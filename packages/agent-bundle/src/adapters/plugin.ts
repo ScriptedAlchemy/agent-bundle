@@ -17,7 +17,7 @@ import {
   unavailableCapability,
   unionCapabilityStates,
 } from './capability-state.ts';
-import claudeCapabilityTable from './capabilities/claude-2.1.250.json' with { type: 'json' };
+import claudeCapabilityTable from './capabilities/claude-2.1.260.json' with { type: 'json' };
 import codexCapabilityTable from './capabilities/codex-0.147.0.json' with { type: 'json' };
 import cursorCapabilityTable from './capabilities/cursor-2026-08-28.json' with { type: 'json' };
 import { claudeAdapter, claudeArtifactPaths, claudeHooksValidator, planClaudeArtifacts } from './claude.ts';
@@ -240,7 +240,7 @@ const artifactValidation = deepFreeze({
 });
 
 const metadata = Object.freeze({
-  adapterRevision: '1.28.0',
+  adapterRevision: '1.29.0',
   observedVersion: `${claudeAdapter.metadata.observedVersion}+${codexAdapter.metadata.observedVersion}+${cursorAdapter.metadata.observedVersion}`,
   // Metadata schemas must exactly match the validation contract: each host's
   // documents, with one shared Claude-format hook schema (the pinned Codex

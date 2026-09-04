@@ -140,7 +140,7 @@ export const resolveMcpStdioLaunch = async (
   });
 };
 
-export interface RunMcpForegroundOptions extends ResolveMcpStdioLaunchOptions {
+export interface McpLaunchEnvironmentOptions extends ResolveMcpStdioLaunchOptions {
   /**
    * Explicit `.env` files replacing the conventional workspace-root set.
    * Files use Node's `--env-file` dialect and load in order, later files
@@ -152,6 +152,9 @@ export interface RunMcpForegroundOptions extends ResolveMcpStdioLaunchOptions {
   readonly loadEnvFiles?: boolean;
   /** Configuration mode selecting `.env.<mode>` variants of the conventional set. */
   readonly mode?: string;
+}
+
+export interface RunMcpForegroundOptions extends McpLaunchEnvironmentOptions {
   /** Injectable only to make foreground process behavior deterministic in tests. */
   readonly spawnProcess?: (
     command: string,
@@ -169,7 +172,7 @@ export interface RunMcpForegroundOptions extends ResolveMcpStdioLaunchOptions {
  * still seeds `${VAR}` interpolation inside env-file values.
  */
 const loadLaunchFileEnv = async (
-  options: RunMcpForegroundOptions,
+  options: McpLaunchEnvironmentOptions,
   processEnv: Readonly<Record<string, string>>,
 ): Promise<Record<string, string>> => {
   if (options.loadEnvFiles === false) return {};
@@ -195,26 +198,43 @@ const loadLaunchFileEnv = async (
 };
 
 /**
- * Resolves the server's generated entry from the built artifact and runs it
- * in the foreground with inherited stdio. SIGINT/SIGTERM forward to the
- * child; the child's exit code (or 128 + signal number) is returned.
- *
- * Launch environment precedence, lowest to highest: manifest env (declared
- * entries plus the injected plugin-root anchor, path tokens expanded), the
- * `.env` file layer, then the operator's real `process.env` — an exported
- * variable always beats every file- or manifest-declared value.
+ * The complete launch of one stdio server out of a built artifact: the
+ * resolved command plus the layered environment `mcp run` and `serve-app`
+ * share. Precedence, lowest to highest: manifest env (declared entries plus
+ * the injected plugin-root anchor, path tokens expanded), the `.env` file
+ * layer, then the operator's real `process.env` — an exported variable
+ * always beats every file- or manifest-declared value. The plugin-data root
+ * is created so the server's durable-state anchor exists before it starts.
  */
-export const runMcpForeground = async (options: RunMcpForegroundOptions): Promise<number> => {
+export const resolveMcpLaunchEnvironment = async (
+  options: McpLaunchEnvironmentOptions,
+): Promise<ResolvedMcpStdioLaunch> => {
   const launch = await resolveMcpStdioLaunch(options);
   await mkdir(resolve(options.pluginDataRoot), { recursive: true });
   const inheritedEnv = Object.fromEntries(
     Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
   );
   const fileEnv = await loadLaunchFileEnv(options, inheritedEnv);
+  return Object.freeze({
+    args: launch.args,
+    command: launch.command,
+    cwd: launch.cwd,
+    env: Object.freeze({ ...launch.env, ...fileEnv, ...inheritedEnv }),
+  });
+};
+
+/**
+ * Resolves the server's generated entry from the built artifact and runs it
+ * in the foreground with inherited stdio. SIGINT/SIGTERM forward to the
+ * child; the child's exit code (or 128 + signal number) is returned. The
+ * launch environment is {@link resolveMcpLaunchEnvironment}'s.
+ */
+export const runMcpForeground = async (options: RunMcpForegroundOptions): Promise<number> => {
+  const launch = await resolveMcpLaunchEnvironment(options);
   const spawnProcess = options.spawnProcess ?? ((command, args, spawnOptions) => spawn(command, [...args], spawnOptions));
   const child = spawnProcess(launch.command, launch.args, {
     cwd: launch.cwd,
-    env: { ...launch.env, ...fileEnv, ...inheritedEnv },
+    env: { ...launch.env },
     stdio: 'inherit',
   });
 

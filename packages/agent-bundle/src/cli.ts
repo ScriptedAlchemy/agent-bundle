@@ -21,10 +21,13 @@ import type {
   inspect,
   prepack,
   runEvals,
+  serveApp,
   startDevServer,
   validate,
   InspectionComponentCapability,
   InspectionSkippedComponent,
+  McpAppConsentCapability,
+  McpAppProfileId,
   ProjectOptions,
 } from './api.ts';
 import type {
@@ -93,6 +96,8 @@ export interface CliDependencies {
   readonly prepack?: typeof prepack;
   readonly runDoctor?: typeof runDoctor;
   readonly runHostMcpProxy?: typeof runHostMcpProxy;
+  /** Injectable only to verify the serve-app CLI contract without a built artifact. */
+  readonly serveApp?: typeof serveApp;
   /** Injectable only to make foreground shutdown behavior deterministic in tests. */
   readonly signals?: CliSignalSource;
   readonly startDevServer?: typeof startDevServer;
@@ -191,6 +196,22 @@ interface DevProxyCommandOptions {
   readonly url?: string;
 }
 
+interface ServeAppCommandOptions extends JsonInputOptions {
+  readonly allow: readonly McpAppConsentCapability[];
+  readonly artifact?: string;
+  readonly config?: string;
+  readonly env: boolean;
+  readonly envFile: readonly string[];
+  readonly mode?: string;
+  readonly open?: boolean;
+  readonly pluginRoot?: string;
+  readonly port?: number;
+  readonly profile: McpAppProfileId;
+  readonly root: string;
+  readonly target: string;
+  readonly tool?: string;
+}
+
 const collect = (value: string, previous: string[]): string[] => [...previous, value];
 
 const port = (value: string): number => {
@@ -224,6 +245,23 @@ const installScope = (value: string): InstallScope => {
   if (value === 'user' || value === 'project' || value === 'local') return value;
   throw new TypeError('Install scope must be user, project, or local.');
 };
+
+const mcpAppProfile = (value: string): McpAppProfileId => {
+  if (value === 'portable' || value === 'claude' || value === 'chatgpt') return value;
+  throw new InvalidArgumentError('MCP App profile must be portable, claude, or chatgpt.');
+};
+
+const consentCapabilities: ReadonlySet<McpAppConsentCapability> = new Set<McpAppConsentCapability>([
+  'call-tool', 'download-file', 'open-external-link', 'request-display-mode',
+]);
+
+const consentCapability = (value: string): McpAppConsentCapability => {
+  if (consentCapabilities.has(value as McpAppConsentCapability)) return value as McpAppConsentCapability;
+  throw new InvalidArgumentError('Consent capability must be call-tool, download-file, open-external-link, or request-display-mode.');
+};
+
+const collectConsentCapability = (value: string, previous: readonly McpAppConsentCapability[]): readonly McpAppConsentCapability[] =>
+  [...previous, consentCapability(value)];
 
 const doctorHost = (value: string): DoctorHost => {
   if (value === 'claude' || value === 'codex' || value === 'cursor') return value;
@@ -619,25 +657,36 @@ const humanValidate = (result: Awaited<ReturnType<typeof validate>>): string => 
 };
 
 /**
- * Closes the foreground development session on SIGINT/SIGTERM. Returns a
- * promise that settles once a signal has closed the session (so the caller
- * can keep the terminal services alive until the close diagnostics, if any,
- * have been written); it never settles when no signal arrives.
+ * Closes the foreground session on SIGINT/SIGTERM. Returns a promise that
+ * settles once a signal has closed the session (so the caller can keep the
+ * terminal services alive until the close diagnostics, if any, have been
+ * written). Without `until` it never settles when no signal arrives; when
+ * `until` settles first, the signal listeners are released and the promise
+ * settles without closing anything.
  */
 const closeForegroundOnSignal = (
   session: Pick<Awaited<ReturnType<typeof startDevServer>>, 'close'>,
   signals: CliSignalSource,
   writeDiagnostics: (text: string) => Promise<void>,
+  until?: Promise<unknown>,
 ): Promise<void> => new Promise<void>((settle) => {
   const terminationSignals = ['SIGINT', 'SIGTERM'] as const;
   let closing: Promise<void> | undefined;
+  const detach = (): void => {
+    for (const signal of terminationSignals) signals.removeListener(signal, close);
+  };
   const close = (): void => {
     closing ??= session.close().catch((error: unknown) => writeDiagnostics(machineLine(diagnosticsFor(error)))).finally(() => {
-      for (const signal of terminationSignals) signals.removeListener(signal, close);
+      detach();
       settle();
     });
   };
   for (const signal of terminationSignals) signals.once(signal, close);
+  void until?.then(() => {
+    if (closing !== undefined) return;
+    detach();
+    settle();
+  }, () => undefined);
 });
 
 export const runCli = async (
@@ -708,6 +757,76 @@ export const runCli = async (
       writeDiagnostic: (message) => { pending = pending.then(() => diagnostics(`${message}\n`)); },
     });
     await pending;
+  });
+
+  const serveAppCommand = program.command('serve-app')
+    .description('Serve one built MCP App standalone in a browser, bound to its packed MCP server')
+    .argument('<app>', 'MCP App as <server>/<app>, or <server>/ui://... for an exact resource URI')
+    .option('--root <root>', 'Project root', process.cwd())
+    .option('--config <path>', 'Configuration file relative to --root')
+    .option('--mode <mode>', 'Configuration mode', 'production')
+    .option('--artifact <path>', 'Use exactly this built artifact')
+    .option('--target <target>', 'Artifact target containing the MCP server', 'portable')
+    .option('--tool <tool>', 'Tool whose result opens the App (default: the only tool that declares the App)')
+    .option('--input <json>', 'Inline JSON object input for the opening tool call')
+    .option('--input-file <path>', 'JSON object input file for the opening tool call')
+    .option('--port <port>', 'Loopback TCP port', port)
+    .option('--profile <profile>', 'Simulated MCP Apps host profile: portable, claude, or chatgpt', mcpAppProfile, 'portable')
+    .option(
+      '--allow <capability>',
+      'Approve one consent capability on your behalf as the App requests it (repeatable): call-tool, download-file, open-external-link, request-display-mode',
+      collectConsentCapability,
+      [],
+    )
+    .option('--open', 'Open the default browser once the host is listening')
+    .option('--no-open', 'Do not open the default browser')
+    .option('--env-file <path>', 'Load exactly this .env file, replacing the project-root set (repeatable)', collect, [])
+    .option('--no-env', 'Launch the server without loading any .env files')
+    .option('--plugin-root <path>', 'Expand env plugin-root anchors against this root instead of the project root');
+  serveAppCommand.action(async (app: string, options: ServeAppCommandOptions) => {
+    if (options.env === false && options.envFile.length > 0) {
+      throw new TypeError('Use either --env-file or --no-env, not both.');
+    }
+    const input = options.input === undefined && options.inputFile === undefined ? {} : await parseJsonObject(options);
+    const { serveApp: serve } = await import('./api.ts');
+    const served = await (dependencies.serveApp ?? serve)({
+      ...(options.allow.length === 0 ? {} : { autoApprove: options.allow }),
+      app,
+      ...(options.artifact === undefined ? {} : { artifact: options.artifact }),
+      ...(options.config === undefined ? {} : { configPath: options.config }),
+      ...(options.envFile.length === 0 ? {} : { envFiles: options.envFile }),
+      input,
+      ...(options.env === false ? { loadEnvFiles: false } : {}),
+      mode: options.mode,
+      open: options.open === true,
+      ...(options.pluginRoot === undefined ? {} : { pluginRoot: options.pluginRoot }),
+      ...(options.port === undefined ? {} : { port: options.port }),
+      profile: options.profile,
+      root: options.root,
+      target: options.target,
+      ...(options.tool === undefined ? {} : { tool: options.tool }),
+    });
+    await show(`MCP App ${app} at ${served.url} (tool ${served.tool}; Ctrl-C stops the server)\n`);
+    // The host outlives this call like `dev` does; it ends on a termination
+    // signal, or when the bound server exits on its own, which is reported
+    // as a diagnostic and, in the real process, as exit code 1.
+    let closedBySignal = false;
+    const session = {
+      close: () => {
+        closedBySignal = true;
+        return served.close();
+      },
+    };
+    foreground = closeForegroundOnSignal(session, dependencies.signals ?? process, diagnostics, served.closed).then(async () => {
+      if (closedBySignal) return;
+      await diagnostics(machineLine([{
+        code: 'AB5000',
+        message: `The MCP server behind ${app} exited; the MCP App host closed.`,
+        severity: 'error',
+      } satisfies Diagnostic]));
+      if (dependencies.signals === undefined) process.exitCode = 1;
+      await served.close().catch(() => undefined);
+    });
   });
 
   const buildCommand = configureSourceOptions(

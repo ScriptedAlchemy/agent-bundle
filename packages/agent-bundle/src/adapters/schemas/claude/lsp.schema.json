@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://agent-bundle.dev/schemas/claude/2.1.250/lsp.schema.json",
+  "$id": "https://agent-bundle.dev/schemas/claude/2.1.260/lsp.schema.json",
   "$defs": {
     "server": {
       "additionalProperties": false,

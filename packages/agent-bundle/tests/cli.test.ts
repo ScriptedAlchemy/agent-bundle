@@ -833,3 +833,131 @@ it('dispatches the install command through the native installer surface', async 
     state: 'installed',
   });
 });
+
+it('maps serve-app argv onto serveApp, prints the served URL, and closes the host once on a termination signal', async () => {
+  const calls: unknown[] = [];
+  const handlers = new Map<NodeJS.Signals, () => void>();
+  const removed: NodeJS.Signals[] = [];
+  let closeCalls = 0;
+  const closedGate = Promise.withResolvers<void>();
+  const result = await runSourceCliWithOutput([
+    'serve-app', 'hauler/dashboard',
+    '--root', '/project', '--artifact', 'artifact', '--target', 'claude',
+    '--tool', 'hauler_status', '--input', '{"scope":"all"}', '--port', '4941', '--profile', 'claude',
+    '--allow', 'call-tool', '--allow', 'open-external-link', '--open', '--env-file', '.env.dashboard', '--plugin-root', '/state',
+  ], {
+    serveApp: async (options) => {
+      calls.push(options);
+      return {
+        close: async () => {
+          closeCalls += 1;
+          closedGate.resolve();
+        },
+        closed: closedGate.promise,
+        resourceUri: 'ui://cargo-hauler/dashboard.html',
+        sandboxOrigin: 'http://127.0.0.1:4942',
+        server: 'hauler',
+        tool: 'hauler_status',
+        url: 'http://127.0.0.1:4941/',
+      };
+    },
+    signals: {
+      once: (signal, listener) => { handlers.set(signal, listener); },
+      removeListener: (signal) => { removed.push(signal); },
+    },
+  });
+
+  expect(result.code).toBe(0);
+  expect(result.stderr).toBe('');
+  expect(result.stdout).toBe('MCP App hauler/dashboard at http://127.0.0.1:4941/ (tool hauler_status; Ctrl-C stops the server)\n');
+  expect(calls).toEqual([{
+    app: 'hauler/dashboard',
+    artifact: 'artifact',
+    autoApprove: ['call-tool', 'open-external-link'],
+    envFiles: ['.env.dashboard'],
+    input: { scope: 'all' },
+    mode: 'production',
+    open: true,
+    pluginRoot: '/state',
+    port: 4941,
+    profile: 'claude',
+    root: '/project',
+    target: 'claude',
+    tool: 'hauler_status',
+  }]);
+
+  handlers.get('SIGINT')?.();
+  handlers.get('SIGTERM')?.();
+  await closedGate.promise;
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  expect(closeCalls).toBe(1);
+  expect(removed).toEqual(expect.arrayContaining(['SIGINT', 'SIGTERM']));
+});
+
+it('reports the bound server exiting on its own as one diagnostic and releases the serve-app signal listeners', async () => {
+  const handlers = new Map<NodeJS.Signals, () => void>();
+  const removed: NodeJS.Signals[] = [];
+  let closeCalls = 0;
+  const serverExit = Promise.withResolvers<void>();
+  const terminal = captureCliTerminal();
+  Object.defineProperty(globalThis, '__AGENT_BUNDLE_VERSION__', { configurable: true, value: 'test' });
+  const code = await runSourceCli(['serve-app', 'status/status', '--root', '/project', '--no-open'], terminal.output, {
+    serveApp: async () => ({
+      close: async () => { closeCalls += 1; },
+      closed: serverExit.promise,
+      resourceUri: 'ui://mcp-app-example/status.html',
+      sandboxOrigin: 'http://127.0.0.1:4102',
+      server: 'status',
+      tool: 'show-status',
+      url: 'http://127.0.0.1:4101/',
+    }),
+    signals: {
+      once: (signal, listener) => { handlers.set(signal, listener); },
+      removeListener: (signal) => { removed.push(signal); },
+    },
+  });
+  expect(code).toBe(0);
+  expect(handlers.size).toBe(2);
+
+  serverExit.resolve();
+  for (let attempt = 0; attempt < 20 && closeCalls === 0; attempt += 1) {
+    await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  }
+
+  expect(closeCalls).toBe(1);
+  expect(removed).toEqual(expect.arrayContaining(['SIGINT', 'SIGTERM']));
+  expect(JSON.parse(terminal.stderr())).toEqual([{
+    code: 'AB5000',
+    message: 'The MCP server behind status/status exited; the MCP App host closed.',
+    severity: 'error',
+  }]);
+});
+
+it('rejects serve-app argv that cannot be served before anything launches', async () => {
+  const launched: unknown[] = [];
+  const dependencies: CliDependencies = {
+    serveApp: async (options) => {
+      launched.push(options);
+      throw new Error('unreachable');
+    },
+  };
+  const missingApp = await runSourceCliWithOutput(['serve-app', '--root', '/project'], dependencies);
+  expect(missingApp.code).toBe(2);
+  expect(missingApp.stderr).toContain("missing required argument 'app'");
+  const badInput = await runSourceCliWithOutput(['serve-app', 'status/status', '--root', '/project', '--input', '[1]'], dependencies);
+  expect(badInput.code).toBe(1);
+  expect(JSON.parse(badInput.stderr)).toEqual([{ code: 'AB5000', message: 'Input must be a JSON object.', severity: 'error' }]);
+  const bothEnv = await runSourceCliWithOutput(['serve-app', 'status/status', '--root', '/project', '--no-env', '--env-file', '.env'], dependencies);
+  expect(bothEnv.code).toBe(1);
+  expect(JSON.parse(bothEnv.stderr)).toEqual([{ code: 'AB5000', message: 'Use either --env-file or --no-env, not both.', severity: 'error' }]);
+  const badProfile = await runSourceCliWithOutput(['serve-app', 'status/status', '--root', '/project', '--profile', 'cursor'], dependencies);
+  expect(badProfile.code).toBe(2);
+  expect(badProfile.stderr).toContain('MCP App profile must be portable, claude, or chatgpt.');
+  const badCapability = await runSourceCliWithOutput(['serve-app', 'status/status', '--root', '/project', '--allow', 'camera'], dependencies);
+  expect(badCapability.code).toBe(2);
+  expect(badCapability.stderr).toContain('Consent capability must be call-tool, download-file, open-external-link, or request-display-mode.');
+  const badPort = await runSourceCliWithOutput(['serve-app', 'status/status', '--root', '/project', '--port', '70000'], dependencies);
+  expect(badPort.code).toBe(1);
+  expect(JSON.parse(badPort.stderr)).toEqual([{ code: 'AB5000', message: 'Port must be a TCP port number.', severity: 'error' }]);
+  expect(launched).toEqual([]);
+});

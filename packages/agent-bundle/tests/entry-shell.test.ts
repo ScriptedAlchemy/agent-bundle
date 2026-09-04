@@ -95,13 +95,24 @@ describe('generated entry templates', () => {
     expect(source).not.toMatch(/^import[^\n]*curator\.ts/mu);
   });
 
-  it('generates a process envelope that adopts numeric exit codes', () => {
-    const source = generatedExecutableEntrySource({ entrySource: '/proj/src/cli.ts', exportName: 'main' });
+  it('generates a process envelope that adopts numeric exit codes and hands main the terminal capability (#511)', () => {
+    const source = generatedExecutableEntrySource({ entrySource: '/proj/src/cli.ts', exportName: 'main', hostSurface: 'cli' });
     expect(source).toContain('import * as entry from "/proj/src/cli.ts"');
+    expect(source).toContain(`import { detectProcessTerminal } from ${JSON.stringify(entryShellModule.terminalCapabilityRuntimeSpecifier)}`);
     expect(source).toContain('entry["main"]');
-    expect(source).toContain('await main(process.argv.slice(2))');
+    expect(source).toContain('await main(process.argv.slice(2), Object.freeze({ terminal: detectProcessTerminal("cli") }))');
     expect(source).toContain("if (typeof code === 'number') process.exitCode = code;");
-    expect(generatedExecutableEntrySource({ entrySource: '/e.ts', exportName: 'default' })).toContain('entry["default"]');
+    // Artifact scripts default to the `script` surface; the envelope never loads the runtime.
+    const script = generatedExecutableEntrySource({ entrySource: '/e.ts', exportName: 'default' });
+    expect(script).toContain('entry["default"]');
+    expect(script).toContain('detectProcessTerminal("script")');
+    expect(script).not.toContain('@agent-bundle/runtime');
+  });
+
+  it('locates the dependency-free terminal probe the envelope aliases in', async () => {
+    const path = entryShellModule.terminalCapabilityRuntimePath();
+    await expect(access(path)).resolves.toBeUndefined();
+    expect(path.endsWith('terminal-capability.ts') || path.endsWith('terminal-capability.js')).toBe(true);
   });
 
   it('defers installer filesystem URL conversion to the guarded runtime', () => {
@@ -404,8 +415,9 @@ it('generates the warm react-server Flight worker separately from the MCP dispat
     '"hook:event-route:tool-after": Object.freeze({ event: "tool/after", id: "event:tool/after", kind: \'event-route\'',
   );
   expect(source).toContain("lineage: message.lineage ?? unavailable('not-provided'),");
+  expect(source).toContain("terminal: message.terminal ?? unavailable('not-provided'),");
   expect(createHash('sha256').update(source).digest('hex')).toBe(
-    '7544ab8820a0784210464d71bb15f6de7999f521a6dc35a920136db613cbcd66',
+    '16bcae6386fbba1c664806a732e02373cc753d9c3baa976782218bdb88847773',
   );
   expect(generate({
     artifactEpoch: 'route-fixture@1.2.3',
@@ -466,8 +478,41 @@ it('generates projected MCP commands with the same tool invocation and request c
   expect(source).toContain('request: { artifactEpoch: "route-fixture@1.2.3", kind: \'tool\', operationId: command.routeId, surface: command.mcp.tool }');
   expect(source).toContain('props: { input: parsed }');
   // The worker mounts providers from `message.invocation`, so the render
-  // message must carry the dispatched invocation (#319 review).
-  expect(source).toContain("worker.postMessage({ id, invocation, props, request, routeId, type: 'render' })");
+  // message must carry the dispatched invocation (#319 review) and the
+  // executable's probed terminal (#511).
+  expect(source).toContain("worker.postMessage({ id, invocation, props, request, routeId, terminal, type: 'render' })");
+  expect(source).toContain('terminal: context.terminal,');
+});
+
+it('mounts the shell-probed terminal on every routed-CLI surface and forwards it under MCP and hooks (#511)', () => {
+  const plainRoute = {
+    config: {},
+    id: 'cli:doctor',
+    kind: 'cli' as const,
+    provenance: { kind: 'conventional' as const, relativePath: 'src/cli/doctor.ts' },
+    source: '/project/src/cli/doctor.ts',
+  };
+  const bin = entryShellModule.generatedCliBinEntrySource({
+    commands: [{ aliases: [], exitCode: 'zero', options: [], path: ['doctor'], rendered: false, routeId: plainRoute.id }],
+    plugin: { name: 'route-fixture', version: '1.2.3' },
+    routes: [plainRoute],
+  });
+  // Plain commands run in the executable itself: the shell's probe is the value.
+  expect(bin).toContain("terminal: available(context.terminal, 'native'),");
+
+  const worker = entryShellModule.generatedRenderedRouteWorkerSource({ routes: [plainRoute] });
+  // A worker thread's own streams are pipes to the parent; it must never probe them.
+  expect(worker).toContain("terminal: message.terminal === undefined ? unavailable('not-provided') : available(message.terminal, 'native'),");
+  expect(worker).not.toContain('detectProcessTerminal');
+
+  const flightWorker = entryShellModule.generatedRouteFlightWorkerSource({
+    artifactEpoch: 'route-fixture@1.2.3',
+    routes: [],
+    serverName: 'curator',
+  });
+  // The MCP host scope says `none`; the Flight worker forwards rather than guesses.
+  expect(flightWorker).toContain("terminal: message.terminal ?? unavailable('not-provided'),");
+  expect(flightWorker).not.toContain('process.stdout.isTTY');
 });
 
 it('forwards the dispatched invocation to the rendered worker in every rendered surface', async () => {
@@ -476,7 +521,8 @@ it('forwards the dispatched invocation to the rendered worker in every rendered 
     routeId: 'script:report',
     workerFile: 'report-flight.mjs',
   });
-  expect(generated).toContain("worker.postMessage({ id, invocation, props, request, routeId, type: 'render' })");
+  expect(generated).toContain("worker.postMessage({ id, invocation, props, request, routeId, terminal, type: 'render' })");
+  expect(generated).toContain('terminal: context.terminal,');
   const factoryStart = generated.indexOf('const openRenderedSession');
   const factoryEnd = generated.indexOf('\nawait runGeneratedRenderedScriptProcess');
   const factory = generated.slice(factoryStart, factoryEnd)
@@ -671,7 +717,7 @@ it('mounts deterministic per-request providers in rendered route workers', () =>
     routeId: 'script:report',
     workerFile: 'report-flight.mjs',
   });
-  expect(bridge).toContain("worker.postMessage({ id, invocation, props, request, routeId, type: 'render' })");
+  expect(bridge).toContain("worker.postMessage({ id, invocation, props, request, routeId, terminal, type: 'render' })");
 });
 
 it('keeps the generated provider loop and the in-process execution helper identical', async () => {

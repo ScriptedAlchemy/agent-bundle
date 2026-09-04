@@ -12,13 +12,24 @@ import {
   selectNoticeDeliveryRoutes,
   agentNoticeStateDefinition,
   createAgentNoticeLedger,
+  NOTICE_REDACTION_MARK,
+  noticePublisherOf,
+  publisherMatchesPrincipal,
+  recipientMatchesPrincipal,
+  recordedNoticePrincipal,
   type AgentNoticeAuthorizationRequest,
+  type AgentNoticePrincipal,
+  type AgentNoticePublishInput,
   type AgentNoticeState,
+  type AgentRecipient,
 } from '../src/notices/index.js';
 import {
   agent,
   available,
   runAgentRequest,
+  unavailable,
+  type AgentLineage,
+  type Observed,
 } from '../src/index.js';
 import { createMemoryStateDriver, defineState } from '../src/state/index.js';
 import { createSqliteStateDriver } from '../src/state/sqlite.js';
@@ -52,6 +63,7 @@ const run = async <T>(
     readonly actorId: string;
     readonly id: string;
     readonly kind: 'event' | 'tool';
+    readonly lineage?: Observed<AgentLineage>;
     readonly startedAt: string;
   },
   operation: () => Promise<T>,
@@ -63,10 +75,19 @@ const run = async <T>(
     kind: input.kind,
     startedAt: input.startedAt,
   },
+  ...(input.lineage === undefined ? {} : { lineage: input.lineage }),
   noticeLedger: ledger,
   session,
   workspace,
 }, operation);
+
+/** A Claude/Codex-shaped lineage: every subagent shares the root `session_id`, only `conversation` tells them apart. */
+const lineageOf = (conversation: string, root = 'root-session'): Observed<AgentLineage> => available(
+  conversation === root
+    ? { conversation, depth: 0, resolution: 'native', root }
+    : { conversation, depth: 1, parent: root, resolution: 'registry', root, subagent: { id: conversation } },
+  conversation === root ? 'native' : 'derived',
+);
 
 describe('notice state taxonomy', () => {
   it('declares only framework-evidenced v1 states', () => {
@@ -1422,5 +1443,594 @@ describe('notice ledger schema version', () => {
     } finally {
       await rm(root, { force: true, recursive: true });
     }
+  });
+});
+
+describe('lineage-addressed recipients (#458)', () => {
+  const principalOf = (overrides: Partial<AgentNoticePrincipal>): AgentNoticePrincipal => ({
+    actor: unavailable(),
+    host,
+    lineage: unavailable('not-provided'),
+    session,
+    workspace,
+    ...overrides,
+  });
+  const matches = (recipient: AgentRecipient, principal: AgentNoticePrincipal): boolean =>
+    recipientMatchesPrincipal(recipient, principal);
+
+  it('matches conversation exactly, root as the whole subtree, and both in conjunction with the other axes', () => {
+    const child = principalOf({ lineage: lineageOf('agent-a') });
+    const sibling = principalOf({ lineage: lineageOf('agent-b') });
+    const rootPrincipal = principalOf({ lineage: lineageOf('root-session') });
+    const otherTree = principalOf({ lineage: lineageOf('agent-z', 'other-root') });
+
+    expect(matches({ conversation: 'agent-a' }, child)).toBe(true);
+    expect(matches({ conversation: 'agent-a' }, sibling)).toBe(false);
+    expect(matches({ conversation: 'agent-a' }, rootPrincipal)).toBe(false);
+
+    expect(matches({ root: 'root-session' }, child)).toBe(true);
+    expect(matches({ root: 'root-session' }, sibling)).toBe(true);
+    expect(matches({ root: 'root-session' }, rootPrincipal)).toBe(true);
+    expect(matches({ root: 'root-session' }, otherTree)).toBe(false);
+
+    // Every present axis must hold: the session both children share does not
+    // widen a conversation-addressed notice, and a workspace mismatch still
+    // refuses a conversation match.
+    expect(matches({ conversation: 'agent-a', session: { sessionId: 'session-1' } }, child)).toBe(true);
+    expect(matches({ conversation: 'agent-a', session: { sessionId: 'session-1' } }, sibling)).toBe(false);
+    expect(matches({ conversation: 'agent-a', workspace: { root: '/elsewhere' } }, child)).toBe(false);
+    expect(matches({ conversation: 'agent-a', root: 'other-root' }, child)).toBe(false);
+    expect(matches({ root: 'root-session', workspace: { root: '/workspace' } }, sibling)).toBe(true);
+  });
+
+  it('never matches a lineage axis the request could not resolve, and the other axes keep working without lineage', () => {
+    const unresolved = principalOf({ lineage: unavailable('no-shared-runtime') });
+    expect(matches({ conversation: 'agent-a' }, unresolved)).toBe(false);
+    expect(matches({ root: 'root-session' }, unresolved)).toBe(false);
+    expect(matches({ session: { sessionId: 'session-1' } }, unresolved)).toBe(true);
+    // An admission journaled before the axis existed carries no lineage at all.
+    const legacy = { actor: unavailable(), host, session, workspace } as const;
+    expect(recipientMatchesPrincipal({ conversation: 'agent-a' }, legacy)).toBe(false);
+    expect(recipientMatchesPrincipal({ workspace: { root: '/workspace' } }, legacy)).toBe(true);
+  });
+
+  it('journals only the conversation and root of the admitting lineage, and none for a four-axis principal', () => {
+    const recorded = recordedNoticePrincipal(principalOf({ lineage: lineageOf('agent-a') }));
+    expect(recorded.lineage).toEqual({
+      source: 'derived',
+      state: 'available',
+      value: { conversation: 'agent-a', root: 'root-session' },
+    });
+    expect(recordedNoticePrincipal(principalOf({ lineage: unavailable('id-not-resolvable') })).lineage)
+      .toEqual({ reason: 'id-not-resolvable', state: 'unavailable' });
+    // A principal built before the axis existed keeps working: nothing journaled, nothing matched.
+    const fourAxis: AgentNoticePrincipal = { actor: unavailable(), host, session, workspace };
+    expect(recordedNoticePrincipal(fourAxis)).not.toHaveProperty('lineage');
+    expect(matches({ conversation: 'agent-a' }, fourAxis)).toBe(false);
+    expect(matches({ session: { sessionId: 'session-1' } }, fourAxis)).toBe(true);
+  });
+
+  it('admits through a four-axis principal handed straight to openRequest, as before the axis existed', async () => {
+    const { driver, ledger } = await openLedger();
+    await run(ledger, {
+      actorId: 'publisher',
+      id: 'publish-legacy-principal',
+      kind: 'tool',
+      startedAt: '2026-09-01T19:00:00.000Z',
+    }, async () => (await agent()).notices!.publish({
+      content: document('session-addressed'),
+      priority: 'normal',
+      recipient: { session: { sessionId: 'session-1' } },
+    }, { idempotencyKey: 'publish:legacy-principal' }));
+    const lease = await ledger.openRequest({
+      invocation: { id: 'legacy-event', kind: 'event', startedAt: '2026-09-01T19:01:00.000Z' },
+      principal: { actor: unavailable(), host, session, workspace },
+      signal: new AbortController().signal,
+    });
+    try {
+      expect((await lease.handle.read()).map(({ notice }) => notice.recipient)).toEqual([{ session: { sessionId: 'session-1' } }]);
+    } finally {
+      lease.close();
+    }
+    await driver.close();
+  });
+
+  it('admits a conversation-addressed notice only on that conversation, not on a sibling sharing its session and workspace', async () => {
+    const { driver, ledger } = await openLedger();
+    const published = await run(ledger, {
+      actorId: 'publisher',
+      id: 'publish-conversation',
+      kind: 'tool',
+      lineage: lineageOf('agent-b'),
+      startedAt: '2026-09-01T19:00:00.000Z',
+    }, async () => (await agent()).notices!.publish({
+      content: document('for agent-a only'),
+      priority: 'high',
+      recipient: { conversation: 'agent-a' },
+    }, { idempotencyKey: 'publish:conversation' }));
+    expect(published.notice.recipient).toEqual({ conversation: 'agent-a' });
+
+    // The sibling's event: same host, session, workspace — different conversation.
+    const sibling = await run(ledger, {
+      actorId: 'agent-b',
+      id: 'event-sibling',
+      kind: 'event',
+      lineage: lineageOf('agent-b'),
+      startedAt: '2026-09-01T19:01:00.000Z',
+    }, async () => (await agent()).notices!.read());
+    expect(sibling).toEqual([]);
+    // The root's own event does not receive it either, nor one without lineage.
+    const rootEvent = await run(ledger, {
+      actorId: 'root',
+      id: 'event-root',
+      kind: 'event',
+      lineage: lineageOf('root-session'),
+      startedAt: '2026-09-01T19:01:30.000Z',
+    }, async () => (await agent()).notices!.read());
+    expect(rootEvent).toEqual([]);
+    const unresolved = await run(ledger, {
+      actorId: 'agent-a',
+      id: 'event-unresolved',
+      kind: 'event',
+      startedAt: '2026-09-01T19:01:45.000Z',
+    }, async () => (await agent()).notices!.read());
+    expect(unresolved).toEqual([]);
+    expect((await ledger.read()).notices[0]?.state).toBe('pending');
+
+    const delivered = await run(ledger, {
+      actorId: 'agent-a',
+      id: 'event-agent-a',
+      kind: 'event',
+      lineage: lineageOf('agent-a'),
+      startedAt: '2026-09-01T19:02:00.000Z',
+    }, async () => (await agent()).notices!.read());
+    expect(delivered.map(({ notice }) => notice.id)).toEqual([published.notice.id]);
+    const snapshot = await ledger.read();
+    expect(snapshot.notices[0]).toMatchObject({
+      attempts: [{ invocationId: 'event-agent-a' }],
+      state: 'attempted',
+    });
+    await driver.close();
+  });
+
+  it('admits a root-addressed notice on every conversation under that root and on none outside it', async () => {
+    const { driver, ledger } = await openLedger();
+    const published = await run(ledger, {
+      actorId: 'agent-a',
+      id: 'publish-root',
+      kind: 'tool',
+      lineage: lineageOf('agent-a'),
+      startedAt: '2026-09-01T19:00:00.000Z',
+    }, async () => (await agent()).notices!.publish({
+      content: document('everyone under root-session'),
+      priority: 'normal',
+      recipient: { root: 'root-session' },
+      retryBudget: 3,
+    }, { idempotencyKey: 'publish:root' }));
+
+    const elsewhere = await run(ledger, {
+      actorId: 'agent-z',
+      id: 'event-other-tree',
+      kind: 'event',
+      lineage: lineageOf('agent-z', 'other-root'),
+      startedAt: '2026-09-01T19:01:00.000Z',
+    }, async () => (await agent()).notices!.read());
+    expect(elsewhere).toEqual([]);
+
+    const seen: string[] = [];
+    for (const [conversation, id] of [['agent-b', 'event-b'], ['root-session', 'event-root'], ['agent-a', 'event-a']] as const) {
+      const deliveries = await run(ledger, {
+        actorId: conversation,
+        id,
+        kind: 'event',
+        lineage: lineageOf(conversation),
+        startedAt: `2026-09-01T19:02:0${String(seen.length)}.000Z`,
+      }, async () => (await agent()).notices!.read());
+      if (deliveries.length > 0) seen.push(conversation);
+    }
+    // The subtree includes the root conversation and the publisher itself:
+    // `root` is a pure match, not "everyone but me".
+    expect(seen).toEqual(['agent-b', 'root-session', 'agent-a']);
+    expect((await ledger.read()).notices[0]).toMatchObject({
+      attempts: [
+        { invocationId: 'event-b' },
+        { invocationId: 'event-root' },
+        { invocationId: 'event-a' },
+      ],
+      id: published.notice.id,
+      state: 'attempted',
+    });
+    await driver.close();
+  });
+
+  it('scopes the inbox and acknowledgement to the addressed conversation', async () => {
+    const { driver, ledger } = await openLedger();
+    const published = await run(ledger, {
+      actorId: 'publisher',
+      id: 'publish-inbox-conversation',
+      kind: 'tool',
+      lineage: lineageOf('agent-b'),
+      startedAt: '2026-09-01T19:00:00.000Z',
+    }, async () => (await agent()).notices!.publish({
+      content: document('inbox for agent-a'),
+      priority: 'normal',
+      recipient: { conversation: 'agent-a', workspace: { root: '/workspace' } },
+    }, { idempotencyKey: 'publish:inbox-conversation' }));
+
+    expect(await run(ledger, {
+      actorId: 'agent-b',
+      id: 'inbox-sibling',
+      kind: 'tool',
+      lineage: lineageOf('agent-b'),
+      startedAt: '2026-09-01T19:01:00.000Z',
+    }, async () => (await agent()).notices!.inbox())).toEqual([]);
+    await expect(run(ledger, {
+      actorId: 'agent-b',
+      id: 'ack-sibling',
+      kind: 'tool',
+      lineage: lineageOf('agent-b'),
+      startedAt: '2026-09-01T19:01:30.000Z',
+    }, async () => (await agent()).notices!.acknowledge(published.notice.id))).rejects.toMatchObject({
+      code: 'unauthorized',
+    });
+
+    const inbox = await run(ledger, {
+      actorId: 'agent-a',
+      id: 'inbox-agent-a',
+      kind: 'tool',
+      lineage: lineageOf('agent-a'),
+      startedAt: '2026-09-01T19:02:00.000Z',
+    }, async () => (await agent()).notices!.inbox());
+    expect(inbox.map((notice) => notice.id)).toEqual([published.notice.id]);
+    const acknowledged = await run(ledger, {
+      actorId: 'agent-a',
+      id: 'ack-agent-a',
+      kind: 'tool',
+      lineage: lineageOf('agent-a'),
+      startedAt: '2026-09-01T19:03:00.000Z',
+    }, async () => (await agent()).notices!.acknowledge(published.notice.id));
+    expect(acknowledged.state).toBe('acknowledged');
+    await driver.close();
+  });
+
+  it('rejects blank lineage axes at publish and persists them as additive optional fields', async () => {
+    const { driver, ledger, store } = await openLedger();
+    await expect(run(ledger, {
+      actorId: 'publisher',
+      id: 'publish-blank-conversation',
+      kind: 'tool',
+      startedAt: '2026-09-01T19:00:00.000Z',
+    }, async () => (await agent()).notices!.publish({
+      content: document('blank'),
+      priority: 'normal',
+      recipient: { conversation: '  ' },
+    }, { idempotencyKey: 'publish:blank-conversation' }))).rejects.toMatchObject({ code: 'invalid-input' });
+    await expect(run(ledger, {
+      actorId: 'publisher',
+      id: 'publish-blank-root',
+      kind: 'tool',
+      startedAt: '2026-09-01T19:00:01.000Z',
+    }, async () => (await agent()).notices!.publish({
+      content: document('blank'),
+      priority: 'normal',
+      recipient: { root: '' },
+    }, { idempotencyKey: 'publish:blank-root' }))).rejects.toMatchObject({ code: 'invalid-input' });
+    expect((await ledger.read()).notices).toEqual([]);
+
+    // A pre-#458 admission — no `lineage` on its principal — still journals
+    // and replays under the same definition version.
+    const legacy = await store.dispatch('admitted', {
+      at: '2026-09-01T19:05:00.000Z',
+      authorizedIds: [],
+      invocationId: 'legacy-admission',
+      principal: { actor: { state: 'unavailable', reason: 'not-provided' }, host, session, workspace },
+      unavailableIds: [],
+    }, { idempotencyKey: 'legacy:admitted' });
+    expect(legacy.state.notices).toEqual([]);
+    expect(AGENT_NOTICE_STATE_VERSION).toBe(2);
+    await driver.close();
+  });
+});
+
+describe('publisher-scoped visibility (#460)', () => {
+  const principalOf = (overrides: Partial<AgentNoticePrincipal>): AgentNoticePrincipal => ({
+    actor: unavailable(),
+    host,
+    lineage: unavailable('not-provided'),
+    session,
+    workspace,
+    ...overrides,
+  });
+  /** A request from a different transport for the same agent: MCP client name and session id, server cwd. */
+  const mcpCallOf = (conversation: string): Partial<AgentNoticePrincipal> => ({
+    host: available({ name: 'claude-code' }, 'native'),
+    lineage: lineageOf(conversation),
+    session: available({ sessionId: 'mcp-session-9' }, 'native'),
+    workspace: available({ root: '/server-cwd' }, 'derived'),
+  });
+
+  it('records every observed identity axis of the publisher, or nothing for an identity-less request', () => {
+    expect(noticePublisherOf(principalOf({ actor: actor('a1'), lineage: lineageOf('agent-a') }))).toEqual({
+      actor: { id: 'a1' },
+      conversation: 'agent-a',
+      host: { name: 'claude' },
+      session: { sessionId: 'session-1' },
+      workspace: { root: '/workspace' },
+    });
+    expect(noticePublisherOf(principalOf({ host: unavailable(), session: unavailable(), workspace: unavailable() })))
+      .toBeUndefined();
+    expect(publisherMatchesPrincipal(undefined, principalOf({}))).toBe(false);
+  });
+
+  it('matches the publisher by lineage conversation first, else by every recorded axis', () => {
+    const withLineage = noticePublisherOf(principalOf({ lineage: lineageOf('agent-a') }));
+    // Same agent thread observed by another transport: host, session, and workspace all differ.
+    expect(publisherMatchesPrincipal(withLineage, principalOf(mcpCallOf('agent-a')))).toBe(true);
+    // Same host/session/workspace, different agent thread (a sibling under the same root).
+    expect(publisherMatchesPrincipal(withLineage, principalOf({ lineage: lineageOf('agent-b') }))).toBe(false);
+    // Lineage the reader could not resolve is never the publisher.
+    expect(publisherMatchesPrincipal(withLineage, principalOf({}))).toBe(false);
+
+    const withoutLineage = noticePublisherOf(principalOf({ actor: actor('a1') }));
+    expect(publisherMatchesPrincipal(withoutLineage, principalOf({ actor: actor('a1') }))).toBe(true);
+    // A four-axis principal (no `lineage` key at all) records and matches by its axes.
+    expect(noticePublisherOf({ actor: actor('a1'), host, session, workspace })).toEqual(withoutLineage);
+    expect(publisherMatchesPrincipal(withoutLineage, { actor: actor('a1'), host, session, workspace })).toBe(true);
+    expect(publisherMatchesPrincipal(withLineage, { actor: actor('a1'), host, session, workspace })).toBe(false);
+    expect(publisherMatchesPrincipal(withoutLineage, principalOf({ actor: actor('a1'), lineage: lineageOf('agent-a') }))).toBe(true);
+    expect(publisherMatchesPrincipal(withoutLineage, principalOf({ actor: actor('a2') }))).toBe(false);
+    expect(publisherMatchesPrincipal(withoutLineage, principalOf({}))).toBe(false);
+    expect(publisherMatchesPrincipal(withoutLineage, principalOf({ actor: actor('a1'), workspace: unavailable() }))).toBe(false);
+    expect(publisherMatchesPrincipal(withoutLineage, principalOf({
+      actor: actor('a1'),
+      session: available({ sessionId: 'session-2' }, 'native'),
+    }))).toBe(false);
+  });
+
+  it('shows the publisher its own notice through every state while recipients and bystanders see nothing of it', async () => {
+    const phases: string[] = [];
+    const { driver, ledger } = await openLedger((request) => {
+      phases.push(request.phase);
+      return { state: 'authorized' };
+    });
+    const published = await run(ledger, {
+      actorId: 'agent-b',
+      id: 'publish-own',
+      kind: 'tool',
+      lineage: lineageOf('agent-b'),
+      startedAt: '2026-09-01T19:00:00.000Z',
+    }, async () => (await agent()).notices!.publish({
+      content: document('for agent-a'),
+      priority: 'high',
+      recipient: { conversation: 'agent-a' },
+    }, { idempotencyKey: 'publish:own' }));
+    expect(published.notice.publisher).toEqual({
+      actor: { id: 'agent-b' },
+      conversation: 'agent-b',
+      host: { name: 'claude' },
+      session: { sessionId: 'session-1' },
+      workspace: { root: '/workspace' },
+    });
+    const revisionAfterPublish = (await ledger.read()).revision;
+
+    // The publisher: pending, and its own inbox never shows it (it is not the recipient).
+    const seenPending = await run(ledger, {
+      actorId: 'agent-b',
+      id: 'published-1',
+      kind: 'tool',
+      lineage: lineageOf('agent-b'),
+      startedAt: '2026-09-01T19:00:30.000Z',
+    }, async () => ({
+      inbox: await (await agent()).notices!.inbox(),
+      published: await (await agent()).notices!.published(),
+    }));
+    expect(seenPending.inbox).toEqual([]);
+    expect(seenPending.published).toEqual([expect.objectContaining({ id: published.notice.id, state: 'pending' })]);
+    expect(seenPending.published[0]?.content.root).toEqual({ kind: 'text', text: 'for agent-a' });
+    // A read, not a receipt: nothing moved on the ledger.
+    expect((await ledger.read()).revision).toBe(revisionAfterPublish);
+    expect((await ledger.read()).notices[0]).not.toHaveProperty('exposure');
+
+    // The recipient sees it in its inbox, but not as something it published;
+    // a sibling under the same root sees neither.
+    const recipientView = await run(ledger, {
+      actorId: 'agent-a',
+      id: 'recipient-view',
+      kind: 'tool',
+      lineage: lineageOf('agent-a'),
+      startedAt: '2026-09-01T19:01:00.000Z',
+    }, async () => ({
+      inbox: await (await agent()).notices!.inbox(),
+      published: await (await agent()).notices!.published(),
+    }));
+    expect(recipientView.inbox.map((notice) => notice.id)).toEqual([published.notice.id]);
+    expect(recipientView.published).toEqual([]);
+    expect(await run(ledger, {
+      actorId: 'agent-c',
+      id: 'bystander-view',
+      kind: 'tool',
+      lineage: lineageOf('agent-c'),
+      startedAt: '2026-09-01T19:01:10.000Z',
+    }, async () => (await agent()).notices!.published())).toEqual([]);
+
+    // Admission on the recipient's next event: the publisher now sees `attempted`.
+    await run(ledger, {
+      actorId: 'agent-a',
+      id: 'event-agent-a',
+      kind: 'event',
+      lineage: lineageOf('agent-a'),
+      startedAt: '2026-09-01T19:02:00.000Z',
+    }, async () => (await agent()).notices!.read());
+    const seenAttempted = await run(ledger, {
+      actorId: 'agent-b',
+      id: 'published-2',
+      kind: 'tool',
+      lineage: lineageOf('agent-b'),
+      startedAt: '2026-09-01T19:02:30.000Z',
+    }, async () => (await agent()).notices!.published());
+    expect(seenAttempted).toEqual([expect.objectContaining({
+      attempts: [expect.objectContaining({ invocationId: 'event-agent-a' })],
+      id: published.notice.id,
+      state: 'attempted',
+    })]);
+
+    // The recipient acknowledges; the publisher sees `acknowledged` — from an
+    // MCP tool call whose host name, session id, and cwd all differ from the
+    // hook that published, because the conversation is the identity.
+    await run(ledger, {
+      actorId: 'agent-a',
+      id: 'ack-agent-a',
+      kind: 'tool',
+      lineage: lineageOf('agent-a'),
+      startedAt: '2026-09-01T19:03:00.000Z',
+    }, async () => (await agent()).notices!.acknowledge(published.notice.id));
+    const seenAcknowledged = await runAgentRequest({
+      ...mcpCallOf('agent-b'),
+      actor: unavailable(),
+      invocation: { id: 'published-3', kind: 'tool', startedAt: '2026-09-01T19:03:30.000Z' },
+      noticeLedger: ledger,
+    }, async () => (await agent()).notices!.published());
+    expect(seenAcknowledged).toEqual([expect.objectContaining({
+      acknowledgement: expect.objectContaining({ invocationId: 'ack-agent-a' }),
+      id: published.notice.id,
+      state: 'acknowledged',
+    })]);
+    // Judged once per matching notice; the recipient's and bystander's reads
+    // matched nothing, so nothing was put to the authorizer for them.
+    expect(phases.filter((phase) => phase === 'published')).toHaveLength(3);
+    await driver.close();
+  });
+
+  it('omits notices the authorizer refuses under phase published, and never returns identity-less publishes', async () => {
+    const { driver, ledger } = await openLedger((request) =>
+      request.phase === 'published' && request.recipient.session?.sessionId === 'refused'
+        ? { state: 'unavailable' }
+        : { state: 'authorized' });
+    await run(ledger, {
+      actorId: 'publisher',
+      id: 'publish-allowed',
+      kind: 'tool',
+      startedAt: '2026-09-01T19:00:00.000Z',
+    }, async () => (await agent()).notices!.publish({
+      content: document('allowed'),
+      priority: 'normal',
+      recipient: { session: { sessionId: 'allowed' } },
+    }, { idempotencyKey: 'publish:allowed' }));
+    await run(ledger, {
+      actorId: 'publisher',
+      id: 'publish-refused',
+      kind: 'tool',
+      startedAt: '2026-09-01T19:00:01.000Z',
+    }, async () => (await agent()).notices!.publish({
+      content: document('refused'),
+      priority: 'normal',
+      recipient: { session: { sessionId: 'refused' } },
+    }, { idempotencyKey: 'publish:refused' }));
+    // An identity-less publisher records no publisher at all.
+    const anonymous = await runAgentRequest({
+      invocation: { id: 'publish-anonymous', kind: 'tool', startedAt: '2026-09-01T19:00:02.000Z' },
+      noticeLedger: ledger,
+    }, async () => (await agent()).notices!.publish({
+      content: document('anonymous'),
+      priority: 'normal',
+      recipient: { session: { sessionId: 'allowed' } },
+    }, { idempotencyKey: 'publish:anonymous' }));
+    expect(anonymous.notice).not.toHaveProperty('publisher');
+
+    const own = await run(ledger, {
+      actorId: 'publisher',
+      id: 'published-filtered',
+      kind: 'tool',
+      startedAt: '2026-09-01T19:01:00.000Z',
+    }, async () => (await agent()).notices!.published());
+    expect(own.map((notice) => notice.recipient)).toEqual([{ session: { sessionId: 'allowed' } }]);
+    expect(await runAgentRequest({
+      invocation: { id: 'published-anonymous', kind: 'tool', startedAt: '2026-09-01T19:01:01.000Z' },
+      noticeLedger: ledger,
+    }, async () => (await agent()).notices!.published())).toEqual([]);
+    await driver.close();
+  });
+
+  it('orders published notices by the instant they were created, whatever offset the invocation spelled', async () => {
+    const { driver, ledger } = await openLedger();
+    const publishAt = (id: string, startedAt: string) => run(ledger, { actorId: 'author', id, kind: 'tool', startedAt },
+      async () => (await agent()).notices!.publish({
+        content: document(id),
+        priority: 'normal',
+        recipient: { actor: { id: 'recipient' } },
+      }, { idempotencyKey: `publish:${id}` }));
+    // Lexically the +02:00 stamp sorts after the Z stamp; chronologically it is 90 minutes earlier.
+    const later = await publishAt('later', '2026-01-01T00:30:00.000Z');
+    const earlier = await publishAt('earlier', '2026-01-01T01:00:00.000+02:00');
+    const own = await run(ledger, {
+      actorId: 'author',
+      id: 'published-order',
+      kind: 'tool',
+      startedAt: '2026-01-01T03:00:00.000Z',
+    }, async () => (await agent()).notices!.published());
+    expect(own.map((notice) => notice.id)).toEqual([earlier.notice.id, later.notice.id]);
+    await driver.close();
+  });
+
+  it('discloses published content under the default internal ceiling and never another author\'s deduped content', async () => {
+    const { driver, ledger } = await openLedger();
+    const publishAs = (actorId: string, id: string, input: AgentNoticePublishInput) =>
+      run(ledger, { actorId, id, kind: 'tool', startedAt: `2026-09-01T19:00:0${id.length % 10}.000Z` },
+        async () => (await agent()).notices!.publish(input, { idempotencyKey: `publish:${id}` }));
+
+    const secretText = await publishAs('author', 'internal', {
+      content: document('deploy with token=abcdef0123456789 tonight'),
+      priority: 'normal',
+      recipient: { actor: { id: 'recipient' } },
+    });
+    const classified = await publishAs('author', 'secret', {
+      content: document('the whole document is secret'),
+      priority: 'normal',
+      recipient: { actor: { id: 'recipient' } },
+      sensitivity: 'secret',
+    });
+    const open = await publishAs('author', 'public', {
+      content: document('public token=abcdef0123456789 stays as authored'),
+      priority: 'normal',
+      recipient: { actor: { id: 'recipient' } },
+      sensitivity: 'public',
+    });
+    // Another author publishing the same dedupe key for the same recipient
+    // lands on the first author's notice; it is not theirs to read back.
+    await publishAs('author', 'shared', {
+      content: document('first author wrote this'),
+      dedupeKey: 'shared-key',
+      priority: 'normal',
+      recipient: { actor: { id: 'recipient' } },
+    });
+    const deduped = await publishAs('other-author', 'shared-again', {
+      content: document('second author'),
+      dedupeKey: 'shared-key',
+      priority: 'normal',
+      recipient: { actor: { id: 'recipient' } },
+    });
+    expect(deduped.deduped).toBe(true);
+
+    const own = await run(ledger, {
+      actorId: 'author',
+      id: 'published-disclosure',
+      kind: 'tool',
+      startedAt: '2026-09-01T19:05:00.000Z',
+    }, async () => (await agent()).notices!.published());
+    const text = (id: string) => {
+      const found = own.find((notice) => notice.id === id);
+      return found?.content.root.kind === 'text' ? found.content.root.text : undefined;
+    };
+    expect(text(secretText.notice.id)).toBe(`deploy with ${NOTICE_REDACTION_MARK} tonight`);
+    expect(text(classified.notice.id)).toBe(NOTICE_REDACTION_MARK);
+    expect(text(open.notice.id)).toBe('public token=abcdef0123456789 stays as authored');
+    expect(own).toHaveLength(4);
+    expect(await run(ledger, {
+      actorId: 'other-author',
+      id: 'published-other',
+      kind: 'tool',
+      startedAt: '2026-09-01T19:05:01.000Z',
+    }, async () => (await agent()).notices!.published())).toEqual([]);
+    await driver.close();
   });
 });

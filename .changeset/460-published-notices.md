@@ -1,0 +1,5 @@
+---
+"@agent-bundle/runtime": patch
+---
+
+Let a publisher read what became of its own notices: `(await agent()).notices.published()` returns the notices the current principal published, in every ledger state (`pending`, `attempted`, `acknowledged`, `expired`, `unavailable`, `withdrawn`) with their receipts. `publish()` records the publishing request's observed identity on the notice as `AgentNotice.publisher` (`actor`, `host`, `session`, `workspace`, and `conversation` from `request.lineage`); a reader is the publisher when it resolves the same lineage conversation, or — for a publisher recorded without lineage — when every recorded axis matches. The view records nothing on the ledger, is judged per notice under the new authorization `phase: 'published'`, discloses content under the default `internal` ceiling, and never returns another publisher's or any recipient's notices. `publisher` is an additive optional field (no state-definition version bump). `examples/worktree-proximity`'s `coordinator/status` reports the calling agent's published-notice counts by state. (#460)

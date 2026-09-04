@@ -41,7 +41,8 @@ epoch。这正是协议轨迹有意义的原因：其中每一帧都来自同一
 
 - **Restart MCP session** 会在它*所选*的那个 epoch 上重新启动该生成式服务器。
 - 要使用新发布的 epoch，请打开一个**新**会话。
-- 兼容的 MCP App 通过同一个已绑定会话预览。
+- 兼容的 MCP App 通过同一个已绑定会话预览。同一套宿主栈也能通过 `agent-bundle serve-app` 在一个普通
+  浏览器标签页里独立提供某个 App；见[独立提供 App](../authoring/mcp.mdx#独立提供-app)。
 
 ## Playground 拥有自己的轨迹
 

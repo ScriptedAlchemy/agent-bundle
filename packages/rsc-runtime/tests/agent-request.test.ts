@@ -95,7 +95,24 @@ describe('agent request store', () => {
       expect(context.session).toEqual(unavailable());
       expect(context.actor).toEqual(unavailable());
       expect(context.workspace).toEqual(unavailable());
+      expect(context.terminal).toEqual(unavailable());
       expect(Object.hasOwn(context.host, 'value')).toBe(false);
+    });
+  });
+
+  it('exposes the mounted terminal capability as a frozen Observed axis (#511)', async () => {
+    const terminal = {
+      hostSurface: 'cli' as const,
+      sharesTarget: true,
+      stderr: { color: 'basic' as const, columns: 120, kind: 'tty' as const, rows: 40 },
+      stdout: { color: 'basic' as const, columns: 120, kind: 'tty' as const, rows: 40 },
+    };
+    await runAgentRequest({ ...init('cli'), terminal: available(terminal, 'native') }, async () => {
+      const context = await agent();
+      expect(context.terminal).toEqual({ source: 'native', state: 'available', value: terminal });
+      if (context.terminal.state !== 'available') throw new Error('expected an available terminal');
+      expect(Object.isFrozen(context.terminal.value)).toBe(true);
+      expect(Object.isFrozen(context.terminal.value.stdout)).toBe(true);
     });
   });
 
@@ -334,6 +351,9 @@ describe('entrypoint bindings', () => {
         kind: context.invocation.kind,
         operationId: context.invocation.operationId,
         surface: context.invocation.surface,
+        terminal: context.terminal.state === 'available'
+          ? `${context.terminal.source} ${context.terminal.value.hostSurface}/${context.terminal.value.stdout.kind}/${context.terminal.value.stderr.kind}`
+          : `unavailable:${context.terminal.reason}`,
       };
     },
     id: 'status',
@@ -353,6 +373,7 @@ describe('entrypoint bindings', () => {
       kind: z.enum(['tool', 'event', 'cli', 'script', 'workbench']),
       operationId: z.string().optional(),
       surface: z.string().optional(),
+      terminal: z.string(),
     }).strict(),
   });
   const application = defineRscApplication({
@@ -373,8 +394,22 @@ describe('entrypoint bindings', () => {
       kind: 'cli',
       operationId: 'status',
       surface: 'status',
+      // The adapter owns no probe: without a caller-supplied terminal the axis is honestly absent (#511).
+      terminal: 'unavailable:not-provided',
     });
     await expect(agent()).rejects.toMatchObject({ code: 'outside-invocation' });
+
+    const probed: string[] = [];
+    await runRscCli(application, ['status'], {
+      terminal: {
+        hostSurface: 'cli',
+        sharesTarget: true,
+        stderr: { color: 'basic', columns: 80, kind: 'tty', rows: 24 },
+        stdout: { color: 'basic', columns: 80, kind: 'tty', rows: 24 },
+      },
+      write: (value) => probed.push(value),
+    });
+    expect(JSON.parse(probed.join(''))).toMatchObject({ terminal: 'native cli/tty/tty' });
   });
 
   it('installs a tool invocation for createRscMcpServer', async () => {
@@ -389,6 +424,8 @@ describe('entrypoint bindings', () => {
       kind: 'tool',
       operationId: 'status',
       surface: 'runtime_status',
+      // An MCP server has no terminal, whatever its descriptors are (#511).
+      terminal: 'derived mcp/none/none',
     });
     await expect(agent()).rejects.toMatchObject({ code: 'outside-invocation' });
   });

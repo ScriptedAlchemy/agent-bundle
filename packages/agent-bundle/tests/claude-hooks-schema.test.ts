@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
-import claudeCapabilityTable from '../src/adapters/capabilities/claude-2.1.250.json' with { type: 'json' };
+import claudeCapabilityTable from '../src/adapters/capabilities/claude-2.1.260.json' with { type: 'json' };
 import { readStandardNativeHookCommands } from '../src/adapters/hook-contract.ts';
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import hooksSchema from '../src/adapters/schemas/claude/hooks.schema.json' with { type: 'json' };
@@ -16,12 +16,15 @@ import type { LoadedConfig } from '../src/config/load.ts';
 const fixtureRoot = new URL('./fixtures/claude-hooks-schema/', import.meta.url);
 /**
  * The Claude CLI the schema is pinned to (PROVENANCE.json observedCliVersion, the
- * exact version CI installs); its `plugin validate --strict` verdicts must be
- * recorded beside the cases. Reports from later releases may sit beside them.
+ * exact version CI installs); its `plugin validate --strict --json` verdicts must
+ * be recorded beside the cases.
  */
 const pinnedCliVersion = schemaProvenance.observedCliVersion;
-/** The newest release recorded; the reference the schema is drawn from describes it. */
-const latestRecordedCliVersion = '2.1.260';
+/**
+ * The previous pin, kept as the evidence for the v2.1.251 gate: it has no
+ * `--json`, so its verdicts come from the text reporter.
+ */
+const previousPinCliVersion = '2.1.250';
 const validate = createAdapterValidator().compile(hooksSchema);
 
 interface RecordedReport {
@@ -63,26 +66,27 @@ const deliberateTightenings: Readonly<Record<string, string>> = {
   'server-empty': 'an empty server name can never resolve to a connected MCP server.',
   'shell-on-mcp': 'closed per-type handler shape: `shell` is a command-hook field.',
   'timeout-float': 'the hook contract lowers timeoutMs to whole seconds; `timeout` stays an integer as it was before this pin.',
-  'unknown-group-field': 'closed matcher-group shape: Claude Code 2.1.260 --strict ignores unknown hooks.json keys without a warning, so the pin is the only guard against a misspelled field.',
-  'unknown-handler-field': 'closed handler shape: Claude Code 2.1.260 --strict ignores unknown hooks.json keys without a warning.',
-  'unknown-top-level-field': 'closed document shape: Claude Code 2.1.260 --strict ignores unknown hooks.json keys without a warning.',
+  'unknown-group-field': 'closed matcher-group shape: Claude Code 2.1.250 and 2.1.260 --strict ignore unknown hooks.json keys without a warning, so the pin is the only guard against a misspelled field.',
+  'unknown-handler-field': 'closed handler shape: Claude Code 2.1.250 and 2.1.260 --strict ignore unknown hooks.json keys without a warning.',
+  'unknown-top-level-field': 'closed document shape: Claude Code 2.1.250 and 2.1.260 --strict ignore unknown hooks.json keys without a warning.',
   'url-on-command': 'closed per-type handler shape: `url` is an http-hook field.',
 };
 
 /**
- * Cases the reference documents but the pinned host predates: the schema and the
- * pinned CLI reject them, a later CLI accepts them, and admitting them waits for
- * the re-pin that moves observedCliVersion past the gate.
+ * Cases the reference gates to a release after the previous pin: the schema and
+ * the pinned 2.1.260 CLI accept them, the previous 2.1.250 pin rejected the keys
+ * as unknown. Recorded so the gate stays visible for anyone still on 2.1.250.
  */
-const newerThanPin: Readonly<Record<string, string>> = {
-  'model-switch-events': 'hooks reference "PreModelSwitch" / "PostModelSwitch": both require Claude Code v2.1.251 or later; 2.1.250 rejects the keys.',
+const newerThanPreviousPin: Readonly<Record<string, string>> = {
+  'all-pinned-events': 'every documented event, including PreModelSwitch and PostModelSwitch (v2.1.251 or later); 2.1.250 rejects the two keys.',
+  'model-switch-events': 'hooks reference "PreModelSwitch" / "PostModelSwitch": both require Claude Code v2.1.251 or later; 2.1.250 rejects the keys, the pinned 2.1.260 accepts them.',
 };
 
-/** The reference's "Hook events" minus PreModelSwitch and PostModelSwitch, which require v2.1.251 (newerThanPin). */
+/** The reference's "Hook events": all 33 events the pinned 2.1.260 host knows. */
 const documentedEvents = [
   'ConfigChange', 'CwdChanged', 'DirectoryAdded', 'Elicitation', 'ElicitationResult', 'FileChanged', 'InstructionsLoaded',
-  'MessageDisplay', 'Notification', 'PermissionDenied', 'PermissionRequest', 'PostCompact', 'PostToolBatch',
-  'PostToolUse', 'PostToolUseFailure', 'PreCompact', 'PreToolUse', 'SessionEnd', 'SessionStart', 'Setup', 'Stop',
+  'MessageDisplay', 'Notification', 'PermissionDenied', 'PermissionRequest', 'PostCompact', 'PostModelSwitch', 'PostToolBatch',
+  'PostToolUse', 'PostToolUseFailure', 'PreCompact', 'PreModelSwitch', 'PreToolUse', 'SessionEnd', 'SessionStart', 'Setup', 'Stop',
   'StopFailure', 'SubagentStart', 'SubagentStop', 'TaskCompleted', 'TaskCreated', 'TeammateIdle', 'UserPromptExpansion',
   'UserPromptSubmit', 'WorktreeCreate', 'WorktreeRemove',
 ] as const;
@@ -95,13 +99,13 @@ const startupEvents = ['SessionStart', 'Setup'] as const;
 
 const handlerGroup = (handler: Readonly<Record<string, unknown>>): unknown => [{ hooks: [handler] }];
 
-it('agrees with the recorded verdict of the pinned Claude CLI and every later one on each fixture, except the recorded tightenings', async () => {
+it('agrees with the recorded verdict of the pinned Claude CLI and the previous pin on each fixture, except the recorded tightenings', async () => {
   const names = await caseNames();
   expect(names.length).toBeGreaterThan(40);
   const recordedVersions = (await readdir(new URL('./reports/', fixtureRoot))).sort();
-  expect(pinnedCliVersion).toBe('2.1.250');
-  expect(recordedVersions).toEqual([pinnedCliVersion, latestRecordedCliVersion]);
-  for (const tightening of [...Object.keys(deliberateTightenings), ...Object.keys(newerThanPin)]) expect(names).toContain(tightening);
+  expect(pinnedCliVersion).toBe('2.1.260');
+  expect(recordedVersions).toEqual([previousPinCliVersion, pinnedCliVersion]);
+  for (const tightening of [...Object.keys(deliberateTightenings), ...Object.keys(newerThanPreviousPin)]) expect(names).toContain(tightening);
 
   for (const version of recordedVersions) {
     const pinned = version === pinnedCliVersion;
@@ -111,17 +115,17 @@ it('agrees with the recorded verdict of the pinned Claude CLI and every later on
       const report = await readJson<RecordedReport>(`./reports/${version}/${name}.json`);
       const label = `${name} @ ${version}`;
       expect(report.strict, label).toBe(true);
-      // 2.1.250 has no `--json`; its verdicts come from the text reporter.
-      expect(report.reporter, label).toBe(pinned ? 'text' : undefined);
+      // 2.1.250 has no `--json`; its verdicts come from the text reporter. The pin records `--json`.
+      expect(report.reporter, label).toBe(pinned ? undefined : 'text');
       const accepted = validate(document);
       if (Object.hasOwn(deliberateTightenings, name)) {
         expect(report.success, `${label}: a tightening must be a case Claude accepts`).toBe(true);
         expect(accepted, `${label}: the schema must reject what the tightening describes`).toBe(false);
         continue;
       }
-      if (Object.hasOwn(newerThanPin, name)) {
-        expect(accepted, `${label}: the schema must not admit what the pinned host rejects`).toBe(false);
-        expect(report.success, `${label}: newer-than-pin cases are rejected by the pin and accepted after it`).toBe(!pinned);
+      if (Object.hasOwn(newerThanPreviousPin, name)) {
+        expect(accepted, `${label}: the schema admits what the pinned host accepts`).toBe(true);
+        expect(report.success, `${label}: gated cases are rejected by the previous pin and accepted by the pin`).toBe(pinned);
         continue;
       }
       expect(accepted, `${label}: schema=${accepted} claude=${report.success} ${JSON.stringify(validate.errors ?? report.contents)}`)
@@ -201,15 +205,16 @@ it('keeps the pinned schema descriptor and the capability evidence in step with 
   const descriptor = claude.metadata.schemas.find((schema) => schema.name === 'hooks');
   expect(descriptor?.sha256).toBe(schemaProvenance.schemas['hooks.schema.json'].sha256);
   expect(schemaProvenance.hooksSchemaNotes).toContain('hooks.schema.json was re-pinned (uploaded 2026-09-03');
-  expect(schemaProvenance.hooksSchemaNotes).toContain('Claude Code 2.1.250');
-  expect(schemaProvenance.hooksSchemaNotes).toContain('2.1.260');
+  expect(schemaProvenance.hooksSchemaNotes).toContain('Claude Code 2.1.260');
+  expect(schemaProvenance.hooksSchemaNotes).toContain('2.1.250');
   expect(schemaProvenance.hooksSchemaNotes).toContain('PreModelSwitch');
+  expect(schemaProvenance.hooksSchemaNotes).toContain('re-pin to 2.1.260');
 
   const handlerContract = claudeCapabilityTable.hooks.handlerContract;
   expect(handlerContract.types).toEqual(['agent', 'command', 'http', 'mcp_tool', 'prompt']);
   expect(handlerContract.emitted).toEqual({ command: ['command', 'timeout', 'type'] });
   expect(handlerContract.evidence.some((line) => line.startsWith('uploaded 2026-09-03:') && line.includes('hooks-2.md'))).toBe(true);
-  expect(handlerContract.evidence.some((line) => line.includes('Claude Code 2.1.250') && line.includes('2.1.260'))).toBe(true);
+  expect(handlerContract.evidence.some((line) => line.includes('Claude Code 2.1.260') && line.includes('2.1.250'))).toBe(true);
   for (const feature of ['timeout', 'toolMatchers'] as const) {
     expect(claudeCapabilityTable.hooks.features[feature].evidence.some((line) => line.includes('every handler'))).toBe(true);
   }

@@ -15,6 +15,8 @@ import {
   AGENT_NOTICE_AVAILABILITY_RESERVATION_TTL_MS,
   type AgentNotice,
   type AgentNoticePrincipal,
+  type AgentNoticePublisher,
+  type AgentNoticeRecordedPrincipal,
   type AgentNoticeRetentionSummary,
   type AgentNoticeWithheldEntry,
   type AgentNoticeWithholding,
@@ -47,7 +49,11 @@ const observed = <T extends z.ZodType>(value: T) => z.discriminatedUnion('state'
 
 const recipientSchema = z.object({
   actor: z.object({ id: z.string().min(1) }).strict().optional(),
+  // Lineage axes (additive, optional): notices journaled before them parse
+  // unchanged, and absent means the axis is not part of the conjunction.
+  conversation: z.string().min(1).optional(),
   host: z.object({ name: z.string().min(1) }).strict().optional(),
+  root: z.string().min(1).optional(),
   session: z.object({ sessionId: z.string().min(1) }).strict().optional(),
   workspace: z.object({ root: z.string().min(1) }).strict().optional(),
 }).strict().refine(
@@ -55,9 +61,31 @@ const recipientSchema = z.object({
   'A notice recipient requires at least one identity axis',
 );
 
+// Additive optional field on the notice: absent on notices published before
+// it existed and on identity-less publishes; a recorded publisher names at
+// least one axis, so an empty record can never match every reader.
+const publisherSchema = z.object({
+  actor: z.object({ id: z.string().min(1) }).strict().optional(),
+  conversation: z.string().min(1).optional(),
+  host: z.object({ name: z.string().min(1) }).strict().optional(),
+  session: z.object({ sessionId: z.string().min(1) }).strict().optional(),
+  workspace: z.object({ root: z.string().min(1) }).strict().optional(),
+}).strict().refine(
+  (publisher) => Object.values(publisher).some((value) => value !== undefined),
+  'A notice publisher requires at least one identity axis',
+);
+
+const lineageScopeSchema = z.object({
+  conversation: z.string().min(1),
+  root: z.string().min(1),
+}).strict();
+
 const principalSchema = z.object({
   actor: observed(z.object({ id: z.string().min(1) }).strict()),
   host: observed(z.object({ name: z.string().min(1) }).strict()),
+  // Optional so admissions journaled before the lineage axes replay unchanged;
+  // the reducer reads an absent scope as unavailable lineage.
+  lineage: observed(lineageScopeSchema).optional(),
   session: observed(z.object({ sessionId: z.string().min(1) }).strict()),
   workspace: observed(z.object({ root: z.string().min(1) }).strict()),
 }).strict();
@@ -132,6 +160,7 @@ const noticeSchema = z.object({
   id: z.string().min(1),
   nextAttemptAt: z.string().min(1).optional(),
   priority: z.enum(['low', 'normal', 'high']),
+  publisher: publisherSchema.optional(),
   recipient: recipientSchema,
   // Optional (not defaulted): parse must never materialize fields absent from
   // stored heads or the journal head-vs-replay consistency check would diverge
@@ -229,9 +258,96 @@ export const agentNoticeEventSchemas = {
 const sameRecipient = (left: AgentRecipient, right: AgentRecipient): boolean =>
   canonicalJson(left) === canonicalJson(right);
 
+/**
+ * The principal as an admission journals it: the lineage axis is narrowed to
+ * the conversation and root the matcher reads, so the journaled payload never
+ * grows with the lineage shape and a replay matches exactly what the live
+ * admission matched.
+ */
+export const recordedNoticePrincipal = (principal: AgentNoticePrincipal): AgentNoticeRecordedPrincipal => Object.freeze({
+  actor: principal.actor,
+  host: principal.host,
+  // A principal built without the axis journals none, exactly like a
+  // pre-#458 admission: absent reads as unavailable.
+  ...(principal.lineage === undefined
+    ? {}
+    : {
+      lineage: principal.lineage.state === 'available'
+        ? Object.freeze({
+            source: principal.lineage.source,
+            state: 'available' as const,
+            value: Object.freeze({
+              conversation: principal.lineage.value.conversation,
+              root: principal.lineage.value.root,
+            }),
+          })
+        : principal.lineage,
+    }),
+  session: principal.session,
+  workspace: principal.workspace,
+});
+
+/**
+ * The publisher `publish()` records: every identity axis the publishing
+ * request observed, in recipient terms. `undefined` when the request observed
+ * none, so the notice belongs to no `published()` view rather than to all.
+ */
+export const noticePublisherOf = (principal: AgentNoticePrincipal): AgentNoticePublisher | undefined => {
+  const publisher: AgentNoticePublisher = Object.freeze({
+    ...(principal.actor.state === 'available' ? { actor: Object.freeze({ id: principal.actor.value.id }) } : {}),
+    ...(principal.lineage?.state === 'available' ? { conversation: principal.lineage.value.conversation } : {}),
+    ...(principal.host.state === 'available' ? { host: Object.freeze({ name: principal.host.value.name }) } : {}),
+    ...(principal.session.state === 'available'
+      ? { session: Object.freeze({ sessionId: principal.session.value.sessionId }) }
+      : {}),
+    ...(principal.workspace.state === 'available'
+      ? { workspace: Object.freeze({ root: principal.workspace.value.root }) }
+      : {}),
+  });
+  return Object.keys(publisher).length === 0 ? undefined : publisher;
+};
+
+/**
+ * Whether `principal` is the publisher a notice recorded. The lineage
+ * conversation is the identity of an agent thread (#444), so when the
+ * publisher recorded one the reader must resolve the same conversation —
+ * whatever transport observed it: a hook and an MCP tool call from the same
+ * agent differ in host name and session id but share the conversation. A
+ * publisher recorded without lineage is matched on every axis it did record;
+ * a reader missing any of them is not it. No publisher, no match.
+ */
+export const publisherMatchesPrincipal = (
+  publisher: AgentNoticePublisher | undefined,
+  principal: AgentNoticePrincipal,
+): boolean => {
+  if (publisher === undefined) return false;
+  if (publisher.conversation !== undefined) {
+    return principal.lineage?.state === 'available' && principal.lineage.value.conversation === publisher.conversation;
+  }
+  if (publisher.actor !== undefined) {
+    if (principal.actor.state !== 'available' || principal.actor.value.id !== publisher.actor.id) return false;
+  }
+  if (publisher.host !== undefined) {
+    if (principal.host.state !== 'available' || principal.host.value.name !== publisher.host.name) return false;
+  }
+  if (publisher.session !== undefined) {
+    if (principal.session.state !== 'available' || principal.session.value.sessionId !== publisher.session.sessionId) return false;
+  }
+  if (publisher.workspace !== undefined) {
+    if (principal.workspace.state !== 'available' || principal.workspace.value.root !== publisher.workspace.root) return false;
+  }
+  return true;
+};
+
+/**
+ * Every axis the recipient names must match an available axis of the
+ * principal; an unavailable axis — including lineage the runtime could not
+ * resolve — matches nothing. `conversation` is exact; `root` matches the
+ * root conversation itself and every conversation whose lineage root it is.
+ */
 export const recipientMatchesPrincipal = (
   recipient: AgentRecipient,
-  principal: AgentNoticePrincipal,
+  principal: AgentNoticeRecordedPrincipal,
 ): boolean => {
   if (recipient.actor !== undefined) {
     if (principal.actor.state !== 'available' || principal.actor.value.id !== recipient.actor.id) return false;
@@ -244,6 +360,12 @@ export const recipientMatchesPrincipal = (
   }
   if (recipient.workspace !== undefined) {
     if (principal.workspace.state !== 'available' || principal.workspace.value.root !== recipient.workspace.root) return false;
+  }
+  if (recipient.conversation !== undefined) {
+    if (principal.lineage?.state !== 'available' || principal.lineage.value.conversation !== recipient.conversation) return false;
+  }
+  if (recipient.root !== undefined) {
+    if (principal.lineage?.state !== 'available' || principal.lineage.value.root !== recipient.root) return false;
   }
   return true;
 };
@@ -474,7 +596,7 @@ const transitionAdmission = (
     readonly at: string;
     readonly authorizedIds: ReadonlySet<string>;
     readonly invocationId: string;
-    readonly principal: AgentNoticePrincipal;
+    readonly principal: AgentNoticeRecordedPrincipal;
     readonly unavailableIds: ReadonlySet<string>;
     readonly withheld: ReadonlyMap<string, AgentNoticeWithholdingReason>;
   },
@@ -580,6 +702,14 @@ export const agentNoticeStateDefinition = (
     // Journals written under version 1 therefore cannot be replayed by this
     // reducer; the migration rebases them on their materialized head, which
     // already satisfies the version 2 schema unchanged.
+    //
+    // The lineage recipient axes (`recipient.conversation` / `recipient.root`,
+    // `principal.lineage` on admissions) are additive optional fields, not a
+    // version: a journal without them replays to the same state, because an
+    // admission that recorded no lineage matches exactly the recipients it
+    // matched when it was written, and no persisted notice names an axis it
+    // did not have. `publisher` (#460) is additive in the same way: it scopes
+    // only the publisher's own `published()` read and never a transition.
     migrations: { 2: (persisted) => persisted },
     reduce: (state, event) => {
       switch (event.name) {

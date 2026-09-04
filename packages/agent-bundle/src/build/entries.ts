@@ -29,6 +29,8 @@ import {
   generatedExecutableEntrySource,
   generatedRenderedRouteWorkerSource,
   generatedRenderedScriptEntrySource,
+  terminalCapabilityRuntimePath,
+  terminalCapabilityRuntimeSpecifier,
   generatedRouteArtifactEpoch,
   generatedRouteFlightWorkerSource,
   generatedRouteMcpEntrySource,
@@ -41,7 +43,7 @@ import {
 import { emptyRouteConfig, type CompiledLayout, type CompiledProvider } from '../routes/types.ts';
 import type { CompiledMcpApp } from './mcp-apps.ts';
 import type { ArtifactOutputKind } from './provenance.ts';
-import type { RslibSurfacePlan } from './rslib.ts';
+import type { RslibEntry, RslibSurfacePlan } from './rslib.ts';
 
 const eventRuntimeModulePath = (module: 'ipc' | 'project'): string => {
   for (const candidate of [
@@ -176,8 +178,16 @@ export const planScriptsSurface = async (
   const cliRuntimeShell = bundled.some((entry) => entry.rendered !== undefined)
     ? cliEntryRuntimePath()
     : undefined;
+  // The builder decides the envelope statically, before any module runs.
+  const mainExports = new Map(await Promise.all(bundled
+    .filter((entry) => entry.rendered === undefined)
+    .map(async (entry) => [entry.source, (await scanEntryExports(entry.source)).hasMainExport] as const)));
+  const terminalProbe = [...mainExports.values()].some(Boolean) ? terminalCapabilityRuntimePath() : undefined;
+  // Every compiler-owned runtime module lives in this package, so one ignored
+  // root covers the cli-entry shell and the terminal probe alike.
+  const ignoredRuntime = cliRuntimeShell ?? terminalProbe;
   return {
-    entries: await Promise.all(bundled.flatMap((entry) => {
+    entries: await Promise.all(bundled.flatMap((entry): readonly Promise<RslibEntry>[] => {
       const { name, rendered, source, sourceInputs } = entry;
       if (rendered !== undefined) {
         const workerSourceInputs = Object.freeze([...new Set([
@@ -228,22 +238,23 @@ export const planScriptsSurface = async (
         ];
       }
       // A Script whose module exports `main` receives the framework process
-      // envelope (argv, numeric exit codes); self-executing modules keep
-      // today's direct-bundle behavior byte for byte.
-      return [(async () => {
-        const exports = await scanEntryExports(source);
-        return {
-          name,
-          outputRelativePath: `scripts/${name}.mjs`,
-          source,
-          sourceInputs,
-          ...(exports.hasMainExport
-            ? { virtualSource: generatedExecutableEntrySource({ entrySource: source, exportName: 'main' }) }
-            : {}),
-        };
-      })()];
+      // envelope (argv, the terminal capability, numeric exit codes);
+      // self-executing modules keep today's direct-bundle behavior byte for
+      // byte.
+      return [Promise.resolve({
+        name,
+        outputRelativePath: `scripts/${name}.mjs`,
+        source,
+        sourceInputs,
+        ...(mainExports.get(source) === true
+          ? {
+            aliases: { [terminalCapabilityRuntimeSpecifier]: terminalProbe! },
+            virtualSource: generatedExecutableEntrySource({ entrySource: source, exportName: 'main', hostSurface: 'script' }),
+          }
+          : {}),
+      })];
     })),
-    ...(cliRuntimeShell === undefined ? {} : { ignoredSourcePaths: [runtimeIgnoredRoot(cliRuntimeShell)] }),
+    ...(ignoredRuntime === undefined ? {} : { ignoredSourcePaths: [runtimeIgnoredRoot(ignoredRuntime)] }),
     finish: async (evidence) => {
       await emitPlanEntries({
         entries: await Promise.all(compiled

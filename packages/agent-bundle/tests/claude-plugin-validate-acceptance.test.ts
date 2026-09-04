@@ -26,7 +26,7 @@ const hook = (event: NormalizedHook['event'], name: string): NormalizedHook => (
 /**
  * The shape ScriptedAlchemy/cargo-hauler#48 shipped: SessionStart, PreToolUse,
  * PostToolUse, and Stop hooks beside a stdio MCP server, built for the `claude`
- * target and installed through a marketplace. Claude Code 2.1.250–2.1.259
+ * target and installed through a marketplace. Claude Code 2.1.250–2.1.260
  * refused it while `.claude-plugin/plugin.json` named `./hooks/hooks.json`
  * under `hooks` (#462/#463, fixed in #470).
  */
@@ -130,9 +130,9 @@ it('emits the cargo-hauler shape at the default hook location with no manifest h
 // load without `errors` in `claude --plugin-dir <root> plugin list --json`. The second check is the
 // one that matters for #462/#463: `plugin validate` accepted the duplicate-hooks manifest that Claude
 // Code then refused at load time, so validation alone is not proof the plugin reaches a session.
-// `--json` on `plugin validate` exists from Claude Code 2.1.259; the CI host-install job runs the pinned
-// 2.1.250, which rejects the flag ("unknown option '--json'"), so older binaries take the textual form
-// and are held to its exit code and "Validation passed" line instead.
+// `--json` on `plugin validate` exists from Claude Code 2.1.259 and is the primary path on the pinned
+// 2.1.260 the CI host-install job runs; an older binary (2.1.250 rejects the flag with "unknown option
+// '--json'") takes the textual form and is held to its exit code and "Validation passed" line instead.
 claudeIt(`passes claude plugin validate --strict and loads without errors for the emitted claude artifact${claudeAvailable ? '' : missingClaude}`, () => {
   const pluginRoot = join(root, 'plugin');
 

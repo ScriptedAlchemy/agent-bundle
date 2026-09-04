@@ -201,16 +201,19 @@ export default async function AfterFileEdit({ canonical, native, signal }: Agent
 `tool/before` 在 Claude 与 Codex 上成为 `hookSpecificOutput.permissionDecision: 'allow' | 'ask' | 'deny'`，
 在 Cursor 上则是 `{ permission: 'allow' | 'deny', … }`——Cursor 文档称 `ask` 不会被强制执行，因此会拒绝它；
 被拒绝的 `stop` 成为 `{ decision: 'block', reason }` 或 Cursor 的 `followup_message`。`allow` 与 `ask` 是
-`tool/before` 的决定（`allow` 也可以代表用户回答 `permission/request`）；其他任何事件族都会拒绝它们。每个
-宿主支持哪些事件族，见生成的[事件与钩子矩阵](../../reference/events.md)。
+`tool/before` 与 `model-switch/before` 的决定（`allow` 也可以代表用户回答 `permission/request`）；其他任何
+事件族都会拒绝它们。做出决定的 `model-switch/before` 在 Claude Code 的 `PreModelSwitch`（2.1.251 或更新）上
+成为 `hookSpecificOutput.permissionDecision: 'allow' | 'ask' | 'deny'`（在交互式 `/model` 之外，`ask`
+等同于拒绝）；`model-switch/after` 只观察已完成的切换，其 `Agent.Context` 会作为 `additionalContext`
+随下一次请求送达 Claude。每个宿主支持哪些事件族，见生成的[事件与钩子矩阵](../../reference/events.md)。
 
 `tool/before` 上的 `updatedInput` 改写待执行的调用，并且与决定相互独立。在 Claude 与 Codex 上，随 `continue`
 返回的改写不携带 `permissionDecision`，宿主会针对改写后的输入评估其权限规则；与 `allow` 搭配可自动批准该改写，
 与 `ask` 搭配则把改写后的输入展示给用户确认。Cursor 只在与 `permission` 同时出现时记载 `updated_input`，因此
 改写在那里以 `permission: 'allow'` 交付。
 
-事件路由可以触达全部二十个规范事件族（`session/end`、`prompt/submit`、`compact/before`、
-`permission/request`……）；配置声明的 `hooks` 只覆盖上面列出的七个。
+事件路由可以触达全部二十二个规范事件族（`session/end`、`prompt/submit`、`compact/before`、
+`permission/request`、`model-switch/before`……）；配置声明的 `hooks` 只覆盖上面列出的七个。
 
 **抛出**异常的路由或处理器不会产生文档，因此也没有决定：生成的包装器写到 stderr，stdout 无输出，
 退出码为 `1`——所有受支持的宿主都把它记作非阻塞错误，待执行的动作会像 pass-through 之后一样继续进行。
