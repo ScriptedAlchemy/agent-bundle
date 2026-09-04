@@ -439,6 +439,15 @@ aliased module throws the same `AB4760` naming the compiler diagnostics and
 the recovery "fix them, then rerun Rstest" — the manifest's placeholder
 identity is never served as a real one.
 
+Rendered skills (`src/skills/<name>/SKILL.tsx`) evaluate during discovery,
+and the skill loader aliases the specifier to the same generated module fed
+from the identity normalization stamps into the model, so a skill importing
+`agent-bundle/meta` compiles under `validate`, `build`, `inspect`, dev, and
+`inspectWorkbenchSurface` (#440). Only a direct `parseSkill` call without a
+project identity leaves the specifier to resolve as the project resolves
+`agent-bundle`; the published module then raises this diagnostic inside the
+skill's `AB3003`.
+
 | Code | Severity | Trigger | Recovery |
 | --- | --- | --- | --- |
 | `AB4760` | error | A module evaluated the published `agent-bundle/meta` outside a surface Agent Bundle compiles — typically a unit test pool not built from the Rstest preset, or a hand-run script importing plugin source. | Run the test under `agentBundleRstest()` or `agentBundleBrowserRstest()` from `agent-bundle/rstest` (pass `include` to cover a plain unit pool), or compile the surface with `agent-bundle build`. In a custom test runner, alias `agent-bundle/meta` (`resolve.alias`, exact match) to a module with the named exports `{ name, packageName, packageVersion, version, meta }` — `meta` the frozen object of the other four, exported as both the named binding and the default export — computed from the project's `agent-bundle.config.ts` plugin name and `package.json` version; the `.agent-bundle/test/meta.mjs` module `agentBundleRstest()` writes is that module. |

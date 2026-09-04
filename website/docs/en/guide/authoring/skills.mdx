@@ -134,6 +134,15 @@ Six `Skill.*` members emit canonical tokens: `Skill.Arguments`, `Skill.PluginDat
 `Skill.Resource` renders a Markdown link (`[path](path)`), not a token. Host syntax is
 applied during lowering, never in the component.
 
+A rendered source may import project code, so the document is computed from the same sources the
+plugin ships, and it may import `agent-bundle/meta`: the loader serves the same
+`{ name, packageName, packageVersion, version }` the compiler stamps into every built surface, so a
+skill can print the version it documents. Its JSX compiles against the loader's own element
+factory rather than the project's `react/jsx-runtime` — the renderer walks plain element objects
+and needs no React internals — so the evaluation does not depend on how the process resolves
+`react` (the `react-server` condition of the route-unit pool included), and `inspectWorkbenchSurface`
+inspects a project with rendered skills from any pool.
+
 A hand-authored `SKILL.md` in the same directory always wins — an authored file beats a
 generated one — and the shadowed component reports the informational `AB4735` nudge. A rendered
 module that fails to load reports `AB3003`; one that does not default-export a component

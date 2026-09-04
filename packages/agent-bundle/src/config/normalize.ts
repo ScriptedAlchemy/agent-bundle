@@ -15,9 +15,9 @@ import {
   parseRuntimeVersion,
   satisfiesGeneratedRuntimeFloor,
 } from '../core/runtime.ts';
-import { developmentFallbackVersion, snapshotPackageIdentity } from '../core/project-context.ts';
 import { isRecord } from '../core/strict-json.ts';
 import { conventionalEntryAt } from './conventional-entry.ts';
+import { pluginIdentity } from './plugin-identity.ts';
 import {
   canonicalHookEvents,
   isPrebuiltEntryInput,
@@ -1201,22 +1201,6 @@ const normalizeRules = (
   };
 });
 
-/**
- * The one plugin version every surface agrees on (issue #94 stage 3): an
- * authored `plugin.version` still wins so a legacy declaration never changes
- * meaning mid-migration (a disagreement with package.json is the AB4008
- * warning), an omitted one derives the release version from package.json,
- * and a project with neither carries the development fallback that
- * `agent-bundle build` refuses to package (AB4013).
- */
-const resolvePluginVersion = (
-  authored: unknown,
-  packageVersion: string | undefined,
-): string =>
-  (typeof authored === 'string' && authored.trim().length > 0 ? authored : undefined)
-  ?? packageVersion
-  ?? developmentFallbackVersion;
-
 /** Selects the generated-executable floor; invalid raises fall back to the default the validator rejected. */
 const normalizeRuntime = (loaded: LoadedConfig): NormalizedRuntime => {
   const node = loaded.config.runtime?.node;
@@ -1272,9 +1256,9 @@ export const normalizeProject = async (
   const logo = normalizePluginLogo(loaded);
   // The npm package axes are derived, never authored in config: package.json
   // is authoritative for release identity (issue #94), while plugin.version
-  // remains the host-facing declared version during the migration.
-  const packageIdentity = snapshotPackageIdentity(loaded.context.projectRoot);
-  const version = resolvePluginVersion(loaded.config.plugin.version, packageIdentity.packageVersion);
+  // remains the host-facing declared version during the migration. The same
+  // derivation serves `agent-bundle/meta` to rendered skills at discovery.
+  const identity = pluginIdentity(loaded.context.projectRoot, loaded.config);
   const hostBins = await normalizeHostBins(loaded, targetNames, registry);
   const hostOutputStyles = await normalizeHostPayloadDirectories(
     loaded,
@@ -1323,11 +1307,11 @@ export const normalizeProject = async (
       ...(typeof description === 'string' ? { description } : {}),
       id: `plugin:${loaded.config.plugin.name}`,
       ...(logo === undefined ? {} : { logo }),
-      name: loaded.config.plugin.name,
-      ...(packageIdentity.packageName === undefined ? {} : { packageName: packageIdentity.packageName }),
-      ...(packageIdentity.packageVersion === undefined ? {} : { packageVersion: packageIdentity.packageVersion }),
+      name: identity.name,
+      ...(identity.packageName === undefined ? {} : { packageName: identity.packageName }),
+      ...(identity.packageVersion === undefined ? {} : { packageVersion: identity.packageVersion }),
       provenance: configProvenance,
-      version,
+      version: identity.version,
     },
     mcpApps: normalizeMcpApps(loaded, discovered, mcpServers),
     mcpServers,

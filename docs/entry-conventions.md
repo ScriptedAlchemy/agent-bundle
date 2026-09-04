@@ -914,6 +914,14 @@ route-unit level, `renderRoute`, and `invokeCli` alike — with the identity
 does not use the preset must add the same alias; the `AB4760` recovery text
 spells it out (see [Diagnostics](diagnostics.md#build-time-identity-outside-the-compiler-ab4760)).
 
+Rendered skills are not outside it either (#440): `src/skills/<name>/SKILL.tsx`
+evaluates during discovery, before any bundle exists, and the skill loader
+aliases the specifier to the same generated module fed from the identity
+normalization is about to stamp into the model (`plugin.name`, the
+`package.json` axes, the resolved version). A skill that prints `version`
+prints the one its artifact manifest reports, under `validate`, `build`,
+`inspect`, dev, the Workbench's source documents, and `inspectWorkbenchSurface`.
+
 ## Prebuilt payloads — package what you compiled yourself
 
 Some projects legitimately own their compilation — a coordinated
