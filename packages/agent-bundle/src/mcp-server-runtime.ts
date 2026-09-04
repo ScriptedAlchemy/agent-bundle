@@ -610,7 +610,8 @@ export interface GeneratedEventRuntimeBinding {
 export interface GeneratedNoticePrincipal {
   readonly actor: Observed<AgentActorIdentity>;
   readonly host: Observed<AgentHostIdentity>;
-  readonly lineage: Observed<AgentLineage>;
+  /** Optional like the runtime's: absent is unavailable lineage. */
+  readonly lineage?: Observed<AgentLineage>;
   readonly session: Observed<AgentSessionIdentity>;
   readonly workspace: Observed<AgentWorkspaceIdentity>;
 }

@@ -1490,7 +1490,7 @@ describe('lineage-addressed recipients (#458)', () => {
     expect(recipientMatchesPrincipal({ workspace: { root: '/workspace' } }, legacy)).toBe(true);
   });
 
-  it('journals only the conversation and root of the admitting lineage', () => {
+  it('journals only the conversation and root of the admitting lineage, and none for a four-axis principal', () => {
     const recorded = recordedNoticePrincipal(principalOf({ lineage: lineageOf('agent-a') }));
     expect(recorded.lineage).toEqual({
       source: 'derived',
@@ -1499,6 +1499,36 @@ describe('lineage-addressed recipients (#458)', () => {
     });
     expect(recordedNoticePrincipal(principalOf({ lineage: unavailable('id-not-resolvable') })).lineage)
       .toEqual({ reason: 'id-not-resolvable', state: 'unavailable' });
+    // A principal built before the axis existed keeps working: nothing journaled, nothing matched.
+    const fourAxis: AgentNoticePrincipal = { actor: unavailable(), host, session, workspace };
+    expect(recordedNoticePrincipal(fourAxis)).not.toHaveProperty('lineage');
+    expect(matches({ conversation: 'agent-a' }, fourAxis)).toBe(false);
+    expect(matches({ session: { sessionId: 'session-1' } }, fourAxis)).toBe(true);
+  });
+
+  it('admits through a four-axis principal handed straight to openRequest, as before the axis existed', async () => {
+    const { driver, ledger } = await openLedger();
+    await run(ledger, {
+      actorId: 'publisher',
+      id: 'publish-legacy-principal',
+      kind: 'tool',
+      startedAt: '2026-09-01T19:00:00.000Z',
+    }, async () => (await agent()).notices!.publish({
+      content: document('session-addressed'),
+      priority: 'normal',
+      recipient: { session: { sessionId: 'session-1' } },
+    }, { idempotencyKey: 'publish:legacy-principal' }));
+    const lease = await ledger.openRequest({
+      invocation: { id: 'legacy-event', kind: 'event', startedAt: '2026-09-01T19:01:00.000Z' },
+      principal: { actor: unavailable(), host, session, workspace },
+      signal: new AbortController().signal,
+    });
+    try {
+      expect((await lease.handle.read()).map(({ notice }) => notice.recipient)).toEqual([{ session: { sessionId: 'session-1' } }]);
+    } finally {
+      lease.close();
+    }
+    await driver.close();
   });
 
   it('admits a conversation-addressed notice only on that conversation, not on a sibling sharing its session and workspace', async () => {

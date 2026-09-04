@@ -251,16 +251,22 @@ const sameRecipient = (left: AgentRecipient, right: AgentRecipient): boolean =>
 export const recordedNoticePrincipal = (principal: AgentNoticePrincipal): AgentNoticeRecordedPrincipal => Object.freeze({
   actor: principal.actor,
   host: principal.host,
-  lineage: principal.lineage.state === 'available'
-    ? Object.freeze({
-        source: principal.lineage.source,
-        state: 'available' as const,
-        value: Object.freeze({
-          conversation: principal.lineage.value.conversation,
-          root: principal.lineage.value.root,
-        }),
-      })
-    : principal.lineage,
+  // A principal built without the axis journals none, exactly like a
+  // pre-#458 admission: absent reads as unavailable.
+  ...(principal.lineage === undefined
+    ? {}
+    : {
+      lineage: principal.lineage.state === 'available'
+        ? Object.freeze({
+            source: principal.lineage.source,
+            state: 'available' as const,
+            value: Object.freeze({
+              conversation: principal.lineage.value.conversation,
+              root: principal.lineage.value.root,
+            }),
+          })
+        : principal.lineage,
+    }),
   session: principal.session,
   workspace: principal.workspace,
 });

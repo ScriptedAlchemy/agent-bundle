@@ -251,7 +251,8 @@ request's `lineage`: `conversation` (exactly one agent thread,
 `request.lineage.conversation`) and `root` (the root conversation and every
 subagent under it, `request.lineage.root`). Every named axis must match, and
 an axis the request cannot observe — including lineage the runtime could not
-resolve — matches nothing, so a `conversation`-addressed notice is never
+resolve, or a principal built without the optional `lineage` at all —
+matches nothing, so a `conversation`-addressed notice is never
 admitted on a sibling's event even though Claude and Codex give every
 subagent the root `session_id`. Admissions journal the principal's lineage as
 just `{ conversation, root }`; both recipient fields and that scope are

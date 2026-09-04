@@ -56,8 +56,13 @@ export interface AgentRecipient {
 export interface AgentNoticePrincipal {
   readonly actor: Observed<AgentActorIdentity>;
   readonly host: Observed<AgentHostIdentity>;
-  /** The request's place in the conversation tree; unavailable lineage matches no `conversation`/`root` recipient. */
-  readonly lineage: Observed<AgentLineage>;
+  /**
+   * The request's place in the conversation tree. Optional so a principal
+   * built before the axis existed (a four-axis `openRequest()` or
+   * `subscribe()` caller) keeps working: absent is unavailable, and
+   * unavailable lineage matches no `conversation`/`root` recipient.
+   */
+  readonly lineage?: Observed<AgentLineage>;
   readonly session: Observed<AgentSessionIdentity>;
   readonly workspace: Observed<AgentWorkspaceIdentity>;
 }
