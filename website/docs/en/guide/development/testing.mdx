@@ -60,8 +60,10 @@ of its own.
 
 The compiler's generated `.agent-bundle/routes.d.ts` registers the project's route contracts on
 `@agent-bundle/runtime`'s `Register` interface, the way it already declares provider keys. Once
-that file is part of the project's TypeScript program (add `".agent-bundle/routes.d.ts"` to
-`tsconfig.json` `include`), a `renderRoute` call written with a string literal is checked against
+that file is part of the project's TypeScript program — `create-agent-bundle` templates list
+`".agent-bundle/routes.d.ts"` in `tsconfig.json` `include` by default, the file itself stays
+gitignored, and `agent-bundle validate` warns with `AB4834` when a project that compiles routes or
+providers leaves it out — a `renderRoute` call written with a string literal is checked against
 the compiled route ids — the editor completes them, and a typo is rejected naming the registered
 alternatives — while `input` and `result` come from that route's own `inputSchema` and
 `resultSchema`:

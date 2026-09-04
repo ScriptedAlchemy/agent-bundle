@@ -5,6 +5,7 @@
   },
   "include": [
     "agent-bundle.config.ts",
+    ".agent-bundle/routes.d.ts",
     "src/**/*.ts",
     "src/**/*.tsx",
     "tests/**/*.ts",

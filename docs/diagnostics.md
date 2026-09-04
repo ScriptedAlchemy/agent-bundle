@@ -23,13 +23,13 @@ even when no error diagnostic was reported.
 | `AB46xx` | Assets and the generated-runtime floor. |
 | `AB470x` | Package build `bin` configuration (`AB4706`: artifact output overlaps `dist`; `AB4707`–`AB4709`: `output.distPath` shape, root escape, reserved namespace). |
 | `AB471x` | Package build `lib` configuration (`AB4710`–`AB4715`) and declaration generation (`AB4716`; see below). |
-| `AB472x` | The `tools.rsbuild` / `tools.rspack` escape hatch. |
+| `AB472x` | The `tools.rsbuild` / `tools.rspack` escape hatch (`AB4720`–`AB4723`: shape; `AB4724`: a framework-owned Rsbuild plugin re-added through `tools.rsbuild.plugins`; see below). |
 | `AB473x` | Migration nudges (informational; see below). |
 | `AB474x`/`AB4750` | Prebuilt payloads and prebuilt entries (see below). |
 | `AB4760` | The published `agent-bundle/meta` identity module evaluated outside every compiled surface and outside the Rstest presets (see below). |
 | `AB4765`–`AB4766` | Artifact-hosted routed CLI: a target without the `cli` capability omits `bin/<name>.mjs`; a host-emitted file collides with it (see below). |
 | `AB490x`/`AB492x` | Conventional host components (#100 stage 2): rules `src/rules/*.mdc` (`AB4900`–`AB4908`) and commands `src/commands/*.md` (`AB4920`–`AB4928`), including per-host feature-set enforcement (`AB4907`/`AB4908`, `AB4927`/`AB4928`); see below. |
-| `AB48xx`/`AB494x` | Route graph, state, layout (`AB4830`–`AB4832`), and provider conventions (see below). |
+| `AB48xx`/`AB494x` | Route graph, state, layout (`AB4830`–`AB4832`), generated route declarations outside the TypeScript program (`AB4834`), and provider conventions (see below). |
 | `AB5000` | General CLI and adapter failures. |
 | `AB60xx` | Built-artifact validation, including schema documents and referenced files (`AB6011`/`AB6012`: a target's required pinned-schema document is missing or invalid; `AB6025`: a manifest-declared `logo` path is missing from the artifact or escapes the deploy tree; `AB6034`: emitted Skill Markdown has no instruction body; `AB6035`–`AB6038`: Agent Plugins portable validation, see below). |
 | `AB700x` | Host installation: bundle identity, host availability, scope, command failure, and collision checks (`AB7005`: version collision, pre-receipt content collision, or foreign install; `AB7006`: the host lists the installed copy with load errors; see below). |
@@ -521,7 +521,38 @@ above, never per feature. Skills keep their own closed per-host schemas
 | `AB4927` | error | A command explicitly targets a host that supports commands but whose `commands.<field>` row for a frontmatter field the command uses is `degraded`, `unavailable`, or `prohibited` (the message carries the host's reason). Cursor's pinned commands surface is frontmatter-free Markdown, so every field row is unavailable there. | Remove the field or drop that host from the command's `targets`. |
 | `AB4928` | warning | An implicitly selected host supports commands but cannot express a frontmatter field the command uses; the command ships there without it (Cursor receives the prompt body only). | Accept the omission, restrict the command's `targets` to hosts that support the field, or remove the field. |
 
-## Route graph, state, layout, and provider conventions (`AB4800`–`AB4833`, `AB4940`–`AB4942`)
+## The bundler escape hatch (`AB4720`–`AB4724`)
+
+`tools.rsbuild` and `tools.rspack` are validated with the rest of the config
+source, so a malformed or colliding hatch is an **error** before any bundler
+runs — in `validate`, `build`, `inspect`, and `dev` alike. `AB4720`–`AB4723`
+check the shape: `tools` must be an object whose only keys are `rsbuild`
+(an Rsbuild environment-config object) and `rspack` (an Rspack config
+object, a mutator function, or an array of both).
+
+`AB4724` checks `tools.rsbuild.plugins` against the Rsbuild plugins the
+framework registers itself — currently `@rsbuild/plugin-react`
+(`rsbuild:react`), which every synthesized Rslib entry and every React-syntax
+MCP App view carries. The hatch merges *beside* the framework profile
+(`mergeRslibConfig` / `mergeRsbuildConfig` concatenate `plugins` arrays), and
+Rsbuild's plugin manager appends every plugin it is handed without deduping by
+name, so re-adding `pluginReact()` would register it twice. The check is
+static: plugin objects are matched by `name`, nested arrays are flattened the
+way Rsbuild flattens them, `false`/`null`/`undefined` holes are skipped, and a
+plugin supplied as a Promise is not inspected. It is an error rather than a
+warning for the same reason as its siblings: a config problem with one
+deterministic fix, reported once at the source, so no build ever runs a
+framework-owned plugin twice by accident.
+
+| Code | Severity | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB4720` | error | `tools` is not an object. | Declare `tools: { rsbuild?, rspack? }`. |
+| `AB4721` | error | `tools` carries a key other than `rsbuild` or `rspack`. | Remove the key; the hatch has exactly two fragments. |
+| `AB4722` | error | `tools.rsbuild` is not an Rsbuild environment-config object. | Declare an object fragment. |
+| `AB4723` | error | `tools.rspack` is not an Rspack config object, a mutator function, or an array of both. | Use one of the three Rslib `tools.rspack` forms. |
+| `AB4724` | error | `tools.rsbuild.plugins` supplies a plugin whose `name` matches a framework-owned registration (`rsbuild:react` from `@rsbuild/plugin-react`). The message names the plugin and its package. | Remove the plugin from `tools.rsbuild.plugins`; agent-bundle registers it in every config it synthesizes. |
+
+## Route graph, state, layout, and provider conventions (`AB4800`–`AB4834`, `AB4940`–`AB4942`)
 
 The route-graph compiler discovers conventional route modules
 (`src/mcp/<server>/{tools,resources,prompts,apps}/*`, `src/events/*/*`,
@@ -606,7 +637,19 @@ order — and augments `@agent-bundle/runtime`'s `AgentProviderValues` so
 `(await agent()).providers.<key>` observes that type in projects whose
 TypeScript program includes the file. Provider-free graphs emit no
 augmentation, so the declaration never references a module the project has no
-reason to depend on.
+reason to depend on. The file is only as good as the program that compiles
+it: `create-agent-bundle` templates and the `examples/*` projects list
+`".agent-bundle/routes.d.ts"` in `tsconfig.json` `include` (a literal entry,
+because `**/*` never descends into dot-directories), while the file itself
+stays gitignored. After publishing the declaration, `agent-bundle validate`
+resolves the root `tsconfig.json` program the way `tsc -p` does — `extends`,
+`files`, `include`, `exclude`, and one level of `references` for a
+solution-style root — and reports `AB4834` (a **warning**, surfaced by
+`validate` only) when the published file is not among its root files. A
+project with no root `tsconfig.json`, no published declaration (route-free
+and provider-free), or a `tsconfig.json` TypeScript cannot parse gets no
+diagnostic: there is no program to be missing from, or `tsc` already
+reports the parse failure itself.
 
 Conventional `src/scripts/` routes ship through the same pipeline as
 explicit `scripts` entries (#102 stage 1): a plain module directly under
@@ -717,6 +760,7 @@ schema constants), unions, nested objects, transforms, coercions — raises
 | `AB4831` | error | Two layout modules declare one layout scope (for example `src/layout.ts` beside `src/layout.tsx`). Keep exactly one module per scope. |
 | `AB4832` | error | A server layout (`src/mcp/<server>/layout.*`) names an MCP server that declares no tool, resource, or prompt route modules — the server directory is missing or holds only `apps/` routes, which never take a layout. Add routes under that server directory, move the layout, or rename it `_layout.*` to opt out. A server pinned to `custom`, `command`, or `remote` via `routes.servers.<server>` is skipped entirely: its layout is neither validated (`AB4830`) nor retained, because no generated worker composes it. |
 | `AB4833` | error | `notices.retention` is malformed: `notices` or `retention` is not an object, carries an unknown key, `terminalTtl` is not a positive integer of milliseconds or a duration such as `"7d"`, `"12h"`, `"30m"`, or `"90s"`, `maxTerminal` / `maxJournalBytes` is not a positive integer — or the policy is declared by a project without a conventional `src/state.ts`, which has no co-mounted notice ledger to retain. Omit a field to keep the runtime default (`7d`, `500`, `16777216`). |
+| `AB4834` | warning | `agent-bundle validate` published `.agent-bundle/routes.d.ts` (the project compiles routes or providers) but the root `tsconfig.json` program — resolved like `tsc -p`, including `extends` and one level of project `references` — does not compile it, so `renderRoute` / `renderRouteEvents` type-check route ids as `string` and `input` / `result` as `unknown`. Reported on `tsconfig.json`; never for a project without one. | Add `".agent-bundle/routes.d.ts"` to `tsconfig.json` `include` (not `files`: an `include` entry is inert until the first build publishes the file, while a missing `files` entry is a `tsc` error); `build`, `dev`, and `validate` keep the file current and it stays gitignored. |
 | `AB4940` | error | A conventional provider module has no default export or its default export is not a function. Default-export a factory receiving `{ invocation, signal }`. |
 | `AB4941` | error | Two provider filenames derive the same camel-cased provider key. Rename one file so every provider key is unique. |
 | `AB4942` | error | A provider filename derives the reserved `processLifetime` key. Rename the file so its camel-cased key does not collide with the framework-owned provider. |

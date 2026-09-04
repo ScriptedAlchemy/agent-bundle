@@ -32,7 +32,9 @@ npx agent-bundle dev --root .
 
 开发期还会从同一份编译后的路由图，把生成的路由声明发布到 `.agent-bundle/routes.d.ts`。每次写入都先
 写入一个同级临时文件，再原子地重命名覆盖先前那份完整声明，因此无效源码会保留上一份可用文件，而一次
-成功的、不含路由的准备过程会移除它。
+成功的、不含路由的准备过程会移除它。只有当项目的 TypeScript 程序编译了这份声明，它才会为 `renderRoute`
+提供类型：请把 `".agent-bundle/routes.d.ts"` 保留在 `tsconfig.json` 的 `include` 中（模板默认如此；
+缺失时 `agent-bundle validate` 会以 `AB4834` 警告）。
 
 ## 三个表面
 

@@ -987,6 +987,16 @@ and through a post-build scan of the emitted bundle for function-form
 `externals` — because generated executables must stay self-contained. The
 hatch customizes *how code compiles*, never *what the artifact promises*.
 
+The hatch merges *beside* the framework profile, not over it: `plugins`
+arrays concatenate, and Rsbuild's plugin manager appends every plugin it is
+handed without deduping by name. So a `tools.rsbuild.plugins` entry that
+re-adds a plugin the framework already registers — `@rsbuild/plugin-react`
+(`rsbuild:react`), carried by every synthesized Rslib entry and every
+React-syntax MCP App view — would run it twice. `agent-bundle validate`
+reports that as `AB4724` (an error, like the other `tools` shape checks) with
+the plugin and package name; remove the entry, the framework already
+registers it.
+
 The hatch executes under two different bundler engine copies. Artifact
 scripts, MCP entries, hook wrappers, and the package build compile through
 Rslib, which runs the Rsbuild/Rspack versions nested inside `@rslib/core`

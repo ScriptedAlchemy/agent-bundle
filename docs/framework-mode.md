@@ -148,9 +148,11 @@ The generated `.agent-bundle/routes.d.ts` declares `AgentBundleProviders`
 (`ProviderKey`, `ProviderValue<Key>`) from each factory's resolved return type
 and augments `@agent-bundle/runtime`'s `AgentProviderValues`, so
 `(await agent()).providers.library` is a `LibraryContext` with no cast once
-the file is part of the project's TypeScript program (add
-`".agent-bundle/routes.d.ts"` to `tsconfig.json` `include`). Undeclared keys
-stay `unknown`. The `agent-bundle/test` harness (`renderRoute`, `invokeCli`,
+the file is part of the project's TypeScript program. `create-agent-bundle`
+templates include it by default (`".agent-bundle/routes.d.ts"` in
+`tsconfig.json` `include`; the file stays gitignored), and `agent-bundle
+validate` warns with `AB4834` when a project that compiles routes or
+providers leaves it out. Undeclared keys stay `unknown`. The `agent-bundle/test` harness (`renderRoute`, `invokeCli`,
 the in-memory MCP helpers) mounts the project's providers automatically, in the
 same order and with the same fail-closed semantics as the generated request
 scopes, so a route-unit test observes what the artifact would mount — including

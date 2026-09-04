@@ -180,7 +180,10 @@ Development-only settings that never become part of a built artifact.
 The single bundler escape hatch. Both fragments merge last-but-bounded into every bundler config
 the framework synthesizes, and the artifact invariant assertions still run after the merge, so a
 hatch value that breaks an artifact contract is a hard diagnostic rather than a silent override
-(`AB472x`).
+(`AB472x`). `AB4720`–`AB4723` check the shape of `tools`, `tools.rsbuild`, and `tools.rspack`;
+`AB4724` rejects a `tools.rsbuild.plugins` entry that re-adds a framework-owned plugin
+(`@rsbuild/plugin-react`, `rsbuild:react`), because `plugins` arrays concatenate and Rsbuild
+never dedupes plugins by name — the framework registers it for you.
 
 The hatch executes under two bundler engine copies: artifact scripts, MCP entries, hooks, and the
 package build compile through Rslib's nested Rsbuild/Rspack, while MCP App views compile through

@@ -38,7 +38,9 @@ as one `AB7103` **warning** on the succeeded build attempt and retries on the ne
 Development also publishes generated route declarations at `.agent-bundle/routes.d.ts` from the
 same compiled graph. Each write goes to a sibling temporary file and is renamed over the prior
 complete declaration atomically, so invalid source keeps the last-good file, and a successful
-route-free preparation removes it.
+route-free preparation removes it. The declaration only types `renderRoute` when the project's
+TypeScript program compiles it: keep `".agent-bundle/routes.d.ts"` in `tsconfig.json` `include`
+(the templates ship it that way; `agent-bundle validate` warns with `AB4834` when it is missing).
 
 ## The three surfaces
 

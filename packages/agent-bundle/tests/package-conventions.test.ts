@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { pluginReact } from '@rsbuild/plugin-react';
 import { afterEach, describe, expect, it } from '@rstest/core';
 
 import {
@@ -262,6 +263,38 @@ describe('bin, lib, and tools validation', () => {
       'src/index.ts': 'export const a = 1;\n',
     });
     expect(diagnostics.map((diagnostic) => diagnostic.code)).toContain(code);
+  });
+
+  // AB4724: Rsbuild appends every plugin it is handed without deduping by
+  // name, and the hatch merges beside the framework profile, so a consumer
+  // re-adding a framework-owned plugin would register it twice.
+  it('rejects a framework-owned plugin re-added through tools.rsbuild.plugins with AB4724', async () => {
+    const diagnostics = await validated({
+      tools: { rsbuild: { plugins: [pluginReact(), [false, pluginReact({ fastRefresh: true })]] } },
+    });
+    const collisions = diagnostics.filter((diagnostic) => diagnostic.code === 'AB4724');
+    expect(collisions).toHaveLength(1);
+    expect(collisions[0]).toMatchObject({
+      message: expect.stringContaining('"rsbuild:react" (@rsbuild/plugin-react) is already registered by agent-bundle'),
+      recovery: expect.stringContaining('Remove @rsbuild/plugin-react from tools.rsbuild.plugins'),
+      severity: 'error',
+    });
+    expect(collisions[0]!.sourcePath).toMatch(/agent-bundle\.config\.ts$/u);
+  });
+
+  it('accepts unrelated plugins in tools.rsbuild.plugins without a collision diagnostic', async () => {
+    const diagnostics = await validated({
+      tools: {
+        rsbuild: {
+          plugins: [
+            { name: 'consumer:banner', setup: () => undefined },
+            [null, { name: 'consumer:nested', setup: () => undefined }],
+            Promise.resolve(pluginReact()),
+          ],
+        },
+      },
+    });
+    expect(diagnostics).toEqual([]);
   });
 });
 
