@@ -189,15 +189,20 @@ describe('audiobook-curator at the CLI dispatch proof level', () => {
       }
     });
 
-    it('maps the inspect zod bounds failure to exit 2', async () => {
+    it('maps the inspect zod bounds failure to a flag error and exit 2 (#465)', async () => {
       const { library } = await temporaryLibrary();
       const run = await invokeCli(['inspect', library, '--max-files', '0']);
 
       expect(run.exitCode).toBe(2);
       expect(run.stdout).toBe('');
-      expect(run.stderr).toContain('maxFiles');
-      expect(run.stderr).toContain('expected number to be >=1');
-      expect(run.stderr).toContain("Run 'audiobook-curator inspect --help' for usage.");
+      expect(run.stderr).toBe([
+        'Invalid value for --max-files: expected number >= 1; received 0.',
+        'Usage: audiobook-curator inspect [options] <root>',
+        "Run 'audiobook-curator inspect --help' for usage.",
+        '',
+      ].join('\n'));
+      expect(run.stderr).not.toContain('maxFiles');
+      expect(run.stderr).not.toContain('too_small');
     });
   });
 

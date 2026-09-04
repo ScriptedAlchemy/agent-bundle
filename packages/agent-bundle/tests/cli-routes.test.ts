@@ -3,10 +3,12 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { afterEach, describe, expect, it } from '@rstest/core';
+import { z } from 'zod';
 
 import { inspect } from '../src/api.ts';
 import {
   CliInputError,
+  cliInputError,
   projectCliDocumentToMarkdown,
   runGeneratedCliEntry,
   runGeneratedRenderedScript,
@@ -866,6 +868,129 @@ describe('generated CLI shell', () => {
     expect(invalid.code).toBe(2);
     expect(invalid.stderr).toContain('root must be absolute');
     expect(invalid.stderr).toContain('for usage');
+  });
+
+  describe('input-validation failures (#465)', () => {
+    const doctor = commands[0]!;
+    const audit = commands[1]!;
+    const doctorSchema = z.object({
+      maxFiles: z.number().int().max(55_000).default(8),
+      root: z.string().min(1),
+      verbose: z.boolean().optional(),
+    }).strict();
+    const failure = (schema: z.ZodType, input: Readonly<Record<string, unknown>>): unknown => {
+      const result = schema.safeParse(input);
+      if (result.success) throw new Error('fixture input unexpectedly valid');
+      return result.error;
+    };
+
+    it('spells each zod issue as the CLI argument, the expectation, and the received value', () => {
+      const error = cliInputError(doctor, { maxFiles: 300_000, root: '/library' }, failure(doctorSchema, { maxFiles: 300_000, root: '/library' }));
+      expect(error).toBeInstanceOf(CliInputError);
+      expect(error.issues).toEqual([{
+        expected: 'number <= 55000',
+        message: expect.stringContaining('55000'),
+        received: 300_000,
+        target: '--max-files',
+      }]);
+      expect(error.message).toBe('Invalid value for --max-files: expected number <= 55000; received 300000.');
+      expect(error.message).not.toContain('"code"');
+
+      const positional = cliInputError(doctor, { root: '' }, failure(doctorSchema, { root: '' }));
+      expect(positional.message).toBe('Invalid value for <root>: expected non-empty string; received "".');
+
+      const missing = cliInputError(doctor, {}, failure(doctorSchema, {}));
+      expect(missing.issues).toEqual([{ expected: 'string', message: expect.any(String), target: '<root>' }]);
+      expect(missing.message).toBe('Invalid value for <root>: expected string; received nothing.');
+
+      const type = cliInputError(doctor, { maxFiles: 'many', root: '/library' }, failure(doctorSchema, { maxFiles: 'many', root: '/library' }));
+      expect(type.message).toBe('Invalid value for --max-files: expected number; received "many".');
+    });
+
+    it('maps enum, length, unknown-key, and multi-issue failures one line per issue', () => {
+      const auditSchema = z.object({
+        format: z.enum(['json', 'table']).optional(),
+        report: z.string(),
+        sources: z.array(z.string()).max(2),
+      }).strict();
+      const input = { extra: true, format: 'xml', report: 'r', sources: ['a', 'b', 'c'] };
+      const error = cliInputError(audit, input, failure(auditSchema, input));
+      expect(error.issues.map((issue) => issue.target)).toEqual(['--format', '<sources>', 'input']);
+      expect(error.message.split('\n')).toEqual([
+        'Invalid value for --format: expected one of: "json", "table"; received "xml".',
+        'Invalid value for <sources>: expected array with at most 2 items; received ["a","b","c"].',
+        'Invalid value for input: expected no unknown key "extra"; received {"extra":true,"format":"xml","report":"r","sources":["a","b","c"]}.',
+      ]);
+    });
+
+    it('keeps the operand of every string refinement in the bounded grammar', () => {
+      const cases: readonly [schema: z.ZodType, value: string, expected: string][] = [
+        [z.object({ root: z.string().startsWith('/') }), 'relative', 'string starting with "/"'],
+        [z.object({ root: z.string().endsWith('.json') }), 'config.yaml', 'string ending with ".json"'],
+        [z.object({ root: z.string().includes('@') }), 'nobody', 'string containing "@"'],
+        [z.object({ root: z.string().regex(/^[a-z]+$/u) }), 'Nope', 'string matching /^[a-z]+$/u'],
+        [z.object({ root: z.string().length(4) }), 'abc', 'string with exactly 4 characters'],
+        [z.object({ root: z.url() }), 'not a url', 'URL'],
+      ];
+      for (const [schema, value, expected] of cases) {
+        const error = cliInputError(doctor, { root: value }, failure(schema, { root: value }));
+        expect(error.message).toBe(`Invalid value for <root>: expected ${expected}; received ${JSON.stringify(value)}.`);
+      }
+    });
+
+    it('spells a projected MCP command path as --input.<path>', () => {
+      const schema = z.object({ message: z.string(), nested: z.object({ count: z.number() }).optional() });
+      const input = { message: 42, nested: { count: 'x' } };
+      const error = cliInputError(readOnlyTool, input, failure(schema, input));
+      expect(error.message.split('\n')).toEqual([
+        'Invalid value for --input.message: expected string; received 42.',
+        'Invalid value for --input.nested.count: expected number; received "x".',
+      ]);
+    });
+
+    it('keeps a non-schema failure message-only', () => {
+      const error = cliInputError(doctor, {}, new Error('root must be absolute'));
+      expect(error.issues).toEqual([]);
+      expect(error.message).toBe('root must be absolute');
+    });
+
+    it('prints one line per issue, the exact usage line, and the help hint; exit 2', async () => {
+      const input = { maxFiles: 300_000, root: '/library' };
+      const invalid = await run(['doctor', '/library', '--max-files', '300000'], {
+        throws: cliInputError(doctor, input, failure(doctorSchema, input)),
+      });
+      expect(invalid.code).toBe(2);
+      expect(invalid.stdout).toBe('');
+      expect(invalid.stderr).toBe([
+        'Invalid value for --max-files: expected number <= 55000; received 300000.',
+        'Usage: curator doctor [options] <root>',
+        "Run 'curator doctor --help' for usage.",
+        '',
+      ].join('\n'));
+    });
+
+    it('emits one canonical error object on stderr under --json and keeps stdout empty', async () => {
+      const input = { maxFiles: 300_000, root: '/library' };
+      const invalid = await run(['doctor', '/library', '--max-files', '300000', '--json'], {
+        throws: cliInputError(doctor, input, failure(doctorSchema, input)),
+      });
+      expect(invalid.code).toBe(2);
+      expect(invalid.stdout).toBe('');
+      expect(invalid.stderr.endsWith('\n')).toBe(true);
+      expect(invalid.stderr.trimEnd().split('\n')).toHaveLength(1);
+      expect(JSON.parse(invalid.stderr)).toEqual({
+        error: {
+          code: 'CLI_INPUT_INVALID',
+          issues: [{
+            expected: 'number <= 55000',
+            message: expect.stringContaining('55000'),
+            received: 300_000,
+            target: '--max-files',
+          }],
+          usage: 'Usage: curator doctor [options] <root>',
+        },
+      });
+    });
   });
 
   it('adopts the validated result exitCode under the result policy and fails closed otherwise', async () => {

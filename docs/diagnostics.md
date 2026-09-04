@@ -690,7 +690,11 @@ Diagnostics go to stderr; machine output owns stdout. Exit codes: 0 on
 success (or the validated result's integer `exitCode` under
 `config.exitCode: 'result'`), 1 on execution/render failure, 2 on usage or
 input-validation failure, 130/143 after SIGINT/SIGTERM. `--help`, `--json`,
-`--ndjson`, and `--version` are owned by the generated shell.
+`--ndjson`, and `--version` are owned by the generated shell. An
+`inputSchema` rejection is reported one issue per line in CLI terms —
+`Invalid value for <target>: expected <expectation>; received <JSON>.` — then
+the usage line; `--json` writes one `{"error":{"code":"CLI_INPUT_INVALID",
+...}}` line to stderr and `--ndjson` one `type: "error"` event (#465).
 
 The power-tier `routes.mcpCommands` option projects tools from generated MCP
 servers into that same command graph. Each tool becomes

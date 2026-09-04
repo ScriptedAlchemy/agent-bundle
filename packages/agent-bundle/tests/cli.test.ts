@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { expect, it } from '@rstest/core';
 
 import { runCli as runSourceCli, type CliDependencies } from '../src/cli.ts';
+import { captureCliTerminal } from './support/cli-terminal.ts';
 import { cachedNpmInstallArguments, packOutputFromJson } from './support/shared-pack.ts';
 import { timeScale } from './support/time-scale.ts';
 
@@ -42,14 +43,10 @@ const runSourceCliWithOutput = async (
   args: string[],
   dependencies: CliDependencies = {},
 ): Promise<{ readonly code: number; readonly stderr: string; readonly stdout: string }> => {
-  const stderr: string[] = [];
-  const stdout: string[] = [];
+  const terminal = captureCliTerminal();
   Object.defineProperty(globalThis, '__AGENT_BUNDLE_VERSION__', { configurable: true, value: 'test' });
-  const code = await runSourceCli(args, {
-    stderr: { write: (chunk: string) => stderr.push(chunk) },
-    stdout: { write: (chunk: string) => stdout.push(chunk) },
-  }, dependencies);
-  return { code, stderr: stderr.join(''), stdout: stdout.join('') };
+  const code = await runSourceCli(args, terminal.output, dependencies);
+  return { code, stderr: terminal.stderr(), stdout: terminal.stdout() };
 };
 
 const createCliProject = async (): Promise<{ readonly output: string; readonly root: string }> => {
@@ -737,17 +734,13 @@ it('reports a generated Flight worker collision before compiling scripts', async
 }, 30_000 * timeScale);
 
 it('dispatches the install command through the native installer surface', async () => {
-  const stderr: string[] = [];
-  const stdout: string[] = [];
+  const terminal = captureCliTerminal();
   const calls: unknown[] = [];
   Object.defineProperty(globalThis, '__AGENT_BUNDLE_VERSION__', { configurable: true, value: 'test' });
 
   const code = await runSourceCli(
     ['install', 'claude', '--from', '/tmp/example bundle', '--scope', 'project', '--json'],
-    {
-      stderr: { write: (chunk: string) => stderr.push(chunk) },
-      stdout: { write: (chunk: string) => stdout.push(chunk) },
-    },
+    terminal.output,
     {
       installBundle: async (options: unknown) => {
         calls.push(options);
@@ -764,14 +757,14 @@ it('dispatches the install command through the native installer surface', async 
   );
 
   expect(code).toBe(0);
-  expect(stderr.join('')).toBe('');
+  expect(terminal.stderr()).toBe('');
   expect(calls).toEqual([{
     from: '/tmp/example bundle',
     host: 'claude',
     replace: false,
     scope: 'project',
   }]);
-  expect(JSON.parse(stdout.join(''))).toMatchObject({
+  expect(JSON.parse(terminal.stdout())).toMatchObject({
     host: 'claude',
     plugin: 'fixture',
     state: 'installed',

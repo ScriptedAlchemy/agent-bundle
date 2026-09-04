@@ -9,6 +9,7 @@ import { TargetRegistry } from '../src/adapters/registry.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
 import type { NormalizedPlugin } from '../src/core/types.ts';
 import { runCli } from '../src/cli.ts';
+import { captureCliTerminal } from './support/cli-terminal.ts';
 import { createWorkbenchAssetSource } from '../src/dev/workbench-assets.ts';
 import {
   closeDevServerLifecycle,
@@ -1827,7 +1828,7 @@ it('retains sandbox startup and foreground cleanup failures structurally', async
 });
 
 it('passes --no-open, the requested port, and repeatable dev host installs to the public dev API', async () => {
-  const stdout: string[] = [];
+  const terminal = captureCliTerminal();
   const received: unknown[] = [];
   const exitCode = await runCli([
     'dev',
@@ -1840,9 +1841,7 @@ it('passes --no-open, the requested port, and repeatable dev host installs to th
     'cursor',
     '--install-host',
     'claude',
-  ], {
-    stdout: { write: (value) => stdout.push(value) },
-  }, {
+  ], terminal.output, {
     startDevServer: async (options) => {
       received.push(options);
       return {
@@ -1861,7 +1860,7 @@ it('passes --no-open, the requested port, and repeatable dev host installs to th
     port: 4100,
     root: '/project',
   })]);
-  expect(stdout.join('')).toBe('Development workbench at http://127.0.0.1:4100\n');
+  expect(terminal.stdout()).toBe('Development workbench at http://127.0.0.1:4100\n');
 });
 
 it('passes explicit Agent API enablement and disablement through the dev CLI', async () => {

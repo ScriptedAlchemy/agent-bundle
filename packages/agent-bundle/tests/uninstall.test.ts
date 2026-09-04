@@ -17,6 +17,7 @@ import {
   readInstallReceiptFile,
 } from '../src/install/receipt.ts';
 import { uninstallBundle, type UninstallResult } from '../src/install/uninstall.ts';
+import { captureCliTerminal } from './support/cli-terminal.ts';
 import { diffTreeSnapshots, snapshotTree, treesIdentical } from './support/tree-snapshot.ts';
 
 interface CommandCall {
@@ -1246,8 +1247,7 @@ it('rejects an uninstall mode for hosts other than Cursor before touching anythi
 });
 
 it('exposes uninstall through the public CLI with every lifecycle flag', async () => {
-  const stderr: string[] = [];
-  const stdout: string[] = [];
+  const terminal = captureCliTerminal();
   const calls: unknown[] = [];
   Object.defineProperty(globalThis, '__AGENT_BUNDLE_VERSION__', { configurable: true, value: 'test' });
   const result: UninstallResult = {
@@ -1268,10 +1268,7 @@ it('exposes uninstall through the public CLI with every lifecycle flag', async (
   };
   const code = await runCli(
     ['uninstall', 'cursor', '--from', '/tmp/example bundle', '--mode', 'local', '--plan', '--force', '--purge-data', '--confirm-purge', '--json'],
-    {
-      stderr: { write: (chunk: string) => stderr.push(chunk) },
-      stdout: { write: (chunk: string) => stdout.push(chunk) },
-    },
+    terminal.output,
     {
       uninstallBundle: async (options: unknown) => {
         calls.push(options);
@@ -1280,7 +1277,7 @@ it('exposes uninstall through the public CLI with every lifecycle flag', async (
     } as unknown as Parameters<typeof runCli>[2],
   );
   expect(code).toBe(0);
-  expect(stderr.join('')).toBe('');
+  expect(terminal.stderr()).toBe('');
   expect(calls).toEqual([{
     confirmPurge: true,
     force: true,
@@ -1291,15 +1288,15 @@ it('exposes uninstall through the public CLI with every lifecycle flag', async (
     purgeData: true,
     scope: 'user',
   }]);
-  expect(JSON.parse(stdout.join(''))).toMatchObject({ plugin: 'fixture', state: 'planned' });
+  expect(JSON.parse(terminal.stdout())).toMatchObject({ plugin: 'fixture', state: 'planned' });
 
-  const human: string[] = [];
+  const human = captureCliTerminal();
   await runCli(
     ['uninstall', 'cursor', '--keep-data'],
-    { stderr: { write: () => undefined }, stdout: { write: (chunk: string) => human.push(chunk) } },
+    human.output,
     { uninstallBundle: async () => result } as unknown as Parameters<typeof runCli>[2],
   );
-  expect(human.join('')).toContain('Would uninstall fixture@1.0.0 for cursor (local mode)');
-  expect(human.join('')).toContain('/home/example/.cursor/plugins/local/fixture/payload.txt');
-  expect(human.join('')).toContain('Data (keep): kept');
+  expect(human.stdout()).toContain('Would uninstall fixture@1.0.0 for cursor (local mode)');
+  expect(human.stdout()).toContain('/home/example/.cursor/plugins/local/fixture/payload.txt');
+  expect(human.stdout()).toContain('Data (keep): kept');
 });

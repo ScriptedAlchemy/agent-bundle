@@ -301,7 +301,7 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
   const plainIndent = options.state === undefined ? '  ' : '    ';
   const stateFallback = options.stateFallback ?? 'cwd';
   return [
-    `import { CliInputError, runGeneratedCliProcess } from ${JSON.stringify(cliEntryRuntimeSpecifier)};`,
+    `import { cliInputError, runGeneratedCliProcess } from ${JSON.stringify(cliEntryRuntimeSpecifier)};`,
     rendered
       ? "import { available, createAgentRenderDispatcher, runAgentRequest, unavailable } from '@agent-bundle/runtime';"
       : "import { available, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
@@ -320,11 +320,13 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     '',
     `const commands = Object.freeze(${stableJson(options.commands)});`,
     '',
-    'const parseInput = (route, input) => {',
+    // A schema failure becomes a CliInputError whose issues name the CLI
+    // argument, the expectation, and the received value (#465).
+    'const parseInput = (command, route, input) => {',
     '  try {',
     '    return route.module.inputSchema.parse(input);',
     '  } catch (error) {',
-    '    throw new CliInputError(error instanceof Error ? error.message : String(error));',
+    '    throw cliInputError(command, input, error);',
     '  }',
     '};',
     '',
@@ -334,7 +336,7 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     'const execute = async (command, input, context) => {',
     '  const route = routes[command.routeId];',
     "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated CLI route must default-export an async function.');",
-    '  const parsed = parseInput(route, input);',
+    '  const parsed = parseInput(command, route, input);',
     '  const cwd = process.cwd();',
     ...processHitSource('  '),
     ...(options.state === undefined
@@ -373,7 +375,7 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
         '',
         'const render = (command, input, context) => {',
         '  const route = routes[command.routeId];',
-        '  const parsed = parseInput(route, input);',
+        '  const parsed = parseInput(command, route, input);',
         '  if (command.mcp !== undefined) {',
         '    return openRenderedSession({',
         "      invocation: { kind: 'tool', props: { input: parsed, operationId: command.routeId } },",

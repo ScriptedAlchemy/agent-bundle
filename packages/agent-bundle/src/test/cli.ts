@@ -20,7 +20,7 @@
 import type * as AgentRuntime from '@agent-bundle/runtime';
 import type { RegisteredRouteId } from '@agent-bundle/runtime';
 
-import { CliInputError, runGeneratedCliEntry } from '../cli-entry.ts';
+import { cliInputError, runGeneratedCliEntry } from '../cli-entry.ts';
 import type { CliRenderedEvent } from '../cli-entry.ts';
 import { createProviderProcessLifetime } from '../routes/provider-execution.ts';
 import type { CompiledCliCommand } from '../routes/types.ts';
@@ -242,7 +242,7 @@ export const invokeCli = async (
         try {
           parsed = module.inputSchema.parse(input);
         } catch (error) {
-          throw new CliInputError(error instanceof Error ? error.message : String(error));
+          throw cliInputError(command, input, error);
         }
         const root = process.cwd();
         // Same provider invocation the generated plain-command path builds (#366).

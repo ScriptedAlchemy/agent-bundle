@@ -246,9 +246,31 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
 
   // Usage and input-validation failures exit 2 with diagnostics on stderr only.
   await expect(execFile(binPath, ['unknown'])).rejects.toMatchObject({ code: 2, stdout: '' });
+  // The packed executable spells a schema rejection in CLI terms (#465): the
+  // argument, the expectation, the received value, then the usage line —
+  // never the raw zod issue JSON.
   const tooMany = execFile(binPath, ['library', 'audit', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i']);
-  await expect(tooMany).rejects.toMatchObject({ code: 2, stdout: '' });
-  await expect(tooMany).rejects.toMatchObject({ stderr: expect.stringContaining('sources') });
+  await expect(tooMany).rejects.toMatchObject({
+    code: 2,
+    stderr: [
+      'Invalid value for <sources>: expected array with at most 8 items; received ["a","b","c","d","e","f","g","h","i"].',
+      'Usage: cli-bin-fixture library audit [options] <sources...>',
+      "Run 'cli-bin-fixture library audit --help' for usage.",
+      '',
+    ].join('\n'),
+    stdout: '',
+  });
+  const tooManyJson = execFile(binPath, ['library', 'audit', '--max-findings', '-1', 'a', '--json']);
+  await expect(tooManyJson).rejects.toMatchObject({ code: 2, stdout: '' });
+  await tooManyJson.catch((failure: { readonly stderr: string }) => {
+    expect(JSON.parse(failure.stderr)).toEqual({
+      error: {
+        code: 'CLI_INPUT_INVALID',
+        issues: [{ expected: 'number >= 0', message: expect.any(String), received: -1, target: '--max-findings' }],
+        usage: 'Usage: cli-bin-fixture library audit [options] <sources...>',
+      },
+    });
+  });
 
   // The rendered .tsx command (#102 stage 3) renders through the dispatcher
   // against the sibling react-server worker.

@@ -234,7 +234,9 @@ motivated the decline is still real and is what the keep-raw list below
 encodes: the pinned `FileSystem` has no `lstat`, `OpenFlag` accepts only
 string flags (no `O_NOFOLLOW`), and there is no directory fsync.
 `NodeRuntime.runMain` stays banned (the 130/143 signal-distinct exit
-contract).
+contract). The same package's `Terminal` and `Stdio` services are adopted for
+the first-party CLI's user-facing text — see
+[Terminal and Stdio](#terminal-and-stdio-user-facing-cli-text).
 
 ### Adopt
 
@@ -269,10 +271,14 @@ contract).
 - Layer wiring: one composition root per process. The scaffolder provides
   `NodeServices.layer` immediately before its boundary's `runPromise`;
   `agent-bundle`'s public API functions provide `platformLayer` through
-  `runWithPlatform`; the dev server (phase 2) gets one
-  `makeScopedEffectRuntime(platformLayer)` in `startDevServer`, disposed
-  from the session's `close`. Never provide a platform layer deep inside
-  library code.
+  `runWithPlatform`; the first-party CLI's root is the
+  `makeScopedEffectRuntime(nodeCliServices)` in `runCli` (today `NodeTerminal`
+  + `NodeStdio`, see [Terminal and
+  Stdio](#terminal-and-stdio-user-facing-cli-text)) and widens to
+  `platformLayer` there when CLI code adopts the filesystem services; the dev
+  server (phase 2) gets one `makeScopedEffectRuntime(platformLayer)` in
+  `startDevServer`, disposed from the session's `close`. Never provide a
+  platform layer deep inside library code.
 - Errors: `PlatformError` flows through the Effect error channel and is
   mapped once, at the boundary, onto the existing contract. Where a
   user-facing AB#### diagnostic already exists for the failure, map to it
@@ -343,6 +349,51 @@ path, and lifting only its two async reads would add an Effect runtime per
 compile for nothing. Emitted artifacts, hook wrappers, and compiler hot
 paths never import this module; the dev server picks it up in phase 2
 through `makeScopedEffectRuntime(platformLayer)`.
+
+### Terminal and Stdio: user-facing CLI text
+
+Adopted 2026-09-03 for the first-party `agent-bundle` CLI (`src/cli.ts`); the
+Node implementations come from `@effect/platform-node-shared@4.0.0-rc.112`,
+the same dependency `platform.ts` builds `platformLayer` from (never
+`@effect/platform-node`, for the consumer-footprint reason above).
+`effect/Terminal` is the sanctioned way to touch stdin/stdout for
+**user-facing text**: human command output, Commander help and argv errors,
+and the Workbench startup URL line go through `Terminal.display`, and any
+future interactive prompt goes through `terminal.readLine` (EOF surfaces as
+`Terminal.QuitError`, so a prompt must handle it). `Terminal.display` is
+stdout-only; **diagnostics** (the canonical JSON diagnostics document) go
+through `Stdio.stderr()`, and **machine output** (`--json`, stable JSON
+lines) goes through `Stdio.stdout()` so its bytes stay exact. The helpers
+live in `src/effect/terminal.ts` (`display`, `writeStderr`, `writeStdout`).
+
+Wiring rules:
+
+- Provide the process-backed layers **once**, at the CLI composition root
+  (`runCli`), through one `makeScopedEffectRuntime(nodeCliServices)` from
+  `src/effect/boundary.ts`, and close it when the command finishes (a
+  foreground `dev` session keeps it until the session closes). No other
+  module provides `NodeTerminal.layer` / `NodeStdio.layer`.
+- `nodeCliServices` is `Layer.mergeAll(NodeTerminal.layer, NodeStdio.layer)`
+  from the `@effect/platform-node-shared/NodeTerminal` and `/NodeStdio`
+  subpaths, not the whole `platformLayer`: the CLI's help/version path does
+  not use child-process, crypto, or filesystem services, and loading them
+  measured at roughly +400 ms of startup.
+- The scaffolder (`packages/create-agent-bundle/src/index.ts`) uses the same
+  two services from its existing `NodeServices.layer` root for `--help`
+  (`Terminal.display`) and flag errors (`Stdio.stderr()`); Clack stays the
+  prompt renderer and is not replaced by `readLine`.
+- Keep `display` text explicit about line endings (`\n`); the service writes
+  what it is given.
+- Tests provide a capture layer (`tests/support/cli-terminal.ts`:
+  `Terminal.make({ display })` + `Stdio.layerTest({ stdout, stderr })`)
+  through `runCli(args, { services })`; they never spy on `process.stdout`.
+- **Protocol stdout stays raw.** MCP stdio JSON-RPC (`mcp-entry.ts`,
+  `mcp run`), hook result JSON (`adapters/hook-contract.ts`), the emitted
+  routed-CLI shell (`cli-entry.ts`'s `writeOut`/`writeErr` ports and the
+  `entry-shell.ts` bin template), generated installers (`install-entry.ts`,
+  `install/surface.ts`), and child/worker stderr forwarding keep their direct
+  `process.stdout`/`process.stderr` adapters: emitted artifacts must not carry
+  a platform runtime, and byte-exact protocol frames are not terminal text.
 
 ## Effect Schema wire contracts (Schema projections)
 
@@ -421,6 +472,7 @@ wire contracts](#effect-schema-wire-contracts-schema-projections).
 | --- | --- | --- |
 | `effect/unstable/reactivity` (+ `@effect/atom-react` bindings) | Workbench Agent Document panel (#105 phase 1) and route editor (#105 phase 2) | re-pin bumps @effect/atom-react in lockstep; re-run disposal regression + bundle measurement; stream-backed derived atoms stay banned until the rc.112 disposal fix ships |
 | `@effect/platform-node` (`NodeServices.layer`, `create-agent-bundle`) and `@effect/platform-node-shared` (`agent-bundle`'s `platformLayer`); `FileSystem` / `Path` services live in `effect` | **adopted** (2026-09-03) for ordinary I/O — `create-agent-bundle` scaffolder and the `agent-bundle` temp directories in `api.ts` / the Codex validator (phase 1); see [Effect platform services](#effect-platform-services-effectplatform-node) for the keep-raw list and the consumer-footprint reason for the split | re-pin bumps both in lockstep with `effect`; re-check whether `@effect/platform-node` still forces a `redis` peer (if it stops, `agent-bundle` can move to `NodeServices.layer`); re-check whether `lstat` / `O_NOFOLLOW` / directory fsync landed (would shrink the keep-raw list) and the `runMain` 130/143 exit contract |
+| `@effect/platform-node-shared` (`NodeTerminal` / `NodeStdio`) + `effect/Terminal`, `effect/Stdio` | first-party CLI user-facing text, diagnostics, and machine output (`src/cli.ts`, `src/effect/terminal.ts`) and `create-agent-bundle`'s `--help` / flag-error text (2026-09-03) | re-pin re-checks `Terminal.display` stays stdout-only, `readLine` EOF → `QuitError`, the `Stdio` sink contract, and re-measures `agent-bundle --version` startup against the recorded +180 ms budget |
 | `Schema` / `SchemaAST` / `SchemaParser` projections (`toType` / `toEncoded`) for wire contracts | **declined** (2026-09-01) | revisit at Effect GA or on the first encoded/decoded-divergent wire contract; re-pin re-checks the projections API and the `onExcessProperty` parse-option default |
 
 ## Language service

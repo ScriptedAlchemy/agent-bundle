@@ -112,6 +112,21 @@ deterministically:
 | `2` | Usage or input failure. |
 | `130` / `143` | SIGINT / SIGTERM, which also reach the route's `AbortSignal`. |
 
+When `inputSchema` rejects the parsed argv, the shell spells each issue in CLI terms instead of
+printing the raw schema issue JSON: the argument as typed (`--max-files`, `<root>`, or
+`--input.<path>` for a projected MCP command), the expectation, and the received value, one line
+per issue, then the exact usage line and the `--help` hint — all on stderr, exit code `2`:
+
+```text
+Invalid value for --max-files: expected number <= 55000; received 300000.
+Usage: curator doctor [options] <root>
+Run 'curator doctor --help' for usage.
+```
+
+Under `--json` stdout stays empty and stderr carries one canonical
+`{"error":{"code":"CLI_INPUT_INVALID","issues":[...],"usage":"..."}}` line; under `--ndjson` the
+stream carries one `type: "error"` event with the same `error` object.
+
 A `.tsx` command route swaps the default function for an async default Server Component with the
 same props and renders through the runtime dispatcher against a sibling
 `dist/bin/<plugin-name>-flight.mjs` worker. It gains the four output modes described in
