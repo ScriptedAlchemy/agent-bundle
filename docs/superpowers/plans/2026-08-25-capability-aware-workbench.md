@@ -544,7 +544,6 @@ Expected: zero failures and zero lint warnings.
 ```bash
 pnpm check:release
 pnpm test:packed
-pnpm lint:package
 ```
 
 Expected: pack dry-run, publint, ATTW, and packed Workbench tests all pass.

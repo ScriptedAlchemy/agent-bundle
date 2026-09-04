@@ -126,7 +126,7 @@ In `package.json`, remove `workspaces`, add `"packageManager": "pnpm@11.23.0"`, 
     "test:packed:native:claude": "pnpm build && AGENT_BUNDLE_PACKED_NATIVE_CLAUDE_SMOKE=1 pnpm test:packed:native",
     "test:packed:native:codex": "pnpm build && AGENT_BUNDLE_PACKED_NATIVE_CODEX_SMOKE=1 pnpm test:packed:native",
     "pack:dry-run": "pnpm build && npm pack ./packages/agent-bundle --dry-run --json",
-    "lint:release": "pnpm lint:package && attw --pack --profile esm-only packages/agent-bundle",
+    "lint:release": "attw --pack --profile esm-only packages/agent-bundle",
     "check:release": "pnpm pack:dry-run && pnpm lint:release && pnpm test:packed"
   }
 }

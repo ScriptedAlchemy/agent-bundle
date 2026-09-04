@@ -8,7 +8,7 @@
  *
  * Hosted job → local leg mapping:
  * - verify (Node 22.19 / 24 / 26) → legs `verify-node22|24|26`: install,
- *   playwright chrome, build, lint:package, typecheck, lint, test:unit,
+ *   playwright chrome, build (publint runs inside it), typecheck, lint, test:unit,
  *   test:integration — the same package scripts in the same order.
  * - examples-check + release-gates + rsc-runtime-micro-eval (all Node 22.19)
  *   → leg `gates-node22`: examples:check, check:release, eval:spot run
@@ -357,8 +357,8 @@ const main = async () => {
     // apt/root-only and the OS packages are a one-time machine setup, so the
     // local step installs/validates the browser only.
     { id: 'browsers', hostedJob: 'verify', command: ['pnpm', 'exec', 'playwright', 'install', 'chrome'] },
+    // publint runs inside each package's `rslib build` (rsbuild-plugin-publint).
     { id: 'build', hostedJob: 'verify', command: ['pnpm', 'build'] },
-    { id: 'lint:package', hostedJob: 'verify', command: ['pnpm', 'lint:package'] },
     { id: 'typecheck', hostedJob: 'verify', command: ['pnpm', 'typecheck'] },
     { id: 'lint', hostedJob: 'verify', command: ['pnpm', 'lint'] },
     { id: 'test:unit', hostedJob: 'verify', command: ['pnpm', 'test:unit', ...unitCapArguments] },

@@ -191,3 +191,33 @@ the workspace-pinned `@rsbuild/core`. Never construct plugins or perform `instan
 against an imported `@rspack/core` — use the `utils` argument passed to `tools.rspack` mutator
 functions (`(config, { rspack }) => ...`), which always hands you the executing engine's own
 `rspack` object.
+
+### Plugins
+
+The framework registers exactly one Rsbuild plugin in the configs it synthesizes:
+`@rsbuild/plugin-react` (plugin name `rsbuild:react`), on every artifact entry — routes are
+authored as TSX and the plugin selects the automatic JSX runtime — and on every MCP App view whose
+source is `.jsx`/`.tsx`. That set is `frameworkOwnedRsbuildPlugins` in
+`packages/agent-bundle/src/build/framework-plugins.ts`; a unit test derives it from the synthesized
+configs, so it cannot drift, and `validateTools` reads the same map to report `AB4724` when a
+`tools.rsbuild.plugins` entry re-adds one of its names.
+
+Every other [official Rsbuild plugin](https://rslib.rs/config/rsbuild/plugins) registers under its
+own name and may be added through `tools.rsbuild.plugins`. The fragment reaches every synthesized
+config; the table says which surface each plugin is relevant to:
+
+| Plugin | Relevant to | Notes |
+| --- | --- | --- |
+| `@rsbuild/plugin-babel` | artifact entries and MCP App views | Adds a Babel pass beside SWC. |
+| `@rsbuild/plugin-svgr`, `@rsbuild/plugin-styled-components` | MCP App views | React-only concerns; the framework's `@rsbuild/plugin-react` stays in charge of JSX. |
+| `@rsbuild/plugin-sass`, `@rsbuild/plugin-less`, `@rsbuild/plugin-stylus`, `@rsbuild/plugin-tailwindcss`, `@rsbuild/plugin-typed-css-modules`, `@rsbuild/plugin-css-minimizer` | MCP App views | CSS exists only in the browser bundle; views inline it into the self-contained HTML. |
+| `@rsbuild/plugin-yaml`, `@rsbuild/plugin-toml`, `@rsbuild/plugin-mdx` | artifact entries and MCP App views | Extra module types. |
+| `@rsbuild/plugin-type-check`, `@rsbuild/plugin-eslint` | artifact entries and MCP App views | Separate-process checks; a failure fails the build in production mode. |
+| `@rsbuild/plugin-check-syntax` | MCP App views only | The plugin skips non-`web` environments, so artifact entries (`target: 'node'`) are never checked by it. |
+| `@rsbuild/plugin-node-polyfill`, `@rsbuild/plugin-assets-retry`, `@rsbuild/plugin-image-compress` | MCP App views | Browser-only concerns. |
+
+Not applicable: the Vue, Vue JSX, Preact, Solid, and Svelte plugins (routes and views are React;
+those plugins reconfigure the JSX transform the React plugin owns), `@rsbuild/plugin-umd` (the
+framework emits ESM), and the package-publishing checks `rsbuild-plugin-publint` and
+`rsbuild-plugin-arethetypeswrong` (they lint the `package.json` of the build root after the build,
+not the artifact).

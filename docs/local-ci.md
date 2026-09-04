@@ -61,7 +61,7 @@ only `verify (24)` runs hosted.
 
 | Local leg | Node | Steps | Mirrors hosted job |
 | --- | --- | --- | --- |
-| `verify-node22` | 22.19.x | `install`, `playwright install chrome`, `build`, `lint:package`, `typecheck`, `lint`, `test:unit`, `test:integration` | `verify (22.19.0)` |
+| `verify-node22` | 22.19.x | `install`, `playwright install chrome`, `build` (publint runs inside each package's `rslib build`), `typecheck`, `lint`, `test:unit`, `test:integration` | `verify (22.19.0)` |
 | `verify-node24` | 24.x | same | `verify (24)` |
 | `verify-node26` | 26.x | same | `verify (26)` |
 | `gates-node22` | 22.19.x | `install`, `examples:check`, `check:release`, `eval:spot` | `examples-check`, `release-gates`, `rsc-runtime-micro-eval` |

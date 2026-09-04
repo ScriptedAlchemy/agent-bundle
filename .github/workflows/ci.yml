@@ -140,9 +140,10 @@ jobs:
           fi
       # Build first: checked-in suites and API tests import the package's built type
       # declarations, so typecheck requires dist (same order as `pnpm check`).
+      # publint runs inside each publishable package's `rslib build`
+      # (rsbuild-plugin-publint, throwOn: 'warning'), so a manifest warning
+      # already fails this step; there is no separate publint step.
       - run: pnpm build
-      - name: Package lint (publint)
-        run: pnpm lint:package
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm test
