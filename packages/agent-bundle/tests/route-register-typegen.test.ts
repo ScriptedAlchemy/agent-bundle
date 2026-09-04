@@ -144,6 +144,7 @@ it('types every route-aware public surface from the generated route registration
       '  getMcpPrompt,',
       '  invokeCli,',
       '  invokeMcpTool,',
+      '  loadRouteModule,',
       '  renderRoute,',
       '  renderRouteEvents,',
       '  runContractMatrix,',
@@ -223,7 +224,17 @@ it('types every route-aware public surface from the generated route registration
       "  expectNoMcpCall({ server: 'curator' });",
       "  expectNoMcpCall({ server: 'github', tool: 'search_issues' });",
       "  expectMcpCall({ server: dynamic, tool: dynamic });",
+      '  // loadRouteModule checks its id the same way and types the schemas\' parsed values from the registration.',
+      "  const found_module = await loadRouteModule('tool:curator/find');",
+      "  const parsedQuery: string | undefined = found_module.inputSchema?.parse({ query: 'dune' }).query;",
+      '  const parsedHits: number | undefined = found_module.resultSchema?.parse({ hits: 1 }).hits;',
+      '  const looseModule = await loadRouteModule(dynamic);',
+      '  const looseParsed: unknown = looseModule.resultSchema?.parse({});',
+      '  // A conventional script is loadable by literal even though scripts are not registered.',
+      "  const script = await loadRouteModule('script:anything');",
+      '  const scriptParsed: unknown = script.resultSchema?.parse({});',
       '  void hits; void status; void none; void anything; void packed; void executed; void isReport;',
+      '  void parsedQuery; void parsedHits; void looseParsed; void scriptParsed;',
       '};',
       '',
     ].join('\n')),
@@ -292,6 +303,11 @@ it('types every route-aware public surface from the generated route registration
       "export const missing = renderRoute('tool:curator/missing');",
       '',
     ].join('\n')),
+    writeProjectFile(root, 'wrong-load-id.ts', [
+      "import { loadRouteModule } from 'agent-bundle/test';",
+      "export const missing = loadRouteModule('tool:curator/missing');",
+      '',
+    ].join('\n')),
     writeProjectFile(root, 'wrong-input.ts', [
       "import { renderRoute } from 'agent-bundle/test';",
       "export const mistyped = renderRoute('tool:curator/find', { input: { query: 7 } });",
@@ -336,6 +352,10 @@ it('types every route-aware public surface from the generated route registration
   expect(wrongId).toHaveLength(1);
   // The rejection names the registered ids, not `never`.
   expect(wrongId[0]).toContain(`Argument of type '"tool:curator/missing"' is not assignable to parameter of type '${registeredIds.map((id) => `"${id}"`).join(' | ')}'`);
+  const wrongLoadId = typecheck(root, 'wrong-load-id.ts', true);
+  expect(wrongLoadId).toHaveLength(1);
+  // Scripts are not registered, so a `script:` literal is admitted beside the registered ids.
+  expect(wrongLoadId[0]).toContain(`Argument of type '"tool:curator/missing"' is not assignable to parameter of type '${registeredIds.map((id) => `"${id}"`).join(' | ')} | \`script:\${string}\`'`);
   const wrongInput = typecheck(root, 'wrong-input.ts', true);
   expect(wrongInput).toHaveLength(1);
   expect(wrongInput[0]).toContain("Type 'number' is not assignable to type 'string'");

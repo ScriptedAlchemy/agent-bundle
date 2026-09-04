@@ -44,6 +44,7 @@ import {
 } from './registry.ts';
 import type {
   AgentRouteModule,
+  AgentRouteSchema,
   RenderableRouteKind,
   RenderedRouteProvenance,
   TestableRouteDescriptor,
@@ -434,9 +435,37 @@ const resolveTarget = async (
     return { component: componentOf(target, provenance), kind, layouts: [], module: target, provenance };
   }
   const manifest = options.manifest ?? testManifest();
-  const descriptor = manifest.routes[target];
+  const loaded = await loadManifestRouteModule(manifest, target);
+  const layouts = await loadLayoutChain(manifest, loaded.descriptor, loaded.provenance);
+  return {
+    component: componentOf(loaded.module, loaded.provenance),
+    kind: loaded.kind,
+    layouts,
+    manifest,
+    module: loaded.module,
+    provenance: loaded.provenance,
+  };
+};
+
+interface LoadedManifestRoute {
+  readonly descriptor: TestableRouteDescriptor;
+  readonly kind: RenderableRouteKind;
+  readonly module: AgentRouteModule;
+  readonly provenance: RenderedRouteProvenance;
+}
+
+/**
+ * Resolves one compiled route id of `manifest` to its evaluated module through
+ * the loader the generated setup registered — the one path every manifest
+ * render takes, and the one `loadRouteModule` exposes on its own.
+ */
+const loadManifestRouteModule = async (
+  manifest: AgentBundleTestManifest,
+  routeId: string,
+): Promise<LoadedManifestRoute> => {
+  const descriptor = manifest.routes[routeId];
   if (descriptor === undefined) {
-    throw new AgentTestError('route-not-found', `No compiled route is named ${JSON.stringify(target)}.`, {
+    throw new AgentTestError('route-not-found', `No compiled route is named ${JSON.stringify(routeId)}.`, {
       details: [
         `project root: ${manifest.projectRoot}`,
         `compiled:     ${knownRouteIds(manifest)}`,
@@ -490,15 +519,76 @@ const resolveTarget = async (
     );
   }
   const module = await loader();
-  const layouts = await loadLayoutChain(manifest, descriptor, { ...provenance, kind });
-  return {
-    component: componentOf(module, { ...provenance, kind }),
-    kind,
-    layouts,
-    manifest,
-    module,
-    provenance: { ...provenance, kind },
-  };
+  return { descriptor, kind, module, provenance: { ...provenance, kind } };
+};
+
+/** A route schema whose parsed value is typed from the route's registration once the id is registered. */
+export interface RouteModuleSchema<Value> extends AgentRouteSchema {
+  readonly parse: (value: unknown) => Value;
+}
+
+/**
+ * The evaluated module `loadRouteModule` returns: the same object the generated
+ * server, the routed CLI, and `renderRoute` execute, so `inputSchema` and
+ * `resultSchema` are the route's own schema instances by reference (not copies
+ * or JSON), `config` is the module's static config export, and `default` its
+ * component — absent for a plain `src/scripts/*.ts` module, whose contract is
+ * `main`. Any other named export is reachable through the index signature.
+ */
+export interface LoadedRouteModule<Target extends string = string> {
+  readonly [exportName: string]: unknown;
+  readonly config?: unknown;
+  readonly default?: (props: never) => unknown;
+  readonly inputSchema?: RouteModuleSchema<RouteTargetInput<Target>>;
+  readonly resultSchema?: RouteModuleSchema<RouteTargetResult<Target>>;
+}
+
+export interface LoadRouteModuleOptions {
+  /** Loads against an explicit manifest instead of the one the generated configuration registered. */
+  readonly manifest?: AgentBundleTestManifest;
+}
+
+/**
+ * The constraint one `loadRouteModule` id must satisfy. Conventional scripts
+ * are loadable but are not part of the generated route registration
+ * (`.agent-bundle/routes.d.ts` registers tool, resource, prompt, CLI, and
+ * event routes), so a `script:` literal is admitted unchecked while every
+ * other literal is checked against the registered ids exactly as `renderRoute`
+ * checks its target; a value typed `string` stays legal for dynamic lookups,
+ * and without a registration every string is legal. The union is spelled
+ * inline so a rejection lists the registered ids rather than an alias name.
+ */
+export type LoadRouteModuleConstraint<Target> = string extends Target ? string : RegisteredRouteId | `script:${string}`;
+
+/**
+ * Loads the evaluated module of one compiled route by its id, through the
+ * lazy loader the generated Rstest setup registered for it — the loader
+ * `renderRoute` uses. This is the supported replacement for a hand-maintained
+ * list of static `import * as m from '../../src/mcp/<server>/tools/<tool>'`
+ * statements in a schema-identity suite: iterate `testManifest().routes` and
+ * load each id instead (#493).
+ *
+ * The id is checked against the registered route ids exactly as `renderRoute`
+ * checks its target, so a removed placement is a type error (`script:` ids are
+ * not registered and pass unchecked; see {@link LoadRouteModuleConstraint}). Outside a pool
+ * built with `agentBundleRstest()` it throws `manifest-unavailable`, and a
+ * manifest describing another project rejects with the same mismatch report
+ * `renderRoute` gives: route loaders are bound to the compilation that
+ * produced them. Every renderable kind loads — tools, resources, prompts,
+ * event routes, CLI commands, and scripts; App routes are browser builds and
+ * are not loadable here (`unsupported-route-kind`).
+ */
+export const loadRouteModule = async <Target extends string>(
+  routeId: (Target & LoadRouteModuleConstraint<Target>) | LoadRouteModuleConstraint<Target>,
+  ...[options = {}]: HarnessOptionsArguments<LoadRouteModuleOptions>
+): Promise<LoadedRouteModule<Target>> => {
+  const manifest = options.manifest ?? testManifest();
+  // The loader returns the module namespace object itself. Its shape is not
+  // checked here: a plain script legitimately has no default export, and the
+  // render and dispatch levels already report a module that breaks their own
+  // contract with the route's provenance.
+  const loaded = await loadManifestRouteModule(manifest, routeId as string);
+  return loaded.module as LoadedRouteModule<Target>;
 };
 
 /**

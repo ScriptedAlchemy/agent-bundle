@@ -93,6 +93,32 @@ const chapters: number | undefined = result?.chapters; // 无需强制类型转�
 一次构建的代价。任何失败——未知路由、被拒绝的路由种类、被拒的输入、渲染错误——都会指明 route id、target
 种类与模块 provenance。
 
+`loadRouteModule(id)` 通过 `renderRoute` 所用的同一个惰性加载器，返回某个 id 背后已求值的模块。它就是模块
+对象本身，因此 `inputSchema` 与 `resultSchema` 按引用就是路由自己的 schema 实例，`config` 是它的静态配置
+导出，`default` 是它的组件（普通 `.ts` 脚本导出的是 `main`）。于是 schema 一致性套件不再需要手工维护一份
+静态路由导入列表：遍历 `testManifest().routes` 并逐个加载即可。
+
+```ts
+import { loadRouteModule, testManifest } from 'agent-bundle/test';
+
+// schema 是 MCP 路由的契约；事件路由与脚本不导出 schema。
+const mcpRoutes = Object.values(testManifest().routes)
+  .filter((route) => route.kind === 'tool' || route.kind === 'prompt' || route.kind === 'resource');
+
+for (const route of mcpRoutes) {
+  const module = await loadRouteModule(route.id);
+  expect(module.inputSchema).toBeInstanceOf(z.ZodObject);
+  expect(module.resultSchema).toBeInstanceOf(z.ZodObject);
+  expect(module.config ?? {}).toEqual(route.config);
+}
+```
+
+字面量 id 会像 `renderRoute` 检查其目标那样对照已注册的 id 进行检查，schema 的解析结果也从注册中获得类型，
+因此被移除的放置会成为类型错误。约定式脚本可以加载，但不属于注册的一部分，因此 `script:` 字面量会不经检查地
+被接受。加载会像 import 一样对模块求值——自执行的普通脚本会运行。在不是由 `agentBundleRstest()` 构建的
+测试池之外，调用会以 `manifest-unavailable` 关闭式失败；描述另一个项目的 manifest 会给出与 `renderRoute`
+相同的不匹配报告并拒绝，因为路由加载器绑定到产生它们的那次编译。
+
 针对 Agent Document 契约的匹配器：`toHaveStatus`、`toContainMarkdown`、`toContainText`、
 `toHaveValue`、`toHaveError` 与 `toHaveNodeKinds`。
 

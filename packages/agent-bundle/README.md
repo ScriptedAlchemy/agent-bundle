@@ -565,7 +565,13 @@ its own. `testManifest()` exposes the
 compiled route inventory, so a suite can iterate every route in process rather
 than paying for a build per route. Every failure — an unknown route, a refused
 route kind, a rejected input, a render error — names the route id, the target
-kind, and the module provenance.
+kind, and the module provenance. `loadRouteModule(id)` returns the evaluated
+module behind one compiled id through the same registered loader `renderRoute`
+uses — the module object itself, so `inputSchema`, `resultSchema`, `config`,
+and `default` are the route's own exports by reference — which replaces a
+hand-maintained list of static route imports in a schema-identity suite; it
+fails closed with `manifest-unavailable` outside an `agentBundleRstest()` pool
+or against a manifest the registered loaders did not come from.
 
 The same generated `.agent-bundle/routes.d.ts` registers the route contracts on
 `@agent-bundle/runtime`'s `Register` interface. With that file in the project's

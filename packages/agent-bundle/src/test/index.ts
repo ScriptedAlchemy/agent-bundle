@@ -8,7 +8,7 @@
  *
  * | level | helper | what it proves |
  * | --- | --- | --- |
- * | `route-unit` | `renderRoute`, `renderRouteEvents`, `createTargetCapabilityFixture`, `projectTargetCapabilities` | the route component and its document through the real Agent renderer; explicit target-capability projection through the real MCP projector, without transport or host proof |
+ * | `route-unit` | `renderRoute`, `renderRouteEvents`, `loadRouteModule`, `createTargetCapabilityFixture`, `projectTargetCapabilities` | the route component and its document through the real Agent renderer (and the evaluated route module itself, by compiled id); explicit target-capability projection through the real MCP projector, without transport or host proof |
  * | `mcp-in-memory` | `openInMemoryMcpServer`, `invokeMcpTool`, `readMcpResource`, `getMcpPrompt`, `listMcpSurface`, `runContractMatrix` | the real generated MCP server's protocol contract, over the SDK's in-memory transport; MCP App routes are not registered and report `not-applicable` |
  * | `dev-epoch` | `runDevEpochContractMatrix` | an epoch-pinned generated stdio process opened through the Workbench session service; MCP App routes are covered (surface + `ui://` sweep) and auto-covered without a fixture |
  * | `cli-dispatch` | `invokeCli`, `cliJson`, `cliNdjson` | a compiled plain or rendered CLI command dispatched through the routed CLI's own shell, including rendered output modes, in this process |
@@ -61,9 +61,13 @@ export { AGENT_TEST_REGISTRY_VERSION, registerTestRoutes, testManifest } from '.
 export type { AgentProviderModuleLoader, AgentTestRouteRegistry } from './registry.ts';
 export { AgentTestError } from './errors.ts';
 export type { AgentTestErrorCode } from './errors.ts';
-export { renderRoute, renderRouteEvents } from './render.ts';
+export { loadRouteModule, renderRoute, renderRouteEvents } from './render.ts';
 export type {
   HarnessOptionsArguments,
+  LoadRouteModuleConstraint,
+  LoadRouteModuleOptions,
+  LoadedRouteModule,
+  RouteModuleSchema,
   RenderRouteContext,
   RenderRouteContextInit,
   RenderRouteOptions,
