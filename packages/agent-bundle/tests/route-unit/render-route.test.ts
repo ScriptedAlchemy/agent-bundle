@@ -256,7 +256,10 @@ describe('renderRoute through the real renderer', () => {
       openRequest: async () => Object.freeze({
         close: () => undefined,
         handle: Object.freeze({
+          // The `request-view` fixture provider reads `published()` on every request (#459).
+          inbox: async () => [],
           publish: async () => { throw new Error('unused in journal route'); },
+          published: async () => [],
           read: async () => ({ notices: [] }),
         }),
       }),

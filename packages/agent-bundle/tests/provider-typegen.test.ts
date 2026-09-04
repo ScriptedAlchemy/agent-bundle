@@ -60,18 +60,22 @@ it('types (await agent()).providers.<key> from the generated provider declaratio
       '});',
       '',
     ].join('\n')),
-    // The factory reads the request view a provider receives (#459): lineage
-    // with its tree, and the read-only state / notices handles.
+    // The factory reads the request view a provider receives (#459): the
+    // identity axes (plugin root included), lineage with its tree, and the
+    // read-only state / notices handles.
     writeProjectFile(root, 'src/providers/library.ts', [
       "import type { AgentProviderContext } from 'agent-bundle';",
-      'export interface LibraryContext { readonly revision: number | undefined; readonly siblings: number | undefined; readonly stages: readonly string[]; readonly surface: string; }',
-      'export default async function library({ invocation, lineage, notices, state }: AgentProviderContext): Promise<LibraryContext> {',
+      'export interface LibraryContext { readonly published: readonly string[]; readonly revision: number | undefined; readonly siblings: number | undefined; readonly stages: readonly string[]; readonly stateRoot: string | undefined; readonly surface: string; }',
+      'export default async function library({ invocation, lineage, notices, plugin, state }: AgentProviderContext): Promise<LibraryContext> {',
       '  const snapshot = state === undefined ? undefined : await state.read();',
       "  const pending = notices === undefined ? [] : (await notices.inbox()).map((notice) => notice.id);",
+      "  const published = notices === undefined ? [] : (await notices.published()).map((notice) => `${notice.id}:${notice.state}`);",
       '  return {',
+      '    published,',
       '    revision: snapshot?.revision,',
       "    siblings: lineage.state === 'available' ? lineage.value.tree?.siblings.length : undefined,",
       "    stages: ['discover', ...pending],",
+      "    stateRoot: plugin.state === 'available' ? plugin.value.stateRoot : undefined,",
       '    surface: invocation.kind,',
       '  };',
       '}',
@@ -132,7 +136,7 @@ it('types (await agent()).providers.<key> from the generated provider declaratio
       "import { renderRoute } from 'agent-bundle/test';",
       "import type { LibraryContext } from './src/providers/library.js';",
       '',
-      "const library: LibraryContext = { revision: undefined, siblings: undefined, stages: ['discover'], surface: 'tool' };",
+      "const library: LibraryContext = { published: [], revision: undefined, siblings: undefined, stages: ['discover'], stateRoot: undefined, surface: 'tool' };",
       'export const complete = async (): Promise<void> => {',
       "  await runAgentRequest({ invocation: { kind: 'tool' }, providers: { buildNumber: 7, library } }, async () => undefined);",
       // A resolver function is typed against the same declared keys and reads the runtime's request view.
@@ -151,14 +155,26 @@ it('types (await agent()).providers.<key> from the generated provider declaratio
     writeProjectFile(root, 'missing-fixture.ts', [
       "import { renderRoute } from 'agent-bundle/test';",
       "import type { LibraryContext } from './src/providers/library.js';",
-      "const library: LibraryContext = { revision: undefined, siblings: undefined, stages: ['discover'], surface: 'tool' };",
+      "const library: LibraryContext = { published: [], revision: undefined, siblings: undefined, stages: ['discover'], stateRoot: undefined, surface: 'tool' };",
       "export const partial = renderRoute('tool:curator/status', { context: { providers: { library } } });",
+      '',
+    ].join('\n')),
+    // The write paths are not on the provider context: a factory that reaches
+    // for `state.dispatch`, `notices.publish`, or `notices.acknowledge` does
+    // not compile (#459).
+    writeProjectFile(root, 'writing-provider.ts', [
+      "import type { AgentProviderContext } from 'agent-bundle';",
+      'export default async function writing({ notices, state }: AgentProviderContext): Promise<void> {',
+      "  await state?.dispatch('noted', {}, { idempotencyKey: 'k' });",
+      "  await notices?.publish({ content: { root: { kind: 'text', text: '' }, status: 'success', version: 1 }, priority: 'low', recipient: {} }, { idempotencyKey: 'k' });",
+      "  await notices?.acknowledge('n-1');",
+      '}',
       '',
     ].join('\n')),
     writeProjectFile(root, 'missing-resolver.ts', [
       "import { runAgentRequest } from '@agent-bundle/runtime';",
       "import type { LibraryContext } from './src/providers/library.js';",
-      "const library: LibraryContext = { revision: undefined, siblings: undefined, stages: ['discover'], surface: 'tool' };",
+      "const library: LibraryContext = { published: [], revision: undefined, siblings: undefined, stages: ['discover'], stateRoot: undefined, surface: 'tool' };",
       "export const partial = runAgentRequest({ invocation: { kind: 'tool' }, providers: async () => ({ library }) }, async () => undefined);",
       '',
     ].join('\n')),
@@ -186,4 +202,9 @@ it('types (await agent()).providers.<key> from the generated provider declaratio
   const missingResolver = typecheck(root, 'missing-resolver.ts');
   expect(missingResolver).toHaveLength(1);
   expect(missingResolver[0]).toContain("Property '\"buildNumber\"' is missing");
+  const writing = typecheck(root, 'writing-provider.ts');
+  expect(writing).toHaveLength(3);
+  expect(writing[0]).toContain("Property 'dispatch' does not exist on type 'AgentProviderStateHandle<unknown>'");
+  expect(writing[1]).toContain("Property 'publish' does not exist on type 'AgentProviderNoticesHandle'");
+  expect(writing[2]).toContain("Property 'acknowledge' does not exist on type 'AgentProviderNoticesHandle'");
 });

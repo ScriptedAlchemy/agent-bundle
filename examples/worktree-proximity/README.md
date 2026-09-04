@@ -50,9 +50,10 @@ The application has four planes:
   `resolution`) and, through `lineage.value.tree`, who else is alive:
   `siblings` (every other live conversation under the same root, the root
   included), `children`, and other live `roots`, each with the registry's own
-  `resolution` for its placement. `agentTree()` in `src/event-support.ts`
-  turns that into the coordinator's report; `liveConversations()` turns it
-  into the liveness the domain uses.
+  `resolution` for its placement. `agentTreeOf()` in `src/event-support.ts`
+  turns that into the coordinator's report (the `agent-topology` provider
+  calls it over the `lineage` the framework hands it); `liveConversations()`
+  turns it into the liveness the domain uses.
 - **Providers** — `git-worktree` derives repository, branch, commit, common
   Git directory, and linked-worktree identity without throwing for expected
   degradation. `agent-topology` assembles the coordinator's snapshot once per
