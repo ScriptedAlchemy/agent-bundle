@@ -174,6 +174,7 @@ it('types every route-aware public surface from the generated route registration
       "export type PromptNames = Assert<Equal<RegisteredMcpRouteName<'prompt'>, 'brief'>>;",
       "export type FindIds = Assert<Equal<RegisteredMcpRouteId<'tool', string, 'find'>, 'tool:curator/find' | 'tool:shelf/find'>>;",
       "export type FindWireInput = Assert<Equal<McpRouteInput<'find', 'tool'>, { query: string } | { isbn: string }>>;",
+      "export type ShelfFindWireInput = Assert<Equal<McpRouteInput<'find', 'tool', 'shelf'>, { isbn: string }>>;",
       "export type DynamicWireInput = Assert<Equal<McpRouteInput<string, 'tool'>, unknown>>;",
       '',
       'export const typed = async (canonical: AgentEventCanonicalIdentity, native: AgentEventNativePayload): Promise<void> => {',
@@ -189,12 +190,16 @@ it('types every route-aware public surface from the generated route registration
       "  const dynamic: string = ['tool:curator/status'].join('');",
       '  const loose = await renderRoute(dynamic);',
       '  const anything: unknown = loose.result;',
-      '  // The wire helpers take the protocol name; `input` is the registered input of every route with that name.',
+      '  // The wire helpers take the protocol name; `input` is the registered input of every route with that name,',
+      '  // or of the one route on a literal `server`.',
       "  await invokeMcpTool('status');",
       "  await invokeMcpTool('find', { input: { query: 'dune' } });",
+      "  await invokeMcpTool('find', { input: { query: 'dune' }, server: 'curator' });",
       "  await invokeMcpTool('find', { input: { isbn: '9780441172719' }, server: 'shelf' });",
-      "  await invokeMcpTool(dynamic, { input: { anything: true } });",
+      "  await invokeMcpTool('find', { input: { isbn: '9780441172719' }, server: dynamic });",
+      "  await invokeMcpTool(dynamic, { input: { anything: true }, server: dynamic });",
       "  await getMcpPrompt('brief', { input: { topic: 'dune' } });",
+      "  await getMcpPrompt('brief', { input: { topic: 'dune' }, server: 'curator' });",
       '  // A contract-matrix fixture map types each registered key\'s inputs; unregistered keys (MCP App routes) stay legal.',
       '  const fixtures: ContractRouteFixtures = {',
       "    'tool:curator/find': { cancellation: { input: { query: 'slow' } }, input: { query: 'dune' }, inputs: [{ query: 'arrakis' }], resultCompat: 'closed' },",
@@ -235,6 +240,21 @@ it('types every route-aware public surface from the generated route registration
     writeProjectFile(root, 'wrong-prompt-input.ts', [
       "import { getMcpPrompt } from 'agent-bundle/test';",
       "export const mistyped = getMcpPrompt('brief', { input: { topic: 7 } });",
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'wrong-server-tool.ts', [
+      "import { invokeMcpTool } from 'agent-bundle/test';",
+      "export const elsewhere = invokeMcpTool('status', { server: 'shelf' });",
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'wrong-server-input.ts', [
+      "import { invokeMcpTool } from 'agent-bundle/test';",
+      "export const mistyped = invokeMcpTool('find', { input: { query: 'dune' }, server: 'shelf' });",
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'wrong-server-name.ts', [
+      "import { getMcpPrompt } from 'agent-bundle/test';",
+      "export const missing = getMcpPrompt('brief', { input: { topic: 'dune' }, server: 'librarian' });",
       '',
     ].join('\n')),
     writeProjectFile(root, 'wrong-fixture-input.ts', [
@@ -296,7 +316,7 @@ it('types every route-aware public surface from the generated route registration
       "export type ToolNames = Assert<Equal<RegisteredMcpRouteName<'tool'>, string>>;",
       "export type WireInput = Assert<Equal<McpRouteInput<'find', 'tool'>, unknown>>;",
       "export const anyId = renderRoute('tool:curator/missing', { input: { query: 7 } });",
-      "export const anyTool = invokeMcpTool('missing', { input: { query: 7 } });",
+      "export const anyTool = invokeMcpTool('missing', { input: { query: 7 }, server: 'librarian' });",
       "export const anyPrompt = getMcpPrompt('missing', { input: { topic: 7 } });",
       "export const anyFixture = runContractMatrix({ fixtures: { 'tool:curator/missing': { input: { query: 7 }, resultCompat: 'closed' } } });",
       "export const anyRoute = async (): Promise<string | undefined> => (await invokeCli(['report'])).routeId;",
@@ -338,6 +358,18 @@ it('types every route-aware public surface from the generated route registration
   const wrongPromptInput = typecheck(root, 'wrong-prompt-input.ts', true);
   expect(wrongPromptInput).toHaveLength(1);
   expect(wrongPromptInput[0]).toContain("Type 'number' is not assignable to type 'string'");
+  // A literal `server` binds the lookup to that server's routes, since the session mounts only those:
+  // a name another server registers, and the other server's input, are rejected; an unknown server is
+  // rejected on `server` itself, naming the compiled ones.
+  const wrongServerTool = typecheck(root, 'wrong-server-tool.ts', true);
+  expect(wrongServerTool).toHaveLength(1);
+  expect(wrongServerTool[0]).toContain('Argument of type \'"status"\' is not assignable to parameter of type \'"find"\'');
+  const wrongServerInput = typecheck(root, 'wrong-server-input.ts', true);
+  expect(wrongServerInput).toHaveLength(1);
+  expect(wrongServerInput[0]).toContain("'query' does not exist in type '{ isbn: string; }'");
+  const wrongServerName = typecheck(root, 'wrong-server-name.ts', true);
+  expect(wrongServerName).toHaveLength(1);
+  expect(wrongServerName[0]).toContain('Type \'"librarian"\' is not assignable to type \'"curator" | "shelf" | undefined\'');
 
   // Contract-matrix fixtures: a registered key's `input` and lifecycle transitions carry that route's input.
   const wrongFixtureInput = typecheck(root, 'wrong-fixture-input.ts', true);

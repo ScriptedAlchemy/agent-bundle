@@ -74,8 +74,9 @@ const chapters: number | undefined = result?.chapters; // 无需强制类型转�
 同一份注册会流向测试工具中每一个接受 route id 或路由载荷的表面，正如 TanStack Router 的那一个
 `Register` 会流向 `Link to`、`useNavigate` 与 `RoutesByPath`。`invokeMcpTool('find', { input })` 与
 `getMcpPrompt('brief', { input })` 会把线上名称对照已注册的工具或提示名称做检查（`tool:curator/find`
-对应 `find`），并根据该路由的 `inputSchema` 为 `input` 定型——若两个服务器注册了同名路由，则为二者的
-联合类型；`runContractMatrix`、`runPackedContractMatrix`、`runDevEpochContractMatrix` 与
+对应 `find`），并根据该路由的 `inputSchema` 为 `input` 定型——省略 `server` 且两个服务器注册了同名路由时为二者的
+联合类型，传入字面量 `server` 时则只取该服务器上的那条路由（`server` 本身也会对照已编译的服务器名称
+做检查）；`runContractMatrix`、`runPackedContractMatrix`、`runDevEpochContractMatrix` 与
 `runInstalledHostContractMatrix` 会根据对应路由为 `fixtures` 中每个已注册键定型（`input`、`inputs`、
 `cancellation.input` 与生命周期 transition），而 MCP App 路由的键或动态构造的
 `Record<string, ContractRouteFixture>` 仍然合法；`invokeCli` 把已执行命令的 `routeId` 报告为已注册的

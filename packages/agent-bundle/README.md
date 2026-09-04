@@ -514,7 +514,8 @@ input and result.
 The registration flows to every harness surface that takes a route id or
 payload, not only `renderRoute`: `invokeMcpTool('find', { input })` and
 `getMcpPrompt` check the wire name against the registered tool/prompt names and
-type `input` from that route (`RegisteredMcpServerName`, `RegisteredMcpRouteName`,
+type `input` from that route — of the literal `server`, when passed
+(`RegisteredMcpServerName`, `RegisteredMcpRouteName`,
 and `RegisteredMcpRouteId` name what a `tool:<server>/<name>` id encodes); the
 contract matrices type each registered key of `fixtures` while an MCP App key
 or a dynamic `Record<string, ContractRouteFixture>` stays legal; `invokeCli`

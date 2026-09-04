@@ -184,7 +184,9 @@ That one registration is read by every public surface that takes or yields a
 route id or route payload, the way TanStack Router's `Register` reaches `Link
 to`, `useNavigate`, and `RoutesByPath`: `invokeMcpTool` and `getMcpPrompt`
 check their wire name against the registered tool/prompt names (the last
-segment of a `tool:`/`prompt:` id) and type `input` from that route;
+segment of a `tool:`/`prompt:` id) — of the literal `server` when one is
+passed, since the session mounts only that server's routes — and type
+`input` from that route;
 `runContractMatrix` and the packed, dev-epoch, and installed-host matrices type
 the inputs of each registered `fixtures` key (an App route key stays untyped —
 Apps register no contract); `invokeCli` reports `routeId` as a registered id;

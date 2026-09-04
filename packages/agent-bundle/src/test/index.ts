@@ -150,6 +150,8 @@ export type {
   McpResourceRead,
   McpRouteInput,
   McpRouteNameConstraint,
+  McpRouteServer,
+  McpServerConstraint,
   McpSurfaceListing,
   McpToolInvocation,
 } from './mcp.ts';

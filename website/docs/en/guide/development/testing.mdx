@@ -86,7 +86,9 @@ The same registration reaches every other harness surface that takes a route id 
 payload, the way TanStack Router's one `Register` reaches `Link to`, `useNavigate`, and
 `RoutesByPath`. `invokeMcpTool('find', { input })` and `getMcpPrompt('brief', { input })` check
 their wire name against the registered tool or prompt names (`find` for `tool:curator/find`) and
-type `input` from that route's `inputSchema` — a union when two servers register the same name;
+type `input` from that route's `inputSchema` — a union when two servers register the same name and
+`server` is omitted, that one server's route when a literal `server` is passed (and `server` itself is
+checked against the compiled server names);
 `runContractMatrix`, `runPackedContractMatrix`, `runDevEpochContractMatrix`, and
 `runInstalledHostContractMatrix` type each registered key of `fixtures` (`input`, `inputs`,
 `cancellation.input`, and lifecycle transitions) from that route, while an MCP App route key or a
