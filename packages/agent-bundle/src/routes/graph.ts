@@ -33,6 +33,7 @@ import { isRecord } from '../core/strict-json.ts';
 import type { AgentBundleConfig } from '../core/types.ts';
 import { canonicalAgentEvents, type CanonicalAgentEvent } from './public.ts';
 import { validateRouteRenderConfig } from './render-budget.ts';
+import { validateRouteExecutionConfig } from './task-support.ts';
 import {
   emptyRouteConfig,
   type CompiledAgentRoute,
@@ -892,6 +893,9 @@ export const compileRouteGraph = async (
         // The route's render budget (#454) is read by the generated server
         // from this compiled config, so it is validated here, once.
         diagnostics.push(...validateRouteRenderConfig(route, 'MCP route').diagnostics);
+        // Likewise the tool's task support (#369): advertised in tools/list and
+        // gating the task lifecycle, both read from this compiled config.
+        diagnostics.push(...validateRouteExecutionConfig(route, 'MCP route').diagnostics);
       }
     }
     servers.push({
