@@ -158,6 +158,54 @@ interface AgentTerminal {
 [包入口](./package-entries.mdx#可执行封套)）。在测试中，`invokeCli` 与 `runScript` 的 `tty` 开关会塑造
 一个确定性的合成值，而 `context.terminal` 则可以像注入任何身份轴一样注入其他取值。
 
+## 用 JSX 编写富 Markdown 块
+
+`Agent.Markdown` 承载一个 Markdown 字符串，而手工拼接这个字符串——每行一个
+`- **${label}:** ${value}`——正是表格、嵌套列表与转义出错的地方。`@agent-bundle/runtime` 导出的异步
+`MarkdownContent` 组件把它的 JSX 子节点渲染为一个 GitHub Flavored Markdown 字符串，并降低为
+`Agent.Markdown`，因此路由可以直接用标记语言编写这个块：
+
+```tsx
+import React from 'react';
+import { MarkdownContent } from '@agent-bundle/runtime';
+
+interface MeasuredFile {
+  readonly path: string;
+  readonly bytes: number;
+}
+
+export const MeasuredFiles = ({ files }: { readonly files: readonly MeasuredFile[] }) => (
+  <MarkdownContent>
+    <table>
+      <thead>
+        <tr><th>File</th><th align="right">Bytes</th></tr>
+      </thead>
+      <tbody>
+        {files.map((file) => (
+          <tr key={file.path}><td>{file.path}</td><td>{file.bytes}</td></tr>
+        ))}
+      </tbody>
+    </table>
+  </MarkdownContent>
+);
+```
+
+标题 `h1`–`h6`、段落、`strong`/`em`/`del`、`code` 与 `pre`、链接与图片、引用块、`ul`/`ol`（可嵌套，
+`ol` 支持 `start`）、GFM 任务列表（`li` 内的 `<input type="checkbox">`）、单元格带 `align` 的
+`table`、`dt`/`dd`、`br` 与 `hr` 都会序列化为对应的 Markdown 形式；未知元素直接透传其子节点。子节点中
+任何位置的同步与异步组件——包括调用 `React.use` 的组件——都会在该块发出前解析完成。文本会被转义，因此
+字面上的 `*stars*`、`[x]`、`<tag>`、`&amp;`，以及行首的 `-`、`#`、`1.` 或 `>` 在文档被再次解析时仍是
+文本。渲染出的块不带末尾换行：Agent Document 投影负责兄弟块之间的空行连接，所以 `MarkdownContent` 与
+`Agent.Text` 及其他节点并列时，行为与手写的 `Agent.Markdown` 完全一致。
+
+当自定义元素需要自己的 Markdown 时，`components` 把额外的宿主标签名映射到序列化器
+`(props, { inline, blocks }) => string`——`inline()` 与 `blocks()` 分别把该元素的子节点渲染为行内文本，
+或以空行连接的块。渲染器本身也被导出：`renderToMarkdown(children, options?)` 解析为字符串，
+`renderToMarkdownStream(children, options?)` 则按文档顺序产出一个由 UTF-8 块组成的
+`ReadableStream<Uint8Array>`。其输出以带 GFM 扩展的 micromark——Workbench 的
+`react-markdown`/`remark-gfm` 底层所用的解析器——为基准固定下来，因此路由编写的结构就是消费方解析出的
+结构。
+
 ## 流式输出与进度
 
 路由通过渲染 React `Suspense` 实现流式输出：外壳（shell）先带着回退内容发出，之后每个解析完成的
