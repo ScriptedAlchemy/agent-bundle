@@ -477,6 +477,16 @@ const humanDoctor = (result: DoctorReport): string => {
         `  durable state: ${stores} ${stores === 1 ? 'store' : 'stores'}, ${formatByteSize(bytes)}\n`,
       );
     }
+    // The operator `.env` layer (#469): present files and their variable counts, never a value.
+    const operatorEnvFiles = [
+      ...host.inventory.findings.map((finding) => finding.operatorEnv),
+      host.bundle?.operatorEnv,
+    ].flatMap((report) => report?.files ?? []).filter((file) => file.state !== 'absent');
+    const uniqueEnvFiles = [...new Map(operatorEnvFiles.map((file) => [file.path, file])).values()];
+    if (uniqueEnvFiles.length > 0) {
+      out.push(`  operator env: ${uniqueEnvFiles.map((file) =>
+        `${file.path} (${file.state === 'present' ? `${String(file.variables ?? 0)} variable${file.variables === 1 ? '' : 's'}` : file.state})`).join(', ')}\n`);
+    }
   }
   out.push(
     `runtime endpoints: ${result.endpoints.status}; ${result.endpoints.summary.live} live, ` +

@@ -51,12 +51,29 @@ export {
 export type { RouteModuleExports } from './contract.ts';
 export { routeRenderLimits, validateRouteRenderConfig } from './render-budget.ts';
 export type { RouteRenderBudget, ValidatedRouteRenderConfig } from './render-budget.ts';
-export { appResourceUri, canonicalAgentEvents, MAX_ROUTE_RENDER_ELAPSED_MS } from './public.ts';
+export { routeTaskSupport, toolTaskSupportValues, validateRouteExecutionConfig } from './task-support.ts';
+export type { ValidatedRouteExecutionConfig } from './task-support.ts';
+export {
+  agentEventPayloadFieldKinds,
+  agentEventPayloadFields,
+  agentEventPayloadNativeKeys,
+  appResourceUri,
+  canonicalAgentEvents,
+  MAX_ROUTE_RENDER_ELAPSED_MS,
+} from './public.ts';
 export type {
   AgentEventCanonicalIdentity,
   AgentEventDelivery,
   AgentEventFallbackMode,
   AgentEventNativePayload,
+  AgentEventPayload,
+  AgentEventPayloadField,
+  AgentEventPayloadFieldKind,
+  AgentEventPayloadFieldName,
+  AgentEventPayloadFields,
+  AgentEventPayloadFieldTypes,
+  AgentEventPayloadHost,
+  AgentEventPayloadNativeKey,
   AgentEventProvenance,
   AgentEventRouteConfig,
   AgentEventRouteProps,
@@ -65,6 +82,26 @@ export type {
   AgentLayoutRouteKind,
   AgentProviderContext,
   AgentProviderFactory,
+  AgentProviderHostIdentity,
+  AgentProviderLineage,
+  AgentProviderLineagePeer,
+  AgentProviderLineageResolution,
+  AgentProviderLineageSubagent,
+  AgentProviderLineageTree,
+  AgentProviderNotice,
+  AgentProviderNoticeAttempt,
+  AgentProviderNoticePublisher,
+  AgentProviderNoticeRecipient,
+  AgentProviderNoticesHandle,
+  AgentProviderNoticeState,
+  AgentProviderNoticeWithholding,
+  AgentProviderObserved,
+  AgentProviderObservedPluginRoot,
+  AgentProviderPluginRoot,
+  AgentProviderSessionIdentity,
+  AgentProviderStateHandle,
+  AgentProviderStateSnapshot,
+  AgentProviderWorkspaceIdentity,
   AppRouteConfig,
   CanonicalAgentEvent,
   CliRouteConfig,
@@ -77,5 +114,7 @@ export type {
   RouteSchemaOutput,
   RouteUiMeta,
   ToolConfig,
+  ToolExecutionConfig,
   ToolRouteProps,
+  ToolTaskSupport,
 } from './public.ts';

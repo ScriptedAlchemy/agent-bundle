@@ -102,11 +102,18 @@ export default defineConfig({
       'event-project': './src/events/project.ts',
       index: './src/index.ts',
       'install-entry': './src/install-entry.ts',
+      'launch-env': './src/launch-env.ts',
       'lifecycle-render-child': './src/dev/playground/lifecycle-render-child.ts',
       'mcp-apps': './src/mcp-apps.ts',
       'mcp-entry': './src/mcp-entry.ts',
       meta: './src/meta.ts',
       'mcp-server-runtime': './src/mcp-server-runtime.ts',
+      // Its own entry so it is emitted as a chunk beside the runtime rather
+      // than concatenated into it: a generated artifact bundles
+      // `dist/mcp-server-runtime.js`, and a chunk that also hosts a sibling
+      // module carries rslib's `__webpack_require__` runtime import, whose
+      // identifiers shadow the artifact bundler's own runtime.
+      'mcp-tasks': './src/mcp-tasks.ts',
       // The route authoring surface: types plus the compile-time helpers a
       // route module may import at run time without pulling the compiler
       // into its generated bundle.

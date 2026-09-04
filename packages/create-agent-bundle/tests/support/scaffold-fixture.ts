@@ -6,12 +6,18 @@ import { promisify } from 'node:util';
 
 import { expect } from '@rstest/core';
 
-import { cachedNpmInstallArguments, installedEnvironment, sharedPackedTarball } from '../../../agent-bundle/tests/support/shared-pack.ts';
+import {
+  cachedNpmInstallArguments,
+  installedEnvironment,
+  npmInstallArguments,
+  sharedPackedTarball,
+} from '../../../agent-bundle/tests/support/shared-pack.ts';
 
 const execFile = promisify(executeFile);
 
 interface PackedFixture {
   readonly frameworkTarball: string;
+  readonly markdownStreamTarball: string;
   readonly root: string;
   readonly runnerRoot: string;
   readonly scaffolderBin: string;
@@ -28,10 +34,16 @@ interface PackedFixture {
  */
 const packFixture = async (): Promise<PackedFixture> => {
   const root = await mkdtemp(join(tmpdir(), 'create-agent-bundle-e2e-'));
-  const [{ tarball: frameworkTarball }, { tarball: scaffolderTarball }, { tarball: runtimeTarball }] = await Promise.all([
+  const [
+    { tarball: frameworkTarball },
+    { tarball: scaffolderTarball },
+    { tarball: runtimeTarball },
+    { tarball: markdownStreamTarball },
+  ] = await Promise.all([
     sharedPackedTarball('agent-bundle'),
     sharedPackedTarball('create-agent-bundle'),
     sharedPackedTarball('runtime'),
+    sharedPackedTarball('markdown-stream'),
   ]);
   const pairedRuntimeTarball = join(
     dirname(frameworkTarball),
@@ -48,10 +60,28 @@ const packFixture = async (): Promise<PackedFixture> => {
   });
   return {
     frameworkTarball,
+    markdownStreamTarball,
     root,
     runnerRoot,
     scaffolderBin: join(runnerRoot, 'node_modules', '.bin', 'create-agent-bundle'),
   };
+};
+
+/**
+ * `npm install` for a scaffolded project whose template pins the paired
+ * local runtime tarball. That runtime depends on `rsc-markdown-stream` by
+ * exact version, which the registry cannot serve until this repository
+ * publishes it, so the run-level tarball is offered in the same install and
+ * npm dedupes the runtime's edge onto it. `--no-save` leaves the scaffolded
+ * manifest exactly as the scaffolder wrote it: a real consumer declares
+ * nothing extra.
+ */
+export const installScaffoldedProject = async (projectRoot: string): Promise<void> => {
+  const { markdownStreamTarball } = await fixture();
+  await execFile('npm', ['install', ...npmInstallArguments, '--no-save', markdownStreamTarball], {
+    cwd: projectRoot,
+    env: installedEnvironment(),
+  });
 };
 
 let fixturePromise: Promise<PackedFixture> | undefined;

@@ -557,6 +557,73 @@ it('inventories durable SQLite stores and sidecars without opening them', async 
   }
 });
 
+it('reports whether an installed pack carries an operator .env file, never its contents (#469)', async () => {
+  const fixture = await temporaryDoctor();
+  const pluginRoot = join(fixture.home, '.cursor', 'plugins', 'local', 'configured');
+  try {
+    await writeJson(
+      join(pluginRoot, '.cursor-plugin/plugin.json'),
+      { name: 'configured', version: '1.0.0' },
+    );
+    await writeFile(join(pluginRoot, '.env'), '# operator credentials\nIPT_SESSION=s3cr3t-session\nMAM_SESSION="s3cr3t-mam"\n');
+
+    const report = await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      home: fixture.home,
+      hosts: ['cursor'],
+    });
+    const finding = hostReport(report, 'cursor').inventory.findings.find((entry) => entry.entry === 'configured');
+    expect(finding?.operatorEnv).toEqual({
+      diagnostics: [expect.objectContaining({ code: 'AB7331', severity: 'info' })],
+      files: [
+        { path: join(pluginRoot, '.env'), state: 'present', variables: 2 },
+        { path: join(pluginRoot, '.env.local'), state: 'absent' },
+      ],
+      status: 'present',
+    });
+    const info = report.diagnostics.find((entry) => entry.code === 'AB7331');
+    expect(info?.message).toContain(`Operator env file ${JSON.stringify(join(pluginRoot, '.env'))} is present and declares 2 variables`);
+    // Names and values stay out of the report entirely.
+    expect(JSON.stringify(report)).not.toMatch(/s3cr3t|IPT_SESSION|MAM_SESSION/u);
+    expect(report.summary).toMatchObject({ errors: 0, warnings: 0 });
+
+    const human = captureCliTerminal();
+    await runCli(['doctor'], human.output, { runDoctor: async () => report });
+    expect(human.stdout()).toContain(`operator env: ${join(pluginRoot, '.env')} (2 variables)`);
+    expect(human.stdout()).not.toContain('s3cr3t');
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('records both operator env files as absent for a pack that ships none, without a diagnostic', async () => {
+  const fixture = await temporaryDoctor();
+  const pluginRoot = join(fixture.home, '.cursor', 'plugins', 'local', 'plain');
+  try {
+    await writeJson(join(pluginRoot, '.cursor-plugin/plugin.json'), { name: 'plain', version: '1.0.0' });
+    const report = await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      home: fixture.home,
+      hosts: ['cursor'],
+    });
+    const finding = hostReport(report, 'cursor').inventory.findings.find((entry) => entry.entry === 'plain');
+    expect(finding?.operatorEnv).toEqual({
+      diagnostics: [],
+      files: [
+        { path: join(pluginRoot, '.env'), state: 'absent' },
+        { path: join(pluginRoot, '.env.local'), state: 'absent' },
+      ],
+      status: 'absent',
+    });
+    expect(report.diagnostics.some((entry) => entry.code === 'AB7331')).toBe(false);
+    const human = captureCliTerminal();
+    await runCli(['doctor'], human.output, { runDoctor: async () => report });
+    expect(human.stdout()).not.toContain('operator env:');
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 it('inventories durable state under a checked --from bundle', async () => {
   const fixture = await temporaryDoctor();
   try {

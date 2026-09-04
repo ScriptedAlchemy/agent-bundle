@@ -836,6 +836,18 @@ validation. MCP Apps are not registered at this level: every app route reports
 `surface-completeness` as `not-applicable` and receives no coverage or sweep
 check, and app fixture entries are accepted and ignored.
 
+**Task-augmented calls (`mcp-in-memory`, #369).** The session's `client` is
+the SDK `Client`, so a tool route that declares
+`config.execution.taskSupport` is proved through the same lifecycle a
+task-aware host would drive: `client.request({ method: 'tools/call', params:
+{ name, arguments, task: {} } }, CreateTaskResultSchema)` answers at once,
+`tasks/get` reports `working` with the last render progress, `tasks/result`
+blocks for the same `CallToolResult` an ordinary `callTool` produces (plus
+`_meta["io.modelcontextprotocol/related-task"]`), and `tasks/cancel`
+interrupts the render. The generated server declares the `tasks` capability
+only when at least one tool opted in; `runContractMatrix` keeps calling every
+tool as an ordinary request, which is the contract task-free clients rely on.
+
 **`runPackedContractMatrix` (`packed-stdio` / `packed-deleted-source`)** runs
 against an already-open packed session (the single packed journey owns session
 open/close). It proves process stdio evidence for surface completeness

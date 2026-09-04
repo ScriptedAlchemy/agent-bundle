@@ -237,8 +237,9 @@ describe('rendered scripts at the script dispatch level', () => {
     // The generated script passes `name: 'tooling-summary'`, never the route id.
     expect(scriptJson(first)).toEqual({
       arguments: 2,
-      keys: ['libraryTooling', 'processLifetime'],
+      keys: ['libraryTooling', 'processLifetime', 'requestView'],
       libraryTooling: { kind: 'script', surface: 'tooling-summary', tool: 'ffprobe 6.1' },
+      requestView: expect.objectContaining({ handle: 'outside-invocation', lineage: 'not-provided' }),
     });
     expect((scriptJson(second) as Summary).arguments).toBe(1);
 

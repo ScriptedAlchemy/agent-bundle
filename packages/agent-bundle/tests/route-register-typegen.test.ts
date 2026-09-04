@@ -124,13 +124,17 @@ it('types every route-aware public surface from the generated route registration
       'export default async function Report() { return { lines: 1 }; }',
       '',
     ].join('\n')),
+    // Typed to its family, so `canonical.payload` narrows to the tool/after fields (#466).
     writeProjectFile(root, 'src/events/tool/after.ts', [
       "import type { AgentEventRouteProps } from 'agent-bundle';",
-      'export default async function ToolAfter(props: AgentEventRouteProps) { return props.canonical.event; }',
+      "export default async function ToolAfter(props: AgentEventRouteProps<'tool/after'>) {",
+      '  const name: string | undefined = props.canonical.payload.toolName?.value;',
+      '  return name ?? props.canonical.event;',
+      '}',
       '',
     ].join('\n')),
     writeProjectFile(root, 'assertions.ts', [
-      "import type { AgentEventCanonicalIdentity, AgentEventNativePayload } from 'agent-bundle';",
+      "import type { AgentEventCanonicalIdentity, AgentEventNativePayload, AgentEventPayload } from 'agent-bundle';",
       "import { expectMcpCall, expectNoMcpCall } from 'agent-bundle/eval';",
       'import type {',
       '  RegisteredMcpRouteId,',
@@ -141,6 +145,7 @@ it('types every route-aware public surface from the generated route registration
       '  RegisteredRouteResult,',
       "} from '@agent-bundle/runtime';",
       'import {',
+      '  createEventRouteInput,',
       '  getMcpPrompt,',
       '  invokeCli,',
       '  invokeMcpTool,',
@@ -165,7 +170,12 @@ it('types every route-aware public surface from the generated route registration
       '// An event route registers the harness payload — the component props without the `signal` the harness',
       '// injects — and no result, since event modules export no resultSchema.',
       "export type EventInput = Assert<Equal<keyof RegisteredRouteInput<'event:tool/after'>, 'canonical' | 'native'>>;",
-      "export type EventCanonical = Assert<Equal<RegisteredRouteInput<'event:tool/after'>['canonical'], AgentEventCanonicalIdentity>>;",
+      "export type EventCanonical = Assert<Equal<RegisteredRouteInput<'event:tool/after'>['canonical'], AgentEventCanonicalIdentity<'tool/after'>>>;",
+      '// The route\'s family narrows `canonical.payload`: tool/after fields are present, stop-only fields are not.',
+      "export type EventPayload = Assert<Equal<RegisteredRouteInput<'event:tool/after'>['canonical']['payload'], AgentEventPayload<'tool/after'>>>;",
+      "export type EventPayloadTool = Assert<Equal<NonNullable<AgentEventPayload<'tool/after'>['toolResponse']>['nativeKey'], string>>;",
+      "export type EventPayloadNoReentry = Assert<Equal<'reentry' extends keyof AgentEventPayload<'tool/after'> ? true : false, false>>;",
+      "export type EventPayloadStop = Assert<Equal<'reentry' extends keyof AgentEventPayload<'stop'> ? true : false, true>>;",
       "export type EventNative = Assert<Equal<RegisteredRouteInput<'event:tool/after'>['native'], AgentEventNativePayload>>;",
       "export type EventResult = Assert<Equal<RegisteredRouteResult<'event:tool/after'>, undefined>>;",
       '// The MCP server and protocol names a registered id encodes (TanStack\'s `RoutesByPath` shape).',
@@ -178,7 +188,7 @@ it('types every route-aware public surface from the generated route registration
       "export type ShelfFindWireInput = Assert<Equal<McpRouteInput<'find', 'tool', 'shelf'>, { isbn: string }>>;",
       "export type DynamicWireInput = Assert<Equal<McpRouteInput<string, 'tool'>, unknown>>;",
       '',
-      'export const typed = async (canonical: AgentEventCanonicalIdentity, native: AgentEventNativePayload): Promise<void> => {',
+      "export const typed = async (canonical: AgentEventCanonicalIdentity<'tool/after'>, native: AgentEventNativePayload): Promise<void> => {",
       "  const found = await renderRoute('tool:curator/find', { input: { query: 'dune' } });",
       '  // `result` is the route\'s own resultSchema output, no cast.',
       '  const hits: number | undefined = found.result?.hits;',
@@ -187,6 +197,12 @@ it('types every route-aware public surface from the generated route registration
       '  // A valid event-route call carries exactly `{ canonical, native }`; the harness supplies the signal.',
       "  const after = await renderRoute('event:tool/after', { input: { canonical, native } });",
       '  const none: undefined = after.result;',
+      '  // `createEventRouteInput` builds that pair from a host envelope, narrowed to the family.',
+      "  const built = createEventRouteInput('tool/after', { hook_event_name: 'PostToolUse', tool_name: 'Write' }, { host: 'claude', validate: false });",
+      '  const builtName: string | undefined = built.canonical.payload.toolName?.value;',
+      "  await renderRoute('event:tool/after', { input: built });",
+      "  const stopInput = createEventRouteInput('stop', { hook_event_name: 'Stop' }, { host: 'codex', validate: false });",
+      '  const reentry: boolean | undefined = stopInput.canonical.payload.reentry?.value;',
       '  // A value typed string stays legal for dynamic lookups and observes unknown.',
       "  const dynamic: string = ['tool:curator/status'].join('');",
       '  const loose = await renderRoute(dynamic);',
@@ -234,7 +250,7 @@ it('types every route-aware public surface from the generated route registration
       "  const script = await loadRouteModule('script:anything');",
       '  const scriptParsed: unknown = script.resultSchema?.parse({});',
       '  void hits; void status; void none; void anything; void packed; void executed; void isReport;',
-      '  void parsedQuery; void parsedHits; void looseParsed; void scriptParsed;',
+      '  void parsedQuery; void parsedHits; void looseParsed; void scriptParsed; void builtName; void reentry;',
       '};',
       '',
     ].join('\n')),
@@ -296,6 +312,17 @@ it('types every route-aware public surface from the generated route registration
     writeProjectFile(root, 'wrong-event-input.ts', [
       "import { renderRoute } from 'agent-bundle/test';",
       "export const mistyped = renderRoute('event:tool/after', { input: { canonical: 'tool/after', native: {} } });",
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'wrong-event-payload.ts', [
+      "import { createEventRouteInput } from 'agent-bundle/test';",
+      "export const stopOnly = createEventRouteInput('tool/after', { hook_event_name: 'PostToolUse' }, { host: 'claude', validate: false }).canonical.payload.reentry;",
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'wrong-event-family.ts', [
+      "import { renderRoute } from 'agent-bundle/test';",
+      "import { createEventRouteInput } from 'agent-bundle/test';",
+      "export const mismatched = renderRoute('event:tool/after', { input: createEventRouteInput('stop', { hook_event_name: 'Stop' }, { host: 'claude', validate: false }) });",
       '',
     ].join('\n')),
     writeProjectFile(root, 'wrong-id.ts', [
@@ -361,7 +388,15 @@ it('types every route-aware public surface from the generated route registration
   expect(wrongInput[0]).toContain("Type 'number' is not assignable to type 'string'");
   const wrongEventInput = typecheck(root, 'wrong-event-input.ts', true);
   expect(wrongEventInput).toHaveLength(1);
-  expect(wrongEventInput[0]).toContain("Type 'string' is not assignable to type 'AgentEventCanonicalIdentity'");
+  expect(wrongEventInput[0]).toContain("Type 'string' is not assignable to type 'AgentEventCanonicalIdentity<\"tool/after\">'");
+  // The payload is narrowed by family: a stop-only field is rejected on a tool/after route, and a
+  // stop envelope's input is rejected for a tool/after route.
+  const wrongEventPayload = typecheck(root, 'wrong-event-payload.ts', true);
+  expect(wrongEventPayload).toHaveLength(1);
+  expect(wrongEventPayload[0]).toContain("Property 'reentry' does not exist on type 'AgentEventPayload<\"tool/after\">'");
+  const wrongEventFamily = typecheck(root, 'wrong-event-family.ts', true);
+  expect(wrongEventFamily).toHaveLength(1);
+  expect(wrongEventFamily[0]).toContain("Type '\"stop\"' is not assignable to type '\"tool/after\"'");
   const wrongResult = typecheck(root, 'wrong-result.ts', true);
   expect(wrongResult).toHaveLength(1);
   expect(wrongResult[0]).toContain("Type 'number | undefined' is not assignable to type 'string | undefined'");

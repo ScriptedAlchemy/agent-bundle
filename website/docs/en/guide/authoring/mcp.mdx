@@ -93,7 +93,7 @@ export const config = {
 ```
 
 Call `await agent()` only when the route needs context. The handle exposes the invocation plus
-the `host`, `session`, `actor`, and `workspace` identity axes. Each axis is *observed*: a
+the `host`, `session`, `actor`, `workspace`, and `plugin` identity axes. Each axis is *observed*: a
 transport publishes an `available` value and its source when it knows one, or `unavailable` with
 a typed reason when it does not. Bare stdio supplies neither a session id nor HTTP actor
 authentication, so those axes stay honestly unavailable rather than being fabricated.
@@ -114,6 +114,27 @@ to the single pending `subagentStart`). A confirmation also fills in `subagent.t
 siblings claimed blind, places a start no spawn window could, and moves a child the window
 filed under the wrong parent. There is deliberately no operator or user identity axis: the
 framework never reads or surfaces who the human behind a host session is.
+
+When the registry placed the request, the lineage also carries `tree` — who else is alive, read
+from the same registry and never invented:
+
+```ts
+const { lineage } = await agent();
+if (lineage.state === 'available' && lineage.value.tree !== undefined) {
+  lineage.value.tree.siblings; // every other live conversation under the same root (any depth,
+                               // the root itself included for a subagent), oldest first
+  lineage.value.tree.children; // live conversations whose parent is this one
+  lineage.value.tree.roots;    // other live root conversations (Cursor: same workspace_roots)
+}
+```
+
+Each peer is `{ conversation, depth, parent?, startedAt, subagent?, resolution }` — the
+registry's facts about that node, with the trust level of *its* placement, judged exactly as on
+a request that node made itself. Stopped conversations are not listed; a Cursor child whose
+conversation has not spoken yet is listed under its `subagent_id`. The tree is absent when the
+registry did not place the request (a standalone hook, or a Codex `_meta` naming a thread it
+never saw start): the axis then still says who you are, not who else is here. Route-unit tests
+inject it through the same `context.lineage` seam as the rest of the axis.
 
 ### The terminal capability
 
@@ -153,6 +174,92 @@ A plain `main`-exporting script or bin has no request scope; its envelope passes
 as the second argument of `main` (see [Package entries](./package-entries.mdx#the-executable-envelope)).
 In tests, the `tty` knob of `invokeCli` and `runScript` shapes a deterministic synthetic value,
 and `context.terminal` injects any other one through the same seam as every identity axis.
+
+### Request context providers
+
+A conventional `src/providers/<name>.ts` module default-exports a factory whose value is
+mounted at `(await agent()).providers.<camelCaseName>` on every generated surface. Beyond the
+surface-specific `invocation` and the request `signal`, the factory receives the request as the
+route will read it — `host`, `session`, `workspace`, `plugin`, and `lineage` (tree included), the
+same `Observed` values with the same provenance — plus read-only views of the mounted handles:
+`state` (`read` only) when the project declares `src/state.ts`, `notices` (`inbox` and
+`published` only) when the scope mounts the notice ledger. A provider can therefore derive a view
+of shared state — a topology, a peers list, what became of the notices this agent published — but
+cannot dispatch a state event or publish a notice; those stay in routes.
+
+```ts
+// src/providers/agent-topology.ts
+import type { AgentProviderContext } from 'agent-bundle';
+
+export default async function agentTopology({ lineage, state }: AgentProviderContext) {
+  const snapshot = state === undefined ? undefined : await state.read();
+  return {
+    peers: lineage.state === 'available' ? lineage.value.tree?.siblings ?? [] : [],
+    revision: snapshot?.revision,
+  };
+}
+```
+
+Providers run once per request as the request's own resolver: after `runAgentRequest` has
+frozen the identity axes and opened the notice lease, before the route, in deterministic key
+order, outside the request's async context (`agent()` inside a factory throws
+`outside-invocation`). A factory that throws fails the request closed; expected degradation
+should return an honest unavailable-shaped value instead. The `agent-bundle/test` harness hands
+its providers the same view, so a route-unit test that injects `context.lineage` or mounts state
+sees them reflected in `providers.<key>`; an explicit `context.providers` map is mounted verbatim.
+
+## Rich Markdown blocks as JSX
+
+`Agent.Markdown` carries one Markdown string, and hand-concatenating that string — one
+`- **${label}:** ${value}` per row — is where tables, nested lists, and escaping go wrong. The
+async `MarkdownContent` component from `@agent-bundle/runtime` renders its JSX children to one
+GitHub Flavored Markdown string and lowers it into `Agent.Markdown`, so a route authors the block
+as markup:
+
+```tsx
+import React from 'react';
+import { MarkdownContent } from '@agent-bundle/runtime';
+
+interface MeasuredFile {
+  readonly path: string;
+  readonly bytes: number;
+}
+
+export const MeasuredFiles = ({ files }: { readonly files: readonly MeasuredFile[] }) => (
+  <MarkdownContent>
+    <table>
+      <thead>
+        <tr><th>File</th><th align="right">Bytes</th></tr>
+      </thead>
+      <tbody>
+        {files.map((file) => (
+          <tr key={file.path}><td>{file.path}</td><td>{file.bytes}</td></tr>
+        ))}
+      </tbody>
+    </table>
+  </MarkdownContent>
+);
+```
+
+Headings `h1`–`h6`, paragraphs, `strong`/`em`/`del`, `code` and `pre`, links and images,
+blockquotes, `ul`/`ol` (nested, and `start` on `ol`), GFM task lists (`<input type="checkbox">`
+inside `li`), `table` with `align` on its cells, `dt`/`dd`, `br`, and `hr` serialize to their
+Markdown forms; unknown elements pass their children through. Sync and async components anywhere
+in the children — including ones that call `React.use` — resolve before the block is emitted.
+Text is escaped, so literal `*stars*`, `[x]`, `<tag>`, `&amp;`, and a line-leading `-`, `#`,
+`1.`, or `>` survive as text when the document is parsed again. The rendered block carries no
+trailing newline: Agent Document projections own the blank-line joining between sibling blocks,
+so `MarkdownContent` sits beside `Agent.Text` and other nodes exactly like a handwritten
+`Agent.Markdown`.
+
+`components` maps extra host tag names to serializers, `(props, { inline, blocks }) => string`,
+when a custom element needs its own Markdown — `inline()` and `blocks()` render the element's
+children as inline text or as blank-line-joined blocks. The renderer is exported too:
+`renderToMarkdown(children, options?)` resolves to the string and
+`renderToMarkdownStream(children, options?)` yields a `ReadableStream<Uint8Array>` of UTF-8
+blocks in document order. Its output is pinned against micromark with the GFM extension — the
+parser under the Workbench's `react-markdown`/`remark-gfm` — so what a route authors is the
+structure the consumer parses.
 
 ## Streaming and progress
 
@@ -235,6 +342,84 @@ Code's default per-call wall clock is about 28 hours (`MCP_TOOL_TIMEOUT`, or a p
 notifications; Codex bounds a call at `tool_timeout_sec`, 60 seconds unless the operator raises
 it in `config.toml`. `agent-bundle inspect --routes` shows the budget with the rest of each
 route's compiled `config`.
+
+## Long-running tools: tasks
+
+The render budget bounds how long a render may run; it does not change that an ordinary
+`tools/call` blocks the client until the render ends. The MCP `2025-11-25` Tasks utility is the
+complementary mechanism: a client that asks for task-augmented execution gets a task handle at
+once and collects the result later, so its own request deadline stops mattering for the render. A
+tool route opts in with `config.execution.taskSupport`, the tool's `execution` block as
+`tools/list` advertises it:
+
+```ts twoslash
+import type { ToolConfig } from 'agent-bundle';
+
+export const config = {
+  annotations: { readOnlyHint: true },
+  description: 'Convert the selected audiobook.',
+  execution: { taskSupport: 'optional' },
+} satisfies ToolConfig;
+```
+
+`taskSupport` is `'forbidden'` (the wire default when the key is absent: every call is an
+ordinary request), `'optional'` (a client may ask for a task; one that does not gets the ordinary
+result), or `'required'` (an ordinary call is refused with JSON-RPC `-32601`); anything else, an
+unknown key under `execution`, or the key on a resource or prompt route is `AB4836`. The route
+module itself does not change: it renders exactly as for an ordinary call, and `signal`,
+`progress.report()`, and streamed `Agent.Progress` fallbacks mean what they always did.
+
+When at least one tool opted in, the generated server declares
+`capabilities.tasks: { list, cancel, requests: { tools: { call } } }` and serves the lifecycle on
+a `2025-11-25` session:
+
+| Request | Answer |
+| --- | --- |
+| `tools/call` with `params.task` (`{ ttl?, pollInterval? }`) on an opted-in tool | `CreateTaskResult` at once: `task.taskId`, `status: "working"`, `createdAt`, `lastUpdatedAt`, the honoured `ttl` (the client's request, capped at 24 hours; five minutes when omitted) and `pollInterval` (at least 100 ms; 1 s when omitted), plus `_meta["io.modelcontextprotocol/model-immediate-response"]`, a sentence a host may hand its model while the task runs. The render starts under the task. |
+| `tasks/get` | The task: `working` with `statusMessage` set to the latest progress message and `_meta["agent-bundle/progress"]` carrying `{ progress, total?, message? }` — the same `Agent.Progress` projection that feeds `notifications/progress`; `completed`; `failed` with the tool error's text as `statusMessage` (a result with `isError: true` is a failed task, as the spec requires); or `cancelled`. The last progress stays readable on a settled task. |
+| `tasks/result` | Blocks until the task settles, then returns exactly what the ordinary call would have: the same `content`, `structuredContent`, and layout `_meta`, plus `_meta["io.modelcontextprotocol/related-task"]`; a render that ended in a JSON-RPC error returns that error. |
+| `tasks/cancel` | Transitions the task to `cancelled` before answering and aborts the render through the same `AbortSignal` a cancelled request uses; the interrupted render settles as the SDK's tool error, which `tasks/result` then returns. Cancelling a settled task is `-32602`. |
+| `tasks/list` | Every task the session still retains, oldest first, paged by an opaque `cursor`. |
+
+An unknown `taskId` is `-32602`; a task-augmented call to a tool that declared no support (or
+none) is `-32601`. Progress notifications for a task still flow only when the request carried
+`_meta.progressToken`, now stamped with the related-task key; the task observes progress either
+way. A client that never sends `params.task` sees no change at all, and a server none of whose
+tools opted in advertises no `tasks` capability and processes a task-augmented request as an
+ordinary one, as the utility requires of a receiver without the capability. Task records belong
+to the session that created them (the spawned stdio process, one client), stay for `ttl` after
+the task settles, at most 256 per server, and every task still working is cancelled when the
+session closes.
+
+The render budget applies to the task's render, not to the client's request: a task's
+`tools/call` returns immediately whatever the budget, and the render behind it is still bounded
+by the route's `config.render` (or the 60-second default). Raise the budget only when the render
+itself needs longer, not to outlast a host's request deadline — that is what the task is for. The
+`2026-07-28` protocol revision moves tasks out of the core into the `io.modelcontextprotocol/tasks`
+extension with a different shape (`resultType: "task"`, `tasks/update`, no `tasks/result`); the
+generated server's SDK release does not serve that extension, so a client on that revision keeps
+the ordinary contract and no task capability is advertised to it. Whether a pinned host issues
+task-augmented calls at all is recorded per host in the [host capability
+matrix](../../reference/hosts.md); at the time of writing none does, so the lifecycle is proven with
+the SDK client and the Workbench MCP page, where a tool that advertises task support offers
+**Run as task** and the Tasks panel polls `tasks/get`, fetches `tasks/result`, and cancels.
+
+The `mcp-in-memory` level proves the whole contract with the real SDK client:
+
+```ts
+import { specTypeSchemas } from '@modelcontextprotocol/client';
+import { openInMemoryMcpServer } from 'agent-bundle/test';
+
+await using session = await openInMemoryMcpServer();
+const created = await session.client.request({
+  method: 'tools/call',
+  params: { arguments: { holdMs: 2000 }, name: 'wait', task: { ttl: 60_000 } },
+}, specTypeSchemas.CreateTaskResult);
+const result = await session.client.request({
+  method: 'tasks/result',
+  params: { taskId: created.task.taskId },
+}, specTypeSchemas.CallToolResult);
+```
 
 ## Shared layouts
 
@@ -344,14 +529,31 @@ That guard matters because stdout carries JSON-RPC framing: one stray `console.l
 imported module would corrupt the protocol stream.
 
 Self-connecting entries — modules that construct and connect a transport at top level without a
-default export — keep their existing behavior byte for byte. Source validation reports the
-informational `AB4730` nudge suggesting the factory upgrade; it is never an error.
+default export — keep their existing behavior byte for byte: no lifecycle shell, and no operator
+`.env` layer, since there is no shell to apply it before the module's own top-level code runs.
+Source validation reports the informational `AB4730` nudge suggesting the factory upgrade; it is
+never an error.
 
-The same lifecycle is public API for hand-rolled entries:
+The same lifecycle is public API for hand-rolled entries, and so is the operator `.env` layer the
+generated shell applies before it imports the server module (see
+[Installation](../distribution/installation.mdx#operator-configuration-the-installed-packs-env)).
+Both imports are inlined into the emitted entry, which stays self-contained;
+`agent-bundle/launch-env` is aliased into every stdio entry, so it resolves whether or not the
+entry has a shell. A self-connecting entry that needs the layer applies it first thing, anchored
+the way the generated shell is (the artifact root is the parent of `mcp/`):
 
 ```ts
+import { fileURLToPath } from 'node:url';
+import { applyOperatorEnv, operatorEnvPluginRoot } from 'agent-bundle/launch-env';
 import { redirectConsoleToStderr, runStdioServer } from 'agent-bundle/mcp-entry';
+
+applyOperatorEnv({
+  pluginRoot: operatorEnvPluginRoot(fileURLToPath(new URL('..', import.meta.url))),
+});
 ```
+
+`operatorEnvPluginRoot` prefers an `AGENT_BUNDLE_PLUGIN_ROOT` the host set over the directory you
+pass, so the entry reads the same files as the pack's hook wrappers and CLI.
 
 ## Declaring servers in config
 
@@ -411,6 +613,32 @@ import { pluginRootEnvAnchor } from 'agent-bundle';
 const readPluginRoot = (env: Record<string, string | undefined>): string | undefined =>
   env[pluginRootEnvAnchor];
 ```
+
+Inside a route there is no need to read the variable at all. Every generated shell — the MCP
+entry and its Flight worker, the routed CLI executable and its render worker, the hook wrappers —
+resolves the anchor once at startup with `resolvePluginRoot` from `@agent-bundle/runtime`, mounts
+its SQLite state, notice ledger, and lineage journal under `<root>/state`, and publishes the same
+value on every request it opens as `(await agent()).plugin`:
+
+```ts
+const { plugin } = await agent();
+if (plugin.state === 'available') {
+  plugin.value.root;      // the install root: AGENT_BUNDLE_PLUGIN_ROOT, or the shell's fallback
+  plugin.value.stateRoot; // `<root>/state`, where defineState / notices / lineage already live
+  plugin.source;          // 'native' from the variable, 'derived' from the fallback
+}
+```
+
+`source: 'native'` means the host supplied an expanded `AGENT_BUNDLE_PLUGIN_ROOT`; `'derived'`
+means the shell fell back — to the artifact root (the parent of `mcp/`, `bin/`, or `hooks/`) inside
+a built artifact, or to `$PWD/.agent-bundle` for the npm package bin. A value still carrying an
+unexpanded `${…}` token (a host that passed its manifest through literally) is treated as unset,
+reported once on stderr, and never joined into a path. Conventional providers receive the same
+observed value as `plugin` in their factory context, beside `invocation` and `signal`, so a
+provider that keeps files beside the framework's state derives nothing itself. The route-unit and
+`mcp-in-memory` harnesses resolve it the same way (falling back to `<project root>/.agent-bundle`)
+and accept `context.plugin` as an override like every other axis; outside a generated scope the
+axis is `unavailable('not-provided')`.
 
 ## MCP Apps
 

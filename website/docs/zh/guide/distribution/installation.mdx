@@ -85,6 +85,43 @@ node ./install.mjs
 因为 `plugin update` 受版本门控；Codex 先 `codex plugin remove` 再 `add`。输出的 `INSTALL.md` 按宿主记录了
 同样的步骤。
 
+## 操作者配置：已安装包的 `.env`
+
+通过环境变量配置的插件——会话 cookie、API 令牌、主机名——应在安装处配置，而不是在产物里：清单 `env` 是编译
+产物，按内容寻址且每次构建都会重新输出，不是放置密钥的地方。取而代之，在已安装副本的插件根目录（存放
+`.claude-plugin/`、`.cursor-plugin/` 或 Codex 插件清单、与 `mcp/`、`hooks/`、`bin/` 同级的目录）放一个
+`.env` 文件，可选地再放一个 `.env.local`：
+
+```sh
+# ~/.cursor/plugins/local/movie-library/.env
+IPT_SESSION=…
+RTORRENT_SSH_HOST=nas.local
+```
+
+包输出的每个外壳——stdio MCP 服务器入口（工厂导出；[自行连接的入口](../authoring/mcp.mdx#手写-stdio-入口)
+没有外壳，除非自行调用 `applyOperatorEnv`，否则不读取任何文件）、运行插件代码的 hook 包装器、产物 CLI
+`bin/<name>.mjs`——在启动时按同一条规则读取该文件：
+
+| 优先级 | 层 | 内容 |
+| --- | --- | --- |
+| 3（最高） | 宿主环境 | 宿主导出的变量以及其清单 `env` 声明的变量（包括 `AGENT_BUNDLE_PLUGIN_ROOT`）。导出的变量永远胜出。 |
+| 2 | `.env.local` | 只填补空缺；同一个键上胜过 `.env`。 |
+| 1（最低） | `.env` | 只填补空缺。 |
+
+位置是包解析出的插件根目录——宿主设置了 `AGENT_BUNDLE_PLUGIN_ROOT` 时取它，否则取外壳自身所在目录
+（`mcp/`、`hooks/`、`bin/`）的上一级。`AGENT_BUNDLE_ENV_FILE` 可指定改为读取的一个或多个文件（以平台路径
+分隔符分隔），`AGENT_BUNDLE_ENV_FILE=none` 则关闭这一层。语法即 dotenv：`KEY=value`、`export KEY=value`、
+`#` 注释、单引号、双引号或反引号包裹的值（双引号内展开 `\n`）、跨行的引号值，且不做 `${VAR}` 插值。
+文件缺失是常态且没有开销；无法读取的文件会被跳过，包照常启动。取值永远不会被记录。该文件不归安装回执
+所有，因此 `install --replace` 与同版本重建都会保留它，而 `uninstall` 绝不移除非归属条目：卸载后该文件仍会
+留下（Doctor 随后以 `AB7307` 把该目录报告为残留），凭据应当消失时请手动删除。路由与 provider 代码在运行时看到的是合成后的环境；在导入时就读取 `process.env` 的 hook 处理器或
+CLI 路由模块仍只看到宿主环境，因为这些模块是其包装器的静态导入——MCP 服务器模块在这一层之后加载，
+处处可见。`agent-bundle mcp run` 自己也合成同样的三层，并把 `--env-file` / `--no-env` 以
+`AGENT_BUNDLE_ENV_FILE` 传给子进程，因此演练与已安装包读取的是同一组文件。
+
+`agent-bundle doctor` 会报告已安装副本是否带有 `.env` 或 `.env.local` 以及各自声明了多少个变量
+（`AB7331`，信息级）——绝不报告名字或取值。
+
 ## 按回执卸载
 
 ```sh

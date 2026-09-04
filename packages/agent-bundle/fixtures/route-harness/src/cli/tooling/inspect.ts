@@ -12,6 +12,7 @@ export const resultSchema = z.object({
   keys: z.array(z.string()),
   libraryTooling: z.unknown().optional(),
   processLifetime: z.object({ hits: z.number().int().min(1), instanceId: z.string(), pid: z.number().int() }).strict(),
+  requestView: z.unknown().optional(),
 }).strict();
 
 export default async function inspect(_props: CliRouteProps<typeof inputSchema>) {
@@ -20,5 +21,6 @@ export default async function inspect(_props: CliRouteProps<typeof inputSchema>)
     keys: Object.keys(providers).sort(),
     libraryTooling: providers['libraryTooling'],
     processLifetime: providers['processLifetime'],
+    requestView: providers['requestView'],
   };
 }

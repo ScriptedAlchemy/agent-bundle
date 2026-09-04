@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { afterEach, beforeEach, expect, it } from '@rstest/core';
-import { expectDocument, renderRoute, testManifest } from 'agent-bundle/test';
+import { createEventRouteInput, expectDocument, renderRoute, testManifest } from 'agent-bundle/test';
 
 /**
  * The route-unit proof level for the demo's PostToolUse migration: the hook is
@@ -46,21 +46,9 @@ it('compiles the PostToolUse hook as a real event route rather than configuratio
 it('renders a native Claude PostToolUse envelope into the document the host projects from', async () => {
   const native = JSON.parse(await readFile(fixture, 'utf8')) as Record<string, unknown>;
   const rendered = await renderRoute('event:tool/after', {
-    input: {
-      canonical: {
-        event: 'tool/after',
-        idempotencyKey: 'route-unit-claude-write',
-        observedAt: '2026-09-01T00:00:00.000Z',
-        provenance: {
-          host: 'claude',
-          hostContractRevision: 'route-unit',
-          nativeEvent: 'PostToolUse',
-          source: 'native',
-        },
-        sequence: 1,
-      },
-      native: { ...native, cwd: workspace },
-    },
+    // The harness validates the Claude envelope and projects `canonical.payload`
+    // (cwd, sessionId, toolName, toolInput) exactly as the artifact's wrapper does.
+    input: createEventRouteInput('tool/after', { ...native, cwd: workspace }, { host: 'claude' }),
   });
 
   expect(rendered.invocation.kind).toBe('event');
@@ -77,21 +65,9 @@ it('appends a value-free eval hook probe when AGENT_RUNTIME_HOOK_PROBE_FILE is s
   const native = JSON.parse(await readFile(fixture, 'utf8')) as Record<string, unknown>;
 
   await renderRoute('event:tool/after', {
-    input: {
-      canonical: {
-        event: 'tool/after',
-        idempotencyKey: 'route-unit-claude-write',
-        observedAt: '2026-09-01T00:00:00.000Z',
-        provenance: {
-          host: 'claude',
-          hostContractRevision: 'route-unit',
-          nativeEvent: 'PostToolUse',
-          source: 'native',
-        },
-        sequence: 1,
-      },
-      native: { ...native, cwd: workspace },
-    },
+    // The harness validates the Claude envelope and projects `canonical.payload`
+    // (cwd, sessionId, toolName, toolInput) exactly as the artifact's wrapper does.
+    input: createEventRouteInput('tool/after', { ...native, cwd: workspace }, { host: 'claude' }),
   });
 
   const probe = JSON.parse(await readFile(probeFile, 'utf8'));

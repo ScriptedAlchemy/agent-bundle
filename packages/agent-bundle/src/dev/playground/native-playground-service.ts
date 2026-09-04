@@ -1,8 +1,13 @@
 import { constants, type Stats } from 'node:fs';
-import { link, lstat, mkdir, mkdtemp, open, readdir, realpath, rename, rm, type FileHandle } from 'node:fs/promises';
+import { link, lstat, mkdir, mkdtemp, open, readdir, rename, rm, type FileHandle } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
+import { Effect, FileSystem } from 'effect';
+
 import { digest, stableJson } from '../../core/digest.ts';
+import { type PlatformRun } from '../../effect/platform.ts';
+import { platformRunOf } from '../platform-run.ts';
+import type { DevPlatformRuntime } from '../platform-runtime.ts';
 import { hasExactOwnKeys, isJsonRecord, parseJsonWithoutDuplicateKeys, snapshotStrictJsonValue, type JsonValue } from '../../core/strict-json.ts';
 import { loadConfig } from '../../config/load.ts';
 import type { PreparedEvalArtifact } from '../../eval/artifact.ts';
@@ -111,6 +116,8 @@ export interface NativePlaygroundServiceOptions {
   readonly projectRoot: string;
   /** @internal Deterministic cleanup seam for lifecycle tests. */
   readonly removeWorkspace?: (root: string) => Promise<void>;
+  /** The dev server's session runtime; absent, each program runs on its own `platformLayer`. */
+  readonly platformRuntime?: DevPlatformRuntime;
 }
 
 export interface NativePlaygroundCatalogStorage {
@@ -630,6 +637,7 @@ export class NativePlaygroundService {
   readonly #planFixture: NonNullable<NativePlaygroundServiceOptions['planFixture']>;
   readonly #projectRoot: string;
   readonly #removeWorkspace: NonNullable<NativePlaygroundServiceOptions['removeWorkspace']>;
+  readonly #run: PlatformRun;
   readonly #stagingSettleDeadlineMs: number;
   #abortDispatchDepth = 0;
   #closePromise: Promise<void> | undefined;
@@ -641,7 +649,9 @@ export class NativePlaygroundService {
     this.#stagingSettleDeadlineMs = options.catalogStagingSettleDeadlineMs ?? stagingPublicationSettleDeadlineMs;
     this.#catalogMove = options.catalogStorage?.move ?? rename;
     this.#projectRoot = options.projectRoot;
-    this.#removeWorkspace = options.removeWorkspace ?? (async (root) => rm(root, { force: true, recursive: true }));
+    this.#run = platformRunOf(options.platformRuntime);
+    this.#removeWorkspace = options.removeWorkspace ??
+      ((root) => this.#run(Effect.flatMap(FileSystem.FileSystem, (fs) => fs.remove(root, { force: true, recursive: true }))));
     this.#environment = options.environment;
     this.#native = options.native;
     this.#discover = options.discover ?? (async (projectRoot) => {
@@ -1491,8 +1501,10 @@ export class NativePlaygroundService {
     }
     if (this.#catalogDirectory !== undefined) return;
     try {
-      const resolvedEpochRoot = await realpath(dirname(reference.root));
-      const resolvedDirectory = await realpath(directory);
+      const [resolvedEpochRoot, resolvedDirectory] = await this.#run(Effect.flatMap(
+        FileSystem.FileSystem,
+        (fs) => Effect.all([fs.realPath(dirname(reference.root)), fs.realPath(directory)]),
+      ));
       if (!isInsideOrEqual(resolvedEpochRoot, resolvedDirectory)) {
         throw new Error('Native Playground catalog directory is invalid.');
       }
@@ -1502,10 +1514,13 @@ export class NativePlaygroundService {
     }
   }
 
+  /** Ownership passes to the operation's `#cleanupWorkspace`, so this is not a `withTempDirectory` bracket. */
   async #createWorkspaceRoot(): Promise<string> {
     const root = join(this.#projectRoot, '.agent-bundle');
-    await mkdir(root, { recursive: true });
-    return mkdtemp(join(root, 'native-playground-'));
+    return this.#run(Effect.flatMap(FileSystem.FileSystem, (fs) => Effect.andThen(
+      fs.makeDirectory(root, { recursive: true }),
+      fs.makeTempDirectory({ directory: root, prefix: 'native-playground-' }),
+    )));
   }
 
   async #workspaceDiff(workspace: string, prepared: NativePlaygroundPrepared): Promise<WorkspaceDiff | undefined> {

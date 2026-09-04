@@ -46,9 +46,34 @@ class RecordingSession implements McpSessionRouteSession {
     return Promise.resolve({ content: [{ text: 'forecast', type: 'text' }], structuredContent: { temperature: 20 } });
   }
 
+  callToolTask(options: { readonly arguments: Record<string, unknown>; readonly name: string; readonly requestId?: string; readonly task: Readonly<Record<string, unknown>> }): Promise<unknown> {
+    this.calls.push({ kind: 'callToolTask', options });
+    return Promise.resolve({ task: { createdAt: 't0', lastUpdatedAt: 't0', status: 'working', taskId: 'task-a', ttl: 60_000 } });
+  }
+
   cancel(requestId: string): boolean {
     this.calls.push({ kind: 'cancel', requestId });
     return requestId === 'request-a';
+  }
+
+  cancelTask(options: { readonly taskId: string }): Promise<unknown> {
+    this.calls.push({ kind: 'cancelTask', options });
+    return Promise.resolve({ createdAt: 't0', lastUpdatedAt: 't1', status: 'cancelled', taskId: options.taskId, ttl: 60_000 });
+  }
+
+  getTask(options: { readonly taskId: string }): Promise<unknown> {
+    this.calls.push({ kind: 'getTask', options });
+    return Promise.resolve({ createdAt: 't0', lastUpdatedAt: 't0', status: 'working', taskId: options.taskId, ttl: 60_000 });
+  }
+
+  getTaskResult(options: { readonly taskId: string }): Promise<unknown> {
+    this.calls.push({ kind: 'getTaskResult', options });
+    return Promise.resolve({ content: [{ text: 'forecast', type: 'text' }] });
+  }
+
+  listTasks(options: { readonly cursor?: string }): Promise<unknown> {
+    this.calls.push({ kind: 'listTasks', options });
+    return Promise.resolve({ tasks: [] });
   }
 
   getPrompt(options: { readonly arguments?: Record<string, string>; readonly name: string }): Promise<unknown> {
@@ -288,6 +313,51 @@ it('requires the foreground origin and token before every MCP session operation'
       diagnostic: { code: 'AB8003', message: 'Request origin is not this foreground server.' },
     });
     expect(service.opens).toEqual([]);
+  } finally {
+    await started.close();
+  }
+});
+
+it('routes the task operations (#369) as typed operations, rejecting malformed task shapes', async () => {
+  const service = new RecordingService();
+  const started = await startRoutes(service);
+  const post = (body: unknown) => fetch(`${started.url}/api/mcp/sessions/session-a/operations`, {
+    body: JSON.stringify(body),
+    headers: { ...headers(), 'content-type': 'application/json' },
+    method: 'POST',
+  });
+
+  try {
+    const created = await post({ arguments: { holdMs: 50 }, name: 'forecast', operation: 'tools/call', requestId: 'request-task', task: { ttl: 60_000 } });
+    expect(created.status).toBe(200);
+    await expect(created.json()).resolves.toEqual({ result: { task: expect.objectContaining({ status: 'working', taskId: 'task-a' }) } });
+    expect(service.session.calls).toContainEqual({
+      kind: 'callToolTask',
+      options: { arguments: { holdMs: 50 }, name: 'forecast', requestId: 'request-task', task: { ttl: 60_000 } },
+    });
+    for (const [operation, kind] of [['tasks/get', 'getTask'], ['tasks/result', 'getTaskResult'], ['tasks/cancel', 'cancelTask']] as const) {
+      const response = await post({ operation, taskId: 'task-a' });
+      expect(response.status).toBe(200);
+      expect(service.session.calls).toContainEqual({ kind, options: { taskId: 'task-a' } });
+    }
+    const listed = await post({ operation: 'tasks/list' });
+    expect(listed.status).toBe(200);
+    await expect(listed.json()).resolves.toEqual({ result: { tasks: [] } });
+    expect(service.session.calls).toContainEqual({ kind: 'listTasks', options: {} });
+
+    for (const malformed of [
+      { arguments: {}, name: 'forecast', operation: 'tools/call', task: { ttl: -1 } },
+      { arguments: {}, name: 'forecast', operation: 'tools/call', task: { later: true } },
+      { operation: 'tasks/get' },
+      { operation: 'tasks/get', taskId: '' },
+      { cursor: 5, operation: 'tasks/list' },
+    ]) {
+      const rejected = await post(malformed);
+      expect(rejected.status).toBe(400);
+      await expect(rejected.json()).resolves.toEqual({
+        diagnostic: { code: 'AB8016', message: 'MCP session request has an invalid shape.' },
+      });
+    }
   } finally {
     await started.close();
   }

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, expect, it } from '@rstest/core';
 import { available, type AgentLineage } from '@agent-bundle/runtime';
-import { expectDocument, mountTestState, renderRoute, testManifest, type MountedTestState } from 'agent-bundle/test';
+import { createEventRouteInput, expectDocument, mountTestState, renderRoute, testManifest, type MountedTestState } from 'agent-bundle/test';
 
 import { LOG_DIR_ENV } from '../../src/log.js';
 import { DEFAULT_DUMP_LIMIT } from '../../src/mcp/host-test/tools/dump.js';
@@ -19,25 +19,24 @@ let logDir: string;
 let mounted: MountedTestState<CapturesState, CaptureEvents>;
 let sequence = 0;
 
+// The probe records the whole envelope, so its tests hand it partial ones
+// (`validate: false`); the harness still projects `canonical.payload` from them.
 const eventInput = (
   event: 'agent/start' | 'agent/stop' | 'session/start' | 'tool/before',
   native: Record<string, unknown>,
   host = 'claude',
-) => ({
-  canonical: {
-    event,
-    idempotencyKey: `${event}:${String(sequence)}`,
-    observedAt: `2026-09-03T08:00:${String(sequence++).padStart(2, '0')}.000Z`,
-    provenance: {
-      host,
-      hostContractRevision: 'route-unit',
-      nativeEvent: native.hook_event_name as string,
-      source: 'native',
+) => {
+  const built = createEventRouteInput(event, native, { host, validate: false });
+  return {
+    canonical: {
+      ...built.canonical,
+      idempotencyKey: `${event}:${String(sequence)}`,
+      observedAt: `2026-09-03T08:00:${String(sequence++).padStart(2, '0')}.000Z`,
+      sequence,
     },
-    sequence,
-  },
-  native,
-});
+    native: built.native,
+  };
+};
 
 const render = async (
   route: string,
@@ -87,7 +86,23 @@ it('compiles every canonical event family plus the MCP and CLI surfaces', () => 
   ]) {
     expect(routes, family).toContain(`event:${family}`);
   }
-  expect(routes).toEqual(expect.arrayContaining(['tool:host-test/dump', 'tool:host-test/reset', 'cli:dump']));
+  expect(routes).toEqual(expect.arrayContaining(['tool:host-test/dump', 'tool:host-test/reset', 'tool:host-test/slow', 'cli:dump']));
+  expect(manifest.routes['tool:host-test/slow']?.config).toMatchObject({ execution: { taskSupport: 'optional' } });
+});
+
+it('holds the slow probe open for the requested time, reporting one progress tick per tickMs, and records the call', async () => {
+  const slow = await render('tool:host-test/slow', { holdMs: 120, tickMs: 40 });
+  expect(slow.document.value).toMatchObject({ ticks: 3 });
+  expect((slow.document.value as { heldMs: number }).heldMs).toBeGreaterThanOrEqual(100);
+  expect(slow.progress.map((update) => update.completed)).toEqual([1, 2, 3]);
+  // The probe is recorded like every other MCP call; the dump that reads it records itself too.
+  const dumped = await render('tool:host-test/dump', {});
+  expect(dumped.document.value).toMatchObject({
+    records: [
+      expect.objectContaining({ event: 'mcp:slow', kind: 'mcp', observed: { holdMs: 120, tickMs: 40, tool: 'slow' } }),
+      expect.objectContaining({ event: 'mcp:dump', kind: 'mcp' }),
+    ],
+  });
 });
 
 it('records the complete native envelope, the request context, and env names for every event', async () => {

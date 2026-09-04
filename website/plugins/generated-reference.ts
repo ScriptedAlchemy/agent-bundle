@@ -24,6 +24,8 @@ interface CapabilityRow {
   readonly nativeEvent?: string;
   readonly evidence?: readonly string[];
   readonly availability?: Readonly<Record<string, { readonly state?: string; readonly reason?: string }>>;
+  /** Canonical payload field → host key (or `{ nativeKey, decode }`), on supported event-route rows. */
+  readonly payload?: JsonObject;
 }
 
 interface HostCapabilityTable {
@@ -140,6 +142,9 @@ const messages = {
     installSurface: 'Install surface',
     pathTokens: 'Path tokens',
     mcpTransports: 'MCP transports and token fields',
+    mcpTasksIntro:
+      'The `tasks` column records whether the pinned host client issues task-augmented `tools/call` requests (the MCP `2025-11-25` Tasks utility: `params.task`, `CreateTaskResult`, `tasks/get`, `tasks/result`, `tasks/cancel`, `tasks/list`). Generated servers serve that lifecycle for any tool route that declares `config.execution.taskSupport`; the column is about the host, not the server. `unavailable` means the host is documented or observed to send ordinary calls only, with the reason and evidence below.',
+    mcpTasksDetails: 'Task-augmented calls by host',
     lineage: 'Conversation lineage',
     lineageIntro:
       'The `lineage` section of each table: what the host tells the warm runtime about the conversation tree behind `request.lineage`. `subagent-events` says whether the host emits subagent start/stop hooks at all, `root` whether every payload names the root conversation, `parent` and `depth` how a subagent is placed under its parent (`supported` only when the child\'s own payload names it, `degraded` when the runtime registry places it from spawn-call ordering and any later host confirmation), and `mcp-correlation` how a generated MCP tool call is matched to the hook window that produced it. A degraded row records what the registry does and how certain it is; a supported row records the evidence. The `resolution` field on `request.lineage` reports which path answered (`native`, `registry`, `confirmed`, `inferred`).',
@@ -162,8 +167,10 @@ const messages = {
       token: 'Token',
       stdio: 'stdio',
       streamableHttp: 'Streamable HTTP',
+      tasks: 'Task-augmented calls',
       tokenFields: 'Fields accepting path tokens',
       canonicalEvent: 'Canonical event',
+      payloadField: 'Payload field',
       configKey: 'Config key',
       selector: 'Selector',
       nativeEvent: 'Native event',
@@ -183,6 +190,10 @@ const messages = {
     eventRoutesIntro:
       'Rows are the canonical event families a `src/events/<family>/*.tsx` route may declare; columns are the pinned hosts. A cell names the native event the route lowers to.',
     unavailableRoutes: 'Why a route is unavailable',
+    payloadFields: 'Canonical payload fields',
+    payloadFieldsIntro:
+      'The `canonical.payload` an event route receives (`AgentEventRouteProps<E>`): one table per family, one row per canonical field, one column per host that supports the family. A cell names the host key the field is read from — the field arrives as `{ value, nativeKey }` with exactly that key as its provenance — and `—` means the host never sends it, so the field is `undefined` there rather than fabricated. A key marked `→ json-string` is a JSON-encoded string the framework parses (kept as the string when it is not valid JSON); `→ positive-count` is a counter read as a boolean. Fields no host shares stay on `native`.',
+    payloadDecode: (decode: string) => `→ ${decode}`,
     configHookEvents: 'Config-declared hook events',
     configHookEventsIntro:
       'The `hooks` block of `agent-bundle.config.ts` is keyed by these canonical names; each maps to the native event a target registers.',
@@ -236,6 +247,9 @@ const messages = {
     installSurface: '安装方式',
     pathTokens: '路径令牌',
     mcpTransports: 'MCP 传输与令牌字段',
+    mcpTasksIntro:
+      '`tasks` 列记录固定版本的宿主客户端是否会发出任务增强的 `tools/call` 请求（MCP `2025-11-25` Tasks 工具：`params.task`、`CreateTaskResult`、`tasks/get`、`tasks/result`、`tasks/cancel`、`tasks/list`）。生成的服务器会为任何声明了 `config.execution.taskSupport` 的工具路由提供这一生命周期；本列描述的是宿主，而不是服务器。`unavailable` 表示文档或观测表明该宿主只发送普通调用，原因与证据见下表。',
+    mcpTasksDetails: '各宿主的任务增强调用',
     lineage: '会话谱系',
     lineageIntro:
       '每张表的 `lineage` 部分：宿主向常驻运行时提供了哪些关于 `request.lineage` 背后会话树的信息。`subagent-events` 表示宿主是否发出子代理 start/stop 钩子，`root` 表示每个载荷是否都给出根会话，`parent` 与 `depth` 表示子代理如何被放到其父节点之下（只有当子代理自己的载荷给出父节点时才是 `supported`；由运行时注册表按 spawn 调用顺序放置、再由宿主事后确认时为 `degraded`），`mcp-correlation` 表示生成的 MCP 工具调用如何匹配到产生它的钩子窗口。degraded 行记录注册表的做法及其确定程度；supported 行记录证据。`request.lineage` 上的 `resolution` 字段报告是哪条路径给出了答案（`native`、`registry`、`confirmed`、`inferred`）。',
@@ -258,8 +272,10 @@ const messages = {
       token: '令牌',
       stdio: 'stdio',
       streamableHttp: 'Streamable HTTP',
+      tasks: '任务增强调用',
       tokenFields: '接受路径令牌的字段',
       canonicalEvent: '规范事件',
+      payloadField: '载荷字段',
       configKey: '配置键',
       selector: '选择器',
       nativeEvent: '宿主原生事件',
@@ -279,6 +295,10 @@ const messages = {
     eventRoutesIntro:
       '行是 `src/events/<family>/*.tsx` 路由可以声明的规范事件族；列是固定宿主。单元格给出该路由降级到的原生事件。',
     unavailableRoutes: '路由不可用的原因',
+    payloadFields: '规范载荷字段',
+    payloadFieldsIntro:
+      '事件路由收到的 `canonical.payload`（`AgentEventRouteProps<E>`）：每个事件族一张表，每个规范字段一行，每个支持该事件族的宿主一列。单元格给出该字段读取自的宿主键——字段以 `{ value, nativeKey }` 的形式到达，`nativeKey` 恰为该键——`—` 表示宿主从不发送该字段，因此它在那里是 `undefined`，而非被伪造。标有 `→ json-string` 的键是框架会解析的 JSON 编码字符串（不是合法 JSON 时保留为字符串）；`→ positive-count` 表示把计数读作布尔值。没有任何两个宿主共有的字段留在 `native` 上。',
+    payloadDecode: (decode: string) => `→ ${decode}`,
     configHookEvents: '配置声明的钩子事件',
     configHookEventsIntro:
       '`agent-bundle.config.ts` 的 `hooks` 块以这些规范名称为键；每个键映射到目标注册的原生事件。',
@@ -373,6 +393,18 @@ const stateCell = (row: CapabilityRow | undefined, m: Messages): string => {
     return parts.join(' ');
   }
   return row.state ?? m.unavailable;
+};
+
+/** One payload-mapping cell: the host key, plus the transformation the framework applies when one is named. */
+const payloadCell = (mapping: JsonValue | undefined, m: Messages): string => {
+  if (typeof mapping === 'string') {
+    return code(mapping);
+  }
+  if (isObject(mapping) && typeof mapping.nativeKey === 'string') {
+    const decode = asString(mapping.decode);
+    return decode === undefined ? code(mapping.nativeKey) : `${code(mapping.nativeKey)} ${m.payloadDecode(decode)}`;
+  }
+  return m.notApplicable;
 };
 
 const unionKeys = (hosts: readonly HostCapabilityTable[], select: (data: JsonObject) => JsonObject): string[] =>
@@ -507,7 +539,7 @@ function renderHosts(hosts: readonly HostCapabilityTable[], m: Messages): string
   sections.push(`## ${m.mcpTransports}\n`);
   sections.push(
     table(
-      [m.headers.host, m.headers.stdio, m.headers.streamableHttp, m.headers.tokenFields],
+      [m.headers.host, m.headers.stdio, m.headers.streamableHttp, m.headers.tasks, m.headers.tokenFields],
       hosts.map(host => {
         const mcp = asObject(host.data.mcp);
         const fields = Object.entries(mcpPathTokenFields(host.data))
@@ -517,8 +549,30 @@ function renderHosts(hosts: readonly HostCapabilityTable[], m: Messages): string
           code(host.host),
           mcp.stdio === true ? 'supported' : m.unavailable,
           mcp.streamableHttp === true ? 'supported' : m.unavailable,
+          stateCell(capabilityRow(mcp.tasks), m),
           fields.length > 0 ? fields : mcpPathTokenLoweringNote(host.data) ?? m.notApplicable,
         ];
+      }),
+    ),
+  );
+  sections.push(m.mcpTasksIntro);
+  sections.push(`### ${m.mcpTasksDetails}\n`);
+  sections.push(
+    table(
+      [m.headers.host, m.headers.state, m.headers.detail],
+      hosts.flatMap(host => {
+        const entry = capabilityRow(asObject(host.data.mcp).tasks);
+        if (entry === undefined) {
+          return [];
+        }
+        const details: string[] = [];
+        if (entry.reason !== undefined) {
+          details.push(escapeProse(entry.reason));
+        }
+        if (Array.isArray(entry.evidence)) {
+          details.push(m.evidenceNotes(entry.evidence.length));
+        }
+        return [[code(host.host), entry.state ?? m.unavailable, details.length > 0 ? details.join('<br />') : m.notApplicable]];
       }),
     ),
   );
@@ -623,6 +677,26 @@ function renderEvents(hosts: readonly HostCapabilityTable[], m: Messages): strin
       }
     }
     sections.push(bullets.join('\n'));
+  }
+
+  sections.push(`## ${m.payloadFields}\n`);
+  sections.push(m.payloadFieldsIntro);
+  for (const eventKey of eventKeys) {
+    const supporting = hosts.filter(host => capabilityRow(eventRoutesOf(host.data)[eventKey])?.payload !== undefined);
+    if (supporting.length === 0) {
+      continue;
+    }
+    const fieldKeys = unionKeys(supporting, data => asObject(capabilityRow(eventRoutesOf(data)[eventKey])?.payload));
+    sections.push(`### ${code(eventKey)}\n`);
+    sections.push(
+      table(
+        [m.headers.payloadField, ...supporting.map(hostHeader)],
+        fieldKeys.map(field => [
+          code(field),
+          ...supporting.map(host => payloadCell(asObject(capabilityRow(eventRoutesOf(host.data)[eventKey])?.payload)[field], m)),
+        ]),
+      ),
+    );
   }
 
   sections.push(`## ${m.configHookEvents}\n`);

@@ -38,7 +38,7 @@ import type { AgentTerminal } from '../terminal-capability.ts';
 import { AgentTestError, captured } from './errors.ts';
 import { composeLayouts, loadLayoutChain, type LayoutChainTarget, type LoadedLayout } from './layouts.ts';
 import { ROUTE_UNIT_PROOF_LEVEL, type AgentBundleTestManifest } from './manifest.ts';
-import { claimProcessHit, mountProviders } from './providers.ts';
+import { claimProcessHit, harnessPluginRoot, mountProviders } from './providers.ts';
 import { routeKindTerminal } from './terminal.ts';
 import {
   registeredManifestIdentity,
@@ -161,6 +161,7 @@ interface Renderer {
   readonly createGeneratedRuntimeState: typeof AgentMount.createGeneratedRuntimeState;
   readonly createMemoryStateDriver: typeof AgentState.createMemoryStateDriver;
   readonly renderAgentFlight: typeof AgentFlightServer.renderAgentFlight;
+  readonly resolvePluginRoot: typeof AgentRuntime.resolvePluginRoot;
   readonly runAgentRequest: typeof AgentRuntime.runAgentRequest;
   readonly unavailable: typeof AgentRuntime.unavailable;
 }
@@ -191,6 +192,7 @@ const loadRenderer = async (): Promise<Renderer> => {
       createGeneratedRuntimeState: mount.createGeneratedRuntimeState,
       createMemoryStateDriver: state.createMemoryStateDriver,
       renderAgentFlight: flight.renderAgentFlight,
+      resolvePluginRoot: runtime.resolvePluginRoot,
       runAgentRequest: runtime.runAgentRequest,
       unavailable: runtime.unavailable,
     };
@@ -1126,13 +1128,13 @@ export const prepareCliRenderHost = async (
         renderer,
         requestInit: async (request) => {
           const root = process.cwd();
-          const providers = await mountProviders({
+          const plugin = harnessPluginRoot({ context, manifest: options.manifest, resolvePluginRoot: renderer.resolvePluginRoot });
+          const providers = mountProviders({
             explicit: context.providers,
             invocation,
             manifest: options.manifest,
             processHit: claimProcessHit(options.processLifetime),
             provenance: { ...options.provenance, routeId: command.routeId },
-            signal: request.signal,
           });
           return {
             capabilities: {
@@ -1142,6 +1144,7 @@ export const prepareCliRenderHost = async (
               projectRoot: renderer.available({ root }, 'derived'),
             },
             host: renderer.unavailable('unsupported-surface'),
+            plugin,
             terminal: renderer.available(execution.terminal, 'native'),
             workspace: renderer.available({ root }, 'derived'),
             ...context,
@@ -1324,13 +1327,13 @@ export const prepareScriptRenderHost = async (
             const root = process.cwd();
             // The generated script's render worker hands its providers the
             // `script` invocation with the path-derived name, never the route id.
-            const providers = await mountProviders({
+            const plugin = harnessPluginRoot({ context, manifest: options.manifest, resolvePluginRoot: renderer.resolvePluginRoot });
+            const providers = mountProviders({
               explicit: context.providers,
               invocation,
               manifest: options.manifest,
               processHit: claimProcessHit(options.processLifetime),
               provenance: options.provenance,
-              signal: request.signal,
             });
             return {
               capabilities: {
@@ -1340,6 +1343,7 @@ export const prepareScriptRenderHost = async (
                 projectRoot: renderer.available({ root }, 'derived'),
               },
               host: renderer.unavailable('unsupported-surface'),
+              plugin,
               terminal: renderer.available(execution.terminal, 'native'),
               workspace: renderer.available({ root }, 'derived'),
               ...context,
@@ -1425,6 +1429,7 @@ const prepareRender = async (
   // request; nothing is warm across renders, so each starts at hit 1.
   const processLifetime = createProviderProcessLifetime();
   const mounted = await mountManifestState(resolved.manifest, resolved.provenance, context, renderer, signal);
+  const plugin = harnessPluginRoot({ context, manifest: resolved.manifest, resolvePluginRoot: renderer.resolvePluginRoot });
   const dispatcher = createFlightDispatcher({
     collected,
     component: resolved.component,
@@ -1443,6 +1448,7 @@ const prepareRender = async (
       : { limits: { ...options.limits, ...resolved.render } }),
     renderer,
     requestInit: async (request) => ({
+      plugin,
       // What the artifact's scope for this route kind mounts (#511): no
       // terminal under MCP or a hook, the harness's piped shape otherwise.
       terminal: renderer.available(routeKindTerminal(resolved.kind), 'derived'),
@@ -1450,13 +1456,12 @@ const prepareRender = async (
       ...mounted.context,
       // The render invocation is exactly what the generated Flight worker
       // receives as `message.invocation`, so providers see the same shape.
-      providers: await mountProviders({
+      providers: mountProviders({
         explicit: context.providers,
         invocation: request.invocation,
         manifest: resolved.manifest,
         processHit: claimProcessHit(processLifetime),
         provenance: resolved.provenance,
-        signal: request.signal,
       }),
       invocation: {
         ...requestInvocation(request.invocation, resolved.provenance.routeId, surface),

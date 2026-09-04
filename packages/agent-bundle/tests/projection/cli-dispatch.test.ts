@@ -35,6 +35,7 @@ describe('the CLI dispatch level', () => {
         'harness layout-probe',
         'harness lifecycle',
         'harness mutation-probe',
+        'harness plugin-root',
         'harness publish-notice',
         'harness strict-report',
         'harness ticket',

@@ -46,6 +46,7 @@ try {
   await Promise.all([
     ['agent-bundle', 'agent-bundle', 'agent-bundle'],
     ['create-agent-bundle', 'create-agent-bundle', 'create-agent-bundle'],
+    ['markdown-stream', 'rsc-markdown-stream', 'rsc-markdown-stream'],
     ['runtime', 'rsc-runtime', '@agent-bundle/runtime'],
   ].map(async ([packageName, directory, npmName]) => {
     const { stdout } = await execFile('npm', ['pack', '--json', '--pack-destination', packDirectory], {

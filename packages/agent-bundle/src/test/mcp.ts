@@ -40,7 +40,7 @@ import { createProviderProcessLifetime } from '../routes/provider-execution.ts';
 import { AgentTestError, captured } from './errors.ts';
 import { composeLayouts, loadLayoutChain, type LoadedLayout } from './layouts.ts';
 import { MCP_IN_MEMORY_PROOF_LEVEL, type AgentBundleTestManifest } from './manifest.ts';
-import { claimProcessHit, mountProviders } from './providers.ts';
+import { claimProcessHit, harnessPluginRoot, mountProviders } from './providers.ts';
 import { registeredRouteLoader, testManifest } from './registry.ts';
 import type { HarnessOptionsArguments, RenderRouteContext, RenderRouteContextInit } from './render.ts';
 import type { RenderedRouteProvenance, TestableRouteDescriptor } from './types.ts';
@@ -263,6 +263,7 @@ interface Renderer {
   readonly createWarmFlightHost: typeof import('@agent-bundle/runtime').createWarmFlightHost;
   readonly noticeInboxRoute: typeof import('@agent-bundle/runtime/notices/inbox-route');
   readonly renderAgentFlight: typeof import('@agent-bundle/runtime/flight/server').renderAgentFlight;
+  readonly resolvePluginRoot: typeof import('@agent-bundle/runtime').resolvePluginRoot;
   readonly runAgentRequest: typeof import('@agent-bundle/runtime').runAgentRequest;
 }
 
@@ -304,6 +305,7 @@ const loadDependencies = async (): Promise<ServerRuntime & Renderer & Sdk> => {
       createWarmFlightHost: runtime.createWarmFlightHost,
       noticeInboxRoute,
       renderAgentFlight: flight.renderAgentFlight,
+      resolvePluginRoot: runtime.resolvePluginRoot,
       runAgentRequest: runtime.runAgentRequest,
     };
   })().catch((error: unknown) => {
@@ -446,6 +448,8 @@ export const openInMemoryMcpServer = async <
   const runtimeState = options.state === undefined
     ? undefined
     : dependencies.createGeneratedRuntimeState(options.state);
+  // One resolution per open server, as the generated entry does at startup.
+  const pluginRoot = harnessPluginRoot({ context, manifest, resolvePluginRoot: dependencies.resolvePluginRoot });
   const host = dependencies.createWarmFlightHost({
     artifactEpoch,
     host: {
@@ -466,16 +470,19 @@ export const openInMemoryMcpServer = async <
         const processHit = claimProcessHit(processLifetime);
         const bindings = await runtimeState?.requestBindings({ signal: request.signal });
         try {
-          // Conventional providers run before the scope opens, over the same
+          // Conventional providers run as the scope's resolver, over the same
           // tool invocation the generated Flight worker hands them.
           const descriptor = manifest.routes[route.id];
-          const providers = await mountProviders({
+          // The server process's anchor, as the artifact's host scope forwards
+          // it into the Flight worker; the context seam overrides it like every
+          // other identity axis.
+          const plugin = transport.plugin.state === 'available' ? transport.plugin : pluginRoot;
+          const providers = mountProviders({
             explicit: context.providers,
             invocation: request.invocation,
             manifest,
             processHit,
             ...(descriptor === undefined ? {} : { provenance: routeProvenance(descriptor, manifest) }),
-            signal: request.signal,
           });
           return streamOf(await dependencies.runAgentRequest({
             // Mirror the Flight worker boundary while allowing the documented
@@ -483,6 +490,7 @@ export const openInMemoryMcpServer = async <
             actor: transport.actor,
             host: transport.host,
             lineage: transport.lineage,
+            plugin,
             session: transport.session,
             terminal: transport.terminal,
             workspace: transport.workspace,
@@ -551,6 +559,7 @@ export const openInMemoryMcpServer = async <
         }),
     ...(options.limits === undefined ? {} : { limits: options.limits }),
     plugin: manifest.plugin,
+    pluginRoot,
     routes: routes as never,
   });
   const client = new dependencies.Client({ name: 'agent-bundle-in-memory-projection', version: '1.0.0' });

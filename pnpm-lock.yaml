@@ -6,6 +6,7 @@ settings:
 
 overrides:
   '@agent-bundle/runtime': workspace:*
+  rsc-markdown-stream: workspace:*
 
 importers:
 
@@ -365,6 +366,21 @@ importers:
         specifier: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f
         version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f(@rstest/core@0.11.10)(effect@4.0.0-rc.112)
 
+  packages/rsc-markdown-stream:
+    devDependencies:
+      '@rslib/core':
+        specifier: 0.23.2
+        version: 0.23.2(typescript@7.0.2)
+      '@rstest/core':
+        specifier: 0.11.10
+        version: 0.11.10
+      '@types/react':
+        specifier: 19.2.18
+        version: 19.2.18
+      react:
+        specifier: 19.2.8
+        version: 19.2.8
+
   packages/rsc-runtime:
     dependencies:
       '@modelcontextprotocol/sdk':
@@ -382,6 +398,9 @@ importers:
       react-server-dom-rspack:
         specifier: 0.1.0
         version: 0.1.0(@rspack/core@2.2.1(@swc/helpers@0.5.23))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      rsc-markdown-stream:
+        specifier: workspace:*
+        version: link:../rsc-markdown-stream
       zod:
         specifier: 4.5.4
         version: 4.5.4
@@ -404,6 +423,12 @@ importers:
       effect-rstest:
         specifier: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f
         version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f(@rstest/core@0.11.10)(effect@4.0.0-rc.112)
+      micromark:
+        specifier: 4.0.2
+        version: 4.0.2(supports-color@7.2.0)
+      micromark-extension-gfm:
+        specifier: 3.0.0
+        version: 3.0.0
       react:
         specifier: 19.2.8
         version: 19.2.8

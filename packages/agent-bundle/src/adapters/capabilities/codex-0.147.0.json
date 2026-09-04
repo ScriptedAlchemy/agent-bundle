@@ -216,10 +216,62 @@
         "reason": "retrieved 2026-09-02: the complete rust-v0.147.0 generated hook schema directory contains no teammate-idle event.",
         "state": "unavailable"
       },
-      "agent/start": { "nativeEvent": "SubagentStart", "state": "supported" },
-      "agent/stop": { "nativeEvent": "SubagentStop", "state": "supported" },
-      "compact/after": { "nativeEvent": "PostCompact", "state": "supported" },
-      "compact/before": { "nativeEvent": "PreCompact", "state": "supported" },
+      "agent/start": {
+        "nativeEvent": "SubagentStart",
+        "payload": {
+          "agentId": "agent_id",
+          "agentType": "agent_type",
+          "cwd": "cwd",
+          "model": "model",
+          "permissionMode": "permission_mode",
+          "sessionId": "session_id",
+          "transcriptPath": "transcript_path"
+        },
+        "state": "supported"
+      },
+      "agent/stop": {
+        "nativeEvent": "SubagentStop",
+        "payload": {
+          "agentId": "agent_id",
+          "agentTranscriptPath": "agent_transcript_path",
+          "agentType": "agent_type",
+          "cwd": "cwd",
+          "lastAssistantMessage": "last_assistant_message",
+          "model": "model",
+          "permissionMode": "permission_mode",
+          "reentry": "stop_hook_active",
+          "sessionId": "session_id",
+          "transcriptPath": "transcript_path"
+        },
+        "state": "supported"
+      },
+      "compact/after": {
+        "nativeEvent": "PostCompact",
+        "payload": {
+          "agentId": "agent_id",
+          "agentType": "agent_type",
+          "cwd": "cwd",
+          "permissionMode": "permission_mode",
+          "sessionId": "session_id",
+          "transcriptPath": "transcript_path",
+          "trigger": "trigger"
+        },
+        "state": "supported"
+      },
+      "compact/before": {
+        "nativeEvent": "PreCompact",
+        "payload": {
+          "agentId": "agent_id",
+          "agentType": "agent_type",
+          "cwd": "cwd",
+          "model": "model",
+          "permissionMode": "permission_mode",
+          "sessionId": "session_id",
+          "transcriptPath": "transcript_path",
+          "trigger": "trigger"
+        },
+        "state": "supported"
+      },
       "config/change": {
         "reason": "retrieved 2026-09-02: the complete rust-v0.147.0 generated hook schema directory contains no config-change event.",
         "state": "unavailable"
@@ -240,11 +292,77 @@
         "reason": "retrieved 2026-09-02: the complete rust-v0.147.0 generated hook schema directory contains no permission-denied event.",
         "state": "unavailable"
       },
-      "permission/request": { "nativeEvent": "PermissionRequest", "state": "supported" },
-      "prompt/submit": { "nativeEvent": "UserPromptSubmit", "state": "supported" },
-      "session/end": { "nativeEvent": "SessionEnd", "state": "supported" },
-      "session/start": { "nativeEvent": "SessionStart", "state": "supported" },
-      "stop": { "nativeEvent": "Stop", "state": "supported" },
+      "permission/request": {
+        "nativeEvent": "PermissionRequest",
+        "payload": {
+          "agentId": "agent_id",
+          "agentType": "agent_type",
+          "cwd": "cwd",
+          "permissionMode": "permission_mode",
+          "sessionId": "session_id",
+          "toolInput": "tool_input",
+          "toolName": "tool_name",
+          "transcriptPath": "transcript_path"
+        },
+        "state": "supported"
+      },
+      "prompt/submit": {
+        "nativeEvent": "UserPromptSubmit",
+        "payload": {
+          "agentId": "agent_id",
+          "agentType": "agent_type",
+          "cwd": "cwd",
+          "model": "model",
+          "permissionMode": "permission_mode",
+          "prompt": "prompt",
+          "sessionId": "session_id",
+          "transcriptPath": "transcript_path"
+        },
+        "state": "supported"
+      },
+      "session/end": {
+        "nativeEvent": "SessionEnd",
+        "payload": {
+          "agentId": "agent_id",
+          "agentType": "agent_type",
+          "cwd": "cwd",
+          "model": "model",
+          "permissionMode": "permission_mode",
+          "reason": "reason",
+          "sessionId": "session_id",
+          "transcriptPath": "transcript_path"
+        },
+        "state": "supported"
+      },
+      "session/start": {
+        "nativeEvent": "SessionStart",
+        "payload": {
+          "agentId": "agent_id",
+          "agentType": "agent_type",
+          "cwd": "cwd",
+          "model": "model",
+          "permissionMode": "permission_mode",
+          "sessionId": "session_id",
+          "source": "source",
+          "transcriptPath": "transcript_path"
+        },
+        "state": "supported"
+      },
+      "stop": {
+        "nativeEvent": "Stop",
+        "payload": {
+          "agentId": "agent_id",
+          "agentType": "agent_type",
+          "cwd": "cwd",
+          "lastAssistantMessage": "last_assistant_message",
+          "model": "model",
+          "permissionMode": "permission_mode",
+          "reentry": "stop_hook_active",
+          "sessionId": "session_id",
+          "transcriptPath": "transcript_path"
+        },
+        "state": "supported"
+      },
       "stop/failure": {
         "reason": "retrieved 2026-09-02: the complete rust-v0.147.0 generated hook schema directory contains no stop-failure event.",
         "state": "unavailable"
@@ -257,8 +375,39 @@
         "reason": "retrieved 2026-09-02: the complete rust-v0.147.0 generated hook schema directory contains no task-created event.",
         "state": "unavailable"
       },
-      "tool/after": { "nativeEvent": "PostToolUse", "state": "supported" },
-      "tool/before": { "nativeEvent": "PreToolUse", "state": "supported" },
+      "tool/after": {
+        "nativeEvent": "PostToolUse",
+        "payload": {
+          "agentId": "agent_id",
+          "agentType": "agent_type",
+          "cwd": "cwd",
+          "model": "model",
+          "permissionMode": "permission_mode",
+          "sessionId": "session_id",
+          "toolInput": "tool_input",
+          "toolName": "tool_name",
+          "toolResponse": "tool_response",
+          "toolUseId": "tool_use_id",
+          "transcriptPath": "transcript_path"
+        },
+        "state": "supported"
+      },
+      "tool/before": {
+        "nativeEvent": "PreToolUse",
+        "payload": {
+          "agentId": "agent_id",
+          "agentType": "agent_type",
+          "cwd": "cwd",
+          "model": "model",
+          "permissionMode": "permission_mode",
+          "sessionId": "session_id",
+          "toolInput": "tool_input",
+          "toolName": "tool_name",
+          "toolUseId": "tool_use_id",
+          "transcriptPath": "transcript_path"
+        },
+        "state": "supported"
+      },
       "tool/failure": {
         "reason": "retrieved 2026-09-02: the complete rust-v0.147.0 generated hook schema directory and native event inventory contain no tool-failure event.",
         "state": "unavailable"
@@ -447,7 +596,15 @@
       "state": "degraded"
     },
     "stdio": true,
-    "streamableHttp": true
+    "streamableHttp": true,
+    "tasks": {
+      "state": "unavailable",
+      "reason": "Codex 0.147.0 does not task-augment a tools/call. Its opt-in MCP 2026-07-28 support (`mcp_2026_07_28`) documents paginated discovery, multi-round requests, and non-blocking server startup; on that revision tasks are the `io.modelcontextprotocol/tasks` extension (`resultType: \"task\"`, `tasks/update`), a shape the generated server's SDK does not serve. With the flag off it negotiates the legacy `initialize` handshake and sends no `params.task`.",
+      "evidence": [
+        "Codex CLI 0.147.0 release (2026-08-07): MCP 2026-07-28 support is opt-in through the `mcp_2026_07_28` feature flag or `codex --enable mcp_2026_07_28`, adding paginated discovery, multi-round (`input_required`) requests, and non-blocking server startup; task-augmented tool calls are not among the documented additions.",
+        "2026-09-03: recorded tools/call requests carry `_meta.x-codex-turn-metadata` (thread_id, turn_id, session_id) and no `params.task`."
+      ]
+    }
   },
   "noticeDelivery": {
     "current-response": {

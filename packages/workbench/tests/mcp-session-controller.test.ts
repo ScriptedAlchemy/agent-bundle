@@ -1,5 +1,5 @@
 import { expect, it } from '@rstest/core';
-import type { Client, Transport } from '@modelcontextprotocol/client';
+import { specTypeSchemas, type Client, type Transport } from '@modelcontextprotocol/client';
 import type { McpAppBoundOperationResult } from '../../agent-bundle/src/dev/mcp-app-runtime-binding-service.ts';
 import type { McpAppBindingOperation } from '../../agent-bundle/src/dev/mcp-app-runtime-preview-service.ts';
 
@@ -1771,6 +1771,67 @@ it('replays only the recorded epoch binding and carries replay provenance into i
     message: 'MCP invocation "missing" is not available for replay.',
     severity: 'error',
   });
+
+  stream.close();
+  await controller.close();
+});
+
+it('maps the task operations (#369) onto the 2025-11-25 wire with the SDK schema each result is validated against', async () => {
+  const stream = traceStream();
+  const routes: McpSessionControllerRoutes = {
+    catalog: async () => ({ prompts: [], resourceTemplates: [], resources: [], tools: [] }),
+    config: async () => ({ launch: { args: [], command: 'node', env: {}, kind: 'stdio' }, origin: 'artifact' }),
+    restart: async () => connection,
+    stream: async () => stream.response,
+    trace: async () => ({ entries: [] }),
+  };
+  const requests: { readonly request: unknown; readonly schema: unknown }[] = [];
+  const task = { createdAt: '2026-09-04T00:00:00.000Z', lastUpdatedAt: '2026-09-04T00:00:00.000Z', pollInterval: 250, status: 'working', taskId: 'task-1', ttl: 600_000 };
+  const client: McpSessionControllerClient = {
+    close: async () => undefined,
+    connect: async (transport) => transport.start(),
+    request: async (request, _options, resultSchema) => {
+      requests.push({ request, schema: resultSchema });
+      if (request.method === 'tools/call') return { task };
+      if (request.method === 'tasks/list') return { tasks: [task] };
+      if (request.method === 'tasks/result') return { content: [{ text: 'done', type: 'text' }] };
+      return { ...task, ...(request.method === 'tasks/cancel' ? { status: 'cancelled' } : {}) };
+    },
+  };
+  const controller = createMcpSessionController({ clientFactory: () => client, routes, transportFactory: () => fakeTransport() });
+  await controller.open(binding);
+
+  await expect(controller.invoke({ id: 'task-create', operation: 'callToolTask', request: { arguments: { holdMs: 400 }, name: 'wait', task: { ttl: 600_000 } } }))
+    .resolves.toEqual({ task });
+  await expect(controller.invoke({ id: 'task-create-default', operation: 'callToolTask', request: { arguments: {}, name: 'wait' } })).resolves.toEqual({ task });
+  await expect(controller.invoke({ id: 'task-get', operation: 'getTask', request: { taskId: 'task-1' } })).resolves.toEqual(task);
+  await expect(controller.invoke({ id: 'task-result', operation: 'getTaskResult', request: { taskId: 'task-1' } })).resolves.toEqual({ content: [{ text: 'done', type: 'text' }] });
+  await expect(controller.invoke({ id: 'task-list', operation: 'listTasks', request: {} })).resolves.toEqual({ tasks: [task] });
+  await expect(controller.invoke({ id: 'task-cancel', operation: 'cancelTask', request: { taskId: 'task-1' } })).resolves.toMatchObject({ status: 'cancelled' });
+
+  expect(requests.map((entry) => entry.request)).toEqual([
+    { method: 'tools/call', params: { arguments: { holdMs: 400 }, name: 'wait', task: { ttl: 600_000 } } },
+    // A task call always carries a `task` object: that is what makes it task-augmented.
+    { method: 'tools/call', params: { arguments: {}, name: 'wait', task: {} } },
+    { method: 'tasks/get', params: { taskId: 'task-1' } },
+    { method: 'tasks/result', params: { taskId: 'task-1' } },
+    { method: 'tasks/list', params: {} },
+    { method: 'tasks/cancel', params: { taskId: 'task-1' } },
+  ]);
+  // Task methods are outside the SDK's typed surface, so each names its SDK result schema; an ordinary call passes none.
+  expect(requests.map((entry) => entry.schema)).toEqual([
+    specTypeSchemas.CreateTaskResult,
+    specTypeSchemas.CreateTaskResult,
+    specTypeSchemas.GetTaskResult,
+    specTypeSchemas.CallToolResult,
+    specTypeSchemas.ListTasksResult,
+    specTypeSchemas.CancelTaskResult,
+  ]);
+  await controller.invoke({ id: 'plain', operation: 'callTool', request: { arguments: {}, name: 'echo' } });
+  expect(requests.at(-1)).toEqual({ request: { method: 'tools/call', params: { arguments: {}, name: 'echo' } }, schema: undefined });
+  expect(controller.history.map((entry) => entry.operation)).toEqual([
+    'callToolTask', 'callToolTask', 'getTask', 'getTaskResult', 'listTasks', 'cancelTask', 'callTool',
+  ]);
 
   stream.close();
   await controller.close();

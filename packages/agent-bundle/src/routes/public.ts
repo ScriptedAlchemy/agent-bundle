@@ -1,5 +1,24 @@
 import type { JsonValue } from '../core/strict-json.ts';
 import type { AgentTerminal } from '../terminal-capability.ts';
+import type { AgentEventPayload, CanonicalAgentEvent } from './events.ts';
+
+export {
+  agentEventPayloadFieldKinds,
+  agentEventPayloadFields,
+  agentEventPayloadNativeKeys,
+  canonicalAgentEvents,
+} from './events.ts';
+export type {
+  AgentEventPayload,
+  AgentEventPayloadField,
+  AgentEventPayloadFieldKind,
+  AgentEventPayloadFieldName,
+  AgentEventPayloadFields,
+  AgentEventPayloadFieldTypes,
+  AgentEventPayloadHost,
+  AgentEventPayloadNativeKey,
+  CanonicalAgentEvent,
+} from './events.ts';
 
 /** The structural schema surface route props infer without coupling to one schema library. */
 export interface RouteSchema<Output = unknown> {
@@ -8,34 +27,6 @@ export interface RouteSchema<Output = unknown> {
 
 export type RouteSchemaOutput<Schema> = Schema extends RouteSchema<infer Output> ? Output : never;
 
-/** The event-route families admitted by the recorded #97 v1/G10 decision. */
-export const canonicalAgentEvents = Object.freeze([
-  'session/start',
-  'tool/before',
-  'tool/after',
-  'stop',
-  'agent/start',
-  'agent/stop',
-  'workspace/open',
-  'session/end',
-  'prompt/submit',
-  'tool/failure',
-  'compact/before',
-  'compact/after',
-  'permission/request',
-  'permission/denied',
-  'stop/failure',
-  'file/change',
-  'config/change',
-  'task/create',
-  'task/complete',
-  'agent/idle',
-  'model-switch/before',
-  'model-switch/after',
-] as const);
-
-export type CanonicalAgentEvent = (typeof canonicalAgentEvents)[number];
-
 export interface AgentEventProvenance {
   readonly host: string;
   readonly hostContractRevision: string;
@@ -43,11 +34,19 @@ export interface AgentEventProvenance {
   readonly source: 'native';
 }
 
-/** Cross-host identity supplied to an event route without fabricated host fields. */
-export interface AgentEventCanonicalIdentity {
-  readonly event: CanonicalAgentEvent;
+/**
+ * Cross-host identity supplied to an event route without fabricated host
+ * fields, plus the canonical `payload` of its family (#466): the fields at
+ * least two hosts report — tool name, input, and response, session id,
+ * transcript path, stop re-entry, prompt text, agent id and type, … — each
+ * carrying the host's own key as provenance, and absent when the host did
+ * not send it. `E` narrows `payload` to the family the route handles.
+ */
+export interface AgentEventCanonicalIdentity<E extends CanonicalAgentEvent = CanonicalAgentEvent> {
+  readonly event: E;
   readonly idempotencyKey: string;
   readonly observedAt: string;
+  readonly payload: AgentEventPayload<E>;
   readonly provenance: AgentEventProvenance;
   readonly sequence: number;
 }
@@ -57,6 +56,9 @@ export type AgentEventNativePayload = Readonly<Record<string, unknown>>;
 
 /**
  * Props received by an event route's async default Server Component.
+ * `canonical.payload` is the cross-host reading of the envelope for the
+ * route's family; `native` is the frozen host envelope itself, for the
+ * host-specific fields the payload does not model.
  *
  * Read transport-owned request context with `await agent()` from
  * `@agent-bundle/runtime`. The invocation, host, session, actor, workspace,
@@ -67,8 +69,8 @@ export type AgentEventNativePayload = Readonly<Record<string, unknown>>;
  * is unavailable on hook-driven event scopes. The framework never derives or
  * surfaces the operator's identity from a host payload.
  */
-export interface AgentEventRouteProps {
-  readonly canonical: AgentEventCanonicalIdentity;
+export interface AgentEventRouteProps<E extends CanonicalAgentEvent = CanonicalAgentEvent> {
+  readonly canonical: AgentEventCanonicalIdentity<E>;
   readonly native: AgentEventNativePayload;
   readonly signal: AbortSignal;
 }
@@ -95,10 +97,216 @@ type AgentProviderInvocation =
     readonly props: { readonly input?: JsonValue; readonly view: string };
   };
 
-/** Request-scoped inputs supplied to a conventional context provider factory. */
+/**
+ * An observed request axis as a provider receives it: the same shape as every
+ * `agent()` identity axis, provenance included. Declared here so config-only
+ * consumers need no `@agent-bundle/runtime` import; structurally the runtime's
+ * `Observed<T>`.
+ */
+export type AgentProviderObserved<Value> =
+  | { readonly source: 'native' | 'receipt' | 'derived'; readonly state: 'available'; readonly value: Value }
+  | { readonly reason: string; readonly state: 'unavailable' };
+
+/** Structurally the runtime's `AgentHostIdentity`: the host the request came through. */
+export interface AgentProviderHostIdentity {
+  readonly name: string;
+}
+
+/** Structurally the runtime's `AgentSessionIdentity`: the host session the request belongs to. */
+export interface AgentProviderSessionIdentity {
+  readonly sessionId: string;
+}
+
+/** Structurally the runtime's `AgentWorkspaceIdentity`: the workspace root the request runs in. */
+export interface AgentProviderWorkspaceIdentity {
+  readonly root: string;
+}
+
+/**
+ * The plugin install root and durable-state anchor a generated scope resolved
+ * (#468), as `(await agent()).plugin` observes it: `root` is the expanded
+ * `AGENT_BUNDLE_PLUGIN_ROOT` (`source: 'native'`) or the shell's fallback
+ * (`'derived'`), and `stateRoot` is `<root>/state`, where the SQLite kernel,
+ * the notice ledger, and the lineage journal live. Structurally identical to
+ * the runtime's `AgentPluginIdentity`.
+ */
+export interface AgentProviderPluginRoot {
+  readonly root: string;
+  readonly stateRoot: string;
+}
+
+/** The observed plugin root a provider receives; the same shape as every `agent()` identity axis. */
+export type AgentProviderObservedPluginRoot = AgentProviderObserved<AgentProviderPluginRoot>;
+
+/** Structurally the runtime's `AgentLineageSubagent`. */
+export interface AgentProviderLineageSubagent {
+  readonly id: string;
+  readonly isParallelWorker?: boolean;
+  readonly toolCallId?: string;
+  readonly type?: string;
+}
+
+export type AgentProviderLineageResolution = 'native' | 'registry' | 'confirmed' | 'transcript' | 'inferred';
+
+/** Structurally the runtime's `AgentLineagePeer` (#457): one other live conversation in the registry's tree. */
+export interface AgentProviderLineagePeer {
+  readonly conversation: string;
+  readonly depth: number;
+  readonly parent?: string;
+  readonly resolution: AgentProviderLineageResolution;
+  readonly startedAt: string;
+  readonly subagent?: AgentProviderLineageSubagent;
+}
+
+/** Structurally the runtime's `AgentLineageTree` (#457). */
+export interface AgentProviderLineageTree {
+  readonly children: readonly AgentProviderLineagePeer[];
+  readonly roots: readonly AgentProviderLineagePeer[];
+  readonly siblings: readonly AgentProviderLineagePeer[];
+}
+
+/**
+ * Structurally the runtime's `AgentLineage`: the request's own chain plus,
+ * when the warm runtime's registry placed it, the live `tree` around it.
+ */
+export interface AgentProviderLineage {
+  readonly conversation: string;
+  readonly depth: number;
+  readonly generation?: string;
+  readonly parent?: string;
+  readonly resolution: AgentProviderLineageResolution;
+  readonly root: string;
+  readonly subagent?: AgentProviderLineageSubagent;
+  readonly tree?: AgentProviderLineageTree;
+}
+
+/** The snapshot a provider's `state.read()` resolves; structurally the runtime's `AgentStateSnapshot`. */
+export interface AgentProviderStateSnapshot<TState = unknown> {
+  readonly revision: number;
+  readonly state: TState;
+}
+
+/**
+ * The read-only view of the project's mounted state handle a provider receives
+ * (#459): the runtime's `AgentStateHandle` narrowed to `lifetime` and `read`
+ * by construction, so a provider can derive a view of shared state but never
+ * dispatch. Absent for stateless projects and for surfaces that mount none.
+ */
+export interface AgentProviderStateHandle<TState = unknown> {
+  readonly lifetime: 'request' | 'process' | 'workspace-durable' | 'external';
+  read(options?: { readonly revision?: number; readonly signal?: AbortSignal }): Promise<AgentProviderStateSnapshot<TState>>;
+}
+
+export type AgentProviderNoticeState = 'pending' | 'attempted' | 'expired' | 'unavailable' | 'withdrawn' | 'acknowledged';
+
+/**
+ * Structurally the runtime's `AgentRecipient`: the conjunction of identity
+ * axes a notice is addressed to. `conversation` and `root` are lineage ids.
+ */
+export interface AgentProviderNoticeRecipient {
+  readonly actor?: { readonly id: string };
+  readonly conversation?: string;
+  readonly host?: AgentProviderHostIdentity;
+  readonly root?: string;
+  readonly session?: AgentProviderSessionIdentity;
+  readonly workspace?: AgentProviderWorkspaceIdentity;
+}
+
+/** Structurally the runtime's `AgentNoticePublisher`: the identity `publish()` recorded (#460). */
+export interface AgentProviderNoticePublisher {
+  readonly actor?: { readonly id: string };
+  readonly conversation?: string;
+  readonly host?: AgentProviderHostIdentity;
+  readonly session?: AgentProviderSessionIdentity;
+  readonly workspace?: AgentProviderWorkspaceIdentity;
+}
+
+/** Structurally the runtime's `AgentNoticeAttemptReceipt`. */
+export interface AgentProviderNoticeAttempt {
+  readonly attemptedAt: string;
+  readonly channel: 'next-event';
+  readonly invocationId: string;
+}
+
+/** Structurally the runtime's `AgentNoticeWithholding`: a route's refusal to disclose the notice. */
+export interface AgentProviderNoticeWithholding {
+  readonly count: number;
+  readonly firstAt: string;
+  readonly lastAt: string;
+  readonly reason: 'route-unavailable' | 'sensitivity-exceeds-route';
+}
+
+/**
+ * One notice as a provider reads it from `inbox()` or `published()`: every
+ * field of the runtime's `AgentNotice`, spelled structurally. `content` is the
+ * persisted Agent Document snapshot (the runtime's `AgentDocumentSnapshot`);
+ * it is `unknown` here because the Agent Document types ship with the runtime,
+ * so a provider that needs the authored text narrows it with the runtime's
+ * types — a route reads the same notice through `(await agent()).notices`.
+ */
+export interface AgentProviderNotice {
+  readonly acknowledgement?: { readonly acknowledgedAt: string; readonly invocationId: string };
+  readonly attempts: readonly AgentProviderNoticeAttempt[];
+  readonly availability?: { readonly channel: 'mcp-resource-updated'; readonly count: number; readonly firstAt: string; readonly lastAt: string };
+  readonly availabilityReservation?: { readonly at: string; readonly key: string };
+  readonly content: unknown;
+  readonly createdAt: string;
+  readonly dedupeKey?: string;
+  readonly expiredAt?: string;
+  readonly expiresAt?: string;
+  readonly exposure?: { readonly channel: 'mcp-inbox'; readonly count: number; readonly firstAt: string; readonly lastAt: string; readonly lastInvocationId: string };
+  readonly id: string;
+  readonly nextAttemptAt?: string;
+  readonly priority: 'low' | 'normal' | 'high';
+  readonly publisher?: AgentProviderNoticePublisher;
+  readonly recipient: AgentProviderNoticeRecipient;
+  readonly retryBudget?: number;
+  readonly sensitivity?: 'public' | 'internal' | 'secret';
+  readonly state: AgentProviderNoticeState;
+  readonly unavailableAt?: string;
+  readonly unavailableReason?: 'delivery-authorization-unavailable';
+  readonly withdrawnAt?: string;
+  readonly withheld?: Readonly<Partial<Record<string, AgentProviderNoticeWithholding>>>;
+}
+
+/**
+ * The read-only view of the request's notice handle a provider receives
+ * (#459): the runtime's `AgentNoticesHandle` narrowed by construction to
+ * `inbox` — pending notices addressed to this request's principal, as the
+ * `mcp-inbox` route discloses them — and `published` — what became of the
+ * notices this principal published, in every state (#460). Never `publish`,
+ * `acknowledge`, or the admission-bound `read`. Absent when the project mounts
+ * no notice ledger.
+ */
+export interface AgentProviderNoticesHandle {
+  inbox(): Promise<readonly AgentProviderNotice[]>;
+  published(): Promise<readonly AgentProviderNotice[]>;
+}
+
+/**
+ * Request-scoped inputs supplied to a conventional context provider factory.
+ * Beyond the surface-specific `invocation` and the request `signal`, a
+ * factory observes the request's identity axes (`host`, `session`,
+ * `workspace`, `plugin`) and `lineage` exactly as the route will read them
+ * from `await agent()` — the same `Observed` values, provenance included — plus
+ * read-only views of the mounted state and notice handles (#459). Providers
+ * run after the request's handles exist and before the route, outside the
+ * request's async context: `agent()` throws `outside-invocation` there, and
+ * nothing on this context can dispatch state or publish a notice.
+ */
 export interface AgentProviderContext {
+  readonly host: AgentProviderObserved<AgentProviderHostIdentity>;
   readonly invocation: AgentProviderInvocation;
+  readonly lineage: AgentProviderObserved<AgentProviderLineage>;
+  /** Present only for projects with a mounted notice ledger. */
+  readonly notices?: AgentProviderNoticesHandle;
+  /** The resolved plugin root, exactly what the route will read as `(await agent()).plugin`. */
+  readonly plugin: AgentProviderObservedPluginRoot;
+  readonly session: AgentProviderObserved<AgentProviderSessionIdentity>;
   readonly signal: AbortSignal;
+  /** Present only for projects that declare `src/state.ts`. */
+  readonly state?: AgentProviderStateHandle;
+  readonly workspace: AgentProviderObserved<AgentProviderWorkspaceIdentity>;
 }
 
 /** Default export contract for one `src/providers/<name>.{ts,tsx}` module. */
@@ -218,10 +426,31 @@ export interface RouteRenderConfig {
  */
 export const MAX_ROUTE_RENDER_ELAPSED_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * How a tool may be called as an MCP task (the `2025-11-25` Tasks utility,
+ * `Tool.execution.taskSupport`). `forbidden` — the wire default when the
+ * field is absent — means every call is an ordinary request. `optional` lets
+ * a client that asks for task-augmented execution receive a `CreateTaskResult`
+ * at once and poll `tasks/get` / `tasks/result` for the final `CallToolResult`
+ * while the render continues; a client that does not ask sees no change.
+ * `required` refuses an ordinary call with JSON-RPC `-32601`. The compiler
+ * validates the value (`AB4836`); the generated server advertises it in
+ * `tools/list` and declares the `tasks` capability only when at least one
+ * tool opted in.
+ */
+export type ToolTaskSupport = 'forbidden' | 'optional' | 'required';
+
+/** The `Tool.execution` block a tool route declares statically in `config.execution`. */
+export interface ToolExecutionConfig {
+  readonly taskSupport?: ToolTaskSupport;
+}
+
 export interface ToolConfig {
   readonly _meta?: RouteMeta;
   readonly annotations?: Readonly<Record<string, boolean>>;
   readonly description?: string;
+  /** Task-augmented execution of this tool (`execution.taskSupport`); see {@link ToolTaskSupport}. */
+  readonly execution?: ToolExecutionConfig;
   /** Project a validated result's integer `exitCode` when this tool is exposed through the generated CLI. */
   readonly exitCode?: 'result';
   /** The render budget of one call; also inherited by the tool's projected CLI command. */

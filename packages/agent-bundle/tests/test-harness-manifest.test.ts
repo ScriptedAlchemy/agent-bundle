@@ -90,6 +90,7 @@ describe('the compiled test manifest', () => {
       'tool:harness/layout-probe',
       'tool:harness/lifecycle',
       'tool:harness/mutation-probe',
+      'tool:harness/plugin-root',
       'tool:harness/publish-notice',
       'tool:harness/strict-report',
       'tool:harness/ticket',
@@ -98,13 +99,22 @@ describe('the compiled test manifest', () => {
       'tool:harness/wait',
     ]);
     expect(manifest.diagnostics).toEqual([]);
-    expect(manifest.providers).toEqual([{
-      id: 'provider:library-tooling',
-      key: 'libraryTooling',
-      name: 'library-tooling',
-      relativePath: 'src/providers/library-tooling.ts',
-      source: resolve(fixtureRoot, 'src/providers/library-tooling.ts'),
-    }]);
+    expect(manifest.providers).toEqual([
+      {
+        id: 'provider:library-tooling',
+        key: 'libraryTooling',
+        name: 'library-tooling',
+        relativePath: 'src/providers/library-tooling.ts',
+        source: resolve(fixtureRoot, 'src/providers/library-tooling.ts'),
+      },
+      {
+        id: 'provider:request-view',
+        key: 'requestView',
+        name: 'request-view',
+        relativePath: 'src/providers/request-view.ts',
+        source: resolve(fixtureRoot, 'src/providers/request-view.ts'),
+      },
+    ]);
     // Layouts are never routes; the manifest carries them separately, ordered by id.
     expect(manifest.layouts).toEqual([
       {
@@ -329,6 +339,7 @@ describe('the compiled test manifest', () => {
       projected('layout-probe', 'Renders a bare valued result so the layout chain around it is observable.', false),
       projected('lifecycle', 'Replays a deterministic durable lifecycle through mounted state.', true),
       projected('mutation-probe', 'Records how many times the mutation probe executed.', true),
+      projected('plugin-root', 'Reports the plugin root and durable-state anchor this route observes.', false),
       projected('publish-notice', 'Publishes a durable notice for a later session event.', true),
       projected('strict-report', 'Returns a closed-object report that rejects unknown serialized keys.', true),
       projected('ticket', 'Returns a cargo-conductor-shaped ticket status with optional diagnostics fields.', true),
@@ -470,6 +481,7 @@ describe('the generated route registry', () => {
 
     expect(providerLoaders).toContain('"provider:library-tooling": () => import(');
     expect(providerLoaders).toContain('/src/providers/library-tooling.ts');
+    expect(providerLoaders).toContain('"provider:request-view": () => import(');
     // A project without providers emits no loader table at all.
     expect(routeTestSetupSource({ ...manifest, providers: undefined })).not.toContain('providerLoaders');
   });

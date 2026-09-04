@@ -28,6 +28,7 @@ import type {
 } from '../host-contracts/process.ts';
 import { runBoundedChildProcess } from '../host-contracts/process.ts';
 import { requestEventRuntimeStatus } from '../events/ipc.ts';
+import { OPERATOR_ENV_FILE_NAMES, parseOperatorEnv } from '../launch-env.ts';
 import {
   claudePluginRowErrors,
   parsePublicHostInventory,
@@ -129,6 +130,8 @@ export interface DoctorFinding {
   /** Git commit of a staged Cursor marketplace repository. */
   readonly commit?: string;
   readonly durableState?: DoctorDurableStateReport;
+  /** The operator `.env` layer the installed pack's shells read at launch (#469); names and counts only, never values. */
+  readonly operatorEnv?: DoctorOperatorEnvReport;
   /**
    * Claude only: the row's `enabled` flag from `claude plugin list --json`.
    * `false` sets `state: 'disabled'` — the copy is installed but switched off,
@@ -221,6 +224,20 @@ export interface DoctorDurableStateStore {
   readonly file: string;
   readonly mtime: string;
   readonly path: string;
+}
+
+/** One operator env file of an installed pack: present (with its variable count) or absent. */
+export interface DoctorOperatorEnvFile {
+  readonly path: string;
+  readonly state: 'absent' | 'present' | 'unreadable';
+  /** The number of variables the file declares; never their names or values. */
+  readonly variables?: number;
+}
+
+export interface DoctorOperatorEnvReport {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly files: readonly DoctorOperatorEnvFile[];
+  readonly status: 'absent' | 'present' | 'warnings';
 }
 
 export interface DoctorDurableStateReport {
@@ -655,6 +672,58 @@ const inspectDurableState = async (
   return durableStateReport(directory, findings, diagnostics);
 };
 
+/**
+ * Whether an installed pack carries the operator `.env` layer its shells read
+ * at launch (#469). Doctor reports the files and how many variables each
+ * declares — the pack's credentials are configured, or not — and never a name
+ * or a value. Both files absent is the common case and produces no diagnostic.
+ */
+const inspectOperatorEnv = async (
+  pluginRoot: string,
+  target?: DoctorHost,
+): Promise<DoctorOperatorEnvReport> => {
+  const files: DoctorOperatorEnvFile[] = [];
+  const diagnostics: Diagnostic[] = [];
+  for (const name of OPERATOR_ENV_FILE_NAMES) {
+    const path = join(pluginRoot, name);
+    let contents: string;
+    try {
+      contents = await readFile(path, 'utf8');
+    } catch (error) {
+      if (isErrno(error, 'ENOENT')) {
+        files.push({ path, state: 'absent' });
+        continue;
+      }
+      files.push({ path, state: 'unreadable' });
+      diagnostics.push(diagnostic(
+        'AB7331',
+        `Operator env file ${JSON.stringify(path)} exists but could not be read; the pack's shells skip it at launch.`,
+        'Repair the file permissions so the installed pack can read its operator configuration, then rerun `agent-bundle doctor`.',
+        'warning',
+        target,
+      ));
+      continue;
+    }
+    const variables = Object.keys(parseOperatorEnv(contents)).length;
+    files.push({ path, state: 'present', variables });
+    diagnostics.push(diagnostic(
+      'AB7331',
+      `Operator env file ${JSON.stringify(path)} is present and declares ${String(variables)} variable${variables === 1 ? '' : 's'}; ` +
+        'the pack\'s MCP servers, hook wrappers, and CLI read it at launch to fill variables the host did not set.',
+      'Nothing to do; remove the file to stop the pack from reading it. Doctor never reads variable names or values.',
+      'info',
+      target,
+    ));
+  }
+  return Object.freeze({
+    diagnostics: freezeDiagnostics(diagnostics),
+    files: Object.freeze(files),
+    status: diagnostics.some((entry) => entry.severity === 'warning')
+      ? 'warnings'
+      : files.some((file) => file.state === 'present') ? 'present' : 'absent',
+  });
+};
+
 const probeBinary = async (
   host: Exclude<DoctorHost, 'cursor'>,
   cwd: string,
@@ -1015,6 +1084,8 @@ const cursorInventory = async (
     if (launch !== undefined) diagnostics.push(...launch.diagnostics);
     const durableState = await inspectDurableState(path, 'cursor');
     if (durableState !== undefined) diagnostics.push(...durableState.diagnostics);
+    const operatorEnv = await inspectOperatorEnv(path, 'cursor');
+    diagnostics.push(...operatorEnv.diagnostics);
     const hooks = manifest.manifest === cursorManifestCandidates[0]
       ? await inspectCursorPluginHooks(path, home, { caseInsensitivePaths: platform === 'win32' })
       : undefined;
@@ -1033,6 +1104,7 @@ const cursorInventory = async (
       ...(durableState === undefined ? {} : { durableState }),
       entry,
       ...(hooks === undefined ? {} : { hooks: hooks.registration }),
+      operatorEnv,
       ...(launch?.launch === undefined ? {} : { launch: launch.launch }),
       manifest: manifest.manifest,
       name: manifest.name,
@@ -2591,12 +2663,15 @@ const doctorHost = async (
       }
       const durableState = await inspectDurableState(identity.bundleRoot, host);
       if (durableState !== undefined) diagnostics.push(...durableState.diagnostics);
+      const operatorEnv = await inspectOperatorEnv(identity.bundleRoot, host);
+      diagnostics.push(...operatorEnv.diagnostics);
       bundle = Object.freeze({
         ...checked.finding,
         ...(staticDiagnostics.some((entry) => entry.severity === 'error')
           ? { state: 'corrupt' as const }
           : {}),
         ...(durableState === undefined ? {} : { durableState }),
+        operatorEnv,
       });
     } catch (error) {
       const malformed = malformedBundle(host, error);

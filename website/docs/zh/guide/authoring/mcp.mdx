@@ -87,7 +87,7 @@ export const config = {
 ```
 
 只有在路由确实需要上下文时才调用 `await agent()`。该句柄暴露本次调用，以及 `host`、`session`、
-`actor`、`workspace` 四个身份轴。每个轴都是*被观察到的*：传输层知道时会发布一个 `available` 取值及
+`actor`、`workspace`、`plugin` 五个身份轴。每个轴都是*被观察到的*：传输层知道时会发布一个 `available` 取值及
 其来源，不知道时则发布带有类型化原因的 `unavailable`。裸 stdio 既不提供 session id 也不提供 HTTP
 actor 认证，因此这两个轴保持诚实的不可用，而不是被伪造出来。
 
@@ -104,6 +104,24 @@ start 匹配到最新一个未被认领的 spawn 调用）、`confirmed`（宿�
 唯一一个待定的 `subagentStart`）。一次确认还会为盲选认领的同胞补上 `subagent.toolCallId`，安放 spawn
 窗口无法安放的 start，并把窗口挂错父节点的子代理挪到正确的父节点下。框架刻意不提供操作者或用户身份轴：它永远不会读取或暴露宿主
 会话背后的人是谁。
+
+当注册表安放了这次请求时，lineage 还会带有 `tree`——还有谁在线，读自同一个注册表，绝不凭空编造：
+
+```ts
+const { lineage } = await agent();
+if (lineage.state === 'available' && lineage.value.tree !== undefined) {
+  lineage.value.tree.siblings; // 同一根会话之下所有其他在线会话（任意深度，
+                               // 对子代理而言包含根会话本身），按启动时间从早到晚
+  lineage.value.tree.children; // 以本会话为父节点的在线会话
+  lineage.value.tree.roots;    // 其他在线的根会话（Cursor：同一 workspace_roots）
+}
+```
+
+每个对等节点是 `{ conversation, depth, parent?, startedAt, subagent?, resolution }`——注册表关于该
+节点的事实，以及*它自己*安放的可信级别，与该节点自己发出请求时得到的判断完全一致。已停止的会话不会
+列出；尚未开口的 Cursor 子会话以其 `subagent_id` 列出。注册表没有安放这次请求时（独立钩子进程，或
+Codex `_meta` 指向一个注册表从未见过其启动的线程），`tree` 不存在：此时这一轴仍然回答"我是谁"，但不
+回答"还有谁在这里"。路由单元测试通过与该轴其余部分相同的 `context.lineage` 接缝注入它。
 
 ### 终端能力
 
@@ -139,6 +157,83 @@ interface AgentTerminal {
 导出 `main` 的普通脚本或 bin 没有请求作用域；其封套会把同一个值作为 `main` 的第二个参数传入（见
 [包入口](./package-entries.mdx#可执行封套)）。在测试中，`invokeCli` 与 `runScript` 的 `tty` 开关会塑造
 一个确定性的合成值，而 `context.terminal` 则可以像注入任何身份轴一样注入其他取值。
+
+### 请求上下文 provider
+
+约定式的 `src/providers/<name>.ts` 模块默认导出一个工厂函数，其返回值在每个生成表面上挂载到
+`(await agent()).providers.<camelCaseName>`。除了表面特定的 `invocation` 和请求 `signal` 之外，工厂
+还会收到路由将要读到的请求本身——`host`、`session`、`workspace`、`plugin` 与 `lineage`（含 `tree`），
+即同样的 `Observed` 值、同样的来源——以及已挂载句柄的只读视图：项目声明了 `src/state.ts` 时的
+`state`（仅 `read`），作用域挂载了通知账本时的 `notices`（仅 `inbox` 与 `published`）。因此 provider
+可以派生共享状态的一个视图——拓扑、对等节点列表、本代理发布的通知的去向——但不能派发状态事件或发布通知；
+这些仍然只属于路由。
+
+```ts
+// src/providers/agent-topology.ts
+import type { AgentProviderContext } from 'agent-bundle';
+
+export default async function agentTopology({ lineage, state }: AgentProviderContext) {
+  const snapshot = state === undefined ? undefined : await state.read();
+  return {
+    peers: lineage.state === 'available' ? lineage.value.tree?.siblings ?? [] : [],
+    revision: snapshot?.revision,
+  };
+}
+```
+
+provider 每个请求作为该请求自己的解析器运行一次：在 `runAgentRequest` 冻结身份轴、打开通知租约之后，
+在路由之前，按确定的键顺序，并且在请求的异步上下文之外（工厂里调用 `agent()` 会抛出
+`outside-invocation`）。抛出异常的工厂会使请求失败关闭；预期中的降级应返回一个诚实的 unavailable
+形状的值。`agent-bundle/test` 测试装置把同样的视图交给它的 provider，因此注入了 `context.lineage`
+或挂载了状态的路由单元测试会在 `providers.<key>` 中看到它们；显式的 `context.providers` 映射会被原样挂载。
+
+## 用 JSX 编写富 Markdown 块
+
+`Agent.Markdown` 承载一个 Markdown 字符串，而手工拼接这个字符串——每行一个
+`- **${label}:** ${value}`——正是表格、嵌套列表与转义出错的地方。`@agent-bundle/runtime` 导出的异步
+`MarkdownContent` 组件把它的 JSX 子节点渲染为一个 GitHub Flavored Markdown 字符串，并降低为
+`Agent.Markdown`，因此路由可以直接用标记语言编写这个块：
+
+```tsx
+import React from 'react';
+import { MarkdownContent } from '@agent-bundle/runtime';
+
+interface MeasuredFile {
+  readonly path: string;
+  readonly bytes: number;
+}
+
+export const MeasuredFiles = ({ files }: { readonly files: readonly MeasuredFile[] }) => (
+  <MarkdownContent>
+    <table>
+      <thead>
+        <tr><th>File</th><th align="right">Bytes</th></tr>
+      </thead>
+      <tbody>
+        {files.map((file) => (
+          <tr key={file.path}><td>{file.path}</td><td>{file.bytes}</td></tr>
+        ))}
+      </tbody>
+    </table>
+  </MarkdownContent>
+);
+```
+
+标题 `h1`–`h6`、段落、`strong`/`em`/`del`、`code` 与 `pre`、链接与图片、引用块、`ul`/`ol`（可嵌套，
+`ol` 支持 `start`）、GFM 任务列表（`li` 内的 `<input type="checkbox">`）、单元格带 `align` 的
+`table`、`dt`/`dd`、`br` 与 `hr` 都会序列化为对应的 Markdown 形式；未知元素直接透传其子节点。子节点中
+任何位置的同步与异步组件——包括调用 `React.use` 的组件——都会在该块发出前解析完成。文本会被转义，因此
+字面上的 `*stars*`、`[x]`、`<tag>`、`&amp;`，以及行首的 `-`、`#`、`1.` 或 `>` 在文档被再次解析时仍是
+文本。渲染出的块不带末尾换行：Agent Document 投影负责兄弟块之间的空行连接，所以 `MarkdownContent` 与
+`Agent.Text` 及其他节点并列时，行为与手写的 `Agent.Markdown` 完全一致。
+
+当自定义元素需要自己的 Markdown 时，`components` 把额外的宿主标签名映射到序列化器
+`(props, { inline, blocks }) => string`——`inline()` 与 `blocks()` 分别把该元素的子节点渲染为行内文本，
+或以空行连接的块。渲染器本身也被导出：`renderToMarkdown(children, options?)` 解析为字符串，
+`renderToMarkdownStream(children, options?)` 则按文档顺序产出一个由 UTF-8 块组成的
+`ReadableStream<Uint8Array>`。其输出以带 GFM 扩展的 micromark——Workbench 的
+`react-markdown`/`remark-gfm` 底层所用的解析器——为基准固定下来，因此路由编写的结构就是消费方解析出的
+结构。
 
 ## 流式输出与进度
 
@@ -211,6 +306,74 @@ Claude Code 默认的单次调用挂钟约为 28 小时（`MCP_TOOL_TIMEOUT`，�
 计时器（stdio 服务器为 30 分钟）正是由这些通知重置；Codex 以 `tool_timeout_sec` 约束一次调用，除非操作者
 在 `config.toml` 中提高，否则为 60 秒。`agent-bundle inspect --routes` 会随每条路由编译后的 `config`
 一并显示该预算。
+
+## 长时运行的工具：任务
+
+渲染预算约束的是一次渲染最多能跑多久；它并不改变普通 `tools/call` 会一直阻塞客户端直到渲染结束这一点。
+MCP `2025-11-25` 的 Tasks 工具是与之互补的机制：请求任务增强执行的客户端会立刻拿到一个任务句柄，稍后再
+取结果，于是它自身的请求期限不再影响渲染。工具路由通过 `config.execution.taskSupport` 选择加入，这正是
+`tools/list` 宣告的工具 `execution` 块：
+
+```ts twoslash
+import type { ToolConfig } from 'agent-bundle';
+
+export const config = {
+  annotations: { readOnlyHint: true },
+  description: 'Convert the selected audiobook.',
+  execution: { taskSupport: 'optional' },
+} satisfies ToolConfig;
+```
+
+`taskSupport` 取 `'forbidden'`（省略该键时的线上默认值：每次调用都是普通请求）、`'optional'`（客户端
+可以请求任务；不请求的客户端得到普通结果）或 `'required'`（普通调用会被以 JSON-RPC `-32601` 拒绝）；
+其他任何值、`execution` 下的未知键，或把该键放在资源或提示路由上，都会报 `AB4836`。路由模块本身无需
+改动：它与普通调用完全一样地渲染，`signal`、`progress.report()` 与流式 `Agent.Progress` 回退的含义也
+一如从前。
+
+只要至少有一个工具选择加入，生成的服务器就会声明
+`capabilities.tasks: { list, cancel, requests: { tools: { call } } }`，并在 `2025-11-25` 会话上提供整个
+生命周期：
+
+| 请求 | 应答 |
+| --- | --- |
+| 对已加入的工具发出带 `params.task`（`{ ttl?, pollInterval? }`）的 `tools/call` | 立即返回 `CreateTaskResult`：`task.taskId`、`status: "working"`、`createdAt`、`lastUpdatedAt`、实际采用的 `ttl`（客户端请求的值，上限 24 小时；省略时为五分钟）与 `pollInterval`（至少 100 毫秒；省略时为 1 秒），以及 `_meta["io.modelcontextprotocol/model-immediate-response"]`——宿主可在任务运行期间交给模型的一句话。渲染在任务之下开始。 |
+| `tasks/get` | 任务本身：`working` 时 `statusMessage` 为最新的进度消息，`_meta["agent-bundle/progress"]` 携带 `{ progress, total?, message? }`——与馈送 `notifications/progress` 的同一份 `Agent.Progress` 投影；`completed`；`failed` 时以工具错误文本作为 `statusMessage`（按规范要求，`isError: true` 的结果即失败任务）；或 `cancelled`。已结束的任务上仍可读到最后一次进度。 |
+| `tasks/result` | 阻塞到任务结束，然后返回与普通调用完全相同的内容：同样的 `content`、`structuredContent` 与布局 `_meta`，另加 `_meta["io.modelcontextprotocol/related-task"]`；以 JSON-RPC 错误结束的渲染返回该错误。 |
+| `tasks/cancel` | 在应答前把任务转为 `cancelled`，并通过与取消请求相同的 `AbortSignal` 中止渲染；被中断的渲染以 SDK 的工具错误结束，随后 `tasks/result` 返回的就是它。取消已结束的任务报 `-32602`。 |
+| `tasks/list` | 会话仍保留的所有任务，按创建先后排列，以不透明的 `cursor` 分页。 |
+
+未知 `taskId` 报 `-32602`；对未声明支持（或声明为 forbidden）的工具发出任务增强调用报 `-32601`。任务的
+进度通知仍只在请求携带 `_meta.progressToken` 时发送，并加盖 related-task 键；无论是否携带令牌，任务都会
+记录进度。从不发送 `params.task` 的客户端看不到任何变化；没有任何工具加入的服务器不会宣告 `tasks` 能力，
+并把任务增强请求当作普通请求处理——这正是该工具对不具备能力的接收方的要求。任务记录归创建它的会话（被
+拉起的 stdio 进程，一个客户端）所有，在任务结束后保留 `ttl` 时长，每台服务器最多 256 条，会话关闭时仍在
+运行的任务全部被取消。
+
+渲染预算作用于任务的渲染，而不是客户端的请求：无论预算多大，任务的 `tools/call` 都会立即返回，其背后的
+渲染仍受路由 `config.render`（或 60 秒默认值）约束。只在渲染本身确实需要更久时才提高预算，不要为了熬过
+宿主的请求期限而提高——那正是任务的用途。`2026-07-28` 协议修订把任务从核心移入
+`io.modelcontextprotocol/tasks` 扩展，形态也不同（`resultType: "task"`、`tasks/update`、没有
+`tasks/result`）；生成服务器所用的 SDK 版本不提供该扩展，因此该修订上的客户端保持普通契约，也不会被宣告
+任务能力。固定版本的宿主是否会发出任务增强调用，按宿主记录在[宿主能力矩阵](../../reference/hosts.md)中；
+撰写本文时没有任何宿主这样做，因此这一生命周期由 SDK 客户端与 Workbench MCP 页面证明：宣告了任务支持的
+工具会提供**Run as task**，Tasks 面板会轮询 `tasks/get`、获取 `tasks/result` 并取消任务。
+
+`mcp-in-memory` 层用真实的 SDK 客户端证明整套契约：
+
+```ts
+import { specTypeSchemas } from '@modelcontextprotocol/client';
+import { openInMemoryMcpServer } from 'agent-bundle/test';
+
+await using session = await openInMemoryMcpServer();
+const created = await session.client.request({
+  method: 'tools/call',
+  params: { arguments: { holdMs: 2000 }, name: 'wait', task: { ttl: 60_000 } },
+}, specTypeSchemas.CreateTaskResult);
+const result = await session.client.request({
+  method: 'tasks/result',
+  params: { taskId: created.task.taskId },
+}, specTypeSchemas.CallToolResult);
+```
 
 ## 共享布局
 
@@ -308,14 +471,27 @@ export default () => createRscMcpServer(application, 'curator');
 这层保护之所以重要，是因为 stdout 承载着 JSON-RPC 帧：任何被导入模块中一次走神的 `console.log` 都会
 破坏协议流。
 
-自行连接的入口——在顶层构造并连接传输层、且没有默认导出的模块——保持现有行为，逐字节不变。源码校验
+自行连接的入口——在顶层构造并连接传输层、且没有默认导出的模块——保持现有行为，逐字节不变：没有生命周期
+外壳，也没有操作者 `.env` 层，因为没有外壳能在模块自身的顶层代码运行之前应用它。源码校验
 会报告信息级的 `AB4730` 提示，建议升级为工厂函数写法；它永远不是错误。
 
-同一套生命周期对手写入口也是公开 API：
+同一套生命周期对手写入口也是公开 API，生成外壳在导入服务器模块之前应用的操作者 `.env` 层同样如此
+（见[安装](../distribution/installation.mdx#操作者配置已安装包的-env)）。这两个导入都会被内联进产出的
+入口，入口保持自包含；`agent-bundle/launch-env` 会被别名到每一个 stdio 入口，因此无论入口有没有外壳都能
+解析。需要这一层的自行连接入口应在第一行自行应用它，并像生成外壳一样锚定（产物根目录是 `mcp/` 的上一级）：
 
 ```ts
+import { fileURLToPath } from 'node:url';
+import { applyOperatorEnv, operatorEnvPluginRoot } from 'agent-bundle/launch-env';
 import { redirectConsoleToStderr, runStdioServer } from 'agent-bundle/mcp-entry';
+
+applyOperatorEnv({
+  pluginRoot: operatorEnvPluginRoot(fileURLToPath(new URL('..', import.meta.url))),
+});
 ```
+
+`operatorEnvPluginRoot` 会优先采用宿主设置的 `AGENT_BUNDLE_PLUGIN_ROOT`，否则回退到你传入的目录，
+因此该入口读取的文件与同一个包的钩子包装器和 CLI 完全一致。
 
 ## 在配置中声明服务器
 
@@ -371,6 +547,28 @@ import { pluginRootEnvAnchor } from 'agent-bundle';
 const readPluginRoot = (env: Record<string, string | undefined>): string | undefined =>
   env[pluginRootEnvAnchor];
 ```
+
+在路由内部完全不需要读取这个变量。每个生成的外壳——MCP 入口及其 Flight worker、路由式 CLI 可执行文件
+及其渲染 worker、hook 包装器——都在启动时用 `@agent-bundle/runtime` 的 `resolvePluginRoot` 解析一次
+锚点，把 SQLite 状态、通知账本与 lineage 日志挂载在 `<root>/state` 之下，并在它打开的每个请求上以
+`(await agent()).plugin` 发布同一个值：
+
+```ts
+const { plugin } = await agent();
+if (plugin.state === 'available') {
+  plugin.value.root;      // 安装根目录：AGENT_BUNDLE_PLUGIN_ROOT，或外壳的回退值
+  plugin.value.stateRoot; // `<root>/state`，defineState / 通知 / lineage 已经存放于此
+  plugin.source;          // 来自变量为 'native'，来自回退为 'derived'
+}
+```
+
+`source: 'native'` 表示宿主提供了已展开的 `AGENT_BUNDLE_PLUGIN_ROOT`；`'derived'` 表示外壳使用了回退——
+在构建产物内是产物根目录（`mcp/`、`bin/` 或 `hooks/` 的父目录），对 npm 包 bin 则是 `$PWD/.agent-bundle`。
+仍带有未展开 `${…}` token 的值（宿主把清单原样透传）会被视为未设置，在 stderr 上报告一次，且绝不会被
+拼接进路径。约定式 provider 在其工厂上下文中收到同样的被观察值 `plugin`，与 `invocation`、`signal` 并列，
+因此把文件放在框架状态旁边的 provider 自己不必再推导任何东西。route-unit 与 `mcp-in-memory` 测试层级
+以同样方式解析它（回退到 `<项目根目录>/.agent-bundle`），并像其他每个轴一样接受 `context.plugin` 覆盖；
+在生成的作用域之外，该轴为 `unavailable('not-provided')`。
 
 ## MCP App
 

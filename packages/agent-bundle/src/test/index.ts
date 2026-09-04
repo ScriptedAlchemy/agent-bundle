@@ -96,6 +96,8 @@ export type {
   TargetCapabilityFixtureInput,
   TargetCapabilityProjection,
 } from './target-capabilities.ts';
+export { createEventRouteInput } from './event-input.ts';
+export type { AgentEventRouteInput, CreateEventRouteInputOptions } from './event-input.ts';
 export { expectEvents } from './events.ts';
 export type {
   AgentRenderEventType,

@@ -42,12 +42,25 @@ export type { McpAppProfileId } from './dev/mcp-app-profile-descriptors.ts';
 import { deepFreeze } from './core/freeze.ts';
 
 export { compileRouteGraph, emptyCompiledRouteGraph, isEmptyRouteGraph } from './routes/graph.ts';
-export { canonicalAgentEvents } from './routes/public.ts';
+export {
+  agentEventPayloadFieldKinds,
+  agentEventPayloadFields,
+  agentEventPayloadNativeKeys,
+  canonicalAgentEvents,
+} from './routes/public.ts';
 export type {
   AgentEventCanonicalIdentity,
   AgentEventDelivery,
   AgentEventFallbackMode,
   AgentEventNativePayload,
+  AgentEventPayload,
+  AgentEventPayloadField,
+  AgentEventPayloadFieldKind,
+  AgentEventPayloadFieldName,
+  AgentEventPayloadFields,
+  AgentEventPayloadFieldTypes,
+  AgentEventPayloadHost,
+  AgentEventPayloadNativeKey,
   AgentEventProvenance,
   AgentEventRouteConfig,
   AgentEventRouteProps,

@@ -1,6 +1,7 @@
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { dataArrayValues, hasDataKeys, isPlainDataRecord, isRecord, ownDataValue } from '../core/strict-json.ts';
 import { escapeRegExp } from '../core/strings.ts';
+import { operatorEnvImports, operatorEnvStatement } from '../build/launch-env-shell.ts';
 import type { CanonicalAgentEvent } from '../routes/public.ts';
 import {
   canonicalHookEvents,
@@ -649,14 +650,19 @@ const eventRouteHookWrapperSource = (
     : ['const target = artifactTarget;'];
   return [
     "import { dirname, resolve } from 'node:path';",
+    // Only a wrapper that can render in-process needs the operator `.env`
+    // layer (#469): a shared-runtime wrapper forwards the event to the warm
+    // MCP process, which applied the layer itself when it started.
+    ...(standalone ? operatorEnvImports({ importsFileUrlToPath: retiresLineage }) : []),
     ...(standalone ? ["import { Worker } from 'node:worker_threads';"] : []),
     ...(standalone
-      ? ["import { agent, available, createAgentRenderDispatcher, resolveStandaloneLineage, runAgentRequest, unavailable } from '@agent-bundle/runtime';"]
+      ? [
+          "import { fileURLToPath } from 'node:url';",
+          "import { agent, available, createAgentRenderDispatcher, resolvePluginRoot, resolveStandaloneLineage, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
+        ]
       : []),
     ...(retiresLineage
       ? [
-          "import { join } from 'node:path';",
-          "import { fileURLToPath } from 'node:url';",
           "import { agentLineageStateDefinition, createAgentLineageRegistry } from '@agent-bundle/runtime/lineage';",
           "import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';",
         ]
@@ -675,10 +681,14 @@ const eventRouteHookWrapperSource = (
     `const fallbackMode = ${JSON.stringify(route.fallback)};`,
     `const timeoutMs = ${String(entry.hook.timeoutMs ?? 5_000)};`,
     "const endpointId = `${artifactEpoch}:${artifactTarget}:${dirname(dirname(resolve(process.argv[1])))}`;",
+    ...(standalone ? [operatorEnvStatement] : []),
     '',
     'const fail = (message) => { throw new Error(`Agent Bundle event route error: ${message}`); };',
     ...(standalone
       ? [
+          // The wrapper lives in `hooks/`, so its artifact root is the parent
+          // directory — the same anchor the generated MCP entry resolves (#468).
+          "const pluginRoot = resolvePluginRoot({ fallback: fileURLToPath(new URL('..', import.meta.url)) });",
           'const renderStandalone = async (invocation, signal) => {',
           '  const worker = new Worker(new URL(/* webpackIgnore: true */ "./hooks-flight.mjs", import.meta.url), { stderr: true, stdout: true });',
           "  worker.stdout?.on('data', (chunk) => process.stderr.write(chunk));",
@@ -714,6 +724,7 @@ const eventRouteHookWrapperSource = (
           '          id,',
           '          invocation: dispatch.invocation,',
           '          lineage: context.lineage,',
+          '          plugin: context.plugin,',
           '          requestInvocation: context.invocation,',
           '          session: context.session,',
           '          terminal: context.terminal,',
@@ -733,8 +744,7 @@ const eventRouteHookWrapperSource = (
             ? [
                 'const retireLineage = async (native, idempotencyKey, observedAt) => {',
                 "  if (target !== 'claude' && target !== 'codex' && target !== 'cursor') return;",
-                "  const anchor = process.env.AGENT_BUNDLE_PLUGIN_ROOT ?? fileURLToPath(new URL('..', import.meta.url));",
-                "  const driver = createSqliteStateDriver({ root: join(anchor, 'state') });",
+                '  const driver = createSqliteStateDriver({ root: pluginRoot.stateRoot });',
                 '  try {',
                 '    const store = await driver.open(agentLineageStateDefinition());',
                 '    try {',
@@ -762,6 +772,7 @@ const eventRouteHookWrapperSource = (
           '    host: available({ name: target }, "native"),',
           '    invocation: { artifactEpoch, hostContractRevision: capabilityRevision, kind: "event", operationId: `event:${canonicalEvent}`, surface: canonicalEvent },',
           '    lineage,',
+          '    plugin: pluginRoot.identity,',
           '    ...(sessionId === undefined ? {} : { session: available({ sessionId }, "native") }),',
           '    signal,',
           // A hook's stdout is its host envelope: no terminal, never probed (#511).
@@ -813,7 +824,11 @@ const eventRouteHookWrapperSource = (
 
 /** Emits the published Cursor hook wrapper source; see encodeCursorPlaygroundInput for the envelope contract. */
 export const cursorHookWrapperSource = (entry: TargetHookWrapper): string => [
+  ...operatorEnvImports({ importsFileUrlToPath: false }),
   `import * as handlerModule from ${JSON.stringify(entry.hook.source)};`,
+  // The installed pack's operator `.env` layer (#469), applied before the
+  // handler runs; the handler module itself is a static import.
+  operatorEnvStatement,
   'const target = "cursor";',
   `const canonicalEvent = ${JSON.stringify(entry.event)};`,
   `const nativeEvent = ${JSON.stringify(entry.nativeEvent)};`,
@@ -1228,7 +1243,11 @@ export const nativeHookWrapperSource = (
       ]
     : [`const target = ${JSON.stringify(entry.target)};`];
   return [
+    ...operatorEnvImports({ importsFileUrlToPath: false }),
     `import * as handlerModule from ${JSON.stringify(entry.hook.source)};`,
+    // The installed pack's operator `.env` layer (#469), applied before the
+    // handler runs; the handler module itself is a static import.
+    operatorEnvStatement,
     ...targetSource,
     `const canonicalEvent = ${JSON.stringify(entry.event)};`,
     `const nativeEvent = ${JSON.stringify(nativeEvent)};`,
