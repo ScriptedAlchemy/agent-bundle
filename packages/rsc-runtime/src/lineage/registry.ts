@@ -80,6 +80,24 @@ const SPAWN_TOOLS: Readonly<Record<LineageHost, (toolName: string) => boolean>> 
   cursor: (toolName) => toolName === 'Task',
 });
 
+/**
+ * Whether this call of a spawn tool starts a new subagent. Claude's `Agent`
+ * can also be invoked with `tool_input.resume` naming an existing agent
+ * (sub-agents reference, "Resume subagents": resuming starts a new run under
+ * the same ID); its PostToolUse then returns that agent's id without a new
+ * lineage edge, so such a call opens no spawn window and confirms nothing.
+ */
+const SPAWNS_NEW_AGENT: Readonly<Record<LineageHost, (toolName: string, native: Readonly<Record<string, unknown>>) => boolean>> = Object.freeze({
+  claude: (toolName, native) => {
+    if (!SPAWN_TOOLS.claude(toolName)) return false;
+    const input = native['tool_input'];
+    if (input === null || typeof input !== 'object' || Array.isArray(input)) return true;
+    return nativeString(input as Readonly<Record<string, unknown>>, 'resume') === undefined;
+  },
+  codex: (toolName) => SPAWN_TOOLS.codex(toolName),
+  cursor: (toolName) => SPAWN_TOOLS.cursor(toolName),
+});
+
 /** The host named the child a spawn call produced, on the spawn's own post-tool hook. */
 interface SpawnConfirmation {
   readonly child: string;
@@ -580,7 +598,7 @@ export const createAgentLineageRegistry = (
           ...(carrier.generation === undefined ? {} : { generation: carrier.generation }),
           openedAt: observedAt,
           root: carrierNode.root,
-          ...(SPAWN_TOOLS[host](toolName) ? { spawn: true } : {}),
+          ...(SPAWNS_NEW_AGENT[host](toolName, native) ? { spawn: true } : {}),
           toolCallId,
           toolName,
         }, keys);
@@ -588,7 +606,7 @@ export const createAgentLineageRegistry = (
         await dispatch('toolCallClosed', { conversation: carrier.conversation, toolCallId }, keys);
         // A spawn that failed produced no child; Codex closes a successful
         // spawn before SubagentStart, so only failure discards the claim.
-        if (event === 'tool/failure' && SPAWN_TOOLS[host](toolName)) {
+        if (event === 'tool/failure' && SPAWNS_NEW_AGENT[host](toolName, native)) {
           await dispatch('spawnFailed', { toolCallId }, keys);
         }
       }
@@ -599,7 +617,7 @@ export const createAgentLineageRegistry = (
     // matched, or moves one it matched wrong — the same event in every case,
     // so a redelivery is idempotent. A carrier that is itself an unplaced
     // start keeps the confirmation until its own edge is known.
-    const confirmation = event === 'tool/after' && toolName !== undefined && SPAWN_TOOLS[host](toolName)
+    const confirmation = event === 'tool/after' && toolName !== undefined && SPAWNS_NEW_AGENT[host](toolName, native)
       ? SPAWN_CONFIRMATIONS[host](native)
       : undefined;
     if (

@@ -4,11 +4,12 @@ import { z } from 'zod';
 const nonEmpty = z.string().trim().min(1);
 /**
  * Where an identity claim came from: `native` is read straight from the host
- * envelope (or a `request.lineage` the runtime resolved natively), `registry`
- * and `inferred` are the runtime lineage registry's own resolutions, and
- * `derived` is this application's fallback (`worktree:<root>`).
+ * envelope (or a `request.lineage` the runtime resolved natively), `registry`,
+ * `inferred` and `confirmed` are the runtime lineage registry's own
+ * resolutions (`confirmed` once the host has named every edge to the root),
+ * and `derived` is this application's fallback (`worktree:<root>`).
  */
-const provenance = z.enum(['native', 'registry', 'inferred', 'derived']);
+const provenance = z.enum(['native', 'registry', 'inferred', 'confirmed', 'derived']);
 
 export type IdentityProvenance = z.output<typeof provenance>;
 

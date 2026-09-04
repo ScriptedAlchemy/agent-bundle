@@ -1256,6 +1256,34 @@ describe('lineage registry Claude spawn confirmation from the Agent PostToolUse 
     expect(registry.snapshot().nodes[parallel]).toMatchObject({ confirmed: true, depth: 1, parent: orchestrationRoot });
   });
 
+  it('treats an Agent call with tool_input.resume as no spawn: it opens no window and its agentId confirms nothing', async () => {
+    // sub-agents reference (sub-agents-3.md, "Resume subagents"): resuming starts a new
+    // run under the same agent id; the PostToolUse names that id without a new edge.
+    const registry = createAgentLineageRegistry();
+    const observe = claude(registry);
+    await observe('session/start', 's', { hook_event_name: 'SessionStart', session_id: 'root' });
+    await observe('tool/before', 'sp1', spawnBefore('sp1'));
+    await observe('agent/start', 'a', start('a'));
+    await observe('tool/after', 'sp1-done', spawnAfter('sp1', 'a', 'async_launched'));
+    // `a` spawned `b` in the foreground; `b` is confirmed under `a`.
+    await observe('tool/before', 'sp2', spawnBefore('sp2', 'a'));
+    await observe('agent/start', 'b', start('b'));
+    await observe('tool/after', 'sp2-done', spawnAfter('sp2', 'b', 'completed', 'a'));
+    expect(registry.snapshot().nodes['b']).toMatchObject({ confirmed: true, depth: 2, parent: 'a', toolCallId: 'sp2' });
+    // Another child `c` of the root resumes `b` by id: no window, no confirmation, no re-parenting.
+    await observe('tool/before', 'sp3', spawnBefore('sp3'));
+    await observe('agent/start', 'c', start('c'));
+    const resume = { ...session('c'), hook_event_name: 'PreToolUse', tool_input: { prompt: 'continue', resume: 'b' }, tool_name: 'Agent', tool_use_id: 'rs1' };
+    await observe('tool/before', 'rs1', resume);
+    expect(registry.snapshot().openCalls.find((call) => call.toolCallId === 'rs1')).toMatchObject({ conversation: 'c' });
+    expect(registry.snapshot().pendingSpawns.map((call) => call.toolCallId)).toEqual([]);
+    // A start `d` arriving now cannot claim the resume call.
+    expect(await observe('agent/start', 'd', start('d'))).toEqual(unavailable('id-not-resolvable'));
+    await observe('tool/after', 'rs1-done', { ...resume, hook_event_name: 'PostToolUse', tool_response: { agentId: 'b', agentType: 'general-purpose', content: [], status: 'completed' } });
+    expect(registry.snapshot().nodes['b']).toMatchObject({ confirmed: true, depth: 2, parent: 'a', toolCallId: 'sp2' });
+    expect(registry.snapshot().openCalls.find((call) => call.toolCallId === 'rs1')).toBeUndefined();
+  });
+
   it('drops the unplaced starts of a session that ends', async () => {
     const registry = createAgentLineageRegistry();
     const observe = claude(registry);
