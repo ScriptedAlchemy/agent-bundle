@@ -563,13 +563,17 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
   }
   return Object.freeze({
     close: async (): Promise<void> => {
+      // Every service that ran on the runtime closes first; only then is its
+      // Scope released. A session close failure is the report that matters, so
+      // it is rethrown as-is even when the disposal also fails; the disposal
+      // failure surfaces on its own only after a clean session close.
       try {
         await session.close();
-      } finally {
-        // Every service that ran on the runtime has closed above; only then
-        // is its Scope released.
-        await platformRuntime.close();
+      } catch (error) {
+        await Promise.allSettled([platformRuntime.close()]);
+        throw error;
       }
+      await platformRuntime.close();
     },
     openRuntimeClientSurface: (surfaceId: string) => session.openRuntimeClientSurface(surfaceId),
     status: () => session.status(),
