@@ -4,6 +4,14 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Merge queue: every job that is a required check on main must also run on
+  # merge_group, or a queued entry waits until the queue times it out. The
+  # event never fires while this repository is user-owned (GitHub offers the
+  # queue only to organization-owned repositories: creating a `merge_queue`
+  # ruleset here returns 422 "Invalid rule 'merge_queue'"), so this trigger
+  # is dormant until the repository moves to an organization.
+  merge_group:
+    branches: [main]
   # Nightly release-boundary matrix (packed-matrix job): the scaffolder
   # template tests beyond the per-PR minimal-template smoke.
   schedule:
@@ -14,9 +22,10 @@ permissions:
   contents: read
 
 # PR pushes cancel the superseded run of the same PR (only the latest commit
-# matters). Pushes to main, the nightly schedule, and manual dispatches get
-# SHA-keyed groups with no cancellation, so a new main push can never kill an
-# in-flight main or nightly run. Same pattern as package-preview.yml.
+# matters). Pushes to main, merge-queue entries, the nightly schedule, and
+# manual dispatches get SHA-keyed groups with no cancellation, so a new main
+# push can never kill an in-flight main, queue, or nightly run. Same pattern
+# as package-preview.yml.
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -27,7 +36,9 @@ jobs:
   # Nested markdown elsewhere is code because examples and packages contain
   # compiled SKILL.md artifacts, and package markdown affects npm pack audits.
   # Classification fails open so uncertain PRs run every heavy job; pushes to
-  # main never skip any job based on changed paths.
+  # main and merge-queue entries never skip any job based on changed paths
+  # (this job does not run for them, and the heavy jobs treat the missing
+  # output as "run").
   # Path rules and fail-open listing checks live in
   # scripts/classify-docs-only.mjs (unit-tested). This job sparse-checkouts
   # only that script so the vendored Effect subtree never lands on the
@@ -110,12 +121,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     # Measured PR Verify cost was 3 legs × ~7 minutes, about 75% of PR
-    # runner-minutes. PRs run newest-LTS Node 24; every main push and manual
-    # dispatch still gates on the full supported matrix.
+    # runner-minutes. PRs and merge-queue entries run newest-LTS Node 24 (the
+    # "Verify (Node 24)" context is the required check on main); every main
+    # push and manual dispatch still gates on the full supported matrix.
     strategy:
       fail-fast: false
       matrix:
-        node-version: ${{ github.event_name == 'pull_request' && fromJSON('["24"]') || fromJSON('["22.19.0","24","26"]') }}
+        node-version: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && fromJSON('["24"]') || fromJSON('["22.19.0","24","26"]') }}
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/setup@v2

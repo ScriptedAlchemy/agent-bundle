@@ -7,12 +7,20 @@ name: Changeset
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
+  # "Changeset present" is a required check on main, so a merge queue entry
+  # needs a passing context too (see the merge_group note in ci.yml; dormant
+  # until the repository is organization-owned). The requirement itself is
+  # enforced on the pull request, which must already be green to enter the
+  # queue; the queue run only reports success, because a merge_group event
+  # carries no PR labels and its commit stacks earlier queue entries.
+  merge_group:
+    branches: [main]
 
 permissions:
   contents: read
 
 concurrency:
-  group: changeset-${{ github.event.pull_request.number }}
+  group: changeset-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 jobs:
@@ -21,19 +29,26 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Merge queue entry — requirement already enforced on the pull request
+        if: github.event_name == 'merge_group'
+        run: echo "::notice::merge_group run; the changeset requirement was checked on the pull request."
       # `changeset status --since=origin/main` diffs against the merge-base
       # with main, so the PR merge commit needs enough history to reach it.
       - uses: actions/checkout@v7
+        if: github.event_name != 'merge_group'
         with:
           fetch-depth: 0
           persist-credentials: false
       - uses: pnpm/setup@v2
+        if: github.event_name != 'merge_group'
         with:
           cache: true
           install: false
           runtime: node@22.19.0
       - run: pnpm install --frozen-lockfile
+        if: github.event_name != 'merge_group'
       - name: Require a changeset for publishable package changes
+        if: github.event_name != 'merge_group'
         env:
           SKIP_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'skip-changeset') }}
           # Only the machine-owned release branch of this repository is exempt;
