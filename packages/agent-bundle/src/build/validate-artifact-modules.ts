@@ -8,7 +8,7 @@ import type { Diagnostic } from '../core/diagnostics.ts';
 import { readFileBytes, runWithPlatform } from '../effect/platform.ts';
 import { artifactDiagnostic as diagnostic, artifactDiagnosticRecoveries } from './artifact-diagnostics.ts';
 import type { ArtifactFile } from './emit.ts';
-import { readModuleImports, rememberedModuleImports, type ModuleSyntaxCheck } from './module-imports.ts';
+import { readModuleImports, type ModuleImport, type ModuleSyntaxCheck } from './module-imports.ts';
 
 const javaScriptModuleSuffix = /\.(?:m?js)$/u;
 const generatedJavaScriptRecovery = artifactDiagnosticRecoveries.AB6005;
@@ -139,17 +139,14 @@ export const validateJavaScriptModules = async (options: {
     // Keyed by the digest of the bytes just read — not the inspection's — so
     // a module rewritten between the two is never answered from the cache,
     // while the same bytes scanned earlier in this process are not lexed twice.
-    const sha256 = sha256Hex(bytes);
-    let imports = rememberedModuleImports(check, sha256);
-    if (imports === undefined) {
-      try {
-        imports = await readModuleImports(bytes.toString('utf8'), { check, sha256 });
-      } catch {
-        diagnostics.push(graphDiagnostic(path, 'has invalid syntax.'));
-        visiting.delete(path);
-        visited.add(path);
-        return;
-      }
+    let imports: readonly ModuleImport[];
+    try {
+      imports = await readModuleImports(bytes.toString('utf8'), { check, sha256: sha256Hex(bytes) });
+    } catch {
+      diagnostics.push(graphDiagnostic(path, 'has invalid syntax.'));
+      visiting.delete(path);
+      visited.add(path);
+      return;
     }
     for (const imported of imports) {
       if (imported.kind === 'meta') continue;

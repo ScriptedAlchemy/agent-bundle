@@ -30,14 +30,12 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "validate": "agent-bundle validate"
   },
-  "dependencies": {
-    "@agent-bundle/runtime": "workspace:*",
-    "react": "19.2.8",
-    "zod": "4.5.4"
-  },
   "devDependencies": {
+    "@agent-bundle/runtime": "workspace:*",
     "@rstest/core": "0.11.10",
     "@types/react": "19.2.18",
-    "agent-bundle": "workspace:*"
+    "agent-bundle": "workspace:*",
+    "react": "19.2.8",
+    "zod": "4.5.4"
   }
 }
