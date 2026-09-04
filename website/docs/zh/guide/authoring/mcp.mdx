@@ -311,9 +311,11 @@ export default () => createRscMcpServer(application, 'curator');
 自行连接的入口——在顶层构造并连接传输层、且没有默认导出的模块——保持现有行为，逐字节不变。源码校验
 会报告信息级的 `AB4730` 提示，建议升级为工厂函数写法；它永远不是错误。
 
-同一套生命周期对手写入口也是公开 API：
+同一套生命周期对手写入口也是公开 API，生成外壳在导入服务器模块之前应用的操作者 `.env` 层同样如此
+（见[安装](../distribution/installation.mdx#操作者配置已安装包的-env)）：
 
 ```ts
+import { applyOperatorEnv } from 'agent-bundle/launch-env';
 import { redirectConsoleToStderr, runStdioServer } from 'agent-bundle/mcp-entry';
 ```
 

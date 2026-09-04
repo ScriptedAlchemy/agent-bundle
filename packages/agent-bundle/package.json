@@ -68,6 +68,10 @@
       "types": "./dist/meta.d.ts",
       "import": "./dist/meta.js"
     },
+    "./launch-env": {
+      "types": "./dist/launch-env.d.ts",
+      "import": "./dist/launch-env.js"
+    },
     "./mcp-entry": {
       "types": "./dist/mcp-entry.d.ts",
       "import": "./dist/mcp-entry.js"

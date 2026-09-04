@@ -23,8 +23,10 @@ import { stableJson } from '../core/digest.ts';
 import { emitPlanEntries, resolveArtifactDestination } from './emit.ts';
 import { scanEntryExports } from './entry-exports.ts';
 import { deepFreeze } from '../core/freeze.ts';
+import { launchEnvRuntimeSpecifier } from './launch-env-shell.ts';
 import {
   cliEntryRuntimePath,
+  launchEnvRuntimePath,
   cliEntryRuntimeSpecifier,
   generatedExecutableEntrySource,
   generatedRenderedRouteWorkerSource,
@@ -425,6 +427,9 @@ export const planMcpEntriesSurface = async (
       : undefined;
   }));
   const runtimeShell = entryShells.some((shell) => shell !== undefined) ? mcpEntryRuntimePath() : undefined;
+  // The stdio lifecycle shell applies the operator `.env` layer (#469); the
+  // plain-Node module is inlined beside it.
+  const launchEnvRuntime = runtimeShell === undefined ? undefined : launchEnvRuntimePath();
   const eventIpcRuntime = options.eventHooks.length === 0 ? undefined : eventRuntimeModulePath('ipc');
   const eventProjectRuntime = options.eventHooks.length === 0 ? undefined : eventRuntimeModulePath('project');
   const serverRuntime = generatedRouteSources.some((routeSource) => routeSource !== undefined)
@@ -436,6 +441,7 @@ export const planMcpEntriesSurface = async (
       : {
         aliases: {
           [mcpEntryRuntimeSpecifier]: runtimeShell,
+          ...(launchEnvRuntime === undefined ? {} : { [launchEnvRuntimeSpecifier]: launchEnvRuntime }),
           ...(id !== eventHostId || eventIpcRuntime === undefined || eventProjectRuntime === undefined
             ? {}
             : {
@@ -486,6 +492,7 @@ export const planMcpEntriesSurface = async (
       : {
         ignoredSourcePaths: [
           ...(runtimeShell === undefined ? [] : [runtimeShell]),
+          ...(launchEnvRuntime === undefined ? [] : [launchEnvRuntime]),
           ...(eventIpcRuntime === undefined ? [] : [runtimeIgnoredRoot(eventIpcRuntime)]),
           ...(serverRuntime === undefined ? [] : [runtimeIgnoredRoot(serverRuntime)]),
         ],
@@ -560,6 +567,7 @@ export const planHooksSurface = (
   const workerArtifactEpoch = generatedRouteArtifactEpoch(options.plugin);
   const eventIpcRuntime = routeEntries.length === 0 ? undefined : eventRuntimeModulePath('ipc');
   const eventProjectRuntime = routeEntries.length === 0 ? undefined : eventRuntimeModulePath('project');
+  const launchEnvRuntime = launchEnvRuntimePath();
   const workerEntry = standaloneEventRoutes.length === 0
     ? undefined
     : {
@@ -598,14 +606,16 @@ export const planHooksSurface = (
         || entries[index]!.hook.eventRoute?.fallback === 'standalone'
         ? { rscManifest: true as const }
         : {}),
-      ...(entries[index]!.hook.eventRoute === undefined || eventIpcRuntime === undefined
-        ? {}
-        : {
-          aliases: {
+      aliases: {
+        // Every wrapper that runs plugin code applies the operator `.env` layer (#469).
+        [launchEnvRuntimeSpecifier]: launchEnvRuntime,
+        ...(entries[index]!.hook.eventRoute === undefined || eventIpcRuntime === undefined
+          ? {}
+          : {
             [eventIpcRuntimeSpecifier]: eventIpcRuntime,
             ...(eventProjectRuntime === undefined ? {} : { [eventProjectRuntimeSpecifier]: eventProjectRuntime }),
-          },
-        }),
+          }),
+      },
       source: entry.source,
       sourceInputs: entry.sourceInputs,
       virtualSource: entries[index]!.virtualSource
@@ -614,11 +624,10 @@ export const planHooksSurface = (
       })),
       ...(workerEntry === undefined ? [] : [workerEntry]),
     ],
-    ...(eventIpcRuntime === undefined
-      ? {}
-      : {
-        ignoredSourcePaths: [runtimeIgnoredRoot(eventIpcRuntime)],
-      }),
+    ignoredSourcePaths: [
+      launchEnvRuntime,
+      ...(eventIpcRuntime === undefined ? [] : [runtimeIgnoredRoot(eventIpcRuntime)]),
+    ],
     finish: async (evidence) => {
       const evidenceByPath = new Map(evidence.map((entry) => [entry.path, entry.sourceInputs]));
       return Object.freeze(compiled.map((entry, index) => Object.freeze({

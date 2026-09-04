@@ -347,9 +347,12 @@ Self-connecting entries — modules that construct and connect a transport at to
 default export — keep their existing behavior byte for byte. Source validation reports the
 informational `AB4730` nudge suggesting the factory upgrade; it is never an error.
 
-The same lifecycle is public API for hand-rolled entries:
+The same lifecycle is public API for hand-rolled entries, and so is the operator `.env` layer the
+generated shell applies before it imports the server module (see
+[Installation](../distribution/installation.mdx#operator-configuration-the-installed-packs-env)):
 
 ```ts
+import { applyOperatorEnv } from 'agent-bundle/launch-env';
 import { redirectConsoleToStderr, runStdioServer } from 'agent-bundle/mcp-entry';
 ```
 

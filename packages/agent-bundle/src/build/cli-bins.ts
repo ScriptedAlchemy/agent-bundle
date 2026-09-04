@@ -7,11 +7,13 @@ import type { Diagnostic } from '../core/diagnostics.ts';
 import type { NormalizedBinEntry, NormalizedPlugin } from '../core/types.ts';
 import { resolveArtifactDestination } from './emit.ts';
 import { runtimeIgnoredRoot, type CompiledEntry } from './entries.ts';
+import { launchEnvRuntimeSpecifier } from './launch-env-shell.ts';
 import {
   cliEntryRuntimePath,
   cliEntryRuntimeSpecifier,
   generatedCliBinEntrySource,
   generatedRenderedRouteWorkerSource,
+  launchEnvRuntimePath,
 } from './entry-shell.ts';
 import type { RslibEntry, RslibSurfacePlan } from './rslib.ts';
 
@@ -111,7 +113,8 @@ export const cliBinRslibEntries = (
   const cli = generatedCli(entry.bin);
   const workerFile = `${entry.name}-flight.mjs`;
   const entries: RslibEntry[] = [{
-    aliases: { [cliEntryRuntimeSpecifier]: cliEntryRuntimePath() },
+    // The artifact-hosted bin applies the pack's operator `.env` layer (#469).
+    aliases: { [cliEntryRuntimeSpecifier]: cliEntryRuntimePath(), [launchEnvRuntimeSpecifier]: launchEnvRuntimePath() },
     name: `bin-${entry.name}`,
     outputRelativePath: cliBinArtifactPath(entry.name),
     ...(entry.rendered ? { rscManifest: true as const } : {}),
@@ -193,7 +196,7 @@ export const planCliBinsSurface = (
           }),
       })));
     },
-    ignoredSourcePaths: [runtimeIgnoredRoot(cliEntryRuntimePath())],
+    ignoredSourcePaths: [runtimeIgnoredRoot(cliEntryRuntimePath()), launchEnvRuntimePath()],
     logLevel: 'error',
   };
 };

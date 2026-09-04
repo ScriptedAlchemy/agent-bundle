@@ -9,6 +9,7 @@ import {
   generatedRouteFlightWorkerSource,
   generatedRouteMcpEntrySource,
   generatedStdioMcpEntrySource,
+  launchEnvRuntimePath,
   mcpEntryRuntimePath,
   mcpEntryRuntimeSpecifier,
   mcpServerRuntimePath,
@@ -16,6 +17,7 @@ import {
   terminalCapabilityRuntimePath,
   terminalCapabilityRuntimeSpecifier,
 } from './entry-shell.ts';
+import { launchEnvRuntimeSpecifier } from './launch-env-shell.ts';
 import { cliBinRslibEntries, planCompiledCliBins } from './cli-bins.ts';
 import { planCompiledMcpEntries } from './entries.ts';
 import { composeMcpAppsRsbuildConfig, planCompiledMcpApps } from './mcp-apps.ts';
@@ -226,6 +228,7 @@ const mcpEntryEntries = async (
         ...(wrapped
           ? {
             aliases: {
+              [launchEnvRuntimeSpecifier]: launchEnvRuntimePath(),
               [mcpEntryRuntimeSpecifier]: mcpEntryRuntimePath(),
               ...(routeSource === undefined ? {} : { [mcpServerRuntimeSpecifier]: mcpServerRuntimePath() }),
             },
@@ -303,6 +306,7 @@ const hookEntries = (
   const outputRoot = artifactOutputToken(target);
   return entries.map((entry) => rslibInspectionEntry({
     entry: {
+      aliases: { [launchEnvRuntimeSpecifier]: launchEnvRuntimePath() },
       name: entry.relativePath.replaceAll('/', '-').replace(/\.mjs$/u, ''),
       outputRelativePath: entry.relativePath,
       source: entry.hook.source,
