@@ -129,9 +129,13 @@ const node26Flags: ReadonlySet<string> = new Set([
 it('passes --experimental-transform-types to a TypeScript child only where the binary accepts it', () => {
   expect(typeScriptTransformFlags(node22Flags)).toEqual(['--experimental-transform-types']);
   expect(typeScriptTransformFlags(node24Flags)).toEqual(['--experimental-transform-types']);
-  // Node 26 strips types unflagged and rejects the removed flag as a bad option.
-  expect(typeScriptTransformFlags(node26Flags)).toEqual([]);
+  // Node 26 rejects the removed flag as a bad option; it strips types by
+  // default, and the stable flag names that explicitly so an inherited
+  // NODE_OPTIONS=--no-strip-types cannot switch it off.
+  expect(typeScriptTransformFlags(node26Flags)).toEqual(['--strip-types']);
   expect(Object.isFrozen(typeScriptTransformFlags(node26Flags))).toBe(true);
+  // A binary that accepts neither gets no flag rather than a bad option.
+  expect(typeScriptTransformFlags(new Set(['--input-type']))).toEqual([]);
 });
 
 it('defaults to the flags this process accepts, so a child over process.execPath never gets a bad option', () => {

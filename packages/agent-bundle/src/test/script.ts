@@ -368,8 +368,8 @@ const runPlainScript = async (
   signal.throwIfAborted();
   // A generated executable runs under plain `node`; the test runner's own
   // flags are not inherited, only the TypeScript loading the source needs —
-  // the transform flag where this Node still has one (22, 24), nothing on
-  // Node 26, which rejects the old flag and strips types unflagged.
+  // the transform flag where this Node still has one (22, 24), `--strip-types`
+  // on Node 26, which rejects the old flag and only strips types.
   const child = spawn(process.execPath, [
     ...typeScriptTransformFlags(),
     '--disable-warning=ExperimentalWarning',
