@@ -11,6 +11,7 @@ import {
 } from '@shikijs/transformers';
 import { generatedReference } from './plugins/generated-reference.ts';
 import { cleanGeneratedApiMarkdown, mirrorApiLocale } from './plugins/mirror-api-locale.ts';
+import { rehypeTableCellBreaks } from './plugins/rehype-table-cell-breaks.ts';
 
 const websiteDir = import.meta.dirname;
 const docsDir = path.join(websiteDir, 'docs');
@@ -97,6 +98,8 @@ export default defineConfig({
       checkDeadLinks: { excludes: isGeneratedLlmsTarget },
       checkAnchors: true,
     },
+    // Long keys, paths, and URLs in table cells wrap instead of widening the table.
+    rehypePlugins: [rehypeTableCellBreaks],
     image: {
       checkDeadImages: true,
     },
