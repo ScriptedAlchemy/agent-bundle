@@ -275,7 +275,7 @@ start().catch((error) => {
 
 const HOST_STYLE = `
 :root { color-scheme: light dark; font: 14px/1.4 system-ui, sans-serif; }
-html, body { height: 100%; margin: 0; }
+html, body { height: 100%; margin: 0; overflow: hidden; }
 body { display: flex; flex-direction: column; background: Canvas; color: CanvasText; }
 header { align-items: center; border-bottom: 1px solid color-mix(in srgb, CanvasText 15%, transparent); display: flex; gap: 12px; padding: 8px 16px; }
 header h1 { font-size: 15px; font-weight: 600; margin: 0; }
@@ -289,7 +289,7 @@ header h1 { font-size: 15px; font-weight: 600; margin: 0; }
 #consent li { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; }
 #consent code { font-size: 12px; opacity: 0.8; overflow: hidden; text-overflow: ellipsis; max-width: 40ch; white-space: nowrap; }
 #frame-host { flex: 1; min-height: 0; }
-#frame-host iframe { border: 0; height: 100%; width: 100%; }
+#frame-host iframe { border: 0; display: block; height: 100%; width: 100%; }
 #fallback { overflow: auto; padding: 16px; }
 #fallback pre { background: color-mix(in srgb, CanvasText 6%, transparent); overflow: auto; padding: 8px; }
 `;
