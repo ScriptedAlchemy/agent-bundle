@@ -18,6 +18,7 @@ export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/artifact-validator.test.ts',
   'packages/agent-bundle/tests/browser-stdio-bridge-spike.test.ts',
   'packages/agent-bundle/tests/build.test.ts',
+  'packages/agent-bundle/tests/claude-plugin-validate-acceptance.test.ts',
   'packages/agent-bundle/tests/cli-routes-build.test.ts',
   'packages/agent-bundle/tests/cli.test.ts',
   'packages/agent-bundle/tests/dev-contract-adoption.test.ts',

@@ -259,11 +259,31 @@ export const publicHostCacheRoot = (
   : join(environment['CODEX_HOME'] ?? join(home, '.codex'), 'plugins', 'cache');
 
 export interface PublicHostInstalledEntry {
+  /**
+   * Claude only: the host's own load errors for this copy, verbatim from the
+   * row's `errors` array (present and nonempty only when Claude Code refused
+   * the plugin, e.g. "Hook load failed: Duplicate hooks file detected ...").
+   * A refused copy is installed but contributes no hooks, MCP servers, or
+   * skills to a session, so callers must not report it as healthy.
+   */
+  readonly errors?: readonly string[];
   readonly installPath: string;
   /** Claude only: the scope this copy is installed at. */
   readonly scope?: string;
   readonly version: string;
 }
+
+/**
+ * Reads a Claude `plugin list --json` row's `errors` array. Healthy rows omit
+ * the key (Claude Code 2.1.259); a refused row carries nonempty strings.
+ * Anything else is treated as "no readable errors" rather than a failure, so
+ * an unexpected shape cannot mask the row as uninstalled.
+ */
+export const claudePluginRowErrors = (row: Readonly<Record<string, unknown>>): readonly string[] => {
+  const errors = row['errors'];
+  if (!Array.isArray(errors)) return [];
+  return Object.freeze(errors.filter((error): error is string => typeof error === 'string' && error.trim().length > 0));
+};
 
 /**
  * The host's own answer to "is this plugin installed, and where": usable, or
@@ -323,7 +343,13 @@ export const parsePublicHostInventory = (
         };
       }
       if (options.scope !== undefined && row['scope'] !== options.scope) continue;
-      entries.push({ installPath: row['installPath'], scope: row['scope'], version: row['version'] });
+      const errors = claudePluginRowErrors(row);
+      entries.push({
+        ...(errors.length === 0 ? {} : { errors }),
+        installPath: row['installPath'],
+        scope: row['scope'],
+        version: row['version'],
+      });
     }
     return { entries, status: 'available' };
   }
@@ -373,6 +399,26 @@ const readPublicHostInventory = async (
     scope,
   });
 };
+
+/**
+ * A copy the host lists with load errors is installed but refused: Claude Code
+ * drops its hooks, MCP servers, and skills from every session. Neither
+ * "already installed" nor a fresh install may report it as healthy (`AB7006`).
+ */
+const refusedInstallFailure = (
+  host: Exclude<InstallHost, 'cursor'>,
+  id: string,
+  entry: PublicHostInstalledEntry,
+  phase: 'existing' | 'installed',
+): DiagnosticError => failure(
+  'AB7006',
+  `${host} refused to load ${id} (version ${entry.version}) at ${JSON.stringify(entry.installPath)}` +
+    `${entry.scope === undefined ? '' : ` (scope ${entry.scope})`}` +
+    `${phase === 'installed' ? ' after installation' : ''}: ${(entry.errors ?? []).join(' | ')} ` +
+    `The copy is installed but contributes no hooks, MCP servers, or skills; fix the artifact (\`${host} plugin list --json\` ` +
+    'shows the host\'s message under `errors`), rebuild, and rerun `agent-bundle install` with `--replace`.',
+  host,
+);
 
 const publicHostUninstallArguments = (
   host: Exclude<InstallHost, 'cursor'>,
@@ -441,6 +487,8 @@ const installPublicCli = async (
     }
     const sameVersion = entry.version === identity.version;
     if (installed !== undefined && sameVersion && installed.hash === artifact.hash) {
+      // Byte-identical, so reinstalling cannot help: the host's refusal is the artifact's own defect.
+      if (entry.errors !== undefined && entry.errors.length > 0) throw refusedInstallFailure(host, id, entry, 'existing');
       return { ...base, destination: entry.installPath, state: 'already-installed' };
     }
     if (!sameVersion && options.replace !== true) {
@@ -474,6 +522,17 @@ const installPublicCli = async (
   await runHostCommand(runner, identity, host, host === 'claude'
     ? ['plugin', 'install', id, '--scope', scope]
     : ['plugin', 'add', id]);
+  if (host === 'claude') {
+    // `claude plugin install` exits 0 for a plugin Claude then refuses to load (#464): the load verdict
+    // is only in `plugin list --json` `errors`, so verify the fresh row before reporting success. An
+    // unusable listing leaves the result unverified rather than failing an install the host accepted.
+    const verified = await readPublicHostInventory(runner, identity, host, scope, environment, home);
+    if (verified.status === 'available') {
+      const refused = verified.entries.find((candidate) =>
+        candidate.version === identity.version && candidate.errors !== undefined && candidate.errors.length > 0);
+      if (refused !== undefined) throw refusedInstallFailure(host, id, refused, 'installed');
+    }
+  }
   return {
     ...base,
     ...(destination === undefined ? {} : { destination }),

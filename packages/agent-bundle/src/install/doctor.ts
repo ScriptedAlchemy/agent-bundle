@@ -25,6 +25,7 @@ import type {
 import { runBoundedChildProcess } from '../host-contracts/process.ts';
 import { requestEventRuntimeStatus } from '../events/ipc.ts';
 import {
+  claudePluginRowErrors,
   parsePublicHostInventory,
   publicHostCacheRoot,
   treeHash,
@@ -94,6 +95,12 @@ export interface DoctorFinding {
   readonly commit?: string;
   readonly durableState?: DoctorDurableStateReport;
   readonly entry?: string;
+  /**
+   * The host's own load errors, verbatim (`claude plugin list --json` `errors`);
+   * present only when the host refused to load this plugin, which also sets
+   * `state: 'failed'`.
+   */
+  readonly errors?: readonly string[];
   /** Cursor plugin hook registration proof (`.cursor-plugin/plugin.json` installs only). */
   readonly hooks?: CursorHooksRegistration;
   readonly marketplace?: string;
@@ -143,6 +150,7 @@ export interface DoctorInventory {
 export type DoctorInstallComparisonStatus =
   | 'current'
   | 'foreign'
+  | 'load-failed'
   | 'not-installed'
   | 'stale'
   | 'unknown'
@@ -152,11 +160,14 @@ export type DoctorInstallComparisonStatus =
  * Installed copy versus the built artifact: `current` (same content),
  * `stale` (same version, different content), `version-mismatch`, `foreign`
  * (a directory at the install path that is not an agent-bundle install of
- * this plugin), `not-installed`, or `unknown` when the host inventory could
- * not be read.
+ * this plugin), `load-failed` (the host lists the copy but refused to load
+ * it; `errors` carries its message), `not-installed`, or `unknown` when the
+ * host inventory could not be read.
  */
 export interface DoctorInstallComparison {
   readonly artifactContentHash: string;
+  /** Host load errors for a `load-failed` copy, verbatim from `claude plugin list --json`. */
+  readonly errors?: readonly string[];
   readonly installedContentHash?: string;
   readonly installedPath?: string;
   readonly installedVersion?: string;
@@ -883,11 +894,15 @@ const publicHostInventory = (
       ) {
         return unknown('a row lacks id, installPath, scope, or version');
       }
+      // A row with `errors` is installed but refused by Claude Code (no hooks, MCP servers, or skills
+      // reach the session); the inventory says so instead of listing it as a healthy install.
+      const errors = claudePluginRowErrors(row);
       findings.push({
         entry: `${row['id']} (${row['scope']})`,
+        ...(errors.length === 0 ? {} : { errors }),
         name: row['id'].slice(0, row['id'].indexOf('@') === -1 ? undefined : row['id'].indexOf('@')),
         path: row['installPath'],
-        state: 'installed',
+        state: errors.length === 0 ? 'installed' : 'failed',
         version: row['version'],
       });
     }
@@ -971,6 +986,27 @@ const publicHostReplaceRecipe = (host: Exclude<DoctorHost, 'cursor'>, scopeArgum
     '`codex plugin remove` + `codex plugin add`.';
 
 /**
+ * `AB7325`: the host lists the plugin but refused to load it. The message
+ * carries the host's own `errors` verbatim (e.g. Claude Code's "Hook load
+ * failed: Duplicate hooks file detected ..."), since that text is the only
+ * place the refusal surfaces — `plugin install`, `plugin validate --strict`,
+ * and `plugin details` all accept a plugin Claude Code then refuses.
+ */
+const hostLoadFailureDiagnostic = (
+  host: Exclude<DoctorHost, 'cursor'>,
+  copy: string,
+  errors: readonly string[],
+  replaceHint = '',
+): Diagnostic => diagnostic(
+  'AB7325',
+  `${host} refused to load ${copy}: ${errors.join(' | ')}`,
+  `Fix the artifact so \`${host} plugin list --json\` reports no \`errors\` for it, rebuild, and rerun ` +
+    `\`agent-bundle install ${host} --from <bundle-dir>${replaceHint} --replace\`.`,
+  'error',
+  host,
+);
+
+/**
  * Compares the copy a public host CLI caches for this plugin against the
  * built artifact. Unusable inventories degrade to `unknown` (Doctor never
  * guesses a cache path without the host confirming the install).
@@ -1006,6 +1042,20 @@ const publicHostInstallComparison = async (
   for (const entry of inventory.entries) {
     const scoped = entry.scope === undefined ? '' : ` (scope ${entry.scope})`;
     const replaceHint = entry.scope === undefined ? '' : ` --scope ${entry.scope}`;
+    if (entry.errors !== undefined && entry.errors.length > 0) {
+      // The host lists the copy but refused to load it: content comparison is moot because none of the
+      // plugin reaches a session. Report the host's own message rather than `current`/`stale` (#464).
+      comparisons.push(Object.freeze({
+        artifactContentHash: artifact.hash,
+        errors: entry.errors,
+        installedPath: entry.installPath,
+        installedVersion: entry.version,
+        ownership: 'host',
+        status: 'load-failed',
+      }));
+      diagnostics.push(hostLoadFailureDiagnostic(host, `${identity.name}@${entry.version} at ${entry.installPath}${scoped}`, entry.errors, replaceHint));
+      continue;
+    }
     let installed: TreeInventory;
     try {
       installed = await treeInventory(entry.installPath);
@@ -1083,6 +1133,7 @@ const publicHostInstallComparison = async (
     stale: 3,
     'version-mismatch': 4,
     foreign: 5,
+    'load-failed': 6,
   };
   const worst = comparisons.reduce((left, right) => severity[right.status] > severity[left.status] ? right : left);
   return { comparison: worst, diagnostics: freezeDiagnostics(diagnostics) };
@@ -1338,13 +1389,12 @@ const claudeRegistration = async (
       finding: Object.freeze({ ...base, state: 'failed' }),
     };
   }
-  const entries = inventory;
-  if (!entries.some((entry) =>
+  const row = inventory.find((entry): entry is Record<string, unknown> =>
     entry !== null &&
     typeof entry === 'object' &&
     !Array.isArray(entry) &&
-    (entry as { id?: unknown }).id === `${identity.name}@inline`
-  )) {
+    (entry as { id?: unknown }).id === `${identity.name}@inline`);
+  if (row === undefined) {
     return {
       diagnostics: freezeDiagnostics([diagnostic(
         'AB7311',
@@ -1354,6 +1404,15 @@ const claudeRegistration = async (
         'claude',
       )]),
       finding: Object.freeze({ ...base, state: 'unregistered' }),
+    };
+  }
+  // Claude Code lists a plugin it refused to load (the row keeps `enabled: true`) and reports why under
+  // `errors`; that is the only surface where e.g. "Duplicate hooks file detected" appears (#464).
+  const errors = claudePluginRowErrors(row);
+  if (errors.length > 0) {
+    return {
+      diagnostics: freezeDiagnostics([hostLoadFailureDiagnostic('claude', `${identity.name}@${identity.version} from ${identity.bundleRoot}`, errors)]),
+      finding: Object.freeze({ ...base, errors, state: 'failed' }),
     };
   }
   return { diagnostics: Object.freeze([]), finding: Object.freeze({ ...base, state: 'registered' }) };

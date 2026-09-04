@@ -307,6 +307,9 @@ const describeInstallComparison = (comparison: DoctorInstallComparison): string 
       return `version mismatch${installed}`;
     case 'foreign':
       return `foreign install${installed}`;
+    case 'load-failed':
+      return `load failed (installed ${comparison.installedVersion ?? 'unknown version'}, refused by the host: ` +
+        `${(comparison.errors ?? []).join(' | ')})`;
     case 'not-installed':
       return 'not installed';
     case 'unknown':

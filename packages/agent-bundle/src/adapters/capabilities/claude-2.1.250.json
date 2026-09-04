@@ -76,6 +76,13 @@
   },
   "hooks": {
     "config": "hooks/hooks.json",
+    "configAutoLoaded": true,
+    "manifestField": {
+      "name": "hooks",
+      "semantics": "additional",
+      "types": ["string", "array", "object"],
+      "refusesAutoLoadedPath": true
+    },
     "events": {
       "agentStart": "SubagentStart",
       "agentStop": "SubagentStop",
@@ -852,6 +859,9 @@
       "2026-09-01: https://code.claude.com/docs/en/plugin-dependencies requires cross-marketplace targets in `allowCrossMarketplaceDependenciesOn` on the root marketplace; only the root allowlist is consulted, trust does not chain, and users may manually install a blocked dependency first.",
       "2026-09-01: https://code.claude.com/docs/en/plugin-dependencies documents intersection of constraints from multiple dependents, constrained auto-update, transitive enable, disable refusal while depended upon, release of constraints after uninstall, and pruning only auto-installed orphan dependencies.",
       "2026-09-01: https://code.claude.com/docs/en/plugin-dependencies exposes dependency-unsatisfied, range-conflict, dependency-version-unsatisfied, and no-matching-tag in `claude plugin list --json` errors.",
+      "2026-09-03: the plugins reference (\"Component path fields\", \"File locations reference\") documents `hooks/hooks.json` as the default hook location and the manifest `hooks` field (string|array|object) as \"Hook config paths or inline config\" with the example `./my-extra-hooks.json`. Claude Code 2.1.250 (the pinned revision), 2.1.251, 2.1.257, and 2.1.259 all refuse a plugin whose manifest names the auto-loaded file again (probed 2026-09-03 with `claude --plugin-dir <plugin> plugin list --json`; the rule is not a 2.1.255 regression as ScriptedAlchemy/agent-bundle#462 assumed): `claude plugin list --json` carries `errors: [\"Hook load failed: Duplicate hooks file detected: ./hooks/hooks.json resolves to already-loaded file <plugin>/hooks/hooks.json. The standard hooks/hooks.json is loaded automatically, so manifest.hooks should only reference additional hook files.\"]`, the human listing prints `Status: ✘ failed to load`, and no hook, MCP server, or skill from that plugin reaches the session. `claude plugin validate --strict` and `claude plugin details` accept the same manifest, so the list verb is the only surface that exposes the refusal (#463).",
+      "2026-09-03: `claude plugin list --json` (2.1.259) rows carry `id`, `version`, `scope`, `enabled`, `installPath`, `installedAt`, `lastUpdated`, optional `mcpServers`, and — only for a plugin Claude Code failed to load — `errors` as a nonempty array of strings; healthy rows omit the key. `--plugin-dir` rows use the `<name>@inline` id and carry the same `errors` array (#464).",
+      "2026-09-03: Claude Code 2.1.259 loads exactly one hook set (`plugin details` reports `Hooks (1) SessionStart`) for a plugin that ships `hooks/hooks.json` beside `hooks/hooks-cursor.json` with no manifest `hooks` key, so the unified bundle needs no manifest pointer to keep Claude Code off the Cursor-format document.",
       "2026-09-01: Local host proof against the observed Claude Code 2.1.257 binary (newer than the pinned 2.1.250 table): `claude plugin validate --strict` accepts an emitted plugin manifest declaring one bare dependency and one `{name, version}` dependency object and prints \"Validation passed\" (host-adapters.native.test.ts).",
       "2026-09-02 (retrieved 2026-09-02): https://code.claude.com/docs/en/plugin-marketplaces documents required top-level marketplace name, owner, and plugins plus optional $schema, description, version, metadata.pluginRoot, allowCrossMarketplaceDependenciesOn, and renames; owner requires name and optionally accepts email and url.",
       "2026-09-02 (retrieved 2026-09-02): https://code.claude.com/docs/en/plugin-marketplaces documents plugin-entry name and source plus standard metadata, category, tags, strict, relevance, defaultEnabled, component configuration, headers, and headersHelper. Agent Bundle keeps generated `./` as the default and lets the authored plugin overlay record a distributed relative, github, git URL, git-subdir, npm, archive, or command source.",

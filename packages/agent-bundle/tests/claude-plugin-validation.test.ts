@@ -82,6 +82,76 @@ const pluginWithNumberOption = async (
   return root;
 };
 
+const pluginWithHooksField = async (hooks: unknown): Promise<string> => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-claude-hooks-field-'));
+  fixtureRoots.push(root);
+  await mkdir(join(root, '.claude-plugin'), { recursive: true });
+  await mkdir(join(root, 'hooks'), { recursive: true });
+  await writeFile(join(root, 'hooks', 'hooks.json'), `${JSON.stringify({
+    hooks: { SessionStart: [{ hooks: [{ command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/session-start.mjs"', type: 'command' }] }] },
+  })}\n`);
+  await writeFile(join(root, '.claude-plugin', 'plugin.json'), `${JSON.stringify({
+    author: { name: 'cargo-hauler' },
+    description: 'Coalesce, schedule, and stream cargo.',
+    ...(hooks === undefined ? {} : { hooks }),
+    name: 'cargo-hauler',
+    version: '0.4.1',
+  })}\n`);
+  return root;
+};
+
+// Claude Code loads `hooks/hooks.json` on its own; a manifest `hooks` that names it again is refused
+// at load time ("Duplicate hooks file detected"), which `claude plugin validate` does not catch (#463).
+it('rejects a manifest hooks field that names the auto-loaded hooks/hooks.json', async () => {
+  const pluginDirectory = await pluginWithHooksField('./hooks/hooks.json');
+
+  const findings = await validateClaudePluginFiles({ pluginDirectory, target: 'claude' });
+  expect(findings.length).toBeGreaterThan(0);
+  expect(findings.every((finding) => finding.code === 'AB6012')).toBe(true);
+  expect(findings).toContainEqual(expect.objectContaining({
+    message: expect.stringContaining('".claude-plugin/plugin.json" is invalid for schema "plugin" at /hooks: must NOT be valid'),
+  }));
+  const arrayFindings = await validateClaudePluginFiles({
+    pluginDirectory: await pluginWithHooksField(['./hooks/hooks.json']),
+    target: 'claude',
+  });
+  expect(arrayFindings).toContainEqual(expect.objectContaining({
+    code: 'AB6012',
+    message: expect.stringContaining('at /hooks/0: must NOT be valid'),
+  }));
+});
+
+it('accepts the default-location hook document without a manifest hooks field', async () => {
+  const pluginDirectory = await pluginWithHooksField(undefined);
+
+  await expect(validateClaudePluginFiles({ pluginDirectory, target: 'claude' })).resolves.toEqual([]);
+});
+
+it('accepts the documented additional hook config forms on the manifest hooks field', async () => {
+  for (const hooks of [
+    './my-extra-hooks.json',
+    ['./hooks/security-hooks.json', './hooks/extra.json'],
+    { hooks: { Stop: [{ hooks: [{ command: 'echo done', type: 'command' }] }] } },
+  ]) {
+    await expect(validateClaudePluginFiles({
+      pluginDirectory: await pluginWithHooksField(hooks),
+      target: 'claude',
+    })).resolves.toEqual([]);
+  }
+  // No `./` prefix, and every alias of the auto-loaded file that a literal exclusion would miss: the
+  // pattern admits only normalized paths (no `.`/`..`/empty segments), so `./hooks/./hooks.json` and
+  // `./hooks/../hooks/hooks.json` cannot pass the schema and then be refused by Claude Code.
+  for (const alias of ['hooks/extra.json', './hooks/./hooks.json', './hooks/../hooks/hooks.json', './hooks//hooks.json', './hooks/hooks.json/']) {
+    await expect(validateClaudePluginFiles({
+      pluginDirectory: await pluginWithHooksField(alias),
+      target: 'claude',
+    }), alias).resolves.toContainEqual(expect.objectContaining({
+      code: 'AB6012',
+      message: expect.stringContaining('at /hooks: must match pattern'),
+    }));
+  }
+});
+
 it('rejects a numeric userConfig minimum greater than its maximum', async () => {
   const pluginDirectory = await pluginWithNumberOption({ max: 5, min: 10 });
 

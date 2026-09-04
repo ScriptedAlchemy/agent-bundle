@@ -74,6 +74,13 @@ claude --plugin-dir artifact/claude
 claude --plugin-dir artifact/claude plugin list --json
 ```
 
+这份列表才是加载结论，而且比校验更严格：`claude plugin validate --strict` 会接受一份 Claude Code 随后在加载时
+拒绝的清单（例如 `hooks` 字段指向自动加载的 `hooks/hooks.json`——"Duplicate hooks file detected"）。被拒绝插件
+所在的行带有 `errors` 数组，内含宿主的消息；健康的行没有 `errors` 键。`agent-bundle doctor --host claude --from
+<bundle-dir>` 会在 `--plugin-dir` 注册证明与已安装副本两处读取该数组，并报告为 `AB7325`（`load-failed`）；当已安装
+副本带有该数组时，`agent-bundle install claude` 以 `AB7006` 失败。被固定的 Claude `plugin` schema 也会预先拒绝
+`hooks: "./hooks/hooks.json"`（`AB6012`），因为清单中的该字段只用于*额外的* hook 文件。
+
 ## Codex 与 Cursor：被固定的 schema
 
 Codex 与 Cursor 目前都没有发布插件校验的开发者动词，因此 Agent Bundle 用自己 vendored 的、被固定的
