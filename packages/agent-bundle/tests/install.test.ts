@@ -843,6 +843,73 @@ it('fails closed when Cursor is not detected in the selected home', async () => 
   }
 });
 
+it('reports a Cursor home it cannot inspect as AB7004 for the cursor host, like every other Cursor install failure', async () => {
+  if (process.getuid?.() === 0) return; // root ignores directory modes; the lstat cannot be made to fail here.
+  const fixture = await createHostBundle('cursor');
+  const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
+  const home = join(parent, 'home');
+  await mkdir(join(home, '.cursor'), { recursive: true });
+  await chmod(home, 0o000);
+  try {
+    const error = await installBundle({
+      from: fixture.from,
+      home,
+      host: 'cursor',
+      scope: 'user',
+    }).catch((failure: unknown) => failure);
+
+    expect(error).toBeInstanceOf(DiagnosticError);
+    expect((error as DiagnosticError).diagnostics).toMatchObject([{
+      code: 'AB7004',
+      message: expect.stringContaining('EACCES'),
+      severity: 'error',
+      target: 'cursor',
+    }]);
+  } finally {
+    await chmod(home, 0o755);
+    await Promise.all([
+      rm(fixture.cleanupRoot, { force: true, recursive: true }),
+      rm(parent, { force: true, recursive: true }),
+    ]);
+  }
+});
+
+it('removes the staging parent after a failed replacement and re-raises the refusal as AB7004', async () => {
+  const fixture = await createHostBundle('cursor');
+  const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
+  const installRoot = join(home, '.cursor', 'plugins', 'local');
+  await mkdir(installRoot, { recursive: true });
+  try {
+    const first = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
+    expect(first.state).toBe('installed');
+    const destination = first.destination;
+    if (destination === undefined) throw new Error('Expected a local Cursor install destination.');
+    // The rebuilt artifact ships a new file exactly where the installed copy holds an unowned one, so
+    // the swap is staged in full and then refused by replaceInstalledTree.
+    await mkdir(join(fixture.bundleRoot, 'skills', 'new'), { recursive: true });
+    await writeFile(join(fixture.bundleRoot, 'skills', 'new', 'SKILL.md'), '# new\n');
+    await mkdir(join(destination, 'skills', 'new'), { recursive: true });
+    await writeFile(join(destination, 'skills', 'new', 'SKILL.md'), '# operator-owned\n');
+    const error = await installBundle({ from: fixture.from, home, host: 'cursor', replace: true, scope: 'user' })
+      .catch((failure: unknown) => failure);
+
+    expect(error).toBeInstanceOf(DiagnosticError);
+    expect((error as DiagnosticError).diagnostics).toMatchObject([{
+      code: 'AB7004',
+      message: expect.stringContaining('Refusing to overwrite unowned files'),
+      target: 'cursor',
+    }]);
+    // The refusal happened after staging: the staging parent is gone and the installed copy is untouched.
+    expect(await readdir(installRoot)).toEqual([destination.slice(installRoot.length + 1)]);
+    await expect(readFile(join(destination, 'skills', 'new', 'SKILL.md'), 'utf8')).resolves.toBe('# operator-owned\n');
+  } finally {
+    await Promise.all([
+      rm(fixture.cleanupRoot, { force: true, recursive: true }),
+      rm(home, { force: true, recursive: true }),
+    ]);
+  }
+});
+
 it('refreshes a receipt whose inventory drifted even when the owned bytes hash equal, and restructures owned paths', async () => {
   const fixture = await createHostBundle('cursor');
   const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));

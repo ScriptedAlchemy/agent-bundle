@@ -9,7 +9,7 @@ import { DiagnosticError } from '../core/diagnostics.ts';
 import { errorMessage, isErrno } from '../core/errors.ts';
 import { exists } from '../core/paths.ts';
 import { runPromise } from '../effect/boundary.ts';
-import { liftPromise } from '../effect/lift.ts';
+import { liftPromise, type LiftedRejection } from '../effect/lift.ts';
 import { claudePluginRowErrors } from '../host-contracts/claude-plugin-validation.ts';
 import { stageCursorMarketplace } from './cursor-marketplace.ts';
 import {
@@ -854,16 +854,58 @@ const installCursorMarketplace = async (
   }
 };
 
-const installCursor = async (
+/**
+ * The Cursor installers' failure contract: a `DiagnosticError` they raised
+ * passes through, anything else a leaf helper threw becomes `AB7004` for the
+ * host. The public-CLI installers deliberately do *not* share it — a raw leaf
+ * failure (an unwritable receipt store, say) re-raises verbatim after their
+ * host-verb rollback, and `tests/install.test.ts` pins that.
+ */
+const installFailure = (host: InstallHost) => (error: unknown): DiagnosticError =>
+  error instanceof DiagnosticError ? error : failure('AB7004', errorMessage(error), host);
+
+/**
+ * Stage, apply, and always remove the staging parent. The removal must
+ * *propagate* — a failed cleanup replaces the apply outcome, exactly as the
+ * former `try`/`finally` did — so this is an explicit exit sequence, not a
+ * scope finalizer. The FileSystem lane owns turning the staging parent into a
+ * scoped temporary directory.
+ */
+const withStagedArtifact = <A>(
+  stage: () => Promise<Awaited<ReturnType<typeof stageArtifact>>>,
+  apply: (staged: Awaited<ReturnType<typeof stageArtifact>>) => Promise<A>,
+): Effect.Effect<A, LiftedRejection> =>
+  Effect.gen(function*() {
+    const staged = yield* liftPromise(stage);
+    const applied = yield* Effect.exit(liftPromise(() => apply(staged)));
+    yield* liftPromise(() => rm(staged.parent, { force: true, recursive: true }));
+    return yield* applied;
+  });
+
+/**
+ * The local Cursor install as an Effect program: only the leaf I/O is lifted
+ * (root resolution, inventories, `exists`, `mkdir`, staging, receipts), the
+ * decision logic stays synchronous inside the fiber, and every failure leaves
+ * on the typed channel as a `DiagnosticError`.
+ */
+const installCursor = Effect.fnUntraced(function*(
   options: InstallBundleOptions,
   identity: PluginIdentity,
   scope: InstallScope,
-): Promise<InstallResult> => {
+): Effect.fn.Return<InstallResult, DiagnosticError> {
   if (scope !== 'user') {
-    throw failure('AB7003', `Cursor plugin installation supports only user scope, not ${scope}.`, 'cursor');
+    return yield* Effect.fail(
+      failure('AB7003', `Cursor plugin installation supports only user scope, not ${scope}.`, 'cursor'),
+    );
   }
-  if (options.mode === 'marketplace') return installCursorMarketplace(options, identity);
-  const cursorRoot = await resolveCursorRoot(options);
+  if (options.mode === 'marketplace') {
+    return yield* liftPromise(() => installCursorMarketplace(options, identity)).pipe(
+      Effect.mapError(installFailure('cursor')),
+    );
+  }
+  const cursorRoot = yield* liftPromise(() => resolveCursorRoot(options)).pipe(
+    Effect.mapError(installFailure('cursor')),
+  );
   const installRoot = join(cursorRoot, 'plugins', 'local');
   const destination = join(installRoot, identity.plugin);
   const base = {
@@ -875,15 +917,15 @@ const installCursor = async (
     receipt: join(destination, installReceiptFile),
     version: identity.version,
   } as const;
-  try {
-    const artifact = await treeInventory(identity.bundleRoot);
+  const program = Effect.gen(function*() {
+    const artifact = yield* liftPromise(() => treeInventory(identity.bundleRoot));
     // The receipt records which host directories this installer created on the way to the plugin root
     // (a fresh Cursor home has no `plugins/local`), so uninstall can prune exactly those and no more.
     const hostDirectories: string[] = [];
     for (const relativePath of ['plugins', 'plugins/local']) {
-      if (!await exists(join(cursorRoot, relativePath))) hostDirectories.push(relativePath);
+      if (!(yield* liftPromise(() => exists(join(cursorRoot, relativePath))))) hostDirectories.push(relativePath);
     }
-    await mkdir(installRoot, { recursive: true });
+    yield* liftPromise(() => mkdir(installRoot, { recursive: true }));
     const receipt: InstallReceiptIdentity = {
       host: 'cursor',
       hostDirectories,
@@ -893,94 +935,93 @@ const installCursor = async (
       scope: 'user',
       version: identity.version,
     };
-    if (!await exists(destination)) {
-      const staged = await stageArtifact({ artifactRoot: identity.bundleRoot, destination, receipt, stageRoot: installRoot });
-      try {
-        await rename(staged.root, destination);
-      } finally {
-        await rm(staged.parent, { force: true, recursive: true });
-      }
-      return { ...base, contentHash: artifact.hash, state: 'installed' };
+    if (!(yield* liftPromise(() => exists(destination)))) {
+      yield* withStagedArtifact(
+        () => stageArtifact({ artifactRoot: identity.bundleRoot, destination, receipt, stageRoot: installRoot }),
+        (staged) => rename(staged.root, destination),
+      );
+      return { ...base, contentHash: artifact.hash, state: 'installed' } as const;
     }
     if (resolve(identity.bundleRoot) === destination) {
-      return { ...base, contentHash: artifact.hash, state: 'already-installed' };
+      return { ...base, contentHash: artifact.hash, state: 'already-installed' } as const;
     }
-    const compared = await compareInstalledTree({
+    const installedManifest = yield* liftPromise(() => readInstalledManifest(destination));
+    const compared = yield* liftPromise(() => compareInstalledTree({
       artifact,
       destination,
-      installedManifest: await readInstalledManifest(destination),
+      installedManifest,
       plugin: identity.plugin,
       version: identity.version,
-    });
+    }));
     // `uninstall --keep-data` leaves a shell holding only state/ (plus, normally, a remnant receipt that owns no
     // files): a reinstall fills it back in around the preserved durable state instead of refusing it as foreign
     // (nothing in it is anyone's plugin content) and reports an install, not a replacement.
     const remnant = compared.ownership === 'receipt' && compared.receipt !== undefined
       ? isRemnantReceipt(compared.receipt)
-      : compared.ownership === 'foreign' && await isRuntimeStateRemnant(destination);
+      : compared.ownership === 'foreign' && (yield* liftPromise(() => isRuntimeStateRemnant(destination)));
     const comparison: InstalledTreeComparison = remnant && compared.ownership === 'foreign'
       ? { ...compared, ownership: 'legacy', status: 'stale' }
       : compared;
     if (comparison.status === 'current') {
       if (comparison.ownership === 'legacy' && options.replace === true) {
         // Adoption created nothing: the legacy copy's directories are not the installer's to prune.
-        await writeInstallReceipt(destination, createInstallReceipt({
+        yield* liftPromise(() => writeInstallReceipt(destination, createInstallReceipt({
           ...receipt,
           directories: [],
           hostDirectories: [],
           inventory: artifact,
-        }));
-        return { ...base, contentHash: artifact.hash, state: 'adopted' };
+        })));
+        return { ...base, contentHash: artifact.hash, state: 'adopted' } as const;
       }
       // A receipt-managed identical copy whose receipt predates format/2 is upgraded in place: the
       // lifecycle fields are synthesized exactly as the reader migrates them, and nothing else changes.
       if (comparison.ownership === 'receipt' && comparison.receipt?.migratedFrom !== undefined) {
-        await writeInstallReceipt(destination, createInstallReceipt({
+        const previous = comparison.receipt;
+        yield* liftPromise(() => writeInstallReceipt(destination, createInstallReceipt({
           ...receipt,
-          directories: comparison.receipt.directories,
-          hostDirectories: comparison.receipt.hostDirectories,
-          installedAt: comparison.receipt.installedAt,
+          directories: previous.directories,
+          hostDirectories: previous.hostDirectories,
+          installedAt: previous.installedAt,
           inventory: artifact,
           updatedAt: new Date().toISOString(),
-        }));
+        })));
       }
-      return { ...base, contentHash: artifact.hash, state: 'already-installed' };
+      return { ...base, contentHash: artifact.hash, state: 'already-installed' } as const;
     }
     const replaceable = (comparison.status === 'stale' && comparison.ownership === 'receipt') || remnant
       ? true
       : comparison.status !== 'foreign' && options.replace === true;
     if (!replaceable) {
-      throw failure('AB7005', collisionMessage(destination, identity, comparison), 'cursor');
+      return yield* Effect.fail(failure('AB7005', collisionMessage(destination, identity, comparison), 'cursor'));
     }
     // Replacing an existing copy created no host directories; the previous receipt's carry over.
     const replacement: InstallReceiptIdentity = { ...receipt, hostDirectories: comparison.receipt?.hostDirectories ?? [] };
-    const staged = await stageArtifact({ artifactRoot: identity.bundleRoot, destination, receipt: replacement, stageRoot: installRoot });
-    try {
-      await replaceInstalledTree({ comparison, destination, receipt: replacement, staged });
-    } finally {
-      await rm(staged.parent, { force: true, recursive: true });
-    }
+    yield* withStagedArtifact(
+      () => stageArtifact({ artifactRoot: identity.bundleRoot, destination, receipt: replacement, stageRoot: installRoot }),
+      (staged) => replaceInstalledTree({ comparison, destination, receipt: replacement, staged }),
+    );
     // Filling a state-only shell is a fresh install of plugin content, not a replacement of any.
-    if (remnant) return { ...base, contentHash: artifact.hash, state: 'installed' };
+    if (remnant) return { ...base, contentHash: artifact.hash, state: 'installed' } as const;
     return {
       ...base,
       contentHash: artifact.hash,
       previousContentHash: comparison.installedContentHash,
       state: 'replaced',
-    };
-  } catch (error) {
-    if (error instanceof DiagnosticError) throw error;
-    throw failure(
-      'AB7004',
-      errorMessage(error),
-      'cursor',
-    );
-  }
-};
+    } as const;
+  });
+  return yield* program.pipe(Effect.mapError(installFailure('cursor')));
+});
 
+/**
+ * The install program. The Cursor branch is Effect-native with a
+ * `DiagnosticError` channel; `readIdentity` and the public-CLI installers are
+ * lifted as units whose raw leaf failures cross the boundary verbatim (their
+ * pinned contract — the CLI entry maps those to `AB7004` itself), so the
+ * program's channel is the union of both.
+ */
 const installProgram = Effect.fnUntraced(function*(
   options: InstallBundleOptions,
-): Effect.fn.Return<InstallResult, unknown> {
+): Effect.fn.Return<InstallResult, DiagnosticError | LiftedRejection> {
   const scope = options.scope ?? 'user';
   if (options.mode !== undefined && options.host !== 'cursor') {
     return yield* Effect.fail(failure(
@@ -992,11 +1033,12 @@ const installProgram = Effect.fnUntraced(function*(
   const identity = yield* liftPromise(() => readIdentity(options.from, options.host));
   switch (options.host) {
     case 'claude':
-      return yield* liftPromise(() => installPublicCli(options, identity, 'claude', scope));
-    case 'codex':
-      return yield* liftPromise(() => installPublicCli(options, identity, 'codex', scope));
+    case 'codex': {
+      const host = options.host;
+      return yield* liftPromise(() => installPublicCli(options, identity, host, scope));
+    }
     case 'cursor':
-      return yield* liftPromise(() => installCursor(options, identity, scope));
+      return yield* installCursor(options, identity, scope);
     default: {
       const exhaustive: never = options.host;
       return yield* Effect.fail(failure('AB7000', `Unsupported install host ${String(exhaustive)}.`, options.host));
