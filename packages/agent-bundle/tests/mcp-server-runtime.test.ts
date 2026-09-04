@@ -291,6 +291,8 @@ describe('generated server teardown', () => {
             order.push('events');
             throw new Error('socket teardown failed');
           },
+          onRoleChange: () => () => undefined,
+          role: () => 'owner',
         })) as never,
         endpointId: 'teardown-test',
         projectEventDocument: (() => {

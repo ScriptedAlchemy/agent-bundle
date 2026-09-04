@@ -4,7 +4,7 @@ import { createConnection, createServer, type Server, type Socket } from 'node:n
 import { dirname, join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 
-import { Context, Duration, Effect, Exit, Layer } from 'effect';
+import { Context, Duration, Effect, Exit, Fiber, Layer, Random, Ref, type Scope } from 'effect';
 import { z } from 'zod';
 
 import { isAbortError, makeScopedEffectRuntime, runPromise, type ScopedEffectRuntime } from '../effect/boundary.ts';
@@ -14,6 +14,14 @@ const EVENT_RUNTIME_PROTOCOL_VERSION = 1 as const;
 const MAX_EVENT_MESSAGE_BYTES = 1024 * 1024;
 const ENDPOINT_CLAIM_RETRY_COUNT = 100;
 const ENDPOINT_CLAIM_RETRY_DELAY = Duration.millis(10);
+/**
+ * How often a standby server asks whether the owner is still there. The
+ * interval bounds the hook-visible gap after an owner exits (hooks see
+ * `runtime-unavailable` until the takeover lands); the jitter keeps several
+ * standbys from probing — and claiming — in lockstep.
+ */
+const STANDBY_PROBE_INTERVAL = Duration.seconds(1);
+const STANDBY_PROBE_JITTER_MS = 250;
 
 export type EventRuntimeTransportErrorCode =
   | 'epoch-mismatch'
@@ -31,6 +39,25 @@ export class EventRuntimeTransportError extends Error {
     this.name = 'EventRuntimeTransportError';
   }
 }
+
+/**
+ * The one `runtime-failed` outcome a standby server recovers from: a live
+ * server answered on the endpoint. It is the same `EventRuntimeTransportError`
+ * (code, message, and name) the fail-closed path has always thrown; the
+ * subclass exists only so `whenOwned: 'standby'` can tell "owned elsewhere"
+ * from a genuinely broken endpoint, which still fails.
+ */
+class EventRuntimeEndpointOwnedError extends EventRuntimeTransportError {
+  constructor() {
+    super('runtime-failed', 'Event runtime endpoint already has a live server.');
+  }
+}
+
+const endpointOwned = (): Effect.Effect<never, EventRuntimeEndpointOwnedError> =>
+  Effect.fail(new EventRuntimeEndpointOwnedError());
+
+const isEndpointOwned = (error: EventRuntimeTransportError): error is EventRuntimeEndpointOwnedError =>
+  error instanceof EventRuntimeEndpointOwnedError;
 
 const eventRequestSchema = z.object({
   artifactEpoch: z.string().min(1),
@@ -104,16 +131,41 @@ export interface EventRuntimeStatus {
   readonly startedAt?: string;
 }
 
+/**
+ * `owner` binds the endpoint and answers hooks; `standby` binds nothing and
+ * waits for the owner to exit. A server only ever moves from `standby` to
+ * `owner`, never back.
+ */
+export type EventRuntimeServerRole = 'owner' | 'standby';
+
+/**
+ * What `createEventRuntimeServer` does when a live server already owns the
+ * endpoint. `fail` (the default) rejects with `runtime-failed`
+ * (`Event runtime endpoint already has a live server.`); `standby` resolves a
+ * server in the `standby` role that takes the endpoint over once the owner
+ * exits. Every other startup failure fails closed under both policies.
+ */
+export type EventRuntimeOwnedEndpointPolicy = 'fail' | 'standby';
+
 export interface CreateEventRuntimeServerOptions {
   readonly artifactEpoch: string;
   readonly endpointId: string;
   readonly handle: (request: EventRuntimeRequest, signal: AbortSignal) => Promise<unknown>;
   readonly status?: () => EventRuntimeStatus;
+  readonly whenOwned?: EventRuntimeOwnedEndpointPolicy;
 }
 
 export interface EventRuntimeServer {
   readonly close: () => Promise<void>;
   readonly endpoint: string;
+  /**
+   * Observes role changes — today only `standby` → `owner`, when this server
+   * takes the endpoint over. Returns the unsubscribe. Listeners run on the
+   * takeover's own turn, after the socket is bound and before any hook is
+   * answered through it.
+   */
+  readonly onRoleChange: (listener: (role: EventRuntimeServerRole) => void) => () => void;
+  readonly role: () => EventRuntimeServerRole;
 }
 
 export interface RequestEventRuntimeOptions extends EventRuntimeRequest {
@@ -287,14 +339,28 @@ const handleConnection = Effect.fnUntraced(function*(
   });
 });
 
-interface EventSocketServiceShape {
+/** The bound endpoint: what an owner holds and a standby is waiting to become. */
+interface EventSocketListener {
   readonly endpoint: string;
   readonly endpointIdentity?: Readonly<{ readonly device: number; readonly inode: number }>;
   readonly server: Server;
   readonly sockets: Set<Socket>;
 }
 
-class EventSocketService extends Context.Service<EventSocketService, EventSocketServiceShape>()(
+/**
+ * One server's lifetime state. `listener` is set exactly once — at open for
+ * an owner, at takeover for a standby — and only ever by the fiber that bound
+ * it; `standby` is the takeover loop, present only for a server that started
+ * behind a live owner, and interrupted by the scope or by `close()`.
+ */
+interface EventRuntimeServerState {
+  readonly endpoint: string;
+  readonly listener: Ref.Ref<EventSocketListener | undefined>;
+  readonly roleListeners: Set<(role: EventRuntimeServerRole) => void>;
+  readonly standby: Fiber.Fiber<void> | undefined;
+}
+
+class EventSocketService extends Context.Service<EventSocketService, EventRuntimeServerState>()(
   'agent-bundle/events/EventSocketService',
 ) {}
 
@@ -651,12 +717,7 @@ const claimEndpoint = Effect.fnUntraced(function*(
     }
 
     const endpointState = yield* probeEndpoint(endpoint);
-    if (endpointState === 'live') {
-      return yield* Effect.fail(transportError(
-        'runtime-failed',
-        'Event runtime endpoint already has a live server.',
-      ));
-    }
+    if (endpointState === 'live') return yield* endpointOwned();
     if (yield* reclaimOrphanedEndpointClaim(endpoint, testHooks)) continue;
     if (attempt + 1 < ENDPOINT_CLAIM_RETRY_COUNT) {
       yield* Effect.sleep(ENDPOINT_CLAIM_RETRY_DELAY);
@@ -673,8 +734,8 @@ const claimEndpoint = Effect.fnUntraced(function*(
 const listenServer = (
   options: CreateEventRuntimeServerOptions,
   endpoint: string,
-): Effect.Effect<EventSocketServiceShape, EventRuntimeTransportError> =>
-  Effect.callback<EventSocketServiceShape, EventRuntimeTransportError>((resume) => {
+): Effect.Effect<EventSocketListener, EventRuntimeTransportError> =>
+  Effect.callback<EventSocketListener, EventRuntimeTransportError>((resume) => {
     const sockets = new Set<Socket>();
     const server = createServer({ allowHalfOpen: true }, (socket) => {
       sockets.add(socket);
@@ -694,7 +755,13 @@ const listenServer = (
           socket.removeListener('error', interrupt);
         });
     });
-    const onError = (error: Error): void => {
+    const onError = (error: NodeJS.ErrnoException): void => {
+      // The path (or, on Windows, the pipe name — the only owner check that
+      // platform has) is bound by a server this process did not probe: owned.
+      if (error.code === 'EADDRINUSE') {
+        resume(endpointOwned());
+        return;
+      }
       resume(Effect.fail(transportError('runtime-failed', 'Unable to listen on the event runtime endpoint.', error)));
     };
     server.once('error', onError);
@@ -723,10 +790,17 @@ const listenServer = (
     });
   });
 
+/**
+ * Probes, claims, and binds the endpoint — the whole owner path. A live
+ * server on the endpoint fails with the `EventRuntimeEndpointOwnedError`
+ * marker at every site that can see one (before the claim, inside the claim
+ * loop, and under the claim), so a standby retries exactly that and nothing
+ * else.
+ */
 const openServer = Effect.fnUntraced(function*(
   options: CreateEventRuntimeServerOptions,
   testHooks?: EventRuntimeServerTestHooks,
-): Effect.fn.Return<EventSocketServiceShape, EventRuntimeTransportError> {
+): Effect.fn.Return<EventSocketListener, EventRuntimeTransportError> {
   const endpoint = eventRuntimeEndpoint(options.endpointId);
   if (process.platform === 'win32') return yield* listenServer(options, endpoint);
 
@@ -743,21 +817,11 @@ const openServer = Effect.fnUntraced(function*(
       Effect.mapError((error) => transportError('runtime-failed', 'Event runtime endpoint probe hook failed.', error)),
     );
   }
-  if (endpointState === 'live') {
-    return yield* Effect.fail(transportError(
-      'runtime-failed',
-      'Event runtime endpoint already has a live server.',
-    ));
-  }
+  if (endpointState === 'live') return yield* endpointOwned();
 
   const listenUnderClaim = Effect.gen(function*() {
     const claimedEndpointState = yield* probeEndpoint(endpoint);
-    if (claimedEndpointState === 'live') {
-      return yield* Effect.fail(transportError(
-        'runtime-failed',
-        'Event runtime endpoint already has a live server.',
-      ));
-    }
+    if (claimedEndpointState === 'live') return yield* endpointOwned();
     if (claimedEndpointState === 'stale') {
       yield* liftPromise(() => rm(endpoint)).pipe(
         Effect.mapError((error) => transportError(
@@ -795,75 +859,137 @@ const openServer = Effect.fnUntraced(function*(
  * leaving a stale endpoint behind silently; a missing path is already gone.
  */
 const removeOwnedEndpoint = (
-  service: EventSocketServiceShape,
+  listener: EventSocketListener,
   testHooks?: EventRuntimeServerTestHooks,
 ): Effect.Effect<void, EventRuntimeTransportError> =>
   liftPromise(async () => {
-    if (service.endpointIdentity === undefined) return;
+    if (listener.endpointIdentity === undefined) return;
     await testHooks?.beforeEndpointRemoval?.();
     let current;
     try {
-      current = await stat(service.endpoint);
+      current = await stat(listener.endpoint);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
       throw error;
     }
     if (
-      current.dev === service.endpointIdentity.device
-      && current.ino === service.endpointIdentity.inode
+      current.dev === listener.endpointIdentity.device
+      && current.ino === listener.endpointIdentity.inode
     ) {
-      await rm(service.endpoint, { force: true });
+      await rm(listener.endpoint, { force: true });
     }
   }).pipe(
     Effect.mapError((error) => transportError('runtime-failed', 'Unable to remove the event runtime endpoint.', error)),
   );
 
 /** Destroys every accepted socket and stops listening. Idempotent and infallible: the scope finalizer. */
-const shutdownServer = (service: EventSocketServiceShape): Effect.Effect<void> =>
+const shutdownServer = (listener: EventSocketListener): Effect.Effect<void> =>
   Effect.callback<void>((resume) => {
-    for (const socket of service.sockets) socket.destroy();
-    if (!service.server.listening) {
+    for (const socket of listener.sockets) socket.destroy();
+    if (!listener.server.listening) {
       resume(Effect.void);
       return undefined;
     }
-    service.server.close(() => resume(Effect.void));
+    listener.server.close(() => resume(Effect.void));
     return undefined;
   });
 
 /**
- * The explicit teardown `EventRuntimeServer.close()` runs: shut the server
- * down, then remove the owned endpoint. The removal is fallible on purpose —
- * the scope finalizer only ever repeats the (idempotent) shutdown, so the one
+ * The explicit teardown `EventRuntimeServer.close()` runs: stop the standby
+ * loop, then shut the bound server down and remove the owned endpoint. The
+ * loop is interrupted — and awaited, so an in-flight takeover finishes its
+ * claim→listen→release before this reads the listener — first, or a takeover
+ * could bind a socket nobody removes. The removal is fallible on purpose: the
+ * scope finalizer only ever repeats the (idempotent) shutdown, so the one
  * teardown step that can fail reports to the caller rather than to a
  * finalizer that would have to swallow it.
  */
-const closeServer = (
-  service: EventSocketServiceShape,
+const closeServer = Effect.fnUntraced(function*(
+  state: EventRuntimeServerState,
   testHooks?: EventRuntimeServerTestHooks,
-): Effect.Effect<void, EventRuntimeTransportError> =>
-  shutdownServer(service).pipe(
-    Effect.andThen(process.platform === 'win32' ? Effect.void : removeOwnedEndpoint(service, testHooks)),
-  );
+): Effect.fn.Return<void, EventRuntimeTransportError> {
+  if (state.standby !== undefined) yield* Fiber.interrupt(state.standby);
+  const listener = yield* Ref.get(state.listener);
+  if (listener === undefined) return;
+  yield* shutdownServer(listener);
+  if (process.platform !== 'win32') yield* removeOwnedEndpoint(listener, testHooks);
+});
+
+/**
+ * The standby role's one job: notice the owner leaving and run the same
+ * `openServer` path an unowned start runs. Losing that race — another standby
+ * claimed first, or the endpoint is live again by the time this probe lands —
+ * leaves it standing by for the next tick; so does any other typed failure,
+ * because the MCP server this runtime serves is already up and there is no
+ * caller left to fail. Bound to the scope: `close()` interrupts it before
+ * reading the listener, and the layer scope interrupts it on dispose.
+ */
+const standByForEndpoint = Effect.fnUntraced(function*(
+  endpoint: string,
+  acquire: Effect.Effect<EventSocketListener, EventRuntimeTransportError, Scope.Scope>,
+  roleListeners: ReadonlySet<(role: EventRuntimeServerRole) => void>,
+): Effect.fn.Return<void, never, Scope.Scope> {
+  while (true) {
+    const jitter = yield* Random.nextIntBetween(0, STANDBY_PROBE_JITTER_MS);
+    yield* Effect.sleep(Duration.sum(STANDBY_PROBE_INTERVAL, Duration.millis(jitter)));
+    const endpointState = yield* probeEndpoint(endpoint).pipe(
+      Effect.catch(() => Effect.succeed<EndpointProbe>('live')),
+    );
+    if (endpointState === 'live') continue;
+    const listener = yield* acquire.pipe(Effect.catch(() => Effect.succeed(undefined)));
+    if (listener === undefined) continue;
+    yield* Effect.sync(() => {
+      for (const notify of roleListeners) notify('owner');
+    });
+    return;
+  }
+});
 
 const eventSocketLayer = (
   options: CreateEventRuntimeServerOptions,
   testHooks?: EventRuntimeServerTestHooks,
 ): Layer.Layer<EventSocketService, EventRuntimeTransportError> =>
-  Layer.effect(EventSocketService, Effect.acquireRelease(openServer(options, testHooks), shutdownServer));
+  Layer.effect(EventSocketService, Effect.gen(function*() {
+    const endpoint = eventRuntimeEndpoint(options.endpointId);
+    const listener = yield* Ref.make<EventSocketListener | undefined>(undefined);
+    const roleListeners = new Set<(role: EventRuntimeServerRole) => void>();
+    // Binding and recording the listener are one uninterruptible acquire, so
+    // a `close()` that interrupts a takeover mid-flight still finds — and
+    // removes — the socket that takeover had just bound.
+    const acquire = Effect.acquireRelease(
+      openServer(options, testHooks).pipe(Effect.tap((bound) => Ref.set(listener, bound))),
+      shutdownServer,
+    );
+    if (options.whenOwned !== 'standby') {
+      yield* acquire;
+      return { endpoint, listener, roleListeners, standby: undefined };
+    }
+    const opened = yield* acquire.pipe(Effect.catchIf(isEndpointOwned, () => Effect.succeed(undefined)));
+    if (opened !== undefined) return { endpoint, listener, roleListeners, standby: undefined };
+    const standby = yield* Effect.forkScoped(standByForEndpoint(endpoint, acquire, roleListeners));
+    return { endpoint, listener, roleListeners, standby };
+  }));
 
 const createEventRuntimeServerWithHooks = async (
   options: CreateEventRuntimeServerOptions,
   testHooks?: EventRuntimeServerTestHooks,
 ): Promise<EventRuntimeServer> => {
   const runtime: ScopedEffectRuntime<EventSocketService> = makeScopedEffectRuntime(eventSocketLayer(options, testHooks));
-  const service = await runtime.run(EventSocketService);
+  const state = await runtime.run(EventSocketService);
   let closing: Promise<void> | undefined;
   return Object.freeze({
     close: () => {
-      closing ??= runtime.run(closeServer(service, testHooks)).finally(() => runtime.close());
+      closing ??= runtime.run(closeServer(state, testHooks)).finally(() => runtime.close());
       return closing;
     },
-    endpoint: service.endpoint,
+    endpoint: state.endpoint,
+    onRoleChange: (listener: (role: EventRuntimeServerRole) => void) => {
+      state.roleListeners.add(listener);
+      return () => {
+        state.roleListeners.delete(listener);
+      };
+    },
+    role: () => (Ref.getUnsafe(state.listener) === undefined ? 'standby' : 'owner'),
   });
 };
 

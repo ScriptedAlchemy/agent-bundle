@@ -731,6 +731,11 @@ const noticeDiagnostic = (line: string): void => {
 
 const describeError = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
+/** stderr only: stdout is the protocol stream. */
+const eventRuntimeDiagnostic = (line: string): void => {
+  process.stderr.write(`agent-bundle event runtime: ${line}\n`);
+};
+
 /**
  * Installs `resources/subscribe` / `resources/unsubscribe` for the notice
  * inbox URI and returns the post-render observation that emits
@@ -878,6 +883,14 @@ const canonicalEvent = (event: string): CanonicalAgentEvent => {
  * The shared event runtime for one artifact: native envelopes arrive over the
  * IPC socket, render through the same dispatcher every route uses, and project
  * back into the host's own hook response shape.
+ *
+ * One process per install root owns the socket. Hosts routinely launch several
+ * sessions of the same plugin from one install (every Claude Code session
+ * Claude Desktop starts, Cursor importing a Claude-installed plugin), so a
+ * second server finding the socket owned is normal, not fatal: it starts in
+ * the `standby` role, serves its own MCP session, and takes the socket over
+ * when the owner exits. Both role changes are announced on stderr only — the
+ * process's stdout is the MCP protocol stream.
  */
 const startEventRuntime = async (
   events: GeneratedEventRuntimeBinding,
@@ -888,7 +901,7 @@ const startEventRuntime = async (
   pluginRoot: Observed<AgentPluginIdentity> | undefined,
 ): Promise<{ readonly close: () => Promise<void> }> => {
   const startedAt = new Date().toISOString();
-  return events.createEventRuntimeServer({
+  const server = await events.createEventRuntimeServer({
     artifactEpoch: events.artifactEpoch,
     endpointId: events.endpointId,
     handle: async (request, signal) => settled(async () => {
@@ -966,7 +979,15 @@ const startEventRuntime = async (
       pid: process.pid,
       startedAt,
     }),
+    whenOwned: 'standby',
   });
+  if (server.role() === 'standby') {
+    eventRuntimeDiagnostic(`${server.endpoint} is owned by another process; standing by`);
+    server.onRoleChange((role) => {
+      if (role === 'owner') eventRuntimeDiagnostic(`${server.endpoint} was released by its owner; took it over`);
+    });
+  }
+  return server;
 };
 
 /**

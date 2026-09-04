@@ -5,7 +5,7 @@ import { createConnection, type Socket } from 'node:net';
 import { dirname } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
-import { Effect } from 'effect';
+import { Duration, Effect } from 'effect';
 import { expect, it } from 'effect-rstest';
 
 import {
@@ -13,10 +13,12 @@ import {
   createEventRuntimeServerForTest,
   eventRuntimeEndpoint,
   type EventRuntimeServer,
+  type EventRuntimeServerRole,
   EventRuntimeTransportError,
   requestEventRuntime,
   requestEventRuntimeStatus,
 } from '../src/events/ipc.ts';
+import { within } from './support/eventually.ts';
 
 type ContenderOutcome =
   | Readonly<{ readonly server: EventRuntimeServer; readonly status: 'opened' }>
@@ -133,6 +135,27 @@ const writeEndpointClaim = async (endpointId: string, contents: string): Promise
   await writeFile(claimPath, contents, { mode: 0o600 });
   return claimPath;
 };
+
+/** One `session/start` hook request against whichever server owns `endpointId`. */
+const askRuntime = (endpointId: string): Effect.Effect<unknown> => Effect.promise(() => requestEventRuntime({
+  artifactEpoch: 'epoch-1',
+  endpointId,
+  event: 'session/start',
+  hostContractRevision: '2.1.250',
+  native: { hook_event_name: 'SessionStart' },
+  signal: new AbortController().signal,
+  target: 'claude',
+  timeoutMs: 1_000,
+}));
+
+/** Resolves with the next role the server reports; the standby loop settles within a probe interval plus jitter. */
+const nextRole = (server: EventRuntimeServer): Promise<EventRuntimeServerRole> => within(
+  new Promise<EventRuntimeServerRole>((resolve) => { server.onRoleChange(resolve); }),
+  5_000,
+);
+
+const expectMissing = (path: string): Effect.Effect<void> => Effect.promise(() =>
+  expect(stat(path)).rejects.toMatchObject({ code: 'ENOENT' }));
 
 const expectBoundedClaimFailure = async (endpointId: string): Promise<void> => {
   await expect(createEventRuntimeServer({
@@ -277,6 +300,151 @@ it.live('rejects a second live server without disturbing the endpoint owner', ()
     expect(response).toEqual({ owner: 'first', target: 'claude' });
   }));
 }));
+
+it.live('keeps rejecting a second live server when the caller asks for the fail policy explicitly', () => Effect.gen(function*() {
+  if (process.platform === 'win32') return;
+  const endpointId = `event-ipc-owner-explicit-fail-${crypto.randomUUID()}`;
+  yield* Effect.acquireRelease(
+    Effect.promise(() => createEventRuntimeServer({
+      artifactEpoch: 'epoch-1',
+      endpointId,
+      handle: async () => ({ owner: 'first' }),
+    })),
+    (server) => Effect.promise(() => server.close()),
+  );
+  const alreadyRunning = yield* Effect.tryPromise({
+    try: () => createEventRuntimeServer({
+      artifactEpoch: 'epoch-1',
+      endpointId,
+      handle: async () => ({ owner: 'second' }),
+      whenOwned: 'fail',
+    }),
+    catch: (error) => error,
+  }).pipe(Effect.flip);
+  expect(alreadyRunning).toMatchObject({
+    code: 'runtime-failed',
+    message: 'Event runtime endpoint already has a live server.',
+    name: EventRuntimeTransportError.name,
+  });
+  expect(yield* askRuntime(endpointId)).toEqual({ owner: 'first' });
+}));
+
+it.live('stands by behind a live owner and takes the endpoint over once the owner closes', () => Effect.gen(function*() {
+  if (process.platform === 'win32') return;
+  const endpointId = `event-ipc-standby-${crypto.randomUUID()}`;
+  const endpoint = eventRuntimeEndpoint(endpointId);
+  // A free endpoint under the standby policy opens as owner straight away.
+  const owner = yield* Effect.promise(() => createEventRuntimeServer({
+    artifactEpoch: 'epoch-1',
+    endpointId,
+    handle: async () => ({ owner: 'first' }),
+    whenOwned: 'standby',
+  }));
+  expect(owner.role()).toBe('owner');
+
+  yield* Effect.scoped(Effect.gen(function*() {
+    const standby = yield* Effect.acquireRelease(
+      Effect.promise(() => createEventRuntimeServer({
+        artifactEpoch: 'epoch-1',
+        endpointId,
+        handle: async () => ({ owner: 'second' }),
+        whenOwned: 'standby',
+      })),
+      (server) => Effect.promise(() => server.close()),
+    );
+    const roles: EventRuntimeServerRole[] = [];
+    standby.onRoleChange((role) => { roles.push(role); });
+    const takeover = nextRole(standby);
+    expect(standby.role()).toBe('standby');
+    expect(standby.endpoint).toBe(endpoint);
+    // The owner keeps answering; the standby bound nothing.
+    expect(yield* askRuntime(endpointId)).toEqual({ owner: 'first' });
+
+    yield* Effect.promise(() => owner.close());
+    expect(yield* Effect.promise(() => takeover)).toBe('owner');
+    expect(standby.role()).toBe('owner');
+    expect(roles).toEqual(['owner']);
+    expect(yield* askRuntime(endpointId)).toEqual({ owner: 'second' });
+    const bound = yield* Effect.promise(() => stat(endpoint));
+    expect(bound.mode & 0o777).toBe(0o600);
+  }));
+  // The last owner out removes the socket it bound, and no claim lingers.
+  yield* expectMissing(endpoint);
+  yield* expectMissing(`${endpoint}.lock`);
+}), 20_000);
+
+it.live('closes a standby before any takeover without disturbing the owner or leaving files behind', () => Effect.gen(function*() {
+  if (process.platform === 'win32') return;
+  const endpointId = `event-ipc-standby-close-${crypto.randomUUID()}`;
+  const endpoint = eventRuntimeEndpoint(endpointId);
+  const owner = yield* Effect.promise(() => createEventRuntimeServer({
+    artifactEpoch: 'epoch-1',
+    endpointId,
+    handle: async () => ({ owner: 'first' }),
+  }));
+  const standby = yield* Effect.promise(() => createEventRuntimeServer({
+    artifactEpoch: 'epoch-1',
+    endpointId,
+    handle: async () => ({ owner: 'second' }),
+    whenOwned: 'standby',
+  }));
+  expect(standby.role()).toBe('standby');
+  yield* Effect.promise(() => standby.close());
+  expect(standby.role()).toBe('standby');
+  expect(yield* askRuntime(endpointId)).toEqual({ owner: 'first' });
+  yield* expectMissing(`${endpoint}.lock`);
+
+  yield* Effect.promise(() => owner.close());
+  yield* expectMissing(endpoint);
+  // A closed standby's loop is gone: nothing takes the freed endpoint over.
+  yield* Effect.sleep(Duration.seconds(2));
+  yield* expectMissing(endpoint);
+  yield* expectMissing(`${endpoint}.lock`);
+}), 20_000);
+
+it.live('lets exactly one of several standbys take over and keeps the rest standing by', () => Effect.gen(function*() {
+  if (process.platform === 'win32') return;
+  const endpointId = `event-ipc-standby-race-${crypto.randomUUID()}`;
+  const endpoint = eventRuntimeEndpoint(endpointId);
+  const owner = yield* Effect.promise(() => createEventRuntimeServer({
+    artifactEpoch: 'epoch-1',
+    endpointId,
+    handle: async () => ({ owner: 'first' }),
+  }));
+  const standbys = yield* Effect.forEach(['second', 'third'] as const, (label) => Effect.acquireRelease(
+    Effect.promise(() => createEventRuntimeServer({
+      artifactEpoch: 'epoch-1',
+      endpointId,
+      handle: async () => ({ owner: label }),
+      whenOwned: 'standby',
+    })),
+    (server) => Effect.promise(() => server.close()),
+  ));
+  expect(standbys.map((server) => server.role())).toEqual(['standby', 'standby']);
+  const takeovers = standbys.map((server) => nextRole(server).then(() => server));
+
+  yield* Effect.promise(() => owner.close());
+  const winner = yield* Effect.promise(() => Promise.race(takeovers));
+  // Give the loser at least one more probe after the winner bound the socket:
+  // it must see a live endpoint and stay standby rather than unlink the winner.
+  yield* Effect.sleep(Duration.millis(1_600));
+  const roles = standbys.map((server) => server.role());
+  expect(roles.filter((role) => role === 'owner')).toHaveLength(1);
+  expect(winner.role()).toBe('owner');
+  const loser = standbys.find((server) => server !== winner)!;
+  expect(loser.role()).toBe('standby');
+  const served = yield* askRuntime(endpointId);
+  expect([{ owner: 'second' }, { owner: 'third' }]).toContainEqual(served);
+
+  // The loser is next in line: closing the new owner hands the endpoint on.
+  const succession = nextRole(loser);
+  yield* Effect.promise(() => winner.close());
+  expect(yield* Effect.promise(() => succession)).toBe('owner');
+  expect(yield* askRuntime(endpointId)).not.toEqual(served);
+  yield* Effect.promise(() => loser.close());
+  yield* expectMissing(endpoint);
+  yield* expectMissing(`${endpoint}.lock`);
+}), 30_000);
 
 it.live('reports a failed endpoint removal from close() after the server has stopped listening', () => Effect.gen(function*() {
   if (process.platform === 'win32') return;
