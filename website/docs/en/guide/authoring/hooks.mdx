@@ -112,9 +112,16 @@ adds `toolResponse`; `StopHookEvent` and `AgentStopHookEvent` carry `stopHookAct
 `AgentStartHookEvent` carries `agentId` and `agentType`) are exported by name, a field is required
 only when every host delivers it, and the handler's second argument (`HookHandlerContext`) names
 the invoking `target`, its native event, and the validated native input verbatim for a handler
-that needs a host-specific field. The types are the portable contract — what every host wrapper
-accepts — so a Cursor-only denial from `agentStart` or Claude-only `additionalContext` from
-`agentStop` stays outside them.
+that needs a host-specific field. `HookHandlerEventName` is the set of events a config hook can be
+declared for — the six every host maps to a plain hook; `workspaceOpen` is served by an
+[event route](#event-routes) instead. The types are the portable contract: a field they admit is
+accepted by every host's wrapper *and* reaches that host's native output. Host-specific behaviour
+stays outside them and is reachable only from an untyped result: `additionalContext` from
+`beforeTool` (delivered by Claude and Codex; Cursor's `preToolUse` output carries only a permission
+or an input rewrite), `additionalContext` from `agentStart` or `agentStop` (Claude and Codex,
+Claude only), and a Cursor-only denial from `agentStart`. One runtime caveat the type cannot carry:
+Cursor consumes an `agentStop` denial only for a subagent whose `status` is `completed`, so a
+handler that also targets Cursor checks `context.nativeInput.status` before denying.
 
 The generated wrapper still validates the result before projecting it into host-native output —
 the same rules, applied at hook time to JavaScript and prebuilt handlers too. Exactly four keys

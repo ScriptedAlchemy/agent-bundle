@@ -13,14 +13,16 @@ import {
 } from '../src/adapters/hook-contract.ts';
 import {
   hookEventFields,
+  hookHandlerEventNames,
   hookResultContract,
   type HookEvent,
   type HookEventFields,
   type HookHandler,
+  type HookHandlerEventName,
   type HookResult,
 } from '../src/adapters/hook-handler.ts';
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
-import { canonicalHookEvents, type CanonicalHookEvent } from '../src/core/types.ts';
+import { canonicalHookEvents } from '../src/core/types.ts';
 import type { CanonicalAgentEvent } from '../src/routes/public.ts';
 
 type Host = 'claude' | 'codex' | 'cursor';
@@ -33,17 +35,16 @@ interface WrapperInternals {
 
 const hosts: readonly Host[] = ['claude', 'codex', 'cursor'];
 
-const agentEventFor: Readonly<Record<CanonicalHookEvent, CanonicalAgentEvent>> = {
+const agentEventFor: Readonly<Record<HookHandlerEventName, CanonicalAgentEvent>> = {
   afterTool: 'tool/after',
   agentStart: 'agent/start',
   agentStop: 'agent/stop',
   beforeTool: 'tool/before',
   sessionStart: 'session/start',
   stop: 'stop',
-  workspaceOpen: 'workspace/open',
 };
 
-const wrapperEntry = (host: Host, event: CanonicalHookEvent, nativeEvent: string): TargetHookWrapper => ({
+const wrapperEntry = (host: Host, event: HookHandlerEventName, nativeEvent: string): TargetHookWrapper => ({
   event,
   hook: {
     event,
@@ -80,19 +81,19 @@ const wrapperInternalsSource = (host: Host, entry: TargetHookWrapper): string =>
   return `${body}\nexport { ${decoder} as decodeNative, validateNativeInput, validateResult };\n`;
 };
 
-const nativeEventNames = (host: Host): Readonly<Partial<Record<CanonicalHookEvent, string>>> =>
+const nativeEventNames = (host: Host): Readonly<Partial<Record<HookHandlerEventName, string>>> =>
   createDefaultRegistry().hookContract(host)?.eventNames ?? {};
 
 let root: string;
 const internals = new Map<string, WrapperInternals>();
 
-const wrapperFor = (host: Host, event: CanonicalHookEvent): WrapperInternals | undefined =>
+const wrapperFor = (host: Host, event: HookHandlerEventName): WrapperInternals | undefined =>
   internals.get(`${host}:${event}`);
 
 beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), 'agent-bundle-hook-handler-contract-'));
   for (const host of hosts) {
-    for (const [event, nativeEvent] of Object.entries(nativeEventNames(host)) as [CanonicalHookEvent, string][]) {
+    for (const [event, nativeEvent] of Object.entries(nativeEventNames(host)) as [HookHandlerEventName, string][]) {
       const file = join(root, `${host}-${event}.mjs`);
       await writeFile(file, wrapperInternalsSource(host, wrapperEntry(host, event, nativeEvent)));
       internals.set(`${host}:${event}`, await import(pathToFileURL(file).href) as WrapperInternals);
@@ -122,7 +123,7 @@ const resultShapes = (): readonly Record<string, unknown>[] => {
 };
 
 /** The runtime twin of `HookResult<E>`: what the portable contract admits for one event. */
-const admittedByContract = (event: CanonicalHookEvent, shape: Record<string, unknown>): boolean => {
+const admittedByContract = (event: HookHandlerEventName, shape: Record<string, unknown>): boolean => {
   const rule = hookResultContract[event];
   const outcome = shape['outcome'] ?? 'continue';
   if (outcome === 'stop') return false;
@@ -143,12 +144,25 @@ const accepts = (wrapper: WrapperInternals, shape: Record<string, unknown>): boo
 };
 
 /**
- * Where one host's wrapper is more permissive than the portable contract.
- * These are host features, not contract members: a handler typed
- * `HookResult<E>` must run unchanged on every host, so the type excludes
- * them. Any other divergence between the table and a wrapper fails below.
+ * Where one host's wrapper validator is more permissive than the portable
+ * contract. These are host features (or fields a host validates but has no
+ * output channel for), not contract members: a handler typed `HookResult<E>`
+ * must run unchanged, with the same effect, on every host, so the type
+ * excludes them. Any other divergence between the table and a wrapper fails
+ * below.
  */
+const beforeToolContextShapes = [
+  '{"additionalContext":"context"}',
+  '{"additionalContext":"context","outcome":"continue"}',
+  '{"additionalContext":"context","outcome":"deny","reason":"because"}',
+  '{"additionalContext":"context","updatedInput":{}}',
+  '{"additionalContext":"context","outcome":"continue","updatedInput":{}}',
+];
 const hostLeniencies: ReadonlySet<string> = new Set([
+  // Every validator accepts `additionalContext` on a before-tool result, but
+  // Cursor's preToolUse output carries only a permission or an input rewrite,
+  // so the field is delivered on Claude and Codex alone.
+  ...hosts.flatMap((host) => beforeToolContextShapes.map((shape) => `${host}:beforeTool:${shape}`)),
   // Claude and Codex project `additionalContext` on SubagentStart; Cursor has no channel for it.
   'claude:agentStart:{"additionalContext":"context"}',
   'claude:agentStart:{"additionalContext":"context","outcome":"continue"}',
@@ -163,11 +177,18 @@ const hostLeniencies: ReadonlySet<string> = new Set([
 ]);
 
 describe('the typed hook handler contract agrees with the generated wrappers (#488)', () => {
-  it('covers every canonical hook event in both tables', () => {
-    expect(Object.keys(hookResultContract).sort()).toEqual([...canonicalHookEvents].sort());
-    expect(Object.keys(hookEventFields).sort()).toEqual([...canonicalHookEvents].sort());
+  it('covers exactly the canonical events some host maps to a plain hook, in both tables', () => {
+    const mapped = new Set<string>();
+    for (const host of hosts) for (const event of Object.keys(nativeEventNames(host))) mapped.add(event);
+    expect([...hookHandlerEventNames].sort()).toEqual([...mapped].sort());
+    for (const event of hookHandlerEventNames) expect(canonicalHookEvents).toContain(event);
+    // `workspaceOpen` is canonical but served by an event route on every host, so it has no handler contract.
+    expect(canonicalHookEvents).toContain('workspaceOpen');
+    expect(hookHandlerEventNames).not.toContain('workspaceOpen');
+    expect(Object.keys(hookResultContract).sort()).toEqual([...hookHandlerEventNames].sort());
+    expect(Object.keys(hookEventFields).sort()).toEqual([...hookHandlerEventNames].sort());
     // A field is either required or optional, never both, and the lists are sorted for stable diffs.
-    for (const event of canonicalHookEvents) {
+    for (const event of hookHandlerEventNames) {
       const { optional, required } = hookEventFields[event];
       expect([...optional]).toEqual([...optional].sort());
       expect([...required]).toEqual([...required].sort());
@@ -180,7 +201,7 @@ describe('the typed hook handler contract agrees with the generated wrappers (#4
     const rejected: string[] = [];
     let compared = 0;
     for (const host of hosts) {
-      for (const event of canonicalHookEvents) {
+      for (const event of hookHandlerEventNames) {
         const wrapper = wrapperFor(host, event);
         if (wrapper === undefined) continue;
         for (const shape of resultShapes()) {
@@ -203,7 +224,7 @@ describe('the typed hook handler contract agrees with the generated wrappers (#4
   it('decodes every host fixture into the field set the payload types declare', () => {
     let compared = 0;
     for (const host of hosts) {
-      for (const [event, nativeEvent] of Object.entries(nativeEventNames(host)) as [CanonicalHookEvent, string][]) {
+      for (const [event, nativeEvent] of Object.entries(nativeEventNames(host)) as [HookHandlerEventName, string][]) {
         const wrapper = wrapperFor(host, event)!;
         // The starter carries what the shared event-route envelope validator
         // needs; the config-hook wrapper additionally requires Cursor's stop status.
@@ -236,23 +257,22 @@ type RequiredKeys<T> = { [K in keyof T]-?: object extends Pick<T, K> ? never : K
 type OptionalKeys<T> = { [K in keyof T]-?: object extends Pick<T, K> ? K : never }[keyof T];
 
 type PayloadKeysAgree = {
-  [E in CanonicalHookEvent]: Equal<RequiredKeys<HookEvent<E>>, HookEventFields[E]['required'][number]>
+  [E in HookHandlerEventName]: Equal<RequiredKeys<HookEvent<E>>, HookEventFields[E]['required'][number]>
     & Equal<OptionalKeys<HookEvent<E>>, HookEventFields[E]['optional'][number]>;
 };
-const payloadKeysAgree: { [E in CanonicalHookEvent]: true } = {
+const payloadKeysAgree: { [E in HookHandlerEventName]: true } = {
   afterTool: true,
   agentStart: true,
   agentStop: true,
   beforeTool: true,
   sessionStart: true,
   stop: true,
-  workspaceOpen: true,
 } satisfies PayloadKeysAgree;
 
 const legalHandlers = {
   afterToolContext: ((event) => ({ additionalContext: `${event.toolName} finished` })) satisfies HookHandler<'afterTool'>,
   agentStopDeny: (() => ({ outcome: 'deny', reason: 'keep going' })) satisfies HookHandler<'agentStop'>,
-  beforeToolDeny: ((event) => ({ additionalContext: 'blocked', outcome: 'deny', reason: `${event.toolName} is not allowed` })) satisfies HookHandler<'beforeTool'>,
+  beforeToolDeny: ((event) => ({ outcome: 'deny', reason: `${event.toolName} is not allowed` })) satisfies HookHandler<'beforeTool'>,
   beforeToolRewrite: ((event) => ({ updatedInput: { dryRun: true, tool: event.toolName } })) satisfies HookHandler<'beforeTool'>,
   sessionStartAsync: (async (event, context) => ({ additionalContext: `${context.target}: ${event.sessionId}`, outcome: 'continue' })) satisfies HookHandler<'sessionStart'>,
   sessionStartVoid: (() => undefined) satisfies HookHandler<'sessionStart'>,
@@ -276,10 +296,14 @@ const illegalResults = {
   sessionStartUpdatedInput: { updatedInput: {} } satisfies HookResult<'sessionStart'>,
   // @ts-expect-error — agentStart has no portable additionalContext channel.
   agentStartContext: { additionalContext: 'x' } satisfies HookResult<'agentStart'>,
+  // @ts-expect-error — Cursor's preToolUse output has no context channel, so beforeTool context is not portable.
+  beforeToolContext: { additionalContext: 'x' } satisfies HookResult<'beforeTool'>,
+  // @ts-expect-error — workspaceOpen is not a config hook event on any host.
+  workspaceOpenHandler: (() => undefined) satisfies HookHandler<'workspaceOpen'>,
 };
 
 it('keeps the compile-time checks referenced', () => {
-  expect(Object.keys(payloadKeysAgree)).toHaveLength(canonicalHookEvents.length);
+  expect(Object.keys(payloadKeysAgree)).toHaveLength(hookHandlerEventNames.length);
   expect(Object.keys(legalHandlers)).toHaveLength(7);
-  expect(Object.keys(illegalResults)).toHaveLength(8);
+  expect(Object.keys(illegalResults)).toHaveLength(10);
 });

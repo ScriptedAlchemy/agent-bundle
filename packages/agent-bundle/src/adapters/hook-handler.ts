@@ -6,22 +6,48 @@ import type { JsonObject, JsonValue } from '../dev/types.ts';
  * #488): the event payload the generated wrapper hands the default export and
  * the result it validates before projecting it into host-native output.
  *
- * Both sides are derived from one table per canonical event so that the
- * types and the wrappers' runtime `validateResult` cannot drift: the table is
- * the *portable* contract — what every host wrapper (`Claude`, `Codex`,
- * `Universal`, and `cursor`) accepts for that event — and
- * `tests/hook-handler-contract.test.ts` runs the generated wrappers against
- * it. Host-specific leniencies (Cursor admits a denying `agentStart`; Claude
- * carries `additionalContext` on `agentStop`) are not part of the type,
- * because a handler typed here must run unchanged on every host it targets.
- * The wrappers keep their runtime validation for untyped and prebuilt handlers.
+ * Both sides are derived from one table per handler event so that the types
+ * and the wrappers' runtime `validateResult` cannot drift: the table is the
+ * *portable* contract — a result field it admits is accepted by every host
+ * wrapper (`Claude`, `Codex`, `Universal`, and `cursor`) *and* projected into
+ * that host's native output — and `tests/hook-handler-contract.test.ts` runs
+ * the generated wrappers against it. Host-specific behaviour is not part of
+ * the type, because a handler typed here must run unchanged on every host it
+ * targets: Cursor admits a denying `agentStart`; Claude and Codex accept
+ * `additionalContext` on `beforeTool` and `agentStart` (Cursor validates but
+ * has no channel for it there); Claude carries `additionalContext` on
+ * `agentStop`. The wrappers keep their runtime validation for untyped and
+ * prebuilt handlers.
  */
 
-/** What a hook result may carry for one canonical event, on every host. */
+/**
+ * The canonical events a config hook (`hooks.<event>.handler`) can be declared
+ * for: the events every production host maps to a native plain hook.
+ * `workspaceOpen` is a `CanonicalHookEvent` but no host maps it as a plain
+ * hook — it is served by an event route — so it has no handler contract.
+ */
+export const hookHandlerEventNames = [
+  'sessionStart',
+  'beforeTool',
+  'afterTool',
+  'stop',
+  'agentStart',
+  'agentStop',
+] as const satisfies readonly CanonicalHookEvent[];
+
+export type HookHandlerEventName = (typeof hookHandlerEventNames)[number];
+
+/** What a hook result may carry for one handler event, on every host. */
 export interface HookResultRule {
-  /** `additionalContext` is projected into the agent's context. */
+  /** `additionalContext` is accepted and projected into the agent's context on every host. */
   readonly additionalContext: boolean;
-  /** `{ outcome: 'deny', reason }` is a legal result (a denial always needs a non-empty `reason`). */
+  /**
+   * `{ outcome: 'deny', reason }` is a legal result (a denial always needs a
+   * non-empty `reason`). Cursor consumes an `agentStop` denial only for a
+   * subagent that completed (`nativeInput.status === "completed"`); denying an
+   * errored or aborted one fails the hook there, so a handler targeting Cursor
+   * checks `context.nativeInput.status` first.
+   */
   readonly deny: boolean;
   /** A continuing result may replace the pending call's input with `updatedInput`. */
   readonly updatedInput: boolean;
@@ -37,32 +63,32 @@ export const hookResultContract = {
   afterTool: { additionalContext: true, deny: false, updatedInput: false },
   // Claude and Codex accept `additionalContext` here; Cursor's subagentStart has no context channel.
   agentStart: { additionalContext: false, deny: false, updatedInput: false },
-  // Claude carries `additionalContext` on SubagentStop; Codex and Cursor reject it.
+  // Claude carries `additionalContext` on SubagentStop; Codex and Cursor reject it. See HookResultRule.deny for Cursor's status rule.
   agentStop: { additionalContext: false, deny: true, updatedInput: false },
-  beforeTool: { additionalContext: true, deny: true, updatedInput: true },
+  // Claude and Codex project `additionalContext` on PreToolUse; Cursor's preToolUse output carries only a permission or an input rewrite.
+  beforeTool: { additionalContext: false, deny: true, updatedInput: true },
   sessionStart: { additionalContext: true, deny: false, updatedInput: false },
   stop: { additionalContext: false, deny: true, updatedInput: false },
-  workspaceOpen: { additionalContext: true, deny: false, updatedInput: false },
-} as const satisfies Readonly<Record<CanonicalHookEvent, HookResultRule>>;
+} as const satisfies Readonly<Record<HookHandlerEventName, HookResultRule>>;
 
 export type HookResultContract = typeof hookResultContract;
 
-type WithAdditionalContext<E extends CanonicalHookEvent> = HookResultContract[E]['additionalContext'] extends true
+type WithAdditionalContext<E extends HookHandlerEventName> = HookResultContract[E]['additionalContext'] extends true
   ? { readonly additionalContext?: string }
   : { readonly additionalContext?: never };
 
-type WithUpdatedInput<E extends CanonicalHookEvent> = HookResultContract[E]['updatedInput'] extends true
+type WithUpdatedInput<E extends HookHandlerEventName> = HookResultContract[E]['updatedInput'] extends true
   ? { readonly updatedInput?: JsonObject }
   : { readonly updatedInput?: never };
 
 /** A continuing result: `outcome` may be omitted, and `reason` is never legal here. */
-export type HookContinueResult<E extends CanonicalHookEvent> = {
+export type HookContinueResult<E extends HookHandlerEventName> = {
   readonly outcome?: 'continue';
   readonly reason?: never;
 } & WithAdditionalContext<E> & WithUpdatedInput<E>;
 
 /** A denying result, for the events whose hosts honour a denial; `updatedInput` is never legal while denying. */
-export type HookDenyResult<E extends CanonicalHookEvent> = HookResultContract[E]['deny'] extends true
+export type HookDenyResult<E extends HookHandlerEventName> = HookResultContract[E]['deny'] extends true
   ? {
       readonly outcome: 'deny';
       /** Non-empty: the wrapper rejects a denial without one. */
@@ -72,15 +98,15 @@ export type HookDenyResult<E extends CanonicalHookEvent> = HookResultContract[E]
   : never;
 
 /**
- * The result a handler for canonical event `E` may return. Returning nothing
+ * The result a handler for event `E` may return. Returning nothing
  * (`void`) continues; the generated wrapper still validates every returned
  * object at hook time, so JavaScript and prebuilt handlers keep the same
  * runtime contract.
  */
-export type HookResult<E extends CanonicalHookEvent> = HookContinueResult<E> | HookDenyResult<E>;
+export type HookResult<E extends HookHandlerEventName> = HookContinueResult<E> | HookDenyResult<E>;
 
 /**
- * The payload fields every canonical hook event carries. Fields are required
+ * The payload fields every handler event carries. Fields are required
  * only when every host's wrapper guarantees them; `sessionId` is the one
  * identity every host names. `transcriptPath` is `null` on Codex when no
  * rollout exists yet.
@@ -136,9 +162,7 @@ export interface AgentStopHookEvent extends HookEventBase {
   readonly stopHookActive: boolean;
 }
 
-export type WorkspaceOpenHookEvent = HookEventBase;
-
-/** The per-event payload a config hook handler receives, keyed by canonical event. */
+/** The per-event payload a config hook handler receives, keyed by handler event. */
 export interface HookEventPayloads {
   readonly afterTool: AfterToolHookEvent;
   readonly agentStart: AgentStartHookEvent;
@@ -146,11 +170,10 @@ export interface HookEventPayloads {
   readonly beforeTool: BeforeToolHookEvent;
   readonly sessionStart: SessionStartHookEvent;
   readonly stop: StopHookEvent;
-  readonly workspaceOpen: WorkspaceOpenHookEvent;
 }
 
-/** The event payload a handler for canonical event `E` receives. */
-export type HookEvent<E extends CanonicalHookEvent> = HookEventPayloads[E];
+/** The event payload a handler for event `E` receives. */
+export type HookEvent<E extends HookHandlerEventName> = HookEventPayloads[E];
 
 /**
  * The payload fields per canonical event, as the wrappers decode them: the
@@ -183,11 +206,7 @@ export const hookEventFields = {
     optional: ['cwd', 'effort', 'hookEventName', 'lastAssistantMessage', 'model', 'permissionMode', 'promptId', 'transcriptPath', 'turnId'],
     required: ['sessionId', 'stopHookActive'],
   },
-  workspaceOpen: {
-    optional: ['cwd', 'effort', 'hookEventName', 'model', 'permissionMode', 'promptId', 'transcriptPath', 'turnId'],
-    required: ['sessionId'],
-  },
-} as const satisfies Readonly<Record<CanonicalHookEvent, { readonly optional: readonly string[]; readonly required: readonly string[] }>>;
+} as const satisfies Readonly<Record<HookHandlerEventName, { readonly optional: readonly string[]; readonly required: readonly string[] }>>;
 
 export type HookEventFields = typeof hookEventFields;
 
@@ -203,15 +222,14 @@ export interface HookHandlerContext {
 }
 
 /**
- * A config-declared hook handler module's default export for canonical
- * event `E`. Author it as
+ * A config-declared hook handler module's default export for event `E`. Author it as
  * `export default ((event) => ({ ... })) satisfies HookHandler<'sessionStart'>;`
  * and an illegal result — a denying `sessionStart`, a `reason` beside
  * `continue`, `updatedInput` on a `stop` hook — is rejected by `tsc` instead
  * of by the wrapper at hook time. The wrapper's runtime validation is
  * unchanged, so a JavaScript or prebuilt handler is held to the same contract.
  */
-export type HookHandler<E extends CanonicalHookEvent> = (
+export type HookHandler<E extends HookHandlerEventName> = (
   event: HookEvent<E>,
   context: HookHandlerContext,
 ) => HookResult<E> | undefined | void | Promise<HookResult<E> | undefined | void>;

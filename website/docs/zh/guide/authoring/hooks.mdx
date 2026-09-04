@@ -103,8 +103,14 @@ export default ((event) => ({
 增加 `toolResponse`；`StopHookEvent` 与 `AgentStopHookEvent` 携带 `stopHookActive`；`AgentStartHookEvent`
 携带 `agentId` 与 `agentType`）都按名字导出，只有当每个宿主都会提供某个字段时它才是必填的；处理器的第二个
 参数（`HookHandlerContext`）给出调用它的 `target`、该宿主的原生事件名以及原样的已校验原生输入，供需要
-宿主特定字段的处理器使用。这些类型是可移植契约——每个宿主包装层都接受的部分——因此仅 Cursor 支持的
-`agentStart` 拒绝，或仅 Claude 支持的 `agentStop` `additionalContext`，都不在其中。
+宿主特定字段的处理器使用。`HookHandlerEventName` 是配置 hook 可以声明的事件集合——每个宿主都映射为
+普通 hook 的那六个；`workspaceOpen` 改由[事件路由](#事件路由)提供。这些类型是可移植契约：它们所接纳的
+字段既被每个宿主的包装层接受，*也*会到达该宿主的原生输出。宿主特定的行为不在其中，只能通过未带类型的
+结果触及：来自 `beforeTool` 的 `additionalContext`（Claude 与 Codex 会投递；Cursor 的 `preToolUse` 输出
+只携带权限或输入重写）、来自 `agentStart` 或 `agentStop` 的 `additionalContext`（分别为 Claude 与 Codex、
+仅 Claude），以及仅 Cursor 支持的 `agentStart` 拒绝。还有一条类型无法承载的运行时注意事项：Cursor 只对
+`status` 为 `completed` 的子代理消费 `agentStop` 拒绝，因此同时面向 Cursor 的处理器应在拒绝前检查
+`context.nativeInput.status`。
 
 生成的包装层仍会在把结果投影为宿主原生输出之前先校验它——同样的规则，在 hook 运行时也施加于 JavaScript
 与预构建的处理器。只接受四个键，并且每一个都会被检查：
