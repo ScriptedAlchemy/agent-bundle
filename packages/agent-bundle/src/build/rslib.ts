@@ -11,6 +11,7 @@ import { isErrno } from '../core/errors.ts';
 import { isRecord } from '../core/strict-json.ts';
 import type { AgentBundleToolsConfig } from '../core/types.ts';
 import type { AgentBundleMeta } from '../meta.ts';
+import { composeToolsLayers, frameworkInvariantLayer } from './compose-layers.ts';
 import { mcpEntryRuntimeSpecifier } from './entry-shell.ts';
 import {
   generatedMetaModulePath,
@@ -414,13 +415,12 @@ const assertExecutableConfig = (
 };
 
 /**
- * Composes the full Rslib lib config for one synthesized entry: the
- * framework profile, the consumer `tools` escape hatch merged over it
- * (Rslib's "raw user config highest" priority), and the invariant enforcer
- * hook appended last, all composed with Rslib's own `mergeRslibConfig`
- * keyed by the synthesized lib id. `buildWithRslib` lowers exactly this
- * composition and `inspect --bundler` surfaces it, so the two can never
- * drift.
+ * Composes the full Rslib lib config for one synthesized entry in the
+ * shared `composeToolsLayers` order — the framework profile, the consumer
+ * `tools` escape hatch over it, the invariant enforcer hook last — with
+ * Rslib's own `mergeRslibConfig` keyed by the synthesized lib id.
+ * `buildWithRslib` lowers exactly this composition and `inspect --bundler`
+ * surfaces it, so the two can never drift.
  */
 export const composeEntryLibConfig = (
   entry: RslibEntry,
@@ -567,20 +567,17 @@ export const composeEntryLibConfig = (
       ...(entry.tsconfigPath === undefined ? {} : { tsconfigPath: entry.tsconfigPath }),
     },
   };
-  const merged = mergeRslibConfig(
-    { lib: [profile] },
-    options.tools?.rsbuild === undefined
-      ? undefined
-      : { lib: [{ ...asRslibEnvironmentFragment(options.tools.rsbuild), id: libId }] },
-    options.tools?.rspack === undefined
-      ? undefined
-      : { lib: [{ id: libId, tools: { rspack: asRslibRspackHatch(options.tools.rspack) } }] },
-    // Merged last so the hatch cannot reach either invariant. Dist cleaning
-    // would delete sibling entries already emitted into the shared staged
-    // root, so it stays off no matter what the consumer asks for; the
-    // emitted output is published atomically from a staged root instead.
-    { lib: [{ id: libId, output: { cleanDistPath: false }, tools: { rspack: enforceInvariants } }] },
-  );
+  // Every layer is keyed by the synthesized lib id so `mergeRslibConfig`
+  // folds them into one lib entry in `composeToolsLayers` order.
+  const merged = mergeRslibConfig(...composeToolsLayers<RslibLibConfig>({
+    invariants: { id: libId, ...frameworkInvariantLayer(enforceInvariants) },
+    lift: {
+      rsbuild: (fragment) => ({ ...asRslibEnvironmentFragment(fragment), id: libId }),
+      rspack: (hatch) => ({ id: libId, tools: { rspack: asRslibRspackHatch(hatch) } }),
+    },
+    profile,
+    ...(options.tools === undefined ? {} : { tools: options.tools }),
+  }).map((lib) => ({ lib: [lib] })));
   const lib = merged.lib?.[0];
   if (merged.lib?.length !== 1 || lib === undefined) {
     throw new Error(`Rslib config composition did not merge one lib entry for ${JSON.stringify(libId)}.`);
