@@ -551,7 +551,11 @@ export const openInMemoryMcpServer = async <
             allowedTargets: [options.lineageHost],
             artifactEpoch,
             createCanonicalEventProps: (() => { throw new Error('in-memory lineage sessions dispatch no events'); }) as never,
-            createEventRuntimeServer: (async () => ({ close: async () => undefined })) as never,
+            createEventRuntimeServer: (async () => ({
+              close: async () => undefined,
+              onRoleChange: () => () => undefined,
+              role: () => 'owner',
+            })) as never,
             endpointId: `${artifactEpoch}:in-memory`,
             projectEventDocument: (() => undefined) as never,
             target: options.lineageHost,

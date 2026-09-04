@@ -337,6 +337,25 @@ down first, so it never leaves a live server behind the error. A stale socket or
 crashed process is recovered by the next server, which probes the endpoint and reclaims a
 claim whose owner is provably dead.
 
+**Concurrent sessions.** Hosts routinely run several sessions of one plugin from the same
+install root — every Claude Code session Claude Desktop launches shares one
+`--plugin-dir`, and Cursor imports Claude-installed plugins from that same cache — so several
+generated MCP server processes with the same endpoint are normal. Exactly one of them owns
+the socket at a time. A server that starts while another process owns the endpoint does
+**not** exit: it comes up in the `standby` role, serves its own MCP session as usual, writes
+`agent-bundle event runtime: <socket> is owned by another process; standing by` to stderr,
+and probes the endpoint about once a second. The moment the owner exits, a standby takes the
+socket over through the same claim-and-listen path an unowned start uses (and logs
+`… was released by its owner; took it over`); if several stand by, the claim lock lets exactly
+one win and the rest keep waiting. Hook wrappers need no change: while an owner is alive they
+are answered as before, and during the takeover gap (at most about a second) they see
+`runtime-unavailable`, which is exactly the case the `fallback: 'standalone'` route above
+covers — a shared-only route exits nonzero for that one event. A takeover that fails for any
+reason other than the socket still being owned (a socket directory it cannot write, a claim
+that never clears) is reported on the server's stderr — one line per distinct failure, repeated
+at most every 30 seconds — while the server keeps standing by. A startup that fails for any
+other reason still fails closed, as does a stale socket the owner cannot remove.
+
 A route with `runtime: 'standalone'` bundles its module into the wrapper itself: the same
 canonical identity, the same projection, no shared process state. `AB4817` refuses a route
 that requires the shared runtime on a target where no generated MCP entry hosts it and no
