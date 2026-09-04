@@ -487,7 +487,16 @@
   },
   "mcp": {
     "stdio": true,
-    "streamableHttp": true
+    "streamableHttp": true,
+    "tasks": {
+      "state": "unavailable",
+      "reason": "Claude Code never task-augments a tools/call (MCP 2025-11-25 Tasks): a main-conversation call still running after two minutes moves to a client-side background task (`/tasks`, `CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS`) while the call itself stays an ordinary tools/call held open against the server. A generated server's task-capable tools serve it as ordinary requests.",
+      "evidence": [
+        "retrieved 2026-09-04 from https://code.claude.com/docs/en/mcp: \"An MCP tool call in the main conversation that is still running after two minutes moves to a background task instead of blocking the session ... The per-call limits still apply while the call runs in the background\" (v2.1.212+); the page names no `tasks` capability, no `params.task`, and no `tasks/get`, `tasks/result`, or `tasks/cancel` request.",
+        "retrieved 2026-09-04 from https://code.claude.com/docs/en/mcp: the v2 runtime (SDK 2.0, v2.1.232+) asks stdio servers for protocol revision 2026-07-28 only when `MCP_PROTOCOL_NEGOTIATION=auto`; otherwise stdio servers negotiate through the earlier `initialize` handshake, where the generated server serves the 2025-11-25 core Tasks utility to a client that sends `params.task`.",
+        "live model 2026-09-03, Claude Code 2.1.257 (host-lineage audit): every recorded tools/call carried `_meta.claudecode/toolUseId` and a progressToken; none carried `params.task`."
+      ]
+    }
   },
   "noticeDelivery": {
     "current-response": {

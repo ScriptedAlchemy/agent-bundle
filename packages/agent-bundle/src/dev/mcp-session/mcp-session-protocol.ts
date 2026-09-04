@@ -53,12 +53,22 @@ export interface McpSessionOperationTraceEntry extends McpSessionTraceEntryBase 
 
 export type McpSessionOperation =
   | 'callTool'
+  /** A task-augmented `tools/call` (#369): answered by a `CreateTaskResult`. */
+  | 'callToolTask'
   | 'cancel'
+  /** `tasks/cancel` of one task the session created. */
+  | 'cancelTask'
   | 'getPrompt'
+  /** `tasks/get`: the status, progress, and retention of one task. */
+  | 'getTask'
+  /** `tasks/result`: the final `CallToolResult` of one task, blocking until it settles. */
+  | 'getTaskResult'
   | 'initialize'
   | 'listPrompts'
   | 'listResources'
   | 'listResourceTemplates'
+  /** `tasks/list`: every task the session still retains. */
+  | 'listTasks'
   | 'listTools'
   | 'readResource'
   | 'restart'
