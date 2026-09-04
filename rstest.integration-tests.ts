@@ -69,6 +69,8 @@ export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/target-mcp-runtime.test.ts',
   'packages/agent-bundle/tests/workbench-surface-dev-server.test.ts',
   'packages/agent-bundle/tests/worktree-proximity-journeys.test.ts',
+  'packages/rsc-markdown-stream/tests/react-server.test.ts',
+  'packages/rsc-runtime/tests/markdown-content-flight.test.ts',
   'packages/rsc-runtime/tests/notices-sqlite-cross-process.test.ts',
   'packages/rsc-runtime/tests/state-packaging.test.ts',
   'packages/rsc-runtime/tests/state-sqlite-cross-process.test.ts',

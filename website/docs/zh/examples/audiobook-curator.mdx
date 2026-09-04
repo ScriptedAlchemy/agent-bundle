@@ -31,6 +31,10 @@ description: '有声书策展器示例：一个由路由模块、请求上下文
   而可能产生变更的工具需要 `--yes`。
 - **表现层是共享的，不是复制的。** `src/components/` 是一份报告组件库，MCP 路由与渲染式 CLI 路由都
   组合它，因此一个 MCP 工具和它的 CLI 对应命令不可能漂移成两套表现层。
+- **Markdown 块就是 JSX。** 组件库中的 `DataList`、`FileList` 原语以及重复分析中的已测量文件表格，都通过
+  运行时的 [`MarkdownContent`](../guide/authoring/mcp.mdx#用-jsx-编写富-markdown-块) 组件编写
+  Markdown——`<ul>`/`<li>`、`<strong>` 和一个 GFM `<table>`——而不是手工拼接字符串，因此转义归渲染器
+  负责，管道输出的 CLI Markdown 与 MCP 文本内容出自同一份输出。
 - **请求上下文是观察出来的，不是假定的。** 约定式的 `src/providers/library.ts` 在每个请求中探测
   `ffmpeg -version` 与 `ffprobe -version`，并连同探测时间一起发布工具可用性。目录资源通过
   `await agent()` 读取它，并渲染实时上下文或一个显式的不可用状态。

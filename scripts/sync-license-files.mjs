@@ -12,6 +12,7 @@ export const licenseFiles = Object.freeze(['LICENSE', 'NOTICE']);
 export const publishablePackageDirectories = Object.freeze([
   'packages/agent-bundle',
   'packages/rsc-runtime',
+  'packages/rsc-markdown-stream',
   'packages/create-agent-bundle',
 ]);
 

@@ -208,6 +208,59 @@ should return an honest unavailable-shaped value instead. The `agent-bundle/test
 its providers the same view, so a route-unit test that injects `context.lineage` or mounts state
 sees them reflected in `providers.<key>`; an explicit `context.providers` map is mounted verbatim.
 
+## Rich Markdown blocks as JSX
+
+`Agent.Markdown` carries one Markdown string, and hand-concatenating that string — one
+`- **${label}:** ${value}` per row — is where tables, nested lists, and escaping go wrong. The
+async `MarkdownContent` component from `@agent-bundle/runtime` renders its JSX children to one
+GitHub Flavored Markdown string and lowers it into `Agent.Markdown`, so a route authors the block
+as markup:
+
+```tsx
+import React from 'react';
+import { MarkdownContent } from '@agent-bundle/runtime';
+
+interface MeasuredFile {
+  readonly path: string;
+  readonly bytes: number;
+}
+
+export const MeasuredFiles = ({ files }: { readonly files: readonly MeasuredFile[] }) => (
+  <MarkdownContent>
+    <table>
+      <thead>
+        <tr><th>File</th><th align="right">Bytes</th></tr>
+      </thead>
+      <tbody>
+        {files.map((file) => (
+          <tr key={file.path}><td>{file.path}</td><td>{file.bytes}</td></tr>
+        ))}
+      </tbody>
+    </table>
+  </MarkdownContent>
+);
+```
+
+Headings `h1`–`h6`, paragraphs, `strong`/`em`/`del`, `code` and `pre`, links and images,
+blockquotes, `ul`/`ol` (nested, and `start` on `ol`), GFM task lists (`<input type="checkbox">`
+inside `li`), `table` with `align` on its cells, `dt`/`dd`, `br`, and `hr` serialize to their
+Markdown forms; unknown elements pass their children through. Sync and async components anywhere
+in the children — including ones that call `React.use` — resolve before the block is emitted.
+Text is escaped, so literal `*stars*`, `[x]`, `<tag>`, `&amp;`, and a line-leading `-`, `#`,
+`1.`, or `>` survive as text when the document is parsed again. The rendered block carries no
+trailing newline: Agent Document projections own the blank-line joining between sibling blocks,
+so `MarkdownContent` sits beside `Agent.Text` and other nodes exactly like a handwritten
+`Agent.Markdown`.
+
+`components` maps extra host tag names to serializers, `(props, { inline, blocks }) => string`,
+when a custom element needs its own Markdown — `inline()` and `blocks()` render the element's
+children as inline text or as blank-line-joined blocks. The renderer is exported too:
+`renderToMarkdown(children, options?)` resolves to the string and
+`renderToMarkdownStream(children, options?)` yields a `ReadableStream<Uint8Array>` of UTF-8
+blocks in document order. Its output is pinned against micromark with the GFM extension — the
+parser under the Workbench's `react-markdown`/`remark-gfm` — so what a route authors is the
+structure the consumer parses.
+
 ## Streaming and progress
 
 A route streams by rendering React `Suspense`: the shell goes out first with the fallback in
