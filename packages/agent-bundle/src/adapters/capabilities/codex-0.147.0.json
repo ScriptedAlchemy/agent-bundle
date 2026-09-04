@@ -596,7 +596,15 @@
       "state": "degraded"
     },
     "stdio": true,
-    "streamableHttp": true
+    "streamableHttp": true,
+    "tasks": {
+      "state": "unavailable",
+      "reason": "Codex 0.147.0 does not task-augment a tools/call. Its opt-in MCP 2026-07-28 support (`mcp_2026_07_28`) documents paginated discovery, multi-round requests, and non-blocking server startup; on that revision tasks are the `io.modelcontextprotocol/tasks` extension (`resultType: \"task\"`, `tasks/update`), a shape the generated server's SDK does not serve. With the flag off it negotiates the legacy `initialize` handshake and sends no `params.task`.",
+      "evidence": [
+        "Codex CLI 0.147.0 release (2026-08-07): MCP 2026-07-28 support is opt-in through the `mcp_2026_07_28` feature flag or `codex --enable mcp_2026_07_28`, adding paginated discovery, multi-round (`input_required`) requests, and non-blocking server startup; task-augmented tool calls are not among the documented additions.",
+        "2026-09-03: recorded tools/call requests carry `_meta.x-codex-turn-metadata` (thread_id, turn_id, session_id) and no `params.task`."
+      ]
+    }
   },
   "noticeDelivery": {
     "current-response": {

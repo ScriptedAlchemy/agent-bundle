@@ -136,7 +136,14 @@
       ]
     },
     "stdio": true,
-    "streamableHttp": true
+    "streamableHttp": true,
+    "tasks": {
+      "state": "unavailable",
+      "reason": "The portable target pins no host client, so no host is recorded as issuing task-augmented calls. The generated server serves the 2025-11-25 Tasks utility to any client of that revision that sends `params.task` to a tool declaring `execution.taskSupport` — the MCP SDK client and the Workbench MCP page do.",
+      "evidence": [
+        "2026-09-04: packages/agent-bundle/tests/projection/mcp-in-memory.test.ts and packages/agent-bundle/tests/packed-stdio-projection.test.ts drive a task-augmented tools/call through the generated server with the SDK client; packages/workbench/tests/mcp-tasks.e2e.test.ts drives it from the Workbench against the spawned stdio artifact."
+      ]
+    }
   },
   "noticeDelivery": {
     "current-response": {

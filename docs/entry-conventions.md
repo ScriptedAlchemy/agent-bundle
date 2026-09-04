@@ -948,10 +948,18 @@ top level without a default export — keep today's behavior byte for byte.
 
 Every served tool call is one ordinary `tools/call`: optional
 `notifications/progress` while the caller's progress token is live, then one
-final `CallToolResult`. The shell advertises no `tasks` capability and
-processes a task-augmented request as an ordinary one; task-augmented calls
-are deferred until the MCP SDK ships a task runtime (see
-[MCP conformance evidence](./mcp-conformance.md#task-augmented-requests-deferred-2026-09-02)).
+final `CallToolResult`. The operation-based `createRscMcpServer` shell above
+advertises no `tasks` capability and processes a task-augmented request as an
+ordinary one, as the `2025-11-25` Tasks utility requires of a receiver without
+the capability. Generated route servers (`src/mcp/<server>/tools/*.tsx`) serve
+the utility for tool routes that declare `config.execution.taskSupport`: a
+`tools/call` carrying `params.task` answers with a `CreateTaskResult`, the
+Flight render continues behind the task, `tasks/get` reports status and the
+last render progress, `tasks/result` blocks for the same `CallToolResult` the
+ordinary call returns, `tasks/cancel` interrupts the render through its
+`AbortSignal`, and `tasks/list` lists the session's tasks (see
+[Long-running tools: tasks](https://scriptedalchemy.github.io/agent-bundle/guide/authoring/mcp#long-running-tools-tasks)
+and [MCP conformance evidence](./mcp-conformance.md#task-augmented-requests-served-2026-09-04)).
 
 The same lifecycle is public API for hand-rolled entries:
 
