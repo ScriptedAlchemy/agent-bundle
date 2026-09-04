@@ -656,7 +656,10 @@ const validateGeneratedFiles = async (options: {
     files: options.files,
     ...(options.manifestFiles === undefined
       ? {}
-      : { manifestFiles: new Set(options.manifestFiles.map((file) => file.path)) }),
+      : {
+        bundledPaths: new Set(options.manifestFiles.filter((file) => file.kind === 'bundle').map((file) => file.path)),
+        manifestFiles: new Set(options.manifestFiles.map((file) => file.path)),
+      }),
     prebuiltPaths,
     validJson,
   }));
@@ -664,8 +667,14 @@ const validateGeneratedFiles = async (options: {
   return Object.freeze(diagnostics);
 };
 
+/**
+ * The pre-manifest content pass `build` runs over a staged tree before it
+ * writes the manifest. The planned manifest file table, when given, tells
+ * the JavaScript validator which modules the compiler emitted; without it
+ * every module is parsed in full.
+ */
 export const validateArtifactFiles = async (
-  context: ValidateArtifactOptions,
+  context: ValidateArtifactOptions & { readonly manifestFiles?: readonly ManifestFile[] },
 ): Promise<readonly Diagnostic[]> => {
   const inspection = await inspectArtifact(context);
   return Object.freeze([
@@ -673,6 +682,7 @@ export const validateArtifactFiles = async (
     ...await validateGeneratedFiles({
       artifactRoot: context.artifactRoot,
       files: inspection.files,
+      ...(context.manifestFiles === undefined ? {} : { manifestFiles: context.manifestFiles }),
       ...(context.prebuiltPaths === undefined ? {} : { prebuiltPaths: context.prebuiltPaths }),
     }),
   ]);

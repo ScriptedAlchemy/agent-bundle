@@ -3,12 +3,10 @@ import { isBuiltin } from 'node:module';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { parse as parseJavaScript } from 'acorn';
-import { init, parse } from 'es-module-lexer';
-
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { artifactDiagnostic as diagnostic, artifactDiagnosticRecoveries } from './artifact-diagnostics.ts';
 import type { ArtifactFile } from './emit.ts';
+import { readModuleImports, rememberedModuleImports, type ModuleImport } from './module-imports.ts';
 
 const javaScriptModuleSuffix = /\.(?:m?js)$/u;
 const generatedJavaScriptRecovery = artifactDiagnosticRecoveries.AB6005;
@@ -98,13 +96,18 @@ const resolveJavaScriptImport = async (options: {
 
 export const validateJavaScriptModules = async (options: {
   readonly artifactRoot: string;
+  /**
+   * Modules the framework compiled (manifest kind `bundle`): the ESM lexer is
+   * their only syntax pass (`ModuleSyntaxCheck` `lexed`); every other module
+   * is parsed in full (`parsed`).
+   */
+  readonly bundledPaths?: ReadonlySet<string>;
   readonly files: readonly ArtifactFile[];
   readonly manifestFiles?: ReadonlySet<string>;
   /** Prebuilt payload files: opaque consumer outputs excluded from graph validation. */
   readonly prebuiltPaths?: ReadonlySet<string>;
   readonly validJson: ReadonlySet<string>;
 }): Promise<readonly Diagnostic[]> => {
-  await init;
   const artifactRoot = await realpath(options.artifactRoot);
   const files = new Map(options.files
     .filter((file) => options.manifestFiles === undefined || options.manifestFiles.has(file.path))
@@ -120,29 +123,35 @@ export const validateJavaScriptModules = async (options: {
       return;
     }
     visiting.add(path);
-    let source: string;
-    try {
-      source = await readFile(resolve(artifactRoot, path), 'utf8');
-    } catch {
-      diagnostics.push(graphDiagnostic(path, 'cannot be read.'));
-      visiting.delete(path);
-      visited.add(path);
-      return;
-    }
-
-    let imports: ReturnType<typeof parse>[0];
-    try {
-      parseJavaScript(source, { ecmaVersion: 'latest', sourceType: 'module' });
-      [imports] = parse(source);
-    } catch {
-      diagnostics.push(graphDiagnostic(path, 'has invalid syntax.'));
-      visiting.delete(path);
-      visited.add(path);
-      return;
+    const check = options.bundledPaths?.has(path) === true ? 'lexed' : 'parsed';
+    // The inspection that listed this file already digested its bytes; the
+    // same bytes scanned earlier in this process need no second read or lex.
+    const sha256 = files.get(path)?.sha256;
+    let imports: readonly ModuleImport[] | undefined = sha256 === undefined
+      ? undefined
+      : rememberedModuleImports(check, sha256);
+    if (imports === undefined) {
+      let source: string;
+      try {
+        source = await readFile(resolve(artifactRoot, path), 'utf8');
+      } catch {
+        diagnostics.push(graphDiagnostic(path, 'cannot be read.'));
+        visiting.delete(path);
+        visited.add(path);
+        return;
+      }
+      try {
+        imports = await readModuleImports(source, { check, ...(sha256 === undefined ? {} : { sha256 }) });
+      } catch {
+        diagnostics.push(graphDiagnostic(path, 'has invalid syntax.'));
+        visiting.delete(path);
+        visited.add(path);
+        return;
+      }
     }
     for (const imported of imports) {
-      if (imported.d === -2) continue;
-      if (imported.n === undefined) {
+      if (imported.kind === 'meta') continue;
+      if (imported.specifier === undefined) {
         diagnostics.push(graphDiagnostic(path, 'has a non-literal dynamic import.'));
         continue;
       }
@@ -150,7 +159,7 @@ export const validateJavaScriptModules = async (options: {
         artifactRoot,
         files,
         importer: path,
-        specifier: imported.n,
+        specifier: imported.specifier,
         validJson: options.validJson,
       });
       if (resolved.diagnostic !== undefined) diagnostics.push(resolved.diagnostic);

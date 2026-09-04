@@ -510,6 +510,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
     });
     const preManifestDiagnostics = await validateArtifactFiles({
       artifactRoot: stageRoot,
+      manifestFiles: files,
       prebuiltPaths: new Set(outputProvenance
         .filter((output) => output.kind === 'prebuilt')
         .map((output) => output.path)),
