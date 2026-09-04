@@ -700,6 +700,7 @@ const eventRouteHookWrapperSource = (
           '          lineage: context.lineage,',
           '          requestInvocation: context.invocation,',
           '          session: context.session,',
+          '          terminal: context.terminal,',
           '          type: "render",',
           '          workspace: context.workspace,',
           '        });',
@@ -747,6 +748,8 @@ const eventRouteHookWrapperSource = (
           '    lineage,',
           '    ...(sessionId === undefined ? {} : { session: available({ sessionId }, "native") }),',
           '    signal,',
+          // A hook's stdout is its host envelope: no terminal, never probed (#511).
+          '    terminal: available({ hostSurface: "hook", sharesTarget: false, stderr: { color: "none", kind: "none" }, stdout: { color: "none", kind: "none" } }, "derived"),',
           '    ...(workspaceRoot === undefined ? {} : { workspace: available({ root: workspaceRoot }, "native") }),',
           '  }, async () => renderStandalone({ kind: "event", props: { event: canonicalEvent, payload: { canonical: props.canonical, native: props.native } } }, signal));',
           '  return projectEventDocument(document, canonicalEvent, target, nativeEvent, native);',

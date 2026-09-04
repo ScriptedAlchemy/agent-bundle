@@ -57,6 +57,10 @@ export default async function Summary({ argv, signal }: ScriptRouteProps) {
     invocation: context.invocation.kind,
     stateMounted: context.state !== undefined,
     surface: context.invocation.surface ?? null,
+    // The executable's probed terminal (#511), as `<surface>/<stdout kind>/<stderr kind>`.
+    terminal: context.terminal.state === 'available'
+      ? `${context.terminal.value.hostSurface}/${context.terminal.value.stdout.kind}/${context.terminal.value.stderr.kind}`
+      : `unavailable:${context.terminal.reason}`,
   };
   if (argv.includes('--fail')) {
     return (

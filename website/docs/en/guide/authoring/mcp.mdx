@@ -115,6 +115,44 @@ siblings claimed blind, places a start no spawn window could, and moves a child 
 filed under the wrong parent. There is deliberately no operator or user identity axis: the
 framework never reads or surfaces who the human behind a host session is.
 
+### The terminal capability
+
+The handle's last axis is `terminal`, an `Observed<AgentTerminal>`: what the process's output
+streams are, so a route that paints its own stderr or sizes its own table never probes
+`process.stdout.isTTY` or reads `FORCE_COLOR` itself. The framework shell computes it once per
+invocation with the same rules that select the CLI output mode, so plugin output and framework
+output agree. It is information only — never a writer — and it changes nothing about what
+`Agent.*` components render.
+
+```ts
+interface AgentTerminal {
+  hostSurface: 'cli' | 'mcp' | 'hook' | 'script' | 'workbench';
+  stdout: { kind: 'tty' | 'pipe' | 'none'; color: 'none' | 'basic' | '256' | 'truecolor'; columns?: number; rows?: number };
+  stderr: { kind: 'tty' | 'pipe' | 'none'; color: 'none' | 'basic' | '256' | 'truecolor'; columns?: number; rows?: number };
+  sharesTarget: boolean; // fd 1 and fd 2 name one open file (`2>&1`, one shared terminal)
+}
+```
+
+Color follows the informal standards in their usual precedence: `FORCE_COLOR` decides outright
+when set (`0`/`false` off; empty, `1`, or `true` basic; `2` 256; `3` truecolor), `CLICOLOR_FORCE`
+forces color on even for a pipe, `NO_COLOR` (any non-empty value) and `CLICOLOR=0` force it off,
+`TERM=dumb` renders none, and otherwise a terminal renders at the depth `COLORTERM`/`TERM`
+advertise while a pipe renders none. `COLUMNS`/`LINES` override the reported size.
+
+| Where the route runs | `hostSurface` | `stdout` / `stderr` |
+| --- | --- | --- |
+| Routed CLI executable — plain, rendered, or projected MCP command | `cli` | Probed from the executable's own process. Machine output owns stdout, so `stdout` says where the document lands and `stderr` is the channel a route may write to. |
+| Rendered script (`src/scripts/<name>.tsx`) | `script` | Probed, as above. |
+| Generated MCP server | `mcp` | `none` on both — stdout is the protocol wire, stderr the host's log. Never probed, never guessed. |
+| Event route (shared runtime or standalone hook) | `hook` | `none` on both — stdout is the host's hook envelope. |
+| Workbench lifecycle replay | `workbench` | `none` on both. |
+| A custom host that mounts none | — | `unavailable` (`not-provided`). |
+
+A plain `main`-exporting script or bin has no request scope; its envelope passes the same value
+as the second argument of `main` (see [Package entries](./package-entries.mdx#the-executable-envelope)).
+In tests, the `tty` knob of `invokeCli` and `runScript` shapes a deterministic synthetic value,
+and `context.terminal` injects any other one through the same seam as every identity axis.
+
 ## Streaming and progress
 
 A route streams by rendering React `Suspense`: the shell goes out first with the fallback in

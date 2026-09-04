@@ -95,7 +95,24 @@ describe('agent request store', () => {
       expect(context.session).toEqual(unavailable());
       expect(context.actor).toEqual(unavailable());
       expect(context.workspace).toEqual(unavailable());
+      expect(context.terminal).toEqual(unavailable());
       expect(Object.hasOwn(context.host, 'value')).toBe(false);
+    });
+  });
+
+  it('exposes the mounted terminal capability as a frozen Observed axis (#511)', async () => {
+    const terminal = {
+      hostSurface: 'cli' as const,
+      sharesTarget: true,
+      stderr: { color: 'basic' as const, columns: 120, kind: 'tty' as const, rows: 40 },
+      stdout: { color: 'basic' as const, columns: 120, kind: 'tty' as const, rows: 40 },
+    };
+    await runAgentRequest({ ...init('cli'), terminal: available(terminal, 'native') }, async () => {
+      const context = await agent();
+      expect(context.terminal).toEqual({ source: 'native', state: 'available', value: terminal });
+      if (context.terminal.state !== 'available') throw new Error('expected an available terminal');
+      expect(Object.isFrozen(context.terminal.value)).toBe(true);
+      expect(Object.isFrozen(context.terminal.value.stdout)).toBe(true);
     });
   });
 

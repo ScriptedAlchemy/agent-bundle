@@ -106,6 +106,17 @@ describe('the in-memory MCP projection level', () => {
       },
       lineage: { reason: 'not-provided', state: 'unavailable' },
       session: { reason: 'not-provided', state: 'unavailable' },
+      // The generated server's stdout is the protocol wire: no terminal, never probed (#511).
+      terminal: {
+        source: 'derived',
+        state: 'available',
+        value: {
+          hostSurface: 'mcp',
+          sharesTarget: false,
+          stderr: { color: 'none', kind: 'none' },
+          stdout: { color: 'none', kind: 'none' },
+        },
+      },
       workspace: {
         source: 'derived',
         state: 'available',

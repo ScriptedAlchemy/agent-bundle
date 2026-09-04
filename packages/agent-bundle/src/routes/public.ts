@@ -1,4 +1,5 @@
 import type { JsonValue } from '../core/strict-json.ts';
+import type { AgentTerminal } from '../terminal-capability.ts';
 
 /** The structural schema surface route props infer without coupling to one schema library. */
 export interface RouteSchema<Output = unknown> {
@@ -273,4 +274,23 @@ export interface CliRouteProps<InputSchema extends RouteSchema> {
 export interface ScriptRouteProps {
   readonly argv: readonly string[];
   readonly signal: AbortSignal;
+}
+
+export type {
+  AgentTerminal,
+  AgentTerminalColor,
+  AgentTerminalStream,
+  AgentTerminalStreamKind,
+  AgentTerminalSurface,
+} from '../terminal-capability.ts';
+
+/**
+ * The second argument the generated executable envelope passes to a plain
+ * script's or bin's `main(argv, context)` (#511): the process's terminal
+ * capability, probed once before `main` runs. A rendered route reads the same
+ * shape from `(await agent()).terminal`; a plain script has no request scope,
+ * so the envelope hands it the value directly.
+ */
+export interface ExecutableMainContext {
+  readonly terminal: AgentTerminal;
 }

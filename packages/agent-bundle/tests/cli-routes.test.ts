@@ -12,6 +12,7 @@ import {
   projectCliDocumentToMarkdown,
   runGeneratedCliEntry,
   runGeneratedRenderedScript,
+  type AgentTerminal,
   type CliRenderedDocument,
   type CliRenderedEvent,
   type GeneratedCliRenderSession,
@@ -1172,6 +1173,74 @@ describe('rendered command projection (#102 stage 3)', () => {
     const tty = await runRendered(['report', '/library'], { isTty: true });
     expect(tty.code).toBe(0);
     expect(tty.stdout).toBe('\r\u001B[2Kauditing (1/2)\r\u001B[2KFound **2** books.\n');
+  });
+
+  it('selects the output mode from the same terminal capability it hands the render host (#511)', async () => {
+    const terminal: AgentTerminal = {
+      hostSurface: 'cli',
+      sharesTarget: true,
+      stderr: { color: '256', columns: 132, kind: 'tty', rows: 50 },
+      stdout: { color: '256', columns: 132, kind: 'tty', rows: 50 },
+    };
+    const seen: AgentTerminal[] = [];
+    const stdout: string[] = [];
+    const code = await runGeneratedCliEntry({
+      argv: ['report', '/library'],
+      commands: [renderedCommand],
+      execute: async () => {
+        throw new Error('plain execute must not run for a rendered command');
+      },
+      name: 'curator',
+      render: (_command, _input, context) => {
+        seen.push(context.terminal);
+        return { close: async () => undefined, events: () => eventStream(events), validate: (value) => value };
+      },
+      terminal,
+      version: '1.2.3',
+      writeErr: () => undefined,
+      writeOut: (text) => void stdout.push(text),
+    });
+    expect(code).toBe(0);
+    // An explicit capability wins over probing and drives the interactive mode.
+    expect(seen).toEqual([terminal]);
+    expect(stdout.join('')).toBe('\r\u001B[2Kauditing (1/2)\r\u001B[2KFound **2** books.\n');
+
+    // `--json` changes what stdout carries, never what the terminal is.
+    seen.length = 0;
+    await runGeneratedCliEntry({
+      argv: ['report', '/library', '--json'],
+      commands: [renderedCommand],
+      execute: async () => undefined,
+      name: 'curator',
+      render: (_command, _input, context) => {
+        seen.push(context.terminal);
+        return { close: async () => undefined, events: () => eventStream(events), validate: (value) => value };
+      },
+      terminal,
+      version: '1.2.3',
+      writeErr: () => undefined,
+      writeOut: () => undefined,
+    });
+    expect(seen).toEqual([terminal]);
+
+    // The legacy `isTty` knob still shapes a consistent capability for stdout.
+    const legacy: AgentTerminal[] = [];
+    await runGeneratedCliEntry({
+      argv: ['report', '/library'],
+      commands: [renderedCommand],
+      execute: async () => undefined,
+      isTty: () => false,
+      name: 'curator',
+      render: (_command, _input, context) => {
+        legacy.push(context.terminal);
+        return { close: async () => undefined, events: () => eventStream(events), validate: (value) => value };
+      },
+      version: '1.2.3',
+      writeErr: () => undefined,
+      writeOut: () => undefined,
+    });
+    expect(legacy[0]?.hostSurface).toBe('cli');
+    expect(legacy[0]?.stdout.kind).not.toBe('tty');
   });
 
   it('emits the canonical validated final value under --json', async () => {

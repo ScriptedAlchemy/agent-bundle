@@ -471,6 +471,7 @@ export const openInMemoryMcpServer = async <
             host: transport.host,
             lineage: transport.lineage,
             session: transport.session,
+            terminal: transport.terminal,
             workspace: transport.workspace,
             ...context,
             providers,
