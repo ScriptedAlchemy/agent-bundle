@@ -17,6 +17,12 @@ on:
   pull_request:
   push:
     branches: [main]
+  # "Docs site" is a required check on main, so it must also report on merge
+  # queue entries (see the merge_group note in ci.yml; dormant until the
+  # repository is organization-owned). Queue runs build only: the deploy
+  # steps stay gated on a push or dispatch of main itself.
+  merge_group:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -27,7 +33,8 @@ permissions:
 # build-and-deploy runs execute in order and an older, slower build can never
 # deploy over a newer one (GitHub keeps at most one pending run per group, so
 # a superseded pending build is dropped, never reordered). Dispatches on other
-# refs get SHA-keyed groups.
+# refs and merge-queue entries (ref gh-readonly-queue/main/...) get SHA-keyed
+# groups.
 concurrency:
   group: docs-${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'main' || github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
