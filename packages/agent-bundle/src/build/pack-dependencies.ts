@@ -568,66 +568,40 @@ const packageImportTargets = (packageDocument: Readonly<Record<string, unknown>>
 const installScripts = ['preinstall', 'install', 'postinstall'] as const;
 
 /**
- * One shell command invoking `npm run` (also `pnpm`/`yarn`/`bun`, and npm's
- * aliases `run-script`, `rum`, `urn`): the tool, any options before the
- * subcommand — valueless (`--silent`), valued (`--prefix .`,
- * `--workspace=pkg`) — then the rest of the command up to the next shell
- * operator. Which of those tokens is the script is settled against the
- * manifest's `scripts` rather than by option grammar, since every token that
- * names a script is one the command may run.
+ * The segments of one shell word: a double-quoted one, in which a backslash
+ * escapes `"`, `\`, `$`, `` ` ``, and a newline and is literal before anything
+ * else; a single-quoted one, in which nothing escapes; and an unquoted
+ * backslash escape, `\x` being `x` and `\<newline>` a continuation. Unquoted
+ * text between them stands as written.
  */
-const runSubcommand = String.raw`(?:run(?:-script)?|rum|urn)\b`;
-/** npm's direct script commands, each running the script of the same name (`t` and `tst` are `test`). */
-const directScriptCommand = String.raw`(?:test|tst|t|start|stop|restart)\b`;
-const delegatedRun = new RegExp(
-  String.raw`\b(?:npm|pnpm|yarn|bun)\s+(?:(?!${runSubcommand}|${directScriptCommand})[^\s&|;]+\s+)*`
-    + String.raw`(?:${runSubcommand}(?<rest>[^&|;\n]*)|(?<direct>${directScriptCommand}))`,
-  'gu',
-);
+const shellSegment = /"((?:[^"\\\n]|\\[\s\S])*)"|'([^'\n]*)'|\\([\s\S])/gu;
+const doubleQuotedEscape = /\\([\\"$`\n])/gu;
 
-/** A single- or double-quoted shell segment; a word is a run of them and unquoted text with no whitespace between. */
-const shellQuoted = /"([^"\n]*)"|'([^'\n]*)'/gu;
+/** The text a shell word denotes: quotes removed and escapes resolved, segment by segment. */
+const unquoteShellWord = (word: string): string => word.replace(
+  shellSegment,
+  (_segment, doubleQuoted: string | undefined, singleQuoted: string | undefined, escaped: string | undefined) => {
+    if (doubleQuoted !== undefined) return doubleQuoted.replace(doubleQuotedEscape, (_escape, char: string) => (char === '\n' ? '' : char));
+    if (singleQuoted !== undefined) return singleQuoted;
+    return escaped === '\n' ? '' : escaped ?? '';
+  },
+);
 
 /**
  * A shell command's words: quoted arguments kept whole and unquoted (`node
- * "scripts/my install.cjs"` is two words, `--import="./setup.mjs"` one), and
- * the operators `&&`, `||`, `;`, `|`, `&` split off even without surrounding
- * whitespace (`node install.js&&echo done` is four words). A newline is an
- * operator too: it ends a command as `;` does, and is how `installScriptText`
- * joins one script's body to the next.
+ * "scripts/my install.cjs"` is two words, `--import="./setup.mjs"` one),
+ * backslash escapes resolved (`"require(\"driver\")"` is
+ * `require("driver")`, `\"quoted\"` is `"quoted"`, `'lit\eral'` keeps its
+ * backslash), and the operators `&&`, `||`, `;`, `|`, `&` split off even
+ * without surrounding whitespace (`node install.js&&echo done` is four
+ * words). A newline is an operator too: it ends a command as `;` does, and is
+ * how `installScriptText` joins one script's body to the next.
  */
-const shellWords = (command: string): readonly string[] =>
+export const shellWords = (command: string): readonly string[] =>
   Array.from(
-    command.matchAll(/(?:"[^"\n]*"|'[^'\n]*'|[^\s"'&|;]+)+|&&|\|\||[;|&\n]/gu),
-    (match) => match[0].replace(shellQuoted, '$1$2'),
+    command.matchAll(/(?:"(?:[^"\\\n]|\\[\s\S])*"|'[^'\n]*'|(?:[^\s"'&|;\\]|\\[\s\S])+)+|&&|\|\||[;|&\n]/gu),
+    (match) => unquoteShellWord(match[0]),
   );
-
-/**
- * The text a consumer's install lifecycle executes: the lifecycle scripts,
- * plus every script they reach through `npm run <name>` or a direct `npm
- * test`/`start`/`stop`/`restart` (with its `pre<name>` and `post<name>`
- * hooks), transitively. Dependency executables are on `PATH` for all of them.
- */
-const installScriptText = (scripts: Readonly<Record<string, unknown>>): string => {
-  const seen = new Set<string>();
-  const visit = (name: string): void => {
-    const body = scripts[name];
-    if (seen.has(name) || typeof body !== 'string') return;
-    seen.add(name);
-    for (const match of body.matchAll(delegatedRun)) {
-      const direct = match.groups?.direct;
-      const candidates = direct === undefined
-        ? shellWords(match.groups?.rest ?? '')
-        : [direct === 't' || direct === 'tst' ? 'test' : direct];
-      for (const candidate of candidates) {
-        if (candidate === '' || candidate.startsWith('-') || !Object.hasOwn(scripts, candidate)) continue;
-        for (const hook of [`pre${candidate}`, candidate, `post${candidate}`]) visit(hook);
-      }
-    }
-  };
-  for (const script of installScripts) visit(script);
-  return [...seen].map((name) => scripts[name] as string).join('\n');
-};
 
 const unscopedName = (name: string): string => name.replace(/^@[^/]+\//u, '');
 
@@ -672,72 +646,190 @@ const shellOperators = new Set(['&&', '||', ';', '|', '&', '\n']);
 const commandPrefix = /^(?:[A-Za-z_][A-Za-z0-9_]*=|-|npx$|bunx$|cross-env$|env$|exec$|dotenv$|nice$|time$)/u;
 const packageManagers = new Set(['npm', 'pnpm', 'yarn', 'bun']);
 const execSubcommands = new Set(['exec', 'dlx', 'x']);
+/** npm's `run` and its aliases; each runs the script the first positional names. */
+const runSubcommands = new Set(['run', 'run-script', 'rum', 'urn']);
+/** npm's direct script commands, each running the script of the same name (`t` and `tst` are `test`). */
+const directScriptCommands: ReadonlyMap<string, string> = new Map([
+  ['test', 'test'],
+  ['tst', 'test'],
+  ['t', 'test'],
+  ['start', 'start'],
+  ['stop', 'stop'],
+  ['restart', 'restart'],
+]);
+/** Options npm, pnpm, Yarn, and Bun read with their value in the next word (`--prefix .`); `--option=value` takes none. */
+const valuedManagerOptions = new Set(['-w', '--workspace', '-C', '--prefix', '--filter', '--script-shell', '--loglevel', '--userconfig', '--registry']);
+
+interface ParsedOption {
+  readonly name: string;
+  readonly value: string | undefined;
+}
+
+/**
+ * A command line read as its program does, up to the first positional word:
+ * every `-x` before it is an option — one in `valued`, in space form, taking
+ * the next word as its value, `--x=v` carrying its own, any other a flag —
+ * and `--` ends the options, the word after it being positional. `-` alone
+ * is positional (stdin). Returns the options and the index of that first
+ * positional, `words.length` when there is none.
+ */
+const leadingOptions = (
+  words: readonly string[],
+  valued: ReadonlySet<string>,
+  from = 0,
+): { readonly options: readonly ParsedOption[]; readonly positional: number } => {
+  const options: ParsedOption[] = [];
+  for (let index = from; index < words.length; index += 1) {
+    const word = words[index] as string;
+    if (word === '--') return { options, positional: index + 1 };
+    if (word === '-' || !word.startsWith('-')) return { options, positional: index };
+    const assigned = /^(--[^=]+)=(.*)$/u.exec(word);
+    if (assigned !== null) {
+      options.push({ name: assigned[1] as string, value: assigned[2] });
+    } else if (valued.has(word)) {
+      options.push({ name: word, value: words[index + 1] });
+      index += 1;
+    } else {
+      options.push({ name: word, value: undefined });
+    }
+  }
+  return { options, positional: words.length };
+};
 
 /** One simple command of a shell script: what it runs, and the words after it. */
 interface SimpleCommand {
   /** The command proper, the directory dropped from a path (`./node_modules/.bin/tsc` is `tsc`). */
   readonly command: string;
   readonly operands: readonly string[];
+  /** The manifest script a package-manager command delegates to: `npm run setup`, `pnpm --filter pkg run setup`, `npm test`, `yarn start`. */
+  readonly script: string | undefined;
 }
+
+/**
+ * What a package-manager command runs, read as `npm [options] <subcommand>
+ * [options] <positional…>`. A `run` subcommand (`run-script`, `rum`, `urn`)
+ * runs the first positional after it as a manifest script — the rest, after
+ * a `--` or not, are that script's arguments (`npm run setup -- dormant`
+ * runs `setup` alone, as does `npm run setup dormant`) — and `test`, `start`,
+ * `stop`, `restart` (`t`, `tst`) run the script of that name, their
+ * positionals being arguments too. `exec`, `dlx`, and `x` run the first
+ * positional as a command, the rest its operands. Any other subcommand is
+ * the manager's own.
+ */
+const managerCommand = (manager: string, args: readonly string[]): SimpleCommand => {
+  const sub = leadingOptions(args, valuedManagerOptions).positional;
+  const subcommand = args[sub];
+  const next = leadingOptions(args, valuedManagerOptions, sub + 1).positional;
+  if (subcommand !== undefined && execSubcommands.has(subcommand) && next < args.length) {
+    return { command: posix.basename(args[next] as string), operands: args.slice(next + 1), script: undefined };
+  }
+  const script = subcommand === undefined
+    ? undefined
+    : runSubcommands.has(subcommand) ? args[next] : directScriptCommands.get(subcommand);
+  return { command: manager, operands: args.slice(sub + 1), script };
+};
 
 /**
  * The simple commands of a shell script, one per operator-separated segment:
  * the first word after environment assignments and exec wrappers (`FOO=1 npx
  * tsc`, `pnpm exec -- tsc`, `cross-env CI=1 tsc`) is the command, the rest of
- * the segment its operands.
+ * the segment its operands; a package manager's command is read by its own
+ * grammar (`managerCommand`).
  */
 const simpleCommands = (text: string): readonly SimpleCommand[] => {
-  const commands: { readonly command: string; readonly operands: string[] }[] = [];
-  let current: (typeof commands)[number] | undefined;
-  let skipSubcommand = false;
-  for (const word of shellWords(text)) {
-    if (shellOperators.has(word)) {
-      current = undefined;
-      skipSubcommand = false;
-      continue;
-    }
-    if (current !== undefined) {
-      current.operands.push(word);
-      continue;
-    }
-    if (skipSubcommand) {
-      skipSubcommand = false;
-      if (execSubcommands.has(word)) continue;
-    }
-    if (commandPrefix.test(word)) continue;
-    if (packageManagers.has(word)) {
-      skipSubcommand = true;
-      continue;
-    }
-    current = { command: word.includes('/') ? posix.basename(word) : word, operands: [] };
-    commands.push(current);
-  }
+  const words = shellWords(text);
+  const commands: SimpleCommand[] = [];
+  let start = 0;
+  const segment = (end: number): void => {
+    let index = start;
+    while (index < end && commandPrefix.test(words[index] as string)) index += 1;
+    if (index >= end) return;
+    const word = words[index] as string;
+    const rest = words.slice(index + 1, end);
+    commands.push(packageManagers.has(word)
+      ? managerCommand(word, rest)
+      : { command: posix.basename(word), operands: rest, script: undefined });
+  };
+  words.forEach((word, index) => {
+    if (!shellOperators.has(word)) return;
+    segment(index);
+    start = index + 1;
+  });
+  segment(words.length);
   return commands;
 };
 
+/**
+ * The text a consumer's install lifecycle executes: the lifecycle scripts,
+ * plus every script they reach through `npm run <name>` or a direct `npm
+ * test`/`start`/`stop`/`restart` (with its `pre<name>` and `post<name>`
+ * hooks), transitively. Dependency executables are on `PATH` for all of them.
+ */
+const installScriptText = (scripts: Readonly<Record<string, unknown>>): string => {
+  const seen = new Set<string>();
+  const visit = (name: string): void => {
+    const body = scripts[name];
+    if (seen.has(name) || typeof body !== 'string') return;
+    seen.add(name);
+    for (const { script } of simpleCommands(body)) {
+      if (script === undefined || !Object.hasOwn(scripts, script)) continue;
+      for (const hook of [`pre${script}`, script, `post${script}`]) visit(hook);
+    }
+  };
+  for (const script of installScripts) visit(script);
+  return [...seen].map((name) => scripts[name] as string).join('\n');
+};
+
+/**
+ * Node's options that take their value in the next word (`--require x`;
+ * `--require=x` carries its own). Everything else before the program is a
+ * flag, so the first word that is neither is the program.
+ */
+const valuedNodeOptions = new Set([
+  '-r', '--require', '--import', '--loader', '--experimental-loader',
+  '-e', '--eval', '-p', '--print', '-pe',
+  '--input-type', '-C', '--conditions', '--env-file', '--env-file-if-exists', '--title', '--run',
+  '--test-name-pattern', '--test-reporter', '--test-reporter-destination', '--test-shard', '--watch-path',
+  '--openssl-config', '--icu-data-dir', '--unhandled-rejections', '--dns-result-order', '--experimental-default-type',
+  '--redirect-warnings', '--report-directory', '--report-filename', '--report-signal', '--diagnostic-dir',
+  '--disable-warning', '--localstorage-file', '--cpu-prof-dir', '--cpu-prof-name', '--heap-prof-dir', '--heap-prof-name',
+  '--trace-event-categories', '--trace-event-file-pattern', '--experimental-sea-config', '--secure-heap',
+  '--stack-trace-limit', '--max-http-header-size', '--inspect-port', '--experimental-policy', '--policy-integrity',
+  '--tls-cipher-list', '--tls-keylog', '--heapsnapshot-signal', '--heapsnapshot-near-heap-limit',
+]);
 /** Node's preloads, loaded before the program: `-r`/`--require` (CommonJS), `--import`, and `--loader`/`--experimental-loader` (ES modules). */
 const preloadOptions = /^(?:-r|--require|--import|--loader|--experimental-loader)$/u;
 /** Node's inline programs: `-e`/`--eval`, `-p`/`--print`, and the one short combination Node accepts, `-pe`. */
 const inlineOptions = /^(?:-e|--eval|-p|-pe|--print)$/u;
 
+interface NodeCommand {
+  readonly options: readonly ParsedOption[];
+  /** The script Node runs, when the command names one: the first positional, unless an inline program makes it an argument. */
+  readonly program: string | undefined;
+}
+
+/**
+ * A `node` command read as Node does — `node [options] [script | -e code | -]
+ * [arguments]`: options up to the first positional or a `--`, that positional
+ * the program (an argument instead when `-e`/`-p` supply the program), and
+ * nothing after it Node's (`node install.js --require x` passes `--require
+ * x` to `install.js`).
+ */
+const nodeCommand = (operands: readonly string[]): NodeCommand => {
+  const { options, positional } = leadingOptions(operands, valuedNodeOptions);
+  const inline = options.some((option) => inlineOptions.test(option.name));
+  return { options, program: inline ? undefined : operands[positional] };
+};
+
 /**
  * The values a script gives one of `node`'s options, across every `node`
- * command in command position: the next word (`-r dotenv/config`) or the
- * assigned text (`--require=dotenv/config`), up to a `--`, after which Node
- * reads no options. The program's own arguments are read too — Node has too
- * many valued options to tell where the program starts — while the same flag
- * on another command (`rm -r dist`) is never Node's.
+ * command in command position: `-r dotenv/config` or `--require=dotenv/config`
+ * before the program; the same flag after it (`node install.js -r x`) or on
+ * another command (`rm -r dist`) is never Node's.
  */
 const nodeOptionValues = (commands: readonly SimpleCommand[], options: RegExp): readonly string[] =>
-  commands.filter(({ command }) => command === 'node').flatMap(({ operands }) => {
-    const terminator = operands.indexOf('--');
-    const own = terminator === -1 ? operands : operands.slice(0, terminator);
-    return own.flatMap((word, index) => {
-      const assigned = /^(--[^=]+)=(.*)$/u.exec(word);
-      if (assigned !== null) return options.test(assigned[1] ?? '') ? [assigned[2] ?? ''] : [];
-      return options.test(word) && index + 1 < own.length ? [own[index + 1] as string] : [];
-    });
-  });
+  commands.filter(({ command }) => command === 'node').flatMap(({ operands }) => nodeCommand(operands).options
+    .flatMap(({ name, value }) => (options.test(name) && value !== undefined ? [value] : [])));
 
 /**
  * Dependencies a consumer's install lifecycle demonstrably needs: one of
@@ -841,13 +933,16 @@ const packageDirectory = /^\.\/*$/u;
  * `node ./scripts/setup.mjs`, `node scripts/install`, `node "scripts/my
  * install.cjs"`. Every word is tried; a word that is not a packed module is
  * not one, and the empty word `""` names no path. The package directory
- * itself counts only as a `node` operand (`node .`, `node -r dotenv/config
+ * itself counts only as a `node` program (`node .`, `node -r dotenv/config
  * .`): elsewhere `.` is the working directory an option names (`npm --prefix
  * . run setup`), not a program.
  */
 const installScriptFiles = (text: string, commands: readonly SimpleCommand[], modules: PackedModules): readonly string[] => [
   ...shellWords(text).filter((word) => word !== '' && !packageDirectory.test(word)),
-  ...commands.filter(({ command }) => command === 'node').flatMap(({ operands }) => operands.filter((word) => packageDirectory.test(word))),
+  ...commands.filter(({ command }) => command === 'node').flatMap(({ operands }) => {
+    const { program } = nodeCommand(operands);
+    return program !== undefined && packageDirectory.test(program) ? [program] : [];
+  }),
 ].flatMap((word) => {
   const module = packedModule(word, modules);
   return module === undefined ? [] : [module];

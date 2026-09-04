@@ -354,9 +354,9 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
       // `scripts/install.js`), as `npm test` running a script whose quoted path contains a space, and as
       // `node scripts/hooks.cjs&&…` with no whitespace around the shell operator; the last loads its dependencies
       // through a wildcard `imports` entry mapped to the package's own file, and through a directory whose packed
-      // manifest names its `main`. An inline `node -e` program that requires a package needs it too, as do the
-      // modules `node` preloads — a bare `-r` package and a packed `--import=` file — before running `.`, the root
-      // `main`.
+      // manifest names its `main`. An inline `node -e` program that requires a package needs it too — its quotes
+      // escaped for the shell — as do the modules `node` preloads — a bare `-r` package and a packed `--import=`
+      // file, behind the valued `--conditions` option — before running `.`, the root `main`.
       'setup-tool': 'git+https://github.com/owner/setup-tool.git',
       'newline-tool': 'github:owner/newline-tool',
       'optional-driver': 'github:owner/optional-driver',
@@ -367,10 +367,12 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
       'optional-preload': 'github:owner/optional-preload',
       'optional-imported': 'github:owner/optional-imported',
       'optional-root': 'github:owner/optional-root',
-      // Merely mentioned by the script — an `echo` argument, and the operand of `rm -r`, whose `-r` is not Node's
-      // preload option — so npm's skipping them breaks nothing: a warning.
+      // Merely mentioned by the script — an `echo` argument; the operand of `rm -r`, whose `-r` is not Node's
+      // preload option; and the value of a `--require` after the program, which Node hands to the program as an
+      // argument — so npm's skipping them breaks nothing: a warning.
       'optional-mentioned': 'github:owner/optional-mentioned',
       'optional-removed': 'github:owner/optional-removed',
+      'optional-argument': 'github:owner/optional-argument',
       // npm parses these only to fail, so optional or not, the consumer's install dies.
       'typo-optional': 'foo:bar',
       'tag-optional': 'not a valid spec',
@@ -381,9 +383,9 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
     document.main = './scripts/root-setup.cjs';
     document.scripts = {
       ...(document.scripts as Record<string, string> | undefined),
-      postinstall: 'echo start\nnewline-tool --init && setup-tool --init && node scripts/install && npm test',
-      test: 'node "scripts/my install.cjs";node scripts/hooks.cjs&&echo optional-mentioned && node -e "require(\'optional-inline\')"'
-        + ' && rm -r optional-removed && node -r optional-preload/register --import="./scripts/preload.mjs" .',
+      postinstall: 'echo start\nnewline-tool --init && setup-tool --init && node scripts/install --require optional-argument && npm test',
+      test: 'node "scripts/my install.cjs";node scripts/hooks.cjs&&echo optional-mentioned && node -e "require(\\"optional-inline\\")"'
+        + ' && rm -r optional-removed && node --conditions react-server -r optional-preload/register --import="./scripts/preload.mjs" .',
     };
   },
   async () => {
@@ -427,13 +429,13 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
     expect(reported.map((diagnostic) => diagnostic.message)).toEqual([
       expect.stringMatching(/^package\.json dependencies .*consumers cannot install the package\.$/u),
       expect.stringMatching(/^package\.json optionalDependencies .*"bad name" -> "\^1\.0\.0", "newline-tool" -> "github:owner\/newline-tool", "optional-driver" -> "github:owner\/optional-driver", "optional-hook" -> "github:owner\/optional-hook", "optional-imported" -> "github:owner\/optional-imported", "optional-inline" -> "github:owner\/optional-inline", "optional-main" -> "github:owner\/optional-main", "optional-preload" -> "github:owner\/optional-preload", "optional-root" -> "github:owner\/optional-root", "optional-tester" -> "github:owner\/optional-tester", "setup-tool" -> "git\+https:\/\/github\.com\/owner\/setup-tool\.git", "tag-optional" -> "not a valid spec", "typo-optional" -> "foo:bar", "url-optional" -> "http:%zz"; consumers cannot install the package\.$/u),
-      expect.stringMatching(/^package\.json optionalDependencies .*"optional-mentioned" -> "github:owner\/optional-mentioned", "optional-removed" -> "github:owner\/optional-removed", "scp" -> "git@github\.com:owner\/repo\.git".*continues without them/u),
+      expect.stringMatching(/^package\.json optionalDependencies .*"optional-argument" -> "github:owner\/optional-argument", "optional-mentioned" -> "github:owner\/optional-mentioned", "optional-removed" -> "github:owner\/optional-removed", "scp" -> "git@github\.com:owner\/repo\.git".*continues without them/u),
     ]);
     // npm survives an optional dependency it parsed but cannot fetch, so that entry warns rather than blocks the
     // release; a specifier it cannot parse fails the manifest read and stays fatal, as does a skipped package an
     // install script then runs or loads.
     expect(reported.map((diagnostic) => diagnostic.severity)).toEqual(['error', 'error', 'warning']);
-    for (const name of ['scp', 'optional-mentioned', 'optional-removed']) {
+    for (const name of ['scp', 'optional-argument', 'optional-mentioned', 'optional-removed']) {
       expect(reported[1]?.message).not.toContain(JSON.stringify(name));
     }
     for (const name of [
@@ -534,6 +536,8 @@ it('accepts a dependency reached through a package imports map or run by a consu
       'prepack-test-wrapper': 'npm:@scope/real@^1.0.0',
       // npm never runs `prepare` for a registry or tarball install; a package only it names is installed for nothing.
       'prepare-only': '^1.0.0',
+      // Named by a script that `npm run` and `npm test` only receive as an argument, never run.
+      'dormant-only': '^1.0.0',
       // Reached only through npm's direct script commands: `npm t` is `test` (and its `pretest`), `yarn start` is `start`.
       'test-runner': '^1.0.0',
       'server-starter': '^1.0.0',
@@ -542,14 +546,16 @@ it('accepts a dependency reached through a package imports map or run by a consu
     document.scripts = {
       ...(document.scripts as Record<string, string> | undefined),
       // `tsc` and `node-pre-gyp` are reached only through delegated run-scripts and their pre/post hooks, behind
-      // options with values (`--prefix .`, `-w .`) and without (`--silent`), through npm's `rum` alias, and with
-      // the script name quoted for the shell.
-      postinstall: 'named-in-script --init && npm --silent --prefix . run setup && npm t',
+      // options with values (`--prefix .`, `-w pkg`, pnpm's `--filter pkg`) and without (`--silent`), through npm's
+      // `rum` alias, after a `--`, and with the script name quoted for the shell. Only the first positional after
+      // `run` (or the direct command) is the script: `dormant`, with or without a `--` before it, is an argument.
+      postinstall: 'named-in-script --init && npm --silent --prefix . run setup dormant && npm t dormant',
       setup: 'echo setup',
-      presetup: 'npm rum typecheck',
+      presetup: 'pnpm --filter pkg rum typecheck',
       typecheck: 'tsc --version',
-      postsetup: 'pnpm run -w . "finish"',
+      postsetup: 'npm run -w pkg -- "finish" dormant',
       finish: 'node-pre-gyp install && real --check',
+      dormant: 'dormant-only --generate',
       prepare: 'prepare-only --generate',
       pretest: 'yarn start',
       test: 'test-runner --ci',
@@ -569,11 +575,13 @@ it('accepts a dependency reached through a package imports map or run by a consu
       // and the alias through `real`, the bin npm derives from the installed manifest's name. `prepare` proves nothing.
       const [withImport] = withCode(await diagnostics(pack), 'AB7014');
       expect(withImport?.message).toContain('"prepare-only"');
+      expect(withImport?.message).toContain('"dormant-only"');
       expect(withImport?.message).not.toContain('"driver-package"');
       // Without the `#` import the map alone proves nothing.
       const [reported] = withCode(await diagnostics(), 'AB7014');
       expect(reported?.message).toContain('"driver-package"');
       expect(reported?.message).toContain('"prepare-only"');
+      expect(reported?.message).toContain('"dormant-only"');
       expect(reported?.message).not.toContain('"typescript"');
       expect(reported?.message).not.toContain('"@mapbox/node-pre-gyp"');
       expect(reported?.message).not.toContain('"prepack-test-wrapper"');

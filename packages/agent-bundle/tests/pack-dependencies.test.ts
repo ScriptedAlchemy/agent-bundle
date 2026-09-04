@@ -7,6 +7,7 @@ import {
   declarationSpecifiers,
   packageNameOf,
   rewritesWorkspaceProtocols,
+  shellWords,
 } from '../src/build/pack-dependencies.ts';
 
 it.each([
@@ -171,6 +172,26 @@ it.each([
   ['declare const n: string;', []],
 ])('declarationSpecifiers(%j) is %j', (source, specifiers) => {
   expect(declarationSpecifiers(source)).toEqual(specifiers);
+});
+
+it.each([
+  // Quoted arguments are whole words; adjacent segments join into one.
+  ['node "scripts/my install.cjs"', ['node', 'scripts/my install.cjs']],
+  ['node --import="./setup.mjs" .', ['node', '--import=./setup.mjs', '.']],
+  ["a'b c'\"d e\"f", ['ab cd ef']],
+  // Operators split without whitespace; a newline is one too.
+  ['node install.js&&echo done', ['node', 'install.js', '&&', 'echo', 'done']],
+  ['a || b | c ; d & e\nf', ['a', '||', 'b', '|', 'c', ';', 'd', '&', 'e', '\n', 'f']],
+  // Backslash escapes: `"`, `\`, `$`, and a backtick inside double quotes, anything unquoted; nothing single-quoted.
+  [String.raw`node -e "require(\"optional-driver\")"`, ['node', '-e', 'require("optional-driver")']],
+  [String.raw`echo "\\ \$HOME \` \n"`, ['echo', String.raw`\ $HOME ` + '` \\n']],
+  [String.raw`echo \"quoted\" my\ file \\`, ['echo', '"quoted"', 'my file', '\\']],
+  [String.raw`echo 'lit\eral' 'no\"escape'`, ['echo', String.raw`lit\eral`, String.raw`no\"escape`]],
+  // A backslash-newline continues the line, quoted or not.
+  ['echo one\\\ntwo "three\\\nfour"', ['echo', 'onetwo', 'threefour']],
+  ['', []],
+])('shellWords(%j) is %j', (command, words) => {
+  expect(shellWords(command)).toEqual(words);
 });
 
 it('lists installed-dependency fields only, skipping non-string specifiers; optional peers are kept but not installed', () => {
