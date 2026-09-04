@@ -19,6 +19,7 @@ import {
   generatedMetaModuleSource,
   generatedModulesRoot,
   metaModuleSpecifier,
+  virtualModulesPluginConstructor,
 } from './meta.ts';
 import { readModuleImports, type ModuleImport } from './module-imports.ts';
 import { collectBundledOutputEvidence, type BundledOutputEvidence } from './provenance.ts';
@@ -62,26 +63,9 @@ interface RslibDependencies {
   readonly createRslib?: (options: Parameters<typeof createRslib>[0]) => Promise<Pick<RslibInstance, 'build' | 'inspectConfig'>>;
 }
 
-/**
- * Generated sources ride Rspack's `experiments.VirtualModulesPlugin` instead
- * of throwaway files on disk — an accepted design decision: the experimental
- * surface is the cost of never touching the artifact tree with build-time
- * scratch files. This narrow feature check turns an upstream rename or
- * removal into an actionable diagnostic instead of an opaque resolution
- * failure deep inside a build.
- */
-const virtualModulesPluginConstructor = (): typeof rspack.experiments.VirtualModulesPlugin => {
-  const constructor = (rspack as { readonly experiments?: { readonly VirtualModulesPlugin?: unknown } })
-    .experiments?.VirtualModulesPlugin;
-  if (typeof constructor !== 'function') {
-    throw new Error(
-      'The Rspack engine nested in @rslib/core no longer exposes experiments.VirtualModulesPlugin, '
-      + 'which agent-bundle uses to serve generated wrapper and registry modules. '
-      + 'Pin @rslib/core to a version whose Rspack ships the plugin, or update agent-bundle.',
-    );
-  }
-  return constructor as typeof rspack.experiments.VirtualModulesPlugin;
-};
+/** This engine's virtual-module plugin (see {@link virtualModulesPluginConstructor}). */
+const rslibVirtualModulesPlugin = (): typeof rspack.experiments.VirtualModulesPlugin =>
+  virtualModulesPluginConstructor(rspack, '@rslib/core', 'serve generated wrapper and registry modules');
 
 /**
  * The tools escape hatch is typed against the workspace `@rsbuild/core` (the
@@ -395,7 +379,7 @@ const assertExecutableConfig = (
     // resolved config without the plugin instance would resolve the
     // reserved generated paths against the real filesystem.
     const registryModules = virtualRegistryModules(cwd, entry, meta);
-    const constructor = virtualModulesPluginConstructor();
+    const constructor = rslibVirtualModulesPlugin();
     if (config.plugins?.some((plugin) => plugin instanceof constructor) !== true) {
       throw new Error('Rslib resolved a generated executable environment without its virtual modules.');
     }
@@ -467,12 +451,6 @@ export const composeEntryLibConfig = (
   ]);
   const enforceInvariants = (config: Rspack.Configuration): Rspack.Configuration => {
     config.output = { ...config.output, asyncChunks: false };
-    if (entry.rscManifest === true) {
-      config.plugins = [
-        ...(config.plugins ?? []),
-        new rspack.DefinePlugin({ __rspack_rsc_manifest__: JSON.stringify({ clientManifest: {}, cssLinkProps: {}, entryCssFiles: {}, entryJsFiles: [], moduleLoading: { prefix: '' }, serverConsumerModuleMap: {}, serverManifest: {} }) }),
-      ];
-    }
     if (entry.reactServer === true) {
       config.resolve = { ...config.resolve, conditionNames: ['react-server', '...'] };
     }
@@ -499,15 +477,18 @@ export const composeEntryLibConfig = (
         },
       };
     }
-    if (generatedModules.length > 0) {
-      // Added after the hatch mutator (this hook is merged last), so a
-      // consumer cannot strip the generated sources out of the compiler.
-      const VirtualModulesPlugin = virtualModulesPluginConstructor();
-      config.plugins = [
-        ...(config.plugins ?? []),
-        new VirtualModulesPlugin(Object.fromEntries(generatedModules.map((module) => [module.path, module.source]))),
-      ];
-    }
+    // Framework plugins are added after the hatch mutator (this hook is
+    // merged last), so a consumer cannot strip the RSC manifest stub or the
+    // generated sources out of the compiler.
+    const frameworkPlugins = [
+      ...(entry.rscManifest === true
+        ? [new rspack.DefinePlugin({ __rspack_rsc_manifest__: JSON.stringify({ clientManifest: {}, cssLinkProps: {}, entryCssFiles: {}, entryJsFiles: [], moduleLoading: { prefix: '' }, serverConsumerModuleMap: {}, serverManifest: {} }) })]
+        : []),
+      ...(generatedModules.length > 0
+        ? [new (rslibVirtualModulesPlugin())(Object.fromEntries(generatedModules.map((module) => [module.path, module.source])))]
+        : []),
+    ];
+    if (frameworkPlugins.length > 0) config.plugins = [...(config.plugins ?? []), ...frameworkPlugins];
     if (virtualSource !== undefined) {
       // Rslib validates `source.entry` against the real filesystem before
       // Rspack exists, so the profile keys the entry on the authored program

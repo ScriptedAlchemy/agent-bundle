@@ -14,29 +14,23 @@ import {
   generatedMetaModuleSource,
   generatedModulesRoot,
   metaModuleSpecifier,
+  virtualModulesPluginConstructor,
 } from './meta.ts';
 import { collectBundledOutputEvidence } from './provenance.ts';
 
 export const mcpAppMimeType = 'text/html;profile=mcp-app';
 
 /**
- * Rsbuild and Rslib carry independent Rspack copies (the dual-engine reality
- * documented on `AgentBundleToolsConfig`), so the browser path checks its own
- * engine for the experimental virtual-module surface rather than borrowing
- * the Rslib guard.
+ * This engine's virtual-module plugin: the browser path checks the workspace
+ * `@rsbuild/core`'s own Rspack rather than borrowing the Rslib guard (see
+ * {@link virtualModulesPluginConstructor}).
  */
-const virtualModulesPluginConstructor = (): typeof rspack.experiments.VirtualModulesPlugin => {
-  const constructor = (rspack as { readonly experiments?: { readonly VirtualModulesPlugin?: unknown } })
-    .experiments?.VirtualModulesPlugin;
-  if (typeof constructor !== 'function') {
-    throw new Error(
-      'The Rspack engine nested in @rsbuild/core no longer exposes experiments.VirtualModulesPlugin, '
-      + 'which agent-bundle uses to serve the generated agent-bundle/meta module to browser MCP App bundles. '
-      + 'Pin @rsbuild/core to a version whose Rspack ships the plugin, or update agent-bundle.',
-    );
-  }
-  return constructor as typeof rspack.experiments.VirtualModulesPlugin;
-};
+const rsbuildVirtualModulesPlugin = (): typeof rspack.experiments.VirtualModulesPlugin =>
+  virtualModulesPluginConstructor(
+    rspack,
+    '@rsbuild/core',
+    'serve the generated agent-bundle/meta module to browser MCP App bundles',
+  );
 
 export interface CompiledMcpApp {
   readonly _meta?: Readonly<Record<string, unknown>>;
@@ -225,7 +219,7 @@ export const composeMcpAppsRsbuildConfig = (
     };
     // Added after the hatch mutator (this hook is merged last), so a consumer
     // cannot strip the generated identity module out of the compiler.
-    const VirtualModulesPlugin = virtualModulesPluginConstructor();
+    const VirtualModulesPlugin = rsbuildVirtualModulesPlugin();
     config.plugins = [
       ...(config.plugins ?? []),
       new VirtualModulesPlugin({ [metaModulePath]: generatedMetaModuleSource(options.meta) }),
