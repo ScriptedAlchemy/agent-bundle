@@ -20,6 +20,14 @@ describe('resolvePluginRoot (#468)', () => {
     expect(Object.isFrozen(resolved)).toBe(true);
   });
 
+  it('takes the configured path exactly as written, whitespace included', () => {
+    const resolved = resolvePluginRoot({ env: { [PLUGIN_ROOT_ENV_ANCHOR]: '/opt/curator ' }, fallback });
+
+    expect(resolved.root).toBe('/opt/curator ');
+    expect(resolved.stateRoot).toBe(join('/opt/curator ', 'state'));
+    expect(resolved.source).toBe('native');
+  });
+
   it('makes a relative anchor absolute against the working directory, as Codex hands "./"', () => {
     const resolved = resolvePluginRoot({ env: { [PLUGIN_ROOT_ENV_ANCHOR]: './' }, fallback });
 

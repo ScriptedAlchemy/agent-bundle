@@ -49,8 +49,9 @@ const defaultWarn = (message: string): void => {
  * so `(await agent()).plugin.stateRoot` is by construction the directory the
  * kernel, the notice ledger, and the lineage journal use.
  *
- * `AGENT_BUNDLE_PLUGIN_ROOT` wins when it is set to a non-empty, expanded
- * value (`source: 'native'`). An empty value or one still carrying a `${…}`
+ * `AGENT_BUNDLE_PLUGIN_ROOT` wins when it is set to a non-blank, expanded
+ * value (`source: 'native'`), taken exactly as written — a path is never
+ * trimmed. A blank value or one still carrying a `${…}`
  * token is treated as unset — the token case is reported once on stderr,
  * because it means the host did not expand its manifest — and the shell's
  * `fallback` anchors the plugin (`source: 'derived'`). Both roots are made
@@ -58,10 +59,10 @@ const defaultWarn = (message: string): void => {
  */
 export const resolvePluginRoot = (options: ResolvePluginRootOptions): ResolvedPluginRoot => {
   const env = options.env ?? process.env;
-  const declared = env[PLUGIN_ROOT_ENV_ANCHOR]?.trim() ?? '';
+  const declared = env[PLUGIN_ROOT_ENV_ANCHOR] ?? '';
   let root: string;
   let source: 'native' | 'derived';
-  if (declared === '') {
+  if (declared.trim() === '') {
     root = resolve(options.fallback);
     source = 'derived';
   } else if (unexpandedToken.test(declared)) {
@@ -71,6 +72,8 @@ export const resolvePluginRoot = (options: ResolvePluginRootOptions): ResolvedPl
     root = resolve(options.fallback);
     source = 'derived';
   } else {
+    // The value is a path: trimming would move the anchor, so only the
+    // blank check above looks at a trimmed copy.
     root = resolve(declared);
     source = 'native';
   }
