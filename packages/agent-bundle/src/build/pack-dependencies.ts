@@ -124,12 +124,14 @@ export const rewritesWorkspaceProtocols = (packerUserAgent: string | undefined):
   /^(?:pnpm|yarn|bun)\//u.test(packerUserAgent ?? '');
 
 /**
- * The specifier schemes npm can parse at all. Anything else with a scheme —
+ * The specifier schemes npm can parse at all, each needing something after
+ * the colon (`file:` alone names nothing). Anything else with a scheme —
  * `workspace:`, `catalog:`, `link:`, `portal:`, or a typo — fails every
  * consumer with `EUNSUPPORTEDPROTOCOL` before npm fetches anything, even for
- * a peer it would never install.
+ * a peer it would never install. `npm:` is parsed as an alias and must name a
+ * package (`npm:` alone is "aliases must have a name").
  */
-const npmScheme = /^(?:git(?:\+[a-z]+)?|github|gitlab|bitbucket|gist|https?|file|npm):/iu;
+const npmScheme = /^(?:git(?:\+[a-z]+)?|github|gitlab|bitbucket|gist|https?|file):\S/iu;
 const anyScheme = /^[a-z][a-z0-9+.-]*:/iu;
 const windowsDrivePath = /^[a-z]:[\\/]/iu;
 
@@ -183,6 +185,7 @@ export const isNpmParseable = (specifier: string): boolean => {
     const target = alias.groups?.target;
     return target === undefined || target === '' || (!target.startsWith('npm:') && isNpmParseable(target));
   }
+  if (/^npm:/iu.test(trimmed)) return false;
   if (anyScheme.test(trimmed)) return npmScheme.test(trimmed) || windowsDrivePath.test(trimmed);
   return nonRegistrySpecifier.test(trimmed) || isRegistrySelector(trimmed);
 };
@@ -375,6 +378,30 @@ const packageImportTargets = (packageDocument: Readonly<Record<string, unknown>>
 
 const installScripts = ['preinstall', 'install', 'postinstall', 'prepare'] as const;
 
+/** `npm run build`, `pnpm run -s build`, `yarn run build`, `bun run build`: a script delegating to another. */
+const delegatedRun = /\b(?:npm|pnpm|yarn|bun)\s+run(?:-script)?\s+(?:-{1,2}[\w-]+\s+)*([\w:.-]+)/gu;
+
+/**
+ * The text a consumer's install lifecycle executes: the lifecycle scripts,
+ * plus every script they reach through `npm run <name>` (with its `pre<name>`
+ * and `post<name>` hooks), transitively. Dependency executables are on `PATH`
+ * for all of them.
+ */
+const installScriptText = (scripts: Readonly<Record<string, unknown>>): string => {
+  const seen = new Set<string>();
+  const visit = (name: string): void => {
+    const body = scripts[name];
+    if (seen.has(name) || typeof body !== 'string') return;
+    seen.add(name);
+    for (const match of body.matchAll(delegatedRun)) {
+      const target = match[1] ?? '';
+      for (const hook of [`pre${target}`, target, `post${target}`]) visit(hook);
+    }
+  };
+  for (const script of installScripts) visit(script);
+  return [...seen].map((name) => scripts[name] as string).join('\n');
+};
+
 /**
  * Dependencies a consumer's install lifecycle uses: npm puts every
  * dependency's executables on `PATH` for `preinstall`/`install`/`postinstall`
@@ -391,8 +418,7 @@ const installScriptDependencies = async (
   names: readonly string[],
   projectRoot: string,
 ): Promise<readonly string[]> => {
-  const scripts = isRecord(packageDocument.scripts) ? packageDocument.scripts : {};
-  const text = installScripts.flatMap((script) => (typeof scripts[script] === 'string' ? [scripts[script]] : [])).join('\n');
+  const text = installScriptText(isRecord(packageDocument.scripts) ? packageDocument.scripts : {});
   if (text === '') return [];
   const binCommands = async (name: string): Promise<readonly string[]> => {
     const unscoped = name.replace(/^@[^/]+\//u, '');

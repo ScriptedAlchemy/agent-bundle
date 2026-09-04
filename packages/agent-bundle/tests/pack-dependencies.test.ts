@@ -69,6 +69,10 @@ it.each([
   ['next', true],
   ['not a valid spec', false],
   ['npm:name@not a valid spec', false],
+  // A known scheme with nothing after it names no package.
+  ['npm:', false],
+  ['file:', false],
+  ['github:', false],
 ])('isRegistrySpecifier(%j) is %s', (specifier, registry) => {
   expect(isRegistrySpecifier(specifier)).toBe(registry);
 });
@@ -91,6 +95,9 @@ it.each([
   ['owner/repo', true],
   ['../local', true],
   ['not a valid spec', false],
+  ['npm:', false],
+  ['npm:name@', true],
+  ['file:', false],
 ])('isNpmParseable(%j) is %s', (specifier, parseable) => {
   expect(isNpmParseable(specifier)).toBe(parseable);
 });

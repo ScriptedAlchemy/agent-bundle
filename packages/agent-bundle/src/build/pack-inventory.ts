@@ -189,11 +189,18 @@ const dependencyDiagnostics = async (options: {
     ? declared.filter((dependency) => dependency.installed && !imported.names.has(dependency.name))
     : [];
   return [
+    // A peer nothing imports may be a deliberate compatibility contract with the host that loads the package;
+    // npm 7+ still installs it for every consumer, so it is worth a look, not a refusal.
     ...perField(unused, (field, own) => diagnostic(
       'AB7014',
       `package.json ${field} names packages no packed JavaScript or declaration file references: ${quoteAll(own.map((dependency) => dependency.name))}. `
-        + 'Every consumer installs them for nothing; the emitted outputs already inline what they use.',
-      'Move build-only packages to devDependencies, or import the package from a packed module if a consumer needs it at runtime; a computed import() or require() in packed code withholds this check.',
+        + (field === 'peerDependencies'
+          ? 'If they only constrain the host version, that is a compatibility contract; npm 7+ still installs them for every consumer.'
+          : 'Every consumer installs them for nothing; the emitted outputs already inline what they use.'),
+      field === 'peerDependencies'
+        ? 'Keep a deliberate compatibility peer, mark it optional in peerDependenciesMeta so npm stops installing it, or move a build-only package to devDependencies.'
+        : 'Move build-only packages to devDependencies, or import the package from a packed module if a consumer needs it at runtime; a computed import() or require() in packed code withholds this check.',
+      field === 'peerDependencies' ? 'warning' : 'error',
     )),
     // npm skips an optional dependency it cannot fetch, so the install survives — but only once the specifier parsed;
     // an unsupported protocol or invalid selector fails the manifest read itself, whichever field declares it.

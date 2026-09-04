@@ -217,8 +217,11 @@ it('reports installed dependencies no packed JavaScript imports as AB7014, per f
       expect.stringMatching(/^package\.json dependencies .*"effect", "zod"/u),
       expect.stringMatching(/^package\.json peerDependencies .*"react"/u),
     ]);
-    expect(reported.every((diagnostic) => diagnostic.severity === 'error')).toBe(true);
+    // A required peer nothing imports may be a deliberate host-compatibility contract: a warning, not a refusal.
+    expect(reported.map((diagnostic) => diagnostic.severity)).toEqual(['error', 'warning']);
     expect(reported[0]?.recovery).toContain('devDependencies');
+    expect(reported[1]?.message).toContain('compatibility contract');
+    expect(reported[1]?.recovery).toContain('peerDependenciesMeta');
   },
 ));
 
@@ -381,7 +384,12 @@ it('accepts a dependency reached through a package imports map or run by a consu
     document.imports = { '#driver': { node: 'driver-package/node', default: 'driver-package' } };
     document.scripts = {
       ...(document.scripts as Record<string, string> | undefined),
-      postinstall: 'named-in-script --init && tsc --version && node-pre-gyp install',
+      // `tsc` and `node-pre-gyp` are reached only through delegated run-scripts and their pre/post hooks.
+      postinstall: 'named-in-script --init && npm run -s setup',
+      setup: 'echo setup',
+      presetup: 'tsc --version',
+      postsetup: 'pnpm run finish',
+      finish: 'node-pre-gyp install',
     };
   },
   async () => {
