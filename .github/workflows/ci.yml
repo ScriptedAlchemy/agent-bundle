@@ -160,6 +160,34 @@ jobs:
       - run: pnpm lint
       - run: pnpm test
 
+  # Required-check anchor for the Verify matrix. When a matrix job is skipped
+  # (docs-only PRs), GitHub reports it under its unexpanded name
+  # "Verify (Node ${{ matrix.node-version }})", so a branch protection that
+  # requires "Verify (Node 24)" never sees that context and blocks the PR for
+  # good. This job has a static name and always runs after Verify: it passes
+  # when every leg passed or the matrix was skipped (a skipped job satisfies
+  # a required check, like the other docs-only skips) and fails when a leg
+  # failed or was cancelled. Require "Verify gate" on main, not a leg name.
+  verify-gate:
+    needs: verify
+    if: always() && github.event_name != 'schedule'
+    name: Verify gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every Verify leg to have passed or been skipped
+        env:
+          VERIFY_RESULT: ${{ needs.verify.result }}
+        run: |
+          echo "Verify matrix result: $VERIFY_RESULT"
+          case "$VERIFY_RESULT" in
+            success|skipped) exit 0 ;;
+            *)
+              echo "::error::Verify matrix result is '$VERIFY_RESULT'; see the Verify (Node …) jobs."
+              exit 1
+              ;;
+          esac
+
   release-gates:
     needs: changes
     if: >-
