@@ -3,8 +3,8 @@ import type { AgentEventRouteProps } from 'agent-bundle';
 import React from 'react';
 
 import { worktree } from '../../api.js';
-import { withNotices, withTopology } from '../../coordination.js';
-import { ROOT_ACTOR_PREFIX, deliveryContexts, nonEmpty, requestLineage } from '../../event-support.js';
+import { withIntent, withNotices } from '../../coordination.js';
+import { deliveryContexts, nonEmpty, requestLineage } from '../../event-support.js';
 
 export const config = {
   runtime: 'shared',
@@ -24,7 +24,9 @@ export default async function SessionStart({
   }
   // The runtime's lineage names the root conversation on every host; the
   // payload's `sessionId` (Claude and Codex `session_id`) is the fallback when
-  // no lineage was resolved.
+  // no lineage was resolved. The root actor is that conversation itself, so
+  // the binding it gets here is keyed by the same id `request.lineage.tree`
+  // lists it under everywhere else.
   const lineage = await requestLineage();
   const root = lineage.state === 'available'
     ? { id: lineage.value.root, source: lineage.value.resolution }
@@ -40,28 +42,19 @@ export default async function SessionStart({
     );
   }
 
-  const actorId = `${ROOT_ACTOR_PREFIX}${root.id}`;
-  const topologyResult = await withTopology(async (topology) => {
-    await topology.dispatch('actorObserved', {
-      id: actorId,
-      kind: 'root',
-      provenance: { id: root.source },
-      status: 'active',
-    }, {
-      idempotencyKey: `${canonical.idempotencyKey}:actor`,
-    });
-    await topology.dispatch('actorBound', {
-      actorId,
-      provenance: 'native',
+  const intentResult = await withIntent(async (intent) => {
+    await intent.dispatch('actorBound', {
+      actorId: root.id,
+      provenance: { actorId: root.source, worktreeRoot: 'native' },
       worktreeRoot: currentWorktree.root,
     }, {
       idempotencyKey: `${canonical.idempotencyKey}:worktree`,
     });
   });
-  if (topologyResult.state === 'unavailable') {
+  if (intentResult.state === 'unavailable') {
     return (
       <Agent.Result>
-        <Agent.Context>{topologyResult.reason}</Agent.Context>
+        <Agent.Context>{intentResult.reason}</Agent.Context>
       </Agent.Result>
     );
   }

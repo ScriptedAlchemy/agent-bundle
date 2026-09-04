@@ -53,7 +53,8 @@ describe('generated MCP tool calls resolve request.lineage through the runtime r
     expect(await callContext(registry, { 'claudecode/toolUseId': 'toolu_1' })).toEqual({
       source: 'derived',
       state: 'available',
-      value: { conversation: root, depth: 0, resolution: 'registry', root },
+      // The live tree rides along (#457): the root is alone so far.
+      value: { conversation: root, depth: 0, resolution: 'registry', root, tree: { children: [], roots: [], siblings: [] } },
     });
 
     await observe(registry, 'tool/after', {
@@ -100,6 +101,8 @@ describe('generated MCP tool calls resolve request.lineage through the runtime r
         resolution: 'inferred',
         root,
         subagent: { id: child, toolCallId: 'toolu_spawn', type: 'general-purpose' },
+        // The child sees its root as the one other live node under the same root (#457).
+        tree: { children: [], roots: [], siblings: [{ conversation: root, depth: 0, resolution: 'native', startedAt: expect.any(String) }] },
       },
     });
     expect(await callContext(registry, { 'claudecode/toolUseId': 'toolu_child_call' })).toMatchObject({

@@ -145,6 +145,8 @@ describe('lineage registry places Codex threads from their own rollout (#423)', 
       resolution: 'transcript',
       root: ROOT,
       subagent: { id: SUBAGENT, toolCallId: SPAWN_CALLS.subagent, type: 'default' },
+      // The live tree around the new thread (#457): only the root is alive so far.
+      tree: { children: [], roots: [], siblings: [{ conversation: ROOT, depth: 0, resolution: 'native', startedAt: expect.any(String) }] },
     });
     expect(value(nestedStart!.lineage)).toMatchObject({
       conversation: NESTED,
@@ -243,6 +245,8 @@ describe('lineage registry places Codex threads from their own rollout (#423)', 
       resolution: 'transcript',
       root: ROOT,
       subagent: { id: NESTED, type: 'default' },
+      // The tree lists what the registry holds: the root it materialized, not the parent thread it only named.
+      tree: { children: [], roots: [], siblings: [{ conversation: ROOT, depth: 0, resolution: 'native', startedAt: expect.any(String) }] },
     });
     // The root node was materialized from the payload's session_id; the parent thread itself is named, not fabricated.
     expect(registry.snapshot().nodes[ROOT]).toMatchObject({ depth: 0 });

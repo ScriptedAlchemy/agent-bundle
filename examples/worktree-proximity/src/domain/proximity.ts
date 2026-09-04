@@ -1,4 +1,4 @@
-import type { TopologyState } from '../state.js';
+import type { IntentState } from '../state.js';
 
 export interface ProximityIntent {
   readonly actorId: string;
@@ -10,6 +10,18 @@ export interface ProximityConflict {
   readonly actorId: string;
   readonly summary: string;
   readonly worktreeRoot: string;
+}
+
+export interface ProximityOptions {
+  /**
+   * The conversations the runtime's lineage registry lists as alive around
+   * the current request (itself and `lineage.tree.siblings`). When given, an
+   * intent held by a host-identified actor outside that set is stale — its
+   * agent stopped — and is ignored; derived `worktree:<root>` actors are not
+   * conversations and are never filtered. When absent, every recorded intent
+   * counts: an unknown tree is not an empty one.
+   */
+  readonly liveConversations?: ReadonlySet<string>;
 }
 
 const normalizeSegments = (value: string): string => {
@@ -39,38 +51,39 @@ const normalizePath = (value: string, worktreeRoot: string): string => {
 const normalizeDependency = (value: string): string => value.trim().toLowerCase();
 
 export const findProximity = (
-  snapshot: TopologyState,
+  snapshot: IntentState,
   currentWorktree: string,
   intent: ProximityIntent,
+  options: ProximityOptions = {},
 ): readonly ProximityConflict[] => {
   const currentPaths = new Set(intent.paths.map((path) => normalizePath(path, currentWorktree)).filter(Boolean));
   const currentDependencies = new Set(
     intent.dependencies.map(normalizeDependency).filter((dependency) => dependency !== ''),
   );
-  const actors = new Map(snapshot.actors.map((actor) => [actor.id, actor]));
+  const bindings = new Map(snapshot.bindings.map((binding) => [binding.actorId, binding]));
   const conflicts: ProximityConflict[] = [];
 
   for (const activity of snapshot.activities) {
     if (activity.actorId === intent.actorId) continue;
-    const actor = actors.get(activity.actorId);
+    const binding = bindings.get(activity.actorId);
+    if (binding === undefined || binding.worktreeRoot === currentWorktree) continue;
     if (
-      actor === undefined
-      || actor.status !== 'active'
-      || actor.worktreeRoot === undefined
-      || actor.worktreeRoot === currentWorktree
+      options.liveConversations !== undefined
+      && binding.provenance.actorId !== 'derived'
+      && !options.liveConversations.has(binding.actorId)
     ) {
       continue;
     }
 
     const sharedPath = activity.paths
-      .map((path) => normalizePath(path, actor.worktreeRoot!))
+      .map((path) => normalizePath(path, binding.worktreeRoot))
       .find((path) => currentPaths.has(path));
     if (sharedPath !== undefined) {
       conflicts.push({
-        actorId: actor.id,
+        actorId: binding.actorId,
         summary:
-          `Worktrees ${currentWorktree} and ${actor.worktreeRoot} both intend to change path ${sharedPath}.`,
-        worktreeRoot: actor.worktreeRoot,
+          `Worktrees ${currentWorktree} and ${binding.worktreeRoot} both intend to change path ${sharedPath}.`,
+        worktreeRoot: binding.worktreeRoot,
       });
     }
 
@@ -79,10 +92,10 @@ export const findProximity = (
       .find((dependency) => currentDependencies.has(dependency));
     if (sharedDependency !== undefined) {
       conflicts.push({
-        actorId: actor.id,
+        actorId: binding.actorId,
         summary:
-          `Worktrees ${currentWorktree} and ${actor.worktreeRoot} both depend on ${sharedDependency}.`,
-        worktreeRoot: actor.worktreeRoot,
+          `Worktrees ${currentWorktree} and ${binding.worktreeRoot} both depend on ${sharedDependency}.`,
+        worktreeRoot: binding.worktreeRoot,
       });
     }
   }
