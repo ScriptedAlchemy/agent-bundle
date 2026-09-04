@@ -19,7 +19,7 @@ const defaultHeartbeatName = 'agent-bundle';
 type StdoutWrite = typeof process.stdout.write;
 
 export interface StdoutProtocolGuard {
-  /** Hands stdout back to the protocol transport; console.* keeps writing to stderr. */
+  /** Hands stdout back to the protocol transport; console.* keeps writing to stderr. Once only: later calls are no-ops. */
   readonly restoreProtocolStdout: () => void;
 }
 
@@ -59,8 +59,14 @@ export const redirectConsoleToStderr = (): StdoutProtocolGuard => {
   const redirectedWrite = ((chunk: never, encoding?: never, callback?: never) =>
     process.stderr.write(chunk, encoding, callback)) as StdoutWrite;
   process.stdout.write = redirectedWrite;
+  // Restoring is once-only: a second call, or a stale holder's call after a
+  // fresh guard replaced this one, would otherwise overwrite that guard's
+  // redirect with this original while `installedGuard` still names it.
+  let restored = false;
   const guard: StdoutProtocolGuard = Object.freeze({
     restoreProtocolStdout: (): void => {
+      if (restored) return;
+      restored = true;
       if (process.stdout.write !== redirectedWrite) {
         process.stderr.write(
           '[agent-bundle] a module replaced process.stdout.write while console output was redirected to stderr; '

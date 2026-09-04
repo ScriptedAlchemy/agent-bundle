@@ -351,6 +351,65 @@ describe('stdout protocol guard', () => {
       console.log = originalConsole.log;
     }
   });
+
+  const withCapturedStreams = (run: (captured: { readonly stdout: string[]; readonly stderr: string[] }) => void): void => {
+    const originalConsole = { error: console.error, log: console.log };
+    const originalStdoutWrite = process.stdout.write;
+    const originalStderrWrite = process.stderr.write;
+    const captured = { stderr: [] as string[], stdout: [] as string[] };
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      captured.stdout.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      captured.stderr.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      run(captured);
+    } finally {
+      process.stdout.write = originalStdoutWrite;
+      process.stderr.write = originalStderrWrite;
+      console.error = originalConsole.error;
+      console.log = originalConsole.log;
+    }
+  };
+
+  it('restores once: a second restoreProtocolStdout is a no-op and warns at most once', () => {
+    withCapturedStreams(({ stderr, stdout }) => {
+      const guard = redirectConsoleToStderr();
+      const redirect = process.stdout.write;
+      process.stdout.write = ((chunk: string | Uint8Array) => redirect.call(process.stdout, chunk)) as typeof process.stdout.write;
+      guard.restoreProtocolStdout();
+      const afterFirst = process.stdout.write;
+      expect(stderr.filter((line) => line.includes('replaced process.stdout.write'))).toHaveLength(1);
+      guard.restoreProtocolStdout();
+      expect(process.stdout.write).toBe(afterFirst);
+      expect(stderr.filter((line) => line.includes('replaced process.stdout.write'))).toHaveLength(1);
+      process.stdout.write('{"jsonrpc":"2.0"}');
+      expect(stdout).toEqual(['{"jsonrpc":"2.0"}']);
+    });
+  });
+
+  it('ignores a stale restore after a fresh guard was installed: the fresh redirect stays, and adoption still returns the fresh guard', () => {
+    withCapturedStreams(({ stderr, stdout }) => {
+      const stale = redirectConsoleToStderr();
+      stale.restoreProtocolStdout();
+      const fresh = redirectConsoleToStderr();
+      const freshRedirect = process.stdout.write;
+      // A second holder of the first guard restores late: nothing changes.
+      stale.restoreProtocolStdout();
+      expect(process.stdout.write).toBe(freshRedirect);
+      expect(redirectConsoleToStderr()).toBe(fresh);
+      process.stdout.write('still guarded');
+      expect(stdout).toEqual([]);
+      expect(stderr).toContain('still guarded');
+      fresh.restoreProtocolStdout();
+      process.stdout.write('{"jsonrpc":"2.0"}');
+      expect(stdout).toEqual(['{"jsonrpc":"2.0"}']);
+      expect(stderr.some((line) => line.includes('replaced process.stdout.write'))).toBe(false);
+    });
+  });
 });
 
 describe('runGeneratedStdioMcpEntry', () => {
