@@ -129,7 +129,8 @@ agent-bundle uninstall <host> [--from <bundle-dir>] [--scope <scope>] [--mode <m
 uninstall 只删除回执归属的内容：记录的文件与安装器创建的目录（Cursor 本地，包括安装本身创建的
 `~/.cursor/plugins[/local]` 目录）、暂存仓库（Cursor 市场模式，在其 `HEAD` 与记录的提交匹配之后），或宿主注册
 （`claude plugin uninstall <id> --scope <scope> --keep-data` + `claude plugin marketplace remove`，
-`codex plugin remove` + `codex plugin marketplace remove`——若另一个已安装插件仍在使用该市场，则保留市场）。
+`codex plugin remove` + `codex plugin marketplace remove`——若另一个已安装插件仍在使用该市场，则保留市场，
+包括仅记录在 Claude 的 `plugins/installed_plugins.json` 注册表中、位于另一作用域或另一项目的 Claude 安装）。
 非归属条目被保留并列出；缺少回执为 `AB7009`，不匹配为 `AB7007`，除非 `--force`；再次运行是 `not-installed`
 空操作。类型化的 `data.outcome` 按宿主如实说明持久状态的去向：Cursor 为 `kept` / `purged` / `absent`；
 Claude 为 `retained-by-host`（缓存副本在 Claude 约 14 天的宽限期内被标为 orphaned；purge 还会删除 `state/` 与

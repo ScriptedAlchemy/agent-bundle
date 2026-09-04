@@ -923,8 +923,11 @@ open issue). Every mutation is opt-in and bounded by the receipt:
   that receipt records the marketplace registration or only its plugin, since
   a plugin installed after the marketplace existed still needs it — when the
   same plugin is installed at another Claude scope or in another project (live
-  row or stored receipt), or when `plugin marketplace list --json`, the
-  dependency re-read of `plugin list --json`, or any receipt in the store
+  row, Claude's cross-project `plugins/installed_plugins.json` registry —
+  which also records hand-made `project`/`local` installs elsewhere that have
+  no receipt and are invisible to `plugin list --json` run here — or stored
+  receipt), or when `plugin marketplace list --json`, the dependency re-read
+  of `plugin list --json`, that registry, or any receipt in the store
   cannot be read (a failed read is not proof that nothing depends on it: an
   unreadable receipt may be the very dependent or ownership heir, so the
   dependency set is unknown and a purge of shared state is refused with
@@ -967,7 +970,7 @@ since been removed by hand.
 | Code | Severity | Trigger | Recovery |
 | --- | --- | --- | --- |
 | `AB7007` | error | `uninstall` refused a mismatch or a foreign target: the owned files hash differently from the receipt, the cached host copy differs from the receipt in version or content, the staged repository's `HEAD` is not the recorded commit or its working tree is dirty / unverifiable, the receipt names another plugin, the directory is not this plugin's install at all, or a destination / `state/` entry is a symlink or special file. | `--force` overrides content and `HEAD` mismatches (the receipt-owned set is still the only thing removed); a receipt or manifest naming another plugin, and symlinked entries, are refused regardless — inspect and remove them manually. |
-| `AB7008` | error | `--purge-data` without `--confirm-purge`, `--purge-data` together with `--keep-data`, or (Claude) `--purge-data` while the same plugin is installed at another scope or in another project (a live `plugin list --json` row, or a stored receipt for the same plugin) — the cached copy and `plugins/data/<id>/` are scope-less and still in use — or while `claude plugin list --json` cannot be re-read to prove there is no other scope. | Pass `--purge-data --confirm-purge` to delete durable state, or neither flag to keep it; for a shared Claude scope, uninstall without `--purge-data` and purge after the last scope is removed. |
+| `AB7008` | error | `--purge-data` without `--confirm-purge`, `--purge-data` together with `--keep-data`, or (Claude) `--purge-data` while the same plugin is installed at another scope or in another project (a live `plugin list --json` row, an entry in Claude's `plugins/installed_plugins.json` registry, or a stored receipt for the same plugin) — the cached copy and `plugins/data/<id>/` are scope-less and still in use — or while `claude plugin list --json` or that registry cannot be read to prove there is no other scope. | Pass `--purge-data --confirm-purge` to delete durable state, or neither flag to keep it; for a shared Claude scope, uninstall without `--purge-data` and purge after the last scope is removed. |
 | `AB7009` | error | `uninstall` found the install but no receipt proving Agent Bundle owns it: a Cursor local copy in the pre-receipt legacy layout, a staged marketplace repository without its store receipt, or a host-registered Claude/Codex copy without its store receipt. | Re-run with `--force` (a legacy Cursor copy is removed by its inventory, `state/` kept; a host-CLI install is removed through the host verbs), or reinstall with `--replace` first to record a receipt. |
 
 The Cursor and portable host-install proofs (`tests/host-install-proof.test.ts`,

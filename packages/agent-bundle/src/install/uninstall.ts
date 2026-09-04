@@ -891,11 +891,16 @@ const uninstallCursorMarketplace = async (
  * the marketplace registration itself: an install made after the marketplace
  * already existed records only its plugin registration, and that plugin still
  * needs the marketplace. `sameOtherScopes`: (Claude) the same plugin installed
- * at another scope or in another project, from a live row or a stored receipt
- * — it shares the marketplace, whose `remove` applies to every scope, and the
- * scope-less `plugins/data/<id>`. A `plugin list --json` that cannot be read
- * is `'unknown'`, never an empty list: a failed read is not proof that nothing
- * depends on the marketplace, so the caller retains it (fail-closed).
+ * at another scope or in another project, from a live row, Claude's own
+ * registry, or a stored receipt — it shares the marketplace, whose `remove`
+ * applies to every scope, and the scope-less `plugins/data/<id>`. For Claude,
+ * project- and local-scope installs made by hand in other projects have no
+ * receipt and are invisible to `plugin list --json` run here, so the host's
+ * cross-project registry `plugins/installed_plugins.json` is read as well: it
+ * is where Claude records every scope of every install. A `plugin list --json`
+ * or registry that cannot be read is `'unknown'`, never an empty list: a
+ * failed read is not proof that nothing depends on the marketplace, so the
+ * caller retains it (fail-closed).
  */
 interface MarketplaceDependents {
   readonly others: readonly string[];
@@ -904,6 +909,50 @@ interface MarketplaceDependents {
   readonly sameOtherScopes: readonly string[];
 }
 
+const claudeInstalledPluginsRegistry = 'plugins/installed_plugins.json';
+
+interface ClaudeInstalledPluginsEntry {
+  readonly id: string;
+  readonly projectPath: string | undefined;
+  readonly scope: string;
+}
+
+/**
+ * Claude's cross-scope, cross-project install registry (`{ plugins: { "<id>@<marketplace>": [{ scope, projectPath?, ... }] } }`).
+ * Absent means Claude has never recorded an install into this config root (it writes the file on the first install and
+ * leaves `{ "plugins": {} }` behind after the last uninstall); any other read or parse failure is `'unknown'`.
+ */
+const readClaudeInstalledPluginsRegistry = async (hostRoot: string): Promise<readonly ClaudeInstalledPluginsEntry[] | 'unknown'> => {
+  let text: string;
+  try {
+    text = await readFile(join(hostRoot, claudeInstalledPluginsRegistry), 'utf8');
+  } catch (error) {
+    return isErrno(error, 'ENOENT') ? Object.freeze([]) : 'unknown';
+  }
+  let document: unknown;
+  try {
+    document = JSON.parse(text) as unknown;
+  } catch {
+    return 'unknown';
+  }
+  if (typeof document !== 'object' || document === null) return 'unknown';
+  const plugins = (document as { readonly plugins?: unknown }).plugins;
+  if (plugins === undefined) return Object.freeze([]);
+  if (typeof plugins !== 'object' || plugins === null || Array.isArray(plugins)) return 'unknown';
+  const entries: ClaudeInstalledPluginsEntry[] = [];
+  for (const [id, value] of Object.entries(plugins as Record<string, unknown>)) {
+    // Registry version 1 stored one object per id; version 2 stores one array of scoped installs per id.
+    const installs = Array.isArray(value) ? value : [value];
+    for (const install of installs) {
+      if (typeof install !== 'object' || install === null) return 'unknown';
+      const { projectPath, scope } = install as { readonly projectPath?: unknown; readonly scope?: unknown };
+      if (typeof scope !== 'string' || (projectPath !== undefined && typeof projectPath !== 'string')) return 'unknown';
+      entries.push(Object.freeze({ id, projectPath, scope }));
+    }
+  }
+  return Object.freeze(entries);
+};
+
 const marketplaceDependents = async (
   runner: InstallCommandRunner,
   identity: PluginIdentity,
@@ -911,11 +960,13 @@ const marketplaceDependents = async (
   marketplace: string,
   id: string,
   scope: InstallScope,
+  projectRoot: string | undefined,
   hostRoot: string,
   receiptPath: string,
 ): Promise<MarketplaceDependents | 'unknown'> => {
   const others: string[] = [];
   const sameOtherScopes: string[] = [];
+  const seen = new Set<string>();
   try {
     const result = await runner.run(host, ['plugin', 'list', '--json'], { cwd: identity.bundleRoot });
     if (result.code !== 0) return 'unknown';
@@ -931,12 +982,33 @@ const marketplaceDependents = async (
       if (typeof rowId !== 'string' || !rowId.endsWith(`@${marketplace}`)) continue;
       if (rowId !== id) {
         others.push(rowId);
+        seen.add(rowId);
       } else if (host === 'claude' && typeof candidate.scope === 'string' && candidate.scope !== scope) {
         sameOtherScopes.push(`${rowId} (scope ${candidate.scope})`);
+        seen.add(`${rowId}|${candidate.scope}`);
       }
     }
   } catch {
     return 'unknown';
+  }
+  if (host === 'claude') {
+    const registry = await readClaudeInstalledPluginsRegistry(hostRoot);
+    if (registry === 'unknown') return 'unknown';
+    for (const entry of registry) {
+      if (!entry.id.endsWith(`@${marketplace}`)) continue;
+      if (entry.id !== id) {
+        if (seen.has(entry.id)) continue;
+        seen.add(entry.id);
+        others.push(`${entry.id} (scope ${entry.scope}${entry.projectPath === undefined ? '' : ` in ${entry.projectPath}`}, per ${claudeInstalledPluginsRegistry})`);
+        continue;
+      }
+      // The copy being removed: same scope, and either no project or this project.
+      if (entry.scope === scope && (entry.projectPath === undefined || projectRoot === undefined || entry.projectPath === projectRoot)) continue;
+      const key = entry.projectPath === undefined ? `${entry.id}|${entry.scope}` : `${entry.id}|${entry.scope}|${entry.projectPath}`;
+      if (seen.has(key) || (entry.projectPath !== undefined && seen.has(`${entry.id}|${entry.scope}`))) continue;
+      seen.add(key);
+      sameOtherScopes.push(`${entry.id} (scope ${entry.scope}${entry.projectPath === undefined ? '' : ` in ${entry.projectPath}`}, per ${claudeInstalledPluginsRegistry})`);
+    }
   }
   const receipts: StoredInstallReceipt[] = [];
   const store = await listStoredInstallReceipts(hostRoot);
@@ -1134,7 +1206,7 @@ const uninstallPublicCli = async (
   // Dependents decide both whether the marketplace goes and whether Claude's scope-less durable state may be
   // purged, so they are read whenever either decision is live — and always before any mutation.
   const dependents = marketplaceState !== 'absent' || (host === 'claude' && policy === 'purge')
-    ? await marketplaceDependents(runner, identity, host, marketplace, id, scope, hostRoot, receiptPath)
+    ? await marketplaceDependents(runner, identity, host, marketplace, id, scope, publicHostProjectRoot(host, scope, identity), hostRoot, receiptPath)
     : Object.freeze({ others: Object.freeze([]), receipts: Object.freeze([]), sameOtherScopes: Object.freeze([]) });
   const dependentNames = dependents === 'unknown' ? 'unknown' : [...dependents.others, ...dependents.sameOtherScopes];
   const retainMarketplace = !marketplaceOwned || marketplaceState === 'unknown' || dependentNames === 'unknown' ||
@@ -1184,7 +1256,7 @@ const uninstallPublicCli = async (
             ? `Marketplace ${marketplace} stays registered: ` +
               (marketplaceState === 'unknown'
                 ? `\`${host} plugin marketplace list --json\` could not be read`
-                : `\`${host} plugin list --json\` or a receipt in the Agent Bundle receipt store could not be read`) +
+                : `\`${host} plugin list --json\`, ${host === 'claude' ? `the ${claudeInstalledPluginsRegistry} registry, ` : ''}or a receipt in the Agent Bundle receipt store could not be read`) +
               ' to prove nothing else installs from it, and `plugin marketplace remove` applies to every scope. ' +
               'Remove it by hand once the inventory is readable.'
             : dependentNames.length > 0

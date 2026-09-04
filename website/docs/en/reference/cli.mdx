@@ -133,8 +133,9 @@ directories (Cursor local, including the `~/.cursor/plugins[/local]` directories
 created), the staged repository (Cursor marketplace, after its `HEAD` matches the recorded
 commit), or the host registrations (`claude plugin uninstall <id> --scope <scope> --keep-data` +
 `claude plugin marketplace remove`, `codex plugin remove` + `codex plugin marketplace remove` —
-the marketplace is retained while another installed plugin still uses it). Unowned entries are
-retained and listed; a missing receipt is `AB7009` and a mismatch is `AB7007` unless `--force`; a
+the marketplace is retained while another installed plugin still uses it, including a Claude
+install at another scope or in another project known only to Claude's `plugins/installed_plugins.json`
+registry). Unowned entries are retained and listed; a missing receipt is `AB7009` and a mismatch is `AB7007` unless `--force`; a
 second run is a `not-installed` no-op. The typed `data.outcome` says what happened to durable
 state per host: Cursor `kept` / `purged` / `absent`; Claude `retained-by-host` (the cached copy is
 orphaned for Claude's ~14-day grace period; a purge also removes `state/` and

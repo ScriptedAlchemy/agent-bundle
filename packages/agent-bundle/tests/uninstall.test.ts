@@ -963,6 +963,93 @@ it.each([
       await rm(join(hostRoot, 'agent-bundle'), { force: true, recursive: true });
       installed = false;
       marketplaceRegistered = false;
+
+      // A project- or local-scope install made by hand in another project has no receipt and is invisible to
+      // `plugin list --json` run here, but Claude records every scope of every install in its own
+      // plugins/installed_plugins.json: that registry is read too, so the marketplace (and, for the same plugin,
+      // the scope-less durable state) is retained for consumers no receipt describes.
+      const registryPath = join(hostRoot, 'plugins', 'installed_plugins.json');
+      const registry = (plugins: Record<string, readonly { readonly projectPath?: string; readonly scope: string }[]>) =>
+        JSON.stringify({ plugins: Object.fromEntries(Object.entries(plugins).map(([pluginId, installs]) => [pluginId, installs.map((install) => ({
+          ...install, installPath, installedAt: '2026-09-03T00:00:00.000Z', lastUpdated: '2026-09-03T00:00:00.000Z', version: '1.2.3',
+        }))])), version: 2 });
+      await mkdir(join(hostRoot, 'plugins'), { recursive: true });
+      await installBundle(options);
+      await writeFile(registryPath, registry({ 'uninstall-fixture@uninstall-fixture-marketplace': [
+        { scope: 'user' },
+        { projectPath: '/elsewhere/by-hand', scope: 'project' },
+      ] }));
+      await cp(fixture.bundleRoot, installPath, { recursive: true });
+      await mkdir(join(installPath, 'state'), { recursive: true });
+      await writeFile(join(installPath, 'state', 'plugin.sqlite'), 'durable\n');
+      calls.length = 0;
+      const registrySharedPurge = await failureOf(uninstallBundle({ ...options, confirmPurge: true, purgeData: true }));
+      expect(registrySharedPurge.diagnostics[0]).toMatchObject({ code: 'AB7008', target: 'claude' });
+      expect(registrySharedPurge.diagnostics[0]?.message)
+        .toContain('uninstall-fixture@uninstall-fixture-marketplace (scope project in /elsewhere/by-hand, per plugins/installed_plugins.json)');
+      expect(calls.map((call) => call.args.join(' '))).not.toContain(uninstall);
+      expect(await readFile(join(installPath, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
+      await rm(installPath, { force: true, recursive: true });
+      calls.length = 0;
+      const byRegistry = await uninstallBundle(options);
+      expect(byRegistry.registrations.find((registration) => registration.kind === 'claude-marketplace')).toMatchObject({
+        action: 'retained',
+        detail: expect.stringContaining('(scope project in /elsewhere/by-hand, per plugins/installed_plugins.json) still install from it'),
+      });
+      expect(calls.map((call) => call.args.join(' '))).toContain(uninstall);
+      expect(calls.map((call) => call.args.join(' '))).not.toContain(removeMarketplace);
+      installed = false;
+      marketplaceRegistered = false;
+
+      // Another plugin from the same marketplace, known only to the registry, retains the marketplace but is not a
+      // same-plugin dependent: purging this plugin's own durable state is allowed.
+      await installBundle(options);
+      await writeFile(registryPath, registry({
+        'other-fixture@uninstall-fixture-marketplace': [{ projectPath: '/elsewhere/other', scope: 'local' }],
+        'uninstall-fixture@uninstall-fixture-marketplace': [{ scope: 'user' }],
+      }));
+      await cp(fixture.bundleRoot, installPath, { recursive: true });
+      await mkdir(join(installPath, 'state'), { recursive: true });
+      await writeFile(join(installPath, 'state', 'plugin.sqlite'), 'durable\n');
+      calls.length = 0;
+      const byOtherRegistered = await uninstallBundle({ ...options, confirmPurge: true, purgeData: true });
+      expect(byOtherRegistered).toMatchObject({ data: { outcome: 'purged' }, state: 'uninstalled' });
+      expect(byOtherRegistered.registrations.find((registration) => registration.kind === 'claude-marketplace')).toMatchObject({
+        action: 'retained',
+        detail: expect.stringContaining('other-fixture@uninstall-fixture-marketplace (scope local in /elsewhere/other, per plugins/installed_plugins.json)'),
+      });
+      expect(calls.map((call) => call.args.join(' '))).not.toContain(removeMarketplace);
+      await rm(installPath, { force: true, recursive: true });
+      installed = false;
+      marketplaceRegistered = false;
+
+      // The registry naming only the copy being removed is not a dependent: the marketplace goes.
+      await installBundle(options);
+      await writeFile(registryPath, registry({ 'uninstall-fixture@uninstall-fixture-marketplace': [{ scope: 'user' }] }));
+      calls.length = 0;
+      const selfOnly = await uninstallBundle(options);
+      expect(selfOnly.registrations).toMatchObject([
+        { action: 'removed', kind: 'claude-plugin' },
+        { action: 'removed', kind: 'claude-marketplace' },
+      ]);
+      expect(calls.map((call) => call.args.join(' '))).toContain(removeMarketplace);
+      installed = false;
+      marketplaceRegistered = false;
+
+      // A registry that cannot be parsed makes the dependency set unknown, and unknown fails closed.
+      await installBundle(options);
+      await writeFile(registryPath, '{ not a registry');
+      calls.length = 0;
+      const unreadableRegistry = await uninstallBundle(options);
+      expect(unreadableRegistry.registrations.find((registration) => registration.kind === 'claude-marketplace')).toMatchObject({
+        action: 'retained',
+        detail: expect.stringContaining('the plugins/installed_plugins.json registry, or a receipt in the Agent Bundle receipt store could not be read'),
+      });
+      expect(calls.map((call) => call.args.join(' '))).toContain(uninstall);
+      expect(calls.map((call) => call.args.join(' '))).not.toContain(removeMarketplace);
+      await rm(join(hostRoot, 'plugins'), { force: true, recursive: true });
+      installed = false;
+      marketplaceRegistered = false;
     }
 
     // An orphaned receipt (host already forgot the plugin) is consumed without any host verb.

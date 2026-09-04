@@ -302,7 +302,9 @@ receipt and remove exactly what it owns:
   reported `manual` with the Customize step.
 - Claude / Codex: `claude plugin uninstall <id> --scope <scope> --keep-data` /
   `codex plugin remove <id>`, then `plugin marketplace remove <marketplace>`
-  unless another installed plugin still uses it, then the store receipt. An
+  unless another installed plugin still uses it (live row, another store
+  receipt, or — Claude — an install at another scope or in another project
+  recorded in `plugins/installed_plugins.json`), then the store receipt. An
   unusable `plugin list --json` fails closed (`AB7004`); a registration the
   host no longer holds is `already-absent`, so an orphaned receipt is consumed
   without running a host verb.
