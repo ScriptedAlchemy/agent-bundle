@@ -1,4 +1,3 @@
-import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../../adapters/registry.ts';
@@ -15,6 +14,9 @@ import type {
   HostDiscoveryReport,
 } from '../../contracts/discovery.ts';
 import { parseJsonWithoutDuplicateKeys } from '../../core/strict-json.ts';
+import { readFileString, type PlatformRun } from '../../effect/platform.ts';
+import { platformRunOf } from '../platform-run.ts';
+import type { DevPlatformRuntime } from '../platform-runtime.ts';
 import {
   runDoctor,
   type DoctorDurableStateReport,
@@ -41,6 +43,8 @@ export interface HostDiscoveryServiceOptions {
     readonly manifestDigest?: string;
   }> | undefined;
   readonly registry?: TargetRegistry;
+  /** The dev server's session runtime; absent, each program runs on its own `platformLayer`. */
+  readonly platformRuntime?: DevPlatformRuntime;
 }
 
 const discoveryDiagnostic = (
@@ -115,6 +119,7 @@ const discoveryMcpServer = (value: ModernMcpServerEntry): DiscoveryMcpServer => 
 const enumerateMcpServers = async (
   value: DoctorHostReport,
   registry: TargetRegistry,
+  run: PlatformRun,
 ): Promise<readonly DiscoveryMcpServer[] | undefined> => {
   const bundleRoot = value.bundle?.bundleRoot;
   if (bundleRoot === undefined) return undefined;
@@ -122,7 +127,7 @@ const enumerateMcpServers = async (
     const runtime = registry.mcpRuntime(value.host);
     if (runtime === undefined) return undefined;
     const document = parseJsonWithoutDuplicateKeys(
-      await readFile(join(bundleRoot, runtime.manifestPath), 'utf8'),
+      await run(readFileString(join(bundleRoot, runtime.manifestPath))),
     );
     const result = readTargetMcpServers(runtime, document);
     if (result.status === 'invalid') return undefined;
@@ -135,10 +140,11 @@ const enumerateMcpServers = async (
 const hostReport = async (
   value: DoctorHostReport,
   registry: TargetRegistry,
+  run: PlatformRun,
 ): Promise<DiscoveryHostReport> => Object.freeze({
   ...(value.bundle === undefined
     ? {}
-    : { bundle: bundleFinding(value.bundle, await enumerateMcpServers(value, registry)) }),
+    : { bundle: bundleFinding(value.bundle, await enumerateMcpServers(value, registry, run)) }),
   diagnostics: Object.freeze(value.diagnostics.map(discoveryDiagnostic)),
   host: value.host,
   inventory: Object.freeze({
@@ -166,6 +172,7 @@ export class HostDiscoveryService implements HostDiscoveryRouteService {
   readonly #now: () => Date;
   readonly #prepared: NonNullable<HostDiscoveryServiceOptions['prepared']>;
   readonly #registry: TargetRegistry;
+  readonly #run: PlatformRun;
   #inFlight: Promise<HostDiscoveryReport> | undefined;
 
   constructor(options: HostDiscoveryServiceOptions = {}) {
@@ -174,6 +181,7 @@ export class HostDiscoveryService implements HostDiscoveryRouteService {
     this.#now = options.now ?? (() => new Date());
     this.#prepared = options.prepared ?? (() => undefined);
     this.#registry = options.registry ?? createDefaultRegistry();
+    this.#run = platformRunOf(options.platformRuntime);
   }
 
   discover(): Promise<HostDiscoveryReport> {
@@ -196,7 +204,7 @@ export class HostDiscoveryService implements HostDiscoveryRouteService {
       ...(bundleSource ? { from: bundleSource } : {}),
     });
     const hosts: readonly DiscoveryHostReport[] = Object.freeze(
-      await Promise.all(report.hosts.map((value) => hostReport(value, this.#registry))),
+      await Promise.all(report.hosts.map((value) => hostReport(value, this.#registry, this.#run))),
     );
     const endpoints: DiscoveryEndpointReport = endpointReport(report.endpoints);
     const diagnostics: readonly DiscoveryDiagnostic[] = Object.freeze(

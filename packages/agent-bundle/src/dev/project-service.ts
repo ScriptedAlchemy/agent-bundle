@@ -3,6 +3,9 @@ import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
+import { readFileBytes } from '../effect/platform.ts';
+import { platformRunOf } from './platform-run.ts';
+import type { DevPlatformRuntime } from './platform-runtime.ts';
 import {
   loadDevContractMatrix,
   type PreparedDevContractMatrix,
@@ -59,6 +62,8 @@ export interface ProjectServiceOptions {
   readonly outputRoots?: readonly string[];
   readonly registry?: TargetRegistry;
   readonly root: string;
+  /** The dev server's session runtime; absent, each program runs on its own `platformLayer`. */
+  readonly platformRuntime?: DevPlatformRuntime;
   readonly targets?: readonly string[];
 }
 
@@ -155,6 +160,10 @@ const relativeSourcePath = (root: string, source: string): string => {
   return components.join('/');
 };
 
+/**
+ * Stays on `node:fs`: the per-file `lstat` records link identity next to
+ * the bytes, and this runs once per project file on every preparation.
+ */
 const sourceInput = async (root: string, source: string): Promise<ProjectSourceSnapshotInput> => {
   try {
     const resolvedSource = await realpath(source);
@@ -737,7 +746,7 @@ export class ProjectService {
     const configPath = resolve(root, this.#options.configPath ?? 'agent-bundle.config.ts');
     const configIdentity = async (): Promise<string | undefined> => {
       try {
-        return createHash('sha256').update(await readFile(configPath)).digest('hex');
+        return createHash('sha256').update(await platformRunOf(this.#options.platformRuntime)(readFileBytes(configPath))).digest('hex');
       } catch {
         return undefined;
       }

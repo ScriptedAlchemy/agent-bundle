@@ -1,14 +1,19 @@
-import { realpath, stat, readFile } from 'node:fs/promises';
 import { basename, extname, resolve } from 'node:path';
 
-import { isErrno } from '../core/errors.ts';
+import { Effect, FileSystem, Option } from 'effect';
+
 import { isInside } from '../core/paths.ts';
+import { isPlatformErrno, readFileBytes } from '../effect/platform.ts';
+import { platformRunOf } from './platform-run.ts';
+import type { DevPlatformRuntime } from './platform-runtime.ts';
 
 import type { WorkbenchAssetSource } from './foreground-server.ts';
 
 export interface WorkbenchAssetSourceOptions {
   /** Root of the prebuilt workbench asset tree. */
   readonly root?: string;
+  /** The dev server's session runtime; absent, each program runs on its own `platformLayer`. */
+  readonly platformRuntime?: DevPlatformRuntime;
 }
 
 const contentTypes: Readonly<Record<string, string>> = Object.freeze({
@@ -45,7 +50,14 @@ export const createWorkbenchAssetSource = (
   options: WorkbenchAssetSourceOptions = {},
 ): WorkbenchAssetSource => {
   const root = resolve(options.root ?? defaultRoot());
-  const resolvedRoot = realpath(root);
+  const run = platformRunOf(options.platformRuntime);
+  // Resolved once, like the former eager `realpath(root)` promise: a missing
+  // root surfaces on the first read, as it did.
+  let resolvedRoot: Promise<string> | undefined;
+  const resolveRoot = (): Promise<string> => {
+    resolvedRoot ??= run(Effect.flatMap(FileSystem.FileSystem, (fs) => fs.realPath(root)));
+    return resolvedRoot;
+  };
   // The tree is fixed once built, so successful reads are cached forever.
   // Misses are never cached: they carry no read cost worth saving, and a
   // hostile stream of request paths must not grow the cache.
@@ -57,18 +69,30 @@ export const createWorkbenchAssetSource = (
       if (!isInside(root, candidate)) return undefined;
       const cached = served.get(candidate);
       if (cached !== undefined) return cached;
-      try {
-        const [actualRoot, actualPath] = await Promise.all([resolvedRoot, realpath(candidate)]);
-        if (!isInside(actualRoot, actualPath)) return undefined;
-        const metadata = await stat(actualPath);
-        if (!metadata.isFile()) return undefined;
-        const asset = Object.freeze({ body: await readFile(actualPath), contentType: contentTypeFor(actualPath) });
-        served.set(candidate, asset);
-        return asset;
-      } catch (error) {
-        if (isErrno(error, 'ENOENT')) return undefined;
+      const actualRoot = await resolveRoot().catch((error: unknown) => {
+        if (isPlatformErrno(error, 'ENOENT')) return undefined;
         throw error;
-      }
+      });
+      if (actualRoot === undefined) return undefined;
+      const asset = await run(readContainedAsset(actualRoot, candidate));
+      if (Option.isNone(asset)) return undefined;
+      served.set(candidate, asset.value);
+      return asset.value;
     },
   });
 };
+
+/** `realPath` → containment → regular-file `stat` → bytes; `ENOENT` anywhere is a miss, other errors propagate. */
+const readContainedAsset = Effect.fnUntraced(function* (actualRoot: string, candidate: string) {
+  const fs = yield* FileSystem.FileSystem;
+  return yield* Effect.gen(function* () {
+    const actualPath = yield* fs.realPath(candidate);
+    if (!isInside(actualRoot, actualPath)) return Option.none<Readonly<{ body: Buffer; contentType: string }>>();
+    const metadata = yield* fs.stat(actualPath);
+    if (metadata.type !== 'File') return Option.none<Readonly<{ body: Buffer; contentType: string }>>();
+    const body = yield* readFileBytes(actualPath);
+    return Option.some(Object.freeze({ body, contentType: contentTypeFor(actualPath) }));
+  }).pipe(Effect.catch((error) => isPlatformErrno(error, 'ENOENT')
+    ? Effect.succeed(Option.none<Readonly<{ body: Buffer; contentType: string }>>())
+    : Effect.fail(error)));
+});
