@@ -669,14 +669,36 @@ const installPublicCli = async (
     'add',
     identity.bundleRoot,
   ]);
-  await runHostCommand(runner, identity, host, host === 'claude'
-    ? ['plugin', 'install', id, '--scope', scope]
-    : ['plugin', 'add', id]);
-  await writeStoredInstallReceipt(receiptPath, createInstallReceipt({
-    ...recorded,
-    inventory: storeInventory,
-    updatedAt: new Date().toISOString(),
-  }));
+  // Between `marketplace add` and the receipt write, a marketplace this run created is claimed only in memory.
+  // If the plugin install or the receipt write fails there, roll the registration back rather than leave a
+  // marketplace nothing records: a retry would then sample it as pre-existing, record only the plugin, and
+  // `uninstall` would retain it as user-owned forever.
+  const createdMarketplace = previousReceipt === undefined &&
+    recorded.registrations.some((registration) => registration.kind === `${host}-marketplace`);
+  try {
+    await runHostCommand(runner, identity, host, host === 'claude'
+      ? ['plugin', 'install', id, '--scope', scope]
+      : ['plugin', 'add', id]);
+    await writeStoredInstallReceipt(receiptPath, createInstallReceipt({
+      ...recorded,
+      inventory: storeInventory,
+      updatedAt: new Date().toISOString(),
+    }));
+  } catch (error) {
+    if (!createdMarketplace) throw error;
+    try {
+      await runHostCommand(runner, identity, host, publicHostMarketplaceRemoveArguments(marketplace), 'removal');
+    } catch (rollbackError) {
+      throw failure(
+        'AB7004',
+        `${errorMessage(error)} Rolling back the marketplace this install registered also failed: ` +
+          `${errorMessage(rollbackError)}. Marketplace ${marketplace} is registered with ${host} but no receipt records it; ` +
+          `run \`${host} ${publicHostMarketplaceRemoveArguments(marketplace).join(' ')}\` before retrying.`,
+        host,
+      );
+    }
+    throw error;
+  }
   // The receipt lands before the load verdict: the host did install the copy, so a refused one stays
   // receipt-owned and `uninstall` removes it without --force.
   if (host === 'claude') {

@@ -799,6 +799,25 @@ it('emitted install.mjs --uninstall mirrors the core lifecycle: plan, receipt-ow
     const marketplaceUninstalled = await run(installer, ['--uninstall', '--mode', 'marketplace'], home);
     expect(marketplaceUninstalled).toMatchObject({ code: 0, stderr: '' });
     expect(marketplaceUninstalled.stdout).toContain('Registration cursor-marketplace-staging install-fixture-marketplace: removed');
+    // The plan is exact: this was the last staged marketplace and store receipt, so the run prunes the receipt
+    // store, the marketplaces root, and the agent-bundle namespace — and the plan already named every one of them.
+    const pathLines = (stdout: string, label: string): string[] => {
+      const lines = stdout.split('\n');
+      const start = lines.findIndex((line) => line.startsWith(label));
+      const listed: string[] = [];
+      for (const line of lines.slice(start + 1)) {
+        if (!line.startsWith('  ')) break;
+        listed.push(line.trim());
+      }
+      return listed.sort();
+    };
+    const plannedDirectories = pathLines(marketplacePlan.stdout, 'Would remove directory');
+    expect(plannedDirectories).toEqual(pathLines(marketplaceUninstalled.stdout, 'Removed directory'));
+    expect(plannedDirectories).toEqual(expect.arrayContaining([
+      join(cursorRoot, 'agent-bundle', 'receipts'),
+      join(cursorRoot, 'agent-bundle', 'marketplaces'),
+      join(cursorRoot, 'agent-bundle'),
+    ]));
     expect(marketplaceUninstalled.stdout).toContain('Data (keep): unavailable');
     expect(diffTreeSnapshots(before, await snapshotTree(home))).toEqual({ added: [], changed: [], removed: [] });
     expect((await run(installer, ['--uninstall', '--mode', 'marketplace'], home)).stdout).toContain('Not installed install-fixture@1.2.3 for cursor (marketplace mode)');

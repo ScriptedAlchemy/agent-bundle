@@ -256,6 +256,57 @@ it.each([
     await rm(receiptPath);
     await installBundle({ ...isolated(fixture), commandRunner: unreadable.runner, from: fixture.from, host, scope });
     expect((await readInstallReceiptFile(receiptPath))?.registrations.map((registration) => registration.kind)).toEqual([`${host}-plugin`]);
+
+    // `marketplace add` succeeded but the plugin install failed: the marketplace this run created is claimed only
+    // in memory, so it is rolled back rather than left registered with no receipt (a retry would otherwise sample it
+    // as pre-existing, record only the plugin, and `uninstall` would retain it as user-owned forever).
+    await rm(receiptPath);
+    const installVerb = host === 'claude' ? 'plugin install' : 'plugin add';
+    const failing: CommandCall[] = [];
+    const rolledBack = await installBundle({
+      ...isolated(fixture),
+      commandRunner: { run: async (command, args, runOptions) => {
+        const call = { args: [...args], command, cwd: runOptions.cwd };
+        failing.push(call);
+        if (isMarketplaceListCall(call)) return { code: 0, stderr: '', stdout: noMarketplaces(call) };
+        return args.join(' ').startsWith(installVerb)
+          ? { code: 1, stderr: 'install exploded', stdout: '' }
+          : { code: 0, stderr: '', stdout: '' };
+      } },
+      from: fixture.from,
+      host,
+      scope,
+    }).catch((failure: unknown) => failure);
+    expect(rolledBack).toBeInstanceOf(DiagnosticError);
+    expect((rolledBack as DiagnosticError).diagnostics[0]).toMatchObject({ code: 'AB7004', target: host });
+    expect((rolledBack as DiagnosticError).diagnostics[0]?.message).toContain('install exploded');
+    expect(failing.map((call) => call.args.join(' ')).slice(-2)).toEqual([
+      `${installVerb} install-fixture@install-fixture-marketplace${host === 'claude' ? ` --scope ${scope}` : ''}`,
+      'plugin marketplace remove install-fixture-marketplace',
+    ]);
+    expect(await readInstallReceiptFile(receiptPath)).toBeUndefined();
+
+    // A marketplace that pre-existed the install is not this run's to roll back.
+    const preExisting: CommandCall[] = [];
+    await installBundle({
+      ...isolated(fixture),
+      commandRunner: { run: async (command, args, runOptions) => {
+        const call = { args: [...args], command, cwd: runOptions.cwd };
+        preExisting.push(call);
+        if (isMarketplaceListCall(call)) {
+          return { code: 0, stderr: '', stdout: host === 'claude'
+            ? JSON.stringify([{ name: 'install-fixture-marketplace' }])
+            : JSON.stringify({ marketplaces: [{ name: 'install-fixture-marketplace', root: '/elsewhere' }] }) };
+        }
+        return args.join(' ').startsWith(installVerb)
+          ? { code: 1, stderr: 'install exploded', stdout: '' }
+          : { code: 0, stderr: '', stdout: '' };
+      } },
+      from: fixture.from,
+      host,
+      scope,
+    }).catch(() => undefined);
+    expect(preExisting.map((call) => call.args.join(' '))).not.toContain('plugin marketplace remove install-fixture-marketplace');
   } finally {
     await rm(fixture.cleanupRoot, { force: true, recursive: true });
   }
