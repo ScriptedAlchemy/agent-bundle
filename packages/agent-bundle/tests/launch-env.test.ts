@@ -59,10 +59,45 @@ describe('the operator .env layer of an installed pack (#469)', () => {
     });
   });
 
+  it('reads an inline comment after a closing quote and keeps a quoted value on one line', () => {
+    expect(parseOperatorEnv([
+      'TOKEN="s3cr3t" # operator note',
+      "SINGLE='one' # note",
+      'TICK=`two` # note',
+      'ESCAPED="a \\" b" # note',
+      'NEXT=still-parsed',
+      'TRAILER="x" not-a-comment',
+      'OPEN="never closed',
+    ].join('\n'))).toEqual({
+      ESCAPED: 'a " b',
+      NEXT: 'still-parsed',
+      // dotenv reads a quoted value followed by anything but a comment as an unquoted literal.
+      OPEN: '"never closed',
+      SINGLE: 'one',
+      TICK: 'two',
+      TOKEN: 's3cr3t',
+      TRAILER: '"x" not-a-comment',
+    });
+  });
+
+  it('reserves host keys case-insensitively on Windows only', async () => {
+    const root = await createRoot();
+    await writeFile(join(root, '.env'), 'PATH=from-file\nAPI_KEY=from-file\nOTHER=1\n');
+    const windows: NodeJS.ProcessEnv = { Api_Key: 'host', Path: 'host' };
+    expect(applyOperatorEnv({ env: windows, platform: 'win32', pluginRoot: root }).applied).toEqual(['OTHER']);
+    expect(windows).toEqual({ Api_Key: 'host', OTHER: '1', Path: 'host' });
+
+    const posix: NodeJS.ProcessEnv = { Api_Key: 'host', Path: 'host' };
+    expect(applyOperatorEnv({ env: posix, platform: 'linux', pluginRoot: root }).applied).toEqual(['API_KEY', 'OTHER', 'PATH']);
+    expect(posix).toEqual({ API_KEY: 'from-file', Api_Key: 'host', OTHER: '1', PATH: 'from-file', Path: 'host' });
+  });
+
   it('resolves the plugin root with the anchor precedence the runtime uses', () => {
     expect(operatorEnvPluginRoot('/artifact/claude', {})).toBe('/artifact/claude');
     expect(operatorEnvPluginRoot('/artifact/claude', { AGENT_BUNDLE_PLUGIN_ROOT: '/installs/curator' })).toBe('/installs/curator');
     expect(operatorEnvPluginRoot('/artifact/claude', { AGENT_BUNDLE_PLUGIN_ROOT: '  ' })).toBe('/artifact/claude');
+    // A configured path is resolved exactly as written, like the runtime's resolvePluginRoot (#468).
+    expect(operatorEnvPluginRoot('/artifact/claude', { AGENT_BUNDLE_PLUGIN_ROOT: '/installs/curator ' })).toBe('/installs/curator ');
     // An unexpanded host token is treated as unset, never joined into a path.
     expect(operatorEnvPluginRoot('/artifact/claude', { AGENT_BUNDLE_PLUGIN_ROOT: '${CLAUDE_PLUGIN_ROOT}' })).toBe('/artifact/claude');
     expect(operatorEnvPluginRoot('/artifact/claude', { AGENT_BUNDLE_PLUGIN_ROOT: './' })).toBe(resolve('./'));

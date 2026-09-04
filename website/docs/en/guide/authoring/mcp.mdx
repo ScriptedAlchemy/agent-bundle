@@ -344,12 +344,15 @@ That guard matters because stdout carries JSON-RPC framing: one stray `console.l
 imported module would corrupt the protocol stream.
 
 Self-connecting entries — modules that construct and connect a transport at top level without a
-default export — keep their existing behavior byte for byte. Source validation reports the
-informational `AB4730` nudge suggesting the factory upgrade; it is never an error.
+default export — keep their existing behavior byte for byte: no lifecycle shell, and no operator
+`.env` layer, since there is no shell to apply it before the module's own top-level code runs.
+Source validation reports the informational `AB4730` nudge suggesting the factory upgrade; it is
+never an error.
 
 The same lifecycle is public API for hand-rolled entries, and so is the operator `.env` layer the
 generated shell applies before it imports the server module (see
-[Installation](../distribution/installation.mdx#operator-configuration-the-installed-packs-env)):
+[Installation](../distribution/installation.mdx#operator-configuration-the-installed-packs-env)) —
+a self-connecting entry that needs the layer calls `applyOperatorEnv` itself, first thing:
 
 ```ts
 import { applyOperatorEnv } from 'agent-bundle/launch-env';

@@ -113,8 +113,10 @@ IPT_SESSION=…
 RTORRENT_SSH_HOST=nas.local
 ```
 
-Every shell the pack emits reads that file when it starts — the stdio MCP server entries, the
-hook wrappers that run plugin code, and the artifact CLI `bin/<name>.mjs` — under one rule:
+Every shell the pack emits reads that file when it starts — the stdio MCP server entries (factory
+exports; a [self-connecting entry](../authoring/mcp.mdx#handwritten-stdio-entries) has no shell and
+reads none unless it calls `applyOperatorEnv` itself), the hook wrappers that run plugin code, and
+the artifact CLI `bin/<name>.mjs` — under one rule:
 
 | Precedence | Layer | Contents |
 | --- | --- | --- |

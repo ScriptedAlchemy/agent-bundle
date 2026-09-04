@@ -96,8 +96,9 @@ IPT_SESSION=…
 RTORRENT_SSH_HOST=nas.local
 ```
 
-包输出的每个外壳——stdio MCP 服务器入口、运行插件代码的 hook 包装器、产物 CLI `bin/<name>.mjs`——在启动时
-按同一条规则读取该文件：
+包输出的每个外壳——stdio MCP 服务器入口（工厂导出；[自行连接的入口](../authoring/mcp.mdx#手写-stdio-入口)
+没有外壳，除非自行调用 `applyOperatorEnv`，否则不读取任何文件）、运行插件代码的 hook 包装器、产物 CLI
+`bin/<name>.mjs`——在启动时按同一条规则读取该文件：
 
 | 优先级 | 层 | 内容 |
 | --- | --- | --- |

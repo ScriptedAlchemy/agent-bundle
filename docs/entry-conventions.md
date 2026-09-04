@@ -944,7 +944,9 @@ race against wedged transports, and heartbeat/activity logging on stderr
 name).
 
 Self-connecting entries — modules that construct and connect a transport at
-top level without a default export — keep today's behavior byte for byte.
+top level without a default export — keep today's behavior byte for byte: no
+lifecycle shell and no operator `.env` layer (#469); an entry that wants the
+layer calls `applyOperatorEnv` from `agent-bundle/launch-env` itself.
 
 Every served tool call is one ordinary `tools/call`: optional
 `notifications/progress` while the caller's progress token is live, then one
@@ -1271,8 +1273,9 @@ canonical precedence order (highest wins):
 | 1 (lowest) | Manifest env | Entries declared in the server config plus the injected plugin-root anchor, path tokens expanded. |
 
 Installed packs get the same layer without `mcp run` (#469): every artifact
-shell that runs plugin code — the stdio MCP entry (before its deferred server
-import), the hook wrappers that execute handlers or render standalone, and the
+shell that runs plugin code — the stdio MCP entry of a factory-exporting
+server (before its deferred server import; a self-connecting entry has no
+shell), the hook wrappers that execute handlers or render standalone, and the
 artifact CLI `bin/<name>.mjs` — applies `agent-bundle/launch-env`
 (`src/launch-env.ts`, plain Node, inlined into the bundle) at startup. It
 reads `<plugin root>/.env` then `.env.local`, where the plugin root is the
