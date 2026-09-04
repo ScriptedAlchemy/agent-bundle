@@ -140,6 +140,46 @@ the call fails closed with `manifest-unavailable`; a manifest describing another
 with the same mismatch report `renderRoute` gives, because route loaders are bound to the
 compilation that produced them.
 
+### One state across several renders
+
+Every `renderRoute` mounts the project's declared state — and its notice ledger — fresh for that
+one render and closes it afterwards, so two renders never see each other's writes. That is the
+right default for an isolated route test, but a journey that records on one event and reads on
+the next needs the same mounted state under every step. `mountTestState()` mounts the manifest's
+state definition once, with the same driver rules (a `workspace-durable` definition opens a
+disposable sqlite root that `close()` removes; other lifetimes use the memory driver), and hands
+the same `state` and `noticeLedger` to as many `renderRoute` or `renderRouteEvents` calls as spread
+its `context()`:
+
+```ts
+import { mountTestState, renderRoute } from 'agent-bundle/test';
+
+import type { TopologyEvents, TopologyState } from '../../src/state.js';
+
+const topology = await mountTestState<TopologyState, TopologyEvents>();
+try {
+  await renderRoute('event:session/start', { context: { ...topology.context(), host, workspace }, input: start });
+  await renderRoute('event:tool/before', { context: { ...topology.context(), host, workspace }, input: intent });
+
+  const snapshot = await topology.read(); // AgentStateSnapshot<TopologyState>
+  expect(snapshot.state.activities).toHaveLength(1);
+  const { notices } = await topology.notices(); // the ledger those renders published into
+} finally {
+  await topology.close();
+}
+```
+
+`read()` and `notices()` are the owner's own snapshots, not a per-render copy; `state` and
+`noticeLedger` are exposed too, for a direct `dispatch`. Each render binds the shared owner to its
+own request signal, exactly as a generated request scope does, so a render's `signal` still
+cancels that render's state operations. `withTestState(async (state) => { ... })`
+is the same mount scoped to one callback, closed when it settles. The snapshot type comes from the
+type arguments — the state registration carries no state type — or, checked, from
+`options.definition`, which mounts that definition instead of the manifest's (an `external`
+definition needs `options.driver`, since it names no storage the harness could open). A render
+that omits the mounted handles still gets its own isolated owner, so the two styles mix in one
+suite.
+
 Matchers over the Agent Document contracts: `toHaveStatus`, `toContainMarkdown`, `toContainText`,
 `toHaveValue`, `toHaveError`, and `toHaveNodeKinds`.
 
@@ -154,7 +194,7 @@ and prints it in every failure, because a pass at one level is never a receipt f
 
 | Level | Helpers | What it proves |
 | --- | --- | --- |
-| `route-unit` | `renderRoute`, `renderRouteEvents` | A route module renders to the document — and render-event stream — it claims. |
+| `route-unit` | `renderRoute`, `renderRouteEvents`, `mountTestState` | A route module renders to the document — and render-event stream — it claims; one mounted state can span a multi-render journey. |
 | `mcp-in-memory` | `openInMemoryMcpServer`, `invokeMcpTool`, `readMcpResource`, `getMcpPrompt`, `listMcpSurface`, `runContractMatrix` | The real generated MCP server's protocol contract, over the SDK's in-memory transport. |
 | `dev-epoch` | `runDevEpochContractMatrix` | An epoch-pinned generated stdio process opened through the Workbench session service; the caller owns the epoch lease and process lifetime, and MCP App routes are covered (surface plus `ui://` sweep). |
 | `cli-dispatch` | `invokeCli`, `cliJson`, `cliNdjson` | A plain or rendered argv vector resolved and run through the routed CLI's own shell — including rendered Markdown, explicit TTY, JSON, and NDJSON modes — in-process. |

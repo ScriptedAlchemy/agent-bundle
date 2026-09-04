@@ -4,26 +4,19 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, expect, it } from '@rstest/core';
 import { available, type AgentLineage } from '@agent-bundle/runtime';
-import {
-  createGeneratedRuntimeState,
-  type GeneratedRuntimeState,
-} from '@agent-bundle/runtime/mount';
-import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';
-import { expectDocument, renderRoute, testManifest } from 'agent-bundle/test';
+import { expectDocument, mountTestState, renderRoute, testManifest, type MountedTestState } from 'agent-bundle/test';
 
 import { LOG_DIR_ENV } from '../../src/log.js';
 import { DEFAULT_DUMP_LIMIT } from '../../src/mcp/host-test/tools/dump.js';
-import {
-  capturesStateDefinition,
-  type CaptureEvents,
-  type CapturesState,
-} from '../../src/state.js';
+import type { CaptureEvents, CapturesState } from '../../src/state.js';
 
 const manifest = testManifest();
 
-let stateRoot: string;
+let logRoot: string;
 let logDir: string;
-let runtimeState: GeneratedRuntimeState<CapturesState, CaptureEvents>;
+// One mounted captures state per test, shared by every event and tool render
+// in it, so the durable summary a `dump` reads is the one the events wrote.
+let mounted: MountedTestState<CapturesState, CaptureEvents>;
 let sequence = 0;
 
 const eventInput = (
@@ -52,24 +45,16 @@ const render = async (
   sessionId = 'root-session',
   host = 'claude',
   lineage?: AgentLineage,
-) => {
-  const bindings = await runtimeState.requestBindings();
-  try {
-    return await renderRoute(route, {
-      context: {
-        host: available({ name: host }, 'native'),
-        ...(lineage === undefined ? {} : { lineage: available(lineage, 'native') }),
-        noticeLedger: bindings.noticeLedger,
-        session: available({ sessionId }, 'native'),
-        state: bindings.state,
-        workspace: available({ root: '/repo' }, 'native'),
-      },
-      input,
-    });
-  } finally {
-    await bindings.close();
-  }
-};
+) => renderRoute(route, {
+  context: {
+    ...mounted.context(),
+    host: available({ name: host }, 'native'),
+    ...(lineage === undefined ? {} : { lineage: available(lineage, 'native') }),
+    session: available({ sessionId }, 'native'),
+    workspace: available({ root: '/repo' }, 'native'),
+  },
+  input,
+});
 
 const readLogLines = async (): Promise<Record<string, unknown>[]> =>
   (await readFile(join(logDir, 'captures.ndjson'), 'utf8'))
@@ -78,20 +63,17 @@ const readLogLines = async (): Promise<Record<string, unknown>[]> =>
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 
 beforeEach(async () => {
-  stateRoot = await mkdtemp(join(tmpdir(), 'host-test-route-unit-'));
-  logDir = join(stateRoot, 'log');
+  logRoot = await mkdtemp(join(tmpdir(), 'host-test-route-unit-'));
+  logDir = join(logRoot, 'log');
   process.env[LOG_DIR_ENV] = logDir;
-  runtimeState = createGeneratedRuntimeState({
-    definition: capturesStateDefinition,
-    driver: createSqliteStateDriver({ root: stateRoot }),
-  });
+  mounted = await mountTestState<CapturesState, CaptureEvents>();
   sequence = 0;
 });
 
 afterEach(async () => {
   delete process.env[LOG_DIR_ENV];
-  await runtimeState.close();
-  await rm(stateRoot, { force: true, recursive: true });
+  await mounted.close();
+  await rm(logRoot, { force: true, recursive: true });
 });
 
 it('compiles every canonical event family plus the MCP and CLI surfaces', () => {
