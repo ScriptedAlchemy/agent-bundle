@@ -124,6 +124,9 @@
   after each push until none remain. Only then merge.
 - PRs are squash-merged. Review threads left on an already-merged PR must
   still be answered, in a follow-up PR.
+- `main` is protected: PRs land only with every required check green and
+  the branch up to date with `main` (`gh pr update-branch`, then
+  `gh pr merge --squash --auto`); never bypass with `--admin`.
 
 ## Vendored repos
 
