@@ -47,8 +47,10 @@ npx agent-bundle eval compare <baseline-run-id> <candidate-run-id>
 
 ### Writing an outcome grader
 
-`expectOutcome({ script })` names a module, resolved relative to the suite file and required to
-stay inside the suite directory, that default-exports one grader function. `agent-bundle/eval`
+`expectOutcome({ script })` names a module that default-exports one grader function. The path is
+resolved relative to the suite file and must not climb out of the suite directory (`../` past it
+is rejected; the check is on the path, so a symlink inside the suite is followed wherever it
+points). `agent-bundle/eval`
 exports its contract: [`EvalGraderFunction`](../../api/types/eval.EvalGraderFunction.md) takes an
 [`EvalGraderContext`](../../api/interfaces/eval.EvalGraderContext.md) and returns an
 [`EvalScriptOutcome`](../../api/interfaces/eval.EvalScriptOutcome.md), synchronously or as a
