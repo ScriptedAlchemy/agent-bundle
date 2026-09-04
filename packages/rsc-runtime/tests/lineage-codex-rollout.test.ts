@@ -312,6 +312,77 @@ describe('lineage registry places Codex threads from their own rollout (#423)', 
     expect(registry.snapshot().nodes[other]?.stoppedAt).toBeUndefined();
   });
 
+  it('takes exact parent and depth from the child rollout at SubagentStop when the parent thread was never placed', async () => {
+    // Unreadable at start (inference files the nested thread directly under the
+    // root), readable by the time it stops.
+    const rollouts = new Map<string, string>();
+    const registry = createAgentLineageRegistry({ readTranscript: async (path) => rollouts.get(basename(path)) });
+    const observe = (event: string, key: string, native: Record<string, unknown>) =>
+      registry.observe({ event, host: 'codex', idempotencyKey: key, native, observedAt: '2026-09-03T00:00:00.000Z' });
+    await observe('session/start', 's', codexHook('SessionStart', undefined));
+    await observe('tool/before', 'sp', codexHook('PreToolUse', undefined, { tool_input: {}, tool_name: 'collaborationspawn_agent', tool_use_id: 'sp' }));
+    const misfiled = await observe('agent/start', 'nested', codexHook('SubagentStart', NESTED, { transcript_path: NESTED_ROLLOUT }));
+    expect(value(misfiled)).toMatchObject({ depth: 1, parent: ROOT, resolution: 'registry' });
+    await observe('tool/before', 'gc-spawn', codexHook('PreToolUse', NESTED, { tool_input: {}, tool_name: 'collaborationspawn_agent', tool_use_id: 'gc-spawn' }));
+    const grandchild = '01a00000-0000-7000-8000-00000000000c';
+    await observe('agent/start', 'gc', codexHook('SubagentStart', grandchild, { transcript_path: `/x/rollout-2026-09-03T00-00-00-${grandchild}.jsonl` }));
+
+    rollouts.set(basename(NESTED_ROLLOUT), (await readCodexRolloutHead(rolloutFixture(NESTED_ROLLOUT)))!);
+    // SUBAGENT, the real parent, was never seen by this registry: only the child's own rollout can say how deep it sits.
+    const stopped = await observe('agent/stop', 'nested-stop', codexHook('SubagentStop', NESTED, { agent_transcript_path: NESTED_ROLLOUT, stop_hook_active: false, transcript_path: SUBAGENT_ROLLOUT }));
+    expect(value(stopped)).toMatchObject({ conversation: NESTED, depth: 2, parent: SUBAGENT, resolution: 'transcript' });
+    expect(registry.snapshot().nodes[NESTED]).toMatchObject({ depth: 2, parent: SUBAGENT, placement: 'transcript' });
+    expect(registry.snapshot().nodes[grandchild]).toMatchObject({ depth: 3, parent: NESTED });
+    expect(registry.snapshot().nodes[SUBAGENT]).toBeUndefined();
+  });
+
+  it('keeps the inferred depth when only the parent basename is available and that parent is unknown', async () => {
+    const registry = createAgentLineageRegistry({ readTranscript: noRollouts });
+    const observe = (event: string, key: string, native: Record<string, unknown>) =>
+      registry.observe({ event, host: 'codex', idempotencyKey: key, native, observedAt: '2026-09-03T00:00:00.000Z' });
+    await observe('session/start', 's', codexHook('SessionStart', undefined));
+    await observe('tool/before', 'sp', codexHook('PreToolUse', undefined, { tool_input: {}, tool_name: 'collaborationspawn_agent', tool_use_id: 'sp' }));
+    await observe('agent/start', 'nested', codexHook('SubagentStart', NESTED, { transcript_path: NESTED_ROLLOUT }));
+    const stopped = await observe('agent/stop', 'nested-stop', codexHook('SubagentStop', NESTED, { agent_transcript_path: NESTED_ROLLOUT, stop_hook_active: false, transcript_path: SUBAGENT_ROLLOUT }));
+    // The parent is corrected to what the basename proves; the depth stays what inference gave, still reported as `registry`.
+    expect(value(stopped)).toMatchObject({ conversation: NESTED, depth: 1, parent: SUBAGENT, resolution: 'registry' });
+  });
+
+  it('never consumes a sibling\'s spawn call whose recorded path differs from the starting child\'s', async () => {
+    const rollouts = new Map<string, string>();
+    const registry = createAgentLineageRegistry({ readTranscript: async (path) => rollouts.get(path) });
+    const observe = (event: string, key: string, native: Record<string, unknown>) =>
+      registry.observe({ event, host: 'codex', idempotencyKey: key, native, observedAt: '2026-09-03T00:00:00.000Z' });
+    const meta = (thread: string, agentPath: string) =>
+      JSON.stringify({ payload: { id: thread, session_id: ROOT, source: { subagent: { thread_spawn: { agent_path: agentPath, depth: 1, parent_thread_id: ROOT } } } }, type: 'session_meta' });
+    const a = '01a00000-0000-7000-8000-0000000000aa';
+    const b = '01a00000-0000-7000-8000-0000000000bb';
+    rollouts.set('/r/a.jsonl', meta(a, '/root/a'));
+    rollouts.set('/r/b.jsonl', meta(b, '/root/b'));
+    await observe('session/start', 's', codexHook('SessionStart', undefined));
+    // A's spawn call was fully observed; B's spawn hooks were missed entirely.
+    await observe('tool/before', 'sa', codexHook('PreToolUse', undefined, { tool_input: { task_name: 'a' }, tool_name: 'collaborationspawn_agent', tool_use_id: 'spawn-a' }));
+    await observe('tool/after', 'sa-after', codexHook('PostToolUse', undefined, { tool_input: { task_name: 'a' }, tool_name: 'collaborationspawn_agent', tool_response: '{"task_name":"/root/a"}', tool_use_id: 'spawn-a' }));
+    const startB = await observe('agent/start', 'b', codexHook('SubagentStart', b, { transcript_path: '/r/b.jsonl' }));
+    expect(value(startB)).toMatchObject({ conversation: b, depth: 1, parent: ROOT, resolution: 'transcript' });
+    expect(value(startB).subagent?.toolCallId).toBeUndefined();
+    expect(registry.snapshot().pendingSpawns.map((call) => call.toolCallId)).toEqual(['spawn-a']);
+    const startA = await observe('agent/start', 'a', codexHook('SubagentStart', a, { transcript_path: '/r/a.jsonl' }));
+    expect(value(startA)).toMatchObject({ conversation: a, resolution: 'transcript', subagent: { toolCallId: 'spawn-a' } });
+    expect(registry.snapshot().pendingSpawns).toEqual([]);
+  });
+
+  it('still claims a spawn call whose response (and path) was missed, when it is the parent\'s only pending one', async () => {
+    const meta = JSON.stringify({ payload: { id: NESTED, session_id: ROOT, source: { subagent: { thread_spawn: { agent_path: '/root/x', depth: 1, parent_thread_id: ROOT } } } }, type: 'session_meta' });
+    const registry = createAgentLineageRegistry({ readTranscript: async () => meta });
+    const observe = (event: string, key: string, native: Record<string, unknown>) =>
+      registry.observe({ event, host: 'codex', idempotencyKey: key, native, observedAt: '2026-09-03T00:00:00.000Z' });
+    await observe('session/start', 's', codexHook('SessionStart', undefined));
+    await observe('tool/before', 'sp', codexHook('PreToolUse', undefined, { tool_input: {}, tool_name: 'collaborationspawn_agent', tool_use_id: 'pathless' }));
+    const start = await observe('agent/start', 'n', codexHook('SubagentStart', NESTED, { transcript_path: '/r/n.jsonl' }));
+    expect(value(start)).toMatchObject({ depth: 1, parent: ROOT, resolution: 'transcript', subagent: { toolCallId: 'pathless' } });
+  });
+
   it('leaves a transcript-placed node alone at SubagentStop and ignores a self-referential path', async () => {
     const registry = createAgentLineageRegistry({ readTranscript: capturedRollouts });
     const observe = (event: string, key: string, native: Record<string, unknown>) =>

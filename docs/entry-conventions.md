@@ -494,8 +494,10 @@ ambiguous. The `spawn_agent` call is still claimed, by parent and by the
 `subagent.toolCallId` is exact even for same-parent siblings. Only when the
 rollout is unreadable does Codex fall back to the Claude rule (`resolution:
 'registry'`), and a parent inferred that way is corrected at `SubagentStop`,
-where `transcript_path` is the parent's rollout
-(`rollout-<timestamp>-<thread id>.jsonl`); descendants move with it.
+— from the child's own rollout (`agent_transcript_path`, exact parent and
+depth) when it is readable by then, else from the parent rollout in
+`transcript_path` (`rollout-<timestamp>-<thread id>.jsonl`); descendants move
+with it.
 
 Claude Code names no parent on any hook a subagent emits (#422; hooks
 reference "Common input fields": `agent_id` and `agent_type` are the only

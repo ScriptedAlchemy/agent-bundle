@@ -406,12 +406,17 @@ export const createAgentLineageRegistry = (
     const spawn = SPAWN_TOOLS[host];
     const underRoot = state.pendingSpawns.filter((call) =>
       spawn(call.toolName) && (nodeFor(call.conversation)?.root ?? call.conversation) === root);
-    // A known parent narrows the field to that parent's spawns; a known
-    // agent path names the exact call, since the spawn's tool response
-    // carried the same path.
+    // A known parent narrows the field to that parent's spawns. A known agent
+    // path names the exact call, since the spawn's tool response carried the
+    // same path; a call recorded with a *different* path belongs to another
+    // child and is never consumed, while a call whose response was missed
+    // (no path recorded) stays eligible.
     const fromParent = target === undefined ? underRoot : underRoot.filter((call) => call.conversation === target.parent);
-    const byPath = target?.agentPath === undefined ? [] : fromParent.filter((call) => call.agentPath === target.agentPath);
-    const candidates = byPath.length > 0 ? byPath : fromParent;
+    const compatible = target?.agentPath === undefined
+      ? fromParent
+      : fromParent.filter((call) => call.agentPath === undefined || call.agentPath === target.agentPath);
+    const exact = target?.agentPath === undefined ? [] : compatible.filter((call) => call.agentPath === target.agentPath);
+    const candidates = exact.length > 0 ? exact : compatible;
     if (candidates.length === 0) return { kind: 'none' };
     // Several unclaimed spawns from different parents under one root: the
     // start payload carries nothing to pick between them, so no guess.
@@ -665,14 +670,23 @@ export const createAgentLineageRegistry = (
       // start, or a start left unplaced while its rollout was unreadable)
       // still names the thread's rollout in `agent_transcript_path`.
       if (state.nodes[stopped] === undefined) await placeUnknownCodexThread('agent/stop', native, observedAt, keys);
-      // `transcript_path` on SubagentStop is the parent's rollout, and the
-      // rollout basename carries its thread id: a parent inferred from spawn
-      // ordering that disagrees is corrected before the node retires.
+      // A node placed by spawn ordering is checked against the host's own
+      // record before it retires: the child's rollout (`agent_transcript_path`)
+      // states parent and depth exactly; failing that, `transcript_path` is
+      // the parent's rollout and its basename carries the parent thread id
+      // (the depth then follows the parent when the registry knows it).
       const node = state.nodes[stopped];
-      const parent = codexThreadFromRolloutPath(nativeString(native, 'transcript_path'));
-      if (node !== undefined && node.placement !== 'transcript' && parent !== undefined && parent !== node.id && node.parent !== parent) {
-        const parentDepth = parent === node.root ? 0 : nodeFor(parent)?.depth;
-        await dispatch('nodeReparented', { ...(parentDepth === undefined ? {} : { depth: parentDepth + 1 }), id: stopped, parent }, keys);
+      if (node !== undefined && node.placement !== 'transcript') {
+        const own = await readCodexSpawnLineage(nativeString(native, 'agent_transcript_path'), stopped, readTranscript);
+        if (own !== undefined) {
+          await dispatch('nodeReparented', { depth: own.depth, id: stopped, parent: own.parent, placement: 'transcript' }, keys);
+        } else {
+          const parent = codexThreadFromRolloutPath(nativeString(native, 'transcript_path'));
+          if (parent !== undefined && parent !== node.id && node.parent !== parent) {
+            const parentDepth = parent === node.root ? 0 : nodeFor(parent)?.depth;
+            await dispatch('nodeReparented', { ...(parentDepth === undefined ? {} : { depth: parentDepth + 1 }), id: stopped, parent }, keys);
+          }
+        }
       }
     }
     // A stop for a start still waiting on its edge is kept with that start, so

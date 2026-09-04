@@ -314,7 +314,7 @@ gives shell commands the agent runs `CURSOR_CONVERSATION_ID`/`CURSOR_REQUEST_ID`
 | Host | Answer | How |
 | --- | --- | --- |
 | Claude | Yes, with the parent inferred | `SubagentStart` names the child (`agent_id`). The parent is not in the payload; it is the agent whose `Agent`/`Task` `PreToolUse` is open when `SubagentStart` fires (root when none is open) — re-verified live at depth 1 and 2 in all three runs, including two spawns issued in one message (the host serialises them: each `SubagentStart` fires before the next `Agent` `PreToolUse` opens). The host then confirms the link on the parent's `Agent` `PostToolUse` (`tool_response.agentId` = the child, `status` `async_launched` or `completed`). `Stop`/`SubagentStop` list the children still running **in the background** in `background_tasks[]` (empty when every child ran in the foreground). |
-| Codex | Yes | `SubagentStart` names the child thread and its rollout (`transcript_path`); the rollout's `session_meta` head records `source.subagent.thread_spawn.{parent_thread_id, depth, agent_path}` (§10), so the parent is read, not inferred. The `collaborationspawn_agent` call is matched to the child by `agent_path` (= the call's `PostToolUse` `tool_response.task_name`, rows 16/27). With the rollout unreadable, the parent is inferred from the newest unclaimed spawn call and corrected at `SubagentStop` by the parent rollout in `transcript_path`. MCP calls carry `parent_thread_id` directly. |
+| Codex | Yes | `SubagentStart` names the child thread and its rollout (`transcript_path`); the rollout's `session_meta` head records `source.subagent.thread_spawn.{parent_thread_id, depth, agent_path}` (§10), so the parent is read, not inferred. The `collaborationspawn_agent` call is matched to the child by `agent_path` (= the call's `PostToolUse` `tool_response.task_name`, rows 16/27). With the rollout unreadable, the parent is inferred from the newest unclaimed spawn call and corrected at `SubagentStop` — from the child's own rollout (`agent_transcript_path`) when readable by then, else from the parent rollout in `transcript_path`. MCP calls carry `parent_thread_id` directly. |
 | Cursor | Yes for the spawn, weakly for the child's traffic | `subagentStart` carries `parent_conversation_id`, `subagent_id`/`tool_call_id`, `is_parallel_worker`. The child's own `conversation_id` is not in that payload, so the first event with an unseen conversation id after a `subagentStart` is bound to it (unambiguous when children start sequentially; ambiguous for parallel workers). |
 
 **Can a plugin running under a subagent know its parent/root?**
@@ -481,4 +481,6 @@ places the thread with `resolution: 'transcript'`; the MCP `_meta` lineage
 (§3) and the hook-side lineage therefore agree by construction. What stays
 host-side: the payload itself still carries no `parent_thread_id`, so a hook
 that cannot read `CODEX_HOME/sessions` (or a rollout not yet flushed) falls
-back to spawn-ordering inference and is corrected at `SubagentStop`.
+back to spawn-ordering inference and is corrected at `SubagentStop` (from the
+child's own rollout when readable by then, else from the parent rollout's
+basename).
