@@ -475,6 +475,8 @@ export interface BuildProjectResult {
 
 export interface PrepackResult {
   readonly build: BuildProjectResult;
+  /** Non-error pack-inventory diagnostics; errors throw `DiagnosticError` instead. */
+  readonly diagnostics: readonly Diagnostic[];
   readonly pack: PackOutput;
 }
 
@@ -1175,8 +1177,8 @@ export const prepack = async (options: BuildOptions): Promise<PrepackResult> => 
     packerRewritesWorkspaceProtocols: rewritesWorkspaceProtocols(process.env.npm_config_user_agent),
     projectRoot: options.root,
   });
-  if (diagnostics.length > 0) throw new DiagnosticError(diagnostics);
-  return deepFreeze({ build: result, pack });
+  if (hasErrors(diagnostics)) throw new DiagnosticError(diagnostics);
+  return deepFreeze({ build: result, diagnostics, pack });
 };
 
 /** Every eval refusal reaches a caller as one actionable diagnostic, never a raw service error. */

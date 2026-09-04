@@ -162,11 +162,16 @@ const requireCall = new RegExp(String.raw`(?:\brequire|\.resolve)\s*[(]\s*${quot
  * A CommonJS load or resolution whose argument is not a string literal —
  * `require(x)`, `require.resolve(x)`, `import.meta.resolve(x)`, or a direct
  * `createRequire(…)(x)` — selecting a package at runtime, which no literal can
- * prove. Bundler runtimes (`__webpack_require__(…)`) have no word boundary
- * before `require` and never match; `path.resolve(x)` and `Promise.resolve(x)`
- * are not resolution and never match.
+ * prove. An argument that merely starts with a literal, `require("driver/" +
+ * variant)`, is computed too. Bundler runtimes (`__webpack_require__(…)`) have
+ * no word boundary before `require` and never match; `path.resolve(x)` and
+ * `Promise.resolve(x)` are not resolution and never match.
  */
-const computedLoad = /(?:\brequire(?:\.resolve)?|\bimport\.meta\.resolve|\bcreateRequire\s*[(][^)]*[)])\s*[(]\s*[^"'\s)]/u;
+const computedLoad = new RegExp(
+  String.raw`(?:\brequire(?:\.resolve)?|\bimport\.meta\.resolve|\bcreateRequire\s*[(][^)]*[)])\s*[(]\s*`
+    + String.raw`(?:[^"'\s)]|"[^"\n]*"\s*[^)\s]|'[^'\n]*'\s*[^)\s])`,
+  'u',
+);
 
 /**
  * Every module specifier a declaration file resolves: `from "…"`,

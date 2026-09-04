@@ -281,6 +281,8 @@ it.each([
   ['require.resolve()', 'module.exports = (name) => require.resolve(name);'],
   ['import.meta.resolve()', 'export const where = (name) => import.meta.resolve(name);'],
   ['a direct createRequire()()', 'import { createRequire } from "node:module";\nexport const load = (name) => createRequire(import.meta.url)(name);'],
+  ['require() of a literal-prefixed expression', 'module.exports = (variant) => require("chosen-at-runtime/" + variant);'],
+  ['require.resolve() of a template literal', 'module.exports = (variant) => require.resolve(`chosen-at-runtime/${variant}`);'],
 ])('withholds AB7014 for a computed CommonJS %s just as for a computed import()', (_form, source) => withPackageDocument(
   (document) => { document.dependencies = { 'chosen-at-runtime': '^1.0.0' }; },
   async () => {
@@ -329,6 +331,18 @@ it('accepts a dependency reached through a package imports map or run by a consu
     } finally {
       await rm(consumer, { force: true });
     }
+  },
+));
+
+it('prepack succeeds and surfaces the warning when the only finding is an unresolvable optional dependency', () => withPackageDocument(
+  (document) => {
+    document.optionalDependencies = { 'optional-native': 'github:owner/optional-native' };
+    // The build rewrites dist, so the usage evidence lives in an install script rather than a packed module.
+    document.scripts = { ...(document.scripts as Record<string, string> | undefined), postinstall: 'optional-native --setup || true' };
+  },
+  async () => {
+    const packed = await prepack({ root: projectRoot });
+    expect(packed.diagnostics.map((diagnostic) => [diagnostic.code, diagnostic.severity])).toEqual([['AB7015', 'warning']]);
   },
 ));
 
