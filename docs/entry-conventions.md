@@ -890,6 +890,22 @@ A tool whose validated result carries an integer `exitCode` can declare
 domain failures exit nonzero. Other projected tools retain the success-status
 policy and exit zero only for a successful rendered document.
 
+Every rendered route — generated MCP tool, resource, or prompt, projected MCP
+command, rendered `src/cli/**` command — runs inside one render session whose
+wall clock defaults to `DEFAULT_AGENT_RENDER_LIMITS.maxElapsedMs` (60 s). A
+route whose legitimate work runs longer declares `config.render:
+{ maxElapsedMs }` (#454): a positive integer of milliseconds up to
+`MAX_ROUTE_RENDER_ELAPSED_MS` (24 hours), `AB4835` otherwise. The value is read
+statically with the rest of `config`; the generated MCP server passes it to
+the dispatcher per call (`AgentRenderDispatch.limits`), the compiled command
+carries it into the generated CLI executable (a projected command inherits
+its tool's), and the route-unit and `mcp-in-memory` harnesses apply it over
+the `limits` a test passes as the dispatcher's base. A plain `.ts` command
+has no render session and rejects the key. The budget bounds only the
+framework's session: the host's tool-call deadline still applies, so a long
+route keeps reporting progress, which the projector forwards as
+`notifications/progress` for the whole call.
+
 This is an in-house projection over the compiled route graph, per gate G7; it
 does not depend on MCPorter or introduce a second command model. MCPorter can
 still be pointed independently at the generated MCP server when a live-server

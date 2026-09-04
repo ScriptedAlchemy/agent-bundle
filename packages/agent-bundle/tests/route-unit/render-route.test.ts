@@ -3,6 +3,7 @@ import { describe, expect, it } from '@rstest/core';
 import { createElement } from 'react';
 
 import Echo from '../../fixtures/route-harness/src/mcp/harness/tools/echo.tsx';
+import Wait from '../../fixtures/route-harness/src/mcp/harness/tools/wait.tsx';
 import { AgentTestError } from '../../src/test/errors.ts';
 import { expectDocument } from '../../src/test/matchers.ts';
 import { renderRoute } from '../../src/test/render.ts';
@@ -286,6 +287,37 @@ describe('renderRoute through the real renderer', () => {
 
     expect(rendered.progress).toEqual([{ completed: 1, message: 'echoing', total: 1 }]);
     expect(delegated).toEqual([...rendered.progress]);
+  });
+
+  describe('a route that declares its own render budget (#454)', () => {
+    // `wait` declares `config.render.maxElapsedMs: 120_000`. The harness
+    // `limits` are the dispatcher's base, so a base of 100ms shows whether the
+    // route's compiled budget reached its render session: a 300ms hold
+    // outlives the base and completes only because the route raised it.
+    const limits = { maxElapsedMs: 100 };
+
+    it('applies the compiled config.render budget over the base limits for a manifest route', async () => {
+      const rendered = await renderRoute('tool:harness/wait', { input: { holdMs: 300 }, limits });
+
+      expectDocument(rendered).toHaveStatus('success').toHaveValue({ waitedMs: 300 });
+    });
+
+    it('leaves the base limits alone for a module rendered directly, which has no compiled config', async () => {
+      const error = await rejection(renderRoute({ default: Wait }, { input: { holdMs: 300 }, limits, routeId: 'tool:harness/wait' }));
+
+      expect(error.code).toBe('render-failed');
+      expect(error.message).toContain('elapsed time exceeds 100ms');
+    });
+
+    it('keeps forwarding progress reports for the whole raised budget', async () => {
+      const rendered = await renderRoute('tool:harness/wait', { input: { holdMs: 300, tickMs: 100 }, limits });
+
+      expect(rendered.progress).toEqual([
+        { completed: 1, message: 'waiting', total: 3 },
+        { completed: 2, message: 'waiting', total: 3 },
+        { completed: 3, message: 'waiting', total: 3 },
+      ]);
+    });
   });
 
   it('reports a represented error as the document status the runtime decided', async () => {

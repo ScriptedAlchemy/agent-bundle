@@ -200,6 +200,42 @@ The route-unit and `mcp-in-memory` test levels prove this without a host:
 returns the notifications the fixture's token produced, and an `openInMemoryMcpServer()` client
 that sets `_meta.progressToken` on `callTool` receives them over the real protocol.
 
+## Render budget
+
+Every call renders inside one render session bounded by the runtime's default limits, and the
+wall-clock one is 60 seconds (`DEFAULT_AGENT_RENDER_LIMITS.maxElapsedMs`). A route whose
+legitimate work outlives that — awaiting a build, long-polling a daemon — declares its own budget
+in `config.render` instead of clamping its waits and asking the caller to poll:
+
+```ts twoslash
+import type { ToolConfig } from 'agent-bundle';
+
+export const config = {
+  annotations: { readOnlyHint: true },
+  description: 'Wait for a ticket to settle.',
+  render: { maxElapsedMs: 7_200_000 },
+} satisfies ToolConfig;
+```
+
+`maxElapsedMs` is a positive integer of milliseconds up to the framework ceiling of 24 hours
+(`MAX_ROUTE_RENDER_ELAPSED_MS`, exported from `agent-bundle`); anything else is `AB4835` at build
+time. The compiler reads the value statically with the rest of `config`, so the generated MCP
+server applies it to that route's render session on every `tools/call`, `resources/read`, and
+`prompts/get`; a `routes.mcpCommands` projection of the tool and a rendered `src/cli/**` command
+carry the same key on the compiled command (`config.render` on `CliRouteConfig`; a plain `.ts`
+command has no render session and rejects it). `renderRoute` and `openInMemoryMcpServer` apply it
+too, layered over the `limits` a test passes as the dispatcher's base. Omitting `render` keeps
+the default, and the other limits (document size, event count, event rate) are unchanged.
+
+The budget bounds the framework's session only; the host's own tool-call deadline still applies,
+so keep progress flowing for the whole wait — every `progress.report()` and streamed
+`Agent.Progress` fallback is forwarded as `notifications/progress` while the call runs. Claude
+Code's default per-call wall clock is about 28 hours (`MCP_TOOL_TIMEOUT`, or a per-server
+`timeout`), and its idle timer (30 minutes for stdio servers) is reset by exactly those
+notifications; Codex bounds a call at `tool_timeout_sec`, 60 seconds unless the operator raises
+it in `config.toml`. `agent-bundle inspect --routes` shows the budget with the rest of each
+route's compiled `config`.
+
 ## Shared layouts
 
 `src/layout.tsx` is the composition point around every rendered route — the `layout.tsx` idea from

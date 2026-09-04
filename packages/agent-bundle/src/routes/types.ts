@@ -209,6 +209,12 @@ export interface CompiledCliCommand {
   readonly options: readonly CompiledCliOption[];
   /** Command path segments below the CLI root (`['library', 'audit']`). */
   readonly path: readonly string[];
+  /**
+   * The render budget the route declared in `config.render` (#454); a
+   * projected MCP command inherits its tool's. Absent means the runtime
+   * default, so pre-#454 graphs digest unchanged.
+   */
+  readonly render?: { readonly maxElapsedMs: number };
   /** True for a `.tsx` route whose async default Server Component renders through the dispatcher (#102 stage 3). */
   readonly rendered: boolean;
   readonly routeId: string;

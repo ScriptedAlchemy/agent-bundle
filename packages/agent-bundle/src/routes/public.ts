@@ -195,12 +195,37 @@ export type RouteMeta = Readonly<Record<string, unknown>> & {
  */
 export const appResourceUri = (reference: string): string => reference;
 
+/**
+ * The render budget a rendered route declares statically in `config.render`.
+ * Every rendered route runs inside one render session bounded by the runtime's
+ * default limits; a long-running route (a build await, a long poll) raises
+ * `maxElapsedMs` here instead of clamping its own waits. The compiler
+ * validates the value (`AB4835`: a positive integer of milliseconds up to
+ * {@link MAX_ROUTE_RENDER_ELAPSED_MS}), and the generated MCP server, the
+ * routed CLI, and the route-unit harness apply it to that route's render
+ * session — the host's own tool-call deadline still applies on top.
+ */
+export interface RouteRenderConfig {
+  /** Wall-clock budget of one render of this route, in milliseconds; the runtime default is 60 000. */
+  readonly maxElapsedMs?: number;
+}
+
+/**
+ * The ceiling `config.render.maxElapsedMs` may declare: 24 hours. The value
+ * stays inside Claude Code's default per-call wall clock (`MCP_TOOL_TIMEOUT`,
+ * about 28 hours); Codex (`tool_timeout_sec`, 60 s by default) and any
+ * per-server host setting must be raised separately by the operator.
+ */
+export const MAX_ROUTE_RENDER_ELAPSED_MS = 24 * 60 * 60 * 1000;
+
 export interface ToolConfig {
   readonly _meta?: RouteMeta;
   readonly annotations?: Readonly<Record<string, boolean>>;
   readonly description?: string;
   /** Project a validated result's integer `exitCode` when this tool is exposed through the generated CLI. */
   readonly exitCode?: 'result';
+  /** The render budget of one call; also inherited by the tool's projected CLI command. */
+  readonly render?: RouteRenderConfig;
   readonly title?: string;
 }
 
@@ -208,6 +233,8 @@ export interface ResourceConfig {
   readonly _meta?: RouteMeta;
   readonly description?: string;
   readonly mimeType?: string;
+  /** The render budget of one read. */
+  readonly render?: RouteRenderConfig;
   readonly title?: string;
   readonly uri: string;
 }
@@ -215,6 +242,8 @@ export interface ResourceConfig {
 export interface PromptConfig {
   readonly _meta?: RouteMeta;
   readonly description?: string;
+  /** The render budget of one get. */
+  readonly render?: RouteRenderConfig;
   readonly title?: string;
 }
 
@@ -252,6 +281,8 @@ export interface CliRouteConfig {
    * named here become `--options`.
    */
   readonly positionals?: readonly string[];
+  /** The render budget of one rendered (`.tsx`) command run; plain commands ignore it. */
+  readonly render?: RouteRenderConfig;
 }
 
 /**

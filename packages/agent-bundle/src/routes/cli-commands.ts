@@ -5,6 +5,7 @@ import { scanRouteModuleExports } from './contract.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { deepFreeze } from '../core/freeze.ts';
 import { isRecord } from '../core/strict-json.ts';
+import { routeRenderLimits, validateRouteRenderConfig, type RouteRenderBudget } from './render-budget.ts';
 import type {
   CompiledAgentRoute,
   CompiledCliCommand,
@@ -85,6 +86,7 @@ interface RouteCliConfig {
   readonly diagnostics: readonly Diagnostic[];
   readonly exitCode: 'result' | 'zero';
   readonly positionals?: readonly string[];
+  readonly render?: RouteRenderBudget;
 }
 
 const stringArray = (value: unknown): readonly string[] | undefined =>
@@ -130,12 +132,26 @@ const routeCliConfig = (route: CompiledAgentRoute): RouteCliConfig => {
       route.source,
     ));
   }
+  // A render budget bounds a render session; a plain `.ts` command executes
+  // directly and has none, so declaring one there is a mistake to surface.
+  const render = validateRouteRenderConfig(route, 'CLI route');
+  diagnostics.push(...render.diagnostics);
+  if (render.render !== undefined && !isRenderedCliRoute(route)) {
+    diagnostics.push({
+      code: 'AB4835',
+      message: `CLI route ${relativePath} declares config.render, but a plain .ts command executes without a render session; only rendered .tsx commands take a render budget.`,
+      recovery: 'Rename the module to .tsx and render Agent.* elements, or remove config.render.',
+      severity: 'error',
+      sourcePath: route.source,
+    });
+  }
   return {
     aliases,
     ...(typeof description === 'string' ? { description } : {}),
     diagnostics,
     exitCode,
     ...(positionals === undefined ? {} : { positionals }),
+    ...(render.render === undefined ? {} : { render: render.render }),
   };
 };
 
@@ -310,6 +326,9 @@ export const compileMcpCliCommands = (
     const annotations = route.config['annotations'];
     const confirm = !(isRecord(annotations) && annotations.readOnlyHint === true);
     const description = route.config['description'];
+    // The tool's own render budget was validated with its server (AB4835 is
+    // reported once, there); the projected command inherits the value.
+    const render = routeRenderLimits(route.config);
     return {
       aliases: [],
       ...(typeof description === 'string' ? { description } : {}),
@@ -317,6 +336,7 @@ export const compileMcpCliCommands = (
       mcp: { confirm, server, tool },
       options: confirm ? [toolOption, confirmationOption] : [toolOption],
       path: [server, tool],
+      ...(render === undefined ? {} : { render }),
       rendered: true,
       routeId: route.id,
     };
@@ -387,6 +407,7 @@ export const compileCliCommands = async (
       exitCode: config.exitCode,
       options,
       path: cliCommandPath(route),
+      ...(config.render === undefined ? {} : { render: config.render }),
       rendered: isRenderedCliRoute(route),
       routeId: route.id,
     });
