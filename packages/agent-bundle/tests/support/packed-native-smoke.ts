@@ -256,7 +256,6 @@ const summarizeEval = (host: PackedNativeHost, command: CommandResult) => {
 };
 
 interface PackedClaudeValidationDocument {
-  readonly diagnostics?: readonly unknown[];
   readonly hostValidation?: readonly {
     readonly diagnostics?: readonly unknown[];
     readonly host?: unknown;
@@ -279,13 +278,14 @@ const packedClaudeValidationPassed = (stdout: string, versionNumber: string): bo
   } catch {
     return false;
   }
+  // Other hosts' informational reports (Codex `AB6030`/`AB6031`) share the document; the exit
+  // code already proves none of them is an error.
   const report = document.hostValidation?.find((entry) => entry.host === 'claude' && entry.target === 'claude');
   return report !== undefined
     && report.status === 'passed'
     && report.version === versionNumber
     && report.load?.status === 'loaded'
-    && (report.diagnostics?.length ?? 0) === 0
-    && (document.diagnostics?.length ?? 0) === 0;
+    && (report.diagnostics?.length ?? 0) === 0;
 };
 
 /**
