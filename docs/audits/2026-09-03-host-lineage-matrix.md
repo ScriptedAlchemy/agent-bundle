@@ -360,7 +360,7 @@ root, and the parent-of-subagent chain — is the only identity-adjacent surface
 | `_meta` carries no conversation/tool-call id | Cursor | §3 | Hook-correlated only; filed |
 | ~~`sessionStart` never dispatched on the desktop~~ | Cursor | §1, §9 | Closed 2026-09-04: 3.18.25 desktop dispatches `sessionStart` to plugin-scoped hooks for newly created root chats — not for resumed roots or `Task` children (§9.1); the 0× count came from 3.14.7 launches only. Lineage still treats it as one root-shaped event among several rather than a prerequisite, because roots are routinely first seen mid-conversation (§9) |
 | `subagentStart`/`subagentStop` dispatch varies by instance on 3.18.25: delivered in the isolated §1 run, never requested on the maintainer's daily instance (six `Task` runs, §9.1) | Cursor | §1, §9.1 | Host-side; where the start is not delivered the child is first seen on its own tool hook with no pending start to bind to, so `request.lineage` reports `id-not-resolvable` for it rather than inferring a parent |
-| Roots first seen on a tool hook (Cursor restart or plugin load mid-conversation) | Cursor | §9 | Ours: workspace-scoped child binding plus correction (subtree re-rooted) when a bound conversation later carries a root-only event (`beforeSubmitPrompt`, `stop`, `sessionEnd`, `preCompact`) |
+| Roots first seen on a tool hook (Cursor restart or plugin load mid-conversation) | Cursor | §9 | Ours: workspace-scoped child binding plus correction (subtree re-rooted) when a bound conversation later carries a root-only event (the registry's Cursor root set — in practice `sessionStart`, `sessionEnd`, `beforeSubmitPrompt`, `stop` or `preCompact`; see §9.1) |
 | Cursor CLI not exercised | Cursor | table above | Needs a signed-in `cursor-agent`; not attempted on the operator's account |
 | ~~Claude session used a scripted model~~ | Claude | §8 | Closed 2026-09-03: two live-model sessions replace the stand-in fixture; every stand-in claim held, see §8 |
 | ~~Claude `PostToolUse(Agent).tool_response.agentId` not consumed by the registry~~ | Claude | §1, §2 | Closed 2026-09-03 (#422 follow-up PR): the registry now treats the parent's `Agent` PostToolUse as the host's word on the edge — it confirms the spawn-window match (`resolution: confirmed` once every edge to the root is host-named), fills in sibling `toolCallId`s claimed blind, places a `SubagentStart` no window could (an unplaced start keeps id/type/time/stop, and any confirmations it issued for its own children, until its edge is known), moves a child filed under the wrong parent and re-bases its descendants, and holds a child named before its start (orchestration row 13 → 14). Replays of the orchestration capture with row 64 or row 81 withheld recover the sequential agent and the depth-2 child from rows 99/101 alone |
@@ -409,11 +409,11 @@ Cursor desktop keeps a per-window hooks log
 that prints `Hook step requested: <event>` for **every** step before it looks
 up declared hooks — 58,717 `preToolUse` steps appear with no hook declared for
 them — so an absent step is non-dispatch, not a registration problem. The
-retained logs on the maintainer's machine (five 3.14.7 launches,
-2026-08-13 → 2026-08-28 — every one of their 59,455 `cursor_version` stamps
-reads 3.14.7; the remaining steps are requests with no matching hook, which
-log no payload — plus the first step of the 2026-09-03 3.18.25 launch;
-89,219 steps; 35 conversations; a local plugin declaring `sessionStart`, `sessionEnd`,
+retained logs on the maintainer's machine (89,219 steps: 89,218 from the
+five 3.14.7 launches, 2026-08-13 → 2026-08-28 — every one of their 59,455
+`cursor_version` stamps reads 3.14.7; the remaining steps are requests with
+no matching hook, which log no payload — plus the first step of the
+2026-09-03 3.18.25 launch; 35 conversations; a local plugin declaring `sessionStart`, `sessionEnd`,
 `workspaceOpen`, `stop`, `postToolUse`, `preCompact`, `afterFileEdit`,
 `afterShellExecution`) show:
 
@@ -472,7 +472,7 @@ as of 2026-09-04T08:14Z.
 
 | Fact | 3.14.7 record (§9) | 3.18.25 observed 2026-09-04 |
 | --- | --- | --- |
-| `sessionStart` to plugin-scoped hooks | 0× requested | **dispatched for newly created root chats**: 6× across the two earlier 3.18.25 launches (`20260903T041607`, `20260904T062311`; 2026-09-03T20:30Z → 2026-09-04T06:42Z), each the first event its conversation ever logged, `is_background_agent: false`, `composer_mode: "agent"`, every one `Found n hook(s) … from claude-plugin config`; payload `conversation_id` = `session_id`, `generation_id: ""`, `model`, `model_id`, `model_params`, `is_background_agent`, `composer_mode`, `cursor_version`, `workspace_roots`, `user_email`, `transcript_path: null`. **Not requested** for a resumed root (this window's two roots: 0×) nor for any of the six `Task` children. The §9 0× is a 3.14.7 result: all 89,219 of those steps came from the 3.14.7 launches, the 3.18.25 launch having logged one step when they were counted |
+| `sessionStart` to plugin-scoped hooks | 0× requested | **dispatched for newly created root chats**: 6× across the two earlier 3.18.25 launches (`20260903T041607`, `20260904T062311`; 2026-09-03T20:30Z → 2026-09-04T06:42Z), each the first event its conversation ever logged, `is_background_agent: false`, `composer_mode: "agent"`, every one `Found n hook(s) … from claude-plugin config`; payload `conversation_id` = `session_id`, `generation_id: ""`, `model`, `model_id`, `model_params`, `is_background_agent`, `composer_mode`, `cursor_version`, `workspace_roots`, `user_email`, `transcript_path: null`. **Not requested** for a resumed root (this window's two roots: 0×) nor for any of the six `Task` children. The §9 0× is a 3.14.7 result: 89,218 of those 89,219 steps came from the 3.14.7 launches; the one remaining step was the first of the 2026-09-03 3.18.25 launch |
 | Tool events to plugin-scoped hooks | yes | yes — in this window: `preToolUse` 3,635, `postToolUse` 1,912, `afterShellExecution` 227, `afterFileEdit` 60, `stop` 7, `preCompact` 1, `workspaceOpen` 1 requested; the emitted pack's `^Shell$` hooks ran from the plugin root with `${CURSOR_PLUGIN_ROOT}` expanded |
 | Duplicate `preToolUse` for one `tool_use_id` | seen for `Read`/`Grep` in the §1 capture | none among the delivered `preToolUse` (all `Shell`; `Read`/`Grep` had no `preToolUse` hook declared, so unobserved for those tools). A `postToolUse` appearing twice in the log is two plugins (`Found 2 hook(s)`), not a duplicate delivery |
 | `subagentStart` / `subagentStop` | unobserved on the desktop (§9); delivered in the isolated §1 run | **not requested at all** for any of the six `Task` runs — no `Hook step requested: subagentStart`/`subagentStop`, and no `preToolUse`/`postToolUse` naming `tool_name: "Task"`, neither while the children ran nor after they finished. No retained desktop log on this machine (3.14.7 or 3.18.25, 95,674 steps) has ever requested either step. Same build as §1, so delivery of the subagent family varies by instance or account state |
@@ -489,8 +489,13 @@ registry to bind a child to, so `request.lineage` for that child is
 `id-not-resolvable` (`ensureRoot` finds no pending start and the event is not
 root-shaped, so no node is created), which is the honest answer; nothing binds
 blind. The root-only-event correction stays justified because a desktop child
-still never carries `stop`/`beforeSubmitPrompt`/`sessionEnd`/`preCompact`. No
-framework code changes follow from this re-check.
+still never carries any event in the registry's Cursor root set
+(`CURSOR_ROOT_EVENTS` in `packages/rsc-runtime/src/lineage/registry.ts`:
+canonical `session/start`, `session/end`, `prompt/submit`, `stop`,
+`compact/before`, `compact/after`, `workspace/open` — on Cursor that means
+`sessionStart`, `sessionEnd`, `beforeSubmitPrompt`, `stop` or `preCompact`,
+since the host documents no post-compact hook and `workspaceOpen` is
+sessionless). No framework code changes follow from this re-check.
 
 
 ## 10. Codex rollout heads: the parent the hook payloads omit (added 2026-09-03)
