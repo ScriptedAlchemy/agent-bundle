@@ -861,8 +861,9 @@ const processLifetimeValueSource = 'processHit';
  * before the route; sequentially in deterministic key order; fail-closed on a
  * missing factory or a thrown/rejected factory; `processLifetime` seeded
  * first. Each factory receives the runtime's read-only request view (`host`,
- * `session`, `workspace`, `lineage`, `signal`, and the `read`/`inbox`-only
- * `state`/`notices` handles) spread beside the surface-specific `invocation`.
+ * `session`, `workspace`, `plugin`, `lineage`, `signal`, the `read`-only
+ * `state` handle, and the `inbox`/`published`-only `notices` handle) spread
+ * beside the surface-specific `invocation`.
  * The emitted loop mirrors `executeProviders` in
  * `../routes/provider-execution.ts`, which the in-process test harness runs;
  * `entry-shell.test.ts` pins the two together.
