@@ -1,7 +1,8 @@
 import { execFile as executeFile } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
+
+import { Effect, FileSystem } from 'effect';
 
 import { capabilityIsSupported, unavailableCapability } from './adapters/capability-state.ts';
 import { createDefaultRegistry, TargetRegistry } from './adapters/registry.ts';
@@ -162,6 +163,11 @@ import {
   type McpListOptions,
   type McpListResult,
 } from './services/mcp-service.ts';
+// Imported after the service modules on purpose: the position of
+// `effect/lift.ts` in the module graph fixes its position in the emitted
+// hook bundles, and this order keeps those bundles byte-identical.
+import { runWithPlatform } from './effect/platform.ts';
+import { liftPromise } from './effect/lift.ts';
 
 export {
   compareInstalledHostContract,
@@ -569,9 +575,16 @@ const temporaryArtifact = async <Result>(
 ): Promise<Result> => {
   if (options.artifact !== undefined) return operation(resolve(options.artifact));
 
-  const artifact = await mkdtemp(join(resolve(options.root), '.agent-bundle-artifact-'));
-  try {
-    await build({
+  // The staging directory lives exactly as long as the scope: created next
+  // to the project (same filesystem as a real `artifact/`), removed when the
+  // build or the operation settles, success or failure.
+  return runWithPlatform(Effect.scoped(Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const artifact = yield* fs.makeTempDirectoryScoped({
+      directory: resolve(options.root),
+      prefix: '.agent-bundle-artifact-',
+    });
+    yield* liftPromise(() => build({
       configPath: options.configPath,
       logger: options.logger,
       mode: options.mode,
@@ -579,11 +592,9 @@ const temporaryArtifact = async <Result>(
       registry: options.registry,
       root: options.root,
       targets: options.targets,
-    });
-    return await operation(artifact);
-  } finally {
-    await rm(artifact, { force: true, recursive: true });
-  }
+    }));
+    return yield* liftPromise(() => operation(artifact));
+  })));
 };
 
 type HostValidatedTarget = 'claude' | 'codex' | 'cursor' | 'plugin' | 'portable';

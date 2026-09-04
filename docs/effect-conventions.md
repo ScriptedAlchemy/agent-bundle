@@ -300,6 +300,20 @@ provides `NodeServices.layer` once. Measured on rc.112 (bundled by Rslib,
 110.2 kB; `--help` cold start ≈40 ms → ≈65 ms. `undici` is not pulled into
 the bundle.
 
+`packages/agent-bundle/src/effect/platform.ts` owns the framework's platform
+layer: `platformLayer` (= `NodeServices.layer`), `unwrapPlatformError`, and
+`runWithPlatform`, which provides the layer and unwraps `PlatformError`
+before handing off to `boundary.ts`'s `runPromise`. It is the only module
+that imports `effect/PlatformError`: `boundary.ts` is bundled into every
+emitted hook wrapper, and the error class would drag `Data.TaggedError` into
+each one (measured: +12 kB per hook). Phase-1 callers are the throwaway
+artifact in `api.ts` (`listMcp` / `invokeMcp` / `runMcp` / `listHooks` /
+`simulateHook` without `artifact`) and the Codex validator's
+schema-generation directory, both `makeTempDirectoryScoped` inside
+`Effect.scoped`. Emitted artifacts, hook wrappers, and compiler hot paths
+never import this module; the dev server picks it up in phase 2 through
+`makeScopedEffectRuntime(platformLayer)`.
+
 ## Effect Schema wire contracts (Schema projections)
 
 Evaluated 2026-09-01 against `effect@4.0.0-rc.112` for the wire-contract
@@ -376,7 +390,7 @@ wire contracts](#effect-schema-wire-contracts-schema-projections).
 | Module | Adopted in | Re-verify |
 | --- | --- | --- |
 | `effect/unstable/reactivity` (+ `@effect/atom-react` bindings) | Workbench Agent Document panel (#105 phase 1) and route editor (#105 phase 2) | re-pin bumps @effect/atom-react in lockstep; re-run disposal regression + bundle measurement; stream-backed derived atoms stay banned until the rc.112 disposal fix ships |
-| `@effect/platform-node` (`NodeServices.layer`; `FileSystem` / `Path` services live in `effect`) | **adopted** (2026-09-03) for ordinary I/O — `create-agent-bundle` scaffolder (phase 1); see [Effect platform services](#effect-platform-services-effectplatform-node) for the keep-raw list | re-pin bumps `@effect/platform-node` in lockstep with `effect`; re-check whether `lstat` / `O_NOFOLLOW` / directory fsync landed (would shrink the keep-raw list) and the `runMain` 130/143 exit contract |
+| `@effect/platform-node` (`NodeServices.layer`; `FileSystem` / `Path` services live in `effect`) | **adopted** (2026-09-03) for ordinary I/O — `create-agent-bundle` scaffolder and the `agent-bundle` scoped temp directories in `api.ts` / the Codex validator (phase 1); see [Effect platform services](#effect-platform-services-effectplatform-node) for the keep-raw list | re-pin bumps `@effect/platform-node` in lockstep with `effect`; re-check whether `lstat` / `O_NOFOLLOW` / directory fsync landed (would shrink the keep-raw list) and the `runMain` 130/143 exit contract |
 | `Schema` / `SchemaAST` / `SchemaParser` projections (`toType` / `toEncoded`) for wire contracts | **declined** (2026-09-01) | revisit at Effect GA or on the first encoded/decoded-divergent wire contract; re-pin re-checks the projections API and the `onExcessProperty` parse-option default |
 
 ## Language service
@@ -408,8 +422,8 @@ must not regress it: `pnpm bench:hook-cold-start -- --check`.
    `packages/agent-bundle/package.json`, `packages/workbench/package.json`,
    and `packages/create-agent-bundle/package.json`.
 2. Synchronize `@effect/atom-react` in `packages/workbench/package.json` and
-   `@effect/platform-node` in `packages/create-agent-bundle/package.json` to
-   the same RC; re-run the Workbench disposal regression test and production
+   `@effect/platform-node` in `packages/create-agent-bundle/package.json` and
+   `packages/agent-bundle/package.json` to the same RC; re-run the Workbench disposal regression test and production
    bundle measurement (rsbuild size table), and re-measure the scaffolder
    bundle (`pnpm --filter create-agent-bundle build` prints the size table).
 3. `git subtree pull --prefix=repos/effect https://github.com/Effect-TS/effect.git main --squash`.
@@ -432,5 +446,5 @@ soon as the trigger fires and retire the row.
 | --- | --- | --- | --- |
 | 2026-09-03 | `@rslib/core` **`0.23.2`** — root, `packages/agent-bundle`, `packages/rsc-runtime`, `packages/create-agent-bundle` devDependencies. Stays on `0.23.x` until rslib 1.0 leaves rc. | `npm view @rslib/core dist-tags`: `latest` `0.23.2`, `rc` `1.0.0-rc.2`, `beta` `1.0.0-beta.3`, `canary` `0.20.0-canary-202603101`. | `latest` becomes `1.x`. Bump all four pins in one chore; re-run `pnpm build`, `lint:package`, `check:release`, and the Rslib-driven compile tests. |
 | 2026-09-03 | `effect-rstest` **pkg.pr.new preview `e5f8d5f`** (`https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f`) — `packages/agent-bundle`, `packages/rsc-runtime`, `packages/create-agent-bundle` devDependencies (three pins). Needs a real release pin once published. | `npm view effect-rstest versions`: **E404 — not published to npm** (no versions, no dist-tags). | First npm publish of `effect-rstest`. Replace all three preview URLs with the exact published version, refresh `pnpm-lock.yaml`, re-run `pnpm test:unit` (`it.effect` / `it.live` suites). |
-| 2026-09-03 | `effect` **`4.0.0-rc.112`** (`packages/agent-bundle`, `packages/rsc-runtime`, `packages/workbench`, `packages/create-agent-bundle`), `@effect/atom-react` `4.0.0-rc.112` (`packages/workbench`), `@effect/platform-node` `4.0.0-rc.112` (`packages/create-agent-bundle`), `@effect/language-service` `0.87.2` and `@effect/tsgo` `0.39.0` (root). Auto re-pin in lockstep + `repos/effect` subtree + Workbench atom phase 4 unblock (stream-backed derived atoms) once the post-rc.112 disposal fix ships. | `npm view effect dist-tags`: `rc` **`4.0.0-rc.112`** (unchanged), `beta` `4.0.0-beta.107`, `latest` `3.22.1`. `@effect/atom-react`: `rc` `4.0.0-rc.112`. `@effect/language-service`: `latest` `0.87.2`. `@effect/tsgo`: `latest` `0.39.1` (patch ahead of the `0.39.0` pin; rides the lockstep chore). | `effect@rc` advances past `4.0.0-rc.112`. Run the re-pin chore steps 1–6 above, bumping `effect`, `@effect/atom-react`, `@effect/language-service`, and `@effect/tsgo` together, then lift the stream-backed derived-atom ban in the Workbench if the disposal fix is in the new RC. |
+| 2026-09-03 | `effect` **`4.0.0-rc.112`** (`packages/agent-bundle`, `packages/rsc-runtime`, `packages/workbench`, `packages/create-agent-bundle`), `@effect/atom-react` `4.0.0-rc.112` (`packages/workbench`), `@effect/platform-node` `4.0.0-rc.112` (`packages/create-agent-bundle`, `packages/agent-bundle`), `@effect/language-service` `0.87.2` and `@effect/tsgo` `0.39.0` (root). Auto re-pin in lockstep + `repos/effect` subtree + Workbench atom phase 4 unblock (stream-backed derived atoms) once the post-rc.112 disposal fix ships. | `npm view effect dist-tags`: `rc` **`4.0.0-rc.112`** (unchanged), `beta` `4.0.0-beta.107`, `latest` `3.22.1`. `@effect/atom-react`: `rc` `4.0.0-rc.112`. `@effect/language-service`: `latest` `0.87.2`. `@effect/tsgo`: `latest` `0.39.1` (patch ahead of the `0.39.0` pin; rides the lockstep chore). | `effect@rc` advances past `4.0.0-rc.112`. Run the re-pin chore steps 1–6 above, bumping `effect`, `@effect/atom-react`, `@effect/language-service`, and `@effect/tsgo` together, then lift the stream-backed derived-atom ban in the Workbench if the disposal fix is in the new RC. |
 | 2026-09-03 | Agent Plugins specification **`1.0.0`** — `packages/agent-bundle/src/adapters/schemas/portable/{plugin,mcp}.schema.json` + `PROVENANCE.json` (spec repo `agentplugins/agent-plugins-spec` @ `ff8ab5e392cc87bd88d87c060815a87490e51003`, 2026-08-19), portable `adapterRevision` `1.8.0`, pins in `tests/adapter-metadata.test.ts`. Spec watch for #426; not an npm pin, so re-verify with `curl`/`gh api`, not `npm view`. | Live `https://agent-plugins.org/schemas/1.0.0/{plugin,mcp}.schema.json` rehash to the pinned sha256 (1805 / 3408 bytes). Repo `main` HEAD unchanged at the pinned commit; **no tags, no GitHub releases**. `spec/1.1.0.md` is "Status: Working Draft" (started 2026-08-15, `a2afd7ec`); in-repo `schemas/1.1.0/*.schema.json` differ from 1.0.0 only in the `$id`/`const`/`description` version strings; `https://agent-plugins.org/schemas/1.1.0/*.schema.json` → 404. Observed latest published version: **1.0.0**. | `spec/1.1.0.md` (or later) flips to "Published" **and** `agent-plugins.org/schemas/<version>/` serves both schemas. Re-pin under `schemas/portable/` with a dated `PROVENANCE.json` (sha/bytes/date/commit), bump the portable `adapterRevision`, refresh the metadata pins, run `pnpm test:unit` (portable adapter + plugin-validation suites) and `pnpm test:host-install:build`, and add a capability row per additive field. |
