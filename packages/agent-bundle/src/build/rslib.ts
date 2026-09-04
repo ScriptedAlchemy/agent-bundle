@@ -477,6 +477,16 @@ export const composeEntryLibConfig = (
         },
       };
     }
+    // Generated modules live under the project root, so a consumer
+    // package.json declaring `"sideEffects": false` would otherwise let the
+    // bundler drop a bare `import "agent-bundle/launch-env-layer"` (#469) as
+    // an unused side-effect-free import. They exist for their side effects.
+    if (generatedModules.length > 0) {
+      config.module = {
+        ...config.module,
+        rules: [...(config.module?.rules ?? []), { include: generatedModulesRoot(options.cwd), sideEffects: true }],
+      };
+    }
     // Framework plugins are added after the hatch mutator (this hook is
     // merged last), so a consumer cannot strip the RSC manifest stub or the
     // generated sources out of the compiler.

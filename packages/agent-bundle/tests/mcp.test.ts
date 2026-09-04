@@ -741,6 +741,112 @@ it('inlines agent-bundle/launch-env into a self-connecting entry so it can apply
   }
 }, 30_000);
 
+it('lets the operator .env beat a manifest env default the host passed through, never a host export, before the server module evaluates (#469)', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-manifest-env-'));
+  try {
+    await mkdir(join(root, 'src'), { recursive: true });
+    await mkdir(join(root, 'node_modules'), { recursive: true });
+    await symlink(
+      join(agentBundleNodeModules, '@modelcontextprotocol'),
+      join(root, 'node_modules', '@modelcontextprotocol'),
+      'dir',
+    );
+    await writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n');
+    await writeFile(join(root, 'package.json'), '{"type":"module"}\n');
+    // A factory entry that reports the composed environment twice: once at
+    // module top level (what a static import evaluates first) and once when
+    // the factory runs, then exits before the lifecycle opens the transport.
+    const names = ['MANIFEST_ONLY', 'MANIFEST_KEPT', 'HOST_EXPORTED', 'HOST_ONLY', 'ABSENT_EVERYWHERE'] as const;
+    await writeFile(join(root, 'src', 'server.ts'), [
+      "import { McpServer } from '@modelcontextprotocol/server';",
+      `const names = ${JSON.stringify(names)};`,
+      "const snapshot = () => Object.fromEntries(names.map((name) => [name, process.env[name] ?? null]));",
+      'const atImport = snapshot();',
+      'export default () => {',
+      "  process.stderr.write(`${JSON.stringify({ atImport, atRun: snapshot() })}\\n`);",
+      '  process.exit(0);',
+      "  return new McpServer({ name: 'manifest-env', version: '1.0.0' });",
+      '};',
+      '',
+    ].join('\n'));
+    const model = await normalizeProject(
+      loadedProject(root, {
+        mcp: {
+          servers: {
+            probe: {
+              entry: './src/server.ts',
+              env: { HOST_EXPORTED: 'manifest-default', MANIFEST_KEPT: 'manifest-default', MANIFEST_ONLY: 'manifest-default' },
+            },
+          },
+        },
+        plugin: { name: 'mcp-manifest-env', version: '1.0.0' },
+        targets: ['claude'],
+      }),
+      { skills: [] },
+      registry,
+    );
+    const outputRoot = join(root, 'artifact');
+    const result = await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+    const [entry] = result.compiledMcpEntries;
+    const pluginRoot = join(outputRoot, 'claude');
+
+    // The host reads the manifest, expands its plugin-root token, and merges
+    // the `env` block into the child environment beneath its own exports —
+    // so the child sees a manifest default and a host export the same way.
+    const manifest = JSON.parse(await readFile(join(pluginRoot, '.mcp.json'), 'utf8')) as {
+      readonly mcpServers: Readonly<Record<string, { readonly env: Readonly<Record<string, string>> }>>;
+    };
+    const manifestEnv = Object.fromEntries(Object.entries(manifest.mcpServers['probe']!.env)
+      .map(([key, value]) => [key, value.replaceAll('${CLAUDE_PLUGIN_ROOT}', pluginRoot)]));
+    expect(manifestEnv).toEqual({
+      AGENT_BUNDLE_PLUGIN_ROOT: pluginRoot,
+      HOST_EXPORTED: 'manifest-default',
+      MANIFEST_KEPT: 'manifest-default',
+      MANIFEST_ONLY: 'manifest-default',
+    });
+    const hostExports = { HOST_EXPORTED: 'from-host', HOST_ONLY: 'from-host' };
+    const launch = async (overrides: Readonly<Record<string, string>> = {}): Promise<unknown> => {
+      const run = await runNodeScript({ args: [entry!.output], env: { ...manifestEnv, ...hostExports, ...overrides } });
+      expect(run).toMatchObject({ code: 0, stdout: '' });
+      const report = JSON.parse(run.stderr) as { readonly atImport: unknown; readonly atRun: unknown };
+      // The layer lands before the server module's own top level.
+      expect(report.atImport).toEqual(report.atRun);
+      return report.atRun;
+    };
+    // No file: the host environment as delivered.
+    const delivered = {
+      ABSENT_EVERYWHERE: null,
+      HOST_EXPORTED: 'from-host',
+      HOST_ONLY: 'from-host',
+      MANIFEST_KEPT: 'manifest-default',
+      MANIFEST_ONLY: 'manifest-default',
+    };
+    expect(await launch()).toEqual(delivered);
+
+    await writeFile(join(pluginRoot, '.env'), [
+      'MANIFEST_ONLY=from-file',
+      'HOST_EXPORTED=from-file',
+      'HOST_ONLY=from-file',
+      'ABSENT_EVERYWHERE=from-file',
+      '',
+    ].join('\n'));
+    // manifest < .env < host: a passed-through manifest default yields to the
+    // file, a host export never does, a gap is filled, an untouched manifest
+    // default stays.
+    expect(await launch()).toEqual({
+      ABSENT_EVERYWHERE: 'from-file',
+      HOST_EXPORTED: 'from-host',
+      HOST_ONLY: 'from-host',
+      MANIFEST_KEPT: 'manifest-default',
+      MANIFEST_ONLY: 'from-file',
+    });
+    // `AGENT_BUNDLE_ENV_FILE=none` disables the layer: the manifest default stands.
+    expect(await launch({ AGENT_BUNDLE_ENV_FILE: 'none' })).toEqual(delivered);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 60_000);
+
 it('builds one deterministic self-contained MCP App view and injects it through the virtual module', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-app-build-'));
   try {

@@ -1015,8 +1015,10 @@ name).
 Self-connecting entries — modules that construct and connect a transport at
 top level without a default export — keep today's behavior byte for byte: no
 lifecycle shell and no operator `.env` layer (#469); an entry that wants the
-layer calls `applyOperatorEnv` from `agent-bundle/launch-env` itself. That
-module is aliased into every stdio entry, shell or not, so the import is
+layer calls `applyOperatorEnv` from `agent-bundle/launch-env` itself,
+passing its own declared `env` block as `manifestEnv` if a passed-through
+manifest default should yield to the file as it does in the generated shell.
+That module is aliased into every stdio entry, shell or not, so the import is
 inlined from this package rather than resolved through the plugin's own
 `node_modules`, and a `tools` hatch can never externalize it.
 
@@ -1352,22 +1354,51 @@ canonical precedence order (highest wins):
 | 2 | `.env` file layer | The conventional project-root set, or the explicit `--env-file` list in order. Fills gaps only; never beats an exported variable. |
 | 1 (lowest) | Manifest env | Entries declared in the server config plus the injected plugin-root anchor, path tokens expanded. |
 
-Installed packs get the same layer without `mcp run` (#469): every artifact
-shell that runs plugin code — the stdio MCP entry of a factory-exporting
-server (before its deferred server import; a self-connecting entry has no
-shell), the hook wrappers that execute handlers or render standalone, and the
-artifact CLI `bin/<name>.mjs` — applies `agent-bundle/launch-env`
-(`src/launch-env.ts`, plain Node, inlined into the bundle) at startup. It
-reads `<plugin root>/.env` then `.env.local`, where the plugin root is the
-expanded `AGENT_BUNDLE_PLUGIN_ROOT` or the shell's parent directory, or the
-files `AGENT_BUNDLE_ENV_FILE` names (platform-delimited list; `none` disables
-the layer); it fills only variables the host did not set, never logs a value,
+Installed packs get the same layer and the same order without `mcp run`
+(#469): every artifact shell that runs plugin code — the stdio MCP entry of a
+factory-exporting server (a self-connecting entry has no shell), the hook
+wrappers that execute handlers or render standalone, and the artifact CLI
+`bin/<name>.mjs` — applies `agent-bundle/launch-env` (`src/launch-env.ts`,
+plain Node, inlined into the bundle) at startup. It reads `<plugin
+root>/.env` then `.env.local`, where the plugin root is the expanded
+`AGENT_BUNDLE_PLUGIN_ROOT` or the shell's parent directory, or the files
+`AGENT_BUNDLE_ENV_FILE` names (platform-delimited list; `none` disables the
+layer); it fills only variables the host did not set, never logs a value,
 treats a missing file as the normal case and an unreadable one as skipped.
 The dotenv grammar has no `${VAR}` interpolation. Under `mcp run` the plugin
 root is the project root, so the shell's pass is a no-op; `--env-file` and
 `--no-env` are handed down as `AGENT_BUNDLE_ENV_FILE` so the shell follows the
 operator's choice. The npm package bin reads no pack file. Doctor reports the
 presence and variable count of each file (`AB7331`).
+
+Two details keep the installed order equal to the `mcp run` table above:
+
+- **Manifest env stays lowest.** A host merges the server's manifest `env`
+  block into the child environment before launch, so the child cannot tell a
+  manifest default from a host export by looking at `process.env`. The stdio
+  entry's layer module therefore embeds the server's declared `env` block
+  (normalized, path tokens unexpanded) as `manifestEnv`, and
+  `applyOperatorEnv` reserves a present variable only when its value differs
+  from that default: a passed-through default yields to the file, a host or
+  operator export is kept. The accepted ambiguity: an operator export equal to
+  the manifest default reads as the default and yields too. A default carrying
+  a path token never equals its host-expanded value and is always kept — this
+  covers the injected `AGENT_BUNDLE_PLUGIN_ROOT`. Hook wrappers and the CLI
+  bin have no manifest env and embed none. The host manifests are unchanged;
+  hosts still show `env` in their UIs.
+- **The layer precedes every consumer module.** Rspack inlines the modules of
+  a single-chunk bundle into one scope, evaluates all of them before the
+  entry module's own body, and places a dynamic import's target ahead of the
+  static ones — so neither a statement in the shell body nor an awaited
+  `import()` after it runs before a consumer module's top level. The layer is
+  instead a generated virtual module (`agent-bundle/launch-env-layer`,
+  `src/build/launch-env-shell.ts`) that each shell imports first, and the
+  server module, hook handler, routes, providers, and state definition are
+  static imports after it; ESM import order is what the bundler preserves. A
+  consumer `package.json` declaring `"sideEffects": false` would let the
+  bundler drop that bare import, so the build marks generated modules
+  side-effectful (`src/build/rslib.ts`). Module-level `process.env` reads in
+  plugin code see the composed environment.
 
 ### Durable-state anchors
 

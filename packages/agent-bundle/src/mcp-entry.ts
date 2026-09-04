@@ -231,8 +231,11 @@ export interface GeneratedStdioMcpEntryModule {
 
 export interface RunGeneratedStdioMcpEntryOptions {
   /**
-   * Loads the consumer entry module. Deferred so the console guard is active
-   * before any consumer module side effect can print to the protocol channel.
+   * Loads the consumer entry module. The generated shell imports the module
+   * statically, after the operator `.env` layer (#469), and resolves it here:
+   * under bundling every module of the single-chunk entry evaluates before
+   * the shell body whichever way it is imported, so the console guard covers
+   * the factory call and everything after it, not the module's top level.
    */
   readonly loadEntry: () => Promise<GeneratedStdioMcpEntryModule>;
   /** Test seam mirroring {@link RunStdioServerOptions}. */
@@ -242,7 +245,7 @@ export interface RunGeneratedStdioMcpEntryOptions {
 
 /**
  * The body of every generated stdio MCP entry: install the stdout guard,
- * evaluate the consumer module, build the server from its default-exported
+ * take the consumer module, build the server from its default-exported
  * factory, hand raw stdout back for protocol frames, and serve under the
  * managed lifecycle.
  */

@@ -10,6 +10,7 @@ import { claudeAdapter } from '../src/adapters/claude.ts';
 import type { NoticeDeliveryAdvertisement } from '../src/adapters/notice-delivery.ts';
 import { scanEntryExportsSource, stripCommentsAndStrings } from '../src/build/entry-exports.ts';
 import * as entryShellModule from '../src/build/entry-shell.ts';
+import { launchEnvLayerSpecifier, operatorEnvLayerImport, operatorEnvLayerModuleSource, operatorEnvLayerVirtualModule } from '../src/build/launch-env-shell.ts';
 import { stableJson } from '../src/core/digest.ts';
 import {
   generatedExecutableEntrySource,
@@ -85,20 +86,44 @@ describe('generated entry templates', () => {
     expect(path.endsWith('mcp-entry.ts') || path.endsWith('mcp-entry.js')).toBe(true);
   });
 
-  it('generates a stdio entry that defers the consumer import behind the lifecycle', () => {
+  it('generates a stdio entry that imports the operator .env layer before the server module (#469)', () => {
     const source = generatedStdioMcpEntrySource({ entrySource: '/proj/src/mcp/curator.ts', serverName: 'curator' });
     expect(source).toContain(`from ${JSON.stringify(mcpEntryRuntimeSpecifier)}`);
-    expect(source).toContain('loadEntry: () => import("/proj/src/mcp/curator.ts")');
     expect(source).toContain('serverName: "curator"');
-    // The consumer module must never be statically imported: the console
-    // guard has to activate before its side effects can reach stdout.
-    expect(source).not.toMatch(/^import[^\n]*curator\.ts/mu);
-    // The operator `.env` layer (#469) lands before the deferred import, so
-    // server code reads a composed process.env; the anchor is the artifact
-    // root (the parent of `mcp/`) unless the host set AGENT_BUNDLE_PLUGIN_ROOT.
-    expect(source).toContain("import { applyOperatorEnv, operatorEnvPluginRoot } from \"agent-bundle/launch-env\";");
-    expect(source.indexOf("applyOperatorEnv({ pluginRoot: operatorEnvPluginRoot(fileURLToPath(new URL('..', import.meta.url))) });"))
-      .toBeLessThan(source.indexOf('await runGeneratedStdioMcpEntry('));
+    // The layer is the shell's first import and the server module a static
+    // import after it: the bundler inlines every module ahead of the entry
+    // body and a dynamic import's target ahead of the static ones, so only
+    // static import order puts the layer before the server module's own top
+    // level (pinned end to end by tests/mcp.test.ts).
+    expect(source.startsWith(`${operatorEnvLayerImport}\n`)).toBe(true);
+    expect(source.indexOf(operatorEnvLayerImport)).toBeLessThan(source.indexOf('import * as serverModule from "/proj/src/mcp/curator.ts";'));
+    expect(source).toContain('loadEntry: async () => serverModule,');
+    expect(source).not.toContain('import(');
+    expect(source).not.toContain('applyOperatorEnv');
+  });
+
+  it('generates the operator .env layer module with the manifest env defaults it must recognise (#469)', () => {
+    // The anchor is the artifact root (the parent of `mcp/`, `hooks/`, `bin/`)
+    // unless the host set AGENT_BUNDLE_PLUGIN_ROOT; without manifest env the
+    // layer reserves every variable the host set.
+    const bare = operatorEnvLayerModuleSource();
+    expect(bare).toContain("import { fileURLToPath } from 'node:url';");
+    expect(bare).toContain('import { applyOperatorEnv, operatorEnvPluginRoot } from "agent-bundle/launch-env";');
+    expect(bare).toContain("applyOperatorEnv({ pluginRoot: operatorEnvPluginRoot(fileURLToPath(new URL('..', import.meta.url))) });");
+    expect(operatorEnvLayerModuleSource({})).toBe(bare);
+    // A stdio shell's layer embeds its server's manifest `env` block as sorted
+    // literals so a passed-through default is told from a host export; path
+    // tokens stay unexpanded (the host expands them, so they never match).
+    expect(operatorEnvLayerModuleSource({ ZED: 'last', API_URL: 'https://api.example', DATA_DIR: 'agent-bundle:path:plugin-root/data' }))
+      .toContain(
+        'applyOperatorEnv({ manifestEnv: {"API_URL":"https://api.example","DATA_DIR":"agent-bundle:path:plugin-root/data","ZED":"last"}, '
+        + "pluginRoot: operatorEnvPluginRoot(fileURLToPath(new URL('..', import.meta.url))) });",
+      );
+    expect(operatorEnvLayerVirtualModule({ API_URL: 'x' })).toEqual({
+      name: launchEnvLayerSpecifier,
+      source: operatorEnvLayerModuleSource({ API_URL: 'x' }),
+    });
+    expect(operatorEnvLayerImport).toBe('import "agent-bundle/launch-env-layer";');
   });
 
   it('applies the operator .env layer in every artifact shell that runs plugin code, and only there (#469)', () => {
@@ -116,14 +141,21 @@ describe('generated entry templates', () => {
       routes: [route],
       stateFallback: 'artifact',
     });
-    expect(artifactBin).toContain("from \"agent-bundle/launch-env\"");
-    expect(artifactBin).toContain("import { fileURLToPath } from 'node:url';");
-    expect(artifactBin.indexOf("applyOperatorEnv({ pluginRoot: operatorEnvPluginRoot(fileURLToPath(new URL('..', import.meta.url))) });"))
-      .toBeLessThan(artifactBin.indexOf('const processLifetime'));
-    // With durable state the bin already imports fileURLToPath; the layer must not declare it twice.
+    // The layer is the first import, ahead of the route, provider, and state
+    // modules, so a module-level `process.env` read in any of them sees the
+    // composed environment; the consumer imports themselves stay static.
+    expect(artifactBin.startsWith(`${operatorEnvLayerImport}\n`)).toBe(true);
+    expect(artifactBin).not.toContain('applyOperatorEnv');
+    expect(artifactBin).toContain('import * as route0 from "/project/src/cli/report.ts";');
     const durableBin = entryShellModule.generatedCliBinEntrySource({
       commands: [command],
       plugin: { name: 'fixture', version: '1.0.0' },
+      providers: [{
+        id: 'provider:project-auth',
+        name: 'project-auth',
+        provenance: { kind: 'conventional', relativePath: 'src/providers/project-auth.ts' },
+        source: '/project/src/providers/project-auth.ts',
+      }],
       routes: [route],
       state: {
         id: 'project/tasks',
@@ -133,7 +165,14 @@ describe('generated entry templates', () => {
       },
       stateFallback: 'artifact',
     });
-    expect(durableBin.match(/import \{ fileURLToPath \} from 'node:url';/gu)).toHaveLength(1);
+    expect(durableBin.startsWith(`${operatorEnvLayerImport}\n`)).toBe(true);
+    for (const consumer of [
+      'import stateDefinition from "/project/src/state.ts";',
+      'import * as route0 from "/project/src/cli/report.ts";',
+      'import * as provider0 from "/project/src/providers/project-auth.ts";',
+    ]) {
+      expect(durableBin).toContain(consumer);
+    }
     // The npm package bin runs from the operator's own shell and reads no pack file.
     const npmBin = entryShellModule.generatedCliBinEntrySource({
       commands: [command],
