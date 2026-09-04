@@ -2,8 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
-import { makeScopedEffectRuntime } from '../effect/boundary.ts';
-import { platformLayer, platformRunner, type PlatformRun } from '../effect/platform.ts';
+import type { PlatformRun } from '../effect/platform.ts';
 import type { InstallHost } from '../install/install.ts';
 import { AgentApi } from './agent-api.ts';
 import { ArtifactInspectionService } from './artifacts/artifact-inspection-service.ts';
@@ -50,6 +49,7 @@ import { McpSessionService } from './mcp-session/mcp-session-service.ts';
 import { NativePlaygroundService } from './playground/native-playground-service.ts';
 import { PlaygroundOrchestrationService } from './playground/playground-orchestration-service.ts';
 import { PlaygroundStore as PlaygroundService } from './playground/playground-store.ts';
+import { createDevPlatformRuntime } from './platform-runtime.ts';
 import { ProjectService } from './project-service.ts';
 import { emptyCompiledRouteGraph } from '../routes/graph.ts';
 import { routeManifestFor } from './routes/route-manifest.ts';
@@ -547,11 +547,10 @@ export const startDevServer = async (options: StartDevServerOptions): Promise<De
   // One platform runtime per dev-server session, created here rather than at
   // module top level: `effect` is a CLI cold-start cost (#530), and the
   // runtime's Scope is disposed from the returned session's `close`.
-  const effectRuntime = makeScopedEffectRuntime(platformLayer);
-  const runPlatform = platformRunner(effectRuntime);
+  const effectRuntime = createDevPlatformRuntime();
   let session: DevServerSession;
   try {
-    session = await startDevServerSession(options, runPlatform);
+    session = await startDevServerSession(options, effectRuntime.run);
   } catch (error) {
     const [cleanup] = await Promise.allSettled([effectRuntime.close()]);
     if (cleanup?.status === 'rejected') {

@@ -411,9 +411,17 @@ the first-party CLI's user-facing text — see
   `NodeTerminal` + `NodeStdio`, built on the first command write, see
   [Terminal and Stdio](#terminal-and-stdio-user-facing-cli-text)) and widens
   to `platformLayer` there when CLI code adopts the filesystem services; the
-  dev server (phase 2) gets one `makeScopedEffectRuntime(platformLayer)` in
-  `startDevServer`, disposed from the session's `close`. Never provide a
-  platform layer deep inside library code.
+  dev server has one `makeScopedEffectRuntime(platformLayer)`, created
+  inside `startDevServer` (never at module top level — `effect` is a CLI
+  cold-start cost) and disposed from the returned session's `close` after
+  every service has closed (`src/dev/platform-runtime.ts`,
+  `createDevPlatformRuntime`). Its `run` is a `PlatformRun` (the
+  `runWithPlatform` signature over a long-lived runtime; the type lives in
+  `platform.ts`, the runtime-backed edge does not — that module is bundled
+  into the emitted installer) that every dev service takes as an optional
+  `runPlatform` constructor option, defaulting to `runWithPlatform` so the
+  services stay usable on their own. Never provide a platform layer deep
+  inside library code.
 - Errors: `PlatformError` flows through the Effect error channel and is
   mapped once, at the boundary, onto the existing contract. Where a
   user-facing AB#### diagnostic already exists for the failure, map to it
@@ -450,6 +458,22 @@ the first-party CLI's user-facing text — see
   synchronous `existsSync` probe beside `createRequire`'s synchronous
   resolution.
 - Synchronous SQLite setup (`rsc-runtime/src/state/sqlite.ts`).
+- Dev-server durable protocols and identity checks: `dev/epoch-store.ts`,
+  `dev/dev-lock.ts`, `dev/runtime-generation-store.ts`'s publish path
+  (`wx` manifest, non-recursive `mkdir`, `rename`, `lstat`-verified assets;
+  only its manifest / asset reads and recursive `mkdir`s are programs),
+  `dev/playground/native-playground-service.ts`'s catalog publication
+  (`link` / `open` / `rename` / `lstat`, rollback quarantine),
+  `dev/host-install-manager.ts`'s `lstat` rows, `mkdtemp` + `cp`
+  (`verbatimSymlinks`, `errorOnExist`) staging and atomic `rename` swap,
+  `dev/eval/eval-service.ts`'s `O_NOFOLLOW` evidence reader, the
+  `lstat` / `realpath` containment in `dev/skill-document-service.ts` and
+  `dev/project-service.ts`, `dev/package-build-service.ts`'s `rmdir`
+  pruning (no `FileSystem` equivalent with its "not empty" contract), and
+  `dev/playground/mcp-probe-service.ts`'s retrying teardown `rm`
+  (`maxRetries` / `retryDelay` have no `FileSystem.remove` option), and
+  `dev/playground/lifecycle-replay-service.ts`'s synchronous `existsSync`
+  probe.
 - `dev/watcher.ts`: chokidar stays. `FileSystem.watch` is a thin `fs.watch`
   with create/update/remove only — no `ignored` callbacks, readiness, or the
   other event kinds — and the watcher's `dev:ino` signatures need `stat`
@@ -511,9 +535,23 @@ carve-outs above. The sibling `routes/graph.ts` reads stay raw:
 only its two async reads would add an Effect runtime per compile for
 nothing. Emitted artifacts, hook wrappers, compiler hot paths, and the
 modules `cli.ts` loads eagerly never import this module (`cli.test.ts`
-fails if `--version` / `--help` resolve an `effect` module); the dev server
-picks it up in phase 2's second PR through
-`makeScopedEffectRuntime(platformLayer)`.
+fails if `--version` / `--help` resolve an `effect` module). The dev server
+(phase 2, second PR, 2026-09-03) runs on one
+`makeScopedEffectRuntime(platformLayer)` created in `startDevServer`
+(`dev/platform-runtime.ts`) and handed to every service as `runPlatform`:
+the ordinary reads, temp directories, and removals of `dev/project-service.ts`,
+`package-build-service.ts`, `host-install-manager.ts`,
+`skill-document-service.ts`, `workbench-assets.ts`,
+`runtime-generation-store.ts`, `runtime-provider-loader.ts`,
+`playground/{hook,host-discovery,mcp-probe,native,script}-playground-service.ts`,
+and `eval/eval-service.ts`. Two directories outlive their call and are
+therefore not `withTempDirectory` brackets: the MCP session's plugin-data
+directory is acquired into its own session-lifetime `Scope` whose only
+finalizer removes it — the session closes that scope from `close()`, and
+until the session exists the open scope's release closes it instead — and
+the script playground's workspace lease keeps `close` as a separate step so
+a removal failure is reported in the result's `cleanupFailures`, not in
+place of the script's outcome.
 
 ### Terminal and Stdio: user-facing CLI text
 
@@ -688,7 +726,7 @@ wire contracts](#effect-schema-wire-contracts-schema-projections).
 | Module | Adopted in | Re-verify |
 | --- | --- | --- |
 | `effect/unstable/reactivity` (+ `@effect/atom-react` bindings) | Workbench Agent Document panel (#105 phase 1) and route editor (#105 phase 2) | re-pin bumps @effect/atom-react in lockstep; re-run disposal regression + bundle measurement; stream-backed derived atoms stay banned until the rc.112 disposal fix ships |
-| `@effect/platform-node` (`NodeServices.layer`, `create-agent-bundle`) and `@effect/platform-node-shared` (`agent-bundle`'s `platformLayer`); `FileSystem` / `Path` services live in `effect` | **adopted** (2026-09-03) for ordinary I/O — `create-agent-bundle` scaffolder and the `agent-bundle` temp directories in `api.ts` / the Codex validator (phase 1); host-contracts validators, `services/*`, `eval/*`, and the post-build readers (phase 2, ordinary-I/O modules, 2026-09-03); see [Effect platform services](#effect-platform-services-effectplatform-node) for the keep-raw list and the consumer-footprint reason for the split | re-pin bumps both in lockstep with `effect`; re-check whether `@effect/platform-node` still forces a `redis` peer (if it stops, `agent-bundle` can move to `NodeServices.layer`); re-check whether `lstat` / `O_NOFOLLOW` / directory fsync landed (would shrink the keep-raw list) and the `runMain` 130/143 exit contract |
+| `@effect/platform-node` (`NodeServices.layer`, `create-agent-bundle`) and `@effect/platform-node-shared` (`agent-bundle`'s `platformLayer`); `FileSystem` / `Path` services live in `effect` | **adopted** (2026-09-03) for ordinary I/O — `create-agent-bundle` scaffolder and the `agent-bundle` temp directories in `api.ts` / the Codex validator (phase 1); host-contracts validators, `services/*`, `eval/*`, and the post-build readers (phase 2, ordinary-I/O modules, 2026-09-03); the dev server's services on one session-scoped runtime created in `startDevServer` (phase 2, dev server, 2026-09-03); see [Effect platform services](#effect-platform-services-effectplatform-node) for the keep-raw list and the consumer-footprint reason for the split | re-pin bumps both in lockstep with `effect`; re-check whether `@effect/platform-node` still forces a `redis` peer (if it stops, `agent-bundle` can move to `NodeServices.layer`); re-check whether `lstat` / `O_NOFOLLOW` / directory fsync landed (would shrink the keep-raw list) and the `runMain` 130/143 exit contract |
 | `@effect/platform-node-shared` (`NodeTerminal` / `NodeStdio`) + `effect/Terminal`, `effect/Stdio` | first-party CLI command output, diagnostics, and machine output (`src/cli.ts`, `src/effect/terminal.ts`, `src/effect/cli-runtime.ts`), loaded lazily on the first command write (2026-09-03); Commander's help/version/argv-error text and the scaffolder's `--help` / flag-error text stay on synchronous process writes for the cold-start budget | re-pin re-checks `Terminal.display` stays stdout-only, `readLine` EOF → `QuitError`, the `Stdio` sink contract, and re-measures `agent-bundle --version` startup against the recorded ≈60 ms (`cli.test.ts` fails the build if the trivial invocations resolve an `effect` module) |
 | `Schema` / `SchemaAST` / `SchemaParser` projections (`toType` / `toEncoded`) for wire contracts | **declined** (2026-09-01) | revisit at Effect GA or on the first encoded/decoded-divergent wire contract; re-pin re-checks the projections API and the `onExcessProperty` parse-option default |
 
