@@ -16,6 +16,7 @@ import {
   declaredDependencies,
   importedPackageNames,
   isWorkspaceProtocol,
+  packagedSourcePath,
   type DeclaredDependency,
   type DependencyKind,
   type InstalledDependencyField,
@@ -172,11 +173,16 @@ const dependencyDiagnostics = async (options: {
     paths: options.packedPaths,
     projectRoot: options.projectRoot,
   });
-  // `bundleDependencies` exempts an entry only when npm actually packed it: a name absent from node_modules
-  // at pack time is silently dropped from the tarball, and the consumer neither fetches nor finds it.
+  // The tarball itself may carry the dependency: `bundleDependencies` exempts an entry only when npm actually
+  // packed it (a name absent from node_modules at pack time is silently dropped, and the consumer neither
+  // fetches nor finds it), and a `file:` path inside the package is installed from the consumer's own copy
+  // when the source directory's manifest, or the tarball file, is packed.
   const packed = new Set(options.packedPaths);
-  const embedded = (dependency: DeclaredDependency): boolean =>
-    dependency.bundled && packed.has(`node_modules/${dependency.name}/package.json`);
+  const embedded = (dependency: DeclaredDependency): boolean => {
+    if (dependency.bundled && packed.has(`node_modules/${dependency.name}/package.json`)) return true;
+    const source = packagedSourcePath(dependency.name, dependency.specifier);
+    return source !== undefined && (packed.has(source) || packed.has(`${source}/package.json`));
+  };
   // A workspace protocol the packer rewrites reaches the consumer as a registry version; every other entry
   // is read as npm itself reads it.
   const kindOf = (dependency: DeclaredDependency): DependencyKind =>
@@ -189,7 +195,7 @@ const dependencyDiagnostics = async (options: {
   const unresolvable = declared.filter((dependency) => !embedded(dependency)
     && (dependency.installed ? kinds.get(dependency) !== 'registry' : kinds.get(dependency) === 'unparseable'));
   // An optional dependency npm parses but cannot fetch: the install continues without it — unless a consumer
-  // install script then runs it, and fails on the missing command.
+  // install script then runs it, or loads it from a packed file it runs, and fails on the missing package.
   const survivable = (dependency: DeclaredDependency): boolean =>
     dependency.field === 'optionalDependencies'
     && kinds.get(dependency) === 'fetched'

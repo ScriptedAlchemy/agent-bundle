@@ -305,40 +305,59 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
       embedded: 'file:../embedded',
       // Declared bundled but absent from node_modules at pack time: npm silently packs nothing, so the consumer fetches it.
       'not-embedded': 'file:../not-embedded',
+      // Shipped inside the tarball, as a directory and as a tarball file: npm installs them from the consumer's copy.
+      vendored: 'file:vendor/vendored',
+      tarred: 'file:vendor/tarred.tgz',
+      // Declared as if shipped, but the source is not in the pack.
+      'not-vendored': 'file:vendor/not-vendored',
     };
     document.bundleDependencies = ['embedded', 'not-embedded'];
     document.optionalDependencies = {
       scp: 'git@github.com:owner/repo.git',
-      // npm skips this one after the failed fetch too — and then postinstall fails on the missing command.
+      // npm skips these two after the failed fetch too — and then postinstall fails: on the missing command, and
+      // on the missing module a packed file it runs requires through a relative import.
       'setup-tool': 'git+https://github.com/owner/setup-tool.git',
+      'optional-driver': 'github:owner/optional-driver',
       // npm parses these only to fail, so optional or not, the consumer's install dies.
       'typo-optional': 'foo:bar',
       'tag-optional': 'not a valid spec',
       'url-optional': 'http:%zz',
       'bad name': '^1.0.0',
     };
-    document.scripts = { ...(document.scripts as Record<string, string> | undefined), postinstall: 'setup-tool --init' };
+    document.scripts = { ...(document.scripts as Record<string, string> | undefined), postinstall: 'setup-tool --init && node ./install.cjs' };
   },
   async () => {
-    const pack = { ...result.pack, files: [...result.pack.files, { path: 'node_modules/embedded/package.json' }] };
+    await mkdir(join(projectRoot, 'scripts'), { recursive: true });
+    await writeFile(join(projectRoot, 'install.cjs'), 'require("./scripts/driver-setup");\n');
+    await writeFile(join(projectRoot, 'scripts', 'driver-setup.cjs'), 'module.exports = require("optional-driver");\n');
+    const pack = { ...result.pack, files: [...result.pack.files,
+      { path: 'node_modules/embedded/package.json' },
+      { path: 'vendor/vendored/package.json' },
+      { path: 'vendor/tarred.tgz' },
+      { path: 'install.cjs' },
+      { path: 'scripts/driver-setup.cjs' },
+    ] };
     const reported = withCode(await diagnostics(pack), 'AB7015');
     expect(reported.map((diagnostic) => diagnostic.message)).toEqual([
       expect.stringMatching(/^package\.json dependencies .*consumers cannot install the package\.$/u),
-      expect.stringMatching(/^package\.json optionalDependencies .*"bad name" -> "\^1\.0\.0", "setup-tool" -> "git\+https:\/\/github\.com\/owner\/setup-tool\.git", "tag-optional" -> "not a valid spec", "typo-optional" -> "foo:bar", "url-optional" -> "http:%zz"; consumers cannot install the package\.$/u),
+      expect.stringMatching(/^package\.json optionalDependencies .*"bad name" -> "\^1\.0\.0", "optional-driver" -> "github:owner\/optional-driver", "setup-tool" -> "git\+https:\/\/github\.com\/owner\/setup-tool\.git", "tag-optional" -> "not a valid spec", "typo-optional" -> "foo:bar", "url-optional" -> "http:%zz"; consumers cannot install the package\.$/u),
       expect.stringMatching(/^package\.json optionalDependencies .*"scp" -> "git@github\.com:owner\/repo\.git".*continues without them/u),
     ]);
     // npm survives an optional dependency it parsed but cannot fetch, so that entry warns rather than blocks the
     // release; a specifier it cannot parse fails the manifest read and stays fatal, as does a skipped package an
-    // install script then runs.
+    // install script then runs or loads.
     expect(reported.map((diagnostic) => diagnostic.severity)).toEqual(['error', 'error', 'warning']);
     expect(reported[1]?.message).not.toContain('"scp"');
     expect(reported[2]?.message).not.toContain('"setup-tool"');
-    for (const name of ['@agent-bundle/runtime', 'bashjsast', 'local', 'sibling', 'not-embedded']) {
+    expect(reported[2]?.message).not.toContain('"optional-driver"');
+    for (const name of ['@agent-bundle/runtime', 'bashjsast', 'local', 'sibling', 'not-embedded', 'not-vendored']) {
       expect(reported[0]?.message).toContain(`${JSON.stringify(name)} -> `);
     }
-    for (const name of ['alias', 'tilde', 'versioned', 'embedded']) {
+    for (const name of ['alias', 'tilde', 'versioned', 'embedded', 'vendored', 'tarred']) {
       expect(reported[0]?.message).not.toContain(JSON.stringify(name));
     }
+    await rm(join(projectRoot, 'install.cjs'), { force: true });
+    await rm(join(projectRoot, 'scripts'), { force: true, recursive: true });
     expect(reported[0]?.recovery).toContain('registry');
 
     const underPnpm = withCode(await diagnostics(pack, true), 'AB7015');

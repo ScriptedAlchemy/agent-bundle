@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { isBuiltin } from 'node:module';
-import { resolve } from 'node:path';
+import { posix, relative, resolve } from 'node:path';
 
 import npa from 'npm-package-arg';
 
@@ -143,13 +143,39 @@ export const rewritesWorkspaceProtocols = (packerUserAgent: string | undefined):
  */
 export type DependencyKind = 'registry' | 'fetched' | 'unparseable';
 
+/**
+ * Where the package would be installed from, for path specifiers: a directory
+ * deep enough that `file:../sibling` stays distinguishable from a path inside
+ * the package. Nothing touches the disk.
+ */
+const packageAnchor = '/package/root';
+
 export const classifyDependency = (name: string, specifier: string): DependencyKind => {
   try {
     // The manifest value exactly as npm reads it: `" npm:bar@1"` is an invalid dist-tag, not an alias.
-    // `where` only anchors path specifiers into a string; nothing touches the disk.
-    return npa.resolve(name, specifier, '/').registry === true ? 'registry' : 'fetched';
+    return npa.resolve(name, specifier, packageAnchor).registry === true ? 'registry' : 'fetched';
   } catch {
     return 'unparseable';
+  }
+};
+
+/**
+ * The tarball-relative path a `file:` or bare path specifier reads from, when
+ * it stays inside the package: `vendor/foo` for `file:vendor/foo`,
+ * `vendor/foo.tgz` for `file:vendor/foo.tgz`. npm installs such a dependency
+ * from the consumer's own `node_modules/<package>` copy, so shipping the
+ * source in the tarball makes it installable without a registry. `undefined`
+ * for anything else, including a path that escapes the package
+ * (`file:../sibling`), which no consumer has.
+ */
+export const packagedSourcePath = (name: string, specifier: string): string | undefined => {
+  try {
+    const parsed = npa.resolve(name, specifier, packageAnchor);
+    if ((parsed.type !== 'directory' && parsed.type !== 'file') || typeof parsed.fetchSpec !== 'string') return undefined;
+    const path = relative(packageAnchor, parsed.fetchSpec).split('\\').join('/');
+    return path === '' || path.startsWith('../') || path.startsWith('/') ? undefined : path;
+  } catch {
+    return undefined;
   }
 };
 
@@ -378,9 +404,10 @@ export interface ImportedPackages {
   /** Every package name the packed files name literally, run as an executable, or need during a consumer's install. */
   readonly names: ReadonlySet<string>;
   /**
-   * The subset a consumer's install lifecycle script runs. An optional
-   * dependency npm skipped after a failed fetch is absent from `PATH` when
-   * that script runs, so the install fails after all.
+   * The subset a consumer's install lifecycle needs: run as a command by a
+   * script, or loaded by a packed file the script runs. An optional dependency
+   * npm skipped after a failed fetch is then missing from `PATH` or
+   * `node_modules`, so the install fails after all.
    */
   readonly installScripts: ReadonlySet<string>;
   /**
@@ -485,11 +512,7 @@ const executableCommands = async (names: readonly string[], projectRoot: string)
  * so a script that names a dependency, or one of its `bin` commands, needs it
  * installed even though no packed JavaScript imports it.
  */
-const installScriptDependencies = (
-  packageDocument: Readonly<Record<string, unknown>>,
-  executables: ExecutableCommands,
-): readonly string[] => {
-  const text = installScriptText(isRecord(packageDocument.scripts) ? packageDocument.scripts : {});
+const installScriptDependencies = (text: string, executables: ExecutableCommands): readonly string[] => {
   if (text === '') return [];
   const runs = (command: string): boolean => new RegExp(String.raw`(?<![\w-])${escapeRegExp(command)}(?![\w-])`, 'u').test(text);
   return [...executables]
@@ -497,11 +520,68 @@ const installScriptDependencies = (
     .map(([name]) => name);
 };
 
+/** The packed JavaScript files an install script runs: `node install.cjs`, `node ./scripts/setup.mjs`. */
+const installScriptFiles = (text: string, packed: ReadonlySet<string>): readonly string[] =>
+  text.split(/\s+/u)
+    .map((token) => token.replace(shellQuotes, '$2').replace(/^\.\//u, ''))
+    .filter((token) => javaScriptSuffix.test(token) && packed.has(token));
+
+const relativeSpecifier = /^\.\.?\//u;
+
+/**
+ * The packed module a relative specifier resolves to, exact or with the
+ * extension or `index` file Node's CommonJS loader would try.
+ */
+const relativeTarget = (from: string, specifier: string, packed: ReadonlySet<string>): string | undefined => {
+  const base = posix.normalize(posix.join(posix.dirname(from), specifier));
+  return [base, `${base}.js`, `${base}.cjs`, `${base}.mjs`, `${base}/index.js`, `${base}/index.cjs`, `${base}/index.mjs`]
+    .find((candidate) => packed.has(candidate));
+};
+
+/**
+ * The packages a consumer's install lifecycle loads through the packed
+ * JavaScript it runs — `"postinstall": "node install.cjs"` with `install.cjs`
+ * requiring a driver — following relative imports through the tarball. A
+ * computed load in any of those files could reach any declared package, so
+ * every declared name then counts as needed at install time.
+ */
+const installScriptModuleDependencies = (
+  roots: readonly string[],
+  evidenceByPath: ReadonlyMap<string, FileEvidence>,
+  packageDocument: Readonly<Record<string, unknown>>,
+  declared: readonly string[],
+): readonly string[] => {
+  const packed = new Set(evidenceByPath.keys());
+  const names = new Set<string>();
+  const seen = new Set<string>();
+  const queue = [...roots];
+  for (let path = queue.shift(); path !== undefined; path = queue.shift()) {
+    const evidence = evidenceByPath.get(path);
+    if (seen.has(path) || evidence === undefined) continue;
+    seen.add(path);
+    if (!evidence.complete) for (const name of declared) names.add(name);
+    for (const name of evidence.executed) names.add(name);
+    for (const specifier of evidence.specifiers) {
+      if (relativeSpecifier.test(specifier)) {
+        const target = relativeTarget(path, specifier, packed);
+        if (target !== undefined) queue.push(target);
+        continue;
+      }
+      const targets = specifier.startsWith('#') ? packageImportTargets(packageDocument) : [specifier];
+      for (const target of targets) {
+        const name = packageNameOf(target);
+        if (name !== undefined) names.add(name);
+      }
+    }
+  }
+  return [...names];
+};
+
 /**
  * Every package name the packed JavaScript imports, requires, resolves, or
  * runs as an executable, the packed declarations reference, a packed `#`
  * import may reach through the manifest's `imports` map, or a consumer's
- * install script runs — read from the bytes npm would publish.
+ * install script runs or loads — read from the bytes npm would publish.
  */
 export const importedPackageNames = async (options: {
   /** Names to test for executable and install-script use; every other source is scanned whole. */
@@ -512,10 +592,20 @@ export const importedPackageNames = async (options: {
 }): Promise<ImportedPackages> => {
   const projectRoot = resolve(options.projectRoot);
   const executables = await executableCommands(options.declared, projectRoot);
-  const evidence = await Promise.all(options.paths
+  const evidenceByPath = new Map(await Promise.all(options.paths
     .filter((path) => javaScriptSuffix.test(path) || declarationSuffix.test(path))
-    .map((path) => fileEvidence(resolve(projectRoot, path), executables)));
-  const fromScripts = installScriptDependencies(options.packageDocument, executables);
+    .map(async (path) => [path, await fileEvidence(resolve(projectRoot, path), executables)] as const)));
+  const evidence = [...evidenceByPath.values()];
+  const scriptText = installScriptText(isRecord(options.packageDocument.scripts) ? options.packageDocument.scripts : {});
+  const fromScripts = [
+    ...installScriptDependencies(scriptText, executables),
+    ...installScriptModuleDependencies(
+      installScriptFiles(scriptText, new Set(evidenceByPath.keys())),
+      evidenceByPath,
+      options.packageDocument,
+      options.declared,
+    ),
+  ];
   const specifiers = evidence.flatMap((file) => file.specifiers);
   const reachable = specifiers.some((specifier) => specifier.startsWith('#'))
     ? packageImportTargets(options.packageDocument)
