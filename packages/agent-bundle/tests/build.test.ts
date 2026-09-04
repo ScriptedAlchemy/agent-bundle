@@ -1173,14 +1173,23 @@ it('inlines reserved specifiers through exact-match aliases and virtual generate
  * `hoisted` places the `linked-b` link in the workspace-root `node_modules`,
  * as npm, Yarn, and a hoisting pnpm do, rather than beneath `linked-a`.
  * `cyclic` gives `linked-b` a dependency back onto the project itself.
+ * `nested` keeps both linked packages inside the project directory, as a
+ * root package linking `<project>/packages/*` or a `file:./vendor/dep` does.
  */
+interface LinkedWorkspaceLayout {
+  readonly cyclic?: boolean;
+  readonly hoisted?: boolean;
+  readonly nested?: boolean;
+}
+
 const linkedWorkspaceProject = async (
-  layout: { readonly cyclic?: boolean; readonly hoisted?: boolean } = {},
+  layout: LinkedWorkspaceLayout = {},
 ): Promise<{ readonly entry: RslibEntry; readonly root: string }> => {
   const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-linked-workspace-'));
   const root = join(parent, 'project');
-  const linkedA = join(parent, 'packages', 'linked-a');
-  const linkedB = join(parent, 'packages', 'linked-b');
+  const packages = layout.nested === true ? join(root, 'packages') : join(parent, 'packages');
+  const linkedA = join(packages, 'linked-a');
+  const linkedB = join(packages, 'linked-b');
   const linkedBLink = layout.hoisted === true
     ? join(parent, 'node_modules', 'linked-b')
     : join(linkedA, 'node_modules', 'linked-b');
@@ -1226,7 +1235,7 @@ const linkedWorkspaceProject = async (
 
 /** Builds the linked-workspace project and returns its bundle text and evidence. */
 const buildLinkedWorkspaceProject = async (
-  layout: { readonly cyclic?: boolean; readonly hoisted?: boolean } = {},
+  layout: LinkedWorkspaceLayout = {},
 ): Promise<{ readonly bundle: string; readonly evidence: Awaited<ReturnType<typeof buildWithRslib>>; readonly root: string }> => {
   const { entry, root: parent } = await linkedWorkspaceProject(layout);
   const root = join(parent, 'project');
@@ -1271,6 +1280,16 @@ it('keeps the project sources when a linked dependency depends back on the proje
   // the project authored would silently vanish from provenance.
   const { bundle, evidence, root } = await buildLinkedWorkspaceProject({ cyclic: true });
   expect(bundle).toContain('local-marker');
+  expect(evidence).toEqual([{ path: 'scripts/linked.mjs', sourceInputs: linkedWorkspaceSourceInputs(root) }]);
+}, 20_000);
+
+it('excludes linked dependencies that live inside the project directory', async () => {
+  // A root package linking `<project>/packages/*` (or a `file:./vendor/dep`
+  // dependency) resolves to a directory beneath the project. Only the project
+  // root itself is exempt from the ignored roots; a dependency nested inside
+  // it is still a dependency, not authored source.
+  const { bundle, evidence, root } = await buildLinkedWorkspaceProject({ nested: true });
+  expect(bundle).toContain('linked-b-marker');
   expect(evidence).toEqual([{ path: 'scripts/linked.mjs', sourceInputs: linkedWorkspaceSourceInputs(root) }]);
 }, 20_000);
 

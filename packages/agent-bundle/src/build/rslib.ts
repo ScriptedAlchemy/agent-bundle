@@ -9,7 +9,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 
 import { sha256Hex } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
-import { exists, isInsideOrEqual } from '../core/paths.ts';
+import { exists } from '../core/paths.ts';
 import { isRecord } from '../core/strict-json.ts';
 import type { AgentBundleToolsConfig } from '../core/types.ts';
 import type { AgentBundleMeta } from '../meta.ts';
@@ -369,7 +369,9 @@ const canonicalProjectRoot = async (cwd: string): Promise<string> => {
  * declares itself. Registry packages resolve beneath `node_modules`, so their
  * trees are never walked. The project itself is never a root: a dependency
  * cycle back onto it (A → B → A) must not turn every authored module into an
- * ignored one.
+ * ignored one. Only the root itself is exempt — a dependency linked from
+ * inside the project (`<project>/packages/dep`, `file:./vendor/dep`) is still
+ * a dependency and is excluded like any other.
  */
 const declaredDependencyRoots = async (cwd: string): Promise<readonly string[]> => {
   const projectRoot = await canonicalProjectRoot(cwd);
@@ -384,7 +386,7 @@ const declaredDependencyRoots = async (cwd: string): Promise<readonly string[]> 
       const manifestPath = await dependencyManifestPath(packageRoot, name);
       if (manifestPath === undefined) return;
       const root = await realpath(dirname(manifestPath));
-      if (isInsideOrEqual(projectRoot, root)) return;
+      if (root === projectRoot) return;
       roots.add(root);
       if (!isBeneathNodeModules(root)) await visit(root, runtimeDependencyFields);
     }));
