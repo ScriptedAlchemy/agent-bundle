@@ -16,7 +16,7 @@ import { mcpEntryRuntimeSpecifier } from './entry-shell.ts';
 import {
   generatedMetaModulePath,
   generatedMetaModuleSource,
-  generatedModulesDirname,
+  generatedModulesRoot,
   metaModuleSpecifier,
 } from './meta.ts';
 import { collectBundledOutputEvidence, type BundledOutputEvidence } from './provenance.ts';
@@ -119,10 +119,12 @@ export const entryLibId = (entry: Pick<RslibEntry, 'outputRelativePath'>): strin
 export const isDeclarationGenerationFailure = (error: unknown): boolean =>
   error instanceof Error && /declaration files/iu.test(error.message);
 
-// join (not resolve) so a tokenized output root (`<output>/<target>`) stays
-// a token instead of resolving against the cwd.
-const generatedEntryModulePath = (outputRoot: string, entry: RslibEntry): string =>
-  join(outputRoot, generatedModulesDirname, `${entry.name}-entry.mjs`);
+// Generated module paths live in the project's reserved namespace (see
+// `generatedModulesDirname`), never under the per-build staged output root:
+// Rspack writes module identifiers relative to the project root into the
+// emitted bundles, and those bytes must not change from one build to the next.
+const generatedEntryModulePath = (projectRoot: string, entry: RslibEntry): string =>
+  join(generatedModulesRoot(projectRoot), `${entry.name}-entry.mjs`);
 
 /** The import requests of one named entry in a lowered Rspack entry record. */
 const entryImportsOf = (entryRecord: unknown, name: string): readonly string[] => {
@@ -134,7 +136,7 @@ const entryImportsOf = (entryRecord: unknown, name: string): readonly string[] =
 };
 
 const virtualRegistryModules = (
-  outputRoot: string,
+  projectRoot: string,
   entry: RslibEntry,
   meta: AgentBundleMeta,
 ): readonly { readonly name: string; readonly path: string; readonly source: string }[] => [
@@ -143,12 +145,12 @@ const virtualRegistryModules = (
   // build stamps one identity, and every entry shares one generated module.
   {
     name: metaModuleSpecifier,
-    path: generatedMetaModulePath(outputRoot),
+    path: generatedMetaModulePath(projectRoot),
     source: generatedMetaModuleSource(meta),
   },
   ...(entry.virtualModules ?? []).map((module, index) => ({
     ...module,
-    path: join(outputRoot, generatedModulesDirname, `${entry.name}-${index}.mjs`),
+    path: join(generatedModulesRoot(projectRoot), `${entry.name}-${index}.mjs`),
   })),
 ];
 
@@ -356,9 +358,9 @@ const assertExecutableConfig = (
     readonly bundlerConfigs: readonly InspectedBundlerConfig[];
     readonly environmentConfigs: Readonly<Record<string, unknown>>;
   },
-  outputRoot: string,
-  meta: AgentBundleMeta,
+  run: Pick<RslibRunOptions, 'cwd' | 'meta' | 'outputRoot'>,
 ): void => {
+  const { cwd, meta, outputRoot } = run;
   if (
     inspection.bundlerConfigs.length !== entries.length ||
     Object.keys(inspection.environmentConfigs).length !== entries.length
@@ -391,14 +393,14 @@ const assertExecutableConfig = (
     }
     // The generated environment must retain the virtual-module source: a
     // resolved config without the plugin instance would resolve the
-    // guaranteed-nonexistent generated paths against the real filesystem.
-    const registryModules = virtualRegistryModules(outputRoot, entry, meta);
+    // reserved generated paths against the real filesystem.
+    const registryModules = virtualRegistryModules(cwd, entry, meta);
     const constructor = virtualModulesPluginConstructor();
     if (config.plugins?.some((plugin) => plugin instanceof constructor) !== true) {
       throw new Error('Rslib resolved a generated executable environment without its virtual modules.');
     }
     if (entry.virtualSource !== undefined
-      && !entryImportsOf(config.entry, entry.name).includes(generatedEntryModulePath(outputRoot, entry))) {
+      && !entryImportsOf(config.entry, entry.name).includes(generatedEntryModulePath(cwd, entry))) {
       throw new Error('Rslib resolved a generated executable environment without its generated wrapper entry.');
     }
     const expectedAliases = {
@@ -436,6 +438,8 @@ const assertExecutableConfig = (
 export const composeEntryLibConfig = (
   entry: RslibEntry,
   options: {
+    /** The project root: the bundler `context` and the root of the generated-module namespace. */
+    readonly cwd: string;
     /** The project identity served to plugin source as `agent-bundle/meta`. */
     readonly meta: AgentBundleMeta;
     /** Receives reserved specifiers that a function-form external resolved at build time. */
@@ -446,13 +450,13 @@ export const composeEntryLibConfig = (
 ): LibConfig => {
   const libId = entryLibId(entry);
   const virtualSource = entry.virtualSource;
-  const virtualModules = virtualRegistryModules(options.outputRoot, entry, options.meta);
+  const virtualModules = virtualRegistryModules(options.cwd, entry, options.meta);
   // Every generated module this entry serves virtually during its build:
   // the wrapper entry (when present) plus the registry modules.
   const generatedModules = [
     ...(virtualSource === undefined
       ? []
-      : [{ path: generatedEntryModulePath(options.outputRoot, entry), source: virtualSource }]),
+      : [{ path: generatedEntryModulePath(options.cwd, entry), source: virtualSource }]),
     ...virtualModules,
   ];
   const aliases = entry.aliases ?? {};
@@ -508,15 +512,15 @@ export const composeEntryLibConfig = (
       // Rslib validates `source.entry` against the real filesystem before
       // Rspack exists, so the profile keys the entry on the authored program
       // and this hook redirects the lowered Rspack entry to the generated
-      // wrapper's guaranteed-nonexistent virtual path, which the plugin
-      // above serves from memory. Rspack resolves entries through the
-      // plugin-patched input filesystem, so no real path is ever shadowed.
+      // wrapper's reserved virtual path, which the plugin above serves from
+      // memory. Rspack resolves entries through the plugin-patched input
+      // filesystem, so nothing is ever read from disk under that path.
       const lowered = config.entry;
       if (!isRecord(lowered)) {
         throw new Error('Rslib lowered a generated executable without a keyed entry record.');
       }
       const description = lowered[entry.name];
-      const wrapperImport = [generatedEntryModulePath(options.outputRoot, entry)];
+      const wrapperImport = [generatedEntryModulePath(options.cwd, entry)];
       config.entry = {
         ...lowered,
         [entry.name]: isRecord(description) ? { ...description, import: wrapperImport } : wrapperImport,
@@ -684,6 +688,7 @@ export const buildRslibSurfaces = async (
       // The run reports at the most verbose level any surface asks for.
       logLevel: surfaces.some((surface) => surface.logLevel === 'error') ? 'error' : 'silent',
       lib: entries.map((entry) => composeEntryLibConfig(entry, {
+        cwd: options.cwd,
         meta: options.meta,
         onReservedExternal: (specifier) => reservedExternalViolations.push(specifier),
         outputRoot: options.outputRoot,
@@ -693,7 +698,7 @@ export const buildRslibSurfaces = async (
   });
 
   const inspection = await rslib.inspectConfig();
-  assertExecutableConfig(entries, inspection.origin, options.outputRoot, options.meta);
+  assertExecutableConfig(entries, inspection.origin, options);
   let result: Awaited<ReturnType<RslibInstance['build']>> | undefined;
   try {
     try {
@@ -714,7 +719,7 @@ export const buildRslibSurfaces = async (
       ignoredSourcePaths: [
         // Generated wrapper/registry modules are virtual, but they still
         // surface in stats as modules under this reserved namespace.
-        resolve(options.outputRoot, generatedModulesDirname),
+        resolve(generatedModulesRoot(options.cwd)),
         ...dependencyRoots,
       ],
       projectRoot: options.cwd,

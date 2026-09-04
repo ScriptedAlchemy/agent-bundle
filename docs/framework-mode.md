@@ -543,6 +543,18 @@ invariant layer that no hatch value can override
 (`src/build/compose-layers.ts`; see the `tools` section of the configuration
 reference). `agent-bundle inspect --bundler` prints the result.
 
+Builds are byte-reproducible: two builds of one unchanged source tree emit
+identical artifacts (same manifest, same digests, same bytes) regardless of
+the `--output` name or the per-build `.<output>.stage-XXXXXX` staging
+directory. The generated wrapper, registry, and identity modules that every
+compiled surface imports are served from memory under the reserved
+`<project root>/.agent-bundle-virtual/` namespace (`src/build/meta.ts`),
+which never exists on disk. That namespace hangs off the project root — the
+bundler `context` — on purpose: Rspack writes module identifiers relative to
+`context` into emitted bundles (the `// NAMESPACE OBJECT: ./…` comments of
+concatenated modules), so a namespace under the staging root would stamp the
+per-build token into the artifact.
+
 `agent-bundle build` makes each target directory independently distributable.
 Every target includes `INSTALL.md` generated with its real plugin and
 marketplace names. Claude and Codex bundles include local marketplace manifests

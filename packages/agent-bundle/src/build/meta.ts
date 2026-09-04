@@ -3,15 +3,29 @@ import { join } from 'node:path';
 import type { AgentBundleMeta } from '../meta.ts';
 
 /**
- * The reserved namespace (under each build's output root) whose paths
+ * The reserved namespace (directly under the project root) whose paths
  * identify generated module sources — wrapper entries, registry modules, and
  * the project-identity module. Nothing ever writes these paths: they are
- * guaranteed-nonexistent module ids served from memory by Rspack's
- * `experiments.VirtualModulesPlugin`, chosen to be deterministic for
+ * module ids served from memory by Rspack's `experiments.VirtualModulesPlugin`
+ * (each compiler keeps its own virtual file store, so one path may serve
+ * every compiler of a build), chosen to be deterministic for
  * `inspect --bundler` and collision-safe across entries. The namespace stays
  * excluded from authored-source provenance.
+ *
+ * It is rooted at the project root — the bundler `context` — rather than at
+ * the per-build staged output root on purpose: Rspack derives the readable
+ * module identifiers it writes into emitted bundles (the `// NAMESPACE
+ * OBJECT: ./…` comments of concatenated modules) from a module's path
+ * relative to `context`, so a namespace under `.artifact.stage-XXXXXX` would
+ * stamp that per-build token into the artifact and break byte-reproducible
+ * builds. Under the project root the identifier is always
+ * `./.agent-bundle-virtual/<module>.mjs`, whatever the output root.
  */
 export const generatedModulesDirname = '.agent-bundle-virtual';
+
+/** The reserved generated-module namespace of one project. */
+export const generatedModulesRoot = (projectRoot: string): string =>
+  join(projectRoot, generatedModulesDirname);
 
 /**
  * The reserved specifier every compiled plugin surface resolves to the
@@ -25,12 +39,12 @@ export const metaModuleSpecifier = 'agent-bundle/meta';
 
 /**
  * The generated path serving {@link metaModuleSpecifier}. One build stamps
- * one identity, so every entry under an output root shares one module — the
- * path carries no entry name and never shifts as other generated modules
- * come and go.
+ * one identity, so every entry of a project shares one module — the path
+ * carries no entry name and never shifts as other generated modules come
+ * and go.
  */
-export const generatedMetaModulePath = (outputRoot: string): string =>
-  join(outputRoot, generatedModulesDirname, 'meta.mjs');
+export const generatedMetaModulePath = (projectRoot: string): string =>
+  join(generatedModulesRoot(projectRoot), 'meta.mjs');
 
 /**
  * The identity axes {@link projectMeta} reads. Normalized project metadata

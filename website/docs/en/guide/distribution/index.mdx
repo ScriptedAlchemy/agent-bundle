@@ -57,6 +57,13 @@ non-interactive plugin install verb.
 real bytes rather than checking that a path exists. The per-target layouts themselves are covered
 in [Project structure](../start/project-structure.mdx).
 
+Builds are reproducible: two builds of one unchanged source tree emit byte-identical artifacts —
+the same manifest and the same digests — whatever `--output` names and however the per-build
+staging directory is named. The module identifiers the bundler writes into compiled entries
+derive from the project root only, never from the staging or output directory or from any
+absolute path of the building machine, so installed copies, preview packages, and
+[`doctor`](./installation.mdx) comparisons see the same bytes from the same source.
+
 ## The npm-facing half
 
 A project that also ships as an npm package has a second output: `dist/bin/<name>.js` executables

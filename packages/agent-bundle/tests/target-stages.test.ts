@@ -88,12 +88,12 @@ describe('planTargetStages', () => {
  * generated executable: the virtual-module plugin instance and the exact
  * match alias of the framework identity module.
  */
-const resolvedEnvironment = (outputRoot: string, entry: RslibEntry) => ({
+const resolvedEnvironment = (projectRoot: string, outputRoot: string, entry: RslibEntry) => ({
   bundler: {
     name: entryLibId(entry),
     output: { asyncChunks: false, path: outputRoot },
     plugins: [new rspack.experiments.VirtualModulesPlugin({})],
-    resolve: { alias: { [`${metaModuleSpecifier}$`]: generatedMetaModulePath(outputRoot) } },
+    resolve: { alias: { [`${metaModuleSpecifier}$`]: generatedMetaModulePath(projectRoot) } },
     target: 'node',
   },
   environment: { output: { cleanDistPath: false } },
@@ -146,10 +146,10 @@ describe('buildRslibSurfaces', () => {
       }),
       inspectConfig: async () => ({
         origin: {
-          bundlerConfigs: entries.map((entry) => resolvedEnvironment(outputRoot, entry).bundler),
+          bundlerConfigs: entries.map((entry) => resolvedEnvironment(project, outputRoot, entry).bundler),
           environmentConfigs: Object.fromEntries(entries.map((entry) => [
             entryLibId(entry),
-            resolvedEnvironment(outputRoot, entry).environment,
+            resolvedEnvironment(project, outputRoot, entry).environment,
           ])),
         },
       }),
