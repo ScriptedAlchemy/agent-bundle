@@ -239,9 +239,11 @@ Not delivered to the plugin in this run: `sessionStart` (never fired for the
 plugin; the sibling raw-hooks probe on the same build saw none either),
 `workspaceOpen` (fired to user-level hooks only), `sessionEnd` (nothing arrived
 when the window was closed with the agent idle), `postToolUseFailure`,
-`preCompact`. §9 below shows that on a real desktop `workspaceOpen` and
-`sessionEnd` *do* reach plugin-scoped hooks and only `sessionStart` never
-does. `preToolUse` was delivered twice for some `Read`/`Grep` calls with the
+`preCompact`. §9 below shows that on a real desktop `workspaceOpen`,
+`sessionEnd`, and (on 3.18.25) `sessionStart` *do* reach plugin-scoped hooks,
+while `subagentStart`/`subagentStop` — delivered in this isolated run — were
+not dispatched at all on the maintainer's daily instance of the same build
+(§9.1). `preToolUse` was delivered twice for some `Read`/`Grep` calls with the
 same `tool_use_id` (pairs 3/4, 9/10, … in the fixture).
 
 Payload excerpt (subagentStart — the only place the parent link exists, and it
@@ -356,7 +358,8 @@ root, and the parent-of-subagent chain — is the only identity-adjacent surface
 | No parent id on `SubagentStart`; child events carry no parent | Codex | §1, §2, §10 | Ours: read from the thread's own rollout head (`thread_spawn.parent_thread_id`, `depth`), which every hook names in `transcript_path`; spawn call matched by `agent_path`; inferred parent corrected at `SubagentStop`. Remaining host-side: the payload itself carries no `parent_thread_id`, so a hook on a machine that cannot read `CODEX_HOME/sessions` (or a rollout not yet flushed) falls back to inference (#423) |
 | Child conversation id absent from `subagentStart`; child events carry no parent/root | Cursor | §1, §2 | Bound by elimination in the registry (single pending start per workspace); refused while ambiguous for parallel workers; filed as #424 |
 | `_meta` carries no conversation/tool-call id | Cursor | §3 | Hook-correlated only; filed |
-| `sessionStart` never dispatched on the desktop (`workspaceOpen`/`sessionEnd` are) | Cursor | §1, §9 | Host-side (#424 gap 4); lineage never depends on it to establish a root |
+| ~~`sessionStart` never dispatched on the desktop~~ | Cursor | §1, §9 | Closed 2026-09-04: 3.18.25 desktop dispatches `sessionStart` to plugin-scoped hooks (§9.1); the 0× count came from 3.14.7 logs. Lineage still treats it as one root-shaped event among several rather than a prerequisite, because roots are routinely first seen mid-conversation (§9) |
+| `subagentStart`/`subagentStop` dispatch varies by instance on 3.18.25: delivered in the isolated §1 run, never requested on the maintainer's daily instance (two `Task` runs, §9.1) | Cursor | §1, §9.1 | Host-side; where the start is not delivered the child is first seen on its own tool hook with no pending start to bind to, so `request.lineage` reports `id-not-resolvable` for it rather than inferring a parent |
 | Roots first seen on a tool hook (Cursor restart or plugin load mid-conversation) | Cursor | §9 | Ours: workspace-scoped child binding plus correction (subtree re-rooted) when a bound conversation later carries a root-only event (`beforeSubmitPrompt`, `stop`, `sessionEnd`, `preCompact`) |
 | Cursor CLI not exercised | Cursor | table above | Needs a signed-in `cursor-agent`; not attempted on the operator's account |
 | ~~Claude session used a scripted model~~ | Claude | §8 | Closed 2026-09-03: two live-model sessions replace the stand-in fixture; every stand-in claim held, see §8 |
@@ -423,13 +426,13 @@ conversations; a local plugin declaring `sessionStart`, `sessionEnd`,
 | `beforeSubmitPrompt` | 7 | yes — `prompt`, `attachments[]`, `composer_mode`, `generation_id` |
 | `sessionEnd` | 6 | yes — `reason: window_close`, `final_status: none`, `duration_ms`, `is_background_agent: false`, `session_id` = `conversation_id`, `generation_id: ""`, `transcript_path: null` |
 | `preCompact` | 4 | yes |
-| **`sessionStart`** | **0** | — |
+| **`sessionStart`** | **0** | — (superseded by §9.1: 3.18.25 does dispatch it) |
 
 Consequences for lineage:
 
 - `workspaceOpen` and `sessionEnd` are confirmed plugin-scoped deliveries on
   the desktop; the §1 run missed them because the Xvfb CLI session never
-  closed a window. Only `sessionStart` remains a host gap (#424 gap 4).
+  closed a window. `sessionStart` was a 3.14.7 gap only (§9.1).
 - Only 7 of the 35 conversations ever produced `beforeSubmitPrompt`; 28 were
   first seen on `postToolUse`/`preToolUse`/`afterShellExecution` (the log
   starts mid-conversation after a Cursor restart, or the plugin loaded
@@ -440,8 +443,42 @@ Consequences for lineage:
   `workspace_roots` and undoes a binding when the bound conversation later
   receives `beforeSubmitPrompt`, which a subagent never does.
 - No `Task` tool call appears in these desktop logs, so desktop
-  `subagentStart`/`subagentStop` delivery is unobserved here; the §1 CLI
-  capture remains the evidence for the subagent families.
+  `subagentStart`/`subagentStop` delivery is unobserved here; see §9.1, which
+  closes that gap with a live `Task` run.
+
+### 9.1 Re-check on Cursor desktop 3.18.25 (added 2026-09-04)
+
+Same machine, same workspace (`19017dde…`), the maintainer's daily desktop
+instance (`/usr/share/cursor`, workbench `280eca29`), hooks log
+`~/.config/Cursor/logs/20260904T071544/window2_wb1/output_20260904T071550/cursor.hooks.workspaceId-19017dde….log`,
+plugins `~/.cursor/plugins/local/tracedecay` (no matchers; `afterFileEdit`,
+`afterShellExecution`, `postToolUse`, `preCompact`, `sessionEnd`,
+`sessionStart`, `stop`, `workspaceOpen`) and `~/.cursor/plugins/local/cargo-hauler`
+(an agent-bundle emitted `cursor` pack: `preToolUse`/`postToolUse` `^Shell$`,
+`sessionStart`, `stop`). No `~/.cursor/hooks.json`, no project `hooks.json`.
+Two root chats ran in the window; one of them launched two `Task` subagents,
+a backgrounded `explore` (`d103df27-…`, 61 hook deliveries) and a foreground
+`general-purpose` (`300d51aa-…`, one `echo` step), to control for subagent
+type and backgrounding.
+
+| Fact | 3.14.7 record (§9) | 3.18.25 observed 2026-09-04 |
+| --- | --- | --- |
+| `sessionStart` to plugin-scoped hooks | 0× requested | **dispatched**: 6× across the retained 3.18.25 logs (2026-09-03T20:30Z → 2026-09-04T06:42Z), every one `Found n hook(s) … from claude-plugin config`; payload `conversation_id` = `session_id`, `generation_id: ""`, `model`, `model_id`, `model_params`, `is_background_agent`, `composer_mode: "agent"`, `cursor_version`, `workspace_roots`, `user_email`, `transcript_path: null` |
+| Tool events to plugin-scoped hooks | yes | yes — in one window: `preToolUse` 343, `postToolUse` 230, `afterShellExecution` 137, `afterFileEdit` 13, `stop` 4, `workspaceOpen` 1 requested; the emitted pack's `^Shell$` hooks ran from the plugin root with `${CURSOR_PLUGIN_ROOT}` expanded |
+| Duplicate `preToolUse` for one `tool_use_id` | seen for `Read`/`Grep` in the §1 capture | none among the delivered `preToolUse` (all `Shell`; `Read`/`Grep` had no `preToolUse` hook declared, so unobserved for those tools). A `postToolUse` appearing twice in the log is two plugins (`Found 2 hook(s)`), not a duplicate delivery |
+| `subagentStart` / `subagentStop` | unobserved on the desktop (§9); delivered in the isolated §1 run | **not requested at all** for either `Task` — no `Hook step requested: subagentStart`/`subagentStop`, and no `preToolUse`/`postToolUse` naming `tool_name: "Task"`, neither while the children ran nor after they finished. No retained desktop log on this machine (3.14.7 or 3.18.25, 90,028 steps) has ever requested either step. Same build as §1, so delivery of the subagent family varies by instance or account state |
+| A subagent's own hooks | fresh `conversation_id`, nothing names the parent | same: both children's events (`preToolUse`/`postToolUse`/`afterShellExecution`) carry their own `conversation_id` = `session_id`, their own `generation_id`, `transcript_path: null`, no parent/root field |
+| Root-only events on a subagent | never | never — neither child produced `stop` (the window's 4 `stop` events all belong to the two roots, which also carry a non-null `transcript_path`) |
+| `cwd: ""` on `Shell` payloads | yes | yes |
+
+Consequences: the `sessionStart` row in §7 is closed and #424 gap 4 with it.
+Where an instance does not deliver `subagentStart`, there is nothing for the
+registry to bind a child to, so `request.lineage` for that child is
+`id-not-resolvable` (`ensureRoot` finds no pending start and the event is not
+root-shaped, so no node is created), which is the honest answer; nothing binds
+blind. The root-only-event correction stays justified because a desktop child
+still never carries `stop`/`beforeSubmitPrompt`/`sessionEnd`/`preCompact`. No
+framework code changes follow from this re-check.
 
 
 ## 10. Codex rollout heads: the parent the hook payloads omit (added 2026-09-03)
