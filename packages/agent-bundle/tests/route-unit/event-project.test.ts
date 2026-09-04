@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+
 import { Agent, type JsonValue } from '@agent-bundle/runtime';
 import { expect, it } from '@rstest/core';
 import { createElement, Suspense } from 'react';
@@ -835,6 +837,100 @@ it('projects the stage-4 Claude-only families with their documented decision cha
   const idleContextual = await render('agent/idle', idleNative, 'TeammateIdle', undefined, 'Context.');
   expect(() => projectEventDocument(idleContextual.document, 'agent/idle', 'claude', 'TeammateIdle'))
     .toThrow(/no documented additional-context channel/u);
+});
+
+it('projects the model-switch families to the PreModelSwitch decision and PostModelSwitch context channels (2.1.260 re-pin)', async () => {
+  const render = async (event: string, native: Record<string, unknown>, nativeEvent: string, value?: JsonValue, context?: string) => {
+    const props = createCanonicalEventProps(
+      event as never,
+      native,
+      'claude',
+      nativeEvent,
+      '2.1.260',
+      new AbortController().signal,
+    );
+    return renderRoute({
+      default: async () => createElement(
+        Agent.Result,
+        value === undefined ? null : { value },
+        context === undefined ? undefined : createElement(Agent.Context, null, context),
+      ),
+    }, {
+      input: { canonical: props.canonical, native: props.native },
+      kind: 'event-route',
+      routeId: `event:${event}`,
+    });
+  };
+  // hooks reference "PreModelSwitch input": the documented `/model opus` example.
+  const before = JSON.parse(await readFile(new URL('../fixtures/events/claude-pre-model-switch.json', import.meta.url), 'utf8')) as Record<string, unknown>;
+  const after = JSON.parse(await readFile(new URL('../fixtures/events/claude-post-model-switch.json', import.meta.url), 'utf8')) as Record<string, unknown>;
+
+  // model-switch/before: pass-through projects nothing; allow / ask / deny are the documented permissionDecision values.
+  const observed = await render('model-switch/before', before, 'PreModelSwitch');
+  expect(projectEventDocument(observed.document, 'model-switch/before', 'claude', 'PreModelSwitch')).toBeUndefined();
+  const passThrough = await render('model-switch/before', before, 'PreModelSwitch', { outcome: 'continue' });
+  expect(projectEventDocument(passThrough.document, 'model-switch/before', 'claude', 'PreModelSwitch')).toBeUndefined();
+  const allowed = await render('model-switch/before', before, 'PreModelSwitch', { outcome: 'allow' });
+  expect(projectEventDocument(allowed.document, 'model-switch/before', 'claude', 'PreModelSwitch')).toEqual({
+    hookSpecificOutput: { hookEventName: 'PreModelSwitch', permissionDecision: 'allow' },
+  });
+  const asked = await render('model-switch/before', before, 'PreModelSwitch', { outcome: 'ask', reason: 'Switching re-sends about 180k tokens. Continue?' });
+  expect(projectEventDocument(asked.document, 'model-switch/before', 'claude', 'PreModelSwitch')).toEqual({
+    hookSpecificOutput: {
+      hookEventName: 'PreModelSwitch',
+      permissionDecision: 'ask',
+      permissionDecisionReason: 'Switching re-sends about 180k tokens. Continue?',
+    },
+  });
+  const denied = await render('model-switch/before', before, 'PreModelSwitch', { outcome: 'deny', reason: 'Opus is not approved for this repository.' });
+  expect(projectEventDocument(denied.document, 'model-switch/before', 'claude', 'PreModelSwitch')).toEqual({
+    hookSpecificOutput: {
+      hookEventName: 'PreModelSwitch',
+      permissionDecision: 'deny',
+      permissionDecisionReason: 'Opus is not approved for this repository.',
+    },
+  });
+  const deniedWithoutReason = await render('model-switch/before', before, 'PreModelSwitch', { outcome: 'deny' });
+  expect(() => projectEventDocument(deniedWithoutReason.document, 'model-switch/before', 'claude', 'PreModelSwitch'))
+    .toThrow(/requires a nonempty reason/u);
+  const allowedWithReason = await render('model-switch/before', before, 'PreModelSwitch', { outcome: 'allow', reason: 'Fine.' });
+  expect(() => projectEventDocument(allowedWithReason.document, 'model-switch/before', 'claude', 'PreModelSwitch'))
+    .toThrow(/reason is only valid when outcome is deny or ask/u);
+  const rewritten = await render('model-switch/before', before, 'PreModelSwitch', { outcome: 'allow', updatedInput: { to_model: 'claude-sonnet-5' } });
+  expect(() => projectEventDocument(rewritten.document, 'model-switch/before', 'claude', 'PreModelSwitch'))
+    .toThrow(/accepts no updatedInput/u);
+  const contextual = await render('model-switch/before', before, 'PreModelSwitch', undefined, 'Context.');
+  expect(() => projectEventDocument(contextual.document, 'model-switch/before', 'claude', 'PreModelSwitch'))
+    .toThrow(/accepts no additionalContext/u);
+
+  // model-switch/after: observation plus additionalContext; the switch already happened.
+  const afterObserved = await render('model-switch/after', after, 'PostModelSwitch');
+  expect(projectEventDocument(afterObserved.document, 'model-switch/after', 'claude', 'PostModelSwitch')).toBeUndefined();
+  const afterContext = await render('model-switch/after', after, 'PostModelSwitch', undefined, 'On Opus, delegate implementation to subagents.');
+  expect(projectEventDocument(afterContext.document, 'model-switch/after', 'claude', 'PostModelSwitch')).toEqual({
+    hookSpecificOutput: {
+      additionalContext: 'On Opus, delegate implementation to subagents.',
+      hookEventName: 'PostModelSwitch',
+    },
+  });
+  const afterDenied = await render('model-switch/after', after, 'PostModelSwitch', { outcome: 'deny', reason: 'No.' });
+  expect(() => projectEventDocument(afterDenied.document, 'model-switch/after', 'claude', 'PostModelSwitch'))
+    .toThrow(/observes a completed model switch/u);
+  const afterAllowed = await render('model-switch/after', after, 'PostModelSwitch', { outcome: 'allow' });
+  expect(() => projectEventDocument(afterAllowed.document, 'model-switch/after', 'claude', 'PostModelSwitch'))
+    .toThrow(/does not accept outcome "allow"/u);
+
+  // Envelope validation follows the documented input: PostModelSwitch alone adds the auto and resume sources.
+  const validation = { canonicalEvent: 'model-switch/before' as const, nativeEvent: 'PreModelSwitch', target: 'claude' };
+  expect(() => validateNativeEventEnvelope({ ...before, source: 'auto' }, validation)).toThrow(/native source is invalid/u);
+  expect(() => validateNativeEventEnvelope({ ...before, requested_model: 7 }, validation)).toThrow(/requested_model must be a string or null/u);
+  expect(() => validateNativeEventEnvelope({ ...before, cache_ttl: '2h' }, validation)).toThrow(/cache_ttl is invalid/u);
+  expect(() => validateNativeEventEnvelope({ ...before, pricing: 'free' }, validation)).toThrow(/pricing is invalid/u);
+  expect(() => validateNativeEventEnvelope({ ...before, to_model: '' }, validation)).toThrow(/to_model must be a nonempty string/u);
+  expect(validateNativeEventEnvelope(
+    { ...after, source: 'resume', requested_model: 'claude-opus-5' },
+    { canonicalEvent: 'model-switch/after', nativeEvent: 'PostModelSwitch', target: 'claude' },
+  )).toMatchObject({ source: 'resume' });
 });
 
 it('projects tool/before pass-through as no decision and only explicit allow/ask/deny as one (#461)', async () => {

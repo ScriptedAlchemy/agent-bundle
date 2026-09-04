@@ -30,7 +30,7 @@ import {
   supportedCapability,
   unavailableCapability,
 } from './capability-state.ts';
-import capabilityTable from './capabilities/claude-2.1.250.json' with { type: 'json' };
+import capabilityTable from './capabilities/claude-2.1.260.json' with { type: 'json' };
 import {
   createNativeEventStarter,
   mergeHookDocuments,
@@ -150,7 +150,7 @@ export interface ClaudeSubagentStatusLineConfig {
 
 /**
  * Default configuration Claude Code applies when the plugin is enabled,
- * emitted as `settings.json` at the plugin root. The pinned 2.1.250 contract
+ * emitted as `settings.json` at the plugin root. The pinned 2.1.260 contract
  * supports exactly two keys, and `settings.json` takes priority over
  * `settings` declared in the manifest.
  *
@@ -431,7 +431,7 @@ const hookContract = Object.freeze({
   wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Claude'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
-  adapterRevision: '1.27.0',
+  adapterRevision: '1.28.0',
   observedVersion: capabilityTable.observedCliVersion,
   schemas: schemaDescriptorsFrom(schemaProvenance, schemaProvenance.observedCliVersion),
 });
@@ -3432,7 +3432,7 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
     pluginReload: unavailableCapability(distributionPolicy.pluginReload.reason),
     pluginTrustGates: unavailableCapability(distributionPolicy.pluginTrustGates.reason),
     rules: unavailableCapability(
-      'The pinned Claude Code plugin contract (2.1.250) defines no rules component; project guidance ships through CLAUDE.md memory, not a rules directory.',
+      'The pinned Claude Code plugin contract (2.1.260) defines no rules component; project guidance ships through CLAUDE.md memory, not a rules directory.',
     ),
     settings: capabilityStateFromSupport(
       capabilityTable.plugin.settings.config === claudeArtifactPaths.settings &&

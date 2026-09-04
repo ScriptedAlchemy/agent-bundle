@@ -601,6 +601,16 @@ Wiring rules:
   `install/surface.ts`), and child/worker stderr forwarding keep their direct
   `process.stdout`/`process.stderr` adapters: emitted artifacts must not carry
   a platform runtime, and byte-exact protocol frames are not terminal text.
+- **The route-facing terminal capability is plain Node, not `Terminal`.**
+  `request.terminal` (#511) — TTY-ness, color depth, and `columns`/`rows` per
+  output stream, reported to routes, rendered scripts, and `main`-envelope
+  executables — is probed by the dependency-free `src/terminal-capability.ts`
+  (aliased into emitted executables as `agent-bundle/terminal-capability`)
+  because those artifacts must not carry the Effect runtime; the first-party
+  CLI mounts no route request scope, so it has nothing to read from the
+  `Terminal` service for it. `Terminal.columns`/`rows` remain the first-party
+  CLI's own way to size its human output. Rules and the per-surface table:
+  [Terminal capability](entry-conventions.md#terminal-capability-requestterminal).
 
 ## Effect Schema wire contracts (Schema projections)
 

@@ -33,10 +33,12 @@ import type {
 } from '../cli-entry.ts';
 import { createProviderProcessLifetime, type ProviderProcessLifetime } from '../routes/provider-execution.ts';
 import type { CompiledCliCommand } from '../routes/types.ts';
+import type { AgentTerminal } from '../terminal-capability.ts';
 import { AgentTestError, captured } from './errors.ts';
 import { composeLayouts, loadLayoutChain, type LayoutChainTarget, type LoadedLayout } from './layouts.ts';
 import { ROUTE_UNIT_PROOF_LEVEL, type AgentBundleTestManifest } from './manifest.ts';
 import { claimProcessHit, mountProviders } from './providers.ts';
+import { routeKindTerminal } from './terminal.ts';
 import {
   registeredManifestIdentity,
   registeredRouteLoader,
@@ -1126,6 +1128,7 @@ export const prepareCliRenderHost = async (
               projectRoot: renderer.available({ root }, 'derived'),
             },
             host: renderer.unavailable('unsupported-surface'),
+            terminal: renderer.available(execution.terminal, 'native'),
             workspace: renderer.available({ root }, 'derived'),
             ...context,
             ...mounted.context,
@@ -1188,7 +1191,7 @@ export interface PreparedScriptRenderHost {
   readonly close: () => Promise<void>;
   readonly createSession: (
     argv: readonly string[],
-    context: { readonly signal: AbortSignal },
+    context: { readonly signal: AbortSignal; readonly terminal: AgentTerminal },
   ) => GeneratedCliRenderSession;
   /**
    * Ends the render the way the generated executable's render worker ending
@@ -1258,7 +1261,10 @@ export const prepareScriptRenderHost = async (
   };
   return Object.freeze({
     close,
-    createSession: (argv: readonly string[], execution: { readonly signal: AbortSignal }): GeneratedCliRenderSession => {
+    createSession: (
+      argv: readonly string[],
+      execution: { readonly signal: AbortSignal; readonly terminal: AgentTerminal },
+    ): GeneratedCliRenderSession => {
       const invocation: AgentRenderInvocation = {
         kind: 'script',
         props: { input: argv as never, name: options.name },
@@ -1320,6 +1326,7 @@ export const prepareScriptRenderHost = async (
                 projectRoot: renderer.available({ root }, 'derived'),
               },
               host: renderer.unavailable('unsupported-surface'),
+              terminal: renderer.available(execution.terminal, 'native'),
               workspace: renderer.available({ root }, 'derived'),
               ...context,
               ...state.context,
@@ -1418,6 +1425,9 @@ const prepareRender = async (
     limits: options.limits,
     renderer,
     requestInit: async (request) => ({
+      // What the artifact's scope for this route kind mounts (#511): no
+      // terminal under MCP or a hook, the harness's piped shape otherwise.
+      terminal: renderer.available(routeKindTerminal(resolved.kind), 'derived'),
       ...context,
       ...mounted.context,
       // The render invocation is exactly what the generated Flight worker

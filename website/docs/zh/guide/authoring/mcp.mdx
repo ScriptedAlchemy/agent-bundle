@@ -105,6 +105,41 @@ start 匹配到最新一个未被认领的 spawn 调用）、`confirmed`（宿�
 窗口无法安放的 start，并把窗口挂错父节点的子代理挪到正确的父节点下。框架刻意不提供操作者或用户身份轴：它永远不会读取或暴露宿主
 会话背后的人是谁。
 
+### 终端能力
+
+句柄的最后一个轴是 `terminal`，一个 `Observed<AgentTerminal>`：描述进程的输出流是什么，因此需要自己给
+stderr 上色或给表格定宽的路由，再也不必自行探测 `process.stdout.isTTY` 或读取 `FORCE_COLOR`。框架外壳
+在每次调用时只计算一次，所用规则与选择 CLI 输出模式的规则完全相同，所以插件输出与框架输出总是一致。
+它只是信息——从来不是写入器——也不会改变 `Agent.*` 组件渲染的任何内容。
+
+```ts
+interface AgentTerminal {
+  hostSurface: 'cli' | 'mcp' | 'hook' | 'script' | 'workbench';
+  stdout: { kind: 'tty' | 'pipe' | 'none'; color: 'none' | 'basic' | '256' | 'truecolor'; columns?: number; rows?: number };
+  stderr: { kind: 'tty' | 'pipe' | 'none'; color: 'none' | 'basic' | '256' | 'truecolor'; columns?: number; rows?: number };
+  sharesTarget: boolean; // fd 1 与 fd 2 指向同一个打开的文件（`2>&1`，或同一个终端）
+}
+```
+
+颜色遵循非正式标准的惯常优先级：设置了 `FORCE_COLOR` 时由它直接决定（`0`/`false` 关闭；空值、`1`
+或 `true` 为 basic；`2` 为 256；`3` 为 truecolor），`CLICOLOR_FORCE` 即使对管道也强制开启颜色，
+`NO_COLOR`（任何非空值）与 `CLICOLOR=0` 强制关闭，`TERM=dumb` 不渲染颜色，其余情况下终端按
+`COLORTERM`/`TERM` 声明的深度渲染，管道则不渲染。`COLUMNS`/`LINES` 会覆盖上报的尺寸。
+
+| 路由运行的位置 | `hostSurface` | `stdout` / `stderr` |
+| --- | --- | --- |
+| 路由式 CLI 可执行文件——普通、渲染式或投影的 MCP 命令 | `cli` | 从可执行文件自身进程探测。机器输出独占 stdout，因此 `stdout` 说明文档落在哪里，`stderr` 则是路由可以自行写入的通道。 |
+| 渲染式脚本（`src/scripts/<name>.tsx`） | `script` | 同上，探测得出。 |
+| 生成的 MCP 服务器 | `mcp` | 两者均为 `none`——stdout 是协议线路，stderr 是宿主的日志。从不探测，也从不猜测。 |
+| 事件路由（共享运行时或独立钩子进程） | `hook` | 两者均为 `none`——stdout 是宿主的钩子信封。 |
+| Workbench 生命周期回放 | `workbench` | 两者均为 `none`。 |
+| `defineRscApplication` 适配器 | `mcp` / `cli` | `createRscMcpServer` 两者均挂载 `none`；`runRscCli` 自身不做探测，只挂载调用方在选项中传入的 `terminal`，否则为 `unavailable`（`not-provided`）。 |
+| 未挂载该轴的自定义宿主 | — | `unavailable`（`not-provided`）。 |
+
+导出 `main` 的普通脚本或 bin 没有请求作用域；其封套会把同一个值作为 `main` 的第二个参数传入（见
+[包入口](./package-entries.mdx#可执行封套)）。在测试中，`invokeCli` 与 `runScript` 的 `tty` 开关会塑造
+一个确定性的合成值，而 `context.terminal` 则可以像注入任何身份轴一样注入其他取值。
+
 ## 流式输出与进度
 
 路由通过渲染 React `Suspense` 实现流式输出：外壳（shell）先带着回退内容发出，之后每个解析完成的

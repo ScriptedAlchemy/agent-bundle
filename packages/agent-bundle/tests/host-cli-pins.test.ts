@@ -17,7 +17,7 @@ import {
   verifyHostCliPins,
   type HostCliPins,
 } from '../../../scripts/host-cli-pins.mjs';
-import claudeCapabilities from '../src/adapters/capabilities/claude-2.1.250.json' with { type: 'json' };
+import claudeCapabilities from '../src/adapters/capabilities/claude-2.1.260.json' with { type: 'json' };
 import codexCapabilities from '../src/adapters/capabilities/codex-0.147.0.json' with { type: 'json' };
 
 const pins: HostCliPins = Object.freeze({
