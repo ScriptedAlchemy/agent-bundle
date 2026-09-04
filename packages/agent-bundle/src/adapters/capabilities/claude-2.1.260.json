@@ -119,27 +119,308 @@
       "stop": "Stop"
     },
     "eventRoutes": {
-      "agent/idle": { "nativeEvent": "TeammateIdle", "state": "supported" },
-      "agent/start": { "nativeEvent": "SubagentStart", "state": "supported" },
-      "agent/stop": { "nativeEvent": "SubagentStop", "state": "supported" },
-      "compact/after": { "nativeEvent": "PostCompact", "state": "supported" },
-      "compact/before": { "nativeEvent": "PreCompact", "state": "supported" },
-      "config/change": { "nativeEvent": "ConfigChange", "state": "supported" },
-      "file/change": { "nativeEvent": "FileChanged", "state": "supported" },
-      "model-switch/after": { "nativeEvent": "PostModelSwitch", "state": "supported" },
-      "model-switch/before": { "nativeEvent": "PreModelSwitch", "state": "supported" },
-      "permission/denied": { "nativeEvent": "PermissionDenied", "state": "supported" },
-      "permission/request": { "nativeEvent": "PermissionRequest", "state": "supported" },
-      "prompt/submit": { "nativeEvent": "UserPromptSubmit", "state": "supported" },
-      "session/end": { "nativeEvent": "SessionEnd", "state": "supported" },
-      "session/start": { "nativeEvent": "SessionStart", "state": "supported" },
-      "stop": { "nativeEvent": "Stop", "state": "supported" },
-      "stop/failure": { "nativeEvent": "StopFailure", "state": "supported" },
-      "task/complete": { "nativeEvent": "TaskCompleted", "state": "supported" },
-      "task/create": { "nativeEvent": "TaskCreated", "state": "supported" },
-      "tool/after": { "nativeEvent": "PostToolUse", "state": "supported" },
-      "tool/before": { "nativeEvent": "PreToolUse", "state": "supported" },
-      "tool/failure": { "nativeEvent": "PostToolUseFailure", "state": "supported" },
+      "agent/idle": {
+        "nativeEvent": "TeammateIdle",
+        "payload": {
+          "agentId": "agent_id",
+          "agentType": "agent_type",
+          "cwd": "cwd",
+          "permissionMode": "permission_mode",
+          "sessionId": "session_id",
+          "teammateName": "teammate_name",
+          "teamName": "team_name",
+          "transcriptPath": "transcript_path"
+        },
+        "state": "supported"
+      },
+      "agent/start": {
+        "nativeEvent": "SubagentStart",
+        "payload": {
+          "agentId": "agent_id",
+          "agentType": "agent_type",
+          "cwd": "cwd",
+          "permissionMode": "permission_mode",
+          "sessionId": "session_id",
+          "transcriptPath": "transcript_path"
+        },
+        "state": "supported"
+      },
+      "agent/stop": {
+        "nativeEvent": "SubagentStop",
+        "payload": {
+          "agentId": "agent_id",
+          "agentTranscriptPath": "agent_transcript_path",
+          "agentType": "agent_type",
+          "cwd": "cwd",
+          "lastAssistantMessage": "last_assistant_message",
+          "permissionMode": "permission_mode",
+          "reentry": "stop_hook_active",
+          "sessionId": "session_id",
+          "transcriptPath": "transcript_path"
+        },
+        "state": "supported"
+      },
+      "compact/after": {
+        "nativeEvent": "PostCompact",
+        "payload": {
+          "agentId": "agent_id",
+          "agentType": "agent_type",
+          "cwd": "cwd",
+          "permissionMode": "permission_mode",
+          "sessionId": "session_id",
+          "transcriptPath": "transcript_path",
+          "trigger": "trigger"
+        },
+        "state": "supported"
+      },
+      "compact/before": {
+        "nativeEvent": "PreCompact",
+        "payload": {
+          "agentId": "agent_id",
+          "agentType": "agent_type",
+          "cwd": "cwd",
+          "permissionMode": "permission_mode",
+          "sessionId": "session_id",
+          "transcriptPath": "transcript_path",
+          "trigger": "trigger"
+        },
+        "state": "supported"
+      },
+      "config/change": {
+        "nativeEvent": "ConfigChange",
+        "payload": {
+          "agentId": "agent_id",
+          "agentType": "agent_type",
+          "cwd": "cwd",
+          "filePath": "file_path",
+          "permissionMode": "permission_mode",
+          "sessionId": "session_id",
+          "source": "source",
+          "transcriptPath": "transcript_path"
+        },
+        "state": "supported"
+      },
+      "file/change": {
+        "nativeEvent": "FileChanged",
+        "payload": {
+          "agentId": "agent_id",
+          "agentType": "agent_type",
+          "cwd": "cwd",
+          "filePath": "file_path",
+          "permissionMode": "permission_mode",
+          "sessionId": "session_id",
+          "transcriptPath": "transcript_path"
+        },
+        "state": "supported"
+      },
+      "model-switch/after": {
+        "nativeEvent": "PostModelSwitch",
+        "payload": {
+          "agentId": "agent_id",
+          "agentType": "agent_type",
+          "cwd": "cwd",
+          "fromModel": "from_model",
+          "permissionMode": "permission_mode",
+          "requestedModel": "requested_model",
+          "sessionId": "session_id",
+          "source": "source",
+          "toModel": "to_model",
+          "transcriptPath": "transcript_path"
+        },
+        "state": "supported"
+      },
+      "model-switch/before": {
+        "nativeEvent": "PreModelSwitch",
+        "payload": {
+          "agentId": "agent_id",
+          "agentType": "agent_type",
+          "cwd": "cwd",
+          "fromModel": "from_model",
+          "permissionMode": "permission_mode",
+          "requestedModel": "requested_model",
+          "sessionId": "session_id",
+          "source": "source",
+          "toModel": "to_model",
+          "transcriptPath": "transcript_path"
+        },
+        "state": "supported"
+      },
+      "permission/denied": {
+        "nativeEvent": "PermissionDenied",
+        "payload": {
+          "agentId": "agent_id",
+          "agentType": "agent_type",
+          "cwd": "cwd",
+          "permissionMode": "permission_mode",
+          "sessionId": "session_id",
+          "toolInput": "tool_input",
+          "toolName": "tool_name",
+          "transcriptPath": "transcript_path"
+        },
+        "state": "supported"
+      },
+      "permission/request": {
+        "nativeEvent": "PermissionRequest",
+        "payload": {
+          "agentId": "agent_id",
+          "agentType": "agent_type",
+          "cwd": "cwd",
+          "permissionMode": "permission_mode",
+          "sessionId": "session_id",
+          "toolInput": "tool_input",
+          "toolName": "tool_name",
+          "transcriptPath": "transcript_path"
+        },
+        "state": "supported"
+      },
+      "prompt/submit": {
+        "nativeEvent": "UserPromptSubmit",
+        "payload": {
+          "agentId": "agent_id",
+          "agentType": "agent_type",
+          "cwd": "cwd",
+          "permissionMode": "permission_mode",
+          "prompt": "prompt",
+          "sessionId": "session_id",
+          "transcriptPath": "transcript_path"
+        },
+        "state": "supported"
+      },
+      "session/end": {
+        "nativeEvent": "SessionEnd",
+        "payload": {
+          "agentId": "agent_id",
+          "agentType": "agent_type",
+          "cwd": "cwd",
+          "permissionMode": "permission_mode",
+          "reason": "reason",
+          "sessionId": "session_id",
+          "transcriptPath": "transcript_path"
+        },
+        "state": "supported"
+      },
+      "session/start": {
+        "nativeEvent": "SessionStart",
+        "payload": {
+          "agentId": "agent_id",
+          "agentType": "agent_type",
+          "cwd": "cwd",
+          "model": "model",
+          "permissionMode": "permission_mode",
+          "sessionId": "session_id",
+          "source": "source",
+          "transcriptPath": "transcript_path"
+        },
+        "state": "supported"
+      },
+      "stop": {
+        "nativeEvent": "Stop",
+        "payload": {
+          "agentId": "agent_id",
+          "agentType": "agent_type",
+          "cwd": "cwd",
+          "lastAssistantMessage": "last_assistant_message",
+          "permissionMode": "permission_mode",
+          "reentry": "stop_hook_active",
+          "sessionId": "session_id",
+          "transcriptPath": "transcript_path"
+        },
+        "state": "supported"
+      },
+      "stop/failure": {
+        "nativeEvent": "StopFailure",
+        "payload": {
+          "agentId": "agent_id",
+          "agentType": "agent_type",
+          "cwd": "cwd",
+          "error": "error",
+          "lastAssistantMessage": "last_assistant_message",
+          "permissionMode": "permission_mode",
+          "reentry": "stop_hook_active",
+          "sessionId": "session_id",
+          "transcriptPath": "transcript_path"
+        },
+        "state": "supported"
+      },
+      "task/complete": {
+        "nativeEvent": "TaskCompleted",
+        "payload": {
+          "agentId": "agent_id",
+          "agentType": "agent_type",
+          "cwd": "cwd",
+          "permissionMode": "permission_mode",
+          "sessionId": "session_id",
+          "taskDescription": "task_description",
+          "taskId": "task_id",
+          "taskSubject": "task_subject",
+          "teammateName": "teammate_name",
+          "teamName": "team_name",
+          "transcriptPath": "transcript_path"
+        },
+        "state": "supported"
+      },
+      "task/create": {
+        "nativeEvent": "TaskCreated",
+        "payload": {
+          "agentId": "agent_id",
+          "agentType": "agent_type",
+          "cwd": "cwd",
+          "permissionMode": "permission_mode",
+          "sessionId": "session_id",
+          "taskDescription": "task_description",
+          "taskId": "task_id",
+          "taskSubject": "task_subject",
+          "teammateName": "teammate_name",
+          "teamName": "team_name",
+          "transcriptPath": "transcript_path"
+        },
+        "state": "supported"
+      },
+      "tool/after": {
+        "nativeEvent": "PostToolUse",
+        "payload": {
+          "agentId": "agent_id",
+          "agentType": "agent_type",
+          "cwd": "cwd",
+          "permissionMode": "permission_mode",
+          "sessionId": "session_id",
+          "toolInput": "tool_input",
+          "toolName": "tool_name",
+          "toolResponse": "tool_response",
+          "toolUseId": "tool_use_id",
+          "transcriptPath": "transcript_path"
+        },
+        "state": "supported"
+      },
+      "tool/before": {
+        "nativeEvent": "PreToolUse",
+        "payload": {
+          "agentId": "agent_id",
+          "agentType": "agent_type",
+          "cwd": "cwd",
+          "permissionMode": "permission_mode",
+          "sessionId": "session_id",
+          "toolInput": "tool_input",
+          "toolName": "tool_name",
+          "toolUseId": "tool_use_id",
+          "transcriptPath": "transcript_path"
+        },
+        "state": "supported"
+      },
+      "tool/failure": {
+        "nativeEvent": "PostToolUseFailure",
+        "payload": {
+          "cwd": "cwd",
+          "error": "error",
+          "isInterrupt": "is_interrupt",
+          "sessionId": "session_id",
+          "toolInput": "tool_input",
+          "toolName": "tool_name",
+          "toolUseId": "tool_use_id",
+          "transcriptPath": "transcript_path"
+        },
+        "state": "supported"
+      },
       "workspace/open": {
         "reason": "The pinned Claude Code 2.1.260 hooks contract has no workspace-open event.",
         "state": "unavailable"

@@ -18,8 +18,7 @@ export const config = {
 
 export default async function Stop({
   canonical,
-  native,
-}: AgentEventRouteProps) {
+}: AgentEventRouteProps<'stop'>) {
   const currentWorktree = await worktree();
   if (currentWorktree.state === 'unavailable') {
     return (
@@ -28,9 +27,9 @@ export default async function Stop({
       </Agent.Result>
     );
   }
-  // A stop names its own actor through the runtime lineage or the native
-  // `agent_id`; only an anonymous stop falls back to the worktree binding.
-  const carried = await carriedChild(native);
+  // A stop names its own actor through the runtime lineage or the payload's
+  // `agentId`; only an anonymous stop falls back to the worktree binding.
+  const carried = await carriedChild(canonical.payload);
   const topologyResult = await withTopology(async (topology): Promise<ResolvedActor> => {
     const resolved: ResolvedActor = carried === undefined
       ? (await actorForWorktree(topology, currentWorktree, canonical)).actor

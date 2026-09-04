@@ -195,21 +195,57 @@ export const config = {
   tools: ['file.write'], // canonical selector -> per-host native matcher
 } satisfies AgentEventRouteConfig;
 
-export default async function AfterFileEdit({ canonical, native, signal }: AgentEventRouteProps) {
+export default async function AfterFileEdit({ canonical, native, signal }: AgentEventRouteProps<'tool/after'>) {
   // canonical.provenance = { host, hostContractRevision, nativeEvent, source: 'native' }
+  // canonical.payload.toolName = { value: 'Write', nativeKey: 'tool_name' } on every host
+  const tool = canonical.payload.toolName?.value ?? 'a tool';
   return (
     <Agent.Result>
-      <Agent.Context>{`Recorded an edit reported by ${canonical.provenance.host}.`}</Agent.Context>
+      <Agent.Context>{`Recorded an edit by ${tool}, reported by ${canonical.provenance.host}.`}</Agent.Context>
     </Agent.Result>
   );
 }
 ```
 
 `canonical` is the cross-host identity the framework derives — `event`, an `idempotencyKey`
-hashed from the event, target, and native payload, `observedAt`, a `sequence`, and the
-`provenance` naming the host and the native event that fired. `native` is a frozen snapshot of
-the validated host envelope. Nothing in `canonical` is fabricated: a host that does not report an
-axis leaves it unavailable.
+hashed from the event, target, and native payload, `observedAt`, a `sequence`, the
+`provenance` naming the host and the native event that fired, and the family's canonical
+`payload`. `native` is a frozen snapshot of the validated host envelope. Nothing in
+`canonical` is fabricated: a host that does not report a field leaves it absent.
+
+### The canonical payload
+
+`canonical.payload` is the cross-host reading of the envelope for the route's family: the
+fields at least two hosts report under their own names — `toolName`, `toolInput`, and
+`toolResponse` on the tool families, `sessionId` (Claude and Codex `session_id`, Cursor
+`conversation_id`), `transcriptPath`, `cwd`, `prompt`, `agentId` and `agentType`, `reentry` (Claude
+and Codex `stop_hook_active`, Cursor `loop_count > 0`), and so on. Each field arrives as
+`{ value, nativeKey }`: the decoded value beside the host key it was read from, so a route can tell
+a mapped field from a missing one and still name the host's spelling in its own output. A field
+the host did not send is `undefined`, never defaulted. Two readings go beyond the key: Cursor's
+`tool_output` JSON string is parsed into `toolResponse` (and kept as the string when it is not
+valid JSON), and Cursor's `loop_count` counter becomes the `reentry` boolean.
+
+Type the route to its family — `AgentEventRouteProps<'tool/after'>` — and `payload` narrows to
+that family's fields, so reading `payload.reentry` on a tool route is a compile error; the
+generated `.agent-bundle/routes.d.ts` carries the same narrowing into `renderRoute`. A route
+typed with the bare `AgentEventRouteProps` sees every field as optional. Anything the payload does
+not model — Cursor's `attachments`, Claude's `background_tasks`, a host-only `duration` — is still
+on `native`. The per-family, per-host table (field × host → native key) is the
+[Canonical payload fields](../../reference/events.md#canonical-payload-fields) section of the
+generated events reference, rendered from the pinned capability tables; the runtime reads the same
+table, exported as `agentEventPayloadFields` and `agentEventPayloadNativeKeys`.
+
+Route-unit tests build the same props from a host envelope with `createEventRouteInput` from
+`agent-bundle/test`, so a fixture exercises `payload` rather than hand-written identity:
+
+```ts
+import { createEventRouteInput, renderRoute } from 'agent-bundle/test';
+
+const rendered = await renderRoute('event:tool/after', {
+  input: createEventRouteInput('tool/after', claudePostToolUseEnvelope, { host: 'claude' }),
+});
+```
 
 The route answers through its rendered document. `Agent.Context` text becomes the host's
 additional-context channel, and `Agent.Result`'s `value` may carry

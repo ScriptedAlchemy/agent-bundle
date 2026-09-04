@@ -4,7 +4,7 @@ import React from 'react';
 
 import { worktree } from '../../api.js';
 import { withNotices, withTopology } from '../../coordination.js';
-import { ROOT_ACTOR_PREFIX, deliveryContexts, nativeString, requestLineage } from '../../event-support.js';
+import { ROOT_ACTOR_PREFIX, deliveryContexts, nonEmpty, requestLineage } from '../../event-support.js';
 
 export const config = {
   runtime: 'shared',
@@ -13,8 +13,7 @@ export const config = {
 
 export default async function SessionStart({
   canonical,
-  native,
-}: AgentEventRouteProps) {
+}: AgentEventRouteProps<'session/start'>) {
   const currentWorktree = await worktree();
   if (currentWorktree.state === 'unavailable') {
     return (
@@ -24,12 +23,13 @@ export default async function SessionStart({
     );
   }
   // The runtime's lineage names the root conversation on every host; the
-  // native `session_id` is the fallback when no lineage was resolved.
+  // payload's `sessionId` (Claude and Codex `session_id`) is the fallback when
+  // no lineage was resolved.
   const lineage = await requestLineage();
   const root = lineage.state === 'available'
     ? { id: lineage.value.root, source: lineage.value.resolution }
     : (() => {
-        const sessionId = nativeString(native, 'session_id');
+        const sessionId = nonEmpty(canonical.payload.sessionId?.value);
         return sessionId === undefined ? undefined : { id: sessionId, source: 'native' as const };
       })();
   if (root === undefined) {

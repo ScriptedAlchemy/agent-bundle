@@ -30,6 +30,7 @@ const replay = {
     event: 'tool/after',
     idempotencyKey: 'receipt-a',
     observedAt: '2026-09-01T12:00:00.000Z',
+    payload: { toolName: { nativeKey: 'tool_name', value: 'Write' } },
     provenance: {
       host: 'claude',
       hostContractRevision: 'claude-hooks@1',
@@ -186,6 +187,9 @@ it('rejects surplus fields at every lifecycle response boundary', async () => {
     },
     { replay: { ...replay, version: 1 } },
     { replay: { ...replay, canonical: { ...replay.canonical, version: 1 } } },
+    // A payload field is exactly `{ nativeKey, value }`; a stray member is rejected like any other drift.
+    { replay: { ...replay, canonical: { ...replay.canonical, payload: { toolName: { nativeKey: 'tool_name', value: 'Write', version: 1 } } } } },
+    { replay: { ...replay, canonical: { ...replay.canonical, payload: { toolName: { value: 'Write' } } } } },
     { replay: { ...replay, requestContext: { ...replay.requestContext, version: 1 } } },
     {
       replay: {

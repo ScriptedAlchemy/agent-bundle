@@ -9,6 +9,7 @@ import type {
   AgentEventRouteProps,
   CanonicalAgentEvent,
 } from '../routes/public.ts';
+import { projectEventPayload } from './payload.ts';
 
 /**
  * The route result vocabulary. `continue` (or no value at all) is the
@@ -418,21 +419,32 @@ export const validateNativeEventEnvelope = (
   return native;
 };
 
-export const createCanonicalEventProps = (
-  event: CanonicalAgentEvent,
+/**
+ * Builds the props an event route receives from one validated native
+ * envelope: the frozen `native` snapshot beside the canonical identity, whose
+ * `payload` is the family's cross-host reading of that same envelope. Every
+ * surface that renders an event route — the standalone hook wrapper, the
+ * shared runtime, `agent-bundle/test`, and the Workbench replay — goes
+ * through here, so the payload can never disagree between them.
+ */
+export const createCanonicalEventProps = <E extends CanonicalAgentEvent>(
+  event: E,
   nativeInput: Readonly<Record<string, unknown>>,
   target: string,
   nativeEvent: string,
   hostContractRevision: string,
   signal: AbortSignal,
-): AgentEventRouteProps => {
+): AgentEventRouteProps<E> => {
   const native = snapshotNative(nativeInput);
-  const canonical: AgentEventCanonicalIdentity = Object.freeze({
+  const canonical: AgentEventCanonicalIdentity<E> = Object.freeze({
     event,
+    // The key hashes the envelope, not the payload: the payload is derived, so
+    // a mapping-table change never re-identifies an already-observed event.
     idempotencyKey: createHash('sha256')
       .update(JSON.stringify({ event, native, target }), 'utf8')
       .digest('hex'),
     observedAt: new Date().toISOString(),
+    payload: projectEventPayload(event, native, target),
     provenance: Object.freeze({
       host: target,
       hostContractRevision,
