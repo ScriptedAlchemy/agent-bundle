@@ -158,6 +158,35 @@ interface AgentTerminal {
 [包入口](./package-entries.mdx#可执行封套)）。在测试中，`invokeCli` 与 `runScript` 的 `tty` 开关会塑造
 一个确定性的合成值，而 `context.terminal` 则可以像注入任何身份轴一样注入其他取值。
 
+### 请求上下文 provider
+
+约定式的 `src/providers/<name>.ts` 模块默认导出一个工厂函数，其返回值在每个生成表面上挂载到
+`(await agent()).providers.<camelCaseName>`。除了表面特定的 `invocation` 和请求 `signal` 之外，工厂
+还会收到路由将要读到的请求本身——`host`、`session`、`workspace`、`plugin` 与 `lineage`（含 `tree`），
+即同样的 `Observed` 值、同样的来源——以及已挂载句柄的只读视图：项目声明了 `src/state.ts` 时的
+`state`（仅 `read`），作用域挂载了通知账本时的 `notices`（仅 `inbox` 与 `published`）。因此 provider
+可以派生共享状态的一个视图——拓扑、对等节点列表、本代理发布的通知的去向——但不能派发状态事件或发布通知；
+这些仍然只属于路由。
+
+```ts
+// src/providers/agent-topology.ts
+import type { AgentProviderContext } from 'agent-bundle';
+
+export default async function agentTopology({ lineage, state }: AgentProviderContext) {
+  const snapshot = state === undefined ? undefined : await state.read();
+  return {
+    peers: lineage.state === 'available' ? lineage.value.tree?.siblings ?? [] : [],
+    revision: snapshot?.revision,
+  };
+}
+```
+
+provider 每个请求作为该请求自己的解析器运行一次：在 `runAgentRequest` 冻结身份轴、打开通知租约之后，
+在路由之前，按确定的键顺序，并且在请求的异步上下文之外（工厂里调用 `agent()` 会抛出
+`outside-invocation`）。抛出异常的工厂会使请求失败关闭；预期中的降级应返回一个诚实的 unavailable
+形状的值。`agent-bundle/test` 测试装置把同样的视图交给它的 provider，因此注入了 `context.lineage`
+或挂载了状态的路由单元测试会在 `providers.<key>` 中看到它们；显式的 `context.providers` 映射会被原样挂载。
+
 ## 流式输出与进度
 
 路由通过渲染 React `Suspense` 实现流式输出：外壳（shell）先带着回退内容发出，之后每个解析完成的

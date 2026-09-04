@@ -17,7 +17,7 @@ import {
 } from 'agent-bundle/test';
 
 import BeforeTool from '../../src/events/tool/before.js';
-import agentTopologyProvider from '../../src/providers/agent-topology.js';
+import agentTopologyProvider, { type AgentTopologyProviderValue } from '../../src/providers/agent-topology.js';
 import type { IntentEvents, IntentState } from '../../src/state.js';
 
 const manifest = testManifest();
@@ -45,13 +45,34 @@ const provider = (root: string) => ({
 });
 
 // The generated `.agent-bundle/routes.d.ts` (in this project's tsconfig program)
-// makes every declared provider key required on an explicit map, so the fixture
-// carries `agentTopology` too; its factory is pure and reports the same honest
-// unavailable value the harness would mount.
+// makes every declared provider key required on an explicit map, so the event
+// fixtures carry `agentTopology` too, as an honest unavailable snapshot: event
+// routes never read it. The coordinator `status` tests pass no `providers` at
+// all, so the harness runs the project's real providers as the request's
+// resolver — over the mounted state handle, the notice lease, and the injected
+// `lineage` — exactly as a generated scope would (#459).
+const noTopology: AgentTopologyProviderValue = {
+  agents: { reason: 'fixture: not resolved', state: 'unavailable' },
+  intent: { reason: 'fixture: not read', state: 'unavailable' },
+  notices: {
+    acknowledged: 0,
+    attempted: 0,
+    expired: 0,
+    pending: 0,
+    reason: 'fixture: not read',
+    state: 'unavailable',
+    total: 0,
+    unavailable: 0,
+    withdrawn: 0,
+  },
+};
 const providers = (root: string) => ({
-  agentTopology: agentTopologyProvider(),
+  agentTopology: noTopology,
   gitWorktree: provider(root),
 });
+
+/** The identity axes a direct factory call receives when nothing observed them. */
+const unobserved = { reason: 'not-provided', state: 'unavailable' } as const;
 
 // The harness projects the envelope into `canonical.payload` exactly as the
 // artifact does; the journeys keep their own readable idempotency keys and
@@ -495,10 +516,7 @@ describe('worktree proximity journeys', () => {
     await recordIntent('agent-b', worktrees.b, 'src/shared.ts', 'intent:b');
 
     const rendered = await renderRoute('tool:coordinator/status', {
-      context: {
-        ...mounted.context(),
-        providers: providers(worktrees.root),
-      },
+      context: mounted.context(),
       input: {},
     });
 
@@ -528,7 +546,6 @@ describe('worktree proximity journeys', () => {
       context: {
         ...mounted.context(),
         lineage: childLineageWithTree('agent-a', ['agent-b']),
-        providers: providers(worktrees.a),
       },
       input: {},
     });
@@ -625,12 +642,13 @@ describe('worktree proximity journeys', () => {
     // An MCP tool call from the same agent: the client name, MCP session id,
     // and server cwd all differ from the hook that published — the lineage
     // conversation is what identifies the publisher.
+    // No explicit `providers`: the real `agent-topology` factory runs as the
+    // request's resolver and counts `notices.published()` for this principal.
     const statusFor = (conversation: string) => renderRoute('tool:coordinator/status', {
       context: {
         ...mounted.context(),
         host: available({ name: 'claude-code' }, 'native'),
         lineage: childLineage(conversation),
-        providers: providers(worktrees.root),
         session: available({ sessionId: 'mcp-session' }, 'native'),
         workspace: available({ root: worktrees.root }, 'derived'),
       },
@@ -672,6 +690,83 @@ describe('worktree proximity journeys', () => {
     expect(recipientAfter.inbox).toEqual([]);
     expect(recipientAfter.published).toEqual([]);
     expect((await noticesOf('agent-b', worktrees.b)).inbox).toEqual([]);
+  });
+
+  it('assembles the agent-topology provider value from the request view: lineage tree, a read of the intent state, and published-notice counts (#459)', async () => {
+    await bindActors();
+    await recordIntent('agent-a', worktrees.a, 'src/shared.ts', 'intent:a');
+    // agent-b's intent publishes the proximity notice addressed to agent-a.
+    await recordIntent('agent-b', worktrees.b, 'src/shared.ts', 'intent:b');
+    // The factory over the read-only view a generated scope hands it: the
+    // request's lineage, the mounted state handle (its `read` only), and the
+    // notice handle the request opened for agent-b's principal.
+    const topology = await runAgentRequest({
+      ...mounted.context(),
+      host: available({ name: 'claude' }, 'native'),
+      invocation: { id: 'invocation:topology', kind: 'tool', startedAt: '2026-09-01T20:05:00.000Z' },
+      lineage: childLineageWithTree('agent-b', ['agent-a']),
+      providers: providers(worktrees.b),
+      session: available({ sessionId: 'root-session' }, 'native'),
+      workspace: available({ root: worktrees.b }, 'native'),
+    }, async () => {
+      const request = await agent();
+      const notices = request.notices!;
+      const state = request.state!;
+      return agentTopologyProvider({
+        host: request.host,
+        invocation: { kind: 'tool', props: { input: {}, operationId: 'tool:coordinator/status' } },
+        lineage: request.lineage,
+        notices: { inbox: () => notices.inbox(), published: () => notices.published() },
+        plugin: request.plugin,
+        session: request.session,
+        signal: request.signal,
+        state: { lifetime: state.lifetime, read: (options) => state.read(options) },
+        workspace: request.workspace,
+      });
+    });
+    expect(topology.agents).toMatchObject({ conversation: 'agent-b', siblings: [rootPeer, childPeer('agent-a')], state: 'available' });
+    expect(topology.intent.state).toBe('available');
+    if (topology.intent.state !== 'available') throw new Error('unreachable');
+    expect(topology.intent.value.value.bindings.map((binding) => binding.actorId)).toEqual(['root-session', 'agent-a', 'agent-b']);
+    expect(topology.intent.value.value.activities.map((activity) => activity.actorId)).toEqual(['agent-a', 'agent-b']);
+    expect(topology.intent.value.revision).toBeGreaterThan(0);
+    // agent-b published one notice (to agent-a), still pending: the provider counts exactly that.
+    expect(topology.notices).toEqual({
+      acknowledged: 0,
+      attempted: 0,
+      expired: 0,
+      pending: 1,
+      state: 'available',
+      total: 1,
+      unavailable: 0,
+      withdrawn: 0,
+    });
+    // Without a mounted state handle or notice ledger the provider says so
+    // instead of opening a store of its own.
+    const stateless = await agentTopologyProvider({
+      host: unobserved,
+      invocation: { kind: 'cli', props: { args: [], command: 'status' } },
+      lineage: { reason: 'unsupported-surface', state: 'unavailable' },
+      plugin: unobserved,
+      session: unobserved,
+      signal: new AbortController().signal,
+      workspace: unobserved,
+    });
+    expect(stateless).toEqual({
+      agents: { reason: 'lineage unavailable (unsupported-surface)', state: 'unavailable' },
+      intent: { reason: 'Intent state unavailable: this surface mounts no state handle.', state: 'unavailable' },
+      notices: {
+        acknowledged: 0,
+        attempted: 0,
+        expired: 0,
+        pending: 0,
+        reason: 'Published notices unavailable: this surface mounts no notice ledger.',
+        state: 'unavailable',
+        total: 0,
+        unavailable: 0,
+        withdrawn: 0,
+      },
+    });
   });
 
   it('renders state unavailability when an event module has no mounted handle', async () => {
