@@ -41,6 +41,13 @@ refused. Operations are trusted-local only.
 Raw HTML, JSX/MDX, and Mermaid in Skill Markdown are **inert** in the Workbench renderer. A Skill
 document is content to display, not markup to execute.
 
+`agent-bundle serve-app` follows the same model for one MCP App: loopback only, one process
+lifetime, one bound server. Its `/api/mcp/...` routes require a per-launch token that only the served
+document holds, plus same-origin and loopback `Host` checks; the App document runs on a second
+loopback origin inside the framework sandbox, and every App action still crosses the same consent
+authority as in the Workbench (`--allow` pre-approves named capabilities on the operator's behalf).
+It is a local preview host, not a deployment target.
+
 ## The Agent API
 
 The Agent API is off by default. When enabled it is an authenticated Streamable HTTP MCP endpoint
