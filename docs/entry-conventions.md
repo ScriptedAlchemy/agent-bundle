@@ -639,6 +639,8 @@ Per surface, the value the generated request scope mounts:
 | Generated MCP server (any transport) | `mcp` | `none` on both, `color: 'none'`, `sharesTarget: false` — stdout is the protocol wire and stderr the host's log. Never probed, whatever the descriptors are. | `derived` |
 | Event route (shared runtime or standalone hook process) | `hook` | `none` on both — stdout is the host's hook envelope. Never probed. | `derived` |
 | Workbench lifecycle replay | `workbench` | `none` on both — the document renders into a panel. | `derived` |
+| `createRscMcpServer` (the `defineRscApplication` MCP adapter) | `mcp` | `none` on both, as above. | `derived` |
+| `runRscCli` (the `defineRscApplication` CLI adapter) | `cli` when the caller passes `terminal` in its options | The adapter owns no probe — the generated routed-CLI shell does — so the caller's value is mounted `native`; omitted, the axis is `unavailable` (`not-provided`). | `native` / — |
 | Custom host calling `runAgentRequest` without `terminal` | — | `unavailable` (`not-provided`) | — |
 
 Plain `main`-exporting scripts and bins have no request scope, so the

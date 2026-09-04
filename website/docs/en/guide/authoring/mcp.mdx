@@ -146,6 +146,7 @@ advertise while a pipe renders none. `COLUMNS`/`LINES` override the reported siz
 | Generated MCP server | `mcp` | `none` on both — stdout is the protocol wire, stderr the host's log. Never probed, never guessed. |
 | Event route (shared runtime or standalone hook) | `hook` | `none` on both — stdout is the host's hook envelope. |
 | Workbench lifecycle replay | `workbench` | `none` on both. |
+| `defineRscApplication` adapters | `mcp` / `cli` | `createRscMcpServer` mounts `none` on both; `runRscCli` owns no probe and mounts the `terminal` its caller passes in the options, else `unavailable` (`not-provided`). |
 | A custom host that mounts none | — | `unavailable` (`not-provided`). |
 
 A plain `main`-exporting script or bin has no request scope; its envelope passes the same value
