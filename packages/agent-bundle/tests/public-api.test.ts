@@ -3,7 +3,7 @@ import { execFile as executeFile } from 'node:child_process';
 import { access, mkdtemp, mkdir, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
@@ -168,6 +168,61 @@ it('publishes directly executable built entrypoints with declarations', async ()
   const { stdout } = await execFile(binPath, ['--version']);
   expect(stdout).toBe(`${manifest.version}\n`);
 }, 15_000);
+
+/**
+ * Declaration files each public export reaches, by breadth-first walk over
+ * the relative `import`/`export ... from` specifiers of the emitted `.d.ts`
+ * graph (per-file declarations, `dts.bundle: false`).
+ */
+const reachableDeclarations = async (entry: string): Promise<ReadonlyMap<string, string>> => {
+  const specifierPattern = /(?:from\s+|import\s*\(\s*)["']([^"']+)["']/gu;
+  const resolveRelative = async (from: string, specifier: string): Promise<string | undefined> => {
+    if (!specifier.startsWith('.')) return undefined;
+    const base = join(dirname(from), specifier).replace(/\.ts$/u, '');
+    for (const candidate of [`${base}.d.ts`, `${base}/index.d.ts`]) {
+      try {
+        await access(candidate);
+        return candidate;
+      } catch {
+        // try the next candidate
+      }
+    }
+    return undefined;
+  };
+  const seen = new Map<string, string>();
+  const queue = [entry];
+  while (queue.length > 0) {
+    const file = queue.shift()!;
+    if (seen.has(file)) continue;
+    const source = await readFile(file, 'utf8');
+    seen.set(file, source);
+    for (const match of source.matchAll(specifierPattern)) {
+      const next = await resolveRelative(file, match[1]!);
+      if (next !== undefined && !seen.has(next)) queue.push(next);
+    }
+  }
+  return seen;
+};
+
+it('keeps every public declaration graph free of effect', async () => {
+  // Effect is an implementation detail (docs/effect-conventions.md § Boundary
+  // modules): a consumer's `tsc` resolves every declaration the exports
+  // reach, so one `import ... from 'effect'` in a reachable `.d.ts` (for
+  // example a class extending `src/effect/errors.ts`) makes `effect` a type
+  // dependency of the package. Public entry classes therefore stay on plain
+  // `Error` / `CodedError`, and this pins it for each export.
+  await buildPackage();
+  const manifest = await readPackageManifest();
+  const effectImport = /from\s+["']effect(?:\/|["'])/u;
+  const offenders: string[] = [];
+  for (const [name, entrypoint] of Object.entries(manifest.exports)) {
+    const reachable = await reachableDeclarations(join(packageRoot, entrypoint.types));
+    for (const [file, source] of reachable) {
+      if (effectImport.test(source)) offenders.push(`${name} -> ${relative(packageRoot, file)}`);
+    }
+  }
+  expect(offenders).toEqual([]);
+}, 30_000);
 
 it('writes the package version as the producer of a built CLI manifest', async () => {
   await buildPackage();

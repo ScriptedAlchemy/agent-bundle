@@ -1,6 +1,6 @@
-import { CodedError } from '../core/errors.ts';
 import type { EvalHarnessFailure, EvalHarnessFailureCode, EvalHarnessFailureStage } from './types.ts';
 import { deepFreeze } from '../core/freeze.ts';
+import { YieldableCodedError } from '../effect/errors.ts';
 
 
 export type CodexEvalHarnessErrorCode =
@@ -15,7 +15,7 @@ export type CodexEvalHarnessErrorCode =
   | 'CODEX_TRIAL_CANCELLED';
 
 /** A defect in Agent Bundle or the installed Codex CLI, never evidence about the plugin. */
-export class CodexEvalHarnessError extends CodedError<CodexEvalHarnessErrorCode> {
+export class CodexEvalHarnessError extends YieldableCodedError<CodexEvalHarnessErrorCode> {
   constructor(code: CodexEvalHarnessErrorCode, message: string) {
     super('CodexEvalHarnessError', code, message);
   }
