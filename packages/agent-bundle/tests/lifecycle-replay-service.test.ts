@@ -201,7 +201,7 @@ it('mounts and reports honest receipt provenance for a Workbench replay', async 
     actor: { reason: 'not-provided', state: 'unavailable' },
     host: { source: 'receipt', state: 'available', value: { name: 'claude' } },
     invocation: {
-      hostContractRevision: '2.1.250',
+      hostContractRevision: '2.1.260',
       kind: 'event',
       operationId: 'event:tool/after',
       surface: 'tool/after',
@@ -219,7 +219,7 @@ it('mounts and reports honest receipt provenance for a Workbench replay', async 
     actor: requestContext.actor,
     host: requestContext.host,
     invocation: {
-      hostContractRevision: '2.1.250',
+      hostContractRevision: '2.1.260',
       operationId: 'event:tool/after',
       surface: 'tool/after',
     },

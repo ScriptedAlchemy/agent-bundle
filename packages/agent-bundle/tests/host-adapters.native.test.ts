@@ -10,9 +10,11 @@ import { codexAdapter } from '../src/adapters/codex.ts';
 import { emitPlanEntries } from '../src/build/emit.ts';
 import { pathTokens, type NormalizedPlugin } from '../src/core/types.ts';
 import {
+  claudeSupportsJsonValidationReport,
   validateClaudePlugin,
   type ClaudePluginValidationReport,
 } from '../src/host-contracts/claude-plugin-validation.ts';
+import { parseCliVersion } from '../../../scripts/host-cli-pins.mjs';
 
 const nativeIt = process.env.AGENT_BUNDLE_NATIVE_HOST_CONTRACTS === '1' ? it : it.skip;
 
@@ -533,7 +535,10 @@ nativeIt('pins Claude plugin and marketplace lifecycle command help', async () =
     ]);
 
     expect(version.code, version.output).toBe(0);
-    expect(version.output).toContain('2.1.257');
+    // The proof runs on whatever `claude` is on PATH (CI installs the pinned 2.1.260, the maintainer's
+    // daily CLI may be newer or older); the help surface below is what the re-pin verified byte-identical
+    // from 2.1.250 through 2.1.260 (schemas/claude/PROVENANCE.json repinNotes).
+    expect(version.output).toMatch(/^\d+\.\d+\.\d+ \(Claude Code\)/u);
     expect(pluginHelp.code, pluginHelp.output).toBe(0);
     for (const command of [
       'details',
@@ -554,6 +559,13 @@ nativeIt('pins Claude plugin and marketplace lifecycle command help', async () =
     expect(marketplaceHelp.code, marketplaceHelp.output).toBe(0);
     for (const command of ['add', 'list', 'remove|rm', 'update']) {
       expect(marketplaceHelp.output).toContain(command);
+    }
+    const validateHelp = await runClaude(root, ['plugin', 'validate', '--help'], root);
+    expect(validateHelp.code, validateHelp.output).toBe(0);
+    expect(validateHelp.output).toContain('--strict');
+    // `--json` landed in 2.1.259 (plugins-reference "plugin validate"); an older PATH binary lacks it.
+    if (claudeSupportsJsonValidationReport(parseCliVersion(version.output))) {
+      expect(validateHelp.output).toContain('--json      Output the validation report as JSON (same exit codes)');
     }
   } finally {
     await rm(root, { force: true, recursive: true });
@@ -677,7 +689,7 @@ nativeIt('records that plugin-mode validation warns about a symlinked skill entr
     // plugin-marketplaces → Validate a plugin or a directory without a manifest › Check files behind
     // symlinks: "A linked entry inside a skills, agents, or commands directory: Claude Code skips it
     // and warns, per directory, how many entries it skipped that a session would load." Observed on
-    // Claude Code 2.1.250 (CI pin), 2.1.251, and 2.1.260 as a `skills` directory warning that
+    // Claude Code 2.1.250, 2.1.251, and 2.1.260 (CI pin) as a `skills` directory warning that
     // --strict promotes to exit 1. The validator never names the link target, so containment stays
     // an install-copy check; this proof is that the plugin run reports the skipped entry at all.
     const validation = await validateClaudePluginRoot(root);
@@ -857,6 +869,8 @@ nativeIt('records which source constraints strict Claude marketplace validation 
     {
       expectedCode: 1,
       label: 'short github sha',
+      // 2.1.260 (CI pin) names the field: `plugins.0.source.sha: Must be a full 40-character lowercase
+      // git commit SHA`; 2.1.250 reported only `plugins.0.source: Invalid input` (re-pin evidence).
       output: 'full 40-character lowercase git commit SHA',
       source: { source: 'github', repo: 'acme/review-tools', sha: 'abc123' },
     },

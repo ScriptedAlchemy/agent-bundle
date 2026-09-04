@@ -42,8 +42,8 @@ export interface SkillTokenClassification {
   readonly token: SkillTokenId;
 }
 
-const claudeSkills = 'https://code.claude.com/docs/en/skills (Claude Code 2.1.250 pin)';
-const claudePlugins = 'https://code.claude.com/docs/en/plugins-reference (Claude Code 2.1.250 pin)';
+const claudeSkills = 'https://code.claude.com/docs/en/skills (Claude Code 2.1.260 pin)';
+const claudePlugins = 'https://code.claude.com/docs/en/plugins-reference (Claude Code 2.1.260 pin)';
 const codexSkills = 'https://learn.chatgpt.com/docs/build-skills (Codex 0.147.0 pin)';
 const codexPlugins = 'https://developers.openai.com/plugins/build/plugins (Codex 0.147.0 pin)';
 const cursorSkills = 'https://prod.cursor.com/docs/skills (Cursor 2026-08-28 pin)';

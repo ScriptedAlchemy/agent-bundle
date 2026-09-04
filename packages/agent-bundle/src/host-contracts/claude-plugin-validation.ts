@@ -60,7 +60,7 @@ export interface ValidateClaudePluginOptions {
    * Also run `claude --plugin-dir <bundle-dir> plugin list --json` after the
    * validation runs and read the plugin's row (default `true`). `plugin
    * validate --strict` accepts manifests Claude Code then refuses to load
-   * (observed 2.1.250–2.1.259); the listing's `errors[]` is the only load
+   * (observed 2.1.250–2.1.260); the listing's `errors[]` is the only load
    * verdict. Doctor passes `false` because it runs its own registration proof.
    */
   readonly loadCheck?: boolean;
@@ -264,7 +264,11 @@ interface ClaudeFinding {
 
 type ClaudeValidationRun = 'marketplace' | 'plugin';
 
-/** `claude plugin validate --json` landed in Claude Code 2.1.259 (plugins-reference §plugin validate). */
+/**
+ * `claude plugin validate --json` landed in Claude Code 2.1.259 (plugins-reference
+ * §plugin validate); the pinned 2.1.260 prints it and 2.1.250 answers
+ * `error: unknown option '--json'`.
+ */
 const jsonReportMinimumVersion: readonly [number, number, number] = [2, 1, 259];
 
 const parseVersion = (version: string): readonly [number, number, number] | undefined => {
@@ -272,15 +276,25 @@ const parseVersion = (version: string): readonly [number, number, number] | unde
   return match === null ? undefined : [Number(match[1]), Number(match[2]), Number(match[3])];
 };
 
+/**
+ * Whether to request the JSON report first. `--json` is the primary path: it
+ * is skipped only for a probed version known to predate 2.1.259. An unknown
+ * or unparseable version asks for JSON and falls back to the text reporter
+ * when the CLI rejects the flag (`unknownJsonOption`).
+ */
 export const claudeSupportsJsonValidationReport = (version: string | undefined): boolean => {
-  if (version === undefined) return false;
+  if (version === undefined) return true;
   const parsed = parseVersion(version);
-  if (parsed === undefined) return false;
+  if (parsed === undefined) return true;
   for (let index = 0; index < 3; index += 1) {
     if (parsed[index] !== jsonReportMinimumVersion[index]) return parsed[index] > jsonReportMinimumVersion[index];
   }
   return true;
 };
+
+/** A CLI without `--json` (Claude Code before 2.1.259) rejects the flag on stderr with exit 1. */
+const unknownJsonOption = (result: ClaudePluginCommandResult): boolean =>
+  result.exitCode !== 0 && /unknown option '--json'/u.test(result.stderr);
 
 const relativeToPlugin = (file: string, pluginDirectory: string): string => {
   const absolute = resolve(pluginDirectory, file);
@@ -533,25 +547,32 @@ export const validateClaudePlugin = async (
   if ('report' in probed) return probed.report;
   const version = probed.version;
 
-  const jsonReport = claudeSupportsJsonValidationReport(version);
+  // `--json` first (2.1.259+); a CLI that rejects the flag drops every run
+  // of this validation to the text reporter, so the two runs stay consistent.
+  let jsonReport = claudeSupportsJsonValidationReport(version);
   const findingsByRun: Partial<Record<ClaudeValidationRun, readonly ClaudeFinding[]>> = {};
   for (const validationTarget of await validationTargets(pluginDirectory)) {
     const label = validationTarget.run === 'marketplace'
       ? 'Claude marketplace manifest validation'
       : 'Claude host artifact validation';
+    const validate = (json: boolean): Promise<ClaudePluginCommandResult> => run(Object.freeze({
+      args: Object.freeze([
+        'plugin',
+        'validate',
+        validationTarget.path,
+        '--strict',
+        ...(json ? ['--json'] : []),
+      ]),
+      cwd,
+      executable,
+    }));
     let result: ClaudePluginCommandResult;
     try {
-      result = await run(Object.freeze({
-        args: Object.freeze([
-          'plugin',
-          'validate',
-          validationTarget.path,
-          '--strict',
-          ...(jsonReport ? ['--json'] : []),
-        ]),
-        cwd,
-        executable,
-      }));
+      result = await validate(jsonReport);
+      if (jsonReport && result.termination === undefined && unknownJsonOption(result)) {
+        jsonReport = false;
+        result = await validate(false);
+      }
     } catch {
       return failedReport(`${label} could not be started.`, options.target, version);
     }
