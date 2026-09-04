@@ -107,7 +107,8 @@ export const packageNameOf = (specifier: string): string | undefined =>
  */
 const workspaceProtocol = /^(?:workspace|catalog):/u;
 
-export const isWorkspaceProtocol = (specifier: string): boolean => workspaceProtocol.test(specifier.trim());
+/** Exact-prefix, as the packers test it: `" workspace:*"` is rewritten by none of them and published verbatim. */
+export const isWorkspaceProtocol = (specifier: string): boolean => workspaceProtocol.test(specifier);
 
 /**
  * Whether the package manager running this pack (its `npm_config_user_agent`,
@@ -144,8 +145,9 @@ export type DependencyKind = 'registry' | 'fetched' | 'unparseable';
 
 export const classifyDependency = (name: string, specifier: string): DependencyKind => {
   try {
+    // The manifest value exactly as npm reads it: `" npm:bar@1"` is an invalid dist-tag, not an alias.
     // `where` only anchors path specifiers into a string; nothing touches the disk.
-    return npa.resolve(name, specifier.trim(), '/').registry === true ? 'registry' : 'fetched';
+    return npa.resolve(name, specifier, '/').registry === true ? 'registry' : 'fetched';
   } catch {
     return 'unparseable';
   }
@@ -401,14 +403,19 @@ const packageImportTargets = (packageDocument: Readonly<Record<string, unknown>>
 const installScripts = ['preinstall', 'install', 'postinstall'] as const;
 
 /**
- * One shell command invoking `npm run` (also `pnpm`/`yarn`/`bun`, and
- * `run-script`): the tool, any options before `run` — valueless
- * (`--silent`), valued (`--prefix .`, `--workspace=pkg`) — then the rest of
- * the command up to the next shell operator. Which of those tokens is the
- * script is settled against the manifest's `scripts` rather than by option
- * grammar, since every token that names a script is one the command may run.
+ * One shell command invoking `npm run` (also `pnpm`/`yarn`/`bun`, and npm's
+ * aliases `run-script`, `rum`, `urn`): the tool, any options before the
+ * subcommand — valueless (`--silent`), valued (`--prefix .`,
+ * `--workspace=pkg`) — then the rest of the command up to the next shell
+ * operator. Which of those tokens is the script is settled against the
+ * manifest's `scripts` rather than by option grammar, since every token that
+ * names a script is one the command may run.
  */
-const delegatedRun = /\b(?:npm|pnpm|yarn|bun)\s+(?:(?!run\b)[^\s&|;]+\s+)*run(?:-script)?\b([^&|;\n]*)/gu;
+const runSubcommand = String.raw`(?:run(?:-script)?|rum|urn)\b`;
+const delegatedRun = new RegExp(
+  String.raw`\b(?:npm|pnpm|yarn|bun)\s+(?:(?!${runSubcommand})[^\s&|;]+\s+)*${runSubcommand}([^&|;\n]*)`,
+  'gu',
+);
 
 /**
  * The text a consumer's install lifecycle executes: the lifecycle scripts,

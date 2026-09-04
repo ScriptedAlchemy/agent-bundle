@@ -410,10 +410,11 @@ it('accepts a dependency reached through a package imports map or run by a consu
     document.scripts = {
       ...(document.scripts as Record<string, string> | undefined),
       // `tsc` and `node-pre-gyp` are reached only through delegated run-scripts and their pre/post hooks, behind
-      // options with values (`--prefix .`, `-w .`) and without (`--silent`).
+      // options with values (`--prefix .`, `-w .`) and without (`--silent`), and through npm's `rum` alias.
       postinstall: 'named-in-script --init && npm --silent --prefix . run setup',
       setup: 'echo setup',
-      presetup: 'tsc --version',
+      presetup: 'npm rum typecheck',
+      typecheck: 'tsc --version',
       postsetup: 'pnpm run -w . finish',
       finish: 'node-pre-gyp install && real --check',
       prepare: 'prepare-only --generate',

@@ -86,9 +86,10 @@ it.each([
   ['portal:../local', 'unparseable'],
   ['foo:bar', 'unparseable'],
   ['jsr:@scope/name', 'unparseable'],
-  // Neither a range nor a URL-safe dist-tag (EINVALIDTAGNAME).
+  // Neither a range nor a URL-safe dist-tag (EINVALIDTAGNAME) — including a value npm reads with its whitespace.
   ['not a valid spec', 'unparseable'],
   ['1.2.3+..', 'unparseable'],
+  [' npm:bar@1', 'unparseable'],
 ])('classifyDependency("name", %j) is %s', (specifier, kind) => {
   expect(classifyDependency('name', specifier)).toBe(kind);
 });
@@ -118,7 +119,9 @@ it.each([
 
 it('tells workspace protocols apart and knows which packers rewrite them', () => {
   expect(isWorkspaceProtocol('workspace:*')).toBe(true);
-  expect(isWorkspaceProtocol(' catalog:default')).toBe(true);
+  expect(isWorkspaceProtocol('catalog:default')).toBe(true);
+  // No packer rewrites a value that merely contains the protocol; npm then reads it as an invalid dist-tag.
+  expect(isWorkspaceProtocol(' catalog:default')).toBe(false);
   expect(isWorkspaceProtocol('npm:effect@^4')).toBe(false);
   expect(isWorkspaceProtocol('github:owner/repo')).toBe(false);
   expect(rewritesWorkspaceProtocols('pnpm/10.18.0 npm/? node/v24.0.0 linux x64')).toBe(true);
