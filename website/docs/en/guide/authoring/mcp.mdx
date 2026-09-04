@@ -738,12 +738,19 @@ export default async function dashboard({ input, signal }: CliRouteProps<typeof 
       input.noOpen === true ? '--no-open' : '--open',
     ], { stdio: ['ignore', 'pipe', 'inherit'] });
     let url: string | null = null;
+    let pending = '';
     child.stdout.on('data', (chunk: Buffer) => {
       // The child prints `MCP App <app> at <url> (…)`; relay it to stderr so the routed
-      // CLI keeps stdout for its JSON result.
+      // CLI keeps stdout for its JSON result, and parse whole lines only — one write can
+      // arrive split across chunks.
       const text = chunk.toString('utf8');
       process.stderr.write(text);
-      url ??= /\bat (https?:\/\/\S+)/u.exec(text)?.[1] ?? null;
+      pending += text;
+      const lines = pending.split('\n');
+      pending = lines.pop() ?? '';
+      for (const line of lines) {
+        url ??= /\bat (https?:\/\/\S+)/u.exec(line)?.[1] ?? null;
+      }
     });
     // Ctrl-C reaching the routed CLI becomes the child's SIGTERM.
     signal.addEventListener('abort', () => child.kill('SIGTERM'), { once: true });

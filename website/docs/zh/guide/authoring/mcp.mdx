@@ -663,12 +663,18 @@ export default async function dashboard({ input, signal }: CliRouteProps<typeof 
       input.noOpen === true ? '--no-open' : '--open',
     ], { stdio: ['ignore', 'pipe', 'inherit'] });
     let url: string | null = null;
+    let pending = '';
     child.stdout.on('data', (chunk: Buffer) => {
-      // 子进程打印 `MCP App <app> at <url> (…)`；转发到 stderr，
-      // 让路由式 CLI 的 stdout 留给 JSON 结果。
+      // 子进程打印 `MCP App <app> at <url> (…)`；转发到 stderr，让路由式 CLI 的 stdout
+      // 留给 JSON 结果，并且只解析完整的行——一次写入可能被拆成多个 chunk 到达。
       const text = chunk.toString('utf8');
       process.stderr.write(text);
-      url ??= /\bat (https?:\/\/\S+)/u.exec(text)?.[1] ?? null;
+      pending += text;
+      const lines = pending.split('\n');
+      pending = lines.pop() ?? '';
+      for (const line of lines) {
+        url ??= /\bat (https?:\/\/\S+)/u.exec(line)?.[1] ?? null;
+      }
     });
     // 抵达路由式 CLI 的 Ctrl-C 变成子进程的 SIGTERM。
     signal.addEventListener('abort', () => child.kill('SIGTERM'), { once: true });
