@@ -74,10 +74,11 @@ description: 'MCP App 示例：把一条服务就绪度工作流表达为生成�
 cd examples/mcp-app
 pnpm validate
 pnpm build
+pnpm typecheck
 pnpm exec agent-bundle eval --case status-is-healthy --trials 1
 ```
 
-`pnpm check` 是不打开 Workbench 的“校验加构建”这一对。
+`pnpm check` 在不打开 Workbench 的情况下依次运行校验、构建和类型检查。
 
 ## 在 stdio 上运行服务器
 

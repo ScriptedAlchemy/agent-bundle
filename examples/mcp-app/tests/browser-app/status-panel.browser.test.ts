@@ -1,6 +1,9 @@
 import { afterEach, expect, it } from '@rstest/core';
 
-import { mountBrowserApp, type MountedBrowserApp } from 'agent-bundle/test/browser';
+import { mountBrowserApp, type MountBrowserAppOptions, type MountedBrowserApp } from 'agent-bundle/test/browser';
+
+type BindingOperations = MountBrowserAppOptions['operations'];
+type ToolCallResult = Awaited<ReturnType<BindingOperations['callTool']>>;
 
 const statusResult = Object.freeze({
   content: Object.freeze([Object.freeze({
@@ -33,10 +36,10 @@ const waitFor = async (predicate: () => boolean, timeoutMs = 2_000): Promise<voi
 };
 
 const operations = (options: {
-  readonly callTool?: () => Promise<unknown>;
+  readonly callTool?: () => Promise<ToolCallResult>;
   readonly calls?: string[];
   readonly reads?: string[];
-} = {}) => ({
+} = {}): BindingOperations => ({
   callTool: async (_bindingId: string, request: { readonly name: string }) => {
     options.calls?.push(request.name);
     return options.callTool?.() ?? statusResult;

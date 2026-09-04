@@ -73,6 +73,7 @@ from the example package:
 cd examples/mcp-app
 pnpm validate
 pnpm build
+pnpm typecheck
 pnpm exec agent-bundle eval --case status-is-healthy --trials 1
 pnpm dev
 ```
@@ -95,6 +96,7 @@ variants, by default. Launch environment precedence is manifest env, then
 `--env-file <path>` to replace the conventional files, `--no-env` to skip
 them, and `--plugin-root <path>` only for a copied-artifact rehearsal.
 
-Use `pnpm check` for validation and build without opening the Workbench. The
+Use `pnpm check` for validation, build, and typecheck without opening the
+Workbench. The
 deterministic portable eval and fixture check read only checked-in data and
 require no native Claude/Codex login or API key.
