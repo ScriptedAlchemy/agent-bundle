@@ -6,7 +6,7 @@ import type {
   AgentNoticeRequestLease,
   AgentNoticesHandle,
 } from './notices/contract.js';
-import type { AgentStateHandle } from './state/contract.js';
+import type { AgentStateHandle, AgentStateReadOptions } from './state/contract.js';
 
 // Bumped to 3 when `lineage` joined the handle shape, to 4 when `terminal`
 // did, and to 5 when `plugin` did: a realm that already holds an older store
@@ -447,18 +447,60 @@ export interface AgentRequestContext {
   readonly notices: AgentNoticesHandle | undefined;
 }
 
+/** The read-only view of a mounted state handle a provider resolver receives (#459): `read`, never `dispatch`. */
+export type AgentProviderStateHandle<TState = unknown> = Pick<AgentStateHandle<TState>, 'lifetime' | 'read'>;
+
+/** The read-only view of the request's notice handle a provider resolver receives (#459): `inbox`, never `publish` or `acknowledge`. */
+export type AgentProviderNoticesHandle = Pick<AgentNoticesHandle, 'inbox'>;
+
 /**
- * The `providers` member of {@link AgentRequestInit}. It is optional only while
- * {@link AgentProviderValues} has no required keys. Once a project's generated
- * `.agent-bundle/routes.d.ts` augmentation declares its conventional providers,
- * every direct `runAgentRequest` caller — custom hosts and route-unit fixtures
- * alike — must supply the full record, so a handler typed against those keys
- * never observes an unchecked `undefined`. Generated request scopes always run
- * the providers before the handler and are unaffected.
+ * What a provider resolver may read of the request it runs for (#459): the
+ * observed identity axes and plugin root, the conversation lineage (own chain
+ * and, when the registry placed the request, its live `tree`), the request
+ * signal, and read-only views of the mounted state and notice handles. The
+ * write paths — `state.dispatch`, `notices.publish`/`acknowledge`, `progress`
+ * — stay route-only, and the resolver runs outside the request's async
+ * context, so `agent()` inside a provider factory throws `outside-invocation`
+ * rather than handing it the full handle. Every field is exactly what the
+ * route will observe on `await agent()`.
+ */
+export interface AgentProviderRequest {
+  readonly host: Observed<AgentHostIdentity>;
+  readonly lineage: Observed<AgentLineage>;
+  /** Present only when the request opened a notice lease (`noticeLedger` supplied). */
+  readonly notices?: AgentProviderNoticesHandle;
+  readonly plugin: Observed<AgentPluginIdentity>;
+  readonly session: Observed<AgentSessionIdentity>;
+  readonly signal: AbortSignal;
+  /** Present only when the request mounted a state handle (`state` supplied). */
+  readonly state?: AgentProviderStateHandle;
+  readonly workspace: Observed<AgentWorkspaceIdentity>;
+}
+
+/**
+ * The function form of {@link AgentRequestInit.providers}: resolved once per
+ * request by `runAgentRequest`, after the identity axes are frozen and the
+ * notice lease is open (so `notices.inbox()` is real) and before the
+ * operation runs, over the read-only {@link AgentProviderRequest}. The record
+ * it returns is frozen and mounted as `(await agent()).providers`; a rejection
+ * fails the request closed exactly as a rejected operation does.
+ */
+export type AgentProviderResolver = (request: AgentProviderRequest) => AgentProviderValues | Promise<AgentProviderValues>;
+
+/**
+ * The `providers` member of {@link AgentRequestInit}: the resolved record, or
+ * an {@link AgentProviderResolver} the request runs itself. It is optional
+ * only while {@link AgentProviderValues} has no required keys. Once a
+ * project's generated `.agent-bundle/routes.d.ts` augmentation declares its
+ * conventional providers, every direct `runAgentRequest` caller — custom hosts
+ * and route-unit fixtures alike — must supply the full record (or a resolver
+ * returning it), so a handler typed against those keys never observes an
+ * unchecked `undefined`. Generated request scopes always run the providers
+ * before the handler and are unaffected.
  */
 export type AgentRequestProvidersInit = Record<never, never> extends AgentProviderValues
-  ? { readonly providers?: AgentProviderValues }
-  : { readonly providers: AgentProviderValues };
+  ? { readonly providers?: AgentProviderValues | AgentProviderResolver }
+  : { readonly providers: AgentProviderValues | AgentProviderResolver };
 
 export interface AgentRequestInitBase {
   readonly actor?: Observed<AgentActorIdentity>;
@@ -729,29 +771,81 @@ export const runAgentRequest = async <T>(
       principal: Object.freeze({ actor, host, lineage, session, workspace }),
       signal,
     });
-  const values: FrozenValues = Object.freeze({
-    actor,
-    capabilities: snapshotCapabilities(init.capabilities ?? emptyCapabilities()),
-    host,
-    invocation,
-    lineage,
-    notices: noticeLease?.handle,
-    plugin,
-    progress: init.progress ?? silentProgress,
-    providers: Object.freeze({ ...(init.providers ?? {}) }),
-    services: Object.freeze({ ...(init.services ?? {}) }),
-    session,
-    signal,
-    state: init.state,
-    terminal,
-    workspace,
-  });
-  const lease = new Lease(values);
-
   try {
-    return await getStore().storage.run(lease, operation);
+    // A resolver runs here, after the notice lease opened and before the
+    // operation's async context exists — and outside any enclosing request's
+    // context (an in-process host scope around the render, as the test harness
+    // has), so `agent()` throws `outside-invocation` for it everywhere, exactly
+    // as in a generated worker. It reads the same frozen axes and the real
+    // handles, narrowed to their read paths.
+    const providers = typeof init.providers === 'function'
+      ? await resolveProvidersDetached(init.providers, providerRequest({
+        host,
+        lineage,
+        notices: noticeLease?.handle,
+        plugin,
+        session,
+        signal,
+        state: init.state,
+        workspace,
+      }))
+      : init.providers;
+    const values: FrozenValues = Object.freeze({
+      actor,
+      capabilities: snapshotCapabilities(init.capabilities ?? emptyCapabilities()),
+      host,
+      invocation,
+      lineage,
+      notices: noticeLease?.handle,
+      plugin,
+      progress: init.progress ?? silentProgress,
+      providers: Object.freeze({ ...(providers ?? {}) }),
+      services: Object.freeze({ ...(init.services ?? {}) }),
+      session,
+      signal,
+      state: init.state,
+      terminal,
+      workspace,
+    });
+    const lease = new Lease(values);
+    try {
+      return await getStore().storage.run(lease, operation);
+    } finally {
+      lease.closed = true;
+    }
   } finally {
-    lease.closed = true;
     noticeLease?.close();
   }
 };
+
+/** Runs the resolver with no request lease in its async context, whatever context the caller was in. */
+const resolveProvidersDetached = (
+  resolver: AgentProviderResolver,
+  request: AgentProviderRequest,
+): Promise<AgentProviderValues> => getStore().storage.exit(async () => resolver(request));
+
+/** The frozen request parts a provider view is built from: the axes as snapshotted, the handles as supplied. */
+interface ProviderRequestParts {
+  readonly host: Observed<AgentHostIdentity>;
+  readonly lineage: Observed<AgentLineage>;
+  readonly notices: AgentNoticesHandle | undefined;
+  readonly plugin: Observed<AgentPluginIdentity>;
+  readonly session: Observed<AgentSessionIdentity>;
+  readonly signal: AbortSignal;
+  readonly state: AgentStateHandle | undefined;
+  readonly workspace: Observed<AgentWorkspaceIdentity>;
+}
+
+/** The read-only request view handed to a provider resolver; handles are narrowed by construction, not by type alone. */
+const providerRequest = ({ host, lineage, notices, plugin, session, signal, state, workspace }: ProviderRequestParts): AgentProviderRequest => Object.freeze({
+  host,
+  lineage,
+  ...(notices === undefined ? {} : { notices: Object.freeze({ inbox: () => notices.inbox() }) }),
+  plugin,
+  session,
+  signal,
+  ...(state === undefined
+    ? {}
+    : { state: Object.freeze({ lifetime: state.lifetime, read: (options?: AgentStateReadOptions) => state.read(options) }) }),
+  workspace,
+});

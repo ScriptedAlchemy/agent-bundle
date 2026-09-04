@@ -1,11 +1,11 @@
-import { Agent, type AgentNoticeState, type JsonValue } from '@agent-bundle/runtime';
+import { Agent, agent, type AgentNoticeState, type JsonValue } from '@agent-bundle/runtime';
 import { AGENT_NOTICE_STATES } from '@agent-bundle/runtime/notices';
 import type { ToolConfig, ToolRouteProps } from 'agent-bundle';
 import React from 'react';
 import { z } from 'zod';
 
-import { withIntent, withNotices } from '../../../coordination.js';
-import { agentTree } from '../../../event-support.js';
+import { withNotices } from '../../../coordination.js';
+import type { AgentTopologyProviderValue } from '../../../providers/agent-topology.js';
 import { ActivitySchema, BindingSchema } from '../../../state.js';
 
 export const config = {
@@ -115,11 +115,22 @@ const publishedNotices = async (): Promise<PublishedNotices> => {
   return { ...counts, state: 'available', total: result.value.length };
 };
 
+/**
+ * The topology snapshot the `agent-topology` provider assembled for this
+ * request (agent-bundle#459): the agent tree the runtime resolved for the call
+ * and a read of the intent state, each with its own availability. A fixture
+ * that omits the provider is reported, never worked around with a second read.
+ */
+const topologyOf = (providers: { readonly agentTopology?: AgentTopologyProviderValue }): AgentTopologyProviderValue =>
+  providers.agentTopology ?? {
+    agents: { reason: 'agent-topology provider not mounted', state: 'unavailable' },
+    intent: { reason: 'Intent state unavailable: the agent-topology provider is not mounted.', state: 'unavailable' },
+  };
+
 export default async function Status({
   input,
 }: ToolRouteProps<typeof inputSchema>) {
-  const agents = await agentTree();
-  const intentResult = await withIntent(async (store) => store.read());
+  const { agents, intent: intentResult } = topologyOf((await agent()).providers);
   const notices = await publishedNotices();
   let result: StatusResult;
   if (intentResult.state === 'unavailable') {
@@ -135,7 +146,7 @@ export default async function Status({
       state: 'unavailable',
     };
   } else {
-    const { revision, state: intent } = intentResult.value;
+    const { revision, value: intent } = intentResult.value;
     const bindings = input.actorId === undefined
       ? intent.bindings
       : intent.bindings.filter((binding) => binding.actorId === input.actorId);

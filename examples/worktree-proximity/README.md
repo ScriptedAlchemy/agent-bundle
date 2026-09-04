@@ -50,13 +50,16 @@ The application has four planes:
   `resolution`) and, through `lineage.value.tree`, who else is alive:
   `siblings` (every other live conversation under the same root, the root
   included), `children`, and other live `roots`, each with the registry's own
-  `resolution` for its placement. `agentTree()` in `src/event-support.ts`
+  `resolution` for its placement. `agentTreeOf()` in `src/event-support.ts`
   turns that into the coordinator's report; `liveConversations()` turns it
   into the liveness the domain uses.
 - **Providers** — `git-worktree` derives repository, branch, commit, common
   Git directory, and linked-worktree identity without throwing for expected
-  degradation. `agent-topology` reports that its snapshot is unavailable
-  because providers receive no request lineage.
+  degradation. `agent-topology` assembles the coordinator's snapshot once per
+  request from the request view every provider receives: the agent tree
+  resolved on `context.lineage` (own chain plus the live tree) and a read of
+  the mounted intent state through `context.state.read()`; each half carries
+  its own availability, and the provider can only read.
 - **Events** — canonical shared-runtime routes bind actors to worktrees,
   record or clear intent, detect conflicts, render current-actor context,
   release stopped actors, and publish or admit notices.
@@ -75,13 +78,14 @@ lineage journal over that same driver. The application never opens a second
 store from Git identity data; `gitWorktree.commonDir` remains identity
 evidence only.
 
-The issue sketch places the agent tree at `providers.agentTopology`. The tree
-is on the request (`request.lineage.tree`,
-[#457](https://github.com/scriptedalchemy/agent-bundle/issues/457)), but a
-provider factory receives only `{ invocation, signal }` — not the request's
-`lineage` ([#459](https://github.com/scriptedalchemy/agent-bundle/issues/459)) —
-so this provider reports an honest unavailable result and routes read the
-tree from `(await agent()).lineage` instead.
+`providers.agentTopology` is that snapshot: a provider factory receives the
+request's `host`, `session`, `workspace`, and `lineage` — with the live tree
+([#457](https://github.com/scriptedalchemy/agent-bundle/issues/457)) — plus
+read-only `state` (`read()`) and `notices` (`inbox()`) handles
+([#459](https://github.com/scriptedalchemy/agent-bundle/issues/459)), so the
+coordinator `status` tool reads `providers.agentTopology` and performs no
+second read of its own. Event routes still use the mounted
+`(await agent()).state` handle, because they dispatch.
 
 `worktree()` in `src/api.ts` is the issue-mandated custom Promise API over the
 provider value. `useWorktree()` is the hook-shaped variant for Server

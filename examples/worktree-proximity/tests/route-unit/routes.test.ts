@@ -17,7 +17,7 @@ import {
 } from 'agent-bundle/test';
 
 import BeforeTool from '../../src/events/tool/before.js';
-import agentTopologyProvider from '../../src/providers/agent-topology.js';
+import agentTopologyProvider, { type AgentTopologyProviderValue } from '../../src/providers/agent-topology.js';
 import type { IntentEvents, IntentState } from '../../src/state.js';
 
 const manifest = testManifest();
@@ -46,11 +46,30 @@ const provider = (root: string) => ({
 
 // The generated `.agent-bundle/routes.d.ts` (in this project's tsconfig program)
 // makes every declared provider key required on an explicit map, so the fixture
-// carries `agentTopology` too; its factory is pure and reports the same honest
-// unavailable value the harness would mount.
-const providers = (root: string) => ({
-  agentTopology: agentTopologyProvider(),
+// carries `agentTopology` too. Event routes never read it, so they get an
+// honest unavailable snapshot; the coordinator tests run the real factory over
+// the request view the harness would hand it (#459).
+const noTopology: AgentTopologyProviderValue = {
+  agents: { reason: 'fixture: not resolved', state: 'unavailable' },
+  intent: { reason: 'fixture: not read', state: 'unavailable' },
+};
+const providers = (root: string, agentTopology: AgentTopologyProviderValue = noTopology) => ({
+  agentTopology,
   gitWorktree: provider(root),
+});
+
+/** Runs the real `agent-topology` factory over the read-only request view a generated scope hands it. */
+const topologyFor = (
+  lineage: Observed<AgentLineage> = { reason: 'not-provided', state: 'unavailable' },
+) => agentTopologyProvider({
+  host: { reason: 'not-provided', state: 'unavailable' },
+  invocation: { kind: 'tool', props: { input: {}, operationId: 'tool:coordinator/status' } },
+  lineage,
+  plugin: { reason: 'not-provided', state: 'unavailable' },
+  session: { reason: 'not-provided', state: 'unavailable' },
+  signal: new AbortController().signal,
+  state: mounted.state,
+  workspace: { reason: 'not-provided', state: 'unavailable' },
 });
 
 // The harness projects the envelope into `canonical.payload` exactly as the
@@ -497,7 +516,7 @@ describe('worktree proximity journeys', () => {
     const rendered = await renderRoute('tool:coordinator/status', {
       context: {
         ...mounted.context(),
-        providers: providers(worktrees.root),
+        providers: providers(worktrees.root, await topologyFor()),
       },
       input: {},
     });
@@ -524,11 +543,12 @@ describe('worktree proximity journeys', () => {
   });
 
   it('renders the live agent tree the runtime resolved for the call, never a tree of its own (#457)', async () => {
+    const lineage = childLineageWithTree('agent-a', ['agent-b']);
     const rendered = await renderRoute('tool:coordinator/status', {
       context: {
         ...mounted.context(),
-        lineage: childLineageWithTree('agent-a', ['agent-b']),
-        providers: providers(worktrees.a),
+        lineage,
+        providers: providers(worktrees.a, await topologyFor(lineage)),
       },
       input: {},
     });
@@ -625,12 +645,12 @@ describe('worktree proximity journeys', () => {
     // An MCP tool call from the same agent: the client name, MCP session id,
     // and server cwd all differ from the hook that published — the lineage
     // conversation is what identifies the publisher.
-    const statusFor = (conversation: string) => renderRoute('tool:coordinator/status', {
+    const statusFor = async (conversation: string) => renderRoute('tool:coordinator/status', {
       context: {
         ...mounted.context(),
         host: available({ name: 'claude-code' }, 'native'),
         lineage: childLineage(conversation),
-        providers: providers(worktrees.root),
+        providers: providers(worktrees.root, await topologyFor(childLineage(conversation))),
         session: available({ sessionId: 'mcp-session' }, 'native'),
         workspace: available({ root: worktrees.root }, 'derived'),
       },
@@ -672,6 +692,32 @@ describe('worktree proximity journeys', () => {
     expect(recipientAfter.inbox).toEqual([]);
     expect(recipientAfter.published).toEqual([]);
     expect((await noticesOf('agent-b', worktrees.b)).inbox).toEqual([]);
+  });
+
+  it('assembles the agent-topology provider value from the request view: lineage tree plus a read of the intent state (#459)', async () => {
+    await bindActors();
+    await recordIntent('agent-a', worktrees.a, 'src/shared.ts', 'intent:a');
+    const topology = await topologyFor(childLineageWithTree('agent-b', ['agent-a']));
+    expect(topology.agents).toMatchObject({ conversation: 'agent-b', siblings: [rootPeer, childPeer('agent-a')], state: 'available' });
+    expect(topology.intent.state).toBe('available');
+    if (topology.intent.state !== 'available') throw new Error('unreachable');
+    expect(topology.intent.value.value.bindings.map((binding) => binding.actorId)).toEqual(['root-session', 'agent-a', 'agent-b']);
+    expect(topology.intent.value.value.activities.map((activity) => activity.actorId)).toEqual(['agent-a']);
+    expect(topology.intent.value.revision).toBeGreaterThan(0);
+    // Without a mounted state handle the provider says so instead of opening a store of its own.
+    const stateless = await agentTopologyProvider({
+      host: { reason: 'not-provided', state: 'unavailable' },
+      invocation: { kind: 'cli', props: { args: [], command: 'status' } },
+      lineage: { reason: 'unsupported-surface', state: 'unavailable' },
+      plugin: { reason: 'not-provided', state: 'unavailable' },
+      session: { reason: 'not-provided', state: 'unavailable' },
+      signal: new AbortController().signal,
+      workspace: { reason: 'not-provided', state: 'unavailable' },
+    });
+    expect(stateless).toEqual({
+      agents: { reason: 'lineage unavailable (unsupported-surface)', state: 'unavailable' },
+      intent: { reason: 'Intent state unavailable: this surface mounts no state handle.', state: 'unavailable' },
+    });
   });
 
   it('renders state unavailability when an event module has no mounted handle', async () => {

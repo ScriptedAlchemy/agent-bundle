@@ -98,30 +98,139 @@ type AgentProviderInvocation =
   };
 
 /**
+ * An observed request axis as a provider receives it: the same shape as every
+ * `agent()` identity axis. Declared here so config-only consumers need no
+ * `@agent-bundle/runtime` import; structurally the runtime's `Observed<T>`.
+ */
+export type AgentProviderObserved<Value> =
+  | { readonly source: 'native' | 'receipt' | 'derived'; readonly state: 'available'; readonly value: Value }
+  | { readonly reason: string; readonly state: 'unavailable' };
+
+/**
  * The plugin install root and durable-state anchor a generated scope resolved
  * (#468), as `(await agent()).plugin` observes it: `root` is the expanded
  * `AGENT_BUNDLE_PLUGIN_ROOT` (`source: 'native'`) or the shell's fallback
  * (`'derived'`), and `stateRoot` is `<root>/state`, where the SQLite kernel,
- * the notice ledger, and the lineage journal live. Declared here so
- * config-only consumers need no runtime import; structurally identical to the
- * runtime's `AgentPluginIdentity`.
+ * the notice ledger, and the lineage journal live. Structurally identical to
+ * the runtime's `AgentPluginIdentity`.
  */
 export interface AgentProviderPluginRoot {
   readonly root: string;
   readonly stateRoot: string;
 }
 
-/** The observed plugin root a provider receives; the same shape as every `agent()` identity axis. */
-export type AgentProviderObservedPluginRoot =
-  | { readonly source: 'native' | 'receipt' | 'derived'; readonly state: 'available'; readonly value: AgentProviderPluginRoot }
-  | { readonly reason: string; readonly state: 'unavailable' };
+/** The observed plugin root a provider receives. */
+export type AgentProviderObservedPluginRoot = AgentProviderObserved<AgentProviderPluginRoot>;
 
-/** Request-scoped inputs supplied to a conventional context provider factory. */
+/** Structurally the runtime's `AgentLineageSubagent`: the host's own id for a subagent and what it knows about the spawn. */
+export interface AgentProviderLineageSubagent {
+  readonly id: string;
+  readonly isParallelWorker?: boolean;
+  readonly toolCallId?: string;
+  readonly type?: string;
+}
+
+/** Structurally the runtime's `AgentLineageResolution`: how the runtime arrived at a lineage's placement. */
+export type AgentProviderLineageResolution = 'native' | 'registry' | 'confirmed' | 'transcript' | 'inferred';
+
+/** Structurally the runtime's `AgentLineagePeer` (#457): one other live conversation in the registry's tree. */
+export interface AgentProviderLineagePeer {
+  readonly conversation: string;
+  readonly depth: number;
+  readonly parent?: string;
+  readonly resolution: AgentProviderLineageResolution;
+  readonly startedAt: string;
+  readonly subagent?: AgentProviderLineageSubagent;
+}
+
+/** Structurally the runtime's `AgentLineageTree` (#457): `children`, other live `roots`, and every live `siblings` under the same root. */
+export interface AgentProviderLineageTree {
+  readonly children: readonly AgentProviderLineagePeer[];
+  readonly roots: readonly AgentProviderLineagePeer[];
+  readonly siblings: readonly AgentProviderLineagePeer[];
+}
+
+/**
+ * Structurally the runtime's `AgentLineage`: the request's own chain
+ * (`conversation`, `parent`, `root`, `depth`) plus, when the warm runtime's
+ * registry placed it, the live `tree` around it.
+ */
+export interface AgentProviderLineage {
+  readonly conversation: string;
+  readonly depth: number;
+  readonly generation?: string;
+  readonly parent?: string;
+  readonly resolution: AgentProviderLineageResolution;
+  readonly root: string;
+  readonly subagent?: AgentProviderLineageSubagent;
+  readonly tree?: AgentProviderLineageTree;
+}
+
+/** The snapshot a provider's `state.read()` resolves; structurally the runtime's `AgentStateSnapshot`. */
+export interface AgentProviderStateSnapshot<TState = unknown> {
+  readonly revision: number;
+  readonly state: TState;
+}
+
+/**
+ * The read-only view of the project's mounted state handle a provider receives
+ * (#459): the runtime's `AgentStateHandle` narrowed to `lifetime` and `read`
+ * by construction, so a provider can derive a view of shared state but never
+ * dispatch. Absent for stateless projects.
+ */
+export interface AgentProviderStateHandle<TState = unknown> {
+  readonly lifetime: 'request' | 'process' | 'workspace-durable' | 'external';
+  read(options?: { readonly revision?: number; readonly signal?: AbortSignal }): Promise<AgentProviderStateSnapshot<TState>>;
+}
+
+/**
+ * The fields of a notice a provider may rely on; at run time each element is
+ * the runtime's full `AgentNotice`, and every notice `inbox()` resolves is
+ * `pending`.
+ */
+export interface AgentProviderNotice {
+  readonly createdAt: string;
+  readonly dedupeKey?: string;
+  readonly id: string;
+  readonly priority: 'low' | 'normal' | 'high';
+  readonly state: 'pending' | 'attempted' | 'expired' | 'unavailable' | 'withdrawn' | 'acknowledged';
+}
+
+/**
+ * The read-only view of the request's notice handle a provider receives
+ * (#459): the runtime's `AgentNoticesHandle` narrowed to `inbox` by
+ * construction — pending notices addressed to this request's principal, as
+ * the `mcp-inbox` route discloses them — never `publish` or `acknowledge`.
+ * Absent when the project mounts no notice ledger.
+ */
+export interface AgentProviderNoticesHandle {
+  inbox(): Promise<readonly AgentProviderNotice[]>;
+}
+
+/**
+ * Request-scoped inputs supplied to a conventional context provider factory.
+ * Beyond the surface-specific `invocation` and the request `signal`, a
+ * factory observes the request's identity axes, plugin root, and lineage
+ * exactly as the route will read them from `await agent()`, plus read-only
+ * views of the mounted state and notice handles (#459). Providers run as the
+ * request's own resolver — after its axes are frozen and its notice lease is
+ * open, before the route — outside the request's async context: `agent()`
+ * throws `outside-invocation` there, and nothing on this context can dispatch
+ * state or publish a notice.
+ */
 export interface AgentProviderContext {
+  readonly host: AgentProviderObserved<{ readonly name: string }>;
   readonly invocation: AgentProviderInvocation;
+  readonly lineage: AgentProviderObserved<AgentProviderLineage>;
+  /** Present only for projects with a mounted notice ledger. */
+  readonly notices?: AgentProviderNoticesHandle;
   /** The resolved plugin root, exactly what the route will read as `(await agent()).plugin`. */
   readonly plugin: AgentProviderObservedPluginRoot;
+  readonly session: AgentProviderObserved<{ readonly sessionId: string }>;
   readonly signal: AbortSignal;
+  /** Present only for projects that declare `src/state.ts`. */
+  readonly state?: AgentProviderStateHandle;
+  readonly workspace: AgentProviderObserved<{ readonly root: string }>;
 }
 
 /** Default export contract for one `src/providers/<name>.{ts,tsx}` module. */

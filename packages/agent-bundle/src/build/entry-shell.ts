@@ -368,8 +368,8 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     '};',
     '',
     // Plain commands mount the same conventional providers as every other
-    // generated request scope (#313): once per request, in deterministic key
-    // order, fail-closed, before the typed Agent request context opens.
+    // generated request scope (#313, #459): once per request, in deterministic
+    // key order, fail-closed, as the typed Agent request's own resolver.
     'const execute = async (command, input, context) => {',
     '  const route = routes[command.routeId];',
     "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated CLI route must default-export an async function.');",
@@ -379,12 +379,6 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     ...(options.state === undefined
       ? []
       : ['  const bindings = await runtimeState.requestBindings({ signal: context.signal });', '  try {']),
-    ...providerExecutionSource(providers, {
-      indent: plainIndent,
-      invocation: "{ kind: 'cli', props: { args: context.args, command: command.path.join(' ') } }",
-      plugin: 'pluginRoot.identity',
-      signal: 'context.signal',
-    }),
     `${plainIndent}const result = await runAgentRequest({`,
     '    capabilities: {',
     '      command: unavailable(),',
@@ -397,7 +391,10 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     "    lineage: unavailable('unsupported-surface'),",
     ...(options.state === undefined ? [] : ['      noticeLedger: bindings.noticeLedger,']),
     '    plugin: pluginRoot.identity,',
-    `    providers: ${providerValuesExpression(providers)},`,
+    ...providersFieldSource(providers, {
+      indent: '    ',
+      invocation: "{ kind: 'cli', props: { args: context.args, command: command.path.join(' ') } }",
+    }),
     '    signal: context.signal,',
     ...(options.state === undefined ? [] : ['      state: bindings.state,']),
     "    terminal: available(context.terminal, 'native'),",
@@ -590,7 +587,6 @@ export const generatedRenderedRouteWorkerSource = (
       ? []
       : ['    const bindings = await runtimeState.requestBindings({ signal: controller.signal });']),
     ...(options.state === undefined ? [] : ['    try {']),
-    ...providerExecutionSource(providers, { indent: '    ', invocation: 'message.invocation', plugin: 'pluginRoot.identity', signal: 'controller.signal' }),
     '    await runAgentRequest({',
     '      capabilities: {',
     '        command: unavailable(),',
@@ -604,7 +600,7 @@ export const generatedRenderedRouteWorkerSource = (
     ...(options.state === undefined ? [] : ['      noticeLedger: bindings.noticeLedger,']),
     '      plugin: pluginRoot.identity,',
     "      progress: { report: async (update) => { parentPort.postMessage({ id: message.id, type: 'progress', update }); } },",
-    `      providers: ${providerValuesExpression(providers)},`,
+    ...providersFieldSource(providers, { indent: '      ', invocation: 'message.invocation' }),
     '      signal: controller.signal,',
     ...(options.state === undefined ? [] : ['      state: bindings.state,']),
     // The executable probed its terminal once and forwards the value; a worker
@@ -857,44 +853,44 @@ const processHitSource = (indent: string): readonly string[] => [
 const processLifetimeValueSource = 'processHit';
 
 /**
- * Per-request provider execution shared by every generated request scope
- * (shared Flight worker, rendered CLI/script worker, plain routed CLI): once
- * per request, sequentially in deterministic key order, fail-closed on a
- * missing factory or a thrown/rejected factory, with the framework-owned
- * `processLifetime` value seeded first. The emitted loop mirrors
- * `executeProviders` in `../routes/provider-execution.ts`, which the
- * in-process test harness runs; `entry-shell.test.ts` pins the two together.
+ * The `providers` field of every generated `runAgentRequest` init (shared
+ * Flight worker, rendered CLI/script worker, plain routed CLI): only the
+ * framework-owned process identity for a project without providers, otherwise
+ * the request's provider resolver (#459) — run by the runtime once per
+ * request, after the identity axes are frozen and the notice lease is open,
+ * before the route; sequentially in deterministic key order; fail-closed on a
+ * missing factory or a thrown/rejected factory; `processLifetime` seeded
+ * first. Each factory receives the runtime's read-only request view (`host`,
+ * `session`, `workspace`, `lineage`, `plugin`, `signal`, and the
+ * `read`/`inbox`-only `state`/`notices` handles) spread beside the
+ * surface-specific `invocation`.
+ * The emitted loop mirrors `executeProviders` in
+ * `../routes/provider-execution.ts`, which the in-process test harness runs;
+ * `entry-shell.test.ts` pins the two together.
  */
-const providerExecutionSource = (
+const providersFieldSource = (
   providers: readonly CompiledProvider[],
-  expressions: {
-    readonly indent: string;
-    readonly invocation: string;
-    /** The observed plugin root the request scope publishes (#468); providers receive the same value. */
-    readonly plugin: string;
-    readonly signal: string;
-  },
+  expressions: { readonly indent: string; readonly invocation: string },
 ): readonly string[] => {
-  if (providers.length === 0) return [];
-  const { indent, invocation, plugin, signal } = expressions;
+  const { indent, invocation } = expressions;
+  if (providers.length === 0) return [`${indent}providers: { processLifetime: ${processLifetimeValueSource} },`];
   return [
-    `${indent}const providerValues = { processLifetime: ${processLifetimeValueSource} };`,
-    `${indent}for (const provider of providers) {`,
-    `${indent}  if (typeof provider.module.default !== 'function') {`,
-    `${indent}    throw new TypeError(\`Context provider "\${provider.key}" (\${provider.source}) must default-export a factory.\`);`,
+    `${indent}providers: async (request) => {`,
+    `${indent}  const providerValues = { processLifetime: ${processLifetimeValueSource} };`,
+    `${indent}  for (const provider of providers) {`,
+    `${indent}    if (typeof provider.module.default !== 'function') {`,
+    `${indent}      throw new TypeError(\`Context provider "\${provider.key}" (\${provider.source}) must default-export a factory.\`);`,
+    `${indent}    }`,
+    `${indent}    try {`,
+    `${indent}      providerValues[provider.key] = await provider.module.default({ ...request, invocation: ${invocation} });`,
+    `${indent}    } catch (error) {`,
+    `${indent}      throw new Error(\`Context provider "\${provider.key}" (\${provider.source}) failed: \${error instanceof Error ? error.message : String(error)}\`, { cause: error });`,
+    `${indent}    }`,
     `${indent}  }`,
-    `${indent}  try {`,
-    `${indent}    providerValues[provider.key] = await provider.module.default({ invocation: ${invocation}, plugin: ${plugin}, signal: ${signal} });`,
-    `${indent}  } catch (error) {`,
-    `${indent}    throw new Error(\`Context provider "\${provider.key}" (\${provider.source}) failed: \${error instanceof Error ? error.message : String(error)}\`, { cause: error });`,
-    `${indent}  }`,
-    `${indent}}`,
+    `${indent}  return providerValues;`,
+    `${indent}},`,
   ];
 };
-
-/** The `providers` request-scope value: the executed map, or only the framework-owned process identity. */
-const providerValuesExpression = (providers: readonly CompiledProvider[]): string =>
-  providers.length === 0 ? `{ processLifetime: ${processLifetimeValueSource} }` : 'providerValues';
 
 /** The long-lived react-server worker used by one generated MCP process. */
 export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWorkerOptions): string => {
@@ -951,17 +947,15 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     ...(options.state === undefined
       ? []
       : ['    const bindings = await runtimeState.requestBindings({ signal: controller.signal });', '    try {']),
-    '    const plugin = message.plugin ?? pluginRoot.identity;',
-    ...providerExecutionSource(providers, { indent: '    ', invocation: 'message.invocation', plugin: 'plugin', signal: 'controller.signal' }),
     '    const bytes = await runAgentRequest({',
     '      ...(message.actor === undefined ? {} : { actor: message.actor }),',
     '      ...(message.host === undefined ? {} : { host: message.host }),',
     '      invocation: { ...message.requestInvocation, artifactEpoch: ARTIFACT_EPOCH, kind: message.invocation.kind, operationId: route.id, surface: route.name },',
     "      lineage: message.lineage ?? unavailable('not-provided'),",
     ...(options.state === undefined ? [] : ['      noticeLedger: bindings.noticeLedger,']),
-    '      plugin,',
+    '      plugin: message.plugin ?? pluginRoot.identity,',
     '      progress: { report: async (update) => { parentPort.postMessage({ id: message.id, type: \'progress\', update }); } },',
-    `      providers: ${providerValuesExpression(providers)},`,
+    ...providersFieldSource(providers, { indent: '      ', invocation: 'message.invocation' }),
     '      ...(message.session === undefined ? {} : { session: message.session }),',
     '      signal: controller.signal,',
     ...(options.state === undefined ? [] : ['      state: bindings.state,']),

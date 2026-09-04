@@ -1,6 +1,12 @@
 import { join } from 'node:path';
 
-import type { AgentPluginIdentity, AgentProviderValues, Observed, resolvePluginRoot } from '@agent-bundle/runtime';
+import type {
+  AgentPluginIdentity,
+  AgentProviderResolver,
+  AgentProviderValues,
+  Observed,
+  resolvePluginRoot,
+} from '@agent-bundle/runtime';
 
 import {
   executeProviders,
@@ -18,12 +24,16 @@ import type { RenderedRouteProvenance } from './types.ts';
  * Conventional request context providers for harness request scopes.
  *
  * Every generated request scope discovers `src/providers/*` and executes them
- * once per request before `runAgentRequest` (#313, #366). The harness does the
- * same for every manifest-backed render, dispatch, and in-memory projection,
- * through the shared execution helper the generated scopes mirror, so a test
- * observes the provider map the artifact would mount. A test that passes
- * `context.providers` opts out: the explicit map is used verbatim, exactly as
- * the runtime's request contract reads it.
+ * once per request as the request's own provider resolver (#313, #366, #459):
+ * after `runAgentRequest` froze the identity axes and opened the notice lease,
+ * before the route runs, over the runtime's read-only request view. The
+ * harness does the same for every manifest-backed render, dispatch, and
+ * in-memory projection, through the shared execution helper the generated
+ * scopes mirror, so a test observes the provider map the artifact would mount
+ * and every provider observes the same `lineage`, identity, `state.read()`,
+ * and `notices.inbox()` the route will. A test that passes `context.providers`
+ * opts out: the explicit map is used verbatim, exactly as the runtime's
+ * request contract reads it.
  *
  * What the harness simulates per executable is the framework-owned process
  * identity (`processLifetime`), not module evaluation. Provider modules load
@@ -45,15 +55,12 @@ export interface MountProvidersOptions {
   readonly invocation: unknown;
   /** Absent for a module rendered directly: no project, so nothing to discover. */
   readonly manifest: AgentBundleTestManifest | undefined;
-  /** The observed plugin root the simulated scope publishes as `request.plugin` (#468). */
-  readonly plugin: unknown;
   /**
    * This request's claimed hit on the simulated executable's process identity
    * (see {@link claimProcessHit}); mounted verbatim as `providers.processLifetime`.
    */
   readonly processHit: ProviderProcessLifetimeValue;
   readonly provenance?: RenderedRouteProvenance;
-  readonly signal: AbortSignal;
 }
 
 const loadProvider = async (
@@ -116,24 +123,28 @@ export const harnessPluginRoot = (options: HarnessPluginRootOptions): Observed<A
     ?? options.resolvePluginRoot({ fallback: join(options.manifest?.projectRoot ?? process.cwd(), '.agent-bundle') }).identity;
 
 /**
- * The `providers` value for one harness request scope: the explicit map when
- * the test supplied one, otherwise the project's conventional providers
- * executed in the generated order over the claimed process hit.
+ * The `providers` init for one harness request scope: the explicit map when
+ * the test supplied one, only the process identity for a module rendered
+ * directly, otherwise a resolver `runAgentRequest` runs over its read-only
+ * request view — the project's conventional providers, loaded and executed in
+ * the generated order over the claimed process hit.
  */
-export const mountProviders = async (options: MountProvidersOptions): Promise<AgentProviderValues> => {
+export const mountProviders = (options: MountProvidersOptions): AgentProviderValues | AgentProviderResolver => {
   if (options.explicit !== undefined) return options.explicit;
-  if (options.manifest === undefined) {
+  const manifest = options.manifest;
+  if (manifest === undefined) {
     return { processLifetime: options.processHit };
   }
-  const providers: ExecutableProvider[] = [];
-  for (const descriptor of options.manifest.providers ?? []) {
-    providers.push(await loadProvider(options.manifest, descriptor, options.provenance));
-  }
-  return executeProviders({
-    invocation: options.invocation,
-    plugin: options.plugin,
-    processLifetime: { ...options.processHit },
-    providers,
-    signal: options.signal,
-  });
+  return async (request) => {
+    const providers: ExecutableProvider[] = [];
+    for (const descriptor of manifest.providers ?? []) {
+      providers.push(await loadProvider(manifest, descriptor, options.provenance));
+    }
+    return executeProviders({
+      invocation: options.invocation,
+      processLifetime: { ...options.processHit },
+      providers,
+      request,
+    });
+  };
 };

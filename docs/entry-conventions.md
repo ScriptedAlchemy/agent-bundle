@@ -82,7 +82,7 @@ entries carry `provenance.kind: 'conventional'` in the normalized model.
 | `src/cli/**/*.{ts,tsx}` | Routed CLI commands compiled into one collision-checked command graph and one generated package executable named after `plugin.name` (superseding the `src/cli.ts` bin convention for the project), plus the same executable as `bin/<plugin-name>.mjs` in every selected host artifact whose target publishes the `cli` capability (all built-in targets). Nesting is identity: `src/cli/library/audit.ts` runs as `<bin> library audit`. Plain `.ts` commands execute directly and print one canonical JSON line; `.tsx` commands render through the dispatcher with the four output modes. | `bin: false`, `routes.cli: 'conventional'`, or prefix a path segment with `_` |
 | `src/events/<family>/<event>.{ts,tsx}`, `src/events/stop.{ts,tsx}` | Semantic event route: the path is the canonical event family (`src/events/tool/after.tsx` is `tool/after`; `stop` is the one top-level family) and must be one of the admitted `canonicalAgentEvents`. The optional static `config` (`AgentEventRouteConfig`: `targets`, `tools`, `runtime: 'shared' \| 'standalone'`, `fallback`, `delivery`, `timeoutMs`) restricts hosts and selects the execution mode; the async default Server Component receives `AgentEventRouteProps<E>` (`{ canonical, native, signal }`) and returns `Agent.*` output that the selected host adapter encodes into its native hook envelope. `canonical.payload` is the family's cross-host reading of the envelope (#466) — the fields at least two hosts report (`toolName`, `toolInput`, `toolResponse`, `sessionId`, `transcriptPath`, `cwd`, `prompt`, `agentId`/`agentType`, `reentry`, …), each as `{ value, nativeKey }` naming the host key it came from and absent when the host did not send it; `E` narrows it to the route's family. The per-family field table is `agentEventPayloadFields` and the per-host key table `agentEventPayloadNativeKeys` (`routes/events.ts`), mirrored under `hooks.eventRoutes.<event>.payload` in each pinned capability table so the generated events reference documents the mapping per host. Application code never branches on host JSON or emits native hook documents; per-host support is a capability state (`supported`/`degraded`/`unavailable`/`prohibited`) surfaced by `inspect` and enforced at build time (`AB4817`, `AB4823`–`AB4825`). | Restrict `config.targets`, or prefix a path segment with `_` |
 | `src/state.ts` | Project state definition: default-exports `defineState({ ... })`; generated MCP, routed-CLI, and rendered-script request scopes mount `(await agent()).state` and `.notices`. | `state: false`, or rename the file to `_state.ts` |
-| `src/providers/<name>.{ts,tsx}` | Request context provider: default-exports a factory receiving `{ invocation, plugin, signal }`; its value is mounted at `(await agent()).providers.<camelCaseName>` for generated MCP and event routes, projected MCP commands, plain and rendered routed CLI commands, and rendered scripts. | Prefix the file with `_` |
+| `src/providers/<name>.{ts,tsx}` | Request context provider: default-exports a factory receiving `{ invocation, signal, host, session, workspace, lineage, plugin, state?, notices? }` — the request's observed identity, lineage, and plugin root plus read-only views of the mounted state (`read`) and notice (`inbox`) handles; its value is mounted at `(await agent()).providers.<camelCaseName>` for generated MCP and event routes, projected MCP commands, plain and rendered routed CLI commands, and rendered scripts. | Prefix the file with `_` |
 | `src/layout.{ts,tsx}` | Shared document layout: default-exports one component receiving `{ children, route, signal }` that renders `Agent.Result` around every rendered route — generated MCP tools, resources, and prompts, rendered routed CLI commands, projected MCP commands, and rendered scripts. Event routes are never wrapped. | Rename to `_layout.tsx` |
 | `src/mcp/<server>/layout.{ts,tsx}` | Per-server layout nested inside the root layout for that generated server's routes. | Rename to `_layout.tsx`, or set `routes.servers.<server>` to a non-generated mode |
 
@@ -261,22 +261,56 @@ an otherwise valid migration.
 Each direct child of `src/providers/` derives its key by camel-casing the file
 stem: for example, `src/providers/project-auth.ts` mounts at
 `(await agent()).providers.projectAuth`. Every module default-exports a factory
-with the contract `(context: { invocation, plugin, signal }) => value |
-Promise<value>`, where `invocation` is the current route invocation, `plugin`
-is the observed plugin root the request will publish as
-`(await agent()).plugin` (#468), and `signal` is its request abort signal.
+with the contract `(context: AgentProviderContext) => value | Promise<value>`:
+
+```ts
+interface AgentProviderContext {
+  invocation: AgentProviderInvocation;  // the surface-specific route invocation
+  signal: AbortSignal;                  // the request abort signal
+  host: Observed<{ name }>;             // exactly what the route reads on `await agent()`
+  session: Observed<{ sessionId }>;
+  workspace: Observed<{ root }>;
+  lineage: Observed<AgentLineage>;      // own chain plus the live `tree` (#457)
+  plugin: Observed<{ root, stateRoot }>; // the plugin root the request publishes (#468)
+  state?: { lifetime; read(options?) }; // the mounted state handle, `read` only
+  notices?: { inbox() };                // the request's notice handle, `inbox` only
+}
+```
+
+`host`, `session`, `workspace`, `lineage`, and `plugin` are the same observed
+values the route will read, unavailable reasons included. `state` is present
+for projects that declare `src/state.ts` and `notices` for projects whose scope
+mounts the notice ledger; both are the real request handles narrowed by
+construction to their read paths (#459), so a provider can expose a derived
+view of shared state — a topology, a summary, a peers list — but never dispatch
+a state event or publish, acknowledge, or withdraw a notice: those stay
+route-only. Providers also run outside the request's async context, so
+`agent()` and `useAgent()` inside a factory throw `outside-invocation` rather
+than handing it the full handle. The types ship from `agent-bundle`
+(`AgentProviderContext`, `AgentProviderStateHandle`,
+`AgentProviderNoticesHandle`, `AgentProviderLineage`, …) without a runtime
+import; at run time the handles are the runtime's own.
 
 Every generated request scope — the shared Flight worker behind generated MCP
 and event routes, the react-server worker behind rendered routed CLI commands
 and rendered scripts, and the routed-CLI executable itself for plain `.ts`
-commands — executes providers once per request, sequentially in deterministic
-key order, before entering `runAgentRequest`. The returned values join the
-request's provider map. A thrown or rejected factory fails the request closed;
+commands — executes providers once per request as the request's own provider
+resolver: `runAgentRequest` freezes the identity axes, opens the notice lease
+(so `notices.inbox()` is real), then runs the factories sequentially in
+deterministic key order, and only then runs the route. That ordering — state
+and notices mounted before providers, rather than a lazy handle that resolves
+later — is what keeps the generated loop and the harness's `executeProviders`
+one simple function: a provider awaits real handles, and a factory that reads
+`inbox()` eagerly cannot deadlock on a lease that has not opened yet. The
+returned values join the request's provider map. A thrown or rejected factory
+fails the request closed, exactly as a route that throws after admission does;
 expected degradation should return an honest unavailable-shaped value instead
 of throwing. `invocation.kind` stays surface-specific (`tool`, `event`, `cli`,
 `script`), so a provider can branch on the entry surface deliberately.
 `processLifetime` is reserved for the framework-owned process identity and hit
-counter, so provider filenames must not derive that key.
+counter, so provider filenames must not derive that key. A custom host calling
+`runAgentRequest` directly may pass `providers` as the resolved record or as
+the same resolver function `(request: AgentProviderRequest) => values`.
 
 The `agent-bundle/test` harness mounts the same providers, in the same order
 and with the same fail-closed semantics, for every manifest-backed helper

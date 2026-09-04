@@ -1,22 +1,50 @@
-export interface AgentTopologyProviderValue {
-  readonly reason: string;
-  readonly state: 'unavailable';
-}
+import type { AgentProviderContext } from 'agent-bundle';
+
+import type { CapabilityResult } from '../coordination.js';
+import { agentTreeOf, type AgentTreeView } from '../event-support.js';
+import { IntentStateSchema, type IntentState } from '../state.js';
 
 /**
- * The issue sketch places the agent tree at `providers.agentTopology`. The
- * tree itself is now on the request — `(await agent()).lineage.value.tree`
- * lists the live siblings, children, and other roots the runtime's registry
- * holds (agent-bundle#457) — but a conventional provider factory still
- * receives only `{ invocation, signal }`, not the request's `lineage`
- * (agent-bundle#459), so this provider cannot derive that view. Routes read
- * `request.lineage` directly (`agentTree()` in `event-support.ts`); this
- * provider reports the gap honestly rather than inventing a tree.
+ * The whole-tree view the coordinator reports, assembled once per request
+ * from what the framework hands a provider (agent-bundle#459): the agent tree
+ * the runtime's lineage registry resolved for this request — own chain plus
+ * the live siblings, children, and other roots (agent-bundle#457) — and a
+ * read of the mounted intent state (worktree bindings, activities, refusals).
+ * Each half carries its own availability; nothing here is guessed, and the
+ * provider can only read: `state.dispatch` and `notices.publish` are not on
+ * the provider context.
  */
-export default function agentTopologyProvider(): AgentTopologyProviderValue {
-  return {
-    reason:
-      'The agent tree is on request.lineage.tree; providers receive no request lineage (agent-bundle#459), so read it from (await agent()).lineage in a route.',
-    state: 'unavailable',
-  };
+export interface AgentTopologyProviderValue {
+  readonly agents: AgentTreeView;
+  readonly intent: CapabilityResult<{ readonly revision: number; readonly value: IntentState }>;
+}
+
+export default async function agentTopologyProvider(
+  context: AgentProviderContext,
+): Promise<AgentTopologyProviderValue> {
+  const agents = agentTreeOf(context.lineage);
+  if (context.state === undefined) {
+    return {
+      agents,
+      intent: { reason: 'Intent state unavailable: this surface mounts no state handle.', state: 'unavailable' },
+    };
+  }
+  try {
+    const snapshot = await context.state.read({ signal: context.signal });
+    const parsed = IntentStateSchema.safeParse(snapshot.state);
+    return {
+      agents,
+      intent: parsed.success
+        ? { state: 'available', value: { revision: snapshot.revision, value: parsed.data } }
+        : { reason: 'Intent state unavailable: the mounted state is not the worktree-proximity intent definition.', state: 'unavailable' },
+    };
+  } catch (error) {
+    return {
+      agents,
+      intent: {
+        reason: `Intent state unavailable: ${error instanceof Error ? error.message : String(error)}`,
+        state: 'unavailable',
+      },
+    };
+  }
 }
