@@ -214,10 +214,9 @@ describe('worktree proximity journeys', () => {
       .toHaveStatus('success')
       .toContainContext('Proximity warning')
       .toContainContext('src/shared.ts');
-    expect(rendered.document.value).toMatchObject({
-      outcome: 'continue',
-      reason: expect.stringContaining('src/shared.ts'),
-    });
+    // The warning travels as context only; a pass-through result carries no
+    // decision and therefore no reason, so the host's permission flow is untouched.
+    expect(rendered.document.value).toEqual({ outcome: 'continue' });
 
     const bindings = await runtimeState.requestBindings();
     try {
@@ -398,9 +397,6 @@ describe('worktree proximity journeys', () => {
     expectDocument(rendered)
       .toHaveStatus('success')
       .toContainContext('state unavailable');
-    expect(rendered.document.value).toMatchObject({
-      outcome: 'continue',
-      reason: expect.stringContaining('state unavailable'),
-    });
+    expect(rendered.document.value).toEqual({ outcome: 'continue' });
   });
 });

@@ -56,7 +56,7 @@ export default async function BeforeTool({
   });
   if (topologyResult.state === 'unavailable') {
     return (
-      <Agent.Result value={{ outcome: 'continue', reason: topologyResult.reason }}>
+      <Agent.Result value={{ outcome: 'continue' }}>
         <Agent.Context>{topologyResult.reason}</Agent.Context>
       </Agent.Result>
     );
@@ -91,10 +91,10 @@ export default async function BeforeTool({
     : [noticeResult.reason];
   const warnings = resolution.conflicts.map((conflict) =>
     `Proximity warning for ${resolution.actor.id}: ${conflict.summary}`);
-  const reason = warnings.join(' ');
-  const value: JsonValue = reason === ''
-    ? { outcome: 'continue' as const }
-    : { outcome: 'continue' as const, reason };
+  // Proximity warns; it never decides. `continue` leaves the host's own
+  // permission flow untouched, and the warnings reach the agent as context
+  // (a `reason` needs a decision to travel with, so none is attached).
+  const value: JsonValue = { outcome: 'continue' as const };
 
   return (
     <Agent.Result value={value}>
