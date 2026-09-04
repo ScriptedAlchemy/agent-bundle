@@ -228,6 +228,14 @@
         "reason": "retrieved 2026-09-02: the complete rust-v0.147.0 generated hook schema directory contains no file-changed event.",
         "state": "unavailable"
       },
+      "model-switch/after": {
+        "reason": "2026-09-03: the complete rust-v0.147.0 generated hook schema directory contains no post-model-switch event, and https://learn.chatgpt.com/docs/hooks (retrieved 2026-09-02) documents no model-switch hook.",
+        "state": "unavailable"
+      },
+      "model-switch/before": {
+        "reason": "2026-09-03: the complete rust-v0.147.0 generated hook schema directory contains no pre-model-switch event, and https://learn.chatgpt.com/docs/hooks (retrieved 2026-09-02) documents no model-switch hook.",
+        "state": "unavailable"
+      },
       "permission/denied": {
         "reason": "retrieved 2026-09-02: the complete rust-v0.147.0 generated hook schema directory contains no permission-denied event.",
         "state": "unavailable"

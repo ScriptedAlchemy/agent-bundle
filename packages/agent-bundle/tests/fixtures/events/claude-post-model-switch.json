@@ -1,0 +1,15 @@
+{
+    "cache_ttl": "5m",
+    "context_tokens": 182340,
+    "cwd": "/workspace",
+    "estimated_cache_write_usd": 1.1396,
+    "from_model": "claude-sonnet-5",
+    "hook_event_name": "PostModelSwitch",
+    "pricing": "catalog",
+    "prompt_cache_warm": true,
+    "requested_model": null,
+    "session_id": "session-claude-1",
+    "source": "auto",
+    "to_model": "claude-opus-5",
+    "transcript_path": "/workspace/.claude/projects/session.jsonl"
+}

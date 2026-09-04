@@ -62,6 +62,14 @@
       "reason": "2026-09-02: Agent Plugins 1.0.0 defines no hooks and therefore no native FileChanged equivalent (https://agent-plugins.org/).",
       "state": "unavailable"
     },
+    "model-switch/after": {
+      "reason": "2026-09-03: Agent Plugins 1.0.0 defines no hooks and therefore no native PostModelSwitch equivalent (https://agent-plugins.org/).",
+      "state": "unavailable"
+    },
+    "model-switch/before": {
+      "reason": "2026-09-03: Agent Plugins 1.0.0 defines no hooks and therefore no native PreModelSwitch equivalent (https://agent-plugins.org/).",
+      "state": "unavailable"
+    },
     "permission/denied": {
       "reason": "2026-09-02: Agent Plugins 1.0.0 defines no hooks and therefore no native PermissionDenied equivalent (https://agent-plugins.org/).",
       "state": "unavailable"

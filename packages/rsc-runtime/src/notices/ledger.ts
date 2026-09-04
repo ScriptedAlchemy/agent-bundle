@@ -66,6 +66,7 @@ import {
   agentNoticeEventSchemas,
   type AgentNoticeLedgerState,
   recipientMatchesPrincipal,
+  recordedNoticePrincipal,
 } from './state.js';
 
 export interface CreateAgentNoticeLedgerOptions {
@@ -239,9 +240,15 @@ const recipient = (input: AgentRecipient): AgentRecipient => {
     ...(input.actor === undefined
       ? {}
       : { actor: Object.freeze({ id: nonEmptyText(input.actor.id, 'Notice recipient actor id') }) }),
+    ...(input.conversation === undefined
+      ? {}
+      : { conversation: nonEmptyText(input.conversation, 'Notice recipient conversation') }),
     ...(input.host === undefined
       ? {}
       : { host: Object.freeze({ name: nonEmptyText(input.host.name, 'Notice recipient host name') }) }),
+    ...(input.root === undefined
+      ? {}
+      : { root: nonEmptyText(input.root, 'Notice recipient root') }),
     ...(input.session === undefined
       ? {}
       : { session: Object.freeze({ sessionId: nonEmptyText(input.session.sessionId, 'Notice recipient session id') }) }),
@@ -634,7 +641,7 @@ export const createAgentNoticeLedger = (
                 .filter(({ decision }) => decision.state === 'authorized')
                 .map(({ id }) => id),
               invocationId: request.invocation.id,
-              principal: request.principal,
+              principal: recordedNoticePrincipal(request.principal),
               unavailableIds: decisions
                 .filter(({ decision }) => decision.state === 'unavailable')
                 .map(({ id }) => id),
