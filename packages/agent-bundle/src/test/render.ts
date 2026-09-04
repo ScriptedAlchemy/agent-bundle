@@ -5,10 +5,12 @@ import { join } from 'node:path';
 import type * as AgentFlightServer from '@agent-bundle/runtime/flight/server';
 import type * as AgentRuntime from '@agent-bundle/runtime';
 import type * as AgentMount from '@agent-bundle/runtime/mount';
+import type * as AgentNotices from '@agent-bundle/runtime/notices';
 import type * as AgentState from '@agent-bundle/runtime/state';
 import type {
   AgentDocument,
   AgentInvocationInput,
+  AgentNoticeLedger,
   AgentProgressReporter,
   AgentProgressUpdate,
   AgentProviderValues,
@@ -687,6 +689,61 @@ const mountManifestState = async (
   signal: AbortSignal,
 ): Promise<AutoMountedState> => manifestStateMount(manifest, provenance, context)(renderer, signal);
 
+interface OpenedStateOwner<TState, TEvents extends AgentState.AgentStateEventSchemas> {
+  readonly owner: AgentMount.GeneratedRuntimeState<TState, TEvents>;
+  /** Closes the owner (and its driver), then removes the disposable sqlite root when one was created. */
+  dispose(): Promise<void>;
+}
+
+/**
+ * Opens one generated state owner — the project state plus its notice ledger
+ * — over the driver the route-unit level uses: a disposable sqlite root for a
+ * `workspace-durable` definition, so repeated renders are deterministic, and
+ * the memory driver for every other lifetime. A caller-supplied driver
+ * replaces that choice and is closed with the owner.
+ */
+const openStateOwner = async <TState, TEvents extends AgentState.AgentStateEventSchemas>(
+  definition: AgentState.AgentStateDefinition<TState, TEvents>,
+  lifetime: AgentState.AgentStateLifetime,
+  renderer: Renderer,
+  explicitDriver?: AgentState.AgentStateDriver,
+): Promise<OpenedStateOwner<TState, TEvents>> => {
+  let root: string | undefined;
+  let driver: AgentState.AgentStateDriver;
+  try {
+    if (explicitDriver !== undefined) {
+      driver = explicitDriver;
+    } else if (lifetime === 'external') {
+      // The compiler admits no `external` state definition, so only an
+      // explicit `options.definition` reaches here; its storage is the caller's.
+      throw new AgentTestError(
+        'invalid-input',
+        `State ${definition.id} has the external lifetime, which names no storage the harness could open.`,
+        { recovery: 'Pass the driver that owns its storage as options.driver.' },
+      );
+    } else if (lifetime === 'workspace-durable') {
+      root = await mkdtemp(join(tmpdir(), 'agent-bundle-route-state-'));
+      driver = (await import('@agent-bundle/runtime/state/sqlite')).createSqliteStateDriver({ root });
+    } else {
+      driver = renderer.createMemoryStateDriver({ lifetime });
+    }
+  } catch (error) {
+    if (root !== undefined) await rm(root, { force: true, recursive: true });
+    throw error;
+  }
+  const owner = renderer.createGeneratedRuntimeState({ definition, driver });
+  return {
+    owner,
+    dispose: async () => {
+      try {
+        await owner.close();
+      } finally {
+        if (root !== undefined) await rm(root, { force: true, recursive: true });
+      }
+    },
+  };
+};
+
 const mountState = async (
   descriptor: NonNullable<AgentBundleTestManifest['state']>,
   loader: AgentStateModuleLoader,
@@ -695,22 +752,9 @@ const mountState = async (
   signal: AbortSignal,
 ): Promise<AutoMountedState> => {
   const definition = (await loader()).default;
-  let root: string | undefined;
-  let driver: AgentState.AgentStateDriver;
+  const opened = await openStateOwner(definition, descriptor.lifetime, renderer);
   try {
-    if (descriptor.lifetime === 'workspace-durable') {
-      root = await mkdtemp(join(tmpdir(), 'agent-bundle-route-state-'));
-      driver = (await import('@agent-bundle/runtime/state/sqlite')).createSqliteStateDriver({ root });
-    } else {
-      driver = renderer.createMemoryStateDriver({ lifetime: descriptor.lifetime });
-    }
-  } catch (error) {
-    if (root !== undefined) await rm(root, { force: true, recursive: true });
-    throw error;
-  }
-  const owner = renderer.createGeneratedRuntimeState({ definition, driver });
-  try {
-    const bindings = await owner.requestBindings({ signal });
+    const bindings = await opened.owner.requestBindings({ signal });
     let closed = false;
     return Object.freeze({
       context: {
@@ -723,21 +767,156 @@ const mountState = async (
         try {
           await bindings.close();
         } finally {
-          try {
-            await owner.close();
-          } finally {
-            if (root !== undefined) await rm(root, { force: true, recursive: true });
-          }
+          await opened.dispose();
         }
       },
     });
   } catch (error) {
-    try {
-      await owner.close();
-    } finally {
-      if (root !== undefined) await rm(root, { force: true, recursive: true });
-    }
+    await opened.dispose();
     throw error;
+  }
+};
+
+export interface MountTestStateOptions<
+  TState = unknown,
+  TEvents extends AgentState.AgentStateEventSchemas = AgentState.AgentStateEventSchemas,
+> {
+  /**
+   * The state definition to mount instead of the manifest's registered state
+   * module. It also types `state` and `read()`; without it, pass the
+   * definition's types as type arguments (`mountTestState<State, Events>()`).
+   */
+  readonly definition?: AgentState.AgentStateDefinition<TState, TEvents>;
+  /** A driver of your own, closed with the mount; replaces the disposable-sqlite / memory choice. */
+  readonly driver?: AgentState.AgentStateDriver;
+  /** Mounts the state declared by an explicit manifest instead of the one the generated configuration registered. */
+  readonly manifest?: AgentBundleTestManifest;
+  readonly signal?: AbortSignal;
+}
+
+/** The `state` and `noticeLedger` context members one mounted test state hands every render. */
+export interface MountedTestStateContext<
+  TState = unknown,
+  TEvents extends AgentState.AgentStateEventSchemas = AgentState.AgentStateEventSchemas,
+> {
+  readonly noticeLedger: AgentNoticeLedger;
+  readonly state: AgentState.AgentStateHandle<TState, TEvents>;
+}
+
+/**
+ * One state owner mounted for a whole test rather than one render: the same
+ * `state` handle and `noticeLedger` for every `renderRoute` /
+ * `renderRouteEvents` call that spreads {@link MountedTestState.context} into
+ * its `context`, a typed snapshot read, the ledger's snapshot, and one
+ * `close()`.
+ */
+export interface MountedTestState<
+  TState = unknown,
+  TEvents extends AgentState.AgentStateEventSchemas = AgentState.AgentStateEventSchemas,
+> extends MountedTestStateContext<TState, TEvents> {
+  /** Releases the bindings, closes the owner and its driver, and removes the disposable sqlite root. Idempotent. */
+  close(): Promise<void>;
+  /** `{ noticeLedger, state }`, to spread into the `context` of any number of renders. */
+  context(): MountedTestStateContext<TState, TEvents>;
+  /** The notice ledger's current snapshot: every notice with its delivery state. */
+  notices(): Promise<AgentNotices.AgentNoticeLedgerSnapshot>;
+  /** The project state's current snapshot, typed by the mounted definition. */
+  read(): Promise<AgentState.AgentStateSnapshot<TState>>;
+}
+
+const manifestStateDefinition = async (
+  manifest: AgentBundleTestManifest,
+): Promise<AgentState.AgentStateDefinition<unknown, AgentState.AgentStateEventSchemas>> => {
+  if (manifest.state === undefined) {
+    throw new AgentTestError(
+      'manifest-unavailable',
+      'The project declares no state, so there is no state definition to mount.',
+      { recovery: 'Declare src/state.ts in the project, or pass the definition to mount as options.definition.' },
+    );
+  }
+  const loader = registeredStateLoader(manifest);
+  if (loader === undefined) {
+    throw new AgentTestError(
+      'manifest-unavailable',
+      `State ${manifest.state.id} is declared but no test-time state module loader is registered for it.`,
+      { recovery: 'Build the Rstest configuration with agentBundleRstest() so the generated setup registers the state loader, or pass the definition as options.definition.' },
+    );
+  }
+  return (await loader()).default;
+};
+
+/**
+ * Mounts the project's state definition and notice ledger once, for a journey
+ * that spans several renders — record on one event, read on the next — where
+ * the fresh per-render owner `renderRoute` mounts by default would forget
+ * everything between calls. The same driver rules apply: a
+ * `workspace-durable` definition opens a disposable sqlite root that `close()`
+ * removes; every other lifetime uses the memory driver. `renderRoute` and
+ * `renderRouteEvents` honour a caller-supplied `state` and `noticeLedger`, so
+ * spreading `context()` into each render's `context` is the whole wiring; a
+ * render that omits them still mounts its own isolated owner. The owner is
+ * held as one request's bindings, so a `request`-lifetime definition behaves
+ * as one long request. Always `close()` it (or use {@link withTestState}).
+ */
+export const mountTestState = async <
+  TState = unknown,
+  TEvents extends AgentState.AgentStateEventSchemas = AgentState.AgentStateEventSchemas,
+>(
+  ...[options = {}]: HarnessOptionsArguments<MountTestStateOptions<TState, TEvents>>
+): Promise<MountedTestState<TState, TEvents>> => {
+  const renderer = await loadRenderer();
+  // Without an explicit definition the registered module is the project's own
+  // `src/state.ts`; its types are whatever the caller named as type arguments.
+  const definition = options.definition
+    ?? (await manifestStateDefinition(options.manifest ?? testManifest()) as unknown as AgentState.AgentStateDefinition<TState, TEvents>);
+  const opened = await openStateOwner(definition, definition.lifetime, renderer, options.driver);
+  let bindings: AgentMount.GeneratedRuntimeRequestBindings<TState, TEvents>;
+  try {
+    bindings = await opened.owner.requestBindings(options.signal === undefined ? {} : { signal: options.signal });
+  } catch (error) {
+    await opened.dispose();
+    throw error;
+  }
+  const context: MountedTestStateContext<TState, TEvents> = Object.freeze({
+    noticeLedger: bindings.noticeLedger,
+    state: bindings.state,
+  });
+  let closed = false;
+  return Object.freeze({
+    ...context,
+    async close() {
+      if (closed) return;
+      closed = true;
+      try {
+        await bindings.close();
+      } finally {
+        await opened.dispose();
+      }
+    },
+    context: () => context,
+    notices: () => context.noticeLedger.read(),
+    read: () => context.state.read(),
+  });
+};
+
+/**
+ * {@link mountTestState} scoped to one callback: the mounted state is closed
+ * — and its disposable root removed — when `run` settles, whether it resolved
+ * or threw.
+ */
+export const withTestState = async <
+  TState = unknown,
+  TEvents extends AgentState.AgentStateEventSchemas = AgentState.AgentStateEventSchemas,
+  T = void,
+>(
+  run: (state: MountedTestState<TState, TEvents>) => Promise<T>,
+  ...[options = {}]: HarnessOptionsArguments<MountTestStateOptions<TState, TEvents>>
+): Promise<T> => {
+  const mounted = await mountTestState<TState, TEvents>(options);
+  try {
+    return await run(mounted);
+  } finally {
+    await mounted.close();
   }
 };
 

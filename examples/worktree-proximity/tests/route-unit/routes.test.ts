@@ -1,23 +1,10 @@
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
 import { afterEach, beforeEach, describe, expect, it } from '@rstest/core';
 import { available, type AgentLineage, type Observed } from '@agent-bundle/runtime';
-import {
-  createGeneratedRuntimeState,
-  type GeneratedRuntimeState,
-} from '@agent-bundle/runtime/mount';
-import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';
-import { expectDocument, renderRoute, testManifest } from 'agent-bundle/test';
+import { expectDocument, mountTestState, renderRoute, testManifest, type MountedTestState } from 'agent-bundle/test';
 
 import BeforeTool from '../../src/events/tool/before.js';
 import agentTopologyProvider from '../../src/providers/agent-topology.js';
-import {
-  topologyStateDefinition,
-  type TopologyEvents,
-  type TopologyState,
-} from '../../src/state.js';
+import type { TopologyEvents, TopologyState } from '../../src/state.js';
 
 const manifest = testManifest();
 
@@ -27,8 +14,10 @@ const worktrees = {
   b: '/repo/.worktrees/b',
 } as const;
 
-let stateRoot: string;
-let runtimeState: GeneratedRuntimeState<TopologyState, TopologyEvents>;
+// One mounted topology state (and notice ledger) per test: every event in a
+// journey records into it and the assertions read it back, exactly as one
+// generated runtime would serve the whole session.
+let mounted: MountedTestState<TopologyState, TopologyEvents>;
 let sequence = 0;
 
 const provider = (root: string) => ({
@@ -77,30 +66,22 @@ const renderEventInput = async (
   worktreeRoot: string,
   actorId?: string,
   lineage?: Observed<AgentLineage>,
-) => {
-  const bindings = await runtimeState.requestBindings();
-  try {
-    return await renderRoute(route, {
-      context: {
-        actor: actorId === undefined ? undefined : available({ id: actorId }, 'native'),
-        host: available({ name: 'claude' }, 'native'),
-        invocation: {
-          id: `invocation:${id}`,
-          startedAt: `2026-09-01T20:01:${String(sequence).padStart(2, '0')}.000Z`,
-        },
-        ...(lineage === undefined ? {} : { lineage }),
-        noticeLedger: bindings.noticeLedger,
-        providers: providers(worktreeRoot),
-        session: available({ sessionId: 'root-session' }, 'native'),
-        state: bindings.state,
-        workspace: available({ root: worktreeRoot }, 'native'),
-      },
-      input,
-    });
-  } finally {
-    await bindings.close();
-  }
-};
+) => renderRoute(route, {
+  context: {
+    ...mounted.context(),
+    actor: actorId === undefined ? undefined : available({ id: actorId }, 'native'),
+    host: available({ name: 'claude' }, 'native'),
+    invocation: {
+      id: `invocation:${id}`,
+      startedAt: `2026-09-01T20:01:${String(sequence).padStart(2, '0')}.000Z`,
+    },
+    ...(lineage === undefined ? {} : { lineage }),
+    providers: providers(worktreeRoot),
+    session: available({ sessionId: 'root-session' }, 'native'),
+    workspace: available({ root: worktreeRoot }, 'native'),
+  },
+  input,
+});
 
 const renderEvent = (
   route: string,
@@ -190,17 +171,12 @@ const recordIntent = (
 );
 
 beforeEach(async () => {
-  stateRoot = await mkdtemp(join(tmpdir(), 'worktree-proximity-route-unit-'));
-  runtimeState = createGeneratedRuntimeState({
-    definition: topologyStateDefinition,
-    driver: createSqliteStateDriver({ root: stateRoot }),
-  });
+  mounted = await mountTestState<TopologyState, TopologyEvents>();
   sequence = 0;
 });
 
 afterEach(async () => {
-  await runtimeState.close();
-  await rm(stateRoot, { force: true, recursive: true });
+  await mounted.close();
 });
 
 it('compiles the complete shared-runtime route surface', () => {
@@ -242,18 +218,13 @@ describe('worktree proximity journeys', () => {
     // decision and therefore no reason, so the host's permission flow is untouched.
     expect(rendered.document.value).toEqual({ outcome: 'continue' });
 
-    const bindings = await runtimeState.requestBindings();
-    try {
-      const snapshot = await bindings.noticeLedger.read();
-      expect(snapshot.notices).toEqual([
-        expect.objectContaining({
-          recipient: { workspace: { root: worktrees.a } },
-          state: 'pending',
-        }),
-      ]);
-    } finally {
-      await bindings.close();
-    }
+    const notices = await mounted.notices();
+    expect(notices.notices).toEqual([
+      expect.objectContaining({
+        recipient: { workspace: { root: worktrees.a } },
+        state: 'pending',
+      }),
+    ]);
   });
 
   it('attempts and surfaces a notice on the recipient next event (journey 6)', async () => {
@@ -281,16 +252,11 @@ describe('worktree proximity journeys', () => {
       .toContainContext('Directed proximity notice')
       .toContainContext('src/shared.ts');
 
-    const bindings = await runtimeState.requestBindings();
-    try {
-      const snapshot = await bindings.noticeLedger.read();
-      expect(snapshot.notices[0]).toMatchObject({
-        attempts: [expect.objectContaining({ invocationId: 'invocation:intent:a:after' })],
-        state: 'attempted',
-      });
-    } finally {
-      await bindings.close();
-    }
+    const notices = await mounted.notices();
+    expect(notices.notices[0]).toMatchObject({
+      attempts: [expect.objectContaining({ invocationId: 'invocation:intent:a:after' })],
+      state: 'attempted',
+    });
   });
 
   it('deduplicates a repeated native intent envelope (journey 7)', async () => {
@@ -321,13 +287,8 @@ describe('worktree proximity journeys', () => {
       'agent-a',
     );
 
-    const bindings = await runtimeState.requestBindings();
-    try {
-      const snapshot = await bindings.state.read();
-      expect(snapshot.state.activities.filter((activity) => activity.actorId === 'agent-a')).toHaveLength(1);
-    } finally {
-      await bindings.close();
-    }
+    const snapshot = await mounted.read();
+    expect(snapshot.state.activities.filter((activity) => activity.actorId === 'agent-a')).toHaveLength(1);
   });
 
   it('records a refusal and never fabricates an edge without native agent identity (journey 8)', async () => {
@@ -349,18 +310,13 @@ describe('worktree proximity journeys', () => {
       .toContainContext('Parent identity unavailable')
       .toContainContext('refused to fabricate');
 
-    const bindings = await runtimeState.requestBindings();
-    try {
-      const snapshot = await bindings.state.read();
-      expect(snapshot.state.actors).toEqual([]);
-      expect(snapshot.state.refusals).toEqual([
-        expect.objectContaining({
-          reason: 'agent/start omitted native agent_id; refused to fabricate a topology edge',
-        }),
-      ]);
-    } finally {
-      await bindings.close();
-    }
+    const snapshot = await mounted.read();
+    expect(snapshot.state.actors).toEqual([]);
+    expect(snapshot.state.refusals).toEqual([
+      expect.objectContaining({
+        reason: 'agent/start omitted native agent_id; refused to fabricate a topology edge',
+      }),
+    ]);
   });
 
   it('records the child and its parent from request.lineage when the envelope carries no agent_id', async () => {
@@ -382,22 +338,17 @@ describe('worktree proximity journeys', () => {
 
     expectDocument(rendered).toHaveStatus('success').toHaveNodeKinds(['result']);
 
-    const bindings = await runtimeState.requestBindings();
-    try {
-      const snapshot = await bindings.state.read();
-      expect(snapshot.state.refusals).toEqual([]);
-      expect(snapshot.state.actors).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          id: 'agent-c',
-          kind: 'child',
-          parentSessionId: 'root-session',
-          provenance: expect.objectContaining({ id: 'registry', parentSessionId: 'registry' }),
-          worktreeRoot: worktrees.b,
-        }),
-      ]));
-    } finally {
-      await bindings.close();
-    }
+    const snapshot = await mounted.read();
+    expect(snapshot.state.refusals).toEqual([]);
+    expect(snapshot.state.actors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'agent-c',
+        kind: 'child',
+        parentSessionId: 'root-session',
+        provenance: expect.objectContaining({ id: 'registry', parentSessionId: 'registry' }),
+        worktreeRoot: worktrees.b,
+      }),
+    ]));
   });
 
   it('attributes a tool envelope to the lineage child ahead of the worktree binding', async () => {
@@ -421,20 +372,15 @@ describe('worktree proximity journeys', () => {
     expectDocument(rendered).toHaveStatus('success');
     expect(rendered.document.value).toEqual({ outcome: 'continue' });
 
-    const bindings = await runtimeState.requestBindings();
-    try {
-      const snapshot = await bindings.state.read();
-      expect(snapshot.state.actors).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          id: 'agent-c',
-          provenance: expect.objectContaining({ id: 'registry', parentSessionId: 'registry' }),
-          worktreeRoot: worktrees.a,
-        }),
-      ]));
-      expect(snapshot.state.activities.map((activity) => activity.actorId)).toEqual(['agent-c']);
-    } finally {
-      await bindings.close();
-    }
+    const snapshot = await mounted.read();
+    expect(snapshot.state.actors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'agent-c',
+        provenance: expect.objectContaining({ id: 'registry', parentSessionId: 'registry' }),
+        worktreeRoot: worktrees.a,
+      }),
+    ]));
+    expect(snapshot.state.activities.map((activity) => activity.actorId)).toEqual(['agent-c']);
   });
 
   it('renders the coordinator status from mounted topology state', async () => {
@@ -442,20 +388,13 @@ describe('worktree proximity journeys', () => {
     await recordIntent('agent-a', worktrees.a, 'src/shared.ts', 'intent:a');
     await recordIntent('agent-b', worktrees.b, 'src/shared.ts', 'intent:b');
 
-    const bindings = await runtimeState.requestBindings();
-    let rendered: Awaited<ReturnType<typeof renderRoute>>;
-    try {
-      rendered = await renderRoute('tool:coordinator/status', {
-        context: {
-          noticeLedger: bindings.noticeLedger,
-          providers: providers(worktrees.root),
-          state: bindings.state,
-        },
-        input: {},
-      });
-    } finally {
-      await bindings.close();
-    }
+    const rendered = await renderRoute('tool:coordinator/status', {
+      context: {
+        ...mounted.context(),
+        providers: providers(worktrees.root),
+      },
+      input: {},
+    });
 
     expectDocument(rendered)
       .toHaveStatus('success')
