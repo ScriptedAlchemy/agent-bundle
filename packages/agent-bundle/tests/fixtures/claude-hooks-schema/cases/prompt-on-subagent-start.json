@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "x"
+          }
+        ]
+      }
+    ]
+  }
+}

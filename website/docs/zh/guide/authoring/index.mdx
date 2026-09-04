@@ -78,7 +78,13 @@ export default defineConfig({
 
 每个宿主键都是可选的，其中的每个字段也都是可选的。`claude` 与 `codex` 扩展自共享的
 `AgentBundleHostConfig`，它唯一的字段 `nativeHooks` 指向一份由项目编写、target 原生的钩子文档
-（`hooks.json`），适配器会校验它并与编译出的钩子合并。各适配器拥有的字段如下：
+（`hooks.json`），适配器会校验它并与编译出的钩子合并。对 Claude Code 而言，固定的 schema 接纳文档化的
+处理器契约：固定的 2.1.250 宿主认识的每个钩子事件（即参考文档列出的事件，去掉需要 2.1.251 的
+`PreModelSwitch` 与 `PostModelSwitch`）、五种处理器类型（`command`、`http`、`mcp_tool`、`prompt`、
+`agent`）、各类型自己的字段（`args`、`async`、`shell`、`url`、`headers`、`server`、`tool`、`input`、
+`prompt`、`model` 等）以及公共字段 `if`、`once`、`statusMessage` 与 `timeout`；未知键、属于另一种处理器
+类型的字段，以及参考文档明确排除的事件上的 prompt/agent/http 处理器都会被拒绝。编译器自身仍只输出
+shell 形式的 `command` 处理器。各适配器拥有的字段如下：
 
 | 键 | 字段 | 落点 |
 | --- | --- | --- |

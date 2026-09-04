@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://x",
+            "allowedEnvVars": "A"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -99,13 +99,13 @@ it('records exact immutable metadata for every built-in target', () => {
     ],
   });
   expect(registryMetadata(registry, 'claude')).toEqual({
-    adapterRevision: '1.25.0',
+    adapterRevision: '1.26.0',
     observedVersion: '2.1.250',
     schemas: [
       {
         name: 'hooks',
         revision: '2.1.250',
-        sha256: '3c6f3e4391f3dca939d75bd0b200ea88e68db939a2cb885d46f0b143293efb84',
+        sha256: '7535806f86481b89b628a0ccf8e34261e6f93163f562c2146ca8dbfe4d95766e',
       },
       {
         name: 'lsp',

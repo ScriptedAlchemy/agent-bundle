@@ -1,0 +1,28 @@
+{
+  "success": false,
+  "strict": true,
+  "target": "/bundle/claude/.claude-plugin/plugin.json",
+  "reporter": "text",
+  "manifest": {
+    "file": "/bundle/claude/.claude-plugin/plugin.json",
+    "type": "plugin",
+    "errors": [],
+    "warnings": [],
+    "notes": []
+  },
+  "contents": [
+    {
+      "file": "/bundle/claude/hooks/hooks.json",
+      "type": "hooks",
+      "errors": [
+        {
+          "path": "hooks.Stop.0.hooks.0.once",
+          "message": "Invalid input: expected boolean, received string",
+          "code": null
+        }
+      ],
+      "warnings": [],
+      "notes": []
+    }
+  ]
+}

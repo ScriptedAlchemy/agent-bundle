@@ -363,7 +363,12 @@ export const readTargetNativeHookCommands = (
   }
 };
 
-/** Enumerates commands from the native Claude/Codex hook document shape. */
+/**
+ * Enumerates commands from the native Claude/Codex hook document shape. Only
+ * `command` handlers carry a command; the other handler types the pinned hooks
+ * schemas admit (`http`, `mcp_tool`, `prompt`, `agent`) are skipped, so a
+ * native document that mixes them still enumerates its command hooks.
+ */
 export const readStandardNativeHookCommands = (document: unknown): TargetNativeHookCommandsReadResult => {
   if (!isPlainDataRecord(document)) return Object.freeze({ status: 'invalid' });
   const hooks = ownDataValue(document, 'hooks');
@@ -382,9 +387,10 @@ export const readStandardNativeHookCommands = (document: unknown): TargetNativeH
         if (!isPlainDataRecord(hook)) return Object.freeze({ status: 'invalid' });
         const command = ownDataValue(hook, 'command');
         const type = ownDataValue(hook, 'type');
-        if (command === undefined || type === undefined || !type.found || type.value !== 'command') {
+        if (command === undefined || type === undefined || !type.found || typeof type.value !== 'string') {
           return Object.freeze({ status: 'invalid' });
         }
+        if (type.value !== 'command') continue;
         if (command.found && typeof command.value === 'string') {
           commands.push(Object.freeze({ command: command.value }));
         } else {

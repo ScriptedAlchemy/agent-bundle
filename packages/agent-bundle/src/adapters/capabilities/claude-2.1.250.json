@@ -119,16 +119,42 @@
     "features": {
       "timeout": {
         "evidence": [
-          "2026-09-03: the pinned schemas/claude/hooks.schema.json declares an integer `timeout` (minimum 1) on every command hook entry; the hook contract lowers `timeoutMs` to whole seconds."
+          "2026-09-03: the pinned schemas/claude/hooks.schema.json declares an integer `timeout` (minimum 1) on every handler type (hooks reference \"Common fields\": seconds before cancelling, not enforced on an async command hook); the hook contract lowers `timeoutMs` to whole seconds on the command handlers it emits."
         ],
         "state": "supported"
       },
       "toolMatchers": {
         "evidence": [
-          "2026-09-03: the pinned schemas/claude/hooks.schema.json declares a string `matcher` on every hook group, and hooks.matchers above pins the canonical tool selectors (file.read, file.write, mcp, shell) to Claude tool-name regexes; an unmapped selector fails the plan (claude.hook.tool.<tool>)."
+          "2026-09-03: the pinned schemas/claude/hooks.schema.json declares a string `matcher` on every hook group of every handler type, and hooks.matchers above pins the canonical tool selectors (file.read, file.write, mcp, shell) to Claude tool-name regexes; an unmapped selector fails the plan (claude.hook.tool.<tool>)."
         ],
         "state": "supported"
       }
+    },
+    "handlerContract": {
+      "types": ["agent", "command", "http", "mcp_tool", "prompt"],
+      "commonFields": ["if", "once", "statusMessage", "timeout", "type"],
+      "fields": {
+        "agent": ["model", "prompt"],
+        "command": ["args", "async", "asyncRewake", "command", "shell"],
+        "http": ["allowedEnvVars", "headers", "url"],
+        "mcp_tool": ["input", "server", "tool"],
+        "prompt": ["continueOnBlock", "model", "prompt"]
+      },
+      "emitted": { "command": ["command", "timeout", "type"] },
+      "evidence": [
+        "uploaded 2026-09-03: Claude Code docs hooks reference (hooks-2.md, \"Hook handler fields\", \"Common fields\", \"Command hook fields\", \"Exec form and shell form\", \"HTTP hook fields\", \"MCP tool hook fields\", \"Prompt and agent hook fields\", \"Prompt-based hooks\", \"Agent hook configuration\", \"Run hooks in the background\") documents the five handler types, the common if/timeout/statusMessage/once fields, and the per-type fields pinned in schemas/claude/hooks.schema.json (#477); `async` and `args` belong to command hooks only, and agent hooks have no continueOnBlock.",
+        "2026-09-03: the pinned Claude Code 2.1.250 (`claude plugin validate --strict`, text reporter) and 2.1.260 (`--strict --json`) both accept a hooks/hooks.json using every documented type and field (tests/fixtures/claude-hooks-schema/cases/full.json) and both reject under --strict a missing per-type required field, an unknown handler type, an unknown event, and each wrong-typed field; both ignore unknown hooks.json keys and cross-type fields without a warning, which the closed pinned schema rejects instead. They disagree only on PreModelSwitch and PostModelSwitch, which the reference gates to v2.1.251 or later and 2.1.250 rejects as unknown keys, so the schema omits them until the re-pin (schemas/claude/PROVENANCE.json hooksSchemaNotes).",
+        "2026-09-03: the compiler emits only shell-form command handlers carrying type, command, and timeout (hook-contract planHooks); args (exec form, the reference's recommendation for path placeholders such as ${CLAUDE_PLUGIN_ROOT}), async, asyncRewake, shell, if, once, statusMessage, and the http/mcp_tool/prompt/agent handlers reach a bundle only through an authored `claude.nativeHooks` document, validated against the pinned schema and merged after the generated groups."
+      ]
+    },
+    "agentTypeMatcher": {
+      "field": "agent_type",
+      "pluginScopedTemplate": "^<plugin-name>:<agent-name>$",
+      "evidence": [
+        "uploaded 2026-09-03: Claude Code docs hooks reference (hooks-2.md, \"Matcher patterns\" and \"SubagentStart\") — SubagentStart and SubagentStop match on agent type, and the example plugin-scoped value is `^my-plugin:reviewer$`; a matcher containing any character outside letters, digits, `_`, `-`, spaces, `,`, and `|` is evaluated as an unanchored JavaScript regular expression, so the colon of a plugin-scoped identifier requires `^` and `$` for a whole-string match.",
+        "uploaded 2026-09-03: Claude Code docs sub-agents reference (sub-agents-3.md, \"Project-level hooks for subagent events\" and \"Supported frontmatter fields\") — the matcher value is the frontmatter `name` for project and user subagents and the plugin-scoped identifier such as `my-plugin:db-agent` for plugin subagents, anchored as `^my-plugin:db-agent$` to match only that agent; hooks receive `name` as `agent_type`, and a `name` containing `:` is not loaded (Claude Code 2.1.218 or later) because the colon is reserved for plugin-scoped identifiers.",
+        "2026-09-03: no agent/start or agent/stop route selector lowers an agent name yet (the agents component stays behind the #100 stage-2 G5 gate, #478); when one does, the Claude lowering must emit the anchored plugin-scoped form for agents this plugin ships, not the bare frontmatter name."
+      ]
     },
     "matchers": {
       "file.read": "^Read$",
@@ -225,6 +251,7 @@
         "reason": "The #100 stage-2 G5 gate, merged in PR #220 and preserved by #107 revision 3, deliberately withholds an authored plugin-agent name field together with agents/ emission.",
         "evidence": [
           "retrieved 2026-09-02: https://code.claude.com/docs/en/sub-agents documents name as the agent identifier using lowercase letters and hyphens, while https://code.claude.com/docs/en/plugins-reference documents that a plugin agent without name falls back to its filename.",
+          "uploaded 2026-09-03: Claude Code docs sub-agents reference (sub-agents-3.md, \"Supported frontmatter fields\" and \"Subagent files Claude Code skips\") — hooks receive name as agent_type; a name may not contain a colon, reserved for plugin-scoped identifiers such as my-plugin:reviewer, and a file whose name contains one is not loaded on Claude Code 2.1.218 or later; a plugin subagent with no name or unparseable frontmatter still loads under its filename, unlike project and user agents, which are skipped; the hook matcher for a plugin subagent is the anchored scoped form recorded in hooks.agentTypeMatcher (#478).",
           "retrieved 2026-09-02: https://github.com/ScriptedAlchemy/agent-bundle/pull/220 and https://github.com/ScriptedAlchemy/agent-bundle/issues/107 revision 3 keep every authored plugin-agent field behind the #100 stage-2 G5 re-admission increment."
         ]
       },
@@ -310,29 +337,56 @@
       },
       "hooks": {
         "state": "unavailable",
-        "reason": "The #100 stage-2 G5 gate, merged in PR #220 and preserved by #107 revision 3, deliberately defers the plugin-agent surface on which Agent Bundle would omit hooks under the host security contract.",
+        "reason": "The #100 stage-2 G5 gate, merged in PR #220 and preserved by #107 revision 3, deliberately defers the plugin-agent surface on which Agent Bundle would lower hooks as unsupported on Claude plugins: the sub-agents reference marks the field \"Ignored for plugin subagents\", so a re-admitted agents/ component must reject it with a diagnostic rather than emit a field the host drops silently.",
         "evidence": [
           "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference and https://code.claude.com/docs/en/sub-agents document that hooks is unsupported and ignored when an agent is loaded from a plugin.",
+          "uploaded 2026-09-03: Claude Code docs sub-agents reference (sub-agents-3.md, \"Supported frontmatter fields\") marks hooks \"Ignored for [plugin subagents]\" in the frontmatter table (#478).",
           "retrieved 2026-09-02: local Claude Code 2.1.257 `claude plugin validate --strict` accepts a plugin agent declaring hooks without warning, proving the validator does not enforce the loader's ignore contract.",
           "retrieved 2026-09-02: https://github.com/ScriptedAlchemy/agent-bundle/pull/220 and https://github.com/ScriptedAlchemy/agent-bundle/issues/107 revision 3 keep plugin-agent omission enforcement behind the #100 stage-2 G5 re-admission increment."
         ]
       },
       "mcpServers": {
         "state": "unavailable",
-        "reason": "The #100 stage-2 G5 gate, merged in PR #220 and preserved by #107 revision 3, deliberately defers the plugin-agent surface on which Agent Bundle would omit mcpServers under the host security contract.",
+        "reason": "The #100 stage-2 G5 gate, merged in PR #220 and preserved by #107 revision 3, deliberately defers the plugin-agent surface on which Agent Bundle would lower mcpServers as unsupported on Claude plugins: the sub-agents reference marks the field \"Ignored for plugin subagents\", so a re-admitted agents/ component must reject it with a diagnostic rather than emit a field the host drops silently.",
         "evidence": [
           "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference and https://code.claude.com/docs/en/sub-agents document that mcpServers is unsupported and ignored when an agent is loaded from a plugin.",
+          "uploaded 2026-09-03: Claude Code docs sub-agents reference (sub-agents-3.md, \"Supported frontmatter fields\") marks mcpServers \"Ignored for [plugin subagents]\" in the frontmatter table (#478).",
           "retrieved 2026-09-02: local Claude Code 2.1.257 `claude plugin validate --strict` accepts a plugin agent declaring mcpServers without warning, proving the validator does not enforce the loader's ignore contract.",
           "retrieved 2026-09-02: https://github.com/ScriptedAlchemy/agent-bundle/pull/220 and https://github.com/ScriptedAlchemy/agent-bundle/issues/107 revision 3 keep plugin-agent omission enforcement behind the #100 stage-2 G5 re-admission increment."
         ]
       },
       "permissionMode": {
         "state": "unavailable",
-        "reason": "The #100 stage-2 G5 gate, merged in PR #220 and preserved by #107 revision 3, deliberately defers the plugin-agent surface on which Agent Bundle would omit permissionMode under the host security contract.",
+        "reason": "The #100 stage-2 G5 gate, merged in PR #220 and preserved by #107 revision 3, deliberately defers the plugin-agent surface on which Agent Bundle would lower permissionMode as unsupported on Claude plugins: the sub-agents reference marks the field \"Ignored for plugin subagents\", so a re-admitted agents/ component must reject it with a diagnostic rather than emit a field the host drops silently.",
         "evidence": [
           "retrieved 2026-09-02: https://code.claude.com/docs/en/plugins-reference and https://code.claude.com/docs/en/sub-agents document that permissionMode is unsupported and ignored when an agent is loaded from a plugin.",
+          "uploaded 2026-09-03: Claude Code docs sub-agents reference (sub-agents-3.md, \"Supported frontmatter fields\") marks permissionMode \"Ignored for [plugin subagents]\" in the frontmatter table (#478).",
           "retrieved 2026-09-02: local Claude Code 2.1.257 `claude plugin validate --strict` accepts a plugin agent declaring permissionMode: bypassPermissions without warning, proving the validator does not enforce the loader's ignore contract.",
           "retrieved 2026-09-02: https://github.com/ScriptedAlchemy/agent-bundle/pull/220 and https://github.com/ScriptedAlchemy/agent-bundle/issues/107 revision 3 keep plugin-agent omission enforcement behind the #100 stage-2 G5 re-admission increment."
+        ]
+      },
+      "color": {
+        "state": "unavailable",
+        "reason": "The #100 stage-2 G5 gate, merged in PR #220 and preserved by #107 revision 3, deliberately withholds an authored plugin-agent color field together with agents/ emission.",
+        "evidence": [
+          "uploaded 2026-09-03: Claude Code docs sub-agents reference (sub-agents-3.md, \"Supported frontmatter fields\") documents color as the display color for the subagent in the task list and transcript, accepting red, blue, green, yellow, purple, orange, pink, or cyan.",
+          "2026-09-03: https://github.com/ScriptedAlchemy/agent-bundle/pull/220 and https://github.com/ScriptedAlchemy/agent-bundle/issues/107 revision 3 keep every authored plugin-agent field behind the #100 stage-2 G5 re-admission increment; this row is contract bookkeeping from the uploaded sub-agents reference (#478), not enablement."
+        ]
+      },
+      "initialPrompt": {
+        "state": "unavailable",
+        "reason": "The #100 stage-2 G5 gate, merged in PR #220 and preserved by #107 revision 3, deliberately withholds an authored plugin-agent initialPrompt field together with agents/ emission.",
+        "evidence": [
+          "uploaded 2026-09-03: Claude Code docs sub-agents reference (sub-agents-3.md, \"Supported frontmatter fields\") documents initialPrompt as the text auto-submitted as the first user turn when the agent runs as the main session agent via --agent or the agent setting, with commands and skills processed and the text prepended to any user-provided prompt.",
+          "2026-09-03: https://github.com/ScriptedAlchemy/agent-bundle/pull/220 and https://github.com/ScriptedAlchemy/agent-bundle/issues/107 revision 3 keep every authored plugin-agent field behind the #100 stage-2 G5 re-admission increment; this row is contract bookkeeping from the uploaded sub-agents reference (#478), not enablement."
+        ]
+      },
+      "experimentalCacheTtl": {
+        "state": "unavailable",
+        "reason": "The #100 stage-2 G5 gate, merged in PR #220 and preserved by #107 revision 3, deliberately withholds an authored plugin-agent experimental.cacheTtl field together with agents/ emission.",
+        "evidence": [
+          "uploaded 2026-09-03: Claude Code docs sub-agents reference (sub-agents-3.md, \"Supported frontmatter fields\") documents experimental as a map whose cacheTtl key, 5m or 1h and written inside the experimental map, chooses the prompt cache lifetime for the subagent's requests; Claude Code ignores any other value, ignores 1h while a subscription is using usage credits, reads the field only from subagent files, and requires Claude Code 2.1.248 or later.",
+          "2026-09-03: https://github.com/ScriptedAlchemy/agent-bundle/pull/220 and https://github.com/ScriptedAlchemy/agent-bundle/issues/107 revision 3 keep every authored plugin-agent field behind the #100 stage-2 G5 re-admission increment; this row is contract bookkeeping from the uploaded sub-agents reference (#478), not enablement."
         ]
       }
     },

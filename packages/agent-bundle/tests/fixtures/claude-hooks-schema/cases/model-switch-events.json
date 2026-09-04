@@ -1,0 +1,24 @@
+{
+  "hooks": {
+    "PreModelSwitch": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo PreModelSwitch"
+          }
+        ]
+      }
+    ],
+    "PostModelSwitch": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo PostModelSwitch"
+          }
+        ]
+      }
+    ]
+  }
+}

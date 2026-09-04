@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo hi",
+            "continueOnBlock": true
+          }
+        ]
+      }
+    ]
+  }
+}
