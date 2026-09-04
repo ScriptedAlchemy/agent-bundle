@@ -30,6 +30,7 @@ import {
   type ManifestFile,
 } from './emit.ts';
 import { parseArtifactManifest, type ArtifactManifest } from './manifest.ts';
+import type { ModuleSyntaxCheck } from './module-imports.ts';
 import type {
   ValidateArtifactOptions,
   ValidatedArtifactMcpServerEvidence,
@@ -614,6 +615,7 @@ const validateArtifactStructure = (options: {
 
 const validateGeneratedFiles = async (options: {
   readonly artifactRoot: string;
+  readonly bundleSyntaxCheck?: ModuleSyntaxCheck;
   readonly files: readonly ArtifactFile[];
   readonly manifestFiles?: readonly ManifestFile[];
   readonly prebuiltPaths?: ReadonlySet<string>;
@@ -653,10 +655,14 @@ const validateGeneratedFiles = async (options: {
 
   diagnostics.push(...await validateJavaScriptModules({
     artifactRoot: options.artifactRoot,
+    ...(options.bundleSyntaxCheck === undefined ? {} : { bundleSyntaxCheck: options.bundleSyntaxCheck }),
     files: options.files,
     ...(options.manifestFiles === undefined
       ? {}
-      : { manifestFiles: new Set(options.manifestFiles.map((file) => file.path)) }),
+      : {
+        bundledPaths: new Set(options.manifestFiles.filter((file) => file.kind === 'bundle').map((file) => file.path)),
+        manifestFiles: new Set(options.manifestFiles.map((file) => file.path)),
+      }),
     prebuiltPaths,
     validJson,
   }));
@@ -664,15 +670,23 @@ const validateGeneratedFiles = async (options: {
   return Object.freeze(diagnostics);
 };
 
+/**
+ * The pre-manifest content pass `build` runs over a staged tree before it
+ * writes the manifest. The planned manifest file table, when given, tells
+ * the JavaScript validator which modules the compiler emitted; without it
+ * every module is parsed in full.
+ */
 export const validateArtifactFiles = async (
-  context: ValidateArtifactOptions,
+  context: ValidateArtifactOptions & { readonly manifestFiles?: readonly ManifestFile[] },
 ): Promise<readonly Diagnostic[]> => {
   const inspection = await inspectArtifact(context);
   return Object.freeze([
     ...filesystemDiagnostics(inspection.filesystem),
     ...await validateGeneratedFiles({
       artifactRoot: context.artifactRoot,
+      ...(context.bundleSyntaxCheck === undefined ? {} : { bundleSyntaxCheck: context.bundleSyntaxCheck }),
       files: inspection.files,
+      ...(context.manifestFiles === undefined ? {} : { manifestFiles: context.manifestFiles }),
       ...(context.prebuiltPaths === undefined ? {} : { prebuiltPaths: context.prebuiltPaths }),
     }),
   ]);
@@ -810,6 +824,7 @@ export const validateArtifactWithSnapshot = async (
     }),
     validateGeneratedFiles({
       artifactRoot,
+      ...(context.bundleSyntaxCheck === undefined ? {} : { bundleSyntaxCheck: context.bundleSyntaxCheck }),
       files: inspection.files,
       manifestFiles: manifest.files,
     }),

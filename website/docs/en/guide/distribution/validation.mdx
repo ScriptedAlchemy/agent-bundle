@@ -26,6 +26,17 @@ hand-edited generated file fails rather than passing because the path still exis
 files are checked too — a manifest-declared `logo` that is missing from the artifact or escapes
 the deploy tree reports `AB6025`.
 
+Every emitted JavaScript module is walked as an ES module (`AB6005`): each import must be a
+literal specifier that either names a Node built-in (`node:fs`, `fs`) or resolves — as a relative
+or `file:` specifier — to a regular file listed in the manifest inside the artifact. No non-literal
+dynamic imports, no bare package names, nothing outside the tree. How thoroughly a module's syntax
+is checked follows who produced its bytes. A module the framework compiled (manifest kind `bundle`)
+is the bundler's own output, so only the ESM lexer runs over it, which rejects unterminated
+strings, templates, comments, and regexps and unbalanced braces. A module the framework did not
+compile — a copied consumer script, a generated installer — is parsed in full, and so is every
+bundle of a build whose [`tools` hatch](../../reference/configuration.mdx#tools) could have rewritten the
+emitted assets. Prebuilt payloads (`kind: 'prebuilt'`) stay opaque and hash-locked only.
+
 Every diagnostic is one structured record: a stable `AB` code, a severity, a message, and usually
 a `sourcePath` and a `recovery` hint. The diagnostic-gated commands — `build`, `prepack`,
 `validate`, `doctor`, `install`, and `dev` — exit nonzero **only** when an error diagnostic is

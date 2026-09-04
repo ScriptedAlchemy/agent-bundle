@@ -1120,8 +1120,11 @@ it('rejects a canonical manifest that omits an executable file mode', async () =
 });
 
 it('preserves structural artifact diagnostics after a strict manifest passes', async () => {
+  // A compiler bundle's syntax is the ESM lexer's to reject: an unterminated
+  // template is invalid to it, where a bare `export const broken = ;` is not.
+  const brokenBundle = 'export const broken = `;\n';
   const files = [
-    { contents: 'export const broken = ;\n', kind: 'bundle' as const, path: 'broken.mjs' },
+    { contents: brokenBundle, kind: 'bundle' as const, path: 'broken.mjs' },
     { contents: '{', kind: 'generated' as const, path: 'invalid.json' },
     { contents: '{"mcpServers":{"local":{"args":["mcp/mcp-local-deadbeef.mjs"]}}}', kind: 'generated' as const, path: 'mcp.json' },
   ];
@@ -1130,7 +1133,7 @@ it('preserves structural artifact diagnostics after a strict manifest passes', a
   try {
     await writeFile(join(root, 'mcp.json'), '{"mcpServers":{"local":{"args":["mcp/mcp-local-deadbeef.mjs"]}}}\n');
     await writeFile(join(root, 'invalid.json'), '{');
-    await writeFile(join(root, 'broken.mjs'), 'export const broken = ;\n');
+    await writeFile(join(root, 'broken.mjs'), brokenBundle);
     const diagnostics = await validateArtifact({ artifactRoot: root });
     expect(diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'AB6005', generatedPath: 'broken.mjs' }),
@@ -1795,7 +1798,7 @@ it('does not repeat JavaScript diagnostics after a validation-side mutation', as
   const root = await writeArtifact(files, true, [customManifestTarget]);
   const modulePath = join(root, 'custom', 'scripts', 'mutable.mjs');
   const registry = customRegistry(() => {
-    writeFileSync(modulePath, 'export const broken = ;\n');
+    writeFileSync(modulePath, 'export const broken = `;\n');
     return [];
   });
 
@@ -1803,6 +1806,49 @@ it('does not repeat JavaScript diagnostics after a validation-side mutation', as
     const diagnostics = await validateArtifact({ artifactRoot: root, registry });
     expect(diagnostics.filter((entry) => entry.code === 'AB6005' && entry.generatedPath === 'custom/scripts/mutable.mjs')).toHaveLength(1);
     expect(diagnostics.filter((entry) => entry.code === 'AB6004' && entry.generatedPath === 'custom/scripts/mutable.mjs')).toHaveLength(1);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+/**
+ * The syntax check a module gets follows who produced it. A module the
+ * framework compiled (manifest kind `bundle`) is the bundler's own output:
+ * only the ESM lexer runs over it, so re-parsing megabytes of bundler output
+ * no longer dominates every build, and a bare `export const broken = ;` —
+ * which no bundler emits — passes while unterminated input still fails. A
+ * module the framework did not compile (a copied consumer script, a
+ * generated installer) is parsed in full and keeps the complete check.
+ */
+it('parses copied and generated modules in full and trusts compiler bundles to the ESM lexer', async () => {
+  const brokenStatement = 'export const broken = ;\n';
+  const root = await writeArtifact([
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+    { contents: brokenStatement, kind: 'copy', path: 'custom/scripts/copied.mjs' },
+    { contents: brokenStatement, kind: 'generated', path: 'custom/scripts/generated.mjs' },
+    { contents: brokenStatement, kind: 'bundle', path: 'custom/scripts/bundled.mjs' },
+    { contents: 'export const unterminated = `;\n', kind: 'bundle', path: 'custom/scripts/unterminated.mjs' },
+    { contents: "export { missing } from './missing.mjs';\n", kind: 'bundle', path: 'custom/scripts/dangling.mjs' },
+  ], true, [customManifestTarget]);
+
+  try {
+    const diagnostics = await validateArtifact({ artifactRoot: root, registry: customRegistry() });
+    expect(diagnostics.filter((entry) => entry.code === 'AB6005').map((entry) => [entry.generatedPath, entry.message])).toEqual([
+      ['custom/scripts/copied.mjs', 'Generated JavaScript import from "custom/scripts/copied.mjs" has invalid syntax.'],
+      ['custom/scripts/dangling.mjs', 'Generated JavaScript import from "custom/scripts/dangling.mjs" is missing "./missing.mjs".'],
+      ['custom/scripts/generated.mjs', 'Generated JavaScript import from "custom/scripts/generated.mjs" has invalid syntax.'],
+      ['custom/scripts/unterminated.mjs', 'Generated JavaScript import from "custom/scripts/unterminated.mjs" has invalid syntax.'],
+    ]);
+    // A build whose consumer hatch may have rewritten the emitted assets asks
+    // for the full parse of bundles too; nothing else changes.
+    const parsed = await validateArtifact({ artifactRoot: root, bundleSyntaxCheck: 'parsed', registry: customRegistry() });
+    expect(parsed.filter((entry) => entry.code === 'AB6005').map((entry) => entry.generatedPath)).toEqual([
+      'custom/scripts/bundled.mjs',
+      'custom/scripts/copied.mjs',
+      'custom/scripts/dangling.mjs',
+      'custom/scripts/generated.mjs',
+      'custom/scripts/unterminated.mjs',
+    ]);
   } finally {
     await rm(root, { force: true, recursive: true });
   }

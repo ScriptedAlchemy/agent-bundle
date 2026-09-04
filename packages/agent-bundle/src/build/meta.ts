@@ -109,3 +109,36 @@ export const generatedMetaModuleSource = (meta: AgentBundleMeta): string => [
   'export default meta;',
   '',
 ].join('\n');
+
+/** The shape both Rspack engines expose the experimental virtual-module surface through. */
+interface VirtualModulesEngine {
+  readonly experiments?: { readonly VirtualModulesPlugin?: unknown };
+}
+
+/**
+ * Generated sources ride Rspack's `experiments.VirtualModulesPlugin` instead
+ * of throwaway files on disk — an accepted design decision: the experimental
+ * surface is the cost of never touching the artifact tree with build-time
+ * scratch files. This narrow feature check turns an upstream rename or
+ * removal into an actionable diagnostic instead of an opaque resolution
+ * failure deep inside a build. Rsbuild and Rslib carry independent Rspack
+ * copies (the dual-engine reality documented on `AgentBundleToolsConfig`),
+ * so each build path checks its own `rspack` and names its own package.
+ */
+export const virtualModulesPluginConstructor = <Engine extends VirtualModulesEngine>(
+  rspack: Engine,
+  /** The package whose nested Rspack is checked, as the consumer pins it. */
+  packageName: string,
+  /** What agent-bundle serves through the plugin on this path, completing "uses to …". */
+  purpose: string,
+): NonNullable<NonNullable<Engine['experiments']>['VirtualModulesPlugin']> => {
+  const constructor = rspack.experiments?.VirtualModulesPlugin;
+  if (typeof constructor !== 'function') {
+    throw new Error(
+      `The Rspack engine nested in ${packageName} no longer exposes experiments.VirtualModulesPlugin, `
+        + `which agent-bundle uses to ${purpose}. `
+        + `Pin ${packageName} to a version whose Rspack ships the plugin, or update agent-bundle.`,
+    );
+  }
+  return constructor as NonNullable<NonNullable<Engine['experiments']>['VirtualModulesPlugin']>;
+};
