@@ -1,36 +1,192 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agent-bundle.dev/schemas/claude/2.1.250/hooks.schema.json",
+  "$defs": {
+    "commandHandler": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "args": { "type": "array", "items": { "type": "string" } },
+        "async": { "type": "boolean" },
+        "asyncRewake": { "type": "boolean" },
+        "command": { "type": "string", "minLength": 1 },
+        "if": { "type": "string" },
+        "once": { "type": "boolean" },
+        "shell": { "enum": ["bash", "powershell"] },
+        "statusMessage": { "type": "string" },
+        "timeout": { "type": "integer", "minimum": 1 },
+        "type": { "const": "command" }
+      },
+      "required": ["type", "command"]
+    },
+    "httpHandler": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowedEnvVars": { "type": "array", "items": { "type": "string" } },
+        "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+        "if": { "type": "string" },
+        "once": { "type": "boolean" },
+        "statusMessage": { "type": "string" },
+        "timeout": { "type": "integer", "minimum": 1 },
+        "type": { "const": "http" },
+        "url": { "type": "string", "minLength": 1 }
+      },
+      "required": ["type", "url"]
+    },
+    "mcpToolHandler": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "if": { "type": "string" },
+        "input": { "type": "object" },
+        "once": { "type": "boolean" },
+        "server": { "type": "string", "minLength": 1 },
+        "statusMessage": { "type": "string" },
+        "timeout": { "type": "integer", "minimum": 1 },
+        "tool": { "type": "string", "minLength": 1 },
+        "type": { "const": "mcp_tool" }
+      },
+      "required": ["type", "server", "tool"]
+    },
+    "promptHandler": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "continueOnBlock": { "type": "boolean" },
+        "if": { "type": "string" },
+        "model": { "type": "string", "minLength": 1 },
+        "once": { "type": "boolean" },
+        "prompt": { "type": "string", "minLength": 1 },
+        "statusMessage": { "type": "string" },
+        "timeout": { "type": "integer", "minimum": 1 },
+        "type": { "const": "prompt" }
+      },
+      "required": ["type", "prompt"]
+    },
+    "agentHandler": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "if": { "type": "string" },
+        "model": { "type": "string", "minLength": 1 },
+        "once": { "type": "boolean" },
+        "prompt": { "type": "string", "minLength": 1 },
+        "statusMessage": { "type": "string" },
+        "timeout": { "type": "integer", "minimum": 1 },
+        "type": { "const": "agent" }
+      },
+      "required": ["type", "prompt"]
+    },
+    "allHandlerGroups": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "matcher": { "type": "string" },
+          "hooks": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "oneOf": [
+                { "$ref": "#/$defs/commandHandler" },
+                { "$ref": "#/$defs/httpHandler" },
+                { "$ref": "#/$defs/mcpToolHandler" },
+                { "$ref": "#/$defs/promptHandler" },
+                { "$ref": "#/$defs/agentHandler" }
+              ]
+            }
+          }
+        },
+        "required": ["hooks"]
+      }
+    },
+    "nonModelHandlerGroups": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "matcher": { "type": "string" },
+          "hooks": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "oneOf": [
+                { "$ref": "#/$defs/commandHandler" },
+                { "$ref": "#/$defs/httpHandler" },
+                { "$ref": "#/$defs/mcpToolHandler" }
+              ]
+            }
+          }
+        },
+        "required": ["hooks"]
+      }
+    },
+    "startupHandlerGroups": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "matcher": { "type": "string" },
+          "hooks": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "oneOf": [
+                { "$ref": "#/$defs/commandHandler" },
+                { "$ref": "#/$defs/mcpToolHandler" }
+              ]
+            }
+          }
+        },
+        "required": ["hooks"]
+      }
+    }
+  },
   "type": "object",
   "additionalProperties": false,
   "properties": {
     "description": { "type": "string" },
     "hooks": {
       "type": "object",
-      "additionalProperties": {
-        "type": "array",
-        "items": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "matcher": { "type": "string" },
-            "hooks": {
-              "type": "array",
-              "minItems": 1,
-              "items": {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                  "command": { "type": "string", "minLength": 1 },
-                  "timeout": { "type": "integer", "minimum": 1 },
-                  "type": { "const": "command" }
-                },
-                "required": ["type", "command"]
-              }
-            }
-          },
-          "required": ["hooks"]
-        }
+      "additionalProperties": false,
+      "properties": {
+        "ConfigChange": { "$ref": "#/$defs/nonModelHandlerGroups" },
+        "CwdChanged": { "$ref": "#/$defs/nonModelHandlerGroups" },
+        "DirectoryAdded": { "$ref": "#/$defs/nonModelHandlerGroups" },
+        "Elicitation": { "$ref": "#/$defs/nonModelHandlerGroups" },
+        "ElicitationResult": { "$ref": "#/$defs/nonModelHandlerGroups" },
+        "FileChanged": { "$ref": "#/$defs/nonModelHandlerGroups" },
+        "InstructionsLoaded": { "$ref": "#/$defs/nonModelHandlerGroups" },
+        "MessageDisplay": { "$ref": "#/$defs/nonModelHandlerGroups" },
+        "Notification": { "$ref": "#/$defs/nonModelHandlerGroups" },
+        "PermissionDenied": { "$ref": "#/$defs/allHandlerGroups" },
+        "PermissionRequest": { "$ref": "#/$defs/allHandlerGroups" },
+        "PostCompact": { "$ref": "#/$defs/nonModelHandlerGroups" },
+        "PostModelSwitch": { "$ref": "#/$defs/nonModelHandlerGroups" },
+        "PostToolBatch": { "$ref": "#/$defs/allHandlerGroups" },
+        "PostToolUse": { "$ref": "#/$defs/allHandlerGroups" },
+        "PostToolUseFailure": { "$ref": "#/$defs/allHandlerGroups" },
+        "PreCompact": { "$ref": "#/$defs/nonModelHandlerGroups" },
+        "PreModelSwitch": { "$ref": "#/$defs/nonModelHandlerGroups" },
+        "PreToolUse": { "$ref": "#/$defs/allHandlerGroups" },
+        "SessionEnd": { "$ref": "#/$defs/nonModelHandlerGroups" },
+        "SessionStart": { "$ref": "#/$defs/startupHandlerGroups" },
+        "Setup": { "$ref": "#/$defs/startupHandlerGroups" },
+        "Stop": { "$ref": "#/$defs/allHandlerGroups" },
+        "StopFailure": { "$ref": "#/$defs/nonModelHandlerGroups" },
+        "SubagentStart": { "$ref": "#/$defs/nonModelHandlerGroups" },
+        "SubagentStop": { "$ref": "#/$defs/allHandlerGroups" },
+        "TaskCompleted": { "$ref": "#/$defs/allHandlerGroups" },
+        "TaskCreated": { "$ref": "#/$defs/allHandlerGroups" },
+        "TeammateIdle": { "$ref": "#/$defs/allHandlerGroups" },
+        "UserPromptExpansion": { "$ref": "#/$defs/allHandlerGroups" },
+        "UserPromptSubmit": { "$ref": "#/$defs/allHandlerGroups" },
+        "WorktreeCreate": { "$ref": "#/$defs/nonModelHandlerGroups" },
+        "WorktreeRemove": { "$ref": "#/$defs/nonModelHandlerGroups" }
       }
     }
   },

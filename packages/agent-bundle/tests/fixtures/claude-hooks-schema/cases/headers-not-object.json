@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://x",
+            "headers": [
+              "a"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

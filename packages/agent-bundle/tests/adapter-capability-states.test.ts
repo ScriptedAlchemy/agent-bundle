@@ -403,11 +403,14 @@ it('reports Claude plugin settings support and honest unavailable composite cove
 
 const claudeAgentCapabilityRows = {
   background: 'agents.background',
+  color: 'agents.color',
   component: 'agents',
   description: 'agents.description',
   disallowedTools: 'agents.disallowedTools',
   effort: 'agents.effort',
+  experimentalCacheTtl: 'agents.experimentalCacheTtl',
   hooks: 'agents.hooks',
+  initialPrompt: 'agents.initialPrompt',
   isolationWorktree: 'agents.isolationWorktree',
   maxTurns: 'agents.maxTurns',
   mcpServers: 'agents.mcpServers',
@@ -447,7 +450,9 @@ it('records dated unavailable Claude agent rows and mirrors them through the uni
     expect(row.reason).toContain('PR #220');
     expect(row.reason).toContain('#107 revision 3');
     expect(row.evidence.length).toBeGreaterThan(0);
-    expect(row.evidence.every((line) => line.startsWith('retrieved 2026-09-02:'))).toBe(true);
+    // Dated evidence: the 2026-09-02 web retrieval, the maintainer-uploaded
+    // 2026-09-03 references (sub-agents-3.md, #478), or same-day repository facts.
+    expect(row.evidence.every((line) => /^(?:retrieved 2026-09-02|uploaded 2026-09-03|2026-09-03):/u.test(line))).toBe(true);
     expect(registry.get('claude').capabilities[capability]).toEqual({
       reason: row.reason,
       state: 'unavailable',
@@ -469,6 +474,34 @@ it('records dated unavailable Claude agent rows and mirrors them through the uni
     expect(registry.supports('claude', capability)).toBe(false);
     expect(registry.supports('plugin', capability)).toBe(false);
   }
+});
+
+it('tracks the uploaded sub-agents contract in the Claude agent rows without enabling the component (#478)', () => {
+  const agents = claudeCapabilityTable.plugin.agents;
+  const uploaded = (line: string): boolean => line.startsWith('uploaded 2026-09-03:') && line.includes('sub-agents-3.md');
+
+  // New frontmatter fields: still unavailable behind the G5 gate, cited to the uploaded reference.
+  expect(agents.color.evidence.some((line) => uploaded(line) && /red, blue, green, yellow, purple, orange, pink, or cyan/u.test(line))).toBe(true);
+  expect(agents.initialPrompt.evidence.some((line) => uploaded(line) && line.includes('--agent'))).toBe(true);
+  expect(agents.experimentalCacheTtl.evidence.some((line) => uploaded(line) && line.includes('5m or 1h') && line.includes('2.1.248'))).toBe(true);
+  expect(agents.experimentalCacheTtl.reason).toContain('experimental.cacheTtl');
+
+  // Fields the host ignores for plugin subagents: the reason names the ignore, not merely a deferral.
+  for (const field of ['hooks', 'mcpServers', 'permissionMode'] as const) {
+    expect(agents[field].reason).toContain('Ignored for plugin subagents');
+    expect(agents[field].reason).toContain('diagnostic');
+    expect(agents[field].evidence.some((line) => uploaded(line) && line.includes(field))).toBe(true);
+  }
+
+  // Name constraints and the anchored plugin-scoped agent_type matcher.
+  expect(agents.name.evidence.some((line) => uploaded(line) && line.includes('agent_type') && line.includes('colon'))).toBe(true);
+  const matcher = claudeCapabilityTable.hooks.agentTypeMatcher;
+  expect(matcher.field).toBe('agent_type');
+  expect(matcher.pluginScopedTemplate).toBe('^<plugin-name>:<agent-name>$');
+  expect(matcher.evidence.some((line) => line.startsWith('uploaded 2026-09-03:') && line.includes('hooks-2.md') && line.includes('^my-plugin:reviewer$'))).toBe(true);
+  expect(matcher.evidence.some((line) => uploaded(line) && line.includes('^my-plugin:db-agent$'))).toBe(true);
+  // The tool-selector map the hook contract lowers stays untouched by the note.
+  expect(Object.keys(claudeCapabilityTable.hooks.matchers).sort()).toEqual(['file.read', 'file.write', 'mcp', 'shell']);
 });
 
 it('records the dated G5-gated Cursor agents component row beside the documented Cursor agents format', () => {

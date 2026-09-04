@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "webhook",
+            "url": "http://x"
+          }
+        ]
+      }
+    ]
+  }
+}
