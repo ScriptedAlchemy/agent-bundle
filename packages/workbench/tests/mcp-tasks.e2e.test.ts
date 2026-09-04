@@ -1,5 +1,3 @@
-import { writeFile } from 'node:fs/promises';
-
 import { expect } from '@rstest/playwright';
 
 import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
@@ -104,12 +102,6 @@ e2e('runs, polls, collects, and cancels a task-augmented tool call in real Chrom
 
     expect(ledger.pageErrors).toEqual([]);
     expect(ledger.consoleErrors).toEqual([]);
-  } catch (error) {
-    if (process.env['AGENT_BUNDLE_E2E_FAILURE_SCREENSHOT'] !== undefined) {
-      await page.screenshot({ path: process.env['AGENT_BUNDLE_E2E_FAILURE_SCREENSHOT'] }).catch(() => undefined);
-      await writeFile(`${process.env['AGENT_BUNDLE_E2E_FAILURE_SCREENSHOT']}.html`, await page.content()).catch(() => undefined);
-    }
-    throw error;
   } finally {
     await server.close();
     await project.release();
