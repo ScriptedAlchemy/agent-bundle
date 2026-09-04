@@ -3,10 +3,11 @@ import { Effect } from 'effect';
 import { Atom } from 'effect/unstable/reactivity';
 import { useCallback, useEffect, useState } from 'react';
 
-import type {
-  HostDiscoveryReport,
-  McpProbeHost,
-  McpProbeReport,
+import {
+  DiscoveryClientError,
+  type HostDiscoveryReport,
+  type McpProbeHost,
+  type McpProbeReport,
 } from './discovery-client.ts';
 
 export type DiscoveryLoader = (signal?: AbortSignal) => Promise<HostDiscoveryReport>;
@@ -35,18 +36,47 @@ export const discoveryProbeStateAtom = Atom.family(
   (key: string) => Atom.make<DiscoveryProbeState>(undefined),
 );
 
-export const discoveryReportAtom = Atom.family((refreshKey: number) => Atom.make((get) => {
-  const loader = get.once(discoveryLoaderAtom);
-  if (loader === undefined) {
-    return Effect.fail(new Error('Host discovery loading is not available in this Workbench session.'));
+/**
+ * `AB8234` is the documented host-discovery decoder diagnostic and the code
+ * the page already falls back to for an uncoded failure; the report atom uses
+ * it for the client-side states that have no route diagnostic of their own.
+ */
+const discoveryClientErrorCode = 'AB8234';
+
+/**
+ * The atom's fail channel is always the client's typed error. A
+ * `DiscoveryClientError` passes through unchanged; any other coded `Error`
+ * (for example the foreground authority's `ForegroundRouteClientError` when
+ * authentication was invalidated) keeps its own `code`, `message`, and numeric
+ * `status`; an uncoded rejection gets the decoder code and its message — the
+ * same code/message pair `errorDetails` on the page derived from a bare
+ * `Error`.
+ */
+const toDiscoveryClientError = (error: unknown): DiscoveryClientError => {
+  if (error instanceof DiscoveryClientError) return error;
+  if (!(error instanceof Error)) {
+    return new DiscoveryClientError(discoveryClientErrorCode, 'Host discovery request could not be completed.');
   }
-  return Effect.tryPromise({
-    catch: (error) => error instanceof Error
-      ? error
-      : new Error('Host discovery request could not be completed.'),
-    try: (signal) => loader(signal),
-  });
-}));
+  const code = 'code' in error && typeof error.code === 'string' ? error.code : discoveryClientErrorCode;
+  const status = 'status' in error && typeof error.status === 'number' ? error.status : undefined;
+  return new DiscoveryClientError(code, error.message, status);
+};
+
+export const discoveryReportAtom = Atom.family((refreshKey: number) => Atom.make(
+  (get): Effect.Effect<HostDiscoveryReport, DiscoveryClientError> => {
+    const loader = get.once(discoveryLoaderAtom);
+    if (loader === undefined) {
+      return Effect.fail(new DiscoveryClientError(
+        discoveryClientErrorCode,
+        'Host discovery loading is not available in this Workbench session.',
+      ));
+    }
+    return Effect.tryPromise({
+      catch: toDiscoveryClientError,
+      try: (signal) => loader(signal),
+    });
+  },
+));
 
 export const useDiscoveryLoader = (loader: DiscoveryLoader | undefined): boolean => {
   const [current, setCurrent] = useAtom(discoveryLoaderAtom);

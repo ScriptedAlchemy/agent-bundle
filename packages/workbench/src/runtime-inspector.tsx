@@ -62,7 +62,7 @@ const RuntimeDocumentResult = ({ runId }: Readonly<{ readonly runId: string }>):
   const result = useAtomValue(agentDocumentEventsAtom(runId));
   return AsyncResult.matchWithWaiting(result, {
     onDefect: (error) => <p role="alert">{error instanceof Error ? error.message : 'Agent Document request could not be completed.'}</p>,
-    onError: (message) => <p role="alert">{message}</p>,
+    onError: (error) => <p role="alert">{error.message}</p>,
     onSuccess: ({ value: events }) => <AgentDocumentStage events={events} />,
     onWaiting: () => <p role="status">Loading Agent Document…</p>,
   });
