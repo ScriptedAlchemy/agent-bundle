@@ -59,6 +59,28 @@ call renders through a warm internal Flight dispatcher and lowers the final Agen
 legal MCP output. Flight is an implementation transport inside the generated runtime — never a
 public host wire protocol, and raw Flight bytes never cross the MCP wire.
 
+A route may re-export its component and schemas from another module. This is how one tool is
+placed on two generated servers when only `config` differs between the placements — an MCP App
+`tools/call`, for example, reaches the server that served the widget:
+
+```tsx
+// src/mcp/widgets/tools/status.tsx
+import type { ToolConfig } from 'agent-bundle';
+
+export const config = {
+  _meta: { ui: { resourceUri: 'ui://widgets/status.html' } },
+  annotations: { readOnlyHint: true },
+  description: 'Read runtime status.',
+} satisfies ToolConfig;
+
+export { default, inputSchema, resultSchema } from '../../curator/tools/status.tsx';
+```
+
+The route contract check (`AB4810`) follows relative re-exports (`export { default } from`,
+`export { Page as default } from`) and judges the default export in the module that declares it,
+so a sync component behind the re-export is still reported here. A default re-exported from a
+package the check cannot read is accepted and verified when the route loads.
+
 `ToolConfig` and `ToolRouteProps` are public types:
 
 ```ts twoslash

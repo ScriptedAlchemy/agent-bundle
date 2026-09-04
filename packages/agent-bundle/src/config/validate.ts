@@ -2011,7 +2011,7 @@ const scriptEntryExports = (source: string): EntryExportScan | undefined => {
  */
 const renderedScriptExports = (source: string, relativePath: string): RouteModuleExports | undefined => {
   try {
-    return scanRouteModuleExports(readFileSync(source, 'utf8'), relativePath);
+    return scanRouteModuleExports(readFileSync(source, 'utf8'), relativePath, { source });
   } catch {
     return undefined;
   }
@@ -2062,11 +2062,13 @@ const validateConventionalScripts = (
         // type-only exports); the component by the route compiler's scan (an
         // async default function, not mere default-export presence, since
         // `export default {}` would build and fail at run time). A default
-        // re-exported from another module (`export { default } from`) cannot
-        // be judged statically and is accepted; the worker still verifies it.
+        // re-exported from a relative module (`export { default } from`) is
+        // judged in that module; one the scan cannot read is accepted and the
+        // worker still verifies it.
         const hasMain = scriptEntryExports(route.source)?.hasMainExport === true;
         const routeExports = renderedScriptExports(route.source, relativePath);
-        const hasComponent = routeExports?.asyncDefault === true || routeExports?.named.has('default') === true;
+        const hasComponent = routeExports?.asyncDefault === true
+          || routeExports?.defaultReExport?.resolution === 'unresolved';
         if (hasMain && hasComponent) break;
         const missing = !hasMain && !hasComponent
           ? 'neither an async default Server Component nor a named main'
