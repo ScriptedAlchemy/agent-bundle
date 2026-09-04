@@ -33,7 +33,7 @@ describe('the in-memory MCP projection level', () => {
   it('registers every compiled route kind on the real generated server', async () => {
     const surface = await listMcpSurface();
 
-    expect(surface.tools).toEqual(['catalog', 'context', 'echo', 'journal', 'layout-probe', 'lifecycle', 'mutation-probe', 'publish-notice', 'strict-report', 'ticket', 'tooling', 'unavailable', 'wait']);
+    expect(surface.tools).toEqual(['catalog', 'context', 'echo', 'fault', 'journal', 'layout-probe', 'lifecycle', 'mutation-probe', 'publish-notice', 'strict-report', 'ticket', 'tooling', 'unavailable', 'wait']);
     expect(surface.prompts).toEqual(['summarize']);
     expect(surface.resources).toEqual(['harness://notes']);
     expect(surface.provenance).toMatchObject({
@@ -44,6 +44,7 @@ describe('the in-memory MCP projection level', () => {
         'tool:harness/catalog',
         'tool:harness/context',
         'tool:harness/echo',
+        'tool:harness/fault',
         'tool:harness/journal',
         'tool:harness/layout-probe',
         'tool:harness/lifecycle',
@@ -150,6 +151,45 @@ describe('the in-memory MCP projection level', () => {
     expect(invocation.isError).toBe(true);
     expect(invocation.content).toContainEqual(expect.objectContaining({ type: 'text' }));
     expect(invocation.structuredContent).toEqual({ available: false });
+  });
+
+  describe('a tool route that throws instead of rendering Agent.Error (#492)', () => {
+    it('reaches the wire as the SDK default tool error: message text, isError, no _meta, no structuredContent', async () => {
+      await using session = await openInMemoryMcpServer();
+
+      // No document exists, so nothing agent-bundle projects — layout `_meta`,
+      // `structuredContent`, a `[code]` prefix — can be present. The result is
+      // exactly what @modelcontextprotocol/server's `createToolError` builds
+      // from the thrown error's message.
+      const result = await session.client.callTool({ arguments: { mode: 'throw' }, name: 'fault' });
+      expect(result).toEqual({
+        content: [{ text: 'fault: route threw', type: 'text' }],
+        isError: true,
+      });
+      expect(result).not.toHaveProperty('_meta');
+      expect(result).not.toHaveProperty('structuredContent');
+
+      // The session is still usable: the failure was a result, not a transport error.
+      const ok = await session.client.callTool({ arguments: { mode: 'ok' }, name: 'fault' });
+      expect(ok).toMatchObject({ structuredContent: { mode: 'ok', settled: true } });
+      expect(ok).not.toHaveProperty('isError');
+    });
+
+    it('keeps the layout shell when only a nested Suspense boundary rejects: represented error with code "boundary"', async () => {
+      const invocation = await invokeMcpTool('fault', { input: { mode: 'reject-boundary' } });
+
+      // The reconciler folds the rejected boundary into the streamed document
+      // as an error node, so this is the same wire shape `<Agent.Error
+      // code="boundary">` would produce: layout `_meta` survives, the route's
+      // value is still `structuredContent`, and the text carries the code.
+      expect(invocation.isError).toBe(true);
+      expect(invocation._meta).toMatchObject({ layout: 'harness', route: 'tool:harness/fault', server: 'mcp:harness' });
+      expect(invocation.content).toEqual([
+        { text: 'fault: reject-boundary', type: 'text' },
+        { text: '[boundary] fault: boundary rejected', type: 'text' },
+      ]);
+      expect(invocation.structuredContent).toEqual({ mode: 'reject-boundary', settled: true });
+    });
   });
 
   it('resolves a suspended boundary before the server projects the result', async () => {

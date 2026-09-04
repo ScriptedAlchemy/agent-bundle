@@ -120,6 +120,7 @@ it('serves compiled routes and durable state across packed process restarts', as
         'catalog',
         'context',
         'echo',
+        'fault',
         'journal',
         'layout-probe',
         'lifecycle',

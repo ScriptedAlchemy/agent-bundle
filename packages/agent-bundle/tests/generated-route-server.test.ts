@@ -710,6 +710,78 @@ it('emits MCP progress notifications only when a progress token is supplied', { 
   }
 });
 
+/**
+ * #492: what a thrown (not represented) route error is on each MCP surface of
+ * a real generated stdio server. A tool throw is the SDK's default tool error;
+ * a prompt or resource throw is a JSON-RPC error the client rejects with. The
+ * layout shell never wraps either, because no document exists.
+ */
+it('projects thrown route errors as the SDK tool error or a JSON-RPC error, never as a layout-wrapped document', { retry: 2, timeout: 60_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-generated-thrown-'));
+  roots.push(root);
+  const throwing = (kind: string) => [
+    "import { z } from 'zod';",
+    `export const config = ${kind === 'resource' ? "{ mimeType: 'text/plain', uri: 'curator://broken' }" : "{ description: 'Throws.' }"};`,
+    `export const inputSchema = ${kind === 'resource' ? 'z.object({ uri: z.string() })' : 'z.object({}).strict()'};`,
+    'export const resultSchema = z.object({}).passthrough();',
+    `export default async function Broken() { throw new Error('${kind} route threw'); }`,
+    '',
+  ].join('\n');
+  await writeGeneratedProject(root, {
+    // A layout that would stamp `_meta` on every document, to show it is absent when the route throws.
+    'src/layout.tsx': [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      "export default function Layout({ children, route }) { return createElement(Agent.Result, { metadata: { route: route.id } }, children); }",
+      '',
+    ].join('\n'),
+    'src/mcp/curator/prompts/broken.ts': throwing('prompt'),
+    'src/mcp/curator/resources/broken.ts': throwing('resource'),
+    'src/mcp/curator/tools/broken.ts': throwing('tool'),
+    'src/mcp/curator/tools/fine.tsx': [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      "import { z } from 'zod';",
+      "export const config = { description: 'Renders.' };",
+      'export const inputSchema = z.object({}).strict();',
+      'export const resultSchema = z.object({ ok: z.literal(true) }).strict();',
+      "export default async function Fine() { return createElement(Agent.Result, { value: { ok: true } }, createElement(Agent.Text, null, 'fine')); }",
+      '',
+    ].join('\n'),
+  });
+  const session = await connectGeneratedServer(root);
+  try {
+    // The layout is live: a rendering tool carries its `_meta`.
+    await expect(session.client.callTool({ arguments: {}, name: 'fine' }, { signal: AbortSignal.timeout(10_000) })).resolves.toEqual({
+      _meta: { route: 'tool:curator/fine' },
+      content: [{ text: 'fine', type: 'text' }],
+      structuredContent: { ok: true },
+    });
+
+    // tools/call: @modelcontextprotocol/server `createToolError` — the thrown
+    // message as one text block plus isError. No `_meta`, no
+    // `structuredContent`, no `[code]` prefix: agent-bundle projected nothing.
+    await expect(session.client.callTool({ arguments: {}, name: 'broken' }, { signal: AbortSignal.timeout(10_000) })).resolves.toEqual({
+      content: [{ text: 'tool route threw', type: 'text' }],
+      isError: true,
+    });
+
+    // prompts/get and resources/read have no isError channel: the throw is a
+    // JSON-RPC error response and the client call rejects.
+    await expect(session.client.getPrompt({ arguments: {}, name: 'broken' }, { signal: AbortSignal.timeout(10_000) }))
+      .rejects.toMatchObject({ message: expect.stringContaining('prompt route threw') });
+    await expect(session.client.readResource({ uri: 'curator://broken' }, { signal: AbortSignal.timeout(10_000) }))
+      .rejects.toMatchObject({ message: expect.stringContaining('resource route threw') });
+
+    // The server survived all three: the next call renders normally.
+    await expect(session.client.callTool({ arguments: {}, name: 'fine' }, { signal: AbortSignal.timeout(10_000) })).resolves.toMatchObject({
+      structuredContent: { ok: true },
+    });
+  } finally {
+    await session.close();
+  }
+});
+
 it('maps notifications/cancelled into the renderer AbortSignal', { retry: 2, timeout: 60_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-generated-cancel-'));
   roots.push(root);
@@ -1183,6 +1255,62 @@ it('runs an explicitly standalone event route without a shared runtime', { timeo
     tool_use_id: 'tool-1',
   });
   expect(response).toEqual({ additional_context: 'standalone:Write' });
+});
+
+/**
+ * #492: a thrown event route never reaches `projectEventDocument`. The
+ * generated wrapper writes the message to stderr, nothing to stdout, and exits
+ * 1 — which every supported host documents as a non-blocking error, so the
+ * pending action proceeds exactly as a pass-through would.
+ */
+it('exits 1 with the message on stderr and no stdout when a standalone event route throws', { timeout: 60_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-thrown-event-'));
+  roots.push(root);
+  await symlink(join(process.cwd(), 'examples', 'audiobook-curator', 'node_modules'), join(root, 'node_modules'), 'dir');
+  await Promise.all([
+    writeProjectFile(root, 'package.json', JSON.stringify({
+      dependencies: { '@agent-bundle/runtime': 'workspace:*', react: '19.2.8' },
+      name: 'thrown-event-fixture',
+      type: 'module',
+      version: '1.0.0',
+    })),
+    writeProjectFile(root, 'agent-bundle.config.ts', [
+      "import { defineConfig } from 'agent-bundle/config';",
+      "export default defineConfig({ plugin: { name: 'thrown-event-fixture', version: '1.0.0' }, targets: ['cursor'] });",
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/events/tool/before.tsx', [
+      "export const config = { runtime: 'standalone', targets: ['cursor'] };",
+      "export default async function BeforeTool() { throw new Error('before-tool route exploded'); }",
+      '',
+    ].join('\n')),
+  ]);
+
+  const compiled = await build({ output: join(root, 'artifact'), root, targets: ['cursor'] });
+  const hook = compiled.build.compiledHooks.find((entry) => entry.event === 'beforeTool');
+  expect(hook).toBeDefined();
+  const run = await new Promise<{ readonly code: number | null; readonly stderr: string; readonly stdout: string }>((resolvePromise, reject) => {
+    const child = spawn(process.execPath, [hook!.output], { stdio: ['pipe', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += String(chunk); });
+    child.stderr.on('data', (chunk) => { stderr += String(chunk); });
+    child.once('error', reject);
+    child.once('close', (code) => { resolvePromise({ code, stderr, stdout }); });
+    child.stdin.end(JSON.stringify({
+      conversation_id: 'conversation-1',
+      cwd: root,
+      hook_event_name: 'preToolUse',
+      session_id: 'session-1',
+      tool_input: { command: 'ls' },
+      tool_name: 'Shell',
+      tool_use_id: 'tool-1',
+    }));
+  });
+
+  expect(run.code).toBe(1);
+  expect(run.stdout).toBe('');
+  expect(run.stderr).toContain('before-tool route exploded');
 });
 
 it('replays Claude and Codex subagent fixtures through standalone event-route wrappers', { timeout: 60_000 }, async () => {

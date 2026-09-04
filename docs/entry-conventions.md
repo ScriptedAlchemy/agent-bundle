@@ -332,8 +332,11 @@ document contract under a layout exactly as it does without one.
 The generated worker resolves the route's element **before** the layout chain
 renders, then wraps it. That keeps failure semantics identical with and
 without a layout — a route that throws rejects the whole render (CLI exit 1
-with the route's message, MCP transport failure) instead of being downgraded
-to a represented `boundary` error beneath the layout's shell. The trade-off is
+with the route's message; on MCP the SDK's default `isError` tool result or a
+JSON-RPC error, with no layout `_meta` — see
+[What happens when a route throws](framework-mode.md#what-happens-when-a-route-throws))
+instead of being downgraded to a represented `boundary` error beneath the
+layout's shell. The trade-off is
 deliberate: a layout cannot stream a `Suspense` fallback around `children`
 while the route is still running, because the route is never a lazily
 resolved Flight chunk under the layout. A `Suspense` boundary a layout places

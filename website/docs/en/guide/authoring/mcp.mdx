@@ -127,15 +127,53 @@ compile-time identity (`id`, `kind`, `name`, `serverId` for MCP kinds), `signal`
 signal, and `await agent()` works inside a layout exactly as in a route.
 
 The route's element resolves **before** the layout chain renders, so a throwing route still fails
-the whole render (CLI exit `1`, MCP transport failure) rather than being downgraded to a boundary
-error beneath the layout's shell; the trade-off is that a layout cannot stream a `Suspense`
-fallback around `children`. A layout whose default export is not a function, or that exports the
+the whole render (CLI exit `1`; on MCP the SDK's default `isError` result or a JSON-RPC error with
+no layout `_meta` — see [What happens when a route throws](#what-happens-when-a-route-throws))
+rather than being downgraded to a boundary error beneath the layout's shell; the trade-off is that
+a layout cannot stream a `Suspense` fallback around `children`. A layout whose default export is not a function, or that exports the
 route-only `config`/`inputSchema`/`resultSchema`, is `AB4830`; `.ts` and `.tsx` siblings for one
 scope are `AB4831`; a server layout whose server declares no tool, resource, or prompt routes is
 `AB4832`, while a server pinned to `custom`, `command`, or `remote` skips its layout entirely. The
 route-unit and projection test levels compose the same chain, so `renderRoute('tool:...')` and
 `invokeMcpTool(...)` prove the composed document; a module passed directly to `renderRoute()`
 composes no layout.
+
+## What happens when a route throws
+
+`Agent.Error` is the supported error path. The error is data inside the document, so the layout
+shell, `_meta`, `structuredContent`, and the `[code] message` text all survive, and the wire
+carries `isError: true`:
+
+```tsx
+export default async function Lookup({ input }: ToolRouteProps<typeof inputSchema>) {
+  const hit = await catalog.find(input.id);
+  if (hit === undefined) {
+    return (
+      <Agent.Result value={{ found: false }}>
+        <Agent.Error code="E_NOT_FOUND">{`No entry is named ${input.id}.`}</Agent.Error>
+      </Agent.Result>
+    );
+  }
+  // …
+}
+```
+
+A route that **throws** instead is not projected by agent-bundle at all — there is no document to
+project — and each surface's own default applies. The layout shell never wraps it. Per surface:
+
+| Surface | The route's default export throws | A nested `Suspense` boundary rejects |
+| --- | --- | --- |
+| MCP `tools/call` | The MCP SDK's default tool error: `{ content: [{ type: 'text', text: <message> }], isError: true }` — no `_meta`, no `structuredContent`, no `[code]` prefix. The session stays usable. | A represented error: the reconciler folds the rejected boundary into the document as an error node with code `boundary`, so the result is what `<Agent.Error code="boundary">` would produce — layout `_meta` kept, `structuredContent` from the route's value, `isError: true`, and a `[boundary] <message>` text block beside the content that had already rendered. |
+| MCP `prompts/get`, `resources/read` | A JSON-RPC error response carrying the message; the client call rejects. These surfaces have no `isError` channel. | The generated server returns the route's `resultSchema`-parsed value from the same represented document. |
+| Rendered CLI command / rendered script | The message on stderr, exit `1`; nothing on stdout. | `[boundary] message` on stderr as the event happens; then the document prints as usual — Markdown with `**[boundary]** message`, or under `--json` the route's value alone (the boundary message is not in the JSON; `--ndjson` carries the `error` event). Exit `1`, as for any non-`success` document. |
+| Plain CLI command / plain script | Routed command: message on stderr, exit `1` (usage and input errors exit `2`). Plain script: Node's top-level failure path — stack on stderr, exit `1`. | n/a |
+| Event route (hook) | The generated wrapper writes to stderr, nothing to stdout, and exits `1`. A `runtime: 'standalone'` route or a config-declared handler writes the thrown message; a route in the default **shared** runtime writes `Event route rendering failed.` — the runtime answers with the generic `runtime-failed` error and the original message stays inside the runtime process. Every supported host documents exit `1` as a **non-blocking** error, so the pending action proceeds exactly as a pass-through would — a thrown `tool/before` does **not** deny. Return `outcome: 'deny'` to block. | The hook projection reads `Agent.Context` and the result value only; the error node contributes nothing. |
+| `renderRoute` / `renderRouteEvents` | `AgentTestError('render-failed')` naming the route and the cause; no document, no events. | Resolves with `document.status === 'represented-error'`, an `error` node with code `boundary`, and events `shell → error → complete`. |
+
+The projector deliberately does not wrap a root throw into the `Agent.Error` shape: the layout
+shell is a property of a document, and a root throw has none. A route that wants a code, a shell,
+or structured content on failure renders `Agent.Error`; a route that wants a nested failure to
+keep the rest of the document places it behind `Suspense`.
 
 ## Handwritten stdio entries
 

@@ -211,6 +211,36 @@ The final Agent Document of a tool route lowers to one `CallToolResult`:
 | `Agent.Error code message` | `isError: true` plus one text block `[<code>] <message>`. The wire has no error-code field, so the code is deliberately kept in the text (the routed CLI prints the same `**[code]** message` form); choose codes that read well to the model. |
 | `resultSchema` | `outputSchema` in `tools/list` **only when the schema describes an object** (`z.object`, `z.record`, a discriminated union of objects). The MCP specification requires every result of a tool that declares `outputSchema` to carry `structuredContent`, so a text-only route declares `resultSchema = z.undefined()` (or any non-object schema), advertises no `outputSchema`, and returns no `structuredContent`. An object schema keeps the SDK's fail-closed output validation on every call. |
 
+### What happens when a route throws
+
+`Agent.Error` is the supported error path: the error is data inside the
+document, so the layout shell, `_meta`, `structuredContent`, and the `[code]`
+text all survive. A route that **throws** instead (or rejects, before any
+document exists) is not projected by agent-bundle at all — there is no document
+to project — and each surface's own default applies. These are decisions, pinned
+by `tests/route-unit/thrown-route-error.test.ts`, `tests/projection/mcp-in-memory.test.ts`,
+`tests/projection/cli-dispatch-rendered.test.ts`, `tests/generated-route-server.test.ts`,
+`tests/hooks.test.ts`, and `tests/event-ipc.test.ts` (#492):
+
+| Surface | A route whose default export throws | A nested `Suspense` boundary that rejects |
+| --- | --- | --- |
+| MCP `tools/call` | The MCP SDK's default tool error: `{ content: [{ type: 'text', text: <error.message> }], isError: true }`. No `_meta` (the layout never rendered), no `structuredContent`, no `[code]` prefix. The session stays usable. | A represented error: the reconciler folds the rejected boundary into the streamed document as an error node with code `boundary`, so the result is exactly what `<Agent.Error code="boundary">` would produce — layout `_meta` kept, `structuredContent` from the route's `Agent.Result value`, `isError: true`, and a `[boundary] <message>` text block after the content that had already rendered. |
+| MCP `prompts/get`, `resources/read` | A JSON-RPC error response carrying the message; the client call rejects. These surfaces have no `isError` channel. | The same represented document; the generated server returns the route's `resultSchema`-parsed value, so the prompt or resource result is whatever the route's value said. |
+| Rendered CLI command / rendered script | The message on stderr, exit 1. Nothing on stdout: no Markdown, no `--json` value. | The `error` render event is written to stderr as `[boundary] message` as it happens; the final document then prints as usual — Markdown (TTY or piped) with `**[boundary]** message` beside the content that had rendered, or under `--json` the route's value alone, with the boundary message **not** in the JSON. `--ndjson` carries the `error` event itself. Exit 1, because any non-`success` document status exits 1 regardless of the command's `exitCode` policy. |
+| Plain CLI command / plain script | Routed command: the message on stderr, exit 1 (only usage and input errors exit 2). Plain script: the rejection escapes through Node's top-level failure path — stack on stderr, exit 1. | n/a (no renderer). |
+| Event route (hook) | The generated wrapper writes to stderr, nothing to stdout, and exits 1. What stderr says depends on the runtime mode: a `runtime: 'standalone'` route and a config-declared handler write the thrown message; a route in the default **shared** runtime writes `Event route rendering failed.` — the shared runtime answers the wrapper with the generic `runtime-failed` error (`events/ipc.ts`) and the original message never leaves the runtime process. Every supported host documents exit 1 as a **non-blocking** error (Claude Code and Codex show the stderr; Cursor treats it as fail-open), so the pending action proceeds exactly as a pass-through would — a thrown `tool/before` does **not** deny. | The hook projection reads `Agent.Context` and the result value only; the error node contributes nothing, so the host receives the surviving context and decision as a normal response. |
+| `renderRoute` / `renderRouteEvents` (route-unit) | `AgentTestError('render-failed')` naming the route and the cause; no document, no events. | Resolves: `document.status === 'represented-error'`, an `error` node with code `boundary`, events `shell → error(boundaryId) → complete`. |
+
+Why the projector does not wrap a root throw into the `Agent.Error` shape: the
+layout shell is a property of a document, and a root throw has none — giving it
+`_meta` would mean rendering the layout around a synthetic child, which is the
+layout-level `error` prop the #492 discussion reserves for a consumer who asks
+for it. A `[code]` prefix would also create a third error shape beside the
+SDK default (which every other handler failure — a `resultSchema` rejection, an
+`McpProjectionError` — already uses) and the represented one. Both surveyed real
+apps keep failures as data for exactly this reason; a route that wants a
+code, a shell, or structured content renders `Agent.Error`.
+
 Everything else is power-tier reference: custom/remote server modes and
 collision recovery are in [Entry conventions](entry-conventions.md); accepted
 static metadata, generated `.agent-bundle/routes.d.ts`, and diagnostics are in
