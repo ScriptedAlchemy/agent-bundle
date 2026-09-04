@@ -34,7 +34,7 @@ export interface RequestLineageProvenance {
   readonly depth: number;
   readonly generation?: string;
   readonly parent?: string;
-  readonly resolution: 'native' | 'registry' | 'inferred';
+  readonly resolution: 'native' | 'registry' | 'confirmed' | 'inferred';
   readonly root: string;
   readonly subagent?: Readonly<{
     readonly id: string;

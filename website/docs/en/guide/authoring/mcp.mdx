@@ -81,8 +81,16 @@ conversation, and are we a subagent?" — `{ conversation, root, parent?, depth,
 subagent?, resolution }`, resolved by the warm runtime's registry from the host's subagent
 start/stop and pre-tool hooks, or `unavailable` with a typed reason (`id-not-resolvable`,
 `no-subagent-events`, `no-shared-runtime`, `cloud-agent-no-user-hooks`, `unsupported-surface`,
-`not-provided`). There is deliberately no operator or user identity axis: the framework never
-reads or surfaces who the human behind a host session is.
+`not-provided`). `resolution` is the trust level of `parent`/`root`/`depth`: `native` (named on
+the payload — a Claude or Codex root, a Codex `_meta`), `registry` (the registry matched the
+subagent's start to the newest unclaimed spawn call), `confirmed` (the host afterwards named
+that edge itself — Claude's `Agent` `PostToolUse` carries the spawn `tool_use_id` and
+`tool_response.agentId`, the child — for every edge up to the root), or `inferred` (Cursor
+binds a child conversation to the single pending `subagentStart`). A confirmation also fills
+in `subagent.toolCallId` for siblings claimed blind, places a start no spawn window could, and
+moves a child the window filed under the wrong parent. There is deliberately no operator or
+user identity axis: the framework never reads or surfaces who the human behind a host session
+is.
 
 ## Shared layouts
 

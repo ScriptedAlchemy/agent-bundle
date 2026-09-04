@@ -25,7 +25,7 @@ const availableLineageSchema = z.strictObject({
     depth: z.number().int().nonnegative(),
     generation: textSchema.optional(),
     parent: textSchema.optional(),
-    resolution: z.enum(['native', 'registry', 'inferred']),
+    resolution: z.enum(['native', 'registry', 'confirmed', 'inferred']),
     root: textSchema,
     subagent: z.strictObject({
       id: textSchema,

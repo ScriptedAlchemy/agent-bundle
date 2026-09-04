@@ -105,6 +105,22 @@ describe('generated MCP tool calls resolve request.lineage through the runtime r
     expect(await callContext(registry, { 'claudecode/toolUseId': 'toolu_child_call' })).toMatchObject({
       value: { conversation: child, depth: 1, resolution: 'registry' },
     });
+
+    // The root's `Agent` PostToolUse names the child it produced
+    // (`tool_response.agentId`, Claude Code 2.1.257): the edge the registry
+    // matched is now the host's own, and the same call resolves as confirmed.
+    await observe(registry, 'tool/after', {
+      hook_event_name: 'PostToolUse',
+      session_id: root,
+      tool_input: {},
+      tool_name: 'Agent',
+      tool_response: { agentId: child, isAsync: true, status: 'async_launched' },
+      tool_use_id: 'toolu_spawn',
+    });
+    expect(await callContext(registry, { 'claudecode/toolUseId': 'toolu_child_call' })).toMatchObject({
+      source: 'derived',
+      value: { conversation: child, depth: 1, parent: root, resolution: 'confirmed', subagent: { toolCallId: 'toolu_spawn' } },
+    });
   });
 
   it('leaves the axis honestly absent when the session has no registry', async () => {

@@ -22,6 +22,7 @@ interface CapabilityRow {
   readonly state?: string;
   readonly reason?: string;
   readonly nativeEvent?: string;
+  readonly evidence?: readonly string[];
   readonly availability?: Readonly<Record<string, { readonly state?: string; readonly reason?: string }>>;
 }
 
@@ -129,17 +130,22 @@ const messages = {
       `:::info Generated page\nThis page is a build-time copy of [\`docs/diagnostics.md\`](${repositoryUrl}/docs/diagnostics.md), the repository's diagnostics contract. Change that file, not this page.\n:::`,
     hostsTitle: 'Host capability matrix',
     hostsDescription:
-      'Pinned host capability tables for the Claude Code, Codex, Cursor, and portable targets: observed versions, manifest locations, install surfaces, path tokens, MCP transports, and plugin components.',
+      'Pinned host capability tables for the Claude Code, Codex, Cursor, and portable targets: observed versions, manifest locations, install surfaces, path tokens, MCP transports, conversation lineage, and plugin components.',
     hostsIntro:
       'Every target adapter projects the normalized bundle against a pinned capability table: a JSON document recording the host version the evidence was observed against, the paths the host reads, and — for each capability — whether it is `supported`, `degraded`, or `unavailable` with a written reason. Nothing is inferred: a capability without evidence is unavailable, never a silent guess.',
     pinnedHosts: 'Pinned hosts',
     installSurface: 'Install surface',
     pathTokens: 'Path tokens',
     mcpTransports: 'MCP transports and token fields',
+    lineage: 'Conversation lineage',
+    lineageIntro:
+      'The `lineage` section of each table: what the host tells the warm runtime about the conversation tree behind `request.lineage`. `subagent-events` says whether the host emits subagent start/stop hooks at all, `root` whether every payload names the root conversation, `parent` and `depth` how a subagent is placed under its parent (`supported` only when the child\'s own payload names it, `degraded` when the runtime registry places it from spawn-call ordering and any later host confirmation), and `mcp-correlation` how a generated MCP tool call is matched to the hook window that produced it. A degraded row records what the registry does and how certain it is; a supported row records the evidence. The `resolution` field on `request.lineage` reports which path answered (`native`, `registry`, `confirmed`, `inferred`).',
+    lineageDetails: 'Lineage row details',
     pluginComponents: 'Plugin components',
     pluginComponentsIntro:
       'The `plugin` section of each table, flattened to dotted capability paths. Boolean rows record a component the adapter emits; rows with a state carry the reason the host evidence supports or withholds it. Evidence notes stay in the JSON files.',
     headers: {
+      lineageRow: 'Lineage row',
       host: 'Host',
       version: 'Observed version',
       manifest: 'Plugin manifest',
@@ -206,17 +212,22 @@ const messages = {
       `:::info 生成页面\n本页是仓库诊断契约 [\`docs/diagnostics.md\`](${repositoryUrl}/docs/diagnostics.md) 在构建时的副本，内容保留英文原文。请修改该文件而不是本页。\n:::`,
     hostsTitle: '宿主能力矩阵',
     hostsDescription:
-      'Claude Code、Codex、Cursor 与 portable 目标的固定宿主能力表：观测版本、清单位置、安装方式、路径令牌、MCP 传输与插件组件。',
+      'Claude Code、Codex、Cursor 与 portable 目标的固定宿主能力表：观测版本、清单位置、安装方式、路径令牌、MCP 传输、会话谱系与插件组件。',
     hostsIntro:
       '每个目标适配器都会把归一化后的 bundle 投影到一份固定的能力表上：这份 JSON 文档记录了证据所对应的宿主版本、宿主读取的路径，以及每项能力是 `supported`、`degraded` 还是 `unavailable`，并附带书面原因。没有任何推断：缺少证据的能力即为不可用，绝不会默默猜测。',
     pinnedHosts: '固定宿主',
     installSurface: '安装方式',
     pathTokens: '路径令牌',
     mcpTransports: 'MCP 传输与令牌字段',
+    lineage: '会话谱系',
+    lineageIntro:
+      '每张表的 `lineage` 部分：宿主向常驻运行时提供了哪些关于 `request.lineage` 背后会话树的信息。`subagent-events` 表示宿主是否发出子代理 start/stop 钩子，`root` 表示每个载荷是否都给出根会话，`parent` 与 `depth` 表示子代理如何被放到其父节点之下（只有当子代理自己的载荷给出父节点时才是 `supported`；由运行时注册表按 spawn 调用顺序放置、再由宿主事后确认时为 `degraded`），`mcp-correlation` 表示生成的 MCP 工具调用如何匹配到产生它的钩子窗口。degraded 行记录注册表的做法及其确定程度；supported 行记录证据。`request.lineage` 上的 `resolution` 字段报告是哪条路径给出了答案（`native`、`registry`、`confirmed`、`inferred`）。',
+    lineageDetails: '谱系行详情',
     pluginComponents: '插件组件',
     pluginComponentsIntro:
       '每张表的 `plugin` 部分，按点分能力路径展开。布尔行表示适配器会发出的组件；带状态的行记录宿主证据支持或保留该能力的原因。证据说明保留在 JSON 文件中。',
     headers: {
+      lineageRow: '谱系行',
       host: '宿主',
       version: '观测版本',
       manifest: '插件清单',
@@ -475,6 +486,41 @@ function renderHosts(hosts: readonly HostCapabilityTable[], m: Messages): string
           fields.length > 0 ? fields : mcpPathTokenLoweringNote(host.data) ?? m.notApplicable,
         ];
       }),
+    ),
+  );
+
+  sections.push(`## ${m.lineage}\n`);
+  sections.push(m.lineageIntro);
+  const lineageRows = unionKeys(hosts, data => asObject(data.lineage));
+  sections.push(
+    table(
+      [m.headers.lineageRow, ...hosts.map(hostHeader)],
+      lineageRows.map(row => [
+        code(row),
+        ...hosts.map(host => stateCell(capabilityRow(asObject(host.data.lineage)[row]), m)),
+      ]),
+    ),
+  );
+  sections.push(`### ${m.lineageDetails}\n`);
+  sections.push(
+    table(
+      [m.headers.lineageRow, m.headers.host, m.headers.state, m.headers.detail],
+      lineageRows.flatMap(row =>
+        hosts.flatMap(host => {
+          const entry = capabilityRow(asObject(host.data.lineage)[row]);
+          if (entry === undefined) {
+            return [];
+          }
+          const details: string[] = [];
+          if (entry.reason !== undefined) {
+            details.push(escapeProse(entry.reason));
+          }
+          if (Array.isArray(entry.evidence)) {
+            details.push(m.evidenceNotes(entry.evidence.length));
+          }
+          return [[code(row), code(host.host), entry.state ?? m.unavailable, details.length > 0 ? details.join('<br />') : m.notApplicable]];
+        }),
+      ),
     ),
   );
 

@@ -444,9 +444,20 @@ interface AgentLineage {
   depth: number;          // 0 at the root, +1 per subagent level
   generation?: string;    // Cursor generation_id, Codex turn_id, Claude prompt_id
   subagent?: { id: string; type?: string; toolCallId?: string; isParallelWorker?: boolean };
-  resolution: 'native' | 'registry' | 'inferred';
+  resolution: 'native' | 'registry' | 'confirmed' | 'inferred';
 }
 ```
+
+`resolution` is the trust level of `parent`/`root`/`depth`: `native` — the
+host named them on this payload (a Claude/Codex root, a Codex tool call's
+`_meta`); `registry` — the warm runtime's registry placed the conversation
+when its subagent started, matching the start to the newest unclaimed spawn
+call; `confirmed` — that registry edge, and every edge above it up to the
+root, was afterwards named by the host itself (Claude's `Agent` PostToolUse
+carries the spawn `tool_use_id`, the caller's identity and
+`tool_response.agentId`, the child); `inferred` — ordering inference the host
+forced (Cursor binds a child conversation to the single pending
+`subagentStart`).
 
 Hooks are thin clients to the warm runtime, so lineage is runtime-held state:
 the generated MCP process owns an **agent lineage registry**
@@ -461,14 +472,54 @@ for every event by the id the payload carries. The observed host vocabulary
 
 | Host | `conversation` | `root` | Parent of a new subagent | MCP call correlation |
 | --- | --- | --- | --- | --- |
-| Claude | `agent_id`, else `session_id` | `session_id` | the agent whose `Agent`/`Task` `PreToolUse` is the newest unclaimed spawn | `_meta["claudecode/toolUseId"]` = the open `PreToolUse` `tool_use_id` |
+| Claude | `agent_id`, else `session_id` | `session_id` | the agent whose `Agent`/`Task` `PreToolUse` is the newest unclaimed spawn; confirmed by that agent's `Agent` `PostToolUse` (`tool_response.agentId` = the child) | `_meta["claudecode/toolUseId"]` = the open `PreToolUse` `tool_use_id` |
 | Codex | `agent_id`, else `session_id` | `session_id` | the thread whose `spawn_agent` call is the newest unclaimed spawn | `_meta["x-codex-turn-metadata"]` carries `thread_id`, `parent_thread_id`, `session_id`, `turn_id` natively |
 | Cursor | `conversation_id` | the bound root | `parent_conversation_id` on `subagentStart`; the child's fresh `conversation_id` is bound to the single pending start in the same workspace when it first speaks | the newest open `preToolUse` whose `tool_name` is `MCP:<tool>`; when several conversations have that tool open, the one whose hook `tool_input` equals the call's `arguments` (identical arguments stay `id-not-resolvable`) |
 
 A Claude or Codex subagent is placed only when its spawning pre-tool hook
 (`Agent`/`Task`, `collaborationspawn_agent`) was observed, so projects that
 want `parent`/`depth` for subagents route `tool/before` alongside
-`agent/start`; a start with no claimable spawn stays `id-not-resolvable`.
+`agent/start`; a start with no claimable spawn — none open, or several
+parents with one — stays `id-not-resolvable`, and the registry keeps what the
+start said (id, type, time, and a stop that follows) as an unplaced start.
+
+Claude Code names no parent on any hook a subagent emits (#422; hooks
+reference "Common input fields": `agent_id` and `agent_type` are the only
+subagent fields), but the *parent's* `Agent` `PostToolUse` names the edge:
+`tool_use_id` is the spawn call, the carrier is the parent, and
+`tool_response.agentId` is the child's `agent_id` (observed on Claude Code
+2.1.257 and 2.1.259, `status: "async_launched"` for a background spawn,
+`status: "completed"` for a foreground one). The registry treats that hook
+as the host's word on the edge, whatever it believed before:
+
+- it confirms an edge the spawn window matched (`resolution: 'confirmed'`
+  once every edge from the conversation to the root is host-named);
+- it fills in which sibling came from which spawn call when several from one
+  parent were claimed blind, so `subagent.toolCallId` appears after the fact;
+- it places an unplaced start under the parent, as it started (time, type,
+  and already stopped when its stop came first), and consumes the spawn call
+  so no later start can claim it; a confirmation an unplaced start issued
+  for its own children waits with it and is applied when it is placed, so a
+  missed spawn hook at one level does not lose the subtree beneath it
+  (replaying the 2.1.259 capture without the root's spawn `PreToolUse`
+  recovers both the sequential agent and its depth-2 child from the two
+  `PostToolUse` payloads alone);
+- it moves a child the window filed under the wrong parent (a missed spawn
+  `PreToolUse` leaves another parent's open call as the only candidate) and
+  re-bases everything the child spawned meanwhile;
+- it holds a child it names before that child's `SubagentStart` arrives
+  (Claude fires a background spawn's `PostToolUse` first); the start then
+  adds its `agent_type`.
+
+Timing bounds what this buys a subagent's own events: a background spawn is
+confirmed right after `SubagentStart`, so the child's hooks and MCP calls
+resolve `confirmed`; a foreground spawn's `PostToolUse` fires only after the
+child's `SubagentStop`, so that child's events resolve `registry` for their
+whole life and only the tree (`snapshot()`, the Workbench) shows the
+confirmation. A spawn whose response carries no `agentId` (the sub-agents
+reference says the one-shot built-in Explore and Plan agents return no agent
+ID to Claude) keeps the registry's own match. Nothing here derives an actor
+or a user (#391); `request.lineage` stays the only identity surface (#444).
 Cursor names a child only on the parent's `subagentStart` (`subagent_id` =
 the parent's `Task` call id); the child's own hooks carry a fresh
 `conversation_id` and nothing that points back, so the registry binds by
