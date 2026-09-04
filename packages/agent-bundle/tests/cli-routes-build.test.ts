@@ -26,14 +26,14 @@ const writeProjectFile = async (root: string, path: string, contents: string): P
  * every generated surface (#459): a routed-CLI executable mounts no host
  * conversation, so `host`/`lineage` carry the typed `unsupported-surface`
  * reason the route reads too; the process-lifetime `src/state.ts` mounts the
- * `read`-only state handle and the `inbox`-only notice handle; `useAgent()`
+ * `read`-only state handle and the `inbox`/`published`-only notice handle; `useAgent()`
  * throws `outside-invocation` because the resolver runs outside the request.
  */
 const providerView = {
   handle: 'outside-invocation',
   host: 'unsupported-surface',
   lineage: 'unsupported-surface',
-  notices: ['inbox'],
+  notices: ['inbox', 'published'],
   plugin: 'available',
   session: 'not-provided',
   state: { keys: ['lifetime', 'read'], lifetime: 'process', revision: 0 },
