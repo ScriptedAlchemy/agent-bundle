@@ -844,7 +844,9 @@ it('fails closed when Cursor is not detected in the selected home', async () => 
 });
 
 it('reports a Cursor home it cannot inspect as AB7004 for the cursor host, like every other Cursor install failure', async () => {
-  if (process.getuid?.() === 0) return; // root ignores directory modes; the lstat cannot be made to fail here.
+  // POSIX directory modes drive the failure: root ignores them, and Windows has no `getuid` and does not
+  // make a `0o000` directory untraversable, so neither can make the lstat fail here.
+  if (process.platform === 'win32' || process.getuid?.() === 0) return;
   const fixture = await createHostBundle('cursor');
   const parent = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
   const home = join(parent, 'home');

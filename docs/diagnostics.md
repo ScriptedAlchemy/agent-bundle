@@ -901,7 +901,14 @@ reads as absent, and a receipt that is not a regular file (a symbolic link, a
 FIFO) is refused outright (`AB7004`) before it is read. The same rules apply to
 the artifact itself: a file whose path could not round-trip through a receipt
 (a backslash in a POSIX name, reserved characters, a trailing dot or space) is
-refused (`AB7004`) before anything is staged.
+refused (`AB7004`) before anything is staged. Every other failure of a local
+Cursor install — a `~/.cursor` that exists but cannot be inspected, an
+inventory, staging, or receipt write that fails — is reported the same way, as
+`AB7004` with `target: cursor` and the underlying message; a missing
+`~/.cursor` is `AB7002`. The staging directory is removed before the failure is
+reported, so a refused or failed replacement never leaves a
+`plugins/local/.<name>.stage-*` directory behind, and the installed copy is
+untouched.
 
 | Code | Severity | Trigger | Recovery |
 | --- | --- | --- | --- |
