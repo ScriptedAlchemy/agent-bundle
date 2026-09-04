@@ -119,17 +119,23 @@ each id.
 ```ts
 import { loadRouteModule, testManifest } from 'agent-bundle/test';
 
-for (const route of Object.values(testManifest().routes)) {
-  if (route.kind === 'app') continue; // browser builds load at the browser level
+// Schemas are the MCP route contract; event routes and scripts export none.
+const mcpRoutes = Object.values(testManifest().routes)
+  .filter((route) => route.kind === 'tool' || route.kind === 'prompt' || route.kind === 'resource');
+
+for (const route of mcpRoutes) {
   const module = await loadRouteModule(route.id);
   expect(module.inputSchema).toBeInstanceOf(z.ZodObject);
+  expect(module.resultSchema).toBeInstanceOf(z.ZodObject);
   expect(module.config ?? {}).toEqual(route.config);
 }
 ```
 
 A literal id is checked against the registered ids exactly as `renderRoute` checks its target, and
 the schemas' parsed values are typed from the registration, so a removed placement is a type error.
-Loading evaluates the module as an import would. Outside a pool built with `agentBundleRstest()`
+Conventional scripts are loadable but are not part of the registration, so a `script:` literal is
+accepted unchecked. Loading evaluates the module as an import would — a self-executing plain script
+runs. Outside a pool built with `agentBundleRstest()`
 the call fails closed with `manifest-unavailable`; a manifest describing another project rejects
 with the same mismatch report `renderRoute` gives, because route loaders are bound to the
 compilation that produced them.

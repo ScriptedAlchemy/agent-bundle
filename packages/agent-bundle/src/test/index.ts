@@ -64,6 +64,7 @@ export type { AgentTestErrorCode } from './errors.ts';
 export { loadRouteModule, renderRoute, renderRouteEvents } from './render.ts';
 export type {
   HarnessOptionsArguments,
+  LoadRouteModuleConstraint,
   LoadRouteModuleOptions,
   LoadedRouteModule,
   RouteModuleSchema,

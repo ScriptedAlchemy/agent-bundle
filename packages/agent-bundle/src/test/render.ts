@@ -549,6 +549,18 @@ export interface LoadRouteModuleOptions {
 }
 
 /**
+ * The constraint one `loadRouteModule` id must satisfy. Conventional scripts
+ * are loadable but are not part of the generated route registration
+ * (`.agent-bundle/routes.d.ts` registers tool, resource, prompt, CLI, and
+ * event routes), so a `script:` literal is admitted unchecked while every
+ * other literal is checked against the registered ids exactly as `renderRoute`
+ * checks its target; a value typed `string` stays legal for dynamic lookups,
+ * and without a registration every string is legal. The union is spelled
+ * inline so a rejection lists the registered ids rather than an alias name.
+ */
+export type LoadRouteModuleConstraint<Target> = string extends Target ? string : RegisteredRouteId | `script:${string}`;
+
+/**
  * Loads the evaluated module of one compiled route by its id, through the
  * lazy loader the generated Rstest setup registered for it — the loader
  * `renderRoute` uses. This is the supported replacement for a hand-maintained
@@ -557,7 +569,8 @@ export interface LoadRouteModuleOptions {
  * load each id instead (#493).
  *
  * The id is checked against the registered route ids exactly as `renderRoute`
- * checks its target, so a removed placement is a type error. Outside a pool
+ * checks its target, so a removed placement is a type error (`script:` ids are
+ * not registered and pass unchecked; see {@link LoadRouteModuleConstraint}). Outside a pool
  * built with `agentBundleRstest()` it throws `manifest-unavailable`, and a
  * manifest describing another project rejects with the same mismatch report
  * `renderRoute` gives: route loaders are bound to the compilation that
@@ -566,7 +579,7 @@ export interface LoadRouteModuleOptions {
  * are not loadable here (`unsupported-route-kind`).
  */
 export const loadRouteModule = async <Target extends string>(
-  routeId: (Target & RouteTargetConstraint<Target>) | RouteTargetConstraint<Target>,
+  routeId: (Target & LoadRouteModuleConstraint<Target>) | LoadRouteModuleConstraint<Target>,
   ...[options = {}]: HarnessOptionsArguments<LoadRouteModuleOptions>
 ): Promise<LoadedRouteModule<Target>> => {
   const manifest = options.manifest ?? testManifest();
