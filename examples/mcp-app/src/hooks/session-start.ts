@@ -1,14 +1,10 @@
-interface SessionStartEvent {
-  readonly cwd?: string;
-  readonly sessionId?: string;
-  readonly source?: string;
-}
+import type { HookHandler } from 'agent-bundle';
 
-export default (event: SessionStartEvent) => ({
+export default ((event) => ({
   additionalContext: [
-    `Service readiness session ${event.sessionId ?? 'is active'} from ${event.source ?? 'an unknown source'}.`,
+    `Service readiness session ${event.sessionId} from ${event.source ?? 'an unknown source'}.`,
     `Use the service-readiness Skill, then run check-service-fixture from ${event.cwd ?? process.cwd()} before release review.`,
     'Use show-status for compiler or payments-api when live service evidence is needed.',
   ].join(' '),
-  outcome: 'continue' as const,
-});
+  outcome: 'continue',
+})) satisfies HookHandler<'sessionStart'>;
