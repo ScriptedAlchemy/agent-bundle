@@ -150,9 +150,9 @@ export default async function Lookup({ input }: ToolRouteProps<typeof inputSchem
 | --- | --- | --- |
 | MCP `tools/call` | MCP SDK 的默认工具错误：`{ content: [{ type: 'text', text: <message> }], isError: true }`——没有 `_meta`、没有 `structuredContent`、没有 `[code]` 前缀。会话仍然可用。 | 一个已表示的错误：reconciler 把被拒绝的 boundary 折叠进文档，成为 code 为 `boundary` 的错误节点，因此结果与 `<Agent.Error code="boundary">` 所产生的一致——保留布局 `_meta`，`structuredContent` 来自路由的值，`isError: true`，并在已渲染的内容旁多一个 `[boundary] <message>` 文本块。 |
 | MCP `prompts/get`、`resources/read` | 一个携带该消息的 JSON-RPC 错误响应；客户端调用被拒绝。这些表面没有 `isError` 通道。 | 生成的服务器从同一份已表示文档中返回路由经 `resultSchema` 解析后的值。 |
-| 渲染式 CLI 命令 / 渲染式脚本 | 消息写到 stderr，退出码 `1`；stdout 无输出。 | 文档照常打印并带有 `**[boundary]** message`；退出码 `1`，与任何非 `success` 文档相同。 |
+| 渲染式 CLI 命令 / 渲染式脚本 | 消息写到 stderr，退出码 `1`；stdout 无输出。 | 事件发生时 `[boundary] message` 写到 stderr；随后文档照常打印——Markdown 带有 `**[boundary]** message`，而在 `--json` 下只输出路由的值（boundary 消息不在 JSON 中；`--ndjson` 携带 `error` 事件本身）。退出码 `1`，与任何非 `success` 文档相同。 |
 | 普通 CLI 命令 / 普通脚本 | 路由式命令：消息写到 stderr，退出码 `1`（用法与输入错误退出码为 `2`）。普通脚本：走 Node 的顶层失败路径——堆栈写到 stderr，退出码 `1`。 | 不适用 |
-| 事件路由（钩子） | 生成的包装器把消息写到 stderr，stdout 无输出，退出码 `1`。所有受支持的宿主都把退出码 `1` 记作**非阻塞**错误，因此待执行的动作会像 pass-through 一样继续进行——抛错的 `tool/before` **不会**拒绝。要阻止，请返回 `outcome: 'deny'`。 | 钩子投影只读取 `Agent.Context` 与结果值；错误节点不贡献任何内容。 |
+| 事件路由（钩子） | 生成的包装器写到 stderr，stdout 无输出，退出码 `1`。`runtime: 'standalone'` 的路由或配置声明的处理器写出抛出的消息；默认**共享**运行时中的路由写出 `Event route rendering failed.`——运行时以通用的 `runtime-failed` 错误应答，原始消息留在运行时进程内部。所有受支持的宿主都把退出码 `1` 记作**非阻塞**错误，因此待执行的动作会像 pass-through 一样继续进行——抛错的 `tool/before` **不会**拒绝。要阻止，请返回 `outcome: 'deny'`。 | 钩子投影只读取 `Agent.Context` 与结果值；错误节点不贡献任何内容。 |
 | `renderRoute` / `renderRouteEvents` | `AgentTestError('render-failed')`，指明路由与原因；没有文档，也没有事件。 | 正常返回：`document.status === 'represented-error'`，一个 code 为 `boundary` 的 `error` 节点，事件序列为 `shell → error → complete`。 |
 
 投影器有意不把根级抛错包装成 `Agent.Error` 的形状：布局外壳是文档的属性，而根级抛错没有文档。希望在失败时

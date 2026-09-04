@@ -220,8 +220,11 @@ Event routes reach the twenty canonical families (`session/end`, `prompt/submit`
 listed above.
 
 A route or handler that **throws** produces no document and therefore no decision: the generated
-wrapper writes the message to stderr, nothing to stdout, and exits `1`, which every supported host
-documents as a non-blocking error — the pending action proceeds as it would after a pass-through.
+wrapper writes to stderr, nothing to stdout, and exits `1`, which every supported host documents as
+a non-blocking error — the pending action proceeds as it would after a pass-through. The stderr
+text is the thrown message for a `runtime: 'standalone'` route or a config-declared handler; a route
+in the default shared runtime reports `Event route rendering failed.`, because the runtime answers
+the wrapper with a generic `runtime-failed` error and keeps the original message in its own process.
 A thrown `tool/before` does not deny; return `outcome: 'deny'` for that. The per-surface table is
 in [What happens when a route throws](./mcp.mdx#what-happens-when-a-route-throws).
 

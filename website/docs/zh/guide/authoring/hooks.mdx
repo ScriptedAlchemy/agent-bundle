@@ -198,8 +198,11 @@ export default async function AfterFileEdit({ canonical, native, signal }: Agent
 事件路由可以触达全部二十个规范事件族（`session/end`、`prompt/submit`、`compact/before`、
 `permission/request`……）；配置声明的 `hooks` 只覆盖上面列出的七个。
 
-**抛出**异常的路由或处理器不会产生文档，因此也没有决定：生成的包装器把消息写到 stderr，stdout 无输出，
+**抛出**异常的路由或处理器不会产生文档，因此也没有决定：生成的包装器写到 stderr，stdout 无输出，
 退出码为 `1`——所有受支持的宿主都把它记作非阻塞错误，待执行的动作会像 pass-through 之后一样继续进行。
+对于 `runtime: 'standalone'` 的路由或配置声明的处理器，stderr 文本是抛出的消息；默认共享运行时中的路由
+报告 `Event route rendering failed.`，因为运行时以通用的 `runtime-failed` 错误应答包装器，并把原始消息
+留在自己的进程中。
 抛错的 `tool/before` 不会拒绝；要拒绝请返回 `outcome: 'deny'`。按表面分列的表格见
 [路由抛错时会发生什么](./mcp.mdx#路由抛错时会发生什么)。
 
