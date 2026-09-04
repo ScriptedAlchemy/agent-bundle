@@ -35,12 +35,28 @@ diagnostic involved — see the [CLI exit codes](../../reference/cli.mdx#exit-co
 
 ## Claude Code strict validation
 
-When Claude Code is on `PATH`, artifact validation runs
-`claude plugin validate <bundle-dir> --strict` for emitted `claude` and unified `plugin` targets:
+When Claude Code is on `PATH`, artifact validation runs the installed `claude plugin validate`
+for emitted `claude` and unified `plugin` targets. Claude Code decides what it checks from the
+manifest it is pointed at, and a bundle directory that holds both `.claude-plugin/plugin.json` and
+`.claude-plugin/marketplace.json` is treated as a marketplace, whose validation never opens the
+plugin's hook, skill, agent, or command files. Agent Bundle therefore runs two commands:
 
-- Host **errors** become Agent Bundle errors.
-- Host **warnings** stay warnings unless `agent-bundle validate --strict` is set.
-- A missing binary is reported as an explicit informational **skip**, never as fabricated success.
+```sh
+# plugin.json, hooks/hooks.json, skills/, agents/, commands/
+claude plugin validate <bundle-dir>/.claude-plugin/plugin.json --strict
+# marketplace schema, plugin names, source paths
+claude plugin validate <bundle-dir>/.claude-plugin/marketplace.json --strict
+```
+
+- Host **errors** become Agent Bundle errors (`AB6021`).
+- Host **warnings** stay warnings (`AB6020`) unless `agent-bundle validate --strict` is set.
+- Each finding names the file Claude Code checked, for example
+  `(hooks hooks/hooks.json): hooks: hooks.postToolUse: unknown hook event`. On Claude Code 2.1.259
+  or later Agent Bundle reads the CLI's `--json` report; older releases are parsed from the text
+  report. The marketplace run's `plugins[0] plugin.json →` copies of manifest findings the plugin
+  run already reported are dropped.
+- A missing binary is reported as an explicit informational **skip** (`AB6019`), never as
+  fabricated success; a probe or run that cannot complete is `AB6022`.
 
 CI should use strict validation:
 
@@ -51,7 +67,15 @@ npx agent-bundle validate --artifact artifact --strict
 Use `--no-host-validation` when a deterministic schema-only check is required — a machine without
 the hosts installed must still be able to run the same gate and get the same schema verdict.
 
-During development you can load a built target without installing it and verify registration:
+During development, load the built target for one session without installing it, then iterate:
+
+```sh
+claude --plugin-dir artifact/claude
+```
+
+Run `/reload-plugins` inside that session after `agent-bundle build` rewrites `hooks/`,
+`.mcp.json`, or `agents/`; `SKILL.md` edits take effect without it. A `--plugin-dir` plugin is not
+visible to a bare `claude plugin list`; put the flag before the subcommand to inspect it:
 
 ```sh
 claude --plugin-dir artifact/claude plugin list --json
