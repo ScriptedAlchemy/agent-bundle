@@ -1871,6 +1871,47 @@ it('surfaces the placed → registered → enabled → active lifecycle per host
     });
     expect(enabled.diagnostics.find((entry) => entry.code === 'AB7330')?.message).toContain('Unavailable: active (Claude Code 2.1.257');
 
+    // Several Claude scopes: the lifecycle aggregates every listed copy, and a stage holds only when it holds for
+    // all of them — a disabled or unplaced copy at any scope is reported regardless of Claude's row order.
+    let rows: Record<string, unknown>[] = [];
+    const multiRunner: DoctorCommandRunner = async (request) => {
+      if (request.args[0] === '--version') return commandResult({ stdout: 'claude 2.1.257' });
+      if (isInventoryRequest(request)) return commandResult({ stdout: JSON.stringify(rows) });
+      return commandResult({ stdout: JSON.stringify([{ id: 'doctor-fixture@inline' }]) });
+    };
+    const multiDoctor = () => runDoctor({
+      commandRunner: multiRunner,
+      endpointDirectory: fixture.endpointDirectory,
+      from: claudeBundle,
+      home: fixture.home,
+      hosts: ['claude'],
+    });
+    const userRow = { enabled: true, id: 'doctor-fixture@doctor-fixture-marketplace', installPath: installed, scope: 'user', version: '1.2.3' };
+    rows = [userRow, { ...userRow, enabled: false, scope: 'project' }];
+    const mixed = hostReport(await multiDoctor(), 'claude');
+    expect(mixed.bundle?.lifecycle).toMatchObject({
+      enabled: { evidence: expect.stringContaining('enabled: false for scope project'), status: 'observed', value: false },
+      registered: { evidence: expect.stringContaining('scope user, scope project'), status: 'observed', value: true },
+      stage: 'registered',
+    });
+    rows = [{ ...userRow, scope: 'project', enabled: false }, userRow];
+    expect(hostReport(await multiDoctor(), 'claude').bundle?.lifecycle).toMatchObject({ enabled: { value: false }, stage: 'registered' });
+    rows = [userRow, { ...userRow, installPath: join(fixture.root, 'claude-config', 'nowhere'), scope: 'local' }];
+    const unplaced = hostReport(await multiDoctor(), 'claude');
+    expect(unplaced.bundle?.lifecycle).toMatchObject({
+      placed: { evidence: expect.stringContaining('(scope local)'), status: 'observed', value: false },
+      stage: 'absent',
+    });
+    rows = [userRow, { ...userRow, enabled: undefined, scope: 'project' }];
+    expect(hostReport(await multiDoctor(), 'claude').bundle?.lifecycle).toMatchObject({
+      enabled: { reason: expect.stringContaining('scope project'), status: 'unavailable' },
+    });
+    rows = [userRow, { ...userRow, scope: 'project' }];
+    expect(hostReport(await multiDoctor(), 'claude').bundle?.lifecycle).toMatchObject({
+      enabled: { evidence: expect.stringContaining('scope user, scope project'), status: 'observed', value: true },
+      stage: 'enabled',
+    });
+
     // Cursor: placement is registration; enabled and active have no pinned read-only surface.
     const cursorBundle = await createBundle(fixture.root, 'cursor');
     await mkdir(join(fixture.home, '.cursor'), { recursive: true });

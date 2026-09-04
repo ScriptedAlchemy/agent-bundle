@@ -35,6 +35,7 @@ import {
   publicHostRoot,
   treeHash,
   type InstallHost,
+  type PublicHostInstalledEntry,
   type PublicHostInventory,
 } from './install.ts';
 import {
@@ -1215,8 +1216,7 @@ const publicHostLifecycle = async (
       registered: unavailable(reason),
     });
   }
-  const entry = inventory.entries[0];
-  if (entry === undefined) {
+  if (inventory.entries.length === 0) {
     const evidence = `\`${host} plugin list --json\` lists no copy of the plugin.`;
     return lifecycleOf({
       active: unavailable(noLiveHostSurface(host)),
@@ -1225,19 +1225,42 @@ const publicHostLifecycle = async (
       registered: observed(false, evidence),
     });
   }
-  let placed = false;
-  try {
-    placed = (await lstat(entry.installPath)).isDirectory();
-  } catch (error) {
-    if (!isErrno(error, 'ENOENT') && !isErrno(error, 'ENOTDIR')) throw error;
+  // Claude may list the plugin at several scopes (user, project, local) and Codex reports one row; the lifecycle
+  // aggregates every row, and a stage holds only when it holds for every listed copy — a disabled or unplaced
+  // copy at any scope is reported, never hidden behind the row Claude happened to list first.
+  const label = (entry: PublicHostInstalledEntry): string => entry.scope === undefined ? 'the row' : `scope ${entry.scope}`;
+  const placements: { readonly entry: PublicHostInstalledEntry; readonly placed: boolean }[] = [];
+  for (const entry of inventory.entries) {
+    let placed = false;
+    try {
+      placed = (await lstat(entry.installPath)).isDirectory();
+    } catch (error) {
+      if (!isErrno(error, 'ENOENT') && !isErrno(error, 'ENOTDIR')) throw error;
+    }
+    placements.push({ entry, placed });
   }
+  const unplaced = placements.filter((placement) => !placement.placed);
+  const flagless = inventory.entries.filter((entry) => entry.enabled === undefined);
+  const disabled = inventory.entries.filter((entry) => entry.enabled === false);
+  const scopes = inventory.entries.map(label).join(', ');
   return lifecycleOf({
     active: unavailable(noLiveHostSurface(host)),
-    enabled: entry.enabled === undefined
-      ? unavailable(`the \`${host} plugin list --json\` row carries no enabled flag.`)
-      : observed(entry.enabled, `\`${host} plugin list --json\` row reports enabled: ${String(entry.enabled)}.`),
-    placed: observed(placed, `${host} reports the copy at ${entry.installPath}${placed ? '' : ', which is not a directory'}.`),
-    registered: observed(true, `\`${host} plugin list --json\` lists the plugin${entry.scope === undefined ? '' : ` at scope ${entry.scope}`}.`),
+    enabled: flagless.length > 0
+      ? unavailable(`the \`${host} plugin list --json\` row for ${flagless.map(label).join(', ')} carries no enabled flag.`)
+      : observed(
+        disabled.length === 0,
+        disabled.length === 0
+          ? `\`${host} plugin list --json\` reports enabled: true for ${scopes}.`
+          : `\`${host} plugin list --json\` reports enabled: false for ${disabled.map(label).join(', ')}` +
+            `${disabled.length === inventory.entries.length ? '' : ` (enabled: true for the other listed ${inventory.entries.length - disabled.length === 1 ? 'scope' : 'scopes'})`}.`,
+      ),
+    placed: observed(
+      unplaced.length === 0,
+      unplaced.length === 0
+        ? `${host} reports the ${placements.length === 1 ? 'copy' : 'copies'} at ${[...new Set(placements.map((placement) => placement.entry.installPath))].join(', ')}.`
+        : `${host} reports ${unplaced.map((placement) => `${placement.entry.installPath} (${label(placement.entry)})`).join(', ')}, which ${unplaced.length === 1 ? 'is' : 'are'} not ${unplaced.length === 1 ? 'a directory' : 'directories'}.`,
+    ),
+    registered: observed(true, `\`${host} plugin list --json\` lists the plugin${inventory.entries.some((entry) => entry.scope !== undefined) ? ` at ${scopes}` : ''}.`),
   });
 };
 

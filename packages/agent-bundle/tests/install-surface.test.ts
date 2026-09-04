@@ -791,6 +791,18 @@ it('emitted install.mjs --uninstall mirrors the core lifecycle: plan, receipt-ow
       mode: 'marketplace',
       registrations: [{ commit, kind: 'cursor-marketplace-staging', name: 'install-fixture-marketplace' }],
     });
+    // An untracked file in the staged working tree is not receipt-owned: refused (plan included) until --force.
+    const stagedRepo = join(cursorRoot, 'agent-bundle', 'marketplaces', 'install-fixture');
+    await writeFile(join(stagedRepo, 'notes.txt'), 'operator notes\n');
+    const dirty = await run(installer, ['--uninstall', '--mode', 'marketplace', '--plan'], home);
+    expect(dirty.code).toBe(1);
+    expect(dirty.stderr).toContain('working tree differs from the receipted commit');
+    expect(dirty.stderr).toContain('"notes.txt"');
+    expect(await readFile(join(stagedRepo, 'notes.txt'), 'utf8')).toBe('operator notes\n');
+    const dirtyForced = await run(installer, ['--uninstall', '--mode', 'marketplace', '--plan', '--force'], home);
+    expect(dirtyForced).toMatchObject({ code: 0, stderr: '' });
+    expect(dirtyForced.stdout).toContain('Receipt: forced-mismatch');
+    await rm(join(stagedRepo, 'notes.txt'));
     const marketplacePlan = await run(installer, ['--uninstall', '--mode', 'marketplace', '--plan'], home);
     expect(marketplacePlan).toMatchObject({ code: 0, stderr: '' });
     expect(marketplacePlan.stdout).toContain(`Would uninstall install-fixture@1.2.3 for cursor (marketplace mode) at ${join(cursorRoot, 'agent-bundle', 'marketplaces', 'install-fixture')}`);

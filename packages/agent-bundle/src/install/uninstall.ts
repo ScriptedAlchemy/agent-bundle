@@ -26,6 +26,7 @@ import {
   readPublicHostInventory,
   readPublicHostMarketplaceState,
   runHostCommand,
+  type InstallCommandResult,
   type InstallCommandRunner,
   type InstallHost,
   type InstallMode,
@@ -610,6 +611,34 @@ const readMarketplaceStagingIdentity = async (repoRoot: string, plugin: string):
   }
 };
 
+/**
+ * Why the staged repository's working tree is not the receipted commit's tree, or `undefined` when it is.
+ * Same probe as Doctor's staging verifier (`--no-optional-locks` keeps it read-only; ignored entries count).
+ * A repository that cannot be verified — git missing, or `status` failing — is reported as dirt too: the removal
+ * is recursive, so "unverifiable" must not read as "clean".
+ */
+const stagedWorkingTreeDirt = async (runner: InstallCommandRunner, repoRoot: string): Promise<string | undefined> => {
+  let result: InstallCommandResult;
+  try {
+    result = await runner.run(
+      'git',
+      ['--no-optional-locks', 'status', '--porcelain', '--untracked-files=all', '--ignored=matching'],
+      { cwd: repoRoot },
+    );
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) return 'git is not available on PATH, so the staged working tree cannot be verified against the receipted commit.';
+    throw error;
+  }
+  if (result.code !== 0) {
+    return `\`git status\` failed in the staged repository (${result.stderr.trim() || `exit code ${result.code}`}), so its working tree cannot be verified against the receipted commit.`;
+  }
+  const entries = result.stdout.split('\n').map((line) => line.trimEnd()).filter((line) => line !== '');
+  if (entries.length === 0) return undefined;
+  const shown = entries.slice(0, 5).map((line) => JSON.stringify(line.slice(3))).join(', ');
+  return `its working tree differs from the receipted commit (${entries.length} uncommitted, untracked, or ignored ` +
+    `${entries.length === 1 ? 'entry' : 'entries'}: ${shown}${entries.length > 5 ? ', …' : ''}) that the receipt does not own.`;
+};
+
 const uninstallCursorMarketplace = async (
   options: UninstallBundleOptions,
   identity: PluginIdentity,
@@ -697,6 +726,21 @@ const uninstallCursorMarketplace = async (
           );
         }
         status = 'forced-mismatch';
+      } else if (recorded?.commit !== undefined) {
+        // HEAD matching the receipt proves the commit, not the working tree: uncommitted, untracked, or ignored
+        // entries someone added since staging are not receipt-owned, and the removal below is recursive.
+        const dirty = await stagedWorkingTreeDirt(options.commandRunner ?? defaultCommandRunner, repoRoot);
+        if (dirty !== undefined) {
+          if (!force) {
+            throw failure(
+              'AB7007',
+              `Refusing to remove ${repoRoot}: ${dirty} Move those entries out (or commit them and rerun ` +
+                '`agent-bundle install cursor --mode marketplace`), or re-run with --force to remove them anyway.',
+              'cursor',
+            );
+          }
+          status = 'forced-mismatch';
+        }
       }
     }
   }

@@ -439,6 +439,19 @@ it('removes a staged Cursor marketplace repository only when its HEAD matches th
     const heads = await readdir(join(repo, '.git', 'refs', 'heads'));
     await writeFile(join(repo, '.git', 'HEAD'), `ref: refs/heads/${heads[0]}\n`);
 
+    // HEAD matches the receipt, but someone added an untracked file to the staged working tree: the receipt does
+    // not own it and the removal is recursive, so the uninstall (and its plan) refuses without --force.
+    await writeFile(join(repo, 'notes.txt'), 'operator notes\n');
+    const dirty = await failureOf(uninstallBundle(options));
+    expect(dirty.diagnostics[0]).toMatchObject({ code: 'AB7007', target: 'cursor' });
+    expect(dirty.diagnostics[0]?.message).toContain('working tree differs from the receipted commit');
+    expect(dirty.diagnostics[0]?.message).toContain('"notes.txt"');
+    expect((await failureOf(uninstallBundle({ ...options, plan: true }))).diagnostics[0]).toMatchObject({ code: 'AB7007' });
+    expect(await readFile(join(repo, 'notes.txt'), 'utf8')).toBe('operator notes\n');
+    // --force removes it anyway and says so through the receipt status.
+    expect(await uninstallBundle({ ...options, force: true, plan: true })).toMatchObject({ receipt: { status: 'forced-mismatch' }, state: 'planned' });
+    await rm(join(repo, 'notes.txt'));
+
     const result = await uninstallBundle(options);
     expect(result).toMatchObject({
       receipt: { status: 'consumed' },

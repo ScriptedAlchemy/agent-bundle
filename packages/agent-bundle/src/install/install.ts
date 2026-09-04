@@ -669,33 +669,42 @@ const installPublicCli = async (
     'add',
     identity.bundleRoot,
   ]);
-  // Between `marketplace add` and the receipt write, a marketplace this run created is claimed only in memory.
-  // If the plugin install or the receipt write fails there, roll the registration back rather than leave a
-  // marketplace nothing records: a retry would then sample it as pre-existing, record only the plugin, and
-  // `uninstall` would retain it as user-owned forever.
+  // Between `marketplace add` and the receipt write, everything this run registered is claimed only in memory.
+  // If the plugin install or the receipt write fails there, reverse what did complete rather than leave
+  // registrations nothing records: a plugin without a receipt would pass the byte-identical fast path on retry
+  // as `already-installed`, and a marketplace without one would be sampled as pre-existing and retained as
+  // user-owned by every later `uninstall`. Plugin first, then the marketplace — the order the host verbs
+  // themselves require.
   const createdMarketplace = previousReceipt === undefined &&
     recorded.registrations.some((registration) => registration.kind === `${host}-marketplace`);
+  let pluginInstalled = false;
   try {
     await runHostCommand(runner, identity, host, host === 'claude'
       ? ['plugin', 'install', id, '--scope', scope]
       : ['plugin', 'add', id]);
+    pluginInstalled = true;
     await writeStoredInstallReceipt(receiptPath, createInstallReceipt({
       ...recorded,
       inventory: storeInventory,
       updatedAt: new Date().toISOString(),
     }));
   } catch (error) {
-    if (!createdMarketplace) throw error;
-    try {
-      await runHostCommand(runner, identity, host, publicHostMarketplaceRemoveArguments(marketplace), 'removal');
-    } catch (rollbackError) {
-      throw failure(
-        'AB7004',
-        `${errorMessage(error)} Rolling back the marketplace this install registered also failed: ` +
-          `${errorMessage(rollbackError)}. Marketplace ${marketplace} is registered with ${host} but no receipt records it; ` +
-          `run \`${host} ${publicHostMarketplaceRemoveArguments(marketplace).join(' ')}\` before retrying.`,
-        host,
-      );
+    const rollbacks: (readonly string[])[] = [
+      ...(pluginInstalled ? [publicHostUninstallArguments(host, id, scope)] : []),
+      ...(createdMarketplace ? [publicHostMarketplaceRemoveArguments(marketplace)] : []),
+    ];
+    for (const args of rollbacks) {
+      try {
+        await runHostCommand(runner, identity, host, args, 'removal');
+      } catch (rollbackError) {
+        throw failure(
+          'AB7004',
+          `${errorMessage(error)} Rolling back what this install had registered also failed: ` +
+            `${errorMessage(rollbackError)}. ${host} still holds registrations no receipt records; run ` +
+            `${rollbacks.map((remaining) => `\`${host} ${remaining.join(' ')}\``).join(' then ')} before retrying.`,
+          host,
+        );
+      }
     }
     throw error;
   }

@@ -796,7 +796,14 @@ are two receipts. The `<host>-marketplace` registration is recorded only when
 the install actually created it — `plugin marketplace list --json` did not list
 the marketplace beforehand (or the receipted install it replaces recorded it);
 a marketplace that already existed, or one whose state could not be read,
-is not claimed, and `uninstall` then retains it and says why. A format 1
+is not claimed, and `uninstall` then retains it and says why. Between
+`plugin marketplace add` and the receipt write those registrations exist only
+in memory, so if the plugin install or the receipt write fails the install
+reverses what did complete — the plugin (`plugin uninstall … --keep-data` /
+`plugin remove`) when it was installed, then the marketplace when this run
+created it — before rethrowing; a failed reversal is reported with the exact
+host commands to run before retrying. Nothing is left registered without a
+receipt to record it. A format 1
 receipt (written by #420) is read with those
 fields synthesized (`mode: local`, `scope: user`, one `cursor-local-plugin`
 registration, no host directories) and reported as migrated (`AB7329`); an
@@ -885,9 +892,16 @@ open issue). Every mutation is opt-in and bounded by the receipt:
   is written there so a later purge can still prune the created directories and
   Doctor can explain the directory.
 - **Cursor marketplace** — verifies the staged repository's `HEAD` against the
-  commit the store receipt recorded, then removes the repository wholesale and
-  the receipt; a copy Cursor imported into `~/.cursor/plugins/cache` is
-  Cursor-owned and is reported `manual` with the Customize step in `nextSteps`.
+  commit the store receipt recorded and its working tree against that commit
+  (`git --no-optional-locks status --porcelain --untracked-files=all
+  --ignored=matching`, the same probe Doctor uses: any uncommitted, untracked,
+  or ignored entry — or a tree that cannot be verified because git is missing
+  or `status` fails — is refused with `AB7007` until `--force`, since the
+  removal is recursive and those entries are not receipt-owned), then removes
+  the repository wholesale and the receipt; a copy Cursor imported into
+  `~/.cursor/plugins/cache` (recognised by the receipted commit and version,
+  not the version the bundle may have been rebuilt to) is Cursor-owned and is
+  reported `manual` with the Customize step in `nextSteps`.
 - **Claude / Codex** — reads `<host> plugin list --json` (an unusable listing
   fails closed, `AB7004`), compares the cached copy with the receipt, runs
   `claude plugin uninstall <id> --scope <scope> --keep-data` /
@@ -943,7 +957,7 @@ since been removed by hand.
 
 | Code | Severity | Trigger | Recovery |
 | --- | --- | --- | --- |
-| `AB7007` | error | `uninstall` refused a mismatch or a foreign target: the owned files hash differently from the receipt, the cached host copy differs from the receipt in version or content, the staged repository's `HEAD` is not the recorded commit, the receipt names another plugin, the directory is not this plugin's install at all, or a destination / `state/` entry is a symlink or special file. | `--force` overrides content and `HEAD` mismatches (the receipt-owned set is still the only thing removed); a receipt or manifest naming another plugin, and symlinked entries, are refused regardless — inspect and remove them manually. |
+| `AB7007` | error | `uninstall` refused a mismatch or a foreign target: the owned files hash differently from the receipt, the cached host copy differs from the receipt in version or content, the staged repository's `HEAD` is not the recorded commit or its working tree is dirty / unverifiable, the receipt names another plugin, the directory is not this plugin's install at all, or a destination / `state/` entry is a symlink or special file. | `--force` overrides content and `HEAD` mismatches (the receipt-owned set is still the only thing removed); a receipt or manifest naming another plugin, and symlinked entries, are refused regardless — inspect and remove them manually. |
 | `AB7008` | error | `--purge-data` without `--confirm-purge`, `--purge-data` together with `--keep-data`, or (Claude) `--purge-data` while the same plugin is installed at another scope or in another project (a live `plugin list --json` row, or a stored receipt for the same plugin) — the cached copy and `plugins/data/<id>/` are scope-less and still in use — or while `claude plugin list --json` cannot be re-read to prove there is no other scope. | Pass `--purge-data --confirm-purge` to delete durable state, or neither flag to keep it; for a shared Claude scope, uninstall without `--purge-data` and purge after the last scope is removed. |
 | `AB7009` | error | `uninstall` found the install but no receipt proving Agent Bundle owns it: a Cursor local copy in the pre-receipt legacy layout, a staged marketplace repository without its store receipt, or a host-registered Claude/Codex copy without its store receipt. | Re-run with `--force` (a legacy Cursor copy is removed by its inventory, `state/` kept; a host-CLI install is removed through the host verbs), or reinstall with `--replace` first to record a receipt. |
 
@@ -982,7 +996,7 @@ inventory finding and on the bundle finding).
 | --- | --- | --- | --- |
 | `AB7328` | warning | A store receipt is orphaned — the host no longer holds the registration it records (Claude/Codex listing lacks the plugin — a Claude `project`/`local` receipt is checked by `plugin list --json` run from its recorded `projectRoot`, and is `unknown`, never orphaned, when that root cannot be listed; the staged Cursor marketplace repository is gone) — or the receipt store / a receipt file could not be read or is not a valid receipt. | `agent-bundle uninstall <host> --from <bundle-dir> [--mode marketplace]` consumes an orphaned receipt; reinstall to rewrite an invalid one; repair permissions. |
 | `AB7329` | info | A receipt predates lifecycle receipts (`agent-bundle-install-receipt/1`) and was read with synthesized `mode`, `scope`, `registrations`, and `hostDirectories`. Doctor never rewrites it. | Rerun `agent-bundle install` (or `install.mjs`) once; an identical copy rewrites the receipt as format 2 without changing plugin files. `uninstall` accepts the migrated receipt as is. |
-| `AB7330` | info | The bundle's lifecycle stage on this host and its four observations; the message lists every `unavailable` stage with its reason. | Stage-specific: register (`agent-bundle install`), enable (`claude plugin enable`, Codex `/plugins`, Cursor Customize), or complete the Cursor import; unavailable stages need no action and are never guessed. |
+| `AB7330` | info | The bundle's lifecycle stage on this host and its four observations; the message lists every `unavailable` stage with its reason. When Claude lists the plugin at several scopes the observations aggregate every row — a stage holds only when it holds for every listed copy, and the evidence names the scopes that are disabled, unplaced, or carry no enabled flag — so the report never depends on Claude's row order. | Stage-specific: register (`agent-bundle install`), enable (`claude plugin enable`, Codex `/plugins`, Cursor Customize), or complete the Cursor import; unavailable stages need no action and are never guessed. |
 
 ## Live development into hosts (`AB7200`–`AB7202`, `AB7210`–`AB7211`, `AB8024`–`AB8025`)
 

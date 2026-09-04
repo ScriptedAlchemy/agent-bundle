@@ -307,6 +307,35 @@ it.each([
       scope,
     }).catch(() => undefined);
     expect(preExisting.map((call) => call.args.join(' '))).not.toContain('plugin marketplace remove install-fixture-marketplace');
+
+    // The host install succeeded but the receipt could not be written: the plugin registration is reversed too
+    // (plugin first, then the marketplace this run created), so nothing stays registered without a receipt.
+    const receiptStore = join(hostRoot, 'agent-bundle', 'receipts');
+    await rm(join(hostRoot, 'agent-bundle'), { force: true, recursive: true });
+    await mkdir(receiptStore, { recursive: true });
+    if (process.getuid?.() === 0) return; // root ignores directory modes; the receipt write cannot be made to fail here.
+    await chmod(receiptStore, 0o555);
+    const unwritable: CommandCall[] = [];
+    const receiptFailed = await installBundle({
+      ...isolated(fixture),
+      commandRunner: { run: async (command, args, runOptions) => {
+        const call = { args: [...args], command, cwd: runOptions.cwd };
+        unwritable.push(call);
+        return { code: 0, stderr: '', stdout: isMarketplaceListCall(call) ? noMarketplaces(call) : '' };
+      } },
+      from: fixture.from,
+      host,
+      scope,
+    }).catch((failure: unknown) => failure);
+    expect(receiptFailed).toBeInstanceOf(Error);
+    expect(receiptFailed).not.toBeInstanceOf(DiagnosticError);
+    expect(unwritable.map((call) => call.args.join(' ')).slice(-2)).toEqual([
+      host === 'claude'
+        ? `plugin uninstall install-fixture@install-fixture-marketplace --scope ${scope} --keep-data`
+        : 'plugin remove install-fixture@install-fixture-marketplace',
+      'plugin marketplace remove install-fixture-marketplace',
+    ]);
+    await chmod(receiptStore, 0o755);
   } finally {
     await rm(fixture.cleanupRoot, { force: true, recursive: true });
   }
