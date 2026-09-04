@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { digest } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
 import { isRecord } from '../core/strict-json.ts';
+import { readFileString, runWithPlatform } from '../effect/platform.ts';
 import { spawn } from 'node:child_process';
 import { lstat, readFile, readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -304,6 +305,7 @@ const evidenceFor = (
   version,
 });
 
+/** Stays on `lstat` + `Dirent`: the digest records link identity, which `stat` would follow. */
 const digestClaudeFileTree = async (path: string, includeContents = true): Promise<string> => {
   try {
     const entry = await lstat(path);
@@ -358,7 +360,7 @@ const resolveClaudeNormalHome = (
 const digestClaudeStateMcpServers = async (path: string): Promise<string> => {
   let text: string;
   try {
-    text = await readFile(path, 'utf8');
+    text = await runWithPlatform(readFileString(path));
   } catch (error) {
     if (isErrno(error, 'ENOENT')) return 'none';
     throw error;

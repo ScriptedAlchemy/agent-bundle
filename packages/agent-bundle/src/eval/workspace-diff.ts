@@ -38,6 +38,12 @@ const positiveBound = (value: number, name: string, maximum: number): number => 
   return value;
 };
 
+/**
+ * Stays on `node:fs` (see `docs/effect-conventions.md`, keep-raw list): the
+ * hash is taken through an `O_NOFOLLOW` descriptor whose `dev`/`ino`/`nlink`
+ * identity is checked against the `lstat` that discovered it. The pinned
+ * `FileSystem.open` accepts only string flags and has no `lstat`.
+ */
 const sha256 = async (path: string, byteLimit: number): Promise<Readonly<{
   readonly bytes: number;
   readonly digest?: string;

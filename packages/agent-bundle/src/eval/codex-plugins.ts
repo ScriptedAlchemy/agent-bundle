@@ -1,9 +1,10 @@
-import { readFile, readdir } from 'node:fs/promises';
+import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { isRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { CodexEvalHarnessError } from './codex-errors.ts';
 import { deepFreeze } from '../core/freeze.ts';
+import { readFileString, runWithPlatform } from '../effect/platform.ts';
 
 
 export interface CodexCandidatePlugin {
@@ -24,6 +25,7 @@ const marketplacePath = '.agents/plugins/marketplace.json';
 const artifactError = (message: string): CodexEvalHarnessError =>
   new CodexEvalHarnessError('CODEX_ARTIFACT_INVALID', message);
 
+/** Stays on `Dirent`: a symlinked skill directory is not a skill of the candidate. */
 const readCandidateSkills = async (candidateDirectory: string): Promise<readonly string[]> => {
   try {
     const entries = await readdir(join(candidateDirectory, 'skills'), { withFileTypes: true });
@@ -39,7 +41,7 @@ const readCandidateSkills = async (candidateDirectory: string): Promise<readonly
 const readMarketplaceDocument = async (candidateDirectory: string): Promise<unknown> => {
   let raw: string;
   try {
-    raw = await readFile(join(candidateDirectory, ...marketplacePath.split('/')), 'utf8');
+    raw = await runWithPlatform(readFileString(join(candidateDirectory, ...marketplacePath.split('/'))));
   } catch {
     throw artifactError(
       `Codex candidate ${JSON.stringify(candidateDirectory)} contains no marketplace manifest at ${marketplacePath}.`,

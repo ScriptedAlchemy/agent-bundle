@@ -363,6 +363,15 @@ it('keeps bundled config extension types in emitted root declarations', async ()
       join(consumerRoot, 'node_modules', '@rslib'),
       'dir',
     );
+    // The validators' and services' FileSystem programs type their Effect
+    // signatures, so the declaration graph resolves effect exactly as
+    // installed consumers do (a runtime dependency of the package; nothing
+    // Effect-typed is re-exported from a package entry).
+    await symlink(
+      join(agentBundleNodeModules, 'effect'),
+      join(consumerRoot, 'node_modules', 'effect'),
+      'dir',
+    );
     await writeFile(join(emittedPackageRoot, 'package.json'), JSON.stringify({
       exports: { '.': { types: './dist/index.d.ts' } },
       name: 'agent-bundle',

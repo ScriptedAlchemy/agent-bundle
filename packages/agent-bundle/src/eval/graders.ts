@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { lstat, readFile } from 'node:fs/promises';
+import { lstat } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -15,6 +15,7 @@ import type {
 } from './types.ts';
 import { isErrno } from '../core/errors.ts';
 import { deepFreeze } from '../core/freeze.ts';
+import { readFileString, runWithPlatform } from '../effect/platform.ts';
 
 
 const runCommand = promisify(execFile);
@@ -117,7 +118,7 @@ const gradeFile = async (
     return outcome('fail', `${spec.path} is not a regular file.`);
   }
   if (spec.contains === undefined) return outcome('pass', `${spec.path} exists.`);
-  const contents = await readFile(target, 'utf8');
+  const contents = await runWithPlatform(readFileString(target));
   return contents.includes(spec.contains)
     ? outcome('pass', `${spec.path} contains the expected content.`)
     : outcome('fail', `${spec.path} does not contain the expected content.`);
@@ -142,7 +143,7 @@ const gradeJsonSchema = async (
   const target = containedPath(context.fixturePath, spec.path);
   let parsed: unknown;
   try {
-    parsed = parseJsonWithoutDuplicateKeys(await readFile(target, 'utf8'));
+    parsed = parseJsonWithoutDuplicateKeys(await runWithPlatform(readFileString(target)));
   } catch (error) {
     if (isErrno(error, 'ENOENT')) return outcome('fail', `${spec.path} does not exist.`);
     return outcome('fail', `${spec.path} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
