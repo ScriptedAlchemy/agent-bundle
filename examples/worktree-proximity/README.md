@@ -75,9 +75,10 @@ the runtime's `outside-invocation` error outside a request.
 
 Every identity claim records where it came from. `native` is read from the
 host envelope (or a `request.lineage` the runtime resolved natively),
-`registry`, `inferred` and `confirmed` are the runtime lineage registry's own
-resolutions (`confirmed` once the host has named every edge up to the root),
-and `derived` is this application's fallback:
+`registry`, `inferred`, `confirmed` and `transcript` are the runtime lineage
+registry's own resolutions (`confirmed` once the host has named every edge up
+to the root; `transcript` is read from the host's own rollout file), and
+`derived` is this application's fallback:
 
 - `session/start` observes `session:<root>` as the root actor, where the root
   is `(await agent()).lineage.root` when the runtime resolved a lineage and the
