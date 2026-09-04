@@ -470,21 +470,19 @@ export const openInMemoryMcpServer = async <
         const processHit = claimProcessHit(processLifetime);
         const bindings = await runtimeState?.requestBindings({ signal: request.signal });
         try {
-          // Conventional providers run before the scope opens, over the same
+          // Conventional providers run as the scope's resolver, over the same
           // tool invocation the generated Flight worker hands them.
           const descriptor = manifest.routes[route.id];
           // The server process's anchor, as the artifact's host scope forwards
           // it into the Flight worker; the context seam overrides it like every
           // other identity axis.
           const plugin = transport.plugin.state === 'available' ? transport.plugin : pluginRoot;
-          const providers = await mountProviders({
+          const providers = mountProviders({
             explicit: context.providers,
             invocation: request.invocation,
             manifest,
-            plugin,
             processHit,
             ...(descriptor === undefined ? {} : { provenance: routeProvenance(descriptor, manifest) }),
-            signal: request.signal,
           });
           return streamOf(await dependencies.runAgentRequest({
             // Mirror the Flight worker boundary while allowing the documented

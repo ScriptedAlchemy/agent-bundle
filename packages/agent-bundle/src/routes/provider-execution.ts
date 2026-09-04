@@ -63,21 +63,42 @@ export interface ExecutableProvider {
   readonly source: string;
 }
 
+/**
+ * The read-only request view `runAgentRequest` hands a provider resolver
+ * (#459): the runtime's `AgentProviderRequest`, spelled structurally so this
+ * module — emitted into generated shells and imported by the harness — stays
+ * free of the optional runtime peer's declarations. Every member is spread
+ * onto the factory context verbatim, beside the surface-specific
+ * `invocation`; `signal` is the same request signal the scope opened with.
+ */
+export interface ProviderRequestView {
+  readonly host: unknown;
+  readonly lineage: unknown;
+  readonly notices?: unknown;
+  /** The observed plugin root the request scope publishes (#468); handed to every factory unchanged. */
+  readonly plugin: unknown;
+  readonly session: unknown;
+  readonly signal: AbortSignal;
+  readonly state?: unknown;
+  readonly workspace: unknown;
+}
+
 export interface ExecuteProvidersOptions {
   /** The surface-specific provider invocation (`tool`, `event`, `cli`, `script`). */
   readonly invocation: unknown;
-  /** The observed plugin root the request scope publishes (#468); handed to every factory unchanged. */
-  readonly plugin: unknown;
   readonly processLifetime: ProviderProcessLifetime;
   /** Providers already in {@link orderedProviders} order. */
   readonly providers: readonly ExecutableProvider[];
-  readonly signal: AbortSignal;
+  /** The request view `runAgentRequest` resolved; the factory context is this plus `invocation`. */
+  readonly request: ProviderRequestView;
 }
 
 /**
  * Executes conventional providers for one request exactly as a generated
- * request scope does. The caller increments `processLifetime.hits` before the
- * call, as every generated scope does before its provider loop.
+ * request scope does: as the request's provider resolver, after its identity
+ * axes are frozen and its notice lease is open, before the route runs. The
+ * caller increments `processLifetime.hits` before the call, as every generated
+ * scope does before its request opens.
  */
 export const executeProviders = async (
   options: ExecuteProvidersOptions,
@@ -91,11 +112,10 @@ export const executeProviders = async (
       throw new TypeError(providerFactoryMissingMessage(provider.key, provider.source));
     }
     try {
-      values[provider.key] = await (factory as (context: {
-        readonly invocation: unknown;
-        readonly plugin: unknown;
-        readonly signal: AbortSignal;
-      }) => unknown)({ invocation: options.invocation, plugin: options.plugin, signal: options.signal });
+      values[provider.key] = await (factory as (context: ProviderRequestView & { readonly invocation: unknown }) => unknown)({
+        ...options.request,
+        invocation: options.invocation,
+      });
     } catch (error) {
       throw new Error(providerFailedMessage(provider.key, provider.source, error), { cause: error });
     }
