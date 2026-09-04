@@ -33,7 +33,7 @@ even when no error diagnostic was reported.
 | `AB5000` | General CLI and adapter failures. |
 | `AB60xx` | Built-artifact validation, including schema documents and referenced files (`AB6011`/`AB6012`: a target's required pinned-schema document is missing or invalid; `AB6025`: a manifest-declared `logo` path is missing from the artifact or escapes the deploy tree; `AB6034`: emitted Skill Markdown has no instruction body; `AB6035`–`AB6038`: Agent Plugins portable validation, see below). |
 | `AB700x` | Host installation and uninstallation: bundle identity, host availability, scope, command failure, and collision checks (`AB7005`: version collision, pre-receipt content collision, or foreign install; `AB7006`: the host lists the installed copy with load errors; see below), plus the `uninstall` refusals `AB7007`–`AB7009` (ownership or content mismatch, unconfirmed data purge, missing receipt; see below). |
-| `AB7010`–`AB7013` | npm prepack inventory, artifact freshness, package bin targets, and release-version agreement. |
+| `AB7010`–`AB7015` | npm prepack inventory, artifact freshness, package bin targets, release-version agreement, and installed-dependency hygiene (`AB7014`: a dependency no packed JavaScript imports; `AB7015`: a git, remote-tarball, or path dependency specifier). |
 | `AB7200`–`AB7202`, `AB7210`–`AB7211` | Development rebuilds and live host surfaces: rebuild admission and phase failures, development host install sync, and the dev-epoch contract gate (see below). |
 | `AB7xxx` | Project preparation and development rebuilds. |
 | `AB7300`–`AB7330` | Read-only install Doctor: host probes, installed inventory, bundle comparison and registration proof, runtime endpoint health and identity, durable-state inventory, static bytes-at-rest validation, foreign-install detection (`AB7321`; see below), Cursor plugin hook registration / marketplace staging (`AB7322`–`AB7324`; see below), host load refusal (`AB7325`; see below), the Cursor Agent Plugins launch proof (`AB7326`; see below), a disabled Claude install (`AB7327`; see below), and lifecycle receipts and activation states (`AB7328`–`AB7330`; see below). `AB7311` and `AB7325` are also emitted by `build` and `validate --artifact` from the Claude load check (see "Claude Code host validation"). |
@@ -176,7 +176,7 @@ Validation happens at three moments, all fail-closed:
 | `AB6037` | error | A symlink inside the plugin resolves outside the plugin root, or cannot be resolved at all (§4.1 containment). | Replace the escaping symlink with a file or a link that resolves inside the plugin root, then rebuild. |
 | `AB6038` | info | Every portable host-validation report states that Agent Plugins publishes no reference validator and names the pinned schema provenance (specification repository commit, retrieval and re-verification dates) used for local validation. | Review the pinned Agent Plugins provenance before changing the local validator contract. |
 
-## npm prepack gate (`AB7010`–`AB7013`)
+## npm prepack gate (`AB7010`–`AB7015`)
 
 | Code | Meaning |
 | --- | --- |
@@ -184,6 +184,14 @@ Validation happens at three moments, all fail-closed:
 | `AB7011` | An on-disk artifact file no longer matches its manifest SHA-256. Rebuild and do not modify generated host packs. |
 | `AB7012` | A `package.json` bin points outside the packed `dist` output (including `src/`) or names a file npm omitted. Point it at the generated `dist/bin` file. |
 | `AB7013` | `package.json`, normalized plugin metadata, a host manifest, or artifact provenance reports a different release version. Make every release identity agree. |
+| `AB7014` | A `package.json` `dependencies`, `optionalDependencies`, or `peerDependencies` field names packages that no packed JavaScript imports or requires (one diagnostic per field). The build inlines every dependency into `dist/bin` and the host packs, so such an entry only makes every consumer's `npm install` fetch build-time packages. Move them to `devDependencies`, or import the package from a packed module if a consumer really needs it at runtime. |
+| `AB7015` | A `package.json` `dependencies`, `optionalDependencies`, or `peerDependencies` entry resolves outside a registry: a `git`/`github:`/`gitlab:`/`bitbucket:`/`gist:` source, an `owner/repo` shorthand, an `http(s):` tarball, or a `file:`/`link:`/`portal:`/relative path. npm 12 refuses git and remote fetches by default (`allow-git=none`, `allow-remote=none`), so consumers cannot install the published package. Depend on a published registry version, or bundle the package and declare it under `devDependencies`. `npm:` aliases and `workspace:` protocols (rewritten at publish time) are registry specifiers. |
+
+The dependency evidence is read from the packed bytes themselves: every `.js`/`.mjs`/`.cjs` file
+`npm pack --dry-run` lists is lexed for static and dynamic `import` specifiers and scanned for
+literal `require("…")` calls; bare specifiers are reduced to their package name (`@scope/name` or
+`name`), and Node built-ins are ignored. A mention inside a comment or string can only keep a
+dependency, never report one, and `devDependencies` are never inspected.
 
 ## Declaration generation (`AB4716`)
 

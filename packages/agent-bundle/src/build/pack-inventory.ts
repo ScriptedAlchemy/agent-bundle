@@ -8,6 +8,7 @@ import { deepFreeze } from '../core/freeze.ts';
 import { installSurfaceRequirements } from '../install/surface.ts';
 import { artifactManifestName } from './emit.ts';
 import { parseArtifactManifest } from './manifest.ts';
+import { packDependencyDiagnostics } from './pack-dependencies.ts';
 import type { PackageBuildResult } from './package-build.ts';
 
 export interface PackOutputFile {
@@ -214,6 +215,12 @@ export const packInventoryDiagnostics = async (options: {
       'Set package.json, plugin metadata, generated host manifests, and artifact provenance to one semantic version.',
     ));
   }
+
+  diagnostics.push(...await packDependencyDiagnostics({
+    packageDocument,
+    packedPaths: [...packed],
+    projectRoot,
+  }));
 
   return deepFreeze(diagnostics.sort((left, right) => left.code.localeCompare(right.code)));
 };
