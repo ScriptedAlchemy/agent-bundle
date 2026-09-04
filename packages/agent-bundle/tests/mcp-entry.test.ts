@@ -259,6 +259,43 @@ describe('stdout protocol guard', () => {
       console.log = originalConsole.log;
     }
   });
+
+  it('adopts an installed guard instead of stacking a second one, and installs anew once restored', () => {
+    // The generated stdio prelude installs the guard as the entry's first
+    // import and the lifecycle calls this again: a second install would
+    // capture the redirect as the original and "restore" stdout to stderr.
+    const originalConsole = { error: console.error, log: console.log };
+    const originalStdoutWrite = process.stdout.write;
+    const originalStderrWrite = process.stderr.write;
+    const stdoutChunks: string[] = [];
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      stdoutChunks.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+    process.stderr.write = (() => true) as typeof process.stderr.write;
+
+    try {
+      const first = redirectConsoleToStderr();
+      const second = redirectConsoleToStderr();
+      expect(second).toBe(first);
+      second.restoreProtocolStdout();
+      process.stdout.write('{"jsonrpc":"2.0"}');
+      expect(stdoutChunks).toEqual(['{"jsonrpc":"2.0"}']);
+      // Restored means uninstalled: the next call installs a fresh guard
+      // whose original is the real stdout again.
+      const third = redirectConsoleToStderr();
+      expect(third).not.toBe(first);
+      process.stdout.write('swallowed');
+      third.restoreProtocolStdout();
+      process.stdout.write('{"id":1}');
+      expect(stdoutChunks).toEqual(['{"jsonrpc":"2.0"}', '{"id":1}']);
+    } finally {
+      process.stdout.write = originalStdoutWrite;
+      process.stderr.write = originalStderrWrite;
+      console.error = originalConsole.error;
+      console.log = originalConsole.log;
+    }
+  });
 });
 
 describe('runGeneratedStdioMcpEntry', () => {

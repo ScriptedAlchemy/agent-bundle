@@ -847,6 +847,71 @@ it('lets the operator .env beat a manifest env default the host passed through, 
   }
 }, 60_000);
 
+it('redirects stdout written at module scope by the server module to stderr before the protocol stream opens', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-module-scope-stdout-'));
+  try {
+    await mkdir(join(root, 'src'), { recursive: true });
+    await mkdir(join(root, 'node_modules'), { recursive: true });
+    await symlink(
+      join(agentBundleNodeModules, '@modelcontextprotocol'),
+      join(root, 'node_modules', '@modelcontextprotocol'),
+      'dir',
+    );
+    await writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n');
+    await writeFile(join(root, 'package.json'), '{"type":"module"}\n');
+    // A factory entry whose module top level writes to stdout both ways a
+    // consumer module can: the console and the raw stream. The server module
+    // is a static import of the shell, so it evaluates before the shell body;
+    // only a guard installed by an earlier import keeps these off the wire.
+    await writeFile(join(root, 'src', 'server.ts'), [
+      "import { McpServer } from '@modelcontextprotocol/server';",
+      "console.log('hello');",
+      "process.stdout.write('raw\\n');",
+      'export default () => {',
+      "  console.log('factory');",
+      "  const server = new McpServer({ name: 'module-scope-stdout', version: '1.0.0' });",
+      "  server.registerTool('ping', { description: 'Reply.' }, async () => {",
+      "    console.log('tool');",
+      "    return { content: [{ type: 'text' as const, text: 'pong' }] };",
+      '  });',
+      '  return server;',
+      '};',
+      '',
+    ].join('\n'));
+    const model = await normalizeProject(
+      loadedProject(root, {
+        mcp: { servers: { chatty: { entry: './src/server.ts' } } },
+        plugin: { name: 'mcp-module-scope-stdout', version: '1.0.0' },
+        targets: ['portable'],
+      }),
+      { skills: [] },
+      registry,
+    );
+    const result = await build({ model, outputRoot: join(root, 'artifact'), projectRoot: root, registry: createDefaultRegistry() });
+    const [entry] = result.compiledMcpEntries;
+
+    const stderrChunks: string[] = [];
+    const transport = new StdioClientTransport({ args: [entry!.output], command: process.execPath, stderr: 'pipe' });
+    transport.stderr?.on('data', (chunk: Buffer | string) => stderrChunks.push(String(chunk)));
+    const client = new Client({ name: 'module-scope-stdout-consumer', version: '1.0.0' });
+    await client.connect(transport);
+    try {
+      // initialize completed above; tools/list and a call prove the protocol
+      // stream stayed clean end to end.
+      expect((await client.listTools()).tools).toMatchObject([{ name: 'ping' }]);
+      expect(await client.callTool({ arguments: {}, name: 'ping' })).toMatchObject({ content: [{ text: 'pong', type: 'text' }] });
+    } finally {
+      await client.close();
+    }
+    const stderr = stderrChunks.join('');
+    expect(stderr).toContain('hello\nraw\n');
+    expect(stderr).toContain('factory\n');
+    expect(stderr).toContain('tool\n');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 60_000);
+
 it('builds one deterministic self-contained MCP App view and injects it through the virtual module', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-app-build-'));
   try {

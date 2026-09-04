@@ -1004,7 +1004,8 @@ export default () => createRscMcpServer(application, 'curator');
 ```
 
 The generated shell provides, in order: console-to-stderr redirection before
-the consumer module evaluates, the factory call, raw `process.stdout.write`
+the consumer module evaluates (installed by the shell's first import, its
+stdio prelude — see below), the factory call, raw `process.stdout.write`
 restored for protocol frames, `StdioServerTransport` construction and
 connect, SIGINT → exit 130, SIGTERM → exit 143, stdin EOF → exit 0 (so the
 client can respawn), transport-close → exit 0, a 5-second bounded shutdown
@@ -1391,14 +1392,26 @@ Two details keep the installed order equal to the `mcp run` table above:
   entry module's own body, and places a dynamic import's target ahead of the
   static ones — so neither a statement in the shell body nor an awaited
   `import()` after it runs before a consumer module's top level. The layer is
-  instead a generated virtual module (`agent-bundle/launch-env-layer`,
-  `src/build/launch-env-shell.ts`) that each shell imports first, and the
+  instead a generated virtual module that each shell imports first, and the
   server module, hook handler, routes, providers, and state definition are
-  static imports after it; ESM import order is what the bundler preserves. A
-  consumer `package.json` declaring `"sideEffects": false` would let the
-  bundler drop that bare import, so the build marks generated modules
+  static imports after it; ESM import order is what the bundler preserves.
+  Hook wrappers and the CLI bin import the env-only layer
+  (`agent-bundle/launch-env-layer`, `src/build/launch-env-shell.ts`); they
+  legitimately write stdout. The stdio MCP shell imports its prelude instead
+  (`agent-bundle/stdio-prelude`, `src/build/entry-shell.ts`), which calls
+  `redirectConsoleToStderr` from `agent-bundle/mcp-entry` and then applies
+  the layer — stdout is the protocol wire there, and the same ordering
+  argument means only an earlier import can put the guard ahead of a
+  `console.log` or `process.stdout.write` at the server module's top level.
+  The guard has one implementation: `redirectConsoleToStderr` returns the
+  guard already installed (recognised by `process.stdout.write` still being
+  its redirect) instead of stacking a second, so `runGeneratedStdioMcpEntry`
+  adopts the prelude's guard and restores raw stdout from it before serving.
+  A consumer `package.json` declaring `"sideEffects": false` would let the
+  bundler drop either bare import, so the build marks generated modules
   side-effectful (`src/build/rslib.ts`). Module-level `process.env` reads in
-  plugin code see the composed environment.
+  plugin code see the composed environment, and module-level stdout writes in
+  a server module land on stderr.
 
 ### Durable-state anchors
 

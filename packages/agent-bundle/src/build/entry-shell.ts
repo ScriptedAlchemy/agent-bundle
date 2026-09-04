@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { eventIpcRuntimeSpecifier, eventProjectRuntimeSpecifier } from '../adapters/hook-contract.ts';
-import { operatorEnvLayerImport } from './launch-env-shell.ts';
+import { operatorEnvLayerImport, operatorEnvLayerImports, operatorEnvLayerStatement } from './launch-env-shell.ts';
 import type { NoticeDeliveryAdvertisement } from '../adapters/notice-delivery.ts';
 import { stableJson } from '../core/digest.ts';
 import type { NormalizedHook, NormalizedNoticeRetentionPolicy, NormalizedStateDefinition } from '../core/types.ts';
@@ -69,22 +69,52 @@ export const terminalCapabilityRuntimePath = (): string => runtimeModulePath('te
 export type GeneratedExecutableSurface = 'cli' | 'script';
 
 /**
+ * The generated prelude of a stdio MCP entry: the stdout guard, then the
+ * operator `.env` layer (#469), as one virtual module the shell imports
+ * first. stdout is the protocol wire on a stdio server, so the guard must be
+ * in place before the server module's own top level runs — and under
+ * bundling that top level precedes the shell body whichever way the module
+ * is imported, so only an earlier import can install it. The guard is the
+ * one `agent-bundle/mcp-entry` exports; the lifecycle adopts it rather than
+ * installing a second. Hook wrappers and the CLI bin import the env-only
+ * layer instead: they legitimately write stdout.
+ */
+export const stdioPreludeSpecifier = 'agent-bundle/stdio-prelude';
+
+/** The import every generated stdio MCP entry places first. */
+export const stdioPreludeImport = `import ${JSON.stringify(stdioPreludeSpecifier)};`;
+
+/** The prelude source: guard first, so nothing after it can reach stdout; then the layer with the server's manifest `env` defaults. */
+export const stdioPreludeModuleSource = (manifestEnv?: Readonly<Record<string, string>>): string => [
+  ...operatorEnvLayerImports,
+  `import { redirectConsoleToStderr } from ${JSON.stringify(mcpEntryRuntimeSpecifier)};`,
+  '',
+  'redirectConsoleToStderr();',
+  operatorEnvLayerStatement(manifestEnv),
+  '',
+].join('\n');
+
+/** The prelude as the virtual module an Rslib entry serves beside its shell. */
+export const stdioPreludeVirtualModule = (
+  manifestEnv?: Readonly<Record<string, string>>,
+): { readonly name: string; readonly source: string } => ({
+  name: stdioPreludeSpecifier,
+  source: stdioPreludeModuleSource(manifestEnv),
+});
+
+/**
  * The generated stdio MCP entry body for a factory-exporting server module.
- * The operator `.env` layer (#469) is the first import and the server module
- * a static import after it: the bundler inlines every module of the
- * single-chunk bundle ahead of the entry body and places a dynamic import's
- * target ahead of the static ones, so only static import order puts the
- * layer before the server module's own top level (see
- * launchEnvLayerSpecifier). The layer module carries the server's manifest
- * `env` defaults. The lifecycle installs its console guard before the
- * factory runs; the module's top-level evaluation precedes the shell body
- * under bundling whichever way it is imported.
+ * The prelude is the first import and the server module a static import
+ * after it: the bundler inlines every module of the single-chunk bundle
+ * ahead of the entry body and places a dynamic import's target ahead of the
+ * static ones, so only static import order puts the guard and the layer
+ * before the server module's own top level (see launchEnvLayerSpecifier).
  */
 export const generatedStdioMcpEntrySource = (options: {
   readonly entrySource: string;
   readonly serverName: string;
 }): string => [
-  operatorEnvLayerImport,
+  stdioPreludeImport,
   `import { runGeneratedStdioMcpEntry } from ${JSON.stringify(mcpEntryRuntimeSpecifier)};`,
   `import * as serverModule from ${JSON.stringify(options.entrySource)};`,
   '',

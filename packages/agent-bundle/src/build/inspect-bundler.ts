@@ -15,6 +15,7 @@ import {
   mcpEntryRuntimeSpecifier,
   mcpServerRuntimePath,
   mcpServerRuntimeSpecifier,
+  stdioPreludeVirtualModule,
   terminalCapabilityRuntimePath,
   terminalCapabilityRuntimeSpecifier,
 } from './entry-shell.ts';
@@ -256,7 +257,7 @@ const mcpEntryEntries = async (
             source: '/* The MCP App registry virtual module is generated from built app HTML at build time. */',
           },
           ...(routeSource === undefined ? [] : [{ name: 'agent-bundle/generated-route-server', source: routeSource }]),
-          ...(wrapped ? [operatorEnvLayerVirtualModule(server?.env)] : []),
+          ...(wrapped ? [stdioPreludeVirtualModule(server?.env)] : []),
         ],
       },
       kind: 'mcp-entry',

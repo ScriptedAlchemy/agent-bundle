@@ -29,14 +29,26 @@ export const launchEnvRuntimeSpecifier = 'agent-bundle/launch-env';
  */
 export const launchEnvLayerSpecifier = 'agent-bundle/launch-env-layer';
 
-/** The import every artifact shell that runs plugin code places first. */
+/**
+ * The import the hook wrappers and the artifact CLI bin place first. The
+ * stdio MCP shell imports its prelude instead (`stdioPreludeImport` in
+ * `entry-shell.ts`), which applies this same layer after installing the
+ * stdout guard: stdout is the protocol wire there, while hooks and the CLI
+ * legitimately write it.
+ */
 export const operatorEnvLayerImport = `import ${JSON.stringify(launchEnvLayerSpecifier)};`;
 
+/** The imports the layer statement needs, shared with the stdio prelude. */
+export const operatorEnvLayerImports: readonly string[] = [
+  "import { fileURLToPath } from 'node:url';",
+  `import { applyOperatorEnv, operatorEnvPluginRoot } from ${JSON.stringify(launchEnvRuntimeSpecifier)};`,
+];
+
 /**
- * The source of the layer module. Every artifact shell lives one directory
- * below the plugin root (`mcp/`, `hooks/`, `bin/`), so the fallback anchor —
- * used when the host set no `AGENT_BUNDLE_PLUGIN_ROOT` — is the bundle's
- * parent directory, the same fallback the durable-state kernel uses
+ * The statement that applies the layer. Every artifact shell lives one
+ * directory below the plugin root (`mcp/`, `hooks/`, `bin/`), so the fallback
+ * anchor — used when the host set no `AGENT_BUNDLE_PLUGIN_ROOT` — is the
+ * bundle's parent directory, the same fallback the durable-state kernel uses
  * (`import.meta.url` stays native in the emitted ESM, so it names the bundle).
  *
  * A stdio MCP shell embeds its server's manifest `env` block as build-time
@@ -45,19 +57,17 @@ export const operatorEnvLayerImport = `import ${JSON.stringify(launchEnvLayerSpe
  * let the file beat them while an exported variable still wins. Hook
  * wrappers and the CLI bin have no manifest env and embed none.
  */
-export const operatorEnvLayerModuleSource = (manifestEnv?: Readonly<Record<string, string>>): string => {
+export const operatorEnvLayerStatement = (manifestEnv?: Readonly<Record<string, string>>): string => {
   const defaults = Object.entries(manifestEnv ?? {}).sort(([left], [right]) => left.localeCompare(right));
   const manifestField = defaults.length === 0
     ? ''
     : `manifestEnv: ${JSON.stringify(Object.fromEntries(defaults))}, `;
-  return [
-    "import { fileURLToPath } from 'node:url';",
-    `import { applyOperatorEnv, operatorEnvPluginRoot } from ${JSON.stringify(launchEnvRuntimeSpecifier)};`,
-    '',
-    `applyOperatorEnv({ ${manifestField}pluginRoot: operatorEnvPluginRoot(fileURLToPath(new URL('..', import.meta.url))) });`,
-    '',
-  ].join('\n');
+  return `applyOperatorEnv({ ${manifestField}pluginRoot: operatorEnvPluginRoot(fileURLToPath(new URL('..', import.meta.url))) });`;
 };
+
+/** The source of the env-only layer module. */
+export const operatorEnvLayerModuleSource = (manifestEnv?: Readonly<Record<string, string>>): string =>
+  [...operatorEnvLayerImports, '', operatorEnvLayerStatement(manifestEnv), ''].join('\n');
 
 /** The layer as the virtual module an Rslib entry serves beside its wrapper. */
 export const operatorEnvLayerVirtualModule = (

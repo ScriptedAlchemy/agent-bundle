@@ -7,6 +7,7 @@ import { describe, expect, it } from '@rstest/core';
 import ts from 'typescript-5';
 
 import { claudeAdapter } from '../src/adapters/claude.ts';
+import { cursorHookWrapperSource, nativeHookWrapperSource, type TargetHookWrapper } from '../src/adapters/hook-contract.ts';
 import type { NoticeDeliveryAdvertisement } from '../src/adapters/notice-delivery.ts';
 import { scanEntryExportsSource, stripCommentsAndStrings } from '../src/build/entry-exports.ts';
 import * as entryShellModule from '../src/build/entry-shell.ts';
@@ -20,6 +21,10 @@ import {
   mcpEntryRuntimeSpecifier,
   mcpServerRuntimePath,
   mcpServerRuntimeSpecifier,
+  stdioPreludeImport,
+  stdioPreludeModuleSource,
+  stdioPreludeSpecifier,
+  stdioPreludeVirtualModule,
 } from '../src/build/entry-shell.ts';
 import {
   executeProviders,
@@ -86,20 +91,70 @@ describe('generated entry templates', () => {
     expect(path.endsWith('mcp-entry.ts') || path.endsWith('mcp-entry.js')).toBe(true);
   });
 
-  it('generates a stdio entry that imports the operator .env layer before the server module (#469)', () => {
+  it('generates a stdio entry whose first import is the prelude — stdout guard, then the operator .env layer — ahead of the server module (#469)', () => {
     const source = generatedStdioMcpEntrySource({ entrySource: '/proj/src/mcp/curator.ts', serverName: 'curator' });
     expect(source).toContain(`from ${JSON.stringify(mcpEntryRuntimeSpecifier)}`);
     expect(source).toContain('serverName: "curator"');
-    // The layer is the shell's first import and the server module a static
+    // The prelude is the shell's first import and the server module a static
     // import after it: the bundler inlines every module ahead of the entry
     // body and a dynamic import's target ahead of the static ones, so only
-    // static import order puts the layer before the server module's own top
-    // level (pinned end to end by tests/mcp.test.ts).
-    expect(source.startsWith(`${operatorEnvLayerImport}\n`)).toBe(true);
-    expect(source.indexOf(operatorEnvLayerImport)).toBeLessThan(source.indexOf('import * as serverModule from "/proj/src/mcp/curator.ts";'));
+    // static import order puts the guard and the layer before the server
+    // module's own top level (pinned end to end by tests/mcp.test.ts).
+    expect(source.startsWith(`${stdioPreludeImport}\n`)).toBe(true);
+    expect(stdioPreludeImport).toBe('import "agent-bundle/stdio-prelude";');
+    expect(source.indexOf(stdioPreludeImport)).toBeLessThan(source.indexOf('import * as serverModule from "/proj/src/mcp/curator.ts";'));
+    // The stdio shell never imports the env-only layer: stdout is its wire.
+    expect(source).not.toContain(launchEnvLayerSpecifier);
     expect(source).toContain('loadEntry: async () => serverModule,');
     expect(source).not.toContain('import(');
     expect(source).not.toContain('applyOperatorEnv');
+    expect(source).not.toContain('redirectConsoleToStderr');
+  });
+
+  it('generates the stdio prelude module: the mcp-entry guard installed first, then the layer with the manifest env defaults (#469)', () => {
+    const source = stdioPreludeModuleSource({ API_URL: 'https://api.example' });
+    const lines = source.split('\n');
+    expect(lines.slice(0, 3)).toEqual([
+      "import { fileURLToPath } from 'node:url';",
+      'import { applyOperatorEnv, operatorEnvPluginRoot } from "agent-bundle/launch-env";',
+      'import { redirectConsoleToStderr } from "agent-bundle/mcp-entry";',
+    ]);
+    // One guard implementation: the prelude calls the export the lifecycle
+    // adopts, and calls it before the layer so nothing after the first
+    // statement can reach stdout.
+    expect(lines.indexOf('redirectConsoleToStderr();')).toBeLessThan(lines.findIndex((line) => line.startsWith('applyOperatorEnv(')));
+    expect(source).toContain(
+      'applyOperatorEnv({ manifestEnv: {"API_URL":"https://api.example"}, '
+      + "pluginRoot: operatorEnvPluginRoot(fileURLToPath(new URL('..', import.meta.url))) });",
+    );
+    expect(stdioPreludeVirtualModule({ API_URL: 'https://api.example' })).toEqual({ name: stdioPreludeSpecifier, source });
+    expect(stdioPreludeSpecifier).toBe('agent-bundle/stdio-prelude');
+  });
+
+  it('gives hook wrappers the env-only layer, never the stdio prelude: stdout is the host envelope there (#469)', () => {
+    const entry: TargetHookWrapper = {
+      event: 'sessionStart',
+      hook: {
+        event: 'sessionStart',
+        id: 'hook:sessionStart:probe:00000000',
+        name: 'probe',
+        provenance: { kind: 'config', sourcePath: '/project/agent-bundle.config.ts' },
+        source: '/project/src/hooks/probe.ts',
+        targets: ['claude'],
+        tools: [],
+      },
+      nativeEvent: 'SessionStart',
+      relativePath: 'hooks/sessionStart.mjs',
+      target: 'claude',
+    };
+    for (const source of [
+      nativeHookWrapperSource(entry, 'Claude'),
+      cursorHookWrapperSource({ ...entry, nativeEvent: 'sessionStart', target: 'cursor' }),
+    ]) {
+      expect(source.startsWith(`${operatorEnvLayerImport}\n`)).toBe(true);
+      expect(source).not.toContain(stdioPreludeSpecifier);
+      expect(source).not.toContain('redirectConsoleToStderr');
+    }
   });
 
   it('generates the operator .env layer module with the manifest env defaults it must recognise (#469)', () => {
@@ -141,10 +196,12 @@ describe('generated entry templates', () => {
       routes: [route],
       stateFallback: 'artifact',
     });
-    // The layer is the first import, ahead of the route, provider, and state
-    // modules, so a module-level `process.env` read in any of them sees the
-    // composed environment; the consumer imports themselves stay static.
+    // The env-only layer is the first import, ahead of the route, provider,
+    // and state modules, so a module-level `process.env` read in any of them
+    // sees the composed environment; the consumer imports themselves stay
+    // static. Never the stdio prelude: a CLI bin owns its stdout.
     expect(artifactBin.startsWith(`${operatorEnvLayerImport}\n`)).toBe(true);
+    expect(artifactBin).not.toContain(stdioPreludeSpecifier);
     expect(artifactBin).not.toContain('applyOperatorEnv');
     expect(artifactBin).toContain('import * as route0 from "/project/src/cli/report.ts";');
     const durableBin = entryShellModule.generatedCliBinEntrySource({

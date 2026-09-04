@@ -42,6 +42,7 @@ import {
   mcpEntryRuntimeSpecifier,
   mcpServerRuntimePath,
   mcpServerRuntimeSpecifier,
+  stdioPreludeVirtualModule,
 } from './entry-shell.ts';
 import { emptyRouteConfig, type CompiledLayout, type CompiledProvider } from '../routes/types.ts';
 import type { CompiledMcpApp } from './mcp-apps.ts';
@@ -424,7 +425,7 @@ export const planMcpEntriesSurface = async (
   }));
   const runtimeShell = entryShells.some((shell) => shell !== undefined) ? mcpEntryRuntimePath() : undefined;
   // The operator `.env` layer (#469) is public API for every stdio entry: the
-  // lifecycle shell applies it before the deferred server import, and a
+  // shell's prelude applies it ahead of the server module, and a
   // self-connecting entry — which has no shell — imports
   // `agent-bundle/launch-env` and calls `applyOperatorEnv` itself. The alias
   // is unconditional so that import resolves to this package's plain-Node
@@ -471,13 +472,13 @@ export const planMcpEntriesSurface = async (
         name: routeModuleSpecifier,
         source: generatedRouteSources[index],
       }]),
-      // The shell's operator `.env` layer (#469) carries the server's manifest
-      // `env` block, so the layer can tell a passed-through default from a
-      // host export; a self-connecting entry has no shell and applies the
-      // layer itself if it wants it.
+      // The shell's prelude — stdout guard, then the operator `.env` layer
+      // (#469) — carries the server's manifest `env` block, so the layer can
+      // tell a passed-through default from a host export; a self-connecting
+      // entry has no shell and applies the layer itself if it wants it.
       ...(entryShells[index] === undefined
         ? []
-        : [operatorEnvLayerVirtualModule(servers.find((candidate) => candidate.id === id)?.env)]),
+        : [stdioPreludeVirtualModule(servers.find((candidate) => candidate.id === id)?.env)]),
     ],
   }));
   const workerEntries = compiled.flatMap((entry, index) => {
