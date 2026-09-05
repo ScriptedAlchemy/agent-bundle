@@ -1,4 +1,5 @@
 import { execFile as executeFile, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -50,11 +51,33 @@ const runSourceCliWithOutput = async (
   return { code, stderr: terminal.stderr(), stdout: terminal.stdout() };
 };
 
-const createCliProject = async (): Promise<{ readonly output: string; readonly root: string }> => {
+/**
+ * Deterministic text gzip cannot shrink much (a sha256 hex chain). A real App
+ * view carries hundreds of KiB of runtime, so the fixture view embeds enough
+ * of this to keep both its raw and gzip sizes above 1 KiB — the size line's
+ * units are KiB/MiB.
+ */
+const incompressibleText = (length: number): string => {
+  let text = '';
+  for (let seed = 'agent-bundle cli fixture'; text.length < length;) {
+    seed = createHash('sha256').update(seed).digest('hex');
+    text += seed;
+  }
+  return text.slice(0, length);
+};
+
+const createCliProject = async (
+  options: Readonly<{
+    /** Also declare one local MCP server with a `dashboard` App view compiled for `portable` (#572). */
+    readonly mcpApp?: boolean;
+  }> = {},
+): Promise<{ readonly output: string; readonly root: string }> => {
   const parent = await mkdtemp(join(tmpdir(), 'agent bundle cli parent-'));
   const root = join(parent, 'project with spaces');
   const output = join(root, 'artifact with spaces');
+  const mcpApp = options.mcpApp === true;
   await mkdir(join(root, 'src', 'skills', 'review'), { recursive: true });
+  if (mcpApp) await mkdir(join(root, 'views'), { recursive: true });
   await Promise.all([
     writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
     writeFile(
@@ -64,6 +87,12 @@ const createCliProject = async (): Promise<{ readonly output: string; readonly r
         "  plugin: { name: 'cli-fixture', version: '1.0.0' },",
         "  targets: selectedTargets.length === 0 ? ['portable', 'codex'] : selectedTargets,",
         '  fixtureContext: { command, mode, projectRoot, selectedTargets },',
+        ...(mcpApp ? [
+          '  mcp: { servers: { fixture: {',
+          "    apps: { dashboard: { entry: './views/dashboard.ts', resourceUri: 'ui://cli-fixture/dashboard.html', targets: ['portable'] } },",
+          "    entry: './src/server.ts',",
+          '  } } },',
+        ] : []),
         '});',
         '',
       ].join('\n'),
@@ -72,6 +101,13 @@ const createCliProject = async (): Promise<{ readonly output: string; readonly r
       join(root, 'src', 'skills', 'review', 'SKILL.md'),
       '---\nname: review\ndescription: Reviews changes\n---\n# Review\n',
     ),
+    ...(mcpApp ? [
+      writeFile(join(root, 'src', 'server.ts'), 'export {};\n'),
+      writeFile(
+        join(root, 'views', 'dashboard.ts'),
+        `document.body.textContent = ${JSON.stringify(`dashboard ${incompressibleText(16 * 1024)}`)};\n`,
+      ),
+    ] : []),
   ]);
   return { output, root };
 };
@@ -526,7 +562,7 @@ it('build requests the Claude host validator by default, opts out under --no-hos
       ? []
       : [{ code: 'AB6020', message: 'Claude plugin validation warning.', severity: strict ? 'error' as const : 'warning' as const }];
     return {
-      build: { outputRoot: '/artifact' },
+      build: { compiledMcpApps: [], outputRoot: '/artifact' },
       diagnostics,
       ...(skipped ? {} : {
         hostValidation: [{ diagnostics, host: 'claude', load: { status: 'loaded' }, status: strict ? 'failed' : 'warnings', target: 'claude', version: '2.1.259' }],
@@ -555,6 +591,80 @@ it('build requests the Claude host validator by default, opts out under --no-hos
     expect.objectContaining({ hostValidation: true, strict: true }),
   ]);
 });
+
+it('build lists every compiled MCP App view with its measured size after the Built line (#572)', async () => {
+  // Sizes chosen off the whole-unit boundary so the expected text does not
+  // depend on how a formatter renders an exact `.0`.
+  const build = async () => ({
+    build: {
+      compiledMcpApps: [
+        { name: 'status', size: { bytes: 1_363_149, gzipBytes: 437_350 }, target: 'portable' },
+        { name: 'dashboard', size: { bytes: 437_350, gzipBytes: 104_550 }, target: 'portable' },
+        { name: 'dashboard', size: { bytes: 437_350, gzipBytes: 104_550 }, target: 'codex' },
+      ],
+      diagnostics: [],
+      outputRoot: '/artifact',
+    },
+    diagnostics: [],
+    model: { metadata: { name: 'fixture' } },
+  });
+
+  const human = await runSourceCliWithOutput(['build', '--root', '/project', '--no-host-validation'], { build: build as never });
+
+  // Sorted by target, then App name; 1024-based, one decimal.
+  expect(human).toEqual({
+    code: 0,
+    stderr: '',
+    stdout: [
+      'Built fixture to /artifact',
+      'MCP App dashboard (codex): mcp-apps/dashboard.html 427.1 KiB (102.1 KiB gzip)',
+      'MCP App dashboard (portable): mcp-apps/dashboard.html 427.1 KiB (102.1 KiB gzip)',
+      'MCP App status (portable): mcp-apps/status.html 1.3 MiB (427.1 KiB gzip)',
+      '',
+    ].join('\n'),
+  });
+});
+
+it('build compiles a declared MCP App view and reports its document and measured size (#572)', async () => {
+  const project = await createCliProject({ mcpApp: true });
+  try {
+    // `--json` serializes the whole build result, so the measured sizes and
+    // the compiler's non-fatal diagnostics ride along without a bespoke shape.
+    const json = await runSourceCliWithOutput([
+      'build', '--root', project.root, '--output', project.output, '--no-host-validation', '--json',
+    ]);
+    expect(json).toMatchObject({ code: 0, stderr: '' });
+    const document = JSON.parse(json.stdout) as {
+      readonly build: {
+        readonly compiledMcpApps: readonly {
+          readonly name: string;
+          readonly size: { readonly bytes: number; readonly gzipBytes: number };
+          readonly target: string;
+        }[];
+        readonly diagnostics: readonly unknown[];
+      };
+      readonly diagnostics: readonly unknown[];
+    };
+    expect(document.build.compiledMcpApps).toMatchObject([{ name: 'dashboard', target: 'portable' }]);
+    const size = document.build.compiledMcpApps[0]!.size;
+    expect(size.bytes).toBeGreaterThan(0);
+    expect(size.gzipBytes).toBeGreaterThan(0);
+    expect(size.gzipBytes).toBeLessThanOrEqual(size.bytes);
+    expect(Array.isArray(document.build.diagnostics)).toBe(true);
+    expect(Array.isArray(document.diagnostics)).toBe(true);
+
+    const human = await runSourceCliWithOutput([
+      'build', '--root', project.root, '--output', project.output, '--no-host-validation',
+    ]);
+    expect(human).toMatchObject({ code: 0, stderr: '' });
+    expect(human.stdout).toContain(`Built cli-fixture to ${project.output}\n`);
+    expect(human.stdout).toMatch(
+      /^MCP App dashboard \(portable\): mcp-apps\/dashboard\.html \d+(?:\.\d)? [KM]iB \(\d+(?:\.\d)? [KM]iB gzip\)$/mu,
+    );
+  } finally {
+    await rm(resolve(project.root, '..'), { force: true, recursive: true });
+  }
+}, 60_000 * timeScale);
 
 it('enables bounded host validation for built artifacts and promotes warnings only under --strict', async () => {
   const calls: unknown[] = [];
