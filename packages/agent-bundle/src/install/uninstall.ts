@@ -476,7 +476,12 @@ const cursorLocalData = async (
   } else {
     const observed = receipt?.stateRoot ?? await resolveInstalledStateRoot(destination, 'cursor', environment, home);
     if (observed.root !== stateDirectory && await realDirectory(observed.root, 'cursor') !== undefined) {
-      retainedState.push({ path: observed.root, reason: 'unproven' });
+      if (receipt !== undefined && observed.source === 'derived') {
+        paths.push(observed.root);
+        kinds.push(`derived framework state root ${observed.root}`);
+      } else {
+        retainedState.push({ path: observed.root, reason: 'unproven' });
+      }
     }
   }
   if (await realDirectory(stateDirectory, 'cursor') !== undefined) {
@@ -619,7 +624,8 @@ const uninstallCursorLocal = async (
   // External state kept by --keep-data needs the remnant receipt and canonical install path so a later purge can
   // derive and remove the same root even though no plugin content remains.
   const keepRoot = policy === 'keep' &&
-    data.report.paths.some((path) => path !== join(destination, 'state'));
+    [...data.report.paths, ...(data.report.retained ?? []).map((entry) => entry.path)]
+      .some((path) => path !== join(destination, 'state'));
   const pluginDataRecorded = ownership.receipt?.cursorExpansion?.pluginData === cursorPluginDataDirectory(cursorRoot, identity.plugin);
   const directoryCandidates = [
     ...ownership.directories.map((directory) => join(destination, directory)),
@@ -1146,7 +1152,8 @@ const publicHostData = async (
         !paths.includes(observed.root) &&
         await realDirectory(observed.root, host) !== undefined
       ) {
-        retainedState.push({ path: observed.root, reason: 'unproven' });
+        if (receipt !== undefined && observed.source === 'derived') paths.push(observed.root);
+        else retainedState.push({ path: observed.root, reason: 'unproven' });
       }
     }
   }

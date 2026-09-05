@@ -717,6 +717,70 @@ it('emitted install.mjs mirrors the core replace policy: no-op, owned-only repla
   }
 }, 60_000);
 
+it('emitted install.mjs marks new explicit state roots and retains pre-existing ones', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-state-ownership-mjs-'));
+  const bundle = join(root, 'bundle');
+  const home = join(root, 'home');
+  const cursorRoot = join(home, '.cursor');
+  const destination = join(cursorRoot, 'plugins', 'local', 'install-fixture');
+  const installer = join(bundle, 'install.mjs');
+  const ownedRoot = join(root, 'owned-state');
+  try {
+    const writes = writesFor('cursor');
+    await Promise.all([
+      mkdir(join(bundle, '.cursor-plugin'), { recursive: true }),
+      mkdir(cursorRoot, { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(installer, writes.get('install.mjs') ?? ''),
+      writeFile(join(bundle, 'INSTALL.md'), writes.get('INSTALL.md') ?? ''),
+      writeFile(join(bundle, '.cursor-plugin', 'plugin.json'), JSON.stringify({ name: 'install-fixture', version: '1.2.3' })),
+      writeFile(join(bundle, '.cursor-plugin', 'mcp.json'), JSON.stringify({
+        mcpServers: {
+          stateful: {
+            command: 'node',
+            env: { AGENT_BUNDLE_STATE_ROOT: ownedRoot },
+          },
+        },
+      })),
+      writeFile(join(bundle, 'payload.txt'), 'payload\n'),
+    ]);
+    expect((await run(installer, [], home)).code).toBe(0);
+    expect(await readInstallReceipt(destination)).toMatchObject({
+      state: {
+        roots: [{
+          ownership: { kind: 'marker', marker: join(ownedRoot, '.agent-bundle-state-owner.json') },
+          root: ownedRoot,
+          servers: ['stateful'],
+        }],
+      },
+    });
+    await writeFile(join(ownedRoot, 'state.sqlite'), 'owned\n');
+    expect((await run(installer, ['--uninstall', '--purge-data', '--confirm-purge'], home)).code).toBe(0);
+    await expect(readdir(ownedRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    const sharedRoot = join(root, 'shared-state');
+    const sentinel = join(sharedRoot, 'sentinel.txt');
+    await mkdir(sharedRoot);
+    await writeFile(sentinel, 'keep\n');
+    await writeFile(join(bundle, '.cursor-plugin', 'mcp.json'), JSON.stringify({
+      mcpServers: {
+        stateful: {
+          command: 'node',
+          env: { AGENT_BUNDLE_STATE_ROOT: sharedRoot },
+        },
+      },
+    }));
+    expect((await run(installer, [], home)).code).toBe(0);
+    const retained = await run(installer, ['--uninstall', '--purge-data', '--confirm-purge'], home);
+    expect(retained.code).toBe(0);
+    expect(retained.stdout).toContain(`Retained ${sharedRoot} (pre-existing)`);
+    expect(await readFile(sentinel, 'utf8')).toBe('keep\n');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 60_000);
+
 it('emitted install.mjs --uninstall mirrors the core lifecycle: plan, receipt-owned removal, data policy, refusals', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-uninstall-mjs-'));
   const bundle = join(root, 'bundle');

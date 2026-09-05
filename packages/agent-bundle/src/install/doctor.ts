@@ -765,21 +765,30 @@ const inspectInstalledDurableState = async (
       servers: Object.freeze(current.servers),
     }));
   }
-  const fallback = receipt?.stateRoot?.root ?? pluginRoot;
-  const effective = effectiveAll[0] ?? Object.freeze({
-    ...(await inspectDurableState(fallback, receipt?.stateRoot?.source ?? 'derived', host)),
-    ownership: 'unrecorded' as const,
-    purgeable: false,
-    servers: Object.freeze([]),
-  });
+  const unresolvedServers = locations
+    .filter((location) => location.status === 'unproven')
+    .map((location) => location.server);
+  const effective = effectiveAll[0] ?? durableStateReport(
+    `<unresolved state root: ${unresolvedServers.join(', ')}>`,
+    false,
+    false,
+    'native',
+    [],
+    [],
+    'unrecorded',
+    false,
+    unresolvedServers,
+    'relative override has no provable execution directory',
+  );
+  const reportedAll = effectiveAll.length === 0 ? Object.freeze([effective]) : Object.freeze(effectiveAll);
   const legacyRoot = join(pluginRoot, 'state');
   if (legacyRoot === effective.directory) {
-    return { diagnostics: effective.diagnostics, effective, effectiveAll: Object.freeze(effectiveAll) };
+    return { diagnostics: effective.diagnostics, effective, effectiveAll: reportedAll };
   }
   const legacy = await inspectDurableState(legacyRoot, 'legacy', host);
-  const effectiveDiagnostics = effectiveAll.flatMap((entry) => entry.diagnostics);
+  const effectiveDiagnostics = reportedAll.flatMap((entry) => entry.diagnostics);
   if (!legacy.exists) {
-    return { diagnostics: freezeDiagnostics(effectiveDiagnostics), effective, effectiveAll: Object.freeze(effectiveAll) };
+    return { diagnostics: freezeDiagnostics(effectiveDiagnostics), effective, effectiveAll: reportedAll };
   }
   const legacyDiagnostic = diagnostic(
     'AB7332',
@@ -791,7 +800,7 @@ const inspectInstalledDurableState = async (
   return {
     diagnostics: freezeDiagnostics([...effectiveDiagnostics, ...legacy.diagnostics, legacyDiagnostic]),
     effective,
-    effectiveAll: Object.freeze(effectiveAll),
+    effectiveAll: reportedAll,
     legacy,
   };
 };

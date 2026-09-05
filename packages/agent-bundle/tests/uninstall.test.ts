@@ -477,6 +477,20 @@ it('never purges a pre-existing declared state root or its unrelated sentinel', 
       retained: [{ path: sharedRoot, reason: 'pre-existing' }],
     });
     expect(plan.removed.directories).not.toContain(sharedRoot);
+    const kept = await uninstallBundle(options);
+    expect(kept.remnantReceipt).toBe(join(
+      cursorRoot,
+      'plugins',
+      'local',
+      'uninstall-fixture',
+      installReceiptFile,
+    ));
+    expect((await readInstallReceipt(join(
+      cursorRoot,
+      'plugins',
+      'local',
+      'uninstall-fixture',
+    )))?.state?.roots[0]).toMatchObject({ root: sharedRoot });
     await uninstallBundle({ ...options, confirmPurge: true, purgeData: true });
     expect(await readFile(sentinel, 'utf8')).toBe('keep\n');
   } finally {
@@ -1494,6 +1508,56 @@ it('purges Claude durable state only when confirmed and reports the host-retaine
     expect(purged.removed.files).toEqual([expect.stringContaining('uninstall-fixture.uninstall-fixture-marketplace.user.json')]);
     await expect(readdir(join(installPath, 'state'))).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readdir(dataDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+  }
+});
+
+it('reacquires Claude marketplace ownership after a keep-data remnant reinstall', async () => {
+  const fixture = await createFixture('claude');
+  const hostRoot = join(fixture.cleanupRoot, 'claude-root');
+  const installPath = join(hostRoot, 'plugins', 'cache', 'uninstall-fixture-marketplace', 'uninstall-fixture', '1.2.3');
+  let installed = false;
+  let marketplaceRegistered = false;
+  const { runner } = recordingRunner((call) => {
+    const verb = call.args.join(' ');
+    if (verb === 'plugin list --json') {
+      return claudeListing(installed
+        ? [{ enabled: true, id: 'uninstall-fixture@uninstall-fixture-marketplace', installPath, scope: 'user', version: '1.2.3' }]
+        : []);
+    }
+    if (verb === 'plugin marketplace list --json') {
+      return JSON.stringify(marketplaceRegistered ? [{ name: 'uninstall-fixture-marketplace' }] : []);
+    }
+    if (verb === `plugin marketplace add ${fixture.bundleRoot}`) marketplaceRegistered = true;
+    if (verb.startsWith('plugin marketplace remove ')) marketplaceRegistered = false;
+    if (verb.startsWith('plugin install ')) installed = true;
+    if (verb.startsWith('plugin uninstall ')) installed = false;
+    return '';
+  });
+  const options = {
+    commandRunner: runner,
+    environment: { CLAUDE_CONFIG_DIR: hostRoot },
+    from: fixture.bundleRoot,
+    home: fixture.home,
+    host: 'claude' as const,
+  };
+  try {
+    await installBundle(options);
+    await cp(fixture.bundleRoot, installPath, { recursive: true });
+    const stateRoot = userDataStateRoot(installPath, options.environment, fixture.home);
+    await mkdir(stateRoot, { recursive: true });
+    await writeFile(join(stateRoot, 'state.sqlite'), 'state\n');
+    const kept = await uninstallBundle(options);
+    expect(kept.receipt.status).toBe('remnant');
+    expect(marketplaceRegistered).toBe(false);
+
+    await installBundle(options);
+    expect(marketplaceRegistered).toBe(true);
+    const removed = await uninstallBundle(options);
+    expect(removed.registrations.find((registration) => registration.kind === 'claude-marketplace'))
+      .toMatchObject({ action: 'removed' });
+    expect(marketplaceRegistered).toBe(false);
   } finally {
     await rm(fixture.cleanupRoot, { force: true, recursive: true });
   }

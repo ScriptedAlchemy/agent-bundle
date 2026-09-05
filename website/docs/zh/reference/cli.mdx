@@ -183,6 +183,8 @@ agent-bundle install <host> [--from <root>] [--scope <scope>] [--mode <mode>] \
 每次安装都会写入生命周期回执（格式 `agent-bundle-install-receipt/2`：版本、内容哈希、模式、作用域、归属路径、
 宿主注册、时间戳）——Cursor 本地副本写在树内，Claude、Codex 与 Cursor 市场模式写在
 `<宿主根目录>/agent-bundle/receipts/` 下——`uninstall` 与 `doctor` 都消费它。
+安装期间，尚不存在的显式状态根会由安装器创建，并写入记录安装身份的
+`.agent-bundle-state-owner.json`。为到达该根而创建的父目录不会被声明为归属内容，也绝不会被递归删除。
 
 ## uninstall
 

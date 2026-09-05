@@ -192,6 +192,9 @@ before `add`. Every install writes a lifecycle receipt (format `agent-bundle-ins
 version, content hash, mode, scope, owned paths, host registrations, timestamps) — in-tree for
 Cursor local copies, under `<host root>/agent-bundle/receipts/` for Claude, Codex, and Cursor
 marketplace mode — that `uninstall` and `doctor` consume.
+During install, an explicit state root that does not yet exist is created and receives
+`.agent-bundle-state-owner.json`, which records the installation identity. Parent directories may
+be created to reach it but are never claimed or recursively removed.
 
 ## uninstall
 

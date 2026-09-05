@@ -579,12 +579,13 @@ const installPublicCli = async (
   let previousContentHash: string | undefined;
   // Both hosts cache at `<root>/<marketplace>/<plugin>/<version>` (pinned by the real-host proofs), so a
   // reported copy locates where the reinstalled version lands.
-  let destination = join(
+  const predictedDestination = join(
     publicHostCacheRoot(host, environment, home),
     marketplace,
     identity.plugin,
     identity.version,
   );
+  let destination: string | undefined;
   const entry = inventory.status === 'available' ? inventory.entries[0] : undefined;
   // The store receipt is the lifecycle record for this host-owned copy: written on every install and
   // replacement, and refreshed when an identical copy is found without one (pre-#101 installs). It owns
@@ -595,7 +596,7 @@ const installPublicCli = async (
   // belongs to whoever configured it; when `plugin marketplace list --json` cannot say, the registration
   // is not claimed either (fail-closed: `uninstall` then retains it and says why).
   const receiptIdentity = async (): Promise<InstallReceiptIdentity> => {
-    const ownsMarketplace = previousReceipt !== undefined
+    const ownsMarketplace = previousReceipt !== undefined && !isRemnantReceipt(previousReceipt)
       ? previousReceipt.registrations.some((registration) => registration.kind === `${host}-marketplace`)
       : await readPublicHostMarketplaceState(runner, identity, host, marketplace) === 'absent';
     return {
@@ -700,7 +701,7 @@ const installPublicCli = async (
   // as `already-installed`, and a marketplace without one would be sampled as pre-existing and retained as
   // user-owned by every later `uninstall`. Plugin first, then the marketplace — the order the host verbs
   // themselves require.
-  const createdMarketplace = previousReceipt === undefined &&
+  const createdMarketplace = (previousReceipt === undefined || isRemnantReceipt(previousReceipt)) &&
     recorded.registrations.some((registration) => registration.kind === `${host}-marketplace`);
   let pluginInstalled = false;
   let stateRollback: (() => Promise<void>) | undefined;
@@ -715,7 +716,7 @@ const installPublicCli = async (
       host,
       mode: 'host-cli',
       plugin: identity.plugin,
-      pluginRoot: destination,
+      pluginRoot: destination ?? predictedDestination,
       previous: previousReceipt?.state,
       ...(projectRoot === undefined ? {} : { projectRoot }),
       scope,

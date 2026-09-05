@@ -121,11 +121,15 @@ export const resolveInstalledStateRoots = async (
           status: 'resolved' as const,
         })]);
       }
-      return Object.freeze([Object.freeze({
-        server: 'default',
-        source: 'declared' as const,
-        status: 'unproven' as const,
-      })]);
+      if (/\$\{[^}]*\}/u.test(expanded)) {
+        return Object.freeze([Object.freeze({
+          root: installedUserDataStateRoot(canonicalRoot, environment, home),
+          server: 'default',
+          source: 'derived' as const,
+          status: 'resolved' as const,
+        })]);
+      }
+      return Object.freeze([Object.freeze({ server: 'default', source: 'declared' as const, status: 'unproven' as const })]);
     }
     return Object.freeze([Object.freeze({
       root: installedUserDataStateRoot(canonicalRoot, environment, home),
@@ -147,7 +151,12 @@ export const resolveInstalledStateRoots = async (
     }
     const expanded = expandPluginRoot(declared, canonicalRoot);
     if (/\$\{[^}]*\}/u.test(expanded)) {
-      return Object.freeze({ server: server.name, source: 'declared' as const, status: 'unproven' as const });
+      return Object.freeze({
+        root: installedUserDataStateRoot(canonicalRoot, environment, home),
+        server: server.name,
+        source: 'derived' as const,
+        status: 'resolved' as const,
+      });
     }
     if (isAbsolute(expanded)) {
       return Object.freeze({

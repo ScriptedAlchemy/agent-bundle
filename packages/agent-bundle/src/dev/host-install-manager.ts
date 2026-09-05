@@ -410,6 +410,7 @@ export class DevHostInstallManager {
       let installed = this.#installed.get(host);
       if (installed === undefined) {
         const result = await this.#installBundle({
+          environment: this.#environment,
           from: prepared.root,
           ...(this.#home === undefined ? {} : { home: this.#home }),
           host,

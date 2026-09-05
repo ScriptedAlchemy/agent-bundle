@@ -615,6 +615,41 @@ it('reports a missing derived state root and a declared state-root override', as
   }
 });
 
+it('reports an unresolved relative state override without treating the plugin root as state', async () => {
+  const fixture = await temporaryDoctor();
+  const pluginRoot = join(fixture.home, '.cursor', 'plugins', 'local', 'relative-state');
+  try {
+    await Promise.all([
+      writeJson(join(pluginRoot, '.cursor-plugin/plugin.json'), { name: 'relative-state', version: '1.0.0' }),
+      writeJson(join(pluginRoot, '.cursor-plugin/mcp.json'), {
+        mcpServers: {
+          configured: {
+            command: 'node',
+            env: { AGENT_BUNDLE_STATE_ROOT: '../state' },
+          },
+        },
+      }),
+    ]);
+    const report = await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      home: fixture.home,
+      hosts: ['cursor'],
+    });
+    const finding = hostReport(report, 'cursor').inventory.findings.find((entry) => entry.entry === 'relative-state');
+    expect(finding?.durableState).toMatchObject({
+      directory: '<unresolved state root: configured>',
+      exists: false,
+      ownership: 'unrecorded',
+      ownershipReason: 'relative override has no provable execution directory',
+      purgeable: false,
+      servers: ['configured'],
+    });
+    expect(finding?.durableState?.directory).not.toBe(pluginRoot);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 it('reports whether an installed pack carries an operator .env file, never its contents (#469)', async () => {
   const fixture = await temporaryDoctor();
   const pluginRoot = join(fixture.home, '.cursor', 'plugins', 'local', 'configured');
