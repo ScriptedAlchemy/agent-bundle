@@ -98,7 +98,8 @@ it('serves an exposed App and registers its opening call for page binding', asyn
       origin: server.url,
       'x-agent-bundle-session': session.token,
     };
-    const bind = (body: Readonly<Record<string, unknown>>) => fetch(`${server.url}/api/mcp/sessions/${encodeURIComponent(sessionId)}/apps`, {
+    const url = server.url;
+    const bind = (body: Readonly<Record<string, unknown>>) => fetch(`${url}/api/mcp/sessions/${encodeURIComponent(sessionId)}/apps`, {
       body: JSON.stringify({ host: hostContext, previewProfile: 'portable', toolName, ...body }),
       headers,
       method: 'POST',

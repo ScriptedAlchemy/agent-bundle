@@ -522,12 +522,13 @@ Local `inputSchema` imports now resolve into one `RouteContract`
 landed): an unresolvable chain is `AB4838`, a cycle is `AB4839`, and a
 grammar error inside a resolved schema stays `AB4814`.
 
-**Browser bridge is forked.** Workbench
-`packages/workbench/src/mcp/mcp-app-frame.tsx` `McpAppFrameRelay` and
-`serve-app/serve-app-page.ts` `HOST_SCRIPT` implement the same relay.
-Apps that need a typed client still hand-write `postMessage`
-([#594](https://github.com/ScriptedAlchemy/agent-bundle/issues/594),
-[#564](https://github.com/ScriptedAlchemy/agent-bundle/issues/564)).
+**Browser bridge was forked.** One host-side relay now lives in
+`web-host/browser/frame-relay.ts` (`McpAppFrameRelay`) and is mounted by the
+Workbench, `serve-app`, dev `/web/<server>/<app>`, and the artifact's
+`<plugin> web` page
+([#564](https://github.com/ScriptedAlchemy/agent-bundle/issues/564) landed);
+Apps use the typed client from `agent-bundle/app`
+([#594](https://github.com/ScriptedAlchemy/agent-bundle/issues/594) landed).
 
 **Filesystem probing next to the manifest.** `install` / `doctor`
 `resolveBundleRoot` probes the Claude, Codex, or Cursor `plugin.json`. Eval and the Workbench

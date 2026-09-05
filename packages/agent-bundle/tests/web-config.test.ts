@@ -37,7 +37,7 @@ const route = (
   config: Readonly<Record<string, unknown>> = {},
 ): CompiledAgentRoute => ({
   config,
-  id: `mcp:catalog/${kind}s/${name}`,
+  id: `${kind}:catalog/${name}`,
   kind,
   provenance: { kind: 'conventional', relativePath: `src/mcp/catalog/${kind}s/${name}.ts` },
   serverId: 'mcp:catalog',

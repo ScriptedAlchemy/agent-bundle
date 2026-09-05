@@ -2415,7 +2415,7 @@ const webDiagnostics = (model: NormalizedPlugin): Diagnostic[] => {
       if (server?.generatedRoutes !== undefined) {
         const tool = server.generatedRoutes.find((route) =>
           route.kind === 'tool' &&
-          route.id.slice(route.id.lastIndexOf('/') + 1) === app.tool &&
+          mcpRouteProtocolName(route.id) === app.tool &&
           webToolResourceUri(route) === app.resourceUri);
         if (tool === undefined) {
           diagnostics.push(sourceDiagnostic(

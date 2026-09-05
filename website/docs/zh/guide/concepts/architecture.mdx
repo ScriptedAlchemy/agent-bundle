@@ -450,11 +450,11 @@ CLI bin 的文件，只以 `files[]` 中一行的形式出现。
 （[#593](https://github.com/ScriptedAlchemy/agent-bundle/issues/593) 已落地）：无法跟随的
 链是 `AB4838`，环是 `AB4839`，已解析 schema 内部的语法错误仍是 `AB4814`。
 
-**浏览器桥接被分叉。** Workbench 的 `packages/workbench/src/mcp/mcp-app-frame.tsx`
-`McpAppFrameRelay` 与 `serve-app/serve-app-page.ts` 的 `HOST_SCRIPT` 实现了同一个中继。
-需要类型化客户端的 App 仍在手写 `postMessage`
-（[#594](https://github.com/ScriptedAlchemy/agent-bundle/issues/594)、
-[#564](https://github.com/ScriptedAlchemy/agent-bundle/issues/564)）。
+**浏览器桥接曾被分叉。** 现在只有一个宿主侧中继，位于
+`web-host/browser/frame-relay.ts`（`McpAppFrameRelay`），由 Workbench、`serve-app`、开发态
+`/web/<server>/<app>` 与产物的 `<plugin> web` 页面共同挂载
+（[#564](https://github.com/ScriptedAlchemy/agent-bundle/issues/564) 已落地）；App 使用
+`agent-bundle/app` 的类型化客户端（[#594](https://github.com/ScriptedAlchemy/agent-bundle/issues/594) 已落地）。
 
 **与清单并存的文件系统探测。** `install` / `doctor` 的 `resolveBundleRoot` 探测
 Claude、Codex 或 Cursor 的 `plugin.json`。Eval 与 Workbench 检视器为完整性解析产物清单，随后仍从路径前缀与

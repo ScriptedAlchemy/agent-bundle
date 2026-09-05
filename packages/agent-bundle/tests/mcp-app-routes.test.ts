@@ -649,7 +649,7 @@ it('binds the host\'s own opening call when a create request omits input and res
       { host, input: { city: 'Oslo' }, previewProfile: 'portable', toolName: 'show-weather' },
       { host, opening: 'stale-page', previewProfile: 'portable', toolName: 'show-weather' },
       { host, opening: '', previewProfile: 'portable', toolName: 'show-weather' },
-      { host, input: { city: 'Oslo' }, opening: 'page-7', previewProfile: 'portable', result: large, toolName: 'show-weather' },
+      { host, input: { city: 'Oslo' }, opening: 'page-7', previewProfile: 'portable', result: { content: [] }, toolName: 'show-weather' },
     ]) {
       const response = await fetch(`${started.url}/api/mcp/sessions/session-a/apps`, {
         body: JSON.stringify(body),
