@@ -91,6 +91,12 @@ bound to schemas imported from a relative module inside the project
 [route contract](./index.mdx#route-contracts-application-ir) in the compiled graph; the
 resolution rules and the `AB4838`/`AB4839` diagnostics are under
 [Share one schema between MCP and CLI](./package-entries.mdx#share-one-schema-between-mcp-and-cli).
+A generated tool can also expose an idiomatic CLI command without a second route: a colocated
+`<tool>.cli.ts` projection module is a CLI surface projection of the same operation
+(`tool:<server>/<tool>`), never a route. A route observes `kind: 'cli'` whenever it runs from
+the generated CLI executable, whichever projection mechanism produced the command; the
+generated MCP server still passes `kind: 'tool'`. See
+[Project one tool as an idiomatic command](./package-entries.mdx#project-one-tool-as-an-idiomatic-command).
 
 A route may re-export its component and schemas from another module. This is how one tool is
 placed on two generated servers when only `config` differs between the placements — an MCP App
@@ -1031,8 +1037,10 @@ node <root>/bin/<plugin>.mjs web [<server>/<app>] [--port N] [--open|--no-open] 
 The default App is the only exposed one; several without a selector is a usage error (exit `2`)
 that lists them. Missing `agent-bundle.manifest.json` beside `bin/` exits `1`. The command
 launches the plugin's own MCP server (`node <root>/mcp/<entry>.mjs`,
-`AGENT_BUNDLE_PLUGIN_ROOT=<root>`, declared static env with path tokens expanded), calls the
-opening tool once, serves the App at `http://127.0.0.1:<port>/` on a loopback origin with a
+`AGENT_BUNDLE_PLUGIN_ROOT=<root>`, declared static env with path tokens expanded — the
+plugin-data token resolves outside the artifact, under
+`~/.agent-bundle/web-data/<plugin>-<digest>/<server>`, so a read-only install still launches),
+calls the opening tool once, serves the App at `http://127.0.0.1:<port>/` on a loopback origin with a
 second loopback sandbox origin for the App document (the same host stack and consent behavior as
 `agent-bundle serve-app` and the Workbench), prints
 `MCP App <server>/<app> at <url> (tool <tool>; Ctrl-C stops the server)` (or one JSON line with
@@ -1043,7 +1051,18 @@ Ctrl-C / SIGTERM. `web` is listed in the bin's `--help`. An authored `src/cli/we
 
 `agent-bundle dev` serves the same page, relay, routes, sandbox proxy, and consent behavior at
 `GET /web/<server>/<app>` on the foreground server, bound to the current epoch's server session.
-Apps not listed in `web.apps` are 404.
+Apps not listed in `web.apps` are 404. The server's launch comes from the projections the
+artifact manifest declares, never from the browser presentation profile: an explicit
+`?target=<projection>` is validated against the declared projections that launch the server
+(invalid is an error, never a fallback), projections sharing one normalized launch descriptor
+(command, arguments, cwd, declared env, runtime binding) open unprompted, and materially
+different launches answer 409 naming the choices — a Claude- or Codex-only build opens its App
+without a portable projection or `mcp.json`. Web sessions are cached by epoch, server, and
+resolved launch identity; a successful rebuild retires unused sessions of older epochs (pages
+still leasing one keep it until their last lease releases), and a failed rebuild retires
+nothing. An opening tool annotated
+`readOnlyHint: true` runs on every page load; any other opening tool runs once per session,
+tool, App, and input, and a refresh rebinds that retained result.
 
 `agent-bundle serve-app` is unchanged: it is the checkout-time form that builds or points at an
 artifact and needs the framework installed. Every option is in the

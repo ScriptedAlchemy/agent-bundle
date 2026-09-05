@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -19,8 +19,17 @@ const artifactRoot = async (): Promise<string> => {
   return root;
 };
 
+const homeRoot = async (): Promise<string> => {
+  const home = await realpath(await mkdtemp(join(tmpdir(), 'agent-bundle-web-home-')));
+  roots.push(home);
+  return home;
+};
+
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
+  await Promise.all(roots.splice(0).map(async (root) => {
+    await chmod(root, 0o755).catch(() => undefined);
+    await rm(root, { force: true, recursive: true });
+  }));
 });
 
 const app = (overrides: Partial<WebManifestApp> = {}): WebManifestApp => ({
@@ -95,8 +104,9 @@ describe('resolveWebLaunch', () => {
   });
 
   describe('path tokens in declared env', () => {
-    it('expands plugin-root, plugin-data, and workspace-root, and creates the per-server data directory', async () => {
+    it('expands plugin-root, plugin-data, and workspace-root, and creates the per-server data directory outside the artifact', async () => {
       const root = await artifactRoot();
+      const home = await homeRoot();
       const launch = await resolveWebLaunch({
         app: app({
           env: {
@@ -107,28 +117,63 @@ describe('resolveWebLaunch', () => {
           },
         }),
         env: {},
+        home,
         pluginRoot: root,
       });
-      const data = webPluginDataDirectory(root, 'status');
-      expect(data).toBe(join(root, '.agent-bundle', 'web', 'status'));
+      const data = webPluginDataDirectory(root, 'status', home);
+      expect(data.startsWith(join(home, '.agent-bundle', 'web-data') + '/')).toBe(true);
+      expect(data.startsWith(root)).toBe(false);
+      expect(data.endsWith('/status')).toBe(true);
       expect(launch.env['CACHE']).toBe(`${data}/cache`);
       expect(launch.env['HOME_DIR']).toBe(root);
       expect(launch.env['MIXED']).toBe(`${root}:${process.cwd()}`);
       expect(launch.env['PLAIN']).toBe('kept as is');
       expect((await stat(data)).isDirectory()).toBe(true);
+      expect(await exists(join(root, '.agent-bundle'))).toBe(false);
+    });
+
+    it('keys the state on the resolved plugin root, so two installs never share it', async () => {
+      const home = await homeRoot();
+      const first = await artifactRoot();
+      const second = await artifactRoot();
+      expect(webPluginDataDirectory(first, 'status', home)).not.toBe(webPluginDataDirectory(second, 'status', home));
+      expect(webPluginDataDirectory(first, 'status', home)).toBe(webPluginDataDirectory(`${first}/mcp/..`, 'status', home));
     });
 
     it('creates no data directory when no declared value names plugin-data', async () => {
       const root = await artifactRoot();
-      await resolveWebLaunch({ app: app({ env: { HOME_DIR: pathTokens.pluginRoot } }), env: {}, pluginRoot: root });
+      const home = await homeRoot();
+      await resolveWebLaunch({ app: app({ env: { HOME_DIR: pathTokens.pluginRoot } }), env: {}, home, pluginRoot: root });
       expect(await exists(join(root, '.agent-bundle'))).toBe(false);
+      expect(await exists(join(home, '.agent-bundle'))).toBe(false);
     });
 
     it('keeps a hostile server name inside the data root', async () => {
       const root = await artifactRoot();
-      const data = webPluginDataDirectory(root, '../shared');
-      expect(data.startsWith(join(root, '.agent-bundle', 'web') + '/')).toBe(true);
+      const home = await homeRoot();
+      const data = webPluginDataDirectory(root, '../shared', home);
+      expect(data.startsWith(join(home, '.agent-bundle', 'web-data') + '/')).toBe(true);
       expect(data).not.toContain('..');
+    });
+
+    it('launches from a read-only artifact when the server declares plugin-data state', async () => {
+      const root = await artifactRoot();
+      const home = await homeRoot();
+      await chmod(root, 0o555);
+      try {
+        const launch = await resolveWebLaunch({
+          app: app({ env: { CACHE: `${pathTokens.pluginData}/cache` } }),
+          env: {},
+          home,
+          pluginRoot: root,
+        });
+        const data = webPluginDataDirectory(root, 'status', home);
+        expect(launch.env['CACHE']).toBe(`${data}/cache`);
+        expect((await stat(data)).isDirectory()).toBe(true);
+        expect(await readdir(root)).toEqual(['mcp']);
+      } finally {
+        await chmod(root, 0o755);
+      }
     });
   });
 

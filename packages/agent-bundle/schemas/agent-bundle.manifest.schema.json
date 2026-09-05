@@ -756,6 +756,14 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "aliases": {
+          "type": "array",
+          "description": "Extra long-form `--spellings` a CLI projection declared for the option; sorted, unique.",
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "uniqueItems": true
+        },
         "choices": {
           "type": "array",
           "items": {
@@ -795,6 +803,41 @@
         "option",
         "repeated",
         "required"
+      ]
+    },
+    "cliProjection": {
+      "type": "object",
+      "description": "What a tool's `<tool>.cli.{ts,tsx}` projection module contributes beyond the argv grammar its command's `options` spell.",
+      "additionalProperties": false,
+      "properties": {
+        "defaults": {
+          "type": "object",
+          "description": "Canonical key → the projection's `flags.<key>.default` literal; at least one entry, keys sorted.",
+          "additionalProperties": {
+            "$ref": "#/$defs/routeInputLiteral"
+          },
+          "minProperties": 1
+        },
+        "mapInput": {
+          "type": "boolean"
+        },
+        "module": {
+          "$ref": "#/$defs/relativePath",
+          "description": "Project-relative POSIX path of the projection module."
+        },
+        "relaxed": {
+          "type": "array",
+          "description": "Canonical-required keys the projection made optional on the CLI; at least one, sorted, unique.",
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "mapInput",
+        "module"
       ]
     },
     "cliCommandMcp": {
@@ -856,6 +899,9 @@
             "$ref": "#/$defs/nonEmptyString"
           },
           "minItems": 1
+        },
+        "projection": {
+          "$ref": "#/$defs/cliProjection"
         },
         "routeId": {
           "$ref": "#/$defs/nonEmptyString"

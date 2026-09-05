@@ -7,6 +7,7 @@ import {
 import { isRelocatablePosixPath } from '../core/paths.ts';
 import { isValidPackageName, isValidPackageVersion } from '../core/project-context.ts';
 import { isPlainRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import type { CliProjectionFlagDefault } from '../routes/public.ts';
 import type {
   CompiledCliMode,
   CompiledCliOption,
@@ -195,6 +196,8 @@ export interface ArtifactManifestServer {
 
 /** One argv projection of a CLI route's input schema, without editor defaults. */
 export interface ArtifactManifestCliOption {
+  /** Extra long-form `--spellings` a CLI projection declared (`flags.<key>.aliases`); sorted, unique. */
+  readonly aliases?: readonly string[];
   readonly choices?: readonly string[];
   readonly description?: string;
   readonly key: string;
@@ -211,6 +214,21 @@ export interface ArtifactManifestCliCommandMcp {
   readonly tool: string;
 }
 
+/**
+ * Mirrors {@link CompiledCliProjection}: what a tool's `<tool>.cli.{ts,tsx}`
+ * module (#596) contributes beyond the argv grammar `options` already spell.
+ */
+export interface ArtifactManifestCliProjection {
+  /** Canonical key → the projection's `flags.<key>.default` literal. */
+  readonly defaults?: Readonly<Record<string, CliProjectionFlagDefault>>;
+  /** True when the module exports `mapInput`. */
+  readonly mapInput: boolean;
+  /** Project-relative POSIX path of the projection module. */
+  readonly module: string;
+  /** Canonical-required keys the projection made optional on the CLI; sorted, unique. */
+  readonly relaxed?: readonly string[];
+}
+
 /** One executable command compiled from a custom CLI route or projected MCP tool. */
 export interface ArtifactManifestCliCommand {
   readonly aliases: readonly string[];
@@ -219,6 +237,8 @@ export interface ArtifactManifestCliCommand {
   readonly mcp?: ArtifactManifestCliCommandMcp;
   readonly options: readonly ArtifactManifestCliOption[];
   readonly path: readonly string[];
+  /** Present for a command compiled from a tool's CLI projection module. */
+  readonly projection?: ArtifactManifestCliProjection;
   readonly routeId: string;
 }
 
@@ -846,7 +866,7 @@ const parseCliOptions = (value: unknown, location: string): readonly ArtifactMan
       option,
       optionLocation,
       ['key', 'kind', 'option', 'repeated', 'required'],
-      ['choices', 'description', 'positional'],
+      ['aliases', 'choices', 'description', 'positional'],
     );
     if (
       option.positional !== undefined &&
@@ -855,6 +875,7 @@ const parseCliOptions = (value: unknown, location: string): readonly ArtifactMan
       fail(`${optionLocation}.positional must be a non-negative safe integer.`);
     }
     return {
+      ...(option.aliases === undefined ? {} : { aliases: parseStringList(option.aliases, `${optionLocation}.aliases`) }),
       ...(option.choices === undefined ? {} : { choices: parseStringList(option.choices, `${optionLocation}.choices`, false) }),
       ...(option.description === undefined ? {} : { description: requireString(option.description, `${optionLocation}.description`) }),
       key: requireString(option.key, `${optionLocation}.key`),
@@ -869,6 +890,26 @@ const parseCliOptions = (value: unknown, location: string): readonly ArtifactMan
   return options;
 };
 
+const parseCliProjection = (value: unknown, location: string): ArtifactManifestCliProjection => {
+  const projection = requireRecord(value, location);
+  requireExactKeys(projection, location, ['mapInput', 'module'], ['defaults', 'relaxed']);
+  let defaults: Record<string, CliProjectionFlagDefault> | undefined;
+  if (projection.defaults !== undefined) {
+    const record = requireRecord(projection.defaults, `${location}.defaults`);
+    const keys = Object.keys(record);
+    if (keys.length === 0) fail(`${location}.defaults must name at least one flag.`);
+    defaults = Object.fromEntries(keys.map((key) => [key, parseSchemaLiteral(record[key], `${location}.defaults.${key}`)]));
+  }
+  const relaxed = projection.relaxed === undefined ? undefined : parseStringList(projection.relaxed, `${location}.relaxed`);
+  if (relaxed !== undefined && relaxed.length === 0) fail(`${location}.relaxed must name at least one key.`);
+  return {
+    ...(defaults === undefined ? {} : { defaults }),
+    mapInput: requireBoolean(projection.mapInput, `${location}.mapInput`),
+    module: requirePath(projection.module, `${location}.module`),
+    ...(relaxed === undefined ? {} : { relaxed }),
+  };
+};
+
 const parseCliCommands = (value: unknown, location: string): readonly ArtifactManifestCliCommand[] => {
   const commands = requireArray(value, location).map((candidate, index) => {
     const commandLocation = `${location}[${index}]`;
@@ -877,7 +918,7 @@ const parseCliCommands = (value: unknown, location: string): readonly ArtifactMa
       command,
       commandLocation,
       ['aliases', 'exitCode', 'options', 'path', 'routeId'],
-      ['description', 'mcp'],
+      ['description', 'mcp', 'projection'],
     );
     let mcp: ArtifactManifestCliCommandMcp | undefined;
     if (command.mcp !== undefined) {
@@ -898,6 +939,7 @@ const parseCliCommands = (value: unknown, location: string): readonly ArtifactMa
       ...(mcp === undefined ? {} : { mcp }),
       options: parseCliOptions(command.options, `${commandLocation}.options`),
       path,
+      ...(command.projection === undefined ? {} : { projection: parseCliProjection(command.projection, `${commandLocation}.projection`) }),
       routeId: requireString(command.routeId, `${commandLocation}.routeId`),
     } satisfies ArtifactManifestCliCommand;
   });

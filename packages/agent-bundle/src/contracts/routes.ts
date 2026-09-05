@@ -8,6 +8,7 @@ export type {
   RouteManifestCliCommand,
   RouteManifestCliMode,
   RouteManifestCliOption,
+  RouteManifestCliProjection,
   RouteManifestCliSurface,
   RouteManifestConfigEntry,
   RouteManifestContract,
@@ -20,6 +21,7 @@ export type {
   RouteManifestServerMode,
   RouteManifestState,
 } from '../dev/routes/route-manifest.ts';
+export type { CliProjectionFlagDefault } from '../routes/public.ts';
 export type {
   RouteInputArrayItemSchema,
   RouteInputArraySchema,

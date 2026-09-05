@@ -146,9 +146,10 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 | `routeId` | 是 | 该命令运行的 `cli:` 路由。 |
 | `path[]` | 是 | 命令段，至少一个。 |
 | `aliases[]` | 是 | 已排序的别名。 |
-| `options[]` | 是 | 路由输入 schema 的 argv 投影，按 `key` 排序：`{ key, option, kind, repeated, required, choices?, description?, positional? }`，`kind` 为 `boolean`、`enum`、`number`、`string` 之一。 |
+| `options[]` | 是 | 路由输入 schema 的 argv 投影，按 `key` 排序：`{ key, option, kind, repeated, required, aliases?, choices?, description?, positional? }`，`kind` 为 `boolean`、`enum`、`number`、`string` 之一；`aliases` 是 CLI 投影额外声明的、已排序的 `--拼写`。 |
 | `exitCode` | 是 | `result` 或 `zero`。 |
 | `mcp` | 否 | 当该命令是某个 MCP 工具的 CLI 投影时为 `{ server, tool, confirm }`。 |
+| `projection` | 否 | 当该命令由某个工具的 `<tool>.cli.{ts,tsx}` 模块编译而来时为 `{ module, mapInput, defaults?, relaxed? }`：`module` 是项目相对的模块路径，`mapInput` 表示它是否导出映射函数，`defaults` 是仅限 CLI 的 `flags.<key>.default` 字面量（键已排序），`relaxed` 是在 CLI 上被放宽为可选的规范必填键（已排序）。 |
 | `description` | 否 | 命令描述。 |
 
 ### `executables`
@@ -372,7 +373,6 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 | `executables.noticeDelivery` | 烘焙进每个编译后 wrapper 与 MCP 入口的通知投递交集。 |
 | `executables.hooks[].preflight` | 钩子行上的门禁与预检声明。 |
 | `executables.mcpServers[].apps[].client` | App 的生成式客户端与 `web` 环境。 |
-| `routes.cli.commands[].projection` | 当一个操作可以同时投影到两种表面时，CLI 命令投影的是哪个 MCP 工具。 |
 
 ## 版本规则
 

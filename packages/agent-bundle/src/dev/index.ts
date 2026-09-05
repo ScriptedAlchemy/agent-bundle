@@ -94,6 +94,7 @@ export type {
   RouteManifest,
   RouteManifestCliCommand,
   RouteManifestCliOption,
+  RouteManifestCliProjection,
   RouteManifestCliSurface,
   RouteManifestConfigEntry,
   RouteManifestContract,

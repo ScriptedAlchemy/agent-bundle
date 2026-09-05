@@ -1,6 +1,8 @@
 import { mkdir } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { basename, join, resolve } from 'node:path';
 
+import { sha256Hex } from '../core/digest.ts';
 import { CodedError } from '../core/errors.ts';
 import { mcpServerStateDirectory } from '../core/mcp-state-directory.ts';
 import { exists, joinArtifact, safeArtifactPath } from '../core/paths.ts';
@@ -12,6 +14,8 @@ import type { StdioLaunch } from './session.ts';
 export interface ResolveWebLaunchOptions {
   readonly app: WebManifestApp;
   readonly env: NodeJS.ProcessEnv;
+  /** The user home the durable web state root anchors on; defaults to the OS home directory. */
+  readonly home?: string;
   readonly pluginRoot: string;
 }
 
@@ -23,15 +27,35 @@ export class WebLaunchError extends CodedError<WebLaunchErrorCode> {
   }
 }
 
-export const webPluginDataDirectory = (pluginRoot: string, server: string): string =>
-  join(pluginRoot, '.agent-bundle', 'web', mcpServerStateDirectory(server));
+const safePluginSegment = /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/u;
+
+/**
+ * One state segment per installed plugin root: the resolved root's digest
+ * keys the state, so two installs of the same plugin never share it, and the
+ * basename stays in front only when it is already a safe path segment.
+ */
+const webPluginStateSegment = (pluginRoot: string): string => {
+  const digest = sha256Hex(pluginRoot).slice(0, 16);
+  const name = basename(pluginRoot);
+  return safePluginSegment.test(name) ? `${name}-${digest}` : `plugin-${digest}`;
+};
+
+/**
+ * Durable per-server web state, outside the installed artifact: the artifact
+ * stays immutable (it may be installed read-only), so framework-owned
+ * writable state anchors under the user's home instead of the plugin root.
+ */
+export const webPluginDataDirectory = (pluginRoot: string, server: string, home = homedir()): string =>
+  join(home, '.agent-bundle', 'web-data', webPluginStateSegment(resolve(pluginRoot)), mcpServerStateDirectory(server));
 
 const inheritedEnvironment = (env: NodeJS.ProcessEnv): Record<string, string> =>
   Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
 
 /**
  * Declared env overrides inherited env, matching installed hosts. Plugin data
- * is artifact-local because the artifact is the durable installation.
+ * lives outside the artifact (under the user's home), because the installed
+ * artifact is immutable — a read-only install must still launch when the
+ * server declares plugin-data state.
  */
 export const resolveWebLaunch = async (options: ResolveWebLaunchOptions): Promise<StdioLaunch> => {
   const pluginRoot = resolve(options.pluginRoot);
@@ -50,7 +74,7 @@ export const resolveWebLaunch = async (options: ResolveWebLaunchOptions): Promis
       `MCP server entry ${entry} of ${app.app} does not exist; rebuild the plugin so the artifact matches its manifest.`,
     );
   }
-  const pluginData = webPluginDataDirectory(pluginRoot, app.server);
+  const pluginData = webPluginDataDirectory(pluginRoot, app.server, options.home);
   const workspaceRoot = process.cwd();
   const expand = (value: string): string => value
     .replaceAll(pathTokens.pluginRoot, pluginRoot)

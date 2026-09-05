@@ -84,6 +84,10 @@ export class CliUsageError extends Error {
   }
 }
 
+/** The fail-closed confirmation diagnostic shared by bulk and explicit MCP tool projections. */
+export const confirmationRequiredMessage = (server: string, tool: string): string =>
+  `MCP tool ${server}:${tool} is mutation-capable per its MCP annotations and requires --yes.`;
+
 /**
  * One input-validation failure of a routed command, already spelled in CLI
  * terms (#465): the argument the user typed rather than the schema path.
@@ -246,7 +250,7 @@ const pathSuffix = (path: readonly PropertyKey[]): string =>
  */
 const targetOf = (command: CompiledCliCommand, path: readonly PropertyKey[]): string => {
   if (path.length === 0) return 'input';
-  if (command.mcp !== undefined) return `--input${pathSuffix(path)}`;
+  if (command.mcp !== undefined && command.projection === undefined) return `--input${pathSuffix(path)}`;
   const [head, ...rest] = path;
   const option = command.options.find((candidate) => candidate.key === head);
   if (option === undefined) return `input${pathSuffix(path)}`;
@@ -269,7 +273,7 @@ export const cliInputIssueLine = (issue: CliInputIssue): string =>
  */
 export const cliInputError = (
   command: CompiledCliCommand,
-  input: Readonly<Record<string, unknown>>,
+  input: unknown,
   error: unknown,
 ): CliInputError => {
   const schemaIssues = schemaIssuesOf(error);
@@ -346,7 +350,7 @@ export interface RunGeneratedCliOptions {
     command: CompiledCliCommand,
     input: Readonly<Record<string, unknown>>,
     context: GeneratedCliRenderContext,
-  ) => GeneratedCliRenderSession;
+  ) => GeneratedCliRenderSession | Promise<GeneratedCliRenderSession>;
   readonly signal?: AbortSignal;
   /**
    * The terminal capability to report and select the output mode from (#511).
@@ -453,6 +457,7 @@ const commandHelp = (name: string, command: CompiledCliCommand): string => {
     lines.push('', `MCP tool: ${command.mcp.server}:${command.mcp.tool}`);
     if (command.mcp.confirm) lines.push('Mutation-capable; requires --yes.');
   }
+  if (command.projection !== undefined) lines.push(`Projection: ${command.projection.module}`);
   const positionals = sortedPositionals(command);
   if (positionals.length > 0) {
     lines.push('', 'Arguments:', helpColumns(positionals.map((option) => [
@@ -466,7 +471,7 @@ const commandHelp = (name: string, command: CompiledCliCommand): string => {
   }
   const options = namedOptions(command);
   const optionRows: (readonly [string, string])[] = options.map((option) => [
-    `    --${option.option}${optionPlaceholder(option)}${option.repeated ? ' ...' : ''}`,
+    `    ${[option.option, ...(option.aliases ?? [])].map((spelling) => `--${spelling}`).join(', ')}${optionPlaceholder(option)}${option.repeated ? ' ...' : ''}`,
     [
       option.description ?? '',
       ...(option.required ? ['(required)'] : []),
@@ -569,7 +574,11 @@ const coercePositional = (option: CompiledCliOption, value: string): unknown => 
 
 /** Parses one resolved command's remaining argv against its compiled option surface. */
 const parseCommandArgv = (command: CompiledCliCommand, argv: readonly string[]): ParsedArgv => {
-  const options = new Map(namedOptions(command).map((option) => [option.option, option]));
+  const options = new Map<string, CompiledCliOption>();
+  for (const option of namedOptions(command)) {
+    options.set(option.option, option);
+    for (const alias of option.aliases ?? []) options.set(alias, option);
+  }
   const positionals = sortedPositionals(command);
   const values = new Map<string, unknown>();
   const bare: string[] = [];
@@ -667,6 +676,15 @@ const parseMcpCommandInput = (
   parsed: ParsedArgv,
 ): ParsedArgv => {
   if (command.mcp === undefined) return parsed;
+  if (command.mcp.confirm && parsed.input['yes'] !== true) {
+    throw new CliUsageError(confirmationRequiredMessage(command.mcp.server, command.mcp.tool));
+  }
+  if (command.projection !== undefined) {
+    if (!command.mcp.confirm) return parsed;
+    const input = { ...parsed.input };
+    delete input['yes'];
+    return { ...parsed, input };
+  }
   const raw = parsed.input['input'];
   let input: unknown = {};
   if (raw !== undefined) {
@@ -678,11 +696,6 @@ const parseMcpCommandInput = (
   }
   if (typeof input !== 'object' || input === null || Array.isArray(input)) {
     throw new CliUsageError('--input must be a JSON object; arrays, null, and scalar values are not accepted.');
-  }
-  if (command.mcp.confirm && parsed.input['yes'] !== true) {
-    throw new CliUsageError(
-      `MCP tool ${command.mcp.server}:${command.mcp.tool} is mutation-capable per its MCP annotations and requires --yes.`,
-    );
   }
   return { ...parsed, input: input as Readonly<Record<string, unknown>> };
 };
@@ -963,7 +976,7 @@ export const runGeneratedCliEntry = async (options: RunGeneratedCliOptions): Pro
           : terminal.stdout.kind === 'tty'
             ? 'tty'
             : 'markdown';
-      const session = options.render(command, parsed.input, { args: rest, signal, terminal });
+      const session = await options.render(command, parsed.input, { args: rest, signal, terminal });
       try {
         return await runRenderedInvocation({
           exitCode: command.exitCode,

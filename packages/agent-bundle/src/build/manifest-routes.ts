@@ -2,6 +2,7 @@ import type {
   CompiledAgentRoute,
   CompiledCliCommand,
   CompiledCliOption,
+  CompiledCliProjection,
   CompiledCliSurface,
   CompiledLayout,
   CompiledProvider,
@@ -13,6 +14,7 @@ import type {
   ArtifactManifestCli,
   ArtifactManifestCliCommand,
   ArtifactManifestCliOption,
+  ArtifactManifestCliProjection,
   ArtifactManifestLayout,
   ArtifactManifestProvider,
   ArtifactManifestRoute,
@@ -53,6 +55,7 @@ export const artifactRouteFor = (route: CompiledAgentRoute): ArtifactManifestRou
 };
 
 export const artifactCliOptionFor = (option: CompiledCliOption): ArtifactManifestCliOption => ({
+  ...(option.aliases === undefined ? {} : { aliases: [...option.aliases] }),
   ...(option.choices === undefined ? {} : { choices: [...option.choices] }),
   ...(option.description === undefined ? {} : { description: option.description }),
   key: option.key,
@@ -63,6 +66,18 @@ export const artifactCliOptionFor = (option: CompiledCliOption): ArtifactManifes
   required: option.required,
 });
 
+const artifactCliProjectionFor = (projection: CompiledCliProjection): ArtifactManifestCliProjection => ({
+  ...(projection.defaults === undefined
+    ? {}
+    : {
+      defaults: Object.fromEntries(Object.entries(projection.defaults)
+        .map(([key, value]) => [key, Array.isArray(value) ? [...value] : value])),
+    }),
+  mapInput: projection.mapInput,
+  module: projection.module,
+  ...(projection.relaxed === undefined ? {} : { relaxed: [...projection.relaxed] }),
+});
+
 /** One command in compiler order; {@link artifactRoutesFor} sorts the manifest copy by its sort keys. */
 export const artifactCliCommandFor = (command: CompiledCliCommand): ArtifactManifestCliCommand => ({
   aliases: [...command.aliases],
@@ -71,13 +86,30 @@ export const artifactCliCommandFor = (command: CompiledCliCommand): ArtifactMani
   ...(command.mcp === undefined ? {} : { mcp: { ...command.mcp } }),
   options: command.options.map(artifactCliOptionFor),
   path: [...command.path],
+  ...(command.projection === undefined ? {} : { projection: artifactCliProjectionFor(command.projection) }),
   routeId: command.routeId,
+});
+
+const byText = (left: string, right: string): number => left.localeCompare(right);
+
+const sortedCliOption = (option: ArtifactManifestCliOption): ArtifactManifestCliOption => ({
+  ...option,
+  ...(option.aliases === undefined ? {} : { aliases: [...option.aliases].sort(byText) }),
+});
+
+const sortedCliProjection = (projection: ArtifactManifestCliProjection): ArtifactManifestCliProjection => ({
+  ...projection,
+  ...(projection.defaults === undefined
+    ? {}
+    : { defaults: Object.fromEntries(Object.entries(projection.defaults).sort(([left], [right]) => byText(left, right))) }),
+  ...(projection.relaxed === undefined ? {} : { relaxed: [...projection.relaxed].sort(byText) }),
 });
 
 const sortedCliCommand = (command: ArtifactManifestCliCommand): ArtifactManifestCliCommand => ({
   ...command,
-  aliases: [...command.aliases].sort((left, right) => left.localeCompare(right)),
-  options: [...command.options].sort((left, right) => left.key.localeCompare(right.key)),
+  aliases: [...command.aliases].sort(byText),
+  options: command.options.map(sortedCliOption).sort((left, right) => byText(left.key, right.key)),
+  ...(command.projection === undefined ? {} : { projection: sortedCliProjection(command.projection) }),
 });
 
 export const artifactProviderFor = (provider: CompiledProvider): ArtifactManifestProvider => ({

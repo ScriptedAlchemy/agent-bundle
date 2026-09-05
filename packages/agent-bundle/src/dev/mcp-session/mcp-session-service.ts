@@ -109,6 +109,8 @@ interface ActiveSession {
   readonly session: McpSession;
   appLeaseCount: number;
   closed: boolean;
+  /** Deferred close armed by {@link McpSessionService.closeSessionWhenUnleased}; fires at the release of the last lease. */
+  retire: (() => void) | undefined;
 }
 
 type McpAppLeaseIdentity = McpAppBridgeSession['identity'] & Readonly<{
@@ -224,6 +226,11 @@ const createMcpAppSessionLease = (entry: ActiveSession): McpAppSessionLease => {
       if (released) return;
       released = true;
       entry.appLeaseCount = Math.max(0, entry.appLeaseCount - 1);
+      if (entry.appLeaseCount === 0 && !entry.closed) {
+        const retire = entry.retire;
+        entry.retire = undefined;
+        retire?.();
+      }
     },
     session: bridgeSession,
     watchSessionClosed: (listener: McpAppSessionCloseListener) => {
@@ -405,6 +412,7 @@ export class McpSessionService {
           appLeaseCount: 0,
           closeWatchers: new Set(),
           closed: false,
+          retire: undefined,
           session,
         });
         return session;
@@ -437,6 +445,30 @@ export class McpSessionService {
     const entry = this.#sessions.get(sessionId);
     if (entry === undefined || entry.closed) throw new Error(`Unknown MCP App session ${JSON.stringify(sessionId)}.`);
     return createMcpAppSessionLease(entry);
+  }
+
+  /** Live App leases over one session; 0 for an unknown or closed session. */
+  appLeaseCount(sessionId: string): number {
+    const entry = this.#sessions.get(sessionId);
+    return entry === undefined || entry.closed ? 0 : entry.appLeaseCount;
+  }
+
+  /**
+   * Closes the session as soon as nothing leases it: immediately when the
+   * lease count is already zero, otherwise at the release of its last lease.
+   * Returns whether the close began now.
+   */
+  closeSessionWhenUnleased(id: McpSessionId): boolean {
+    const entry = this.#sessions.get(id);
+    if (entry === undefined || entry.closed) return false;
+    if (entry.appLeaseCount === 0) {
+      void this.closeSession(id).catch(() => undefined);
+      return true;
+    }
+    entry.retire = () => {
+      void this.closeSession(id).catch(() => undefined);
+    };
+    return false;
   }
 
   async closeSession(id: McpSessionId): Promise<boolean> {

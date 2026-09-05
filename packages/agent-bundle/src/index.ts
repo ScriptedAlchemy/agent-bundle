@@ -185,6 +185,7 @@ export type {
   ArtifactManifestCliCommand,
   ArtifactManifestCliCommandMcp,
   ArtifactManifestCliOption,
+  ArtifactManifestCliProjection,
   ArtifactManifestCompiler,
   ArtifactManifestCompilerAdapter,
   ArtifactManifestDistribution,

@@ -132,7 +132,9 @@ node <root>/bin/<plugin>.mjs web [<server>/<app>] [--port N] [--open|--no-open] 
 | `--json` | 关闭 | 打印一行 JSON `{ app, server, tool, url, port, resourceUri, sandboxOrigin }` 代替人类可读就绪行，然后继续运行。 |
 
 该命令启动插件自己的 MCP 服务器（`node <root>/mcp/<entry>.mjs`，`AGENT_BUNDLE_PLUGIN_ROOT=<root>`，
-已声明的静态 env 并展开路径令牌），先调用一次开场工具，然后在 `http://127.0.0.1:<port>/` 上用
+已声明的静态 env 并展开路径令牌——plugin-data 令牌解析到产物之外的
+`~/.agent-bundle/web-data/<plugin>-<digest>/<server>`，因此只读安装也能启动），先调用一次开场工具，
+然后在 `http://127.0.0.1:<port>/` 上用
 loopback origin 提供 App，并为 App 文档再开一个 loopback 沙箱 origin——与 `agent-bundle serve-app`
 以及 Workbench 同一套宿主栈与同意行为。人类模式打印
 `MCP App <server>/<app> at <url> (tool <tool>; Ctrl-C stops the server)`，并一直运行到 Ctrl-C /

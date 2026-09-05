@@ -5,6 +5,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import type { AgentBundleToolsConfig, NormalizedPlugin } from '../core/types.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { assertInside, toPosixRelative } from '../core/paths.ts';
+import { cliBinSourceInputs } from './cli-bins.ts';
 import type { CompileResult } from './compile-result.ts';
 import { buildWithRslib } from './compiler.ts';
 import { declarationBuildDiagnostics, replayDeclarationEmit } from './declaration-diagnostics.ts';
@@ -123,13 +124,8 @@ export const planPackageEntries = async (
       // Rendered commands add one sibling react-server Flight worker.
       const rendered = bin.generatedCli.commands.some((command) => command.rendered);
       const workerFile = `${bin.name}-flight.mjs`;
-      const sourceInputs = Object.freeze([...new Set([
-        bin.provenance.sourcePath,
-        ...bin.generatedCli.routes.map((route) => route.source),
-        ...(model.layouts ?? []).map((layout) => layout.source),
-        ...(model.providers ?? []).map((provider) => provider.source),
-        ...(model.state === undefined ? [] : [model.state.source]),
-      ])]);
+      const sourceInputs = cliBinSourceInputs(model, bin);
+      const generatedCli = bin.generatedCli;
       entries.push({
         aliases: { [cliEntryRuntimeSpecifier]: cliEntryRuntimePath() },
         banner: binShebang,
@@ -140,7 +136,7 @@ export const planPackageEntries = async (
         source: bin.source,
         sourceInputs,
         virtualSource: generatedCliBinEntrySource({
-          commands: bin.generatedCli.commands,
+          commands: generatedCli.commands,
           plugin: {
             ...(model.metadata.description === undefined ? {} : { description: model.metadata.description }),
             name: model.metadata.name,
@@ -148,7 +144,10 @@ export const planPackageEntries = async (
           },
           ...(model.notices === undefined ? {} : { noticeRetention: model.notices.retention.resolved }),
           providers: model.providers ?? [],
-          routes: bin.generatedCli.routes,
+          ...(generatedCli.projectionSources === undefined
+            ? {}
+            : { projectionSources: generatedCli.projectionSources }),
+          routes: generatedCli.routes,
           ...(model.state === undefined ? {} : { state: model.state }),
           ...(rendered ? { workerFile } : {}),
         }),

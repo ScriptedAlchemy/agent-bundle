@@ -16,6 +16,7 @@ import type {
 import type {
   ArtifactManifestCliCommand,
   ArtifactManifestCliOption,
+  ArtifactManifestCliProjection,
   ArtifactManifestProvider,
   ArtifactManifestRoute,
   ArtifactManifestRouteContract,
@@ -75,6 +76,9 @@ export interface RouteManifestServer {
 
 /** One argv projection of a CLI route's input schema, without editor defaults. */
 export type RouteManifestCliOption = ArtifactManifestCliOption;
+
+/** Mirrors {@link CompiledCliProjection}: the explicit CLI surface projection of one tool. */
+export type RouteManifestCliProjection = ArtifactManifestCliProjection;
 
 /** One executable command compiled from a custom CLI route or projected MCP tool. */
 export type RouteManifestCliCommand = ArtifactManifestCliCommand;

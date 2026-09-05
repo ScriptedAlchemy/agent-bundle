@@ -203,6 +203,7 @@ it('serves compiled routes and durable state across packed process restarts', as
         'plugin-root',
         'publish-notice',
         'strict-report',
+        'submit',
         'ticket',
         'tooling',
         'unavailable',

@@ -157,9 +157,10 @@ A `routes.cli.commands[]` row, sorted by the joined `path`:
 | `routeId` | yes | The `cli:` route the command runs. |
 | `path[]` | yes | The command segments, at least one. |
 | `aliases[]` | yes | Sorted aliases. |
-| `options[]` | yes | The argv projection of the route's input schema, sorted by `key`: `{ key, option, kind, repeated, required, choices?, description?, positional? }`, `kind` one of `boolean`, `enum`, `number`, `string`. |
+| `options[]` | yes | The argv projection of the route's input schema, sorted by `key`: `{ key, option, kind, repeated, required, aliases?, choices?, description?, positional? }`, `kind` one of `boolean`, `enum`, `number`, `string`; `aliases` are the extra sorted `--spellings` a CLI projection declared. |
 | `exitCode` | yes | `result` or `zero`. |
 | `mcp` | no | `{ server, tool, confirm }` when the command is the CLI projection of an MCP tool. |
+| `projection` | no | `{ module, mapInput, defaults?, relaxed? }` when the command was compiled from a tool's `<tool>.cli.{ts,tsx}` module: `module` is the project-relative module path, `mapInput` whether it exports a mapper, `defaults` the CLI-only `flags.<key>.default` literals (keys sorted), and `relaxed` the canonical-required keys made optional on the CLI (sorted). |
 | `description` | no | The command description. |
 
 ### `executables`
@@ -390,7 +391,6 @@ other unknown key. They are listed so that a consumer does not invent its own sp
 | `executables.noticeDelivery` | The notice-delivery intersection baked into every compiled wrapper and MCP entry. |
 | `executables.hooks[].preflight` | Gate and preflight declarations on a hook row. |
 | `executables.mcpServers[].apps[].client` | The generated client and `web` environment of an App. |
-| `routes.cli.commands[].projection` | Which MCP tool a CLI command projects, once one operation can be projected to both surfaces. |
 
 ## Versioning
 
