@@ -121,9 +121,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     # Measured PR Verify cost was 3 legs × ~7 minutes, about 75% of PR
-    # runner-minutes. PRs and merge-queue entries run newest-LTS Node 24 (the
-    # "Verify (Node 24)" context is the required check on main); every main
-    # push and manual dispatch still gates on the full supported matrix.
+    # runner-minutes. PRs and merge-queue entries run newest-LTS Node 24
+    # (main requires the static "Verify gate" job below, never a leg name);
+    # every main push and manual dispatch still gates on the full matrix.
     strategy:
       fail-fast: false
       matrix:
