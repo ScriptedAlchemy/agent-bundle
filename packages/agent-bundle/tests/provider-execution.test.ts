@@ -12,6 +12,8 @@ import {
 } from '../src/routes/provider-execution.ts';
 import { providerKeyFromName } from '../src/routes/providers.ts';
 import type { CompiledProvider } from '../src/routes/types.ts';
+import { selectManifestProviderDescriptors } from '../src/test/providers.ts';
+import type { AgentBundleTestManifest, TestableProviderDescriptor } from '../src/test/manifest.ts';
 
 /**
  * Declaration-driven required-provider selection (#595): the pure step every
@@ -199,5 +201,43 @@ describe('executeProviders over a selection', () => {
     expect(Object.keys(values)).toEqual(['processLifetime', 'alphaValue', 'zeta']);
     expect(values).toEqual({ alphaValue: 'a', processLifetime: { hits: 1, instanceId: 'instance-1', pid: 42 }, zeta: 'z' });
     expect(calls).toEqual(['alphaValue', 'zeta']);
+  });
+});
+
+describe('test-manifest provider selection', () => {
+  const descriptors = providers.map((provider): TestableProviderDescriptor => ({
+    id: provider.id,
+    key: providerKeyFromName(provider.name),
+    name: provider.name,
+    relativePath: provider.provenance.relativePath,
+    source: provider.source,
+  }));
+  const manifest = {
+    providers: descriptors,
+    routes: {
+      'event:tool/before': {
+        config: { providers: ['alphaValue'] },
+        id: 'event:tool/before',
+        kind: 'event-route',
+        relativePath: 'src/events/tool/before.ts',
+        source: '/project/src/events/tool/before.ts',
+      },
+      'tool:server/example': {
+        config: { providers: [] },
+        id: 'tool:server/example',
+        kind: 'tool',
+        relativePath: 'src/mcp/server/tools/example.ts',
+        source: '/project/src/mcp/server/tools/example.ts',
+      },
+    },
+  } as unknown as AgentBundleTestManifest;
+
+  it('selects only an event route declaration and preserves compatibility elsewhere', () => {
+    expect(selectManifestProviderDescriptors(manifest, 'event:tool/before').map(({ key }) => key))
+      .toEqual(['alphaValue']);
+    expect(selectManifestProviderDescriptors(manifest, 'tool:server/example').map(({ key }) => key))
+      .toEqual(['alphaValue', 'daemonProbe', 'zeta']);
+    expect(selectManifestProviderDescriptors(manifest, undefined).map(({ key }) => key))
+      .toEqual(['alphaValue', 'daemonProbe', 'zeta']);
   });
 });

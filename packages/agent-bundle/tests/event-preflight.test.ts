@@ -146,7 +146,7 @@ it('honors the framework-owned abort signal before and after an asynchronous gat
   } as unknown as EventPreflightContext<'tool/before'>;
   await expect(executeEventPreflight(async () => {
     controller.abort(new Error('deadline elapsed'));
-    return 'execute';
+    return 'execute' as const;
   }, context)).rejects.toThrow(/deadline elapsed/u);
 });
 

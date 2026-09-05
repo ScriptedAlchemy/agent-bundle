@@ -872,8 +872,9 @@ decoding, host validation, and canonical event construction, and before any
 of the rendered route runtime — React, the RSC renderer, layouts, providers,
 state, notices — is loaded. The gate is sync or async, receives a frozen
 context of the `canonical` identity and payload the route would receive, the
-request `signal` owned by the hook deadline, and the translated `terminal`
-capability metadata (never `native`, state, notices, lineage, providers, or
+compiled host identity and native event name, the request `signal` owned by
+the hook deadline, and translated `terminal` capability metadata (never
+`native`, state, notices, lineage, providers, or
 the request context), and returns exactly one of `'execute'` (load the route
 runtime, resolve its declared providers, render), `{ outcome: 'continue' }`
 (pass through with no host decision), or `{ outcome: 'deny', reason }` (a

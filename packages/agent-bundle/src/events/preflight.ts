@@ -3,7 +3,7 @@ import type { AgentEventCanonicalIdentity } from '../routes/public.ts';
 import type { AgentTerminal } from '../terminal-capability.ts';
 
 /**
- * The gate result a conventional `export const preflight` may return (#595).
+ * The gate result a conventional event route's re-exported preflight may return (#595).
  * `execute` is the only value that loads the rendered route; `continue` is a
  * pass-through with no host decision; `deny` blocks through the existing
  * canonical event outcome projection and always carries a nonempty reason.
@@ -15,8 +15,8 @@ export type EventPreflightResult =
 
 /**
  * Frozen, deliberately small context a preflight gate receives: the same
- * canonical identity the rendered route would see, the hook-deadline signal,
- * and already-translated terminal capability metadata. It does not include
+ * canonical identity the rendered route would see, compiled host metadata,
+ * the hook-deadline signal, and translated terminal capability metadata. It does not include
  * `native`, state, notices, lineage, providers, or React/RSC helpers.
  */
 export interface EventPreflightContext<E extends CanonicalAgentEvent = CanonicalAgentEvent> {

@@ -203,6 +203,7 @@ export default async function AfterFileEdit({ canonical, native, signal }: Agent
 
 ```ts
 // src/events/tool/before.tsx
+export const config = { providers: ['projectPolicy'] };
 export { default as preflight } from './before.preflight.js';
 
 export default async function BeforeTool({ canonical, signal }) {
@@ -247,6 +248,9 @@ provider 导入。裸包、循环、非函数以及其他无法跟随的 `prefli
 Provider 的惰性是声明驱动的。`preflight` 不会解析任何应用 provider。被执行的事件路由可以静态声明它
 需要的 provider 键；运行时随后只加载并解析那个子集。被选中的 provider 仍按确定性的键/来源顺序逐个
 挂载，每个请求一次，先挂载 `processLifetime`，并且失败保持关闭。重复或未知的键是构建错误。
+
+写成 `export const config = { providers: ['projectPolicy'] }`；provider 键来自 `src/providers/`
+下文件名的小驼峰形式。空数组表示不选择任何应用 provider。
 
 为了兼容，没有声明任何 provider 的已执行路由会解析全部约定 provider。为随处触发的路由声明那个窄
 子集，这样无关的 daemon、state 或 provider 工作就不会进入 `preflight` 可执行文件，也不会进入被推迟的

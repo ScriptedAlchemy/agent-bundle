@@ -222,6 +222,7 @@ runtime loads. The physically cheap pattern is a statically followable relative 
 
 ```ts
 // src/events/tool/before.tsx
+export const config = { providers: ['projectPolicy'] };
 export { default as preflight } from './before.preflight.js';
 
 export default async function BeforeTool({ canonical, signal }) {
@@ -274,6 +275,9 @@ executed event route can statically declare the provider keys it needs; the runt
 loads and resolves only that subset. Selected providers still materialize once per request,
 sequentially in deterministic key/source order, with `processLifetime` seeded first, and failures
 remain closed. Duplicate or unknown keys are build errors.
+
+Use `export const config = { providers: ['projectPolicy'] }`; provider keys are the camel-cased
+filenames under `src/providers/`. An empty array selects no application providers.
 
 For compatibility, an executed route with no provider declaration resolves all conventional
 providers. Declare the narrow subset for ubiquitous routes so unrelated daemon, state, or
