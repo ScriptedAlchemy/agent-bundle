@@ -222,6 +222,13 @@ and prints it in every failure, because a pass at one level is never a receipt f
 Workbench renders, so tests assert leaves and paths instead of a fixed list of pages.
 `WorkbenchPageName` and `workbenchPageLabel` are no longer exported.
 
+For browser acceptance of the live Workbench, run a real route and assert the populated trace
+rather than only its empty state. `data-testid="trace-timeline"` identifies the timeline,
+`trace-entry` identifies each selectable row, `trace-group` identifies correlated groups, and
+`trace-detail` identifies the selected entry's detail view. Assert the row's source, kind, and
+correlation evidence, then use **Open route** and verify that the route workspace loaded the
+recorded `?invocation=<id>` snapshot.
+
 Two further levels sit alongside these nine, for eleven in all. `agent-bundle/test/browser` supplies `mountBrowserApp`
 for the browser-safe `browser-app` level — production-compiled MCP App HTML mounted over the
 product bridge in a real browser page — and `simulated` reuses the installed-host helper

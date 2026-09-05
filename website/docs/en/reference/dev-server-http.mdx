@@ -1,0 +1,146 @@
+---
+description: 'Browser-facing HTTP routes for Workbench invocations, the unified trace, raw logs, and host hook receipts.'
+---
+
+# Development-server HTTP
+
+`agent-bundle dev` mounts these routes on its loopback foreground server for the Workbench. They
+are development protocols, not public deployment endpoints. Browser routes require the
+foreground session guard and enforce the Workbench origin policy described in
+[Security](./security.mdx). Unless noted otherwise, cursors are non-negative safe integers and
+responses are JSON.
+
+## Route invocations
+
+| Method | Path | Response |
+| --- | --- | --- |
+| `POST` | `/api/routes/invocations` | `{ invocation: RouteInvocation }` |
+| `GET` | `/api/routes/invocations?limit=<1..200>` | `{ invocations: RouteInvocationSummary[] }`, newest first |
+| `GET` | `/api/routes/invocations/<id>` | `{ invocation: RouteInvocation }` |
+
+The POST body is a `RouteInvocationRequest`: `routeId` plus optional `input`, `args`,
+`correlationId`, caller `requestId`, and event fixture options. The foreground echoes the two
+identifiers on the invocation so the route workspace and trace can join the run. The completed
+envelope holds the input, provenance context, providers, render events, Agent Document, result,
+projections, diagnostics, and timings. Trace entries link to that full snapshot instead of
+duplicating it.
+
+## Development runtime runs
+
+`POST /api/runtime/runs` accepts a `DevRuntimeInvocationRequest` with `surfaceId`, `target`,
+`input`, and optional `fixtureId`, `expectedGenerationId`, and `correlationId`. The foreground
+passes `correlationId` to the runtime provider and copies it onto the run's trace entries; runtime
+events can also carry it directly. `GET /api/runtime/runs` lists recent runs and
+`GET /api/runtime/runs/<id>` reads one run.
+
+## MCP operations and correlation
+
+`POST /api/mcp/sessions/<session-id>/operations` keeps the existing operation union. A
+`tools/call` operation additionally accepts an optional top-level `correlationId` of at most 256
+characters. The browser cannot supply `_meta` directly; the foreground copies this value to
+`params._meta["agent-bundle/correlationId"]` before sending the request.
+
+The MCP trace lifts the JSON-RPC id and method plus bounded host metadata. Request/response pairs
+share `mcpRequestId` and duration; tool calls and prompt reads link to their Application route
+with `?session=<session-id>`. An operation that cannot resolve a route links to
+`/advanced/protocol?session=<session-id>`.
+
+## Unified trace
+
+| Method | Path | Transport |
+| --- | --- | --- |
+| `GET` | `/api/trace?after=<sequence>` | `TraceReplay` JSON |
+| `GET` | `/api/trace/stream?after=<sequence>` | `application/x-ndjson` frames of `TraceMessage` |
+
+Omitting `after` is equivalent to `after=0`. Replay has this shape:
+
+```ts
+interface TraceReplay {
+  readonly entries: readonly TraceEntry[];
+  readonly gap?: TraceReplayGap;
+  readonly latestSequence: number;
+}
+```
+
+Each `TraceEntry` contains:
+
+```ts
+interface TraceEntry {
+  readonly id: string;
+  readonly sequence: number;
+  readonly occurredAt: string;
+  readonly source:
+    | 'invocation'
+    | 'kernel'
+    | 'mcp'
+    | 'runtime'
+    | 'hook'
+    | 'log'
+    | 'diagnostic';
+  readonly kind: string;
+  readonly summary: string;
+  readonly correlation: TraceCorrelation;
+  readonly status?: 'ok' | 'error' | 'running';
+  readonly durationMs?: number;
+  readonly details?: JsonValue;
+  readonly href?: string;
+}
+```
+
+`TraceCorrelation` can carry `correlationId`, `conversationId`, `epochId`, `executionId`, `host`,
+`invocationId`, `mcpRequestId`, `mcpSessionId`, `requestId`, `routeId`, `runId`, and `sessionId`.
+Publishers fill only keys they know. `details` is a bounded, already-safe JSON projection; it is
+not a payload body.
+
+When the requested cursor predates retained history, replay returns a gap and the stream emits the
+same `TraceReplayGap` as one NDJSON frame:
+
+```ts
+interface TraceReplayGap {
+  readonly droppedCount: number;
+  readonly firstAvailableSequence: number;
+  readonly requestedAfterSequence: number;
+  readonly type: 'trace.gap';
+}
+```
+
+A malformed cursor returns `400`, a cursor ahead of current history returns `409`, and a closed
+or unavailable trace hub returns `503`. These responses use the trace diagnostics registered in
+the generated [diagnostics reference](./diagnostics.md).
+
+## Raw logs
+
+| Method | Path | Transport |
+| --- | --- | --- |
+| `GET` | `/api/logs/replay?after=<sequence>` | `{ replay: DevLogReplay }` JSON |
+| `GET` | `/api/logs/stream?after=<sequence>` | `application/x-ndjson` frames of `DevLogMessage` |
+
+Raw logs remain a framework-diagnostics stream. Records expose only allowlisted context values
+and browser-safe text. A record carrying `correlationId`, `invocationId`, or `mcpSessionId` can
+link into `/trace?correlation=<value>`; uncorrelated records stay in Advanced → Raw logs.
+
+## Host hook receipts
+
+| Method | Path | Transport |
+| --- | --- | --- |
+| `POST` | `/api/trace/receipts` | One `EventTraceReceipt` JSON body, at most 16 KiB; success is `204` |
+
+Generated hook processes post one bounded receipt to this foreground-only route. This is not a
+browser API: it rejects an `Origin` header and non-loopback peer, requires the receipt endpoint's
+random per-dev-server bearer token, and exposes no read or command operation. The Workbench cookie
+and session header do not authorize it. A receipt contains version `1`, one
+`EventTraceExecution`, payload-free kernel events, their wall-clock start,
+host/session/request identity, and the resolved lineage axis. Native event bodies, tool input or
+output, rendered documents, environment values, credentials, filesystem paths, and error stacks
+are absent.
+
+For a host invocation, the wrapper finds `.agent-bundle-dev.json` beside its installed bundle,
+then reads the active endpoint from the named project's
+`.agent-bundle/hook-receipts.json`. A dev-server-spawned simulation receives the same loopback URL
+and token through the two internal receipt environment variables. The endpoint file is replaced
+with owner-only mode and removed when the server closes. Only an exact
+`http://127.0.0.1:<port>` or `http://[::1]:<port>` origin is accepted. The wrapper gives the post
+750 ms and ignores transport failure, so Workbench observation can never change the hook result.
+
+See [Trace](../guide/development/workbench.mdx#trace) for how receipt and kernel entries appear in
+the timeline.

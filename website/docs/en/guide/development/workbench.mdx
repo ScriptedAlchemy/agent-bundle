@@ -30,7 +30,8 @@ These are contracts, not defaults:
 The primary navigation has four destinations in this release:
 
 - **Application** — the compiled application tree and the workspace for its selected leaf.
-- **Trace** — invocations observed in this foreground development session.
+- **Trace** — the correlated timeline of application activity observed in this foreground
+  development session.
 - **Problems** — current compiler, runtime, and contract diagnostics.
 - **Advanced** — Evals, Artifact, Protocol, Host diagnostics, and Raw logs.
 
@@ -110,10 +111,84 @@ inside Skill Markdown remain inert.
 
 ## Trace
 
-Trace lists this foreground development session's route invocations and updates when a
-`route.invocation` project event arrives. Select an entry to inspect it, or follow its route link
-to load that invocation snapshot in the route workspace. This release does not claim a durable
-cross-session trace or embedded host session.
+Trace is the live, ordered timeline of what the foreground server observes the application doing.
+For example, running the `sessionStart` event route in
+[Hooks and Scripts](../../examples/hooks-and-scripts.mdx) can produce a sequence like:
+
+```text
+22:41:04.101 invocation.started       event:session/start
+22:41:04.118 kernel.preflight.start   session/start · claude
+22:41:04.121 kernel.execute.start     event:session/start
+22:41:04.126 kernel.providers.start
+22:41:04.129 kernel.providers.finish
+22:41:04.132 kernel.render.start
+22:41:04.146 kernel.render.finish
+22:41:04.149 invocation.completed     sessionStart succeeded
+```
+
+An invocation through the Protocol inspector adds `mcp.request`, progress or logging
+notifications, and `mcp.response` to the same timeline. A hook delivered by an attached host adds
+`hook.received` and `hook.completed` or `hook.failed`; its payload-free kernel phases are retained
+in the terminal row's details.
+
+### Entries, correlation, and grouping
+
+The timeline is a lowering of records that already exist. It does not make a second copy of an
+invocation, protocol frame, runtime run, hook receipt, log record, or diagnostic. Each row carries
+its occurrence time, `source`, publisher-owned dotted `kind`, one-line summary, known correlation
+keys, optional status and duration, and, when a full record is available, an `href` to it:
+
+| Source | Kinds | Correlation keys | Destination |
+| --- | --- | --- | --- |
+| `invocation` | `invocation.started`, `invocation.completed`, `invocation.failed` | `correlationId`, `requestId`, `invocationId`, `routeId`, `epochId`, plus session/conversation when available | The Application route with `?invocation=<id>` |
+| `kernel` | `kernel.preflight.start`, `kernel.preflight.outcome`, `kernel.execute.start`, provider and render start/finish, `kernel.failure` | `executionId`, route, host, session and conversation identity when available | The corresponding route invocation |
+| `mcp` | request, response, notification, progress, logging, session, and stderr kinds | `mcpSessionId`, JSON-RPC `mcpRequestId`, `requestId`, route and host metadata when known | The route workspace with `?session=<id>`, or the bound Protocol session |
+| `runtime` | run start/completion/failure, generation publication, and App updates | `runId`, `correlationId`, `routeId`, `epochId`, `mcpSessionId` | The route with `?invocation=<runId>` |
+| `hook` | receipt/completion/failure and host session start/end | `requestId`, `executionId`, `sessionId`, `conversationId`, `routeId`, `host` | The event route and captured receipt |
+| `log` | `log.<producer>.<kind>` for records with a shared key | Any correlation key retained by the safe log projection | Advanced → Raw logs |
+| `diagnostic` | build, contract, and host-sync failures | Build, epoch, route, and shared request identity when known | Problems or the affected route |
+
+Trace groups entries transitively on shared identity. The group label uses the strongest available
+key in this order: conversation, session, invocation, kernel execution, runtime run, MCP request,
+then the browser-minted correlation id. An MCP request id joins only within its MCP session. The
+grouping is evidence-based: unrelated activity is not joined merely because it happened nearby.
+Filter by source, host, route, or status; the text filter matches summaries and kinds.
+`/trace?correlation=<value>` selects the group containing an entry with that exact correlation
+value.
+
+### Inspecting and deep-linking
+
+Select a row to open its detail at `/trace/<entry-id>`. **Open route** follows the row's `href` and
+loads the immutable invocation snapshot in the Application workspace rather than rerunning the
+route. The route workspace's **Open in Trace** action returns to the matching correlated group.
+Advanced → Raw logs offers the same action when a record carries `correlationId`, `invocationId`,
+or `mcpSessionId`.
+
+Trace replay loads from `GET /api/trace?after=<sequence>` and the live view continues from
+`GET /api/trace/stream?after=<sequence>`. A dropped replay window is represented explicitly as a
+gap; the browser does not silently imply that the remaining rows are complete. Trace belongs to
+the current foreground development session: it is not durable across server restarts and is not
+the embedded host-session UI planned for a later release.
+
+### Host hook receipts
+
+Attached generated hook wrappers can post a receipt of at most 16 KiB to
+`POST /api/trace/receipts`. The wrapper discovers the active loopback endpoint and random
+per-dev-server bearer token from the development install marker and the project's owner-only
+receipt file; simulations receive the pair directly from the foreground server, and shutdown
+removes the file. The write-only route rejects a non-loopback peer and any request with an
+`Origin` header; neither the Workbench cookie nor its session header authorizes it. A receipt
+contains execution identity, payload-free kernel events, host/session/request ids, and resolved
+lineage — never the native hook payload. Posting has a 750 ms budget and failure is ignored, so
+Workbench observation cannot change the hook result. This is narrow authenticated telemetry, not
+a remote-control or general-purpose ingestion endpoint.
+
+### Deliberately absent data
+
+Trace never includes request or response payload bodies, rendered Agent Documents, native event
+envelopes, environment variables, credentials, absolute paths, or error stacks. Open the linked
+invocation, route, Protocol session, Raw log record, or Problem when its bounded full record is
+available and you need more detail.
 
 ## Problems and stale-catalog repair
 
@@ -141,8 +216,9 @@ Repair a stale catalog in this order:
   [MCP Inspector](https://github.com/modelcontextprotocol/inspector) launcher.
 - **Host diagnostics** is limited to installed state, version, path, whether the current plugin is
   attached, actionable errors, and one MCP handshake indicator.
-- **Raw logs** contains producer streams for framework-level diagnosis. Trace is the normal route
-  execution view.
+- **Raw logs** remains the framework-level producer stream for details that do not belong on the
+  typed timeline. Trace is the normal observability view; a log record carrying
+  `correlationId`, `invocationId`, or `mcpSessionId` offers **Open in Trace**.
 
 An MCP protocol session remains pinned to `{ epochId, target, serverName }`. Restarting it respawns
 that generated server on the selected epoch; open a new session to use a newly published epoch.
@@ -169,7 +245,8 @@ Workbench uses paths and browser history, not `#page` hashes:
 /routes/skills/<id>
 /routes/commands/<id>
 /routes/rules/<id>
-/trace/<invocation-id>
+/trace/<entry-id>
+/trace?correlation=<correlation-value>
 /problems
 /advanced/<section>
 ```
@@ -188,6 +265,10 @@ The route workspace uses one authenticated, origin-guarded foreground API:
 - `GET /api/routes/invocations?limit=50` returns newest-first summaries for Trace.
 - `GET /api/routes/invocations/<id>` returns one invocation.
 - `/api/project/events` publishes completed summaries as `route.invocation` events.
+- `GET /api/trace?after=<sequence>` returns a correlated trace replay.
+- `GET /api/trace/stream?after=<sequence>` streams trace entries and replay gaps as NDJSON.
+- `POST /api/trace/receipts` accepts one bounded, bearer-authenticated hook receipt from a
+  development wrapper; it is not a browser route.
 
 The envelope carries canonical input, request context, providers, ordered render events, the
 final Agent Document, structured result, projections, diagnostics, and execution timings when
@@ -196,6 +277,9 @@ ids (`AB8231`), unavailable epochs (`AB8232`), render timeouts or crashes (`AB82
 requests (`AB8237`), and unknown fixture ids (`AB8238`) are reported as diagnostics.
 See the [diagnostics reference](../../reference/diagnostics.md) for the individual triggers and
 recovery guidance.
+
+The complete browser-facing HTTP shapes, including the trace entry and replay contracts, are in
+the [development-server HTTP reference](../../reference/dev-server-http.mdx).
 
 ## The same session programmatically
 
