@@ -787,7 +787,7 @@ simply not been built yet is a validation **warning** that only
 | `AB4748` | error (build) | `agent-bundle build` refuses a prebuilt entry file absent from its payload. |
 | `AB4749` | error (build) | A payload directory overlaps the artifact `--output` root. |
 | `AB4750` | info | A payload is older than the newest project source file and may be stale; rerun the project's own build if so. |
-| `AB4751` | error | A `runtimeDependencies` entry is not a bare package name as npm reads one (a subpath such as `sharp/lib`, a selector such as `sharp@1`, a path, or a URL scheme), or `package.json` does not declare it as a dependency a consumer installs — `dependencies`, `optionalDependencies`, or a peer not marked optional in `peerDependenciesMeta` (the set `AB7014` judges). The declaration check is skipped when `package.json` is missing (silent) or unparsable or outside the root (`AB4009`–`AB4011`). |
+| `AB4751` | error | A `runtimeDependencies` entry is not a bare package name as npm reads one (a subpath such as `sharp/lib`, a selector such as `sharp@1`, a path, or a URL scheme), or `package.json` does not declare it as a dependency a consumer installs — `dependencies`, `optionalDependencies`, or a peer not marked optional in `peerDependenciesMeta` (the set `AB7014` judges). The declaration check is skipped when `package.json` is missing (silent) or unparsable or outside the root (`AB4011`). |
 
 ## Build-time identity outside the compiler (`AB4760`)
 

@@ -1662,7 +1662,7 @@ const payloadTargetDiagnostics = (
 /**
  * The names a consumer's npm installs — `dependencies`, `optionalDependencies`,
  * and peers not marked optional — the same set `AB7014` judges; undefined when
- * the package document is absent or is one AB4009–AB4011 already report
+ * the package document is absent or is one AB4011 already reports
  * (unparsable, outside the root).
  */
 const installedDependencyNames = (projectRoot: string): ReadonlySet<string> | undefined => {
@@ -1707,7 +1707,7 @@ const payloadRuntimeDependencyDiagnostics = (
         'AB4751',
         `Payload ${JSON.stringify(name)} runtimeDependencies names ${JSON.stringify(dependency)}, which package.json does not declare as a dependency a consumer installs (dependencies, optionalDependencies, or a peer not marked optional).`,
         loaded.configPath,
-        'Declare the package under dependencies or optionalDependencies so a consumer installs it, or remove it from runtimeDependencies.',
+        'Declare the package under dependencies, optionalDependencies, or peerDependencies (not marked optional) so a consumer installs it, or remove it from runtimeDependencies.',
       )];
     }
     return [];

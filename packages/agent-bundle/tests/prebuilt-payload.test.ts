@@ -85,7 +85,7 @@ it('validates declared payload runtime dependencies and normalizes them sorted a
   });
   try {
     const validated = await validate({ root });
-    expect(validated.diagnostics.filter((diagnostic) => diagnostic.code === 'AB4751')).toEqual([]);
+    expect(validated.diagnostics.filter((diagnostic) => /^AB47[45]\d$/u.test(diagnostic.code))).toEqual([]);
 
     const built = await build({ output: join(root, 'out'), root });
     expect(built.model.payloads).toMatchObject([
