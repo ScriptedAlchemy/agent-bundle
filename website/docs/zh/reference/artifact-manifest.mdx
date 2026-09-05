@@ -35,8 +35,8 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 
 | 消费者 | 读取什么 |
 | --- | --- |
-| `install <host> --from <root>`、`uninstall` | `<root>` 下的清单。身份——插件名与版本——来自 `application`；市场名来自 `projections[host].marketplace`；宿主被指向的文件来自 `projections[host].documents.plugin`。没有清单、清单不是规范字节、没有该宿主的投影，或投影没有宿主插件清单的根目录，都以 `AB7001` 拒绝。 |
-| `doctor --from <root>` | 与 `install` 相同的读取，按被检查的宿主逐一进行；它对树运行的静态校验（`AB7319`）继续按投影进行。 |
+| `install <host> --from <root>`、`uninstall` | `<root>` 下的清单。身份——插件名与版本——来自 `application`；市场名来自 `projections[host].marketplace`；宿主被指向的文件来自 `projections[host].documents.plugin`。`install` 从 `files[]` 加清单自身和操作员 `.env` 覆盖层取得复制集合与产物内容哈希，并直接读取这些固定路径而不遍历产物目录。没有清单、清单不是规范字节、没有该宿主的投影、投影没有宿主插件清单，或某个 `files[]` 条目缺失或摘要不符的根目录，都以 `AB7001` 拒绝。 |
+| `doctor --from <root>` | 与 `install` 相同的身份、固定路径文件集合与内容哈希读取，按被检查的宿主逐一进行；它对树运行的静态校验（`AB7319`）继续按投影进行。 |
 | `serve-app`、`mcp list` / `invoke` / `run` | 从 `executables.mcpServers[]` 取服务器编译后的 `entry` 及其 `apps[]`；省略 `--target` 时从 `projections[]` 选出宿主。 |
 | `hooks list` / `simulate` | `executables.hooks[]`——可被模拟的编译器 wrapper。 |
 | `inspect --json` | 当产物输出位置存在已构建的清单时，追加一份 `output.manifest` 摘要——投影与可执行文件——因此 JSON 消费者无需第二次探测。 |
@@ -82,6 +82,10 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 | `sha256` | 是 | 内容摘要。校验比对的是真实字节，因此被手工改过的生成文件会失败。 |
 | `kind` | 是 | `bundle`（编译后的入口）、`copy`（逐字节复制）、`generated`（编译器写出的文档）或 `prebuilt`（预构建 payload 文件）。 |
 | `mode` | 否 | 构建设置了文件模式时的取值，`0` 至 `0o777`。 |
+
+`install` 与 `doctor --from` 把这些行用作权威产物清点。它们直接读取每个列出的路径，
+按 `sha256` 校验字节，并在不枚举根目录的情况下将其计入回执内容哈希。清单文件自身以及
+操作员放在旁边的 `.env` 或 `.env.local` 也会被复制并哈希；未列出的文件会被忽略。
 
 ### `projections[]`
 
@@ -378,7 +382,7 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 | `AB6001` | 清单不是严格的规范清单，或在校验运行期间发生了变化。 |
 | `AB6004` | 某行 `files[]` 与树不一致。 |
 | `AB6018` | `executables.hooks[]` 与某份宿主钩子文档就编译器 wrapper 不一致。 |
-| `AB7001` | `install`、`uninstall` 或 `doctor` 无法从 `--from` 下的清单解析出该宿主。 |
+| `AB7001` | `install`、`uninstall` 或 `doctor` 无法从 `--from` 下的清单解析出该宿主，或某个列出的文件缺失或与其 `files[]` 摘要不符。 |
 
 全部说明见[诊断参考](./diagnostics.md)。
 

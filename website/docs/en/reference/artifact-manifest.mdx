@@ -41,8 +41,8 @@ file is hand-editable: change the config or the sources and rebuild.
 
 | Consumer | What it reads |
 | --- | --- |
-| `install <host> --from <root>`, `uninstall` | The manifest at `<root>`. Identity — plugin name and version — from `application`; the marketplace name from `projections[host].marketplace`; the file the host is pointed at from `projections[host].documents.plugin`. A root with no manifest, a non-canonical manifest, no projection for the host, or a projection without a host plugin manifest is refused with `AB7001`. |
-| `doctor --from <root>` | The same read as `install`, per inspected host; the static validation it runs over the tree (`AB7319`) continues per projection. |
+| `install <host> --from <root>`, `uninstall` | The manifest at `<root>`. Identity — plugin name and version — from `application`; the marketplace name from `projections[host].marketplace`; the file the host is pointed at from `projections[host].documents.plugin`. `install` takes its copy set and artifact content hash from `files[]` plus the manifest itself and any operator `.env` overlay, reading those fixed paths without walking the artifact directory. A root with no manifest, a non-canonical manifest, no projection for the host, a projection without a host plugin manifest, or a missing or digest-mismatched `files[]` entry is refused with `AB7001`. |
+| `doctor --from <root>` | The same identity, fixed-path file set, and content-hash read as `install`, per inspected host; the static validation it runs over the tree (`AB7319`) continues per projection. |
 | `serve-app`, `mcp list` / `invoke` / `run` | `executables.mcpServers[]` for the server's compiled `entry` and its `apps[]`; `projections[]` to pick the host when `--target` is omitted. |
 | `hooks list` / `simulate` | `executables.hooks[]` — the compiler wrappers that can be simulated. |
 | `inspect --json` | Adds an `output.manifest` summary — projections and executables — when a built manifest exists at the artifact output, so a JSON consumer needs no second probe. |
@@ -91,6 +91,11 @@ each row lives on `compiler.provenance`, not here.
 | `sha256` | yes | Content digest. Validation compares real bytes, so a hand-edited generated file fails. |
 | `kind` | yes | `bundle` (a compiled entry), `copy` (a byte-for-byte copy), `generated` (a compiler-written document), or `prebuilt` (a prebuilt payload file). |
 | `mode` | no | The file mode, `0` through `0o777`, when the build set one. |
+
+`install` and `doctor --from` use these rows as the authoritative artifact inventory. They read
+each listed path directly, verify its bytes against `sha256`, and include it in the receipt content
+hash without enumerating the root. The manifest file itself and an operator-provided `.env` or
+`.env.local` beside it are also copied and hashed; unlisted files are ignored.
 
 ### `projections[]`
 
@@ -394,7 +399,7 @@ does not know — read an artifact with the framework version that built it, or 
 | `AB6001` | The manifest is not a strict canonical manifest, or it changed while validation ran. |
 | `AB6004` | A `files[]` row and the tree disagree. |
 | `AB6018` | `executables.hooks[]` and a host hooks document disagree about the compiler wrappers. |
-| `AB7001` | `install`, `uninstall`, or `doctor` cannot resolve the host from the manifest at `--from`. |
+| `AB7001` | `install`, `uninstall`, or `doctor` cannot resolve the host from the manifest at `--from`, or a listed file is missing or differs from its `files[]` digest. |
 
 All are described in the [Diagnostics reference](./diagnostics.md).
 

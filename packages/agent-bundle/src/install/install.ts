@@ -13,6 +13,7 @@ import { liftPromise, type LiftedRejection } from '../effect/lift.ts';
 import { claudePluginRowErrors } from '../host-contracts/claude-plugin-validation.ts';
 import { stageCursorMarketplace } from './cursor-marketplace.ts';
 import {
+  bundleInventory,
   failure,
   readBundleIdentity,
   type BundleIdentityHost,
@@ -456,7 +457,7 @@ const installPublicCli = async (
   const environment = options.environment ?? process.env;
   const home = options.home ?? homedir();
   const id = `${identity.plugin}@${marketplace}`;
-  const artifact = await treeInventory(identity.bundleRoot);
+  const artifact = await bundleInventory(identity);
   const inventory = await readPublicHostInventory(runner, identity, host, scope, environment, home);
   if (inventory.status === 'unavailable' && options.replace === true) {
     throw failure(
@@ -697,7 +698,9 @@ const installCursorMarketplace = async (
 ): Promise<InstallResult> => {
   const cursorRoot = await resolveCursorRoot(options);
   try {
+    const artifact = await bundleInventory(identity);
     const staged = await stageCursorMarketplace({
+      artifact,
       cursorRoot,
       identity,
       runner: options.commandRunner ?? defaultCommandRunner,
@@ -707,7 +710,6 @@ const installCursorMarketplace = async (
     // registration records the commit Cursor imports so uninstall can prove the repository is still ours.
     const receiptPath = cursorMarketplaceReceiptPath(cursorRoot, identity.plugin);
     const previousReceipt = await readInstallReceiptFile(receiptPath);
-    const artifact = await treeInventory(identity.bundleRoot);
     if (
       staged.state === 'staged' ||
       previousReceipt === undefined ||
@@ -815,7 +817,7 @@ const installCursor = Effect.fnUntraced(function*(
     version: identity.version,
   } as const;
   const program = Effect.gen(function*() {
-    const artifact = yield* liftPromise(() => treeInventory(identity.bundleRoot));
+    const artifact = yield* liftPromise(() => bundleInventory(identity));
     // The receipt records which host directories this installer created on the way to the plugin root
     // (a fresh Cursor home has no `plugins/local`), so uninstall can prune exactly those and no more.
     const hostDirectories: string[] = [];
@@ -834,7 +836,13 @@ const installCursor = Effect.fnUntraced(function*(
     };
     if (!(yield* liftPromise(() => exists(destination)))) {
       yield* withStagedArtifact(
-        () => stageArtifact({ artifactRoot: identity.bundleRoot, destination, receipt, stageRoot: installRoot }),
+        () => stageArtifact({
+          artifactRoot: identity.bundleRoot,
+          destination,
+          inventory: artifact,
+          receipt,
+          stageRoot: installRoot,
+        }),
         (staged) => rename(staged.root, destination),
       );
       return { ...base, contentHash: artifact.hash, state: 'installed' } as const;
@@ -894,7 +902,13 @@ const installCursor = Effect.fnUntraced(function*(
     // Replacing an existing copy created no host directories; the previous receipt's carry over.
     const replacement: InstallReceiptIdentity = { ...receipt, hostDirectories: comparison.receipt?.hostDirectories ?? [] };
     yield* withStagedArtifact(
-      () => stageArtifact({ artifactRoot: identity.bundleRoot, destination, receipt: replacement, stageRoot: installRoot }),
+      () => stageArtifact({
+        artifactRoot: identity.bundleRoot,
+        destination,
+        inventory: artifact,
+        receipt: replacement,
+        stageRoot: installRoot,
+      }),
       (staged) => replaceInstalledTree({ comparison, destination, receipt: replacement, staged }),
     );
     // Filling a state-only shell is a fresh install of plugin content, not a replacement of any.

@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { lstat, readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -30,6 +30,23 @@ export interface InstallFixtureProjection {
   readonly mcp?: string;
 }
 
+const fixtureFiles = async (root: string, relative = ''): Promise<readonly string[]> => {
+  const files: string[] = [];
+  for (const name of await readdir(join(root, relative))) {
+    const path = relative === '' ? name : `${relative}/${name}`;
+    if (
+      path === artifactManifestName ||
+      (relative === '' && (name === '.env' || name === '.env.local' || name === 'state'))
+    ) {
+      continue;
+    }
+    const metadata = await lstat(join(root, path));
+    if (metadata.isDirectory()) files.push(...await fixtureFiles(root, path));
+    else if (metadata.isFile()) files.push(path);
+  }
+  return files.sort((left, right) => left.localeCompare(right));
+};
+
 export const writeInstallFixtureManifest = async (
   bundleRoot: string,
   application: { readonly name: string; readonly version: string },
@@ -41,15 +58,11 @@ export const writeInstallFixtureManifest = async (
   })]);
   const projectionRows: ArtifactManifestProjection[] = [];
   const adapterRows: ArtifactManifestCompilerAdapter[] = [];
-  const documentPaths = new Set<string>();
   for (const projection of projections) {
     const plugin = pluginDocuments[projection.host];
     const marketplace = projection.host === 'cursor'
       ? undefined
       : marketplaceDocuments[projection.host];
-    documentPaths.add(plugin);
-    if (marketplace !== undefined) documentPaths.add(marketplace);
-    if (projection.mcp !== undefined) documentPaths.add(projection.mcp);
     projectionRows.push({
       // The fixture hosts are the shipped adapters, so identity and name coincide.
       builtInHost: projection.host,
@@ -72,7 +85,7 @@ export const writeInstallFixtureManifest = async (
   }
   projectionRows.sort((left, right) => left.host.localeCompare(right.host));
   adapterRows.sort((left, right) => left.host.localeCompare(right.host));
-  const files = await Promise.all([...documentPaths].sort().map(async (path) => {
+  const files = await Promise.all((await fixtureFiles(bundleRoot)).map(async (path) => {
     const bytes = await readFile(join(bundleRoot, path));
     return {
       bytes: bytes.length,
