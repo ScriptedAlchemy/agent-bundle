@@ -43,7 +43,7 @@ token 会在构建时报告 `AB6028`，并由 Doctor 报告 `AB7320`。
 | `AGENT_BUNDLE_NATIVE_HOST_CONTRACTS` | 贡献者测试套件 | `1` 用于比对已安装宿主 CLI 的契约。 |
 | `AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE` | 贡献者测试套件 | `1` 用于运行已登录的 Claude 原生冒烟测试。 |
 | `AGENT_BUNDLE_NATIVE_CODEX_SMOKE` | 贡献者测试套件 | `1` 用于运行已登录的 Codex 原生冒烟测试。 |
-| `AGENT_BUNDLE_WORKBENCH_API_PROXY` | 贡献者 HMR（`packages/workbench/scripts/dev.mjs`） | 启动 Workbench 界面 HMR 之前必须设置的、正在运行的 Agent Bundle 前台服务器 URL。见[开发者 Workbench](../guide/development/workbench.mdx)。 |
+| `AGENT_BUNDLE_WORKBENCH_API_PROXY` | 贡献者 HMR（`packages/workbench/scripts/dev.mjs`） | 启动 Workbench 界面 HMR 之前必须设置的、正在运行的 Agent Bundle 前台服务器 URL；Rsbuild 开发服务器把 `/api` 代理到那里，并且在它被设置期间拒绝挪离自己的端口（`server.strictPort`）。请在前台服务器一侧搭配 `agent-bundle dev --workbench-dev-origin <origin>` 使用。见[贡献者 UI 的 HMR](../guide/development/workbench.mdx#贡献者-ui-的-hmr)。 |
 
 这三个原生冒烟测试的开关之所以存在，是因为那些运行需要一个真实的、已登录的 CLI；它们绝不属于日常测试
 运行的一部分。

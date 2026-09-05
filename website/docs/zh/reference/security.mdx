@@ -31,6 +31,16 @@ API key 与形似凭据的环境取值，并在所选宿主的日常配置、设
 它绝不提供命令、工作目录、原生模型或凭据，且由浏览器提供的原生模型与凭据会被拒绝。所有操作都只是可信
 本地操作。
 
+前台服务器的浏览器路由——会话引导、变更与项目事件流——带有一道 `Origin` 守卫：`Origin` 不是前台 URL
+的请求会以 `AB8003` 被拒绝（不带 `Origin` 的请求只有作为 `Sec-Fetch-Site: same-origin` 才能通过），
+因为其他任何 origin——包括另一个 loopback origin，例如在自己的 loopback 端口上运行第三方插件代码的
+MCP App 沙箱 iframe——否则都可能对它伪造请求。贡献者 HMR 放行列表
+`agent-bundle dev --workbench-dev-origin <origin>` 是唯一的例外：显式、仅限 loopback（不是裸 loopback
+`http`/`https` origin 的任何取值都会在启动时被拒绝）、默认关闭，因此不带该标志时这道守卫保持
+不变。该循环中的 Rsbuild 代理刻意绝不改写 `Origin`：前台始终看到浏览器真实的 origin，并且只放行被明确
+列出的那一个，而不是信任代理转发过来的任何内容。见
+[贡献者 UI 的 HMR](../guide/development/workbench.mdx#贡献者-ui-的-hmr)。
+
 Skill Markdown 中的原始 HTML、JSX/MDX 与 Mermaid 在 Workbench 渲染器中是**惰性的**。Skill 文档是用于
 展示的内容，而不是用于执行的标记。
 

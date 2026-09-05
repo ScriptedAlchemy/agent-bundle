@@ -188,6 +188,7 @@ interface DevCommandOptions {
   readonly open?: boolean;
   readonly port?: number;
   readonly root: string;
+  readonly workbenchDevOrigin: readonly string[];
 }
 
 interface DevProxyCommandOptions {
@@ -734,7 +735,8 @@ export const runCli = async (
     .option('--no-agent-api', 'Disable the authenticated Agent API on /mcp')
     .option('--install-host <host>', 'Install and re-sync a development host (repeatable)', collectInstallHost, [])
     .option('--open', 'Open the workbench after the foreground server starts')
-    .option('--no-open', 'Do not open the workbench after the foreground server starts');
+    .option('--no-open', 'Do not open the workbench after the foreground server starts')
+    .option('--workbench-dev-origin <origin>', 'Accept Workbench UI requests from this loopback contributor HMR origin (repeatable)', collect, []);
   devCommand.action(async (options: DevCommandOptions) => {
     const { startDevServer: start } = await import('./api.ts');
     const session = await (dependencies.startDevServer ?? start)({
@@ -743,6 +745,7 @@ export const runCli = async (
       open: options.open === true,
       ...(options.port === undefined ? {} : { port: options.port }),
       root: options.root,
+      ...(options.workbenchDevOrigin.length === 0 ? {} : { workbenchDevOrigins: options.workbenchDevOrigin }),
     });
     await show(`Development workbench at ${session.url}\n`);
     foreground = closeForegroundOnSignal(session, dependencies.signals ?? process, diagnostics);

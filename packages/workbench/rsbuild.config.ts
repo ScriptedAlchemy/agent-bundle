@@ -8,7 +8,10 @@ const sourceRoot = resolve(import.meta.dirname, 'src');
 /**
  * The contributor dev process proxies to a separately started foreground
  * server. Production assets never proxy: they are served by that foreground
- * server directly from the published package.
+ * server directly from the published package. The proxy leaves the browser's
+ * `Origin` untouched (Rsbuild's default `changeOrigin` rewrites only `Host`),
+ * so the foreground must allowlist this dev origin; `strictPort` fails loudly
+ * on a busy port instead of silently moving the UI to one it has not allowed.
  */
 export const createWorkbenchConfig = (apiProxyTarget = process.env.AGENT_BUNDLE_WORKBENCH_API_PROXY) => ({
   html: {
@@ -42,6 +45,7 @@ export const createWorkbenchConfig = (apiProxyTarget = process.env.AGENT_BUNDLE_
       proxy: {
         '/api': { target: apiProxyTarget },
       },
+      strictPort: true,
     },
   }),
 });
