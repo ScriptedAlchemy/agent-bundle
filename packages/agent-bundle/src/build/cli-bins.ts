@@ -18,7 +18,8 @@ import {
   webHostRuntimePath,
   webHostRuntimeSpecifier,
 } from './entry-shell.ts';
-import type { RslibEntry, RslibSurfacePlan } from './rslib.ts';
+import type { RslibSurfacePlan } from './compiler.ts';
+import type { RslibEntry } from './rslib.ts';
 import { runtimeIgnoredRoot } from './runtime-path.ts';
 
 const webHostPageVirtualModuleSpecifier = 'agent-bundle/web-host-page';

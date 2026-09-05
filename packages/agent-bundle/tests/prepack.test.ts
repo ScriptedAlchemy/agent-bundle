@@ -884,7 +884,7 @@ const createSiblingProject = async (
   return root;
 };
 
-it('accepts a dependency that only a prebuilt payload module imports: prepack passes, AB6005 does not walk copied files', async () => {
+it('accepts a dependency that only a prebuilt payload module imports: prepack passes, AB6005 does not walk prebuilt payloads', async () => {
   const root = await createSiblingProject('prebuilt-project', {
     bin: { 'prebuilt-fixture': './dist/bin/prebuilt-fixture.js' },
     dependencies: { express: '^5.0.0' },
@@ -916,7 +916,7 @@ it('accepts a dependency that only a prebuilt payload module imports: prepack pa
   expect(packed.pack.files.map((file) => file.path)).toContain('host-packs/runtime/mcp/server.js');
 }, 180_000);
 
-it('fails prepack with AB6005, never AB7014, when only a compiled dist bundle imports a declared dependency', async () => {
+it('fails prepack with compile-time AB6005, never AB7014, when only a compiled dist bundle imports a declared dependency', async () => {
   const root = await createSiblingProject('externalized-project', {
     dependencies: { 'left-pad': '^1.3.0' },
     files: ['dist', 'host-packs', 'README.md'],
@@ -930,8 +930,11 @@ it('fails prepack with AB6005, never AB7014, when only a compiled dist bundle im
     "  output: { distPath: 'host-packs' },",
     "  plugin: { name: 'externalized-fixture' },",
     "  targets: ['cursor'],",
-    // The hatch keeps the import external, so the compiled bundle carries a bare specifier.
-    "  tools: { rsbuild: { output: { externals: ['left-pad'] } } },",
+    '  tools: {',
+    '    rspack: (config) => {',
+    "      config.externals = [...(Array.isArray(config.externals) ? config.externals : [config.externals]).flat().filter(Boolean), 'left-pad'];",
+    '    },',
+    '  },',
     '};',
   ], {
     'src/index.ts': "import leftPad from 'left-pad';\nexport const pad = (value: string): string => leftPad(value, 4);\n",
@@ -939,12 +942,13 @@ it('fails prepack with AB6005, never AB7014, when only a compiled dist bundle im
   const failure: unknown = await prepack({ root }).then(() => undefined, (error: unknown) => error);
   expect(failure).toBeInstanceOf(DiagnosticError);
   const reported = (failure as DiagnosticError).diagnostics;
-  expect(reported).toContainEqual(expect.objectContaining({
+  expect(reported).toContainEqual({
     code: 'AB6005',
     generatedPath: 'dist/index.js',
-    message: expect.stringContaining('"left-pad"'),
-  }));
-  // The build fails before the inventory runs, so the two gates cannot disagree about the same dependency.
+    message: 'Compiled module "dist/index.js" keeps "left-pad" external (module) from src/index.ts; a generated executable bundles everything but Node built-ins.',
+    recovery: 'Bundle every JavaScript dependency into the artifact, then rebuild it.',
+    severity: 'error',
+  });
   expect(withCode(reported, 'AB7014')).toHaveLength(0);
 }, 180_000);
 

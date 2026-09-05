@@ -4,8 +4,9 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { compileRslibSurfaces, settledRslibSurface } from '../src/build/compiler.ts';
 import { generatedMetaModulePath, metaModuleSpecifier } from '../src/build/meta.ts';
-import { buildRslibSurfaces, compileRslibSurfaces, entryLibId, settledRslibSurface, type RslibEntry } from '../src/build/rslib.ts';
+import { buildRslibSurfaces, entryLibId, type RslibEntry } from '../src/build/rslib.ts';
 import { planCompileStages } from '../src/build/compile-stages.ts';
 import type { AgentBundleMeta } from '../src/meta.ts';
 
@@ -160,6 +161,11 @@ describe('buildRslibSurfaces', () => {
         await writeFile(join(outputRoot, entry.outputRelativePath), 'export default undefined;\n');
       }
       const evidence = await buildRslibSurfaces({ cwd: project, meta, outputRoot }, surfaces, {
+        compilationEvidence: entries.map((entry) => ({
+          compiler: entryLibId(entry),
+          externals: [],
+          modules: [],
+        })),
         createRslib: async (options) => {
           instances.push(options as never);
           return rslib as never;
@@ -175,16 +181,36 @@ describe('buildRslibSurfaces', () => {
       // Evidence comes back per surface, and each surface's exclusions apply
       // only to its own outputs.
       expect(evidence).toEqual([
-        [{ path: 'bin/tool.mjs', sourceInputs: [`${project}/runtime/events/ipc.ts`, `${project}/src/cli/index.ts`] }],
-        [{
-          path: 'scripts/report.mjs',
-          sourceInputs: [`${project}/runtime/cli/shell.ts`, `${project}/runtime/events/ipc.ts`, `${project}/src/scripts/report.ts`],
-        }],
-        [
-          { path: 'hooks/event-route-stop.mjs', sourceInputs: [`${project}/runtime/cli/shell.ts`, `${project}/src/hooks/stop.ts`] },
-          { path: 'hooks/hooks-flight.mjs', sourceInputs: [`${project}/runtime/cli/shell.ts`, `${project}/src/hooks/stop.ts`] },
-        ],
-        [{ path: 'mcp/server.mjs', sourceInputs: [`${project}/runtime/cli/shell.ts`, `${project}/runtime/events/ipc.ts`, `${project}/src/mcp/server.ts`] }],
+        {
+          assets: [{ path: 'bin/tool.mjs', sourceInputs: [`${project}/runtime/events/ipc.ts`, `${project}/src/cli/index.ts`] }],
+          diagnostics: [],
+          externals: [],
+          modules: [],
+        },
+        {
+          assets: [{
+            path: 'scripts/report.mjs',
+            sourceInputs: [`${project}/runtime/cli/shell.ts`, `${project}/runtime/events/ipc.ts`, `${project}/src/scripts/report.ts`],
+          }],
+          diagnostics: [],
+          externals: [],
+          modules: [],
+        },
+        {
+          assets: [
+            { path: 'hooks/event-route-stop.mjs', sourceInputs: [`${project}/runtime/cli/shell.ts`, `${project}/src/hooks/stop.ts`] },
+            { path: 'hooks/hooks-flight.mjs', sourceInputs: [`${project}/runtime/cli/shell.ts`, `${project}/src/hooks/stop.ts`] },
+          ],
+          diagnostics: [],
+          externals: [],
+          modules: [],
+        },
+        {
+          assets: [{ path: 'mcp/server.mjs', sourceInputs: [`${project}/runtime/cli/shell.ts`, `${project}/runtime/events/ipc.ts`, `${project}/src/mcp/server.ts`] }],
+          diagnostics: [],
+          externals: [],
+          modules: [],
+        },
       ]);
     } finally {
       await rm(outputRoot, { force: true, recursive: true });
@@ -204,7 +230,10 @@ describe('buildRslibSurfaces', () => {
     ]);
     expect(created).toBe(0);
     expect(bins).toEqual([['settled']]);
-    expect(evidence).toEqual([[], []]);
+    expect(evidence).toEqual([
+      { assets: [], diagnostics: [], externals: [], modules: [] },
+      { assets: [], diagnostics: [], externals: [], modules: [] },
+    ]);
   });
 
   it('lets two surfaces reuse an entry name because lib ids derive from destinations, and refuses a shared destination', async () => {

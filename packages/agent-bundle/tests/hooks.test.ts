@@ -26,7 +26,7 @@ import {
   type ArtifactManifestHook,
 } from '../src/build/manifest.ts';
 import { generatedMetaModulePath, metaModuleSpecifier, projectMeta } from '../src/build/meta.ts';
-import { buildWithRslib, compileRslibSurfaces } from '../src/build/rslib.ts';
+import { buildWithRslib, compileRslibSurfaces } from '../src/build/compiler.ts';
 import { digest } from '../src/core/digest.ts';
 import type { AgentBundleMeta } from '../src/meta.ts';
 import { emptyCompiledRouteGraph } from '../src/routes/graph.ts';
@@ -372,6 +372,11 @@ it('does not share a persistent Rslib cache between generated executables', asyn
       meta: probeMeta,
       outputRoot,
     }, {
+      compilationEvidence: [{
+        compiler: 'agent-bundle-hooks-cache-probe',
+        externals: [],
+        modules: [],
+      }],
       createRslib: async (options) => {
         createOptions.push(options);
         return rslib as never;
@@ -445,6 +450,11 @@ it('closes the Rslib build result and serves the generated wrapper entry virtual
       meta: probeMeta,
       outputRoot,
     }, {
+      compilationEvidence: [{
+        compiler: 'agent-bundle-hooks-close-probe',
+        externals: [],
+        modules: [],
+      }],
       createRslib: async (options) => {
         createOptions.push(options);
         return rslib as never;

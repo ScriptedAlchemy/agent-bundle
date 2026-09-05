@@ -9,7 +9,8 @@ import { createRslib } from '@rslib/core';
 import { createJiti } from 'jiti';
 
 import { build as buildArtifact, type BuildOptions as LowLevelBuildOptions, type BuildResult } from '../src/build/build.ts';
-import { buildWithRslib, type RslibEntry } from '../src/build/rslib.ts';
+import { buildWithRslib } from '../src/build/compiler.ts';
+import type { RslibEntry } from '../src/build/rslib.ts';
 import type { AgentBundleMeta } from '../src/meta.ts';
 import { publishArtifact } from '../src/build/emit.ts';
 import type { TargetHookContract } from '../src/adapters/hook-contract.ts';
@@ -1146,9 +1147,6 @@ it('inlines reserved specifiers through exact-match aliases and virtual generate
       entries: [entry],
       meta: testMeta,
       outputRoot: join(root, 'dist'),
-      // A hatch external naming a non-reserved module is legal: the
-      // invariant rejects reserved specifiers, not the externals mechanism.
-      tools: { rspack: { externals: { fsevents: 'node-commonjs fsevents' } } },
     });
     const bundle = await readFile(join(root, 'dist', 'scripts', 'reserved-probe.mjs'), 'utf8');
     expect(bundle).toContain('inlined-runtime-shell');
@@ -1162,7 +1160,7 @@ it('inlines reserved specifiers through exact-match aliases and virtual generate
     // guaranteed-nonexistent paths: the reserved namespace never reaches the
     // filesystem and never counts as authored source evidence.
     await expect(readdir(join(root, 'dist', '.agent-bundle-virtual'))).rejects.toMatchObject({ code: 'ENOENT' });
-    expect(evidence).toEqual([{
+    expect(evidence.assets).toEqual([{
       path: 'scripts/reserved-probe.mjs',
       sourceInputs: [join(root, 'src', 'entry.ts'), join(root, 'src', 'shell.ts')],
     }]);
@@ -1379,7 +1377,7 @@ const linkedWorkspaceSourceInputs = (root: string): readonly string[] => [
 it('bundles symlinked workspace dependencies, transitively, without attributing them as project sources', async () => {
   const { bundle, evidence, root } = await buildLinkedWorkspaceProject();
   expect(bundle).toContain('linked-b-marker');
-  expect(evidence).toEqual([{ path: 'scripts/linked.mjs', sourceInputs: linkedWorkspaceSourceInputs(root) }]);
+  expect(evidence.assets).toEqual([{ path: 'scripts/linked.mjs', sourceInputs: linkedWorkspaceSourceInputs(root) }]);
 }, 20_000);
 
 it('excludes a transitive workspace dependency hoisted to an ancestor node_modules', async () => {
@@ -1389,7 +1387,7 @@ it('excludes a transitive workspace dependency hoisted to an ancestor node_modul
   // probing only `linked-a/node_modules`.
   const { bundle, evidence, root } = await buildLinkedWorkspaceProject({ hoisted: true });
   expect(bundle).toContain('linked-b-marker');
-  expect(evidence).toEqual([{ path: 'scripts/linked.mjs', sourceInputs: linkedWorkspaceSourceInputs(root) }]);
+  expect(evidence.assets).toEqual([{ path: 'scripts/linked.mjs', sourceInputs: linkedWorkspaceSourceInputs(root) }]);
 }, 20_000);
 
 it('keeps the project sources when a linked dependency depends back on the project', async () => {
@@ -1398,7 +1396,7 @@ it('keeps the project sources when a linked dependency depends back on the proje
   // the project authored would silently vanish from provenance.
   const { bundle, evidence, root } = await buildLinkedWorkspaceProject({ cyclic: true });
   expect(bundle).toContain('local-marker');
-  expect(evidence).toEqual([{ path: 'scripts/linked.mjs', sourceInputs: linkedWorkspaceSourceInputs(root) }]);
+  expect(evidence.assets).toEqual([{ path: 'scripts/linked.mjs', sourceInputs: linkedWorkspaceSourceInputs(root) }]);
 }, 20_000);
 
 it('excludes linked dependencies that live inside the project directory', async () => {
@@ -1408,7 +1406,7 @@ it('excludes linked dependencies that live inside the project directory', async 
   // it is still a dependency, not authored source.
   const { bundle, evidence, root } = await buildLinkedWorkspaceProject({ nested: true });
   expect(bundle).toContain('linked-b-marker');
-  expect(evidence).toEqual([{ path: 'scripts/linked.mjs', sourceInputs: linkedWorkspaceSourceInputs(root) }]);
+  expect(evidence.assets).toEqual([{ path: 'scripts/linked.mjs', sourceInputs: linkedWorkspaceSourceInputs(root) }]);
 }, 20_000);
 
 it('parses emitted bundles in full when a tools hatch could have rewritten them', async () => {

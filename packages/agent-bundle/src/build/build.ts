@@ -31,7 +31,7 @@ import {
   type PlannedMcpApp,
 } from './mcp-apps.ts';
 import { bundleSyntaxCheckFor } from './module-imports.ts';
-import { compileRslibSurfaces, settledRslibSurface } from './rslib.ts';
+import { compileRslibSurfaces, settledRslibSurface } from './compiler.ts';
 import { planCompileStages } from './compile-stages.ts';
 import {
   assertUniqueArtifactDestinations,
