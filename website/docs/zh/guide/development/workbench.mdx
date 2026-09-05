@@ -223,8 +223,13 @@ MCP App 沙箱 iframe 在独立的 loopback 端口上运行第三方插件代码
 
 不带 `--workbench-dev-origin` 时，位于 `http://localhost:3000` 的界面会以 `AB8003` 拒绝自己的引导
 （会话响应体中写的是前台 origin，而不是页面的 origin），并停留在"Foreground connection unavailable"
-门控页上，显示"Workbench request failed with HTTP 200."；前台也同样会以 `AB8003` 拒绝携带该 `Origin`
-的变更请求。前台 URL 本身无论如何都照常工作。
+门控页上，显示 `AB8003 — Origin http://localhost:3000 is not allowed by the foreground server at
+http://127.0.0.1:3100. Open http://127.0.0.1:3100 instead, or start agent-bundle dev with
+--workbench-dev-origin http://localhost:3000 to allow this origin.`。门控页只在前台响应本身失败时才会
+追加 `(HTTP <status>)`——例如前台回以 403 的 `AB8003` 会显示为
+`AB8003 — Request origin is not this foreground server. (HTTP 403)`——因此不带标志时这一行没有状态码：
+前台回应的是 200，是界面拒绝了该响应体。前台仍会以 `AB8003` 拒绝携带该 `Origin` 的变更请求。前台 URL
+本身无论如何都照常工作。
 
 ## 下一步
 

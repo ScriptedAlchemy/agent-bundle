@@ -651,7 +651,11 @@ export class ForegroundRouteClient implements ForegroundRequestAuthority {
         browserOrigin !== undefined && browserOrigin !== 'null' && browserOrigin !== body.origin &&
         devOrigins?.includes(browserOrigin) !== true
       ) {
-        throw new ForegroundRouteClientError('AB8003', 'Foreground session bootstrap origin does not match this browser.', response.status);
+        throw new ForegroundRouteClientError(
+          'AB8003',
+          `Origin ${browserOrigin} is not allowed by the foreground server at ${body.origin}. Open ${body.origin} instead, or start agent-bundle dev with --workbench-dev-origin ${browserOrigin} to allow this origin.`,
+          response.status,
+        );
       }
       const previous = this.#snapshot;
       const generation = previous === undefined

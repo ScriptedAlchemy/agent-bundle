@@ -65,7 +65,7 @@ import { RoutesPage } from './routes/routes-page.tsx';
 import { overviewFor } from './overview-model.ts';
 import { downloadBlob, errorMessage as messageFrom } from './client-helpers.ts';
 import { BundleWorkflow, HostAdoptionSection, StateMark } from './overview-page.tsx';
-import { ProjectClient, type ProjectConnectionState } from './project-client.ts';
+import { connectionFailureText, ProjectClient, type ProjectConnectionState } from './project-client.ts';
 import { SkillClient } from './skill-client.ts';
 import { SkillsPage } from './skills-page.tsx';
 import {
@@ -73,7 +73,7 @@ import {
   loadWorkbenchCapabilities,
   type WorkbenchCapabilities,
 } from './workbench-capabilities.ts';
-import type { WorkbenchPage as GeneralWorkbenchPage } from './workbench-screen.tsx';
+import { ConnectionGate, type WorkbenchPage as GeneralWorkbenchPage } from './workbench-screen.tsx';
 import { RuntimeClient, type RuntimeBootstrap } from './runtime-client.ts';
 import {
   createRuntimeEventBuffer,
@@ -100,6 +100,9 @@ const sourceFor = (diagnostic: Diagnostic): string =>
 
 const errorMessage = (reason: unknown): string =>
   messageFrom(reason, 'Foreground project state could not be refreshed.');
+
+const connectionFailure = (reason: unknown): string =>
+  connectionFailureText(reason, 'Foreground project state could not be refreshed.');
 
 const activeEpochFor = (status: ProjectStatus) =>
   status.artifact.state === 'missing' ? undefined : status.artifact.activeEpoch;
@@ -866,7 +869,7 @@ const Workbench = () => {
           mcpControllerRef.current?.close() ?? Promise.resolve(),
         ]);
         const failure = results.find((result) => result.status === 'rejected');
-        if (failure?.status === 'rejected') setConnectionError(errorMessage(failure.reason));
+        if (failure?.status === 'rejected') setConnectionError(connectionFailure(failure.reason));
         mcpAppClient.current?.resetRuntimeForForegroundReplacement();
         handoffCoordinator.current = undefined;
         mcpPreviewDeparture.current = undefined;
@@ -1243,11 +1246,11 @@ const Workbench = () => {
         }
       },
       (reason) => {
-        if (mounted) setConnectionError(errorMessage(reason));
+        if (mounted) setConnectionError(connectionFailure(reason));
       },
       (event) => { runtimeEvents.receive(event); },
     ).catch((reason: unknown) => {
-      if (mounted) setConnectionError(errorMessage(reason));
+      if (mounted) setConnectionError(connectionFailure(reason));
     });
     return () => {
       mounted = false;
@@ -1345,11 +1348,7 @@ const Workbench = () => {
   }, [mcpController]);
   useEffect(() => mcpController.subscribe(setMcpModel), [mcpController]);
 
-  const connectionGate = connection.state === 'connected' ? undefined : <main aria-live="polite" className="connection-recovery loading-state">
-    <h1>{connection.state === 'unavailable' ? 'Foreground connection unavailable' : 'Foreground connection reconnecting'}</h1>
-    <p>{connection.state === 'unavailable' ? 'Waiting for the foreground server to recover.' : 'Connecting to the foreground server.'}</p>
-    {connectionError === undefined ? undefined : <p role="alert">{connectionError}</p>}
-  </main>;
+  const connectionGate = connection.state === 'connected' ? undefined : <ConnectionGate error={connectionError} state={connection.state} />;
   const withConnectionGate = (content: ReactNode): ReactNode => <>
     <div className="connection-content" inert={connectionGate === undefined ? undefined : true} key={connection.generation}>{content}</div>
     {connectionGate}

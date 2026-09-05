@@ -1,6 +1,7 @@
 import { expect, it } from '@rstest/core';
 
 import {
+  connectionFailureText,
   ProjectClient,
   ProjectClientError,
   type EventSourceFactory,
@@ -11,6 +12,7 @@ import { HookClient } from '../src/hooks/hook-client.ts';
 import { LogClient } from '../src/logs/log-client.ts';
 import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
 import { PlaygroundClient } from '../src/playground/playground-client.ts';
+import { withBrowserOrigin } from './support/browser-origin.ts';
 
 interface Listener {
   readonly listener: (event: { readonly data: string; readonly lastEventId: string }) => void;
@@ -102,6 +104,10 @@ const flushEvents = async (): Promise<void> => {
   await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
   await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
 };
+
+/** What the route client says when a contributor dev origin reaches a foreground server that was not started with the flag. */
+const noFlagRefusal = 'Origin http://localhost:3000 is not allowed by the foreground server at http://127.0.0.1:3100. '
+  + 'Open http://127.0.0.1:3100 instead, or start agent-bundle dev with --workbench-dev-origin http://localhost:3000 to allow this origin.';
 
 it('calls the default browser fetch with its global receiver', async () => {
   const originalFetch = globalThis.fetch;
@@ -889,7 +895,7 @@ it('reports one failed event refresh without an unhandled rejection and retains 
 
     expect(observed).toEqual(['active']);
     expect(errors).toHaveLength(1);
-    expect(errors[0]).toMatchObject({ message: 'Workbench request failed with HTTP 500.' });
+    expect(errors[0]).toMatchObject({ code: 'AB8007', message: 'Request could not be completed.', status: 500 });
     expect(unhandled).toEqual([]);
   } finally {
     process.off('unhandledRejection', onUnhandled);
@@ -1186,4 +1192,43 @@ it('invalidates every shared foreground admission when ProjectClient closes duri
   expect(protectedRequests).toBe(0);
   expect(eventSources).toBe(0);
   expect(stream.closed).toBe(false);
+});
+
+it('surfaces the client-side refusal of an HTTP 200 bootstrap with its code and message but no status', async () => {
+  await withBrowserOrigin('http://localhost:3000', async () => {
+    const errors: unknown[] = [];
+    const client = new ProjectClient({
+      events: () => new RecordingEventSource(),
+      fetch: withForegroundSession(async () => Response.json({ status: status() })),
+      retryDelay: () => new Promise<void>((resolvePromise) => setImmediate(resolvePromise)),
+    });
+    try {
+      const rejection: unknown = await client.connect(() => undefined, (reason) => errors.push(reason))
+        .then(() => undefined, (reason: unknown) => reason);
+
+      expect(rejection).toBeInstanceOf(ProjectClientError);
+      if (!(rejection instanceof ProjectClientError)) return;
+      expect(rejection.code).toBe('AB8003');
+      expect(rejection.status).toBeUndefined();
+      expect(rejection.message).toBe(noFlagRefusal);
+      expect(errors).toEqual([rejection]);
+      expect(client.connection.state).toBe('unavailable');
+    } finally {
+      client.close();
+    }
+  });
+});
+
+it('formats a connection failure as its code, message, and HTTP status, omitting the parts it lacks', () => {
+  expect(connectionFailureText(new ProjectClientError('Request origin is not this foreground server.', 'AB8003', 403), 'fallback'))
+    .toBe('AB8003 — Request origin is not this foreground server. (HTTP 403)');
+  expect(connectionFailureText(new ProjectClientError(noFlagRefusal, 'AB8003'), 'fallback')).toBe(`AB8003 — ${noFlagRefusal}`);
+  expect(connectionFailureText(new ProjectClientError('Foreground project event stream disconnected.'), 'fallback'))
+    .toBe('Foreground project event stream disconnected.');
+  expect(connectionFailureText(new Error('x'), 'fallback')).toBe('x');
+  expect(connectionFailureText({ get message(): string { throw new Error('hostile'); } }, 'fallback')).toBe('fallback');
+  expect(connectionFailureText(Object.defineProperty(new Error('x'), 'message', { get(): string { throw new Error('hostile'); } }), 'fallback'))
+    .toBe('fallback');
+  expect(connectionFailureText('not an error', 'fallback')).toBe('fallback');
+  expect(connectionFailureText(undefined, 'fallback')).toBe('fallback');
 });

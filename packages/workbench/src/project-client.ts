@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import type { Diagnostic } from '../../agent-bundle/src/contracts/diagnostics.ts';
-import { exactKeys, isRecord } from './client-helpers.ts';
+import { errorMessage, exactKeys, isRecord } from './client-helpers.ts';
 import {
   freezeJsonValue,
   type ArtifactEpoch,
@@ -68,13 +68,32 @@ interface QueuedProjectEvent {
 
 export class ProjectClientError extends Error {
   readonly code: string | undefined;
+  /**
+   * Status of the failed foreground response (4xx/5xx); absent when the failure
+   * was not an HTTP failure (e.g. the client refused an HTTP 200 bootstrap body).
+   */
+  readonly status: number | undefined;
 
-  constructor(message: string, code?: string) {
+  constructor(message: string, code?: string, status?: number) {
     super(message);
     this.name = 'ProjectClientError';
     this.code = code;
+    this.status = status;
   }
 }
+
+/**
+ * The one-line account of a connection failure the gate and topbar show:
+ * `<code> — <message> (HTTP <status>)`, omitting the parts a failure lacks.
+ * Other errors keep their message; a hostile reason falls back.
+ */
+export const connectionFailureText = (reason: unknown, fallback: string): string => {
+  const message = errorMessage(reason, fallback);
+  if (!(reason instanceof ProjectClientError)) return message;
+  const code = reason.code === undefined ? '' : `${reason.code} — `;
+  const status = reason.status === undefined ? '' : ` (HTTP ${reason.status})`;
+  return `${code}${message}${status}`;
+};
 
 const projectEventTypes = [
   'artifact.available',
@@ -241,7 +260,7 @@ const projectStatusResponse = (value: unknown): ProjectStatusResponse => {
 
 const projectError = (error: unknown): ProjectClientError | unknown =>
   error instanceof ForegroundRouteClientError
-    ? new ProjectClientError(`Workbench request failed with HTTP ${error.status}.`, error.code)
+    ? new ProjectClientError(error.message, error.code, error.status >= 400 ? error.status : undefined)
     : error;
 
 const isSequence = (value: unknown): value is number =>
@@ -555,7 +574,7 @@ export class ProjectClient {
       this.#eventSource = undefined;
       source.close();
       this.#setConnection({ ...this.#connection, state: 'unavailable' });
-      this.#reportError(error);
+      this.#reportError(projectError(error));
       this.#startRecovery(version);
     }
   }

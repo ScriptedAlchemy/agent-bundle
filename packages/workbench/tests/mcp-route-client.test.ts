@@ -1,6 +1,7 @@
 import { describe, expect, it } from '@rstest/core';
 
 import { ForegroundRouteClient, McpRouteClient, McpRouteClientError } from '../src/mcp/mcp-route-client.ts';
+import { withBrowserOrigin } from './support/browser-origin.ts';
 
 const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), {
   headers: { 'content-type': 'application/json' },
@@ -196,18 +197,6 @@ const sessionBootstrap = (body: unknown): ForegroundRouteClient => new Foregroun
   },
 });
 
-/** Stubs the browser origin the Node unit pool lacks, then removes the stub (or restores a prior descriptor). */
-const withBrowserOrigin = async (origin: string, run: () => Promise<void>): Promise<void> => {
-  const previous = Object.getOwnPropertyDescriptor(globalThis, 'location');
-  Object.defineProperty(globalThis, 'location', { configurable: true, value: { origin } });
-  try {
-    await run();
-  } finally {
-    if (previous === undefined) Reflect.deleteProperty(globalThis, 'location');
-    else Object.defineProperty(globalThis, 'location', previous);
-  }
-};
-
 it('admits a browser served from an allowlisted contributor dev-server origin', async () => {
   await withBrowserOrigin('http://localhost:3000', async () => {
     const foreground = sessionBootstrap(devSessionBody);
@@ -225,13 +214,21 @@ it('admits a browser served from an allowlisted contributor dev-server origin', 
 
 it('rejects a browser origin outside the contributor dev-server allowlist', async () => {
   await withBrowserOrigin('http://localhost:3001', async () => {
-    await expect(sessionBootstrap(devSessionBody).sessionSnapshot()).rejects.toMatchObject({ code: 'AB8003' });
+    await expect(sessionBootstrap(devSessionBody).sessionSnapshot()).rejects.toMatchObject({
+      code: 'AB8003',
+      message: 'Origin http://localhost:3001 is not allowed by the foreground server at http://127.0.0.1:4100. '
+        + 'Open http://127.0.0.1:4100 instead, or start agent-bundle dev with --workbench-dev-origin http://localhost:3001 to allow this origin.',
+    });
   });
 });
 
 it('still rejects a foreign browser origin when the bootstrap carries no dev-server allowlist', async () => {
   await withBrowserOrigin('http://localhost:3000', async () => {
-    await expect(sessionBootstrap(sessionBody).sessionSnapshot()).rejects.toMatchObject({ code: 'AB8003' });
+    await expect(sessionBootstrap(sessionBody).sessionSnapshot()).rejects.toMatchObject({
+      code: 'AB8003',
+      message: 'Origin http://localhost:3000 is not allowed by the foreground server at http://127.0.0.1:4100. '
+        + 'Open http://127.0.0.1:4100 instead, or start agent-bundle dev with --workbench-dev-origin http://localhost:3000 to allow this origin.',
+    });
   });
 });
 

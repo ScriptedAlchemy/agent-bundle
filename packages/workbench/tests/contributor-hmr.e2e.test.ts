@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { expect } from '@rstest/playwright';
 import { createRsbuild, type Rspack, type StartDevServerResult } from '@rsbuild/core';
 
+import type { StartDevServerOptions } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture, type ProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
 import { availablePort } from '../../agent-bundle/tests/support/available-port.ts';
 import { within } from '../../agent-bundle/tests/support/eventually.ts';
@@ -39,6 +40,13 @@ import {
  *    reaches the dev server with a foreign loopback origin is still refused
  *    by the foreground with AB8003, while the allowlisted origin is disclosed
  *    as `devOrigins` next to the unchanged foreground `origin`.
+ * 4. The documented no-flag failure: with the same dev server and page origin
+ *    but the foreground restarted on its port WITHOUT `--workbench-dev-origin`,
+ *    the bootstrap succeeds as HTTP 200 yet names only the foreground origin,
+ *    so the client refuses it as AB8003 and the page stays on the "Foreground
+ *    connection unavailable" gate whose alert names the code, the foreground
+ *    URL to open instead, and the exact flag to add; the foreground refuses
+ *    the page's `Origin` outright.
  *
  * Deliberately not covered: MCP App preview and runtime client-surface
  * iframes stay bound to the foreground origin (their sandbox and proxy
@@ -56,7 +64,17 @@ const devHost = 'localhost';
 interface ContributorLoop {
   readonly dev: StartDevServerResult;
   readonly devOrigin: string;
+  /** The foreground behind the dev server's `/api` proxy: the replacement once `restartForeground` has run. */
   readonly foreground: WorkbenchServer;
+  /** Closes the running foreground; a no-op while a restart left none running. */
+  readonly closeForeground: () => Promise<void>;
+  /**
+   * Closes the foreground and starts another on the SAME port with the e2e
+   * defaults plus `overrides`, so the already-compiled dev server keeps proxying
+   * `/api` to it — an `agent-bundle dev` restart that drops the allowlist unless
+   * `overrides` names `workbenchDevOrigins` again.
+   */
+  readonly restartForeground: (overrides?: Partial<StartDevServerOptions>) => Promise<WorkbenchServer>;
 }
 
 const startContributorLoop = async (project: ProjectFixture): Promise<ContributorLoop> => {
@@ -66,6 +84,13 @@ const startContributorLoop = async (project: ProjectFixture): Promise<Contributo
   const port = await availablePort(devHost);
   const devOrigin = `http://${devHost}:${port}`;
   const foreground = await startWorkbenchDevServer(project, { workbenchDevOrigins: [devOrigin] });
+  const foregroundPort = Number(new URL(foreground.url).port);
+  let current: WorkbenchServer | undefined = foreground;
+  const closeForeground = async (): Promise<void> => {
+    const closing = current;
+    current = undefined;
+    await closing?.close();
+  };
   try {
     const documented = createWorkbenchConfig(foreground.url);
     if (!('server' in documented)) throw new Error('The documented Workbench config did not configure the /api proxy.');
@@ -94,31 +119,46 @@ const startContributorLoop = async (project: ProjectFixture): Promise<Contributo
       await Promise.allSettled([dev.server.close()]);
       throw error;
     }
-    return { dev, devOrigin, foreground };
+    return {
+      closeForeground,
+      dev,
+      devOrigin,
+      get foreground(): WorkbenchServer {
+        if (current === undefined) throw new Error('No foreground server is running behind the dev server proxy.');
+        return current;
+      },
+      restartForeground: async (overrides = {}): Promise<WorkbenchServer> => {
+        await closeForeground();
+        current = await startWorkbenchDevServer(project, { ...overrides, port: foregroundPort });
+        return current;
+      },
+    };
   } catch (error) {
-    await Promise.allSettled([foreground.close()]);
+    await Promise.allSettled([closeForeground()]);
     throw error;
   }
 };
 
 /** The dev server closes first: its proxy holds upstream connections into the foreground. */
-const closeContributorLoop = async ({ dev, foreground }: ContributorLoop): Promise<void> => {
+const closeContributorLoop = async ({ closeForeground, dev }: ContributorLoop): Promise<void> => {
   const [devClosed] = await Promise.allSettled([dev.server.close()]);
-  await foreground.close();
+  await closeForeground();
   if (devClosed?.status === 'rejected') throw devClosed.reason;
 };
 
 const sessionThroughProxy = (devOrigin: string, origin?: string): Promise<Response> =>
   fetch(`${devOrigin}/api/project/session`, origin === undefined ? {} : { headers: { origin } });
 
-e2e('completes a Workbench session through the documented contributor HMR proxy', { timeout: 180_000 }, async ({ page }) => {
+// 180 s covered one foreground start plus the compile and browser budgets; the no-flag step adds a second foreground start.
+e2e('completes a Workbench session through the documented contributor HMR proxy and gates a foreground started without the allowlist', { timeout: 210_000 }, async ({ page }) => {
   await buildWorkbench();
   await withWorkbenchServer({
     close: closeContributorLoop,
     createProject: () => createProjectFixture(),
     dispose: (project) => removeProjectFixture(project.root),
     start: startContributorLoop,
-  }, async ({ devOrigin, foreground }) => {
+  }, async (loop) => {
+    const { devOrigin, foreground } = loop;
     expect(devOrigin).not.toBe(foreground.url);
     const pageErrors: Error[] = [];
     page.on('pageerror', (error) => pageErrors.push(error));
@@ -164,5 +204,56 @@ e2e('completes a Workbench session through the documented contributor HMR proxy'
     const admitted = await sessionThroughProxy(devOrigin, devOrigin);
     expect(admitted.status).toBe(200);
     expect(await admitted.json()).toMatchObject({ devOrigins: [devOrigin], origin: foreground.url });
+
+    // 4. The documented no-flag failure on the same dev server: the foreground
+    //    restarts on its port without `--workbench-dev-origin`, so the proxy
+    //    target is unchanged and only the allowlist is gone. The page leaves
+    //    first so its event stream and recovery polling are not proxied into a
+    //    foreground that is going away; the fresh load below is the documented
+    //    "open http://localhost:<port>" moment.
+    await page.goto('about:blank');
+    const unlisted = await loop.restartForeground();
+    expect(unlisted.url).toBe(foreground.url);
+    const bootstrap = page.waitForResponse((candidate) =>
+      candidate.request().method() === 'GET' && candidate.url() === `${devOrigin}/api/project/session`);
+    await page.goto(workbenchUrl(devOrigin, 'overview'));
+    // The bootstrap itself succeeds — the browser's same-origin GET carries no
+    // `Origin` — but its body names only the foreground origin and no `devOrigins`,
+    // so the refusal below is the client's own, not an HTTP failure.
+    const bootstrapResponse = await bootstrap;
+    expect((await bootstrapResponse.request().allHeaders())['origin']).toBeUndefined();
+    expect(bootstrapResponse.status()).toBe(200);
+    const bootstrapBody: unknown = await bootstrapResponse.json();
+    expect(bootstrapBody).toMatchObject({ origin: unlisted.url });
+    expect(bootstrapBody).not.toHaveProperty('devOrigins');
+    try {
+      await expect(page.getByRole('heading', { name: 'Foreground connection unavailable' })).toBeVisible({ timeout: browserTimeout });
+    } catch (reason) {
+      throw new Error(
+        `The connection gate did not appear on ${page.url()} without the dev-origin allowlist.\n${await page.locator('body').innerText()}`,
+        { cause: reason },
+      );
+    }
+    expect(new URL(page.url()).origin).toBe(devOrigin);
+    // The gate's alert is the diagnostic itself: the code, the foreground URL to
+    // open instead, and the exact flag that is missing — not a bare HTTP status.
+    const alert = page.getByRole('alert');
+    await expect(alert).toContainText('AB8003', { timeout: browserTimeout });
+    await expect(alert).toContainText(`--workbench-dev-origin ${devOrigin}`);
+    await expect(alert).toHaveText(
+      `AB8003 — Origin ${devOrigin} is not allowed by the foreground server at ${unlisted.url}. `
+      + `Open ${unlisted.url} instead, or start agent-bundle dev with --workbench-dev-origin ${devOrigin} to allow this origin.`,
+    );
+    await expect(alert).not.toContainText('HTTP 200');
+    await expect(alert).not.toContainText('Workbench request failed');
+    await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toHaveCount(0);
+    expect(pageErrors).toEqual([]);
+
+    // The server-side half of the same sentence: the Origin admitted in step 3 is
+    // refused outright once the allowlist is gone, so no mutation from this page
+    // could be admitted either.
+    const refused = await sessionThroughProxy(devOrigin, devOrigin);
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toMatchObject({ diagnostic: { code: 'AB8003' } });
   });
 });
