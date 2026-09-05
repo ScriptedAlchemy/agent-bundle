@@ -38,12 +38,7 @@ export const supportedCapability = (evidence: CapabilityEvidence): CapabilitySta
  */
 export const cliBinCapability = 'cli';
 
-/**
- * The capability that admits the framework-owned `<plugin> web` command — a
- * browser host inside the composite artifact that runs from the installed
- * root on any host (#564). Wave-2 bin emission consumes this row the same
- * way `cliBinCapability` gates `bin/<plugin>.mjs`.
- */
+/** Capability for the framework-owned `<plugin> web` command (#564). */
 export const webSurfaceCapability = 'web';
 
 export const unavailableCapability = (reason: string): CapabilityState => Object.freeze({

@@ -11,18 +11,8 @@ import { appNameOf, openApp, parseAppSelector } from '../web-host/select-app.ts'
 import { openStdioAppSession } from '../web-host/session.ts';
 
 /**
- * `agent-bundle serve-app`: one built MCP App, served standalone in a browser
- * over a bound session to the plugin's own packed MCP server.
- *
- * The host itself is the framework's shared web host (`web-host/*`): the same
- * stdio session, App selection, loopback HTTP host, and page a generated
- * plugin's `<plugin> web` command runs from its bin. What is specific to this
- * module is the framework side — validating the operator's options,
- * resolving (or building) the artifact and its launch environment exactly as
- * `mcp run` does, and reading the built page script from the package — and
- * the Effect scope that owns every acquired resource: `close()` finalizes it
- * once, newest resource first (the web host, then the MCP session, then a
- * throwaway artifact).
+ * The Effect scope owns the web host, MCP session, and optional throwaway
+ * artifact, releasing them newest first.
  */
 
 export type { McpAppConsentCapability, ServedMcpApp, ServeMcpAppPublicOptions } from './types.ts';
@@ -50,7 +40,6 @@ const serveProgram = (options: ServeMcpAppOptions): Effect.Effect<WebHost, unkno
   const requestedApp = yield* liftTry(() => parseAppSelector(options.app));
   const autoApprove = Object.freeze([...(options.autoApprove ?? [])]);
   const timeoutMs = options.timeoutMs ?? defaultTimeoutMs;
-  // Before any build or launch: a package without its page cannot host anything.
   const pageScript = yield* liftPromise(() => readWebHostPageScript());
   const artifact = typeof options.artifact === 'string' ? options.artifact : yield* options.artifact;
   const launch = yield* liftPromise(() => resolveMcpLaunchEnvironment({
@@ -92,13 +81,7 @@ const serveProgram = (options: ServeMcpAppOptions): Effect.Effect<WebHost, unkno
   );
 });
 
-/**
- * Serves one built MCP App standalone: launches the plugin's packed MCP
- * server exactly as `agent-bundle mcp run` would, binds the App to it
- * through the Workbench's MCP App host stack, and returns the loopback URL of
- * a page that renders the App. `close()` tears everything down, the server
- * process included.
- */
+/** Serves one built MCP App until `close()` tears down its host and server. */
 export const serveMcpApp = async (options: ServeMcpAppOptions): Promise<ServedMcpApp> => {
   const runtime = makeScopedEffectRuntime(Layer.effect(ServedMcpAppService, serveProgram(options)));
   let host: WebHost;

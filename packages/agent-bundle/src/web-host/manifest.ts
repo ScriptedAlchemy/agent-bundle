@@ -4,7 +4,8 @@ import {
   isServeAppAllowCapability,
   type ServeAppAllowCapability,
 } from '../core/mcp-app-allow.ts';
-import { hasDataKeys, isPlainRecord } from '../core/strict-json.ts';
+import { errorMessage } from '../core/errors.ts';
+import { hasDataKeys, isPlainRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 
 export interface WebManifestApp {
   readonly allow: readonly ServeAppAllowCapability[];
@@ -23,18 +24,19 @@ export interface WebManifest {
   readonly open: 'browser' | 'never';
 }
 
-type JsonRecord = Record<string, unknown>;
+type JsonRecord = Readonly<Record<string, unknown>>;
 
 const prefix = 'agent-bundle.manifest.json web section is invalid:';
 
+const invalid = (message: string): Error => new Error(`${prefix} ${message}`);
+
 const fail = (message: string): never => {
-  throw new Error(`${prefix} ${message}`);
+  throw invalid(message);
 };
 
 const record = (value: unknown, location: string): JsonRecord =>
-  isPlainRecord(value) ? value as JsonRecord : fail(`${location} must be a plain object.`);
+  isPlainRecord(value) ? value : fail(`${location} must be a plain object.`);
 
-/** Exact required/optional key contract (`hasDataKeys`), naming the location and expected keys on failure. */
 const keyedRecord = (
   value: unknown,
   location: string,
@@ -56,8 +58,8 @@ const stringRecord = (value: unknown, location: string): Readonly<Record<string,
   const candidate = record(value, location);
   const result: Record<string, string> = {};
   for (const [key, entry] of Object.entries(candidate)) {
-    if (typeof entry !== 'string') fail(`${location}.${key} must be a string.`);
-    result[key] = entry as string;
+    if (typeof entry !== 'string') throw invalid(`${location}.${key} must be a string.`);
+    result[key] = entry;
   }
   return result;
 };
@@ -73,9 +75,8 @@ const parseApp = (value: unknown, index: number): WebManifestApp => {
     ['allow', 'app', 'entry', 'env', 'name', 'resourceUri', 'server'],
     ['input', 'tool'],
   );
-  if (!Array.isArray(app.allow)) fail(`${location}.allow must be an array.`);
-  const declaredAllow = app.allow as unknown[];
-  const allow = declaredAllow.map((capability: unknown, capabilityIndex: number) => {
+  if (!Array.isArray(app.allow)) throw invalid(`${location}.allow must be an array.`);
+  const allow = app.allow.map((capability: unknown, capabilityIndex: number) => {
     if (typeof capability !== 'string' || !isServeAppAllowCapability(capability)) {
       return fail(`${location}.allow[${capabilityIndex}] is not an App-initiated consent capability.`);
     }
@@ -96,25 +97,25 @@ const parseApp = (value: unknown, index: number): WebManifestApp => {
 
 export const parseWebManifest = (value: unknown): WebManifest => {
   const manifest = keyedRecord(value, 'root', ['apps', 'open']);
-  if (!Array.isArray(manifest.apps)) fail('apps must be an array.');
+  if (!Array.isArray(manifest.apps)) throw invalid('apps must be an array.');
   if (manifest.open !== 'browser' && manifest.open !== 'never') {
-    fail('open must be "browser" or "never".');
+    throw invalid('open must be "browser" or "never".');
   }
-  const apps = (manifest.apps as unknown[]).map(parseApp);
+  const apps = manifest.apps.map(parseApp);
   for (let index = 1; index < apps.length; index += 1) {
     if (apps[index - 1]!.app.localeCompare(apps[index]!.app) >= 0) {
       fail('apps must be sorted by app with no duplicates.');
     }
   }
-  return { apps, open: manifest.open as WebManifest['open'] };
+  return { apps, open: manifest.open };
 };
 
 export const readWebManifest = async (manifestPath: string): Promise<WebManifest | undefined> => {
   try {
-    const document: unknown = JSON.parse(await readFile(manifestPath, 'utf8'));
+    const document = parseJsonWithoutDuplicateKeys(await readFile(manifestPath, 'utf8'));
     const manifest = record(document, 'manifest');
     return manifest['web'] === undefined ? undefined : parseWebManifest(manifest['web']);
   } catch (error) {
-    throw new Error(`Unable to read web section from ${manifestPath}: ${(error as Error).message}`, { cause: error });
+    throw new Error(`Unable to read web section from ${manifestPath}: ${errorMessage(error)}`, { cause: error });
   }
 };

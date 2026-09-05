@@ -141,21 +141,15 @@ export interface AgentBundleMcpConfig {
   servers: Readonly<Record<string, AgentBundleMcpServer>>;
 }
 
-/** One MCP App exposed by the generated artifact's browser surface. */
 export interface AgentBundleWebAppConfig {
-  /** App selector in `<server>/<app>` form. */
+  /** `<server>/<app>` */
   app: string;
-  /** App-initiated consent capabilities approved before launch. */
   allow?: readonly ServeAppAllowCapability[];
-  /** Opening tool input. */
   input?: Readonly<Record<string, unknown>>;
-  /** Tool used to open the App. */
   tool?: string;
 }
 
-/** Browser-host surface emitted into a generated artifact. */
 export interface AgentBundleWebConfig {
-  /** MCP Apps exposed by the artifact. */
   apps: ReadonlyArray<string | AgentBundleWebAppConfig>;
   /** Whether the generated command opens the system browser. Defaults to `never`. */
   open?: 'browser' | 'never';
@@ -496,33 +490,20 @@ export interface NormalizedMcpApp {
   readonly template?: string;
 }
 
-/** One resolved MCP App exposed by the artifact browser host. */
 export interface NormalizedWebApp {
-  /** Pre-approved App-initiated consent capabilities. */
   readonly allow: readonly ServeAppAllowCapability[];
-  /** Authored `<server>/<app>` selector. */
   readonly app: string;
-  /** App name within its server. */
   readonly appName: string;
-  /** Optional opening tool input. */
   readonly input?: Readonly<Record<string, unknown>>;
-  /** App resource URI. */
   readonly resourceUri: string;
-  /** Normalized owning MCP server id. */
   readonly serverId: string;
-  /** Owning MCP server name used by runtime commands. */
   readonly serverName: string;
-  /** Optional opening tool. */
   readonly tool?: string;
 }
 
-/** Normalized generated browser-host surface. */
 export interface NormalizedWeb {
-  /** Exposed Apps in authored order. */
   readonly apps: readonly NormalizedWebApp[];
-  /** Browser-opening policy. */
   readonly open: 'browser' | 'never';
-  /** Configuration source that declared the surface. */
   readonly provenance: { readonly sourcePath: string };
 }
 
@@ -548,7 +529,6 @@ export interface NormalizedBinEntry {
   readonly name: string;
   readonly provenance: SourceProvenance;
   readonly source: string;
-  /** This framework-generated bin also dispatches the artifact `web` command. */
   readonly web?: true;
 }
 
@@ -789,7 +769,6 @@ export interface NormalizedPlugin {
   readonly skills: readonly NormalizedSkill[];
   readonly state?: NormalizedStateDefinition;
   readonly targets: readonly NormalizedTarget[];
-  /** Generated browser-host surface exposed by the artifact. */
   readonly web?: NormalizedWeb;
 }
 

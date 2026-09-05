@@ -6,6 +6,8 @@ import { expect } from '@rstest/playwright';
 import type { Frame, Page } from 'playwright';
 
 import { build } from '../../agent-bundle/src/api.ts';
+import { WEB_HOST_SEED_ELEMENT_ID, type WebHostPageSeed } from '../../agent-bundle/src/web-host/browser/seed.ts';
+import { WEB_HOST_TOKEN_HEADER } from '../../agent-bundle/src/web-host/page.ts';
 import { awaitStdoutLine, connectionRefused, isProcessGone, killAll, runBin } from '../../agent-bundle/tests/support/bin-process.ts';
 import { eventuallyPasses, within } from '../../agent-bundle/tests/support/eventually.ts';
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
@@ -13,29 +15,12 @@ import { copyExample } from './support/example-acceptance.ts';
 import { descendantProcessIds } from './support/packed-release-harness.ts';
 import { e2e } from './support/workbench-e2e.ts';
 
-/**
- * The `<plugin> web` browser acceptance (#564) over the public example:
- * `examples/mcp-app` exposes `status/status` through `web.apps`, so its
- * composite root carries `bin/mcp-app-example.mjs` with the framework-owned
- * `web` command. The bin runs as a real process (`web --no-open --json`), the
- * page it serves is opened in a 1440×900 desktop browser, and the App renders
- * in the separate-origin sandbox and round-trips the MCP Apps bridge — no
- * assertion is made while the host page is still binding. SIGINT then ends
- * the bin with the envelope's exit code and nothing it spawned survives.
- */
-
 const pluginName = 'mcp-app-example';
 const app = 'status/status';
 const resourceUri = 'ui://mcp-app-example/status.html';
 const tool = 'show-status';
-/**
- * `show-status` validates `{ service: 'compiler' | 'payments-api' }`
- * (examples/mcp-app/src/mcp/status.ts), so the opening call needs an input:
- * `--input` (web-host/command.ts argv) supplies it, whatever the example's
- * `web.apps` entry configures.
- */
+// show-status requires `{ service: 'compiler' | 'payments-api' }`; --input supplies it.
 const openingInput = { service: 'compiler' } as const;
-/** What `show-status` returns for that input: `healthyCompilerStatus` (examples/mcp-app/src/compiler-status-contract.ts). */
 const healthyCompilerStatus = {
   checks: [
     { label: 'Availability', status: 'passing' },
@@ -45,28 +30,18 @@ const healthyCompilerStatus = {
   status: 'healthy',
   summary: 'Compiler service is ready for release.',
 } as const;
-/** `WEB_HOST_SEED_ELEMENT_ID` (web-host/browser/seed.ts). */
-const seedElementId = 'agent-bundle-web-host-seed';
-/** `WEB_HOST_TOKEN_HEADER` (web-host/page.ts): the header the standalone host page presents on `/api/mcp/...`. */
-const tokenHeader = 'x-agent-bundle-web-host';
-const seedElementPattern = new RegExp(`<script\\b(?=[^>]*\\btype="application/json")(?=[^>]*\\bid="${seedElementId}")[^>]*>`, 'u');
-/** A live framework import surviving in a generated executable: `from "agent-bundle/..."` or `import("agent-bundle/...")`. */
+const seedElementPattern = new RegExp(`<script\\b(?=[^>]*\\btype="application/json")(?=[^>]*\\bid="${WEB_HOST_SEED_ELEMENT_ID}")[^>]*>`, 'u');
 const agentBundleImport = /(?:\bfrom\s*|\bimport\s*\(\s*)['"]agent-bundle(?:\/[^'"]*)?['"]/u;
-/** A live Effect import surviving in a generated executable: the web host is plain Node and never carries the compiler's runtime. */
 const effectImport = /(?:\bfrom\s*|\bimport\s*\(\s*)['"]effect(?:\/[^'"]*)?['"]/u;
-/** The host page's `#status` while it binds the opening call, then once the App is served over the bound session. */
 const bindingStatus = `Binding ${tool} to the App…`;
 const servingStatus = `Serving ${app} over the bound session.`;
 const statusLogKey = '__agentBundleWebHostStatusLog';
 
 const browserTimeout = 15_000 * timeScale;
-/** Spawning the packed MCP server, listing its tools, making the opening call, and opening the sandbox proxy. */
 const startupBudget = 60_000 * timeScale;
-/** The envelope's signal exit lands within 5 s (scaled for shared machines). */
 const exitBudget = 5_000 * timeScale;
 const teardownBudget = { attempts: 50 * timeScale, delayMs: 100 } as const;
 
-/** The one stdout line `<plugin> web --json` prints (web-host/command.ts): these keys, in this (sorted) order. */
 interface WebReadyDocument {
   readonly app: string;
   readonly port: number;
@@ -77,19 +52,6 @@ interface WebReadyDocument {
   readonly url: string;
 }
 const webReadyKeys: readonly (keyof WebReadyDocument)[] = ['app', 'port', 'resourceUri', 'sandboxOrigin', 'server', 'tool', 'url'];
-
-/** `WebHostPageSeed` (web-host/browser/seed.ts), as embedded in the served document. */
-interface WebHostSeed {
-  readonly autoApprove: readonly string[];
-  readonly input: unknown;
-  readonly previewProfile: string;
-  readonly result: unknown;
-  readonly sessionId: string;
-  readonly title: string;
-  readonly token: string;
-  readonly tokenHeader: string;
-  readonly toolName: string;
-}
 
 interface StatusEntry {
   readonly text: string;
@@ -104,14 +66,9 @@ interface HostRequest {
 
 const requestBody = (body: string | null): unknown => {
   if (body === null) return undefined;
-  try {
-    return JSON.parse(body);
-  } catch {
-    return undefined;
-  }
+  return JSON.parse(body);
 };
 
-/** The JSON-RPC method a relayed App frame carries: `{ message }` as `McpAppRoutes` reads it. */
 const relayedMethod = (body: unknown): string | undefined => {
   if (body === null || typeof body !== 'object') return undefined;
   const message = (body as { readonly message?: unknown }).message;
@@ -158,8 +115,6 @@ e2e('serves examples/mcp-app through `<plugin> web` from its composite root and 
   let testFailure: unknown;
   let cleanupFailure: unknown;
   try {
-    // Artifact: the example's `web.apps` entry lands in the manifest and the
-    // composite root gains the bin that carries the `web` command.
     example = await copyExample('mcp-app');
     const artifactRoot = join(example.root, 'artifact');
     const built = await build({ output: artifactRoot, root: example.root });
@@ -186,7 +141,6 @@ e2e('serves examples/mcp-app through `<plugin> web` from its composite root and 
     expect(binSource).not.toMatch(agentBundleImport);
     expect(binSource).not.toMatch(effectImport);
 
-    // Process: one JSON line, keys sorted, then the bin keeps serving.
     const run = runBin(bin, ['web', '--no-open', '--json', '--input', JSON.stringify(openingInput)], { cwd: artifactRoot, track: spawned });
     const line = await awaitStdoutLine(run, (candidate) => candidate.startsWith('{'), startupBudget);
     const ready = JSON.parse(line) as WebReadyDocument;
@@ -204,8 +158,6 @@ e2e('serves examples/mcp-app through `<plugin> web` from its composite root and 
     const hostOrigin = new URL(ready.url).origin;
     expect(ready.sandboxOrigin).not.toBe(hostOrigin);
 
-    // Page: the seed element and a policy that lets no one frame the host
-    // and lets the host frame only the sandbox origin.
     const response = await fetch(ready.url);
     expect(response.status).toBe(200);
     const policy = response.headers.get('content-security-policy') ?? '';
@@ -213,8 +165,6 @@ e2e('serves examples/mcp-app through `<plugin> web` from its composite root and 
     expect(policy).toContain(`frame-src ${ready.sandboxOrigin}`);
     expect(await response.text()).toMatch(seedElementPattern);
 
-    // Browser: every relayed App frame and every non-OK host response is
-    // recorded so the bridge traffic can be asserted, not inferred.
     const hostRequests: HostRequest[] = [];
     const failedHostResponses: string[] = [];
     page.on('request', (request) => {
@@ -231,13 +181,15 @@ e2e('serves examples/mcp-app through `<plugin> web` from its composite root and 
       hostRequests.some((request) => request.method === 'POST' && request.path.endsWith('/messages') && relayedMethod(request.body) === method);
     await installStatusLog(page);
     await page.goto(ready.url);
-    const seed = JSON.parse(await page.locator(`#${seedElementId}`).textContent() ?? 'null') as WebHostSeed;
+    const seedText = await page.locator(`#${WEB_HOST_SEED_ELEMENT_ID}`).textContent();
+    if (seedText === null) throw new Error(`The host page carries no #${WEB_HOST_SEED_ELEMENT_ID} element.`);
+    const seed = JSON.parse(seedText) as WebHostPageSeed;
     expect(seed).toMatchObject({
       autoApprove: ['call-tool'],
       input: openingInput,
       previewProfile: 'portable',
       result: { structuredContent: healthyCompilerStatus },
-      tokenHeader,
+      tokenHeader: WEB_HOST_TOKEN_HEADER,
       toolName: tool,
     });
     expect(seed.token.length).toBeGreaterThan(0);
@@ -255,9 +207,7 @@ e2e('serves examples/mcp-app through `<plugin> web` from its composite root and 
     expect(servingIndex, JSON.stringify(statusLog)).toBeGreaterThan(bindingIndex);
     expect(statusLog.filter((entry) => entry.tone === 'error' || entry.tone === 'warn')).toEqual([]);
 
-    // Frames: the host page frames the sandbox proxy on its own origin, and
-    // the proxy frames the App as a `srcdoc` document under `allow-scripts`
-    // alone (dev/mcp-apps/mcp-app-sandbox.ts).
+    // Proxy iframe is allow-scripts + allow-same-origin; the App srcdoc is allow-scripts alone.
     const outerFrame = page.locator('iframe');
     await expect(outerFrame).toHaveCount(1);
     await expect(outerFrame).toBeVisible({ timeout: browserTimeout });
@@ -270,9 +220,6 @@ e2e('serves examples/mcp-app through `<plugin> web` from its composite root and 
     await expect(appIframe).toHaveAttribute('referrerpolicy', 'no-referrer');
     const appFrame = await frameWhere(page, (frame) => frame.url() === 'about:blank' && frame.parentFrame() === proxyFrame, 'the App srcdoc frame inside the sandbox proxy');
 
-    // App: the opening call's structuredContent is rendered
-    // (examples/mcp-app/views/status-panel.ts), and the App document never
-    // sees the host token.
     await expect(appFrame.locator('#service')).toHaveText(healthyCompilerStatus.service, { timeout: browserTimeout });
     await expect(appFrame.locator('#status')).toHaveText(healthyCompilerStatus.status);
     await expect(appFrame.locator('#status-indicator')).toHaveAttribute('data-state', healthyCompilerStatus.status);
@@ -301,9 +248,6 @@ e2e('serves examples/mcp-app through `<plugin> web` from its composite root and 
     await expect(hostStatus).toHaveAttribute('data-tone', 'ok');
     expect(failedHostResponses).toEqual([]);
 
-    // Teardown: SIGINT reaches the envelope (exit 130) and ends the MCP
-    // server under the bin, the host, and the sandbox proxy; stdout stayed
-    // the one JSON line.
     const descendants = await descendantProcessIds(run.child.pid!);
     expect(descendants.length).toBeGreaterThanOrEqual(1);
     for (const processId of descendants) observedProcessIds.add(processId);

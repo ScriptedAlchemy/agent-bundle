@@ -9,13 +9,6 @@ import {
   type AppSelectionSource,
 } from '../src/web-host/select-app.ts';
 
-/**
- * App selection (`web-host/select-app.ts`) over a fake session: the rules
- * `agent-bundle serve-app` and `<plugin> web` share for turning
- * `<server>/<app>` into one resource and one opening tool, and the errors
- * that name what the server actually serves when they cannot.
- */
-
 const statusUri = 'ui://mcp-app-example/status.html';
 const reportUri = 'ui://mcp-app-example/reports/status.html';
 const dashboardUri = 'ui://mcp-app-example/dashboard.html';

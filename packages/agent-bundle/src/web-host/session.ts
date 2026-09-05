@@ -22,18 +22,9 @@ import {
 } from '../dev/mcp-session/mcp-session-apps.ts';
 import { requireJsonObject, type AppSelectionSource } from './select-app.ts';
 
-/**
- * The one stdio session behind an agent-bundle web host: a launched MCP
- * server (the plugin's own packed executable, spawned exactly as `mcp run`
- * spawns it) connected through the SDK client, exposed both as the
- * `McpAppBridgeSession` the App host stack leases and as the
- * `AppSelectionSource` App selection reads. Plain Node plus
- * `@modelcontextprotocol/client`: the generated bin bundles it (AB6005).
- */
-
+/** Plain Node session support bundled into generated executables (AB6005). */
 const maxStderrBytes = 64 * 1024;
 
-/** How to spawn the MCP server: `services/mcp-run.ts#ResolvedMcpStdioLaunch` and a manifest `web` entry both resolve to this. */
 export interface StdioLaunch {
   readonly args: readonly string[];
   readonly command: string;
@@ -43,12 +34,9 @@ export interface StdioLaunch {
 
 export interface StdioAppSession {
   readonly bridge: McpAppBridgeSession;
-  /** Settles once the server connection has ended, whether by `close()` or on its own. */
   readonly closed: Promise<void>;
-  /** App selection over this session's tools and `ui://` resources. */
   readonly selection: AppSelectionSource;
   readonly sessionId: string;
-  /** The server's captured stderr so far (bounded), for the error a failed start reports. */
   readonly stderr: () => string;
   close(): Promise<void>;
   watchClosed(listener: () => void): () => void;
@@ -64,11 +52,6 @@ const captureStderr = (stream: Stream | null): (() => string) => {
   return () => captured;
 };
 
-/**
- * Launches the server and connects; a start that fails within `timeoutMs`
- * rejects with the server's stderr attached. Every request over the session
- * carries the same timeout.
- */
 export const openStdioAppSession = async (
   launch: StdioLaunch,
   identity: Readonly<{ readonly serverName: string; readonly target: string }>,
@@ -92,13 +75,7 @@ export const openStdioAppSession = async (
     if (closed) return;
     closed = true;
     closedGate.resolve();
-    for (const listener of listeners) {
-      try {
-        listener();
-      } catch {
-        // A close watcher must never disrupt teardown.
-      }
-    }
+    for (const listener of listeners) listener();
     listeners.clear();
   };
   transport.onclose = markClosed;
@@ -199,7 +176,6 @@ export const openStdioAppSession = async (
   });
 };
 
-/** The one bound session, leased to every App binding the host page creates. */
 export const sessionAuthorityFor = (session: StdioAppSession): McpAppSessionAuthority => Object.freeze({
   acquireAppLease: async (sessionId: string): Promise<McpAppSessionLease> => {
     if (sessionId !== session.sessionId) throw new Error(`Unknown MCP App session ${JSON.stringify(sessionId)}.`);

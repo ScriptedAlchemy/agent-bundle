@@ -1,25 +1,8 @@
-/**
- * `<plugin> web` (#564): the framework-owned command every generated bin
- * carries once the plugin exposes an MCP App through the `web` config key.
- * It reads the artifact's `agent-bundle.manifest.json` `web` section, picks
- * the App, launches the App's MCP server out of the artifact, calls the
- * opening tool once, and hosts the App on a loopback page until the process
- * is told to stop.
- *
- * Plain Node plus the MCP SDK client: this module is bundled into the
- * generated bin, so it imports neither Effect nor a compiler module
- * (`build/**`, `config/**`, `services/mcp-run.ts`). It never throws. Every
- * failure is an exit code with its message on stderr — 2 for a usage error
- * (an unknown option, a malformed value, an App that is not exposed or not
- * named when several are), 1 for everything else — because the generated
- * envelope (`cli-entry.ts`) owns the process and maps a termination signal
- * to 130/143 itself.
- */
 import type { McpAppConsentCapability, McpAppJsonValue, McpAppProfileId } from '../contracts/mcp-apps.ts';
 import { stableJson } from '../core/digest.ts';
 import { CodedError, errorMessage } from '../core/errors.ts';
 import { exists } from '../core/paths.ts';
-import { isRecord } from '../core/strict-json.ts';
+import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { MCP_APP_PROFILE_DESCRIPTORS } from '../dev/mcp-app-profile-descriptors.ts';
 import {
   formatServeAppReadyLine,
@@ -30,35 +13,21 @@ import {
 import { startWebHost, type WebHost } from './host-server.ts';
 import { resolveWebLaunch } from './launch.ts';
 import { readWebManifest, type WebManifest, type WebManifestApp } from './manifest.ts';
-import { openApp, parseAppSelector, type AppSelector } from './select-app.ts';
+import { openApp, parseAppSelector, requireJsonObject, type AppSelector } from './select-app.ts';
 import { openStdioAppSession, type StdioAppSession } from './session.ts';
 
+/** Plain Node entry bundled into generated executables; do not import Effect or compiler modules (#564). */
 export interface WebCommandOptions {
-  /** The arguments after `web`. */
   readonly argv: readonly string[];
-  /** `<pluginRoot>/agent-bundle.manifest.json`. */
   readonly manifestPath: string;
-  /**
-   * The executable's name for usage text — what `runGeneratedCliEntry`
-   * receives as `name`. Omitted, usage reads `<plugin> web ...`.
-   */
   readonly name?: string;
-  /** The built host page script, inlined into the bin. */
   readonly pageScript: string;
-  /** The plugin root the bin runs from: the built artifact or the installed plugin directory. */
   readonly pluginRoot: string;
-  /** Aborted when the process is told to stop; the host closes and the command returns 0. */
   readonly signal: AbortSignal;
   readonly writeErr: (text: string) => void;
   readonly writeOut: (text: string) => void;
 }
 
-/**
- * The modules the command drives, injectable so the command's own logic —
- * argv, manifest, App selection, output, shutdown — is testable without a
- * server process or a listening socket. Production passes nothing and gets
- * the real modules.
- */
 export interface WebCommandRuntime {
   readonly openApp: typeof openApp;
   readonly openStdioAppSession: typeof openStdioAppSession;
@@ -75,20 +44,6 @@ const webCommandRuntime: WebCommandRuntime = Object.freeze({
   startWebHost,
 });
 
-/**
- * Why the command stopped short of hosting, as the error's `code`:
- * - `usage`: the argv is malformed (exit 2);
- * - `app-ambiguous`: several Apps are exposed and none was named, or the
- *   name matches more than one (exit 2);
- * - `app-not-exposed`: the named App is not in the manifest (exit 2);
- * - `manifest-missing`: no `agent-bundle.manifest.json` at the path (exit 1);
- * - `web-missing`: the manifest has no `web` section, or it exposes no App
- *   (exit 1);
- * - `manifest-invalid`: the manifest or its `web` section is malformed
- *   (exit 1);
- * - `server-exited`: the App's MCP server ended while the App was hosted
- *   (exit 1).
- */
 export type WebCommandErrorCode =
   | 'app-ambiguous'
   | 'app-not-exposed'
@@ -122,9 +77,7 @@ const exitCodeOf = (code: WebCommandErrorCode): number => {
   }
 };
 
-/** How long the launched server gets to complete the MCP handshake, and each request after it. */
 const sessionTimeoutMs = 30_000;
-/** How much of the server's captured stderr is reported when it exits while hosted. */
 const stderrTailChars = 4096;
 
 const webProfiles = Object.freeze(Object.keys(MCP_APP_PROFILE_DESCRIPTORS)) as readonly McpAppProfileId[];
@@ -141,7 +94,6 @@ const columns = (rows: readonly (readonly [string, string])[]): string => {
   return rows.map(([left, right]) => `  ${left.padEnd(width)}  ${right}`).join('\n');
 };
 
-/** The `--help` text: usage, one argument, and every option in the grammar's order. */
 export const webHelp = (name: string | undefined): string => [
   webUsageLine(name),
   '',
@@ -194,17 +146,17 @@ const parsePort = (value: string): number => {
 };
 
 const parseInput = (value: string): Readonly<Record<string, McpAppJsonValue>> => {
-  let parsed: unknown;
+  let parsed;
   try {
-    parsed = JSON.parse(value);
+    parsed = parseJsonWithoutDuplicateKeys(value);
   } catch {
     throw usage('--input must be one valid JSON object.');
   }
-  if (!isRecord(parsed)) {
+  try {
+    return requireJsonObject(parsed, 'MCP App tool input');
+  } catch {
     throw usage('--input must be a JSON object; arrays, null, and scalar values are not accepted.');
   }
-  // `JSON.parse` output is JSON by construction.
-  return parsed as Readonly<Record<string, McpAppJsonValue>>;
 };
 
 const parseAllow = (value: string): ServeAppAllowCapability => {
@@ -219,13 +171,6 @@ const parseProfile = (value: string): McpAppProfileId => {
   return value;
 };
 
-/**
- * `[<server>/<app>] [--port N] [--open|--no-open] [--tool T] [--input JSON]
- * [--allow <cap>]... [--profile <id>] [--json] [--help]`. Values follow their
- * option as the next argument or after `=`; `--allow` repeats, every other
- * option appears once; `--open` and `--no-open` exclude each other. `--help`
- * anywhere wins over everything else, as in the routed shell.
- */
 export const parseWebArgv = (argv: readonly string[]): WebArgv => {
   if (argv.includes('--help') || argv.includes('-h')) return { allow: [], help: true, json: false };
   const allow: ServeAppAllowCapability[] = [];
@@ -319,11 +264,6 @@ export const parseWebArgv = (argv: readonly string[]): WebArgv => {
 const manifestRequirement = (name: string | undefined): string =>
   `agent-bundle.manifest.json with a web section is required beside bin/; run ${commandName(name)} from the built artifact or the installed plugin root.`;
 
-/**
- * The manifest's `web` section, or the coded reason there is none: no
- * manifest file, a manifest without the section, or a section exposing no
- * App. A malformed manifest keeps the reader's own message.
- */
 const readExposedApps = async (
   runtime: WebCommandRuntime,
   manifestPath: string,
@@ -368,7 +308,6 @@ const appMatches = (app: WebManifestApp, selector: AppSelector): boolean => {
   return selector.resourceUri === undefined ? selector.name === app.name : selector.resourceUri === app.resourceUri;
 };
 
-/** The one App the argv selects: the only exposed one by default, else the one the selector names. */
 const pickApp = (manifest: WebManifest, selector: string | undefined): WebManifestApp => {
   const { apps } = manifest;
   if (selector === undefined) {
@@ -401,7 +340,6 @@ const portOf = (url: string): number => {
   return parsed.protocol === 'https:' ? 443 : 80;
 };
 
-/** Settles with what ended the hosting: the process signal, or the server's own exit. */
 const hostingEnd = (signal: AbortSignal, closed: Promise<void>): Promise<'aborted' | 'closed'> =>
   new Promise((settle) => {
     if (signal.aborted) {
@@ -444,12 +382,7 @@ const reportReady = (options: WebCommandOptions, json: boolean, hosted: HostedAp
   options.writeOut(`${formatServeAppReadyLine({ app: app.app, tool: host.tool, url: host.url })}\n`);
 };
 
-/**
- * Launches the App's server, opens the App, hosts it, and stays until the
- * signal aborts (exit 0, the envelope maps the signal) or the server exits
- * on its own (exit 1 with its stderr tail). The session is this function's
- * to close, whichever way the hosting ends.
- */
+/** Owns and closes the session it launches. */
 const hostApp = async (
   options: WebCommandOptions,
   runtime: WebCommandRuntime,
@@ -458,7 +391,7 @@ const hostApp = async (
   argv: WebArgv,
 ): Promise<number> => {
   const tool = argv.tool ?? app.tool;
-  const input = argv.input ?? (app.input as Readonly<Record<string, McpAppJsonValue>> | undefined);
+  const input = argv.input ?? app.input;
   const allow: readonly McpAppConsentCapability[] = argv.allow.length > 0 ? argv.allow : app.allow;
   const open = argv.open ?? manifest.open === 'browser';
   const launch = await runtime.resolveWebLaunch({ app, env: process.env, pluginRoot: options.pluginRoot });
@@ -501,12 +434,6 @@ const hostApp = async (
   }
 };
 
-/**
- * Runs `<plugin> web` to completion and returns the process exit code: 0
- * after `--help` or once the signal stopped the host, 2 for a usage error,
- * 1 for any other failure. Help and the ready line (or its `--json` form) go
- * through `writeOut`; every diagnostic through `writeErr`.
- */
 export const runWebCommand = async (options: WebCommandOptions, runtime: WebCommandRuntime = webCommandRuntime): Promise<number> => {
   try {
     const argv = parseWebArgv(options.argv);

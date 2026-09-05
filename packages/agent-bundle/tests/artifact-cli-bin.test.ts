@@ -195,15 +195,8 @@ const createFixture = async (options: {
 };
 
 const webOnlyPluginName = 'web-only-artifact';
-/** A live framework import surviving in a generated executable: `from "agent-bundle/..."` or `import("agent-bundle/...")`. */
 const agentBundleImport = /(?:\bfrom\s*|\bimport\s*\(\s*)['"]agent-bundle(?:\/[^'"]*)?['"]/u;
 
-/**
- * A project with no `src/cli/**` at all: one MCP server with one App, exposed
- * through `web.apps` (#564). The App view and the server entry are plain
- * TypeScript, so the build needs no runtime dependencies beyond the config
- * entry the audiobook example's installed tree resolves.
- */
 const createWebOnlyFixture = async (): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-web-only-artifact-'));
   roots.push(root);
@@ -419,13 +412,6 @@ it('lists authored commands and web in one generated artifact bin', { retry: 1, 
   expect(await readFile(binPath, 'utf8')).toContain('agent-bundle-web-host-seed');
 });
 
-/**
- * The `web` surface rides the same executable (#564): a project that authors
- * no `src/cli/**` command but exposes an App through `web.apps` still gets
- * `bin/<plugin>.mjs` in its composite root, self-contained, with the
- * framework-owned `web` command listed by `--help`, and the manifest's `web`
- * section naming the exposed App.
- */
 it('emits bin/<plugin>.mjs for a project with web.apps and no src/cli, and its --help lists web (#564)', { retry: 1, timeout: 240_000 }, async () => {
   const root = await createWebOnlyFixture();
   const result = await build({ output: 'artifact', root });
@@ -437,14 +423,11 @@ it('emits bin/<plugin>.mjs for a project with web.apps and no src/cli, and its -
   expect(result.diagnostics.filter((entry) => entry.severity === 'error')).toEqual([]);
   expect(await readFile(binPath, 'utf8')).not.toMatch(agentBundleImport);
 
-  // `<plugin> --help` lists the framework-owned command among the plugin's.
   const help = await execFile(process.execPath, [binPath, '--help']);
   expect(help.stdout).toContain(`${webOnlyPluginName} 1.0.0`);
   expect(help.stdout).toMatch(/^Commands:$/mu);
   expect(help.stdout).toMatch(/^\s+web\b/mu);
 
-  // The manifest's `web` section (web-host/manifest.ts) names the exposed
-  // App and the compiled MCP executable the host launches.
   const manifest = JSON.parse(await readFile(join(artifactRoot, 'agent-bundle.manifest.json'), 'utf8')) as { readonly web?: unknown };
   const mcpEntries = result.build.manifest.files.filter((file) => file.path.startsWith('mcp/')).map((file) => file.path);
   expect(mcpEntries).toHaveLength(1);

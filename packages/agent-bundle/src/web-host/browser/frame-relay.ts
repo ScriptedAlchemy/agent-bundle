@@ -105,9 +105,9 @@ const resource = (value: McpAppJsonValue): CanonicalResource => {
     throw new McpAppFrameRelayError('MCP App preview resource has invalid permission declarations.');
   }
   return Object.freeze({
-    ...(value.csp === undefined ? {} : { csp: value.csp as McpAppJsonValue }),
+    ...(value.csp === undefined ? {} : { csp: value.csp }),
     html: value.html,
-    ...(value.permissions === undefined ? {} : { permissions: value.permissions as McpAppJsonValue }),
+    ...(value.permissions === undefined ? {} : { permissions: value.permissions }),
   });
 };
 

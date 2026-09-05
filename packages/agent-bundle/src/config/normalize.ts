@@ -221,14 +221,8 @@ export const configuredArtifactDistPath = (
 };
 
 /**
- * The framework-generated routed-CLI bin (#102 stage 2): a generated-mode
- * `src/cli/**` surface with at least one compiled command becomes one
- * executable named after the plugin, exactly where the `src/cli.ts`
- * convention would have placed it. Rendered routes that compiled no command
- * are hard source-validation errors (AB4816), so omitting them here is
- * deterministic hygiene, never a silent choice. A configured `web` surface
- * (#564) rides the same executable as the framework-owned `web` command,
- * and creates it when no command route exists.
+ * A configured web surface rides the generated routed-CLI executable and
+ * creates it when the plugin has no command route (#564).
  */
 const generatedCliBinEntry = (
   config: Readonly<AgentBundleConfig>,
@@ -251,7 +245,7 @@ const generatedCliBinEntry = (
     name: config.plugin.name,
     provenance: { kind: 'conventional', sourcePath: source },
     source,
-    ...(web ? { web: true as const } : {}),
+    ...(web ? { web: true } : {}),
   };
 };
 
@@ -262,8 +256,6 @@ const normalizeBinEntries = (
   routeCli: CompiledCliSurface | undefined,
 ): readonly NormalizedBinEntry[] => {
   const generated = generatedCliBinEntry(config, configPath, routeCli);
-  // `bin: false` disables every executable, the web one included; model
-  // validation reports the surface that then has nowhere to live (AB4341).
   if (config.bin === false) return [];
   if (config.bin !== undefined) {
     const explicit = Object.entries(config.bin)

@@ -5,12 +5,6 @@ import { name, version } from 'agent-bundle/meta';
 const app = apps[0];
 if (app === undefined) throw new Error('Expected the status MCP App.');
 
-/**
- * Default-exported server factory: `agent-bundle build` wraps it in the
- * framework stdio lifecycle shell. One App resource and one tool that opens
- * it — the pair `<plugin> web` binds for `status/status`. The tool takes no
- * input, so the opening call the host makes needs none.
- */
 export default function createStatusServer(): McpServer {
   const server = new McpServer({ name, version });
 

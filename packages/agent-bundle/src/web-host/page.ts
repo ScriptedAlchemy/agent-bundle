@@ -1,26 +1,9 @@
 import { WEB_HOST_SEED_ELEMENT_ID, type WebHostPageSeed } from './browser/seed.ts';
 
-/**
- * The host document every agent-bundle web host serves at `/`: one HTML
- * shell carrying the page seed (the bound session, the tool whose result the
- * App opens with, and the per-launch credential the authenticated
- * `/api/mcp/...` routes require) and the framework's built page script
- * (`web-host/browser/main.ts`, the browser half of the Workbench's
- * `McpAppFrameRelay`). Rendering is pure: the script arrives as a string,
- * inlined from the bin or read from `dist/web-host/page.js` (`page-script.ts`),
- * so this module touches no filesystem and bundles into the generated bin.
- */
-
-/**
- * The request header the host document presents on every authenticated
- * route. Standalone hosts (`agent-bundle serve-app`, `<plugin> web`) issue
- * their own per-launch token under it; the dev server's host reuses its
- * session header instead. The name reaches the page through the seed.
- */
+/** Shared header for a standalone host's per-launch credential. */
 export const WEB_HOST_TOKEN_HEADER = 'x-agent-bundle-web-host';
 
 export interface RenderWebHostPageOptions {
-  /** The built page script, inlined verbatim into the document's `<script>`; it must not contain `</script`. */
   readonly script: string;
   readonly seed: WebHostPageSeed;
 }
@@ -70,7 +53,6 @@ export const webHostContentSecurityPolicy = (sandboxOrigin: string): string => [
   "style-src 'unsafe-inline'",
 ].join('; ');
 
-/** Renders the host document for one bound session. */
 export const renderWebHostPage = ({ script, seed }: RenderWebHostPageOptions): string => {
   if (/<\/script/iu.test(script)) throw new Error('The web host page script must not contain "</script".');
   return [

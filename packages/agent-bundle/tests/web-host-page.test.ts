@@ -3,13 +3,6 @@ import { describe, expect, it } from '@rstest/core';
 import { WEB_HOST_SEED_ELEMENT_ID, type WebHostPageSeed } from '../src/web-host/browser/seed.ts';
 import { renderWebHostPage, WEB_HOST_TOKEN_HEADER, webHostContentSecurityPolicy } from '../src/web-host/page.ts';
 
-/**
- * The shared host document (`web-host/page.ts`) as `agent-bundle serve-app`
- * and `<plugin> web` render it: the seed must survive the `<script>` element
- * it is embedded in whatever the tool result contains, the title must not
- * become markup, and the page script must arrive verbatim.
- */
-
 const seed: WebHostPageSeed = {
   autoApprove: ['call-tool'],
   input: { service: 'compiler' },

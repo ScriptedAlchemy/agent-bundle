@@ -9,13 +9,6 @@ import { pathTokens, pluginRootEnvAnchor } from '../src/core/types.ts';
 import { resolveWebLaunch, WebLaunchError, webPluginDataDirectory } from '../src/web-host/launch.ts';
 import type { WebManifestApp } from '../src/web-host/manifest.ts';
 
-/**
- * How `<plugin> web` launches an exposed App's MCP server out of the
- * artifact (#564): the entry under this Node from the plugin root, the
- * framework path tokens in the server's declared env expanded against that
- * root, and a host-style environment where declared entries win.
- */
-
 const roots: string[] = [];
 
 const artifactRoot = async (): Promise<string> => {
@@ -71,10 +64,11 @@ describe('resolveWebLaunch', () => {
       const root = await artifactRoot();
       const failure = await resolveWebLaunch({ app: app({ entry }), env: {}, pluginRoot: root }).then(() => undefined, (error: unknown) => error);
       expect(failure).toBeInstanceOf(WebLaunchError);
-      expect((failure as WebLaunchError).code).toBe('entry-outside-root');
-      expect((failure as WebLaunchError).message).toContain(JSON.stringify(entry));
-      expect((failure as WebLaunchError).message).toContain('status/status');
-      expect((failure as WebLaunchError).message).toContain(root);
+      if (!(failure instanceof WebLaunchError)) throw failure;
+      expect(failure.code).toBe('entry-outside-root');
+      expect(failure.message).toContain(JSON.stringify(entry));
+      expect(failure.message).toContain('status/status');
+      expect(failure.message).toContain(root);
     });
 
     it('refuses an entry the artifact does not contain instead of letting the spawn fail', async () => {
@@ -82,9 +76,10 @@ describe('resolveWebLaunch', () => {
       const failure = await resolveWebLaunch({ app: app({ entry: 'mcp/mcp-status-deadbeef.mjs' }), env: {}, pluginRoot: root })
         .then(() => undefined, (error: unknown) => error);
       expect(failure).toBeInstanceOf(WebLaunchError);
-      expect((failure as WebLaunchError).code).toBe('entry-missing');
-      expect((failure as WebLaunchError).message).toContain(join(root, 'mcp', 'mcp-status-deadbeef.mjs'));
-      expect((failure as WebLaunchError).message).toContain('rebuild');
+      if (!(failure instanceof WebLaunchError)) throw failure;
+      expect(failure.code).toBe('entry-missing');
+      expect(failure.message).toContain(join(root, 'mcp', 'mcp-status-deadbeef.mjs'));
+      expect(failure.message).toContain('rebuild');
     });
   });
 

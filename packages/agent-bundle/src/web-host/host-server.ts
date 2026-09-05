@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { Socket } from 'node:net';
 
+import { isErrno } from '../core/errors.ts';
 import { diagnostic, isRequestDiagnostic, requestError, responseDiagnostic, singleHeader } from '../dev/http.ts';
 import type { McpAppProfileId } from '../dev/mcp-app-profile-descriptors.ts';
 import { McpAppBindingService, type McpAppToolDefinition } from '../dev/mcp-apps/mcp-app-binding-service.ts';
@@ -19,53 +20,26 @@ import { renderWebHostPage, WEB_HOST_TOKEN_HEADER, webHostContentSecurityPolicy 
 import type { AppSelection } from './select-app.ts';
 import { sessionAuthorityFor, type StdioAppSession } from './session.ts';
 
-/**
- * The loopback HTTP host behind `agent-bundle serve-app` and the generated
- * `<plugin> web` command: the Workbench's MCP App preview stack without the
- * Workbench. The same `McpAppBindingService` → `McpAppPreviewService` →
- * `McpAppRoutes` chain hosts the App over `/api/mcp/...`, the same loopback
- * sandbox proxy (`createMcpAppSandboxProxy`) isolates the App document on its
- * own origin, and the same `McpAppBridge` enforces the MCP Apps protocol,
- * consent, and resource policy. The session authority is the one stdio
- * session the caller opened (`session.ts`), and the host document is the
- * page `page.ts` renders around the caller's page script.
- *
- * Plain async acquire/release, no Effect: resources are acquired in order and
- * `close()` releases them newest first — routes, preview bindings, sandbox
- * proxy, HTTP server — exactly as the former Effect scope did. The session
- * stays the caller's to close; `closed` is the session's own settlement.
- */
-
+/** Plain Node host bundled into generated executables; the caller retains ownership of the session (#564). */
 export interface StartWebHostOptions {
-  /** Consent capabilities the operator pre-approved; the page decides them without asking. */
   readonly autoApprove: readonly McpAppConsentCapability[];
-  /** Open the default browser on the host URL once it listens. */
   readonly open: boolean;
-  /** Injectable only to keep browser launching deterministic in tests. */
   readonly openBrowser?: OpenBrowser;
-  /** The page script: inlined into a generated bin, or `readWebHostPageScript()` in the framework. */
   readonly pageScript: string;
-  /** Loopback TCP port; `0` picks an ephemeral one. */
   readonly port: number;
-  /** The simulated MCP Apps host profile. */
   readonly profile: McpAppProfileId;
   readonly selection: AppSelection;
   readonly session: StdioAppSession;
-  /** The document title, e.g. `<server>/<app>`. */
   readonly title: string;
 }
 
 export interface WebHost {
-  /** Settles once the bound MCP server connection has ended, whether by the caller's close or on its own. */
   readonly closed: Promise<void>;
   readonly resourceUri: string;
-  /** Loopback origin of the sandbox proxy the App document runs on. */
   readonly sandboxOrigin: string;
   readonly server: string;
   readonly tool: string;
-  /** The host document URL. */
   readonly url: string;
-  /** Releases the host's own resources, newest first; the session is left to its owner. Idempotent. */
   close(): Promise<void>;
 }
 
@@ -73,14 +47,12 @@ const closeTimeoutMs = 1_000;
 
 const loopbackHosts: ReadonlySet<string> = new Set(['127.0.0.1', 'localhost', '[::1]']);
 
-/** A valid loopback TCP port, `0` (ephemeral) when absent. */
 export const validPort = (value: number | undefined): number => {
   const port = value ?? 0;
   if (!Number.isSafeInteger(port) || port < 0 || port > 65_535) throw new RangeError('MCP App host port must be a TCP port number.');
   return port;
 };
 
-/** A supported MCP Apps host profile, `portable` when absent. */
 export const validProfile = (value: McpAppProfileId | undefined): McpAppProfileId => {
   const profile = value ?? 'portable';
   if (profile !== 'portable' && profile !== 'claude' && profile !== 'chatgpt') {
@@ -108,7 +80,7 @@ const closeServer = async (server: Server, sockets: ReadonlySet<Socket>): Promis
   }, closeTimeoutMs);
   server.close((error) => {
     clearTimeout(deadline);
-    if (error !== undefined && (error as NodeJS.ErrnoException).code !== 'ERR_SERVER_NOT_RUNNING') reject(error);
+    if (error !== undefined && !isErrno(error, 'ERR_SERVER_NOT_RUNNING')) reject(error);
     else resolveClose();
   });
   for (const socket of sockets) socket.destroy();
@@ -153,13 +125,6 @@ const releaseStack = (): Readonly<{ push(release: () => Promise<void> | void): v
   });
 };
 
-/**
- * Hosts one selected App over the caller's session: listens on loopback,
- * starts the sandbox proxy, wires the preview stack and its authenticated
- * routes around a per-launch token, serves the host document at `/`, and
- * optionally opens the browser. A failure part-way releases what was
- * acquired before rejecting.
- */
 export const startWebHost = async (options: StartWebHostOptions): Promise<WebHost> => {
   const port = validPort(options.port);
   const profile = validProfile(options.profile);

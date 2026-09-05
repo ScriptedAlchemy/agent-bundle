@@ -6,25 +6,9 @@ import {
 } from '../dev/mcp-apps/mcp-app-binding-service.ts';
 import { canonicalMcpAppJson } from '../dev/mcp-session/mcp-session-apps.ts';
 
-/**
- * App selection shared by every agent-bundle web host. `agent-bundle
- * serve-app` and the generated `<plugin> web` command resolve an operator's
- * `<server>/<app>` selector the same way: to one `ui://` resource the live
- * server actually serves and one tool that declares it as its App, which the
- * host then calls once so the App opens populated — the same input/result
- * pair the Workbench binds when it previews a tool run.
- *
- * Plain Node: the generated bin bundles this module (AB6005), so it carries
- * no Effect and no compiler modules. `session.ts` adapts the SDK client to
- * {@link AppSelectionSource}; tests substitute a fake.
- */
-
-/** What App selection needs from a live MCP session. */
 export interface AppSelectionSource {
   callTool(name: string, input: Readonly<Record<string, McpAppJsonValue>>): Promise<McpAppJsonValue>;
-  /** The `ui://` resources whose MIME type is the MCP Apps document type. */
   listAppResourceUris(): Promise<readonly string[]>;
-  /** Canonical tool definitions (`mcp-session-apps.ts#canonicalMcpAppTool(tool).definition`). */
   listToolDefinitions(): Promise<readonly McpAppToolDefinition[]>;
 }
 
@@ -35,18 +19,10 @@ export interface AppSelector {
 }
 
 export interface OpenAppRequest {
-  /**
-   * Arguments for the opening tool call; defaults to `{}`. Any JSON-shaped
-   * record is accepted and canonicalized here, so callers holding parsed
-   * `--input` JSON or a manifest's `input` pass it through unchanged.
-   */
   readonly input?: Readonly<Record<string, unknown>>;
-  /** The App's name, resolved against the resources the server serves. Ignored when `resourceUri` is given. */
   readonly name?: string;
-  /** A known `ui://` resource URI (a manifest's); still verified against the live server. */
   readonly resourceUri?: string;
   readonly server: string;
-  /** The opening tool; defaults to the only tool declaring the App's `_meta.ui.resourceUri`. */
   readonly tool?: string;
 }
 
@@ -58,14 +34,12 @@ export interface AppSelection {
   readonly tool: McpAppToolDefinition;
 }
 
-/** A detached, canonical JSON object, or a `TypeError` naming `label`; the bound of every tool argument record a host sends. */
 export const requireJsonObject = (value: unknown, label: string): Readonly<Record<string, McpAppJsonValue>> => {
   const snapshot = canonicalMcpAppJson(value, label);
   if (!isRecord(snapshot)) throw new TypeError(`${label} must be a JSON object.`);
-  return snapshot as Readonly<Record<string, McpAppJsonValue>>;
+  return snapshot;
 };
 
-/** Splits `<server>/<app>` or `<server>/ui://...` into its server and App parts, rejecting anything else. */
 export const parseAppSelector = (value: string): AppSelector => {
   const trimmed = value.trim();
   if (trimmed.length === 0) throw new Error('MCP App must be named as <server>/<app> or a ui:// resource URI.');
@@ -80,7 +54,6 @@ export const parseAppSelector = (value: string): AppSelector => {
   return Object.freeze({ name: rest, server });
 };
 
-/** The App name a `ui://` resource URI spells: its last path segment without an `.html` suffix. */
 export const appNameOf = (resourceUri: string): string | undefined => {
   try {
     const parsed = new URL(resourceUri);

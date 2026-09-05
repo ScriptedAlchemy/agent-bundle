@@ -354,18 +354,12 @@ export interface RunGeneratedCliOptions {
    */
   readonly terminal?: AgentTerminal;
   readonly version: string;
-  /**
-   * The framework-owned `web` command (#564), present when the plugin
-   * exposes an MCP App. `<plugin> web ...` reaches `run` with the arguments
-   * after `web` before the authored command tree is consulted, and the root
-   * help lists it; it is not a route, so the compiled tree never carries it.
-   */
+  /** Framework-owned command dispatched before authored routes (#564). */
   readonly web?: GeneratedCliWebCommand;
   readonly writeErr?: (text: string) => void;
   readonly writeOut?: (text: string) => void;
 }
 
-/** What the shell hands the `web` command: the executable's name for its usage text and the shell's own streams and signal. */
 export interface GeneratedCliWebContext {
   readonly name: string;
   readonly signal: AbortSignal;
@@ -374,11 +368,9 @@ export interface GeneratedCliWebContext {
 }
 
 export interface GeneratedCliWebCommand {
-  /** Runs `web` with the arguments after it and returns the exit code; it reports its own diagnostics. */
   readonly run: (argv: readonly string[], context: GeneratedCliWebContext) => Promise<number>;
 }
 
-/** The root-help row of the framework-owned `web` command. */
 const webCommandRow: readonly [string, string] = ['web', "Open one of the plugin's MCP Apps in a browser."];
 
 interface CommandTreeNode {
@@ -509,7 +501,6 @@ const treeHelp = (
     rows.push([label, child.command?.description ?? '']);
   }
   if (web && node.path.length === 0) {
-    // A top-level command like the authored ones, listed in the same order.
     const at = rows.findIndex(([label]) => label.localeCompare(webCommandRow[0]) > 0);
     rows.splice(at === -1 ? rows.length : at, 0, webCommandRow);
   }

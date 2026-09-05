@@ -41,7 +41,6 @@ import {
 
 const devWebHostTarget = 'portable';
 const manifestFileName = 'agent-bundle.manifest.json';
-/** Opening calls retained for page binding; each `/web` page load adds one, so the oldest are evicted past this bound. */
 const maxRetainedOpeningCalls = 64;
 
 interface WebHostEpochReference {
@@ -93,7 +92,7 @@ const jsonInput = (
 ): Readonly<Record<string, McpAppJsonValue>> => {
   const input = canonicalMcpAppJson(value ?? {}, 'MCP App opening input');
   if (!isRecord(input)) throw new TypeError('MCP App opening input must be a JSON object.');
-  return input as Readonly<Record<string, McpAppJsonValue>>;
+  return input;
 };
 
 const selectionSource = (session: McpSession): AppSelectionSource => Object.freeze({

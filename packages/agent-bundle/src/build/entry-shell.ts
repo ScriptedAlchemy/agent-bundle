@@ -161,10 +161,8 @@ export const cliEntryRuntimeSpecifier = 'agent-bundle/cli-entry';
  */
 export const cliEntryRuntimePath = (): string => runtimeModulePath('cli-entry');
 
-/** The framework-owned runtime behind an artifact CLI's generated `web` command. */
 export const webHostRuntimeSpecifier = 'agent-bundle/web-host';
 
-/** The on-disk `agent-bundle/web-host` module, aliased so generated bins remain self-contained. */
 export const webHostRuntimePath = (): string => runtimeModulePath('web-host');
 
 export const installEntryRuntimeSpecifier = 'agent-bundle/install-entry';
@@ -206,7 +204,6 @@ export interface GeneratedCliBinEntryOptions {
   readonly state?: NormalizedStateDefinition;
   /** Durable-state anchor fallback; defaults to `cwd` (the npm package bin). */
   readonly stateFallback?: GeneratedStateFallback;
-  /** Framework-owned `web` command locations relative to this generated executable. */
   readonly web?: {
     readonly manifestRelativeUrl: string;
     readonly pluginRootRelativeUrl: string;
@@ -392,10 +389,7 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
   const providers = orderedProviders(options.providers ?? []);
   const plainIndent = options.state === undefined ? '  ' : '    ';
   const stateFallback = options.stateFallback ?? 'cwd';
-  // A bin that compiles no command and mounts no state (a `web`-only plugin,
-  // #564) never opens a request scope, so it does not import
-  // `@agent-bundle/runtime`: that optional peer is owed only by projects with
-  // route modules, and the artifact-resident host must build without it.
+  // Web-only bins must not acquire the optional route runtime (#564).
   const runtimeBacked = commandRoutes.length > 0 || options.state !== undefined;
   return [
     // The artifact-hosted executable is part of an installed pack, so it
@@ -423,9 +417,7 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     ...providerImports(providers),
     '',
     ...(runtimeBacked ? [pluginRootDeclaration(stateFallback, options.web?.pluginRootRelativeUrl)] : []),
-    // The `web` command hosts the artifact this module ships in: its manifest
-    // is read beside `bin/`, so the root the MCP executable launches from is
-    // that same directory, whatever `AGENT_BUNDLE_PLUGIN_ROOT` names.
+    // Launch from the artifact carrying the manifest, not an environment override.
     ...(options.web === undefined
       ? []
       : [`const artifactRoot = ${pluginRootFallbackExpression(stateFallback, options.web.pluginRootRelativeUrl)};`]),
@@ -453,8 +445,6 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     // generated request scope (#313, #459): once per request, in deterministic
     // key order, fail-closed, as the typed Agent request's own resolver.
     ...(runtimeBacked ? [] : [
-      // Nothing compiles into `routes`, so the shell's usage error answers
-      // every authored-command path before `execute` could be reached.
       "const execute = async (command) => { throw new TypeError(`This plugin compiles no CLI command (${command.path.join(' ')}).`); };",
     ]),
     ...(runtimeBacked ? [

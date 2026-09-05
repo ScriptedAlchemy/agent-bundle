@@ -9,53 +9,28 @@ import { afterAll, beforeAll, expect, it } from '@rstest/core';
 import { descendantProcessIds } from '../../workbench/tests/support/packed-release-harness.ts';
 import { formatServeAppReadyLine, parseServeAppReadyLine } from '../src/serve-app/command-contract.ts';
 import { removeProjectSource } from '../src/test/packed.ts';
+import { WEB_HOST_SEED_ELEMENT_ID, type WebHostPageSeed } from '../src/web-host/browser/seed.ts';
+import { WEB_HOST_TOKEN_HEADER } from '../src/web-host/page.ts';
 import { awaitStdoutLine, connectionRefused, isProcessGone, killAll, runBin, type BinRun } from './support/bin-process.ts';
 import { eventuallyPasses, within } from './support/eventually.ts';
 import { cachedNpmInstallArguments, installedEnvironment, sharedPackedTarball } from './support/shared-pack.ts';
 import { timeScale } from './support/time-scale.ts';
-
-/**
- * The `<plugin> web` packed proof (#564): a plugin exposes its MCP App through
- * `web.apps`, and the *installed* framework builds a composite root whose
- * `bin/<plugin>.mjs` carries the framework-owned `web` command — the browser
- * host, its page script, and the stdio session to the packed MCP server —
- * beside the author's own routed command, with nothing loaded from outside
- * the artifact.
- *
- * One tarball set (the run-level shared pack), one scratch consumer copied
- * from `fixtures/web-surface`, one `agent-bundle build` with the installed
- * CLI, then the project source is removed and verified absent
- * (`packed-deleted-source`) before the generated bin runs as a separate
- * operating-system process: the `--json` ready document and the human ready
- * line, the served page (seed element, CSP, token-gated routes), teardown of
- * the MCP server child on SIGINT/SIGTERM with the envelope's exit codes, the
- * `--help` listing shared with the authored command, and the fail-closed
- * exits (no manifest, unknown App, unknown `--allow`).
- */
 
 const execFile = promisify(executeFile);
 const fixtureRoot = resolve(import.meta.dirname, '../fixtures/web-surface');
 const pluginName = 'web-surface-fixture';
 const app = 'status/status';
 const resourceUri = 'ui://web-surface-fixture/status.html';
-/** The App's opening tool: the fixture configures none, so the one tool declaring its `_meta.ui.resourceUri` is resolved on the live server. */
+// Fixture configures no tool; the live server resolves the one declaring this App.
 const tool = 'status';
-/** `WEB_HOST_SEED_ELEMENT_ID` (web-host/browser/seed.ts): the `<script type="application/json">` the host page reads its seed from. */
-const seedElementId = 'agent-bundle-web-host-seed';
-/** `WEB_HOST_TOKEN_HEADER` (web-host/page.ts): the header the standalone host page presents on `/api/mcp/...`. */
-const tokenHeader = 'x-agent-bundle-web-host';
-/** A live framework import surviving in a generated executable: `from "agent-bundle/..."` or `import("agent-bundle/...")`. */
 const agentBundleImport = /(?:\bfrom\s*|\bimport\s*\(\s*)['"]agent-bundle(?:\/[^'"]*)?['"]/u;
-/** A live Effect import surviving in a generated executable: the web host is plain Node and never carries the compiler's runtime. */
+// The web host is plain Node and must not carry the compiler's Effect runtime.
 const effectImport = /(?:\bfrom\s*|\bimport\s*\(\s*)['"]effect(?:\/[^'"]*)?['"]/u;
-const seedElementPattern = new RegExp(`<script\\b(?=[^>]*\\btype="application/json")(?=[^>]*\\bid="${seedElementId}")[^>]*>([\\s\\S]*?)</script>`, 'u');
-/** Spawning the packed MCP server, listing its tools, making the opening call, and opening the sandbox proxy. */
+const seedElementPattern = new RegExp(`<script\\b(?=[^>]*\\btype="application/json")(?=[^>]*\\bid="${WEB_HOST_SEED_ELEMENT_ID}")[^>]*>([\\s\\S]*?)</script>`, 'u');
 const startupBudget = 60_000 * timeScale;
-/** The envelope's signal exit lands within 5 s (scaled for shared machines). */
 const exitBudget = 5_000 * timeScale;
 const teardownBudget = { attempts: 50 * timeScale, delayMs: 100 } as const;
 
-/** The one stdout line `<plugin> web --json` prints (web-host/command.ts): these keys, in this (sorted) order. */
 interface WebReadyDocument {
   readonly app: string;
   readonly port: number;
@@ -67,37 +42,22 @@ interface WebReadyDocument {
 }
 const webReadyKeys: readonly (keyof WebReadyDocument)[] = ['app', 'port', 'resourceUri', 'sandboxOrigin', 'server', 'tool', 'url'];
 
-/** `WebHostPageSeed` (web-host/browser/seed.ts), as embedded in the served document. */
-interface WebHostSeed {
-  readonly autoApprove: readonly string[];
-  readonly input: unknown;
-  readonly previewProfile: string;
-  readonly result: unknown;
-  readonly sessionId: string;
-  readonly title: string;
-  readonly token: string;
-  readonly tokenHeader: string;
-  readonly toolName: string;
-}
-
 let consumer = '';
 let project = '';
 let artifact = '';
 let bin = '';
-/** Every bin this file spawned and every descendant it observed, killed on teardown if still alive. */
 const spawned = new Set<ChildProcess>();
 const observedProcessIds = new Set<number>();
 
 const spawnBin = (executable: string, args: readonly string[], cwd = project): BinRun =>
   runBin(executable, args, { cwd, env: installedEnvironment(), track: spawned });
 
-const seedOf = (html: string): WebHostSeed => {
+const seedOf = (html: string): WebHostPageSeed => {
   const match = seedElementPattern.exec(html);
-  if (match?.[1] === undefined) throw new Error(`The served page carries no #${seedElementId} element:\n${html}`);
-  return JSON.parse(match[1]) as WebHostSeed;
+  if (match?.[1] === undefined) throw new Error(`The served page carries no #${WEB_HOST_SEED_ELEMENT_ID} element:\n${html}`);
+  return JSON.parse(match[1]) as WebHostPageSeed;
 };
 
-/** Polls (≤5 s, scaled) until every listed URL refuses connections and every listed process is gone. */
 const expectTornDown = async (urls: readonly string[], processIds: readonly number[]): Promise<void> => {
   await eventuallyPasses(async () => {
     for (const processId of processIds) expect(isProcessGone(processId), `process ${String(processId)} is still alive`).toBe(true);
@@ -105,7 +65,6 @@ const expectTornDown = async (urls: readonly string[], processIds: readonly numb
   }, teardownBudget);
 };
 
-/** Records the MCP server (and anything else) the bin spawned, so teardown can be asserted and a failure cannot leak them. */
 const observeDescendants = async (run: BinRun): Promise<readonly number[]> => {
   const descendants = await descendantProcessIds(run.child.pid!);
   for (const processId of descendants) observedProcessIds.add(processId);
@@ -180,14 +139,13 @@ it('builds the exposed App into the composite root: a manifest web section and o
   expect(source).not.toMatch(agentBundleImport);
   expect(source).not.toMatch(effectImport);
   expect(source).toContain('Ctrl-C stops the server');
-  expect(source).toContain(seedElementId);
+  expect(source).toContain(WEB_HOST_SEED_ELEMENT_ID);
 });
 
 it('serves the App from `web --json --no-open` as a real process out of the deleted-source consumer, gates its routes by token, and tears down on SIGINT', { timeout: 120_000 }, async () => {
   const run = spawnBin(bin, ['web', '--no-open', '--json']);
   const line = await awaitStdoutLine(run, (candidate) => candidate.startsWith('{'), startupBudget);
   const ready = JSON.parse(line) as WebReadyDocument;
-  // One JSON line, keys sorted, nothing else on stdout while serving.
   expect(Object.keys(ready)).toEqual(webReadyKeys);
   expect(JSON.stringify(ready)).toBe(line);
   expect(ready).toEqual({
@@ -202,8 +160,6 @@ it('serves the App from `web --json --no-open` as a real process out of the dele
   expect(ready.sandboxOrigin).not.toBe(new URL(ready.url).origin);
   expect(run.stdout()).toBe(`${line}\n`);
 
-  // The page: the seed element the page script reads, framed by no one
-  // (`frame-ancestors 'none'`), framing only the sandbox origin.
   const page = await fetch(ready.url);
   expect(page.status).toBe(200);
   expect(page.headers.get('content-type')).toMatch(/^text\/html/u);
@@ -218,14 +174,12 @@ it('serves the App from `web --json --no-open` as a real process out of the dele
     input: {},
     previewProfile: 'portable',
     result: { structuredContent: { status: 'healthy' } },
-    tokenHeader,
+    tokenHeader: WEB_HOST_TOKEN_HEADER,
     toolName: tool,
   });
   expect(seed.token.length).toBeGreaterThan(0);
   expect(seed.sessionId.length).toBeGreaterThan(0);
 
-  // The authenticated routes refuse a request that presents no token, even
-  // one that names the seeded session from the host's own origin.
   const anonymous = await fetch(new URL(`/api/mcp/sessions/${encodeURIComponent(seed.sessionId)}/apps`, ready.url), {
     body: '{}',
     headers: { 'content-type': 'application/json', origin: new URL(ready.url).origin },
@@ -233,8 +187,6 @@ it('serves the App from `web --json --no-open` as a real process out of the dele
   });
   expect(anonymous.status).toBe(403);
 
-  // The packed MCP server runs under the bin; SIGINT reaches the envelope
-  // (exit 130), which closes the host, the sandbox proxy, and the session.
   const descendants = await observeDescendants(run);
   expect(descendants.length).toBeGreaterThanOrEqual(1);
   run.child.kill('SIGINT');
@@ -294,16 +246,12 @@ it('fails closed: exit 1 without a manifest beside the bin, exit 2 for an App we
   expect(missing.stdout()).toBe('');
   expect(missing.stderr()).toContain('agent-bundle.manifest.json');
 
-  // A selector the manifest's `web` section does not expose is a usage error
-  // that lists what is exposed.
   const unknownApp = spawnBin(bin, ['web', 'nope/nope', '--no-open']);
   expect(await within(unknownApp.exit, 30_000 * timeScale), unknownApp.stderr()).toEqual({ code: 2, signal: null });
   expect(unknownApp.stdout()).toBe('');
   expect(unknownApp.stderr()).toContain('nope/nope');
   expect(unknownApp.stderr()).toContain(app);
 
-  // `--allow` accepts the serve-app vocabulary only (command-contract.ts
-  // `serveAppAllowCapabilities`); browser permissions stay interactive.
   const unknownAllow = spawnBin(bin, ['web', '--allow', 'camera', '--no-open']);
   expect(await within(unknownAllow.exit, 30_000 * timeScale), unknownAllow.stderr()).toEqual({ code: 2, signal: null });
   expect(unknownAllow.stdout()).toBe('');

@@ -33,22 +33,16 @@ interface ConsentDecision {
   readonly preview?: Readonly<{ readonly frame?: McpAppRelayFrame }>;
 }
 
-const element = <ElementType extends HTMLElement>(id: string): ElementType => {
-  const candidate = document.getElementById(id);
-  if (candidate === null) throw new Error(`MCP App host element #${id} is unavailable.`);
-  return candidate as ElementType;
-};
-
-const seedElement = element<HTMLElement>(WEB_HOST_SEED_ELEMENT_ID);
-const seed = JSON.parse(seedElement.textContent ?? '') as WebHostPageSeed;
-const status = element<HTMLElement>('status');
-const frameHost = element<HTMLElement>('frame-host');
-const consentPanel = element<HTMLElement>('consent');
-const consentList = element<HTMLOListElement>('consent-list');
-const fallbackPanel = element<HTMLElement>('fallback');
-const fallbackReason = element<HTMLElement>('fallback-reason');
-const fallbackInput = element<HTMLElement>('fallback-input');
-const fallbackResult = element<HTMLElement>('fallback-result');
+const seedElement = document.getElementById(WEB_HOST_SEED_ELEMENT_ID)!;
+const seed: WebHostPageSeed = JSON.parse(seedElement.textContent!);
+const status = document.getElementById('status')!;
+const frameHost = document.getElementById('frame-host')!;
+const consentPanel = document.getElementById('consent')!;
+const consentList = document.querySelector<HTMLOListElement>('#consent-list')!;
+const fallbackPanel = document.getElementById('fallback')!;
+const fallbackReason = document.getElementById('fallback-reason')!;
+const fallbackInput = document.getElementById('fallback-input')!;
+const fallbackResult = document.getElementById('fallback-result')!;
 
 const setStatus = (text: string, tone = 'info'): void => {
   status.textContent = text;

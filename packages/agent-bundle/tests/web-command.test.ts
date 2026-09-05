@@ -14,14 +14,6 @@ import type { AppSelection, AppSelectionSource, OpenAppRequest } from '../src/we
 import type { StdioAppSession, StdioLaunch } from '../src/web-host/session.ts';
 import { deferred, eventually } from './support/eventually.ts';
 
-/**
- * `<plugin> web` (#564) as a command: its argv grammar, how it reads the
- * manifest's `web` section and picks the App, what it prints once the host
- * listens, and how it ends — all against fakes of the session, selection,
- * and host modules, so nothing here spawns a server or binds a socket. The
- * real chain runs in the e2e suite over a built artifact.
- */
-
 const roots: string[] = [];
 
 afterEach(async () => {
@@ -125,7 +117,6 @@ interface RuntimeOptions {
   readonly url?: string;
 }
 
-/** A runtime whose modules record their calls and answer from `options`. */
 const recorded = (options: RuntimeOptions = {}): Recorded => {
   const fake = options.session ?? fakeSession();
   const launches: ResolveWebLaunchOptions[] = [];
