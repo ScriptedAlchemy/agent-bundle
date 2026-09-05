@@ -92,6 +92,8 @@ export type {
   CompiledRouteKind,
   CompiledServerMode,
   CompiledServerSurface,
+  RouteContract,
+  RouteContractOrigin,
   RouteProvenance,
 } from './routes/types.ts';
 export type { BuildResult } from './build/build.ts';

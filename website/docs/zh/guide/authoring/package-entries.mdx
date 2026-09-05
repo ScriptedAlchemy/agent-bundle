@@ -141,6 +141,65 @@ Run 'curator doctor --help' for usage.
 
 退出方式：`bin: false`、`routes.cli: 'conventional'`，或给某一段路径加 `_` 前缀。
 
+### 在 MCP 与 CLI 之间共享同一份 schema
+
+无论 `inputSchema` 声明在哪里，argv 语法都会从中投影。暴露同一操作的 CLI 命令与 MCP 工具会绑定
+同一个 schema 模块，而不是各自携带一份副本：
+
+```ts
+// src/lib/protocol-schemas.ts
+import { z } from 'zod';
+
+// `export const requestStatuses = ['queued', …] as const` in ../daemon/protocol.ts
+import { requestStatuses } from '../daemon/protocol.js';
+
+const requestStatusSchema = z.enum(requestStatuses);
+
+export const statusInputSchema = z.object({
+  laneKey: z.string().min(1).optional(),
+  limit: z.number().int().min(1).max(500).optional(),
+  statuses: z.array(requestStatusSchema).max(8).optional(),
+  tickets: z.array(z.string().min(1)).max(100).optional(),
+}).strict();
+export const statusResultSchema = z.object({ /* ... */ }).strict();
+```
+
+```ts
+// src/cli/status.tsx
+import { statusInputSchema, statusResultSchema } from '../lib/protocol-schemas.js';
+
+export const inputSchema = statusInputSchema;
+export const resultSchema = statusResultSchema;
+```
+
+工具路由（`src/mcp/hauler/tools/hauler_status.tsx`）从
+`'../../../lib/protocol-schemas.js'` 导入，并导出同样两行。编译器不会执行任何模块，而是在声明该
+schema 的模块中解析 zod 表达式，所用的有界语法与内联 schema 相同：
+
+- 引用可以是整个 `inputSchema` initializer、属性 initializer、方法链的根
+  （`requestStatusSchema.optional()`），也可以是 `z.array(...)`、`z.enum(...)`（由字符串字面量组成的
+  `as const` 数组）、`z.object(...)` / `z.strictObject(...)`（对象字面量）或 `.default(...)`
+  （静态字面量）的参数。
+- 它可以解析到同一模块顶层的 `const`（无论是否导出），也可以解析到通过**相对** specifier 导入且位于
+  项目内部的模块所导出的 `export const`（`.js` specifier 会映射到对应的 `.ts`/`.tsx` 源码）。
+  别名链（`export const a = b`）会被跟随到任意深度，并记录每个访问过的 binding，因此循环会被检测出来，
+  而不会重复遍历。
+- 裸包 specifier、项目外部或缺失的模块、没有对应名称 `export const` 的目标模块、`let`/`var`、
+  解构、函数、类、默认导入与命名空间导入 binding，以及动态 initializer（裸调用、函数、带替换项的
+  template），都是解析器不会越过的边界。
+- 已解析 schema 内部的语法违规仍是 `AB4814`，其位置会带上声明模块。无法跟随的引用是 `AB4838`，
+  消息会打印引用链（`inputSchema -> statusInputSchema (src/lib/protocol-schemas.ts) ->
+  requestStatusSchema -> requestStatuses`）以及阻止解析器继续的边界；循环链是 `AB4839`，消息会打印该循环。
+- 只有 CLI 路由会触发 `AB4838`/`AB4839`，因为只有这里静态语法不可或缺。解析器无法跟随 schema 的
+  MCP 路由仍会像 schema 不符合内联语法时一样正常工作：生成的服务器会从真实的 zod 对象派生其
+  JSON Schema。
+- `resultSchema` 可以用同样方式导入。框架会静态检查它是否存在，其类型经由 TypeScript 流转，运行时则
+  使用真实的 zod 对象进行校验。
+
+随后，两条路由都会绑定同一个规范的
+[路由契约](./index.mdx#路由契约application-ir)；argv 语法、静态 MCP `inputSchema`、生成的路由类型、
+Workbench 与 `agent-bundle inspect --routes` 读取的正是它。
+
 ### 宿主产物中的路由式 CLI
 
 包 bin 只能到达安装了 npm 包的用户，而 hook、Skill 与脚本是随宿主产物一起交付的。因此构建还会把同一张
