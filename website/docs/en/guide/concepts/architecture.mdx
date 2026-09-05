@@ -351,9 +351,10 @@ document through the CLI output contract. The Workbench inspects it via
 `packages/workbench/src/runtime/agent-document-client.ts`. Raw
 `CallToolResult` is an interop boundary, not the authoring model.
 
-Context values stay `available` / `unavailable` / observed
-(`@agent-bundle/runtime`). The kernel does not invent a host or session
-identity the host did not supply.
+Context values are `Observed<T>` (`@agent-bundle/runtime`): `state` is
+`available` (with `source` `native` | `receipt` | `derived`) or
+`unavailable` (with a `reason`). The kernel does not invent a host or
+session identity the host did not supply.
 
 ## `agent-bundle.manifest.json` today
 
@@ -410,7 +411,7 @@ Production readers call `parseArtifactManifest` or take an already-parsed
 | `eval/artifact.ts` | `files[]`, `targets[]`, `runtime` | `evalTargetDigests`: one digest per selected host over the **whole** file table (same bytes, distinct identity) |
 | `dev/artifacts/artifact-inspection-service.ts` | `files[]`, `project`, `targets[]` | Workbench artifact inspector: rebuilds one tree from `files[]` and labels it once per selected host |
 | `dev/artifacts/artifact-script-catalog.ts` | `files[]`, `targets[]` | Browser-selectable scripts. Each selected host that lays out `scripts/` gets a catalog row pointing at the **same** root file |
-| `src/index.ts` | re-exports the types and `parse` / `serialize` / `assemble` | Public API |
+| `index.ts` | re-exports the types and `parse` / `serialize` / `assemble` | Public API |
 
 `install/install.ts` and `install/doctor.ts` **do not** read
 `agent-bundle.manifest.json`. `resolveBundleRoot` looks for the Claude,

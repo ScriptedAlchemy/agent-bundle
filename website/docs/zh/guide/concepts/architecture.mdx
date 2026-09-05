@@ -311,8 +311,9 @@ prompt 路由则返回经校验的协议结果（来自 `document.value`）。CL
 `packages/workbench/src/runtime/agent-document-client.ts` 检视它。原始的 `CallToolResult`
 是互操作边界，而不是编写模型。
 
-上下文值保持为 `available` / `unavailable` / observed（`@agent-bundle/runtime`）。内核不会
-凭空发明宿主未提供的宿主或会话身份。
+上下文值是 `Observed<T>`（`@agent-bundle/runtime`）：`state` 为 `available`
+（带有 `source`：`native` | `receipt` | `derived`）或 `unavailable`（带有
+`reason`）。内核不会凭空发明宿主未提供的宿主或会话身份。
 
 ## `agent-bundle.manifest.json` 的现状
 
@@ -362,7 +363,7 @@ CLI bin 的文件，只以 `files[]` 中一行的形式出现。
 | `eval/artifact.ts` | `files[]`、`targets[]`、`runtime` | `evalTargetDigests`：对**整张**文件表为每个所选宿主计算一个摘要（相同字节，不同身份） |
 | `dev/artifacts/artifact-inspection-service.ts` | `files[]`、`project`、`targets[]` | Workbench 产物检视器：从 `files[]` 重建一棵树，并为每个所选宿主各标注一次 |
 | `dev/artifacts/artifact-script-catalog.ts` | `files[]`、`targets[]` | 可在浏览器中选择的脚本。每个布局了 `scripts/` 的所选宿主都得到一行目录条目，指向**同一个**根文件 |
-| `src/index.ts` | 重新导出这些类型与 `parse` / `serialize` / `assemble` | 公开 API |
+| `index.ts` | 重新导出这些类型与 `parse` / `serialize` / `assemble` | 公开 API |
 
 `install/install.ts` 与 `install/doctor.ts` **不**读取 `agent-bundle.manifest.json`。
 `resolveBundleRoot` 直接在 `--from` 之下查找 Claude、Codex 或 Cursor 的插件清单
