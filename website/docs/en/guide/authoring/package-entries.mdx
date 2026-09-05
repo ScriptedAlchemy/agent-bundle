@@ -150,6 +150,72 @@ session and rejects the key. See [Render budget](./mcp.mdx#render-budget).
 
 Opt out with `bin: false`, `routes.cli: 'conventional'`, or by prefixing a path segment with `_`.
 
+### Share one schema between MCP and CLI
+
+The argv grammar is projected from `inputSchema` wherever that schema is declared. A CLI command
+and an MCP tool that expose the same operation bind one schema module instead of each carrying a
+copy:
+
+```ts
+// src/lib/protocol-schemas.ts
+import { z } from 'zod';
+
+// `export const requestStatuses = ['queued', …] as const` in ../daemon/protocol.ts
+import { requestStatuses } from '../daemon/protocol.js';
+
+const requestStatusSchema = z.enum(requestStatuses);
+
+export const statusInputSchema = z.object({
+  laneKey: z.string().min(1).optional(),
+  limit: z.number().int().min(1).max(500).optional(),
+  statuses: z.array(requestStatusSchema).max(8).optional(),
+  tickets: z.array(z.string().min(1)).max(100).optional(),
+}).strict();
+export const statusResultSchema = z.object({ /* ... */ }).strict();
+```
+
+```ts
+// src/cli/status.tsx
+import { statusInputSchema, statusResultSchema } from '../lib/protocol-schemas.js';
+
+export const inputSchema = statusInputSchema;
+export const resultSchema = statusResultSchema;
+```
+
+The tool route (`src/mcp/hauler/tools/hauler_status.tsx`) exports the same two lines, importing
+from `'../../../lib/protocol-schemas.js'`. The compiler resolves the reference without executing
+any module and parses the zod expression in the module that declares it, under the same bounded
+grammar as an inline schema:
+
+- A reference may be the whole `inputSchema` initializer, a property initializer, the root of a
+  method chain (`requestStatusSchema.optional()`), or the argument of `z.array(...)`,
+  `z.enum(...)` (an `as const` array of string literals), `z.object(...)` / `z.strictObject(...)`
+  (an object literal), or `.default(...)` (a static literal).
+- It resolves to a top-level `const` of the same module, exported or not, or to the
+  `export const` of a module imported through a **relative** specifier that resolves inside the
+  project (`.js` specifiers map onto their `.ts`/`.tsx` source). Alias chains
+  (`export const a = b`) are followed to any depth, and every visited binding is recorded, so a
+  cycle is detected rather than walked twice.
+- Bare package specifiers, modules outside the project or missing, a target module with no
+  `export const` of that name, `let`/`var`, destructured, function, class, default-import, and
+  namespace-import bindings, and dynamic initializers (a call, a spread, a template with
+  substitutions) are boundaries the resolver does not cross.
+- A grammar violation inside the resolved schema is still `AB4814`, its position qualified by the
+  declaring module. A reference that cannot be followed is `AB4838`, whose message prints the
+  reference chain (`inputSchema -> statusInputSchema (src/lib/protocol-schemas.ts) ->
+  requestStatuses`) and the boundary that stopped the resolver; a cyclic chain is `AB4839`, whose
+  message prints the cycle.
+- Only CLI routes raise `AB4838`/`AB4839`, because only there the static grammar is load-bearing.
+  An MCP route whose schema the resolver cannot follow keeps working exactly as an out-of-grammar
+  inline schema does: the generated server derives its JSON Schema from the real zod object.
+- `resultSchema` may be imported the same way. Its presence is checked statically, its type
+  flows through TypeScript, and the runtime validates with the real zod object.
+
+Both routes then bind one canonical
+[route contract](./index.mdx#route-contracts-application-ir), which is what the argv grammar,
+the static MCP `inputSchema`, the generated route types, the Workbench, and
+`agent-bundle inspect --routes` read.
+
 ### The routed CLI inside host artifacts
 
 The package bin only reaches users who install the npm package, while hooks, Skills, and scripts
