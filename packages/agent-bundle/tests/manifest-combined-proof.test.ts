@@ -110,7 +110,7 @@ describe('the authoritative manifest combined proof', () => {
         '      apps: {',
         "        status: { entry: './views/status.ts', resourceUri: 'ui://manifest-combined-proof/status.html', template: './views/status.html' },",
         '      },',
-        "      env: { COMBINED_STATE: '${agent-bundle:path:plugin-data}/state' },",
+        "      env: { COMBINED_STATE: 'agent-bundle:path:plugin-data/state' },",
         "      targets: ['claude', 'portable'],",
         '    },',
         '    runtime: {',
@@ -268,10 +268,15 @@ describe('the authoritative manifest combined proof', () => {
       apps: [expect.objectContaining({ resourceUri: 'ui://manifest-combined-proof/status.html' })],
       hosts: ['claude', 'portable'],
       kind: 'compiled',
+      launch: {
+        args: [],
+        entry: expect.stringMatching(/^mcp\/.+\.mjs$/),
+        env: { COMBINED_STATE: 'agent-bundle:path:plugin-data/state' },
+      },
       name: 'proof',
       transport: 'stdio',
     });
-    // integrator: assert the compiled server launch block once its lane lands.
+    expect(manifest.files.some((file) => file.path === server?.launch?.entry)).toBe(true);
 
     expect(manifest.web?.apps).toEqual([
       expect.objectContaining({
