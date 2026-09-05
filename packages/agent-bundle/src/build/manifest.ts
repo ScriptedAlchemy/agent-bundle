@@ -19,7 +19,17 @@ import type {
   RouteInputSchema,
   RouteInputSchemaLiteral,
 } from '../routes/types.ts';
-import { parseWebManifest, type WebManifest } from '../web-host/manifest.ts';
+import {
+  parseLaunch,
+  parseWebManifest,
+  type ArtifactManifestLaunch,
+  type ArtifactManifestLaunchArgument,
+  type WebManifest,
+} from '../web-host/manifest.ts';
+
+// The launch record is declared beside the reader bundled into generated
+// executables (`agent-bundle/web-host`), which must not import this module.
+export type { ArtifactManifestLaunch, ArtifactManifestLaunchArgument };
 
 /**
  * The authoritative artifact manifest (`agent-bundle.manifest.json`, issue
@@ -353,22 +363,19 @@ export interface ArtifactManifestMcpApp {
   readonly resourceUri: string;
 }
 
-export interface ArtifactManifestMcpEntry {
-  readonly path: string;
-  readonly worker?: string;
-}
-
 /**
- * One MCP server the artifact declares: `compiled` servers have an `entry`
- * the artifact starts, `command` servers name a host-run command, `remote`
- * servers a URL — both live only in the host MCP documents.
+ * One MCP server the artifact declares: `compiled` servers carry the one
+ * `launch` record the artifact starts them from, `command` servers name a
+ * host-run command, `remote` servers a URL — both live only in the host MCP
+ * documents.
  */
 export interface ArtifactManifestMcpServer {
   readonly apps: readonly ArtifactManifestMcpApp[];
-  readonly entry?: ArtifactManifestMcpEntry;
   readonly hosts: readonly string[];
   readonly id: string;
-  readonly kind: 'command' | 'compiled' | 'remote';
+  readonly kind: 'command' | 'compiled' | 'prebuilt' | 'remote';
+  /** Present exactly for `compiled` servers. */
+  readonly launch?: ArtifactManifestLaunch;
   readonly name: string;
   readonly transport: string;
 }
@@ -1224,26 +1231,17 @@ const parseMcpServers = (value: unknown, hosts: ReadonlySet<string>): readonly A
   const servers = requireArray(value, 'executables.mcpServers').map((candidate, index) => {
     const location = `executables.mcpServers[${index}]`;
     const server = requireRecord(candidate, location);
-    requireExactKeys(server, location, ['apps', 'hosts', 'id', 'kind', 'name', 'transport'], ['entry']);
-    const kind = requireOneOf(server.kind, `${location}.kind`, ['command', 'compiled', 'remote'] as const);
-    if ((kind === 'compiled') !== (server.entry !== undefined)) {
-      fail(`${location}.entry is present exactly for compiled servers.`);
-    }
-    let entry: ArtifactManifestMcpEntry | undefined;
-    if (server.entry !== undefined) {
-      const record = requireRecord(server.entry, `${location}.entry`);
-      requireExactKeys(record, `${location}.entry`, ['path'], ['worker']);
-      entry = {
-        path: requirePath(record.path, `${location}.entry.path`),
-        ...(record.worker === undefined ? {} : { worker: requirePath(record.worker, `${location}.entry.worker`) }),
-      };
+    requireExactKeys(server, location, ['apps', 'hosts', 'id', 'kind', 'name', 'transport'], ['launch']);
+    const kind = requireOneOf(server.kind, `${location}.kind`, ['command', 'compiled', 'prebuilt', 'remote'] as const);
+    if ((kind === 'compiled' || kind === 'prebuilt') !== (server.launch !== undefined)) {
+      fail(`${location}.launch is present exactly for compiled and prebuilt servers.`);
     }
     return {
       apps: parseMcpApps(server.apps, `${location}.apps`),
-      ...(entry === undefined ? {} : { entry }),
       hosts: parseHosts(server.hosts, `${location}.hosts`, hosts),
       id: requireString(server.id, `${location}.id`),
       kind,
+      ...(server.launch === undefined ? {} : { launch: parseLaunch(server.launch, `${location}.launch`) }),
       name: requireString(server.name, `${location}.name`),
       transport: requireString(server.transport, `${location}.transport`),
     } satisfies ArtifactManifestMcpServer;
@@ -1370,12 +1368,11 @@ const parseRuntime = (value: unknown): ArtifactManifestRuntime => {
   return { node };
 };
 
-/** Every root-relative path a manifest section points at, with its location for the failure message. */
+/** Every root-relative file a manifest section points at, with its location for the failure message. */
 const referencedPaths = (manifest: {
   readonly distribution: ArtifactManifestDistribution;
   readonly executables: ArtifactManifestExecutables;
   readonly projections: readonly ArtifactManifestProjection[];
-  readonly web: WebManifest | undefined;
 }): readonly (readonly [string, string])[] => {
   const references: (readonly [string, string])[] = [];
   const reference = (location: string, path: string | undefined): void => {
@@ -1396,8 +1393,8 @@ const referencedPaths = (manifest: {
     reference(`executables.hooks[${hook.host}/${hook.id}].path`, hook.path);
   }
   for (const server of manifest.executables.mcpServers) {
-    reference(`executables.mcpServers[${server.id}].entry.path`, server.entry?.path);
-    reference(`executables.mcpServers[${server.id}].entry.worker`, server.entry?.worker);
+    reference(`executables.mcpServers[${server.id}].launch.entry`, server.launch?.entry);
+    reference(`executables.mcpServers[${server.id}].launch.worker`, server.launch?.worker);
     for (const app of server.apps) {
       reference(`executables.mcpServers[${server.id}].apps[${app.id}].path`, app.path);
     }
@@ -1408,16 +1405,40 @@ const referencedPaths = (manifest: {
   }
   reference('distribution.install.instructions', manifest.distribution.install?.instructions);
   reference('distribution.install.script', manifest.distribution.install?.script);
-  for (const app of manifest.web?.apps ?? []) {
-    reference(`web.apps[${app.app}].entry`, app.entry);
-  }
   return references;
 };
 
-const parseWeb = (value: unknown): WebManifest | undefined => {
+/**
+ * An `artifact` launch argument names a file of the root or a directory under
+ * it (a payload tree the compiler never indexed file by file), never a path
+ * the root does not contain.
+ */
+const requireArtifactArguments = (
+  servers: readonly ArtifactManifestMcpServer[],
+  files: readonly ArtifactManifestFile[],
+  filePaths: ReadonlySet<string>,
+): void => {
+  const inRoot = (path: string): boolean =>
+    filePaths.has(path) || files.some((file) => file.path.startsWith(`${path}/`));
+  for (const server of servers) {
+    for (const [index, argument] of (server.launch?.args ?? []).entries()) {
+      if (argument.kind === 'artifact' && !inRoot(argument.path)) {
+        fail(`executables.mcpServers[${server.id}].launch.args[${index}].path names ${JSON.stringify(argument.path)}, which is not inside the artifact.`);
+      }
+    }
+  }
+};
+
+/** Every exposed App's `server` is a server with the launch record `<plugin> web` starts. */
+const parseWeb = (value: unknown, servers: readonly ArtifactManifestMcpServer[]): WebManifest | undefined => {
   if (value === undefined) return undefined;
   const web = parseWebManifest(value);
-  for (const app of web.apps) requirePath(app.entry, `web.apps[${app.app}].entry`);
+  const launchable = new Set(servers.filter((server) => server.launch !== undefined).map((server) => server.name));
+  for (const app of web.apps) {
+    if (!launchable.has(app.server)) {
+      fail(`web.apps[${app.app}].server names ${JSON.stringify(app.server)}, which is not an MCP server with a launch record.`);
+    }
+  }
   return web;
 };
 
@@ -1582,7 +1603,7 @@ const validateManifest = (value: unknown): ArtifactManifest => {
   if (distribution.channels.includes('npm') !== (compiler.project.packageName !== undefined)) {
     fail('distribution.channels lists "npm" exactly when compiler.project.packageName is present.');
   }
-  const web = parseWeb(manifest.web);
+  const web = parseWeb(manifest.web, executables.mcpServers);
   const filePaths = new Set(files.map((file) => file.path));
   for (const [index, payload] of distribution.payloads.entries()) {
     const prefix = `${payload.name}/`;
@@ -1590,9 +1611,10 @@ const validateManifest = (value: unknown): ArtifactManifest => {
       fail(`distribution.payloads[${index}].name names a directory with no prebuilt manifest file.`);
     }
   }
-  for (const [location, path] of referencedPaths({ distribution, executables, projections, web })) {
+  for (const [location, path] of referencedPaths({ distribution, executables, projections })) {
     if (!filePaths.has(path)) fail(`${location} names ${JSON.stringify(path)}, which is not a manifest file.`);
   }
+  requireArtifactArguments(executables.mcpServers, files, filePaths);
 
   return {
     application,

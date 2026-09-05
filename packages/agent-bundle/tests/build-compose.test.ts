@@ -442,7 +442,7 @@ describe('composite plugin root (#555)', () => {
       readonly run: Promise<number>;
     }> => {
       const { output, result } = await buildFixture(['synthetic'], { registry });
-      const entry = result.build.manifest.executables.mcpServers[0]?.entry?.path;
+      const entry = result.build.manifest.executables.mcpServers[0]?.launch?.entry;
       if (entry === undefined) throw new Error('expected a compiled MCP entry');
       const launches: { args: readonly string[]; command: string; cwd: string }[] = [];
       const child = new EventEmitter() as ChildProcess;

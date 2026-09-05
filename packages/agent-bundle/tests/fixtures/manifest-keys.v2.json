@@ -23,7 +23,12 @@
     "executables.mcpServers[].kind": [
       "command",
       "compiled",
+      "prebuilt",
       "remote"
+    ],
+    "executables.mcpServers[].launch.args[].kind": [
+      "artifact",
+      "literal"
     ],
     "executables.scripts[].mode": [
       "bundle",
@@ -264,12 +269,17 @@
     "executables.mcpServers[].apps[].path",
     "executables.mcpServers[].apps[].prebuilt",
     "executables.mcpServers[].apps[].resourceUri",
-    "executables.mcpServers[].entry",
-    "executables.mcpServers[].entry.path",
-    "executables.mcpServers[].entry.worker",
     "executables.mcpServers[].hosts",
     "executables.mcpServers[].id",
     "executables.mcpServers[].kind",
+    "executables.mcpServers[].launch",
+    "executables.mcpServers[].launch.args",
+    "executables.mcpServers[].launch.args[].kind",
+    "executables.mcpServers[].launch.args[].path",
+    "executables.mcpServers[].launch.args[].value",
+    "executables.mcpServers[].launch.entry",
+    "executables.mcpServers[].launch.env",
+    "executables.mcpServers[].launch.worker",
     "executables.mcpServers[].name",
     "executables.mcpServers[].transport",
     "executables.scripts",
@@ -472,9 +482,6 @@
     "web.apps",
     "web.apps[].allow",
     "web.apps[].app",
-    "web.apps[].args",
-    "web.apps[].entry",
-    "web.apps[].env",
     "web.apps[].input",
     "web.apps[].name",
     "web.apps[].resourceUri",

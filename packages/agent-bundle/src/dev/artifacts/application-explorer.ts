@@ -59,7 +59,7 @@ export interface ApplicationExplorerServer {
   readonly entry?: string;
   readonly hosts: readonly string[];
   readonly id: string;
-  readonly kind: 'command' | 'compiled' | 'remote';
+  readonly kind: 'command' | 'compiled' | 'prebuilt' | 'remote';
   readonly name: string;
   readonly prompts: readonly ApplicationExplorerRoute[];
   readonly resources: readonly ApplicationExplorerRoute[];
@@ -206,7 +206,7 @@ const serversFor = (manifest: ArtifactManifest): ApplicationExplorerServer[] => 
             resourceUri: app.resourceUri,
           }))
           .sort(byId),
-        ...(executable.entry === undefined ? {} : { entry: executable.entry.path }),
+        ...(executable.launch === undefined ? {} : { entry: executable.launch.entry }),
         hosts: [...executable.hosts].sort((left, right) => left.localeCompare(right)),
         id: executable.id,
         kind: executable.kind,

@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from '@rstest/core';
 import { exists } from '../src/core/paths.ts';
 import { pathTokens, pluginRootEnvAnchor } from '../src/core/types.ts';
 import { resolveWebLaunch, WebLaunchError, webPluginDataDirectory } from '../src/web-host/launch.ts';
-import type { WebManifestApp } from '../src/web-host/manifest.ts';
+import type { ArtifactManifestLaunch, WebManifestApp } from '../src/web-host/manifest.ts';
 
 const roots: string[] = [];
 
@@ -16,6 +16,7 @@ const artifactRoot = async (): Promise<string> => {
   roots.push(root);
   await mkdir(join(root, 'mcp'), { recursive: true });
   await writeFile(join(root, 'mcp', 'mcp-status-073c1634.mjs'), 'export {};\n');
+  await writeFile(join(root, 'status.json'), '{}\n');
   return root;
 };
 
@@ -32,22 +33,25 @@ afterEach(async () => {
   }));
 });
 
-const app = (overrides: Partial<WebManifestApp> = {}): WebManifestApp => ({
+const app: WebManifestApp = {
   allow: [],
   app: 'status/status',
-  args: [],
-  entry: 'mcp/mcp-status-073c1634.mjs',
-  env: {},
   name: 'status',
   resourceUri: 'ui://status/status.html',
   server: 'status',
+};
+
+const launchRecord = (overrides: Partial<ArtifactManifestLaunch> = {}): ArtifactManifestLaunch => ({
+  args: [],
+  entry: 'mcp/mcp-status-073c1634.mjs',
+  env: {},
   ...overrides,
 });
 
 describe('resolveWebLaunch', () => {
   it('runs the artifact-relative entry under this Node from the plugin root', async () => {
     const root = await artifactRoot();
-    const launch = await resolveWebLaunch({ app: app(), env: {}, pluginRoot: root });
+    const launch = await resolveWebLaunch({ app, env: {}, launch: launchRecord(), pluginRoot: root });
     expect(launch.command).toBe(process.execPath);
     expect(launch.args).toEqual([join(root, 'mcp', 'mcp-status-073c1634.mjs')]);
     expect(launch.cwd).toBe(root);
@@ -55,19 +59,50 @@ describe('resolveWebLaunch', () => {
     expect(Object.isFrozen(launch.env)).toBe(true);
   });
 
-  it('passes the server\'s declared arguments after the entry, path tokens expanded', async () => {
+  it('passes the launch arguments after the entry: artifact paths under the root, literals with tokens expanded', async () => {
     const root = await artifactRoot();
+    const home = await homeRoot();
     const launch = await resolveWebLaunch({
-      app: app({ args: ['--config', `${pathTokens.pluginRoot}/status.json`, '--verbose'] }),
+      app,
       env: {},
+      home,
+      launch: launchRecord({
+        args: [
+          { kind: 'literal', value: '--config' },
+          { kind: 'artifact', path: 'status.json' },
+          { kind: 'literal', value: `--cache=${pathTokens.pluginData}/cache` },
+          { kind: 'literal', value: './looks/like/a/path' },
+        ],
+      }),
       pluginRoot: root,
     });
-    expect(launch.args).toEqual([join(root, 'mcp', 'mcp-status-073c1634.mjs'), '--config', join(root, 'status.json'), '--verbose']);
+    expect(launch.args).toEqual([
+      join(root, 'mcp', 'mcp-status-073c1634.mjs'),
+      '--config',
+      join(root, 'status.json'),
+      `--cache=${webPluginDataDirectory(root, 'status', home)}/cache`,
+      './looks/like/a/path',
+    ]);
+  });
+
+  it.each([
+    ['artifact argument', { args: [{ kind: 'artifact', path: '../outside.json' }] }, 'entry-outside-root', '"../outside.json"'],
+    ['artifact argument', { args: [{ kind: 'artifact', path: 'missing.json' }] }, 'entry-missing', join('missing.json')],
+    ['worker', { worker: '../worker.mjs' }, 'entry-outside-root', '"../worker.mjs"'],
+    ['worker', { worker: 'mcp/missing-flight.mjs' }, 'entry-missing', join('mcp', 'missing-flight.mjs')],
+  ] as const)('holds a %s to the same containment as the entry', async (_role, overrides, code, detail) => {
+    const root = await artifactRoot();
+    const failure = await resolveWebLaunch({ app, env: {}, launch: launchRecord(overrides), pluginRoot: root })
+      .then(() => undefined, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(WebLaunchError);
+    if (!(failure instanceof WebLaunchError)) throw failure;
+    expect(failure.code).toBe(code);
+    expect(failure.message).toContain(detail);
   });
 
   it('normalizes the plugin root before anchoring anything on it', async () => {
     const root = await artifactRoot();
-    const launch = await resolveWebLaunch({ app: app(), env: {}, pluginRoot: `${root}/mcp/..` });
+    const launch = await resolveWebLaunch({ app, env: {}, launch: launchRecord(), pluginRoot: `${root}/mcp/..` });
     expect(launch.cwd).toBe(root);
     expect(launch.args).toEqual([join(root, 'mcp', 'mcp-status-073c1634.mjs')]);
     expect(launch.env[pluginRootEnvAnchor]).toBe(root);
@@ -82,7 +117,8 @@ describe('resolveWebLaunch', () => {
       [''],
     ])('refuses entry %j, which cannot be a file of this artifact', async (entry) => {
       const root = await artifactRoot();
-      const failure = await resolveWebLaunch({ app: app({ entry }), env: {}, pluginRoot: root }).then(() => undefined, (error: unknown) => error);
+      const failure = await resolveWebLaunch({ app, env: {}, launch: launchRecord({ entry }), pluginRoot: root })
+        .then(() => undefined, (error: unknown) => error);
       expect(failure).toBeInstanceOf(WebLaunchError);
       if (!(failure instanceof WebLaunchError)) throw failure;
       expect(failure.code).toBe('entry-outside-root');
@@ -93,8 +129,12 @@ describe('resolveWebLaunch', () => {
 
     it('refuses an entry the artifact does not contain instead of letting the spawn fail', async () => {
       const root = await artifactRoot();
-      const failure = await resolveWebLaunch({ app: app({ entry: 'mcp/mcp-status-deadbeef.mjs' }), env: {}, pluginRoot: root })
-        .then(() => undefined, (error: unknown) => error);
+      const failure = await resolveWebLaunch({
+        app,
+        env: {},
+        launch: launchRecord({ entry: 'mcp/mcp-status-deadbeef.mjs' }),
+        pluginRoot: root,
+      }).then(() => undefined, (error: unknown) => error);
       expect(failure).toBeInstanceOf(WebLaunchError);
       if (!(failure instanceof WebLaunchError)) throw failure;
       expect(failure.code).toBe('entry-missing');
@@ -108,7 +148,10 @@ describe('resolveWebLaunch', () => {
       const root = await artifactRoot();
       const home = await homeRoot();
       const launch = await resolveWebLaunch({
-        app: app({
+        app,
+        env: {},
+        home,
+        launch: launchRecord({
           env: {
             CACHE: `${pathTokens.pluginData}/cache`,
             HOME_DIR: pathTokens.pluginRoot,
@@ -116,8 +159,6 @@ describe('resolveWebLaunch', () => {
             PLAIN: 'kept as is',
           },
         }),
-        env: {},
-        home,
         pluginRoot: root,
       });
       const data = webPluginDataDirectory(root, 'status', home);
@@ -143,7 +184,7 @@ describe('resolveWebLaunch', () => {
     it('creates no data directory when no declared value names plugin-data', async () => {
       const root = await artifactRoot();
       const home = await homeRoot();
-      await resolveWebLaunch({ app: app({ env: { HOME_DIR: pathTokens.pluginRoot } }), env: {}, home, pluginRoot: root });
+      await resolveWebLaunch({ app, env: {}, home, launch: launchRecord({ env: { HOME_DIR: pathTokens.pluginRoot } }), pluginRoot: root });
       expect(await exists(join(root, '.agent-bundle'))).toBe(false);
       expect(await exists(join(home, '.agent-bundle'))).toBe(false);
     });
@@ -162,15 +203,16 @@ describe('resolveWebLaunch', () => {
       await chmod(root, 0o555);
       try {
         const launch = await resolveWebLaunch({
-          app: app({ env: { CACHE: `${pathTokens.pluginData}/cache` } }),
+          app,
           env: {},
           home,
+          launch: launchRecord({ env: { CACHE: `${pathTokens.pluginData}/cache` } }),
           pluginRoot: root,
         });
         const data = webPluginDataDirectory(root, 'status', home);
         expect(launch.env['CACHE']).toBe(`${data}/cache`);
         expect((await stat(data)).isDirectory()).toBe(true);
-        expect(await readdir(root)).toEqual(['mcp']);
+        expect(await readdir(root)).toEqual(['mcp', 'status.json']);
       } finally {
         await chmod(root, 0o755);
       }
@@ -181,8 +223,9 @@ describe('resolveWebLaunch', () => {
     it('inherits string values only, lets declared entries win, and injects the plugin-root anchor', async () => {
       const root = await artifactRoot();
       const launch = await resolveWebLaunch({
-        app: app({ env: { SHARED: 'declared', STATUS_TOKEN: 'from-manifest' } }),
+        app,
         env: { INHERITED: 'yes', SHARED: 'inherited', UNSET: undefined },
+        launch: launchRecord({ env: { SHARED: 'declared', STATUS_TOKEN: 'from-manifest' } }),
         pluginRoot: root,
       });
       expect(launch.env).toEqual({
@@ -197,8 +240,9 @@ describe('resolveWebLaunch', () => {
     it('lets a declared plugin-root anchor win over the injected one, tokens expanded', async () => {
       const root = await artifactRoot();
       const launch = await resolveWebLaunch({
-        app: app({ env: { [pluginRootEnvAnchor]: `${pathTokens.pluginRoot}/nested` } }),
+        app,
         env: { [pluginRootEnvAnchor]: '/somewhere/else' },
+        launch: launchRecord({ env: { [pluginRootEnvAnchor]: `${pathTokens.pluginRoot}/nested` } }),
         pluginRoot: root,
       });
       expect(launch.env[pluginRootEnvAnchor]).toBe(`${root}/nested`);
@@ -207,8 +251,9 @@ describe('resolveWebLaunch', () => {
     it('overrides an exported variable with the declared one, as a host launch does', async () => {
       const root = await artifactRoot();
       const launch = await resolveWebLaunch({
-        app: app({ env: { [pluginRootEnvAnchor]: 'declared-root' } }),
+        app,
         env: { [pluginRootEnvAnchor]: 'exported-root' },
+        launch: launchRecord({ env: { [pluginRootEnvAnchor]: 'declared-root' } }),
         pluginRoot: root,
       });
       expect(launch.env[pluginRootEnvAnchor]).toBe('declared-root');

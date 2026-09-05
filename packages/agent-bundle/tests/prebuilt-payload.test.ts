@@ -278,6 +278,12 @@ it('packages prebuilt payloads at stable paths and lowers prebuilt entries throu
     });
     expect(manifest.compiler.project.sourceInputs.some((input) => input.path === 'built/runtime/mcp/server.js')).toBe(true);
     expect(manifest.distribution.payloads.map((payload) => payload.name)).toEqual(['app', 'runtime']);
+    // The prebuilt server carries the same launch record a compiled one does,
+    // sourced from its provenance kind and payload-anchored first argument.
+    expect(manifest.executables.mcpServers.find((server) => server.name === 'timeline')).toMatchObject({
+      kind: 'prebuilt',
+      launch: { args: [], entry: 'runtime/mcp/server.js', env: {} },
+    });
 
     // The published artifact revalidates cleanly from disk alone.
     const revalidated = await validate({ artifact: join(root, 'out'), root });

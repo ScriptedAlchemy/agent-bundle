@@ -1301,24 +1301,78 @@
         ]
       }
     },
-    "mcpEntry": {
+    "launchArgument": {
+      "description": "One launch argument after the entry. An `artifact` argument names a file of the root or a directory under it (parser-enforced); a `literal` is passed through with its `agent-bundle:path:*` tokens expanded by the launcher.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "artifact"
+            },
+            "path": {
+              "$ref": "#/$defs/relativePath"
+            }
+          },
+          "required": [
+            "kind",
+            "path"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "literal"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ]
+        }
+      ]
+    },
+    "launch": {
       "type": "object",
+      "description": "The one launch record of a compiled MCP server: `entry` and `worker` name `files[]` rows (parser-enforced); tokens in `args` and `env` are expanded by the launcher, never by the manifest.",
       "additionalProperties": false,
       "properties": {
-        "path": {
+        "args": {
+          "type": "array",
+          "description": "Arguments after the entry, in order.",
+          "items": {
+            "$ref": "#/$defs/launchArgument"
+          }
+        },
+        "entry": {
           "$ref": "#/$defs/relativePath"
+        },
+        "env": {
+          "type": "object",
+          "description": "Declared environment; values may carry `agent-bundle:path:*` tokens.",
+          "additionalProperties": {
+            "type": "string"
+          }
         },
         "worker": {
           "$ref": "#/$defs/relativePath"
         }
       },
       "required": [
-        "path"
+        "args",
+        "entry",
+        "env"
       ]
     },
     "mcpServer": {
       "type": "object",
-      "description": "`entry` is present exactly for compiled servers.",
+      "description": "`launch` is present exactly for compiled and prebuilt servers.",
       "additionalProperties": false,
       "properties": {
         "apps": {
@@ -1328,9 +1382,6 @@
             "$ref": "#/$defs/mcpApp"
           },
           "uniqueItems": true
-        },
-        "entry": {
-          "$ref": "#/$defs/mcpEntry"
         },
         "hosts": {
           "$ref": "#/$defs/hosts"
@@ -1342,8 +1393,12 @@
           "enum": [
             "command",
             "compiled",
+            "prebuilt",
             "remote"
           ]
+        },
+        "launch": {
+          "$ref": "#/$defs/launch"
         },
         "name": {
           "$ref": "#/$defs/nonEmptyString"
@@ -1363,19 +1418,22 @@
       "if": {
         "properties": {
           "kind": {
-            "const": "compiled"
+            "enum": [
+              "compiled",
+              "prebuilt"
+            ]
           }
         }
       },
       "then": {
         "required": [
-          "entry"
+          "launch"
         ]
       },
       "else": {
         "not": {
           "required": [
-            "entry"
+            "launch"
           ]
         }
       }
@@ -1712,7 +1770,7 @@
     },
     "webApp": {
       "type": "object",
-      "description": "One MCP App exposed to `<plugin> web`: the App, the compiled server entry that serves it, and the launch arguments and environment of that server.",
+      "description": "One MCP App exposed to `<plugin> web`: the App, its opening call, and the configured `server` whose `executables.mcpServers[]` launch record starts it (a compiled server; parser-enforced).",
       "additionalProperties": false,
       "properties": {
         "allow": {
@@ -1729,22 +1787,6 @@
         },
         "app": {
           "$ref": "#/$defs/nonEmptyString"
-        },
-        "args": {
-          "type": "array",
-          "description": "The server's declared arguments after its entry, path tokens unexpanded.",
-          "items": {
-            "type": "string"
-          }
-        },
-        "entry": {
-          "$ref": "#/$defs/relativePath"
-        },
-        "env": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
         },
         "input": {
           "type": "object"
@@ -1765,9 +1807,6 @@
       "required": [
         "allow",
         "app",
-        "args",
-        "entry",
-        "env",
         "name",
         "resourceUri",
         "server"

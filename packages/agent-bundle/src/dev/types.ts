@@ -100,7 +100,7 @@ export interface ArtifactInspectionMcpApp {
 export interface ArtifactInspectionMcpServer {
   readonly apps: readonly ArtifactInspectionMcpApp[];
   readonly entryPaths: readonly string[];
-  readonly kind: 'command' | 'compiled' | 'remote';
+  readonly kind: 'command' | 'compiled' | 'prebuilt' | 'remote';
   readonly manifestPath: string;
   readonly name: string;
   readonly target: string;

@@ -6,7 +6,7 @@ import packageManifest from '../../package.json' with { type: 'json' };
 import type { TargetRegistry } from '../adapters/registry.ts';
 import { deduplicateDiagnostics, DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
 import type { ProjectContext } from '../core/project-context.ts';
-import { pathTokens, type AgentBundleToolsConfig, type NormalizedPlugin } from '../core/types.ts';
+import { pathTokens, type AgentBundleToolsConfig, type NormalizedMcpServer, type NormalizedPlugin } from '../core/types.ts';
 import { assertInside, isInsideOrEqual, isRelocatablePosixPath } from '../core/paths.ts';
 import { agentSkillsSchemaRevision } from '../schemas/agent-skills/contract.ts';
 import {
@@ -58,6 +58,8 @@ import {
   type ArtifactManifestPayload,
   type ArtifactManifestExecutables,
   type ArtifactManifestHook,
+  type ArtifactManifestLaunch,
+  type ArtifactManifestLaunchArgument,
   type ArtifactManifestMcpApp,
   type ArtifactManifestMcpServer,
   type ArtifactManifestProjection,
@@ -412,6 +414,55 @@ const manifestHooks = (options: {
     .sort(compareArtifactManifestHooks));
 };
 
+/**
+ * An author argument anchored on the plugin-root token names a file or
+ * directory of the artifact; every other argument is recorded as the author
+ * declared it, tokens included, for the launcher to expand.
+ */
+const manifestLaunchArguments = (args: readonly string[]): readonly ArtifactManifestLaunchArgument[] => {
+  const tokenPrefix = `${pathTokens.pluginRoot}/`;
+  return Object.freeze(args.map((argument): ArtifactManifestLaunchArgument => Object.freeze(
+    argument.startsWith(tokenPrefix)
+      ? { kind: 'artifact', path: argument.slice(tokenPrefix.length) }
+      : { kind: 'literal', value: argument },
+  )));
+};
+
+const manifestMcpServerKind = (
+  server: NormalizedMcpServer,
+  entry: CompiledMcpEntry | undefined,
+): ArtifactManifestMcpServer['kind'] => {
+  if (entry !== undefined) return 'compiled';
+  if (server.provenance.kind === 'prebuilt') return 'prebuilt';
+  return server.url !== undefined ? 'remote' : 'command';
+};
+
+/**
+ * The one launch record of a server the artifact starts. A compiled server's
+ * normalized `args[0]` is its entry; a prebuilt server's is the payload path
+ * anchored on the plugin-root token (`config/normalize.ts`). The author's
+ * arguments follow in both cases.
+ */
+const manifestLaunch = (
+  artifactRoot: string,
+  server: NormalizedMcpServer,
+  entry: CompiledMcpEntry | undefined,
+): ArtifactManifestLaunch | undefined => {
+  const [first, ...rest] = server.args ?? [];
+  const launchEntry = entry !== undefined
+    ? artifactPath(artifactRoot, entry.output)
+    : server.provenance.kind === 'prebuilt' && first !== undefined
+      ? first.slice(`${pathTokens.pluginRoot}/`.length)
+      : undefined;
+  if (launchEntry === undefined) return undefined;
+  return Object.freeze({
+    args: manifestLaunchArguments(rest),
+    entry: launchEntry,
+    env: Object.freeze({ ...(server.env ?? {}) }),
+    ...(entry?.workerOutput === undefined ? {} : { worker: artifactPath(artifactRoot, entry.workerOutput) }),
+  });
+};
+
 const manifestMcpServers = (options: {
   readonly artifactRoot: string;
   readonly compiledMcpApps: readonly CompiledMcpApp[];
@@ -426,6 +477,7 @@ const manifestMcpServers = (options: {
     .filter(({ hosts }) => hosts.length > 0)
     .map(({ hosts, server }): ArtifactManifestMcpServer => {
       const entry = entries.get(server.id);
+      const launch = manifestLaunch(options.artifactRoot, server, entry);
       const compiledApps = options.compiledMcpApps
         .filter((app) => app.serverIds.includes(server.id))
         .map((app): ArtifactManifestMcpApp => Object.freeze({
@@ -445,17 +497,10 @@ const manifestMcpServers = (options: {
         }));
       return Object.freeze({
         apps: Object.freeze([...compiledApps, ...prebuiltApps].sort((left, right) => left.id.localeCompare(right.id))),
-        ...(entry === undefined
-          ? {}
-          : {
-            entry: Object.freeze({
-              path: artifactPath(options.artifactRoot, entry.output),
-              ...(entry.workerOutput === undefined ? {} : { worker: artifactPath(options.artifactRoot, entry.workerOutput) }),
-            }),
-          }),
         hosts,
         id: server.id,
-        kind: entry !== undefined ? 'compiled' : server.url !== undefined ? 'remote' : 'command',
+        kind: manifestMcpServerKind(server, entry),
+        ...(launch === undefined ? {} : { launch }),
         name: server.name,
         transport: server.transport,
       });
@@ -527,49 +572,28 @@ const manifestDistribution = (options: {
  * declaration targets intersect the selection, exactly the Apps
  * `planCompiledMcpApps` compiles into it. An App scoped to a host outside the
  * selection is not advertised, since the server the root ships cannot serve
- * it; a selection that exposes none leaves the section out.
+ * it; a selection that exposes none leaves the section out. Each App names
+ * its server; the launch is that server's `executables.mcpServers[]` record.
  */
 const webManifestFor = (options: {
-  readonly artifactRoot: string;
-  readonly compiledMcpEntries: readonly CompiledMcpEntry[];
   readonly model: NormalizedPlugin;
   readonly selected: readonly string[];
 }): WebManifest | undefined => {
   if (options.model.web === undefined) return undefined;
-  const entries = new Map(options.compiledMcpEntries.map((entry) => [
-    entry.id,
-    relative(options.artifactRoot, entry.output).replaceAll('\\', '/'),
-  ]));
-  const servers = new Map(options.model.mcpServers.map((server) => [server.id, server]));
   const selectedApps = (options.model.mcpApps ?? []).filter((app) =>
     app.targets.some((target) => options.selected.includes(target)));
   const exposed = options.model.web.apps.filter((app) =>
     selectedApps.some((candidate) => candidate.serverId === app.serverId && candidate.name === app.appName));
   if (exposed.length === 0) return undefined;
-  const apps = exposed.map((app) => {
-    const server = servers.get(app.serverId);
-    const declaredEntry = server?.args?.[0];
-    const pluginRootPrefix = `${pathTokens.pluginRoot}/`;
-    const entry = entries.get(app.serverId) ??
-      (declaredEntry?.startsWith(pluginRootPrefix) === true
-        ? declaredEntry.slice(pluginRootPrefix.length)
-        : undefined);
-    if (server === undefined || entry === undefined) {
-      throw new Error(`Web App ${JSON.stringify(app.app)} has no compiled MCP server entry.`);
-    }
-    return {
-      allow: [...app.allow],
-      app: app.app,
-      args: server.args?.slice(1) ?? [],
-      entry,
-      env: { ...(server.env ?? {}) },
-      ...(app.input === undefined ? {} : { input: structuredClone(app.input) }),
-      name: app.appName,
-      resourceUri: app.resourceUri,
-      server: app.serverName,
-      ...(app.tool === undefined ? {} : { tool: app.tool }),
-    };
-  }).sort((left, right) => left.app.localeCompare(right.app));
+  const apps = exposed.map((app) => ({
+    allow: [...app.allow],
+    app: app.app,
+    ...(app.input === undefined ? {} : { input: structuredClone(app.input) }),
+    name: app.appName,
+    resourceUri: app.resourceUri,
+    server: app.serverName,
+    ...(app.tool === undefined ? {} : { tool: app.tool }),
+  })).sort((left, right) => left.app.localeCompare(right.app));
   return parseWebManifest({ apps, open: options.model.web.open });
 };
 
@@ -608,12 +632,7 @@ const manifestFor = (options: {
       selected,
     }),
   });
-  const web = webManifestFor({
-    artifactRoot: options.artifactRoot,
-    compiledMcpEntries: options.compiledMcpEntries,
-    model: options.model,
-    selected,
-  });
+  const web = webManifestFor({ model: options.model, selected });
   return {
     application: {
       ...(options.model.metadata.description === undefined ? {} : { description: options.model.metadata.description }),
