@@ -206,8 +206,8 @@ agent-bundle uninstall <host> [--from <root>] [--scope <scope>] [--mode <mode>] 
 | `--from <root>` | `process.cwd()` | The artifact root that identifies the plugin (name, version, marketplace), with the host's manifest directly under it, as for `install`. |
 | `--scope <scope>` | `user` | The scope the plugin was installed at (Claude). |
 | `--mode <mode>` | `local` | Cursor only: uninstall the `local` copy or the staged `marketplace` repository. |
-| `--keep-data` | on | Keep legacy or in-place durable runtime state (`state/`: state kernel, notices journal; for a Cursor copy of an Agent Plugins pack, also the recorded `PLUGIN_DATA` directory). This is the default; the flag makes it explicit. (Artifacts built from this release keep framework state under `~/.agent-bundle/state/<plugin>-<digest>`, which `uninstall` does not remove.) |
-| `--purge-data` | off | Also remove the legacy or in-place durable runtime state (`state/`, recorded `PLUGIN_DATA`); the derived `~/.agent-bundle/state/<plugin>-<digest>` root stays. Refused (`AB7008`) without `--confirm-purge`. |
+| `--keep-data` | on | Keep the effective framework state root (`AGENT_BUNDLE_STATE_ROOT`, else `~/.agent-bundle/state/<plugin>-<digest>` or `$XDG_STATE_HOME/agent-bundle/<plugin>-<digest>`), derived web-data, legacy `state/`, and a recorded Cursor `PLUGIN_DATA` directory. This is the default; the flag makes it explicit. |
+| `--purge-data` | off | Remove those durable-data roots for the exact installed code root. Refused (`AB7008`) without `--confirm-purge`. |
 | `--force` | off | Proceed without a receipt (legacy Cursor copy, host-only install) or when owned content, version, or staged `HEAD` no longer matches the receipt. A receipt or manifest naming another plugin is refused regardless. |
 | `--plan` | off | Print the exact paths and host registrations that would be removed and change nothing. |
 
@@ -221,10 +221,9 @@ install at another scope or in another project known only to Claude's `plugins/i
 registry). Unowned entries are retained and listed; a missing receipt is `AB7009` and a mismatch is `AB7007` unless `--force`; a
 second run is a `not-installed` no-op. The typed `data.outcome` says what happened to durable
 state per host: Cursor `kept` / `purged` / `absent`; Claude `retained-by-host` (the cached copy is
-orphaned for Claude's ~14-day grace period; a purge also removes legacy or in-place `state/` and
-`plugins/data/<id>/`, but not the current `~/.agent-bundle/state/<plugin>-<digest>` framework
-state); Codex `removed-by-host` / `unavailable` (`codex plugin remove` deletes the
-cached tree and has no keep-data option). The package-relative installer bin accepts
+orphaned for Claude's ~14-day grace period; a purge removes the effective framework state root,
+derived web-data, legacy `state/`, and `plugins/data/<id>/`); Codex keeps external state by default
+and removes it on a confirmed purge while `codex plugin remove` deletes the cached tree. The package-relative installer bin accepts
 `uninstall <host>` with the same flags; the emitted `install.mjs` accepts `--uninstall` with
 `--mode`, `--keep-data`, `--purge-data --confirm-purge`, `--force`, and `--plan`.
 
@@ -258,6 +257,9 @@ surface exposes it (`AB7330`). It inventories the Agent Bundle receipt store und
 and warns about receipts the host no longer honours (`AB7328`), and reports receipts written
 before format 2 as migrated (`AB7329`). A Cursor directory holding only preserved runtime state
 from `uninstall --keep-data` is reported `missing` with an `AB7307` info, not corrupt or foreign.
+For every installed copy Doctor reports the resolved framework state root, its `native` or
+`derived` source, whether it exists, and whether it is writable. A pre-#640
+`<plugin root>/state` is reported separately and flagged with `AB7332`.
 
 ## validate
 

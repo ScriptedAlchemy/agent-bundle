@@ -1,6 +1,8 @@
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 
+import { rspack } from '@rslib/core';
+
 import packageManifest from '../../package.json' with { type: 'json' };
 
 import type { TargetRegistry } from '../adapters/registry.ts';
@@ -32,6 +34,12 @@ import {
 } from './mcp-apps.ts';
 import { bundleSyntaxCheckFor } from './module-imports.ts';
 import { compileRslibSurfaces, settledRslibSurface } from './compiler.ts';
+import {
+  compileEvidenceFileName,
+  createCompileEvidenceRecord,
+  type CompileEvidenceRecord,
+} from './compile-evidence.ts';
+import type { CompileResult } from './compile-result.ts';
 import { planCompileStages } from './compile-stages.ts';
 import {
   assertUniqueArtifactDestinations,
@@ -41,6 +49,7 @@ import {
   listArtifactFiles,
   publishArtifact,
   resolveArtifactDestination,
+  writeCompileEvidence,
   writeHookIndex,
   writeManifest,
 } from './emit.ts';
@@ -62,6 +71,7 @@ export interface BuildResult {
   readonly compiledHooks: readonly CompiledHookEntry[];
   readonly compiledMcpApps: readonly CompiledMcpApp[];
   readonly compiledMcpEntries: readonly CompiledMcpEntry[];
+  readonly compileEvidence: CompileEvidenceRecord;
   /**
    * Non-fatal compiler findings the artifact survived — MCP App view compile
    * warnings and size advisories. Errors never reach here: a failing compile
@@ -283,6 +293,11 @@ const outputCandidatesFor = (options: {
     path: resolveArtifactDestination(options.artifactRoot, artifactHookIndexName),
     sourceInputs: hookIndexSourceInputs(options.model, options.compiledHooks),
   },
+  {
+    kind: 'generated' as const,
+    path: resolveArtifactDestination(options.artifactRoot, compileEvidenceFileName),
+    sourceInputs: [options.model.metadata.provenance.sourcePath],
+  },
 ];
 
 const assertOutputProvenanceSources = (options: {
@@ -430,6 +445,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
     const compiledHooks: CompiledHookEntry[] = [];
     const compiledMcpApps: CompiledMcpApp[] = [];
     const compiledMcpEntries: CompiledMcpEntry[] = [];
+    const compileResults: CompileResult[] = [];
     const compileDiagnostics: Diagnostic[] = [];
     const tools = options.tools === undefined ? {} : { tools: options.tools };
     // The resolved `notices.retention`; generated ledgers fall back to the runtime defaults without it.
@@ -462,6 +478,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
             });
             stagedMcpApps = views.apps;
             compiledMcpApps.push(...views.apps);
+            compileResults.push(...views.compileResults);
             compileDiagnostics.push(...views.diagnostics);
           }
           break;
@@ -469,7 +486,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
           await emitPlanEntries({ entries: composite.entries, root: stageRoot });
           // Every agent-host surface of the root lowers through one Rslib
           // instance; each surface keeps its own evidence and result.
-          const [cliBins, scripts, hooks, mcpEntries] = await compileRslibSurfaces(
+          const compiled = await compileRslibSurfaces(
             { cwd: options.projectRoot, meta, outputRoot: stageRoot, ...tools },
             [
               composite.cliBin
@@ -513,6 +530,8 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
               }),
             ],
           );
+          const [cliBins, scripts, hooks, mcpEntries] = compiled.results;
+          compileResults.push(...compiled.compileResults);
           compiledCliBins.push(...cliBins);
           compiledEntries.push(...scripts);
           compiledHooks.push(...hooks);
@@ -545,6 +564,13 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
         ...(entry.timeout === undefined ? {} : { timeout: entry.timeout }),
       })),
     });
+    const compileEvidence = await createCompileEvidenceRecord({
+      results: compileResults,
+      rewritable: options.tools?.rspack !== undefined || options.tools?.rsbuild !== undefined,
+      root: stageRoot,
+      rspackVersion: rspack.rspackVersion,
+    });
+    await writeCompileEvidence({ artifactRoot: stageRoot, evidence: compileEvidence });
     const outputProvenance = createOutputProvenance({
       artifactRoot: stageRoot,
       outputs: outputCandidatesFor({
@@ -615,6 +641,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
         output: publishedOutput(entry),
         ...(entry.workerOutput === undefined ? {} : { workerOutput: publishedOutput({ output: entry.workerOutput }) }),
       }))),
+      compileEvidence,
       diagnostics: deepFreeze(deduplicateDiagnostics(compileDiagnostics)),
       manifest,
       outputProvenance,

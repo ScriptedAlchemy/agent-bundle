@@ -18,6 +18,12 @@ import {
   type TargetArtifactWrite,
 } from '../src/adapters/types.ts';
 import { composeProjections } from '../src/build/compose.ts';
+import {
+  compileEvidenceFileName,
+  serializeCompileEvidenceRecord,
+  type CompileEvidenceAsset,
+  type CompileEvidenceExternal,
+} from '../src/build/compile-evidence.ts';
 import { assembleArtifactManifest, type ArtifactManifest } from '../src/build/manifest.ts';
 import { artifactDiagnosticRecoveries, validateArtifact, validateArtifactWithSnapshot } from '../src/build/validate-artifact.ts';
 import { digest, sha256Hex } from '../src/core/digest.ts';
@@ -104,6 +110,168 @@ const writeArtifact = async (
   );
   return root;
 };
+
+const compileEvidence = (
+  assets: readonly CompileEvidenceAsset[],
+  policyRevision = 1,
+): string => serializeCompileEvidenceRecord({
+  assets,
+  coverage: { rewritable: false, unobserved: [] },
+  policy: { name: 'closed-world-externals', revision: policyRevision },
+  producer: { name: 'agent-bundle', rspack: '1.0.0', version: '0.1.0' },
+});
+
+const compileEvidenceAsset = (
+  path: string,
+  sha256: string,
+  externals: readonly CompileEvidenceExternal[] = [],
+): CompileEvidenceAsset => ({ externals, packages: [], path, sha256 });
+
+const compileEvidenceFixture = async (
+  record: string,
+  files: readonly ArtifactFixtureFile[],
+): Promise<string> => writeArtifact([
+  ...files,
+  { contents: record, kind: 'generated', path: compileEvidenceFileName },
+]);
+
+it('accepts compile evidence that covers a matching bundle', async () => {
+  const bundle = { contents: 'export default 1;\n', kind: 'bundle' as const, path: 'bin/index.mjs' };
+  const root = await compileEvidenceFixture(
+    compileEvidence([compileEvidenceAsset(bundle.path, hash(bundle.contents))]),
+    [bundle],
+  );
+
+  try {
+    expect((await validateArtifact({ artifactRoot: root })).filter((diagnostic) => diagnostic.code === 'AB6039')).toEqual([]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('reports compile evidence for different bundle bytes', async () => {
+  const bundle = { contents: 'export default 1;\n', kind: 'bundle' as const, path: 'bin/index.mjs' };
+  const root = await compileEvidenceFixture(
+    compileEvidence([compileEvidenceAsset(bundle.path, hash('export default 2;\n'))]),
+    [bundle],
+  );
+
+  try {
+    await expect(validateArtifact({ artifactRoot: root })).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6039', message: expect.stringContaining('describes different bytes') }),
+    ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('reports compile evidence that does not cover a bundle', async () => {
+  const bundle = { contents: 'export default 1;\n', kind: 'bundle' as const, path: 'bin/index.mjs' };
+  const root = await compileEvidenceFixture(compileEvidence([]), [bundle]);
+
+  try {
+    await expect(validateArtifact({ artifactRoot: root })).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6039', message: expect.stringContaining('does not cover') }),
+    ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('reports compile evidence that names a copy file', async () => {
+  const copy = { contents: 'copied\n', kind: 'copy' as const, path: 'assets/copied.txt' };
+  const root = await compileEvidenceFixture(
+    compileEvidence([compileEvidenceAsset(copy.path, hash(copy.contents))]),
+    [copy],
+  );
+
+  try {
+    await expect(validateArtifact({ artifactRoot: root })).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6039', message: expect.stringContaining('does not list as a compiled file') }),
+    ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('reports a non-builtin external in compile evidence', async () => {
+  const bundle = { contents: 'export default 1;\n', kind: 'bundle' as const, path: 'bin/index.mjs' };
+  const external = {
+    externalType: 'commonjs',
+    issuers: [],
+    kind: 'builtin',
+    request: 'left-pad',
+    userRequest: 'left-pad',
+  } satisfies CompileEvidenceExternal;
+  const root = await compileEvidenceFixture(
+    compileEvidence([compileEvidenceAsset(bundle.path, hash(bundle.contents), [external])]),
+    [bundle],
+  );
+
+  try {
+    await expect(validateArtifact({ artifactRoot: root })).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6039', message: expect.stringContaining('is not one') }),
+    ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('reports a missing artifact-relative external target in compile evidence', async () => {
+  const bundle = { contents: 'export default 1;\n', kind: 'bundle' as const, path: 'bin/index.mjs' };
+  const external = {
+    externalType: 'commonjs',
+    issuers: [],
+    kind: 'artifact-relative',
+    request: './sibling.mjs',
+    target: 'bin/sibling.mjs',
+    userRequest: './sibling.mjs',
+  } satisfies CompileEvidenceExternal;
+  const root = await compileEvidenceFixture(
+    compileEvidence([compileEvidenceAsset(bundle.path, hash(bundle.contents), [external])]),
+    [bundle],
+  );
+
+  try {
+    await expect(validateArtifact({ artifactRoot: root })).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6039', message: expect.stringContaining('does not contain') }),
+    ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('reports compile evidence from a different policy revision', async () => {
+  const bundle = { contents: 'export default 1;\n', kind: 'bundle' as const, path: 'bin/index.mjs' };
+  const root = await compileEvidenceFixture(
+    compileEvidence([compileEvidenceAsset(bundle.path, hash(bundle.contents))], 2),
+    [bundle],
+  );
+
+  try {
+    await expect(validateArtifact({ artifactRoot: root })).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6039', message: expect.stringContaining('was judged under policy') }),
+    ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('reports malformed compile evidence as a non-strict record', async () => {
+  const root = await compileEvidenceFixture('{not JSON}\n', []);
+
+  try {
+    await expect(validateArtifact({ artifactRoot: root })).resolves.toEqual([
+      expect.objectContaining({
+        code: 'AB6039',
+        generatedPath: compileEvidenceFileName,
+        message: 'Compile evidence record is not valid JSON.',
+      }),
+    ]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
 
 const customTarget = 'custom';
 const customMetadata = Object.freeze({
@@ -2276,6 +2444,7 @@ it('documents recovery for every stable artifact diagnostic code', async () => {
       'AB6007', 'AB6008', 'AB6009', 'AB6010', 'AB6011', 'AB6012', 'AB6013',
       'AB6014', 'AB6015', 'AB6016', 'AB6017', 'AB6018', 'AB6019', 'AB6020',
       'AB6021', 'AB6022', 'AB6023', 'AB6024', 'AB6025', 'AB6034',
+      'AB6039',
     ]);
     expect(Object.values(artifactDiagnosticRecoveries).every((recovery) => recovery.trim().length > 0)).toBe(true);
     expect(artifactDiagnosticRecoveries.AB6015).not.toBe(artifactDiagnosticRecoveries.AB6016);

@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { chmod, cp, mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { chmod, cp, mkdir, mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -79,6 +79,9 @@ it('serves a state-writing tool from a read-only installed artifact without writ
   const consumer = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-readonly-state-'));
   const project = join(consumer, 'project');
   const artifact = join(project, 'artifact');
+  const home = join(project, '.home');
+  const cursorRoot = join(home, '.cursor');
+  const installedRoot = join(cursorRoot, 'plugins', 'local', pluginName);
   let readOnly = false;
 
   try {
@@ -98,12 +101,20 @@ it('serves a state-writing tool from a read-only installed artifact without writ
     });
     const deletedSource = await removeProjectSource({ extraPaths: ['views'], projectRoot: project });
     expect(deletedSource.removed).toEqual(['agent-bundle.config.ts', 'src', 'views']);
+    const env = stringEnvironment(installedEnvironment());
+    delete env['AGENT_BUNDLE_PLUGIN_ROOT'];
+    delete env['AGENT_BUNDLE_STATE_ROOT'];
+    env['HOME'] = home;
+    await mkdir(cursorRoot, { recursive: true });
+    const installer = join(artifact, 'install.mjs');
+    expect((await execFile(process.execPath, [installer], { cwd: artifact, env })).stdout)
+      .toContain(`Installed ${pluginName}`);
 
     // An installed artifact a host may own read-only: no shell, worker, or bin
     // spawned below may create anything beneath it.
-    await chmodTree(artifact, { directory: 0o555, file: 0o444 });
+    await chmodTree(installedRoot, { directory: 0o555, file: 0o444 });
     readOnly = true;
-    const listingBefore = await treeListing(artifact);
+    const listingBefore = await treeListing(installedRoot);
     expect(listingBefore).toEqual(expect.arrayContaining([
       expect.stringMatching(new RegExp(`^bin/${pluginName}\\.mjs \\d+$`, 'u')),
       'mcp/',
@@ -113,9 +124,6 @@ it('serves a state-writing tool from a read-only installed artifact without writ
     // No custom state env: the launch inherits the worker's XDG_STATE_HOME
     // (rstest.worker-isolation.ts), so the derived user-data state root stays
     // under the worker root and never touches the developer's home.
-    const env = stringEnvironment(installedEnvironment());
-    delete env['AGENT_BUNDLE_PLUGIN_ROOT'];
-    delete env['AGENT_BUNDLE_STATE_ROOT'];
     const stateHome = env['XDG_STATE_HOME'];
     if (stateHome === undefined || !stateHome.startsWith(rstestWorkerRoot())) {
       throw new Error(`XDG_STATE_HOME must name a directory under the worker root ${rstestWorkerRoot()}; got ${String(stateHome)}. Is rstest.setup.ts isolating this worker?`);
@@ -124,18 +132,18 @@ it('serves a state-writing tool from a read-only installed artifact without writ
     // Resolve the launch the way `<plugin> web` does: the manifest's web
     // section names the App and its artifact-relative entry, and
     // resolveWebLaunch anchors the code root without naming a state root.
-    const webManifest = await readWebManifest(join(artifact, 'agent-bundle.manifest.json'));
+    const webManifest = await readWebManifest(join(installedRoot, 'agent-bundle.manifest.json'));
     const declaredApp = webManifest?.apps.find((candidate) => candidate.app === app);
     if (declaredApp === undefined) throw new Error(`The artifact manifest exposes no ${app} App: ${JSON.stringify(webManifest)}`);
-    const launch = await resolveWebLaunch({ app: declaredApp, env, pluginRoot: artifact });
+    const launch = await resolveWebLaunch({ app: declaredApp, env, pluginRoot: installedRoot });
     expect(launch.command).toBe(process.execPath);
-    expect(launch.cwd).toBe(artifact);
-    expect(launch.env['AGENT_BUNDLE_PLUGIN_ROOT']).toBe(artifact);
+    expect(launch.cwd).toBe(installedRoot);
+    expect(launch.env['AGENT_BUNDLE_PLUGIN_ROOT']).toBe(installedRoot);
     expect(launch.env['AGENT_BUNDLE_STATE_ROOT']).toBeUndefined();
     expect(launch.env['XDG_STATE_HOME']).toBe(stateHome);
     const [entry, ...args] = launch.args;
     if (entry === undefined) throw new Error('resolveWebLaunch returned no entry argument.');
-    expect(entry.startsWith(join(artifact, 'mcp') + '/')).toBe(true);
+    expect(entry.startsWith(join(installedRoot, 'mcp') + '/')).toBe(true);
     const openSession = () => openPackedMcpServer({
       args,
       cwd: launch.cwd,
@@ -165,9 +173,9 @@ it('serves a state-writing tool from a read-only installed artifact without writ
     // Nothing landed beneath the read-only artifact; the SQLite kernel sits
     // under the user-data state root the child derived from the same code
     // root and inherited env.
-    expect(await treeListing(artifact)).toEqual(listingBefore);
-    expect(await exists(join(artifact, 'state'))).toBe(false);
-    const stateRoot = userDataStateRoot(artifact, launch.env);
+    expect(await treeListing(installedRoot)).toEqual(listingBefore);
+    expect(await exists(join(installedRoot, 'state'))).toBe(false);
+    const stateRoot = userDataStateRoot(installedRoot, launch.env);
     expect(stateRoot.startsWith(join(stateHome, 'agent-bundle') + '/')).toBe(true);
     expect(await readdir(stateRoot)).toEqual(expect.arrayContaining([
       expect.stringMatching(/\.sqlite$/u),
@@ -176,7 +184,7 @@ it('serves a state-writing tool from a read-only installed artifact without writ
     // The artifact CLI bin derives the same code root from its own `bin/`
     // parent — no AGENT_BUNDLE_PLUGIN_ROOT, no state env — and reads the
     // entries the MCP process wrote.
-    const bin = join(artifact, 'bin', `${pluginName}.mjs`);
+    const bin = join(installedRoot, 'bin', `${pluginName}.mjs`);
     const cliRun = await execFile(process.execPath, [bin, 'entries', '--json'], { cwd: consumer, env });
     expect(JSON.parse(cliRun.stdout) as JournalResult).toEqual({
       entries: [{ note: 'first' }, { note: 'second' }],
@@ -195,11 +203,26 @@ it('serves a state-writing tool from a read-only installed artifact without writ
     } finally {
       await secondSession.close();
     }
-    expect(await treeListing(artifact)).toEqual(listingBefore);
-    expect(await exists(join(artifact, 'state'))).toBe(false);
-    expect(await readFile(join(artifact, 'agent-bundle.manifest.json'), 'utf8')).not.toContain('AGENT_BUNDLE_STATE_ROOT');
+    expect(await treeListing(installedRoot)).toEqual(listingBefore);
+    expect(await exists(join(installedRoot, 'state'))).toBe(false);
+    expect(await readFile(join(installedRoot, 'agent-bundle.manifest.json'), 'utf8')).not.toContain('AGENT_BUNDLE_STATE_ROOT');
+
+    await chmodTree(installedRoot, { directory: 0o755, file: 0o644 });
+    readOnly = false;
+    const kept = await execFile(process.execPath, [installer, '--uninstall', '--keep-data'], { cwd: artifact, env });
+    expect(kept.stdout).toContain(`Data (keep): kept`);
+    expect(kept.stdout).toContain(stateRoot);
+    expect(await exists(stateRoot)).toBe(true);
+    const purged = await execFile(
+      process.execPath,
+      [installer, '--uninstall', '--purge-data', '--confirm-purge'],
+      { cwd: artifact, env },
+    );
+    expect(purged.stdout).toContain(`Data (purge): purged`);
+    expect(purged.stdout).toContain(stateRoot);
+    expect(await exists(stateRoot)).toBe(false);
   } finally {
-    if (readOnly) await chmodTree(artifact, { directory: 0o755, file: 0o644 });
+    if (readOnly) await chmodTree(installedRoot, { directory: 0o755, file: 0o644 });
     await rm(consumer, { force: true, recursive: true });
   }
 }, 300_000);

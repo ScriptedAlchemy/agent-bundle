@@ -47,8 +47,12 @@ artifact/
 ├── INSTALL.md                            # 选中了任一内置宿主时
 ├── install.mjs                           # 选中了 cursor 或 portable 时
 ├── agent-bundle.manifest.json            # 所选投影 + 来源信息
+├── agent-bundle.compile-evidence.json    # 每个已编译文件的编译器记录
 └── agent-bundle.hooks.json               # 覆盖所选宿主的钩子索引
 ```
+
+`agent-bundle.compile-evidence.json` 是编译器对每个已编译（`bundle`）文件的记录；
+`validate --artifact` 把已列入清单的记录对照文件表复核（`AB6039`）。
 
 宿主清单位于根目录下各自的点目录中。`skills/`、`hooks/`、`mcp/`、`scripts/`、`bin/` 与 `assets/` 是共享的，
 只输出**一次**——没有逐宿主副本。根目录下不会出现其他任何东西：没有生成的 `AGENTS.md`，也没有

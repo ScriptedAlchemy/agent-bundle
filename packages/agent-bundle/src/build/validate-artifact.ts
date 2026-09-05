@@ -21,6 +21,11 @@ import {
   matchesManifestFile,
 } from './artifact-layout.ts';
 import {
+  compileEvidenceDiagnostics,
+  compileEvidenceFileName,
+  parseCompileEvidenceRecord,
+} from './compile-evidence.ts';
+import {
   artifactHookIndexName,
   artifactManifestName,
   inspectArtifactFilesystem,
@@ -49,7 +54,7 @@ export { artifactDiagnosticRecoveries, type ArtifactDiagnosticCode } from './art
 export type * from './artifact-validation-types.ts';
 
 const epochStagingMarkerName = '.agent-bundle-epoch-stage.json';
-const artifactRootMetadata = new Set([artifactHookIndexName]);
+const artifactRootMetadata = new Set([artifactHookIndexName, compileEvidenceFileName]);
 
 const matchesManifestFileTable = (
   files: readonly ArtifactFile[],
@@ -580,6 +585,29 @@ const validateArtifactStructure = (options: {
   return Object.freeze(diagnostics);
 };
 
+const validateCompileEvidence = async (options: {
+  readonly artifactRoot: string;
+  readonly manifest: ArtifactManifest;
+}): Promise<readonly Diagnostic[]> => {
+  if (!options.manifest.files.some((file) => file.path === compileEvidenceFileName)) return Object.freeze([]);
+  const bytes = await runWithPlatform(readFileString(resolve(options.artifactRoot, compileEvidenceFileName)))
+    .catch(() => undefined);
+  if (bytes === undefined) {
+    return Object.freeze([diagnostic('AB6039', 'Compile evidence record cannot be read.', compileEvidenceFileName)]);
+  }
+  let record: ReturnType<typeof parseCompileEvidenceRecord>;
+  try {
+    record = parseCompileEvidenceRecord(bytes);
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+    return Object.freeze([diagnostic('AB6039', error.message, compileEvidenceFileName)]);
+  }
+  return compileEvidenceDiagnostics(
+    record,
+    new Map(options.manifest.files.map((file) => [file.path, { kind: file.kind, sha256: file.sha256 }])),
+  );
+};
+
 const validateGeneratedFiles = async (options: {
   readonly artifactRoot: string;
   readonly bundleSyntaxCheck?: ModuleSyntaxCheck;
@@ -596,7 +624,8 @@ const validateGeneratedFiles = async (options: {
   );
   const validJson = new Set<string>();
 
-  for (const file of options.files.filter((entry) => entry.path.endsWith('.json'))) {
+  // The compile evidence record has its own strict reader (`AB6039`).
+  for (const file of options.files.filter((entry) => entry.path.endsWith('.json') && entry.path !== compileEvidenceFileName)) {
     try {
       // Strict parseability only: host MCP documents are read against the
       // compiled entries by validateMcpCoherence.
@@ -739,6 +768,7 @@ export const validateArtifactWithSnapshot = async (
   // Read-only validators over the same immutable inspection run concurrently;
   // collecting in this fixed order keeps the diagnostics sequence deterministic.
   const [
+    compileEvidenceRecordDiagnostics,
     targetContractDiagnostics,
     portableTargetDiagnostics,
     mcpCoherenceDiagnostics,
@@ -746,6 +776,7 @@ export const validateArtifactWithSnapshot = async (
     emittedSkillDiagnostics,
     generatedFileDiagnostics,
   ] = await Promise.all([
+    validateCompileEvidence({ artifactRoot, manifest }),
     validateTargetContracts({
       artifactRoot,
       files: inspection.files,
@@ -786,6 +817,7 @@ export const validateArtifactWithSnapshot = async (
     }),
   ]);
   diagnostics.push(
+    ...compileEvidenceRecordDiagnostics,
     ...targetContractDiagnostics,
     ...portableTargetDiagnostics,
     ...mcpCoherenceDiagnostics,
