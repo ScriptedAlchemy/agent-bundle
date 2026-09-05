@@ -346,9 +346,9 @@ id。只要路由从生成的 CLI 可执行文件运行，无论命令由哪种�
 `bin/<plugin-name>-flight.mjs`），由所有选中宿主共享。每个内置 target 都发布了准入它的 `cli` 能力。产物 bin 是一个
 自包含的 ESM 模块，没有 shebang 也没有可执行位——像 `scripts/*.mjs` 一样以
 `node <plugin-root>/bin/<plugin-name>.mjs <command>` 运行。帮助、argv 解析、输出模式、退出码与信号都与
-包 bin 一致；唯一的区别是，在宿主未提供 `AGENT_BUNDLE_PLUGIN_ROOT` 时，工作区级持久状态锚定在产物根目录
-（`bin/` 的父目录，与生成的 MCP worker 使用同一个回退），而不是 `$PWD/.agent-bundle/state`，这样一起安装
-的 CLI 与服务器观察到的是同一份存储。
+包 bin 一致；唯一的区别是，产物宿主的 CLI 与 MCP 服务器从同一个代码根目录推导出同一个框架状态根目录——
+`~/.agent-bundle/state/<plugin>-<digest>`，或已设置的 `AGENT_BUNDLE_STATE_ROOT`——因此共享同一份存储。
+npm 包 bin 仍使用 `$PWD/.agent-bundle/state`。
 
 从其他表面引用它时使用插件根 token——Claude Skill Markdown 与 hook 命令中写
 `${CLAUDE_PLUGIN_ROOT}/bin/<plugin-name>.mjs`，Codex hook 中写 `${PLUGIN_ROOT}/…`，Cursor hook 中写
