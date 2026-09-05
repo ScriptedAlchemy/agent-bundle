@@ -22,14 +22,10 @@ import {
   externalPolicy,
   serializeCompileEvidenceRecord,
   unobservedLoadForms,
-} from '../src/build/compile-evidence.ts';
-import { composeProjections } from '../src/build/compose.ts';
-import {
-  compileEvidenceFileName,
-  serializeCompileEvidenceRecord,
   type CompileEvidenceAsset,
   type CompileEvidenceExternal,
 } from '../src/build/compile-evidence.ts';
+import { composeProjections } from '../src/build/compose.ts';
 import { assembleArtifactManifest, type ArtifactManifest } from '../src/build/manifest.ts';
 import { artifactDiagnosticRecoveries, validateArtifact, validateArtifactWithSnapshot } from '../src/build/validate-artifact.ts';
 import { digest, sha256Hex } from '../src/core/digest.ts';
