@@ -112,7 +112,6 @@ export interface BuildOptions {
   readonly projectContext: ProjectContext;
   readonly projectRoot: string;
   readonly registry: TargetRegistry;
-  /** The compiled route graph the manifest records as the artifact's Application IR (#592 step 3). */
   readonly routeGraph: CompiledRouteGraph;
   /** The consumer bundler escape hatch, applied to every synthesized config. */
   readonly tools?: AgentBundleToolsConfig;
@@ -320,7 +319,6 @@ const assertOutputProvenanceSources = (options: {
 const sortedHosts = (hosts: Iterable<string>): readonly string[] =>
   Object.freeze([...new Set(hosts)].sort((left, right) => left.localeCompare(right)));
 
-/** Artifact-root-relative POSIX path; refuses anything the parser would reject. */
 const artifactPath = (artifactRoot: string, absolute: string): string => {
   const path = relative(artifactRoot, absolute).replaceAll('\\', '/');
   if (!isRelocatablePosixPath(path)) {
@@ -329,7 +327,6 @@ const artifactPath = (artifactRoot: string, absolute: string): string => {
   return path;
 };
 
-/** The selected host projections the composite root holds, with their derived-document pointers. */
 const manifestProjections = (options: {
   readonly composite: CompositePlan;
   readonly filePaths: ReadonlySet<string>;
@@ -482,7 +479,6 @@ const manifestMcpServers = (options: {
 }): readonly ArtifactManifestMcpServer[] => {
   const entries = new Map(options.compiledMcpEntries.map((entry) => [entry.id, entry]));
   return Object.freeze(options.model.mcpServers
-    // Every adapter MCP document uses the same server.targets membership predicate for its host.
     .map((server) => ({ hosts: sortedHosts(server.targets.filter((target) => options.selected.includes(target))), server }))
     .filter(({ hosts }) => hosts.length > 0)
     .map(({ hosts, server }): ArtifactManifestMcpServer => {

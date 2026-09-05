@@ -280,8 +280,6 @@ it('packages prebuilt payloads at stable paths and lowers prebuilt entries throu
     });
     expect(manifest.compiler.project.sourceInputs.some((input) => input.path === 'built/runtime/mcp/server.js')).toBe(true);
     expect(manifest.distribution.payloads.map((payload) => payload.name)).toEqual(['app', 'runtime']);
-    // The prebuilt server carries the same launch record a compiled one does,
-    // sourced from its provenance kind and payload-anchored first argument.
     expect(manifest.executables.mcpServers.find((server) => server.name === 'timeline')).toMatchObject({
       kind: 'prebuilt',
       launch: { args: [], entry: 'runtime/mcp/server.js', env: {} },
@@ -417,7 +415,6 @@ it('reports the prebuilt payload source diagnostics', async () => {
   try {
     const result = await validate({ root });
     const codes = result.diagnostics.map((diagnostic) => [diagnostic.code, diagnostic.severity] as const);
-    // The reserved destination names, the runtime-owned state root in any letter case among them.
     expect(codes.filter(([code]) => code === 'AB4741')).toHaveLength(5);
     expect(result.diagnostics.find((diagnostic) =>
       diagnostic.code === 'AB4741' && diagnostic.message.includes('"bin"'))?.recovery).toContain('claude.bin');

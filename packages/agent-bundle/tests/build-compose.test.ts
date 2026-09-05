@@ -435,7 +435,6 @@ describe('composite plugin root (#555)', () => {
       buildFixture(['claude', 'codex'], { registry }),
     ]);
     expect(alone.result.build.manifest.projections.map((projection) => projection.host)).toEqual(['synthetic']);
-    // The pointer comes from the adapter's runtime contract, so an advanced adapter's own document is indexed too.
     expect(alone.result.build.manifest.projections[0]!.documents.mcp).toBe(syntheticMcpRuntime.manifestPath);
     expect(await topLevel(alone.output)).toContain(syntheticMcpRuntime.manifestPath);
     expect(builtIn.result.build.manifest.projections.map((projection) => projection.host)).toEqual(['claude', 'codex']);
@@ -471,7 +470,6 @@ describe('composite plugin root (#555)', () => {
       return { entry, launches, output, run };
     };
 
-    // Flags ahead of the entry stay ahead: the host document's order is the launch order.
     const flagFirst = await launch(new TargetRegistry().register(
       syntheticAdapterNamed('synthetic', (args) => ['--enable-source-maps', ...args, '--stdio']),
       { default: true },
@@ -483,7 +481,6 @@ describe('composite plugin root (#555)', () => {
       cwd: flagFirst.output,
     }]);
 
-    // A document that skips the compiled entry never becomes an artifact: the build refuses it.
     await expect(buildFixture(['synthetic'], {
       registry: new TargetRegistry().register(syntheticAdapterNamed('synthetic', () => ['--version']), { default: true }),
     })).rejects.toMatchObject({
@@ -530,7 +527,6 @@ describe('composite plugin root (#555)', () => {
     })).resolves.toBe(0);
     expect(launches).toHaveLength(1);
     expect(launches[0]).toMatchObject({ args: [join(output, record.entry)], command: 'node', cwd: output });
-    // The anchor names the durable root, not the rebuildable artifact.
     expect(launches[0]?.env['AGENT_BUNDLE_PLUGIN_ROOT']).toBe(workspaceRoot);
   });
 

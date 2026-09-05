@@ -126,7 +126,6 @@ it('reads the optional section and returns undefined when absent', () => withDoc
 }));
 
 it('refuses every manifestVersion but the one it was built for, before reading any section', () => withDocument(async (path, write) => {
-  // Every other slice is well-formed and familiar: the version alone decides.
   for (const manifestVersion of [undefined, 1, 3, '2']) {
     await write(document({ manifestVersion }));
     await expect(readWebManifestDocument(path)).rejects.toThrow(/manifestVersion must be 2\./u);
@@ -197,7 +196,6 @@ it('refuses a launch record naming bytes the manifest does not index', () => wit
     await write(document({ files }));
     await expect(readWebManifestDocument(path)).rejects.toThrow(message);
   }
-  // A directory argument is inside the artifact when the manifest indexes a file under it.
   await write(document({
     executables: { mcpServers: [{ ...catalogRow(), launch: { ...validLaunch(), args: [{ kind: 'artifact', path: 'payload' }] } }] },
   }));

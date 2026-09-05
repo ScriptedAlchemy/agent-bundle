@@ -1107,21 +1107,23 @@ const parseRoutes = (value: unknown): ArtifactManifestRoutes => {
   const allRoutes = [...events, ...scripts, ...servers.flatMap((server) => server.routes), ...(cli?.routes ?? [])];
   const routeIds = new Set(allRoutes.map((route) => route.id));
   const contractIds = new Set((contracts ?? []).map((contract) => contract.id));
-  const bound = allRoutes.filter((route) => route.contract !== undefined);
+  const bound = allRoutes.filter(
+    (route): route is ArtifactManifestRoute & { readonly contract: string } => route.contract !== undefined,
+  );
   if ((contracts !== undefined) !== (bound.length > 0)) {
     fail('routes.contracts is present exactly when a route binds a contract.');
   }
   for (const route of bound) {
-    if (!contractIds.has(route.contract!)) fail(`routes route ${route.id} binds undeclared contract ${JSON.stringify(route.contract)}.`);
+    if (!contractIds.has(route.contract)) fail(`routes route ${route.id} binds undeclared contract ${JSON.stringify(route.contract)}.`);
   }
   // The binding is reciprocal: a contract's `routes` are exactly the routes
   // whose `contract` names it (a projected CLI tool route repeats its server
   // route's id, so the comparison is over id sets).
   const boundByContract = new Map<string, Set<string>>();
   for (const route of bound) {
-    const ids = boundByContract.get(route.contract!) ?? new Set<string>();
+    const ids = boundByContract.get(route.contract) ?? new Set<string>();
     ids.add(route.id);
-    boundByContract.set(route.contract!, ids);
+    boundByContract.set(route.contract, ids);
   }
   for (const contract of contracts ?? []) {
     for (const id of contract.routes) {
