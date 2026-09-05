@@ -26,7 +26,6 @@ import type {
   validate,
   InspectionComponentCapability,
   InspectionSkippedComponent,
-  McpAppConsentCapability,
   McpAppProfileId,
   ProjectOptions,
 } from './api.ts';
@@ -52,6 +51,7 @@ import { errorMessage } from './core/errors.ts';
 import { formatInstallResult, formatUninstallResult } from './install/format.ts';
 import { projectVersionLabel } from './core/project-context.ts';
 import { stableJson } from './core/digest.ts';
+import { formatServeAppReadyLine, isServeAppAllowCapability, type ServeAppAllowCapability } from './serve-app/command-contract.ts';
 import type { EvalComparisonDelta, EvalConditionMetrics } from './eval/compare.ts';
 import type { CliTerminal } from './effect/cli-runtime.ts';
 import type { CliServices } from './effect/terminal.ts';
@@ -198,7 +198,7 @@ interface DevProxyCommandOptions {
 }
 
 interface ServeAppCommandOptions extends JsonInputOptions {
-  readonly allow: readonly McpAppConsentCapability[];
+  readonly allow: readonly ServeAppAllowCapability[];
   readonly artifact?: string;
   readonly config?: string;
   readonly env: boolean;
@@ -252,16 +252,12 @@ const mcpAppProfile = (value: string): McpAppProfileId => {
   throw new InvalidArgumentError('MCP App profile must be portable, claude, or chatgpt.');
 };
 
-const consentCapabilities: ReadonlySet<McpAppConsentCapability> = new Set<McpAppConsentCapability>([
-  'call-tool', 'download-file', 'open-external-link', 'request-display-mode',
-]);
-
-const consentCapability = (value: string): McpAppConsentCapability => {
-  if (consentCapabilities.has(value as McpAppConsentCapability)) return value as McpAppConsentCapability;
+const consentCapability = (value: string): ServeAppAllowCapability => {
+  if (isServeAppAllowCapability(value)) return value;
   throw new InvalidArgumentError('Consent capability must be call-tool, download-file, open-external-link, or request-display-mode.');
 };
 
-const collectConsentCapability = (value: string, previous: readonly McpAppConsentCapability[]): readonly McpAppConsentCapability[] =>
+const collectConsentCapability = (value: string, previous: readonly ServeAppAllowCapability[]): readonly ServeAppAllowCapability[] =>
   [...previous, consentCapability(value)];
 
 const doctorHost = (value: string): DoctorHost => {
@@ -822,7 +818,7 @@ export const runCli = async (
       target: options.target,
       ...(options.tool === undefined ? {} : { tool: options.tool }),
     });
-    await show(`MCP App ${app} at ${served.url} (tool ${served.tool}; Ctrl-C stops the server)\n`);
+    await show(`${formatServeAppReadyLine({ app, tool: served.tool, url: served.url })}\n`);
     // The host outlives this call like `dev` does; it ends on a termination
     // signal, or when the bound server exits on its own, which is reported
     // as a diagnostic and, in the real process, as exit code 1.

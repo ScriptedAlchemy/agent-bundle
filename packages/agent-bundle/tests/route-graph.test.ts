@@ -1777,6 +1777,107 @@ it('validates layout modules with AB4830, duplicate scopes with AB4831, and orph
   expect(graph.servers.map((server) => server.name)).toEqual(['curator', 'panel']);
 });
 
+it('judges a layout or provider for AB4837 only when a generated executable bundles it', async () => {
+  // Value imports of the compiler (#558): the route graph reports them
+  // before the bundler would inline the compiler into a self-contained
+  // executable. A layout is inlined only into the workers of the rendered
+  // routes it wraps; a provider into every generated request scope.
+  const compilerImport = "import { serveApp } from 'agent-bundle/api';\n";
+  const layout = `${compilerImport}export default ({ children }) => { void serveApp; return children; };\n`;
+  const provider = `${compilerImport}export default () => serveApp;\n`;
+  const codesBySource = (diagnostics: readonly { readonly code: string; readonly sourcePath?: string }[], root: string) =>
+    diagnostics
+      .filter(({ code }) => code === 'AB4837')
+      .map(({ sourcePath }) => sourcePath?.slice(root.length + 1).replaceAll('\\', '/'))
+      .sort();
+
+  // A generated tool route composes through the root layout: both are judged.
+  const wrapped = await createRoot();
+  await writeTree(wrapped, {
+    'src/layout.tsx': layout,
+    'src/mcp/curator/tools/inspect.tsx': moduleSource,
+    'src/providers/git-worktree.ts': provider,
+  });
+  const wrappedGraph = await compileRouteGraph(wrapped, fixtureConfig());
+  expect(codesBySource(wrappedGraph.diagnostics, wrapped)).toEqual(['src/layout.tsx', 'src/providers/git-worktree.ts']);
+  expect(wrappedGraph.diagnostics.find(({ code }) => code === 'AB4837')!.message)
+    .toMatch(/^Layout module src\/layout\.tsx imports "agent-bundle\/api" as a value; the generated executable is self-contained/u);
+
+  // Apps are browser builds and event routes take no layout, so nothing
+  // bundles the root layout — while the generated server and the hook
+  // wrapper still mount the provider.
+  const unwrapped = await createRoot();
+  await writeTree(unwrapped, {
+    'src/events/workspace/open.tsx': moduleSource,
+    'src/layout.tsx': layout,
+    'src/mcp/panel/apps/main.tsx': `export const config = { resourceUri: 'ui://panel/main.html' }; ${moduleSource}`,
+    'src/providers/git-worktree.ts': provider,
+  });
+  const unwrappedGraph = await compileRouteGraph(unwrapped, fixtureConfig());
+  expect(codesBySource(unwrappedGraph.diagnostics, unwrapped)).toEqual(['src/providers/git-worktree.ts']);
+
+  // A plain `.ts` command runs without a render session, so the routed CLI
+  // executable inlines no layout — but it mounts the providers.
+  const plainCli = await createRoot();
+  await writeTree(plainCli, {
+    'src/cli/doctor.ts': [
+      'export const inputSchema = z.object({}).strict();',
+      'export const resultSchema = {};',
+      'export default async () => undefined;',
+      '',
+    ].join('\n'),
+    'src/layout.tsx': layout,
+    'src/providers/git-worktree.ts': provider,
+  });
+  expect(codesBySource((await compileRouteGraph(plainCli, fixtureConfig())).diagnostics, plainCli))
+    .toEqual(['src/providers/git-worktree.ts']);
+
+  // A rendered `.tsx` command renders through the worker, which imports both.
+  const renderedCli = await createRoot();
+  await writeTree(renderedCli, {
+    'src/cli/doctor.tsx': [
+      'export const inputSchema = z.object({}).strict();',
+      'export const resultSchema = {};',
+      'export default async () => undefined;',
+      '',
+    ].join('\n'),
+    'src/layout.tsx': layout,
+    'src/providers/git-worktree.ts': provider,
+  });
+  expect(codesBySource((await compileRouteGraph(renderedCli, fixtureConfig())).diagnostics, renderedCli))
+    .toEqual(['src/layout.tsx', 'src/providers/git-worktree.ts']);
+
+  // A plain script is bundled from its own source: neither layouts nor
+  // providers are inlined. A rendered script's worker inlines both.
+  const plainScript = await createRoot();
+  await writeTree(plainScript, {
+    'src/layout.tsx': layout,
+    'src/providers/git-worktree.ts': provider,
+    'src/scripts/rebuild-index.ts': moduleSource,
+  });
+  expect(codesBySource((await compileRouteGraph(plainScript, fixtureConfig())).diagnostics, plainScript)).toEqual([]);
+  const renderedScript = await createRoot();
+  await writeTree(renderedScript, {
+    'src/layout.tsx': layout,
+    'src/providers/git-worktree.ts': provider,
+    'src/scripts/rebuild-index.tsx': moduleSource,
+  });
+  expect(codesBySource((await compileRouteGraph(renderedScript, fixtureConfig())).diagnostics, renderedScript))
+    .toEqual(['src/layout.tsx', 'src/providers/git-worktree.ts']);
+
+  // A server layout of a server that is not generated wraps nothing that is
+  // bundled either, and with no generated executable at all the provider is
+  // never inlined.
+  const custom = await createRoot();
+  await writeTree(custom, {
+    'src/mcp/curator/layout.tsx': layout,
+    'src/mcp/curator/tools/inspect.tsx': moduleSource,
+    'src/providers/git-worktree.ts': provider,
+  });
+  const customGraph = await compileRouteGraph(custom, fixtureConfig({ routes: { servers: { curator: 'custom' } } }));
+  expect(codesBySource(customGraph.diagnostics, custom)).toEqual([]);
+});
+
 it('rejects provider key collisions and the reserved processLifetime key', async () => {
   const root = await createRoot();
   const provider = 'export default () => undefined;\n';

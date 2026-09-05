@@ -83,6 +83,10 @@
       "types": "./dist/rstest/index.d.ts",
       "import": "./dist/rstest.js"
     },
+    "./serve-app-command": {
+      "types": "./dist/serve-app-command.d.ts",
+      "import": "./dist/serve-app-command.js"
+    },
     "./test": {
       "types": "./dist/test/index.d.ts",
       "import": "./dist/test.js"

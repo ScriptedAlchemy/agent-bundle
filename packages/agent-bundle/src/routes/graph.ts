@@ -5,6 +5,7 @@ import fastGlob from 'fast-glob';
 
 import { conventionalEntryAt } from '../config/conventional-entry.ts';
 import { isProjectPathIgnored, readProjectIgnoreRules, toPosixPath } from '../config/ignore.ts';
+import { isRenderedScriptRoute } from '../config/script-routes.ts';
 import { resolveAppRouteTemplate } from './app-template.ts';
 import {
   compileCliCommands,
@@ -23,8 +24,9 @@ import {
   validateProviderModuleContract,
   validateRouteModuleContract,
 } from './contract.ts';
+import { validateRouteFrameworkImports } from './framework-imports.ts';
 import { extractInputSchema } from './input-schema.ts';
-import { isLayoutRouteKind } from './layouts.ts';
+import { isLayoutRouteKind, layoutChainFor } from './layouts.ts';
 import { providerKeyFromName } from './providers.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { digest } from '../core/digest.ts';
@@ -460,6 +462,44 @@ const decideServerMode = (
   return withEntry('conflict');
 };
 
+/**
+ * AB4837 (#558) for one route module a generated executable bundles: the
+ * caller decides *whether* the route ships (a generated server or CLI, a
+ * conventional script, an event route); this names the self-contained
+ * executable the module is inlined into. App routes are browser builds and
+ * never bundle into a Node executable, so they are exempt.
+ */
+const routeFrameworkImportDiagnostics = (
+  route: CompiledAgentRoute,
+  moduleText: string | undefined,
+): readonly Diagnostic[] => {
+  if (moduleText === undefined) return [];
+  let executable: string;
+  switch (route.kind) {
+    case 'app':
+      return [];
+    case 'cli':
+      executable = 'routed CLI executable';
+      break;
+    case 'script':
+      executable = 'script executable';
+      break;
+    case 'tool':
+    case 'resource':
+    case 'prompt':
+      executable = 'generated MCP server';
+      break;
+    case 'event-route':
+      executable = 'hook wrapper';
+      break;
+    default: {
+      const unreachable: never = route.kind;
+      throw new TypeError(`Unhandled route kind ${String(unreachable)}.`);
+    }
+  }
+  return validateRouteFrameworkImports(moduleText, route.provenance.relativePath, route.source, executable);
+};
+
 const compiledRoute = (
   module: DiscoveredRouteModule,
   config: Readonly<Record<string, unknown>>,
@@ -712,6 +752,7 @@ export const compileRouteGraph = async (
       });
       const layoutText = await readRouteModuleText(module.source);
       if (layoutText !== undefined) {
+        moduleTextBySource.set(module.source, layoutText);
         diagnostics.push(...validateLayoutModuleContract(
           layoutText,
           module.relativePath,
@@ -729,6 +770,7 @@ export const compileRouteGraph = async (
       });
       const providerText = await readRouteModuleText(module.source);
       if (providerText !== undefined) {
+        moduleTextBySource.set(module.source, providerText);
         diagnostics.push(...validateProviderModuleContract(
           providerText,
           module.relativePath,
@@ -789,12 +831,19 @@ export const compileRouteGraph = async (
       }
       case 'event-route':
         events.push(route);
+        // Every event route ships as a hook wrapper of its own, so it is
+        // judged here; MCP and CLI routes are judged once their server or
+        // CLI surface is known to be generated, because a route of a
+        // custom/command/remote server or a conventional CLI never bundles.
+        diagnostics.push(...routeFrameworkImportDiagnostics(route, moduleText));
         break;
       case 'cli':
         cliRoutes.push(route);
         break;
       case 'script':
         scripts.push(route);
+        // Conventional scripts compile into every selected target.
+        diagnostics.push(...routeFrameworkImportDiagnostics(route, moduleText));
         break;
       default: {
         const unreachable: never = route.kind;
@@ -890,6 +939,9 @@ export const compileRouteGraph = async (
             route.source,
           ));
         }
+        // The generated server inlines the route, so a compiler-carrying
+        // framework import would break its bundle (AB4837, #558).
+        diagnostics.push(...routeFrameworkImportDiagnostics(route, moduleText));
         // The route's render budget (#454) is read by the generated server
         // from this compiled config, so it is validated here, once.
         diagnostics.push(...validateRouteRenderConfig(route, 'MCP route').diagnostics);
@@ -950,6 +1002,10 @@ export const compileRouteGraph = async (
       const compiled = await compileCliCommands(cliRoutes, async (route) =>
         moduleTextBySource.get(route.source), projected);
       diagnostics.push(...compiled.diagnostics);
+      // The routed CLI executable inlines every command route (AB4837, #558).
+      for (const route of cliRoutes) {
+        diagnostics.push(...routeFrameworkImportDiagnostics(route, moduleTextBySource.get(route.source)));
+      }
       cli = {
         commands: compiled.commands,
         mode,
@@ -967,6 +1023,50 @@ export const compileRouteGraph = async (
         ));
       }
       cli = { mode, routes: mode === 'conventional' ? [] : cliRoutes };
+    }
+  }
+
+  // AB4837 (#558) for layouts and providers, judged once the generated
+  // surfaces are known, against what the build inlines (build/entry-shell.ts,
+  // build/cli-bins.ts, build/entries.ts). A worker imports only the layouts
+  // some route it renders composes through (`workerLayouts`): the non-App
+  // routes of a generated server, the rendered commands of a generated CLI
+  // (plain `.ts` commands run without a render session), and rendered
+  // scripts. A layout none of them reaches — a root layout in a project of
+  // Apps and event routes, a server layout of a custom server — is never
+  // bundled and is not judged. Providers mount in every generated request
+  // scope — a generated server, the routed CLI executable (plain commands
+  // too), a rendered script's worker, a hook wrapper — but a plain script is
+  // bundled from its own source and mounts none.
+  const generatedServers = servers.filter((server) => server.mode === 'generated');
+  const renderedCommandRouteIds = new Set(
+    (cli?.mode === 'generated' ? cli.commands ?? [] : []).filter((command) => command.rendered).map((command) => command.routeId),
+  );
+  const renderedCliRoutes = cli?.mode === 'generated' ? cli.routes.filter((route) => renderedCommandRouteIds.has(route.id)) : [];
+  const renderedScripts = scripts.filter(isRenderedScriptRoute);
+  const layoutRoutes = [...generatedServers.flatMap((server) => server.routes), ...renderedCliRoutes, ...renderedScripts];
+  for (const layout of layouts) {
+    const layoutText = moduleTextBySource.get(layout.source);
+    if (layoutText === undefined || !layoutRoutes.some((route) => layoutChainFor(route, [layout]).length > 0)) continue;
+    diagnostics.push(...validateRouteFrameworkImports(
+      layoutText,
+      layout.provenance.relativePath,
+      layout.source,
+      'generated executable',
+      'Layout module',
+    ));
+  }
+  if (generatedServers.length > 0 || cli?.mode === 'generated' || renderedScripts.length > 0 || events.length > 0) {
+    for (const provider of providers) {
+      const providerText = moduleTextBySource.get(provider.source);
+      if (providerText === undefined) continue;
+      diagnostics.push(...validateRouteFrameworkImports(
+        providerText,
+        provider.provenance.relativePath,
+        provider.source,
+        'generated executable',
+        'Provider module',
+      ));
     }
   }
 
