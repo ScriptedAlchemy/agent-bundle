@@ -28,33 +28,32 @@ and Claude artifacts; the App resource remains portable.
 
 ## Workbench walkthrough
 
-1. **Overview** opens on the Bundle dashboard. Its Author, Build, Exercise,
-   and Evaluate stages connect the source capability to its emitted artifact,
-   runtime evidence, and eval result.
-2. **Skills** defaults to `service-readiness`; compare its authored status
-   policy and readiness-report resource with generated output and its explicit
-   eval coverage. **Hooks** defaults to a populated Claude `sessionStart`
-   canonical input; run the simulation to attach the readiness workflow.
-3. **Playground** defaults to Script execution, the Claude target, and
-   `check-service-fixture`. Run it and wait for the finalized session. The
+1. The shell header connects build status and diagnostics to the current
+   emitted artifact.
+2. Under **Application → Skills**, select `service-readiness`; compare its
+   authored status policy and readiness-report resource with generated output
+   and its explicit eval coverage. Under **Application → Events / Hooks**,
+   select `sessionStart`, use the populated Claude canonical input, and run the
+   simulation to attach the readiness workflow.
+3. Under **Application → Scripts**, select `check-service-fixture`, choose the
+   Claude fixture, and run it. The
    emitted checker resolves the packaged status fixture beside its emitted
    module, so it succeeds without depending on the shell working directory.
-4. **Logs** exposes the resulting producer records. In **Artifacts**, select
-   portable to inspect `mcp-apps/status.html`; Codex and Claude retain their
-   host artifacts but not this portable App resource.
-5. Before recording two eval runs, **Comparisons** deliberately displays:
+4. **Advanced → Raw logs** exposes the resulting producer records. In
+   **Advanced → Artifact**, select portable to inspect `mcp-apps/status.html`;
+   Codex and Claude retain their host artifacts but not this portable App resource.
+5. Before recording two eval runs, **Advanced → Evals → Compare** deliberately displays:
    `At least two recorded runs are needed before a comparison can be aligned.`
    That is the precise empty state, not an error.
-6. In **MCP playground**, the defaults are portable and the `status` server.
-   Open the session, list tools, select `show-status`, choose `payments-api`,
-   and invoke it. Invocation history shows the degraded summary and labelled
+6. Under **Application → MCP → status → Tools**, select `show-status`, choose
+   `payments-api`, and run it. Invocation history shows the degraded summary and labelled
    Availability and P95 latency checks (the latter fails). Open the App preview:
    the rendered panel also shows `payments-api`, a text-labelled amber
    `degraded` indicator, the same summary, and passing/failing checks through
    the MCP Apps bridge. Inspect the
-   protocol trace, use **Restart MCP session**, then close, reset, and reopen
-   it to exercise the lifecycle.
-7. **Evals** defaults to the deterministic `mcp-app-status` suite. Run
+   protocol trace in the route workspace; use **Advanced → Protocol** for
+   session restart, reset, and lifecycle inspection.
+7. **Advanced → Evals → Runs** defaults to the deterministic `mcp-app-status` suite. Run
    `status-is-healthy` and inspect its completed passing trial attributed to
    `service-readiness`; it reads only checked-in fixture data and needs no
    native login or API key.
