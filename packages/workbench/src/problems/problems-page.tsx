@@ -10,7 +10,7 @@ import React, { useState } from 'react';
 
 import type { ProjectStatus } from '../../../agent-bundle/src/contracts/project.ts';
 import { projectFailureText } from '../project-client.ts';
-import { buildStatusFor, type Problem, type ProblemSource } from '../shell/build-status-model.ts';
+import { buildStatusFor, type BuildStatusModel, type Problem, type ProblemSource, staleCatalogMessage } from '../shell/build-status-model.ts';
 import { applicationNodePath, formatWorkbenchLocation, type WorkbenchLocation } from '../shell/workbench-location.ts';
 
 export interface ProblemsPageProps {
@@ -33,11 +33,23 @@ const sourceLabels: Readonly<Record<ProblemSource, string>> = Object.freeze({
 const problemKey = (problem: Problem, index: number): string =>
   `${problem.source}-${problem.code ?? ''}-${String(index)}`;
 
+/** The banner for the documented stale-diagnostic flow: the published build no longer matches the source, and a rebuild repairs it. */
+const staleBannerFor = (model: BuildStatusModel, problems: readonly Problem[]): string | undefined => {
+  if (model.build === 'failed') {
+    return 'The latest build failed and published no new epoch; Application keeps the last good build until a rebuild succeeds.';
+  }
+  if (model.epoch.state === 'stale' || problems.some((problem) => problem.source === 'route-catalog' && problem.repairable)) {
+    return staleCatalogMessage;
+  }
+  return undefined;
+};
+
 export const ProblemsPage = ({ onNavigate, onRepair, problems, status }: ProblemsPageProps) => {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const model = buildStatusFor(status);
   const repairable = problems.some((problem) => problem.repairable);
+  const staleBanner = staleBannerFor(model, problems);
 
   const repair = async (): Promise<void> => {
     setError(undefined);
@@ -63,6 +75,7 @@ export const ProblemsPage = ({ onNavigate, onRepair, problems, status }: Problem
         </button>
       </div>
     </div>
+    {staleBanner === undefined ? undefined : <p className="problems-banner" data-testid="problems-banner" role="status">{staleBanner}</p>}
     {error === undefined ? undefined : <p className="request-error" role="alert">{error}</p>}
     {problems.length === 0
       ? <p className="empty-row" data-testid="problems-empty">No source, build, contract-gate, route-catalog, or host problems.</p>

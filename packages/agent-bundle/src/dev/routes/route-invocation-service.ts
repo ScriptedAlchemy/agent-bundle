@@ -5,6 +5,8 @@ import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import type { AgentDocument } from '@agent-bundle/runtime';
+
 import { createDefaultRegistry, type TargetRegistry } from '../../adapters/registry.ts';
 import type { TargetHookContract } from '../../adapters/hook-contract.ts';
 import { projectCliDocumentToMarkdown } from '../../cli-entry.ts';
@@ -25,7 +27,8 @@ import type {
 } from '../../contracts/request-provenance.ts';
 import { createCanonicalEventProps, projectEventDocument } from '../../events/projection.ts';
 import type { CanonicalAgentEvent } from '../../routes/public.ts';
-import type { AgentBundleTestManifest } from '../../test/manifest.ts';
+import type { AgentBundleTestManifest, TestableScriptDescriptor } from '../../test/manifest.ts';
+import type { ScriptPlaygroundResult, ScriptPlaygroundRunRequest } from '../playground/script-playground-service.ts';
 import type {
   RouteInvocation,
   RouteInvocationEventHost,
@@ -63,9 +66,19 @@ export interface RouteInvocationFixture {
  * route, provider, layout, and state loaders.
  */
 export interface RouteInvocationPreparedProject {
+  /**
+   * The published build a plain script runs from, and a target whose layout
+   * emits the `scripts/` directory. Absent while no build is published.
+   */
+  readonly artifact?: Readonly<{ epochId: string; target: string }>;
   readonly fixtures?: Readonly<Record<string, readonly RouteInvocationFixture[]>>;
   readonly manifest: AgentBundleTestManifest;
   readonly targets: readonly RouteInvocationEventHost[];
+}
+
+/** Runs one emitted script from a published artifact epoch; `ScriptPlaygroundService` in production. */
+export interface RouteInvocationScriptRunner {
+  run(request: ScriptPlaygroundRunRequest): Promise<ScriptPlaygroundResult>;
 }
 
 export interface RouteInvocationServiceOptions {
@@ -79,6 +92,7 @@ export interface RouteInvocationServiceOptions {
     request: RouteInvocationChildRequest,
     signal: AbortSignal,
   ) => Promise<RouteInvocationChildResult>;
+  readonly scripts?: RouteInvocationScriptRunner;
   readonly timeoutMs?: number;
 }
 
@@ -300,6 +314,48 @@ const childPath = (): string => {
   return found;
 };
 
+/** The plain script this route is, or `undefined` for every renderable route. */
+const plainScriptFor = (prepared: RouteInvocationPreparedProject, route: RouteManifestRoute): TestableScriptDescriptor | undefined =>
+  route.kind === 'script'
+    ? prepared.manifest.scripts.find((script) => script.routeId === route.id && !script.rendered)
+    : undefined;
+
+/**
+ * A plain script has no route component for the Agent renderer: it runs as
+ * the emitted executable of the published build — the same engine the old
+ * Playground drove — and its stdout becomes the document the CLI projection
+ * reads, with the process status carried in `result`.
+ */
+const runPlainScript = async (
+  scripts: RouteInvocationScriptRunner | undefined,
+  prepared: RouteInvocationPreparedProject,
+  script: TestableScriptDescriptor,
+  input: JsonValue,
+  signal: AbortSignal,
+): Promise<RouteInvocationChildResult> => {
+  if (scripts === undefined) throw new Error('No script runner is available for a plain script.');
+  if (prepared.artifact === undefined) throw new Error('A plain script runs from the published build; none is published.');
+  const startedAt = performance.now();
+  const run = await scripts.run({
+    epochId: prepared.artifact.epochId,
+    scriptId: script.routeId,
+    signal,
+    target: prepared.artifact.target,
+  });
+  const document: AgentDocument = {
+    root: { kind: 'text', text: run.stdout },
+    status: run.exitCode === 0 ? 'success' : 'represented-error',
+    version: 1,
+  };
+  return deepFreeze({
+    document,
+    events: [{ document, sequence: 1, type: 'complete' }],
+    input,
+    renderDurationMs: performance.now() - startedAt,
+    result: { exitCode: run.exitCode, stderr: run.stderr, stdout: run.stdout },
+  });
+};
+
 const isChildResponse = (value: unknown): value is RouteInvocationChildResponse => {
   if (!isRecord(value)) return false;
   if (value.type === 'result') return isRecord(value.result);
@@ -453,7 +509,11 @@ const invocationProjection = (
   }
   if (route.kind === 'cli' || route.kind === 'script') {
     const command = manifest.cli?.commands?.find((candidate) => candidate.routeId === route.id);
-    const policy = route.kind === 'script' ? 'zero' : command?.exitCode ?? 'zero';
+    // A plain script's exit code is its process status, carried in `result`;
+    // a rendered script exits zero like a rendered CLI command.
+    const policy = route.kind === 'script'
+      ? (plainScriptFor(prepared, route) === undefined ? 'zero' : 'result')
+      : command?.exitCode ?? 'zero';
     return deepFreeze({
       cli: {
         exitCode: resultExitCode(policy, result),
@@ -544,6 +604,7 @@ export class RouteInvocationService {
   readonly #prepared: () => RouteInvocationPreparedProject;
   readonly #registry: TargetRegistry;
   readonly #renderChild: NonNullable<RouteInvocationServiceOptions['renderChild']>;
+  readonly #scripts: RouteInvocationScriptRunner | undefined;
   readonly #semaphore: InvocationSemaphore;
   readonly #timeoutMs: number;
   #closed = false;
@@ -555,6 +616,7 @@ export class RouteInvocationService {
     this.#prepared = options.prepared;
     this.#registry = options.registry ?? createDefaultRegistry();
     this.#renderChild = options.renderChild ?? renderInChild;
+    this.#scripts = options.scripts;
     this.#semaphore = new InvocationSemaphore(options.concurrency ?? defaultConcurrency);
     this.#timeoutMs = options.timeoutMs ?? defaultTimeoutMs;
     if (!Number.isSafeInteger(this.#timeoutMs) || this.#timeoutMs < 1) throw new RangeError('Invocation timeout must be positive.');
@@ -629,14 +691,17 @@ export class RouteInvocationService {
       }
       const timeout = setTimeout(() => controller.abort(new DOMException('Route invocation timed out.', 'TimeoutError')), this.#timeoutMs);
       let child: RouteInvocationChildResult;
+      const plainScript = plainScriptFor(prepared, route);
       try {
-        child = await this.#renderChild({
-          ...(request.args === undefined ? {} : { args: request.args }),
-          context,
-          input,
-          manifest: prepared.manifest,
-          routeId: route.id,
-        }, controller.signal);
+        child = plainScript === undefined
+          ? await this.#renderChild({
+            ...(request.args === undefined ? {} : { args: request.args }),
+            context,
+            input,
+            manifest: prepared.manifest,
+            routeId: route.id,
+          }, controller.signal)
+          : await runPlainScript(this.#scripts, prepared, plainScript, input, controller.signal);
       } catch (error) {
         const completedAt = this.#now();
         return failedInvocation({
@@ -649,7 +714,7 @@ export class RouteInvocationService {
             ? 'Route invocation child timed out.'
             : controller.signal.aborted
               ? 'Route invocation child stopped because the service closed.'
-            : `Route invocation child failed: ${error instanceof Error ? error.message : String(error)}`,
+            : `${plainScript === undefined ? 'Route invocation child' : 'Script run'} failed: ${error instanceof Error ? error.message : String(error)}`,
           request: { ...request, input },
           route,
           startedAt,

@@ -1,5 +1,8 @@
+import { existsSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+
 import * as AgentRuntime from '@agent-bundle/runtime';
-import { createJiti } from 'jiti';
+import { createJiti, type JitiOptions, type TransformOptions } from 'jiti';
 import * as React from 'react';
 
 import type { JsonObject } from '../../core/strict-json.ts';
@@ -18,16 +21,51 @@ import type {
   RouteInvocationChildResult,
 } from './route-invocation-service.ts';
 
-const jiti = createJiti(import.meta.url, {
+/**
+ * Classic JSX runtime, as in the playground's lifecycle render child: the
+ * automatic runtime would import `react/jsx-runtime`, which jiti resolves
+ * without the child's `--conditions=react-server`, binding the client runtime
+ * to the server `react` and throwing inside React (#441). Compiled JSX calls
+ * `React.createElement` instead, on the route's own `react` import or on the
+ * global below for modules that do not import it.
+ */
+(globalThis as typeof globalThis & { React?: typeof React }).React = React;
+
+const jitiOptions: JitiOptions = {
   fsCache: false,
   interopDefault: false,
-  jsx: { runtime: 'automatic' },
+  jsx: { runtime: 'classic' },
   moduleCache: false,
   nativeModules: ['typescript'],
   virtualModules: {
     '@agent-bundle/runtime': AgentRuntime,
     react: React,
   },
+};
+
+const relativeJsSpecifier = /(['"])(\.\.?\/[^'"\n]*)\.js\1/gu;
+
+/**
+ * Project code imports its TypeScript siblings by their emitted `.js` name
+ * (`moduleResolution: NodeNext`); the build resolves those through Rspack's
+ * `extensionAlias`. jiti only retries `.js` as `.ts`, so a `.js` specifier
+ * whose source is a `.tsx` component never resolves. Point it at the file on
+ * disk before the transform sees the module.
+ */
+const rewriteTsxSpecifiers = ({ filename, source }: TransformOptions): string => {
+  if (filename === undefined) return source;
+  const directory = dirname(filename);
+  return source.replace(relativeJsSpecifier, (match, quote: string, specifier: string) => {
+    const stem = resolve(directory, specifier);
+    if (existsSync(`${stem}.js`) || existsSync(`${stem}.ts`) || !existsSync(`${stem}.tsx`)) return match;
+    return `${quote}${specifier}.tsx${quote}`;
+  });
+};
+
+const baseJiti = createJiti(import.meta.url, jitiOptions);
+const jiti = createJiti(import.meta.url, {
+  ...jitiOptions,
+  transform: (options) => ({ code: baseJiti.transform({ ...options, source: rewriteTsxSpecifiers(options) }) }),
 });
 
 const load = <Module>(source: string): (() => Promise<Module>) =>
