@@ -193,7 +193,7 @@ describe('the CLI surface projection of tool:harness/submit', () => {
     expect(help.stdout).toMatch(/^ +--tag <string> \.\.\. +Tag attached to the request \(repeatable; duplicates are dropped\)\.$/mu);
     expect(help.stdout).not.toContain('(required)');
     expect(help.stdout).not.toContain('requires --yes');
-    for (const absent of ['--lane-key', '--tags', '--input', '--yes', 'harness submit']) {
+    for (const absent of ['--lane-key', '--tags', '--input', '--yes', 'route-harness harness submit']) {
       expect(help.stdout).not.toContain(absent);
     }
   });

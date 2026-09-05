@@ -331,7 +331,8 @@ describe('the compiled test manifest', () => {
       rendered: true,
       routeId: `tool:harness/${tool}`,
     });
-    expect(manifest.cliCommands.filter((command) => command.mcp !== undefined)).toEqual([
+    // `submit` carries an explicit `.cli.ts` projection, so it leaves the bulk set (#596).
+    expect(manifest.cliCommands.filter((command) => command.mcp !== undefined && command.projection === undefined)).toEqual([
       projected('catalog', 'Streams the harness catalog behind one Suspense boundary.', true),
       projected('context', 'Returns the request identity axes observed by this route.', true),
       projected('echo', 'Echoes one message back with the observed workspace root.', false),
@@ -343,12 +344,19 @@ describe('the compiled test manifest', () => {
       projected('plugin-root', 'Reports the plugin root and durable-state anchor this route observes.', false),
       projected('publish-notice', 'Publishes a durable notice for a later session event.', true),
       projected('strict-report', 'Returns a closed-object report that rejects unknown serialized keys.', true),
-      projected('submit', 'Submits one command line as lane work and echoes the accepted request.', true),
       projected('ticket', 'Returns a cargo-conductor-shaped ticket status with optional diagnostics fields.', true),
       projected('tooling', 'Reports the request providers an MCP tool observes.', false),
       projected('unavailable', 'Returns a typed unavailable result for projection checks.', true),
       // The projected command inherits the tool's declared render budget (#454).
       projected('wait', 'Waits until aborted or holdMs elapses, for cancellation contract proof.', true, { maxElapsedMs: 120_000 }),
+    ]);
+    expect(manifest.cliCommands.filter((command) => command.projection !== undefined)).toMatchObject([
+      {
+        mcp: { confirm: false, server: 'harness', tool: 'submit' },
+        path: ['submit'],
+        projection: { mapInput: true, module: 'src/mcp/harness/tools/submit.cli.ts' },
+        routeId: 'tool:harness/submit',
+      },
     ]);
   });
 
