@@ -471,6 +471,18 @@ const humanDoctor = (result: DoctorReport): string => {
       host.bundle?.durableState,
     ].filter((report): report is DoctorDurableStateReport => report !== undefined);
     const uniqueReports = [...new Map(reports.map((report) => [report.directory, report])).values()];
+    for (const report of uniqueReports) {
+      out.push(
+        `  state root: ${report.directory} (${report.exists ? 'exists' : 'missing'}, ` +
+        `${report.writable ? 'writable' : 'not writable'}, ${report.stateSource})\n`,
+      );
+    }
+    const legacyReports = host.inventory.findings
+      .map((finding) => finding.legacyDurableState)
+      .filter((report): report is DoctorDurableStateReport => report !== undefined);
+    for (const report of [...new Map(legacyReports.map((entry) => [entry.directory, entry])).values()]) {
+      out.push(`  legacy state: ${report.directory} (exists, ${report.writable ? 'writable' : 'not writable'})\n`);
+    }
     if (uniqueReports.length > 0) {
       const stores = uniqueReports.reduce((total, report) => total + report.summary.stores, 0);
       const bytes = uniqueReports.reduce((total, report) => total + report.summary.bytes, 0);

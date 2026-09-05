@@ -38,7 +38,7 @@ even when no error diagnostic was reported.
 | `AB7010`–`AB7015` | npm prepack inventory, artifact freshness, package bin targets, release-version agreement, and installed-dependency hygiene (`AB7014`: a dependency no packed file references; `AB7015`: a git, remote-tarball, path, or unrewritten workspace-protocol dependency specifier). |
 | `AB7200`–`AB7202`, `AB7210`–`AB7211` | Development rebuilds and live host surfaces: rebuild admission and phase failures, development host install sync, and the dev-epoch contract gate (see below). |
 | `AB7xxx` | Project preparation and development rebuilds (`AB7100`–`AB7102`: a development rebuild's compilation, publication, and cleanup; `AB7103`: the development package build; see below). |
-| `AB7300`–`AB7331` | Read-only install Doctor: host probes, installed inventory, bundle comparison and registration proof, runtime endpoint health and identity, durable-state inventory, static bytes-at-rest validation, foreign-install detection (`AB7321`; see below), Cursor plugin hook registration / marketplace staging (`AB7322`–`AB7324`; see below), host load refusal (`AB7325`; see below), the Cursor Agent Plugins launch proof (`AB7326`; see below), a disabled Claude install (`AB7327`; see below), lifecycle receipts and activation states (`AB7328`–`AB7330`; see below), and the operator `.env` layer of an installed pack (`AB7331`; see below). `AB7311` and `AB7325` are also emitted by `build` and `validate --artifact` from the Claude load check (see "Claude Code host validation"). |
+| `AB7300`–`AB7332` | Read-only install Doctor: host probes, installed inventory, bundle comparison and registration proof, runtime endpoint health and identity, durable-state inventory, static bytes-at-rest validation, foreign-install detection (`AB7321`; see below), Cursor plugin hook registration / marketplace staging (`AB7322`–`AB7324`; see below), host load refusal (`AB7325`; see below), the Cursor Agent Plugins launch proof (`AB7326`; see below), a disabled Claude install (`AB7327`; see below), lifecycle receipts and activation states (`AB7328`–`AB7330`; see below), the operator `.env` layer of an installed pack (`AB7331`; see below), and retained pre-#640 state (`AB7332`; see below). `AB7311` and `AB7325` are also emitted by `build` and `validate --artifact` from the Claude load check (see "Claude Code host validation"). |
 | `AB8200`–`AB8209` | Workbench development runtime routes (`/api/runtime/**`): `AB8200` development runtime provider configuration, load, or lifecycle failure, `AB8201` runtime/session/run not available, `AB8202` invalid route path, `AB8203` invalid request shape, `AB8204` stale runtime generation or MCP session revision (409), `AB8205` runtime request could not be completed, `AB8206` Workbench runtime client failure, `AB8207` Agent Document decoding needs the optional `@agent-bundle/runtime` peer (503), `AB8208` stored Flight could not be decoded as an Agent Document (409), `AB8209` decoded Agent Document over the 16 MiB budget (413) or an invalid document response. |
 | `AB8210`–`AB8214` | Workbench semantic lifecycle replay routes (`/api/lifecycles`, `/api/lifecycles/replays`): `AB8210` invalid path, `AB8211` malformed replay request or native envelope (400, carries the shared validator message), `AB8212` replay unavailable or could not be completed, `AB8213` stale manifest binding (409; the page repairs it with refresh → explicit re-run), `AB8214` replay over the 16 MiB budget (413). |
 | `AB8215`–`AB8218` | Workbench read-only host discovery route (`/api/discovery`): `AB8215` invalid path, `AB8216` query string or non-`GET` method (400/405), `AB8217` report over the 16 MiB response limit (413), `AB8218` discovery not available (503). |
@@ -1334,7 +1334,7 @@ SQLite lock or shared-memory files.
 
 | Code | Severity | Trigger |
 | --- | --- | --- |
-| `AB7316` | warning | An installed bundle's `state/` directory or one of its `*.sqlite`, `-wal`, or `-shm` files cannot be read with filesystem metadata operations. Repair permissions and rerun Doctor; Doctor never repairs state. |
+| `AB7316` | warning | An installed bundle's effective or legacy state directory is not writable, or the directory or one of its `*.sqlite`, `-wal`, or `-shm` files cannot be read with filesystem metadata operations. Repair permissions and rerun Doctor; Doctor never repairs state. |
 
 ## Read-only Doctor operator env inventory (`AB7331`)
 
@@ -1348,6 +1348,16 @@ diagnostic.
 | Code | Severity | Trigger |
 | --- | --- | --- |
 | `AB7331` | info / warning | Info: an installed copy (or the `--from` bundle) carries `.env` or `.env.local` at its plugin root; the message names the file and its variable count. Warning: the file exists but cannot be read, so the pack's shells skip it at launch — repair its permissions and rerun Doctor. |
+
+## Read-only Doctor legacy state (`AB7332`)
+
+Doctor resolves each installed copy's effective framework state root from its
+canonical code root and declared environment. It reports that root's source,
+existence, and writability separately from the pre-#640 in-tree location.
+
+| Code | Severity | Trigger |
+| --- | --- | --- |
+| `AB7332` | info | `<plugin root>/state` still exists while the installed artifact resolves framework state elsewhere. Move any state that must be retained, or use `uninstall --purge-data --confirm-purge` to remove both roots. |
 
 ## Read-only runtime identity introspection (`AB7317`–`AB7318`)
 

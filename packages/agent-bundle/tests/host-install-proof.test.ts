@@ -561,7 +561,7 @@ codexPluginIt(
       keepData: 'unavailable',
       plan: 'no-op',
       proofLevel: proofLabel,
-      purgeData: 'removed-by-host',
+      purgeData: 'purged',
       refusals: { foreignOrMismatch: 'AB7007', missingReceipt: 'AB7009', unconfirmedPurge: 'AB7008' },
       registrations: { 'codex-marketplace': 'removed', 'codex-plugin': 'removed' },
       rerun: 'not-installed',
