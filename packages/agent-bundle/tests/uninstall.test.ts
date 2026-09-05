@@ -498,6 +498,34 @@ it('never purges a pre-existing declared state root or its unrelated sentinel', 
   }
 });
 
+it('prunes a newly marked explicit root when no runtime state was written', async () => {
+  const fixture = await createFixture('cursor');
+  const cursorRoot = join(fixture.home, '.cursor');
+  const declaredRoot = join(fixture.cleanupRoot, 'unused-state');
+  const options = { from: fixture.bundleRoot, home: fixture.home, host: 'cursor' as const };
+  try {
+    await Promise.all([
+      mkdir(cursorRoot, { recursive: true }),
+      writeJson(join(fixture.bundleRoot, '.cursor-plugin/mcp.json'), {
+        mcpServers: {
+          stateful: {
+            command: 'node',
+            env: { AGENT_BUNDLE_STATE_ROOT: declaredRoot },
+          },
+        },
+      }),
+    ]);
+    await installBundle(options);
+    expect(await readdir(declaredRoot)).toEqual(['.agent-bundle-state-owner.json']);
+    const removed = await uninstallBundle(options);
+    expect(removed.data.outcome).toBe('absent');
+    expect(removed.remnantReceipt).toBeUndefined();
+    await expect(readdir(declaredRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+  }
+});
+
 it('purges only the install-time AGENT_BUNDLE_STATE_ROOT when the uninstall environment changes', async () => {
   const fixture = await createFixture('cursor');
   const cursorRoot = join(fixture.home, '.cursor');
@@ -1548,8 +1576,10 @@ it('reacquires Claude marketplace ownership after a keep-data remnant reinstall'
     const stateRoot = userDataStateRoot(installPath, options.environment, fixture.home);
     await mkdir(stateRoot, { recursive: true });
     await writeFile(join(stateRoot, 'state.sqlite'), 'state\n');
+    const plan = await uninstallBundle({ ...options, plan: true });
     const kept = await uninstallBundle(options);
     expect(kept.receipt.status).toBe('remnant');
+    expect(plan.removed).toEqual(kept.removed);
     expect(marketplaceRegistered).toBe(false);
 
     await installBundle(options);
@@ -1595,6 +1625,7 @@ it('keeps external Codex state while reporting in-tree state only for purge', as
       mkdir(join(installPath, 'state'), { recursive: true }),
       mkdir(stateRoot, { recursive: true }),
     ]);
+    await writeFile(join(stateRoot, 'state.sqlite'), 'state\n');
     expect((await uninstallBundle({ ...options, plan: true })).data).toMatchObject({
       outcome: 'kept',
       paths: [stateRoot],

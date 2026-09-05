@@ -1391,11 +1391,18 @@ const publicHostInventory = async (
       // hooks, MCP servers, or skills reach a session until it is enabled again (#476).
       const enabled = typeof row['enabled'] === 'boolean' ? row['enabled'] : undefined;
       const name = row['id'].slice(0, row['id'].indexOf('@') === -1 ? undefined : row['id'].indexOf('@'));
-      const receipt = storedReceipts.receipts.find((stored) =>
+      const receiptCandidates = storedReceipts.receipts.filter((stored) =>
         stored.receipt.plugin === name &&
         stored.receipt.scope === row['scope'] &&
         stored.receipt.version === row['version']
-      )?.receipt;
+      );
+      const rowProjectRoot = typeof row['projectPath'] === 'string' ? resolve(row['projectPath']) : undefined;
+      const matchingReceipts = rowProjectRoot === undefined
+        ? receiptCandidates
+        : receiptCandidates.filter((stored) =>
+            stored.receipt.projectRoot !== undefined &&
+            resolve(stored.receipt.projectRoot) === rowProjectRoot);
+      const receipt = matchingReceipts.length === 1 ? matchingReceipts[0]?.receipt : undefined;
       const durableState = await inspectInstalledDurableState(row['installPath'], host, environment, home, receipt);
       diagnostics.push(...durableState.diagnostics);
       findings.push({

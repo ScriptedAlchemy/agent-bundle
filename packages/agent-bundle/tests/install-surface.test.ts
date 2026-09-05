@@ -755,6 +755,12 @@ it('emitted install.mjs marks new explicit state roots and retains pre-existing 
         }],
       },
     });
+    const markerOnly = await run(installer, ['--uninstall'], home);
+    expect(markerOnly.code).toBe(0);
+    expect(markerOnly.stdout).not.toContain('Remnant receipt:');
+    await expect(readdir(ownedRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    expect((await run(installer, [], home)).code).toBe(0);
     await writeFile(join(ownedRoot, 'state.sqlite'), 'owned\n');
     expect((await run(installer, ['--uninstall', '--purge-data', '--confirm-purge'], home)).code).toBe(0);
     await expect(readdir(ownedRoot)).rejects.toMatchObject({ code: 'ENOENT' });

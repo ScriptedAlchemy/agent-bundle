@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { lstat, mkdir, open, readFile, realpath, rm, rmdir } from 'node:fs/promises';
+import { lstat, mkdir, open, readFile, readdir, realpath, rm, rmdir } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
 import { isErrno } from '../core/errors.ts';
@@ -251,7 +251,8 @@ export interface RecordedInstalledState {
 }
 
 export interface InstalledStateOwnershipDecision {
-  readonly action: 'absent' | 'purge' | 'retain';
+  readonly action: 'absent' | 'empty' | 'purge' | 'retain';
+  readonly marker?: string;
   readonly path: string;
   readonly reason?: string;
 }
@@ -284,6 +285,15 @@ export const inspectInstalledStateOwnership = async (
     )
   ) {
     return Object.freeze({ action: 'retain', path: root.root, reason: 'marker-mismatch' });
+  }
+  const entries = await readdir(root.root);
+  if (entries.length === 0) return Object.freeze({ action: 'empty', path: root.root });
+  if (
+    root.ownership.kind === 'marker' &&
+    entries.length === 1 &&
+    entries[0] === stateOwnershipMarkerFile
+  ) {
+    return Object.freeze({ action: 'empty', marker: root.ownership.marker, path: root.root });
   }
   return Object.freeze({ action: 'purge', path: root.root });
 };
@@ -340,17 +350,30 @@ export const recordInstalledState = async (
       await mkdir(dirname(root), { recursive: true });
       try {
         await mkdir(root);
+        created.push(root);
         const handle = await open(marker, 'wx');
         try {
           await handle.writeFile(markerDocument(owner), 'utf8');
         } finally {
           await handle.close();
         }
-        created.push(root);
         ownership = Object.freeze({ kind: 'marker' as const, marker });
       } catch (error) {
-        if (!isErrno(error, 'EEXIST')) throw error;
-        ownership = Object.freeze({ kind: 'unowned' as const, reason: 'pre-existing' as const });
+        if (!isErrno(error, 'EEXIST')) {
+          if (created.at(-1) === root) {
+            created.pop();
+            await rmdir(root).catch((rollbackError: unknown) => {
+              if (!isErrno(rollbackError, 'ENOENT') && !isErrno(rollbackError, 'ENOTEMPTY')) {
+                throw rollbackError;
+              }
+            });
+          }
+          throw error;
+        }
+        if (created.at(-1) === root) created.pop();
+        ownership = await markerMatches(marker, owner)
+          ? Object.freeze({ kind: 'marker' as const, marker })
+          : Object.freeze({ kind: 'unowned' as const, reason: 'foreign-marker' as const });
       }
     } else if (await markerMatches(marker, owner)) {
       ownership = Object.freeze({ kind: 'marker' as const, marker });
