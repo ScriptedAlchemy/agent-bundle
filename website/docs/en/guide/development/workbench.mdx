@@ -1,5 +1,5 @@
 ---
-description: 'The agent-bundle developer Workbench: loopback boundaries, epoch-pinned MCP sessions, Playground traces, development host installs, and the optional Agent API.'
+description: 'Explore, invoke, render, trace, and diagnose an agent-bundle application in the loopback developer Workbench.'
 ---
 
 # Developer Workbench
@@ -25,88 +25,171 @@ These are contracts, not defaults:
 - **Trusted-local operations only.** The browser never supplies a command, a working directory, a
   native model, or a credential. See [Security](../../reference/security.mdx).
 
-## What it shows
+## Workbench navigation
 
-| Page | Contents |
-| --- | --- |
-| Overview | Project identity, normalized model, and diagnostics. |
-| Routes | The compiled route catalog from the same compiler pass as `inspect --routes`: each route's source module, config summary, and a generated input editor; a route with a static contract names the contract's declaring module and any other routes sharing it. |
-| Skills | Every Skill document, including each host's lowered output. |
-| Artifacts | The artifact tree with provenance and epoch comparison. |
-| MCP | An artifact-bound playground with the raw protocol trace, MCP App previews, and a launcher for the standalone MCP Inspector. |
-| Hooks | A playground that runs the emitted hook wrapper. |
-| Playground | A durable, ordered trace with replay and export. |
-| Evals | Eval runs and run comparisons. |
-| Logs | Concise events plus raw stdout, stderr, and protocol streams, grouped by producer: normalization, build, diagnostics, MCP, hook, host trial, and grader. |
+The primary navigation has four destinations in this release:
 
-A failed MCP App view compile is a build failure like any other. The Overview **Diagnostics**
-table shows one `AB4770` row per Rspack error: the Message column carries
-`MCP App "<name>" failed to compile: <file>:<line>:<column>: <message>` and the Source column the
-failing file, in place of the former
-`AB7100 "Unable to compile the build: Rspack build failed."` row whose only source was the config
-file. Logs records the same diagnostics — code and source path — under the `build.failed` entry.
-No `artifact.available` follows, so the last good epoch stays active and every bound MCP session
-keeps serving it; save a fix and the next rebuild publishes. Compile warnings (`AB4771`) and the
-size advisory (`AB4772`) ride the succeeded epoch's diagnostics the same way.
+- **Application** — the compiled application tree and the workspace for its selected leaf.
+- **Trace** — invocations observed in this foreground development session.
+- **Problems** — current compiler, runtime, and contract diagnostics.
+- **Advanced** — Evals, Artifact, Protocol, Host diagnostics, and Raw logs.
 
-## MCP sessions bind to an epoch
+The header stays visible across them. It shows the project name, build state and epoch,
+contract-gate and diagnostic failure count (linked to Problems), and foreground connection
+state. Host **Sessions** arrive in a later release and are not part of this Workbench.
 
-A Workbench MCP session binds `{ epochId, target, serverName }` when it is opened and never moves
-to a new epoch automatically. That is what makes a protocol trace meaningful: every frame in it
-came from one generated server built from one set of inputs.
+## Application tree
 
-- **Restart MCP session** respawns that generated server on its *selected* epoch.
-- To use a newly published epoch, open a **new** session.
-- Compatible MCP Apps preview through the same bound session. The dev loop compiles views
-  unminified, so the browser devtools show readable App source; `agent-bundle build` ships them
-  minified (see
-  [Development vs production builds](../authoring/mcp.mdx#development-vs-production-builds)).
-  The same host stack serves one App standalone in a plain browser tab through
-  `agent-bundle serve-app`; see
-  [Serving an App standalone](../authoring/mcp.mdx#serving-an-app-standalone).
+Application is one tree derived from the compiled application graph:
 
-## Standalone MCP Inspector
+```text
+MCP
+  <server>
+    Tools
+    Resources
+    Prompts
+    Apps
+Events / Hooks
+CLI
+Scripts
+Skills
+Rules / Commands
+```
 
-The [MCP Inspector](https://github.com/modelcontextprotocol/inspector) is a separate localhost app
-with its own token URL. The Workbench never embeds it; the **MCP Inspector** section of the MCP page
-launches it on demand and hands you a link.
+Each leaf is an authored or configured plugin surface. Generated MCP servers group tools,
+resources, prompts, and Apps beneath their server. Event routes and configured hooks appear
+under Events / Hooks. Routed commands form the CLI branch. Conventional and explicitly
+configured scripts share Scripts. Skills, host rules, and host commands remain visible even
+when they do not have an executable route id.
 
-- **Open MCP Inspector** asks the dev server to run `npx --yes @modelcontextprotocol/inspector` in
-  the project root, with `MCP_AUTO_OPEN_ENABLED=false` so the Inspector does not open a window of
-  its own. The first launch downloads the package and can take up to 30 seconds. The browser never
-  chooses the command, its arguments, its working directory, or its environment.
-- Once the Inspector prints its tokenized localhost URL, the dev server returns it and the page
-  renders **Open MCP Inspector in a new tab**. The link opens a new tab with
-  `rel="noopener noreferrer"`. If the Inspector is already running when the page loads, the link
-  appears immediately.
-- For a `streamable-http` session the link is an Inspector 2.x deep link: `serverUrl` is the
-  session's server URL (credentials and query parameters already stripped), `transport=http`, and
-  `autoConnect` carries the Inspector's own token, so the Inspector connects to that server on
-  load.
-- Inspector 2.x no longer accepts a command in the URL — upstream removed `serverCommand` and
-  `serverArgs` — so a `stdio` session cannot be deep-linked. Add the command inside the Inspector
-  instead; **Download Inspector config** exports the selected session's resolved command,
-  arguments, and non-secret environment for exactly that.
-- Failures surface inline on the page: `AB8112` when the Inspector could not be launched, exited
-  before publishing a URL, or did not publish one within the 30-second startup budget; `AB8113`
-  when the Inspector routes are not available.
+Config-only hooks and scripts are not hidden merely because there is no matching file-convention
+route. The tree combines the route manifest with the compiler inspection that owns those
+declarations. A stale or unavailable compiler catalog is called out in the tree instead of being
+presented as an empty application.
 
-## Playground owns its trace
+## Route workspace
 
-Only actions started in Playground join its ordered durable trace. Hook and MCP page operations
-stay independent even while a Playground session is open — a trace records a deliberate sequence,
-not everything that happened to be clicked.
+Selecting a leaf opens one workspace rather than sending you to a surface-specific page. For an
+executable route, the input editor is generated from its schema and offers applicable fixtures
+and the last input kept for that leaf. **Run** executes the production route path on the
+foreground server.
 
-From a Playground trace you can replay or export the raw evidence, or promote selected durable
-outcome and assertion evidence into a draft eval case.
+Results open on **Rendered**, the browser rendering of the production Agent Document and its
+streamed progress or Suspense replacements. Secondary result tabs are **Structured result**,
+**Raw AgentDocument**, **MCP projection**, **CLI projection** when available, and **Trace**.
+The inspector opens only when requested and contains **Source**, **Schema**, **Context**,
+**Providers**, **Execution timings**, **Projection**, and **Raw protocol**.
 
-`script.run` is a production-mounted, trusted-local Playground operation: it runs only the
-selected manifest-owned emitted script for the selected target, in a managed workspace, and
-preserves bounded stdout and stderr, the exit code, cancellation, and raw event references. See
-[Scripts and assets](../authoring/scripts-assets.mdx).
+The browser does not import or execute arbitrary route modules. The server runs the same RSC
+route path used by generated executables and sends its semantic render-event stream and final
+Agent Document to the Workbench.
 
-Native prompts choose a server catalog selection — case, fixture, host, and pinned model — for
-the selected epoch, rather than accepting a browser-supplied command or model.
+### Event routes
+
+An event leaf has fixture choices **Canonical**, **Claude**, **Codex**, and **Cursor**. Running a
+host fixture decodes the native envelope exactly as that host wrapper would, then shows canonical
+input, request context, providers, the returned decision or document, and projected host results.
+Canonical-to-host mapping and native input/output are secondary projection details.
+
+Observed event receipts appear in the leaf's **Replay** tab and in Trace. Select a receipt there
+to rerun its epoch-bound input; there is no separate lifecycle destination.
+
+### App and Skill leaves
+
+An App leaf places the sandboxed MCP App preview in the center of the workspace, bound to its
+server. A bound App can also be reached from its tool's projection details.
+
+A Skill leaf renders the emitted Skill document by default. Source/generated differences,
+frontmatter, resources, and eval coverage live in the inspector. Raw HTML, JSX/MDX, and Mermaid
+inside Skill Markdown remain inert.
+
+## Trace
+
+Trace lists this foreground development session's route invocations and updates when a
+`route.invocation` project event arrives. Select an entry to inspect it, or follow its route link
+to load that invocation snapshot in the route workspace. This release does not claim a durable
+cross-session trace or embedded host session.
+
+## Problems and stale-catalog repair
+
+Problems collects the current diagnostics. A failed build publishes no new epoch, so the header
+shows the failed state while Application continues to expose the last good catalog and artifact.
+For example, an MCP App compile failure contributes one `AB4770` row per Rspack error, including
+the failing source and location; `AB4771` warnings and the `AB4772` size advisory belong to a
+successful epoch.
+
+Repair a stale catalog in this order:
+
+1. Open **Problems** from the header failure count and fix the reported source.
+2. Rebuild, then wait for the completed **Idle** state; **Building** is not repair evidence.
+3. Return to **Application**. The new published epoch replaces the stale tree and clears repaired
+   diagnostics.
+
+## Advanced
+
+- **Evals** has **Runs** and **Compare** views for admitting, cancelling, inspecting, and comparing
+  eval runs.
+- **Artifact** defaults to a simple emitted-file tree. Select a file and enable its details to see
+  hashes, modes, and provenance.
+- **Protocol** is the low-level MCP session inspector. It retains protocol traces, task controls,
+  consent, restart/cancel actions, and the standalone
+  [MCP Inspector](https://github.com/modelcontextprotocol/inspector) launcher.
+- **Host diagnostics** is limited to installed state, version, path, whether the current plugin is
+  attached, actionable errors, and one MCP handshake indicator.
+- **Raw logs** contains producer streams for framework-level diagnosis. Trace is the normal route
+  execution view.
+
+An MCP protocol session remains pinned to `{ epochId, target, serverName }`. Restarting it respawns
+that generated server on the selected epoch; open a new session to use a newly published epoch.
+Compatible Apps preview through the same bound session. See
+[Development vs production builds](../authoring/mcp.mdx#development-vs-production-builds).
+
+The standalone MCP Inspector still launches as a separate localhost app. Streamable HTTP sessions
+can deep-link into Inspector 2.x; stdio sessions use the downloadable resolved command,
+arguments, and non-secret environment. `AB8112` reports launch failure or timeout and `AB8113`
+reports unavailable launcher routes.
+
+## URL model
+
+Workbench uses paths and browser history, not `#page` hashes:
+
+```text
+/routes/mcp/<server>/tool/<name>
+/routes/mcp/<server>/resource/<name>
+/routes/mcp/<server>/prompt/<name>
+/routes/mcp/<server>/app/<name>
+/routes/events/<event...>
+/routes/cli/<command...>
+/routes/scripts/<name>
+/routes/skills/<id>
+/routes/commands/<id>
+/routes/rules/<id>
+/trace/<invocation-id>
+/problems
+/advanced/<section>
+```
+
+The Advanced section names are `evals`, `artifact`, `protocol`, `hosts`, and `logs`.
+Append `?invocation=<id>` to an Application route to load a recorded invocation. The dev server
+serves the Workbench shell for these paths, so route, trace, Problems, and Advanced deep links
+survive refresh.
+
+## Route invocation API
+
+The route workspace uses one authenticated, origin-guarded foreground API:
+
+- `POST /api/routes/invocations` accepts a route invocation request and returns its completed
+  invocation envelope.
+- `GET /api/routes/invocations?limit=50` returns newest-first summaries for Trace.
+- `GET /api/routes/invocations/<id>` returns one invocation.
+- `/api/project/events` publishes completed summaries as `route.invocation` events.
+
+The envelope carries canonical input, request context, providers, ordered render events, the
+final Agent Document, structured result, projections, diagnostics, and execution timings when
+available. A represented `Agent.Error` remains a rendered result; malformed requests, unknown
+routes, unavailable epochs, execution timeouts, and invalid responses use `AB8231`–`AB8235`.
+See the [diagnostics reference](../../reference/diagnostics.md) for the individual triggers and
+recovery guidance.
 
 ## The same session programmatically
 
@@ -281,7 +364,15 @@ disconnected.`, then the refusal once the reconnect's own 200 bootstrap is turne
 foreground still refuses mutations carrying
 that `Origin` with `AB8003`. The foreground URL keeps working regardless.
 
+## What changed
+
+- Overview status moved into the persistent header and Problems.
+- Routes, Hooks, Skills, and MCP previews moved into Application leaves.
+- Event replay moved into event routes and Trace; script execution moved into Script leaves.
+- Evals and comparisons became Advanced → Evals → Runs / Compare; artifact, protocol, host
+  diagnostics, and raw logs also moved under Advanced.
+
 ## Next
 
 - [Testing](./testing.mdx) — the proof levels behind the surfaces the Workbench exercises.
-- [Evaluations](./evaluations.mdx) — eval runs, comparisons, and the Eval page.
+- [Evaluations](./evaluations.mdx) — eval runs and comparisons under Advanced.

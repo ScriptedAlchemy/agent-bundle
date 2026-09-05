@@ -44,18 +44,19 @@ it is needed.
 
 ## Working in the Workbench
 
-1. **Overview** opens on the Bundle dashboard: the three Skills, the generated targets, build
-   health, and the next useful actions.
-2. **Skills** lists `dependency-upgrade`, `incident-triage`, and `release-review`. Browse their
-   linked checklists and report templates, and switch between Source and Generated per target.
-3. **Artifacts** defaults to the Claude target. Change the target to compare the portable, Codex,
-   and Claude output trees and their provenance.
-4. **Evals** defaults to the `release-readiness` suite. Run `release-artifact-is-ready` and
+1. **Application → Skills** lists `dependency-upgrade`, `incident-triage`, and `release-review`.
+   Select one to render its document, then use the inspector to browse linked checklists and
+   report templates or compare Source and Generated output.
+2. **Advanced → Artifact** defaults to the Claude target. Change the target to compare the
+   portable, Codex, and Claude output trees; enable details for provenance.
+3. **Advanced → Evals → Runs** defaults to the `release-readiness` suite. Run
+   `release-artifact-is-ready` and
    inspect the passing trial; it consumes only the checked-in evidence fixture.
-5. To practice repair, make a reversible edit to the release policy, press **Rebuild**, and wait
-   for a Failed or Idle result rather than a Building state. Restore the checked-in policy and
-   rebuild. The earlier eval is now stale for the changed build — rerun `release-readiness` to
-   record current, repaired evidence.
+4. To practice repair, make a reversible edit to the release policy, press **Rebuild**, and wait
+   for a Failed or Idle result rather than a Building state. On failure, open **Problems** from
+   the header count while Application keeps the last-good tree. Restore the checked-in policy
+   and rebuild. The earlier eval is now stale for the changed build — rerun `release-readiness`
+   to record current, repaired evidence.
 
 ## Noninteractive checks
 

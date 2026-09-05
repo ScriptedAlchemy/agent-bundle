@@ -88,10 +88,11 @@ npx agent-bundle dev --root .                   # local workbench with live rebu
 ```
 
 `build` validates the project and writes the artifact, plus the `bin`/`lib` package build when
-declared. `dev` serves the loopback developer Workbench and rebuilds as inputs change: project
-overview and diagnostics, Skill documents, the artifact tree with provenance and epoch
-comparison, an artifact-bound MCP playground with the raw protocol trace, a hook playground that
-runs the emitted wrapper, and eval runs.
+declared. `dev` serves the loopback developer Workbench and rebuilds as inputs change. Use its
+Application tree to select a tool, event, CLI command, script, App, Skill, rule, or command; run
+executable leaves and inspect the rendered Agent Document first. Trace shows this session's
+invocations, Problems holds diagnostics, and Advanced contains evals, artifact inspection,
+protocol inspection, host diagnostics, and raw logs.
 
 ## Inspect what the compiler decided
 

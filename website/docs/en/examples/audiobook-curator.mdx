@@ -90,6 +90,20 @@ pnpm --filter @agent-bundle-example/audiobook-curator typecheck
 beneath `artifact/` — each host's plugin metadata, Skill, bundled CLI script, and
 lifecycle-wrapped MCP server — plus the npm package beneath `dist/`.
 
+Start `pnpm example:audiobook` from the repository root for the visual development loop:
+
+1. Expand **Application → MCP → curator → Tools** and select `search_audible`.
+2. Enter a title such as `Dune` in the generated input editor, then select **Run**.
+3. Inspect **Rendered** first: it shows the actual Agent Document from the route's production
+   RSC execution. Structured data, raw document, MCP/CLI projections, and Trace remain available
+   as secondary tabs.
+4. Edit `src/mcp/curator/tools/search_audible.tsx` or a component it renders. After the rebuild
+   reaches **Idle**, rerun the saved input and inspect the updated rendered result.
+
+The route is directly addressable at
+`/routes/mcp/curator/tool/search_audible`; append `?invocation=<id>` to reopen one of this
+session's recorded results.
+
 To exercise the built CLI without packing a tarball, link the built bin from any writable
 directory already on `PATH`:
 
