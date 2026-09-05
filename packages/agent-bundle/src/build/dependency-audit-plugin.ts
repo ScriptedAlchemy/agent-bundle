@@ -1,4 +1,4 @@
-import { rspack, type Rspack } from '@rslib/core';
+import type { Rspack } from '@rslib/core';
 
 import { isRecord } from '../core/strict-json.ts';
 import type { CompilationEvidence, CompilationExternal, CompilationModule } from './compile-result.ts';
@@ -61,6 +61,7 @@ const moduleResource = (module: Rspack.Module | null | undefined): string | unde
   module?.nameForCondition() ?? module?.identifier();
 
 const collectExternals = (compilation: Rspack.Compilation): readonly CompilationExternal[] => {
+  const { ExternalModule } = compilation.compiler.rspack;
   const byRequest = new Map<string, {
     readonly externalType: string;
     readonly issuers: Set<string>;
@@ -68,7 +69,7 @@ const collectExternals = (compilation: Rspack.Compilation): readonly Compilation
     readonly userRequest: string;
   }>();
   for (const module of compilation.modules) {
-    if (!(module instanceof rspack.ExternalModule)) continue;
+    if (!(module instanceof ExternalModule)) continue;
     const { externalType, request } = runtimeRequest(module);
     const key = [externalType, request, module.userRequest].join('\u0000');
     const record = byRequest.get(key) ?? {
@@ -97,9 +98,10 @@ const collectExternals = (compilation: Rspack.Compilation): readonly Compilation
 };
 
 const collectModules = (compilation: Rspack.Compilation): readonly CompilationModule[] => {
+  const { NormalModule } = compilation.compiler.rspack;
   const modules: CompilationModule[] = [];
   for (const module of compilation.modules) {
-    if (!(module instanceof rspack.NormalModule)) continue;
+    if (!(module instanceof NormalModule)) continue;
     const resource = module.nameForCondition();
     modules.push(Object.freeze({ identifier: module.identifier(), ...(resource === undefined ? {} : { resource }) }));
   }
@@ -109,7 +111,8 @@ const collectModules = (compilation: Rspack.Compilation): readonly CompilationMo
 /**
  * Records what one compilation resolved — externals with their issuers and
  * bundled modules — once the module graph is final and before any asset is
- * emitted.
+ * emitted. Module classes come from the compiler's own Rspack instance, so the
+ * plugin judges an Rslib and an Rsbuild compilation alike.
  */
 export class ArtifactDependencyAuditPlugin {
   readonly #record: (evidence: CompilationEvidence) => void;
