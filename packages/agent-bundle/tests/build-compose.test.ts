@@ -167,7 +167,12 @@ const topLevel = async (root: string): Promise<readonly string[]> => (await read
 
 describe('composite plugin root (#555)', () => {
   it('emits one root whose top-level entries are exactly the selected projections and shared surfaces (acceptance 1)', { timeout: 120_000 }, async () => {
-    const { output } = await buildFixture(['claude', 'codex']);
+    const { output, result } = await buildFixture(['claude', 'codex']);
+    const registry = createDefaultRegistry();
+    for (const projection of result.build.manifest.projections) {
+      expect(projection.documents.hooks).toBe(registry.hookContract(projection.host)?.manifestPath);
+      expect(projection.documents.mcp).toBe(registry.mcpRuntime(projection.host)?.manifestPath);
+    }
 
     // The pinned layout of a Claude Code + Codex root. Every entry has one
     // obvious purpose; a future step that adds an entry here must justify it.
@@ -232,6 +237,7 @@ describe('composite plugin root (#555)', () => {
     expect(result.build.manifest.manifestVersion).toBe(2);
     expect(result.build.manifest.projections.map((projection) => projection.host)).toEqual(['portable']);
     expect(result.build.manifest.projections[0]!.documents.plugin).toBe('plugin.json');
+    expect(result.build.manifest.projections[0]!.documents.mcp).toBe('mcp.json');
     expect(result.build.manifest.files.some(({ path }) =>
       path === result.build.manifest.projections[0]!.documents.plugin)).toBe(true);
     expect(result.build.manifest.routes).toMatchObject({
@@ -416,6 +422,7 @@ describe('composite plugin root (#555)', () => {
       buildFixture(['claude', 'codex'], { registry }),
     ]);
     expect(alone.result.build.manifest.projections.map((projection) => projection.host)).toEqual(['synthetic']);
+    expect(alone.result.build.manifest.projections[0]!.documents.mcp).toBeUndefined();
     expect(await topLevel(alone.output)).toContain(syntheticMcpRuntime.manifestPath);
     expect(builtIn.result.build.manifest.projections.map((projection) => projection.host)).toEqual(['claude', 'codex']);
     expect(await topLevel(builtIn.output)).not.toContain(syntheticMcpRuntime.manifestPath);

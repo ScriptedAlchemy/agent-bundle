@@ -83,9 +83,8 @@ export interface ArtifactManifestProject {
 
 /**
  * The application identity, once and host-independent: what `install`,
- * `doctor`, and `uninstall` act on. Every host `plugin.json` repeats `name`
- * and `version` for its host, and the artifact validator proves they agree
- * (`AB6040`).
+ * `doctor`, and `uninstall` act on. Host documents and this manifest are
+ * serialized from the same compiled model in one build.
  */
 export interface ArtifactManifestApplication {
   readonly description?: string;

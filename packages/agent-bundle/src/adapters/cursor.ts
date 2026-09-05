@@ -577,7 +577,7 @@ export const planCursorArtifacts = (model: NormalizedPlugin): TargetArtifactPlan
   const isSelected = (targets: readonly string[]): boolean => targets.includes(cursorName);
   const selected = model.targets.map((target) => target.name);
   const planContract = planHookContract(selected);
-  const mcpRelativePath = cursorArtifactPaths.mcp;
+  const mcpRelativePath = mcpRuntime.manifestPath;
   const selectedCommands = (model.commands ?? []).filter((command) => isSelected(command.targets));
   const selectedRules = (model.rules ?? []).filter((rule) => isSelected(rule.targets));
   const diagnostics: Diagnostic[] = [];

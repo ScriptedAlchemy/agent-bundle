@@ -1116,7 +1116,7 @@ const planHookContract = (selected: readonly string[]): TargetHookContract =>
 export const planCodexArtifacts = (model: NormalizedPlugin): TargetArtifactPlan => {
   const targetName = codexName;
   const selected = model.targets.map((target) => target.name);
-  const mcpRelativePath = codexArtifactPaths.mcp;
+  const mcpRelativePath = mcpRuntime.manifestPath;
   const planContract = planHookContract(selected);
   const isSelected = (targets: readonly string[]): boolean => targets.includes(targetName);
   const diagnostics: Diagnostic[] = [];

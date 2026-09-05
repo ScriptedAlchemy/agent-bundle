@@ -586,9 +586,10 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
     }
   }
 
-  if (Object.keys(servers).length > 0) {
-    const mcp = { $schema: portableMcpSchema, mcpServers: servers };
-    const mcpDiagnostics = schemaDiagnostics('mcp', validateMcp(mcp), validateMcp.errors);
+  const mcp = Object.keys(servers).length > 0 ? { $schema: portableMcpSchema, mcpServers: servers } : undefined;
+  const mcpValid = mcp !== undefined && validateMcp(mcp);
+  if (mcp !== undefined) {
+    const mcpDiagnostics = schemaDiagnostics('mcp', mcpValid, validateMcp.errors);
     diagnostics.push(...mcpDiagnostics);
     if (mcpDiagnostics.length === 0) {
       entries.push({
@@ -604,7 +605,10 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
 
   return deepFreeze({
     diagnostics: diagnostics,
-    documents: { plugin: 'plugin.json' },
+    documents: {
+      ...(mcpValid ? { mcp: mcpRuntime.manifestPath } : {}),
+      plugin: 'plugin.json',
+    },
     entries: sortedEntries(entries),
     hookEntries: [],
   });

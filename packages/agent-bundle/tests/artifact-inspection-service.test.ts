@@ -300,8 +300,6 @@ const publish = async (options: {
   readonly files: readonly FixtureFile[];
   readonly id: string;
   readonly omitMcpDocument?: boolean;
-  /** Validation codes the published fixture is expected to trip instead of validating clean. */
-  readonly expectValidationCodes?: readonly string[];
   readonly registry: TargetRegistry;
   readonly root: string;
   readonly sourceInputs?: typeof fixtureInputs;
@@ -333,10 +331,6 @@ const publish = async (options: {
         artifactRoot,
         registry: options.registry,
       });
-      if (options.expectValidationCodes !== undefined) {
-        expect(diagnostics.map((diagnostic) => diagnostic.code)).toEqual(options.expectValidationCodes);
-        return;
-      }
       if (diagnostics.length > 0) throw new Error(diagnostics.map((diagnostic) => diagnostic.message).join('\n'));
     });
   } catch (error) {
@@ -531,10 +525,7 @@ it('rejects a manifested MCP host without its projection MCP document', async ()
   const store = new EpochStore({ projectRoot: root });
 
   try {
-    // The validator's manifest-coherence pass (AB6039) refuses the row before
-    // inspection ever reaches its own AB6202 guard.
     await publish({
-      expectValidationCodes: ['AB6039'],
       files: runtimeFiles(),
       id: 'epoch-missing-mcp-document',
       omitMcpDocument: true,
@@ -545,8 +536,8 @@ it('rejects a manifested MCP host without its projection MCP document', async ()
 
     await expect(new ArtifactInspectionService(store, registry).inspect('epoch-missing-mcp-document'))
       .rejects.toMatchObject({
-        code: 'ARTIFACT_INSPECTION_INVALID',
-        diagnostics: [expect.objectContaining({ code: 'AB6039' })],
+        code: 'ARTIFACT_INSPECTION_RUNTIME_INVALID',
+        diagnostics: [expect.objectContaining({ code: 'AB6202' })],
       });
   } finally {
     await rm(root, { force: true, recursive: true });

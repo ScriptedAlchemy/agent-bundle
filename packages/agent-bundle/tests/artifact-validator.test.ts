@@ -1939,6 +1939,24 @@ it('requires manifest target metadata to match the supplied registry exactly', a
   }
 });
 
+it('reports AB6010 when a projection records another built-in adapter identity', async () => {
+  const registry = createDefaultRegistry();
+  const target = { ...targetFromRegistry(registry, 'claude'), builtInHost: 'codex' as const };
+  const root = await writeArtifact([], true, [target]);
+
+  try {
+    await expect(validateArtifact({ artifactRoot: root, registry })).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'AB6010',
+        message: expect.stringContaining('metadata and adapter identity'),
+        target: 'claude',
+      }),
+    ]));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('requires registered target-native documents and validates their pinned schema contracts', async () => {
   const root = await writeArtifact([], true, [customManifestTarget]);
 
@@ -2289,7 +2307,7 @@ it('documents recovery for every stable artifact diagnostic code', async () => {
       'AB6000', 'AB6001', 'AB6002', 'AB6003', 'AB6004', 'AB6005', 'AB6006',
       'AB6007', 'AB6008', 'AB6009', 'AB6010', 'AB6011', 'AB6012', 'AB6013',
       'AB6014', 'AB6015', 'AB6016', 'AB6017', 'AB6018', 'AB6019', 'AB6020',
-      'AB6021', 'AB6022', 'AB6023', 'AB6024', 'AB6025', 'AB6034', 'AB6039', 'AB6040',
+      'AB6021', 'AB6022', 'AB6023', 'AB6024', 'AB6025', 'AB6034',
     ]);
     expect(Object.values(artifactDiagnosticRecoveries).every((recovery) => recovery.trim().length > 0)).toBe(true);
     expect(artifactDiagnosticRecoveries.AB6015).not.toBe(artifactDiagnosticRecoveries.AB6016);
