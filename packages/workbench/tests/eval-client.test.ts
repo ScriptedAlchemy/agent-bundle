@@ -1,6 +1,6 @@
 import { expect, it } from '@rstest/core';
 
-import { ComparisonClient } from '../src/comparisons/comparison-client.ts';
+import { ComparisonClient } from '../src/evals/comparison-client.ts';
 import { EvalClient } from '../src/evals/eval-client.ts';
 import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
 import { recordingFetch, response, type RecordedRequest } from './support/recording-fetch.ts';

@@ -163,8 +163,10 @@ e2e('admits a deterministic Eval promptly and renders refreshed durable evidence
     page.on('request', (request) => {
       if (request.method() === 'GET' && request.url().includes('/api/evals/runs/')) durableReads.push(request.url());
     });
-    await page.goto(workbenchUrl(server.url, 'evals'));
+    await page.goto(workbenchUrl(server.url, '/advanced/evals'));
     await expect(page.getByRole('heading', { name: 'Evals' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('tab', { name: 'Runs' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('tab', { name: 'Compare' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByRole('button', { name: 'Run deterministic suite' })).toBeEnabled({ timeout: browserTimeout });
     await expect(page.getByLabel('Harness')).toHaveValue('deterministic');
     await expect(page.getByText('Authored model pins are read-only')).toBeVisible();
@@ -259,7 +261,7 @@ e2e('keeps a gated deterministic run cancellable exactly once and rejects stale 
       await heldCancel;
       await route.continue();
     });
-    await page.goto(workbenchUrl(server.url, 'evals'));
+    await page.goto(workbenchUrl(server.url, '/advanced/evals'));
     await expect(page.getByRole('heading', { name: 'Evals' })).toBeVisible({ timeout: browserTimeout });
     await page.getByLabel('Suite').selectOption('gated-cancel');
     const admitted = page.waitForResponse((response) =>
@@ -314,7 +316,7 @@ e2e('does not cancel a gated run when a newer admission replaces it or the Eval 
     page.on('request', (request) => {
       if (request.method() === 'POST' && request.url().includes('/cancel')) cancellations += 1;
     });
-    await page.goto(workbenchUrl(server.url, 'evals'));
+    await page.goto(workbenchUrl(server.url, '/advanced/evals'));
     await expect(page.getByRole('heading', { name: 'Evals' })).toBeVisible({ timeout: browserTimeout });
     await page.getByLabel('Suite').selectOption('gated-cancel');
     const firstAdmission = page.waitForResponse((response) =>
@@ -330,8 +332,8 @@ e2e('does not cancel a gated run when a newer admission replaces it or the Eval 
     await expect(page.locator('.eval-summary')).toContainText(replacement.run.id, { timeout: browserTimeout });
     await page.waitForTimeout(150);
     await expect(page.locator('.eval-summary')).not.toContainText(first.run.id);
-    await page.goto(workbenchUrl(server.url, 'overview'));
-    await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
+    await page.goto(workbenchUrl(server.url, '/'));
+    await expect(page.getByTestId('workbench-area-application')).toBeVisible({ timeout: browserTimeout });
     expect(cancellations).toBe(0);
   } finally {
     await gate.release();

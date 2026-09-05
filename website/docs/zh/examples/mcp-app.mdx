@@ -64,23 +64,25 @@ description: 'MCP App 示例：把一条服务就绪度工作流表达为生成�
 
 ## 在 Workbench 中操作
 
-1. **Overview** 打开时是 Bundle 仪表盘。它的 Author、Build、Exercise 与 Evaluate 阶段把源码中的能力与
-   它的输出产物、运行时证据和 eval 结果连起来。
-2. **Skills** 默认选中 `service-readiness`；把它编写好的状态策略与就绪度报告资源，与生成输出及其显式
-   eval 覆盖对比。**Hooks** 默认是一份已填充的 Claude `sessionStart` 规范输入。
-3. **Playground** 默认是脚本执行、Claude target 与 `check-service-fixture`。运行它并等待会话定稿：输出
-   的检查器会解析自己输出模块旁边打包好的状态夹具，因此它的成功与 shell 的工作目录无关。
-4. **Artifacts** 显示复合插件根目录，无论选中哪个 target，`mcp-apps/status.html` 都出现在这里。在存在
-   两次 eval 运行之前，**Comparisons** 会刻意显示
+1. 在 **Application → Skills** 下选中 `service-readiness`。它的文档默认渲染；用检查器查看源码/生成
+   输出、资源与 eval 覆盖。
+2. 在 **Application → Events / Hooks** 下选中已配置的 `sessionStart` 钩子，并选择 Claude 夹具。运行它
+   以检视规范输入、返回的上下文，以及 Claude 投影。
+3. 在 **Application → Scripts** 下选中 `check-service-fixture` 并运行。输出的检查器会解析自己输出模块
+   旁边打包好的状态夹具，因此它的成功与 shell 的工作目录无关。
+4. 在 **Application → MCP → status → Apps** 下选中 `status` App。它的实时预览占据路由工作区。
+   **Advanced → Artifact** 显示复合插件根目录，无论选中哪个 target，`mcp-apps/status.html` 都出现在
+   这里。
+5. 在存在两次 eval 运行之前，**Advanced → Evals → Compare** 会刻意显示
    `At least two recorded runs are needed before a comparison can be aligned.`——这是精确的空状态，
    不是错误。
-5. **MCP playground** 默认是 portable 与 `status` 服务器。打开会话、列出工具、选择 `show-status`、
-   选中 `payments-api` 并调用它。调用历史会显示降级摘要，以及标注了 Availability 与 P95 latency 的检查，
-   其中后者失败。打开 App 预览：渲染出的面板通过 MCP Apps 桥接展示同一条记录，并带一个以文字标注的
-   琥珀色 `degraded` 指示。检视协议轨迹、使用 **Restart MCP session**，然后关闭、重置并重新打开会话，
-   以演练整个生命周期。
-6. **Evals** 默认选中 `mcp-app-status`。运行 `status-is-healthy`，查看归属于 `service-readiness` 的那次
-   已完成且通过的试次。
+6. 打开 **Advanced → Protocol**，选择 portable 与 `status` 服务器，打开会话、列出工具、选择
+   `show-status`、选中 `payments-api` 并调用它。调用历史会显示降级摘要，以及标注了 Availability 与
+   P95 latency 的检查，其中后者失败。打开 App 预览：渲染出的面板通过 MCP Apps 桥接展示同一条记录，
+   并带一个以文字标注的琥珀色 `degraded` 指示。检视协议轨迹、使用 **Restart MCP session**，然后关闭、
+   重置并重新打开会话，以演练整个生命周期。
+7. 在 **Advanced → Evals → Runs** 中选中 `mcp-app-status`，运行 `status-is-healthy`，查看归属于
+   `service-readiness` 的那次已完成且通过的试次。
 
 如果你修改了某个源文件，请重建并等到 Failed 或 Idle 状态再判断结果；Building 状态仍在进行中。
 

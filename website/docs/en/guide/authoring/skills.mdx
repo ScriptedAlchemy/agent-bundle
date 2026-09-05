@@ -172,8 +172,9 @@ npx agent-bundle inspect --root . --skills
 ```
 
 The skill focus shows each discovered Skill, its provenance (`conventional` or `config`), its
-resources, and the per-target lowering decisions. In the developer Workbench, the Skills page
-renders the emitted document for each host.
+resources, and the per-target lowering decisions. In the developer Workbench, select the Skill
+under **Application → Skills**. Its emitted document is the default view; source/generated
+differences, frontmatter, resources, and eval coverage are inspector tabs.
 
 Raw HTML, JSX/MDX, and Mermaid inside Skill Markdown are inert in the Workbench renderer. That
 is a deliberate containment boundary, not a rendering gap.

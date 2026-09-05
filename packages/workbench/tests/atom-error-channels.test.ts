@@ -5,9 +5,6 @@ import { AsyncResult, AtomRegistry, type Atom } from 'effect/unstable/reactivity
 import { DiscoveryClientError, type HostDiscoveryReport } from '../src/discovery/discovery-client.ts';
 import { discoveryLoaderAtom, discoveryReportAtom } from '../src/discovery/discovery-atoms.ts';
 import { ForegroundRouteClientError } from '../src/mcp/mcp-route-client.ts';
-import { AgentDocumentClientError } from '../src/runtime/agent-document-client.ts';
-import { agentDocumentEventsAtom, agentDocumentLoaderAtom } from '../src/runtime/agent-document-atoms.ts';
-import { RuntimeClientError } from '../src/runtime-client.ts';
 
 const settled = <A, E>(
   registry: AtomRegistry.AtomRegistry,
@@ -48,64 +45,6 @@ const report: HostDiscoveryReport = {
 };
 
 describe('Workbench atom error channels', () => {
-  it('fails the Agent Document atom with AgentDocumentClientError in every failure state', async () => {
-    const registry = AtomRegistry.make();
-    try {
-      const unavailable = failureOf(await settled(registry, agentDocumentEventsAtom('run-1')));
-      expect(unavailable).toBeInstanceOf(AgentDocumentClientError);
-      expect(unavailable).toMatchObject({
-        code: 'AB8206',
-        message: 'Agent Document loading is not available in this Workbench session.',
-        name: 'AgentDocumentClientError',
-      });
-
-      const routeFailure = new AgentDocumentClientError('AB8208', 'Stored Flight could not be decoded.', 409);
-      registry.set(agentDocumentLoaderAtom, async () => { throw routeFailure; });
-      expect(failureOf(await settled(registry, agentDocumentEventsAtom('run-2')))).toBe(routeFailure);
-
-      registry.set(agentDocumentLoaderAtom, async () => { throw new TypeError('Failed to fetch'); });
-      expect(failureOf(await settled(registry, agentDocumentEventsAtom('run-3')))).toMatchObject({
-        code: 'AB8206',
-        message: 'Failed to fetch',
-        name: 'AgentDocumentClientError',
-      });
-
-      // The production loader (`RuntimeClient.readRunDocument`) rethrows the
-      // route diagnostic as a RuntimeClientError; its code must survive.
-      registry.set(agentDocumentLoaderAtom, async () => {
-        throw new RuntimeClientError({ code: 'AB8208', message: 'Stored Flight could not be decoded.', phase: 'flight-decode' });
-      });
-      expect(failureOf(await settled(registry, agentDocumentEventsAtom('run-3-runtime')))).toMatchObject({
-        code: 'AB8208',
-        message: 'Stored Flight could not be decoded.',
-        name: 'AgentDocumentClientError',
-        status: undefined,
-      });
-      registry.set(agentDocumentLoaderAtom, async () => {
-        throw new ForegroundRouteClientError('AB8019', 'Foreground authentication was invalidated.', 401);
-      });
-      expect(failureOf(await settled(registry, agentDocumentEventsAtom('run-3-foreground')))).toMatchObject({
-        code: 'AB8019',
-        message: 'Foreground authentication was invalidated.',
-        name: 'AgentDocumentClientError',
-        status: 401,
-      });
-
-      registry.set(agentDocumentLoaderAtom, async () => { throw 'opaque'; });
-      expect(failureOf(await settled(registry, agentDocumentEventsAtom('run-4')))).toMatchObject({
-        code: 'AB8206',
-        message: 'Agent Document request could not be completed.',
-        name: 'AgentDocumentClientError',
-      });
-
-      registry.set(agentDocumentLoaderAtom, async () => []);
-      const loaded = await settled(registry, agentDocumentEventsAtom('run-5'));
-      expect(AsyncResult.isSuccess(loaded)).toBe(true);
-    } finally {
-      registry.dispose();
-    }
-  });
-
   it('fails the host discovery report atom with DiscoveryClientError in every failure state', async () => {
     const registry = AtomRegistry.make();
     try {

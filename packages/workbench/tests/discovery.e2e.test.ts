@@ -124,74 +124,51 @@ ${outputAnchor}`));
           }
         },
       });
-      await page.goto(workbenchUrl(fixture.url, 'hosts'));
+      await page.goto(workbenchUrl(fixture.url, '/advanced/hosts'));
       try {
-        await expect(page.getByText('Generated at', { exact: true })).toBeVisible({ timeout: browserTimeout });
+        await expect(page.getByRole('heading', { name: 'Host diagnostics' })).toBeVisible({ timeout: browserTimeout });
       } catch (reason) {
         throw new Error(
-          `Host discovery page did not become ready at ${page.url()}.\n${await page.locator('body').innerText()}`,
+          `Host diagnostics did not become ready at ${page.url()}.\n${await page.locator('body').innerText()}`,
           { cause: reason },
         );
       }
-      await expect(page.getByText('Loading host discovery', { exact: true })).toHaveCount(0, { timeout: browserTimeout });
+      await expect(page.getByText('Loading host diagnostics', { exact: true })).toHaveCount(0, { timeout: browserTimeout });
+      await expect(page.getByTestId('workbench-nav').getByRole('link', { name: 'Advanced' })).toHaveAttribute('aria-current', 'page');
 
-      await expect(page.getByRole('heading', { name: 'Hosts' })).toBeVisible();
-      await expect(page.getByRole('link', { exact: true, name: 'Hosts' })).toHaveAttribute('aria-current', 'page');
-
-      const claude = page.getByRole('group', { name: 'Claude' });
-      await expect(claude.locator('.discovery-badge').first()).toHaveText('Available');
+      const claude = page.getByRole('group', { name: 'Claude Code' });
+      await expect(claude.locator('.discovery-badge').first()).toHaveText('Installed');
       await expect(claude.getByText('1.2.3', { exact: true })).toBeVisible();
-      const claudeMcp = claude.getByLabel('Claude MCP servers');
+      const handshake = claude.getByLabel('Claude Code MCP handshake');
       try {
-        await expect(claudeMcp.getByRole('heading', { name: 'MCP servers' })).toBeVisible();
+        await expect(handshake.getByRole('heading', { name: 'MCP handshake' })).toBeVisible();
       } catch (reason) {
-        throw new Error(`Claude MCP discovery was not populated:\n${await claude.innerText()}`, {
+        throw new Error(`Claude MCP handshake was not populated:\n${await claude.innerText()}`, {
           cause: reason,
         });
       }
-      await expect(claudeMcp.getByText('timeline', { exact: true })).toBeVisible();
-      await expect(claudeMcp.getByText('stdio', { exact: true }).first()).toBeVisible();
       expect(probeRequests).toEqual([]);
 
-      await claudeMcp.getByRole('button', { name: 'Probe timeline' }).click();
-      await expect(claudeMcp.getByRole('heading', { name: 'Consent required' })).toBeVisible();
-      await expect(claudeMcp).toContainText('read-only live probe');
-      await expect(claudeMcp).toContainText('Nothing is stored');
-      await claudeMcp.getByRole('button', { name: 'Cancel' }).click();
+      await handshake.getByRole('button', { name: /Probe MCP handshake/u }).click();
+      await expect(handshake.getByRole('heading', { name: 'Consent required' })).toBeVisible();
+      await expect(handshake).toContainText('read-only live probe');
+      await expect(handshake).toContainText('Nothing is stored');
+      await handshake.getByRole('button', { name: 'Cancel' }).click();
       expect(probeRequests).toEqual([]);
 
-      await claudeMcp.getByRole('button', { name: 'Probe timeline' }).click();
-      await claudeMcp.getByRole('button', { name: 'Run live probe' }).click();
+      await handshake.getByRole('button', { name: /Probe MCP handshake/u }).click();
+      await handshake.getByRole('button', { name: 'Run handshake' }).click();
       await expect.poll(() => probeRequests).toEqual(['POST']);
-      await expect(claudeMcp.getByText('Connected', { exact: true })).toBeVisible({
-        timeout: browserTimeout,
-      });
-      const protocol = claudeMcp.locator('.discovery-mcp-server-facts > div')
-        .filter({ hasText: 'Protocol' })
-        .locator('dd');
-      await expect(protocol).not.toHaveText('');
-      await expect.poll(() => claudeMcp.getByLabel('timeline tools').getByRole('row').count())
-        .toBeGreaterThan(1);
-      await expect(claudeMcp.getByLabel('Redacted launch summary')).toBeVisible();
-      await expect(page.getByRole('alert')).toHaveCount(0);
-
-      const downServer = claudeMcp.locator(':scope > ul > li').filter({ hasText: 'probe-down' });
-      await claudeMcp.getByRole('button', { name: 'Probe probe-down' }).click();
-      await downServer.getByRole('button', { name: 'Run live probe' }).click();
-      await expect.poll(() => probeRequests).toEqual(['POST', 'POST']);
-      const downBadge = downServer.getByText(/^(?:Timed out|Unreachable)$/u);
-      await expect(downBadge).toBeVisible({ timeout: browserTimeout });
-      await expect(downBadge).toHaveClass(/(?:^|\s)discovery-badge--neutral(?:\s|$)/u);
-      await expect(downServer).toContainText(/connect|handshake|protocol/u);
+      const handshakeBadge = handshake.getByText(/Handshake (?:ok|timed out|unreachable)/u);
+      await expect(handshakeBadge).toBeVisible({ timeout: browserTimeout });
       await expect(page.getByRole('alert')).toHaveCount(0);
 
       await page.getByRole('button', { name: 'Re-run discovery' }).first().click();
-      await expect(page.getByText('Loading host discovery', { exact: true })).toHaveCount(0, {
+      await expect(page.getByText('Loading host diagnostics', { exact: true })).toHaveCount(0, {
         timeout: browserTimeout,
       });
-      await expect(claudeMcp.getByText('Connected', { exact: true })).toHaveCount(0);
-      await expect(claudeMcp.getByText(/^(?:Timed out|Unreachable)$/u)).toHaveCount(0);
-      await expect(claudeMcp.getByRole('button', { name: 'Probe timeline' })).toBeVisible();
+      await expect(handshake.getByText(/Handshake (?:ok|timed out|unreachable)/u)).toHaveCount(0);
+      await expect(handshake.getByRole('button', { name: /Probe MCP handshake/u })).toBeVisible();
 
       const codex = page.getByRole('group', { name: 'Codex' });
       const absentBadge = codex.getByText('Not installed', { exact: true });
@@ -200,28 +177,11 @@ ${outputAnchor}`));
       await expect(page.getByRole('alert')).toHaveCount(0);
 
       const cursor = page.getByRole('group', { name: 'Cursor' });
-      await expect(cursor.getByRole('table').getByText('host-discovery-fixture', { exact: true })).toBeVisible();
-      await expect(cursor.getByLabel('Bundle check').locator('.discovery-badge')).toHaveText('Failed');
-
-      const endpoints = page.getByLabel('Runtime endpoints');
-      await expect(endpoints.getByRole('heading', { name: 'Endpoints' })).toBeVisible();
-      await expect(endpoints).toContainText(endpointDirectory);
-      try {
-        await expect(endpoints.getByText('Stale socket', { exact: true })).toBeVisible();
-      } catch (reason) {
-        throw new Error(`Unexpected endpoint report:\n${await endpoints.innerText()}`, { cause: reason });
-      }
-
-      const diagnostics = page.getByLabel('Discovery diagnostics');
-      await expect(diagnostics.getByRole('heading', { name: 'Diagnostics' })).toBeVisible();
-      await expect(diagnostics.getByText('Recovery:', { exact: true }).first()).toBeVisible();
+      await expect(cursor).toBeVisible();
+      await expect(cursor.getByRole('heading', { name: 'Cursor' })).toBeVisible();
 
       const staleBanner = page.locator('.discovery-stale[role="status"]');
       await expect(staleBanner).toHaveCount(0);
-      const generatedAt = page.locator('.discovery-toolbar dl > div')
-        .filter({ has: page.getByText('Generated at', { exact: true }) })
-        .locator('dd');
-      const generatedAtBefore = await generatedAt.innerText();
       const source = await readFile(fixture.definitionSource, 'utf8');
       await replaceWatchedSource(
         fixture.root,
@@ -233,8 +193,7 @@ ${outputAnchor}`));
         name: 'Discovery report is from an older build',
       })).toBeVisible({ timeout: browserTimeout });
       await staleBanner.getByRole('button', { name: 'Re-run discovery' }).click();
-      await expect(generatedAt).not.toHaveText(generatedAtBefore, { timeout: browserTimeout });
-      await expect(page.getByText('Loading host discovery', { exact: true })).toHaveCount(0, { timeout: browserTimeout });
+      await expect(page.getByText('Loading host diagnostics', { exact: true })).toHaveCount(0, { timeout: browserTimeout });
       await expect(staleBanner).toHaveCount(0);
       expect(pageErrors).toEqual([]);
     } finally {

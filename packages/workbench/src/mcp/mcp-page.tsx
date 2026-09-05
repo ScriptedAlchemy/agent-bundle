@@ -3,6 +3,10 @@ import React, { useCallback, useEffect, useRef, useState, type KeyboardEvent } f
 import type { McpSessionBinding, McpSessionInspectorConfig, McpSessionOperation } from '../../../agent-bundle/src/contracts/mcp-session.ts';
 import type { DevRuntimeMcpAppRunBinding } from '../../../agent-bundle/src/contracts/runtime.ts';
 import { isRecord } from '../client-helpers.ts';
+import type {
+  RuntimeAppPreviewLifecycle,
+  RuntimeAppPreviewProps,
+} from '../runtime-view-contracts.ts';
 
 import { McpJsonInput, type ImmutableJsonRecord } from './mcp-json-input.tsx';
 import {
@@ -14,11 +18,12 @@ import {
   type McpAppRuntimePreviewProps,
   type McpAppPreviewState,
 } from './mcp-app-preview.tsx';
-import type {
-  McpAppConsentChallenge,
-  McpAppHostContext,
-  McpAppJsonValue,
-  McpAppPreviewProfile,
+import {
+  workbenchMcpAppHostContext,
+  type McpAppConsentChallenge,
+  type McpAppHostContext,
+  type McpAppJsonValue,
+  type McpAppPreviewProfile,
 } from './mcp-app-client.ts';
 import { createMcpAppFrameRelay } from '../../../agent-bundle/src/web-host/browser/frame-relay.ts';
 import { mcpInspectorDeepLink, type McpInspectorLaunchModel } from './mcp-inspector-launch-model.ts';
@@ -28,8 +33,6 @@ import type {
   McpBrowserSessionTimelineEntry,
 } from './mcp-session-model.ts';
 import type { McpSessionControllerBinding, McpSessionControllerReplay, McpSessionControllerRequest } from './mcp-session-controller.ts';
-import type { RuntimeAppPreviewProps } from '../runtime-stage.tsx';
-import type { RuntimeAppPreviewLifecycle } from '../runtime-playground.tsx';
 import type { McpToolPrefill } from '../routes/routes-model.ts';
 import {
   mcpProtocolTraceDownload,
@@ -700,25 +703,6 @@ export const mcpPageSessionControls = (
 
 const text = (value: unknown): string | undefined => typeof value === 'string' && value.length > 0 ? value : undefined;
 
-const browserMcpAppHost = (): McpAppHostContext => {
-  const browser = typeof window === 'undefined' ? undefined : window;
-  const locale = browser?.navigator.language;
-  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  return Object.freeze({
-    availableDisplayModes: Object.freeze(['inline']),
-    containerDimensions: Object.freeze({ height: Math.max(0, browser?.innerHeight ?? 0), width: Math.max(0, browser?.innerWidth ?? 0) }),
-    deviceCapabilities: Object.freeze({}),
-    displayMode: 'inline',
-    locale: typeof locale === 'string' && locale.length > 0 ? locale : 'en',
-    platform: 'web',
-    safeAreaInsets: Object.freeze({ bottom: 0, left: 0, right: 0, top: 0 }),
-    styles: Object.freeze({}),
-    theme: browser?.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
-    timeZone: typeof timeZone === 'string' && timeZone.length > 0 ? timeZone : 'UTC',
-    userAgent: browser?.navigator.userAgent ?? 'unknown',
-  });
-};
-
 export const mcpAppPreviewSourceFor = (
   session: Pick<McpBrowserSessionModel, 'phase' | 'sessionId'>,
   invocation: McpBrowserSessionInvocation,
@@ -1317,7 +1301,7 @@ export const McpPage = (props: McpPageProps) => {
     runtimeProps === undefined ? initialPreview : runtimeAdmission?.selection?.preview);
   const [appPreviewBusy, setAppPreviewBusy] = useState(false);
   const [appPreviewProfile, setAppPreviewProfile] = useState<McpAppPreviewProfile>('portable');
-  const [appHost] = useState(browserMcpAppHost);
+  const [appHost] = useState(workbenchMcpAppHostContext);
   // Seeded from the controller so a static render (no effects) already shows the current launch state.
   const [inspectorModel, setInspectorModel] = useState<McpInspectorLaunchModel | undefined>(() => inspectorLaunch?.model);
   const actionSession = useRef(createMcpPageActionSession());

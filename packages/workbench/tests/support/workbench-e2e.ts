@@ -2,11 +2,13 @@ import { execFile as executeFile } from 'node:child_process';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
-import { test, type PlaywrightOptions } from '@rstest/playwright';
+import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
+import type { Page } from 'playwright-core';
 
 import { createWorkbenchAssetSource } from '../../../agent-bundle/src/dev/workbench-assets.ts';
 import { startDevServer, type DevServerSession, type StartDevServerOptions } from '../../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture, type ProjectFixture } from '../../../agent-bundle/tests/helpers/project-fixture.ts';
+import { timeScale } from '../../../agent-bundle/tests/support/time-scale.ts';
 import { browserLaunchOptions } from './browser-launch-options.ts';
 
 export { browserLaunchOptions };
@@ -34,11 +36,57 @@ export const e2e = test.extend({
 });
 
 /**
- * Canonical Workbench route URL for browser navigation. The dedicated
- * route-contract test (overview.e2e) keeps literal hash strings so this
- * helper cannot make its assertions self-fulfilling.
+ * Deleted hash-page names → PR 1 destinations. Callers that still pass
+ * `'logs'` / `'evals'` / `'mcp'` keep compiling; new suites should pass a
+ * pathname (`/`, `/advanced/evals`, a `workbenchLeafPath` result).
  */
-export const workbenchUrl = (origin: string, page: string): string => `${origin}#${page}`;
+const legacyPagePath = Object.freeze({
+  artifacts: '/advanced/artifact',
+  comparisons: '/advanced/evals',
+  discovery: '/advanced/hosts',
+  evals: '/advanced/evals',
+  hooks: '/',
+  hosts: '/advanced/hosts',
+  lifecycles: '/trace',
+  logs: '/advanced/logs',
+  mcp: '/advanced/protocol',
+  overview: '/',
+  playground: '/',
+  routes: '/',
+  runtime: '/',
+  skills: '/',
+} as const);
+
+export type WorkbenchLegacyPage = keyof typeof legacyPagePath;
+
+/** Pathname the shell should show for a primary area or a leftover hash-page name. */
+export const workbenchPathname = (pageOrPath = '/'): string => {
+  if (pageOrPath.startsWith('/')) return pageOrPath;
+  return legacyPagePath[pageOrPath as WorkbenchLegacyPage] ?? `/${pageOrPath}`;
+};
+
+/**
+ * Canonical Workbench URL. Pathnames are the URL model (`/routes/…`,
+ * `/advanced/evals`). Hash-only `#page` routing is gone.
+ */
+export const workbenchUrl = (origin: string, pageOrPath = '/'): string =>
+  new URL(workbenchPathname(pageOrPath), origin.endsWith('/') ? origin : `${origin}/`).href;
+
+const idleTimeout = 15_000 * timeScale;
+const buildSettleTimeout = 60_000 * timeScale;
+
+/**
+ * Wait until the Workbench is past its loading state, including a header
+ * that still reads "Building…". AGENTS.md: never assert or screenshot a
+ * route while loading is still visible.
+ */
+export const waitForWorkbenchIdle = async (page: Page, timeout = idleTimeout): Promise<void> => {
+  await expect(page.getByText('Foreground server connected', { exact: true })).toBeVisible({ timeout });
+  await expect(page.getByTestId('workbench-loading')).toHaveCount(0, { timeout });
+  await expect(page.locator('.loading-state')).toHaveCount(0, { timeout });
+  await expect(page.getByText(/^Loading(?:\s|…|$)/u)).toHaveCount(0, { timeout });
+  await expect(page.locator('.shell-build--building')).toHaveCount(0, { timeout: Math.max(timeout, buildSettleTimeout) });
+};
 
 let workbenchBuild: Promise<void> | undefined;
 

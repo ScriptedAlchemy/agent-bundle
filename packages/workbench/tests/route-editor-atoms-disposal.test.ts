@@ -45,66 +45,69 @@ const startStaticServer = async (root: string) => {
 };
 
 const fixtureSource = (root: string): string => `
-  import { RegistryProvider } from '@effect/atom-react';
+  import { RegistryProvider, useAtom } from '@effect/atom-react';
   import React, { useState } from 'react';
   import { createRoot } from 'react-dom/client';
-  import type { RouteManifest } from ${JSON.stringify(join(root, 'packages/agent-bundle/src/contracts/routes.ts'))};
-  import { routeEditorKey } from ${JSON.stringify(join(root, 'packages/workbench/src/routes/route-editor-atoms.ts'))};
-  import { routeCatalogFor } from ${JSON.stringify(join(root, 'packages/workbench/src/routes/routes-model.ts'))};
-  import { RoutesPage } from ${JSON.stringify(join(root, 'packages/workbench/src/routes/routes-page.tsx'))};
+  import type { RouteInputSchema, RouteManifestCliCommand } from ${JSON.stringify(join(root, 'packages/agent-bundle/src/contracts/routes.ts'))};
+  import { routeEditorKey, routeEditorStateAtom } from ${JSON.stringify(join(root, 'packages/workbench/src/routes/route-editor-atoms.ts'))};
+  import {
+    initialRouteEditorState,
+    setRouteEditorDraftValue,
+    validateRouteEditor,
+  } from ${JSON.stringify(join(root, 'packages/workbench/src/routes/routes-model.ts'))};
 
-  const catalogFor = (digest: string) => routeCatalogFor({
-    cli: {
-      commands: [{
-        aliases: [],
-        exitCode: 'zero',
-        options: [
-          { key: 'input', kind: 'string', option: 'input', positional: 0, repeated: false, required: true },
-        ],
-        path: ['library', 'audit'],
-        routeId: 'cli:library/audit',
-      }],
-      mode: 'generated',
-      routes: [{
-        config: [],
-        id: 'cli:library/audit',
-        inputSchema: {
-          additionalProperties: false,
-          properties: { input: { type: 'string' } },
-          required: ['input'],
-          type: 'object',
-        },
-        kind: 'cli',
-        provenance: { kind: 'conventional' },
-        source: 'src/cli/library/audit.ts',
-      }],
-    },
-    diagnostics: [],
-    digest,
-    events: [],
-    providers: [],
-    scripts: [],
-    servers: [{
-      id: 'mcp:library',
-      mode: 'generated',
-      name: 'library',
-      routes: [{
-        config: [],
-        id: 'tool:library/search',
-        inputSchema: {
-          additionalProperties: false,
-          properties: { query: { type: 'string' } },
-          required: ['query'],
-          type: 'object',
-        },
-        kind: 'tool',
-        provenance: { kind: 'conventional' },
-        serverId: 'mcp:library',
-        source: 'src/mcp/library/tools/search.ts',
-      }],
-    }],
-    sourceRevision: 'source',
-  } satisfies RouteManifest);
+  const schema = {
+    additionalProperties: false,
+    properties: { input: { type: 'string' } },
+    required: ['input'],
+    type: 'object',
+  } as RouteInputSchema;
+  const command = {
+    aliases: [],
+    exitCode: 'zero',
+    options: [
+      { key: 'input', kind: 'string', option: 'input', positional: 0, repeated: false, required: true },
+    ],
+    path: ['library', 'audit'],
+    routeId: 'cli:library/audit',
+  } as RouteManifestCliCommand;
+
+  const DraftEditor = ({ digest }: { readonly digest: string }) => {
+    const [stored, setStored] = useAtom(routeEditorStateAtom(routeEditorKey(digest, 'cli:library/audit')));
+    const state = stored ?? initialRouteEditorState(schema);
+    return <section aria-label="Input for cli:library/audit" className="route-input-editor">
+      <label htmlFor="route-input">Input (required)
+        <input
+          id="route-input"
+          onChange={(event) => {
+            const next = event.currentTarget.value;
+            setStored((current) => setRouteEditorDraftValue(
+              current ?? initialRouteEditorState(schema),
+              schema,
+              command,
+              'input',
+              next,
+            ));
+          }}
+          value={typeof state.draft.input === 'string' ? state.draft.input : ''}
+        />
+      </label>
+      {state.errors.input === undefined ? undefined : <span className="route-input-error" role="alert">{state.errors.input}</span>}
+      <button
+        onClick={() => setStored((current) => validateRouteEditor(
+          current ?? initialRouteEditorState(schema),
+          schema,
+          command,
+        ))}
+        type="button"
+      >
+        Validate input
+      </button>
+      {state.argv === undefined ? undefined : <label htmlFor="route-argv">Generated argv invocation
+        <input id="route-argv" readOnly value={state.argv} />
+      </label>}
+    </section>;
+  };
 
   const Fixture = () => {
     const [state, setState] = useState({ digest: '', mounted: false });
@@ -114,7 +117,7 @@ const fixtureSource = (root: string): string => `
     };
     return state.mounted
       ? <div data-editor-key={routeEditorKey(state.digest, 'cli:library/audit')}>
-          <RoutesPage catalog={catalogFor(state.digest)} />
+          <DraftEditor digest={state.digest} />
         </div>
       : <p>Routes unmounted</p>;
   };

@@ -212,10 +212,15 @@ and prints it in every failure, because a pass at one level is never a receipt f
 | `dev-epoch` | `runDevEpochContractMatrix` | An epoch-pinned generated stdio process opened through the Workbench session service; the caller owns the epoch lease and process lifetime, and MCP App routes are covered (surface plus `ui://` sweep). |
 | `cli-dispatch` | `invokeCli`, `cliJson`, `cliNdjson` | A plain or rendered argv vector resolved and run through the routed CLI's own shell — including rendered Markdown, explicit TTY, JSON, and NDJSON modes — in-process. |
 | `script-dispatch` | `runScript`, `scriptJson`, `scriptNdjson` | A conventional `src/scripts/*` module run through its generated executable's contract, without bundling: a rendered `.tsx` script through the rendered-script shell in-process (piped Markdown, TTY, `--json`, `--ndjson`, with the project's conventional providers mounted), a plain `.ts` script as a Node process of its own through the `main` envelope, over the source under Node's own TypeScript loading (`--experimental-transform-types` on Node 22 and 24; `--strip-types` on Node 26, which removed the transform flag, so TypeScript-only syntax such as `enum` fails there as it does under `node file.ts`) — real `process.exit`, exit code, stdout, stderr, optional `stdin`. `testManifest().scripts` lists the scripts that ship; a nested (`AB4808`) or conflicting (`AB4809`) script is never a target. |
-| `workbench-surface` | `inspectWorkbenchSurface` | What the dev server would hand the Workbench for this project — route manifest, grouped route catalog, state declaration, lifecycle-replay fixtures, page availability — from the same compiler pass, with no browser and no dev server; a project the compiler rejects reports `manifest-unavailable` with its error diagnostics. |
+| `workbench-surface` | `inspectWorkbenchSurface` | What the dev server would hand the Workbench for this project — the `application` tree, routes, lifecycle-replay fixtures, capability counts, and Advanced sections — from the same compiler pass, with no browser and no dev server; a project the compiler rejects reports `manifest-unavailable` with its error diagnostics. |
 | `packed-stdio` | `openPackedMcpServer`, `runPackedContractMatrix` | A built artifact's generated entry running as a real process over stdio. |
 | `packed-deleted-source` | `removeProjectSource`, `openPackedMcpServer({ deletedSource })`, `runPackedContractMatrix` | The packed stdio process still runs after project source and configuration are removed and verified absent. |
 | `host-install` | `openInstalledHostMcpServer`, `runInstalledHostContractMatrix` | A built bundle staged into an isolated host root, discovered in the emitted host format, and spawned from the installed layout. |
+
+`inspectWorkbenchSurface()` returns
+`{ application, routes, lifecycles, counts, advanced }`. `application` is the same tree shape the
+Workbench renders, so tests assert leaves and paths instead of a fixed list of pages.
+`WorkbenchPageName` and `workbenchPageLabel` are no longer exported.
 
 Two further levels sit alongside these nine, for eleven in all. `agent-bundle/test/browser` supplies `mountBrowserApp`
 for the browser-safe `browser-app` level — production-compiled MCP App HTML mounted over the
