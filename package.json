@@ -69,7 +69,7 @@
     "@rsbuild/core": "2.2.3",
     "@rsbuild/plugin-react": "2.1.0",
     "@rslib/core": "1.0.0",
-    "@rslint/core": "0.8.2",
+    "@rslint/core": "0.9.0",
     "@rstest/adapter-rslib": "0.11.12",
     "@rstest/core": "0.11.12",
     "@rstest/playwright": "0.11.12",
