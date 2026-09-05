@@ -21,7 +21,7 @@
   },
   {
     "text": "Type API",
-    "link": "/api/",
-    "activeMatch": "/api/"
+    "link": "/reference/api",
+    "activeMatch": "/api/|/reference/api"
   }
 ]

@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://scriptedalchemy.github.io/agent-bundle/sitemap.xml
