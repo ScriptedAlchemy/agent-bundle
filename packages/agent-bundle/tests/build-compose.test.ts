@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from '@rstest/core';
 import { claudeAdapter } from '../src/adapters/claude.ts';
 import { codexAdapter, codexArtifactPaths } from '../src/adapters/codex.ts';
 import { cursorAdapter, cursorArtifactPaths } from '../src/adapters/cursor.ts';
+import { portableAdapter } from '../src/adapters/portable.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
 import { build, type BuildProjectResult, createDefaultRegistry, TargetRegistry, validate } from '../src/api.ts';
 import { parseArtifactHookIndex } from '../src/build/hook-index.ts';
@@ -452,11 +453,34 @@ describe('composite plugin root (#555)', () => {
     await writeProject(mixed, { targets: ['claude', 'portable'] });
     const refused = await validate({ registry, root: mixed });
     expect(refused.diagnostics.filter((entry) => entry.code === 'AB4106').map((entry) => entry.target)).toEqual(['portable']);
-    const alone = await mkdtemp(join(tmpdir(), 'agent-bundle-composite-identity-'));
-    roots.push(alone);
-    await writeProject(alone, { targets: ['portable'] });
-    const validated = await validate({ hostValidation: true, registry, root: alone });
+    const validated = await validate({ artifact: custom.output, hostValidation: true, registry });
     expect(validated.diagnostics.filter((entry) => entry.severity === 'error')).toEqual([]);
     expect(validated.hostValidation).toBeUndefined();
+
+    // `build --host-validation` runs the Claude developer validator for the
+    // shipped Claude adapter only: a custom adapter named `claude` spawns no
+    // host CLI and gets no report.
+    const claudeNamed = new TargetRegistry()
+      .register(syntheticAdapterNamed('claude'), { default: true })
+      .register(codexAdapter)
+      .register(cursorAdapter)
+      .register(portableAdapter);
+    const spawned: string[][] = [];
+    const project = await mkdtemp(join(tmpdir(), 'agent-bundle-composite-identity-'));
+    roots.push(project);
+    await writeProject(project, { targets: ['claude'] });
+    const built = await build({
+      hostValidation: true,
+      hostValidationRunner: async (request) => {
+        spawned.push([...request.args]);
+        return { exitCode: 0, signal: null, stderr: '', stdout: '' };
+      },
+      output: join(project, 'artifact'),
+      registry: claudeNamed,
+      root: project,
+    });
+    expect(built.diagnostics.filter((entry) => entry.severity === 'error')).toEqual([]);
+    expect(built.hostValidation).toEqual([]);
+    expect(spawned).toEqual([]);
   });
 });
