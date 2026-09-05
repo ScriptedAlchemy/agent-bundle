@@ -73,8 +73,11 @@
   package build's `dist` bundles are walked by the same `AB6005` rule
   (`src/build/package-build.ts` reuses `validateJavaScriptModules` from
   `src/build/validate-artifact-modules.ts`), so a generated executable in a
-  host pack or in `dist` loads nothing but Node built-ins from outside its
-  tree. MCP App views (`src/build/mcp-apps.ts`) inline every script and style
+  host pack or in `dist` imports nothing but Node built-ins from outside its
+  tree. The walk reads import specifiers, static and literal dynamic; a
+  `createRequire(…)(…)` or `import.meta.resolve(…)` call is not an import and
+  is outside `AB6005` in either output — the prepack gate reads those calls
+  as dependency evidence. MCP App views (`src/build/mcp-apps.ts`) inline every script and style
   into one HTML file. The framework never adds `externals` to a plugin build;
   the `externals` handling in `rslib.ts` (`reservedExternalsViolation`,
   `guardReservedExternals`) only rejects reserved specifiers in the resolved

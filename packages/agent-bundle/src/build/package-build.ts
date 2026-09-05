@@ -373,9 +373,13 @@ export const buildPackageOutputs = async (options: {
     // every emitted `dist` module is walked as an ES module, and a bare
     // specifier that is not a Node built-in — an import the `tools` hatch
     // kept external — fails the build (`AB6005`) before `dist` is published,
-    // so a `dist/bin` executable loads nothing from a consumer's
-    // `node_modules`. Declarations are not modules and are not walked; they
-    // may still reference declared dependencies.
+    // so a `dist/bin` executable imports nothing from a consumer's
+    // `node_modules`. The walk reads import specifiers (static and literal
+    // dynamic); a `createRequire(…)(…)` or `import.meta.resolve(…)` call is
+    // not an import and is outside it, in `dist` as in a host pack — the
+    // prepack gate reads those as dependency evidence. Declarations are not
+    // modules and are not walked; they may still reference declared
+    // dependencies.
     const selfContainment = await validateJavaScriptModules({
       artifactRoot: stageRoot,
       bundledPaths: new Set(files.filter((file) => file.kind === 'bundle').map((file) => file.path)),
