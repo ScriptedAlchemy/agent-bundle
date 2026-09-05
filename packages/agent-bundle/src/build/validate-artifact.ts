@@ -6,7 +6,6 @@ import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry
 import type {
   TargetArtifactDocumentIssue,
   TargetArtifactDocumentValidator,
-  TargetArtifactValidationContract,
 } from '../adapters/types.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { readFileString, runWithPlatform } from '../effect/platform.ts';
@@ -40,7 +39,6 @@ import type {
 import { validateJavaScriptModules } from './validate-artifact-modules.ts';
 import { validateHookCoherence } from './validate-artifact-hooks.ts';
 import { manifestLogoPathDiagnostics } from './validate-artifact-logo.ts';
-import { validateManifestCoherence } from './validate-artifact-manifest.ts';
 import { validateMcpCoherence } from './validate-artifact-mcp.ts';
 import { manifestTargets, validateEmittedSkills } from './validate-artifact-skills.ts';
 import { installSurfaceRequirements } from '../install/surface.ts';
@@ -255,7 +253,9 @@ const sameSchemas = (
 const matchesTargetMetadata = (
   target: ArtifactManifest['projections'][number],
   metadata: ReturnType<TargetRegistry['metadata']>,
+  builtInHost: ReturnType<TargetRegistry['builtInHost']>,
 ): boolean => target.adapterRevision === metadata.adapterRevision &&
+  target.builtInHost === builtInHost &&
   target.observedVersion === metadata.observedVersion &&
   sameSchemas(target.schemas, metadata.schemas);
 
@@ -319,20 +319,13 @@ const matchesArtifactDocumentPath = (contractPath: string, relativePath: string)
  * root (#555): the install surface is written once for the whole selection,
  * and each host's documents live at their contract paths inside the root.
  */
-interface TargetContractValidation {
-  /** The validation contract of every projection whose metadata matched, fetched once and shared with the coherence lane. */
-  readonly contracts: ReadonlyMap<string, TargetArtifactValidationContract>;
-  readonly diagnostics: readonly Diagnostic[];
-}
-
 const validateTargetContracts = async (options: {
   readonly artifactRoot: string;
   readonly files: readonly ArtifactFile[];
   readonly manifest: ArtifactManifest;
   readonly registry: TargetRegistry;
-}): Promise<TargetContractValidation> => {
+}): Promise<readonly Diagnostic[]> => {
   const diagnostics: Diagnostic[] = [];
-  const contracts = new Map<string, TargetArtifactValidationContract>();
   const files = new Set(options.files.map((file) => file.path));
   const selected = manifestTargets(options.manifest);
 
@@ -355,10 +348,14 @@ const validateTargetContracts = async (options: {
       ));
       continue;
     }
-    if (!matchesTargetMetadata(target, options.registry.metadata(target.host))) {
+    if (!matchesTargetMetadata(
+      target,
+      options.registry.metadata(target.host),
+      options.registry.builtInHost(target.host),
+    )) {
       diagnostics.push(diagnostic(
         'AB6010',
-        `Artifact metadata for target ${JSON.stringify(target.host)} does not match its registered contract.`,
+        `Artifact metadata and adapter identity for target ${JSON.stringify(target.host)} do not match its registered contract.`,
         artifactManifestName,
         target.host,
       ));
@@ -366,7 +363,6 @@ const validateTargetContracts = async (options: {
     }
 
     const validation = options.registry.artifactValidation(target.host);
-    contracts.set(target.host, validation);
     const validators = new Map(validation.schemas.map((schema) => [schema.name, schema.validate]));
     for (const document of validation.documents) {
       const generatedPaths = document.path.includes('*')
@@ -419,7 +415,7 @@ const validateTargetContracts = async (options: {
       }
     }
   }
-  return { contracts, diagnostics: Object.freeze(diagnostics) };
+  return Object.freeze(diagnostics);
 };
 
 /**
@@ -724,10 +720,6 @@ export const validateArtifactWithSnapshot = async (
 
   const runtimeEvidence = runtimeEvidenceBuilder(manifest);
   const initialStructuralDiagnostics = validateArtifactStructure({ inspection, manifest, registry });
-  // The manifest coherence lane (AB6039/AB6040) reads host documents as the
-  // bytes the manifest hashed; over a tree that already disagrees with the
-  // file table (AB6004) its findings would only restate that drift.
-  const fileTableVerified = !initialStructuralDiagnostics.some((entry) => entry.code === 'AB6004');
   const diagnostics: Diagnostic[] = [...initialStructuralDiagnostics];
   if (
     manifest.agentSkills.schemaSha256 !== agentSkillsSchemaRevision.schemaSha256 ||
@@ -745,7 +737,7 @@ export const validateArtifactWithSnapshot = async (
   // Read-only validators over the same immutable inspection run concurrently;
   // collecting in this fixed order keeps the diagnostics sequence deterministic.
   const [
-    targetContracts,
+    targetContractDiagnostics,
     portableTargetDiagnostics,
     mcpCoherenceDiagnostics,
     hookCoherenceDiagnostics,
@@ -790,25 +782,11 @@ export const validateArtifactWithSnapshot = async (
       manifestFiles: manifest.files,
     }),
   ]);
-  // The manifest coherence lane compares the manifest rows against the MCP
-  // evidence the single document read above captured, so it runs after it and
-  // never re-reads a host document.
-  const manifestCoherenceDiagnostics = fileTableVerified
-    ? await validateManifestCoherence({
-      artifactRoot,
-      contracts: targetContracts.contracts,
-      manifest,
-      mcpEvidence: runtimeEvidence.mcpServers,
-      mcpUnprovenHosts: new Set(mcpCoherenceDiagnostics.flatMap((entry) => entry.target === undefined ? [] : [entry.target])),
-      registry,
-    })
-    : Object.freeze([]);
   diagnostics.push(
-    ...targetContracts.diagnostics,
+    ...targetContractDiagnostics,
     ...portableTargetDiagnostics,
     ...mcpCoherenceDiagnostics,
     ...hookCoherenceDiagnostics,
-    ...manifestCoherenceDiagnostics,
     ...emittedSkillDiagnostics,
     ...generatedFileDiagnostics,
   );

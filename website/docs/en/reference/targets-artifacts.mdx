@@ -158,8 +158,9 @@ filesystem, and the compiled model, and its bytes are canonical — every reader
 hand-edited copy. Because every file carries a digest, validation compares **real bytes** rather
 than checking that a path exists, and a hand-edited generated file fails. That contract is what
 makes `validate --artifact`, `mcp`, and `hooks` work against an artifact whose project sources
-have been deleted. The host documents in the root are written from the same model as the manifest,
-and validation proves they agree with it (`AB6039`, `AB6040`).
+have been deleted. The host documents and manifest are serialized from the same compiled model
+in one build, and every host document is a digest-pinned `files[]` row, so a hand edit fails the
+digest check.
 
 ## Versions and revisions
 

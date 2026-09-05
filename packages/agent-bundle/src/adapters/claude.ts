@@ -3233,6 +3233,7 @@ export const planClaudeArtifacts = (model: NormalizedPlugin): TargetArtifactPlan
     marketplaceSourceInputs: marketplace.sourceInputs,
     marketplaceValid,
     mcp,
+    mcpRelativePath: mcpRuntime.manifestPath,
     mcpValid,
     model,
     plugin,

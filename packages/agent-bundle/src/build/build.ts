@@ -311,10 +311,10 @@ const manifestProjections = (options: {
     const documents = projection.plan.documents;
     const emitted = (path: string | undefined): string | undefined =>
       path !== undefined && options.filePaths.has(path) ? path : undefined;
+    const hooks = emitted(documents?.hooks);
     const plugin = emitted(documents?.plugin);
     const marketplace = emitted(documents?.marketplace?.path);
-    const mcp = emitted(options.registry.mcpRuntime(host)?.manifestPath);
-    const hooks = emitted(options.registry.hookContract(host)?.manifestPath);
+    const mcp = emitted(documents?.mcp);
     const builtInHost = options.registry.builtInHost(host);
     return Object.freeze({
       adapterRevision: metadata.adapterRevision,
@@ -388,6 +388,7 @@ const manifestMcpServers = (options: {
 }): readonly ArtifactManifestMcpServer[] => {
   const entries = new Map(options.compiledMcpEntries.map((entry) => [entry.id, entry]));
   return Object.freeze(options.model.mcpServers
+    // Every adapter MCP document uses the same server.targets membership predicate for its host.
     .map((server) => ({ hosts: sortedHosts(server.targets.filter((target) => options.selected.includes(target))), server }))
     .filter(({ hosts }) => hosts.length > 0)
     .map(({ hosts, server }): ArtifactManifestMcpServer => {
