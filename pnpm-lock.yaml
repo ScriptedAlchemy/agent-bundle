@@ -273,7 +273,7 @@ importers:
         version: 0.1.2(jiti@2.7.0)
       '@rstest/core':
         specifier: ^0.11.10
-        version: 0.11.12
+        version: 0.11.11
       acorn:
         specifier: 8.18.0
         version: 8.18.0
@@ -305,8 +305,8 @@ importers:
         specifier: 2.7.0
         version: 2.7.0
       npm-package-arg:
-        specifier: 13.0.2
-        version: 13.0.2
+        specifier: 14.0.0
+        version: 14.0.0
       open:
         specifier: 11.0.2
         version: 11.0.2
@@ -328,7 +328,7 @@ importers:
         version: 8.18.1
       effect-rstest:
         specifier: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f
-        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f(@rstest/core@0.11.12)(effect@4.0.0-rc.112)
+        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f(@rstest/core@0.11.11)(effect@4.0.0-rc.112)
       react:
         specifier: 19.2.8
         version: 19.2.8
@@ -1259,6 +1259,19 @@ packages:
       playwright:
         optional: true
 
+  '@rstest/core@0.11.11':
+    resolution: {integrity: sha512-7Ii2/2/ex1Oa0Kg5Qk5RKx2+e0I83BHLwH0/gn1B7IDwXCh5msFCF7yTyVGFuMltlm3E8Cf4QD7jadOEaBfXfw==}
+    engines: {node: ^20.19.0 || >=22.12.0}
+    hasBin: true
+    peerDependencies:
+      happy-dom: ^20.8.3
+      jsdom: '>=15.0.0'
+    peerDependenciesMeta:
+      happy-dom:
+        optional: true
+      jsdom:
+        optional: true
+
   '@rstest/core@0.11.12':
     resolution: {integrity: sha512-dklEYLtL1eip/11K+o3xEchEs2nCGua2u2W8Pycf6PS8TE0PDJH2Bn9y/txuQI4YVHyIQ88PISWtS6fVnxSyXQ==}
     engines: {node: ^20.19.0 || >=22.12.0}
@@ -2117,9 +2130,9 @@ packages:
   hookable@6.1.1:
     resolution: {integrity: sha512-U9LYDy1CwhMCnprUfeAZWZGByVbhd54hwepegYTK7Pi5NvqEj63ifz5z+xukznehT7i6NIZRu89Ay1AZmRsLEQ==}
 
-  hosted-git-info@9.0.3:
-    resolution: {integrity: sha512-Hc+ghLoSt6QaYZUv0WBiIvmMDZuZZ7oaDvdH8MbfOO4lOsxdXLEvuC6ePoGs9H1X9oCLyq6+NVN0MKqD+ydxyg==}
-    engines: {node: ^20.17.0 || >=22.9.0}
+  hosted-git-info@10.1.1:
+    resolution: {integrity: sha512-DeOnSPAvOndYKfw075gt8yZzQ7S2hNztw34zBTfhIzLhmBTswIBg5/y+pqu/VD5cYWm5goAFTusDmUEmKZ0PEQ==}
+    engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
 
   html-url-attributes@3.0.1:
     resolution: {integrity: sha512-ol6UPyBWqsrO6EJySPz2O7ZSr856WDrEzM5zMqp+FJJLGMW35cLYmmZnl0vztAZxRUoNZJFTCohfjuIJ8I4QBQ==}
@@ -2572,9 +2585,9 @@ packages:
     resolution: {integrity: sha512-s+w+rBWnpTMwSFbaE0UXsRlg7hU4FjekKU4eyAih5T8nJuNZT1nNsskXpxmeqSK9UzkBl6UgRlnKc8hz8IEqOw==}
     hasBin: true
 
-  npm-package-arg@13.0.2:
-    resolution: {integrity: sha512-IciCE3SY3uE84Ld8WZU23gAPPV9rIYod4F+rc+vJ7h7cwAJt9Vk6TVsK60ry7Uj3SRS3bqRRIGuTp9YVlk6WNA==}
-    engines: {node: ^20.17.0 || >=22.9.0}
+  npm-package-arg@14.0.0:
+    resolution: {integrity: sha512-69XQh3k+dtGa1p+7RaR57IuG3rCko96xr/nUfN4yDYBXbTYICiWcOpsFKLN2GtGE9cyIljE+f1exnaYt9MvM+Q==}
+    engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
 
   npm-run-path@6.0.0:
     resolution: {integrity: sha512-9qny7Z9DsQU8Ou39ERsPU4OZQlSTP47ShQzuKZ6PRXpYLtIFgl/DEBYEXKlvcEa+9tHVcK8CF81Y2V72qaZhWA==}
@@ -2693,9 +2706,9 @@ packages:
     resolution: {integrity: sha512-gjVS5hOP+M3wMm5nmNOucbIrqudzs9v/57bWRHQWLYklXqoXKrVfYW2W9+glfGsqtPgpiz5WwyEEB+ksXIx3gQ==}
     engines: {node: '>=18'}
 
-  proc-log@6.1.0:
-    resolution: {integrity: sha512-iG+GYldRf2BQ0UDUAd6JQ/RwzaQy6mXmsk/IzlYyal4A4SNFw54MeH4/tLkF4I5WoWG9SQwuqWzS99jaFQHBuQ==}
-    engines: {node: ^20.17.0 || >=22.9.0}
+  proc-log@7.0.0:
+    resolution: {integrity: sha512-FYgfaA69XZ93zaXLoMNQ+ViDXGGBgR8aLh03txzcFhV+9xOXx7+8DLCULrKKpR9+GsH9ZfHm82aSUPpozX0Ztg==}
+    engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
 
   property-information@7.2.0:
     resolution: {integrity: sha512-IAtzIB6sUiWaJYrX9smp3V46pBGbBeLFRGdh25kg1334VcBlD8HzhPeNIWQH9zhGmo2itIe25EHt9dQP7G5hmg==}
@@ -3182,9 +3195,9 @@ packages:
     resolution: {integrity: sha512-OljLrQ9SQdOUqTaQxqL5dEfZWrXExyyWsozYlAWFawPVNuD83igl7uJD2RTkNMbniIYgt8l81eCJGIdQF7avLQ==}
     engines: {node: ^14.17.0 || ^16.13.0 || >=18.0.0}
 
-  validate-npm-package-name@7.0.2:
-    resolution: {integrity: sha512-hVDIBwsRruT73PbK7uP5ebUt+ezEtCmzZz3F59BSr2F6OVFnJ/6h8liuvdLrQ88Xmnk6/+xGGuq+pG9WwTuy3A==}
-    engines: {node: ^20.17.0 || >=22.9.0}
+  validate-npm-package-name@8.0.0:
+    resolution: {integrity: sha512-SCv6OOV6Xj2/3cXy3dGmADluJTNcL3o7hZAglNPTe+WYuEuvxgJzxPrSDLZhF+CwyQOubqgecjMmTJGMVLWjYQ==}
+    engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
 
   vary@1.1.2:
     resolution: {integrity: sha512-BNGbWLfd0eUPabhkXUVm0j8uuvREyTh5ovRa/dyow/BqAbZJyC+5fU+IzQOzmAKzYqYRAISoRhdQr3eIZ/PXqg==}
@@ -4082,6 +4095,14 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
+  '@rstest/core@0.11.11':
+    dependencies:
+      '@rsbuild/core': 2.2.3
+      '@types/chai': 5.2.3
+    transitivePeerDependencies:
+      - '@module-federation/runtime-tools'
+      - core-js
+
   '@rstest/core@0.11.12':
     dependencies:
       '@rsbuild/core': 2.2.3
@@ -4584,6 +4605,11 @@ snapshots:
 
   ee-first@1.1.1: {}
 
+  effect-rstest@https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f(@rstest/core@0.11.11)(effect@4.0.0-rc.112):
+    dependencies:
+      '@rstest/core': 0.11.11
+      effect: 4.0.0-rc.112
+
   effect-rstest@https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f(@rstest/core@0.11.12)(effect@4.0.0-rc.112):
     dependencies:
       '@rstest/core': 0.11.12
@@ -4972,7 +4998,7 @@ snapshots:
 
   hookable@6.1.1: {}
 
-  hosted-git-info@9.0.3:
+  hosted-git-info@10.1.1:
     dependencies:
       lru-cache: 11.5.2
 
@@ -5666,12 +5692,12 @@ snapshots:
       detect-libc: 2.1.2
     optional: true
 
-  npm-package-arg@13.0.2:
+  npm-package-arg@14.0.0:
     dependencies:
-      hosted-git-info: 9.0.3
-      proc-log: 6.1.0
+      hosted-git-info: 10.1.1
+      proc-log: 7.0.0
       semver: 7.8.5
-      validate-npm-package-name: 7.0.2
+      validate-npm-package-name: 8.0.0
 
   npm-run-path@6.0.0:
     dependencies:
@@ -5778,7 +5804,7 @@ snapshots:
     dependencies:
       parse-ms: 4.0.0
 
-  proc-log@6.1.0: {}
+  proc-log@7.0.0: {}
 
   property-information@7.2.0: {}
 
@@ -6350,7 +6376,7 @@ snapshots:
 
   validate-npm-package-name@5.0.1: {}
 
-  validate-npm-package-name@7.0.2: {}
+  validate-npm-package-name@8.0.0: {}
 
   vary@1.1.2: {}
 
