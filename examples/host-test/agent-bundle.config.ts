@@ -23,6 +23,6 @@ export default defineConfig({
   // The generated `host-test` MCP server (src/mcp/host-test/tools) hosts the
   // shared event runtime; `src/mcp/host-test-raw.ts` is a hand-rolled stdio
   // server that records the raw MCP request envelope for correlation.
-  // The rendered `src/cli/dump.tsx` command compiles into dist/bin/host-test.js.
+  // The rendered `src/cli/dump.tsx` command compiles into dist/bin/host-test.mjs.
   targets: ['claude', 'codex', 'cursor', 'portable'],
 });

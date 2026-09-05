@@ -8,13 +8,6 @@
   "engines": {
     "node": ">=22.19.0"
   },
-  "files": [
-    "artifact",
-    "README.md"
-  ],
-  "bin": {
-    "host-test": "./dist/bin/host-test.js"
-  },
   "scripts": {
     "build": "agent-bundle build --output artifact",
     "check": "pnpm validate && pnpm build && pnpm typecheck && pnpm test",

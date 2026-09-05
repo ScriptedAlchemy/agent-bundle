@@ -13,7 +13,7 @@ import {
 import { mapConcurrent } from '../core/async.ts';
 import { errorMessage, isErrno } from '../core/errors.ts';
 import { readArtifactManifest } from '../build/manifest-file.ts';
-import { exists, isPreservedRuntimeRoot } from '../core/paths.ts';
+import { exists } from '../core/paths.ts';
 import { isRecord } from '../core/strict-json.ts';
 import {
   validateClaudePlugin,
@@ -49,12 +49,12 @@ import {
   installReceiptFile,
   installReceiptFormat,
   installReceiptStoreDirectory,
+  isPreservedRuntimeRoot,
   isRemnantReceipt,
   isRuntimeStateRemnant,
   listStoredInstallReceipts,
   readInstallReceipt,
   readInstallReceiptFile,
-  treeInventory,
   type InstalledTreeComparison,
   type InstalledTreeOwnership,
   type InstallReceipt,
@@ -75,7 +75,7 @@ import {
   inspectCursorPluginHooks,
 } from './cursor-hooks-registration.ts';
 import { cursorMarketplacePluginPath, cursorMarketplaceRoot } from './cursor-marketplace.ts';
-import { bundleInventory, readBundleIdentity, type PluginIdentity } from './identity.ts';
+import { bundleInventory, installedBundleInventory, readBundleIdentity, type PluginIdentity } from './identity.ts';
 import {
   inspectInstalledStateOwnership,
   resolveInstalledStateRoots,
@@ -1798,7 +1798,7 @@ const publicHostInstallComparison = async (
     }
     let installed: TreeInventory;
     try {
-      installed = await treeInventory(entry.installPath);
+      installed = await installedBundleInventory(entry.installPath, host);
     } catch (error) {
       comparisons.push(Object.freeze({
         artifactContentHash: artifact.hash,

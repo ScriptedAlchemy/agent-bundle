@@ -64,8 +64,8 @@ const registrationLabel = (registration: UninstallResult['registrations'][number
   registration.id ?? registration.name ?? registration.kind;
 
 /**
- * Human-readable uninstall summary shared by the CLI and generated installer
- * bins. `--plan` output lists every exact path the run would remove, so an
+ * Human-readable uninstall summary shared by the CLI and standalone artifact
+ * installer. `--plan` output lists every exact path the run would remove, so an
  * operator can audit the mutation before allowing it.
  */
 export const formatUninstallResult = (result: UninstallResult): string => {

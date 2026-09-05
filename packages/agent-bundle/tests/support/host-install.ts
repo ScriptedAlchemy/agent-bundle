@@ -184,12 +184,6 @@ export interface DevHostInstallProofReport {
   readonly status: 'passed';
 }
 
-export interface HostInstallCommand {
-  readonly cwd?: string;
-  readonly executable: string;
-  readonly prefixArguments?: readonly string[];
-}
-
 export interface InstalledHostContractMatrixProofOptions {
   readonly environment: Readonly<NodeJS.ProcessEnv>;
   readonly fixtures: Readonly<Record<string, ContractRouteFixture>>;
@@ -200,7 +194,6 @@ export interface InstalledHostContractMatrixProofOptions {
 
 interface HostInstallProofOptions {
   readonly environment: Readonly<NodeJS.ProcessEnv>;
-  readonly installCommand?: HostInstallCommand;
 }
 
 /** The same-version rebuild round trip every host proof performs after its first install. */
@@ -437,7 +430,7 @@ const runNodeCli = (
   { ...options, timeout: 180_000 },
 );
 
-/** Runs `install` or `uninstall` through the source-built CLI (`--from <bundle>`) or the packed package bin. */
+/** Runs `install` or `uninstall` through the source-built CLI with `--from <bundle>`. */
 const runLifecycleCommand = (
   fixture: BuiltHostInstallFixture,
   verb: 'install' | 'uninstall',
@@ -445,29 +438,14 @@ const runLifecycleCommand = (
   bundle: string,
   options: HostInstallProofOptions,
   extraArguments: readonly string[] = [],
-): Promise<CommandResult> => {
-  if (options.installCommand === undefined) {
-    return runNodeCli(fixture, [
-      verb,
-      host,
-      '--from',
-      bundle,
-      ...extraArguments,
-      '--json',
-    ], { cwd: bundle, environment: isolatedEnvironment(options.environment, {}) });
-  }
-  return run(options.installCommand.executable, [
-    ...(options.installCommand.prefixArguments ?? []),
+): Promise<CommandResult> => runNodeCli(fixture, [
     verb,
     host,
+    '--from',
+    bundle,
     ...extraArguments,
     '--json',
-  ], {
-    cwd: options.installCommand.cwd ?? bundle,
-    environment: isolatedEnvironment(options.environment, {}),
-    timeout: 180_000,
-  });
-};
+  ], { cwd: bundle, environment: isolatedEnvironment(options.environment, {}) });
 
 const runInstallCommand = (
   fixture: BuiltHostInstallFixture,
@@ -998,6 +976,16 @@ export const runClaudeHostInstallProof = async (
       },
       installedRoot: expectedInstallPath,
     });
+    const doctor = await runDoctor({
+      environment,
+      from: fixture.artifactRoot,
+      home,
+      hosts: ['claude'],
+    });
+    assertProof(
+      doctor.hosts.find((entry) => entry.host === 'claude')?.bundle?.comparison?.status === 'current',
+      `Doctor did not report the installed Claude npm root as current: ${JSON.stringify(doctor.diagnostics)}`,
+    );
     return Object.freeze({
       host: 'claude',
       install: Object.freeze({ sameVersionRebuild, state: 'installed', version }),
@@ -1124,6 +1112,16 @@ export const runCodexHostInstallProof = async (
       },
       installedRoot: cachePath,
     });
+    const doctor = await runDoctor({
+      environment,
+      from: fixture.artifactRoot,
+      home,
+      hosts: ['codex'],
+    });
+    assertProof(
+      doctor.hosts.find((entry) => entry.host === 'codex')?.bundle?.comparison?.status === 'current',
+      `Doctor did not report the installed Codex npm root as current: ${JSON.stringify(doctor.diagnostics)}`,
+    );
 
     return Object.freeze({
       host: 'codex',
