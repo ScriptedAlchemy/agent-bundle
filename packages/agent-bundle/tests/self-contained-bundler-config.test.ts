@@ -8,7 +8,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { composeMcpAppsRsbuildConfig } from '../src/build/mcp-apps.ts';
-import { buildWithRslib, composeEntryLibConfig, entryLibId, type RslibEntry } from '../src/build/rslib.ts';
+import { buildWithRslib } from '../src/build/compiler.ts';
+import { ArtifactDependencyAuditPlugin } from '../src/build/dependency-audit-plugin.ts';
+import { composeEntryLibConfig, entryLibId, type RslibEntry } from '../src/build/rslib.ts';
 import type { AgentBundleMeta } from '../src/meta.ts';
 import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
 
@@ -118,6 +120,7 @@ it('lowers a generated executable with only Node builtins external and inlines i
     expect(bundlerConfigs).toHaveLength(1);
     const bundler = bundlerConfigs[0]!;
     expectOnlyNodeBuiltinExternals(bundler.externals);
+    expect(bundler.plugins?.some((plugin) => plugin instanceof ArtifactDependencyAuditPlugin)).toBe(true);
     expect(bundler.output?.asyncChunks).toBe(false);
     // Rslib's ESM format layer sets this over Rsbuild's lowering of
     // `splitChunks: false`; it splits only async chunks, of which
@@ -165,10 +168,10 @@ it('composes MCP App views as fully inlined web bundles with nothing externalize
     expect(environment.splitChunks).toBe(false);
     expect(environment.output.inlineScripts).toBe(true);
     expect(environment.output.inlineStyles).toBe(true);
-    // A `web` target has no builtins to leave external, and `autoExternal`
-    // is an Rslib concept the browser path never grows.
+    // A `web` target has no builtins to leave external, and the shared
+    // invariant pins automatic externalization off for every engine.
     expect(externalDeclarations(environment.output.externals)).toEqual([]);
-    expect(environment.output).not.toHaveProperty('autoExternal');
+    expect(environment.output).toHaveProperty('autoExternal', false);
     expect(inspection.origin.bundlerConfigs).toHaveLength(1);
     const bundler = inspection.origin.bundlerConfigs[0]!;
     expect(externalDeclarations(bundler.externals)).toEqual([]);

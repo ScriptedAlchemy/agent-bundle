@@ -26,20 +26,27 @@ hand-edited generated file fails rather than passing because the path still exis
 files are checked too — a manifest-declared `logo` that is missing from the artifact or escapes
 the deploy tree reports `AB6025`.
 
-Every emitted JavaScript module is walked as an ES module (`AB6005`) — the host-pack modules of
-every artifact build, and the package build's `dist` bundles (`dist/bin/*.js`, a rendered route's
-Flight worker `.mjs`, the `lib` entry) before `dist` is published: each import must be a literal
-specifier that either names a Node built-in (`node:fs`, `fs`) or resolves — as a relative or
-`file:` specifier — to a regular file inside the emitted tree (for a host pack, one the manifest
-lists). No non-literal dynamic imports, no bare package names, nothing outside the tree; a `dist`
-finding names its file as `dist/<path>`. How thoroughly a module's syntax is checked follows who
-produced its bytes. A module the framework compiled (manifest kind `bundle`) is the bundler's own
-output, so only the ESM lexer runs over it, which rejects unterminated strings, templates,
-comments, and regexps and unbalanced braces. A module the framework did not compile — a copied
-consumer script, a generated installer — is parsed in full, and so is every bundle of a build
-whose [`tools` hatch](../../reference/configuration.mdx#tools) could have rewritten the emitted
-assets, in `dist` as in a host pack. Prebuilt payloads (`kind: 'prebuilt'`) stay opaque and
-hash-locked only, and declaration files (`.d.ts`) are not walked. The route graph guards the same
+Self-containment is proven from the compilation's externals (`AB6005` at compile time). The
+compiler service lowers every host-pack surface and package-build entry (`dist/bin/*.js`, a
+rendered route's Flight worker `.mjs`, and the `lib` entry). The framework-owned
+`ArtifactDependencyAuditPlugin` taps `thisCompilation` to record every module Rspack kept
+external, and the service reads that evidence before trusting an asset. Only Node built-ins
+(`node:fs`, `fs`), `pnpapi`, and an emitted sibling of the same artifact may remain external; any
+other request fails whatever spelling Rspack emitted (`import`, `require`, or its `createRequire`
+shim). An expression request (`import(expr)`, `require(expr)`) is outside the compiler's view:
+Rslib's profile leaves it verbatim without parsing it, so it is neither bundled nor external.
+
+The emitted-module walk remains behind that compiler evidence as defense in depth. It walks each
+emitted JavaScript module as an ES module and rejects residual unsupported imports, non-literal
+dynamic imports, and targets missing from or outside the emitted tree; a `dist` finding names its
+file as `dist/<path>`. How thoroughly syntax is checked follows who produced the bytes. A module
+the framework compiled (manifest kind `bundle`) is the bundler's own output, so only the ESM lexer
+runs over it, rejecting unterminated strings, templates, comments, and regexps and unbalanced
+braces. A module the framework did not compile — a copied consumer script or generated installer
+— is parsed in full, as is every bundle of a build whose
+[`tools` hatch](../../reference/configuration.mdx#tools) could have rewritten the emitted assets.
+Prebuilt payloads (`kind: 'prebuilt'`) stay opaque and hash-locked only, and declaration files
+(`.d.ts`) are not walked. The route graph guards the same
 self-containment before the bundler runs: a route module, layout, or provider — or a module one of
 them reaches through relative imports — that value-imports a compiler-carrying framework entry
 (`agent-bundle`, `agent-bundle/api`, `agent-bundle/config`, `agent-bundle/eval`,
@@ -196,12 +203,12 @@ exact package and artifact inventory, manifest hashes, package bin targets, rele
 agreement, and the installed-dependency fields of `package.json`. The build inlines every
 dependency into `dist/bin` and the host packs, so a published plugin should install nothing:
 declare the framework, `@agent-bundle/runtime`, `react`, `zod`, and the rest of the stack under
-`devDependencies`. A compiled bundle — a host-pack module or a `dist` bundle alike — cannot import
-a bare package at all: `AB6005` fails the build before `prepack` reaches the inventory. So
+`devDependencies`. A compiled bundle — a host-pack module or a `dist` bundle alike — cannot keep
+a bare package external: the compiler reports `AB6005` before `prepack` reaches the inventory. So
 `dependencies` is only for what the packed files demonstrably need by other means — a prebuilt
 payload module's import, a `require`, `createRequire`, or `import.meta.resolve` call in a packed
-file (a call is not an import, so `AB6005` does not walk it), a packed declaration's reference, a
-consumer install script, or a `bin` command a packed file runs — since only JavaScript the
+file that the compiler did not resolve as a module dependency, a packed declaration's reference,
+a consumer install script, or a `bin` command a packed file runs — since only JavaScript the
 framework did not compile can still import one. `--output` is an artifact path relative to `--root` that overrides the configured
 `output.distPath`, defaulting to `artifact`. Use it as an npm `prepack` script; `--ignore-scripts`
 prevents recursion, and no npm lifecycle ever performs a host install.
@@ -211,18 +218,20 @@ Generated executables — artifact scripts, the routed CLI, MCP entries, hook wr
 package build's JavaScript bundles — compile with Rslib's `autoExternal` disabled, `bundle: true`,
 and `splitChunks: false`, and the framework adds no `externals` of its own; Rslib's `node` target
 leaves only Node built-ins (`node:fs`, `path`, plus Yarn PnP's `pnpapi`) external. MCP App views
-inline every script and style into one HTML file. Artifact validation holds the compiled host-pack
-bytes to the same line, and the package build holds its `dist` bundles to it before publishing
-them: a bare import specifier that is not a Node built-in is `AB6005`, so a generated executable — in a
-host pack or in `dist` — imports nothing but built-ins from outside its tree. An import kept
-external through the [`tools` hatch](../../reference/configuration.mdx#tools) is not a way around
-that: it fails the build in either output and never reaches the prepack inventory. A
+inline every script and style into one HTML file. `AB4725` rejects
+`tools.rsbuild.output.autoExternal` other than `false` and statically visible string or object
+`externals` entries that name packages. RegExp, function-form, relative, and mutator externals are
+judged from the compilation's own evidence: `AB6005` fails a generated executable in a host pack
+or `dist` when Rspack kept anything except a built-in, `pnpapi`, or an emitted sibling external.
+The emitted-module walk remains behind this compile-time check. An external kept through the
+[`tools` hatch](../../reference/configuration.mdx#tools) is therefore not a way around the
+contract and never reaches the prepack inventory. A
 `dependencies` entry is therefore only for what the packed files demonstrably need from outside a
 compiled bundle — a package a prebuilt `.js`/`.mjs`/`.cjs` payload module imports (prebuilt files
 are opaque to `AB6005`, and `AB7014` scans only those extensions, so an extensionless prebuilt
 module counts for nothing), one a packed file loads through a `require`, `createRequire`, or
-`import.meta.resolve` call (a call is not an import, so `AB6005` does not walk it in either
-output), one a consumer-side install script runs, one whose `bin` a packed file executes, or one a
+`import.meta.resolve` call that the compiler does not resolve as a module dependency, one a
+consumer-side install script runs, one whose `bin` a packed file executes, or one a
 packed declaration file references (`.d.ts` outputs are not walked by `AB6005`) — and `AB7014`
 reports a declared dependency with none of that evidence, while `AB7015` reports one a consumer's
 npm cannot install.

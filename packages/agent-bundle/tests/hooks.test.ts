@@ -19,7 +19,7 @@ import { runNodeScript } from './support/run-node-script.ts';
 import { writeHookIndex } from '../src/build/emit.ts';
 import { planHooksSurface } from '../src/build/entries.ts';
 import { generatedMetaModulePath, metaModuleSpecifier, projectMeta } from '../src/build/meta.ts';
-import { buildWithRslib, compileRslibSurfaces } from '../src/build/rslib.ts';
+import { buildWithRslib, compileRslibSurfaces } from '../src/build/compiler.ts';
 import type { AgentBundleMeta } from '../src/meta.ts';
 import { HookService, isHookSimulationCancellation } from '../src/services/hook-service.ts';
 import { parseArtifactHookIndex } from '../src/build/hook-index.ts';
@@ -275,6 +275,11 @@ it('does not share a persistent Rslib cache between generated executables', asyn
       meta: probeMeta,
       outputRoot,
     }, {
+      compilationEvidence: [{
+        compiler: 'agent-bundle-hooks-cache-probe',
+        externals: [],
+        modules: [],
+      }],
       createRslib: async (options) => {
         createOptions.push(options);
         return rslib as never;
@@ -348,6 +353,11 @@ it('closes the Rslib build result and serves the generated wrapper entry virtual
       meta: probeMeta,
       outputRoot,
     }, {
+      compilationEvidence: [{
+        compiler: 'agent-bundle-hooks-close-probe',
+        externals: [],
+        modules: [],
+      }],
       createRslib: async (options) => {
         createOptions.push(options);
         return rslib as never;

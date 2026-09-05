@@ -2,6 +2,7 @@ import { isAbsolute, relative, resolve, win32 } from 'node:path';
 
 import { assertInside, toPosixRelative } from '../core/paths.ts';
 import { isRecord } from '../core/strict-json.ts';
+import type { AssetIR } from './compile-result.ts';
 
 export type ArtifactOutputKind = 'bundle' | 'copy' | 'generated' | 'prebuilt';
 
@@ -40,11 +41,7 @@ export interface BundledOutputCandidate {
   readonly allowUnassociatedHtml?: true;
 }
 
-export interface BundledOutputEvidence {
-  readonly path: string;
-  /** Absolute authored inputs. Build-boundary canonicalization happens separately. */
-  readonly sourceInputs: readonly string[];
-}
+export type BundledOutputEvidence = AssetIR;
 
 interface PublicStats {
   toJson(options?: unknown): unknown;
