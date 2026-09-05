@@ -53,8 +53,8 @@ export default defineConfig({
       // emits ~30% more bytes by inlining shared types into every entry, and
       // renames colliding public names (`AgentBundleConfig_2`). What keeps
       // the shipped declarations honest instead is the release gate
-      // (scripts/check-declaration-imports.mjs via `pnpm lint:release`): no
-      // declaration a consumer can reach may import a devDependency.
+      // (scripts/check-declaration-imports.mjs --strict via `pnpm lint:release`):
+      // no packed declaration, reachable or not, may import a devDependency.
       dts: true,
       format: 'esm',
       syntax: 'es2022',

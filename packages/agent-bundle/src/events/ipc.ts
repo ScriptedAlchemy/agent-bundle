@@ -73,7 +73,15 @@ const eventStatusRequestSchema = z.object({
   protocolVersion: z.literal(EVENT_RUNTIME_PROTOCOL_VERSION),
 }).strict();
 
-const runtimeAvailabilitySchema = z.enum(['available', 'runtime-restarted', 'runtime-unavailable']);
+const eventRuntimeAvailabilities = ['available', 'runtime-restarted', 'runtime-unavailable'] as const;
+/**
+ * Whether the shared event runtime answering a status probe is the one the
+ * hook client expects. Derived from the tuple, not from the zod schema, so
+ * the shipped declaration of this module does not import `zod` — a
+ * devDependency consumers never install (scripts/check-declaration-imports.mjs).
+ */
+export type EventRuntimeAvailability = (typeof eventRuntimeAvailabilities)[number];
+const runtimeAvailabilitySchema = z.enum(eventRuntimeAvailabilities);
 const eventRuntimeStatusPayloadSchema = z.object({
   artifactEpoch: z.string().min(1),
   availability: runtimeAvailabilitySchema,
@@ -122,7 +130,6 @@ export interface EventRuntimeRequest {
   readonly target: string;
 }
 
-export type EventRuntimeAvailability = z.infer<typeof runtimeAvailabilitySchema>;
 export interface EventRuntimeStatus {
   readonly artifactEpoch: string;
   readonly availability: EventRuntimeAvailability;
