@@ -6,6 +6,7 @@ import { parseEnv } from 'node:util';
 import { Effect, FileSystem } from 'effect';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
+import { resolveManifestHostFromRoot } from '../build/manifest-projection.ts';
 import { validateArtifact } from '../build/validate-artifact.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { sha256Hex } from '../core/digest.ts';
@@ -25,9 +26,9 @@ import {
 
 /**
  * The foreground MCP server runner behind `agent-bundle mcp run`: it resolves
- * the content-hashed generated entry out of the built target manifest — the
- * job consumers previously solved with bash launchers parsing `mcp.json` —
- * and executes it with inherited stdio until the server exits.
+ * the compiled entry from the artifact manifest (`executables.mcpServers[]`)
+ * and executes it with inherited stdio until the server exits. Host MCP
+ * documents supply only the args/env the manifest row does not carry.
  */
 
 export interface ResolvedMcpStdioLaunch {
@@ -52,7 +53,7 @@ export interface ResolveMcpStdioLaunchOptions {
   readonly pluginDataRoot: string;
   readonly registry?: TargetRegistry;
   readonly server: string;
-  readonly target: string;
+  readonly target?: string;
   readonly workspaceRoot: string;
 }
 
@@ -67,6 +68,32 @@ const safeStateSegment = /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/u;
 export const mcpServerStateDirectory = (server: string): string =>
   safeStateSegment.test(server) ? server : `server-${sha256Hex(server).slice(0, 16)}`;
 
+const hostMcpDocument = async (
+  artifact: string,
+  documentPath: string | undefined,
+  runtime: TargetMcpRuntimeContract,
+  host: string,
+  server: string,
+): Promise<ModernMcpStdioServer | undefined> => {
+  if (documentPath === undefined) return undefined;
+  const manifestPath = joinArtifact(artifact, documentPath);
+  let document: unknown;
+  try {
+    document = parseJsonWithoutDuplicateKeys(await runWithPlatform(readFileString(manifestPath)));
+  } catch {
+    throw new Error(`MCP manifest for target ${JSON.stringify(host)} is not valid JSON.`);
+  }
+  const result = readTargetMcpServer(runtime, document, server);
+  if (result.status === 'missing') return undefined;
+  if (result.status === 'invalid') {
+    throw new Error(`MCP server ${JSON.stringify(server)} in target ${JSON.stringify(host)} is invalid.`);
+  }
+  if (result.server.kind !== 'stdio') {
+    throw new Error(`MCP server ${JSON.stringify(server)} is not a stdio server; only stdio servers can run in the foreground.`);
+  }
+  return result.server;
+};
+
 export const resolveMcpStdioLaunch = async (
   options: ResolveMcpStdioLaunchOptions,
 ): Promise<ResolvedMcpStdioLaunch> => {
@@ -74,35 +101,56 @@ export const resolveMcpStdioLaunch = async (
     throw new Error('MCP server name must be nonempty.');
   }
   const registry = options.registry ?? createDefaultRegistry();
-  if (!registry.has(options.target) || !registry.supports(options.target, 'mcp')) {
-    throw new Error(`Unsupported MCP target ${JSON.stringify(options.target)}.`);
-  }
-  const runtime = registry.mcpRuntime(options.target);
-  if (runtime === undefined) {
-    throw new Error(`Unsupported MCP target ${JSON.stringify(options.target)}.`);
-  }
-
   const artifact = resolve(options.artifact);
   const diagnostics = await validateArtifact({ artifactRoot: artifact, registry });
   const errors = diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
   if (errors.length > 0) throw new DiagnosticError(errors);
 
+  const resolved = await resolveManifestHostFromRoot(artifact, {
+    capability: 'mcp',
+    ...(options.target === undefined ? {} : { requested: options.target }),
+    server: options.server,
+  }, registry);
+  const host = resolved.host;
+  const row = resolved.manifest.executables.mcpServers.find(
+    (server) => server.name === options.server && server.hosts.includes(host),
+  );
+  if (row === undefined) {
+    throw new Error(`No projection of this artifact runs MCP server ${options.server}.`);
+  }
+  switch (row.kind) {
+    case 'compiled':
+      break;
+    case 'command':
+    case 'remote':
+      throw new Error(
+        `MCP server ${options.server} is a ${row.kind} server; only compiled servers can be run from the artifact.`,
+      );
+    default: {
+      const exhaustive: never = row.kind;
+      throw new TypeError(`Unhandled MCP server kind ${String(exhaustive)}.`);
+    }
+  }
+  if (row.entry?.path === undefined) {
+    throw new Error(
+      `MCP server ${options.server} is a compiled server without an entry path; only compiled servers can be run from the artifact.`,
+    );
+  }
+  const runtime = registry.mcpRuntime(host);
+  if (runtime === undefined) {
+    throw new Error(`Unsupported MCP target ${JSON.stringify(host)}.`);
+  }
+
   // Every selected host reads the composite root as its plugin root (#555).
   const targetRoot = artifact;
-  const manifestPath = joinArtifact(targetRoot, runtime.manifestPath);
-  let document: unknown;
-  try {
-    document = parseJsonWithoutDuplicateKeys(await runWithPlatform(readFileString(manifestPath)));
-  } catch {
-    throw new Error(`MCP manifest for target ${JSON.stringify(options.target)} is not valid JSON.`);
-  }
-  const result = readTargetMcpServer(runtime, document, options.server);
-  if (result.status === 'missing') {
-    throw new Error(`Expected exactly one ${options.target} MCP server matching ${JSON.stringify(options.server)}.`);
-  }
-  if (result.status === 'invalid') {
-    throw new Error(`MCP server ${JSON.stringify(options.server)} in target ${JSON.stringify(options.target)} is invalid.`);
-  }
+  const projection = resolved.manifest.projections.find((candidate) => candidate.host === host);
+  const hostStdio = await hostMcpDocument(
+    targetRoot,
+    projection?.documents.mcp,
+    runtime,
+    host,
+    options.server,
+  );
 
   /**
    * Per-field plugin-root split: `args`/`cwd` must stay artifact-rooted
@@ -112,7 +160,7 @@ export const resolveMcpStdioLaunch = async (
    */
   const envPluginRoot = resolve(options.envPluginRoot ?? options.workspaceRoot);
   const launchRuntime: TargetMcpRuntimeContract = {
-    manifestPath: runtime.manifestPath,
+    manifestPath: projection?.documents.mcp ?? runtime.manifestPath,
     readModernServers: (document) => runtime.readModernServers(document),
     resolveStdioArgument: (value, roots) => runtime.resolveStdioArgument(value, roots),
     resolveValue: (field, roots, value) => {
@@ -125,25 +173,41 @@ export const resolveMcpStdioLaunch = async (
       return { ...resolution, value: runtime.resolveStdioArgument(resolution.value, envRoots) };
     },
   };
-  const resolved = resolveMcpPathTokens({
-    roots: {
-      pluginData: resolve(options.pluginDataRoot),
-      pluginRoot: targetRoot,
-      workspaceRoot: resolve(options.workspaceRoot),
-    },
+  const roots = {
+    pluginData: resolve(options.pluginDataRoot),
+    pluginRoot: targetRoot,
+    workspaceRoot: resolve(options.workspaceRoot),
+  };
+  const entryLaunch = resolveMcpPathTokens({
+    roots,
     runtime: launchRuntime,
-    server: result.server,
-    target: options.target,
+    server: Object.freeze({ args: Object.freeze([row.entry.path]), command: 'node', kind: 'stdio' }),
+    target: host,
   });
-  if (resolved.kind !== 'stdio') {
+  if (entryLaunch.kind !== 'stdio') {
     throw new Error(`MCP server ${JSON.stringify(options.server)} is not a stdio server; only stdio servers can run in the foreground.`);
   }
-  const stdio = resolved as ModernMcpStdioServer;
+  if (row.entry.worker !== undefined) {
+    joinArtifact(targetRoot, row.entry.worker);
+  }
+  const hostLaunch = hostStdio === undefined
+    ? undefined
+    : resolveMcpPathTokens({
+      roots,
+      runtime: launchRuntime,
+      server: hostStdio,
+      target: host,
+    });
+  if (hostLaunch !== undefined && hostLaunch.kind !== 'stdio') {
+    throw new Error(`MCP server ${JSON.stringify(options.server)} is not a stdio server; only stdio servers can run in the foreground.`);
+  }
+  const extraArgs = hostLaunch === undefined ? [] : hostLaunch.args.slice(1);
+  const cwd = hostLaunch?.cwd;
   return Object.freeze({
-    args: Object.freeze([...stdio.args]),
-    command: stdio.command,
-    cwd: stdio.cwd === undefined ? targetRoot : resolveContained(targetRoot, stdio.cwd),
-    env: Object.freeze({ ...stdio.env }),
+    args: Object.freeze([entryLaunch.args[0]!, ...extraArgs]),
+    command: hostLaunch?.command ?? 'node',
+    cwd: cwd === undefined ? targetRoot : resolveContained(targetRoot, cwd),
+    env: Object.freeze({ ...hostLaunch?.env }),
   });
 };
 

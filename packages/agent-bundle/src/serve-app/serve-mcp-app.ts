@@ -4,9 +4,11 @@ import { Context, Effect, Layer, type Scope } from 'effect';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { Socket } from 'node:net';
+import { join } from 'node:path';
 import type { Stream } from 'node:stream';
 
-import type { TargetRegistry } from '../adapters/registry.ts';
+import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
+import { resolveManifestHostFromRoot } from '../build/manifest-projection.ts';
 import { isRecord } from '../core/strict-json.ts';
 import type { McpAppProfileId } from '../dev/mcp-app-profile-descriptors.ts';
 import type { ServedMcpApp, ServeMcpAppPublicOptions } from './types.ts';
@@ -39,7 +41,12 @@ import {
 import { diagnostic, isRequestDiagnostic, requestError, responseDiagnostic, singleHeader } from '../dev/http.ts';
 import { makeScopedEffectRuntime } from '../effect/boundary.ts';
 import { liftPromise, liftTry } from '../effect/lift.ts';
-import { resolveMcpLaunchEnvironment, type McpLaunchEnvironmentOptions, type ResolvedMcpStdioLaunch } from '../services/mcp-run.ts';
+import {
+  mcpServerStateDirectory,
+  resolveMcpLaunchEnvironment,
+  type McpLaunchEnvironmentOptions,
+  type ResolvedMcpStdioLaunch,
+} from '../services/mcp-run.ts';
 import { renderServeAppPage, SERVE_APP_TOKEN_HEADER } from './serve-app-page.ts';
 
 /**
@@ -64,7 +71,10 @@ import { renderServeAppPage, SERVE_APP_TOKEN_HEADER } from './serve-app-page.ts'
 
 export type { McpAppConsentCapability, ServedMcpApp, ServeMcpAppPublicOptions } from './types.ts';
 
-export interface ServeMcpAppOptions extends ServeMcpAppPublicOptions, Omit<McpLaunchEnvironmentOptions, 'artifact' | 'registry' | 'server'> {
+export interface ServeMcpAppOptions extends ServeMcpAppPublicOptions, Omit<
+  McpLaunchEnvironmentOptions,
+  'artifact' | 'pluginDataRoot' | 'registry' | 'server' | 'target'
+> {
   /** The MCP App to serve: `<server>/<app>`, or `<server>/ui://...` for an exact resource URI. */
   readonly app: string;
   /**
@@ -72,7 +82,9 @@ export interface ServeMcpAppOptions extends ServeMcpAppPublicOptions, Omit<McpLa
    * App's scope (a throwaway build removed on `close()`).
    */
   readonly artifact: string | Effect.Effect<string, unknown, Scope.Scope>;
+  readonly pluginDataRoot?: string;
   readonly registry?: TargetRegistry;
+  readonly target?: string;
 }
 
 const defaultTimeoutMs = 30_000;
@@ -408,20 +420,28 @@ const serveProgram = (options: ServeMcpAppOptions): Effect.Effect<ServedMcpAppSh
   const timeoutMs = options.timeoutMs ?? defaultTimeoutMs;
   const requestedApp = yield* liftTry(() => parseServeAppSelector(options.app));
   const artifact = typeof options.artifact === 'string' ? options.artifact : yield* options.artifact;
+  const registry = options.registry ?? createDefaultRegistry();
+  const { host } = yield* liftPromise(() => resolveManifestHostFromRoot(artifact, {
+    capability: 'mcp',
+    ...(options.target === undefined ? {} : { requested: options.target }),
+    server: requestedApp.server,
+  }, registry));
+  const pluginDataRoot = options.pluginDataRoot
+    ?? join(options.workspaceRoot, '.agent-bundle', 'mcp-run', host, mcpServerStateDirectory(requestedApp.server));
   const launch = yield* liftPromise(() => resolveMcpLaunchEnvironment({
     artifact,
     ...(options.envFiles === undefined ? {} : { envFiles: options.envFiles }),
     ...(options.envPluginRoot === undefined ? {} : { envPluginRoot: options.envPluginRoot }),
     ...(options.loadEnvFiles === undefined ? {} : { loadEnvFiles: options.loadEnvFiles }),
     ...(options.mode === undefined ? {} : { mode: options.mode }),
-    pluginDataRoot: options.pluginDataRoot,
-    ...(options.registry === undefined ? {} : { registry: options.registry }),
+    pluginDataRoot,
+    registry,
     server: requestedApp.server,
-    target: options.target,
+    target: host,
     workspaceRoot: options.workspaceRoot,
   }));
   const session = yield* Effect.acquireRelease(
-    liftPromise(() => openSession(launch, { serverName: requestedApp.server, target: options.target }, timeoutMs)),
+    liftPromise(() => openSession(launch, { serverName: requestedApp.server, target: host }, timeoutMs)),
     (opened) => Effect.promise(() => opened.close()),
   );
   const selection = yield* liftPromise(() => selectApp(session, options));

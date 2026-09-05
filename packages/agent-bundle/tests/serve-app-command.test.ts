@@ -305,7 +305,6 @@ describe('serve-app round trip through the CLI parser', () => {
       open: false,
       profile: 'portable',
       root: '/project',
-      target: 'portable',
     }]);
     await result.shutdown();
   });

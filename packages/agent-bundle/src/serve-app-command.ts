@@ -40,8 +40,9 @@ export { parseServeAppReadyLine, serveAppAllowCapabilities };
  * injections — `logger`, `registry`, `openBrowser` — and the two keys the
  * CLI does not expose, `targets` and `timeoutMs`, which stay with host
  * processes that call `serveApp` directly. Unset keys take the CLI's
- * defaults (`--target portable`, `--profile portable`, `--mode production`,
- * no browser). Relative paths resolve exactly as they would in-process:
+ * defaults (`--profile portable`, `--mode production`, no browser; `--target`
+ * is the only projection that runs the App's server). Relative paths resolve
+ * exactly as they would in-process:
  * `configPath` against `root`, `artifact` and `envFiles` against the
  * working directory.
  */

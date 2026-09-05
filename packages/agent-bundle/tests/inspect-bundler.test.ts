@@ -193,4 +193,6 @@ it('keeps the bundler focus out of unfocused inspections', async () => {
   const result = await inspect({ root });
   expect(result.state).toBe('ready');
   expect((result as ReadyInspectResult).selected).toBeUndefined();
+  expect((result as ReadyInspectResult).output.distPath).toBe('dist');
+  expect((result as ReadyInspectResult).output.manifest).toBeUndefined();
 });
