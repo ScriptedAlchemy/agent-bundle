@@ -180,10 +180,9 @@ Four version axes are tracked separately and are expected to agree:
 
 The `host-install` proof level records all four and fails closed when any is missing or differs.
 `prepack` gates the first two plus normalized plugin metadata and host manifests (`AB7013`), and
-refuses a `package.json` whose installed-dependency fields name packages nothing in the pack uses — no
-packed JavaScript imports, requires, or resolves them, no packed declaration references them, no
-`imports` mapping or consumer install script reaches them (`AB7014`) — or that a consumer's npm cannot
-fetch from a registry (`AB7015`): a published plugin installs only what its packed files need. The
+refuses a `package.json` whose installed-dependency fields name packages no packed declaration,
+consumer install script, or prebuilt `runtimeDependencies` proves a consumer needs (`AB7014`) — or that a consumer's npm cannot fetch from a registry
+(`AB7015`). A package merely inlined into a compiled bundle does not count as used. The
 [validation guide](../guide/distribution/validation.mdx) lists every source of evidence.
 
 `compiler.adapters[]` records an `adapterRevision` (monotonic, repository-owned) and an

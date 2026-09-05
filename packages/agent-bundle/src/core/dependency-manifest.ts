@@ -11,9 +11,8 @@ import { exists } from './paths.ts';
  * too. A package whose `exports` map hides `package.json` makes that lookup
  * throw, so the same ancestor walk is then performed by hand.
  *
- * Plain Node, no framework imports: the build's dependency-root discovery and
- * `agent-bundle/web-host`, which is bundled into generated executables, locate
- * packages the same way.
+ * Plain Node, no framework imports: the build's dependency-root discovery in
+ * `rslib.ts` is its only caller.
  */
 export const dependencyManifestPath = async (packageRoot: string, name: string): Promise<string | undefined> => {
   try {

@@ -582,53 +582,6 @@ it('fails closed when the resolved environment lost its virtual modules or wrapp
   }
 });
 
-it('fails closed when an emitted bundle retains a residual reserved import', async () => {
-  const outputRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-rslib-residual-output-'));
-  const rslib = {
-    build: async () => ({
-      close: async () => undefined,
-      stats: {
-        toJson: () => ({
-          assets: [{ name: 'hooks/residual-probe.mjs' }],
-          modules: [],
-        }),
-      },
-    }),
-    inspectConfig: async () => ({
-      origin: {
-        bundlerConfigs: [{
-          name: 'agent-bundle-hooks-residual-probe',
-          output: { asyncChunks: false, path: outputRoot },
-          target: 'node',
-          ...resolvedVirtualModules('/tmp'),
-        }],
-        environmentConfigs: { 'agent-bundle-hooks-residual-probe': { output: { cleanDistPath: false } } },
-      },
-    }),
-  };
-
-  try {
-    await mkdir(join(outputRoot, 'hooks'), { recursive: true });
-    await writeFile(
-      join(outputRoot, 'hooks', 'residual-probe.mjs'),
-      'import { runGeneratedStdioMcpEntry } from "agent-bundle/mcp-entry";\nawait runGeneratedStdioMcpEntry({});\n',
-    );
-    await expect(buildWithRslib({
-      cwd: '/tmp',
-      entries: [{
-        name: 'residual-probe',
-        outputRelativePath: 'hooks/residual-probe.mjs',
-        source: '/tmp/hook.ts',
-        sourceInputs: ['/tmp/hook.ts'],
-      }],
-      meta: probeMeta,
-      outputRoot,
-    }, { createRslib: async () => rslib as never })).rejects.toThrow(/not self-contained/u);
-  } finally {
-    await rm(outputRoot, { force: true, recursive: true });
-  }
-});
-
 it('closes the Rslib build result when provenance stats are unavailable', async () => {
   const outputRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-rslib-close-error-output-'));
   const close = rs.fn(async () => undefined);

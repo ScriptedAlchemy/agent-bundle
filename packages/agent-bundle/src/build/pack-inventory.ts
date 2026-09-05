@@ -13,10 +13,11 @@ import { parseArtifactManifest } from './manifest.ts';
 import { declaredDependencies, type DeclaredDependency, type InstalledDependencyField } from '../core/package-dependencies.ts';
 import {
   classifyDependency,
-  importedPackageNames,
+  installScriptDependencies,
   isWorkspaceProtocol,
   packagedSourceInstallable,
   packagedSourcePath,
+  packedDeclarationReferences,
   type DependencyKind,
 } from './pack-dependencies.ts';
 import type { PackageBuildResult } from './package-build.ts';
@@ -122,22 +123,14 @@ const perField = (
   .map(([field, own]) => emit(field, own.toSorted((left, right) => left.name.localeCompare(right.name))));
 
 /**
- * `AB7014`/`AB7015`: the build inlines every dependency into `dist` and the
- * host packs, so an installed-dependency entry no packed file references
- * only makes every consumer's `npm install` fetch a build-time package — and
- * fail outright when the specifier is one a consumer's npm cannot resolve
- * (git, remote tarball, path, or an unrewritten workspace protocol). A
- * compiled bundle cannot `import` a bare package at all: `AB6005` fails the
- * build on any import specifier that is not a Node built-in, and `prepack`
- * runs that build before this inventory, so the import evidence `AB7014`
- * accepts comes only from modules the framework copied rather than compiled
- * — prebuilt payload modules and other scripts the `files` allowlist packs —
- * never from a `dist` bundle or a host-pack module. A `require`,
- * `createRequire(…)(…)`, or `import.meta.resolve(…)` call is not an import
- * and `AB6005` does not walk it, so that evidence is read from every packed
- * file, compiled bundles included. A prebuilt payload's `runtimeDependencies`
- * declaration is evidence of the same standing: the compiler never opens a
- * payload file, so the author states what it loads.
+ * `AB7014`/`AB7015`: an installed-dependency entry counts as used only when a
+ * consumer must have it installed — a prebuilt payload declares it in
+ * `runtimeDependencies`, a packed declaration file references it, or a
+ * consumer-side install script names or runs it. The build inlines every
+ * other import (`AB6005`), so a bundled package is still unused: every
+ * consumer's `npm install` fetches it for nothing — and fails outright when
+ * the specifier is one a consumer's npm cannot resolve (git, remote tarball,
+ * path, or an unrewritten workspace protocol).
  */
 const unresolvableMessage = (field: InstalledDependencyField, own: readonly DeclaredDependency[]): string =>
   `package.json ${field} names packages a consumer's npm cannot resolve through a registry (an invalid name or a non-registry specifier): ${own.map((dependency) =>
@@ -148,6 +141,8 @@ const unresolvableRecovery = 'Depend on a published registry version, or bundle 
   + 'which only pnpm, Yarn, or Bun rewrite while packing.';
 
 const dependencyDiagnostics = async (options: {
+  /** Package → the packed bundles the compiler inlined it into, each sorted. */
+  readonly bundledInto: ReadonlyMap<string, readonly string[]>;
   readonly declaredRuntimeDependencies: ReadonlySet<string>;
   readonly packageDocument: Readonly<Record<string, unknown>>;
   readonly packedPaths: readonly string[];
@@ -156,15 +151,17 @@ const dependencyDiagnostics = async (options: {
 }): Promise<readonly Diagnostic[]> => {
   const declared = declaredDependencies(options.packageDocument);
   if (declared.length === 0) return [];
-  // `prepack` runs the build before this inventory, and `AB6005` there refuses every bare import in a compiled
-  // bundle, so any `import` evidence found here belongs to a packed module the framework did not compile; the
-  // `require`/`createRequire`/`import.meta.resolve` evidence is not an import and may come from any packed file.
-  const imported = await importedPackageNames({
-    declared: declared.filter((dependency) => dependency.installed).map((dependency) => dependency.name),
+  const declarationReferences = await packedDeclarationReferences({
     packageDocument: options.packageDocument,
     paths: options.packedPaths,
     projectRoot: options.projectRoot,
   });
+  const installScripts = await installScriptDependencies({
+    declared: declared.filter((dependency) => dependency.installed).map((dependency) => dependency.name),
+    packageDocument: options.packageDocument,
+    projectRoot: options.projectRoot,
+  });
+  const used = new Set([...options.declaredRuntimeDependencies, ...declarationReferences, ...installScripts.names]);
   // The tarball itself may carry the dependency: `bundleDependencies` exempts an entry only when npm actually
   // packed it (a name absent from node_modules at pack time is silently dropped, and the consumer neither
   // fetches nor finds it), and a `file:` path inside the package is installed from the consumer's own copy
@@ -191,29 +188,31 @@ const dependencyDiagnostics = async (options: {
   const unresolvable = declared.filter((dependency) => !embedded(dependency)
     && (dependency.installed ? kinds.get(dependency) !== 'registry' : kinds.get(dependency) === 'unparseable'));
   // An optional dependency npm parses but cannot fetch: the install continues without it — unless a consumer
-  // install script then runs it, or loads it from a packed file it runs, and fails on the missing package.
+  // install script then runs it and fails on the missing package.
   const survivable = (dependency: DeclaredDependency): boolean =>
     dependency.field === 'optionalDependencies'
     && kinds.get(dependency) === 'fetched'
-    && !imported.installScripts.has(dependency.name);
-  // A computed import() may load any declared package; nothing can then be called unused.
-  const unused = imported.complete
-    ? declared.filter((dependency) => dependency.installed
-      && !imported.names.has(dependency.name)
-      && !options.declaredRuntimeDependencies.has(dependency.name))
-    : [];
+    && !installScripts.needed.has(dependency.name);
+  const unused = declared.filter((dependency) => dependency.installed && !used.has(dependency.name));
+  const inlinedSentence = (own: readonly DeclaredDependency[]): string | undefined => {
+    const inlined = own.flatMap((dependency) => {
+      const bundles = options.bundledInto.get(dependency.name);
+      return bundles === undefined ? [] : [`${JSON.stringify(dependency.name)} into ${bundles.join(' and ')}`];
+    });
+    return inlined.length === 0 ? undefined : `The build inlined ${inlined.join(', and ')}; every consumer installs them for nothing.`;
+  };
   return [
     // A peer nothing imports may be a deliberate compatibility contract with the host that loads the package;
     // npm 7+ still installs it for every consumer, so it is worth a look, not a refusal.
     ...perField(unused, (field, own) => diagnostic(
       'AB7014',
-      `package.json ${field} names packages no packed JavaScript or declaration file references, runs, or install script needs, and no prebuilt payload declares: ${quoteAll(own.map((dependency) => dependency.name))}. `
-        + (field === 'peerDependencies'
+      `package.json ${field} names packages a consumer never needs installed: no packed declaration file references them, no consumer-side install script names or runs them, and no prebuilt payload declares them in runtimeDependencies: ${quoteAll(own.map((dependency) => dependency.name))}. `
+        + (inlinedSentence(own) ?? (field === 'peerDependencies'
           ? 'If they only constrain the host version, that is a compatibility contract; npm 7+ still installs them for every consumer.'
-          : 'Every consumer installs them for nothing; the emitted outputs already inline what they use.'),
+          : 'Nothing packed reaches them at runtime; every consumer installs them for nothing.')),
       field === 'peerDependencies'
         ? 'Keep a deliberate compatibility peer, mark it optional in peerDependenciesMeta so npm stops installing it, or move a build-only package to devDependencies.'
-        : 'Move build-only packages to devDependencies; compiled bundles inline their imports (AB6005), so keep a runtime dependency only for what a prebuilt payload or other uncompiled packed module imports, a packed file requires or resolves (createRequire, import.meta.resolve), a packed declaration file references, a #subpath import reaches through the imports map, an install script or packed JavaScript runs, or a prebuilt payload names in runtimeDependencies (definePrebuilt); a computed import() or require() in packed code withholds this check.',
+        : 'Move build-only packages to devDependencies; compiled bundles inline their imports (AB6005). Keep a runtime dependency only for what a packed declaration file references, a consumer install script names or runs, or a prebuilt payload declares in runtimeDependencies (definePrebuilt).',
       field === 'peerDependencies' ? 'warning' : 'error',
     )),
     // npm skips an optional dependency it cannot fetch, so the install survives — but only once the specifier parsed
@@ -326,7 +325,12 @@ export const packInventoryDiagnostics = async (options: {
     ));
   }
 
+  const bundledInto = new Map([...Map.groupBy(
+    options.packageBuild.evidence.assets.flatMap((asset) => asset.packages.map((name) => ({ name, path: asset.path }))),
+    (entry) => entry.name,
+  )].map(([name, entries]) => [name, entries.map((entry) => entry.path).sort((left, right) => left.localeCompare(right))]));
   diagnostics.push(...await dependencyDiagnostics({
+    bundledInto,
     declaredRuntimeDependencies: new Set((options.model.payloads ?? []).flatMap((payload) => payload.runtimeDependencies)),
     packageDocument,
     packedPaths: [...packed],

@@ -70,18 +70,19 @@
   `packages/agent-bundle/src/build/rslib.ts` (`composeEntryLibConfig`) bundles
   every dependency of a generated executable — `output.autoExternal: false`,
   `bundle: true`, `splitChunks: false`, no `externals`. Rslib's `node` target
-  leaves only Node built-ins (and `pnpapi`) external, and the only bare
-  import specifiers `AB6005` accepts in a host-pack module are Node built-ins. The
-  package build's `dist` bundles are walked by the same `AB6005` rule
-  (`src/build/package-build.ts` reuses `validateJavaScriptModules` from
-  `src/build/validate-artifact-modules.ts`), so a generated executable in a
-  host pack or in `dist` imports nothing but Node built-ins from outside its
-  tree. The walk reads import specifiers, static and literal dynamic; a
-  `createRequire(…)(…)` or `import.meta.resolve(…)` call is not an import and
-  is outside `AB6005` in either output — the prepack gate reads those calls
-  as dependency evidence. MCP App views (`src/build/mcp-apps.ts`) inline every script and style
-  into one HTML file. The framework never adds `externals` to a plugin build;
-  the `externals` handling in `rslib.ts` (`reservedExternalsViolation`,
+  leaves only Node built-ins (and `pnpapi`) external. The compiler service
+  (`src/build/compiler.ts`, `external-policy.ts`,
+  `dependency-audit-plugin.ts`) records every `ExternalModule` of every
+  host-pack, `dist`, and MCP App view compilation and fails the build
+  (`AB6005`) on anything but a Node built-in, `pnpapi`, or an emitted sibling
+  — whatever spelling Rspack emitted. The package build's `dist` bundles are
+  judged by the same rule and then walked like host-pack modules
+  (`src/build/package-build.ts` reuses `validateJavaScriptModules`), so a
+  generated executable in a host pack or in `dist` imports nothing but Node
+  built-ins from outside its tree. MCP App views
+  (`src/build/mcp-apps.ts`) inline every script and style into one HTML file.
+  The framework never adds `externals` to a plugin build; the `externals`
+  handling in `rslib.ts` (`reservedExternalsViolation`,
   `guardReservedExternals`) only rejects reserved specifiers in the resolved
   externals, which come from the author's `tools` hatch and Rslib's built-in
   list, never from the profile.
@@ -90,18 +91,37 @@
   a consumer must install is the author's explicit decision, and an import
   kept external through the `tools` hatch is not a way to make it anywhere:
   `AB6005` fails such an import in a host pack and in `dist` alike. What
-  legitimately puts a package under `dependencies` is a packed declaration
-  reference, a prebuilt payload module that imports it, an install script,
-  or a `bin` command packed JavaScript runs — and the prepack gate judges
-  those: `AB7014` demands that evidence, `AB7015` a specifier a consumer's
-  npm can install.
-- Proof is bytes and processes, not config: every artifact build walks the
-  compiled host-pack modules and every package build walks its emitted `dist`
-  bundles (`AB6005` fails a bare package specifier in either), the prepack
-  gate then judges what remains declared, and the packed pool
-  (`pnpm test:packed`) installs the packed tarball into a clean consumer,
-  builds, removes the project source, and spawns the generated entry as a
-  real process (`packed-deleted-source`).
+  legitimately puts a package under `dependencies` is one of three `AB7014`
+  evidence sources: `runtimeDependencies` on a prebuilt payload
+  (`definePrebuilt`), a packed declaration reference, or a consumer-side
+  install script that names or runs it. The framework's own runtime modules
+  load no package at run time (`generated-module-evidence.test.ts`), so there
+  is no framework process-dependency record to read. `AB7015` additionally
+  requires a specifier a consumer's npm can install.
+- Proof is compiler evidence, the persisted record, and packed-process
+  tests: each compilation's own external and module records are judged before
+  emission, `build` writes them beside the emitted files as
+  `agent-bundle.compile-evidence.json` (`src/build/compile-evidence.ts`) and
+  `validate --artifact` re-checks the record against the file table
+  (`AB6039`), the prepack gate judges declared dependencies from evidence,
+  and the packed pool (`pnpm test:packed`) installs the packed tarball into a
+  clean consumer, builds, removes the project source, and spawns the
+  generated entry as a real process (`packed-deleted-source`). The
+  emitted-module walk (`src/build/validate-artifact-modules.ts`) remains
+  only for what the compiler cannot see: an expression `import()` in a
+  compiled module (Rslib's profile leaves `import(<expression>)`,
+  `require(<expression>)`, `require.resolve(…)`, `createRequire(…)(…)`, and
+  `import.meta.resolve(…)` verbatim — no module, no external, no warning),
+  JavaScript the framework did not compile (`install.mjs`, copied scripts),
+  and every module of a build with a `tools` hatch (`coverage.rewritable`).
+  A compiled module the record proves is lexed, not parsed, and each literal
+  import it still carries is held to the record: a Node built-in or a
+  recorded external passes, anything else is an import the build was told
+  to ignore (`rspackIgnore`/`webpackIgnore` — Rspack leaves it verbatim with
+  no module, external, or warning) and fails `AB6005`. A matching digest
+  proves the bytes are the compiler's, never that every import in them was
+  resolved. The walk is not a second self-containment check and must not
+  grow one: it resolves nothing the record already judged.
 
 ## Documentation site
 

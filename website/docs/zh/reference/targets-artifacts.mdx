@@ -160,9 +160,10 @@ MCP 入口、脚本、路由式 CLI bin 与 MCP App 只编译**一次**，归属
 - **运行中的进程** —— 活跃的 MCP `initialize` 所报告的版本。
 
 `host-install` 证明级别会记录全部四者，并在任何一项缺失或不一致时以失败告终。`prepack` 则为前两者，外加
-规范化后的插件元数据与宿主清单把关（`AB7013`），并拒绝这样的 `package.json`：安装期依赖字段中列出的包在整个包里无人使用——没有打包后的 JavaScript 导入、require 或解析它，
-没有打包后的声明文件引用它，也没有 `imports` 映射或消费者侧安装脚本触及它（`AB7014`）——或消费者的 npm 无法从注册表抓取它（`AB7015`）：
-已发布的插件只安装其打包文件所需的内容。[验证指南](../guide/distribution/validation.mdx)列出了每一种证据来源。
+规范化后的插件元数据与宿主清单把关（`AB7013`），并拒绝这样的 `package.json`：安装期依赖字段点名了
+打包后声明文件、消费者安装脚本或预构建 `runtimeDependencies` 都不能证明消费者需要的包
+（`AB7014`），或消费者的 npm 无法从注册表抓取的包（`AB7015`）。仅仅内联进已编译 bundle 的包不算已使用。
+[验证指南](../guide/distribution/validation.mdx)列出了每一种证据来源。
 
 `compiler.adapters[]` 记录 `adapterRevision`（单调递增，仓库自有）与 `observedVersion`（记录该能力证据时所观察到的
 宿主版本）。两者都不做哈希：Git 已经为仓库自有内容做了版本管理，在仓库内部再哈希一遍会让每次编辑表格
