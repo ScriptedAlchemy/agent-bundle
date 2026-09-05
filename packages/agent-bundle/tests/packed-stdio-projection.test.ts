@@ -44,12 +44,18 @@ interface McpJson {
  * (tests/projection/) covers the same route protocol surface at a fraction of
  * the cost and explicitly does not claim any of this.
  */
-it('serves compiled routes with a private runtime sibling across packed process restarts', async () => {
+it.each([
+  ['release', 'agent-bundle'],
+  ['private runtime sibling', 'agent-bundle-runtime-rebundle'],
+] as const)('serves compiled routes from the %s package across packed process restarts', async (_variant, packageName) => {
   const [agentBundle, runtime, markdownStream] = await Promise.all([
-    sharedPackedTarball('agent-bundle-runtime-rebundle'),
+    sharedPackedTarball(packageName),
     sharedPackedTarball('runtime'),
     sharedPackedTarball('markdown-stream'),
   ]);
+  expect(agentBundle.variant).toBe(
+    packageName === 'agent-bundle-runtime-rebundle' ? 'runtime-rebundle' : undefined,
+  );
   const consumer = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-stdio-'));
   const project = join(consumer, 'project');
   const artifact = join(project, 'artifact');
@@ -253,7 +259,7 @@ it('serves compiled routes with a private runtime sibling across packed process 
       // fills `HARNESS_FROM_FILE` and `.env.local`'s `HARNESS_LOCAL`, the host's
       // exported `HARNESS_HOST_WINS` is untouched, and nothing was logged.
       for (const [name, value] of [
-        ...(agentBundle.variant === 'runtime-rebundle'
+        ...(packageName === 'agent-bundle-runtime-rebundle'
           ? [['AGENT_BUNDLE_RUNTIME_REBUNDLE_FIXTURE_EXECUTED', '1'] as const]
           : []),
         ['HARNESS_FROM_FILE', 's3cr3t-from-file'],

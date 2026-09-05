@@ -72,6 +72,7 @@ try {
     cwd: repositoryRoot,
     env: {
       ...environment,
+      AGENT_BUNDLE_RSLIB_CACHE_DIRECTORY: join(packDirectory, 'runtime-rebundle-cache'),
       AGENT_BUNDLE_RUNTIME_REBUNDLE_FIXTURE: '1',
       NODE_ENV: 'production',
     },
