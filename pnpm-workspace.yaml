@@ -26,5 +26,8 @@ minimumReleaseAgeExclude:
   - '@effect/tsgo-win32-arm64@0.39.0'
   - '@effect/tsgo-win32-x64@0.39.0'
   - '@effect/tsgo@0.39.0'
+# LocalProvider.init() awaits FlexSearch addAsync so the first search query
+# cannot race the index build (#590; upstream web-infra-dev/rspress#3658).
+# Drop the patch once a release awaits the adds.
 patchedDependencies:
   '@rspress/core@2.0.21': patches/@rspress__core@2.0.21.patch
