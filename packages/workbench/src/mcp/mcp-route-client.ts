@@ -9,7 +9,7 @@ import type {
 } from '../../../agent-bundle/src/contracts/runtime.ts';
 import type { JsonObject } from '../../../agent-bundle/src/contracts/runtime.ts';
 import { isMcpSessionTarget, type McpSessionTarget } from '../../../agent-bundle/src/contracts/mcp-session.ts';
-import { exactKeys, isHttpUrl, isRecord } from '../client-helpers.ts';
+import { exactKeys, isLoopbackHttpUrl, isRecord } from '../client-helpers.ts';
 import { hasOnlyOwnKeys } from '../strict-json.ts';
 
 export type McpRouteTarget = McpSessionTarget;
@@ -426,14 +426,14 @@ const inspectorRouteStatus = (value: unknown): McpInspectorRouteStatus => {
   const status = response.status;
   if (
     !hasOnlyKeys(status, ['state', 'url']) || !isInspectorRouteState(status.state) ||
-    (status.url !== undefined && !isHttpUrl(status.url))
+    (status.url !== undefined && !isLoopbackHttpUrl(status.url))
   ) throw invalid();
   return Object.freeze({ state: status.state, ...(status.url === undefined ? {} : { url: status.url }) });
 };
 
 const inspectorRouteLaunch = (value: unknown): Readonly<{ readonly url: string }> => {
   const response = isRecord(value) ? asRecord(value) : undefined;
-  if (response === undefined || !hasExactKeys(response, ['url']) || !isHttpUrl(response.url)) {
+  if (response === undefined || !hasExactKeys(response, ['url']) || !isLoopbackHttpUrl(response.url)) {
     throw new McpRouteClientError('AB8019', 'Inspector launch route returned an invalid response.');
   }
   return Object.freeze({ url: response.url });

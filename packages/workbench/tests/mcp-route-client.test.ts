@@ -235,6 +235,9 @@ describe('MCP route client inspector routes', () => {
     ['an unknown state', { status: { state: 'bogus' } }],
     ['an unexpected status field', { status: { extra: 1, state: 'idle' } }],
     ['a non-HTTP Inspector URL', { status: { state: 'running', url: 'javascript:alert(1)' } }],
+    ['a non-loopback Inspector URL', { status: { state: 'running', url: 'https://inspector.example.com/?MCP_INSPECTOR_API_TOKEN=tok' } }],
+    ['an all-interfaces Inspector URL', { status: { state: 'running', url: 'http://0.0.0.0:6274/?MCP_INSPECTOR_API_TOKEN=tok' } }],
+    ['an Inspector URL carrying credentials', { status: { state: 'running', url: 'http://user:pass@127.0.0.1:6274/' } }],
     ['a missing status', {}],
   ];
 
@@ -273,9 +276,18 @@ describe('MCP route client inspector routes', () => {
 
   const invalidLaunchBodies: readonly [string, unknown][] = [
     ['a non-HTTP Inspector URL', { url: 'javascript:alert(1)' }],
+    ['a non-loopback Inspector URL', { url: 'https://inspector.example.com/?MCP_INSPECTOR_API_TOKEN=tok' }],
     ['an unexpected field', { extra: true, url: inspectorUrl }],
     ['a missing URL', {}],
   ];
+
+  it('accepts every loopback spelling for the Inspector URL', async () => {
+    for (const url of ['http://localhost:6274/?MCP_INSPECTOR_API_TOKEN=tok', 'http://[::1]:6274/?MCP_INSPECTOR_API_TOKEN=tok', inspectorUrl]) {
+      const { client } = inspectorRouteClient(() => json({ url }));
+
+      await expect(client.inspectorLaunch()).resolves.toEqual({ url });
+    }
+  });
 
   for (const [description, body] of invalidLaunchBodies) {
     it(`rejects an Inspector launch response with ${description}`, async () => {

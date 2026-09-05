@@ -158,6 +158,16 @@ it('prefers a token query URL and falls back to the first localhost URL', () => 
   expect(parseInspectorStdoutUrl('http://localhost:6274/?MCP_PROXY_AUTH_')).toBeUndefined();
 });
 
+it('never publishes a token URL on a non-loopback host, even when no loopback URL follows', () => {
+  expect(parseInspectorStdoutUrl('http://0.0.0.0:6274/?MCP_INSPECTOR_API_TOKEN=abc\n')).toBeUndefined();
+  expect(parseInspectorStdoutUrl('https://inspector.example.com/?MCP_INSPECTOR_API_TOKEN=abc\n')).toBeUndefined();
+  expect(parseInspectorStdoutUrl([
+    'https://inspector.example.com/?MCP_INSPECTOR_API_TOKEN=abc',
+    'http://127.0.0.1:6274/?MCP_INSPECTOR_API_TOKEN=def',
+    '',
+  ].join('\n'))).toBe('http://127.0.0.1:6274/?MCP_INSPECTOR_API_TOKEN=def');
+});
+
 it('does not choose a URL that ends the buffer, whether or not it already carries a token key', () => {
   // A later chunk may still extend the token value, so an undelimited URL is not evidence yet.
   expect(parseInspectorStdoutUrl('https://localhost:6274/?sessionToken=abc')).toBeUndefined();

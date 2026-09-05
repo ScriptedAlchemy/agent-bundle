@@ -117,9 +117,11 @@ const isLocalhost = (url: URL): boolean => {
 };
 
 /**
- * First delimited stdout http(s) URL with a token query param, else the first delimited
- * localhost URL. A URL that ends the buffer is never chosen: stdout arrives in chunks, and a
- * boundary inside the token value would otherwise publish a truncated token.
+ * First delimited loopback http(s) URL with a token query param, else the first delimited
+ * loopback URL. Only loopback hosts qualify: the Workbench hands this URL, token included, to
+ * the browser as a link, so a non-loopback host (an inherited `HOST=0.0.0.0`, say) is never
+ * published. A URL that ends the buffer is never chosen either: stdout arrives in chunks, and
+ * a boundary inside the token value would otherwise publish a truncated token.
  *
  * Inspector 2.x prints `http://127.0.0.1:6274?MCP_INSPECTOR_API_TOKEN=…` (no slash before
  * `?`; `new URL()` adds it) followed by a token-less
@@ -130,11 +132,11 @@ export const parseInspectorStdoutUrl = (stdout: string): string | undefined => {
   const found: URL[] = [];
   for (const match of text.matchAll(httpUrl)) {
     const url = inspectableUrl(match[0]!);
-    if (url === undefined || match.index === undefined) continue;
+    if (url === undefined || match.index === undefined || !isLocalhost(url)) continue;
     const next = text[match.index + match[0].length];
     if (next !== undefined && urlDelimiter.test(next)) found.push(url);
   }
-  return (found.find(hasTokenQuery) ?? found.find(isLocalhost))?.href;
+  return (found.find(hasTokenQuery) ?? found[0])?.href;
 };
 
 const alreadyClosed = (child: ChildProcess): boolean =>

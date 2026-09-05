@@ -52,6 +52,8 @@ class McpInspectorLaunchControllerImpl implements McpInspectorLaunchController {
   readonly #listeners = new Set<McpInspectorLaunchListener>();
   readonly #routes: McpInspectorLaunchRoutes;
   #launching: Promise<void> | undefined;
+  /** Count of launches started; a refresh that began under an older count is superseded. */
+  #launches = 0;
   #model = createMcpInspectorLaunchModel();
 
   constructor(options: McpInspectorLaunchControllerOptions) {
@@ -64,6 +66,7 @@ class McpInspectorLaunchControllerImpl implements McpInspectorLaunchController {
 
   launch(): Promise<void> {
     if (this.#launching !== undefined) return this.#launching;
+    this.#launches += 1;
     this.#publish({ type: 'launch' });
     this.#launching = this.#runLaunch().finally(() => {
       this.#launching = undefined;
@@ -71,15 +74,24 @@ class McpInspectorLaunchControllerImpl implements McpInspectorLaunchController {
     return this.#launching;
   }
 
+  /**
+   * A status read is evidence about the moment it was requested. One that completes while a
+   * launch is in flight, or after a launch that began later, is superseded and discarded: it
+   * would otherwise turn a fresh `ready` back into `idle` or erase a launch diagnostic.
+   */
   async refresh(): Promise<void> {
+    const launches = this.#launches;
+    const superseded = (): boolean => this.#launching !== undefined || launches !== this.#launches;
     try {
       const status = await this.#routes.inspectorStatus();
+      if (superseded()) return;
       if (status.state === 'running' && status.url !== undefined) {
         this.#publish({ type: 'running', url: status.url });
       } else {
         this.#publish({ type: 'stopped' });
       }
     } catch (reason) {
+      if (superseded()) return;
       this.#publish({ diagnostic: failureDiagnostic(reason, STATUS_FAILED), type: 'failed' });
     }
   }

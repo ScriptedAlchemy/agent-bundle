@@ -288,6 +288,73 @@ describe('MCP Inspector launch controller', () => {
     expect(models.map((model) => model.phase)).toEqual(['idle', 'starting', 'ready']);
   });
 
+  it('discards a status refresh that began before a launch and lands after the launch is ready', async () => {
+    const status = deferred<McpInspectorRouteStatus>();
+    const { routes } = fakeRoutes({ status: () => status.promise });
+    const controller = createMcpInspectorLaunchController({ routes });
+    const models = observed(controller);
+
+    const refreshing = controller.refresh();
+    await controller.launch();
+    expect(controller.model).toEqual({ phase: 'ready', url: inspectorUrl });
+
+    status.resolve({ state: 'idle' });
+    await expect(refreshing).resolves.toBeUndefined();
+
+    expect(controller.model).toEqual({ phase: 'ready', url: inspectorUrl });
+    expect(models.map((model) => model.phase)).toEqual(['idle', 'starting', 'ready']);
+  });
+
+  it('keeps a launch diagnostic when a superseded status refresh reports idle afterwards', async () => {
+    const status = deferred<McpInspectorRouteStatus>();
+    const { routes } = fakeRoutes({
+      launch: async () => { throw codedError(launchFailure.code, launchFailure.message); },
+      status: () => status.promise,
+    });
+    const controller = createMcpInspectorLaunchController({ routes });
+
+    const refreshing = controller.refresh();
+    await controller.launch();
+    expect(controller.model).toEqual({ diagnostic: launchFailure, phase: 'error' });
+
+    status.resolve({ state: 'idle' });
+    await refreshing;
+
+    expect(controller.model).toEqual({ diagnostic: launchFailure, phase: 'error' });
+  });
+
+  it('ignores a status refresh failure that lands while a launch is in flight', async () => {
+    const launch = deferred<Readonly<{ readonly url: string }>>();
+    const { routes } = fakeRoutes({
+      launch: () => launch.promise,
+      status: async () => { throw codedError(routesUnavailable.code, routesUnavailable.message); },
+    });
+    const controller = createMcpInspectorLaunchController({ routes });
+    const models = observed(controller);
+    const pending = controller.launch();
+
+    await expect(controller.refresh()).resolves.toBeUndefined();
+    expect(controller.model).toEqual({ phase: 'starting' });
+
+    launch.resolve({ url: inspectorUrl });
+    await pending;
+
+    expect(controller.model).toEqual({ phase: 'ready', url: inspectorUrl });
+    expect(models.map((model) => model.phase)).toEqual(['idle', 'starting', 'ready']);
+  });
+
+  it('applies a status refresh that begins after a launch has settled', async () => {
+    let status: McpInspectorRouteStatus = { state: 'running', url: inspectorUrl };
+    const { routes } = fakeRoutes({ status: async () => status });
+    const controller = createMcpInspectorLaunchController({ routes });
+
+    await controller.launch();
+    status = { state: 'exited' };
+    await controller.refresh();
+
+    expect(controller.model).toEqual({ phase: 'idle' });
+  });
+
   it('maps a rejected status refresh to an error diagnostic without rejecting', async () => {
     const coded = createMcpInspectorLaunchController({
       routes: fakeRoutes({ status: async () => { throw codedError(routesUnavailable.code, routesUnavailable.message); } }).routes,
