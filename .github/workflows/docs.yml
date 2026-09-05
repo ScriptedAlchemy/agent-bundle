@@ -48,7 +48,14 @@ jobs:
     # can be repointed at unreviewed code); the trailing comment names the
     # release Dependabot keeps in step.
     steps:
+      # Full history, blobless: `sitemap.xml` `lastmod` comes from
+      # `git log -1 -- <source>` (website/plugins/sitemap-lastmod.ts), which
+      # needs every commit and tree but no old file contents. On a shallow
+      # clone the plugin omits `lastmod` rather than dating every page today.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          filter: blob:none
       - uses: ./.github/actions/setup-workspace
         with:
           node-version: 22.19.0
