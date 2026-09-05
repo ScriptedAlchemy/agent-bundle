@@ -190,15 +190,147 @@ schema 的模块中解析 zod 表达式，所用的有界语法与内联 schema 
 - 已解析 schema 内部的语法违规仍是 `AB4814`，其位置会带上声明模块。无法跟随的引用是 `AB4838`，
   消息会打印引用链（`inputSchema -> statusInputSchema (src/lib/protocol-schemas.ts) ->
   requestStatusSchema -> requestStatuses`）以及阻止解析器继续的边界；循环链是 `AB4839`，消息会打印该循环。
-- 只有 CLI 路由会触发 `AB4838`/`AB4839`，因为只有这里静态语法不可或缺。解析器无法跟随 schema 的
-  MCP 路由仍会像 schema 不符合内联语法时一样正常工作：生成的服务器会从真实的 zod 对象派生其
-  JSON Schema。
+- 只有 CLI 路由，或带 CLI 投影的工具路由，会触发 `AB4838`/`AB4839`，因为只有这里静态语法不可或缺。
+  schema 无法被解析器跟随、且没有投影的 MCP 路由仍会像 schema 不符合内联语法时一样正常工作：
+  生成的服务器会从真实的 zod 对象派生其 JSON Schema。在带 CLI 投影的工具路由上，消息前缀是
+  `Tool route <path> (CLI projection <module>)`，而不是 `CLI route <path>`。
 - `resultSchema` 可以用同样方式导入。框架会静态检查它是否存在，其类型经由 TypeScript 流转，运行时则
   使用真实的 zod 对象进行校验。
 
 随后，两条路由都会绑定同一个规范的
 [路由契约](./index.mdx#路由契约application-ir)；argv 语法、静态 MCP `inputSchema`、生成的路由类型、
 Workbench 与 `agent-bundle inspect --routes` 读取的正是它。
+
+### 将一个工具投影为惯用命令
+
+当 CLI 语法不能由 schema 自动进行 kebab 投影时，共享一个 `RouteContract` 仍会留下两条*路由*。
+cargo-hauler 把 `src/cli/status.tsx` 放在 `src/mcp/hauler/tools/hauler_status.tsx` 旁边，让
+`--lane` 可以表示 `laneKey`；又把 `src/cli/request.tsx` 放在 `hauler_request.tsx` 旁边，让
+`hauler request -- cargo check` 可以传入 `argv`，并让 `mapInput` 派生 `cwd`。第二个模块是第二个
+操作（`cli:status`），拥有自己的 `operationId` 与 typegen 条目。同位置的 `<tool>.cli.ts` 则是同一
+操作的 CLI *表面*投影——身份仍为 `tool:<server>/<tool>`——而不是一条路由。宿主投影（`targets`）
+保持不变，并且与此正交。
+
+该模块位于工具旁边，绝不放在 `src/cli/**` 下。Status 只需重命名；解析器已经发出规范键，因此不需要
+`mapInput`：
+
+```ts
+// src/mcp/hauler/tools/hauler_status.cli.ts
+import type { CliProjectionConfig } from 'agent-bundle/routes';
+import type { inputSchema } from './hauler_status.js';
+
+export const config = {
+  command: ['status'],
+  confirm: false,
+  description:
+    'Show the queue, in-flight cargo work, lanes, and admission state.',
+  flags: {
+    laneKey: {
+      description: 'Only requests in this lane key',
+      name: 'lane',
+    },
+    limit: { description: 'Recent rows to show' },
+    statuses: {
+      description: 'Only these statuses (repeatable)',
+      name: 'status',
+    },
+    tickets: {
+      description: 'Only these tickets (repeatable)',
+      name: 'ticket',
+    },
+  },
+} satisfies CliProjectionConfig<typeof inputSchema>;
+```
+
+Request 需要位置参数，以及一个同步的 `mapInput`：它会用 `process.cwd()` 填充规范必填的 `cwd`，并拆分
+逗号分隔的 `--after` 列表：
+
+```ts
+// src/mcp/hauler/tools/hauler_request.cli.ts
+import type { CliProjectionConfig } from 'agent-bundle/routes';
+import type { z } from 'zod';
+
+import { parseTicketList } from '../../../client/parse.js';
+import type { inputSchema } from './hauler_request.js';
+
+export const config = {
+  command: ['request'],
+  confirm: false,
+  description:
+    'Submit a background cargo request and print its ticket: ' +
+    'hauler request [--after cc-N] -- cargo check -p foo',
+  flags: {
+    after: {
+      description:
+        'Tickets that must finish first (repeatable, or comma-separated)',
+    },
+    cwd: {
+      description: 'Workspace directory (default: current directory)',
+      required: false,
+    },
+    host: { description: 'Agent host name for attribution' },
+    session: { description: 'Agent session id for attribution' },
+  },
+  positionals: ['argv'],
+} satisfies CliProjectionConfig<typeof inputSchema>;
+
+type CliInput = Omit<z.input<typeof inputSchema>, 'cwd' | 'after'> & {
+  readonly after?: readonly string[];
+  readonly cwd?: string;
+};
+
+export const mapInput = (
+  input: CliInput,
+): z.input<typeof inputSchema> => {
+  const after = parseTicketList(input.after ?? []);
+  return {
+    ...input,
+    cwd: input.cwd ?? process.cwd(),
+    ...(after.length === 0 ? {} : { after }),
+  };
+};
+```
+
+`CliProjectionConfig<Schema>` 从 `agent-bundle/routes` 导出。`flags` 与 `positionals` 的键受限于
+`keyof z.input<Schema>`。`config` 使用与路由模块相同的静态提取语法（会解包 `satisfies`）。
+`mapInput` 是普通的命名导出，其存在性会被静态记录，并且只由 CLI bin 加载；MCP worker 永远不会看到
+该模块。
+
+| 键 | 含义 |
+| --- | --- |
+| `command` | 命令路径段；默认为 `[tool]`。每一段都必须通过 `safeIdentitySegment`。 |
+| `description` | 帮助文本；默认为工具的 `config.description`。 |
+| `positionals` | 按顺序作为裸参数使用的规范键（规则与 `src/cli` 路由相同）。 |
+| `flags.<key>.name` | CLI 拼写（kebab-case，不带前导短横线）；默认为 `kebab(key)`。 |
+| `flags.<key>.aliases` | 额外的长格式 `--spellings`，使用 kebab-case，不带前导短横线。 |
+| `flags.<key>.description` | 覆盖 schema 的 `.describe()`。 |
+| `flags.<key>.default` | shell 在 `mapInput` 之前应用的 CLI 专用默认值。 |
+| `flags.<key>.required` | `false` 会放宽一个规范必填键；仅当导出了 `mapInput` 时合法。 |
+| `aliases` | 命令别名（规则与 `src/cli` 路由的 `config.aliases` 相同）。 |
+| `confirm` | 默认为 `!(tool config.annotations.readOnlyHint === true)`。 |
+| `exitCode` | `'result'` 或 `'zero'`；默认为工具的 `config.exitCode ?? 'zero'`。 |
+
+`flags` 以工具的 `RouteContract.input` 的规范键为键。发现阶段会在派生身份之前排除 `.cli.{ts,tsx}`，
+并将该文件与同级的 `.{ts,tsx}` 配对。这个后缀在 `src/mcp/**` 下保留；加 `_` 前缀可以停用它。
+孤立文件，或位于 `resources/`、`prompts/` 或 `apps/` 下的 `.cli.*`，会触发 `AB4840`。缺失或动态的
+`config`、封闭集合之外的键、形状错误的字段、静态上不是函数的 `mapInput`，或在没有 `mapInput` 时对
+规范必填键使用 `required: false` / CLI `default`，会触发 `AB4841`。契约中不存在的
+`flags`/`positionals` 键、不符合 kebab-case、为保留名（`help`、`json`、`ndjson`、`version`，以及
+启用确认时的 `yes`）或相互冲突的 `name`/别名，以及不是安全身份段的 `command` 段，会触发 `AB4842`。
+每条消息都是 `CLI projection <module> for tool:<server>/<tool>: <detail>.`。工具一旦有了投影，原本没有
+静态契约的 schema 就成为不可或缺的语法：`AB4814`/`AB4838`/`AB4839` 会在工具模块上触发，前缀为
+`Tool route <path> (CLI projection <module>)`。
+
+`agent-bundle inspect --routes` 会转储编译后的路由图，因此无需额外的 renderer 即可看到
+`cli.commands[].projection`（`module`、`mapInput`、`relaxed?`）与
+`options[].{key,option,aliases}`。Workbench 的 CLI 行会在规范输入编辑器旁显示同样的信息。
+编译后命令的 `routeId` 是工具 id；运行时的 `invocation.kind` 为 `'cli'`，`operationId` 则为该工具 id。
+
+没有投影模块，就不会通过这条路径生成命令；批量选择加入的
+[`routes.mcpCommands`](#把-mcp-工具投影进-cli) 对其他所有工具仍照常工作。任何投影字段都不会改变 MCP
+`inputSchema`、`tools/list`、annotations 或 `_meta`；`ToolConfig` 不会增加任何字段。
+
+短格式 `-x` 别名（shell 目前会拒绝单短横线 token）与异步 `mapInput` 暂不支持。
 
 ### 宿主产物中的路由式 CLI
 
@@ -223,9 +355,11 @@ Workbench 与 `agent-bundle inspect --routes` 读取的正是它。
 
 `routes.mcpCommands` 把生成式 MCP 服务器的工具加入同一张命令图与同一个可执行文件，即使项目完全没有
 `src/cli/**` 路由也可以。`true` 选中每个符合条件的工具；对象形式接受匹配 `<server>:<tool>` 身份的
-`include` 与 `exclude` 模式，其中 `*` 是唯一的通配符。
+`include` 与 `exclude` 模式，其中 `*` 是唯一的通配符。已经有同位置 `<tool>.cli.ts` 的工具会从这次
+批量投影中排除：一个操作只编译成一个命令。仅匹配这类工具的 `include` 模式会触发 `AB4822`，并点名
+投影模块。
 
-每个被投影的工具以 `<plugin-bin> <server> <tool>` 运行，协议工具名逐字保留。它唯一的输入选项是
+每个被批量投影的工具以 `<plugin-bin> <server> <tool>` 运行，协议工具名逐字保留。它唯一的输入选项是
 `--input`，接受一个 JSON 对象。只有当工具的静态 MCP annotations 明确设置了 `readOnlyHint: true` 时
 它才是只读的；其余工具都被视为可变更，并在没有 `--yes` 时失败关闭。每个声明的模式都必须至少匹配一个
 符合条件的工具，拼写错误会以 `AB4822` 失败，并列出可用的身份。

@@ -26,7 +26,7 @@ npx agent-bundle dev --root . --port 3100 --no-open
 | 页面 | 内容 |
 | --- | --- |
 | Overview | 项目标识、规范化模型与诊断。 |
-| Routes | 来自与 `inspect --routes` 相同编译器 pass 的已编译路由目录：每条路由的源码模块、配置摘要与生成的输入编辑器；带静态契约的路由还会指明契约的声明模块及共享该契约的其他路由。 |
+| Routes | 来自与 `inspect --routes` 相同编译器 pass 的已编译路由目录：每条路由的源码模块、配置摘要与生成的输入编辑器；带静态契约的路由还会指明契约的声明模块及共享该契约的其他路由；由 `<tool>.cli.ts` 编译而来的 CLI 命令会在规范输入编辑器旁指明投影模块、是否存在 `mapInput`，以及键 ↔ 选项（含别名）表。 |
 | Skills | 每个 Skill 文档，包括各宿主降级后的输出。 |
 | Artifacts | 带 provenance 与 epoch 对比的产物树。 |
 | MCP | 绑定到产物的 playground，带原始协议轨迹、MCP App 预览，以及独立 MCP Inspector 的启动器。 |
