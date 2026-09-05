@@ -37,7 +37,7 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 | 消费者 | 读取什么 |
 | --- | --- |
 | `install <host> --from <root>`、`uninstall` | `<root>` 下的清单。身份——插件名与版本——来自 `application`；市场名来自 `projections[host].marketplace`；宿主被指向的文件来自 `projections[host].documents.plugin`。`install` 从 `files[]` 加清单自身和操作员 `.env` 覆盖层取得复制集合与产物内容哈希，并直接读取这些固定路径而不遍历产物目录。没有清单、清单不是规范字节、没有该宿主的投影、投影没有宿主插件清单，或某个 `files[]` 条目缺失或摘要不符的根目录，都以 `AB7001` 拒绝。 |
-| `doctor --from <root>` | 与 `install` 相同的身份、固定路径文件集合与内容哈希读取，按被检查的宿主逐一进行；它对树运行的静态校验（`AB7319`）继续按投影进行。在已安装的根目录上，`doctor` 与 `uninstall` 通过安装时复制的清单——即 `projections[host].documents.mcp` 指向的宿主 MCP 文档——定位声明的 `AGENT_BUNDLE_STATE_ROOT` 覆盖，绝不探测宿主文档路径；没有清单的根目录不声明任何覆盖，使用推导出的状态根。 |
+| `doctor --from <root>` | 与 `install` 相同的身份、固定路径文件集合与内容哈希读取，按被检查的宿主逐一进行；它对树运行的静态校验（`AB7319`）继续按投影进行。在已安装的根目录上，`doctor` 与 `uninstall` 通过安装时复制的清单——即 `projections[host].documents.mcp` 指向的宿主 MCP 文档——定位声明的 `AGENT_BUNDLE_STATE_ROOT` 覆盖，绝不探测宿主文档路径；没有清单的根目录不声明文档覆盖，转而回退到继承的 `AGENT_BUNDLE_STATE_ROOT`，再回退到推导出的状态根。 |
 | `serve-app`、`mcp list` / `invoke` / `run` | 从 `executables.mcpServers[]` 取服务器编译后的 `launch` 记录及其 `apps[]`；省略 `--target` 时从 `projections[]` 选出宿主。 |
 | `hooks list` / `simulate` | `executables.hooks[]`——可被模拟的编译器 wrapper。 |
 | `inspect --json` | 当产物输出位置存在已构建的清单时，追加一份 `output.manifest` 摘要——投影与可执行文件——因此 JSON 消费者无需第二次探测。`inspect --artifact <root>` 通过该文件读取裸的复合根，并打印 Workbench 渲染的同一份 `application` 投影，包括 `distribution.payloads[]` 行。 |

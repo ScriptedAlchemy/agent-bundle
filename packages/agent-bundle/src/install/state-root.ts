@@ -32,11 +32,6 @@ const installedUserDataStateRoot = (
   return join(stateHome, safePluginSegment.test(name) ? `${name}-${digest}` : `plugin-${digest}`);
 };
 
-/**
- * The host MCP document the installed manifest points at for this host
- * (`projections[].documents.mcp`); an installed root without a manifest or
- * without that projection declares nothing.
- */
 const installedMcpDocument = async (pluginRoot: string, host: InstallHost): Promise<string | undefined> => {
   const read = await readArtifactManifest(pluginRoot);
   if (read.status !== 'ok') return undefined;

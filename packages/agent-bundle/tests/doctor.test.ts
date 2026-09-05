@@ -588,8 +588,6 @@ it('reports a missing derived state root and a declared state-root override', as
   const pluginRoot = join(fixture.home, '.cursor', 'plugins', 'local', 'configured-state');
   const declaredStateRoot = join(fixture.root, 'declared-state');
   try {
-    // The override is read from the host MCP document the installed manifest
-    // points at, not from a probed path.
     await Promise.all([
       writeJson(join(pluginRoot, '.cursor-plugin/plugin.json'), { name: 'configured-state', version: '1.0.0' }),
       writeJson(join(pluginRoot, '.cursor-plugin/mcp.json'), {
