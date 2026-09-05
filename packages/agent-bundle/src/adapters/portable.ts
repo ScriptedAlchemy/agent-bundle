@@ -604,6 +604,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
 
   return deepFreeze({
     diagnostics: diagnostics,
+    documents: { plugin: 'plugin.json' },
     entries: sortedEntries(entries),
     hookEntries: [],
   });

@@ -30,8 +30,8 @@ export const artifactScriptCatalog = (
 ): readonly ArtifactScriptCatalogEntry[] => {
   const entries: ArtifactScriptCatalogEntry[] = [];
   const identities = new Set<string>();
-  for (const target of manifest.targets) {
-    const layout = registry.artifactLayout(target.name).scripts;
+  for (const { host: target } of manifest.projections) {
+    const layout = registry.artifactLayout(target).scripts;
     if (layout === undefined) continue;
     // Scripts live once at the composite root; every selected host that lays
     // out that directory reads the same emitted file.
@@ -43,12 +43,12 @@ export const artifactScriptCatalog = (
       const name = scriptName(file, layout.allowedSuffixes);
       if (name === undefined) continue;
       const id = `script:${name}`;
-      const identity = `${target.name}\0${id}`;
+      const identity = `${target}\0${id}`;
       if (identities.has(identity)) {
-        throw new Error(`Validated artifact has ambiguous emitted script ${JSON.stringify(id)} for target ${JSON.stringify(target.name)}.`);
+        throw new Error(`Validated artifact has ambiguous emitted script ${JSON.stringify(id)} for target ${JSON.stringify(target)}.`);
       }
       identities.add(identity);
-      entries.push(Object.freeze({ file: manifestFile.path, id, name, target: target.name }));
+      entries.push(Object.freeze({ file: manifestFile.path, id, name, target }));
     }
   }
   entries.sort(compareCatalogEntries);

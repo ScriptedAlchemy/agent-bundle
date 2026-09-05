@@ -6,7 +6,7 @@ import { Effect, FileSystem } from 'effect';
 
 import { canonicalHookEventFor, type TargetHookContract } from '../../adapters/hook-contract.ts';
 import { createDefaultRegistry, TargetRegistry } from '../../adapters/registry.ts';
-import type { ArtifactHook } from '../../build/hook-index.ts';
+import type { ArtifactManifestHook } from '../../build/manifest.ts';
 import type { CanonicalHookEvent } from '../../core/types.ts';
 import { isErrno } from '../../core/errors.ts';
 import { isRecord, snapshotStrictJsonValue } from '../../core/strict-json.ts';
@@ -86,7 +86,7 @@ export interface HookPlaygroundListOptions {
 
 export interface HookPlaygroundHook {
   readonly binding: HookPlaygroundBinding;
-  readonly hook: ArtifactHook;
+  readonly hook: ArtifactManifestHook;
 }
 
 export interface HookPlaygroundInput {
@@ -158,7 +158,7 @@ const missingManifest = (target: string, event: string, manifestPath: string): H
 
 const matcherFor = async (
   artifact: string,
-  hook: ArtifactHook,
+  hook: ArtifactManifestHook,
   contract: TargetHookContract,
   nativeSelector: string,
   run: PlatformRun,
@@ -167,7 +167,7 @@ const matcherFor = async (
   try {
     document = JSON.parse(await run(readFileString(join(artifact, contract.manifestPath))));
   } catch (error) {
-    if (isErrno(error, 'ENOENT')) return missingManifest(hook.target, hook.event, contract.manifestPath);
+    if (isErrno(error, 'ENOENT')) return missingManifest(hook.host, hook.event, contract.manifestPath);
     return undefined;
   }
   if (!isRecord(document) || !isRecord(document.hooks)) return undefined;
@@ -184,15 +184,15 @@ const matcherFor = async (
 
 const hostMappingFor = async (
   artifact: string,
-  hook: ArtifactHook,
+  hook: ArtifactManifestHook,
   contract: TargetHookContract,
   run: PlatformRun,
 ): Promise<HookPlaygroundHostMapping | HookPlaygroundDiagnosticResult> => {
   const canonicalEvent = canonicalHookEventFor(hook.event);
-  if (canonicalEvent === undefined) return unsupportedEvent(hook.target, hook.event);
+  if (canonicalEvent === undefined) return unsupportedEvent(hook.host, hook.event);
   const nativeSelector = contract.eventNames[canonicalEvent];
   if (typeof nativeSelector !== 'string' || nativeSelector.trim().length === 0) {
-    return unsupportedEvent(hook.target, hook.event);
+    return unsupportedEvent(hook.host, hook.event);
   }
   const matcher = await matcherFor(artifact, hook, contract, nativeSelector, run);
   if (typeof matcher === 'object' && matcher !== null) return matcher;
@@ -202,7 +202,7 @@ const hostMappingFor = async (
     nativeEvent: nativeSelector,
     nativeProjection: 'deterministic',
     nativeSelector,
-    target: hook.target,
+    target: hook.host,
     wrapperPath: hook.path,
   });
 };
@@ -267,7 +267,7 @@ export class HookPlaygroundService {
         ...(options.target === undefined ? {} : { target: options.target }),
       });
       return deepFreeze(hooks.map((hook) => ({
-        binding: Object.freeze({ epochId: options.epochId, hook: hook.id, target: hook.target }),
+        binding: Object.freeze({ epochId: options.epochId, hook: hook.id, target: hook.host }),
         hook: cloneRecord(hook),
       })));
     });
@@ -280,7 +280,7 @@ export class HookPlaygroundService {
       const hooks = await this.#hookService.list({ allowEpochStagingMarker: true, artifact });
       const matching = hooks.filter((hook) => hook.id === options.hook || hook.name === options.hook);
       if (matching.length === 0) throw new Error(`Expected one hook matching ${JSON.stringify(options.hook)}.`);
-      const selected = matching.filter((hook) => hook.target === options.target);
+      const selected = matching.filter((hook) => hook.host === options.target);
       const example = matching[0]!;
       if (!this.#registry.has(options.target)) return unsupportedTarget(options.target, example.event);
       const contract = this.#registry.hookContract(options.target);

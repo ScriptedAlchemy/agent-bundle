@@ -11,16 +11,11 @@ import {
 } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 
-import { sha256Hex, stableJson } from '../core/digest.ts';
+import { sha256Hex } from '../core/digest.ts';
 import { assertInside, exists, toPosixPath } from '../core/paths.ts';
 import type { TargetArtifactEntry } from '../adapters/types.ts';
 import {
-  artifactHookIndexName,
-  compareArtifactHooks,
-  type ArtifactHook,
-  type ArtifactHookIndex,
-} from './hook-index.ts';
-import {
+  artifactManifestName,
   assembleArtifactManifest,
   parseArtifactManifest,
   type ArtifactManifestFile,
@@ -51,9 +46,7 @@ export interface ArtifactFilesystemSnapshot {
   readonly files: readonly ArtifactFile[];
 }
 
-export { artifactHookIndexName } from './hook-index.ts';
-export type { ArtifactHook, ArtifactHookIndex } from './hook-index.ts';
-export const artifactManifestName = 'agent-bundle.manifest.json';
+export { artifactManifestName } from './manifest.ts';
 
 const normalizeRelativePath = toPosixPath;
 
@@ -238,25 +231,6 @@ export const writeManifest = async (options: {
   const manifestPath = join(options.artifactRoot, artifactManifestName);
   await writeFile(manifestPath, assembled.bytes, 'utf8');
   return parseArtifactManifest(await readFile(manifestPath, 'utf8'));
-};
-
-export const writeHookIndex = async (options: {
-  readonly artifactRoot: string;
-  readonly hooks: readonly ArtifactHook[];
-}): Promise<ArtifactHookIndex> => {
-  const hooks = options.hooks
-    .slice()
-    .sort(compareArtifactHooks)
-    .map((hook) => Object.freeze({ ...hook }));
-  const index: ArtifactHookIndex = {
-    hooks: Object.freeze(hooks),
-  };
-  await writeFile(
-    join(options.artifactRoot, artifactHookIndexName),
-    `${stableJson(index)}\n`,
-    'utf8',
-  );
-  return Object.freeze(index);
 };
 
 export const publishArtifact = async (options: {

@@ -136,7 +136,8 @@ export const validateMcpCoherence = async (options: {
   const compiledEntries = new Set<string>();
   const referencedAnywhere = new Set<string>();
 
-  for (const target of options.manifest.targets) {
+  for (const { host: targetName } of options.manifest.projections) {
+    const target = { name: targetName };
     if (!options.registry.has(target.name) || !options.registry.supports(target.name, 'mcp')) continue;
     const runtime = options.registry.mcpRuntime(target.name);
     if (runtime === undefined) continue;

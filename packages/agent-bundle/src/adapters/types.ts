@@ -60,8 +60,23 @@ export const sortedEntries = (entries: TargetArtifactEntry[]): readonly TargetAr
   entries.sort((left, right) => left.relativePath < right.relativePath ? -1 : left.relativePath > right.relativePath ? 1 : 0),
 );
 
+/**
+ * The host documents one projection derives from the model, as the artifact
+ * manifest records them: root-relative pointers, never data copied back out of
+ * the documents (#592 step 3). The MCP and hooks documents are named by the
+ * adapter's runtime and hook contracts instead.
+ */
+export interface TargetPlanDocuments {
+  /** The marketplace document and the marketplace name it registers; absent when the projection emits none. */
+  readonly marketplace?: Readonly<{ readonly name: string; readonly path: string }>;
+  /** The host plugin manifest (`.claude-plugin/plugin.json`, `plugin.json`, …). */
+  readonly plugin: string;
+}
+
 export interface TargetArtifactPlan {
   readonly diagnostics: readonly Diagnostic[];
+  /** Absent only for adapters that emit no host plugin manifest (test doubles); every shipped adapter declares it. */
+  readonly documents?: TargetPlanDocuments;
   readonly entries: readonly TargetArtifactEntry[];
   readonly hookEntries?: readonly TargetHookEntry[];
 }
@@ -359,8 +374,15 @@ export const standardPluginArtifactPlan = (input: StandardPluginArtifactsInput):
 
   entries.push(...payloadCopyEntries(model, isSelected));
 
+  const marketplaceName = marketplace !== undefined && marketplaceValid ? marketplace['name'] : undefined;
   return Object.freeze({
     diagnostics: Object.freeze(diagnostics),
+    documents: Object.freeze({
+      ...(typeof marketplaceName === 'string'
+        ? { marketplace: Object.freeze({ name: marketplaceName, path: marketplaceRelativePath }) }
+        : {}),
+      plugin: pluginRelativePath,
+    }),
     entries: sortedEntries(entries),
     hookEntries: hookDocumentValid ? hookEntries : Object.freeze([]),
   });

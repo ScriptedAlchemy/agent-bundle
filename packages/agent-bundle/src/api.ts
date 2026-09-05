@@ -106,9 +106,34 @@ export type {
   ArtifactManifestProject,
   ArtifactManifestRuntime,
   ArtifactManifestSourceInput,
-  ArtifactManifestTarget,
-  ArtifactManifestTargetSchema,
-  ArtifactManifestTargetValidation,
+  ArtifactManifestApplication,
+  ArtifactManifestBin,
+  ArtifactManifestCli,
+  ArtifactManifestCliCommand,
+  ArtifactManifestCliCommandMcp,
+  ArtifactManifestCliOption,
+  ArtifactManifestDistribution,
+  ArtifactManifestDistributionChannel,
+  ArtifactManifestDistributionInstall,
+  ArtifactManifestExecutables,
+  ArtifactManifestHook,
+  ArtifactManifestLayout,
+  ArtifactManifestMcpApp,
+  ArtifactManifestMcpEntry,
+  ArtifactManifestMcpServer,
+  ArtifactManifestProjection,
+  ArtifactManifestProjectionDocuments,
+  ArtifactManifestProjectionMarketplace,
+  ArtifactManifestProjectionSchema,
+  ArtifactManifestProjectionValidation,
+  ArtifactManifestProvider,
+  ArtifactManifestRoute,
+  ArtifactManifestRouteKind,
+  ArtifactManifestRouteProvenance,
+  ArtifactManifestRoutes,
+  ArtifactManifestScript,
+  ArtifactManifestScriptRendered,
+  ArtifactManifestServer,
   ArtifactManifest,
   ArtifactManifestValidation,
   ArtifactManifestValidationRecord,
@@ -116,10 +141,13 @@ export type {
   AssembledArtifactManifest,
 } from './build/manifest.ts';
 export {
+  artifactManifestName,
+  artifactManifestVersion,
   assembleArtifactManifest,
   parseArtifactManifest,
   serializeArtifactManifest,
 } from './build/manifest.ts';
+export { readArtifactManifest, type ArtifactManifestReadResult } from './build/manifest-file.ts';
 import { composeBundlerInspection, type BundlerInspection } from './build/inspect-bundler.ts';
 import { defaultPackageArtifactDistPath } from './config/normalize.ts';
 export type { BundlerInspection, BundlerInspectionEntry } from './build/inspect-bundler.ts';
@@ -761,8 +789,8 @@ export const validate = async (options: ValidateOptions): Promise<ValidateResult
       if (validated.snapshot === undefined) {
         return Object.freeze({ diagnostics: freezeDiagnostics(validated.diagnostics) });
       }
-      const reports = await Promise.all(validated.snapshot.manifest.targets
-        .map((target) => target.name)
+      const reports = await Promise.all(validated.snapshot.manifest.projections
+        .map((projection) => projection.host)
         .filter(isBuiltInHost)
         .map((target) => hostValidationReport(target, artifact, options.strict)));
       return Object.freeze({
@@ -1202,6 +1230,7 @@ export const build = async (options: BuildOptions): Promise<BuildProjectResult> 
     projectContext,
     projectRoot: prepared.root,
     registry: prepared.registry,
+    routeGraph: prepared.routeGraph ?? emptyCompiledRouteGraph,
     ...(prepared.tools === undefined ? {} : { tools: prepared.tools }),
   });
   let packageBuild: PackageBuildResult | undefined;
@@ -1215,7 +1244,7 @@ export const build = async (options: BuildOptions): Promise<BuildProjectResult> 
     if (packageBuild !== undefined) assertPackageOutputSources(packageBuild, projectContext);
   }
   const hostValidation = options.hostValidation === true
-    ? await buildHostValidation(result.manifest.targets.map((target) => target.name), output, options)
+    ? await buildHostValidation(result.manifest.projections.map((projection) => projection.host), output, options)
     : undefined;
   return Object.freeze({
     build: result,

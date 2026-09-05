@@ -7,20 +7,24 @@ import {
 import type { NormalizedNotices, NormalizedStateDefinition } from '../../core/types.ts';
 import type {
   CompiledAgentRoute,
-  CompiledCliCommand,
   CompiledCliMode,
-  CompiledCliOption,
   CompiledCliSurface,
-  CompiledProvider,
   CompiledRouteGraph,
-  CompiledRouteKind,
   CompiledServerMode,
   CompiledServerSurface,
-  RouteInputSchema,
 } from '../../routes/types.ts';
+import type {
+  ArtifactManifestCliCommand,
+  ArtifactManifestCliOption,
+  ArtifactManifestProvider,
+  ArtifactManifestRoute,
+  ArtifactManifestRouteKind,
+  ArtifactManifestRouteProvenance,
+} from '../../build/manifest.ts';
+import { artifactCliCommandFor, artifactProviderFor, artifactRouteFor } from '../../build/manifest-routes.ts';
 
 /** Mirrors {@link CompiledRouteKind}: the catalog groups by the compiler's own kinds. */
-export type RouteManifestKind = CompiledRouteKind;
+export type RouteManifestKind = ArtifactManifestRouteKind;
 
 /** Mirrors {@link CompiledServerMode}. */
 export type RouteManifestServerMode = CompiledServerMode;
@@ -40,35 +44,16 @@ export interface RouteManifestConfigEntry {
   readonly value: string;
 }
 
-/**
- * How a route entered the graph. Only conventional filesystem discovery
- * exists today; keeping the discriminant makes a later provenance additive
- * rather than a wire break.
- */
-export interface RouteManifestProvenance {
-  readonly kind: 'conventional';
-}
+/** How a route entered the graph; the same discriminant the artifact manifest records. */
+export type RouteManifestProvenance = ArtifactManifestRouteProvenance;
 
-/** One compiled route projected for the browser catalog. */
-export interface RouteManifestRoute {
+/**
+ * One compiled route projected for the browser catalog: the artifact
+ * manifest's route row plus the flattened config summary only the catalog
+ * displays.
+ */
+export interface RouteManifestRoute extends ArtifactManifestRoute {
   readonly config: readonly RouteManifestConfigEntry[];
-  /** `config.description` when it is a string; the catalog's human label. */
-  readonly description?: string;
-  /** Canonical event identity; `event-route` routes only. */
-  readonly event?: string;
-  readonly id: string;
-  /** Bounded JSON Schema projection; absent when the route schema is richer than the static grammar. */
-  readonly inputSchema?: RouteInputSchema;
-  readonly kind: RouteManifestKind;
-  readonly provenance: RouteManifestProvenance;
-  /** The owning MCP server id (`mcp:<name>`); MCP route kinds only. */
-  readonly serverId?: string;
-  /**
-   * Project-relative POSIX module path. The compiler's absolute path stays on
-   * the server: the relative path is the route's portable identity and the
-   * only location that means anything to a browser reading this catalog.
-   */
-  readonly source: string;
 }
 
 /** One MCP server surface with the routes its packaging mode actually compiles. */
@@ -80,27 +65,10 @@ export interface RouteManifestServer {
 }
 
 /** One argv projection of a CLI route's input schema, without editor defaults. */
-export interface RouteManifestCliOption {
-  readonly choices?: readonly string[];
-  readonly description?: string;
-  readonly key: string;
-  readonly kind: CompiledCliOption['kind'];
-  readonly option: string;
-  readonly positional?: number;
-  readonly repeated: boolean;
-  readonly required: boolean;
-}
+export type RouteManifestCliOption = ArtifactManifestCliOption;
 
 /** One executable command compiled from a custom CLI route or projected MCP tool. */
-export interface RouteManifestCliCommand {
-  readonly aliases: readonly string[];
-  readonly description?: string;
-  readonly exitCode: CompiledCliCommand['exitCode'];
-  readonly mcp?: NonNullable<CompiledCliCommand['mcp']>;
-  readonly options: readonly RouteManifestCliOption[];
-  readonly path: readonly string[];
-  readonly routeId: string;
-}
+export type RouteManifestCliCommand = ArtifactManifestCliCommand;
 
 /** The CLI surface assembled from `src/cli/**` route modules. */
 export interface RouteManifestCliSurface {
@@ -111,12 +79,7 @@ export interface RouteManifestCliSurface {
 }
 
 /** One conventional `src/providers/<name>` context provider module. */
-export interface RouteManifestProvider {
-  readonly id: string;
-  readonly name: string;
-  /** Project-relative POSIX module path, for the same reason routes carry one. */
-  readonly source: string;
-}
+export type RouteManifestProvider = ArtifactManifestProvider;
 
 /** The effective static state declaration exposed to the browser catalog. */
 export type RouteManifestState = StateDefinitionProjection;
@@ -177,25 +140,10 @@ const configSummary = (config: Readonly<Record<string, unknown>>): readonly Rout
   Object.keys(config).sort((left, right) => left.localeCompare(right))
     .map((key) => configEntry(key, config[key]));
 
-const description = (config: Readonly<Record<string, unknown>>): string | undefined => {
-  const value = config['description'];
-  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
-};
-
-const manifestRoute = (route: CompiledAgentRoute): RouteManifestRoute => {
-  const summary = description(route.config);
-  return {
-    config: configSummary(route.config),
-    ...(summary === undefined ? {} : { description: summary }),
-    ...(route.event === undefined ? {} : { event: route.event }),
-    id: route.id,
-    ...(route.inputSchema === undefined ? {} : { inputSchema: route.inputSchema }),
-    kind: route.kind,
-    provenance: { kind: route.provenance.kind },
-    ...(route.serverId === undefined ? {} : { serverId: route.serverId }),
-    source: route.provenance.relativePath,
-  };
-};
+const manifestRoute = (route: CompiledAgentRoute): RouteManifestRoute => ({
+  ...artifactRouteFor(route),
+  config: configSummary(route.config),
+});
 
 const manifestServer = (server: CompiledServerSurface): RouteManifestServer => ({
   id: server.id,
@@ -204,37 +152,10 @@ const manifestServer = (server: CompiledServerSurface): RouteManifestServer => (
   routes: server.routes.map(manifestRoute),
 });
 
-const manifestCliOption = (option: CompiledCliOption): RouteManifestCliOption => ({
-  ...(option.choices === undefined ? {} : { choices: [...option.choices] }),
-  ...(option.description === undefined ? {} : { description: option.description }),
-  key: option.key,
-  kind: option.kind,
-  option: option.option,
-  ...(option.positional === undefined ? {} : { positional: option.positional }),
-  repeated: option.repeated,
-  required: option.required,
-});
-
-const manifestCliCommand = (command: CompiledCliCommand): RouteManifestCliCommand => ({
-  aliases: [...command.aliases],
-  ...(command.description === undefined ? {} : { description: command.description }),
-  exitCode: command.exitCode,
-  ...(command.mcp === undefined ? {} : { mcp: { ...command.mcp } }),
-  options: command.options.map(manifestCliOption),
-  path: [...command.path],
-  routeId: command.routeId,
-});
-
 const manifestCli = (cli: CompiledCliSurface): RouteManifestCliSurface => ({
-  ...(cli.commands === undefined ? {} : { commands: cli.commands.map(manifestCliCommand) }),
+  ...(cli.commands === undefined ? {} : { commands: cli.commands.map(artifactCliCommandFor) }),
   mode: cli.mode,
   routes: cli.routes.map(manifestRoute),
-});
-
-const manifestProvider = (provider: CompiledProvider): RouteManifestProvider => ({
-  id: provider.id,
-  name: provider.name,
-  source: provider.provenance.relativePath,
 });
 
 /** Projects one compiled route graph into its immutable browser manifest. */
@@ -248,7 +169,7 @@ export const routeManifestFor = (
   diagnostics: graph.diagnostics.map((diagnostic) => ({ ...diagnostic })),
   digest: graph.digest,
   events: graph.events.map(manifestRoute),
-  providers: graph.providers.map(manifestProvider),
+  providers: graph.providers.map(artifactProviderFor),
   scripts: graph.scripts.map(manifestRoute),
   servers: graph.servers.map(manifestServer),
   ...(state === undefined ? {} : { state: stateDefinitionProjection(state, 'src/state.ts', notices) }),

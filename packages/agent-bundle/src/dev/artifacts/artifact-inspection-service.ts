@@ -281,9 +281,9 @@ export class ArtifactInspectionService {
       }
       directory.files.set(fileName, file);
     }
-    return Object.freeze(manifest.targets.map((target): ArtifactInspectionTarget => Object.freeze({
-      name: target.name,
-      tree: treeNode(target.name, '.', root),
+    return Object.freeze(manifest.projections.map((projection): ArtifactInspectionTarget => Object.freeze({
+      name: projection.host,
+      tree: treeNode(projection.host, '.', root),
     })));
   }
 
@@ -325,7 +325,7 @@ export class ArtifactInspectionService {
     for (const hook of runtime.hooks) {
       const file = filesByPath.get(hook.path);
       if (file === undefined) {
-        throw this.#runtimeError('Validated hook evidence references an unmanifested wrapper.', hook.path, hook.target);
+        throw this.#runtimeError('Validated hook evidence references an unmanifested wrapper.', hook.path, hook.host);
       }
       hooks.push(Object.freeze({
         event: hook.event,
@@ -333,7 +333,7 @@ export class ArtifactInspectionService {
         id: hook.id,
         name: hook.name,
         path: hook.path,
-        target: hook.target,
+        target: hook.host,
         ...(hook.timeout === undefined ? {} : { timeout: hook.timeout }),
       }));
     }

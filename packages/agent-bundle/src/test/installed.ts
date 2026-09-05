@@ -7,7 +7,6 @@ import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { codexArtifactPaths } from '../adapters/codex.ts';
 import { cursorArtifactPaths } from '../adapters/cursor.ts';
 import { artifactManifestName } from '../build/emit.ts';
-import { parseArtifactHookIndex, type ArtifactHook } from '../build/hook-index.ts';
 import { parseArtifactManifest } from '../build/manifest.ts';
 import { digest, sha256Hex } from '../core/digest.ts';
 import { eventRuntimeEndpoint } from '../events/ipc.ts';
@@ -324,9 +323,9 @@ export const openInstalledHostMcpServer = async (
   } catch {
     failures.push({ check: 'manifest-schema', reason: 'built artifact manifest was unavailable or invalid' });
   }
-  const target = artifactManifest?.targets.find((candidate) => candidate.name === options.host);
+  const target = artifactManifest?.projections.find((candidate) => candidate.host === options.host);
   if (target === undefined) {
-    failures.push({ check: 'manifest-schema', reason: `artifact manifest did not declare target ${options.host}` });
+    failures.push({ check: 'manifest-schema', reason: `artifact manifest did not declare projection ${options.host}` });
   }
   // The composite root is the bundle root for every selected host; a missing
   // host manifest is recorded and the checks below still read the root.
@@ -397,19 +396,11 @@ export const openInstalledHostMcpServer = async (
     failures,
   );
 
-  let installedHooks: readonly ArtifactHook[] | undefined;
-  try {
-    const hookIndex = parseArtifactHookIndex(
-      await readFile(join(artifactRoot, 'agent-bundle.hooks.json'), 'utf8'),
-    );
-    if (hookIndex === undefined) {
-      failures.push({ check: 'hook-commands', reason: 'artifact hook index was unavailable or invalid' });
-    } else {
-      installedHooks = hookIndex.hooks.filter((hook) => hook.target === options.host);
-    }
-  } catch {
-    failures.push({ check: 'hook-commands', reason: 'artifact hook index was unavailable or invalid' });
-  }
+  // Hook rows are the manifest's own (`executables.hooks`, #592 step 3); an
+  // unreadable manifest already failed `manifest-schema` above.
+  const installedHooks = artifactManifest === undefined
+    ? undefined
+    : artifactManifest.executables.hooks.filter((hook) => hook.host === options.host);
   if (installedHooks !== undefined && installedHooks.length > 0) {
     const hookDocument = await readJsonRecord(
       join(installedRoot, hostHookPath(options.host, installedManifest)),

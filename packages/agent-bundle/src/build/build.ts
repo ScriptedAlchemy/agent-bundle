@@ -35,16 +35,28 @@ import { compileRslibSurfaces, settledRslibSurface } from './rslib.ts';
 import { planCompileStages } from './compile-stages.ts';
 import {
   assertUniqueArtifactDestinations,
-  artifactHookIndexName,
   createArtifactManifestFiles,
   emitPlanEntries,
   listArtifactFiles,
   publishArtifact,
   resolveArtifactDestination,
-  writeHookIndex,
   writeManifest,
 } from './emit.ts';
-import type { ArtifactManifest } from './manifest.ts';
+import {
+  artifactManifestVersion,
+  compareArtifactManifestHooks,
+  type ArtifactManifest,
+  type ArtifactManifestBin,
+  type ArtifactManifestDistribution,
+  type ArtifactManifestExecutables,
+  type ArtifactManifestHook,
+  type ArtifactManifestMcpApp,
+  type ArtifactManifestMcpServer,
+  type ArtifactManifestProjection,
+  type ArtifactManifestScript,
+} from './manifest.ts';
+import { artifactRoutesFor } from './manifest-routes.ts';
+import type { CompiledRouteGraph } from '../routes/types.ts';
 import {
   createOutputProvenance,
   type ArtifactOutputCandidate,
@@ -84,6 +96,8 @@ export interface BuildOptions {
   readonly projectContext: ProjectContext;
   readonly projectRoot: string;
   readonly registry: TargetRegistry;
+  /** The compiled route graph the manifest records as the artifact's Application IR (#592 step 3). */
+  readonly routeGraph: CompiledRouteGraph;
   /** The consumer bundler escape hatch, applied to every synthesized config. */
   readonly tools?: AgentBundleToolsConfig;
 }
@@ -200,17 +214,6 @@ const plannedDestinations = (composite: CompositePlan, staged: StagedRoot): read
   ...staged.compiledMcpEntries.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
 ];
 
-const hookIndexSourceInputs = (
-  model: NormalizedPlugin,
-  compiledHooks: readonly CompiledHookEntry[],
-): readonly string[] => {
-  const hookIds = new Set(compiledHooks.map((hook) => hook.id));
-  const inputs = model.hooks
-    .filter((hook) => hookIds.has(hook.id))
-    .map((hook) => hook.provenance.sourcePath);
-  return inputs.length === 0 ? [model.metadata.provenance.sourcePath] : inputs;
-};
-
 const outputCandidatesFor = (options: {
   readonly artifactRoot: string;
   readonly compiledCliBins: readonly CompiledCliBin[];
@@ -219,7 +222,6 @@ const outputCandidatesFor = (options: {
   readonly compiledMcpApps: readonly CompiledMcpApp[];
   readonly compiledMcpEntries: readonly CompiledMcpEntry[];
   readonly entries: CompositePlan['entries'];
-  readonly model: NormalizedPlugin;
 }): readonly ArtifactOutputCandidate[] => [
   ...options.entries.map((entry) => ({
     kind: entry.kind !== 'copy'
@@ -269,11 +271,6 @@ const outputCandidatesFor = (options: {
     path: entry.workerOutput,
     sourceInputs: entry.workerSourceInputs ?? entry.sourceInputs,
   }])]),
-  {
-    kind: 'generated' as const,
-    path: resolveArtifactDestination(options.artifactRoot, artifactHookIndexName),
-    sourceInputs: hookIndexSourceInputs(options.model, options.compiledHooks),
-  },
 ];
 
 const assertOutputProvenanceSources = (options: {
@@ -290,43 +287,238 @@ const assertOutputProvenanceSources = (options: {
   }
 };
 
-/** The selected real projections the composite root holds, with their adapter provenance. */
-const manifestTargets = (
-  registry: TargetRegistry,
-  selected: readonly string[],
-): ArtifactManifest['targets'] => Object.freeze(selected
-  .map((name) => {
-    const metadata = registry.metadata(name);
+const sortedHosts = (hosts: Iterable<string>): readonly string[] =>
+  Object.freeze([...new Set(hosts)].sort((left, right) => left.localeCompare(right)));
+
+const artifactPath = (artifactRoot: string, absolute: string): string =>
+  relative(artifactRoot, absolute).replaceAll('\\', '/');
+
+/** The selected host projections the composite root holds, with their adapter provenance and derived-document pointers. */
+const manifestProjections = (options: {
+  readonly composite: CompositePlan;
+  readonly filePaths: ReadonlySet<string>;
+  readonly registry: TargetRegistry;
+}): readonly ArtifactManifestProjection[] => Object.freeze(options.composite.projections
+  .map((projection): ArtifactManifestProjection => {
+    const host = projection.name;
+    const metadata = options.registry.metadata(host);
+    const documents = projection.plan.documents;
+    const emitted = (path: string | undefined): string | undefined =>
+      path !== undefined && options.filePaths.has(path) ? path : undefined;
+    const plugin = emitted(documents?.plugin);
+    const marketplace = emitted(documents?.marketplace?.path);
+    const mcp = emitted(options.registry.mcpRuntime(host)?.manifestPath);
+    const hooks = emitted(options.registry.hookContract(host)?.manifestPath);
     return Object.freeze({
       adapterRevision: metadata.adapterRevision,
-      name,
+      documents: Object.freeze({
+        ...(hooks === undefined ? {} : { hooks }),
+        ...(marketplace === undefined ? {} : { marketplace }),
+        ...(mcp === undefined ? {} : { mcp }),
+        ...(plugin === undefined ? {} : { plugin }),
+      }),
+      host,
+      ...(marketplace === undefined || documents?.marketplace === undefined
+        ? {}
+        : { marketplace: Object.freeze({ name: documents.marketplace.name }) }),
       observedVersion: metadata.observedVersion,
       schemas: Object.freeze(metadata.schemas
         .map((schema) => Object.freeze({ ...schema }))
         .sort((left, right) => left.name.localeCompare(right.name))),
     });
   })
-  .sort((left, right) => left.name.localeCompare(right.name)));
+  .sort((left, right) => left.host.localeCompare(right.host)));
+
+const manifestBins = (options: {
+  readonly artifactRoot: string;
+  readonly compiledCliBins: readonly CompiledCliBin[];
+  readonly composite: CompositePlan;
+}): readonly ArtifactManifestBin[] => {
+  const hosts = sortedHosts(options.composite.projections
+    .filter((projection) => projection.cliBin)
+    .map((projection) => projection.name));
+  return Object.freeze(options.compiledCliBins
+    .map((bin): ArtifactManifestBin => Object.freeze({
+      hosts,
+      name: bin.name,
+      path: artifactPath(options.artifactRoot, bin.output),
+      ...(bin.workerOutput === undefined ? {} : { worker: artifactPath(options.artifactRoot, bin.workerOutput) }),
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name)));
+};
+
+const manifestHooks = (options: {
+  readonly artifactRoot: string;
+  readonly compiledHooks: readonly CompiledHookEntry[];
+  readonly model: NormalizedPlugin;
+}): readonly ArtifactManifestHook[] => {
+  const eventRouteIds = new Set(options.model.hooks
+    .filter((hook) => hook.eventRoute !== undefined)
+    .map((hook) => hook.id));
+  // Host-document wrapper variants stay out of the canonical rows: exactly one
+  // row per hook and host, pointing at the wrapper its host contract simulates.
+  return Object.freeze(options.compiledHooks
+    .filter((entry) => entry.indexed !== false)
+    .map((entry): ArtifactManifestHook => Object.freeze({
+      event: entry.event,
+      host: entry.target,
+      id: entry.id,
+      kind: eventRouteIds.has(entry.id) ? 'event-route' : 'config',
+      name: entry.name,
+      path: artifactPath(options.artifactRoot, entry.output),
+      ...(entry.timeout === undefined ? {} : { timeout: entry.timeout }),
+    }))
+    .sort(compareArtifactManifestHooks));
+};
+
+const manifestMcpServers = (options: {
+  readonly artifactRoot: string;
+  readonly compiledMcpApps: readonly CompiledMcpApp[];
+  readonly compiledMcpEntries: readonly CompiledMcpEntry[];
+  readonly model: NormalizedPlugin;
+  readonly selected: readonly string[];
+}): readonly ArtifactManifestMcpServer[] => {
+  const entries = new Map(options.compiledMcpEntries.map((entry) => [entry.id, entry]));
+  return Object.freeze(options.model.mcpServers
+    .map((server) => ({ hosts: sortedHosts(server.targets.filter((target) => options.selected.includes(target))), server }))
+    .filter(({ hosts }) => hosts.length > 0)
+    .map(({ hosts, server }): ArtifactManifestMcpServer => {
+      const entry = entries.get(server.id);
+      const compiledApps = options.compiledMcpApps
+        .filter((app) => app.serverIds.includes(server.id))
+        .map((app): ArtifactManifestMcpApp => Object.freeze({
+          id: app.id,
+          name: app.name,
+          path: artifactPath(options.artifactRoot, app.output),
+          resourceUri: app.resourceUri,
+        }));
+      const prebuiltApps = (options.model.mcpApps ?? [])
+        .filter((app) => app.prebuilt === true && app.serverId === server.id &&
+          app.targets.some((target) => options.selected.includes(target)))
+        .map((app): ArtifactManifestMcpApp => Object.freeze({
+          id: app.id,
+          name: app.name,
+          prebuilt: true,
+          resourceUri: app.resourceUri,
+        }));
+      return Object.freeze({
+        apps: Object.freeze([...compiledApps, ...prebuiltApps].sort((left, right) => left.id.localeCompare(right.id))),
+        ...(entry === undefined
+          ? {}
+          : {
+            entry: Object.freeze({
+              path: artifactPath(options.artifactRoot, entry.output),
+              ...(entry.workerOutput === undefined ? {} : { worker: artifactPath(options.artifactRoot, entry.workerOutput) }),
+            }),
+          }),
+        hosts,
+        id: server.id,
+        kind: entry !== undefined ? 'compiled' : server.url !== undefined ? 'remote' : 'command',
+        name: server.name,
+        transport: server.transport,
+      });
+    })
+    .sort((left, right) => left.id.localeCompare(right.id)));
+};
+
+const manifestScripts = (options: {
+  readonly artifactRoot: string;
+  readonly compiledEntries: readonly CompiledEntry[];
+  readonly model: NormalizedPlugin;
+  readonly selected: readonly string[];
+}): readonly ArtifactManifestScript[] => {
+  const compiled = new Map(options.compiledEntries.map((entry) => [entry.name, entry]));
+  return Object.freeze(selectedScripts(options.model, options.selected)
+    .flatMap((script): ArtifactManifestScript[] => {
+      const entry = compiled.get(script.name);
+      if (entry === undefined) return [];
+      return [Object.freeze({
+        hosts: sortedHosts(script.targets.filter((target) => options.selected.includes(target))),
+        id: script.id,
+        mode: script.mode,
+        name: script.name,
+        path: artifactPath(options.artifactRoot, entry.output),
+        ...(script.rendered === true ? { rendered: Object.freeze({ routeId: script.id }) } : {}),
+        ...(entry.workerOutput === undefined ? {} : { worker: artifactPath(options.artifactRoot, entry.workerOutput) }),
+      })];
+    })
+    .sort((left, right) => left.id.localeCompare(right.id)));
+};
+
+const manifestDistribution = (options: {
+  readonly filePaths: ReadonlySet<string>;
+  readonly projectContext: ProjectContext;
+}): ArtifactManifestDistribution => {
+  const instructions = options.filePaths.has('INSTALL.md') ? 'INSTALL.md' : undefined;
+  const script = options.filePaths.has('install.mjs') ? 'install.mjs' : undefined;
+  return Object.freeze({
+    channels: Object.freeze(options.projectContext.packageName === undefined ? ['local' as const] : ['local' as const, 'npm' as const]),
+    ...(instructions === undefined && script === undefined
+      ? {}
+      : {
+        install: Object.freeze({
+          ...(instructions === undefined ? {} : { instructions }),
+          ...(script === undefined ? {} : { script }),
+        }),
+      }),
+  });
+};
 
 const manifestFor = (options: {
+  readonly artifactRoot: string;
+  readonly compiledCliBins: readonly CompiledCliBin[];
+  readonly compiledEntries: readonly CompiledEntry[];
+  readonly compiledHooks: readonly CompiledHookEntry[];
+  readonly compiledMcpApps: readonly CompiledMcpApp[];
+  readonly compiledMcpEntries: readonly CompiledMcpEntry[];
+  readonly composite: CompositePlan;
   readonly files: ArtifactManifest['files'];
   readonly model: NormalizedPlugin;
   readonly projectContext: ProjectContext;
   readonly registry: TargetRegistry;
-  readonly selected: readonly string[];
+  readonly routeGraph: CompiledRouteGraph;
 }): ArtifactManifest => {
-  const targets = manifestTargets(options.registry, options.selected);
+  const filePaths = new Set(options.files.map((file) => file.path));
+  const projections = manifestProjections({ composite: options.composite, filePaths, registry: options.registry });
+  const selected = options.composite.selected;
+  const executables: ArtifactManifestExecutables = Object.freeze({
+    bins: manifestBins({ artifactRoot: options.artifactRoot, compiledCliBins: options.compiledCliBins, composite: options.composite }),
+    hooks: manifestHooks({ artifactRoot: options.artifactRoot, compiledHooks: options.compiledHooks, model: options.model }),
+    mcpServers: manifestMcpServers({
+      artifactRoot: options.artifactRoot,
+      compiledMcpApps: options.compiledMcpApps,
+      compiledMcpEntries: options.compiledMcpEntries,
+      model: options.model,
+      selected,
+    }),
+    scripts: manifestScripts({
+      artifactRoot: options.artifactRoot,
+      compiledEntries: options.compiledEntries,
+      model: options.model,
+      selected,
+    }),
+  });
   return {
     agentSkills: agentSkillsSchemaRevision,
+    application: {
+      ...(options.model.metadata.description === undefined ? {} : { description: options.model.metadata.description }),
+      id: options.model.metadata.id,
+      name: options.model.metadata.name,
+      version: options.model.metadata.version,
+    },
+    distribution: manifestDistribution({ filePaths, projectContext: options.projectContext }),
+    executables,
     files: options.files,
+    manifestVersion: artifactManifestVersion,
     producer: { name: 'agent-bundle', version: packageManifest.version },
     project: options.projectContext,
+    projections,
+    routes: artifactRoutesFor(options.routeGraph),
     runtime: { ...options.model.runtime },
-    targets,
     validation: {
       artifact: { status: 'passed' },
+      projections: projections.map(({ host }) => ({ host, status: 'passed' })),
       source: { status: 'passed' },
-      targets: targets.map(({ name }) => ({ name, status: 'passed' })),
     },
   };
 };
@@ -467,20 +659,6 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
         output: publishedOutput(entry),
       }),
     ));
-    await writeHookIndex({
-      artifactRoot: stageRoot,
-      // Host-document wrapper variants stay out of the canonical index: it
-      // keeps exactly one entry per hook and target, pointing at the
-      // canonical wrapper their target contract simulates.
-      hooks: compiledHooks.filter((entry) => entry.indexed !== false).map((entry) => ({
-        event: entry.event,
-        id: entry.id,
-        name: entry.name,
-        path: relative(stageRoot, entry.output).replaceAll('\\', '/'),
-        target: entry.target,
-        ...(entry.timeout === undefined ? {} : { timeout: entry.timeout }),
-      })),
-    });
     const outputProvenance = createOutputProvenance({
       artifactRoot: stageRoot,
       outputs: outputCandidatesFor({
@@ -491,7 +669,6 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
         compiledMcpApps,
         compiledMcpEntries,
         entries: composite.entries,
-        model: options.model,
       }),
       projectRoot: options.projectRoot,
     });
@@ -515,11 +692,18 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
     const manifest = await writeManifest({
       artifactRoot: stageRoot,
       manifest: manifestFor({
+        artifactRoot: stageRoot,
+        compiledCliBins,
+        compiledEntries,
+        compiledHooks,
+        compiledMcpApps,
+        compiledMcpEntries,
+        composite,
         files,
         model: options.model,
         projectContext: options.projectContext,
         registry: options.registry,
-        selected: composite.selected,
+        routeGraph: options.routeGraph,
       }),
     });
     const diagnostics = await validateArtifact({ artifactRoot: stageRoot, bundleSyntaxCheck, registry: options.registry });
