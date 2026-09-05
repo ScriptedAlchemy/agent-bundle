@@ -44,14 +44,7 @@ export const workbenchTestId = (page: Page, id: keyof typeof workbenchTestIds): 
   page.getByTestId(workbenchTestIds[id]);
 
 const navLinkLabels = async (page: Page): Promise<readonly string[]> =>
-  workbenchTestId(page, 'workbenchNav').getByRole('link').evaluateAll((links) =>
-    links.map((link) => Array.from(link.childNodes)
-      .filter((node) => node.nodeType === Node.TEXT_NODE)
-      .map((node) => node.textContent ?? '')
-      .join('')
-      .trim()
-      .replace(/\s+/gu, ' '))
-      .filter((label) => label.length > 0));
+  workbenchTestId(page, 'workbenchNav').locator('.nav-label').allInnerTexts();
 
 export const expectPrimaryNav = async (page: Page, timeout = browserTimeout): Promise<void> => {
   const nav = workbenchTestId(page, 'workbenchNav');
