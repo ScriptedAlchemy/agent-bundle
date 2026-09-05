@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
-import { basename, dirname, extname, relative, resolve } from 'node:path';
+import { basename, dirname, extname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import type { NoticeDeliveryAdvertisement } from '../adapters/notice-delivery.ts';
@@ -49,13 +49,18 @@ import type { CompiledMcpApp } from './mcp-apps.ts';
 import type { ArtifactOutputKind } from './provenance.ts';
 import type { RslibEntry, RslibSurfacePlan } from './rslib.ts';
 
+/**
+ * Spelled as paths, not `new URL(…, import.meta.url)`: the package's own
+ * Rslib build would otherwise read the template as a directory context and
+ * replace it with a lookup that throws at run time.
+ */
 const eventRuntimeModulePath = (module: 'ipc' | 'project'): string => {
-  for (const candidate of [
-    new URL(`./event-${module}.js`, import.meta.url),
-    new URL(`../../dist/event-${module}.js`, import.meta.url),
-    new URL(`../events/${module}.ts`, import.meta.url),
+  const here = dirname(fileURLToPath(import.meta.url));
+  for (const path of [
+    join(here, `event-${module}.js`),
+    join(here, '..', '..', 'dist', `event-${module}.js`),
+    join(here, '..', 'events', `${module}.ts`),
   ]) {
-    const path = fileURLToPath(candidate);
     if (existsSync(path)) return path;
   }
   throw new Error(`Unable to locate the compiler-owned event ${module} runtime module.`);

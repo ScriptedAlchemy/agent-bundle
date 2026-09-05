@@ -14,9 +14,9 @@
   "devDependencies": {
     "@modelcontextprotocol/ext-apps": "1.7.5",
     "@modelcontextprotocol/server": "2.0.0",
-    "@rstest/browser": "0.11.10",
-    "@rstest/core": "0.11.10",
-    "@rstest/playwright": "0.11.10",
+    "@rstest/browser": "0.11.12",
+    "@rstest/core": "0.11.12",
+    "@rstest/playwright": "0.11.12",
     "agent-bundle": "workspace:*",
     "playwright": "1.62.1",
     "zod": "4.5.4"

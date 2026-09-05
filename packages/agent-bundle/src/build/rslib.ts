@@ -58,6 +58,41 @@ export interface RslibEntry {
 }
 
 type RslibInstance = Awaited<ReturnType<typeof createRslib>>;
+type RslibBundlerChain = Exclude<NonNullable<NonNullable<LibConfig['tools']>['bundlerChain']>, readonly unknown[]>;
+
+/**
+ * Rslib 1.x adds a module rule (its `NEW_URL_RULE`, `rslib:new-url`) whose
+ * rule-level `parser.javascript.url` outranks the global parser option
+ * `composeEntryLibConfig` pins off, so the rule's own option is turned off
+ * too: a `new URL(…, import.meta.url)` in plugin or generated code names a
+ * run-time path, not an asset to emit.
+ */
+const preserveResourceReferences: RslibBundlerChain = (chain) => {
+  chain.module.rule('rslib:new-url').parser({ url: false });
+};
+
+/**
+ * Lowers the composed lib configs to bundler configs, always as the
+ * production build `rslib.build()` runs. Rslib 1.x otherwise infers the mode
+ * from `NODE_ENV`, and under `development` inspects only `mf` libs — none
+ * here — so `assertExecutableConfig` and `inspect --bundler` would fail. Rslib
+ * writes the inspected mode back to `NODE_ENV`; the process gets its own value
+ * back — set or unset — whether the inspection succeeded or threw, so a
+ * development server or test runner that inspects a config is not left
+ * running as `production`. (`rslib.build()` sets `production` itself when it
+ * finds `NODE_ENV` unset; that is the build's business, not the inspection's.)
+ */
+const inspectProductionConfig = async (
+  rslib: Pick<RslibInstance, 'inspectConfig'>,
+): Promise<Awaited<ReturnType<RslibInstance['inspectConfig']>>> => {
+  const nodeEnv = process.env.NODE_ENV;
+  try {
+    return await rslib.inspectConfig({ mode: 'production' });
+  } finally {
+    if (nodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = nodeEnv;
+  }
+};
 type RslibLibConfig = LibConfig;
 type RslibToolsRspack = NonNullable<NonNullable<LibConfig['tools']>['rspack']>;
 
@@ -70,12 +105,13 @@ const rslibVirtualModulesPlugin = (): typeof rspack.experiments.VirtualModulesPl
   virtualModulesPluginConstructor(rspack, '@rslib/core', 'serve generated wrapper and registry modules');
 
 /**
- * The tools escape hatch is typed against the workspace `@rsbuild/core` (the
- * engine of the MCP Apps path), while this build path executes under the
- * Rsbuild/Rspack copies nested in `@rslib/core` (the dual-engine reality
- * documented on {@link AgentBundleToolsConfig}). These two functions are the
- * single deliberate crossing between those type universes; everything else
- * in this module stays inside Rslib's own types.
+ * The tools escape hatch is typed against the workspace `@rsbuild/core`,
+ * while this build path speaks Rslib's `LibConfig`, which imports its
+ * Rsbuild types through `@rslib/core`'s own dependency edge (the same
+ * package today — see {@link AgentBundleToolsConfig} — but a separate type
+ * universe for the compiler). These two functions are the single deliberate
+ * crossing between them; everything else in this module stays inside Rslib's
+ * own types.
  */
 const asRslibEnvironmentFragment = (
   fragment: NonNullable<AgentBundleToolsConfig['rsbuild']>,
@@ -529,6 +565,22 @@ export const composeEntryLibConfig = (
   ]);
   const enforceInvariants = (config: Rspack.Configuration): Rspack.Configuration => {
     config.output = { ...config.output, asyncChunks: false };
+    // Rslib 1.x treats a statically analyzable `new URL(…, import.meta.url)`
+    // as a static asset to emit and `new Worker(new URL(…))` as a worker
+    // entry to bundle. Generated entries spell their sibling Flight worker
+    // and their artifact root exactly that way, naming files that exist only
+    // in the build output, and consumer code points at run-time filesystem
+    // paths beside the artifact. Both parsers stay off, as Rslib 0.x left
+    // them, so every such expression survives into the artifact verbatim;
+    // `preserveResourceReferences` switches Rslib's own `rslib:new-url` rule
+    // off for the same reason (a rule-level parser option outranks this one).
+    config.module = {
+      ...config.module,
+      parser: {
+        ...config.module?.parser,
+        javascript: { ...config.module?.parser?.javascript, url: false, worker: false },
+      },
+    };
     if (entry.reactServer === true) {
       config.resolve = { ...config.resolve, conditionNames: ['react-server', '...'] };
     }
@@ -610,7 +662,6 @@ export const composeEntryLibConfig = (
   };
   const profile: RslibLibConfig = {
     id: libId,
-    autoExternal: false,
     ...(entry.banner === undefined ? {} : { banner: { js: entry.banner } }),
     bundle: true,
     dts: entry.dts === true,
@@ -632,6 +683,10 @@ export const composeEntryLibConfig = (
     splitChunks: false,
     syntax: 'es2022',
     output: {
+      // Nothing is externalized by declaration: an artifact is self-contained,
+      // and AB7014/AB7015 judge the consumer's declared dependencies against
+      // what the bundle actually reached.
+      autoExternal: false,
       distPath: { root: options.outputRoot },
       filename: { js: entry.outputRelativePath },
       filenameHash: false,
@@ -640,6 +695,10 @@ export const composeEntryLibConfig = (
       sourceMap: false,
       target: 'node',
     },
+    // `externalsType` stays Rslib's ESM default (`modern-module`): a CommonJS
+    // `require()` of a Node builtin inside a bundled dependency reaches the
+    // artifact as the same `createRequire()` shim Rslib 0.x emitted for it
+    // (`packages/agent-bundle/rslib.config.ts` has the comparison).
     source: {
       // Always the authored program, even when a generated wrapper is the
       // real compilation root: Rslib checks that every entry exists on disk,
@@ -653,8 +712,9 @@ export const composeEntryLibConfig = (
   };
   // Every layer is keyed by the synthesized lib id so `mergeRslibConfig`
   // folds them into one lib entry in `composeToolsLayers` order.
+  const invariants = frameworkInvariantLayer(enforceInvariants);
   const merged = mergeRslibConfig(...composeToolsLayers<RslibLibConfig>({
-    invariants: { id: libId, ...frameworkInvariantLayer(enforceInvariants) },
+    invariants: { id: libId, ...invariants, tools: { ...invariants.tools, bundlerChain: preserveResourceReferences } },
     lift: {
       rsbuild: (fragment) => ({ ...asRslibEnvironmentFragment(fragment), id: libId }),
       rspack: (hatch) => ({ id: libId, tools: { rspack: asRslibRspackHatch(hatch) } }),
@@ -767,7 +827,7 @@ export const buildRslibSurfaces = async (
     },
   });
 
-  const inspection = await rslib.inspectConfig();
+  const inspection = await inspectProductionConfig(rslib);
   assertExecutableConfig(entries, inspection.origin, options);
   let result: Awaited<ReturnType<RslibInstance['build']>> | undefined;
   try {
