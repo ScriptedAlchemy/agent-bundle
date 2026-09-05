@@ -352,9 +352,8 @@ const manifestHooks = (options: {
   readonly compiledHooks: readonly CompiledHookEntry[];
   readonly model: NormalizedPlugin;
 }): readonly ArtifactManifestHook[] => {
-  const eventRouteIds = new Set(options.model.hooks
-    .filter((hook) => hook.eventRoute !== undefined)
-    .map((hook) => hook.id));
+  const eventRoutes = new Map(options.model.hooks
+    .flatMap((hook) => hook.eventRoute === undefined ? [] : [[hook.id, `event:${hook.eventRoute.event}`] as const]));
   // Host-document wrapper variants stay out of the canonical rows: exactly one
   // row per hook and host, pointing at the wrapper its host contract simulates.
   return Object.freeze(options.compiledHooks
@@ -363,9 +362,10 @@ const manifestHooks = (options: {
       event: entry.event,
       host: entry.target,
       id: entry.id,
-      kind: eventRouteIds.has(entry.id) ? 'event-route' : 'config',
+      kind: eventRoutes.has(entry.id) ? 'event-route' : 'config',
       name: entry.name,
       path: artifactPath(options.artifactRoot, entry.output),
+      ...(eventRoutes.has(entry.id) ? { routeId: eventRoutes.get(entry.id)! } : {}),
       ...(entry.timeout === undefined ? {} : { timeout: entry.timeout }),
     }))
     .sort(compareArtifactManifestHooks));

@@ -255,6 +255,8 @@ export interface ArtifactManifestHook {
   readonly kind: 'config' | 'event-route';
   readonly name: string;
   readonly path: string;
+  /** The `routes.events[]` row an `event-route` wrapper dispatches; present exactly for that kind. */
+  readonly routeId?: string;
   /** Native hook timeout in seconds. Omit it to use the host default. */
   readonly timeout?: number;
 }
@@ -920,9 +922,13 @@ const parseHooks = (value: unknown, hosts: ReadonlySet<string>): readonly Artifa
   const hooks = requireArray(value, 'executables.hooks').map((candidate, index) => {
     const location = `executables.hooks[${index}]`;
     const hook = requireRecord(candidate, location);
-    requireExactKeys(hook, location, ['event', 'host', 'id', 'kind', 'name', 'path'], ['timeout']);
+    requireExactKeys(hook, location, ['event', 'host', 'id', 'kind', 'name', 'path'], ['routeId', 'timeout']);
     const host = requireString(hook.host, `${location}.host`);
     if (!hosts.has(host)) fail(`${location}.host names undeclared projection ${JSON.stringify(host)}.`);
+    const kind = requireOneOf(hook.kind, `${location}.kind`, ['config', 'event-route'] as const);
+    if ((kind === 'event-route') !== (hook.routeId !== undefined)) {
+      fail(`${location}.routeId is present exactly for event-route hooks.`);
+    }
     if (
       hook.timeout !== undefined &&
       (!Number.isSafeInteger(hook.timeout) || (hook.timeout as number) <= 0)
@@ -933,9 +939,10 @@ const parseHooks = (value: unknown, hosts: ReadonlySet<string>): readonly Artifa
       event: requireString(hook.event, `${location}.event`),
       host,
       id: requireString(hook.id, `${location}.id`),
-      kind: requireOneOf(hook.kind, `${location}.kind`, ['config', 'event-route'] as const),
+      kind,
       name: requireString(hook.name, `${location}.name`),
       path: requirePath(hook.path, `${location}.path`),
+      ...(hook.routeId === undefined ? {} : { routeId: requireString(hook.routeId, `${location}.routeId`) }),
       ...(hook.timeout === undefined ? {} : { timeout: hook.timeout as number }),
     } satisfies ArtifactManifestHook;
   });
@@ -1222,6 +1229,18 @@ const validateManifest = (value: unknown): ArtifactManifest => {
   for (const script of executables.scripts) {
     if (script.rendered !== undefined && !scriptRouteIds.has(script.rendered.routeId)) {
       fail(`executables.scripts[${script.id}].rendered.routeId names an undeclared script route.`);
+    }
+  }
+  const eventRouteIds = new Set(routes.events.map((route) => route.id));
+  for (const hook of executables.hooks) {
+    if (hook.routeId !== undefined && !eventRouteIds.has(hook.routeId)) {
+      fail(`executables.hooks[${hook.host}/${hook.id}].routeId names an undeclared event route.`);
+    }
+  }
+  const cliRouteIds = new Set(routes.cli?.routes.map((route) => route.id) ?? []);
+  for (const command of routes.cli?.commands ?? []) {
+    if (!cliRouteIds.has(command.routeId)) {
+      fail(`routes.cli.commands[${command.path.join(' ')}].routeId names an undeclared CLI route.`);
     }
   }
   if (distribution.channels.includes('npm') !== (packageName !== undefined)) {

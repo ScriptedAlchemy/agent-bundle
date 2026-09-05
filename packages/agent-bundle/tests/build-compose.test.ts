@@ -439,7 +439,7 @@ describe('composite plugin root (#555)', () => {
       buildFixture(['portable'], { registry }),
       buildFixture(['portable'], {}),
     ]);
-    expect(custom.result.build.manifest.targets.map((target) => target.name)).toEqual(['portable']);
+    expect(custom.result.build.manifest.projections.map((projection) => projection.host)).toEqual(['portable']);
     const customTree = await topLevel(custom.output);
     expect(customTree).toContain(syntheticMcpRuntime.manifestPath);
     expect(customTree).not.toContain('INSTALL.md');

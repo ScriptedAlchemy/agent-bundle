@@ -147,7 +147,7 @@ export {
   parseArtifactManifest,
   serializeArtifactManifest,
 } from './build/manifest.ts';
-import { readArtifactManifest } from './build/manifest-file.ts';
+import { readArtifactManifest, type ArtifactManifestReadResult } from './build/manifest-file.ts';
 export { readArtifactManifest, type ArtifactManifestReadResult } from './build/manifest-file.ts';
 export {
   inspectManifestOutput,
@@ -164,7 +164,7 @@ import {
   type InspectManifestOutput,
 } from './build/manifest-projection.ts';
 import { composeBundlerInspection, type BundlerInspection } from './build/inspect-bundler.ts';
-import { defaultPackageArtifactDistPath } from './config/normalize.ts';
+import { defaultArtifactDistPath, defaultPackageArtifactDistPath } from './config/normalize.ts';
 export type { BundlerInspection, BundlerInspectionEntry } from './build/inspect-bundler.ts';
 export { describeRspackStatsError, formatRspackStatsError, rspackStatsErrors } from './build/rspack-stats-errors.ts';
 export type { RspackStatsErrorDetail, RspackStatsErrorLocation } from './build/rspack-stats-errors.ts';
@@ -225,9 +225,7 @@ import {
 } from './services/hook-service.ts';
 import {
   McpService,
-  type McpInvokeOptions,
   type McpInvokeResult,
-  type McpListOptions,
   type McpListResult,
 } from './services/mcp-service.ts';
 // Imported after the service modules on purpose: the position of
@@ -1088,6 +1086,18 @@ const inspectState = (model: NormalizedPlugin): StateInspection => {
   });
 };
 
+/**
+ * The built manifest `inspect` summarizes: the configured artifact output, or —
+ * when nothing was built there and the output is the library default — the
+ * package-output root the CLI `build` writes to (`artifact/`).
+ */
+const readBuiltManifest = async (root: string, artifactDistPath: string): Promise<ArtifactManifestReadResult> => {
+  const configured = await readArtifactManifest(resolve(root, artifactDistPath));
+  if (configured.status !== 'missing' || artifactDistPath !== defaultArtifactDistPath) return configured;
+  const packaged = await readArtifactManifest(resolve(root, defaultPackageArtifactDistPath));
+  return packaged.status === 'missing' ? configured : packaged;
+};
+
 export const inspect = async (options: InspectOptions): Promise<InspectResult> => {
   const prepared = await prepareProject(options, 'inspect');
   if (
@@ -1189,9 +1199,7 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
         : {}),
       ...(options.focus === 'state' ? { state: inspectState(model) } : {}),
     });
-  const manifest = inspectManifestOutput(
-    await readArtifactManifest(resolve(prepared.root, prepared.artifactDistPath)),
-  );
+  const manifest = inspectManifestOutput(await readBuiltManifest(prepared.root, prepared.artifactDistPath));
   return Object.freeze({
     diagnostics: prepared.diagnostics,
     model,
