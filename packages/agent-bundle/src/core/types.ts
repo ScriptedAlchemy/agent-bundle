@@ -5,7 +5,13 @@ import type {
   AgentEventRuntimeMode,
   CanonicalAgentEvent,
 } from '../routes/public.ts';
-import type { CompiledAgentRoute, CompiledCliCommand, CompiledLayout, CompiledProvider } from '../routes/types.ts';
+import type {
+  CompiledAgentRoute,
+  CompiledCliCommand,
+  CompiledEventPreflight,
+  CompiledLayout,
+  CompiledProvider,
+} from '../routes/types.ts';
 import type { SkillHostDocument, SkillIr, SkillTreeLayoutDecision } from '../skills/ir.ts';
 import type { CapabilityState } from './capabilities.ts';
 
@@ -524,6 +530,8 @@ export interface NormalizedHook {
   readonly eventRoute?: Readonly<{
     readonly event: CanonicalAgentEvent;
     readonly fallback: AgentEventFallbackMode;
+    readonly preflight?: CompiledEventPreflight;
+    readonly providers?: readonly string[];
     readonly runtime: AgentEventRuntimeMode;
   }>;
   readonly id: string;

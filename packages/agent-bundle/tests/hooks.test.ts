@@ -11,7 +11,9 @@ import { rspack } from '@rslib/core';
 import { codexArtifactPaths } from '../src/adapters/codex.ts';
 import { cursorArtifactPaths } from '../src/adapters/cursor.ts';
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
-import { nativeHookWrapperSource, type TargetHookWrapper } from '../src/adapters/hook-contract.ts';
+import { hookWrapperPath } from '../src/adapters/composite-layout.ts';
+import { nativeHookWrapperSource, planHooks, type TargetHookWrapper } from '../src/adapters/hook-contract.ts';
+import type { CompiledEventPreflight } from '../src/routes/types.ts';
 import { build } from './support/build.ts';
 import { runNodeScript } from './support/run-node-script.ts';
 import { writeHookIndex } from '../src/build/emit.ts';
@@ -158,6 +160,67 @@ it('keeps the Claude and Codex native wrapper codecs byte-identical apart from i
   // Every wrapper bakes the host it was planned for; none sniffs it at runtime.
   expect(claudeSource).toContain('const target = "claude";');
   expect(claudeSource).not.toContain('AGENT_BUNDLE_HOOK_HOST');
+});
+
+it('wires Compiled event preflight into each per-host wrapper and keeps built-in host identity baked', () => {
+  const selected = ['claude', 'codex', 'cursor'] as const;
+  const preflight: CompiledEventPreflight = Object.freeze({
+    provenance: Object.freeze({ kind: 'conventional', relativePath: 'src/events/tool/before.preflight.ts' }),
+    source: '/project/src/events/tool/before.preflight.ts',
+  });
+  const hook: NormalizedPlugin['hooks'][number] = {
+    event: 'beforeTool',
+    eventRoute: { event: 'tool/before', fallback: 'none', preflight, runtime: 'shared' },
+    id: 'hook:event-route:tool-before',
+    name: 'event-route-tool-before',
+    provenance: { kind: 'conventional', sourcePath: '/project/src/events/tool/before.tsx' },
+    source: '/project/src/events/tool/before.tsx',
+    targets: [...selected],
+    tools: [],
+  };
+  const model: NormalizedPlugin = {
+    extensions: {},
+    hooks: [hook],
+    mcpServers: [],
+    metadata: {
+      id: 'plugin:preflight-hosts',
+      name: 'preflight-hosts',
+      provenance: { kind: 'config', sourcePath: '/project/agent-bundle.config.ts' },
+      version: '1.0.0',
+    },
+    runtime: { node: '22.12.0' },
+    scripts: [],
+    skills: [],
+    targets: selected.map((name) => ({
+      id: `target:${name}`,
+      name,
+      provenance: { kind: 'config' as const, sourcePath: '/project/agent-bundle.config.ts' },
+    })),
+  };
+  const registry = createDefaultRegistry();
+
+  for (const host of selected) {
+    const contract = registry.hookContract(host);
+    expect(contract).toBeDefined();
+    const plan = planHooks(model, host, {
+      ...contract!,
+      wrapperPath: (candidate) => hookWrapperPath(host, candidate.name, candidate.targets, selected),
+    });
+    const entry = plan.hookEntries[0]!;
+    expect(plan.diagnostics).toEqual([]);
+    expect(entry.relativePath).toBe(`hooks/event-route-tool-before.${host}.mjs`);
+    expect(entry.target).toBe(host);
+    expect(entry.virtualSource).toContain(`const target = ${JSON.stringify(host)};`);
+    expect(entry.virtualSource).toContain('executeEventPreflight');
+    expect(entry.virtualSource).toContain(`from ${JSON.stringify(preflight.source)}`);
+    expect(entry.virtualSource).toContain('projectEventPreflightResult');
+    expect(entry.virtualSource).toContain(`./event-route-tool-before.${host}.execute.mjs`);
+    expect(entry.executeVirtualSource).toContain('requestEventRuntime');
+    expect(entry.virtualSource).not.toContain('AGENT_BUNDLE_HOOK_HOST');
+    expect(entry.virtualSource).not.toContain("from '@agent-bundle/runtime'");
+    expect(entry.virtualSource).not.toContain('/project/src/events/tool/before.tsx');
+    expect(entry.virtualSource).not.toContain('import * as provider');
+  }
 });
 
 const runPublishedHook = async (wrapper: string, input: string) => runNodeScript({ args: [wrapper], input });

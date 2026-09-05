@@ -6,7 +6,7 @@ import type { CompiledMcpApp } from './mcp-apps.ts';
 export interface PlannedRootOutputs {
   readonly compiledCliBins: readonly Pick<CompiledCliBin, 'output' | 'workerOutput'>[];
   readonly compiledEntries: readonly Pick<CompiledEntry, 'output' | 'outputKind' | 'workerOutput'>[];
-  readonly compiledHooks: readonly Pick<CompiledHookEntry, 'output' | 'workerOutput'>[];
+  readonly compiledHooks: readonly Pick<CompiledHookEntry, 'executorOutput' | 'output' | 'workerOutput'>[];
   readonly compiledMcpApps: readonly Pick<CompiledMcpApp, 'output'>[];
   readonly compiledMcpEntries: readonly Pick<CompiledMcpEntry, 'output' | 'workerOutput'>[];
 }
@@ -31,9 +31,14 @@ export type CompileStage =
   | { readonly kind: 'node-surfaces'; readonly outputs: readonly string[] };
 
 const withWorkers = (
-  entries: readonly { readonly output: string; readonly workerOutput?: string }[],
+  entries: readonly {
+    readonly executorOutput?: string;
+    readonly output: string;
+    readonly workerOutput?: string;
+  }[],
 ): readonly string[] => entries.flatMap((entry) => [
   entry.output,
+  ...(entry.executorOutput === undefined ? [] : [entry.executorOutput]),
   ...(entry.workerOutput === undefined ? [] : [entry.workerOutput]),
 ]);
 
