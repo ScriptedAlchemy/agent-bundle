@@ -1795,8 +1795,9 @@ placeholders itself.
 ## Built-artifact validation (`AB6000`–`AB6018`, `AB6023`–`AB6025`, `AB6039`)
 
 `agent-bundle build` validates the staged tree before it writes the manifest
-(`validateArtifactFiles`: filesystem entries and generated JSON documents),
-validates the finished artifact against its
+(`validateArtifactFiles`: filesystem entries, generated JSON documents, the
+compile evidence record against the planned file table (`AB6039`), and
+generated JavaScript modules), validates the finished artifact against its
 manifest, and re-checks the validated snapshot after the staging tree is
 renamed into place. `agent-bundle validate --artifact <dir>` runs the same
 validator over a built directory, `agent-bundle dev` runs it over every
