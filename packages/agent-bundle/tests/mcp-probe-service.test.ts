@@ -6,6 +6,13 @@ import { expect, it } from '@rstest/core';
 
 import type { TargetRegistry } from '../src/adapters/registry.ts';
 import {
+  artifactCompilerRecordVersion,
+  artifactManifestName,
+  assembleArtifactManifest,
+  type ArtifactManifest,
+} from '../src/build/manifest.ts';
+import { digest, sha256Hex } from '../src/core/digest.ts';
+import {
   McpProbeService,
   McpProbeTargetNotFoundError,
   mcpProbeInstructionTextLimit,
@@ -90,7 +97,96 @@ const createBundle = async (
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-probe-'));
   await mkdir(join(root, '.claude-plugin'), { recursive: true });
   await writeFile(join(root, '.claude-plugin', 'plugin.json'), '{"name":"probe","version":"1.0.0"}');
+  await writeFile(join(root, '.claude-plugin', 'marketplace.json'), '{"name":"probe-marketplace"}');
   await writeFile(join(root, '.mcp.json'), JSON.stringify({ mcpServers: servers }));
+  const sourceInputs = Object.freeze([Object.freeze({
+    path: 'agent-bundle.config.ts',
+    sha256: sha256Hex('mcp probe fixture config\n'),
+  })]);
+  const documentPaths = [
+    '.claude-plugin/marketplace.json',
+    '.claude-plugin/plugin.json',
+    '.mcp.json',
+  ] as const;
+  const files = await Promise.all(documentPaths.map(async (path) => {
+    const bytes = await readFile(join(root, path));
+    return {
+      bytes: bytes.length,
+      kind: 'generated' as const,
+      path,
+      sha256: sha256Hex(bytes),
+    };
+  }));
+  const manifest: ArtifactManifest = {
+    application: { id: 'application:probe', name: 'probe', version: '1.0.0' },
+    compiler: {
+      adapters: [{
+        adapterRevision: 'claude-fixture-v1',
+        host: 'claude',
+        observedVersion: 'fixture',
+        schemas: [],
+      }],
+      agentSkills: {
+        schemaSha256: 'b9079c0c10b7930e8c6a20ff2bc10cda2a3343c55185120e3f1116a1a529b220',
+        sourceRevision: '69ef37e9424c0a7ea9dd2293b559e43ec8176379',
+        specification: 'https://raw.githubusercontent.com/agentskills/agentskills/69ef37e9424c0a7ea9dd2293b559e43ec8176379/docs/specification.mdx',
+      },
+      producer: { name: 'agent-bundle', version: '0.1.0' },
+      project: {
+        configDigest: sourceInputs[0]!.sha256,
+        configPath: sourceInputs[0]!.path,
+        modelDigest: sha256Hex('mcp probe fixture model\n'),
+        revision: digest({ inputs: sourceInputs }),
+        sourceInputs,
+      },
+      provenance: files.map((file) => ({
+        path: file.path,
+        sourceInputs: ['agent-bundle.config.ts'],
+      })),
+      recordVersion: artifactCompilerRecordVersion,
+      validation: {
+        artifact: { status: 'passed' },
+        projections: [{ host: 'claude', status: 'passed' }],
+        source: { status: 'passed' },
+      },
+    },
+    distribution: { channels: ['local'], payloads: [] },
+    executables: {
+      bins: [],
+      hooks: [],
+      mcpServers: Object.keys(servers).sort().map((name) => ({
+        apps: [],
+        hosts: ['claude'],
+        id: `mcp:${name}`,
+        kind: 'command',
+        name,
+        transport: 'stdio',
+      })),
+      scripts: [],
+    },
+    files,
+    manifestVersion: 2,
+    projections: [{
+      builtInHost: 'claude',
+      documents: {
+        marketplace: '.claude-plugin/marketplace.json',
+        mcp: '.mcp.json',
+        plugin: '.claude-plugin/plugin.json',
+      },
+      host: 'claude',
+      marketplace: { name: 'probe-marketplace' },
+    }],
+    routes: {
+      digest: sha256Hex('mcp probe fixture routes\n'),
+      events: [],
+      layouts: [],
+      providers: [],
+      scripts: [],
+      servers: [],
+    },
+    runtime: { node: '22.12.0' },
+  };
+  await writeFile(join(root, artifactManifestName), assembleArtifactManifest(manifest).bytes);
   return root;
 };
 

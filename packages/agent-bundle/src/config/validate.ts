@@ -7,7 +7,7 @@ import { type EntryExportScan, scanEntryExportsSource } from '../build/entry-exp
 import { externalizedSpecifiers } from '../build/external-policy.ts';
 import { frameworkOwnedPluginCollisions, frameworkOwnedRsbuildPlugins } from '../build/framework-plugins.ts';
 import type { CapabilityState } from '../core/capabilities.ts';
-import { toPosixRelative } from '../core/paths.ts';
+import { isPreservedRuntimeRoot, toPosixRelative } from '../core/paths.ts';
 import { isPlainRecord, isRecord } from '../core/strict-json.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { stableJson } from '../core/digest.ts';
@@ -1747,10 +1747,10 @@ const validatePayload = (
   const sources: { name: string; source: string }[] = [];
   const installed = installedDependencyNames(loaded.context.projectRoot);
   for (const [name, declaration] of Object.entries(configured)) {
-    if (!isSafeOutputName(name) || reservedPayloadDestinations.has(name)) {
+    if (!isSafeOutputName(name) || reservedPayloadDestinations.has(name) || isPreservedRuntimeRoot(name)) {
       const diagnostic = sourceDiagnostic(
         'AB4741',
-        `Payload destination ${JSON.stringify(name)} must be a safe directory name outside the compiler-owned artifact namespaces.`,
+        `Payload destination ${JSON.stringify(name)} must be a safe directory name outside the compiler-owned artifact namespaces and the runtime-owned state root.`,
         loaded.configPath,
       );
       diagnostics.push(name === 'bin'

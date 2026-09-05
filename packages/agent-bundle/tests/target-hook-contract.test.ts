@@ -19,6 +19,7 @@ import { normalizeProject, type NormalizationTargetRegistry } from '../src/confi
 import type { AgentBundleConfig, NormalizedHook, NormalizedPlugin } from '../src/core/types.ts';
 import type { CompiledEventPreflight } from '../src/routes/types.ts';
 import { build } from './support/build.ts';
+import { emptyCompiledRouteGraph } from '../src/routes/graph.ts';
 
 const eventPreflight: CompiledEventPreflight = Object.freeze({
   provenance: Object.freeze({ kind: 'conventional', relativePath: 'src/events/tool/before.preflight.ts' }),
@@ -256,6 +257,7 @@ it('builds adapter-owned native hook event, layout, and wrapper source', async (
       outputRoot,
       projectRoot: root,
       registry: new TargetRegistry().register(adapter, { default: true }),
+      routeGraph: emptyCompiledRouteGraph,
     });
 
     expect(result.compiledHooks[0]).toMatchObject({ target: 'synthetic' });

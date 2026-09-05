@@ -18,11 +18,16 @@ npx agent-bundle install codex --from artifact
 npx agent-bundle install cursor --from artifact
 ```
 
-`--from` names the **artifact root**: the directory that holds the selected host's manifest
-directly (`.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, or
-`.cursor-plugin/plugin.json`). It needs no project sources, and there is no `<from>/<host>`
-lookup — a root that lacks the host's manifest is refused (`AB7001`). Builds write no
-`artifact/<host>` subdirectory to point at; the root is the bundle.
+`--from` names the **composite root**: the directory that holds `agent-bundle.manifest.json`. The
+installer reads that one file and nothing else to learn what it is installing — the plugin name
+and version come from `application`, the marketplace name from `projections[host].marketplace`,
+and the file the host is pointed at from `projections[host].documents.plugin` (see the
+[Artifact manifest](../../reference/artifact-manifest.mdx)). It needs no project sources, and there
+is no `<from>/<host>` lookup: builds write no `artifact/<host>` subdirectory, and the root is the
+bundle. `AB7001` refuses a root whose manifest is missing or not canonical, that has no projection
+for the host, whose projection has no host plugin manifest (or whose pointed file is absent), that
+declares no marketplace identity for `claude` or `codex`, or whose plugin name is not a safe local
+plugin name for `cursor`.
 
 ## What each host accepts
 
@@ -105,10 +110,16 @@ this plugin's installer did not place — is refused either way. Cursor copies c
 place and touches owned files only, never unowned entries such as legacy or in-place `state/`, and
 `--replace` adopts a pre-receipt copy. Current artifact builds keep framework state under
 `~/.agent-bundle/state/<plugin>-<digest>` instead (`AGENT_BUNDLE_STATE_ROOT` overrides that
-location); `uninstall` does not remove it. Claude replacement runs
+location); `uninstall --purge-data --confirm-purge` removes it for the installed code root. Claude replacement runs
 `claude plugin uninstall --keep-data` before reinstalling because `plugin update` is
 version-gated; Codex runs `codex plugin remove` before `add`. The emitted `INSTALL.md` documents
 the same recipe per host.
+
+The framework CLI derives the artifact-side hash and copy set from
+`agent-bundle.manifest.json` `files[]`, verifies every listed digest, and does not walk the artifact
+directory. The manifest itself and a conventional operator `.env` / `.env.local` overlay are also
+copied and hashed; an unlisted stray file is ignored. A missing or changed listed file fails as
+`AB7001`.
 
 ## Operator configuration: the installed pack's `.env`
 
@@ -187,9 +198,9 @@ created, the host registrations it performed, and timestamps. Cursor local copie
 `.agent-bundle-install.json`; Claude, Codex, and Cursor marketplace-mode installs keep theirs under
 `<host root>/agent-bundle/receipts/`. `uninstall` removes exactly what the receipt owns and
 reverses exactly the registrations it recorded — never anything else; unowned entries are listed
-as retained. Legacy or in-place durable runtime state (`state/`, and for a Cursor copy of an Agent
-Plugins pack the `PLUGIN_DATA` directory the receipt records) is kept unless you pass
-`--purge-data --confirm-purge`, and the result states honestly what the host itself decided where
+as retained. The effective framework state root, derived web-data, legacy `state/`, and for a
+Cursor copy of an Agent Plugins pack the `PLUGIN_DATA` directory the receipt records are kept unless
+you pass `--purge-data --confirm-purge`, and the result states honestly what the host itself decided where
 Agent Bundle cannot (Claude orphans its cached copy for a ~14-day grace period; Codex deletes the
 cached tree and offers no keep-data option). A missing receipt (`AB7009`) or a content mismatch
 (`AB7007`) is refused unless `--force`; a directory that belongs to another plugin is refused
@@ -207,7 +218,10 @@ npx agent-bundle doctor --host claude --host cursor --json
 npx agent-bundle doctor --from artifact --json
 ```
 
-Doctor is read-only. It probes hosts, inventories installed bundles, compares them against a
+Doctor is read-only. `--from` is the same composite root `install` takes, read the same way: the
+plugin identity and each inspected host's plugin manifest come from `agent-bundle.manifest.json`
+(`application`, `projections[host]`), and a root the manifest does not describe for that host is
+`AB7001`. It probes hosts, inventories installed bundles, compares them against a
 supplied bundle, checks registration proof, samples runtime endpoint health and identity,
 inventories durable state and the operator `.env` layer (`AB7331`), and re-runs the pinned process-free document and loader validators over
 installed bytes. It never repairs anything. With `--from`, it reports the installed copy per host as
@@ -236,7 +250,7 @@ registration proof and the rows' `errors` already hold that verdict.
 | `AB7330` | info | The bundle's lifecycle stage on this host and its four observations; unobservable stages (a live session's loaded plugins on every host, Cursor's server-assigned enabled state) are typed `unavailable`, never guessed. |
 | `AB7328` | warning | A store receipt records a registration the host no longer holds (orphaned), or the receipt store cannot be read; `agent-bundle uninstall` consumes an orphaned receipt. |
 | `AB7329` | info | A receipt predates lifecycle receipts and was read with synthesized fields; rerun `install` once to rewrite it as format 2. |
-| `AB7316` | warning | An installed bundle's `state/` directory or one of its `*.sqlite`, `-wal`, or `-shm` files cannot be read with filesystem metadata operations. Doctor inventories state by directory entry and metadata only; it never opens a database. |
+| `AB7316` | warning | An installed bundle's effective or legacy state directory is not writable, or the directory or one of its `*.sqlite`, `-wal`, or `-shm` files cannot be read with filesystem metadata operations. Doctor inventories state by directory entry and metadata only; it never opens a database. |
 | `AB7317` | info | A live event runtime implements the older strict protocol and does not expose runtime identity. |
 | `AB7318` | error | A live event runtime became unavailable, timed out, or returned an invalid status response during the bounded read-only identity probe. |
 | `AB7319` | error | A host tree resolved from `doctor --from` violates its pinned document schemas or process-free loader rules; the message retains the originating build-validator code. |

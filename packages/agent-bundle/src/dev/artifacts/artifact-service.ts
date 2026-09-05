@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readdir, rename, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import { build, type BuildOptions, type BuildResult } from '../../build/build.ts';
+import { emptyCompiledRouteGraph } from '../../routes/graph.ts';
 import {
   recheckValidatedArtifactSnapshot,
   validateArtifact,
@@ -207,6 +208,7 @@ export class ArtifactService {
         projectContext,
         projectRoot: prepared.root,
         registry: prepared.registry,
+        routeGraph: prepared.routeGraph ?? emptyCompiledRouteGraph,
         ...(prepared.tools === undefined ? {} : { tools: prepared.tools }),
       });
       const firstValidation = this.#validateArtifact === undefined

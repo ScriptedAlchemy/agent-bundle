@@ -310,7 +310,8 @@ it('emits the routed CLI bin into every capable host artifact and omits it elsew
   // The manifest inventories the bin with bundle provenance naming every command route.
   const manifestFile = result.build.manifest.files.find((file) => file.path === `bin/${pluginName}.mjs`);
   expect(manifestFile).toMatchObject({ kind: 'bundle' });
-  expect(manifestFile?.sourceInputs).toEqual(expect.arrayContaining(['src/cli/report.tsx', 'src/cli/status.ts']));
+  expect(result.build.manifest.compiler.provenance.find((entry) => entry.path === `bin/${pluginName}.mjs`)?.sourceInputs)
+    .toEqual(expect.arrayContaining(['src/cli/report.tsx', 'src/cli/status.ts']));
   expect(result.build.manifest.files.find((file) => file.path === `bin/${pluginName}-flight.mjs`)).toMatchObject({ kind: 'bundle' });
   expect(result.build.manifest.files.filter((file) => file.path.startsWith('bin/'))).toHaveLength(2);
 
@@ -436,17 +437,23 @@ it('emits bin/<plugin>.mjs for a project with web.apps and no src/cli, and its -
   expect(help.stdout).toMatch(/^Commands:$/mu);
   expect(help.stdout).toMatch(/^\s+web\b/mu);
 
-  const manifest = JSON.parse(await readFile(join(artifactRoot, 'agent-bundle.manifest.json'), 'utf8')) as { readonly web?: unknown };
+  const manifest = JSON.parse(await readFile(join(artifactRoot, 'agent-bundle.manifest.json'), 'utf8')) as {
+    readonly executables: { readonly mcpServers: readonly Readonly<Record<string, unknown>>[] };
+    readonly web?: unknown;
+  };
   const mcpEntries = result.build.manifest.files.filter((file) => file.path.startsWith('mcp/')).map((file) => file.path);
   expect(mcpEntries).toHaveLength(1);
   expect(result.build.manifest.files.filter((file) => file.path.startsWith('mcp-apps/')).map((file) => file.path)).toEqual(['mcp-apps/status.html']);
+  // The launch lives once, on the compiled server row; the web section only names the server.
+  expect(manifest.executables.mcpServers.map((server) => server['launch'])).toEqual([{
+    args: [{ kind: 'literal', value: '--verbose' }],
+    entry: mcpEntries[0]!,
+    env: {},
+  }]);
   expect(manifest.web).toEqual({
     apps: [{
       allow: [],
       app: 'status/status',
-      args: ['--verbose'],
-      entry: mcpEntries[0]!,
-      env: {},
       name: 'status',
       resourceUri: 'ui://web-only-artifact/status.html',
       server: 'status',

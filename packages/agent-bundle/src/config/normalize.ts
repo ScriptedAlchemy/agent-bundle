@@ -65,6 +65,7 @@ import type {
   SourceProvenance,
 } from '../core/types.ts';
 import { appRouteTemplatePath, resolveAppRouteTemplate } from '../routes/app-template.ts';
+import { eventRouteExecutionFor } from '../routes/event-execution.ts';
 import { mcpRouteProtocolName } from '../routes/protocol-name.ts';
 import type { CompiledCliSurface } from '../routes/types.ts';
 import { type DiscoveredProject, payloadDeclarationSource } from './discover.ts';
@@ -546,19 +547,13 @@ const normalizeHooks = (
     const timeoutMs = typeof configuredTimeoutMs === 'number' && Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
       ? configuredTimeoutMs
       : undefined;
-    const fallback = route.config['fallback'] === 'standalone' ? 'standalone' as const : 'none' as const;
-    const runtime = route.config['runtime'] === 'standalone' ? 'standalone' as const : 'shared' as const;
-    const configuredProviders = route.config['providers'];
-    const providers = Array.isArray(configuredProviders)
-      && configuredProviders.every((provider): provider is string => typeof provider === 'string')
-      ? [...configuredProviders]
-      : undefined;
+    const execution = eventRouteExecutionFor(route);
     const eventName = event.replace('/', '-');
     hooks.push({
       event: hookEventForRoute[event],
       eventRoute: Object.freeze({
         event,
-        fallback,
+        fallback: execution.fallback,
         ...(route.preflight === undefined
           ? {}
           : {
@@ -567,8 +562,8 @@ const normalizeHooks = (
               source: route.preflight.source,
             },
           }),
-        ...(providers === undefined ? {} : { providers }),
-        runtime,
+        ...(execution.providers === undefined ? {} : { providers: execution.providers }),
+        runtime: execution.runtime,
       }),
       id: `hook:event-route:${eventName}`,
       name: `event-route-${eventName}`,

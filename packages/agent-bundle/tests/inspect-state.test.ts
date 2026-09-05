@@ -131,6 +131,8 @@ it('inspects volatile and workspace-durable state without inventing runtime path
     expect(humanDefault.stdout).toContain(
       'state: fixture/durable-state (workspace-durable, sqlite driver)',
     );
+    expect(humanDefault.stdout).not.toContain('Built manifest:');
+    expect(JSON.parse((await inspectCli(root, ['--json'])).stdout).output.manifest).toBeUndefined();
 
     await writeFile(stateSource, [
       'export default defineState({',
@@ -196,6 +198,22 @@ it('reports the declared notice retention policy and rejects a malformed one as 
     const malformed = await inspectCli(root, ['--state', '--json']);
     expect(malformed.code).not.toBe(0);
     expect(`${malformed.stdout}${malformed.stderr}`).toContain('AB4833');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('reports an invalid built manifest on inspect without treating it as missing', async () => {
+  const root = await createProject();
+  try {
+    await mkdir(join(root, 'dist'), { recursive: true });
+    await writeFile(join(root, 'dist', 'agent-bundle.manifest.json'), '{not-json');
+    const json = await inspectCli(root, ['--json']);
+    expect(json).toMatchObject({ code: 0, stderr: '' });
+    expect(JSON.parse(json.stdout).output.manifest).toMatchObject({ status: 'invalid' });
+    expect(typeof JSON.parse(json.stdout).output.manifest.detail).toBe('string');
+    const human = await inspectCli(root, []);
+    expect(human.stdout).toContain('Built manifest: invalid');
   } finally {
     await rm(root, { force: true, recursive: true });
   }

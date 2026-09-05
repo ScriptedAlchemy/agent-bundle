@@ -233,8 +233,8 @@ export const planCliBinsSurface = (
   const planned = planCompiledCliBins(model, options);
   return {
     entries: planned.length === 0 ? [] : cliBinRslibEntries(planned, model),
-    finish: async (evidence) => {
-      const evidenceByPath = new Map(evidence.map((entry) => [entry.path, entry.sourceInputs]));
+    finish: async (result) => {
+      const evidenceByPath = new Map(result.assets.map((entry) => [entry.path, entry.sourceInputs]));
       const bundledInputs = (path: string, label: string): readonly string[] => {
         const inputs = evidenceByPath.get(path);
         if (inputs === undefined) throw new Error(`Missing bundled routed CLI ${label} evidence for ${JSON.stringify(path)}.`);

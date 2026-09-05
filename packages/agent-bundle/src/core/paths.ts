@@ -54,12 +54,42 @@ export const assertInside = (root: string, candidate: string): string => {
 /** One case-insensitive alphanumeric-leading path segment; structurally unable to be `.` or `..`. */
 export const isSafePathSegment = (value: string): boolean => /^[a-z0-9][a-z0-9._-]*$/iu.test(value);
 
+/** Root entries owned by generated runtime code; the compiler never emits under them and installers never remove or rewrite them. */
+export const preservedRuntimeEntries: readonly string[] = Object.freeze(['state']);
+
+/**
+ * Whether a root entry name is a preserved runtime root. Matched
+ * case-insensitively: on case-insensitive filesystems `State/` *is* `state/`,
+ * so no spelling of a runtime root may be emitted, inventoried, staged, or
+ * claimed by a receipt.
+ */
+export const isPreservedRuntimeRoot = (name: string): boolean =>
+  preservedRuntimeEntries.includes(name.toLowerCase());
+
+/** The installer's receipt beside an installed root; reserved as a top-level entry in every spelling, file or directory. */
+export const installReceiptFile = '.agent-bundle-install.json';
+
+export const isInstallReceiptEntry = (name: string): boolean => name.toLowerCase() === installReceiptFile.toLowerCase();
+
 /** A non-empty relative path (POSIX or Windows form) whose segments never traverse upward. */
 export const isContainedRelativePath = (value: string): boolean =>
   value.length > 0 &&
   !isAbsolute(value) &&
   !/^[a-z]:/iu.test(value) &&
   !value.split(/[/\\]/u).includes('..');
+
+/**
+ * The manifest's path rule: a non-empty POSIX path that is relative on every platform
+ * (no leading `/`, no drive letter, no backslash, no NUL) and whose segments are
+ * non-empty and never `.` or `..`, so the path means the same file wherever the root lands.
+ */
+export const isRelocatablePosixPath = (path: string): boolean =>
+  path.length > 0 &&
+  !path.includes('\\') &&
+  !path.includes('\0') &&
+  !path.startsWith('/') &&
+  !/^[a-z]:/iu.test(path) &&
+  path.split('/').every((segment) => segment.length > 0 && segment !== '.' && segment !== '..');
 
 /** A normalized relative path that cannot traverse out of an artifact root. */
 export const safeArtifactPath = (path: string): boolean =>

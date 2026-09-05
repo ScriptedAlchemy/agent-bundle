@@ -14,11 +14,13 @@ import {
   rmdir,
   writeFile,
 } from 'node:fs/promises';
-import { basename, dirname, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
-import { exists } from '../core/paths.ts';
+import { exists, installReceiptFile, isInstallReceiptEntry, isPreservedRuntimeRoot } from '../core/paths.ts';
+import { artifactManifestName, type ArtifactManifest } from '../build/manifest.ts';
+import { OPERATOR_ENV_FILE_NAMES } from '../launch-env.ts';
 
 /**
  * Host-agnostic install ownership core shared by `agent-bundle install`,
@@ -30,7 +32,7 @@ import { exists } from '../core/paths.ts';
  */
 
 /** Sidecar written at an installed plugin root by every agent-bundle installer. */
-export const installReceiptFile = '.agent-bundle-install.json';
+export { installReceiptFile };
 
 /**
  * Current receipt format. Format 2 (#101) adds the lifecycle fields —
@@ -86,17 +88,6 @@ export interface InstallRegistration {
   readonly scope?: InstallReceiptScope;
 }
 
-/** Root entries owned by generated runtime code; installers never remove or rewrite them. */
-export const preservedRuntimeEntries: readonly string[] = Object.freeze(['state']);
-
-/**
- * Whether a root entry name is a preserved runtime root. Matched
- * case-insensitively: on case-insensitive filesystems `State/` *is* `state/`,
- * so no spelling of a runtime root may be inventoried, staged, or claimed by a
- * receipt.
- */
-export const isPreservedRuntimeRoot = (name: string): boolean =>
-  preservedRuntimeEntries.includes(name.toLowerCase());
 
 /**
  * Root files every emitted Cursor-compatible bundle carries. A receipt-less
@@ -158,9 +149,16 @@ export interface InstallReceipt {
   /** Host registrations the installer performed, in the order it performed them. */
   readonly registrations: readonly InstallRegistration[];
   readonly scope: InstallReceiptScope;
+  /** Effective framework state root retained by a Cursor `--keep-data` uninstall. */
+  readonly stateRoot?: {
+    readonly root: string;
+    readonly source: 'derived' | 'native';
+  };
   /** When this receipt was last written (install or replacement); `installedAt` is the first install. */
   readonly updatedAt: string;
   readonly version: string;
+  /** Derived web-data root retained by a Cursor `--keep-data` uninstall. */
+  readonly webDataRoot?: string;
 }
 
 /** The lifecycle identity every receipt writer supplies; inventory and timestamps come from the write. */
@@ -210,6 +208,16 @@ const sortNames = (names: readonly string[]): readonly string[] =>
   [...names].sort((left, right) => left.localeCompare(right));
 
 const toPosix = (path: string): string => path.replaceAll('\\', '/');
+
+const compareTreePaths = (left: string, right: string): number => {
+  const leftSegments = left.split('/');
+  const rightSegments = right.split('/');
+  for (let index = 0; index < Math.min(leftSegments.length, rightSegments.length); index += 1) {
+    const compared = leftSegments[index]!.localeCompare(rightSegments[index]!);
+    if (compared !== 0) return compared;
+  }
+  return leftSegments.length - rightSegments.length;
+};
 
 /** Every ancestor directory of the given POSIX-relative files, deduplicated and sorted. */
 export const directoriesOf = (files: readonly string[]): readonly string[] => {
@@ -285,6 +293,56 @@ export const treeInventory = async (root: string): Promise<TreeInventory> => {
     // whether they sit in an installed copy or in an artifact that was run in place.
     if (isPreservedRuntimeRoot(name)) continue;
     await visit(name);
+  }
+  return Object.freeze({ files: Object.freeze(files), hash: hash.digest('hex') });
+};
+
+/**
+ * Reads only the fixed paths declared by the authoritative artifact manifest,
+ * plus the manifest itself and conventional operator environment overlays.
+ */
+export const manifestInventory = async (
+  root: string,
+  manifest: ArtifactManifest,
+): Promise<TreeInventory> => {
+  const rootMetadata = await lstat(root);
+  if (rootMetadata.isSymbolicLink() || !rootMetadata.isDirectory()) throw unsupportedEntry('.');
+  const rows = new Map(manifest.files.map((file) => [file.path, file]));
+  const paths = new Set([artifactManifestName, ...rows.keys()]);
+  for (const name of OPERATOR_ENV_FILE_NAMES) {
+    try {
+      const metadata = await lstat(join(root, name));
+      if (metadata.isSymbolicLink() || !metadata.isFile()) throw unsupportedEntry(name);
+      paths.add(name);
+    } catch (error) {
+      if (!isErrno(error, 'ENOENT')) throw error;
+    }
+  }
+  const files = [...paths].sort(compareTreePaths);
+  await assertRealAncestors(root, files);
+  const hash = createHash('sha256');
+  for (const relativePath of files) {
+    const path = join(root, relativePath);
+    let metadata: Stats;
+    let bytes: Buffer;
+    try {
+      metadata = await lstat(path);
+      if (metadata.isSymbolicLink() || !metadata.isFile()) throw unsupportedEntry(relativePath);
+      bytes = await readFile(path);
+    } catch (error) {
+      if (isErrno(error, 'ENOENT')) {
+        throw new Error(`--from root does not match its manifest: ${relativePath} is missing.`, { cause: error });
+      }
+      throw error;
+    }
+    const row = rows.get(relativePath);
+    if (
+      row !== undefined &&
+      createHash('sha256').update(bytes).digest('hex') !== row.sha256
+    ) {
+      throw new Error(`--from root does not match its manifest: ${relativePath} bytes differ from its files[] digest.`);
+    }
+    hashEntry(hash, relativePath, metadata, bytes);
   }
   return Object.freeze({ files: Object.freeze(files), hash: hash.digest('hex') });
 };
@@ -395,7 +453,7 @@ export const isReceiptPath = (value: unknown): value is string =>
   // The receipt's own name is reserved as a top-level entry in every spelling, file or directory:
   // on a case-insensitive filesystem an alias resolves to the receipt itself, so nothing at or
   // beneath it can be owned content or be installed.
-  (value.split('/')[0] ?? '').toLowerCase() !== installReceiptFile.toLowerCase() &&
+  !isInstallReceiptEntry(value.split('/')[0] ?? '') &&
   !value.includes('\\') &&
   !value.startsWith('/') &&
   // Runtime roots are never installer-owned, whatever a receipt claims and however it spells them.
@@ -491,6 +549,19 @@ const receiptFromDocument = (value: unknown): InstallReceipt | undefined => {
     return undefined;
   }
   const cursorExpansion = readCursorExpansion(record['cursorExpansion']);
+  const stateRootRecord = record['stateRoot'];
+  const stateRoot = stateRootRecord !== undefined &&
+    stateRootRecord !== null &&
+    typeof stateRootRecord === 'object' &&
+    !Array.isArray(stateRootRecord) &&
+    typeof (stateRootRecord as Record<string, unknown>)['root'] === 'string' &&
+    ((stateRootRecord as Record<string, unknown>)['source'] === 'derived' ||
+      (stateRootRecord as Record<string, unknown>)['source'] === 'native')
+    ? Object.freeze({
+        root: (stateRootRecord as Record<string, unknown>)['root'] as string,
+        source: (stateRootRecord as Record<string, unknown>)['source'] as 'derived' | 'native',
+      })
+    : undefined;
   const base = {
     contentHash: record['contentHash'],
     ...(cursorExpansion === undefined ? {} : { cursorExpansion }),
@@ -500,7 +571,9 @@ const receiptFromDocument = (value: unknown): InstallReceipt | undefined => {
     host: record['host'],
     installedAt: record['installedAt'],
     plugin: record['plugin'],
+    ...(stateRoot === undefined ? {} : { stateRoot }),
     version: record['version'],
+    ...(typeof record['webDataRoot'] === 'string' ? { webDataRoot: record['webDataRoot'] } : {}),
   } as const;
   if (format === legacyInstallReceiptFormat) {
     return Object.freeze({
@@ -571,6 +644,8 @@ export const createInstallReceipt = (options: InstallReceiptIdentity & {
   readonly cursorExpansion?: InstallReceiptCursorExpansion;
   readonly directories?: readonly string[];
   readonly inventory: TreeInventory;
+  readonly stateRoot?: InstallReceipt['stateRoot'];
+  readonly webDataRoot?: string;
 }): InstallReceipt => {
   const installedAt = options.installedAt ?? new Date().toISOString();
   return Object.freeze({
@@ -587,8 +662,10 @@ export const createInstallReceipt = (options: InstallReceiptIdentity & {
     ...(options.projectRoot === undefined ? {} : { projectRoot: options.projectRoot }),
     registrations: Object.freeze(options.registrations.map((registration) => Object.freeze({ ...registration }))),
     scope: options.scope,
+    ...(options.stateRoot === undefined ? {} : { stateRoot: Object.freeze({ ...options.stateRoot }) }),
     updatedAt: options.updatedAt ?? installedAt,
     version: options.version,
+    ...(options.webDataRoot === undefined ? {} : { webDataRoot: options.webDataRoot }),
   });
 };
 
@@ -882,6 +959,39 @@ export interface StagedArtifact {
 }
 
 /**
+ * Copies exactly one already-validated inventory without enumerating the
+ * source tree, then re-measures the copy: the bytes that landed are the bytes
+ * the manifest was verified against, or the copy is refused — a source that
+ * changed under the installer never becomes an installed root whose receipt
+ * and compile evidence describe other bytes.
+ */
+export const copyInventoryFiles = async (
+  sourceRoot: string,
+  destinationRoot: string,
+  inventory: TreeInventory,
+): Promise<TreeInventory> => {
+  await mkdir(destinationRoot, { recursive: true });
+  for (const directory of directoriesOf(inventory.files)) {
+    await mkdir(join(destinationRoot, directory), { recursive: true });
+  }
+  for (const file of inventory.files) {
+    await cp(join(sourceRoot, file), join(destinationRoot, file), {
+      errorOnExist: true,
+      force: false,
+      verbatimSymlinks: true,
+    });
+  }
+  const copied = await treeInventory(destinationRoot);
+  if (copied.hash !== inventory.hash) {
+    throw new Error(
+      `--from root changed while it was being copied: copied content ${shortHash(copied.hash)} `
+      + `differs from verified content ${shortHash(inventory.hash)}.`,
+    );
+  }
+  return copied;
+};
+
+/**
  * Copies the artifact into a sibling staging directory on the destination's
  * filesystem (so every later `rename` is atomic), refuses symlinks, and lands
  * the receipt inside the staged copy.
@@ -889,30 +999,14 @@ export interface StagedArtifact {
 export const stageArtifact = async (options: {
   readonly artifactRoot: string;
   readonly destination: string;
+  readonly inventory: TreeInventory;
   readonly receipt: InstallReceiptIdentity;
   readonly stageRoot: string;
 }): Promise<StagedArtifact> => {
   const parent = await mkdtemp(join(options.stageRoot, `.${basename(options.destination)}.stage-`));
   const root = join(parent, 'bundle');
   try {
-    // Exactly the inventoried content is copied: runtime roots and a stray receipt never are (a
-    // run-in-place artifact may hold a large live database), and neither are empty directories —
-    // they carry no plugin content, so they are not hashed, not installed, and not owned, and the
-    // installed tree, its receipt, and the artifact hash all describe the same set of entries.
-    const artifactRoot = resolve(options.artifactRoot);
-    const source = await treeInventory(artifactRoot);
-    const content = new Set([...source.files, ...directoriesOf(source.files)]);
-    await cp(artifactRoot, root, {
-      errorOnExist: true,
-      filter: (entry) => {
-        const relativePath = relative(artifactRoot, entry);
-        return relativePath === '' || content.has(toPosix(relativePath));
-      },
-      force: false,
-      recursive: true,
-      verbatimSymlinks: true,
-    });
-    const inventory = await treeInventory(root);
+    const inventory = await copyInventoryFiles(resolve(options.artifactRoot), root, options.inventory);
     await writeFile(
       join(root, installReceiptFile),
       receiptDocument(createInstallReceipt({ ...options.receipt, inventory })),

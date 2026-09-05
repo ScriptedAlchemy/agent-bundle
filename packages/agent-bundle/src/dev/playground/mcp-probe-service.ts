@@ -27,9 +27,9 @@ import type {
 import { redactCredentialText } from '../../core/credentials.ts';
 import { parseJsonWithoutDuplicateKeys } from '../../core/strict-json.ts';
 import { readFileString, type PlatformRun } from '../../effect/platform.ts';
+import { readBundleIdentity, type PluginIdentity } from '../../install/identity.ts';
 import { platformRunOf } from '../platform-run.ts';
 import type { DevPlatformRuntime } from '../platform-runtime.ts';
-import { resolveBundleRoot } from '../../install/doctor.ts';
 import {
   readTargetMcpServer,
   type TargetMcpRuntimeContract,
@@ -439,16 +439,23 @@ export class McpProbeService {
     if (prepared === undefined) {
       throw new McpProbeTargetNotFoundError('No prepared bundle is available for MCP probing.');
     }
-    let bundleRoot: string;
+    let identity: PluginIdentity;
     try {
-      bundleRoot = await resolveBundleRoot(prepared.bundleSource, options.host);
+      identity = await readBundleIdentity(prepared.bundleSource, options.host);
     } catch {
       throw new McpProbeTargetNotFoundError(
         `No prepared ${options.host} bundle is available for MCP probing.`,
       );
     }
+    const bundleRoot = identity.bundleRoot;
+    const mcpDocument = identity.documents.mcp;
+    if (mcpDocument === undefined) {
+      throw new McpProbeTargetNotFoundError(
+        `No prepared ${options.host} bundle is available for MCP probing.`,
+      );
+    }
     const runtime = this.#runtime(options.host);
-    const server = await this.#server(bundleRoot, options.host, runtime, options.serverName);
+    const server = await this.#server(bundleRoot, mcpDocument, options.host, runtime, options.serverName);
     const pluginData = await this.#createPluginData();
     let launch: ResolvedMcpSessionLaunch;
     let projectedLaunch: McpProbeLaunch;
@@ -560,12 +567,13 @@ export class McpProbeService {
 
   async #server(
     bundleRoot: string,
+    documentPath: string,
     host: McpProbeHost,
     runtime: TargetMcpRuntimeContract,
     serverName: string,
   ) {
     const document = parseJsonWithoutDuplicateKeys(
-      await this.#runPlatform(readFileString(resolve(bundleRoot, runtime.manifestPath))),
+      await this.#runPlatform(readFileString(resolve(bundleRoot, documentPath))),
     );
     const result = readTargetMcpServer(runtime, document, serverName);
     if (result.status === 'missing') {

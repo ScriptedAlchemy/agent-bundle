@@ -136,8 +136,8 @@ manifests at files inside those payloads without compiling them. Payload files c
 | `agent-bundle build` | Build a validated artifact from source, plus the declared `dist/` package build. |
 | `agent-bundle prepack` | Run the release build, dry-run npm packing without scripts, and verify packaged outputs, artifact hashes, bins, and versions (`--output` and `--json` supported). |
 | `agent-bundle install <host>` | Install a built bundle into Claude, Codex, or Cursor (`--from`, `--scope`, `--replace`/`--force`, `--mode local\|marketplace` for Cursor, and `--json` supported). Same-version content drift of an agent-bundle-managed install is replaced automatically; identical reruns are a no-op. |
-| `agent-bundle uninstall <host>` | Remove a receipt-owned install and nothing else: the receipt's files and directories, the host registrations it recorded (`claude plugin uninstall --keep-data` + `marketplace remove`, `codex plugin remove` + `marketplace remove`, the Cursor local directory or staged marketplace). `--plan` prints the exact paths without changing anything; durable `state/` is kept unless `--purge-data --confirm-purge`; a missing receipt or content mismatch is refused unless `--force`; a rerun is `not-installed`. |
-| `agent-bundle doctor` | Read-only host inspection: host probes, installed inventory, store receipts cross-checked against the host, and, with `--from`, the installed copy compared against the built artifact by version and content hash (`current`, `stale`, `version-mismatch`, `foreign`, `not-installed`) plus the lifecycle stage (placed → registered → enabled → active, unobservable stages typed `unavailable`). |
+| `agent-bundle uninstall <host>` | Remove a receipt-owned install and nothing else: the receipt's files and directories, the host registrations it recorded (`claude plugin uninstall --keep-data` + `marketplace remove`, `codex plugin remove` + `marketplace remove`, the Cursor local directory or staged marketplace). `--plan` prints the exact paths without changing anything; the effective framework state root, web-data, and legacy `state/` are kept unless `--purge-data --confirm-purge`; a missing receipt or content mismatch is refused unless `--force`; a rerun is `not-installed`. |
+| `agent-bundle doctor` | Read-only host inspection: host probes, installed inventory, effective and legacy state roots with existence and writability, store receipts cross-checked against the host, and, with `--from`, the installed copy compared against the built artifact by version and content hash (`current`, `stale`, `version-mismatch`, `foreign`, `not-installed`) plus the lifecycle stage (placed → registered → enabled → active, unobservable stages typed `unavailable`). |
 | `agent-bundle validate` | Validate project source, or an artifact with `--artifact`. |
 | `agent-bundle inspect` | Inspect the normalized model and each selected host projection's plan from source, with per-host component accounting: which skills, commands, rules, hooks, MCP surfaces, and scripts each host emits and, for every omission, whether the author excluded it or the host's pinned capability judgment (`degraded`/`unavailable`/`prohibited`, with reason) ruled it out. |
 | `agent-bundle inspect --bundler` | Dump the synthesized Rslib/Rsbuild configs (post-`tools`-hatch merge) for every generated output. |
@@ -228,9 +228,12 @@ the shipped document in the install receipt (`cursorExpansion`), and
 itself stays spec-conformant for other Agent Plugins clients.
 
 Cursor installation is user-scoped. Claude also accepts `--scope project` and
-`--scope local`; Codex is user-scoped. `--from` names the plugin root itself —
-the directory that holds the selected host's manifest — and a source-free copy
-of that root is accepted.
+`--scope local`; Codex is user-scoped. `--from` names the composite root itself —
+the directory that holds `agent-bundle.manifest.json` — and a source-free copy
+of that root is accepted. Identity (name, version, marketplace) and the host
+plugin document come from that manifest's `application` and `projections[]`
+rows, never from probing host files; a root whose manifest is missing, not
+canonical, or has no projection for the host is refused with `AB7001`.
 
 ### Reinstall after a same-version rebuild
 
@@ -332,12 +335,14 @@ receipt and remove exactly what it owns:
 
 Durable runtime state (`state/`: state kernel, notices journal; for a Cursor
 copy of an Agent Plugins pack, also the `PLUGIN_DATA` directory the receipt
-records) is kept by default; `--purge-data --confirm-purge` removes it
-(`AB7008` without the confirmation). The typed `data.outcome` is honest per host: Cursor `kept` /
-`purged` / `absent`; Claude `retained-by-host` (Claude 2.1.257 orphans the
-cached copy for its ~14-day grace period; a purge also removes `state/` and
-`plugins/data/<id>/`); Codex `removed-by-host` / `unavailable` (codex-cli
-0.147.0 deletes the cached tree on `plugin remove` and has no keep-data option).
+records), effective framework state, and web-data are kept by default;
+`--purge-data --confirm-purge` removes them (`AB7008` without the confirmation).
+The typed `data.outcome` is honest per host: Cursor `kept` / `purged` / `absent`;
+Claude `retained-by-host` (Claude 2.1.257 orphans the cached copy for its ~14-day
+grace period; a purge also removes external framework state, web-data, `state/`,
+and `plugins/data/<id>/`); Codex reports external state as `kept` / `purged`,
+while in-tree `state/` is removed by the host and cannot be kept (codex-cli
+0.147.0 has no keep-data option).
 `--plan` reports the same exact paths and host verbs without opening a writer.
 A missing receipt (`AB7009`) or an owned-content, version, or `HEAD` mismatch
 (`AB7007`) is refused unless `--force`; a receipt or manifest naming another
