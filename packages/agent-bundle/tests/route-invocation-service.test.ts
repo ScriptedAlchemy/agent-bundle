@@ -16,6 +16,7 @@ import {
 import type { RouteManifest } from '../src/dev/routes/route-manifest.ts';
 import type { CompiledRouteGraph } from '../src/routes/types.ts';
 import { testManifestFromRouteGraph } from '../src/test/manifest.ts';
+import { isProcessGone } from './support/bin-process.ts';
 
 const invocation = (id: string, completedAt: string): RouteInvocation => ({
   completedAt,
@@ -155,12 +156,7 @@ interface LeakingRouteProject {
   readonly service: (options?: Readonly<{ timeoutMs?: number }>) => RouteInvocationService;
 }
 
-/**
- * A tool route that keeps its render child alive after replying (an interval)
- * and forks a descendant that would outlive the child. The route records both
- * pids on disk so the test can prove they are gone, whether it replies or
- * hangs until the service intervenes.
- */
+/** A tool route that holds an interval and a forked descendant, and writes both pids. */
 const leakingRouteProject = async (behaviour: 'hang' | 'reply'): Promise<LeakingRouteProject> => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-route-invocation-child-'));
   const relativePath = 'src/mcp/fixture/tools/leak.tsx';
@@ -232,18 +228,14 @@ const leakingRouteProject = async (behaviour: 'hang' | 'reply'): Promise<Leaking
     service: (options = {}) => new RouteInvocationService({
       manifest: { manifest: () => manifest },
       prepared: () => prepared,
-      ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+      timeoutMs: options.timeoutMs,
     }),
   };
 };
 
 /** A zombie has exited; only a process still scheduled counts as alive. */
 const alive = (pid: number): boolean => {
-  try {
-    process.kill(pid, 0);
-  } catch {
-    return false;
-  }
+  if (isProcessGone(pid)) return false;
   if (process.platform !== 'linux') return true;
   try {
     return !/\) Z /u.test(readFileSync(`/proc/${pid}/stat`, 'utf8'));
@@ -254,7 +246,9 @@ const alive = (pid: number): boolean => {
 
 const recordedPids = async (project: LeakingRouteProject): Promise<Readonly<{ child: number; descendant: number }>> => {
   await expect.poll(() => project.pids(), { interval: 50, timeout: 20_000 }).toBeDefined();
-  return (await project.pids())!;
+  const pids = await project.pids();
+  if (pids === undefined) throw new Error('The leaking route did not record process ids.');
+  return pids;
 };
 
 it('reaps the render child and its descendants after a successful reply', { timeout: 30_000 }, async () => {
@@ -264,9 +258,9 @@ it('reaps the render child and its descendants after a successful reply', { time
     const pids = await project.pids();
 
     expect(invocation.status).toBe('succeeded');
-    expect(pids).toBeDefined();
-    expect(alive(pids!.child)).toBe(false);
-    expect(alive(pids!.descendant)).toBe(false);
+    if (pids === undefined) throw new Error('The leaking route did not record process ids.');
+    expect(alive(pids.child)).toBe(false);
+    expect(alive(pids.descendant)).toBe(false);
   } finally {
     await rm(project.root, { force: true, recursive: true });
   }

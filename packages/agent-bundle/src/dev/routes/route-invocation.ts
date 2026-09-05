@@ -96,7 +96,7 @@ export interface RouteInvocationEvent {
   readonly native?: JsonObject;
 }
 
-/** The runtime-free fields shared by complete invocations and trace/list rows. */
+/** One row of `GET /api/routes/invocations`: the envelope without its streams, for lists and the trace. */
 export interface RouteInvocationSummary {
   readonly completedAt: string;
   readonly correlationId?: string;
@@ -117,7 +117,6 @@ export interface RouteInvocationSummary {
   readonly timings: readonly RouteInvocationTiming[];
 }
 
-/** One row of `GET /api/routes/invocations`: the envelope without its streams, for lists and the trace. */
 export interface RouteInvocationListResponse {
   readonly invocations: readonly RouteInvocationSummary[];
 }

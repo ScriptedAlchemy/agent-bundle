@@ -33,7 +33,6 @@ import { replaceWatchedSource } from './support/watched-files.ts';
 import { browserLaunchOptions, browserTrace, waitForWorkbenchIdle, workbenchUrl } from './support/workbench-e2e.ts';
 import { deepFreeze } from '../src/freeze.ts';
 
-
 const fixtureRoot = join(workspaceRoot, 'fixtures', 'integration', 'packed-release');
 const browserTimeout = 12_000 * timeScale;
 const productTemporaryRootPrefixes = [
@@ -68,7 +67,6 @@ const e2e = test.extend({
 
 const isAppRoute = (url: URL): boolean =>
   url.pathname.startsWith('/api/mcp/apps/') || /^\/api\/mcp\/sessions\/[^/]+\/apps$/u.test(url.pathname);
-
 
 e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 * timeScale }, async ({ page }) => {
   const { tarball } = await sharedPackedTarball('agent-bundle');

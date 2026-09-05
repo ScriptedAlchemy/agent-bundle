@@ -8,7 +8,6 @@ import type {
   RouteInvocationSummary,
 } from './route-invocation.ts';
 
-/** The complete result of one Workbench route invocation. */
 export interface RouteInvocation extends RouteInvocationSummary {
   readonly context: RequestContextProvenance;
   /** The final Agent Document; absent when rendering failed before a document existed. */

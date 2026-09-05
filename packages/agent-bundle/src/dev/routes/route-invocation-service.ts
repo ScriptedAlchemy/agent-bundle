@@ -387,11 +387,6 @@ const treeExited = (child: ChildProcess): Promise<boolean> => waitForProcessTree
   timeoutMilliseconds: childTerminationGraceMs,
 });
 
-/**
- * The child is detached into its own process group so that route or provider
- * code that leaves an interval, a socket, or a forked descendant behind is
- * reaped with it. SIGTERM first; SIGKILL to whatever the grace period leaves.
- */
 const terminateChild = async (child: ChildProcess): Promise<void> => {
   await terminateTree(child, 'SIGTERM');
   const graceful = await Promise.race([
