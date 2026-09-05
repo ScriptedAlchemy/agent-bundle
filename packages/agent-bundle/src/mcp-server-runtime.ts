@@ -29,7 +29,7 @@ import {
   runAgentRequest,
   unavailable,
 } from '@agent-bundle/runtime';
-import type { createEventRuntimeServer } from './events/ipc.ts';
+import type { createEventRuntimeServer, EventRuntimeTransportError } from './events/ipc.ts';
 import type { createCanonicalEventProps, projectEventDocument } from './events/project.ts';
 import { createTaskAugmentedMcpServer, type TaskAugmentedMcpServer } from './mcp-tasks.ts';
 import { canonicalAgentEvents, type CanonicalAgentEvent } from './routes/public.ts';
@@ -731,6 +731,35 @@ const noticeDiagnostic = (line: string): void => {
 
 const describeError = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
+/** stderr only: stdout is the protocol stream. */
+const eventRuntimeDiagnostic = (line: string): void => {
+  process.stderr.write(`agent-bundle event runtime: ${line}\n`);
+};
+
+/** How long one takeover-failure message stays reported before the same message earns another line. */
+const STANDBY_ERROR_REPEAT_INTERVAL_MS = 30_000;
+
+/**
+ * Turns the standby loop's recoverable failures into stderr lines without
+ * repeating one per probe tick: a message is reported when first seen and
+ * again once `STANDBY_ERROR_REPEAT_INTERVAL_MS` has passed since its last
+ * line, so a takeover that keeps failing the same way stays visible at one
+ * line per half minute while a new failure mode is reported at once.
+ */
+export const createStandbyErrorReporter = (
+  report: (line: string) => void,
+  now: () => number = Date.now,
+): ((error: EventRuntimeTransportError) => void) => {
+  const lastReportedAt = new Map<string, number>();
+  return (error) => {
+    const at = now();
+    const previous = lastReportedAt.get(error.message);
+    if (previous !== undefined && at - previous < STANDBY_ERROR_REPEAT_INTERVAL_MS) return;
+    lastReportedAt.set(error.message, at);
+    report(`takeover failed, still standing by: ${error.message}`);
+  };
+};
+
 /**
  * Installs `resources/subscribe` / `resources/unsubscribe` for the notice
  * inbox URI and returns the post-render observation that emits
@@ -878,6 +907,15 @@ const canonicalEvent = (event: string): CanonicalAgentEvent => {
  * The shared event runtime for one artifact: native envelopes arrive over the
  * IPC socket, render through the same dispatcher every route uses, and project
  * back into the host's own hook response shape.
+ *
+ * One process per install root owns the socket. Hosts routinely launch several
+ * sessions of the same plugin from one install (every Claude Code session
+ * Claude Desktop starts, Cursor importing a Claude-installed plugin), so a
+ * second server finding the socket owned is normal, not fatal: it starts in
+ * the `standby` role, serves its own MCP session, and takes the socket over
+ * when the owner exits. Both role changes, and any takeover failure other than
+ * "still owned", are announced on stderr only — the process's stdout is the
+ * MCP protocol stream.
  */
 const startEventRuntime = async (
   events: GeneratedEventRuntimeBinding,
@@ -888,7 +926,10 @@ const startEventRuntime = async (
   pluginRoot: Observed<AgentPluginIdentity> | undefined,
 ): Promise<{ readonly close: () => Promise<void> }> => {
   const startedAt = new Date().toISOString();
-  return events.createEventRuntimeServer({
+  // The socket path is known once the server exists; the standby loop only
+  // reports after its first probe interval, by which time it is.
+  let endpointLabel = events.endpointId;
+  const server = await events.createEventRuntimeServer({
     artifactEpoch: events.artifactEpoch,
     endpointId: events.endpointId,
     handle: async (request, signal) => settled(async () => {
@@ -966,7 +1007,19 @@ const startEventRuntime = async (
       pid: process.pid,
       startedAt,
     }),
+    onStandbyError: createStandbyErrorReporter((line) => {
+      eventRuntimeDiagnostic(`${endpointLabel} ${line}`);
+    }),
+    whenOwned: 'standby',
   });
+  endpointLabel = server.endpoint;
+  if (server.role() === 'standby') {
+    eventRuntimeDiagnostic(`${server.endpoint} is owned by another process; standing by`);
+    server.onRoleChange((role) => {
+      if (role === 'owner') eventRuntimeDiagnostic(`${server.endpoint} was released by its owner; took it over`);
+    });
+  }
+  return server;
 };
 
 /**
