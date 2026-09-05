@@ -2,7 +2,6 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 
 const workbenchRoot = join(import.meta.dirname, '..', '..');
-const vendorRoot = join(workbenchRoot, 'src', 'inspector', 'vendor');
 const requireFromWorkbench = createRequire(join(workbenchRoot, 'package.json'));
 
 export const workbenchNodeModules = join(workbenchRoot, 'node_modules');
