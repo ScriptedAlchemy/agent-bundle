@@ -664,19 +664,16 @@ const eventRouteHookWrapperSource = (
   entry: TargetHookWrapper,
   hostContractRevision: string,
   durableLineage = false,
-  includePreflight = true,
 ): string => {
   const route = entry.hook.eventRoute!;
   const standalone = standaloneEventRoute(route);
-  const preflight = includePreflight ? eventRoutePreflight(route) : undefined;
   // A standalone `session/end` (the warm runtime has usually already exited by
   // then) retires the durable lineage journal itself, so roots never outlive
   // their session; only projects whose state is workspace-durable have one.
   const retiresLineage = standalone && durableLineage && route.event === 'session/end';
   const projectBindings = [
     ...new Set([
-      ...(standalone || preflight !== undefined ? ['createCanonicalEventProps'] : []),
-      ...(preflight !== undefined ? ['executeEventPreflight', 'projectEventPreflightResult'] : []),
+      ...(standalone ? ['createCanonicalEventProps'] : []),
       ...(standalone ? ['projectEventDocument'] : []),
       'validateNativeEventEnvelope',
     ]),
@@ -687,7 +684,7 @@ const eventRouteHookWrapperSource = (
     // MCP process, which applied the layer itself when it started. First,
     // so it evaluates before every other module of the bundle — including a
     // preflight leaf that may read `process.env`.
-    ...(standalone || preflight !== undefined ? [operatorEnvLayerImport] : []),
+    ...(standalone ? [operatorEnvLayerImport] : []),
     "import { dirname, resolve } from 'node:path';",
     ...(standalone ? ["import { Worker } from 'node:worker_threads';"] : []),
     ...(standalone
@@ -704,7 +701,6 @@ const eventRouteHookWrapperSource = (
       : []),
     `import { EventRuntimeTransportError, requestEventRuntime } from ${JSON.stringify(eventIpcRuntimeSpecifier)};`,
     `import { ${projectBindings.join(', ')} } from ${JSON.stringify(eventProjectRuntimeSpecifier)};`,
-    ...(preflight === undefined ? [] : [`import preflight from ${JSON.stringify(preflight.source)};`]),
     '',
     `const artifactEpoch = ${JSON.stringify(eventArtifactEpochToken)};`,
     ...(standalone ? [`const flightArtifactEpoch = ${JSON.stringify(eventFlightArtifactEpochToken)};`] : []),
@@ -794,8 +790,8 @@ const eventRouteHookWrapperSource = (
                 '};',
               ]
             : []),
-          'const runStandalone = async (native, signal, props) => {',
-          '  const resolved = props ?? createCanonicalEventProps(canonicalEvent, native, target, nativeEvent, capabilityRevision, signal);',
+          'const runStandalone = async (native, signal) => {',
+          '  const resolved = createCanonicalEventProps(canonicalEvent, native, target, nativeEvent, capabilityRevision, signal);',
           ...(retiresLineage ? ['  await retireLineage(native, resolved.canonical.idempotencyKey, resolved.canonical.observedAt);'] : []),
           '  const sessionId = typeof native.session_id === "string" ? native.session_id : typeof native.conversation_id === "string" ? native.conversation_id : undefined;',
           '  const workspaceRoot = typeof native.cwd === "string" ? native.cwd : Array.isArray(native.workspace_roots) && typeof native.workspace_roots[0] === "string" ? native.workspace_roots[0] : undefined;',
@@ -829,42 +825,19 @@ const eventRouteHookWrapperSource = (
     '  try { parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { fail("stdin must contain exactly one JSON value"); }',
     '  const native = validateNativeEventEnvelope(parsed, { canonicalEvent, nativeEvent, target });',
     '  const controller = new AbortController();',
-    ...(preflight === undefined
-      ? []
-      : [
-          '  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(timeoutMs)]);',
-          '  const props = createCanonicalEventProps(canonicalEvent, native, target, nativeEvent, capabilityRevision, signal);',
-          '  const gate = await executeEventPreflight(preflight, {',
-          '    canonical: props.canonical,',
-          '    host: { name: target, nativeEvent },',
-          '    signal,',
-          '    terminal: { hostSurface: "hook", sharesTarget: false, stderr: { color: "none", kind: "none" }, stdout: { color: "none", kind: "none" } },',
-          '  });',
-          '  if (gate !== "execute") {',
-          '    const projected = projectEventPreflightResult(gate, canonicalEvent, target, nativeEvent, native);',
-          '    if (projected !== undefined) process.stdout.write(JSON.stringify(projected));',
-          '    return;',
-          '  }',
-        ]),
     '  let output;',
     '  if (runtimeMode === "standalone") {',
     ...(standalone
-      ? [preflight === undefined
-        ? '    output = await runStandalone(native, controller.signal);'
-        : '    output = await runStandalone(native, signal, props);']
+      ? ['    output = await runStandalone(native, controller.signal);']
       : ['    fail("standalone runtime was not compiled");']),
     '  } else {',
     '    try {',
-    ...(preflight === undefined
-      ? ['      output = await requestEventRuntime({ artifactEpoch, endpointId, event: canonicalEvent, hostContractRevision: capabilityRevision, native, signal: controller.signal, target, timeoutMs });']
-      : ['      output = await requestEventRuntime({ artifactEpoch, endpointId, event: canonicalEvent, hostContractRevision: capabilityRevision, native, signal, target, timeoutMs });']),
+    '      output = await requestEventRuntime({ artifactEpoch, endpointId, event: canonicalEvent, hostContractRevision: capabilityRevision, native, signal: controller.signal, target, timeoutMs });',
     '    } catch (error) {',
     ...(standalone
       ? [
           '      if (!(fallbackMode === "standalone" && error instanceof EventRuntimeTransportError && error.code === "runtime-unavailable")) throw error;',
-          preflight === undefined
-            ? '      output = await runStandalone(native, controller.signal);'
-            : '      output = await runStandalone(native, signal, props);',
+          '      output = await runStandalone(native, controller.signal);',
         ]
       : ['      throw error;']),
     '    }',
@@ -893,7 +866,14 @@ const eventRoutePreflightWrapperSource = (
   const route = entry.hook.eventRoute!;
   const preflight = eventRoutePreflight(route)!;
   const executorFile = entry.relativePath.split('/').at(-1)!.replace(/\.mjs$/u, '.execute.mjs');
-  const projectBindings = ['createCanonicalEventProps', 'executeEventPreflight', 'projectEventPreflightResult', 'validateNativeEventEnvelope'];
+  const projectBindings = [
+    'createCanonicalEventProps',
+    'createEventTracer',
+    'eventTraceExecution',
+    'executeEventPreflight',
+    'projectEventPreflightResult',
+    'validateNativeEventEnvelope',
+  ];
   return [
     operatorEnvLayerImport,
     "import { spawn } from 'node:child_process';",
@@ -905,6 +885,7 @@ const eventRoutePreflightWrapperSource = (
     `const capabilityRevision = ${JSON.stringify(hostContractRevision)};`,
     `const nativeEvent = ${JSON.stringify(entry.nativeEvent)};`,
     `const target = ${JSON.stringify(entry.target)};`,
+    `const runtimeMode = ${JSON.stringify(route.runtime)};`,
     `const timeoutMs = ${String(entry.hook.timeoutMs ?? 5_000)};`,
     `const executor = fileURLToPath(new URL(/* webpackIgnore: true */ ${JSON.stringify(`./${executorFile}`)}, import.meta.url));`,
     'const fail = (message) => { throw new Error(`Agent Bundle event route error: ${message}`); };',
@@ -915,6 +896,7 @@ const eventRoutePreflightWrapperSource = (
     '  child.stdout.on("data", (chunk) => stdout.push(chunk));',
     '  child.stderr.on("data", (chunk) => stderr.push(chunk));',
     '  child.once("error", reject);',
+    '  child.stdin.once("error", reject);',
     '  child.once("close", (code, childSignal) => {',
     '    const errorText = Buffer.concat(stderr).toString("utf8");',
     '    if (code !== 0 || childSignal !== null) { reject(new Error(errorText.trim() || `Deferred event executor failed (exit ${String(code)}, signal ${String(childSignal)}).`)); return; }',
@@ -937,17 +919,19 @@ const eventRoutePreflightWrapperSource = (
     '  const native = validateNativeEventEnvelope(parsed, { canonicalEvent, nativeEvent, target });',
     '  const signal = AbortSignal.timeout(timeoutMs);',
     '  const props = createCanonicalEventProps(canonicalEvent, native, target, nativeEvent, capabilityRevision, signal);',
+    '  const trace = createEventTracer({ execution: eventTraceExecution({ event: canonicalEvent, host: target, nativeEvent }) });',
     '  const gate = await executeEventPreflight(preflight, {',
     '    canonical: props.canonical,',
     '    host: { name: target, nativeEvent },',
     '    signal,',
     '    terminal: { hostSurface: "hook", sharesTarget: false, stderr: { color: "none", kind: "none" }, stdout: { color: "none", kind: "none" } },',
-    '  });',
+    '  }, trace);',
     '  if (gate !== "execute") {',
     '    const projected = projectEventPreflightResult(gate, canonicalEvent, target, nativeEvent, native);',
     '    if (projected !== undefined) process.stdout.write(JSON.stringify(projected));',
     '    return;',
     '  }',
+    '  trace.executeStart(runtimeMode);',
     '  const output = await runExecutor(input, signal);',
     '  if (output.length > 0) process.stdout.write(output);',
     '};',
@@ -1335,7 +1319,6 @@ export const planHooks = (
             wrapper,
             contract.hostContractRevision ?? target,
             model.state?.lifetime === 'workspace-durable',
-            false,
           ),
         }),
       virtualSource: hook.eventRoute === undefined

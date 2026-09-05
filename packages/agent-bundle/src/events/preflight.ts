@@ -2,6 +2,7 @@ import { settleBeforeAbort } from '../core/abort.ts';
 import type { CanonicalAgentEvent } from '../routes/events.ts';
 import type { AgentEventCanonicalIdentity } from '../routes/public.ts';
 import type { AgentTerminal } from '../terminal-capability.ts';
+import type { EventTracer } from './trace.ts';
 
 /**
  * The gate result a conventional event route's re-exported preflight may return (#595).
@@ -137,15 +138,24 @@ export const validateEventPreflightResult = (
 export const executeEventPreflight = async <E extends CanonicalAgentEvent>(
   preflight: EventPreflight<E>,
   context: EventPreflightContext<E>,
+  trace?: EventTracer,
 ): Promise<EventPreflightResult> => {
-  context.signal.throwIfAborted();
-  const frozenContext = Object.freeze({
-    canonical: context.canonical,
-    host: Object.freeze({ ...context.host }),
-    signal: context.signal,
-    terminal: context.terminal,
-  });
-  const value = await settleBeforeAbort(Promise.resolve().then(() => preflight(frozenContext)), context.signal);
-  context.signal.throwIfAborted();
-  return validateEventPreflightResult(value, context.canonical.event);
+  trace?.preflightStart();
+  try {
+    context.signal.throwIfAborted();
+    const frozenContext = Object.freeze({
+      canonical: context.canonical,
+      host: Object.freeze({ ...context.host }),
+      signal: context.signal,
+      terminal: context.terminal,
+    });
+    const value = await settleBeforeAbort(Promise.resolve().then(() => preflight(frozenContext)), context.signal);
+    context.signal.throwIfAborted();
+    const result = validateEventPreflightResult(value, context.canonical.event);
+    trace?.preflightOutcome(result);
+    return result;
+  } catch (error) {
+    trace?.failure('preflight', error);
+    throw error;
+  }
 };

@@ -119,6 +119,27 @@ export type EventTraceEvent =
 /** A consumer's sink. Called synchronously with a frozen event; exceptions are swallowed. */
 export type EventTraceObserver = (event: EventTraceEvent) => void;
 
+const eventTraceObserverSlot = Symbol.for('agent-bundle.event-trace-observer');
+const observerRegistry = globalThis as typeof globalThis & Record<symbol, EventTraceObserver | undefined>;
+
+/** Returns the process-local observer currently installed for kernel traces. */
+export const eventTraceObserver = (): EventTraceObserver | undefined =>
+  observerRegistry[eventTraceObserverSlot];
+
+/**
+ * Installs the process-local observer used by framework-created tracers.
+ * The disposer restores the previous observer without disturbing a newer one.
+ */
+export const installEventTraceObserver = (observer: EventTraceObserver): (() => void) => {
+  const previous = observerRegistry[eventTraceObserverSlot];
+  observerRegistry[eventTraceObserverSlot] = observer;
+  return () => {
+    if (observerRegistry[eventTraceObserverSlot] === observer) {
+      observerRegistry[eventTraceObserverSlot] = previous;
+    }
+  };
+};
+
 /**
  * The framework-owned emitter the kernel calls at each phase boundary. Every
  * method is safe to call at any time and never throws.
@@ -260,7 +281,8 @@ const disabledTracer = (execution: EventTraceExecution): EventTracer => {
  * the observer never changes what the caller sees.
  */
 export const createEventTracer = (options: CreateEventTracerOptions): EventTracer => {
-  const { execution, observer } = options;
+  const execution = options.execution;
+  const observer = options.observer ?? eventTraceObserver();
   if (observer === undefined) return disabledTracer(execution);
   const now = options.now ?? (() => performance.now());
   let sequence = 0;

@@ -331,8 +331,9 @@ payload-free view of the event kernel: `preflight.start`, `preflight.outcome`, `
 Each frozen event carries one `EventTraceExecution` identity, a monotonic timestamp and sequence,
 and only phase-specific metadata; failures use a bounded, stack-free `EventTraceErrorSummary`.
 `createEventTracer` is a no-op without an observer and isolates observer errors from execution.
-The trace types and helpers are exported from `agent-bundle`, `agent-bundle/api`, and
-`agent-bundle/event-project`.
+Developer tooling installs the process-local sink with `installEventTraceObserver`; the returned
+disposer restores the previous sink. The trace types and helpers are exported from
+`agent-bundle` and `agent-bundle/api`.
 
 ### Declaring route providers
 

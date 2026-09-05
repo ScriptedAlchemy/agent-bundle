@@ -100,7 +100,9 @@ export {
   createEventTracer,
   eventTraceEventKinds,
   eventTraceExecution,
+  eventTraceObserver,
   eventTracePhases,
+  installEventTraceObserver,
   summarizeEventTraceError,
 } from './events/trace.ts';
 export type {

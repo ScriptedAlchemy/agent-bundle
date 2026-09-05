@@ -12,6 +12,7 @@ import { readModuleImports } from '../src/build/module-imports.ts';
 import { validateArtifact } from '../src/build/validate-artifact.ts';
 import { compileRouteGraph } from '../src/routes/graph.ts';
 import { isRelativeSpecifier, moduleCandidates, readModuleFromDisk } from '../src/routes/module-candidates.ts';
+import { runNodeScript } from './support/run-node-script.ts';
 
 /**
  * #595's emitted-graph proof, pre-staged at the built-artifact level: the
@@ -23,11 +24,7 @@ import { isRelativeSpecifier, moduleCandidates, readModuleFromDisk } from '../sr
  * `new URL('./x.mjs', import.meta.url)`) in modules that stay self-contained
  * (the AB6005 rule: Node built-ins and in-artifact relative imports only).
  *
- * Runs a real Rslib build, so it belongs in `integrationTestFiles`
- * (rstest.integration-tests.ts) when it lands; until then it carries its own
- * timeouts. Contract seams the compiler does not fill yet on this branch:
- * the standalone wrapper never imports the preflight leaf, and it inlines
- * `@agent-bundle/runtime` (React, the Flight client, the render dispatcher).
+ * Runs a real Rslib build, so it belongs in `integrationTestFiles`.
  */
 
 const sentinels = Object.freeze({
@@ -67,7 +64,8 @@ const projectFiles: Readonly<Record<string, string>> = {
     'export default ({ canonical }: { readonly canonical: { readonly payload?: Record<string, unknown> } }) => {',
     "  const tool = canonical.payload?.['toolInput'] as { readonly value?: { readonly command?: unknown } } | undefined;",
     "  const command = typeof tool?.value?.command === 'string' ? tool.value.command : '';",
-    "  return mentionsCargo(command) ? 'execute' : { outcome: 'deny', reason: PREFLIGHT_LEAF_SENTINEL };",
+    "  if (mentionsCargo(command)) return 'execute';",
+    "  return command === 'blocked' ? { outcome: 'deny', reason: PREFLIGHT_LEAF_SENTINEL } : { outcome: 'continue' };",
     '};',
     '',
   ].join('\n'),
@@ -79,7 +77,7 @@ const projectFiles: Readonly<Record<string, string>> = {
     "export { default as preflight } from './before.preflight.js';",
     "export const config = { providers: ['daemonProbe'], runtime: 'standalone' };",
     'export default async function ToolBefore({ canonical }) {',
-    '  return <Agent.Result value={{ event: canonical.event, sentinel: RENDERED_ROUTE_SENTINEL }}><Agent.Context>{RENDERED_ROUTE_SENTINEL}</Agent.Context></Agent.Result>;',
+    "  return <Agent.Result value={{ outcome: 'deny', reason: RENDERED_ROUTE_SENTINEL }}><Agent.Context>{canonical.event}</Agent.Context></Agent.Result>;",
     '}',
     '',
   ].join('\n'),
@@ -282,6 +280,41 @@ describe('preflight artifact graph (#595)', () => {
     }
     const diagnostics = await validateArtifact({ artifactRoot: output });
     expect(diagnostics.filter((diagnostic) => diagnostic.code === 'AB6005' || diagnostic.severity === 'error')).toEqual([]);
+  });
+
+  it('runs continue, deny, and deferred execute outcomes through the published hook process', async () => {
+    const invoke = (command: string) => runNodeScript({
+      args: [join(artifactRoot, entryPath)],
+      input: JSON.stringify({
+        cwd: root,
+        hook_event_name: 'PreToolUse',
+        session_id: 'session-1',
+        tool_input: { command },
+        tool_name: 'Bash',
+        tool_use_id: 'use-1',
+        transcript_path: join(root, 'transcript.json'),
+      }),
+    });
+
+    await expect(invoke('echo hello')).resolves.toEqual({ code: 0, stderr: '', stdout: '' });
+    const denied = await invoke('blocked');
+    expect(denied.code).toBe(0);
+    expect(denied.stderr).toBe('');
+    expect(JSON.parse(denied.stdout)).toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'deny',
+        permissionDecisionReason: sentinels.preflightLeaf,
+      },
+    });
+    const executed = await invoke('cargo check');
+    expect(executed.code).toBe(0);
+    expect(executed.stderr).toBe('');
+    expect(JSON.parse(executed.stdout)).toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'deny',
+        permissionDecisionReason: sentinels.renderedRoute,
+      },
+    });
   });
 
   it('carries the preflight leaf in the public entry\'s static graph and names it among the entry\'s source inputs', () => {

@@ -15,9 +15,11 @@ export {
 } from './preflight.ts';
 export {
   createEventTracer,
+  eventTraceObserver,
   eventTraceEventKinds,
   eventTraceExecution,
   eventTracePhases,
+  installEventTraceObserver,
   summarizeEventTraceError,
   type CreateEventTracerOptions,
   type EventTraceErrorSummary,

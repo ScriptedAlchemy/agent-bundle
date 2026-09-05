@@ -1219,7 +1219,7 @@ the route names, never a second event route. A `preflight` declared inline in
 the route module (`export const preflight = …`, `export function preflight`)
 is rejected too: evaluating the route module evaluates its rendering and
 provider imports, the very cost the gate exists to avoid. Every rejected form
-is `AB4838`, once per route on the route module; the route compiles without a
+is `AB4840`, once per route on the route module; the route compiles without a
 gate beside the error, and because the diagnostic is an error the build fails
 instead of silently taking the expensive path.
 
@@ -1237,7 +1237,7 @@ the generated `AgentBundleProviders` declares; `processLifetime` is not one of
 them and must not be declared. The declaration is judged when the route graph
 compiles: a declaration that is not an array of string literals, a key listed
 twice, the reserved `processLifetime`, or a key naming no discovered provider
-module is `AB4839`, once per route with every defect in one message; a
+module is `AB4841`, once per route with every defect in one message; a
 declaration with any defect selects nothing, so the build fails rather than
 resolving a provider set the author did not write.
 

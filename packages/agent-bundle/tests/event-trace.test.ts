@@ -4,7 +4,9 @@ import {
   createEventTracer,
   eventTraceEventKinds,
   eventTraceExecution,
+  eventTraceObserver,
   eventTracePhases,
+  installEventTraceObserver,
   summarizeEventTraceError,
   type EventTraceErrorSummary,
   type EventTraceEvent,
@@ -185,6 +187,19 @@ it('emits a complete executing trace with monotonic sequence, timestamps, and ph
   expect(events[2]).toMatchObject({ kind: 'execute.start', runtime: 'standalone' });
   expect(events[4]).toMatchObject({ count: 2, durationMs: 10, kind: 'providers.finish' });
   expect(events[6]).toMatchObject({ durationMs: 10, kind: 'render.finish' });
+});
+
+it('uses the process observer for framework-created tracers and restores it safely', () => {
+  const { events, observer } = collect();
+  const dispose = installEventTraceObserver(observer);
+  expect(eventTraceObserver()).toBe(observer);
+  const tracer = createEventTracer({ execution, now: ticking() });
+  expect(tracer.enabled).toBe(true);
+  tracer.preflightStart();
+  expect(events).toHaveLength(1);
+  dispose();
+  expect(eventTraceObserver()).toBeUndefined();
+  expect(createEventTracer({ execution }).enabled).toBe(false);
 });
 
 it('summarizes gate results without carrying the reason text', () => {
