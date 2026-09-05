@@ -18,8 +18,9 @@ import type { Lifecycle, LifecycleClient, LifecycleTarget } from '../lifecycles/
 import type { WorkbenchLocation } from '../shell/workbench-location.ts';
 import type { ApplicationLeaf } from './application-tree-model.ts';
 import { ExecutableRouteWorkspace } from './executable-route-workspace.tsx';
+import { outcomeLabel, statusLabel } from './invocation-model.ts';
 import { displayAgentDocumentValue } from './rendered-document.tsx';
-import type { ResultTabDefinition } from './result-tabs.tsx';
+import { OutcomeBadge, StatusBadge, type ResultTabDefinition } from './result-tabs.tsx';
 import { requestContextRows } from './route-inspector.tsx';
 import {
   invocationOf,
@@ -142,7 +143,8 @@ const CanonicalResultTab = ({ invocation }: { readonly invocation?: RouteInvocat
   return <div className="event-canonical">
     <Rows rows={[
       { label: 'Document status', value: invocation.document?.status ?? 'no document' },
-      { label: 'Invocation status', value: invocation.status },
+      { label: 'Execution', value: statusLabel(invocation.status) },
+      { label: 'Outcome', value: invocation.outcome === undefined ? 'none (the boundary did not complete)' : outcomeLabel(invocation.outcome) },
     ]} />
     {value === undefined
       ? <Empty>The document carries no value; the decision is expressed by its nodes (see Rendered).</Empty>
@@ -196,7 +198,8 @@ const ReplayTab = ({ controller, defaultHost, lifecycle }: {
       ? <Empty>No host-submitted invocations of this route have been recorded in this dev session.</Empty>
       : <ol className="result-trace">{observed.map((summary) => <li className="result-trace-entry" key={summary.id}>
         <button onClick={() => controller.load(summary.id)} type="button">
-          <span className={`result-trace-status result-trace-status--${summary.status}`}>{summary.status}</span>
+          <StatusBadge status={summary.status} />
+          {summary.outcome === undefined ? undefined : <OutcomeBadge outcome={summary.outcome} />}
           <span className="result-trace-host">{summary.event?.host}</span>
           <span className="result-trace-time">{summary.startedAt}</span>
           <span className="result-trace-id">{summary.id}</span>

@@ -335,7 +335,7 @@ describe('generated entry templates', () => {
     // the generator without #564 (hash of the same input on this commit's
     // `entry-shell.ts`; #596's projection steps and `kind: 'cli'` request
     // moved the pin from the pre-#564 value, #637's `stateAnchor` moved it
-    // again).
+    // again, #643's `routeInvocationExitCode` export moved it once more).
     const withoutWeb = entryShellModule.generatedCliBinEntrySource({
       commands: [command],
       plugin: { name: 'fixture', version: '1.0.0' },
@@ -343,7 +343,7 @@ describe('generated entry templates', () => {
       stateFallback: 'artifact',
     });
     expect(createHash('sha256').update(withoutWeb).digest('hex'))
-      .toBe('9f76d9d0664efaf028e15cfd5378e121e352aeea714f5820331dfb64845a821e');
+      .toBe('fad5a6fe047fe71e2e061a5f7d1880d39502afaa5e725538e7de364499334580');
     expect(withoutWeb).not.toContain('agent-bundle/web-host');
     expect(withoutWeb).not.toContain('web: Object.freeze({');
   });

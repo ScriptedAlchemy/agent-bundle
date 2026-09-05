@@ -239,6 +239,23 @@ reported as diagnostics.
 See the [diagnostics reference](../../reference/diagnostics.md) for the individual triggers and
 recovery guidance.
 
+The envelope, the `route.invocation` event payload, and the route workspace report two separate
+facts. `status` says whether the execution boundary completed; `outcome` says what a completed
+run meant, judged by the surface the route runs through. A failed boundary carries no `outcome`,
+and a completed run always carries one, so a represented error or a non-zero exit is never
+reported as plain success.
+
+| Field | Value | Meaning |
+| --- | --- | --- |
+| `status` | `succeeded` | The child completed a final document (or a plain script exited). |
+| `status` | `failed` | The boundary never completed: crash, timeout, abort, or an `AB825x` diagnostic. |
+| `outcome` | `{ kind: "success" }` | The projected result is a success by the route's surface. |
+| `outcome` | `{ kind: "represented-error", summary }` | The MCP projection carries `isError: true` (a non-`success` Agent Document, such as `Agent.Error`), or an event route's decision is `deny`. `summary` lists the `Agent.Error` codes and messages, or the deny reason. |
+| `outcome` | `{ kind: "process-exit", exitCode }` | A CLI or script route completed and its generated executable set a non-zero exit code — the bin's own `exitCode` policy applied to the validated result, or `1` for a non-`success` document. A zero exit reports `success`. |
+
+The Workbench status line shows the execution status (`Completed` / `Failed`) beside an outcome
+badge, and Trace lists both for every entry.
+
 ## The same session programmatically
 
 The public `startDevServer` export accepts the options the CLI flags map to (`root`, `port`,

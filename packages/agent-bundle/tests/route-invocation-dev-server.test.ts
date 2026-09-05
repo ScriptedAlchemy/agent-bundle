@@ -64,6 +64,20 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         '}',
         '',
       ].join('\n'),
+      'src/cli/exit.tsx': [
+        "import { Agent } from '@agent-bundle/runtime';",
+        "import { createElement } from 'react';",
+        "import { z } from 'zod';",
+        '',
+        "export const config = { description: 'Exits with the requested code.', exitCode: 'result', positionals: ['code'] };",
+        'export const inputSchema = z.object({ code: z.number().int().min(0).max(255) }).strict();',
+        'export const resultSchema = z.object({ exitCode: z.number() }).strict();',
+        '',
+        'export default async function Exit({ input }) {',
+        '  return createElement(Agent.Result, { value: { exitCode: input.code } }, createElement(Agent.Text, null, `Exiting ${input.code}.`));',
+        '}',
+        '',
+      ].join('\n'),
       'src/events/tool/after.preflight.ts': "export default () => 'execute';\n",
       'src/events/tool/after.tsx': [
         "import { Agent } from '@agent-bundle/runtime';",
@@ -103,6 +117,18 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         "  if (context.state === undefined) throw new Error('state unavailable');",
         "  const committed = await context.state.dispatch('incremented', { by: 1 }, { idempotencyKey: `${input.key}:${crypto.randomUUID()}` });",
         '  return createElement(Agent.Result, { value: { count: committed.state.count } });',
+        '}',
+        '',
+      ].join('\n'),
+      'src/mcp/status/tools/refuse.tsx': [
+        "import { Agent } from '@agent-bundle/runtime';",
+        "import { createElement } from 'react';",
+        "import { z } from 'zod';",
+        '',
+        'export const inputSchema = z.object({ reason: z.string() }).strict();',
+        'export const resultSchema = z.object({ refused: z.boolean() }).strict();',
+        'export default async function Refuse({ input }) {',
+        "  return createElement(Agent.Result, { value: { refused: true } }, createElement(Agent.Error, { code: 'refused' }, `Refused: ${input.reason}`));",
         '}',
         '',
       ].join('\n'),
@@ -207,6 +233,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     expect(toolResponse.status).toBe(200);
     const tool = await toolResponse.json() as RouteInvocationResponse;
     expect(tool.invocation.status, JSON.stringify(tool.invocation.diagnostics)).toBe('succeeded');
+    expect(tool.invocation.outcome).toEqual({ kind: 'success' });
     expect(tool.invocation.events.at(-1)?.type).toBe('complete');
     expect(tool.invocation.document).toBeDefined();
     expect(tool.invocation.projection.mcp).toBeDefined();
@@ -231,6 +258,24 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     ]);
     for (const entry of tool.invocation.timings) expect(entry.durationMs).toBeGreaterThanOrEqual(0);
 
+    // A completed run whose document represents an error: the boundary
+    // succeeded, the MCP projection says `isError`, and the outcome says so too.
+    const refuseResponse = await fetch(`${server.url}/api/routes/invocations`, {
+      body: JSON.stringify({ input: { reason: 'policy' }, routeId: 'tool:status/refuse' }),
+      headers,
+      method: 'POST',
+    });
+    expect(refuseResponse.status).toBe(200);
+    const refuse = await refuseResponse.json() as RouteInvocationResponse;
+    expect(refuse.invocation.status, JSON.stringify(refuse.invocation.diagnostics)).toBe('succeeded');
+    expect(refuse.invocation.document?.status).toBe('represented-error');
+    expect(refuse.invocation.projection.mcp).toMatchObject({ isError: true });
+    expect(refuse.invocation.outcome).toEqual({
+      kind: 'represented-error',
+      summary: '[refused] Refused: policy',
+    });
+    expect(refuse.invocation.result).toEqual({ refused: true });
+
     const eventResponse = await fetch(`${server.url}/api/routes/invocations`, {
       body: JSON.stringify({
         input: {
@@ -253,6 +298,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     expect(eventResponse.status, eventFailure).toBe(200);
     const event = await eventResponse.json() as RouteInvocationResponse;
     expect(event.invocation.status).toBe('succeeded');
+    expect(event.invocation.outcome).toEqual({ kind: 'success' });
     expect(event.invocation.events.at(-1)?.type).toBe('complete');
     expect(event.invocation.document).toBeDefined();
     expect(event.invocation.projection.hosts?.[0]).toMatchObject({ host: 'claude' });
@@ -303,6 +349,11 @@ it('invokes compiled tool and event routes through the foreground server', { tim
       const invoked = await response.json() as RouteInvocationResponse;
       expect(invoked.invocation.status, JSON.stringify(invoked.invocation.diagnostics)).toBe('succeeded');
       expect(invoked.invocation.result).toEqual(expected);
+      expect(invoked.invocation.outcome).toEqual(
+        expected.outcome === 'deny'
+          ? { kind: 'represented-error', summary: 'deny: blocked by preflight' }
+          : { kind: 'success' },
+      );
       expect(invoked.invocation.events).toEqual([]);
       expect(invoked.invocation.trace?.map((trace) => trace.kind)).toEqual([
         'preflight.start',
@@ -336,10 +387,38 @@ it('invokes compiled tool and event routes through the foreground server', { tim
           text: expect.stringContaining('Hello, Ada.'),
         },
       },
+      outcome: { kind: 'success' },
       result: { message: 'Hello, Ada.' },
       status: 'succeeded',
       surface: { args: ['Ada'], command: 'greet', kind: 'cli' },
     });
+
+    // A completed run whose bin exits non-zero: `status` stays `succeeded`
+    // (the boundary completed), the outcome carries the bin's own exit code,
+    // and the generated bin agrees when run as a real process. `unit-render`
+    // has no bin and no argv parser, so it takes the parsed input and applies
+    // the same `cli-entry.ts` exit-code rule to the route's policy.
+    const exitInvocation = async (mode?: 'unit-render'): Promise<RouteInvocationResponse> => {
+      const response = await fetch(`${server!.url}/api/routes/invocations`, {
+        body: JSON.stringify({
+          ...(mode === undefined ? { args: ['3'] } : { input: { code: 3 }, mode }),
+          routeId: 'cli:exit',
+        }),
+        headers,
+        method: 'POST',
+      });
+      expect(response.status).toBe(200);
+      return response.json() as Promise<RouteInvocationResponse>;
+    };
+    for (const exit of [await exitInvocation(), await exitInvocation('unit-render')]) {
+      expect(exit.invocation, JSON.stringify(exit.invocation.diagnostics)).toMatchObject({
+        kind: 'cli',
+        outcome: { exitCode: 3, kind: 'process-exit' },
+        projection: { cli: { exitCode: 3, text: expect.stringContaining('Exiting 3.') } },
+        result: { exitCode: 3 },
+        status: 'succeeded',
+      });
+    }
 
     const projectedCliResponse = await fetch(`${server.url}/api/routes/invocations`, {
       body: JSON.stringify({
@@ -382,6 +461,15 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     });
     expect(generatedBin.code, generatedBin.stderr).toBe(0);
     expect(projectedCli.invocation.result).toEqual(JSON.parse(generatedBin.stdout));
+    const generatedExit = await runNodeScript({
+      args: [join(artifactRoot, 'bin', binName), 'exit', '3'],
+      cwd: project.root,
+      env: {
+        [pluginRootEnvAnchor]: artifactRoot,
+        [pluginStateRootEnvAnchor]: stateRoot,
+      },
+    });
+    expect(generatedExit.code, generatedExit.stderr).toBe(3);
 
     const mismatchedCommand = await fetch(`${server.url}/api/routes/invocations`, {
       body: JSON.stringify({
@@ -460,7 +548,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
 
     const published = await readEvent(stream, 'route.invocation');
     expect(published).toMatchObject({
-      payload: { invocation: { routeId: 'tool:status/report', status: 'succeeded' } },
+      payload: { invocation: { outcome: { kind: 'success' }, routeId: 'tool:status/report', status: 'succeeded' } },
       type: 'route.invocation',
     });
 

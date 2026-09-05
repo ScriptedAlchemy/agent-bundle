@@ -6,9 +6,11 @@ import type { InvocationBackend } from '../src/application/invocation-backend.ts
 import {
   idleInvocationState,
   invocationSummaryOf,
+  outcomeLabel,
   readLastInput,
   reduceInvocationState,
   selectBackend,
+  statusLabel,
   writeLastInput,
 } from '../src/application/invocation-model.ts';
 
@@ -28,6 +30,7 @@ const invocation = Object.freeze({
   input: Object.freeze({ title: 'Dune' }),
   kind: 'tool' as const,
   manifestDigest: 'manifest-a',
+  outcome: Object.freeze({ kind: 'success' as const }),
   projection: Object.freeze({}),
   providers: Object.freeze([]),
   routeId: 'tool:curator/search_audible',
@@ -116,6 +119,7 @@ it('selects the first accepting backend and creates exact summaries', () => {
     input: invocation.input,
     kind: invocation.kind,
     manifestDigest: invocation.manifestDigest,
+    outcome: { kind: 'success' },
     routeId: invocation.routeId,
     source: invocation.source,
     sourceRevision: invocation.sourceRevision,
@@ -124,4 +128,13 @@ it('selects the first accepting backend and creates exact summaries', () => {
     surface: { kind: 'mcp' },
     timings: [],
   });
+});
+
+it('labels execution status and outcome as distinct facts', () => {
+  expect(statusLabel('succeeded')).toBe('Completed');
+  expect(statusLabel('failed')).toBe('Failed');
+  expect(outcomeLabel({ kind: 'success' })).toBe('Success');
+  expect(outcomeLabel({ kind: 'represented-error', summary: '[refused] Refused: policy' }))
+    .toBe('Represented error · [refused] Refused: policy');
+  expect(outcomeLabel({ exitCode: 3, kind: 'process-exit' })).toBe('Exit code 3');
 });

@@ -751,6 +751,19 @@ const resultExitCode = (policy: 'result' | 'zero', result: unknown): number => {
   return exitCode;
 };
 
+/**
+ * The exit code a completed rendered run sets once its value has passed the
+ * route's `resultSchema`: 1 for a non-`success` document, else the policy's
+ * code. Throws when the `result` policy finds no valid `exitCode` (the shell
+ * reports the message and exits 1). Generated bins export this decision so
+ * the Workbench production path records the bin's own verdict.
+ */
+export const renderedDocumentExitCode = (
+  policy: 'result' | 'zero',
+  document: Pick<CliRenderedDocument, 'status'>,
+  value: unknown,
+): number => document.status === 'success' ? resultExitCode(policy, value) : 1;
+
 const markdownBlocks = (node: CliRenderedDocumentNode): readonly string[] => {
   switch (node.kind) {
     case 'result':
@@ -936,8 +949,7 @@ const runRenderedInvocation = async (options: RenderedRunOptions): Promise<numbe
       throw new TypeError(`Unsupported output mode ${String(unreachable)}.`);
     }
   }
-  if (complete.status !== 'success') return 1;
-  return resultExitCode(options.exitCode, value);
+  return renderedDocumentExitCode(options.exitCode, complete, value);
 };
 
 /**

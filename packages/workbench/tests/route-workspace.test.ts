@@ -160,6 +160,38 @@ describe('RouteWorkspace dispatch', () => {
     expect(markup).not.toContain('Handler threw');
   });
 
+  it('shows the outcome of a completed run beside its execution status, never as plain success', () => {
+    const render = (outcome: NonNullable<typeof invocation.outcome>): string => {
+      const envelope = { ...invocation, outcome };
+      return renderToStaticMarkup(createElement(ExecutableRouteWorkspace, {
+        controller: controllerWith({
+          history: [summaryOf(envelope)],
+          state: { durationMs: 432, invocation: envelope, phase: 'succeeded' },
+        }),
+        leaf: toolLeaf,
+        onNavigate: noop,
+        tab: 'trace',
+      }));
+    };
+
+    const represented = render({ kind: 'represented-error', summary: '[refused] Refused: policy' });
+    expect(represented).toContain('Completed in 432 ms');
+    expect(represented).toContain('route-outcome--represented-error');
+    expect(represented).toContain('Represented error · [refused] Refused: policy');
+    // Once on the status line, once on the Trace entry.
+    expect(represented.split('route-outcome--represented-error')).toHaveLength(3);
+    expect(represented).not.toContain('route-outcome--success');
+
+    const exited = render({ exitCode: 3, kind: 'process-exit' });
+    expect(exited).toContain('route-outcome--process-exit');
+    expect(exited).toContain('Exit code 3');
+    expect(exited).not.toContain('route-outcome--success');
+
+    const success = render({ kind: 'success' });
+    expect(success).toContain('route-outcome--success');
+    expect(success).toContain('>Success<');
+  });
+
   it('mounts the host selector for an event leaf', () => {
     const markup = renderToStaticMarkup(createElement(RouteWorkspace, {
       backends: [fakeBackend()],

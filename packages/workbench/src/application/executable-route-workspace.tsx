@@ -22,10 +22,11 @@ import {
   readLastInput,
   reduceInvocationState,
   selectBackend,
+  statusLabel,
   writeLastInput,
   type InvocationState,
 } from './invocation-model.ts';
-import { ResultTabs, type ResultTabDefinition } from './result-tabs.tsx';
+import { OutcomeBadge, ResultTabs, type ResultTabDefinition } from './result-tabs.tsx';
 import {
   defaultRouteInputValue,
   RouteInputEditor,
@@ -158,9 +159,9 @@ const stateSummary = (state: InvocationState): string => {
     case 'running':
       return 'Running…';
     case 'succeeded':
-      return `Succeeded${state.durationMs === undefined ? '' : ` in ${String(state.durationMs)} ms`}`;
+      return `${statusLabel('succeeded')}${state.durationMs === undefined ? '' : ` in ${String(state.durationMs)} ms`}`;
     case 'failed':
-      return `Failed${state.durationMs === undefined ? '' : ` after ${String(state.durationMs)} ms`}`;
+      return `${statusLabel('failed')}${state.durationMs === undefined ? '' : ` after ${String(state.durationMs)} ms`}`;
     default: {
       const exhaustive: never = state;
       return exhaustive;
@@ -172,6 +173,7 @@ const InvocationStatusLine = ({ backendKind, state }: { readonly backendKind?: s
   const invocation = invocationOf(state);
   return <p aria-live="polite" className={`route-status route-status--${state.phase}`} data-testid="route-status" role="status">
     <span className="route-status-phase">{stateSummary(state)}</span>
+    {invocation?.outcome === undefined ? undefined : <OutcomeBadge outcome={invocation.outcome} />}
     {backendKind === undefined ? undefined : <span className="route-status-backend">via {backendKind}</span>}
     {invocation === undefined ? undefined : <span className="route-status-id">{invocation.id}</span>}
     {invocation?.correlationId === undefined ? undefined : <span className="route-status-correlation">correlation {invocation.correlationId}</span>}

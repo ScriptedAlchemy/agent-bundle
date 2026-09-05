@@ -22,6 +22,7 @@ const summary = (id: string, completedAt: string, overrides: Partial<RouteInvoca
   input: {},
   kind: 'tool',
   manifestDigest: 'a'.repeat(64),
+  outcome: { kind: 'success' },
   routeId: 'tool:curator/search_audible',
   source: 'src/mcp/curator/tools/search_audible.tsx',
   sourceRevision: 'r',

@@ -14,6 +14,7 @@ import {
   type AgentRenderInvocation,
 } from '@agent-bundle/runtime';
 
+import { renderedDocumentExitCode } from '../../cli-entry.ts';
 import type { EventTraceEvent, EventTraceObserver, EventTracer } from '../../events/trace.ts';
 import type { JsonObject, JsonValue } from '../../core/strict-json.ts';
 import { pluginRootEnvAnchor, pluginStateRootEnvAnchor } from '../../core/types.ts';
@@ -31,6 +32,8 @@ import type { RouteInvocationProvider, RouteInvocationTiming } from './route-inv
 
 interface CompiledCliInvocationModule {
   prepareRouteInvocation(routeId: string, argv: readonly string[]): unknown;
+  /** The exit code the bin sets for this completed document (`cli-entry.ts` rules, decided by the bin). */
+  routeInvocationExitCode(routeId: string, document: AgentDocument): number;
 }
 
 interface CompiledEventPreflight {
@@ -123,11 +126,21 @@ const eventWrapperPath = (
   return existsSync(plain) ? plain : undefined;
 };
 
+const isCliInvocationModule = (module: Partial<CompiledCliInvocationModule>): module is CompiledCliInvocationModule =>
+  typeof module.prepareRouteInvocation === 'function' && typeof module.routeInvocationExitCode === 'function';
+
+interface PreparedInput {
+  /** The generated bin that prepared a CLI-surface input; it also decides the run's exit code. */
+  readonly cli?: CompiledCliInvocationModule;
+  readonly input: JsonValue;
+  readonly preflight?: CompiledEventPreflight;
+}
+
 const prepareInput = async (
   request: ProductionRequest,
   traceEvents: EventTraceEvent[],
   signal: AbortSignal,
-): Promise<Readonly<{ readonly input: JsonValue; readonly preflight?: CompiledEventPreflight }>> => {
+): Promise<PreparedInput> => {
   const route = request.manifest.routes[request.routeId];
   if (request.surface.kind === 'cli') {
     const binRoot = join(request.artifactRoot, 'bin');
@@ -142,8 +155,9 @@ const prepareInput = async (
       .sort();
     for (const name of bins) {
       const module = await importedModule<Partial<CompiledCliInvocationModule>>(join(binRoot, name));
-      if (typeof module.prepareRouteInvocation !== 'function') continue;
+      if (!isCliInvocationModule(module)) continue;
       return {
+        cli: module,
         input: module.prepareRouteInvocation(request.routeId, request.surface.args) as JsonValue,
       };
     }
@@ -481,7 +495,7 @@ export const renderProductionRoute = async (
   const productionRequest = request as ProductionRequest;
   const traceEvents: EventTraceEvent[] = [];
   const controller = new AbortController();
-  let prepared: Awaited<ReturnType<typeof prepareInput>>;
+  let prepared: PreparedInput;
   try {
     prepared = await prepareInput(productionRequest, traceEvents, controller.signal);
   } catch (error) {
@@ -510,11 +524,21 @@ export const renderProductionRoute = async (
       prepared.preflight?.trace,
     );
     const result = rendered.document.value;
+    const kind = request.manifest.routes[request.routeId]?.kind;
+    // A process surface records the exit code its generated executable sets:
+    // the bin's own decision for CLI surfaces; the rendered-script envelope's
+    // fixed `zero` policy (`runGeneratedRenderedScript`) for rendered scripts.
+    const exitCode = prepared.cli !== undefined
+      ? prepared.cli.routeInvocationExitCode(request.routeId, rendered.document)
+      : kind === 'script'
+        ? renderedDocumentExitCode('zero', rendered.document, result)
+        : undefined;
     return Object.freeze({
       document: rendered.document,
       events: rendered.events,
+      ...(exitCode === undefined ? {} : { exitCode }),
       input: prepared.input,
-      ...(request.manifest.routes[request.routeId]?.kind === 'tool'
+      ...(kind === 'tool'
         ? { mcp: documentToCallToolResult(rendered.document, { structuredContent: result }) as JsonObject }
         : {}),
       observed: {

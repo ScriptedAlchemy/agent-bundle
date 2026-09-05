@@ -185,6 +185,7 @@ export const invocation: RouteInvocation = {
   input: { title: 'Dune' },
   kind: 'tool',
   manifestDigest: 'digest-1',
+  outcome: { kind: 'success' },
   projection: {
     mcp: { content: [{ text: 'Found 8 candidates for Dune.', type: 'text' }], structuredContent: { candidates: 8 } },
   },
