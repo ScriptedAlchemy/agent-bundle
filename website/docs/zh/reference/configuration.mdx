@@ -21,7 +21,7 @@ export default defineConfig({
 | 字段 | 类型 | 默认值 |
 | --- | --- | --- |
 | `plugin` | `{ name, description?, logo?, ... }` | **必填。** |
-| `targets` | `string[]` | `['portable']`。 |
+| `targets` | `string[]` | `['portable']`——唯一以 `default: true` 注册的适配器；`--target` 会同时覆盖配置值与默认值。 |
 | `skills` | `string[]` | `src/skills/*` 约定。 |
 | `hooks` | `Partial<Record<CanonicalHookEvent, ...>>` | `src/hooks/*` 约定。 |
 | `mcp` | `{ servers: Record<string, ...> }` | `src/mcp/*` 约定。 |
@@ -35,7 +35,7 @@ export default defineConfig({
 | `payload` | `Record<string, string \| { source, targets? }>` | 无。 |
 | `state` | `false` | `src/state.ts` 约定。 |
 | `notices` | `{ retention?: { terminalTtl?, maxTerminal?, maxJournalBytes? } }` | 运行时默认值（`7d`、`500`、`16777216`）。 |
-| `marketplace` | `boolean` | 由适配器选择。 |
+| `marketplace` | `boolean` | `false`。 |
 | `dev` | `{ agentApi?, contracts?, runtime? }` | 无。 |
 | `evals` | `{ include?, runsDir?, semanticGrader? }` | 见下文。 |
 | `tools` | `{ rsbuild?, rspack? }` | 无。 |
@@ -48,8 +48,11 @@ export default defineConfig({
 ### 生成的类型定义
 
 配置是一份 TypeScript 契约，而不是运行时 schema：`defineConfig` 接受一个 `AgentBundleConfig`（或返回
-它的工厂函数），`validateSource` 则用结构化诊断强制执行本页的规则。下面这些精确形态在每次文档构建时由
-TypeDoc 从包源码生成，因此不会与已发布的类型产生偏差。
+它的工厂函数），`validateSource` 则用结构化诊断强制执行本页的规则。`evals` 与 `routes` 是例外：二者都不是
+`AgentBundleConfig` 的成员——它们经由 `[key: string]: unknown` 索引签名传入——因此 `tsc` 不会检查它们的
+形状；`evals` 的规则要到 eval 运行时才生效（`EVAL_CONFIG_INVALID`），`agent-bundle validate` 不会报告它们，
+而 `routes` 覆盖块由路由图在发现阶段校验，其诊断随 `validateSource` 一并报告。下面这些精确形态在每次文档
+构建时由 TypeDoc 从包源码生成，因此不会与已发布的类型产生偏差。
 
 | 字段 | 类型定义 |
 | --- | --- |

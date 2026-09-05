@@ -140,6 +140,7 @@ Workbench's display-only fields are absent.
 | `cli` | no | `{ mode, routes[], commands? }`: `mode` is `generated`, `conventional`, or `conflict`; `routes[]` holds the `cli` routes plus every MCP `tool` route `routes.mcpCommands` projects into the executable; `commands[]` is present exactly in `generated` mode, and each command's `routeId` names one of those routes. |
 | `providers[]` | yes | `{ id, name, source }`, sorted by `id`; `id` is `provider:<stem>`. |
 | `layouts[]` | yes | `{ id, scope, serverId?, source }`, sorted by `id`: `layout:root` with `scope: 'root'`, or `layout:mcp:<server>` with `scope: 'server'` and `serverId` naming a declared server. |
+| `contracts[]` | exactly when a route binds one | The canonical input contracts (#593), sorted by `id`: `{ id, input, origin: { module, binding }, routes[] }`. `id` is `contract:<module>#<binding>`; `input` is the bounded JSON Schema every bound route shares; `origin` is the declaring module (project-relative) and binding; `routes[]` are the sorted ids of the routes that bind it. |
 
 Every route row has the same shape:
 
@@ -153,6 +154,7 @@ Every route row has the same shape:
 | `serverId` | exactly for MCP kinds | The owning server, `mcp:<name>`, on `app`, `prompt`, `resource`, and `tool` routes. |
 | `description` | no | `config.description`, when it is a non-blank string. |
 | `inputSchema` | no | The bounded JSON Schema projection of the route's input: an object with `additionalProperties: false`, properties typed `boolean`, `number`, `string` (with optional `enum`), or `array` of those, each with optional `default` and `description`, and an optional `required` list. Absent when the route schema is richer than this grammar. |
+| `contract` | no | The `routes.contracts[]` row whose `input` this route binds; absent when no static contract was extracted. |
 
 A `routes.cli.commands[]` row, sorted by the joined `path`:
 
@@ -329,7 +331,6 @@ other unknown key. They are listed so that a consumer does not invent its own sp
 | `projections[].components` | The per-host component accounting `inspect` prints (`selected` / `skipped` with reason). |
 | `executables.noticeDelivery` | The notice-delivery intersection baked into every compiled wrapper and MCP entry. |
 | `executables.hooks[].preflight` | Gate and preflight declarations on a hook row. |
-| `routes.*` route rows: `contract` | A contract id attached to a route. |
 | `executables.mcpServers[].apps[].client` | The generated client and `web` environment of an App. |
 | `routes.cli.commands[].projection` | Which MCP tool a CLI command projects, once one operation can be projected to both surfaces. |
 

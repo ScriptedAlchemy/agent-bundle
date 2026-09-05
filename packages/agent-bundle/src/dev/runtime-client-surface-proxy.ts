@@ -23,7 +23,10 @@ import {
 
 const appAssetLimit = 4 * 1024 * 1024;
 const headerLimit = 16 * 1024;
-const upstreamRequestTimeout = 15_000;
+/** Bound on each upstream compiler request unless `RuntimeClientSurfaceProxyOptions` overrides it. */
+export const defaultRuntimeClientSurfaceUpstreamRequestTimeoutMs = 15_000;
+/** Node collapses longer `setTimeout` delays to 1 ms, which would silently drop the bound. */
+const maximumTimerDelayMs = 2_147_483_647;
 const loopbackHosts = new Set(['127.0.0.1', '::1']);
 /**
  * Proxy-owned browser push channel. The proxy authors both ends: its server
@@ -58,6 +61,16 @@ export interface RuntimeClientSurfaceConnectionEvent {
   readonly connectionCount: number;
   readonly surfaceId: string;
   readonly type: 'connected' | 'disconnected';
+}
+
+/** Server-only tuning for `RuntimeClientSurfaceProxy.open`; production callers take the defaults. */
+export interface RuntimeClientSurfaceProxyOptions {
+  /**
+   * Bound on each upstream compiler request — the bootstrap entry fetch and
+   * every proxied asset — from dispatch until its body has been read. A
+   * request still open at the deadline is aborted and answered 502.
+   */
+  readonly upstreamRequestTimeoutMs?: number;
 }
 
 interface ValidatedEndpoint {
@@ -132,6 +145,14 @@ const contentSecurityPolicy = (input: RuntimeClientSurfaceContentPolicy): string
     invalidContentPolicy('a bounded nonempty contentSecurityPolicy string');
   }
   return value;
+};
+
+const upstreamRequestTimeoutMs = (options: RuntimeClientSurfaceProxyOptions): number => {
+  const timeout = options.upstreamRequestTimeoutMs ?? defaultRuntimeClientSurfaceUpstreamRequestTimeoutMs;
+  if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > maximumTimerDelayMs) {
+    throw new TypeError(`Runtime client surface proxy options must use an integer upstreamRequestTimeoutMs from 1 to ${String(maximumTimerDelayMs)}.`);
+  }
+  return timeout;
 };
 
 const response = (target: ServerResponse, status: number): void => {
@@ -591,10 +612,12 @@ export class RuntimeClientSurfaceProxy {
     listener: (event: RuntimeClientSurfaceConnectionEvent) => void,
     hostOrigin: string,
     policy: RuntimeClientSurfaceContentPolicy = strictRuntimeClientSurfaceContentPolicy,
+    options: RuntimeClientSurfaceProxyOptions = {},
   ): Promise<DevRuntimeClientSurfaceProxyBinding> {
     const trusted = endpoint(input);
     const trustedHostOrigin = canonicalHostOrigin(hostOrigin);
     const trustedContentSecurityPolicy = contentSecurityPolicy(policy);
+    const trustedUpstreamRequestTimeoutMs = upstreamRequestTimeoutMs(options);
     const bootstrapCapability = randomBytes(32).toString('base64url');
     const sessionCapability = randomBytes(32).toString('base64url');
     const bootstrapPath = `/__agent_bundle_runtime/bootstrap/${bootstrapCapability}`;
@@ -656,7 +679,7 @@ export class RuntimeClientSurfaceProxy {
       const deadline = setTimeout(() => {
         abort();
         rejectPromise(new Error('Runtime client entry timed out.'));
-      }, upstreamRequestTimeout);
+      }, trustedUpstreamRequestTimeoutMs);
       const upstreamRequest = requestUpstream({
         agent: upstreamAgent,
         headers: { accept: 'text/html' },
@@ -772,7 +795,7 @@ export class RuntimeClientSurfaceProxy {
           timedOut = true;
           response(target, 502);
           abort();
-        }, upstreamRequestTimeout);
+        }, trustedUpstreamRequestTimeoutMs);
         const upstreamRequest = requestUpstream({
           agent: upstreamAgent,
           headers: {

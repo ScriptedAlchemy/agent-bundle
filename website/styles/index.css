@@ -42,6 +42,25 @@
 }
 
 /*
+ * Desktop doc layout. Rspress sizes the doc column as
+ * 100vw − sidebar − outline − 2 × content padding (`layout/DocLayout/index.css`),
+ * which at 1440 × 900 leaves a 686 px code scroller: 81 monospace columns at
+ * the theme's 14 px code size, short of the ~90 columns the code samples wrap
+ * at (AGENTS.md). Trimming the three tokens widens the column to 824 px, so a
+ * 90-column line fits without a horizontal scrollbar once Shiki's 20 px line
+ * padding is paid. `html:root` outranks the theme's plain `:root` declaration
+ * regardless of stylesheet order; the ≤1279 px breakpoints keep the theme's
+ * own values.
+ */
+@media (width >= 1280px) {
+  html:root {
+    --rp-sidebar-width: 280px;
+    --rp-outline-width: 240px;
+    --rp-content-padding-x: 48px;
+  }
+}
+
+/*
  * Bounded homepage accent. The default theme already brand-colors the feature
  * card border on hover, so this only tints the icon chip and adds a small lift.
  */

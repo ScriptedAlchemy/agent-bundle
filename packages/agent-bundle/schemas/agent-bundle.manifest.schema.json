@@ -604,9 +604,13 @@
     },
     "route": {
       "type": "object",
-      "description": "One compiled route. `event` is present exactly for event-route routes; `serverId` is present exactly for MCP route kinds (app, prompt, resource, tool).",
+      "description": "One compiled route. `event` is present exactly for event-route routes; `serverId` is present exactly for MCP route kinds (app, prompt, resource, tool). `contract` names a declared `routes.contracts[]` row.",
       "additionalProperties": false,
       "properties": {
+        "contract": {
+          "$ref": "#/$defs/nonEmptyString",
+          "description": "Id of the `routes.contracts[]` row this route binds (parser-enforced)."
+        },
         "description": {
           "$ref": "#/$defs/nonEmptyString"
         },
@@ -995,6 +999,14 @@
       "properties": {
         "cli": {
           "$ref": "#/$defs/cli"
+        },
+        "contracts": {
+          "type": "array",
+          "description": "Sorted by `id` with no duplicates; present exactly when a route binds a contract (parser-enforced).",
+          "items": {
+            "$ref": "#/$defs/routeContract"
+          },
+          "uniqueItems": true
         },
         "digest": {
           "$ref": "#/$defs/sha256"
@@ -1463,6 +1475,53 @@
         "artifact",
         "projections",
         "source"
+      ]
+    },
+    "routeContractOrigin": {
+      "type": "object",
+      "description": "Where a contract's schema is declared: the project-relative module and the binding at the end of any alias chain.",
+      "additionalProperties": false,
+      "properties": {
+        "binding": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "module": {
+          "$ref": "#/$defs/relativePath"
+        }
+      },
+      "required": [
+        "binding",
+        "module"
+      ]
+    },
+    "routeContract": {
+      "type": "object",
+      "description": "One canonical input contract (#593): a route `inputSchema` declaration normalized once and shared by every route binding it. `routes` name declared routes (parser-enforced).",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "input": {
+          "$ref": "#/$defs/routeInputSchema"
+        },
+        "origin": {
+          "$ref": "#/$defs/routeContractOrigin"
+        },
+        "routes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "id",
+        "input",
+        "origin",
+        "routes"
       ]
     }
   }

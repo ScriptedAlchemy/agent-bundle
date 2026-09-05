@@ -7,6 +7,7 @@ import type {
   CompiledProvider,
   CompiledRouteGraph,
   CompiledServerSurface,
+  RouteContract,
 } from '../routes/types.ts';
 import type {
   ArtifactManifestCli,
@@ -15,6 +16,7 @@ import type {
   ArtifactManifestLayout,
   ArtifactManifestProvider,
   ArtifactManifestRoute,
+  ArtifactManifestRouteContract,
   ArtifactManifestRoutes,
   ArtifactManifestServer,
 } from './manifest.ts';
@@ -39,6 +41,7 @@ export const routeDescription = (config: Readonly<Record<string, unknown>>): str
 export const artifactRouteFor = (route: CompiledAgentRoute): ArtifactManifestRoute => {
   const summary = routeDescription(route.config);
   return {
+    ...(route.contract === undefined ? {} : { contract: route.contract }),
     ...(summary === undefined ? {} : { description: summary }),
     ...(route.event === undefined ? {} : { event: route.event }),
     id: route.id,
@@ -110,8 +113,17 @@ const artifactCliFor = (cli: CompiledCliSurface): ArtifactManifestCli => ({
 });
 
 /** The manifest `routes` section for one compiled graph; arrays are sorted by their manifest sort keys. */
+/** One route contract row (#593): the compiler's contract with its sorted bound route ids. */
+export const artifactRouteContractFor = (contract: RouteContract): ArtifactManifestRouteContract => ({
+  id: contract.id,
+  input: contract.input,
+  origin: { binding: contract.origin.binding, module: contract.origin.module },
+  routes: [...contract.routes].sort((left, right) => left.localeCompare(right)),
+});
+
 export const artifactRoutesFor = (graph: CompiledRouteGraph): ArtifactManifestRoutes => ({
   ...(graph.cli === undefined ? {} : { cli: artifactCliFor(graph.cli) }),
+  ...(graph.contracts === undefined ? {} : { contracts: byId(graph.contracts.map(artifactRouteContractFor)) }),
   digest: graph.digest,
   events: byId(graph.events.map(artifactRouteFor)),
   layouts: byId((graph.layouts ?? []).map(artifactLayoutFor)),

@@ -13,7 +13,8 @@ The fastest start is `create-agent-bundle`. It prompts for a name, a template, a
 targets:
 
 ```sh
-npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-pr> my-plugin
+npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-pr> \
+  my-plugin
 ```
 
 Once npm releases exist, this becomes `npm create agent-bundle`. Until then, use a commit SHA or
@@ -23,7 +24,8 @@ A run that names both a directory and a template is treated as scripted and asks
 remaining values fall back to their defaults:
 
 ```sh
-npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-pr> my-plugin \
+npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-pr> \
+  my-plugin \
   --template mcp-server \
   --targets portable,codex,claude
 ```

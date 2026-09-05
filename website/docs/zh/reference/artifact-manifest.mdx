@@ -131,6 +131,7 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 | `cli` | 否 | `{ mode, routes[], commands? }`：`mode` 为 `generated`、`conventional` 或 `conflict`；`routes[]` 是 `cli` 路由，加上 `routes.mcpCommands` 投射进可执行文件的每个 MCP `tool` 路由；`commands[]` 恰在 `generated` 模式下出现，且每个命令的 `routeId` 指向其中一条路由。 |
 | `providers[]` | 是 | `{ id, name, source }`，按 `id` 排序；`id` 为 `provider:<stem>`。 |
 | `layouts[]` | 是 | `{ id, scope, serverId?, source }`，按 `id` 排序：`layout:root` 带 `scope: 'root'`，或 `layout:mcp:<server>` 带 `scope: 'server'` 且 `serverId` 指向已声明的服务器。 |
+| `contracts[]` | 恰在有路由绑定契约时 | 规范输入契约（#593），按 `id` 排序：`{ id, input, origin: { module, binding }, routes[] }`。`id` 为 `contract:<module>#<binding>`；`input` 是所有绑定路由共享的有界 JSON Schema；`origin` 是声明它的模块（相对项目根）与绑定名；`routes[]` 是绑定该契约的路由 id（已排序）。 |
 
 每条路由行的形状相同：
 
@@ -144,6 +145,7 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 | `serverId` | 恰对 MCP 类型 | 所属服务器 `mcp:<name>`，出现在 `app`、`prompt`、`resource` 与 `tool` 路由上。 |
 | `description` | 否 | `config.description`，当它是非空白字符串时。 |
 | `inputSchema` | 否 | 路由输入的有界 JSON Schema 投影：一个 `additionalProperties: false` 的对象，属性类型为 `boolean`、`number`、`string`（可带 `enum`）或由它们组成的 `array`，每个属性可带 `default` 与 `description`，外加可选的 `required` 列表。路由 schema 超出这一语法时缺省。 |
+| `contract` | 否 | 该路由所绑定 `input` 所在的 `routes.contracts[]` 行；未提取到静态契约时缺省。 |
 
 `routes.cli.commands[]` 的一行，按拼接后的 `path` 排序：
 
@@ -317,7 +319,6 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 | `projections[].components` | `inspect` 打印的逐宿主组件清点（`selected` / `skipped` 及原因）。 |
 | `executables.noticeDelivery` | 烘焙进每个编译后 wrapper 与 MCP 入口的通知投递交集。 |
 | `executables.hooks[].preflight` | 钩子行上的门禁与预检声明。 |
-| `routes.*` 路由行上的 `contract` | 挂接到路由上的契约 id。 |
 | `executables.mcpServers[].apps[].client` | App 的生成式客户端与 `web` 环境。 |
 | `routes.cli.commands[].projection` | 当一个操作可以同时投影到两种表面时，CLI 命令投影的是哪个 MCP 工具。 |
 

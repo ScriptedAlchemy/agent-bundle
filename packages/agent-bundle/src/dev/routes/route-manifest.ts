@@ -18,10 +18,16 @@ import type {
   ArtifactManifestCliOption,
   ArtifactManifestProvider,
   ArtifactManifestRoute,
+  ArtifactManifestRouteContract,
   ArtifactManifestRouteKind,
   ArtifactManifestRouteProvenance,
 } from '../../build/manifest.ts';
-import { artifactCliCommandFor, artifactProviderFor, artifactRouteFor } from '../../build/manifest-routes.ts';
+import {
+  artifactCliCommandFor,
+  artifactProviderFor,
+  artifactRouteContractFor,
+  artifactRouteFor,
+} from '../../build/manifest-routes.ts';
 
 /** Mirrors {@link CompiledRouteKind}: the catalog groups by the compiler's own kinds. */
 export type RouteManifestKind = ArtifactManifestRouteKind;
@@ -47,10 +53,13 @@ export interface RouteManifestConfigEntry {
 /** How a route entered the graph; the same discriminant the artifact manifest records. */
 export type RouteManifestProvenance = ArtifactManifestRouteProvenance;
 
+/** Mirrors one compiler route contract: the artifact manifest's own row. */
+export type RouteManifestContract = ArtifactManifestRouteContract;
+
 /**
  * One compiled route projected for the browser catalog: the artifact
- * manifest's route row plus the flattened config summary only the catalog
- * displays.
+ * manifest's route row (including its bound `contract` id) plus the flattened
+ * config summary only the catalog displays.
  */
 export interface RouteManifestRoute extends ArtifactManifestRoute {
   readonly config: readonly RouteManifestConfigEntry[];
@@ -91,6 +100,8 @@ export type RouteManifestState = StateDefinitionProjection;
  */
 export interface RouteManifest {
   readonly cli?: RouteManifestCliSurface;
+  /** Present only when the compiler graph carries route contracts. */
+  readonly contracts?: readonly RouteManifestContract[];
   readonly diagnostics: readonly Diagnostic[];
   /** The graph digest over project-relative route identity. */
   readonly digest: string;
@@ -166,6 +177,7 @@ export const routeManifestFor = (
   notices?: NormalizedNotices,
 ): RouteManifest => deepFreeze({
   ...(graph.cli === undefined ? {} : { cli: manifestCli(graph.cli) }),
+  ...(graph.contracts === undefined ? {} : { contracts: graph.contracts.map(artifactRouteContractFor) }),
   diagnostics: graph.diagnostics.map((diagnostic) => ({ ...diagnostic })),
   digest: graph.digest,
   events: graph.events.map(manifestRoute),

@@ -8,7 +8,6 @@ import { isErrno } from '../core/errors.ts';
 import { deepFreeze } from '../core/freeze.ts';
 import { isRecord } from '../core/strict-json.ts';
 import { readFileBytes, readFileString, runWithPlatform } from '../effect/platform.ts';
-import { installSurfaceRequirements } from '../install/surface.ts';
 import { artifactManifestName } from './emit.ts';
 import { parseArtifactManifest } from './manifest.ts';
 import {
@@ -251,9 +250,10 @@ export const packInventoryDiagnostics = async (options: {
   const expected = new Set<string>([
     ...options.packageBuild.files.map((file) => `${packagePrefix}/${file.path}`),
     `${artifactPrefix}/${artifactManifestName}`,
+    // Every emitted file is manifested, the install surface included: the
+    // artifact validator (`AB6023`/`AB6024`) already judged its presence by
+    // adapter identity, so the pack expects exactly what the manifest lists.
     ...manifest.files.map((file) => `${artifactPrefix}/${file.path}`),
-    ...installSurfaceRequirements(manifest.projections.map((projection) => projection.host))
-      .map((path) => `${artifactPrefix}/${path}`),
     'README.md',
   ]);
 

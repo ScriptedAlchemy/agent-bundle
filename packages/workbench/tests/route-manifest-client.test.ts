@@ -32,6 +32,17 @@ const manifest = {
       source: 'src/cli/library/audit.ts',
     }],
   },
+  contracts: [{
+    id: 'contract:src/lib/protocol-schemas.ts#statusInputSchema',
+    input: {
+      additionalProperties: false,
+      properties: { format: { enum: ['text', 'json'], type: 'string' } },
+      required: ['format'],
+      type: 'object',
+    },
+    origin: { binding: 'statusInputSchema', module: 'src/lib/protocol-schemas.ts' },
+    routes: ['tool:library/echo'],
+  }],
   diagnostics: [{ code: 'AB4800', message: 'Two routes claim the same id.', severity: 'error' }],
   digest: 'd'.repeat(64),
   events: [{
@@ -56,6 +67,7 @@ const manifest = {
     name: 'library',
     routes: [{
       config: [{ key: 'title', kind: 'string', value: 'Echo' }],
+      contract: 'contract:src/lib/protocol-schemas.ts#statusInputSchema',
       id: 'tool:library/echo',
       inputSchema: {
         additionalProperties: false,
@@ -117,6 +129,13 @@ it('reads the compiled manifest over the shared foreground session', async () =>
     type: 'string',
   });
   expect(decoded.cli?.commands?.[0]?.path).toEqual(['library', 'audit']);
+  expect(decoded.contracts?.[0]?.origin).toEqual({
+    binding: 'statusInputSchema',
+    module: 'src/lib/protocol-schemas.ts',
+  });
+  expect(decoded.servers[0]?.routes[0]?.contract).toBe(
+    'contract:src/lib/protocol-schemas.ts#statusInputSchema',
+  );
   expect(decoded.state).toEqual(manifest.state);
   expect(calls).toEqual([{ method: 'GET', token: 'foreground-token', url: '/api/routes/manifest' }]);
 });

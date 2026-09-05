@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from '@rstest/core';
 import { claudeAdapter } from '../src/adapters/claude.ts';
 import { codexAdapter, codexArtifactPaths } from '../src/adapters/codex.ts';
 import { cursorAdapter, cursorArtifactPaths } from '../src/adapters/cursor.ts';
+import { portableAdapter } from '../src/adapters/portable.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
 import { build, type BuildProjectResult, createDefaultRegistry, TargetRegistry, validate } from '../src/api.ts';
 import { parseArtifactManifest } from '../src/build/manifest.ts';
@@ -446,5 +447,44 @@ describe('composite plugin root (#555)', () => {
     expect(customTree).not.toContain('install.mjs');
     expect(custom.result.diagnostics.filter((entry) => entry.code === 'AB6023' || entry.code === 'AB6024')).toEqual([]);
     expect(await topLevel(shipped.output)).toEqual(expect.arrayContaining(['INSTALL.md', 'install.mjs', 'plugin.json']));
+
+    // The same identity judgment gates the shared root (`AB4106`) and the
+    // host validators: beside Claude Code the custom `portable` is refused
+    // like any advanced-registry adapter, and alone it is held to no shipped
+    // host's validator.
+    const mixed = await mkdtemp(join(tmpdir(), 'agent-bundle-composite-identity-'));
+    roots.push(mixed);
+    await writeProject(mixed, { targets: ['claude', 'portable'] });
+    const refused = await validate({ registry, root: mixed });
+    expect(refused.diagnostics.filter((entry) => entry.code === 'AB4106').map((entry) => entry.target)).toEqual(['portable']);
+    const validated = await validate({ artifact: custom.output, hostValidation: true, registry, root: dirname(custom.output) });
+    expect(validated.diagnostics.filter((entry) => entry.severity === 'error')).toEqual([]);
+    expect(validated.hostValidation).toBeUndefined();
+
+    // `build --host-validation` runs the Claude developer validator for the
+    // shipped Claude adapter only: a custom adapter named `claude` spawns no
+    // host CLI and gets no report.
+    const claudeNamed = new TargetRegistry()
+      .register(syntheticAdapterNamed('claude'), { default: true })
+      .register(codexAdapter)
+      .register(cursorAdapter)
+      .register(portableAdapter);
+    const spawned: string[][] = [];
+    const project = await mkdtemp(join(tmpdir(), 'agent-bundle-composite-identity-'));
+    roots.push(project);
+    await writeProject(project, { targets: ['claude'] });
+    const built = await build({
+      hostValidation: true,
+      hostValidationRunner: async (request) => {
+        spawned.push([...request.args]);
+        return { exitCode: 0, signal: null, stderr: '', stdout: '' };
+      },
+      output: join(project, 'artifact'),
+      registry: claudeNamed,
+      root: project,
+    });
+    expect(built.diagnostics.filter((entry) => entry.severity === 'error')).toEqual([]);
+    expect(built.hostValidation).toEqual([]);
+    expect(spawned).toEqual([]);
   });
 });

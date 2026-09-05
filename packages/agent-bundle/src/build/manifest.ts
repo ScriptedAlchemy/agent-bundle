@@ -144,6 +144,8 @@ export interface ArtifactManifestRouteProvenance {
 
 /** One compiled route of the Application IR, host-independent. */
 export interface ArtifactManifestRoute {
+  /** Id of the `routes.contracts[]` row this route binds (#593); absent when no static contract was extracted. */
+  readonly contract?: string;
   /** `config.description` when it is a string. */
   readonly description?: string;
   /** Canonical event identity; `event-route` routes only. */
@@ -221,8 +223,29 @@ export interface ArtifactManifestLayout {
 }
 
 /** The compiled route graph the artifact was built from (gap 1 of #592 step 3). */
+/** Where a contract's schema is declared: the project-relative module and the binding at the end of any alias chain. */
+export interface ArtifactManifestRouteContractOrigin {
+  readonly binding: string;
+  readonly module: string;
+}
+
+/**
+ * One canonical input contract (#593): a route `inputSchema` declaration
+ * normalized once and shared by every route binding the same declaration.
+ * `id` is `contract:<origin.module>#<origin.binding>`; `routes` are the sorted
+ * ids of the graph routes bound to it.
+ */
+export interface ArtifactManifestRouteContract {
+  readonly id: string;
+  readonly input: RouteInputSchema;
+  readonly origin: ArtifactManifestRouteContractOrigin;
+  readonly routes: readonly string[];
+}
+
 export interface ArtifactManifestRoutes {
   readonly cli?: ArtifactManifestCli;
+  /** Sorted by id; present exactly when some route binds a contract. */
+  readonly contracts?: readonly ArtifactManifestRouteContract[];
   /** sha256 over the graph's project-relative identity. */
   readonly digest: string;
   readonly events: readonly ArtifactManifestRoute[];
@@ -682,7 +705,7 @@ const parseRoute = (value: unknown, location: string): ArtifactManifestRoute => 
     route,
     location,
     ['id', 'kind', 'provenance', 'source'],
-    ['description', 'event', 'inputSchema', 'serverId'],
+    ['contract', 'description', 'event', 'inputSchema', 'serverId'],
   );
   const provenance = requireRecord(route.provenance, `${location}.provenance`);
   requireExactKeys(provenance, `${location}.provenance`, ['kind']);
@@ -698,6 +721,7 @@ const parseRoute = (value: unknown, location: string): ArtifactManifestRoute => 
     fail(`${location}.serverId is present exactly for MCP route kinds.`);
   }
   return {
+    ...(route.contract === undefined ? {} : { contract: requireString(route.contract, `${location}.contract`) }),
     ...(route.description === undefined ? {} : { description: requireString(route.description, `${location}.description`) }),
     ...(event === undefined ? {} : { event }),
     id: requireString(route.id, `${location}.id`),
@@ -861,9 +885,32 @@ const parseLayouts = (value: unknown): readonly ArtifactManifestLayout[] => {
   return layouts;
 };
 
+const parseContracts = (value: unknown): readonly ArtifactManifestRouteContract[] => {
+  const contracts = requireArray(value, 'routes.contracts').map((candidate, index) => {
+    const location = `routes.contracts[${index}]`;
+    const contract = requireRecord(candidate, location);
+    requireExactKeys(contract, location, ['id', 'input', 'origin', 'routes']);
+    const origin = requireRecord(contract.origin, `${location}.origin`);
+    requireExactKeys(origin, `${location}.origin`, ['binding', 'module']);
+    const routes = parseStringList(contract.routes, `${location}.routes`);
+    if (routes.length === 0) fail(`${location}.routes must name at least one route.`);
+    return {
+      id: requireString(contract.id, `${location}.id`),
+      input: parseInputSchema(contract.input, `${location}.input`),
+      origin: {
+        binding: requireString(origin.binding, `${location}.origin.binding`),
+        module: requirePath(origin.module, `${location}.origin.module`),
+      },
+      routes,
+    } satisfies ArtifactManifestRouteContract;
+  });
+  requireSortedUnique(contracts, 'routes.contracts', (contract) => contract.id);
+  return contracts;
+};
+
 const parseRoutes = (value: unknown): ArtifactManifestRoutes => {
   const routes = requireRecord(value, 'routes');
-  requireExactKeys(routes, 'routes', ['digest', 'events', 'layouts', 'providers', 'scripts', 'servers'], ['cli']);
+  requireExactKeys(routes, 'routes', ['digest', 'events', 'layouts', 'providers', 'scripts', 'servers'], ['cli', 'contracts']);
   const events = parseRoutesList(routes.events, 'routes.events');
   if (events.some((route) => route.kind !== 'event-route')) fail('routes.events must hold event-route routes only.');
   const scripts = parseRoutesList(routes.scripts, 'routes.scripts');
@@ -874,8 +921,29 @@ const parseRoutes = (value: unknown): ArtifactManifestRoutes => {
   if (layouts.some((layout) => layout.serverId !== undefined && !serverIds.has(layout.serverId))) {
     fail('routes.layouts names an undeclared server.');
   }
+  const cli = routes.cli === undefined ? undefined : parseCli(routes.cli);
+  const contracts = routes.contracts === undefined ? undefined : parseContracts(routes.contracts);
+  // Every route's `contract` names a declared contract and every contract's
+  // `routes` name declared routes; `contracts` is present exactly when a route
+  // binds one, matching the compiler graph.
+  const allRoutes = [...events, ...scripts, ...servers.flatMap((server) => server.routes), ...(cli?.routes ?? [])];
+  const routeIds = new Set(allRoutes.map((route) => route.id));
+  const contractIds = new Set((contracts ?? []).map((contract) => contract.id));
+  const bound = allRoutes.filter((route) => route.contract !== undefined);
+  if ((contracts !== undefined) !== (bound.length > 0)) {
+    fail('routes.contracts is present exactly when a route binds a contract.');
+  }
+  for (const route of bound) {
+    if (!contractIds.has(route.contract!)) fail(`routes route ${route.id} binds undeclared contract ${JSON.stringify(route.contract)}.`);
+  }
+  for (const contract of contracts ?? []) {
+    for (const id of contract.routes) {
+      if (!routeIds.has(id)) fail(`routes.contracts[${contract.id}].routes names undeclared route ${JSON.stringify(id)}.`);
+    }
+  }
   return {
-    ...(routes.cli === undefined ? {} : { cli: parseCli(routes.cli) }),
+    ...(cli === undefined ? {} : { cli }),
+    ...(contracts === undefined ? {} : { contracts }),
     digest: requireHash(routes.digest, 'routes.digest'),
     events,
     layouts,

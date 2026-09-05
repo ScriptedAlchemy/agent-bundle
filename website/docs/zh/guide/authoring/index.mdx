@@ -135,6 +135,35 @@ Server Component：它完成工作并返回 `Agent.*` 节点，并且只有在�
 capability 或 state 上下文时才调用 `await agent()`。不存在公开的 `execute`/`render` 分裂，普通 `.ts`
 路由也绝不会被包进 React 行为里。
 
+## 路由契约（Application IR）
+
+编译后的路由图是应用中与宿主无关的模型——即
+[#592](https://github.com/ScriptedAlchemy/agent-bundle/issues/592) 所述的 Application IR——每个表面
+都是它的一份投影：生成的 MCP 服务器、路由式 CLI 的 argv 语法、生成的路由类型、Workbench，以及
+`agent-bundle inspect --routes`。路由的输入 schema 是该图中的一个节点，路由引用它而不是各自携带它。
+当编译器能够静态读取 `inputSchema` 时——无论它是内联编写的，还是绑定到路由通过相对路径导入的模块中
+声明的 schema——都会把它规范化一次，成为一个 `RouteContract`：
+
+| 字段 | 含义 |
+| --- | --- |
+| `id` | `contract:<module>#<binding>`，即别名链末端的声明位置：导入的 schema 为 `contract:src/lib/protocol-schemas.ts#statusInputSchema`，内联 schema 为 `contract:src/cli/status.tsx#inputSchema`。 |
+| `input` | 有界的 JSON Schema 投影，经过深度冻结。每条绑定路由的 `inputSchema` 都是同一个对象。 |
+| `origin` | `{ module, binding }`：声明该 schema 的项目相对模块，以及其 initializer 为 zod 表达式的 binding。 |
+| `routes` | 绑定到该契约的每条路由 id，经过排序。 |
+
+身份取决于声明位置，而不是内容。两条路由导入同一个 binding 时，共享一个带两条 `routes` 的契约；两份
+分别声明、文本相同的 schema 仍是两个契约，因为它们是两个独立编写、将来可能分化的事物。每条路由以
+`route.contract` 指明自己的契约，路由图则把它们列在 `contracts` 中，按 id 排序；没有任何路由带契约时
+该字段缺席（`RouteContract` 与 `RouteContractOrigin` 从 `agent-bundle/api` 导出，与 `CompiledRouteGraph`
+并列）。`agent-bundle inspect --routes` 会随路由图打印这些契约，Workbench 的 Routes 页面则显示
+路由契约的来源以及共享它的其他路由。在路由自身模块之外声明的契约会参与该路由的 digest identity；
+schema 全部内联的路由图保持其已有的 digest。
+
+契约承载输入侧。`resultSchema` 可以用同样方式导入，但不存在静态的结果投影：框架会静态检查它是否存在，
+其类型经由 TypeScript 流转，运行时则使用真实的 zod 对象进行校验。引用的解析方式以及
+`AB4814`/`AB4838`/`AB4839` 诊断见
+[在 MCP 与 CLI 之间共享同一份 schema](./package-entries.mdx#在-mcp-与-cli-之间共享同一份-schema)。
+
 ## 可编写的表面
 
 - [Skills](./skills.mdx) —— Markdown Skill、它们的资源，以及渲染式 Skill 源码。

@@ -1,5 +1,5 @@
 ---
-description: 'The complete agent-bundle command-line surface: dev, serve-app, build, prepack, install, doctor, validate, eval, inspect, mcp, and hooks, with every option and exit code.'
+description: 'The agent-bundle CLI surface: dev, serve-app, build, prepack, install, doctor, validate, eval, inspect, mcp, and hooks, with every option and exit code.'
 ---
 
 # CLI
@@ -76,7 +76,8 @@ The proxy inherits `--root` from the parent `dev` command and writes diagnostics
 ## serve-app
 
 ```sh
-agent-bundle serve-app <server>/<app> [--artifact <path>] [--tool <tool>] [--input <json>] [--port <port>] [--open]
+agent-bundle serve-app <server>/<app> [--artifact <path>] [--tool <tool>] \
+  [--input <json>] [--port <port>] [--open]
 ```
 
 Serves one built MCP App in a plain browser tab, outside any MCP host and without the
@@ -140,7 +141,8 @@ Programmatic `build()` calls never run host validation unless `hostValidation: t
 ## install
 
 ```sh
-agent-bundle install <host> [--from <root>] [--scope <scope>] [--mode <mode>] [--replace] [--json]
+agent-bundle install <host> [--from <root>] [--scope <scope>] [--mode <mode>] \
+  [--replace] [--json]
 ```
 
 | Option | Default | Meaning |
@@ -163,7 +165,8 @@ marketplace mode — that `uninstall` and `doctor` consume.
 ## uninstall
 
 ```sh
-agent-bundle uninstall <host> [--from <root>] [--scope <scope>] [--mode <mode>] [--keep-data | --purge-data --confirm-purge] [--force] [--plan] [--json]
+agent-bundle uninstall <host> [--from <root>] [--scope <scope>] [--mode <mode>] \
+  [--keep-data | --purge-data --confirm-purge] [--force] [--plan] [--json]
 ```
 
 | Option | Default | Meaning |
@@ -307,8 +310,8 @@ same `--input` / `--input-file` pair as `mcp invoke`.
 | Code | Meaning |
 | --- | --- |
 | `0` | Success, including `--help` and `--version`. |
-| `1` | A reported failure: an error diagnostic, an invalid model from `inspect`, a failing or inconclusive eval run, or an uncaught error written to stderr as one `AB5000` diagnostic. |
-| `2` | An argument-parsing failure from the command-line parser. |
+| `1` | A reported failure: an error diagnostic, an invalid model from `inspect`, a failing or inconclusive eval run, or an uncaught error written to stderr as one `AB5000` diagnostic. Option values checked outside the parser land here: an invalid `install` / `uninstall` `<host>`, `--scope`, or `--mode`, an invalid `--port`, `--trials`, or `dev --install-host`, and a malformed `--input` / `--input-file` document. |
+| `2` | A parser-level failure from the command-line parser: an unknown command or option, a missing required argument or option, or an invalid `serve-app --profile`, `serve-app --allow`, or `doctor --host` value. |
 
 An eval run exits `1` when any trial **fails or is inconclusive** — an inconclusive trial produced
 no evidence, so it cannot report success either.
