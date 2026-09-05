@@ -781,12 +781,12 @@ const inspectInstalledDurableState = async (
     'relative override has no provable execution directory',
   );
   const reportedAll = effectiveAll.length === 0 ? Object.freeze([effective]) : Object.freeze(effectiveAll);
+  const effectiveDiagnostics = reportedAll.flatMap((entry) => entry.diagnostics);
   const legacyRoot = join(pluginRoot, 'state');
-  if (legacyRoot === effective.directory) {
-    return { diagnostics: effective.diagnostics, effective, effectiveAll: reportedAll };
+  if (reportedAll.some((entry) => entry.directory === legacyRoot)) {
+    return { diagnostics: freezeDiagnostics(effectiveDiagnostics), effective, effectiveAll: reportedAll };
   }
   const legacy = await inspectDurableState(legacyRoot, 'legacy', host);
-  const effectiveDiagnostics = reportedAll.flatMap((entry) => entry.diagnostics);
   if (!legacy.exists) {
     return { diagnostics: freezeDiagnostics(effectiveDiagnostics), effective, effectiveAll: reportedAll };
   }

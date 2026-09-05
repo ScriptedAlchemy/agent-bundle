@@ -105,7 +105,9 @@ this plugin's installer did not place — is refused either way. Cursor copies c
 place and touches owned files only, never unowned entries such as legacy or in-place `state/`, and
 `--replace` adopts a pre-receipt copy. Current artifact builds keep framework state under
 `~/.agent-bundle/state/<plugin>-<digest>` instead (`AGENT_BUNDLE_STATE_ROOT` overrides that
-location); `uninstall --purge-data --confirm-purge` removes it for the installed code root. Claude replacement runs
+location); `uninstall --purge-data --confirm-purge` removes only roots whose receipt proves that
+installation owns them. Pre-existing, shared, marker-less, and otherwise unproven override roots
+are retained. Claude replacement runs
 `claude plugin uninstall --keep-data` before reinstalling because `plugin update` is
 version-gated; Codex runs `codex plugin remove` before `add`. The emitted `INSTALL.md` documents
 the same recipe per host.

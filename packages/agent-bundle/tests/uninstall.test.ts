@@ -17,6 +17,7 @@ import {
   readInstallReceipt,
   readInstallReceiptFile,
 } from '../src/install/receipt.ts';
+import { recordInstalledState } from '../src/install/state-root.ts';
 import { uninstallBundle, type UninstallResult } from '../src/install/uninstall.ts';
 import { captureCliTerminal } from './support/cli-terminal.ts';
 import { diffTreeSnapshots, snapshotTree, treesIdentical } from './support/tree-snapshot.ts';
@@ -521,6 +522,70 @@ it('prunes a newly marked explicit root when no runtime state was written', asyn
     expect(removed.data.outcome).toBe('absent');
     expect(removed.remnantReceipt).toBeUndefined();
     await expect(readdir(declaredRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+  }
+});
+
+it('records an inaccessible declared root as unproven without failing installation', async () => {
+  const fixture = await createFixture('cursor');
+  const cursorRoot = join(fixture.home, '.cursor');
+  const blockedParent = join(fixture.cleanupRoot, 'not-a-directory');
+  try {
+    await Promise.all([
+      mkdir(cursorRoot, { recursive: true }),
+      writeFile(blockedParent, 'file\n'),
+      writeJson(join(fixture.bundleRoot, '.cursor-plugin/mcp.json'), {
+        mcpServers: {
+          stateful: {
+            command: 'node',
+            env: { AGENT_BUNDLE_STATE_ROOT: join(blockedParent, 'state') },
+          },
+        },
+      }),
+    ]);
+    const installed = await installBundle({
+      from: fixture.bundleRoot,
+      home: fixture.home,
+      host: 'cursor',
+    });
+    if (installed.destination === undefined) throw new Error('Cursor install did not report its destination.');
+    expect((await readInstallReceipt(installed.destination))?.state?.roots).toMatchObject([{
+      ownership: { kind: 'unowned', reason: 'unproven' },
+      root: join(blockedParent, 'state'),
+    }]);
+  } finally {
+    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+  }
+});
+
+it('rolls back earlier state markers when a later root cannot be recorded', async () => {
+  const fixture = await createFixture('cursor');
+  const firstRoot = join(fixture.cleanupRoot, 'first-state');
+  const invalidRoot = join(fixture.cleanupRoot, 'x'.repeat(300));
+  try {
+    await writeJson(join(fixture.bundleRoot, '.cursor-plugin/mcp.json'), {
+      mcpServers: {
+        first: {
+          command: 'node',
+          env: { AGENT_BUNDLE_STATE_ROOT: firstRoot },
+        },
+        second: {
+          command: 'node',
+          env: { AGENT_BUNDLE_STATE_ROOT: invalidRoot },
+        },
+      },
+    });
+    await expect(recordInstalledState({
+      environment: {},
+      home: fixture.home,
+      host: 'cursor',
+      mode: 'local',
+      plugin: 'uninstall-fixture',
+      pluginRoot: fixture.bundleRoot,
+      scope: 'user',
+    })).rejects.toMatchObject({ code: 'ENAMETOOLONG' });
+    await expect(readdir(firstRoot)).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await rm(fixture.cleanupRoot, { force: true, recursive: true });
   }

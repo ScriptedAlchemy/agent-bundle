@@ -635,7 +635,8 @@ const installPublicCli = async (
       if (
         previousReceipt === undefined ||
         previousReceipt.contentHash !== artifact.hash ||
-        previousReceipt.state === undefined
+        previousReceipt.state === undefined ||
+        isRemnantReceipt(previousReceipt)
       ) {
         const receiptIdentityValue = await receiptIdentity();
         const state = await recordInstalledState({

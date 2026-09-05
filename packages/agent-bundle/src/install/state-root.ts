@@ -324,89 +324,121 @@ export const recordInstalledState = async (
   }
   const created: string[] = [];
   const recorded: InstallReceiptStateRoot[] = [];
-  for (const { location, servers } of roots.values()) {
-    const root = location.root as string;
-    const canonicalRoot = await canonicalPath(root);
-    if (location.source === 'derived') {
-      recorded.push(Object.freeze({
-        canonicalRoot,
-        ownership: Object.freeze({ kind: 'derived' as const }),
-        root,
-        servers: Object.freeze(servers),
-        source: 'derived',
-      }));
-      continue;
-    }
-    const marker = join(root, stateOwnershipMarkerFile);
-    let existed = true;
-    try {
-      await lstat(root);
-    } catch (error) {
-      if (!isErrno(error, 'ENOENT')) throw error;
-      existed = false;
-    }
-    let ownership: InstallReceiptStateRoot['ownership'];
-    if (!existed) {
-      await mkdir(dirname(root), { recursive: true });
-      try {
-        await mkdir(root);
-        created.push(root);
-        const handle = await open(marker, 'wx');
-        try {
-          await handle.writeFile(markerDocument(owner), 'utf8');
-        } finally {
-          await handle.close();
-        }
-        ownership = Object.freeze({ kind: 'marker' as const, marker });
-      } catch (error) {
-        if (!isErrno(error, 'EEXIST')) {
-          if (created.at(-1) === root) {
-            created.pop();
-            await rmdir(root).catch((rollbackError: unknown) => {
-              if (!isErrno(rollbackError, 'ENOENT') && !isErrno(rollbackError, 'ENOTEMPTY')) {
-                throw rollbackError;
-              }
-            });
-          }
-          throw error;
-        }
-        if (created.at(-1) === root) created.pop();
-        ownership = await markerMatches(marker, owner)
-          ? Object.freeze({ kind: 'marker' as const, marker })
-          : Object.freeze({ kind: 'unowned' as const, reason: 'foreign-marker' as const });
-      }
-    } else if (await markerMatches(marker, owner)) {
-      ownership = Object.freeze({ kind: 'marker' as const, marker });
-    } else {
-      let markerExists = true;
-      try {
-        await lstat(marker);
-      } catch (error) {
-        if (!isErrno(error, 'ENOENT')) throw error;
-        markerExists = false;
-      }
-      ownership = Object.freeze({
-        kind: 'unowned' as const,
-        reason: markerExists ? 'foreign-marker' as const : 'pre-existing' as const,
+  const rollback = async (): Promise<void> => {
+    for (const root of [...created].reverse()) {
+      await rm(join(root, stateOwnershipMarkerFile), { force: true });
+      await rmdir(root).catch((error: unknown) => {
+        if (!isErrno(error, 'ENOENT') && !isErrno(error, 'ENOTEMPTY')) throw error;
       });
     }
-    recorded.push(Object.freeze({
-      canonicalRoot: await canonicalPath(root),
-      ownership,
-      root,
-      servers: Object.freeze(servers),
-      source: 'declared',
-    }));
+  };
+  try {
+    for (const { location, servers } of roots.values()) {
+      const root = location.root as string;
+      if (location.source === 'derived') {
+        recorded.push(Object.freeze({
+          canonicalRoot: await canonicalPath(root),
+          ownership: Object.freeze({ kind: 'derived' as const }),
+          root,
+          servers: Object.freeze(servers),
+          source: 'derived',
+        }));
+        continue;
+      }
+      try {
+        const marker = join(root, stateOwnershipMarkerFile);
+        let existed = true;
+        try {
+          await lstat(root);
+        } catch (error) {
+          if (!isErrno(error, 'ENOENT')) throw error;
+          existed = false;
+        }
+        let ownership: InstallReceiptStateRoot['ownership'];
+        if (!existed) {
+          await mkdir(dirname(root), { recursive: true });
+          try {
+            await mkdir(root);
+            created.push(root);
+            const handle = await open(marker, 'wx');
+            try {
+              await handle.writeFile(markerDocument(owner), 'utf8');
+            } finally {
+              await handle.close();
+            }
+            ownership = Object.freeze({ kind: 'marker' as const, marker });
+          } catch (error) {
+            if (!isErrno(error, 'EEXIST')) {
+              if (created.at(-1) === root) {
+                created.pop();
+                await rmdir(root).catch((rollbackError: unknown) => {
+                  if (!isErrno(rollbackError, 'ENOENT') && !isErrno(rollbackError, 'ENOTEMPTY')) {
+                    throw rollbackError;
+                  }
+                });
+              }
+              throw error;
+            }
+            if (created.at(-1) === root) created.pop();
+            ownership = await markerMatches(marker, owner)
+              ? Object.freeze({ kind: 'marker' as const, marker })
+              : Object.freeze({ kind: 'unowned' as const, reason: 'foreign-marker' as const });
+          }
+        } else if (await markerMatches(marker, owner)) {
+          ownership = Object.freeze({ kind: 'marker' as const, marker });
+        } else {
+          let markerExists = true;
+          try {
+            await lstat(marker);
+          } catch (error) {
+            if (!isErrno(error, 'ENOENT')) throw error;
+            markerExists = false;
+          }
+          ownership = Object.freeze({
+            kind: 'unowned' as const,
+            reason: markerExists ? 'foreign-marker' as const : 'pre-existing' as const,
+          });
+        }
+        recorded.push(Object.freeze({
+          canonicalRoot: await canonicalPath(root),
+          ownership,
+          root,
+          servers: Object.freeze(servers),
+          source: 'declared',
+        }));
+      } catch (error) {
+        if (
+          !isErrno(error, 'EACCES') &&
+          !isErrno(error, 'ENOTDIR') &&
+          !isErrno(error, 'EPERM') &&
+          !isErrno(error, 'EROFS')
+        ) {
+          throw error;
+        }
+        if (created.at(-1) === root) {
+          created.pop();
+          await rm(join(root, stateOwnershipMarkerFile), { force: true });
+          await rmdir(root).catch((rollbackError: unknown) => {
+            if (!isErrno(rollbackError, 'ENOENT') && !isErrno(rollbackError, 'ENOTEMPTY')) {
+              throw rollbackError;
+            }
+          });
+        }
+        recorded.push(Object.freeze({
+          canonicalRoot: resolve(root),
+          ownership: Object.freeze({ kind: 'unowned' as const, reason: 'unproven' as const }),
+          root,
+          servers: Object.freeze(servers),
+          source: 'declared',
+        }));
+      }
+    }
+  } catch (error) {
+    await rollback();
+    throw error;
   }
   return Object.freeze({
-    rollback: async () => {
-      for (const root of created.reverse()) {
-        await rm(join(root, stateOwnershipMarkerFile), { force: true });
-        await rmdir(root).catch((error: unknown) => {
-          if (!isErrno(error, 'ENOENT') && !isErrno(error, 'ENOTEMPTY')) throw error;
-        });
-      }
-    },
+    rollback,
     state: Object.freeze({ owner, roots: Object.freeze(recorded) }),
   });
 };

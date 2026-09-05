@@ -510,7 +510,7 @@ const readReceiptState = (value: unknown): InstallReceiptState | undefined => {
       typeof root['root'] !== 'string' ||
       !isAbsolute(root['root']) ||
       !Array.isArray(root['servers']) ||
-      !root['servers'].every((server) => typeof server === 'string' && server.length > 0) ||
+      !root['servers'].every((server) => typeof server === 'string') ||
       (root['source'] !== 'declared' && root['source'] !== 'derived') ||
       ownershipValue === null ||
       typeof ownershipValue !== 'object' ||
