@@ -14,8 +14,9 @@
  *
  *   - a violation in a declaration reachable from `exports` (or `types`) is
  *     an error and fails the gate;
- *   - a violation in an internal declaration is a warning, so the debt stays
- *     visible on every release run; `--strict` makes it an error too.
+ *   - a violation in an internal declaration is reported as a warning
+ *     without `--strict`; `pnpm lint:release` passes `--strict`, so it fails
+ *     the release gate as an error too.
  *
  * Usage: node scripts/check-declaration-imports.mjs [--strict] <package-dir>...
  *

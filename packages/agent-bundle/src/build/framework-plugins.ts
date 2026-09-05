@@ -13,8 +13,9 @@
  * each literal to the plugin it names.
  */
 export const frameworkOwnedRsbuildPlugins: ReadonlyMap<string, string> = new Map([
-  // `pluginReact()` from rslib.ts (every synthesized entry) and mcp-apps.ts
-  // (every React-syntax view): automatic JSX runtime, fast refresh off.
+  // `pluginReact({ fastRefresh: false })` from rslib.ts (every synthesized
+  // entry) and mcp-apps.ts (every MCP App view, whatever its entry
+  // extension): automatic JSX runtime, fast refresh off.
   ['rsbuild:react', '@rsbuild/plugin-react'],
 ]);
 

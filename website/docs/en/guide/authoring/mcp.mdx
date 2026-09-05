@@ -66,6 +66,22 @@ The lowered value is an `McpCallToolResult` (exported from `@agent-bundle/runtim
 against either SDK accepts it as is; `attachMcpStructuredContent` returns whatever result type
 it was given.
 
+The schemas reach the host as JSON Schema: `tools/list` advertises `inputSchema` and, for a
+`resultSchema` that describes an object, `outputSchema` in the 2020-12 dialect, projected so that
+2020-12 validators and non-strict draft-07 validators both accept every valid value. A zod tuple
+(`z.tuple([...])`) is emitted as `prefixItems` plus `items` set to the union of the positional
+schemas, with `minItems` (and, for a closed tuple, `maxItems`) bounding the length — never
+`items: false` — so a host that checks `structuredContent` with draft-07 keyword semantics
+(Cursor, which otherwise rejects a valid tuple result with
+`MCP error -32602 … boolean schema is false`) accepts everything a 2020-12 validator accepts.
+`inputSchema` goes through the same projection, so a host that checks arguments the same way is
+covered too. A `.rest()` tuple is the one place 2020-12 precision is loosened: its rest positions
+may also match a prefix schema. Everything else zod emits passes through untouched: keywords
+both dialects share (`$ref`, `propertyNames`, `const`, numeric `exclusiveMinimum`) validate the
+same way under both, `$defs` is reached through JSON-pointer `$ref`s under either, and a
+2020-12-only keyword such as `unevaluatedProperties` or `dependentRequired` is ignored by a lax
+draft-07 validator rather than misapplied.
+
 A route may re-export its component and schemas from another module. This is how one tool is
 placed on two generated servers when only `config` differs between the placements — an MCP App
 `tools/call`, for example, reaches the server that served the widget:
@@ -693,6 +709,106 @@ silently at run time.
 
 An App declared on a *prebuilt* server stays a development surface: the Workbench compiles it
 live, and the build assumes the payload already serves the resource.
+
+### The compiled document
+
+Every App compiles to exactly one self-contained HTML file, `mcp-apps/<name>.html` in each
+selected target, with its scripts and styles inlined. An App without a `template` gets the
+framework shell: `<html lang="en">`, a `<title>` equal to the App name, the charset and viewport
+`<meta>` tags, and the mount point `<div id="root"></div>`. The entry renders into that node:
+
+```ts
+// src/mcp/status/apps/status.ts — a .ts entry; the JSX lives in the .tsx it imports.
+import type { AppRouteConfig } from 'agent-bundle';
+
+import { mountStatusPanel } from './StatusPanel.tsx';
+
+export const config = {
+  resourceUri: 'ui://mcp-app-example/status.html',
+} satisfies AppRouteConfig;
+
+const root = document.getElementById('root');
+if (root === null) throw new Error('The App document has no #root mount point.');
+mountStatusPanel(root);
+```
+
+A `template` replaces that shell entirely, so the template owns the mount id, the title, and the
+`lang` attribute. The framework only fills in `lang="en"` on `<html>` when the template declares
+no `lang`, and a `<title>` equal to the App name when it has no `<title>`; a template that sets
+them is left alone.
+
+JSX compiles in every App build regardless of the entry's extension: `@rsbuild/plugin-react` with
+the automatic runtime (`react/jsx-runtime`, fast refresh off) is registered on every App
+environment, so the `<StatusPanel />` that `StatusPanel.tsx` renders compiles the same way behind
+a `.ts` entry as behind a `.tsx` one — never to a `React.createElement` call that would need a
+`React` import in scope. JSX syntax itself still belongs in `.tsx`/`.jsx` files, because the
+bundler detects a module's syntax from its extension.
+
+### Reserved specifiers win
+
+Your `tsconfig.json` `paths` work inside a view (`@lib/*`, `@/components/*`, and so on):
+Rsbuild hands them to the bundler as usual, where they resolve ahead of every alias. The one
+specifier that escapes them is `agent-bundle/meta`: the compiler rewrites that exact import to
+the generated identity module before resolution starts, so a `paths` mapping for
+`agent-bundle/meta` has no effect inside a compiled view — the framework's identity is what the
+App imports, in every build, with every tsconfig. The resolved-config assertion refuses a build
+where a `tools` hatch removed that rewrite.
+
+### Compile errors and size
+
+The bundler's own log output is silenced while views compile; the framework reads the Rspack
+stats instead and reports each error as one `AB4770` diagnostic carrying the failing file, its
+`line:column`, and the bundler's message (`sourcePath` is the failing file):
+
+```text
+MCP App "status" failed to compile: views/status.ts:1:10: Module build failed
+  (from builtin:swc-loader): Syntax Error: Expression expected
+```
+
+`agent-bundle build` exits `1` and writes those diagnostics to stderr — never the `AB5000`
+catch-all. Warnings that did not fail the build are `AB4771` in the same shape; they print as
+`AB4771 (warning): …` lines before `Built …` and ride `--json` as `diagnostics` and
+`build.diagnostics`. The
+[Diagnostics reference](../../reference/diagnostics.md#mcp-app-view-compilation-ab4770ab4772)
+lists every shape, including the location-less form for a `tsconfig.json` problem.
+
+A successful build prints one line per App after `Built …`, sorted by target and App name, with
+the emitted size and its gzip size (`build.compiledMcpApps[].size.bytes` and `.gzipBytes` in
+`--json`):
+
+```text
+Built mcp-app-example to …/mcp-app-example/artifact
+MCP App status (portable): mcp-apps/status.html 427.1 KiB (102.1 KiB gzip)
+```
+
+That example is close to the floor. Any view that imports `@modelcontextprotocol/ext-apps`
+carries `zod` (v3 and v4), `@modelcontextprotocol/sdk`, `zod-to-json-schema`, and `ext-apps`
+itself — about 437 kB (104 kB gzip) before the first line of your own code — so a healthy view
+sits well under 1 MiB. A production build that emits 1 MiB or more reports the `AB4772`
+advisory naming the five largest modules; any build over 2 MiB reports it too, because 2 MiB is
+the bound above which the Workbench and `serve-app` hosts refuse the resource and the view stops
+rendering there. The thresholds are fixed; no config key moves them.
+
+### Development vs production builds
+
+`agent-bundle dev` (the Workbench) compiles views unminified, so the preview's source is
+readable in the browser devtools: real identifiers, and one
+`// CONCATENATED MODULE: ./src/mcp/status/apps/StatusPanel.tsx` marker per module. The output is
+still exactly one self-contained HTML document per App, about 2.7× the production size (a
+617 KiB `ext-apps` view becomes 1.6 MiB), which is why the 1 MiB advisory does not apply to
+development builds while the 2 MiB host bound still does. A view whose readable document would
+cross that bound is recompiled with the production profile so the preview keeps rendering it,
+and `AB4772` says so. `agent-bundle build` ships the production profile: minified, no source
+maps.
+
+Neither profile emits a source map by default: a map that carries the original sources is
+another ~7× on top (that same view would reach 4.2 MiB), past what the hosts accept. For a
+small view, opt in through the escape hatch —
+`tools.rsbuild = { output: { sourceMap: { js: 'inline-source-map' } } }` — which, like every
+`tools` fragment, reaches every synthesized config. Only inline maps work: an external `.map`
+file beside the HTML fails the build with an error naming the stray file, because the artifact
+must stay one self-contained document per App. `agent-bundle inspect --bundler` prints the
+resolved App configuration when a hatch value does not land where you expected.
 
 ### Serving an App standalone
 

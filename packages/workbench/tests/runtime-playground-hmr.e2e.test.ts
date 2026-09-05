@@ -317,7 +317,10 @@ e2e('activates an edited RSC generation and replays the selected hook without re
     const sourceBuildDiagnostic = page.getByLabel('Runtime diagnostics evidence');
     await expect(sourceBuildDiagnostic).toContainText('source/build', { timeout: browserTimeout });
     await expect(sourceBuildDiagnostic).toContainText('AB8206', { timeout: browserTimeout });
-    await expect(sourceBuildDiagnostic).toContainText('RSC runtime source build failed.', { timeout: browserTimeout });
+    // #572: the diagnostic carries the Rspack error with the failing file and
+    // line instead of a fixed sentence.
+    await expect(sourceBuildDiagnostic).toContainText('RSC runtime source build failed:', { timeout: browserTimeout });
+    await expect(sourceBuildDiagnostic).toContainText('src/rsc/components.tsx:', { timeout: browserTimeout });
     const afterSourceBuildFailure = await identity.evaluate((element) => Object.fromEntries([...element.attributes]
       .filter((attribute) => attribute.name.startsWith('data-runtime-'))
       .map((attribute) => [attribute.name, attribute.value])));

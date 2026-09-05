@@ -143,6 +143,13 @@
       "evidence": [
         "2026-09-04: packages/agent-bundle/tests/projection/mcp-in-memory.test.ts and packages/agent-bundle/tests/packed-stdio-projection.test.ts drive a task-augmented tools/call through the generated server with the SDK client; packages/workbench/tests/mcp-tasks.e2e.test.ts drives it from the Workbench against the spawned stdio artifact."
       ]
+    },
+    "structuredContentValidation": {
+      "state": "unavailable",
+      "reason": "The portable target pins no host client, so no client-side validation of arguments against `inputSchema` or of `structuredContent` against `outputSchema` is recorded. The generated server validates both against the route's zod schemas itself and advertises the interoperable 2020-12 projection — tuples as `prefixItems` plus `items` set to the union of the positional schemas, never `items: false` — so a valid result passes a non-strict draft-07 validator and a 2020-12 validator alike.",
+      "evidence": [
+        "2026-09-05: measured with ajv 8.20.0 and zod 4.5.4 — the projected schema is accepted by Ajv's draft-07 class in non-strict mode (`strict: false`, the configuration MCP clients run; strict mode rejects the retained `prefixItems` as an unknown keyword at compile time) and by Ajv2020 (default-strict and `strict: false`) for valid tuple-bearing results, while the unprojected 2020-12 output fails non-strict draft-07 with the per-element `boolean schema is false` that #563 reported; packages/agent-bundle/tests/mcp-schema-projection.test.ts pins that validator matrix."
+      ]
     }
   },
   "noticeDelivery": {

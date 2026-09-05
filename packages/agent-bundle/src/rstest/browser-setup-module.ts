@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
 import type { CompiledMcpApp } from '../build/mcp-apps.ts';
-import { MAX_APP_HTML_BYTES } from '../dev/mcp-apps/mcp-app-bridge.ts';
+import { MAX_APP_HTML_BYTES } from '../core/mcp-app-limits.ts';
 import {
   AGENT_BROWSER_TEST_REGISTRY_SYMBOL_KEY,
   AGENT_BROWSER_TEST_REGISTRY_VERSION,

@@ -53,8 +53,8 @@ export default defineConfig({
       // emits ~30% more bytes by inlining shared types into every entry, and
       // renames colliding public names (`AgentBundleConfig_2`). What keeps
       // the shipped declarations honest instead is the release gate
-      // (scripts/check-declaration-imports.mjs via `pnpm lint:release`): no
-      // declaration a consumer can reach may import a devDependency.
+      // (scripts/check-declaration-imports.mjs --strict via `pnpm lint:release`):
+      // no packed declaration, reachable or not, may import a devDependency.
       dts: true,
       format: 'esm',
       syntax: 'es2022',
@@ -126,6 +126,13 @@ export default defineConfig({
       'mcp-apps': './src/mcp-apps.ts',
       'mcp-entry': './src/mcp-entry.ts',
       meta: './src/meta.ts',
+      // Same reason as `mcp-tasks` below: the runtime's only other private
+      // sibling. Concatenated into the runtime's chunk it makes that chunk
+      // host two modules, so rslib synthesizes the runtime's namespace
+      // object (for `agent-bundle/test`'s dynamic import) through its own
+      // `__webpack_require__`, and the generated stdio entry fails to start
+      // with `__webpack_modules__[moduleId] is not a function`.
+      'mcp-schema-projection': './src/mcp-schema-projection.ts',
       'mcp-server-runtime': './src/mcp-server-runtime.ts',
       // Its own entry so it is emitted as a chunk beside the runtime rather
       // than concatenated into it: a generated artifact bundles

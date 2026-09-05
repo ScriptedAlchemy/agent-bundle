@@ -145,6 +145,9 @@ const messages = {
     mcpTasksIntro:
       'The `tasks` column records whether the pinned host client issues task-augmented `tools/call` requests (the MCP `2025-11-25` Tasks utility: `params.task`, `CreateTaskResult`, `tasks/get`, `tasks/result`, `tasks/cancel`, `tasks/list`). Generated servers serve that lifecycle for any tool route that declares `config.execution.taskSupport`; the column is about the host, not the server. `unavailable` means the host is documented or observed to send ordinary calls only, with the reason and evidence below.',
     mcpTasksDetails: 'Task-augmented calls by host',
+    mcpStructuredContentValidationIntro:
+      'The `structuredContentValidation` row records whether the pinned host client validates `tools/call` arguments against `inputSchema` and `structuredContent` against `outputSchema`, and with which JSON Schema dialect semantics. Generated servers advertise an interoperable 2020-12 projection — tuples as `prefixItems` plus `items` set to the union of the positional schemas, never `items: false` — so a valid result passes both a 2020-12 validator and a non-strict draft-07 one; `degraded` records a host whose validator reads a dialect other than the one declared, and `unavailable` a host with no client-side check on record, where the generated server\'s own validation against the route\'s zod schemas is the only one.',
+    mcpStructuredContentValidationDetails: 'Structured content validation by host',
     lineage: 'Conversation lineage',
     lineageIntro:
       'The `lineage` section of each table: what the host tells the warm runtime about the conversation tree behind `request.lineage`. `subagent-events` says whether the host emits subagent start/stop hooks at all, `root` whether every payload names the root conversation, `parent` and `depth` how a subagent is placed under its parent (`supported` only when the child\'s own payload names it, `degraded` when the runtime registry places it from spawn-call ordering and any later host confirmation), and `mcp-correlation` how a generated MCP tool call is matched to the hook window that produced it. A degraded row records what the registry does and how certain it is; a supported row records the evidence. The `resolution` field on `request.lineage` reports which path answered (`native`, `registry`, `confirmed`, `inferred`).',
@@ -250,6 +253,9 @@ const messages = {
     mcpTasksIntro:
       '`tasks` 列记录固定版本的宿主客户端是否会发出任务增强的 `tools/call` 请求（MCP `2025-11-25` Tasks 工具：`params.task`、`CreateTaskResult`、`tasks/get`、`tasks/result`、`tasks/cancel`、`tasks/list`）。生成的服务器会为任何声明了 `config.execution.taskSupport` 的工具路由提供这一生命周期；本列描述的是宿主，而不是服务器。`unavailable` 表示文档或观测表明该宿主只发送普通调用，原因与证据见下表。',
     mcpTasksDetails: '各宿主的任务增强调用',
+    mcpStructuredContentValidationIntro:
+      '`structuredContentValidation` 行记录固定版本的宿主客户端是否会把 `tools/call` 的参数对照 `inputSchema`、把 `structuredContent` 对照 `outputSchema` 进行校验，以及采用哪一种 JSON Schema 方言语义。生成的服务器公布的是可互操作的 2020-12 投影——元组表示为 `prefixItems` 加上取各位置 schema 并集的 `items`，绝不使用 `items: false`——因此合法结果既能通过 2020-12 校验器，也能通过非严格模式的 draft-07 校验器；`degraded` 表示宿主的校验器按不同于所声明方言的语义读取 schema，`unavailable` 表示没有记录到客户端侧校验，此时生成的服务器自身对照路由 zod schema 的校验是唯一一道检查。',
+    mcpStructuredContentValidationDetails: '各宿主的结构化内容校验',
     lineage: '会话谱系',
     lineageIntro:
       '每张表的 `lineage` 部分：宿主向常驻运行时提供了哪些关于 `request.lineage` 背后会话树的信息。`subagent-events` 表示宿主是否发出子代理 start/stop 钩子，`root` 表示每个载荷是否都给出根会话，`parent` 与 `depth` 表示子代理如何被放到其父节点之下（只有当子代理自己的载荷给出父节点时才是 `supported`；由运行时注册表按 spawn 调用顺序放置、再由宿主事后确认时为 `degraded`），`mcp-correlation` 表示生成的 MCP 工具调用如何匹配到产生它的钩子窗口。degraded 行记录注册表的做法及其确定程度；supported 行记录证据。`request.lineage` 上的 `resolution` 字段报告是哪条路径给出了答案（`native`、`registry`、`confirmed`、`inferred`）。',
@@ -407,6 +413,30 @@ const payloadCell = (mapping: JsonValue | undefined, m: Messages): string => {
   return m.notApplicable;
 };
 
+/**
+ * The per-host details table for one `mcp.<row>` capability row (`tasks`,
+ * `structuredContentValidation`): state, reason, and the evidence-note count.
+ * A host whose table lacks the row is skipped rather than rendered as `—`.
+ */
+const mcpRowDetails = (hosts: readonly HostCapabilityTable[], row: string, m: Messages): string =>
+  table(
+    [m.headers.host, m.headers.state, m.headers.detail],
+    hosts.flatMap(host => {
+      const entry = capabilityRow(asObject(host.data.mcp)[row]);
+      if (entry === undefined) {
+        return [];
+      }
+      const details: string[] = [];
+      if (entry.reason !== undefined) {
+        details.push(escapeProse(entry.reason));
+      }
+      if (Array.isArray(entry.evidence)) {
+        details.push(m.evidenceNotes(entry.evidence.length));
+      }
+      return [[code(host.host), entry.state ?? m.unavailable, details.length > 0 ? details.join('<br />') : m.notApplicable]];
+    }),
+  );
+
 const unionKeys = (hosts: readonly HostCapabilityTable[], select: (data: JsonObject) => JsonObject): string[] =>
   [...new Set(hosts.flatMap(host => Object.keys(select(host.data))))].sort();
 
@@ -557,25 +587,10 @@ function renderHosts(hosts: readonly HostCapabilityTable[], m: Messages): string
   );
   sections.push(m.mcpTasksIntro);
   sections.push(`### ${m.mcpTasksDetails}\n`);
-  sections.push(
-    table(
-      [m.headers.host, m.headers.state, m.headers.detail],
-      hosts.flatMap(host => {
-        const entry = capabilityRow(asObject(host.data.mcp).tasks);
-        if (entry === undefined) {
-          return [];
-        }
-        const details: string[] = [];
-        if (entry.reason !== undefined) {
-          details.push(escapeProse(entry.reason));
-        }
-        if (Array.isArray(entry.evidence)) {
-          details.push(m.evidenceNotes(entry.evidence.length));
-        }
-        return [[code(host.host), entry.state ?? m.unavailable, details.length > 0 ? details.join('<br />') : m.notApplicable]];
-      }),
-    ),
-  );
+  sections.push(mcpRowDetails(hosts, 'tasks', m));
+  sections.push(m.mcpStructuredContentValidationIntro);
+  sections.push(`### ${m.mcpStructuredContentValidationDetails}\n`);
+  sections.push(mcpRowDetails(hosts, 'structuredContentValidation', m));
 
   sections.push(`## ${m.lineage}\n`);
   sections.push(m.lineageIntro);

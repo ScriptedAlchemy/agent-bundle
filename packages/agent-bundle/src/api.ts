@@ -121,6 +121,8 @@ export {
 import { composeBundlerInspection, type BundlerInspection } from './build/inspect-bundler.ts';
 import { defaultPackageArtifactDistPath } from './config/normalize.ts';
 export type { BundlerInspection, BundlerInspectionEntry } from './build/inspect-bundler.ts';
+export { describeRspackStatsError, formatRspackStatsError, rspackStatsErrors } from './build/rspack-stats-errors.ts';
+export type { RspackStatsErrorDetail, RspackStatsErrorLocation } from './build/rspack-stats-errors.ts';
 import { validateArtifact, validateArtifactWithSnapshot } from './build/validate-artifact.ts';
 import { freezeDiagnostics, hasErrors, DiagnosticError, type Diagnostic } from './core/diagnostics.ts';
 export type { Diagnostic, DiagnosticSeverity } from './core/diagnostics.ts';
@@ -572,7 +574,12 @@ export interface BuildOptions extends ProjectOptions {
 
 export interface BuildProjectResult {
   readonly build: BuildResult;
-  /** Project diagnostics followed by the host-validation findings (`AB6019`–`AB6022`) when `hostValidation` ran. */
+  /**
+   * Project diagnostics, then the artifact compiler's non-fatal findings —
+   * MCP App view compile warnings (`AB4771`) and size advisories (`AB4772`),
+   * the same list as `build.diagnostics` — then the host-validation findings
+   * (`AB6019`–`AB6022`) when `hostValidation` ran.
+   */
   readonly diagnostics: readonly Diagnostic[];
   /** One report per built `claude`/`plugin` target; present only when `hostValidation` was requested. */
   readonly hostValidation?: readonly ClaudePluginValidationReport[];
@@ -1227,9 +1234,11 @@ export const build = async (options: BuildOptions): Promise<BuildProjectResult> 
     : undefined;
   return Object.freeze({
     build: result,
-    diagnostics: hostValidation === undefined
-      ? prepared.diagnostics
-      : freezeDiagnostics([...prepared.diagnostics, ...hostValidation.diagnostics]),
+    diagnostics: freezeDiagnostics([
+      ...prepared.diagnostics,
+      ...result.diagnostics,
+      ...(hostValidation === undefined ? [] : hostValidation.diagnostics),
+    ]),
     ...(hostValidation === undefined ? {} : { hostValidation: hostValidation.reports }),
     model,
     ...(packageBuild === undefined ? {} : { packageBuild }),
