@@ -218,7 +218,10 @@ Generated executables — artifact scripts, the routed CLI, MCP entries, hook wr
 package build's JavaScript bundles — compile with Rslib's `autoExternal` disabled, `bundle: true`,
 and `splitChunks: false`, and the framework adds no `externals` of its own; Rslib's `node` target
 leaves only Node built-ins (`node:fs`, `path`, plus Yarn PnP's `pnpapi`) external. MCP App views
-inline every script and style into one HTML file. `AB4725` rejects
+inline every script and style into one HTML file, and the same audit plugin sits in their Rsbuild
+compiler: a browser document has no allowable external, so any module a view's compilation kept
+external — a `react` mapped to a global through the hatch, say — fails the view with `AB6005`
+(`Compiled MCP App view "mcp-apps/<name>.html" keeps … external …`). `AB4725` rejects
 `tools.rsbuild.output.autoExternal` other than `false` and statically visible string or object
 `externals` entries that name packages. RegExp, function-form, relative, and mutator externals are
 judged from the compilation's own evidence: `AB6005` fails a generated executable in a host pack

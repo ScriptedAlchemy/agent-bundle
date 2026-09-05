@@ -2,9 +2,11 @@ import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } f
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 
+import { createRsbuild } from '@rsbuild/core';
 import { afterEach, describe, expect, it } from '@rstest/core';
 import { init, parse } from 'es-module-lexer';
 
+import type { CompilationEvidence } from '../src/build/compile-result.ts';
 import { MCP_APP_HTML_ADVISORY_BYTES } from '../src/build/mcp-app-diagnostics.ts';
 import { compileMcpApps, composeMcpAppsRsbuildConfig, type McpAppCompileMode } from '../src/build/mcp-apps.ts';
 import { DiagnosticError, type Diagnostic } from '../src/core/diagnostics.ts';
@@ -195,6 +197,44 @@ describe('compileMcpApps', () => {
     expect(compiled!.size.bytes).toBeGreaterThan(0);
     expect(compiled!.size.gzipBytes).toBeGreaterThan(0);
     expect(compiled!.size.gzipBytes).toBeLessThan(compiled!.size.bytes);
+  }, 60_000);
+
+  it('fails a view with AB6005 when a tools.rspack mutator keeps a dependency external, judged from compile evidence', async () => {
+    const root = await createProject(reactView);
+    const diagnostics = await compileFailure(compile(root, [app(root)], {
+      tools: {
+        rspack: (config) => {
+          config.externals = { 'react-dom/client': 'ReactDOMClient' };
+        },
+      },
+    }));
+    expect(diagnostics).toEqual([{
+      code: 'AB6005',
+      generatedPath: 'mcp-apps/status.html',
+      message: 'Compiled MCP App view "mcp-apps/status.html" keeps "ReactDOMClient" external (var), imported as "react-dom/client", from views/status.ts; a view inlines every module it loads.',
+      recovery: 'Bundle every JavaScript dependency into the artifact, then rebuild it.',
+      severity: 'error',
+    }]);
+  }, 60_000);
+
+  it('records no external for a self-contained view', async () => {
+    const root = await createProject(reactView);
+    const evidence: CompilationEvidence[] = [];
+    const config = composeMcpAppsRsbuildConfig([app(root)], {
+      cwd: root,
+      meta,
+      onCompilationEvidence: (record) => evidence.push(record),
+      outDir: join(root, 'dist'),
+    });
+    const rsbuild = await createRsbuild({ cwd: root, config });
+    const result = await rsbuild.build();
+    await result.close();
+    expect(evidence.map((record) => ({ compiler: record.compiler, externals: record.externals }))).toEqual([
+      { compiler: 'status', externals: [] },
+    ]);
+    expect(evidence.some((record) =>
+      record.modules.some((module) => module.resource === join(root, 'views', 'StatusPanel.tsx')),
+    )).toBe(true);
   }, 60_000);
 
   it('reports a syntax error as one AB4770 naming the file and position', async () => {
