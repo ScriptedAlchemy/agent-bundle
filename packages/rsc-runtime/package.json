@@ -67,7 +67,8 @@
     "./lineage": {
       "types": "./dist/lineage/index.d.ts",
       "import": "./dist/lineage.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "scripts": {
     "build": "node ../../scripts/sync-license-files.mjs && rslib build",
@@ -79,8 +80,12 @@
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
+  "peerDependenciesMeta": {
+    "@rspack/core": {
+      "optional": true
+    }
+  },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.30.0",
     "@modelcontextprotocol/server": "2.0.0",
     "effect": "4.0.0-rc.112",
     "flare-redact": "1.6.1",
