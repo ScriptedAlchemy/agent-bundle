@@ -18,11 +18,12 @@ import {
   type McpAppRuntimePreviewProps,
   type McpAppPreviewState,
 } from './mcp-app-preview.tsx';
-import type {
-  McpAppConsentChallenge,
-  McpAppHostContext,
-  McpAppJsonValue,
-  McpAppPreviewProfile,
+import {
+  workbenchMcpAppHostContext,
+  type McpAppConsentChallenge,
+  type McpAppHostContext,
+  type McpAppJsonValue,
+  type McpAppPreviewProfile,
 } from './mcp-app-client.ts';
 import { createMcpAppFrameRelay } from './mcp-app-frame.tsx';
 import { mcpInspectorDeepLink, type McpInspectorLaunchModel } from './mcp-inspector-launch-model.ts';
@@ -702,25 +703,6 @@ export const mcpPageSessionControls = (
 
 const text = (value: unknown): string | undefined => typeof value === 'string' && value.length > 0 ? value : undefined;
 
-const browserMcpAppHost = (): McpAppHostContext => {
-  const browser = typeof window === 'undefined' ? undefined : window;
-  const locale = browser?.navigator.language;
-  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  return Object.freeze({
-    availableDisplayModes: Object.freeze(['inline']),
-    containerDimensions: Object.freeze({ height: Math.max(0, browser?.innerHeight ?? 0), width: Math.max(0, browser?.innerWidth ?? 0) }),
-    deviceCapabilities: Object.freeze({}),
-    displayMode: 'inline',
-    locale: typeof locale === 'string' && locale.length > 0 ? locale : 'en',
-    platform: 'web',
-    safeAreaInsets: Object.freeze({ bottom: 0, left: 0, right: 0, top: 0 }),
-    styles: Object.freeze({}),
-    theme: browser?.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
-    timeZone: typeof timeZone === 'string' && timeZone.length > 0 ? timeZone : 'UTC',
-    userAgent: browser?.navigator.userAgent ?? 'unknown',
-  });
-};
-
 export const mcpAppPreviewSourceFor = (
   session: Pick<McpBrowserSessionModel, 'phase' | 'sessionId'>,
   invocation: McpBrowserSessionInvocation,
@@ -1319,7 +1301,7 @@ export const McpPage = (props: McpPageProps) => {
     runtimeProps === undefined ? initialPreview : runtimeAdmission?.selection?.preview);
   const [appPreviewBusy, setAppPreviewBusy] = useState(false);
   const [appPreviewProfile, setAppPreviewProfile] = useState<McpAppPreviewProfile>('portable');
-  const [appHost] = useState(browserMcpAppHost);
+  const [appHost] = useState(workbenchMcpAppHostContext);
   // Seeded from the controller so a static render (no effects) already shows the current launch state.
   const [inspectorModel, setInspectorModel] = useState<McpInspectorLaunchModel | undefined>(() => inspectorLaunch?.model);
   const actionSession = useRef(createMcpPageActionSession());

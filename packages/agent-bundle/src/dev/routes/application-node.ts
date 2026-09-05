@@ -42,10 +42,14 @@ const decode = (value: string): string | undefined => {
 };
 
 const decodeAll = (values: readonly string[]): readonly string[] | undefined => {
-  const decoded = values.map(decode);
-  return decoded.length === 0 || decoded.some((value) => value === undefined)
-    ? undefined
-    : Object.freeze(decoded as string[]);
+  if (values.length === 0) return undefined;
+  const decoded: string[] = [];
+  for (const value of values) {
+    const part = decode(value);
+    if (part === undefined) return undefined;
+    decoded.push(part);
+  }
+  return Object.freeze(decoded);
 };
 
 /** Compiled route id (`tool:curator/search_audible`, `event:tool/before`, `cli:audible/search`, `script:sync`) → node reference. */

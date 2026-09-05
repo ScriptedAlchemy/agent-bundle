@@ -1,5 +1,6 @@
 import type { JSONRPCMessage, Transport, TransportSendOptions } from '@modelcontextprotocol/client';
 
+import type { RuntimeVector } from '../../../agent-bundle/src/contracts/runtime.ts';
 import { isRecord, parseStrictResponseJson } from '../client-helpers.ts';
 import { readNdjsonResponseFrames } from '../ndjson.ts';
 import {
@@ -140,7 +141,7 @@ const invalidParamsMessage = (method: string): string =>
 
 export interface AgentBundleMcpDispatchResult {
   readonly value: unknown;
-  readonly vector?: import('../../../agent-bundle/src/contracts/runtime.ts').RuntimeVector;
+  readonly vector?: RuntimeVector;
 }
 
 type AgentBundleMcpRoutedMethod =
