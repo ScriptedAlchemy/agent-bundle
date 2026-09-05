@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { isErrno } from '../core/errors.ts';
+import { errorMessage, isErrno } from '../core/errors.ts';
 
 import { artifactManifestName, parseArtifactManifest, type ArtifactManifest } from './manifest.ts';
 
@@ -16,9 +16,6 @@ export type ArtifactManifestReadResult =
   | Readonly<{ readonly path: string; readonly root: string; readonly status: 'missing' }>
   | Readonly<{ readonly detail: string; readonly path: string; readonly root: string; readonly status: 'invalid' }>;
 
-const describe = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
-
 export const readArtifactManifest = async (from: string): Promise<ArtifactManifestReadResult> => {
   const root = resolve(from);
   const path = join(root, artifactManifestName);
@@ -29,11 +26,11 @@ export const readArtifactManifest = async (from: string): Promise<ArtifactManife
     // Only an absent file is "missing"; a directory, a permission refusal, or
     // an I/O failure is a manifest that exists and cannot be read.
     if (isErrno(error, 'ENOENT')) return Object.freeze({ path, root, status: 'missing' });
-    return Object.freeze({ detail: describe(error), path, root, status: 'invalid' });
+    return Object.freeze({ detail: errorMessage(error), path, root, status: 'invalid' });
   }
   try {
     return Object.freeze({ manifest: parseArtifactManifest(bytes), path, root, status: 'ok' });
   } catch (error) {
-    return Object.freeze({ detail: describe(error), path, root, status: 'invalid' });
+    return Object.freeze({ detail: errorMessage(error), path, root, status: 'invalid' });
   }
 };

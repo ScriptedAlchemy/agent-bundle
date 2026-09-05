@@ -112,7 +112,6 @@ const artifactCliFor = (cli: CompiledCliSurface): ArtifactManifestCli => ({
   routes: byId(cli.routes.map(artifactRouteFor)),
 });
 
-/** The manifest `routes` section for one compiled graph; arrays are sorted by their manifest sort keys. */
 /** One route contract row (#593): the compiler's contract with its sorted bound route ids. */
 export const artifactRouteContractFor = (contract: RouteContract): ArtifactManifestRouteContract => ({
   id: contract.id,
@@ -121,6 +120,7 @@ export const artifactRouteContractFor = (contract: RouteContract): ArtifactManif
   routes: [...contract.routes].sort((left, right) => left.localeCompare(right)),
 });
 
+/** The manifest `routes` section for one compiled graph; arrays are sorted by their manifest sort keys. */
 export const artifactRoutesFor = (graph: CompiledRouteGraph): ArtifactManifestRoutes => ({
   ...(graph.cli === undefined ? {} : { cli: artifactCliFor(graph.cli) }),
   ...(graph.contracts === undefined ? {} : { contracts: byId(graph.contracts.map(artifactRouteContractFor)) }),

@@ -1510,10 +1510,3 @@ export const assembleArtifactManifest = (manifest: ArtifactManifest): AssembledA
   const bytes = serializeArtifactManifest(manifest);
   return Object.freeze({ bytes, manifest: parseArtifactManifest(bytes) });
 };
-
-/** The projection of one host, or undefined when the artifact was not built for it. */
-export const projectionFor = (
-  manifest: ArtifactManifest,
-  host: string,
-): ArtifactManifestProjection | undefined =>
-  manifest.projections.find((projection) => projection.host === host);
