@@ -1,8 +1,9 @@
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 
 import { afterEach, describe, expect, it } from '@rstest/core';
+import { init, parse } from 'es-module-lexer';
 
 import { MCP_APP_HTML_ADVISORY_BYTES } from '../src/build/mcp-app-diagnostics.ts';
 import { compileMcpApps, composeMcpAppsRsbuildConfig, type McpAppCompileMode } from '../src/build/mcp-apps.ts';
@@ -10,7 +11,7 @@ import { DiagnosticError, type Diagnostic } from '../src/core/diagnostics.ts';
 import { MAX_APP_HTML_BYTES } from '../src/core/mcp-app-limits.ts';
 import type { AgentBundleToolsConfig, NormalizedMcpApp } from '../src/core/types.ts';
 import type { AgentBundleMeta } from '../src/meta.ts';
-import { workbenchNodeModules } from './helpers/workspace-paths.ts';
+import { agentBundlePackageRoot, workbenchNodeModules } from './helpers/workspace-paths.ts';
 
 const roots: string[] = [];
 
@@ -82,6 +83,33 @@ const compileFailure = async (promise: Promise<unknown>): Promise<readonly Diagn
 
 const compileErrorShape = { code: 'AB4770', severity: 'error' } as const;
 
+const runtimeImportGraph = async (
+  entry: string,
+): Promise<{ readonly externalSpecifiers: readonly string[]; readonly files: ReadonlyMap<string, string> }> => {
+  await init;
+  const files = new Map<string, string>();
+  const externalSpecifiers: string[] = [];
+  const queue = [entry];
+  while (queue.length > 0) {
+    const file = queue.shift()!;
+    if (files.has(file)) continue;
+    const source = await readFile(file, 'utf8');
+    files.set(file, source);
+    const [imports] = parse(source);
+    for (const record of imports) {
+      if (record.d === -2) continue;
+      if (record.n === undefined) {
+        externalSpecifiers.push('<non-literal dynamic import>');
+      } else if (record.n.startsWith('.')) {
+        queue.push(join(dirname(file), record.n));
+      } else {
+        externalSpecifiers.push(record.n);
+      }
+    }
+  }
+  return { externalSpecifiers: Object.freeze(externalSpecifiers), files };
+};
+
 const reactView = {
   'views/StatusPanel.tsx': 'export const Panel = () => <strong className="w">panel-ready</strong>;\n',
   'views/status.ts': [
@@ -93,6 +121,65 @@ const reactView = {
 };
 
 describe('compileMcpApps', () => {
+  it('bundles agent-bundle/app into one browser-only inline document', async () => {
+    const root = await createProject({
+      'views/status.ts': [
+        "import { createAppClient } from 'agent-bundle/app';",
+        "(globalThis as Record<string, unknown>)['createAppClient'] = createAppClient;",
+        '',
+      ].join('\n'),
+    });
+    await rm(join(root, 'node_modules'));
+    const graph = await runtimeImportGraph(join(agentBundlePackageRoot, 'dist', 'app.js'));
+    expect(graph.externalSpecifiers).toEqual([]);
+    expect([...graph.files.keys()]).toContain(join(agentBundlePackageRoot, 'dist', 'app.js'));
+    expect(graph.files.size).toBeGreaterThan(1);
+    expect([...graph.files.keys()].every((file) =>
+      file.startsWith(join(agentBundlePackageRoot, 'dist')),
+    )).toBe(true);
+    const runtimeBytes = [...graph.files.values()].join('\n');
+    const forbiddenSharedBytes = [
+      /\bnode:/u,
+      /["']effect(?:\/|["'])/u,
+      /["']zod(?:\/|["'])/u,
+      /typescript-5|source-map-support/u,
+      /mcp-server-runtime|mcp-schema-projection|mcp-tasks/u,
+      /routes\/framework-imports|routes\/public|build\/mcp-apps/u,
+    ];
+    const forbiddenRuntimeBytes = [
+      ...forbiddenSharedBytes,
+      /\bprocess\b/u,
+      /\brequire\b/u,
+      /__webpack_require__/u,
+      /\bBuffer\b/u,
+      /\bimport\.meta\b/u,
+    ];
+    expect(forbiddenRuntimeBytes.filter((pattern) => pattern.test(runtimeBytes))).toEqual([]);
+    expect(runtimeBytes).toContain('APP_PROTOCOL_VERSION');
+
+    const installedPackage = join(root, 'node_modules', 'agent-bundle');
+    await mkdir(installedPackage, { recursive: true });
+    await writeFile(join(installedPackage, 'package.json'), await readFile(join(agentBundlePackageRoot, 'package.json')));
+    for (const [file, source] of graph.files) {
+      const installedFile = join(installedPackage, relative(agentBundlePackageRoot, file));
+      await mkdir(dirname(installedFile), { recursive: true });
+      await writeFile(installedFile, source);
+    }
+
+    const { outDir, result } = await compile(root, [app(root)]);
+    const html = await emittedHtml(outDir);
+    expect(html).toContain('2026-01-26');
+    expect(result.apps[0]!.sourceInputs).toEqual([
+      join(root, 'agent-bundle.config.ts'),
+      join(root, 'views', 'status.ts'),
+    ]);
+    expect(await readdir(outDir)).toEqual(['mcp-apps']);
+    expect(await readdir(join(outDir, 'mcp-apps'))).toEqual(['status.html']);
+    expect(html).toMatch(/<script\b(?![^>]*\bsrc=)[^>]*>/u);
+    expect(html).not.toMatch(/<(?:script\b[^>]*\bsrc|link\b[^>]*\bhref)=?/u);
+    expect(forbiddenSharedBytes.filter((pattern) => pattern.test(html))).toEqual([]);
+  }, 60_000);
+
   it('compiles a .ts entry that imports a .tsx component to the automatic JSX runtime and measures the view', async () => {
     const root = await createProject(reactView);
     const { outDir, result } = await compile(root, [app(root)]);
@@ -177,6 +264,28 @@ describe('compileMcpApps', () => {
     const html = await emittedHtml(outDir);
     expect(html).toContain(meta.name);
     expect(html).not.toContain('SHADOWED');
+  }, 60_000);
+
+  it('resolves the reserved agent-bundle/app specifier ahead of a consumer tsconfig paths entry that shadows it', async () => {
+    const root = await createProject({
+      'stub-app.ts': "export const createAppClient = (): string => 'SHADOWED_APP_RUNTIME';\n",
+      'tsconfig.json': `${JSON.stringify({
+        compilerOptions: { baseUrl: '.', paths: { 'agent-bundle/app': ['./stub-app.ts'] } },
+      })}\n`,
+      'views/status.ts': [
+        "import { createAppClient } from 'agent-bundle/app';",
+        'document.body.dataset.client = String(createAppClient);',
+        '',
+      ].join('\n'),
+    });
+    const { outDir, result } = await compile(root, [app(root)]);
+    const html = await emittedHtml(outDir);
+    expect(html).toContain('2026-01-26');
+    expect(html).not.toContain('SHADOWED_APP_RUNTIME');
+    expect(result.apps[0]!.sourceInputs).toEqual([
+      join(root, 'agent-bundle.config.ts'),
+      join(root, 'views', 'status.ts'),
+    ]);
   }, 60_000);
 
   it('still resolves the author’s own tsconfig paths inside a view', async () => {

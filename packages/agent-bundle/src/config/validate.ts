@@ -23,6 +23,7 @@ import {
 } from '../core/runtime.ts';
 import { canonicalHookEvents, isPrebuiltEntryInput, parseNativeHookToolSelector } from '../core/types.ts';
 import { type RouteModuleExports, scanRouteModuleExports } from '../routes/contract.ts';
+import { mcpRouteProtocolName } from '../routes/protocol-name.ts';
 import { featureCapabilityName } from '../core/components.ts';
 import type {
   AgentBundleBinEntry,
@@ -926,7 +927,7 @@ const validateMcp = (
   for (const server of generatedServers) {
     for (const route of server.routes) {
       if (route.kind !== 'app') continue;
-      const appName = route.id.slice(route.id.lastIndexOf('/') + 1);
+      const appName = mcpRouteProtocolName(route.id);
       if (!names.has(appName)) names.set(appName, undefined);
       const resourceUri = route.config['resourceUri'];
       if (typeof resourceUri === 'string' && !uris.has(resourceUri)) uris.set(resourceUri, appName);

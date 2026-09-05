@@ -12,8 +12,8 @@ to see how the surfaces fit together instead of studying one of them alone.
 - **Run from the repository root:** `pnpm example:mcp-app`
 - **Package:** `@agent-bundle-example/mcp-app`
 - **Public dependencies:** `agent-bundle` (`workspace:*`), `@modelcontextprotocol/server`,
-  `@modelcontextprotocol/ext-apps`, `zod`; `@rstest/browser`, `@rstest/core`,
-  `@rstest/playwright`, and `playwright` for the browser-app test
+  `zod`; `@rstest/browser`, `@rstest/core`, `@rstest/playwright`, and `playwright` for the
+  browser-app test
 - **Targets:** `portable`, `codex`, `claude` — the MCP App is declared for `portable`
 - **Credentials:** none — the eval and the fixture check read only checked-in data
 - **Source:** [`examples/mcp-app`](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/mcp-app)
@@ -38,6 +38,17 @@ to see how the surfaces fit together instead of studying one of them alone.
   mounts the production-compiled App HTML over the product bridge through
   `agent-bundle/test/browser` — the `browser-app` level in
   [Testing](../guide/development/testing.mdx).
+- **The App is a client of the bridge, not a transport of its own.** `views/status-panel.ts`
+  creates its client with `createAppClient` from `agent-bundle/app`, receives the opening
+  `show-status` call's input and structured result through `onToolInput` / `onToolResult`, and
+  surfaces failed or unstructured opening results through `onToolError`
+  registered on `tool:status/show-status` (delivered when the host's initialize result names
+  `show-status` as the opening tool), refreshes through `call('tool:status/refresh-status', …)`,
+  and reads the readiness policy through `request('resources/read', …)`. The `status` server is
+  handwritten, so no generated route contracts exist; the view types its two tools itself with a
+  structural `AppRegister` augmentation. No JSON-RPC ids, pending maps, `postMessage('*')`, or
+  `structuredContent` unwrapping remain in the view. See
+  [The typed App client](../guide/authoring/mcp.mdx#the-typed-app-client).
 
 ## What is authored
 

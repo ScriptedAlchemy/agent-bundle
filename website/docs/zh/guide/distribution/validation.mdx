@@ -35,8 +35,10 @@ npx agent-bundle validate --artifact artifact --strict    # 已构建字节，�
 路由模块、布局或 provider——或它们之一通过相对导入触达的模块——若值导入了携带编译器的框架入口
 （`agent-bundle`、`agent-bundle/api`、`agent-bundle/config`、`agent-bundle/eval`、`agent-bundle/rstest`、
 `agent-bundle/test`、`agent-bundle/test/browser`），会由 `inspect`、`validate`、`build` 与 `dev` 报告为
-`AB4837`，点名文件与说明符，而不是在打包器内部失败；`import type` 以及仅作为类型使用的导入不会被报告，
-需要框架的路由式命令则改为通过 [`spawnServeApp`](../authoring/mcp.mdx#独立提供-app) 提供 App。
+`AB4837`，点名文件与说明符，而不是在打包器内部失败。浏览器安全且不携带编译器的
+`agent-bundle/app` 不在这份列表中，值导入不会触发 `AB4837`。`import type` 以及仅作为类型使用的导入
+不会被报告，需要框架的路由式命令则改为通过
+[`spawnServeApp`](../authoring/mcp.mdx#独立提供-app) 提供 App。
 
 每条诊断都是一份结构化记录：稳定的 `AB` 代码、一个严重级别、一条消息，通常还有 `sourcePath` 与一条
 `recovery` 提示。由诊断把关的命令——`build`、`prepack`、`validate`、`doctor`、`install` 与 `dev`——只有

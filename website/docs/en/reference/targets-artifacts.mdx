@@ -134,8 +134,10 @@ inventory checks the same paths (`AB7010`).
 
 ## agent-bundle.manifest.json
 
-One manifest is emitted per root and is the input to every later integrity check —
-`validate --artifact`, `prepack`, `doctor --from`, and the packed and installed-host proof levels.
+One manifest is emitted per root and is the input to later integrity checks —
+`validate --artifact`, `prepack`, and the packed and installed-host proof
+levels. `doctor --from` and `install --from` identify the root from the
+host `plugin.json` under `--from`; they do not parse this file.
 
 | Field | Contents |
 | --- | --- |
@@ -182,6 +184,8 @@ schema pin, and emitted files and source inputs.
 
 ## Next
 
+- [Compiler architecture](../guide/concepts/architecture.mdx) — the three
+  compiler layers and which production readers consume each manifest field.
 - [Artifact validation](../guide/distribution/validation.mdx) — the checks that read this manifest.
 - [Host installation](../guide/distribution/installation.mdx) — installing the root into each host.
 - [Runtime environment](./runtime-environment.mdx) — what the emitted executables assume at run time.
