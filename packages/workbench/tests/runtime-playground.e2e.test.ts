@@ -165,6 +165,32 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
     await expect(page.getByRole('tabpanel'))
       .toContainText('Stored Flight could not be decoded as an Agent Document.', { timeout: browserTimeout });
 
+    // The hook run's stored Flight is downloadable from the Flight tab. The
+    // client rejects any response that is not `application/octet-stream`
+    // and surfaces the rejection as an alert; the real route then clears the
+    // alert and hands the viewer a `runtime-run-<id>.flight.bin` download.
+    await history.nth(1).getByRole('button').first().click();
+    await page.getByRole('tab', { name: 'Flight', exact: true }).click();
+    const download = page.getByRole('button', { name: 'Download Flight payload' });
+    await expect(download).toBeVisible({ timeout: browserTimeout });
+    const flightAlert = page.locator('.runtime-request-error[role="alert"]');
+    const flightRoute = '**/api/runtime/runs/*/flight';
+    await page.route(flightRoute, (route) => route.fulfill({ body: 'nope', contentType: 'text/plain', status: 200 }));
+    await download.click();
+    await expect(flightAlert).toHaveText('Runtime Flight response is not valid.', { timeout: browserTimeout });
+    await page.unroute(flightRoute);
+    const downloadEvent = page.waitForEvent('download');
+    await download.click();
+    const downloaded = await downloadEvent;
+    expect(downloaded.suggestedFilename()).toMatch(/^runtime-run-.+\.flight\.bin$/u);
+    await expect(flightAlert).toHaveCount(0, { timeout: browserTimeout });
+
+    // Real trace spans carry no `details`, so the Diagnostics tab renders the
+    // render phases without a span-details disclosure.
+    await page.getByRole('tab', { name: 'Diagnostics', exact: true }).click();
+    await expect(page.getByLabel('Runtime render trace')).toContainText('normalize', { timeout: browserTimeout });
+    await expect(page.getByRole('button', { name: /span details/u })).toHaveCount(0);
+
     const reset = page.getByRole('button', { name: 'Reset fixture state' });
     const stateVersionBeforeReset = await identity.getAttribute('data-runtime-state-version');
     await reset.click();

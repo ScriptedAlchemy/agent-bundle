@@ -551,6 +551,40 @@ it('renders previous-provider last-good output separately from session-only runt
   expect(markup).toContain('&quot;city&quot;: &quot;London&quot;');
 });
 
+it('toggles span details for traced spans that carry them and renders no toggle otherwise', async () => {
+  const traced = run('01', {
+    result: Object.freeze({
+      agentVisible: Object.freeze({ city: 'London' }),
+      state: Object.freeze({ identity: Object.freeze({ stateStoreId: 'state-a', stateVersion: 1 }) }),
+      trace: Object.freeze([
+        Object.freeze({ details: Object.freeze({ step: 'render' }), id: 'render', phase: 'render', startedAt: '2026-08-15T12:01:00.000Z', status: 'succeeded' as const }),
+        Object.freeze({ id: 'flight', parentId: 'render', phase: 'flight', startedAt: '2026-08-15T12:01:00.500Z', status: 'succeeded' as const }),
+      ]),
+      tree: Object.freeze([]),
+    }),
+  });
+  const controller = createRuntimePlaygroundController({ bootstrap: bootstrap({ history: Object.freeze([traced]) }), client: clientFor(), profiles });
+  controller.dispatch({ tab: 'diagnostics', type: 'selection.tab' });
+  const toggles = (markup: string): readonly string[] => markup.match(/<button aria-expanded="(?:true|false)" type="button">(?:Show|Hide) span details<\/button>/gu) ?? [];
+
+  const collapsed = await renderWhenReady(createElement(RuntimePlayground, { controller }));
+  expect(toggles(collapsed)).toEqual(['<button aria-expanded="false" type="button">Show span details</button>']);
+  expect(collapsed).toContain('<li data-runtime-trace-parent="render"><strong>flight</strong>');
+  expect(collapsed).not.toContain('&quot;step&quot;: &quot;render&quot;');
+
+  controller.dispatch({ spanId: 'render', type: 'trace.toggle' });
+  const expanded = await renderWhenReady(createElement(RuntimePlayground, { controller }));
+  expect(controller.model.expandedTraceSpanIds).toEqual(['render']);
+  expect(toggles(expanded)).toEqual(['<button aria-expanded="true" type="button">Hide span details</button>']);
+  expect(expanded).toContain('&quot;step&quot;: &quot;render&quot;');
+
+  controller.dispatch({ spanId: 'render', type: 'trace.toggle' });
+  const recollapsed = await renderWhenReady(createElement(RuntimePlayground, { controller }));
+  expect(controller.model.expandedTraceSpanIds).toEqual([]);
+  expect(toggles(recollapsed)).toEqual(['<button aria-expanded="false" type="button">Show span details</button>']);
+  expect(recollapsed).not.toContain('&quot;step&quot;: &quot;render&quot;');
+});
+
 it('initializes all provider history items without truncating the server-owned fifty item window', () => {
   const history = Object.freeze(Array.from({ length: 50 }, (_, index) => run(String(50 - index).padStart(2, '0'))));
   const controller = createRuntimePlaygroundController({ bootstrap: bootstrap({ history }), client: clientFor(), profiles });
