@@ -138,6 +138,24 @@ it('resolves an exported const string literal imported from a relative sibling m
   expect(config).toEqual({ _meta: { ui: { resourceUri: 'ui://notes/panel.html' } }, title: 'Shared' });
 });
 
+it('resolves a string const reached through two relative hops and an export const re-alias', () => {
+  const project = virtualProject({
+    '/project/src/shared/title.ts': "export const SHARED_TITLE = 'Shared' as const;\n",
+    '/project/src/mcp/notes/constants.ts': [
+      "import { SHARED_TITLE } from '../../shared/title.js';",
+      'export const TITLE = SHARED_TITLE;',
+      '',
+    ].join('\n'),
+  });
+  const { config, diagnostics } = extract([
+    "import { TITLE } from '../constants.js';",
+    'export const config = { title: TITLE };',
+    'export default () => null;',
+  ].join('\n'), 'src/mcp/notes/tools/search.ts', project);
+  expect(diagnostics).toEqual([]);
+  expect(config).toEqual({ title: 'Shared' });
+});
+
 it.each([
   [
     'a bare package specifier',
