@@ -91,6 +91,12 @@ it('validates declared payload runtime dependencies and normalizes them sorted a
     expect(built.model.payloads).toMatchObject([
       { name: 'runtime', runtimeDependencies: ['sharp', 'zod'] },
     ]);
+    // The manifest row is the normalized payload, serialized: the same hosts the
+    // payload was packaged for and the same sorted, unique dependency list.
+    const manifest = parseArtifactManifest(await readFile(join(root, 'out', 'agent-bundle.manifest.json'), 'utf8'));
+    expect(manifest.distribution.payloads).toEqual([
+      { hosts: ['claude', 'codex', 'portable'], name: 'runtime', runtimeDependencies: ['sharp', 'zod'] },
+    ]);
   } finally {
     await removeProjectFixture(root);
   }
@@ -255,6 +261,7 @@ it('packages prebuilt payloads at stable paths and lowers prebuilt entries throu
       sourceInputs: ['agent-bundle.config.ts', 'built/runtime/chunks/417.js'],
     });
     expect(manifest.compiler.project.sourceInputs.some((input) => input.path === 'built/runtime/mcp/server.js')).toBe(true);
+    expect(manifest.distribution.payloads.map((payload) => payload.name)).toEqual(['app', 'runtime']);
 
     // The published artifact revalidates cleanly from disk alone.
     const revalidated = await validate({ artifact: join(root, 'out'), root });

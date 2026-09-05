@@ -108,7 +108,7 @@ export const writeFixtureManifest = async (options: {
           source: { status: 'passed' },
         },
       },
-      distribution: { channels: ['local'] },
+      distribution: { channels: ['local'], payloads: [] },
       executables: {
         bins: [],
         hooks: [],

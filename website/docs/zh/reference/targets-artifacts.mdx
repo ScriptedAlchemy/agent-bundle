@@ -136,7 +136,7 @@ MCP 入口、脚本、路由式 CLI bin 与 MCP App 只编译**一次**，归属
 | `projections[]` | 每个所选宿主一行，按 `host` 排序：`host`、可选的 `builtInHost`、指向该投影输出的宿主插件、市场、MCP 与钩子文档的 `documents` 指针，以及它的 `marketplace` 名。 |
 | `routes` | 编译后的路由图：`servers[]`、`events[]`、`scripts[]`、`cli`、`providers[]`、`layouts[]`、`contracts[]`（当有路由绑定时）及其 `digest`。绑定了契约的路由用 `route.contract` 命名它。 |
 | `executables` | 根目录能启动的每个进程：`bins[]`、`hooks[]`（每个宿主的每个 wrapper 一行）、带 `entry` 与 `apps[]` 的 `mcpServers[]`，以及 `scripts[]`。 |
-| `distribution` | `channels`（`local`，当 `compiler.project.packageName` 存在时再加 `npm`）与指向 `INSTALL.md` / `install.mjs` 的 `install` 指针。 |
+| `distribution` | `channels`（`local`，当 `compiler.project.packageName` 存在时再加 `npm`）、指向 `INSTALL.md` / `install.mjs` 的 `install` 指针，以及 `payloads[]`——每个预构建负载目录、它所打包的宿主及其声明的 `runtimeDependencies`。 |
 | `compiler` | 运行记录，由 `recordVersion` 独立于 `manifestVersion` 版本化：`producer`、`project`（`configPath`、`configDigest`、`modelDigest`、`revision`、`sourceInputs`，可选的 `packageName` / `packageVersion`）、`provenance[]`（每个 `files[]` 行一条 `{ path, sourceInputs[] }`）、`adapters[]`（每个投影的 `adapterRevision`、`observedVersion`、固定的 `schemas`）、`agentSkills` 与 `validation`。 |
 | `web` | **除非配置了 [`web`](./configuration.mdx#web)，否则不出现。** `{ open, apps[] }`，每个 app 为 `{ allow, app, args, entry, env, name, resourceUri, server, tool?, input? }`。`entry` 是根相对的已编译 MCP 可执行文件，必须对应一行 `files[]`；`args` 是该服务器在 entry 之后声明的 `mcp.servers.<id>.args`，`env` 是其已声明的静态 env，二者的 `agent-bundle:path:*` 令牌都保持未展开。App 按 `app` 排序；`targets` 落在本根选择范围之外的已暴露 App 会被省略（若一个都不剩则整个小节省略）。`<plugin> web` 命令、`agent-bundle dev` 的 `/web/<server>/<app>` 与 `doctor` 读取这一节，绝不会从 `src/**` 重新发现 App。 |
 

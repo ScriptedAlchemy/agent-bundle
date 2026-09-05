@@ -115,7 +115,11 @@ const validManifest = (): ArtifactManifest => ({
       source: { status: 'passed' },
     },
   },
-  distribution: { channels: ['local', 'npm'], install: { instructions: 'install.md', script: 'install.sh' } },
+  distribution: {
+    channels: ['local', 'npm'],
+    install: { instructions: 'install.md', script: 'install.sh' },
+    payloads: [{ hosts: ['claude'], name: 'runtime', runtimeDependencies: ['zod'] }],
+  },
   executables: {
     bins: [{ hosts: ['claude', 'codex'], name: 'review', path: 'runtime/bin/review.mjs', worker: 'runtime/bin/review.worker.mjs' }],
     hooks: [
@@ -275,7 +279,7 @@ const minimalManifest = (): ArtifactManifest => ({
     recordVersion: artifactCompilerRecordVersion,
     validation: { artifact: { status: 'passed' }, projections: [], source: { status: 'passed' } },
   },
-  distribution: { channels: ['local'] },
+  distribution: { channels: ['local'], payloads: [] },
   executables: { bins: [], hooks: [], mcpServers: [], scripts: [] },
   files: [],
   manifestVersion: 2,
@@ -444,6 +448,13 @@ const parserOnlyRules: readonly { readonly apply: (manifest: MutableManifest) =>
   { apply: (manifest) => { manifest.executables.scripts[0]!.worker = 'runtime/scripts/missing.mjs'; }, rule: 'scripts[].worker names a manifest file' },
   { apply: (manifest) => { manifest.projections[0]!.documents.plugin = 'claude/missing.json'; }, rule: 'projections[].documents.* name manifest files' },
   { apply: (manifest) => { manifest.distribution.install!.script = 'missing.sh'; }, rule: 'distribution.install.* name manifest files' },
+  { apply: (manifest) => { manifest.distribution.payloads[0]!.hosts = ['zed']; }, rule: 'payloads[].hosts name declared projections' },
+  { apply: (manifest) => { manifest.distribution.payloads[0]!.name = 'vendor'; }, rule: 'payloads[].name holds a prebuilt manifest file' },
+  {
+    apply: (manifest) => { manifest.distribution.payloads = [...manifest.distribution.payloads, { ...manifest.distribution.payloads[0]!, name: 'app' }]; },
+    rule: 'payloads sorted by name',
+  },
+  { apply: (manifest) => { manifest.distribution.payloads[0]!.runtimeDependencies = ['zod', 'effect']; }, rule: 'payloads[].runtimeDependencies sorted' },
   { apply: (manifest) => { manifest.executables.scripts[0]!.rendered!.routeId = 'nope'; }, rule: 'scripts[].rendered.routeId names a script route' },
   { apply: (manifest) => { manifest.executables.hooks[1]!.routeId = 'nope'; }, rule: 'hooks[].routeId names an event route' },
   { apply: (manifest) => { manifest.routes.cli!.commands![0]!.routeId = 'nope'; }, rule: 'routes.cli.commands[].routeId names a CLI route' },
@@ -500,6 +511,7 @@ const schemaEncodedRules: readonly { readonly apply: (manifest: MutableManifest)
   { apply: (manifest) => { manifest.distribution.channels = ['npm', 'local']; }, rule: 'channels are sorted' },
   { apply: (manifest) => { manifest.distribution.channels = ['local', 'local']; }, rule: 'channels are unique' },
   { apply: (manifest) => { manifest.distribution.install = {}; }, rule: 'install names a pointer' },
+  { apply: (manifest) => { manifest.distribution.payloads[0]!.name = 'runtime/mcp'; }, rule: 'payload name is one segment' },
   { apply: (manifest) => { manifest.routes.cli!.mode = 'conventional'; }, rule: 'cli commands appear only in generated mode' },
   { apply: (manifest) => { manifest.routes.cli!.routes[0]!.kind = 'script'; }, rule: 'cli routes are cli routes or projected MCP tool routes' },
   {

@@ -128,7 +128,7 @@ export const writeInstallFixtureManifest = async (
         source: { status: 'passed' },
       },
     },
-    distribution: { channels: ['local'] },
+    distribution: { channels: ['local'], payloads: [] },
     executables: { bins: [], hooks: [], mcpServers: [], scripts: [] },
     files,
     manifestVersion: 2,

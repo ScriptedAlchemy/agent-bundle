@@ -71,7 +71,7 @@ const validManifest = (): ArtifactManifest => ({
       source: { status: 'passed' },
     },
   },
-  distribution: { channels: ['local'] },
+  distribution: { channels: ['local'], payloads: [] },
   executables: {
     bins: [],
     hooks: [{
@@ -328,7 +328,7 @@ it('round-trips the optional package identity axes distinctly', () => {
   const manifest = validManifest();
   (manifest.compiler.project as { packageName?: string }).packageName = '@agent-bundle-example/audiobook-curator';
   (manifest.compiler.project as { packageVersion?: string }).packageVersion = '1.0.0';
-  (manifest.distribution as { channels: ('local' | 'npm')[] }).channels.push('npm');
+  (manifest.distribution.channels as ('local' | 'npm')[]).push('npm');
   const assembled = assembleArtifactManifest(manifest);
   expect(assembled.manifest.compiler.project.packageName).toBe('@agent-bundle-example/audiobook-curator');
   expect(assembled.manifest.compiler.project.packageVersion).toBe('1.0.0');

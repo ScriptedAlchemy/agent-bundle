@@ -40,6 +40,21 @@ const skillTree: SkillDocumentTree = {
 };
 
 const inspection: ArtifactInspection = {
+  application: {
+    distribution: { channels: ['local'] },
+    events: [],
+    hooks: [{
+      hooks: [{ event: 'session/start', id: 'hook:configured', kind: 'config', name: 'configured-hook', path: 'hooks/configured.mjs' }],
+      host: 'claude',
+    }],
+    hosts: [
+      { builtIn: true, documents: [{ kind: 'plugin', path: '.claude-plugin/plugin.json' }], host: 'claude' },
+      { builtIn: true, documents: [{ kind: 'plugin', path: 'plugin.json' }], host: 'portable' },
+    ],
+    identity: { id: 'application:fixture', name: 'fixture', version: '1.0.0' },
+    scripts: [{ hosts: ['portable'], id: 'script:configured', mode: 'bundle', name: 'configured', path: file.path }],
+    servers: [],
+  },
   epochId: 'epoch-a',
   files: [],
   project: {
@@ -49,13 +64,16 @@ const inspection: ArtifactInspection = {
     revision: digest,
     sourceInputs: [],
   },
+  projections: [],
   provenance: [],
   runtime: {
+    bins: [],
     executables: [],
     hooks: [{
       event: 'session/start',
       file,
       id: 'hook:configured',
+      kind: 'config',
       name: 'configured-hook',
       path: 'hooks/configured.mjs',
       target: 'claude',
@@ -64,11 +82,11 @@ const inspection: ArtifactInspection = {
     scripts: [{
       file,
       id: 'script:configured',
+      mode: 'bundle',
       name: 'configured',
       target: 'portable',
     }],
   },
-  targets: [],
 };
 
 it('adapts Workbench skill and artifact sources into the shared pure tree', () => {

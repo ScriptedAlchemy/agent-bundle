@@ -261,7 +261,7 @@ const manifestFor = (
         source: { status: 'passed' },
       },
     },
-    distribution: { channels: ['local'] },
+    distribution: { channels: ['local'], payloads: [] },
     executables: {
       bins: files.some((file) => file.path === 'bin/fixture.mjs')
         ? [{ hosts: [fixtureTarget], name: 'fixture', path: 'bin/fixture.mjs', worker: 'bin/fixture.worker.mjs' }]

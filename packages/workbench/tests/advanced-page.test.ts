@@ -79,7 +79,7 @@ it('mounts each existing page component under its section', () => {
 
   const artifact = render('artifact');
   expect(artifact).toContain('advanced-section--artifact');
-  expect(artifact).toContain('id="artifact-target"');
+  expect(artifact).toContain('id="artifact-projection"');
 
   const protocolMarkup = render('protocol');
   expect(protocolMarkup).toContain('class="mcp-content"');

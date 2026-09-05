@@ -88,6 +88,7 @@ const writePackedFixtureManifest = async (artifactRoot: string): Promise<Artifac
           ...(filePaths.has('INSTALL.md') ? { instructions: 'INSTALL.md' } : {}),
           ...(filePaths.has('install.mjs') ? { script: 'install.mjs' } : {}),
         },
+        payloads: [],
       },
       executables: {
         bins: [],

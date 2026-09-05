@@ -161,6 +161,7 @@ export type {
   ArtifactManifestMcpApp,
   ArtifactManifestMcpEntry,
   ArtifactManifestMcpServer,
+  ArtifactManifestPayload,
   ArtifactManifestProjection,
   ArtifactManifestProjectionDocuments,
   ArtifactManifestProjectionMarketplace,

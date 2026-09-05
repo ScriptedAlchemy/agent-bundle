@@ -50,6 +50,7 @@ import {
   type ArtifactManifestBin,
   type ArtifactManifestCompilerAdapter,
   type ArtifactManifestDistribution,
+  type ArtifactManifestPayload,
   type ArtifactManifestExecutables,
   type ArtifactManifestHook,
   type ArtifactManifestMcpApp,
@@ -481,9 +482,24 @@ const manifestScripts = (options: {
     .sort((left, right) => left.id.localeCompare(right.id)));
 };
 
+const manifestPayloads = (options: {
+  readonly model: NormalizedPlugin;
+  readonly selected: readonly string[];
+}): readonly ArtifactManifestPayload[] => Object.freeze((options.model.payloads ?? [])
+  .map((payload) => ({ hosts: sortedHosts(payload.targets.filter((target) => options.selected.includes(target))), payload }))
+  .filter(({ hosts }) => hosts.length > 0)
+  .map(({ hosts, payload }): ArtifactManifestPayload => Object.freeze({
+    hosts,
+    name: payload.name,
+    runtimeDependencies: Object.freeze([...payload.runtimeDependencies]),
+  }))
+  .sort((left, right) => left.name.localeCompare(right.name)));
+
 const manifestDistribution = (options: {
   readonly filePaths: ReadonlySet<string>;
+  readonly model: NormalizedPlugin;
   readonly projectContext: ProjectContext;
+  readonly selected: readonly string[];
 }): ArtifactManifestDistribution => {
   const instructions = options.filePaths.has('INSTALL.md') ? 'INSTALL.md' : undefined;
   const script = options.filePaths.has('install.mjs') ? 'install.mjs' : undefined;
@@ -497,6 +513,7 @@ const manifestDistribution = (options: {
           ...(script === undefined ? {} : { script }),
         }),
       }),
+    payloads: manifestPayloads({ model: options.model, selected: options.selected }),
   });
 };
 
@@ -612,7 +629,7 @@ const manifestFor = (options: {
         source: { status: 'passed' },
       },
     },
-    distribution: manifestDistribution({ filePaths, projectContext: options.projectContext }),
+    distribution: manifestDistribution({ filePaths, model: options.model, projectContext: options.projectContext, selected }),
     executables,
     files: options.files,
     manifestVersion: artifactManifestVersion,

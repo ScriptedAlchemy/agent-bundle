@@ -369,11 +369,29 @@ export interface ArtifactManifestDistributionInstall {
   readonly script?: string;
 }
 
+/**
+ * One prebuilt payload directory the artifact packages byte-for-byte
+ * (`definePrebuilt`, #630). The compiler never opens its files, so the
+ * author's `runtimeDependencies` declaration is the only record of what the
+ * tree loads from a consumer's install; `files[]` rows under `<name>/` carry
+ * kind `prebuilt`.
+ */
+export interface ArtifactManifestPayload {
+  /** Declared projections the payload is packaged for; sorted. */
+  readonly hosts: readonly string[];
+  /** Artifact-root directory name. */
+  readonly name: string;
+  /** Bare package names the payload loads at run time; sorted, unique. */
+  readonly runtimeDependencies: readonly string[];
+}
+
 /** How the artifact reaches a host (gap 7 of #592 step 3). */
 export interface ArtifactManifestDistribution {
   /** `local` always; `npm` when the project carries a package identity. */
   readonly channels: readonly ArtifactManifestDistributionChannel[];
   readonly install?: ArtifactManifestDistributionInstall;
+  /** Prebuilt payload directories, sorted by name. */
+  readonly payloads: readonly ArtifactManifestPayload[];
 }
 
 export interface ArtifactManifestValidationRecord {
@@ -1186,9 +1204,28 @@ const parseExecutables = (value: unknown, hosts: ReadonlySet<string>): ArtifactM
   };
 };
 
-const parseDistribution = (value: unknown): ArtifactManifestDistribution => {
+const parsePayloads = (value: unknown, hosts: ReadonlySet<string>): readonly ArtifactManifestPayload[] => {
+  const payloads = requireArray(value, 'distribution.payloads').map((candidate, index) => {
+    const location = `distribution.payloads[${index}]`;
+    const payload = requireRecord(candidate, location);
+    requireExactKeys(payload, location, ['hosts', 'name', 'runtimeDependencies']);
+    const name = requireString(payload.name, `${location}.name`);
+    if (!isRelocatablePosixPath(name) || name.includes('/')) {
+      fail(`${location}.name must be a single artifact-root directory name.`);
+    }
+    return {
+      hosts: parseHosts(payload.hosts, `${location}.hosts`, hosts),
+      name,
+      runtimeDependencies: parseStringList(payload.runtimeDependencies, `${location}.runtimeDependencies`),
+    } satisfies ArtifactManifestPayload;
+  });
+  requireSortedUnique(payloads, 'distribution.payloads', (payload) => payload.name);
+  return payloads;
+};
+
+const parseDistribution = (value: unknown, hosts: ReadonlySet<string>): ArtifactManifestDistribution => {
   const distribution = requireRecord(value, 'distribution');
-  requireExactKeys(distribution, 'distribution', ['channels'], ['install']);
+  requireExactKeys(distribution, 'distribution', ['channels', 'payloads'], ['install']);
   const channels = requireArray(distribution.channels, 'distribution.channels')
     .map((channel, index) => requireOneOf(channel, `distribution.channels[${index}]`, distributionChannels));
   requireSortedUnique(channels, 'distribution.channels', (channel) => channel);
@@ -1208,6 +1245,7 @@ const parseDistribution = (value: unknown): ArtifactManifestDistribution => {
   return {
     channels,
     ...(install === undefined ? {} : { install }),
+    payloads: parsePayloads(distribution.payloads, hosts),
   };
 };
 
@@ -1438,7 +1476,7 @@ const validateManifest = (value: unknown): ArtifactManifest => {
   );
   const routes = parseRoutes(manifest.routes);
   const executables = parseExecutables(manifest.executables, hosts);
-  const distribution = parseDistribution(manifest.distribution);
+  const distribution = parseDistribution(manifest.distribution, hosts);
   const scriptRouteIds = new Set(routes.scripts.map((route) => route.id));
   for (const script of executables.scripts) {
     if (script.rendered !== undefined && !scriptRouteIds.has(script.rendered.routeId)) {
@@ -1462,6 +1500,12 @@ const validateManifest = (value: unknown): ArtifactManifest => {
   }
   const web = parseWeb(manifest.web);
   const filePaths = new Set(files.map((file) => file.path));
+  for (const payload of distribution.payloads) {
+    const prefix = `${payload.name}/`;
+    if (!files.some((file) => file.kind === 'prebuilt' && file.path.startsWith(prefix))) {
+      fail(`distribution.payloads[${payload.name}] names a directory with no prebuilt manifest file.`);
+    }
+  }
   for (const [location, path] of referencedPaths({ distribution, executables, projections, web })) {
     if (!filePaths.has(path)) fail(`${location} names ${JSON.stringify(path)}, which is not a manifest file.`);
   }

@@ -105,7 +105,7 @@ const manifestFor = (
         source: { status: 'passed' },
       },
     },
-    distribution: { channels: ['local'] },
+    distribution: { channels: ['local'], payloads: [] },
     executables: { bins: [], hooks: [], mcpServers: [], scripts: [] },
     files: manifestFiles,
     manifestVersion: artifactManifestVersion,

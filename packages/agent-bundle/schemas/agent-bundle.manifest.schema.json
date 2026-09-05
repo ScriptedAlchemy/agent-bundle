@@ -1422,10 +1422,19 @@
         },
         "install": {
           "$ref": "#/$defs/distributionInstall"
+        },
+        "payloads": {
+          "type": "array",
+          "description": "Prebuilt payload directories (`definePrebuilt`), sorted by `name` with no duplicates; each names a directory holding at least one `prebuilt` `files[]` row.",
+          "items": {
+            "$ref": "#/$defs/payload"
+          },
+          "uniqueItems": true
         }
       },
       "required": [
-        "channels"
+        "channels",
+        "payloads"
       ]
     },
     "validationRecord": {
@@ -1690,6 +1699,42 @@
       "required": [
         "apps",
         "open"
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "description": "One prebuilt payload directory the artifact packages byte-for-byte; the compiler never opens its files, so `runtimeDependencies` is the author's record of what the tree loads at run time.",
+      "additionalProperties": false,
+      "properties": {
+        "hosts": {
+          "$ref": "#/$defs/hosts"
+        },
+        "name": {
+          "type": "string",
+          "description": "Artifact-root directory name: one relocatable path segment.",
+          "allOf": [
+            {
+              "$ref": "#/$defs/relativePath"
+            },
+            {
+              "type": "string",
+              "pattern": "^[^/]+$"
+            }
+          ]
+        },
+        "runtimeDependencies": {
+          "type": "array",
+          "description": "Bare package names, sorted and unique.",
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "hosts",
+        "name",
+        "runtimeDependencies"
       ]
     }
   }

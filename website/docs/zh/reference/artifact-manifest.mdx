@@ -169,6 +169,7 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 | --- | --- | --- |
 | `channels[]` | 是 | 始终有 `local`；恰当 `compiler.project.packageName` 存在时有 `npm`。已排序。 |
 | `install` | 否 | 指向安装表面的根相对指针：`{ instructions?: 'INSTALL.md', script?: 'install.mjs' }`，根目录至少携带其一时出现。 |
+| `payloads[]` | 是 | 每个为所选宿主打包的预构建负载目录（`definePrebuilt`）一行：`{ hosts, name, runtimeDependencies }`。`name` 是产物根下的目录名；`hosts` 是它所打包的投影；`runtimeDependencies` 是作者声明的、已排序去重的裸包名列表，即该目录树在运行时加载的包——编译器从不打开负载文件，因此这是唯一的记录。按 `name` 排序。 |
 
 ### `web`
 
@@ -236,6 +237,7 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
   `executables.mcpServers[].entry.*`、`executables.mcpServers[].apps[].path`、
   `distribution.install.*`、`web.apps[].entry`——都指向一行 `files[]`。
 - 每个 `hosts[]` 项与每个 `hooks[].host` 都指向一行 `projections[]`。
+- 每个 `distribution.payloads[].name` 目录下至少有一行 kind 为 `prebuilt` 的 `files[]`。
 - `compiler.validation.projections[]` 的宿主等于 `projections[]` 的宿主。
 - `executables.scripts[].rendered.routeId` 指向一条 `routes.scripts[]` 路由。
 - `distribution.channels` 恰当 `compiler.project.packageName` 存在时包含 `npm`。
@@ -272,7 +274,8 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
   },
   "distribution": {
     "channels": ["local", "npm"],
-    "install": { "instructions": "INSTALL.md" }
+    "install": { "instructions": "INSTALL.md" },
+    "payloads": []
   },
   "executables": {
     "bins": [

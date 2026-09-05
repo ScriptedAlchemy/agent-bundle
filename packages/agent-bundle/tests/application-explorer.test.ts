@@ -15,6 +15,7 @@ const manifest = (): ArtifactManifest => ({
   distribution: {
     channels: ['local', 'npm'],
     install: { instructions: 'INSTALL.md', script: 'install.mjs' },
+    payloads: [],
   },
   executables: {
     bins: [{

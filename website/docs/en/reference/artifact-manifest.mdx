@@ -180,6 +180,7 @@ list and each `host` names a `projections[]` row.
 | --- | --- | --- |
 | `channels[]` | yes | `local` always; `npm` exactly when `compiler.project.packageName` is present. Sorted. |
 | `install` | no | Root-relative pointers to the install surface: `{ instructions?: 'INSTALL.md', script?: 'install.mjs' }`, present when the root carries at least one of them. |
+| `payloads[]` | yes | One row per prebuilt payload directory (`definePrebuilt`) packaged for a selected host: `{ hosts, name, runtimeDependencies }`. `name` is the artifact-root directory; `hosts` the projections it was packaged for; `runtimeDependencies` the author's sorted, unique list of bare package names the tree loads at run time — the compiler never opens a payload file, so this is the only record. Sorted by `name`. |
 
 ### `web`
 
@@ -252,6 +253,8 @@ A reader enforces these before it accepts the document:
   `executables.mcpServers[].entry.*`, `executables.mcpServers[].apps[].path`,
   `distribution.install.*`, `web.apps[].entry` — names a `files[]` row.
 - Every `hosts[]` entry and every `hooks[].host` names a `projections[]` row.
+- Every `distribution.payloads[].name` directory holds at least one `files[]` row of kind
+  `prebuilt`.
 - `compiler.validation.projections[]` hosts equal `projections[]` hosts.
 - `executables.scripts[].rendered.routeId` names a `routes.scripts[]` route.
 - `distribution.channels` includes `npm` exactly when `compiler.project.packageName` is present.
@@ -288,7 +291,8 @@ event route, and a routed CLI. Digests are elided; keys appear in canonical (sor
   },
   "distribution": {
     "channels": ["local", "npm"],
-    "install": { "instructions": "INSTALL.md" }
+    "install": { "instructions": "INSTALL.md" },
+    "payloads": []
   },
   "executables": {
     "bins": [
