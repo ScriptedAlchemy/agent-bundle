@@ -274,7 +274,7 @@ keep-data 选项）。相对包的安装器 bin 接受带同样标志的 `uninst
 | --- | --- |
 | `0` | 成功，包括 `--help` 与 `--version`。 |
 | `1` | 一次被报告的失败：一条 error 级诊断、`inspect` 得到的无效模型、失败或结论不明的 eval 运行，或者被作为一条 `AB5000` 诊断写到 stderr 的未捕获错误。 |
-| `2` | 来自命令行解析器的参数解析失败。 |
+| `2` | 仅限命令行解析器（Commander）自身的错误：未知选项、缺少参数，或者 `serve-app` 的 `--profile` 与 `--allow`、`doctor --host` 的无效取值——这三个校验器抛出 `InvalidArgumentError`。`install`/`uninstall` 的 `<host>` 参数、`--scope` 与 `--mode`，以及 `dev --install-host`、`--port` 与 `eval --trials` 的校验器抛出的是普通 `TypeError`，`runCli` 会把它作为一条 `AB5000` 诊断写到 stderr 并以 `1` 退出。 |
 
 当任何一次试验**失败或结论不明**时，eval 运行以 `1` 退出——结论不明的试验没有产生证据，因此它同样不能
 报告成功。
