@@ -6,7 +6,14 @@
  */
 
 :root:not(.rp-dark) {
-  --rp-c-brand: #0d8f80;
+  /*
+   * Brand text (active nav item, heading anchors, edit link, search matches)
+   * at 14 px needs 4.5:1. #0d8f80 measured 3.99:1 on #fff; same hue and
+   * saturation (hsl 173° 84%), lightness 31% → 27%: 4.83:1 on #fff, 4.55:1
+   * on --rp-c-bg-soft (search panel). Restated as `brandColor` in
+   * rspress.config.ts (the theme-color meta); keep the two in step.
+   */
+  --rp-c-brand: #0b8072;
   --rp-c-brand-light: #14b8a6;
   --rp-c-brand-lighter: #99f6e4;
   --rp-c-brand-dark: #0f766e;
@@ -39,6 +46,104 @@
     var(--rp-c-brand-dark) 32%,
     var(--rp-home-hero-secondary-color) 100%
   );
+}
+
+/*
+ * Contrast (#590). Ratios are WCAG 2.x, computed from the declared colours
+ * composited over the theme backgrounds (#fff / #121212 unless noted); text
+ * below 18.66 px bold needs 4.5:1.
+ *
+ * `--rp-c-text-3` is the theme's tertiary text token: prev/next labels
+ * (12 px), the home footer message and last-updated line (14 px), the
+ * external-link arrow, the code-block copy/wrap icons and fold button. It
+ * shipped at 1.85:1 light and 3.19:1 dark. Kept in the theme's alpha form so
+ * it still composites over --rp-c-bg-soft and --rp-c-bg-mute.
+ *
+ * Code blocks use Shiki's `css-variables` theme, so token colours are these
+ * variables (`styles/vars/shiki-vars.css`, declared through `:where()`).
+ * The light string token measured 3.04:1; the light comment (2.06:1) and
+ * parameter (2.30:1) tokens and the dark comment token (3.84:1) fail the same
+ * way and are corrected alongside it. Each pick keeps the original hue.
+ */
+:root:not(.rp-dark) {
+  /* #3c3c3c at 75 %: 5.18:1 on #fff, 5.01:1 on --rp-c-bg-soft, 4.86:1 on --rp-c-bg-mute. */
+  --rp-c-text-3: #3c3c3cbf;
+  /* #31a94d 3.04:1 → 5.37:1 on #fff, 4.78:1 on a highlighted line (`{n}` / `[!code highlight]`, #ebf2fe). */
+  --shiki-token-string: #227a37;
+  /* #b6b4b4 2.06:1 → 4.74:1 */
+  --shiki-token-comment: #737373;
+  /* #f59403 2.30:1 → 4.66:1 */
+  --shiki-token-parameter: #a76502;
+}
+
+:root.rp-dark {
+  /* #ebebeb at 65 %: 7.08:1 on #121212, 5.08:1 on --rp-c-bg-mute (prev/next hover). */
+  --rp-c-text-3: #ebebeba6;
+  /* #6a727b 3.84:1 → 5.02:1 */
+  --shiki-token-comment: #7d8590;
+}
+
+/*
+ * The theme fades the whole prev/next card to 70 % on hover
+ * (`PrevNextPage/index.css`), which takes the label above back down to
+ * 2.75:1 light / 2.81:1 dark; the `--rp-c-bg-mute` background change is
+ * enough hover feedback on its own.
+ */
+.rp-prev-next-page__item:hover {
+  opacity: 1;
+}
+
+/*
+ * Keyboard access (#590). The appearance switch (theme/index.tsx) is now a
+ * tab stop; its focus ring is declared here so the two custom controls (this
+ * switch and the skip link) share one visible style instead of the UA default.
+ * Ring is --rp-c-brand on --rp-c-bg: 4.83:1 light, 10.06:1 dark.
+ */
+.rp-switch-appearance:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--rp-c-brand);
+  outline-offset: 2px;
+}
+
+/* Wrapper the theme adds around the default social links; stays out of the nav's flex layout. */
+.ab-social-links {
+  display: contents;
+}
+
+/*
+ * Skip link (theme/index.tsx `SkipLink`): the first focusable element on the
+ * page, clipped until it receives focus, then pinned over the sticky nav.
+ * Text is --rp-c-brand on --rp-c-bg: 4.83:1 light, 10.06:1 dark.
+ */
+.ab-skip-link {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: calc(var(--rp-z-index-nav) + 1);
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.ab-skip-link:focus {
+  width: auto;
+  height: auto;
+  overflow: visible;
+  clip-path: none;
+  padding: 0.5rem 1rem;
+  border-radius: 0 0 var(--rp-radius-small) 0;
+  background: var(--rp-c-bg);
+  color: var(--rp-c-brand);
+  font-weight: 600;
+  outline: 2px solid var(--rp-c-brand);
+  outline-offset: -2px;
+}
+
+/* Zero-size focus target; a focus ring around an empty box would render as a stray dot. */
+.ab-skip-target {
+  outline: none;
 }
 
 /*

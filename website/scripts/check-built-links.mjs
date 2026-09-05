@@ -129,6 +129,17 @@ const main = () => {
       if (!idsOf(target).has(fragment)) report(`no id="${fragment}" in ${path.relative(options.dir, target)}`);
     }
   }
+  // Sitemap `lastmod` (plugins/sitemap-lastmod.ts) comes from git history, or is
+  // omitted on a shallow clone. Whatever is present must parse, must not be in
+  // the future, and — the regression this guards — must not all be the same
+  // instant, which is what the source-mtime default produced in CI.
+  const sitemap = files.find(file => file.endsWith('sitemap.xml'));
+  if (sitemap) {
+    const stamps = [...fs.readFileSync(sitemap, 'utf8').matchAll(/<lastmod>([^<]*)<\/lastmod>/g)].map(([, value]) => value);
+    const invalid = stamps.filter(value => Number.isNaN(Date.parse(value)) || Date.parse(value) > Date.now() + 60_000);
+    if (invalid.length > 0) broken.set('sitemap:lastmod', `sitemap.xml — ${invalid.length} unparseable or future <lastmod> (first: ${invalid[0]})`);
+    else if (stamps.length > 10 && new Set(stamps).size < 2) broken.set('sitemap:lastmod', `sitemap.xml — every <lastmod> is ${stamps[0]}; dates are not coming from git history`);
+  }
   for (const line of [...broken.values()].sort()) console.log(line);
   console.log(`${broken.size} broken links / ${anchors} anchors checked (${links} internal links across ${files.length} files under ${options.dir})`);
   if (broken.size > 0) process.exitCode = 1;
