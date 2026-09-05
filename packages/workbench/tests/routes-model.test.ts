@@ -32,12 +32,24 @@ const manifest: RouteManifest = {
     mode: 'generated',
     routes: [{
       config: [],
+      contract: 'contract:src/lib/protocol-schemas.ts#statusInputSchema',
       id: 'cli:library/audit',
       kind: 'cli',
       provenance: { kind: 'conventional' },
       source: 'src/cli/library/audit.ts',
     }],
   },
+  contracts: [{
+    id: 'contract:src/lib/protocol-schemas.ts#statusInputSchema',
+    input: {
+      additionalProperties: false,
+      properties: { format: { enum: ['text', 'json'], type: 'string' } },
+      required: ['format'],
+      type: 'object',
+    },
+    origin: { binding: 'statusInputSchema', module: 'src/lib/protocol-schemas.ts' },
+    routes: ['cli:library/audit', 'tool:alpha/echo'],
+  }],
   diagnostics: [],
   digest: 'd'.repeat(64),
   events: [{
@@ -80,6 +92,7 @@ const manifest: RouteManifest = {
       routes: [
         {
           config: [{ key: 'title', kind: 'string', value: 'Echo' }],
+          contract: 'contract:src/lib/protocol-schemas.ts#statusInputSchema',
           id: 'tool:alpha/echo',
           inputSchema: {
             additionalProperties: false,
@@ -208,6 +221,22 @@ it('attaches the compiled command to its CLI route entry', () => {
 
   expect(entry?.command?.path).toEqual(['library', 'audit']);
   expect(entry?.command?.options.map((option) => option.key)).toEqual(['input', 'verbose']);
+});
+
+it('derives contract origin and other sharing routes for each catalog entry', () => {
+  const catalog = routeCatalogFor(manifest);
+  const tool = catalog.groups.flatMap((group) => group.entries)
+    .find((entry) => entry.id === 'tool:alpha/echo');
+  const cli = catalog.groups.flatMap((group) => group.entries)
+    .find((entry) => entry.id === 'cli:library/audit');
+
+  expect(tool?.contract).toEqual({
+    id: 'contract:src/lib/protocol-schemas.ts#statusInputSchema',
+    origin: { binding: 'statusInputSchema', module: 'src/lib/protocol-schemas.ts' },
+    sharedWith: ['cli:library/audit'],
+  });
+  expect(cli?.contract?.sharedWith).toEqual(['tool:alpha/echo']);
+  expect(Object.isFrozen(tool?.contract?.sharedWith)).toBe(true);
 });
 
 it('prefills projected defaults and validates typed route input before invoke', () => {
