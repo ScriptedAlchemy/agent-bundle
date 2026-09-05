@@ -314,8 +314,8 @@ Because the compiler never opens payload files, use `definePrebuilt` and
 `runtimeDependencies` to list the bare package names they load. A name npm would not read
 as a bare package name, or one `package.json` does not install for a consumer
 (`dependencies`, `optionalDependencies`, or a peer not marked optional), is `AB4751`; the
-declaration check is skipped when `package.json` is missing (silent) or unparsable
-(`AB4011`). Declared names count as used for `AB7014`.
+declaration check is skipped when `package.json` is missing (silent), unparsable, or outside
+the root (`AB4011`). Declared names count as used for `AB7014`.
 
 ```ts
 import { defineConfig, definePrebuilt } from 'agent-bundle';

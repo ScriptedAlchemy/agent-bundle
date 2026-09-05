@@ -1203,8 +1203,8 @@ export default defineConfig({
   or one `package.json` does not install for a consumer (`dependencies`,
   `optionalDependencies`, or a peer not marked optional), is `AB4751`; a
   malformed list is `AB4740`. The declaration check is skipped when
-  `package.json` is missing (silent) or unparsable (`AB4011`), and
-  declared names count as used for `AB7014`.
+  `package.json` is missing (silent), unparsable, or outside the root
+  (`AB4011`), and declared names count as used for `AB7014`.
 - **Ordering.** Run your own build before `agent-bundle build`: a missing or
   empty payload is a validation warning (`AB4743`/`AB4745`) so `dev` works
   from a clean checkout, but `agent-bundle build` refuses it
