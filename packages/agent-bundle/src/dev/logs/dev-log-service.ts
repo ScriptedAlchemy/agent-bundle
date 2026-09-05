@@ -124,6 +124,31 @@ const unavailable = '[UNAVAILABLE]' as const;
 const redacted = '[REDACTED]';
 const safeIdentifier = /^[A-Za-z0-9][A-Za-z0-9._:@+-]{0,255}$/u;
 const maxSummaryLength = 2_048;
+const absolutePosixPath = /(?:^|[\s"'`([=:,])\/[^\s/]+(?:\/[^\s/]+)*/u;
+const homeRelativePath = /(?:^|[\s"'`([=:,])~\/[^\s/]+/u;
+const traceRequestContextKeys: ReadonlySet<string> = new Set([
+  'conversationId',
+  'correlationId',
+  'executionId',
+  'invocationId',
+  'mcpRequestId',
+  'mcpSessionId',
+  'requestId',
+  'runId',
+  'sessionId',
+]);
+const loweredProjectEventMirrors: ReadonlySet<string> = new Set([
+  'build:build.failed',
+  'diagnostic:build.failed.diagnostic',
+  'diagnostic:dev.contract.status.diagnostic',
+  'diagnostic:dev.host.sync.diagnostic',
+  'diagnostic:route.invocation.diagnostic',
+  'diagnostic:runtime.event.diagnostic',
+  'project:dev.contract.status',
+  'project:dev.host.sync',
+  'project:route.invocation',
+  'project:runtime.event',
+]);
 
 // Records and gap messages are deep-frozen, so their encoded size never goes
 // stale; caching it spares one full JSON.stringify per retain/evict/deliver.
@@ -197,7 +222,11 @@ const projectPath = (value: string, roots: readonly string[]): string => {
 const redactAbsolutePaths = (value: string, roots: readonly string[]): string => {
   const sanitized = projectPath(value, roots);
   const withoutProjectPaths = sanitized.replace(/<project>(?:\/[A-Za-z0-9._@+-]+)*/gu, '');
-  return hasControlOrSeparators(withoutProjectPaths) || /(?:file:|[A-Za-z]:|\\\\)/iu.test(withoutProjectPaths)
+  const withoutPathSeparators = withoutProjectPaths.replaceAll('/', '').replaceAll('\\', '');
+  return hasControlOrSeparators(withoutPathSeparators)
+    || absolutePosixPath.test(withoutProjectPaths)
+    || homeRelativePath.test(withoutProjectPaths)
+    || /(?:file:|[A-Za-z]:[\\/]|\\\\)/iu.test(withoutProjectPaths)
     ? redacted
     : sanitized;
 };
@@ -263,6 +292,12 @@ const traceCorrelationFor = (context: Readonly<Record<string, string>>): TraceCo
   ...(context.runId === undefined ? {} : { runId: context.runId }),
   ...(context.sessionId === undefined ? {} : { sessionId: context.sessionId }),
 });
+
+const hasTraceRequestContext = (context: Readonly<Record<string, string>>): boolean =>
+  Object.keys(context).some((key) => traceRequestContextKeys.has(key));
+
+const isLoweredProjectEventMirror = (record: DevLogRecord): boolean =>
+  loweredProjectEventMirrors.has(`${record.producer}:${record.kind}`);
 
 const traceHrefFor = (record: DevLogRecord): string => {
   const routeId = record.context.routeId;
@@ -435,9 +470,9 @@ export class DevLogService {
 
   #publishTrace(record: DevLogRecord): void {
     const trace = this.#trace;
-    if (trace === undefined) return;
+    if (trace === undefined || isLoweredProjectEventMirror(record)) return;
     const correlation = traceCorrelationFor(record.context);
-    if (record.level !== 'warning' && record.level !== 'error' && Object.keys(correlation).length === 0) return;
+    if (record.level !== 'warning' && record.level !== 'error' && !hasTraceRequestContext(record.context)) return;
     try {
       trace.publish({
         correlation,

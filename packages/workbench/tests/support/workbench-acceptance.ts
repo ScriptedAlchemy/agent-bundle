@@ -274,7 +274,7 @@ export const traceEntryRow = (page: Page, kind?: string): Locator =>
     ? workbenchTestId(page, 'traceEntry')
     : page.locator(`[data-testid=${JSON.stringify(workbenchTestIds.traceEntry)}][data-kind=${JSON.stringify(kind)}]`);
 
-/** Group for one tool invocation. Summaries may be `[REDACTED]`; `routeId` is asserted via the Route facet. */
+/** Group for one tool invocation, with only its server-published start and completion rows. */
 export const expectToolInvocationTraceGroup = async (
   page: Page,
   options: Readonly<{ readonly invocationId: string; readonly routeId: string }>,
@@ -285,13 +285,17 @@ export const expectToolInvocationTraceGroup = async (
   const group = workbenchTestId(page, 'traceGroup').filter({ hasText: options.invocationId }).first();
   await expect(group).toBeVisible({ timeout });
   await group.scrollIntoViewIfNeeded();
+  const rows = group.locator(`[data-testid=${JSON.stringify(workbenchTestIds.traceEntry)}]`);
+  await expect(rows).toHaveCount(2, { timeout });
+  await expect(group).not.toContainText('[REDACTED]', { timeout });
   const completed = group.locator(`[data-testid=${JSON.stringify(workbenchTestIds.traceEntry)}][data-kind="invocation.completed"]`);
   await expect(completed).toBeVisible({ timeout });
+  await expect(completed).toContainText(options.routeId.slice(options.routeId.indexOf(':') + 1), { timeout });
   await expect(group.locator(`[data-testid=${JSON.stringify(workbenchTestIds.traceEntry)}][data-kind="invocation.started"]`))
     .toBeVisible({ timeout });
-  const kernel = group.locator(`[data-testid=${JSON.stringify(workbenchTestIds.traceEntry)}][data-kind^="kernel."]`);
-  if (await kernel.count() > 0) await expect(kernel.first()).toBeVisible({ timeout });
-  else await expect(completed.locator('.trace-duration')).toHaveText(/\d|</u, { timeout });
+  await expect(group.locator(`[data-testid=${JSON.stringify(workbenchTestIds.traceEntry)}][data-kind^="log.project."]`))
+    .toHaveCount(0);
+  await expect(completed.locator('.trace-duration')).toHaveText(/\d|</u, { timeout });
   return group;
 };
 

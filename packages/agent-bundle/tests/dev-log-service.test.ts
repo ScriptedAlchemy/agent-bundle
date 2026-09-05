@@ -4,10 +4,24 @@ import { expect, it } from '@rstest/core';
 
 import {
   DevLogService,
+  safeDevWireText,
   type DevLogInput,
   type DevLogServiceOptions,
 } from '../src/dev/logs/dev-log-service.ts';
 import { TraceHub } from '../src/dev/trace/trace-hub.ts';
+
+it('preserves relative route identities while redacting filesystem paths', () => {
+  const projectRoot = '/Users/x/project';
+  expect(safeDevWireText('MCP tool curator/search_audible · 2.9 s', projectRoot))
+    .toBe('MCP tool curator/search_audible · 2.9 s');
+  expect(safeDevWireText('event tool/before (claude)', projectRoot))
+    .toBe('event tool/before (claude)');
+  expect(safeDevWireText('/Users/x/project/src/a.ts', projectRoot)).toBe('<project>/src/a.ts');
+  expect(safeDevWireText('<project>/src/a.ts', projectRoot)).toBe('<project>/src/a.ts');
+  for (const unsafe of ['file:///x', 'C:\\x', '\\\\server\\share', '~/.ssh/id_rsa', '/etc/passwd']) {
+    expect(safeDevWireText(unsafe, projectRoot)).toBe('[REDACTED]');
+  }
+});
 
 it('records detached redacted details and replaces its own project root', () => {
   const service = new DevLogService({
@@ -58,12 +72,23 @@ it('publishes warnings, errors, and correlated records to trace without plain in
     summary: 'Plain project chatter.',
   });
   service.log({
+    context: { buildId: 'build-1', epochId: 'epoch-1', routeId: 'tool:curator/search', target: 'codex' },
+    kind: 'project.prepared',
+    level: 'info',
+    producer: 'project',
+    summary: 'Build and route facets are not request correlation.',
+  });
+  service.log({
     context: {
       conversationId: 'conversation-1',
       correlationId: 'correlation-1',
       executionId: 'execution-1',
+      invocationId: 'invocation-1',
+      mcpRequestId: 'mcp-request-1',
       mcpSessionId: 'mcp-session-1',
       requestId: 'request-1',
+      runId: 'run-1',
+      sessionId: 'session-1',
     },
     kind: 'project.prepared',
     level: 'info',
@@ -87,6 +112,12 @@ it('publishes warnings, errors, and correlated records to trace without plain in
     producer: 'project',
     summary: 'Route failed.',
   });
+  service.log({
+    kind: 'project.invalid-source',
+    level: 'error',
+    producer: 'project',
+    summary: 'Uncorrelated error.',
+  });
 
   expect(trace.replay().entries).toMatchObject([
     {
@@ -94,34 +125,53 @@ it('publishes warnings, errors, and correlated records to trace without plain in
         conversationId: 'conversation-1',
         correlationId: 'correlation-1',
         executionId: 'execution-1',
+        invocationId: 'invocation-1',
+        mcpRequestId: 'mcp-request-1',
         mcpSessionId: 'mcp-session-1',
         requestId: 'request-1',
+        runId: 'run-1',
+        sessionId: 'session-1',
       },
-      href: '/advanced/logs?sequence=2',
+      href: '/advanced/logs?sequence=3',
       kind: 'log.project.project.prepared',
       source: 'log',
       summary: 'Correlated project event.',
     },
     {
       correlation: {},
-      href: '/advanced/logs?sequence=3',
+      href: '/advanced/logs?sequence=4',
       kind: 'log.mcp.mcp.stderr',
       source: 'log',
       summary: 'Uncorrelated warning.',
     },
     {
-      correlation: {
-        invocationId: 'invocation-1',
-        mcpRequestId: 'request-1',
-        routeId: 'tool:curator/search',
-      },
-      href: '/routes/mcp/curator/tool/search?invocation=invocation-1',
-      kind: 'log.project.route.invocation',
+      correlation: {},
+      href: '/advanced/logs?sequence=6',
+      kind: 'log.project.project.invalid-source',
       source: 'log',
       status: 'error',
-      summary: 'Route failed.',
+      summary: 'Uncorrelated error.',
     },
   ]);
+});
+
+it('does not republish project event mirrors already lowered by dedicated trace producers', () => {
+  const trace = new TraceHub({ projectRoot: '/work/project' });
+  const service = new DevLogService({ projectRoot: '/work/project', trace });
+  const mirrors: readonly DevLogInput[] = [
+    { context: { buildId: 'build-1' }, kind: 'build.failed', level: 'error', producer: 'build', summary: 'Build failed.' },
+    { context: { epochId: 'epoch-1' }, kind: 'dev.contract.status', level: 'error', producer: 'project', summary: 'Contract failed.' },
+    { context: { epochId: 'epoch-1' }, kind: 'dev.host.sync', level: 'error', producer: 'project', summary: 'Host sync failed.' },
+    { context: { invocationId: 'inv-1' }, kind: 'route.invocation', level: 'error', producer: 'project', summary: 'Invocation failed.' },
+    { context: { runId: 'run-1' }, kind: 'runtime.event', level: 'warning', producer: 'project', summary: 'Runtime failed.' },
+    { context: { diagnosticCode: 'BUILD_FAILED' }, kind: 'build.failed.diagnostic', level: 'error', producer: 'diagnostic', summary: 'Build diagnostic.' },
+    { context: { diagnosticCode: 'CONTRACT_FAILED' }, kind: 'dev.contract.status.diagnostic', level: 'error', producer: 'diagnostic', summary: 'Contract diagnostic.' },
+    { context: { diagnosticCode: 'HOST_SYNC_FAILED' }, kind: 'dev.host.sync.diagnostic', level: 'error', producer: 'diagnostic', summary: 'Host diagnostic.' },
+  ];
+  for (const mirror of mirrors) service.log(mirror);
+
+  expect(trace.replay().entries).toEqual([]);
+  expect(service.replay().records).toHaveLength(mirrors.length);
 });
 
 it('rejects hostile envelopes without breaking the producer', () => {

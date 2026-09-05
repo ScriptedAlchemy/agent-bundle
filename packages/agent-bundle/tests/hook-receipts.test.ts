@@ -191,7 +191,7 @@ it('lowers a completed receipt to hook.received and hook.completed with the even
     occurredAt: '2026-09-05T15:00:00.000Z',
     source: 'hook',
     status: 'ok',
-    summary: 'claude PreToolUse → tool · before received',
+    summary: 'claude PreToolUse → tool/before received',
   });
   expect(entries[1]).toMatchObject({
     correlation,
@@ -208,7 +208,7 @@ it('lowers a completed receipt to hook.received and hook.completed with the even
     href: '/routes/events/tool/before',
     occurredAt: '2026-09-05T15:00:00.006Z',
     status: 'ok',
-    summary: 'claude PreToolUse → tool · before completed',
+    summary: 'claude PreToolUse → tool/before completed',
   });
   expect(entries.every((entry) => !entry.href?.includes('invocation='))).toBe(true);
   expect(JSON.stringify(entries)).not.toContain('tool_input');
@@ -226,7 +226,7 @@ it('lowers a failure to hook.failed with the kernel error summary, and a gate ou
     details: { error: { code: 'runtime-failed', message: 'render exploded', name: 'EventRuntimeTransportError' }, failedPhase: 'execute', runtime: 'shared' },
     durationMs: 2,
     status: 'error',
-    summary: 'claude PreToolUse → tool · before failed in execute: EventRuntimeTransportError: render exploded',
+    summary: 'claude PreToolUse → tool/before failed in execute: EventRuntimeTransportError: render exploded',
   });
   const denied = receipt({
     events: [
@@ -240,7 +240,7 @@ it('lowers a failure to hook.failed with the kernel error summary, and a gate ou
     details: { gate: 'deny' },
     kind: 'hook.completed',
     status: 'ok',
-    summary: 'claude PreToolUse → tool · before denied by preflight',
+    summary: 'claude PreToolUse → tool/before denied by preflight',
   });
   expect(gated[1]!.details).not.toHaveProperty('runtime');
 });
