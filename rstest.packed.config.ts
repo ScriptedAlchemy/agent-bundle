@@ -1,6 +1,7 @@
 import { defineConfig } from '@rstest/core';
 
 import { packedReleaseOnlyTestFiles, packedTestFiles } from './rstest.integration-tests.ts';
+import { poolTimeouts, workspaceGlobalSetup, workspaceSetupFiles } from './rstest.pools.ts';
 import { withAgentBundleRslibConfig } from './rstest.rslib.ts';
 
 /**
@@ -19,5 +20,10 @@ export default defineConfig({
     ...packedTestFiles,
     ...(process.env['AGENT_BUNDLE_PACKED_RELEASE'] === '1' ? packedReleaseOnlyTestFiles : []),
   ],
-  setupFiles: ['./rstest.setup.ts'],
+  globalSetup: [...workspaceGlobalSetup],
+  setupFiles: [...workspaceSetupFiles],
+  // A pack + consumer install + host run per case: the files set their own
+  // per-test budgets (up to 300 s), and this floor keeps a case that forgets
+  // one from dying at Rstest's 5 s default (#576).
+  ...poolTimeouts(120_000),
 });

@@ -43,9 +43,22 @@ const esmNodeGlobalsPlugin: RsbuildPlugin = {
  */
 const buildCacheDirectory = process.env['AGENT_BUNDLE_RSLIB_CACHE_DIRECTORY'];
 
+/**
+ * The `id` of the single lib entry. To Rslib an id is a name: it labels the
+ * Rsbuild environment the entry becomes (`esm` when unset —
+ * `composeRsbuildEnvironments` in @rslib/core), so it shows in build logs,
+ * selects the entry for `rslib build --lib`, and keys the persistent build
+ * cache's version (`<environment>-<mode>`, Rsbuild's cache plugin); it
+ * changes no emitted file. It exists so `rstest.rslib.ts` can pass it as the
+ * adapter's `libId`: without one, `@rstest/adapter-rslib` reads none of this
+ * entry's fields into the pools' test build.
+ */
+export const agentBundleLibId = 'esm-node';
+
 export default defineConfig({
   lib: [
     {
+      id: agentBundleLibId,
       bundle: true,
       // One `.d.ts` per source module. Bundling them per entry
       // (`dts: { bundle: true }`, API Extractor) was measured and rejected:

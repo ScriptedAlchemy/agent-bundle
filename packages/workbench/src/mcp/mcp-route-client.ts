@@ -651,7 +651,11 @@ export class ForegroundRouteClient implements ForegroundRequestAuthority {
         browserOrigin !== undefined && browserOrigin !== 'null' && browserOrigin !== body.origin &&
         devOrigins?.includes(browserOrigin) !== true
       ) {
-        throw new ForegroundRouteClientError('AB8003', 'Foreground session bootstrap origin does not match this browser.', response.status);
+        throw new ForegroundRouteClientError(
+          'AB8003',
+          `Origin ${browserOrigin} is not allowed by the foreground server at ${body.origin}. Open ${body.origin} instead, or start agent-bundle dev with --workbench-dev-origin ${browserOrigin} to allow this origin.`,
+          response.status,
+        );
       }
       const previous = this.#snapshot;
       const generation = previous === undefined
@@ -699,20 +703,36 @@ export class ForegroundRouteClientError extends Error {
   readonly code: string;
   readonly details: unknown | undefined;
   readonly phase: string | undefined;
+  /**
+   * HTTP status of the failed foreground response (`fromResponse`); `undefined`
+   * when the client constructed the failure itself — a refused 200 body, a
+   * superseded or invalidated session — and `status` is only nominal.
+   */
+  readonly responseStatus: number | undefined;
   readonly status: number;
 
-  constructor(code: string, message: string, status: number, options: Readonly<{ readonly details?: unknown; readonly phase?: string }> = {}) {
+  constructor(
+    code: string,
+    message: string,
+    status: number,
+    options: Readonly<{ readonly details?: unknown; readonly phase?: string; readonly responseStatus?: number }> = {},
+  ) {
     super(message);
     this.name = 'ForegroundRouteClientError';
     this.code = code;
     this.details = options.details;
     this.phase = options.phase;
+    this.responseStatus = options.responseStatus;
     this.status = status;
   }
 
   static fromResponse(body: unknown, status: number): ForegroundRouteClientError {
     const detail = diagnostic(body, status);
-    return new ForegroundRouteClientError(detail.code, detail.message, status, detail);
+    return new ForegroundRouteClientError(detail.code, detail.message, status, {
+      details: detail.details,
+      phase: detail.phase,
+      responseStatus: status,
+    });
   }
 }
 

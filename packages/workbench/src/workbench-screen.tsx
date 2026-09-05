@@ -1,5 +1,7 @@
 import React, { type ReactNode } from 'react';
 
+import type { ProjectConnectionPhase } from './project-client.ts';
+
 export type WorkbenchPage = 'artifacts' | 'comparisons' | 'evals' | 'hooks' | 'hosts' | 'lifecycles' | 'logs' | 'mcp' | 'overview' | 'playground' | 'routes' | 'skills';
 
 interface NavigationItem {
@@ -67,6 +69,16 @@ export const Topbar = ({ connectionError }: { readonly connectionError?: string 
     <span aria-hidden="true" />{connectionError === undefined ? 'Foreground server connected' : `Foreground server unavailable: ${connectionError}`}
   </span>
 </header>;
+
+/** Overlays the Workbench while the foreground connection is not `connected`; `error` is the `projectFailureText` line. */
+export const ConnectionGate = ({ error, state }: {
+  readonly error?: string;
+  readonly state: Exclude<ProjectConnectionPhase, 'connected'>;
+}) => <main aria-live="polite" className="connection-recovery loading-state">
+  <h1>{state === 'unavailable' ? 'Foreground connection unavailable' : 'Foreground connection reconnecting'}</h1>
+  <p>{state === 'unavailable' ? 'Waiting for the foreground server to recover.' : 'Connecting to the foreground server.'}</p>
+  {error === undefined ? undefined : <p role="alert">{error}</p>}
+</main>;
 
 export const Navigation = ({ onNavigate, page, pages }: {
   readonly onNavigate: (page: WorkbenchPage) => void;

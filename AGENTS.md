@@ -44,8 +44,10 @@
   for false positives from prose in `docs/**` and from strings that merely
   contain the name: `Symbol('epoch-staging')` in `dev/epoch-store.ts` was the
   only match for a 343-line dead file, which is why it read as reachable.
-- Gate before pushing: `pnpm typecheck && pnpm lint && pnpm test:unit`, plus
-  `pnpm build` first if the change touches `packages/rsc-runtime`.
+- Gate before pushing: `pnpm build && pnpm typecheck && pnpm lint && pnpm
+  test:unit`. Every Rstest pool and `pnpm typecheck` refuse to start over a
+  `dist` older than its sources (`scripts/dist-freshness.mjs`), so the build
+  comes first whatever the change touched.
 
 ## Workbench platform scope
 
