@@ -205,6 +205,9 @@ const emitRuntimeManifest = (): RsbuildPlugin => ({
 const selfContainedAppPlugin = (): RsbuildPlugin => ({
   name: 'agent-bundle:rsc-runtime-self-contained-app',
   setup(api) {
+    api.modifyEnvironmentConfig((config, { name }) => {
+      if (name === 'app') config.mode = 'production';
+    });
     api.onBeforeCreateCompiler(({ bundlerConfigs }) => {
       const config = api.getNormalizedConfig({ environment: 'app' });
       const bundler = bundlerConfigs.find((candidate) => candidate.name === 'app');
@@ -370,10 +373,11 @@ export const createRscRuntimeRsbuildConfig = (
   return {
     // Provider session vs packaged artifacts: development compiles React and
     // react-server-dom as their development variants (warnings, readable
-    // identifiers). `rsbuild build --mode production` and the default export
-    // stay production so Flight payloads and App HTML stay the compact
-    // surface hosts load. Topology (dev entries, compiler roots) still
-    // follows `options.mode`.
+    // identifiers) for the RSC and widget environments. The App environment
+    // is overridden to production by `selfContainedAppPlugin` because Rsbuild
+    // only honors `inlineScripts: true` and `inlineStyles: true` in production
+    // and otherwise emits development source maps beside the HTML. Topology
+    // (dev entries, compiler roots) still follows `options.mode`.
     mode: options.mode,
     // Compile errors reach consumers as diagnostics: the dev session's
     // `AB8206` carries every Rspack error, so Rsbuild's own console output —
@@ -489,6 +493,7 @@ export const createRscRuntimeRsbuildConfig = (
           inlineStyles: true,
           legalComments: 'inline',
           overrideBrowserslist: [...rscRuntimeBrowserHost],
+          sourceMap: false,
           target: 'web',
         },
         source: {

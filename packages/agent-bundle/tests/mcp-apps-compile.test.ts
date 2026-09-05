@@ -377,6 +377,25 @@ describe('compileMcpApps', () => {
     expect(shell).toContain('<main id="view"></main>');
   }, 60_000);
 
+  it('exposes only safe Rsbuild defaults to a parameterized authored template', async () => {
+    const root = await createProject({
+      'views/status.ts': "document.querySelector('#root')!.textContent = 'ok';\n",
+      'views/status.html': [
+        '<!doctype html><html><head></head>',
+        '<body data-entry="<%= entryName %>" data-prefix="<%= assetPrefix %>" data-compilation="<%= typeof compilation %>">',
+        '<main id="<%= mountId %>"></main>',
+        '</body></html>',
+        '',
+      ].join(''),
+    });
+    const { outDir } = await compile(root, [app(root, { template: 'views/status.html' })]);
+    const html = await emittedHtml(outDir);
+    expect(html).toContain('data-entry="status"');
+    expect(html).toContain('data-prefix=""');
+    expect(html).toContain('data-compilation="undefined"');
+    expect(html).toContain('<main id="root">');
+  }, 60_000);
+
   it('keeps development output readable and one self-contained file, with inline source maps as an opt-in', async () => {
     const files = {
       'views/helper.ts': 'export function veryLongIdentifierName(): number { return 1; }\n',
@@ -554,7 +573,18 @@ describe('composeMcpAppsRsbuildConfig', () => {
     });
     const templateParameters = production.environments?.status?.html?.templateParameters;
     if (typeof templateParameters !== 'function') throw new Error('Expected MCP App template parameters to be a function.');
-    expect(await templateParameters({ compilation: 'private', mountId: 'root' }, { entryName: 'status' })).toEqual({});
+    expect(await templateParameters({
+      assetPrefix: '/',
+      compilation: 'private',
+      entryName: 'status',
+      htmlPlugin: 'private',
+      mountId: 'root',
+      rspackConfig: 'private',
+    }, { entryName: 'status' })).toEqual({
+      assetPrefix: '/',
+      entryName: 'status',
+      mountId: 'root',
+    });
 
     const development = composeMcpAppsRsbuildConfig([source], { ...options, mode: 'development' });
     expect(development.mode).toBe('production');

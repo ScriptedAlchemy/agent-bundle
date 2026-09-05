@@ -278,16 +278,6 @@ describe('bin, lib, and tools validation', () => {
     { config: { tools: { webpackChain: () => {} } }, path: 'tools.webpackChain', replacement: 'tools.bundlerChain' },
     { config: { dev: { setupMiddlewares: () => {} } }, path: 'dev.setupMiddlewares', replacement: 'server.setup' },
     {
-      config: { html: { templateParameters: { webpackConfig: {} } } },
-      path: 'html.templateParameters.webpackConfig',
-      replacement: 'rspackConfig',
-    },
-    {
-      config: { html: { templateParameters: { htmlWebpackPlugin: {} } } },
-      path: 'html.templateParameters.htmlWebpackPlugin',
-      replacement: 'htmlPlugin',
-    },
-    {
       config: { server: { proxy: [{ context: '/api', target: 'https://example.com' }] } },
       path: 'server.proxy[].context',
       replacement: 'pathFilter',
@@ -325,6 +315,22 @@ describe('bin, lib, and tools validation', () => {
       recovery: expect.stringContaining(replacement),
       severity: 'error',
     })]);
+  });
+
+  it('allows authored template variables named after removed HtmlRspackPlugin defaults', async () => {
+    const diagnostics = await validated({
+      tools: {
+        rsbuild: {
+          html: {
+            templateParameters: {
+              htmlWebpackPlugin: 'author-defined',
+              webpackConfig: 'author-defined',
+            },
+          },
+        },
+      },
+    });
+    expect(diagnostics).toEqual([]);
   });
 
   it('does not apply Rsbuild v2 key rejection to tools.rspack configuration', async () => {

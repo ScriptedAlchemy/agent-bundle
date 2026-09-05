@@ -37,7 +37,7 @@ test('sets an explicit Chromium browserslist on the web hosts only', () => {
   expect(webOutput(development, 'widget')?.overrideBrowserslist).toEqual([...rscRuntimeBrowserHost]);
 });
 
-test('resolved development inspect keeps Fast Refresh out of the srcdoc App and Flight widget', async () => {
+test('resolved development inspect keeps only the self-contained App in production mode', async () => {
   const compilerRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-config-'));
   try {
     const rsbuild = await createRsbuild({
@@ -49,7 +49,11 @@ test('resolved development inspect keeps Fast Refresh out of the srcdoc App and 
     const appBundler = inspection.origin.bundlerConfigs.find((config) => config.name === 'app');
 
     expect(inspection.origin.rsbuildConfig.mode).toBe('development');
+    expect(inspection.origin.environmentConfigs.app?.mode).toBe('production');
+    expect(inspection.origin.environmentConfigs.rsc?.mode).toBe('development');
+    expect(inspection.origin.environmentConfigs.widget?.mode).toBe('development');
     expect(inspection.origin.environmentConfigs.app?.output.overrideBrowserslist).toEqual([...rscRuntimeBrowserHost]);
+    expect(inspection.origin.environmentConfigs.app?.output.sourceMap).toBe(false);
     expect(inspection.origin.environmentConfigs.widget?.output.overrideBrowserslist).toEqual([...rscRuntimeBrowserHost]);
     expect(appBundler?.plugins?.some((plugin) => plugin?.constructor?.name.includes('ReactRefresh'))).toBe(false);
     expect(widgetBundler?.plugins?.some((plugin) => plugin?.constructor?.name.includes('ReactRefresh'))).toBe(false);

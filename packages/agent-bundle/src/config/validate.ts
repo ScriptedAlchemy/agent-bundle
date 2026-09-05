@@ -2008,8 +2008,6 @@ const deprecatedRsbuildHatchKeys = [
   { path: ['tools', 'webpack'], recovery: 'Use tools.rsbuild.tools.rspack instead.' },
   { path: ['tools', 'webpackChain'], recovery: 'Use tools.rsbuild.tools.bundlerChain instead.' },
   { path: ['dev', 'setupMiddlewares'], recovery: 'Use tools.rsbuild.server.setup instead.' },
-  { path: ['html', 'templateParameters', 'webpackConfig'], recovery: 'Use the rspackConfig template parameter instead.' },
-  { path: ['html', 'templateParameters', 'htmlWebpackPlugin'], recovery: 'Use the htmlPlugin template parameter instead.' },
 ] as const;
 
 const deprecatedProxyKeys = [

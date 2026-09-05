@@ -1,10 +1,11 @@
 import { parseRuntimeVersion } from '../core/runtime.ts';
 
 /**
- * Node floor the generated-executable compiler profile assumes. Must stay
- * aligned with this package's `engines.node` (`>=22.19.0`).
+ * Node floor of the compiler host, aligned with this package's
+ * `engines.node` (`>=22.19.0`). Generated Node executables target syntax
+ * that this floor can parse.
  */
-export const generatedExecutableNodeFloor = '22.19.0';
+export const compilerHostNodeFloor = '22.19.0';
 
 /**
  * ECMAScript syntax Rslib can emit for a generated-executable Node floor.
@@ -24,15 +25,14 @@ export const generatedExecutableSyntaxFor = (floor: string): 'es2022' => {
   return 'es2022';
 };
 
-export const generatedExecutableSyntax = generatedExecutableSyntaxFor(generatedExecutableNodeFloor);
+export const generatedExecutableSyntax = generatedExecutableSyntaxFor(compilerHostNodeFloor);
 
 /**
- * License comments stay inside the executable. `linked` would emit a
- * `<name>.LICENSE.txt` sibling, but artifact provenance
- * (`createArtifactManifestFiles`) and the package build both require an
- * exact planned file set — an unplanned license asset fails the build —
- * so `inline` is the only mode that keeps licenses in the artifact and
- * preserves the self-contained single-file guarantee.
+ * Policy for a future profile that enables minification: license comments
+ * must stay inside the executable. The current profile sets `minify: false`,
+ * so this option does not change today's emitted bytes. `linked` would emit a
+ * `<name>.LICENSE.txt` sibling once minification is enabled, but artifact
+ * provenance and package builds require an exact planned file set.
  */
 export const generatedExecutableLegalComments = 'inline' as const;
 

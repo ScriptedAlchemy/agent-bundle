@@ -8,8 +8,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  compilerHostNodeFloor,
   generatedExecutableLegalComments,
-  generatedExecutableNodeFloor,
   generatedExecutableSyntax,
 } from '../src/build/compiler-profile.ts';
 import { composeMcpAppsRsbuildConfig } from '../src/build/mcp-apps.ts';
@@ -103,22 +103,23 @@ it('composes the executable lib profile with nothing externalized', () => {
   expect(lib.output?.externals).toBeUndefined();
 });
 
-it('derives generated-executable syntax from the Node floor matching engines.node', async () => {
+it('derives generated-executable syntax from the compiler host floor matching engines.node', async () => {
   const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
     readonly engines: { readonly node: string };
   };
-  expect(pkg.engines.node).toBe(`>=${generatedExecutableNodeFloor}`);
+  expect(pkg.engines.node).toBe(`>=${compilerHostNodeFloor}`);
   expect(generatedExecutableSyntax).toBe('es2022');
   const root = join(tmpdir(), 'agent-bundle-syntax-floor-profile');
   const lib = composeEntryLibConfig(probeEntry(root), { cwd: root, meta: testMeta, outputRoot: join(root, 'dist') });
   expect(lib.syntax).toBe(generatedExecutableSyntax);
 });
 
-it('inlines legal comments because a linked license asset is not an artifact file', () => {
+it('reserves inline legal comments for future minification without adding a license asset today', () => {
   expect(generatedExecutableLegalComments).toBe('inline');
   const root = join(tmpdir(), 'agent-bundle-legal-comments-profile');
   const lib = composeEntryLibConfig(probeEntry(root), { cwd: root, meta: testMeta, outputRoot: join(root, 'dist') });
   expect(lib.output?.legalComments).toBe(generatedExecutableLegalComments);
+  expect(lib.output?.minify).toBe(false);
   expect(lib.output?.sourceMap).toBe(false);
 });
 

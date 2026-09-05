@@ -369,7 +369,11 @@ export const composeMcpAppsRsbuildConfig = (
       html: {
         inject: 'body' as const,
         mountId: 'root',
-        templateParameters: () => ({}),
+        templateParameters: ({ assetPrefix, entryName, mountId }) => ({
+          assetPrefix,
+          entryName,
+          mountId,
+        }),
         title: source.name,
         ...(source.template === undefined ? {} : { template: source.template }),
       },
