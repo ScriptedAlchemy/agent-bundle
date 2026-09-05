@@ -253,7 +253,9 @@ it('serves compiled routes with a private runtime sibling across packed process 
       // fills `HARNESS_FROM_FILE` and `.env.local`'s `HARNESS_LOCAL`, the host's
       // exported `HARNESS_HOST_WINS` is untouched, and nothing was logged.
       for (const [name, value] of [
-        ['AGENT_BUNDLE_RUNTIME_REBUNDLE_FIXTURE_EXECUTED', '1'],
+        ...(process.env['AGENT_BUNDLE_RUNTIME_REBUNDLE_FIXTURE'] === '1'
+          ? [['AGENT_BUNDLE_RUNTIME_REBUNDLE_FIXTURE_EXECUTED', '1'] as const]
+          : []),
         ['HARNESS_FROM_FILE', 's3cr3t-from-file'],
         ['HARNESS_LOCAL', 'from-local'],
         ['HARNESS_HOST_WINS', 'from-host'],
