@@ -191,6 +191,7 @@ export type AgentBundleConfig = CoreAgentBundleConfig
   & PortableConfigExtension;
 
 export type { PortableAuthorConfig, PortableManifestConfig } from './adapters/portable.ts';
+export type { CapabilityRow, HostCapabilityTable } from './adapters/capability-state.ts';
 
 // The config hook handler contract (#488): the payload a `hooks.<event>.handler`
 // receives and the result the generated wrapper admits, per canonical event.
