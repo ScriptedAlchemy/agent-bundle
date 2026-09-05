@@ -2,6 +2,7 @@ import { expect, it } from '@rstest/core';
 
 import type { ArtifactManifest as ApiArtifactManifest } from '../src/api.ts';
 import {
+  artifactManifestVersion,
   assembleArtifactManifest,
   parseArtifactManifest,
   serializeArtifactManifest,
@@ -24,6 +25,25 @@ const validManifest = (): ArtifactManifest => ({
     sourceRevision: '69ef37e9424c0a7ea9dd2293b559e43ec8176379',
     specification: 'https://raw.githubusercontent.com/agentskills/agentskills/69ef37e9424c0a7ea9dd2293b559e43ec8176379/docs/specification.mdx',
   },
+  application: {
+    id: 'plugin:review-tools',
+    name: 'review-tools',
+    version: '1.0.0',
+  },
+  distribution: { channels: ['local'] },
+  executables: {
+    bins: [],
+    hooks: [{
+      event: 'sessionStart',
+      host: 'codex',
+      id: 'hook:review',
+      kind: 'config',
+      name: 'review',
+      path: 'codex/scripts/review.mjs',
+    }],
+    mcpServers: [],
+    scripts: [],
+  },
   files: [
     {
       bytes: 18,
@@ -41,6 +61,7 @@ const validManifest = (): ArtifactManifest => ({
       sourceInputs: ['agent-bundle.config.ts', 'src/skills/review/SKILL.md'],
     },
   ],
+  manifestVersion: artifactManifestVersion,
   producer: {
     name: 'agent-bundle',
     version: '0.1.0',
@@ -52,11 +73,11 @@ const validManifest = (): ArtifactManifest => ({
     revision: digest({ inputs: sourceInputs }),
     sourceInputs,
   },
-  runtime: { node: '22.12.0' },
-  targets: [
+  projections: [
     {
       adapterRevision: 'codex-adapter-v1',
-      name: 'codex',
+      documents: {},
+      host: 'codex',
       observedVersion: '0.147.0',
       schemas: [
         {
@@ -67,10 +88,19 @@ const validManifest = (): ArtifactManifest => ({
       ],
     },
   ],
+  routes: {
+    digest: hash('f'),
+    events: [],
+    layouts: [],
+    providers: [],
+    scripts: [],
+    servers: [],
+  },
+  runtime: { node: '22.12.0' },
   validation: {
     artifact: { status: 'passed' },
+    projections: [{ host: 'codex', status: 'passed' }],
     source: { status: 'passed' },
-    targets: [{ name: 'codex', status: 'passed' }],
   },
 });
 
@@ -114,7 +144,7 @@ it('returns a deeply frozen manifest and exports the public manifest type', () =
   expect(Object.isFrozen(manifest.files)).toBe(true);
   expect(Object.isFrozen(manifest.files[0]!)).toBe(true);
   expect(Object.isFrozen(manifest.project.sourceInputs[0]!)).toBe(true);
-  expect(Object.isFrozen(manifest.targets[0]!.schemas[0]!)).toBe(true);
+  expect(Object.isFrozen(manifest.projections[0]!.schemas[0]!)).toBe(true);
   expect(() => {
     (manifest.files as unknown as { push(value: unknown): void }).push({});
   }).toThrow(TypeError);
@@ -144,10 +174,10 @@ it('rejects object shapes, JSON containers, and duplicate JSON keys strictly', (
     ['missing project key', (manifest) => { delete (manifest.project as Record<string, unknown>).modelDigest; }],
     ['extra runtime key', (manifest) => { (manifest.runtime as Record<string, unknown>).extra = true; }],
     ['missing runtime key', (manifest) => { delete (manifest.runtime as Record<string, unknown>).node; }],
-    ['extra target key', (manifest) => { ((manifest.targets as Record<string, unknown>[])[0]!).extra = true; }],
-    ['missing target key', (manifest) => { delete ((manifest.targets as Record<string, unknown>[])[0]!).observedVersion; }],
-    ['extra schema key', (manifest) => { ((((manifest.targets as Record<string, unknown>[])[0]!).schemas as Record<string, unknown>[])[0]!).extra = true; }],
-    ['missing schema key', (manifest) => { delete ((((manifest.targets as Record<string, unknown>[])[0]!).schemas as Record<string, unknown>[])[0]!).revision; }],
+    ['extra projection key', (manifest) => { ((manifest.projections as Record<string, unknown>[])[0]!).extra = true; }],
+    ['missing projection key', (manifest) => { delete ((manifest.projections as Record<string, unknown>[])[0]!).observedVersion; }],
+    ['extra schema key', (manifest) => { ((((manifest.projections as Record<string, unknown>[])[0]!).schemas as Record<string, unknown>[])[0]!).extra = true; }],
+    ['missing schema key', (manifest) => { delete ((((manifest.projections as Record<string, unknown>[])[0]!).schemas as Record<string, unknown>[])[0]!).revision; }],
     ['extra validation key', (manifest) => { (manifest.validation as Record<string, unknown>).extra = true; }],
     ['missing validation key', (manifest) => { delete (manifest.validation as Record<string, unknown>).source; }],
     ['extra validation status key', (manifest) => { ((manifest.validation as { artifact: Record<string, unknown> }).artifact).extra = true; }],
@@ -236,38 +266,38 @@ it('rejects duplicate or unsorted arrays and cross-record inconsistencies', () =
   unsortedProjectInputs.project.sourceInputs.reverse();
   const unsortedFileInputs = clone();
   unsortedFileInputs.files[1]!.sourceInputs.reverse();
-  const duplicateTarget = clone();
-  duplicateTarget.targets.push(structuredClone(duplicateTarget.targets[0]!));
+  const duplicateProjection = clone();
+  duplicateProjection.projections.push(structuredClone(duplicateProjection.projections[0]!));
   const unsortedSchemas = clone();
-  unsortedSchemas.targets[0]!.schemas.push({
+  unsortedSchemas.projections[0]!.schemas.push({
     name: 'aaa',
     revision: 'schema-v2',
     sha256: hash('9'),
   });
-  const duplicateValidationTarget = clone();
-  duplicateValidationTarget.validation.targets.push({ name: 'codex', status: 'passed' });
+  const duplicateValidationProjection = clone();
+  duplicateValidationProjection.validation.projections.push({ host: 'codex', status: 'passed' });
   const missingInput = clone();
   missingInput.files[0]!.sourceInputs = ['missing.ts'];
   const mismatchedConfigDigest = clone();
   mismatchedConfigDigest.project.configDigest = hash('9');
   const mismatchedRevision = clone();
   mismatchedRevision.project.revision = hash('9');
-  const mismatchedValidationTargets = clone();
-  mismatchedValidationTargets.validation.targets[0]!.name = 'claude';
+  const mismatchedValidationProjections = clone();
+  mismatchedValidationProjections.validation.projections[0]!.host = 'claude';
 
   for (const manifest of [
     unsortedProjectInputs,
     unsortedFileInputs,
-    duplicateTarget,
+    duplicateProjection,
     unsortedSchemas,
-    duplicateValidationTarget,
+    duplicateValidationProjection,
   ]) {
     expectInvalid(manifest, /duplicate|sorted/i);
   }
   expectInvalid(missingInput, /source input/i);
   expectInvalid(mismatchedConfigDigest, /configDigest/i);
   expectInvalid(mismatchedRevision, /revision/i);
-  expectInvalid(mismatchedValidationTargets, /validation target/i);
+  expectInvalid(mismatchedValidationProjections, /validation\.projections/i);
 });
 
 it('rejects whitespace, key-order drift, and trailing input outside the canonical bytes', () => {
@@ -283,6 +313,7 @@ it('round-trips the optional package identity axes distinctly', () => {
   const manifest = validManifest();
   (manifest.project as { packageName?: string }).packageName = '@agent-bundle-example/audiobook-curator';
   (manifest.project as { packageVersion?: string }).packageVersion = '1.0.0';
+  (manifest.distribution as { channels: ('local' | 'npm')[] }).channels.push('npm');
   const assembled = assembleArtifactManifest(manifest);
   expect(assembled.manifest.project.packageName).toBe('@agent-bundle-example/audiobook-curator');
   expect(assembled.manifest.project.packageVersion).toBe('1.0.0');

@@ -19,6 +19,7 @@ import { createDefaultRegistry, TargetRegistry } from '../src/adapters/registry.
 import { createProjectContext } from '../src/core/project-context.ts';
 import type { NormalizedPlugin } from '../src/core/types.ts';
 import { sha256Hex } from '../src/core/digest.ts';
+import { emptyCompiledRouteGraph } from '../src/routes/graph.ts';
 
 const testMeta: AgentBundleMeta = Object.freeze({
   name: 'reserved-probe-plugin',
@@ -182,14 +183,15 @@ const projectContextFor = async (
 };
 
 const build = async (
-  options: Omit<LowLevelBuildOptions, 'projectContext'>,
+  options: Omit<LowLevelBuildOptions, 'projectContext' | 'routeGraph'>,
 ): Promise<BuildResult> => buildArtifact({
   ...options,
   projectContext: await projectContextFor(options.projectRoot, options.outputRoot, options.model),
+  routeGraph: emptyCompiledRouteGraph,
 });
 
 const buildFromSource = async (
-  options: Omit<LowLevelBuildOptions, 'projectContext'>,
+  options: Omit<LowLevelBuildOptions, 'projectContext' | 'routeGraph'>,
 ): Promise<BuildResult> => {
   const jiti = createJiti(import.meta.url, { interopDefault: false, moduleCache: false });
   const module = await jiti.import<typeof import('../src/build/build.ts')>(
@@ -198,6 +200,7 @@ const buildFromSource = async (
   return module.build({
     ...options,
     projectContext: await projectContextFor(options.projectRoot, options.outputRoot, options.model),
+    routeGraph: emptyCompiledRouteGraph,
   });
 };
 
@@ -358,12 +361,13 @@ it('low-level build writes and returns the exact canonical manifest for a config
           expect.objectContaining({ path: 'src/skills/review/SKILL.md' }),
         ]),
       },
+      manifestVersion: 2,
+      projections: [expect.objectContaining({ host: 'portable' })],
       runtime: { node: '22.12.0' },
-      targets: [expect.objectContaining({ name: 'portable' })],
       validation: {
         artifact: { status: 'passed' },
+        projections: [{ host: 'portable', status: 'passed' }],
         source: { status: 'passed' },
-        targets: [{ name: 'portable', status: 'passed' }],
       },
     });
     for (const file of files.filter((entry) => entry.path.endsWith('.json'))) {
@@ -525,11 +529,7 @@ it('reports complete immutable output provenance for a Skill copy and bundled sc
         'src/skills/review/SKILL.md',
       ],
     });
-    expect(provenance).toContainEqual({
-      kind: 'generated',
-      path: 'agent-bundle.hooks.json',
-      sourceInputs: ['agent-bundle.config.ts'],
-    });
+    expect(result.manifest.executables.hooks).toEqual([]);
     expect(provenance.every((record) => !record.path.includes(project.outputRoot))).toBe(true);
     expect(provenance.every((record) => record.sourceInputs.every((input) => !input.startsWith('/')))).toBe(true);
     expect(Object.isFrozen(provenance)).toBe(true);
@@ -742,6 +742,7 @@ it.each(['portable', 'codex', 'claude'] as const)(
         projectContext: await projectContextFor(project.root, project.outputRoot, base),
         projectRoot: project.root,
         registry: createDefaultRegistry(),
+        routeGraph: emptyCompiledRouteGraph,
       })).rejects.toThrow(/AB4339/);
       await expect(readFile(join(project.outputRoot, 'previous.txt'), 'utf8')).resolves.toBe('previous\n');
       await expect(readFile(join(project.outputRoot, 'agent-bundle.manifest.json'), 'utf8')).rejects.toMatchObject({
