@@ -91,7 +91,7 @@ export type {
   ToolRouteProps,
   ToolTaskSupport,
 } from './routes/public.ts';
-export { compareEvals, runEvals, startDevServer } from './api.ts';
+export { compareEvals, inspectArtifact, runEvals, startDevServer } from './api.ts';
 export {
   createCodexEvalHarness,
   createEvalHarness,
@@ -122,6 +122,7 @@ export {
   validateArtifactManifestSchema,
 } from './api.ts';
 export type {
+  CompareEvalsOptions,
   EvalAssertionSummary,
   EvalCaseSummary,
   EvalComparison,
@@ -130,7 +131,7 @@ export type {
   EvalServiceNativeOptions,
   EvalSuiteListing,
   EvalSuiteSummary,
-  CompareEvalsOptions,
+  InspectArtifactResult,
   RunEvalsOptions,
 } from './api.ts';
 export type {

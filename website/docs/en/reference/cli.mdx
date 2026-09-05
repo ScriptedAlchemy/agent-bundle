@@ -251,7 +251,10 @@ from `eval`.
 ## inspect
 
 `inspect` takes `--root`, `--config`, `--mode`, `--json`, and a single `--target <target>` filter
-(not repeatable), plus **at most one** focus flag:
+(not repeatable), plus **at most one** focus flag. `--artifact <path>` inspects a copied built
+composite root through its `agent-bundle.manifest.json` instead of a project source tree; it is
+mutually exclusive with `--root` and `--config` (a usage error). A missing or non-canonical
+manifest fails with `AB7001`.
 
 | Flag | Focus |
 | --- | --- |
@@ -267,6 +270,12 @@ With `--json`, the document gains an `output.manifest` summary — the built `pr
 `executables` — whenever a built `agent-bundle.manifest.json` exists at the artifact output, so a
 JSON consumer sees what the last build emitted without probing the root itself. The source-side
 model and plan view is unchanged.
+
+`inspect --artifact <path>` does not load project config. `--json` prints `{ manifest, application }`:
+the same `InspectManifestSummary` as `output.manifest`, and the same `application` projection the
+Workbench renders (`applicationExplorerFor`). Without `--json`, the human output is the application
+id/name/version, projections with `builtInHost`, servers with tool counts, hooks by host, bins, and
+scripts.
 
 Every inspection plan reports each component with its canonical kind — `agent`, `cli`, `command`,
 `event-route`, `hook`, `lsp`, `mcp-app`, `mcp-server`, `native-diagnostics`, `native-extension`,

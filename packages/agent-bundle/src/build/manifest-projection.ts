@@ -161,6 +161,37 @@ export const resolveManifestHostFromRoot = async (
   });
 };
 
+export const inspectManifestSummary = (
+  manifest: ArtifactManifest,
+  path: string,
+): InspectManifestSummary => Object.freeze({
+  application: manifest.application,
+  executables: Object.freeze({
+    bins: Object.freeze(manifest.executables.bins.map((bin) => bin.name)),
+    hooks: manifest.executables.hooks.length,
+    mcpServers: Object.freeze(manifest.executables.mcpServers.map((server) => Object.freeze({
+      hosts: server.hosts,
+      kind: server.kind,
+      name: server.name,
+    }))),
+    scripts: Object.freeze(manifest.executables.scripts.map((script) => script.name)),
+  }),
+  manifestVersion: manifest.manifestVersion,
+  path,
+  projections: Object.freeze(manifest.projections.map((projection) => Object.freeze({
+    ...(projection.builtInHost === undefined ? {} : { builtInHost: projection.builtInHost }),
+    documents: projection.documents,
+    host: projection.host,
+  }))),
+  routes: Object.freeze({
+    cli: manifest.routes.cli?.mode,
+    digest: manifest.routes.digest,
+    events: manifest.routes.events.length,
+    scripts: manifest.routes.scripts.length,
+    servers: manifest.routes.servers.length,
+  }),
+});
+
 export const inspectManifestOutput = (read: ArtifactManifestReadResult): InspectManifestOutput | undefined => {
   switch (read.status) {
     case 'missing':
@@ -168,33 +199,7 @@ export const inspectManifestOutput = (read: ArtifactManifestReadResult): Inspect
     case 'invalid':
       return Object.freeze({ detail: read.detail, path: read.path, status: 'invalid' });
     case 'ok':
-      return Object.freeze({
-        application: read.manifest.application,
-        executables: Object.freeze({
-          bins: Object.freeze(read.manifest.executables.bins.map((bin) => bin.name)),
-          hooks: read.manifest.executables.hooks.length,
-          mcpServers: Object.freeze(read.manifest.executables.mcpServers.map((server) => Object.freeze({
-            hosts: server.hosts,
-            kind: server.kind,
-            name: server.name,
-          }))),
-          scripts: Object.freeze(read.manifest.executables.scripts.map((script) => script.name)),
-        }),
-        manifestVersion: read.manifest.manifestVersion,
-        path: read.path,
-        projections: Object.freeze(read.manifest.projections.map((projection) => Object.freeze({
-          ...(projection.builtInHost === undefined ? {} : { builtInHost: projection.builtInHost }),
-          documents: projection.documents,
-          host: projection.host,
-        }))),
-        routes: Object.freeze({
-          cli: read.manifest.routes.cli?.mode,
-          digest: read.manifest.routes.digest,
-          events: read.manifest.routes.events.length,
-          scripts: read.manifest.routes.scripts.length,
-          servers: read.manifest.routes.servers.length,
-        }),
-      });
+      return inspectManifestSummary(read.manifest, read.path);
     default: {
       const exhaustive: never = read;
       throw new TypeError(`Unhandled artifact manifest status ${String(exhaustive)}.`);
