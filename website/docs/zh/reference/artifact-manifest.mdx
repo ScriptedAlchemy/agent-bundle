@@ -17,7 +17,7 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 | --- | --- |
 | 只写一次 | 只有 `agent-bundle build` 在暂存根目录完成之后写出它。没有任何别的东西会创建或编辑它。 |
 | `manifestVersion` | `2`。读取方拒绝任何其他值。 |
-| 规范字节 | 文件就是该文档的规范 JSON 序列化——对象键已排序、没有无意义的空白、末尾恰有一个换行。每个读取方都会把解析结果重新序列化，字节不完全一致就拒绝该文件。手工编辑、重新格式化或重复键都会让读取失败。 |
+| 规范字节 | 文件就是该文档的规范 JSON 序列化——对象键已排序、没有无意义的空白、末尾恰有一个换行。读取整份文档的每个读取方都会把解析结果重新序列化，字节不完全一致就拒绝该文件；手工编辑、重新格式化或重复键都会让读取失败。唯一的精简读取方——打包进生成 bin 的 `<plugin> web` 支持——检查 `manifestVersion`、拒绝重复键，并只校验它启动所需的 `projections[].host`、`executables.mcpServers[]` 的 launch 与 `web` 这几个切片。 |
 | 封闭键 | 每个对象只接受文档化的那些键。任何层级上的未知键都是解析错误。 |
 | 有序数组 | 每个数组都有显式的排序键（各分节下方注明），且没有重复项。 |
 | 路径 | 每个路径都是 POSIX 形式、相对根目录且安全：没有前导 `/`、没有反斜杠、没有 `.` 或 `..` 段，也绝不会是构建机上的绝对路径。把整个组合根目录搬到另一个绝对路径后，每个读取方仍然可用：所有路径都保持相对根目录，并在搬迁后的树内解析。任何分节指向的路径——宿主文档、可执行文件、App 视图、安装文件——同时也是一行 `files[]`。 |
@@ -47,8 +47,9 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 
 ## 公开契约
 
-顶层恰有九个键，全部必填：`application`、`compiler`、`distribution`、`executables`、`files`、
-`manifestVersion`、`projections`、`routes`、`runtime`。安装、诊断、服务或列出根目录的消费者
+顶层有九个必填键——`application`、`compiler`、`distribution`、`executables`、`files`、
+`manifestVersion`、`projections`、`routes`、`runtime`——外加可选的 [`web`](#web)，恰在配置向
+`<plugin> web` 暴露了 App 时出现。安装、诊断、服务或列出根目录的消费者
 （`install`、`doctor`、`serve-app`、`mcp`、`hooks`、`inspect` 摘要）只读这份契约。编译器运行事实
 在 `compiler` 下，并单独版本化。
 

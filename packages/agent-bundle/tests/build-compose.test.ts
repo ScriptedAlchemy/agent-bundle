@@ -17,7 +17,11 @@ import { sha256Hex } from '../src/core/digest.ts';
 import { DiagnosticError } from '../src/core/diagnostics.ts';
 import type { NormalizedPlugin } from '../src/core/types.ts';
 import { createMcpPathTokenResolver, standardMcpPathTokens } from '../src/services/mcp-path-tokens.ts';
-import { createTargetMcpRuntime, resolveTargetRelativeStdioArgument } from '../src/services/mcp-runtime.ts';
+import {
+  createTargetMcpRuntime,
+  resolveTargetRelativeStdioArgument,
+  type TargetMcpRuntimeContract,
+} from '../src/services/mcp-runtime.ts';
 import { supportedCapabilities } from './support/adapter-capabilities.ts';
 
 /**
@@ -481,6 +485,49 @@ describe('composite plugin root (#555)', () => {
     })).rejects.toMatchObject({
       diagnostics: expect.arrayContaining([expect.objectContaining({ code: 'AB6017' })]),
     });
+  });
+
+  it('mcp run launches from the manifest record alone when the host document names no such server (#604)', { timeout: 180_000 }, async () => {
+    // Built with the adapter as shipped; run through a registry whose reader
+    // reports the document's servers under other names — the compiled entry
+    // stays referenced (AB6017 holds), but no document row is `fixture`, so
+    // only `executables.mcpServers[].launch` can describe the launch.
+    const { output, result } = await buildFixture(['synthetic'], {
+      registry: new TargetRegistry().register(syntheticAdapter, { default: true }),
+    });
+    const record = result.build.manifest.executables.mcpServers[0]?.launch;
+    if (record === undefined) throw new Error('expected a compiled MCP entry');
+    const aliasingRuntime: TargetMcpRuntimeContract = {
+      ...syntheticMcpRuntime,
+      readModernServers: (document) => {
+        const read = syntheticMcpRuntime.readModernServers(document);
+        return read.status === 'found'
+          ? { servers: read.servers.map((entry) => ({ ...entry, name: `${entry.name}-alias` })), status: 'found' }
+          : read;
+      },
+    };
+    const blindRegistry = new TargetRegistry().register({ ...syntheticAdapter, mcpRuntime: aliasingRuntime }, { default: true });
+    const launches: { args: readonly string[]; command: string; cwd: string; env: Readonly<Record<string, string>> }[] = [];
+    const child = new EventEmitter() as ChildProcess;
+    child.kill = () => true;
+    const workspaceRoot = dirname(output);
+    await expect(runMcp({
+      artifact: output,
+      loadEnvFiles: false,
+      registry: blindRegistry,
+      root: workspaceRoot,
+      server: 'fixture',
+      spawnProcess: (command, args, options) => {
+        launches.push({ args, command, cwd: options.cwd, env: options.env });
+        queueMicrotask(() => child.emit('exit', 0, null));
+        return child;
+      },
+      target: 'synthetic',
+    })).resolves.toBe(0);
+    expect(launches).toHaveLength(1);
+    expect(launches[0]).toMatchObject({ args: [join(output, record.entry)], command: 'node', cwd: output });
+    // The anchor names the durable root, not the rebuildable artifact.
+    expect(launches[0]?.env['AGENT_BUNDLE_PLUGIN_ROOT']).toBe(workspaceRoot);
   });
 
   it('judges the built-in hosts by adapter identity, so a custom adapter named like one earns no install surface (#592)', { timeout: 120_000 }, async () => {

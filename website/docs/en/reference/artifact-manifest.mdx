@@ -20,7 +20,7 @@ directory layout to find out.
 | --- | --- |
 | Written once | Only `agent-bundle build` writes it, after the staged root is complete. Nothing else creates or edits it. |
 | `manifestVersion` | `2`. A reader refuses any other value. |
-| Canonical bytes | The file is the canonical JSON serialization of the document — object keys sorted, no insignificant whitespace, one trailing newline. Every reader re-serializes what it parsed and rejects the file unless the bytes are identical. A hand edit, a reformat, or a duplicate key fails the read. |
+| Canonical bytes | The file is the canonical JSON serialization of the document — object keys sorted, no insignificant whitespace, one trailing newline. Every reader of the whole document re-serializes what it parsed and rejects the file unless the bytes are identical; a hand edit, a reformat, or a duplicate key fails the read. The one lean reader — the `<plugin> web` support bundled into a generated bin — checks `manifestVersion`, refuses duplicate keys, and validates only the `projections[].host`, `executables.mcpServers[]` launch, and `web` slices it launches from. |
 | Closed keys | Every object admits exactly its documented keys. An unknown key at any level is a parse error. |
 | Sorted arrays | Every array has an explicit sort key (named per section below) and no duplicates. |
 | Paths | Every path is POSIX, relative to the root, and safe: no leading `/`, no backslash, no `.` or `..` segment, and never a build-machine absolute path. Moving the entire composite root to a different absolute directory keeps every reader working: every path stays root-relative and resolves inside the moved tree. Every path a section points at — a host document, an executable, an App view, an install file — is also a `files[]` row. |
@@ -53,8 +53,9 @@ file is hand-editable: change the config or the sources and rebuild.
 
 ## Public contract
 
-The top level has exactly nine keys, all required: `application`, `compiler`, `distribution`,
-`executables`, `files`, `manifestVersion`, `projections`, `routes`, `runtime`. Consumers that
+The top level has nine required keys — `application`, `compiler`, `distribution`,
+`executables`, `files`, `manifestVersion`, `projections`, `routes`, `runtime` — plus the optional
+[`web`](#web), present exactly when the configuration exposes an App to `<plugin> web`. Consumers that
 install, diagnose, serve, or list a root (`install`, `doctor`, `serve-app`, `mcp`, `hooks`,
 `inspect` summary) read only this contract. Operational compiler facts live under `compiler`
 and are versioned separately.

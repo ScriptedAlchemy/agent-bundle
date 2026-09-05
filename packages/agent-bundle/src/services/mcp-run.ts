@@ -11,6 +11,7 @@ import { validateArtifact } from '../build/validate-artifact.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { joinArtifact, resolveContained } from '../core/paths.ts';
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import { pluginRootEnvAnchor } from '../core/types.ts';
 import { runPromise } from '../effect/boundary.ts';
 import { liftPromise } from '../effect/lift.ts';
 import { readFileString, runWithPlatform } from '../effect/platform.ts';
@@ -186,7 +187,7 @@ export const resolveMcpStdioLaunch = async (
     throw new Error(`MCP server ${JSON.stringify(options.server)} is not a stdio server; only stdio servers can run in the foreground.`);
   }
   // Without a host document the record itself is the launch line, under the
-  // same per-field root split the host projections get.
+  // same per-field root split and plugin-root anchor the host projections get.
   if (hostLaunch === undefined) {
     const envRoots = { ...roots, pluginRoot: envPluginRoot };
     return Object.freeze({
@@ -198,9 +199,12 @@ export const resolveMcpStdioLaunch = async (
       ]),
       command: 'node',
       cwd: targetRoot,
-      env: Object.freeze(Object.fromEntries(
-        Object.entries(row.launch.env).map(([key, value]) => [key, expandLaunchTokens(value, envRoots)]),
-      )),
+      env: Object.freeze({
+        [pluginRootEnvAnchor]: envPluginRoot,
+        ...Object.fromEntries(
+          Object.entries(row.launch.env).map(([key, value]) => [key, expandLaunchTokens(value, envRoots)]),
+        ),
+      }),
     });
   }
   // The host document is the adapter's own launch line for that entry — `AB6017`
