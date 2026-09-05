@@ -38,6 +38,16 @@ These are contracts, not defaults:
 | Evals | Eval runs and run comparisons. |
 | Logs | Concise events plus raw stdout, stderr, and protocol streams, grouped by producer: normalization, build, diagnostics, MCP, hook, host trial, and grader. |
 
+A failed MCP App view compile is a build failure like any other. The Overview **Diagnostics**
+table shows one `AB4770` row per Rspack error: the Message column carries
+`MCP App "<name>" failed to compile: <file>:<line>:<column>: <message>` and the Source column the
+failing file, in place of the former
+`AB7100 "Unable to compile the build: Rspack build failed."` row whose only source was the config
+file. Logs records the same diagnostics — code and source path — under the `build.failed` entry.
+No `artifact.available` follows, so the last good epoch stays active and every bound MCP session
+keeps serving it; save a fix and the next rebuild publishes. Compile warnings (`AB4771`) and the
+size advisory (`AB4772`) ride the succeeded epoch's diagnostics the same way.
+
 ## MCP sessions bind to an epoch
 
 A Workbench MCP session binds `{ epochId, target, serverName }` when it is opened and never moves
@@ -46,8 +56,12 @@ came from one generated server built from one set of inputs.
 
 - **Restart MCP session** respawns that generated server on its *selected* epoch.
 - To use a newly published epoch, open a **new** session.
-- Compatible MCP Apps preview through the same bound session. The same host stack serves one App
-  standalone in a plain browser tab through `agent-bundle serve-app`; see
+- Compatible MCP Apps preview through the same bound session. The dev loop compiles views
+  unminified, so the browser devtools show readable App source; `agent-bundle build` ships them
+  minified (see
+  [Development vs production builds](../authoring/mcp.mdx#development-vs-production-builds)).
+  The same host stack serves one App standalone in a plain browser tab through
+  `agent-bundle serve-app`; see
   [Serving an App standalone](../authoring/mcp.mdx#serving-an-app-standalone).
 
 ## Standalone MCP Inspector

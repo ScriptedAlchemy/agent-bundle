@@ -49,7 +49,6 @@ export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/generated-route-server.test.ts',
   'packages/agent-bundle/tests/hook-playground-service.test.ts',
   'packages/agent-bundle/tests/hooks.test.ts',
-  'packages/agent-bundle/tests/host-adapters.native.test.ts',
   'packages/agent-bundle/tests/host-adapters.test.ts',
   'packages/agent-bundle/tests/host-discovery-dev-server.test.ts',
   'packages/agent-bundle/tests/host-mcp-proxy.test.ts',
@@ -59,12 +58,14 @@ export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/integration-matrix.test.ts',
   'packages/agent-bundle/tests/layout-build.test.ts',
   'packages/agent-bundle/tests/lifecycle-replay-dev-server.test.ts',
+  'packages/agent-bundle/tests/mcp-apps-compile.test.ts',
   'packages/agent-bundle/tests/mcp-probe-dev-server.test.ts',
   'packages/agent-bundle/tests/mcp-session-service.test.ts',
   'packages/agent-bundle/tests/mcp.test.ts',
   'packages/agent-bundle/tests/package-build.test.ts',
   'packages/agent-bundle/tests/path-token-resolver.test.ts',
   'packages/agent-bundle/tests/plugin-bundle.test.ts',
+  'packages/agent-bundle/tests/prebuilt-payload.test.ts',
   'packages/agent-bundle/tests/prepack.test.ts',
   'packages/agent-bundle/tests/provider-typegen.test.ts',
   'packages/agent-bundle/tests/public-api.test.ts',
@@ -74,9 +75,11 @@ export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/rstest-meta-consumer.test.ts',
   'packages/agent-bundle/tests/script-playground-service.test.ts',
   'packages/agent-bundle/tests/self-contained-bundler-config.test.ts',
+  'packages/agent-bundle/tests/serve-app-command-spawn.test.ts',
   'packages/agent-bundle/tests/serve-app.test.ts',
   'packages/agent-bundle/tests/target-hook-contract.test.ts',
   'packages/agent-bundle/tests/target-mcp-runtime.test.ts',
+  'packages/agent-bundle/tests/test-browser-rstest.test.ts',
   'packages/agent-bundle/tests/workbench-surface-dev-server.test.ts',
   'packages/agent-bundle/tests/worktree-proximity-journeys.test.ts',
   'packages/rsc-markdown-stream/tests/react-server.test.ts',
@@ -131,6 +134,18 @@ export const nightlyEvidenceTestFiles: readonly string[] = [
 ];
 
 /**
+ * Installed-host contract proofs: every test spawns the real `claude` /
+ * `codex` CLI and the whole file skips unless
+ * AGENT_BUNDLE_NATIVE_HOST_CONTRACTS=1, so no per-PR pool collects it. It
+ * runs through rstest.native-host.config.ts (`pnpm test:native-host`) on one
+ * worker, the shape a real host session needs — not next to 3,600 other
+ * tests in the unit pool, and not as 29 skips per integration run (#576).
+ */
+export const nativeHostTestFiles: readonly string[] = [
+  'packages/agent-bundle/tests/host-adapters.native.test.ts',
+];
+
+/**
  * Official MCP server conformance runs only through the manually dispatched
  * lane. It builds one generated fixture, opens loopback HTTP, and invokes the
  * external runner, so no default Rstest pool may collect it.
@@ -156,6 +171,7 @@ export const packedTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/packed-consumer-typescript.test.ts',
   'packages/agent-bundle/tests/packed-host-install-proof.test.ts',
   'packages/agent-bundle/tests/packed-native-smoke.test.ts',
+  'packages/agent-bundle/tests/packed-serve-app-command.test.ts',
   'packages/agent-bundle/tests/packed-stdio-projection.test.ts',
   'packages/agent-bundle/tests/public-api-packed.test.ts',
   'packages/agent-bundle/tests/rsc-runtime-optional-packaging.test.ts',

@@ -28,14 +28,15 @@ even when no error diagnostic was reported.
 | `AB474x`/`AB4750` | Prebuilt payloads and prebuilt entries (see below). |
 | `AB4760` | The published `agent-bundle/meta` identity module evaluated outside every compiled surface and outside the Rstest presets (see below). |
 | `AB4765`–`AB4766` | Artifact-hosted routed CLI: a target without the `cli` capability omits `bin/<name>.mjs`; a host-emitted file collides with it (see below). |
+| `AB477x` | MCP App view compilation (`AB4770`: compile error with file, line, column and the bundler message; `AB4771`: compile warning; `AB4772`: emitted-size advisory; see below). |
 | `AB490x`/`AB492x` | Conventional host components (#100 stage 2): rules `src/rules/*.mdc` (`AB4900`–`AB4908`) and commands `src/commands/*.md` (`AB4920`–`AB4928`), including per-host feature-set enforcement (`AB4907`/`AB4908`, `AB4927`/`AB4928`); see below. |
-| `AB48xx`/`AB494x` | Route graph, state, layout (`AB4830`–`AB4832`), generated route declarations outside the TypeScript program (`AB4834`), route render budgets (`AB4835`), tool task support (`AB4836`), and provider conventions (see below). |
+| `AB48xx`/`AB494x` | Route graph, state, layout (`AB4830`–`AB4832`), generated route declarations outside the TypeScript program (`AB4834`), route render budgets (`AB4835`), tool task support (`AB4836`), a route module that value-imports a compiler-carrying framework entry (`AB4837`), and provider conventions (see below). |
 | `AB5000` | General CLI and adapter failures. |
 | `AB60xx` | Built-artifact validation, including schema documents and referenced files (`AB6011`/`AB6012`: a target's required pinned-schema document is missing or invalid; `AB6025`: a manifest-declared `logo` path is missing from the artifact or escapes the deploy tree; `AB6034`: emitted Skill Markdown has no instruction body; `AB6035`–`AB6038`: Agent Plugins portable validation, see below). |
 | `AB700x` | Host installation and uninstallation: bundle identity, host availability, scope, command failure, and collision checks (`AB7005`: version collision, pre-receipt content collision, or foreign install; `AB7006`: the host lists the installed copy with load errors; see below), plus the `uninstall` refusals `AB7007`–`AB7009` (ownership or content mismatch, unconfirmed data purge, missing receipt; see below). |
 | `AB7010`–`AB7015` | npm prepack inventory, artifact freshness, package bin targets, release-version agreement, and installed-dependency hygiene (`AB7014`: a dependency no packed file references; `AB7015`: a git, remote-tarball, path, or unrewritten workspace-protocol dependency specifier). |
 | `AB7200`–`AB7202`, `AB7210`–`AB7211` | Development rebuilds and live host surfaces: rebuild admission and phase failures, development host install sync, and the dev-epoch contract gate (see below). |
-| `AB7xxx` | Project preparation and development rebuilds. |
+| `AB7xxx` | Project preparation and development rebuilds (`AB7100`–`AB7102`: a development rebuild's compilation, publication, and cleanup; `AB7103`: the development package build; see below). |
 | `AB7300`–`AB7331` | Read-only install Doctor: host probes, installed inventory, bundle comparison and registration proof, runtime endpoint health and identity, durable-state inventory, static bytes-at-rest validation, foreign-install detection (`AB7321`; see below), Cursor plugin hook registration / marketplace staging (`AB7322`–`AB7324`; see below), host load refusal (`AB7325`; see below), the Cursor Agent Plugins launch proof (`AB7326`; see below), a disabled Claude install (`AB7327`; see below), lifecycle receipts and activation states (`AB7328`–`AB7330`; see below), and the operator `.env` layer of an installed pack (`AB7331`; see below). `AB7311` and `AB7325` are also emitted by `build` and `validate --artifact` from the Claude load check (see "Claude Code host validation"). |
 | `AB8200`–`AB8209` | Workbench development runtime routes (`/api/runtime/**`): `AB8200` development runtime provider configuration, load, or lifecycle failure, `AB8201` runtime/session/run not available, `AB8202` invalid route path, `AB8203` invalid request shape, `AB8204` stale runtime generation or MCP session revision (409), `AB8205` runtime request could not be completed, `AB8206` Workbench runtime client failure, `AB8207` Agent Document decoding needs the optional `@agent-bundle/runtime` peer (503), `AB8208` stored Flight could not be decoded as an Agent Document (409), `AB8209` decoded Agent Document over the 16 MiB budget (413) or an invalid document response. |
 | `AB8210`–`AB8214` | Workbench semantic lifecycle replay routes (`/api/lifecycles`, `/api/lifecycles/replays`): `AB8210` invalid path, `AB8211` malformed replay request or native envelope (400, carries the shared validator message), `AB8212` replay unavailable or could not be completed, `AB8213` stale manifest binding (409; the page repairs it with refresh → explicit re-run), `AB8214` replay over the 16 MiB budget (413). |
@@ -260,6 +261,84 @@ its module does not export) are invisible to `tsc --noEmit`, so a green
 `typecheck` script proves nothing about them. Reproduce them with
 `tsc --declaration --emitDeclarationOnly` over the lib entry source
 directory.
+
+## MCP App view compilation (`AB4770`–`AB4772`)
+
+MCP App views compile through Rsbuild with its logging silenced
+(`logLevel: 'silent'`), so the bundler never prints on its own. The framework
+reads the Rspack stats of every App environment instead and reports **one
+`AB4770` error per Rspack error**, each carrying the failing module as a
+project-relative path (forward slashes; absolute when the module lives outside
+the project root), the `line:column` the bundler reported, and the bundler's
+message — ANSI colours, the miette frame glyphs, and code-frame lines
+stripped, the remaining lines joined into one — plus a `sourcePath` naming the
+failing module:
+
+```text
+[AB4770] MCP App "status" failed to compile: views/status.ts:1:10: Module build failed
+  (from builtin:swc-loader): Syntax Error: Expression expected
+[AB4770] MCP App "status" failed to compile: views/status.ts:1:1: Module not found:
+  Can't resolve './missing-module' in '…/views'
+[AB4770] MCP App "status" failed to compile: Tsconfig not found …/does-not-exist.json
+```
+
+The third line is the shape without a location: Rspack attributes a
+`tsconfig.json` whose `extends` target is missing to no module, so the message
+carries only the bundler text and `sourcePath` falls back to the App's entry
+source. A compile that fails without a single stats error still reports one
+`AB4770` with the bundler's own message. More than 20 errors on one App are
+cut at 20, and the last diagnostic ends with `… and N more errors (run the
+compile with logLevel error via tools.rsbuild for the full list)`. App compile
+failures never fall through to the `AB5000` catch-all, and `agent-bundle dev`
+shows the same `AB4770` rows in the Workbench Overview's Diagnostics table —
+the Source column is the failing file — instead of
+`AB7100 "Unable to compile the build: Rspack build failed."`.
+
+Rspack warnings that are not on the framework's ignore list report as
+`AB4771` **warnings** of the same shape, with `produced a warning while
+compiling` in place of `failed to compile`. They never fail the build and are
+returned beside the compiled Apps (`build.diagnostics` in
+`agent-bundle build --json`). The ignore list is the documented constant in
+`packages/agent-bundle/src/build/mcp-app-diagnostics.ts` — one comment per
+entry citing the warning text it drops and why it is noise; it may be empty.
+
+Every App is measured after it is emitted: the UTF-8 bytes of the
+self-contained HTML and their gzip size, what a compressing transport would
+carry. `AB4772` is the size advisory, one **warning** per App. Any view that
+imports `@modelcontextprotocol/ext-apps` starts at about 437 kB (104 kB gzip)
+— `zod` v3 and v4, `@modelcontextprotocol/sdk`, `zod-to-json-schema`, and
+`ext-apps` itself — so the advisory bound of 1 MiB (1,048,576 bytes) sits at
+roughly 2.4× that floor and at half the 2 MiB (2,097,152 bytes) bound above
+which the Workbench and `serve-app` hosts refuse the resource and the Rstest
+browser harness refuses to mount it. The advisory fires when a production
+build emits 1 MiB or more, and in either compile mode when the document
+exceeds 2 MiB (the view will not render in those hosts). The message names
+the raw and gzip sizes, the bound that was crossed, and the five largest
+modules from the stats (project-relative, or `node_modules/<package>/…`), with
+sizes 1024-based to one decimal, a trailing `.0` dropped (`427.1 KiB`,
+`1.3 MiB`, `2 MiB`). Both thresholds are fixed; no configuration key moves
+them.
+
+`agent-bundle dev` compiles views unminified so the Workbench preview is
+readable — about 2.7× the production bytes. A view whose readable document
+would exceed the 2 MiB host bound is recompiled with the production profile
+so the preview still renders it, and one `AB4772` reports the substitution
+instead: `MCP App "<name>" readable development output compiled to <size>,
+above the 2 MiB bound the Workbench and serve-app hosts accept; the preview
+renders the production build (<size>, <gzip> gzip) instead; largest modules:
+…`. The production sizes in that notice stand in for the 1 MiB advisory, so
+a substituted view never carries two size advisories. When the production
+build itself exceeds 2 MiB the substitution buys nothing: the notice is not
+emitted, the preview receives that production document, and the ordinary
+over-bound `AB4772` names its sizes so the author knows the view does not
+render. The 1 MiB advisory is a production concern and never fires on
+readable output.
+
+| Code | Severity | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB4770` | error (build) | One Rspack error while compiling an App view — a syntax error, an unresolved import, a `tsconfig.json` whose `extends` target is missing, or any other module failure. `MCP App "<name>" failed to compile: <file>:<line>:<column>: <message>`, without the location prefix when Rspack attributes the error to no module; `sourcePath` is the failing module, else the App's entry. | Fix the reported error in the named file and rebuild; run `agent-bundle build` for the full message. |
+| `AB4771` | warning | One Rspack warning while compiling an App view that the framework's ignore list does not cover; `MCP App "<name>" produced a warning while compiling: <file>:<line>:<column>: <message>`. | Address the warning in the named file; a warning that is bundler noise inside the framework's own dependency graph belongs on the documented ignore list. |
+| `AB4772` | warning | The emitted App HTML is 1 MiB or larger in a production build, or larger than 2 MiB in any build; `MCP App "<name>" compiled to <size> (<gzip> gzip), above the … bound; largest modules: …`. In `agent-bundle dev`, a view whose readable output would exceed 2 MiB was recompiled with the production profile for the preview and that production build fits: `MCP App "<name>" readable development output compiled to <size>, above the 2 MiB bound …; the preview renders the production build (…) instead; largest modules: …` — the only size advisory that view receives; a production build that is itself over 2 MiB gets the ordinary over-bound message instead. | Trim the largest modules the message names — usually a dependency imported whole; a view over 2 MiB does not render in the Workbench or `serve-app` and must shrink before it ships. The development substitution costs only the readable source in the preview. |
 
 ## Release identity (`AB4001`, `AB4008`–`AB4011`, `AB4013`)
 
@@ -586,8 +665,8 @@ object, a mutator function, or an array of both).
 
 `AB4724` checks `tools.rsbuild.plugins` against the Rsbuild plugins the
 framework registers itself — currently `@rsbuild/plugin-react`
-(`rsbuild:react`), which every synthesized Rslib entry and every React-syntax
-MCP App view carries. The hatch merges *beside* the framework profile
+(`rsbuild:react`), which every synthesized Rslib entry and every MCP App
+view carries, whatever the view's entry extension. The hatch merges *beside* the framework profile
 (`mergeRslibConfig` / `mergeRsbuildConfig` concatenate `plugins` arrays), and
 Rsbuild's plugin manager appends every plugin it is handed without deduping by
 name, so re-adding `pluginReact()` would register it twice. The check is
@@ -606,7 +685,7 @@ framework-owned plugin twice by accident.
 | `AB4723` | error | `tools.rspack` is not an Rspack config object, a mutator function, or an array of both. | Use one of the three Rslib `tools.rspack` forms. |
 | `AB4724` | error | `tools.rsbuild.plugins` supplies a plugin whose `name` matches a framework-owned registration (`rsbuild:react` from `@rsbuild/plugin-react`). The message names the plugin and its package. | Remove the plugin from `tools.rsbuild.plugins`; agent-bundle registers it in every config it synthesizes. |
 
-## Route graph, state, layout, and provider conventions (`AB4800`–`AB4836`, `AB4940`–`AB4942`)
+## Route graph, state, layout, and provider conventions (`AB4800`–`AB4837`, `AB4940`–`AB4942`)
 
 The route-graph compiler discovers conventional route modules
 (`src/mcp/<server>/{tools,resources,prompts,apps}/*`, `src/events/*/*`,
@@ -821,6 +900,7 @@ schema constants), unions, nested objects, transforms, coercions — raises
 | `AB4834` | warning | `agent-bundle validate` published `.agent-bundle/routes.d.ts` (the project compiles routes or providers) but the root `tsconfig.json` program — resolved like `tsc -p`, including `extends` and one level of project `references` — does not compile it, so `renderRoute` / `renderRouteEvents` type-check route ids as `string` and `input` / `result` as `unknown`. Reported on `tsconfig.json`; never for a project without one. | Add `".agent-bundle/routes.d.ts"` to `tsconfig.json` `include` (not `files`: an `include` entry is inert until the first build publishes the file, while a missing `files` entry is a `tsc` error); `build`, `dev`, and `validate` keep the file current and it stays gitignored. |
 | `AB4835` | error | A route's static `config.render` (the render budget of one call, #454) is malformed: `render` is not an object, carries a key other than `maxElapsedMs`, `maxElapsedMs` is not a positive integer of milliseconds, or it exceeds the framework ceiling of `86400000` (24 hours) — or a plain `.ts` CLI command declares one, although it executes without a render session. Reported once per route: on an MCP tool, resource, or prompt route with its server (the tool's projected CLI command inherits the value), or on a `src/cli/**` command route; a route with a rejected budget compiles no command. Omit `render` to keep the runtime default (`60000`). Declare `config.render = { maxElapsedMs: <positive integer ≤ 86400000> }` on a rendered route, or remove it. The budget bounds the framework's render session only: Codex's `tool_timeout_sec` (60 s by default) and any per-server host timeout must be raised by the operator separately, while Claude Code's default per-call wall clock is about 28 hours and its idle timer is kept alive by the `notifications/progress` the projector forwards. |
 | `AB4836` | error | A route's static `config.execution` (MCP task support, #369) is malformed: `execution` is not an object, carries a key other than `taskSupport`, or `taskSupport` is not one of `forbidden`, `optional`, `required` — or a resource or prompt route declares it, although the `2025-11-25` Tasks utility augments `tools/call` only. Reported once per route with its server. Omit `execution` to keep the wire default (`forbidden`: every call is an ordinary request), or declare `config.execution = { taskSupport: 'optional' }` so a task-aware client may receive a `CreateTaskResult` and poll `tasks/get` / `tasks/result` while the render continues, or `'required'` to refuse ordinary calls with JSON-RPC `-32601`. The generated server advertises the value in `tools/list` and declares the `tasks` capability only when at least one tool opted in. |
+| `AB4837` | error | A route module of any kind except an App — a `src/cli/**` command, a `src/scripts/**` script, a tool, resource, or prompt route of a generated server, an event route — a layout, or a provider, or a module one of them reaches through relative value imports, imports `agent-bundle`, `agent-bundle/api`, `agent-bundle/config`, `agent-bundle/eval`, `agent-bundle/rstest`, `agent-bundle/test`, or `agent-bundle/test/browser` as a value (a static import whose binding is read at run time, `import 'agent-bundle/api'`, `import('agent-bundle/api')` with a literal specifier, or a non-type re-export). Those entries carry the compiler, and the generated executable is self-contained (#387): the bundler would inline the compiler and fail on the framework's runtime-relative module references (`Module not found: Can't resolve '../events'`), or the artifact validator would reject the inlined compiler's non-literal dynamic imports with `AB6005` — either way naming a generated file instead of the route (#558). Judged statically when the route graph compiles, so `inspect`, `validate`, `build`, and `dev` all report it, once per module, naming the route and the helper the import lives in. `import type`, `type`-qualified specifiers, and imports used only in type positions are elided by the bundler and never reported; routes of a server that is not generated (`custom`/`command`/`remote`, or an `AB4800` conflict) or of a CLI that is not generated (`conventional`, or an `AB4801` conflict) are never bundled, so they are not judged; likewise a layout that no bundled rendered route composes through (a worker imports only the layouts its routes reach: the tool, resource, and prompt routes of a generated server, the rendered `.tsx` commands of a generated CLI, and rendered `.tsx` scripts), and a provider in a project whose only executables are plain `.ts` scripts, which are bundled from their own source and mount none. Spawn the framework instead of importing it: serve an MCP App from a routed command with `spawnServeApp` from `agent-bundle/serve-app-command`, which runs `agent-bundle serve-app` as a child process; keep other framework calls in host processes (`package.json` scripts, a hand-written `.mjs` run from the checkout). The bundle-safe entries stay allowed: `agent-bundle/routes`, `agent-bundle/launch-env`, `agent-bundle/meta`, `agent-bundle/mcp-apps`, `agent-bundle/mcp-entry`, `agent-bundle/cli-entry`, `agent-bundle/terminal-capability`, and `agent-bundle/serve-app-command`. |
 | `AB4940` | error | A conventional provider module has no default export or its default export is not a function. Default-export a factory receiving `{ invocation, plugin, signal }`. |
 | `AB4941` | error | Two provider filenames derive the same camel-cased provider key. Rename one file so every provider key is unique. |
 | `AB4942` | error | A provider filename derives the reserved `processLifetime` key. Rename the file so its camel-cased key does not collide with the framework-owned provider. |
@@ -1169,6 +1249,25 @@ host-facing build together with the failed checks.
 | `AB7211` | error | The development contract matrix failed or could not complete for a published epoch. The message carries the aggregated `contract-violation` detail; `dev.contract.status` lists the failed check names grouped by route. That epoch is never adopted by live host connections or development installs. | Fix the failing route or fixture and rebuild; a passing epoch is adopted normally. |
 | `AB8024` | error (MCP) | The epoch a live host connection was serving vanished from the epoch store mid-session. The connection is invalidated and the typed MCP error carries `{ code, epochId }`. | Reconnect from the host; the proxy binds to the currently adopted epoch. |
 | `AB8025` | error (MCP) | `agent-bundle dev proxy` found no running development server for the project (cold start or shutdown), so the host-facing connection fails closed rather than serving stale bytes. | Start `agent-bundle dev` for that project root; installed hooks and Skills remain in place. |
+
+## Development rebuild compilation and publication (`AB7100`–`AB7102`)
+
+Every `agent-bundle dev` rebuild compiles the project into a build attempt,
+validates the artifact, proves the project source did not change underneath
+it, and publishes the result as an immutable epoch. Structured diagnostics
+thrown along that path — the `AB4770` compile errors of an MCP App view, the
+artifact validation codes — pass through to the failed attempt unchanged, so
+the Workbench Overview and the `build.failed` Logs entry show the real
+finding. `AB7100` is only what remains: the fallback for a throw in that pass
+that carried no structured diagnostics, and the code of a cleanup failure
+after the attempt settled. `sourcePath` on all three codes is the project's
+config file.
+
+| Code | Severity | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB7100` | error / warning | `Unable to compile the build: <error>` — the compile, validate, or publish pass of a rebuild threw something that was not a `DiagnosticError` carrying diagnostics. Also `Unable to clean up build attempt after the build: <error>` or `Unable to clean up staging epoch after the build: <error>` when removing the attempt directory or closing an unpublished staging epoch fails: a **warning** on a succeeded attempt (the epoch is live), an error on a failed one. | Read the wrapped error; a structured cause reports under its own code instead. A cleanup failure names a path under `.agent-bundle/attempts` or `.agent-bundle/epochs` to repair or remove. |
+| `AB7101` | error | `Project source changed while the artifact was compiling; publication was rejected.` — the source snapshot taken after compilation differs from the inputs the build read, so the attempt is discarded rather than published as an epoch built from mixed inputs. | Nothing to fix: the change that raced the build is already queued as the follow-up rebuild, and the last-good epoch stays active until it succeeds. |
+| `AB7102` | warning | `Artifact epoch was committed, but follow-up work was incomplete: <error>` — the epoch is published and active, but the work after the commit failed: retention cleanup of older epochs (`Epoch publication committed, but retention cleanup failed.`) or confirming the active-epoch metadata reached disk (`… active metadata durability could not be confirmed.`). | The epoch itself is valid and serving. Check the epoch store under `.agent-bundle/epochs` for the retained or unsynced files the wrapped error names; the next publication runs the same follow-up work again. |
 
 ## Development package build (`AB7103`)
 

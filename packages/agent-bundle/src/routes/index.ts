@@ -49,6 +49,16 @@ export {
   validateRouteModuleContract,
 } from './contract.ts';
 export type { RouteModuleExports } from './contract.ts';
+export {
+  compilerCarryingSpecifiers,
+  scanFrameworkValueImports,
+  validateRouteFrameworkImports,
+} from './framework-imports.ts';
+export type {
+  FrameworkValueImport,
+  FrameworkValueImportForm,
+  ScanFrameworkValueImportsOptions,
+} from './framework-imports.ts';
 export { routeRenderLimits, validateRouteRenderConfig } from './render-budget.ts';
 export type { RouteRenderBudget, ValidatedRouteRenderConfig } from './render-budget.ts';
 export { routeTaskSupport, toolTaskSupportValues, validateRouteExecutionConfig } from './task-support.ts';

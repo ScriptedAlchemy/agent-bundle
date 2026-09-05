@@ -14,7 +14,7 @@ Every public entry point is documented from its declarations:
 | Entry point | Contents |
 | --- | --- |
 | `agent-bundle` | The authoring and orchestration surface: `defineSkill`, `canonicalAgentEvents`, `startDevServer`, `runEvals`, `compareEvals`, the eval harness factories, and the artifact-manifest helpers. |
-| `agent-bundle/api` | The programmatic compiler: `build`, `validate`, `inspect`, `prepack`, their option and result types, the `AgentComponentKind` / `componentKindCapability` component-kind helpers, and the artifact operations `listMcp`, `invokeMcp`, `runMcp`, `serveApp` (a built MCP App served standalone in a browser — a host-process API for scripts and tests; a routed CLI command inside the artifact cannot import it, see [Serving an App standalone](../guide/authoring/mcp.mdx#serving-an-app-standalone)), `listHooks`, and `simulateHook`. |
+| `agent-bundle/api` | The programmatic compiler: `build`, `validate`, `inspect`, `prepack`, their option and result types, the `AgentComponentKind` / `componentKindCapability` component-kind helpers, and the artifact operations `listMcp`, `invokeMcp`, `runMcp`, `serveApp` (a built MCP App served standalone in a browser — a host-process API for scripts and tests; a routed CLI command inside the artifact uses `spawnServeApp` from `agent-bundle/serve-app-command` instead, see [Serving an App standalone](../guide/authoring/mcp.mdx#serving-an-app-standalone)), `listHooks`, and `simulateHook`; plus the Rspack stats formatters `rspackStatsErrors`, `describeRspackStatsError`, and `formatRspackStatsError`, which render a compile error as the same `<file>:<line>:<column>: <message>` line the compiler's `AB4770` carries, for tools that drive their own Rsbuild compile. |
 | `agent-bundle/config` | `defineConfig` and the configuration types. |
 | `agent-bundle/test` | The route-testing harness, matchers, and contract matrices. |
 | `agent-bundle/test/browser` | The MCP App bridge harness for browser-rendered views. |
@@ -25,6 +25,7 @@ Every public entry point is documented from its declarations:
 | `agent-bundle/cli-entry` | The routed-CLI shell every generated CLI executable is built on. |
 | `agent-bundle/mcp-entry` | The stdio MCP entry shell every generated MCP server is wrapped in. |
 | `agent-bundle/launch-env` | The operator `.env` layer every emitted shell applies at launch (`applyOperatorEnv`, `parseOperatorEnv`, `AGENT_BUNDLE_ENV_FILE`), for hand-rolled entries that want the same behavior. |
+| `agent-bundle/serve-app-command` | Plain Node, no dependencies: `spawnServeApp`, `serveAppArgv`, `locateFrameworkCli`, `parseServeAppReadyLine`, `serveAppAllowCapabilities`, `ServeAppCommandError`, and their types — a routed CLI command (or any other generated executable) serves a built MCP App by spawning `agent-bundle serve-app` instead of importing `serveApp`. |
 | `agent-bundle/routes` | The route-module authoring types (`AgentEventRouteProps`, `ToolRouteProps`, `CliRouteProps`, the `config` shapes) and `appResourceUri`, the static reference to a sibling MCP App the compiler resolves to its `resourceUri`. |
 
 Because it is generated, it always matches the shipped types: signatures, unions, defaults, and

@@ -1,6 +1,7 @@
 import { defineConfig } from '@rstest/core';
 
 import { nightlyEvidenceTestFiles } from './rstest.integration-tests.ts';
+import { examplePayloadGlobalSetup, poolTimeouts, workspaceSetupFiles } from './rstest.pools.ts';
 import { withAgentBundleRslibConfig } from './rstest.rslib.ts';
 
 /**
@@ -15,9 +16,9 @@ import { withAgentBundleRslibConfig } from './rstest.rslib.ts';
 export default defineConfig({
   extends: withAgentBundleRslibConfig(),
   include: [...nightlyEvidenceTestFiles],
-  globalSetup: ['./rstest.integration.setup.ts'],
+  globalSetup: [...examplePayloadGlobalSetup],
   pool: { maxWorkers: 1 },
-  setupFiles: ['./rstest.setup.ts'],
+  setupFiles: [...workspaceSetupFiles],
   isolate: true,
-  testTimeout: 30_000,
+  ...poolTimeouts(30_000),
 });

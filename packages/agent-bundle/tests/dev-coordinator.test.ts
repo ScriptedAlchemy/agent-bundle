@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
+import { DiagnosticError, type Diagnostic } from '../src/core/diagnostics.ts';
 import { EpochStore } from '../src/dev/epoch-store.ts';
 import {
   ArtifactService,
@@ -14,6 +15,7 @@ import {
   type ArtifactEpoch,
   type ArtifactEpochResult,
   type DiagnosticReport,
+  type FailedBuildAttempt,
   type Invalidation,
   type PreparedProject,
 } from '../src/dev/index.ts';
@@ -366,6 +368,48 @@ it('retains the last good epoch as stale when a later rebuild fails', async () =
     });
     expect(events).toEqual(expect.arrayContaining(['artifact.available', 'build.failed', 'artifact.status']));
     await coordinator.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('surfaces the compiler\'s own MCP App diagnostics on build.failed instead of AB7100', async () => {
+  const root = await createProject();
+  const store = new EpochStore({ projectRoot: root });
+  const compileError: Diagnostic = {
+    code: 'AB4770',
+    message: 'MCP App "status" failed to compile: views/status.ts:1:10: Syntax Error: Expression expected',
+    severity: 'error',
+    sourcePath: join(root, 'views', 'status.ts'),
+  };
+  const hub = new ProjectEventHub({ now: () => new Date('2026-08-14T12:00:00.000Z') });
+  const failures: FailedBuildAttempt[] = [];
+  hub.subscribe((event) => {
+    if (event.type === 'build.failed') failures.push(event.payload);
+  });
+
+  try {
+    const coordinator = new DevCoordinator({
+      acquireLock: async () => ({ close: async () => undefined }),
+      artifactService: new ArtifactService({
+        compile: async () => { throw new DiagnosticError([compileError]); },
+        epochStore: store,
+      }),
+      createWatcher: () => ({ close: async () => undefined }),
+      diagnosticService: { close: async () => undefined, lint: async (paths) => ({ diagnostics: [], paths }) },
+      epochStore: store,
+      eventHub: hub,
+      projectService: new ProjectService({ root }),
+      root,
+    });
+
+    const session = await coordinator.start();
+    expect(failures.map((attempt) => attempt.diagnostics)).toEqual([[compileError]]);
+    expect(session.status()).toMatchObject({
+      artifact: { state: 'missing' },
+      build: { lastAttempt: { diagnostics: [compileError], outcome: 'failed' }, state: 'failed' },
+    });
+    await session.close();
   } finally {
     await rm(root, { force: true, recursive: true });
   }

@@ -14,6 +14,23 @@ import { Layers, pluginRSC } from 'rsbuild-plugin-rsc';
 
 import { emitRuntimeArtifacts } from './src/build/emit-artifacts.js';
 
+/**
+ * A completed development cohort that Rspack rejected. The observer receives
+ * it through `failAttempt(…, 'source-build')` carrying the cohort's stats
+ * JSON — errors, children, module traces — and renders them itself (see
+ * `src/dev/compile-diagnostics.ts`); this config stays free of the framework
+ * API so a plain `rsbuild build` never loads it.
+ */
+export class RscRuntimeCompileError extends Error {
+  readonly stats: Rspack.StatsCompilation;
+
+  constructor(stats: Rspack.StatsCompilation) {
+    super('RSC runtime compile reported errors.');
+    this.name = 'RscRuntimeCompileError';
+    this.stats = stats;
+  }
+}
+
 export interface RscRuntimeCompileSnapshot {
   readonly attemptId: string;
   readonly candidateId: string;
@@ -154,6 +171,47 @@ const emitRuntimeManifest = (): RsbuildPlugin => ({
   },
 });
 
+/**
+ * The App environment ships each entry as exactly one self-contained HTML
+ * document (the framework's MCP App compiler invariant): scripts, styles,
+ * licence comments, and every asset inline, no sibling files. The resolved
+ * configuration is checked before the compiler exists, and the emitted asset
+ * set after inlining, so a config drift fails the compile instead of quietly
+ * emitting a sibling file the host never serves.
+ */
+const selfContainedAppPlugin = (): RsbuildPlugin => ({
+  name: 'agent-bundle:rsc-runtime-self-contained-app',
+  setup(api) {
+    api.onBeforeCreateCompiler(({ bundlerConfigs }) => {
+      const config = api.getNormalizedConfig({ environment: 'app' });
+      const bundler = bundlerConfigs.find((candidate) => candidate.name === 'app');
+      if (
+        config.output.inlineScripts !== true ||
+        config.output.inlineStyles !== true ||
+        config.output.dataUriLimit !== Number.MAX_SAFE_INTEGER ||
+        config.output.legalComments !== 'inline' ||
+        config.output.filenameHash !== false ||
+        config.splitChunks !== false ||
+        bundler?.output?.asyncChunks !== false
+      ) {
+        throw new Error('RSC runtime App environment resolved an invalid self-contained configuration.');
+      }
+    });
+    // `report` runs after Rsbuild's `rsbuild:inline-chunk` deletes the inlined
+    // script and style assets at `summarize`, so what remains is what lands on
+    // disk. A compilation error (rather than a thrown hook) is what
+    // `stats.hasErrors()` sees: the production build rejects and the dev
+    // session reports the stray files through its `AB8206` diagnostic.
+    api.processAssets({ environments: ['app'], stage: 'report' }, ({ assets, compilation, compiler }) => {
+      const stray = Object.keys(assets).filter((name) => !name.endsWith('.html')).sort();
+      if (stray.length === 0) return;
+      compilation.errors.push(new compiler.webpack.WebpackError(
+        `RSC runtime App environment emitted files beyond its self-contained HTML documents: ${stray.join(', ')}`,
+      ));
+    });
+  },
+});
+
 const runtimeCompileObserverPlugin = (
   observer: NonNullable<RscRuntimeRsbuildConfigOptions['onCompile']>,
 ): RsbuildPlugin => {
@@ -202,7 +260,15 @@ const runtimeCompileObserverPlugin = (
         try {
           if (stats.hasErrors()) {
             capturedCohort = undefined;
-            observer.failAttempt(attemptId, new Error('RSC runtime compile reported errors.'), 'source-build');
+            // The console is not the diagnostic channel (development runs
+            // Rsbuild silent, see `logLevel` below): the Rspack errors ride
+            // the failure into the session's `AB8206` diagnostic, which
+            // renders them as `file:line:col: message` lines.
+            observer.failAttempt(
+              attemptId,
+              new RscRuntimeCompileError(stats.toJson({ all: false, children: true, errors: true, moduleTrace: true })),
+              'source-build',
+            );
             return;
           }
           const json = stats.toJson({ all: false, children: true, hash: true });
@@ -286,6 +352,12 @@ export const createRscRuntimeRsbuildConfig = (
     // session URLs are built for. `options.mode` still selects the compile
     // topology (dev entries, compiler roots) independently of this flavor.
     mode: 'production',
+    // Compile errors reach consumers as diagnostics: the dev session's
+    // `AB8206` carries every Rspack error, so Rsbuild's own console output —
+    // which would print the same errors to the provider's stderr — is
+    // silenced there; a production `rsbuild build` rejects, and its console
+    // shows the errors (only those) since no diagnostic channel exists.
+    logLevel: development ? 'silent' : 'error',
     ...(development ? {
       dev: { writeToDisk: true },
       // Port 0 lets the OS assign the listener. Rsbuild's default (3000 with an
@@ -299,6 +371,7 @@ export const createRscRuntimeRsbuildConfig = (
       pluginReact(),
       pluginRSC({ environments: { server: 'rsc', client: 'widget' } }),
       emitRuntimeManifest(),
+      selfContainedAppPlugin(),
       ...(options.onAppReload === undefined ? [] : [runtimeAppReloadPlugin(options.onAppReload)]),
       ...(options.onCompile === undefined ? [] : [runtimeCompileObserverPlugin(options.onCompile)]),
     ],
@@ -370,8 +443,12 @@ export const createRscRuntimeRsbuildConfig = (
           },
         } : {}),
         html: { inject: 'body' },
+        // Self-contained documents, asserted by `selfContainedAppPlugin`: every
+        // script, style, licence comment, and asset of any size is inlined,
+        // and nothing may split into a sibling chunk or file.
         output: {
           cleanDistPath: false,
+          dataUriLimit: Number.MAX_SAFE_INTEGER,
           distPath: {
             ...(development ? {} : { js: './' }),
             root: root('app', 'dist/app'),
@@ -382,11 +459,11 @@ export const createRscRuntimeRsbuildConfig = (
               css: '[name].css',
               js: '[name].js',
             },
-            filenameHash: false,
-            legalComments: 'linked',
           }),
+          filenameHash: false,
           inlineScripts: true,
           inlineStyles: true,
+          legalComments: 'inline',
           target: 'web',
         },
         source: {
@@ -395,10 +472,12 @@ export const createRscRuntimeRsbuildConfig = (
             standalone: './src/widget/index.tsx',
           },
         },
+        splitChunks: false,
         tools: {
           rspack: {
             name: 'app',
             module: { parser: { javascript: { dynamicImportMode: 'eager' } } },
+            output: { asyncChunks: false },
           },
         },
       },

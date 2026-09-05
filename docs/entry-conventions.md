@@ -1222,8 +1222,8 @@ The hatch merges *beside* the framework profile, not over it: `plugins`
 arrays concatenate, and Rsbuild's plugin manager appends every plugin it is
 handed without deduping by name. So a `tools.rsbuild.plugins` entry that
 re-adds a plugin the framework already registers — `@rsbuild/plugin-react`
-(`rsbuild:react`), carried by every synthesized Rslib entry and every
-React-syntax MCP App view — would run it twice. `agent-bundle validate`
+(`rsbuild:react`), carried by every synthesized Rslib entry and every MCP
+App view — would run it twice. `agent-bundle validate`
 reports that as `AB4724` (an error, like the other `tools` shape checks) with
 the plugin and package name; remove the entry, the framework already
 registers it.
@@ -1477,17 +1477,37 @@ closed }`). It is a host-process API: it belongs to processes the framework
 does not compile — the first-party CLI, the Workbench, tests, a plugin's own
 `package.json` scripts or a hand-written `.mjs` run from the checkout — and
 never to the MCP server shell. A routed CLI command inside the artifact
-cannot import it today: routed CLI bins are self-contained (#387), so the
-bundler inlines `agent-bundle/dist/api.js` into the bin and fails on the
+cannot import it: routed CLI bins are self-contained (#387), so the bundler
+would inline `agent-bundle/dist/api.js` into the bin and fail on the
 framework's runtime-relative module references (`Module not found: Can't
-resolve '../events'`), while an external bare import (`AB6005 uses
+resolve '../events'`). The route graph reports such an import first, as
+`AB4837` naming the module and the specifier
+(`src/routes/framework-imports.ts`; the compiler-carrying entries are
+`agent-bundle`, `agent-bundle/api`, `agent-bundle/config`,
+`agent-bundle/eval`, `agent-bundle/rstest`, `agent-bundle/test`, and
+`agent-bundle/test/browser`, matched exactly; `import type` and type-only
+usage are not reported), while an external bare import (`AB6005 uses
 unsupported specifier`) or a non-literal `import(spec)` (`AB6005 has a
-non-literal dynamic import`) fails artifact validation. The pattern that
-builds is a plain routed command that spawns `agent-bundle serve-app` as a
-child process — resolving the framework CLI from `node_modules/agent-bundle`
-by path, relaying the child's `MCP App <app> at <url>` line to stderr so the
-routed CLI keeps stdout for its result, and turning the route `signal` into
-the child's `SIGTERM` — which makes it a checkout-only command (an installed
-host pack has neither `node_modules` nor the artifact). A framework helper
-for that plumbing is tracked in #558; the worked example is in the MCP Apps
-guide, "Serving an App standalone".
+non-literal dynamic import`) still fails artifact validation. The sanctioned
+shape is `spawnServeApp` from `agent-bundle/serve-app-command`
+(`src/serve-app-command.ts`, #558) — plain Node with no dependencies, so the
+bundler inlines it into the self-contained executable the way it inlines
+`agent-bundle/launch-env`. It lowers the `serveApp` options to `serve-app`
+argv (`serveAppArgv`; every `ServeAppOptions` key except the host-process-only
+`logger`, `registry`, `openBrowser`, `targets`, and `timeoutMs`), resolves the
+framework CLI from the `agent-bundle` package installed at or above `root`
+(`locateFrameworkCli`, through `src/core/dependency-manifest.ts`), spawns it
+with the child's stdout piped and its stderr inherited, relays every stdout
+line to stderr so the routed CLI keeps stdout for its result, resolves once
+the child prints the ready line `MCP App <app> at <url> (tool <tool>; Ctrl-C
+stops the server)` — the CLI writes it and the helper parses it through one
+module, `src/serve-app/command-contract.ts` — and turns the route `signal`
+into the child's `SIGTERM`. The result is `{ app, url, tool, server, port,
+pid, closed, close() }`; failures are `ServeAppCommandError` with `code`
+`framework-not-installed`, `artifact-missing`, `spawn-failed`,
+`exited-before-ready` (carrying the child's `exit`), `aborted`, or
+`stop-failed` (the running child refused the signal `close()` or the abort
+sent; it is still running). It is a
+checkout command: an installed host pack has neither `node_modules/agent-bundle`
+nor the artifact, and the first two codes say so before anything is spawned.
+The worked example is in the MCP Apps guide, "Serving an App standalone".

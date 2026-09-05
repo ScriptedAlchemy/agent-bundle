@@ -13,7 +13,7 @@ description: '生成的 agent-bundle 类型 API：它覆盖哪些入口点、如
 | 入口点 | 内容 |
 | --- | --- |
 | `agent-bundle` | 编写与编排表面：`defineSkill`、`canonicalAgentEvents`、`startDevServer`、`runEvals`、`compareEvals`、eval harness 工厂，以及产物清单辅助函数。 |
-| `agent-bundle/api` | 程序化编译器：`build`、`validate`、`inspect`、`prepack`，及其选项与结果类型，`AgentComponentKind` / `componentKindCapability` 组件类型辅助，以及产物操作 `listMcp`、`invokeMcp`、`runMcp`、`serveApp`（在浏览器里独立提供一个已构建的 MCP App——面向脚本与测试的宿主进程 API；产物内部的路由式 CLI 命令无法导入它，见[独立提供 App](../guide/authoring/mcp.mdx#独立提供-app)）、`listHooks` 与 `simulateHook`。 |
+| `agent-bundle/api` | 程序化编译器：`build`、`validate`、`inspect`、`prepack`，及其选项与结果类型，`AgentComponentKind` / `componentKindCapability` 组件类型辅助，以及产物操作 `listMcp`、`invokeMcp`、`runMcp`、`serveApp`（在浏览器里独立提供一个已构建的 MCP App——面向脚本与测试的宿主进程 API；产物内部的路由式 CLI 命令则改用 `agent-bundle/serve-app-command` 中的 `spawnServeApp`，见[独立提供 App](../guide/authoring/mcp.mdx#独立提供-app)）、`listHooks` 与 `simulateHook`；另有 Rspack stats 格式化工具 `rspackStatsErrors`、`describeRspackStatsError` 与 `formatRspackStatsError`，把一条编译错误渲染成与编译器 `AB4770` 相同的 `<file>:<line>:<column>: <message>` 行，供自行驱动 Rsbuild 编译的工具使用。 |
 | `agent-bundle/config` | `defineConfig` 与配置类型。 |
 | `agent-bundle/test` | 路由测试 harness、匹配器与契约矩阵。 |
 | `agent-bundle/test/browser` | 面向浏览器渲染视图的 MCP App bridge harness。 |
@@ -24,6 +24,7 @@ description: '生成的 agent-bundle 类型 API：它覆盖哪些入口点、如
 | `agent-bundle/cli-entry` | 每个生成的 CLI 可执行文件所基于的路由式 CLI 外壳。 |
 | `agent-bundle/mcp-entry` | 每个生成的 MCP 服务器所包裹的 stdio MCP 入口外壳。 |
 | `agent-bundle/launch-env` | 每个输出外壳在启动时应用的操作者 `.env` 层（`applyOperatorEnv`、`parseOperatorEnv`、`AGENT_BUNDLE_ENV_FILE`），供希望获得同样行为的手写入口使用。 |
+| `agent-bundle/serve-app-command` | 纯 Node、无依赖：`spawnServeApp`、`serveAppArgv`、`locateFrameworkCli`、`parseServeAppReadyLine`、`serveAppAllowCapabilities`、`ServeAppCommandError` 及其类型——路由式 CLI 命令（或任何其他生成的可执行文件）通过启动 `agent-bundle serve-app` 来提供一个已构建的 MCP App，而不是导入 `serveApp`。 |
 | `agent-bundle/routes` | 路由模块的编写类型（`AgentEventRouteProps`、`ToolRouteProps`、`CliRouteProps` 与各类 `config` 形状），以及 `appResourceUri`——对同级 MCP App 的静态引用，编译器会把它解析为该 App 的 `resourceUri`。 |
 
 因为它是生成的，所以它始终与已交付的类型一致：签名、联合类型、默认值，以及各表面可能抛出的错误类。
