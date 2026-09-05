@@ -7,7 +7,7 @@ import {
   type McpPreviewDepartureOptions,
   type RuntimeHandoffLifecycle,
 } from '../src/mcp/runtime-mcp-handoff.ts';
-import type { RuntimeAppPreviewProps } from '../src/runtime-stage.tsx';
+import type { RuntimeAppPreviewProps } from '../src/runtime-view-contracts.ts';
 
 const deferred = <Value>() => {
   let reject: (reason?: unknown) => void = () => undefined;
