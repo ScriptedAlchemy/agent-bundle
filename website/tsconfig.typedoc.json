@@ -3,10 +3,14 @@
   // build must not depend on `pnpm build`: `packages/agent-bundle/src` imports
   // `@agent-bundle/runtime`, whose declarations only exist after that package
   // is compiled. Resolving those specifiers to `packages/rsc-runtime/src`
-  // keeps `pnpm docs:site:build` self-sufficient, mirroring the source-mapped `paths`
-  // the Twoslash plugin uses for the same reason. The runtime's own workspace
+  // keeps `pnpm docs:site:build` self-sufficient. The runtime's own workspace
   // dependency, `rsc-markdown-stream`, publishes its declarations from `dist`
   // too, so it resolves to the hand-written source declaration file.
+  //
+  // `paths` is also the source of truth for the Twoslash plugin:
+  // `rspress.config.ts` reads this file and passes the same map (made
+  // absolute) as twoslash `compilerOptions.paths`, so a new source-mapped
+  // specifier is added here once and both compilers see it.
   "extends": "../packages/agent-bundle/tsconfig.build.json",
   "compilerOptions": {
     // Widened from the package's `src` so the resolved runtime sources are

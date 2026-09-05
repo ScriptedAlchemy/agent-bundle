@@ -19,8 +19,9 @@ description: 'Skills 起步项目示例：三个按约定发现的工程运维 S
 - **约定发现。** `agent-bundle.config.ts` 只声明插件与它的三个 target，别的什么都没有。每个
   `src/skills/*/SKILL.md` 目录都按约定被发现，因此配置从不列出任何 Skill。这正是
   [Skills](../guide/authoring/skills.mdx) 中描述的编写模型。
-- **一份源码，三种宿主布局。** 同一批编写好的文档被降级到 portable、Codex 与 Claude 三棵输出树中。
-  Workbench 的 Source 与 Generated 视图会显示某个 target 究竟是复制还是改写了一份文档。
+- **一份源码，三种宿主投影。** 同一批编写好的文档为同一个复合插件根目录中的 portable、Codex 与 Claude
+  投影分别降级——`skills/` 只输出一份，由所有选中宿主共同读取。Workbench 的 Source 与 Generated 视图
+  会显示某个宿主究竟是复制还是改写了一份文档。
 - **确定性的 eval 证据。** eval 套件通过确定性 harness 针对签入夹具运行，因此某个 Skill 的覆盖是一次
   记录下来的运行，而不是一句断言。覆盖被标记为*间接*，因为确定性 harness 无法观察宿主端的 Skill 激活。
 
@@ -43,8 +44,8 @@ description: 'Skills 起步项目示例：三个按约定发现的工程运维 S
    操作。
 2. **Skills** 列出 `dependency-upgrade`、`incident-triage` 与 `release-review`。浏览它们链接的清单与
    报告模板，并按 target 在 Source 与 Generated 之间切换。
-3. **Artifacts** 默认选中 Claude target。切换 target 即可对比 portable、Codex 与 Claude 的输出树及其
-   来源信息。
+3. **Artifacts** 显示复合插件根目录。在 portable、Codex 与 Claude 之间切换 target 只是改变聚焦的
+   投影，每种选择看到的都是同一棵树——三个宿主共同读取的那一个目录——以及每个文件的来源信息。
 4. **Evals** 默认选中 `release-readiness` 套件。运行 `release-artifact-is-ready` 并查看通过的试次；
    它只消费签入的证据夹具。
 5. 想演练修复，就对发布策略做一处可逆修改，按 **Rebuild**，并等待 Failed 或 Idle 结果，而不是 Building

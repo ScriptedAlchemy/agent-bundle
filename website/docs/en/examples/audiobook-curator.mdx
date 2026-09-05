@@ -1,5 +1,5 @@
 ---
-description: 'The Audiobook Curator example: a complete agent-bundle application built from route modules, request-context providers, durable state, MCP-to-CLI projection, and the framework-owned package build.'
+description: 'Audiobook Curator: a complete agent-bundle app from route modules, request-context providers, durable state, MCP-to-CLI projection, and the package build.'
 ---
 
 # Audiobook Curator
@@ -86,9 +86,10 @@ pnpm --filter @agent-bundle-example/audiobook-curator typecheck
 ```
 
 `pnpm check` inside the package runs validate, build, typecheck, and both test pools. One
-`agent-bundle build --output artifact` produces everything: complete Claude and Codex outputs
-beneath `artifact/` — each host's plugin metadata, Skill, bundled CLI script, and
-lifecycle-wrapped MCP server — plus the npm package beneath `dist/`.
+`agent-bundle build --output artifact` produces everything: one composite plugin root at
+`artifact/` carrying the Claude and Codex projections — each host's manifest in its own dotfolder
+over one shared Skill, bundled CLI script, and lifecycle-wrapped MCP server — plus the npm
+package beneath `dist/`.
 
 To exercise the built CLI without packing a tarball, link the built bin from any writable
 directory already on `PATH`:

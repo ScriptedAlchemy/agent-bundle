@@ -313,6 +313,69 @@ it('passes the bounded input schema through as the optional manifest wire field'
   expect(Object.isFrozen(manifest.scripts[0]?.inputSchema)).toBe(true);
 });
 
+it('projects shared route contracts and omits them from contract-free graphs', () => {
+  const input = Object.freeze({
+    additionalProperties: false as const,
+    properties: Object.freeze({
+      statuses: Object.freeze({
+        items: Object.freeze({ enum: Object.freeze(['queued', 'running']), type: 'string' as const }),
+        type: 'array' as const,
+      }),
+    }),
+    type: 'object' as const,
+  });
+  const contractId = 'contract:src/lib/protocol-schemas.ts#statusInputSchema';
+  const cliRoute = {
+    config: {},
+    contract: contractId,
+    id: 'cli:status',
+    inputSchema: input,
+    kind: 'cli' as const,
+    provenance: { kind: 'conventional' as const, relativePath: 'src/cli/status.ts' },
+    source: '/project/src/cli/status.ts',
+  };
+  const toolRoute = {
+    config: {},
+    contract: contractId,
+    id: 'tool:hauler/hauler_status',
+    inputSchema: input,
+    kind: 'tool' as const,
+    provenance: { kind: 'conventional' as const, relativePath: 'src/mcp/hauler/tools/hauler_status.ts' },
+    serverId: 'mcp:hauler',
+    source: '/project/src/mcp/hauler/tools/hauler_status.ts',
+  };
+  const graph: CompiledRouteGraph = {
+    ...emptyCompiledRouteGraph,
+    cli: { mode: 'generated', routes: [cliRoute] },
+    contracts: [{
+      id: contractId,
+      input,
+      origin: { binding: 'statusInputSchema', module: 'src/lib/protocol-schemas.ts' },
+      routes: ['cli:status', 'tool:hauler/hauler_status'],
+    }],
+    digest: 'c'.repeat(64),
+    servers: [{
+      id: 'mcp:hauler',
+      mode: 'generated',
+      name: 'hauler',
+      routes: [toolRoute],
+    }],
+  };
+
+  const manifest = routeManifestFor(graph, revision);
+
+  expect(manifest.contracts).toEqual([{
+    id: contractId,
+    input,
+    origin: { binding: 'statusInputSchema', module: 'src/lib/protocol-schemas.ts' },
+    routes: ['cli:status', 'tool:hauler/hauler_status'],
+  }]);
+  expect(manifest.cli?.routes[0]?.contract).toBe(contractId);
+  expect(manifest.servers[0]?.routes[0]?.contract).toBe(contractId);
+  expect(Object.isFrozen(manifest.contracts)).toBe(true);
+  expect(routeManifestFor(emptyCompiledRouteGraph, revision)).not.toHaveProperty('contracts');
+});
+
 it('summarizes an extracted route config without leaking non-scalar shapes', async () => {
   const graph = await compileRouteGraph(resolve(import.meta.dirname, '../fixtures/route-harness'), { targets: ['claude'] } as never);
   const manifest = routeManifestFor(graph, revision);

@@ -13,8 +13,10 @@ blocking script traces, and live Logs. Both scripts export `main` and return
 their exit codes; the build generates the process envelope that owns argv,
 awaiting, and exit-code adoption. `verify-release` ships by convention — any
 unclaimed plain script under `src/scripts/` is discovered — while
-`detect-risk` stays explicitly configured to restrict its targets, so the
-example keeps both modes covered.
+`detect-risk` stays explicitly configured because it selects a host: it is
+emitted only when the build selects `portable`, into the shared `scripts/` of
+the one plugin root every selected host installs — so the example keeps both
+modes covered.
 
 ## Workbench walkthrough
 

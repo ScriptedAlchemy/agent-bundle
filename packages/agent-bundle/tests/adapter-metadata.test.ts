@@ -170,7 +170,6 @@ it('records exact immutable metadata for every built-in target', () => {
       },
     ],
   });
-  expect(registryMetadata(registry, 'plugin').adapterRevision).toBe('1.29.0');
 });
 
 it('records observed capability versions and rehashes schema snapshots against pinned provenance', async () => {

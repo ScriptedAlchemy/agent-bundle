@@ -24,7 +24,7 @@ const wrapper: ArtifactInspectionFile = {
   bytes: 512,
   kind: 'generated',
   mode: 0o755,
-  path: 'claude/hooks/session-start.mjs',
+  path: 'hooks/session-start.mjs',
   sha256: 'a'.repeat(64),
   sourceInputs: [{ path: 'hooks/session-start.ts', sha256: 'b'.repeat(64) }],
 };
@@ -32,7 +32,7 @@ const wrapper: ArtifactInspectionFile = {
 const agents: ArtifactInspectionFile = {
   bytes: 128,
   kind: 'copy',
-  path: 'claude/AGENTS.md',
+  path: 'AGENTS.md',
   sha256: 'c'.repeat(64),
   sourceInputs: [],
 };
@@ -48,7 +48,7 @@ const inspection: ArtifactInspection = {
     sourceInputs: [{ path: 'hooks/session-start.ts', sha256: 'b'.repeat(64) }],
   },
   provenance: [{
-    outputPath: 'claude/hooks/session-start.mjs',
+    outputPath: 'hooks/session-start.mjs',
     sourceInputs: [{ path: 'hooks/session-start.ts', sha256: 'b'.repeat(64) }],
   }],
   runtime: {
@@ -58,14 +58,14 @@ const inspection: ArtifactInspection = {
       file: wrapper,
       id: 'hook:session-start',
       name: 'session-start',
-      path: 'claude/hooks/session-start.mjs',
+      path: 'hooks/session-start.mjs',
       target: 'claude',
       timeout: 30,
     }],
     mcpServers: [{
-      entryPaths: ['claude/mcp/review/server.mjs'],
+      entryPaths: ['mcp/review/server.mjs'],
       kind: 'stdio',
-      manifestPath: 'claude/.mcp.json',
+      manifestPath: '.mcp.json',
       name: 'review',
       target: 'claude',
     }],
@@ -75,26 +75,26 @@ const inspection: ArtifactInspection = {
     name: 'claude',
     tree: {
       children: [
-        { file: agents, kind: 'file', name: 'AGENTS.md', path: 'claude/AGENTS.md' },
+        { file: agents, kind: 'file', name: 'AGENTS.md', path: 'AGENTS.md' },
         {
-          children: [{ file: wrapper, kind: 'file', name: 'session-start.mjs', path: 'claude/hooks/session-start.mjs' }],
+          children: [{ file: wrapper, kind: 'file', name: 'session-start.mjs', path: 'hooks/session-start.mjs' }],
           kind: 'directory',
           name: 'hooks',
-          path: 'claude/hooks',
+          path: 'hooks',
         },
       ],
       kind: 'directory',
       name: 'claude',
-      path: 'claude',
+      path: '.',
     },
   }],
 };
 
 const diff: ArtifactEpochDiff = {
-  added: [{ after: agents, path: 'claude/AGENTS.md' }],
+  added: [{ after: agents, path: 'AGENTS.md' }],
   baseEpochId: 'epoch-1',
   candidateEpochId: 'epoch-2',
-  changed: [{ after: wrapper, before: { ...wrapper, bytes: 400, sha256: 'd'.repeat(64) }, path: 'claude/hooks/session-start.mjs' }],
+  changed: [{ after: wrapper, before: { ...wrapper, bytes: 400, sha256: 'd'.repeat(64) }, path: 'hooks/session-start.mjs' }],
   removed: [],
   unchanged: [],
 };
@@ -141,11 +141,11 @@ it('renders the epoch identity, artifact tree, runtime metadata, and provenance'
   expect(markup).toContain('Provenance');
   expect(markup).toContain('revision-9');
   expect(markup).toContain('config-digest');
-  expect(markup).toContain('claude/hooks/session-start.mjs');
+  expect(markup).toContain('hooks/session-start.mjs');
   expect(markup).toContain('0755');
   expect(markup).toContain('session-start · sessionStart · claude');
   expect(markup).toContain('review · stdio · claude');
-  expect(markup).toContain('claude/.mcp.json');
+  expect(markup).toContain('.mcp.json');
   expect(markup).toContain('hooks/session-start.ts');
   expect(markup).toContain('a'.repeat(64));
 });
@@ -177,7 +177,7 @@ it('renders each diff group with its count and both epoch digests', () => {
   expect(markup).toContain('Changed');
   expect(markup).toContain('Unchanged');
   expect(markup).toContain('epoch-1');
-  expect(markup).toContain('claude/AGENTS.md');
+  expect(markup).toContain('AGENTS.md');
   expect(markup).toContain('d'.repeat(64));
 });
 

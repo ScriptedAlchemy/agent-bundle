@@ -151,8 +151,8 @@ describe('framework-owned package build', () => {
     // Both outputs exist and run.
     expect(result.packageBuild?.files.map((file) => file.path)).toContain('bin/hauler.js');
     await expect(execFile(join(root, 'dist', 'bin', 'hauler.js'), ['alpha'])).resolves.toMatchObject({ stdout: 'hauled:alpha\n' });
-    expect(result.build.outputProvenance.map((record) => record.path)).toContain('portable/scripts/hauler.mjs');
-    const script = join(root, 'artifact', 'portable', 'scripts', 'hauler.mjs');
+    expect(result.build.outputProvenance.map((record) => record.path)).toContain('scripts/hauler.mjs');
+    const script = join(root, 'artifact', 'scripts', 'hauler.mjs');
     await expect(execFile(process.execPath, [script, 'beta'])).resolves.toMatchObject({ stdout: 'hauled:beta\n' });
   }, 120_000);
 
@@ -538,7 +538,7 @@ describe('mcp run', () => {
     expect(launches).toHaveLength(1);
     expect(launches[0]!.command).toBe('node');
     expect(launches[0]!.args[0]).toMatch(/mcp-echoer-[a-f\d]{8}\.mjs$/u);
-    expect(launches[0]!.cwd).toBe(join(artifact, 'portable'));
+    expect(launches[0]!.cwd).toBe(artifact);
     await expect(stat(join(launches[0]!.cwd, launches[0]!.args[0]!))).resolves.toMatchObject({});
   }, 120_000);
 
@@ -590,7 +590,7 @@ describe('mcp run', () => {
     expect(bare.env.SHARED).toBe('dotenv');
     // args/cwd stay artifact-rooted: args[0] is the content-hashed bundle.
     expect(bare.args[0]).toMatch(/mcp-echoer-[a-f\d]{8}\.mjs$/u);
-    expect(bare.cwd).toBe(join(artifact, 'portable'));
+    expect(bare.cwd).toBe(artifact);
     // Loading never leaks .env values into the runner's own environment.
     expect(process.env.FROM_DOTENV).toBeUndefined();
 
@@ -626,9 +626,9 @@ describe('mcp run', () => {
     expect(disabled.env.AGENT_BUNDLE_ENV_FILE).toBe('none');
 
     // pluginRoot restores the byte-faithful artifact-rooted rehearsal.
-    const rehearsal = await captureLaunch({ ...base, pluginRoot: join(artifact, 'portable') });
-    expect(rehearsal.env.AGENT_BUNDLE_PLUGIN_ROOT).toBe(join(artifact, 'portable'));
-    expect(rehearsal.env.STATE_DIR).toBe(join(artifact, 'portable', '.runtime'));
+    const rehearsal = await captureLaunch({ ...base, pluginRoot: artifact });
+    expect(rehearsal.env.AGENT_BUNDLE_PLUGIN_ROOT).toBe(artifact);
+    expect(rehearsal.env.STATE_DIR).toBe(join(artifact, '.runtime'));
 
     // Codex has no token interpolation — its anchor is a `./` path, so the
     // target's own relative rule must re-anchor it durably too.
@@ -682,7 +682,7 @@ describe('mcp run', () => {
     expect(state.anchor).toBe(root);
     expect(state.cookie).toBe('secret');
     // Nothing durable may land inside the rebuildable artifact.
-    await expect(stat(join(root, 'artifact', 'portable', '.runtime'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(join(root, 'artifact', '.runtime'))).rejects.toMatchObject({ code: 'ENOENT' });
   }, 120_000);
 
   it('rejects --env-file combined with --no-env', async () => {

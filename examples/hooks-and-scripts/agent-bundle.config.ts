@@ -12,7 +12,9 @@ export default defineConfig({
   },
   // verify-release ships by convention: unclaimed plain scripts under
   // src/scripts/ are discovered. detect-risk stays explicitly configured
-  // because it restricts targets.
+  // because it selects a host: it is emitted only when the build selects
+  // portable — and, like every script, into the shared scripts/ directory
+  // of the one plugin root every selected host installs.
   scripts: {
     'detect-risk': {
       entry: './src/scripts/detect-risk.ts',

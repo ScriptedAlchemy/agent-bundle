@@ -6,7 +6,6 @@ import { afterAll, expect, it } from '@rstest/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import { cursorAdapter, cursorPluginValidator } from '../src/adapters/cursor.ts';
-import { pluginAdapter } from '../src/adapters/plugin.ts';
 import { normalizeProject, validateSource } from '../src/config/index.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
 import type { AgentBundleConfig, NormalizedPlugin } from '../src/core/types.ts';
@@ -42,7 +41,7 @@ const loadedProject = async (
   };
 };
 
-const logoModel = (target: 'cursor' | 'plugin'): NormalizedPlugin => ({
+const logoModel = (target: 'cursor'): NormalizedPlugin => ({
   extensions: {},
   hooks: [],
   metadata: {
@@ -159,28 +158,6 @@ it('emits Cursor plugin.json logo and copies the image into the artifact', () =>
   expect(manifest.logo).toBe('./assets/docs/media/logo.svg');
   expect(plan.entries).toContainEqual(expect.objectContaining({
     bytes: Buffer.byteLength(logoSvg),
-    kind: 'copy',
-    relativePath: 'assets/docs/media/logo.svg',
-    source: '/workspace/docs/media/logo.svg',
-  }));
-});
-
-it('omits logo from Claude and Codex manifests while still emitting it for Cursor', () => {
-  const model = logoModel('plugin');
-  const plan = pluginAdapter.plan(model);
-  expect(plan.diagnostics).toEqual([]);
-  const documents = Object.fromEntries(
-    plan.entries
-      .filter((entry): entry is Extract<typeof entry, { readonly kind: 'write' }> => entry.kind === 'write')
-      .map((entry) => [entry.relativePath, entry.content]),
-  );
-  const claude = JSON.parse(documents['.claude-plugin/plugin.json']!) as Record<string, unknown>;
-  const codex = JSON.parse(documents['.codex-plugin/plugin.json']!) as Record<string, unknown>;
-  const cursor = JSON.parse(documents['.cursor-plugin/plugin.json']!) as Record<string, unknown>;
-  expect(claude).not.toHaveProperty('logo');
-  expect(codex).not.toHaveProperty('logo');
-  expect(cursor.logo).toBe('./assets/docs/media/logo.svg');
-  expect(plan.entries).toContainEqual(expect.objectContaining({
     kind: 'copy',
     relativePath: 'assets/docs/media/logo.svg',
     source: '/workspace/docs/media/logo.svg',

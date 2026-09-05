@@ -128,6 +128,21 @@ const StatePanel = ({ state }: { readonly state?: RouteManifestState }) => <sect
 const editorId = (routeId: string, key: string): string =>
   `route-input-${routeId}-${key}`.replace(/[^a-zA-Z0-9_-]/gu, '-');
 
+const contractSummary = (entry: RouteCatalogEntry): string | undefined => {
+  const contract = entry.contract;
+  if (contract === undefined) return undefined;
+  // Route-local contracts use a stable declaration label instead of repeating
+  // the route source already shown in the adjacent table cell.
+  const origin = contract.origin.module === entry.source
+    ? 'declared in this module'
+    : contract.origin.module;
+  return [
+    `Contract ${contract.origin.binding}`,
+    origin,
+    ...(contract.sharedWith.length === 0 ? [] : [`shared with ${contract.sharedWith.join(', ')}`]),
+  ].join(' · ');
+};
+
 const scalarControl = (
   routeId: string,
   key: string,
@@ -207,8 +222,10 @@ const RouteInputEditor = ({ digest, entry, group, onOpenMcp }: {
     if (prefill !== undefined) onOpenMcp(prefill);
   };
 
+  const contract = contractSummary(entry);
   return <section aria-label={`Input for ${entry.id}`} className="route-input-editor">
     <h3>{schema === undefined ? 'Raw JSON input' : 'Generated input editor'}</h3>
+    {contract === undefined ? undefined : <p className="route-input-note">{contract}</p>}
     {schema === undefined
       ? <label htmlFor={editorId(entry.id, 'raw')}>Schema not statically projectable; enter a JSON object.
           <textarea

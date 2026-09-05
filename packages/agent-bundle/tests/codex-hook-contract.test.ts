@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { expect, it } from '@rstest/core';
 
 import codexCapabilityTable from '../src/adapters/capabilities/codex-0.147.0.json' with { type: 'json' };
-import { codexAdapter } from '../src/adapters/codex.ts';
+import { codexAdapter, codexArtifactPaths } from '../src/adapters/codex.ts';
 import { encodeNativeHookPlaygroundOutput } from '../src/adapters/hook-contract.ts';
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import hooksSchema from '../src/adapters/schemas/codex/hooks.schema.json' with { type: 'json' };
@@ -99,14 +99,13 @@ const planCodes = (model: NormalizedPlugin): readonly string[] =>
   codexAdapter.plan(model).diagnostics.map((diagnostic) => diagnostic.code);
 
 const emittedHooks = (model: NormalizedPlugin): unknown => {
-  const entry = codexAdapter.plan(model).entries.find((candidate) => candidate.relativePath === 'hooks/hooks.json');
+  const entry = codexAdapter.plan(model).entries.find((candidate) => candidate.relativePath === codexArtifactPaths.hooksManifest);
   if (entry?.kind !== 'write') return undefined;
   return JSON.parse(entry.content);
 };
 
-it('records dated four-state Codex hook-contract rows mirrored by the adapter and intersected by the unified bundle', () => {
+it('records dated four-state Codex hook-contract rows mirrored by the adapter', () => {
   const registry = createDefaultRegistry();
-  const unified = registry.get('plugin');
   const contract = codexCapabilityTable.hooks.contract as Readonly<Record<string, {
     readonly evidence: readonly string[];
     readonly reason?: string;
@@ -135,8 +134,6 @@ it('records dated four-state Codex hook-contract rows mirrored by the adapter an
       });
     }
     expect(registry.supports('codex', capability)).toBe(expectedState === 'supported');
-    expect(unified.capabilities[capability]).toMatchObject({ state: 'unavailable' });
-    expect(registry.supports('plugin', capability)).toBe(false);
   }
 });
 
@@ -225,7 +222,7 @@ it('names deferred, unknown, and skipped native hook surfaces before schema vali
     severity: 'error',
     target: 'codex',
   });
-  expect(plan.entries.some((entry) => entry.relativePath === 'hooks/hooks.json')).toBe(false);
+  expect(plan.entries.some((entry) => entry.relativePath === codexArtifactPaths.hooksManifest)).toBe(false);
 });
 
 it('rejects handler fields the Codex host would ignore or refuse for the event', () => {
@@ -258,7 +255,7 @@ it('rejects handler fields the Codex host would ignore or refuse for the event',
     message: expect.stringContaining('at most 3 seconds'),
     recovery: expect.stringContaining('3 seconds or less'),
   });
-  expect(rejected.entries.some((entry) => entry.relativePath === 'hooks/hooks.json')).toBe(false);
+  expect(rejected.entries.some((entry) => entry.relativePath === codexArtifactPaths.hooksManifest)).toBe(false);
 });
 
 it('emits a native document that uses every documented handler field unchanged', () => {

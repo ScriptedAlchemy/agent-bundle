@@ -55,7 +55,8 @@ const evalCase = (invocation: EvalCase['invocation'] = { mode: 'automatic' }): E
 const seedWorld = async (): Promise<TrialWorld> => {
   const root = await mkdtemp(join(tmpdir(), 'agent bundle codex harness '));
   const suiteDir = join(root, 'evals');
-  const target = join(root, 'artifact', 'codex');
+  // The composite artifact root is the Codex candidate; `codex` only selects the projection.
+  const target = join(root, 'artifact');
   const normalCodexHome = join(root, 'normal-codex-home');
   await mkdir(join(suiteDir, 'fixtures', 'repo'), { recursive: true });
   await mkdir(join(target, '.agents', 'plugins'), { recursive: true });

@@ -13,16 +13,16 @@ even when no error diagnostic was reported.
 
 | Family | Area |
 | --- | --- |
-| `AB30xx` | Skill documents: Markdown parsing (`AB3000`–`AB3002`: unreadable, missing or malformed frontmatter) and rendered-skill compilation (`AB3003`: module failed to load, `AB3004`: missing/invalid default component or `frontmatter` export, `AB3005`: content outside the supported Markdown element subset). |
-| `AB40xx` | Plugin metadata and Skill source validation (`AB4000`/`AB4001`: name/version; `AB4002`–`AB4007`: Skill fields; `AB4008`–`AB4011` and `AB4013`: release identity, see below; `AB4012`: declared `plugin.logo` is missing, not a file, or outside the project). |
-| `AB41xx` | Normalized model invariants (unknown targets, duplicate IDs and outputs). |
-| `AB42xx` | Hook configuration and native hook sources. |
-| `AB43xx` | MCP server and MCP App configuration (`AB4340`: a declaration for a route-generated server redeclares `entry`/`command`/`url`; see below). |
-| `AB44xx` | Script configuration. |
-| `AB4500` | Registered config extensions (strict finite JSON). |
-| `AB46xx` | Assets and the generated-runtime floor. |
-| `AB470x` | Package build `bin` configuration (`AB4706`: artifact output overlaps `dist`; `AB4707`–`AB4709`: `output.distPath` shape, root escape, reserved namespace). |
-| `AB471x` | Package build `lib` configuration (`AB4710`–`AB4715`) and declaration generation (`AB4716`; see below). |
+| `AB30xx` | Skill documents: Markdown parsing (`AB3000`–`AB3002`: unreadable, missing or malformed frontmatter), rendered-skill compilation (`AB3003`: module failed to load, `AB3004`: missing/invalid default component or `frontmatter` export, `AB3005`: content outside the supported Markdown element subset), and the Skill IR (`AB3006`: unknown frontmatter field; `AB3008`–`AB3010`: per-host lowering of tokens and frontmatter); see below. |
+| `AB40xx` | Plugin metadata and Skill source validation (`AB4000`/`AB4001`: name/version; `AB4002`–`AB4007`: Skill fields; `AB4008`–`AB4011` and `AB4013`: release identity; `AB4012`: declared `plugin.logo` is missing, not a file, or outside the project); see below. |
+| `AB41xx` | Normalized model invariants (`AB4100`–`AB4102`: unknown targets — the retired `plugin` name included — duplicate IDs and outputs; `AB4103`, `AB4105`, `AB4106`: the composite-root checks — same path with different bytes across selected projections, a host-scoped component leaking through conventional discovery, an advanced-registry adapter selected beside another target; see below). |
+| `AB42xx` | Hook configuration and native hook sources (`AB4200`–`AB4212`; see below). |
+| `AB43xx` | MCP server and MCP App configuration (`AB4300`–`AB4339`, see below; `AB4340`: a declaration for a route-generated server redeclares `entry`/`command`/`url`; see below). |
+| `AB44xx` | Script configuration (`AB4400`–`AB4408`; see below). |
+| `AB4500` | Registered config extensions (strict finite JSON; see below). |
+| `AB46xx` | Assets and the generated-runtime floor (`AB4600`–`AB4602`; see below). |
+| `AB470x` | Package build `bin` configuration (`AB4700`–`AB4705`; `AB4706`: artifact output overlaps `dist`; `AB4707`–`AB4709`: `output.distPath` shape, root escape, reserved namespace); see below. |
+| `AB471x` | Package build `lib` configuration (`AB4710`–`AB4715`) and declaration generation (`AB4716`); see below. |
 | `AB472x` | The `tools.rsbuild` / `tools.rspack` escape hatch (`AB4720`–`AB4723`: shape; `AB4724`: a framework-owned Rsbuild plugin re-added through `tools.rsbuild.plugins`; see below). |
 | `AB473x` | Migration nudges (informational; see below). |
 | `AB474x`/`AB4750` | Prebuilt payloads and prebuilt entries (see below). |
@@ -30,28 +30,267 @@ even when no error diagnostic was reported.
 | `AB4765`–`AB4766` | Artifact-hosted routed CLI: a target without the `cli` capability omits `bin/<name>.mjs`; a host-emitted file collides with it (see below). |
 | `AB477x` | MCP App view compilation (`AB4770`: compile error with file, line, column and the bundler message; `AB4771`: compile warning; `AB4772`: emitted-size advisory; see below). |
 | `AB490x`/`AB492x` | Conventional host components (#100 stage 2): rules `src/rules/*.mdc` (`AB4900`–`AB4908`) and commands `src/commands/*.md` (`AB4920`–`AB4928`), including per-host feature-set enforcement (`AB4907`/`AB4908`, `AB4927`/`AB4928`); see below. |
-| `AB48xx`/`AB494x` | Route graph, state, layout (`AB4830`–`AB4832`), generated route declarations outside the TypeScript program (`AB4834`), route render budgets (`AB4835`), tool task support (`AB4836`), a route module that value-imports a compiler-carrying framework entry (`AB4837`), and provider conventions (see below). |
-| `AB5000` | General CLI and adapter failures. |
+| `AB48xx`/`AB494x` | Route graph, state, layout (`AB4830`–`AB4832`), generated route declarations outside the TypeScript program (`AB4834`), route render budgets (`AB4835`), tool task support (`AB4836`), a route module that value-imports a compiler-carrying framework entry (`AB4837`), a CLI route `inputSchema` reference the static resolver cannot follow (`AB4838`) or that cycles (`AB4839`), and provider conventions (see below). |
+| `AB5000` | General CLI and adapter failures (see below). |
 | `AB60xx` | Built-artifact validation, including schema documents and referenced files (`AB6005`: an emitted `.js`/`.mjs` module — a host-pack module or a package build `dist` bundle (`dist/bin/*.js`, the Flight workers, the `lib` entry), prebuilt payloads excepted, `.d.ts` never walked — `cannot be read.`, `has invalid syntax.`, or loads something that is neither a Node built-in nor a relative or `file:` specifier resolving to a listed regular `.js`/`.mjs` file inside its tree (a host pack may also accept a relative target to listed valid JSON without traversing it). Messages include `uses invalid specifier`, `uses unsupported specifier`, `uses invalid file URL`, `is missing`, `does not resolve to a regular file`, `resolves outside the artifact root`, `is not listed in the artifact manifest`, `references invalid JSON`, and `uses unsupported target`; the recognised forms are imports, `require(…)`/`require.resolve(…)`, direct or aliased `createRequire(…)` loaders and their `.resolve(…)`, and `import.meta.resolve(…)`. Comments, strings, regular-expression literals where an operand is expected, and template text are stepped over, while `${…}` substitutions are scanned. A non-literal dynamic import is reported, a non-literal loader call says `loads a non-literal specifier through <call>`, and a loader reference says `passes <loader> on as a value instead of calling it`; load messages append `in <call>` when a concrete call is available (for example `… in require("left-pad").`), and a `dist` finding names `dist/<path>`; `AB6011`/`AB6012`: a target's required pinned-schema document is missing or invalid; `AB6025`: a manifest-declared `logo` path is missing from the artifact or escapes the deploy tree; `AB6034`: emitted Skill Markdown has no instruction body; `AB6035`–`AB6038`: Agent Plugins portable validation, see below). |
-| `AB700x` | Host installation and uninstallation: bundle identity, host availability, scope, command failure, and collision checks (`AB7005`: version collision, pre-receipt content collision, or foreign install; `AB7006`: the host lists the installed copy with load errors; see below), plus the `uninstall` refusals `AB7007`–`AB7009` (ownership or content mismatch, unconfirmed data purge, missing receipt; see below). |
+| `AB6200`–`AB6202` | Workbench artifact inspection over published epochs: `AB6200` the epoch does not validate or its provenance is inconsistent, `AB6201` an epoch reference could not be released, `AB6202` unsafe runtime metadata (see below). |
+| `AB700x` | Host installation and uninstallation: bundle identity, host availability, scope, command failure, and collision checks (`AB7000`–`AB7004`: unsupported host, unreadable bundle identity, missing host, scope or mode refusal, host command failure — the same five codes are also the development project service's preparation failures; `AB7005`: version collision, pre-receipt content collision, or foreign install; `AB7006`: the host lists the installed copy with load errors; see below), plus the `uninstall` refusals `AB7007`–`AB7009` (ownership or content mismatch, unconfirmed data purge, missing receipt; see below). |
 | `AB7010`–`AB7015` | npm prepack inventory, artifact freshness, package bin targets, release-version agreement, and installed-dependency hygiene (`AB7014`: a dependency no packed file references; `AB7015`: a git, remote-tarball, path, or unrewritten workspace-protocol dependency specifier). |
 | `AB7200`–`AB7202`, `AB7210`–`AB7211` | Development rebuilds and live host surfaces: rebuild admission and phase failures, development host install sync, and the dev-epoch contract gate (see below). |
 | `AB7xxx` | Project preparation and development rebuilds (`AB7100`–`AB7102`: a development rebuild's compilation, publication, and cleanup; `AB7103`: the development package build; see below). |
 | `AB7300`–`AB7331` | Read-only install Doctor: host probes, installed inventory, bundle comparison and registration proof, runtime endpoint health and identity, durable-state inventory, static bytes-at-rest validation, foreign-install detection (`AB7321`; see below), Cursor plugin hook registration / marketplace staging (`AB7322`–`AB7324`; see below), host load refusal (`AB7325`; see below), the Cursor Agent Plugins launch proof (`AB7326`; see below), a disabled Claude install (`AB7327`; see below), lifecycle receipts and activation states (`AB7328`–`AB7330`; see below), and the operator `.env` layer of an installed pack (`AB7331`; see below). `AB7311` and `AB7325` are also emitted by `build` and `validate --artifact` from the Claude load check (see "Claude Code host validation"). |
 | `AB8200`–`AB8209` | Workbench development runtime routes (`/api/runtime/**`): `AB8200` development runtime provider configuration, load, or lifecycle failure, `AB8201` runtime/session/run not available, `AB8202` invalid route path, `AB8203` invalid request shape, `AB8204` stale runtime generation or MCP session revision (409), `AB8205` runtime request could not be completed, `AB8206` Workbench runtime client failure, `AB8207` Agent Document decoding needs the optional `@agent-bundle/runtime` peer (503), `AB8208` stored Flight could not be decoded as an Agent Document (409), `AB8209` decoded Agent Document over the 16 MiB budget (413) or an invalid document response. |
 | `AB8210`–`AB8214` | Workbench semantic lifecycle replay routes (`/api/lifecycles`, `/api/lifecycles/replays`): `AB8210` invalid path, `AB8211` malformed replay request or native envelope (400, carries the shared validator message), `AB8212` replay unavailable or could not be completed, `AB8213` stale manifest binding (409; the page repairs it with refresh → explicit re-run), `AB8214` replay over the 16 MiB budget (413). |
-| `AB8215`–`AB8218` | Workbench read-only host discovery route. |
+| `AB8215`–`AB8218` | Workbench read-only host discovery route (`/api/discovery`): `AB8215` invalid path, `AB8216` query string or non-`GET` method (400/405), `AB8217` report over the 16 MiB response limit (413), `AB8218` discovery not available (503). |
 | `AB8219`–`AB8223` | Workbench live MCP probe route (user-initiated, read-only initialize + tools/list): `AB8219` invalid path, `AB8220` invalid request/method, `AB8221` probe target not found, `AB8222` response over the 16 MiB budget, `AB8223` probe unavailable. |
 | `AB8233`–`AB8235` | Workbench browser-side strict decoders rejecting a dev-server response: `AB8233` lifecycle replay, `AB8234` host discovery, `AB8235` MCP probe report. |
 | `AB8110`–`AB8113` | Workbench standalone MCP Inspector routes (`/api/inspector/status`, `/api/inspector/launch`): `AB8110` invalid path, `AB8111` invalid request shape or query, `AB8112` the Inspector could not be launched (spawn failure, exit before publishing a URL, or the 30 s startup budget elapsed; 502), `AB8113` routes not available (404 when the launcher is not composed, 503 after shutdown). |
+| `AB8120`–`AB8123` | Workbench route manifest (`/api/routes/manifest`): `AB8120` invalid path, `AB8121` not available (404/409/503), `AB8122` query string on the request, `AB8123` the browser client could not decode the response (see below). |
 | `AB8024`–`AB8025` | Live host MCP proxy: epoch drift behind a host connection and dev-server unavailability (see below). |
-| `AB8xxx` | Development server configuration. |
+| `AB80xx` | Development server: `AB8000` server construction refusals, `AB8001`–`AB8012` shared transport and foreground routes (origin, session, body, cursor, asset, and Skill route refusals), then one block per route module — MCP sessions (`AB8013`–`AB8019`), MCP App previews (`AB8020`–`AB8023`), hook playground (`AB8030`–`AB8034`), prompt playground (`AB8040`–`AB8057`), artifact epochs (`AB8060`–`AB8068`), evals (`AB8070`–`AB8083`, `AB8085`–`AB8088`), development logs (`AB8090`–`AB8093`); see "Development server" below. |
 | `AB9xxx` | Eval selection, harnesses, and persisted runs. |
+
+## Skill documents and Skill IR lowering (`AB3000`–`AB3010`)
+
+A skill directory (`src/skills/<name>/`, or a directory an explicit `skills`
+entry names) holds a hand-authored `SKILL.md` or a rendered source module
+(`SKILL.tsx`/`SKILL.ts`; `docs/framework-mode.md`). Parsing runs at discovery
+and reports `AB3000`–`AB3005` on the document; the Skill IR is then read from
+the frontmatter (`AB3006`) during source validation, and the IR is lowered once
+per selected skill host — `claude`, `codex`, `cursor`, `portable`, plus the
+unified `plugin` target's shared document — with `AB3008`–`AB3010` judged on
+the normalized model and carrying `target`. A skill whose frontmatter declares
+no host extension and whose body carries no token passes through byte for byte
+and is never lowered. `AB3007` is not assigned.
+
+| Code | Severity | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB3000` | error | `SKILL.md` could not be read: `Unable to read Skill Markdown: <error>` — a permissions failure, a directory in its place, or a skill directory (an explicit `skills` path, or one that lost its file mid-run) with neither `SKILL.md` nor a rendered source module. | Make the file readable, or remove the directory from `src/skills/` and from `skills`. |
+| `AB3001` | error | `SKILL.md` does not open with a `---` YAML frontmatter block. | Start the document with `---`, the YAML fields, and a closing `---`. |
+| `AB3002` | error | The frontmatter YAML does not parse, or parses to something other than an object (a list or a scalar); the message carries the parser error. | Repair the YAML between the `---` fences. |
+| `AB3003` | error | The rendered skill module failed to load: `Rendered Skill module failed to load: <error>` — a syntax error, an unresolved import, or a throw at module evaluation (the published `agent-bundle/meta` reached without a project identity raises `AB4760` here). | Fix the module so it imports and evaluates; `agent-bundle validate` prints the message. |
+| `AB3004` | error | The rendered skill module does not default-export a component function, does not export a `frontmatter` plain object, or its `frontmatter` cannot be serialized as YAML. | Export both a default component and `export const frontmatter = { name, description, … }`. |
+| `AB3005` | error | Rendering the component to Markdown failed: an element outside the supported subset (`h1`–`h6`, `p`, `ul`/`ol`/`li`, `strong`/`b`, `em`/`i`, `code`, `pre`, `blockquote`, `a`, `hr`, `br`, fragments, text), a structural rule of that subset (`<a>` without a nonempty string `href`, `<pre>` holding anything but text or one `<code>`, a list child that is not `<li>`, an empty list), a component that threw or resolved past the depth limit, a value that is neither text nor a supported element, or content that produced no Markdown; the message names the construct. | Write the content within the supported elements, or hand-author `SKILL.md`. |
+| `AB3006` | error | Skill frontmatter declares a field that is not a portable Agent Skills field (`name`, `description`, `license`, `compatibility`, `allowed-tools`, `metadata`), not a typed host extension (Claude: `agent`, `argument-hint`, `arguments`, `background`, `context`, `disallowed-tools`, `effort`, `hooks`, `model`, `shell`, `user-invocable`, `when_to_use`; Cursor: `color`, `globs`, `icon`; shared: `disable-model-invocation`, `paths`), and not the authoring key `targets`; or `targets` is not an object, carries a key other than `claude`, `codex`, `cursor`, or holds an unknown key inside `targets.<host>` (including `targets.codex.interface`, `.policy`, `.dependencies`, and `.dependencies.tools[<n>]`). The message names the field path. | Move host-only fields into `targets.<host>` or a documented host key, or remove the unknown field. |
+| `AB3008` | error | The Skill Markdown body uses a canonical token (`agent-bundle:token:arguments`, `agent-bundle:path:plugin-root`, `agent-bundle:path:plugin-data`, `agent-bundle:path:workspace-root`, `agent-bundle:token:session-identity`, `agent-bundle:token:skill-root`) or a host alias of one (`$ARGUMENTS`, `${CLAUDE_PLUGIN_ROOT}`, `${PLUGIN_ROOT}`, `${workspaceFolder}`, …), and the skill lowers to a host whose pinned Skill Markdown contract documents no interpolation placeholder: Codex, Cursor, portable, and the unified `plugin` target's shared portable document. Claude documents all six. One diagnostic per token per host: `Skill token "<token>" has no <host> Skill Markdown equivalent.` | Remove the token, restrict the skill to a host that documents it, or move the reference to a document that host interpolates. |
+| `AB3009` | error | After token lowering, the `<host>` Skill Markdown body still contains a placeholder spelling another host's contract owns — for Codex, Cursor, and portable documents, one of Claude's `$ARGUMENTS`, `${CLAUDE_PLUGIN_DATA}`, `${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_PROJECT_DIR}`, `${CLAUDE_SESSION_ID}`, `${CLAUDE_SKILL_DIR}`; the message names the syntax. | Use canonical agent-bundle tokens so lowering emits only this host's documented placeholders. |
+| `AB3010` | error | The lowered `<host>` skill frontmatter fails that host's pinned schema — `schemas/skill-hosts/claude-skill-frontmatter.schema.json` and `cursor-skill-frontmatter.schema.json` for Claude and Cursor, the Agent Skills frontmatter schema for Codex and portable: `Lowered <host> Skill document <field> <message>.` | Remove the unsupported field or restrict the skill to a host that documents it. |
+
+## Plugin metadata and Skill source validation (`AB4000`–`AB4007`, `AB4012`)
+
+`plugin.name` is the host-native slug every manifest carries; `plugin.logo`
+is an optional project-relative image. Each discovered skill is checked
+against the pinned Agent Skills frontmatter schema
+(`schemas/agent-skills/frontmatter.schema.json`: `name` and `description`
+required, closed portable field shapes), its directory, its resources, and
+the other skills. `AB4001`, `AB4008`–`AB4011`, and `AB4013` are the release
+identity codes (see "Release identity" below). Every row is reported on the
+config file (`AB4000`, `AB4012`) or the skill source.
+
+| Code | Severity | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB4000` | error | `plugin.name` is missing or is not a nonempty string. | Declare `plugin: { name: '<slug>' }`. |
+| `AB4002` | error | Skill frontmatter `name` fails the pinned schema: missing, not a string, empty, longer than 64 characters, or not lowercase kebab-case (`^[a-z0-9]+(?:-[a-z0-9]+)*$`): `Skill frontmatter name <message>.` | Declare a kebab-case `name` of at most 64 characters. |
+| `AB4003` | error | Skill frontmatter `description` fails the pinned schema: missing, not a string, blank, or longer than 1024 characters. | Declare a nonblank `description` of at most 1024 characters. |
+| `AB4004` | error | Skill frontmatter `name` differs from the skill directory's name: `Skill name "<name>" must match directory "<dir>".` | Rename the directory or the `name` so they agree. |
+| `AB4005` | error | The Skill Markdown body links to a relative resource — an inline link or image, a reference-style link through its definition, or a shortcut reference; fenced and inline code are ignored; `#` anchors, absolute paths, and URLs with a scheme are not resources — that is not a file the skill directory ships (project ignore rules apply): `Skill references missing resource "<path>".` | Add the file beside `SKILL.md`, or fix the link. |
+| `AB4006` | error | Two discovered skills declare the same frontmatter `name`: `Skill name "<name>" duplicates <first source>.` | Rename one skill. |
+| `AB4007` | error | Another portable frontmatter field fails the pinned schema: `allowed-tools` or `license` not a string, `compatibility` not a string of 1–500 characters, or `metadata` not an object whose values are all strings: `Skill frontmatter <field> <message>.` | Fix the field's value. |
+| `AB4012` | error | `plugin.logo` is declared but is not a nonempty string, resolves outside the project root (or to the root itself), or does not name an existing file. | Set `plugin.logo` to an existing file inside the project root, or omit the field. |
+
+## Normalized model invariants (`AB4100`–`AB4102`)
+
+`validateModel` runs over the normalized plugin after source validation and
+normalization, on every command that prepares a project. These codes judge
+the model rather than the config text, so they also hold for a model handed
+to the API directly. Source-level duplicates (`AB4006`, `AB4408`, `AB4802`)
+are usually reported first; `AB4101` and `AB4102` are the model-level
+backstop.
+
+| Code | Severity | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB4100` | error | A selected target — `targets` in config, or the CLI's `--target` selection — is not a registered adapter: `Unknown target "<name>".` The built-in registry publishes `claude`, `codex`, `cursor`, and `portable`; `plugin` is one of the unknown names — it used to name a merged multi-host output and now selects nothing, because every build already emits the composite root (see the composite plugin root section below). Reported with `target`. | Select host projections (`claude`, `codex`, `cursor`, `portable`); omit `targets` for the default `portable` projection. |
+| `AB4101` | error | Two normalized components share one `id` (for example two skills normalizing to `skill:<name>`): `Normalized component ID "<id>" is duplicated.` | Rename or remove one of the two components. |
+| `AB4102` | error | Two inputs of one target produce the same artifact path — a skill's `SKILL.md`, sidecar, or resource under `skills/<name>/`, an `assets/` file, `commands/<name>.md`, `rules/<name>.mdc`, a payload file, or a Claude `bin/`, `output-styles/`, or `workflows/` file: `Multiple inputs produce "<path>"; first source is <source>.` Reported with `generatedPath`, `sourcePath`, and `target`. | Rename or remove one of the inputs. |
+
+## Hook configuration and native hook sources (`AB4200`–`AB4212`)
+
+`hooks.<event>` accepts a handler path, an entry object (`handler`,
+`targets`, `tools`, `timeout`, `args`), or an array of those; see
+`website/docs/en/guide/authoring/hooks.mdx`. `AB4200`–`AB4205` and
+`AB4210`–`AB4212` are source checks reported on the config file;
+`AB4203`/`AB4204` are repeated on the normalized model with `target`;
+`AB4206`–`AB4209` judge the target-native hook documents an adapter's
+`nativeHooks` key names (`claude.nativeHooks`, `codex.nativeHooks`). A hook
+without `targets` inherits the selected targets that support hooks, so a host
+without a hook surface (`portable`) is skipped there without a diagnostic;
+naming it explicitly is `AB4204`. Prebuilt handlers (`{ prebuilt }`) and
+`args` are judged by `AB4744`–`AB4746`.
+
+| Code | Severity | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB4200` | error | A hook entry's `handler` is neither a nonempty path nor a `{ prebuilt }` marker: `Hook <event> requires a nonempty handler path.` | Point `handler` at the handler module. |
+| `AB4201` | error | A hook on an event other than `beforeTool` or `afterTool` declares `tools`; only the tool events take selectors. | Remove `tools`, or move the hook to a tool event. |
+| `AB4202` | error | A `tools` selector is neither a canonical selector (`shell`, `file.read`, `file.write`, `mcp`, `agent`) nor a `<target>:<native-name>` host selector. | Use a canonical selector or a `<target>:<native-name>` spelling. |
+| `AB4203` | error | A hook `targets` entry is not a nonempty string, or names a target that is not registered. Also reported on the normalized model. | Name registered targets only. |
+| `AB4204` | error | A hook explicitly names a registered target whose adapter does not support hooks (`portable`): `Target "<target>" cannot emit hook <event>.` Also reported on the normalized model. | Drop that target from the hook's `targets`, or omit `targets` so the hook inherits only the selected hosts that support hooks. |
+| `AB4205` | error | `timeout` is not a positive whole number of seconds. | Declare an integer number of seconds, or omit it for the host default. |
+| `AB4206` | error | A native hook document is attributed to a target that is not registered (a model-level check on `nativeHooks`). | Keep native hook documents under a registered host key. |
+| `AB4207` | error | A native hook document is attributed to a target whose adapter cannot emit hooks. | Remove the document from that host key. |
+| `AB4208` | error | `<host>.nativeHooks` (`claude.nativeHooks`, `codex.nativeHooks`) is declared as something other than a nonempty string path: `Native hook source for target "<target>" must return a string or undefined.` | Set it to the path of the host's `hooks.json`, or omit it. |
+| `AB4209` | error | Reading `<host>.nativeHooks` from the config threw (an accessor that throws), so the adapter could not resolve the native hook source. | Declare the path as a plain string. |
+| `AB4210` | error | A `<target>:<native-name>` selector names a target that is not registered. | Spell a registered target. |
+| `AB4211` | error | A `<target>:<native-name>` selector names a target whose adapter cannot emit hooks. | Select a host with a hook surface. |
+| `AB4212` | error | A `<target>:<native-name>` selector names a target outside the hook's selected targets (its `targets`, or the project's selected targets when omitted). | Add the target to the hook's `targets`, or drop the selector. |
+
+## MCP server and MCP App configuration (`AB4300`–`AB4339`)
+
+`mcp.servers.<id>` declares one of `entry` (a local module compiled into a
+stdio server; the conventional `src/mcp/<id>.ts` supplies it when all three
+are absent), `command` (an external stdio command), or `url` (a remote
+`streamable-http` server); `apps` declares MCP App views for a server with a
+local entry. `AB4300`–`AB4319`, `AB4322`–`AB4335`, and `AB4338` are source
+checks reported on the config file and name the server or App;
+`AB4320`, `AB4321`, `AB4336`, `AB4337`, and `AB4339` are judged on the
+normalized model. A server the route graph compiles in `generated` mode is
+judged by `AB4340` (see below) plus the shared local-entry field rules
+(`AB4305`, `AB4308`–`AB4312`) and the App rules.
+
+| Code | Severity | Trigger |
+| --- | --- | --- |
+| `AB4300` | error | `mcp` is not an object. |
+| `AB4301` | error | `mcp.servers` is not an object. |
+| `AB4302` | error | A server key is empty or whitespace. |
+| `AB4303` | error | A server value is not an object. |
+| `AB4304` | error | A server declares none, or more than one, of `entry`, `command`, and `url`, and no conventional `src/mcp/<id>.ts` stdio entry exists to fill in. Declare exactly one, or add the conventional module. |
+| `AB4305` | error | `targets` is not an array of nonempty strings. |
+| `AB4306` | error | `entry` is declared but is not a nonempty path. |
+| `AB4307` | error | `entry` does not name an existing file (resolved from the project root). |
+| `AB4308` | error | A local-entry server (explicit, conventional, or route-generated) declares a `transport` other than `stdio`. |
+| `AB4309` | error | A local-entry server declares `cwd`; the compiled server runs from the plugin root. |
+| `AB4310` | error | A stdio server (`entry` or `command`) declares `headers`, which belong to remote servers. |
+| `AB4311` | error | `args` is not an array of nonempty strings. |
+| `AB4312` | error | `env` is not an object mapping nonempty keys to string values. |
+| `AB4313` | error | `command` is declared but empty. |
+| `AB4314` | error | A `command` server declares a `transport` other than `stdio`. |
+| `AB4315` | error | A `command` server declares a `cwd` that is not a nonempty path. |
+| `AB4316` | error | `url` is not a valid `http:` or `https:` URL. |
+| `AB4317` | error | A `url` server does not declare `transport: 'streamable-http'`, the only remote transport. |
+| `AB4318` | error | A `url` server declares `args`, `env`, or `cwd`, which are stdio options. |
+| `AB4319` | error | `headers` is not an object mapping nonempty keys to string values. |
+| `AB4320` | error | A normalized server selects a target that is not registered (reported with `target`). |
+| `AB4321` | error | A normalized local-entry server's first `args` entry is not the compiler's content-hashed output alias `mcp/mcp-<slug>-<8 hex>.mjs`: `MCP server "<name>" has an unsafe local output alias.` The normalizer always writes that alias, so this guards a model built or altered outside it. |
+| `AB4322` | error | A `command` or `url` server declares `apps`; Apps need a local entry (explicit `entry`, the conventional module, or route-generated) to host them. |
+| `AB4323` | error | `apps` is not an object. |
+| `AB4324` | error | An App name is not lowercase kebab-case starting with a letter (`^[a-z][a-z0-9-]*$`). |
+| `AB4325` | error | One App name is declared by more than one server with different declarations, or by a config App and a `src/mcp/<server>/apps/<name>` route module; servers may share a name only when `entry`, `resourceUri`, `template`, and `_meta` are identical. |
+| `AB4326` | error | An App value is not an object. |
+| `AB4327` | error | An App's `entry` is not a nonempty path. |
+| `AB4328` | error | An App's `entry` does not name an existing file. |
+| `AB4329` | error | An App's `resourceUri` is not a `ui://` URI with a nonempty host. |
+| `AB4330` | error | One `resourceUri` is declared under two different App names (config Apps and route-declared Apps together). |
+| `AB4331` | error | `template` is declared but is not a nonempty path. |
+| `AB4332` | error | `template` does not end in `.html` or `.htm`, or does not name an existing file (resolved from the project root; a route App's template resolves from the route module instead, `AB4827`). |
+| `AB4333` | error | An App's `targets` is not an array of nonempty strings. |
+| `AB4334` | error | An App's `targets` names a target outside its server's declared `targets`. |
+| `AB4335` | error | `_meta` is declared but is not an object. |
+| `AB4336` | error | A normalized App selects a target that is not registered. |
+| `AB4337` | error | A normalized App selects a target its owning server does not ship to, or its server is missing from the model. |
+| `AB4338` | error | `_meta` is an object but not plain JSON data: a non-finite number, `undefined`, a function, symbol, or bigint, a class instance or other non-plain object, an accessor property, a symbol key, an array with holes or extra properties, or a cycle. |
+| `AB4339` | error | A normalized server's `transport` is not `stdio` or `streamable-http` — a legacy `sse`, another string, or a value that could not be read: `MCP server "<name>" uses unsupported transport "<value>".` Judged on the model and again when each built-in host adapter plans its artifact; the source rules above (`AB4308`, `AB4314`, `AB4317`) fix each declaration form's transport first. |
+
+## Script configuration (`AB4400`–`AB4408`)
+
+`scripts.<name>` is an entry path or `{ entry, targets }`. A bundled entry
+(`.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts`, `.cts`) compiles to
+`scripts/<name>.mjs`; `.sh`, `.bash`, and `.py` entries are copied and keep
+their extension. Conventional `src/scripts/` routes are judged by
+`AB4808`/`AB4809` and `AB4737`/`AB4738` instead. Every row is reported on the
+config file; `AB4406` is repeated on the normalized model.
+
+| Code | Severity | Trigger |
+| --- | --- | --- |
+| `AB4400` | error | `scripts` is not an object. |
+| `AB4401` | error | A script name is not a safe stable output name (`^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$`). |
+| `AB4402` | error | A script value is neither an entry path nor an object with an entry path, or its `entry` is empty. |
+| `AB4403` | error | The entry's extension is not one of `.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts`, `.cts`, `.sh`, `.bash`, `.py`. |
+| `AB4404` | error | The entry does not name an existing regular file. |
+| `AB4405` | error | The entry resolves outside the project root, lexically or after resolving symlinks. |
+| `AB4406` | error | `targets` names a target that is not registered. |
+| `AB4407` | error | `targets` is not an array of nonempty strings. |
+| `AB4408` | error | Two scripts resolve to the same canonical artifact output (`scripts/<name>.mjs` for bundled entries, `scripts/<name><ext>` otherwise): `Scripts <a> and <b> share canonical output "<path>".` |
+
+## Registered config extensions (`AB4500`)
+
+The host-scoped config keys (`claude`, `codex`, `cursor`, `portable`) are
+extensions the target adapters register. Normalization deep-clones each
+declared extension as strict finite JSON before any adapter reads it; a value
+that cannot be cloned aborts normalization, and `validate`, `build`,
+`inspect`, and `dev` report the failed preparation under this code on the
+config file.
+
+| Code | Severity | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB4500` | error | A registered extension value contains something that is not strict finite JSON: a non-finite number (`NaN`, `Infinity`), `undefined`, a function, symbol, or bigint, a cyclic reference, an object whose prototype is neither `Object.prototype` nor `null` (a class instance, `Map`, `Date`), a symbol key, an accessor or non-enumerable property, or an array with holes or extra properties: `A registered config extension must contain strict finite JSON data.` | Declare only JSON literals — objects, arrays, strings, finite numbers, booleans, `null` — under the host keys. |
+
+## Assets and the generated-runtime floor (`AB4600`–`AB4602`)
+
+`assets` lists project files or globs copied into the artifact's `assets/`;
+`runtime.node` raises the minimum Node.js version of the generated
+executables above the framework default (`22.12.0`). The two validators share
+three codes; the message tells them apart.
+
+| Code | Severity | Trigger |
+| --- | --- | --- |
+| `AB4600` | error | `assets` is not an array of nonempty paths or globs; or `runtime` is not a plain object whose only key is `node`. |
+| `AB4601` | error | An asset entry resolves outside the project root; or `runtime.node` is not a `major.minor[.patch]` version string such as `"22.16"` or `"24.0.0"`. |
+| `AB4602` | error | A literal asset entry (one without the glob characters `*`, `?`, `{`, `[`, `]`, `(`, `)`, `!`) names nothing on disk; or `runtime.node` is lower than the default floor, Node.js `22.12.0`, which `runtime` may raise but never lower. |
+
+## Package build configuration: `bin`, `output`, and `lib` (`AB4700`–`AB4716`)
+
+`bin` (`false`, or `{ <name>: '<entry>' }` / `{ <name>: { entry } }`) and
+`lib` (`false`, an entry path, or `{ entry, dts }`) declare the framework-owned
+npm package build under `dist/` (`docs/framework-mode.md`, "Package
+entries"); `output.distPath` moves the artifact output. Bundled entries must be
+JavaScript or TypeScript modules (`.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`,
+`.mts`, `.cts`). Every row but `AB4706` is reported on the config file.
+`AB4716`, the declaration-emit failure of a `lib` entry with `dts`, has its own
+section, "Declaration generation", below.
+
+| Code | Severity | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB4700` | error | `bin` is neither `false` nor an object of bin entries. | Declare `bin: false` or `bin: { <name>: '<entry>' }`. |
+| `AB4701` | error | A bin name is not a safe stable output name (`^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$`); it becomes `dist/bin/<name>.js`. | Rename the entry. |
+| `AB4702` | error | A bin value is neither an entry path nor `{ entry }`, or its entry is empty. | Point the entry at a module. |
+| `AB4703` | error | A bin entry resolves outside the project root. | Move the module inside the project. |
+| `AB4704` | error | A bin entry's extension is not a bundled JavaScript or TypeScript extension. | Point the entry at a `.ts`/`.js`-family module. |
+| `AB4705` | error | A bin entry does not name an existing regular file. | Create the module or fix the path. |
+| `AB4706` | error (build) | The project has package entries, and the artifact output (`output.distPath`, or `--output`) and the package build output (`dist/`) overlap in either direction; `agent-bundle build` refuses before writing anything. Thrown without a `sourcePath`. | Configure a different `output.distPath` or pass a different `--output`. |
+| `AB4707` | error | `output` is not an object with an optional `distPath` string, or `distPath` is declared but is not a nonempty string. | Declare `output.distPath` as a non-empty project-root-relative path string, or remove the `output` block. |
+| `AB4708` | error | `output.distPath` is not a project-root-contained relative POSIX path: it is absolute, contains a backslash, has a `.`, `..`, or empty segment, or resolves to the project root itself. | Use a project-root-contained relative POSIX path; pass the CLI `--output` flag for per-invocation absolute locations. |
+| `AB4709` | error | The first segment of `output.distPath` is a reserved namespace, compared case-insensitively: `.agent-bundle`, `.git`, `node_modules`, or `src`. | Choose a directory outside the framework, VCS, dependency, and source namespaces. |
+| `AB4710` | error | `lib` is neither `false`, an entry path, nor an object with an entry path. | Declare `lib: false`, `lib: '<entry>'`, or `lib: { entry, dts? }`. |
+| `AB4711` | error | The lib entry is empty. | Point `entry` at a module. |
+| `AB4712` | error | The lib entry resolves outside the project root. | Move the module inside the project. |
+| `AB4713` | error | The lib entry's extension is not a bundled JavaScript or TypeScript extension. | Point the entry at a `.ts`/`.js`-family module. |
+| `AB4714` | error | The lib entry does not name an existing regular file. | Create the module or fix the path. |
+| `AB4715` | error | `lib.dts` is declared but is not a boolean. | Declare `dts: true` or `dts: false`, or omit it (the default is `true`). |
+
+## General CLI and adapter failures (`AB5000`)
+
+`AB5000` is the catch-all for a failure that reached the CLI or the build
+without a structured diagnostic of its own. Structured failures never fall
+through to it: declaration-emit failures are `AB4716`, MCP App compile
+failures `AB4770`, and every validator code keeps its own number.
+
+| Code | Severity | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB5000` | error | Three emitters. **`agent-bundle` CLI**: a command threw something other than a `DiagnosticError` — a `TypeError` from option handling (`Use either --input or --input-file, not both.`), an I/O failure, a bug — so `runCli` writes the error's message as one `AB5000` diagnostic (a JSON diagnostics array on stderr, without `sourcePath`) and exits `1`; Commander usage errors exit `2` without a diagnostic. The same line is written when a foreground session (`dev`, `serve-app`) fails to close on SIGINT/SIGTERM. **`agent-bundle serve-app`**: the bound MCP server exited on its own, so the App host closed: `The MCP server behind <app> exited; the MCP App host closed.`, exit code `1`. **`agent-bundle build`**: a target adapter's plan attributed a hook entry to a target other than itself (`Target adapter "<name>" planned hook "<id>" for target "<other>", expected "<name>".`), with `target` — an adapter contract violation, never a config mistake. | Read the message: it is the underlying error. Fix the named cause and rerun; for the build case, fix the adapter. |
 
 ## Claude Code host validation (`AB6019`–`AB6022`, `AB7311`, `AB7325`)
 
 `agent-bundle validate --artifact <dir>` and `agent-bundle build` run the
-installed Claude Code validator for the `claude` and `plugin` targets when
+installed Claude Code validator over the composite root when `claude` is selected and
 `--host-validation` is on (the default for both commands; `--no-host-validation`
 skips it, and programmatic `build()` calls skip it unless `hostValidation: true`
 is passed). `agent-bundle doctor --host claude --from <dir>` runs the same
@@ -88,7 +327,7 @@ readable `.claude-plugin/plugin.json` name (the validation runs already report
 that manifest). Doctor does not repeat it: its registration proof and the
 inventory rows' `errors` already carry the same verdicts. Without `claude` on
 `PATH`, `build` spawns once, reports one `AB6019`, and marks the remaining
-`claude`/`plugin` targets `unavailable` without spawning again.
+`claude` projection `unavailable` without spawning again.
 
 | Code | Severity | Meaning | Recovery |
 | --- | --- | --- | --- |
@@ -104,7 +343,7 @@ inventory rows' `errors` already carry the same verdicts. Without `claude` on
 | Code | Severity | Trigger | Recovery |
 | --- | --- | --- | --- |
 | `AB6026` | info | Every Cursor host-validation report states that Cursor publishes no plugin-validate devtools verb and names the vendored schema pin used for local validation. | Review the pinned Cursor schema provenance before changing the local validator contract. |
-| `AB6027` | error | A required generated Cursor document is missing or a present plugin, marketplace, MCP, or hooks document is unreadable, invalid JSON, or rejected by its pinned schema. The hooks document is the one `.cursor-plugin/plugin.json` `hooks` names — a plugin-root-relative file (`hooks/hooks.json` for the `cursor` target, `hooks/hooks-cursor.json` for the unified `plugin` target, reported under that path) or an inline object (`.cursor-plugin/plugin.json#/hooks`) — falling back to `hooks/hooks.json` folder discovery only when the field is absent; a declared file that is missing or resolves outside the plugin root is an error, and any other `hooks/hooks.json` beside a named document is not read. | Repair the generated Cursor JSON document so it satisfies the vendored pinned schema, then rebuild. |
+| `AB6027` | error | A required generated Cursor document is missing or a present plugin, marketplace, MCP, or hooks document is unreadable, invalid JSON, or rejected by its pinned schema. The hooks document is the one `.cursor-plugin/plugin.json` `hooks` names — a plugin-root-relative file (`.cursor-plugin/hooks.json` in the composite root, reported under that path) or an inline object (`.cursor-plugin/plugin.json#/hooks`) — falling back to `hooks/hooks.json` folder discovery only when the field is absent; a declared file that is missing or resolves outside the plugin root is an error, and any other `hooks/hooks.json` beside a named document is not read. | Repair the generated Cursor JSON document so it satisfies the vendored pinned schema, then rebuild. |
 | `AB6028` | error | Generated bytes violate pinned Cursor loader evidence: manifest-candidate precedence selects a fallback manifest, a symlink resolves outside the bundle, or `CURSOR_PLUGIN_ROOT` appears outside loader-substituted fields. | Repair the generated Cursor layout, token locations, or symlinks to match the pinned loader evidence, then rebuild. |
 | `AB6029` | info / warning | The Cursor Agent version probe is unavailable (`ENOENT`, info) or cannot complete successfully (warning). Local pinned-schema validation still runs. | Install Cursor Agent or repair `cursor-agent --version` when local CLI version evidence is required, then rerun artifact validation. |
 
@@ -119,7 +358,7 @@ as a separate drift signal, never as a substitute plugin contract.
 | --- | --- | --- | --- |
 | `AB6030` | info | The Codex CLI is unavailable, or the installed Codex release publishes no plugin validation command. | Install Codex and put it on `PATH`; until Codex publishes a validator, use the vendored pinned-schema diagnostics. |
 | `AB6031` | info / warning (error in strict mode) | The app-server schema-generation verb is unavailable, or its live output is missing or differs from the pinned generated hook schemas. | Review the attributable host schema source and update the pinned revision only when Codex publishes the matching contract. |
-| `AB6032` | error | A required Codex bundle document is missing, unreadable, invalid JSON, or fails its vendored pinned schema. | Repair the named `.codex-plugin/plugin.json`, `hooks/hooks.json`, `.mcp.json`, or marketplace document and rebuild. |
+| `AB6032` | error | A required Codex bundle document is missing, unreadable, invalid JSON, or fails its vendored pinned schema. | Repair the named `.codex-plugin/plugin.json`, `.codex-plugin/hooks.json`, `.codex-plugin/mcp.json`, or marketplace document and rebuild. |
 | `AB6033` | error | A bounded Codex version or schema-generation command could not start, failed, timed out, exceeded 1 MiB of output, or produced unreadable output. | Verify `codex --version` and `codex app-server generate-json-schema --out <dir>` complete successfully, then rerun validation. |
 
 ## Agent Skills emitted spec lint (`AB6034`)
@@ -272,6 +511,10 @@ its module does not export) are invisible to `tsc --noEmit`, so a green
 `typecheck` script proves nothing about them. Reproduce them with
 `tsc --declaration --emitDeclarationOnly` over the lib entry source
 directory.
+
+| Code | Severity | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB4716` | error (build) | Declaration emit for a `lib` entry with `dts` enabled failed. One diagnostic per recovered TypeScript diagnostic — `Declaration generation for lib entry "<name>" failed: <file>(<line>,<column>): TS<code>: <message>` — or a single one carrying the bundler's own message when none could be recovered (no resolvable `typescript`, or a replay that passes). `sourcePath` is the file TypeScript located, when it did. | Fix the reported TypeScript declaration errors and rebuild; replay them with `tsc --declaration --emitDeclarationOnly` over the lib entry source directory, since `tsc --noEmit` never shows them. |
 
 ## MCP App view compilation (`AB4770`–`AB4772`)
 
@@ -587,6 +830,27 @@ skill's `AB3003`.
 | --- | --- | --- | --- |
 | `AB4760` | error | A module evaluated the published `agent-bundle/meta` outside a surface Agent Bundle compiles — typically a unit test pool not built from the Rstest preset, or a hand-run script importing plugin source. | Run the test under `agentBundleRstest()` or `agentBundleBrowserRstest()` from `agent-bundle/rstest` (pass `include` to cover a plain unit pool), or compile the surface with `agent-bundle build`. In a custom test runner, alias `agent-bundle/meta` (`resolve.alias`, exact match) to a module with the named exports `{ name, packageName, packageVersion, version, meta }` — `meta` the frozen object of the other four, exported as both the named binding and the default export — computed from the project's `agent-bundle.config.ts` plugin name and `package.json` version; the `.agent-bundle/test/meta.mjs` module `agentBundleRstest()` writes is that module. |
 
+## The composite plugin root (`AB4100`, `AB4103`, `AB4105`, `AB4106`)
+
+`build` emits **one** plugin root at the artifact directory (#555). The
+`targets` list selects which host *projections* the root carries —
+`claude`, `codex`, `cursor`, `portable` — and every selected host reads the
+same directory as its plugin root: host manifests sit in their own dotfolders
+(`.claude-plugin/`, `.codex-plugin/`, `.cursor-plugin/`, or `plugin.json`
+for the portable format), while `skills/`, `hooks/`, `mcp/`, `scripts/`,
+`bin/`, and `INSTALL.md` are shared. There is no `<root>/<host>/` partition
+and no `plugin` target: the composite *is* the output. Only those four
+built-in hosts share a root; an adapter registered on an advanced
+`TargetRegistry` is built alone (`AB4106`). `validate` and `inspect` plan the
+same composite root the build stages, so they report `AB4103` and `AB4105`
+exactly where `build` would refuse.
+
+| Code | Severity | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB4103` | error | Two selected projections plan the same artifact path with different bytes, so one root cannot hold both. The common case is a Skill whose frontmatter carries a host extension (`targets: { claude: … }`): it lowers to different `skills/<name>/SKILL.md` bytes for Claude Code than for the other hosts. Projections are compared in host-name order and paths in path order, so the same selection reports the same collision however `targets` is written. | Make the component identical for every selected host, or build the conflicting hosts into separate artifacts (one `targets` entry per build). |
+| `AB4105` | error | A component scoped to a subset of the selected hosts (a command or rule with frontmatter `targets`) would be discovered by another selected host that scans the same conventional directory (`commands/` for Claude Code and Cursor, `rules/` for Cursor). Inside one root the file cannot be hidden from that host, so the build refuses rather than leaking it. Skills are never host-scoped — every skill ships to every selected host, and a per-host frontmatter extension that changes its bytes is an `AB4103` collision instead. | Extend the component's `targets` to every selected host that discovers its directory, or build those hosts into separate artifacts. |
+| `AB4106` | error | The selection mixes an adapter registered on an advanced `TargetRegistry` — any target whose adapter is not one of the shipped `claude`, `codex`, `cursor`, `portable` adapters, judged by adapter identity, so a custom adapter registered under one of those names counts as advanced — with one or more other targets. The built-in hosts agree on where the files they cannot share live, which conventional directories each discovers, and one install surface; a third-party adapter has made none of those agreements, so it cannot share a root. Judged on the normalized model, so `validate`, `inspect`, and `build` all report it, on the non-built-in target with its config provenance. A selection of one target never triggers it, whatever the target; unknown names are `AB4100`'s and do not count. | Build that target alone — `targets: ['<name>']` — into its own `--output`, and the remaining targets into another. |
+
 ## Artifact-hosted routed CLI (`AB4765`–`AB4766`)
 
 A generated-mode `src/cli/**` surface compiles into the npm package bin
@@ -696,7 +960,7 @@ framework-owned plugin twice by accident.
 | `AB4723` | error | `tools.rspack` is not an Rspack config object, a mutator function, or an array of both. | Use one of the three Rslib `tools.rspack` forms. |
 | `AB4724` | error | `tools.rsbuild.plugins` supplies a plugin whose `name` matches a framework-owned registration (`rsbuild:react` from `@rsbuild/plugin-react`). The message names the plugin and its package. | Remove the plugin from `tools.rsbuild.plugins`; agent-bundle registers it in every config it synthesizes. |
 
-## Route graph, state, layout, and provider conventions (`AB4800`–`AB4837`, `AB4940`–`AB4942`)
+## Route graph, state, layout, and provider conventions (`AB4800`–`AB4839`, `AB4940`–`AB4942`)
 
 The route-graph compiler discovers conventional route modules
 (`src/mcp/<server>/{tools,resources,prompts,apps}/*`, `src/events/*/*`,
@@ -726,11 +990,14 @@ in every tool that opens it:
   `export const X = '<literal>'` of a module reached through a *relative*
   import (`import { X } from '../constants'`; `.ts`/`.tsx` resolution,
   `.js`-style specifiers map onto their TypeScript source, index modules
-  resolve) inside the project root. The sibling module is parsed, never
-  executed, and only that one hop is followed: the exported const's
-  initializer must itself be a string literal. Because the identifier is a
-  real import, the same value is available at run time (for example in
-  `Agent.Result metadata`).
+  resolve) inside the project root. The referenced modules are parsed, never
+  executed, by the same static resolver that follows `inputSchema`
+  references (below): an alias chain (`export const X = Y`, where `Y` is
+  itself a top-level `const` of that module or a named import from another
+  relative module inside the project) is followed across any number of
+  modules, and the binding at the end of it must be initialized with a
+  string literal. Because the identifier is a real import, the same value is
+  available at run time (for example in `Agent.Result metadata`).
 - **`appResourceUri('<app>')`** imported from `agent-bundle/routes`. The
   compiler resolves the reference to the target App route's static
   `config.resourceUri` while compiling the graph. The App must belong to the
@@ -754,10 +1021,11 @@ in every tool that opens it:
   use the const form when the URI is also needed inside the component.
 
 Anything else — any other identifier, a call, a package import, a relative
-import that leaves the project or does not export a string-literal const —
-is dynamic: the route compiles with an empty config beside a named `AB4806`
-error whose recovery names both reference forms. A module without a `config`
-export compiles silently with an empty config.
+import that leaves the project or whose chain does not end in a
+string-literal `export const` — is dynamic: the route compiles with an empty
+config beside a named `AB4806` error whose recovery names both reference
+forms. A module without a `config` export compiles silently with an empty
+config.
 
 An MCP App route's `config.template` resolves **relative to the route
 module**, the way its imports do (`template: './dashboard.html'`). The older
@@ -797,8 +1065,8 @@ reports the parse failure itself.
 
 Conventional `src/scripts/` routes ship through the same pipeline as
 explicit `scripts` entries (#102 stage 1): a plain module directly under
-`src/scripts/` compiles to `scripts/<name>.mjs` in every selected target
-artifact with `provenance.kind: 'conventional'`. A rendered module
+`src/scripts/` compiles once to `scripts/<name>.mjs` in the plugin root, shared
+by every selected host, with `provenance.kind: 'conventional'`. A rendered module
 (`src/scripts/<name>.tsx`/`.jsx`, #102 stage 3) compiles to the same
 `scripts/<name>.mjs` plus a sibling `scripts/<name>-flight.mjs` react-server
 worker: its async default component receives `{ argv, signal }` and renders
@@ -868,9 +1136,66 @@ project onto kebab-case options (`maxFiles` becomes `--max-files`); booleans
 are flags and must carry `.optional()` or `.default(...)`;
 `config.positionals` names the keys consumed as bare arguments in order,
 where only the trailing positional may be a `z.array(...)` (variadic).
-Anything outside that grammar — identifier references (including shared
-schema constants), unions, nested objects, transforms, coercions — raises
-`AB4814` naming the offending construct.
+Anything outside that grammar — unions, nested objects, transforms,
+coercions — raises `AB4814` naming the offending construct and its position,
+wherever the schema is declared.
+
+The schema does not have to be written inline. `inputSchema` may be bound to
+a reference (`export const inputSchema = statusInputSchema`), and a
+reference may also stand as a property initializer, at the root of a method
+chain (`requestStatusSchema.optional()` — the resolved chain's calls come
+first, then the local ones), or as the argument of `z.array(<ref>)`, of
+`z.enum(<ref>)` (an array literal of string literals; `as const` unwraps),
+of `z.object(<ref>)`/`z.strictObject(<ref>)` (an object literal), or of
+`.default(<ref>)` (a static literal). The static resolver follows a
+reference without executing anything: a same-module top-level `const`
+(exported or not) resolves to its initializer; a named import
+(`import { X as Y } from './rel'`, `.js`-style specifiers mapping onto their
+`.ts`/`.tsx` source) resolves to the target module's `export const X`,
+provided the specifier is relative and resolves inside the project root;
+alias hops (`export const a = b`) are followed to any depth; and every
+visited `<module>#<binding>` is recorded, so revisiting one is a cycle. The
+zod expression at the end of the chain is parsed in the *declaring* module's
+scope under the same grammar, and a grammar violation there is still
+`AB4814`, its position qualified by that module (`z.object at
+src/lib/protocol-schemas.ts:12:5 is outside the bounded argv grammar`). What
+the resolver will not cross: a bare (non-relative) specifier, a module
+outside the project or one that cannot be read, a target module without a
+top-level `export const <name>`, a `let`/`var`, destructured, function,
+class, default-import, or namespace-import binding, an unknown identifier,
+and a dynamic initializer (a bare call, a function, a template literal with
+substitutions). On a CLI route such a reference is `AB4838`, whose message
+prints the chain (`inputSchema -> statusInputSchema
+(src/lib/protocol-schemas.ts) -> requestStatusSchema -> requestStatuses`) and the boundary
+(`imported from "@shared/protocol", which is not a relative module path`); a
+cyclic chain is `AB4839`, whose message prints the cycle. Only CLI routes
+raise them, because there the argv grammar is load-bearing and the command
+cannot compile without it; an MCP tool, resource, prompt, script, or event
+route whose schema the resolver cannot follow compiles silently without a
+static contract, exactly as an out-of-grammar inline schema does, and the
+runtime derives its MCP JSON Schema from the real zod object. `resultSchema`
+may be imported the same way: the route contract check (`AB4810`/`AB4815`)
+requires only that the named export exists, TypeScript types the route
+through the import, and the runtime validates with the real zod object — no
+static result projection exists.
+
+Every statically extracted `inputSchema` is normalized once into a
+`RouteContract` in the compiled graph (`graph.contracts`, sorted by id, absent
+when no route has one): `id` is `contract:<module>#<binding>` — the
+declaration site at the end of the alias chain, so
+`contract:src/lib/protocol-schemas.ts#statusInputSchema` for an imported
+schema and `contract:src/cli/status.tsx#inputSchema` for an inline one;
+`input` is the deep-frozen JSON Schema projection, the same object as each
+bound route's `inputSchema`; `origin` is `{ module, binding }`; and `routes`
+lists the sorted ids of every route bound to it. Each route names its
+contract as `route.contract`. Identity is the declaration site, not the
+content: two routes importing one binding share one contract, while two
+textually equal schemas declared separately stay two contracts. A contract
+declared outside the route's own module joins the route's digest identity;
+graphs whose schemas are all inline keep their recorded digests.
+`agent-bundle inspect --routes` prints the contracts with the graph, and the
+Workbench route detail shows a route's contract origin and the other routes
+sharing it.
 
 | Code | Severity | Trigger |
 | --- | --- | --- |
@@ -880,7 +1205,7 @@ schema constants), unions, nested objects, transforms, coercions — raises
 | `AB4803` | error | A route path derives an unsafe identity segment (each segment must match `^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$`). |
 | `AB4804` | error | A `routes` mode override is not `generated`/`custom`/`command`/`remote` for a server, or `generated`/`conventional` for the CLI. |
 | `AB4805` | error | A route module exports `config` through a rejected declaration shape (`let`/`var`, destructuring, `export { config }`, a function or class, a missing initializer), or the extracted value is not an object. |
-| `AB4806` | error | A route module's `config` initializer is dynamic — the message names the offending construct and position, and the recovery names the two accepted reference forms (a top-level `const` string literal declared locally or `export const`-ed by a relative sibling module, and `appResourceUri('<app>')` from `agent-bundle/routes`). |
+| `AB4806` | error | A route module's `config` initializer is dynamic — the message names the offending construct and position (for a reference the static resolver could not follow, the boundary it stopped at: a non-relative specifier, a module outside the project, a missing `export const`, a non-`const` binding, a non-literal initializer), and the recovery names the two accepted reference forms (a top-level `const` string literal declared locally or reached through `export const` alias hops across any number of relative modules inside the project, and `appResourceUri('<app>')` from `agent-bundle/routes`). |
 | `AB4807` | retired | The stage-1 rendered-script gate. Rendered script routes ship through the Agent renderer pipeline since #102 stage 3; the code is never reused. |
 | `AB4808` | error | A conventional `src/scripts/` route nests below the scripts root; conventional scripts ship as direct children only. Move it up, prefix a path segment with `_`, or declare it under `scripts` in config with a flat name. |
 | `AB4809` | error | A conventional `src/scripts/` route and a configured `scripts` entry share one script identity through different files. Point the config entry at the module to claim it, or rename one of the two. |
@@ -888,7 +1213,7 @@ schema constants), unions, nested objects, transforms, coercions — raises
 | `AB4811` | error | A generated MCP route exports `execute` or `render`; route mode accepts only the async default Server Component contract. |
 | `AB4812` | error | A generated MCP App route has no non-empty static `config.resourceUri`. |
 | `AB4813` | error | The command graph collides: a route is both a command module and a command group, an alias collides with a sibling command, group, or alias, an alias is unsafe or duplicated, or an explicit `bin` entry claims the generated CLI executable's name. |
-| `AB4814` | error | A CLI route's `inputSchema` leaves the bounded argv grammar (the message names the offending construct and position), a key projects onto a reserved or duplicate option name, a required boolean has no flag expression, or `config.positionals` violates the positional policy. |
+| `AB4814` | error | A CLI route's `inputSchema` leaves the bounded argv grammar wherever the schema is declared — inline, or in a relative module the route imports (the message names the offending construct and position, qualified by the declaring module for a resolved import: `z.object at src/lib/protocol-schemas.ts:12:5 is outside the bounded argv grammar`) — a key projects onto a reserved or duplicate option name, a required boolean has no flag expression, or `config.positionals` violates the positional policy. A reference the static resolver cannot follow is `AB4838`, and a cyclic one `AB4839`, not `AB4814`. |
 | `AB4815` | error | A CLI route does not satisfy the routed command contract: missing named `inputSchema`/`resultSchema` exports, a default export that is not an async function, or malformed `config.description`/`aliases`/`exitCode` fields. |
 | `AB4816` | retired | The stage-2 rendered-command gate. Rendered command routes render through the dispatcher since #102 stage 3; the code is never reused. |
 | `AB4817` | error | An event route requires the shared runtime for a target, but no generated MCP entry hosts that runtime and the route does not allow standalone fallback. |
@@ -908,10 +1233,12 @@ schema constants), unions, nested objects, transforms, coercions — raises
 | `AB4831` | error | Two layout modules declare one layout scope (for example `src/layout.ts` beside `src/layout.tsx`). Keep exactly one module per scope. |
 | `AB4832` | error | A server layout (`src/mcp/<server>/layout.*`) names an MCP server that declares no tool, resource, or prompt route modules — the server directory is missing or holds only `apps/` routes, which never take a layout. Add routes under that server directory, move the layout, or rename it `_layout.*` to opt out. A server pinned to `custom`, `command`, or `remote` via `routes.servers.<server>` is skipped entirely: its layout is neither validated (`AB4830`) nor retained, because no generated worker composes it. |
 | `AB4833` | error | `notices.retention` is malformed: `notices` or `retention` is not an object, carries an unknown key, `terminalTtl` is not a positive integer of milliseconds or a duration such as `"7d"`, `"12h"`, `"30m"`, or `"90s"`, `maxTerminal` / `maxJournalBytes` is not a positive integer — or the policy is declared by a project without a conventional `src/state.ts`, which has no co-mounted notice ledger to retain. Omit a field to keep the runtime default (`7d`, `500`, `16777216`). |
-| `AB4834` | warning | `agent-bundle validate` published `.agent-bundle/routes.d.ts` (the project compiles routes or providers) but the root `tsconfig.json` program — resolved like `tsc -p`, including `extends` and one level of project `references` — does not compile it, so `renderRoute` / `renderRouteEvents` type-check route ids as `string` and `input` / `result` as `unknown`. Reported on `tsconfig.json`; never for a project without one. | Add `".agent-bundle/routes.d.ts"` to `tsconfig.json` `include` (not `files`: an `include` entry is inert until the first build publishes the file, while a missing `files` entry is a `tsc` error); `build`, `dev`, and `validate` keep the file current and it stays gitignored. |
+| `AB4834` | warning | `agent-bundle validate` published `.agent-bundle/routes.d.ts` (the project compiles routes or providers) but the root `tsconfig.json` program — resolved like `tsc -p`, including `extends` and one level of project `references` — does not compile it, so `renderRoute` / `renderRouteEvents` type-check route ids as `string` and `input` / `result` as `unknown`. Reported on `tsconfig.json`; never for a project without one. Add `".agent-bundle/routes.d.ts"` to `tsconfig.json` `include` (not `files`: an `include` entry is inert until the first build publishes the file, while a missing `files` entry is a `tsc` error); `build`, `dev`, and `validate` keep the file current and it stays gitignored. |
 | `AB4835` | error | A route's static `config.render` (the render budget of one call, #454) is malformed: `render` is not an object, carries a key other than `maxElapsedMs`, `maxElapsedMs` is not a positive integer of milliseconds, or it exceeds the framework ceiling of `86400000` (24 hours) — or a plain `.ts` CLI command declares one, although it executes without a render session. Reported once per route: on an MCP tool, resource, or prompt route with its server (the tool's projected CLI command inherits the value), or on a `src/cli/**` command route; a route with a rejected budget compiles no command. Omit `render` to keep the runtime default (`60000`). Declare `config.render = { maxElapsedMs: <positive integer ≤ 86400000> }` on a rendered route, or remove it. The budget bounds the framework's render session only: Codex's `tool_timeout_sec` (60 s by default) and any per-server host timeout must be raised by the operator separately, while Claude Code's default per-call wall clock is about 28 hours and its idle timer is kept alive by the `notifications/progress` the projector forwards. |
 | `AB4836` | error | A route's static `config.execution` (MCP task support, #369) is malformed: `execution` is not an object, carries a key other than `taskSupport`, or `taskSupport` is not one of `forbidden`, `optional`, `required` — or a resource or prompt route declares it, although the `2025-11-25` Tasks utility augments `tools/call` only. Reported once per route with its server. Omit `execution` to keep the wire default (`forbidden`: every call is an ordinary request), or declare `config.execution = { taskSupport: 'optional' }` so a task-aware client may receive a `CreateTaskResult` and poll `tasks/get` / `tasks/result` while the render continues, or `'required'` to refuse ordinary calls with JSON-RPC `-32601`. The generated server advertises the value in `tools/list` and declares the `tasks` capability only when at least one tool opted in. |
 | `AB4837` | error | A route module of any kind except an App — a `src/cli/**` command, a `src/scripts/**` script, a tool, resource, or prompt route of a generated server, an event route — a layout, or a provider, or a module one of them reaches through relative value imports, imports `agent-bundle`, `agent-bundle/api`, `agent-bundle/config`, `agent-bundle/eval`, `agent-bundle/rstest`, `agent-bundle/test`, or `agent-bundle/test/browser` as a value (a static import whose binding is read at run time, `import 'agent-bundle/api'`, `import('agent-bundle/api')` with a literal specifier, or a non-type re-export). Those entries carry the compiler, and the generated executable is self-contained (#387): the bundler would inline the compiler and fail on the framework's runtime-relative module references (`Module not found: Can't resolve '../events'`), or the artifact validator would reject the inlined compiler's non-literal dynamic imports with `AB6005` — either way naming a generated file instead of the route (#558). Judged statically when the route graph compiles, so `inspect`, `validate`, `build`, and `dev` all report it, once per module, naming the route and the helper the import lives in. `import type`, `type`-qualified specifiers, and imports used only in type positions are elided by the bundler and never reported; routes of a server that is not generated (`custom`/`command`/`remote`, or an `AB4800` conflict) or of a CLI that is not generated (`conventional`, or an `AB4801` conflict) are never bundled, so they are not judged; likewise a layout that no bundled rendered route composes through (a worker imports only the layouts its routes reach: the tool, resource, and prompt routes of a generated server, the rendered `.tsx` commands of a generated CLI, and rendered `.tsx` scripts), and a provider in a project whose only executables are plain `.ts` scripts, which are bundled from their own source and mount none. Spawn the framework instead of importing it: serve an MCP App from a routed command with `spawnServeApp` from `agent-bundle/serve-app-command`, which runs `agent-bundle serve-app` as a child process; keep other framework calls in host processes (`package.json` scripts, a hand-written `.mjs` run from the checkout). The bundle-safe entries stay allowed: `agent-bundle/routes`, `agent-bundle/launch-env`, `agent-bundle/meta`, `agent-bundle/mcp-apps`, `agent-bundle/mcp-entry`, `agent-bundle/cli-entry`, `agent-bundle/terminal-capability`, and `agent-bundle/serve-app-command`. |
+| `AB4838` | error | A CLI route's `inputSchema` references a binding the static resolver cannot follow. The message is `CLI route <path> inputSchema: <chain> <reason>.` — the chain is the reference path from `inputSchema`, each step `<binding>`, or `<binding> (<module>)` when it crosses into another module (`inputSchema -> statusInputSchema (src/lib/protocol-schemas.ts) -> requestStatusSchema -> requestStatuses`), and the reason names the boundary: a specifier that `is not a relative module path`, one that `resolves outside the project` or `does not resolve to a module inside the project` (missing or unreadable), a target module that does not declare a top-level `export const <name>`, a binding that is not a top-level `const` (`let`/`var`, destructuring, a function, a class, a default or namespace import — the message says what it is), an identifier that `is neither a top-level const in this module nor a named import from a relative module`, or a dynamic initializer — one that is neither a method chain, an object or array literal, nor a static literal (`whose initializer is a call expression`, `a function expression`, `a template literal with substitutions`). Reported on the route module; the recovery names the supported forms — relative imports inside the project, `export const`, alias chains — then says to inspect again. Only CLI routes raise it, because only there the static contract is load-bearing: an MCP, script, or event route whose schema the resolver cannot follow compiles without a static contract, as an out-of-grammar inline schema does, and the runtime derives its MCP JSON Schema from the real zod object. A reference that resolves but whose schema leaves the grammar is `AB4814`. |
+| `AB4839` | error | A CLI route's `inputSchema` reference chain is cyclic — `a` → `b` → `a`, within one module or across several: every visited `<module>#<binding>` is recorded and revisiting one stops the walk. The message is `CLI route <path> inputSchema: <chain> is a reference cycle.` and prints the cycle; it is reported on the route module, with the same recovery and the same CLI-only rule as `AB4838`. |
 | `AB4940` | error | A conventional provider module has no default export or its default export is not a function. Default-export a factory receiving `{ invocation, plugin, signal }`. |
 | `AB4941` | error | Two provider filenames derive the same camel-cased provider key. Rename one file so every provider key is unique. |
 | `AB4942` | error | A provider filename derives the reserved `processLifetime` key. Rename the file so its camel-cased key does not collide with the framework-owned provider. |
@@ -955,7 +1282,7 @@ host CLI, repair a bundle, or perform a live protocol exchange.
 | Code | Severity | Trigger | Recovery |
 | --- | --- | --- | --- |
 | `AB7319` | error | A host tree resolved from `doctor --from` violates its pinned document schemas or process-free loader rules. The message retains the originating build-validator code and detail. | Rebuild that host bundle from valid source bytes, then rerun Doctor. |
-| `AB7320` | error / info | Error when a `.cursor-plugin/plugin.json` install violates Cursor's pinned document schemas or token-location rules (the hooks document checked is the one the manifest `hooks` field names, so a unified `plugin` bundle's Claude-format `hooks/hooks.json` beside its `hooks/hooks-cursor.json` is not a finding), when a root `plugin.json` install that declares an Agent Plugins `$schema` violates the pinned Agent Plugins 1.0.0 contract (`AB6035`–`AB6037`, retained in the message), or when any local plugin contains a symlink that escapes `~/.cursor/plugins/local`; the inventory entry is reported as `corrupt`. Info naming the contract applied to an Agent Plugins install, or stating that a `.claude-plugin/plugin.json` (or schema-less root `plugin.json`) install has no Cursor-side pinned static document contract; loader-recognized entries remain `installed`. | Reinstall an invalid Cursor plugin, rebuild an invalid portable bundle, or repair an escaping symlink. For other manifest flavors, use that ecosystem's validator when static document proof is required. |
+| `AB7320` | error / info | Error when a `.cursor-plugin/plugin.json` install violates Cursor's pinned document schemas or token-location rules (the hooks document checked is the one the manifest `hooks` field names — `.cursor-plugin/hooks.json` — so a Claude-format `hooks/hooks.json` beside it in a composite root is not a finding), when a root `plugin.json` install that declares an Agent Plugins `$schema` violates the pinned Agent Plugins 1.0.0 contract (`AB6035`–`AB6037`, retained in the message), or when any local plugin contains a symlink that escapes `~/.cursor/plugins/local`; the inventory entry is reported as `corrupt`. Info naming the contract applied to an Agent Plugins install, or stating that a `.claude-plugin/plugin.json` (or schema-less root `plugin.json`) install has no Cursor-side pinned static document contract; loader-recognized entries remain `installed`. | Reinstall an invalid Cursor plugin, rebuild an invalid portable bundle, or repair an escaping symlink. For other manifest flavors, use that ecosystem's validator when static document proof is required. |
 
 ## Install replacement and Doctor install comparison (`AB7005`, `AB7307`–`AB7309`, `AB7321`)
 
@@ -966,7 +1293,7 @@ install receipt, `.agent-bundle-install.json`, beside the plugin manifest:
 
 ```json
 {
-  "contentHash": "<sha256 over path\\0mode\\0bytes\\0 for every owned file; mode is x when executable>",
+  "contentHash": "<sha256 over path\\0mode\\0bytes\\0 per owned file; x = executable>",
   "directories": [".cursor-plugin", "..."],
   "files": [".cursor-plugin/plugin.json", "INSTALL.md", "install.mjs", "..."],
   "format": "agent-bundle-install-receipt/2",
@@ -1289,6 +1616,10 @@ that already committed; it surfaces as one `AB7103` **warning** on the
 succeeded build attempt, and the package build retries on the next
 invalidation. See `docs/entry-conventions.md` for the dev-watch contract.
 
+| Code | Severity | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB7103` | warning | `Package build (bin/lib) failed during development rebuild: <error>` — the framework-owned package build threw during a rebuild; the artifact epoch that committed stays live. `Unable to remove stale package build outputs: <error>` — the project no longer declares a package build and the outputs this session last published could not be removed. `sourcePath` is the project's config file. | Read the wrapped error; the package build runs again on the next invalidation. |
+
 ## Read-only Doctor Cursor hook registration and marketplace staging (`AB7322`–`AB7324`)
 
 Cursor delivers a plugin's hooks from its `.cursor-plugin/plugin.json` `hooks`
@@ -1329,7 +1660,7 @@ that array instead of treating every listed row as a healthy install. The
 observed instance is the manifest `hooks` pointer at the auto-loaded
 `hooks/hooks.json` ("Hook load failed: Duplicate hooks file detected …
 manifest.hooks should only reference additional hook files"), which the
-`claude` and unified `plugin` targets no longer emit (#470) and which the
+`claude` projection no longer emits (#470) and which the
 pinned Claude `plugin` schema now rejects (`AB6012` at `/hooks`).
 
 | Code | Severity | Trigger | Recovery |
@@ -1386,3 +1717,242 @@ placeholders itself.
 | Code | Severity | Meaning | Recovery |
 | --- | --- | --- | --- |
 | `AB7326` | info / warning / error | Info (`launch.state = expanded`): the receipt's expansion still describes the installed copy — same plugin root, existing data directory, no placeholder left, absolute `cwd` and plugin-root `command`/`args` paths that exist, `PLUGIN_ROOT` / `PLUGIN_DATA` equal to the recorded values. Warning (`unexpanded`): an Agent Plugins install without a recorded expansion whose stdio servers still rely on the spec forms Cursor does not resolve (the message lists the forms per server); Cursor reports `spawn … ENOENT` / `MODULE_NOT_FOUND` for them. Error (`drifted`, entry `corrupt`): the installed `mcp.json` is not byte-identical to the expansion Doctor recomputes from the recorded document (edited, replaced, or removed after install), the recorded expansion names another plugin root (the copy was moved or duplicated), the data directory or an expanded path no longer exists, or the environment no longer carries the recorded values. Only a byte-identical copy has its recorded document validated by `AB7320`; a drifted copy is validated as the bytes on disk. Packages without stdio servers, and copies already carrying absolute paths with the §9.1 variables, produce no finding. | Reinstall with the bundle's emitted `install.mjs` at the copy's current location; the Cursor-target (`.cursor-plugin/plugin.json`) bundle is never rewritten and is not subject to this check. |
+
+## Built-artifact validation (`AB6000`–`AB6018`, `AB6023`–`AB6025`)
+
+`agent-bundle build` validates the staged tree before it writes the manifest
+(`validateArtifactFiles`: filesystem entries, generated JSON documents, and
+generated JavaScript modules), validates the finished artifact against its
+manifest, and re-checks the validated snapshot after the staging tree is
+renamed into place. `agent-bundle validate --artifact <dir>` runs the same
+validator over a built directory, `agent-bundle dev` runs it over every
+rebuild before publishing the epoch, and the Workbench artifact inspection
+runs it over each epoch it reads (`AB6200`). Every code here is an **error**
+whose `recovery` is fixed per code in the artifact diagnostic registry
+(`artifactDiagnosticRecoveries`); `generatedPath` names the offending artifact
+file (`agent-bundle.manifest.json` for manifest-level findings) and `target`
+names the host target namespace when the check is per target.
+
+| Code | Severity | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB6000` | error | `Artifact root is not a readable directory.` — the artifact root cannot be walked; `Artifact manifest is missing or cannot be read.` — the tree could not be inspected, or `agent-bundle.manifest.json` is absent, is not a regular file, or could not be read (the manifest is read between two identity checks, so a manifest replaced mid-read reports here too). Validation stops at this code. | Restore a readable artifact root and canonical manifest, then rebuild the artifact. |
+| `AB6001` | error | `Artifact manifest is not a strict canonical manifest.` — `agent-bundle.manifest.json` does not parse as a strict canonical artifact manifest. `Artifact manifest changed during validation.` — its bytes or identity differ between the first read and the re-read after validation. | Regenerate the strict canonical manifest without concurrent writes, then rerun validation. |
+| `AB6002`–`AB6003` | error | Reserved: both codes are declared in the artifact diagnostic registry, but no validator emits either today. | `AB6002`: Rebuild the artifact from complete project source, then rerun validation. `AB6003`: Rebuild the artifact with canonical generated output, then rerun validation. |
+| `AB6004` | error | `Artifact files do not match the manifest.` — the regular files on disk differ from the manifest file table (a path, byte length, mode, or SHA-256; a missing or unmanifested file). `Artifact file changed during validation: "<path>".` — a file differed between the initial and final inspection, or between a validated staging tree and its re-check after `build` renamed it into place. `Artifact file table changed during validation.` — the final inspection could not be taken. | Rebuild the artifact so its file table and contents match the manifest. |
+| `AB6005` | error | `Generated JavaScript import from "<module>" <finding>.` — an emitted JavaScript module — a host-pack module or a package build `dist` bundle (`dist/bin/*.js`, the Flight workers, the `lib` entry), prebuilt payloads excepted — has an import that is neither a Node built-in nor a relative or `file:` specifier resolving to a listed regular file inside its tree (`uses unsupported specifier`, `is missing`, `resolves outside the artifact root`, `is not listed in the artifact manifest`, `does not resolve to a regular file`, `references invalid JSON`, `uses unsupported target`), or the module cannot be read, has invalid syntax, or has a non-literal dynamic import; a `dist` finding names `dist/<path>`. The walk covers `import` specifiers only — `require`, `createRequire`, and `import.meta.resolve` calls are the prepack inventory's business (`AB7014`). | Bundle every JavaScript dependency into the artifact, then rebuild it. |
+| `AB6006` | error | `Generated JSON cannot be parsed.` — a `.json` file in the artifact is not valid JSON (prebuilt payload files are exempt). Doctor's Claude document lane reports the same code inside an `AB7319` message for a Claude bundle document that is unreadable or not valid JSON. | Regenerate the affected JSON document as valid JSON, then rebuild the artifact. |
+| `AB6007` | error | `MCP manifest references missing generated server "<path>".` — a root-level MCP manifest (pre-manifest pass) or a target's MCP manifest names a local server entry that the artifact does not contain. | Repair MCP manifest references to generated servers, then rebuild the artifact. |
+| `AB6008` | error | `Artifact Agent Skills provenance does not match the pinned schema contract.` — the manifest's `agentSkills` schema SHA-256, source revision, or specification differs from the framework's pinned Agent Skills revision. | Rebuild the artifact with the pinned Agent Skills contract. |
+| `AB6009` | error | `Artifact declares unknown target "<name>".` — a manifest target is not registered in the target registry the validator was given (the project's configured registry for `build`, `validate --artifact`, and `dev`). | Rebuild the artifact with a registered target. |
+| `AB6010` | error | `Artifact metadata for target "<name>" does not match its registered contract.` — the manifest's per-target metadata (contract version, kind, artifact layout) differs from the adapter registered under that name. | Rebuild the artifact with the current target registry. |
+| `AB6011` | error | `Target "<name>" is missing required document "<path>".` — a document the target's artifact-validation contract marks required (for example a host manifest) is absent from the target namespace. Also reported inside Doctor's `AB7319` message for a missing required Claude bundle document. | Generate the required target document, then rebuild the artifact. |
+| `AB6012` | error | `Target "<name>" document "<path>" is invalid for schema "<schema>" at <pointer>: <issue>.` — a generated host document fails its vendored pinned schema (only the first issue is reported per document); unparsable documents are skipped here and reported as `AB6006`. Also reported inside Doctor's `AB7319` message for a Claude document that fails its schema or whose contract pattern could not be listed. | Correct the target document source so it satisfies its schema, then rebuild the artifact. |
+| `AB6013` | error | `Artifact contains unsupported <kind> filesystem entry "<path>".` — the tree holds a symlink or another entry that is neither a regular file nor a directory, or such an entry appeared between the initial and final inspection. | Remove unsupported filesystem entries and rebuild the artifact. |
+| `AB6014` | error | Ownership and layout: `Artifact file "<path>" is outside declared target emitted layouts.` (a manifested file under a target that no emitted layout, hook manifest, MCP runtime manifest, validation contract, or prebuilt entry accounts for), `Artifact directory "<path>" does not name a declared target namespace.` (a root directory that is not a manifest target), `Artifact directory "<path>" is empty.`, `Declared target "<name>" has no emitted namespace.`, or `Artifact directory changed during validation: "<path>".` | Rebuild the artifact with files only in declared target namespaces. |
+| `AB6015` | error | Emitted Skill layout and frontmatter: a Skill document outside the canonical `skills/<name>/SKILL.md` layout, a Skill resource directory without its `SKILL.md`, Skill Markdown that cannot be read, does not start with YAML frontmatter, has invalid or schema-violating frontmatter (`Emitted Skill frontmatter <location> <issue>.`), or whose frontmatter `name` differs from its directory name. | Restore canonical Skill Markdown and copied resources, then rebuild the artifact. |
+| `AB6016` | error | `Emitted Skill reference "<ref>" escapes its Skill root.` or `Emitted Skill references missing regular resource "<ref>".` — a relative reference inside a `SKILL.md` body points outside the Skill directory or at a file the artifact does not contain as a regular file. | Copy every referenced Skill resource inside its Skill root, then rebuild the artifact. |
+| `AB6017` | error | Target MCP manifest coherence (`generatedPath` is the target's MCP manifest): the manifest is not strict JSON or does not contain only modern supported servers; a server's runtime values cannot be resolved; a `cwd`, `command`, or `args` path escapes the target, references a missing or unmanifested file, or names a non-executable command file; or a compiler-emitted MCP entry is referenced by no server or by more than one. | Rebuild the artifact so every target MCP manifest references its exact compiler outputs. |
+| `AB6018` | error | Hook coherence: `agent-bundle.hooks.json` is not strict canonical hook index data; an entry selects an undeclared or hook-incompatible target, or references a missing or invalid target wrapper; a target in the index is missing its native hook manifest, or that manifest is invalid for command enumeration; an indexed hook does not map to exactly one native command, or a native command is not indexed (or indexed more than once). | Rebuild the artifact so native hook commands and hook metadata agree. |
+| `AB6023` | error | `Artifact is missing required install surface "INSTALL.md".` — the selection includes a built-in host (`claude`, `codex`, `cursor`, `portable`, judged by adapter identity, so an advanced registry's own adapter named like one requires nothing) but the composite root has no `INSTALL.md`; the surface is emitted once at the root, never per target. | Rebuild the artifact so the root carries its generated `INSTALL.md`. |
+| `AB6024` | error | `Artifact is missing required install surface "install.mjs".` — the selection includes the shipped `cursor` or `portable` adapter (judged by adapter identity, like `AB6023`) but the composite root has no `install.mjs` (a root selecting only `claude` and/or `codex` requires none). | Rebuild the artifact so the root carries its generated `install.mjs`. |
+| `AB6025` | error | `Plugin logo "<logo>" escapes the artifact for target "<name>".` or `Plugin logo "<logo>" references missing artifact file "<path>".` — a `plugin.json` `logo` string resolves outside the target directory or to a file the artifact does not contain. | Rebuild the artifact so every manifest-declared logo path copies into the deploy tree. |
+
+## Workbench artifact inspection (`AB6200`–`AB6202`)
+
+The Workbench artifact pages (`/api/artifacts/epochs/<id>`,
+`/api/artifacts/diff`) read published epochs through the artifact inspection
+service. Each refusal is an `ArtifactInspectionServiceError` whose
+`diagnostics` carry one of these **error** codes; the route reports the
+service failure as `AB8064`, `AB8065`, or `AB8066` and forwards the
+diagnostics in the response body.
+
+| Code | Severity | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB6200` | error | `Artifact inspection could not validate the published artifact.` — the strict artifact validator threw over the epoch; `Artifact file provenance references an unknown project source input.` — an output's `sourceInputs` name an input the manifest project does not declare; `Artifact manifest project inputs are invalid.` — the manifest's project inputs are structurally invalid. An epoch whose validation merely reports diagnostics is refused with those diagnostics instead of this code. | Rebuild the epoch from a project whose artifact validates cleanly. |
+| `AB6201` | error | `Artifact inspection could not release every acquired epoch reference.` — releasing an epoch reference after an inspection or diff failed. | None in the project: the failure is internal to the development server's epoch bookkeeping. |
+| `AB6202` | error | Runtime metadata derived from the validated snapshot is unsafe: an MCP server's `entryPaths` name a file outside its target or absent from the manifest (`Validated MCP evidence references an unmanifested target file.`), or another runtime-evidence check named in the message failed. | Rebuild the epoch so its MCP runtime evidence references manifested target files. |
+
+## Host installation, uninstallation, and project preparation (`AB7000`–`AB7004`)
+
+The `AB7000`–`AB7004` codes are shared by two families of emitters with
+distinct meanings. `agent-bundle install` and `agent-bundle uninstall`
+(`install/install.ts`, `install/uninstall.ts`, `install/cursor-marketplace.ts`)
+throw them as `DiagnosticError`s with `target` set to the host; the
+`install-entry` CLI wraps any non-diagnostic failure as `AB7004`. The
+development project service (`dev/project-service.ts`) and `inspectProject`
+emit them as **error** diagnostics on a failed preparation with `sourcePath`
+set to the config file and a fixed `recovery` ending in "then inspect again".
+The install-time collision (`AB7005`) and load-refusal (`AB7006`) codes, and
+the uninstall refusals `AB7007`–`AB7009`, have their own sections above.
+
+| Code | Severity | Meaning | Recovery |
+| --- | --- | --- | --- |
+| `AB7000` | error | Install/uninstall: `Unsupported install host <host>.` / `Unsupported uninstall host <host>.` — the exhaustive host switch received a host that is not `claude`, `codex`, or `cursor`. Project preparation: `Unable to load project source.` — evaluating the configuration module or discovering source threw before validation. | Install: pass `--host claude`, `codex`, or `cursor`. Preparation: fix the Agent Bundle configuration and source files, then inspect again. |
+| `AB7001` | error | Install/uninstall: the bundle identity is unreadable — no host manifest directly under the `--from` directory (the composite root is every selected host's bundle root, so `<from>/<host>` is never probed); a manifest that is not a JSON object or lacks a nonempty required key; a Cursor plugin name that is not a safe local name; a Claude or Codex bundle with no marketplace identity. Project preparation: `Unable to validate project source.`, `Unable to normalize project source.`, `Unable to validate normalized project.`, or `Unable to create project context.` — the source validator, normalizer, adapter planner, or project-context factory threw; `inspectProject` adds `Unable to prepare inspection plans.` and `Unable to compose the bundler inspection.` | Install: point `--from` at a built bundle whose host manifest carries the fields the message names. Preparation: fix normalized project configuration and source references, then inspect again. |
+| `AB7002` | error | Install/uninstall: `<host> is not installed or is not available on PATH.`, `Cursor is not installed in "<root>".` / `Cursor home "<root>" is not a directory.`, or `git` is missing for `--mode marketplace`. Project preparation: `Unable to prepare project paths.` — the project root or a configured output root could not be resolved inside the project. | Install: install the host CLI the message names; for the `git` refusal, install git or use `--mode local`. Preparation: ensure the project root and configured output roots are readable and remain inside the project root, then inspect again. |
+| `AB7003` | error | Install/uninstall scope and mode refusals: `--mode` on a host other than `cursor`; `--scope` other than `user` for Codex or Cursor; `--mode marketplace` without `.cursor-plugin/plugin.json` or with bundle-internal Git metadata. Project preparation: `Unable to snapshot project source.` — the source snapshot could not be taken. | Install: use `--scope user`, drop `--mode` for non-Cursor hosts, or — as the message says — stage a Cursor Plugin bundle without `.git`, or use `--mode local`. Preparation: ensure project source files and ignore rules are readable and remain inside the project root, then inspect again. |
+| `AB7004` | error | Install/uninstall command and safety failures: `<host> plugin <operation> failed: <detail>` (a host CLI verb exited nonzero); `<host> plugin list --json` was unusable when `--replace` or an uninstall needed it; an installed copy could not be compared and `--replace` was not given; a rollback after a failed install also failed (the message lists the host verbs to run by hand); a Cursor marketplace `git` step failed or the committed tree differs from the staged bytes; any non-diagnostic error thrown by a Cursor installer or reaching the `install-entry` CLI. `inspectProject`: `Requested inspection target "<name>" is not selected for this project.` | Install: read the host's detail in the message, then rerun (with `--replace` where the message says so). Inspection: choose a target selected by the project configuration, then inspect again. |
+
+## Development server (`AB80xx`)
+
+`agent-bundle dev` serves the Workbench and its JSON API from one loopback
+foreground server (`dev/foreground-server.ts`) whose route modules under
+`dev/**` share the helpers in `dev/http.ts`. Every refusal is a request
+diagnostic — `{ code, message, status }` — written as the JSON body
+`{ "diagnostic": { "code", "message" } }` with the listed HTTP status; a
+thrown request diagnostic anywhere in a handler is written the same way. The
+codes are fixed per route module, so the same code covers every message the
+module emits with it. The Workbench browser clients reuse the owning route's
+"could not be completed" code (`AB8019`, `AB8033`, `AB8043`, `AB8063`,
+`AB8073`, `AB8083`, `AB8093`, `AB8123`) for a response they cannot decode or an
+HTTP failure that carried no diagnostic body, `AB8015`–`AB8017` for a request
+the browser refuses to send, and `AB8003` when the page origin is not one the
+foreground server accepts.
+
+### Server configuration and shared transport
+
+| Code | Status | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB8000` | — | `ForegroundServerError` thrown while constructing the server: the bind host is not `127.0.0.1` or `::1`, the port is not a safe TCP port number, the instance ID is empty, longer than 128 characters, or not trimmed, or a `--workbench-dev-origin` is not a loopback `http(s)` origin such as `http://localhost:3000`. | Pass a valid `--port` and loopback `--workbench-dev-origin` to `agent-bundle dev`; host and instance ID are programmatic `ForegroundServer` options. |
+| `AB8001` | 400 | `Request body must be valid JSON.` — a JSON route body did not parse (or, through `readJsonBody`, contained duplicate keys). | Send a single well-formed JSON document. |
+| `AB8002` | 400 | `Request body may contain only an optional paths array.` — the `POST /api/project/rebuild` body is not an object, has a key other than `paths`, or lists a value that is not a project-relative path. | Send `{}` or `{ "paths": ["<project-relative path>", …] }`. |
+| `AB8003` | 403 | `Request origin is not this foreground server.` — a browser route received an `Origin` header that is neither the foreground origin nor a listed `--workbench-dev-origin`, or no `Origin` and no `sec-fetch-site: same-origin`; on `/mcp`, an `Origin` that is not exactly the foreground origin. Also emitted by `agent-bundle serve-app` (`Request origin is not this MCP App host.`). | Open the Workbench at the foreground URL, or start `agent-bundle dev` with `--workbench-dev-origin <origin>` to allow a separate dev-server origin. |
+| `AB8004` | 403 | `A valid same-session token is required.` — a mutating browser route lacks the `x-agent-bundle-session` header matching this server's session token; `A valid foreground session cookie is required.` — the `/api/project/events` stream lacks the per-origin session cookie issued by `/api/project/session`. Also emitted by `agent-bundle serve-app` (`A valid MCP App host token is required.`). | Reload the Workbench so it re-bootstraps its session from `/api/project/session`; a token or cookie issued by an earlier server instance no longer matches. |
+| `AB8005` | 400 | `Asset path is not valid.` — a static asset request has no leading `/`, a segment that does not URL-decode, or a segment that is empty, `.`, `..`, or contains `/`, `\`, or NUL. | Request the asset by its plain path under the Workbench root. |
+| `AB8006` | 400 | `/api/project/events` cursor: `Project event cursor must be singular.` (more than one `after` query value), `… must be a non-negative integer.`, or `… must not be ahead of the project event stream.` (a `Last-Event-ID` header or `after` value beyond the latest sequence). | Reconnect with a single `after` value or `Last-Event-ID` no later than the last sequence received, or none to replay from the start. |
+| `AB8007` | 404 / 405 / 500 | `Route was not found.` — no asset at the path, or `/mcp` when the Agent API is not composed; `Route does not accept this method.` — a route received a method it does not serve; `Request could not be completed.` — a handler threw something other than a request diagnostic. | Check the method and path; for a 500, read the dev-server log for the underlying error. |
+| `AB8008` | 400 | `Request host is not this foreground server.` — the `Host` header does not name this server's loopback URL. | Address the server by the URL `agent-bundle dev` printed. |
+| `AB8009` | 415 | `Request body must use application/json.` — a JSON route received a body without an `application/json` content type. | Send `content-type: application/json`. |
+| `AB8010` | 413 | `Request body exceeds 64 KiB.` — the default `readBody` bound; the runtime MCP routes apply the same bound. Playground routes raise a 1 MiB bound under `AB8085`. | Send a smaller body. |
+| `AB8011` | 404 | `Skill workbench service is not available.` — a `/api/skills/**` route was requested but the server was composed without the Skill document service. | Nothing to fix in the project; the Skill pages need a server composed with the Skill service. |
+| `AB8012` | 400 | `Skill route path is not valid.` — a `/api/skills/**` path does not match the source or generated Skill tree, document, or resource shapes, or a segment does not decode. | Use the Skill links the Workbench renders. |
+
+### MCP sessions (`/api/mcp/sessions/**`)
+
+| Code | Status | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB8013` | 400 | `MCP session route path is not valid.` — `/api/mcp` or a path under it that is not `sessions`, `sessions/<id>`, or `sessions/<id>/<operation>` with a known operation (`connection`, `catalog`, `config`, `operations`, `trace`, `stream`, `restart`, `cancel`), or a segment that does not decode; the App routes claim `sessions/<id>/apps` and `apps/**` first. | Use the session routes the Workbench MCP page issues. |
+| `AB8014` | 404 / 503 | `MCP session routes are not available.` — 404 when the server was composed without the MCP session service, 503 after the routes closed for shutdown. | Restart `agent-bundle dev`. |
+| `AB8015` | 404 | `MCP session is not available.` — the session id is unknown, or the session was closed while the request was in flight. | Open a new session from the MCP page. |
+| `AB8016` | 400 | `MCP session request has an invalid shape.` — the request body does not match the operation's expected fields. | Send the fields the operation defines. |
+| `AB8017` | 400 / 409 | `MCP session trace cursor is not valid.` (400) — the trace `after` cursor is not a single non-negative safe integer; `MCP session trace cursor is ahead of the current trace.` (409). | Resume from a cursor no later than the trace's current sequence. |
+| `AB8018` | 409 | `MCP session epoch is no longer available; the project changed underneath the session.` — the epoch the session was opened against is no longer available after the project changed. | Open a new session against the current epoch. |
+| `AB8019` | 400 / 502 | `MCP session could not be opened.` (400, on create) or `MCP session operation could not be completed.` (502) — the service threw something the route does not map to a more specific code. | Read the dev-server log for the underlying error, then retry. |
+
+### MCP App previews (`/api/mcp/apps/**`, `/api/mcp/sessions/<id>/apps`, `/api/runtime/apps/**`)
+
+| Code | Status | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB8020` | 400 / 404 | `MCP App route path is not valid.` — an App route whose binding id or operation segment is missing or does not decode, or an unknown operation under `/api/mcp/apps/<binding>/`. `agent-bundle serve-app` answers unknown paths with `Not found.` (404) under the same code. | Use the App routes the Workbench MCP page issues. |
+| `AB8021` | 400 | `MCP App request has an invalid shape.` — the request body does not match the operation's expected fields. | Send the fields the operation defines. |
+| `AB8022` | 404 / 410 / 503 | `MCP App routes are not available.` — 404 without the preview service, 503 after shutdown; `MCP App preview is not available.` (404) — the binding id is unknown; `Runtime MCP App preview was revoked.` (410) — the runtime binding has been revoked. `agent-bundle serve-app` reports `MCP App host is not ready.` (503) before its host finishes starting. | Re-open the App preview; after 410 the page must create a new binding. |
+| `AB8023` | 413 / 502 | `MCP App operation could not be completed.` (502) — an unmapped service failure; `Runtime MCP App operation exceeded its 30 second deadline.` (502); `Runtime MCP App operation response could not be encoded.` (502) or `… exceeds its transport bound.` (413) — the result of a runtime App operation could not cross the bounded host-to-App channel. | Read the dev-server log; shrink or split the App operation result if the bound was hit. |
+
+### Hook playground (`/api/hooks/**`)
+
+| Code | Status | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB8030` | 400 | `Hook playground route path is not valid.` — an unknown path under `/api/hooks/` or a segment that does not decode. | Use the routes the Workbench Hooks page issues. |
+| `AB8031` | 404 / 503 | `Hook playground routes are not available.` — 404 without the hook playground service, 503 once shutdown has begun. | Restart `agent-bundle dev`. |
+| `AB8032` | 400 | `Hook playground request has an invalid shape.` — the request body does not match the operation's expected fields. | Send the fields the operation defines. |
+| `AB8033` | 502 | `Hook playground operation could not be completed.` — the service threw something other than a request diagnostic. | Read the dev-server log for the underlying error, then retry. |
+| `AB8034` | — | `HookPlaygroundCloseError`: `Hook playground routes could not drain every in-flight operation.` — thrown from the routes' `close()` during server shutdown when a cancelled operation failed to settle; the foreground server records it as a `hook-playground` close failure rather than an HTTP response. `failures` lists each operation and its error. | Nothing to fix in the project; inspect the listed errors if shutdown reports them. |
+
+### Prompt playground (`/api/playground/**`)
+
+| Code | Status | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB8040` | 400 | `Playground route path is not valid.` — an unknown path under `/api/playground/` or a segment that does not decode. | Use the routes the Workbench Playground page issues. |
+| `AB8041` | 404 / 503 | `Playground routes are not available.` — 404 without the playground service, 503 after the routes closed. | Restart `agent-bundle dev`. |
+| `AB8042` | 400 | `Playground request has an invalid shape.` — the request body or query does not match the operation's expected fields. | Send the fields the operation defines. |
+| `AB8043` | 502 | `Playground operation could not be completed.` — the service threw something the route does not map to a `PlaygroundServiceError` code below. | Read the dev-server log for the underlying error, then retry. |
+| `AB8044` | 404 | `Playground session was not found.` — the store holds no session with that id. | Open a session this project recorded, or start a new one. |
+| `AB8045` | 409 | `Playground session already exists.` — the store already holds a session with the requested id. | Create the session with a fresh id. |
+| `AB8046` | 409 | `Playground session is already finalized.` — a write against a session the store has finalized. | Start a new session. |
+| `AB8047` | 409 | `Playground session is owned by another writer.` — the session's owner lock is held by another foreground service, could not be acquired, or changed during admission or cleanup. | Continue in the `agent-bundle dev` instance that owns the session, or start a new one. |
+| `AB8048` | 409 | `Playground cursor is ahead of persisted history.` — a replay or subscription cursor beyond the session's persisted history. | Resume from a cursor no later than the persisted history. |
+| `AB8049` | 400 | `Playground cursor is not valid.` — the `after` cursor is not a single non-negative safe integer. | Send one non-negative integer cursor. |
+| `AB8050` | 400 | `Playground request has an invalid value.` — a field the route accepted is refused by the store: not a nonempty string, not JSON-compatible (cycles, accessors, non-finite numbers), an unsupported event source, or an outcome or event that is not an object. | Send JSON-compatible values with the shapes the operation defines. |
+| `AB8051` | 400 | `Playground session id is not valid.` — the id is not a path-safe identifier. | Use the session id the create response returned. |
+| `AB8052` | 400 | `A durable playground outcome is required first.` — promoting a session to a draft eval requires a finalized or closed session with a recorded outcome; a finalized session missing its outcome reports here too. | Let the session finalize with an outcome before promoting it. |
+| `AB8053` | 400 | `Playground values may not carry provider credentials.` — a record to be persisted contains provider credential material. | Remove the credential material from the value. |
+| `AB8054` | 503 | `Playground service is closed.` — the store is shutting down. | Restart `agent-bundle dev`. |
+| `AB8055` | 500 | `Playground store is corrupt.` — the store's owner lock is malformed or invalid, or its pending index could not be pinned safely. | Remove or repair the store under `.agent-bundle/playground`, then restart `agent-bundle dev`. |
+| `AB8056` | 500 | `Playground storage root is not valid.` — `.agent-bundle/playground` is not an absolute, project-contained real directory (a symbolic link, a root outside the project, or a session or index root resolving outside the storage root). | Restore `.agent-bundle/playground` as a real directory inside the project root. |
+| `AB8057` | 409 | `Playground session belongs to a different project.` — the persisted session records another project's identity. | Open the session from the project that created it. |
+
+### Artifact epochs (`/api/artifacts/**`)
+
+| Code | Status | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB8060` | 400 | `Artifact route path is not valid.` — a path under `/api/artifacts/` other than `diff` or `epochs/<id>`, or a segment that does not decode. | Use the artifact links the Workbench renders. |
+| `AB8061` | 404 / 503 | `Artifact routes are not available.` — 404 without the inspection service, 503 after the routes closed. | Restart `agent-bundle dev`. |
+| `AB8062` | 400 | `Artifact request has an invalid shape.` — `/api/artifacts/diff` lacks exactly one nonempty `base` and `candidate` query value or carries other keys; an epoch request carries a query string. | Request `/api/artifacts/diff?base=<id>&candidate=<id>` or `/api/artifacts/epochs/<id>` with no query. |
+| `AB8063` | 502 | `Artifact inspection could not be completed.` — the service threw something other than an inspection or epoch-store error. | Read the dev-server log for the underlying error, then retry. |
+| `AB8064` | 422 | `Artifact epoch failed validation.` — the epoch's artifact reports validation diagnostics, or the inspection service refused it with `AB6200`; the response body carries those diagnostics. | Fix the reported artifact diagnostics; the next rebuild publishes a valid epoch. |
+| `AB8065` | 422 | `Artifact runtime metadata is not valid.` — the inspection service refused the epoch with `AB6202`. | Rebuild the epoch so its MCP runtime evidence references manifested target files. |
+| `AB8066` | 500 | `Artifact epoch reference could not be released.` — the inspection service reported `AB6201`. | None in the project: the failure is internal to the development server's epoch bookkeeping. |
+| `AB8067` | 404 | `Artifact epoch was not found.` — the epoch id names no published epoch. | Pick an epoch from the current epoch list. |
+| `AB8068` | 400 | `Artifact epoch id is not valid.` — the epoch store rejected the id's shape. | Use an epoch id the Workbench lists. |
+
+### Evals (`/api/evals/**`)
+
+| Code | Status | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB8070` | 400 | `Eval route path is not valid.` — an unknown path under `/api/evals/` or a segment that does not decode. | Use the routes the Workbench Evals page issues. |
+| `AB8071` | 404 / 503 | `Eval routes are not available.` — 404 without the eval service, 503 once shutdown has begun. | Restart `agent-bundle dev`. |
+| `AB8072` | 400 | `Eval request has an invalid shape.` — the body does not match the operation's fields, `trials` is not an integer between 1 and 100, or the service refused the trial count. | Send the fields the operation defines. |
+| `AB8073` | 502 | `Eval operation could not be completed.` — the service threw something the route does not map to a code below. | Read the dev-server log for the underlying error, then retry. |
+| `AB8074` | 404 | `Eval run was not found.` — the run id is unknown or not a valid run id. | Read a run this project recorded, or start a new one. |
+| `AB8075` | 422 | `The requested eval harness is unknown or unsupported.` | Use `deterministic`, `claude`, or `codex`. |
+| `AB8076` | 422 | `No discovered eval suite or case matched this selection.` | Select a suite or case the Evals page lists as discovered. |
+| `AB8077` | 422 | `The evaluated artifact has no target for a pinned eval host.` | Select the targets the pinned eval hosts name, then evaluate again. |
+| `AB8078` | 422 | `A recorded eval run could not be read.` — the run store reports a corrupt or invalid persisted run. | Repair or remove the corrupt persisted eval run. |
+| `AB8079` | 422 | `Project eval configuration is not valid.` — the eval service threw an `EvalConfigError`; the route hides its message. | Fix the project's `evals` configuration; running `agent-bundle eval` from the CLI surfaces the underlying error message. |
+| `AB8080` | 422 | `An authored eval suite is not valid.` — the eval service threw an `EvalDefinitionError` or `EvalDiscoveryError`; the route hides its message. | Fix the authored suite; running `agent-bundle eval` from the CLI surfaces the underlying error message. |
+| `AB8081` | 422 | `An eval fixture could not be prepared.` — the eval service threw an `EvalFixtureError`. | Fix the fixture the eval case references; the CLI surfaces the underlying error message. |
+| `AB8082` | 422 | `The artifact under evaluation could not be prepared.` — the eval service threw an `EvalHarnessError`. | Rebuild the artifact under evaluation; the CLI surfaces the underlying error message. |
+| `AB8083` | 422 | `Configured semantic grading requires the native Claude eval harness.` | Run the configured semantic grader with the `claude` harness and a Claude-pinned eval case. |
+| `AB8085` | 404 / 413 | Two meanings share this code: `Recorded raw evidence was not found.` (404, evals) — the requested raw-evidence artifact does not exist for the trial; `Request body exceeds 1 MiB.` (413, playground) — the prompt playground's larger body bound. | Evals: select raw evidence the recorded trial persisted. Playground: send a smaller body. |
+| `AB8086` | 422 | `Recorded raw evidence is not available.` — the run persisted no readable raw evidence for the trial. | Regenerate the recorded eval run before reading its raw evidence. |
+| `AB8087` | 400 | `Eval event cursor is not valid.` — the event stream cursor is not a non-negative integer no later than the durable event sequence. | Reconnect from a non-negative cursor no later than the durable event sequence. |
+| `AB8088` | 413 | `Eval event replay exceeds the stream limit.` — the retained events after the requested cursor would exceed the stream byte limit when replayed. | Reconnect from a later cursor so fewer retained events replay. |
+
+### Development logs (`/api/logs/replay`, `/api/logs/stream`)
+
+| Code | Status | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB8090` | 400 | `Dev Log route path is not valid.` — a path under `/api/logs/` other than `replay` or `stream`. | Use the Logs page routes. |
+| `AB8091` | 400 | `Dev Log cursor is not valid.` — the `after` cursor is not a single non-negative safe integer. | Send one non-negative integer cursor. |
+| `AB8092` | 409 | `Dev Log cursor is ahead of retained history.` — the cursor is beyond the log ring's latest sequence (the Logs page treats this as a reset and replays from the start). | Reconnect from a cursor no later than the latest retained sequence. |
+| `AB8093` | 404 / 503 | `Dev Log routes are not available.` — 404 without the log service, 503 once shutdown has begun or when the service reports any other failure. | Restart `agent-bundle dev`. |
+
+### Route manifest (`/api/routes/manifest`)
+
+| Code | Status | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB8120` | 400 | `Route manifest path is not valid.` — `/api/routes` or a path under it other than `/api/routes/manifest`. | Request `/api/routes/manifest` exactly. |
+| `AB8121` | 404 / 409 / 503 | `Route manifest is not available.` — 404 without the route manifest service, 503 after the routes closed, 409 when no valid prepared project exists yet (the manifest is a projection of the latest valid compiler pass, never an empty catalog). | Fix the project preparation failures the Overview reports so a valid pass exists; after shutdown, restart `agent-bundle dev`. |
+| `AB8122` | 400 | `Route manifest request has an invalid shape.` — the request carries a query string. | Send a bare `GET /api/routes/manifest`. |
+| `AB8123` | — | Workbench route manifest client: `Route manifest request failed with HTTP <status>.` — the response carried no diagnostic body; `Route manifest route returned an invalid response.` — the body does not match the manifest schema. | Reload the Workbench against a running `agent-bundle dev`; a mismatched Workbench and server build produces the invalid response. |
+
+## Eval refusals through the API and CLI (`AB9001`–`AB9005`, `AB9007`–`AB9011`)
+
+`runEvals` and `compareEvals` (and `agent-bundle eval` / `eval compare` on top
+of them) map every `EvalServiceError` to one **error** diagnostic whose
+`message` is the service's own and whose `recovery` is fixed per code, thrown
+as a `DiagnosticError`. The dev-server eval routes report the same service
+conditions under their own `AB807x`/`AB808x` codes (see "Development server").
+
+| Code | Severity | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB9001` | error | `EVAL_HARNESS_UNSUPPORTED` — the requested harness is unknown or unsupported. | Use `deterministic`, `claude`, or `codex`, or correct an unknown harness name. |
+| `AB9002` | error | `EVAL_SELECTION_EMPTY` — no discovered eval suite or case matched the selection. | Select a suite or case that `agent-bundle eval --json` reports as discovered. |
+| `AB9003` | error | `EVAL_RUN_NOT_FOUND` — the run id names no recorded run (`compareEvals` also maps the run store's not-found error here). | Read a run that this project recorded, or start a new one. |
+| `AB9004` | error | `EVAL_TARGET_MISSING` — the evaluated artifact has no target for a pinned eval host. | Select the targets the pinned eval hosts name, then evaluate again. |
+| `AB9005` | error | `EVAL_TRIALS_INVALID` — the trial count is not an integer between 1 and 100. | Request an integer trial count between 1 and 100. |
+| `AB9007` | error | `A persisted eval run is corrupt and cannot be compared.` — `compareEvals` read a run the store reports as corrupt or with an invalid record. | Repair or remove the corrupt persisted eval run, then compare two completed runs. |
+| `AB9008` | error | `EVAL_SEMANTIC_GRADER_UNSUPPORTED` — the configured semantic grader needs the native Claude harness. | Run the configured semantic grader with `--harness claude` and a Claude-pinned eval case. |
+| `AB9009` | error | `EVAL_ARTIFACT_NOT_FOUND` — the requested raw evidence does not exist for the recorded trial. | Select raw evidence that the recorded eval trial persisted. |
+| `AB9010` | error | `EVAL_ARTIFACT_UNAVAILABLE` — the recorded run has no readable raw evidence for the trial. | Regenerate the recorded eval run before reading its raw evidence. |
+| `AB9011` | error | `EVAL_EVENTS_CURSOR_INVALID` — an eval event cursor is negative or beyond the durable event sequence. | Reconnect from a non-negative cursor no later than the durable event sequence. |

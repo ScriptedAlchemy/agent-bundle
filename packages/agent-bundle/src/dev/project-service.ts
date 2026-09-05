@@ -3,6 +3,7 @@ import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
+import { planComposite } from '../build/compose.ts';
 import { readFileBytes } from '../effect/platform.ts';
 import { platformRunOf } from './platform-run.ts';
 import type { DevPlatformRuntime } from './platform-runtime.ts';
@@ -938,10 +939,12 @@ export class ProjectService {
         ...(command === 'validate' ? routeTypesProgramDiagnostics(root) : []),
         ...validateModel(model, registry),
       ];
-      for (const target of model.targets) {
-        if (!registry.has(target.name)) continue;
-        const adapter = registry.get(target.name);
-        diagnostics.push(...adapter.plan(model).diagnostics);
+      // The selected projections are judged as the one composite root the
+      // build stages (#555), so a collision (AB4103) or scope leak (AB4105)
+      // the build would refuse is reported here too. An unknown target is
+      // already AB4100 above and has no planner to run.
+      if (model.targets.every((target) => registry.has(target.name))) {
+        diagnostics.push(...planComposite(model, registry).diagnostics);
       }
     } catch {
       return failedPreparation(

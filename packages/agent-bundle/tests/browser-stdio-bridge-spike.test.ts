@@ -148,7 +148,8 @@ class AgentBundleRemoteTransport implements Transport {
 }
 
 const generatedServer = async (artifact: string, target: string, serverName: string, workspaceRoot: string): Promise<GeneratedStdioServer> => {
-  const targetRoot = join(artifact, target);
+  // The composite root is the plugin root for every selected host.
+  const targetRoot = artifact;
   const runtime = createDefaultRegistry().mcpRuntime(target);
   if (runtime === undefined) throw new Error(`Missing MCP runtime for ${JSON.stringify(target)}.`);
   const document: unknown = JSON.parse(await readFile(join(targetRoot, runtime.manifestPath), 'utf8'));
