@@ -3,31 +3,37 @@
   {
     "type": "dir",
     "name": "modules",
-    "label": "Modules"
+    "label": "Modules",
+    "collapsed": true
   },
   {
     "type": "dir",
     "name": "functions",
-    "label": "Functions"
+    "label": "Functions",
+    "collapsed": true
   },
   {
     "type": "dir",
     "name": "classes",
-    "label": "Classes"
+    "label": "Classes",
+    "collapsed": true
   },
   {
     "type": "dir",
     "name": "interfaces",
-    "label": "Interfaces"
+    "label": "Interfaces",
+    "collapsed": true
   },
   {
     "type": "dir",
     "name": "types",
-    "label": "Type aliases"
+    "label": "Type aliases",
+    "collapsed": true
   },
   {
     "type": "dir",
     "name": "variables",
-    "label": "Variables"
+    "label": "Variables",
+    "collapsed": true
   }
 ]

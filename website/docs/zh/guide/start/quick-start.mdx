@@ -11,7 +11,8 @@ description: '用脚手架创建 agent-bundle 项目，或手写 agent-bundle.co
 最快的方式是 `create-agent-bundle`。它会依次询问名称、模板与宿主 targets：
 
 ```sh
-npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-pr> my-plugin
+npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-pr> \
+  my-plugin
 ```
 
 等到 npm 正式发布之后，这条命令会变成 `npm create agent-bundle`。在此之前，请使用
@@ -20,7 +21,8 @@ npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-
 同时指定目录与模板的运行会被视为脚本化调用，不再询问任何问题——其余取值回退到各自的默认值：
 
 ```sh
-npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-pr> my-plugin \
+npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-pr> \
+  my-plugin \
   --template mcp-server \
   --targets portable,codex,claude
 ```
