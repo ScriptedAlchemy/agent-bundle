@@ -89,10 +89,24 @@ const writePackedFixtureManifest = async (artifactRoot: string): Promise<Artifac
           ...(filePaths.has('install.mjs') ? { script: 'install.mjs' } : {}),
         },
       },
-      executables: { bins: [], hooks: [], mcpServers: [], scripts: [] },
+      executables: {
+        bins: [],
+        hooks: [],
+        mcpServers: [{
+          apps: [],
+          entry: { path: 'mcp/server.mjs' },
+          hosts: ['portable'],
+          id: 'mcp:fixture',
+          kind: 'compiled',
+          name: 'fixture',
+          transport: 'stdio',
+        }],
+        scripts: [],
+      },
       files,
       manifestVersion: artifactManifestVersion,
       projections: [{
+        builtInHost: 'portable',
         documents: {
           ...(filePaths.has('mcp.json') ? { mcp: 'mcp.json' } : {}),
           ...(filePaths.has('plugin.json') ? { plugin: 'plugin.json' } : {}),
