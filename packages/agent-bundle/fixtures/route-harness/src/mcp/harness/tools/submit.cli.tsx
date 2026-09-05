@@ -1,6 +1,7 @@
 import type { CliProjectionConfig } from 'agent-bundle/routes';
 import type { z } from 'zod';
 
+import { dedupe } from '../../../lib/submit-helpers.js';
 import type { inputSchema } from './submit.js';
 
 /**
@@ -32,7 +33,7 @@ type CliInput = Omit<z.input<typeof inputSchema>, 'cwd'> & { readonly cwd?: stri
  * which the shell reports as an input failure (exit 2).
  */
 export const mapInput = (input: CliInput): z.input<typeof inputSchema> => {
-  const tags = input.tags === undefined ? undefined : [...new Set(input.tags)];
+  const tags = input.tags === undefined ? undefined : dedupe(input.tags);
   const rejected = tags?.find((tag) => tag.startsWith('!'));
   if (rejected !== undefined) {
     throw new Error(`Tag ${JSON.stringify(rejected)} must not start with "!".`);
@@ -40,6 +41,6 @@ export const mapInput = (input: CliInput): z.input<typeof inputSchema> => {
   return {
     ...input,
     cwd: input.cwd ?? process.cwd(),
-    ...(tags === undefined ? {} : { tags }),
+    ...(tags === undefined ? {} : { tags: [...tags] }),
   };
 };

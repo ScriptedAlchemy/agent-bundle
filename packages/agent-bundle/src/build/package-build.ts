@@ -5,7 +5,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import type { AgentBundleToolsConfig, NormalizedPlugin } from '../core/types.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { assertInside, toPosixRelative } from '../core/paths.ts';
-import { cliBinSourceInputs, type GeneratedCliBinSurface } from './cli-bins.ts';
+import { cliBinSourceInputs } from './cli-bins.ts';
 import { declarationBuildDiagnostics, replayDeclarationEmit } from './declaration-diagnostics.ts';
 import { listArtifactFiles, publishArtifact, resolveArtifactDestination } from './emit.ts';
 import { scanEntryExports } from './entry-exports.ts';
@@ -124,7 +124,7 @@ export const planPackageEntries = async (
       const rendered = bin.generatedCli.commands.some((command) => command.rendered);
       const workerFile = `${bin.name}-flight.mjs`;
       const sourceInputs = cliBinSourceInputs(model, bin);
-      const generatedCli = bin.generatedCli as GeneratedCliBinSurface;
+      const generatedCli = bin.generatedCli;
       entries.push({
         aliases: { [cliEntryRuntimeSpecifier]: cliEntryRuntimePath() },
         banner: binShebang,

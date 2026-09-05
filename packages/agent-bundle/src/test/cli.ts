@@ -30,7 +30,7 @@ import { parseCanonicalJsonLine, parseRenderedEventLines } from './output-modes.
 import { claimProcessHit, harnessPluginRoot, mountProviders } from './providers.ts';
 import { registeredRouteLoader, testManifest } from './registry.ts';
 import {
-  loadCliProjectionModules,
+  loadCliProjectionModule,
   parseCliCommandInput,
   prepareCliRenderHost,
   type HarnessOptionsArguments,
@@ -192,7 +192,6 @@ export const invokeCli = async (
   // process identity at module load, so every separate run starts at hit 1.
   const processLifetime = createProviderProcessLifetime();
   const renderedCommands = manifest.cliCommands.filter((command) => command.rendered);
-  const projectionModules = await loadCliProjectionModules(manifest, manifest.cliCommands);
 
   let executed: CompiledCliCommand | undefined;
   let value: unknown;
@@ -213,7 +212,6 @@ export const invokeCli = async (
       modules: renderedModules,
       onValidated: (validated) => { value = validated; },
       processLifetime,
-      projectionModules,
       provenance: {
         kind: 'cli',
         manifestDigest: manifest.digest,
@@ -255,7 +253,7 @@ export const invokeCli = async (
         const parsed = parseCliCommandInput(
           command,
           module,
-          projectionModules.get(command.routeId),
+          await loadCliProjectionModule(manifest, command),
           input,
         );
         const root = process.cwd();
@@ -300,9 +298,14 @@ export const invokeCli = async (
       ...(renderHost === undefined
         ? {}
         : {
-            render: (command, input, execution) => {
+            render: async (command, input, execution) => {
               executed = command;
-              return renderHost.render(command, input, execution);
+              return renderHost.render(
+                command,
+                input,
+                execution,
+                await loadCliProjectionModule(manifest, command),
+              );
             },
           }),
       signal,

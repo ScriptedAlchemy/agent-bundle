@@ -84,6 +84,10 @@ export class CliUsageError extends Error {
   }
 }
 
+/** The fail-closed confirmation diagnostic shared by bulk and explicit MCP tool projections. */
+export const confirmationRequiredMessage = (server: string, tool: string): string =>
+  `MCP tool ${server}:${tool} is mutation-capable per its MCP annotations and requires --yes.`;
+
 /**
  * One input-validation failure of a routed command, already spelled in CLI
  * terms (#465): the argument the user typed rather than the schema path.
@@ -346,7 +350,7 @@ export interface RunGeneratedCliOptions {
     command: CompiledCliCommand,
     input: Readonly<Record<string, unknown>>,
     context: GeneratedCliRenderContext,
-  ) => GeneratedCliRenderSession;
+  ) => GeneratedCliRenderSession | Promise<GeneratedCliRenderSession>;
   readonly signal?: AbortSignal;
   /**
    * The terminal capability to report and select the output mode from (#511).
@@ -666,9 +670,7 @@ const parseMcpCommandInput = (
     throw new CliUsageError('--input must be a JSON object; arrays, null, and scalar values are not accepted.');
   }
   if (command.mcp.confirm && parsed.input['yes'] !== true) {
-    throw new CliUsageError(
-      `MCP tool ${command.mcp.server}:${command.mcp.tool} is mutation-capable per its MCP annotations and requires --yes.`,
-    );
+    throw new CliUsageError(confirmationRequiredMessage(command.mcp.server, command.mcp.tool));
   }
   return { ...parsed, input: input as Readonly<Record<string, unknown>> };
 };
@@ -945,7 +947,7 @@ export const runGeneratedCliEntry = async (options: RunGeneratedCliOptions): Pro
           : terminal.stdout.kind === 'tty'
             ? 'tty'
             : 'markdown';
-      const session = options.render(command, parsed.input, { args: rest, signal, terminal });
+      const session = await options.render(command, parsed.input, { args: rest, signal, terminal });
       try {
         return await runRenderedInvocation({
           exitCode: command.exitCode,

@@ -11,6 +11,7 @@ import { compileTestManifest, proofLevelLabel, testManifestFromRouteGraph } from
 import {
   AGENT_TEST_REGISTRY_SYMBOL_KEY,
   AGENT_TEST_REGISTRY_VERSION,
+  registeredProjectionLoader,
   registerTestRoutes,
   testManifest,
 } from '../src/test/registry.ts';
@@ -354,7 +355,7 @@ describe('the compiled test manifest', () => {
       {
         mcp: { confirm: false, server: 'harness', tool: 'submit' },
         path: ['submit'],
-        projection: { mapInput: true, module: 'src/mcp/harness/tools/submit.cli.ts' },
+        projection: { mapInput: true, module: 'src/mcp/harness/tools/submit.cli.tsx' },
         routeId: 'tool:harness/submit',
       },
     ]);
@@ -503,6 +504,29 @@ describe('the generated route registry', () => {
     expect(layoutLoaders).toContain('"layout:mcp:harness": () => import(');
     expect(layoutLoaders).toContain('/src/layout.tsx")');
     expect(layoutLoaders).toContain('/src/mcp/harness/layout.tsx")');
+  });
+
+  it('registers projection loaders through the project bundler', async () => {
+    const projectionLoaders = /projectionLoaders: \{\n(?<body>[\s\S]*?)\n {2}\},/u.exec(source)?.groups?.body ?? '';
+
+    expect(projectionLoaders).toContain('"tool:harness/submit": () => import(');
+    expect(projectionLoaders).toContain('/src/mcp/harness/tools/submit.cli.tsx")');
+
+    const loaded: string[] = [];
+    await withRealmRegistry({
+      loaders: {},
+      manifest,
+      projectionLoaders: {
+        'tool:harness/submit': () => {
+          loaded.push('tool:harness/submit');
+          return Promise.resolve({ mapInput: (input: unknown) => input });
+        },
+      },
+      version: AGENT_TEST_REGISTRY_VERSION,
+    }, async () => {
+      await registeredProjectionLoader(manifest, 'tool:harness/submit')?.();
+    });
+    expect(loaded).toEqual(['tool:harness/submit']);
   });
 
   it('carries the manifest and the registry version the helpers require', () => {

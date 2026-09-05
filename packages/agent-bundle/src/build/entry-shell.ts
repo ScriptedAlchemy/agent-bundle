@@ -387,7 +387,7 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     // module-level `process.env` read sees the composed environment. The
     // npm package bin runs from the operator's own shell and reads none.
     ...(stateFallback === 'artifact' ? [operatorEnvLayerImport] : []),
-    `import { CliInputError, CliUsageError, cliInputError, runGeneratedCliProcess } from ${JSON.stringify(cliEntryRuntimeSpecifier)};`,
+    `import { CliInputError, CliUsageError, cliInputError, confirmationRequiredMessage, runGeneratedCliProcess } from ${JSON.stringify(cliEntryRuntimeSpecifier)};`,
     rendered
       ? "import { available, createAgentRenderDispatcher, resolvePluginRoot, runAgentRequest, unavailable } from '@agent-bundle/runtime';"
       : "import { available, resolvePluginRoot, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
@@ -412,23 +412,19 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     '',
     `const commands = Object.freeze(${stableJson(options.commands)});`,
     '',
-    // Projection defaults are identified by command.projection plus an
-    // option's own defaultValue field. This deliberately reapplies static zod
-    // defaults on projected commands; zod defaults are idempotent, while
-    // non-projected commands retain their existing schema-owned behavior.
     'const parseInput = (command, route, input) => {',
     '  let mapped = { ...input };',
     '  if (command.projection !== undefined && command.mcp?.confirm === true) {',
-    "    if (mapped.yes !== true) throw new CliUsageError(`MCP tool ${command.mcp.server}:${command.mcp.tool} is mutation-capable per its MCP annotations and requires --yes.`);",
+    '    if (mapped.yes !== true) throw new CliUsageError(confirmationRequiredMessage(command.mcp.server, command.mcp.tool));',
     '    delete mapped.yes;',
     '  }',
-    '  if (command.projection !== undefined) {',
-    '    for (const option of command.options) {',
-    "      if (!Object.hasOwn(mapped, option.key) && Object.hasOwn(option, 'defaultValue')) mapped[option.key] = option.defaultValue;",
+    '  if (command.projection?.defaults !== undefined) {',
+    '    for (const [key, value] of Object.entries(command.projection.defaults)) {',
+    '      if (!Object.hasOwn(mapped, key)) mapped[key] = value;',
     '    }',
     '  }',
     '  if (command.projection?.mapInput === true) {',
-    "    if (typeof route.projection?.mapInput !== 'function') throw new TypeError(`CLI projection ${command.projection.module} must export a mapInput function.`);",
+    "    if (typeof route.projection?.mapInput !== 'function') throw new TypeError(`CLI projection ${command.projection.module} for ${command.routeId} must export a mapInput function.`);",
     '    try {',
     '      mapped = route.projection.mapInput(mapped);',
     '    } catch (error) {',

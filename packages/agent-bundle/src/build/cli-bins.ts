@@ -5,7 +5,6 @@ import type { TargetRegistry } from '../adapters/registry.ts';
 import { routedCliBinLayout, type TargetArtifactEntry } from '../adapters/types.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import type { NormalizedBinEntry, NormalizedPlugin } from '../core/types.ts';
-import type { CompiledCliSurface } from '../routes/types.ts';
 import { resolveArtifactDestination } from './emit.ts';
 import { runtimeIgnoredRoot, type CompiledEntry } from './entries.ts';
 import { launchEnvRuntimeSpecifier, operatorEnvLayerVirtualModule } from './launch-env-shell.ts';
@@ -61,14 +60,11 @@ interface PlannedCliBin extends CompiledCliBin {
   readonly rendered: boolean;
 }
 
-export type GeneratedCliBinSurface = NonNullable<NormalizedBinEntry['generatedCli']>
-  & Pick<CompiledCliSurface, 'projectionSources'>;
-
-const generatedCli = (bin: NormalizedBinEntry): GeneratedCliBinSurface => {
+const generatedCli = (bin: NormalizedBinEntry): NonNullable<NormalizedBinEntry['generatedCli']> => {
   if (bin.generatedCli === undefined) {
     throw new Error(`Bin ${JSON.stringify(bin.name)} is not a framework-generated routed CLI.`);
   }
-  return bin.generatedCli as GeneratedCliBinSurface;
+  return bin.generatedCli;
 };
 
 /** Every project source that can change a generated routed-CLI executable. */

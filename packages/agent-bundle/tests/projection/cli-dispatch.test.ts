@@ -34,7 +34,7 @@ describe('the CLI dispatch level', () => {
       path: ['submit'],
       projection: {
         mapInput: false,
-        module: 'src/mcp/harness/tools/submit.cli.ts',
+        module: 'src/mcp/harness/tools/submit.cli.tsx',
       },
       rendered: false,
       routeId: 'tool:harness/submit',
@@ -62,7 +62,7 @@ describe('the CLI dispatch level', () => {
 
     const help = await run(['submit', '--help'], async () => ({}));
     expect(help.code).toBe(0);
-    expect(help.stdout).toContain('MCP tool: harness:submit\nProjection: src/mcp/harness/tools/submit.cli.ts');
+    expect(help.stdout).toContain('MCP tool: harness:submit\nProjection: src/mcp/harness/tools/submit.cli.tsx');
     expect(help.stdout).toContain('--lane, --lane-key <string>');
 
     const invalid = await run(['submit', '--lane', 'blue'], async (input) => {

@@ -649,6 +649,14 @@ it('imports explicit CLI projections and maps their input before canonical valid
       mcp: { confirm: true, server: 'curator', tool: 'submit' },
       options: [
         {
+          defaultValue: '.',
+          key: 'cwd',
+          kind: 'string',
+          option: 'cwd',
+          repeated: false,
+          required: false,
+        },
+        {
           defaultValue: 'main',
           key: 'laneKey',
           kind: 'string',
@@ -666,6 +674,7 @@ it('imports explicit CLI projections and maps their input before canonical valid
       ],
       path: ['submit'],
       projection: {
+        defaults: { laneKey: 'main' },
         mapInput: true,
         module: 'src/mcp/curator/tools/submit.cli.ts',
         relaxed: ['laneKey'],
@@ -686,7 +695,7 @@ it('imports explicit CLI projections and maps their input before canonical valid
     '"tool:curator/submit": Object.freeze({ module: route0, projection: projection0 })',
   );
   const confirmation = source.indexOf('if (command.projection !== undefined && command.mcp?.confirm === true)');
-  const defaults = source.indexOf("if (!Object.hasOwn(mapped, option.key) && Object.hasOwn(option, 'defaultValue'))");
+  const defaults = source.indexOf('for (const [key, value] of Object.entries(command.projection.defaults))');
   const mapping = source.indexOf('mapped = route.projection.mapInput(mapped)');
   const validation = source.indexOf('return route.module.inputSchema.parse(mapped)');
   expect(confirmation).toBeGreaterThan(-1);
@@ -694,7 +703,10 @@ it('imports explicit CLI projections and maps their input before canonical valid
   expect(defaults).toBeLessThan(mapping);
   expect(mapping).toBeLessThan(validation);
   expect(source).toContain('delete mapped.yes;');
-  expect(source).toContain("throw new TypeError(`CLI projection ${command.projection.module} must export a mapInput function.`)");
+  expect(source).toContain('if (!Object.hasOwn(mapped, key)) mapped[key] = value;');
+  expect(source).not.toContain("Object.hasOwn(option, 'defaultValue')");
+  expect(source).toContain('confirmationRequiredMessage(command.mcp.server, command.mcp.tool)');
+  expect(source).toContain("throw new TypeError(`CLI projection ${command.projection.module} for ${command.routeId} must export a mapInput function.`)");
   expect(source).toContain('throw new CliInputError(error instanceof Error ? error.message : String(error));');
   expect(source).toContain(
     "invocation: { kind: 'cli', props: { args: context.args, command: command.path.join(' ') } }",

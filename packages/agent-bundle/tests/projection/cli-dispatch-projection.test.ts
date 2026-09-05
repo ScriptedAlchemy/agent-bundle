@@ -6,7 +6,7 @@ import { testManifest } from '../../src/test/registry.ts';
 
 /**
  * The explicit CLI surface projection (#596) at the `cli-dispatch` proof
- * level: `src/mcp/harness/tools/submit.cli.ts` projects `tool:harness/submit`
+ * level: `src/mcp/harness/tools/submit.cli.tsx` projects `tool:harness/submit`
  * onto `route-harness submit` with an idiomatic grammar (`--lane`, a
  * repeatable `--tag`, trailing `argv` with `--` passthrough, `cwd` derived by
  * `mapInput`). The operation itself is invoked once per surface — the routed
@@ -40,7 +40,7 @@ describe('the CLI surface projection of tool:harness/submit', () => {
         expect.objectContaining({ description: 'Tag attached to the request (repeatable; duplicates are dropped).', key: 'tags', kind: 'string', option: 'tag', repeated: true, required: false }),
       ],
       path: ['submit'],
-      projection: { mapInput: true, module: 'src/mcp/harness/tools/submit.cli.ts', relaxed: ['cwd'] },
+      projection: { mapInput: true, module: 'src/mcp/harness/tools/submit.cli.tsx', relaxed: ['cwd'] },
       rendered: true,
       routeId: 'tool:harness/submit',
     });
@@ -186,7 +186,7 @@ describe('the CLI surface projection of tool:harness/submit', () => {
     expect(help.stdout).toContain(`${usage}\n`);
     expect(help.stdout).toContain('Submits one command line as lane work and echoes the accepted request.');
     expect(help.stdout).toContain('MCP tool: harness:submit');
-    expect(help.stdout).toContain('Projection: src/mcp/harness/tools/submit.cli.ts');
+    expect(help.stdout).toContain('Projection: src/mcp/harness/tools/submit.cli.tsx');
     expect(help.stdout).toMatch(/^ +<argv\.\.\.> +The command line to run\.$/mu);
     expect(help.stdout).toMatch(/^ +--cwd <string> +Working directory of the command \(default: the current directory\)\.$/mu);
     expect(help.stdout).toMatch(/^ +--lane <string> +Lane the work is queued under\.$/mu);
