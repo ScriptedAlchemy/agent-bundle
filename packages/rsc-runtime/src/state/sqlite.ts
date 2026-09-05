@@ -14,9 +14,11 @@ import { DatabaseSync, type StatementSync } from 'node:sqlite';
 
 import {
   Context,
+  Duration,
   Effect,
   Exit,
   Layer,
+  Schedule,
 } from 'effect';
 
 import {
@@ -105,7 +107,9 @@ export interface SqliteStateDriverOptions {
   /**
    * SQLite lock wait budget per operation in milliseconds (default 5000).
    * Contending cross-process writers queue on the database lock for at most
-   * this long before the operation fails typed `unavailable`.
+   * this long before the operation fails typed `unavailable`. The same budget
+   * bounds how long the first open of a file waits for another process that
+   * is switching it into WAL.
    */
   readonly busyTimeoutMs?: number;
   /**
@@ -133,6 +137,23 @@ const SQLITE_CORRUPT = 11;
 const SQLITE_NOTADB = 26;
 const SQLITE_BUSY = 5;
 
+/**
+ * `node:sqlite` reports the extended result code (`SQLITE_BUSY_RECOVERY`,
+ * `SQLITE_CORRUPT_INDEX`, ...); the primary code lives in the low byte.
+ */
+const primaryResultCode = (error: unknown): number | undefined => {
+  const errcode = (error as SqliteErrorShape | undefined)?.errcode;
+  return typeof errcode === 'number' ? errcode & 0xff : undefined;
+};
+
+const isSqliteBusy = (error: unknown): boolean => primaryResultCode(error) === SQLITE_BUSY;
+
+/**
+ * Pause between attempts to switch a rollback-mode database into WAL while
+ * another process holds its write lock (see `SqliteStore#initialize`).
+ */
+const WAL_SWITCH_RETRY_DELAY = Duration.millis(5);
+
 const mapSqliteError = (
   definitionId: string,
   action: string,
@@ -141,21 +162,22 @@ const mapSqliteError = (
 ): AgentStateError | undefined => {
   if (error instanceof AgentStateError) return error;
   const shape = error as SqliteErrorShape;
+  const errcode = primaryResultCode(error);
   const sqliteError =
-    typeof shape?.errcode === 'number'
+    errcode !== undefined
     || (typeof shape?.code === 'string' && shape.code.startsWith('ERR_SQLITE'));
   if (!sqliteError && !(mapSystemError && typeof shape?.code === 'string')) {
     return undefined;
   }
   const detail = typeof shape.errstr === 'string' ? `: ${shape.errstr}` : '';
-  if (shape.errcode === SQLITE_CORRUPT || shape.errcode === SQLITE_NOTADB) {
+  if (errcode === SQLITE_CORRUPT || errcode === SQLITE_NOTADB) {
     return new AgentStateError(
       'corrupt',
       `State '${definitionId}' storage is corrupt (${action}${detail})`,
       { cause: error },
     );
   }
-  if (shape.errcode === SQLITE_BUSY) {
+  if (errcode === SQLITE_BUSY) {
     return new AgentStateError(
       'unavailable',
       `State '${definitionId}' storage stayed locked beyond the busy timeout (${action})`,
@@ -927,11 +949,26 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
       Effect.gen(function*() {
         const db = yield* SqliteConnection;
         yield* sqliteEffect(definitionId, 'configure storage', () => {
-          // busy_timeout first: switching journal modes takes the database
-          // lock, and two processes racing the very first open would otherwise
-          // fail SQLITE_BUSY with a zero retry budget.
           db.exec(`PRAGMA busy_timeout = ${String(busyTimeoutMs)}`);
+        });
+        // busy_timeout does not cover this statement. Switching a rollback-
+        // mode database into WAL opens a read transaction and upgrades it to
+        // a write (SHARED -> RESERVED), the one lock transition SQLite never
+        // routes through the busy handler (deadlock avoidance), so two
+        // processes racing the very first open of a file fail SQLITE_BUSY at
+        // once. Retry the switch under the same budget: once the header says
+        // WAL the statement is a plain read and never contends again.
+        yield* sqliteEffect(definitionId, 'configure storage', () => {
           db.exec('PRAGMA journal_mode = WAL');
+        }).pipe(
+          Effect.retry({
+            schedule: Schedule.spaced(WAL_SWITCH_RETRY_DELAY).pipe(
+              Schedule.upTo({ duration: Duration.millis(busyTimeoutMs) }),
+            ),
+            while: (error) => isSqliteBusy(error.cause),
+          }),
+        );
+        yield* sqliteEffect(definitionId, 'configure storage', () => {
           db.exec('PRAGMA synchronous = FULL');
         });
         yield* initializeStorage;
