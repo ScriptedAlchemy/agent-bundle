@@ -4,7 +4,7 @@ import type { TargetRegistry } from '../adapters/registry.ts';
 import { parseSkillMarkdown, referencedResources } from '../config/skill-references.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { readFileString, runWithPlatform } from '../effect/platform.ts';
-import { validateAgentSkillsFrontmatter } from '../schemas/agent-skills/contract.ts';
+import { validateAgentSkillsFrontmatter, type AgentSkillsFrontmatterIssue } from '../schemas/agent-skills/contract.ts';
 import {
   validateClaudeSkillFrontmatter,
   validateCursorSkillFrontmatter,
@@ -16,45 +16,58 @@ import {
 import type { ArtifactFile } from './emit.ts';
 import type { ArtifactManifest } from './manifest.ts';
 
-export const targetNamespaces = (manifest: ArtifactManifest): ReadonlySet<string> =>
-  new Set(manifest.targets.map((target) => target.name));
+/** The selected host projections the composite root records. */
+export const manifestTargets = (manifest: ArtifactManifest): readonly string[] =>
+  manifest.targets.map((target) => target.name);
 
-export const pathTarget = (path: string, targets: ReadonlySet<string>): string | undefined => {
-  const [target] = path.split('/');
-  return target !== undefined && targets.has(target) ? target : undefined;
+/**
+ * The skill directories the selected hosts read, each with the hosts that
+ * read it. Every built-in host emits `skills/`, so one emitted Skill is read
+ * by every selected host and must satisfy each host's frontmatter contract.
+ */
+const skillDirectories = (
+  targets: readonly string[],
+  registry: TargetRegistry,
+): ReadonlyMap<string, readonly string[]> => {
+  const directories = new Map<string, string[]>();
+  for (const target of targets) {
+    if (!registry.has(target)) continue;
+    const directory = registry.artifactLayout(target).skills;
+    if (directory === undefined) continue;
+    directories.set(directory, [...(directories.get(directory) ?? []), target]);
+  }
+  return directories;
 };
 
 interface EmittedSkill {
   readonly name: string;
   readonly path: string;
   readonly root: string;
-  readonly target: string;
+  /** The selected hosts that read this Skill directory. */
+  readonly targets: readonly string[];
 }
 
 const emittedSkillFor = (
   file: ArtifactFile,
-  targets: ReadonlySet<string>,
-  registry: TargetRegistry,
+  directories: ReadonlyMap<string, readonly string[]>,
 ): EmittedSkill | undefined => {
   const segments = file.path.split('/');
-  const [target, layout, name, document] = segments;
-  if (target === undefined || !targets.has(target) || !registry.has(target)) return undefined;
-  const skillLayout = registry.artifactLayout(target).skills;
-  if (
-    layout !== skillLayout ||
-    name === undefined ||
-    document !== 'SKILL.md' ||
-    segments.length !== 4
-  ) {
-    return undefined;
+  const [layout, name, document] = segments;
+  if (layout === undefined || name === undefined || document !== 'SKILL.md' || segments.length !== 3) return undefined;
+  const targets = directories.get(layout);
+  if (targets === undefined) return undefined;
+  return { name, path: file.path, root: `${layout}/${name}`, targets };
+};
+
+const frontmatterValidatorFor = (target: string): (frontmatter: unknown) => readonly AgentSkillsFrontmatterIssue[] => {
+  switch (target) {
+    case 'claude':
+      return validateClaudeSkillFrontmatter;
+    case 'cursor':
+      return validateCursorSkillFrontmatter;
+    default:
+      return validateAgentSkillsFrontmatter;
   }
-  if (skillLayout === undefined) return undefined;
-  return {
-    name,
-    path: file.path,
-    root: `${target}/${skillLayout}/${name}`,
-    target,
-  };
 };
 
 const isSkillRootEscape = (reference: string): boolean =>
@@ -69,42 +82,39 @@ export const validateEmittedSkills = async (options: {
   readonly registry: TargetRegistry;
 }): Promise<readonly Diagnostic[]> => {
   const diagnostics: Diagnostic[] = [];
-  const targets = targetNamespaces(options.manifest);
+  const directories = skillDirectories(manifestTargets(options.manifest), options.registry);
   const skills = options.files
-    .map((file) => emittedSkillFor(file, targets, options.registry))
+    .map((file) => emittedSkillFor(file, directories))
     .filter((skill): skill is EmittedSkill => skill !== undefined);
   const skillsByRoot = new Map(skills.map((skill) => [skill.root, skill]));
 
   for (const file of options.files) {
-    if (!file.path.endsWith('/SKILL.md') || emittedSkillFor(file, targets, options.registry) !== undefined) continue;
-    const target = pathTarget(file.path, targets);
+    if (!file.path.endsWith('/SKILL.md') || emittedSkillFor(file, directories) !== undefined) continue;
     diagnostics.push(diagnostic(
       'AB6015',
       `Emitted Skill document ${JSON.stringify(file.path)} does not use the canonical skills/<name>/SKILL.md layout.`,
       file.path,
-      target,
+      undefined,
       skillRecovery,
     ));
   }
 
   const resourceFilesBySkill = new Map<string, readonly ArtifactFile[]>();
   for (const file of options.files) {
-    const [target, layout, name] = file.path.split('/');
-    if (target === undefined || name === undefined || !targets.has(target) || !options.registry.has(target)) continue;
-    if (layout !== options.registry.artifactLayout(target).skills) continue;
-    const root = `${target}/${layout}/${name}`;
+    const [layout, name] = file.path.split('/');
+    if (layout === undefined || name === undefined || !directories.has(layout)) continue;
+    const root = `${layout}/${name}`;
     const existing = resourceFilesBySkill.get(root) ?? [];
     resourceFilesBySkill.set(root, [...existing, file]);
   }
 
   for (const [root, files] of resourceFilesBySkill) {
     if (skillsByRoot.has(root)) continue;
-    const [target] = root.split('/');
     diagnostics.push(diagnostic(
       'AB6015',
       `Emitted Skill resource directory ${JSON.stringify(root)} is missing its SKILL.md document.`,
       files[0]?.path,
-      target,
+      undefined,
       skillRecovery,
     ));
   }
@@ -118,7 +128,7 @@ export const validateEmittedSkills = async (options: {
         'AB6015',
         'Emitted Skill Markdown cannot be read.',
         skill.path,
-        skill.target,
+        undefined,
         skillRecovery,
       ));
       continue;
@@ -130,7 +140,7 @@ export const validateEmittedSkills = async (options: {
         'AB6015',
         'Emitted Skill Markdown must start with YAML frontmatter.',
         skill.path,
-        skill.target,
+        undefined,
         skillRecovery,
       ));
       continue;
@@ -140,33 +150,32 @@ export const validateEmittedSkills = async (options: {
         'AB6015',
         `Emitted Skill YAML frontmatter is invalid: ${parsed.message}`,
         skill.path,
-        skill.target,
+        undefined,
         skillRecovery,
       ));
       continue;
     }
 
-    const frontmatterIssues = skill.target === 'claude'
-      ? validateClaudeSkillFrontmatter(parsed.frontmatter)
-      : skill.target === 'cursor'
-        ? validateCursorSkillFrontmatter(parsed.frontmatter)
-        : validateAgentSkillsFrontmatter(parsed.frontmatter);
-    for (const issue of frontmatterIssues) {
-      const location = issue.field ?? (issue.instancePath === '' ? 'root' : issue.instancePath);
-      diagnostics.push(diagnostic(
-        'AB6015',
-        `Emitted Skill frontmatter ${location} ${issue.message}.`,
-        skill.path,
-        skill.target,
-        skillRecovery,
-      ));
+    // One emitted document, read by every selected host: each host's
+    // frontmatter contract judges it and names itself in the diagnostic.
+    for (const target of skill.targets) {
+      for (const issue of frontmatterValidatorFor(target)(parsed.frontmatter)) {
+        const location = issue.field ?? (issue.instancePath === '' ? 'root' : issue.instancePath);
+        diagnostics.push(diagnostic(
+          'AB6015',
+          `Emitted Skill frontmatter ${location} ${issue.message}.`,
+          skill.path,
+          target,
+          skillRecovery,
+        ));
+      }
     }
     if (typeof parsed.frontmatter.name === 'string' && parsed.frontmatter.name !== skill.name) {
       diagnostics.push(diagnostic(
         'AB6015',
         `Emitted Skill name ${JSON.stringify(parsed.frontmatter.name)} must match directory ${JSON.stringify(skill.name)}.`,
         skill.path,
-        skill.target,
+        undefined,
         skillRecovery,
       ));
     }
@@ -175,7 +184,7 @@ export const validateEmittedSkills = async (options: {
         'AB6034',
         'Emitted Skill Markdown must contain instructions after its YAML frontmatter.',
         skill.path,
-        skill.target,
+        undefined,
         artifactDiagnosticRecoveries.AB6034,
       ));
     }
@@ -189,7 +198,7 @@ export const validateEmittedSkills = async (options: {
           'AB6016',
           `Emitted Skill reference ${JSON.stringify(reference)} escapes its Skill root.`,
           skill.path,
-          skill.target,
+          undefined,
           artifactDiagnosticRecoveries.AB6016,
         ));
       } else if (!resources.has(reference)) {
@@ -197,7 +206,7 @@ export const validateEmittedSkills = async (options: {
           'AB6016',
           `Emitted Skill references missing regular resource ${JSON.stringify(reference)}.`,
           skill.path,
-          skill.target,
+          undefined,
           artifactDiagnosticRecoveries.AB6016,
         ));
       }

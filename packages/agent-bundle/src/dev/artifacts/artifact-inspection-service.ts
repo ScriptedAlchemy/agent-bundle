@@ -102,7 +102,7 @@ const treeNode = (
 ): ArtifactInspectionDirectoryNode => {
   const children: ArtifactInspectionTreeNode[] = [
     ...[...directory.directories.entries()]
-      .map(([directoryName, child]) => treeNode(directoryName, `${path}/${directoryName}`, child)),
+      .map(([directoryName, child]) => treeNode(directoryName, path === '.' ? directoryName : `${path}/${directoryName}`, child)),
     ...[...directory.files.entries()].map(([fileName, file]): ArtifactInspectionFileNode => Object.freeze({
       file,
       kind: 'file',
@@ -264,27 +264,27 @@ export class ArtifactInspectionService {
     manifest: ArtifactManifest,
     files: readonly ArtifactInspectionFile[],
   ): readonly ArtifactInspectionTarget[] {
-    return Object.freeze(manifest.targets.map((target): ArtifactInspectionTarget => {
-      const root = emptyTreeBuildDirectory();
-      const prefix = `${target.name}/`;
-      for (const file of files) {
-        if (!file.path.startsWith(prefix)) continue;
-        const segments = file.path.slice(prefix.length).split('/');
-        const fileName = segments.pop();
-        if (fileName === undefined) continue;
-        let directory = root;
-        for (const segment of segments) {
-          let child = directory.directories.get(segment);
-          if (child === undefined) {
-            child = emptyTreeBuildDirectory();
-            directory.directories.set(segment, child);
-          }
-          directory = child;
+    // One composite root (#555): every selected projection reads the same tree.
+    const root = emptyTreeBuildDirectory();
+    for (const file of files) {
+      const segments = file.path.split('/');
+      const fileName = segments.pop();
+      if (fileName === undefined) continue;
+      let directory = root;
+      for (const segment of segments) {
+        let child = directory.directories.get(segment);
+        if (child === undefined) {
+          child = emptyTreeBuildDirectory();
+          directory.directories.set(segment, child);
         }
-        directory.files.set(fileName, file);
+        directory = child;
       }
-      return Object.freeze({ name: target.name, tree: treeNode(target.name, target.name, root) });
-    }));
+      directory.files.set(fileName, file);
+    }
+    return Object.freeze(manifest.targets.map((target): ArtifactInspectionTarget => Object.freeze({
+      name: target.name,
+      tree: treeNode(target.name, '.', root),
+    })));
   }
 
   #runtime(
@@ -324,7 +324,7 @@ export class ArtifactInspectionService {
     const hooks: ArtifactInspectionHook[] = [];
     for (const hook of runtime.hooks) {
       const file = filesByPath.get(hook.path);
-      if (file === undefined || !hook.path.startsWith(`${hook.target}/`)) {
+      if (file === undefined) {
         throw this.#runtimeError('Validated hook evidence references an unmanifested wrapper.', hook.path, hook.target);
       }
       hooks.push(Object.freeze({
@@ -349,11 +349,11 @@ export class ArtifactInspectionService {
   ): readonly ArtifactInspectionMcpServer[] {
     const servers: ArtifactInspectionMcpServer[] = [];
     for (const server of runtime.mcpServers) {
-      if (!server.manifestPath.startsWith(`${server.target}/`) || !filesByPath.has(server.manifestPath)) {
+      if (!filesByPath.has(server.manifestPath)) {
         throw this.#runtimeError('Validated MCP evidence references an unmanifested target manifest.', server.manifestPath, server.target);
       }
       for (const path of server.entryPaths) {
-        if (!path.startsWith(`${server.target}/`) || !filesByPath.has(path)) {
+        if (!filesByPath.has(path)) {
           throw this.#runtimeError('Validated MCP evidence references an unmanifested target file.', path, server.target);
         }
       }

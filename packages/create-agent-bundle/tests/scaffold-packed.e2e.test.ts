@@ -38,6 +38,6 @@ it('scaffolds the minimal template, auto-installs, and passes its own check', as
 
   await npmRun(projectRoot, 'check');
   await expectCleanValidate(projectRoot);
-  await expect(readFile(join(projectRoot, 'artifact', 'portable', 'skills', 'getting-started', 'SKILL.md'), 'utf8'))
+  await expect(readFile(join(projectRoot, 'artifact', 'skills', 'getting-started', 'SKILL.md'), 'utf8'))
     .resolves.toContain('# Getting started');
 }, 600_000);

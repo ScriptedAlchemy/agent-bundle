@@ -1,13 +1,13 @@
 ---
-description: 'agent-bundle compiles one typed config into installable Claude Code, Codex, Cursor, and portable agent plugin artifacts.'
+description: 'agent-bundle compiles one typed config into one installable plugin root for Claude Code, Codex, Cursor, and the portable Agent Plugins format.'
 ---
 
 # Introduction
 
 agent-bundle compiles an agent plugin — Skills, hooks, MCP servers, and scripts, described
-by one typed config — into installable artifacts for Claude Code, Codex, and Cursor, plus a
-portable layout. You write the plugin once; the compiler emits each host's manifests and
-wrappers.
+by one typed config — into one installable plugin root for Claude Code, Codex, and Cursor, plus
+the portable Agent Plugins format. You write the plugin once; the compiler emits each host's
+manifests and wrappers into that root.
 
 Node.js 22.19 or later is required.
 
@@ -25,11 +25,12 @@ source tree:
 npx agent-bundle build --root .
 ```
 
-With `targets: ['plugin']`, that single command emits one multi-host bundle at `artifact/plugin/`:
-`.claude-plugin/`, `.codex-plugin/`, and `.cursor-plugin/` manifests over shared `skills/`,
-`hooks/`, `mcp/`, and `scripts/` directories. The bundle's generated `AGENTS.md` explains how to
-install it into each host. Per-host layouts are available as the `claude`, `codex`, `cursor`,
-and `portable` targets.
+That single command emits one composite plugin root at `artifact/`: the manifests of every
+selected host (`.claude-plugin/`, `.codex-plugin/`, `.cursor-plugin/`, the portable
+`plugin.json`) over shared `skills/`, `hooks/`, `mcp/`, `bin/`, and `scripts/` directories,
+plus one `INSTALL.md`. `targets` selects which host projections the root carries — `claude`,
+`codex`, `cursor`, `portable`; omitted, it selects `portable` alone — and every host installs
+the same directory.
 
 ## What the config owns
 
@@ -40,7 +41,7 @@ import { defineConfig } from 'agent-bundle/config';
 
 export default defineConfig({
   plugin: { name: 'my-plugin', description: 'What it does.' }, // [!code highlight]
-  targets: ['plugin'],
+  targets: ['claude', 'codex', 'cursor'],
   skills: ['src/skills/*'],
   hooks: { sessionStart: { handler: './src/session-start.ts' } },
   mcp: { servers: { tools: { entry: './src/mcp.ts' } } },
@@ -50,7 +51,7 @@ export default defineConfig({
 The same config also owns the npm package build — no second bundler config, no bin shims, no
 hand-rolled stdio lifecycles. `bin` and `lib` entries (or the conventions `src/cli.ts`,
 `src/index.ts`, and `src/mcp/<server-id>.ts`) emit executable `dist/bin/<name>.js` bundles and a
-library output alongside the host artifacts. An MCP entry that default-exports a server factory
+library output beside the plugin root. An MCP entry that default-exports a server factory
 runs under a framework-owned stdio lifecycle. `tools.rsbuild` / `tools.rspack` is the one
 bundler escape hatch.
 

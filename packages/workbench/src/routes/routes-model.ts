@@ -34,6 +34,14 @@ export const routeCatalogKinds = Object.freeze([
 export interface RouteCatalogEntry {
   readonly command?: RouteManifestCliCommand;
   readonly config: readonly RouteManifestConfigEntry[];
+  readonly contract?: {
+    readonly id: string;
+    readonly origin: {
+      readonly binding: string;
+      readonly module: string;
+    };
+    readonly sharedWith: readonly string[];
+  };
   readonly description?: string;
   readonly event?: string;
   readonly id: string;
@@ -132,17 +140,33 @@ export const routeKindLabel = (kind: RouteManifestKind): string => kindLabels[ki
 
 const byId = (left: RouteCatalogEntry, right: RouteCatalogEntry): number => left.id.localeCompare(right.id);
 
-const entryFor = (route: RouteManifestRoute, command?: RouteManifestCliCommand): RouteCatalogEntry => Object.freeze({
-  ...(command === undefined ? {} : { command }),
-  config: route.config,
-  ...(route.description === undefined ? {} : { description: route.description }),
-  ...(route.event === undefined ? {} : { event: route.event }),
-  id: route.id,
-  ...(route.inputSchema === undefined ? {} : { inputSchema: route.inputSchema }),
-  kind: route.kind,
-  provenance: route.provenance.kind,
-  source: route.source,
-});
+type ManifestContract = NonNullable<RouteManifest['contracts']>[number];
+
+const entryFor = (
+  route: RouteManifestRoute,
+  contracts: ReadonlyMap<string, ManifestContract>,
+  command?: RouteManifestCliCommand,
+): RouteCatalogEntry => {
+  const contract = route.contract === undefined ? undefined : contracts.get(route.contract);
+  return Object.freeze({
+    ...(command === undefined ? {} : { command }),
+    config: route.config,
+    ...(contract === undefined ? {} : {
+      contract: Object.freeze({
+        id: contract.id,
+        origin: Object.freeze({ ...contract.origin }),
+        sharedWith: Object.freeze(contract.routes.filter((routeId) => routeId !== route.id)),
+      }),
+    }),
+    ...(route.description === undefined ? {} : { description: route.description }),
+    ...(route.event === undefined ? {} : { event: route.event }),
+    id: route.id,
+    ...(route.inputSchema === undefined ? {} : { inputSchema: route.inputSchema }),
+    kind: route.kind,
+    provenance: route.provenance.kind,
+    source: route.source,
+  });
+};
 
 const groupFor = (
   kind: RouteManifestKind,
@@ -155,30 +179,46 @@ const groupFor = (
   ...(server === undefined ? {} : { mode: server.mode, server: server.name, serverId: server.id }),
 });
 
-const serverGroups = (manifest: RouteManifest): readonly RouteCatalogGroup[] =>
+const serverGroups = (
+  manifest: RouteManifest,
+  contracts: ReadonlyMap<string, ManifestContract>,
+): readonly RouteCatalogGroup[] =>
   [...manifest.servers]
     .sort((left, right) => left.name.localeCompare(right.name))
     .flatMap((server) => routeCatalogKinds
-      .map((kind) => Object.freeze({ entries: server.routes.filter((route) => route.kind === kind).map((route) => entryFor(route)), kind }))
+      .map((kind) => Object.freeze({
+        entries: server.routes.filter((route) => route.kind === kind).map((route) => entryFor(route, contracts)),
+        kind,
+      }))
       .filter((group) => group.entries.length > 0)
       .map((group) => groupFor(group.kind, group.entries, { id: server.id, mode: server.mode, name: server.name })));
 
-const cliGroups = (manifest: RouteManifest): readonly RouteCatalogGroup[] => {
+const cliGroups = (
+  manifest: RouteManifest,
+  contracts: ReadonlyMap<string, ManifestContract>,
+): readonly RouteCatalogGroup[] => {
   const cli = manifest.cli;
   if (cli === undefined || cli.routes.length === 0) return [];
   const commands = new Map((cli.commands ?? []).map((command) => [command.routeId, command]));
   return [Object.freeze({
-    entries: Object.freeze(cli.routes.map((route) => entryFor(route, commands.get(route.id))).sort(byId)),
+    entries: Object.freeze(cli.routes.map((route) => entryFor(route, contracts, commands.get(route.id))).sort(byId)),
     kind: 'cli' as const,
     label: kindLabels.cli,
     mode: cli.mode,
   })];
 };
 
-const projectGroups = (manifest: RouteManifest): readonly RouteCatalogGroup[] => [
-  ...(manifest.events.length === 0 ? [] : [groupFor('event-route', manifest.events.map((route) => entryFor(route)))]),
-  ...cliGroups(manifest),
-  ...(manifest.scripts.length === 0 ? [] : [groupFor('script', manifest.scripts.map((route) => entryFor(route)))]),
+const projectGroups = (
+  manifest: RouteManifest,
+  contracts: ReadonlyMap<string, ManifestContract>,
+): readonly RouteCatalogGroup[] => [
+  ...(manifest.events.length === 0
+    ? []
+    : [groupFor('event-route', manifest.events.map((route) => entryFor(route, contracts)))]),
+  ...cliGroups(manifest, contracts),
+  ...(manifest.scripts.length === 0
+    ? []
+    : [groupFor('script', manifest.scripts.map((route) => entryFor(route, contracts)))]),
 ];
 
 /**
@@ -190,7 +230,11 @@ export const routeCatalogFor = (
   manifest: RouteManifest,
   epochSourceRevision?: string,
 ): RouteCatalog => {
-  const groups = Object.freeze([...serverGroups(manifest), ...projectGroups(manifest)]);
+  const contracts = new Map((manifest.contracts ?? []).map((contract) => [contract.id, contract]));
+  const groups = Object.freeze([
+    ...serverGroups(manifest, contracts),
+    ...projectGroups(manifest, contracts),
+  ]);
   return Object.freeze({
     diagnostics: manifest.diagnostics,
     digest: manifest.digest,

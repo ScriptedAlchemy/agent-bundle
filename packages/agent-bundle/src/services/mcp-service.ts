@@ -225,7 +225,8 @@ export class McpService {
     const errors = diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
     if (errors.length > 0) throw new DiagnosticError(errors);
 
-    const targetRoot = joinArtifact(artifact, options.target);
+    // Every selected host reads the composite root as its plugin root (#555).
+    const targetRoot = artifact;
     // The per-connection plugin-data directory lives exactly as long as the
     // connection: `withTempDirectory` is the `mkdtemp` + `finally rm` bracket
     // (cleanup failure wins, as the throwing `finally` did). The client and

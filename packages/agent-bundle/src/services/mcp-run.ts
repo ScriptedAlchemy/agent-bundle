@@ -87,7 +87,8 @@ export const resolveMcpStdioLaunch = async (
   const errors = diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
   if (errors.length > 0) throw new DiagnosticError(errors);
 
-  const targetRoot = joinArtifact(artifact, options.target);
+  // Every selected host reads the composite root as its plugin root (#555).
+  const targetRoot = artifact;
   const manifestPath = joinArtifact(targetRoot, runtime.manifestPath);
   let document: unknown;
   try {

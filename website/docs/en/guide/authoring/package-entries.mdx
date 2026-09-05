@@ -60,7 +60,10 @@ function, receives the generated process envelope:
 // src/cli.ts — the whole CLI entry a consumer writes
 import type { ExecutableMainContext } from 'agent-bundle';
 
-export const main = async (argv: readonly string[], { terminal }: ExecutableMainContext): Promise<number> => {
+export const main = async (
+  argv: readonly string[],
+  { terminal }: ExecutableMainContext,
+): Promise<number> => {
   if (terminal.stderr.color !== 'none') { /* paint progress on stderr */ }
   return 0;
 };
@@ -100,7 +103,9 @@ export const inputSchema = z.object({
 
 export const resultSchema = z.object({ scanned: z.number().int() }).strict();
 
-export default async function inspect({ input, signal }: CliRouteProps<typeof inputSchema>) {
+export default async function inspect(
+  { input, signal }: CliRouteProps<typeof inputSchema>,
+) {
   signal.throwIfAborted();
   return { scanned: input.maxFiles ?? 0 };
 }
@@ -150,15 +155,82 @@ session and rejects the key. See [Render budget](./mcp.mdx#render-budget).
 
 Opt out with `bin: false`, `routes.cli: 'conventional'`, or by prefixing a path segment with `_`.
 
+### Share one schema between MCP and CLI
+
+The argv grammar is projected from `inputSchema` wherever that schema is declared. A CLI command
+and an MCP tool that expose the same operation bind one schema module instead of each carrying a
+copy:
+
+```ts
+// src/lib/protocol-schemas.ts
+import { z } from 'zod';
+
+// `export const requestStatuses = ['queued', …] as const` in ../daemon/protocol.ts
+import { requestStatuses } from '../daemon/protocol.js';
+
+const requestStatusSchema = z.enum(requestStatuses);
+
+export const statusInputSchema = z.object({
+  laneKey: z.string().min(1).optional(),
+  limit: z.number().int().min(1).max(500).optional(),
+  statuses: z.array(requestStatusSchema).max(8).optional(),
+  tickets: z.array(z.string().min(1)).max(100).optional(),
+}).strict();
+export const statusResultSchema = z.object({ /* ... */ }).strict();
+```
+
+```ts
+// src/cli/status.tsx
+import { statusInputSchema, statusResultSchema } from '../lib/protocol-schemas.js';
+
+export const inputSchema = statusInputSchema;
+export const resultSchema = statusResultSchema;
+```
+
+The tool route (`src/mcp/hauler/tools/hauler_status.tsx`) exports the same two lines, importing
+from `'../../../lib/protocol-schemas.js'`. The compiler resolves the reference without executing
+any module and parses the zod expression in the module that declares it, under the same bounded
+grammar as an inline schema:
+
+- A reference may be the whole `inputSchema` initializer, a property initializer, the root of a
+  method chain (`requestStatusSchema.optional()`), or the argument of `z.array(...)`,
+  `z.enum(...)` (an `as const` array of string literals), `z.object(...)` / `z.strictObject(...)`
+  (an object literal), or `.default(...)` (a static literal).
+- It resolves to a top-level `const` of the same module, exported or not, or to the
+  `export const` of a module imported through a **relative** specifier that resolves inside the
+  project (`.js` specifiers map onto their `.ts`/`.tsx` source). Alias chains
+  (`export const a = b`) are followed to any depth, and every visited binding is recorded, so a
+  cycle is detected rather than walked twice.
+- Bare package specifiers, modules outside the project or missing, a target module with no
+  `export const` of that name, `let`/`var`, destructured, function, class, default-import, and
+  namespace-import bindings, and dynamic initializers (a bare call, a function, a template with
+  substitutions) are boundaries the resolver does not cross.
+- A grammar violation inside the resolved schema is still `AB4814`, its position qualified by the
+  declaring module. A reference that cannot be followed is `AB4838`, whose message prints the
+  reference chain (`inputSchema -> statusInputSchema (src/lib/protocol-schemas.ts) ->
+  requestStatusSchema -> requestStatuses`) and the boundary that stopped the resolver; a cyclic
+  chain is `AB4839`, whose message prints the cycle.
+- Only CLI routes raise `AB4838`/`AB4839`, because only there the static grammar is load-bearing.
+  An MCP route whose schema the resolver cannot follow keeps working exactly as an out-of-grammar
+  inline schema does: the generated server derives its JSON Schema from the real zod object.
+- `resultSchema` may be imported the same way. Its presence is checked statically, its type
+  flows through TypeScript, and the runtime validates with the real zod object.
+
+Both routes then bind one canonical
+[route contract](./index.mdx#route-contracts-application-ir), which is what the argv grammar,
+the static MCP `inputSchema`, the generated route types, the Workbench, and
+`agent-bundle inspect --routes` read.
+
 ### The routed CLI inside host artifacts
 
 The package bin only reaches users who install the npm package, while hooks, Skills, and scripts
-ship with the host artifact. So the build also emits the same compiled command graph into every
-selected target as `<target>/bin/<plugin-name>.mjs` (plus `bin/<plugin-name>-flight.mjs` when any
-command renders). Every built-in target publishes the `cli` capability that admits it. The
-artifact bin is a self-contained ESM module with no shebang or executable bit — run it as
-`node <plugin-root>/bin/<plugin-name>.mjs <command>`, exactly like `scripts/*.mjs`. Help, argv
-parsing, output modes, exit codes, and signals match the package bin; the one difference is that
+ship with the host artifact. So the build also emits the same compiled command graph once into
+the artifact root as `bin/<plugin-name>.mjs` (plus `bin/<plugin-name>-flight.mjs` when any
+command renders), shared by every selected host. Every built-in target publishes the `cli`
+capability that admits it. The artifact bin is a self-contained ESM module with no shebang or
+executable bit — run it as `node <plugin-root>/bin/<plugin-name>.mjs <command>`, exactly like
+`scripts/*.mjs`. Help, argv parsing, output modes, exit codes, and signals match the package bin;
+the one difference is that
 workspace-durable state without a host-supplied `AGENT_BUNDLE_PLUGIN_ROOT` anchors on the artifact
 root (the parent of `bin/`, the same fallback the generated MCP worker uses) instead of
 `$PWD/.agent-bundle/state`, so a co-installed CLI and server share one store.
@@ -207,7 +279,7 @@ fabricated identity, and a release build refuses a project with no release versi
 
 ## Packaging and installers
 
-When package outputs and at least one Claude, Codex, or Cursor host pack are built inside the
+When package outputs and at least one Claude, Codex, or Cursor projection are built inside the
 project, the framework also emits one self-contained package-relative installer at
 `dist/bin/<plugin-name>.js` — or `<plugin-name>-install.js` when that name is taken, with a
 numeric suffix if both are. Declare the matching `package.json` `bin` value. Its grammar is

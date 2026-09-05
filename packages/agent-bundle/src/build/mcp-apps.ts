@@ -266,26 +266,23 @@ const appIdentity = (app: NormalizedMcpApp): string => stableJson({
   ...(app.template === undefined ? {} : { template: app.template }),
 });
 
-export type McpAppTargetSelection =
-  | Readonly<{ readonly target: string; readonly targets?: never }>
-  | Readonly<{ readonly target?: never; readonly targets: Readonly<Record<string, string>> }>;
-
-const selectedAppTarget = (
-  app: NormalizedMcpApp,
-  selection: McpAppTargetSelection,
-): string | undefined => {
-  const target = selection.target ?? selection.targets[app.id];
-  return target !== undefined && app.targets.includes(target) ? target : undefined;
-};
+/**
+ * The projections one composite root compiles apps for (#555): an app is
+ * compiled once when its target set reaches any selected host, and the
+ * compiled surface is attributed to the selection's identity (`target`).
+ */
+export interface McpAppSelection {
+  readonly selected: readonly string[];
+  readonly target: string;
+}
 
 export const planCompiledMcpApps = (
   apps: readonly NormalizedMcpApp[],
-  options: Readonly<{ readonly outDir: string } & McpAppTargetSelection>,
+  options: Readonly<{ readonly outDir: string } & McpAppSelection>,
 ): readonly PlannedMcpApp[] => {
-  const planned = new Map<string, { identity: string; serverIds: string[]; app: NormalizedMcpApp; target: string }>();
+  const planned = new Map<string, { identity: string; serverIds: string[]; app: NormalizedMcpApp }>();
   for (const app of apps) {
-    const target = selectedAppTarget(app, options);
-    if (app.prebuilt === true || target === undefined) continue;
+    if (app.prebuilt === true || !app.targets.some((target) => options.selected.includes(target))) continue;
     const identity = appIdentity(app);
     const existing = planned.get(app.name);
     if (existing !== undefined) {
@@ -298,9 +295,9 @@ export const planCompiledMcpApps = (
       if (!existing.serverIds.includes(app.serverId)) existing.serverIds.push(app.serverId);
       continue;
     }
-    planned.set(app.name, { app, identity, serverIds: [app.serverId], target });
+    planned.set(app.name, { app, identity, serverIds: [app.serverId] });
   }
-  return Object.freeze([...planned.values()].map(({ app, serverIds, target }) => Object.freeze({
+  return Object.freeze([...planned.values()].map(({ app, serverIds }) => Object.freeze({
     ...(app._meta === undefined ? {} : { _meta: app._meta }),
     id: app.id,
     mimeType: mcpAppMimeType,
@@ -314,7 +311,7 @@ export const planCompiledMcpApps = (
       app.source,
       ...(app.template === undefined ? [] : [app.template]),
     ]),
-    target,
+    target: options.target,
   })));
 };
 
@@ -423,12 +420,9 @@ export const compileMcpApps = async (
     readonly mode?: McpAppCompileMode;
     readonly outDir: string;
     readonly tools?: AgentBundleToolsConfig;
-  } & McpAppTargetSelection>,
+  } & McpAppSelection>,
 ): Promise<CompiledMcpAppsResult> => {
-  const compiled = planCompiledMcpApps(apps, {
-    outDir: options.outDir,
-    ...(options.target === undefined ? { targets: options.targets } : { target: options.target }),
-  });
+  const compiled = planCompiledMcpApps(apps, { outDir: options.outDir, selected: options.selected, target: options.target });
   if (compiled.length === 0) {
     return Object.freeze({ apps: Object.freeze([]), diagnostics: Object.freeze([]) });
   }

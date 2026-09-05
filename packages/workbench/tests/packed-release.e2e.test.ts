@@ -399,9 +399,16 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       await expect(appFrame.locator('#view')).toHaveText('packed release dashboard', { timeout: browserTimeout });
 
       phase = 'Logs, Evals, and Comparisons pages';
+      // The heading renders before the page's mount replay is answered; leaving
+      // on the heading alone cancels that replay mid-flight on a loaded server.
+      // The visit is complete once the replay has responded.
+      const logsReplayListing = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/logs/replay');
       await page.goto(workbenchUrl(origin, 'logs'));
       phase = 'Logs page heading';
       await expect(page.getByRole('heading', { name: 'Logs' })).toBeVisible({ timeout: browserTimeout });
+      phase = 'Logs page replay';
+      const logsReplayListingResponse = await logsReplayListing;
+      if (!logsReplayListingResponse.ok()) throw new Error(`The Logs page replay route failed with ${logsReplayListingResponse.status()}: ${await logsReplayListingResponse.text()}`);
       const initialEvalsRequestIndex = browserRequests.length;
       await page.goto(workbenchUrl(origin, 'evals'));
       phase = 'Evals page heading';
@@ -879,6 +886,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       await expect(page.locator('.eval-raw-result')).toContainText('The deterministic packed fixture passed.', { timeout: browserTimeout });
       await waitForBrowserRequestsAfter(evalsBrowserRequestIndex);
       phase = 'Evals comparison run availability';
+      const comparisonsOpenedIndex = browserRequests.length;
       await page.getByRole('link', { name: 'Comparisons', exact: true }).click();
       await expect(page.getByRole('heading', { name: 'Comparisons' })).toBeVisible({ timeout: browserTimeout });
       await expect.poll(async () => page.locator('#comparison-base option').count(), { timeout: browserTimeout }).toBeGreaterThanOrEqual(2);
@@ -923,6 +931,19 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       const rebuiltWithRecoveredSession = page.waitForResponse((response) =>
         response.url() === `${origin}/api/project/rebuild` && response.request().method() === 'POST' && response.ok(),
       );
+      // The recovered session hands the Comparisons page new clients, and its
+      // effect re-lists /api/evals/runs; leaving for Overview before a loaded
+      // server answers aborts that listing, which the ledger must be able to
+      // attribute to this departure like every later one. A visit owns the
+      // requests recorded between its arrival and departure stamps — delivery
+      // order, which a millisecond cannot establish (see the ledger).
+      const postRecoveryNavigation: Array<Readonly<{
+        leftAt: number;
+        leftIndex: number;
+        openedIndex: number;
+        respondedStream?: true;
+        url: string;
+      }>> = [Object.freeze({ leftAt: Date.now(), leftIndex: browserRequests.length, openedIndex: comparisonsOpenedIndex, url: `${origin}/api/evals/runs` })];
       await page.getByRole('link', { name: 'Overview', exact: true }).click();
       await page.getByRole('button', { name: 'Rebuild' }).click();
       const rebuiltWithRecoveredSessionResponse = await rebuiltWithRecoveredSession;
@@ -967,12 +988,24 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
         response.url() === `${origin}/api/mcp/sessions/${encodeURIComponent(browserMcpSessionBId)}` &&
         response.request().method() === 'DELETE' && response.ok(),
       );
+      // The close window opens on a stamp taken before the click — the click
+      // is issued from here, so nothing it causes can reach the ledger earlier
+      // — and closes on the DELETE's own completion entry: the page aborts both
+      // session streams before it issues that DELETE, so the close-induced
+      // aborts are delivered inside the window however late Playwright hands
+      // them over, while an abort before the click stays outside it. Completion
+      // events trail their responses, so the DELETE entry is awaited.
       const browserMcpSessionBCloseStartedAt = Date.now();
       await page.getByRole('button', { name: 'Close MCP session' }).click();
       const closedBrowserMcpSessionBResponse = await closedBrowserMcpSessionB;
       expect(closedBrowserMcpSessionBResponse.request().headers()['x-agent-bundle-session']).toBe(browserGenerationBToken);
       await expect(page.locator('.mcp-page-phase')).toContainText('Session closed', { timeout: browserTimeout });
-      const browserMcpSessionBCloseCompletedAt = Date.now();
+      const browserMcpSessionBCloseRequest = browserRequestByPlaywrightRequest.get(closedBrowserMcpSessionBResponse.request());
+      if (browserMcpSessionBCloseRequest === undefined) throw new Error('The fresh B browser MCP session close was not recorded in the network ledger.');
+      await expect.poll(() => browserMcpSessionBCloseRequest.completedAt, { timeout: browserTimeout }).toBeDefined();
+      const browserMcpSessionBCloseCompletedAt = browserMcpSessionBCloseRequest.completedAt;
+      // Narrowing only: the poll above settled the entry.
+      if (browserMcpSessionBCloseCompletedAt === undefined) throw new Error('The fresh B browser MCP close window is missing its completed DELETE entry.');
 
       phase = 'desktop navigation floor';
       const navigationFloorRequestIndex = browserRequests.length;
@@ -981,7 +1014,12 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
         { heading: 'MCP playground', label: 'MCP playground' }, { heading: 'Artifacts', label: 'Artifacts' }, { heading: 'Playground', label: 'Playground' },
         { heading: 'Logs', label: 'Logs' }, { heading: 'Evals', label: 'Evals' }, { heading: 'Comparisons', label: 'Comparisons' },
       ];
+      // Every abortable request a route issues on mount, so leaving the route
+      // before a loaded server answers is claimed by the route's record rather
+      // than reported as an unknown post-recovery failure.
       const postRecoveryNavigationUrls = new Map<string, readonly string[]>([
+        // Skills lists the authored suites for its eval-coverage column.
+        ['Skills', [`${origin}/api/evals/suites`]],
         ['Hooks', [`${origin}/api/hooks?epochId=${encodeURIComponent(recoveredEpochId)}`]],
         ['MCP playground', [`${origin}/api/artifacts/epochs/${encodeURIComponent(recoveredEpochId)}`]],
         ['Playground', [`${origin}/api/playground/catalog?epochId=${encodeURIComponent(recoveredEpochId)}`]],
@@ -990,26 +1028,28 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
         ['Comparisons', [`${origin}/api/evals/runs`]],
       ]);
       const respondedNavigationStreams = new Set<string>();
-      const postRecoveryNavigation: Array<Readonly<{
-        leftAt: number;
-        openedAt: number;
-        respondedStream?: true;
-        url: string;
-      }>> = [];
-      let activeNavigationRoute: Readonly<{ openedAt: number; urls?: readonly string[] }> | undefined;
-      const leaveActiveNavigationRoute = (leftAt: number): void => {
+      let activeNavigationRoute: Readonly<{ openedIndex: number; urls?: readonly string[] }> | undefined;
+      // A departure is a test action with no wire event of its own, so it is
+      // stamped twice before the click: the instant, which the abort it
+      // provokes must not precede, and the ledger length, which orders the
+      // requests already handed over (the departed page's) against those that
+      // follow (the next page's) even when both share the instant's millisecond.
+      const leaveActiveNavigationRoute = (): void => {
         if (activeNavigationRoute === undefined) return;
+        const leftAt = Date.now();
+        const leftIndex = browserRequests.length;
         for (const url of activeNavigationRoute.urls ?? []) postRecoveryNavigation.push(Object.freeze({
           leftAt,
-          openedAt: activeNavigationRoute.openedAt,
+          leftIndex,
+          openedIndex: activeNavigationRoute.openedIndex,
           ...(respondedNavigationStreams.has(url) ? { respondedStream: true as const } : {}),
           url,
         }));
         activeNavigationRoute = undefined;
       };
       for (const route of navigationRoutes) {
-        const openedAt = Date.now();
-        leaveActiveNavigationRoute(openedAt);
+        leaveActiveNavigationRoute();
+        const openedIndex = browserRequests.length;
         const logsStreamResponse = route.label === 'Logs'
           ? page.waitForResponse((response) => {
             const url = new URL(response.url());
@@ -1029,15 +1069,15 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
           const streamUrl = response.url();
           const stream = browserRequestByPlaywrightRequest.get(response.request());
           if (
-            stream === undefined || stream.at < openedAt || stream.respondedAt === undefined ||
+            stream === undefined || browserRequests.indexOf(stream) < openedIndex || stream.respondedAt === undefined ||
             stream.status !== response.status()
           ) throw new Error('The Logs navigation stream response was not recorded in the network ledger.');
           respondedNavigationStreams.add(streamUrl);
           routeUrls.push(streamUrl);
         }
-        activeNavigationRoute = Object.freeze({ openedAt, urls: Object.freeze(routeUrls) });
+        activeNavigationRoute = Object.freeze({ openedIndex, urls: Object.freeze(routeUrls) });
       }
-      leaveActiveNavigationRoute(Date.now());
+      leaveActiveNavigationRoute();
       await page.getByRole('link', { name: 'Overview', exact: true }).focus();
       await page.keyboard.press('Enter');
       await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });

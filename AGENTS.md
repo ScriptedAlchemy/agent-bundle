@@ -153,8 +153,9 @@
 ## Pull requests
 
 - Every PR gets a self-review before merge: spawn a local reviewer subagent
-  (`change-risk-reviewer` if available, else `generalPurpose`; prefer a
-  different model from the author's, e.g. `gpt-5.6-sol-high`) with the repo
+  (`change-risk-reviewer` if available, else `generalPurpose`; a different
+  model from the author's, e.g. `gpt-5.6-sol-high` or a Claude model — never
+  a Grok model for review) with the repo
   path and the PR number or branch, asking for concrete merge risks only —
   bugs, breaking changes, missed tests, doc or changeset gaps — against the
   current diff vs `origin/main`. Fix or explicitly dismiss every finding in

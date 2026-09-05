@@ -3,31 +3,37 @@
   {
     "type": "dir",
     "name": "modules",
-    "label": "模块"
+    "label": "模块",
+    "collapsed": true
   },
   {
     "type": "dir",
     "name": "functions",
-    "label": "函数"
+    "label": "函数",
+    "collapsed": true
   },
   {
     "type": "dir",
     "name": "classes",
-    "label": "类"
+    "label": "类",
+    "collapsed": true
   },
   {
     "type": "dir",
     "name": "interfaces",
-    "label": "接口"
+    "label": "接口",
+    "collapsed": true
   },
   {
     "type": "dir",
     "name": "types",
-    "label": "类型别名"
+    "label": "类型别名",
+    "collapsed": true
   },
   {
     "type": "dir",
     "name": "variables",
-    "label": "变量"
+    "label": "变量",
+    "collapsed": true
   }
 ]

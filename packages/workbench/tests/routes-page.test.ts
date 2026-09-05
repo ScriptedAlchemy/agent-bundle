@@ -28,6 +28,17 @@ const manifest: RouteManifest = {
       source: 'src/cli/library/audit.ts',
     }],
   },
+  contracts: [{
+    id: 'contract:src/lib/protocol-schemas.ts#statusInputSchema',
+    input: {
+      additionalProperties: false,
+      properties: { format: { enum: ['text', 'json'], type: 'string' } },
+      required: ['format'],
+      type: 'object',
+    },
+    origin: { binding: 'statusInputSchema', module: 'src/lib/protocol-schemas.ts' },
+    routes: ['cli:library/audit', 'tool:library/echo'],
+  }],
   diagnostics: [{ code: 'AB4801', message: 'Two MCP tool routes claim the same name.', severity: 'error' }],
   digest: 'd'.repeat(64),
   events: [{
@@ -46,6 +57,7 @@ const manifest: RouteManifest = {
     name: 'library',
     routes: [{
       config: [{ key: 'title', kind: 'string', value: 'Echo' }],
+      contract: 'contract:src/lib/protocol-schemas.ts#statusInputSchema',
       description: 'Echo the request back',
       id: 'tool:library/echo',
       inputSchema: {
@@ -215,6 +227,14 @@ it('renders generated fields, descriptions, defaults, required markers, and a ga
   expect(markup).toContain('Full schema validation runs during execution.');
   expect(markup).toContain('Open in MCP session');
   expect(markup).toContain('disabled=""');
+});
+
+it('renders a compact contract origin and sharing summary beside the input heading', () => {
+  const markup = render(routeCatalogFor(manifest));
+
+  expect(markup).toContain(
+    'Contract statusInputSchema · src/lib/protocol-schemas.ts · shared with cli:library/audit',
+  );
 });
 
 it('renders an honest JSON fallback and no invoke control for non-tool routes', () => {

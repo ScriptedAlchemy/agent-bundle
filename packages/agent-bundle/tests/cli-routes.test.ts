@@ -95,7 +95,6 @@ describe('static argv projection (bounded zod grammar)', () => {
   });
 
   it.each([
-    ['a shared schema identifier', 'z.object({ root: pathSchema })', 'pathSchema'],
     ['a union', 'z.object({ mode: z.union([z.string(), z.number()]) })', 'z.union'],
     ['a nested object', 'z.object({ nested: z.object({ a: z.string() }) })', 'z.object'],
     ['a transform', 'z.object({ root: z.string().transform((value) => value) })', '.transform()'],
@@ -109,6 +108,53 @@ describe('static argv projection (bounded zod grammar)', () => {
     const extracted = extract(schema);
     expect(codesOf(extracted.diagnostics)).toEqual(['AB4814']);
     expect(extracted.diagnostics[0]!.message).toContain(fragment);
+    expect(extracted.options).toBeUndefined();
+  });
+
+  it('rejects an unresolvable identifier reference with AB4838 naming the chain and reason', () => {
+    const extracted = extract('z.object({ root: pathSchema })');
+    expect(codesOf(extracted.diagnostics)).toEqual(['AB4838']);
+    expect(extracted.diagnostics[0]).toMatchObject({
+      severity: 'error',
+      sourcePath: '/project/src/cli/example.ts',
+    });
+    expect(extracted.diagnostics[0]!.message).toContain('inputSchema -> pathSchema');
+    expect(extracted.diagnostics[0]!.message).toContain(
+      'which is neither a top-level const in this module nor a named import from a relative module',
+    );
+    expect(extracted.diagnostics[0]!.recovery).toContain('relative');
+    expect(extracted.diagnostics[0]!.recovery).toContain('export const');
+    expect(extracted.diagnostics[0]!.recovery).toContain('inspect again');
+    expect(extracted.options).toBeUndefined();
+  });
+
+  it('rejects a cyclic inputSchema reference with AB4839', () => {
+    const files = new Map<string, string>([
+      ['/project/src/lib/a.ts', "import { y } from './b.js';\nexport const x = y;\n"],
+      ['/project/src/lib/b.ts', "import { x } from './a.js';\nexport const y = x;\n"],
+    ]);
+    const extracted = extractCliArgv(
+      "import { x } from '../lib/a.js';\nexport const inputSchema = x;\n",
+      'src/cli/example.ts',
+      '/project/src/cli/example.ts',
+      {
+        projectRoot: '/project',
+        readModule: (path) => files.get(path),
+        source: '/project/src/cli/example.ts',
+      },
+    );
+    expect(codesOf(extracted.diagnostics)).toEqual(['AB4839']);
+    expect(extracted.diagnostics[0]).toMatchObject({
+      severity: 'error',
+      sourcePath: '/project/src/cli/example.ts',
+    });
+    expect(extracted.diagnostics[0]!.message).toContain(
+      'inputSchema -> x (src/lib/a.ts) -> y (src/lib/b.ts) -> x (src/lib/a.ts)',
+    );
+    expect(extracted.diagnostics[0]!.message).toContain('is a reference cycle.');
+    expect(extracted.diagnostics[0]!.recovery).toContain('relative');
+    expect(extracted.diagnostics[0]!.recovery).toContain('export const');
+    expect(extracted.diagnostics[0]!.recovery).toContain('inspect again');
     expect(extracted.options).toBeUndefined();
   });
 
@@ -201,6 +247,42 @@ describe('compiled command graph', () => {
       },
     ]);
     expect(Object.isFrozen(graph.cli!.commands)).toBe(true);
+  });
+
+  it('projects an imported schema onto the same CompiledCliOption[] as its inline twin', async () => {
+    const schema = [
+      'z.object({',
+      '  limit: z.number().int().min(1).optional(),',
+      '  name: z.string().min(1),',
+      '}).strict()',
+    ].join('\n');
+    const commandModule = (inputSchema: string): string => [
+      `export const inputSchema = ${inputSchema};`,
+      'export const resultSchema = {};',
+      'export default async () => undefined;',
+      '',
+    ].join('\n');
+    const inlineRoot = await createRoot();
+    await writeTree(inlineRoot, {
+      'src/cli/status.ts': commandModule(schema),
+    });
+    const importedRoot = await createRoot();
+    await writeTree(importedRoot, {
+      'src/cli/status.ts': commandModule('statusInputSchema').replace(
+        'export const inputSchema',
+        "import { statusInputSchema } from '../lib/protocol-schemas.js';\nexport const inputSchema",
+      ),
+      'src/lib/protocol-schemas.ts': `export const statusInputSchema = ${schema};\n`,
+    });
+    const inline = await compileRouteGraph(inlineRoot, fixtureConfig());
+    const imported = await compileRouteGraph(importedRoot, fixtureConfig());
+    expect(inline.diagnostics).toEqual([]);
+    expect(imported.diagnostics).toEqual([]);
+    expect(imported.cli?.commands?.[0]?.options).toEqual(inline.cli?.commands?.[0]?.options);
+    expect(imported.cli?.commands?.[0]?.options).toEqual([
+      { key: 'limit', kind: 'number', option: 'limit', repeated: false, required: false },
+      { key: 'name', kind: 'string', option: 'name', repeated: false, required: true },
+    ]);
   });
 
   it('errors with AB4813 when a command path is both a module and a group', async () => {

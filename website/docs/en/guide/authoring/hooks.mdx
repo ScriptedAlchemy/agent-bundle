@@ -98,7 +98,8 @@ canonical event, so a `satisfies` clause is the whole contract:
 import type { HookHandler } from 'agent-bundle';
 
 export default ((event) => ({
-  additionalContext: `Run verify-release from ${event.cwd ?? process.cwd()} before publishing.`,
+  additionalContext:
+    `Run verify-release from ${event.cwd ?? process.cwd()} before publishing.`,
   outcome: 'continue',
 })) satisfies HookHandler<'sessionStart'>;
 ```
@@ -129,21 +130,25 @@ are accepted, and each one is checked:
 
 | Key | Contract |
 | --- | --- |
-| `outcome` | `continue`, `deny`, or `stop`. |
-| `reason` | A non-empty string, valid only when denying a `beforeTool`, `stop`, or `agentStop` hook. Denying one of those without a reason fails. |
+| `outcome` | `continue` or `deny`. `'stop'` is not a legal result on any event: `HookHandler<E>` excludes it and the generated wrapper rejects it at run time. |
+| `reason` | A non-empty string, valid only when denying a `beforeTool`, `stop`, or `agentStop` hook (Cursor's wrapper also takes one on the `agentStart` denial it alone admits). Denying one of those without a reason fails. |
 | `additionalContext` | A string appended to the agent's context. |
 | `updatedInput` | Replacement input for the pending call. |
 
 Per-event restrictions are enforced, not documented-and-hoped:
 
-- `sessionStart`, `afterTool`, and `agentStart` cannot deny, stop, or replace input.
+- `sessionStart`, `afterTool`, and `agentStart` cannot deny, stop, or replace input. The typed
+  contract rejects all three, and so do the Claude and Codex wrappers; Cursor's wrapper alone
+  tolerates a denying `agentStart` with a reason, projected as `permission: 'deny'`.
 - `beforeTool` cannot stop, and cannot replace input while denying. A continuing `beforeTool`
   handler makes **no** permission decision: nothing is written to the host's decision field, so
   its normal permission prompt still applies, and a `updatedInput` rewrite is evaluated by that
   flow against the rewritten input. Only `deny` is projected as a decision. To approve a call
   explicitly, use an [event route](#event-routes) and return `outcome: 'allow'`.
 - `stop` accepts only `continue`, or `deny` with a reason.
-- `agentStop` cannot stop the parent flow or replace input, and on Codex it cannot add context.
+- `agentStop` cannot stop the parent flow or replace input, and only Claude Code carries
+  `additionalContext` from it — Codex and Cursor reject it, and the typed contract excludes it
+  everywhere.
 
 An unknown key, a wrong type, or a violation of any rule above fails the hook with a clear
 message instead of being projected into a host document that would misbehave silently.
@@ -195,13 +200,17 @@ export const config = {
   tools: ['file.write'], // canonical selector -> per-host native matcher
 } satisfies AgentEventRouteConfig;
 
-export default async function AfterFileEdit({ canonical, native, signal }: AgentEventRouteProps<'tool/after'>) {
+export default async function AfterFileEdit(
+  { canonical, native, signal }: AgentEventRouteProps<'tool/after'>,
+) {
   // canonical.provenance = { host, hostContractRevision, nativeEvent, source: 'native' }
   // canonical.payload.toolName = { value: 'Write', nativeKey: 'tool_name' } on every host
   const tool = canonical.payload.toolName?.value ?? 'a tool';
   return (
     <Agent.Result>
-      <Agent.Context>{`Recorded an edit by ${tool}, reported by ${canonical.provenance.host}.`}</Agent.Context>
+      <Agent.Context>
+        {`Recorded an edit by ${tool}, reported by ${canonical.provenance.host}.`}
+      </Agent.Context>
     </Agent.Result>
   );
 }
@@ -243,7 +252,9 @@ Route-unit tests build the same props from a host envelope with `createEventRout
 import { createEventRouteInput, renderRoute } from 'agent-bundle/test';
 
 const rendered = await renderRoute('event:tool/after', {
-  input: createEventRouteInput('tool/after', claudePostToolUseEnvelope, { host: 'claude' }),
+  input: createEventRouteInput('tool/after', claudePostToolUseEnvelope, {
+    host: 'claude',
+  }),
 });
 ```
 
@@ -288,16 +299,20 @@ in [What happens when a route throws](./mcp.mdx#what-happens-when-a-route-throws
 
 ### What is on the wire
 
-Both shapes share the emitted `hooks/hooks.json` wiring, and both compile into a wrapper the host
-invokes as `node "${CLAUDE_PLUGIN_ROOT}/hooks/<wrapper>.mjs"` (or the host's own root token). The
-unified `plugin` target also writes `hooks/hooks-cursor.json` and `hooks/<name>.cursor.mjs` for
-Cursor (`preToolUse` / `postToolUse` camelCase). Claude Code and Codex load `hooks/hooks.json` by
-convention and never scan `hooks/` for other documents, so the Claude manifest carries no `hooks`
-pointer: Claude Code reports a pointer at the conventional file as a duplicate hooks file
-(`manifest.hooks` is for additional documents only). Each wrapper compares the envelope's
-`hook_event_name` against the spelling baked for its own host (`PreToolUse` / `PostToolUse` for
-Claude and Codex), so `native hook_event_name must equal postToolUse` on a Claude session means a
-Cursor-built wrapper is installed under the Claude plugin root, not that Claude sends camelCase. A
+Both shapes compile into a wrapper under the root `hooks/` directory that the host invokes as
+`node "${CLAUDE_PLUGIN_ROOT}/hooks/<wrapper>.mjs"` (or with its own root token). A hook that only
+one selected host receives compiles to `hooks/<name>.mjs`; a hook shared by several selected hosts
+compiles once per host as `hooks/<name>.<host>.mjs`, because each wrapper bakes in its host's
+event spelling — `PreToolUse` / `PostToolUse` for Claude Code and Codex, camelCase `preToolUse` /
+`postToolUse` for Cursor — and each host's document points at its own wrapper. Claude Code's
+document is `hooks/hooks.json`, which it loads by convention without scanning `hooks/` for other
+documents, so the Claude manifest carries no `hooks` pointer: Claude Code reports a pointer at the
+conventional file as a duplicate hooks file (`manifest.hooks` is for additional documents only).
+Codex and Cursor manifests carry an explicit `hooks` pointer, so their documents sit beside their
+manifests as `.codex-plugin/hooks.json` and `.cursor-plugin/hooks.json`. Each wrapper compares the
+envelope's `hook_event_name` against the spelling baked for its own host, so
+`native hook_event_name must equal postToolUse` on a Claude session means Claude's document is
+invoking a Cursor wrapper, not that Claude sends camelCase. A
 config-declared handler runs in-process inside that wrapper. An event route with
 `runtime: 'shared'` instead forwards to the warm runtime living inside the generated MCP server
 process, so hooks share state with tools:
@@ -356,6 +371,12 @@ that never clears) is reported on the server's stderr — one line per distinct 
 at most every 30 seconds — while the server keeps standing by. A startup that fails for any
 other reason still fails closed, as does a stale socket the owner cannot remove.
 
+Inside one composite root each selected host reaches that runtime through the first generated
+MCP server its own MCP document lists — one process when every selected host lists the same
+server, one per host otherwise. The runtime's socket is identified by the artifact alone (its
+epoch and root directory, never the `targets` selection), and the invoking host rides on each
+request, so whichever process owns the socket answers every selected host's wrappers.
+
 A route with `runtime: 'standalone'` bundles its module into the wrapper itself: the same
 canonical identity, the same projection, no shared process state. `AB4817` refuses a route
 that requires the shared runtime on a target where no generated MCP entry hosts it and no
@@ -371,7 +392,8 @@ npx agent-bundle inspect --root . --hooks
 npx agent-bundle hooks list --artifact artifact --target claude
 npx agent-bundle hooks simulate --artifact artifact --target claude \
   --hook session-start-session-start-7ab7e8a5 \
-  --input '{"sessionId":"local","transcriptPath":"/tmp/transcript.jsonl","cwd":"/tmp/project","source":"startup"}'
+  --input '{"sessionId":"local","transcriptPath":"/tmp/transcript.jsonl",
+    "cwd":"/tmp/project","source":"startup"}'
 ```
 
 `--hook` must be the exact `name` (or `id`) that `hooks list` printed — normalization derives it

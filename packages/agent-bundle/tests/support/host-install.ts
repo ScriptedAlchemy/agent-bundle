@@ -13,6 +13,7 @@ import portableMcpSchema from '../../src/adapters/schemas/portable/mcp.schema.js
 import portablePluginSchema from '../../src/adapters/schemas/portable/plugin.schema.json' with { type: 'json' };
 import { codexArtifactPaths, codexInterfaceFields, codexPluginDocumentValidator } from '../../src/adapters/codex.ts';
 import {
+  cursorArtifactPaths,
   cursorHooksValidator,
   cursorMcpValidator,
   cursorPluginValidator,
@@ -68,7 +69,7 @@ const portablePluginSchemaIdentifier =
   'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json';
 const skillSidecarPath = join('skills', 'probe', 'agents', 'openai.yaml');
 const codexManifestPath = codexArtifactPaths.plugin;
-const validateCodexPluginManifest = codexPluginDocumentValidator(codexArtifactPaths.mcp);
+const validateCodexPluginManifest = codexPluginDocumentValidator;
 const portableSchemaValidator = createAdapterValidator();
 
 /**
@@ -149,8 +150,11 @@ export interface BuiltFixtureProject {
 }
 
 export interface BuiltHostInstallFixture extends BuiltFixtureProject {
-  /** Per-host bundles plus the unified `plugin` bundle (one root, three host manifests). */
-  readonly bundles: Readonly<Record<'claude' | 'codex' | 'cursor' | 'plugin', string>>;
+  /**
+   * The composite root is the bundle for every selected host: one directory,
+   * three host manifests. Keyed by host so install flows read as before.
+   */
+  readonly bundles: Readonly<Record<'claude' | 'codex' | 'cursor', string>>;
 }
 
 export interface BuiltHostInstallTokenFixture extends BuiltFixtureProject {
@@ -296,12 +300,12 @@ export interface CursorHostInstallReport {
   readonly skill: string;
   readonly status: 'passed';
   /**
-   * The unified `plugin` bundle installed as a Cursor local plugin in its own isolated home: Doctor's
-   * static validation must follow the manifest to `hooks/hooks-cursor.json` and report zero
+   * The composite root installed as a Cursor local plugin in its own isolated home: Doctor's
+   * static validation must follow the manifest to `.cursor-plugin/hooks.json` and report zero
    * AB7320/AB6027 findings even though a Claude-format `hooks/hooks.json` sits beside it (#438).
    */
   readonly unifiedBundle: {
-    readonly hooksDocument: 'hooks/hooks-cursor.json';
+    readonly hooksDocument: '.cursor-plugin/hooks.json';
     readonly hooksRegistration: 'registered';
     readonly install: 'installed';
     readonly staticFindings: { readonly AB6027: 0; readonly AB7320: 0 };
@@ -582,7 +586,8 @@ const proveSameVersionRebuild = async (options: {
  */
 const buildFixtureProject = async (options: {
   readonly buildCommand?: 'build' | 'prepack';
-  readonly bundleNames: readonly string[];
+  /** Root-relative host documents that prove each selected projection landed. */
+  readonly expectedPaths: readonly string[];
   readonly environment: Readonly<NodeJS.ProcessEnv>;
   readonly fixture: string;
   readonly prepareProject?: (projectRoot: string) => Promise<void>;
@@ -607,7 +612,7 @@ const buildFixtureProject = async (options: {
       timeout: 180_000,
     });
     assertProof(result.exitCode === 0, `${options.fixture} fixture build failed: ${commandDetail(result)}`);
-    await Promise.all(options.bundleNames.map((name) => access(join(artifactRoot, name))));
+    await Promise.all(options.expectedPaths.map((path) => access(join(artifactRoot, path))));
     return Object.freeze({ artifactRoot, cli, root });
   } catch (error) {
     await rm(root, { force: true, recursive: true });
@@ -622,18 +627,17 @@ export const buildHostInstallFixture = async (options: {
 }): Promise<BuiltHostInstallFixture> => {
   const built = await buildFixtureProject({
     ...(options.buildCommand === undefined ? {} : { buildCommand: options.buildCommand }),
-    bundleNames: ['claude', 'codex', 'cursor', 'plugin'],
     environment: options.environment,
+    expectedPaths: ['.claude-plugin/plugin.json', '.codex-plugin/plugin.json', '.cursor-plugin/plugin.json'],
     fixture: 'host-install',
     ...(options.prepareProject === undefined ? {} : { prepareProject: options.prepareProject }),
   });
   return Object.freeze({
     ...built,
     bundles: Object.freeze({
-      claude: join(built.artifactRoot, 'claude'),
-      codex: join(built.artifactRoot, 'codex'),
-      cursor: join(built.artifactRoot, 'cursor'),
-      plugin: join(built.artifactRoot, 'plugin'),
+      claude: built.artifactRoot,
+      codex: built.artifactRoot,
+      cursor: built.artifactRoot,
     }),
   });
 };
@@ -648,11 +652,11 @@ export const buildHostInstallTokenFixture = async (options: {
   readonly environment: Readonly<NodeJS.ProcessEnv>;
 }): Promise<BuiltHostInstallTokenFixture> => {
   const built = await buildFixtureProject({
-    bundleNames: ['claude'],
     environment: options.environment,
+    expectedPaths: ['.claude-plugin/plugin.json'],
     fixture: 'host-install-tokens',
   });
-  const claudeBundle = join(built.artifactRoot, 'claude');
+  const claudeBundle = built.artifactRoot;
   return Object.freeze({
     ...built,
     claudeBundle,
@@ -664,13 +668,13 @@ export const buildPortableHostInstallFixture = async (options: {
   readonly environment: Readonly<NodeJS.ProcessEnv>;
 }): Promise<BuiltPortableHostInstallFixture> => {
   const built = await buildFixtureProject({
-    bundleNames: ['portable'],
     environment: options.environment,
+    expectedPaths: ['agent-bundle.manifest.json'],
     fixture: 'host-install-portable',
   });
   return Object.freeze({
     ...built,
-    portableBundle: join(built.artifactRoot, 'portable'),
+    portableBundle: built.artifactRoot,
   });
 };
 
@@ -746,7 +750,7 @@ export const runDevHostInstallProof = async (
   const destination = host === 'cursor'
     ? join(home, '.cursor', 'plugins', 'local', plugin)
     : join(marketplaceRoot, 'plugins', 'cache', marketplace, plugin, version);
-  const mcpPath = host === 'cursor' ? 'mcp.json' : '.mcp.json';
+  const mcpPath = hostMcpDocument(host);
   try {
     manager.start();
     const first = identity('epoch-1', fixture.artifactRoot);
@@ -774,11 +778,11 @@ export const runDevHostInstallProof = async (
       `${host} development proxy did not report AB8025: ${commandDetail(spawned)}`,
     );
     const skillBefore = await readFile(join(destination, 'skills', 'probe', 'SKILL.md'), 'utf8');
-    const hookName = (await readdir(join(epoch2Root, host, 'hooks'))).find((name) => name.endsWith('.mjs'));
+    const hookName = (await readdir(join(epoch2Root, 'hooks'))).find((name) => name.endsWith(`.${host}.mjs`));
     assertProof(hookName !== undefined, `${host} proof epoch contained no generated hook module.`);
     await Promise.all([
-      writeFile(join(epoch2Root, host, 'skills', 'probe', 'SKILL.md'), `${skillBefore}\nDev epoch two.\n`),
-      writeFile(join(epoch2Root, host, 'hooks', hookName), 'export default () => ({ outcome: "continue", additionalContext: "epoch two" });\n'),
+      writeFile(join(epoch2Root, 'skills', 'probe', 'SKILL.md'), `${skillBefore}\nDev epoch two.\n`),
+      writeFile(join(epoch2Root, 'hooks', hookName), 'export default () => ({ outcome: "continue", additionalContext: "epoch two" });\n'),
     ]);
     const callsAfterInstall = hostCommandCalls;
     const second = identity('epoch-2', epoch2Root);
@@ -1183,9 +1187,9 @@ const assertCursorPluginRootVariable = (input: {
     );
   }
   return Object.freeze([
-    'hooks/hooks.json#/hooks/sessionStart/0/command',
-    'mcp.json#/mcpServers/probe/args/0',
-    'mcp.json#/mcpServers/probe/env/AGENT_BUNDLE_PLUGIN_ROOT',
+    '.cursor-plugin/hooks.json#/hooks/sessionStart/0/command',
+    '.cursor-plugin/mcp.json#/mcpServers/probe/args/0',
+    '.cursor-plugin/mcp.json#/mcpServers/probe/env/AGENT_BUNDLE_PLUGIN_ROOT',
   ]);
 };
 
@@ -1284,9 +1288,9 @@ const assertCursorMarketplaceStaging = async (
 };
 
 /**
- * Installs the unified `plugin` bundle as a Cursor local plugin in a fresh isolated home and asks Doctor
- * for the static and registration verdicts. The bundle carries both `hooks/hooks.json` (Claude/Codex
- * format) and `hooks/hooks-cursor.json` (Cursor format, named by `.cursor-plugin/plugin.json`), so a
+ * Installs the composite root as a Cursor local plugin in a fresh isolated home and asks Doctor
+ * for the static and registration verdicts. The root carries both `hooks/hooks.json` (Claude
+ * format) and `.cursor-plugin/hooks.json` (Cursor format, named by `.cursor-plugin/plugin.json`), so a
  * validator that ignored the manifest would report AB7320/AB6027 against a byte-for-byte install (#438).
  */
 const assertUnifiedBundleCursorInstall = async (
@@ -1297,8 +1301,8 @@ const assertUnifiedBundleCursorInstall = async (
   try {
     await mkdir(join(home, '.cursor'), { recursive: true });
     const environment = isolatedEnvironment(options.environment, { HOME: home });
-    const result = await runNodeCli(fixture, ['install', 'cursor', '--from', fixture.bundles.plugin, '--json'], {
-      cwd: fixture.bundles.plugin,
+    const result = await runNodeCli(fixture, ['install', 'cursor', '--from', fixture.artifactRoot, '--json'], {
+      cwd: fixture.artifactRoot,
       environment,
     });
     assertProof(result.exitCode === 0, `Unified bundle Cursor install failed: ${commandDetail(result)}`);
@@ -1309,12 +1313,12 @@ const assertUnifiedBundleCursorInstall = async (
 
     const manifest = record(await readJson(join(destination, '.cursor-plugin', 'plugin.json'), 'unified bundle Cursor manifest'));
     assertProof(
-      manifest?.hooks === './hooks/hooks-cursor.json',
-      `Unified bundle Cursor manifest did not name hooks/hooks-cursor.json: ${JSON.stringify(manifest?.hooks)}`,
+      manifest?.hooks === './.cursor-plugin/hooks.json',
+      `Unified bundle Cursor manifest did not name .cursor-plugin/hooks.json: ${JSON.stringify(manifest?.hooks)}`,
     );
-    await access(join(destination, 'hooks', 'hooks.json')).catch(() => fail('Unified bundle install lacks the Claude/Codex hooks/hooks.json.'));
+    await access(join(destination, 'hooks', 'hooks.json')).catch(() => fail('Unified bundle install lacks the Claude hooks/hooks.json.'));
     const cursorHooks = parseJson<unknown>(
-      await readText(join(destination, 'hooks', 'hooks-cursor.json'), 'unified bundle Cursor hooks document'),
+      await readText(join(destination, '.cursor-plugin', 'hooks.json'), 'unified bundle Cursor hooks document'),
       'unified bundle Cursor hooks document',
     );
     assertProof(cursorHooksValidator(cursorHooks), `Unified bundle Cursor hooks document failed its pinned schema: ${JSON.stringify(cursorHooksValidator.errors)}`);
@@ -1330,12 +1334,12 @@ const assertUnifiedBundleCursorInstall = async (
     const finding = cursor?.inventory.findings.find((entry) => entry.path === destination);
     assertProof(finding?.state === 'installed', `Doctor reported the unified bundle install as ${JSON.stringify(finding?.state)} instead of installed.`);
     assertProof(
-      finding.hooks?.state === 'registered' && finding.hooks.source === join(destination, 'hooks', 'hooks-cursor.json'),
-      `Doctor did not register hooks from hooks/hooks-cursor.json: ${JSON.stringify(finding.hooks)}`,
+      finding.hooks?.state === 'registered' && finding.hooks.source === join(destination, '.cursor-plugin', 'hooks.json'),
+      `Doctor did not register hooks from .cursor-plugin/hooks.json: ${JSON.stringify(finding.hooks)}`,
     );
     assertProof(finding.hooks.events.includes('sessionStart'), 'Doctor did not see the unified bundle sessionStart hook registration.');
     return Object.freeze({
-      hooksDocument: 'hooks/hooks-cursor.json',
+      hooksDocument: '.cursor-plugin/hooks.json',
       hooksRegistration: 'registered',
       install: 'installed',
       staticFindings: Object.freeze({ AB6027: 0, AB7320: 0 }),
@@ -1378,10 +1382,10 @@ export const runCursorHostInstallProof = async (
       `Cursor plugin logo ${JSON.stringify(logo)} does not resolve inside the deploy tree.`,
     );
     await access(logoPath).catch(() => fail(`Cursor plugin logo ${JSON.stringify(logo)} is missing from the deploy tree.`));
-    const hooksText = await readText(join(destination, 'hooks', 'hooks.json'), 'Cursor hooks document');
+    const hooksText = await readText(join(destination, '.cursor-plugin', 'hooks.json'), 'Cursor hooks document');
     const hooksDocument = parseJson<unknown>(hooksText, 'Cursor hooks document');
     assertProof(cursorHooksValidator(hooksDocument), `Cursor hooks document failed its pinned schema: ${JSON.stringify(cursorHooksValidator.errors)}`);
-    const mcpText = await readText(join(destination, 'mcp.json'), 'Cursor MCP document');
+    const mcpText = await readText(join(destination, '.cursor-plugin', 'mcp.json'), 'Cursor MCP document');
     const mcpDocument = parseJson<unknown>(mcpText, 'Cursor MCP document');
     assertProof(cursorMcpValidator(mcpDocument), `Cursor MCP document failed its pinned schema: ${JSON.stringify(cursorMcpValidator.errors)}`);
     const pluginRootLocations = assertCursorPluginRootVariable({
@@ -1809,7 +1813,20 @@ const liveSkillSource = (version: 'v1' | 'v2'): string => [
 const liveHookSource = (version: 'v1' | 'v2'): string =>
   `export default () => ({ additionalContext: 'live development proof ${version}', outcome: 'continue' as const });\n`;
 
-const hostMcpDocument = (host: InstallHost): string => host === 'cursor' ? 'mcp.json' : '.mcp.json';
+const hostMcpDocument = (host: InstallHost): string => {
+  switch (host) {
+    case 'claude':
+      return '.mcp.json';
+    case 'codex':
+      return codexArtifactPaths.mcp;
+    case 'cursor':
+      return cursorArtifactPaths.mcp;
+    default: {
+      const exhaustive: never = host;
+      throw new TypeError(`Unknown install host ${String(exhaustive)}.`);
+    }
+  }
+};
 
 const liveHostDestination = (
   host: InstallHost,

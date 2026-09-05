@@ -49,7 +49,7 @@
     "@effect/platform-node": "4.0.0-rc.112",
     "@rslib/core": "1.0.0",
     "@rstest/core": "0.11.12",
-    "@types/node": "26.4.0",
+    "@types/node": "26.4.1",
     "effect": "4.0.0-rc.112",
     "effect-rstest": "https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f"
   }

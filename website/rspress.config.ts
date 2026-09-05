@@ -4,11 +4,8 @@ import { pluginLlms } from '@rspress/plugin-llms';
 import { pluginSitemap } from '@rspress/plugin-sitemap';
 import { pluginTwoslash } from '@rspress/plugin-twoslash';
 import { pluginTypeDoc } from '@rspress/plugin-typedoc';
-import {
-  transformerNotationDiff,
-  transformerNotationFocus,
-  transformerNotationHighlight,
-} from '@shikijs/transformers';
+import { transformerNotationHighlight } from '@shikijs/transformers';
+import ts from 'typescript';
 import { generatedReference } from './plugins/generated-reference.ts';
 import { cleanGeneratedApiMarkdown, mirrorApiLocale } from './plugins/mirror-api-locale.ts';
 import { rehypeTableCellBreaks } from './plugins/rehype-table-cell-breaks.ts';
@@ -18,6 +15,54 @@ const docsDir = path.join(websiteDir, 'docs');
 const repoRoot = path.join(websiteDir, '..');
 
 const packageSource = path.join(repoRoot, 'packages', 'agent-bundle', 'src');
+const typedocTsconfigPath = path.join(websiteDir, 'tsconfig.typedoc.json');
+
+/**
+ * The `paths` that resolve the workspace packages `packages/agent-bundle/src`
+ * imports (`@agent-bundle/runtime`, `rsc-markdown-stream`) to their sources.
+ * Their published declarations only exist after `pnpm build`, which the docs
+ * build never runs, so a compiler that resolves them through `package.json`
+ * types every one of those imports as `any`. TypeDoc reads the tsconfig
+ * itself; twoslash takes its compiler options programmatically, so the same
+ * map is read here rather than copied.
+ *
+ * The file is JSONC and the values are relative to the tsconfig, which is how
+ * TypeScript resolves them; twoslash gets no `baseUrl` or config directory,
+ * so each target is made absolute before it is handed over.
+ */
+function readSourceMappedPaths(tsconfigPath: string): Record<string, string[]> {
+  const { config, error } = ts.readConfigFile(tsconfigPath, ts.sys.readFile);
+  if (error) {
+    throw new Error(
+      `${tsconfigPath}: ${ts.flattenDiagnosticMessageText(error.messageText, '\n')}`,
+    );
+  }
+  const paths: unknown = config?.compilerOptions?.paths;
+  if (!paths || typeof paths !== 'object' || Object.keys(paths).length === 0) {
+    throw new Error(`${tsconfigPath}: expected a non-empty compilerOptions.paths`);
+  }
+  const tsconfigDir = path.dirname(tsconfigPath);
+  return Object.fromEntries(
+    Object.entries(paths).map(([specifier, targets]) => {
+      if (!Array.isArray(targets) || !targets.every(target => typeof target === 'string')) {
+        throw new Error(`${tsconfigPath}: compilerOptions.paths["${specifier}"] must be string[]`);
+      }
+      return [specifier, targets.map(target => path.resolve(tsconfigDir, target))];
+    }),
+  );
+}
+
+/**
+ * Twoslash samples import the package by its published name, which nothing in
+ * `packages/agent-bundle/src` does, so those four entries live only here.
+ */
+const twoslashPaths: Record<string, string[]> = {
+  'agent-bundle': [path.join(packageSource, 'index.ts')],
+  'agent-bundle/config': [path.join(packageSource, 'config/index.ts')],
+  'agent-bundle/test': [path.join(packageSource, 'test/index.ts')],
+  'agent-bundle/eval': [path.join(packageSource, 'eval/index.ts')],
+  ...readSourceMappedPaths(typedocTsconfigPath),
+};
 
 const publicApiEntryPoints = [
   'index.ts',
@@ -37,7 +82,12 @@ const publicApiEntryPoints = [
 ].map(entry => path.join(packageSource, entry));
 
 const generatedApiDir = 'en/api';
-const mirroredApiDirs = ['zh/api'];
+const mirroredApiTargets = [
+  {
+    dir: 'zh/api',
+    notice: 'API 参考仅提供英文版本；正文与英文站点相同。',
+  },
+];
 
 const repositoryUrl = 'https://github.com/ScriptedAlchemy/agent-bundle';
 const siteTitle = 'agent-bundle';
@@ -45,6 +95,8 @@ const siteDescription =
   'Compile skills, hooks, MCP servers, and scripts from one typed config into installable Claude Code, Codex, and Cursor artifacts.';
 const siteDescriptionZh =
   '用一份带类型的配置描述 Skill、钩子、MCP 服务器与脚本，编译为可直接安装到 Claude Code、Codex 与 Cursor 的产物。';
+/** `--rp-c-brand` in `styles/index.css`. */
+const brandColor = '#0d8f80';
 
 /**
  * `llms.txt` and `llms-full.txt` are emitted as build assets rather than
@@ -63,6 +115,13 @@ export default defineConfig({
   icon: '/logo.svg',
   logo: '/logo.svg',
   logoText: siteTitle,
+  // Only rendered at SSG (`renderHtmlTemplate`); `rspress dev` leaves the head
+  // marker untouched, so the tag is absent from the dev server. Per-route
+  // entries (`route => ['link', { rel: 'canonical', ... }]`) are typed but
+  // cannot be combined with `ssg.experimentalWorker`: `renderPages` ships
+  // `config.head` to the worker threads through `workerData`, and a function
+  // fails structured cloning (`DataCloneError`) before the first page renders.
+  head: [['meta', { name: 'theme-color', content: brandColor }]],
   locales: [
     {
       lang: 'en',
@@ -77,12 +136,21 @@ export default defineConfig({
       description: siteDescriptionZh,
     },
   ],
-  search: {
-    codeBlocks: true,
-  },
   route: {
     cleanUrls: true,
     localeRedirect: 'never',
+  },
+  // Renders the ~900 routes across a tinypool of worker threads instead of one
+  // process; output is identical.
+  ssg: {
+    experimentalWorker: true,
+  },
+  builderConfig: {
+    performance: {
+      // The per-asset table is one line per route (plus chunks) and buries the
+      // dead-link and parity results; the total is still printed.
+      printFileSize: { detail: false },
+    },
   },
   markdown: {
     shiki: {
@@ -90,11 +158,9 @@ export default defineConfig({
       // grammar set cannot be inferred from page sources alone (same fix as
       // the upstream rspress.rs site).
       langs: ['markdown', 'mdx', 'ts', 'tsx', 'js', 'jsx', 'json', 'bash', 'yaml', 'css', 'html'],
-      transformers: [
-        transformerNotationDiff(),
-        transformerNotationHighlight(),
-        transformerNotationFocus(),
-      ],
+      // Only `[!code highlight]` is used in the docs; add the diff or focus
+      // transformer back alongside the first page that needs its notation.
+      transformers: [transformerNotationHighlight()],
     },
     link: {
       checkDeadLinks: { excludes: isGeneratedLlmsTarget },
@@ -118,6 +184,11 @@ export default defineConfig({
       docRepoBaseUrl: `${repositoryUrl}/tree/main/website/docs`,
     },
     socialLinks: [{ icon: 'github', mode: 'link', content: repositoryUrl }],
+    // Rendered by `HomeFooter` on the home layout only, and read from the
+    // site-level theme config, so one message serves both locales.
+    footer: {
+      message: `Released under the <a href="${repositoryUrl}/blob/main/LICENSE">Apache-2.0 License</a>.`,
+    },
   },
   plugins: [
     // TypeDoc and twoslash compile packages/agent-bundle/src with the
@@ -134,8 +205,10 @@ export default defineConfig({
         // so typedoc-plugin-markdown's escaped underscores (`FOO\_BAR`) would
         // surface verbatim. Intraword underscores are not emphasis in
         // CommonMark, so the member title is safe to emit unescaped.
+        // `includeVersion` is unset, so `{version}` would only leave a
+        // trailing space in the title.
         app.options.setValue('pageTitleTemplates', {
-          index: '{projectName} {version}',
+          index: '{projectName}',
           module: '{kind}: {name}',
           member: ({ kind, name }: { kind: string; name: string }) =>
             `${kind}: ${name.replace(/\\_/g, '_')}`,
@@ -145,7 +218,7 @@ export default defineConfig({
     }),
     mirrorApiLocale({
       sourceDir: generatedApiDir,
-      targetDirs: mirroredApiDirs,
+      targets: mirroredApiTargets,
     }),
     generatedReference({
       repoRoot,
@@ -157,12 +230,7 @@ export default defineConfig({
     pluginTwoslash({
       twoslashOptions: {
         compilerOptions: {
-          paths: {
-            'agent-bundle': [path.join(packageSource, 'index.ts')],
-            'agent-bundle/config': [path.join(packageSource, 'config/index.ts')],
-            'agent-bundle/test': [path.join(packageSource, 'test/index.ts')],
-            'agent-bundle/eval': [path.join(packageSource, 'eval/index.ts')],
-          },
+          paths: twoslashPaths,
         },
       },
     }),

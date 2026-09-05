@@ -82,6 +82,11 @@ export default defineConfig({
 Skill frontmatter 中的 `targets` 就是上述按宿主划分的对象，别无他用；写成列表（如 `targets: ['claude']`）是
 `AB3006`。Skill 会输出到项目选择的每一个 target——不存在按 Skill 限制产物的机制。
 
+所有选中宿主读取的是同一个复合插件根目录，因此 `skills/<name>/SKILL.md` 只存在一份。若某个宿主扩展
+让文档在一个选中宿主上的降级结果与另一个宿主不同——例如在 `claude` + `codex` 的构建中写
+`targets: { claude: { effort: high } }`——就是致命的 `AB4103` 冲突。请让输出的文档对每个选中宿主
+都完全一致，或者把这些宿主分开构建到不同的产物中（每次构建只写一个 `targets` 条目）。
+
 ## 路径 token
 
 各宿主的占位符语法并不相同——`${CLAUDE_PLUGIN_ROOT}` 并不是 Cursor 或可移植标准所使用的写法。请改为

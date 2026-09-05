@@ -42,7 +42,8 @@ SHA 的预览 tarball，而 pnpm 11 的 `blockExoticSubdeps`（默认 `true`）�
 脚手架发布在同一条通道上，其设计意图是直接运行而不是安装：
 
 ```sh
-npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-pr> my-plugin
+npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-pr> \
+  my-plugin
 ```
 
 脚手架生成的项目会把 `agent-bundle` 固定到脚手架自身所来自的那个提交的预览版本，因此上述配对规则的

@@ -41,7 +41,9 @@ export const config = {
 export const inputSchema = z.object({ verbose: z.boolean().optional() }).strict();
 export const resultSchema = z.object({ status: z.literal('ready') }).strict();
 
-export default async function Status({ input, signal }: ToolRouteProps<typeof inputSchema>) {
+export default async function Status(
+  { input, signal }: ToolRouteProps<typeof inputSchema>,
+) {
   if (signal.aborted) throw new DOMException('aborted', 'AbortError');
   if (input.verbose) await agent();
   const result = { status: 'ready' as const };
@@ -81,6 +83,14 @@ both dialects share (`$ref`, `propertyNames`, `const`, numeric `exclusiveMinimum
 same way under both, `$defs` is reached through JSON-pointer `$ref`s under either, and a
 2020-12-only keyword such as `unevaluatedProperties` or `dependentRequired` is ignored by a lax
 draft-07 validator rather than misapplied.
+
+Neither schema has to be written in the route module: `inputSchema` and `resultSchema` may both be
+bound to schemas imported from a relative module inside the project
+(`export const inputSchema = statusInputSchema`), and every route that binds the same declared
+`inputSchema` — a tool here, a `src/cli/**` command elsewhere — shares one
+[route contract](./index.mdx#route-contracts-application-ir) in the compiled graph; the
+resolution rules and the `AB4838`/`AB4839` diagnostics are under
+[Share one schema between MCP and CLI](./package-entries.mdx#share-one-schema-between-mcp-and-cli).
 
 A route may re-export its component and schemas from another module. This is how one tool is
 placed on two generated servers when only `config` differs between the placements — an MCP App
@@ -144,10 +154,12 @@ from the same registry and never invented:
 ```ts
 const { lineage } = await agent();
 if (lineage.state === 'available' && lineage.value.tree !== undefined) {
-  lineage.value.tree.siblings; // every other live conversation under the same root (any depth,
-                               // the root itself included for a subagent), oldest first
+  lineage.value.tree.siblings; // every other live conversation under the same root
+                               // (any depth, the root itself included for a subagent),
+                               // oldest first
   lineage.value.tree.children; // live conversations whose parent is this one
-  lineage.value.tree.roots;    // other live root conversations (Cursor: same workspace_roots)
+  lineage.value.tree.roots;    // other live root conversations
+                               // (Cursor: same workspace_roots)
 }
 ```
 
@@ -171,8 +183,18 @@ output agree. It is information only — never a writer — and it changes nothi
 ```ts
 interface AgentTerminal {
   hostSurface: 'cli' | 'mcp' | 'hook' | 'script' | 'workbench';
-  stdout: { kind: 'tty' | 'pipe' | 'none'; color: 'none' | 'basic' | '256' | 'truecolor'; columns?: number; rows?: number };
-  stderr: { kind: 'tty' | 'pipe' | 'none'; color: 'none' | 'basic' | '256' | 'truecolor'; columns?: number; rows?: number };
+  stdout: {
+    kind: 'tty' | 'pipe' | 'none';
+    color: 'none' | 'basic' | '256' | 'truecolor';
+    columns?: number;
+    rows?: number;
+  };
+  stderr: {
+    kind: 'tty' | 'pipe' | 'none';
+    color: 'none' | 'basic' | '256' | 'truecolor';
+    columns?: number;
+    rows?: number;
+  };
   sharesTarget: boolean; // fd 1 and fd 2 name one open file (`2>&1`, one shared terminal)
 }
 ```
@@ -295,9 +317,15 @@ framework's streaming progress surface on MCP, in the rendered CLI, and in the W
 import React, { Suspense } from 'react';
 import { Agent } from '@agent-bundle/runtime';
 
-export default async function Search({ input, signal }: ToolRouteProps<typeof inputSchema>) {
+export default async function Search(
+  { input, signal }: ToolRouteProps<typeof inputSchema>,
+) {
   return (
-    <Suspense fallback={<Agent.Progress completed={0} message={`Searching for ${input.query}`} />}>
+    <Suspense
+      fallback={
+        <Agent.Progress completed={0} message={`Searching for ${input.query}`} />
+      }
+    >
       <Results input={input} signal={signal} />
     </Suspense>
   );
@@ -651,8 +679,10 @@ value on every request it opens as `(await agent()).plugin`:
 ```ts
 const { plugin } = await agent();
 if (plugin.state === 'available') {
-  plugin.value.root;      // the install root: AGENT_BUNDLE_PLUGIN_ROOT, or the shell's fallback
-  plugin.value.stateRoot; // `<root>/state`, where defineState / notices / lineage already live
+  plugin.value.root;      // the install root: AGENT_BUNDLE_PLUGIN_ROOT,
+                          // or the shell's fallback
+  plugin.value.stateRoot; // `<root>/state`, where defineState / notices / lineage
+                          // already live
   plugin.source;          // 'native' from the variable, 'derived' from the fallback
 }
 ```
@@ -818,7 +848,8 @@ tab, from a terminal — `agent-bundle serve-app` hosts one built App standalone
 
 ```sh
 npx agent-bundle build
-npx agent-bundle serve-app status/status --artifact artifact --input '{"service":"compiler"}' --open
+npx agent-bundle serve-app status/status --artifact artifact \
+  --input '{"service":"compiler"}' --open
 ```
 
 The command launches the plugin's packed MCP server exactly as `mcp run` does (same artifact
@@ -859,7 +890,7 @@ host packs stay self-contained. This is what cargo-hauler's `hauler dashboard` d
 resolution of [#558](https://github.com/ScriptedAlchemy/agent-bundle/issues/558):
 
 ```ts
-// src/cli/dashboard.ts — `hauler dashboard`: open the App against the plugin's own server.
+// src/cli/dashboard.ts — `hauler dashboard`: open the App against the plugin's server.
 import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
 import { ServeAppCommandError, spawnServeApp } from 'agent-bundle/serve-app-command';
 import { z } from 'zod';
@@ -880,7 +911,9 @@ export const resultSchema = z.object({
   url: z.string().nullable(),
 }).strict();
 
-export default async function dashboard({ input, signal }: CliRouteProps<typeof inputSchema>) {
+export default async function dashboard(
+  { input, signal }: CliRouteProps<typeof inputSchema>,
+) {
   let served;
   try {
     served = await spawnServeApp({

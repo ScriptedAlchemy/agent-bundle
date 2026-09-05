@@ -8,6 +8,7 @@ import { expect, it } from '@rstest/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import type { TargetArtifactWrite } from '../src/adapters/types.ts';
+import { composeProjections } from '../src/build/compose.ts';
 import { runCli } from '../src/cli.ts';
 import { captureCliTerminal } from './support/cli-terminal.ts';
 import { eventRuntimeEndpoint } from '../src/events/ipc.ts';
@@ -356,7 +357,7 @@ it('proves Agent Plugins stdio launch on Cursor: unexpanded spec forms warn, the
     // 2. The same pack installed by the emitted install.mjs: expanded, recorded, and verified — the Agent Plugins
     //    contract is checked against the bundle's document, so the absolute paths and §9.1 keys in the copy are no error.
     const bundle = join(fixture.root, 'portable-bundle');
-    const installerSource = createDefaultRegistry().get('portable').plan({
+    const installerSource = composeProjections({
       extensions: {},
       hooks: [],
       mcpServers: [],
@@ -370,8 +371,8 @@ it('proves Agent Plugins stdio launch on Cursor: unexpanded spec forms warn, the
       scripts: [],
       skills: [],
       targets: [{ id: 'target:portable', name: 'portable', provenance: { kind: 'config', sourcePath: '/project/agent-bundle.config.ts' } }],
-    }).entries.find((entry): entry is TargetArtifactWrite => entry.kind === 'write' && entry.relativePath === 'install.mjs');
-    if (installerSource === undefined) throw new Error('portable plan emitted no install.mjs');
+    }, createDefaultRegistry()).entries.find((entry): entry is TargetArtifactWrite => entry.kind === 'write' && entry.relativePath === 'install.mjs');
+    if (installerSource === undefined) throw new Error('portable composite root emitted no install.mjs');
     await mkdir(join(bundle, 'mcp'), { recursive: true });
     await writeFile(join(bundle, 'install.mjs'), installerSource.content);
     await writeFile(join(bundle, 'INSTALL.md'), '# Install expanded\n');
@@ -975,24 +976,25 @@ it('validates --from Claude documents from pinned bytes without a new CLI proof'
   }
 });
 
-it('lists Claude plugins from the resolved host bundle root when --from names a multi-target artifact root', async () => {
+it('lists Claude plugins from the plugin root --from names, never from a directory nested under it (#555)', async () => {
   const fixture = await temporaryDoctor();
   const calls: { readonly args: readonly string[]; readonly cwd?: string }[] = [];
   try {
-    // `<from>/claude` holds the manifest; Claude `project`/`local` rows are keyed by the cwd the host verbs ran
-    // in, and install runs them from that resolved root — so must the listing, or such scopes read as absent.
+    // The root itself holds the manifest; Claude `project`/`local` rows are
+    // keyed by the cwd the host verbs ran in, and install runs them from that
+    // root — so must the listing, or such scopes read as absent. A `claude/`
+    // directory nested under it (the pre-composite partition) is never probed.
     const artifactRoot = join(fixture.root, 'artifact');
-    await mkdir(artifactRoot, { recursive: true });
-    const bundle = join(artifactRoot, 'claude');
-    await mkdir(bundle, { recursive: true });
-    await writeFile(join(bundle, 'payload.txt'), 'payload\n');
-    await writeJson(join(bundle, '.claude-plugin/plugin.json'), {
+    await mkdir(join(artifactRoot, 'claude'), { recursive: true });
+    await writeJson(join(artifactRoot, 'claude', '.claude-plugin/plugin.json'), { name: 'nested-decoy', version: '0.0.0' });
+    await writeFile(join(artifactRoot, 'payload.txt'), 'payload\n');
+    await writeJson(join(artifactRoot, '.claude-plugin/plugin.json'), {
       author: { name: 'Doctor Fixture' },
       description: 'Doctor fixture plugin.',
       name: 'doctor-fixture',
       version: '1.2.3',
     });
-    await writeJson(join(bundle, '.claude-plugin/marketplace.json'), {
+    await writeJson(join(artifactRoot, '.claude-plugin/marketplace.json'), {
       name: 'doctor-fixture-marketplace',
       owner: { name: 'Doctor Fixture' },
       plugins: [{ name: 'doctor-fixture', source: './' }],
@@ -1012,10 +1014,10 @@ it('lists Claude plugins from the resolved host bundle root when --from names a 
     });
 
     expect(calls).toEqual(expect.arrayContaining([
-      expect.objectContaining({ args: ['plugin', 'list', '--json'], cwd: bundle }),
+      expect.objectContaining({ args: ['plugin', 'list', '--json'], cwd: artifactRoot }),
     ]));
     expect(calls).not.toEqual(expect.arrayContaining([
-      expect.objectContaining({ args: ['plugin', 'list', '--json'], cwd: artifactRoot }),
+      expect.objectContaining({ args: ['plugin', 'list', '--json'], cwd: join(artifactRoot, 'claude') }),
     ]));
   } finally {
     await fixture.cleanup();

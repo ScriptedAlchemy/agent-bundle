@@ -268,10 +268,10 @@ it('uses only an installed tarball after source deletion', async () => {
         agentBundleImport,
       );
     }
-    const localServer = JSON.parse(await readFile(join(artifact, 'portable', 'mcp.json'), 'utf8')) as {
+    const localServer = JSON.parse(await readFile(join(artifact, 'mcp.json'), 'utf8')) as {
       readonly mcpServers: { readonly local: { readonly args: readonly [string, ...string[]] } };
     };
-    const localServerBundle = join(artifact, 'portable', localServer.mcpServers.local.args[0]);
+    const localServerBundle = join(artifact, localServer.mcpServers.local.args[0]);
 
     await Promise.all([
       rm(join(projectRoot, 'agent-bundle.config.ts')),
@@ -315,23 +315,23 @@ it('uses only an installed tarball after source deletion', async () => {
       .sort();
     expect(validationDocument.diagnostics.map((diagnostic) => diagnostic.code).sort()).toEqual(hostDiagnosticCodes);
 
-    const bundlePath = join(artifact, 'portable', 'scripts', 'bundle.mjs');
+    const bundlePath = join(artifact, 'scripts', 'bundle.mjs');
     await expect(execFile(process.execPath, [
       '--input-type=module',
       '--eval',
       "const module = await import(process.argv[1]); console.log(module.bundleMessage);",
       pathToFileURL(bundlePath).href,
     ], { cwd: projectRoot, env: installedEnvironment() })).resolves.toMatchObject({ stdout: 'bundled fixture\n' });
-    await expect(execFile(join(artifact, 'portable', 'scripts', 'shell.sh'), [], {
+    await expect(execFile(join(artifact, 'scripts', 'shell.sh'), [], {
       cwd: projectRoot,
       env: installedEnvironment(),
     })).resolves.toMatchObject({ stdout: 'shell fixture\n' });
-    await expect(execFile('python3', [join(artifact, 'portable', 'scripts', 'python.py')], {
+    await expect(execFile('python3', [join(artifact, 'scripts', 'python.py')], {
       cwd: projectRoot,
       env: installedEnvironment(),
     })).resolves.toMatchObject({ stdout: 'python fixture\n' });
-    expect((await stat(join(artifact, 'portable', 'scripts', 'shell.sh'))).mode & 0o777).toBe(sourceShellMode);
-    expect((await stat(join(artifact, 'portable', 'scripts', 'python.py'))).mode & 0o777).toBe(sourcePythonMode);
+    expect((await stat(join(artifact, 'scripts', 'shell.sh'))).mode & 0o777).toBe(sourceShellMode);
+    expect((await stat(join(artifact, 'scripts', 'python.py'))).mode & 0o777).toBe(sourcePythonMode);
 
     const { stdout: hooks } = await runInstalled(cli, projectRoot, [
       'hooks', 'list', '--json', '--root', projectRoot, '--artifact', artifact, '--target', 'codex',
@@ -429,16 +429,17 @@ it('uses only an installed tarball after source deletion', async () => {
     await runInstalled(frameworkCli, frameworkRoot, ['build', '--root', frameworkRoot, '--output', frameworkArtifact]);
 
     // Self-containment on the outputs a consumer builds from the installed
-    // tarball: every host tree of the artifact and the package build's dist/
-    // import nothing but Node builtins. A violation names the importer and
-    // the specifier that survived bundling.
+    // tarball: the composite root and the package build's dist/ import
+    // nothing but Node builtins. A violation names the importer and the
+    // specifier that survived bundling. The MCP entry is compiled once for
+    // the three selected hosts (#555), not once per host.
     const [artifactModules, packageModules] = await Promise.all([
       emittedModuleReport(frameworkArtifact),
       emittedModuleReport(join(frameworkRoot, 'dist')),
     ]);
     expect(artifactModules.violations).toEqual([]);
     expect(packageModules.violations).toEqual([]);
-    expect(artifactModules.modules.filter((module) => /^(?:claude|codex|portable)\/mcp\/[^/]+\.mjs$/u.test(module.path))).toHaveLength(3);
+    expect(artifactModules.modules.filter((module) => /^mcp\/[^/]+\.mjs$/u.test(module.path))).toHaveLength(1);
     expect(packageModules.modules.map((module) => module.path)).toEqual(expect.arrayContaining([
       'bin/framework-build-fixture-install.js',
       'bin/framework-build-fixture.js',
@@ -458,10 +459,10 @@ it('uses only an installed tarball after source deletion', async () => {
     expect(packedLib.packedAnswer.value).toBe(42);
     await expect(readFile(join(frameworkRoot, 'dist', 'index.d.ts'), 'utf8')).resolves.toContain('PackedAnswer');
 
-    const greeterManifest = JSON.parse(await readFile(join(frameworkArtifact, 'portable', 'mcp.json'), 'utf8')) as {
+    const greeterManifest = JSON.parse(await readFile(join(frameworkArtifact, 'mcp.json'), 'utf8')) as {
       readonly mcpServers: { readonly greeter: { readonly args: readonly [string, ...string[]] } };
     };
-    const greeterEntry = join(frameworkArtifact, 'portable', greeterManifest.mcpServers.greeter.args[0]);
+    const greeterEntry = join(frameworkArtifact, greeterManifest.mcpServers.greeter.args[0]);
     const greeterBundle = await readFile(greeterEntry, 'utf8');
     expect(greeterBundle).not.toMatch(agentBundleImport);
     expect(greeterBundle).toContain('stdio heartbeat');

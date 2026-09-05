@@ -1,7 +1,5 @@
 import { posix } from 'node:path';
 
-import type { ValidateFunction } from 'ajv/dist/2020.js';
-
 import { createTargetDiagnostics } from './diagnostics.ts';
 import type { CapabilityState } from '../core/capabilities.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
@@ -11,6 +9,7 @@ import {
   pathTokens,
   type AgentBundleConfig,
   type AgentBundleHostConfig,
+  type NormalizedHook,
   type NormalizedMcpServer,
   type NormalizedPlugin,
 } from '../core/types.ts';
@@ -30,6 +29,7 @@ import {
 import capabilityTable from './capabilities/codex-0.147.0.json' with { type: 'json' };
 import {
   createNativeEventStarter,
+  emptyHookDocument,
   mergeHookDocuments,
   encodeNativeHookPlaygroundInput,
   encodeNativeHookPlaygroundOutput,
@@ -60,7 +60,7 @@ import {
   type TargetArtifactPlan,
 } from './types.ts';
 import { pluginLogoManifestRef, withPluginLogoEntry } from './plugin-logo.ts';
-import { withInstallSurface } from '../install/surface.ts';
+import { folderDiscoveryShadowed, hookWrapperPath } from './composite-layout.ts';
 import { deepFreeze } from '../core/freeze.ts';
 
 export interface CodexInterfaceConfig {
@@ -134,12 +134,18 @@ declare module '../core/types.ts' {
 
 const codexName = 'codex';
 
-/** Codex's conventional artifact document paths, shared with the unified bundle adapter. */
+/** Codex's conventional artifact document paths. */
+/**
+ * Codex's artifact documents. The hook and MCP documents live beside the
+ * manifest rather than at Claude Code's conventional `hooks/hooks.json` and
+ * `.mcp.json`: the manifest's `hooks` and `mcpServers` pointers name them, so
+ * a composite root that also holds a Claude projection never collides (#555).
+ */
 export const codexArtifactPaths = Object.freeze({
   apps: '.app.json',
-  hooksManifest: 'hooks/hooks.json',
+  hooksManifest: '.codex-plugin/hooks.json',
   marketplace: '.agents/plugins/marketplace.json',
-  mcp: '.mcp.json',
+  mcp: '.codex-plugin/mcp.json',
   plugin: '.codex-plugin/plugin.json',
 });
 const validator = createAdapterValidator();
@@ -148,15 +154,8 @@ const validatePlugin = validator.compile(pluginSchema);
 const validateMcp = validator.compile(mcpSchema);
 const validateMarketplace = validator.compile(marketplaceSchema);
 
-/**
- * The pinned schema admits every documented plugin-root-relative component
- * path. Standalone and unified plans still emit their canonical paths.
- */
-const pluginValidatorFor = (_mcpRelativePath: string): ValidateFunction => validatePlugin;
-
-/** Wrapped manifest validator for a plan whose MCP document path was relocated. */
-export const codexPluginDocumentValidator = (mcpRelativePath: string): TargetArtifactDocumentValidator =>
-  validateJsonSchemaDocument(pluginValidatorFor(mcpRelativePath));
+/** The pinned manifest validator, shared with the host-install test harness. */
+export const codexPluginDocumentValidator: TargetArtifactDocumentValidator = validateJsonSchemaDocument(validatePlugin);
 const validateHooks = validator.compile(hooksSchema);
 const eventRouteNames = supportedEventRouteNamesFrom(capabilityTable.hooks.eventRoutes);
 const hookContract = Object.freeze({
@@ -167,7 +166,7 @@ const hookContract = Object.freeze({
     encodeNativeHookPlaygroundOutput(result, event, nativeEvent, 'codex'),
   eventNames: capabilityTable.hooks.events,
   eventRouteNames,
-  manifestPath: 'hooks/hooks.json',
+  manifestPath: codexArtifactPaths.hooksManifest,
   matchers: capabilityTable.hooks.matchers,
   nativeEventStarter: (event) => {
     const nativeEvent = eventRouteNames[event];
@@ -216,11 +215,11 @@ const codexHookRules = Object.freeze({
 
 const artifactValidation = deepFreeze({
   documents: [
-    Object.freeze({ path: '.app.json', required: false, schema: 'app' }),
-    Object.freeze({ path: 'hooks/hooks.json', required: false, schema: 'hooks' }),
-    Object.freeze({ path: '.agents/plugins/marketplace.json', required: false, schema: 'marketplace' }),
-    Object.freeze({ path: '.mcp.json', required: false, schema: 'mcp' }),
-    Object.freeze({ path: '.codex-plugin/plugin.json', required: true, schema: 'plugin' }),
+    Object.freeze({ path: codexArtifactPaths.apps, required: false, schema: 'app' }),
+    Object.freeze({ path: codexArtifactPaths.hooksManifest, required: false, schema: 'hooks' }),
+    Object.freeze({ path: codexArtifactPaths.marketplace, required: false, schema: 'marketplace' }),
+    Object.freeze({ path: codexArtifactPaths.mcp, required: false, schema: 'mcp' }),
+    Object.freeze({ path: codexArtifactPaths.plugin, required: true, schema: 'plugin' }),
   ],
   schemas: [
     Object.freeze({ name: 'app', validate: validateJsonSchemaDocument(validateApps) }),
@@ -232,7 +231,7 @@ const artifactValidation = deepFreeze({
 });
 
 const mcpRuntime = createTargetMcpRuntime({
-  manifestPath: '.mcp.json',
+  manifestPath: codexArtifactPaths.mcp,
   remoteTypes: ['streamable-http'],
   resolveStdioArgument: resolveTargetRelativeStdioArgument,
   resolveValue: createMcpPathTokenResolver({
@@ -1102,21 +1101,23 @@ const planMcpServer = (
   };
 };
 
-export interface CodexArtifactPlanOptions {
-  /** Artifact-relative path for the Codex MCP document; the unified bundle relocates it. */
-  readonly mcpRelativePath?: string;
-  /** See StandardPluginArtifactsInput.sharedCopyEntries; the unified bundle emits shared copies once. */
-  readonly sharedCopyEntries?: boolean;
-  /** Target name used for selection and provenance; native hooks stay keyed to Codex. */
-  readonly targetName?: string;
-}
+/**
+ * The hook contract of one plan: the registered contract with the wrapper
+ * paths the composite root assigns for this selection (#555). The document
+ * itself stays at `codexArtifactPaths.hooksManifest`, which the manifest's
+ * `hooks` pointer names.
+ */
+const planHookContract = (selected: readonly string[]): TargetHookContract =>
+  Object.freeze({
+    ...hookContract,
+    wrapperPath: (hook: NormalizedHook) => hookWrapperPath(codexName, hook.name, hook.targets, selected),
+  });
 
-export const planCodexArtifacts = (
-  model: NormalizedPlugin,
-  options: CodexArtifactPlanOptions = {},
-): TargetArtifactPlan => {
-  const targetName = options.targetName ?? codexName;
-  const mcpRelativePath = options.mcpRelativePath ?? codexArtifactPaths.mcp;
+export const planCodexArtifacts = (model: NormalizedPlugin): TargetArtifactPlan => {
+  const targetName = codexName;
+  const selected = model.targets.map((target) => target.name);
+  const mcpRelativePath = codexArtifactPaths.mcp;
+  const planContract = planHookContract(selected);
   const isSelected = (targets: readonly string[]): boolean => targets.includes(targetName);
   const diagnostics: Diagnostic[] = [];
   const servers: Record<string, Record<string, unknown>> = Object.create(null) as Record<string, Record<string, unknown>>;
@@ -1127,11 +1128,15 @@ export const planCodexArtifacts = (
     if (serverPlan.value !== undefined) servers[server.name] = serverPlan.value;
   }
 
-  const mcp = Object.keys(servers).length === 0 ? undefined : { mcpServers: servers };
+  // An empty document still carries the manifest pointer when Claude's
+  // conventional `.mcp.json` shares the root, so Codex never loads it (#555).
+  const mcp = Object.keys(servers).length === 0
+    ? (folderDiscoveryShadowed('.mcp.json', selected) ? { mcpServers: {} } : undefined)
+    : { mcpServers: servers };
   const mcpValid = mcp !== undefined && validateMcp(mcp);
   if (mcp !== undefined) diagnostics.push(...schemaDiagnostics('mcp', mcpValid, validateMcp.errors));
   diagnostics.push(...codexHostedToolDiagnostics(model, isSelected));
-  const generatedHooks = planHooks(model, targetName, hookContract);
+  const generatedHooks = planHooks(model, targetName, planContract);
   diagnostics.push(...generatedHooks.diagnostics);
   if (generatedHooks.document !== undefined) {
     diagnostics.push(...schemaDiagnostics('hooks', validateHooks(generatedHooks.document), validateHooks.errors));
@@ -1147,7 +1152,9 @@ export const planCodexArtifacts = (
     ? { diagnostics: [] }
     : validatedNativeHookDocument(model, codexName, 'Codex', validateHooks, errorDiagnostic);
   diagnostics.push(...nativeHooks.diagnostics);
-  const hookDocument = mergeHookDocuments(generatedHooks.document, nativeHooks.document);
+  // Likewise an empty hooks document keeps Codex off Claude's `hooks/hooks.json`.
+  const hookDocument = mergeHookDocuments(generatedHooks.document, nativeHooks.document)
+    ?? (folderDiscoveryShadowed('hooks/hooks.json', selected) ? emptyHookDocument(planContract) : undefined);
   const hookSemantics = hookDocument === undefined ? [] : codexHookDocumentDiagnostics(hookDocument);
   diagnostics.push(...hookSemantics);
   const hookDocumentValid = hookDocument !== undefined && hookSemantics.length === 0 && validateHooks(hookDocument);
@@ -1189,13 +1196,12 @@ export const planCodexArtifacts = (
     interface: interfacePlan.value,
     ...(appsValid ? { apps: `./${codexArtifactPaths.apps}` } : {}),
     ...(mcp === undefined ? {} : { mcpServers: `./${mcpRelativePath}` }),
-    ...(hookDocument === undefined ? {} : { hooks: `./${hookContract.manifestPath}` }),
+    ...(hookDocument === undefined ? {} : { hooks: `./${planContract.manifestPath}` }),
     name: model.metadata.name,
     skills: './skills/',
     version: model.metadata.version,
   };
-  const pluginValidator = pluginValidatorFor(mcpRelativePath);
-  diagnostics.push(...schemaDiagnostics('plugin', pluginValidator(plugin), pluginValidator.errors));
+  diagnostics.push(...schemaDiagnostics('plugin', validatePlugin(plugin), validatePlugin.errors));
 
   const interfaceCategory = interfacePlan.value['category'];
   const marketplacePlan = planCodexMarketplace(
@@ -1235,7 +1241,7 @@ export const planCodexArtifacts = (
     hookDocument,
     hookDocumentValid,
     hookEntries: generatedHooks.hookEntries,
-    hookManifestPath: hookContract.manifestPath,
+    hookManifestPath: planContract.manifestPath,
     isSelected,
     marketplace,
     marketplaceRelativePath: codexArtifactPaths.marketplace,
@@ -1246,16 +1252,11 @@ export const planCodexArtifacts = (
     mcpValid,
     model,
     plugin,
-    ...(options.sharedCopyEntries === undefined ? {} : { sharedCopyEntries: options.sharedCopyEntries }),
     pluginRelativePath: codexArtifactPaths.plugin,
     targetName,
   });
-  // interface.logo references an artifact path, so the referenced image must
-  // ship; shared-copy suppression leaves emission to the composite's owner.
-  const plan = options.sharedCopyEntries === false
-    ? basePlan
-    : Object.freeze({ ...basePlan, entries: withPluginLogoEntry(basePlan.entries, model) });
-  return withInstallSurface(plan, model, targetName === 'plugin' ? 'plugin' : 'codex');
+  // interface.logo references an artifact path, so the referenced image must ship.
+  return Object.freeze({ ...basePlan, entries: withPluginLogoEntry(basePlan.entries, model) });
 };
 
 export const codexAdapter: TargetAdapter = Object.freeze({
