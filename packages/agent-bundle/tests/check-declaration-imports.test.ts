@@ -269,6 +269,13 @@ describe('declarationImportViolations', () => {
     expect(check({ '.': ['../outside.js', './dist/../escape.js', 'zod', './dist/index.js'] }, ['self'])).toEqual([]);
     expect(check({ '.': ['../outside.js', 'zod'] }, ['self'])).toEqual(['self']);
     expect(check({ '.': { import: '../outside.js', default: './dist/index.js' } }, ['self'])).toEqual(['self']);
+    // Node rejects `.`, `..`, and `node_modules` segments case-insensitively
+    // and after percent-decoding; an empty array blocks rather than falls through.
+    for (const target of ['./dist/./index.js', './dist/NODE_MODULES/x.js', './dist/%2e%2e/x.js', './dist/%6Eode_modules/x.js']) {
+      expect(check({ '.': target }, ['self'])).toEqual(['self']);
+    }
+    expect(check({ '.': [] }, ['self'])).toEqual(['self']);
+    expect(check({ '.': { import: [], default: './dist/index.js' } }, ['self'])).toEqual(['self']);
     // No `exports` at all: every file resolves by path.
     expect(check(undefined, ['self', 'self/dist/anything.js'])).toEqual([]);
   });
@@ -303,6 +310,10 @@ describe('declarationImportViolations', () => {
             "import type { BlockedCondition } from '#blocked-condition';",
             "import type { Escapes } from '#escapes';",
             "import type { Unmapped } from '#nope';",
+            // Node rejects these before consulting the map, pattern or not.
+            "import type { Bare } from '#';",
+            "import type { Slash } from '#/internal/thing';",
+            "import type { Trailing } from '#internal/thing/';",
           ].join('\n'),
         },
       ],
@@ -316,6 +327,9 @@ describe('declarationImportViolations', () => {
       'subpath-import #blocked-condition',
       'subpath-import #escapes',
       'subpath-import #nope',
+      'subpath-import #',
+      'subpath-import #/internal/thing',
+      'subpath-import #internal/thing/',
     ]);
     expect(report.errors[0]?.message).toBe(
       'imports "#internal/missing" → "./dist/internal/missing.js": no packed declaration for "./dist/internal/missing.js" '

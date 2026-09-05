@@ -273,9 +273,20 @@ const activeConditions = new Set(['types', 'import', 'node', 'default']);
  */
 const isValidTarget = (target, internal) => {
   if (target.startsWith('./')) {
-    return !target.split('/').slice(1).some((segment) => segment === '..' || segment === 'node_modules');
+    return !target.split(/[/\\]/u).slice(1).some((segment) => invalidSegments.has(decodedSegment(segment)));
   }
   return internal && !target.startsWith('../') && !target.startsWith('/') && !hasScheme(target);
+};
+
+/** Segments Node rejects in a package target, compared after percent-decoding and case-folding. */
+const invalidSegments = new Set(['.', '..', 'node_modules']);
+
+const decodedSegment = (segment) => {
+  try {
+    return decodeURIComponent(segment).toLowerCase();
+  } catch {
+    return segment.toLowerCase();
+  }
 };
 
 /**
@@ -289,6 +300,7 @@ const targetString = (target, internal) => {
   if (target === null) return null;
   if (typeof target === 'string') return isValidTarget(target, internal) ? target : null;
   if (Array.isArray(target)) {
+    if (target.length === 0) return null;
     let blocked = false;
     for (const entry of target) {
       const resolved = targetString(entry, internal);
@@ -328,10 +340,12 @@ const exportsSubpath = (manifest, subpath) => {
 
 /**
  * Resolves a `#subpath` import through the manifest's `imports` map to the
- * string it maps to — `undefined` when the map lacks it, blocks it, or maps
- * it to something the active conditions do not select.
+ * string it maps to — `undefined` when the specifier is one Node rejects
+ * outright (`#`, `#/…`, a trailing slash), when the map lacks or blocks it,
+ * or when it maps to something the active conditions do not select.
  */
 const importsTarget = (manifest, specifier) => {
+  if (specifier === '#' || specifier.startsWith('#/') || specifier.endsWith('/')) return undefined;
   if (!isRecord(manifest.imports)) return undefined;
   const resolved = resolveSubpathMap(manifest.imports, specifier);
   const mapped = resolved === undefined ? undefined : targetString(resolved.target, true);
