@@ -58,7 +58,7 @@ const projection: ArtifactInspectionProjection = {
 
 const inspection: ArtifactInspection = {
   application: {
-    distribution: { channels: ['local'] },
+    distribution: { channels: ['local'], payloads: [] },
     events: [{
       event: 'sessionStart',
       hooks: [{ host: 'claude', kind: 'event-route', path: 'hooks/session-start.mjs', timeout: 30 }],

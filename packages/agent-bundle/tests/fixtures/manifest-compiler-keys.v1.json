@@ -1,0 +1,60 @@
+{
+  "enums": {
+    "producer.name": [
+      "agent-bundle"
+    ],
+    "recordVersion": [
+      1
+    ],
+    "validation.artifact.status": [
+      "passed"
+    ],
+    "validation.projections[].status": [
+      "passed"
+    ],
+    "validation.source.status": [
+      "passed"
+    ]
+  },
+  "keys": [
+    "adapters",
+    "adapters[].adapterRevision",
+    "adapters[].host",
+    "adapters[].observedVersion",
+    "adapters[].schemas",
+    "adapters[].schemas[].name",
+    "adapters[].schemas[].revision",
+    "adapters[].schemas[].sha256",
+    "agentSkills",
+    "agentSkills.schemaSha256",
+    "agentSkills.sourceRevision",
+    "agentSkills.specification",
+    "producer",
+    "producer.name",
+    "producer.version",
+    "project",
+    "project.configDigest",
+    "project.configPath",
+    "project.modelDigest",
+    "project.packageName",
+    "project.packageVersion",
+    "project.revision",
+    "project.sourceInputs",
+    "project.sourceInputs[].executable",
+    "project.sourceInputs[].path",
+    "project.sourceInputs[].sha256",
+    "provenance",
+    "provenance[].path",
+    "provenance[].sourceInputs",
+    "recordVersion",
+    "validation",
+    "validation.artifact",
+    "validation.artifact.status",
+    "validation.projections",
+    "validation.projections[].host",
+    "validation.projections[].status",
+    "validation.source",
+    "validation.source.status"
+  ],
+  "recordVersion": 1
+}

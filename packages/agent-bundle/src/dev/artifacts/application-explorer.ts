@@ -126,9 +126,16 @@ export interface ApplicationExplorerInstall {
   readonly script?: string;
 }
 
+export interface ApplicationExplorerPayload {
+  readonly hosts: readonly string[];
+  readonly name: string;
+  readonly runtimeDependencies: readonly string[];
+}
+
 export interface ApplicationExplorerDistribution {
   readonly channels: readonly ArtifactManifestDistributionChannel[];
   readonly install?: ApplicationExplorerInstall;
+  readonly payloads: readonly ApplicationExplorerPayload[];
 }
 
 const documentKinds = ['hooks', 'marketplace', 'mcp', 'plugin'] as const;
@@ -301,6 +308,14 @@ export const applicationExplorerFor = (manifest: ArtifactManifest): ApplicationE
               : { script: manifest.distribution.install.script }),
           },
         }),
+      payloads: [...manifest.distribution.payloads]
+        .map((payload): ApplicationExplorerPayload => ({
+          hosts: [...payload.hosts].sort((left, right) => left.localeCompare(right)),
+          name: payload.name,
+          runtimeDependencies: [...payload.runtimeDependencies]
+            .sort((left, right) => left.localeCompare(right)),
+        }))
+        .sort((left, right) => left.name.localeCompare(right.name)),
     },
     events: eventsFor(manifest),
     hooks: configHooksFor(manifest),

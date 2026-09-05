@@ -77,9 +77,16 @@ const isApplication = (value: unknown): boolean =>
   typeof value.id === 'string' && typeof value.name === 'string' && typeof value.version === 'string' &&
   (!Object.hasOwn(value, 'description') || typeof value.description === 'string');
 
+const isExplorerPayload = (value: unknown): boolean =>
+  exactRecord(value, ['hosts', 'name', 'runtimeDependencies']) &&
+  arrayOf(value.hosts, (host) => typeof host === 'string') &&
+  typeof value.name === 'string' &&
+  arrayOf(value.runtimeDependencies, (dependency) => typeof dependency === 'string');
+
 const isDistribution = (value: unknown): boolean => {
-  if (!exactRecord(value, ['channels'], ['install']) ||
-    !arrayOf(value.channels, (channel) => channel === 'local' || channel === 'npm')) return false;
+  if (!exactRecord(value, ['channels', 'payloads'], ['install']) ||
+    !arrayOf(value.channels, (channel) => channel === 'local' || channel === 'npm') ||
+    !arrayOf(value.payloads, isExplorerPayload)) return false;
   if (!Object.hasOwn(value, 'install')) return true;
   return exactRecord(value.install, [], ['instructions', 'script']) &&
     (!Object.hasOwn(value.install, 'instructions') || typeof value.install.instructions === 'string') &&

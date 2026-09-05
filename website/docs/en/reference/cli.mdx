@@ -305,9 +305,11 @@ model and plan view is unchanged.
 
 `inspect --artifact <path>` does not load project config. `--json` prints `{ manifest, application }`:
 the same `InspectManifestSummary` as `output.manifest`, and the same `application` projection the
-Workbench renders (`applicationExplorerFor`). Without `--json`, the human output is the application
-id/name/version, projections with `builtInHost`, servers with tool counts, hooks by host, bins, and
-scripts.
+Workbench renders (`applicationExplorerFor`), including `distribution.payloads[]` — each prebuilt
+payload's `name`, `hosts`, and `runtimeDependencies` (the row artifact-only consumers read for
+packages that must exist at consumer runtime; see [`definePrebuilt`](../guide/authoring/package-entries.mdx#prebuilt-payloads)).
+Without `--json`, the human output is the application id/name/version, projections with
+`builtInHost`, servers with tool counts, hooks by host, bins, scripts, and payload rows.
 
 Every inspection plan reports each component with its canonical kind — `agent`, `cli`, `command`,
 `event-route`, `hook`, `lsp`, `mcp-app`, `mcp-server`, `native-diagnostics`, `native-extension`,

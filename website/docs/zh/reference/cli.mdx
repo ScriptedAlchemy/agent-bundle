@@ -283,8 +283,11 @@ keep-data 选项）。相对包的安装器 bin 接受带同样标志的 `uninst
 
 `inspect --artifact <path>` 不加载项目配置。`--json` 打印 `{ manifest, application }`：与
 `output.manifest` 相同的 `InspectManifestSummary`，以及 Workbench 渲染的同一份 `application`
-投影（`applicationExplorerFor`）。不带 `--json` 时，人类可读输出是应用 id/名称/版本、带
-`builtInHost` 的投影、带工具计数的服务器、按宿主分组的钩子、以及 bins 与 scripts。
+投影（`applicationExplorerFor`），其中包括 `distribution.payloads[]`——每个预构建负载的 `name`、
+`hosts` 与 `runtimeDependencies`（产物专用消费者读取的、必须存在于消费者运行时的包行；见
+[`definePrebuilt`](../guide/authoring/package-entries.mdx#预构建-payload)）。不带 `--json` 时，
+人类可读输出是应用 id/名称/版本、带 `builtInHost` 的投影、带工具计数的服务器、按宿主分组的钩子、
+以及 bins、scripts 与 payload 行。
 
 每份检查计划都会以规范组件类型报告每个组件——`agent`、`cli`、`command`、`event-route`、`hook`、`lsp`、
 `mcp-app`、`mcp-server`、`native-diagnostics`、`native-extension`、`rule`、`script`、`skill`（来自

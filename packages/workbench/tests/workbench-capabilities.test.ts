@@ -15,7 +15,7 @@ const file = (path: string) => ({
 
 const inspection = ({ hooks = 0, mcpServers = 0, scripts = 0, targets = 1 } = {}): ArtifactInspection => ({
   application: {
-    distribution: { channels: ['local'] },
+    distribution: { channels: ['local'], payloads: [] },
     events: Array.from({ length: hooks }, (_, index) => ({
       event: 'sessionStart',
       hooks: [{ host: 'claude', kind: 'event-route' as const, path: `hooks/hook-${String(index)}.mjs` }],

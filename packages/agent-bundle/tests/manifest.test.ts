@@ -389,6 +389,20 @@ it('round-trips and deeply freezes the optional web section', () => {
   expect(Object.isFrozen(manifest.web?.apps[0])).toBe(true);
 });
 
+it('rejects any manifestVersion other than the closed current version', () => {
+  const manifest = clone() as unknown as Record<string, unknown>;
+  manifest.manifestVersion = 3;
+  expect(() => parseArtifactManifest(canonicalBytes(manifest)))
+    .toThrow(`Artifact manifest manifestVersion must be ${artifactManifestVersion}.`);
+});
+
+it('rejects any compiler.recordVersion other than the closed current version', () => {
+  const manifest = clone();
+  (manifest.compiler as { recordVersion: number }).recordVersion = 2;
+  expect(() => parseArtifactManifest(canonicalBytes(manifest)))
+    .toThrow(`Artifact manifest compiler.recordVersion must be ${artifactCompilerRecordVersion}.`);
+});
+
 it('accepts a project without package identity and rejects invalid identity values', () => {
   const withoutIdentity = assembleArtifactManifest(validManifest());
   expect(withoutIdentity.manifest.compiler.project.packageName).toBeUndefined();

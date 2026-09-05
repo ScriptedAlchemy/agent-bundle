@@ -45,7 +45,7 @@ file is hand-editable: change the config or the sources and rebuild.
 | `doctor --from <root>` | The same identity, fixed-path file set, and content-hash read as `install`, per inspected host; the static validation it runs over the tree (`AB7319`) continues per projection. |
 | `serve-app`, `mcp list` / `invoke` / `run` | `executables.mcpServers[]` for the server's compiled `entry` and its `apps[]`; `projections[]` to pick the host when `--target` is omitted. |
 | `hooks list` / `simulate` | `executables.hooks[]` — the compiler wrappers that can be simulated. |
-| `inspect --json` | Adds an `output.manifest` summary — projections and executables — when a built manifest exists at the artifact output, so a JSON consumer needs no second probe. `inspect --artifact <root>` reads a bare composite root through that one file and prints the same `application` projection the Workbench renders. |
+| `inspect --json` | Adds an `output.manifest` summary — projections and executables — when a built manifest exists at the artifact output, so a JSON consumer needs no second probe. `inspect --artifact <root>` reads a bare composite root through that one file and prints the same `application` projection the Workbench renders, including the `distribution.payloads[]` rows. |
 | `eval --artifact`, `agent-bundle/test` installed-host proofs | `projections[]` and `executables.hooks[]` in place of any host document. |
 | Workbench artifacts page | Reads the manifest through the application-explorer projection at `ArtifactInspection.application`: application identity, hosts and their documents, joined server routes and executables, events and hooks, CLI, scripts, and distribution. The emitted file tree remains separate inspection evidence; the browser does not use the manifest's raw shape as its application-tree model. |
 | `validate --artifact`, `build` | The whole document: presence and canonical bytes (`AB6000`, `AB6001`), `files[]` against the tree (`AB6004`), and hook coherence over `executables.hooks[]` (`AB6018`). |
@@ -182,7 +182,7 @@ list and each `host` names a `projections[]` row.
 | --- | --- | --- |
 | `channels[]` | yes | `local` always; `npm` exactly when `compiler.project.packageName` is present. Sorted. |
 | `install` | no | Root-relative pointers to the install surface: `{ instructions?: 'INSTALL.md', script?: 'install.mjs' }`, present when the root carries at least one of them. |
-| `payloads[]` | yes | One row per prebuilt payload directory (`definePrebuilt`) packaged for a selected host: `{ hosts, name, runtimeDependencies }`. `name` is the artifact-root directory; `hosts` the projections it was packaged for; `runtimeDependencies` the author's sorted, unique list of bare package names the tree loads at run time — the compiler never opens a payload file, so this is the only record. Sorted by `name`. |
+| `payloads[]` | yes | One row per prebuilt payload directory ([`definePrebuilt`](../guide/authoring/package-entries.mdx#prebuilt-payloads)) packaged for a selected host: `{ hosts, name, runtimeDependencies }`. `name` is the artifact-root directory; `hosts` the projections it was packaged for; `runtimeDependencies` the author's sorted, unique list of bare package names the tree loads at run time — the compiler never opens a payload file, so this is the only record. **This is the row artifact-only consumers read** (`install`, `doctor`, the npm root of #555 S4) for packages that must exist at consumer runtime; the artifact never bundles them. Sorted by `name`. |
 
 ### `web`
 
@@ -396,20 +396,23 @@ other unknown key. They are listed so that a consumer does not invent its own sp
 
 ## Versioning
 
-Two version numbers travel with every root:
+Two version numbers travel with every root. Keys are closed, so **optional is not backward
+compatible**: a reader of version N rejects any key or enumerated value it does not know.
 
 - `manifestVersion` versions the **public contract** consumers read (`application`, `files[]`,
-  `runtime`, `projections[]`, `routes`, `executables`, `distribution`). It changes when a
-  public-contract key is **renamed or removed**; adding an **optional** public key does not
-  change it. Version 2 renamed `targets[]` to `projections[]`, moved the hook rows that
-  `agent-bundle.hooks.json` used to carry into `executables.hooks[]` and deleted that file, and
-  added `application`, `routes`, `executables`, `distribution`, and `projections[].documents`.
+  `runtime`, `projections[]`, `routes`, `executables`, `distribution`). It bumps on **any**
+  change an old closed reader would reject — adding, renaming, or removing a public-contract
+  key (optional or not), or changing an enumerated value set a reader closes. Within one
+  version the key inventory is frozen. Readers refuse any other `manifestVersion`. Version 2
+  renamed `targets[]` to `projections[]`, moved the hook rows that `agent-bundle.hooks.json`
+  used to carry into `executables.hooks[]` and deleted that file, and added `application`,
+  `routes`, `executables`, `distribution`, and `projections[].documents`.
 - `compiler.recordVersion` versions the **operational compiler record** (`producer`, `project`,
-  `provenance`, `adapters`, `agentSkills`, `validation`). An internal compiler refactor that
-  changes only those facts bumps `recordVersion` and never forces a `manifestVersion` bump.
+  `provenance`, `adapters`, `agentSkills`, `validation`) by the same rule over that record's
+  keys. An internal compiler refactor that changes only those facts bumps `recordVersion` and
+  never forces a `manifestVersion` bump. Readers refuse any other `recordVersion`.
 
-Because keys are closed, a reader older than the writer refuses a document that carries a key it
-does not know — read an artifact with the framework version that built it, or a newer one.
+Read an artifact with the framework version that built it, or a newer one.
 
 ## Diagnostics
 

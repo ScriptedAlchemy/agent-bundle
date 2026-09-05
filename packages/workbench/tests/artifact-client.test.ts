@@ -6,7 +6,7 @@ import { recordingFetch, response, type RecordedRequest } from './support/record
 
 const inspection = {
   application: {
-    distribution: { channels: ['local'] },
+    distribution: { channels: ['local'], payloads: [] },
     events: [{
       event: 'tool/after',
       hooks: [],

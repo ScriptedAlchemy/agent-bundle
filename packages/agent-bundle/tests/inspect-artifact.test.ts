@@ -1,9 +1,14 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
+import {
+  artifactManifestName,
+  assembleArtifactManifest,
+  parseArtifactManifest,
+} from '../src/build/manifest.ts';
 import { runCli as runSourceCli } from '../src/cli.ts';
 import { captureCliTerminal } from './support/cli-terminal.ts';
 import { writeInstallFixtureManifest } from './support/install-fixture.ts';
@@ -22,7 +27,28 @@ const writeCursorArtifactRoot = async (root: string): Promise<void> => {
     name: 'demo',
     version: '1.0.0',
   }));
+  await mkdir(join(root, 'native'), { recursive: true });
+  await writeFile(join(root, 'native', 'addon.node'), 'native');
+  await mkdir(join(root, 'tools'), { recursive: true });
+  await writeFile(join(root, 'tools', 'load.mjs'), 'export {}\n');
   await writeInstallFixtureManifest(root, { name: 'demo', version: '1.0.0' }, [{ host: 'cursor' }]);
+  const manifestPath = join(root, artifactManifestName);
+  const manifest = parseArtifactManifest(await readFile(manifestPath, 'utf8'));
+  await writeFile(manifestPath, assembleArtifactManifest({
+    ...manifest,
+    distribution: {
+      ...manifest.distribution,
+      payloads: [
+        { hosts: ['cursor'], name: 'native', runtimeDependencies: ['ffmpeg'] },
+        { hosts: ['cursor'], name: 'tools', runtimeDependencies: ['sharp'] },
+      ],
+    },
+    files: manifest.files.map((file) =>
+      file.path.startsWith('native/') || file.path.startsWith('tools/')
+        ? { ...file, kind: 'prebuilt' as const }
+        : file
+    ),
+  }).bytes);
 };
 
 it('inspect --artifact --json projects the fixture manifest and Workbench application tree', async () => {
@@ -32,16 +58,30 @@ it('inspect --artifact --json projects the fixture manifest and Workbench applic
     const result = await runSourceCliWithOutput(['inspect', '--artifact', root, '--json']);
     expect(result).toMatchObject({ code: 0, stderr: '' });
     const document = JSON.parse(result.stdout) as {
-      readonly application: { readonly identity: { readonly id: string } };
+      readonly application: {
+        readonly distribution: {
+          readonly payloads: readonly {
+            readonly hosts: readonly string[];
+            readonly name: string;
+            readonly runtimeDependencies: readonly string[];
+          }[];
+        };
+        readonly identity: { readonly id: string };
+      };
       readonly manifest: { readonly application: { readonly id: string } };
     };
     expect(document.manifest.application.id).toBe('application:demo');
     expect(document.application.identity.id).toBe('application:demo');
+    expect(document.application.distribution.payloads).toEqual([
+      { hosts: ['cursor'], name: 'native', runtimeDependencies: ['ffmpeg'] },
+      { hosts: ['cursor'], name: 'tools', runtimeDependencies: ['sharp'] },
+    ]);
 
     const human = await runSourceCliWithOutput(['inspect', '--artifact', root]);
     expect(human).toMatchObject({ code: 0, stderr: '' });
     expect(human.stdout).toContain('Application: demo (application:demo) 1.0.0');
     expect(human.stdout).toContain('Projections: cursor');
+    expect(human.stdout).toContain('Payloads: native (cursor: ffmpeg); tools (cursor: sharp)');
   } finally {
     await rm(root, { force: true, recursive: true });
   }

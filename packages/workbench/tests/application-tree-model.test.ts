@@ -41,7 +41,7 @@ const skillTree: SkillDocumentTree = {
 
 const inspection: ArtifactInspection = {
   application: {
-    distribution: { channels: ['local'] },
+    distribution: { channels: ['local'], payloads: [] },
     events: [],
     hooks: [{
       hooks: [{ event: 'session/start', id: 'hook:configured', kind: 'config', name: 'configured-hook', path: 'hooks/configured.mjs' }],

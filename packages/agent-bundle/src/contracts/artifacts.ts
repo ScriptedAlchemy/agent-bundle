@@ -17,6 +17,7 @@ export type {
   ApplicationExplorerHost,
   ApplicationExplorerIdentity,
   ApplicationExplorerInstall,
+  ApplicationExplorerPayload,
   ApplicationExplorerRoute,
   ApplicationExplorerScript,
   ApplicationExplorerServer,
