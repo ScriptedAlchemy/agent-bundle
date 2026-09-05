@@ -1,6 +1,6 @@
-import { expect, it } from '@rstest/core';
+import { describe, expect, it } from '@rstest/core';
 
-import { ForegroundRouteClient, McpRouteClient } from '../src/mcp/mcp-route-client.ts';
+import { ForegroundRouteClient, McpRouteClient, McpRouteClientError } from '../src/mcp/mcp-route-client.ts';
 
 const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), {
   headers: { 'content-type': 'application/json' },
@@ -257,3 +257,127 @@ for (const [description, devOrigins] of invalidDevOrigins) {
     });
   });
 }
+
+const foregroundSession = Object.freeze({
+  cookieName: 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef',
+  instanceId: 'foreground-instance-a',
+  origin: 'http://127.0.0.1:4100',
+  token: 'foreground-secret',
+});
+
+interface RecordedRouteRequest {
+  readonly body: unknown;
+  readonly headers: Headers;
+  readonly method: string;
+  readonly path: string;
+}
+
+const inspectorRouteClient = (respond: (request: RecordedRouteRequest) => Response) => {
+  const requests: RecordedRouteRequest[] = [];
+  const foreground = new ForegroundRouteClient({
+    fetch: async (input, init) => {
+      if (String(input) === '/api/project/session') return json(foregroundSession);
+      const request: RecordedRouteRequest = {
+        body: init?.body,
+        headers: new Headers(init?.headers),
+        method: init?.method ?? 'GET',
+        path: String(input),
+      };
+      requests.push(request);
+      return respond(request);
+    },
+  });
+  return { client: new McpRouteClient({ foreground }), requests };
+};
+
+describe('MCP route client inspector routes', () => {
+  const inspectorUrl = 'http://127.0.0.1:6274/?MCP_INSPECTOR_API_TOKEN=tok';
+
+  it('reads the Inspector status with the foreground session header', async () => {
+    const { client, requests } = inspectorRouteClient(() => json({ status: { state: 'running', url: inspectorUrl } }));
+
+    const status = await client.inspectorStatus();
+
+    expect(status).toEqual({ state: 'running', url: inspectorUrl });
+    expect(Object.isFrozen(status)).toBe(true);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ method: 'GET', path: '/api/inspector/status' });
+    expect(requests[0]!.body).toBeUndefined();
+    expect(requests[0]!.headers.get('x-agent-bundle-session')).toBe('foreground-secret');
+  });
+
+  it('reads a not-running Inspector status without a URL', async () => {
+    const { client } = inspectorRouteClient(() => json({ status: { state: 'idle' } }));
+
+    await expect(client.inspectorStatus()).resolves.toEqual({ state: 'idle' });
+  });
+
+  const invalidStatusBodies: readonly [string, unknown][] = [
+    ['an unknown state', { status: { state: 'bogus' } }],
+    ['an unexpected status field', { status: { extra: 1, state: 'idle' } }],
+    ['a non-HTTP Inspector URL', { status: { state: 'running', url: 'javascript:alert(1)' } }],
+    ['a non-loopback Inspector URL', { status: { state: 'running', url: 'https://inspector.example.com/?MCP_INSPECTOR_API_TOKEN=tok' } }],
+    ['an all-interfaces Inspector URL', { status: { state: 'running', url: 'http://0.0.0.0:6274/?MCP_INSPECTOR_API_TOKEN=tok' } }],
+    ['an Inspector URL carrying credentials', { status: { state: 'running', url: 'http://user:pass@127.0.0.1:6274/' } }],
+    ['a missing status', {}],
+  ];
+
+  for (const [description, body] of invalidStatusBodies) {
+    it(`rejects an Inspector status response with ${description}`, async () => {
+      const { client } = inspectorRouteClient(() => json(body));
+
+      const status = client.inspectorStatus();
+
+      await expect(status).rejects.toBeInstanceOf(McpRouteClientError);
+      await expect(status).rejects.toMatchObject({ code: 'AB8019' });
+    });
+  }
+
+  it('launches the Inspector with an empty JSON object body and the foreground session header', async () => {
+    const { client, requests } = inspectorRouteClient(() => json({ url: inspectorUrl }));
+
+    const launched = await client.inspectorLaunch();
+
+    expect(launched).toEqual({ url: inspectorUrl });
+    expect(Object.isFrozen(launched)).toBe(true);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ body: '{}', method: 'POST', path: '/api/inspector/launch' });
+    expect(requests[0]!.headers.get('content-type')).toBe('application/json');
+    expect(requests[0]!.headers.get('x-agent-bundle-session')).toBe('foreground-secret');
+  });
+
+  it('surfaces the server launch diagnostic as a typed MCP route error', async () => {
+    const { client } = inspectorRouteClient(() => json({ diagnostic: { code: 'AB8112', message: 'MCP Inspector could not be launched.' } }, 502));
+
+    const launch = client.inspectorLaunch();
+
+    await expect(launch).rejects.toBeInstanceOf(McpRouteClientError);
+    await expect(launch).rejects.toMatchObject({ code: 'AB8112', message: 'MCP Inspector could not be launched.' });
+  });
+
+  const invalidLaunchBodies: readonly [string, unknown][] = [
+    ['a non-HTTP Inspector URL', { url: 'javascript:alert(1)' }],
+    ['a non-loopback Inspector URL', { url: 'https://inspector.example.com/?MCP_INSPECTOR_API_TOKEN=tok' }],
+    ['an unexpected field', { extra: true, url: inspectorUrl }],
+    ['a missing URL', {}],
+  ];
+
+  it('accepts every loopback spelling for the Inspector URL', async () => {
+    for (const url of ['http://localhost:6274/?MCP_INSPECTOR_API_TOKEN=tok', 'http://[::1]:6274/?MCP_INSPECTOR_API_TOKEN=tok', inspectorUrl]) {
+      const { client } = inspectorRouteClient(() => json({ url }));
+
+      await expect(client.inspectorLaunch()).resolves.toEqual({ url });
+    }
+  });
+
+  for (const [description, body] of invalidLaunchBodies) {
+    it(`rejects an Inspector launch response with ${description}`, async () => {
+      const { client } = inspectorRouteClient(() => json(body));
+
+      const launch = client.inspectorLaunch();
+
+      await expect(launch).rejects.toBeInstanceOf(McpRouteClientError);
+      await expect(launch).rejects.toMatchObject({ code: 'AB8019' });
+    });
+  }
+});
