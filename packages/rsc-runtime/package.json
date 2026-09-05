@@ -90,9 +90,9 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/client": "2.0.0",
-    "@rslib/core": "0.23.2",
-    "@rspack/core": "2.2.1",
-    "@rstest/core": "0.11.10",
+    "@rslib/core": "1.0.0",
+    "@rspack/core": "2.2.2",
+    "@rstest/core": "0.11.12",
     "@types/react": "19.2.18",
     "effect-rstest": "https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f",
     "micromark": "4.0.2",

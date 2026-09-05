@@ -85,6 +85,17 @@ export default defineConfig({
       // extractor never reaches it.
       config.ignoreWarnings = [...(config.ignoreWarnings ?? []), /Can't resolve 'source-map-support'/u];
       config.node = { ...(typeof config.node === 'object' ? config.node : {}), __dirname: false, __filename: false };
+      // `externalsType` stays Rslib 1.x's ESM default, `modern-module`, on
+      // purpose. The only externals this bundle loads through CommonJS
+      // `require()` are the Node builtins the bundled TypeScript parser
+      // reads (`fs`, `path`, `os`, `crypto`, `inspector`, `perf_hooks`), and
+      // Rslib 0.x already emitted those through a `createRequire()` shim
+      // chunk; `modern-module` reproduces that chunk byte for byte, while
+      // pinning `module-import` would turn them into hoisted
+      // `import * as` namespaces — a change, not a preservation. The shim
+      // chunk is reachable only from the parser chunk, never from the
+      // runtime entries the compiler re-bundles into consumer artifacts, so
+      // the artifact bundler never has to see through a `createRequire()`.
     },
   },
   source: {
