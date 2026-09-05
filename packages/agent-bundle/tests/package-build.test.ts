@@ -143,7 +143,10 @@ const unpublishedPackageOutput = async (root: string): Promise<void> => {
 
 describe('framework-owned package build', () => {
   it('builds bin, lib, and dts outputs from conventions and stays deterministic', async () => {
-    const root = await fixtureRoot(conventionFixture());
+    const root = await fixtureRoot({
+      ...conventionFixture(),
+      'package.json': '{"name":"package-build-fixture","type":"module","private":true,"scripts":{"prepack":"agent-bundle prepack","test":"rstest"}}\n',
+    });
     await installTypescriptToolchain(root);
     const result = await build({ output: 'artifact', packageOutputs: true, root });
 
@@ -154,6 +157,14 @@ describe('framework-owned package build', () => {
     const packageBuild = result.packageBuild;
     expect(packageBuild).toBeDefined();
     expect(packageBuild!.outputRoot).toBe(join(root, 'dist'));
+    const packageDocument = JSON.parse(await readFile(join(root, 'dist', 'package.json'), 'utf8'));
+    expect(packageDocument).toMatchObject({
+      bin: { 'package-build-fixture': './bin/package-build-fixture.js' },
+      name: 'package-build-fixture',
+      private: true,
+      type: 'module',
+    });
+    expect(packageDocument).not.toHaveProperty('scripts');
     const paths = packageBuild!.files.map((file) => file.path);
     expect(paths).toContain('bin/package-build-fixture.js');
     expect(paths).toContain('index.js');

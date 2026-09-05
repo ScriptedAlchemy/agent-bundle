@@ -1401,7 +1401,6 @@ export const prepack = async (options: BuildOptions): Promise<PrepackResult> => 
   });
   const pack = packOutputFromJson(stdout);
   const diagnostics = await packInventoryDiagnostics({
-    artifactRoot: result.build.outputRoot,
     model: result.model,
     packageBuild: result.packageBuild,
     packOutput: pack,

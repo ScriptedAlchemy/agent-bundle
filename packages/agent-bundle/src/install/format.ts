@@ -23,7 +23,7 @@ const installVerb = (state: InstallResult['state'], mode: InstallResult['mode'])
   }
 };
 
-/** Human-readable install summary shared by the CLI and generated installer bins. */
+/** Human-readable install summary shared by the CLI and standalone artifact installer. */
 export const formatInstallResult = (result: InstallResult): string => {
   const destination = result.destination ?? result.bundleRoot;
   const mode = result.mode === undefined ? '' : ` (${result.mode} mode)`;

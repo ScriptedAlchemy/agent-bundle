@@ -536,7 +536,7 @@ const assertInstallResult = (
   assertProof(document.host === host, `${host} install result did not identify the host.`);
   assertProof(document.plugin === plugin, `${host} install result did not identify ${plugin}.`);
   assertProof(document.version === version, `${host} install result did not identify version ${version}.`);
-  assertProof(document.state === state, `${host} install result state was not ${state}.`);
+  assertProof(document.state === state, `${host} install result state was ${document.state}, expected ${state}.`);
   assertProof(
     typeof document.contentHash === 'string' && /^[0-9a-f]{64}$/u.test(document.contentHash),
     `${host} install result carried no artifact content hash.`,

@@ -1049,8 +1049,9 @@ self-contained module run as `node <plugin-root>/bin/<plugin-name>.mjs <command>
 route can spawn its `../bin/<plugin-name>.mjs` sibling and a Claude skill can point at
 `${CLAUDE_PLUGIN_ROOT}/bin/<plugin-name>.mjs` without a separate npm install. Every built-in host
 publishes the `cli` capability that admits it; `inspect` accounts for it as a `cli` component, and
-the manifest records both files with bundle provenance. The npm package bin under `dist/bin/` is
-unchanged. See `docs/entry-conventions.md` for the layout and diagnostics (`AB4765`, `AB4766`).
+the manifest records both files with bundle provenance. The generated npm root copies this
+executable unchanged and points `package.json` `bin` at it. See `docs/entry-conventions.md` for the
+layout and diagnostics (`AB4765`–`AB4767`).
 
 ### What gets hashed
 

@@ -1,5 +1,5 @@
 import { execFile as executeFile, spawnSync } from 'node:child_process';
-import { access, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { access, copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -15,7 +15,6 @@ import {
   runCursorHostInstallProof,
   runHostUninstallProof,
   type BuiltHostInstallFixture,
-  type HostInstallCommand,
 } from './support/host-install.ts';
 import {
   installedEnvironment,
@@ -49,7 +48,6 @@ const codexPluginIt = codexAvailable ? it : it.skip;
 let cleanupRoot: string | undefined;
 let sourceFixture: BuiltHostInstallFixture | undefined;
 let packedFixture: BuiltHostInstallFixture | undefined;
-let packedInstallCommand: HostInstallCommand | undefined;
 let fixturePackageVersion: string | undefined;
 
 beforeAll(async () => {
@@ -65,8 +63,6 @@ beforeAll(async () => {
       }
       fixturePackageVersion = packageDocument.version;
       delete packageDocument.private;
-      packageDocument.bin = { [pluginName]: `./dist/bin/${pluginName}.js` };
-      packageDocument.files = ['artifact', 'dist', 'README.md'];
       await Promise.all([
         writeFile(packagePath, `${JSON.stringify(packageDocument, null, 2)}\n`),
         writeFile(join(projectRoot, 'README.md'), '# Host install proof fixture\n'),
@@ -90,7 +86,7 @@ beforeAll(async () => {
   const packed = await execFile(
     'npm',
     ['pack', '--json', '--ignore-scripts', '--pack-destination', tarballs],
-    { cwd: projectRoot, env: installedEnvironment() },
+    { cwd: join(projectRoot, 'dist'), env: installedEnvironment() },
   );
   const packOutput = packOutputFromJson(packed.stdout);
   const tarball = join(tarballs, packOutput.filename);
@@ -100,10 +96,17 @@ beforeAll(async () => {
   });
 
   const installedPackageRoot = join(consumer, 'node_modules', packageName);
-  const installedArtifactRoot = join(installedPackageRoot, 'artifact');
-  const installedBin = join(consumer, 'node_modules', '.bin', pluginName);
+  const installedArtifactRoot = join(consumer, 'packed-artifact');
+  const manifestName = 'agent-bundle.manifest.json';
+  const manifestText = await readFile(join(installedPackageRoot, manifestName), 'utf8');
+  const manifest = JSON.parse(manifestText) as { readonly files: readonly { readonly path: string }[] };
+  await mkdir(installedArtifactRoot);
+  for (const file of [...manifest.files, { path: manifestName }]) {
+    const destination = join(installedArtifactRoot, file.path);
+    await mkdir(dirname(destination), { recursive: true });
+    await copyFile(join(installedPackageRoot, file.path), destination);
+  }
   await Promise.all([
-    access(installedBin),
     access(join(installedArtifactRoot, '.claude-plugin', 'plugin.json')),
     access(join(installedArtifactRoot, '.codex-plugin', 'plugin.json')),
     access(join(installedArtifactRoot, '.cursor-plugin', 'plugin.json')),
@@ -111,7 +114,7 @@ beforeAll(async () => {
 
   await rm(projectRoot, { force: true, recursive: true });
   await expect(stat(projectRoot), proofLabel).rejects.toMatchObject({ code: 'ENOENT' });
-  await expect(access(join(projectRoot, 'dist', 'bin', `${pluginName}.js`)), proofLabel)
+  await expect(access(join(projectRoot, 'dist', 'bin', `${pluginName}.mjs`)), proofLabel)
     .rejects.toMatchObject({ code: 'ENOENT' });
 
   packedFixture = Object.freeze({
@@ -124,7 +127,6 @@ beforeAll(async () => {
     cli: sourceFixture.cli,
     root: cleanupRoot,
   });
-  packedInstallCommand = Object.freeze({ cwd: consumer, executable: installedBin });
 }, 300_000);
 
 afterAll(async () => {
@@ -137,11 +139,6 @@ afterAll(async () => {
 const builtFixture = (): BuiltHostInstallFixture => {
   if (packedFixture === undefined) throw new Error(`[${proofLabel}] packed fixture setup did not complete.`);
   return packedFixture;
-};
-
-const installCommand = (): HostInstallCommand => {
-  if (packedInstallCommand === undefined) throw new Error(`[${proofLabel}] packed installer setup did not complete.`);
-  return packedInstallCommand;
 };
 
 const expectHygienicReport = (report: unknown): void => {
@@ -157,7 +154,6 @@ claudePluginIt(
   async () => {
     const report = await runClaudeHostInstallProof(builtFixture(), {
       environment: process.env,
-      installCommand: installCommand(),
     });
 
     expect(report, proofLabel).toEqual({
@@ -189,7 +185,6 @@ codexPluginIt(
   async () => {
     const report = await runCodexHostInstallProof(builtFixture(), {
       environment: process.env,
-      installCommand: installCommand(),
     });
 
     expect(report, proofLabel).toEqual({
@@ -226,7 +221,6 @@ codexPluginIt(
 it('installs the packed tarball into an isolated Cursor home, validates schemas, and is idempotent', async () => {
   const report = await runCursorHostInstallProof(builtFixture(), {
     environment: process.env,
-    installCommand: installCommand(),
   });
 
   expect(report, proofLabel).toEqual({
@@ -277,12 +271,11 @@ it('installs the packed tarball into an isolated Cursor home, validates schemas,
 
 claudePluginIt(
   claudeAvailable
-    ? 'uninstalls the packed tarball through Claude with the package bin, leaving only host-owned bookkeeping'
-    : `uninstalls the packed tarball through Claude with the package bin, leaving only host-owned bookkeeping [${claudeMissingEvidence}]`,
+    ? 'uninstalls the packed tarball through Claude, leaving only host-owned bookkeeping'
+    : `uninstalls the packed tarball through Claude, leaving only host-owned bookkeeping [${claudeMissingEvidence}]`,
   async () => {
     const report = await runHostUninstallProof(builtFixture(), 'claude', {
       environment: process.env,
-      installCommand: installCommand(),
     });
     expect(report, proofLabel).toMatchObject({
       agentBundleResidue: [],
@@ -298,12 +291,11 @@ claudePluginIt(
 
 codexPluginIt(
   codexAvailable
-    ? 'uninstalls the packed tarball through Codex with the package bin'
-    : `uninstalls the packed tarball through Codex with the package bin [${codexMissingEvidence}]`,
+    ? 'uninstalls the packed tarball through Codex'
+    : `uninstalls the packed tarball through Codex [${codexMissingEvidence}]`,
   async () => {
     const report = await runHostUninstallProof(builtFixture(), 'codex', {
       environment: process.env,
-      installCommand: installCommand(),
     });
     expect(report, proofLabel).toMatchObject({
       agentBundleResidue: [],
@@ -317,10 +309,9 @@ codexPluginIt(
   300_000,
 );
 
-it('uninstalls the packed tarball from an isolated Cursor home with the package bin and leaves it byte-identical', async () => {
+it('uninstalls the packed tarball from an isolated Cursor home and leaves it byte-identical', async () => {
   const report = await runHostUninstallProof(builtFixture(), 'cursor', {
     environment: process.env,
-    installCommand: installCommand(),
   });
   expect(report, proofLabel).toEqual({
     agentBundleResidue: [],
