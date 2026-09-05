@@ -15,20 +15,19 @@ import { decodeLiteral, quotedLiteral, scanModuleLoads } from './module-loads.ts
  * Evidence for the npm prepack dependency gate (`AB7014`/`AB7015`, emitted by
  * `pack-inventory.ts`): what `package.json` asks npm to install alongside the
  * package, and which packages the packed JavaScript and declaration files
- * actually reference. JavaScript the framework compiled — the `dist` bundles
- * and the host-pack modules — never carries a bare package name, since
- * `AB6005` fails the build first and `prepack` builds before it packs: it
- * walks a compiled module's `import` records, static and dynamic, and its
- * literal and computed `require`, `createRequire(…)`, and
- * `import.meta.resolve` loads alike (`module-loads.ts`, the scanner both
- * gates share). A bare package name in the load evidence read here can
- * therefore come only from where a bare import can — a module `AB6005`
- * never walked: a prebuilt payload module, JavaScript the `files` allowlist
- * packs outside the artifact and `dist` — and from an inline `node -e`
- * program in an install script. The `bin`-command, declaration,
- * `imports`-map, and install-script evidence are read from every packed
- * file as before (a compiled bundle may run a dependency's command,
- * `spawnSync("tsc")`, which is not an import).
+ * actually reference. The inventory lexes every packed JavaScript file
+ * (`importedPackageNames`, `dist/**` included). Because `AB6005` has already
+ * refused a bare load in every walked emitted module before the inventory
+ * runs (`prepack` builds first), the evidence that can still keep a
+ * dependency in a build that passed comes from a prebuilt payload module,
+ * packed JavaScript the `files` allowlist adds from outside the artifact
+ * and `dist`, a packed declaration reference, an install script, or a `bin`
+ * command. `AB6005` walks a compiled module's `import` records, static and
+ * dynamic, and its literal and computed `require`, `require.resolve`,
+ * `createRequire(…)` (direct or bound), `.resolve`, and `import.meta.resolve`
+ * loads alike (`module-loads.ts`, the scanner both gates share). A compiled
+ * bundle may still run a dependency's command (`spawnSync("tsc")`), which
+ * is not an import.
  */
 
 /**
@@ -365,17 +364,19 @@ const commandLiteral = (command: string): RegExp =>
 
 /**
  * The module specifiers JavaScript source loads — the lexer's static and
- * dynamic literal imports, then the literal `require`, `createRequire(…)`,
- * bound-loader, and `import.meta.resolve` loads `scanModuleLoads` reports, in
- * source order — and whether that is all of them: a computed `import(x)`, a
- * computed load (`require(x)`, `require("driver/" + v)`), or a loader passed
- * on as a value means it is not — and so does source the lexer rejects, whose
- * `import()` calls it could not report (syntax itself is another gate's
- * concern). Both readers see code only: the lexer by construction, the
- * scanner by stepping over comments, strings, templates, and regex literals
- * as tokens, so a `require` in a bundled docblock or an error message neither
- * keeps a declaration nor withholds `AB7014`. Packed files and inline `node
- * -e` programs are read alike.
+ * dynamic literal imports, then the literal `require`, `require.resolve`,
+ * `createRequire(…)` (direct or bound), `.resolve`, and `import.meta.resolve`
+ * loads `scanModuleLoads` reports, in source order — and whether that is all
+ * of them: a computed `import(x)`, a computed recognised load (non-literal
+ * argument; optional `?.(` and a trailing comma count the same), or a loader
+ * passed on as a value (argument, array element, object-literal value,
+ * ternary branch, return/arrow value, assignment right-hand side, export —
+ * not a binding position) means it is not — and so does source the lexer
+ * rejects, whose `import()` calls it could not report (syntax itself is
+ * another gate's concern). The scanner steps over comments, string literals,
+ * regex literals in operand position, and template static text; a load
+ * inside a template `${…}` substitution is scanned as code. Packed files
+ * and inline `node -e` programs are read alike.
  */
 const moduleLoads = async (source: string, sha256?: string): Promise<Pick<FileEvidence, 'complete' | 'specifiers'>> => {
   let imports: readonly ModuleImport[];

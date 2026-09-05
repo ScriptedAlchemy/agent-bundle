@@ -76,6 +76,18 @@ const boundReference = 'passes load, a createRequire(…) loader, on as a value 
 describe('validateJavaScriptModules', () => {
   it.each([
     ['require()', 'export const pad = require("left-pad");\n', unsupported('require("left-pad")')],
+    [
+      'require() in a template substitution',
+      'export const banner = `v${require("left-pad")}`;\n',
+      unsupported('require("left-pad")'),
+    ],
+    [
+      'require() after postfix increment and division',
+      'const n = count++ / require("left-pad") / 2;\nexport { n };\n',
+      unsupported('require("left-pad")'),
+    ],
+    ['an optional require() call', 'export const pad = require?.("left-pad");\n', unsupported('require("left-pad")')],
+    ['require() with a trailing comma', 'export const pad = require("left-pad",);\n', unsupported('require("left-pad")')],
     ['require.resolve()', 'export const where = require.resolve("left-pad");\n', unsupported('require.resolve("left-pad")')],
     [
       'a direct createRequire()() call',
@@ -257,7 +269,7 @@ describe('validateJavaScriptModules', () => {
     })).resolves.toEqual([]);
   });
 
-  it.each([
+  it.each<readonly [form: string, source: string, siblings?: Readonly<Record<string, string>>]>([
     ['a line comment', '// require("probe-dep") is prose\nexport const ok = true;\n'],
     ['a bundled docblock', '/**\n * Use require("probe-dep") when the host lacks it.\n */\nexport const ok = true;\n'],
     ['a string literal', 'export const text = \'require("probe-dep")\';\n'],
@@ -285,9 +297,24 @@ describe('validateJavaScriptModules', () => {
       'a method and a function definition named require',
       'export class Host {\n  require(id) { return this.modules.get(id); }\n}\nfunction require(id, parent) {\n  return id;\n}\n',
     ],
+    [
+      'require binding positions',
+      [
+        'import { require } from "./helper.js";',
+        'export function wrapper(module, exports, require) { return 1; }',
+        'try { x(); } catch (require) {}',
+        '{ const { require } = host; }',
+        '',
+      ].join('\n'),
+      { 'scripts/helper.js': 'export const require = 1;\n' },
+    ],
+    [
+      'a createRequire name inside a comment',
+      '/* const load = createRequire(import.meta.url); */\nfunction load(x) { return x; }\nload("left-pad");\n',
+    ],
     ['a longer identifier', 'const require_fast_uri = () => "fast-uri";\nexport const uri = require_fast_uri();\n'],
-  ])('does not fail a compiled module for %s', async (_form, source) => {
-    await expect(validateProbe(source)).resolves.toEqual([]);
+  ])('does not fail a compiled module for %s', async (_form, source, siblings = {}) => {
+    await expect(validateProbe(source, siblings)).resolves.toEqual([]);
   });
 
   it('finds the same loads whether a module is lexed as a bundle or parsed in full', async () => {

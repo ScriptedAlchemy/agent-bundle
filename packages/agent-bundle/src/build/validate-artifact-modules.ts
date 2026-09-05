@@ -14,18 +14,24 @@ import { scanModuleLoads, type ComputedModuleLoad, type LiteralModuleLoad } from
 /**
  * `AB6005`: the JavaScript modules an artifact — or a package build's staged
  * `dist` — ships resolve nothing from outside their tree but Node built-ins.
- * Every listed `.js`/`.mjs` module is walked, and every module a walked one
- * reaches: its `import` records as the ES-module lexer reports them, static
- * and dynamic, and its `require`, `createRequire(…)`, bound-loader, and
- * `import.meta.resolve` loads as `scanModuleLoads` reports them — the calls
- * the bundler leaves in place, which reach a package as surely as an import
- * does. Compiled bundles and the framework-generated modules parsed in full
+ * Every listed `.js`/`.mjs` module is walked, and every `.js`/`.mjs` module
+ * a walked one reaches: its `import` records as the ES-module lexer reports
+ * them, static and dynamic, and its recognised loads as `scanModuleLoads`
+ * reports them — `require(…)`, `require.resolve(…)`,
+ * `createRequire(…)(…)`/`.resolve(…)` (factory written out,
+ * namespace-qualified, or aliased), a loader bound by
+ * `const|let|var name = createRequire(…)` then called, and
+ * `import.meta.resolve(…)`; optional `?.(` and a trailing comma count the
+ * same. Compiled bundles and the framework-generated modules parsed in full
  * are read the same way; prebuilt payload modules are opaque consumer output
  * and are not walked. A relative or `file:` specifier, imported or loaded,
- * must name a listed regular `.js`/`.mjs` module or listed valid JSON inside
- * the tree, and that module is walked in turn; a bare name that is not a
- * built-in, a non-literal specifier, or a loader passed on as a value is a
- * finding.
+ * must name a listed regular `.js`/`.mjs` module inside the tree, which is
+ * walked in turn, or listed valid JSON (host packs only), which is accepted
+ * as a terminal and is not walked; a bare name that is not a built-in, a
+ * non-literal specifier, or a loader name used as a value (argument, array
+ * element, object-literal value, ternary branch, return/arrow value,
+ * assignment right-hand side, export — not a binding position: parameter,
+ * `catch`, destructuring pattern, import specifier) is a finding.
  */
 
 const javaScriptModuleSuffix = /\.(?:m?js)$/u;

@@ -154,15 +154,17 @@ const perField = (
  * emitted module cannot load a bare package at all: `AB6005` walks every
  * `.js`/`.mjs` module of a host pack and of `dist` — compiled bundles and
  * copied scripts alike, prebuilt payload modules excepted — and fails any
- * `import`, `require`, `createRequire(…)` loader call, or
- * `import.meta.resolve` whose specifier is not a Node built-in or a listed
- * file inside the tree, and `prepack` runs that build before this inventory.
- * So the import evidence and the `require`/`createRequire`/
- * `import.meta.resolve` evidence `AB7014` accepts both come only from files
- * `AB6005` never walked — prebuilt payload modules and JavaScript the `files`
- * allowlist packs from outside the artifact and `dist` — and from the inline
- * `node -e` programs of install scripts; one scanner (`module-loads.ts`)
- * reads the loads for both gates.
+ * `import`, `require`, `require.resolve`, `createRequire(…)` loader call
+ * (direct or bound), `.resolve`, or `import.meta.resolve` whose specifier
+ * is not a Node built-in or a listed file inside the tree, and `prepack`
+ * runs that build before this inventory. The inventory lexes every packed
+ * JavaScript file (`importedPackageNames`, `dist/**` included); because
+ * `AB6005` has already refused a bare load in every walked emitted module
+ * before the inventory runs, the evidence that can still keep a dependency
+ * in a build that passed comes from a prebuilt payload module, packed
+ * JavaScript the `files` allowlist adds from outside the artifact and
+ * `dist`, a packed declaration reference, an install script, or a `bin`
+ * command. One scanner (`module-loads.ts`) reads the loads for both gates.
  */
 const unresolvableMessage = (field: InstalledDependencyField, own: readonly DeclaredDependency[]): string =>
   `package.json ${field} names packages a consumer's npm cannot resolve through a registry (an invalid name or a non-registry specifier): ${own.map((dependency) =>
@@ -180,10 +182,12 @@ const dependencyDiagnostics = async (options: {
 }): Promise<readonly Diagnostic[]> => {
   const declared = declaredDependencies(options.packageDocument);
   if (declared.length === 0) return [];
-  // `prepack` runs the build before this inventory, and `AB6005` there refuses every bare import, `require`,
-  // `createRequire(…)` load, and `import.meta.resolve` in an emitted module, so any such evidence found here
-  // belongs to a file `AB6005` never walked: a prebuilt payload module, JavaScript packed from outside the
-  // artifact and `dist`, or an install script's inline `node -e` program.
+  // The inventory lexes every packed JavaScript file. `prepack` runs the build first, and `AB6005` there
+  // refuses every bare import, `require`, `require.resolve`, `createRequire(…)` load (direct or bound),
+  // `.resolve`, and `import.meta.resolve` in a walked emitted module, so the evidence that can still keep
+  // a dependency in a build that passed comes from a prebuilt payload module, packed JavaScript the
+  // `files` allowlist adds from outside the artifact and `dist`, a packed declaration reference, an
+  // install script, or a `bin` command.
   const imported = await importedPackageNames({
     declared: declared.filter((dependency) => dependency.installed).map((dependency) => dependency.name),
     packageDocument: options.packageDocument,
@@ -236,7 +240,7 @@ const dependencyDiagnostics = async (options: {
           : 'Every consumer installs them for nothing; the emitted outputs already inline what they use.'),
       field === 'peerDependencies'
         ? 'Keep a deliberate compatibility peer, mark it optional in peerDependenciesMeta so npm stops installing it, or move a build-only package to devDependencies.'
-        : 'Move build-only packages to devDependencies; the build inlines every dependency into emitted modules (AB6005), so keep a runtime dependency only for what a prebuilt payload module or other packed JavaScript outside the artifact and dist imports, requires, or resolves (createRequire, import.meta.resolve), a packed declaration file references, a #subpath import reaches through the imports map, or an install script or packed JavaScript runs; a computed import() or require() in packed code withholds this check.',
+        : 'Move build-only packages to devDependencies; the build inlines every dependency into emitted modules (AB6005), so keep a runtime dependency only for what a prebuilt payload module, packed JavaScript the files allowlist adds from outside the artifact and dist, a packed declaration file, a #subpath import through the imports map, an install script, or a bin command still references, loads, or runs; a non-literal import(), require(), require.resolve(), createRequire()() or .resolve(), or import.meta.resolve(), or a loader passed on as a value, makes a packed file\'s evidence incomplete and withholds this check.',
       field === 'peerDependencies' ? 'warning' : 'error',
     )),
     // npm skips an optional dependency it cannot fetch, so the install survives — but only once the specifier parsed

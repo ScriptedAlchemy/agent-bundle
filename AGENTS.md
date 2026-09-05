@@ -76,21 +76,30 @@
   (`src/build/package-build.ts` reuses `validateJavaScriptModules` from
   `src/build/validate-artifact-modules.ts`), so a generated executable in a
   host pack or in `dist` loads nothing but Node built-ins from outside its
-  tree. The walk reads every way an emitted `.js`/`.mjs` module loads
-  another (prebuilt payload modules excepted, `.d.ts` never walked): its ES
-  import records — static, literal dynamic `import()`; a non-literal one is
-  a finding — and the CommonJS-style loads Rspack leaves in emitted output:
-  `require("…")`, `require.resolve("…")`, `createRequire(…)("…")` and its
-  `.resolve("…")`, a loader bound to a name
-  (`const load = createRequire(import.meta.url); load("…")` — the shim
-  Rspack emits for a `tools.rspack` `externalsType: 'node-commonjs'`
-  external and for a builtin `require` inside a bundled dependency), and
-  `import.meta.resolve("…")`. A Node built-in passes; a relative or `file:`
-  target must be a listed regular `.js`/`.mjs` file inside the tree (or
-  listed valid JSON, host packs only) and is then walked; a bare package
-  name fails, a non-literal argument fails, and a loader passed on as a
-  value rather than called fails. One scanner, `src/build/module-loads.ts`,
-  reads those loads for `AB6005` and for the prepack gate alike. MCP App
+  tree. The walk reads the recognised load forms in an emitted
+  `.js`/`.mjs` module (prebuilt payload modules excepted, `.d.ts` never
+  walked): its ES import records — static, literal dynamic `import()`; a
+  non-literal one is a finding — and `require(…)`, `require.resolve(…)`,
+  `createRequire(…)(…)` and `.resolve(…)` with the factory written inline,
+  namespace-qualified, or imported/destructured under an alias, a loader
+  declared with `const`/`let`/`var` from `createRequire(…)` and then called
+  directly or through `.resolve(…)`, and `import.meta.resolve(…)`; optional
+  calls and a trailing comma after the literal count the same. Comments,
+  strings, regular-expression literals, and template text are stepped over;
+  `${…}` template substitutions are code and are scanned; binding and alias
+  names are read from code only. A Node built-in passes; a relative or
+  `file:` target must be a listed regular `.js`/`.mjs` file inside the tree
+  and is walked in turn (in a host pack only, listed valid JSON is accepted
+  as a terminal and not walked). A bare package name fails, a non-literal
+  argument fails, and a loader used as a value rather than called fails —
+  a binding position (parameter, `catch`, destructuring pattern, import
+  specifier) is not a use as a value. One scanner,
+  `src/build/module-loads.ts`, reads those loads for `AB6005` and for the
+  prepack gate alike; its header states the approximations it makes (a `/`
+  after `)` or an identifier is division, and the hand-authored forms it
+  does not recognise: `.call`/`.apply`, `globalThis.require`,
+  `module.require`, `import.meta["resolve"]`, assignment-bound or
+  second-hop loader aliases). MCP App
   views (`src/build/mcp-apps.ts`) inline every script and style into one
   HTML file. The framework never adds `externals` to a plugin build;
   the `externals` handling in `rslib.ts` (`reservedExternalsViolation`,
@@ -101,16 +110,18 @@
   `autoExternal` or externalize a dependency on the author's behalf. A package
   a consumer must install is the author's explicit decision, and keeping a
   dependency external through the `tools` hatch is not how that decision is
-  made, in any emitted form: an ES `import` external and a
-  `commonjs`/`node-commonjs` `require` shim both fail `AB6005` in a host
-  pack and in `dist` alike. What legitimately puts a package under
-  `dependencies` is a packed declaration reference, an import or a
-  `require`/`createRequire`/`import.meta.resolve` load in a file `AB6005`
-  never walked (a prebuilt payload module, or JavaScript the `files`
-  allowlist packs from outside the artifact and `dist`), an install script,
-  or a `bin` command packed JavaScript runs — and the prepack gate judges
-  those: `AB7014` demands that evidence, `AB7015` a specifier a consumer's
-  npm can install.
+  made, in any emitted form: an ES `import` external and the
+  `node-commonjs` `createRequire` shim both fail `AB6005` in a host pack and
+  in `dist` alike; a direct `require("pkg")` call, however emitted, is
+  rejected the same way. `AB7014` lexes every packed
+  `.js`/`.mjs`/`.cjs` file, including `dist` and artifact files. Because
+  `AB6005` has already refused a bare load in every walked emitted module
+  before that inventory runs, the evidence that can still keep a dependency
+  in a build that passed comes from a prebuilt payload module, packed
+  JavaScript the `files` allowlist adds from outside the artifact and
+  `dist`, a packed declaration reference, an install script, or a `bin`
+  command. The prepack gate judges those: `AB7014` demands that evidence,
+  `AB7015` a specifier a consumer's npm can install.
 - Proof is bytes and processes, not config: every artifact build walks the
   compiled host-pack modules and every package build walks its emitted `dist`
   bundles (`AB6005` fails a bare package specifier in either, imported or

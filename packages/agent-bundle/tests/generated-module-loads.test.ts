@@ -24,12 +24,12 @@
  *   scanned.
  */
 import { isBuiltin } from 'node:module';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { describe, expect, it } from '@rstest/core';
 
-import { claudeAdapter } from '../src/adapters/claude.ts';
-import { codexAdapter } from '../src/adapters/codex.ts';
-import { createCursorHookContract, cursorAdapter } from '../src/adapters/cursor.ts';
+import { createCursorHookContract } from '../src/adapters/cursor.ts';
 import {
   cursorHookWrapperSource,
   nativeHookWrapperSource,
@@ -37,8 +37,8 @@ import {
   type TargetHookContract,
   type TargetHookWrapper,
 } from '../src/adapters/hook-contract.ts';
-import { pluginAdapter } from '../src/adapters/plugin.ts';
-import type { TargetAdapter } from '../src/adapters/types.ts';
+import { createDefaultRegistry } from '../src/adapters/registry.ts';
+import { planMcpEntriesSurface } from '../src/build/entries.ts';
 import {
   generatedCliBinEntrySource,
   generatedExecutableEntrySource,
@@ -51,6 +51,7 @@ import {
   stdioPreludeModuleSource,
 } from '../src/build/entry-shell.ts';
 import { operatorEnvLayerModuleSource } from '../src/build/launch-env-shell.ts';
+import { generatedMetaModuleSource } from '../src/build/meta.ts';
 import { type ModuleLoad, scanModuleLoads } from '../src/build/module-loads.ts';
 import type {
   NormalizedHook,
@@ -85,9 +86,6 @@ const declared = <T>(value: T | undefined, label: string): T => {
   if (value === undefined) throw new Error(`${label} is not declared`);
   return value;
 };
-
-const hookContractOf = (adapter: TargetAdapter, label: string): TargetHookContract =>
-  declared(adapter.hookContract, `the ${label} adapter hook contract`);
 
 const configProvenance: SourceProvenance = { kind: 'config', sourcePath: '/project/agent-bundle.config.ts' };
 
@@ -144,7 +142,8 @@ const durableState: NormalizedStateDefinition = {
 };
 const volatileState: NormalizedStateDefinition = { ...durableState, lifetime: 'process' };
 const noticeRetention: NormalizedNoticeRetentionPolicy = { maxJournalBytes: 1024, maxTerminal: 3, terminalTtlMs: 60_000 };
-const noticeDelivery = declared(claudeAdapter.noticeDelivery, 'the claude adapter notice delivery advertisement');
+const registry = createDefaultRegistry();
+const noticeDelivery = declared(registry.noticeDelivery('claude'), 'the claude adapter notice delivery advertisement');
 
 const plainCommand: CompiledCliCommand = {
   aliases: [],
@@ -234,10 +233,12 @@ const hookPlanners: ReadonlyArray<{
   readonly label: string;
   readonly target: string;
 }> = [
-  { contract: hookContractOf(claudeAdapter, 'claude'), label: 'claude', target: 'claude' },
-  { contract: hookContractOf(codexAdapter, 'codex'), label: 'codex', target: 'codex' },
-  { contract: hookContractOf(cursorAdapter, 'cursor'), label: 'cursor', target: 'cursor' },
-  { contract: hookContractOf(pluginAdapter, 'plugin'), label: 'plugin', target: 'plugin' },
+  // Intentionally enumerate the production hook list: Claude, Codex, Cursor,
+  // Universal plugin, and its Cursor variant; portable declares hooks unavailable.
+  ...registry.names().flatMap((target) => {
+    const contract = registry.hookContract(target);
+    return contract === undefined ? [] : [{ contract, label: target, target }];
+  }),
   {
     concreteEventTarget: 'cursor',
     contract: createCursorHookContract({
@@ -252,10 +253,12 @@ const hookPlanners: ReadonlyArray<{
 
 describe('generated JavaScript loads nothing by a bare package specifier', () => {
   it('can fail: a createRequire load of a bare package is one offending load', () => {
-    const offending = offendingLoads('export const x = createRequire(import.meta.url)("left-pad");');
-
-    expect(offending).toHaveLength(1);
-    expect(offending[0]).toMatchObject({ kind: 'literal', specifier: 'left-pad' });
+    expect(() => {
+      expectNoBareLoads(
+        'negative control',
+        'export const x = createRequire(import.meta.url)("left-pad");',
+      );
+    }).toThrow(/left-pad/u);
     // The allowed literal forms stay silent, so a passing suite means no bare load rather than no load.
     expect(offendingLoads([
       'const fs = require("node:fs");',
@@ -427,6 +430,36 @@ describe('generated JavaScript loads nothing by a bare package specifier', () =>
       'operatorEnvLayerModuleSource(env)',
       operatorEnvLayerModuleSource({ API_URL: 'https://api.example', LOG_LEVEL: 'info' }),
     );
+  });
+
+  it('build/meta and entries: the project identity and MCP Apps registry modules', async () => {
+    expectNoBareLoads(
+      'generatedMetaModuleSource',
+      generatedMetaModuleSource({ name: 'fixture', packageName: '@fixture/plugin', packageVersion: '1.0.0', version: '1.0.0' }),
+    );
+
+    const surface = await planMcpEntriesSurface([{
+      args: ['mcp/mcp-curator-12345678.mjs'],
+      id: 'mcp:curator',
+      name: 'curator',
+      provenance: configProvenance,
+      source: import.meta.filename,
+      targets: ['plugin'],
+      transport: 'stdio',
+    }], {
+      artifactEpoch: 'fixture@1',
+      eventHooks: [],
+      outDir: join(tmpdir(), 'agent-bundle-generated-module-loads'),
+      plugin,
+      target: 'plugin',
+    });
+    const mcpApps = declared(
+      surface.entries
+        .flatMap((entry) => entry.virtualModules ?? [])
+        .find((module) => module.name === 'agent-bundle/mcp-apps'),
+      'the generated agent-bundle/mcp-apps registry module',
+    );
+    expectNoBareLoads('planMcpEntriesSurface agent-bundle/mcp-apps', mcpApps.source);
   });
 
   it('adapters/hook-contract: the native and Cursor wrapper codecs', () => {

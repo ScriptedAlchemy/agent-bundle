@@ -6,12 +6,15 @@ import { exists } from './paths.ts';
  * The manifest of dependency `name` as seen from `packageRoot`: the first
  * `<directory>/node_modules/<name>/package.json` that exists, walking from
  * `packageRoot` through its ancestors up to the filesystem root, or
- * `undefined` when no ancestor has the package. That is the ancestor walk
- * Node's resolver performs for a bare specifier, done by hand, so it honours
- * hoisting the same way: npm, Yarn, and pnpm with a hoist pattern place a
- * workspace dependency in an ancestor `node_modules`, where Rspack finds it
- * too. A scoped `name` is one package (`@scope/pkg`); a subpath is not
- * supported.
+ * `undefined` when no ancestor has the package. That walk probes only
+ * `node_modules` up the ancestor chain, so it honours hoisting the same
+ * way: npm, Yarn, and pnpm with a hoist pattern place a workspace
+ * dependency in an ancestor `node_modules`, where Rspack finds it too.
+ * `createRequire(…).resolve(…)` also consulted `NODE_PATH`, Node's global
+ * folders (`$HOME/.node_modules`, `$HOME/.node_libraries`,
+ * `$PREFIX/lib/node`), and a Yarn Plug'n'Play runtime when one is loaded;
+ * this walk no longer consults any of those. A scoped `name` is one
+ * package (`@scope/pkg`); a subpath is not supported.
  *
  * By hand, not through `createRequire(…).resolve(…)`: this module is bundled
  * into every generated executable that imports

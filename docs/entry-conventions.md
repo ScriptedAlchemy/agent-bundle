@@ -1214,10 +1214,10 @@ Rslib's `node` target leaves only Node built-ins (and `pnpapi`) external, and
 `AB6005` fails any bare specifier that is not a Node built-in in every
 compiled module — host-pack modules and the package build's `dist` bundles
 alike — whether Rspack emitted it as an ES `import` or as the `require`,
-`createRequire(…)` loader, or `import.meta.resolve` call a `commonjs` or
-`node-commonjs` external becomes
-(`const load = createRequire(import.meta.url); load("x")`), so the hatch
-cannot keep a dependency external in any emitted form (one scanner,
+`createRequire(…)` loader, or `import.meta.resolve` call. An ES `import`
+external and the `node-commonjs` `createRequire` shim are both rejected; a
+direct `require("pkg")` call, however emitted, is rejected the same way, so
+the hatch cannot keep a dependency external in any emitted form (one scanner,
 `src/build/module-loads.ts`, reads those loads for `AB6005` and for the
 prepack gate alike). Run-time
 path references are kept the same way: a `new URL(…, import.meta.url)` or

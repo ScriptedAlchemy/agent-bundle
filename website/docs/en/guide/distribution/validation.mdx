@@ -28,17 +28,29 @@ the deploy tree reports `AB6025`.
 
 Every emitted `.js`/`.mjs` module is walked as an ES module (`AB6005`) — the host-pack modules of
 every artifact build, and the package build's `dist` bundles (`dist/bin/*.js`, a rendered route's
-Flight worker `.mjs`, the `lib` entry) before `dist` is published: each import, and each
-CommonJS-style load Rspack leaves in emitted output — `require("…")`, `require.resolve("…")`,
-`createRequire(…)("…")` and its `.resolve("…")`, a loader bound to a name
-(`const load = createRequire(import.meta.url); load("…")`, the shim Rspack emits for a
-`node-commonjs` external and for a bundled dependency's `require`), and `import.meta.resolve("…")`
-— must be a literal specifier that either names a Node built-in (`node:fs`, `fs`) or resolves —
-as a relative or `file:` specifier — to a listed regular `.js`/`.mjs` file inside the emitted tree
-(for a host pack, one the manifest lists; a host pack may also load listed valid JSON), which is
-then walked in turn. No non-literal dynamic imports or load arguments, no bare package names,
-nothing outside the tree, and no `require` or loader passed on as a value instead of called. Only
-code is read: a `require` inside a comment, string, template, or regex literal is not a load. A
+Flight worker `.mjs`, the `lib` entry) before `dist` is published. The scanner reads imports and
+the recognised CommonJS-style loads: `require(…)`, `require.resolve(…)`,
+`createRequire(…)(…)` and `.resolve(…)` with the factory written inline, namespace-qualified, or
+imported/destructured under an alias, a loader declared with `const`/`let`/`var` from
+`createRequire(…)` and then called directly or through `.resolve(…)`, and
+`import.meta.resolve(…)`. Optional calls and a trailing comma after the literal count the same.
+Examples of a named loader are `const load = createRequire(import.meta.url); load("…")` and the
+shim Rspack emits for a `node-commonjs` external and for a bundled dependency's `require`.
+Each specifier must be literal and either name a Node built-in (`node:fs`, `fs`) or resolve, as a
+relative or `file:` specifier, to a listed regular `.js`/`.mjs` file inside the emitted tree; that
+JavaScript target is walked in turn. In a host pack only, a relative target to listed valid JSON
+is accepted as a terminal and is not walked. No non-literal dynamic imports or load arguments, no
+bare package names, nothing outside the tree, and no `require` or loader used as a value instead
+of called; parameters, `catch` bindings, destructuring patterns, and import specifiers are binding
+positions rather than references. Comments, strings, and template text are stepped over, as are
+regular-expression literals after an operator, `(`, `,`, `;`, `{`, `}`, `[`, `:`, `?`, `!`, or
+a keyword such as `return`, `typeof`, or `case`; `${…}` template substitutions are code and are
+scanned. Binding and alias names are read from code only, never from comments or strings. After
+`)`, `]`, an identifier, a number, `++`, or `--`, `/` is treated as division and following text
+is scanned as code, failing closed. Assignment-bound and second-hop loader aliases,
+`.call`/`.apply`, `globalThis.require`, `module.require`,
+`import.meta["resolve"]`, `require("")`, and a regex written directly after `)` or an identifier
+are outside the recognised emitted forms. A
 load finding names the call — `uses unsupported specifier "left-pad" in require("left-pad").`,
 `loads a non-literal specifier through import.meta.resolve(…).`,
 `passes load, a createRequire(…) loader, on as a value instead of calling it.` — and a `dist`
@@ -205,11 +217,12 @@ dependency into `dist/bin` and the host packs, so a published plugin should inst
 declare the framework, `@agent-bundle/runtime`, `react`, `zod`, and the rest of the stack under
 `devDependencies`. An emitted module — a host-pack module, a copied artifact script, or a `dist`
 bundle alike — cannot import, require, or resolve a bare package at all: `AB6005` fails the build
-before `prepack` reaches the inventory. So `dependencies` is only for what the packed files
-demonstrably need by other means — an import or a `require`, `createRequire`, or
-`import.meta.resolve` load in a file `AB6005` never walked (a prebuilt payload module, or
-JavaScript the `files` allowlist packs from outside the artifact and `dist`), a packed
-declaration's reference, a consumer install script, or a `bin` command a packed file runs.
+before `prepack` reaches the inventory. `AB7014` then lexes every packed `.js`/`.mjs`/`.cjs`
+file, including `dist` and artifact files. Because `AB6005` has already refused a bare load in
+every walked emitted module, the evidence that can still keep a dependency in a build that
+passed comes from a prebuilt payload module, packed JavaScript the `files` allowlist adds from
+outside the artifact and `dist`, a packed declaration reference, an install script, or a `bin`
+command.
 `--output` is an artifact path relative to `--root` that overrides the configured
 `output.distPath`, defaulting to `artifact`. Use it as an npm `prepack` script; `--ignore-scripts`
 prevents recursion, and no npm lifecycle ever performs a host install.
@@ -225,11 +238,11 @@ them: a bare specifier that is not a Node built-in is `AB6005` whether it is imp
 loaded through a `createRequire(…)` loader, or passed to `import.meta.resolve`, so a generated
 executable — in a host pack or in `dist` — loads nothing but built-ins from outside its tree. A
 dependency kept external through the [`tools` hatch](../../reference/configuration.mdx#tools) is
-not a way around that in any emitted form: an ES `import` external and a `commonjs`/`node-commonjs`
-`require` shim both fail the build in either output and never reach the prepack inventory. A
-`dependencies` entry is therefore only for what the packed files demonstrably need from outside
-what `AB6005` walked — a package a prebuilt `.js`/`.mjs`/`.cjs` payload module imports, requires,
-or resolves (prebuilt files are opaque to `AB6005`, and `AB7014` scans only those extensions, so
+not a way around that in any emitted form: an ES `import` external and the `node-commonjs`
+`createRequire` shim both fail the build in either output; a direct `require("pkg")` call,
+however emitted, is rejected the same way. A `dependencies` entry is therefore only for evidence
+that remains after that gate — a package a prebuilt `.js`/`.mjs`/`.cjs` payload module imports,
+requires, or resolves (prebuilt files are opaque to `AB6005`, and `AB7014` scans only those extensions, so
 an extensionless prebuilt module counts for nothing), one that JavaScript packed from outside the
 artifact and `dist` imports or loads through a `require`, `createRequire`, or `import.meta.resolve`
 call, one a consumer-side install script runs or loads from an inline `node -e` program, one whose
@@ -243,13 +256,15 @@ walked by `AB6005`) — and `AB7014` reports a declared dependency with none of 
 | `AB7011` | An on-disk artifact file no longer matches its manifest SHA-256. Rebuild, and do not modify generated host packs. |
 | `AB7012` | A `package.json` bin points outside the packed `dist` output (including `src/`) or names a file npm omitted. Point it at the generated `dist/bin` file. |
 | `AB7013` | `package.json`, normalized plugin metadata, a host manifest, or artifact provenance reports a different release version. Make every release identity agree. |
-| `AB7014` | A `dependencies`, `optionalDependencies`, or `peerDependencies` field names packages nothing in the pack uses — no packed JavaScript imports, requires, or resolves them (emitted modules inline their dependencies and `AB6005` fails a bare `import`, `require`, `createRequire(…)` load, or `import.meta.resolve` they kept, so that evidence comes only from files `AB6005` never walked — prebuilt payload modules and JavaScript packed from outside the artifact and `dist` — and from inline `node -e` install programs), no packed declaration references them, no `imports` mapping or consumer install script reaches them (one diagnostic per field; optional peers are skipped here but their specifier is still checked by `AB7015`, and an `optionalDependencies` entry supersedes the same name under `dependencies`). Every consumer would install them for nothing. Move build-only packages to `devDependencies`. For `peerDependencies` this is a warning, since a required peer nothing imports may be a deliberate host-compatibility contract; mark it optional in `peerDependenciesMeta` if npm should stop installing it. |
+| `AB7014` | A `dependencies`, `optionalDependencies`, or `peerDependencies` field names packages nothing in the pack uses. Every packed `.js`/`.mjs`/`.cjs` file is lexed, including `dist` and artifact files, but `AB6005` has already refused bare loads in walked emitted modules. In a passing build, remaining evidence comes from a prebuilt payload module, JavaScript packed from outside the artifact and `dist`, a packed declaration reference, an `imports` mapping, an install script, or a `bin` command. Optional peers are skipped here but their specifier is still checked by `AB7015`, and an `optionalDependencies` entry supersedes the same name under `dependencies`. Move build-only packages to `devDependencies`. For `peerDependencies` this is a warning, since a required peer nothing imports may be a deliberate host-compatibility contract; mark it optional in `peerDependenciesMeta` if npm should stop installing it. |
 | `AB7015` | A `dependencies`, `optionalDependencies`, or `peerDependencies` entry a consumer's npm cannot resolve through a registry. Name and specifier are read with `npm-package-arg`, npm's own parser, and come out as one of three kinds: registry (a version, range, dist-tag, or `npm:` alias of one), fetched (a git, GitHub-shorthand, remote-tarball, or path source — npm 12 refuses git and remote fetches by default (`allow-git`, `allow-remote`), and a path never exists on the consumer's disk), or unparseable (a name npm rejects, a scheme it lacks such as `link:`, `portal:`, or a typo, a selector that is neither a range nor a URL-safe dist-tag, an alias of a non-registry target, or an invalid URL — the manifest read itself fails, so this is reported even on an optional peer). A fetched `optionalDependencies` entry warns instead of failing, since npm continues without it; it stays an error when unparseable, or when a consumer install script needs the skipped package (runs its command — not merely mentions it — loads it from an inline `node -e` program — scanned for `require`, `createRequire`, and `import()` like a packed file — preloads it with `node -r`/`--require`/`--import`/`--loader`, or runs a packed file that imports it, `node .` running the root `main` included; each command after `&&`, `;`, or a newline is read on its own, shell quotes and backslash escapes resolved, and `node`'s options belong to `node` alone and end at the program — `node install.js --require x` preloads nothing, while a `NODE_OPTIONS=--require=x` assignment on the same `node` command does; every script word naming a packed JavaScript file counts as run, deliberately, so that runners the gate does not model — `tsx`, `zx`, `bun`, `deno run` — still have their file's dependencies traced, at the cost of a rare escalation for a word such as `echo install.js`, which the diagnostic makes visible by naming the file). A peer that `dependencies` or `optionalDependencies` also names is judged by that concrete entry; npm never reads the duplicate peer's selector. `workspace:`/`catalog:` are reported too unless the `prepack` lifecycle runs under pnpm, Yarn, or Bun, which rewrite them at pack time — `npm publish` does not, so under npm `AB7015` fires; entries the tarball itself carries — `bundleDependencies` npm actually packed (never peers), and a `file:` path inside the package whose packed source is installable (a directory with a parseable `package.json`, or a well-formed tarball whose `package.json` parses) — are not reported. Depend on a published version, or bundle the package and declare it under `devDependencies`. |
 
 The dependency evidence is read from the packed bytes: every `.js`/`.mjs`/`.cjs` file npm would
 publish is lexed for `import` specifiers and scanned for literal `require("…")`, `require.resolve("…")`, and
-`import.meta.resolve("…")` calls (a `createRequire(…)` binding counts as `require`, even with the factory
-renamed on import, as do direct `Module.createRequire(…)("…")` and `require("node:module").createRequire(…)("…")` calls; `path.resolve("…")` does not count), and every
+`import.meta.resolve("…")` calls (a call through a `createRequire(…)` binding counts as
+`require`, even with the factory renamed on import, as do direct
+`Module.createRequire(…)("…")` and `require("node:module").createRequire(…)("…")` calls;
+`path.resolve("…")` does not count), and every
 packed `.d.ts` is scanned for the modules its types reference (a `/// <reference types>` directive
 counts for the package and its `@types/*` twin); specifiers are reduced to package names, string escapes
 decoded first, with Node built-ins ignored. A dependency packed code runs as an executable — a string literal
@@ -264,12 +279,16 @@ string-form `bin` is named after the installed manifest, read as npm reads it �
 wins — and the unscoped name stands in when the dependency is not installed locally or its manifest is not
 JSON). A
 computed `import(expression)` or `require(expression)` (likewise `require.resolve`, `import.meta.resolve`,
-a direct `createRequire(…)(…)`, or a `createRequire` binding) in packed code `AB6005` never walked — an
+a direct `createRequire(…)(…)`, or a call through a loader bound from `createRequire(…)`) in packed code
+`AB6005` never walked — an
 emitted module with one has already failed the build — could load any declared package, so it withholds
 `AB7014` altogether; so does packed source the ESM lexer rejects, whose `import()`
 calls it cannot report, and so does `require` passed on as a value (`const load = require`,
-`fn(require)`) rather than called, since packages may then be loaded under a name the scan never sees. A mention inside a comment can only keep a dependency, never
-report one; `devDependencies` are never inspected, and an `npm:` alias counts as a registry specifier when its target does.
+`fn(require)`) rather than called, since packages may then be loaded under a name the scan never sees.
+A `require` or import mention inside a comment, string, template text, or regular-expression
+literal is neither evidence nor a load; only install-script command text and `bin` command strings
+are text evidence. `devDependencies` are never inspected, and an `npm:` alias counts as a registry
+specifier when its target does.
 
 A release build also refuses a project with **no** release version at all (`AB4013`), so a
 published artifact never carries the `0.0.0-dev.<short-revision>` development fallback. A

@@ -69,6 +69,41 @@ describe('scanModuleLoads reports a literal load', () => {
     ['a unicode escape in the specifier', String.raw`const unicode = require('unicode-pkg\u002fsubpath');`, [literal('require', 'require', 'unicode-pkg/subpath')]],
     ['a load after a nested template literal', 'const text = `outer ${flag ? `require("in-template")` : "x"} end`;\nrequire("after-template");\n', [literal('require', 'require', 'after-template')]],
     ['a load after a regex literal holding a quote, on the same line', 'const quote = /["\']/u; require("left-pad");\n', [literal('require', 'require', 'left-pad')]],
+    // A template's substitutions are code: scanned with the source's names, reported where the template appears.
+    ['a load in a template substitution', 'const v = `pre ${require("x")} post`;\n', [literal('require', 'require', 'x')]],
+    ['a load in a nested template substitution', 'const v = `${`${require("x")}`}`;\n', [literal('require', 'require', 'x')]],
+    ['loads around and inside templates, in source order', 'require("1"); const v = `${require("2")} ${`${require("3")}`}`; require("4");\n', [
+      literal('require', 'require', '1'),
+      literal('require', 'require', '2'),
+      literal('require', 'require', '3'),
+      literal('require', 'require', '4'),
+    ]],
+    ['a bound loader called in a template substitution', 'const load = createRequire(import.meta.url);\nconst v = `${load("driver-package")}`;\n', [literal('bound-loader', 'load', 'driver-package')]],
+    ['a template beyond the nesting budget, whose text is scanned as code', 'const v = `${ {a:{b:{c: require("x")}}} }`;\n', [literal('require', 'require', 'x')]],
+    // A `/` after `++` or `--` is division, so the operand after it is code.
+    ['a load after a postfix increment and a division', 'count++ / require("left-pad") / divisor\n', [literal('require', 'require', 'left-pad')]],
+    ['a load after a postfix decrement and a division', 'count-- / require("left-pad") / divisor\n', [literal('require', 'require', 'left-pad')]],
+    ['a load after a prefix increment and a division', 'const x = ++i / 2; require("left-pad");\n', [literal('require', 'require', 'left-pad')]],
+    // Optional chaining before the argument list or `resolve`.
+    ['require?.("…")', 'module.exports = require?.("left-pad");', [literal('require', 'require', 'left-pad')]],
+    ['require.resolve?.("…")', 'module.exports = require.resolve?.("left-pad");', [literal('require.resolve', 'require', 'left-pad')]],
+    ['require?.resolve("…")', 'module.exports = require?.resolve("left-pad");', [literal('require.resolve', 'require', 'left-pad')]],
+    ['require ?. ("…") with spaces', 'module.exports = require ?. ("left-pad");', [literal('require', 'require', 'left-pad')]],
+    ['load?.("…") for a bound loader', 'const load = createRequire(import.meta.url);\nexport const driver = load?.("driver-package");\n', [literal('bound-loader', 'load', 'driver-package')]],
+    ['load?.resolve("…") for a bound loader', 'const load = createRequire(import.meta.url);\nexport const where = load?.resolve("driver-package");\n', [literal('bound-loader.resolve', 'load', 'driver-package')]],
+    ['import.meta.resolve?.("…")', 'export const tool = import.meta.resolve?.("tool-pkg");', [literal('import.meta.resolve', 'import.meta', 'tool-pkg')]],
+    ['createRequire(…)?.("…")', 'export const driver = createRequire(import.meta.url)?.("driver-package");', [literal('createRequire', 'createRequire', 'driver-package')]],
+    ['createRequire(…)?.resolve("…")', 'export const where = createRequire(import.meta.url)?.resolve("driver-package");', [literal('createRequire.resolve', 'createRequire', 'driver-package')]],
+    // A trailing comma after the one literal argument.
+    ['require("…",)', 'module.exports = require("left-pad",);', [literal('require', 'require', 'left-pad')]],
+    ['require.resolve("…", )', 'module.exports = require.resolve("left-pad", );', [literal('require.resolve', 'require', 'left-pad')]],
+    ['require("…", /* comment */)', 'module.exports = require("left-pad", /* was: "right-pad" */);', [literal('require', 'require', 'left-pad')]],
+    ['import.meta.resolve("…",)', 'export const tool = import.meta.resolve("tool-pkg",);', [literal('import.meta.resolve', 'import.meta', 'tool-pkg')]],
+    ['createRequire(…)("…",)', 'export const driver = createRequire(import.meta.url)("driver-package",);', [literal('createRequire', 'createRequire', 'driver-package')]],
+    ['load("…",) and load.resolve("…",) for a bound loader', 'const load = createRequire(import.meta.url);\nload("driver-package",);\nload.resolve("asset-pkg",);\n', [
+      literal('bound-loader', 'load', 'driver-package'),
+      literal('bound-loader.resolve', 'load', 'asset-pkg'),
+    ]],
     ['require rebound from createRequire, with every resolver', [
       'const { createRequire } = await import("node:module");',
       'const require = createRequire(import.meta.url);',
@@ -111,6 +146,18 @@ describe('scanModuleLoads reports a computed load', () => {
       literal('require', 'require', './polyfill.js'),
       computed('require', 'require'),
     ]],
+    ['require?.(x)', 'module.exports = (name) => require?.(name);', [computed('require', 'require')]],
+    ['load?.resolve(x) for a bound loader', 'const load = createRequire(import.meta.url);\nexport const any = (name) => load?.resolve(name);\n', [computed('bound-loader.resolve', 'load')]],
+    ['two literal arguments', 'module.exports = require("left-pad", "right-pad");', [computed('require', 'require')]],
+    ['a parenthesised literal', 'module.exports = require(("left-pad"));', [computed('require', 'require')]],
+    // A template argument is a token like any template: its substitutions are code, its closing backtick closes it.
+    ['a static template literal argument', 'module.exports = require(`left-pad`);', [computed('require', 'require')]],
+    ['a template literal argument holding a load', 'module.exports = require(`${require("inner")}`);', [computed('require', 'require'), literal('require', 'require', 'inner')]],
+    ['a template literal argument before another template', 'require(`x`); require("after"); const t = `z`; require("last");\n', [
+      computed('require', 'require'),
+      literal('require', 'require', 'after'),
+      literal('require', 'require', 'last'),
+    ]],
   ])('for %s', (_form, source, loads) => {
     expect(scanModuleLoads(source)).toEqual(loads);
   });
@@ -131,6 +178,20 @@ describe('scanModuleLoads reports a loader passed on as a value', () => {
     ['fn(load) for a bound loader', 'import { createRequire } from "node:module";\nconst load = createRequire(import.meta.url);\nexport const use = (fn) => fn(load);', [reference('bound-loader', 'load')]],
     ['return load for a bound loader', 'const load = createRequire(import.meta.url);\nfunction loader() { return load }\n', [reference('bound-loader', 'load')]],
     ['=> load for a bound loader', 'const load = createRequire(import.meta.url);\nexport const loader = () => load;\n', [reference('bound-loader', 'load')]],
+    // Values that share a shape with a binding position, and are not one.
+    ['fn(a, require) and fn(require, b)', 'fn(a, require);\nfn(require, b);\n', [reference('require', 'require'), reference('require', 'require')]],
+    ['fn(require, callback) with a block body', 'register(require, function (id) { return id; });\nregister(require, () => { run(); });\n', [reference('require', 'require'), reference('require', 'require')]],
+    ['fn(require) as an if condition', 'if (accepts(require)) { run(); }\n', [reference('require', 'require')]],
+    ['use({ require }), an object literal argument', 'use({ require });\nuse({ other, require });\n', [reference('require', 'require'), reference('require', 'require')]],
+    ['const x = { require }, an object literal initialiser', 'const context = { require };\n', [reference('require', 'require')]],
+    ['{ require } returned before a later indexed assignment', 'function context() {\n  return { require }\n}\ncache[0] = 1;\n', [reference('require', 'require')]],
+    ['[require] before a later array pattern', 'const list = [require];\nconst [first] = list;\n', [reference('require', 'require')]],
+    ['[require].map(…)', 'const names = [require].map((fn) => fn.name);\n', [reference('require', 'require')]],
+    ['a later declarator initialised with the loader', 'const a = b, load = require;\n', [reference('require', 'require')]],
+    ['x && require, x || require', 'const l = a && require;\nconst m = a || require;\n', [reference('require', 'require'), reference('require', 'require')]],
+    ['export { require }', 'const require = createRequire(import.meta.url);\nexport { require };\n', [reference('require', 'require')]],
+    ['fn(require) in a template substitution', 'const text = `${describe(require)}`;\n', [reference('require', 'require')]],
+    ['x ? require : y in a template substitution', 'const text = `${flag ? require : fallback}`;\n', [reference('require', 'require')]],
   ])('for %s', (_form, source, loads) => {
     expect(scanModuleLoads(source)).toEqual(loads);
   });
@@ -158,8 +219,54 @@ describe('scanModuleLoads reports nothing', () => {
     ['iconv prose in a comment and an error string', '// > iconv.enableStreamingAPI(require(\'stream\'));\nthrow new Error("Use iconv.enableStreamingAPI(require(\'stream\'))");\n'],
     ['import.meta.url', 'const here = import.meta.url;\nconst dir = new URL(".", import.meta.url);\n'],
     ['a dynamic import, which the lexer reports', 'const p = import("left-pad");\nconst q = import(name);\n'],
+    // Binding positions introduce a name; they pass no loader on.
+    ['a function parameter', 'function wrapper(module, exports, require) {}\nfunction first(require, module) {}\n'],
+    ['a function expression parameter', 'const wrapper = function (require) {};\nconst star = function* (module, require) {};\n'],
+    ['an arrow parameter list', 'const one = (require) => 1;\nconst two = (module, require) => 2;\nconst three = async (require) => {};\n'],
+    ['a bare arrow parameter', 'const one = require => 1;\n'],
+    ['a method parameter', 'const host = { load(require) { return 1; } };\nclass Host { run(require) {} }\n'],
+    ['a catch parameter', 'try { run(); } catch (require) {}\n'],
+    ['a bound loader as a parameter', 'const load = createRequire(import.meta.url);\nfunction wrap(load) {}\nconst arrow = (load) => 1;\n'],
+    ['an if, while, or switch head', 'if (require) {}\nwhile (require) {}\nswitch (require) {}\n'],
+    ['a declared object pattern', 'const { require } = host;\nlet { a, require: r } = host;\nvar { other, require } = host;\n'],
+    ['a declared object pattern, nested or renaming', 'const { a: { require } } = host;\nconst { a: require } = host;\n'],
+    ['a declared array pattern', 'const [require] = host;\nlet [a, require] = xs;\n'],
+    ['an assigned pattern', '({ require } = host);\n[require] = host;\n'],
+    ['a pattern parameter', 'function wrap({ require }) {}\nconst arrow = ({ require }) => 1;\nfor (const { require } of hosts) {}\n'],
+    ['a later declarator', 'let a, require;\nvar b = 1, require;\n'],
+    ['a bound loader in a pattern', 'const load = createRequire(import.meta.url);\nconst { load } = host;\n'],
+    ['an import specifier', 'import { require } from "./helper.js";\nimport { a, require } from "./helper.js";\nimport { require, a }\n  from "./helper.js";\n'],
+    ['a re-export specifier', 'export { require } from "./helper.js";\n'],
+    // Binding names are read from code, never from a comment, a string, or a template.
+    ['a loader bound in a block comment', '/* const load = createRequire(import.meta.url); */\nfunction load(x) { return x; }\nload("left-pad");\n'],
+    ['a factory alias in a block comment', '/* { createRequire: mk } */\nmk(import.meta.url)("left-pad");\n'],
+    ['a factory alias in a line comment', '// import { createRequire as mk } from "node:module"\nmk(import.meta.url)("left-pad");\n'],
+    ['a loader bound in a string', 'const shim = "const load = createRequire(import.meta.url);";\nfunction load(x) { return x; }\nload("left-pad");\n'],
+    ['a loader bound in a template', 'const shim = `const load = createRequire(import.meta.url);`;\nload("left-pad");\n'],
+    ['a bound loader called in a comment', 'const load = createRequire(import.meta.url);\n/* load("left-pad") */\n'],
+    // Template quasis are text; an escaped `\${` is text; a whole-substitution loader name converts to a string.
+    ['a template whose quasis say require', 'const v = `require("x")`;\nconst w = `require("no") ${ok} require("no")`;\n'],
+    ['an escaped substitution', 'const v = `\\${require("x")}`;\n'],
+    ['a loader name as a whole substitution', 'const v = `${require}`;\n'],
+    ['an empty specifier', 'module.exports = require("");\n'],
   ])('for %s', (_form, source) => {
     expect(scanModuleLoads(source)).toEqual([]);
+  });
+});
+
+/*
+ * A `/` directly after `)` is division, since `(a + b) / 2` is common in emitted code and `if (x) /re/` is not, so a
+ * regex written there is scanned as code: a load inside it is reported, and a quote inside it opens a string token
+ * that runs to the next quote on the line, hiding the code between. Both are pinned here as the approximation the
+ * module's header states.
+ */
+describe('scanModuleLoads reads a regex literal directly after `)` as code', () => {
+  it.each([
+    ['a load written inside the regex is reported', 'if (enabled) /require("left-pad")/.test(text)\n', [literal('require', 'require', 'left-pad')]],
+    ['a quote inside the regex hides the rest of its line', 'if (x) /"/.test(y); require("hidden");\nrequire("next-line");\n', [literal('require', 'require', 'next-line')]],
+    ['division after `)` is code as it should be', 'const half = (a + b) / 2; require("left-pad");\n', [literal('require', 'require', 'left-pad')]],
+  ])('so %s', (_case, source, loads) => {
+    expect(scanModuleLoads(source)).toEqual(loads);
   });
 });
 
