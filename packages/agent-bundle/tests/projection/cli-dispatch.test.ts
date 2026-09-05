@@ -38,6 +38,7 @@ describe('the CLI dispatch level', () => {
         'harness plugin-root',
         'harness publish-notice',
         'harness strict-report',
+        'harness submit',
         'harness ticket',
         'harness tooling',
         'harness unavailable',

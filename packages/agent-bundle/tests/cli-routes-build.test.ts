@@ -1,13 +1,15 @@
 import { execFile as executeFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
-import { afterEach, expect, it } from '@rstest/core';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from '@rstest/core';
 
-import { build, validate } from '../src/api.ts';
+import { build, type ReadyInspectResult, validate } from '../src/api.ts';
+import { runCli } from '../src/cli.ts';
 import { DiagnosticError } from '../src/core/diagnostics.ts';
+import { captureCliTerminal } from './support/cli-terminal.ts';
 
 const execFile = promisify(executeFile);
 const roots: string[] = [];
@@ -481,4 +483,238 @@ it('refuses a routed command that imports agent-bundle/api with AB4837 before bu
   expect(diagnostics.some((diagnostic) => diagnostic.code === 'AB6005')).toBe(false);
   await expect(stat(join(root, 'dist'))).rejects.toMatchObject({ code: 'ENOENT' });
   await expect(stat(join(root, 'artifact'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+/**
+ * The CLI surface projection (#596) in a built executable: `submit.cli.ts`
+ * beside `src/mcp/demo/tools/submit.tsx` projects the tool onto `<bin> submit`
+ * with an idiomatic grammar, the generated shell parses that grammar and
+ * applies `mapInput` before the tool's canonical schema, and `inspect --routes`
+ * reports the projection on the compiled command. One build serves every case.
+ */
+describe('the CLI surface projection in the generated routed-CLI executable', () => {
+  const projectionModule = 'src/mcp/demo/tools/submit.cli.ts';
+  const usage = 'Usage: cli-projection-fixture submit [options] <argv...>';
+  let root: string;
+  let binPath: string;
+  let built: Awaited<ReturnType<typeof build>>;
+
+  beforeAll(async () => {
+    // `process.cwd()` in the child is the resolved path; the fixture compares against it.
+    root = await realpath(await mkdtemp(join(tmpdir(), 'agent-bundle-cli-projection-')));
+    binPath = join(root, 'dist', 'bin', 'cli-projection-fixture.js');
+    await symlink(join(process.cwd(), 'examples', 'audiobook-curator', 'node_modules'), join(root, 'node_modules'), 'dir');
+    await Promise.all([
+      writeProjectFile(root, 'package.json', JSON.stringify({
+        dependencies: {
+          '@agent-bundle/runtime': 'workspace:*',
+          zod: '4.4.3',
+        },
+        name: 'cli-projection-fixture',
+        type: 'module',
+        version: '1.0.0',
+      })),
+      // `mcpCommands: true` alongside the projection: the bulk projection must
+      // skip the projected tool and still cover its neighbour.
+      writeProjectFile(root, 'agent-bundle.config.ts', [
+        "import { defineConfig } from 'agent-bundle/config';",
+        'export default defineConfig({',
+        "  plugin: { description: 'CLI projection fixture.', name: 'cli-projection-fixture', version: '1.0.0' },",
+        '  routes: { mcpCommands: true },',
+        "  targets: ['portable'],",
+        '});',
+        '',
+      ].join('\n')),
+      writeProjectFile(root, 'src/mcp/demo/tools/ping.tsx', [
+        "import { Agent } from '@agent-bundle/runtime';",
+        "import { z } from 'zod';",
+        "export const config = { annotations: { readOnlyHint: true }, description: 'Answers a ping.' };",
+        'export const inputSchema = z.object({}).strict();',
+        "export const resultSchema = z.object({ pong: z.literal(true) }).strict();",
+        'export default async function Ping() {',
+        '  return <Agent.Result value={{ pong: true }}><Agent.Text>pong</Agent.Text></Agent.Result>;',
+        '}',
+        '',
+      ].join('\n')),
+      // The operation: canonical input echoed as the structured result, the
+      // observed surface in the rendered text only.
+      writeProjectFile(root, 'src/mcp/demo/tools/submit.tsx', [
+        "import { Agent, agent } from '@agent-bundle/runtime';",
+        "import { z } from 'zod';",
+        "export const config = { annotations: { readOnlyHint: false }, description: 'Submits one command line as lane work.' };",
+        'export const inputSchema = z.object({',
+        '  argv: z.array(z.string()).min(1),',
+        '  cwd: z.string().min(1),',
+        '  laneKey: z.string().optional(),',
+        '  tags: z.array(z.string()).optional(),',
+        '});',
+        'export const resultSchema = z.object({',
+        '  argv: z.array(z.string()).min(1),',
+        '  cwd: z.string().min(1),',
+        '  laneKey: z.string().optional(),',
+        "  operation: z.literal('submit'),",
+        '  tags: z.array(z.string()).optional(),',
+        '});',
+        'export default async function Submit({ input }) {',
+        '  const { invocation } = await agent();',
+        "  const value = { ...input, operation: 'submit' };",
+        '  return (',
+        '    <Agent.Result value={value}>',
+        "      <Agent.Text>{`submit: ${input.argv.join(' ')}`}</Agent.Text>",
+        '      <Agent.Text>{`invocation: ${invocation.kind} ${invocation.operationId} ${invocation.surface}`}</Agent.Text>',
+        '    </Agent.Result>',
+        '  );',
+        '}',
+        '',
+      ].join('\n')),
+      // The projection: never a route. `laneKey` as `--lane`, `tags` as a
+      // repeatable `--tag`, `argv` trailing (so `-- cargo check -p foo` passes
+      // through), `cwd` relaxed because `mapInput` derives it, and no `--yes`
+      // although the tool is not read-only.
+      writeProjectFile(root, projectionModule, [
+        'export const config = {',
+        "  command: ['submit'],",
+        '  confirm: false,',
+        '  flags: {',
+        "    cwd: { description: 'Working directory of the command (default: the current directory).', required: false },",
+        "    laneKey: { name: 'lane' },",
+        "    tags: { description: 'Tag attached to the request (repeatable; duplicates are dropped).', name: 'tag' },",
+        '  },',
+        "  positionals: ['argv'],",
+        '};',
+        'export const mapInput = (input) => {',
+        '  const tags = input.tags === undefined ? undefined : [...new Set(input.tags)];',
+        "  const rejected = tags?.find((tag) => tag.startsWith('!'));",
+        '  if (rejected !== undefined) throw new Error(`Tag ${JSON.stringify(rejected)} must not start with "!".`);',
+        '  return { ...input, cwd: input.cwd ?? process.cwd(), ...(tags === undefined ? {} : { tags }) };',
+        '};',
+        '',
+      ].join('\n')),
+    ]);
+    built = await build({ output: 'artifact', packageOutputs: true, root });
+  }, 120_000);
+
+  afterAll(async () => {
+    await rm(root, { force: true, recursive: true });
+  });
+
+  it('bundles the projection module into the executable and keeps the tool as the only route behind it', async () => {
+    expect(built.model.packageBuild?.bins).toMatchObject([
+      { name: 'cli-projection-fixture', provenance: { kind: 'conventional' } },
+    ]);
+    await expect(stat(binPath)).resolves.toMatchObject({});
+    // The bin's provenance names the projection module beside the route modules it projects.
+    const evidence = built.packageBuild!.files.find((file) => file.path === 'bin/cli-projection-fixture.js');
+    expect(evidence?.sourceInputs).toEqual(expect.arrayContaining([
+      'src/mcp/demo/tools/ping.tsx',
+      projectionModule,
+      'src/mcp/demo/tools/submit.tsx',
+    ]));
+    // The executable's compiled surface: the projected command at the root
+    // beside the bulk-projected neighbour, and the tool as a route exactly
+    // once — the projection module is not a route.
+    const generatedCli = built.model.packageBuild?.bins[0]?.generatedCli;
+    expect(generatedCli?.commands.map((command) => command.path.join(' ')).sort()).toEqual(['demo ping', 'submit']);
+    expect(generatedCli?.routes.map((route) => route.id).sort()).toEqual(['tool:demo/ping', 'tool:demo/submit']);
+  });
+
+  it('prints help with the short path, the projected spellings, the tool provenance, and the projection module', async () => {
+    const help = await execFile(binPath, ['submit', '--help'], { cwd: root });
+
+    expect(help.stdout).toContain(`${usage}\n`);
+    expect(help.stdout).toContain('Submits one command line as lane work.');
+    expect(help.stdout).toContain('MCP tool: demo:submit');
+    expect(help.stdout).toContain(`Projection: ${projectionModule}`);
+    expect(help.stdout).toMatch(/^ +<argv\.\.\.>/mu);
+    expect(help.stdout).toMatch(/^ +--cwd <string> +Working directory of the command \(default: the current directory\)\.$/mu);
+    expect(help.stdout).toMatch(/^ +--lane <string>/mu);
+    expect(help.stdout).toMatch(/^ +--tag <string> \.\.\. +Tag attached to the request/mu);
+    expect(help.stdout).not.toContain('requires --yes');
+    expect(help.stdout).not.toContain('--input');
+    expect(help.stdout).not.toContain('(required)');
+    // The tree lists the projected command at the root, beside the bulk-projected group.
+    const tree = await execFile(binPath, ['--help'], { cwd: root });
+    expect(tree.stdout).toMatch(/^ +submit +Submits one command line as lane work\.$/mu);
+    expect(tree.stdout).toMatch(/^ +demo <command>/mu);
+  });
+
+  it('round-trips the projected grammar through --json: renamed flag, repeated flag, passthrough argv, derived cwd', async () => {
+    const submitted = await execFile(binPath, ['submit', '--lane', 'x', '--tag', 'a', '--tag', 'a', '--json', '--', 'cargo', 'check'], { cwd: root });
+    expect(JSON.parse(submitted.stdout)).toEqual({ argv: ['cargo', 'check'], cwd: root, laneKey: 'x', operation: 'submit', tags: ['a'] });
+
+    // Flags after `--` are the command line's, not the shell's; no `--yes` despite readOnlyHint: false.
+    const passthrough = await execFile(binPath, ['submit', '--cwd', '/tmp/elsewhere', '--json', '--', 'cargo', 'check', '-p', 'core', '--lane', 'literal'], { cwd: root });
+    expect(JSON.parse(passthrough.stdout)).toEqual({ argv: ['cargo', 'check', '-p', 'core', '--lane', 'literal'], cwd: '/tmp/elsewhere', operation: 'submit' });
+
+    // Piped text output carries the surface the tool observed: the CLI, with the tool as the operation.
+    const piped = await execFile(binPath, ['submit', '--', 'cargo', 'check'], { cwd: root });
+    expect(piped.stdout).toBe('submit: cargo check\n\ninvocation: cli tool:demo/submit submit\n');
+
+    // The bulk projection still serves the neighbouring tool under the server path.
+    const ping = await execFile(binPath, ['demo', 'ping', '--json'], { cwd: root });
+    expect(JSON.parse(ping.stdout)).toEqual({ pong: true });
+  });
+
+  it('exits 2 from the packed shell when mapInput throws or the mapped input fails the canonical schema', async () => {
+    await expect(execFile(binPath, ['submit', '--tag', '!boom', '--', 'cargo', 'check'], { cwd: root })).rejects.toMatchObject({
+      code: 2,
+      stderr: [
+        'Tag "!boom" must not start with "!".',
+        "Run 'cli-projection-fixture submit --help' for usage.",
+        '',
+      ].join('\n'),
+      stdout: '',
+    });
+    // The canonical schema judges the MAPPED input, and the issue is spelled
+    // with the CLI option the operator typed.
+    await expect(execFile(binPath, ['submit', '--cwd', '', '--', 'cargo', 'check'], { cwd: root })).rejects.toMatchObject({
+      code: 2,
+      stderr: [
+        'Invalid value for --cwd: expected non-empty string; received "".',
+        usage,
+        "Run 'cli-projection-fixture submit --help' for usage.",
+        '',
+      ].join('\n'),
+      stdout: '',
+    });
+    await expect(execFile(binPath, ['submit', '--lane', 'x'], { cwd: root })).rejects.toMatchObject({
+      code: 2,
+      stderr: expect.stringContaining('Missing required argument: <argv...>.'),
+      stdout: '',
+    });
+    await expect(execFile(binPath, ['submit', '--yes', '--', 'cargo', 'check'], { cwd: root })).rejects.toMatchObject({
+      code: 2,
+      stderr: expect.stringContaining('Unknown option: --yes.'),
+      stdout: '',
+    });
+  });
+
+  it('shows the projection on the compiled command through inspect --routes', async () => {
+    const terminal = captureCliTerminal();
+    const code = await runCli(['inspect', '--root', root, '--routes', '--json'], terminal.output);
+
+    expect(code).toBe(0);
+    const document = JSON.parse(terminal.stdout()) as ReadyInspectResult;
+    const commands = document.selected?.routes?.cli?.commands ?? [];
+    expect(commands.map((command) => command.path.join(' ')).sort()).toEqual(['demo ping', 'submit']);
+    expect(commands.find((command) => command.routeId === 'tool:demo/submit')).toMatchObject({
+      mcp: { confirm: false, server: 'demo', tool: 'submit' },
+      options: [
+        expect.objectContaining({ key: 'argv', option: 'argv', positional: 0, repeated: true, required: true }),
+        expect.objectContaining({ key: 'cwd', option: 'cwd', repeated: false, required: false }),
+        expect.objectContaining({ key: 'laneKey', option: 'lane', repeated: false, required: false }),
+        expect.objectContaining({ key: 'tags', option: 'tag', repeated: true, required: false }),
+      ],
+      path: ['submit'],
+      projection: { mapInput: true, module: projectionModule, relaxed: ['cwd'] },
+      rendered: true,
+      routeId: 'tool:demo/submit',
+    });
+    expect(commands.find((command) => command.routeId === 'tool:demo/ping')).not.toHaveProperty('projection');
+    // The projection module is not a route.
+    expect(document.selected?.routes?.servers.flatMap((server) => server.routes.map((route) => route.id))).toEqual([
+      'tool:demo/ping',
+      'tool:demo/submit',
+    ]);
+  });
 });
