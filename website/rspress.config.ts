@@ -1,7 +1,6 @@
 import path from 'node:path';
 import { defineConfig } from '@rspress/core';
 import { pluginLlms } from '@rspress/plugin-llms';
-import { pluginSitemap } from '@rspress/plugin-sitemap';
 import { pluginTwoslash } from '@rspress/plugin-twoslash';
 import { pluginTypeDoc } from '@rspress/plugin-typedoc';
 import { transformerNotationHighlight } from '@shikijs/transformers';
@@ -259,7 +258,6 @@ export default defineConfig({
         exclude: ({ page }) => page.routePath.includes('/api/'),
       },
     ]),
-    pluginSitemap(),
     sitemapLastmod({ repoRoot }),
   ],
 });

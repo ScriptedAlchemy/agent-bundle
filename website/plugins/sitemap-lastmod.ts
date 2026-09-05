@@ -3,6 +3,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import type { RspressPlugin, UserConfig } from '@rspress/core';
+import { type PluginSitemapOptions, pluginSitemap } from '@rspress/plugin-sitemap';
 
 const API_SOURCE = 'packages/agent-bundle/src';
 const CAPABILITIES_SOURCE = 'packages/agent-bundle/src/adapters/capabilities';
@@ -20,6 +21,8 @@ export interface SitemapLastmodRewriteOptions {
 export interface SitemapLastmodOptions {
   /** Absolute repository root used as the Git working directory. */
   readonly repoRoot: string;
+  /** Passed through to `@rspress/plugin-sitemap`. */
+  readonly sitemap?: PluginSitemapOptions;
 }
 
 function decodeXmlText(value: string): string {
@@ -190,10 +193,22 @@ function sitemapPath(config: UserConfig): string {
   return path.resolve(outDir, 'sitemap.xml');
 }
 
+/**
+ * `@rspress/plugin-sitemap` with `lastmod` taken from git history.
+ *
+ * Rspress runs every plugin's `afterBuild` in parallel
+ * (`PluginDriver._runParallelAsyncHook`), so a second plugin cannot rely on
+ * running after the sitemap has been written. This wraps the sitemap plugin
+ * instead: its own hooks are kept as they are and the rewrite is chained onto
+ * its `afterBuild`, so `sitemap.xml` exists before it is read.
+ */
 export function sitemapLastmod(options: SitemapLastmodOptions): RspressPlugin {
+  const sitemap = pluginSitemap(options.sitemap);
   return {
+    ...sitemap,
     name: 'agent-bundle/sitemap-lastmod',
     async afterBuild(config, isProd) {
+      await sitemap.afterBuild?.(config, isProd);
       if (!isProd || !config.siteOrigin) {
         return;
       }
