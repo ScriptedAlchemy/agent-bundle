@@ -341,6 +341,8 @@ const handleConnection = Effect.fnUntraced(function*(
     event: parsed.data.event,
     hostContractRevision: parsed.data.hostContractRevision,
     native: parsed.data.native,
+    observedAt: parsed.data.observedAt,
+    sequence: parsed.data.sequence,
     target: parsed.data.target,
   }, signal)).pipe(Effect.exit);
   if (handled._tag === 'Failure') {
@@ -1140,7 +1142,9 @@ const requestProgram = (
       event: options.event,
       hostContractRevision: options.hostContractRevision,
       native: options.native,
+      observedAt: options.observedAt,
       protocolVersion: EVENT_RUNTIME_PROTOCOL_VERSION,
+      sequence: options.sequence,
       target: options.target,
     })}\n`);
     const raw = yield* readOneMessage(socket);
