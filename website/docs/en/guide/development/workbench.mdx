@@ -197,7 +197,8 @@ The envelope carries canonical input, request context, providers, ordered render
 final Agent Document, structured result, projections, diagnostics, and execution timings when
 available. A represented `Agent.Error` remains a rendered result; unknown routes or invocation
 ids (`AB8231`), unavailable epochs (`AB8232`), render timeouts or crashes (`AB8236`), malformed
-requests (`AB8237`), and unknown fixture ids (`AB8238`) are reported as diagnostics.
+requests (`AB8237`), unknown fixture ids (`AB8238`), and a queued invocation whose published
+revision moved before it acquired a slot (`AB8239`) are reported as diagnostics.
 See the [diagnostics reference](../../reference/diagnostics.md) for the individual triggers and
 recovery guidance.
 

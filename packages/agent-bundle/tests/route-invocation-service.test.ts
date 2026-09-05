@@ -8,15 +8,20 @@ import { expect, it } from '@rstest/core';
 import type { RouteInvocation } from '../src/dev/routes/route-invocation-result.ts';
 import {
   InvocationRingBuffer,
+  ROUTE_INVOCATION_STALE_REVISION_CODE,
   RouteInvocationService,
   RouteInvocationRequestError,
   invocationSummary,
   parseRouteInvocationRequest,
+  routeInvocationStateRoot,
+  type RouteInvocationChildRequest,
+  type RouteInvocationChildResult,
 } from '../src/dev/routes/route-invocation-service.ts';
 import type { RouteManifest } from '../src/dev/routes/route-manifest.ts';
 import type { CompiledRouteGraph } from '../src/routes/types.ts';
 import { testManifestFromRouteGraph } from '../src/test/manifest.ts';
 import { isProcessGone } from './support/bin-process.ts';
+import { deferred } from './support/eventually.ts';
 
 const invocation = (id: string, completedAt: string): RouteInvocation => ({
   completedAt,
@@ -110,44 +115,125 @@ it('retains a bounded newest-first invocation history', () => {
   expect(history.read('inv_two')?.id).toBe('inv_two');
 });
 
+const echoRoute = {
+  config: [],
+  id: 'tool:fixture/echo',
+  kind: 'tool',
+  provenance: { kind: 'conventional' },
+  serverId: 'mcp:fixture',
+  source: 'src/mcp/fixture/tools/echo.tsx',
+} as const;
+
+const catalog = (digest: string, sourceRevision: string): RouteManifest => ({
+  diagnostics: [],
+  digest,
+  events: [],
+  providers: [],
+  scripts: [],
+  servers: [{ id: 'mcp:fixture', mode: 'generated', name: 'fixture', routes: [echoRoute] }],
+  sourceRevision,
+});
+
+const childResult = (request: RouteInvocationChildRequest): RouteInvocationChildResult => ({
+  document: {
+    root: { kind: 'text', text: 'ok' },
+    status: 'success',
+    version: 1,
+  },
+  events: [],
+  input: request.input,
+  mcp: {},
+  renderDurationMs: 1,
+});
+
 it('aborts and drains a running render when the service closes', async () => {
-  const route = {
-    config: [],
-    id: 'tool:fixture/echo',
-    kind: 'tool',
-    provenance: { kind: 'conventional' },
-    serverId: 'mcp:fixture',
-    source: 'src/mcp/fixture/tools/echo.tsx',
-  } as const;
+  let releases = 0;
+  const started = deferred();
   const service = new RouteInvocationService({
     manifest: {
-      manifest: () => ({
-        diagnostics: [],
-        digest: 'digest',
-        events: [],
-        providers: [],
-        scripts: [],
-        servers: [{ id: 'mcp:fixture', mode: 'generated', name: 'fixture', routes: [route] }],
-        sourceRevision: 'revision',
-      }),
+      manifest: () => catalog('digest', 'revision'),
     },
     prepared: () => ({
-      manifest: { projectRoot: '/project' } as never,
-      targets: ['claude'],
+      project: {
+        manifest: { projectRoot: '/project' } as never,
+        stateRoot: routeInvocationStateRoot('/project'),
+        targets: ['claude'],
+      },
+      release: () => {
+        releases += 1;
+      },
     }),
     renderChild: (_request, signal) => new Promise((_resolve, reject) => {
       signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      started.resolve();
     }),
   });
 
-  const pending = service.invoke({ input: {}, routeId: route.id });
-  await Promise.resolve();
+  const pending = service.invoke({ input: {}, routeId: echoRoute.id });
+  await started.promise;
   await service.close();
 
   await expect(pending).resolves.toMatchObject({
     diagnostics: [expect.objectContaining({ code: 'AB8236' })],
     status: 'failed',
   });
+  expect(releases).toBe(1);
+});
+
+it('rejects a queued invocation when the published revision moves before the slot is acquired', async () => {
+  const hold = deferred();
+  const firstStarted = deferred();
+  let digest = 'digest-1';
+  let sourceRevision = 'rev-1';
+  const executed: RouteInvocationChildRequest[] = [];
+  let releases = 0;
+  const projectRoot = '/project';
+  const service = new RouteInvocationService({
+    concurrency: 1,
+    manifest: {
+      manifest: () => catalog(digest, sourceRevision),
+    },
+    prepared: () => ({
+      project: {
+        manifest: { projectRoot } as never,
+        stateRoot: routeInvocationStateRoot(projectRoot),
+        targets: ['claude'],
+      },
+      release: () => {
+        releases += 1;
+      },
+    }),
+    renderChild: async (request) => {
+      executed.push(request);
+      firstStarted.resolve();
+      await hold.promise;
+      return childResult(request);
+    },
+  });
+
+  const first = service.invoke({ input: { n: 1 }, routeId: echoRoute.id });
+  await firstStarted.promise;
+  const second = service.invoke({ input: { n: 2 }, routeId: echoRoute.id });
+  await Promise.resolve();
+  digest = 'digest-2';
+  sourceRevision = 'rev-2';
+  hold.resolve();
+
+  const firstResult = await first;
+  expect(firstResult).toMatchObject({
+    manifestDigest: 'digest-1',
+    sourceRevision: 'rev-1',
+    status: 'succeeded',
+  });
+  expect(executed).toHaveLength(1);
+  expect(executed[0]?.stateRoot).toBe(routeInvocationStateRoot(projectRoot));
+  expect(executed[0]?.stateRoot).not.toBe(projectRoot);
+  await expect(second).rejects.toMatchObject({
+    code: ROUTE_INVOCATION_STALE_REVISION_CODE,
+    status: 409,
+  });
+  expect(executed).toHaveLength(1);
+  expect(releases).toBe(2);
 });
 
 interface LeakingRouteProject {
@@ -217,6 +303,7 @@ const leakingRouteProject = async (behaviour: 'hang' | 'reply'): Promise<Leaking
   };
   const prepared = Object.freeze({
     manifest: testManifestFromRouteGraph({ graph, projectRoot: root }),
+    stateRoot: routeInvocationStateRoot(root),
     targets: ['claude' as const],
   });
   return {
