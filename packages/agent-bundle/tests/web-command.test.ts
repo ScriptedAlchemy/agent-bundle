@@ -9,6 +9,7 @@ import { runWebCommand, webHelp, webUsageLine, type WebCommandOptions, type WebC
 import type { StartWebHostOptions, WebHost } from '../src/web-host/host-server.ts';
 import { WebLaunchError, type ResolveWebLaunchOptions } from '../src/web-host/launch.ts';
 import type { WebManifest, WebManifestApp } from '../src/web-host/manifest.ts';
+import type { McpAppJsonValue } from '../src/contracts/mcp-apps.ts';
 import type { AppSelection, AppSelectionSource, OpenAppRequest } from '../src/web-host/select-app.ts';
 import type { StdioAppSession, StdioLaunch } from '../src/web-host/session.ts';
 import { deferred, eventually } from './support/eventually.ts';
@@ -91,7 +92,8 @@ const fakeSession = (stderr = ''): FakeSession => {
 };
 
 const selectionOf = (request: OpenAppRequest): AppSelection => Object.freeze({
-  input: request.input ?? {},
+  // `openApp` canonicalizes the request's `unknown` record; the fake hands it through as-is.
+  input: (request.input ?? {}) as Readonly<Record<string, McpAppJsonValue>>,
   resourceUri: request.resourceUri ?? 'ui://unknown',
   result: { content: [] },
   server: request.server,
