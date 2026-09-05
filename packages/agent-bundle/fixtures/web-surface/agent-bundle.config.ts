@@ -1,5 +1,6 @@
 // Plain object export keeps this packed fixture independent of the package build (#564).
 export default {
+  bin: { 'web-surface-lifecycle': './src/lifecycle-proof.ts' },
   mcp: {
     servers: {
       status: {

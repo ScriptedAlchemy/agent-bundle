@@ -35,6 +35,11 @@ const seedElementPattern = new RegExp(`<script\\b(?=[^>]*\\btype="application/js
 const startupBudget = 60_000 * timeScale;
 const exitBudget = 5_000 * timeScale;
 const teardownBudget = { attempts: 50 * timeScale, delayMs: 100 } as const;
+const lifecycleInstallArguments = [
+  ...cachedNpmInstallArguments.filter((argument) => argument !== '--ignore-scripts'),
+  '--foreground-scripts',
+  '--ignore-scripts=false',
+] as const;
 
 interface WebReadyDocument {
   readonly app: string;
@@ -113,7 +118,6 @@ beforeAll(async () => {
     mkdir(tarballs),
     mkdir(installedConsumer),
   ]);
-  await writeFile(join(installedConsumer, 'package.json'), '{"private":true}\n');
   const { stdout: packJson } = await execFile('npm', [
     'pack',
     '--json',
@@ -122,21 +126,49 @@ beforeAll(async () => {
     tarballs,
   ], { cwd: packageRoot, env: installedEnvironment() });
   const packed = packOutputFromJson(packJson, pluginName);
+  const tarball = join(tarballs, packed.filename);
   packedPaths = packed.files.map((file) => file.path);
+  await writeFile(join(installedConsumer, 'package.json'), '{"private":true}\n');
+  const npmMajor = Number.parseInt((await execFile('npm', ['--version'])).stdout, 10);
+  if (npmMajor >= 12) {
+    // npm 12 blocks dependency install scripts until the consumer approves
+    // the exact installed source. Discover and approve the local tarball,
+    // then remove that scriptless copy so the next install is the proof.
+    await execFile('npm', [
+      'install',
+      ...cachedNpmInstallArguments,
+      tarball,
+    ], { cwd: installedConsumer, env: installedEnvironment() });
+    await execFile('npm', [
+      'install-scripts',
+      'approve',
+      pluginName,
+    ], { cwd: installedConsumer, env: installedEnvironment() });
+    await rm(join(installedConsumer, 'node_modules'), { force: true, recursive: true });
+  }
   await execFile('npm', [
     'install',
-    ...cachedNpmInstallArguments,
-    join(tarballs, packed.filename),
+    ...lifecycleInstallArguments,
+    ...(npmMajor >= 12 ? [] : [tarball]),
   ], { cwd: installedConsumer, env: installedEnvironment() });
   const installedPackageRoot = join(installedConsumer, 'node_modules', pluginName);
   const packageDocument = JSON.parse(
     await readFile(join(installedPackageRoot, 'package.json'), 'utf8'),
-  ) as { readonly bin?: Readonly<Record<string, string>> };
+  ) as {
+    readonly bin?: Readonly<Record<string, string>>;
+    readonly dependencies?: Readonly<Record<string, string>>;
+    readonly scripts?: Readonly<Record<string, string>>;
+  };
   const declaredBin = packageDocument.bin?.[pluginName];
   if (declaredBin === undefined) {
     throw new Error(`Packed ${pluginName} package does not declare its executable.`);
   }
   bin = resolve(installedPackageRoot, declaredBin);
+  expect(packageDocument.bin?.['web-surface-lifecycle']).toBe('./bin/web-surface-lifecycle.js');
+  expect(packageDocument.dependencies?.['typescript']).toBe('7.0.2');
+  expect(packageDocument.scripts?.postinstall).toBe('node "./bin/web-surface-lifecycle.js"');
+  expect(await readFile(join(installedPackageRoot, 'lifecycle-ran.txt'), 'utf8').catch(() => undefined))
+    .toBe('7.0.2\n');
   // `packed-deleted-source`: the bin serves out of the artifact alone, so the
   // config, the routes, the server, and the App view are removed and verified
   // absent before any process runs.

@@ -17,6 +17,8 @@ import { classifyExternal } from './external-policy.ts';
  * states plainly what the compiler could not see.
  */
 export const compileEvidenceFileName = 'agent-bundle.compile-evidence.json';
+/** Package-only compiler evidence beside the canonical npm root's artifact evidence. */
+export const packageCompileEvidenceFileName = 'agent-bundle.package-compile-evidence.json';
 
 /** The self-containment policy the record was judged under; bump `revision` when `external-policy.ts` changes what it permits. */
 export const externalPolicy = Object.freeze({ name: 'closed-world-externals', revision: 1 });
@@ -339,7 +341,7 @@ export const compileEvidenceDiagnostics = (
   const nodeBundles = new Set([...compiled].filter((path) => !isViewAsset(path)));
   for (const asset of record.assets) {
     if (!compiled.has(asset.path)) {
-      diagnostics.push(evidenceDiagnostic(`names ${JSON.stringify(asset.path)}, which the manifest does not list as a compiled file.`));
+      diagnostics.push(evidenceDiagnostic(`names ${JSON.stringify(asset.path)}, which the file table does not list as a compiled file.`));
     }
     for (const external of asset.externals) {
       if (isViewAsset(asset.path)) {
