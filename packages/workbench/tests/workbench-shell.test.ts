@@ -49,7 +49,7 @@ const shell = (location: ShellProps['location'], problems: readonly Problem[] = 
     ...extra,
   }));
 
-it('renders the four PR 1 destinations in order, without Sessions, and marks the active one', () => {
+it('renders the primary destinations in order, without Sessions, and marks the active one', () => {
   expect(workbenchNavItems.map((item) => item.label)).toEqual(['Application', 'Trace', 'Problems', 'Advanced']);
   const markup = shell({ area: 'trace' });
   expect(markup).toContain('data-testid="workbench-nav"');

@@ -1,13 +1,3 @@
-/**
- * Workbench-surface adapter for the PR 1 IA.
- *
- * L10 replaces `workbenchPageLabel` / `WorkbenchPageName` / `pages` with
- * `inspectWorkbenchSurface(root).application` (`ApplicationTree`) and
- * `workbenchLeafPath(leaf)`. This module codes against those names. Until L10
- * lands it derives a tree from the current catalog so `inspectWorkbenchSurface`
- * dry-runs still compile and run. Drop this adapter on integration and import
- * the same names from `agent-bundle/src/test`.
- */
 import { applicationNodePath, applicationNodeRefForRouteId } from '../../../agent-bundle/src/dev/routes/application-node.ts';
 import {
   inspectWorkbenchSurface as inspectCurrentSurface,
@@ -229,7 +219,6 @@ const applicationTreeFromCatalog = (catalog: WorkbenchRouteCatalog): Application
   };
 };
 
-/** L10's return shape. Extra catalog fields stay until the integrator drops them. */
 export interface WorkbenchIaSurface {
   readonly advanced: readonly AdvancedSection[];
   readonly application: ApplicationTree;

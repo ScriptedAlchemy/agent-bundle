@@ -12,7 +12,6 @@ import {
 
 const browserTimeout = 15_000 * timeScale;
 
-/** data-testid contract the UI lanes / integrator must mount. See LANE-NOTES.md. */
 export const workbenchTestIds = Object.freeze({
   applicationTree: 'application-tree',
   inspectorToggle: 'inspector-toggle',
