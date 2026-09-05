@@ -1,5 +1,5 @@
 import { access, mkdtemp, mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
-import { get as httpGet } from 'node:http';
+import { get as httpGet, request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 
@@ -293,6 +293,97 @@ it('contains prebuilt workbench asset reads to their declared root', async () =>
     await rm(root, { force: true, recursive: true });
   }
 });
+
+it('types extensionless notice and license files as text and keeps the binary fallback for other extensionless files', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-notices-'));
+  try {
+    await Promise.all([mkdir(join(root, 'src', 'mcp'), { recursive: true }), mkdir(join(root, 'static'), { recursive: true })]);
+    await Promise.all([
+      writeFile(join(root, 'THIRD_PARTY_NOTICES'), 'Agent Bundle workbench includes an MCP App renderer.\n'),
+      writeFile(join(root, 'src', 'mcp', 'APP-RENDERER-LICENSE'), 'MIT License\n'),
+      writeFile(join(root, 'LICENSE'), 'Apache License\n'),
+      writeFile(join(root, 'NOTICE'), 'Agent Bundle\n'),
+      writeFile(join(root, 'static', 'payload'), Buffer.from([0x00, 0xff, 0x10, 0x80])),
+      writeFile(join(root, 'static', 'licensed-fixture'), 'not a notice\n'),
+    ]);
+    const assets = createWorkbenchAssetSource({ root });
+
+    const text = { contentType: 'text/plain; charset=utf-8' };
+    await expect(assets.read('THIRD_PARTY_NOTICES')).resolves.toMatchObject(text);
+    await expect(assets.read('src/mcp/APP-RENDERER-LICENSE')).resolves.toMatchObject(text);
+    await expect(assets.read('LICENSE')).resolves.toMatchObject(text);
+    await expect(assets.read('NOTICE')).resolves.toMatchObject(text);
+    await expect(assets.read('static/payload')).resolves.toMatchObject({ contentType: 'application/octet-stream' });
+    await expect(assets.read('static/licensed-fixture')).resolves.toMatchObject({ contentType: 'application/octet-stream' });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('serves packaged notice files over HTTP as text without loosening asset path checks', async () => {
+  const project = await createProjectFixture();
+  const assetsRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-workbench-notice-server-'));
+  await Promise.all([mkdir(join(assetsRoot, 'src', 'mcp'), { recursive: true }), mkdir(join(assetsRoot, 'static'), { recursive: true })]);
+  await Promise.all([
+    writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Agent Bundle workbench</title>'),
+    writeFile(join(assetsRoot, 'THIRD_PARTY_NOTICES'), 'Agent Bundle workbench includes an MCP App renderer.\n'),
+    writeFile(join(assetsRoot, 'src', 'mcp', 'APP-RENDERER-LICENSE'), 'MIT License\n'),
+    writeFile(join(assetsRoot, 'static', 'payload'), Buffer.from([0x00, 0xff, 0x10, 0x80])),
+  ]);
+  try {
+    const server = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: assetsRoot }),
+      open: false,
+      openBrowser: async () => {},
+      port: 0,
+      root: project.root,
+    });
+    // `fetch` collapses `%2e%2e` into `..` before the request leaves, so the
+    // traversal probes go over `node:http`, which sends the path verbatim.
+    const address = new URL(server.url);
+    const probe = (path: string, method: 'GET' | 'HEAD' = 'GET'): Promise<Readonly<{
+      body: string;
+      contentType: string | undefined;
+      status: number;
+    }>> => new Promise((resolvePromise, rejectPromise) => {
+      const request = httpRequest({ host: address.hostname, method, path, port: address.port }, (response) => {
+        let body = '';
+        response.setEncoding('utf8');
+        response.on('data', (chunk: string) => {
+          body += chunk;
+        });
+        response.once('end', () => resolvePromise({ body, contentType: response.headers['content-type'], status: response.statusCode ?? 0 }));
+        response.once('error', rejectPromise);
+      });
+      request.once('error', rejectPromise);
+      request.end();
+    });
+
+    await expect(probe('/THIRD_PARTY_NOTICES')).resolves.toEqual({
+      body: 'Agent Bundle workbench includes an MCP App renderer.\n',
+      contentType: 'text/plain; charset=utf-8',
+      status: 200,
+    });
+    await expect(probe('/src/mcp/APP-RENDERER-LICENSE')).resolves.toEqual({
+      body: 'MIT License\n',
+      contentType: 'text/plain; charset=utf-8',
+      status: 200,
+    });
+    await expect(probe('/src/mcp/APP-RENDERER-LICENSE', 'HEAD')).resolves.toEqual({
+      body: '',
+      contentType: 'text/plain; charset=utf-8',
+      status: 200,
+    });
+    await expect(probe('/static/payload')).resolves.toMatchObject({ contentType: 'application/octet-stream', status: 200 });
+    await expect(probe('/src/mcp/%2e%2e/%2e%2e/THIRD_PARTY_NOTICES')).resolves.toMatchObject({ status: 400 });
+    await expect(probe('/src/mcp/APP-RENDERER-LICENSE%00')).resolves.toMatchObject({ status: 400 });
+    await expect(probe('/src/mcp')).resolves.toMatchObject({ status: 404 });
+    await expect(probe('/LICENSE')).resolves.toMatchObject({ status: 404 });
+    await server.close();
+  } finally {
+    await Promise.all([removeProjectFixture(project.root), rm(assetsRoot, { force: true, recursive: true })]);
+  }
+}, 30_000);
 
 it('starts a loopback server with prebuilt assets, does not open on --no-open, and closes its coordinator', async () => {
   const project = await createProjectFixture();

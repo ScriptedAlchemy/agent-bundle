@@ -84,7 +84,7 @@ export interface PlannedPackageEntry extends RslibEntry {
  * package output, exactly like the dedicated build tsconfig consumers
  * previously maintained by hand.
  */
-const synthesizeDtsTsconfig = async (options: {
+export const synthesizeDtsTsconfig = async (options: {
   readonly projectRoot: string;
   readonly sourceDir: string;
 }): Promise<{ readonly cleanup: () => Promise<void>; readonly path: string }> => {

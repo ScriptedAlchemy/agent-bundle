@@ -564,7 +564,8 @@ Every synthesized bundler config — both stages plus the `dist/` package build
 `tools.rsbuild` fragment, then the `tools.rspack` hatch, then the framework
 invariant layer that no hatch value can override
 (`src/build/compose-layers.ts`; see the `tools` section of the configuration
-reference). `agent-bundle inspect --bundler` prints the result.
+reference). `agent-bundle inspect --bundler` prints the lowered Rspack
+configuration each engine receives from that composition.
 
 Builds are byte-reproducible: two builds of one unchanged source tree emit
 identical artifacts (same manifest, same digests, same bytes) regardless of

@@ -29,6 +29,7 @@ import { RouteManifestRoutes, type RouteManifestRouteService } from './routes/ro
 import { SkillDocumentError, type SkillDocumentService } from './skill-document-service.ts';
 import type { Invalidation, ProjectEventMessage, ProjectStatus } from './types.ts';
 import { WebHostRoutes, type WebHostEpochSource, type WebHostLaunchOptions } from './web-host-routes.ts';
+import { workbenchAssetCacheControl } from './workbench-assets.ts';
 import { isWorkbenchShellPath } from './workbench-shell-paths.ts';
 import {
   diagnostic,
@@ -1058,7 +1059,10 @@ export class ForegroundServer {
       : decodedAssetPath(request.url);
     const asset = await this.#assets?.read(path);
     if (asset === undefined) return responseDiagnostic(response, diagnostic('AB8007', 'Route was not found.', 404));
-    response.writeHead(200, { 'content-type': asset.contentType });
+    response.writeHead(200, {
+      'cache-control': workbenchAssetCacheControl(path),
+      'content-type': asset.contentType,
+    });
     response.end(method === 'HEAD' ? undefined : asset.body);
   }
 }

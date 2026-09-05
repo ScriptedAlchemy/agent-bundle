@@ -105,7 +105,7 @@ artifact validation (`AB6018`) read those rows.
 MCP entries, scripts, routed CLI bins, and MCP Apps are compiled **once** and attributed to the
 **composite identity** — the selected host names, sorted and joined by `+`, such as
 `claude+codex` — rather than to any one host. `agent-bundle inspect --bundler` shows the same
-thing: its `distPath.root` is the artifact output, `<output>`, with no host segment beneath it.
+thing: its `output.path` is the artifact output, `<output>`, with no host segment beneath it.
 
 ### One root, one set of bytes
 

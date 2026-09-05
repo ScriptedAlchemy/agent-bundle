@@ -536,7 +536,7 @@ const humanInspect = (result: Awaited<ReturnType<typeof inspect>>): string => {
     return out.join('');
   }
   if (result.selected?.bundler !== undefined) {
-    // The bundler focus is a debugging dump: the full synthesized
+    // The bundler focus is a debugging dump: the full lowered
     // configuration is the human output, not a one-line summary.
     out.push(`${JSON.stringify(result.selected.bundler, null, 2)}\n`);
     return out.join('');
@@ -1099,7 +1099,7 @@ export const runCli = async (
   const inspectCommand = configureInspectOptions(
     program.command('inspect').description('Inspect normalized targets and adapter plans'),
   )
-    .option('--bundler', 'Include the synthesized bundler configuration focus')
+    .option('--bundler', 'Include the lowered bundler configuration focus')
     .option('--hooks', 'Include the hook focus')
     .option('--routes', 'Include the compiled route-graph focus')
     .option('--skills', 'Include the skill focus')

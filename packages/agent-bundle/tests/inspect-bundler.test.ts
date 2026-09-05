@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -6,10 +6,13 @@ import { afterEach, expect, it } from '@rstest/core';
 
 import { planHooks } from '../src/adapters/hook-contract.ts';
 import { inspect, type BundlerInspectionEntry, type ReadyInspectResult } from '../src/api.ts';
+import { appRuntimePath } from '../src/build/app-runtime.ts';
+import { launchEnvRuntimePath, mcpEntryRuntimePath, terminalCapabilityRuntimePath } from '../src/build/entry-shell.ts';
 import { composeBundlerInspection } from '../src/build/inspect-bundler.ts';
 import { stableJson } from '../src/core/digest.ts';
 import type { NormalizedHook, NormalizedPlugin } from '../src/core/types.ts';
 import type { CompiledEventPreflight } from '../src/routes/types.ts';
+import { workspaceNodeModules } from './helpers/workspace-paths.ts';
 
 const roots: string[] = [];
 
@@ -17,13 +20,23 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
 });
 
+/**
+ * The lowering runs the same Rslib/Rsbuild config resolution the build runs,
+ * which reads every authored entry from disk and — for the `dts` lib entry —
+ * resolves the project's own TypeScript, so the fixture links one in.
+ */
 const createProject = async (): Promise<string> => {
   const parent = await realpath(await mkdtemp(join(tmpdir(), 'agent-bundle-inspect-bundler-')));
   roots.push(parent);
   const root = join(parent, 'project');
   await mkdir(join(root, 'src', 'mcp'), { recursive: true });
+  await mkdir(join(root, 'node_modules'), { recursive: true });
   await Promise.all([
+    symlink(join(workspaceNodeModules, 'typescript'), join(root, 'node_modules', 'typescript'), 'dir'),
     writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
+    writeFile(join(root, 'tsconfig.json'), JSON.stringify({
+      compilerOptions: { experimentalDecorators: true },
+    })),
     writeFile(
       join(root, 'agent-bundle.config.ts'),
       [
@@ -41,7 +54,7 @@ const createProject = async (): Promise<string> => {
         '    },',
         '  },',
         '  tools: {',
-        "    rsbuild: { output: { legalComments: 'linked' } },",
+        "    rsbuild: { resolve: { alias: { '@fixture': './src' } } },",
         "    rspack: { resolve: { extensionAlias: { '.js': ['.js', '.ts'] } } },",
         '  },',
         '};',
@@ -76,7 +89,27 @@ const entryOf = (
   return entry;
 };
 
-it('surfaces every synthesized bundler config with the tools hatch merged over the profile', async () => {
+/** The lowered Rspack configuration of one entry, typed loosely for the assertions. */
+interface LoweredConfig {
+  readonly context?: string;
+  readonly entry?: Readonly<Record<string, readonly string[]>>;
+  readonly externals?: readonly unknown[];
+  readonly mode?: string;
+  readonly module?: { readonly parser?: { readonly javascript?: Readonly<Record<string, unknown>> } };
+  readonly name?: string;
+  readonly output?: Readonly<Record<string, unknown>>;
+  readonly plugins?: readonly string[];
+  readonly resolve?: {
+    readonly alias?: Readonly<Record<string, string>>;
+    readonly extensionAlias?: Readonly<Record<string, readonly string[]>>;
+    readonly tsConfig?: { readonly configFile?: string };
+  };
+  readonly target?: readonly string[];
+}
+
+const loweredConfig = (entry: BundlerInspectionEntry): LoweredConfig => entry.config as LoweredConfig;
+
+it('renders the lowered Rspack configuration of every compiled output with the tools hatch applied', async () => {
   const root = await createProject();
   const result = await inspect({ focus: 'bundler', root });
   expect(result.state).toBe('ready');
@@ -86,9 +119,16 @@ it('surfaces every synthesized bundler config with the tools hatch merged over t
   expect(entries.map((entry) => `${entry.target ?? 'package'}:${entry.kind}:${entry.name}`)).toEqual([
     'package:bin:bundler-fixture',
     'package:lib:index',
-    'portable:mcp-apps:mcp-apps',
+    'portable:mcp-app:dashboard',
     'portable:mcp-entry:curator',
     'portable:script:tool',
+  ]);
+  expect(entries.map((entry) => loweredConfig(entry).name)).toEqual([
+    'agent-bundle-bin-bundler-fixture',
+    'agent-bundle-index',
+    'dashboard',
+    expect.stringMatching(/^agent-bundle-mcp-mcp-curator-[a-f\d]{8}$/u),
+    'agent-bundle-scripts-tool',
   ]);
 
   const script = entryOf(entries, 'script', 'tool');
@@ -98,98 +138,125 @@ it('surfaces every synthesized bundler config with the tools hatch merged over t
     source: `${root}/src/tool.ts`,
     target: 'portable',
   });
-  // The generated executable envelope wraps the `main` export.
+  // The generated executable envelope wraps the `main` export, and the
+  // lowered entry is redirected to it in the reserved virtual namespace.
   expect(script.generatedEntry).toContain('process.argv.slice(2)');
-  expect(script.config).toMatchObject({
-    id: 'agent-bundle-scripts-tool',
-    // Routes are authored as TSX, so every Rslib entry carries the React
-    // plugin: without it JSX lowers to a `React` factory that no generated
-    // executable has in scope.
-    plugins: [{ name: 'rsbuild:react' }],
+  const scriptConfig = loweredConfig(script);
+  expect(scriptConfig).toMatchObject({
+    context: root,
+    entry: { tool: [`${root}/.agent-bundle-virtual/tool-entry.mjs`] },
+    mode: 'production',
+    // Generated code spells run-time paths as `new URL(…, import.meta.url)`;
+    // the invariant layer keeps the bundler from turning them into assets.
+    module: { parser: { javascript: { url: false, worker: false } } },
     output: {
-      distPath: { root: '<output>' },
-      filename: { js: 'scripts/tool.mjs' },
-      // The consumer rsbuild hatch merges over the framework profile value.
-      legalComments: 'linked',
-      target: 'node',
+      asyncChunks: false,
+      // Rslib lowers the per-entry filename to its own resolver function.
+      filename: '[function jsFilename]',
+      module: true,
+      // The per-build artifact root appears as the stable token.
+      path: '<output>',
     },
-    syntax: 'es2022',
-    tools: {
-      // Rslib's `new URL()` rule is switched off so filesystem URLs in
-      // generated and plugin code survive verbatim.
-      bundlerChain: '[function preserveResourceReferences]',
-      // The consumer rspack hatch is merged before the framework invariant
-      // hook, which always runs last.
-      rspack: [
-        { resolve: { extensionAlias: { '.js': ['.js', '.ts'] } } },
-        '[function enforceInvariants]',
-      ],
+    resolve: {
+      alias: {
+        // The consumer rsbuild hatch merges over the framework profile.
+        '@fixture': `${root}/src`,
+        // The framework's reserved aliases land as exact-match keys.
+        'agent-bundle/meta$': `${root}/.agent-bundle-virtual/meta.mjs`,
+        'agent-bundle/terminal-capability$': terminalCapabilityRuntimePath(),
+      },
     },
   });
+  expect(scriptConfig.target).toContain('node');
+  // The consumer rspack hatch is merged before the invariant hook and lands in
+  // the lowered config after Rsbuild's own defaults.
+  expect(scriptConfig.resolve?.extensionAlias?.['.js']?.slice(-2)).toEqual(['.js', '.ts']);
+  // Rslib's node target leaves only the Node built-ins (and pnpapi) external.
+  expect(scriptConfig.externals).toEqual(expect.arrayContaining(['fs', '[regexp /^node:/]', 'pnpapi']));
+  // Framework plugins survive the hatch: the generated sources are served
+  // from memory and the dependency audit reads the final module graph.
+  expect(scriptConfig.plugins).toEqual(expect.arrayContaining([
+    '[object VirtualModulesPlugin]',
+    '[object ArtifactDependencyAuditPlugin]',
+  ]));
 
   const mcpEntry = entryOf(entries, 'mcp-entry', 'curator');
   expect(mcpEntry.generatedEntry).toContain('runGeneratedStdioMcpEntry');
   expect(mcpEntry.source).toBe(`${root}/src/mcp/curator.ts`);
   expect(mcpEntry.outputPath).toMatch(/^mcp\/mcp-curator-[a-f\d]{8}\.mjs$/u);
+  expect(loweredConfig(mcpEntry)).toMatchObject({
+    output: { filename: '[function jsFilename]', path: '<output>' },
+    resolve: {
+      alias: {
+        'agent-bundle/launch-env$': launchEnvRuntimePath(),
+        'agent-bundle/mcp-entry$': mcpEntryRuntimePath(),
+      },
+    },
+  });
 
   const bin = entryOf(entries, 'bin', 'bundler-fixture');
   expect(bin).toMatchObject({
-    config: {
-      banner: { js: '#!/usr/bin/env node' },
-      output: { distPath: { root: 'dist' } },
-    },
     outputPath: 'dist/bin/bundler-fixture.js',
     source: `${root}/src/cli.ts`,
   });
   expect(bin.generatedEntry).toContain('process.argv.slice(2)');
+  const binConfig = loweredConfig(bin);
+  // The package build's output root is its published destination.
+  expect(binConfig.output).toMatchObject({ filename: '[function jsFilename]', path: `${root}/dist` });
+  // The shebang banner lowers to Rspack's banner plugin.
+  expect(binConfig.plugins).toContain('[object BannerPlugin]');
 
   const lib = entryOf(entries, 'lib', 'index');
-  expect(lib).toMatchObject({
-    config: {
-      dts: true,
-      source: { tsconfigPath: '<generated-dts-tsconfig>' },
-    },
-    outputPath: 'dist/index.js',
-  });
+  expect(lib.outputPath).toBe('dist/index.js');
+  expect(loweredConfig(lib).resolve?.tsConfig).toEqual({ configFile: '<generated-dts-tsconfig>', references: 'auto' });
+  const legacyDecorators = (entry: BundlerInspectionEntry): boolean =>
+    stableJson(entry.config).includes('"legacyDecorator":true');
+  expect(legacyDecorators(lib)).toBe(true);
+  expect(legacyDecorators(lib)).toBe(legacyDecorators(script));
+  expect((await readdir(join(root, 'node_modules')))
+    .filter((name) => name.startsWith('.agent-bundle-dts-'))).toEqual([]);
 
-  const apps = entryOf(entries, 'mcp-apps', 'mcp-apps');
-  expect(apps.bundler).toBe('rsbuild');
-  expect(apps.config).toMatchObject({
-    environments: {
-      dashboard: {
-        // Every view carries the React plugin and the document defaults
-        // (mount point, title = the App name), whatever its entry extension.
-        html: { inject: 'body', mountId: 'root', title: 'dashboard' },
-        plugins: [{ name: 'rsbuild:react' }],
-        source: { entry: { dashboard: `${root}/src/view.tsx` } },
+  const app = entryOf(entries, 'mcp-app', 'dashboard');
+  expect(app).toMatchObject({
+    bundler: 'rsbuild',
+    outputPath: 'mcp-apps/dashboard.html',
+    source: `${root}/src/view.tsx`,
+    target: 'portable',
+  });
+  expect(app.generatedEntry).toBeUndefined();
+  const appConfig = loweredConfig(app);
+  expect(appConfig).toMatchObject({
+    entry: { dashboard: [`${root}/src/view.tsx`] },
+    mode: 'production',
+    output: { asyncChunks: false, path: '<output>' },
+    resolve: {
+      alias: {
+        // The consumer rsbuild hatch also merges over the view profile.
+        '@fixture': `${root}/src`,
+        'agent-bundle/app$': appRuntimePath(),
+        'agent-bundle/meta$': `${root}/.agent-bundle-virtual/meta.mjs`,
       },
     },
-    output: {
-      distPath: { html: 'mcp-apps', root: '<output>' },
-      inlineScripts: true,
-      // The consumer rsbuild hatch also merges over the view profile.
-      legalComments: 'linked',
-      // The inspection renders the production profile: no source maps.
-      sourceMap: false,
-    },
-    tools: {
-      rspack: [
-        { resolve: { extensionAlias: { '.js': ['.js', '.ts'] } } },
-        '[function enforceInvariants]',
-      ],
-    },
   });
+  expect(appConfig.target).toContain('web');
+  expect(appConfig.plugins).toEqual(expect.arrayContaining([
+    '[object NormalModuleReplacementPlugin]',
+    '[object VirtualModulesPlugin]',
+    '[object ArtifactDependencyAuditPlugin]',
+  ]));
 });
 
-it('keeps the bundler inspection deterministic and JSON-serializable', async () => {
+it('keeps the bundler inspection deterministic, JSON-serializable, and free of the staged output path', async () => {
   const root = await createProject();
   const [first, second] = await Promise.all([
     inspect({ focus: 'bundler', root }),
     inspect({ focus: 'bundler', root }),
   ]);
   expect(first.state).toBe('ready');
-  expect(stableJson((first as ReadyInspectResult).selected))
-    .toBe(stableJson((second as ReadyInspectResult).selected));
+  const rendered = stableJson((first as ReadyInspectResult).selected);
+  expect(rendered).toBe(stableJson((second as ReadyInspectResult).selected));
+  expect(rendered).not.toContain(`${root}/<output>`);
+  expect(rendered).not.toContain(`${root}/<generated-dts-tsconfig>`);
 });
 
 it('keeps the bundler focus out of unfocused inspections', async () => {
@@ -201,18 +268,53 @@ it('keeps the bundler focus out of unfocused inspections', async () => {
   expect((result as ReadyInspectResult).output.manifest).toBeUndefined();
 });
 
+it('reports a tools hatch the lowering refuses as an invalid inspection naming the refusal', async () => {
+  const root = await createProject();
+  await writeFile(
+    join(root, 'agent-bundle.config.ts'),
+    [
+      'export default {',
+      "  plugin: { name: 'bundler-fixture', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      "  scripts: { tool: './src/tool.ts' },",
+      // Aliasing a reserved specifier is refused only once the invariant hook
+      // runs over the lowered config, so it surfaces from the inspection.
+      "  tools: { rspack: { resolve: { alias: { 'agent-bundle/meta': './src/index.ts' } } } },",
+      '};',
+      '',
+    ].join('\n'),
+  );
+  const result = await inspect({ focus: 'bundler', root });
+  expect(result.state).toBe('invalid');
+  expect(result.diagnostics).toEqual([expect.objectContaining({
+    code: 'AB7001',
+    message: expect.stringContaining('The tools escape hatch must not alias the reserved specifier matched by "agent-bundle/meta"'),
+  })]);
+  expect((await readdir(join(root, 'node_modules')))
+    .filter((name) => name.startsWith('.agent-bundle-dts-'))).toEqual([]);
+});
+
 it('inspects the per-host preflight wrapper under the composite identity', async () => {
+  const parent = await realpath(await mkdtemp(join(tmpdir(), 'agent-bundle-inspect-hooks-')));
+  roots.push(parent);
+  const root = join(parent, 'project');
+  await mkdir(join(root, 'src', 'events', 'tool'), { recursive: true });
+  await Promise.all([
+    writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
+    writeFile(join(root, 'src', 'events', 'tool', 'before.tsx'), 'export default () => undefined;\n'),
+    writeFile(join(root, 'src', 'events', 'tool', 'before.preflight.ts'), 'export default () => true;\n'),
+  ]);
   const preflight: CompiledEventPreflight = Object.freeze({
     provenance: Object.freeze({ kind: 'conventional' as const, relativePath: 'src/events/tool/before.preflight.ts' }),
-    source: '/project/src/events/tool/before.preflight.ts',
+    source: `${root}/src/events/tool/before.preflight.ts`,
   });
   const hook: NormalizedHook = {
     event: 'beforeTool',
     eventRoute: { event: 'tool/before', fallback: 'none', preflight, runtime: 'shared' },
     id: 'hook:event-route:tool-before',
     name: 'event-route-tool-before',
-    provenance: { kind: 'conventional', sourcePath: '/project/src/events/tool/before.tsx' },
-    source: '/project/src/events/tool/before.tsx',
+    provenance: { kind: 'conventional', sourcePath: `${root}/src/events/tool/before.tsx` },
+    source: `${root}/src/events/tool/before.tsx`,
     targets: ['claude', 'codex'],
     tools: [],
   };
@@ -223,7 +325,7 @@ it('inspects the per-host preflight wrapper under the composite identity', async
     metadata: {
       id: 'plugin:preflight-inspect',
       name: 'preflight-inspect',
-      provenance: { kind: 'config', sourcePath: '/project/agent-bundle.config.ts' },
+      provenance: { kind: 'config', sourcePath: `${root}/agent-bundle.config.ts` },
       version: '1.0.0',
     },
     runtime: { node: '22.12.0' },
@@ -232,7 +334,7 @@ it('inspects the per-host preflight wrapper under the composite identity', async
     targets: ['claude', 'codex'].map((name) => ({
       id: `target:${name}`,
       name,
-      provenance: { kind: 'config' as const, sourcePath: '/project/agent-bundle.config.ts' },
+      provenance: { kind: 'config' as const, sourcePath: `${root}/agent-bundle.config.ts` },
     })),
   };
   const hookEntries = ['claude', 'codex'].flatMap((host) => planHooks(model, host, {
@@ -256,7 +358,7 @@ it('inspects the per-host preflight wrapper under the composite identity', async
       selected: ['claude', 'codex'],
     },
     model,
-    projectRoot: '/project',
+    projectRoot: root,
   });
   const hooks = inspection.entries.filter((entry) => entry.kind === 'hook');
   expect(hooks.map((entry) => entry.outputPath).sort()).toEqual([
@@ -270,5 +372,10 @@ it('inspects the per-host preflight wrapper under the composite identity', async
     expect(entry.generatedEntry).toContain('agent-bundle/event-project');
     expect(entry.generatedEntry).toContain('.execute.mjs');
     expect(entry.generatedEntry).not.toContain('AGENT_BUNDLE_HOOK_HOST');
+    expect(loweredConfig(entry)).toMatchObject({
+      name: `agent-bundle-${entry.outputPath.replace(/\.mjs$/u, '').replaceAll('/', '-')}`,
+      output: { filename: '[function jsFilename]', path: '<output>' },
+      resolve: { alias: { 'agent-bundle/launch-env$': launchEnvRuntimePath() } },
+    });
   }
 });

@@ -94,7 +94,7 @@ const startContributorLoop = async (project: ProjectFixture): Promise<Contributo
     await closing?.close();
   };
   try {
-    const documented = createWorkbenchConfig(foreground.url);
+    const documented = createWorkbenchConfig(foreground.url, 'development');
     if (!('server' in documented)) throw new Error('The documented Workbench config did not configure the /api proxy.');
     const rsbuild = await createRsbuild({
       config: {

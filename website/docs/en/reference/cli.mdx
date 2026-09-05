@@ -295,7 +295,7 @@ manifest fails with `AB7001`.
 
 | Flag | Focus |
 | --- | --- |
-| `--bundler` | The synthesized bundler configuration, lowered as the production build lowers it regardless of `NODE_ENV`. Its `distPath.root` is the artifact output, `<output>`, because every selected projection compiles into the one composite root. |
+| `--bundler` | The lowered Rspack configuration of every compiled output — what Rslib (executables) or Rsbuild (MCP App views) hands the compiler after the `tools` hatch and the framework invariants, lowered in production mode regardless of `NODE_ENV`. Resolved aliases, externals, plugins (`[object <ClassName>]`), and functions (`[function <name>]`) are rendered in place; `output.path` is the artifact output, `<output>`, because every selected projection compiles into the one composite root. A `tools` value the build would refuse makes the inspection invalid with `AB7001`. |
 | `--hooks` | Hooks. |
 | `--routes` | The compiled route graph. |
 | `--skills` | Skills. |
