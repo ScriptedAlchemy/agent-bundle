@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
-import { basename, dirname, extname, join, relative, resolve } from 'node:path';
+import { dirname, extname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import type { NoticeDeliveryAdvertisement } from '../adapters/notice-delivery.ts';
@@ -48,6 +48,7 @@ import { emptyRouteConfig, type CompiledLayout, type CompiledProvider } from '..
 import type { CompiledMcpApp } from './mcp-apps.ts';
 import type { ArtifactOutputKind } from './provenance.ts';
 import type { RslibEntry, RslibSurfacePlan } from './rslib.ts';
+import { runtimeIgnoredRoot } from './runtime-path.ts';
 
 /**
  * Spelled as paths, not `new URL(…, import.meta.url)`: the package's own
@@ -64,27 +65,6 @@ const eventRuntimeModulePath = (module: 'ipc' | 'project'): string => {
     if (existsSync(path)) return path;
   }
   throw new Error(`Unable to locate the compiler-owned event ${module} runtime module.`);
-};
-
-/**
- * The package root owning one compiler-provided runtime module. Provenance
- * collects consumer sources, and a runtime module reaches its own siblings
- * (`routes/public.ts`, `core/*`) as it is inlined, so the whole owning package
- * is what has to be ignored rather than the single aliased file.
- */
-export const runtimeIgnoredRoot = (path: string): string => {
-  const normalized = path.replaceAll('\\', '/');
-  let directory = dirname(normalized);
-  while (true) {
-    if (basename(directory) === 'dist' || basename(directory) === 'src') {
-      return resolve(dirname(directory));
-    }
-    const parent = dirname(directory);
-    if (parent === directory) {
-      throw new Error(`Runtime module is not under an owning package src or dist directory: ${JSON.stringify(path)}.`);
-    }
-    directory = parent;
-  }
 };
 
 export interface CompiledEntry {
@@ -303,13 +283,59 @@ const localMcpOutputName = (server: NormalizedMcpServer): string => {
   return match[1];
 };
 
+/** The selected hosts whose MCP documents list `server` — the hosts that can launch it — in selection order. */
+export const selectedServerHosts = (server: NormalizedMcpServer, selected: readonly string[]): readonly string[] =>
+  selected.filter((target) => server.targets.includes(target));
+
+/**
+ * Where a composite root hosts its shared event runtime (#555). Each selected
+ * host reaches the runtime through the first generated-route server its MCP
+ * document lists — the rule every per-host artifact applied before the roots
+ * merged — so a root whose hosts launch different servers hosts the runtime
+ * in each of them, and a host that lists no generated-route server is not
+ * served (`AB4817` refuses that for a route without standalone fallback). The
+ * endpoint is the artifact's alone (#592) and whichever hosting process owns
+ * it answers every host's wrappers, so every hosting server accepts the same
+ * set: the selected hosts that list a hosting server. The build bakes this
+ * into the entries and `inspect --bundler` describes the same hosting.
+ */
+export interface EventRuntimeHosting {
+  /** The selected hosts whose hook wrappers may deliver events, in selection order. */
+  readonly allowedTargets: readonly string[];
+  /** The ids of the generated-route servers that host the runtime. */
+  readonly serverIds: ReadonlySet<string>;
+}
+
+export const eventRuntimeHosting = (
+  servers: readonly NormalizedMcpServer[],
+  selected: readonly string[],
+): EventRuntimeHosting => {
+  const generated = servers.filter((server) => server.source !== undefined && server.generatedRoutes !== undefined);
+  const hostedBy = new Map<string, string>();
+  for (const host of selected) {
+    const server = generated.find((candidate) => candidate.targets.includes(host));
+    if (server !== undefined) hostedBy.set(host, server.id);
+  }
+  return Object.freeze({
+    allowedTargets: Object.freeze([...hostedBy.keys()]),
+    serverIds: new Set(hostedBy.values()),
+  });
+};
+
+/**
+ * The MCP entries of one artifact root: every server that reaches one of the
+ * selected hosts (`targets`), compiled once. `target` is the composite
+ * identity the compiled surface is attributed to in build reports and
+ * `inspect --bundler`; it names no host and never reaches the generated code.
+ */
 export const planCompiledMcpEntries = (
   servers: readonly NormalizedMcpServer[],
-  options: { readonly outDir: string; readonly target: string },
+  options: { readonly outDir: string; readonly target: string; readonly targets: readonly string[] },
 ): readonly CompiledMcpEntry[] => {
   const names = new Set<string>();
+  const selected = options.targets;
   return Object.freeze(servers
-    .filter((server) => server.source !== undefined && server.targets.includes(options.target))
+    .filter((server) => server.source !== undefined && server.targets.some((target) => selected.includes(target)))
     .map((server) => {
       const outputName = localMcpOutputName(server);
       const name = outputName.slice(0, -extname(outputName).length);
@@ -359,11 +385,13 @@ export const planMcpEntriesSurface = async (
     readonly noticeRetention?: NormalizedNoticeRetentionPolicy;
     readonly state?: NormalizedStateDefinition;
     readonly target: string;
+    /** The selected hosts of the composite root; a server reaching any of them is compiled and may receive their events. */
+    readonly targets: readonly string[];
   },
 ): Promise<RslibSurfacePlan<readonly CompiledMcpEntry[]>> => {
   const compiled = planCompiledMcpEntries(servers, options);
-  const eventHostId = compiled.find((entry) =>
-    servers.find((server) => server.id === entry.id)?.generatedRoutes !== undefined)?.id;
+  const hosting = eventRuntimeHosting(servers, options.targets);
+  const hostsRuntime = (id: string): boolean => hosting.serverIds.has(id);
   const virtualSources = await Promise.all(compiled.map(async (entry) => {
     const records = await Promise.all((options.apps ?? [])
       .filter((app) => app.serverIds.includes(entry.id))
@@ -388,14 +416,15 @@ export const planMcpEntriesSurface = async (
       ? undefined
       : generatedRouteMcpEntrySource({
         artifactEpoch: options.artifactEpoch,
-        eventRoutes: entry.id === eventHostId ? options.eventHooks : [],
+        eventRoutes: hostsRuntime(entry.id) ? options.eventHooks : [],
         ...(options.noticeDelivery === undefined ? {} : { noticeDelivery: options.noticeDelivery }),
         plugin: options.plugin,
         routes: server.generatedRoutes,
         serverName: server.name,
         ...(options.noticeRetention === undefined ? {} : { noticeRetention: options.noticeRetention }),
         ...(options.state === undefined ? {} : { state: options.state }),
-        target: options.target,
+        allowedTargets: hostsRuntime(entry.id) ? hosting.allowedTargets : [],
+        hosts: selectedServerHosts(server, options.targets),
         workerFile: `${entry.name}-flight.mjs`,
       });
   });
@@ -405,7 +434,7 @@ export const planMcpEntriesSurface = async (
       ? undefined
       : generatedRouteFlightWorkerSource({
         artifactEpoch: generatedRouteArtifactEpoch(options.plugin),
-        eventRoutes: entry.id === eventHostId ? options.eventHooks : [],
+        eventRoutes: hostsRuntime(entry.id) ? options.eventHooks : [],
         layouts: options.layouts ?? [],
         ...(options.noticeDelivery === undefined ? {} : { noticeDelivery: options.noticeDelivery }),
         providers: options.providers ?? [],
@@ -449,7 +478,7 @@ export const planMcpEntriesSurface = async (
         ? {}
         : {
           [mcpEntryRuntimeSpecifier]: runtimeShell,
-          ...(id !== eventHostId || eventIpcRuntime === undefined || eventProjectRuntime === undefined
+          ...(!hostsRuntime(id) || eventIpcRuntime === undefined || eventProjectRuntime === undefined
             ? {}
             : {
               [eventIpcRuntimeSpecifier]: eventIpcRuntime,

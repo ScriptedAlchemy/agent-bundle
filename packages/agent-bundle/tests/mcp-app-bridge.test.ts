@@ -352,6 +352,52 @@ it('forwards only same-binding app-visible tools and resources while retaining r
   ]);
 });
 
+it('validates a typed client route id against the bound server before dispatch', async () => {
+  const fixture = fixtureFor();
+  const bridge = createMcpAppBridge({
+    binding: fixture.binding,
+    host: fixture.host,
+    operations: fixture.operations,
+    send: (message) => (fixture.sent.push(message), true),
+  });
+  await bridge.receive(initialize('init:route-id'));
+  await bridge.receive(initialized());
+
+  await bridge.receive({
+    id: 'wrong-server',
+    jsonrpc: '2.0',
+    method: 'tools/call',
+    params: {
+      _meta: { 'io.agent-bundle/route-id': 'tool:shelf/refresh-weather' },
+      name: 'refresh-weather',
+    },
+  });
+  expect(fixture.calls).toEqual([]);
+  expect(fixture.sent.at(-1)).toEqual({
+    error: {
+      code: -32602,
+      message: 'tools/call route id does not match the bound MCP server and tool.',
+    },
+    id: 'wrong-server',
+    jsonrpc: '2.0',
+  });
+
+  await bridge.receive({
+    id: 'bound-server',
+    jsonrpc: '2.0',
+    method: 'tools/call',
+    params: {
+      _meta: { 'io.agent-bundle/route-id': 'tool:weather/refresh-weather' },
+      name: 'refresh-weather',
+    },
+  });
+  expect(fixture.calls).toEqual([{
+    arguments: undefined,
+    bindingId: 'binding-app',
+    name: 'refresh-weather',
+  }]);
+});
+
 it('handles standard host actions and rejects malformed app requests without forwarding them', async () => {
   const seen: string[] = [];
   const fixture = fixtureFor({

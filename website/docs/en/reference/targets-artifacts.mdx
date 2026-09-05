@@ -1,36 +1,143 @@
 ---
-description: 'What each agent-bundle target emits and the artifact manifest contract: file kinds, digests, source inputs, target schema pins, and recorded validation status.'
+description: 'The composite plugin root agent-bundle build emits: where each host projection places its manifest, hook, and MCP documents, the hook wrapper naming rule, the AB4103/AB4105/AB4106 composition rules, and the artifact manifest contract.'
 ---
 
 # Targets and artifacts
 
-The target table — which layout each target emits, and why the portable standard omits rules,
-commands, and hooks — is in [Configuration model](../guide/authoring/index.mdx). The directory
-layouts are in [Project structure](../guide/start/project-structure.mdx). This page is the
-artifact contract those layouts have to satisfy.
+The target table — what each host projection carries, and why the portable standard omits rules,
+commands, and hooks — is in [Configuration model](../guide/authoring/index.mdx). The source-tree
+layout is in [Project structure](../guide/start/project-structure.mdx). This page is the output
+contract: the one directory `build` emits, and the artifact manifest its bytes have to satisfy.
 
-## Every target directory is distributable
+## The composite plugin root
 
-A built target directory is the unit of distribution: no packaging step follows the build. Each
-one carries the components the host reads, a generated `INSTALL.md` written with the bundle's
-real plugin and marketplace names, and the install surface that target requires.
+`agent-bundle build` writes **one directory** at the artifact output — `artifact/` by default;
+`output.distPath` or `--output` moves it. `targets` selects the **host projections** laid into
+that root: `claude`, `codex`, `cursor`, and `portable`, in any combination. Every selected host
+reads the same directory as its plugin root; there is no per-host subdirectory to point a host at.
 
-| Target | Marketplace manifests | Install surface |
+- Omit `targets` — in config and on the command line — and the build emits only the `portable`
+  projection.
+- Order does not matter. `['codex', 'claude']` and `['claude', 'codex']` produce byte-identical
+  output, and the normalized model, the artifact manifest, and `inspect` list the selection
+  sorted by name.
+- `plugin` is not a target. `targets: ['plugin']` or `--target plugin` is an unknown target
+  (`AB4100`): the composite root is already the output of every build.
+
+Built with all four projections, the host-test example's root looks like this (component
+directories appear only when the project authors them):
+
+```text
+artifact/
+├── .agents/plugins/marketplace.json      # Codex marketplace
+├── .claude-plugin/plugin.json            # Claude Code manifest
+├── .claude-plugin/marketplace.json
+├── .codex-plugin/plugin.json             # Codex manifest
+├── .codex-plugin/hooks.json              # Codex hook document
+├── .codex-plugin/mcp.json                # Codex MCP document
+├── .cursor-plugin/plugin.json            # Cursor manifest
+├── .cursor-plugin/marketplace.json
+├── .cursor-plugin/hooks.json             # Cursor hook document
+├── .cursor-plugin/mcp.json               # Cursor MCP document
+├── .mcp.json                             # Claude Code MCP document
+├── plugin.json                           # portable (Agent Plugins) manifest
+├── mcp.json                              # portable MCP document
+├── hooks/hooks.json                      # Claude Code hook document
+├── hooks/<hook>.mjs                      # wrapper, hook selected for ONE host
+├── hooks/<hook>.<host>.mjs               # wrappers, hook shared by >1 selected host
+├── hooks/hooks-flight.mjs
+├── mcp/mcp-<server>-<hash>.mjs           # compiled MCP entries (+ -flight.mjs)
+├── bin/<plugin>.mjs, bin/<plugin>-flight.mjs   # routed CLI (when src/cli exists)
+├── scripts/, skills/, commands/, rules/, assets/, mcp-apps/   # emitted once
+├── INSTALL.md                            # when any built-in host is selected
+├── install.mjs                           # when cursor or portable is selected
+├── agent-bundle.manifest.json            # selected projections + provenance
+└── agent-bundle.hooks.json               # hook index over selected hosts
+```
+
+Host manifests live in their dotfolders at the root. `skills/`, `hooks/`, `mcp/`, `scripts/`,
+`bin/`, and `assets/` are shared and emitted **once** — no per-host copies. Nothing else appears
+at the root: no generated `AGENTS.md`, no `hooks/hooks-cursor.json`.
+
+### Where each host reads its documents
+
+| Host | Manifest | Hook document | MCP document | Marketplace |
+| --- | --- | --- | --- | --- |
+| Claude Code | `.claude-plugin/plugin.json` | `hooks/hooks.json` | `.mcp.json` | `.claude-plugin/marketplace.json` |
+| Codex | `.codex-plugin/plugin.json` | `.codex-plugin/hooks.json` | `.codex-plugin/mcp.json` | `.agents/plugins/marketplace.json` |
+| Cursor | `.cursor-plugin/plugin.json` | `.cursor-plugin/hooks.json` | `.cursor-plugin/mcp.json` | `.cursor-plugin/marketplace.json` when `marketplace: true` |
+| portable | `plugin.json` | — | `mcp.json` | — |
+
+The paths are fixed whatever the selection, so a single-host root and a four-host root share one
+layout. Claude Code and the portable Agent Plugins format load their documents from the
+conventional plugin-root locations and cannot be redirected; Codex and Cursor manifests carry
+explicit `hooks` and MCP pointers, so their documents sit beside their manifests. Both of those
+hosts also fall back to folder discovery of the conventional paths when the pointer is absent, so
+a Codex or Cursor projection with no document of its own still points at an empty one whenever
+another selected host claims the conventional path — Cursor never loads Claude Code's
+`hooks/hooks.json`.
+
+### Hook wrappers
+
+A hook wrapper bakes in the host it was planned for (its codec, its `target`, its host contract
+revision), so one wrapper cannot serve two hosts:
+
+- A hook that reaches exactly one selected host keeps the plain name, `hooks/<name>.mjs`.
+- A hook that reaches several selected hosts is emitted once per host as
+  `hooks/<name>.<host>.mjs`, and each host's hook document points at its own wrapper.
+
+Which hosts a hook reaches is its `targets` (every target, by default) intersected with the
+selection, so the same source hook is `hooks/audit.mjs` in a `claude`-only root and
+`hooks/audit.claude.mjs` plus `hooks/audit.cursor.mjs` in a `claude` + `cursor` root. Native hooks
+are preserved for every selected host. `agent-bundle.hooks.json` indexes the wrappers over the
+selected hosts.
+
+### Compiled surfaces
+
+MCP entries, scripts, routed CLI bins, and MCP Apps are compiled **once** and attributed to the
+**composite identity** — the selected host names, sorted and joined by `+`, such as
+`claude+codex` — rather than to any one host. `agent-bundle inspect --bundler` shows the same
+thing: its `distPath.root` is the artifact output, `<output>`, with no host segment beneath it.
+
+### One root, one set of bytes
+
+Merging projections by path only works when the hosts agree on the bytes. Three rules keep the
+root honest; all are errors, and `validate` and `inspect` report them exactly where `build`
+refuses:
+
+| Code | Rule |
+| --- | --- |
+| `AB4103` | Two selected projections plan the same path with different bytes. Projections are compared in host-name order and paths in path order, so a given selection reports the same collision however `targets` is written. The usual cause is a Skill whose frontmatter carries a host extension (`targets: { claude: … }`), which lowers to different `skills/<name>/SKILL.md` bytes for Claude Code than for the other hosts. Make the component identical for every selected host, or build the conflicting hosts into separate artifacts. |
+| `AB4105` | A component scoped to a subset of the selected hosts — a command or rule with frontmatter `targets` — sits in a conventional directory another selected host scans (`commands/` for Claude Code and Cursor, `rules/` for Cursor). Inside one root the file cannot be hidden from that host, so the build refuses rather than leaking it. Extend `targets` to every selected host that discovers the directory, or build those hosts separately. Skills are never host-scoped: every skill ships to every selected host, and a per-host frontmatter extension that changes its bytes is an `AB4103` collision instead. |
+| `AB4106` | The selection mixes an adapter registered on an advanced `TargetRegistry` — any target whose adapter is not one of the shipped `claude`, `codex`, `cursor`, `portable` adapters, judged by adapter identity, so a custom adapter registered under one of those names counts as advanced — with another target. Only the built-in hosts agree on where their unshared documents live, which directories each discovers, and one install surface, so a third-party adapter is built alone: `targets: ['<name>']` into its own `--output`. A single-target selection never triggers it. |
+
+All three are listed with `AB4100` in the [Diagnostics reference](./diagnostics.md).
+
+## The root is distributable
+
+The composite root is the unit of distribution: no packaging step follows the build. It carries
+the components the selected hosts read, one generated `INSTALL.md` — a section per selected host,
+written with the bundle's real plugin and marketplace names — and the install surface those hosts
+require, emitted once for the whole selection:
+
+| Selected host | Marketplace manifest | Install surface |
 | --- | --- | --- |
-| `claude` | Local marketplace manifest. | `claude plugin marketplace add` + `claude plugin install`. |
-| `codex` | Local marketplace manifest. | `codex plugin marketplace add` + `codex plugin add`. |
-| `cursor` | Local marketplace manifest (`.cursor-plugin/marketplace.json`) when `marketplace: true`. | `install.mjs`. |
+| `claude` | `.claude-plugin/marketplace.json`. | `claude plugin marketplace add` + `claude plugin install`. |
+| `codex` | `.agents/plugins/marketplace.json`. | `codex plugin marketplace add` + `codex plugin add`. |
+| `cursor` | `.cursor-plugin/marketplace.json` when `marketplace: true`. | `install.mjs`. |
 | `portable` | — | `install.mjs`. |
-| `plugin` | Claude, Codex, and Cursor manifests, plus a generated `AGENTS.md`. | `install.mjs` and the host CLIs. |
 
-Artifact validation errors when a target is missing a required install-surface file, so a bundle
-cannot ship without the installer its `INSTALL.md` promises. The npm pack inventory checks the
-same paths (`AB7010`).
+`INSTALL.md` is written whenever a built-in host is selected; `install.mjs` when `cursor` or
+`portable` is among them. Artifact validation errors when a required install-surface file is
+missing, so a root cannot ship without the installer its `INSTALL.md` promises. The npm pack
+inventory checks the same paths (`AB7010`).
 
 ## agent-bundle.manifest.json
 
-One manifest is emitted per artifact and is the input to every later integrity check —
-`validate --artifact`, `prepack`, `doctor --from`, and the packed and installed-host proof levels.
+One manifest is emitted per root and is the input to later integrity checks —
+`validate --artifact`, `prepack`, and the packed and installed-host proof
+levels. `doctor --from` and `install --from` identify the root from the
+host `plugin.json` under `--from`; they do not parse this file.
 
 | Field | Contents |
 | --- | --- |
@@ -38,9 +145,9 @@ One manifest is emitted per artifact and is the input to every later integrity c
 | `project` | `configPath`, `configDigest`, `modelDigest`, `revision`, the validated `packageName` and `packageVersion` (absent for unpackaged development projects), and `sourceInputs`. |
 | `files` | Every emitted file: `path`, `bytes`, `sha256`, `kind`, optional `mode`, and the `sourceInputs` it derives from. |
 | `runtime` | `{ node }` — the selected generated-executable floor. |
-| `targets` | Per target: `name`, `adapterRevision`, `observedVersion`, and the pinned `schemas` it was validated against. |
+| `targets` | One row per selected projection, sorted by name: `name`, `adapterRevision`, `observedVersion`, and the pinned `schemas` it was validated against. |
 | `agentSkills` | The Agent Skills specification pin: `specification`, `sourceRevision`, `schemaSha256`. |
-| `validation` | Recorded status for `source`, `artifact`, and each target. |
+| `validation` | Recorded status for `source`, `artifact`, and each selected projection. |
 
 `kind` is one of `bundle`, `copy`, `generated`, or `prebuilt` — a bundled entry, a byte-for-byte
 copy, a compiler-generated document, or a prebuilt payload file. `sourceInputs` records each
@@ -77,5 +184,8 @@ schema pin, and emitted files and source inputs.
 
 ## Next
 
+- [Compiler architecture](../guide/concepts/architecture.mdx) — the three
+  compiler layers and which production readers consume each manifest field.
 - [Artifact validation](../guide/distribution/validation.mdx) — the checks that read this manifest.
+- [Host installation](../guide/distribution/installation.mdx) — installing the root into each host.
 - [Runtime environment](./runtime-environment.mdx) — what the emitted executables assume at run time.

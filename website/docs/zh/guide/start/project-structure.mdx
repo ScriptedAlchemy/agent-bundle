@@ -13,7 +13,7 @@ description: 'agent-bundle 识别的约定 src/ 根目录、配置与约定之�
 my-plugin/
 ├── agent-bundle.config.ts     # 项目标识、targets 与策略
 ├── package.json               # 权威的发布版本号与包标识
-├── assets/                    # 按字节复制到每个产物中的静态文件
+├── assets/                    # 按字节复制到产物根目录中的静态文件
 └── src/
     ├── skills/<name>/SKILL.md # 每个目录一个 Skill，并带有自己的资源
     ├── commands/*.md          # 宿主斜杠命令文档
@@ -47,7 +47,7 @@ my-plugin/
 | `src/mcp/<server>/{tools,resources,prompts}/*` | 生成式 MCP 服务器路由。路径提供身份；每个模块提供静态 `config`、schema，以及一个 async 默认 Server Component。 | 把 `routes.servers.<server>` 设为 `custom`、`command` 或 `remote`。 |
 | `src/mcp/<server>/tools/<tool>.cli.ts` | 同级工具路由的 CLI 表面投影。不是路由；会从 `routes.mcpCommands` 中排除。参见[将一个工具投影为惯用命令](../authoring/package-entries.mdx#将一个工具投影为惯用命令)。 | 加 `_` 前缀以停用它。 |
 | `src/mcp/<server>/apps/*` | 浏览器 MCP App 入口，编译为自包含 HTML 并注册到生成的服务器上。必须提供静态 `config.resourceUri`。 | 使用自定义服务器，或给文件名加 `_` 前缀。 |
-| `src/scripts/<name>.ts` | 一个普通脚本，在每个所选 target 中编译为 `scripts/<name>.mjs`。嵌套模块是硬错误（`AB4808`）。 | 给某一段路径加 `_` 前缀，或用显式 `scripts` 条目认领该文件。 |
+| `src/scripts/<name>.ts` | 一个普通脚本，只编译一次，输出为产物根目录下的 `scripts/<name>.mjs`，所有所选宿主共用。嵌套模块是硬错误（`AB4808`）。 | 给某一段路径加 `_` 前缀，或用显式 `scripts` 条目认领该文件。 |
 | `src/scripts/<name>.tsx` | 渲染式脚本：async 默认组件接收 `argv` 与 `signal`，并按 CLI 输出契约通过 Agent 渲染器渲染。 | 改名为 `.ts`、给某一段路径加 `_` 前缀，或认领该文件。 |
 | `src/cli.ts` | 一个以 `plugin.name` 命名的包 bin。 | `bin: false` |
 | `src/cli/**/*.{ts,tsx}` | 路由式 CLI 命令，编译进一张做过冲突检查的命令图与一个可执行文件。嵌套即身份：`src/cli/library/audit.ts` 以 `<bin> library audit` 运行。它取代 `src/cli.ts` 约定。 | `bin: false`、`routes.cli: 'conventional'`，或给某一段路径加 `_` 前缀。 |
@@ -56,7 +56,7 @@ my-plugin/
 | `src/mcp/<server>/layout.{ts,tsx}` | 按服务器的布局，嵌套在根布局之内，包裹该生成式服务器的路由。 | 重命名为 `_layout.tsx`，或把 `routes.servers.<server>` 设为非生成模式。 |
 | `src/state.ts` | 项目状态：默认导出 `defineState`。生成的 MCP、路由式 CLI 与渲染式脚本的请求作用域都会挂载它。 | `state: false`，或改名为 `_state.ts`。 |
 | `src/providers/<name>.{ts,tsx}` | 一个请求上下文 provider，挂载在请求句柄的 `providers.<camelCaseName>` 上；其工厂会收到请求的身份、lineage 以及只读的 state/notices 句柄。 | 给文件名加 `_` 前缀。 |
-| `assets/` | 静态资源，按字节复制到每个 target 产物的 `assets/` 目录。 | 改为声明顶层 `assets` 列表。 |
+| `assets/` | 静态资源，按字节复制到产物根目录的 `assets/` 目录，所有所选宿主共用一份。 | 改为声明顶层 `assets` 列表。 |
 
 路由与包入口约定精确匹配 `.ts` 与 `.tsx` 文件；state 约定则专指 `src/state.ts`。被发现的条目在
 规范化模型中带有 `provenance.kind: 'conventional'`，因此 `agent-bundle inspect` 能告诉你某个文件
@@ -99,35 +99,50 @@ export default defineConfig({
 
 `agent-bundle build` 会写出两类彼此独立的东西。
 
-### 宿主产物
+### 复合插件根目录
 
-在产物根目录下，每个所选 target 一个目录。命令行把该根目录默认为 `artifact/`，因此它永远不会与下文的包构建
-冲突；`output.distPath` 或 `--output` 可以移动它：
+无论 `targets` 选择了什么，产物输出位置都只有一个目录。命令行把该输出默认为 `artifact/`，因此它永远
+不会与下文的包构建冲突；`output.distPath` 或 `--output` 可以移动它。每个所选宿主都把这个目录当作
+自己的插件根目录来读取——不存在 `artifact/<host>/` 这样的分区——因此 `targets` 决定的是根目录中出现
+哪些宿主清单，而不是任何东西落在哪里。省略 `targets` 时，根目录只承载 `portable` 投影。
 
 ```text
 artifact/
-├── agent-bundle.manifest.json # 每个产出文件及其 SHA-256
-└── plugin/                    # targets: ['plugin'] — 一个多宿主捆绑包
-    ├── .claude-plugin/
-    ├── .codex-plugin/
-    ├── .cursor-plugin/
-    ├── bin/<plugin-name>.mjs      # 路由式 CLI，存在 src/cli/** 时出现
-    ├── skills/
-    ├── hooks/
-    ├── mcp/
-    ├── scripts/
-    ├── assets/
-    ├── AGENTS.md
-    └── INSTALL.md
+├── .claude-plugin/plugin.json        # claude，旁边是 marketplace.json
+├── .codex-plugin/plugin.json         # codex，旁边是 hooks.json 与 mcp.json
+├── .agents/plugins/marketplace.json  # codex marketplace
+├── .cursor-plugin/plugin.json        # cursor，旁边是 hooks.json 与 mcp.json
+├── .mcp.json                         # claude MCP 文档
+├── plugin.json                       # portable（Agent Plugins）清单
+├── mcp.json                          # portable MCP 文档
+├── hooks/
+│   ├── hooks.json                    # claude 钩子文档
+│   ├── <hook>.mjs                    # 只到达一个所选宿主的钩子的包装脚本
+│   ├── <hook>.<host>.mjs             # 到达多个宿主的钩子，每个宿主一个包装脚本
+│   └── hooks-flight.mjs
+├── mcp/mcp-<server>-<hash>.mjs       # 编译后的 MCP 入口，只输出一次
+├── bin/<plugin-name>.mjs             # 路由式 CLI，存在 src/cli/** 时出现
+├── scripts/, skills/, commands/, rules/, assets/, mcp-apps/   # 组件目录，只输出一次
+├── INSTALL.md                        # 每个所选宿主一节
+├── install.mjs                       # 选择了 cursor 或 portable 时出现
+├── agent-bundle.manifest.json        # 每个产出文件及其 SHA-256
+└── agent-bundle.hooks.json           # 覆盖所选宿主的钩子索引
 ```
 
-单宿主布局由 `claude`、`codex`、`cursor` 与 `portable` 这几个 target 提供。
-`agent-bundle.manifest.json` 位于产物根目录、与各 target 目录并列，记录了每个产出文件及其 SHA-256，因此产物校验是内容寻址的，而不是猜测。
+宿主清单位于各自的点目录中；`skills/`、`hooks/`、`mcp/`、`scripts/`、`bin/` 与 `assets/` 只输出一次、
+所有宿主共用。钩子与 MCP 文档在项目声明了钩子或 MCP 服务器时出现——此外，只要另一个所选宿主占用了
+约定路径 `hooks/hooks.json`、`.mcp.json` 或 `mcp.json`，Codex 或 Cursor 就会额外输出一份空文档，使该宿主的目录
+发现永远不会加载到其他宿主的文件——`bin/` 只在项目有路由式 CLI 时出现。两个所选宿主若要以不同字节写出同一路径，就无法共用根目录，构建会以 `AB4103` 失败；一个只面向
+部分所选宿主的命令或规则，却位于另一个所选宿主会扫描的目录中，则是 `AB4105`。两者的恢复方式
+相同：让该组件对每个所选宿主都完全一致，或把这些宿主分别构建到不同的产物中。
 
-`output.distPath` 只移动产物根目录；它从不改变每个 target 内部由框架拥有的布局。优先级是 CLI
-`--output`，然后 `output.distPath`，最后是默认值——对同时输出包构建的 `agent-bundle build` 是
-`artifact`，对不带 `packageOutputs` 的编程式 `build()` 是 `dist`。取值必须是非空、限定在项目根目录内的
-相对 POSIX 路径。
+`agent-bundle.manifest.json` 记录了每个产出文件及其 SHA-256，因此产物校验是内容寻址的，而不是猜测。
+编译后的表面归属于复合身份——所选宿主按名称排序后以 `+` 连接，例如 `claude+codex`——`targets` 的
+书写顺序永远不会改变输出。
+
+`output.distPath` 只移动根目录；它从不改变根目录内部由框架拥有的布局。优先级是 CLI `--output`，
+然后 `output.distPath`，最后是默认值——对同时输出包构建的 `agent-bundle build` 是 `artifact`，对不带
+`packageOutputs` 的编程式 `build()` 是 `dist`。取值必须是非空、限定在项目根目录内的相对 POSIX 路径。
 
 ### npm 包构建
 
@@ -157,6 +172,8 @@ export default defineConfig({
 
 ## 下一步
 
+- [编译器架构](../concepts/architecture.mdx) —— 这些根目录如何变成路由图、
+  宿主投影与一份复合产物。
 - [配置模型](../authoring/index.mdx) —— 完整的配置表面。
 - [Skills](../authoring/skills.mdx)、[钩子](../authoring/hooks.mdx)、
   [MCP 服务器与 MCP App](../authoring/mcp.mdx) —— 每种表面一页。

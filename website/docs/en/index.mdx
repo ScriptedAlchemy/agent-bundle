@@ -1,12 +1,12 @@
 ---
 pageType: home
-description: 'Compile skills, hooks, MCP servers, and scripts from one typed config into installable Claude Code, Codex, and Cursor artifacts.'
+description: 'Compile skills, hooks, MCP servers, and scripts from one typed config into one installable plugin root for Claude Code, Codex, and Cursor.'
 titleSuffix: ' - Agent plugin compiler for Claude Code, Codex, and Cursor'
 
 hero:
   name: agent-bundle
   text: One typed config, every agent host
-  tagline: Describe skills, hooks, MCP servers, and scripts once. Compile installable artifacts for Claude Code, Codex, and Cursor.
+  tagline: Describe skills, hooks, MCP servers, and scripts once. Compile one installable plugin root for Claude Code, Codex, and Cursor.
   image:
     src: /logo.svg
     alt: agent-bundle logo
@@ -60,20 +60,21 @@ features:
     link: /guide/development/evaluations
     span: 4
   - icon: 📦
-    title: Every target ships on its own
-    details: A built target directory is the unit you install — it carries its host manifests and a generated INSTALL.md. The artifact root beside it holds agent-bundle.manifest.json, the SHA-256 record that validation, MCP, hooks, and evals read.
+    title: One root, every host
+    details: The artifact root is the unit you install — every selected host's manifest sits in its own dotfolder over shared Skills, hooks, and MCP entries, beside a generated INSTALL.md and agent-bundle.manifest.json, the SHA-256 record that validation, MCP, hooks, and evals read.
     link: /guide/distribution/
     span: 4
 ---
 
-import { Steps, Tab, Tabs } from '@rspress/core/theme';
+import { Steps } from '@rspress/core/theme';
 
 ## What you write, and what you get
 
-The input is one config file and a conventional `src/` tree. The output is one artifact root
-holding a ready-to-install directory per host — each with its own host manifests, generated
-wrappers, and installation instructions written with the bundle's real names — plus the root
-`agent-bundle.manifest.json` that the whole artifact is validated against.
+The input is one config file and a conventional `src/` tree. The output is one composite plugin
+root: every selected host's manifest in its own dotfolder over shared component directories,
+generated wrappers, installation instructions written with the bundle's real names, and the
+`agent-bundle.manifest.json` the whole artifact is validated against. Every host installs that
+same directory.
 
 <div className="ab-compare">
 <div>
@@ -115,71 +116,50 @@ declaration, because a handler has to be bound to an event.
 
 ### The compiler emits
 
-<Tabs>
-<Tab label="Claude Code">
-
-```text title="artifact/claude/"
-artifact/claude/
+```text title="artifact/"
+artifact/
 ├── .claude-plugin/
-│   ├── plugin.json
+│   ├── plugin.json                  # Claude Code manifest
 │   └── marketplace.json
-├── .mcp.json
+├── .codex-plugin/
+│   ├── plugin.json                  # Codex manifest
+│   ├── hooks.json                   # Codex hook document
+│   └── mcp.json                     # Codex MCP document
+├── .agents/plugins/marketplace.json # Codex marketplace
+├── .mcp.json                        # Claude Code MCP document
+├── plugin.json                      # portable (Agent Plugins) manifest
+├── mcp.json                         # portable MCP document
 ├── hooks/
-│   ├── hooks.json
-│   └── session-start-….mjs
-├── mcp/mcp-status-….mjs
+│   ├── hooks.json                   # Claude Code hook document
+│   ├── session-start-….claude.mjs   # one wrapper per host the hook reaches
+│   ├── session-start-….codex.mjs
+│   └── hooks-flight.mjs
+├── mcp/
+│   ├── mcp-status-….mjs             # compiled once, shared by every host
+│   └── mcp-status-…-flight.mjs
 ├── scripts/check-service.mjs
 ├── skills/release-review/
 │   ├── SKILL.md
 │   └── references/policy.md
-└── INSTALL.md
+├── INSTALL.md                       # one section per selected host
+├── install.mjs                      # installer for portable and Cursor
+├── agent-bundle.manifest.json       # every emitted file with its SHA-256
+└── agent-bundle.hooks.json          # hook index over the selected hosts
 ```
 
-</Tab>
-<Tab label="Codex">
-
-```text title="artifact/codex/"
-artifact/codex/
-├── .codex-plugin/plugin.json
-├── .agents/plugins/marketplace.json
-├── .mcp.json
-├── hooks/
-│   ├── hooks.json
-│   └── session-start-….mjs
-├── mcp/mcp-status-….mjs
-├── scripts/check-service.mjs
-├── skills/release-review/
-│   ├── SKILL.md
-│   └── references/policy.md
-└── INSTALL.md
-```
-
-</Tab>
-<Tab label="Portable">
-
-```text title="artifact/portable/"
-artifact/portable/
-├── plugin.json
-├── mcp.json
-├── mcp/mcp-status-….mjs
-├── scripts/check-service.mjs
-├── skills/release-review/
-│   ├── SKILL.md
-│   └── references/policy.md
-├── install.mjs
-└── INSTALL.md
-```
+Every selected host reads this one directory as its plugin root: Claude Code finds
+`.claude-plugin/`, `hooks/hooks.json`, and `.mcp.json`; Codex finds `.codex-plugin/` and the
+marketplace under `.agents/`; Agent Plugins clients find `plugin.json` and `mcp.json`. Skills,
+compiled MCP entries, and scripts are emitted once, never copied per host.
 
 The Agent Plugins open standard has no hook surface. The hook above declares no `targets`, so it
-inherits only the selected targets that support hooks and `portable` is skipped here without a
-diagnostic. Naming it explicitly — `targets: ['portable']` — is `AB4204` at build time instead.
+inherits only the selected targets that support hooks — `claude` and `codex` — and is compiled
+once per host it reaches, which is why two wrappers appear. `portable` is skipped without a
+diagnostic; naming it explicitly — `targets: ['portable']` — is `AB4204` at build time instead.
 
-</Tab>
-</Tabs>
-
-Generated wrapper names end in a short digest of the declaration they were compiled from, not of
-their contents. `artifact/agent-bundle.manifest.json` records every emitted file with its SHA-256, so
-later validation compares real bytes rather than checking that a path exists.
+Generated wrapper names carry a short digest of the declaration they were compiled from, not of
+their contents. `agent-bundle.manifest.json` records every emitted file with its SHA-256, so later
+validation compares real bytes rather than checking that a path exists.
 
 </div>
 </div>
@@ -208,27 +188,33 @@ from route-unit tests up to a bundle installed through the real host CLI — and
 
 ### Ship
 
-`agent-bundle build` validates the project and writes one directory per target.
+`agent-bundle build` validates the project and writes one composite plugin root.
 [Validation](/guide/distribution/validation) checks the artifact against its manifest, and
-[installation](/guide/distribution/installation) uses each host's own install path.
+[installation](/guide/distribution/installation) points each host's own install path at that
+root.
 
 </Steps>
 
 ## One source, every host
 
-| Target | What it emits | Installed with |
+`targets` selects which host projections the one root carries; omit it and the root carries
+`portable` alone. Every row below reads the same directory — only the manifest a host looks for
+and the install verb differ.
+
+| Target | What it adds to the root | Installed with |
 | --- | --- | --- |
-| `claude` | The Claude Code plugin layout, with plugin and local marketplace manifests. | `claude plugin marketplace add` and `claude plugin install`, or `agent-bundle install claude`. |
-| `codex` | The Codex plugin layout, with plugin and local marketplace manifests. | `codex plugin marketplace add` and `codex plugin add`, or `agent-bundle install codex`. |
-| `cursor` | The Cursor plugin layout. | The generated `install.mjs`, or `agent-bundle install cursor`. |
-| `portable` | The [Agent Plugins](https://agent-plugins.org) open standard — Skills and MCP servers — read natively by Cursor, Codex, VS Code, GitHub Copilot, Kiro, and ChatGPT. | The generated `install.mjs`. |
-| `plugin` | One multi-host bundle carrying the Claude, Codex, and Cursor manifests over shared component directories. | `install.mjs` or any of the host CLIs. |
+| `claude` | `.claude-plugin/plugin.json` and a local `marketplace.json`, plus `hooks/hooks.json` and `.mcp.json`. | `claude plugin marketplace add` and `claude plugin install`, or `agent-bundle install claude --from artifact`. |
+| `codex` | `.codex-plugin/plugin.json` with its `hooks.json` and `mcp.json`, plus `.agents/plugins/marketplace.json`. | `codex plugin marketplace add` and `codex plugin add`, or `agent-bundle install codex --from artifact`. |
+| `cursor` | `.cursor-plugin/plugin.json` with its `hooks.json` and `mcp.json`. | The generated `install.mjs`, or `agent-bundle install cursor --from artifact`. |
+| `portable` | The [Agent Plugins](https://agent-plugins.org) open standard — `plugin.json` and `mcp.json` over Skills and MCP servers — read natively by Cursor, Codex, VS Code, GitHub Copilot, Kiro, and ChatGPT. | The generated `install.mjs`. |
 
 Hosts differ in what they can load, so the compiler says so at build time: a surface you select
 for a target that cannot express it is a reported diagnostic, never a quiet omission. The one
 deliberate exception is a hook with no `targets` of its own, which inherits only the hosts that
-support hooks — as the `portable` tab above shows — rather than failing. Every diagnostic has a
-stable `AB` code documented in the [diagnostics reference](/reference/diagnostics).
+support hooks — as the tree above shows — rather than failing. Two selected hosts that would
+write the same path with different bytes cannot share one root, and the build says so with
+`AB4103`. Every diagnostic has a stable `AB` code documented in the
+[diagnostics reference](/reference/diagnostics).
 
 ## Start here
 

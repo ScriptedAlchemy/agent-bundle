@@ -9,7 +9,6 @@ import { cliBinSourceInputs } from './cli-bins.ts';
 import { declarationBuildDiagnostics, replayDeclarationEmit } from './declaration-diagnostics.ts';
 import { listArtifactFiles, publishArtifact, resolveArtifactDestination } from './emit.ts';
 import { scanEntryExports } from './entry-exports.ts';
-import { runtimeIgnoredRoot } from './entries.ts';
 import {
   cliEntryRuntimePath,
   cliEntryRuntimeSpecifier,
@@ -26,6 +25,7 @@ import { projectMeta } from './meta.ts';
 import { bundleSyntaxCheckFor } from './module-imports.ts';
 import type { BundledOutputEvidence } from './provenance.ts';
 import { buildWithRslib, isDeclarationGenerationFailure, type RslibEntry } from './rslib.ts';
+import { runtimeIgnoredRoot } from './runtime-path.ts';
 import { validateJavaScriptModules } from './validate-artifact-modules.ts';
 
 /**
@@ -195,7 +195,7 @@ export const planPackageEntries = async (
     });
   }
   const installHosts = Object.freeze((['claude', 'codex', 'cursor'] as const)
-    .filter((host) => model.targets.some((target) => target.name === host || target.name === 'plugin')));
+    .filter((host) => model.targets.some((target) => target.name === host)));
   if (
     installHosts.length > 0 &&
     options.artifactRoot !== undefined &&

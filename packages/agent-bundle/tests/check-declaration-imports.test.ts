@@ -167,6 +167,30 @@ describe('declarationImportViolations', () => {
     }]);
   });
 
+  it('treats the browser App declaration as a strict public root', () => {
+    const report = declarationImportViolations({
+      manifest: {
+        name: 'agent-bundle',
+        devDependencies: { zod: '4.5.4' },
+        exports: { './app': { types: './dist/app.d.ts', import: './dist/app.js' } },
+      },
+      packedPaths: ['dist/app.d.ts', 'dist/app.js'],
+      declarations: [{
+        path: 'dist/app.d.ts',
+        text: "import type { z } from 'zod';\nexport type BrowserContract = z.ZodType;\n",
+      }],
+    });
+
+    expect(report.errors).toEqual([expect.objectContaining({
+      path: 'dist/app.d.ts',
+      reachableFrom: './app',
+      reason: 'dev-dependency',
+      specifier: 'zod',
+    })]);
+    expect(report.warnings).toEqual([]);
+    expect(report.roots).toEqual([{ entry: './app', path: 'dist/app.d.ts' }]);
+  });
+
   it('follows `#` imports mapped to packed files when computing reachability', () => {
     const report = declarationImportViolations({
       manifest: { ...manifest, imports: { '#events/*': './dist/events/*.js' } },

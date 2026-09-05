@@ -242,7 +242,7 @@ export default async function AfterFileEdit({ canonical, native, signal }: Agent
   );
 }`;
 
-const CLAUDE_HOOKS_JSON = `// claude/hooks/hooks.json - real emitted bytes (examples/hooks-and-scripts)
+const CLAUDE_HOOKS_JSON = `// hooks/hooks.json - real emitted bytes (examples/hooks-and-scripts)
 {
   "hooks": {
     "SessionStart": [
@@ -935,9 +935,9 @@ ctx.actor.state === 'available'
             </Text>
             <MonoBlock
               dim
-              text={`agent-bundle install claude --from artifact/claude --scope user
-agent-bundle install codex  --from artifact/codex
-agent-bundle install cursor --from artifact/cursor   # staged copy`}
+              text={`agent-bundle install claude --from artifact --scope user
+agent-bundle install codex  --from artifact
+agent-bundle install cursor --from artifact   # staged copy`}
             />
             <Text size="small" tone="secondary">
               Every target directory is independently distributable with a generated INSTALL.md;

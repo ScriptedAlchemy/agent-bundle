@@ -265,15 +265,18 @@ const rendered = await renderRoute('event:tool/after', {
 
 ### 线上到底传了什么
 
-两种形态共享输出的 `hooks/hooks.json` 接线，并且都编译成宿主以
-`node "${CLAUDE_PLUGIN_ROOT}/hooks/<wrapper>.mjs"`（或宿主自己的根令牌）调用的包装层。统一 `plugin`
-target 还会为 Cursor 写出 `hooks/hooks-cursor.json` 与 `hooks/<name>.cursor.mjs`（`preToolUse` /
-`postToolUse` 小驼峰）。Claude Code 与 Codex 按约定加载 `hooks/hooks.json`，且从不扫描 `hooks/`
-下的其他文档，因此 Claude 清单不写 `hooks` 指针：Claude Code 会把指向约定文件的指针报告为重复的
-hooks 文件（`manifest.hooks` 只用于额外文档）。每个包装层都拿信封里的 `hook_event_name` 与为
-自己宿主烘焙的拼写比较（Claude 与 Codex 为 `PreToolUse` / `PostToolUse`），所以 Claude 会话里出现
-`native hook_event_name must equal postToolUse`，说明 Claude 插件根目录下装的是为 Cursor 构建的
-包装层，而不是 Claude 发送了小驼峰。配置声明的处理器
+两种形态都编译成位于根目录 `hooks/` 下的包装层，由宿主以
+`node "${CLAUDE_PLUGIN_ROOT}/hooks/<wrapper>.mjs"`（或宿主自己的根令牌）调用。只有一个选中宿主
+接收的钩子编译为 `hooks/<name>.mjs`；被多个选中宿主共享的钩子则为每个宿主各编译一份
+`hooks/<name>.<host>.mjs`，因为每个包装层都烘焙了自己宿主的事件拼写——Claude Code 与 Codex 为
+`PreToolUse` / `PostToolUse`，Cursor 为小驼峰的 `preToolUse` / `postToolUse`——而每个宿主的文档
+都指向它自己的包装层。Claude Code 的文档是 `hooks/hooks.json`，它按约定加载该文件且从不扫描
+`hooks/` 下的其他文档，因此 Claude 清单不写 `hooks` 指针：Claude Code 会把指向约定文件的指针
+报告为重复的 hooks 文件（`manifest.hooks` 只用于额外文档）。Codex 与 Cursor 的清单带有显式的
+`hooks` 指针，因此它们的文档紧挨着各自的清单，分别是 `.codex-plugin/hooks.json` 与
+`.cursor-plugin/hooks.json`。每个包装层都拿信封里的 `hook_event_name` 与为自己宿主烘焙的拼写
+比较，所以 Claude 会话里出现 `native hook_event_name must equal postToolUse`，说明 Claude 的
+文档调用的是为 Cursor 构建的包装层，而不是 Claude 发送了小驼峰。配置声明的处理器
 在该包装层进程内运行。`runtime: 'shared'` 的事件路由则转发给生成的 MCP 服务器进程内的常驻运行时，
 因此钩子与工具共享状态：
 
@@ -316,6 +319,11 @@ Claude Code 会话共享同一个 `--plugin-dir`，Cursor 也会从同一个缓�
 服务端会把失败报告到自己的 stderr——每种不同的失败一行，最多每 30 秒重复一次——并继续待命。因其他
 任何原因失败的启动仍然失败即关闭，所有者无法删除的过期 socket 也一样。
 
+在同一个复合根目录里，每个所选宿主都通过自己 MCP 文档所列出的第一个生成式 MCP 服务器到达该运行时——
+当所有所选宿主都列出同一个服务器时是一个进程，否则每个宿主一个。运行时的 socket 只由制品本身标识（它的
+epoch 与根目录，而非 `targets` 选择），发起调用的宿主随每个请求一起传递，因此无论哪个进程持有该 socket，
+都会应答所有所选宿主的包装层。
+
 `runtime: 'standalone'` 的路由把它的模块打进包装层自身：同样的规范身份、同样的投影、没有共享的进程状态。
 `AB4817` 会拒绝这样的路由：它需要共享运行时，但在某个 target 上没有生成的 MCP 入口承载它，也没有独立
 回退。
@@ -349,3 +357,5 @@ targets、tools、timeout 与 args，因此声明的任何改动都会得到新�
 
 - [MCP 服务器与 MCP App](./mcp.mdx) —— 另一种可执行表面。
 - [脚本与资源](./scripts-assets.mdx) —— 钩子或 Skill 可以调用的代码。
+- [编译器架构](../concepts/architecture.mdx) —— 事件路由、配置钩子与宿主包装层
+  在编译管线中的位置。

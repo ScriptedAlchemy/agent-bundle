@@ -39,9 +39,9 @@ const smokeCase = (): EvalCase => normalizeEvalCase({
 const seedProject = async (): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), 'agent bundle codex home '));
   await mkdir(join(root, 'evals', 'fixtures'), { recursive: true });
-  await mkdir(join(root, 'artifact'), { recursive: true });
   await cp(new URL('workspace/', fixtureRoot).pathname, join(root, 'evals', 'fixtures', 'workspace'), { recursive: true });
-  await cp(new URL('candidate/', fixtureRoot).pathname, join(root, 'artifact', 'codex'), { recursive: true });
+  // The composite artifact root is the Codex candidate itself.
+  await cp(new URL('candidate/', fixtureRoot).pathname, join(root, 'artifact'), { recursive: true });
   return root;
 };
 

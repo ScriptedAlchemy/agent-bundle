@@ -45,8 +45,9 @@ them reaches through relative imports — that value-imports a compiler-carrying
 (`agent-bundle`, `agent-bundle/api`, `agent-bundle/config`, `agent-bundle/eval`,
 `agent-bundle/rstest`, `agent-bundle/test`, `agent-bundle/test/browser`) is reported as `AB4837`
 from `inspect`, `validate`, `build`, and `dev`, naming the file and the specifier, instead of
-failing inside the bundler; `import type` and imports used only as types are not reported, and a
-routed command that needs the framework serves an App through
+failing inside the bundler. The browser-safe `agent-bundle/app` carries no compiler and is not on
+that list, so a value import of it is never `AB4837`; `import type` and imports used only as types
+are not reported either, and a routed command that needs the framework serves an App through
 [`spawnServeApp`](../authoring/mcp.mdx#serving-an-app-standalone) instead.
 
 Every diagnostic is one structured record: a stable `AB` code, a severity, a message, and usually
@@ -58,20 +59,21 @@ diagnostic involved — see the [CLI exit codes](../../reference/cli.mdx#exit-co
 
 ## Claude Code strict validation
 
-When Claude Code is on `PATH`, artifact validation runs the installed `claude plugin validate`
-for emitted `claude` and unified `plugin` targets. `agent-bundle build` runs the same checks over
-the artifact it just wrote (`--no-host-validation` skips them; `--strict` promotes host warnings to
-build errors), and `agent-bundle doctor --host claude --from <bundle-dir>` runs them over the
-bundle and over every installed copy Claude lists. Claude Code decides what it checks from the
-manifest it is pointed at, and a bundle directory that holds both `.claude-plugin/plugin.json` and
-`.claude-plugin/marketplace.json` is treated as a marketplace, whose validation never opens the
-plugin's hook, skill, agent, or command files. Agent Bundle therefore runs two commands:
+Host validation runs only for the selected projections, over the composite root. When Claude Code
+is on `PATH` and `claude` is among the selected projections, artifact validation runs the installed
+`claude plugin validate` over the root. `agent-bundle build` runs the same checks over the root it
+just wrote (`--no-host-validation` skips them; `--strict` promotes host warnings to build errors),
+and `agent-bundle doctor --host claude --from <root>` runs them over the root and over every
+installed copy Claude lists. Claude Code decides what it checks from the manifest it is pointed
+at, and a root that holds both `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`
+is treated as a marketplace, whose validation never opens the plugin's hook, skill, agent, or
+command files. Agent Bundle therefore runs two commands:
 
 ```sh
 # plugin.json, hooks/hooks.json, skills/, agents/, commands/
-claude plugin validate <bundle-dir>/.claude-plugin/plugin.json --strict
+claude plugin validate <root>/.claude-plugin/plugin.json --strict
 # marketplace schema, plugin names, source paths
-claude plugin validate <bundle-dir>/.claude-plugin/marketplace.json --strict
+claude plugin validate <root>/.claude-plugin/marketplace.json --strict
 ```
 
 - Host **errors** become Agent Bundle errors (`AB6021`).
@@ -84,14 +86,14 @@ claude plugin validate <bundle-dir>/.claude-plugin/marketplace.json --strict
   run already reported are dropped.
 - A missing binary is reported as an explicit informational **skip** (`AB6019`), never as
   fabricated success; a probe or run that cannot complete is `AB6022`. A `build` without `claude`
-  on `PATH` spawns once and reports the skip once, however many `claude`/`plugin` targets it built.
+  on `PATH` spawns once and reports the skip once.
 
 ### The load check
 
 Validation is not a load verdict. Claude Code 2.1.250 through 2.1.260 accept, under `--strict`,
 manifests and component files that a session then refuses to load — an invalid
 `monitors/monitors.json`, or a `hooks` field naming the auto-loaded `hooks/hooks.json`. The only
-place the refusal shows is the plugin's row in `claude --plugin-dir <bundle-dir> plugin list --json`
+place the refusal shows is the plugin's row in `claude --plugin-dir <root> plugin list --json`
 ("Plugins reference" → "plugin list"): a refused row carries an `errors` array with the host's
 message, a healthy row has no `errors` key. So `build` and `validate --artifact` follow the two
 validation runs with exactly that listing and read the bundle's `<name>@inline` row:
@@ -115,10 +117,10 @@ npx agent-bundle validate --artifact artifact --strict
 Use `--no-host-validation` when a deterministic schema-only check is required — a machine without
 the hosts installed must still be able to run the same gate and get the same schema verdict.
 
-During development, load the built target for one session without installing it, then iterate:
+During development, load the built root for one session without installing it, then iterate:
 
 ```sh
-claude --plugin-dir artifact/claude
+claude --plugin-dir artifact
 ```
 
 Run `/reload-plugins` inside that session after `agent-bundle build` rewrites `hooks/`,
@@ -126,11 +128,11 @@ Run `/reload-plugins` inside that session after `agent-bundle build` rewrites `h
 visible to a bare `claude plugin list`; put the flag before the subcommand to inspect it:
 
 ```sh
-claude --plugin-dir artifact/claude plugin list --json
+claude --plugin-dir artifact plugin list --json
 ```
 
 That listing is the load verdict described above, and `build` and `validate --artifact` run it for
-you. `agent-bundle doctor --host claude --from <bundle-dir>` reads the same `errors` array on both
+you. `agent-bundle doctor --host claude --from <root>` reads the same `errors` array on both
 the `--plugin-dir` registration proof and the installed copy and reports it as `AB7325`
 (`load-failed`), and `agent-bundle install claude` fails with `AB7006` when the installed copy
 carries it. The pinned Claude `plugin` schema also rejects `hooks: "./hooks/hooks.json"` up front
@@ -151,7 +153,7 @@ schema generators as a **drift signal**, never as a substitute plugin contract.
 | Code | Severity | Meaning |
 | --- | --- | --- |
 | `AB6026` | info | Every Cursor report states that Cursor publishes no plugin-validate verb, and names the vendored schema pin used locally. |
-| `AB6027` | error | A required generated Cursor document is missing, or a present plugin, marketplace, MCP, or hooks document is unreadable, invalid JSON, or rejected by its pinned schema. The hooks document is the one `.cursor-plugin/plugin.json` `hooks` names (`hooks/hooks.json` for the `cursor` target, `hooks/hooks-cursor.json` for the unified `plugin` target, or an inline object), falling back to `hooks/hooks.json` only when the field is absent; a named file that is missing or leaves the plugin root is an error. |
+| `AB6027` | error | A required generated Cursor document is missing, or a present plugin, marketplace, MCP, or hooks document is unreadable, invalid JSON, or rejected by its pinned schema. The hooks document is the one `.cursor-plugin/plugin.json` `hooks` names (`.cursor-plugin/hooks.json`, beside the manifest, or an inline object), falling back to `hooks/hooks.json` only when the field is absent; a named file that is missing or leaves the plugin root is an error. |
 | `AB6028` | error | Generated bytes violate pinned Cursor loader evidence: manifest-candidate precedence selects a fallback manifest, a symlink resolves outside the bundle, or `CURSOR_PLUGIN_ROOT` appears outside loader-substituted fields. |
 | `AB6029` | info / warning | The Cursor Agent version probe is unavailable (`ENOENT`, info) or could not complete (warning). Local pinned-schema validation still runs. |
 | `AB6030` | info | The Codex CLI is unavailable, or the installed release publishes no plugin validation command. |

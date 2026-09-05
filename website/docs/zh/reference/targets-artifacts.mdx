@@ -1,33 +1,129 @@
 ---
-description: '各 agent-bundle target 输出什么，以及产物清单契约：文件种类、摘要、源输入、target schema 固定值与已记录的校验状态。'
+description: 'agent-bundle build 输出的组合插件根目录：各宿主投影把清单、钩子与 MCP 文档放在何处、钩子 wrapper 的命名规则、AB4103/AB4105/AB4106 组合规则，以及产物清单契约。'
 ---
 
 # Target 与产物
 
-target 表格——各 target 输出哪种布局，以及 portable 标准为何省略规则、命令与钩子——在
-[配置模型](../guide/authoring/index.mdx)中。目录布局在
-[项目结构](../guide/start/project-structure.mdx)中。本页讲的是这些布局必须满足的产物契约。
+target 表格——各宿主投影携带什么，以及 portable 标准为何省略规则、命令与钩子——在
+[配置模型](../guide/authoring/index.mdx)中。源码树布局在[项目结构](../guide/start/project-structure.mdx)中。
+本页讲的是输出契约：`build` 输出的那一个目录，以及其中的字节必须满足的产物清单。
 
-## 每个 target 目录都可分发
+## 组合插件根目录
 
-已构建的 target 目录就是分发单位：构建之后没有打包步骤。每个目录都携带宿主要读取的组件、一份使用捆绑包
-真实插件名与市场名写成的生成式 `INSTALL.md`，以及该 target 所需的安装表面。
+`agent-bundle build` 在产物输出位置写出**一个目录**——默认是 `artifact/`；`output.distPath` 或 `--output`
+可以移动它。`targets` 选择铺进该根目录的**宿主投影**：`claude`、`codex`、`cursor` 与 `portable`，可任意
+组合。每个所选宿主都把同一个目录当作自己的插件根目录来读取；没有需要把宿主指向的逐宿主子目录。
 
-| Target | 市场清单 | 安装表面 |
+- 省略 `targets`——配置与命令行都省略——时，构建只输出 `portable` 投影。
+- 顺序无关。`['codex', 'claude']` 与 `['claude', 'codex']` 产出逐字节相同的输出，规范化模型、产物清单与
+  `inspect` 都按名称排序列出所选宿主。
+- `plugin` 不是 target。`targets: ['plugin']` 或 `--target plugin` 是未知 target（`AB4100`）：组合根目录
+  本来就是每次构建的输出。
+
+以全部四个投影构建时，host-test 示例的根目录如下（组件目录只在项目编写了对应组件时才会出现）：
+
+```text
+artifact/
+├── .agents/plugins/marketplace.json      # Codex 市场
+├── .claude-plugin/plugin.json            # Claude Code 清单
+├── .claude-plugin/marketplace.json
+├── .codex-plugin/plugin.json             # Codex 清单
+├── .codex-plugin/hooks.json              # Codex 钩子文档
+├── .codex-plugin/mcp.json                # Codex MCP 文档
+├── .cursor-plugin/plugin.json            # Cursor 清单
+├── .cursor-plugin/marketplace.json
+├── .cursor-plugin/hooks.json             # Cursor 钩子文档
+├── .cursor-plugin/mcp.json               # Cursor MCP 文档
+├── .mcp.json                             # Claude Code MCP 文档
+├── plugin.json                           # portable（Agent Plugins）清单
+├── mcp.json                              # portable MCP 文档
+├── hooks/hooks.json                      # Claude Code 钩子文档
+├── hooks/<hook>.mjs                      # wrapper：钩子只被一个所选宿主选中
+├── hooks/<hook>.<host>.mjs               # wrapper：钩子被多个所选宿主共享
+├── hooks/hooks-flight.mjs
+├── mcp/mcp-<server>-<hash>.mjs           # 编译后的 MCP 入口（+ -flight.mjs）
+├── bin/<plugin>.mjs, bin/<plugin>-flight.mjs   # 路由式 CLI（存在 src/cli 时）
+├── scripts/, skills/, commands/, rules/, assets/, mcp-apps/   # 只输出一次
+├── INSTALL.md                            # 选中了任一内置宿主时
+├── install.mjs                           # 选中了 cursor 或 portable 时
+├── agent-bundle.manifest.json            # 所选投影 + 来源信息
+└── agent-bundle.hooks.json               # 覆盖所选宿主的钩子索引
+```
+
+宿主清单位于根目录下各自的点目录中。`skills/`、`hooks/`、`mcp/`、`scripts/`、`bin/` 与 `assets/` 是共享的，
+只输出**一次**——没有逐宿主副本。根目录下不会出现其他任何东西：没有生成的 `AGENTS.md`，也没有
+`hooks/hooks-cursor.json`。
+
+### 各宿主从哪里读取文档
+
+| 宿主 | 清单 | 钩子文档 | MCP 文档 | 市场 |
+| --- | --- | --- | --- | --- |
+| Claude Code | `.claude-plugin/plugin.json` | `hooks/hooks.json` | `.mcp.json` | `.claude-plugin/marketplace.json` |
+| Codex | `.codex-plugin/plugin.json` | `.codex-plugin/hooks.json` | `.codex-plugin/mcp.json` | `.agents/plugins/marketplace.json` |
+| Cursor | `.cursor-plugin/plugin.json` | `.cursor-plugin/hooks.json` | `.cursor-plugin/mcp.json` | `marketplace: true` 时为 `.cursor-plugin/marketplace.json` |
+| portable | `plugin.json` | —— | `mcp.json` | —— |
+
+无论选择了哪些宿主，这些路径都是固定的，因此单宿主根目录与四宿主根目录共用同一种布局。Claude Code 与
+portable 的 Agent Plugins 格式从约定的插件根位置加载文档，无法重定向；Codex 与 Cursor 的清单携带显式的
+`hooks` 与 MCP 指针，因此它们的文档紧挨着各自的清单。这两个宿主在指针缺失时还会回退到对约定路径的目录
+发现，因此当另一个所选宿主占用了约定路径时，没有自己文档的 Codex 或 Cursor 投影仍会指向一份空文档——
+Cursor 绝不会加载 Claude Code 的 `hooks/hooks.json`。
+
+### 钩子 wrapper
+
+钩子 wrapper 会把它所面向的宿主（该宿主的编解码、`target`、宿主契约修订）烤进自身，因此一个 wrapper
+无法同时服务两个宿主：
+
+- 只触达一个所选宿主的钩子保留普通名字 `hooks/<name>.mjs`。
+- 触达多个所选宿主的钩子按宿主各输出一次，即 `hooks/<name>.<host>.mjs`，各宿主的钩子文档指向自己的
+  那个 wrapper。
+
+钩子触达哪些宿主，由它的 `targets`（默认是全部 target）与所选宿主取交集决定，因此同一个源钩子在仅
+`claude` 的根目录中是 `hooks/audit.mjs`，在 `claude` + `cursor` 的根目录中则是 `hooks/audit.claude.mjs`
+加 `hooks/audit.cursor.mjs`。每个所选宿主的原生钩子都会保留。`agent-bundle.hooks.json` 为所选宿主的
+wrapper 建立索引。
+
+### 编译产出面
+
+MCP 入口、脚本、路由式 CLI bin 与 MCP App 只编译**一次**，归属于**组合身份**——所选宿主名按名称排序、以
+`+` 连接，例如 `claude+codex`——而不是归属于任何单个宿主。`agent-bundle inspect --bundler` 显示的是同一
+件事：它的 `distPath.root` 就是产物输出 `<output>`，其下没有宿主段。
+
+### 一个根目录，一套字节
+
+按路径合并投影，只有在各宿主对字节达成一致时才行得通。三条规则守住根目录的诚实，它们都是错误，且
+`validate` 与 `inspect` 会在 `build` 拒绝的同一位置报告它们：
+
+| 代码 | 规则 |
+| --- | --- |
+| `AB4103` | 两个所选投影为同一路径规划了不同的字节。投影按宿主名顺序比较、路径按路径顺序比较，因此无论 `targets` 怎么写，同一选择报告的都是同一处冲突。常见原因是 frontmatter 带有宿主扩展（`targets: { claude: … }`）的 Skill：它为 Claude Code 降级出的 `skills/<name>/SKILL.md` 字节与其他宿主不同。请让该组件对每个所选宿主都一致，或把冲突的宿主构建进单独的产物。 |
+| `AB4105` | 一个只面向部分所选宿主的组件——frontmatter 带 `targets` 的命令或规则——位于另一个所选宿主会扫描的约定目录中（Claude Code 与 Cursor 的 `commands/`、Cursor 的 `rules/`）。在同一个根目录里无法把该文件对那个宿主隐藏起来，因此构建宁可拒绝也不泄漏它。请把 `targets` 扩展到每个会发现该目录的所选宿主，或把这些宿主分开构建。Skill 从不按宿主限定：每个 skill 都会交付给所有所选宿主，会改变其字节的按宿主 frontmatter 扩展属于 `AB4103` 冲突。 |
+| `AB4106` | 所选目标把注册在高级 `TargetRegistry` 上的适配器——即任何其适配器不是随框架发布的 `claude`、`codex`、`cursor`、`portable` 适配器的目标，按适配器身份而非名称判断，因此以这些名字注册的自定义适配器同样算作高级适配器——与另一个目标混在一起。只有内建宿主就各自不共享的文档放在何处、各自扫描哪些目录以及同一套安装面达成了一致，因此第三方适配器要单独构建：`targets: ['<name>']` 输出到自己的 `--output`。只选一个目标时永不触发。 |
+
+三者与 `AB4100` 一起列在[诊断参考](./diagnostics.md)中。
+
+## 根目录即可分发
+
+组合根目录就是分发单位：构建之后没有打包步骤。它携带所选宿主要读取的组件、一份生成的 `INSTALL.md`
+——每个所选宿主一节，以捆绑包真实的插件名与市场名写成——以及这些宿主所需的安装表面，为整个选择只输出
+一次：
+
+| 所选宿主 | 市场清单 | 安装表面 |
 | --- | --- | --- |
-| `claude` | 本地市场清单。 | `claude plugin marketplace add` + `claude plugin install`。 |
-| `codex` | 本地市场清单。 | `codex plugin marketplace add` + `codex plugin add`。 |
-| `cursor` | `marketplace: true` 时生成本地市场清单（`.cursor-plugin/marketplace.json`）。 | `install.mjs`。 |
+| `claude` | `.claude-plugin/marketplace.json`。 | `claude plugin marketplace add` + `claude plugin install`。 |
+| `codex` | `.agents/plugins/marketplace.json`。 | `codex plugin marketplace add` + `codex plugin add`。 |
+| `cursor` | `marketplace: true` 时为 `.cursor-plugin/marketplace.json`。 | `install.mjs`。 |
 | `portable` | —— | `install.mjs`。 |
-| `plugin` | Claude、Codex 与 Cursor 三份清单，外加一份生成的 `AGENTS.md`。 | `install.mjs` 与各宿主 CLI。 |
 
-当某个 target 缺少必需的安装表面文件时，产物校验会报错，因此捆绑包不可能在缺少其 `INSTALL.md` 所承诺的
-安装器的情况下发布。npm pack 清单会检查同样的路径（`AB7010`）。
+只要选中了内置宿主就会写出 `INSTALL.md`；其中包含 `cursor` 或 `portable` 时还会写出 `install.mjs`。
+当必需的安装表面文件缺失时，产物校验会报错，因此根目录不可能在缺少其 `INSTALL.md` 所承诺的安装器的
+情况下发布。npm pack 清单会检查同样的路径（`AB7010`）。
 
 ## agent-bundle.manifest.json
 
-每份产物输出一份清单，它是之后每一项完整性检查的输入 —— `validate --artifact`、`prepack`、
-`doctor --from`，以及 packed 与 installed-host 证明级别。
+每个根目录输出一份清单，它是之后完整性检查的输入 —— `validate --artifact`、`prepack`，
+以及 packed 与 installed-host 证明级别。`doctor --from` 与 `install --from` 通过 `--from`
+下的宿主 `plugin.json` 识别根目录；它们不解析这个文件。
 
 | 字段 | 内容 |
 | --- | --- |
@@ -35,9 +131,9 @@ target 表格——各 target 输出哪种布局，以及 portable 标准为何�
 | `project` | `configPath`、`configDigest`、`modelDigest`、`revision`、经过校验的 `packageName` 与 `packageVersion`（未打包的开发项目中不存在），以及 `sourceInputs`。 |
 | `files` | 每个输出文件：`path`、`bytes`、`sha256`、`kind`、可选的 `mode`，以及它所派生自的 `sourceInputs`。 |
 | `runtime` | `{ node }` —— 所选的生成式可执行文件下限。 |
-| `targets` | 每个 target 的：`name`、`adapterRevision`、`observedVersion`，以及它据以校验的固定 `schemas`。 |
+| `targets` | 每个所选投影一行，按名称排序：`name`、`adapterRevision`、`observedVersion`，以及它据以校验的固定 `schemas`。 |
 | `agentSkills` | Agent Skills 规范固定值：`specification`、`sourceRevision`、`schemaSha256`。 |
-| `validation` | `source`、`artifact` 与各 target 的已记录状态。 |
+| `validation` | `source`、`artifact` 与各所选投影的已记录状态。 |
 
 `kind` 取值为 `bundle`、`copy`、`generated` 或 `prebuilt` —— 分别是打包入口、按字节复制、编译器生成的
 文档，或预构建 payload 文件。`sourceInputs` 记录每个输入路径及其自身的 SHA-256，并在相关时记录它是否
@@ -67,5 +163,8 @@ target 行还记录 `adapterRevision`（单调递增，仓库自有）与 `obser
 
 ## 下一步
 
+- [编译器架构](../guide/concepts/architecture.mdx) —— 编译器的三层，以及哪些
+  生产读者消费清单的每个字段。
 - [产物校验](../guide/distribution/validation.mdx) —— 读取这份清单的那些检查。
+- [宿主安装](../guide/distribution/installation.mdx) —— 把根目录安装进各个宿主。
 - [运行时环境](./runtime-environment.mdx) —— 输出的可执行文件在运行时假定了什么。

@@ -94,7 +94,7 @@ it('serves compiled routes and durable state across packed process restarts', as
       env: installedEnvironment(),
     });
 
-    const pluginRoot = join(artifact, 'claude');
+    const pluginRoot = artifact;
     const manifest = JSON.parse(await readFile(join(pluginRoot, '.mcp.json'), 'utf8')) as McpJson;
     const serverConfig = manifest.mcpServers['harness']!;
     // Claude Code expands ${CLAUDE_PLUGIN_ROOT} to the installed plugin root
@@ -129,7 +129,7 @@ it('serves compiled routes and durable state across packed process restarts', as
       await readFile(join(artifact, 'agent-bundle.manifest.json'), 'utf8'),
     ) as { readonly project: { readonly revision: string } };
     const eventRuntimeEndpointId =
-      `${artifactManifest.project.revision}:claude:${dirname(dirname(resolve(entry)))}`;
+      `${artifactManifest.project.revision}:${dirname(dirname(resolve(entry)))}`;
     const deletedSource = await removeProjectSource({ projectRoot: project });
 
     // The artifact-hosted routed CLI and the `main`-envelope script probe

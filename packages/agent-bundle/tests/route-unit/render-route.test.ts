@@ -506,6 +506,26 @@ describe('renderRoute through the real renderer', () => {
     expect(rendered.provenance.source).toBe('module');
     expect(rendered.provenance.manifestDigest).toBeUndefined();
   });
+
+  it('derives the request surface of a module rendered directly from its route id, canonical or not', async () => {
+    // What the route reads back as `invocation.surface`: the protocol name the
+    // harness records for the request, as a generated server would.
+    const Surface = (): unknown => {
+      const { invocation } = useAgent();
+      return createElement(Agent.Result, {
+        value: { operationId: invocation.operationId ?? null, surface: invocation.surface ?? null },
+      }, createElement(Agent.Text, null, 'surface observed'));
+    };
+
+    // A canonical MCP id resolves through the shared derivation: its final segment.
+    const canonical = await renderRoute({ default: Surface as never }, { routeId: 'tool:harness/echo' });
+    expectDocument(canonical).toHaveValue({ operationId: 'tool:harness/echo', surface: 'echo' });
+
+    // Any other id keeps the module-direct fallback — its final slash segment —
+    // rather than becoming the whole id.
+    const custom = await renderRoute({ default: Surface as never }, { routeId: 'custom/group/name' });
+    expectDocument(custom).toHaveValue({ operationId: 'custom/group/name', surface: 'name' });
+  });
 });
 
 describe('layout composition at the route-unit level', () => {

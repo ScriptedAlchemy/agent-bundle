@@ -40,9 +40,10 @@ audiobook-curator --help
 Choose any writable directory already on `PATH` in place of `~/.local/bin`.
 This is a direct workspace link; it does not pack or install a tarball.
 
-One `agent-bundle build` produces everything: complete Claude and Codex outputs
-beneath `artifact/` (each host's plugin metadata, Skill, bundled CLI script, and
-lifecycle-wrapped MCP server) plus the npm package beneath `dist/`
+One `agent-bundle build` produces everything: one plugin root at `artifact/`
+that both Claude Code and Codex install (each host's manifest directory,
+`.claude-plugin/` and `.codex-plugin/`, over the shared Skill, bundled CLI
+script, and lifecycle-wrapped MCP server) plus the npm package beneath `dist/`
 (`dist/bin/audiobook-curator.js` for `package.json` `bin`, and `dist/index.js`
 plus declarations for `exports`). The example uses only public `agent-bundle`
 and `@agent-bundle/runtime` exports with `workspace:*` dependencies.

@@ -12,7 +12,6 @@
     "validate": "agent-bundle validate"
   },
   "devDependencies": {
-    "@modelcontextprotocol/ext-apps": "1.7.5",
     "@modelcontextprotocol/server": "2.0.0",
     "@rstest/browser": "0.11.12",
     "@rstest/core": "0.11.12",

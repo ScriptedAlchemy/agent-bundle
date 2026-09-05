@@ -6,7 +6,7 @@ import { routedCliBinLayout, type TargetArtifactEntry } from '../adapters/types.
 import type { Diagnostic } from '../core/diagnostics.ts';
 import type { NormalizedBinEntry, NormalizedPlugin } from '../core/types.ts';
 import { resolveArtifactDestination } from './emit.ts';
-import { runtimeIgnoredRoot, type CompiledEntry } from './entries.ts';
+import type { CompiledEntry } from './entries.ts';
 import { launchEnvRuntimeSpecifier, operatorEnvLayerVirtualModule } from './launch-env-shell.ts';
 import {
   cliEntryRuntimePath,
@@ -16,6 +16,7 @@ import {
   launchEnvRuntimePath,
 } from './entry-shell.ts';
 import type { RslibEntry, RslibSurfacePlan } from './rslib.ts';
+import { runtimeIgnoredRoot } from './runtime-path.ts';
 
 /**
  * The artifact-hosted routed CLI (#387). A generated-mode `src/cli/**`

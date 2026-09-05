@@ -32,6 +32,21 @@ const esmNodeGlobalsPlugin: RsbuildPlugin = {
 };
 
 /**
+ * Rslib's per-source declaration mode preserves `src/app/index.ts` as
+ * `dist/app/index.d.ts`. The public browser entry is intentionally the flat
+ * `dist/app.js`, so emit the matching declaration entry as a redirect while
+ * retaining the shared per-module declarations and strict import graph.
+ */
+const appDeclarationEntrypointPlugin: RsbuildPlugin = {
+  name: 'agent-bundle:app-declaration-entrypoint',
+  setup(api) {
+    api.processAssets({ stage: 'additions' }, ({ compilation, sources }) => {
+      compilation.emitAsset('app.d.ts', new sources.RawSource("export * from './app/index.js';\n"));
+    });
+  },
+};
+
+/**
  * Rslib enables Rspack's persistent build cache by default and keys its
  * directory by this config's root (`node_modules/.cache/rspack`), never by
  * `--dist-path`. Two builds of this config running at once — the packed pool's
@@ -88,6 +103,7 @@ export default defineConfig({
   plugins: [
     // Suggestions stay informational; errors and warnings block publishing.
     pluginPublint({ throwOn: 'warning' }),
+    appDeclarationEntrypointPlugin,
     // The bundled TypeScript 5 parser's eager `getNodeSystem()` reads the
     // CommonJS `__filename`/`__dirname` globals, which the ESM output does
     // not define and which Rspack's `node-module` rewrite (disabled below)
@@ -126,6 +142,7 @@ export default defineConfig({
     },
     entry: {
       api: './src/api.ts',
+      app: './src/app/index.ts',
       cli: './src/cli.ts',
       'cli-entry': './src/cli-entry.ts',
       config: './src/config/index.ts',

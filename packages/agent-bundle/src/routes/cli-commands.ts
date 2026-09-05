@@ -20,6 +20,7 @@ import {
   type CliProjectionModule,
 } from './cli-projection.ts';
 import { scanRouteModuleExports } from './contract.ts';
+import { mcpRouteProtocolName } from './protocol-name.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { deepFreeze } from '../core/freeze.ts';
 import { isRecord } from '../core/strict-json.ts';
@@ -308,7 +309,7 @@ export const compileMcpCliCommands = (
     .flatMap((server) => server.routes
       .filter((route) => route.kind === 'tool')
       .map((route) => {
-        const tool = route.id.slice(route.id.lastIndexOf('/') + 1);
+        const tool = mcpRouteProtocolName(route.id);
         return { identity: `${server.name}:${tool}`, route, server: server.name, tool };
       }))
     .sort((left, right) => left.identity.localeCompare(right.identity));

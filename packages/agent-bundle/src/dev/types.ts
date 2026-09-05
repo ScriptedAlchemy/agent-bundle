@@ -61,6 +61,11 @@ export interface ArtifactInspectionDirectoryNode {
 /** One immutable tree node within a declared artifact target. */
 export type ArtifactInspectionTreeNode = ArtifactInspectionDirectoryNode | ArtifactInspectionFileNode;
 
+/**
+ * One selected host projection and the tree it reads. Every projection reads
+ * the whole composite root (#555), so each target's tree is that root, named
+ * after the host; S3 collapses the per-target view to the single root.
+ */
 export interface ArtifactInspectionTarget {
   readonly name: string;
   readonly tree: ArtifactInspectionDirectoryNode;

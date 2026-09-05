@@ -101,7 +101,8 @@ const producerFrom = async (output: string): Promise<{ readonly name: string; re
 
 it('keeps package output filenames stable', async () => {
   const config = (await import('../rslib.config.ts')).default;
-  expect(config).toMatchObject({ output: { filenameHash: false } });
+  expect(config).toMatchObject({ output: { filenameHash: false, target: 'node' } });
+  expect(config.output).not.toHaveProperty('autoExternal');
   expect(config.output).not.toHaveProperty('externals');
 });
 
@@ -191,6 +192,7 @@ it('exposes the dev.runtime.provider protocol from the advanced API (#485)', () 
 
 it('loads every public subpath and reports the package version', async () => {
   await expect(import('../src/api.ts')).resolves.toBeDefined();
+  await expect(import('../src/app/index.ts')).resolves.toBeDefined();
   await expect(import('../src/config/index.ts')).resolves.toBeDefined();
   await expect(import('../src/eval/index.ts')).resolves.toBeDefined();
   await expect(runCli(['--version'])).resolves.toBe(0);
@@ -216,6 +218,7 @@ it('publishes directly executable built entrypoints with declarations', async ()
 
   const rootEntrypoint = await import('agent-bundle');
   await expect(import('agent-bundle/api')).resolves.toBeDefined();
+  await expect(import('agent-bundle/app')).resolves.toBeDefined();
   const configEntrypoint = await import('agent-bundle/config');
   await expect(import('agent-bundle/eval')).resolves.toBeDefined();
   expect(configEntrypoint.defineConfig).toBe(rootEntrypoint.defineConfig);

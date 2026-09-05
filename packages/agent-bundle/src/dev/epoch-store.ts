@@ -124,7 +124,6 @@ interface StagingRecord {
   readonly root: string;
   readonly rootDevice: number;
   readonly rootInode: number;
-  readonly targets: readonly string[];
 }
 
 interface AtomicWriteProgress {
@@ -380,7 +379,7 @@ export class EpochStore {
           assertSafeEpochId(options.epoch.id);
           return assertEpoch(options.epoch);
         });
-        const targets = yield* liftTry(() => this.#assertTargetSet(epoch, options.targets));
+        yield* liftTry(() => this.#assertTargetSet(epoch, options.targets));
         yield* liftTry(() => this.#manifestRelativePath(epoch));
         yield* liftPromise(() => mkdir(this.#epochsPath, { recursive: true }));
         const root = yield* liftPromise(() => mkdtemp(join(this.#epochsPath, stagingPrefix)));
@@ -394,7 +393,6 @@ export class EpochStore {
           root,
           rootDevice: metadata.dev,
           rootInode: metadata.ino,
-          targets,
         });
         return new EpochStagingHandle(
           root,
@@ -783,34 +781,6 @@ export class EpochStore {
       throw new EpochStoreError('EPOCH_STAGING_INVALID', 'The staging root escapes the epoch store.');
     }
 
-    for (const target of record.targets) {
-      const targetPath = join(record.root, target);
-      let targetMetadata;
-      try {
-        targetMetadata = await lstat(targetPath);
-      } catch (error) {
-        if (isErrno(error, 'ENOENT')) {
-          throw new EpochStoreError(
-            'EPOCH_STAGING_INVALID',
-            `Staged epoch is missing selected target ${JSON.stringify(target)}.`,
-          );
-        }
-        throw error;
-      }
-      if (!targetMetadata.isDirectory() || targetMetadata.isSymbolicLink()) {
-        throw new EpochStoreError(
-          'EPOCH_STAGING_INVALID',
-          `Staged epoch target ${JSON.stringify(target)} must be a contained non-symlink directory.`,
-        );
-      }
-      if (!isInside(stagingRoot, await realpath(targetPath))) {
-        throw new EpochStoreError(
-          'EPOCH_STAGING_INVALID',
-          `Staged epoch target ${JSON.stringify(target)} escapes the staging root.`,
-        );
-      }
-    }
-
     const manifestPath = join(record.root, this.#manifestRelativePath(record.epoch));
     let manifestMetadata;
     try {
@@ -855,34 +825,6 @@ export class EpochStore {
     ]);
     if (!isInside(epochsRoot, activeEpochRoot)) {
       throw new EpochStoreError('EPOCH_METADATA_INVALID', 'Active epoch directory escapes the epoch store.');
-    }
-
-    for (const target of Object.keys(epoch.targetDigests)) {
-      const targetPath = join(epochRoot, target);
-      let targetMetadata;
-      try {
-        targetMetadata = await lstat(targetPath);
-      } catch (error) {
-        if (isErrno(error, 'ENOENT')) {
-          throw new EpochStoreError(
-            'EPOCH_METADATA_INVALID',
-            `Active epoch is missing target ${JSON.stringify(target)}.`,
-          );
-        }
-        throw error;
-      }
-      if (!targetMetadata.isDirectory() || targetMetadata.isSymbolicLink()) {
-        throw new EpochStoreError(
-          'EPOCH_METADATA_INVALID',
-          `Active epoch target ${JSON.stringify(target)} must be a non-symlink directory.`,
-        );
-      }
-      if (!isInside(activeEpochRoot, await realpath(targetPath))) {
-        throw new EpochStoreError(
-          'EPOCH_METADATA_INVALID',
-          `Active epoch target ${JSON.stringify(target)} escapes the epoch directory.`,
-        );
-      }
     }
 
     let manifestRelativePath: string;

@@ -49,6 +49,22 @@ Skill Markdown 中的原始 HTML、JSX/MDX 与 Mermaid 在 Workbench 渲染器�
 检查；App 文档运行在框架沙箱内的第二个 loopback origin 上，并且每一个 App 动作仍与 Workbench 一样经过同一
 个同意授权（`--allow` 代操作者预先批准指定能力）。它是本地预览宿主，不是部署目标。
 
+App 文档内的 `agent-bundle/app` 客户端也不会信任任意 `postMessage` 发送者。sandbox 是 opaque、
+no-referrer 的 `srcdoc`，所以文档在第一帧前不知道宿主 origin：每次 `connect()` 握手尝试只向 `'*'`
+发送一条框架拥有的 `ui/initialize` request，仅接受 configured parent window 以该 request id 返回的有效
+initialize result，并固定响应 origin——opaque 的 `null` origin 会被拒绝。此后发送与接收都只允许同时
+匹配该精确 `source` 与 `origin`。能给出宿主 origin 的调用方传入精确的 `http:` / `https:`
+`targetOrigin`；`'*'` 会被拒绝，且不会发送任何 wildcard frame。`rebind()` 与 `dispose()` 都撤销 pin
+并拒绝所有 pending request，旧 generation 因此不可能收到后续宿主的消息；author code 没有 wildcard
+发送路径。
+
+这条桥接以宿主 relay 为安全边界：App 客户端只与预期 parent 通信；Workbench、`serve-app` 或嵌入式 MCP
+宿主负责把允许的请求转发到所绑定的那一个服务器，并继续执行各自的认证、能力与同意策略。App 不会绕过
+relay 直接访问前台路由或 MCP 后端，relay 也不会把另一个 App、服务器或浏览器 origin 的权限合并进来。
+取消也遵循同一边界：框架宿主桥只处理 App 自己发起且仍在进行中的 request 所对应的
+`notifications/cancelled`——中止这一项操作并拒绝其仍待决定的同意挑战——因此取消既不能绕过同意，也不能
+触碰不是该 App 发起的 request。
+
 ## Agent API
 
 Agent API 默认关闭。启用时，它是挂载在同一个 loopback 前台服务器 `/mcp` 路径上、经过认证的 Streamable

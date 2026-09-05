@@ -14,7 +14,7 @@ silent, and config always wins when both describe the same thing.
 my-plugin/
 ├── agent-bundle.config.ts     # project identity, targets, and policy
 ├── package.json               # authoritative release version and package identity
-├── assets/                    # static files copied byte-for-byte into every artifact
+├── assets/                    # static files copied byte-for-byte into the artifact root
 └── src/
     ├── skills/<name>/SKILL.md # one Skill per directory, with its own resources
     ├── commands/*.md          # host slash-command documents
@@ -48,7 +48,7 @@ my-plugin/
 | `src/mcp/<server>/{tools,resources,prompts}/*` | Generated MCP server routes. The path supplies identity; each module supplies static `config`, schemas, and one async default Server Component. | Set `routes.servers.<server>` to `custom`, `command`, or `remote`. |
 | `src/mcp/<server>/tools/<tool>.cli.ts` | CLI surface projection of the sibling tool route. Not a route; excluded from `routes.mcpCommands`. See [Project one tool as an idiomatic command](../authoring/package-entries.mdx#project-one-tool-as-an-idiomatic-command). | Prefix `_` to park it. |
 | `src/mcp/<server>/apps/*` | Browser MCP App entries compiled to self-contained HTML and registered on the generated server. Static `config.resourceUri` is required. | Use a custom server, or prefix the file with `_`. |
-| `src/scripts/<name>.ts` | A plain script compiled to `scripts/<name>.mjs` in every selected target. Nested modules are a hard error (`AB4808`). | Prefix a path segment with `_`, or claim the file with an explicit `scripts` entry. |
+| `src/scripts/<name>.ts` | A plain script compiled once to `scripts/<name>.mjs` at the artifact root, shared by every selected host. Nested modules are a hard error (`AB4808`). | Prefix a path segment with `_`, or claim the file with an explicit `scripts` entry. |
 | `src/scripts/<name>.tsx` | A rendered script: the async default component receives `argv` and `signal` and renders through the Agent renderer with the CLI output contract. | Rename to `.ts`, prefix a path segment with `_`, or claim the file. |
 | `src/cli.ts` | A package bin named after `plugin.name`. | `bin: false` |
 | `src/cli/**/*.{ts,tsx}` | Routed CLI commands compiled into one collision-checked command graph and one executable. Nesting is identity: `src/cli/library/audit.ts` runs as `<bin> library audit`. Supersedes the `src/cli.ts` convention. | `bin: false`, `routes.cli: 'conventional'`, or prefix a path segment with `_`. |
@@ -57,7 +57,7 @@ my-plugin/
 | `src/mcp/<server>/layout.{ts,tsx}` | Per-server layout nested inside the root layout for that generated server's routes. | Rename to `_layout.tsx`, or set `routes.servers.<server>` to a non-generated mode. |
 | `src/state.ts` | Project state: default-exports `defineState`. Generated MCP, routed-CLI, and rendered-script request scopes mount it. | `state: false`, or rename to `_state.ts`. |
 | `src/providers/<name>.{ts,tsx}` | A request-context provider mounted at `providers.<camelCaseName>` on the request handle; its factory receives the request's identity, lineage, and read-only state/notice handles. | Prefix the file with `_`. |
-| `assets/` | Static resources copied byte-for-byte into every target artifact's `assets/` directory. | Declare a top-level `assets` list instead. |
+| `assets/` | Static resources copied byte-for-byte into the artifact root's `assets/` directory, once for every selected host. | Declare a top-level `assets` list instead. |
 
 Route and package entry conventions match `.ts` and `.tsx` files exactly; the state convention
 is specifically `src/state.ts`. Discovered entries carry `provenance.kind: 'conventional'` in the
@@ -103,38 +103,57 @@ shadows it. The `bin: false` and `lib: false` opt-outs stay silent.
 
 `agent-bundle build` writes two independent things.
 
-### Host artifacts
+### The composite plugin root
 
-One directory per selected target under the artifact root. The CLI defaults that root to
+One directory at the artifact output, whatever `targets` selects. The CLI defaults that output to
 `artifact/`, so it never collides with the package build below; `output.distPath` or `--output`
-moves it:
+moves it. Every selected host reads this directory as its plugin root — there is no
+`artifact/<host>/` partition — so `targets` decides which host manifests appear at the root, not
+where anything lands. Omit `targets` and the root carries the `portable` projection alone.
 
 ```text
 artifact/
-├── agent-bundle.manifest.json # every emitted file with its SHA-256
-└── plugin/                    # targets: ['plugin'] — one multi-host bundle
-    ├── .claude-plugin/
-    ├── .codex-plugin/
-    ├── .cursor-plugin/
-    ├── bin/<plugin-name>.mjs      # the routed CLI, when src/cli/** exists
-    ├── skills/
-    ├── hooks/
-    ├── mcp/
-    ├── scripts/
-    ├── assets/
-    ├── AGENTS.md
-    └── INSTALL.md
+├── .claude-plugin/plugin.json        # claude, with marketplace.json beside it
+├── .codex-plugin/plugin.json         # codex, with hooks.json and mcp.json beside it
+├── .agents/plugins/marketplace.json  # codex marketplace
+├── .cursor-plugin/plugin.json        # cursor, with hooks.json and mcp.json beside it
+├── .mcp.json                         # claude MCP document
+├── plugin.json                       # portable (Agent Plugins) manifest
+├── mcp.json                          # portable MCP document
+├── hooks/
+│   ├── hooks.json                    # claude hook document
+│   ├── <hook>.mjs                    # wrapper for a hook one selected host reaches
+│   ├── <hook>.<host>.mjs             # one wrapper per host for a hook several reach
+│   └── hooks-flight.mjs
+├── mcp/mcp-<server>-<hash>.mjs       # compiled MCP entries, emitted once
+├── bin/<plugin-name>.mjs             # the routed CLI, when src/cli/** exists
+├── scripts/, skills/, commands/, rules/, assets/, mcp-apps/   # components, emitted once
+├── INSTALL.md                        # one section per selected host
+├── install.mjs                       # when cursor or portable is selected
+├── agent-bundle.manifest.json        # every emitted file with its SHA-256
+└── agent-bundle.hooks.json           # hook index over the selected hosts
 ```
 
-Per-host layouts are available as the `claude`, `codex`, `cursor`, and `portable` targets.
-`agent-bundle.manifest.json` sits at the artifact root beside the target directories and records
-every emitted file with its SHA-256, so artifact validation is content-addressed rather than a guess.
+Host manifests live in their dotfolders; `skills/`, `hooks/`, `mcp/`, `scripts/`, `bin/`, and
+`assets/` are emitted once and shared. Hook and MCP documents appear when the project declares
+hooks or MCP servers — plus one empty Codex or Cursor document whenever another selected host
+claims the conventional `hooks/hooks.json`, `.mcp.json`, or `mcp.json` path, so that host's folder discovery
+never loads the other host's file — and `bin/` only when it has a routed CLI. Two selected hosts that
+would write the same path with different bytes cannot share the root, and the build fails with
+`AB4103`; a command or rule scoped to some of the selected hosts but sitting in a
+directory another selected host scans is `AB4105`. Both recover by making the component
+identical for every selected host, or by building those hosts into separate artifacts.
 
-`output.distPath` moves the artifact root; it never changes the framework-owned layout inside
-each target. Precedence is the CLI `--output`, then `output.distPath`, then the default —
-`artifact` for `agent-bundle build`, which also emits the package build, and `dist` for the
-programmatic `build()` without `packageOutputs`. Values must be non-empty, project-root-contained
-relative POSIX paths.
+`agent-bundle.manifest.json` records every emitted file with its SHA-256, so artifact validation
+is content-addressed rather than a guess. Compiled surfaces are attributed to the composite
+identity — the selected hosts sorted and joined with `+`, such as `claude+codex` — and the order
+of `targets` never changes the output.
+
+`output.distPath` moves the root; it never changes the framework-owned layout inside it.
+Precedence is the CLI `--output`, then `output.distPath`, then the default — `artifact` for
+`agent-bundle build`, which also emits the package build, and `dist` for the programmatic
+`build()` without `packageOutputs`. Values must be non-empty, project-root-contained relative
+POSIX paths.
 
 ### The npm package build
 
@@ -165,6 +184,8 @@ export default defineConfig({
 
 ## Next steps
 
+- [Compiler architecture](../concepts/architecture.mdx) — how these roots
+  become a route graph, host projections, and one composite artifact.
 - [Configuration model](../authoring/index.mdx) — the full config surface.
 - [Skills](../authoring/skills.mdx), [Hooks](../authoring/hooks.mdx),
   [MCP servers and Apps](../authoring/mcp.mdx) — one page per surface.

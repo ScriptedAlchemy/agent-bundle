@@ -18,6 +18,7 @@ import { stableJson } from '../core/digest.ts';
 import { MAX_APP_HTML_BYTES } from '../core/mcp-app-limits.ts';
 import { escapeRegExp } from '../core/strings.ts';
 import type { AgentBundleMeta } from '../meta.ts';
+import { appRuntimePath, appRuntimeSpecifier } from './app-runtime.ts';
 import { composeToolsLayers, frameworkInvariantLayer } from './compose-layers.ts';
 import { listArtifactFiles, resolveArtifactDestination } from './emit.ts';
 import {
@@ -39,6 +40,7 @@ import {
   virtualModulesPluginConstructor,
 } from './meta.ts';
 import { collectBundledOutputEvidence } from './provenance.ts';
+import { runtimeIgnoredRoot } from './runtime-path.ts';
 
 export type { McpAppCompileMode, McpAppOutputSize } from './mcp-app-diagnostics.ts';
 
@@ -178,11 +180,20 @@ const isMetaModuleReplacement = (plugin: unknown, metaModulePath: string): boole
   && plugin._args[0].test(metaModuleSpecifier)
   && plugin._args[1] === metaModulePath;
 
+const appRuntimeReplacement = (runtimePath: string): InstanceType<typeof rspack.NormalModuleReplacementPlugin> =>
+  new rspack.NormalModuleReplacementPlugin(new RegExp(`^${escapeRegExp(appRuntimeSpecifier)}$`, 'u'), runtimePath);
+
+const isAppRuntimeReplacement = (plugin: unknown, runtimePath: string): boolean =>
+  plugin instanceof rspack.NormalModuleReplacementPlugin
+  && plugin._args[0].test(appRuntimeSpecifier)
+  && plugin._args[1] === runtimePath;
+
 const assertResolvedViewConfig = (
   inspection: Awaited<ReturnType<Awaited<ReturnType<typeof createRsbuild>>['inspectConfig']>>,
   appNames: readonly string[],
   outputRoot: string,
   metaModulePath: string,
+  runtimePath: string,
 ): void => {
   const environments = inspection.origin.environmentConfigs;
   const bundlers = inspection.origin.bundlerConfigs;
@@ -212,7 +223,8 @@ const assertResolvedViewConfig = (
       bundler.output.path !== outputRoot ||
       // The reserved `agent-bundle/meta` specifier must beat a consumer
       // tsconfig `paths` entry that shadows it (see `metaModuleReplacement`).
-      !(bundler.plugins ?? []).some((plugin) => isMetaModuleReplacement(plugin, metaModulePath))
+      !(bundler.plugins ?? []).some((plugin) => isMetaModuleReplacement(plugin, metaModulePath)) ||
+      !(bundler.plugins ?? []).some((plugin) => isAppRuntimeReplacement(plugin, runtimePath))
     ) {
       throw new Error('Rsbuild resolved an invalid self-contained MCP App configuration.');
     }
@@ -266,26 +278,23 @@ const appIdentity = (app: NormalizedMcpApp): string => stableJson({
   ...(app.template === undefined ? {} : { template: app.template }),
 });
 
-export type McpAppTargetSelection =
-  | Readonly<{ readonly target: string; readonly targets?: never }>
-  | Readonly<{ readonly target?: never; readonly targets: Readonly<Record<string, string>> }>;
-
-const selectedAppTarget = (
-  app: NormalizedMcpApp,
-  selection: McpAppTargetSelection,
-): string | undefined => {
-  const target = selection.target ?? selection.targets[app.id];
-  return target !== undefined && app.targets.includes(target) ? target : undefined;
-};
+/**
+ * The projections one composite root compiles apps for (#555): an app is
+ * compiled once when its target set reaches any selected host, and the
+ * compiled surface is attributed to the selection's identity (`target`).
+ */
+export interface McpAppSelection {
+  readonly selected: readonly string[];
+  readonly target: string;
+}
 
 export const planCompiledMcpApps = (
   apps: readonly NormalizedMcpApp[],
-  options: Readonly<{ readonly outDir: string } & McpAppTargetSelection>,
+  options: Readonly<{ readonly outDir: string } & McpAppSelection>,
 ): readonly PlannedMcpApp[] => {
-  const planned = new Map<string, { identity: string; serverIds: string[]; app: NormalizedMcpApp; target: string }>();
+  const planned = new Map<string, { identity: string; serverIds: string[]; app: NormalizedMcpApp }>();
   for (const app of apps) {
-    const target = selectedAppTarget(app, options);
-    if (app.prebuilt === true || target === undefined) continue;
+    if (app.prebuilt === true || !app.targets.some((target) => options.selected.includes(target))) continue;
     const identity = appIdentity(app);
     const existing = planned.get(app.name);
     if (existing !== undefined) {
@@ -298,9 +307,9 @@ export const planCompiledMcpApps = (
       if (!existing.serverIds.includes(app.serverId)) existing.serverIds.push(app.serverId);
       continue;
     }
-    planned.set(app.name, { app, identity, serverIds: [app.serverId], target });
+    planned.set(app.name, { app, identity, serverIds: [app.serverId] });
   }
-  return Object.freeze([...planned.values()].map(({ app, serverIds, target }) => Object.freeze({
+  return Object.freeze([...planned.values()].map(({ app, serverIds }) => Object.freeze({
     ...(app._meta === undefined ? {} : { _meta: app._meta }),
     id: app.id,
     mimeType: mcpAppMimeType,
@@ -314,7 +323,7 @@ export const planCompiledMcpApps = (
       app.source,
       ...(app.template === undefined ? [] : [app.template]),
     ]),
-    target,
+    target: options.target,
   })));
 };
 
@@ -340,6 +349,7 @@ export const composeMcpAppsRsbuildConfig = (
   },
 ): RsbuildConfig => {
   const metaModulePath = generatedMetaModulePath(options.cwd);
+  const runtimePath = appRuntimePath();
   const profile: RsbuildConfig = {
     environments: Object.fromEntries(sources.map((source) => [source.name, {
       // Every view carries the React plugin, whatever its entry extension: a
@@ -389,13 +399,18 @@ export const composeMcpAppsRsbuildConfig = (
     // imports exactly this specifier, never subpaths beneath it.
     config.resolve = {
       ...config.resolve,
-      alias: { ...config.resolve?.alias, [`${metaModuleSpecifier}$`]: metaModulePath },
+      alias: {
+        ...config.resolve?.alias,
+        [`${appRuntimeSpecifier}$`]: runtimePath,
+        [`${metaModuleSpecifier}$`]: metaModulePath,
+      },
     };
     // Added after the hatch mutator (this hook is merged last), so a consumer
     // cannot strip the generated identity module out of the compiler.
     const VirtualModulesPlugin = rsbuildVirtualModulesPlugin();
     config.plugins = [
       ...(config.plugins ?? []),
+      appRuntimeReplacement(runtimePath),
       metaModuleReplacement(metaModulePath),
       new VirtualModulesPlugin({ [metaModulePath]: generatedMetaModuleSource(options.meta) }),
     ];
@@ -423,12 +438,9 @@ export const compileMcpApps = async (
     readonly mode?: McpAppCompileMode;
     readonly outDir: string;
     readonly tools?: AgentBundleToolsConfig;
-  } & McpAppTargetSelection>,
+  } & McpAppSelection>,
 ): Promise<CompiledMcpAppsResult> => {
-  const compiled = planCompiledMcpApps(apps, {
-    outDir: options.outDir,
-    ...(options.target === undefined ? { targets: options.targets } : { target: options.target }),
-  });
+  const compiled = planCompiledMcpApps(apps, { outDir: options.outDir, selected: options.selected, target: options.target });
   if (compiled.length === 0) {
     return Object.freeze({ apps: Object.freeze([]), diagnostics: Object.freeze([]) });
   }
@@ -456,7 +468,14 @@ export const compileMcpApps = async (
   const collectedStats = new Map<string, Rspack.StatsCompilation>();
   rsbuild.addPlugins([mcpAppStatsCollectorPlugin(collectedStats), mcpAppHtmlDefaultsPlugin()]);
   const inspection = await rsbuild.inspectConfig({ mode: 'production' });
-  assertResolvedViewConfig(inspection, compiled.map((app) => app.name), options.outDir, generatedMetaModulePath(options.cwd));
+  const runtimePath = appRuntimePath();
+  assertResolvedViewConfig(
+    inspection,
+    compiled.map((app) => app.name),
+    options.outDir,
+    generatedMetaModulePath(options.cwd),
+    runtimePath,
+  );
   const contexts: readonly McpAppDiagnosticContext[] = compiled.map((app) => ({
     appName: app.name,
     entrySource: app.source,
@@ -493,7 +512,10 @@ export const compileMcpApps = async (
       })),
       // The generated identity module is virtual, but it still surfaces in
       // stats as a module under this reserved namespace.
-      ignoredSourcePaths: [resolve(generatedModulesRoot(options.cwd))],
+      ignoredSourcePaths: [
+        resolve(generatedModulesRoot(options.cwd)),
+        runtimeIgnoredRoot(runtimePath),
+      ],
       projectRoot: options.cwd,
       stats: result.stats,
     });

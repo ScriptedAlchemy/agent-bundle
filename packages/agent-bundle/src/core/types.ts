@@ -789,9 +789,14 @@ export interface NormalizationTargetRegistry {
   componentCapabilityState?(name: string, capability: string): CapabilityState | undefined;
   configExtensions(): readonly NormalizationConfigExtension[];
   defaultTargetNames(): readonly string[];
+  /**
+   * The built-in host the adapter registered under `name` is, judged by
+   * adapter identity rather than name (`TargetRegistry.builtInHost`); a
+   * registry that cannot tell judges by name. `undefined` for a custom
+   * adapter or an unknown name.
+   */
+  builtInHost?(name: string): string | undefined;
   has(name: string): boolean;
-  /** True when the target's adapter reads the config extension `key` (its own key or a declared composite side). */
-  lowersConfigExtension?(name: string, key: string): boolean;
   nativeHookSources?(
     config: Readonly<AgentBundleConfig>,
     targetNames: readonly string[],

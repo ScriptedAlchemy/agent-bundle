@@ -67,6 +67,9 @@ const registeredIds = [
  * `expectMcpCall` — narrows its id or name, `input`, and `result` from the
  * route modules' own schemas with no per-route declaration file — and the
  * same program without the generated file degrades to `string` / `unknown`.
+ * The same file registers the tool subset on `agent-bundle/app`'s
+ * `AppRegister` (#594), which is what `createAppClient().call` narrows from;
+ * without it `AppRegister` stays empty.
  */
 it('types every route-aware public surface from the generated route registration', { timeout: 60_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-route-register-'));
@@ -135,6 +138,7 @@ it('types every route-aware public surface from the generated route registration
     ].join('\n')),
     writeProjectFile(root, 'assertions.ts', [
       "import type { AgentEventCanonicalIdentity, AgentEventNativePayload, AgentEventPayload } from 'agent-bundle';",
+      "import type { AppRegister } from 'agent-bundle/app';",
       "import { expectMcpCall, expectNoMcpCall } from 'agent-bundle/eval';",
       'import type {',
       '  RegisteredMcpRouteId,',
@@ -187,6 +191,14 @@ it('types every route-aware public surface from the generated route registration
       "export type FindWireInput = Assert<Equal<McpRouteInput<'find', 'tool'>, { query: string } | { isbn: string }>>;",
       "export type ShelfFindWireInput = Assert<Equal<McpRouteInput<'find', 'tool', 'shelf'>, { isbn: string }>>;",
       "export type DynamicWireInput = Assert<Equal<McpRouteInput<string, 'tool'>, unknown>>;",
+      '// The same file registers the MCP tool subset on `agent-bundle/app` (#594): the ids an App client may call,',
+      '// each with its own schema-inferred `{ input, result }`; the CLI, event, and prompt routes are not among them.',
+      `export type AppIds = Assert<Equal<keyof AppRegister['routes'], ${registeredIds.filter((id) => id.startsWith('tool:')).map((id) => `'${id}'`).join(' | ')}>>;`,
+      "export type AppFind = Assert<Equal<AppRegister['routes']['tool:curator/find'], Readonly<{ input: { query: string }; result: { hits: number } }>>>;",
+      "export type AppShelfFind = Assert<Equal<AppRegister['routes']['tool:shelf/find'], Readonly<{ input: { isbn: string }; result: { shelved: boolean } }>>>;",
+      '// Both registrations read the same schemas, so an App call and the harness agree on a tool\'s contract.',
+      "export type AppStatusInput = Assert<Equal<AppRegister['routes']['tool:curator/status']['input'], RegisteredRouteInput<'tool:curator/status'>>>;",
+      "export type AppStatusResult = Assert<Equal<AppRegister['routes']['tool:curator/status']['result'], RegisteredRouteResult<'tool:curator/status'>>>;",
       '',
       "export const typed = async (canonical: AgentEventCanonicalIdentity<'tool/after'>, native: AgentEventNativePayload): Promise<void> => {",
       "  const found = await renderRoute('tool:curator/find', { input: { query: 'dune' } });",
@@ -252,6 +264,11 @@ it('types every route-aware public surface from the generated route registration
       '  void hits; void status; void none; void anything; void packed; void executed; void isReport;',
       '  void parsedQuery; void parsedHits; void looseParsed; void scriptParsed; void builtName; void reentry;',
       '};',
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'wrong-app-id.ts', [
+      "import type { AppRegister } from 'agent-bundle/app';",
+      "export const prompt: keyof AppRegister['routes'] = 'prompt:curator/brief';",
       '',
     ].join('\n')),
     writeProjectFile(root, 'wrong-tool-name.ts', [
@@ -346,14 +363,17 @@ it('types every route-aware public surface from the generated route registration
       '',
     ].join('\n')),
     writeProjectFile(root, 'unregistered.ts', [
+      "import type { AppRegister } from 'agent-bundle/app';",
       "import { expectMcpCall } from 'agent-bundle/eval';",
       "import type { RegisteredMcpRouteName, RegisteredMcpServerName, RegisteredRouteId, RegisteredRouteResult } from '@agent-bundle/runtime';",
       "import { getMcpPrompt, invokeCli, invokeMcpTool, renderRoute, runContractMatrix, type McpRouteInput } from 'agent-bundle/test';",
       '',
       ...equalityHelpers,
       '',
-      '// Without the generated file in the program, ids and names are string and contracts are unknown.',
+      '// Without the generated file in the program, ids and names are string, contracts are unknown, and',
+      '// `agent-bundle/app` has no registration at all.',
       'export type Ids = Assert<Equal<RegisteredRouteId, string>>;',
+      'export type NoAppRoutes = Assert<Equal<keyof AppRegister, never>>;',
       "export type Result = Assert<Equal<RegisteredRouteResult<'tool:curator/find'>, unknown>>;",
       'export type Servers = Assert<Equal<RegisteredMcpServerName, string>>;',
       "export type ToolNames = Assert<Equal<RegisteredMcpRouteName<'tool'>, string>>;",
@@ -373,8 +393,20 @@ it('types every route-aware public surface from the generated route registration
   expect(result.state).toBe('ready');
   const declarations = await readFile(join(root, '.agent-bundle', 'routes.d.ts'), 'utf8');
   expect(declarations).toContain("declare module '@agent-bundle/runtime' {\n  interface Register {\n    readonly routes: AgentBundleRouteContracts;\n  }\n}");
+  // One App augmentation beside it, registering the type-level tool subset: no route id is spelled twice.
+  expect(declarations).toContain("declare module 'agent-bundle/app' {\n  interface AppRegister {\n    readonly routes: AgentBundleAppRouteContracts;\n  }\n}");
+  expect(declarations.match(/declare module 'agent-bundle\/app'/gu)).toHaveLength(1);
+  for (const id of registeredIds) {
+    expect(declarations.match(new RegExp(`"${id}"`, 'gu')), id).toHaveLength(1);
+  }
+  // Declarations only: the file's imports are all type-only, so it can never pull a route module or Zod into an App bundle.
+  expect(declarations.split('\n').filter((line) => line.startsWith('import')).every((line) => line.startsWith('import type * as '))).toBe(true);
 
   expect(typecheck(root, 'assertions.ts', true)).toEqual([]);
+  // An App client's route id is checked against the registered tools only, naming them, not `never`.
+  const wrongAppId = typecheck(root, 'wrong-app-id.ts', true);
+  expect(wrongAppId).toHaveLength(1);
+  expect(wrongAppId[0]).toContain(`Type '"prompt:curator/brief"' is not assignable to type '${registeredIds.filter((id) => id.startsWith('tool:')).map((id) => `"${id}"`).join(' | ')}'`);
   const wrongId = typecheck(root, 'wrong-id.ts', true);
   expect(wrongId).toHaveLength(1);
   // The rejection names the registered ids, not `never`.

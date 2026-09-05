@@ -157,11 +157,15 @@ it('emits byte-identical artifacts from two builds of one source into two output
   // entry imports as a namespace is named by its project-rooted virtual
   // path — not by the staged directory, the output directory, or the machine.
   const bundles = [...firstDigests.keys()].filter((path) => path.endsWith('.mjs'));
-  expect(bundles.some((path) => /^portable\/mcp\/mcp-harness-[a-f\d]{8}\.mjs$/u.test(path))).toBe(true);
+  expect(bundles.some((path) => /^mcp\/mcp-harness-[a-f\d]{8}\.mjs$/u.test(path))).toBe(true);
+  // One composite root: the hook shared by three selected hosts compiles one
+  // host-suffixed wrapper each; every other surface is emitted once (#555).
   expect(bundles).toEqual(expect.arrayContaining([
-    'claude/hooks/event-route-session-start.mjs',
-    'portable/bin/reproducible-fixture.mjs',
-    'portable/scripts/summarize.mjs',
+    'bin/reproducible-fixture.mjs',
+    'hooks/event-route-session-start.claude.mjs',
+    'hooks/event-route-session-start.codex.mjs',
+    'hooks/event-route-session-start.cursor.mjs',
+    'scripts/summarize.mjs',
   ]));
   const forbidden = [root, parked, '.artifact.stage-', ...stageTokens];
   for (const path of bundles) {
@@ -170,6 +174,6 @@ it('emits byte-identical artifacts from two builds of one source into two output
       expect(source, `${path} names ${token}`).not.toContain(token);
     }
   }
-  const mcpEntry = bundles.find((path) => /^portable\/mcp\/mcp-harness-[a-f\d]{8}\.mjs$/u.test(path))!;
+  const mcpEntry = bundles.find((path) => /^mcp\/mcp-harness-[a-f\d]{8}\.mjs$/u.test(path))!;
   expect(await readFile(join(first, mcpEntry), 'utf8')).toMatch(/NAMESPACE OBJECT: \.\/\.agent-bundle-virtual\/mcp-harness-[a-f\d]{8}-\d+\.mjs/u);
 });

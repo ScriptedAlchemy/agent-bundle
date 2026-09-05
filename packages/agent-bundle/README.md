@@ -24,8 +24,8 @@ Generated executables target Node.js 22.12 or newer by default. `runtime: { node
 that floor (it can never be lowered), and the selected floor is recorded as `runtime.node` in the
 artifact manifest.
 
-Files under a root `assets/` directory copy byte-for-byte into every target artifact's `assets/`
-directory. Top-level `assets` replaces that convention with explicit entries: literal file paths,
+Files under a root `assets/` directory copy byte-for-byte into the plugin root's `assets/`
+directory, once for every selected host. Top-level `assets` replaces that convention with explicit entries: literal file paths,
 whole directories, or globs, all resolved from the project root. Entries outside `assets/` keep
 their project-relative path under the artifact's `assets/` directory.
 
@@ -103,6 +103,24 @@ stdin-EOF exit 0, bounded shutdown, heartbeat), also available directly from
 `agent-bundle/mcp-entry`. `tools.rsbuild` / `tools.rspack` is the single bundler escape hatch,
 merged last into every synthesized config and bounded by the artifact invariant assertions.
 
+MCP App views (`src/mcp/<server>/apps/*` or `mcp.servers.<id>.apps`) compile to one self-contained
+HTML resource each and talk to their host through `createAppClient()` from the browser-safe
+`agent-bundle/app` — the MCP Apps handshake, request ids, timeouts and cancellation, JSON-RPC and
+result decoding, and exact parent source/origin pinning are framework-owned, so a view never
+hand-writes `postMessage` frames. `call('tool:<server>/<name>', input)` resolves the tool's
+structured result object directly (an object-rooted `resultSchema` is what makes a tool callable
+from an App), `onToolInput` / `onToolResult` / `onToolError` observe the opening call — dispatched
+to the listeners registered for the tool the host's initialize result names, with a failed or
+malformed opening result arriving on `onToolError` — `onToolCancelled` reports its cancellation,
+`request()` covers `resources/read` and supported `ui/*` methods, and every wire or lifecycle
+failure is an `AppClientError` with a discriminated `code` (option misuse is a plain `TypeError` or
+`RangeError`). A request that times out or is aborted sends `notifications/cancelled`, which the
+framework's host bridge honors by aborting that one in-flight operation. The generated
+`.agent-bundle/routes.d.ts` augments `AppRegister` with the project's tool contracts, so route ids,
+inputs, and results are typed from the routes' own schemas without a route module, Zod, or Node
+entering the App bundle. The entry is bundle-safe (never `AB4837`); the host-side relay, sandbox,
+and consent authority stay with the Workbench, `agent-bundle serve-app`, and embedding hosts.
+
 Projects that own their compilation entirely declare prebuilt payloads instead: the top-level
 `payload` block names already-built directory trees the build packages byte-for-byte at stable
 paths, and `entry: { prebuilt: './dist/…' }` (MCP servers) or
@@ -121,7 +139,7 @@ manifests at files inside those payloads without compiling them. Payload files c
 | `agent-bundle uninstall <host>` | Remove a receipt-owned install and nothing else: the receipt's files and directories, the host registrations it recorded (`claude plugin uninstall --keep-data` + `marketplace remove`, `codex plugin remove` + `marketplace remove`, the Cursor local directory or staged marketplace). `--plan` prints the exact paths without changing anything; durable `state/` is kept unless `--purge-data --confirm-purge`; a missing receipt or content mismatch is refused unless `--force`; a rerun is `not-installed`. |
 | `agent-bundle doctor` | Read-only host inspection: host probes, installed inventory, store receipts cross-checked against the host, and, with `--from`, the installed copy compared against the built artifact by version and content hash (`current`, `stale`, `version-mismatch`, `foreign`, `not-installed`) plus the lifecycle stage (placed → registered → enabled → active, unobservable stages typed `unavailable`). |
 | `agent-bundle validate` | Validate project source, or an artifact with `--artifact`. |
-| `agent-bundle inspect` | Inspect normalized targets and adapter plans from source, with per-target component accounting: which skills, commands, rules, hooks, MCP surfaces, and scripts each host emits and, for every omission, whether the author excluded it or the host's pinned capability judgment (`degraded`/`unavailable`/`prohibited`, with reason) ruled it out. |
+| `agent-bundle inspect` | Inspect the normalized model and each selected host projection's plan from source, with per-host component accounting: which skills, commands, rules, hooks, MCP surfaces, and scripts each host emits and, for every omission, whether the author excluded it or the host's pinned capability judgment (`degraded`/`unavailable`/`prohibited`, with reason) ruled it out. |
 | `agent-bundle inspect --bundler` | Dump the synthesized Rslib/Rsbuild configs (post-`tools`-hatch merge) for every generated output. |
 | `agent-bundle mcp list` / `mcp invoke` | List or invoke one MCP tool from an artifact. |
 | `agent-bundle mcp run` | Run one built stdio MCP server in the foreground, resolving its hashed entry, loading the project-root `.env` set (`--env-file`/`--no-env` to override), and expanding env state anchors to the project root (`--plugin-root` to override). Environment precedence: manifest env < `.env` files < operator `process.env`. |
@@ -133,14 +151,14 @@ manifests at files inside those payloads without compiling them. Payload files c
 
 ### Validate Claude bundles with Claude Code
 
-When Claude Code is on `PATH`, artifact validation runs its validator for emitted `claude` and
-unified `plugin` targets. Claude Code treats a directory that holds both `.claude-plugin/plugin.json`
-and `.claude-plugin/marketplace.json` as a marketplace and then never opens the plugin's hook,
-skill, agent, or command files, so Agent Bundle names each manifest:
+When Claude Code is on `PATH` and the `claude` projection is selected, artifact validation runs
+its validator over the plugin root. Claude Code treats a directory that holds both
+`.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` as a marketplace and then never
+opens the plugin's hook, skill, agent, or command files, so Agent Bundle names each manifest:
 
 ```sh
-claude plugin validate <bundle-dir>/.claude-plugin/plugin.json --strict
-claude plugin validate <bundle-dir>/.claude-plugin/marketplace.json --strict
+claude plugin validate <artifact-root>/.claude-plugin/plugin.json --strict
+claude plugin validate <artifact-root>/.claude-plugin/marketplace.json --strict
 ```
 
 On Claude Code 2.1.259 or later both runs use `--json`; older releases are parsed from the text
@@ -152,42 +170,43 @@ fabricated success. Use `--no-host-validation` when a deterministic schema-only 
 CI should use strict validation:
 
 ```sh
-agent-bundle validate --artifact dist --strict
+agent-bundle validate --artifact artifact --strict
 ```
 
-During development, load a built target without installing it and verify registration:
+During development, load the built root without installing it and verify registration:
 
 ```sh
-claude --plugin-dir dist/claude plugin list --json
+claude --plugin-dir artifact plugin list --json
 ```
 
 ## Distribute and install bundles
 
-Every built target directory contains a generated `INSTALL.md` with commands
-that use the bundle's real plugin and marketplace names. Claude and Codex
-targets always include local marketplace manifests, so their public CLIs can
-install the emitted directory directly:
+The built plugin root contains a generated `INSTALL.md` with a section per
+selected host, using the bundle's real plugin and marketplace names. The
+`claude` and `codex` projections always include local marketplace manifests,
+so their public CLIs can install the emitted directory directly:
 
 ```sh
-agent-bundle install claude --from artifact/claude --scope user
-agent-bundle install codex --from artifact/codex
+agent-bundle install claude --from artifact --scope user
+agent-bundle install codex --from artifact
 ```
 
 The installer delegates to `claude plugin marketplace add` /
 `claude plugin install` and `codex plugin marketplace add` /
 `codex plugin add`; it fails with a typed diagnostic when the selected host
-binary is unavailable. Cursor has no non-interactive install verb, so Cursor,
-portable, and composite targets include `install.mjs`, which safely copies the
-bundle into `~/.cursor/plugins/local/<name>` without overwriting collisions:
+binary is unavailable. Cursor has no non-interactive install verb, so a root
+that carries the `cursor` or `portable` projection includes `install.mjs`,
+which safely copies the bundle into `~/.cursor/plugins/local/<name>` without
+overwriting collisions:
 
 ```sh
-agent-bundle install cursor --from artifact/cursor
-# or, from the emitted target directory:
+agent-bundle install cursor --from artifact
+# or, from the emitted root:
 node ./install.mjs
 ```
 
 Cursor loads the copied `.cursor-plugin/plugin.json` and its manifest-declared
-`hooks/hooks.json` from that directory; plugin hooks run from the plugin root
+`.cursor-plugin/hooks.json` from that directory; plugin hooks run from the plugin root
 with `${CURSOR_PLUGIN_ROOT}` substituted and need no `~/.cursor/hooks.json`
 entry. `--mode marketplace` instead stages a committed local marketplace
 repository at `~/.cursor/agent-bundle/marketplaces/<name>` and prints the
@@ -196,8 +215,9 @@ Cursor manage the plugin as a marketplace install; `agent-bundle doctor --host
 cursor` reports hook registration (`AB7322`), duplicate user-level delivery
 (`AB7323`), and marketplace import state (`AB7324`).
 
-The `portable` target's `install.mjs` copies the Agent Plugins package to the
-same `~/.cursor/plugins/local/<name>` location and, because Cursor 3.18.25
+For a root whose only Cursor-loadable format is the `portable` projection,
+`install.mjs` copies the Agent Plugins package to the same
+`~/.cursor/plugins/local/<name>` location and, because Cursor 3.18.25
 expands none of the standard's placeholders (`${PLUGIN_ROOT}` /
 `${PLUGIN_DATA}` in `args`, `env`, `cwd`; no `PLUGIN_ROOT` / `PLUGIN_DATA`
 variables; omitted `cwd` → home directory; `./` commands → workspace folder),
@@ -208,8 +228,9 @@ the shipped document in the install receipt (`cursorExpansion`), and
 itself stays spec-conformant for other Agent Plugins clients.
 
 Cursor installation is user-scoped. Claude also accepts `--scope project` and
-`--scope local`; Codex is user-scoped. A source-free artifact root is accepted
-by `--from` when it contains the selected host target directory.
+`--scope local`; Codex is user-scoped. `--from` names the plugin root itself —
+the directory that holds the selected host's manifest — and a source-free copy
+of that root is accepted.
 
 ### Reinstall after a same-version rebuild
 
@@ -1019,11 +1040,11 @@ Skill Markdown are inert in the workbench renderer.
 
 Top-level `scripts` is a record of stable output names to an entry path or `{ entry, targets? }`. JavaScript/TypeScript entries bundle to `scripts/<name>.mjs`; `.sh`, `.bash`, and `.py` entries copy byte-for-byte while preserving source modes. The generated `agent-bundle.manifest.json` records file digests for stable artifact validation.
 
-A project with routed `src/cli/**` commands also ships that CLI inside every host artifact as
-`<target>/bin/<plugin-name>.mjs` (plus `bin/<plugin-name>-flight.mjs` when a command renders), a
+A project with routed `src/cli/**` commands also ships that CLI inside the plugin root as
+`bin/<plugin-name>.mjs` (plus `bin/<plugin-name>-flight.mjs` when a command renders), a
 self-contained module run as `node <plugin-root>/bin/<plugin-name>.mjs <command>` — so a script
 route can spawn its `../bin/<plugin-name>.mjs` sibling and a Claude skill can point at
-`${CLAUDE_PLUGIN_ROOT}/bin/<plugin-name>.mjs` without a separate npm install. Every built-in target
+`${CLAUDE_PLUGIN_ROOT}/bin/<plugin-name>.mjs` without a separate npm install. Every built-in host
 publishes the `cli` capability that admits it; `inspect` accounts for it as a `cli` component, and
 the manifest records both files with bundle provenance. The npm package bin under `dist/bin/` is
 unchanged. See `docs/entry-conventions.md` for the layout and diagnostics (`AB4765`, `AB4766`).

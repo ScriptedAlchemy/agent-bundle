@@ -36,15 +36,20 @@ export default defineConfig({
 
 ## Targets
 
-`targets` 选择构建要输出的产物布局：
+`targets` 选择构建铺进同一个复合插件根目录的宿主投影——也就是 `artifact/`（或
+`output.distPath`）下那个由所有选中宿主共同读取的单一目录：
 
-| Target | 输出什么 |
+| Target | 向根目录投影什么 |
 | --- | --- |
-| `plugin` | 一份多宿主捆绑包，`.claude-plugin/`、`.codex-plugin/` 与 `.cursor-plugin/` 三份清单共享同一套组件目录。 |
-| `claude` | Claude Code 插件布局。 |
-| `codex` | Codex 插件布局。 |
-| `cursor` | Cursor 插件布局。 |
-| `portable` | [Agent Plugins 开放标准](https://agent-plugins.org)（规范 1.0.0）。Cursor、Codex、VS Code、GitHub Copilot、Kiro 与 ChatGPT 都是原生客户端。 |
+| `claude` | Claude Code 插件布局：`.claude-plugin/`、`hooks/hooks.json`、`.mcp.json`。 |
+| `codex` | Codex 插件布局：`.codex-plugin/`，内含它自己的 `hooks.json` 与 `mcp.json`。 |
+| `cursor` | Cursor 插件布局：`.cursor-plugin/`，内含它自己的 `hooks.json` 与 `mcp.json`。 |
+| `portable` | [Agent Plugins 开放标准](https://agent-plugins.org)（规范 1.0.0）：根目录的 `plugin.json` 与 `mcp.json`。Cursor、Codex、VS Code、GitHub Copilot、Kiro 与 ChatGPT 都是原生客户端。 |
+
+宿主清单各自位于自己的点目录中；`skills/`、`hooks/`、`mcp/`、`scripts/`、`bin/` 与 `assets/`
+只输出一份，由所有宿主共享。省略 `targets` 时构建只输出 `portable` 投影。顺序无关紧要——
+`['codex', 'claude']` 与 `['claude', 'codex']` 产生完全相同的字节——而其他任何名称（包括
+`plugin`）都是未知 target（`AB4100`）。
 
 可移植标准只打包 Skills 与 MCP 服务器，因此规则、命令与钩子在该 target 上是诚实地不可用，而不是被
 悄悄丢弃。Claude Code 只能通过 CLI 转译消费该标准，这正是它仍需要专属 target 的原因。
@@ -54,7 +59,7 @@ export default defineConfig({
 | 字段 | 负责 |
 | --- | --- |
 | `plugin` | 项目标识。必填。 |
-| `targets` | 要输出哪些产物布局。 |
+| `targets` | 复合插件根目录承载哪些宿主投影。 |
 | `skills` | 显式的 Skill 路径或 glob，取代 `src/skills/*` 约定。见 [Skills](./skills.mdx)。 |
 | `hooks` | 按规范事件分键的生命周期钩子处理器。见[钩子](./hooks.mdx)。 |
 | `mcp` | MCP 服务器声明及其 MCP App。见 [MCP 服务器与 MCP App](./mcp.mdx)。 |
@@ -98,7 +103,7 @@ Cursor 插件的其余一切都从跨宿主模型推导。[宿主参考](../../r
 
 有两个 Claude Code 表面值得细看，因为它们的契约比名字所暗示的更窄：
 
-- **`claude.lspServers`** —— 由 `claude` target 以及 `plugin` 的 Claude 那一半输出为插件根目录的
+- **`claude.lspServers`** —— 只要 `claude` 在选中的投影之中，就输出为根目录的
   `.lsp.json`。路径 token 只在 `command`、`args`、`env` 与 `workspaceFolder` 中展开。agent-bundle
   不包含语言服务器二进制文件，请单独安装它，以确保所声明的命令位于 `PATH` 上。Codex、Cursor 与
   可移植格式不会收到这份配置。
@@ -166,3 +171,6 @@ schema 全部内联的路由图保持其已有的 digest。
 - [MCP 服务器与 MCP App](./mcp.mdx) —— 生成式路由服务器、手写 stdio 入口与浏览器 App。
 - [脚本与资源](./scripts-assets.mdx) —— 产物脚本与静态文件。
 - [包入口](./package-entries.mdx) —— `bin`、`lib`、路由式 CLI 与打包器逃生舱。
+
+一条路由如何同时变成 MCP、CLI 与钩子——以及编译器今天仍在哪些地方重复——见
+[编译器架构](../concepts/architecture.mdx)。
