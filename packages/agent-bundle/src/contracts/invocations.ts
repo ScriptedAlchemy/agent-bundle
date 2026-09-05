@@ -24,3 +24,4 @@ export type {
   RouteInvocation,
   RouteInvocationResponse,
 } from '../dev/routes/route-invocation-result.ts';
+export type { EventTraceEvent } from '../events/trace.ts';

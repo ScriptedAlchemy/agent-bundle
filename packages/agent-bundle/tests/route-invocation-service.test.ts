@@ -393,7 +393,7 @@ const tsxSiblingProject = async (): Promise<RouteProject> => routeProject(
 it('resolves a `.js` import of a `.tsx` sibling without rewriting the same string rendered as text', { timeout: 30_000 }, async () => {
   const project = await tsxSiblingProject();
   try {
-    const invocation = await project.service().invoke({ input: {}, routeId: 'tool:fixture/report' });
+    const invocation = await project.service().invoke({ input: {}, mode: 'unit-render', routeId: 'tool:fixture/report' });
 
     expect(invocation.status, JSON.stringify(invocation.diagnostics)).toBe('succeeded');
     expect(invocation.document).toBeDefined();

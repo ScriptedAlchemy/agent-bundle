@@ -1,12 +1,12 @@
 import { z } from 'zod';
 
 import type {
+  EventTraceEvent,
   RouteInvocation,
   RouteInvocationRequest,
   RouteInvocationSummary,
 } from '../../../agent-bundle/src/contracts/invocations.ts';
 import type { Diagnostic } from '../../../agent-bundle/src/contracts/diagnostics.ts';
-import type { EventTraceEvent } from '../../../agent-bundle/src/events/trace.ts';
 import {
   agentDocumentSchema,
   agentRenderEventSchema,
