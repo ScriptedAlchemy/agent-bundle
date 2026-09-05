@@ -398,8 +398,9 @@ export const config = {
 `io.modelcontextprotocol/tasks` 扩展，形态也不同（`resultType: "task"`、`tasks/update`、没有
 `tasks/result`）；生成服务器所用的 SDK 版本不提供该扩展，因此该修订上的客户端保持普通契约，也不会被宣告
 任务能力。固定版本的宿主是否会发出任务增强调用，按宿主记录在[宿主能力矩阵](../../reference/hosts.md)中；
-撰写本文时没有任何宿主这样做，因此这一生命周期由 SDK 客户端与 Workbench MCP 页面证明：宣告了任务支持的
-工具会提供**Run as task**，Tasks 面板会轮询 `tasks/get`、获取 `tasks/result` 并取消任务。
+撰写本文时没有任何宿主这样做，因此这一生命周期由 SDK 客户端与 Workbench 的 **Advanced → Protocol**
+证明：宣告了任务支持的工具会提供**Run as task**，Tasks 面板会轮询 `tasks/get`、获取 `tasks/result`
+并取消任务。
 
 `mcp-in-memory` 层用真实的 SDK 客户端证明整套契约：
 
@@ -745,7 +746,8 @@ MCP App status (portable): mcp-apps/status.html 427.1 KiB (102.1 KiB gzip)
 
 ### 独立提供 App
 
-在 MCP 宿主之外，App 通常经由 Workbench 的 MCP 页面访问。当插件想要一条“打开仪表盘”的命令——从终端
+在 MCP 宿主之外，App 通常通过在 Workbench 中选中 **Application → MCP → &lt;server&gt; → Apps** 下的
+叶子来访问。当插件想要一条“打开仪表盘”的命令——从终端
 出发，在一个普通浏览器标签页里实时查看它自己的服务器——`agent-bundle serve-app` 会独立托管一个已构建的
 App：
 
@@ -756,7 +758,7 @@ npx agent-bundle serve-app status/status --artifact artifact \
 ```
 
 该命令以与 `mcp run` 完全相同的方式启动插件打包好的 MCP 服务器（同样的产物解析、同样的 `.env` 分层、
-同样的 plugin-data 根目录），通过 Workbench MCP 页面所用的同一套宿主栈——沙箱代理、同意授权、
+同样的 plugin-data 根目录），通过 Workbench App 叶子所用的同一套宿主栈——沙箱代理、同意授权、
 `McpAppBridge`——把 App 绑定到它上面，先调用一次 App 的工具让它带着数据打开，然后打印 loopback URL。
 宿主只绑定 `127.0.0.1`，只提供一个页面加上由每次启动生成的令牌保护的 `/api/mcp/...` 路由，并且只通过
 桥接暴露那一个服务器；App 文档运行在框架沙箱内的第二个 loopback origin 上。它是本地预览宿主，不是部署

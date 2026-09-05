@@ -160,7 +160,8 @@ npx agent-bundle inspect --root . --skills
 ```
 
 skill focus 会展示每个被发现的 Skill、它的 provenance（`conventional` 或 `config`）、它的资源，以及
-逐 target 的降级判断。在开发者 Workbench 中，Skills 页面会渲染每个宿主的输出文档。
+逐 target 的降级判断。在开发者 Workbench 中，于 **Application → Skills** 下选中该 Skill。
+输出文档是默认视图；源码/生成差异、frontmatter、资源与 eval 覆盖是检查器标签。
 
 Skill Markdown 中的原始 HTML、JSX/MDX 与 Mermaid 在 Workbench 渲染器中是惰性的。这是刻意的隔离边界，
 不是渲染缺失。

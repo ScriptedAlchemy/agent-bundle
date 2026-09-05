@@ -155,8 +155,8 @@ capability 或 state 上下文时才调用 `await agent()`。不存在公开的 
 分别声明、文本相同的 schema 仍是两个契约，因为它们是两个独立编写、将来可能分化的事物。每条路由以
 `route.contract` 指明自己的契约，路由图则把它们列在 `contracts` 中，按 id 排序；没有任何路由带契约时
 该字段缺席（`RouteContract` 与 `RouteContractOrigin` 从 `agent-bundle/api` 导出，与 `CompiledRouteGraph`
-并列）。`agent-bundle inspect --routes` 会随路由图打印这些契约，Workbench 的 Routes 页面则显示
-路由契约的来源以及共享它的其他路由。在路由自身模块之外声明的契约会参与该路由的 digest identity；
+并列）。`agent-bundle inspect --routes` 会随路由图打印这些契约，Workbench 的路由检查器则显示
+所选叶子的契约来源以及共享它的其他路由。在路由自身模块之外声明的契约会参与该路由的 digest identity；
 schema 全部内联的路由图保持其已有的 digest。
 
 契约承载输入侧。`resultSchema` 可以用同样方式导入，但不存在静态的结果投影：框架会静态检查它是否存在，

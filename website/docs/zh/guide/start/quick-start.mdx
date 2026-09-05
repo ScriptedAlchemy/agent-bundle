@@ -82,9 +82,9 @@ npx agent-bundle dev --root .     # 带实时重建的本地 Workbench
 ```
 
 `build` 会校验项目并写出产物根目录；声明了 `bin`/`lib` 时还会一并完成包构建。`dev` 在 loopback 上提供
-开发者 Workbench，并随输入变化持续重建：项目概览与诊断、Skill 文档、带 provenance 与 epoch 对比的
-产物树、绑定到产物、带原始协议轨迹的 MCP playground、运行真实生成包装层的钩子 playground，以及
-eval 运行。
+开发者 Workbench，并随输入变化持续重建。用它的 Application 树选择工具、事件、CLI 命令、脚本、App、
+Skill、规则或命令；运行可执行叶子，并首先检视渲染出的 Agent Document。Trace 展示本次会话的调用，
+Problems 保存诊断，Advanced 则包含 eval、产物检视、协议检视、宿主诊断与原始日志。
 
 ## 查看编译器的判断
 
