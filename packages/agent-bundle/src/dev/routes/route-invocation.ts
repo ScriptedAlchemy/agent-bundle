@@ -48,14 +48,28 @@ export type RouteInvocationStatus = 'failed' | 'succeeded';
 
 export interface RouteInvocationTiming {
   readonly durationMs: number;
-  /** `providers`, `handler`, `render`, `projection`, or a provider id (`provider:<name>`). */
+  /**
+   * A measured phase. `render` is the child's render (or plain-script run)
+   * duration; `projection` is host-projection time in the service; `elapsed`
+   * is wall time until failure when the child never produced a render
+   * duration. `handler`, `providers`, and `provider:<name>` appear only when
+   * the child observed them. Zero is a measurement, not "unknown".
+   */
   readonly phase: string;
   readonly startedAt: string;
 }
 
-export type RouteInvocationProviderStatus = 'failed' | 'mounted' | 'skipped';
+/**
+ * Observed provider outcome. `unobserved` means the service never measured
+ * this provider — `durationMs` is omitted, never reported as `0`.
+ */
+export type RouteInvocationProviderStatus = 'failed' | 'mounted' | 'skipped' | 'unobserved';
 
 export interface RouteInvocationProvider {
+  /**
+   * Measured mount duration in milliseconds. Absent when the phase was not
+   * measured (`unobserved`, or an observed row that did not record time).
+   */
   readonly durationMs?: number;
   readonly id: string;
   readonly message?: string;

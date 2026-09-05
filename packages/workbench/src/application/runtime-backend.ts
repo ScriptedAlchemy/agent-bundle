@@ -196,11 +196,13 @@ const invocationForRun = (
     : Object.freeze([]);
   const document = documentFor(events);
   const timings = run.status === 'succeeded'
-    ? Object.freeze(run.result.trace.map((span) => Object.freeze({
-        durationMs: span.durationMs ?? 0,
-        phase: span.phase,
-        startedAt: span.startedAt,
-      })))
+    ? Object.freeze(run.result.trace.flatMap((span) => span.durationMs === undefined
+      ? []
+      : [Object.freeze({
+          durationMs: span.durationMs,
+          phase: span.phase,
+          startedAt: span.startedAt,
+        })]))
     : Object.freeze([]);
   const result = run.status === 'succeeded' ? run.result.agentVisible : undefined;
   return Object.freeze({

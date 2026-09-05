@@ -144,8 +144,10 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     expect(tool.invocation.document).toBeDefined();
     expect(tool.invocation.projection.mcp).toBeDefined();
     expect(tool.invocation.providers).toEqual([
-      expect.objectContaining({ name: 'clock', status: 'mounted' }),
+      expect.objectContaining({ name: 'clock', status: 'unobserved' }),
     ]);
+    expect(tool.invocation.providers[0]).not.toHaveProperty('durationMs');
+    expect(tool.invocation.timings.map((entry) => entry.phase)).toEqual(['render', 'projection']);
 
     const eventResponse = await fetch(`${server.url}/api/routes/invocations`, {
       body: JSON.stringify({

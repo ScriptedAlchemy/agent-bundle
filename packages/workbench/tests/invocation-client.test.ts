@@ -114,6 +114,20 @@ it('preserves coded HTTP diagnostics', async () => {
   });
 });
 
+it('decodes unobserved providers without a duration', async () => {
+  const unobserved = {
+    ...invocation,
+    providers: Object.freeze([{
+      id: 'catalog',
+      name: 'Catalog',
+      status: 'unobserved' as const,
+    }]),
+  } satisfies RouteInvocation;
+  const client = new InvocationClient({ foreground: foreground(() => Response.json({ invocation: unobserved })) });
+
+  await expect(client.invoke({ routeId: invocation.routeId })).resolves.toEqual(unobserved);
+});
+
 it('rejects malformed success payloads and unsafe invocation ids', async () => {
   const client = new InvocationClient({ foreground: foreground(() => Response.json({
     invocation: { ...invocation, unexpected: true },

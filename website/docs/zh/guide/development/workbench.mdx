@@ -66,7 +66,8 @@ schema 生成，并提供适用的夹具以及为该叶子保留的上次输入�
 结果首先打开 **Rendered**，即生产 Agent Document 及其流式进度或 Suspense 替换的浏览器渲染。次要结果
 标签是 **Structured result**、**Raw AgentDocument**、**MCP projection**、可用时的 **CLI projection**，
 以及 **Trace**。检查器仅在请求时打开，其中包含 **Source**、**Schema**、**Context**、**Providers**、
-**Execution timings**、**Projection** 与 **Raw protocol**。
+**Execution timings**、**Projection** 与 **Raw protocol**。未测到的阶段显示 **unobserved**（并省略
+时长）；`0 ms` 是测得的零，不是占位。
 
 浏览器不会导入或执行任意路由模块。服务器运行生成式可执行文件所用的同一条 RSC 路由路径，并把其语义
 渲染事件流与最终的 Agent Document 发送给 Workbench。
@@ -164,10 +165,15 @@ Workbench 外壳，因此路由、trace、Problems 与 Advanced 的深度链接�
 - `GET /api/routes/invocations/<id>` 返回一次调用。
 - `/api/project/events` 以 `route.invocation` 事件发布已完成的摘要。
 
-该信封在可用时携带规范输入、请求上下文、providers、有序渲染事件、最终的 Agent Document、结构化结果、
-投影、诊断与执行计时。被表示的 `Agent.Error` 仍是一份已渲染结果；未知路由或 invocation id（`AB8231`）、
-不可用的 epoch（`AB8232`）、渲染超时或崩溃（`AB8236`）、格式错误的请求（`AB8237`）与未知 fixture id
-（`AB8238`）会作为诊断报告。
+该信封携带规范输入、请求上下文、providers、有序渲染事件、最终的 Agent Document、结构化结果、投影、
+诊断与执行计时。`providers` 列出子进程实际测到的结果（`mounted`、`failed` 或 `skipped`），仅在测到
+时长时带 `durationMs`。子进程未报告观测值时（普通脚本，或在任何 provider 运行之前失败），每个目录
+provider 为 `unobserved` 且省略 `durationMs`；`0` 是测得的零，不是「未知」。`timings` 只列出已测量
+阶段：`render`（子进程的渲染或普通脚本运行时长）、`projection`（服务端的宿主投影时间），以及观测到
+时的 `handler`、`providers` 与 `provider:<name>`。失败的调用记录 `elapsed`（失败前的墙钟时间），
+不会伪造 `failed` 的 provider 行。被表示的 `Agent.Error` 仍是一份已渲染结果；未知路由或
+invocation id（`AB8231`）、不可用的 epoch（`AB8232`）、渲染超时或崩溃（`AB8236`）、格式错误的请求
+（`AB8237`）与未知 fixture id（`AB8238`）会作为诊断报告。
 各条触发条件与恢复指引见[诊断参考](../../reference/diagnostics.md)。
 
 ## 以编程方式使用同一个会话

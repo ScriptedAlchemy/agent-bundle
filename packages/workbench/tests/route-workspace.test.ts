@@ -312,6 +312,27 @@ describe('RouteInspector', () => {
     expect(raw).toContain('&quot;manifestDigest&quot;: &quot;digest-1&quot;');
   });
 
+  it('renders unobserved providers without a fabricated 0 ms duration', () => {
+    const markup = renderToStaticMarkup(createElement(RouteInspector, {
+      backendKind: 'dev-server',
+      invocation: {
+        ...invocation,
+        providers: [{ id: 'provider:library', name: 'library', status: 'unobserved' }],
+        timings: [{ durationMs: 5, phase: 'render', startedAt: invocation.startedAt }],
+      },
+      leaf: toolLeaf,
+      onTabChange: noop,
+      onToggle: noop,
+      open: true,
+      tab: 'providers',
+    }));
+
+    expect(markup).toContain('inspector-status--unobserved');
+    expect(markup).toContain('unobserved');
+    expect(markup).not.toContain('0 ms');
+    expect(markup).toContain('—');
+  });
+
   it('derives one row per request-context axis', () => {
     expect(requestContextRows(invocation.context).map((entry) => entry.label)).toEqual([
       'Invocation kind', 'Operation ID', 'Surface', 'Host contract revision', 'Host', 'Session', 'Actor', 'Workspace', 'Lineage',

@@ -12,6 +12,8 @@ import {
   RouteInvocationRequestError,
   invocationSummary,
   parseRouteInvocationRequest,
+  type RouteInvocationChildResult,
+  type RouteInvocationServiceOptions,
 } from '../src/dev/routes/route-invocation-service.ts';
 import type { RouteManifest } from '../src/dev/routes/route-manifest.ts';
 import type { CompiledRouteGraph } from '../src/routes/types.ts';
@@ -305,4 +307,114 @@ it('reaps the render child and its descendants when the service closes mid-rende
   } finally {
     await rm(project.root, { force: true, recursive: true });
   }
+});
+
+const echoRoute = {
+  config: [],
+  id: 'tool:fixture/echo',
+  kind: 'tool',
+  provenance: { kind: 'conventional' },
+  serverId: 'mcp:fixture',
+  source: 'src/mcp/fixture/tools/echo.tsx',
+} as const;
+
+const clockProvider = {
+  id: 'provider:clock',
+  name: 'clock',
+  source: 'src/providers/clock.ts',
+} as const;
+
+const telemetryManifest = (): RouteManifest => ({
+  diagnostics: [],
+  digest: 'digest',
+  events: [],
+  providers: [clockProvider],
+  scripts: [],
+  servers: [{ id: 'mcp:fixture', mode: 'generated', name: 'fixture', routes: [echoRoute] }],
+  sourceRevision: 'revision',
+});
+
+const succeededChild = (observed?: RouteInvocationChildResult['observed']): RouteInvocationChildResult => ({
+  document: {
+    root: { children: [{ kind: 'text', text: 'ok' }], kind: 'result' },
+    status: 'success',
+    version: 1,
+  },
+  events: [{
+    document: {
+      root: { children: [{ kind: 'text', text: 'ok' }], kind: 'result' },
+      status: 'success',
+      version: 1,
+    },
+    sequence: 1,
+    type: 'complete',
+  }],
+  input: {},
+  mcp: { content: [] },
+  ...(observed === undefined ? {} : { observed }),
+  renderDurationMs: 12,
+});
+
+const telemetryService = (
+  renderChild: NonNullable<RouteInvocationServiceOptions['renderChild']>,
+): RouteInvocationService => new RouteInvocationService({
+  manifest: { manifest: telemetryManifest },
+  prepared: () => ({
+    manifest: { projectRoot: '/project' } as never,
+    targets: ['claude'],
+  }),
+  renderChild,
+});
+
+it('marks catalog providers unobserved when the child reports no observations', async () => {
+  const result = await telemetryService(async () => succeededChild()).invoke({
+    input: {},
+    routeId: echoRoute.id,
+  });
+
+  expect(result.status).toBe('succeeded');
+  expect(result.providers).toEqual([{ id: 'provider:clock', name: 'clock', status: 'unobserved' }]);
+  expect(result.providers[0]).not.toHaveProperty('durationMs');
+  expect(result.timings.map((entry) => entry.phase)).toEqual(['render', 'projection']);
+  expect(result.timings[0]).toMatchObject({ durationMs: 12, phase: 'render' });
+});
+
+it('forwards observed providers and timings without fabricating the rest', async () => {
+  const observed = {
+    providers: [{ durationMs: 7, id: 'provider:clock', name: 'clock', status: 'mounted' as const }],
+    timings: [
+      { durationMs: 3, phase: 'providers', startedAt: '2026-09-05T00:00:00.000Z' },
+      { durationMs: 3, phase: 'provider:clock', startedAt: '2026-09-05T00:00:00.000Z' },
+      { durationMs: 9, phase: 'handler', startedAt: '2026-09-05T00:00:00.003Z' },
+      { durationMs: 99, phase: 'render', startedAt: '2026-09-05T00:00:00.012Z' },
+    ],
+  } as const;
+  const result = await telemetryService(async () => succeededChild(observed)).invoke({
+    input: {},
+    routeId: echoRoute.id,
+  });
+
+  expect(result.providers).toEqual(observed.providers);
+  expect(result.timings.map((entry) => entry.phase)).toEqual([
+    'providers',
+    'provider:clock',
+    'handler',
+    'render',
+    'projection',
+  ]);
+  expect(result.timings.find((entry) => entry.phase === 'handler')).toMatchObject({ durationMs: 9 });
+  expect(result.timings.find((entry) => entry.phase === 'render')).toMatchObject({ durationMs: 12 });
+});
+
+it('does not fabricate failed providers when the child throws', async () => {
+  const result = await telemetryService(async () => {
+    throw new Error('provider boom');
+  }).invoke({ input: {}, routeId: echoRoute.id });
+
+  expect(result.status).toBe('failed');
+  expect(result.providers).toEqual([{ id: 'provider:clock', name: 'clock', status: 'unobserved' }]);
+  expect(result.providers[0]).not.toHaveProperty('durationMs');
+  expect(result.providers.some((provider) => provider.status === 'failed')).toBe(false);
+  expect(result.timings.map((entry) => entry.phase)).toEqual(['elapsed']);
+  expect(result.timings.some((entry) => entry.phase === 'render' || entry.phase === 'handler')).toBe(false);
 });
