@@ -314,7 +314,7 @@ e2e('drives every populated MCP App workflow surface in real Chrome', { timeout:
     await waitForSettledWorkbench(page);
     await expect(page.getByRole('heading', { name: 'Bundle dashboard', exact: true })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByText('See what this bundle publishes, try supported workflows, and rebuild after source changes.', { exact: true })).toBeVisible({ timeout: browserTimeout });
-    for (const capability of ['1 Skill', '2 Hooks', '3 scripts', '3 MCP servers', '1 Eval suite', '3 generated targets']) {
+    for (const capability of ['1 Skill', '2 Hooks', '1 script', '1 MCP server', '1 Eval suite', '3 generated targets']) {
       await expect(page.getByLabel('Bundle capabilities').getByText(capability, { exact: true })).toBeVisible({ timeout: browserTimeout });
     }
     await expect(page.getByLabel('Recommended next actions').getByRole('link')).toHaveCount(3, { timeout: browserTimeout });

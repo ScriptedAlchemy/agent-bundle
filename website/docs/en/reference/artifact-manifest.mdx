@@ -96,6 +96,8 @@ each row lives on `compiler.provenance`, not here.
 each listed path directly, verify its bytes against `sha256`, and include it in the receipt content
 hash without enumerating the root. The manifest file itself and an operator-provided `.env` or
 `.env.local` beside it are also copied and hashed; unlisted files are ignored.
+A tool that derives a variant of a built root, such as a Workbench development install, re-indexes
+the variant's manifest because that manifest remains the inventory the installer copies and hashes.
 
 ### `projections[]`
 
