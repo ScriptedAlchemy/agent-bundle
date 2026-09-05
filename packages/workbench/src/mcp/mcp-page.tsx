@@ -3,6 +3,10 @@ import React, { useCallback, useEffect, useRef, useState, type KeyboardEvent } f
 import type { McpSessionBinding, McpSessionInspectorConfig, McpSessionOperation } from '../../../agent-bundle/src/contracts/mcp-session.ts';
 import type { DevRuntimeMcpAppRunBinding } from '../../../agent-bundle/src/contracts/runtime.ts';
 import { isRecord } from '../client-helpers.ts';
+import type {
+  RuntimeAppPreviewLifecycle,
+  RuntimeAppPreviewProps,
+} from '../runtime-view-contracts.ts';
 
 import { McpJsonInput, type ImmutableJsonRecord } from './mcp-json-input.tsx';
 import {
@@ -28,8 +32,6 @@ import type {
   McpBrowserSessionTimelineEntry,
 } from './mcp-session-model.ts';
 import type { McpSessionControllerBinding, McpSessionControllerReplay, McpSessionControllerRequest } from './mcp-session-controller.ts';
-import type { RuntimeAppPreviewProps } from '../runtime-stage.tsx';
-import type { RuntimeAppPreviewLifecycle } from '../runtime-playground.tsx';
 import type { McpToolPrefill } from '../routes/routes-model.ts';
 import {
   mcpProtocolTraceDownload,

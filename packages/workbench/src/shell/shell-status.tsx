@@ -107,7 +107,7 @@ export const ShellStatus = ({ connection, connectionError, onNavigate, problemCo
 export const ConnectionGate = ({ error, state }: {
   readonly error?: string;
   readonly state: Exclude<ProjectConnectionPhase, 'connected'>;
-}) => <main aria-live="polite" className="connection-recovery loading-state">
+}) => <main aria-live="polite" className="connection-recovery loading-state" data-testid="workbench-loading">
   <h1>{state === 'unavailable' ? 'Foreground connection unavailable' : 'Foreground connection reconnecting'}</h1>
   <p>{state === 'unavailable' ? 'Waiting for the foreground server to recover.' : 'Connecting to the foreground server.'}</p>
   {error === undefined ? undefined : <p role="alert">{error}</p>}

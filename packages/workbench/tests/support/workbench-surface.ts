@@ -225,7 +225,7 @@ const applicationTreeFromCatalog = (catalog: WorkbenchRouteCatalog): Application
         }
       }
     }, 0),
-    state: 'current',
+    state: 'fresh',
   };
 };
 
@@ -238,10 +238,7 @@ export interface WorkbenchIaSurface {
   readonly routes: WorkbenchRouteCatalog;
 }
 
-interface NextWorkbenchSurface extends WorkbenchSurface {
-  readonly advanced?: readonly AdvancedSection[];
-  readonly application?: ApplicationTree;
-}
+type NextWorkbenchSurface = WorkbenchSurface;
 
 export const inspectWorkbenchSurface = async (
   root: string | { readonly root: string },

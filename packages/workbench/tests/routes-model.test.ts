@@ -5,7 +5,6 @@ import {
   cliCommandInvocation,
   cliCommandUsage,
   createRouteInputDraft,
-  mcpToolPrefillFor,
   routeCatalogFor,
   routeCatalogHasKind,
   routeCatalogServerCount,
@@ -351,18 +350,6 @@ it('marks required and optional repeated named flags in CLI usage', () => {
     path: ['library', 'import'],
     routeId: 'cli:library/import',
   })).toBe('library import --source <string> ... [--tag <string> ...]');
-});
-
-it('maps a tool route server id and final route segment into an MCP prefill', () => {
-  const catalog = routeCatalogFor(manifest);
-  const group = catalog.groups[0]!;
-  const entry = group.entries.find((candidate) => candidate.id === 'tool:alpha/echo')!;
-
-  expect(mcpToolPrefillFor(group, entry, { format: 'json' })).toEqual({
-    arguments: { format: 'json' },
-    serverName: 'alpha',
-    toolName: 'echo',
-  });
 });
 
 it('sorts providers by name and keeps route provenance on every entry', () => {

@@ -30,7 +30,7 @@ const status = (overrides: Partial<ProjectStatus> = {}): ProjectStatus => ({
   ...overrides,
 });
 
-const tree: ApplicationTree = { diagnostics: [], groups: [], leafCount: 7, state: 'current' };
+const tree: ApplicationTree = { diagnostics: [], groups: [], leafCount: 7, state: 'fresh' };
 
 const error: Problem = { code: 'AB4000', message: 'Plugin name is required.', repairable: true, severity: 'error', source: 'build' };
 const warning: Problem = { message: 'stale', repairable: true, severity: 'warning', source: 'route-catalog' };
@@ -125,6 +125,7 @@ it('lays out the tree column beside the workspace and renders the empty and unkn
   expect(renderToStaticMarkup(createElement(SelectRouteState, {}))).toContain('declares no routes yet');
 
   const unknown = renderToStaticMarkup(createElement(UnknownRouteState, { onNavigate: () => undefined, path: '/routes/scripts/gone' }));
+  expect(unknown).toContain('data-testid="unknown-route"');
   expect(unknown).toContain('This route is not in the compiled catalog');
   expect(unknown).toContain('/routes/scripts/gone');
   expect(unknown).toContain('href="/"');
@@ -132,6 +133,7 @@ it('lays out the tree column beside the workspace and renders the empty and unkn
 
 it('overlays the connection gate with the failure line', () => {
   const markup = renderToStaticMarkup(createElement(ConnectionGate, { error: 'AB8003 — refused', state: 'unavailable' }));
+  expect(markup).toContain('data-testid="workbench-loading"');
   expect(markup).toContain('Foreground connection unavailable');
   expect(markup).toContain('<p role="alert">AB8003 — refused</p>');
   expect(renderToStaticMarkup(createElement(ConnectionGate, { state: 'connecting' }))).toContain('Foreground connection reconnecting');

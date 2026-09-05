@@ -187,7 +187,7 @@ const treeWith = (source: string): ApplicationTree => ({
     }],
   }],
   leafCount: 1,
-  state: 'current',
+  state: 'fresh',
 });
 
 it('lists source, build, contract-gate, catalog, host, and runtime problems, errors first, with route deep links', () => {

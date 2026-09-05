@@ -66,6 +66,7 @@ it('renders an accessible expanded application tree with counts and selection', 
 
   expect(markup).toContain('>Filter application</span>');
   expect(markup).toMatch(/<label[^>]*for="([^"]+)"[^>]*>.*<input id="\1"/u);
+  expect(markup).toContain('data-testid="application-tree"');
   expect(markup).toContain('role="tree"');
   expect(markup.match(/role="treeitem"/gu)).toHaveLength(6);
   expect(markup).toContain('aria-expanded="true"');

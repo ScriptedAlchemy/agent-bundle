@@ -99,7 +99,7 @@ export const SelectRouteState = ({ tree }: { readonly tree?: ApplicationTree }) 
 /** A deep link whose node the compiled catalog does not contain. */
 export const UnknownRouteState = ({ onNavigate, path }: { readonly onNavigate: (location: WorkbenchLocation) => void; readonly path: string }) => {
   const root: WorkbenchLocation = Object.freeze({ area: 'application' });
-  return <main className="workspace-empty" data-testid="workspace-unknown-route">
+  return <main className="workspace-empty" data-testid="unknown-route">
     <h1>This route is not in the compiled catalog</h1>
     <p><code className="identifier">{path}</code> names no route of the published build. It may have been renamed or removed, or the build that declares it has not published yet.</p>
     <a href={formatWorkbenchLocation(root)} onClick={(event) => { event.preventDefault(); onNavigate(root); }}>Back to the application tree</a>
