@@ -137,11 +137,12 @@ const netCode = (text: string): string | undefined => /\b(net::ERR_[A-Z_]+)\b/u.
 
 const ledgerFailureAt = (request: NetworkLedgerEntry): number => request.completedAt ?? request.at;
 
-type KnownStreamClass = 'evals' | 'logs' | 'playground';
+type KnownStreamClass = 'evals' | 'logs' | 'playground' | 'trace';
 
 const knownStreamClass = (path: string): KnownStreamClass | undefined => {
   const segments = path.split('/').filter((segment) => segment.length > 0);
   if (path === '/api/logs/stream') return 'logs';
+  if (path === '/api/trace/stream') return 'trace';
   if (segments.length !== 5 || segments[0] !== 'api' || segments[3]!.length === 0 || segments[4] !== 'stream') return undefined;
   if (segments[1] === 'playground' && segments[2] === 'sessions') return 'playground';
   return segments[1] === 'evals' && segments[2] === 'runs' ? 'evals' : undefined;
@@ -178,6 +179,10 @@ const isLogsReplayCancellation = (request: NetworkLedgerEntry): boolean =>
   request.path === '/api/logs/replay' && request.completedAt !== undefined && request.at <= request.completedAt &&
   (responseIsAbsent(request) || isSuccessStatus(request.status));
 
+const isTraceReplayCancellation = (request: NetworkLedgerEntry): boolean =>
+  request.path === '/api/trace' && request.completedAt !== undefined && request.at <= request.completedAt &&
+  (responseIsAbsent(request) || isSuccessStatus(request.status));
+
 /**
  * The playground screen retires a superseded in-flight catalog request when
  * its effect re-runs (one AbortController per effect), and route changes abort
@@ -189,7 +194,8 @@ const isKnownPreOutageClientCancellation = (request: NetworkLedgerEntry): boolea
     request.path === '/api/playground/catalog' ||
     isPlaygroundSessionReadCancellation(request) ||
     isPlaygroundSessionReplayPath(request.path) ||
-    isLogsReplayCancellation(request)
+    isLogsReplayCancellation(request) ||
+    isTraceReplayCancellation(request)
   );
 
 export const hasCanonicalAfterCursor = (url: URL): boolean => {
@@ -319,7 +325,8 @@ export const validateOutageLedger = (ledger: OutageLedger): void => {
     // contract. Report only the unclaimed ones — a dump of every failure reads
     // as if the recognized ones were at fault.
     const unrecognizedPostRecoveryFailures = postRecoveryFailures.filter((request) =>
-      !freshMcpStreamFailures.includes(request) && !navigationFailures.has(request),
+      !freshMcpStreamFailures.includes(request) && !navigationFailures.has(request) &&
+      !isKnownPreOutageClientCancellation(request),
     );
     assertOutageLedger(unrecognizedPostRecoveryFailures.length === 0,
       `unknown post-recovery failure: ${JSON.stringify(unrecognizedPostRecoveryFailures)}`);

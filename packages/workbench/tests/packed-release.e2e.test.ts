@@ -333,12 +333,12 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       await waitForWorkbenchIdle(page, browserTimeout);
       await expect(page.getByTestId('application-tree')).toContainText('review', { timeout: browserTimeout });
       await page.goto(workbenchUrl(origin, '/advanced/artifact'));
-      await expect(page.getByRole('heading', { name: 'Artifact' })).toBeVisible({ timeout: browserTimeout });
-      await expect(page.getByRole('heading', { name: 'Emitted files' })).toBeVisible({ timeout: browserTimeout });
+      await expect(page.getByRole('heading', { name: 'Artifact', exact: true })).toBeVisible({ timeout: browserTimeout });
+      await expect(page.getByRole('heading', { name: 'Emitted files', exact: true })).toBeVisible({ timeout: browserTimeout });
 
       phase = 'MCP and App page';
       await page.goto(workbenchUrl(origin, '/advanced/protocol'));
-      await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
+      await expect(page.getByRole('heading', { name: 'MCP playground', exact: true })).toBeVisible({ timeout: browserTimeout });
       await page.locator('#mcp-target').selectOption('portable');
       await page.locator('#mcp-server-name').fill('fixture');
       const openedOldBrowserMcpSession = page.waitForResponse((response) =>
@@ -371,13 +371,13 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       const logsReplayListing = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/logs/replay');
       await openAdvancedSection('Raw logs');
       phase = 'Logs page heading';
-      await expect(page.getByRole('heading', { name: 'Logs' })).toBeVisible({ timeout: browserTimeout });
+      await expect(page.getByRole('heading', { name: 'Logs', exact: true })).toBeVisible({ timeout: browserTimeout });
       phase = 'Logs page replay';
       const logsReplayListingResponse = await logsReplayListing;
       if (!logsReplayListingResponse.ok()) throw new Error(`The Logs page replay route failed with ${logsReplayListingResponse.status()}: ${await logsReplayListingResponse.text()}`);
       await openAdvancedSection('Evals');
       phase = 'Evals page heading';
-      await expect(page.getByRole('heading', { name: 'Evals' })).toBeVisible({ timeout: browserTimeout });
+      await expect(page.getByRole('heading', { name: 'Evals', exact: true })).toBeVisible({ timeout: browserTimeout });
       phase = 'Evals suite catalog';
       await expect(page.getByLabel('Suite')).toContainText('packed-deterministic', { timeout: browserTimeout });
       const compareTab = page.getByRole('tab', { name: 'Compare' });
@@ -437,7 +437,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       const epochBMarker = 'Epoch B changed the packed review guidance.';
       await replaceSourceAndAwaitWatcherRebuild('epoch B', skillSource, `${originalSkill}\n\n${epochBMarker}\n`);
       await openPrimaryArea('problems');
-      await expect(page.getByRole('heading', { name: /^Problems/u })).toBeVisible({ timeout: browserTimeout });
+      await expect(page.getByRole('heading', { name: /^Problems(?: \([0-9]+\))?$/u })).toBeVisible({ timeout: browserTimeout });
       await rebuildFromProblems('epoch B');
       const epochBStatus = activeEpochFrom(await call('project_status'), 'epoch B');
       expect(epochBStatus.artifactStatus.state).toBe('active');
@@ -449,10 +449,10 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
 
       phase = 'artifact epoch diff';
       await openAdvancedSection('Artifact');
-      await expect(page.getByRole('heading', { name: 'Artifact' })).toBeVisible({ timeout: browserTimeout });
+      await expect(page.getByRole('heading', { name: 'Artifact', exact: true })).toBeVisible({ timeout: browserTimeout });
       await page.locator('#artifact-diff-base').fill(epochId);
       await page.getByRole('button', { name: 'Compare builds' }).click();
-      await expect(page.getByRole('heading', { name: 'Build comparison' })).toBeVisible({ timeout: browserTimeout });
+      await expect(page.getByRole('heading', { name: 'Build comparison', exact: true })).toBeVisible({ timeout: browserTimeout });
       const changedRows = page.locator('.artifact-diff-group').filter({
         has: page.getByRole('heading', { name: /^Changed \([1-9][0-9]*\)$/u }),
       }).locator('tbody tr');
@@ -471,7 +471,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       if (invalidConfig === originalConfig) throw new Error('The packed fixture did not contain the resource URI used for the invalid rebuild.');
       await replaceSourceAndAwaitWatcherRebuild('invalid epoch B', configSource, invalidConfig);
       await openPrimaryArea('problems');
-      await expect(page.getByRole('heading', { name: /^Problems/u })).toBeVisible({ timeout: browserTimeout });
+      await expect(page.getByRole('heading', { name: /^Problems(?: \([0-9]+\))?$/u })).toBeVisible({ timeout: browserTimeout });
       await rebuildFromProblems('invalid epoch B');
       const staleStatus = activeEpochFrom(await call('project_status'), 'stale epoch B');
       expect(staleStatus.artifactStatus.state).toBe('stale');
@@ -520,7 +520,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       };
       page.on('response', collectLogsReplay);
       await openAdvancedSection('Raw logs');
-      await expect(page.getByRole('heading', { name: 'Logs' })).toBeVisible({ timeout: browserTimeout });
+      await expect(page.getByRole('heading', { name: 'Logs', exact: true })).toBeVisible({ timeout: browserTimeout });
       let logsReplayDocument: unknown;
       while (logsReplayDocument === undefined) {
         const candidate = await nextLogsReplay();
@@ -663,7 +663,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
 
       phase = 'Evals live evidence and comparisons';
       await openAdvancedSection('Evals');
-      await expect(page.getByRole('heading', { name: 'Evals' })).toBeVisible({ timeout: browserTimeout });
+      await expect(page.getByRole('heading', { name: 'Evals', exact: true })).toBeVisible({ timeout: browserTimeout });
       await page.getByLabel('Suite').selectOption('packed-deterministic');
       await page.getByLabel('Harness').selectOption('deterministic');
       const uiEvalAdmitted = page.waitForResponse((response) =>
@@ -683,8 +683,8 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
         })}`, { cause: error });
       }
       phase = 'Evals durable evidence';
-      await expect(page.getByRole('heading', { name: 'Durable event timeline' })).toBeVisible({ timeout: browserTimeout });
-      await expect(page.getByRole('heading', { name: 'Host / model matrix' })).toBeVisible({ timeout: browserTimeout });
+      await expect(page.getByRole('heading', { name: 'Durable event timeline', exact: true })).toBeVisible({ timeout: browserTimeout });
+      await expect(page.getByRole('heading', { name: 'Host / model matrix', exact: true })).toBeVisible({ timeout: browserTimeout });
       await expect(page.locator('.eval-counts')).toHaveText('1 passed · 0 failed · 0 inconclusive', { timeout: browserTimeout });
       await expect(page.locator('.eval-timeline .eval-event-sequence')).not.toHaveCount(0, { timeout: browserTimeout });
       await expect(page.locator('.eval-timeline')).toContainText('run.completed');
@@ -724,7 +724,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       );
       await closeChild(stoppedChild);
       phase = 'foreground restart/reconnect disconnected state';
-      await expect(page.getByRole('heading', { name: 'Foreground connection unavailable' })).toBeVisible({ timeout: browserTimeout });
+      await expect(page.getByRole('heading', { name: 'Foreground connection unavailable', exact: true })).toBeVisible({ timeout: browserTimeout });
       await expect(page.getByText('Waiting for the foreground server to recover.')).toBeVisible({ timeout: browserTimeout });
       phase = 'foreground restart/reconnect browser recovery';
       child = startInstalledServer(port);
@@ -766,7 +766,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
 
       phase = 'foreground restart/reconnect fresh B browser MCP session';
       await page.goto(workbenchUrl(origin, '/advanced/protocol'));
-      await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
+      await expect(page.getByRole('heading', { name: 'MCP playground', exact: true })).toBeVisible({ timeout: browserTimeout });
       await expect(page.getByRole('button', { name: 'Open MCP session' })).toBeEnabled({ timeout: browserTimeout });
       await expect(page.locator('#mcp-epoch')).toHaveValue(recoveredEpochId, { timeout: browserTimeout });
       await expect(page.locator('#mcp-target')).toHaveValue('portable');
@@ -854,7 +854,9 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
         const openedIndex = browserRequests.length;
         await page.getByTestId('workbench-nav').locator(`[data-area="${route.label.toLowerCase()}"]`).click();
         if (route.heading !== undefined) {
-          await expect(page.getByRole('heading', { name: new RegExp(`^${route.heading}`, 'u') })).toBeVisible({ timeout: browserTimeout });
+          await expect(page.getByRole('heading', {
+            name: route.heading === 'Problems' ? /^Problems(?: \([0-9]+\))?$/u : new RegExp(`^${route.heading}$`, 'u'),
+          })).toBeVisible({ timeout: browserTimeout });
         }
         if (route.testId !== undefined) {
           await expect(page.getByTestId(route.testId)).toBeVisible({ timeout: browserTimeout });

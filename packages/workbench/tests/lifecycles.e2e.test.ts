@@ -84,11 +84,11 @@ e2e(
       await expect(stage).toContainText('Recorded observed-lifecycle.txt from claude', { timeout: browserTimeout });
       await page.getByRole('tab', { name: 'Canonical → host mapping' }).click();
       const requestContext = page.getByRole('tabpanel');
-      await expect(requestContext).toContainText('claude · derived');
+      await expect(requestContext).toContainText('claude · receipt');
       await expect(requestContext).toContainText('lifecycle-observed');
       await expect(requestContext).toContainText('/tmp');
       await expect(requestContext).toContainText('Unavailable · not-provided');
-      await expect(requestContext).toContainText('Unavailable · no-shared-runtime');
+      await expect(requestContext).toContainText('lifecycle-observed · depth 0 · native · receipt');
 
       const sessionToken = await page.evaluate(async () => {
         const response = await fetch('/api/project/session', { credentials: 'same-origin' });

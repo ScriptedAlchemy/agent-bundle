@@ -32,6 +32,9 @@ export const workbenchTestIds = Object.freeze({
   routeStatus: 'route-status',
   routeWorkspace: 'route-workspace',
   shellBuildStatus: 'shell-build-status',
+  traceDetail: 'trace-detail',
+  traceEntry: 'trace-entry',
+  traceGroup: 'trace-group',
   unknownRoute: 'unknown-route',
   workbenchLoading: 'workbench-loading',
   workbenchNav: 'workbench-nav',
@@ -254,6 +257,90 @@ export const readInvocationId = async (page: Page, timeout = browserTimeout): Pr
   if (text.length === 0) throw new Error('route-status rendered an invocation without an id.');
   return text;
 };
+
+export const readCorrelationId = async (page: Page, timeout = browserTimeout): Promise<string> => {
+  const id = workbenchTestId(page, 'routeStatus').locator('.route-status-correlation');
+  await expect(id).toBeVisible({ timeout });
+  const text = (await id.innerText()).trim();
+  const match = /^correlation (.+)$/u.exec(text);
+  if (match?.[1] === undefined || match[1].length === 0) {
+    throw new Error('route-status rendered an invocation without a correlation id.');
+  }
+  return match[1];
+};
+
+export const traceEntryRow = (page: Page, kind?: string): Locator =>
+  kind === undefined
+    ? workbenchTestId(page, 'traceEntry')
+    : page.locator(`[data-testid=${JSON.stringify(workbenchTestIds.traceEntry)}][data-kind=${JSON.stringify(kind)}]`);
+
+/** Group for one tool invocation. Summaries may be `[REDACTED]`; `routeId` is asserted via the Route facet. */
+export const expectToolInvocationTraceGroup = async (
+  page: Page,
+  options: Readonly<{ readonly invocationId: string; readonly routeId: string }>,
+  timeout = browserTimeout,
+): Promise<Locator> => {
+  const routeSelect = page.locator('.trace-filter-field').filter({ hasText: 'Route' }).locator('select');
+  await expect(routeSelect.locator('option').filter({ hasText: options.routeId })).toHaveCount(1, { timeout });
+  const group = workbenchTestId(page, 'traceGroup').filter({ hasText: options.invocationId }).first();
+  await expect(group).toBeVisible({ timeout });
+  await group.scrollIntoViewIfNeeded();
+  const completed = group.locator(`[data-testid=${JSON.stringify(workbenchTestIds.traceEntry)}][data-kind="invocation.completed"]`);
+  await expect(completed).toBeVisible({ timeout });
+  await expect(group.locator(`[data-testid=${JSON.stringify(workbenchTestIds.traceEntry)}][data-kind="invocation.started"]`))
+    .toBeVisible({ timeout });
+  const kernel = group.locator(`[data-testid=${JSON.stringify(workbenchTestIds.traceEntry)}][data-kind^="kernel."]`);
+  if (await kernel.count() > 0) await expect(kernel.first()).toBeVisible({ timeout });
+  else await expect(completed.locator('.trace-duration')).toHaveText(/\d|</u, { timeout });
+  return group;
+};
+
+/**
+ * POSTs `/api/routes/invocations` from the open Workbench tab using the same
+ * session header the shell's `ForegroundRequestAuthority` sends. The page is
+ * not navigated, so a live `/trace` feed can observe the new rows.
+ */
+export const invokeRouteFromWorkbench = async (
+  page: Page,
+  request: Readonly<{
+    readonly input: Readonly<Record<string, boolean | number | string>>;
+    readonly routeId: string;
+  }>,
+): Promise<string> =>
+  page.evaluate(async (body) => {
+    const sessionResponse = await fetch('/api/project/session', { credentials: 'same-origin' });
+    const sessionBody: unknown = await sessionResponse.json();
+    if (
+      !sessionResponse.ok
+      || typeof sessionBody !== 'object'
+      || sessionBody === null
+      || typeof (sessionBody as { readonly token?: unknown }).token !== 'string'
+    ) {
+      throw new Error(`Workbench session bootstrap failed with ${String(sessionResponse.status)}.`);
+    }
+    const response = await fetch('/api/routes/invocations', {
+      body: JSON.stringify({
+        correlationId: globalThis.crypto.randomUUID(),
+        input: body.input,
+        routeId: body.routeId,
+      }),
+      credentials: 'same-origin',
+      headers: {
+        'content-type': 'application/json',
+        'x-agent-bundle-session': (sessionBody as { readonly token: string }).token,
+      },
+      method: 'POST',
+    });
+    const payload: unknown = await response.json();
+    if (!response.ok) {
+      throw new Error(`POST /api/routes/invocations failed with ${String(response.status)}: ${JSON.stringify(payload)}`);
+    }
+    const invocation = (payload as { readonly invocation?: { readonly id?: unknown } }).invocation;
+    if (typeof invocation?.id !== 'string' || invocation.id.length === 0) {
+      throw new Error('POST /api/routes/invocations omitted invocation.id.');
+    }
+    return invocation.id;
+  }, request);
 
 /**
  * Selects the Rendered tab and waits for a complete, error-free Agent Document.
