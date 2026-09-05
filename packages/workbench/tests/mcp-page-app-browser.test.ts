@@ -6,11 +6,10 @@ import { tmpdir } from 'node:os';
 
 import { describe, expect, it } from '@rstest/core';
 import { createRsbuild } from '@rsbuild/core';
-import { pluginReact } from '@rsbuild/plugin-react';
 import { chromium, type Page } from 'playwright';
 
 import { closeServer } from './support/http.ts';
-import { workbenchBrowserAliases } from './support/workbench-browser-modules.ts';
+import { createWorkbenchFixtureConfig } from './support/workbench-fixture-config.ts';
 import { browserLaunchOptions } from './support/workbench-e2e.ts';
 
 const workspaceRoot = join(import.meta.dirname, '..', '..', '..');
@@ -148,22 +147,7 @@ const mountedPageFixture = async (mode: 'artifact' | 'runtime' | 'runtime-direct
     ]),
   ].join('\n'));
   const rsbuild = await createRsbuild({
-    config: {
-      output: {
-        cleanDistPath: false,
-        distPath: { css: 'assets', js: 'assets', root: dist },
-        filename: { css: '[name].css', js: '[name].js' },
-        filenameHash: false,
-      },
-      plugins: [pluginReact()],
-      resolve: {
-        alias: workbenchBrowserAliases,
-      },
-      source: {
-        define: { 'process.env.NODE_ENV': JSON.stringify('production') },
-        entry: { page: entry },
-      },
-    },
+    config: createWorkbenchFixtureConfig({ distRoot: dist, entry: { page: entry } }),
     cwd: workspaceRoot,
   });
   const build = await rsbuild.build();

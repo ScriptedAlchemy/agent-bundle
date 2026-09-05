@@ -40,14 +40,27 @@ it('builds workbench assets with stable unhashed names', () => {
 it('proxies every typed foreground API route only when a contributor supplies its live foreground target', () => {
   const configured = createWorkbenchConfig('http://127.0.0.1:3100');
 
-  // Rsbuild 2.x enables changeOrigin for every proxy rule by default.
+  // Rsbuild 2.x enables changeOrigin for every proxy rule by default, which
+  // rewrites only Host: the browser's Origin reaches the foreground intact.
+  // strictPort keeps the UI on the port the foreground allowlisted.
   expect(configured).toMatchObject({
     server: {
       proxy: {
         '/api': { target: 'http://127.0.0.1:3100' },
       },
+      strictPort: true,
     },
   });
+});
+
+it('configures no dev server block when no foreground target is supplied', () => {
+  const ambientTarget = process.env.AGENT_BUNDLE_WORKBENCH_API_PROXY;
+  delete process.env.AGENT_BUNDLE_WORKBENCH_API_PROXY;
+  try {
+    expect(createWorkbenchConfig()).not.toHaveProperty('server');
+  } finally {
+    if (ambientTarget !== undefined) process.env.AGENT_BUNDLE_WORKBENCH_API_PROXY = ambientTarget;
+  }
 });
 
 it('publishes the workbench application at the foreground server index asset', async () => {
