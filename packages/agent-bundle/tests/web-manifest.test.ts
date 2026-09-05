@@ -90,7 +90,6 @@ const catalogRow = (kind: 'compiled' | 'prebuilt' = 'compiled') => ({
   apps: [], hosts: ['claude'], id: 'mcp:catalog', kind, launch: validLaunch(), name: 'catalog', transport: 'stdio',
 });
 
-// Compiled entries and workers are `bundle` rows, a prebuilt entry a `prebuilt` row; everything else is generated.
 const fileRows = (...paths: readonly string[]) => paths.map((path) => ({
   bytes: 1,
   kind: path.startsWith('mcp/') ? 'bundle' : path.startsWith('runtime/') ? 'prebuilt' : 'generated',

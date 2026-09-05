@@ -224,7 +224,6 @@ export type ArtifactManifestFileKind = (typeof artifactManifestFileKinds)[number
 const isArtifactManifestFileKind = (value: unknown): value is ArtifactManifestFileKind =>
   typeof value === 'string' && (artifactManifestFileKinds as readonly string[]).includes(value);
 
-/** A launchable server's kind and its one launch record. */
 export interface ArtifactManifestServerLaunch {
   readonly kind: 'compiled' | 'prebuilt';
   readonly launch: ArtifactManifestLaunch;
@@ -292,8 +291,6 @@ export const parseFileKinds = (value: unknown): ReadonlyMap<string, ArtifactMani
   return kinds;
 };
 
-// The row kind a launch entry must have: compiled servers start a compiled
-// bundle (the bytes compile evidence describes), prebuilt servers a payload file.
 const launchEntryKind: Readonly<Record<ArtifactManifestServerLaunch['kind'], ArtifactManifestFileKind>> = Object.freeze({
   compiled: 'bundle',
   prebuilt: 'prebuilt',

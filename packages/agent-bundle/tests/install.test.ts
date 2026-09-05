@@ -906,7 +906,7 @@ it('reports manifest-indexed byte drift as AB7001 with the path', async () => {
   }
 });
 
-it('reports manifest-indexed mode drift as AB7001: an executable bit is content the digest cannot see', async () => {
+it('reports manifest-indexed mode drift as AB7001', async () => {
   const fixture = await createHostBundle('cursor');
   const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
   await mkdir(join(home, '.cursor'));

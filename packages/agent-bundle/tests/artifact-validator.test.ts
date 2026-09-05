@@ -1524,7 +1524,7 @@ it.each([
   }
 });
 
-it('holds a host document\'s server to the manifest launch record of the same name', async () => {
+it('rejects host document launches that disagree with the manifest', async () => {
   const entry = 'mcp/mcp-server-deadbeef.mjs';
   const other = 'mcp/mcp-other-deadbeef.mjs';
   const serverRow = (launchEntry: string): ArtifactManifestMcpServer => ({
@@ -1554,9 +1554,6 @@ it('holds a host document\'s server to the manifest launch record of the same na
     .filter((entry) => entry.code === 'AB6017' && /manifest launch record|names no such server/u.test(entry.message))
     .map((entry) => entry.message);
 
-  // The document starts `other`; the record names `entry`. Both are bundles the
-  // artifact ships, so only the agreement check tells them apart. A document
-  // that names the server differently hides the record entirely.
   const swapped = await writeArtifact(files(other), true, [coherenceManifestTarget], [serverRow(entry)]);
   const renamed = await writeArtifact(files(entry, 'server-renamed'), true, [coherenceManifestTarget], [serverRow(entry)]);
   const agreeing = await writeArtifact(files(entry), true, [coherenceManifestTarget], [serverRow(entry)]);

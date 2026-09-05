@@ -471,8 +471,6 @@ it('binds the launch record to compiled servers and every exposed App to a launc
   expect(() => serializeArtifactManifest(unlistedEntry))
     .toThrow('executables.mcpServers[catalog].launch.entry names "codex/scripts/missing.mjs", which is not a manifest file.');
 
-  // The entry row's kind is the server kind's compiled form: a compiled server
-  // starts the bundle compile evidence describes, a prebuilt server its payload.
   const generatedEntry = withWeb();
   (generatedEntry.executables.mcpServers[0]!.launch as { entry: string }).entry = 'codex/config.json';
   expect(() => serializeArtifactManifest(generatedEntry))

@@ -489,11 +489,6 @@ describe('composite plugin root (#555)', () => {
   });
 
   it('mcp run refuses a root whose host document names the manifest server differently (#604)', { timeout: 180_000 }, async () => {
-    // Built with the adapter as shipped; run through a registry whose reader
-    // reports the document's servers under other names. The compiled entry
-    // stays referenced, but no document row is `fixture`: the document is no
-    // longer a projection of `executables.mcpServers[]`, and the manifest
-    // record alone is not a launch line, so `mcp run` refuses with `AB6017`.
     const { output } = await buildFixture(['synthetic'], {
       registry: new TargetRegistry().register(syntheticAdapter, { default: true }),
     });

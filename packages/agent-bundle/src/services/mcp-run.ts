@@ -181,10 +181,7 @@ export const resolveMcpStdioLaunch = async (
   if (hostLaunch.kind !== 'stdio') {
     throw new Error(`MCP server ${JSON.stringify(options.server)} is not a stdio server; only stdio servers can run in the foreground.`);
   }
-  // The host document is the adapter's own launch line for the manifest record:
-  // `AB6017` refused any build whose document renames the server or starts other
-  // bytes, and the digest walk above proved the document unchanged — so its
-  // argument order is the launch order.
+  // Validation binds this host launch to the manifest record; preserve its argument order.
   return Object.freeze({
     args: Object.freeze([...hostLaunch.args]),
     command: hostLaunch.command,

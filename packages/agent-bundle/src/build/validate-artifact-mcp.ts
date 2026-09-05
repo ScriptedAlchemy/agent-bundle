@@ -143,7 +143,6 @@ const validateLaunchAgreement = (options: {
   )]);
 };
 
-/** Every launchable manifest server projected to the target is a server of the target's document, under its own name. */
 const validateDeclaredServersPresent = (options: {
   readonly documentServers: ReadonlySet<string>;
   readonly manifestPath: string;
