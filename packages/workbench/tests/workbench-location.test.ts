@@ -27,6 +27,9 @@ const roundTrips: readonly Readonly<{ readonly location: WorkbenchLocation; read
   },
   { location: { area: 'trace' }, url: '/trace' },
   { location: { area: 'trace', invocationId: 'inv 1/a' }, url: '/trace/inv%201%2Fa' },
+  { location: { area: 'trace', invocationId: 'trc_12' }, url: '/trace/trc_12' },
+  { location: { area: 'trace', correlation: 'conv-1' }, url: '/trace?correlation=conv-1' },
+  { location: { area: 'trace', correlation: 'tool:a/b c', invocationId: 'trc_12' }, url: '/trace/trc_12?correlation=tool%3Aa%2Fb%20c' },
   { location: { area: 'problems' }, url: '/problems' },
   { location: { area: 'sessions' }, url: '/sessions' },
   { location: { area: 'sessions', host: 'claude' }, url: '/sessions/claude' },
@@ -75,6 +78,18 @@ it('drops query parameters that do not belong to the area', () => {
   expect(parseWorkbenchLocation('/', '?invocation=inv-1&tab=raw')).toEqual({ area: 'application' });
   expect(parseWorkbenchLocation('/problems', '?tab=raw')).toEqual({ area: 'problems' });
   expect(parseWorkbenchLocation('/trace', '?invocation=inv-1')).toEqual({ area: 'trace' });
+  expect(parseWorkbenchLocation('/problems', '?correlation=conv-1')).toEqual({ area: 'problems' });
+  expect(parseWorkbenchLocation('/routes/scripts/sync', '?correlation=conv-1')).toEqual({ area: 'application', node: { kind: 'script', name: 'sync' } });
+});
+
+it('reads ?correlation= on the trace area and ignores an empty or malformed value', () => {
+  expect(parseWorkbenchLocation('/trace', '?correlation=exec-1&invocation=inv-1&tab=raw')).toEqual({ area: 'trace', correlation: 'exec-1' });
+  expect(parseWorkbenchLocation('/trace/trc_3', '?correlation=conv-1')).toEqual({ area: 'trace', correlation: 'conv-1', invocationId: 'trc_3' });
+  expect(parseWorkbenchLocation('/trace/a/b', '?correlation=conv-1')).toEqual({ area: 'trace', correlation: 'conv-1' });
+  expect(parseWorkbenchLocation('/trace', '?correlation=')).toEqual({ area: 'trace' });
+  expect(parseWorkbenchLocation('/trace', '?correlation=a%00b')).toEqual({ area: 'trace' });
+  expect(formatWorkbenchLocation({ area: 'trace', correlation: 'a&b=c' })).toBe('/trace?correlation=a%26b%3Dc');
+  expect(parseWorkbenchLocation('/trace', '?correlation=a%26b%3Dc')).toEqual({ area: 'trace', correlation: 'a&b=c' });
 });
 
 it('normalizes trace, sessions, and advanced tails', () => {

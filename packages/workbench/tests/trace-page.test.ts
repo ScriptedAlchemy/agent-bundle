@@ -3,113 +3,128 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 import { expect, it } from '@rstest/core';
 
-import type { RouteInvocationSummary } from '../../agent-bundle/src/contracts/invocations.ts';
-import type { ApplicationLeaf, ApplicationTree } from '../src/application/application-tree-model.ts';
-import type { InvocationBackend } from '../src/application/invocation-backend.ts';
-import {
-  loadTraceHistory,
-  mergeTraceEntries,
-  sortTraceEntries,
-  traceDurationMs,
-  traceEntryLocation,
-  TracePage,
-} from '../src/trace/trace-page.tsx';
+import type { TraceClient } from '../src/trace/trace-client.ts';
+import { TracePage, type TracePageProps } from '../src/trace/trace-page.tsx';
+import { sampleTraceEntries } from './support/trace-fixtures.ts';
 
-const summary = (id: string, completedAt: string, overrides: Partial<RouteInvocationSummary> = {}): RouteInvocationSummary => ({
-  completedAt,
-  diagnostics: [],
-  id,
-  input: {},
-  kind: 'tool',
-  manifestDigest: 'a'.repeat(64),
-  routeId: 'tool:curator/search_audible',
-  source: 'src/mcp/curator/tools/search_audible.tsx',
-  sourceRevision: 'r',
-  startedAt: '2026-09-05T07:00:00.000Z',
-  status: 'succeeded',
-  timings: [{ durationMs: 12, phase: 'handler', startedAt: '2026-09-05T07:00:00.000Z' }],
-  ...overrides,
-});
-
-const leaf = (routeId: string, execution: ApplicationLeaf['execution'] = 'invoke'): ApplicationLeaf => ({
-  config: [],
-  execution,
-  key: routeId,
-  label: routeId,
-  ref: { kind: 'script', name: routeId },
-  routeId,
-});
-
-const tree: ApplicationTree = {
-  diagnostics: [],
-  groups: [
-    { key: 'scripts', kind: 'scripts', label: 'Scripts', leaves: [leaf('script:sync'), leaf('script:report')] },
-    { key: 'skills', kind: 'skills', label: 'Skills', leaves: [leaf('skill:review', 'document')] },
-  ],
-  leafCount: 3,
-  state: 'fresh',
+/** The page never opens the feed when a snapshot is supplied; this client fails loudly if it does. */
+const untouched: TraceClient = {
+  replay: () => Promise.reject(new Error('replay is not under test')),
+  stream: () => Promise.reject(new Error('stream is not under test')),
 };
 
-const backend = (kind: InvocationBackend['kind'], history: (leaf: ApplicationLeaf) => Promise<readonly RouteInvocationSummary[]>, accepts: (leaf: ApplicationLeaf) => boolean = () => true): InvocationBackend & { readonly asked: string[] } => {
-  const asked: string[] = [];
-  return {
-    accepts,
-    asked,
-    history: (target) => { asked.push(target.key); return history(target); },
-    invoke: () => Promise.reject(new Error('not under test')),
-    kind,
-    read: () => Promise.reject(new Error('not under test')),
-    subscribe: () => () => undefined,
-  };
-};
+const render = (props: Partial<TracePageProps> = {}): string => renderToStaticMarkup(createElement(TracePage, {
+  client: untouched,
+  entries: sampleTraceEntries,
+  onNavigate: () => undefined,
+  timeZone: 'UTC',
+  ...props,
+}));
 
-it('sorts newest first and merges by id with the later summary winning', () => {
-  const older = summary('a', '2026-09-05T07:00:01.000Z');
-  const newer = summary('b', '2026-09-05T07:00:05.000Z');
-  const updated = summary('a', '2026-09-05T07:00:09.000Z', { status: 'failed' });
-  expect(sortTraceEntries([older, newer]).map((entry) => entry.id)).toEqual(['b', 'a']);
-  const merged = mergeTraceEntries([older, newer], [updated]);
-  expect(merged.map((entry) => [entry.id, entry.status])).toEqual([['a', 'failed'], ['b', 'succeeded']]);
-  expect(Object.isFrozen(merged)).toBe(true);
+const count = (markup: string, needle: string): number => markup.split(needle).length - 1;
+
+it('renders the correlated timeline oldest first with one line per entry, nested under its group headline', () => {
+  const markup = render();
+  expect(markup).toContain('<h1>Trace</h1>');
+  expect(markup).toContain('9 entries in 4 groups');
+  expect(markup).toContain('data-testid="trace-timeline"');
+  expect(markup).toContain('data-testid="trace-filter-bar"');
+  expect(count(markup, 'data-testid="trace-group"')).toBe(4);
+  expect(count(markup, 'data-testid="trace-entry"')).toBe(9);
+  expect(markup).not.toContain('data-testid="trace-empty"');
+  expect(markup).not.toContain('data-testid="trace-detail"');
+  expect(markup).not.toContain('data-testid="trace-new-pill"');
+
+  expect(markup.indexOf('data-group-key="conversationId:conv-1"')).toBeLessThan(markup.indexOf('data-group-key="runId:run_9"'));
+  expect(markup).toContain('22:41:04.101');
+  expect(markup).toContain('22:41:09.541');
+  expect(markup).toContain('Claude session started');
+  expect(markup).toContain('conversation <span class="identifier">conv-1</span>');
+  expect(markup).toContain('6 entries');
+  expect(markup).toContain('trace-row trace-row--depth-1 trace-row--ok');
+  expect(markup).toContain('render finished');
+  expect(markup).toContain('8.1 ms');
+  expect(markup).toContain('15 ms');
+  expect(markup).toContain('href="/trace/trc_3"');
+  expect(markup).toContain('trace-row--error');
+  expect(markup).toContain('aria-label="error"');
+  expect(markup).toContain('data-group-key="entry:trc_9"');
 });
 
-it('measures duration from the envelope clock and falls back to phase timings', () => {
-  expect(traceDurationMs(summary('a', '2026-09-05T07:00:00.250Z'))).toBe(250);
-  expect(traceDurationMs(summary('a', 'not-a-date'))).toBe(12);
+it('shows the empty state that explains what produces entries, and a connecting state before the first replay', () => {
+  const empty = render({ entries: [] });
+  expect(empty).toContain('data-testid="trace-empty"');
+  expect(empty).toContain('Run a route, call a tool in Advanced → Protocol, or invoke the plugin from a host');
+  expect(count(empty, 'data-testid="trace-group"')).toBe(0);
+  expect(count(empty, 'trace-chip')).toBe(7);
+  expect(count(empty, 'disabled=""')).toBe(8);
+
+  const connecting = renderToStaticMarkup(createElement(TracePage, { client: untouched, onNavigate: () => undefined }));
+  expect(connecting).toContain('Connecting…');
+  expect(connecting).toContain('data-testid="trace-empty"');
+  expect(connecting).toContain('Connecting to the trace…');
 });
 
-it('deep-links an entry to its route workspace with the invocation loaded', () => {
-  expect(traceEntryLocation(summary('inv-1', '2026-09-05T07:00:01.000Z'))).toEqual({
-    area: 'application',
-    invocationId: 'inv-1',
-    node: { kind: 'tool', name: 'search_audible', server: 'curator' },
-  });
-  expect(traceEntryLocation(summary('inv-1', '2026-09-05T07:00:01.000Z', { routeId: 'nonsense' }))).toBeUndefined();
+it('opens the detail drawer for /trace/<id> with correlation links and the primary Open route action', () => {
+  const markup = render({ entryId: 'trc_5' });
+  expect(markup).toContain('data-testid="trace-detail"');
+  expect(markup).toContain('data-entry-id="trc_5"');
+  expect(markup).toContain('trace-page trace-page--detail');
+  expect(markup).toContain('<h2>MCP tools/call hauler_status</h2>');
+  expect(markup).toContain('mcp · <span class="identifier">mcp.request</span>');
+  expect(markup).toContain('href="/advanced/protocol?session=mcp-1"');
+  expect(markup).toContain('>Open route</a>');
+  expect(markup).toContain('href="/trace/trc_5?correlation=conv-1"');
+  expect(markup).toContain('href="/trace/trc_5?correlation=mcp-1"');
+  expect(markup).toContain('href="/trace/trc_5?correlation=7"');
+  expect(markup).toContain('&quot;lane&quot;: &quot;all&quot;');
+  expect(markup).toContain('aria-current="true"');
+  expect(markup).toContain('data-selected="true"');
+  expect(markup).toContain('aria-label="Close entry"');
+  expect(markup).toContain('href="/trace"');
+
+  const invocation = render({ entryId: 'inv_3' });
+  expect(invocation).toContain('data-entry-id="trc_7"');
+  expect(invocation).toContain('href="/routes/mcp/curator/tool/search?invocation=inv_3"');
+
+  const routeless = render({ entryId: 'trc_9' });
+  expect(routeless).toContain('No route record behind this entry.');
+  expect(routeless).toContain('This entry carries no correlation key.');
+  expect(routeless).toContain('No details were published with this entry.');
+
+  const unknown = render({ entryId: 'trc_404' });
+  expect(unknown).toContain('data-testid="trace-detail"');
+  expect(unknown).toContain('Not in this trace');
+  expect(unknown).toContain('No retained entry is trc_404.');
 });
 
-it('loads history only for invocable leaves the backend accepts, dedupes across backends, and reports one failure', async () => {
-  const shared = summary('shared', '2026-09-05T07:00:01.000Z', { routeId: 'script:sync' });
-  const devServer = backend('dev-server', async (target) => target.routeId === 'script:sync' ? [shared, summary('dev-only', '2026-09-05T07:00:02.000Z')] : []);
-  const runtime = backend('runtime', async (target) => {
-    if (target.routeId === 'script:report') throw new Error('runtime history offline');
-    return [shared];
-  }, (target) => target.routeId !== 'skill:review');
-  const history = await loadTraceHistory([runtime, devServer], tree);
-  expect(devServer.asked).toEqual(['script:sync', 'script:report']);
-  expect(runtime.asked).toEqual(['script:sync', 'script:report']);
-  expect(history.entries.map((entry) => entry.id)).toEqual(['dev-only', 'shared']);
-  expect(history.error).toBe('runtime history offline');
+it('scopes the timeline to the group ?correlation= names and offers the way back', () => {
+  const markup = render({ correlation: 'exec-1' });
+  expect(count(markup, 'data-testid="trace-group"')).toBe(1);
+  expect(count(markup, 'data-testid="trace-entry"')).toBe(6);
+  expect(markup).toContain('Correlated by <span class="identifier">exec-1</span>');
+  expect(markup).toContain('>Show all</a>');
+  expect(markup).toContain('href="/trace/trc_1?correlation=exec-1"');
+
+  const withEntry = render({ correlation: 'exec-1', entryId: 'trc_3' });
+  expect(withEntry).toContain('href="/trace?correlation=exec-1"');
+  expect(withEntry).toContain('href="/trace/trc_3"');
+
+  const missing = render({ correlation: 'nobody' });
+  expect(count(missing, 'data-testid="trace-group"')).toBe(0);
+  expect(missing).toContain('No entry carries nobody.');
+  expect(missing).not.toContain('data-testid="trace-empty"');
 });
 
-it('renders the table shell in its loading state and the single-entry heading', () => {
-  const idle = backend('dev-server', async () => []);
-  const list = renderToStaticMarkup(createElement(TracePage, { backends: [idle], onNavigate: () => undefined, tree }));
-  expect(list).toContain('<h1>Trace</h1>');
-  expect(list).toContain('loading history…');
-  expect(list).toContain('data-testid="trace-empty"');
-
-  const one = renderToStaticMarkup(createElement(TracePage, { backends: [idle], invocationId: 'inv-9', onNavigate: () => undefined, tree }));
-  expect(one).toContain('One invocation.');
-  expect(one).toContain('href="/trace"');
-  expect(one).toContain('Loading invocation inv-9…');
+it('renders the filter bar with facets from the entries and every source chip', () => {
+  const markup = render();
+  expect(markup).toContain('<option value="claude">claude</option>');
+  expect(markup).toContain('<option value="portable">portable</option>');
+  expect(markup).toContain('<option value="tool:curator/search">tool:curator/search</option>');
+  expect(markup).toContain('<option value="error">error</option>');
+  expect(markup).toContain('placeholder="Filter summaries…"');
+  expect(markup).toContain('>Clear</button>');
+  for (const source of ['invocation', 'kernel', 'mcp', 'runtime', 'hook', 'log', 'diagnostic']) expect(markup).toContain(`data-source="${source}"`);
+  expect(markup).toContain('data-source="diagnostic" disabled=""');
+  expect(markup).not.toContain('data-source="mcp" disabled=""');
 });
