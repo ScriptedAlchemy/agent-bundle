@@ -7,7 +7,7 @@ import {
   type TransportSendOptions,
 } from '@modelcontextprotocol/client';
 
-import { isMcpSessionTarget } from '../../../agent-bundle/src/contracts/mcp-session.ts';
+import { isMcpSessionTarget, mcpCorrelationMetaKey } from '../../../agent-bundle/src/contracts/mcp-session.ts';
 import type {
   McpSessionBinding,
   McpSessionInspectorConfig,
@@ -43,7 +43,6 @@ import {
   type McpBrowserSessionModel,
 } from './mcp-session-model.ts';
 import {
-  mcpCorrelationMetaKey,
   McpRouteClientError,
   sameRuntimeBinding,
   type McpRouteCatalog,
@@ -562,6 +561,7 @@ const appBindingOperationFor = (operation: McpRouteOperation): McpAppBindingOper
   if (operation.operation === 'resources/read') return Object.freeze({ kind: 'resources/read', uri: operation.uri });
   if (operation.operation === 'tools/call') return Object.freeze({
     arguments: operation.arguments as McpAppJsonValue,
+    ...(operation.correlationId === undefined ? {} : { correlationId: operation.correlationId }),
     kind: 'tools/call',
     name: operation.name,
   });
@@ -612,6 +612,7 @@ const runtimeRequestForRoute = (
   if (operation.operation === 'resources/read') return Object.freeze({ expectedSessionRevision: revision, kind: 'read-resource', uri: operation.uri });
   if (operation.operation === 'tools/call') return Object.freeze({
     arguments: operation.arguments as JsonObject,
+    ...(operation.correlationId === undefined ? {} : { correlationId: operation.correlationId }),
     expectedSessionRevision: revision,
     kind: 'call-tool',
     name: operation.name,

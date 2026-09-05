@@ -84,14 +84,6 @@ export interface McpRouteTrace {
   readonly overflow?: unknown;
 }
 
-/**
- * The `params._meta` key the dev server's MCP session route stamps a `tools/call`
- * `correlationId` under, and the key its trace publisher lifts back into a frame's
- * `meta.correlationId`. In the browser it only travels between the session
- * controller and the remote transport, which lowers it to the top-level field.
- */
-export const mcpCorrelationMetaKey = 'agent-bundle/correlationId';
-
 export type McpRouteOperation =
   | Readonly<{ readonly operation: 'initialize' | 'prompts/list' | 'resources/list' | 'resources/templates/list' | 'tools/list' }>
   | Readonly<{ readonly arguments?: Readonly<Record<string, string>>; readonly name: string; readonly operation: 'prompts/get' }>
@@ -413,9 +405,13 @@ const runtimeOperationRequest = (request: DevRuntimeMcpOperationRequest): DevRun
   }
   if (request.kind === 'call-tool' && nonempty(request.name)) {
     const argumentsSnapshot = detachedJson(request.arguments);
-    if (!isRecord(argumentsSnapshot)) throw new McpRouteClientError('AB8015', 'Runtime MCP operation request is not valid.');
+    if (
+      !isRecord(argumentsSnapshot) ||
+      (request.correlationId !== undefined && (!nonempty(request.correlationId) || request.correlationId.length > 256))
+    ) throw new McpRouteClientError('AB8015', 'Runtime MCP operation request is not valid.');
     return Object.freeze({
       arguments: argumentsSnapshot as JsonObject,
+      ...(request.correlationId === undefined ? {} : { correlationId: request.correlationId }),
       expectedSessionRevision: request.expectedSessionRevision,
       kind: 'call-tool',
       name: request.name,

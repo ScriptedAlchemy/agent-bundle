@@ -1,11 +1,11 @@
 import { expect, it } from '@rstest/core';
 
+import { mcpCorrelationMetaKey } from '../src/contracts/mcp-session.ts';
 import type { McpSessionBinding, McpSessionTraceEntry } from '../src/dev/mcp-session/mcp-session-protocol.ts';
 import { composeMcpSessionTraceSinks, McpSessionTraceLog } from '../src/dev/mcp-session/mcp-session-trace.ts';
 import {
   createMcpSessionTraceSink,
   liftMcpFrame,
-  mcpCorrelationMetaKey,
 } from '../src/dev/mcp-session/mcp-session-trace-publisher.ts';
 import type { TraceEntry, TraceEntryInput } from '../src/dev/trace/trace-entry.ts';
 import type { TracePublisher } from '../src/dev/trace/trace-hub.ts';

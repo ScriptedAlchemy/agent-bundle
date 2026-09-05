@@ -169,6 +169,8 @@ it('rejects duplicate replay keys, extra record fields, and unsafe wire text bef
   await expect(unsafeText.replay()).rejects.toMatchObject({ code: 'AB8093', message: 'Dev Log route returned an invalid response.' });
 
   for (const summary of [
+    '/home/zack/private/fixture',
+    '~/private/fixture',
     'C:\\private\\fixture',
     'C:/private/fixture',
     'C:private',
@@ -178,6 +180,16 @@ it('rejects duplicate replay keys, extra record fields, and unsafe wire text bef
     const path = clientFor(json({ replay: { cursor: { afterSequence: 1 }, records: [{ ...record, summary }] } }));
     await expect(path.replay()).rejects.toMatchObject({ code: 'AB8093', message: 'Dev Log route returned an invalid response.' });
   }
+});
+
+it('accepts slash-bearing relative identities in free log text', async () => {
+  const records = [
+    { ...record, summary: 'MCP tool curator/search_audible · 2.9 s' },
+    { ...record, details: { event: 'event tool/before (claude)' }, sequence: 2 },
+  ];
+  await expect(clientFor(json({
+    replay: { cursor: { afterSequence: 2 }, records },
+  })).replay()).resolves.toMatchObject({ records });
 });
 
 it('rejects malformed UTF-8 and a frame larger than 64 KiB before decoding NDJSON records', async () => {

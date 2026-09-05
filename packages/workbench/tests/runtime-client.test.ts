@@ -196,12 +196,14 @@ it('rejects absolute, protocol-relative, credentialed, and fragmented protected 
 
 it('passes the exact runtime MCP operation cancellation signal to the authenticated route fetch', async () => {
   const abort = new AbortController();
+  let body: unknown;
   let observed: AbortSignal | undefined;
   const client = new McpRouteClient({
     fetch: async (input, init) => {
       const path = String(input);
       if (path === '/api/project/session') return json(foregroundSession);
       if (path === '/api/runtime/mcp/sessions/runtime-session-a/rpc') {
+        body = JSON.parse(String(init?.body));
         observed = init?.signal as AbortSignal | undefined;
         return json({ result: {
           operationId: 'runtime-operation-a', sessionId: 'runtime-session-a', sessionRevision: 3, value: [], vector,
@@ -212,10 +214,28 @@ it('passes the exact runtime MCP operation cancellation signal to the authentica
   });
 
   await expect(client.executeRuntime('runtime-session-a', {
+    arguments: {},
+    correlationId: 'corr-runtime-app',
     expectedSessionRevision: 3,
-    kind: 'list-tools',
+    kind: 'call-tool',
+    name: 'forecast',
   }, abort.signal)).resolves.toMatchObject({ operationId: 'runtime-operation-a' });
+  expect(body).toEqual({
+    arguments: {},
+    correlationId: 'corr-runtime-app',
+    expectedSessionRevision: 3,
+    kind: 'call-tool',
+    name: 'forecast',
+  });
   expect(observed).toBe(abort.signal);
+
+  await expect(client.executeRuntime('runtime-session-a', {
+    arguments: {},
+    correlationId: 'x'.repeat(257),
+    expectedSessionRevision: 3,
+    kind: 'call-tool',
+    name: 'forecast',
+  })).rejects.toMatchObject({ code: 'AB8015' });
 });
 
 it('bootstraps available runtime history through one shared foreground authentication session', async () => {

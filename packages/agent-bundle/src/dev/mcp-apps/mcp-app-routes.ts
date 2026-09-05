@@ -370,11 +370,13 @@ const runtimeOperation = (value: JsonObject): McpAppBindingOperation => {
   if (value.kind === 'resources/read' && hasOnly(value, ['kind', 'uri']) && nonemptyString(value.uri)) {
     return Object.freeze({ kind: 'resources/read', uri: value.uri });
   }
-  if (value.kind === 'tools/call' && hasOnly(value, ['arguments', 'consentId', 'kind', 'name']) && nonemptyString(value.name)
-    && (value.arguments === undefined || isJsonValue(value.arguments)) && (value.consentId === undefined || nonemptyString(value.consentId))) {
+  if (value.kind === 'tools/call' && hasOnly(value, ['arguments', 'consentId', 'correlationId', 'kind', 'name']) && nonemptyString(value.name)
+    && (value.arguments === undefined || isJsonValue(value.arguments)) && (value.consentId === undefined || nonemptyString(value.consentId))
+    && (value.correlationId === undefined || (nonemptyString(value.correlationId) && value.correlationId.length <= 256))) {
     return Object.freeze({
       ...(value.arguments === undefined ? {} : { arguments: cloneJson(value.arguments) }),
       ...(value.consentId === undefined ? {} : { consentId: value.consentId }),
+      ...(value.correlationId === undefined ? {} : { correlationId: value.correlationId }),
       kind: 'tools/call', name: value.name,
     });
   }
