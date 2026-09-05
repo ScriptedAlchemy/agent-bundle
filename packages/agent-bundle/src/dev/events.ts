@@ -82,6 +82,7 @@ const eventTypes = new Set<ProjectEventType>([
   'artifact.status',
   'dev.contract.status',
   'dev.host.sync',
+  'route.invocation',
   'runtime.event',
 ]);
 
