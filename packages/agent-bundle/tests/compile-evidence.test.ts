@@ -9,6 +9,7 @@ import {
   createCompileEvidenceRecord,
   parseCompileEvidenceRecord,
   serializeCompileEvidenceRecord,
+  type CompileEvidenceExternal,
   type CompileEvidenceRecord,
 } from '../src/build/compile-evidence.ts';
 import type { CompileResult } from '../src/build/compile-result.ts';
@@ -147,5 +148,47 @@ describe('compile evidence records', () => {
       expect.stringContaining('"left-pad" as a built-in; it is not one'),
       expect.stringContaining('sibling "./missing.js", which the artifact does not contain'),
     ]));
+  });
+
+  it('re-judges every external instead of trusting the recorded kind or target', () => {
+    const hash = 'a'.repeat(64);
+    const external = (fields: Partial<CompileEvidenceExternal>): CompileEvidenceExternal => ({
+      externalType: 'module',
+      issuers: [],
+      kind: 'artifact-relative',
+      request: './lib/b.js',
+      target: 'lib/b.js',
+      userRequest: './lib/b.js',
+      ...fields,
+    });
+    const files = new Map([
+      ['a.js', { kind: 'bundle', sha256: hash }],
+      ['lib/b.js', { kind: 'bundle', sha256: hash }],
+      ['copied.mjs', { kind: 'copy', sha256: hash }],
+    ]);
+    const judge = (externals: readonly CompileEvidenceExternal[]): readonly string[] =>
+      compileEvidenceDiagnostics({
+        assets: [
+          { externals, packages: [], path: 'a.js', sha256: hash },
+          { externals: [], packages: [], path: 'lib/b.js', sha256: hash },
+        ],
+        coverage: { rewritable: false, unobserved: [] },
+        policy: { name: 'closed-world-externals', revision: 1 },
+        producer: { name: 'agent-bundle', rspack: '2.2.2', version: '1.0.0' },
+      }, files).map((diagnostic) => diagnostic.message);
+
+    expect(judge([external({})])).toEqual([]);
+    // A bare package request cannot borrow a sibling as its target.
+    expect(judge([external({ request: 'left-pad', userRequest: 'left-pad' })]))
+      .toEqual([expect.stringContaining('sibling "left-pad", which the artifact does not contain')]);
+    // The target must be the file the request resolves to from the asset.
+    expect(judge([external({ target: 'a.js' })]))
+      .toEqual([expect.stringContaining('sibling "./lib/b.js", which the artifact does not contain')]);
+    // A sibling that is not a compiled file is not a valid load target.
+    expect(judge([external({ request: './copied.mjs', target: 'copied.mjs', userRequest: './copied.mjs' })]))
+      .toEqual([expect.stringContaining('sibling "./copied.mjs", which the artifact does not contain')]);
+    // A built-in kept through a non-module-loading external type is not a load.
+    expect(judge([{ externalType: 'var', issuers: [], kind: 'builtin', request: 'node:fs', userRequest: 'node:fs' }]))
+      .toEqual([expect.stringContaining('"node:fs" as a built-in; it is not one')]);
   });
 });

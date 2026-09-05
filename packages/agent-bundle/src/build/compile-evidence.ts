@@ -6,7 +6,7 @@ import type { Diagnostic } from '../core/diagnostics.ts';
 import { isPlainRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { artifactDiagnostic } from './artifact-diagnostics.ts';
 import type { CompileResult, ExternalIR } from './compile-result.ts';
-import { isAllowedExternalRequest } from './external-policy.ts';
+import { classifyExternal } from './external-policy.ts';
 
 /**
  * The compile evidence record: what the compiler service reported about each
@@ -310,28 +310,29 @@ export const compileEvidenceDiagnostics = (
     ));
   }
   const recorded = new Map(record.assets.map((asset) => [asset.path, asset]));
-  for (const [path, file] of files) {
-    if (file.kind !== 'bundle') continue;
+  const compiled = new Set([...files].filter(([, file]) => file.kind === 'bundle').map(([path]) => path));
+  for (const path of compiled) {
     const asset = recorded.get(path);
     if (asset === undefined) diagnostics.push(evidenceDiagnostic(`does not cover compiled file ${JSON.stringify(path)}.`));
-    else if (asset.sha256 !== file.sha256) diagnostics.push(evidenceDiagnostic(`for ${JSON.stringify(path)} describes different bytes.`));
+    else if (asset.sha256 !== files.get(path)!.sha256) diagnostics.push(evidenceDiagnostic(`for ${JSON.stringify(path)} describes different bytes.`));
   }
   for (const asset of record.assets) {
-    const file = files.get(asset.path);
-    if (file === undefined || file.kind !== 'bundle') {
+    if (!compiled.has(asset.path)) {
       diagnostics.push(evidenceDiagnostic(`names ${JSON.stringify(asset.path)}, which the manifest does not list as a compiled file.`));
     }
     for (const external of asset.externals) {
+      // The same judgement the build made, over the file table instead of the module graph.
+      const judged = classifyExternal(external, { asset: asset.path, emittedAssets: compiled });
       switch (external.kind) {
         case 'builtin':
-          if (!isAllowedExternalRequest(external.request)) {
+          if (judged !== 'builtin') {
             diagnostics.push(evidenceDiagnostic(
               `for ${JSON.stringify(asset.path)} records ${JSON.stringify(external.request)} as a built-in; it is not one.`,
             ));
           }
           break;
         case 'artifact-relative':
-          if (external.target === undefined || !files.has(external.target)) {
+          if (judged !== 'artifact-relative' || external.target !== posix.join(posix.dirname(asset.path), external.request)) {
             diagnostics.push(evidenceDiagnostic(
               `for ${JSON.stringify(asset.path)} records sibling ${JSON.stringify(external.request)}, which the artifact does not contain.`,
             ));

@@ -261,13 +261,13 @@ it('reports malformed compile evidence as a non-strict record', async () => {
   const root = await compileEvidenceFixture('{not JSON}\n', []);
 
   try {
-    await expect(validateArtifact({ artifactRoot: root })).resolves.toEqual(expect.arrayContaining([
+    await expect(validateArtifact({ artifactRoot: root })).resolves.toEqual([
       expect.objectContaining({
         code: 'AB6039',
         generatedPath: compileEvidenceFileName,
         message: 'Compile evidence record is not valid JSON.',
       }),
-    ]));
+    ]);
   } finally {
     await rm(root, { force: true, recursive: true });
   }

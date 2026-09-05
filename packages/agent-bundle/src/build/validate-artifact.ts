@@ -624,7 +624,8 @@ const validateGeneratedFiles = async (options: {
   );
   const validJson = new Set<string>();
 
-  for (const file of options.files.filter((entry) => entry.path.endsWith('.json'))) {
+  // The compile evidence record has its own strict reader (`AB6039`).
+  for (const file of options.files.filter((entry) => entry.path.endsWith('.json') && entry.path !== compileEvidenceFileName)) {
     try {
       // Strict parseability only: host MCP documents are read against the
       // compiled entries by validateMcpCoherence.

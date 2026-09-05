@@ -61,7 +61,7 @@ npx agent-bundle validate --artifact artifact --strict    # 已构建字节，�
 `coverage.unobserved`。
 
 `agent-bundle validate --artifact` 把已列入清单的记录对照清单文件表复核，且不读取 JavaScript
-（`AB6039`）。包构建把同一份记录留在内存里供 `prepack` 使用（路径为 `dist/bin/…`），不写到磁盘。
+（`AB6039`）。包构建在进程内返回同一份记录（`PackageBuildResult.evidence`，路径为 `dist/bin/…`），不写到磁盘。
 `coverage.unobserved` 列出 Rslib 在捆绑中原样保留的加载形式，因此编译器既不会打包它们，也不会记录
 它们：`import(<expression>)`、`require(<expression>)`、`require.resolve(…)`、
 `createRequire(…)(…)`、`import.meta.resolve(…)`。因此「没有记录任何 externals」并不能证明不存在

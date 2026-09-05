@@ -1830,8 +1830,8 @@ producer `{ name: 'agent-bundle', rspack, version }`, `coverage.rewritable`
 bytes may differ from the module graph), and `coverage.unobserved`.
 `agent-bundle validate --artifact` re-checks a listed record against the
 manifest file table without reading JavaScript (`AB6039`). The package build
-keeps the same record in memory for `prepack` (paths `dist/bin/…`), not on
-disk. `coverage.unobserved` lists the load forms Rslib leaves verbatim in
+returns the same record in process (`PackageBuildResult.evidence`, paths
+`dist/bin/…`) and writes nothing to disk. `coverage.unobserved` lists the load forms Rslib leaves verbatim in
 the bundle, so the compiler neither bundles nor records them:
 `import(<expression>)`, `require(<expression>)`, `require.resolve(…)`,
 `createRequire(…)(…)`, `import.meta.resolve(…)`. No externals recorded
