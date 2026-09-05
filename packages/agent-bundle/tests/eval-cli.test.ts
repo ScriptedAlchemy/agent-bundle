@@ -18,7 +18,6 @@ const runCliWithOutput = async (args: readonly string[]): Promise<{
   readonly stdout: string;
 }> => {
   const terminal = captureCliTerminal();
-  Object.defineProperty(globalThis, '__AGENT_BUNDLE_VERSION__', { configurable: true, value: 'test' });
   const code = await runCli([...args], terminal.output);
   return { code, stderr: terminal.stderr(), stdout: terminal.stdout() };
 };

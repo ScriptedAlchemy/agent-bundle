@@ -65,8 +65,9 @@ not currently overridden with `publishConfig.access`.
 
 `pnpm release` runs the release gate — `pnpm pack:dry-run`, `pnpm lint:release`, and
 `pnpm test:packed:release` — before publishing. `lint:release` runs `attw` with the `esm-only`
-profile on the packed `agent-bundle`, `rsc-markdown-stream`, and `create-agent-bundle` tarballs,
-then `scripts/check-declaration-imports.mjs` over the same inventories: every `.d.ts` a consumer can
+profile on the packed `agent-bundle`, `@agent-bundle/runtime`, `rsc-markdown-stream`, and
+`create-agent-bundle` tarballs, then `scripts/check-declaration-imports.mjs` over the same
+inventories: every `.d.ts` a consumer can
 reach from `exports` may only import packed files, the package's own exported subpaths, `#` imports
 its `imports` map resolves, Node built-ins, and packages declared in `dependencies`,
 `peerDependencies`, or `optionalDependencies` —
