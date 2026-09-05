@@ -419,7 +419,7 @@ export const generatedCliBinEntrySource = (input: GeneratedCliBinEntryOptions): 
     // module-level `process.env` read sees the composed environment. The
     // npm package bin runs from the operator's own shell and reads none.
     ...(stateFallback === 'artifact' ? [operatorEnvLayerImport] : []),
-    `import { CliInputError, cliInputError, runGeneratedCliProcess } from ${JSON.stringify(cliEntryRuntimeSpecifier)};`,
+    `import { mapGeneratedCliInput, parseGeneratedCliArgv, runGeneratedCliProcess } from ${JSON.stringify(cliEntryRuntimeSpecifier)};`,
     ...(options.web === undefined
       ? []
       : [
@@ -456,26 +456,13 @@ export const generatedCliBinEntrySource = (input: GeneratedCliBinEntryOptions): 
     '',
     `const commands = Object.freeze(${stableJson(options.commands)});`,
     '',
-    'const parseInput = (command, route, input) => {',
-    '  let mapped = { ...input };',
-    '  if (command.projection?.defaults !== undefined) {',
-    '    for (const [key, value] of Object.entries(command.projection.defaults)) {',
-    '      if (!Object.hasOwn(mapped, key)) mapped[key] = value;',
-    '    }',
-    '  }',
-    '  if (command.projection?.mapInput === true) {',
-    "    if (typeof route.projection?.mapInput !== 'function') throw new TypeError(`CLI projection ${command.projection.module} for ${command.routeId} must export a mapInput function.`);",
-    '    try {',
-    '      mapped = route.projection.mapInput(mapped);',
-    '    } catch (error) {',
-    '      throw new CliInputError(error instanceof Error ? error.message : String(error));',
-    '    }',
-    '  }',
-    '  try {',
-    '    return route.module.inputSchema.parse(mapped);',
-    '  } catch (error) {',
-    '    throw cliInputError(command, mapped, error);',
-    '  }',
+    'const parseInput = (command, route, input) => mapGeneratedCliInput(command, route.module.inputSchema, route.projection, input);',
+    'export const prepareRouteInvocation = (routeId, argv) => {',
+    '  const command = commands.find((candidate) => candidate.routeId === routeId);',
+    "  if (command === undefined) throw new TypeError(`Generated CLI route ${JSON.stringify(routeId)} is not available.`);",
+    '  const route = routes[routeId];',
+    "  if (route === undefined) throw new TypeError(`Generated CLI route ${JSON.stringify(routeId)} has no compiled module.`);",
+    '  return parseInput(command, route, parseGeneratedCliArgv(command, argv).input);',
     '};',
     '',
     // Plain commands mount the same conventional providers as every other
@@ -543,6 +530,7 @@ export const generatedCliBinEntrySource = (input: GeneratedCliBinEntryOptions): 
         '',
       ]
       : []),
+    'if (import.meta.main) {',
     ...(options.state === undefined ? [] : ['try {']),
     `${options.state === undefined ? '' : '  '}await runGeneratedCliProcess({`,
     '  commands,',
@@ -568,6 +556,7 @@ export const generatedCliBinEntrySource = (input: GeneratedCliBinEntryOptions): 
     ...(options.state === undefined
       ? []
       : ['} finally {', '  await runtimeState.close();', '}']),
+    '}',
     '',
   ].join('\n');
 };
@@ -695,6 +684,10 @@ export const generatedRenderedRouteWorkerSource = (
     'const render = async (message) => {',
     '  const route = routes[message.routeId];',
     "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated rendered route must default-export an async function component.');",
+    '  const observedRoute = message.observe !== true ? route : { ...route, module: { ...route.module, default: async (props) => {',
+    '    const handlerStartedAt = performance.now();',
+    "    try { return await route.module.default(props); } finally { parentPort.postMessage({ durationMs: performance.now() - handlerStartedAt, id: message.id, type: 'observed-handler' }); }",
+    '  } } };',
     '  const controller = new AbortController();',
     '  requests.set(message.id, controller);',
     ...processHitSource('  '),
@@ -717,7 +710,7 @@ export const generatedRenderedRouteWorkerSource = (
     ...(options.state === undefined ? [] : ['      noticeLedger: bindings.noticeLedger,']),
     '      plugin: pluginRoot.identity,',
     "      progress: { report: async (update) => { parentPort.postMessage({ id: message.id, type: 'progress', update }); } },",
-    ...providersFieldSource(providers, { indent: '      ', invocation: 'message.invocation' }),
+    ...providersFieldSource(providers, { indent: '      ', invocation: 'message.invocation', observe: 'message.observe === true' }),
     '      signal: controller.signal,',
     ...(options.state === undefined ? [] : ['      state: bindings.state,']),
     // The executable probed its terminal once and forwards the value; a worker
@@ -725,7 +718,9 @@ export const generatedRenderedRouteWorkerSource = (
     "      terminal: message.terminal === undefined ? unavailable('not-provided') : available(message.terminal, 'native'),",
     "      workspace: available({ root: cwd }, 'derived'),",
     '    }, async () => {',
-    '      const flight = renderAgentFlight(composeLayouts(route, { ...message.props, signal: controller.signal }, controller.signal), { signal: controller.signal });',
+    "      if (message.observe === true) parentPort.postMessage({ id: message.id, type: 'observed-render-start' });",
+    '      const renderStartedAt = performance.now();',
+    '      const flight = renderAgentFlight(composeLayouts(observedRoute, { ...message.props, signal: controller.signal }, controller.signal), { signal: controller.signal });',
     '      const reader = flight.getReader();',
     '      while (true) {',
     '        const next = await reader.read();',
@@ -733,6 +728,7 @@ export const generatedRenderedRouteWorkerSource = (
     '        const bytes = next.value;',
     "        parentPort.postMessage({ bytes, id: message.id, type: 'chunk' }, [bytes.buffer]);",
     '      }',
+    "      if (message.observe === true) parentPort.postMessage({ durationMs: performance.now() - renderStartedAt, id: message.id, type: 'observed-render-finish' });",
     '    });',
     ...(options.state === undefined
       ? []
@@ -1010,24 +1006,51 @@ const providersFieldSource = (
   expressions: {
     readonly indent: string;
     readonly invocation: string;
+    readonly observe?: string;
     readonly providers?: string;
   },
 ): readonly string[] => {
-  const { indent, invocation, providers: providerExpression = 'providers' } = expressions;
-  if (providers.length === 0) return [`${indent}providers: { processLifetime: ${processLifetimeValueSource} },`];
+  const { indent, invocation, observe, providers: providerExpression = 'providers' } = expressions;
+  if (providers.length === 0) {
+    if (observe === undefined) return [`${indent}providers: { processLifetime: ${processLifetimeValueSource} },`];
+    return [
+      `${indent}providers: async () => {`,
+      `${indent}  const providersStartedAt = performance.now();`,
+      `${indent}  if (${observe}) parentPort.postMessage({ id: message.id, type: 'observed-providers-start' });`,
+      `${indent}  if (${observe}) parentPort.postMessage({ count: 0, durationMs: performance.now() - providersStartedAt, id: message.id, type: 'observed-providers-finish' });`,
+      `${indent}  return { processLifetime: ${processLifetimeValueSource} };`,
+      `${indent}},`,
+    ];
+  }
   return [
     `${indent}providers: async (request) => {`,
     `${indent}  const providerValues = { processLifetime: ${processLifetimeValueSource} };`,
+    ...(observe === undefined
+      ? []
+      : [
+          `${indent}  const providersStartedAt = performance.now();`,
+          `${indent}  if (${observe}) parentPort.postMessage({ id: message.id, type: 'observed-providers-start' });`,
+        ]),
     `${indent}  for (const provider of ${providerExpression}) {`,
+    ...(observe === undefined ? [] : [`${indent}    const providerStartedAt = performance.now();`]),
     `${indent}    if (typeof provider.module.default !== 'function') {`,
     `${indent}      throw new TypeError(\`Context provider "\${provider.key}" (\${provider.source}) must default-export a factory.\`);`,
     `${indent}    }`,
     `${indent}    try {`,
     `${indent}      providerValues[provider.key] = await provider.module.default({ ...request, invocation: ${invocation} });`,
+    ...(observe === undefined
+      ? []
+      : [`${indent}      if (${observe}) parentPort.postMessage({ durationMs: performance.now() - providerStartedAt, id: message.id, key: provider.key, source: provider.source, status: 'mounted', type: 'observed-provider' });`]),
     `${indent}    } catch (error) {`,
+    ...(observe === undefined
+      ? []
+      : [`${indent}      if (${observe}) parentPort.postMessage({ durationMs: performance.now() - providerStartedAt, id: message.id, key: provider.key, message: error instanceof Error ? error.message : String(error), source: provider.source, status: 'failed', type: 'observed-provider' });`]),
     `${indent}      throw new Error(\`Context provider "\${provider.key}" (\${provider.source}) failed: \${error instanceof Error ? error.message : String(error)}\`, { cause: error });`,
     `${indent}    }`,
     `${indent}  }`,
+    ...(observe === undefined
+      ? []
+      : [`${indent}  if (${observe}) parentPort.postMessage({ count: Object.keys(providerValues).length - 1, durationMs: performance.now() - providersStartedAt, id: message.id, type: 'observed-providers-finish' });`]),
     `${indent}  return providerValues;`,
     `${indent}},`,
   ];
@@ -1100,6 +1123,10 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     "  const routeId = message.invocation.kind === 'event' ? `hook:event-route:${message.invocation.props.event.replace('/', '-')}` : message.invocation.props.operationId;",
     '  const route = routes[routeId];',
     "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated route must default-export an async Server Component.');",
+    '  const observedRoute = message.observe !== true ? route : { ...route, module: { ...route.module, default: async (props) => {',
+    '    const handlerStartedAt = performance.now();',
+    "    try { return await route.module.default(props); } finally { parentPort.postMessage({ durationMs: performance.now() - handlerStartedAt, id: message.id, type: 'observed-handler' }); }",
+    '  } } };',
     '  const controller = new AbortController();',
     '  requests.set(message.id, controller);',
     ...processHitSource('  '),
@@ -1119,6 +1146,7 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     ...providersFieldSource(providers, {
       indent: '      ',
       invocation: 'message.invocation',
+      observe: 'message.observe === true',
       ...(hasProviderSelections ? { providers: 'route.providers ?? providers' } : {}),
     }),
     '      ...(message.session === undefined ? {} : { session: message.session }),',
@@ -1132,8 +1160,12 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     "      const props = message.invocation.kind === 'event'",
     '        ? Object.freeze({ canonical: Object.freeze(message.invocation.props.payload.canonical), native: Object.freeze(message.invocation.props.payload.native), signal: controller.signal })',
     '        : { input: message.invocation.props.input, signal: controller.signal };',
-    '      const flight = renderAgentFlight(composeLayouts(route, props, controller.signal), { signal: controller.signal });',
-    '      return new Uint8Array(await new Response(flight).arrayBuffer());',
+    "      if (message.observe === true) parentPort.postMessage({ id: message.id, type: 'observed-render-start' });",
+    '      const renderStartedAt = performance.now();',
+    '      const flight = renderAgentFlight(composeLayouts(observedRoute, props, controller.signal), { signal: controller.signal });',
+    '      const renderedBytes = new Uint8Array(await new Response(flight).arrayBuffer());',
+    "      if (message.observe === true) parentPort.postMessage({ durationMs: performance.now() - renderStartedAt, id: message.id, type: 'observed-render-finish' });",
+    '      return renderedBytes;',
     '    });',
     '    parentPort.postMessage({ bytes, id: message.id, type: \'complete\' }, [bytes.buffer]);',
     ...(options.state === undefined

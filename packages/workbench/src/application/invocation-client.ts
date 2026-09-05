@@ -6,6 +6,7 @@ import type {
   RouteInvocationSummary,
 } from '../../../agent-bundle/src/contracts/invocations.ts';
 import type { Diagnostic } from '../../../agent-bundle/src/contracts/diagnostics.ts';
+import type { EventTraceEvent } from '../../../agent-bundle/src/events/trace.ts';
 import {
   agentDocumentSchema,
   agentRenderEventSchema,
@@ -71,6 +72,39 @@ const invocationEventSchema = z.strictObject({
   host: z.enum(['claude', 'codex', 'cursor']).optional(),
   native: jsonObjectSchema.optional(),
 });
+const eventTraceWireSchema = z.strictObject({
+  at: z.number().finite().nonnegative(),
+  count: z.number().int().nonnegative().optional(),
+  durationMs: z.number().finite().nonnegative().optional(),
+  error: z.strictObject({
+    code: z.string().optional(),
+    message: z.string(),
+    name: textSchema,
+  }).optional(),
+  execution: z.strictObject({
+    event: textSchema,
+    executionId: textSchema,
+    host: textSchema,
+    nativeEvent: textSchema,
+  }),
+  kind: z.enum([
+    'preflight.start',
+    'preflight.outcome',
+    'execute.start',
+    'providers.start',
+    'providers.finish',
+    'render.start',
+    'render.finish',
+    'failure',
+  ]),
+  outcome: z.enum(['execute', 'continue', 'deny']).optional(),
+  phase: z.enum(['preflight', 'execute', 'providers', 'render']),
+  runtime: z.enum(['shared', 'standalone']).optional(),
+  sequence: z.number().int().nonnegative(),
+});
+const eventTraceSchema = z.custom<EventTraceEvent>(
+  (value) => eventTraceWireSchema.safeParse(value).success,
+);
 const invocationSummaryFields = {
   completedAt: textSchema,
   correlationId: textSchema.optional(),
@@ -97,6 +131,7 @@ const invocationSchema: z.ZodType<RouteInvocation> = z.strictObject({
   projection: projectionSchema,
   providers: z.array(providerSchema),
   result: z.json().optional(),
+  trace: z.array(eventTraceSchema).optional(),
 });
 const invocationResponseSchema = z.strictObject({ invocation: invocationSchema });
 const invocationListResponseSchema = z.strictObject({

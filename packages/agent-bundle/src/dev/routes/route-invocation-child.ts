@@ -15,6 +15,7 @@ import type {
   RouteInvocationChildResponse,
   RouteInvocationChildResult,
 } from './route-invocation-service.ts';
+import { renderProductionRoute } from './route-invocation-production.ts';
 import { createRouteModuleLoader } from './route-module-loader.ts';
 
 const { load } = createRouteModuleLoader();
@@ -53,7 +54,7 @@ const respond = (response: RouteInvocationChildResponse): Promise<void> => new P
   });
 });
 
-const render = async (request: RouteInvocationChildRequest): Promise<RouteInvocationChildResult> => {
+const renderUnitRoute = async (request: RouteInvocationChildRequest): Promise<RouteInvocationChildResult> => {
   installManifest(request);
   const startedAt = performance.now();
   const input = request.input;
@@ -86,11 +87,19 @@ const render = async (request: RouteInvocationChildRequest): Promise<RouteInvoca
   });
 };
 
+const render = async (request: RouteInvocationChildRequest): Promise<RouteInvocationChildResult> =>
+  request.mode === 'unit-render'
+    ? renderUnitRoute(request)
+    : renderProductionRoute(request);
+
 process.once('message', (request: RouteInvocationChildRequest) => {
   void render(request)
     .then((result) => respond({ result, type: 'result' }))
     .catch((error: unknown) => respond({
       error: {
+        ...(typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
+          ? { code: error.code }
+          : {}),
         message: error instanceof Error ? error.message : String(error),
         name: error instanceof Error ? error.name : 'Error',
       },
