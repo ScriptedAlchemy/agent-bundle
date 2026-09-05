@@ -111,7 +111,7 @@ e2e('drives the populated Skills Starter in real Chrome', { timeout: 90_000 }, a
     await page.getByRole('link', { name: 'Artifacts' }).click();
     await waitForSettledWorkbench(page);
     for (const target of ['portable', 'codex', 'claude']) {
-      await expect(page.locator(`#artifact-target option[value="${target}"]`)).toBeAttached({ timeout: browserTimeout });
+      await expect(page.locator(`#artifact-projection option[value="${target}"]`)).toBeAttached({ timeout: browserTimeout });
     }
     await captureExampleState(page, 'skills-starter', 'artifacts-populated');
     await expectHealthyExamplePage(ledger);
@@ -358,7 +358,7 @@ e2e('drives every populated MCP App workflow surface in real Chrome', { timeout:
     await page.getByRole('link', { name: 'Artifacts', exact: true }).click();
     await waitForSettledWorkbench(page);
     await expect(page.getByRole('heading', { name: 'Artifacts', exact: true })).toBeVisible({ timeout: browserTimeout });
-    await page.locator('#artifact-target').selectOption('portable');
+    await page.locator('#artifact-projection').selectOption('portable');
     await expect(page.locator('.artifact-table').first()).toContainText('mcp-apps/status.html', { timeout: browserTimeout });
     await captureExampleState(page, 'mcp-app', 'artifacts-populated');
 
