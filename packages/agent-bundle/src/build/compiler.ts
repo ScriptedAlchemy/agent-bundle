@@ -58,9 +58,6 @@ export const buildWithRslib = async (
     ...(ignoredSourcePaths === undefined ? {} : { ignoredSourcePaths }),
     ...(logLevel === undefined ? {} : { logLevel }),
   }], dependencies);
-  if (result === undefined) {
-    throw new Error('Rslib did not return a compiler result for its requested surface.');
-  }
-  enforceSelfContainment([result], diagnosticPathPrefix);
-  return result;
+  enforceSelfContainment([result!], diagnosticPathPrefix);
+  return result!;
 };

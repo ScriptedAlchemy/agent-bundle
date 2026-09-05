@@ -202,7 +202,8 @@ hatch value that breaks an artifact contract is a hard diagnostic rather than a 
 (`@rsbuild/plugin-react`, `rsbuild:react`), because `plugins` arrays concatenate and Rsbuild
 never dedupes plugins by name — the framework registers it for you. `AB4725` rejects
 `tools.rsbuild.output.autoExternal` that is not `false`, and a string or object `externals`
-entry that is not a Node built-in, in `tools.rsbuild.output` or an object-form `tools.rspack`.
+entry that names a package (neither a Node built-in nor a relative path), in
+`tools.rsbuild.output` or an object-form `tools.rspack`.
 
 The hatch executes on one bundler engine — the `@rspack/core` behind agent-bundle's pinned
 `@rsbuild/core`, shared by the Rslib-compiled outputs (artifact scripts, MCP entries, hooks, the

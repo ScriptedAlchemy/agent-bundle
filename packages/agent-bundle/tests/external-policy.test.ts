@@ -36,6 +36,11 @@ describe('classifyExternal', () => {
     expect(classify('../outside.mjs')).toBe('package');
     expect(classify('left-pad')).toBe('package');
   });
+
+  it('judges the run-time target, so an escaping normalised path is not a sibling', () => {
+    expect(classify('../scripts/sibling.mjs')).toBe('artifact-relative');
+    expect(classify('./../../scripts/sibling.mjs')).toBe('package');
+  });
 });
 
 describe('selfContainmentDiagnostics', () => {
@@ -47,6 +52,7 @@ describe('selfContainmentDiagnostics', () => {
         issuers: [],
         kind: 'package',
         request: 'left-pad',
+        userRequest: 'left-pad',
       },
       {
         asset: 'scripts/alpha.mjs',
@@ -54,6 +60,7 @@ describe('selfContainmentDiagnostics', () => {
         issuers: ['src/entry.ts', 'src/helper.ts'],
         kind: 'package',
         request: 'right-pad',
+        userRequest: 'right-pad',
       },
     ]))).toEqual([
       expect.objectContaining({
@@ -69,6 +76,30 @@ describe('selfContainmentDiagnostics', () => {
     ]);
   });
 
+  it('names the authored specifier when an object map redirected it, and the missing sibling a relative target misses', () => {
+    expect(selfContainmentDiagnostics(resultWith([
+      {
+        asset: 'scripts/probe.mjs',
+        externalType: 'module',
+        issuers: ['src/probe.ts'],
+        kind: 'package',
+        request: 'lp',
+        userRequest: 'left-pad',
+      },
+      {
+        asset: 'scripts/probe.mjs',
+        externalType: 'module',
+        issuers: ['src/probe.ts'],
+        kind: 'package',
+        request: './missing.mjs',
+        userRequest: './missing.ts',
+      },
+    ])).map((diagnostic) => diagnostic.message)).toEqual([
+      'Compiled module "scripts/probe.mjs" keeps "./missing.mjs" external (module), imported as "./missing.ts", from src/probe.ts; it names no module emitted by this artifact.',
+      'Compiled module "scripts/probe.mjs" keeps "lp" external (module), imported as "left-pad", from src/probe.ts; a generated executable bundles everything but Node built-ins.',
+    ]);
+  });
+
   it('allows builtins and emitted artifact-relative externals', () => {
     expect(selfContainmentDiagnostics(resultWith([
       {
@@ -77,6 +108,7 @@ describe('selfContainmentDiagnostics', () => {
         issuers: ['src/probe.ts'],
         kind: 'builtin',
         request: 'node:fs',
+        userRequest: 'node:fs',
       },
       {
         asset: 'scripts/probe.mjs',
@@ -84,6 +116,7 @@ describe('selfContainmentDiagnostics', () => {
         issuers: ['src/probe.ts'],
         kind: 'artifact-relative',
         request: './sibling.mjs',
+        userRequest: './sibling.mjs',
       },
     ]))).toEqual([]);
   });
@@ -98,6 +131,11 @@ describe('externalizedSpecifiers', () => {
     expect(externalizedSpecifiers({ 'left-pad': false })).toEqual([]);
     expect(externalizedSpecifiers(() => 'left-pad')).toEqual([]);
     expect(externalizedSpecifiers(undefined)).toEqual([]);
+  });
+
+  it('leaves relative requests to compile time, where emitted siblings are known', () => {
+    expect(externalizedSpecifiers('./worker.mjs')).toEqual([]);
+    expect(externalizedSpecifiers({ '../outside.mjs': 'module ../outside.mjs' })).toEqual([]);
   });
 
   it('lists every non-builtin static declaration, recursively', () => {

@@ -763,7 +763,7 @@ const assertDistinctLibIds = (entries: readonly RslibEntry[]): void => {
   }
 };
 
-const packageNameOf = (resource: string): string | undefined => {
+const packageNameOfResource = (resource: string): string | undefined => {
   const segments = resource.replaceAll('\\', '/').split('/');
   const nodeModules = segments.lastIndexOf('node_modules');
   if (nodeModules === -1) return undefined;
@@ -782,7 +782,7 @@ const moduleKindOf = (
   if (resource !== undefined && isInsideOrEqual(generatedModulesRoot(cwd), resource)) return 'generated';
   if (
     resource !== undefined
-    && (packageNameOf(resource) !== undefined || dependencyRoots.some((root) => isInsideOrEqual(root, resource)))
+    && (packageNameOfResource(resource) !== undefined || dependencyRoots.some((root) => isInsideOrEqual(root, resource)))
   ) {
     return 'dependency';
   }
@@ -872,19 +872,16 @@ export const buildRslibSurfaces = async (
           `Rslib did not record exactly one compilation evidence result for ${JSON.stringify(entry.outputRelativePath)}.`,
         );
       }
-      const asset = evidenceByPath.get(entry.outputRelativePath);
-      if (asset === undefined) {
-        throw new Error(`Rslib did not produce output evidence for ${JSON.stringify(entry.outputRelativePath)}.`);
-      }
       const externals = record.externals.map((external): ExternalIR => ({
         asset: entry.outputRelativePath,
         externalType: external.externalType,
         issuers: external.issuers.map((issuer) => projectIssuer(options.cwd, issuer)),
         kind: classifyExternal(external.request, { asset: entry.outputRelativePath, emittedAssets }),
         request: external.request,
+        userRequest: external.userRequest,
       }));
       const modules = record.modules.map((module): ModuleIR => {
-        const packageName = module.resource === undefined ? undefined : packageNameOf(module.resource);
+        const packageName = module.resource === undefined ? undefined : packageNameOfResource(module.resource);
         return {
           asset: entry.outputRelativePath,
           identifier: module.identifier,
@@ -894,7 +891,7 @@ export const buildRslibSurfaces = async (
         };
       });
       return [entry, Object.freeze({
-        assets: Object.freeze([asset]),
+        assets: Object.freeze([evidenceByPath.get(entry.outputRelativePath)!]),
         diagnostics: Object.freeze([]),
         externals: Object.freeze(externals),
         modules: Object.freeze(modules),

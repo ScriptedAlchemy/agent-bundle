@@ -180,7 +180,7 @@ export default defineConfig({
 `tools.rsbuild.plugins` 中再次添加框架自有插件（`@rsbuild/plugin-react`，`rsbuild:react`）的条目，
 因为 `plugins` 数组会拼接、而 Rsbuild 从不按名称去重插件——框架会替你注册它。`AB4725` 会拒绝
 并非 `false` 的 `tools.rsbuild.output.autoExternal`，以及在 `tools.rsbuild.output` 或对象形式的
-`tools.rspack` 中、将非 Node 内置模块外部化的字符串或对象 `externals` 条目。
+`tools.rspack` 中、点名某个包（既不是 Node 内置模块也不是相对路径）的字符串或对象 `externals` 条目。
 
 逃生舱在同一个打包器引擎上执行——即 agent-bundle 所固定的 `@rsbuild/core` 背后的那个 `@rspack/core`，
 由 Rslib 编译的输出（产物脚本、MCP 入口、钩子、包构建）与 MCP App 视图共用——但这个引擎是 agent-bundle

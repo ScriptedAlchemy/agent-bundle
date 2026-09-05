@@ -82,7 +82,7 @@ const leftPadStub = { 'left-pad': 'export default (value, width) => String(value
 const leftPadEntry = ["import leftPad from 'left-pad';", "console.log(leftPad('7', 3));"];
 
 const expectLeftPadExternal = (record: CompilationEvidence | undefined, source: string, externalType: string): void => {
-  expect(record?.externals).toEqual([{ externalType, issuers: [source], request: 'left-pad' }]);
+  expect(record?.externals).toEqual([{ externalType, issuers: [source], request: 'left-pad', userRequest: 'left-pad' }]);
   expect(record?.modules.map((module) => module.resource)).toEqual([source]);
 };
 
@@ -99,8 +99,8 @@ describe('ArtifactDependencyAuditPlugin', () => {
       expect(rest).toEqual([]);
       expect(record?.compiler).toBe(entryLibId(entry));
       expect(record?.externals).toEqual([
-        { externalType: 'module', issuers: [source], request: 'node:fs' },
-        { externalType: 'module', issuers: [source], request: 'node:path' },
+        { externalType: 'module', issuers: [source], request: 'node:fs', userRequest: 'node:fs' },
+        { externalType: 'module', issuers: [source], request: 'node:path', userRequest: 'node:path' },
       ]);
       expect(record?.modules.map((module) => module.resource).sort()).toEqual([
         join(root, 'node_modules', 'probe-dep', 'index.js'),
@@ -151,11 +151,27 @@ describe('ArtifactDependencyAuditPlugin', () => {
     }
   }, 20_000);
 
+  it('records the run-time target of an object-map external, keeping the authored specifier as userRequest', async () => {
+    const { entry, root, source } = await probeProject(["import lp from 'left-pad';", "import './helper.ts';", 'console.log(lp);']);
+    try {
+      const [record] = await buildRecording(root, [entry], withExternals({
+        './helper.ts': 'module ./helper.mjs',
+        'left-pad': ['lp', 'default'],
+      }));
+      expect(record?.externals).toEqual([
+        { externalType: 'module', issuers: [source], request: './helper.mjs', userRequest: './helper.ts' },
+        { externalType: 'module', issuers: [source], request: 'lp', userRequest: 'left-pad' },
+      ]);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  }, 20_000);
+
   it('records an artifact-relative external kept by an object map', async () => {
     const { entry, root, source } = await probeProject(["import './sibling.js';", "console.log('probe');"]);
     try {
       const [record] = await buildRecording(root, [entry], withExternals({ './sibling.js': 'module ./sibling.js' }));
-      expect(record?.externals).toEqual([{ externalType: 'module', issuers: [source], request: './sibling.js' }]);
+      expect(record?.externals).toEqual([{ externalType: 'module', issuers: [source], request: './sibling.js', userRequest: './sibling.js' }]);
       expect(record?.modules.map((module) => module.resource)).toEqual([source]);
     } finally {
       await rm(root, { force: true, recursive: true });
@@ -170,7 +186,7 @@ describe('ArtifactDependencyAuditPlugin', () => {
     try {
       const [record] = await buildRecording(root, [entry]);
       expect(record?.externals).toEqual([
-        { externalType: 'node-commonjs', issuers: [join(root, 'node_modules', 'probe-cjs', 'index.js')], request: 'fs' },
+        { externalType: 'node-commonjs', issuers: [join(root, 'node_modules', 'probe-cjs', 'index.js')], request: 'fs', userRequest: 'fs' },
       ]);
       expect(record?.modules.map((module) => module.resource).sort()).toEqual([
         join(root, 'node_modules', 'probe-cjs', 'index.js'),

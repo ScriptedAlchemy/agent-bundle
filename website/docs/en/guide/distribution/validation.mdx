@@ -219,7 +219,7 @@ and `splitChunks: false`, and the framework adds no `externals` of its own; Rsli
 leaves only Node built-ins (`node:fs`, `path`, plus Yarn PnP's `pnpapi`) external. MCP App views
 inline every script and style into one HTML file. `AB4725` rejects
 `tools.rsbuild.output.autoExternal` other than `false` and statically visible string or object
-`externals` entries that name non-built-ins. RegExp, function-form, and mutator externals are
+`externals` entries that name packages. RegExp, function-form, relative, and mutator externals are
 judged from the compilation's own evidence: `AB6005` fails a generated executable in a host pack
 or `dist` when Rspack kept anything except a built-in, `pnpapi`, or an emitted sibling external.
 The emitted-module walk remains behind this compile-time check. An external kept through the

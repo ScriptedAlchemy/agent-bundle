@@ -1219,8 +1219,13 @@ overriding the contract. At config validation, `AB4725` rejects
 visible string or object `externals` entries that are not Node built-ins.
 RegExp and function-form externals, including those installed by a mutator,
 are judged from the compilation's externals evidence (`AB6005`). The invariant
-layer re-pins `output.autoExternal: false` after the hatch merge. The hatch customizes *how
-code compiles*, never *what the artifact promises*. The framework's own
+layer re-pins `output.autoExternal: false` after the hatch merge. Reserved
+module specifiers are protected the same way: a hatch that externalizes
+`agent-bundle/mcp-entry` or a generated module specifier (`agent-bundle/meta`,
+or a registry specifier such as `agent-bundle/mcp-apps`) fails the build with
+a hard diagnostic — at config inspection for statically visible `externals`,
+and from the emitted bundle's residual imports for function-form `externals`.
+The hatch customizes *how code compiles*, never *what the artifact promises*. The framework's own
 profile keeps the same promise: `output.autoExternal` is `false`, `bundle:
 true`, `splitChunks: false`, and no `externals` are added. The compiler service
 lowers every host-pack surface and package-build entry. The framework-owned

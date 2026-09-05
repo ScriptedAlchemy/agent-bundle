@@ -19,7 +19,10 @@ export interface CompilationExternal {
   readonly externalType: string;
   /** Absolute resource paths of the modules whose imports reach the request; sorted, unique. */
   readonly issuers: readonly string[];
+  /** What the emitted code loads at run time — the mapped target of an object-map external, else the specifier. */
   readonly request: string;
+  /** The specifier as authored in the issuer. */
+  readonly userRequest: string;
 }
 
 export interface CompilationModule {
@@ -44,7 +47,9 @@ export interface ExternalIR {
   /** Issuer modules relative to the project root (POSIX); a generated module keeps its reserved path. */
   readonly issuers: readonly string[];
   readonly kind: ExternalKind;
+  /** The run-time load target; `kind` judges this, not `userRequest`. */
   readonly request: string;
+  readonly userRequest: string;
 }
 
 export type ModuleKind = 'authored' | 'dependency' | 'generated';
