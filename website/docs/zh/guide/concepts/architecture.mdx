@@ -56,7 +56,8 @@ composite plugin root
   + agent-bundle.compile-evidence.json
         │
         ▼
-build/validate-artifact*.ts / AB6005 / AB6039
+build/compiler.ts + build/external-policy.ts / AB6005
+  + build/validate-artifact*.ts / AB6005 (residual), AB6039
   / prepack AB7014, AB7015                   ← Artifact layer
 ```
 
@@ -254,22 +255,23 @@ node 表面。
 | 检查 | 模块 | 代码 |
 | --- | --- | --- |
 | 规范清单解析 + 文件摘要匹配 | `build/validate-artifact.ts` | `AB60xx` 系列；解析错误由 `parseArtifactManifest` 抛出 |
+| 宿主包、包构建 `dist` 与 MCP App 视图的编译只保留获准的 external | `build/compiler.ts`、`build/external-policy.ts` | `AB6005` |
 | 编译证据记录对照清单 `bundle` 文件 | `build/compile-evidence.ts` 的 `compileEvidenceDiagnostics` | `AB6039` |
-| 宿主包与包构建 `dist` 模块只导入相对/`file:` 说明符或 Node 内建模块 | `build/validate-artifact-modules.ts` | `AB6005` |
+| 编译器看不见的已输出模块：任何位置的表达式 `import()`、编译产物中构建被要求忽略的字面量导入（`rspackIgnore`/`webpackIgnore`），以及框架未编译或 `tools` 逃生舱可能改写的 JavaScript 的导入与语法 | `build/validate-artifact-modules.ts` | `AB6005`（残余形态） |
 | Skill / 钩子 / MCP 文档与所选宿主匹配 | `build/validate-artifact-skills.ts`、`build/validate-artifact-hooks.ts`、`build/validate-artifact-mcp.ts` | 按表面划分的 `AB60xx` |
 | 产物对输出根目录的所有权 | `build/validate-artifact.ts` | `AB6014` |
 | 打包的 tarball 包含清单中的每个文件，且没有未使用的安装依赖 | `build/pack-inventory.ts` | `AB7010`、`AB7014`、`AB7015` |
 
-`AB6005` 遍历每个发出的 JavaScript 模块：`manifest.files` 中的宿主包 `.mjs` 行，以及
-包构建的 `dist` 捆绑（`dist/bin/*.js`、Flight worker、`lib` 入口）——在 `dist` 发布之前。
-裸包说明符会失败；只有 Node 内建模块（`node:module.isBuiltin`）可以保持外部。预构建 payload
-（`kind: 'prebuilt'`）只做哈希锁定，不参与遍历。这与生成式插件编译器配置所强制的
-自包含规则相同（`build/rslib.ts` 的 `composeEntryLibConfig`：`autoExternal: false`、
+`AB6005` 读取每次宿主包、包构建 `dist` 与 MCP App 视图编译的证据。Rspack 保持的每个
+`ExternalModule` 都必须是 Node 内建模块、`pnpapi` 或已输出的同级文件；其他 external 都会失败。
+这就是 `build/compiler.ts` 与 `build/external-policy.ts` 强制的自包含规则；生成式插件编译器配置
+同样实施该规则（`build/rslib.ts` 的 `composeEntryLibConfig`：`autoExternal: false`、
 `bundle: true`、没有面向作者的 `externals`）。
 
 `AB7014` / `AB7015` 是 prepack 门禁：`package.json` 中的安装期依赖必须出现在打包后的
-JavaScript、声明文件、`imports` 或消费者侧安装脚本中（`AB7014`），并且消费者的 npm 必须
-能够抓取它（`AB7015`）。
+预构建 `runtimeDependencies`、打包后声明文件引用或消费者安装脚本中
+（`AB7014`），并且消费者的 npm 必须能够抓取它（`AB7015`）。内联进 bundle 的包不算已使用；
+编译证据会记录诊断中点名的 `dist` bundle。
 
 ### 复合根目录
 
@@ -382,8 +384,9 @@ CLI bin 的文件，只以 `files[]` 中一行的形式出现。
 | 读取方 | 使用的字段 | 用途 |
 | --- | --- | --- |
 | `build/validate-artifact.ts` | 全部 | 重新解析磁盘上的字节，匹配 `files[]` 的摘要与 mode，对照注册表检查 `targets[]`，固定 `agentSkills` 与 `runtime.node` |
+| `build/compiler.ts`、`build/external-policy.ts` | 宿主包、包构建 `dist` 与 MCP App 视图的 `CompileResult.externals` | `AB6005` 编译证据自包含检查 |
 | `build/compile-evidence.ts` | `files[]`（`bundle` 行） | `AB6039`：把持久化的编译证据记录对照文件表复核，且不解析 JavaScript |
-| `build/validate-artifact-modules.ts` | `files[]`（`.mjs` 行）以及包构建的 `dist` | `AB6005` 导入图 |
+| `build/validate-artifact-modules.ts` | `files[]`（`.js`/`.mjs` 行）加包构建 `dist`；编译证据记录证明的 `bundle` 行只做词法分析，其字面量导入对照记录在案的外部依赖核对 | `AB6005` 残余遍历：表达式 `import()`、被忽略（`rspackIgnore`）的字面量导入、未编译或被逃生舱改写的模块 |
 | `build/validate-artifact-skills.ts` | `targets[]`（`manifestTargets`）加目录树 | Skill 文档对照所选宿主 |
 | `build/validate-artifact-hooks.ts` | `targets[]`、钩子文件 | 钩子文档对照所选宿主 |
 | `build/validate-artifact-mcp.ts` | `targets[]`、MCP 文件 | MCP 文档对照所选宿主 |

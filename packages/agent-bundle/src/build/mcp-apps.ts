@@ -574,7 +574,7 @@ export const compileMcpApps = async (
   const compileResults = Object.freeze(compiledApps.map((app, index) => compileResultOf(viewEvidence[index]!, {
     asset: { path: `mcp-apps/${app.name}.html`, sourceInputs: app.sourceInputs },
     cwd: options.cwd,
-    dependencyRoots: [],
+    dependencyRoots: new Map(),
     emittedAssets,
   })));
   /**

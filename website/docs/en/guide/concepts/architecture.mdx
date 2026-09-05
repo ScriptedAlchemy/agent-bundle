@@ -60,7 +60,8 @@ composite plugin root
   + agent-bundle.compile-evidence.json
         │
         ▼
-build/validate-artifact*.ts / AB6005 / AB6039
+build/compiler.ts + build/external-policy.ts / AB6005
+  + build/validate-artifact*.ts / AB6005 (residual), AB6039
   / prepack AB7014, AB7015                   ← Artifact layer
 ```
 
@@ -288,26 +289,26 @@ embed their HTML), then the node surfaces.
 | Check | Module | Code |
 | --- | --- | --- |
 | Canonical manifest parse + file digest match | `build/validate-artifact.ts` | `AB60xx` family; parse errors throw from `parseArtifactManifest` |
+| Host-pack, package-build `dist`, and MCP App view compilations keep only permitted externals | `build/compiler.ts`, `build/external-policy.ts` | `AB6005` |
 | Compile evidence record vs manifest `bundle` files | `build/compile-evidence.ts` `compileEvidenceDiagnostics` | `AB6039` |
-| Host-pack and package-build `dist` modules import only relative/`file:` specifiers or Node built-ins | `build/validate-artifact-modules.ts` | `AB6005` |
+| Emitted modules the compiler could not see: an expression `import()` anywhere, a literal import the build was told to ignore (`rspackIgnore`/`webpackIgnore`) in a compiled module, and the imports and syntax of JavaScript the framework did not compile or a `tools` hatch may have rewritten | `build/validate-artifact-modules.ts` | `AB6005` (residual forms) |
 | Skills / hooks / MCP documents match the selected hosts | `build/validate-artifact-skills.ts`, `build/validate-artifact-hooks.ts`, `build/validate-artifact-mcp.ts` | per-surface `AB60xx` |
 | Artifact ownership of the output root | `build/validate-artifact.ts` | `AB6014` |
 | Packed tarball contains every manifest file and no unused install deps | `build/pack-inventory.ts` | `AB7010`, `AB7014`, `AB7015` |
 
-`AB6005` walks every emitted JavaScript module: host-pack `.mjs` rows in
-`manifest.files`, and the package build's `dist` bundles (`dist/bin/*.js`,
-Flight workers, the `lib` entry) before `dist` is published. A bare package
-specifier fails; only Node built-ins (`node:module.isBuiltin`) may stay
-external.
-Prebuilt payloads (`kind: 'prebuilt'`) are hash-locked only and are not
-walked. That is the same self-containment rule the generated-plugin
-compiler profile enforces (`build/rslib.ts` `composeEntryLibConfig`:
-`autoExternal: false`, `bundle: true`, no author-facing `externals`).
+`AB6005` reads compile evidence for every host-pack, package-build `dist`, and
+MCP App view compilation. Each `ExternalModule` that Rspack kept must be a
+Node built-in, `pnpapi`, or an emitted sibling; any other external fails.
+That is the self-containment rule enforced by `build/compiler.ts` and
+`build/external-policy.ts`, alongside the generated-plugin compiler profile
+(`build/rslib.ts` `composeEntryLibConfig`: `autoExternal: false`,
+`bundle: true`, no author-facing `externals`).
 
 `AB7014` / `AB7015` are the prepack gate: a `package.json` install-time
-dependency must appear in packed JavaScript, declarations, `imports`, or a
-consumer install script (`AB7014`), and a consumer's npm must be able to
-fetch it (`AB7015`).
+dependency must be justified by prebuilt `runtimeDependencies`, a packed
+declaration reference, or a consumer install script (`AB7014`), and a consumer's npm
+must be able to fetch it (`AB7015`). A package inlined into a bundle is not
+used; compile evidence records the `dist` bundles named in the diagnostic.
 
 ### Composite root
 
@@ -435,8 +436,9 @@ Production readers call `parseArtifactManifest` or take an already-parsed
 | Reader | Fields used | Purpose |
 | --- | --- | --- |
 | `build/validate-artifact.ts` | all of them | Re-parse the on-disk bytes, match `files[]` digests and modes, check `targets[]` against the registry, pin `agentSkills` and `runtime.node` |
+| `build/compiler.ts`, `build/external-policy.ts` | `CompileResult.externals` for host packs, package-build `dist`, and MCP App views | `AB6005` compile-evidence self-containment |
 | `build/compile-evidence.ts` | `files[]` (`bundle` rows) | `AB6039`: re-check the persisted compile evidence record against the file table without parsing JavaScript |
-| `build/validate-artifact-modules.ts` | `files[]` (`.mjs` rows) plus package-build `dist` | `AB6005` import graph |
+| `build/validate-artifact-modules.ts` | `files[]` (`.js`/`.mjs` rows) plus package-build `dist`; `bundle` rows the compile evidence record proves are lexed and their literal imports held to the recorded externals | `AB6005` residual walk: expression `import()`, ignored (`rspackIgnore`) literal imports, uncompiled or hatch-rewritten modules |
 | `build/validate-artifact-skills.ts` | `targets[]` (`manifestTargets`) plus the tree | Skill documents vs selected hosts |
 | `build/validate-artifact-hooks.ts` | `targets[]`, hook files | Hook documents vs selected hosts |
 | `build/validate-artifact-mcp.ts` | `targets[]`, MCP files | MCP documents vs selected hosts |

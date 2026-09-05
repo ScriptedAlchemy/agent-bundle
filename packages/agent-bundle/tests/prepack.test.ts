@@ -1,7 +1,7 @@
 import { execFile as executeFile } from 'node:child_process';
 import { cp, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative } from 'node:path';
+import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { gzipSync } from 'node:zlib';
 
@@ -17,6 +17,7 @@ import {
   packOutputFromJson,
   type PackOutput,
 } from '../src/build/pack-inventory.ts';
+import type { PackageBuildResult } from '../src/build/package-build.ts';
 
 const execFile = promisify(executeFile);
 const workspaceNodeModules = join(process.cwd(), 'node_modules');
@@ -222,7 +223,7 @@ it('reports package, model, host, and provenance version disagreement as AB7013'
   },
 ));
 
-it('reports installed dependencies no packed JavaScript imports as AB7014, per field', () => withPackageDocument(
+it('reports installed dependencies a consumer never needs as AB7014, per field', () => withPackageDocument(
   (document) => {
     document.dependencies = { zod: '4.5.4', effect: '4.0.0' };
     document.peerDependencies = { react: '19.2.8', 'optional-host': '^1.0.0' };
@@ -232,16 +233,67 @@ it('reports installed dependencies no packed JavaScript imports as AB7014, per f
   async () => {
     const reported = withCode(await diagnostics(), 'AB7014');
     // One diagnostic per field; devDependencies never reach a consumer and optional peers are never installed, so
-    // nothing has to use optional-host.
+    // nothing has to use optional-host. The generated install bin inlines `effect`, so the compiler's evidence names
+    // that bundle; `zod` reached no bundle and is only listed.
+    expect(result.build.packageBuild!.evidence.assets.find((asset) => asset.path === 'dist/bin/installer-fixture.js')?.packages)
+      .toContain('effect');
     expect(reported.map((diagnostic) => diagnostic.message)).toEqual([
-      expect.stringMatching(/^package\.json dependencies .*"effect", "zod"/u),
-      expect.stringMatching(/^package\.json peerDependencies .*"react"/u),
+      'package.json dependencies names packages a consumer never needs installed: no packed declaration file references them, '
+        + 'no consumer-side install script names or runs them, and no prebuilt payload declares them in runtimeDependencies: '
+        + '"effect", "zod". The build inlined "effect" into dist/bin/installer-fixture.js; every consumer installs them for nothing.',
+      expect.stringMatching(/^package\.json peerDependencies .*"react"\. If they only constrain the host version/u),
     ]);
     // A required peer nothing imports may be a deliberate host-compatibility contract: a warning, not a refusal.
     expect(reported.map((diagnostic) => diagnostic.severity)).toEqual(['error', 'warning']);
-    expect(reported[0]?.recovery).toContain('devDependencies');
+    expect(reported[0]?.recovery).toBe('Move build-only packages to devDependencies; compiled bundles inline their imports (AB6005). '
+      + 'Keep a runtime dependency only for what a packed declaration file references, a consumer install script names or runs, '
+      + 'or a prebuilt payload declares in runtimeDependencies (definePrebuilt).');
     expect(reported[1]?.message).toContain('compatibility contract');
     expect(reported[1]?.recovery).toContain('peerDependenciesMeta');
+  },
+));
+
+/** The shared fixture's package build, its evidence record's `packages` set per recorded asset path (`dist/…`). */
+const packageBuildBundling = (bundled: Readonly<Record<string, readonly string[]>>): PackageBuildResult => {
+  const packageBuild = result.build.packageBuild!;
+  return {
+    ...packageBuild,
+    evidence: {
+      ...packageBuild.evidence,
+      assets: packageBuild.evidence.assets.map((asset) => ({ ...asset, packages: bundled[asset.path] ?? [] })),
+    },
+  };
+};
+
+it('reports a dependency only compiled dist bundles inlined as AB7014, naming the bundles', () => withPackageDocument(
+  (document) => {
+    document.dependencies = { 'left-pad': '^1.3.0', 'never-loaded': '^1.0.0', 'tiny-pkg': '^1.0.0' };
+    document.optionalDependencies = { 'optional-extra': '^1.0.0' };
+    document.peerDependencies = { react: '19.2.8' };
+  },
+  async () => {
+    const paths = result.build.packageBuild!.files.map((file) => file.path);
+    expect(paths).toEqual(expect.arrayContaining(['bin/installer-fixture.js', 'index.js']));
+    const reported = withCode(await packInventoryDiagnostics({
+      artifactRoot: result.build.build.outputRoot,
+      model: result.build.model,
+      packageBuild: packageBuildBundling({
+        'dist/bin/installer-fixture.js': ['left-pad', 'tiny-pkg'],
+        'dist/index.js': ['left-pad', 'react'],
+      }),
+      packOutput: result.pack,
+      packerRewritesWorkspaceProtocols: false,
+      projectRoot,
+    }), 'AB7014');
+    // Bundled is not used: the names are still reported, and the tail says which bundles inlined them, names in
+    // field order and each name's bundles sorted. A peer the build inlined gets the same sentence; a field the
+    // compiler never touched gets the plain tail.
+    expect(reported.map((diagnostic) => diagnostic.message)).toEqual([
+      expect.stringMatching(/^package\.json dependencies .*: "left-pad", "never-loaded", "tiny-pkg"\. The build inlined "left-pad" into dist\/bin\/installer-fixture\.js and dist\/index\.js, and "tiny-pkg" into dist\/bin\/installer-fixture\.js; every consumer installs them for nothing\.$/u),
+      expect.stringMatching(/^package\.json optionalDependencies .*: "optional-extra"\. Nothing packed reaches them at runtime; every consumer installs them for nothing\.$/u),
+      expect.stringMatching(/^package\.json peerDependencies .*: "react"\. The build inlined "react" into dist\/index\.js; every consumer installs them for nothing\.$/u),
+    ]);
+    expect(reported.map((diagnostic) => diagnostic.severity)).toEqual(['error', 'error', 'warning']);
   },
 ));
 
@@ -297,97 +349,6 @@ it('reports an optional peer only for a protocol npm cannot parse, which fails t
   },
 ));
 
-it('accepts a package loaded through a createRequire() binding, literal or computed', () => withPackageDocument(
-  (document) => { document.dependencies = { 'driver-package': '^1.0.0', 'never-loaded': '^1.0.0' }; },
-  async () => {
-    const consumer = join(projectRoot, 'dist', 'aliased.mjs');
-    await writeFile(consumer, [
-      // The factory renamed on import is still a factory.
-      'import { createRequire as makeRequire } from "node:module";',
-      'const load = makeRequire(import.meta.url);',
-      'export const driver = load("driver-package");',
-      '',
-    ].join('\n'));
-    try {
-      const pack = { ...result.pack, files: [...result.pack.files, { path: 'dist/aliased.mjs' }] };
-      const [reported] = withCode(await diagnostics(pack), 'AB7014');
-      expect(reported?.message).toContain('"never-loaded"');
-      expect(reported?.message).not.toContain('"driver-package"');
-      // Namespace-qualified factory, computed argument.
-      await writeFile(consumer, 'import * as Module from "node:module";\nconst load = Module.createRequire(import.meta.url);\nexport const any = (name) => load(name);\n');
-      expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
-      // Factory chained off a CommonJS load, literal argument.
-      await writeFile(consumer, 'const load = require("node:module").createRequire(__filename);\nmodule.exports = load("driver-package");\n');
-      const [chained] = withCode(await diagnostics(pack), 'AB7014');
-      expect(chained?.message).toContain('"never-loaded"');
-      expect(chained?.message).not.toContain('"driver-package"');
-      // Loader called inline with a literal.
-      await writeFile(consumer, 'import { createRequire } from "node:module";\nexport const driver = createRequire(import.meta.url)("driver-package");\n');
-      const [inline] = withCode(await diagnostics(pack), 'AB7014');
-      expect(inline?.message).toContain('"never-loaded"');
-      expect(inline?.message).not.toContain('"driver-package"');
-      // Factory argument with nested calls, literal target.
-      await writeFile(consumer, 'import { createRequire } from "node:module";\nexport const driver = createRequire(new URL("./entry.js", import.meta.url))("driver-package");\n');
-      const [nested] = withCode(await diagnostics(pack), 'AB7014');
-      expect(nested?.message).toContain('"never-loaded"');
-      expect(nested?.message).not.toContain('"driver-package"');
-      // The same factory argument, computed target: nothing can be called unused.
-      await writeFile(consumer, 'import { createRequire } from "node:module";\nexport const any = (name) => createRequire(new URL("./entry.js", import.meta.url))(name);\n');
-      expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
-      // Comments between the loader and its parentheses, and around the literal, are trivia — and not a computed argument.
-      await writeFile(consumer, 'module.exports = require /* driver */ ( // which\n /* a */ "driver-package" /* b */ );\n');
-      const [commented] = withCode(await diagnostics(pack), 'AB7014');
-      expect(commented?.message).toContain('"never-loaded"');
-      expect(commented?.message).not.toContain('"driver-package"');
-      // Comment trivia before a computed argument still leaves the load computed.
-      await writeFile(consumer, 'module.exports = (name) => require /* any */ (/* of */ name);\n');
-      expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
-    } finally {
-      await rm(consumer, { force: true });
-    }
-  },
-));
-
-it.each([
-  ['a namespace import', 'import * as Module from "node:module";\nexport const driver = Module.createRequire(import.meta.url)("driver-package");'],
-  ['the default import', 'import module from "node:module";\nexport const driver = module.createRequire(import.meta.url)("driver-package");'],
-  ['require("node:module")', 'module.exports = require("node:module").createRequire(__filename)("driver-package");'],
-  ["require('module')", "module.exports = require('module').createRequire(__filename)('driver-package');"],
-  ['require("node:module") and .resolve', 'module.exports = require("node:module").createRequire(__filename).resolve("driver-package");'],
-  ['a two-level namespace, bound first', 'import * as ns from "node:module";\nconst load = ns.default.createRequire(import.meta.url);\nexport const driver = load("driver-package");'],
-])('accepts a package loaded by a createRequire() call qualified through %s, direct or bound', (_form, source) => withPackageDocument(
-  (document) => { document.dependencies = { 'driver-package': '^1.0.0', 'never-loaded': '^1.0.0' }; },
-  async () => {
-    const consumer = join(projectRoot, 'dist', source.startsWith('import') ? 'qualified.mjs' : 'qualified.cjs');
-    await writeFile(consumer, `${source}\n`);
-    try {
-      const pack = { ...result.pack, files: [...result.pack.files, { path: relative(projectRoot, consumer) }] };
-      const [reported] = withCode(await diagnostics(pack), 'AB7014');
-      expect(reported?.message).toContain('"never-loaded"');
-      expect(reported?.message).not.toContain('"driver-package"');
-    } finally {
-      await rm(consumer, { force: true });
-    }
-  },
-));
-
-it.each([
-  ['a namespace import', 'import * as Module from "node:module";\nexport const load = (name) => Module.createRequire(import.meta.url)(name);'],
-  ['require("node:module")', 'module.exports = (name) => require("node:module").createRequire(__filename)(name);'],
-])('withholds AB7014 for a computed direct createRequire()() call qualified through %s', (_form, source) => withPackageDocument(
-  (document) => { document.dependencies = { 'chosen-at-runtime': '^1.0.0' }; },
-  async () => {
-    const consumer = join(projectRoot, 'dist', source.startsWith('import') ? 'qualified.mjs' : 'qualified.cjs');
-    await writeFile(consumer, `${source}\n`);
-    try {
-      const pack = { ...result.pack, files: [...result.pack.files, { path: relative(projectRoot, consumer) }] };
-      expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
-    } finally {
-      await rm(consumer, { force: true });
-    }
-  },
-));
-
 it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifiers as AB7015', () => withPackageDocument(
   (document) => {
     document.dependencies = {
@@ -419,65 +380,44 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
     document.bundleDependencies = ['embedded', 'not-embedded'];
     document.optionalDependencies = {
       scp: 'git@github.com:owner/repo.git',
-      // npm skips these ten after the failed fetch too — and then postinstall fails: on the missing commands, and on
-      // the missing modules packed files it runs require. `newline-tool` is the first command of postinstall's second
-      // line, `setup-tool` the second of the first. The files are reached as `node scripts/install` (Node resolves
-      // `scripts/install.js`), as `npm test` running a script whose quoted path contains a space, and as
-      // `node scripts/hooks.cjs&&…` with no whitespace around the shell operator; the last loads its dependencies
-      // through a wildcard `imports` entry mapped to the package's own file, and through a directory whose packed
-      // manifest names its `main`. An inline `node -e` program that requires a package needs it too — its quotes
-      // escaped for the shell — as do the modules `node` preloads — a bare `-r` package and a packed `--import=`
-      // file, behind the valued `--conditions` option — before running `.`, the root `main`, and the one a
-      // `NODE_OPTIONS=--require=…` assignment on the `node` command preloads.
+      // npm skips these five after the failed fetch too — and then postinstall fails on the missing package:
+      // `newline-tool` is the first command of postinstall's second line, `setup-tool` the second of the first;
+      // `node node_modules/optional-driver/install.js` runs a file of the third directly, reached through `npm test`
+      // with no whitespace around the shell operator; `node` preloads the last two, a bare `-r` package behind the
+      // valued `--conditions` option and the one a `NODE_OPTIONS=--require=…` assignment on the `node` command names.
       'setup-tool': 'git+https://github.com/owner/setup-tool.git',
       'newline-tool': 'github:owner/newline-tool',
       'optional-driver': 'github:owner/optional-driver',
-      'optional-tester': 'github:owner/optional-tester',
-      'optional-hook': 'github:owner/optional-hook',
-      'optional-main': 'github:owner/optional-main',
-      'optional-inline': 'github:owner/optional-inline',
       'optional-preload': 'github:owner/optional-preload',
-      'optional-imported': 'github:owner/optional-imported',
-      'optional-root': 'github:owner/optional-root',
       'optional-env-preload': 'github:owner/optional-env-preload',
       // Merely mentioned by the script — an `echo` argument; the operand of `rm -r`, whose `-r` is not Node's
-      // preload option; and the value of a `--require` after the program, which Node hands to the program as an
-      // argument — so npm's skipping them breaks nothing: a warning.
+      // preload option; the value of a `--require` after the program, which Node hands to the program as an
+      // argument; and the name of a packed file `node` runs, which the gate no longer opens — so npm's skipping
+      // them breaks nothing: a warning.
       'optional-mentioned': 'github:owner/optional-mentioned',
       'optional-removed': 'github:owner/optional-removed',
       'optional-argument': 'github:owner/optional-argument',
+      'optional-script': 'github:owner/optional-script',
       // npm parses these only to fail, so optional or not, the consumer's install dies.
       'typo-optional': 'foo:bar',
       'tag-optional': 'not a valid spec',
       'url-optional': 'http:%zz',
       'bad name': '^1.0.0',
     };
-    document.imports = { '#hooks/*': './scripts/*-setup.cjs' };
-    document.main = './scripts/root-setup.cjs';
     document.scripts = {
       ...(document.scripts as Record<string, string> | undefined),
       postinstall: 'echo start\nnewline-tool --init && setup-tool --init'
-        + ' && NODE_OPTIONS=--require=optional-env-preload node scripts/install --require optional-argument && npm test',
-      // A `NODE_OPTIONS` that preloads nothing, set through `cross-env`, changes nothing about the command it precedes.
-      test: 'cross-env NODE_OPTIONS="--max-old-space-size=4096" node "scripts/my install.cjs";node scripts/hooks.cjs&&echo optional-mentioned'
-        + ' && node -e "require(\\"optional-inline\\")"'
+        + ' && NODE_OPTIONS=--require=optional-env-preload node scripts/optional-script.cjs --require optional-argument && npm test',
+      // A `NODE_OPTIONS` that preloads nothing, set through `cross-env`, changes nothing about the command it precedes;
+      // a relative `--import=` preload names no package.
+      test: 'cross-env NODE_OPTIONS="--max-old-space-size=4096" node "scripts/my install.cjs";node node_modules/optional-driver/install.js&&echo optional-mentioned'
         + ' && rm -r optional-removed && node --conditions react-server -r optional-preload/register --import="./scripts/preload.mjs" .',
     };
   },
   async () => {
-    await mkdir(join(projectRoot, 'scripts', 'lib'), { recursive: true });
     await mkdir(join(projectRoot, 'vendor', 'vendored'), { recursive: true });
     await mkdir(join(projectRoot, 'vendor', 'bad-manifest'), { recursive: true });
     await Promise.all([
-      writeFile(join(projectRoot, 'scripts', 'install.js'), 'import "./driver-setup.cjs";\n'),
-      writeFile(join(projectRoot, 'scripts', 'driver-setup.cjs'), 'module.exports = require("optional-driver");\n'),
-      writeFile(join(projectRoot, 'scripts', 'my install.cjs'), 'require("optional-tester");\n'),
-      writeFile(join(projectRoot, 'scripts', 'hooks.cjs'), 'require("#hooks/hook");\nrequire("./lib");\n'),
-      writeFile(join(projectRoot, 'scripts', 'hook-setup.cjs'), 'require("optional-hook");\n'),
-      writeFile(join(projectRoot, 'scripts', 'lib', 'package.json'), '{ "main": "setup.cjs" }\n'),
-      writeFile(join(projectRoot, 'scripts', 'lib', 'setup.cjs'), 'require("optional-main");\n'),
-      writeFile(join(projectRoot, 'scripts', 'preload.mjs'), 'import "optional-imported";\n'),
-      writeFile(join(projectRoot, 'scripts', 'root-setup.cjs'), 'require("optional-root");\n'),
       writeFile(join(projectRoot, 'vendor', 'vendored', 'package.json'), '{ "name": "vendored", "version": "1.0.0" }\n'),
       writeFile(join(projectRoot, 'vendor', 'bad-manifest', 'package.json'), '{\n'),
       writeFile(join(projectRoot, 'vendor', 'tarred.tgz'), packageTarball('{ "name": "tarred", "version": "1.0.0" }')),
@@ -491,52 +431,29 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
       { path: 'vendor/tarred.tgz' },
       { path: 'vendor/bad-tarred-manifest.tgz' },
       { path: 'vendor/not-archive.tgz' },
-      { path: 'scripts/install.js' },
-      { path: 'scripts/driver-setup.cjs' },
-      { path: 'scripts/my install.cjs' },
-      { path: 'scripts/hooks.cjs' },
-      { path: 'scripts/hook-setup.cjs' },
-      { path: 'scripts/lib/package.json' },
-      { path: 'scripts/lib/setup.cjs' },
-      { path: 'scripts/preload.mjs' },
-      { path: 'scripts/root-setup.cjs' },
     ] };
     const reported = withCode(await diagnostics(pack), 'AB7015');
     expect(reported.map((diagnostic) => diagnostic.message)).toEqual([
       expect.stringMatching(/^package\.json dependencies .*consumers cannot install the package\.$/u),
-      expect.stringMatching(/^package\.json optionalDependencies .*"bad name" -> "\^1\.0\.0", "newline-tool" -> "github:owner\/newline-tool", "optional-driver" -> "github:owner\/optional-driver", "optional-env-preload" -> "github:owner\/optional-env-preload", "optional-hook" -> "github:owner\/optional-hook", "optional-imported" -> "github:owner\/optional-imported", "optional-inline" -> "github:owner\/optional-inline", "optional-main" -> "github:owner\/optional-main", "optional-preload" -> "github:owner\/optional-preload", "optional-root" -> "github:owner\/optional-root", "optional-tester" -> "github:owner\/optional-tester", "setup-tool" -> "git\+https:\/\/github\.com\/owner\/setup-tool\.git", "tag-optional" -> "not a valid spec", "typo-optional" -> "foo:bar", "url-optional" -> "http:%zz"; consumers cannot install the package\.$/u),
-      expect.stringMatching(/^package\.json optionalDependencies .*"optional-argument" -> "github:owner\/optional-argument", "optional-mentioned" -> "github:owner\/optional-mentioned", "optional-removed" -> "github:owner\/optional-removed", "scp" -> "git@github\.com:owner\/repo\.git".*continues without them/u),
+      expect.stringMatching(/^package\.json optionalDependencies .*"bad name" -> "\^1\.0\.0", "newline-tool" -> "github:owner\/newline-tool", "optional-driver" -> "github:owner\/optional-driver", "optional-env-preload" -> "github:owner\/optional-env-preload", "optional-preload" -> "github:owner\/optional-preload", "setup-tool" -> "git\+https:\/\/github\.com\/owner\/setup-tool\.git", "tag-optional" -> "not a valid spec", "typo-optional" -> "foo:bar", "url-optional" -> "http:%zz"; consumers cannot install the package\.$/u),
+      expect.stringMatching(/^package\.json optionalDependencies .*"optional-argument" -> "github:owner\/optional-argument", "optional-mentioned" -> "github:owner\/optional-mentioned", "optional-removed" -> "github:owner\/optional-removed", "optional-script" -> "github:owner\/optional-script", "scp" -> "git@github\.com:owner\/repo\.git".*continues without them/u),
     ]);
     // npm survives an optional dependency it parsed but cannot fetch, so that entry warns rather than blocks the
     // release; a specifier it cannot parse fails the manifest read and stays fatal, as does a skipped package an
-    // install script then runs or loads.
+    // install script then runs.
     expect(reported.map((diagnostic) => diagnostic.severity)).toEqual(['error', 'error', 'warning']);
-    for (const name of ['scp', 'optional-argument', 'optional-mentioned', 'optional-removed']) {
+    for (const name of ['scp', 'optional-argument', 'optional-mentioned', 'optional-removed', 'optional-script']) {
       expect(reported[1]?.message).not.toContain(JSON.stringify(name));
     }
-    for (const name of [
-      'setup-tool', 'newline-tool', 'optional-driver', 'optional-tester', 'optional-hook', 'optional-main', 'optional-inline',
-      'optional-preload', 'optional-imported', 'optional-root', 'optional-env-preload',
-    ]) {
+    for (const name of ['setup-tool', 'newline-tool', 'optional-driver', 'optional-preload', 'optional-env-preload']) {
       expect(reported[2]?.message).not.toContain(JSON.stringify(name));
     }
-    // To npm, `.` is the working directory (`--prefix .`), not a program: only `node .` runs the root `main`.
-    await withPackageDocument(
-      (document) => {
-        document.scripts = { ...(document.scripts as Record<string, string>), postinstall: 'npm --prefix . run setup', setup: 'echo setup' };
-      },
-      async () => {
-        const survivable = withCode(await diagnostics(pack), 'AB7015').find((diagnostic) => diagnostic.severity === 'warning');
-        expect(survivable?.message).toContain('"optional-root"');
-      },
-    );
     for (const name of ['@agent-bundle/runtime', 'bashjsast', 'local', 'sibling', 'not-embedded', 'not-vendored', 'not-archive', 'bad-manifest', 'bad-tarred-manifest']) {
       expect(reported[0]?.message).toContain(`${JSON.stringify(name)} -> `);
     }
     for (const name of ['alias', 'tilde', 'versioned', 'embedded', 'vendored', 'tarred']) {
       expect(reported[0]?.message).not.toContain(JSON.stringify(name));
     }
-    await rm(join(projectRoot, 'scripts'), { force: true, recursive: true });
     await rm(join(projectRoot, 'vendor'), { force: true, recursive: true });
     expect(reported[0]?.recovery).toContain('registry');
 
@@ -545,122 +462,10 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
   },
 ));
 
-it('withholds AB7014 when packed JavaScript has a computed import() that could load any declared package', () => withPackageDocument(
-  (document) => { document.dependencies = { 'chosen-at-runtime': '^1.0.0' }; },
-  async () => {
-    const consumer = join(projectRoot, 'dist', 'computed.mjs');
-    await writeFile(consumer, 'export const load = (name) => import(name);\n');
-    try {
-      const pack = { ...result.pack, files: [...result.pack.files, { path: 'dist/computed.mjs' }] };
-      expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
-      // Without that file the same declaration is reported.
-      expect(withCode(await diagnostics(), 'AB7014')).toHaveLength(1);
-    } finally {
-      await rm(consumer, { force: true });
-    }
-  },
-));
-
-it('withholds AB7014 when packed JavaScript the lexer rejects may hide an import()', () => withPackageDocument(
-  (document) => { document.dependencies = { 'chosen-at-runtime': '^1.0.0' }; },
-  async () => {
-    const consumer = join(projectRoot, 'dist', 'unlexable.mjs');
-    // An unbalanced call: the lexer throws before reporting any import, so nothing proves the package unused.
-    await writeFile(consumer, 'export const load = () => import("chosen-at-runtime"\n');
-    try {
-      const pack = { ...result.pack, files: [...result.pack.files, { path: 'dist/unlexable.mjs' }] };
-      expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
-    } finally {
-      await rm(consumer, { force: true });
-    }
-  },
-));
-
-it.each([
-  ['require()', 'module.exports = (name) => require(name);'],
-  ['require.resolve()', 'module.exports = (name) => require.resolve(name);'],
-  ['import.meta.resolve()', 'export const where = (name) => import.meta.resolve(name);'],
-  ['a direct createRequire()()', 'import { createRequire } from "node:module";\nexport const load = (name) => createRequire(import.meta.url)(name);'],
-  ['require() of a literal-prefixed expression', 'module.exports = (variant) => require("chosen-at-runtime/" + variant);'],
-  ['require.resolve() of a template literal', 'module.exports = (variant) => require.resolve(`chosen-at-runtime/${variant}`);'],
-])('withholds AB7014 for a computed CommonJS %s just as for a computed import()', (_form, source) => withPackageDocument(
-  (document) => { document.dependencies = { 'chosen-at-runtime': '^1.0.0' }; },
-  async () => {
-    const consumer = join(projectRoot, 'dist', source.startsWith('module.exports') ? 'computed.cjs' : 'computed.mjs');
-    await writeFile(consumer, `${source}\n`);
-    try {
-      const pack = { ...result.pack, files: [...result.pack.files, { path: relative(projectRoot, consumer) }] };
-      expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
-    } finally {
-      await rm(consumer, { force: true });
-    }
-  },
-));
-
-it.each([
-  ['const load = require;', 'const load = require;\nmodule.exports = load("chosen-at-runtime");'],
-  ['fn(require)', 'module.exports = (fn) => fn(require);'],
-  ['module.exports = require', 'module.exports = require'],
-  ['[require]', 'module.exports = [require];'],
-  ['a ? require : b', 'module.exports = typeof require === "function" ? require : null;'],
-  ['a createRequire() binding passed on', 'import { createRequire } from "node:module";\nconst load = createRequire(import.meta.url);\nexport const use = (fn) => fn(load);'],
-])('withholds AB7014 when a loader is passed on as a value (%s), since it may load anything under another name', (_form, source) => withPackageDocument(
-  (document) => { document.dependencies = { 'chosen-at-runtime': '^1.0.0' }; },
-  async () => {
-    const consumer = join(projectRoot, 'dist', source.startsWith('import') ? 'alias.mjs' : 'alias.cjs');
-    await writeFile(consumer, `${source}\n`);
-    try {
-      const pack = { ...result.pack, files: [...result.pack.files, { path: relative(projectRoot, consumer) }] };
-      expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
-    } finally {
-      await rm(consumer, { force: true });
-    }
-  },
-));
-
-it.each([
-  ['require("…")', 'module.exports = require("node:path");'],
-  ['require.resolve("…")', 'module.exports = require.resolve("node:path");'],
-  ['typeof require', 'module.exports = typeof require;'],
-  ['the string "require"', 'module.exports = "require";'],
-  ['prose in comments', '/**\n * Use when a getter may fail, require\n * services, or run asynchronously.\n */\n// factory(module, require)\nmodule.exports = 1;'],
-  ['a bundler runtime named like require', 'const load = __webpack_require__;\nmodule.exports = load;'],
-])('still reports AB7014 when require is only called, resolved through, type-tested, or named in a string or comment (%s)', (_form, source) => withPackageDocument(
-  (document) => { document.dependencies = { 'never-loaded': '^1.0.0' }; },
-  async () => {
-    const consumer = join(projectRoot, 'dist', 'not-alias.cjs');
-    await writeFile(consumer, `${source}\n`);
-    try {
-      const pack = { ...result.pack, files: [...result.pack.files, { path: 'dist/not-alias.cjs' }] };
-      const [reported] = withCode(await diagnostics(pack), 'AB7014');
-      expect(reported?.message).toContain('"never-loaded"');
-    } finally {
-      await rm(consumer, { force: true });
-    }
-  },
-));
-
-it('still reports AB7014 when the only resolve() calls are path or Promise resolution, literal or not', () => withPackageDocument(
-  (document) => { document.dependencies = { 'never-loaded': '^1.0.0' }; },
-  async () => {
-    const consumer = join(projectRoot, 'dist', 'resolvers.mjs');
-    await writeFile(consumer, [
-      'import path, { resolve } from "node:path";',
-      'export const f = (a, b) => [resolve(a, b), Promise.resolve(a), path.resolve("never-loaded"), Promise.resolve("never-loaded")];',
-      '',
-    ].join('\n'));
-    try {
-      const pack = { ...result.pack, files: [...result.pack.files, { path: 'dist/resolvers.mjs' }] };
-      expect(withCode(await diagnostics(pack), 'AB7014')[0]?.message).toContain('"never-loaded"');
-    } finally {
-      await rm(consumer, { force: true });
-    }
-  },
-));
-
-it('accepts a dependency reached through a package imports map or run by a consumer install script', () => withPackageDocument(
+it('accepts a dependency a consumer install script names or runs, through delegated scripts and their hooks', () => withPackageDocument(
   (document) => {
     document.dependencies = {
+      // Reached only through the manifest's imports map, which no packed declaration file resolves: unused.
       'driver-package': '^1.0.0',
       'named-in-script': '^1.0.0',
       typescript: '^5.0.0',
@@ -700,21 +505,13 @@ it('accepts a dependency reached through a package imports map or run by a consu
     };
   },
   async () => {
-    const consumer = join(projectRoot, 'dist', 'mapped.mjs');
-    await writeFile(consumer, 'export { default } from "#driver";\n');
     // The fixture's node_modules is the workspace's; the manifest is removed again below.
     const wrapper = join(workspaceNodeModules, 'prepack-test-wrapper');
     await mkdir(wrapper, { recursive: true });
     await writeFile(join(wrapper, 'package.json'), JSON.stringify({ name: '@scope/real', version: '1.0.0', bin: 'cli.js' }));
     try {
-      const pack = { ...result.pack, files: [...result.pack.files, { path: 'dist/mapped.mjs' }] };
-      // `#driver` reaches driver-package; the script names named-in-script directly, typescript through its `tsc` bin,
-      // and the alias through `real`, the bin npm derives from the installed manifest's name. `prepare` proves nothing.
-      const [withImport] = withCode(await diagnostics(pack), 'AB7014');
-      expect(withImport?.message).toContain('"prepare-only"');
-      expect(withImport?.message).toContain('"dormant-only"');
-      expect(withImport?.message).not.toContain('"driver-package"');
-      // Without the `#` import the map alone proves nothing.
+      // The script names named-in-script directly, typescript through its `tsc` bin, and the alias through `real`,
+      // the bin npm derives from the installed manifest's name. `prepare` proves nothing, nor does the map alone.
       const [reported] = withCode(await diagnostics(), 'AB7014');
       expect(reported?.message).toContain('"driver-package"');
       expect(reported?.message).toContain('"prepare-only"');
@@ -737,28 +534,7 @@ it('accepts a dependency reached through a package imports map or run by a consu
       );
     } finally {
       await rm(wrapper, { force: true, recursive: true });
-      await rm(consumer, { force: true });
     }
-  },
-));
-
-it.each([
-  ['a literal import()', 'node -e "import(\'optional-driver\')"', 'error'],
-  ['an awaited import() in an ES module program', 'node --input-type=module -e "await import(\'optional-driver\')"', 'error'],
-  ['a computed import(), which may load any declared package', 'node -e "import(process.argv[1])"', 'error'],
-  ['a literal require()', 'node -e "require(\'optional-driver\')"', 'error'],
-  ['source the lexer rejects, which may hide an import()', 'node -e "import(\'optional-driver\'"', 'error'],
-  ['import.meta, which loads nothing', 'node --input-type=module -p "typeof import.meta"', 'warning'],
-  ['the package name in a string', 'node -p "\'optional-driver\'"', 'warning'],
-])('an inline node program with %s (%s) leaves a skipped optional dependency at severity %s', (_form, postinstall, severity) => withPackageDocument(
-  (document) => {
-    document.optionalDependencies = { 'optional-driver': 'github:owner/optional-driver' };
-    document.scripts = { ...(document.scripts as Record<string, string> | undefined), postinstall };
-  },
-  async () => {
-    const [reported] = withCode(await diagnostics(), 'AB7015');
-    expect(reported?.message).toContain('"optional-driver"');
-    expect(reported?.severity).toBe(severity);
   },
 ));
 
@@ -812,14 +588,14 @@ it('reads an installed manifest as npm does, so the last of duplicate name keys 
 it('prepack succeeds and surfaces the warning when the only finding is an unresolvable optional dependency', () => withPackageDocument(
   (document) => {
     document.optionalDependencies = { 'optional-native': 'github:owner/optional-native' };
-    // The build rewrites dist, so the packed module that loads the optional package lives in its own packed
-    // directory; an install script naming it instead would make the failed fetch fatal.
+    // The build rewrites dist, so the packed declaration that references the optional package lives in its own
+    // packed directory; an install script running it instead would make the failed fetch fatal.
     document.files = [...(document.files as readonly string[]), 'extras'];
   },
   async () => {
     const extras = join(projectRoot, 'extras');
     await mkdir(extras, { recursive: true });
-    await writeFile(join(extras, 'optional.mjs'), 'export const native = await import("optional-native").catch(() => undefined);\n');
+    await writeFile(join(extras, 'optional.d.ts'), 'export type { Native } from "optional-native";\n');
     try {
       const packed = await prepack({ root: projectRoot });
       expect(packed.diagnostics.map((diagnostic) => [diagnostic.code, diagnostic.severity])).toEqual([['AB7015', 'warning']]);
@@ -830,61 +606,33 @@ it('prepack succeeds and surfaces the warning when the only finding is an unreso
 ));
 
 it('accepts a dependency that only packed declaration files reference, including @types for a type directive', () => withPackageDocument(
-  (document) => { document.dependencies = { zod: '^4.5.4', '@types/node': '^22.0.0' }; },
+  (document) => {
+    document.dependencies = { zod: '^4.5.4', '@types/node': '^22.0.0', 'driver-package': '^1.0.0', 'never-loaded': '^1.0.0' };
+    document.imports = { '#driver': { node: 'driver-package/node', default: 'driver-package' } };
+  },
   async () => {
     const declaration = join(projectRoot, 'dist', 'consumer.d.ts');
+    const modern = join(projectRoot, 'dist', 'driver.d.mts');
     await writeFile(declaration, [
       '/// <reference types="node" />',
       "import type { ZodType } from 'zod';",
       'export declare const schema: ZodType;',
       'export declare const buffer: Buffer;',
+      // A comment or string is not a reference, and a `declare module` in a module file augments a package.
+      '// import { Function } from "effect" -- never counts.',
+      'export declare const text: "import x from \\"effect\\"";',
       '',
     ].join('\n'));
+    // A `#` specifier reaches the package the imports map names.
+    await writeFile(modern, 'export type { Driver } from "#driver";\n');
     try {
-      const pack = { ...result.pack, files: [...result.pack.files, { path: 'dist/consumer.d.ts' }] };
-      expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
+      const pack = { ...result.pack, files: [...result.pack.files, { path: 'dist/consumer.d.ts' }, { path: 'dist/driver.d.mts' }] };
+      const [reported] = withCode(await diagnostics(pack), 'AB7014');
+      expect(reported?.message).toContain('"never-loaded"');
+      for (const name of ['zod', '@types/node', 'driver-package']) expect(reported?.message).not.toContain(JSON.stringify(name));
     } finally {
       await rm(declaration, { force: true });
-    }
-  },
-));
-
-it('accepts a dependency that packed JavaScript imports, requires, or only resolves', () => withPackageDocument(
-  (document) => {
-    document.dependencies = {
-      'left-pad': '^1.3.0',
-      '@scope/required': '^2.0.0',
-      'asset-pkg': '^1.0.0',
-      'tool-pkg': '^1.0.0',
-      // Named only through escaped literals, which Node decodes before resolving.
-      'hex-pkg': '^1.0.0',
-      'unicode-pkg': '^1.0.0',
-      // Run as an executable, never loaded: by the `tsc` bin its installed manifest declares.
-      typescript: '^5.0.0',
-    };
-  },
-  async () => {
-    const consumer = join(projectRoot, 'dist', 'consumer.mjs');
-    await writeFile(consumer, [
-      'import { execSync, spawnSync } from "node:child_process";',
-      'const ran = [spawnSync("tsc", ["--version"]), execSync("tsc --noEmit")];',
-      'import leftPad from "left-pad/lib/index.js";',
-      'const { createRequire } = await import("node:module");',
-      'const require = createRequire(import.meta.url);',
-      'const required = require("@scope/required/subpath");',
-      'const asset = require.resolve("asset-pkg/package.json");',
-      'const tool = import.meta.resolve("tool-pkg/bin/tool");',
-      String.raw`const hex = require("\x68ex-pkg");`,
-      String.raw`const unicode = require('unicode-pkg\u002fsubpath');`,
-      '// import { Function } from "effect" -- a comment never counts.',
-      'export { leftPad, required, asset, tool, hex, unicode, ran };',
-      '',
-    ].join('\n'));
-    try {
-      const pack = { ...result.pack, files: [...result.pack.files, { path: 'dist/consumer.mjs' }] };
-      expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
-    } finally {
-      await rm(consumer, { force: true });
+      await rm(modern, { force: true });
     }
   },
 ));
@@ -916,28 +664,38 @@ const createSiblingProject = async (
   return root;
 };
 
-it('accepts a dependency that only a prebuilt payload module imports: prepack passes, AB6005 does not walk prebuilt payloads', async () => {
+it('accepts a dependency a prebuilt payload declares in runtimeDependencies: prepack passes, the payload stays opaque', async () => {
   const root = await createSiblingProject('prebuilt-project', {
     bin: { 'prebuilt-fixture': './dist/bin/prebuilt-fixture.js' },
-    dependencies: { express: '^5.0.0' },
+    dependencies: { 'body-parser': '^2.0.0', cors: '^2.8.5', express: '^5.0.0' },
     files: ['dist', 'host-packs', 'README.md'],
     name: 'prebuilt-fixture',
     type: 'module',
     version: '1.2.3',
   }, [
+    "import { definePrebuilt } from 'agent-bundle';",
+    '',
     'export default {',
     '  bin: false,',
     "  lib: './src/index.ts',",
     "  mcp: { servers: { timeline: { entry: { prebuilt: './built/runtime/mcp/server.js' }, transport: 'stdio' } } },",
     "  output: { distPath: 'host-packs' },",
-    "  payload: { runtime: './built/runtime' },",
+    "  payload: { runtime: definePrebuilt({ runtimeDependencies: ['body-parser', 'cors', 'express'], source: './built/runtime' }) },",
     "  plugin: { name: 'prebuilt-fixture' },",
     "  targets: ['cursor'],",
     '};',
   ], {
-    // A bare import in a module the framework copies rather than compiles: AB6005 never walks it, and the
-    // import is the usage evidence that keeps `express` out of AB7014.
-    'built/runtime/mcp/server.js': 'import express from "express";\nexport default express;\n',
+    // A bare import, a `require()`, and a `require.resolve()` in a module the framework copies rather than compiles:
+    // nothing opens the file — AB6005 never walks it, and AB7014 reads no packed JavaScript — so the declaration
+    // above is what keeps `express`, `body-parser`, and `cors` out of AB7014.
+    'built/runtime/mcp/server.js': [
+      'import express from "express";',
+      'const body = require("body-parser");',
+      'const where = require.resolve("cors");',
+      'export default express;',
+      'export { body, where };',
+      '',
+    ].join('\n'),
     'src/index.ts': 'export const value = 1;\n',
   });
   const packed = await prepack({ root });
