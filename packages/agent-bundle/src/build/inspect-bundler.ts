@@ -21,7 +21,7 @@ import {
 import { launchEnvRuntimeSpecifier, operatorEnvLayerVirtualModule } from './launch-env-shell.ts';
 import { cliBinRslibEntries, planCompiledCliBins } from './cli-bins.ts';
 import type { CompositePlan } from './compose.ts';
-import { planCompiledMcpEntries } from './entries.ts';
+import { eventAllowedTargets, planCompiledMcpEntries } from './entries.ts';
 import { composeMcpAppsRsbuildConfig, planCompiledMcpApps } from './mcp-apps.ts';
 import { projectMeta } from './meta.ts';
 import { planPackageEntries } from './package-build.ts';
@@ -217,10 +217,10 @@ const mcpEntryEntries = async (
     const generatedRoutes = server?.generatedRoutes;
     const wrapped = generatedRoutes !== undefined || (await scanEntryExports(entry.source)).hasDefaultExport;
     const workerFile = `${entry.name}-flight.mjs`;
-    const routeSource = generatedRoutes === undefined
+    const routeSource = generatedRoutes === undefined || server === undefined
       ? undefined
       : generatedRouteMcpEntrySource({
-        allowedTargets: composite.selected,
+        allowedTargets: eventAllowedTargets(server, composite.selected),
         ...(noticeDelivery === undefined ? {} : { noticeDelivery }),
         ...(model.notices === undefined ? {} : { noticeRetention: model.notices.retention.resolved }),
         plugin: { name: model.metadata.name, version: model.metadata.version },

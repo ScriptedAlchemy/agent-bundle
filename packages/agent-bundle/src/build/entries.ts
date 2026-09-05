@@ -308,6 +308,15 @@ const localMcpOutputName = (server: NormalizedMcpServer): string => {
  * answer events as; `targets` lists the selected hosts a server must reach to
  * be compiled, and defaults to the identity alone (one host, one root).
  */
+/**
+ * The hosts whose hook wrappers may deliver events to a server: the selected
+ * hosts the server itself targets, so a Claude-only server in a Claude+Codex
+ * root never accepts a Codex-attributed request (#555). The build bakes this
+ * into the entry and `inspect --bundler` describes the same set.
+ */
+export const eventAllowedTargets = (server: NormalizedMcpServer, selected: readonly string[]): readonly string[] =>
+  selected.filter((target) => server.targets.includes(target));
+
 export const planCompiledMcpEntries = (
   servers: readonly NormalizedMcpServer[],
   options: { readonly outDir: string; readonly target: string; readonly targets?: readonly string[] },
@@ -370,11 +379,8 @@ export const planMcpEntriesSurface = async (
   },
 ): Promise<RslibSurfacePlan<readonly CompiledMcpEntry[]>> => {
   const compiled = planCompiledMcpEntries(servers, options);
-  // The hosts whose hook wrappers may deliver events to a server: the selected
-  // hosts the server itself targets, so a Claude-only server in a Claude+Codex
-  // root never accepts a Codex-attributed request (#555).
   const allowedTargetsFor = (server: NormalizedMcpServer): readonly string[] =>
-    (options.targets ?? [options.target]).filter((target) => server.targets.includes(target));
+    eventAllowedTargets(server, options.targets ?? [options.target]);
   const eventHostId = compiled.find((entry) =>
     servers.find((server) => server.id === entry.id)?.generatedRoutes !== undefined)?.id;
   const virtualSources = await Promise.all(compiled.map(async (entry) => {
