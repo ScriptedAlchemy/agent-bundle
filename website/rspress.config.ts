@@ -79,6 +79,7 @@ const publicApiEntryPoints = [
   'rstest/index.ts',
   'test/index.ts',
   'test/browser.ts',
+  'web-host.ts',
 ].map(entry => path.join(packageSource, entry));
 
 const generatedApiDir = 'en/api';
