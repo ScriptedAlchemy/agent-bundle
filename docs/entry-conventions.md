@@ -1206,13 +1206,17 @@ way: a hatch that externalizes `agent-bundle/mcp-entry` or a generated
 module specifier (`agent-bundle/meta`, or a registry specifier such as
 `agent-bundle/mcp-apps`) fails the build with a hard diagnostic — at config inspection for statically visible `externals`,
 and through a post-build scan of the emitted bundle for function-form
-`externals` — because generated executables must stay self-contained.
-Run-time path references are kept the same way: a `new URL(…, import.meta.url)`
-or `new Worker(new URL(…))` in consumer or generated code names a file beside
-the artifact, so the invariant layer turns the bundler's URL and worker asset
-processing off after the hatch and the expression reaches the artifact
-verbatim. The hatch customizes *how code compiles*, never *what the artifact
-promises*.
+`externals` — because generated executables must stay self-contained. The
+hatch customizes *how code compiles*, never *what the artifact promises*. The
+framework's own profile keeps the same promise: `output.autoExternal` is
+`false`, `bundle: true`, `splitChunks: false`, and no `externals` are added, so
+Rslib's `node` target leaves only Node built-ins (and `pnpapi`) external, and
+`AB6005` fails any bare specifier that is not a Node built-in in a host-pack
+module. Run-time path references are kept the same way: a
+`new URL(…, import.meta.url)` or `new Worker(new URL(…))` in consumer or
+generated code names a file beside the artifact, so the invariant layer turns
+the bundler's URL and worker asset processing off after the hatch and the
+expression reaches the artifact verbatim.
 
 The hatch merges *beside* the framework profile, not over it: `plugins`
 arrays concatenate, and Rsbuild's plugin manager appends every plugin it is

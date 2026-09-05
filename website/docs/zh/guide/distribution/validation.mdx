@@ -165,6 +165,19 @@ npx agent-bundle prepack --root . --output artifact --json
 `output.distPath`，默认值为 `artifact`。把它用作 npm 的 `prepack` 脚本；`--ignore-scripts` 可防止递归，
 而且任何 npm 生命周期都绝不会执行宿主安装。
 
+这种内联是编译器的契约，而不是一次工具链升级就可能翻转的打包器默认值。生成的可执行文件——产物脚本、路由式
+CLI、MCP 入口、钩子包装层以及包构建的 JavaScript bundle——都以禁用 Rslib 的 `autoExternal`、`bundle: true` 与
+`splitChunks: false` 的配置编译，框架自身也不添加任何 `externals`；Rslib 的 `node` target 只把 Node 内建模块（`node:fs`、`path`，
+以及 Yarn PnP 的 `pnpapi`）保持外部化。MCP App 视图则把每个脚本与样式都内联进同一个 HTML 文件。产物校验对
+编译出的宿主包字节坚持同一条界线：任何不是 Node 内建模块的裸说明符即为 `AB6005`，因此宿主包中生成的可执行文件
+从产物之外加载的只有内建模块。因此，`dependencies` 条目只留给打包后的文件有据可证地需要从已编译 bundle 之外
+获取的内容——打包后的模块因作者通过 [`tools` 逃生舱](../../reference/configuration.mdx#tools)将其保持外部化
+而仍然导入的包（这在包构建的 `dist` 输出中是可能的，因为 `AB6005` 不会遍历它；带有这种导入的宿主包模块则会
+让构建失败），预构建的 `.js`/`.mjs`/`.cjs` payload 模块导入的包（预构建文件对 `AB6005` 不透明，而
+`AB7014` 只扫描这些扩展名，因此无扩展名的预构建模块不算任何证据），消费者侧
+安装脚本运行的包，打包后的文件执行其 `bin` 的包，或打包后的声明文件引用的包——
+`AB7014` 会报告不具备上述任何一种证据的已声明依赖，而 `AB7015` 会报告消费者的 npm 无法安装的依赖。
+
 | 代码 | 含义 |
 | --- | --- |
 | `AB7010` | dry-run 的 npm 清单遗漏了某个包输出、产物清单或文件、安装表面，或 README。请把 `dist` 与产物目录加入包的 `files` 允许列表。 |
