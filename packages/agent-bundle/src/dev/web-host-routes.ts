@@ -480,8 +480,11 @@ export class WebHostRoutes {
     this.#dropSessionState(sessionId);
     const current = this.#sessions.get(key);
     if (current === undefined) return;
-    this.#sessions.delete(key);
-    void current.then((registered) => registered.dispose()).catch(() => undefined);
+    void current.then(async (registered) => {
+      if (registered.session.id !== sessionId || this.#sessions.get(key) !== current) return;
+      this.#sessions.delete(key);
+      await registered.dispose();
+    }).catch(() => undefined);
   }
 
   #dropSessionState(sessionId: string): void {

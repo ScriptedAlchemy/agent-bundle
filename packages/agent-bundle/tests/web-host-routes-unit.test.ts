@@ -383,6 +383,30 @@ describe('WebHostRoutes session retirement', () => {
     expect(harness.service.opened).toHaveLength(1);
     expect(harness.service.closed).toEqual([]);
   });
+
+  it('does not let a retired session close remove a replacement under the same epoch key', async () => {
+    const root = await artifactRoot();
+    await writeFixture(root, { projections: { '.mcp.json': claudeServer() }, targets: ['claude'] });
+    const harness = await startHarness(root, 'epoch-1');
+    expect((await fetch(`${harness.url}/web/status/status`)).status).toBe(200);
+    const firstSessionId = harness.service.opened[0]!.id;
+    const pageLease = await harness.service.leaseAsPage(firstSessionId);
+
+    harness.setEpoch('epoch-2');
+    harness.routes.adoptActiveEpoch('epoch-2');
+    harness.setEpoch('epoch-1');
+    expect((await fetch(`${harness.url}/web/status/status`)).status).toBe(200);
+    const replacementSessionId = harness.service.opened[1]!.id;
+
+    await pageLease.release();
+    await settle();
+    expect(harness.service.closed).toEqual([firstSessionId]);
+
+    harness.setEpoch('epoch-2');
+    harness.routes.adoptActiveEpoch('epoch-2');
+    await settle();
+    expect(harness.service.closed).toEqual([firstSessionId, replacementSessionId]);
+  });
 });
 
 describe('WebHostRoutes opening-tool policy', () => {
