@@ -1,12 +1,12 @@
 import { execFile as executeFile } from 'node:child_process';
 import { access, cp, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { describe, expect, it } from '@rstest/core';
 
+import { availablePort } from './support/available-port.ts';
 import { cachedNpmInstallArguments, installedEnvironment, sharedPackedTarball } from './support/shared-pack.ts';
 
 const execFile = promisify(executeFile);
@@ -20,21 +20,6 @@ const buildPackage = async (): Promise<void> => {
   if (process.env['AGENT_BUNDLE_PACKAGE_PREBUILT'] === '1') return;
   built ??= execFile('pnpm', ['build'], { cwd: workspaceRoot }).then(() => undefined);
   await built;
-};
-
-const availablePort = async (): Promise<number> => {
-  const server = createServer();
-  await new Promise<void>((resolvePromise, rejectPromise) => {
-    server.once('error', rejectPromise);
-    server.listen({ host: '127.0.0.1', port: 0 }, resolvePromise);
-  });
-  const address = server.address();
-  if (address === null || typeof address === 'string') throw new Error('Expected a TCP address.');
-  await new Promise<void>((resolvePromise, rejectPromise) => server.close((error) => {
-    if (error === undefined) resolvePromise();
-    else rejectPromise(error);
-  }));
-  return address.port;
 };
 
 describe.sequential('workbench package build', () => {

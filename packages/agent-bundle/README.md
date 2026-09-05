@@ -491,15 +491,27 @@ calls to the new epoch while an admitted call remains pinned to its original epo
 transport lets an initialized client issue later requests at the same fixed URL when the foreground
 server returns.
 
-Contributor UI HMR is separate from a published workbench: start it only with a running foreground
-server, for example
+Contributor UI HMR is separate from a published workbench and takes two terminals: a foreground
+server that allowlists the Rsbuild dev-server origin, and the Rsbuild dev server proxying `/api` to
+it.
 
 ```sh
-AGENT_BUNDLE_WORKBENCH_API_PROXY=http://127.0.0.1:3100 pnpm --filter agent-bundle-workbench dev
+# Terminal A
+npx agent-bundle dev --root . --port 3100 --no-open \
+  --workbench-dev-origin http://localhost:3000
+# Terminal B
+AGENT_BUNDLE_WORKBENCH_API_PROXY=http://127.0.0.1:3100 \
+  pnpm --filter agent-bundle-workbench dev
 ```
 
-`packages/workbench/scripts/dev.mjs` requires that proxy URL. Published `agent-bundle dev` serves
-prebuilt assets and project events; it does not run an Rsbuild development server.
+Open `http://localhost:3000`. The proxy never rewrites `Origin`, so the foreground server admits
+Workbench requests only from its own origin or the loopback origins listed with
+`--workbench-dev-origin` (repeatable; `startDevServer({ workbenchDevOrigins })`); without the flag
+the UI at `http://localhost:3000` fails at bootstrap with `AB8003`, and the allowlist is never on by
+default. `packages/workbench/scripts/dev.mjs` requires that proxy URL. Published `agent-bundle dev`
+serves prebuilt assets and project events; it does not run an Rsbuild development server. Ports,
+proxy scope, and the iframe limitation are documented under
+[Contributor UI HMR](https://scriptedalchemy.github.io/agent-bundle/guide/development/workbench#contributor-ui-hmr).
 
 ## Testing routes
 

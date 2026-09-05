@@ -5,9 +5,8 @@ import { tmpdir } from 'node:os';
 
 import { expect, it } from '@rstest/core';
 import { createRsbuild } from '@rsbuild/core';
-import { pluginReact } from '@rsbuild/plugin-react';
 
-import { workbenchBrowserAliases } from './support/workbench-browser-modules.ts';
+import { createWorkbenchFixtureConfig } from './support/workbench-fixture-config.ts';
 import { chromium, type Locator } from 'playwright';
 
 const workspaceRoot = join(import.meta.dirname, '..', '..', '..');
@@ -56,14 +55,7 @@ const mountedConsentFixture = async () => {
     "createRoot(document.getElementById('root')).render(<App />);",
   ].join('\n'));
   const rsbuild = await createRsbuild({
-    config: {
-      output: { assetPrefix: '/', distPath: { root: dist }, filename: { js: '[name].js' } },
-      plugins: [pluginReact()],
-      resolve: {
-        alias: { ...workbenchBrowserAliases },
-      },
-      source: { define: { 'process.env.NODE_ENV': JSON.stringify('production') }, entry: { consent: entry } },
-    },
+    config: createWorkbenchFixtureConfig({ distRoot: dist, entry: { consent: entry } }),
     cwd: workspaceRoot,
   });
   const build = await rsbuild.build();

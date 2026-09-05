@@ -55,6 +55,7 @@ to `portable` and takes no `--json`.
 | `--agent-api` / `--no-agent-api` | config `dev.agentApi` | Enable or disable the authenticated Agent API on `/mcp`. |
 | `--install-host <host>` | none | Install and re-sync a development host. Repeatable; `claude`, `codex`, or `cursor`. |
 | `--open` / `--no-open` | `--no-open` | Open the workbench after the foreground server starts. |
+| `--workbench-dev-origin <origin>` | none | Accept Workbench UI requests from this loopback contributor HMR origin (the Rsbuild dev server, for example `http://localhost:3000`). Repeatable; a non-loopback or non-origin value makes `agent-bundle dev` exit before serving anything. See [Contributor UI HMR](../guide/development/workbench.mdx#contributor-ui-hmr). |
 
 `dev` runs in the foreground and closes the session on a termination signal. See
 [Developer Workbench](../guide/development/workbench.mdx).

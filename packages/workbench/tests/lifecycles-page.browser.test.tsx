@@ -5,13 +5,12 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 
 import { createRsbuild } from '@rsbuild/core';
-import { pluginReact } from '@rsbuild/plugin-react';
 import { afterAll, beforeAll } from '@rstest/core';
 import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
 
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import { closeServer } from './support/http.ts';
-import { workbenchBrowserAliases } from './support/workbench-browser-modules.ts';
+import { createWorkbenchFixtureConfig } from './support/workbench-fixture-config.ts';
 
 const workspaceRoot = process.cwd();
 const browserTimeout = 8_000 * timeScale;
@@ -45,20 +44,7 @@ const buildFixture = async (): Promise<Readonly<{ close: () => Promise<void>; ur
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-lifecycles-browser-'));
   const dist = join(root, 'dist');
   const rsbuild = await createRsbuild({
-    config: {
-      output: {
-        cleanDistPath: false,
-        distPath: { css: 'assets', js: 'assets', root: dist },
-        filename: { css: '[name].css', js: '[name].js' },
-        filenameHash: false,
-      },
-      plugins: [pluginReact()],
-      resolve: { alias: workbenchBrowserAliases },
-      source: {
-        define: { 'process.env.NODE_ENV': JSON.stringify('production') },
-        entry: { page: fixtureEntry },
-      },
-    },
+    config: createWorkbenchFixtureConfig({ distRoot: dist, entry: { page: fixtureEntry } }),
     cwd: workspaceRoot,
   });
   const build = await rsbuild.build();

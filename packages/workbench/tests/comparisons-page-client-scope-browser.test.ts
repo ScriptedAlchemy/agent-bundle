@@ -6,10 +6,9 @@ import { join, relative } from 'node:path';
 
 import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
 import { createRsbuild } from '@rsbuild/core';
-import { pluginReact } from '@rsbuild/plugin-react';
 
 import { closeServer } from './support/http.ts';
-import { workbenchBrowserAliases } from './support/workbench-browser-modules.ts';
+import { createWorkbenchFixtureConfig } from './support/workbench-fixture-config.ts';
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 
 const workspaceRoot = process.cwd();
@@ -64,22 +63,7 @@ const mountedComparisonsFixture = async (): Promise<{ readonly close: () => Prom
     '};',
   ].join('\n'));
   const rsbuild = await createRsbuild({
-    config: {
-      output: {
-        cleanDistPath: false,
-        distPath: { css: 'assets', js: 'assets', root: dist },
-        filename: { css: '[name].css', js: '[name].js' },
-        filenameHash: false,
-      },
-      plugins: [pluginReact()],
-      resolve: {
-        alias: workbenchBrowserAliases,
-      },
-      source: {
-        define: { 'process.env.NODE_ENV': JSON.stringify('production') },
-        entry: { page: entry },
-      },
-    },
+    config: createWorkbenchFixtureConfig({ distRoot: dist, entry: { page: entry } }),
     cwd: workspaceRoot,
   });
   const build = await rsbuild.build();

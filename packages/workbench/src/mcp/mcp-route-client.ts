@@ -423,6 +423,24 @@ const foregroundRoute = (path: string): string => {
   return path;
 };
 
+/** A serialized origin: `new URL(value).origin === value`, so no path, trailing slash, credentials, or bare host. */
+const isSerializedOrigin = (value: unknown): value is string => {
+  if (typeof value !== 'string') return false;
+  try {
+    return new URL(value).origin === value;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Contributor dev-server origins the foreground server allowlisted for the Workbench HMR loop (#572).
+ * The bootstrap body carries the key only while that loopback-only allowlist is non-empty, so an empty
+ * list is as invalid as a non-list.
+ */
+const isDevOriginList = (value: unknown): value is readonly string[] =>
+  Array.isArray(value) && value.length > 0 && value.every(isSerializedOrigin);
+
 /** Memory-only authentication shared by foreground browser route clients. */
 export class ForegroundRouteClient implements ForegroundRequestAuthority {
   readonly #fetch: typeof fetch;
@@ -574,12 +592,18 @@ export class ForegroundRouteClient implements ForegroundRequestAuthority {
       if (this.#bootstrapSuperseded(request, authenticationGeneration)) return this.#supersededSnapshot();
       if (!response.ok) throw ForegroundRouteClientError.fromResponse(body, response.status);
       if (
-        !isRecord(body) || !hasExactKeys(body, ['cookieName', 'instanceId', 'origin', 'token']) ||
+        !isRecord(body) ||
+        (!hasExactKeys(body, ['cookieName', 'instanceId', 'origin', 'token']) &&
+          !hasExactKeys(body, ['cookieName', 'devOrigins', 'instanceId', 'origin', 'token'])) ||
         typeof body.cookieName !== 'string' || !/^agent-bundle-foreground-session-[a-f0-9]{32}$/u.test(body.cookieName) ||
         typeof body.instanceId !== 'string' || body.instanceId.length === 0 || body.instanceId.length > 128 ||
         body.instanceId.trim() !== body.instanceId || typeof body.origin !== 'string' ||
         typeof body.token !== 'string' || body.token.length === 0
       ) {
+        throw new ForegroundRouteClientError('AB8019', 'Foreground session bootstrap returned an invalid response.', response.status);
+      }
+      const devOrigins = Object.hasOwn(body, 'devOrigins') ? body.devOrigins : undefined;
+      if (devOrigins !== undefined && !isDevOriginList(devOrigins)) {
         throw new ForegroundRouteClientError('AB8019', 'Foreground session bootstrap returned an invalid response.', response.status);
       }
       let origin: URL;
@@ -590,7 +614,10 @@ export class ForegroundRouteClient implements ForegroundRequestAuthority {
       }
       if (origin.origin !== body.origin) throw new ForegroundRouteClientError('AB8019', 'Foreground session bootstrap returned an invalid origin.', response.status);
       const browserOrigin = globalThis.location?.origin;
-      if (browserOrigin !== undefined && browserOrigin !== 'null' && browserOrigin !== body.origin) {
+      if (
+        browserOrigin !== undefined && browserOrigin !== 'null' && browserOrigin !== body.origin &&
+        devOrigins?.includes(browserOrigin) !== true
+      ) {
         throw new ForegroundRouteClientError('AB8003', 'Foreground session bootstrap origin does not match this browser.', response.status);
       }
       const previous = this.#snapshot;
