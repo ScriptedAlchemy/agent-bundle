@@ -9,6 +9,7 @@ import { expect, it } from '@rstest/core';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
+import { codexArtifactPaths } from '../src/adapters/codex.ts';
 import { build, inspect, invokeMcp, listHooks, listMcp, simulateHook, validate } from '../src/api.ts';
 import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
 
@@ -46,14 +47,14 @@ it('builds the checked-in fixture matrix from a path with spaces', async () => {
         { mode: 'copy', name: 'python' },
         { mode: 'copy', name: 'shell' },
       ],
-      targets: [{ name: 'portable' }, { name: 'codex' }, { name: 'claude' }],
+      targets: [{ name: 'claude' }, { name: 'codex' }, { name: 'portable' }],
     });
 
     await build({ output, root });
     await expect(validate({ artifact: output, root })).resolves.toEqual({ diagnostics: [] });
 
-    const generatedShell = join(output, 'portable', 'scripts', 'shell.sh');
-    const generatedPython = join(output, 'portable', 'scripts', 'python.py');
+    const generatedShell = join(output, 'scripts', 'shell.sh');
+    const generatedPython = join(output, 'scripts', 'python.py');
     const sourceShell = join(root, 'src', 'shell.sh');
     const sourcePython = join(root, 'src', 'python.py');
     await expect(execFile(generatedShell, [], { cwd: root })).resolves.toMatchObject({ stdout: 'shell fixture\n' });
@@ -61,28 +62,30 @@ it('builds the checked-in fixture matrix from a path with spaces', async () => {
     expect((await stat(generatedShell)).mode & 0o777).toBe((await stat(sourceShell)).mode & 0o777);
     expect((await stat(generatedPython)).mode & 0o777).toBe((await stat(sourcePython)).mode & 0o777);
 
-    const bundled = await import(pathToFileURL(join(output, 'portable', 'scripts', 'bundle.mjs')).href);
+    const bundled = await import(pathToFileURL(join(output, 'scripts', 'bundle.mjs')).href);
     expect(bundled.bundleMessage).toBe('bundled fixture');
-    await expect(readFile(join(output, 'portable', 'scripts', 'bundle.mjs'), 'utf8')).resolves.not.toMatch(
+    await expect(readFile(join(output, 'scripts', 'bundle.mjs'), 'utf8')).resolves.not.toMatch(
       /from\s+['"]agent-bundle(?:\/[^'"]*)?['"]/,
     );
 
-    await expect(readFile(join(output, 'portable', 'skills', 'review', 'references', 'guide.txt'), 'utf8')).resolves.toBe(
+    await expect(readFile(join(output, 'skills', 'review', 'references', 'guide.txt'), 'utf8')).resolves.toBe(
       'fixture reference\n',
     );
-    await expect(readFile(join(output, 'portable', 'skills', 'review', 'assets', 'binary.bin'))).resolves.toEqual(
+    await expect(readFile(join(output, 'skills', 'review', 'assets', 'binary.bin'))).resolves.toEqual(
       await readFile(join(root, 'src', 'skills', 'review', 'assets', 'binary.bin')),
     );
 
     const [portableMcp, codexMcp, claudeMcp, codexHooks, claudeHooks, codexMarketplace, claudeMarketplace] =
       await Promise.all([
-        readFile(join(output, 'portable', 'mcp.json'), 'utf8').then((value) => JSON.parse(value)),
-        readFile(join(output, 'codex', '.mcp.json'), 'utf8').then((value) => JSON.parse(value)),
-        readFile(join(output, 'claude', '.mcp.json'), 'utf8').then((value) => JSON.parse(value)),
-        readFile(join(output, 'codex', 'hooks', 'hooks.json'), 'utf8').then((value) => JSON.parse(value)),
-        readFile(join(output, 'claude', 'hooks', 'hooks.json'), 'utf8').then((value) => JSON.parse(value)),
-        readFile(join(output, 'codex', '.agents', 'plugins', 'marketplace.json'), 'utf8').then((value) => JSON.parse(value)),
-        readFile(join(output, 'claude', '.claude-plugin', 'marketplace.json'), 'utf8').then((value) => JSON.parse(value)),
+        // One composite root (#555): Claude and the portable format keep their
+        // conventional documents; Codex keeps its own beside its manifest.
+        readFile(join(output, 'mcp.json'), 'utf8').then((value) => JSON.parse(value)),
+        readFile(join(output, codexArtifactPaths.mcp), 'utf8').then((value) => JSON.parse(value)),
+        readFile(join(output, '.mcp.json'), 'utf8').then((value) => JSON.parse(value)),
+        readFile(join(output, codexArtifactPaths.hooksManifest), 'utf8').then((value) => JSON.parse(value)),
+        readFile(join(output, 'hooks', 'hooks.json'), 'utf8').then((value) => JSON.parse(value)),
+        readFile(join(output, codexArtifactPaths.marketplace), 'utf8').then((value) => JSON.parse(value)),
+        readFile(join(output, '.claude-plugin', 'marketplace.json'), 'utf8').then((value) => JSON.parse(value)),
       ]);
     expect(portableMcp.mcpServers['remote-http']).toEqual({
       headers: { 'X-Fixture': 'integration' },
@@ -119,7 +122,7 @@ it('builds the checked-in fixture matrix from a path with spaces', async () => {
     }
 
     const localMcpPath = portableMcp.mcpServers.local.args[0] as string;
-    await expect(readFile(join(output, 'portable', localMcpPath), 'utf8')).resolves.toContain('ordinary local import');
+    await expect(readFile(join(output, localMcpPath), 'utf8')).resolves.toContain('ordinary local import');
     const localTools = await listMcp({ artifact: output, root, server: 'local', target: 'portable' });
     expect(localTools.tools).toMatchObject([{
       _meta: { ui: { resourceUri: 'ui://integration-fixture/dashboard.html' } },
@@ -141,7 +144,7 @@ it('builds the checked-in fixture matrix from a path with spaces', async () => {
 
     const client = new Client({ name: 'integration-matrix', version: '1.0.0' });
     await client.connect(new StdioClientTransport({
-      args: [join(output, 'portable', localMcpPath)],
+      args: [join(output, localMcpPath)],
       command: process.execPath,
       stderr: 'pipe',
     }));
@@ -195,13 +198,13 @@ it('builds the checked-in portable skills-only fixture', async () => {
       model: { scripts: [], targets: [{ name: 'portable' }] },
     });
     await build({ output, root });
-    await expect(readFile(join(output, 'portable', 'skills', 'portable-skill', 'SKILL.md'), 'utf8')).resolves.toBe(
+    await expect(readFile(join(output, 'skills', 'portable-skill', 'SKILL.md'), 'utf8')).resolves.toBe(
       '---\nname: portable-skill\ndescription: A portable skills-only fixture.\n---\n# Portable skill\n\nRead [the guide](references/guide.txt) before using the asset.\n',
     );
-    await expect(readFile(join(output, 'portable', 'skills', 'portable-skill', 'references', 'guide.txt'), 'utf8')).resolves.toBe(
+    await expect(readFile(join(output, 'skills', 'portable-skill', 'references', 'guide.txt'), 'utf8')).resolves.toBe(
       'portable guide\n',
     );
-    await expect(readFile(join(output, 'portable', 'skills', 'portable-skill', 'assets', 'binary.bin'))).resolves.toEqual(
+    await expect(readFile(join(output, 'skills', 'portable-skill', 'assets', 'binary.bin'))).resolves.toEqual(
       await readFile(join(root, 'src', 'skills', 'portable-skill', 'assets', 'binary.bin')),
     );
   } finally {

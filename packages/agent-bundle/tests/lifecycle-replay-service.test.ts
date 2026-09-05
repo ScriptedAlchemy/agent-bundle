@@ -66,7 +66,7 @@ const graph = Object.freeze({
 const service = (): LifecycleReplayService => new LifecycleReplayService({
   prepared: () => ({
     graph,
-    targets: ['plugin', 'cursor', 'portable'],
+    targets: ['claude', 'codex', 'cursor', 'portable'],
   }),
   loadRouteModule: async () => ({ default: async () => undefined }) as AgentRouteModule,
   render: async () => {
@@ -119,7 +119,6 @@ it('projects event routes across concrete hosts and diagnoses excluded targets',
       target: 'cursor',
     });
   const toolAfter = listed.lifecycles.find((lifecycle) => lifecycle.event === 'tool/after');
-  expect(toolAfter?.targets.every((target) => target.target !== 'plugin')).toBe(true);
   expect(toolAfter?.diagnostics).toContainEqual({
     code: 'lifecycle.target.unsupported',
     message: 'Lifecycle replay target "portable" cannot map canonical event "tool/after".',

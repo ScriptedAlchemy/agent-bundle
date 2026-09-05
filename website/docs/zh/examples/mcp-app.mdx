@@ -12,7 +12,7 @@ description: 'MCP App 示例：把一条服务就绪度工作流表达为生成�
 - **包名：** `@agent-bundle-example/mcp-app`
 - **公开依赖：** `agent-bundle`（`workspace:*`）、`@modelcontextprotocol/server`、`zod`；浏览器端 App
   测试还用到 `@rstest/browser`、`@rstest/core`、`@rstest/playwright` 与 `playwright`
-- **Target：** `portable`、`codex`、`claude`——MCP App 资源仅保留在 portable
+- **Target：** `portable`、`codex`、`claude`——MCP App 只为 `portable` 声明
 - **凭据：** 不需要——eval 与夹具检查只读取签入的数据
 - **源码：** [`examples/mcp-app`](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/mcp-app)
 
@@ -23,9 +23,9 @@ description: 'MCP App 示例：把一条服务就绪度工作流表达为生成�
   [MCP 服务器与 MCP App](../guide/authoring/mcp.mdx)。
 - **生成的 stdio 生命周期不由你来写。** 构建会把那个工厂包进生命周期外壳：console 重定向到 stderr 的
   守卫、信号处理、stdin EOF 退出、有界关停与心跳。
-- **MCP App 是编译出来的资源，不是被服务的页面。** 声明的 app 在 portable target 下编译为
-  `mcp-apps/status.html`，并带有稳定的 `resourceUri`。Codex 与 Claude 保留各自的宿主产物，但不包含这份
-  portable 的 App 资源。
+- **MCP App 是编译出来的资源，不是被服务的页面。** 声明的 app 限定在 `portable`，因此只要选中了该投影
+  它就会被编译——只编译一次，位于产物根目录的 `mcp-apps/status.html`，带有稳定的 `resourceUri`——并被
+  内联进生成的 `status` 服务器入口，而所有选中宿主都从同一个根目录启动这个入口。
 - **降级证据是一等公民。** `status` 服务器提供不可变的 `compiler` 与 `payments-api` 健康记录，而
   `payments-api` 故意返回降级的延迟数据。有意思的输出是一项被如实报告的失败检查，而不是一张全绿截图。
 - **浏览器表面自成一个证明级别。** `tests/browser-app/status-panel.browser.test.ts` 通过
@@ -59,8 +59,8 @@ description: 'MCP App 示例：把一条服务就绪度工作流表达为生成�
    eval 覆盖对比。**Hooks** 默认是一份已填充的 Claude `sessionStart` 规范输入。
 3. **Playground** 默认是脚本执行、Claude target 与 `check-service-fixture`。运行它并等待会话定稿：输出
    的检查器会解析自己输出模块旁边打包好的状态夹具，因此它的成功与 shell 的工作目录无关。
-4. **Artifacts** 在选中 portable target 时，就是 `mcp-apps/status.html` 出现的地方。在存在两次 eval
-   运行之前，**Comparisons** 会刻意显示
+4. **Artifacts** 显示复合插件根目录，无论选中哪个 target，`mcp-apps/status.html` 都出现在这里。在存在
+   两次 eval 运行之前，**Comparisons** 会刻意显示
    `At least two recorded runs are needed before a comparison can be aligned.`——这是精确的空状态，
    不是错误。
 5. **MCP playground** 默认是 portable 与 `status` 服务器。打开会话、列出工具、选择 `show-status`、

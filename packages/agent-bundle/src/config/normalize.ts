@@ -6,8 +6,6 @@ import { basename, dirname, extname, posix, relative, resolve, sep, win32 } from
 import { digest } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
 import { deepFreeze } from '../core/freeze.ts';
-import { capabilityIsSupported } from '../adapters/capability-state.ts';
-import { componentKindCapabilityName } from '../core/components.ts';
 import { isInside } from '../core/paths.ts';
 import {
   defaultGeneratedRuntime,
@@ -69,8 +67,7 @@ import type { CompiledCliSurface } from '../routes/types.ts';
 import { type DiscoveredProject, payloadDeclarationSource } from './discover.ts';
 import type { LoadedConfig } from './load.ts';
 import type { CanonicalAgentEvent } from '../routes/public.ts';
-import type { SkillIr } from '../skills/ir.ts';
-import { decideSkillTreeLayout, lowerSkillIr, lowerSkillIrForHosts } from '../skills/lower.ts';
+import { decideSkillTreeLayout, lowerSkillIrForHosts } from '../skills/lower.ts';
 import { parseSkillIr } from '../skills/parse-ir.ts';
 import type { SkillHost } from '../skills/tokens.ts';
 import { normalizeNoticeRetention } from './notice-retention.ts';
@@ -79,27 +76,8 @@ import { configuredScriptNames, judgeScriptRoute, scriptRouteName } from './scri
 const isSkillHost = (name: string): name is SkillHost =>
   name === 'claude' || name === 'codex' || name === 'cursor' || name === 'portable';
 
-const loweringHosts = (targetNames: readonly string[]): SkillHost[] => {
-  const hosts = new Set<SkillHost>();
-  for (const name of targetNames) {
-    if (name === 'plugin') {
-      hosts.add('claude');
-      hosts.add('codex');
-    } else if (isSkillHost(name)) {
-      hosts.add(name);
-    }
-  }
-  return [...hosts];
-};
-
-const pluginSharedDocument = (skillIr: SkillIr) => {
-  const claude = lowerSkillIr(skillIr, 'claude');
-  const codex = lowerSkillIr(skillIr, 'codex');
-  if (claude.passThrough && codex.passThrough && claude.skillMarkdown === codex.skillMarkdown) {
-    return claude;
-  }
-  return lowerSkillIr(skillIr, 'portable');
-};
+const loweringHosts = (targetNames: readonly string[]): SkillHost[] =>
+  [...new Set(targetNames.filter(isSkillHost))];
 
 const unique = (values: readonly string[]): string[] => [...new Set(values)];
 
@@ -1049,48 +1027,33 @@ const normalizeExtensions = (
 };
 
 /**
- * Enumerates `lsp` components (#100) from every selected host extension's
- * `lspServers` record. Server configuration stays opaque here — the declaring
- * adapter validates and lowers it — so a malformed record yields no component
- * and the adapter's own diagnostics explain it. The declaration is host-scoped:
- * a component targets only the selected adapters that lower its extension key
- * (the declaring host and composites that plan that host's side), so a host
- * whose planner never reads the key is excluded by the declaration and its
- * pinned `lsp` row still explains the omission in inspection.
- */
-/** The emission judgment for one component kind: the adapter's component override when published, else its top-level row. */
-const hostsComponent = (registry: NormalizationTargetRegistry, target: string, capability: string): boolean => {
-  const state = registry.componentCapabilityState?.(target, capability) ?? registry.capabilityState?.(target, capability);
-  return state === undefined ? registry.supports(target, capability) : capabilityIsSupported(state);
-};
-
-/**
  * Total, injective escape for one `lsp:` id segment: `%` first, then the `:`
  * separator. Unlike `encodeURIComponent` it accepts every JavaScript string
  * (lone surrogates included), so a computed key can never abort normalization.
  */
 const lspIdSegment = (segment: string): string => segment.replaceAll('%', '%25').replaceAll(':', '%3A');
 
+/**
+ * Enumerates `lsp` components (#100) from every selected host extension's
+ * `lspServers` record. Server configuration stays opaque here — the declaring
+ * adapter validates and lowers it — so a malformed record yields no component
+ * and the adapter's own diagnostics explain it. The declaration is host-scoped:
+ * a component targets only the selected adapter that owns its extension key,
+ * so every other host is excluded by the declaration and its pinned `lsp` row
+ * still explains the omission in inspection.
+ */
 const normalizeLspServers = (
   extensions: Readonly<Record<string, NormalizedConfigExtension>>,
   targetNames: readonly string[],
-  registry: NormalizationTargetRegistry,
 ): readonly NormalizedLspServer[] => {
   const servers: NormalizedLspServer[] = [];
   for (const extension of Object.values(extensions)) {
     if (!isRecord(extension.value)) continue;
     const declared = extension.value['lspServers'];
     if (!isRecord(declared)) continue;
-    // The declaring host always judges its own declaration; a composite that
-    // lowers the extension inherits it only when the declaring host can lower
-    // LSP servers at all — a composite planning a host with no LSP surface
-    // (Codex) emits nothing for that host's `lspServers`.
-    const declaringHostLowersLsp = hostsComponent(registry, extension.target, componentKindCapabilityName('lsp')!);
-    const targets = targetNames.filter((target) => target === extension.target || (
-      declaringHostLowersLsp &&
-      registry.lowersConfigExtension !== undefined &&
-      registry.lowersConfigExtension(target, extension.key)
-    ));
+    // A host-scoped `<key>.lspServers` declaration is emitted only by the
+    // declaring host; no other projection reads that extension.
+    const targets = targetNames.filter((target) => target === extension.target);
     for (const name of Object.keys(declared).sort((left, right) => left.localeCompare(right))) {
       servers.push({
         declaredBy: extension.key,
@@ -1108,19 +1071,25 @@ const normalizeLspServers = (
   return servers.sort((left, right) => left.id.localeCompare(right.id));
 };
 
+/**
+ * The selected projections, by precedence: `--target` flags, then the config
+ * `targets`, then the registry default (`portable`). The selection is a set —
+ * sorted by name so reordering `targets` cannot change one byte of the
+ * composite root (#555).
+ */
 const selectedTargetNames = (
   loaded: LoadedConfig,
   registry: NormalizationTargetRegistry,
 ): string[] => {
   if (loaded.context.selectedTargets.length > 0) {
-    return unique(loaded.context.selectedTargets);
+    return sortedUnique(loaded.context.selectedTargets);
   }
 
   if (loaded.config.targets !== undefined) {
-    return unique(loaded.config.targets);
+    return sortedUnique(loaded.config.targets);
   }
 
-  return unique(registry.defaultTargetNames());
+  return sortedUnique(registry.defaultTargetNames());
 };
 
 const skillProvenance = (
@@ -1233,10 +1202,7 @@ export const normalizeProject = async (
         : basename(skill.dir);
     const description = frontmatter.description;
     const skillIr = parseSkillIr(skill);
-    const hostDocuments = {
-      ...lowerSkillIrForHosts(skillIr, skillHosts),
-      ...(targetNames.includes('plugin') ? { plugin: pluginSharedDocument(skillIr) } : {}),
-    };
+    const hostDocuments = lowerSkillIrForHosts(skillIr, skillHosts);
 
     return {
       body: skill.body,
@@ -1295,7 +1261,7 @@ export const normalizeProject = async (
     discovered.routeGraph?.cli,
   );
   const extensions = normalizeExtensions(loaded, registry, configProvenance);
-  const lspServers = normalizeLspServers(extensions, targetNames, registry);
+  const lspServers = normalizeLspServers(extensions, targetNames);
   const model: NormalizedPlugin = {
     ...(assets.length === 0 ? {} : { assets }),
     ...(commands.length === 0 ? {} : { commands }),

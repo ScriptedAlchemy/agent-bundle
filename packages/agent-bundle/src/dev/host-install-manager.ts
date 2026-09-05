@@ -13,6 +13,8 @@ import { basename, join, relative, resolve } from 'node:path';
 
 import { Effect, FileSystem } from 'effect';
 
+import { codexArtifactPaths } from '../adapters/codex.ts';
+import { cursorArtifactPaths } from '../adapters/cursor.ts';
 import { stableJson } from '../core/digest.ts';
 import { isPlatformErrno, readFileString, type PlatformRun } from '../effect/platform.ts';
 import { platformRunOf } from './platform-run.ts';
@@ -67,10 +69,11 @@ interface DevInstallMarker {
 const mcpDocumentPath = (host: InstallHost): string => {
   switch (host) {
     case 'claude':
-    case 'codex':
       return '.mcp.json';
+    case 'codex':
+      return codexArtifactPaths.mcp;
     case 'cursor':
-      return 'mcp.json';
+      return cursorArtifactPaths.mcp;
     default: {
       const exhaustive: never = host;
       throw new TypeError(`Unsupported development install host ${String(exhaustive)}.`);
@@ -401,7 +404,8 @@ export class DevHostInstallManager {
   }
 
   async #syncHost(epochRoot: string, epochId: string, host: InstallHost): Promise<void> {
-    const prepared = await prepareDevBundle(join(epochRoot, host), host, epochId, this.#projectRoot, this.#run);
+    // Every selected host installs from the composite epoch root (#555).
+    const prepared = await prepareDevBundle(epochRoot, host, epochId, this.#projectRoot, this.#run);
     try {
       let installed = this.#installed.get(host);
       if (installed === undefined) {

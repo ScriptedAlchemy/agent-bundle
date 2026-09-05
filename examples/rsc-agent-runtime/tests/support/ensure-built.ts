@@ -10,8 +10,8 @@ const exampleRoot = process.cwd();
 /** One probe per build output the dist-consuming tests spawn or read. */
 const requiredArtifacts = [
   'dist/app/standalone.html',
-  'dist/plugins/claude/.claude-plugin/plugin.json',
-  'dist/plugins/codex/.codex-plugin/plugin.json',
+  'dist/plugins/.claude-plugin/plugin.json',
+  'dist/plugins/.codex-plugin/plugin.json',
   'dist/runtime/runtime-assets.json',
 ] as const;
 

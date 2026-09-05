@@ -6,6 +6,7 @@ coverage/
 # Playwright traces @rstest/playwright keeps for failed browser tests on CI (packages/workbench/tests/support/workbench-e2e.ts)
 .rstest/
 artifacts/
+!packages/*/src/**/artifacts/
 *.log
 # Every example's `pnpm build` (and `pnpm examples:check`) writes here.
 examples/*/artifact/

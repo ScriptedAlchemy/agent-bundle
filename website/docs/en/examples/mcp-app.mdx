@@ -14,7 +14,7 @@ to see how the surfaces fit together instead of studying one of them alone.
 - **Public dependencies:** `agent-bundle` (`workspace:*`), `@modelcontextprotocol/server`,
   `zod`; `@rstest/browser`, `@rstest/core`, `@rstest/playwright`, and `playwright` for the
   browser-app test
-- **Targets:** `portable`, `codex`, `claude` — the MCP App resource stays portable
+- **Targets:** `portable`, `codex`, `claude` — the MCP App is declared for `portable`
 - **Credentials:** none — the eval and the fixture check read only checked-in data
 - **Source:** [`examples/mcp-app`](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/mcp-app)
 
@@ -27,9 +27,10 @@ to see how the surfaces fit together instead of studying one of them alone.
 - **The generated stdio lifecycle is not yours to write.** The build wraps that factory in the
   lifecycle shell: the console-to-stderr guard, signal handling, stdin-EOF exit, bounded
   shutdown, and the heartbeat.
-- **An MCP App is a compiled resource, not a served page.** The declared app compiles to
-  `mcp-apps/status.html` under the portable target with a stable `resourceUri`. Codex and Claude
-  keep their host artifacts but not this portable App resource.
+- **An MCP App is a compiled resource, not a served page.** The declared app is scoped to
+  `portable`, so it is compiled when that projection is selected — once, to
+  `mcp-apps/status.html` in the artifact root, with a stable `resourceUri` — and inlined into the
+  generated `status` server entry, which every selected host launches from that same root.
 - **Degraded evidence is first-class.** The `status` server serves immutable `compiler` and
   `payments-api` health records, and `payments-api` deliberately returns degraded latency. The
   interesting output is a failing check that is reported honestly, not a green screenshot.
@@ -71,8 +72,8 @@ to see how the surfaces fit together instead of studying one of them alone.
    Run it and wait for the finalized session: the emitted checker resolves the packaged status
    fixture beside its emitted module, so it succeeds independently of the shell's working
    directory.
-4. **Artifacts** with the portable target selected is where `mcp-apps/status.html` appears.
-   Before two eval runs exist, **Comparisons** deliberately shows
+4. **Artifacts** shows the composite plugin root, where `mcp-apps/status.html` appears whichever
+   target is selected. Before two eval runs exist, **Comparisons** deliberately shows
    `At least two recorded runs are needed before a comparison can be aligned.` — the precise
    empty state, not an error.
 5. **MCP playground** defaults to portable and the `status` server. Open the session, list tools,

@@ -391,27 +391,23 @@ it('delegates one-shot and persistent MCP operations to an injected target runti
     expect(stdio).toHaveLength(1);
     expect(stdio[0]).toMatchObject({
       args: [
-        join(artifact, 'synthetic-mcp', 'scripts', 'server.mjs'),
-        join(artifact, 'synthetic-mcp', 'scripts', 'resource.mjs'),
+        join(artifact, 'scripts', 'server.mjs'),
+        join(artifact, 'scripts', 'resource.mjs'),
       ],
       command: 'runner-$SYNTHETIC_ROOT',
-      cwd: join(artifact, 'synthetic-mcp'),
+      cwd: artifact,
       env: { SESSION: expect.any(String) },
     });
     expect(http).toEqual([{
       headers: { Authorization: expect.stringMatching(/^Bearer \/.+/) },
-      url: `https://mcp.example.test/${artifact}/synthetic-mcp`,
+      url: `https://mcp.example.test/${artifact}`,
     }]);
     await expect(access(stdio[0]!.env.SESSION!)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(access(http[0]!.headers!.Authorization.slice('Bearer '.length))).rejects.toMatchObject({ code: 'ENOENT' });
 
     const epochStore = new EpochStore({ projectRoot: root });
     const staging = await epochStore.createStagingEpoch({ epoch: epoch(root), targets: ['synthetic-mcp'] });
-    await Promise.all([
-      cp(join(artifact, 'agent-bundle.hooks.json'), join(staging.root, 'agent-bundle.hooks.json')),
-      cp(join(artifact, 'agent-bundle.manifest.json'), join(staging.root, 'agent-bundle.manifest.json')),
-      cp(join(artifact, 'synthetic-mcp'), join(staging.root, 'synthetic-mcp'), { recursive: true }),
-    ]);
+    await cp(artifact, staging.root, { recursive: true });
     await staging.publish(async () => undefined);
 
     const persistentStdio: Array<{
@@ -450,11 +446,11 @@ it('delegates one-shot and persistent MCP operations to an injected target runti
     expect(persistentStdio).toHaveLength(1);
     expect(persistentStdio[0]).toMatchObject({
       args: [
-        join(root, '.agent-bundle', 'epochs', 'synthetic-epoch', 'synthetic-mcp', 'scripts', 'server.mjs'),
-        join(root, '.agent-bundle', 'epochs', 'synthetic-epoch', 'synthetic-mcp', 'scripts', 'resource.mjs'),
+        join(root, '.agent-bundle', 'epochs', 'synthetic-epoch', 'scripts', 'server.mjs'),
+        join(root, '.agent-bundle', 'epochs', 'synthetic-epoch', 'scripts', 'resource.mjs'),
       ],
       command: stdio[0]!.command,
-      cwd: join(root, '.agent-bundle', 'epochs', 'synthetic-epoch', 'synthetic-mcp'),
+      cwd: join(root, '.agent-bundle', 'epochs', 'synthetic-epoch'),
       env: { SESSION: expect.any(String) },
     });
     await Promise.all([session.close(), persistent.close()]);

@@ -11,6 +11,7 @@ export interface CompiledBrowserTestApp {
   readonly proofLevel: 'browser-app';
   readonly resourceUri: string;
   readonly serverIds: readonly string[];
+  /** The host the app mounts as — its preview profile and the binding's `target` — not the compiled selection's identity. */
   readonly target: string;
 }
 

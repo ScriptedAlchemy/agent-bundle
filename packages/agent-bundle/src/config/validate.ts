@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'n
 import { basename, extname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 
 import { capabilityIsSupported, cliBinCapability } from '../adapters/capability-state.ts';
+import { builtInHostNames, isBuiltInHost } from '../adapters/composite-layout.ts';
 import { type EntryExportScan, scanEntryExportsSource } from '../build/entry-exports.ts';
 import { frameworkOwnedPluginCollisions, frameworkOwnedRsbuildPlugins } from '../build/framework-plugins.ts';
 import type { CapabilityState } from '../core/capabilities.ts';
@@ -1018,8 +1019,7 @@ interface TargetedDocumentCodes {
 
 /**
  * The host's judgment of one component feature row (`<kind>.<feature>`, #100),
- * read through the emission-dispatch view so the composite `plugin` target is
- * judged by the half that emits the kind. A host that publishes no row for a
+ * read through the emission-dispatch view. A host that publishes no row for a
  * feature it is asked about has not evidenced it and reads as `unavailable`.
  */
 const featureCapabilityStateFor = (
@@ -2316,6 +2316,39 @@ const routedCliBinTargetDiagnostics = (
   return diagnostics;
 };
 
+/**
+ * One composite root is shared by the built-in hosts only (#555): their
+ * projections agree on where the files they cannot share live, which
+ * conventional directories each discovers, and one install surface. An
+ * adapter registered on an advanced `TargetRegistry` has made none of those
+ * agreements, so a selection that puts it beside any other known target is
+ * refused on the model — `validate`, `inspect`, and `build` all report it —
+ * and named on the non-built-in target. Selected alone, any target gets a
+ * root of its own; unknown names are `AB4100`'s and project nothing to share.
+ */
+const compositeRootTargetDiagnostics = (
+  model: NormalizedPlugin,
+  registry: NormalizationTargetRegistry,
+): Diagnostic[] => {
+  const known = model.targets.filter((target) => registry.has(target.name));
+  const selected = [...new Set(known.map((target) => target.name))];
+  if (selected.length < 2) return [];
+  // Built-in by adapter identity where the registry can tell (#592): a custom
+  // adapter registered under a built-in host's name has made no agreement.
+  const isBuiltIn = (name: string): boolean =>
+    registry.builtInHost === undefined ? isBuiltInHost(name) : registry.builtInHost(name) !== undefined;
+  return known
+    .filter((target) => !isBuiltIn(target.name))
+    .map((target) => ({
+      code: 'AB4106',
+      message: `Target ${JSON.stringify(target.name)} cannot share one composite root with the other selected targets (${selected.filter((name) => name !== target.name).join(', ')}): only the built-in hosts (${builtInHostNames.join(', ')}) project into a shared root.`,
+      recovery: `Build ${JSON.stringify(target.name)} alone — targets: [${JSON.stringify(target.name)}] — into its own --output, and the other targets into another.`,
+      severity: 'error',
+      sourcePath: target.provenance.sourcePath,
+      target: target.name,
+    }));
+};
+
 export const validateModel = (
   model: NormalizedPlugin,
   registry: NormalizationTargetRegistry,
@@ -2333,6 +2366,8 @@ export const validateModel = (
       });
     }
   }
+
+  diagnostics.push(...compositeRootTargetDiagnostics(model, registry));
 
   diagnostics.push(...routedCliBinTargetDiagnostics(model, registry));
 
@@ -2514,11 +2549,15 @@ export const validateModel = (
     }
   }
 
+  // Two inputs may not produce one path of a host's projection. Paths are
+  // root-relative — every projection shares the composite root (#555) — and
+  // the same input reaching several hosts is one file, not a collision.
   const outputs = new Map<string, string>();
   const recordOutput = (generatedPath: string, source: string, target: string): void => {
-    const firstSource = outputs.get(generatedPath);
+    const key = `${target}\u0000${generatedPath}`;
+    const firstSource = outputs.get(key);
     if (firstSource === undefined) {
-      outputs.set(generatedPath, source);
+      outputs.set(key, source);
       return;
     }
     diagnostics.push({
@@ -2536,20 +2575,20 @@ export const validateModel = (
       const generatedSkill = hostDocument !== undefined && !hostDocument.passThrough;
       if (generatedSkill) {
         recordOutput(
-          posix.join(target.name, 'skills', skill.name, 'SKILL.md'),
+          posix.join('skills', skill.name, 'SKILL.md'),
           skill.source,
           target.name,
         );
         for (const sidecar of hostDocument.sidecars) {
           recordOutput(
-            posix.join(target.name, 'skills', skill.name, sidecar.relativePath),
+            posix.join('skills', skill.name, sidecar.relativePath),
             sidecar.source ?? skill.source,
             target.name,
           );
         }
       } else if (skill.markdown !== undefined) {
         recordOutput(
-          posix.join(target.name, 'skills', skill.name, 'SKILL.md'),
+          posix.join('skills', skill.name, 'SKILL.md'),
           skill.source,
           target.name,
         );
@@ -2562,7 +2601,7 @@ export const validateModel = (
           continue;
         }
         recordOutput(
-          posix.join(target.name, 'skills', skill.name, resource.relativePath),
+          posix.join('skills', skill.name, resource.relativePath),
           resource.source,
           target.name,
         );
@@ -2570,38 +2609,38 @@ export const validateModel = (
     }
     for (const asset of model.assets ?? []) {
       if (!asset.targets.includes(target.name)) continue;
-      recordOutput(posix.join(target.name, 'assets', asset.relativePath), asset.source, target.name);
+      recordOutput(posix.join('assets', asset.relativePath), asset.source, target.name);
     }
     for (const command of model.commands ?? []) {
       if (!command.targets.includes(target.name)) continue;
-      recordOutput(posix.join(target.name, 'commands', `${command.name}.md`), command.source, target.name);
+      recordOutput(posix.join('commands', `${command.name}.md`), command.source, target.name);
     }
     for (const rule of model.rules ?? []) {
       if (!rule.targets.includes(target.name)) continue;
-      recordOutput(posix.join(target.name, 'rules', `${rule.name}.mdc`), rule.source, target.name);
+      recordOutput(posix.join('rules', `${rule.name}.mdc`), rule.source, target.name);
     }
     for (const payload of model.payloads ?? []) {
       if (!payload.targets.includes(target.name)) continue;
       for (const file of payload.files) {
-        recordOutput(posix.join(target.name, payload.name, file.relativePath), file.source, target.name);
+        recordOutput(posix.join(payload.name, file.relativePath), file.source, target.name);
       }
     }
     for (const bin of model.hostBins ?? []) {
       if (bin.target !== target.name) continue;
       for (const file of bin.files) {
-        recordOutput(posix.join(target.name, 'bin', file.relativePath), file.source, target.name);
+        recordOutput(posix.join('bin', file.relativePath), file.source, target.name);
       }
     }
     for (const directory of model.hostOutputStyles ?? []) {
       if (directory.target !== target.name) continue;
       for (const file of directory.files) {
-        recordOutput(posix.join(target.name, 'output-styles', file.relativePath), file.source, target.name);
+        recordOutput(posix.join('output-styles', file.relativePath), file.source, target.name);
       }
     }
     for (const directory of model.hostWorkflows ?? []) {
       if (directory.target !== target.name) continue;
       for (const file of directory.files) {
-        recordOutput(posix.join(target.name, 'workflows', file.relativePath), file.source, target.name);
+        recordOutput(posix.join('workflows', file.relativePath), file.source, target.name);
       }
     }
   }

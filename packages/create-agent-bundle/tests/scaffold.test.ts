@@ -170,10 +170,10 @@ layer(NodeServices.layer, { excludeTestServices: true })('scaffold (real filesys
 
   it.effect('renders README install instructions for the selected targets', () => Effect.gen(function* () {
     const path = yield* Path.Path;
-    const [defaults, cursorOnly, pluginOnly, portableOnly, minimal] = yield* Effect.all([
+    const [defaults, cursorOnly, everyHost, portableOnly, minimal] = yield* Effect.all([
       scaffoldTemplate('cli-tool', { pluginName: 'greeter' }),
       scaffoldTemplate('mcp-server', { pluginName: 'status-plugin', targets: ['cursor'] }),
-      scaffoldTemplate('mcp-server', { pluginName: 'status-plugin', targets: ['plugin'] }),
+      scaffoldTemplate('mcp-server', { pluginName: 'status-plugin', targets: ['claude', 'codex', 'cursor'] }),
       scaffoldTemplate('cli-tool', { pluginName: 'greeter', targets: ['portable'] }),
       scaffoldTemplate('minimal', { pluginName: 'skills-only', targets: ['portable'] }),
     ], { concurrency: 'unbounded' });
@@ -197,9 +197,9 @@ layer(NodeServices.layer, { excludeTestServices: true })('scaffold (real filesys
     expect(cursorReadme).not.toContain('install claude');
     expect(cursorReadme).not.toContain('install codex');
 
-    // The composite plugin target installs into every host.
-    const pluginReadme = yield* readText(path.join(pluginOnly.root, 'README.md'));
-    expect(pluginReadme).toContain([
+    // Selecting every host installs into every host.
+    const everyHostReadme = yield* readText(path.join(everyHost.root, 'README.md'));
+    expect(everyHostReadme).toContain([
       'npx status-plugin install claude',
       'npx status-plugin install codex',
       'npx status-plugin install cursor',

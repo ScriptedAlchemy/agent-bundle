@@ -87,6 +87,12 @@ their host so they reach only that adapter:
 `targets: ['claude']` is `AB3006`. A Skill is emitted to every target the project selects — there
 is no per-Skill artifact restriction.
 
+Every selected host reads the same composite plugin root, so `skills/<name>/SKILL.md` exists
+once. A host extension that lowers the document differently for one selected host than for
+another — `targets: { claude: { effort: high } }` in a `claude` + `codex` build, say — is a
+fatal `AB4103` collision. Keep the emitted document identical for every selected host, or build
+those hosts into separate artifacts (one `targets` entry per build).
+
 ## Path tokens
 
 Host placeholder syntax differs — `${CLAUDE_PLUGIN_ROOT}` is not what Cursor or the portable

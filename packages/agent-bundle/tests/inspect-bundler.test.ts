@@ -90,7 +90,7 @@ it('surfaces every synthesized bundler config with the tools hatch merged over t
   const script = entryOf(entries, 'script', 'tool');
   expect(script).toMatchObject({
     bundler: 'rslib',
-    outputPath: 'portable/scripts/tool.mjs',
+    outputPath: 'scripts/tool.mjs',
     source: `${root}/src/tool.ts`,
     target: 'portable',
   });
@@ -103,7 +103,7 @@ it('surfaces every synthesized bundler config with the tools hatch merged over t
     // executable has in scope.
     plugins: [{ name: 'rsbuild:react' }],
     output: {
-      distPath: { root: '<output>/portable' },
+      distPath: { root: '<output>' },
       filename: { js: 'scripts/tool.mjs' },
       // The consumer rsbuild hatch merges over the framework profile value.
       legalComments: 'linked',
@@ -126,7 +126,7 @@ it('surfaces every synthesized bundler config with the tools hatch merged over t
   const mcpEntry = entryOf(entries, 'mcp-entry', 'curator');
   expect(mcpEntry.generatedEntry).toContain('runGeneratedStdioMcpEntry');
   expect(mcpEntry.source).toBe(`${root}/src/mcp/curator.ts`);
-  expect(mcpEntry.outputPath).toMatch(/^portable\/mcp\/mcp-curator-[a-f\d]{8}\.mjs$/u);
+  expect(mcpEntry.outputPath).toMatch(/^mcp\/mcp-curator-[a-f\d]{8}\.mjs$/u);
 
   const bin = entryOf(entries, 'bin', 'bundler-fixture');
   expect(bin).toMatchObject({
@@ -161,7 +161,7 @@ it('surfaces every synthesized bundler config with the tools hatch merged over t
       },
     },
     output: {
-      distPath: { html: 'mcp-apps', root: '<output>/portable' },
+      distPath: { html: 'mcp-apps', root: '<output>' },
       inlineScripts: true,
       // The consumer rsbuild hatch also merges over the view profile.
       legalComments: 'linked',

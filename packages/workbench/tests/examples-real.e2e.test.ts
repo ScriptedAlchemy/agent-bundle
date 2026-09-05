@@ -223,9 +223,12 @@ e2e('drives Hooks, scripts, logs, diagnostics, and repair in real Chrome', { tim
 
     await page.getByRole('link', { name: 'Playground', exact: true }).click();
     await waitForSettledWorkbench(page);
-    await page.waitForFunction(() => document.querySelector<HTMLSelectElement>('#playground-script-id')?.value === 'script:verify-release', undefined, { timeout: browserTimeout });
+    // The composite root's `scripts/` holds every emitted script, so the
+    // catalog offers both of the example's scripts; pick the shared one.
+    await expect(page.locator('#playground-script-id option[value="script:verify-release"]')).toHaveCount(1, { timeout: browserTimeout });
     expect(await page.locator('#playground-target').inputValue()).toBe('claude');
     expect(await page.locator('#playground-operation').inputValue()).toBe('script.run');
+    await page.locator('#playground-script-id').selectOption('script:verify-release');
     expect(await page.locator('#playground-script-id').inputValue()).toBe('script:verify-release');
     await page.getByRole('button', { name: 'Run script' }).click();
     await expect(page.getByText('script.completed')).toBeVisible({ timeout: browserTimeout });

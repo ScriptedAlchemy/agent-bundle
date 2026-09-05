@@ -139,7 +139,7 @@ it('lists and calls a generated filesystem tool through final-only Flight', { re
   expect(generatedTypes).toContain('prompt:curator/curate');
   const server = compiled.model.mcpServers[0];
   expect(server).toMatchObject({ id: 'mcp:curator', name: 'curator' });
-  const entry = join(output, 'portable', server!.args![0]!);
+  const entry = join(output, server!.args![0]!);
   const worker = entry.replace(/\.mjs$/u, '-flight.mjs');
   const statelessSources = await Promise.all([entry, worker].map((path) => readFile(path, 'utf8')));
   for (const source of statelessSources) {
@@ -285,12 +285,12 @@ const connectGeneratedServer = async (
   const compiled = await build({ output, root, targets: [target] });
   const server = compiled.model.mcpServers[0];
   if (server?.args?.[0] === undefined) throw new Error('expected a generated MCP entry');
-  const entry = join(output, target, server.args[0]);
+  const entry = join(output, server.args[0]);
   const connection = await connectGeneratedEntry(entry);
   return {
     client: connection.client,
     close: connection.close,
-    endpointId: `${compiled.build.manifest.project.revision}:${target}:${dirname(dirname(resolve(entry)))}`,
+    endpointId: `${compiled.build.manifest.project.revision}:${dirname(dirname(resolve(entry)))}`,
   };
 };
 
@@ -440,7 +440,7 @@ it('augments a generated server from config and projects result _meta and text-o
     id: 'mcp:curator',
   });
   expect(compiled.model.mcpApps?.map((app) => app.id)).toEqual(['mcp-app:curator:panel']);
-  const manifest = JSON.parse(await readFile(join(output, 'portable', 'mcp.json'), 'utf8')) as {
+  const manifest = JSON.parse(await readFile(join(output, 'mcp.json'), 'utf8')) as {
     readonly mcpServers: { readonly curator: { readonly args: readonly string[]; readonly env: Readonly<Record<string, string>> } };
   };
   expect(manifest.mcpServers.curator.args[1]).toBe('--strict');
@@ -448,7 +448,7 @@ it('augments a generated server from config and projects result _meta and text-o
 
   const client = new Client({ name: 'generated-augment-test', version: '0.0.0' });
   const transport = new StdioClientTransport({
-    args: [join(output, 'portable', server!.args![0]!)],
+    args: [join(output, server!.args![0]!)],
     command: process.execPath,
     stderr: 'pipe',
   });
@@ -545,14 +545,14 @@ it('compiles appResourceUri() and imported-const references to the App route res
     description: 'Open the dashboard.',
   });
   // The compiled App HTML came from the route-relative template.
-  const html = await readFile(join(output, 'portable', 'mcp-apps', 'dashboard.html'), 'utf8');
+  const html = await readFile(join(output, 'mcp-apps', 'dashboard.html'), 'utf8');
   expect(html).toContain('route-relative-shell');
   expect(html).toContain('Curator dashboard');
 
   const server = compiled.model.mcpServers[0]!;
   const client = new Client({ name: 'generated-app-refs-test', version: '0.0.0' });
   const transport = new StdioClientTransport({
-    args: [join(output, 'portable', server.args![0]!)],
+    args: [join(output, server.args![0]!)],
     command: process.execPath,
     stderr: 'pipe',
   });
@@ -1071,8 +1071,8 @@ it('keeps a second generated server from the same install alive while the first 
   const compiled = await build({ output, root, targets: ['cursor'] });
   const server = compiled.model.mcpServers[0];
   if (server?.args?.[0] === undefined) throw new Error('expected a generated MCP entry');
-  const entry = join(output, 'cursor', server.args[0]);
-  const endpointId = `${compiled.build.manifest.project.revision}:cursor:${dirname(dirname(resolve(entry)))}`;
+  const entry = join(output, server.args[0]);
+  const endpointId = `${compiled.build.manifest.project.revision}:${dirname(dirname(resolve(entry)))}`;
   const endpoint = eventRuntimeEndpoint(endpointId);
   const status = (): Promise<unknown> => requestEventRuntimeStatus({ endpointId, timeoutMs: 1_000 });
 
@@ -1216,35 +1216,41 @@ it('renders one tool/after event route through two native thin clients', { retry
   expect(compiled.model.hooks.filter((hook) => hook.eventRoute !== undefined)).toHaveLength(2);
   expect(compiled.build.compiledHooks.filter((hook) => hook.id === 'hook:event-route:tool-after')).toHaveLength(2);
 
-  for (const target of ['claude', 'cursor'] as const) {
-    const mcp = compiled.build.compiledMcpEntries.find((entry) => entry.target === target)!;
-    const hook = compiled.build.compiledHooks.find((entry) => entry.target === target && entry.event === 'afterTool')!;
-    await expect(readFile(mcp.output, 'utf8')).resolves.toContain('agent-bundle-event-');
-    const client = new Client({ name: `generated-event-${target}`, version: '0.0.0' });
-    const transport = new StdioClientTransport({ args: [mcp.output], command: process.execPath, stderr: 'pipe' });
-    await client.connect(transport);
-    try {
-      await expect(client.callTool({ arguments: {}, name: 'status' }, { signal: AbortSignal.timeout(10_000) })).resolves.toMatchObject({
-        content: [{ text: 'provider:tool', type: 'text' }],
-        structuredContent: { providerKind: 'tool', providersFrozen: true },
-      });
-      const exploded = await callGeneratedTool(client, 'explode');
-      expectFailClosed(exploded, /throwing.*src[/\\]providers[/\\]throwing\.ts.*provider exploded/iu);
+  // One generated server serves the composite root; each host's thin client
+  // is its own suffixed wrapper in the shared hooks/ folder.
+  const mcp = compiled.build.compiledMcpEntries.find((entry) => entry.target === 'claude+cursor')!;
+  await expect(readFile(mcp.output, 'utf8')).resolves.toContain('agent-bundle-event-');
+  const client = new Client({ name: 'generated-event-composite', version: '0.0.0' });
+  const transport = new StdioClientTransport({ args: [mcp.output], command: process.execPath, stderr: 'pipe' });
+  await client.connect(transport);
+  try {
+    await expect(client.callTool({ arguments: {}, name: 'status' }, { signal: AbortSignal.timeout(10_000) })).resolves.toMatchObject({
+      content: [{ text: 'provider:tool', type: 'text' }],
+      structuredContent: { providerKind: 'tool', providersFrozen: true },
+    });
+    const exploded = await callGeneratedTool(client, 'explode');
+    expectFailClosed(exploded, /throwing.*src[/\\]providers[/\\]throwing\.ts.*provider exploded/iu);
 
-      const endpointId = `${compiled.build.manifest.project.revision}:${target}:${dirname(dirname(resolve(mcp.output)))}`;
-      const expectedEndpoint = eventRuntimeEndpoint(endpointId);
-      await expect(stat(expectedEndpoint)).resolves.toMatchObject({ mode: expect.any(Number) });
-      const firstStatus = await requestEventRuntimeStatus({ endpointId, timeoutMs: 1_000 });
-      const secondStatus = await requestEventRuntimeStatus({ endpointId, timeoutMs: 1_000 });
-      expect(firstStatus).toMatchObject({
-        artifactEpoch: 'generated-events-fixture@1.0.0',
-        availability: 'available',
-        status: 'available',
-      });
-      expect(secondStatus).toMatchObject({
-        instanceId: firstStatus.status === 'available' ? firstStatus.instanceId : undefined,
-        status: 'available',
-      });
+    // The endpoint is the artifact's alone — epoch and root — however many
+    // projections the root carries (#592); the invoking host rides each request.
+    const endpointId = `${compiled.build.manifest.project.revision}:${dirname(dirname(resolve(mcp.output)))}`;
+    const expectedEndpoint = eventRuntimeEndpoint(endpointId);
+    await expect(stat(expectedEndpoint)).resolves.toMatchObject({ mode: expect.any(Number) });
+    const firstStatus = await requestEventRuntimeStatus({ endpointId, timeoutMs: 1_000 });
+    const secondStatus = await requestEventRuntimeStatus({ endpointId, timeoutMs: 1_000 });
+    expect(firstStatus).toMatchObject({
+      artifactEpoch: 'generated-events-fixture@1.0.0',
+      availability: 'available',
+      status: 'available',
+    });
+    expect(secondStatus).toMatchObject({
+      instanceId: firstStatus.status === 'available' ? firstStatus.instanceId : undefined,
+      status: 'available',
+    });
+
+    for (const target of ['claude', 'cursor'] as const) {
+      const hook = compiled.build.compiledHooks.find((entry) => entry.target === target && entry.event === 'afterTool')!;
+      expect(hook.output.endsWith(`.${target}.mjs`)).toBe(true);
       const native = target === 'cursor'
         ? {
             conversation_id: 'conversation-1',
@@ -1275,24 +1281,22 @@ it('renders one tool/after event route through two native thin clients', { retry
               hookEventName: 'PostToolUse',
             },
           });
-      if (target === 'cursor') {
-        const workspaceOpen = compiled.build.compiledHooks.find((entry) =>
-          entry.target === 'cursor' && entry.event === 'workspaceOpen');
-        expect(workspaceOpen).toBeDefined();
-        await expect(runHook(workspaceOpen!.output, {
-          cursor_version: '1.7.2',
-          hook_event_name: 'workspaceOpen',
-          user_email: null,
-          workspace_roots: [root, join(root, 'secondary')],
-        })).resolves.toBeUndefined();
-      }
-    } finally {
-      await client.close();
     }
+    const workspaceOpen = compiled.build.compiledHooks.find((entry) =>
+      entry.target === 'cursor' && entry.event === 'workspaceOpen');
+    expect(workspaceOpen).toBeDefined();
+    await expect(runHook(workspaceOpen!.output, {
+      cursor_version: '1.7.2',
+      hook_event_name: 'workspaceOpen',
+      user_email: null,
+      workspace_roots: [root, join(root, 'secondary')],
+    })).resolves.toBeUndefined();
+  } finally {
+    await client.close();
   }
 });
 
-it('renders composite plugin events through each concrete host in one warm runtime', { retry: 2, timeout: 90_000 }, async () => {
+it('renders composite root events through each selected host in one warm runtime', { retry: 2, timeout: 90_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-generated-plugin-events-'));
   roots.push(root);
   await symlink(join(process.cwd(), 'examples', 'audiobook-curator', 'node_modules'), join(root, 'node_modules'), 'dir');
@@ -1310,7 +1314,7 @@ it('renders composite plugin events through each concrete host in one warm runti
     })),
     writeProjectFile(root, 'agent-bundle.config.ts', [
       "import { defineConfig } from 'agent-bundle/config';",
-      "export default defineConfig({ plugin: { name: 'generated-plugin-events-fixture', version: '1.0.0' }, targets: ['plugin'] });",
+      "export default defineConfig({ plugin: { name: 'generated-plugin-events-fixture', version: '1.0.0' }, targets: ['claude', 'codex', 'cursor'] });",
       '',
     ].join('\n')),
     writeProjectFile(root, 'src/mcp/runtime/tools/status.tsx', [
@@ -1328,7 +1332,7 @@ it('renders composite plugin events through each concrete host in one warm runti
     writeProjectFile(root, 'src/events/tool/after.tsx', [
       "import { Agent, agent } from '@agent-bundle/runtime';",
       "import { createElement } from 'react';",
-      "export const config = { targets: ['plugin'], tools: ['file.write'] };",
+      "export const config = { targets: ['claude', 'codex', 'cursor'], tools: ['file.write'] };",
       'export default async function AfterTool() {',
       '  const context = await agent();',
       '  const processLifetime = context.providers.processLifetime as { hits: number; instanceId: string };',
@@ -1340,7 +1344,7 @@ it('renders composite plugin events through each concrete host in one warm runti
     writeProjectFile(root, 'src/events/session/start.tsx', [
       "import { Agent, agent } from '@agent-bundle/runtime';",
       "import { createElement } from 'react';",
-      "export const config = { targets: ['plugin'] };",
+      "export const config = { targets: ['claude', 'codex', 'cursor'] };",
       'export default async function SessionStart() {',
       '  const context = await agent();',
       '  const processLifetime = context.providers.processLifetime as { hits: number; instanceId: string };',
@@ -1352,19 +1356,20 @@ it('renders composite plugin events through each concrete host in one warm runti
   ]);
 
   const output = join(root, 'artifact');
-  const compiled = await build({ output, root, targets: ['plugin'] });
-  const mcp = compiled.build.compiledMcpEntries.find((entry) => entry.target === 'plugin')!;
-  const sharedAfter = compiled.build.compiledHooks.find((entry) =>
-    entry.event === 'afterTool' && !entry.output.endsWith('.cursor.mjs'))!;
-  const cursorAfter = compiled.build.compiledHooks.find((entry) =>
-    entry.event === 'afterTool' && entry.output.endsWith('.cursor.mjs'))!;
-  const sharedSession = compiled.build.compiledHooks.find((entry) =>
-    entry.event === 'sessionStart' && !entry.output.endsWith('.cursor.mjs'))!;
+  const compiled = await build({ output, root, targets: ['cursor', 'codex', 'claude'] });
+  // One generated server serves the whole composite root under its sorted identity.
+  const mcp = compiled.build.compiledMcpEntries.find((entry) => entry.target === 'claude+codex+cursor')!;
+  const hookFor = (event: string, host: string) => compiled.build.compiledHooks.find((entry) =>
+    entry.event === event && entry.output.endsWith(`.${host}.mjs`))!;
+  const claudeAfter = hookFor('afterTool', 'claude');
+  const codexAfter = hookFor('afterTool', 'codex');
+  const cursorAfter = hookFor('afterTool', 'cursor');
+  const codexSession = hookFor('sessionStart', 'codex');
   const client = new Client({ name: 'generated-event-plugin', version: '0.0.0' });
   const transport = new StdioClientTransport({ args: [mcp.output], command: process.execPath, stderr: 'pipe' });
   await client.connect(transport);
   try {
-    const endpointId = `${compiled.build.manifest.project.revision}:plugin:${dirname(dirname(resolve(mcp.output)))}`;
+    const endpointId = `${compiled.build.manifest.project.revision}:${dirname(dirname(resolve(mcp.output)))}`;
     await expect(requestEventRuntime({
       artifactEpoch: compiled.build.manifest.project.revision,
       endpointId,
@@ -1376,7 +1381,7 @@ it('renders composite plugin events through each concrete host in one warm runti
       timeoutMs: 10_000,
     })).rejects.toMatchObject({ code: 'runtime-failed' });
 
-    const claude = await runHook(sharedAfter.output, {
+    const claude = await runHook(claudeAfter.output, {
       cwd: root,
       hook_event_name: 'PostToolUse',
       session_id: 'session-claude',
@@ -1385,7 +1390,7 @@ it('renders composite plugin events through each concrete host in one warm runti
       tool_response: { ok: true },
       tool_use_id: 'tool-claude',
       transcript_path: join(root, 'transcript.jsonl'),
-    }, { AGENT_BUNDLE_HOOK_HOST: undefined, PLUGIN_ROOT: undefined });
+    }, { PLUGIN_ROOT: undefined });
     const firstContext = (claude as { hookSpecificOutput: { additionalContext: string } })
       .hookSpecificOutput.additionalContext;
     // The worker mounts the compiled route id as `operationId` and the
@@ -1400,7 +1405,7 @@ it('renders composite plugin events through each concrete host in one warm runti
       },
     });
 
-    await expect(runHook(sharedAfter.output, {
+    await expect(runHook(codexAfter.output, {
       cwd: root,
       hook_event_name: 'PostToolUse',
       session_id: 'session-codex',
@@ -1409,7 +1414,7 @@ it('renders composite plugin events through each concrete host in one warm runti
       tool_response: { ok: true },
       tool_use_id: 'tool-codex',
       transcript_path: null,
-    }, { AGENT_BUNDLE_HOOK_HOST: undefined, PLUGIN_ROOT: output })).resolves.toEqual({
+    }, { PLUGIN_ROOT: output })).resolves.toEqual({
       hookSpecificOutput: {
         additionalContext: `codex:event:tool/after|tool/after:2:${instanceId}`,
         hookEventName: 'PostToolUse',
@@ -1425,17 +1430,17 @@ it('renders composite plugin events through each concrete host in one warm runti
       tool_name: 'Write',
       tool_output: '{"ok":true}',
       tool_use_id: 'tool-cursor',
-    }, { AGENT_BUNDLE_HOOK_HOST: undefined, PLUGIN_ROOT: undefined })).resolves.toEqual({
+    }, { PLUGIN_ROOT: undefined })).resolves.toEqual({
       additional_context: `cursor:event:tool/after|tool/after:3:${instanceId}`,
     });
 
-    await expect(runHook(sharedSession.output, {
+    await expect(runHook(codexSession.output, {
       cwd: root,
       hook_event_name: 'SessionStart',
       session_id: 'session-codex',
       source: 'startup',
       transcript_path: null,
-    }, { AGENT_BUNDLE_HOOK_HOST: undefined, PLUGIN_ROOT: output })).resolves.toEqual({
+    }, { PLUGIN_ROOT: output })).resolves.toEqual({
       hookSpecificOutput: {
         additionalContext: `codex:session/start:4:${instanceId}`,
         hookEventName: 'SessionStart',
@@ -1622,7 +1627,7 @@ it('replays Claude and Codex subagent fixtures through standalone event-route wr
   }
 });
 
-it('dispatches composite plugin event routes through the invoking host contract', { timeout: 60_000 }, async () => {
+it('dispatches shared event routes through the invoking host contract', { timeout: 60_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-plugin-subagent-events-'));
   roots.push(root);
   await symlink(join(process.cwd(), 'examples', 'audiobook-curator', 'node_modules'), join(root, 'node_modules'), 'dir');
@@ -1638,13 +1643,13 @@ it('dispatches composite plugin event routes through the invoking host contract'
     })),
     writeProjectFile(root, 'agent-bundle.config.ts', [
       "import { defineConfig } from 'agent-bundle/config';",
-      "export default defineConfig({ plugin: { name: 'plugin-subagent-events-fixture', version: '1.0.0' }, targets: ['plugin'] });",
+      "export default defineConfig({ plugin: { name: 'plugin-subagent-events-fixture', version: '1.0.0' }, targets: ['claude', 'codex'] });",
       '',
     ].join('\n')),
     writeProjectFile(root, 'src/events/agent/start.tsx', [
       "import { Agent } from '@agent-bundle/runtime';",
       "import { createElement } from 'react';",
-      "export const config = { runtime: 'standalone', targets: ['plugin'] };",
+      "export const config = { runtime: 'standalone', targets: ['claude', 'codex'] };",
       'export default async function AgentStart({ canonical, native }) {',
       '  return createElement(Agent.Result, null, createElement(Agent.Context, null, `${canonical.provenance.host}:${native.agent_id}`));',
       '}',
@@ -1653,7 +1658,7 @@ it('dispatches composite plugin event routes through the invoking host contract'
     writeProjectFile(root, 'src/events/agent/stop.tsx', [
       "import { Agent } from '@agent-bundle/runtime';",
       "import { createElement } from 'react';",
-      "export const config = { runtime: 'standalone', targets: ['plugin'] };",
+      "export const config = { runtime: 'standalone', targets: ['claude', 'codex'] };",
       'export default async function AgentStop() {',
       "  return createElement(Agent.Result, null, createElement(Agent.Context, null, 'Check the final result.'));",
       '}',
@@ -1662,9 +1667,10 @@ it('dispatches composite plugin event routes through the invoking host contract'
   ]);
 
   const output = join(root, 'artifact');
-  const compiled = await build({ output, root, targets: ['plugin'] });
-  const start = compiled.build.compiledHooks.find((hook) => hook.event === 'agentStart')!;
-  const stop = compiled.build.compiledHooks.find((hook) => hook.event === 'agentStop')!;
+  const compiled = await build({ output, root, targets: ['claude', 'codex'] });
+  // Both hosts share hooks/, so each host's wrapper carries its suffix.
+  const hookFor = (event: string, host: string) => compiled.build.compiledHooks.find((hook) =>
+    hook.event === event && hook.output.endsWith(`.${host}.mjs`))!;
 
   for (const target of ['claude', 'codex'] as const) {
     const input = JSON.parse(await readFile(
@@ -1673,9 +1679,9 @@ it('dispatches composite plugin event routes through the invoking host contract'
     )) as Record<string, unknown>;
     if (target === 'codex') input.transcript_path = null;
     const env = target === 'codex'
-      ? { AGENT_BUNDLE_HOOK_HOST: undefined, PLUGIN_ROOT: output }
-      : { AGENT_BUNDLE_HOOK_HOST: undefined, PLUGIN_ROOT: undefined };
-    await expect(runHook(start.output, input, env)).resolves.toEqual({
+      ? { PLUGIN_ROOT: output }
+      : { PLUGIN_ROOT: undefined };
+    await expect(runHook(hookFor('agentStart', target).output, input, env)).resolves.toEqual({
       hookSpecificOutput: {
         additionalContext: `${target}:${String(input.agent_id)}`,
         hookEventName: 'SubagentStart',
@@ -1687,8 +1693,7 @@ it('dispatches composite plugin event routes through the invoking host contract'
     new URL('./fixtures/events/claude-subagent-stop.json', import.meta.url),
     'utf8',
   )) as Record<string, unknown>;
-  await expect(runHook(stop.output, claudeStop, {
-    AGENT_BUNDLE_HOOK_HOST: undefined,
+  await expect(runHook(hookFor('agentStop', 'claude').output, claudeStop, {
     PLUGIN_ROOT: undefined,
   })).resolves.toEqual({
     hookSpecificOutput: {
@@ -1702,8 +1707,7 @@ it('dispatches composite plugin event routes through the invoking host contract'
     'utf8',
   )) as Record<string, unknown>;
   codexStop.transcript_path = null;
-  await expect(runHook(stop.output, codexStop, {
-    AGENT_BUNDLE_HOOK_HOST: undefined,
+  await expect(runHook(hookFor('agentStop', 'codex').output, codexStop, {
     PLUGIN_ROOT: output,
   })).rejects.toThrow(/not supported by the Codex SubagentStop output schema/u);
 });
