@@ -55,6 +55,8 @@ export interface DevRuntimeSurface {
   readonly kind: 'hook' | 'mcp-tool' | 'mcp-resource' | 'mcp-app';
   readonly label: string;
   readonly readOnly: boolean;
+  /** Compiled application route represented by this provider surface. */
+  readonly routeId?: string;
   readonly targets: readonly string[];
 }
 
@@ -142,6 +144,7 @@ export type DevRuntimeStatus = Readonly<{
 }>;
 
 export interface DevRuntimeInvocationRequest {
+  readonly correlationId?: string;
   readonly expectedGenerationId?: string;
   readonly fixtureId?: string;
   readonly input: JsonValue;

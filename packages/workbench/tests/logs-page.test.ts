@@ -9,7 +9,7 @@ import { logsViewFor, maximumLogViewRecords, mergeDevLogRecords } from '../src/l
 
 const records: readonly DevLogRecord[] = Object.freeze([
   Object.freeze({
-    context: Object.freeze({ epochId: 'epoch-1', target: 'codex' }),
+    context: Object.freeze({ correlationId: 'correlation-1', epochId: 'epoch-1', target: 'codex' }),
     details: Object.freeze({ changed: ['src/index.ts'] }),
     kind: 'build.started',
     level: 'info',
@@ -84,4 +84,21 @@ it('renders independent production log filters without a playground session', ()
   expect(markup).toContain('id="logs-kind"');
   expect(markup).toContain('id="logs-context"');
   expect(markup).toContain('Project diagnostic was recorded.');
+});
+
+it('links correlated raw log rows into the trace without linking uncorrelated rows', () => {
+  const markup = renderToStaticMarkup(createElement(LogsView, {
+    view: logsViewFor({
+      context: undefined,
+      gap: undefined,
+      kind: undefined,
+      level: undefined,
+      producer: undefined,
+      records,
+    }),
+  }));
+
+  expect(markup).toContain('href="/trace?correlation=correlation-1"');
+  expect(markup).toContain('Open in Trace');
+  expect(markup.match(/Open in Trace/gu)).toHaveLength(1);
 });

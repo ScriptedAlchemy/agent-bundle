@@ -20,6 +20,17 @@ const contextFor = (event: ProjectEvent): Readonly<Record<string, string>> => {
   if (event.type === 'artifact.available' || event.type === 'dev.contract.status' || event.type === 'dev.host.sync' || event.type === 'runtime.event') {
     return event.epochId === undefined ? Object.freeze({}) : Object.freeze({ epochId: event.epochId });
   }
+  if (event.type === 'route.invocation') {
+    const invocation = event.payload.invocation;
+    const correlationId = stringAt(invocation, 'correlationId');
+    const invocationId = stringAt(invocation, 'id');
+    const routeId = stringAt(invocation, 'routeId');
+    return Object.freeze({
+      ...(correlationId === undefined ? {} : { correlationId }),
+      ...(invocationId === undefined ? {} : { invocationId }),
+      ...(routeId === undefined ? {} : { routeId }),
+    });
+  }
   return Object.freeze({});
 };
 

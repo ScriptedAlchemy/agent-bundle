@@ -4,6 +4,12 @@ import { resolve } from 'node:path';
 import { isCredentialKey, redactEvalCredentialText } from '../../eval/credentials.ts';
 import { isJsonRecord as isRecord, snapshotStrictJsonValue, type JsonValue } from '../../core/strict-json.ts';
 import {
+  applicationNodePath,
+  applicationNodeRefForRouteId,
+} from '../routes/application-node.ts';
+import type { TraceCorrelation } from '../trace/trace-entry.ts';
+import type { TracePublisher } from '../trace/trace-hub.ts';
+import {
   devLogKinds,
   devLogLevels,
   devLogProducers,
@@ -84,6 +90,7 @@ export interface DevLogServiceOptions {
   readonly recordLimit?: number;
   readonly subscriberByteLimit?: number;
   readonly subscriberRecordLimit?: number;
+  readonly trace?: TracePublisher;
 }
 
 export type DevLogServiceErrorCode = 'DEV_LOG_CURSOR_AHEAD' | 'DEV_LOG_CURSOR_INVALID' | 'DEV_LOG_SERVICE_CLOSED';
@@ -219,6 +226,11 @@ const detailsFor = (value: unknown, roots: readonly string[]): DevLogDetails => 
   }
 };
 
+const safeContextIdentifier = (key: string, value: string): boolean =>
+  key === 'routeId'
+    ? applicationNodeRefForRouteId(value) !== undefined && !hasControlOrSeparators(value.replaceAll('/', ''))
+    : safeIdentifier.test(value) && !hasControlOrSeparators(value);
+
 const contextFor = (value: unknown): Readonly<Record<string, string>> => {
   if (value === undefined) return Object.freeze({});
   try {
@@ -227,14 +239,39 @@ const contextFor = (value: unknown): Readonly<Record<string, string>> => {
     const context: Record<string, string> = {};
     for (const [key, entry] of Object.entries(snapshot)) {
       if (
-        safeContextKeys.has(key) && typeof entry === 'string' && safeIdentifier.test(entry)
-        && redactEvalCredentialText(entry) === entry && !hasControlOrSeparators(entry)
+        safeContextKeys.has(key) && typeof entry === 'string'
+        && safeContextIdentifier(key, entry)
+        && redactEvalCredentialText(entry) === entry
       ) context[key] = entry;
     }
     return Object.freeze(context);
   } catch {
     return Object.freeze({});
   }
+};
+
+const traceCorrelationFor = (context: Readonly<Record<string, string>>): TraceCorrelation => Object.freeze({
+  ...(context.correlationId === undefined ? {} : { correlationId: context.correlationId }),
+  ...(context.conversationId === undefined ? {} : { conversationId: context.conversationId }),
+  ...(context.epochId === undefined ? {} : { epochId: context.epochId }),
+  ...(context.executionId === undefined ? {} : { executionId: context.executionId }),
+  ...(context.invocationId === undefined ? {} : { invocationId: context.invocationId }),
+  ...(context.mcpRequestId === undefined ? {} : { mcpRequestId: context.mcpRequestId }),
+  ...(context.mcpSessionId === undefined ? {} : { mcpSessionId: context.mcpSessionId }),
+  ...(context.requestId === undefined ? {} : { requestId: context.requestId }),
+  ...(context.routeId === undefined ? {} : { routeId: context.routeId }),
+  ...(context.runId === undefined ? {} : { runId: context.runId }),
+  ...(context.sessionId === undefined ? {} : { sessionId: context.sessionId }),
+});
+
+const traceHrefFor = (record: DevLogRecord): string => {
+  const routeId = record.context.routeId;
+  const node = routeId === undefined ? undefined : applicationNodeRefForRouteId(routeId);
+  if (node === undefined) return `/advanced/logs?sequence=${String(record.sequence)}`;
+  const invocationId = record.context.invocationId ?? record.context.runId;
+  return invocationId === undefined
+    ? applicationNodePath(node)
+    : `${applicationNodePath(node)}?invocation=${encodeURIComponent(invocationId)}`;
 };
 
 const summaryFor = (value: unknown, roots: readonly string[]): string =>
@@ -254,6 +291,7 @@ export class DevLogService {
   readonly #subscriberByteLimit: number;
   readonly #subscriberRecordLimit: number;
   readonly #subscriptions = new Set<Subscription>();
+  readonly #trace: TracePublisher | undefined;
   readonly #undelivered: DevLogRecord[] = [];
   #closePromise: Promise<void> | undefined;
   #closed = false;
@@ -276,6 +314,7 @@ export class DevLogService {
     this.#roots = rootFormsFor(options.projectRoot);
     this.#subscriberByteLimit = positiveInteger(options.subscriberByteLimit ?? defaultSubscriberByteLimit, 'subscriberByteLimit');
     this.#subscriberRecordLimit = positiveInteger(options.subscriberRecordLimit ?? defaultSubscriberRecordLimit, 'subscriberRecordLimit');
+    this.#trace = options.trace;
   }
 
   get latestSequence(): number {
@@ -310,6 +349,7 @@ export class DevLogService {
       }
       if (byteLength(record) > this.#recordByteLimit) return undefined;
       this.#retain(record);
+      this.#publishTrace(record);
       return record;
     } catch {
       return undefined;
@@ -391,6 +431,26 @@ export class DevLogService {
 
   #fallbackRecord(input: DevLogInput): DevLogRecord {
     return this.#recordFor(Object.freeze({ ...input, summary: unavailable }) as DevLogInput, unavailable, Object.freeze({}));
+  }
+
+  #publishTrace(record: DevLogRecord): void {
+    const trace = this.#trace;
+    if (trace === undefined) return;
+    const correlation = traceCorrelationFor(record.context);
+    if (record.level !== 'warning' && record.level !== 'error' && Object.keys(correlation).length === 0) return;
+    try {
+      trace.publish({
+        correlation,
+        href: traceHrefFor(record),
+        kind: `log.${record.producer}.${record.kind}`,
+        occurredAt: record.occurredAt,
+        source: 'log',
+        ...(record.level === 'error' ? { status: 'error' } : {}),
+        summary: record.summary,
+      });
+    } catch {
+      // Logging must not depend on the trace observer.
+    }
   }
 
   #retain(record: DevLogRecord): void {

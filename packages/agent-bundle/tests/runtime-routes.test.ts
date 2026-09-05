@@ -242,6 +242,7 @@ it('requires the foreground session capability for every runtime input, trace, a
 
     const invoked = await fetch(`${server.url}/api/runtime/runs`, {
       body: JSON.stringify({
+        correlationId: 'browser-run-1',
         expectedGenerationId: 'g1',
         fixtureId: 'after-edit',
         input: { path: 'src/a.ts' },
@@ -254,6 +255,7 @@ it('requires the foreground session capability for every runtime input, trace, a
     expect(invoked.status).toBe(200);
     await expect(invoked.json()).resolves.toEqual({ run: expect.objectContaining({ surfaceId: 'hook.after-edit', target: 'claude' }) });
     expect(runtime.invocations).toEqual([{
+      correlationId: 'browser-run-1',
       expectedGenerationId: 'g1',
       fixtureId: 'after-edit',
       input: { path: 'src/a.ts' },

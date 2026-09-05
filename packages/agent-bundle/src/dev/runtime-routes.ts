@@ -168,10 +168,11 @@ const jsonValue = (value: unknown): JsonValue => {
 };
 
 const invocation = (value: Record<string, unknown>, surfaces: readonly DevRuntimeSurface[]): DevRuntimeInvocationRequest => {
-  if (!hasOnly(value, ['expectedGenerationId', 'fixtureId', 'input', 'surfaceId', 'target'])) return invalidShape();
-  const { expectedGenerationId, fixtureId, input, surfaceId, target } = value;
+  if (!hasOnly(value, ['correlationId', 'expectedGenerationId', 'fixtureId', 'input', 'surfaceId', 'target'])) return invalidShape();
+  const { correlationId, expectedGenerationId, fixtureId, input, surfaceId, target } = value;
   if (
     !nonemptyString(surfaceId) || !nonemptyString(target) || input === undefined ||
+    (correlationId !== undefined && !nonemptyString(correlationId)) ||
     (expectedGenerationId !== undefined && !nonemptyString(expectedGenerationId)) ||
     (fixtureId !== undefined && !nonemptyString(fixtureId))
   ) return invalidShape();
@@ -179,6 +180,7 @@ const invocation = (value: Record<string, unknown>, surfaces: readonly DevRuntim
   if (surface === undefined || !surface.targets.includes(target)) return invalidShape();
   if (fixtureId !== undefined && !surface.fixtures.some((fixture) => fixture.id === fixtureId)) return invalidShape();
   return Object.freeze({
+    ...(correlationId === undefined ? {} : { correlationId: correlationId as string }),
     ...(expectedGenerationId === undefined ? {} : { expectedGenerationId: expectedGenerationId as string }),
     ...(fixtureId === undefined ? {} : { fixtureId: fixtureId as string }),
     input: jsonValue(input),
