@@ -11,10 +11,10 @@
  */
 import type { ArtifactInspection } from '../../../agent-bundle/src/contracts/artifacts.ts';
 import type { Diagnostic } from '../../../agent-bundle/src/contracts/diagnostics.ts';
-import type { RouteInputSchema, RouteManifestCliCommand, RouteManifestConfigEntry } from '../../../agent-bundle/src/contracts/routes.ts';
+import type { RouteInputSchema, RouteManifest, RouteManifestCliCommand, RouteManifestConfigEntry } from '../../../agent-bundle/src/contracts/routes.ts';
 import type { SkillDocumentTree } from '../../../agent-bundle/src/contracts/skills.ts';
-import type { RouteCatalog, RouteCatalogState } from '../routes/routes-model.ts';
-import type { ApplicationNodeRef } from '../shell/workbench-location.ts';
+import type { ApplicationNodeRef } from '../../../agent-bundle/src/dev/routes/application-node.ts';
+import type { RouteCatalogState } from '../routes/routes-model.ts';
 
 export type ApplicationGroupKind = 'cli' | 'events' | 'mcp' | 'rules' | 'scripts' | 'skills';
 
@@ -79,9 +79,15 @@ export interface ApplicationTree {
 export interface ApplicationTreeSources {
   /** Artifact inventory of the published epoch: configuration-declared hooks, servers, scripts without route modules. */
   readonly inspection?: ArtifactInspection;
-  readonly routes: RouteCatalog;
+  /** The compiled route manifest; absent when it could not be read (`state` is `unavailable`, `message` says why). */
+  readonly manifest?: RouteManifest;
+  readonly message?: string;
   readonly skillTree?: SkillDocumentTree;
+  readonly state: RouteCatalogState;
 }
 
-// Implemented by the tree lane: applicationTreeFor(sources), findApplicationLeaf(tree, ref),
+// Implemented by the tree lane, as thin adapters over the pure derivation in
+// packages/agent-bundle/src/dev/routes/application-tree.ts (shared with the
+// `agent-bundle/test` Workbench-surface proof): applicationTreeFor(sources),
+// findApplicationLeaf(tree, ref), applicationLeafForRouteId(tree, routeId),
 // applicationLeaves(tree), filterApplicationTree(tree, query), firstApplicationLeaf(tree).
