@@ -1086,28 +1086,28 @@ export const loadCliProjectionModule = async (
   }
 };
 
-/** Mirrors the generated bin's confirmation, explicit defaults, mapping, and canonical validation boundary. */
+/**
+ * Mirrors the generated bin's explicit defaults, mapping, and canonical
+ * validation boundary; confirmation is the shell's (`parseMcpCommandInput`).
+ */
 export const parseCliCommandInput = (
   command: CompiledCliCommand,
   inputSchema: AgentRouteSchema,
   projectionModule: Readonly<Record<string, unknown>> | undefined,
   input: Readonly<Record<string, unknown>>,
 ): unknown => {
-  let mapped: unknown = { ...input };
-  if (command.projection?.defaults !== undefined) {
-    const withDefaults: Record<string, unknown> = { ...input };
-    for (const [key, value] of Object.entries(command.projection.defaults)) {
-      if (!Object.hasOwn(withDefaults, key)) withDefaults[key] = value;
-    }
-    mapped = withDefaults;
+  const withDefaults: Record<string, unknown> = { ...input };
+  for (const [key, value] of Object.entries(command.projection?.defaults ?? {})) {
+    if (!Object.hasOwn(withDefaults, key)) withDefaults[key] = value;
   }
+  let mapped: unknown = withDefaults;
   if (command.projection?.mapInput === true) {
     const mapInput = projectionModule?.['mapInput'];
     if (typeof mapInput !== 'function') {
       throw new TypeError(`CLI projection ${command.projection.module} for ${command.routeId} must export a mapInput function.`);
     }
     try {
-      mapped = mapInput(mapped);
+      mapped = mapInput(withDefaults);
     } catch (error) {
       throw new CliInputError(error instanceof Error ? error.message : String(error));
     }

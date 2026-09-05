@@ -47,8 +47,6 @@ export const routeTestSetupSource = (manifest: AgentBundleTestManifest): string 
       routeId: command.routeId,
       source: resolve(manifest.projectRoot, command.projection!.module),
     }))
-    .filter((projection, index, projections) =>
-      projections.findIndex((candidate) => candidate.routeId === projection.routeId) === index)
     .sort((left, right) => left.routeId.localeCompare(right.routeId))
     .map((projection) =>
       `    ${JSON.stringify(projection.routeId)}: () => import(${JSON.stringify(specifier(projection.source))}),`);

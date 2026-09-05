@@ -163,17 +163,19 @@ interface ResolvedCliOptionPolicy {
   readonly sourcePath: string;
 }
 
-const resolvePolicy = (policy: CliOptionPolicy, relativePath: string, sourcePath: string): ResolvedCliOptionPolicy => ({
-  label: policy.label ?? defaultLabel(relativePath),
-  // Without a reporter an override failure is a grammar error of the owner,
-  // which is what a caller passing overrides without one would read anyway.
-  overrideError: policy.overrideError
-    ?? ((detail) => argvError(`${policy.label ?? defaultLabel(relativePath)} ${detail}.`, sourcePath)),
-  overrides: policy.overrides ?? {},
-  reserved: new Set([...reservedCliOptionNames, ...(policy.reserved ?? [])]),
-  reservedKeys: policy.reservedKeys ?? {},
-  sourcePath,
-});
+const resolvePolicy = (policy: CliOptionPolicy, relativePath: string, sourcePath: string): ResolvedCliOptionPolicy => {
+  const label = policy.label ?? defaultLabel(relativePath);
+  return {
+    label,
+    // Without a reporter an override failure is a grammar error of the owner,
+    // which is what a caller passing overrides without one would read anyway.
+    overrideError: policy.overrideError ?? ((detail) => argvError(`${label} ${detail}.`, sourcePath)),
+    overrides: policy.overrides ?? {},
+    reserved: new Set([...reservedCliOptionNames, ...(policy.reserved ?? [])]),
+    reservedKeys: policy.reservedKeys ?? {},
+    sourcePath,
+  };
+};
 
 const describeKind = (base: ScalarBase): string =>
   base.kind === 'enum' ? `one of ${(base.choices ?? []).map((choice) => JSON.stringify(choice)).join(', ')}` : base.kind;
