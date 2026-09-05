@@ -1,7 +1,9 @@
 import { resolve } from 'node:path';
 
-import { withRslibConfig } from '@rstest/adapter-rslib';
+import { withRslibConfig, type WithRslibConfigOptions } from '@rstest/adapter-rslib';
 import type { ExtendConfig, ExtendConfigFn } from '@rstest/core';
+
+import { agentBundleLibId } from './packages/agent-bundle/rslib.config.ts';
 
 const workspaceRoot = import.meta.dirname;
 const packageRoot = resolve(workspaceRoot, 'packages/agent-bundle');
@@ -53,36 +55,107 @@ export const rstestHygiene = {
 } as const satisfies ExtendConfig;
 
 /**
- * The shared pool configuration: the package's Rslib build config, reduced to
- * what compiling tests needs, plus `rstestHygiene`.
+ * What `packages/agent-bundle/rslib.config.ts` becomes under the adapter —
+ * `withRslibConfig` in @rstest/adapter-rslib 0.11.12 (dist/index.js),
+ * verified against its source, since the adapter documents none of it.
  *
- * Kept from the package build: `source.define` — `__AGENT_BUNDLE_VERSION__`
- * in src/cli.ts is a compile-time identifier and resolves here exactly as in
- * the published build — and `source.tsconfigPath`, repointed at the workspace
- * tsconfig so test files resolve beside the sources. Dropped: the publish-only
- * plugins above and `tools.rspack`, whose `ignoreWarnings` entry and
- * `node.__dirname = false` exist for the inlined TypeScript parser (external
- * in pools; Rstest sets its own `node` options).
+ * The lib entry is found by `libId` (line 53: `lib.find((l) => l.id ===
+ * libId) || {}`); without a `libId`, or with one no entry carries, the entry
+ * is silently `{}` and only the top-level fields count. That is why the entry
+ * has an `id` and these options pass it: the top-level fields happen to carry
+ * everything the pools need, so the result was right by accident, and a field
+ * moved into the entry — `output.target`, `source.define` — would have
+ * vanished from every pool without a diagnostic. Of the entry, only `source`,
+ * `output`, `tools`, `plugins`, and `resolve` are merged over the top-level
+ * config (lines 54-61); `format` is read once more, directly, as the fallback
+ * for `output.module` (line 105).
+ *
+ * Mapped into the pool config (lines 69-120), after `modifyLibConfig`:
+ *
+ * | Rslib config                                 | Rstest config                          |
+ * | -------------------------------------------- | -------------------------------------- |
+ * | `root`                                       | `root`                                 |
+ * | `plugins`                                    | `plugins`, verbatim, plus the          |
+ * |                                              | adapter's own entry that removes       |
+ * |                                              | `rsbuild:dts` and `rsbuild:type-check` |
+ * | `source.define`, `source.tsconfigPath`       | the same keys (also `assetsInclude`,   |
+ * |                                              | `decorators`, `include`, `exclude`,    |
+ * |                                              | `transformImport`)                     |
+ * | `resolve`                                    | `resolve`, verbatim                    |
+ * | `output.module`, else lib `format !== 'cjs'` | `output.module` (`true` is ESM)        |
+ * | `output.target`                              | `testEnvironment`: `web` becomes       |
+ * |                                              | `happy-dom`, anything else `node`      |
+ * |                                              | (line 119)                             |
+ * | `output.cssModules`                          | `output.cssModules`                    |
+ * | `performance.buildCache`                     | `performance.buildCache`, its          |
+ * |                                              | `buildDependencies` resolved against   |
+ * |                                              | the config file, which is appended     |
+ * | `tools.rspack`, `tools.swc`,                 | the same keys                          |
+ * | `tools.bundlerChain`                         |                                        |
+ * | the config file's path                       | `forceRerunTriggers`                   |
+ * | the `libId` option                           | `name` (line 75; dropped below)        |
+ *
+ * Never read: every other lib-entry field — `bundle`, `dts`, `syntax`, and
+ * would-be `autoExternal`, `autoExtension`, `redirect`, `shims`, `banner`,
+ * `footer`, `umdName`, `outBase`, `experiments` — and, top-level,
+ * `source.entry`, `output.{cleanDistPath,copy,filenameHash,legalComments}`
+ * (likewise `output.externals`, `distPath`, `minify`, `sourceMap`), any
+ * `tools.*` beyond the three above, any `performance.*` beyond `buildCache`,
+ * `mode`, `logLevel`, `dev`, `server`. Pools therefore leave every dependency
+ * external — Rstest's default for `testEnvironment: 'node'` — where the
+ * package build's `autoExternal` bundles devDependencies (the TypeScript
+ * parser, #381). One probe escapes `modifyLibConfig`: when the pool sets
+ * neither `source.tsconfigPath` nor `source.decorators.version` and the lib
+ * sets no `source.decorators.version`, the adapter reads the tsconfig the lib
+ * names (`tsconfig.build.json`, before the repointing below) for
+ * `experimentalDecorators` (lines 62-67); it feeds nothing else.
+ *
+ * `modifyLibConfig` keeps `source.define` — `__AGENT_BUNDLE_VERSION__` in
+ * src/cli.ts is a compile-time identifier and resolves here exactly as in the
+ * published build — and `source.tsconfigPath`, repointed at the workspace
+ * tsconfig so test files resolve beside the sources. It drops the
+ * publish-only plugins above and `tools.rspack`, whose `ignoreWarnings` entry
+ * and `node.__dirname = false` exist for the inlined TypeScript parser
+ * (external in pools; Rstest sets its own `node` options).
+ *
+ * Exported so rstest-rslib-adapter.test.ts can hold `libId` against the
+ * config's lib entries: the resolved config cannot show whether the lookup
+ * matched, because a miss yields `{}` and this config's entry adds nothing
+ * the top level lacks.
+ */
+export const agentBundleRslibAdapterOptions = {
+  cwd: packageRoot,
+  libId: agentBundleLibId,
+  modifyLibConfig: ({ plugins, tools, ...config }) => {
+    const { rspack: _publishOnlyRspack, ...testTools } = tools ?? {};
+    return {
+      ...config,
+      root: workspaceRoot,
+      plugins: plugins?.filter((plugin) => {
+        const name = pluginName(plugin);
+        return name === undefined || !publishOnlyPlugins.has(name);
+      }),
+      source: {
+        ...config.source,
+        tsconfigPath: resolve(workspaceRoot, 'tsconfig.json'),
+      },
+      tools: testTools,
+    };
+  },
+} satisfies WithRslibConfigOptions;
+
+/**
+ * The shared pool configuration: the package's Rslib build config, reduced to
+ * what compiling tests needs (`agentBundleRslibAdapterOptions`), plus
+ * `rstestHygiene`, minus the `name` the adapter derives from `libId` — a
+ * project name labels GitHub step summaries and answers `--project`, and
+ * `esm-node` describes the build, not a pool, so the pools keep Rstest's
+ * default (`rstest`).
  */
 export const withAgentBundleRslibConfig = (): ExtendConfigFn => {
-  const rslib = withRslibConfig({
-    cwd: packageRoot,
-    modifyLibConfig: ({ plugins, tools, ...config }) => {
-      const { rspack: _publishOnlyRspack, ...testTools } = tools ?? {};
-      return {
-        ...config,
-        root: workspaceRoot,
-        plugins: plugins?.filter((plugin) => {
-          const name = pluginName(plugin);
-          return name === undefined || !publishOnlyPlugins.has(name);
-        }),
-        source: {
-          ...config.source,
-          tsconfigPath: resolve(workspaceRoot, 'tsconfig.json'),
-        },
-        tools: testTools,
-      };
-    },
-  });
-  return async (userConfig) => ({ ...(await rslib(userConfig)), ...rstestHygiene });
+  const rslib = withRslibConfig(agentBundleRslibAdapterOptions);
+  return async (userConfig) => {
+    const { name: _libId, ...config } = await rslib(userConfig);
+    return { ...config, ...rstestHygiene };
+  };
 };

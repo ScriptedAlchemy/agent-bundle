@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { defineConfig } from '@rstest/core';
 
 import { agentBundleRstest } from './packages/agent-bundle/src/rstest/index.ts';
+import { poolTimeouts, workspaceGlobalSetup, workspaceSetupFiles } from './rstest.pools.ts';
 import { rstestHygiene } from './rstest.rslib.ts';
 
 /**
@@ -14,13 +15,20 @@ import { rstestHygiene } from './rstest.rslib.ts';
  *
  * Neither level opens a process. The `packed-stdio` level lives in the packed
  * pool (`pnpm test:packed`), which owns the run's single build and pack.
- * Per-test restoration comes from the workspace's shared policy, as in the
- * route-unit pool.
+ * Per-test restoration, per-worker temp isolation and the orchestrator hooks
+ * come from the workspace's shared policy, as in the route-unit pool.
  */
+const helper = await agentBundleRstest({
+  include: ['packages/agent-bundle/tests/projection/**/*.test.ts'],
+  root: resolve(import.meta.dirname, 'packages/agent-bundle/fixtures/route-harness'),
+});
+
 export default defineConfig({
-  ...(await agentBundleRstest({
-    include: ['packages/agent-bundle/tests/projection/**/*.test.ts'],
-    root: resolve(import.meta.dirname, 'packages/agent-bundle/fixtures/route-harness'),
-  })),
+  ...helper,
+  globalSetup: [...workspaceGlobalSetup],
+  setupFiles: [...workspaceSetupFiles, ...helper.setupFiles],
   ...rstestHygiene,
+  // contract-matrix.test.ts runs a full runContractMatrix per case (≈5.5 s,
+  // slowest 8.3 s in the #576 audit); 30 s per case is >3× that.
+  ...poolTimeouts(30_000),
 });

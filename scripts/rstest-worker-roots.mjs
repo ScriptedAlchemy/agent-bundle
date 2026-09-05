@@ -5,11 +5,20 @@
  * `/tmp/ab-rstest-<hash16>` — directly under the system temp directory, never
  * under the host `TMPDIR`, because Chrome and the Doctor socket fixtures create
  * AF_UNIX sockets inside it and Linux caps socket paths at 108 bytes. The hash
- * includes the invoking process id, so a runner such as `scripts/local-ci.mjs`
- * cannot predict the paths a finished leg created. Every root therefore carries
- * an owner marker naming the host `TMPDIR` it was derived from and the process
- * that created it; a runner that owns that `TMPDIR` can remove exactly those
- * roots once the run has finished, and nothing else.
+ * includes the invoking process id, so neither the Rstest orchestrator nor a
+ * runner such as `scripts/local-ci.mjs` can predict the paths a finished run
+ * created. Every root therefore carries an owner marker, and a sweeper removes
+ * exactly the roots whose marker names what it owns, and nothing else:
+ *
+ * - `removeRunRstestWorkerRoots` matches the marker's `runId`, the id the
+ *   pool's `globalSetup` (rstest.global-setup.ts) tags an invocation with and
+ *   its workers inherit; the pool's teardown removes its own roots by it.
+ * - `removeOwnedRstestWorkerRoots` matches the marker's `temporaryRoot`, the
+ *   host `TMPDIR` the root was derived from; a runner that owns a private
+ *   `TMPDIR` (each local-CI leg) sweeps by it, catching roots whose pool never
+ *   reached teardown.
+ *
+ * Both retain a matching root whose creating process is still alive.
  */
 import { readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -20,6 +29,12 @@ export const rstestWorkerRootsParent = '/tmp';
 export const rstestWorkerRootPrefix = 'ab-rstest-';
 /** Owner marker written into each worker root by `rstestWorkerRoot()`. */
 export const rstestWorkerRootOwnerFile = '.ab-rstest-owner.json';
+/**
+ * Environment variable carrying the run id of the current Rstest invocation.
+ * rstest.global-setup.ts sets it (unless an outer runner already did) and every
+ * worker's owner marker records it as `runId`.
+ */
+export const rstestRunIdVariable = 'AGENT_BUNDLE_RSTEST_RUN_ID';
 
 const processIsAlive = (pid) => {
   try {
@@ -32,15 +47,19 @@ const processIsAlive = (pid) => {
 };
 
 /**
- * Remove the worker roots owned by a finished run: those whose owner marker
- * names `temporaryRoot` as the host `TMPDIR` they were derived from and whose
- * creating process has exited. Roots without a readable marker, roots owned by
- * another `TMPDIR`, and roots whose owning process is still alive are never
- * touched. Returns the roots removed and the live roots retained.
+ * Markers read at once. A host that accumulated tens of thousands of roots
+ * before the pool teardown existed makes a sequential sweep take >10 s per
+ * run; sixteen concurrent reads bring it under 4 s, and more gains nothing.
  */
-export const removeOwnedRstestWorkerRoots = async (options) => {
-  const parent = options.parent ?? rstestWorkerRootsParent;
-  const isAlive = options.isAlive ?? processIsAlive;
+const sweepConcurrency = 16;
+
+/**
+ * Walk `parent` for worker roots and remove those whose owner marker `owns`
+ * accepts and whose creating process has exited. Roots without a readable
+ * marker, roots `owns` rejects, and roots whose owning process is still alive
+ * are never touched. Returns the roots removed and the live roots retained.
+ */
+const sweepRstestWorkerRoots = async ({ parent, isAlive, owns }) => {
   const removed = [];
   const retained = [];
   let entries;
@@ -49,24 +68,68 @@ export const removeOwnedRstestWorkerRoots = async (options) => {
   } catch {
     return { removed, retained };
   }
-  for (const entry of entries) {
-    if (!entry.isDirectory() || !entry.name.startsWith(rstestWorkerRootPrefix)) continue;
-    const root = join(parent, entry.name);
+  const roots = entries
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith(rstestWorkerRootPrefix))
+    .map((entry) => join(parent, entry.name));
+  const visit = async (root) => {
     let owner;
     try {
       owner = JSON.parse(await readFile(join(root, rstestWorkerRootOwnerFile), 'utf8'));
     } catch {
-      continue;
+      return;
     }
-    if (owner === null || typeof owner !== 'object' || owner.temporaryRoot !== options.temporaryRoot) continue;
+    if (owner === null || typeof owner !== 'object' || !owns(owner)) return;
     if (Number.isSafeInteger(owner.pid) && owner.pid > 0 && isAlive(owner.pid)) {
       retained.push(root);
-      continue;
+      return;
     }
     await rm(root, { recursive: true, force: true });
     removed.push(root);
+  };
+  for (let index = 0; index < roots.length; index += sweepConcurrency) {
+    await Promise.all(roots.slice(index, index + sweepConcurrency).map(visit));
   }
   removed.sort();
   retained.sort();
   return { removed, retained };
+};
+
+/**
+ * Remove the worker roots owned by a finished run: those whose owner marker
+ * names `temporaryRoot` as the host `TMPDIR` they were derived from and whose
+ * creating process has exited. Roots without a readable marker, roots owned by
+ * another `TMPDIR`, and roots whose owning process is still alive are never
+ * touched. Returns the roots removed and the live roots retained.
+ */
+export const removeOwnedRstestWorkerRoots = async (options) =>
+  sweepRstestWorkerRoots({
+    parent: options.parent ?? rstestWorkerRootsParent,
+    isAlive: options.isAlive ?? processIsAlive,
+    owns: (owner) => owner.temporaryRoot === options.temporaryRoot,
+  });
+
+/**
+ * Remove the worker roots one Rstest invocation created: those whose owner
+ * marker records `runId` and whose creating process has exited. Roots without
+ * a readable marker, roots whose marker carries another run id, and roots
+ * whose owning process is still alive are never touched; an empty `runId`
+ * matches nothing, so an unset variable can never widen the sweep.
+ *
+ * `reclaimUntaggedFrom`, when given, also removes the roots whose marker
+ * carries no run id at all and names that directory as `cwd`: roots left by
+ * this checkout's pools before the teardown existed (or by a pool run without
+ * rstest.global-setup.ts), which nothing else ever removes and which every
+ * later sweep would otherwise keep reading. The liveness check applies to
+ * them as well. Returns the roots removed and the live roots retained.
+ */
+export const removeRunRstestWorkerRoots = async (options) => {
+  const { runId, reclaimUntaggedFrom } = options;
+  if (typeof runId !== 'string' || runId === '') return { removed: [], retained: [] };
+  const reclaimsUntagged = typeof reclaimUntaggedFrom === 'string' && reclaimUntaggedFrom !== '';
+  return sweepRstestWorkerRoots({
+    parent: options.parent ?? rstestWorkerRootsParent,
+    isAlive: options.isAlive ?? processIsAlive,
+    owns: (owner) => owner.runId === runId
+      || (reclaimsUntagged && owner.runId === undefined && owner.cwd === reclaimUntaggedFrom),
+  });
 };
