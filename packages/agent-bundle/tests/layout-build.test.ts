@@ -190,7 +190,7 @@ it('composes the root and server layouts around every rendered surface of one bu
   }
 
   // The routed CLI: a rendered command takes only the root layout.
-  const binPath = join(root, 'dist', 'bin', 'layout-fixture.js');
+  const binPath = join(root, 'dist', 'bin', 'layout-fixture.mjs');
   const piped = await execFile(binPath, ['report', '/library']);
   expect(piped.stdout).toBe('Found **2** books under /library.\n\n> shell: cli report\n');
   const reportJson = await execFile(binPath, ['report', '/library', '--json']);
@@ -256,7 +256,7 @@ it('ships byte-identical surfaces when no layout exists and refuses an invalid l
   const output = join(root, 'artifact');
   const result = await build({ output, packageOutputs: true, root });
   expect(result.model.layouts).toBeUndefined();
-  const binPath = join(root, 'dist', 'bin', 'layout-fixture.js');
+  const binPath = join(root, 'dist', 'bin', 'layout-fixture.mjs');
   const piped = await execFile(binPath, ['report', '/library']);
   expect(piped.stdout).toBe('Found **2** books under /library.\n');
   const projected = await execFile(binPath, ['harness', 'lookup', '--input', '{"message":"plain"}']);

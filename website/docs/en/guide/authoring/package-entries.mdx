@@ -447,7 +447,13 @@ npx agent-bundle prepack --root . --output artifact --json
 
 `prepack` runs the release build and `npm pack --dry-run --json --ignore-scripts`, then gates the
 exact package and artifact inventory, manifest hashes, package bin targets, and release-version
-agreement. Use it as an npm `prepack` script; `--ignore-scripts` prevents recursion.
+agreement. It removes source-project scripts from the generated package metadata, so development
+lifecycle commands cannot run from `dist/`. Run the gate first, then publish the npm root it
+validated:
+
+```sh
+npm publish ./dist --ignore-scripts
+```
 
 ## Prebuilt payloads
 

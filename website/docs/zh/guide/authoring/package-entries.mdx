@@ -399,8 +399,12 @@ npx agent-bundle prepack --root . --output artifact --json
 ```
 
 `prepack` 运行发布构建与 `npm pack --dry-run --json --ignore-scripts`，随后对精确的包与产物清单、
-清单哈希、包 bin 目标以及发布版本一致性设卡。把它用作 npm 的 `prepack` 脚本；`--ignore-scripts`
-可防止递归。
+清单哈希、包 bin 目标以及发布版本一致性设卡。生成的包元数据会移除源项目脚本，避免开发期生命周期命令
+从 `dist/` 运行。先运行门禁，再发布它已经校验的 npm 根目录：
+
+```sh
+npm publish ./dist --ignore-scripts
+```
 
 ## 预构建 payload
 

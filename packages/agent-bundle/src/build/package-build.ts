@@ -218,12 +218,18 @@ const packageDocument = async (
     if (bin.generatedCli === undefined) return [bin.name, `./bin/${bin.name}.js`];
     const executable = manifest.executables.bins.find((entry) => entry.name === bin.name);
     if (executable === undefined) {
-      throw new Error(`Artifact manifest does not declare routed CLI executable ${JSON.stringify(bin.name)}.`);
+      throw new DiagnosticError([{
+        code: 'AB4767',
+        message: `The npm package declares routed CLI ${JSON.stringify(bin.name)}, but the artifact manifest has no executable for it.`,
+        recovery: 'Select a target whose adapter publishes the cli capability, or set bin: false.',
+        severity: 'error',
+        sourcePath: bin.provenance.sourcePath,
+      }]);
     }
     return [bin.name, `./${executable.path}`];
   }));
   const transformed = Object.fromEntries(Object.entries(source)
-    .filter(([key]) => key !== 'files' && key !== 'bin')
+    .filter(([key]) => !['bin', 'files', 'scripts'].includes(key))
     .map(([key, value]) => [
       key,
       ['exports', 'main', 'module', 'types', 'typesVersions'].includes(key)

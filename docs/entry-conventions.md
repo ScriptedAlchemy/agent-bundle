@@ -713,7 +713,7 @@ Per surface, the value the generated request scope mounts:
 
 | Surface | `hostSurface` | `stdout` / `stderr` | Source |
 | --- | --- | --- | --- |
-| Routed CLI executable (`dist/bin/<name>.js`, plugin-root `bin/<name>.mjs`), plain or rendered command, projected MCP command | `cli` | Probed from the executable's own process; a rendered command's worker thread receives the executable's probe, never its own pipes. Machine output owns fd 1, so `stdout` describes where the rendered document lands and `stderr` the channel a route may write to itself. | `native` |
+| Routed CLI executable (npm-root and plugin-root `bin/<name>.mjs`), plain or rendered command, projected MCP command | `cli` | Probed from the executable's own process; a rendered command's worker thread receives the executable's probe, never its own pipes. Machine output owns fd 1, so `stdout` describes where the rendered document lands and `stderr` the channel a route may write to itself. | `native` |
 | Rendered script (`scripts/<name>.mjs` from `src/scripts/<name>.tsx`) | `script` | Probed, as above. | `native` |
 | Generated MCP server (any transport) | `mcp` | `none` on both, `color: 'none'`, `sharesTarget: false` — stdout is the protocol wire and stderr the host's log. Never probed, whatever the descriptors are. | `derived` |
 | Event route (shared runtime or standalone hook process) | `hook` | `none` on both — stdout is the host's hook envelope. Never probed. | `derived` |
@@ -782,7 +782,8 @@ through Node's top-level failure path (stack to stderr, exit code 1).
 (#511), probed once before `main` runs by the dependency-free
 `agent-bundle/terminal-capability` module the envelope aliases in — plain
 scripts and bins load no Effect runtime and no `@agent-bundle/runtime` for it.
-Its `hostSurface` is `cli` for a package bin (`dist/bin/<name>.js`) and
+Its `hostSurface` is `cli` for a package bin (`dist/bin/<name>.js` for an authored bin,
+`dist/bin/<name>.mjs` for the manifest-selected routed CLI) and
 `script` for an artifact script (`scripts/<name>.mjs`); a module shipped on
 both surfaces sees the surface it was launched from. A `main` declared with
 one parameter keeps working — the second argument is simply unread.

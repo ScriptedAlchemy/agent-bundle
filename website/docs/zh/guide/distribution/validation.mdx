@@ -182,8 +182,9 @@ bundle——都不能把裸包保持外部化：编译器会在 `prepack` 触及
 文件中未被编译器解析为模块依赖的 `require`、`createRequire` 或 `import.meta.resolve` 调用、打包后声明文件
 的引用、消费者侧安装脚本，或打包后的文件运行的 `bin` 命令——因为只有框架没有编译的 JavaScript 才仍然
 可能导入它。`--output` 是相对
-`--root` 的产物路径，会覆盖配置中的 `output.distPath`，默认值为 `artifact`。把它用作 npm 的 `prepack`
-脚本；`--ignore-scripts` 可防止递归，而且任何 npm 生命周期都绝不会执行宿主安装。
+`--root` 的产物路径，会覆盖配置中的 `output.distPath`，默认值为 `artifact`。生成的 npm 根目录会移除
+源项目脚本。门禁成功后，用 `npm publish ./dist --ignore-scripts` 发布它校验过的准确根目录；任何 npm
+生命周期都绝不会执行宿主安装。
 
 这种内联是编译器的契约，而不是一次工具链升级就可能翻转的打包器默认值。生成的可执行文件——产物脚本、路由式
 CLI、MCP 入口、钩子包装层以及包专用 JavaScript bundle——都以禁用 Rslib 的 `autoExternal`、`bundle: true` 与

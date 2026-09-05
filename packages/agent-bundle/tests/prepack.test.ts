@@ -67,7 +67,7 @@ beforeAll(async () => {
     writeFile(join(projectRoot, 'src', 'index.ts'), 'export const value = 1;\n'),
   ]);
   result = await prepack({ root: projectRoot });
-  payloadPath = join(projectRoot, 'host-packs', 'INSTALL.md');
+  payloadPath = join(projectRoot, 'dist', 'INSTALL.md');
   payloadBytes = await readFile(payloadPath, 'utf8');
 });
 
@@ -80,7 +80,6 @@ const diagnostics = (
   packerRewritesWorkspaceProtocols = false,
 ): Promise<readonly Diagnostic[]> =>
   packInventoryDiagnostics({
-    artifactRoot: result.build.build.outputRoot,
     model: result.build.model,
     packageBuild: result.build.packageBuild!,
     packOutput,
@@ -174,7 +173,7 @@ it('requires README.md even when the source file is absent', async () => {
   }
 });
 
-it('reports stale artifact hashes as AB7011', async () => {
+it('reports stale npm-root hashes as AB7011', async () => {
   await writeFile(payloadPath, `${payloadBytes}stale\n`);
   try {
     expect(await diagnostics()).toContainEqual(expect.objectContaining({ code: 'AB7011' }));
@@ -261,7 +260,6 @@ it('accepts a dependency declared by a prebuilt payload runtimeDependencies list
       targets: ['claude'],
     };
     const reported = withCode(await packInventoryDiagnostics({
-      artifactRoot: result.build.build.outputRoot,
       model: { ...result.build.model, payloads: [payload] },
       packageBuild: result.build.packageBuild!,
       packOutput: result.pack,

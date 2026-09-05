@@ -288,6 +288,18 @@ it('emits the routed CLI bin into every capable host artifact and omits it elsew
     target: 'legacy-host',
   }));
   expect(legacyResult.diagnostics.filter((entry) => entry.code === 'AB4765')).toHaveLength(1);
+  await expect(build({
+    output: 'package-artifact',
+    packageOutputs: true,
+    registry,
+    root: legacyRoot,
+  })).rejects.toMatchObject({
+    diagnostics: [expect.objectContaining({
+      code: 'AB4767',
+      severity: 'error',
+    })],
+    name: 'DiagnosticError',
+  });
 
   // Help, version, and the rendered .tsx command ride the same executable.
   const claudeBin = binPath;
@@ -347,14 +359,15 @@ it('emits the routed CLI bin into every capable host artifact and omits it elsew
     reason: 'unsupported-capability',
   });
 
-  // `inspect --bundler` dumps the composite bin composition beside the
-  // scripts; the npm package bin (no target) keeps its own entry.
+  // `inspect --bundler` dumps the one composite bin composition beside the
+  // scripts. The npm root copies that executable, so there is no second
+  // target-less package compilation to report.
   const bundler = await inspect({ focus: 'bundler', registry, root });
   if (bundler.state !== 'ready') throw new Error('unreachable');
   const binEntries = (bundler.selected?.bundler?.entries ?? [])
     .filter((entry) => entry.kind === 'bin' && entry.target !== undefined);
   expect((bundler.selected?.bundler?.entries ?? []).some((entry) =>
-    entry.kind === 'bin' && entry.target === undefined && entry.outputPath === `dist/bin/${pluginName}.js`)).toBe(true);
+    entry.kind === 'bin' && entry.target === undefined)).toBe(false);
   expect(binEntries.map((entry) => entry.outputPath).sort()).toEqual([
     `bin/${pluginName}-flight.mjs`,
     `bin/${pluginName}.mjs`,

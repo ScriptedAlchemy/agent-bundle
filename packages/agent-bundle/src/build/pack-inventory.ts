@@ -233,7 +233,6 @@ const dependencyDiagnostics = async (options: {
 };
 
 export const packInventoryDiagnostics = async (options: {
-  readonly artifactRoot: string;
   readonly model: NormalizedPlugin;
   readonly packageBuild: PackageBuildResult;
   readonly packOutput: PackOutput;
@@ -241,9 +240,8 @@ export const packInventoryDiagnostics = async (options: {
   readonly packerRewritesWorkspaceProtocols: boolean;
   readonly projectRoot: string;
 }): Promise<readonly Diagnostic[]> => {
-  const artifactRoot = resolve(options.artifactRoot);
   const packageRoot = resolve(options.packageBuild.outputRoot);
-  const manifestPath = join(artifactRoot, artifactManifestName);
+  const manifestPath = join(packageRoot, artifactManifestName);
   const manifest = parseArtifactManifest(await runWithPlatform(readFileString(manifestPath)));
   const packageDocument = await jsonRecord(join(packageRoot, 'package.json'));
   const packed = new Set(options.packOutput.files.map((file) => file.path.replace(/^\.\//u, '')));
@@ -264,14 +262,14 @@ export const packInventoryDiagnostics = async (options: {
 
   const stale: string[] = [];
   for (const file of manifest.files) {
-    const bytes = await runWithPlatform(readFileBytes(join(artifactRoot, file.path)));
+    const bytes = await runWithPlatform(readFileBytes(join(packageRoot, file.path)));
     if (sha256Hex(bytes) !== file.sha256) stale.push(file.path);
   }
   if (stale.length > 0) {
     diagnostics.push(diagnostic(
       'AB7011',
-      `Artifact files no longer match their manifest hashes: ${quoteAll(stale.sort())}.`,
-      'Run agent-bundle prepack again without modifying generated artifacts.',
+      `Packed npm-root files no longer match their manifest hashes: ${quoteAll(stale.sort())}.`,
+      'Run agent-bundle prepack again without modifying the generated npm root.',
     ));
   }
 
@@ -300,7 +298,7 @@ export const packInventoryDiagnostics = async (options: {
   for (const projection of manifest.projections) {
     const path = projection.documents.plugin;
     if (path === undefined) continue;
-    const absolute = join(artifactRoot, path);
+    const absolute = join(packageRoot, path);
     if (await exists(absolute)) {
       versions.push([path, (await jsonRecord(absolute)).version]);
     }
