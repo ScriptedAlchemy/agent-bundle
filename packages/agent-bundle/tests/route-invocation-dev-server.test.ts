@@ -550,7 +550,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     if (republishedEpoch.state !== 'active') throw new Error('Expected an active rebuilt epoch.');
     expect(republishedEpoch.activeEpoch.id).not.toBe(activeEpoch.activeEpoch.id);
     const republishedCounter = await counter();
-    const republishedIsolatedCounter = await counter('unit-render');
+    const republishedIsolatedCounter = await counter(true);
     expect(republishedCounter.invocation.result).toEqual({ count: 3 });
     expect(republishedIsolatedCounter.invocation.result).toEqual({ count: 1 });
 
