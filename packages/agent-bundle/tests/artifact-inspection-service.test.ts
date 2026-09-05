@@ -151,7 +151,10 @@ const projectionRecord = (
   registry: TargetRegistry,
   files: readonly FixtureFile[],
   omitMcpDocument = false,
-): ArtifactManifest['projections'][number] => {
+): {
+  readonly adapter: ArtifactManifest['compiler']['adapters'][number];
+  readonly projection: ArtifactManifest['projections'][number];
+} => {
   const metadata = registry.metadata(fixtureTarget);
   return {
     adapter: {

@@ -260,7 +260,8 @@ it('emits the routed CLI bin into every capable host artifact and omits it elsew
   // The manifest inventories the bin with bundle provenance naming every command route.
   const manifestFile = result.build.manifest.files.find((file) => file.path === `bin/${pluginName}.mjs`);
   expect(manifestFile).toMatchObject({ kind: 'bundle' });
-  expect(manifestFile?.sourceInputs).toEqual(expect.arrayContaining(['src/cli/report.tsx', 'src/cli/status.ts']));
+  expect(result.build.manifest.compiler.provenance.find((entry) => entry.path === `bin/${pluginName}.mjs`)?.sourceInputs)
+    .toEqual(expect.arrayContaining(['src/cli/report.tsx', 'src/cli/status.ts']));
   expect(result.build.manifest.files.find((file) => file.path === `bin/${pluginName}-flight.mjs`)).toMatchObject({ kind: 'bundle' });
   expect(result.build.manifest.files.filter((file) => file.path.startsWith('bin/'))).toHaveLength(2);
 

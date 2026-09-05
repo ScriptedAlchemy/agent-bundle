@@ -396,7 +396,7 @@ it('serves compiled routes and durable state across packed process restarts', as
       let eventResponse: unknown;
       try {
         eventResponse = await requestEventRuntime({
-          artifactEpoch: artifactManifest.project.revision,
+          artifactEpoch: artifactManifest.compiler.project.revision,
           endpointId: eventRuntimeEndpointId,
           event: 'tool/after',
           hostContractRevision: 'packed-proof',
