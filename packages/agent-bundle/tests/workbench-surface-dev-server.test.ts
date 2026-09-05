@@ -27,7 +27,7 @@ it('matches the route manifest and lifecycle inventory a real dev server serves'
       '',
     ].join('\n'),
     files: {
-      'package.json': '{"type":"module"}\n',
+      'package.json': '{"dependencies":{"@agent-bundle/runtime":"workspace:*","react":"19.2.8","zod":"4.5.4"},"type":"module"}\n',
       'src/cli/greet.ts': [
         "import { z } from 'zod';",
         '',

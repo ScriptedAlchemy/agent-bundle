@@ -39,7 +39,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
       '',
     ].join('\n'),
     files: {
-      'package.json': '{"type":"module"}\n',
+      'package.json': '{"dependencies":{"@agent-bundle/runtime":"workspace:*","react":"19.2.8","zod":"4.5.4"},"type":"module"}\n',
       'src/cli/greet.tsx': [
         "import { Agent } from '@agent-bundle/runtime';",
         "import { createElement } from 'react';",
@@ -240,11 +240,11 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         "import { Agent } from '@agent-bundle/runtime';",
         "import { createElement } from 'react';",
         "import { z } from 'zod';",
+        "import './missing.js';",
         '',
         "export const config = { annotations: { readOnlyHint: true }, description: 'Reports one service.' };",
         "export const inputSchema = z.object({ service: z.string().min(1) }).strict();",
         'export const resultSchema = z.object({ service: z.string() }).strict();',
-        'const invalid: string = 1;',
         '',
         'export default async function Report({ input }) {',
         '  const service = `rebuilt-${input.service}`;',
@@ -331,12 +331,12 @@ it('publishes invocation routes only after a successful initial or recovered bui
       '',
     ].join('\n'),
     files: {
-      'package.json': '{"type":"module"}\n',
-      'src/build-failure.ts': 'export const invalid: string = 1;\n',
+      'package.json': '{"dependencies":{"@agent-bundle/runtime":"workspace:*","react":"19.2.8","zod":"4.5.4"},"type":"module"}\n',
       'src/mcp/status/tools/report.tsx': [
         "import { Agent } from '@agent-bundle/runtime';",
         "import { createElement } from 'react';",
         "import { z } from 'zod';",
+        "import './missing.js';",
         '',
         "export const inputSchema = z.object({}).strict();",
         'export const resultSchema = z.object({ version: z.string() }).strict();',
@@ -350,7 +350,6 @@ it('publishes invocation routes only after a successful initial or recovered bui
     prefix: 'agent-bundle-route-invocation-publication-gate-',
   });
   const assetsRoot = join(project.root, 'workbench');
-  const failurePath = join(project.root, 'src/build-failure.ts');
   const reportRoutePath = join(project.root, 'src/mcp/status/tools/report.tsx');
   let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
   await mkdir(assetsRoot, { recursive: true });
@@ -375,7 +374,10 @@ it('publishes invocation routes only after a successful initial or recovered bui
       'x-agent-bundle-session': session.token,
     };
 
-    expect(server.status().build.state).toBe('failed');
+    await expect.poll(
+      () => server!.status().build.state,
+      { timeout: 10_000 },
+    ).toBe('failed');
     const unavailableManifest = await fetch(`${server.url}/api/routes/manifest`, { headers });
     expect(unavailableManifest.status).toBe(409);
     const unavailableInvocation = await fetch(`${server.url}/api/routes/invocations`, {
@@ -394,8 +396,20 @@ it('publishes invocation routes only after a successful initial or recovered bui
     const repairedAttempt = await replaceWatchedSourceAndAwaitRebuild(
       server,
       project.root,
-      failurePath,
-      "export const valid: string = 'repaired';\n",
+      reportRoutePath,
+      [
+        "import { Agent } from '@agent-bundle/runtime';",
+        "import { createElement } from 'react';",
+        "import { z } from 'zod';",
+        '',
+        'export const inputSchema = z.object({}).strict();',
+        'export const resultSchema = z.object({ version: z.string() }).strict();',
+        '',
+        'export default async function Report() {',
+        "  return createElement(Agent.Result, { value: { version: 'published' } }, createElement(Agent.Text, null, 'Published route.'));",
+        '}',
+        '',
+      ].join('\n'),
       { timeoutMs: 10_000 },
     );
     expect(repairedAttempt.outcome, JSON.stringify(repairedAttempt.diagnostics)).toBe('succeeded');
@@ -417,10 +431,10 @@ it('publishes invocation routes only after a successful initial or recovered bui
       "import { Agent } from '@agent-bundle/runtime';",
       "import { createElement } from 'react';",
       "import { z } from 'zod';",
+      "import './missing.js';",
       '',
       'export const inputSchema = z.object({}).strict();',
       'export const resultSchema = z.object({ version: z.string() }).strict();',
-      'const invalid: string = 1;',
       '',
       'export default async function Report() {',
       "  return createElement(Agent.Result, { value: { version: 'unpublished' } }, createElement(Agent.Text, null, 'Unpublished route.'));",
@@ -445,10 +459,13 @@ it('publishes invocation routes only after a successful initial or recovered bui
 
     expect(server.status().artifact.state).toBe('stale');
     const recoveredManifestResponse = await fetch(`${server.url}/api/routes/manifest`, { headers });
-    expect(recoveredManifestResponse.status).toBe(200);
-    const recoveredManifest = await recoveredManifestResponse.json() as RouteManifestResponse;
-    expect(recoveredManifest.manifest.servers.flatMap((manifestServer) =>
-      manifestServer.routes.map((route) => route.id))).toContain('tool:status/report');
+    expect(recoveredManifestResponse.status).toBe(409);
+    await expect(recoveredManifestResponse.json()).resolves.toEqual({
+      diagnostic: {
+        code: 'AB8121',
+        message: 'Route manifest is not available.',
+      },
+    });
     const recoveredInvocation = await fetch(`${server.url}/api/routes/invocations`, {
       body: JSON.stringify({ routeId: 'tool:status/report' }),
       headers,
@@ -458,7 +475,7 @@ it('publishes invocation routes only after a successful initial or recovered bui
     await expect(recoveredInvocation.json()).resolves.toEqual({
       diagnostic: {
         code: 'AB8232',
-        message: 'The source is newer than the published build. Rebuild before invoking routes.',
+        message: 'No published build and route manifest are available.',
       },
     });
   } finally {

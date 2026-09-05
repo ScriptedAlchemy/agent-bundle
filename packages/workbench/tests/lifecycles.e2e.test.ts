@@ -114,6 +114,16 @@ e2e(
       const source = await readFile(eventSource, 'utf8');
       await replaceWatchedSource(fixture.root, eventSource, `${source}\n// lifecycle stale-repair ${Date.now()}\n`);
       await expect.poll(manifestDigest, { timeout: browserTimeout }).not.toBe(staleDigest);
+      await expect.poll(
+        () => page.evaluate(async () => {
+          const response = await fetch('/api/project/status');
+          const body = await response.json() as { status: { artifact: { state: string } } };
+          return body.status.artifact.state;
+        }),
+        { timeout: browserTimeout },
+      ).toBe('active');
+      await page.goto(workbenchUrl(fixture.url, '/routes/events/tool/after'));
+      await expect(page.getByTestId('route-status')).toContainText('Not run yet', { timeout: browserTimeout });
 
       await page.getByRole('tab', { name: 'Replay' }).click();
       const repairedReplay = page.getByRole('tabpanel');
