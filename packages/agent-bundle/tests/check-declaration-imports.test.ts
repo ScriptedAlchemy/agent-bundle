@@ -230,11 +230,62 @@ describe('declarationImportViolations', () => {
     const subpaths = { '.': './dist/index.js', './routes': './dist/routes.js', './features/*': './dist/features/*.js' };
     expect(check(subpaths, ['self', 'self/routes', 'self/features/a', 'self/features/nested/b'])).toEqual([]);
     expect(check(subpaths, ['self/internal', 'self/features'])).toEqual(['self/internal', 'self/features']);
+    // Node precedence: an exact key beats a pattern and the longest matching
+    // prefix beats a broader one, so `null` entries block what `./*` exposes.
+    const blocked = { './*': './dist/*.js', './internal/*': null, './internal/public': './dist/public.js', './secret.js': null };
+    expect(check(blocked, ['self/anything', 'self/internal/public'])).toEqual([]);
+    expect(check(blocked, ['self/internal/x', 'self/internal/deep/y', 'self/secret.js']))
+      .toEqual(['self/internal/x', 'self/internal/deep/y', 'self/secret.js']);
     // A string or conditions-only `exports` serves the root alone.
     expect(check('./dist/index.js', ['self', 'self/routes'])).toEqual(['self/routes']);
     expect(check({ types: './dist/index.d.ts', import: './dist/index.js' }, ['self', 'self/routes'])).toEqual(['self/routes']);
     // No `exports` at all: every file resolves by path.
     expect(check(undefined, ['self', 'self/dist/anything.js'])).toEqual([]);
+  });
+
+  it('resolves `#` imports through the imports map and classifies what they map to', () => {
+    const report = declarationImportViolations({
+      manifest: {
+        ...manifest,
+        imports: {
+          '#internal/*': './dist/internal/*.js',
+          '#pkg': { types: './dist/pkg.d.ts', import: './dist/pkg.js' },
+          '#browser-only': { browser: './dist/browser.js' },
+          '#dev': 'zod',
+          '#blocked': null,
+        },
+      },
+      packedPaths: [...packedPaths, 'dist/internal/thing.d.ts', 'dist/pkg.d.ts'],
+      declarations: [
+        {
+          path: 'dist/index.d.ts',
+          text: [
+            "import type { Thing } from '#internal/thing';",
+            "import type { Pkg } from '#pkg';",
+            "import type { Missing } from '#internal/missing';",
+            "import type { Browser } from '#browser-only';",
+            "import type { Dev } from '#dev';",
+            "import type { Blocked } from '#blocked';",
+            "import type { Unmapped } from '#nope';",
+          ].join('\n'),
+        },
+      ],
+    });
+
+    expect(report.errors.map(({ reason, specifier }) => `${reason} ${specifier}`)).toEqual([
+      'missing-target #internal/missing',
+      'subpath-import #browser-only',
+      'dev-dependency #dev',
+      'subpath-import #blocked',
+      'subpath-import #nope',
+    ]);
+    expect(report.errors[0]?.message).toBe(
+      'imports "#internal/missing" → "./dist/internal/missing.js": no packed declaration for "./dist/internal/missing.js" '
+        + '(tried dist/internal/missing.d.ts)',
+    );
+    expect(report.errors[2]?.message).toBe(
+      'imports "#dev" → "zod": imports "zod" — "zod" is a devDependency, so consumers do not install it',
+    );
   });
 
   it('resolves the source extensions tsgo keeps and extensionless directory imports', () => {

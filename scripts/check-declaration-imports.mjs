@@ -227,27 +227,82 @@ const isAbsoluteOrUrl = (specifier) => specifier.startsWith('/') || (hasScheme(s
 
 const isRelative = (specifier) => specifier.startsWith('./') || specifier.startsWith('../');
 
+/** Replaces the `*` in every string leaf of an `exports`/`imports` target with the matched text. */
+const substituteStar = (target, match) => {
+  if (typeof target === 'string') return target.replaceAll('*', match);
+  if (Array.isArray(target)) return target.map((entry) => substituteStar(entry, match));
+  if (isRecord(target)) {
+    return Object.fromEntries(Object.entries(target).map(([key, value]) => [key, substituteStar(value, match)]));
+  }
+  return target;
+};
+
+/**
+ * Node's subpath resolution over an `exports` or `imports` map: an exact key
+ * wins; otherwise the matching single-`*` pattern with the longest prefix
+ * (then the longest suffix) wins, and its `*` is substituted into the target.
+ * Returns the matched target — `null` when the entry blocks the subpath — or
+ * `undefined` when no key matches.
+ */
+const resolveSubpathMap = (map, subpath) => {
+  if (Object.hasOwn(map, subpath) && !subpath.includes('*')) return { target: map[subpath] };
+  let best;
+  for (const key of Object.keys(map)) {
+    const star = key.indexOf('*');
+    if (star === -1 || key.includes('*', star + 1)) continue;
+    const prefix = key.slice(0, star);
+    const suffix = key.slice(star + 1);
+    if (subpath.length < prefix.length + suffix.length || !subpath.startsWith(prefix) || !subpath.endsWith(suffix)) continue;
+    const longer = best === undefined
+      || prefix.length > best.prefix.length
+      || (prefix.length === best.prefix.length && suffix.length > best.suffix.length);
+    if (longer) best = { key, prefix, suffix };
+  }
+  if (best === undefined) return undefined;
+  const match = subpath.slice(best.prefix.length, subpath.length - best.suffix.length);
+  return { target: substituteStar(map[best.key], match) };
+};
+
+/** Conditions a Node ESM consumer's type checker matches, in the object order Node honours. */
+const activeConditions = new Set(['types', 'import', 'node', 'default']);
+
+/** The string a target resolves to under the active conditions, or `undefined` when it resolves to nothing. */
+const targetString = (target) => {
+  if (typeof target === 'string') return target;
+  if (Array.isArray(target)) return target.map(targetString).find((entry) => entry !== undefined);
+  if (!isRecord(target)) return undefined;
+  return Object.entries(target)
+    .filter(([condition]) => activeConditions.has(condition))
+    .map(([, value]) => targetString(value))
+    .find((entry) => entry !== undefined);
+};
+
 /**
  * Whether the package's own `exports` serves `subpath` (`.` or `./x`): a
- * string or conditions-object `exports` serves only `.`; a subpath map serves
- * its exact keys and `*` patterns; a manifest without `exports` serves any
- * file by path.
+ * string or conditions-object `exports` serves only `.`; a subpath map is
+ * resolved like Node does, so a `null` entry blocks what a broader pattern
+ * would otherwise expose; a manifest without `exports` serves any file by
+ * path.
  */
 const exportsSubpath = (manifest, subpath) => {
   const { exports } = manifest;
   if (exports === undefined || exports === null) return true;
   if (typeof exports === 'string' || Array.isArray(exports)) return subpath === '.';
   if (!isRecord(exports)) return false;
-  const keys = Object.keys(exports);
-  if (!keys.some((key) => key.startsWith('.'))) return subpath === '.';
-  return keys.some((key) => {
-    if (key === subpath) return true;
-    const star = key.indexOf('*');
-    if (!key.startsWith('.') || star === -1) return false;
-    const prefix = key.slice(0, star);
-    const suffix = key.slice(star + 1);
-    return subpath.length >= prefix.length + suffix.length && subpath.startsWith(prefix) && subpath.endsWith(suffix);
-  });
+  if (!Object.keys(exports).some((key) => key.startsWith('.'))) return subpath === '.';
+  const resolved = resolveSubpathMap(exports, subpath);
+  return resolved !== undefined && resolved.target !== null;
+};
+
+/**
+ * Resolves a `#subpath` import through the manifest's `imports` map to the
+ * string it maps to — `undefined` when the map lacks it, blocks it, or maps
+ * it to something the active conditions do not select.
+ */
+const importsTarget = (manifest, specifier) => {
+  if (!isRecord(manifest.imports)) return undefined;
+  const resolved = resolveSubpathMap(manifest.imports, specifier);
+  return resolved === undefined ? undefined : targetString(resolved.target);
 };
 
 /**
@@ -286,9 +341,23 @@ const classifySpecifier = ({ declared, manifest, packed, path, specifier }) => {
       : { message: `references types "${target}" — "${dev}" is a devDependency, so consumers do not install it`, reason: 'dev-dependency' };
   }
   if (target.startsWith('#')) {
-    return isRecord(manifest.imports) && Object.keys(manifest.imports).length > 0
+    // `imports` targets are package-root-relative files or bare specifiers
+    // (Node rejects `#` targets), so the mapped string is classified as if
+    // `package.json` itself had imported it.
+    const mapped = importsTarget(manifest, target);
+    if (mapped === undefined || mapped.startsWith('#')) {
+      return { message: `imports "${target}" — the manifest's "imports" map does not resolve it`, reason: 'subpath-import' };
+    }
+    const violation = classifySpecifier({
+      declared,
+      manifest,
+      packed,
+      path: 'package.json',
+      specifier: { kind: 'import', specifier: mapped },
+    });
+    return violation === undefined
       ? undefined
-      : { message: `imports "${target}" — the manifest has no "imports" map to resolve it`, reason: 'subpath-import' };
+      : { ...violation, message: `imports "${target}" → "${mapped}": ${violation.message}` };
   }
   if (isBuiltin(target)) return undefined;
   const name = packageNameOf(target);

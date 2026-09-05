@@ -57,7 +57,7 @@ npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-
 `pnpm test:packed:release`。`lint:release` 先对打包后的 `agent-bundle`、`rsc-markdown-stream` 与
 `create-agent-bundle` tarball 以 `esm-only` profile 运行 `attw`，再用
 `scripts/check-declaration-imports.mjs` 检查同一份文件清单：消费者能从 `exports` 触达的每个 `.d.ts`
-只能导入包内文件、包自身通过 `exports` 公开的子路径、Node 内建模块，以及在 `dependencies`、
+只能导入包内文件、包自身通过 `exports` 公开的子路径、能被 `imports` 映射解析的 `#` 导入、Node 内建模块，以及在 `dependencies`、
 `peerDependencies` 或 `optionalDependencies` 中声明的包——绝对路径和 URL 在消费者的安装中永远无法解析，
 可触达声明里出现 `zod` 这类 devDependency 会让门禁失败，而没有任何
 入口触达的内部声明只报告为 warning（`--strict` 会让它们也失败）。publint 不是单独的门禁：每个可发布包的
