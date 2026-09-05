@@ -273,7 +273,7 @@ importers:
         version: 0.1.2(jiti@2.7.0)
       '@rstest/core':
         specifier: ^0.11.10
-        version: 0.11.12
+        version: 0.11.11
       acorn:
         specifier: 8.18.0
         version: 8.18.0
@@ -299,8 +299,8 @@ importers:
         specifier: 3.3.3
         version: 3.3.3
       ignore:
-        specifier: 7.0.7
-        version: 7.0.7
+        specifier: 7.0.8
+        version: 7.0.8
       jiti:
         specifier: 2.7.0
         version: 2.7.0
@@ -328,7 +328,7 @@ importers:
         version: 8.18.1
       effect-rstest:
         specifier: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f
-        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f(@rstest/core@0.11.12)(effect@4.0.0-rc.112)
+        version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f(@rstest/core@0.11.11)(effect@4.0.0-rc.112)
       react:
         specifier: 19.2.8
         version: 19.2.8
@@ -1259,6 +1259,19 @@ packages:
       playwright:
         optional: true
 
+  '@rstest/core@0.11.11':
+    resolution: {integrity: sha512-7Ii2/2/ex1Oa0Kg5Qk5RKx2+e0I83BHLwH0/gn1B7IDwXCh5msFCF7yTyVGFuMltlm3E8Cf4QD7jadOEaBfXfw==}
+    engines: {node: ^20.19.0 || >=22.12.0}
+    hasBin: true
+    peerDependencies:
+      happy-dom: ^20.8.3
+      jsdom: '>=15.0.0'
+    peerDependenciesMeta:
+      happy-dom:
+        optional: true
+      jsdom:
+        optional: true
+
   '@rstest/core@0.11.12':
     resolution: {integrity: sha512-dklEYLtL1eip/11K+o3xEchEs2nCGua2u2W8Pycf6PS8TE0PDJH2Bn9y/txuQI4YVHyIQ88PISWtS6fVnxSyXQ==}
     engines: {node: ^20.19.0 || >=22.12.0}
@@ -2143,8 +2156,8 @@ packages:
     resolution: {integrity: sha512-IKXpvIzjnC9XTAUbVBcMfGS0EPaIXtW6v+zr+RRp+hqULEpo0owZax6wyRwPOJbWbzjYspQwusTsfVr0ifh4uQ==}
     engines: {node: '>=0.10.0'}
 
-  ignore@7.0.7:
-    resolution: {integrity: sha512-dML0wP6oak21rsNYCJpJB6O1BJIEwNpGrTw0URPfAk4hm0e3pRfCtzkfB6olBcXcVlU2rouCyz7lCyRB0OMVCA==}
+  ignore@7.0.8:
+    resolution: {integrity: sha512-YYNsSlXBjMk92SKnkwvB5LOVSa6OznlFUGcsvrFgNJbJCd0M1XKeFVRc8ZByeCqz32FivYNHJVooLmdqrmvp/Q==}
     engines: {node: '>= 4'}
 
   import-meta-resolve@4.2.0:
@@ -4082,6 +4095,14 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
+  '@rstest/core@0.11.11':
+    dependencies:
+      '@rsbuild/core': 2.2.3
+      '@types/chai': 5.2.3
+    transitivePeerDependencies:
+      - '@module-federation/runtime-tools'
+      - core-js
+
   '@rstest/core@0.11.12':
     dependencies:
       '@rsbuild/core': 2.2.3
@@ -4584,6 +4605,11 @@ snapshots:
 
   ee-first@1.1.1: {}
 
+  effect-rstest@https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f(@rstest/core@0.11.11)(effect@4.0.0-rc.112):
+    dependencies:
+      '@rstest/core': 0.11.11
+      effect: 4.0.0-rc.112
+
   effect-rstest@https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f(@rstest/core@0.11.12)(effect@4.0.0-rc.112):
     dependencies:
       '@rstest/core': 0.11.12
@@ -4996,7 +5022,7 @@ snapshots:
     dependencies:
       safer-buffer: 2.1.2
 
-  ignore@7.0.7: {}
+  ignore@7.0.8: {}
 
   import-meta-resolve@4.2.0: {}
 
