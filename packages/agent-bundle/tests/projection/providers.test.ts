@@ -91,13 +91,13 @@ describe('conventional providers through the harness', () => {
     });
   });
 
-  it('mounts providers for a projected MCP command with the tool invocation', async () => {
+  it('mounts providers for a bulk-projected MCP command with the cli invocation', async () => {
     const run = await invokeCli(['harness', 'tooling', '--json']);
 
     expect(run.exitCode).toBe(0);
     expect(cliJson(run)).toEqual({
       keys,
-      libraryTooling: { kind: 'tool', surface: 'tool:harness/tooling', tool: 'ffprobe 6.1' },
+      libraryTooling: { kind: 'cli', surface: 'harness tooling', tool: 'ffprobe 6.1' },
       processLifetime: { hits: 1, instanceId: expect.any(String), pid: process.pid },
       requestView: requestView({ mounted: true }),
     });

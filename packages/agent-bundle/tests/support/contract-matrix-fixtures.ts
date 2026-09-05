@@ -98,6 +98,11 @@ export const routeHarnessContractFixtures = (): Record<string, ContractRouteFixt
     resultCompat: 'closed',
   },
   'tool:harness/strict-report': { input: { reportId: 'closed-1' }, resultCompat: 'closed' },
+  'tool:harness/submit': {
+    input: { argv: ['cargo', 'check'], cwd: '/tmp/contract-matrix', laneKey: 'matrix', tags: ['proof'] },
+    inputs: [{ argv: ['cargo', 'check', '-p', 'core'], cwd: '/tmp/contract-matrix' }],
+    resultCompat: 'additive',
+  },
   'tool:harness/ticket': {
     input: { status: 'completed' },
     inputs: [{ status: 'pending' }, { includeDiagnostics: true, status: 'running' }],

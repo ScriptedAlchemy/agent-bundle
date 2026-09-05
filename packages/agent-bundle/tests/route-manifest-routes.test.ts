@@ -233,7 +233,89 @@ it('projects a compiled graph into the browser manifest with project-relative so
     mcp: { confirm: false, server: 'harness', tool: 'echo' },
     routeId: 'tool:harness/echo',
   }));
+  expect(manifest.cli?.commands?.find((command) => command.routeId === 'tool:harness/echo'))
+    .not.toHaveProperty('projection');
   expect(Object.isFrozen(manifest)).toBe(true);
+});
+
+it('projects a CLI surface projection and option aliases without leaking projectionSources', () => {
+  const input = Object.freeze({
+    additionalProperties: false as const,
+    properties: Object.freeze({
+      argv: Object.freeze({ items: Object.freeze({ type: 'string' as const }), type: 'array' as const }),
+      cwd: Object.freeze({ type: 'string' as const }),
+      laneKey: Object.freeze({ type: 'string' as const }),
+    }),
+    required: Object.freeze(['argv', 'cwd']),
+    type: 'object' as const,
+  });
+  const toolRoute = {
+    config: {},
+    id: 'tool:hauler/hauler_request',
+    inputSchema: input,
+    kind: 'tool' as const,
+    provenance: { kind: 'conventional' as const, relativePath: 'src/mcp/hauler/tools/hauler_request.tsx' },
+    serverId: 'mcp:hauler',
+    source: '/project/src/mcp/hauler/tools/hauler_request.tsx',
+  };
+  const graph: CompiledRouteGraph = {
+    ...emptyCompiledRouteGraph,
+    cli: {
+      commands: [{
+        aliases: ['req'],
+        description: 'Submit a background cargo request',
+        exitCode: 'zero',
+        mcp: { confirm: false, server: 'hauler', tool: 'hauler_request' },
+        options: [
+          { key: 'argv', kind: 'string', option: 'argv', positional: 0, repeated: true, required: true },
+          { key: 'cwd', kind: 'string', option: 'cwd', repeated: false, required: false },
+          { aliases: ['lane-key'], key: 'laneKey', kind: 'string', option: 'lane', repeated: false, required: false },
+        ],
+        path: ['request'],
+        projection: {
+          defaults: { cwd: '.', laneKey: ['main', 'next'] },
+          mapInput: true,
+          module: 'src/mcp/hauler/tools/hauler_request.cli.ts',
+          relaxed: ['cwd'],
+        },
+        rendered: true,
+        routeId: 'tool:hauler/hauler_request',
+      }],
+      mode: 'generated',
+      projectionSources: {
+        'tool:hauler/hauler_request': '/project/src/mcp/hauler/tools/hauler_request.cli.ts',
+      },
+      routes: [toolRoute],
+    },
+    digest: 'p'.repeat(64),
+    servers: [{
+      id: 'mcp:hauler',
+      mode: 'generated',
+      name: 'hauler',
+      routes: [toolRoute],
+    }],
+  };
+
+  const manifest = routeManifestFor(graph, revision);
+  const command = manifest.cli?.commands?.[0];
+
+  expect(command?.projection).toEqual({
+    defaults: { cwd: '.', laneKey: ['main', 'next'] },
+    mapInput: true,
+    module: 'src/mcp/hauler/tools/hauler_request.cli.ts',
+    relaxed: ['cwd'],
+  });
+  expect(command?.projection?.defaults).not.toBe(graph.cli!.commands![0]!.projection!.defaults);
+  expect(command?.projection?.defaults?.['laneKey']).not.toBe(graph.cli!.commands![0]!.projection!.defaults!['laneKey']);
+  expect(Object.isFrozen(command?.projection?.defaults?.['laneKey'])).toBe(true);
+  expect(command?.options).toEqual([
+    { key: 'argv', kind: 'string', option: 'argv', positional: 0, repeated: true, required: true },
+    { key: 'cwd', kind: 'string', option: 'cwd', repeated: false, required: false },
+    { aliases: ['lane-key'], key: 'laneKey', kind: 'string', option: 'lane', repeated: false, required: false },
+  ]);
+  expect(manifest.cli).not.toHaveProperty('projectionSources');
+  expect(Object.isFrozen(command?.projection)).toBe(true);
+  expect(Object.isFrozen(command?.options[2]?.aliases)).toBe(true);
 });
 
 it('projects declared, default, and dynamic state budgets without fabricating absent state', () => {

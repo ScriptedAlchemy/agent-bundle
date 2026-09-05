@@ -135,8 +135,10 @@ plugin root — `agent-bundle.manifest.json` must sit beside `bin/` (exit `1` ot
 | `--json` | off | Print one JSON line `{ app, server, tool, url, port, resourceUri, sandboxOrigin }` instead of the human ready line, then keep running. |
 
 The command launches the plugin's own MCP server (`node <root>/mcp/<entry>.mjs`,
-`AGENT_BUNDLE_PLUGIN_ROOT=<root>`, declared static env with path tokens expanded), calls the
-opening tool once, and serves the App at `http://127.0.0.1:<port>/` on a loopback origin with a
+`AGENT_BUNDLE_PLUGIN_ROOT=<root>`, declared static env with path tokens expanded — the
+plugin-data token resolves outside the artifact, under
+`~/.agent-bundle/web-data/<plugin>-<digest>/<server>`, so a read-only install still launches),
+calls the opening tool once, and serves the App at `http://127.0.0.1:<port>/` on a loopback origin with a
 second loopback sandbox origin for the App document — the same host stack and consent behavior as
 `agent-bundle serve-app` and the Workbench. Human mode prints
 `MCP App <server>/<app> at <url> (tool <tool>; Ctrl-C stops the server)` and runs until Ctrl-C /

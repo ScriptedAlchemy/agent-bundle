@@ -239,8 +239,18 @@ const generatedCliBinEntry = (
     ? routeCli.routes.filter((route) => commandRouteIds.has(route.id))
     : [];
   const source = routes[0]?.source ?? configPath;
+  // A tool's projection module (#596) is a source of the bin like the route
+  // it projects; the graph keeps the absolute paths off its digest, so they
+  // travel here, not through `commands`.
+  const projectionSources = Object.fromEntries(
+    Object.entries(generatedMode ? routeCli.projectionSources ?? {} : {}).filter(([routeId]) => commandRouteIds.has(routeId)),
+  );
   return {
-    generatedCli: { commands, routes },
+    generatedCli: {
+      commands,
+      ...(Object.keys(projectionSources).length === 0 ? {} : { projectionSources }),
+      routes,
+    },
     id: `bin:${config.plugin.name}`,
     name: config.plugin.name,
     provenance: { kind: 'conventional', sourcePath: source },

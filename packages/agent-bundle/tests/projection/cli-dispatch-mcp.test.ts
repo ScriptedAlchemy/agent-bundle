@@ -103,7 +103,7 @@ describe('projected MCP tools at the CLI dispatch level', () => {
     expect(allowed.exitCode).toBe(0);
     expect(cliJson(allowed)).toEqual({
       executions: 1,
-      invocation: 'tool',
+      invocation: 'cli',
       marker: 'allowed',
       operationId: 'tool:harness/mutation-probe',
     });

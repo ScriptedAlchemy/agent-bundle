@@ -103,7 +103,11 @@ serves one App standalone in a plain browser tab through `agent-bundle serve-app
 project configures [`web`](../../reference/configuration.mdx#web), `agent-bundle dev` also serves
 `GET /web/<server>/<app>` on the foreground server — the same page, relay, routes, sandbox proxy,
 and consent behavior, bound to the current epoch's server session. Apps not listed in `web.apps`
-are 404. See [Exposing an App in the browser](../authoring/mcp.mdx#exposing-an-app-in-the-browser).
+are 404. The launch resolves from the artifact's declared projections (`?target=` is validated,
+and materially different launches answer 409 naming the choices), web sessions are keyed by
+epoch, server, and launch identity and retire only when a rebuild publishes a new epoch, and a
+non-read-only opening tool runs once per session, tool, App, and input. See
+[Exposing an App in the browser](../authoring/mcp.mdx#exposing-an-app-in-the-browser).
 
 A Skill leaf renders the emitted Skill document by default. Source/generated differences,
 frontmatter, resources, and eval coverage live in the inspector. Raw HTML, JSX/MDX, and Mermaid

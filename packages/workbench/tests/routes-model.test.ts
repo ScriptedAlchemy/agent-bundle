@@ -220,6 +220,62 @@ it('attaches the compiled command to its CLI route entry', () => {
   expect(entry?.command?.options.map((option) => option.key)).toEqual(['input', 'verbose']);
 });
 
+it('exposes a CLI surface projection and option aliases on the catalog entry', () => {
+  const catalog = routeCatalogFor({
+    ...manifest,
+    cli: {
+      commands: [{
+        aliases: ['req'],
+        description: 'Submit a background cargo request',
+        exitCode: 'zero',
+        mcp: { confirm: false, server: 'hauler', tool: 'hauler_request' },
+        options: [
+          { key: 'argv', kind: 'string', option: 'argv', positional: 0, repeated: true, required: true },
+          { key: 'cwd', kind: 'string', option: 'cwd', repeated: false, required: false },
+          { aliases: ['lane-key'], key: 'laneKey', kind: 'string', option: 'lane', repeated: false, required: false },
+        ],
+        path: ['request'],
+        projection: {
+          mapInput: true,
+          module: 'src/mcp/hauler/tools/hauler_request.cli.ts',
+          relaxed: ['cwd'],
+        },
+        routeId: 'tool:hauler/hauler_request',
+      }],
+      mode: 'generated',
+      routes: [{
+        config: [],
+        id: 'tool:hauler/hauler_request',
+        inputSchema: {
+          additionalProperties: false,
+          properties: {
+            argv: { items: { type: 'string' }, type: 'array' },
+            cwd: { type: 'string' },
+            laneKey: { type: 'string' },
+          },
+          required: ['argv', 'cwd'],
+          type: 'object',
+        },
+        kind: 'tool',
+        provenance: { kind: 'conventional' },
+        source: 'src/mcp/hauler/tools/hauler_request.tsx',
+      }],
+    },
+  });
+  const entry = catalog.groups.find((group) => group.kind === 'cli')?.entries[0];
+
+  expect(entry?.command?.projection).toEqual({
+    mapInput: true,
+    module: 'src/mcp/hauler/tools/hauler_request.cli.ts',
+    relaxed: ['cwd'],
+  });
+  expect(entry?.command?.options).toEqual([
+    { key: 'argv', kind: 'string', option: 'argv', positional: 0, repeated: true, required: true },
+    { key: 'cwd', kind: 'string', option: 'cwd', repeated: false, required: false },
+    { aliases: ['lane-key'], key: 'laneKey', kind: 'string', option: 'lane', repeated: false, required: false },
+  ]);
+});
+
 it('derives contract origin and other sharing routes for each catalog entry', () => {
   const catalog = routeCatalogFor(manifest);
   const tool = catalog.groups.flatMap((group) => group.entries)
@@ -337,6 +393,31 @@ it('formats CLI usage and a shell-copyable invocation from validated input', () 
     tag: ['fiction', 'history'],
     verbose: true,
   })).toBe("library audit '/Audio Books' --format json --tag fiction --tag history --verbose");
+});
+
+it('formats usage and invocation from projected keys to option spellings', () => {
+  const command = {
+    aliases: ['req'],
+    exitCode: 'zero' as const,
+    options: [
+      { key: 'argv', kind: 'string' as const, option: 'argv', positional: 0, repeated: true, required: true },
+      { key: 'cwd', kind: 'string' as const, option: 'cwd', repeated: false, required: false },
+      { aliases: ['lane-key'], key: 'laneKey', kind: 'string' as const, option: 'lane', repeated: false, required: false },
+    ],
+    path: ['request'],
+    projection: {
+      mapInput: true,
+      module: 'src/mcp/hauler/tools/hauler_request.cli.ts',
+      relaxed: ['cwd'],
+    },
+    routeId: 'tool:hauler/hauler_request',
+  };
+
+  expect(cliCommandUsage(command)).toBe('request <argv...> [--cwd <string>] [--lane <string>]');
+  expect(cliCommandInvocation(command, {
+    argv: ['cargo', 'check'],
+    laneKey: 'fast',
+  })).toBe('request cargo check --lane fast');
 });
 
 it('marks required and optional repeated named flags in CLI usage', () => {

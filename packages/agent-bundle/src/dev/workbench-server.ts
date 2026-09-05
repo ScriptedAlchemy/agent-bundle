@@ -1017,6 +1017,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
     ...(runtime === undefined ? {} : { runtime }),
     skillDocuments,
     trace: traceHub,
+    webHostLaunch: { projectRoot: root, registry },
     ...(options.workbenchDevOrigins === undefined || options.workbenchDevOrigins.length === 0
       ? {}
       : { workbenchDevOrigins: options.workbenchDevOrigins }),

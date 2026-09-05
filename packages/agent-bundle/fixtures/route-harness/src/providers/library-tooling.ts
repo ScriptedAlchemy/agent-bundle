@@ -9,7 +9,12 @@ import type { AgentProviderContext } from 'agent-bundle';
 export default async function libraryTooling({ invocation, signal }: AgentProviderContext) {
   if (signal.aborted) throw new DOMException('aborted', 'AbortError');
   const input = invocation.kind === 'tool' ? invocation.props.input : undefined;
-  if (typeof input === 'object' && input !== null && (input as { readonly failProvider?: unknown }).failProvider === true) {
+  const failProvider = typeof input === 'object'
+    && input !== null
+    && (input as { readonly failProvider?: unknown }).failProvider === true;
+  const failCliProvider = invocation.kind === 'cli'
+    && invocation.props.args.includes('{"failProvider":true}');
+  if (failProvider || failCliProvider) {
     throw new Error('ffprobe is not installed');
   }
   const surface = invocation.kind === 'tool'

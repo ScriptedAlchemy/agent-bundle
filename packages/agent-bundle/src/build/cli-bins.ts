@@ -93,6 +93,23 @@ const generatedCli = (bin: NormalizedBinEntry): NonNullable<NormalizedBinEntry['
   return bin.generatedCli;
 };
 
+/** Every project source that can change a generated routed-CLI executable. */
+export const cliBinSourceInputs = (
+  model: NormalizedPlugin,
+  bin: NormalizedBinEntry,
+): readonly string[] => {
+  const cli = generatedCli(bin);
+  return Object.freeze([...new Set([
+    bin.provenance.sourcePath,
+    model.metadata.provenance.sourcePath,
+    ...cli.routes.map((route) => route.source),
+    ...Object.values(cli.projectionSources ?? {}),
+    ...(model.layouts ?? []).map((layout) => layout.source),
+    ...(model.providers ?? []).map((provider) => provider.source),
+    ...(model.state === undefined ? [] : [model.state.source]),
+  ])]);
+};
+
 export const planCompiledCliBins = (
   model: NormalizedPlugin,
   options: { readonly outDir: string; readonly target: string },
@@ -101,14 +118,7 @@ export const planCompiledCliBins = (
   return Object.freeze(routedCliBins(model).map((bin): PlannedCliBin => {
     const cli = generatedCli(bin);
     const rendered = cli.commands.some((command) => command.rendered);
-    const sourceInputs = Object.freeze([...new Set([
-      bin.provenance.sourcePath,
-      model.metadata.provenance.sourcePath,
-      ...cli.routes.map((route) => route.source),
-      ...(model.layouts ?? []).map((layout) => layout.source),
-      ...(model.providers ?? []).map((provider) => provider.source),
-      ...(model.state === undefined ? [] : [model.state.source]),
-    ])]);
+    const sourceInputs = cliBinSourceInputs(model, bin);
     return Object.freeze({
       bin,
       id: bin.id,
@@ -169,6 +179,7 @@ export const cliBinRslibEntries = (
       },
       ...(model.notices === undefined ? {} : { noticeRetention: model.notices.retention.resolved }),
       providers: model.providers ?? [],
+      ...(cli.projectionSources === undefined ? {} : { projectionSources: cli.projectionSources }),
       routes: cli.routes,
       ...(model.state === undefined ? {} : { state: model.state }),
       // Durable state anchors on the artifact root (the parent of `bin/`),

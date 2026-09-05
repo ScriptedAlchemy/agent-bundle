@@ -22,8 +22,9 @@ const REGISTRY_SYMBOL = Symbol.for(AGENT_TEST_REGISTRY_SYMBOL_KEY);
  * 4: `providerLoaders` (conventional context providers mounted by the harness).
  * 5: `layoutLoaders` (conventional layouts composed around manifest renders).
  * 6: `manifest.scripts` (the script-dispatch level's inventory).
+ * 7: `projectionLoaders` (explicit CLI projection modules).
  */
-export const AGENT_TEST_REGISTRY_VERSION = 6;
+export const AGENT_TEST_REGISTRY_VERSION = 7;
 
 export type AgentStateModuleLoader = () => Promise<{
   readonly default: AgentStateDefinition<unknown, AgentStateEventSchemas>;
@@ -31,6 +32,7 @@ export type AgentStateModuleLoader = () => Promise<{
 
 export type AgentProviderModuleLoader = () => Promise<{ readonly default?: unknown }>;
 export type AgentLayoutModuleLoader = () => Promise<AgentLayoutModule>;
+export type AgentProjectionModuleLoader = () => Promise<Readonly<Record<string, unknown>>>;
 
 export interface AgentTestRouteRegistry {
   /** Lazy loaders keyed by compiled layout id (`layout:root`, `layout:mcp:<server>`). */
@@ -38,6 +40,8 @@ export interface AgentTestRouteRegistry {
   /** Lazy loaders keyed by compiled route id, so a test only compiles the routes it renders. */
   readonly loaders: Readonly<Record<string, AgentRouteModuleLoader>>;
   readonly manifest: AgentBundleTestManifest;
+  /** Lazy loaders keyed by backing tool route id; present only for explicit CLI projections. */
+  readonly projectionLoaders?: Readonly<Record<string, AgentProjectionModuleLoader>>;
   /** Lazy loaders keyed by compiled provider id; present only when the project declares providers. */
   readonly providerLoaders?: Readonly<Record<string, AgentProviderModuleLoader>>;
   readonly stateLoader?: AgentStateModuleLoader;
@@ -126,6 +130,16 @@ export const registeredStateLoader = (
   const registry = registered();
   if (registry === undefined || !producedRegisteredLoaders(registry, manifest)) return undefined;
   return registry.stateLoader;
+};
+
+/** The projection-module loader generated beside the registered manifest for one backing tool route id. */
+export const registeredProjectionLoader = (
+  manifest: AgentBundleTestManifest,
+  routeId: string,
+): AgentProjectionModuleLoader | undefined => {
+  const registry = registered();
+  if (registry === undefined || !producedRegisteredLoaders(registry, manifest)) return undefined;
+  return registry.projectionLoaders?.[routeId];
 };
 
 /** The provider-module loader generated beside the registered manifest for one compiled provider id. */

@@ -823,7 +823,7 @@ export default async function inspect({ input, signal }: CliRouteProps<typeof in
 
 The compiler statically projects `inputSchema` onto argv (the bounded grammar
 and every policy rule are documented in
-[Diagnostics](diagnostics.md#route-graph-state-layout-and-provider-conventions-ab4800ab4839-ab4940ab4942)), generates nested
+[Diagnostics](diagnostics.md#route-graph-state-layout-and-provider-conventions-ab4800ab4842-ab4940ab4942)), generates nested
 help (`--help` at every level, `--version` at the root), and emits
 `dist/bin/<plugin-name>.js` with the shebang and executable bit through the
 same Rslib synthesis as every other bin. At run time the shell resolves the
@@ -845,8 +845,9 @@ hops, the `.js` specifier mapping onto its `.ts`/`.tsx` source) is resolved
 statically, parsed in the declaring module's scope under the same grammar,
 and normalized once into a `RouteContract` shared by every route — CLI
 command or MCP tool — that binds it; a reference the resolver cannot follow
-is `AB4838` and a cyclic one `AB4839`, both documented in the same
-[Diagnostics](diagnostics.md#route-graph-state-layout-and-provider-conventions-ab4800ab4839-ab4940ab4942)
+is `AB4838` and a cyclic one `AB4839` (CLI routes, or a tool route with a
+CLI projection), both documented in the same
+[Diagnostics](diagnostics.md#route-graph-state-layout-and-provider-conventions-ab4800ab4842-ab4940ab4942)
 section.
 
 When the module's `inputSchema` rejects the parsed argv, the shell reports
@@ -962,16 +963,19 @@ export default defineConfig({
 });
 ```
 
-`true` selects every eligible tool. Object-form `include` defaults to every
+`true` selects every eligible tool. A tool that already has a colocated
+`<tool>.cli.{ts,tsx}` is not eligible — the explicit projection is the
+command for that operation. Object-form `include` defaults to every
 eligible tool when omitted; `exclude` removes matches afterward. Patterns
 match the `<server>:<tool>` identity and support only literal text plus `*`
 (zero or more characters). Every declared pattern must match at least one
 eligible tool; `include: []` and misspellings fail with `AB4822`, whose
-diagnostic lists the available identities. Excluding every selected tool is
-legal.
+diagnostic lists the available identities (and names the projection module
+when the only matches were excluded by a `.cli.ts`). Excluding every
+selected tool is legal.
 
-Each projected tool runs as `<plugin-bin> <server> <tool>` with the protocol
-tool name preserved verbatim. Its only input option is
+Each bulk-projected tool runs as `<plugin-bin> <server> <tool>` with the
+protocol tool name preserved verbatim. Its only input option is
 `--input '<one JSON object>'`; omission supplies `{}`, while invalid JSON,
 arrays, `null`, and scalars exit 2 before route execution. A tool is read-only
 only when its static MCP annotations explicitly set `readOnlyHint: true`.
@@ -1005,6 +1009,62 @@ This is an in-house projection over the compiled route graph, per gate G7; it
 does not depend on MCPorter or introduce a second command model. MCPorter can
 still be pointed independently at the generated MCP server when a live-server
 client is desired.
+
+The explicit form is a colocated `<tool>.cli.ts` (or `.cli.tsx`) projection
+module beside `src/mcp/<server>/tools/<tool>.tsx` (or `.ts`). It is never a
+route: discovery excludes `.cli.{ts,tsx}` before identity derivation, pairs
+the file with the sibling tool, and does not list it on
+`RouteContract.routes`. The suffix is reserved under `src/mcp/**`; prefix
+`_` parks a file the same way as any other conventional module. An orphan
+or a `.cli.*` under `resources/`, `prompts/`, or `apps/` is `AB4843`.
+
+The module exports a static `config` that satisfies `CliProjectionConfig`
+from `agent-bundle/routes` (the same extract grammar as a route `config`)
+and, optionally, a synchronous `mapInput`:
+
+- `command` — path segments; default `[tool]`; each must pass
+  `safeIdentitySegment`.
+- `description` — help text; default: the tool's `config.description`.
+- `positionals` — canonical keys consumed as bare arguments, in order
+  (same rules as a `src/cli` route).
+- `flags` — keyed by the canonical key of the tool's
+  `RouteContract.input`. Each entry may set `name` (CLI spelling,
+  kebab-case, no leading dashes; default `kebab(key)`), `aliases` (extra
+  long-form spellings), `description` (overrides schema `.describe()`),
+  `default` (CLI-only, applied by the shell before `mapInput`), and
+  `required: false` (relax a canonical-required key; legal only when
+  `mapInput` is exported).
+- `aliases` — command aliases (same rules as a `src/cli` route).
+- `confirm` — default `!(tool config.annotations.readOnlyHint === true)`.
+- `exitCode` — `'result'` or `'zero'`; default: the tool's
+  `config.exitCode ?? 'zero'`.
+
+`mapInput` receives the parsed CLI input (canonical keys, after
+projection defaults) and must return `z.input<typeof inputSchema>`. It
+is recorded statically (`scanRouteModuleExports`) and loaded only by the
+CLI bin; the MCP worker never sees the module. `mapInput` is a surface
+adapter, not domain logic: it only reshapes or defaults argv into the
+canonical input (renames, splitting lists, deriving a working directory).
+Domain validation and behaviour stay in the operation — its
+`inputSchema` refinements and its component. A mapper that recreates
+command logic is the duplication the projection exists to remove. A
+contract problem is `AB4844`; a grammar that does not bind to the tool's
+contract is `AB4845`. Message shape:
+`CLI projection <module> for tool:<server>/<tool>: <detail>.`
+
+The explicit projection takes precedence over the bulk `mcpCommands`
+projection: that tool is removed from the eligible set so one operation
+never becomes two commands. The compiled command's `routeId` is the tool
+id; at run time the tool runs with
+`invocation.kind: 'cli'` and `operationId` equal to that tool id
+(`tool:<server>/<tool>`), so a route can pick surface wording from
+`agent().invocation.kind` while the operation stays the tool. A route
+observes `kind: 'cli'` whenever it runs from the generated CLI
+executable, whichever projection mechanism produced the command — the
+bulk `--input` projection is a CLI surface too. The generated MCP
+server still passes `kind: 'tool'`.
+`inspect --routes` prints `cli.commands[].projection`
+(`module`, `mapInput`, `defaults?`, `relaxed?`) and `options[].{key,option,aliases}`.
 
 ### The stdio MCP lifecycle shell
 
@@ -1571,6 +1631,28 @@ gains a `web` section and the bin exists even without authored CLI commands.
 `agent-bundle dev` serves the same host at `GET /web/<server>/<app>` (404
 for Apps not listed in `web.apps`). There is no `web/` directory in the
 artifact.
+
+`--profile` (and the dev page's preview profile) is browser presentation
+only; it never selects a host artifact. The dev `/web` route resolves the
+server's launch from the projections the artifact manifest declares: an
+explicit `?target=<projection>` is validated against the declared
+projections that launch the server (invalid is an error, never a fallback);
+without one, every candidate's normalized launch descriptor (command,
+arguments, cwd, declared env, runtime binding) is compared, materially
+identical launches proceed unprompted whatever the host order, and
+materially different ones answer 409 naming the choices. No portable
+projection or `mcp.json` is required — a Claude- or Codex-only build opens
+`/web/<server>/<app>` from its own projection. Web sessions are cached by
+epoch, server, and resolved launch identity; a successful rebuild retires
+unused sessions of older epochs (pages still leasing one keep it until
+their last lease releases), and a failed rebuild retires nothing. Opening an App page is not an unbounded
+mutation: an opening tool annotated `readOnlyHint: true` runs on every page
+load, while any other opening tool runs once per session, tool, App, and
+input, and a refresh rebinds that retained result. `<plugin> web` keeps the
+installed artifact immutable: framework-owned per-server web state
+(`${PLUGIN_DATA}` in declared env) lives under the user's home
+(`~/.agent-bundle/web-data/<plugin>-<digest>/<server>`), never inside the
+plugin root, so a read-only install still launches.
 
 ## `agent-bundle/app` — the App-side bridge client
 
