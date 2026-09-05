@@ -300,13 +300,13 @@ it('emits a relocatable manifest that survives moving the composite root', async
   const unlistedArgument = forge();
   forgedLaunch(unlistedArgument).args[1] = { kind: 'artifact', path: 'config/not-a-file.json' };
   expect(() => parseArtifactManifest(`${stableJson(unlistedArgument)}\n`)).toThrow(
-    /executables\.mcpServers\[mcp:echo\]\.launch\.args\[1\]\.path names "config\/not-a-file\.json", which is not inside the artifact/u,
+    /executables\.mcpServers\[echo\]\.launch\.args\[1\]\.path names "config\/not-a-file\.json", which is not inside the artifact/u,
   );
 
   const unlistedWorker = forge();
   forgedLaunch(unlistedWorker).worker = 'mcp/not-a-file.mjs';
   expect(() => parseArtifactManifest(`${stableJson(unlistedWorker)}\n`)).toThrow(
-    /executables\.mcpServers\[mcp:echo\]\.launch\.worker names "mcp\/not-a-file\.mjs", which is not a manifest file/u,
+    /executables\.mcpServers\[echo\]\.launch\.worker names "mcp\/not-a-file\.mjs", which is not a manifest file/u,
   );
 
   const unlaunchableWebServer = forge();
