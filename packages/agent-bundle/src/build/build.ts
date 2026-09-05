@@ -4,7 +4,7 @@ import { basename, dirname, join, relative, resolve } from 'node:path';
 import packageManifest from '../../package.json' with { type: 'json' };
 
 import type { TargetRegistry } from '../adapters/registry.ts';
-import { DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
+import { deduplicateDiagnostics, DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
 import type { ProjectContext } from '../core/project-context.ts';
 import { pathTokens, type AgentBundleToolsConfig, type NormalizedPlugin } from '../core/types.ts';
 import { assertInside, isInsideOrEqual } from '../core/paths.ts';
