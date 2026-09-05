@@ -152,11 +152,12 @@
 .inspector-timing-bar span { background: #0b5bd3; display: block; height: 100%; }
 .inspector-timing-duration { color: #596372; text-align: right; }
 
-/* Event route */
-.event-host-selector { align-items: center; display: flex; flex-wrap: wrap; gap: 6px; }
-.event-host-selector button { background: #fff; border: 1px solid #aeb8c6; border-radius: 999px; color: #26364b; cursor: pointer; font-size: 12px; font-weight: 700; padding: 5px 12px; }
-.event-host-selector button[aria-pressed="true"] { background: #e6effd; border-color: #0b5bd3; color: #0b3f8f; }
+/* Invocation surfaces and event hosts */
+.route-surface-selector, .event-host-selector { align-items: center; display: flex; flex-wrap: wrap; gap: 6px; }
+.route-surface-selector button, .event-host-selector button { background: #fff; border: 1px solid #aeb8c6; border-radius: 999px; color: #26364b; cursor: pointer; font-size: 12px; font-weight: 700; padding: 5px 12px; }
+.route-surface-selector button[aria-pressed="true"], .event-host-selector button[aria-pressed="true"] { background: #e6effd; border-color: #0b5bd3; color: #0b3f8f; }
 .event-host-selector button:disabled { cursor: not-allowed; opacity: .45; }
+.route-surface-selector code { font-size: 11px; }
 .event-host-note { color: #596372; font-size: 12px; margin-left: 6px; }
 .event-mapping, .event-native, .event-canonical, .event-replay { display: grid; gap: 12px; }
 .event-mapping h3, .event-native h3, .event-replay h3 { color: #35445a; font-size: 12px; letter-spacing: .03em; margin: 0; text-transform: uppercase; }

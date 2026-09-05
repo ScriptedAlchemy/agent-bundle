@@ -7,7 +7,6 @@ export type {
   RouteInvocationCliProjection,
   RouteInvocationEvent,
   RouteInvocationEventHost,
-  RouteInvocationEventOptions,
   RouteInvocationEventPayload,
   RouteInvocationHostProjection,
   RouteInvocationKind,
@@ -18,6 +17,7 @@ export type {
   RouteInvocationRequest,
   RouteInvocationStatus,
   RouteInvocationSummary,
+  RouteInvocationSurface,
   RouteInvocationTiming,
 } from '../dev/routes/route-invocation.ts';
 export type {

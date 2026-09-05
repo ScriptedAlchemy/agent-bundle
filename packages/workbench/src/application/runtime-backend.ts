@@ -91,8 +91,13 @@ const selectedSurface = (
   leaf: ApplicationLeaf,
   request?: RouteInvocationRequest,
 ): DevRuntimeSurface | undefined => {
+  if (
+    request?.surface !== undefined
+    && request.surface.kind !== 'mcp'
+    && request.surface.kind !== 'event'
+  ) return undefined;
   const matches = surfaces.filter((surface) => surfaceMatches(surface, leaf));
-  const host = request?.event?.host;
+  const host = request?.surface?.kind === 'event' ? request.surface.host : undefined;
   return host === undefined
     ? matches[0]
     : matches.find((surface) =>
@@ -103,7 +108,7 @@ const selectedTarget = (
   surface: DevRuntimeSurface,
   request: RouteInvocationRequest,
 ): string | undefined => {
-  const host = request.event?.host;
+  const host = request.surface?.kind === 'event' ? request.surface.host : undefined;
   if (host !== undefined && surface.targets.includes(host)) return host;
   if (
     surface.defaultTarget !== undefined &&
@@ -234,6 +239,14 @@ const invocationForRun = (
     sourceRevision: run.vector.sourceRevision,
     startedAt: run.startedAt,
     status: run.status,
+    surface: kind === 'event-route'
+      ? Object.freeze({
+          ...(run.target === 'claude' || run.target === 'codex' || run.target === 'cursor'
+            ? { host: run.target }
+            : {}),
+          kind: 'event' as const,
+        })
+      : Object.freeze({ kind: 'mcp' as const }),
     timings,
   });
 };

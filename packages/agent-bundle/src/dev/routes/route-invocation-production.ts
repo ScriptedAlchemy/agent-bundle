@@ -114,7 +114,7 @@ const eventWrapperPath = (
   request: ProductionRequest,
 ): string | undefined => {
   const event = request.manifest.routes[request.routeId]?.event;
-  const target = request.eventTarget;
+  const target = request.surface.kind === 'event' ? request.surface.host : undefined;
   if (event === undefined || target === undefined) return undefined;
   const stem = `event-route-${event.replace('/', '-')}`;
   const suffixed = join(request.artifactRoot, 'hooks', `${stem}.${target}.mjs`);
@@ -129,10 +129,7 @@ const prepareInput = async (
   signal: AbortSignal,
 ): Promise<Readonly<{ readonly input: JsonValue; readonly preflight?: CompiledEventPreflight }>> => {
   const route = request.manifest.routes[request.routeId];
-  const cliCommand = request.args === undefined
-    ? undefined
-    : request.manifest.cliCommands.find((candidate) => candidate.routeId === request.routeId);
-  if (route?.kind === 'cli' || cliCommand !== undefined) {
+  if (request.surface.kind === 'cli') {
     const binRoot = join(request.artifactRoot, 'bin');
     if (!existsSync(binRoot)) {
       throw new ProductionRouteInvocationError(
@@ -147,7 +144,7 @@ const prepareInput = async (
       const module = await importedModule<Partial<CompiledCliInvocationModule>>(join(binRoot, name));
       if (typeof module.prepareRouteInvocation !== 'function') continue;
       return {
-        input: module.prepareRouteInvocation(request.routeId, request.args ?? []) as JsonValue,
+        input: module.prepareRouteInvocation(request.routeId, request.surface.args) as JsonValue,
       };
     }
     throw new ProductionRouteInvocationError(
@@ -174,21 +171,21 @@ const invocationFor = (
 ): AgentRenderInvocation => {
   const route = request.manifest.routes[request.routeId];
   if (route === undefined) throw new Error(`Route ${JSON.stringify(request.routeId)} is absent from the compiled manifest.`);
-  const cliCommand = request.args === undefined
-    ? undefined
-    : request.manifest.cliCommands.find((candidate) => candidate.routeId === request.routeId);
-  if (cliCommand !== undefined) {
-    return { kind: 'cli', props: { args: request.args ?? [], command: cliCommand.path.join(' ') } };
+  if (request.surface.kind === 'cli') {
+    return {
+      kind: 'cli',
+      props: { args: request.surface.args, command: request.surface.command },
+    };
   }
   switch (route.kind) {
     case 'cli': {
       const command = request.manifest.cliCommands.find((candidate) => candidate.routeId === request.routeId);
       if (command === undefined) throw new Error(`CLI route ${JSON.stringify(request.routeId)} has no compiled command.`);
-      return { kind: 'cli', props: { args: request.args ?? [], command: command.path.join(' ') } };
+      return { kind: 'cli', props: { args: [], command: command.path.join(' ') } };
     }
     case 'script': {
       const script = request.manifest.scripts.find((candidate) => candidate.routeId === request.routeId);
-      return { kind: 'script', props: { input: request.args ?? [], name: script?.name ?? request.routeId } };
+      return { kind: 'script', props: { input: [], name: script?.name ?? request.routeId } };
     }
     case 'event-route':
       return {
@@ -214,10 +211,7 @@ const invocationFor = (
 const candidatesFor = async (request: ProductionRequest): Promise<readonly string[]> => {
   const route = request.manifest.routes[request.routeId];
   if (route === undefined) return Object.freeze([]);
-  if (
-    request.args !== undefined
-    && request.manifest.cliCommands.some((candidate) => candidate.routeId === request.routeId)
-  ) {
+  if (request.surface.kind === 'cli') {
     return workerFiles(join(request.artifactRoot, 'bin'));
   }
   switch (route.kind) {
@@ -409,7 +403,7 @@ const streamFromWorker = (
 
 const routeProps = (request: ProductionRequest, input: JsonValue): Readonly<Record<string, unknown>> => {
   const kind = request.manifest.routes[request.routeId]?.kind;
-  if (kind === 'script') return { argv: request.args ?? [] };
+  if (kind === 'script') return { argv: [] };
   return kind === 'event-route'
     ? {
         canonical: (input as { readonly canonical?: unknown }).canonical,

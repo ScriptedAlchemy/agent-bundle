@@ -210,6 +210,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     expect(tool.invocation.events.at(-1)?.type).toBe('complete');
     expect(tool.invocation.document).toBeDefined();
     expect(tool.invocation.projection.mcp).toBeDefined();
+    expect(tool.invocation.surface).toEqual({ kind: 'mcp' });
     expect(tool.invocation.result).toEqual({
       alias: 'aliased',
       define: 'defined',
@@ -232,7 +233,6 @@ it('invokes compiled tool and event routes through the foreground server', { tim
 
     const eventResponse = await fetch(`${server.url}/api/routes/invocations`, {
       body: JSON.stringify({
-        event: { host: 'claude' },
         input: {
           cwd: project.root,
           hook_event_name: 'PostToolUse',
@@ -244,6 +244,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
           transcript_path: join(project.root, 'transcript.json'),
         },
         routeId: 'event:tool/after',
+        surface: { host: 'claude', kind: 'event' },
       }),
       headers,
       method: 'POST',
@@ -294,7 +295,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
       ],
     ] as const) {
       const response = await fetch(`${server.url}/api/routes/invocations`, {
-        body: JSON.stringify({ event: { host: 'claude' }, input, routeId }),
+        body: JSON.stringify({ input, routeId, surface: { host: 'claude', kind: 'event' } }),
         headers,
         method: 'POST',
       });
@@ -321,7 +322,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     }
 
     const cliResponse = await fetch(`${server.url}/api/routes/invocations`, {
-      body: JSON.stringify({ args: ['Ada'], routeId: 'cli:greet' }),
+      body: JSON.stringify({ routeId: 'cli:greet', surface: { args: ['Ada'], command: 'greet', kind: 'cli' } }),
       headers,
       method: 'POST',
     });
@@ -337,10 +338,14 @@ it('invokes compiled tool and event routes through the foreground server', { tim
       },
       result: { message: 'Hello, Ada.' },
       status: 'succeeded',
+      surface: { args: ['Ada'], command: 'greet', kind: 'cli' },
     });
 
     const projectedCliResponse = await fetch(`${server.url}/api/routes/invocations`, {
-      body: JSON.stringify({ args: ['--name', 'projection'], routeId: 'tool:status/report' }),
+      body: JSON.stringify({
+        routeId: 'tool:status/report',
+        surface: { args: ['--name', 'projection'], command: 'report', kind: 'cli' },
+      }),
       headers,
       method: 'POST',
     });
@@ -353,6 +358,16 @@ it('invokes compiled tool and event routes through the foreground server', { tim
       service: 'projection',
       source: 'cli-projection',
       stateRoot,
+    });
+    expect(projectedCli.invocation.projection.cli).toMatchObject({
+      exitCode: 0,
+      text: expect.stringContaining('Service projection'),
+    });
+    expect(projectedCli.invocation.projection.mcp).toBeUndefined();
+    expect(projectedCli.invocation.surface).toEqual({
+      args: ['--name', 'projection'],
+      command: 'report',
+      kind: 'cli',
     });
     const binName = (await readdir(join(artifactRoot, 'bin')))
       .find((name) => name.endsWith('.mjs') && !name.endsWith('-flight.mjs'));
@@ -368,12 +383,38 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     expect(generatedBin.code, generatedBin.stderr).toBe(0);
     expect(projectedCli.invocation.result).toEqual(JSON.parse(generatedBin.stdout));
 
-    const counter = async (mode?: 'production' | 'unit-render'): Promise<RouteInvocationResponse> => {
+    const mismatchedCommand = await fetch(`${server.url}/api/routes/invocations`, {
+      body: JSON.stringify({
+        routeId: 'tool:status/report',
+        surface: { args: [], command: 'greet', kind: 'cli' },
+      }),
+      headers,
+      method: 'POST',
+    });
+    expect(mismatchedCommand.status).toBe(400);
+    await expect(mismatchedCommand.json()).resolves.toMatchObject({
+      diagnostic: { code: 'AB8253' },
+    });
+
+    const duplicateCliOperation = await fetch(`${server.url}/api/routes/invocations`, {
+      body: JSON.stringify({ routeId: 'cli:report' }),
+      headers,
+      method: 'POST',
+    });
+    expect(duplicateCliOperation.status).toBe(400);
+    await expect(duplicateCliOperation.json()).resolves.toEqual({
+      diagnostic: {
+        code: 'AB8254',
+        message: 'CLI operation "cli:report" is a projection of canonical operation "tool:status/report"; invoke that route with surface {"kind":"cli","command":"report","args":[]}.',
+      },
+    });
+
+    const counter = async (unitRender = false): Promise<RouteInvocationResponse> => {
       const response = await fetch(`${server!.url}/api/routes/invocations`, {
         body: JSON.stringify({
-          input: { key: mode ?? 'production' },
-          ...(mode === undefined ? {} : { mode }),
+          input: { key: unitRender ? 'unit-render' : 'production' },
           routeId: 'tool:status/counter',
+          ...(unitRender ? { surface: { kind: 'unit-render' } } : {}),
         }),
         headers,
         method: 'POST',
@@ -383,7 +424,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     };
     const firstCounter = await counter();
     const secondCounter = await counter();
-    const isolatedCounter = await counter('unit-render');
+    const isolatedCounter = await counter(true);
     expect(firstCounter.invocation.result).toEqual({ count: 1 });
     expect(secondCounter.invocation.result).toEqual({ count: 2 });
     expect(isolatedCounter.invocation.result).toEqual({ count: 1 });

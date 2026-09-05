@@ -3,7 +3,7 @@
  * selector in front of it. `Canonical` submits the canonical event payload the
  * route's schema describes; `Claude | Codex | Cursor` submit that host's
  * native hook payload — seeded from the served lifecycle fixture — as
- * `event: { host, fixtureId }` so the service canonicalizes it exactly as the
+ * `surface: { kind: 'event', host, fixtureId }` so the service canonicalizes it exactly as the
  * emitted wrapper would. The plugin-visible decision (the rendered document)
  * stays the default result; the codec panes the old Hooks page led with are
  * secondary tabs: canonical → host mapping, native in / out, canonical
@@ -71,9 +71,16 @@ export const eventFixturesFor = (lifecycle: Lifecycle | undefined): readonly Rou
 export const eventRequestFor = (
   host: EventHostSelection,
   draft: RouteInvocationDraft,
+  fixtureId?: string,
 ): RouteInvocationDraft => {
-  if (host === 'canonical') return draft;
-  return Object.freeze({ ...draft, event: Object.freeze({ host }) });
+  return Object.freeze({
+    ...draft,
+    surface: Object.freeze({
+      ...(fixtureId === undefined ? {} : { fixtureId }),
+      ...(host === 'canonical' ? {} : { host }),
+      kind: 'event',
+    }),
+  });
 };
 
 const Rows = ({ rows }: { readonly rows: readonly { readonly label: string; readonly value: string }[] }): React.ReactNode => <dl className="inspector-rows">
@@ -165,7 +172,10 @@ const ReplayTab = ({ controller, defaultHost, lifecycle }: {
       return;
     }
     setError(undefined);
-    controller.run(Object.freeze({ event: Object.freeze({ host }), input: parsed as JsonObject }));
+    controller.run(Object.freeze({
+      input: parsed as JsonObject,
+      surface: Object.freeze({ host, kind: 'event' }),
+    }));
   };
   return <div className="event-replay">
     <p className="result-note">Replay a receipt a real host produced: paste its native payload and run it through this route exactly as the emitted wrapper would.</p>

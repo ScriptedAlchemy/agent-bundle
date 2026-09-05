@@ -35,6 +35,7 @@ const invocation = Object.freeze({
   sourceRevision: 'source-a',
   startedAt: '2026-09-05T07:00:00.000Z',
   status: 'succeeded' as const,
+  surface: Object.freeze({ kind: 'mcp' as const }),
   timings: Object.freeze([]),
 }) satisfies RouteInvocation;
 
@@ -120,6 +121,7 @@ it('selects the first accepting backend and creates exact summaries', () => {
     sourceRevision: invocation.sourceRevision,
     startedAt: invocation.startedAt,
     status: invocation.status,
+    surface: { kind: 'mcp' },
     timings: [],
   });
 });

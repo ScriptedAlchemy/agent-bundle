@@ -8,7 +8,11 @@
 import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 
 import type { Diagnostic } from '../../../agent-bundle/src/contracts/diagnostics.ts';
-import type { RouteInvocationRequest, RouteInvocationSummary } from '../../../agent-bundle/src/contracts/invocations.ts';
+import type {
+  RouteInvocationRequest,
+  RouteInvocationSummary,
+  RouteInvocationSurface,
+} from '../../../agent-bundle/src/contracts/invocations.ts';
 import { errorMessage, isAbortError, isRecord } from '../client-helpers.ts';
 import type { WorkbenchLocation } from '../shell/workbench-location.ts';
 import type { ApplicationLeaf } from './application-tree-model.ts';
@@ -202,7 +206,7 @@ export interface ExecutableRouteWorkspaceProps {
   readonly leaf: ApplicationLeaf;
   readonly onNavigate: (location: WorkbenchLocation) => void;
   /** Adds request options (an event host, a fixture id) to what the editor produced. */
-  readonly requestFor?: (draft: RouteInvocationDraft) => RouteInvocationDraft;
+  readonly requestFor?: (draft: RouteInvocationDraft, fixtureId?: string) => RouteInvocationDraft;
   readonly tab?: string;
   /** Rendered between the header and the editor (the event host selector). */
   readonly toolbar?: React.ReactNode;
@@ -238,8 +242,8 @@ const leafKindLabel = (leaf: ApplicationLeaf): string => {
 };
 
 /** Title, kind, route id, and description — the header every workspace body shares. */
-export const WorkspaceHeader = ({ leaf }: { readonly leaf: ApplicationLeaf }): React.ReactNode => <header className="route-workspace-heading">
-  <p className="route-workspace-eyebrow">{leafKindLabel(leaf)}{leaf.routeId === undefined ? '' : ` · ${leaf.routeId}`}</p>
+export const WorkspaceHeader = ({ leaf, surface }: { readonly leaf: ApplicationLeaf; readonly surface?: string }): React.ReactNode => <header className="route-workspace-heading">
+  <p className="route-workspace-eyebrow">{leafKindLabel(leaf)}{leaf.routeId === undefined ? '' : ` · ${leaf.routeId}`}{surface === undefined ? '' : ` · ${surface}`}</p>
   <h1>{leaf.label}</h1>
   {leaf.description === undefined ? undefined : <p className="route-workspace-description">{leaf.description}</p>}
 </header>;
@@ -258,6 +262,31 @@ export const ExecutableRouteWorkspace = ({
   toolbar,
 }: ExecutableRouteWorkspaceProps): React.ReactNode => {
   const editorLeaf = inputLeaf ?? leaf;
+  const projectedTool = leaf.ref.kind === 'tool' && leaf.command?.projection !== undefined;
+  const [selectedSurface, setSelectedSurface] = useState<RouteInvocationSurface['kind']>(() => {
+    switch (leaf.ref.kind) {
+      case 'cli':
+        return 'cli';
+      case 'event':
+        return 'event';
+      case 'script':
+        return 'script';
+      case 'tool':
+      case 'resource':
+      case 'prompt':
+        return 'mcp';
+      case 'app':
+      case 'skill':
+      case 'command':
+      case 'rule':
+        return 'unit-render';
+      default: {
+        const exhaustive: never = leaf.ref;
+        return exhaustive;
+      }
+    }
+  });
+  const cliSurface = selectedSurface === 'cli';
   const storageKey = inputKey ?? leaf.key;
   const [input, setInput] = useState<RouteInputValue>(() => {
     const last = readLastInput(storageKey);
@@ -272,6 +301,15 @@ export const ExecutableRouteWorkspace = ({
   const seededFrom = useRef<string | undefined>(undefined);
 
   useEffect(() => { setResultTab(resultTabFor(tab)); }, [tab]);
+  useEffect(() => {
+    if (
+      projectedTool
+      && invocation !== undefined
+      && (invocation.surface.kind === 'mcp' || invocation.surface.kind === 'cli' || invocation.surface.kind === 'unit-render')
+    ) {
+      setSelectedSurface(invocation.surface.kind);
+    }
+  }, [invocation, projectedTool]);
 
   // A snapshot loaded by id (deep link, trace entry) replaces the editor's
   // input with what that invocation actually rendered, once per snapshot.
@@ -287,23 +325,38 @@ export const ExecutableRouteWorkspace = ({
   };
 
   const run = (): void => {
-    const submission = routeInputSubmission(editorLeaf, input);
+    const submission = routeInputSubmission(editorLeaf, input, cliSurface);
     if (submission.draft === undefined) {
       setInput(Object.freeze({ ...input, attempted: true }));
       return;
     }
-    const json = routeInputJson(editorLeaf, input);
+    const json = routeInputJson(editorLeaf, input, cliSurface);
     if (json !== undefined) writeLastInput(storageKey, json);
-    controller.run(requestFor === undefined ? submission.draft : requestFor(submission.draft));
+    const surfaced = submission.draft.surface !== undefined
+      ? submission.draft
+      : Object.freeze({
+          ...submission.draft,
+          surface: Object.freeze({ kind: selectedSurface }) as RouteInvocationSurface,
+        });
+    controller.run(requestFor === undefined ? surfaced : requestFor(surfaced, input.fixtureId));
   };
 
   const failed = controller.state.phase === 'failed' ? controller.state : undefined;
 
   return <div className={inspectorOpen ? 'route-workspace route-workspace--inspecting' : 'route-workspace'} data-testid="route-workspace">
     <div className="route-workspace-main">
-      <WorkspaceHeader leaf={leaf} />
+      <WorkspaceHeader
+        leaf={leaf}
+        surface={selectedSurface === 'cli' ? `CLI ${leaf.command?.path.join(' ') ?? ''}`.trim() : selectedSurface === 'mcp' ? 'MCP' : selectedSurface}
+      />
+      {projectedTool ? <div aria-label="Invocation surface" className="route-surface-selector" role="group">
+        <button aria-pressed={selectedSurface === 'mcp'} onClick={() => setSelectedSurface('mcp')} type="button">MCP</button>
+        <button aria-pressed={selectedSurface === 'cli'} onClick={() => setSelectedSurface('cli')} type="button">CLI <code>{leaf.command!.path.join(' ')}</code></button>
+        <button aria-pressed={selectedSurface === 'unit-render'} onClick={() => setSelectedSurface('unit-render')} type="button">Unit render</button>
+      </div> : undefined}
       {toolbar}
       <RouteInputEditor
+        cliSurface={cliSurface}
         disabled={controller.backendKind === undefined}
         fixtures={fixtures}
         leaf={editorLeaf}

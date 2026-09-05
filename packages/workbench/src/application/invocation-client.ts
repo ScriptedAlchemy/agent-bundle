@@ -72,6 +72,21 @@ const invocationEventSchema = z.strictObject({
   host: z.enum(['claude', 'codex', 'cursor']).optional(),
   native: jsonObjectSchema.optional(),
 });
+const invocationSurfaceSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('mcp') }),
+  z.strictObject({
+    args: z.array(z.string()),
+    command: textSchema,
+    kind: z.literal('cli'),
+  }),
+  z.strictObject({
+    fixtureId: textSchema.optional(),
+    host: z.enum(['claude', 'codex', 'cursor']).optional(),
+    kind: z.literal('event'),
+  }),
+  z.strictObject({ kind: z.literal('script') }),
+  z.strictObject({ kind: z.literal('unit-render') }),
+]);
 const eventTraceWireSchema = z.strictObject({
   at: z.number().finite().nonnegative(),
   count: z.number().int().nonnegative().optional(),
@@ -119,6 +134,7 @@ const invocationSummaryFields = {
   sourceRevision: textSchema,
   startedAt: textSchema,
   status: z.enum(['failed', 'succeeded']),
+  surface: invocationSurfaceSchema,
   timings: z.array(timingSchema),
 } as const;
 const invocationSummarySchema: z.ZodType<RouteInvocationSummary> =

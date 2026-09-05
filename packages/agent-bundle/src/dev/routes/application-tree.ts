@@ -201,9 +201,12 @@ const mcpServers = (
   inspection: ApplicationTreeManifestSources['inspection'],
 ): readonly ApplicationServerGroup[] => {
   const servers = new Map<string, ApplicationServerGroup>();
+  const commands = new Map((manifest?.cli?.commands ?? [])
+    .filter((command) => command.projection !== undefined)
+    .map((command) => [command.routeId, command]));
   for (const server of manifest?.servers ?? []) {
     const subgroups = mcpKinds.flatMap((kind) => {
-      const leaves = leavesForRoutes(server.routes.filter((route) => route.kind === kind));
+      const leaves = leavesForRoutes(server.routes.filter((route) => route.kind === kind), commands);
       return leaves.length === 0
         ? []
         : [Object.freeze({

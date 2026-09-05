@@ -30,6 +30,7 @@ const invocation = Object.freeze({
   sourceRevision: 'source-a',
   startedAt: '2026-09-05T07:00:00.000Z',
   status: 'succeeded' as const,
+  surface: Object.freeze({ kind: 'mcp' as const }),
   timings: Object.freeze([]),
 }) satisfies RouteInvocation;
 
@@ -45,6 +46,7 @@ const summary = ({
   sourceRevision: invocation.sourceRevision,
   startedAt: invocation.startedAt,
   status: invocation.status,
+  surface: invocation.surface,
   timings: invocation.timings,
 });
 

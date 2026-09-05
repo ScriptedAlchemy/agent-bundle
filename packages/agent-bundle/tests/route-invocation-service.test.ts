@@ -53,6 +53,7 @@ const invocation = (id: string, completedAt: string): RouteInvocation => ({
   sourceRevision: 'revision',
   startedAt: completedAt,
   status: 'succeeded',
+  surface: { kind: 'mcp' },
   timings: [],
   trace: [{
     at: 0,
@@ -79,13 +80,18 @@ it('strictly validates invocation request fields and event options', () => {
     routeId: 'tool:curator/search_audible',
   });
   expect(parseRouteInvocationRequest({
-    event: { fixtureId: 'starter', host: 'claude' },
-    mode: 'unit-render',
+    surface: { fixtureId: 'starter', host: 'claude', kind: 'event' },
     routeId: 'event:tool/after',
   })).toEqual({
-    event: { fixtureId: 'starter', host: 'claude' },
-    mode: 'unit-render',
+    surface: { fixtureId: 'starter', host: 'claude', kind: 'event' },
     routeId: 'event:tool/after',
+  });
+  expect(parseRouteInvocationRequest({
+    surface: { args: ['--name', 'Ada'], command: 'report', kind: 'cli' },
+    routeId: 'tool:status/report',
+  })).toEqual({
+    surface: { args: ['--name', 'Ada'], command: 'report', kind: 'cli' },
+    routeId: 'tool:status/report',
   });
   expect(parseRouteInvocationRequest({
     routeId: 'tool:curator/search_audible',
@@ -98,9 +104,11 @@ it('strictly validates invocation request fields and event options', () => {
     { routeId: '' },
     { routeId: 'tool:x/y', unknown: true },
     { args: ['ok', 1], routeId: 'cli:x' },
-    { event: { host: 'other' }, routeId: 'event:tool/after' },
-    { event: { fixtureId: '' }, routeId: 'event:tool/after' },
+    { event: { host: 'claude' }, routeId: 'event:tool/after' },
     { mode: 'preview', routeId: 'tool:x/y' },
+    { routeId: 'event:tool/after', surface: { host: 'other', kind: 'event' } },
+    { routeId: 'event:tool/after', surface: { fixtureId: '', kind: 'event' } },
+    { routeId: 'tool:x/y', surface: { command: 'x', kind: 'cli' } },
   ]) {
     expect(() => parseRouteInvocationRequest(value)).toThrow(RouteInvocationRequestError);
   }
@@ -197,7 +205,7 @@ it('aborts and drains a running render when the service closes', async () => {
     }),
   });
 
-  const pending = service.invoke({ input: {}, mode: 'unit-render', routeId: echoRoute.id });
+  const pending = service.invoke({ input: {}, routeId: echoRoute.id, surface: { kind: 'unit-render' } });
   await started.promise;
   await service.close();
 
@@ -394,9 +402,10 @@ const tsxSiblingProject = async (): Promise<RouteProject> => routeProject(
 it('resolves a `.js` import of a `.tsx` sibling without rewriting the same string rendered as text', { timeout: 30_000 }, async () => {
   const project = await tsxSiblingProject();
   try {
-    const invocation = await project.service().invoke({ input: {}, mode: 'unit-render', routeId: 'tool:fixture/report' });
+    const invocation = await project.service().invoke({ input: {}, routeId: 'tool:fixture/report', surface: { kind: 'unit-render' } });
 
     expect(invocation.status, JSON.stringify(invocation.diagnostics)).toBe('succeeded');
+    expect(invocation.surface).toEqual({ kind: 'unit-render' });
     expect(invocation.document).toBeDefined();
     expectDocument(invocation.document!)
       .toContainText('panel rendered')
@@ -427,7 +436,7 @@ const recordedPids = async (project: LeakingRouteProject): Promise<Readonly<{ ch
 it('reaps the render child and its descendants after a successful reply', { timeout: 30_000 }, async () => {
   const project = await leakingRouteProject('reply');
   try {
-    const invocation = await project.service().invoke({ input: {}, mode: 'unit-render', routeId: 'tool:fixture/leak' });
+    const invocation = await project.service().invoke({ input: {}, routeId: 'tool:fixture/leak', surface: { kind: 'unit-render' } });
     const pids = await project.pids();
 
     expect(invocation.status).toBe('succeeded');
@@ -443,7 +452,7 @@ it('reaps the render child and its descendants when the invocation times out', {
   const project = await leakingRouteProject('hang');
   try {
     const service = project.service({ timeoutMs: 8_000 });
-    const pending = service.invoke({ input: {}, mode: 'unit-render', routeId: 'tool:fixture/leak' });
+    const pending = service.invoke({ input: {}, routeId: 'tool:fixture/leak', surface: { kind: 'unit-render' } });
     const pids = await recordedPids(project);
     expect(alive(pids.child)).toBe(true);
     expect(alive(pids.descendant)).toBe(true);
@@ -463,7 +472,7 @@ it('reaps the render child and its descendants when the service closes mid-rende
   const project = await leakingRouteProject('hang');
   try {
     const service = project.service();
-    const pending = service.invoke({ input: {}, mode: 'unit-render', routeId: 'tool:fixture/leak' });
+    const pending = service.invoke({ input: {}, routeId: 'tool:fixture/leak', surface: { kind: 'unit-render' } });
     const pids = await recordedPids(project);
     expect(alive(pids.child)).toBe(true);
     expect(alive(pids.descendant)).toBe(true);
@@ -536,6 +545,7 @@ it('marks catalog providers unobserved when the child reports no observations', 
   });
 
   expect(result.status).toBe('succeeded');
+  expect(result.surface).toEqual({ kind: 'mcp' });
   expect(result.providers).toEqual([{ id: 'provider:clock', name: 'clock', status: 'unobserved' }]);
   expect(result.providers[0]).not.toHaveProperty('durationMs');
   expect(result.timings.map((entry) => entry.phase)).toEqual(['render', 'projection']);

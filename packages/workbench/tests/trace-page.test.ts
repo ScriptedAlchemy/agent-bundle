@@ -27,6 +27,7 @@ const summary = (id: string, completedAt: string, overrides: Partial<RouteInvoca
   sourceRevision: 'r',
   startedAt: '2026-09-05T07:00:00.000Z',
   status: 'succeeded',
+  surface: { kind: 'mcp' },
   timings: [{ durationMs: 12, phase: 'handler', startedAt: '2026-09-05T07:00:00.000Z' }],
   ...overrides,
 });

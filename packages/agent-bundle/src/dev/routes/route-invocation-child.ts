@@ -60,7 +60,6 @@ const renderUnitRoute = async (request: RouteInvocationChildRequest): Promise<Ro
   const startedAt = performance.now();
   const input = request.input;
   const rendered = await renderRouteEvents(request.routeId, {
-    ...(request.args === undefined ? {} : { args: request.args }),
     context: {
       actor: request.context.actor,
       host: request.context.host,
@@ -89,7 +88,7 @@ const renderUnitRoute = async (request: RouteInvocationChildRequest): Promise<Ro
 };
 
 const render = async (request: RouteInvocationChildRequest): Promise<RouteInvocationChildResult> =>
-  request.mode === 'unit-render'
+  request.surface.kind === 'unit-render'
     ? renderUnitRoute(request)
     : renderProductionRoute(request);
 

@@ -22,8 +22,9 @@ These are contracts, not defaults:
   session.
 - **Epoch-pinned reads.** Nothing follows a new build implicitly; a surface that reads an
   artifact names the epoch it read.
-- **Trusted-local operations only.** The browser never supplies a command, a working directory, a
-  native model, or a credential. See [Security](../../reference/security.mdx).
+- **Trusted-local operations only.** The browser can select only a compiled command projection;
+  it never supplies an arbitrary executable, working directory, native model, or credential.
+  See [Security](../../reference/security.mdx).
 
 ## Workbench navigation
 
@@ -85,6 +86,11 @@ measured zero, not a placeholder.
 The browser does not import or execute arbitrary route modules. The server runs the same RSC
 route path used by generated executables and sends its semantic render-event stream and final
 Agent Document to the Workbench.
+
+A tool with a colocated CLI projection has one tree leaf and one canonical `tool:<server>/<tool>`
+operation. Its surface selector offers **MCP**, **CLI `<command>`**, and **Unit render**. The CLI
+choice shows the projected argv and runs the generated CLI bin's confirmation, defaults,
+`mapInput`, and canonical validation; it does not create a second `cli:` operation.
 
 ### Event routes
 
@@ -195,17 +201,25 @@ The route workspace uses one authenticated, origin-guarded foreground API:
 - `GET /api/routes/invocations/<id>` returns one invocation.
 - `/api/project/events` publishes completed summaries as `route.invocation` events.
 
-Requests default to `mode: "production"`. Production mode executes the selected route from the
-last published compiler epoch, so compiler aliases and defines, generated-entry request scope,
-providers, persistent state, CLI `mapInput` and confirmation, event preflight, and render
-semantics match the installed artifact. `mode: "unit-render"` is an explicit component-preview
-fallback: it loads live source with the route-unit harness and mounts disposable state. It is not
-an artifact-parity receipt.
+Requests identify one canonical operation with `routeId` and may select one shaped `surface`:
+`{ kind: "mcp" }`, `{ kind: "cli", command, args }`, `{ kind: "event", host?, fixtureId? }`,
+`{ kind: "script" }`, or `{ kind: "unit-render" }`. When omitted, the surface follows the route
+kind: tools/resources/prompts use MCP, events use event, scripts use script, and standalone CLI
+routes use their compiled command with empty argv. `unit-render` is never selected by default.
+
+Production surfaces execute the selected route from the last published compiler epoch, so
+compiler aliases and defines, generated-entry request scope, providers, persistent state, CLI
+`mapInput` and confirmation, event preflight, and render semantics match the installed artifact.
+The explicit `unit-render` surface is a component-preview fallback: it loads live source with the
+route-unit harness and mounts disposable state. It is not an artifact-parity receipt. A projected
+CLI command keeps the canonical `tool:` route id; a mismatched command is `AB8253`, while using
+its duplicate-looking `cli:` id is `AB8254` with the canonical id and surface to use.
 Production state lives beside the published epoch at `<epoch>/state`, shared with that epoch's dev
 MCP sessions through `AGENT_BUNDLE_STATE_ROOT`.
 
-The envelope carries canonical input, request context, providers, ordered render events, the
-final Agent Document, structured result, projections, diagnostics, and execution timings.
+The envelope records the resolved `surface` beside `routeId` and carries canonical input, request
+context, providers, ordered render events, the final Agent Document, structured result,
+projections, diagnostics, and execution timings.
 `providers` lists each catalog provider with the outcome the child measured (`mounted`,
 `failed`, or `skipped`) and a `durationMs` only when that duration was measured. When the
 child reports no observations — a plain script, or a failure before any provider ran — every
@@ -218,8 +232,9 @@ wall time until failure and does not invent `failed` provider rows. A represente
 unavailable epochs (`AB8232`), render timeouts or crashes (`AB8236`), malformed requests
 (`AB8237`), unknown fixture ids (`AB8238`), a queued invocation whose published revision
 moved before it acquired a slot (`AB8239`), unavailable compiled artifacts (`AB8250`), missing
-compiled route executables (`AB8251`), and compiled projection or preflight failures (`AB8252`)
-are reported as diagnostics.
+compiled route executables (`AB8251`), compiled projection or preflight failures (`AB8252`),
+CLI command/operation mismatches (`AB8253`), and projected duplicate CLI ids (`AB8254`) are
+reported as diagnostics.
 See the [diagnostics reference](../../reference/diagnostics.md) for the individual triggers and
 recovery guidance.
 
