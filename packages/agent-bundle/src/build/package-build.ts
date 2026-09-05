@@ -2,10 +2,16 @@ import { existsSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 
+import { rspack } from '@rslib/core';
+
 import type { AgentBundleToolsConfig, NormalizedPlugin } from '../core/types.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { assertInside, toPosixRelative } from '../core/paths.ts';
 import { cliBinSourceInputs } from './cli-bins.ts';
+import {
+  createCompileEvidenceRecord,
+  type CompileEvidenceRecord,
+} from './compile-evidence.ts';
 import type { CompileResult } from './compile-result.ts';
 import { buildWithRslib } from './compiler.ts';
 import { declarationBuildDiagnostics, replayDeclarationEmit } from './declaration-diagnostics.ts';
@@ -55,6 +61,8 @@ export interface PackageOutputFile {
 }
 
 export interface PackageBuildResult {
+  /** Compile evidence for the emitted files, paths as a consumer sees them (`dist/bin/<name>.js`); in process only, since `dist` has no manifest to bind it to. */
+  readonly evidence: CompileEvidenceRecord;
   readonly files: readonly PackageOutputFile[];
   readonly outputRoot: string;
 }
@@ -322,9 +330,10 @@ export const buildPackageOutputs = async (options: {
         ? [runtimeIgnoredRoot(terminalCapabilityRuntimePath())]
         : []),
     ])]);
-    const evidence = await buildPackageEntries({
+    const publishedPrefix = toPosixRelative(projectRoot, outputRoot);
+    const compileResult = await buildPackageEntries({
       cwd: projectRoot,
-      diagnosticPathPrefix: toPosixRelative(projectRoot, outputRoot),
+      diagnosticPathPrefix: publishedPrefix,
       entries,
       ...(ignoredRuntimeRoots.length === 0 ? {} : { ignoredSourcePaths: ignoredRuntimeRoots }),
       logLevel: 'error',
@@ -334,7 +343,7 @@ export const buildPackageOutputs = async (options: {
     }, dtsTsconfig === undefined || packageBuild.lib === undefined
       ? undefined
       : { entryName: packageBuild.lib.name, tsconfigPath: dtsTsconfig.path });
-    const evidenceByPath = new Map(evidence.assets.map((entry) => [entry.path, entry.sourceInputs]));
+    const evidenceByPath = new Map(compileResult.assets.map((entry) => [entry.path, entry.sourceInputs]));
     await Promise.all(entries
       .filter((entry) => entry.executable)
       .map((entry) => chmod(resolveArtifactDestination(stageRoot, entry.outputRelativePath), executableMode)));
@@ -391,8 +400,15 @@ export const buildPackageOutputs = async (options: {
     });
     if (selfContainment.length > 0) throw new DiagnosticError(selfContainment);
 
+    const evidence = await createCompileEvidenceRecord({
+      pathPrefix: publishedPrefix,
+      results: [compileResult],
+      rewritable: options.tools?.rspack !== undefined || options.tools?.rsbuild !== undefined,
+      root: stageRoot,
+      rspackVersion: rspack.rspackVersion,
+    });
     await publishArtifact({ outputRoot, stageRoot });
-    return Object.freeze({ files: Object.freeze(files), outputRoot });
+    return Object.freeze({ evidence, files: Object.freeze(files), outputRoot });
   } finally {
     // publishArtifact removes the stage on success; a failed build leaves it.
     await rm(stageRoot, { force: true, recursive: true });

@@ -46,12 +46,18 @@ const webPluginStateSegment = (pluginRoot: string): string => {
 };
 
 /**
+ * The shared web-data root for one installed plugin.
+ */
+export const webPluginDataRoot = (pluginRoot: string, home = homedir()): string =>
+  join(home, '.agent-bundle', 'web-data', webPluginStateSegment(resolve(pluginRoot)));
+
+/**
  * The author-facing `${PLUGIN_DATA}` directory of one server, outside the
  * installed artifact: the artifact stays immutable (it may be installed
  * read-only), so per-server data anchors under the user's home instead.
  */
 export const webPluginDataDirectory = (pluginRoot: string, server: string, home = homedir()): string =>
-  join(home, '.agent-bundle', 'web-data', webPluginStateSegment(resolve(pluginRoot)), mcpServerStateDirectory(server));
+  join(webPluginDataRoot(pluginRoot, home), mcpServerStateDirectory(server));
 
 const inheritedEnvironment = (env: NodeJS.ProcessEnv): Record<string, string> =>
   Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));

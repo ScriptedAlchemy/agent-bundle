@@ -175,6 +175,11 @@ describe('compileMcpApps', () => {
       join(root, 'agent-bundle.config.ts'),
       join(root, 'views', 'status.ts'),
     ]);
+    expect(result.compileResults).toHaveLength(1);
+    expect(result.compileResults[0]!.assets).toEqual([{
+      path: 'mcp-apps/status.html',
+      sourceInputs: result.apps[0]!.sourceInputs,
+    }]);
     expect(await readdir(outDir)).toEqual(['mcp-apps']);
     expect(await readdir(join(outDir, 'mcp-apps'))).toEqual(['status.html']);
     expect(html).toMatch(/<script\b(?![^>]*\bsrc=)[^>]*>/u);

@@ -90,7 +90,7 @@ node ./install.mjs
 插件、版本、宿主、内容哈希、归属文件）；替换就地进行，只触碰归属文件，绝不动旧版或就地的 `state/` 之类的非归属条目，
 `--replace` 会接管回执出现之前的副本。本发行版构建的产物把框架状态放在
 `~/.agent-bundle/state/<plugin>-<digest>`（`AGENT_BUNDLE_STATE_ROOT` 覆盖该位置），`uninstall`
-不会删除它。Claude 的替换先运行 `claude plugin uninstall --keep-data` 再重新安装，
+配合 `--purge-data --confirm-purge` 会按已安装代码根删除它。Claude 的替换先运行 `claude plugin uninstall --keep-data` 再重新安装，
 因为 `plugin update` 受版本门控；Codex 先 `codex plugin remove` 再 `add`。输出的 `INSTALL.md` 按宿主记录了
 同样的步骤。
 
@@ -161,8 +161,8 @@ node artifact/install.mjs --uninstall [--mode marketplace]
 每次安装都会写入生命周期回执（`agent-bundle-install-receipt/2`）：版本、内容哈希、投递模式、作用域、归属的文件与
 目录、安装器创建的宿主目录、执行过的宿主注册，以及时间戳。Cursor 本地副本以 `.agent-bundle-install.json` 携带它；
 Claude、Codex 与 Cursor 市场模式的安装把回执放在 `<宿主根目录>/agent-bundle/receipts/` 下。`uninstall` 只删除回执
-归属的内容，只撤销它记录的注册——绝不多删；非归属条目会被列为保留。旧版或就地的持久运行时状态（`state/`，以及 Agent Plugins
-包的 Cursor 副本在回执中记录的 `PLUGIN_DATA` 目录）除非传入 `--purge-data --confirm-purge` 否则保留，且结果如实说明宿主自行决定而 Agent Bundle 无法左右的部分（Claude 把缓存
+归属的内容，只撤销它记录的注册——绝不多删；非归属条目会被列为保留。有效框架状态根、推导出的 web-data、旧版 `state/`，以及 Agent Plugins
+包的 Cursor 副本在回执中记录的 `PLUGIN_DATA` 目录，除非传入 `--purge-data --confirm-purge` 否则保留，且结果如实说明宿主自行决定而 Agent Bundle 无法左右的部分（Claude 把缓存
 副本标为 orphaned 并保留约 14 天；Codex 删除缓存树且没有 keep-data 选项）。缺少回执（`AB7009`）或内容不匹配
 （`AB7007`）会被拒绝，除非 `--force`；属于另一个插件的目录无论如何都被拒绝；再次运行是 `not-installed` 空操作。
 格式 2 之前写入的回执会在补全生命周期字段后读取并给出诊断（`AB7329`），绝不被拒绝。
@@ -202,7 +202,7 @@ Doctor 还会清点每个宿主根目录下的回执仓库并与宿主交叉核�
 | `AB7330` | info | 该捆绑包在此宿主上的生命周期阶段及四项观察；无法观察的阶段（任一宿主的活跃会话加载了哪些插件、Cursor 由服务端分配的启用状态）被类型化为 `unavailable`，绝不猜测。 |
 | `AB7328` | warning | 某份仓库回执记录的注册宿主已不再持有（孤立），或回执仓库无法读取；`agent-bundle uninstall` 会消费孤立的回执。 |
 | `AB7329` | info | 某份回执早于生命周期回执，读取时补全了字段；再运行一次 `install` 即可将其重写为格式 2。 |
-| `AB7316` | warning | 某个已安装捆绑包的 `state/` 目录，或它的某个 `*.sqlite`、`-wal`、`-shm` 文件无法通过文件系统元数据操作读取。Doctor 只按目录条目与元数据清点状态；它绝不打开数据库。 |
+| `AB7316` | warning | 某个已安装捆绑包的有效或旧版状态目录不可写，或该目录及其某个 `*.sqlite`、`-wal`、`-shm` 文件无法通过文件系统元数据操作读取。Doctor 只按目录条目与元数据清点状态；它绝不打开数据库。 |
 | `AB7317` | info | 某个活跃的事件运行时实现的是较旧的严格协议，不暴露运行时身份。 |
 | `AB7318` | error | 在有界的只读身份探测过程中，某个活跃的事件运行时变为不可用、超时，或返回了无效的状态响应。 |
 | `AB7319` | error | 由 `doctor --from` 解析出的宿主目录树违反了它被固定的文档 schema 或无进程加载器规则；消息中保留原始的构建校验器代码。 |

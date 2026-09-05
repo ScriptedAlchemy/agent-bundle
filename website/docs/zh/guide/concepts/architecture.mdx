@@ -53,9 +53,10 @@ build/build.ts + build/emit.ts + build/compile-stages.ts
         ▼
 composite plugin root
   + agent-bundle.manifest.json
+  + agent-bundle.compile-evidence.json
         │
         ▼
-build/validate-artifact*.ts / AB6005
+build/validate-artifact*.ts / AB6005 / AB6039
   / prepack AB7014, AB7015                   ← Artifact layer
 ```
 
@@ -240,6 +241,7 @@ Skill、命令、规则、配置中声明的钩子、手写的 MCP 入口以及�
 | 计划条目 | `build/emit.ts` 的 `emitPlanEntries` | 宿主文档、Skill、命令、规则、资源、`INSTALL.md` / `install.mjs` |
 | 脚本、钩子、MCP 入口、CLI bin | `build/rslib.ts` 的 `compileRslibSurfaces`，经由 `build/entries.ts`、`build/cli-bins.ts` | `scripts/*.mjs`、`hooks/*.mjs`、`mcp/mcp-<server>-<hash>.mjs`、`bin/<plugin>.mjs`（外加 `-flight.mjs` worker） |
 | MCP App | `build/mcp-apps.ts` 的 `compileMcpApps` | `mcp-apps/<name>.html`（同时内联进生成的服务器） |
+| 编译证据 | `build/compile-evidence.ts` 的 `createCompileEvidenceRecord` | `agent-bundle.compile-evidence.json`（每个已编译文件一条 `assets[]`） |
 | 清单 | `build/build.ts` 的 `manifestFor` + `build/emit.ts` 的 `writeManifest` | `agent-bundle.manifest.json` |
 | 发布 | `build/emit.ts` 的 `publishArtifact` | 把暂存目录原子重命名到 `outputRoot` |
 
@@ -251,6 +253,7 @@ node 表面。
 | 检查 | 模块 | 代码 |
 | --- | --- | --- |
 | 规范清单解析 + 文件摘要匹配 | `build/validate-artifact.ts` | `AB60xx` 系列；解析错误由 `parseArtifactManifest` 抛出 |
+| 编译证据记录对照清单 `bundle` 文件 | `build/compile-evidence.ts` 的 `compileEvidenceDiagnostics` | `AB6039` |
 | 宿主包与包构建 `dist` 模块只导入相对/`file:` 说明符或 Node 内建模块 | `build/validate-artifact-modules.ts` | `AB6005` |
 | Skill / 钩子 / MCP 文档与所选宿主匹配 | `build/validate-artifact-skills.ts`、`build/validate-artifact-hooks.ts`（`executables.hooks[]`，`AB6018`）、`build/validate-artifact-mcp.ts` | 按表面划分的 `AB60xx` |
 | 产物对输出根目录的所有权 | `build/validate-artifact.ts` | `AB6014` |
@@ -287,7 +290,8 @@ artifact/
 ├── bin/<plugin>.mjs, bin/<plugin>-flight.mjs
 ├── skills/, scripts/, commands/, rules/, assets/, mcp-apps/
 ├── INSTALL.md, install.mjs
-└── agent-bundle.manifest.json
+├── agent-bundle.manifest.json
+└── agent-bundle.compile-evidence.json
 ```
 
 [Target 与产物](../../reference/targets-artifacts.mdx)是输出契约：哪个宿主读取哪份文档、
@@ -392,6 +396,7 @@ schema、验证结果——它的变化不会推动 `manifestVersion`；消费�
 | 读取方 | 使用的字段 | 用途 |
 | --- | --- | --- |
 | `build/validate-artifact.ts` | 全部 | 重新解析磁盘上的字节，匹配 `files[]` 的摘要与 mode，对照注册表检查 `projections[]` 与 `compiler.adapters[]`（适配器修订、观测版本与 `builtInHost` 身份，`AB6010`），固定 `compiler.agentSkills` 与 `runtime.node`。没有单独的一致性检查：宿主文档与清单在同一次构建中由同一份编译计划写出，且每个文档都是带摘要的 `files[]` 行 |
+| `build/compile-evidence.ts` | `files[]`（`bundle` 行） | `AB6039`：把持久化的编译证据记录对照文件表复核，且不解析 JavaScript |
 | `build/validate-artifact-modules.ts` | `files[]`（bundle / `.mjs` 行）以及包构建的 `dist` | `AB6005` 导入图 |
 | `build/validate-artifact-skills.ts` | `projections[]`（`manifestTargets`）加目录树 | Skill 文档对照所选宿主 |
 | `build/validate-artifact-hooks.ts` | `executables.hooks[]`、`projections[]` | `AB6018`：钩子行对照宿主钩子文档 |

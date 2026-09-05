@@ -51,8 +51,13 @@ artifact/
 ├── scripts/, skills/, commands/, rules/, assets/, mcp-apps/   # emitted once
 ├── INSTALL.md                            # when any built-in host is selected
 ├── install.mjs                           # when cursor or portable is selected
-└── agent-bundle.manifest.json            # the artifact index (manifestVersion 2)
+├── agent-bundle.manifest.json            # the artifact index (manifestVersion 2)
+└── agent-bundle.compile-evidence.json    # compiler record per compiled file
 ```
+
+`agent-bundle.compile-evidence.json` is the compiler's record of each compiled
+(`bundle`) file; `validate --artifact` re-checks a listed record against the
+file table (`AB6039`).
 
 Host manifests live in their dotfolders at the root. `skills/`, `hooks/`, `mcp/`, `scripts/`,
 `bin/`, and `assets/` are shared and emitted **once** — no per-host copies. Nothing else appears

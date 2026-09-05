@@ -1,4 +1,5 @@
-import { lstat, readFile, readdir } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { access, lstat, readFile, readdir } from 'node:fs/promises';
 import { createConnection } from 'node:net';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -75,6 +76,7 @@ import {
 } from './cursor-hooks-registration.ts';
 import { cursorMarketplacePluginPath, cursorMarketplaceRoot } from './cursor-marketplace.ts';
 import { bundleInventory, readBundleIdentity, type PluginIdentity } from './identity.ts';
+import { resolveInstalledStateRoot } from './state-root.ts';
 
 export type DoctorHost = InstallHost;
 export type DoctorHostProbeStatus = 'available' | 'failed' | 'unavailable';
@@ -134,6 +136,8 @@ export interface DoctorFinding {
   /** Git commit of a staged Cursor marketplace repository. */
   readonly commit?: string;
   readonly durableState?: DoctorDurableStateReport;
+  /** Pre-#640 `<plugin root>/state`, reported separately from the effective state root. */
+  readonly legacyDurableState?: DoctorDurableStateReport;
   /** The operator `.env` layer the installed pack's shells read at launch (#469); names and counts only, never values. */
   readonly operatorEnv?: DoctorOperatorEnvReport;
   /**
@@ -247,12 +251,15 @@ export interface DoctorOperatorEnvReport {
 export interface DoctorDurableStateReport {
   readonly diagnostics: readonly Diagnostic[];
   readonly directory: string;
+  readonly exists: boolean;
   readonly findings: readonly DoctorDurableStateStore[];
+  readonly stateSource: 'derived' | 'legacy' | 'native';
   readonly status: 'known' | 'warnings';
   readonly summary: {
     readonly bytes: number;
     readonly stores: number;
   };
+  readonly writable: boolean;
 }
 
 export interface DoctorInventory {
@@ -454,6 +461,9 @@ const freezeInventory = (
 
 const durableStateReport = (
   directory: string,
+  exists: boolean,
+  writable: boolean,
+  stateSource: DoctorDurableStateReport['stateSource'],
   findings: readonly DoctorDurableStateStore[],
   diagnostics: readonly Diagnostic[],
 ): DoctorDurableStateReport => {
@@ -461,12 +471,15 @@ const durableStateReport = (
   return Object.freeze({
     diagnostics: frozenDiagnostics,
     directory,
+    exists,
     findings: Object.freeze(findings.map((finding) => Object.freeze({ ...finding }))),
+    stateSource,
     status: frozenDiagnostics.length === 0 ? 'known' : 'warnings',
     summary: Object.freeze({
       bytes: findings.reduce((total, finding) => total + finding.bytes, 0),
       stores: findings.length,
     }),
+    writable,
   });
 };
 
@@ -546,15 +559,15 @@ const remnantDiagnostic = async (subject: string, path: string, receipt: Install
 };
 
 const inspectDurableState = async (
-  pluginRoot: string,
+  directory: string,
+  stateSource: DoctorDurableStateReport['stateSource'],
   target?: DoctorHost,
-): Promise<DoctorDurableStateReport | undefined> => {
-  const directory = join(pluginRoot, 'state');
+): Promise<DoctorDurableStateReport> => {
   let entries: readonly string[];
   try {
     entries = (await readdir(directory)).sort((left, right) => left.localeCompare(right));
   } catch (error) {
-    if (isErrno(error, 'ENOENT')) return undefined;
+    if (isErrno(error, 'ENOENT')) return durableStateReport(directory, false, false, stateSource, [], []);
     const diagnostics = [diagnostic(
       'AB7316',
       `Durable state directory ${JSON.stringify(directory)} could not be read.`,
@@ -562,10 +575,23 @@ const inspectDurableState = async (
       'warning',
       target,
     )];
-    return durableStateReport(directory, [], diagnostics);
+    return durableStateReport(directory, true, false, stateSource, [], diagnostics);
   }
 
   const diagnostics: Diagnostic[] = [];
+  const writable = await access(directory, constants.W_OK).then(
+    () => true,
+    () => false,
+  );
+  if (!writable) {
+    diagnostics.push(diagnostic(
+      'AB7316',
+      `Durable state directory ${JSON.stringify(directory)} is not writable.`,
+      'Repair directory permissions before running the plugin; Doctor never opens or repairs state databases.',
+      'warning',
+      target,
+    ));
+  }
   const findings: DoctorDurableStateStore[] = [];
   for (const file of entries.filter((entry) => entry.endsWith('.sqlite'))) {
     const path = join(directory, file);
@@ -599,7 +625,41 @@ const inspectDurableState = async (
       ));
     }
   }
-  return durableStateReport(directory, findings, diagnostics);
+  return durableStateReport(directory, true, writable, stateSource, findings, diagnostics);
+};
+
+const inspectInstalledDurableState = async (
+  pluginRoot: string,
+  host: DoctorHost,
+  environment: Readonly<NodeJS.ProcessEnv>,
+  home: string,
+  receipt?: InstallReceipt,
+): Promise<{
+  readonly diagnostics: readonly Diagnostic[];
+  readonly effective: DoctorDurableStateReport;
+  readonly legacy?: DoctorDurableStateReport;
+}> => {
+  const resolved = receipt?.stateRoot ??
+    await resolveInstalledStateRoot(pluginRoot, host, environment, home);
+  const effective = await inspectDurableState(resolved.root, resolved.source, host);
+  const legacyRoot = join(pluginRoot, 'state');
+  if (legacyRoot === resolved.root) {
+    return { diagnostics: effective.diagnostics, effective };
+  }
+  const legacy = await inspectDurableState(legacyRoot, 'legacy', host);
+  if (!legacy.exists) return { diagnostics: effective.diagnostics, effective };
+  const legacyDiagnostic = diagnostic(
+    'AB7332',
+    `Legacy durable state remains at ${JSON.stringify(legacyRoot)} while this install resolves framework state to ${JSON.stringify(resolved.root)}.`,
+    'Run `agent-bundle uninstall <host> --purge-data --confirm-purge` for this install to remove both roots, or move required pre-#640 data before deleting the legacy directory.',
+    'info',
+    host,
+  );
+  return {
+    diagnostics: freezeDiagnostics([...effective.diagnostics, ...legacy.diagnostics, legacyDiagnostic]),
+    effective,
+    legacy,
+  };
 };
 
 /**
@@ -862,6 +922,7 @@ const stagingGit = (run: DoctorCommandRunner): CursorStagingGit => async (args, 
 
 const cursorInventory = async (
   home: string,
+  environment: Readonly<NodeJS.ProcessEnv>,
   available: boolean,
   git: CursorStagingGit,
   platform: NodeJS.Platform,
@@ -957,11 +1018,12 @@ const cursorInventory = async (
       const stateOnly = await isRuntimeStateRemnant(path);
       const remnant = stateOnly || (remnantReceipt !== undefined && isRemnantReceipt(remnantReceipt));
       if (remnant) {
-        const durableState = await inspectDurableState(path, 'cursor');
-        if (durableState !== undefined) diagnostics.push(...durableState.diagnostics);
+        const durableState = await inspectInstalledDurableState(path, 'cursor', environment, home, remnantReceipt);
+        diagnostics.push(...durableState.diagnostics);
         diagnostics.push(await remnantDiagnostic(`Cursor plugin entry ${JSON.stringify(path)}`, path, remnantReceipt));
         findings.push({
-          ...(durableState === undefined ? {} : { durableState }),
+          durableState: durableState.effective,
+          ...(durableState.legacy === undefined ? {} : { legacyDurableState: durableState.legacy }),
           entry,
           ...(remnantReceipt === undefined ? {} : { name: remnantReceipt.plugin, receipt: receiptSummary(remnantReceipt), version: remnantReceipt.version }),
           path,
@@ -1012,8 +1074,8 @@ const cursorInventory = async (
     }
     diagnostics.push(...staticDiagnostics);
     if (launch !== undefined) diagnostics.push(...launch.diagnostics);
-    const durableState = await inspectDurableState(path, 'cursor');
-    if (durableState !== undefined) diagnostics.push(...durableState.diagnostics);
+    const durableState = await inspectInstalledDurableState(path, 'cursor', environment, home);
+    diagnostics.push(...durableState.diagnostics);
     const operatorEnv = await inspectOperatorEnv(path, 'cursor');
     diagnostics.push(...operatorEnv.diagnostics);
     const hooks = manifest.manifest === cursorManifestCandidates[0]
@@ -1031,7 +1093,8 @@ const cursorInventory = async (
       diagnostics.push(migratedReceiptDiagnostic('cursor', join(path, installReceiptFile), receipt));
     }
     findings.push({
-      ...(durableState === undefined ? {} : { durableState }),
+      durableState: durableState.effective,
+      ...(durableState.legacy === undefined ? {} : { legacyDurableState: durableState.legacy }),
       entry,
       ...(hooks === undefined ? {} : { hooks: hooks.registration }),
       operatorEnv,
@@ -1115,12 +1178,12 @@ const readWebSurface = async (from: string | undefined): Promise<DoctorWebSurfac
  * carry `pluginId`/`version` and the pinned cache layout supplies the path).
  * An unusable listing is reported honestly as unknown (`AB7303`).
  */
-const publicHostInventory = (
+const publicHostInventory = async (
   host: Exclude<DoctorHost, 'cursor'>,
   listing: PublicHostListing,
   environment: Readonly<NodeJS.ProcessEnv>,
   home: string,
-): { readonly diagnostics: readonly Diagnostic[]; readonly inventory: DoctorInventory } => {
+): Promise<{ readonly diagnostics: readonly Diagnostic[]; readonly inventory: DoctorInventory }> => {
   const unknown = (detail: string) => ({
     diagnostics: freezeDiagnostics([diagnostic(
       'AB7303',
@@ -1141,6 +1204,7 @@ const publicHostInventory = (
     return unknown('not JSON');
   }
   const findings: DoctorFinding[] = [];
+  const diagnostics: Diagnostic[] = [];
   if (host === 'claude') {
     if (!Array.isArray(document)) return unknown('not an array');
     for (const row of document) {
@@ -1159,12 +1223,16 @@ const publicHostInventory = (
       // `enabled: false` is a copy the user switched off (`claude plugin disable`): installed, but no
       // hooks, MCP servers, or skills reach a session until it is enabled again (#476).
       const enabled = typeof row['enabled'] === 'boolean' ? row['enabled'] : undefined;
+      const durableState = await inspectInstalledDurableState(row['installPath'], host, environment, home);
+      diagnostics.push(...durableState.diagnostics);
       findings.push({
+        durableState: durableState.effective,
         ...(enabled === undefined ? {} : { enabled }),
         entry: `${row['id']} (${row['scope']})`,
         ...(errors.length === 0 ? {} : { errors }),
         name: row['id'].slice(0, row['id'].indexOf('@') === -1 ? undefined : row['id'].indexOf('@')),
         path: row['installPath'],
+        ...(durableState.legacy === undefined ? {} : { legacyDurableState: durableState.legacy }),
         state: errors.length > 0 ? 'failed' : enabled === false ? 'disabled' : 'installed',
         version: row['version'],
       });
@@ -1179,16 +1247,21 @@ const publicHostInventory = (
       const separator = row['pluginId'].indexOf('@');
       const name = separator === -1 ? row['pluginId'] : row['pluginId'].slice(0, separator);
       const marketplace = separator === -1 ? '' : row['pluginId'].slice(separator + 1);
+      const path = join(publicHostCacheRoot(host, environment, home), marketplace, name, row['version']);
+      const durableState = await inspectInstalledDurableState(path, host, environment, home);
+      diagnostics.push(...durableState.diagnostics);
       findings.push({
+        durableState: durableState.effective,
         entry: row['pluginId'],
         name,
-        path: join(publicHostCacheRoot(host, environment, home), marketplace, name, row['version']),
+        path,
+        ...(durableState.legacy === undefined ? {} : { legacyDurableState: durableState.legacy }),
         state: 'installed',
         version: row['version'],
       });
     }
   }
-  return { diagnostics: Object.freeze([]), inventory: freezeInventory('known', findings) };
+  return { diagnostics: freezeDiagnostics(diagnostics), inventory: freezeInventory('known', findings) };
 };
 
 const malformedBundle = (
@@ -2553,10 +2626,10 @@ const doctorHost = async (
     return pending;
   };
   const inventoried = host === 'cursor'
-    ? await cursorInventory(home, probed.probe.status === 'available', git, options.platform ?? process.platform)
+    ? await cursorInventory(home, environment, probed.probe.status === 'available', git, options.platform ?? process.platform)
     : probed.probe.status !== 'available'
       ? { diagnostics: Object.freeze([]), inventory: freezeInventory('skipped') }
-      : publicHostInventory(host, listing, environment, home);
+      : await publicHostInventory(host, listing, environment, home);
   const diagnostics = [...probed.diagnostics, ...inventoried.diagnostics];
   // Store receipts are lifecycle evidence Agent Bundle itself wrote, so the store is inventoried from
   // the filesystem whether or not the host can be probed: malformed and migrated receipts are always
@@ -2600,8 +2673,8 @@ const doctorHost = async (
       if (checked.finding.lifecycle !== undefined) {
         diagnostics.push(lifecycleDiagnostic(host, identity.plugin, identity.version, checked.finding.lifecycle));
       }
-      const durableState = await inspectDurableState(identity.bundleRoot, host);
-      if (durableState !== undefined) diagnostics.push(...durableState.diagnostics);
+      const durableState = await inspectDurableState(join(identity.bundleRoot, 'state'), 'legacy', host);
+      diagnostics.push(...durableState.diagnostics);
       const operatorEnv = await inspectOperatorEnv(identity.bundleRoot, host);
       diagnostics.push(...operatorEnv.diagnostics);
       bundle = Object.freeze({
@@ -2609,7 +2682,7 @@ const doctorHost = async (
         ...(staticDiagnostics.some((entry) => entry.severity === 'error')
           ? { state: 'corrupt' as const }
           : {}),
-        ...(durableState === undefined ? {} : { durableState }),
+        ...(durableState.exists ? { durableState } : {}),
         operatorEnv,
       });
     } catch (error) {
