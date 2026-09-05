@@ -96,7 +96,7 @@ npx rstest --config rstest.unit.config.ts packages/agent-bundle/tests/route-invo
 npx rstest --config rstest.integration.config.ts packages/agent-bundle/tests/route-invocation-dev-server.test.ts
 ```
 
-Results: 3 unit tests and 1 integration test passed.
+Results: 4 unit tests and 1 integration test passed.
 
 TraceDecay MCP discovery and its required CLI fallback were attempted before
 source exploration/review, but the installed daemon socket was unavailable;
@@ -104,15 +104,23 @@ targeted source reads and the prescribed test gate were used instead.
 
 ## Open risks
 
-- Production `startDevServer` wiring is intentionally pending integrator
-  application of request 1; `ForegroundServer` itself is fully mounted and
-  covered.
 - Exact provider/handler phase timings await request 3.
-- Resource, prompt, CLI, script, timeout, and queue paths are implemented but
-  the lane's required real-server acceptance test exercises tool and event
-  routes.
+- Resource, prompt, timeout, and queue paths are implemented but are not
+  exercised by this lane's real-server acceptance test.
 
 ## Proposed changeset line
 
 Add Workbench route invocation endpoints with production render projections
 and diagnostics AB8231, AB8232, and AB8236–AB8238 (#600).
+
+## Follow-up
+
+- Production `startDevServer` now constructs `RouteInvocationService` beside
+  `routeManifest`, projecting `latestValidPreparedProject` through
+  `testManifestFromRouteGraph` without a second discovery pass. Both services
+  refresh from the same prepared-project closure after successful preparation.
+- Foreground shutdown now closes the invocation service, aborts active render
+  children, drains pending invocations, and reports cleanup failures.
+- The integration test no longer injects a service through the foreground
+  testing seam. It invokes tool, event, CLI, and script routes through the
+  production server path; the unit test also proves active render shutdown.

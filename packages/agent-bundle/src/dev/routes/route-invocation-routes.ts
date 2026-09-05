@@ -25,6 +25,7 @@ import {
 } from './route-invocation-service.ts';
 
 export interface RouteInvocationRouteService {
+  close?(): Promise<void> | void;
   invoke(request: RouteInvocationRequest): Promise<RouteInvocation>;
   list(limit?: number): RouteInvocationListResponse['invocations'];
   read(id: string): RouteInvocation | undefined;
@@ -111,8 +112,9 @@ export class RouteInvocationRoutes {
     this.#service = options.service;
   }
 
-  close(): void {
+  close(): Promise<void> {
     this.#closed = true;
+    return Promise.resolve(this.#service?.close?.());
   }
 
   async handle(request: IncomingMessage, response: ServerResponse): Promise<boolean> {

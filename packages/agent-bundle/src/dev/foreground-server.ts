@@ -84,7 +84,7 @@ export class ForegroundServerError extends Error {
 
 export interface ForegroundServerCloseFailure {
   readonly error: unknown;
-  readonly resource: 'agent-api' | 'coordinator' | 'eval-routes' | 'eval-service' | 'hook-playground' | 'logs' | 'mcp-apps' | 'server';
+  readonly resource: 'agent-api' | 'coordinator' | 'eval-routes' | 'eval-service' | 'hook-playground' | 'logs' | 'mcp-apps' | 'route-invocations' | 'server';
 }
 
 export interface ForegroundServerStartFailure {
@@ -676,7 +676,8 @@ export class ForegroundServer {
     this.#playgroundRoutes.close();
     this.#inspectorRoutes.close();
     this.#artifactRoutes.close();
-    this.#routeInvocationRoutes.close();
+    const releaseRouteInvocations = this.#routeInvocationRoutes.close();
+    void releaseRouteInvocations.catch(() => undefined);
     this.#routeManifestRoutes.close();
     this.#lifecycleReplayRoutes.close();
     const releaseEvals = this.#evalRoutes.close();
@@ -721,13 +722,14 @@ export class ForegroundServer {
           return closeServer(this.#server);
         })()
       : Promise.resolve();
-    const [server, coordinator, evalRoutes, evalService, hookPlayground, logs] = await Promise.allSettled([
+    const [server, coordinator, evalRoutes, evalService, hookPlayground, logs, routeInvocations] = await Promise.allSettled([
       releaseServer,
       releaseCoordinator,
       releaseEvals,
       releaseEvalService,
       releaseHookPlayground,
       releaseLogs,
+      releaseRouteInvocations,
     ]);
     const failures: ForegroundServerCloseFailure[] = [];
     if (agentApi.status === 'rejected') failures.push(Object.freeze({ error: agentApi.reason, resource: 'agent-api' }));
@@ -742,6 +744,9 @@ export class ForegroundServer {
       failures.push(Object.freeze({ error: hookPlayground.reason, resource: 'hook-playground' }));
     }
     if (logs.status === 'rejected') failures.push(Object.freeze({ error: logs.reason, resource: 'logs' }));
+    if (routeInvocations.status === 'rejected') {
+      failures.push(Object.freeze({ error: routeInvocations.reason, resource: 'route-invocations' }));
+    }
     return Object.freeze(failures);
   }
 

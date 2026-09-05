@@ -52,6 +52,9 @@ import { createDevPlatformRuntime } from './platform-run.ts';
 import type { DevPlatformRuntime } from './platform-runtime.ts';
 import { ProjectService } from './project-service.ts';
 import { emptyCompiledRouteGraph } from '../routes/graph.ts';
+import { testManifestFromRouteGraph } from '../test/manifest.ts';
+import type { RouteInvocationEventHost } from './routes/route-invocation.ts';
+import { RouteInvocationService } from './routes/route-invocation-service.ts';
 import { routeManifestFor } from './routes/route-manifest.ts';
 import type { RouteManifestRouteService } from './routes/route-manifest-routes.ts';
 import { DevRuntimeController } from './runtime-controller.ts';
@@ -871,6 +874,43 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
       );
     },
   };
+  const routeInvocations = new RouteInvocationService({
+    manifest: routeManifest,
+    prepared: () => {
+      const prepared = latestValidPreparedProject;
+      if (prepared === undefined || prepared.model === undefined) {
+        throw new Error('No valid prepared project is available for route invocation.');
+      }
+      const targets = prepared.model.targets
+        .map((target) => target.name)
+        .filter((target): target is RouteInvocationEventHost =>
+          target === 'claude' || target === 'codex' || target === 'cursor');
+      return Object.freeze({
+        manifest: testManifestFromRouteGraph({
+          apps: prepared.model.mcpApps,
+          configPath: prepared.configPath,
+          diagnostics: prepared.diagnostics,
+          graph: prepared.routeGraph ?? emptyCompiledRouteGraph,
+          plugin: {
+            name: prepared.model.metadata.name,
+            ...(prepared.model.metadata.packageName === undefined
+              ? {}
+              : { packageName: prepared.model.metadata.packageName }),
+            ...(prepared.model.metadata.packageVersion === undefined
+              ? {}
+              : { packageVersion: prepared.model.metadata.packageVersion }),
+            version: prepared.model.metadata.version,
+          },
+          projectRoot: prepared.root,
+          scripts: prepared.model.scripts,
+          ...(prepared.model.state === undefined ? {} : { state: prepared.model.state }),
+          targets,
+        }),
+        targets,
+      });
+    },
+    registry,
+  });
   const agentApi = agentApiEnabled
     ? new AgentApi({
       artifacts,
@@ -922,6 +962,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
     playground,
     port: options.port,
     routeManifest,
+    routeInvocations,
     ...(runtime === undefined ? {} : { runtime }),
     skillDocuments,
     ...(options.workbenchDevOrigins === undefined || options.workbenchDevOrigins.length === 0
