@@ -6,7 +6,7 @@ import { expect, it } from '@rstest/core';
 import type { ProjectStatus } from '../../agent-bundle/src/contracts/project.ts';
 import { AdvancedPage, advancedSectionLabels, type AdvancedClients, type AdvancedProtocolSession } from '../src/advanced/advanced-page.tsx';
 import { ArtifactClient } from '../src/artifacts/artifact-client.ts';
-import { ComparisonClient } from '../src/comparisons/comparison-client.ts';
+import { ComparisonClient } from '../src/evals/comparison-client.ts';
 import { DiscoveryClient } from '../src/discovery/discovery-client.ts';
 import { EvalClient } from '../src/evals/eval-client.ts';
 import { LogClient } from '../src/logs/log-client.ts';
@@ -72,6 +72,8 @@ it('renders the sub-nav in section order with URL hrefs and the active section m
 it('mounts each existing page component under its section', () => {
   const evals = render('evals');
   expect(evals).toContain('advanced-section--evals');
+  expect(evals).toContain('aria-label="Evals sections"');
+  expect(evals).not.toContain('sub-nav--secondary');
   expect(evals).toMatch(/<button aria-selected="true"[^>]*role="tab"[^>]*>Runs<\/button>/u);
   expect(evals).toMatch(/<button aria-selected="false"[^>]*role="tab"[^>]*>Compare<\/button>/u);
 

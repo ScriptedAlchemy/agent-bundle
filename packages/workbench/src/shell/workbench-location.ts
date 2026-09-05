@@ -18,21 +18,21 @@ import {
   type ApplicationNodeRef,
   applicationNodePath,
   applicationNodeRefForPathSegments,
-} from '../../../agent-bundle/src/dev/routes/application-node.ts';
-import { isWorkbenchShellPath } from '../../../agent-bundle/src/dev/workbench-shell-paths.ts';
+  isWorkbenchShellPath,
+} from '../../../agent-bundle/src/contracts/workbench-shell.ts';
 
 export type {
   ApplicationMcpNodeKind,
   ApplicationNodeKind,
   ApplicationNodeRef,
-} from '../../../agent-bundle/src/dev/routes/application-node.ts';
+} from '../../../agent-bundle/src/contracts/workbench-shell.ts';
 export {
   applicationNodeKey,
   applicationNodePath,
   applicationNodeRefForRouteId,
   routeIdForApplicationNodeRef,
   sameApplicationNodeRef,
-} from '../../../agent-bundle/src/dev/routes/application-node.ts';
+} from '../../../agent-bundle/src/contracts/workbench-shell.ts';
 export { isWorkbenchShellPath };
 
 export type AdvancedSection = 'artifact' | 'evals' | 'hosts' | 'logs' | 'protocol';

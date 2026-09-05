@@ -23,8 +23,8 @@ import { createRuntimeBackend } from './application/runtime-backend.ts';
 import type { WorkspaceClients } from './application/workspace-contracts.ts';
 import { ArtifactClient } from './artifacts/artifact-client.ts';
 import { errorMessage as messageFrom } from './client-helpers.ts';
-import { ComparisonClient } from './comparisons/comparison-client.ts';
 import { DiscoveryClient } from './discovery/discovery-client.ts';
+import { ComparisonClient } from './evals/comparison-client.ts';
 import { EvalClient } from './evals/eval-client.ts';
 import { HookClient } from './hooks/hook-client.ts';
 import { LifecycleClient } from './lifecycles/lifecycle-client.ts';
@@ -43,7 +43,7 @@ import {
   createRuntimePlaygroundController,
   runtimeBootstrapRetryPlan,
   type RuntimePlaygroundController,
-} from './runtime-playground.tsx';
+} from './runtime-controller.ts';
 import { activeEpochFor, problemsFor, type Problem } from './shell/build-status-model.ts';
 import { ConnectionGate } from './shell/shell-status.tsx';
 import { applicationNodePath, type WorkbenchLocation } from './shell/workbench-location.ts';
@@ -420,19 +420,19 @@ const Workbench = () => {
   if (connection.generation === undefined && connectionGate !== undefined) return connectionGate;
   if (status === undefined) {
     if (connectionGate !== undefined) return connectionGate;
-    return <main aria-live="polite" className="loading-state">
+    return <main aria-live="polite" className="loading-state" data-testid="workbench-loading">
       <strong>Loading project state…</strong>
       {runtimeError === undefined ? undefined : <p className="runtime-capability-error">Runtime capability issue: {runtimeError}</p>}
     </main>;
   }
   if (buildId !== undefined && capabilities === undefined) {
     const content = capabilityState.state === 'error' && capabilityState.buildId === buildId
-      ? <main aria-live="polite" className="loading-state">
+      ? <main aria-live="polite" className="loading-state" data-testid="workbench-loading">
           <h1>Bundle capabilities unavailable</h1>
           <p role="alert">{capabilityState.message}</p>
           <button onClick={() => setCapabilityRetry((current) => current + 1)} type="button">Retry</button>
         </main>
-      : <main aria-live="polite" className="loading-state"><strong>Loading bundle capabilities…</strong></main>;
+      : <main aria-live="polite" className="loading-state" data-testid="workbench-loading"><strong>Loading bundle capabilities…</strong></main>;
     return <>
       <div className="connection-content" inert={connectionGate === undefined ? undefined : true} key={connection.generation}>{content}</div>
       {connectionGate}

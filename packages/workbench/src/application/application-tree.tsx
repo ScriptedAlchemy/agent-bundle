@@ -1,7 +1,9 @@
 import React, { useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 
-import type { ApplicationNodeRef } from '../../../agent-bundle/src/dev/routes/application-node.ts';
-import { sameApplicationNodeRef } from '../../../agent-bundle/src/dev/routes/application-node.ts';
+import {
+  type ApplicationNodeRef,
+  sameApplicationNodeRef,
+} from '../../../agent-bundle/src/contracts/workbench-shell.ts';
 import {
   filterApplicationTree,
   type ApplicationGroup,
@@ -192,7 +194,7 @@ export const ApplicationTreeView = ({
             ? 'This project declares no application surfaces.'
             : 'No application surfaces match this filter.'}
         </p>
-      : <div aria-label="Application" className="application-tree" ref={root} role="tree">
+      : <div aria-label="Application" className="application-tree" data-testid="application-tree" ref={root} role="tree">
           {visibleTree.groups.map(renderGroup)}
         </div>}
   </section>;

@@ -10,8 +10,7 @@ import type { ProjectStatus } from '../../../agent-bundle/src/contracts/project.
 import { ArtifactClient } from '../artifacts/artifact-client.ts';
 import { ArtifactsPage } from '../artifacts/artifacts-page.tsx';
 import { downloadBlob } from '../client-helpers.ts';
-import type { ComparisonClient } from '../comparisons/comparison-client.ts';
-import { ComparisonsPage } from '../comparisons/comparisons-page.tsx';
+import type { ComparisonClient } from '../evals/comparison-client.ts';
 import type { DiscoveryClient } from '../discovery/discovery-client.ts';
 import { DiscoveryPage } from '../discovery/discovery-page.tsx';
 import type { EvalClient } from '../evals/eval-client.ts';
@@ -70,19 +69,6 @@ const mcpTargets = ['portable', 'claude', 'codex'] as const;
 
 const downloadMcpFile = ({ blob, filename }: McpDownload): void => downloadBlob(blob, filename);
 
-type EvalsTab = 'compare' | 'runs';
-
-const EvalsSection = ({ comparisonClient, evalClient }: { readonly comparisonClient: ComparisonClient; readonly evalClient: EvalClient }) => {
-  const [tab, setTab] = useState<EvalsTab>('runs');
-  return <div className="advanced-evals">
-    <div className="sub-nav sub-nav--secondary" role="tablist" aria-label="Evals">
-      <button aria-selected={tab === 'runs'} onClick={() => setTab('runs')} role="tab" type="button">Runs</button>
-      <button aria-selected={tab === 'compare'} onClick={() => setTab('compare')} role="tab" type="button">Compare</button>
-    </div>
-    {tab === 'runs' ? <EvalsPage client={evalClient} /> : <ComparisonsPage comparisonClient={comparisonClient} evalClient={evalClient} />}
-  </div>;
-};
-
 /**
  * The raw MCP protocol inspector: the artifact-bound `McpPage` with the
  * published epoch's servers as advisory defaults. Unmounting closes any App
@@ -136,7 +122,7 @@ const ProtocolSection = ({ appClient, artifactClient, protocol, status }: {
 const AdvancedSectionContent = ({ clients, manifestSourceRevision, protocol, section, status }: Omit<AdvancedPageProps, 'onNavigate'>) => {
   switch (section) {
     case 'evals':
-      return <EvalsSection comparisonClient={clients.comparisonClient} evalClient={clients.evalClient} />;
+      return <EvalsPage client={clients.evalClient} comparisonClient={clients.comparisonClient} />;
     case 'artifact':
       return <ArtifactsPage client={clients.artifactClient} epochId={activeEpochFor(status)?.id} />;
     case 'protocol':

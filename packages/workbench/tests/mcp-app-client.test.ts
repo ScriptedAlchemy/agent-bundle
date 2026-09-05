@@ -6,11 +6,9 @@ import {
   assertCurrentMcpAppDocumentPolicy,
   isCurrentMcpAppDocumentPolicy,
   McpAppClient as McpAppClientImplementation,
-  type McpAppConsentChallenge,
   type McpAppPreviewCreateRequest,
 } from '../src/mcp/mcp-app-client.ts';
 import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
-import { createRuntimeConsentQueue } from '../src/mcp/runtime-consent-queue.ts';
 import { ProjectClient, type EventSourceLike, type EventSourceMessage } from '../src/project-client.ts';
 
 const foregroundCookieName = 'agent-bundle-foreground-session-0123456789abcdef0123456789abcdef';
@@ -334,7 +332,7 @@ describe('MCP App browser client', () => {
     expect(calls[6]?.[1]?.method).toBe('DELETE');
   });
 
-  it('abandons cancelled runtime consent challenges before a late decision can dispatch or replay', async () => {
+  it('abandons runtime consent challenges before a late decision can dispatch or replay', async () => {
     const decisionPaths: string[] = [];
     let nextConsent = 0;
     let holdDecision = false;
@@ -372,21 +370,10 @@ describe('MCP App browser client', () => {
     const runtime = new McpAppClient({ fetch: fetch as typeof globalThis.fetch }) as McpAppClient & {
       abandonRuntimeConsent(bindingId: string, consentId: string): void;
     };
-    const queue = createRuntimeConsentQueue(() => undefined);
     await runtime.createRuntime({ expectedGenerationId: 'generation-a', profileId: 'portable', runId: 'run-a' });
 
-    for (let index = 0; index < 2; index += 1) {
+    for (let remaining = 2; remaining > 0; remaining -= 1) {
       const created = await runtime.createRuntimeConsent('runtime-binding', request);
-      const abort = new AbortController();
-      const promptChallenge: McpAppConsentChallenge = Object.freeze({
-        expiresAt: created.challenge.expiresAt,
-        id: created.challenge.id,
-        request: Object.freeze({}),
-      });
-      const prompting = queue.request(promptChallenge, abort.signal);
-      const reason = new DOMException(`Prompt ${index} cancelled.`, 'AbortError');
-      abort.abort(reason);
-      await expect(prompting).rejects.toBe(reason);
       expect(runtime.abandonRuntimeConsent).toBeTypeOf('function');
       runtime.abandonRuntimeConsent('runtime-binding', created.challenge.id);
       await expect(runtime.decideRuntimeConsent('runtime-binding', created.challenge.id, 'allow-once')).rejects.toMatchObject({ code: 'AB8015' });

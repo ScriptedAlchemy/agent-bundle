@@ -47,7 +47,7 @@ const tree: ApplicationTree = {
     { key: 'skills', kind: 'skills', label: 'Skills', leaves: [leaf('skill:review', 'document')] },
   ],
   leafCount: 3,
-  state: 'current',
+  state: 'fresh',
 };
 
 const backend = (kind: InvocationBackend['kind'], history: (leaf: ApplicationLeaf) => Promise<readonly RouteInvocationSummary[]>, accepts: (leaf: ApplicationLeaf) => boolean = () => true): InvocationBackend & { readonly asked: string[] } => {
