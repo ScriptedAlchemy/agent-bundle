@@ -426,6 +426,11 @@ it('purges AGENT_BUNDLE_STATE_ROOT from the installed host manifest', async () =
         },
       }),
     ]);
+    await writeInstallFixtureManifest(
+      fixture.bundleRoot,
+      { name: 'uninstall-fixture', version: '1.2.3' },
+      [{ host: 'cursor' }],
+    );
     await installBundle(options);
     await mkdir(declaredStateRoot, { recursive: true });
     await writeFile(join(declaredStateRoot, 'plugin.sqlite'), 'declared\n');

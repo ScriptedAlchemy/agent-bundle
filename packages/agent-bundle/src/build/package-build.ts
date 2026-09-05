@@ -16,7 +16,6 @@ import type {
 } from '../core/types.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { assertInside, toPosixRelative } from '../core/paths.ts';
-import { cliBinSourceInputs } from './cli-bins.ts';
 import {
   createCompileEvidenceRecord,
   type CompileEvidenceRecord,

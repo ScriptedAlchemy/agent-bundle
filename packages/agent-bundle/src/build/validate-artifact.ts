@@ -535,6 +535,7 @@ const validateArtifactOwnership = (options: {
 
   for (const file of options.files) {
     if (admitsEverything) continue;
+    if (artifactRootMetadata.has(file.path)) continue;
     if (known.some((target) => isProjectionArtifactPath(file.path, target, options.registry))) continue;
     // Prebuilt payload files live in config-named directories under the
     // root, so no emitted layout describes them.
