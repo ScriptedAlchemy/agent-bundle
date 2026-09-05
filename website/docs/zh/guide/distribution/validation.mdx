@@ -38,19 +38,19 @@ Node 内建模块（`node:fs`、`fs`），要么以相对或 `file:` 说明符�
 
 ## Claude Code 严格校验
 
-当 Claude Code 位于 `PATH` 上时，产物校验会为输出的 `claude` target 以及统一的 `plugin` target 运行
-已安装的 `claude plugin validate`。`agent-bundle build` 会对刚写出的产物运行同样的检查
-（`--no-host-validation` 跳过；`--strict` 把宿主 warning 提升为构建 error），而
-`agent-bundle doctor --host claude --from <bundle-dir>` 会对该 bundle 以及 Claude 列出的每一份已安装副本运行
+宿主校验只为所选投影运行，且作用于组合根目录。当 Claude Code 位于 `PATH` 上、且所选投影中包含 `claude`
+时，产物校验会对根目录运行已安装的 `claude plugin validate`。`agent-bundle build` 会对刚写出的根目录运行
+同样的检查（`--no-host-validation` 跳过；`--strict` 把宿主 warning 提升为构建 error），而
+`agent-bundle doctor --host claude --from <root>` 会对该根目录以及 Claude 列出的每一份已安装副本运行
 这些检查。Claude Code 根据被指向的清单决定检查什么：一个同时包含
-`.claude-plugin/plugin.json` 与 `.claude-plugin/marketplace.json` 的 bundle 目录会被当作 marketplace，
+`.claude-plugin/plugin.json` 与 `.claude-plugin/marketplace.json` 的根目录会被当作 marketplace，
 而 marketplace 校验从不打开插件的 hook、skill、agent 或 command 文件。因此 Agent Bundle 运行两条命令：
 
 ```sh
 # plugin.json、hooks/hooks.json、skills/、agents/、commands/
-claude plugin validate <bundle-dir>/.claude-plugin/plugin.json --strict
+claude plugin validate <root>/.claude-plugin/plugin.json --strict
 # marketplace schema、插件名、source 路径
-claude plugin validate <bundle-dir>/.claude-plugin/marketplace.json --strict
+claude plugin validate <root>/.claude-plugin/marketplace.json --strict
 ```
 
 - 宿主的 **error** 会变成 Agent Bundle 的 error（`AB6021`）。
@@ -61,14 +61,13 @@ claude plugin validate <bundle-dir>/.claude-plugin/marketplace.json --strict
   版本早于 2.1.259 时才解析文本报告。marketplace 那次
   运行中对插件运行已报告过的清单发现的 `plugins[0] plugin.json →` 副本会被丢弃。
 - 二进制文件缺失会被报告为一次显式的信息性**跳过**（`AB6019`），绝不会伪造成功；探测或运行无法完成
-  时为 `AB6022`。`PATH` 上没有 `claude` 时，`build` 只会启动一次进程并只报告一次跳过，无论它构建了多少个
-  `claude`/`plugin` target。
+  时为 `AB6022`。`PATH` 上没有 `claude` 时，`build` 只会启动一次进程并只报告一次跳过。
 
 ### 加载检查
 
 校验不是加载结论。Claude Code 2.1.250 到 2.1.260 在 `--strict` 下会接受一些随后会被会话拒绝加载的清单与
 组件文件——例如无效的 `monitors/monitors.json`，或指向自动加载的 `hooks/hooks.json` 的 `hooks` 字段。拒绝
-唯一显现的地方是 `claude --plugin-dir <bundle-dir> plugin list --json`（"Plugins reference" → "plugin list"）
+唯一显现的地方是 `claude --plugin-dir <root> plugin list --json`（"Plugins reference" → "plugin list"）
 中该插件所在的行：被拒绝的行带有 `errors` 数组，内含宿主的消息；健康的行没有 `errors` 键。因此 `build` 与
 `validate --artifact` 在两次校验运行之后正好执行这条列表命令，并读取 bundle 的 `<name>@inline` 行：
 
@@ -91,10 +90,10 @@ npx agent-bundle validate --artifact artifact --strict
 当需要确定性的、只看 schema 的检查时使用 `--no-host-validation` ——没有安装这些宿主的机器也必须能运行
 同一道门禁，并得到同样的 schema 结论。
 
-在开发期，先在不安装的情况下为单个会话加载已构建 target，然后迭代：
+在开发期，先在不安装的情况下为单个会话加载已构建的根目录，然后迭代：
 
 ```sh
-claude --plugin-dir artifact/claude
+claude --plugin-dir artifact
 ```
 
 在 `agent-bundle build` 重写了 `hooks/`、`.mcp.json` 或 `agents/` 之后，在该会话中运行
@@ -102,11 +101,11 @@ claude --plugin-dir artifact/claude
 `claude plugin list` 不可见；把该标志放在子命令之前即可查看：
 
 ```sh
-claude --plugin-dir artifact/claude plugin list --json
+claude --plugin-dir artifact plugin list --json
 ```
 
 这份列表就是上文描述的加载结论，`build` 与 `validate --artifact` 会替你运行它。`agent-bundle doctor --host
-claude --from <bundle-dir>` 会在 `--plugin-dir` 注册证明与已安装副本两处读取同一个 `errors` 数组，并报告为
+claude --from <root>` 会在 `--plugin-dir` 注册证明与已安装副本两处读取同一个 `errors` 数组，并报告为
 `AB7325`（`load-failed`）；当已安装副本带有该数组时，`agent-bundle install claude` 以 `AB7006` 失败。被固定的
 Claude `plugin` schema 也会预先拒绝 `hooks: "./hooks/hooks.json"`（`AB6012`），因为清单中的该字段只用于*额外的*
 hook 文件。
@@ -124,7 +123,7 @@ schema 校验它们输出的 JSON 文档，并把宿主的 schema 生成器视�
 | 代码 | 严重级别 | 含义 |
 | --- | --- | --- |
 | `AB6026` | info | 每份 Cursor 报告都会声明 Cursor 未发布 plugin-validate 动词，并指明本地校验所用的 vendored schema 固定版本。 |
-| `AB6027` | error | 某个必需的生成式 Cursor 文档缺失，或者已存在的 plugin、市场、MCP 或 hooks 文档不可读、不是合法 JSON，或被其固定 schema 拒绝。hooks 文档是 `.cursor-plugin/plugin.json` 的 `hooks` 字段所指定的那个（`cursor` 目标为 `hooks/hooks.json`，统一 `plugin` 目标为 `hooks/hooks-cursor.json`，或内联对象），仅在该字段缺失时才回退到 `hooks/hooks.json`；指定的文件缺失或逃逸出插件根目录时为 error。 |
+| `AB6027` | error | 某个必需的生成式 Cursor 文档缺失，或者已存在的 plugin、市场、MCP 或 hooks 文档不可读、不是合法 JSON，或被其固定 schema 拒绝。hooks 文档是 `.cursor-plugin/plugin.json` 的 `hooks` 字段所指定的那个（紧挨着清单的 `.cursor-plugin/hooks.json`，或内联对象），仅在该字段缺失时才回退到 `hooks/hooks.json`；指定的文件缺失或逃逸出插件根目录时为 error。 |
 | `AB6028` | error | 生成的字节违反了被固定的 Cursor 加载器证据：清单候选优先级选中了回退清单、符号链接解析到捆绑包之外，或者 `CURSOR_PLUGIN_ROOT` 出现在加载器替换字段之外。 |
 | `AB6029` | info / warning | Cursor Agent 版本探测不可用（`ENOENT`，info），或未能完成（warning）。本地的固定 schema 校验仍会运行。 |
 | `AB6030` | info | Codex CLI 不可用，或已安装的 Codex 版本未发布插件校验命令。 |

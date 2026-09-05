@@ -1,10 +1,5 @@
 import type { NormalizedPlugin } from '../core/types.ts';
-import {
-  sortedEntries,
-  sourceInputs,
-  type TargetArtifactPlan,
-  type TargetArtifactWrite,
-} from '../adapters/types.ts';
+import { sourceInputs, type TargetArtifactWrite } from '../adapters/types.ts';
 import {
   installReceiptFile,
   installReceiptFormat,
@@ -14,7 +9,7 @@ import {
   preservedRuntimeEntries,
 } from './receipt.ts';
 
-export type BuiltInTarget = 'claude' | 'codex' | 'cursor' | 'portable';
+type BuiltInTarget = 'claude' | 'codex' | 'cursor' | 'portable';
 
 const marketplaceName = (model: NormalizedPlugin): string => `${model.metadata.name}-marketplace`;
 
@@ -280,25 +275,42 @@ const portableInstructions = (): string[] => [
   '',
 ];
 
-const installMarkdown = (model: NormalizedPlugin, target: BuiltInTarget): string => {
-  const sections = (() => {
-    switch (target) {
-      case 'claude':
-        return claudeInstructions(model);
-      case 'codex':
-        return codexInstructions(model);
-      case 'cursor':
-        return cursorInstructions(model);
-      case 'portable':
-        return portableInstructions();
-      default: {
-        const exhaustive: never = target;
-        throw new TypeError(`Unknown built-in install target ${String(exhaustive)}.`);
-      }
+const builtInTargetOrder: readonly BuiltInTarget[] = Object.freeze(['claude', 'codex', 'cursor', 'portable']);
+
+const isBuiltInTarget = (target: string): target is BuiltInTarget =>
+  (builtInTargetOrder as readonly string[]).includes(target);
+
+/**
+ * The built-in hosts among the selected projections, in the fixed order the
+ * install surface documents them, so the surface never depends on the order
+ * `targets` was written in (#555 acceptance 5). Advanced registries that
+ * select a custom target get no section for it.
+ */
+const selectedBuiltInTargets = (selected: readonly string[]): readonly BuiltInTarget[] =>
+  builtInTargetOrder.filter((target) => selected.includes(target));
+
+const instructionsFor = (model: NormalizedPlugin, target: BuiltInTarget): string[] => {
+  switch (target) {
+    case 'claude':
+      return claudeInstructions(model);
+    case 'codex':
+      return codexInstructions(model);
+    case 'cursor':
+      return cursorInstructions(model);
+    case 'portable':
+      return portableInstructions();
+    default: {
+      const exhaustive: never = target;
+      throw new TypeError(`Unknown built-in install target ${String(exhaustive)}.`);
     }
-  })();
-  return [...header(model), ...sections].join('\n');
+  }
 };
+
+/** One `INSTALL.md` for the composite root: a section per selected built-in host. */
+const installMarkdown = (model: NormalizedPlugin, selected: readonly string[]): string => [
+  ...header(model),
+  ...selectedBuiltInTargets(selected).flatMap((target) => instructionsFor(model, target)),
+].join('\n');
 
 /**
  * The `--uninstall` half of the standalone installer, mirroring
@@ -1382,46 +1394,49 @@ const cursorInstallerSource = (model: NormalizedPlugin): string => {
   ].join('\n');
 };
 
-const needsCursorInstaller = (target: BuiltInTarget): boolean =>
-  target === 'cursor' || target === 'portable';
+/** The self-contained installer ships when a selected host has no non-interactive install verb. */
+const needsCursorInstaller = (selected: readonly string[]): boolean =>
+  selected.includes('cursor') || selected.includes('portable');
 
+/**
+ * The install-surface files a composite root with these selected projections
+ * must contain: `INSTALL.md` whenever a built-in host is selected, plus
+ * `install.mjs` when Cursor or the portable format is among them.
+ */
 export const installSurfaceRequirements = (
-  target: string,
+  selected: readonly string[],
 ): readonly string[] => {
-  if (target === 'cursor' || target === 'portable') {
-    return Object.freeze(['INSTALL.md', 'install.mjs']);
-  }
-  if (target === 'claude' || target === 'codex') {
-    return Object.freeze(['INSTALL.md']);
-  }
-  return Object.freeze([]);
+  if (selected.filter(isBuiltInTarget).length === 0) return Object.freeze([]);
+  return needsCursorInstaller(selected)
+    ? Object.freeze(['INSTALL.md', 'install.mjs'])
+    : Object.freeze(['INSTALL.md']);
 };
 
+/**
+ * The install surface of one composite root, emitted once over every selected
+ * projection rather than by each host planner (#555). The distribution-form
+ * aware rewrite of these documents is a later step; this composes the existing
+ * per-host sections.
+ */
 export const installSurfaceEntries = (
   model: NormalizedPlugin,
-  target: BuiltInTarget,
-): readonly TargetArtifactWrite[] => Object.freeze([
-  Object.freeze({
-    content: installMarkdown(model, target),
-    kind: 'write' as const,
-    relativePath: 'INSTALL.md',
-    sourceInputs: sourceInputs(model.metadata.provenance.sourcePath),
-  }),
-  ...(needsCursorInstaller(target)
-    ? [Object.freeze({
-        content: cursorInstallerSource(model),
-        kind: 'write' as const,
-        relativePath: 'install.mjs',
-        sourceInputs: sourceInputs(model.metadata.provenance.sourcePath),
-      })]
-    : []),
-]);
-
-export const withInstallSurface = (
-  plan: TargetArtifactPlan,
-  model: NormalizedPlugin,
-  target: BuiltInTarget,
-): TargetArtifactPlan => Object.freeze({
-  ...plan,
-  entries: sortedEntries([...plan.entries, ...installSurfaceEntries(model, target)]),
-});
+  selected: readonly string[],
+): readonly TargetArtifactWrite[] => {
+  if (selected.filter(isBuiltInTarget).length === 0) return Object.freeze([]);
+  return Object.freeze([
+    Object.freeze({
+      content: installMarkdown(model, selected),
+      kind: 'write' as const,
+      relativePath: 'INSTALL.md',
+      sourceInputs: sourceInputs(model.metadata.provenance.sourcePath),
+    }),
+    ...(needsCursorInstaller(selected)
+      ? [Object.freeze({
+          content: cursorInstallerSource(model),
+          kind: 'write' as const,
+          relativePath: 'install.mjs',
+          sourceInputs: sourceInputs(model.metadata.provenance.sourcePath),
+        })]
+      : []),
+  ]);
+};

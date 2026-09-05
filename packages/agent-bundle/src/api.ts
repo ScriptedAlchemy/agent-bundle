@@ -9,7 +9,8 @@ import { capabilityIsSupported, unavailableCapability } from './adapters/capabil
 import { createDefaultRegistry, TargetRegistry } from './adapters/registry.ts';
 import type { TargetArtifactEntry, TargetHookEntry } from './adapters/types.ts';
 import { build as buildArtifact, type BuildResult } from './build/build.ts';
-import { routedCliBins, targetHostsCliBin } from './build/cli-bins.ts';
+import { routedCliBins } from './build/cli-bins.ts';
+import { composeProjections } from './build/compose.ts';
 import { buildPackageOutputs, type PackageBuildResult } from './build/package-build.ts';
 import { rewritesWorkspaceProtocols } from './build/pack-dependencies.ts';
 import {
@@ -766,7 +767,7 @@ export const validate = async (options: ValidateOptions): Promise<ValidateResult
       const reports = await Promise.all(validated.snapshot.manifest.targets
         .map((target) => target.name)
         .filter(isHostValidatedTarget)
-        .map((target) => hostValidationReport(target, join(artifact, target), options.strict)));
+        .map((target) => hostValidationReport(target, artifact, options.strict)));
       return Object.freeze({
         diagnostics: freezeDiagnostics([
           ...validated.diagnostics,
@@ -1102,28 +1103,26 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
   let bundler: BundlerInspection | undefined;
   if (options.focus === 'bundler') {
     try {
+      // The bundler surfaces are those of the one composite root, so the
+      // inspection composes the same selection the build stages (#555).
       bundler = await composeBundlerInspection({
+        composite: composeProjections(model, prepared.registry),
         model,
         projectRoot: prepared.root,
-        targets: plans.map((plan) => {
-          const noticeDelivery = prepared.registry.noticeDelivery(plan.target);
-          return {
-            cliBin: targetHostsCliBin(prepared.registry, plan.target),
-            hookEntries: plan.hookEntries,
-            name: plan.target,
-            ...(noticeDelivery === undefined ? {} : { noticeDelivery }),
-          };
-        }),
         ...(prepared.tools === undefined ? {} : { tools: prepared.tools }),
       });
-    } catch {
+    } catch (error) {
+      // A root that cannot be composed (AB4103 collision, AB4105 scope leak)
+      // reports the composition diagnostics themselves, not a generic failure.
       return invalidInspection(freezeDiagnostics([
         ...prepared.diagnostics,
-        projectDiagnostic(
-          'AB7001',
-          'Unable to compose the bundler inspection.',
-          { sourcePath: prepared.configPath },
-        ),
+        ...(error instanceof DiagnosticError
+          ? error.diagnostics
+          : [projectDiagnostic(
+            'AB7001',
+            'Unable to compose the bundler inspection.',
+            { sourcePath: prepared.configPath },
+          )]),
       ]));
     }
   }
@@ -1257,8 +1256,9 @@ const buildHostValidation = async (
       reports.push(Object.freeze({ diagnostics: freezeDiagnostics([]), host: 'claude', status: 'unavailable', target }));
       continue;
     }
+    // The Claude projection's plugin directory is the composite root (#555).
     const report = await validateClaudePlugin({
-      pluginDirectory: join(output, target),
+      pluginDirectory: output,
       ...(options.hostValidationRunner === undefined ? {} : { run: options.hostValidationRunner }),
       ...(options.strict === undefined ? {} : { strict: options.strict }),
       target,

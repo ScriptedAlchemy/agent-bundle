@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
+import { projectionIdentity, sortedProjections } from '../adapters/composite-layout.ts';
 import { compileMcpApps } from '../build/mcp-apps.ts';
 import type { NormalizedMcpApp } from '../core/types.ts';
 import { compileTestManifest, proofLevelLabel, type TestableAppDescriptor } from '../test/manifest.ts';
@@ -49,12 +50,16 @@ export interface AgentBundleBrowserRstestConfig {
   };
 }
 
-const appTarget = (
+/**
+ * Every declared app must reach the compiled selection — the project's
+ * selected hosts, or the one host an override names.
+ */
+const assertAppReachesSelection = (
   app: TestableAppDescriptor,
   projectTargets: readonly string[],
   override: string | undefined,
   configPath: string,
-): string => {
+): void => {
   const target = override ?? app.targets.find((candidate) => projectTargets.includes(candidate));
   if (target === undefined || !projectTargets.includes(target) || !app.targets.includes(target)) {
     throw new Error([
@@ -67,7 +72,6 @@ const appTarget = (
       ...(override === undefined ? [] : [`  override:    ${override}`]),
     ].join('\n'));
   }
-  return target;
 };
 
 const normalizedApp = (app: TestableAppDescriptor, configPath: string): NormalizedMcpApp => {
@@ -113,9 +117,9 @@ export const agentBundleBrowserRstest = async (
   }
 
   const normalized = apps.map((app) => normalizedApp(app, configPath));
-  const targets = Object.fromEntries(
-    apps.map((app) => [app.id, appTarget(app, manifest.targets, options.target, configPath)]),
-  );
+  for (const app of apps) assertAppReachesSelection(app, manifest.targets, options.target, configPath);
+  // The pool compiles the same composite selection the build stages (#555).
+  const selected = sortedProjections(options.target === undefined ? manifest.targets : [options.target]);
   const outputRoot = resolve(root, '.agent-bundle', 'test', 'browser-app-build');
   await rm(outputRoot, { force: true, recursive: true });
   await mkdir(outputRoot, { recursive: true });
@@ -128,7 +132,8 @@ export const agentBundleBrowserRstest = async (
       version: manifest.plugin.version,
     },
     outDir: outputRoot,
-    targets,
+    selected,
+    target: projectionIdentity(selected),
   });
   if (compiled.length !== apps.length) {
     throw new Error(

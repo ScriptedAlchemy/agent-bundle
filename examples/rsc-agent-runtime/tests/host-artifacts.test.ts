@@ -103,11 +103,11 @@ const artifactDigest = async (root: string): Promise<readonly ArtifactDigestEntr
   return digest;
 };
 
-test('materializes self-contained Claude and Codex native plugin artifacts', async () => {
+test('materializes self-contained Claude and Codex native plugin artifacts in one composite root', async () => {
   await runPackageHosts();
-  const claudeRoot = join(pluginsRoot, 'claude');
-  const codexRoot = join(pluginsRoot, 'codex');
-  const claudeManifest = await readJson<{ name: string; version: string }>(join(claudeRoot, '.claude-plugin/plugin.json'));
+  // One composite root hosts every selected projection: Claude reads its
+  // conventional documents, Codex keeps its own beside its manifest.
+  const claudeManifest = await readJson<{ name: string; version: string }>(join(pluginsRoot, '.claude-plugin/plugin.json'));
   const codexManifest = await readJson<{
     interface: unknown;
     mcpServers: string;
@@ -115,22 +115,22 @@ test('materializes self-contained Claude and Codex native plugin artifacts', asy
     name: string;
     skills: string;
     version: string;
-  }>(join(codexRoot, '.codex-plugin/plugin.json'));
-  const claudeMcp = await readJson<{ mcpServers: Record<string, { args: string[] }> }>(join(claudeRoot, '.mcp.json'));
-  const codexMcp = await readJson<{ mcpServers: Record<string, { args: string[]; cwd: string }> }>(join(codexRoot, '.mcp.json'));
+  }>(join(pluginsRoot, '.codex-plugin/plugin.json'));
+  const claudeMcp = await readJson<{ mcpServers: Record<string, { args: string[] }> }>(join(pluginsRoot, '.mcp.json'));
+  const codexMcp = await readJson<{ mcpServers: Record<string, { args: string[]; cwd: string }> }>(join(pluginsRoot, '.codex-plugin/mcp.json'));
   const claudeHooks = await readJson<{ hooks: { PostToolUse: Array<{ matcher: string; hooks: Array<{ command: string }> }> } }>(
-    join(claudeRoot, 'hooks/hooks.json'),
+    join(pluginsRoot, 'hooks/hooks.json'),
   );
   const codexHooks = await readJson<{ hooks: { PostToolUse: Array<{ matcher: string; hooks: Array<{ command: string }> }> } }>(
-    join(codexRoot, 'hooks/hooks.json'),
+    join(pluginsRoot, '.codex-plugin/hooks.json'),
   );
 
   // The generated identity is the config's `plugin` block.
   expect(claudeManifest).toMatchObject({ name: 'rsc-agent-runtime-demo', version: '1.0.0' });
   expect(codexManifest).toMatchObject({
-    hooks: './hooks/hooks.json',
+    hooks: './.codex-plugin/hooks.json',
     interface: expect.any(Object),
-    mcpServers: './.mcp.json',
+    mcpServers: './.codex-plugin/mcp.json',
     name: 'rsc-agent-runtime-demo',
     skills: './skills/',
     version: '1.0.0',
@@ -144,35 +144,34 @@ test('materializes self-contained Claude and Codex native plugin artifacts', asy
   expect(JSON.stringify(codexMcp)).not.toMatch(/\$\{|workspace/i);
   expect(claudeHooks.hooks.PostToolUse[0]).toMatchObject({ matcher: '^(?:Write|Edit)$' });
   expect(claudeHooks.hooks.PostToolUse[0].hooks[0].command).toContain('${CLAUDE_PLUGIN_ROOT}');
-  expect(claudeHooks.hooks.PostToolUse[0].hooks[0].command).toContain('hooks/event-route-tool-after.mjs');
+  // A hook both hosts receive compiles one wrapper per host.
+  expect(claudeHooks.hooks.PostToolUse[0].hooks[0].command).toContain('hooks/event-route-tool-after.claude.mjs');
   expect(codexHooks.hooks.PostToolUse[0]).toMatchObject({ matcher: '^(?:apply_patch|Edit|Write)$' });
   expect(codexHooks.hooks.PostToolUse[0].hooks[0].command).toContain('${PLUGIN_ROOT}');
-  expect(codexHooks.hooks.PostToolUse[0].hooks[0].command).toContain('hooks/event-route-tool-after.mjs');
+  expect(codexHooks.hooks.PostToolUse[0].hooks[0].command).toContain('hooks/event-route-tool-after.codex.mjs');
   expect(JSON.stringify({ claudeMcp, claudeHooks, codexMcp, codexHooks })).not.toMatch(/api[ _-]?key/i);
 
   const runtimeRoot = join(exampleRoot, 'dist/runtime');
   const runtimeDigest = await artifactDigest(runtimeRoot);
-  expect(await artifactDigest(join(claudeRoot, 'runtime'))).toEqual(runtimeDigest);
-  expect(await artifactDigest(join(codexRoot, 'runtime'))).toEqual(runtimeDigest);
+  // The prebuilt runtime payload is packaged once, shared by every projection.
+  expect(await artifactDigest(join(pluginsRoot, 'runtime'))).toEqual(runtimeDigest);
 
   const assets = await runtimeAssets();
   expect(assets.some((asset) => /^chunks\/.+\.js$/u.test(asset))).toBe(true);
-  for (const root of [claudeRoot, codexRoot]) {
-    for (const asset of assets) {
-      await access(join(root, 'runtime', asset));
-    }
-    const asyncChunk = assets.find((asset) => /^chunks\/.+\.js$/.test(asset));
-    expect(asyncChunk).toBeDefined();
-    expect((await stat(join(root, 'runtime', asyncChunk!))).isFile()).toBe(true);
+  for (const asset of assets) {
+    await access(join(pluginsRoot, 'runtime', asset));
   }
+  const asyncChunk = assets.find((asset) => /^chunks\/.+\.js$/.test(asset));
+  expect(asyncChunk).toBeDefined();
+  expect((await stat(join(pluginsRoot, 'runtime', asyncChunk!))).isFile()).toBe(true);
   for (const relative of ['dist/app/edit-timeline-v1.html', 'dist/app/standalone.html']) {
     const appHtml = await readFile(join(exampleRoot, relative), 'utf8');
     expect(appHtml).not.toMatch(/<script[^>]+src=|<link[^>]+rel=["']stylesheet["']/iu);
   }
   // A skill-less plugin emits no `skills/` directory, while the manifest's
   // `./skills/` pointer stays — as in every framework-built Codex artifact.
-  for (const relative of ['.agents/plugins/marketplace.json', '.codex-plugin/plugin.json', '.mcp.json', 'hooks/hooks.json']) {
-    await access(join(codexRoot, relative));
+  for (const relative of ['.agents/plugins/marketplace.json', '.codex-plugin/plugin.json', '.codex-plugin/mcp.json', '.codex-plugin/hooks.json']) {
+    await access(join(pluginsRoot, relative));
   }
 });
 
@@ -192,7 +191,7 @@ test('keeps fresh production App legal payload names stable and package-identica
   for (const entry of appDigest) {
     expect(entry.path).not.toMatch(/(?:^|\/)[^/]*\.[a-f\d]{8,}\.(?:js|css)(?:\.LICENSE\.txt)?$/iu);
   }
-  for (const appRoot of [join(exampleRoot, 'dist/app'), ...['claude', 'codex'].map((host) => join(pluginsRoot, host, 'app'))]) {
+  for (const appRoot of [join(exampleRoot, 'dist/app'), join(pluginsRoot, 'app')]) {
     const payload = await artifactDigest(appRoot);
     expect(payload).toEqual(appDigest);
     let legalReferences = 0;
@@ -218,9 +217,9 @@ test('keeps fresh production App legal payload names stable and package-identica
 test('runs the packaged MCP server after its artifact is isolated from the example dist directory', async () => {
   await runPackageHosts();
   const temporaryRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-isolated-'));
-  const pluginRoot = join(temporaryRoot, 'claude');
+  const pluginRoot = join(temporaryRoot, 'plugin');
   const stateFile = join(temporaryRoot, 'state.sqlite');
-  await cp(join(pluginsRoot, 'claude'), pluginRoot, { recursive: true });
+  await cp(pluginsRoot, pluginRoot, { recursive: true });
   await writeFile(stateFile, '', 'utf8');
 
   const client = new Client({ name: 'host-artifact-test', version: '1.0.0' });
@@ -256,10 +255,10 @@ test('replays schema-conformance fixtures through each packaged native event rou
     for (const host of ['claude', 'codex'] as const) {
       const pluginRoot = join(temporaryRoot, `${host} plugin root ; ordinary`);
       const stateFile = join(temporaryRoot, `${host}-state.sqlite`);
-      const manifestPath = join(pluginRoot, 'hooks/hooks.json');
+      const manifestPath = join(pluginRoot, host === 'claude' ? 'hooks/hooks.json' : '.codex-plugin/hooks.json');
       const rootVariable = host === 'claude' ? 'CLAUDE_PLUGIN_ROOT' : 'PLUGIN_ROOT';
       const filename = `${host}-note.txt`;
-      await cp(join(pluginsRoot, host), pluginRoot, { recursive: true });
+      await cp(pluginsRoot, pluginRoot, { recursive: true });
       const manifest = await readJson<{ hooks: { PostToolUse: Array<{ hooks: Array<{ command: string }> }> } }>(manifestPath);
       const command = manifest.hooks.PostToolUse[0]?.hooks[0]?.command;
       expect(command).toBeTypeOf('string');
@@ -285,11 +284,11 @@ test('replays schema-conformance fixtures through each packaged native event rou
         },
       });
       expect((await readFile(argvFile)).toString('utf8').split('\0').filter(Boolean)).toEqual([
-        join(pluginRoot, 'hooks/event-route-tool-after.mjs'),
+        join(pluginRoot, `hooks/event-route-tool-after.${host}.mjs`),
       ]);
       const recorded = await createFileRuntimeKernel({ stateFile }).readSnapshot();
       expect(recorded.edits.map((edit) => edit.host)).toEqual([host]);
-      expect(command).toBe(`node "\${${rootVariable}}/hooks/event-route-tool-after.mjs"`);
+      expect(command).toBe(`node "\${${rootVariable}}/hooks/event-route-tool-after.${host}.mjs"`);
       expect(command).not.toMatch(/(?:api[ _-]?key|echo|printenv|AGENT_RUNTIME_)/iu);
     }
   } finally {

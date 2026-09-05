@@ -37,18 +37,18 @@ const validDocuments = Object.freeze({
       longDescription: 'A fixture plugin.',
       shortDescription: 'A fixture plugin.',
     },
-    hooks: './hooks/hooks.json',
-    mcpServers: './.mcp.json',
+    hooks: './.codex-plugin/hooks.json',
+    mcpServers: './.codex-plugin/mcp.json',
     name: 'fixture',
     skills: './skills/',
     version: '1.0.0',
   },
-  '.mcp.json': {
+  '.codex-plugin/mcp.json': {
     mcpServers: {
       fixture: { command: 'node', type: 'stdio' },
     },
   },
-  'hooks/hooks.json': {
+  '.codex-plugin/hooks.json': {
     hooks: {
       Stop: [{
         hooks: [{ command: 'node ./hooks/stop.mjs', type: 'command' }],
@@ -309,8 +309,8 @@ it('rejects malformed fixtures for every locally validated Codex schema', async 
       ...validDocuments['.codex-plugin/plugin.json'],
       interface: { ...validDocuments['.codex-plugin/plugin.json'].interface, screenshots: ['./assets/../outside.png'] },
     }],
-    ['hooks/hooks.json', { hooks: { Stop: [{ hooks: [{ command: '', type: 'command' }] }] } }],
-    ['.mcp.json', { mcpServers: { fixture: { type: 'streamable-http', url: 'not a uri' } } }],
+    ['.codex-plugin/hooks.json', { hooks: { Stop: [{ hooks: [{ command: '', type: 'command' }] }] } }],
+    ['.codex-plugin/mcp.json', { mcpServers: { fixture: { type: 'streamable-http', url: 'not a uri' } } }],
     ['.agents/plugins/marketplace.json', {
       ...validDocuments['.agents/plugins/marketplace.json'],
       plugins: [],

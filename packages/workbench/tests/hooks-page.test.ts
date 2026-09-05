@@ -16,7 +16,7 @@ import { hookPlaygroundViewFor } from '../src/hooks/hooks-model.ts';
 
 const hooks: readonly HookPlaygroundHook[] = [{
   binding: { epochId: 'epoch-1', hook: 'hook:session-start', target: 'claude' },
-  hook: { event: 'sessionStart', id: 'hook:session-start', name: 'session-start', path: 'claude/hooks/session-start.mjs', target: 'claude' },
+  hook: { event: 'sessionStart', id: 'hook:session-start', name: 'session-start', path: 'hooks/session-start.mjs', target: 'claude' },
 }];
 
 const simulation: HookPlaygroundSimulation = {
@@ -34,7 +34,7 @@ const simulation: HookPlaygroundSimulation = {
     nativeProjection: 'deterministic',
     nativeSelector: 'SessionStart',
     target: 'claude',
-    wrapperPath: 'claude/hooks/session-start.mjs',
+    wrapperPath: 'hooks/session-start.mjs',
   },
   nativeInput: { cwd: '/workspace', hook_event_name: 'SessionStart', session_id: 'session-1', source: 'startup' },
   nativeOutput: { hookSpecificOutput: { additionalContext: 'Ready to review', hookEventName: 'SessionStart' } },
@@ -112,7 +112,7 @@ it('renders the canonical intent, host mapping, and native trace of a simulation
   expect(markup).toContain('Canonical result');
   expect(markup).toContain('sessionStart');
   expect(markup).toContain('SessionStart');
-  expect(markup).toContain('claude/hooks/session-start.mjs');
+  expect(markup).toContain('hooks/session-start.mjs');
   expect(markup).toContain('startup');
   expect(markup).toContain('hook_event_name');
   expect(markup).toContain('hookSpecificOutput');

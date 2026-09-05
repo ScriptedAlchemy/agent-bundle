@@ -1,5 +1,4 @@
 import { spawn } from 'node:child_process';
-import { join } from 'node:path';
 
 import { Effect, FileSystem } from 'effect';
 
@@ -243,7 +242,7 @@ export const runCodexEvalTrial = async (options: RunCodexEvalTrialOptions): Prom
       try {
         await runWithPlatform(Effect.flatMap(
           FileSystem.FileSystem,
-          (fs) => fs.copy(join(options.artifact.root, target), temporary.candidate, { overwrite: true }),
+          (fs) => fs.copy(options.artifact.root, temporary.candidate, { overwrite: true }),
         ));
       } catch (error) {
         throw new CodexEvalHarnessError(

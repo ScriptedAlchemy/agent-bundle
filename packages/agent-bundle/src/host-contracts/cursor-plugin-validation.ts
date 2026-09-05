@@ -39,20 +39,23 @@ type DocumentKind = 'hooks' | 'manifest' | 'marketplace' | 'mcp';
 
 const manifestPath = '.cursor-plugin/plugin.json';
 const marketplacePath = '.cursor-plugin/marketplace.json';
-const mcpPath = 'mcp.json';
 /** Cursor's folder-discovery default for hooks, used only when the manifest declares no `hooks` field. */
 export const cursorDefaultHooksPath = 'hooks/hooks.json';
+/** Cursor's folder-discovery default for MCP servers, used only when the manifest declares no `mcpServers` field. */
+const cursorDefaultMcpPath = 'mcp.json';
 const inlineHooksPath = `${manifestPath}#/hooks`;
+const inlineMcpPath = `${manifestPath}#/mcpServers`;
 
 /**
  * Where the pinned Cursor loader reads a plugin's hooks from, resolved from the
  * `.cursor-plugin/plugin.json` `hooks` field the way the loader does: a string
  * is a plugin-root-relative path that replaces folder discovery (so the default
  * `hooks/hooks.json` is not also scanned), an object is an inline hooks
- * document, and an absent field falls back to `hooks/hooks.json` (#438).
+ * document, and an absent field falls back to `hooks/hooks.json` (#438). The
+ * `mcpServers` field resolves the same way against `mcp.json`.
  */
 export type CursorHooksSource =
-  | Readonly<{ readonly kind: 'default'; readonly path: typeof cursorDefaultHooksPath }>
+  | Readonly<{ readonly kind: 'default'; readonly path: string }>
   | Readonly<{
     /** The manifest string as written. */
     readonly declared: string;
@@ -69,9 +72,9 @@ export type CursorHooksSource =
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-export const resolveCursorHooksSource = (manifest: unknown): CursorHooksSource => {
-  const declared = isRecord(manifest) ? manifest['hooks'] : undefined;
-  if (declared === undefined) return Object.freeze({ kind: 'default', path: cursorDefaultHooksPath });
+const resolveCursorDocumentSource = (manifest: unknown, field: string, defaultPath: string): CursorHooksSource => {
+  const declared = isRecord(manifest) ? manifest[field] : undefined;
+  if (declared === undefined) return Object.freeze({ kind: 'default', path: defaultPath });
   if (typeof declared === 'string') {
     const slashed = declared.replaceAll('\\', '/');
     const absolute = isAbsolute(declared) || posix.isAbsolute(slashed) || /^[A-Za-z]:\//u.test(slashed);
@@ -87,6 +90,9 @@ export const resolveCursorHooksSource = (manifest: unknown): CursorHooksSource =
   if (isRecord(declared)) return Object.freeze({ kind: 'inline', value: declared });
   return Object.freeze({ kind: 'invalid' });
 };
+
+export const resolveCursorHooksSource = (manifest: unknown): CursorHooksSource =>
+  resolveCursorDocumentSource(manifest, 'hooks', cursorDefaultHooksPath);
 
 export type CursorPluginValidationStatus = 'failed' | 'passed' | 'unavailable' | 'warnings';
 
@@ -173,11 +179,10 @@ const validatorFor = (kind: DocumentKind): ValidateFunction => {
   }
 };
 
-/** The documents every generated Cursor bundle is checked for; the hooks document is added once the manifest names it. */
+/** The documents every generated Cursor bundle is checked for; the hooks and MCP documents are added once the manifest names them. */
 const fixedDocumentContracts: readonly DocumentContract[] = Object.freeze([
   Object.freeze({ kind: 'marketplace' as const, path: marketplacePath, required: false }),
   Object.freeze({ kind: 'manifest' as const, path: manifestPath, required: true }),
-  Object.freeze({ kind: 'mcp' as const, path: mcpPath, required: false }),
 ]);
 
 const recoveryFor = (code: CursorDiagnosticCode, severity: DiagnosticSeverity): string => {
@@ -347,22 +352,23 @@ const readDocument = Effect.fnUntraced(function* (
 });
 
 /**
- * The hooks document is the one the manifest names (or the folder-discovery
- * default when it names none), validated with the pinned Cursor hooks schema.
- * A declared file that is missing is an error: the loader would deliver no
- * hooks even though the bundle promised them.
+ * A pointed document (`hooks`, `mcpServers`) is the one the manifest names
+ * (or the folder-discovery default when it names none), validated with its
+ * pinned Cursor schema. A declared file that is missing is an error: the
+ * loader would deliver nothing even though the bundle promised it.
  */
-const readHooksDocument = (
+const readPointedDocument = (
   pluginDirectory: string,
   manifest: ParsedDocument | undefined,
   target: string,
+  pointer: Readonly<{ readonly defaultPath: string; readonly field: string; readonly inlinePath: string; readonly kind: 'hooks' | 'mcp' }>,
 ): Effect.Effect<DocumentReadResult, never, FileSystem.FileSystem> => {
-  const source = resolveCursorHooksSource(manifest?.value);
+  const source = resolveCursorDocumentSource(manifest?.value, pointer.field, pointer.defaultPath);
   switch (source.kind) {
     case 'default':
       return readDocument(
         pluginDirectory,
-        Object.freeze({ kind: 'hooks', path: source.path, required: false }),
+        Object.freeze({ kind: pointer.kind, path: source.path, required: false }),
         `${source.path} is missing.`,
         target,
       );
@@ -371,8 +377,8 @@ const readHooksDocument = (
         return Effect.succeed(Object.freeze({
           diagnostics: freezeDiagnostics([diagnostic(
             'AB6027',
-            `${manifestPath} declares hooks at ${JSON.stringify(source.declared)}, which does not resolve inside the plugin root; ` +
-              'generated Cursor bundles keep the hooks document under the plugin root.',
+            `${manifestPath} declares ${pointer.field} at ${JSON.stringify(source.declared)}, which does not resolve inside the plugin root; ` +
+              `generated Cursor bundles keep the ${pointer.kind} document under the plugin root.`,
             'error',
             target,
           )]),
@@ -380,25 +386,28 @@ const readHooksDocument = (
       }
       return readDocument(
         pluginDirectory,
-        Object.freeze({ kind: 'hooks', path: source.path, required: true }),
-        `${manifestPath} declares hooks at ${JSON.stringify(source.declared)} but ${source.path} is missing from the Cursor bundle; ` +
-          'Cursor would load no hooks for it.',
+        Object.freeze({ kind: pointer.kind, path: source.path, required: true }),
+        `${manifestPath} declares ${pointer.field} at ${JSON.stringify(source.declared)} but ${source.path} is missing from the Cursor bundle; ` +
+          `Cursor would load no ${pointer.kind} for it.`,
         target,
       );
     }
     case 'inline': {
-      const document: ParsedDocument = Object.freeze({ kind: 'hooks', path: inlineHooksPath, value: source.value });
+      const document: ParsedDocument = Object.freeze({ kind: pointer.kind, path: pointer.inlinePath, value: source.value });
       return Effect.succeed(Object.freeze({ diagnostics: schemaDiagnostics(document, target), document }));
     }
     case 'invalid':
-      // The manifest schema already reports the malformed `hooks` field.
+      // The manifest schema already reports the malformed field.
       return Effect.succeed(Object.freeze({ diagnostics: Object.freeze([]) }));
     default: {
       const exhaustive: never = source;
-      throw new Error(`Unexpected Cursor hooks source: ${String(exhaustive)}`);
+      throw new Error(`Unexpected Cursor document source: ${String(exhaustive)}`);
     }
   }
 };
+
+const hooksPointer = Object.freeze({ defaultPath: cursorDefaultHooksPath, field: 'hooks', inlinePath: inlineHooksPath, kind: 'hooks' as const });
+const mcpPointer = Object.freeze({ defaultPath: cursorDefaultMcpPath, field: 'mcpServers', inlinePath: inlineMcpPath, kind: 'mcp' as const });
 
 interface ReadDocumentsResult {
   readonly diagnostics: readonly Diagnostic[];
@@ -429,9 +438,11 @@ const readCursorPluginDocuments = Effect.fnUntraced(function* (
     documents.push(result.document);
     if (contract.kind === 'manifest') manifest = result.document;
   }
-  const hooks = yield* readHooksDocument(pluginDirectory, manifest, target);
-  diagnostics.push(...hooks.diagnostics);
-  if (hooks.document !== undefined) documents.push(hooks.document);
+  for (const pointer of [mcpPointer, hooksPointer]) {
+    const pointed = yield* readPointedDocument(pluginDirectory, manifest, target, pointer);
+    diagnostics.push(...pointed.diagnostics);
+    if (pointed.document !== undefined) documents.push(pointed.document);
+  }
   return Object.freeze({
     diagnostics: freezeDiagnostics(diagnostics),
     documents: Object.freeze(documents),

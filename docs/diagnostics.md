@@ -15,7 +15,7 @@ even when no error diagnostic was reported.
 | --- | --- |
 | `AB30xx` | Skill documents: Markdown parsing (`AB3000`–`AB3002`: unreadable, missing or malformed frontmatter) and rendered-skill compilation (`AB3003`: module failed to load, `AB3004`: missing/invalid default component or `frontmatter` export, `AB3005`: content outside the supported Markdown element subset). |
 | `AB40xx` | Plugin metadata and Skill source validation (`AB4000`/`AB4001`: name/version; `AB4002`–`AB4007`: Skill fields; `AB4008`–`AB4011` and `AB4013`: release identity, see below; `AB4012`: declared `plugin.logo` is missing, not a file, or outside the project). |
-| `AB41xx` | Normalized model invariants (unknown targets, duplicate IDs and outputs). |
+| `AB41xx` | Normalized model invariants: `AB4100` unknown target (including the retired `plugin` name), `AB4101` duplicate IDs, `AB4102` two inputs producing one output path, and the composite-root checks `AB4103` (same path, different bytes across selected projections) and `AB4105` (host-scoped component leaking through conventional discovery); see below. |
 | `AB42xx` | Hook configuration and native hook sources. |
 | `AB43xx` | MCP server and MCP App configuration (`AB4340`: a declaration for a route-generated server redeclares `entry`/`command`/`url`; see below). |
 | `AB44xx` | Script configuration. |
@@ -49,7 +49,7 @@ even when no error diagnostic was reported.
 ## Claude Code host validation (`AB6019`–`AB6022`, `AB7311`, `AB7325`)
 
 `agent-bundle validate --artifact <dir>` and `agent-bundle build` run the
-installed Claude Code validator for the `claude` and `plugin` targets when
+installed Claude Code validator over the composite root when `claude` is selected and
 `--host-validation` is on (the default for both commands; `--no-host-validation`
 skips it, and programmatic `build()` calls skip it unless `hostValidation: true`
 is passed). `agent-bundle doctor --host claude --from <dir>` runs the same
@@ -86,7 +86,7 @@ readable `.claude-plugin/plugin.json` name (the validation runs already report
 that manifest). Doctor does not repeat it: its registration proof and the
 inventory rows' `errors` already carry the same verdicts. Without `claude` on
 `PATH`, `build` spawns once, reports one `AB6019`, and marks the remaining
-`claude`/`plugin` targets `unavailable` without spawning again.
+`claude` projection `unavailable` without spawning again.
 
 | Code | Severity | Meaning | Recovery |
 | --- | --- | --- | --- |
@@ -495,6 +495,23 @@ skill's `AB3003`.
 | Code | Severity | Trigger | Recovery |
 | --- | --- | --- | --- |
 | `AB4760` | error | A module evaluated the published `agent-bundle/meta` outside a surface Agent Bundle compiles — typically a unit test pool not built from the Rstest preset, or a hand-run script importing plugin source. | Run the test under `agentBundleRstest()` or `agentBundleBrowserRstest()` from `agent-bundle/rstest` (pass `include` to cover a plain unit pool), or compile the surface with `agent-bundle build`. In a custom test runner, alias `agent-bundle/meta` (`resolve.alias`, exact match) to a module with the named exports `{ name, packageName, packageVersion, version, meta }` — `meta` the frozen object of the other four, exported as both the named binding and the default export — computed from the project's `agent-bundle.config.ts` plugin name and `package.json` version; the `.agent-bundle/test/meta.mjs` module `agentBundleRstest()` writes is that module. |
+
+## The composite plugin root (`AB4100`, `AB4103`, `AB4105`)
+
+`build` emits **one** plugin root at the artifact directory (#555). The
+`targets` list selects which host *projections* the root carries —
+`claude`, `codex`, `cursor`, `portable` — and every selected host reads the
+same directory as its plugin root: host manifests sit in their own dotfolders
+(`.claude-plugin/`, `.codex-plugin/`, `.cursor-plugin/`, or `plugin.json`
+for the portable format), while `skills/`, `hooks/`, `mcp/`, `scripts/`,
+`bin/`, and `INSTALL.md` are shared. There is no `<root>/<host>/` partition
+and no `plugin` target: the composite *is* the output.
+
+| Code | Severity | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB4100` | error | A `targets` entry or `--target` flag names a target no adapter provides. `plugin` is one of them: it used to name a merged multi-host output and now selects nothing, because every build already emits the composite root. | Select host projections (`claude`, `codex`, `cursor`, `portable`); omit `targets` for the default `portable` projection. |
+| `AB4103` | error (build) | Two selected projections plan the same artifact path with different bytes, so one root cannot hold both. The common case is a Skill whose frontmatter carries a host extension (`targets: { claude: … }`): it lowers to different `skills/<name>/SKILL.md` bytes for Claude Code than for the other hosts. Projections are compared in host-name order and paths in path order, so the same selection reports the same collision however `targets` is written. | Make the component identical for every selected host, or build the conflicting hosts into separate artifacts (one `targets` entry per build). |
+| `AB4105` | error (build) | A component scoped to a subset of the selected hosts (a command or rule with frontmatter `targets`) would be discovered by another selected host that scans the same conventional directory (`commands/` for Claude Code and Cursor, `rules/` for Cursor, `skills/` for every host). Inside one root the file cannot be hidden from that host, so the build refuses rather than leaking it. | Extend the component's `targets` to every selected host that discovers its directory, or build those hosts into separate artifacts. |
 
 ## Artifact-hosted routed CLI (`AB4765`–`AB4766`)
 
@@ -1218,7 +1235,7 @@ that array instead of treating every listed row as a healthy install. The
 observed instance is the manifest `hooks` pointer at the auto-loaded
 `hooks/hooks.json` ("Hook load failed: Duplicate hooks file detected …
 manifest.hooks should only reference additional hook files"), which the
-`claude` and unified `plugin` targets no longer emit (#470) and which the
+`claude` projection no longer emits (#470) and which the
 pinned Claude `plugin` schema now rejects (`AB6012` at `/hooks`).
 
 | Code | Severity | Trigger | Recovery |

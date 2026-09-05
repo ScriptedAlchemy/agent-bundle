@@ -199,11 +199,6 @@ export interface StandardPluginArtifactsInput {
   readonly mcp?: Record<string, unknown>;
   /** Artifact-relative path for the MCP document; defaults to the plugin-root `.mcp.json` convention. */
   readonly mcpRelativePath?: string;
-  /**
-   * Emit the target-agnostic skill and asset copy entries; a composing target
-   * that lays two host plans into one root emits them from one side only.
-   */
-  readonly sharedCopyEntries?: boolean;
   readonly mcpValid: boolean;
   readonly model: NormalizedPlugin;
   readonly plugin: Record<string, unknown>;
@@ -298,7 +293,7 @@ export const standardPluginArtifactPlan = (input: StandardPluginArtifactsInput):
       ),
     });
   }
-  for (const skill of input.sharedCopyEntries === false ? [] : model.skills) {
+  for (const skill of model.skills) {
     if (!isSelected(skill.targets)) continue;
     const hostDocument = skill.hostDocuments?.[targetName];
     const generatedSkill = hostDocument !== undefined && !hostDocument.passThrough;
@@ -342,7 +337,7 @@ export const standardPluginArtifactPlan = (input: StandardPluginArtifactsInput):
     }
   }
 
-  for (const asset of input.sharedCopyEntries === false ? [] : model.assets ?? []) {
+  for (const asset of model.assets ?? []) {
     if (!isSelected(asset.targets)) continue;
     entries.push({
       bytes: asset.bytes,
@@ -362,7 +357,7 @@ export const standardPluginArtifactPlan = (input: StandardPluginArtifactsInput):
     });
   }
 
-  entries.push(...(input.sharedCopyEntries === false ? [] : payloadCopyEntries(model, isSelected)));
+  entries.push(...payloadCopyEntries(model, isSelected));
 
   return Object.freeze({
     diagnostics: Object.freeze(diagnostics),
@@ -531,14 +526,6 @@ export interface TargetAdapter {
   /** Per-component-kind emission dispatch used by inspect skip accounting; defaults to `capabilities`. */
   readonly componentCapabilities?: Readonly<Record<string, CapabilityState>>;
   readonly configExtension?: TargetConfigExtension;
-  /**
-   * Config extension keys this adapter lowers besides its own (a composite
-   * that plans other hosts' sides). Host-scoped declarations such as
-   * `<key>.lspServers` are eligible for emission only on adapters that lower
-   * that key, so an opaque declaration never counts as emitted by a host whose
-   * planner never reads it.
-   */
-  readonly lowersConfigExtensions?: readonly string[];
   readonly hookContract?: TargetHookContract;
   readonly metadata: TargetAdapterMetadata;
   readonly mcpRuntime?: TargetMcpRuntimeContract;

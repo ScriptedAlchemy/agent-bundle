@@ -837,7 +837,7 @@ it('accepts headerless browser same-origin fetch provenance with the exact token
 it('forwards structured artifact validation diagnostics through the foreground error boundary', async () => {
   const diagnostics = deepFreeze([{
     code: 'AB4300',
-    generatedPath: 'claude/hooks/guard.mjs',
+    generatedPath: 'hooks/guard.mjs',
     message: 'Emitted hook wrapper is not executable.',
     severity: 'error' as const,
   }]);

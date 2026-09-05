@@ -4,6 +4,7 @@ dist/
 .worktrees/
 coverage/
 artifacts/
+!packages/*/src/**/artifacts/
 *.log
 # Every example's `pnpm build` (and `pnpm examples:check`) writes here.
 examples/*/artifact/

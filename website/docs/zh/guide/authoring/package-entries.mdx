@@ -139,8 +139,8 @@ Run 'curator doctor --help' for usage.
 ### 宿主产物中的路由式 CLI
 
 包 bin 只能到达安装了 npm 包的用户，而 hook、Skill 与脚本是随宿主产物一起交付的。因此构建还会把同一张
-编译后的命令图发射进每个所选 target，路径为 `<target>/bin/<plugin-name>.mjs`（若有任一命令需要渲染，
-则再加上 `bin/<plugin-name>-flight.mjs`）。每个内置 target 都发布了准入它的 `cli` 能力。产物 bin 是一个
+编译后的命令图只发射一次到产物根目录，路径为 `bin/<plugin-name>.mjs`（若有任一命令需要渲染，则再加上
+`bin/<plugin-name>-flight.mjs`），由所有选中宿主共享。每个内置 target 都发布了准入它的 `cli` 能力。产物 bin 是一个
 自包含的 ESM 模块，没有 shebang 也没有可执行位——像 `scripts/*.mjs` 一样以
 `node <plugin-root>/bin/<plugin-name>.mjs <command>` 运行。帮助、argv 解析、输出模式、退出码与信号都与
 包 bin 一致；唯一的区别是，在宿主未提供 `AGENT_BUNDLE_PLUGIN_ROOT` 时，工作区级持久状态锚定在产物根目录
@@ -184,7 +184,7 @@ import meta, { name, packageName, packageVersion, version } from 'agent-bundle/m
 
 ## 打包与安装器
 
-当包输出与至少一个 Claude、Codex 或 Cursor 宿主包在同一项目内构建时，框架还会输出一个自包含、相对
+当包输出与至少一个 Claude、Codex 或 Cursor 投影在同一项目内构建时，框架还会输出一个自包含、相对
 包路径的安装器，位于 `dist/bin/<plugin-name>.js`——若该名称已被占用则为 `<plugin-name>-install.js`，
 两者都被占用时再追加数字后缀。请在 `package.json` 的 `bin` 中声明对应取值。它的语法是
 `install <host> [--scope <scope>] [--json]`，帮助中只列出已构建的宿主；它通过 `import.meta.url` 而

@@ -1145,7 +1145,7 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
     const epochId = artifact.activeEpoch.id;
     const modelDigest = artifact.activeEpoch.modelDigest;
     await expect(server.openRuntimeClientSurface('mcp.edit-timeline')).resolves.toBeUndefined();
-    const manifest = JSON.parse(await readFile(join(project.root, '.agent-bundle', 'epochs', epochId, 'portable', 'mcp.json'), 'utf8')) as {
+    const manifest = JSON.parse(await readFile(join(project.root, '.agent-bundle', 'epochs', epochId, 'mcp.json'), 'utf8')) as {
       readonly mcpServers: Readonly<{
         readonly fixture: Readonly<{ readonly args?: readonly string[]; readonly command: string }>;
       }>;
@@ -1239,7 +1239,7 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
       launch: {
         args: ['[REDACTED]'],
         command: manifest.mcpServers.fixture.command,
-        cwd: join(project.root, '.agent-bundle', 'epochs', epochId, 'portable'),
+        cwd: join(project.root, '.agent-bundle', 'epochs', epochId),
         env: { NO_COLOR: '1' },
         kind: 'stdio',
       },

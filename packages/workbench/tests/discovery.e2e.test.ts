@@ -1,4 +1,4 @@
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -101,6 +101,11 @@ e2e(
           const source = await readFile(configSource, 'utf8');
           const anchor = '    servers: {\n      timeline: {';
           if (!source.includes(anchor)) throw new Error('Discovery probe fixture config anchor is missing.');
+          const outputAnchor = '  dev: { runtime:';
+          if (!source.includes(outputAnchor)) throw new Error('Discovery probe fixture config output anchor is missing.');
+          // The example packages into `dist/plugins` (its prebuilt payloads
+          // live beside it under `dist/`); declare that as the artifact dist
+          // path so Doctor reads the composite root the build wrote (#555).
           await writeFile(configSource, source.replace(anchor, `    servers: {
       'probe-down': {
         args: ['-e', 'process.exit(0)'],
@@ -108,14 +113,14 @@ e2e(
         targets: ['portable', 'claude', 'codex'],
         transport: 'stdio',
       },
-      timeline: {`));
+      timeline: {`).replace(outputAnchor, `  output: { distPath: 'dist/plugins' },
+${outputAnchor}`));
           const output = join(root, 'dist', 'plugins');
           const result = await build({ output, root });
           const errors = result.diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
           if (errors.length > 0) {
             throw new Error(`Discovery probe fixture build failed: ${JSON.stringify(errors)}`);
           }
-          await cp(join(output, 'claude'), join(root, 'dist', 'claude'), { recursive: true });
         },
       });
       await page.goto(workbenchUrl(fixture.url, 'hosts'));

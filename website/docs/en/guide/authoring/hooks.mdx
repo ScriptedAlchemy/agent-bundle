@@ -288,16 +288,20 @@ in [What happens when a route throws](./mcp.mdx#what-happens-when-a-route-throws
 
 ### What is on the wire
 
-Both shapes share the emitted `hooks/hooks.json` wiring, and both compile into a wrapper the host
-invokes as `node "${CLAUDE_PLUGIN_ROOT}/hooks/<wrapper>.mjs"` (or the host's own root token). The
-unified `plugin` target also writes `hooks/hooks-cursor.json` and `hooks/<name>.cursor.mjs` for
-Cursor (`preToolUse` / `postToolUse` camelCase). Claude Code and Codex load `hooks/hooks.json` by
-convention and never scan `hooks/` for other documents, so the Claude manifest carries no `hooks`
-pointer: Claude Code reports a pointer at the conventional file as a duplicate hooks file
-(`manifest.hooks` is for additional documents only). Each wrapper compares the envelope's
-`hook_event_name` against the spelling baked for its own host (`PreToolUse` / `PostToolUse` for
-Claude and Codex), so `native hook_event_name must equal postToolUse` on a Claude session means a
-Cursor-built wrapper is installed under the Claude plugin root, not that Claude sends camelCase. A
+Both shapes compile into a wrapper under the root `hooks/` directory that the host invokes as
+`node "${CLAUDE_PLUGIN_ROOT}/hooks/<wrapper>.mjs"` (or with its own root token). A hook that only
+one selected host receives compiles to `hooks/<name>.mjs`; a hook shared by several selected hosts
+compiles once per host as `hooks/<name>.<host>.mjs`, because each wrapper bakes in its host's
+event spelling — `PreToolUse` / `PostToolUse` for Claude Code and Codex, camelCase `preToolUse` /
+`postToolUse` for Cursor — and each host's document points at its own wrapper. Claude Code's
+document is `hooks/hooks.json`, which it loads by convention without scanning `hooks/` for other
+documents, so the Claude manifest carries no `hooks` pointer: Claude Code reports a pointer at the
+conventional file as a duplicate hooks file (`manifest.hooks` is for additional documents only).
+Codex and Cursor manifests carry an explicit `hooks` pointer, so their documents sit beside their
+manifests as `.codex-plugin/hooks.json` and `.cursor-plugin/hooks.json`. Each wrapper compares the
+envelope's `hook_event_name` against the spelling baked for its own host, so
+`native hook_event_name must equal postToolUse` on a Claude session means Claude's document is
+invoking a Cursor wrapper, not that Claude sends camelCase. A
 config-declared handler runs in-process inside that wrapper. An event route with
 `runtime: 'shared'` instead forwards to the warm runtime living inside the generated MCP server
 process, so hooks share state with tools:

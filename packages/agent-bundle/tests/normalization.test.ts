@@ -969,9 +969,11 @@ it('reports unknown targets, duplicate IDs, and portable output collisions', asy
   expect(diagnostics.find(({ code }) => code === 'AB4100')).toMatchObject({
     target: 'future-host',
   });
+  // One collision per selected host, reported against the composite root's
+  // path (#555); the selection is sorted by host name.
   expect(diagnostics.filter(({ code }) => code === 'AB4102')).toMatchObject([
-    { generatedPath: 'portable/skills/duplicate/SKILL.md' },
-    { generatedPath: 'future-host/skills/duplicate/SKILL.md' },
+    { generatedPath: 'skills/duplicate/SKILL.md', target: 'future-host' },
+    { generatedPath: 'skills/duplicate/SKILL.md', target: 'portable' },
   ]);
 });
 
@@ -1014,7 +1016,7 @@ it('normalizes discovered assets with stable IDs, provenance, and all selected t
       provenance: { kind: 'conventional', sourcePath: '/workspace/project/agent-bundle.config.ts' },
       relativePath: 'logo.svg',
       source: '/workspace/project/assets/logo.svg',
-      targets: ['portable', 'claude'],
+      targets: ['claude', 'portable'],
     },
     {
       bytes: 3,
@@ -1023,7 +1025,7 @@ it('normalizes discovered assets with stable IDs, provenance, and all selected t
       provenance: { kind: 'conventional', sourcePath: '/workspace/project/agent-bundle.config.ts' },
       relativePath: 'branding/logo.png',
       source: '/workspace/project/branding/logo.png',
-      targets: ['portable', 'claude'],
+      targets: ['claude', 'portable'],
     },
   ]);
 
@@ -1059,7 +1061,7 @@ it('reports duplicate asset destinations as duplicate IDs and output collisions'
 
   expect(diagnostics.map(({ code }) => code)).toEqual(['AB4101', 'AB4102']);
   expect(diagnostics[1]).toMatchObject({
-    generatedPath: 'portable/assets/logo.svg',
+    generatedPath: 'assets/logo.svg',
     sourcePath: '/workspace/project/branding/logo.svg',
   });
 });

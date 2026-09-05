@@ -360,17 +360,11 @@ export class SkillDocumentService {
         }
         throw error;
       });
-      const targetRoot = join(realEpochRoot, target);
-      const realTargetRoot = await assertedDirectory(targetRoot).catch((error: unknown) => {
-        if (error instanceof SkillDocumentError) {
-          throw new SkillDocumentError('SKILL_TARGET_UNAVAILABLE', 'Artifact target is not available in this epoch.');
-        }
-        throw error;
-      });
-      if (!isInsideOrEqual(realEpochRoot, realTargetRoot)) {
-        throw new SkillDocumentError('SKILL_TARGET_UNAVAILABLE', 'Artifact target escapes its epoch.');
+      // Every selected host reads the composite epoch root; only the selection is per host.
+      if (reference.epoch.targetDigests[target] === undefined) {
+        throw new SkillDocumentError('SKILL_TARGET_UNAVAILABLE', 'Artifact target is not available in this epoch.');
       }
-      return await operation(realTargetRoot);
+      return await operation(realEpochRoot);
     } finally {
       await reference.close();
     }

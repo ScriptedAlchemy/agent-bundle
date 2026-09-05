@@ -50,7 +50,7 @@ import { defineConfig } from 'agent-bundle/config';
 
 export default defineConfig({
   plugin: { name: 'my-plugin', description: 'What it does.' },
-  targets: ['plugin'],
+  targets: ['claude', 'codex', 'cursor'],
   skills: ['src/skills/*'],
   hooks: { sessionStart: { handler: './src/session-start.ts' } },
   mcp: { servers: { tools: { entry: './src/mcp.ts' } } },
@@ -68,17 +68,18 @@ export default defineConfig({
 });
 ```
 
-发布版本号来自 `package.json`。`plugin.version` 字段仍然可用，但它是已废弃的兼容轴；取值与
-`package.json` 不一致时会报告 `AB4008` 警告。
+`targets` 选择这一个产物根目录承载哪些宿主投影——`claude`、`codex`、`cursor`、`portable`；省略它时
+根目录只承载 `portable`。发布版本号来自 `package.json`。`plugin.version` 字段仍然可用，但它是已废弃的
+兼容轴；取值与 `package.json` 不一致时会报告 `AB4008` 警告。
 
 ## 构建，或交互式开发
 
 ```sh
-npx agent-bundle build --root .                 # 把可安装产物写到 artifact/
+npx agent-bundle build --root .                 # 把复合插件根目录写到 artifact/
 npx agent-bundle dev --root .                   # 带实时重建的本地 Workbench
 ```
 
-`build` 会校验项目并写出产物；声明了 `bin`/`lib` 时还会一并完成包构建。`dev` 在 loopback 上提供
+`build` 会校验项目并写出产物根目录；声明了 `bin`/`lib` 时还会一并完成包构建。`dev` 在 loopback 上提供
 开发者 Workbench，并随输入变化持续重建：项目概览与诊断、Skill 文档、带 provenance 与 epoch 对比的
 产物树、绑定到产物、带原始协议轨迹的 MCP playground、运行真实生成包装层的钩子 playground，以及
 eval 运行。
@@ -86,7 +87,7 @@ eval 运行。
 ## 查看编译器的判断
 
 ```sh
-npx agent-bundle inspect --root .            # 规范化配置与逐 target 计划
+npx agent-bundle inspect --root .            # 规范化配置与每个宿主投影的计划
 npx agent-bundle inspect --root . --skills   # 加上 skill focus
 npx agent-bundle validate --root .           # 检查项目源码
 ```
@@ -95,21 +96,23 @@ npx agent-bundle validate --root .           # 检查项目源码
 
 ## 安装结果
 
-每个构建出的 target 目录中都包含生成的 `INSTALL.md`，其中的命令使用该捆绑包真实的插件名与市场名。按上文构建出
-`portable`、`codex` 与 `claude` 三个 target 后，宿主安装命令是：
+产物根目录带有一份生成的 `INSTALL.md`，每个所选宿主一节，其中的命令使用该捆绑包真实的插件名与市场名。
+所有宿主安装的都是同一个目录，因此 `--from` 始终指向根目录。按上文构建出 `portable`、`codex` 与
+`claude` 三个 target 后，宿主安装命令是：
 
 ```sh
-npx agent-bundle install claude --from artifact/claude --scope user
-npx agent-bundle install codex --from artifact/codex
+npx agent-bundle install claude --from artifact --scope user
+npx agent-bundle install codex --from artifact
+node artifact/install.mjs                       # portable 包，通过生成的安装器
 ```
 
-把 `cursor` 加入 `targets` 就会构建出 `artifact/cursor`，然后用 `npx agent-bundle install cursor --from
-artifact/cursor` 以同样方式安装。`plugin` 构建则只有一份覆盖所有宿主的 `INSTALL.md`。
+把 `cursor` 加入 `targets`，同一个根目录就会多出 `.cursor-plugin/`；然后用 `npx agent-bundle install
+cursor --from artifact` 以同样方式安装。
 
 若想在 Claude Code 上进行免安装的开发循环：
 
 ```sh
-claude --plugin-dir artifact/claude plugin list --json
+claude --plugin-dir artifact plugin list --json
 ```
 
 ## 下一步

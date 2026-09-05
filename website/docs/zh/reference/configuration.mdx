@@ -21,7 +21,7 @@ export default defineConfig({
 | 字段 | 类型 | 默认值 |
 | --- | --- | --- |
 | `plugin` | `{ name, description?, logo?, ... }` | **必填。** |
-| `targets` | `string[]` | 由适配器选择。 |
+| `targets` | `string[]` | `['portable']`。 |
 | `skills` | `string[]` | `src/skills/*` 约定。 |
 | `hooks` | `Partial<Record<CanonicalHookEvent, ...>>` | `src/hooks/*` 约定。 |
 | `mcp` | `{ servers: Record<string, ...> }` | `src/mcp/*` 约定。 |
@@ -76,6 +76,13 @@ TypeDoc 从包源码生成，因此不会与已发布的类型产生偏差。
 会报告 `AB4008` 警告，而任何地方都没有版本的发布构建会被 `AB4013` 拒绝，而不是交付
 `0.0.0-dev.<short-revision>` 这个开发期回退值。该字段仅为兼容而保留，并将按照正常的破坏性变更策略移除。
 
+## targets
+
+`build` 铺进组合插件根目录的宿主投影：`claude`、`codex`、`cursor` 与 `portable` 的任意组合。顺序无关——
+选择会按名称排序，因此 `['codex', 'claude']` 与 `['claude', 'codex']` 构建出相同的字节。省略该键时只输出
+`portable` 投影。命令行上的 `--target` 会在单次运行中替换配置里的列表。其他任何名字（包括 `plugin`）都是
+未知 target（`AB4100`）。每个投影在根目录中放置什么，见 [Target 与产物](./targets-artifacts.mdx)。
+
 ## hooks
 
 键是七个标准事件：`sessionStart`、`beforeTool`、`afterTool`、`stop`、`agentStart`、`agentStop`、
@@ -89,7 +96,8 @@ TypeDoc 从包源码生成，因此不会与已发布的类型产生偏差。
 
 ## output 与 runtime
 
-`output.distPath` 是相对项目根目录的产物输出目录。命令行（`build`、`prepack`、`dev`）把它默认为 `artifact`，
+`output.distPath` 是相对项目根目录的产物输出目录——每个所选宿主都读取的组合插件根目录，其下没有逐宿主
+子目录。命令行（`build`、`prepack`、`dev`）把它默认为 `artifact`，
 因为命令行同时运行包构建，而包构建拥有 `dist/`；编程式 `build()` 除非传入 `packageOutputs: true`，否则默认为
 `dist`。逐次调用的 `--output` 标志优先，但同样
 受相同的项目根包含性检查约束；绝对或外部输出路径、形态无效的路径，或落入保留编译器命名空间的路径

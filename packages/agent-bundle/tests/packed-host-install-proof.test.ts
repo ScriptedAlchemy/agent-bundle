@@ -104,10 +104,9 @@ beforeAll(async () => {
   const installedBin = join(consumer, 'node_modules', '.bin', pluginName);
   await Promise.all([
     access(installedBin),
-    access(join(installedArtifactRoot, 'claude')),
-    access(join(installedArtifactRoot, 'codex')),
-    access(join(installedArtifactRoot, 'cursor')),
-    access(join(installedArtifactRoot, 'plugin')),
+    access(join(installedArtifactRoot, '.claude-plugin', 'plugin.json')),
+    access(join(installedArtifactRoot, '.codex-plugin', 'plugin.json')),
+    access(join(installedArtifactRoot, '.cursor-plugin', 'plugin.json')),
   ]);
 
   await rm(projectRoot, { force: true, recursive: true });
@@ -118,10 +117,9 @@ beforeAll(async () => {
   packedFixture = Object.freeze({
     artifactRoot: installedArtifactRoot,
     bundles: Object.freeze({
-      claude: join(installedArtifactRoot, 'claude'),
-      codex: join(installedArtifactRoot, 'codex'),
-      cursor: join(installedArtifactRoot, 'cursor'),
-      plugin: join(installedArtifactRoot, 'plugin'),
+      claude: installedArtifactRoot,
+      codex: installedArtifactRoot,
+      cursor: installedArtifactRoot,
     }),
     cli: sourceFixture.cli,
     root: cleanupRoot,
@@ -255,9 +253,9 @@ it('installs the packed tarball into an isolated Cursor home, validates schemas,
     },
     pluginRootVariable: {
       locations: [
-        'hooks/hooks.json#/hooks/sessionStart/0/command',
-        'mcp.json#/mcpServers/probe/args/0',
-        'mcp.json#/mcpServers/probe/env/AGENT_BUNDLE_PLUGIN_ROOT',
+        '.cursor-plugin/hooks.json#/hooks/sessionStart/0/command',
+        '.cursor-plugin/mcp.json#/mcpServers/probe/args/0',
+        '.cursor-plugin/mcp.json#/mcpServers/probe/env/AGENT_BUNDLE_PLUGIN_ROOT',
       ],
       resolvedAtInstall: false,
       sessionEvidence: 'unavailable: Cursor exposes no non-interactive plugin-loading session surface',
@@ -267,7 +265,7 @@ it('installs the packed tarball into an isolated Cursor home, validates schemas,
     skill: '.cursor/plugins/local/host-install-proof/skills/probe/SKILL.md',
     status: 'passed',
     unifiedBundle: {
-      hooksDocument: 'hooks/hooks-cursor.json',
+      hooksDocument: '.cursor-plugin/hooks.json',
       hooksRegistration: 'registered',
       install: 'installed',
       staticFindings: { AB6027: 0, AB7320: 0 },

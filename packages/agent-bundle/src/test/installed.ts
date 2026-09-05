@@ -4,6 +4,8 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
+import { codexArtifactPaths } from '../adapters/codex.ts';
+import { cursorArtifactPaths } from '../adapters/cursor.ts';
 import { artifactManifestName } from '../build/emit.ts';
 import { parseArtifactHookIndex, type ArtifactHook } from '../build/hook-index.ts';
 import { parseArtifactManifest } from '../build/manifest.ts';
@@ -124,20 +126,38 @@ const hostManifestPath = (host: InstallHost): string => {
   }
 };
 
-const hostMcpPath = (host: InstallHost): string =>
-  host === 'cursor' ? 'mcp.json' : '.mcp.json';
+/**
+ * The MCP document the installed host loads: Claude's conventional `.mcp.json`,
+ * or the document the Codex and Cursor manifests point at beside themselves.
+ */
+const hostMcpPath = (host: InstallHost): string => {
+  switch (host) {
+    case 'claude':
+      return '.mcp.json';
+    case 'codex':
+      return codexArtifactPaths.mcp;
+    case 'cursor':
+      return cursorArtifactPaths.mcp;
+    default: {
+      const exhaustive: never = host;
+      throw new TypeError(`Unknown installed host ${String(exhaustive)}.`);
+    }
+  }
+};
 
 /**
- * The hook document the installed host loads. Claude and Codex read the
- * pinned `hooks/hooks.json`; Cursor reads whatever the installed
- * `.cursor-plugin/plugin.json` `hooks` field names (#438), falling back to
- * `hooks/hooks.json` folder discovery when the field is absent.
+ * The hook document the installed host loads. Claude reads the conventional
+ * `hooks/hooks.json`; Codex reads the document its manifest points at beside
+ * itself; Cursor reads whatever the installed `.cursor-plugin/plugin.json`
+ * `hooks` field names (#438), falling back to `hooks/hooks.json` folder
+ * discovery when the field is absent.
  */
 const hostHookPath = (host: InstallHost, installedManifest: Readonly<Record<string, unknown>>): string => {
   switch (host) {
     case 'claude':
-    case 'codex':
       return 'hooks/hooks.json';
+    case 'codex':
+      return codexArtifactPaths.hooksManifest;
     case 'cursor': {
       const source = resolveCursorHooksSource(installedManifest);
       return source.kind === 'file' ? source.path : cursorDefaultHooksPath;
@@ -308,18 +328,21 @@ export const openInstalledHostMcpServer = async (
   if (target === undefined) {
     failures.push({ check: 'manifest-schema', reason: `artifact manifest did not declare target ${options.host}` });
   }
+  // The composite root is the bundle root for every selected host; a missing
+  // host manifest is recorded and the checks below still read the root.
   const builtRoot = await resolveBundleRoot(artifactRoot, options.host).catch(() => {
     failures.push({ check: 'manifest-schema', reason: `Doctor could not discover the built ${options.host} bundle root` });
-    return join(artifactRoot, options.host);
+    return artifactRoot;
   });
 
-  const prefix = `${options.host}/`;
-  const targetFiles = artifactManifest?.files.filter((file) => file.path.startsWith(prefix)) ?? [];
+  // The composite root is installed whole: every manifest file is part of the
+  // selected host's bundle, keyed by its root-relative path.
+  const targetFiles = artifactManifest?.files ?? [];
   if (targetFiles.length === 0) {
     failures.push({ check: 'component-paths', reason: `artifact manifest declared no ${options.host} component files` });
   }
   for (const file of targetFiles) {
-    const targetRelative = file.path.slice(prefix.length);
+    const targetRelative = file.path;
     const [builtHash, installedHash] = await Promise.all([
       fileHash(join(artifactRoot, file.path)),
       fileHash(join(installedRoot, targetRelative)),
@@ -335,12 +358,9 @@ export const openInstalledHostMcpServer = async (
     }
   }
 
-  const resourceFiles = targetFiles.filter((file) => {
-    const path = file.path.slice(prefix.length);
-    return path.startsWith('assets/') || path.startsWith('skills/') || path.startsWith('commands/');
-  });
-  for (const resource of resourceFiles) {
-    const path = resource.path.slice(prefix.length);
+  const resourceFiles = targetFiles.filter(({ path }) =>
+    path.startsWith('assets/') || path.startsWith('skills/') || path.startsWith('commands/'));
+  for (const { path } of resourceFiles) {
     if (await fileHash(join(installedRoot, path)) === undefined) {
       failures.push({ check: 'resources', reason: `installed resource ${path} was missing` });
     }
@@ -402,9 +422,8 @@ export const openInstalledHostMcpServer = async (
       failures.push({ check: 'hook-commands', reason: 'installed hook document exposed no commands' });
     }
     for (const hook of installedHooks) {
-      const path = hook.path.startsWith(prefix) ? hook.path.slice(prefix.length) : hook.path;
-      if (await fileHash(join(installedRoot, path)) === undefined) {
-        failures.push({ check: 'hook-commands', reason: `installed hook command target ${path} was missing` });
+      if (await fileHash(join(installedRoot, hook.path)) === undefined) {
+        failures.push({ check: 'hook-commands', reason: `installed hook command target ${hook.path} was missing` });
       }
     }
   }

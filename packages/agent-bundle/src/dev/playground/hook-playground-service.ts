@@ -7,12 +7,11 @@ import { Effect, FileSystem } from 'effect';
 import { canonicalHookEventFor, type TargetHookContract } from '../../adapters/hook-contract.ts';
 import { createDefaultRegistry, TargetRegistry } from '../../adapters/registry.ts';
 import type { ArtifactHook } from '../../build/hook-index.ts';
-import { listArtifactFiles } from '../../build/emit.ts';
 import type { CanonicalHookEvent } from '../../core/types.ts';
-import { digest } from '../../core/digest.ts';
 import { isErrno } from '../../core/errors.ts';
 import { isRecord, snapshotStrictJsonValue } from '../../core/strict-json.ts';
 import { HookService } from '../../services/hook-service.ts';
+import { projectionDigests } from '../artifacts/projection-digest.ts';
 import { EpochStore, type EpochReference } from '../epoch-store.ts';
 import type { DevLogKindFor, DevLogSink } from '../logs/dev-log-service.ts';
 import { deepFreeze } from '../../core/freeze.ts';
@@ -166,7 +165,7 @@ const matcherFor = async (
 ): Promise<string | undefined | HookPlaygroundDiagnosticResult> => {
   let document: unknown;
   try {
-    document = JSON.parse(await run(readFileString(join(artifact, hook.target, contract.manifestPath))));
+    document = JSON.parse(await run(readFileString(join(artifact, contract.manifestPath))));
   } catch (error) {
     if (isErrno(error, 'ENOENT')) return missingManifest(hook.target, hook.event, contract.manifestPath);
     return undefined;
@@ -174,14 +173,10 @@ const matcherFor = async (
   if (!isRecord(document) || !isRecord(document.hooks)) return undefined;
   const groups = document.hooks[nativeSelector];
   if (!Array.isArray(groups)) return undefined;
-  const targetPrefix = `${hook.target}/`;
-  const wrapperPath = hook.path.startsWith(targetPrefix)
-    ? hook.path.slice(targetPrefix.length)
-    : hook.path;
   for (const group of groups) {
     if (!isRecord(group) || !Array.isArray(group.hooks)) continue;
     const hasWrapper = group.hooks.some((entry) =>
-      isRecord(entry) && typeof entry.command === 'string' && entry.command.includes(wrapperPath));
+      isRecord(entry) && typeof entry.command === 'string' && entry.command.includes(hook.path));
     if (hasWrapper) return typeof group.matcher === 'string' ? group.matcher : undefined;
   }
   return undefined;
@@ -234,7 +229,7 @@ const assertTargetDigest = async (
 ): Promise<void> => {
   let actual: string;
   try {
-    actual = digest(await listArtifactFiles(join(artifact, target)));
+    actual = (await projectionDigests(artifact, [target]))[target]!;
   } catch {
     throw new Error(`Hook playground target ${JSON.stringify(target)} cannot be verified against its stored digest.`);
   }

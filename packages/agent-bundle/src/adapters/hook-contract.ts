@@ -2,6 +2,7 @@ import type { Diagnostic } from '../core/diagnostics.ts';
 import { dataArrayValues, hasDataKeys, isPlainDataRecord, isRecord, ownDataValue } from '../core/strict-json.ts';
 import { escapeRegExp } from '../core/strings.ts';
 import { operatorEnvLayerImport } from '../build/launch-env-shell.ts';
+import { projectionIdentity } from './composite-layout.ts';
 import type { CanonicalAgentEvent } from '../routes/public.ts';
 import {
   canonicalHookEvents,
@@ -641,10 +642,16 @@ const standaloneEventRoute = (route: NonNullable<NormalizedHook['eventRoute']>):
 export const hookWrapperAppliesOperatorEnv = (entry: TargetHookWrapper): boolean =>
   entry.hook.eventRoute === undefined || standaloneEventRoute(entry.hook.eventRoute);
 
+/**
+ * `artifactTarget` names the artifact the wrapper belongs to — the composite
+ * identity of the selected projections (#555), which is also what the
+ * generated MCP entry bakes as its event endpoint — while `target` is the
+ * host that invoked the hook, used for lineage and host attribution.
+ */
 const eventRouteHookWrapperSource = (
   entry: TargetHookWrapper,
   hostContractRevision: string,
-  concreteTarget?: string,
+  artifactTarget: string,
   durableLineage = false,
 ): string => {
   const route = entry.hook.eventRoute!;
@@ -653,9 +660,6 @@ const eventRouteHookWrapperSource = (
   // then) retires the durable lineage journal itself, so roots never outlive
   // their session; only projects whose state is workspace-durable have one.
   const retiresLineage = standalone && durableLineage && route.event === 'session/end';
-  const targetSource = concreteTarget !== undefined
-    ? [`const target = ${JSON.stringify(concreteTarget)};`]
-    : ['const target = artifactTarget;'];
   return [
     // Only a wrapper that can render in-process needs the operator `.env`
     // layer (#469): a shared-runtime wrapper forwards the event to the warm
@@ -684,8 +688,8 @@ const eventRouteHookWrapperSource = (
     `const canonicalEvent = ${JSON.stringify(route.event)};`,
     `const capabilityRevision = ${JSON.stringify(hostContractRevision)};`,
     `const nativeEvent = ${JSON.stringify(entry.nativeEvent)};`,
-    `const artifactTarget = ${JSON.stringify(entry.target)};`,
-    ...targetSource,
+    `const artifactTarget = ${JSON.stringify(artifactTarget)};`,
+    `const target = ${JSON.stringify(entry.target)};`,
     `const runtimeMode = ${JSON.stringify(route.runtime)};`,
     `const fallbackMode = ${JSON.stringify(route.fallback)};`,
     `const timeoutMs = ${String(entry.hook.timeoutMs ?? 5_000)};`,
@@ -1117,13 +1121,21 @@ const matcherFor = (
   return patterns.length === 1 ? patterns[0] : `(?:${patterns.join('|')})`;
 };
 
+/**
+ * The host's hook document with no entries: what a projection points its
+ * manifest at when another selected host owns the conventional document the
+ * host would otherwise discover by folder (#555).
+ */
+export const emptyHookDocument = (contract: TargetHookContract): Record<string, unknown> =>
+  contract.documentEnvelope === undefined ? { hooks: {} } : contract.documentEnvelope({});
+
 export const planHooks = (
   model: NormalizedPlugin,
   target: string,
   contract: TargetHookContract,
-  concreteEventTarget?: string,
 ): HookPlan => {
   const diagnostics: Diagnostic[] = [];
+  const artifactTarget = projectionIdentity(model.targets.map((selected) => selected.name));
   const selected = model.hooks
     .filter((hook) => hook.targets.includes(target))
     .slice()
@@ -1194,7 +1206,7 @@ export const planHooks = (
         : eventRouteHookWrapperSource(
             wrapper,
             contract.hostContractRevision ?? target,
-            concreteEventTarget,
+            artifactTarget,
             model.state?.lifetime === 'workspace-durable',
           ),
     });
@@ -1212,21 +1224,21 @@ export const planHooks = (
 /**
  * Emits the published hook wrapper source for one target.
  *
- * Invariant: the `'Claude'` and `'Codex'` codec bodies must stay
- * byte-identical apart from the codec token baked into identifier names
+ * Invariant: the `'Claude'` and `'Codex'` codec bodies stay byte-identical
+ * apart from the codec token baked into identifier names
  * (`decode${codecName}Native`/`encode${codecName}Native`) and the baked
- * `const target = ...` line. Decode fields, output validation, output
- * encoding, and exit behavior are shared and must not diverge between the
- * two. This is what makes the `'Universal'` codec sound: it serves one
- * wrapper body to every host, so any Claude/Codex divergence beyond those
- * two spots would make the universal wrapper wrong for whichever host it
- * was not modeled on. The 'keeps the Claude and Codex native wrapper codecs
- * byte-identical...' test in tests/hooks.test.ts guards this invariant —
- * update it alongside any deliberate change to the shared body.
+ * `const target = ...` line: decode fields, output validation, output
+ * encoding, and exit behavior are one shared body, and every host-specific
+ * branch keys off the baked `target` constant. Each host in a composite root
+ * gets its own wrapper with its own baked target, so no wrapper ever has to
+ * discriminate the calling host at runtime. The 'keeps the Claude and Codex
+ * native wrapper codecs byte-identical...' test in tests/hooks.test.ts
+ * guards this invariant — update it alongside any deliberate change to the
+ * shared body.
  */
 export const nativeHookWrapperSource = (
   entry: TargetHookWrapper,
-  codecName: 'Claude' | 'Codex' | 'Universal',
+  codecName: 'Claude' | 'Codex',
 ): string => {
   const nativeEvent = entry.nativeEvent;
   const decoderFields = nativeHookInputFields.map((field) =>
@@ -1235,27 +1247,12 @@ export const nativeHookWrapperSource = (
     .filter((field) => field.canonical !== 'hookEventName')
     .map((field) => `  ${field.native}: canonicalInput.${field.canonical},`);
 
-  // The universal codec serves one wrapper to every host: Codex documents
-  // exporting PLUGIN_ROOT into hook processes and Claude does not, so its
-  // presence discriminates the calling host at runtime; the simulation
-  // harness can pin a host explicitly through AGENT_BUNDLE_HOOK_HOST. This
-  // host-detection block is the only source difference the Universal codec
-  // is allowed from the shared Claude/Codex body below it (see the parity
-  // invariant documented on nativeHookWrapperSource above).
-  const targetSource = codecName === 'Universal'
-    ? [
-        'const declaredHost = process.env.AGENT_BUNDLE_HOOK_HOST;',
-        'const target = declaredHost === "claude" || declaredHost === "codex"',
-        '  ? declaredHost',
-        '  : process.env.PLUGIN_ROOT === undefined ? "claude" : "codex";',
-      ]
-    : [`const target = ${JSON.stringify(entry.target)};`];
   return [
     // The installed pack's operator `.env` layer (#469): the first import, so
     // it evaluates before the handler module (see cursorHookWrapperSource).
     operatorEnvLayerImport,
     `import * as handlerModule from ${JSON.stringify(entry.hook.source)};`,
-    ...targetSource,
+    `const target = ${JSON.stringify(entry.target)};`,
     `const canonicalEvent = ${JSON.stringify(entry.event)};`,
     `const nativeEvent = ${JSON.stringify(nativeEvent)};`,
     '',

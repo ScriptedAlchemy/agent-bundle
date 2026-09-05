@@ -202,7 +202,9 @@ it('builds a selected target through the built executable from a path containing
       build: { outputRoot: resolve(project.output) },
       model: {
         metadata: { name: 'cli-fixture' },
-        targets: [{ name: 'portable' }, { name: 'codex' }],
+        // Selected projections are recorded in composite order (#555), so the
+        // model and the manifest agree whatever the CLI order was.
+        targets: [{ name: 'codex' }, { name: 'portable' }],
       },
     });
     expect(JSON.parse(await readFile(join(project.output, 'agent-bundle.manifest.json'), 'utf8'))).toMatchObject({
@@ -443,9 +445,9 @@ it('keeps inspect JSON stable and validates only the supplied artifact', async (
     expect(firstInspectionDocument).toMatchObject({
       model: {
         metadata: { name: 'cli-fixture' },
-        targets: [{ name: 'portable' }, { name: 'codex' }],
+        targets: [{ name: 'codex' }, { name: 'portable' }],
       },
-      plans: [{ target: 'portable' }, { target: 'codex' }],
+      plans: [{ target: 'codex' }, { target: 'portable' }],
       state: 'ready',
     });
     expect(firstInspectionDocument.plans).toHaveLength(2);
@@ -455,7 +457,7 @@ it('keeps inspect JSON stable and validates only the supplied artifact', async (
     ]);
     expect(filteredInspection).toMatchObject({ code: 0, stderr: '' });
     expect(JSON.parse(filteredInspection.stdout)).toMatchObject({
-      model: { targets: [{ name: 'portable' }, { name: 'codex' }] },
+      model: { targets: [{ name: 'codex' }, { name: 'portable' }] },
       plans: [{ target: 'portable' }],
     });
     expect((JSON.parse(filteredInspection.stdout) as { readonly plans: readonly unknown[] }).plans).toHaveLength(1);
@@ -597,7 +599,7 @@ it('explains selected and omitted components per target on human inspect output'
 
     const human = await runSourceCliWithOutput(['inspect', '--root', project.root]);
     expect(human).toMatchObject({ code: 0, stderr: '' });
-    expect(human.stdout).toContain('Inspected cli-fixture: portable, codex\n');
+    expect(human.stdout).toContain('Inspected cli-fixture: codex, portable\n');
     expect(human.stdout).toContain('portable: 1 component(s) selected, 1 omitted\n');
     expect(human.stdout).toContain('codex: 1 component(s) selected, 1 omitted\n');
     expect(human.stdout).toMatch(/^ {2}omitted rule shared: rules unavailable — .+$/mu);
@@ -723,7 +725,7 @@ it('dumps the synthesized bundler configuration with inspect --bundler', async (
     const script = document.selected.bundler.entries.find((entry) => entry.kind === 'script');
     expect(script).toMatchObject({
       config: {
-        output: { distPath: { root: '<output>/portable' } },
+        output: { distPath: { root: '<output>' } },
         tools: {
           rspack: [
             { resolve: { extensionAlias: { '.js': ['.js', '.ts'] } } },

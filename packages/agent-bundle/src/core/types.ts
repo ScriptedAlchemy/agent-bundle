@@ -787,8 +787,6 @@ export interface NormalizationTargetRegistry {
   configExtensions(): readonly NormalizationConfigExtension[];
   defaultTargetNames(): readonly string[];
   has(name: string): boolean;
-  /** True when the target's adapter reads the config extension `key` (its own key or a declared composite side). */
-  lowersConfigExtension?(name: string, key: string): boolean;
   nativeHookSources?(
     config: Readonly<AgentBundleConfig>,
     targetNames: readonly string[],

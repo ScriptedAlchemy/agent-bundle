@@ -96,7 +96,7 @@ To exercise one hook manually, give it an explicit state file and native Claude-
 
 ```bash
 AGENT_RUNTIME_STATE_FILE=/tmp/rsc-agent-state.sqlite \
-  node examples/rsc-agent-runtime/dist/plugins/claude/hooks/event-route-tool-after.mjs <<JSON
+  node examples/rsc-agent-runtime/dist/plugins/hooks/event-route-tool-after.claude.mjs <<JSON
 {"hook_event_name":"PostToolUse","session_id":"manual","cwd":"$PWD","transcript_path":"$PWD/transcript.jsonl","tool_name":"Write","tool_input":{"file_path":"README.md"},"tool_response":{"success":true},"tool_use_id":"manual-write-1"}
 JSON
 ```
@@ -161,7 +161,7 @@ authorized, use its native shell contract:
 
 ```bash
 claude -p "Create host-created.txt, then use recent_edits and render_edit_timeline." \
-  --plugin-dir examples/rsc-agent-runtime/dist/plugins/claude \
+  --plugin-dir examples/rsc-agent-runtime/dist/plugins \
   --output-format stream-json --verbose --include-hook-events \
   --no-session-persistence --dangerously-skip-permissions
 ```

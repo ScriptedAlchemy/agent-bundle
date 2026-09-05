@@ -121,9 +121,9 @@ const readmeInstallProse = /^Installing the npm package does not mutate any host
 
 /**
  * Rewrite a template README's install instructions for the selected targets:
- * one example line per installable host, or — when no `claude`, `codex`,
- * `cursor`, or `plugin` target is selected and therefore no installer bin is
- * generated — an explanation of how to get one. Templates without an install
+ * one example line per installable host, or — when no `claude`, `codex`, or
+ * `cursor` target is selected and therefore no installer bin is generated —
+ * an explanation of how to get one. Templates without an install
  * section (the skills-only template) pass through unchanged.
  */
 const rewriteReadmeInstall = (contents: string, targets: readonly TargetName[]): string => {

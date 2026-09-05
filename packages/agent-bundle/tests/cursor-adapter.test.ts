@@ -86,10 +86,10 @@ it('registers cursor as a first-class target with pinned schema validation', () 
   expect(registry.supports('cursor', 'marketplace')).toBe(true);
   expect(registry.hookContract('cursor')?.commandRoot).toBe('${CURSOR_PLUGIN_ROOT}');
   expect(registry.artifactValidation('cursor').documents).toEqual([
+    { path: '.cursor-plugin/hooks.json', required: false, schema: 'hooks' },
     { path: '.cursor-plugin/marketplace.json', required: false, schema: 'marketplace' },
+    { path: '.cursor-plugin/mcp.json', required: false, schema: 'mcp' },
     { path: '.cursor-plugin/plugin.json', required: true, schema: 'plugin' },
-    { path: 'hooks/hooks.json', required: false, schema: 'hooks' },
-    { path: 'mcp.json', required: false, schema: 'mcp' },
   ]);
   expect(registry.artifactLayout('cursor').commands).toEqual({
     allowedSuffixes: ['.md'],
@@ -300,18 +300,18 @@ it('plans a schema-valid Cursor artifact with typeless MCP entries and explicit 
   expect(plan.hookEntries).toEqual([]);
 
   const documents = writeContents(model);
+  // The install surface (INSTALL.md, install.mjs) is written once for the
+  // composite root by the build, not by each host's planner.
   expect(Object.keys(documents).sort()).toEqual([
+    '.cursor-plugin/mcp.json',
     '.cursor-plugin/plugin.json',
-    'INSTALL.md',
-    'install.mjs',
-    'mcp.json',
   ]);
 
   const manifest = JSON.parse(documents['.cursor-plugin/plugin.json']!) as Record<string, unknown>;
   expect(manifest).toEqual({
     description: 'Review helpers for Cursor.',
     displayName: 'cursor-review',
-    mcpServers: './mcp.json',
+    mcpServers: './.cursor-plugin/mcp.json',
     name: 'cursor-review',
     skills: './skills/',
     variables: {
@@ -329,7 +329,7 @@ it('plans a schema-valid Cursor artifact with typeless MCP entries and explicit 
       entry.relativePath === artifactPath || entry.relativePath.startsWith(`${artifactPath}/`))).toBe(true);
   }
 
-  const mcp = JSON.parse(documents['mcp.json']!) as { readonly mcpServers: Record<string, Record<string, unknown>> };
+  const mcp = JSON.parse(documents['.cursor-plugin/mcp.json']!) as { readonly mcpServers: Record<string, Record<string, unknown>> };
   expect(mcp.mcpServers['status']).toEqual({
     args: ['--root', '${CURSOR_PLUGIN_ROOT}/tools/server.mjs'],
     command: 'node',
@@ -446,7 +446,7 @@ it('rejects portable Agent Plugin tokens instead of emitting a hybrid Cursor art
   };
   const plan = cursorAdapter.plan(candidate);
   expect(plan.diagnostics.map((diagnostic) => diagnostic.code)).toContain('cursor.mcp.token');
-  expect(plan.entries.map((entry) => entry.relativePath)).not.toContain('mcp.json');
+  expect(plan.entries.map((entry) => entry.relativePath)).not.toContain('.cursor-plugin/mcp.json');
   const manifest = JSON.parse(writeContents(candidate)['.cursor-plugin/plugin.json']!) as Record<string, unknown>;
   expect(manifest).not.toHaveProperty('mcpServers');
   expect(manifest).not.toHaveProperty('variables');
@@ -470,7 +470,7 @@ it('rejects the plugin-data token and omits the failed server from the document'
     expect.objectContaining({ code: 'cursor.mcp.token', severity: 'error', target: 'cursor' }),
   ]);
   const documents = plan.entries.filter((entry) => entry.kind === 'write').map((entry) => entry.relativePath);
-  expect(documents).toEqual(['.cursor-plugin/plugin.json', 'INSTALL.md', 'install.mjs']);
+  expect(documents).toEqual(['.cursor-plugin/plugin.json']);
   const manifest = JSON.parse(
     (plan.entries.find((entry) => entry.relativePath === '.cursor-plugin/plugin.json') as { readonly content: string }).content,
   ) as Record<string, unknown>;
@@ -508,7 +508,7 @@ it('lowers cursor-targeted hooks into the flat versioned document with dedicated
   const documents = Object.fromEntries(plan.entries
     .filter((entry): entry is Extract<typeof entry, { readonly kind: 'write' }> => entry.kind === 'write')
     .map((entry) => [entry.relativePath, entry.content]));
-  expect(JSON.parse(documents['hooks/hooks.json']!)).toEqual({
+  expect(JSON.parse(documents['.cursor-plugin/hooks.json']!)).toEqual({
     hooks: {
       postToolUse: [{
         command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/record-write.mjs"',
@@ -519,7 +519,7 @@ it('lowers cursor-targeted hooks into the flat versioned document with dedicated
     },
     version: 1,
   });
-  expect(JSON.parse(documents['.cursor-plugin/plugin.json']!)).toMatchObject({ hooks: './hooks/hooks.json' });
+  expect(JSON.parse(documents['.cursor-plugin/plugin.json']!)).toMatchObject({ hooks: './.cursor-plugin/hooks.json' });
 
   const wrappers = plan.hookEntries ?? [];
   expect(wrappers.map((entry) => entry.relativePath).sort()).toEqual([
@@ -586,7 +586,7 @@ it('lowers supported route-only families without exposing config hook names', ()
   const documents = Object.fromEntries(plan.entries
     .filter((entry): entry is Extract<typeof entry, { readonly kind: 'write' }> => entry.kind === 'write')
     .map((entry) => [entry.relativePath, entry.content]));
-  expect(JSON.parse(documents['hooks/hooks.json']!)).toEqual({
+  expect(JSON.parse(documents['.cursor-plugin/hooks.json']!)).toEqual({
     hooks: {
       beforeSubmitPrompt: [{
         command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/event-route-prompt-submit.mjs"',
@@ -623,7 +623,7 @@ it('drops hooks scoped to other targets from the plan', () => {
   expect(plan.diagnostics).toEqual([]);
   expect(plan.hookEntries).toEqual([]);
   const paths = plan.entries.map((entry) => entry.relativePath);
-  expect(paths).not.toContain('hooks/hooks.json');
+  expect(paths).not.toContain('.cursor-plugin/hooks.json');
   expect(paths).toContain('.cursor-plugin/marketplace.json');
   const manifest = JSON.parse(
     (plan.entries.find((entry) => entry.relativePath === '.cursor-plugin/plugin.json') as { readonly content: string }).content,
@@ -633,9 +633,9 @@ it('drops hooks scoped to other targets from the plan', () => {
 
 it('reads the emitted shape-discriminated document back through the target MCP runtime', () => {
   const model = plugin();
-  const document = JSON.parse(writeContents(model)['mcp.json']!) as unknown;
+  const document = JSON.parse(writeContents(model)['.cursor-plugin/mcp.json']!) as unknown;
   const runtime = cursorAdapter.mcpRuntime!;
-  expect(runtime.manifestPath).toBe('mcp.json');
+  expect(runtime.manifestPath).toBe('.cursor-plugin/mcp.json');
 
   const result = readTargetMcpServers(runtime, document);
   expect(result.status).toBe('found');

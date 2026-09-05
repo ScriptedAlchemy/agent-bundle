@@ -105,11 +105,10 @@ const makeFifo = async (path: string): Promise<void> => {
 
 const createHostBundle = async (
   host: 'claude' | 'codex' | 'cursor',
-  options: { readonly artifactRoot?: boolean } = {},
 ): Promise<{ readonly bundleRoot: string; readonly cleanupRoot: string; readonly from: string }> => {
   const cleanupRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-install-'));
-  const from = options.artifactRoot === true ? cleanupRoot : join(cleanupRoot, 'bundle');
-  const bundleRoot = options.artifactRoot === true ? join(cleanupRoot, host) : from;
+  const from = join(cleanupRoot, 'bundle');
+  const bundleRoot = from;
   await mkdir(bundleRoot, { recursive: true });
   await writeFile(join(bundleRoot, 'payload.txt'), 'payload\n');
 
@@ -562,25 +561,6 @@ it('honours --replace for Codex through remove + add and fails closed without a 
       expect((error as DiagnosticError).diagnostics[0]?.message).toContain('plugin list --json was unusable');
       expect(unusable.calls).toHaveLength(1);
     }
-  } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
-  }
-});
-
-it('accepts an artifact root containing the requested host target', async () => {
-  const fixture = await createHostBundle('claude', { artifactRoot: true });
-  const { calls, runner } = recordingRunner();
-  try {
-    const result = await installBundle({
-      ...isolated(fixture),
-      commandRunner: runner,
-      from: fixture.from,
-      host: 'claude',
-      scope: 'user',
-    });
-
-    expect(result.bundleRoot).toBe(fixture.bundleRoot);
-    expect(calls[0]).toMatchObject({ cwd: fixture.bundleRoot });
   } finally {
     await rm(fixture.cleanupRoot, { force: true, recursive: true });
   }

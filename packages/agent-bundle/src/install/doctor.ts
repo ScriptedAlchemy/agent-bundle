@@ -466,16 +466,11 @@ const validateBundleFiles = async (
   }
 };
 
+/** The composite root is every selected host's bundle root (#555): its manifest sits directly inside `from`. */
 export const resolveBundleRoot = async (from: string, host: DoctorHost): Promise<string> => {
   const root = resolve(from);
-  const manifest = manifestPath(host);
-  if (await exists(join(root, manifest))) return root;
-  const targetRoot = join(root, host);
-  if (await exists(join(targetRoot, manifest))) return targetRoot;
-  throw new Error(
-    `No ${host} bundle manifest was found in ${JSON.stringify(root)} or its ` +
-    `${JSON.stringify(host)} target directory.`,
-  );
+  if (await exists(join(root, manifestPath(host)))) return root;
+  throw new Error(`No ${host} bundle manifest was found in ${JSON.stringify(root)}.`);
 };
 
 /** The cwd for `plugin list --json`: the resolved host bundle root under `--from`, else the given directory, else home. */

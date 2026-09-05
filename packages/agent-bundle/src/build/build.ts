@@ -4,8 +4,7 @@ import { basename, dirname, join, relative, resolve } from 'node:path';
 import packageManifest from '../../package.json' with { type: 'json' };
 
 import type { TargetRegistry } from '../adapters/registry.ts';
-import type { TargetArtifactEntry, TargetHookEntry } from '../adapters/types.ts';
-import { deduplicateDiagnostics, DiagnosticBag, DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
+import { DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
 import type { ProjectContext } from '../core/project-context.ts';
 import { pathTokens, type AgentBundleToolsConfig, type NormalizedPlugin } from '../core/types.ts';
 import { assertInside, isInsideOrEqual } from '../core/paths.ts';
@@ -21,17 +20,12 @@ import {
   type CompiledHookEntry,
   type CompiledMcpEntry,
 } from './entries.ts';
-import {
-  cliBinCollisionDiagnostics,
-  planCliBinsSurface,
-  planCompiledCliBins,
-  targetHostsCliBin,
-  type CompiledCliBin,
-} from './cli-bins.ts';
+import { planCliBinsSurface, planCompiledCliBins, type CompiledCliBin } from './cli-bins.ts';
+import { composeProjections, type CompositePlan } from './compose.ts';
 import { projectMeta } from './meta.ts';
 import { compileMcpApps, planCompiledMcpApps, type CompiledMcpApp } from './mcp-apps.ts';
 import { compileRslibSurfaces, settledRslibSurface } from './rslib.ts';
-import { planTargetStages } from './target-stages.ts';
+import { planCompileStages } from './compile-stages.ts';
 import {
   assertUniqueArtifactDestinations,
   artifactHookIndexName,
@@ -75,15 +69,8 @@ export interface BuildOptions {
   readonly tools?: AgentBundleToolsConfig;
 }
 
-interface PlannedTarget {
-  /** True when the target's adapter publishes the `cli` capability, admitting the routed CLI bin. */
-  readonly cliBin: boolean;
-  readonly entries: readonly TargetArtifactEntry[];
-  readonly hookEntries: readonly TargetHookEntry[];
-  readonly name: string;
-}
-
-interface StagedTarget extends PlannedTarget {
+/** The compiled outputs of the one composite root, planned before anything compiles. */
+interface StagedRoot {
   readonly compiledCliBins: readonly CompiledCliBin[];
   readonly compiledEntries: readonly CompiledEntry[];
   readonly compiledHooks: readonly CompiledHookEntry[];
@@ -152,73 +139,47 @@ const prebuiltPayloadDiagnostics = (
   return diagnostics;
 };
 
-const planTargets = (options: BuildOptions): readonly PlannedTarget[] => {
-  const diagnostics: Diagnostic[] = [];
-  const planned: PlannedTarget[] = [];
+/**
+ * The scripts a composite root compiles: every script whose target set
+ * intersects the selection, once. Script sources are host-neutral, so one
+ * `scripts/<name>.mjs` serves every selected host that declares it.
+ */
+const selectedScripts = (model: NormalizedPlugin, selected: readonly string[]): NormalizedPlugin['scripts'] =>
+  model.scripts.filter((script) => script.targets.some((target) => selected.includes(target)));
 
-  for (const target of options.model.targets) {
-    const adapter = options.registry.get(target.name);
-    const plan = adapter.plan(options.model);
-    diagnostics.push(...plan.diagnostics);
-    const hookEntries = plan.hookEntries ?? Object.freeze([]);
-    for (const hookEntry of hookEntries) {
-      if (hookEntry.target !== target.name) {
-        diagnostics.push({
-          code: 'AB5000',
-          message: `Target adapter ${JSON.stringify(target.name)} planned hook ${JSON.stringify(hookEntry.hook.id)} for target ${JSON.stringify(hookEntry.target)}, expected ${JSON.stringify(target.name)}.`,
-          severity: 'error',
-          target: target.name,
-        });
-      }
-    }
-    const cliBin = targetHostsCliBin(options.registry, target.name);
-    if (cliBin) diagnostics.push(...cliBinCollisionDiagnostics(options.model, target.name, plan.entries));
-    planned.push({
-      cliBin,
-      entries: plan.entries,
-      hookEntries,
-      name: target.name,
-    });
-  }
-  new DiagnosticBag(deduplicateDiagnostics(diagnostics)).throwIfErrors();
-  return planned;
-};
-
-const planStagedTargets = (options: {
-  readonly artifactRoot: string;
+const planStagedRoot = (options: {
+  readonly composite: CompositePlan;
   readonly model: NormalizedPlugin;
   readonly projectRoot: string;
-  readonly targets: readonly PlannedTarget[];
-}): readonly StagedTarget[] => options.targets.map((target) => {
-  const root = assertInside(options.artifactRoot, resolve(options.artifactRoot, target.name));
-  const scripts = options.model.scripts.filter((script) => script.targets.includes(target.name));
-  const compiledEntries = planCompiledEntries(scripts, { cwd: options.projectRoot, outDir: root });
-  const compiledHooks = planCompiledHooks(target.hookEntries, { outDir: root });
-  const compiledMcpApps = planCompiledMcpApps(options.model.mcpApps ?? [], {
+  readonly root: string;
+}): StagedRoot => {
+  const { composite, model, root } = options;
+  const compiledEntries = planCompiledEntries(selectedScripts(model, composite.selected), { cwd: options.projectRoot, outDir: root });
+  const compiledHooks = planCompiledHooks(composite.hookEntries, { outDir: root });
+  const compiledMcpApps = planCompiledMcpApps(model.mcpApps ?? [], {
     outDir: root,
-    target: target.name,
+    selected: composite.selected,
+    target: composite.identity,
   });
-  const compiledMcpEntries = planCompiledMcpEntries(options.model.mcpServers, {
+  const compiledMcpEntries = planCompiledMcpEntries(model.mcpServers, {
     outDir: root,
-    target: target.name,
+    target: composite.identity,
+    targets: composite.selected,
   });
-  const compiledCliBins = target.cliBin
-    ? planCompiledCliBins(options.model, { outDir: root, target: target.name })
+  const compiledCliBins = composite.cliBin
+    ? planCompiledCliBins(model, { outDir: root, target: composite.identity })
     : Object.freeze([]);
-  return { ...target, compiledCliBins, compiledEntries, compiledHooks, compiledMcpApps, compiledMcpEntries, root };
-});
+  return { compiledCliBins, compiledEntries, compiledHooks, compiledMcpApps, compiledMcpEntries, root };
+};
 
-const plannedDestinations = (targets: readonly StagedTarget[]): readonly string[] =>
-  targets.flatMap((target) => [
-    ...target.entries.map((entry) =>
-      resolveArtifactDestination(target.root, entry.relativePath),
-    ),
-    ...target.compiledCliBins.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
-    ...target.compiledEntries.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
-    ...target.compiledHooks.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
-    ...target.compiledMcpApps.map((entry) => entry.output),
-    ...target.compiledMcpEntries.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
-  ]);
+const plannedDestinations = (composite: CompositePlan, staged: StagedRoot): readonly string[] => [
+  ...composite.entries.map((entry) => resolveArtifactDestination(staged.root, entry.relativePath)),
+  ...staged.compiledCliBins.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
+  ...staged.compiledEntries.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
+  ...staged.compiledHooks.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
+  ...staged.compiledMcpApps.map((entry) => entry.output),
+  ...staged.compiledMcpEntries.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
+];
 
 const hookIndexSourceInputs = (
   model: NormalizedPlugin,
@@ -238,16 +199,16 @@ const outputCandidatesFor = (options: {
   readonly compiledHooks: readonly CompiledHookEntry[];
   readonly compiledMcpApps: readonly CompiledMcpApp[];
   readonly compiledMcpEntries: readonly CompiledMcpEntry[];
+  readonly entries: CompositePlan['entries'];
   readonly model: NormalizedPlugin;
-  readonly targets: readonly StagedTarget[];
 }): readonly ArtifactOutputCandidate[] => [
-  ...options.targets.flatMap((target) => target.entries.map((entry) => ({
+  ...options.entries.map((entry) => ({
     kind: entry.kind !== 'copy'
       ? 'generated' as const
       : entry.prebuilt === true ? 'prebuilt' as const : 'copy' as const,
-    path: resolveArtifactDestination(target.root, entry.relativePath),
+    path: resolveArtifactDestination(options.artifactRoot, entry.relativePath),
     sourceInputs: entry.sourceInputs,
-  }))),
+  })),
   ...options.compiledCliBins.flatMap((entry) => [{
     kind: 'bundle' as const,
     path: entry.output,
@@ -310,11 +271,12 @@ const assertOutputProvenanceSources = (options: {
   }
 };
 
+/** The selected real projections the composite root holds, with their adapter provenance. */
 const manifestTargets = (
   registry: TargetRegistry,
-  targets: readonly StagedTarget[],
-): ArtifactManifest['targets'] => Object.freeze(targets
-  .map(({ name }) => {
+  selected: readonly string[],
+): ArtifactManifest['targets'] => Object.freeze(selected
+  .map((name) => {
     const metadata = registry.metadata(name);
     return Object.freeze({
       adapterRevision: metadata.adapterRevision,
@@ -332,9 +294,9 @@ const manifestFor = (options: {
   readonly model: NormalizedPlugin;
   readonly projectContext: ProjectContext;
   readonly registry: TargetRegistry;
-  readonly targets: readonly StagedTarget[];
+  readonly selected: readonly string[];
 }): ArtifactManifest => {
-  const targets = manifestTargets(options.registry, options.targets);
+  const targets = manifestTargets(options.registry, options.selected);
   return {
     agentSkills: agentSkillsSchemaRevision,
     files: options.files,
@@ -354,14 +316,17 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
   const outputRoot = resolve(options.outputRoot);
   const payloadDiagnostics = prebuiltPayloadDiagnostics(options.model, outputRoot);
   if (payloadDiagnostics.length > 0) throw new DiagnosticError(payloadDiagnostics);
-  const planned = planTargets(options);
-  const preflightTargets = planStagedTargets({
-    artifactRoot: outputRoot,
+  // One composite root (#555): the selected host projections are planned
+  // together and staged as one tree at the artifact root, never one
+  // subdirectory per target.
+  const composite = composeProjections(options.model, options.registry);
+  const preflight = planStagedRoot({
+    composite,
     model: options.model,
     projectRoot: options.projectRoot,
-    targets: planned,
+    root: outputRoot,
   });
-  assertUniqueArtifactDestinations(plannedDestinations(preflightTargets));
+  assertUniqueArtifactDestinations(plannedDestinations(composite, preflight));
   const stageParent = dirname(outputRoot);
   await mkdir(stageParent, { recursive: true });
   const stageRoot = await mkdtemp(join(stageParent, `.${basename(outputRoot)}.stage-`));
@@ -369,13 +334,13 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
     assertInside(outputRoot, resolve(outputRoot, relative(stageRoot, entry.output)));
 
   try {
-    const stagedTargets = planStagedTargets({
-      artifactRoot: stageRoot,
+    const staged = planStagedRoot({
+      composite,
       model: options.model,
       projectRoot: options.projectRoot,
-      targets: planned,
+      root: stageRoot,
     });
-    assertUniqueArtifactDestinations(plannedDestinations(stagedTargets));
+    assertUniqueArtifactDestinations(plannedDestinations(composite, staged));
 
     const compiledCliBins: CompiledCliBin[] = [];
     const compiledEntries: CompiledEntry[] = [];
@@ -391,81 +356,83 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
     // manifest, `inspect`, and dev status report (issue #237).
     const meta = projectMeta(options.model.metadata);
     const plugin = { name: options.model.metadata.name, version: options.model.metadata.version };
-    for (const target of stagedTargets) {
-      let targetMcpApps: readonly CompiledMcpApp[] = Object.freeze([]);
-      for (const stage of planTargetStages(target)) {
-        switch (stage.kind) {
-          case 'mcp-apps':
-            // The optional browser stage, always first: the MCP entries
-            // embed its HTML, and its Rsbuild pass asserts the target root
-            // holds nothing but that HTML.
-            targetMcpApps = await compileMcpApps(options.model.mcpApps ?? [], {
-              cwd: options.projectRoot,
-              meta,
-              outDir: target.root,
-              target: target.name,
-              ...tools,
-            });
-            compiledMcpApps.push(...targetMcpApps);
-            break;
-          case 'node-surfaces': {
-            await emitPlanEntries({ entries: target.entries, root: target.root });
-            const noticeDelivery = options.registry.noticeDelivery(target.name);
-            // Every agent-host surface of the target lowers through one Rslib
-            // instance; each surface keeps its own evidence and result.
-            const [cliBins, scripts, hooks, mcpEntries] = await compileRslibSurfaces(
-              { cwd: options.projectRoot, meta, outputRoot: target.root, ...tools },
-              [
-                target.cliBin
-                  ? planCliBinsSurface(options.model, { outDir: target.root, target: target.name })
-                  : settledRslibSurface<readonly CompiledCliBin[]>(Object.freeze([])),
-                await planScriptsSurface(
-                  options.model.scripts.filter((script) => script.targets.includes(target.name)),
-                  {
-                    cwd: options.projectRoot,
-                    layouts: options.model.layouts ?? [],
-                    outDir: target.root,
-                    ...noticePolicy,
-                    providers: options.model.providers ?? [],
-                    ...(options.model.state === undefined ? {} : { state: options.model.state }),
-                  },
-                ),
-                planHooksSurface(target.hookEntries, {
-                  artifactEpoch: options.projectContext.revision,
-                  ...(noticeDelivery === undefined ? {} : { noticeDelivery }),
-                  ...noticePolicy,
-                  outDir: target.root,
-                  plugin,
-                  providers: options.model.providers ?? [],
-                  ...(options.model.state === undefined ? {} : { state: options.model.state }),
-                }),
-                await planMcpEntriesSurface(options.model.mcpServers, {
-                  apps: targetMcpApps,
-                  artifactEpoch: options.projectContext.revision,
-                  eventHooks: target.hookEntries
-                    .filter((entry) => entry.hook.eventRoute !== undefined)
-                    .map((entry) => entry.hook),
+    // The routes every selected host honours; the shared MCP entries and each
+    // host's hook wrappers are wired from the same advertisement.
+    const noticeDelivery = composite.noticeDelivery === undefined ? {} : { noticeDelivery: composite.noticeDelivery };
+    let stagedMcpApps: readonly CompiledMcpApp[] = Object.freeze([]);
+    for (const stage of planCompileStages(staged)) {
+      switch (stage.kind) {
+        case 'mcp-apps':
+          // The optional browser stage, always first: the MCP entries embed
+          // its HTML, and its Rsbuild pass asserts the root holds nothing but
+          // that HTML.
+          stagedMcpApps = await compileMcpApps(options.model.mcpApps ?? [], {
+            cwd: options.projectRoot,
+            meta,
+            outDir: stageRoot,
+            selected: composite.selected,
+            target: composite.identity,
+            ...tools,
+          });
+          compiledMcpApps.push(...stagedMcpApps);
+          break;
+        case 'node-surfaces': {
+          await emitPlanEntries({ entries: composite.entries, root: stageRoot });
+          // Every agent-host surface of the root lowers through one Rslib
+          // instance; each surface keeps its own evidence and result.
+          const [cliBins, scripts, hooks, mcpEntries] = await compileRslibSurfaces(
+            { cwd: options.projectRoot, meta, outputRoot: stageRoot, ...tools },
+            [
+              composite.cliBin
+                ? planCliBinsSurface(options.model, { outDir: stageRoot, target: composite.identity })
+                : settledRslibSurface<readonly CompiledCliBin[]>(Object.freeze([])),
+              await planScriptsSurface(
+                selectedScripts(options.model, composite.selected),
+                {
+                  cwd: options.projectRoot,
                   layouts: options.model.layouts ?? [],
-                  ...(noticeDelivery === undefined ? {} : { noticeDelivery }),
+                  outDir: stageRoot,
                   ...noticePolicy,
-                  outDir: target.root,
-                  plugin,
                   providers: options.model.providers ?? [],
                   ...(options.model.state === undefined ? {} : { state: options.model.state }),
-                  target: target.name,
-                }),
-              ],
-            );
-            compiledCliBins.push(...cliBins);
-            compiledEntries.push(...scripts);
-            compiledHooks.push(...hooks);
-            compiledMcpEntries.push(...mcpEntries);
-            break;
-          }
-          default: {
-            const exhaustive: never = stage;
-            throw new Error(`Unknown target compile stage ${JSON.stringify(exhaustive)}.`);
-          }
+                },
+              ),
+              planHooksSurface(composite.hookEntries, {
+                artifactEpoch: options.projectContext.revision,
+                ...noticeDelivery,
+                ...noticePolicy,
+                outDir: stageRoot,
+                plugin,
+                providers: options.model.providers ?? [],
+                ...(options.model.state === undefined ? {} : { state: options.model.state }),
+              }),
+              await planMcpEntriesSurface(options.model.mcpServers, {
+                apps: stagedMcpApps,
+                artifactEpoch: options.projectContext.revision,
+                eventHooks: [...new Map(composite.hookEntries
+                  .filter((entry) => entry.hook.eventRoute !== undefined)
+                  .map((entry) => [entry.hook.id, entry.hook])).values()],
+                layouts: options.model.layouts ?? [],
+                ...noticeDelivery,
+                ...noticePolicy,
+                outDir: stageRoot,
+                plugin,
+                providers: options.model.providers ?? [],
+                ...(options.model.state === undefined ? {} : { state: options.model.state }),
+                target: composite.identity,
+                targets: composite.selected,
+              }),
+            ],
+          );
+          compiledCliBins.push(...cliBins);
+          compiledEntries.push(...scripts);
+          compiledHooks.push(...hooks);
+          compiledMcpEntries.push(...mcpEntries);
+          break;
+        }
+        default: {
+          const exhaustive: never = stage;
+          throw new Error(`Unknown compile stage ${JSON.stringify(exhaustive)}.`);
         }
       }
     }
@@ -498,8 +465,8 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
         compiledHooks,
         compiledMcpApps,
         compiledMcpEntries,
+        entries: composite.entries,
         model: options.model,
-        targets: stagedTargets,
       }),
       projectRoot: options.projectRoot,
     });
@@ -532,7 +499,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
         model: options.model,
         projectContext: options.projectContext,
         registry: options.registry,
-        targets: stagedTargets,
+        selected: composite.selected,
       }),
     });
     const diagnostics = await validateArtifact({ artifactRoot: stageRoot, bundleSyntaxCheck, registry: options.registry });

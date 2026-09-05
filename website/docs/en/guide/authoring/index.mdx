@@ -38,15 +38,20 @@ identity from `agent-bundle/meta` instead of a hand-maintained version module.
 
 ## Targets
 
-`targets` selects the artifact layouts the build emits:
+`targets` selects the host projections the build lays into one composite plugin root — the
+single directory at `artifact/` (or `output.distPath`) that every selected host reads:
 
-| Target | What it emits |
+| Target | What it projects into the root |
 | --- | --- |
-| `plugin` | One multi-host bundle with `.claude-plugin/`, `.codex-plugin/`, and `.cursor-plugin/` manifests over shared component directories. |
-| `claude` | The Claude Code plugin layout. |
-| `codex` | The Codex plugin layout. |
-| `cursor` | The Cursor plugin layout. |
-| `portable` | The [Agent Plugins open standard](https://agent-plugins.org) (specification 1.0.0). Cursor, Codex, VS Code, GitHub Copilot, Kiro, and ChatGPT are native clients. |
+| `claude` | The Claude Code plugin layout: `.claude-plugin/`, `hooks/hooks.json`, `.mcp.json`. |
+| `codex` | The Codex plugin layout: `.codex-plugin/` with its own `hooks.json` and `mcp.json`. |
+| `cursor` | The Cursor plugin layout: `.cursor-plugin/` with its own `hooks.json` and `mcp.json`. |
+| `portable` | The [Agent Plugins open standard](https://agent-plugins.org) (specification 1.0.0): root `plugin.json` and `mcp.json`. Cursor, Codex, VS Code, GitHub Copilot, Kiro, and ChatGPT are native clients. |
+
+Host manifests live in their own dotfolders; `skills/`, `hooks/`, `mcp/`, `scripts/`, `bin/`, and
+`assets/` are emitted once and shared. Omit `targets` and the build emits only the `portable`
+projection. Order is irrelevant — `['codex', 'claude']` and `['claude', 'codex']` produce the same
+bytes — and any other name, `plugin` included, is an unknown target (`AB4100`).
 
 The portable standard packages only Skills and MCP servers, so rules, commands, and hooks are
 honestly unavailable on that target rather than silently dropped. Claude Code consumes the
@@ -57,7 +62,7 @@ standard only through CLI translation, which is why its dedicated target remains
 | Field | Owns |
 | --- | --- |
 | `plugin` | Project identity. Required. |
-| `targets` | Which artifact layouts to emit. |
+| `targets` | Which host projections the composite plugin root carries. |
 | `skills` | Explicit Skill paths or globs, replacing the `src/skills/*` convention. See [Skills](./skills.mdx). |
 | `hooks` | Lifecycle hook handlers, keyed by canonical event. See [Hooks](./hooks.mdx). |
 | `mcp` | MCP server declarations and their MCP Apps. See [MCP servers and Apps](./mcp.mdx). |
@@ -106,8 +111,8 @@ host version actually honours.
 Two Claude Code surfaces deserve a closer look because their contracts are narrower than their
 names suggest:
 
-- **`claude.lspServers`** — emitted as a plugin-root `.lsp.json` by the `claude` target and the
-  Claude half of `plugin`. Path tokens expand only in `command`, `args`, `env`, and
+- **`claude.lspServers`** — emitted as a root `.lsp.json` whenever `claude` is among the selected
+  projections. Path tokens expand only in `command`, `args`, `env`, and
   `workspaceFolder`. agent-bundle does not include the language-server binary; install it
   separately so the declared command is available on `PATH`. Codex, Cursor, and the portable
   format do not receive this configuration.

@@ -255,8 +255,8 @@ export const packInventoryDiagnostics = async (options: {
     ...options.packageBuild.files.map((file) => `${packagePrefix}/${file.path}`),
     `${artifactPrefix}/${artifactManifestName}`,
     ...manifest.files.map((file) => `${artifactPrefix}/${file.path}`),
-    ...manifest.targets.flatMap((target) =>
-      installSurfaceRequirements(target.name).map((path) => `${artifactPrefix}/${target.name}/${path}`)),
+    ...installSurfaceRequirements(manifest.targets.map((target) => target.name))
+      .map((path) => `${artifactPrefix}/${path}`),
     'README.md',
   ]);
 
@@ -304,9 +304,9 @@ export const packInventoryDiagnostics = async (options: {
   ];
   for (const target of manifest.targets) {
     for (const path of hostManifestPaths(target.name)) {
-      const absolute = join(artifactRoot, target.name, path);
+      const absolute = join(artifactRoot, path);
       if (await exists(absolute)) {
-        versions.push([`${target.name}/${path}`, (await jsonRecord(absolute)).version]);
+        versions.push([path, (await jsonRecord(absolute)).version]);
       }
     }
   }

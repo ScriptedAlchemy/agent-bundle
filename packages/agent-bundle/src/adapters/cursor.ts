@@ -30,6 +30,7 @@ import capabilityTable from './capabilities/cursor-2026-08-28.json' with { type:
 import {
   createNativeEventStarter,
   cursorHookWrapperSource,
+  emptyHookDocument,
   encodeCursorPlaygroundInput,
   encodeCursorPlaygroundOutput,
   planHooks,
@@ -58,7 +59,7 @@ import {
   type TargetArtifactPlan,
 } from './types.ts';
 import { pluginLogoManifestRef, withPluginLogoEntry } from './plugin-logo.ts';
-import { withInstallSurface } from '../install/surface.ts';
+import { folderDiscoveryShadowed, hookWrapperPath } from './composite-layout.ts';
 
 const cursorName = 'cursor';
 
@@ -102,10 +103,16 @@ declare module '../core/types.ts' {
  * with root `mcp.json` and `hooks/hooks.json`; the manifest keeps explicit
  * pointers so every declared component resolves from one plugin root.
  */
+/**
+ * Cursor's artifact documents. The hook and MCP documents live beside the
+ * manifest rather than at the conventional `hooks/hooks.json` and `mcp.json`:
+ * the manifest's `hooks` and `mcp` pointers name them, so a composite root
+ * that also holds a Claude or portable projection never collides (#555).
+ */
 export const cursorArtifactPaths = Object.freeze({
-  hooks: 'hooks/hooks.json',
+  hooks: '.cursor-plugin/hooks.json',
   marketplace: '.cursor-plugin/marketplace.json',
-  mcp: 'mcp.json',
+  mcp: '.cursor-plugin/mcp.json',
   plugin: '.cursor-plugin/plugin.json',
 });
 
@@ -163,9 +170,6 @@ export const isValidCursorPluginName = (name: string): boolean =>
 export const cursorPluginNameError = (name: string): string =>
   `Plugin name ${JSON.stringify(name)} is not a valid Cursor plugin name ` +
   `(lowercase kebab-case, at most ${cursorNameMaxLength} characters).`;
-
-/** The schema-collision guard the bundle emits when no hook lowers to Cursor. */
-export const emptyCursorHooksDocument = Object.freeze({ hooks: {}, version: 1 });
 
 const cursorHookDocumentEntry = (input: TargetHookDocumentEntryInput): Record<string, unknown> => ({ ...input });
 
@@ -564,8 +568,22 @@ export const planCursorMarketplace = (model: NormalizedPlugin): CursorMarketplac
   });
 };
 
+/**
+ * The hook contract of one plan: the registered contract with the wrapper
+ * paths the composite root assigns for this selection (#555). The document
+ * itself stays at `cursorArtifactPaths.hooks`, which the manifest's `hooks`
+ * pointer names.
+ */
+const planHookContract = (selected: readonly string[]): TargetHookContract => createCursorHookContract({
+  manifestPath: cursorArtifactPaths.hooks,
+  wrapperPath: (hook) => hookWrapperPath(cursorName, hook.name, hook.targets, selected),
+});
+
 export const planCursorArtifacts = (model: NormalizedPlugin): TargetArtifactPlan => {
   const isSelected = (targets: readonly string[]): boolean => targets.includes(cursorName);
+  const selected = model.targets.map((target) => target.name);
+  const planContract = planHookContract(selected);
+  const mcpRelativePath = cursorArtifactPaths.mcp;
   const selectedCommands = (model.commands ?? []).filter((command) => isSelected(command.targets));
   const selectedRules = (model.rules ?? []).filter((rule) => isSelected(rule.targets));
   const diagnostics: Diagnostic[] = [];
@@ -579,13 +597,19 @@ export const planCursorArtifacts = (model: NormalizedPlugin): TargetArtifactPlan
     diagnostics.push(...serverPlan.diagnostics);
     if (serverPlan.value !== undefined) servers[server.name] = serverPlan.value;
   }
-  const mcp = Object.keys(servers).length === 0 ? undefined : { mcpServers: servers };
+  // A manifest pointer replaces Cursor's folder discovery, so an empty
+  // document is still emitted when the portable `mcp.json` or Claude's
+  // `hooks/hooks.json` shares the root; Cursor never loads another host's (#555).
+  const mcp = Object.keys(servers).length === 0
+    ? (folderDiscoveryShadowed('mcp.json', selected) ? { mcpServers: {} } : undefined)
+    : { mcpServers: servers };
   const mcpValid = mcp !== undefined && validateMcp(mcp);
   if (mcp !== undefined) diagnostics.push(...schemaDiagnostics('mcp', mcpValid, validateMcp.errors));
 
-  const generatedHooks = planHooks(model, cursorName, hookContract);
+  const generatedHooks = planHooks(model, cursorName, planContract);
   diagnostics.push(...generatedHooks.diagnostics);
-  const hookDocument = generatedHooks.document;
+  const hookDocument = generatedHooks.document
+    ?? (folderDiscoveryShadowed('hooks/hooks.json', selected) ? emptyHookDocument(planContract) : undefined);
   const hookDocumentValid = hookDocument !== undefined && validateHooks(hookDocument);
   if (hookDocument !== undefined) diagnostics.push(...schemaDiagnostics('hooks', hookDocumentValid, validateHooks.errors));
 
@@ -596,8 +620,8 @@ export const planCursorArtifacts = (model: NormalizedPlugin): TargetArtifactPlan
   diagnostics.push(...manifestMetadata.diagnostics);
   const plugin = cursorManifest(model, {
     ...(selectedCommands.length === 0 ? {} : { commands: './commands/' }),
-    ...(hookDocument !== undefined && hookDocumentValid ? { hooks: `./${cursorArtifactPaths.hooks}` } : {}),
-    ...(mcp !== undefined && mcpValid ? { mcp: `./${cursorArtifactPaths.mcp}` } : {}),
+    ...(hookDocument !== undefined && hookDocumentValid ? { hooks: `./${planContract.manifestPath}` } : {}),
+    ...(mcp !== undefined && mcpValid ? { mcp: `./${mcpRelativePath}` } : {}),
     ...(selectedRules.length === 0 ? {} : { rules: './rules/' }),
     ...(model.skills.some((skill) => isSelected(skill.targets)) ? { skills: './skills/' } : {}),
     ...(variables === undefined ? {} : { variables }),
@@ -615,20 +639,20 @@ export const planCursorArtifacts = (model: NormalizedPlugin): TargetArtifactPlan
     hookDocument,
     hookDocumentValid,
     hookEntries: generatedHooks.hookEntries,
-    hookManifestPath: cursorArtifactPaths.hooks,
+    hookManifestPath: planContract.manifestPath,
     isSelected,
     marketplace: marketplacePlan.document,
     marketplaceRelativePath: cursorArtifactPaths.marketplace,
     marketplaceValid: marketplacePlan.valid,
     mcp,
-    mcpRelativePath: cursorArtifactPaths.mcp,
+    mcpRelativePath,
     mcpValid,
     model,
     plugin,
     pluginRelativePath: cursorArtifactPaths.plugin,
     targetName: cursorName,
   });
-  return withInstallSurface(Object.freeze({
+  return Object.freeze({
     ...basePlan,
     entries: sortedEntries(withPluginLogoEntry([
       ...basePlan.entries,
@@ -636,7 +660,7 @@ export const planCursorArtifacts = (model: NormalizedPlugin): TargetArtifactPlan
         command.markdown === command.body ? command.markdown : command.body),
       ...ruleWriteEntries(model, isSelected),
     ], model)),
-  }), model, 'cursor');
+  });
 };
 
 const { distributionPolicy, formats } = capabilityTable.plugin;

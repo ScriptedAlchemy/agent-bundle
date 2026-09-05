@@ -14,7 +14,7 @@ const simulation = {
     nativeProjection: 'deterministic',
     nativeSelector: 'SessionStart',
     target: 'claude',
-    wrapperPath: 'claude/hooks/session-start.mjs',
+    wrapperPath: 'hooks/session-start.mjs',
   },
   nativeInput: { cwd: '/workspace', hook_event_name: 'SessionStart' },
   nativeOutput: { hookSpecificOutput: { hookEventName: 'SessionStart' } },
@@ -32,7 +32,7 @@ it('lists epoch-bound hooks over the same foreground session', async () => {
     foreground: foreground(recordingFetch(calls, () => response({
       hooks: [{
         binding: { epochId: 'epoch-1', hook: 'hook:session-start', target: 'claude' },
-        hook: { event: 'sessionStart', id: 'hook:session-start', name: 'session-start', path: 'claude/hooks/session-start.mjs', target: 'claude' },
+        hook: { event: 'sessionStart', id: 'hook:session-start', name: 'session-start', path: 'hooks/session-start.mjs', target: 'claude' },
       }],
     }))),
   });
@@ -118,7 +118,7 @@ it('returns route diagnostics instead of a simulation', async () => {
 it('rejects surplus fields throughout the hook list wire DTO', async () => {
   const listedHook = {
     binding: { epochId: 'epoch-1', hook: 'hook:session-start', target: 'claude' },
-    hook: { event: 'sessionStart', id: 'hook:session-start', name: 'session-start', path: 'claude/hooks/session-start.mjs', target: 'claude' },
+    hook: { event: 'sessionStart', id: 'hook:session-start', name: 'session-start', path: 'hooks/session-start.mjs', target: 'claude' },
   };
   const malformed = [
     { hooks: [], schemaVersion: 1 },

@@ -7,6 +7,7 @@ import {
   pathTokens,
   type AgentBundleConfig,
   type AgentBundleHostConfig,
+  type NormalizedHook,
   type NormalizedMcpServer,
   type NormalizedHostPayloadDirectory,
   type NormalizedPlugin,
@@ -71,7 +72,7 @@ import {
   type TargetArtifactLayout,
   type TargetArtifactPlan,
 } from './types.ts';
-import { withInstallSurface } from '../install/surface.ts';
+import { hookWrapperPath } from './composite-layout.ts';
 import { deepFreeze } from '../core/freeze.ts';
 
 
@@ -409,8 +410,6 @@ const validateMonitors = validator.compile(monitorsSchema);
 const validateSettings = validator.compile(settingsSchema);
 const validateTheme = validator.compile(themeSchema);
 
-/** The pinned Claude hooks validator, shared with artifact validation. */
-export const claudeHooksValidator = validateHooks;
 const eventRouteNames = supportedEventRouteNamesFrom(capabilityTable.hooks.eventRoutes);
 const hookContract = Object.freeze({
   hostContractRevision: capabilityTable.observedCliVersion,
@@ -3089,16 +3088,21 @@ export const planClaudeMonitors = (
   return { diagnostics, document, sourceInputs: inputs };
 };
 
-export interface ClaudeArtifactPlanOptions {
-  /** Target name used for selection and provenance; native hooks stay keyed to Claude. */
-  readonly targetName?: string;
-}
+/**
+ * The hook contract of one plan: the registered contract with the wrapper
+ * paths the composite root assigns for this selection (#555). Claude Code
+ * loads `hooks/hooks.json` conventionally, so the document never moves.
+ */
+const planHookContract = (model: NormalizedPlugin): TargetHookContract => {
+  const selected = model.targets.map((target) => target.name);
+  return Object.freeze({
+    ...hookContract,
+    wrapperPath: (hook: NormalizedHook) => hookWrapperPath(claudeName, hook.name, hook.targets, selected),
+  });
+};
 
-export const planClaudeArtifacts = (
-  model: NormalizedPlugin,
-  options: ClaudeArtifactPlanOptions = {},
-): TargetArtifactPlan => {
-  const targetName = options.targetName ?? claudeName;
+export const planClaudeArtifacts = (model: NormalizedPlugin): TargetArtifactPlan => {
+  const targetName = claudeName;
   const isSelected = (targets: readonly string[]): boolean => targets.includes(targetName);
   const diagnostics: Diagnostic[] = [];
   const servers: Record<string, Record<string, unknown>> = Object.create(null) as Record<string, Record<string, unknown>>;
@@ -3145,7 +3149,7 @@ export const planClaudeArtifacts = (
   diagnostics.push(...monitors.diagnostics);
   const dependencies = planClaudeDependencies(model, new Set([model.metadata.name]));
   diagnostics.push(...dependencies.diagnostics);
-  const generatedHooks = planHooks(model, targetName, hookContract);
+  const generatedHooks = planHooks(model, targetName, planHookContract(model));
   diagnostics.push(...generatedHooks.diagnostics);
   if (generatedHooks.document !== undefined) {
     diagnostics.push(...schemaDiagnostics('hooks', validateHooks(generatedHooks.document), validateHooks.errors));
@@ -3235,7 +3239,7 @@ export const planClaudeArtifacts = (
     pluginRelativePath: claudeArtifactPaths.plugin,
     targetName,
   });
-  return withInstallSurface(Object.freeze({
+  return Object.freeze({
     ...basePlan,
     entries: sortedEntries([
       ...basePlan.entries,
@@ -3244,7 +3248,7 @@ export const planClaudeArtifacts = (
       ...workflows.entries,
       ...commandWriteEntries(model, isSelected, claudeCommandMarkdown),
     ]),
-  }), model, 'claude');
+  });
 };
 
 const artifactLayout: TargetArtifactLayout = Object.freeze({

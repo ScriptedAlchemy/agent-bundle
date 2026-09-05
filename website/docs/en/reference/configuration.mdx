@@ -21,7 +21,7 @@ export default defineConfig({
 | Field | Type | Default |
 | --- | --- | --- |
 | `plugin` | `{ name, description?, logo?, ... }` | **Required.** |
-| `targets` | `string[]` | Adapter-selected. |
+| `targets` | `string[]` | `['portable']`. |
 | `skills` | `string[]` | The `src/skills/*` convention. |
 | `hooks` | `Partial<Record<CanonicalHookEvent, ...>>` | The `src/hooks/*` convention. |
 | `mcp` | `{ servers: Record<string, ...> }` | The `src/mcp/*` convention. |
@@ -80,6 +80,15 @@ build with no version anywhere is refused with `AB4013` rather than shipping the
 `0.0.0-dev.<short-revision>` development fallback. The field remains only for compatibility and
 will be removed under the normal breaking-change policy.
 
+## targets
+
+The host projections `build` lays into the composite plugin root: any combination of `claude`,
+`codex`, `cursor`, and `portable`. Order is irrelevant — the selection is sorted by name, so
+`['codex', 'claude']` and `['claude', 'codex']` build the same bytes. Omit the key and only the
+`portable` projection is emitted. `--target` on the command line replaces the configured list for
+one run. Any other name, `plugin` included, is an unknown target (`AB4100`). What each projection
+places in the root is in [Targets and artifacts](./targets-artifacts.mdx).
+
 ## hooks
 
 Keys are the seven canonical events: `sessionStart`, `beforeTool`, `afterTool`, `stop`,
@@ -95,7 +104,8 @@ without a reason fails.
 
 ## output and runtime
 
-`output.distPath` is the artifact output directory relative to the project root. The CLI
+`output.distPath` is the artifact output directory relative to the project root — the composite
+plugin root every selected host reads, with no per-host subdirectory beneath it. The CLI
 (`build`, `prepack`, `dev`) defaults it to `artifact`, because the CLI also runs the package build
 and that owns `dist/`; the programmatic `build()` defaults to `dist` unless `packageOutputs: true`.
 The per-invocation `--output` flag wins, but is subject to the same project-root

@@ -8,6 +8,7 @@ import { expect, it } from '@rstest/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import type { TargetArtifactWrite } from '../src/adapters/types.ts';
+import { composeProjections } from '../src/build/compose.ts';
 import type { NormalizedPlugin } from '../src/core/types.ts';
 import {
   installReceiptFile,
@@ -42,8 +43,10 @@ const modelFor = (target: string): NormalizedPlugin => ({
   }],
 });
 
+// The install surface is written once for the composite root, so the
+// production path is the composed plan, not one adapter's.
 const writesFor = (target: string): ReadonlyMap<string, string> => {
-  const plan = createDefaultRegistry().get(target).plan(modelFor(target));
+  const plan = composeProjections(modelFor(target), createDefaultRegistry());
   return new Map(plan.entries
     .filter((entry): entry is TargetArtifactWrite => entry.kind === 'write')
     .map((entry) => [entry.relativePath, entry.content]));

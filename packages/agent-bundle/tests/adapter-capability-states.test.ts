@@ -911,29 +911,6 @@ it('publishes the routed CLI bin capability with its bin layout on every built-i
   expect(registry.hostsComponent('unknown-target', 'cli')).toBe(false);
 });
 
-it('validates lowersConfigExtensions at registration and answers extension lowering per target (#100)', () => {
-  const source = createDefaultRegistry().get('cursor');
-  for (const malformedValue of ['claude', ['claude', 42], [' ']]) {
-    expect(() => new TargetRegistry().register({
-      ...source,
-      lowersConfigExtensions: malformedValue as never,
-    })).toThrow(/lowersConfigExtensions must be an array of nonempty extension keys/u);
-  }
-  const registry = createDefaultRegistry();
-  // Own key, declared composite sides, and nothing else.
-  expect(registry.lowersConfigExtension('claude', 'claude')).toBe(true);
-  expect(registry.lowersConfigExtension('cursor', 'claude')).toBe(false);
-  expect(registry.lowersConfigExtension('portable', 'claude')).toBe(false);
-  expect(registry.lowersConfigExtension('missing', 'claude')).toBe(false);
-  // Ownership is answered from the registration snapshot: mutating a live
-  // adapter's configExtension afterwards changes nothing.
-  const mutable = { ...createDefaultRegistry().get('cursor'), configExtension: { key: 'mutable' }, name: 'mutable-host' };
-  const snapshotted = new TargetRegistry().register(mutable);
-  mutable.configExtension.key = 'renamed';
-  expect(snapshotted.lowersConfigExtension('mutable-host', 'mutable')).toBe(true);
-  expect(snapshotted.lowersConfigExtension('mutable-host', 'renamed')).toBe(false);
-});
-
 it('rejects a malformed inspection component capability when the adapter registers', () => {
   const source = createDefaultRegistry().get('cursor');
 

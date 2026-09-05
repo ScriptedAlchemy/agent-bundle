@@ -298,13 +298,19 @@ const localMcpOutputName = (server: NormalizedMcpServer): string => {
   return match[1];
 };
 
+/**
+ * The MCP entries of one artifact root. `target` is the identity the entries
+ * answer events as; `targets` lists the selected hosts a server must reach to
+ * be compiled, and defaults to the identity alone (one host, one root).
+ */
 export const planCompiledMcpEntries = (
   servers: readonly NormalizedMcpServer[],
-  options: { readonly outDir: string; readonly target: string },
+  options: { readonly outDir: string; readonly target: string; readonly targets?: readonly string[] },
 ): readonly CompiledMcpEntry[] => {
   const names = new Set<string>();
+  const selected = options.targets ?? [options.target];
   return Object.freeze(servers
-    .filter((server) => server.source !== undefined && server.targets.includes(options.target))
+    .filter((server) => server.source !== undefined && server.targets.some((target) => selected.includes(target)))
     .map((server) => {
       const outputName = localMcpOutputName(server);
       const name = outputName.slice(0, -extname(outputName).length);
@@ -354,9 +360,16 @@ export const planMcpEntriesSurface = async (
     readonly noticeRetention?: NormalizedNoticeRetentionPolicy;
     readonly state?: NormalizedStateDefinition;
     readonly target: string;
+    /** The selected hosts of a composite root; each may deliver events to the entries. Defaults to `[target]`. */
+    readonly targets?: readonly string[];
   },
 ): Promise<RslibSurfacePlan<readonly CompiledMcpEntry[]>> => {
   const compiled = planCompiledMcpEntries(servers, options);
+  // The hosts whose hook wrappers may deliver events to a server: the selected
+  // hosts the server itself targets, so a Claude-only server in a Claude+Codex
+  // root never accepts a Codex-attributed request (#555).
+  const allowedTargetsFor = (server: NormalizedMcpServer): readonly string[] =>
+    (options.targets ?? [options.target]).filter((target) => server.targets.includes(target));
   const eventHostId = compiled.find((entry) =>
     servers.find((server) => server.id === entry.id)?.generatedRoutes !== undefined)?.id;
   const virtualSources = await Promise.all(compiled.map(async (entry) => {
@@ -390,6 +403,7 @@ export const planMcpEntriesSurface = async (
         serverName: server.name,
         ...(options.noticeRetention === undefined ? {} : { noticeRetention: options.noticeRetention }),
         ...(options.state === undefined ? {} : { state: options.state }),
+        allowedTargets: allowedTargetsFor(server),
         target: options.target,
         workerFile: `${entry.name}-flight.mjs`,
       });

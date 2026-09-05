@@ -253,10 +253,10 @@ it('builds adapter-owned native hook event, layout, and wrapper source', async (
     });
 
     expect(result.compiledHooks[0]).toMatchObject({ target: 'synthetic' });
-    const wrapper = join(outputRoot, 'synthetic', 'runtime', 'synthetic-before-tool.mjs');
+    const wrapper = join(outputRoot, 'runtime', 'synthetic-before-tool.mjs');
     await expect(readFile(wrapper, 'utf8')).resolves.toContain('synthetic-wrapper-marker');
     await expect(runWrapper(wrapper)).resolves.toBe('synthetic-wrapper-marker:{"nativeEvent":"SyntheticBeforeWrite"}');
-    await expect(readFile(join(outputRoot, 'synthetic', 'native-events', 'registration.json'), 'utf8')
+    await expect(readFile(join(outputRoot, 'native-events', 'registration.json'), 'utf8')
       .then(JSON.parse)).resolves.toEqual({
       hooks: {
         SyntheticBeforeWrite: [{

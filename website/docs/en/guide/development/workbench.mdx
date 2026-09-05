@@ -31,7 +31,7 @@ These are contracts, not defaults:
 | --- | --- |
 | Overview | Project identity, normalized model, and diagnostics. |
 | Skills | Every Skill document, including each host's lowered output. |
-| Artifacts | The artifact tree with provenance and epoch comparison. |
+| Artifacts | The composite plugin root — one tree, whichever selected host is in focus — with provenance and epoch comparison. |
 | MCP | An artifact-bound playground with the raw protocol trace. |
 | Hooks | A playground that runs the emitted hook wrapper. |
 | Playground | A durable, ordered trace with replay and export. |
@@ -108,8 +108,9 @@ agent-bundle dev proxy --root <projectRoot> --server <serverName> --target <host
 Rebuilds never replace that stable command with an epoch path, and the contents of the host
 process `PATH` do not affect whether the project-local framework can be spawned.
 
-Each later `artifact.available` event copies the new target into an immutable installed
-generation. Top-level directories switch by atomic symlink (or Windows junction) rename and
+Every selected host installs from the same composite epoch root. Each later `artifact.available`
+event copies that root into an immutable installed generation for each host. Top-level directories
+switch by atomic symlink (or Windows junction) rename and
 top-level files by atomic sibling-file rename, so a host sees an old or a new complete entry and
 no synchronized directory disappears between generations. A failed publication rolls the pointers
 back to the prior generation and emits an `AB7202` diagnostic on `dev.host.sync`; a failed build

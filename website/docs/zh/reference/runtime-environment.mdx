@@ -12,8 +12,8 @@ description: '生成式 agent-bundle 可执行文件的运行时契约：Node.js
 
 ## 宿主路径 token
 
-生成的文档通过各宿主会替换的那个 token 引用插件根目录，编译器按 target 写出正确的拼写，而不是假定只有
-一种：
+生成的文档通过各宿主会替换的那个 token 引用插件根目录——即每个所选宿主都加载的组合根目录——编译器把
+正确的拼写写进各宿主自己的文档，而不是假定只有一种：
 
 | 宿主 | 插件根 | 插件数据 |
 | --- | --- | --- |
@@ -35,7 +35,7 @@ token 会在构建时报告 `AB6028`，并由 Doctor 报告 `AB7320`。
 
 | 变量 | 由谁读取 | 含义 |
 | --- | --- | --- |
-| `AGENT_BUNDLE_PLUGIN_ROOT` | 生成式可执行文件 | 插件安装根目录与持久状态锚点。覆盖内置的回退值；以 `(await agent()).plugin`（`source: 'native'`）暴露给路由与 provider。未展开的 `${…}` token 视为未设置。 |
+| `AGENT_BUNDLE_PLUGIN_ROOT` | 生成式可执行文件 | 插件安装根目录——即组合插件根目录，存放宿主清单、`mcp/`、`hooks/` 与 `bin/` 的那个目录——同时也是持久状态锚点。覆盖内置的回退值；以 `(await agent()).plugin`（`source: 'native'`）暴露给路由与 provider。未展开的 `${…}` token 视为未设置。 |
 | `AGENT_BUNDLE_ENV_FILE` | 生成式可执行文件 | 已安装包在启动时改为读取的操作者 env 文件：一个路径，或以平台路径分隔符连接的多个路径（后者胜出），代替 `<插件根目录>/.env` 与 `.env.local`；`none` 关闭这一层。`mcp run` 会根据 `--env-file` / `--no-env` 为其子进程设置它。 |
 | `AGENT_BUNDLE_AGENT_API_TOKEN` | `agent-bundle dev` | Agent API 在启用之前所必需的 bearer token。 |
 | `AGENT_BUNDLE_HOOK_HOST` | 生成的钩子 wrapper | 显式指定声明的宿主，而不去探测。 |
@@ -86,7 +86,7 @@ token 会在构建时报告 `AB6028`，并由 Doctor 报告 `AB7320`。
 
 在 `mcp run` 之下，**env 取值**中的 plugin-root 锚点默认展开到项目根目录，而不是产物：在那里产物只是
 一个临时构建产物，把持久状态锚定其上会让状态在每次重建时被割裂。若要按字节忠实地演练一次「复制产物后
-启动」，请传入指向产物 target 根目录的 `--plugin-root <path>`。
+启动」，请传入指向产物根目录本身——组合插件根目录，而不是某个宿主子目录——的 `--plugin-root <path>`。
 
 当服务器名是单个安全路径段时，逐服务器状态目录直接使用该名字；其他任何名字都会变成内容寻址的
 `server-<digest>` 段，因此像 `../shared` 这样的名字绝不可能穿出状态根目录。

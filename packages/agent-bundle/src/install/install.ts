@@ -178,17 +178,11 @@ const readString = (
   return value;
 };
 
+/** The composite root is every selected host's bundle root (#555): its manifest sits directly inside `from`. */
 const resolveBundleRoot = async (from: string, host: InstallHost): Promise<string> => {
   const root = resolve(from);
-  const manifest = hostManifestPath(host);
-  if (await exists(join(root, manifest))) return root;
-  const targetRoot = join(root, host);
-  if (await exists(join(targetRoot, manifest))) return targetRoot;
-  throw failure(
-    'AB7001',
-    `No ${host} bundle manifest was found in ${JSON.stringify(root)} or its ${JSON.stringify(host)} target directory.`,
-    host,
-  );
+  if (await exists(join(root, hostManifestPath(host)))) return root;
+  throw failure('AB7001', `No ${host} bundle manifest was found in ${JSON.stringify(root)}.`, host);
 };
 
 /** The plugin identity an install or uninstall acts on, read from the bundle's host manifests. */

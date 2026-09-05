@@ -395,8 +395,8 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
 
   // The rendered .tsx script (#102 stage 3) ships beside plain scripts in
   // the target artifact with the same output contract.
-  const scriptPath = join(root, 'artifact', 'portable', 'scripts', 'summarize.mjs');
-  await expect(stat(join(root, 'artifact', 'portable', 'scripts', 'summarize-flight.mjs'))).resolves.toMatchObject({});
+  const scriptPath = join(root, 'artifact', 'scripts', 'summarize.mjs');
+  await expect(stat(join(root, 'artifact', 'scripts', 'summarize-flight.mjs'))).resolves.toMatchObject({});
   const scriptMarkdown = await execFile(process.execPath, [scriptPath, 'alpha', 'beta']);
   expect(scriptMarkdown.stdout).toBe('Summarized 2 arguments.\n');
   // The rendered script's provider sees `invocation.kind === 'script'` (#313).
@@ -404,11 +404,11 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
   expect(JSON.parse(scriptJson.stdout)).toEqual({ arguments: 1, tooling: 'script:ffprobe 6.1', view: providerView });
 
   // #102 acceptance: one build ships custom, MCP-generated, plain, and rendered commands/scripts.
-  const plainScriptPath = join(root, 'artifact', 'portable', 'scripts', 'checksum.mjs');
+  const plainScriptPath = join(root, 'artifact', 'scripts', 'checksum.mjs');
   await expect(stat(plainScriptPath)).resolves.toMatchObject({});
   const plainScript = await execFile(process.execPath, [plainScriptPath]);
   expect(plainScript.stdout).toBe('Fixture checksum: 102\n');
-  await expect(stat(join(root, 'artifact', 'portable', 'scripts', 'checksum-flight.mjs'))).rejects.toMatchObject({
+  await expect(stat(join(root, 'artifact', 'scripts', 'checksum-flight.mjs'))).rejects.toMatchObject({
     code: 'ENOENT',
   });
 });

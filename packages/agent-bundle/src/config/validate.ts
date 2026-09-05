@@ -1017,8 +1017,7 @@ interface TargetedDocumentCodes {
 
 /**
  * The host's judgment of one component feature row (`<kind>.<feature>`, #100),
- * read through the emission-dispatch view so the composite `plugin` target is
- * judged by the half that emits the kind. A host that publishes no row for a
+ * read through the emission-dispatch view. A host that publishes no row for a
  * feature it is asked about has not evidenced it and reads as `unavailable`.
  */
 const featureCapabilityStateFor = (
@@ -2513,11 +2512,15 @@ export const validateModel = (
     }
   }
 
+  // Two inputs may not produce one path of a host's projection. Paths are
+  // root-relative — every projection shares the composite root (#555) — and
+  // the same input reaching several hosts is one file, not a collision.
   const outputs = new Map<string, string>();
   const recordOutput = (generatedPath: string, source: string, target: string): void => {
-    const firstSource = outputs.get(generatedPath);
+    const key = `${target}\u0000${generatedPath}`;
+    const firstSource = outputs.get(key);
     if (firstSource === undefined) {
-      outputs.set(generatedPath, source);
+      outputs.set(key, source);
       return;
     }
     diagnostics.push({
@@ -2535,20 +2538,20 @@ export const validateModel = (
       const generatedSkill = hostDocument !== undefined && !hostDocument.passThrough;
       if (generatedSkill) {
         recordOutput(
-          posix.join(target.name, 'skills', skill.name, 'SKILL.md'),
+          posix.join('skills', skill.name, 'SKILL.md'),
           skill.source,
           target.name,
         );
         for (const sidecar of hostDocument.sidecars) {
           recordOutput(
-            posix.join(target.name, 'skills', skill.name, sidecar.relativePath),
+            posix.join('skills', skill.name, sidecar.relativePath),
             sidecar.source ?? skill.source,
             target.name,
           );
         }
       } else if (skill.markdown !== undefined) {
         recordOutput(
-          posix.join(target.name, 'skills', skill.name, 'SKILL.md'),
+          posix.join('skills', skill.name, 'SKILL.md'),
           skill.source,
           target.name,
         );
@@ -2561,7 +2564,7 @@ export const validateModel = (
           continue;
         }
         recordOutput(
-          posix.join(target.name, 'skills', skill.name, resource.relativePath),
+          posix.join('skills', skill.name, resource.relativePath),
           resource.source,
           target.name,
         );
@@ -2569,38 +2572,38 @@ export const validateModel = (
     }
     for (const asset of model.assets ?? []) {
       if (!asset.targets.includes(target.name)) continue;
-      recordOutput(posix.join(target.name, 'assets', asset.relativePath), asset.source, target.name);
+      recordOutput(posix.join('assets', asset.relativePath), asset.source, target.name);
     }
     for (const command of model.commands ?? []) {
       if (!command.targets.includes(target.name)) continue;
-      recordOutput(posix.join(target.name, 'commands', `${command.name}.md`), command.source, target.name);
+      recordOutput(posix.join('commands', `${command.name}.md`), command.source, target.name);
     }
     for (const rule of model.rules ?? []) {
       if (!rule.targets.includes(target.name)) continue;
-      recordOutput(posix.join(target.name, 'rules', `${rule.name}.mdc`), rule.source, target.name);
+      recordOutput(posix.join('rules', `${rule.name}.mdc`), rule.source, target.name);
     }
     for (const payload of model.payloads ?? []) {
       if (!payload.targets.includes(target.name)) continue;
       for (const file of payload.files) {
-        recordOutput(posix.join(target.name, payload.name, file.relativePath), file.source, target.name);
+        recordOutput(posix.join(payload.name, file.relativePath), file.source, target.name);
       }
     }
     for (const bin of model.hostBins ?? []) {
       if (bin.target !== target.name) continue;
       for (const file of bin.files) {
-        recordOutput(posix.join(target.name, 'bin', file.relativePath), file.source, target.name);
+        recordOutput(posix.join('bin', file.relativePath), file.source, target.name);
       }
     }
     for (const directory of model.hostOutputStyles ?? []) {
       if (directory.target !== target.name) continue;
       for (const file of directory.files) {
-        recordOutput(posix.join(target.name, 'output-styles', file.relativePath), file.source, target.name);
+        recordOutput(posix.join('output-styles', file.relativePath), file.source, target.name);
       }
     }
     for (const directory of model.hostWorkflows ?? []) {
       if (directory.target !== target.name) continue;
       for (const file of directory.files) {
-        recordOutput(posix.join(target.name, 'workflows', file.relativePath), file.source, target.name);
+        recordOutput(posix.join('workflows', file.relativePath), file.source, target.name);
       }
     }
   }

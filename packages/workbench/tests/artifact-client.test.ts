@@ -10,7 +10,7 @@ const inspection = {
     bytes: 512,
     kind: 'generated',
     mode: 0o755,
-    path: 'claude/hooks/session-start.mjs',
+    path: 'hooks/session-start.mjs',
     sha256: 'a'.repeat(64),
     sourceInputs: [{ path: 'hooks/session-start.ts', sha256: 'b'.repeat(64) }],
   }],
@@ -22,7 +22,7 @@ const inspection = {
     sourceInputs: [{ path: 'hooks/session-start.ts', sha256: 'b'.repeat(64) }],
   },
   provenance: [{
-    outputPath: 'claude/hooks/session-start.mjs',
+    outputPath: 'hooks/session-start.mjs',
     sourceInputs: [{ path: 'hooks/session-start.ts', sha256: 'b'.repeat(64) }],
   }],
   runtime: { executables: [], hooks: [], mcpServers: [], scripts: [] },
@@ -34,8 +34,8 @@ const inspection = {
 
 const diff = {
   added: [{
-    after: { bytes: 512, kind: 'generated', path: 'claude/hooks/stop.mjs', sha256: 'c'.repeat(64), sourceInputs: [] },
-    path: 'claude/hooks/stop.mjs',
+    after: { bytes: 512, kind: 'generated', path: 'hooks/stop.mjs', sha256: 'c'.repeat(64), sourceInputs: [] },
+    path: 'hooks/stop.mjs',
   }],
   baseEpochId: 'epoch-1',
   candidateEpochId: 'epoch-2',
