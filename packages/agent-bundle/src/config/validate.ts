@@ -1281,7 +1281,7 @@ const validateBin = (loaded: LoadedConfig): Diagnostic[] => {
 };
 
 const outputShapeRecovery =
-  'Declare output.distPath as a non-empty project-root-relative path string or remove the output block.';
+  'Declare output.distPath as a non-empty project-root-relative path string, output.sourceMap as a boolean, or remove the output block.';
 const outputPathRecovery =
   'Use a project-root-contained relative POSIX path; pass the CLI --output flag for per-invocation absolute locations.';
 const outputReservedRecovery =
@@ -1293,39 +1293,51 @@ const validateOutput = (loaded: LoadedConfig): Diagnostic[] => {
   if (!isArtifactOutputConfig(output)) {
     return [sourceDiagnostic(
       'AB4707',
-      'Output configuration must be an object with an optional distPath string.',
+      'Output configuration must be an object with optional distPath and sourceMap fields.',
       loaded.configPath,
       outputShapeRecovery,
     )];
   }
-  if (!Object.hasOwn(output, 'distPath')) return [];
+  const diagnostics: Diagnostic[] = [];
+  if (Object.hasOwn(output, 'sourceMap') && typeof output.sourceMap !== 'boolean') {
+    diagnostics.push(sourceDiagnostic(
+      'AB4707',
+      'Output sourceMap must be a boolean when declared.',
+      loaded.configPath,
+      outputShapeRecovery,
+    ));
+  }
+  if (!Object.hasOwn(output, 'distPath')) return diagnostics;
   const distPath = output.distPath;
   const issue = artifactDistPathIssue(distPath);
   switch (issue) {
     case undefined:
-      return [];
+      return diagnostics;
     case 'shape':
-      return [sourceDiagnostic(
+      diagnostics.push(sourceDiagnostic(
         'AB4707',
         'Output distPath must be a non-empty string when declared.',
         loaded.configPath,
         outputShapeRecovery,
-      )];
+      ));
+      return diagnostics;
     case 'path':
-      return [sourceDiagnostic(
+      diagnostics.push(sourceDiagnostic(
         'AB4708',
         `Output distPath ${JSON.stringify(distPath)} must be a project-root-contained relative POSIX path without backslashes, ".." traversal, or empty segments, and cannot resolve to the project root.`,
         loaded.configPath,
         outputPathRecovery,
-      )];
+      ));
+      return diagnostics;
     case 'reserved': {
       const firstSegment = (distPath as string).split('/')[0]!;
-      return [sourceDiagnostic(
+      diagnostics.push(sourceDiagnostic(
         'AB4709',
         `Output distPath ${JSON.stringify(distPath)} uses reserved first path segment ${JSON.stringify(firstSegment)}.`,
         loaded.configPath,
         outputReservedRecovery,
-      )];
+      ));
+      return diagnostics;
     }
     default: {
       const exhaustive: never = issue;

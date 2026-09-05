@@ -181,6 +181,29 @@ it('surfaces every synthesized bundler config with the tools hatch merged over t
   });
 });
 
+it('wires output.sourceMap into the generated-executable compiler profile', async () => {
+  const root = await createProject();
+  await writeFile(
+    join(root, 'agent-bundle.config.ts'),
+    [
+      'export default {',
+      "  plugin: { name: 'bundler-fixture', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      "  scripts: { tool: './src/tool.ts' },",
+      '  output: { sourceMap: true },',
+      '};',
+      '',
+    ].join('\n'),
+  );
+  const result = await inspect({ focus: 'bundler', root });
+  expect(result.state).toBe('ready');
+  const script = entryOf(bundlerEntries(result as ReadyInspectResult), 'script', 'tool');
+  expect(script.config).toMatchObject({
+    output: { sourceMap: { js: 'inline-source-map' } },
+    syntax: 'es2022',
+  });
+});
+
 it('keeps the bundler inspection deterministic and JSON-serializable', async () => {
   const root = await createProject();
   const [first, second] = await Promise.all([

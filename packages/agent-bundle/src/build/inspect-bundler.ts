@@ -118,6 +118,7 @@ const rslibInspectionEntry = (options: {
   readonly outputRoot: string;
   readonly projectRoot: string;
   readonly source: string;
+  readonly sourceMap?: boolean;
   readonly target?: string;
   readonly tools?: AgentBundleToolsConfig;
 }): BundlerInspectionEntry => Object.freeze({
@@ -126,6 +127,7 @@ const rslibInspectionEntry = (options: {
     cwd: options.projectRoot,
     meta: options.meta,
     outputRoot: options.outputRoot,
+    ...(options.sourceMap === true ? { sourceMap: true } : {}),
     ...(options.tools === undefined ? {} : { tools: options.tools }),
   })),
   ...(options.entry.virtualSource === undefined ? {} : { generatedEntry: options.entry.virtualSource }),
@@ -174,6 +176,7 @@ const scriptEntries = async (
       projectRoot,
       source: script.source,
       target,
+      ...(model.sourceMap === true ? { sourceMap: true } : {}),
       ...(tools === undefined ? {} : { tools }),
     });
   }));
@@ -199,6 +202,7 @@ const cliBinEntries = (
     projectRoot,
     source: entry.source,
     target,
+    ...(model.sourceMap === true ? { sourceMap: true } : {}),
     ...(tools === undefined ? {} : { tools }),
   }));
 };
@@ -278,6 +282,7 @@ const mcpEntryEntries = async (
       projectRoot,
       source: entry.source,
       target,
+      ...(model.sourceMap === true ? { sourceMap: true } : {}),
       ...(tools === undefined ? {} : { tools }),
     }));
     if (generatedRoutes !== undefined) {
@@ -308,6 +313,7 @@ const mcpEntryEntries = async (
         projectRoot,
         source: entry.source,
         target,
+        ...(model.sourceMap === true ? { sourceMap: true } : {}),
         ...(tools === undefined ? {} : { tools }),
       }));
     }
@@ -321,6 +327,7 @@ const hookEntries = (
   projectRoot: string,
   target: string,
   tools: AgentBundleToolsConfig | undefined,
+  sourceMap?: boolean,
 ): readonly BundlerInspectionEntry[] => {
   const outputRoot = artifactOutputToken;
   return entries.map((entry) => rslibInspectionEntry({
@@ -349,6 +356,7 @@ const hookEntries = (
     projectRoot,
     source: entry.hook.source,
     target,
+    ...(sourceMap === true ? { sourceMap: true } : {}),
     ...(tools === undefined ? {} : { tools }),
   }));
 };
@@ -407,6 +415,7 @@ const packageBuildEntries = async (
       outputRoot: packageBuild.outputDir,
       projectRoot,
       source: entry.source,
+      ...(model.sourceMap === true ? { sourceMap: true } : {}),
       ...(tools === undefined ? {} : { tools }),
     });
   });
@@ -433,7 +442,7 @@ export const composeBundlerInspection = async (options: {
     ...(composite.cliBin ? cliBinEntries(model, projectRoot, composite.identity, tools) : []),
     ...(await scriptEntries(model, projectRoot, composite, tools)),
     ...(await mcpEntryEntries(model, projectRoot, composite, tools)),
-    ...hookEntries(composite.hookEntries, meta, projectRoot, composite.identity, tools),
+    ...hookEntries(composite.hookEntries, meta, projectRoot, composite.identity, tools, model.sourceMap),
     ...mcpAppsEntry(model, projectRoot, composite, tools),
     ...(await packageBuildEntries(model, projectRoot, tools)),
   ];

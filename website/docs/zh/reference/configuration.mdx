@@ -30,7 +30,7 @@ export default defineConfig({
 | `bin` | `false \| Record<string, string \| { entry }>` | `src/cli.ts` 约定。 |
 | `lib` | `false \| string \| { entry, dts? }` | `src/index.ts` 约定。 |
 | `routes` | 路由图策略（`cli`、`mcpCommands`、`servers`） | 由约定推导。同位置有 `<tool>.cli.ts` 的工具会从 `routes.mcpCommands` 中排除。 |
-| `output` | `{ distPath? }` | 命令行下为 `artifact`；不带 `packageOutputs` 的 `build()` 下为 `dist`。 |
+| `output` | `{ distPath?, sourceMap? }` | 命令行下为 `artifact`；不带 `packageOutputs` 的 `build()` 下为 `dist`。`sourceMap` 默认为 `false`。 |
 | `runtime` | `{ node }` | Node 22.12。 |
 | `payload` | `Record<string, string \| { source, targets? }>` | 无。 |
 | `state` | `false` | `src/state.ts` 约定。 |
@@ -109,6 +109,11 @@ export default defineConfig({
 `dist`。逐次调用的 `--output` 标志优先，但同样
 受相同的项目根包含性检查约束；绝对或外部输出路径、形态无效的路径，或落入保留编译器命名空间的路径
 均不受支持（`AB4707`–`AB4709`）。
+
+`output.sourceMap` 是生成式可执行文件的 source map 显式开关，默认为 `false`。设为 `true` 时，编译器
+profile 会把打包器的 `output.sourceMap` 设为内联 JS map，让 map 留在可执行文件内部——同级的 `.map`
+文件不属于计划中的产物文件集合。非布尔值是 `AB4707`。MCP App 视图仍保持自身的默认值（关闭），并继续
+通过 `tools.rsbuild.output.sourceMap` 选择加入。
 
 `runtime.node` 是 `major.minor[.patch]` 形式的最低 Node.js 版本。它只能抬高生成式可执行文件的默认下限，
 绝不能降低，且所选下限会作为 `runtime.node` 记录在产物清单中。这个下限本身在

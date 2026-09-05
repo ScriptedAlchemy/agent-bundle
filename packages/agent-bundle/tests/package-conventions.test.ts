@@ -413,6 +413,20 @@ describe('artifact output validation', () => {
   it.each(['artifact', 'build/artifact', 'dist'])('accepts %s', async (distPath) => {
     await expect(validated({ distPath })).resolves.toEqual([]);
   });
+
+  it('accepts an explicit sourceMap opt-in without a distPath', async () => {
+    await expect(validated({ sourceMap: true })).resolves.toEqual([]);
+    await expect(validated({ distPath: 'artifact', sourceMap: false })).resolves.toEqual([]);
+  });
+
+  it('rejects a non-boolean output.sourceMap with AB4707', async () => {
+    const diagnostics = await validated({ sourceMap: 'inline-source-map' });
+    expect(diagnostics).toEqual([expect.objectContaining({
+      code: 'AB4707',
+      recovery: expect.any(String),
+      severity: 'error',
+    })]);
+  });
 });
 
 describe('migration nudges (AB473x)', () => {

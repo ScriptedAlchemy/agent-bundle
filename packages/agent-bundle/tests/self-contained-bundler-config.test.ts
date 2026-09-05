@@ -7,6 +7,11 @@ import { isBuiltin } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import {
+  generatedExecutableLegalComments,
+  generatedExecutableNodeFloor,
+  generatedExecutableSyntax,
+} from '../src/build/compiler-profile.ts';
 import { composeMcpAppsRsbuildConfig } from '../src/build/mcp-apps.ts';
 import { buildWithRslib } from '../src/build/compiler.ts';
 import { ArtifactDependencyAuditPlugin } from '../src/build/dependency-audit-plugin.ts';
@@ -96,6 +101,44 @@ it('composes the executable lib profile with nothing externalized', () => {
   expect(lib.output?.autoExternal).toBe(false);
   expect(lib.autoExternal).toBeUndefined();
   expect(lib.output?.externals).toBeUndefined();
+});
+
+it('derives generated-executable syntax from the Node floor matching engines.node', async () => {
+  const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
+    readonly engines: { readonly node: string };
+  };
+  expect(pkg.engines.node).toBe(`>=${generatedExecutableNodeFloor}`);
+  expect(generatedExecutableSyntax).toBe('es2022');
+  const root = join(tmpdir(), 'agent-bundle-syntax-floor-profile');
+  const lib = composeEntryLibConfig(probeEntry(root), { cwd: root, meta: testMeta, outputRoot: join(root, 'dist') });
+  expect(lib.syntax).toBe(generatedExecutableSyntax);
+});
+
+it('inlines legal comments because a linked license asset is not an artifact file', () => {
+  // createArtifactManifestFiles requires an exact match between files on disk
+  // and output provenance; package-build rejects any sibling it did not plan.
+  // `linked` would emit `<name>.LICENSE.txt` outside that set, so the profile
+  // keeps license text inside the executable (`inline`) and stays one file.
+  expect(generatedExecutableLegalComments).toBe('inline');
+  const root = join(tmpdir(), 'agent-bundle-legal-comments-profile');
+  const lib = composeEntryLibConfig(probeEntry(root), { cwd: root, meta: testMeta, outputRoot: join(root, 'dist') });
+  expect(lib.output?.legalComments).toBe(generatedExecutableLegalComments);
+  expect(lib.output?.sourceMap).toBe(false);
+});
+
+it('opts generated-executable source maps in through output.sourceMap', () => {
+  const root = join(tmpdir(), 'agent-bundle-source-map-profile');
+  const entry = probeEntry(root);
+  const outputRoot = join(root, 'dist');
+  const off = composeEntryLibConfig(entry, { cwd: root, meta: testMeta, outputRoot });
+  expect(off.output?.sourceMap).toBe(false);
+  const on = composeEntryLibConfig(entry, { cwd: root, meta: testMeta, outputRoot, sourceMap: true });
+  // Sibling `.map` files are the same unplanned-asset problem as linked
+  // LICENSE files, so the public opt-in inlines the map into the executable.
+  expect(on.output?.sourceMap).toEqual({ js: 'inline-source-map' });
+  expect(on.output?.autoExternal).toBe(false);
+  expect(on.bundle).toBe(true);
+  expect(on.splitChunks).toBe(false);
 });
 
 it('lowers a generated executable with only Node builtins external and inlines its dependencies', async () => {

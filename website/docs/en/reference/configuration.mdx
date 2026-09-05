@@ -30,7 +30,7 @@ export default defineConfig({
 | `bin` | `false \| Record<string, string \| { entry }>` | The `src/cli.ts` convention. |
 | `lib` | `false \| string \| { entry, dts? }` | The `src/index.ts` convention. |
 | `routes` | Route-graph policy (`cli`, `mcpCommands`, `servers`) | Convention-derived. A tool with a colocated `<tool>.cli.ts` is excluded from `routes.mcpCommands`. |
-| `output` | `{ distPath? }` | `artifact` from the CLI; `dist` from `build()` without `packageOutputs`. |
+| `output` | `{ distPath?, sourceMap? }` | `artifact` from the CLI; `dist` from `build()` without `packageOutputs`. `sourceMap` defaults to `false`. |
 | `runtime` | `{ node }` | Node 22.12. |
 | `payload` | `Record<string, string \| { source, targets? }>` | None. |
 | `state` | `false` | The `src/state.ts` convention. |
@@ -122,6 +122,12 @@ and that owns `dist/`; the programmatic `build()` defaults to `dist` unless `pac
 The per-invocation `--output` flag wins, but is subject to the same project-root
 containment check; an output path that is absolute or external, has an invalid shape, or lands
 in a reserved compiler namespace is unsupported (`AB4707`–`AB4709`).
+
+`output.sourceMap` is an explicit opt-in for source maps on generated executables. It defaults to
+`false`. When `true`, the compiler profile sets the bundler's `output.sourceMap` to an inline JS
+map so the map stays inside the executable — sibling `.map` files are not part of the planned
+artifact file set. A non-boolean value is `AB4707`. MCP App views keep their own default (off)
+and still opt in through `tools.rsbuild.output.sourceMap`.
 
 `runtime.node` is a minimum Node.js version in `major.minor[.patch]` form. It can only raise the
 default floor for generated executables, never lower it, and the selected floor is recorded as

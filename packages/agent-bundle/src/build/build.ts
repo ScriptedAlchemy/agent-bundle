@@ -470,7 +470,13 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
           // Every agent-host surface of the root lowers through one Rslib
           // instance; each surface keeps its own evidence and result.
           const [cliBins, scripts, hooks, mcpEntries] = await compileRslibSurfaces(
-            { cwd: options.projectRoot, meta, outputRoot: stageRoot, ...tools },
+            {
+              cwd: options.projectRoot,
+              meta,
+              outputRoot: stageRoot,
+              ...(options.model.sourceMap === true ? { sourceMap: true } : {}),
+              ...tools,
+            },
             [
               composite.cliBin
                 ? planCliBinsSurface(options.model, { outDir: stageRoot, target: composite.identity })

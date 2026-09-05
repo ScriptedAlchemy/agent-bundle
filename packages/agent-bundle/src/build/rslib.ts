@@ -19,6 +19,11 @@ import type {
   ExternalIR,
   ModuleIR,
 } from './compile-result.ts';
+import {
+  generatedExecutableLegalComments,
+  generatedExecutableSourceMap,
+  generatedExecutableSyntax,
+} from './compiler-profile.ts';
 import { composeToolsLayers, frameworkInvariantLayer } from './compose-layers.ts';
 import { ArtifactDependencyAuditPlugin } from './dependency-audit-plugin.ts';
 import { mcpEntryRuntimeSpecifier } from './entry-shell.ts';
@@ -529,6 +534,8 @@ export const composeEntryLibConfig = (
     /** Receives reserved specifiers that a function-form external resolved at build time. */
     readonly onReservedExternal?: (specifier: string) => void;
     readonly outputRoot: string;
+    /** Public `output.sourceMap` opt-in; defaults off. */
+    readonly sourceMap?: boolean;
     readonly tools?: AgentBundleToolsConfig;
   },
 ): LibConfig => {
@@ -668,7 +675,7 @@ export const composeEntryLibConfig = (
     // documented migration is top-level splitChunks: false, which also
     // guards against the node-target splitting default added in v2.2.
     splitChunks: false,
-    syntax: 'es2022',
+    syntax: generatedExecutableSyntax,
     output: {
       // Nothing is externalized by declaration: an artifact is self-contained,
       // and AB7014/AB7015 judge the consumer's declared dependencies against
@@ -677,9 +684,9 @@ export const composeEntryLibConfig = (
       distPath: { root: options.outputRoot },
       filename: { js: entry.outputRelativePath },
       filenameHash: false,
-      legalComments: 'none',
+      legalComments: generatedExecutableLegalComments,
       minify: false,
-      sourceMap: false,
+      sourceMap: generatedExecutableSourceMap(options.sourceMap === true),
       target: 'node',
     },
     // `externalsType` stays Rslib's ESM default (`modern-module`): a CommonJS
@@ -738,6 +745,8 @@ export interface RslibRunOptions {
   /** The project identity served to plugin source as `agent-bundle/meta`. */
   readonly meta: AgentBundleMeta;
   readonly outputRoot: string;
+  /** Public `output.sourceMap` opt-in; defaults off. */
+  readonly sourceMap?: boolean;
   /** The consumer escape hatch, merged last-but-bounded into every synthesized entry. */
   readonly tools?: AgentBundleToolsConfig;
 }
@@ -825,6 +834,7 @@ export const buildRslibSurfaces = async (
         onCompilationEvidence: (evidence) => compilationEvidence.push(evidence),
         onReservedExternal: (specifier) => reservedExternalViolations.push(specifier),
         outputRoot: options.outputRoot,
+        ...(options.sourceMap === true ? { sourceMap: true } : {}),
         ...(options.tools === undefined ? {} : { tools: options.tools }),
       })),
     },
