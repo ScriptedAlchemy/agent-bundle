@@ -408,8 +408,10 @@ validates it as the host would, so a Claude `sessionStart` simulation needs `ses
 `toolUseId`).
 
 `hooks simulate` runs the real emitted wrapper — the same file the host will execute — so the
-result you see is the result the host would get. The developer Workbench exposes the same
-playground with the raw stdout, stderr, and outcome for each run.
+result you see is the result the host would get. In the developer Workbench, select the event
+under **Application → Events / Hooks**, choose a Canonical, Claude, Codex, or Cursor fixture,
+and run it there. The route workspace shows the result first and keeps canonical/native codec
+details in its projection inspector.
 
 ## Next
 

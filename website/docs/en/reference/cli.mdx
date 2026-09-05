@@ -79,7 +79,7 @@ agent-bundle serve-app <server>/<app> [--artifact <path>] [--tool <tool>] \
 
 Serves one built MCP App in a plain browser tab, outside any MCP host and without the
 Workbench: the command launches the plugin's packed MCP server exactly as `mcp run` does, binds
-the App to it through the same host stack the Workbench MCP page uses (sandbox proxy, consent
+the App to it through the same host stack the Workbench App workspace uses (sandbox proxy, consent
 authority, bridge), calls the App's tool once so it opens populated, and prints the loopback URL.
 Its output is a contract: once the host is listening, stdout carries exactly one line,
 `MCP App <app> at <url> (tool <tool>; Ctrl-C stops the server)` — `<app>` as given on the command
