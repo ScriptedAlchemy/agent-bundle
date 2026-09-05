@@ -16,6 +16,7 @@ import {
 import type { RouteManifest } from '../src/dev/routes/route-manifest.ts';
 import type { CompiledRouteGraph } from '../src/routes/types.ts';
 import { testManifestFromRouteGraph } from '../src/test/manifest.ts';
+import { expectDocument } from '../src/test/matchers.ts';
 import { isProcessGone } from './support/bin-process.ts';
 
 const invocation = (id: string, completedAt: string): RouteInvocation => ({
@@ -150,37 +151,24 @@ it('aborts and drains a running render when the service closes', async () => {
   });
 });
 
-interface LeakingRouteProject {
-  readonly pids: () => Promise<Readonly<{ child: number; descendant: number }> | undefined>;
+interface RouteProject {
   readonly root: string;
   readonly service: (options?: Readonly<{ timeoutMs?: number }>) => RouteInvocationService;
 }
 
-/** A tool route that holds an interval and a forked descendant, and writes both pids. */
-const leakingRouteProject = async (behaviour: 'hang' | 'reply'): Promise<LeakingRouteProject> => {
-  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-route-invocation-child-'));
-  const relativePath = 'src/mcp/fixture/tools/leak.tsx';
+/** One conventional tool route at `src/mcp/fixture/tools/<name>.tsx`, with the sibling files it imports. */
+const routeProject = async (
+  root: string,
+  name: string,
+  files: Readonly<Record<string, string>>,
+): Promise<RouteProject> => {
+  const relativePath = `src/mcp/fixture/tools/${name}.tsx`;
   const source = join(root, relativePath);
-  const pidsPath = join(root, 'pids.json');
   await mkdir(dirname(source), { recursive: true });
-  await writeFile(source, [
-    "import { spawn } from 'node:child_process';",
-    "import { writeFileSync } from 'node:fs';",
-    "import { Agent } from '@agent-bundle/runtime';",
-    "import { createElement } from 'react';",
-    '',
-    'export default async function Leak() {',
-    '  setInterval(() => {}, 60_000);',
-    "  const descendant = spawn(process.execPath, ['-e', 'setInterval(() => {}, 60_000)'], { stdio: 'ignore' });",
-    `  writeFileSync(${JSON.stringify(pidsPath)}, JSON.stringify({ child: process.pid, descendant: descendant.pid }));`,
-    ...(behaviour === 'hang' ? ['  await new Promise(() => {});'] : []),
-    "  return createElement(Agent.Result, null, createElement(Agent.Text, null, 'leaked'));",
-    '}',
-    '',
-  ].join('\n'));
+  await Promise.all(Object.entries(files).map(([path, text]) => writeFile(join(root, path), text)));
   const compiled = {
     config: {},
-    id: 'tool:fixture/leak',
+    id: `tool:fixture/${name}`,
     kind: 'tool',
     provenance: { kind: 'conventional', relativePath },
     serverId: 'mcp:fixture',
@@ -220,10 +208,6 @@ const leakingRouteProject = async (behaviour: 'hang' | 'reply'): Promise<Leaking
     targets: ['claude' as const],
   });
   return {
-    pids: async () => {
-      if (!existsSync(pidsPath)) return undefined;
-      return JSON.parse(await readFile(pidsPath, 'utf8')) as Readonly<{ child: number; descendant: number }>;
-    },
     root,
     service: (options = {}) => new RouteInvocationService({
       manifest: { manifest: () => manifest },
@@ -232,6 +216,85 @@ const leakingRouteProject = async (behaviour: 'hang' | 'reply'): Promise<Leaking
     }),
   };
 };
+
+interface LeakingRouteProject extends RouteProject {
+  readonly pids: () => Promise<Readonly<{ child: number; descendant: number }> | undefined>;
+}
+
+/** A tool route that holds an interval and a forked descendant, and writes both pids. */
+const leakingRouteProject = async (behaviour: 'hang' | 'reply'): Promise<LeakingRouteProject> => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-route-invocation-child-'));
+  const pidsPath = join(root, 'pids.json');
+  const project = await routeProject(root, 'leak', {
+    'src/mcp/fixture/tools/leak.tsx': [
+      "import { spawn } from 'node:child_process';",
+      "import { writeFileSync } from 'node:fs';",
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      '',
+      'export default async function Leak() {',
+      '  setInterval(() => {}, 60_000);',
+      "  const descendant = spawn(process.execPath, ['-e', 'setInterval(() => {}, 60_000)'], { stdio: 'ignore' });",
+      `  writeFileSync(${JSON.stringify(pidsPath)}, JSON.stringify({ child: process.pid, descendant: descendant.pid }));`,
+      ...(behaviour === 'hang' ? ['  await new Promise(() => {});'] : []),
+      "  return createElement(Agent.Result, null, createElement(Agent.Text, null, 'leaked'));",
+      '}',
+      '',
+    ].join('\n'),
+  });
+  return {
+    ...project,
+    pids: async () => {
+      if (!existsSync(pidsPath)) return undefined;
+      return JSON.parse(await readFile(pidsPath, 'utf8')) as Readonly<{ child: number; descendant: number }>;
+    },
+  };
+};
+
+/**
+ * `report.tsx` imports `panel.tsx` by its emitted name and also renders the
+ * string `'./panel.js'`: the child must resolve the component and print the
+ * text exactly as the compiled program does (#600).
+ */
+const tsxSiblingProject = async (): Promise<RouteProject> => routeProject(
+  await mkdtemp(join(tmpdir(), 'agent-bundle-route-invocation-tsx-sibling-')),
+  'report',
+  {
+    'src/mcp/fixture/tools/panel.tsx': [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      '',
+      "export const Panel = () => createElement(Agent.Text, null, 'panel rendered');",
+      '',
+    ].join('\n'),
+    'src/mcp/fixture/tools/report.tsx': [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      '',
+      "import { Panel } from './panel.js';",
+      '',
+      'export default async function Report() {',
+      "  return createElement(Agent.Result, null, createElement(Panel), createElement(Agent.Text, null, './panel.js'));",
+      '}',
+      '',
+    ].join('\n'),
+  },
+);
+
+it('resolves a `.js` import of a `.tsx` sibling without rewriting the same string rendered as text', { timeout: 30_000 }, async () => {
+  const project = await tsxSiblingProject();
+  try {
+    const invocation = await project.service().invoke({ input: {}, routeId: 'tool:fixture/report' });
+
+    expect(invocation.status, JSON.stringify(invocation.diagnostics)).toBe('succeeded');
+    expect(invocation.document).toBeDefined();
+    expectDocument(invocation.document!)
+      .toContainText('panel rendered')
+      .toContainText('./panel.js');
+  } finally {
+    await rm(project.root, { force: true, recursive: true });
+  }
+});
 
 /** A zombie has exited; only a process still scheduled counts as alive. */
 const alive = (pid: number): boolean => {
