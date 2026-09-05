@@ -86,11 +86,16 @@ const main = () => {
     if (!existsCache.has(file)) existsCache.set(file, fs.existsSync(file) && fs.statSync(file).isFile());
     return existsCache.get(file);
   };
-  /** cleanUrls resolution: verbatim file, then `x.html`, then `x/index.html`. */
+  /**
+   * cleanUrls resolution: verbatim file, then `x.html`, then `x/index.html`. A
+   * candidate that escapes doc_build (`/agent-bundle/../package.json`, or an
+   * encoded `..`) is not a page even when the file exists on disk.
+   */
+  const insideBuild = file => file.startsWith(`${options.dir}${path.sep}`);
   const resolveTarget = pathname => {
     const relative = decode(pathname.slice(BASE.length)).replace(/^\/+/, '');
     const candidates = relative === '' || relative.endsWith('/') ? [`${relative}index.html`] : [relative, `${relative}.html`, `${relative}/index.html`];
-    return candidates.map(candidate => path.join(options.dir, candidate)).find(isFile) ?? null;
+    return candidates.map(candidate => path.resolve(options.dir, candidate)).find(file => insideBuild(file) && isFile(file)) ?? null;
   };
   const broken = new Map();
   let links = 0;
