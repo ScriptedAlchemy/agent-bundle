@@ -190,6 +190,126 @@ it('populates bounded input schemas for every route kind and includes them in th
   await writeFile(inspectPath, (await readFile(inspectPath, 'utf8')).replace('Project root.', 'Workspace root.'));
   const changed = await compileRouteGraph(changedRoot, fixtureConfig());
   expect(changed.digest).not.toBe(graph.digest);
+  // Pre-#593 pin: an inline-only tree must digest exactly as it does on
+  // current main. Contract ids for route-local literals do not join identity.
+  expect(graph.digest).toBe('d4d97709727353b0acf39b9d1b26a507e41c9ba22ba5f897c0a5e9578fd2fb50');
+});
+
+it('shares one RouteContract across a CLI route and a tool route that import the same schema', async () => {
+  const root = await createRoot();
+  const schema = [
+    'export const statusInputSchema = z.object({',
+    '  limit: z.number().int().min(1).max(500).optional(),',
+    '  laneKey: z.string().min(1).optional(),',
+    '}).strict();',
+    '',
+  ].join('\n');
+  const route = (specifier: string): string => [
+    `import { statusInputSchema } from '${specifier}';`,
+    'export const inputSchema = statusInputSchema;',
+    'export const resultSchema = {};',
+    'export default async () => undefined;',
+    '',
+  ].join('\n');
+  await writeTree(root, {
+    'src/cli/status.ts': route('../lib/protocol-schemas.js'),
+    'src/lib/protocol-schemas.ts': schema,
+    'src/mcp/hauler/tools/hauler_status.tsx': route('../../../lib/protocol-schemas.js'),
+  });
+  const graph = await compileRouteGraph(root, fixtureConfig());
+  expect(graph.diagnostics).toEqual([]);
+  expect(graph.contracts).toHaveLength(1);
+  const [contract] = graph.contracts ?? [];
+  expect(contract).toMatchObject({
+    id: 'contract:src/lib/protocol-schemas.ts#statusInputSchema',
+    origin: { binding: 'statusInputSchema', module: 'src/lib/protocol-schemas.ts' },
+    routes: ['cli:status', 'tool:hauler/hauler_status'],
+  });
+  const cli = graph.cli!.routes.find((entry) => entry.id === 'cli:status')!;
+  const tool = graph.servers[0]!.routes.find((entry) => entry.id === 'tool:hauler/hauler_status')!;
+  expect(cli.contract).toBe(contract!.id);
+  expect(tool.contract).toBe(contract!.id);
+  expect(contract!.input).toBe(cli.inputSchema);
+  expect(contract!.input).toBe(tool.inputSchema);
+});
+
+it('assigns a route-local literal the contract id of its own module and lists it in contracts', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    'src/cli/audit.ts': [
+      'export const inputSchema = z.object({ strict: z.boolean().optional() }).strict();',
+      'export const resultSchema = {};',
+      'export default async () => undefined;',
+      '',
+    ].join('\n'),
+  });
+  const graph = await compileRouteGraph(root, fixtureConfig());
+  expect(graph.diagnostics).toEqual([]);
+  expect(graph.contracts).toEqual([
+    expect.objectContaining({
+      id: 'contract:src/cli/audit.ts#inputSchema',
+      origin: { binding: 'inputSchema', module: 'src/cli/audit.ts' },
+      routes: ['cli:audit'],
+    }),
+  ]);
+  expect(graph.cli!.routes[0]!.contract).toBe('contract:src/cli/audit.ts#inputSchema');
+  expect(graph.contracts![0]!.input).toBe(graph.cli!.routes[0]!.inputSchema);
+});
+
+it('omits contract on a route with no static schema', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    'src/scripts/rebuild.ts': moduleSource,
+  });
+  const graph = await compileRouteGraph(root, fixtureConfig());
+  expect(graph.diagnostics).toEqual([]);
+  expect(graph.scripts[0]!.contract).toBeUndefined();
+  expect(graph.contracts).toBeUndefined();
+});
+
+it('does not list routes of a custom-mode server on any contract', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    'src/mcp/curator.ts': moduleSource,
+    'src/mcp/curator/tools/inspect.ts': [
+      'export const inputSchema = z.object({ root: z.string() }).strict();',
+      'export const resultSchema = {};',
+      'export default async () => undefined;',
+      '',
+    ].join('\n'),
+  });
+  const graph = await compileRouteGraph(root, fixtureConfig({
+    mcp: { servers: { curator: { entry: './src/mcp/curator.ts' } } },
+    routes: { servers: { curator: 'custom' } },
+  }));
+  expect(graph.diagnostics).toEqual([]);
+  expect(graph.servers[0]).toMatchObject({ mode: 'custom', routes: [] });
+  expect(graph.contracts).toBeUndefined();
+});
+
+it('changes the graph digest when a route imports its schema from another module', async () => {
+  const schema = 'z.object({ name: z.string() }).strict()';
+  const command = (inputSchema: string): string => [
+    `export const inputSchema = ${inputSchema};`,
+    'export const resultSchema = {};',
+    'export default async () => undefined;',
+    '',
+  ].join('\n');
+  const inlineRoot = await createRoot();
+  await writeTree(inlineRoot, { 'src/cli/status.ts': command(schema) });
+  const importedRoot = await createRoot();
+  await writeTree(importedRoot, {
+    'src/cli/status.ts': command('statusInputSchema').replace(
+      'export const inputSchema',
+      "import { statusInputSchema } from '../lib/protocol-schemas.js';\nexport const inputSchema",
+    ),
+    'src/lib/protocol-schemas.ts': `export const statusInputSchema = ${schema};\n`,
+  });
+  const inline = await compileRouteGraph(inlineRoot, fixtureConfig());
+  const imported = await compileRouteGraph(importedRoot, fixtureConfig());
+  expect(inline.diagnostics).toEqual([]);
+  expect(imported.diagnostics).toEqual([]);
+  expect(imported.digest).not.toBe(inline.digest);
 });
 
 it('skips ignored paths, private segments, and declaration files', async () => {

@@ -1,8 +1,9 @@
-import { copyFile, mkdir, readdir, rm } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { RspressPlugin } from '@rspress/core';
 
 const MARKDOWN_EXTENSION = '.md';
+const FRONTMATTER_FENCE = '---';
 
 async function readDirectory(directory: string) {
   try {
@@ -66,11 +67,50 @@ export async function cleanGeneratedApiMarkdown(directory: string): Promise<void
   await prunePlaceholderDirectories(directory);
 }
 
+/**
+ * Place `notice` in an `:::info` container directly under the page title.
+ *
+ * Rspress derives the page title, sidebar label, and prev/next text from the
+ * first `# ` line, so the container goes after it, never before. Frontmatter
+ * is skipped when present; TypeDoc currently emits none.
+ */
+function insertNoticeAfterTitle(markdown: string, notice: string, filePath: string): string {
+  const lines = markdown.split('\n');
+  let searchFrom = 0;
+
+  if (lines[0] === FRONTMATTER_FENCE) {
+    const closingFence = lines.indexOf(FRONTMATTER_FENCE, 1);
+    if (closingFence === -1) {
+      throw new Error(`${filePath}: frontmatter is never closed, cannot place the locale notice`);
+    }
+    searchFrom = closingFence + 1;
+  }
+
+  const titleIndex = lines.findIndex((line, index) => index >= searchFrom && line.startsWith('# '));
+  if (titleIndex === -1) {
+    throw new Error(`${filePath}: no "# " title to place the locale notice under`);
+  }
+
+  lines.splice(titleIndex + 1, 0, '', ':::info', notice, ':::');
+  return lines.join('\n');
+}
+
+export interface MirrorApiLocaleTarget {
+  /** Docs-root-relative directory that receives the mirrored Markdown. */
+  dir: string;
+  /**
+   * Markdown placed in an `:::info` container under every mirrored page's
+   * title, written in the target locale's language: the body stays English,
+   * and this is where the reader is told so.
+   */
+  notice?: string;
+}
+
 export interface MirrorApiLocaleOptions {
   /** Docs-root-relative directory that TypeDoc generates, such as `en/api`. */
   sourceDir: string;
-  /** Docs-root-relative directories that receive the mirrored Markdown. */
-  targetDirs: string[];
+  /** Locale directories that receive the mirrored Markdown. */
+  targets: MirrorApiLocaleTarget[];
 }
 
 /**
@@ -85,7 +125,7 @@ export interface MirrorApiLocaleOptions {
  * runs once the English reference has been written and before route scanning.
  */
 export function mirrorApiLocale(options: MirrorApiLocaleOptions): RspressPlugin {
-  const { sourceDir, targetDirs } = options;
+  const { sourceDir, targets } = options;
 
   return {
     name: 'agent-bundle/mirror-api-locale',
@@ -98,14 +138,22 @@ export function mirrorApiLocale(options: MirrorApiLocaleOptions): RspressPlugin 
       const source = path.join(docsRoot, sourceDir);
       const generatedFiles = await collectMarkdownFiles(source);
 
-      for (const targetDir of targetDirs) {
-        const target = path.join(docsRoot, targetDir);
+      for (const { dir, notice } of targets) {
+        const target = path.join(docsRoot, dir);
         await cleanGeneratedApiMarkdown(target);
 
         for (const relativePath of generatedFiles) {
+          const sourcePath = path.join(source, relativePath);
           const destination = path.join(target, relativePath);
           await mkdir(path.dirname(destination), { recursive: true });
-          await copyFile(path.join(source, relativePath), destination);
+
+          if (notice === undefined) {
+            await copyFile(sourcePath, destination);
+            continue;
+          }
+
+          const markdown = await readFile(sourcePath, 'utf8');
+          await writeFile(destination, insertNoticeAfterTitle(markdown, notice, sourcePath));
         }
       }
 

@@ -44,21 +44,26 @@ jobs:
     name: Docs site (Node 22.19)
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    # Third-party actions are pinned to full commit SHAs (a moving `vN` tag
+    # can be repointed at unreviewed code); the trailing comment names the
+    # release Dependabot keeps in step.
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-workspace
         with:
           node-version: 22.19.0
       # Website-only PRs skip every ci.yml job that lints, so lint here too.
       - run: pnpm lint
-      # Typecheck the site config and build it. Rspress's own dead-link,
-      # dead-anchor, dead-image, and language-parity checks fail the build if
-      # TypeDoc or the generated reference pages are missing, since the
-      # authored pages link to them.
+      # Typecheck the site config, run the locale-drift and diagnostics-
+      # coverage checks (website/scripts), build with the persistent Rspack
+      # cache off, then walk the emitted HTML for dead links and anchors.
+      # Rspress's own dead-link, dead-anchor, dead-image, and language-parity
+      # checks fail the build if TypeDoc or the generated reference pages are
+      # missing, since the authored pages link to them.
       - run: pnpm docs:site:build
       - name: Upload Pages artifact
         if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-        uses: actions/upload-pages-artifact@v5
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: website/doc_build
 
@@ -96,7 +101,7 @@ jobs:
             echo "Skipped deploy: main moved to ${head}; this run built ${GITHUB_SHA}." >> "$GITHUB_STEP_SUMMARY"
           fi
       - if: steps.head.outputs.deploy == 'true'
-        uses: actions/configure-pages@v6
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
       - if: steps.head.outputs.deploy == 'true'
         id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

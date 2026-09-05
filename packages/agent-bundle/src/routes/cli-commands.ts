@@ -1,6 +1,6 @@
 import { extname } from 'node:path';
 
-import { extractCliArgv } from './cli-argv.ts';
+import { extractCliArgv, projectInputSchemaOptions, type ExtractedCliArgv } from './cli-argv.ts';
 import { scanRouteModuleExports } from './contract.ts';
 import { mcpRouteProtocolName } from './protocol-name.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
@@ -351,6 +351,33 @@ export const compileMcpCliCommands = (
   });
 };
 
+export interface CompileCliCommandsOptions {
+  /** Absolute project root; an `inputSchema` reference resolving outside it is rejected (AB4838). */
+  readonly projectRoot?: string;
+}
+
+/**
+ * The argv surface of one route: a projection of its canonical contract when
+ * the graph bound one (`route.inputSchema` is the contract's normalized
+ * `input`), so the command grammar and the route's declared input are one
+ * object; otherwise the module is parsed again, which is what reports why no
+ * contract exists (AB4814, AB4838, AB4839).
+ */
+const routeArgv = (
+  route: CompiledAgentRoute,
+  moduleText: string,
+  options: CompileCliCommandsOptions,
+): ExtractedCliArgv => {
+  const relativePath = route.provenance.relativePath;
+  if (route.inputSchema !== undefined) {
+    return { ...projectInputSchemaOptions(route.inputSchema, relativePath, route.source), found: true };
+  }
+  return extractCliArgv(moduleText, relativePath, route.source, {
+    ...(options.projectRoot === undefined ? {} : { projectRoot: options.projectRoot }),
+    source: route.source,
+  });
+};
+
 /**
  * Compiles the generated-mode CLI route surface into the collision-checked
  * command graph. `readModuleText` supplies each plain route's source text
@@ -361,6 +388,7 @@ export const compileCliCommands = async (
   routes: readonly CompiledAgentRoute[],
   readModuleText: (route: CompiledAgentRoute) => Promise<string | undefined>,
   projected: CompiledMcpCliCommandSurface = { commands: [], diagnostics: [], routes: [] },
+  compileOptions: CompileCliCommandsOptions = {},
 ): Promise<CompiledCliCommandSurface> => {
   const diagnostics: Diagnostic[] = [...projected.diagnostics];
   const commands: CompiledCliCommand[] = [...projected.commands];
@@ -377,7 +405,7 @@ export const compileCliCommands = async (
     // A default re-exported from a module the scan cannot read is judged at
     // run time, like the MCP route contract.
     const asyncDefault = exports.asyncDefault || exports.defaultReExport?.resolution === 'unresolved';
-    const argv = extractCliArgv(moduleText, relativePath, route.source);
+    const argv = routeArgv(route, moduleText, compileOptions);
     const missing = [
       ...(argv.found ? [] : ['inputSchema']),
       ...(exports.named.has('resultSchema') ? [] : ['resultSchema']),
