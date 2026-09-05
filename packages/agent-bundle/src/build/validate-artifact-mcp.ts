@@ -5,7 +5,7 @@ import { DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { classifyMcpArtifactArgument } from '../services/mcp-artifact-reference.ts';
 import { resolveMcpPathTokens } from '../services/mcp-path-tokens.ts';
-import { readTargetMcpServers } from '../services/mcp-runtime.ts';
+import { readTargetMcpServers, type ModernMcpServer } from '../services/mcp-runtime.ts';
 import { artifactDiagnostic as diagnostic, artifactDiagnosticRecoveries } from './artifact-diagnostics.ts';
 import { readFileString, runWithPlatform } from '../effect/platform.ts';
 import { isDirectOutputLayoutPath, matchesManifestFile } from './artifact-layout.ts';
@@ -114,33 +114,56 @@ const validateMcpArtifactReference = (options: {
 };
 
 /**
- * A host document's stdio server starts the bytes the manifest's launch record
- * of the same name names: the record's entry and every `artifact` argument are
- * among the document's artifact-local command and argument paths. Otherwise
- * `mcp run` (host document) and `<plugin> web` (manifest record) would launch
- * different files under one server name. The document may reference more —
- * an author's bare relative argument is a `literal` in the record — and each
- * such reference is validated on its own above.
+ * A host document's server starts the bytes the manifest's launch record of
+ * the same name names, in the record's order: the first artifact-local path
+ * the document's command and arguments name is the record's entry (Node's
+ * script operand), and the record's `artifact` arguments follow it in order.
+ * Otherwise `mcp run` (host document) and `<plugin> web` (manifest record)
+ * would launch different files under one server name. The document may
+ * reference more — an adapter's flags, an author's bare relative argument that
+ * is a `literal` in the record — and each such reference is validated on its
+ * own above. A document server the record starts but the document reaches
+ * over another transport is the same disagreement.
  */
 const validateLaunchAgreement = (options: {
   readonly declared: ArtifactManifestMcpServer | undefined;
-  readonly entryPaths: ReadonlySet<string>;
+  readonly kind: ModernMcpServer['kind'];
+  readonly launchPaths: readonly string[];
   readonly manifestPath: string;
   readonly server: string;
   readonly target: string;
 }): readonly Diagnostic[] => {
   const launch = options.declared?.launch;
   if (launch === undefined) return Object.freeze([]);
-  const recorded = [launch.entry, ...launch.args.flatMap((argument) => argument.kind === 'artifact' ? [argument.path] : [])];
-  const missing = recorded.filter((path) => !options.entryPaths.has(path));
-  if (missing.length === 0) return Object.freeze([]);
-  return Object.freeze([diagnostic(
+  const disagreement = (detail: string): readonly Diagnostic[] => Object.freeze([diagnostic(
     'AB6017',
-    `MCP server ${JSON.stringify(options.server)} in target ${JSON.stringify(options.target)} does not start ` +
-      `${JSON.stringify(missing)} from its manifest launch record; the document references ${JSON.stringify([...options.entryPaths])}.`,
+    `MCP server ${JSON.stringify(options.server)} in target ${JSON.stringify(options.target)} ${detail}`,
     options.manifestPath,
     options.target,
   )]);
+  if (options.kind !== 'stdio') {
+    return disagreement(`is a ${options.kind} server in the target document, but its manifest launch record starts it over stdio.`);
+  }
+  const [first, ...following] = options.launchPaths;
+  if (first !== launch.entry) {
+    return disagreement(
+      `starts ${first === undefined ? 'no artifact file' : JSON.stringify(first)} in the target document, ` +
+        `but its manifest launch record starts ${JSON.stringify(launch.entry)}.`,
+    );
+  }
+  let cursor = 0;
+  for (const argument of launch.args) {
+    if (argument.kind !== 'artifact') continue;
+    const index = following.indexOf(argument.path, cursor);
+    if (index === -1) {
+      return disagreement(
+        `does not pass ${JSON.stringify(argument.path)} after ${JSON.stringify(launch.entry)} in the order of its manifest ` +
+          `launch record; the target document names ${JSON.stringify(options.launchPaths)}.`,
+      );
+    }
+    cursor = index + 1;
+  }
+  return Object.freeze([]);
 };
 
 const validateDeclaredServersPresent = (options: {
@@ -181,12 +204,22 @@ export const validateMcpCoherence = async (options: {
   const compiledEntries = new Set<string>();
   const referencedAnywhere = new Set<string>();
 
-  for (const { host: targetName } of options.manifest.projections) {
-    const target = { name: targetName };
+  for (const projection of options.manifest.projections) {
+    const target = { name: projection.host };
     if (!options.registry.has(target.name) || !options.registry.supports(target.name, 'mcp')) continue;
     const runtime = options.registry.mcpRuntime(target.name);
     if (runtime === undefined) continue;
     const manifestPath = runtime.manifestPath;
+    const pointer = projection.documents.mcp;
+    if ((pointer !== undefined || files.has(manifestPath)) && pointer !== manifestPath) {
+      diagnostics.push(diagnostic(
+        'AB6017',
+        `projections[${JSON.stringify(target.name)}].documents.mcp ${pointer === undefined ? 'is absent' : `is ${JSON.stringify(pointer)}`}, ` +
+          `but the target's MCP manifest is ${JSON.stringify(manifestPath)}.`,
+        manifestPath,
+        target.name,
+      ));
+    }
     const mcpLayout = options.registry.artifactLayout(target.name).mcpEntries;
     const referenceCounts = new Map<string, McpReferenceOccurrence[]>();
     const mcpEntries = options.files.filter((file) => isDirectOutputLayoutPath(file.path, mcpLayout));
@@ -257,8 +290,17 @@ export const validateMcpCoherence = async (options: {
               }
               continue;
             }
-            const entryPaths = new Set<string>();
+            const declared = options.manifest.executables.mcpServers.find((row) => row.name === entry.name);
+            const launchPaths: string[] = [];
             if (server.kind !== 'stdio') {
+              diagnostics.push(...validateLaunchAgreement({
+                declared,
+                kind: server.kind,
+                launchPaths,
+                manifestPath,
+                server: entry.name,
+                target: target.name,
+              }));
               options.mcpServers.push(Object.freeze({
                 entryPaths: Object.freeze([]),
                 kind: server.kind,
@@ -300,7 +342,7 @@ export const validateMcpCoherence = async (options: {
               if (commandReference.status === 'artifact-local') {
                 recordMcpReference(referenceCounts, commandReference.path, { field: 'command', server: entry.name });
                 referencedAnywhere.add(commandReference.path);
-                entryPaths.add(commandReference.path);
+                launchPaths.push(commandReference.path);
               }
             }
 
@@ -324,18 +366,19 @@ export const validateMcpCoherence = async (options: {
               if (argumentReference.status === 'artifact-local') {
                 recordMcpReference(referenceCounts, argumentReference.path, { field: 'argument', server: entry.name });
                 referencedAnywhere.add(argumentReference.path);
-                entryPaths.add(argumentReference.path);
+                launchPaths.push(argumentReference.path);
               }
             }
             diagnostics.push(...validateLaunchAgreement({
-              declared: options.manifest.executables.mcpServers.find((row) => row.name === entry.name),
-              entryPaths,
+              declared,
+              kind: server.kind,
+              launchPaths,
               manifestPath,
               server: entry.name,
               target: target.name,
             }));
             options.mcpServers.push(Object.freeze({
-              entryPaths: Object.freeze([...entryPaths].sort((left, right) => left.localeCompare(right))),
+              entryPaths: Object.freeze([...new Set(launchPaths)].sort((left, right) => left.localeCompare(right))),
               kind: server.kind,
               manifestPath,
               name: entry.name,

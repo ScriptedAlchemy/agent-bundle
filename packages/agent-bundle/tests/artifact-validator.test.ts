@@ -339,7 +339,11 @@ const coherenceMetadata = Object.freeze({
   schemas: Object.freeze([]),
 });
 
-const coherenceManifestTarget = Object.freeze({ ...coherenceMetadata, documents: Object.freeze({}), host: coherenceTarget });
+const coherenceManifestTarget = Object.freeze({
+  ...coherenceMetadata,
+  documents: Object.freeze({ mcp: 'native/servers.json' }),
+  host: coherenceTarget,
+});
 
 const coherenceRegistry = (): TargetRegistry => new TargetRegistry().register({
   artifactLayout: { mcpEntries: { allowedSuffixes: ['.mjs'], directory: 'mcp' } },
@@ -1430,7 +1434,7 @@ it('does not attribute compiler MCP outputs to an equal-length sibling target', 
     { contents: 'export const neighbor = true;\n', kind: 'bundle', path: 'neighbor/mcp/mcp-server-deadbeef.mjs' },
   ], true, [coherenceManifestTarget, Object.freeze({
     ...siblingMetadata,
-    documents: Object.freeze({}),
+    documents: Object.freeze({ mcp: 'native/servers.json' }),
     host: siblingTarget,
   })]);
 
@@ -1527,47 +1531,84 @@ it.each([
 it('rejects host document launches that disagree with the manifest', async () => {
   const entry = 'mcp/mcp-server-deadbeef.mjs';
   const other = 'mcp/mcp-other-deadbeef.mjs';
+  const config = 'payload/config.json';
+  const schema = 'payload/schema.json';
   const serverRow = (launchEntry: string): ArtifactManifestMcpServer => ({
     apps: [],
     hosts: [coherenceTarget],
     id: 'mcp:server',
     kind: 'compiled',
-    // The author's bare relative argument stays a literal in the record even
-    // though the document resolves it inside the artifact.
-    launch: { args: [{ kind: 'literal', value: 'payload/config.json' }], entry: launchEntry, env: {} },
+    // The author's plugin-root-anchored arguments are `artifact` rows; a bare
+    // relative argument stays a literal even though the document resolves it
+    // inside the artifact.
+    launch: {
+      args: [{ kind: 'artifact', path: config }, { kind: 'literal', value: '--verbose' }, { kind: 'artifact', path: schema }],
+      entry: launchEntry,
+      env: {},
+    },
     name: 'server',
     transport: 'stdio',
   });
-  const files = (documentEntry: string, documentServer = 'server'): ArtifactFixtureFile[] => [
-    {
-      contents: `${JSON.stringify({
-        mcpServers: { [documentServer]: { args: [documentEntry, 'payload/config.json'], command: 'node', type: 'stdio' } },
-      })}\n`,
-      kind: 'generated',
-      path: 'native/servers.json',
-    },
+  const document = (server: Record<string, unknown>, documentServer = 'server'): ArtifactFixtureFile => ({
+    contents: `${JSON.stringify({ mcpServers: { [documentServer]: server } })}\n`,
+    kind: 'generated',
+    path: 'native/servers.json',
+  });
+  const stdio = (args: readonly string[]): Record<string, unknown> => ({ args, command: 'node', type: 'stdio' });
+  const files = (documentFile: ArtifactFixtureFile): ArtifactFixtureFile[] => [
+    documentFile,
     { contents: 'export const server = true;\n', kind: 'bundle', path: entry },
     { contents: 'export const other = true;\n', kind: 'bundle', path: other },
-    { contents: '{}\n', kind: 'generated', path: 'payload/config.json' },
+    { contents: 'export const bootstrap = true;\n', kind: 'generated', path: 'payload/bootstrap.mjs' },
+    { contents: '{}\n', kind: 'generated', path: config },
+    { contents: '{}\n', kind: 'generated', path: schema },
   ];
   const agreementDiagnostics = (diagnostics: readonly Diagnostic[]): readonly string[] => diagnostics
-    .filter((entry) => entry.code === 'AB6017' && /manifest launch record|names no such server/u.test(entry.message))
+    .filter((entry) => entry.code === 'AB6017' && /manifest launch record|names no such server|documents\.mcp/u.test(entry.message))
     .map((entry) => entry.message);
-
-  const swapped = await writeArtifact(files(other), true, [coherenceManifestTarget], [serverRow(entry)]);
-  const renamed = await writeArtifact(files(entry, 'server-renamed'), true, [coherenceManifestTarget], [serverRow(entry)]);
-  const agreeing = await writeArtifact(files(entry), true, [coherenceManifestTarget], [serverRow(entry)]);
+  const cases: readonly {
+    readonly document: ArtifactFixtureFile;
+    readonly expected: readonly string[];
+    readonly projection?: FixtureProjection;
+  }[] = [
+    { document: document(stdio([entry, config, './extra.txt', '--verbose', schema])), expected: [] },
+    {
+      document: document(stdio([other, config, '--verbose', schema])),
+      expected: [`MCP server "server" in target "coherent" starts "${other}" in the target document, but its manifest launch record starts "${entry}".`],
+    },
+    {
+      document: document(stdio(['payload/bootstrap.mjs', entry, config, '--verbose', schema])),
+      expected: ['MCP server "server" in target "coherent" starts "payload/bootstrap.mjs" in the target document, ' +
+        `but its manifest launch record starts "${entry}".`],
+    },
+    {
+      document: document(stdio([entry, schema, '--verbose', config])),
+      expected: [`MCP server "server" in target "coherent" does not pass "${schema}" after "${entry}" in the order of its manifest ` +
+        `launch record; the target document names ["${entry}","${schema}","${config}"].`],
+    },
+    {
+      document: document(stdio([entry, config, '--verbose', schema]), 'server-renamed'),
+      expected: ['MCP server "server" is declared for target "coherent" with a launch record, but the target document names no such server.'],
+    },
+    {
+      document: document({ type: 'streamable-http', url: 'https://example.test/mcp' }),
+      expected: ['MCP server "server" in target "coherent" is a streamable-http server in the target document, ' +
+        'but its manifest launch record starts it over stdio.'],
+    },
+    {
+      document: document(stdio([entry, config, '--verbose', schema])),
+      expected: ['projections["coherent"].documents.mcp is absent, but the target\'s MCP manifest is "native/servers.json".'],
+      projection: { ...coherenceManifestTarget, documents: {} },
+    },
+  ];
+  const roots = await Promise.all(cases.map((scenario) =>
+    writeArtifact(files(scenario.document), true, [scenario.projection ?? coherenceManifestTarget], [serverRow(entry)])));
   try {
-    expect(agreementDiagnostics(await validateArtifact({ artifactRoot: swapped, registry: coherenceRegistry() }))).toEqual([
-      `MCP server "server" in target "coherent" does not start ["${entry}"] from its manifest launch record; ` +
-        `the document references ["${other}","payload/config.json"].`,
-    ]);
-    expect(agreementDiagnostics(await validateArtifact({ artifactRoot: renamed, registry: coherenceRegistry() }))).toEqual([
-      'MCP server "server" is declared for target "coherent" with a launch record, but the target document names no such server.',
-    ]);
-    expect(agreementDiagnostics(await validateArtifact({ artifactRoot: agreeing, registry: coherenceRegistry() }))).toEqual([]);
+    for (const [index, root] of roots.entries()) {
+      expect(agreementDiagnostics(await validateArtifact({ artifactRoot: root, registry: coherenceRegistry() }))).toEqual(cases[index]!.expected);
+    }
   } finally {
-    await Promise.all([swapped, renamed, agreeing].map((root) => rm(root, { force: true, recursive: true })));
+    await Promise.all(roots.map((root) => rm(root, { force: true, recursive: true })));
   }
 });
 
