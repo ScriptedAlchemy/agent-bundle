@@ -47,8 +47,11 @@ function rspressMemberAnchor(title: string): string {
  * TypeDoc reserves some exported names while building its reflection URLs, so
  * links to those `### Member` headings receive a spurious `-1`. Rspress runs
  * github-slugger over the rendered headings instead, where the member's first
- * occurrence has the unsuffixed anchor. Rewrite only such generated links;
- * deeper duplicate headings (for example `##### cwd`) retain their suffixes.
+ * occurrence has the unsuffixed anchor. Rewrite only such generated links, and
+ * only when exactly one heading on the target page — at any depth — produces
+ * that anchor: a same-named `##### property` earlier on the page would make
+ * the unsuffixed id point at the property, so an ambiguous link is left as
+ * TypeDoc wrote it for the build's anchor check to judge.
  */
 async function alignTypeDocMemberLinks(directory: string, files: string[]): Promise<void> {
   const memberAnchorCounts = new Map<string, Map<string, number>>();
@@ -57,8 +60,9 @@ async function alignTypeDocMemberLinks(directory: string, files: string[]): Prom
     const filePath = path.join(directory, relativePath);
     const markdown = await readFile(filePath, 'utf8');
     const counts = new Map<string, number>();
+    const outsideFences = markdown.replace(/^```[\s\S]*?^```[ \t]*$/gm, '');
 
-    for (const match of markdown.matchAll(/^### (.+)$/gm)) {
+    for (const match of outsideFences.matchAll(/^#{1,6} (.+)$/gm)) {
       const anchor = rspressMemberAnchor(match[1]);
       counts.set(anchor, (counts.get(anchor) ?? 0) + 1);
     }
