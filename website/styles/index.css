@@ -66,10 +66,10 @@
  * way and are corrected alongside it. Each pick keeps the original hue.
  */
 :root:not(.rp-dark) {
-  /* #3c3c3c at 75 %: 5.18:1 on #fff, 5.01:1 on --rp-c-bg-soft, 4.83:1 on --rp-c-bg-mute. */
+  /* #3c3c3c at 75 %: 5.18:1 on #fff, 5.01:1 on --rp-c-bg-soft, 4.86:1 on --rp-c-bg-mute. */
   --rp-c-text-3: #3c3c3cbf;
-  /* #31a94d 3.04:1 → 4.72:1 */
-  --shiki-token-string: #26843c;
+  /* #31a94d 3.04:1 → 5.37:1 on #fff, 4.78:1 on a highlighted line (`{n}` / `[!code highlight]`, #ebf2fe). */
+  --shiki-token-string: #227a37;
   /* #b6b4b4 2.06:1 → 4.74:1 */
   --shiki-token-comment: #737373;
   /* #f59403 2.30:1 → 4.66:1 */
@@ -77,10 +77,20 @@
 }
 
 :root.rp-dark {
-  /* #ebebeb at 55 %: 5.37:1 on #121212, 4.59:1 on --rp-c-bg-soft. */
-  --rp-c-text-3: #ebebeb8c;
+  /* #ebebeb at 65 %: 7.08:1 on #121212, 5.08:1 on --rp-c-bg-mute (prev/next hover). */
+  --rp-c-text-3: #ebebeba6;
   /* #6a727b 3.84:1 → 5.02:1 */
   --shiki-token-comment: #7d8590;
+}
+
+/*
+ * The theme fades the whole prev/next card to 70 % on hover
+ * (`PrevNextPage/index.css`), which takes the label above back down to
+ * 2.75:1 light / 2.81:1 dark; the `--rp-c-bg-mute` background change is
+ * enough hover feedback on its own.
+ */
+.rp-prev-next-page__item:hover {
+  opacity: 1;
 }
 
 /*

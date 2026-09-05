@@ -64,8 +64,11 @@ const contentId = 'ab-content';
  */
 const SkipTarget = () => <div id={contentId} tabIndex={-1} className="ab-skip-target" />;
 
-/** Page types whose layout has no `<main>` and therefore no skip target. */
-const pagesWithoutContent = new Set(['404', 'custom', 'blank']);
+/**
+ * Page types whose layout has no `<main>` and therefore no skip target. The
+ * 404 page is not among them: `NotFoundLayout` below wraps the default in one.
+ */
+const pagesWithoutContent = new Set(['custom', 'blank']);
 
 /**
  * First focusable element on the page, rendered through the `top` slot ahead
@@ -151,33 +154,43 @@ const Layout = () => (
  * Enter/Space handling — instead of becoming a `<button>`, because
  * `NavHamburger` (rendered on every page, shown at widths ≤ 1280 px) mounts
  * the switch inside its own `<button>`, and a `<button>` inside a `<button>`
- * is invalid HTML that React reports on every render. The original class
- * names are kept so the theme's CSS still applies. `aria-pressed` is only
- * rendered after mount: the SSG HTML is rendered with the default theme while
- * the client's first render already knows the stored preference, so a state
- * attribute in the initial markup would mismatch on hydration. The original's
- * view-transition animation (`themeConfig.enableAppearanceAnimation`, off
- * for this site) is not reproduced.
+ * is invalid HTML that React reports on every render. That nested copy is
+ * the hamburger's own control, so once mounted the switch checks whether it
+ * sits inside a `<button>` and, if so, renders as the plain click target the
+ * default theme used — a focusable `role="button"` inside a button would be
+ * nested interactive content with undefined keyboard behaviour. The original
+ * class names are kept so the theme's CSS still applies. `aria-pressed` and
+ * the nesting check only apply after mount: the SSG HTML is rendered with the
+ * default theme while the client's first render already knows the stored
+ * preference, so a state attribute in the initial markup would mismatch on
+ * hydration. The original's view-transition animation
+ * (`themeConfig.enableAppearanceAnimation`, off for this site) is not
+ * reproduced.
  */
 const SwitchAppearance = ({ onClick }: { onClick?: () => void }) => {
   const { theme, setTheme } = useContext(ThemeContext);
   const lang = useLang();
+  const ref = useRef<HTMLDivElement>(null);
   const [mounted, setMounted] = useState(false);
+  const [nestedInButton, setNestedInButton] = useState(false);
   useEffect(() => {
     setMounted(true);
+    setNestedInButton(Boolean(ref.current?.closest('button')));
   }, []);
   const isDark = theme === 'dark';
   const toggle = () => {
     setTheme?.(isDark ? 'light' : 'dark');
     onClick?.();
   };
+  const standalone = !nestedInButton;
   return (
     <div
-      role="button"
-      tabIndex={0}
+      ref={ref}
+      role={standalone ? 'button' : undefined}
+      tabIndex={standalone ? 0 : undefined}
       className="rp-switch-appearance"
-      aria-label={lang === 'zh' ? '深色模式' : 'Dark mode'}
-      aria-pressed={mounted ? isDark : undefined}
+      aria-label={standalone ? (lang === 'zh' ? '深色模式' : 'Dark mode') : undefined}
+      aria-pressed={standalone && mounted ? isDark : undefined}
       onClick={toggle}
       onKeyDown={(event) => {
         if (event.key !== 'Enter' && event.key !== ' ') return;
@@ -332,7 +345,14 @@ const NotFoundLayout = () => {
       window.location.replace(pathname.replace(/\/+$/, '') + search + hash);
     }
   }, []);
-  return <BasicNotFoundLayout />;
+  // The default renders its message straight under the nav, with no landmark;
+  // wrapping it gives the 404 page a `<main>` and a target for the skip link.
+  return (
+    <main>
+      <SkipTarget />
+      <BasicNotFoundLayout />
+    </main>
+  );
 };
 
 export {
