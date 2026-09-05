@@ -126,12 +126,12 @@ export interface WebManifestDocument {
   readonly web?: WebManifest;
 }
 
-const targetNames = (value: unknown): readonly string[] => {
+const projectionHosts = (value: unknown): readonly string[] => {
   if (!Array.isArray(value)) return Object.freeze([]);
-  return Object.freeze(value.flatMap((target: unknown) => {
-    if (!isPlainRecord(target)) return [];
-    const name = target['name'];
-    return typeof name === 'string' && name.length > 0 ? [name] : [];
+  return Object.freeze(value.flatMap((projection: unknown) => {
+    if (!isPlainRecord(projection)) return [];
+    const host = projection['host'];
+    return typeof host === 'string' && host.length > 0 ? [host] : [];
   }));
 };
 
@@ -140,7 +140,7 @@ export const readWebManifestDocument = async (manifestPath: string): Promise<Web
     const document = parseJsonWithoutDuplicateKeys(await readFile(manifestPath, 'utf8'));
     const manifest = record(document, 'manifest');
     return {
-      targets: targetNames(manifest['targets']),
+      targets: projectionHosts(manifest['projections']),
       ...(manifest['web'] === undefined ? {} : { web: parseWebManifest(manifest['web']) }),
     };
   } catch (error) {
