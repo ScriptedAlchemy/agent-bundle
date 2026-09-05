@@ -14,10 +14,10 @@ import {
   validateOutageLedger,
   type ConsoleErrorRecord,
 } from './support/packed-outage-ledger.ts';
+import { availablePort } from '../../agent-bundle/tests/support/available-port.ts';
 import { cachedNpmInstallArguments, sharedPackedTarball } from '../../agent-bundle/tests/support/shared-pack.ts';
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import {
-  availablePort,
   awaitReady,
   closeChild,
   descendantProcessIds,

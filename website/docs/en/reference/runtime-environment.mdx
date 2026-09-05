@@ -46,7 +46,7 @@ Cursor's pinned loader has its own substituted-field table, and a token outside 
 | `AGENT_BUNDLE_NATIVE_HOST_CONTRACTS` | Contributor test suites | `1` compares the installed host CLI contract. |
 | `AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE` | Contributor test suites | `1` runs the signed-in Claude native smoke. |
 | `AGENT_BUNDLE_NATIVE_CODEX_SMOKE` | Contributor test suites | `1` runs the signed-in Codex native smoke. |
-| `AGENT_BUNDLE_WORKBENCH_API_PROXY` | Contributor HMR (`packages/workbench/scripts/dev.mjs`) | The running Agent Bundle foreground server URL required before Workbench UI HMR starts. See [Developer Workbench](../guide/development/workbench.mdx). |
+| `AGENT_BUNDLE_WORKBENCH_API_PROXY` | Contributor HMR (`packages/workbench/scripts/dev.mjs`) | The running Agent Bundle foreground server URL required before Workbench UI HMR starts; the Rsbuild dev server proxies `/api` there and, while it is set, refuses to move off its port (`server.strictPort`). Pair it with `agent-bundle dev --workbench-dev-origin <origin>` on the foreground server. See [Contributor UI HMR](../guide/development/workbench.mdx#contributor-ui-hmr). |
 
 The three native-smoke opt-ins exist because those runs need a real signed-in CLI; they are never
 part of an ordinary test run.
