@@ -32,9 +32,12 @@ export class WebLaunchError extends CodedError<WebLaunchErrorCode> {
 const safePluginSegment = /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/u;
 
 /**
- * One state segment per installed plugin root: the resolved root's digest
- * keys the state, so two installs of the same plugin never share it, and the
- * basename stays in front only when it is already a safe path segment.
+ * One data segment per installed plugin root: the resolved root's digest
+ * keys the directory, so two installs of the same plugin never share it, and
+ * the basename stays in front only when it is already a safe path segment.
+ * Spells the segment like `pluginStateSegment` in `@agent-bundle/runtime`,
+ * which the web host must not import (optional peer); `web-launch.test.ts`
+ * pins the two on a canonical root.
  */
 const webPluginStateSegment = (pluginRoot: string): string => {
   const digest = sha256Hex(pluginRoot).slice(0, 16);
@@ -43,9 +46,9 @@ const webPluginStateSegment = (pluginRoot: string): string => {
 };
 
 /**
- * Durable per-server web state, outside the installed artifact: the artifact
- * stays immutable (it may be installed read-only), so framework-owned
- * writable state anchors under the user's home instead of the plugin root.
+ * The author-facing `${PLUGIN_DATA}` directory of one server, outside the
+ * installed artifact: the artifact stays immutable (it may be installed
+ * read-only), so per-server data anchors under the user's home instead.
  */
 export const webPluginDataDirectory = (pluginRoot: string, server: string, home = homedir()): string =>
   join(home, '.agent-bundle', 'web-data', webPluginStateSegment(resolve(pluginRoot)), mcpServerStateDirectory(server));
@@ -73,10 +76,12 @@ const artifactFile = async (pluginRoot: string, app: string, role: string, path:
 };
 
 /**
- * Declared env overrides inherited env, matching installed hosts. Plugin data
- * lives outside the artifact (under the user's home), because the installed
- * artifact is immutable — a read-only install must still launch when the
- * server declares plugin-data state.
+ * Declared env overrides inherited env, matching installed hosts. The launch
+ * names only the code root (`AGENT_BUNDLE_PLUGIN_ROOT`): the spawned shell
+ * derives its framework state root from it exactly as a host-launched one
+ * does (`AGENT_BUNDLE_STATE_ROOT` and `XDG_STATE_HOME` pass through as
+ * inherited env), so a read-only install launches and the web-launched and
+ * host-launched servers of one install share state.
  */
 export const resolveWebLaunch = async (options: ResolveWebLaunchOptions): Promise<StdioLaunch> => {
   const pluginRoot = resolve(options.pluginRoot);

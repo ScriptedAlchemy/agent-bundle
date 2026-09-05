@@ -86,13 +86,12 @@ export interface AgentWorkspaceIdentity {
 }
 
 /**
- * Where this plugin is installed and where its durable state lives (#468) —
- * the one anchor every generated shell resolves from `AGENT_BUNDLE_PLUGIN_ROOT`
- * (source `native`) or, when the host supplies none, from the artifact root or
- * the caller's `.agent-bundle` directory (source `derived`). `stateRoot` is
- * `<root>/state`: the directory the SQLite state kernel, the notice ledger, and
- * the lineage journal all mount, so a route, layout, or provider that keeps
- * its own files beside them reads this instead of re-deriving the anchor.
+ * The plugin's code root and framework state root (#468). `root` comes from
+ * `AGENT_BUNDLE_PLUGIN_ROOT` or the shell fallback. `stateRoot` comes from
+ * `AGENT_BUNDLE_STATE_ROOT`; installed artifacts otherwise use
+ * `~/.agent-bundle/state/<plugin>-<digest>` or
+ * `$XDG_STATE_HOME/agent-bundle/<plugin>-<digest>`, while root-anchored shells
+ * use `<root>/state`.
  */
 export interface AgentPluginIdentity {
   readonly root: string;

@@ -118,6 +118,11 @@ export const isolateWorkerEnvironment = (): void => {
   env['TMP'] = root;
   env['TEMP'] = root;
   env['XDG_CACHE_HOME'] = cache;
+  // Generated shells with workspace-durable state derive their user state
+  // root from XDG_STATE_HOME (`resolvePluginRoot` with the `user-data`
+  // anchor), so every shell a pool spawns writes SQLite under this worker's
+  // root and never beneath the developer's home.
+  env['XDG_STATE_HOME'] = rstestWorkerCacheDirectory('xdg-state');
 };
 
 let commandSerial = 0;

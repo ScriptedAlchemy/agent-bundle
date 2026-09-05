@@ -107,10 +107,13 @@ rebuilding without a version bump no longer needs an uninstall and `rm -rf`. A d
 refused with `AB7005` unless you pass `--replace` (alias `--force`), and a foreign directory — one
 this plugin's installer did not place — is refused either way. Cursor copies carry an install receipt
 (`.agent-bundle-install.json`: plugin, version, host, content hash, owned files); replacement is in
-place and touches owned files only, never unowned entries such as `state/`, and `--replace` adopts
-a pre-receipt copy. Claude replacement runs `claude plugin uninstall --keep-data` before
-reinstalling because `plugin update` is version-gated; Codex runs `codex plugin remove` before
-`add`. The emitted `INSTALL.md` documents the same recipe per host.
+place and touches owned files only, never unowned entries such as legacy or in-place `state/`, and
+`--replace` adopts a pre-receipt copy. Current artifact builds keep framework state under
+`~/.agent-bundle/state/<plugin>-<digest>` instead (`AGENT_BUNDLE_STATE_ROOT` overrides that
+location); `uninstall` does not remove it. Claude replacement runs
+`claude plugin uninstall --keep-data` before reinstalling because `plugin update` is
+version-gated; Codex runs `codex plugin remove` before `add`. The emitted `INSTALL.md` documents
+the same recipe per host.
 
 The framework CLI derives the artifact-side hash and copy set from
 `agent-bundle.manifest.json` `files[]`, verifies every listed digest, and does not walk the artifact
@@ -181,7 +184,7 @@ variables each declares (`AB7331`, informational) — never a name or a value.
 ```sh
 # exact paths, nothing changes
 npx agent-bundle uninstall cursor --from artifact --plan
-# receipt-owned files; state/ kept
+# receipt-owned files; legacy or in-place state/ kept
 npx agent-bundle uninstall cursor --from artifact
 # claude plugin uninstall --keep-data + marketplace remove
 npx agent-bundle uninstall claude --from artifact
@@ -195,8 +198,9 @@ created, the host registrations it performed, and timestamps. Cursor local copie
 `.agent-bundle-install.json`; Claude, Codex, and Cursor marketplace-mode installs keep theirs under
 `<host root>/agent-bundle/receipts/`. `uninstall` removes exactly what the receipt owns and
 reverses exactly the registrations it recorded — never anything else; unowned entries are listed
-as retained. Durable runtime state (`state/`, and for a Cursor copy of an Agent Plugins pack the
-`PLUGIN_DATA` directory the receipt records) is kept unless you pass `--purge-data --confirm-purge`, and the result states honestly what the host itself decided where
+as retained. Legacy or in-place durable runtime state (`state/`, and for a Cursor copy of an Agent
+Plugins pack the `PLUGIN_DATA` directory the receipt records) is kept unless you pass
+`--purge-data --confirm-purge`, and the result states honestly what the host itself decided where
 Agent Bundle cannot (Claude orphans its cached copy for a ~14-day grace period; Codex deletes the
 cached tree and offers no keep-data option). A missing receipt (`AB7009`) or a content mismatch
 (`AB7007`) is refused unless `--force`; a directory that belongs to another plugin is refused

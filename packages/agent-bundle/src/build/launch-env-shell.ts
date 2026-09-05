@@ -48,8 +48,10 @@ export const operatorEnvLayerImports: readonly string[] = [
  * The statement that applies the layer. Every artifact shell lives one
  * directory below the plugin root (`mcp/`, `hooks/`, `bin/`), so the fallback
  * anchor — used when the host set no `AGENT_BUNDLE_PLUGIN_ROOT` — is the
- * bundle's parent directory, the same fallback the durable-state kernel uses
- * (`import.meta.url` stays native in the emitted ESM, so it names the bundle).
+ * bundle's parent directory, the same code-root fallback `resolvePluginRoot`
+ * uses (`import.meta.url` stays native in the emitted ESM, so it names the
+ * bundle). This names the code root only; `resolvePluginRoot` derives the
+ * state root (`AGENT_BUNDLE_STATE_ROOT`, else the user state directory).
  *
  * A stdio MCP shell embeds its server's manifest `env` block as build-time
  * literals (`manifestEnv`): the host merges that block into the child

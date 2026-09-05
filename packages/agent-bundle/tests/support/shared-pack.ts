@@ -21,13 +21,20 @@ export interface SharedPack {
   /** The package's own `npm pack --json` entry recorded when the tarball was produced. */
   readonly packOutput: SharedPackOutput;
   readonly tarball: string;
+  readonly variant?: 'runtime-rebundle';
 }
 
-export type SharedPackPackage = 'agent-bundle' | 'create-agent-bundle' | 'markdown-stream' | 'runtime';
+export type SharedPackPackage =
+  | 'agent-bundle'
+  | 'agent-bundle-runtime-rebundle'
+  | 'create-agent-bundle'
+  | 'markdown-stream'
+  | 'runtime';
 
 /** packages/ directory and npm package name for each shared-pack key. */
 const sharedPackPackages: Readonly<Record<SharedPackPackage, Readonly<{ directory: string; npmName: string }>>> = {
   'agent-bundle': { directory: 'agent-bundle', npmName: 'agent-bundle' },
+  'agent-bundle-runtime-rebundle': { directory: 'agent-bundle', npmName: 'agent-bundle' },
   'create-agent-bundle': { directory: 'create-agent-bundle', npmName: 'create-agent-bundle' },
   // `@agent-bundle/runtime` depends on it by exact version; a consumer that
   // installs the runtime tarball needs this one alongside until that version
@@ -99,6 +106,9 @@ const packOnce = async (packageName: SharedPackPackage): Promise<SharedPack> => 
   const sharedDirectory = process.env['AGENT_BUNDLE_SHARED_PACK_DIR'];
   if (sharedDirectory !== undefined && sharedDirectory.length > 0) {
     return JSON.parse(await readFile(join(sharedDirectory, `${packageName}.json`), 'utf8')) as SharedPack;
+  }
+  if (packageName === 'agent-bundle-runtime-rebundle') {
+    throw new Error('The runtime re-bundle fixture is prepared by `pnpm test:packed`; run the packed pool through that script.');
   }
   // Ad-hoc single-file runs have no run-level tarball, so build once (unless
   // the caller marked the workspace dist prebuilt) and pack into a

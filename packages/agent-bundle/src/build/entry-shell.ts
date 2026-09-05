@@ -189,11 +189,14 @@ export const generatedInstallBinEntrySource = (options: {
 ].join('\n');
 
 /**
- * Where workspace-durable state anchors when the host supplies no
- * `AGENT_BUNDLE_PLUGIN_ROOT`: `cwd` (the caller's `.agent-bundle/state`, the
- * npm package bin's contract) or `artifact` (the parent of the executable's
- * own directory — the target root — which the artifact-hosted routed CLI
- * shares with the generated MCP worker beside it).
+ * The code root a generated module falls back to when the host supplies no
+ * `AGENT_BUNDLE_PLUGIN_ROOT`, and with it where its state root derives absent
+ * `AGENT_BUNDLE_STATE_ROOT`: `cwd` (the caller's `.agent-bundle`, the npm
+ * package bin's contract; state stays under `<root>/state`) or `artifact`
+ * (the parent of the executable's own directory — the target root — shared by
+ * the artifact-hosted CLI, its render worker, the MCP entry and the Flight
+ * worker; state goes to the user state directory keyed by that root, never
+ * into the installed, possibly read-only artifact).
  */
 export type GeneratedStateFallback = 'artifact' | 'cwd';
 
@@ -208,7 +211,7 @@ export interface GeneratedCliBinEntryOptions {
   /** The project's resolved `notices.retention`; the runtime defaults apply when absent. */
   readonly noticeRetention?: NormalizedNoticeRetentionPolicy;
   readonly state?: NormalizedStateDefinition;
-  /** Durable-state anchor fallback; defaults to `cwd` (the npm package bin). */
+  /** Code-root fallback; defaults to `cwd` (the npm package bin). */
   readonly stateFallback?: GeneratedStateFallback;
   readonly web?: {
     readonly manifestRelativeUrl: string;
@@ -243,16 +246,22 @@ const pluginRootFallbackExpression = (
       : "join(process.cwd(), '.agent-bundle')";
 
 /**
- * The one plugin-root resolution of a generated module (#468): the SQLite
+ * The one plugin-root resolution of a generated module (#468, #637): the code
+ * root (`AGENT_BUNDLE_PLUGIN_ROOT`, else the fallback) and the state root
+ * (`AGENT_BUNDLE_STATE_ROOT`, else derived from the code root). The SQLite
  * kernel, the notice ledger, the lineage journal, and every request scope the
  * module opens read `pluginRoot`, so `(await agent()).plugin.stateRoot` is the
- * directory they mount by construction.
+ * directory they mount by construction. An artifact-anchored module derives
+ * its state root in the user state directory keyed by the code root; the npm
+ * bin keeps `<root>/state`.
  */
 const pluginRootDeclaration = (
   fallback: GeneratedStateFallback,
   relativeUrl?: string,
 ): string =>
-  `const pluginRoot = resolvePluginRoot({ fallback: ${pluginRootFallbackExpression(fallback, relativeUrl)} });`;
+  `const pluginRoot = resolvePluginRoot({ fallback: ${pluginRootFallbackExpression(fallback, relativeUrl)}${
+    fallback === 'artifact' ? ", stateAnchor: 'user-data'" : ''
+  } });`;
 
 const generatedStateImports = (
   state: NormalizedStateDefinition | undefined,
@@ -579,7 +588,7 @@ export interface GeneratedRenderedRouteWorkerOptions {
   /** The project's resolved `notices.retention`; the runtime defaults apply when absent. */
   readonly noticeRetention?: NormalizedNoticeRetentionPolicy;
   readonly state?: NormalizedStateDefinition;
-  /** Durable-state anchor fallback; defaults to `cwd` and must match the owning executable. */
+  /** Code-root fallback; defaults to `cwd` and must match the owning executable. */
   readonly stateFallback?: GeneratedStateFallback;
 }
 
@@ -911,8 +920,8 @@ const wiresResourceUpdatedRoute = (options: NoticeRouteSelection): boolean =>
   options.noticeDelivery?.['mcp-resource-updated'].state === 'supported';
 
 /**
- * The server process's own handle on the durable notice store. The anchor
- * resolution matches the worker's so both open the same files.
+ * The server process's own handle on the durable notice store. Both roots
+ * resolve as in the worker, so both open the same files.
  */
 const noticeDeliveryImports = (wired: boolean): readonly string[] =>
   wired
@@ -1078,9 +1087,9 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     'process.stdout.write = process.stderr.write.bind(process.stderr);',
     `const ARTIFACT_EPOCH = ${JSON.stringify(options.artifactEpoch)};`,
     'const processLifetime = { hits: 0, instanceId: crypto.randomUUID(), pid: process.pid };',
-    // The worker resolves the same anchor as the server process beside it
-    // (same environment, same artifact layout); the server's observed value
-    // rides each render message and wins when present.
+    // The worker resolves the same code and state roots as the server process
+    // beside it (same environment, same artifact layout); the server's
+    // observed value rides each render message and wins when present.
     pluginRootDeclaration('artifact'),
     ...generatedStateOwner(options.state, options),
     ...providerRegistrySource(providers),
@@ -1220,10 +1229,10 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
   const wiresInbox = wiresInboxRoute(options);
   const wiresResourceUpdated = wiresResourceUpdatedRoute(options);
   // The lineage registry journals durably only where the project already
-  // accepted the sqlite kernel and its durable anchor (a workspace-durable
+  // accepted the sqlite kernel and its state root (a workspace-durable
   // `src/state.ts`); stateless and volatile projects keep a process-lifetime
-  // registry so `node:sqlite` never loads for them and no `state/` directory
-  // appears inside an artifact that declared none.
+  // registry so `node:sqlite` never loads for them and no state directory
+  // is created for an artifact that declared none.
   const durableLineage = options.state?.lifetime === 'workspace-durable';
   return [
     ...(hasEvents ? ["import { dirname, resolve } from 'node:path';"] : []),
@@ -1244,12 +1253,12 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
     ...routeImports(routes),
     '',
     `const ARTIFACT_EPOCH = ${JSON.stringify(artifactEpoch)};`,
-    // The server process's one anchor (#468): the lineage journal, the notice
-    // store, and every request identity it publishes read `pluginRoot`.
+    // The server process's one root resolution (#468): the lineage journal,
+    // the notice store, and every request identity it publishes read `pluginRoot`.
     pluginRootDeclaration('artifact'),
     ...(durableLineage
       ? [
-          // Beside the project's own durable state, so a restarted MCP process
+          // In the project's own state root, so a restarted MCP process
           // still knows which subagents are alive. A store that cannot open
           // degrades to memory rather than failing the server: lineage is an
           // observed axis, never a precondition.

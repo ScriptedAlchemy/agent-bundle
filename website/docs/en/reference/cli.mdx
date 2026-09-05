@@ -140,8 +140,10 @@ plugin root — `agent-bundle.manifest.json` must sit beside `bin/` (exit `1` ot
 The command launches the plugin's own MCP server (`node <root>/mcp/<entry>.mjs`,
 `AGENT_BUNDLE_PLUGIN_ROOT=<root>`, declared static env with path tokens expanded — the
 plugin-data token resolves outside the artifact, under
-`~/.agent-bundle/web-data/<plugin>-<digest>/<server>`, so a read-only install still launches),
-calls the opening tool once, and serves the App at `http://127.0.0.1:<port>/` on a loopback origin with a
+`~/.agent-bundle/web-data/<plugin>-<digest>/<server>`, so a read-only install still launches).
+The spawned server's own durable framework state likewise lives outside the artifact under
+`~/.agent-bundle/state/<plugin>-<digest>` (or `AGENT_BUNDLE_STATE_ROOT`). It calls the opening
+tool once and serves the App at `http://127.0.0.1:<port>/` on a loopback origin with a
 second loopback sandbox origin for the App document — the same host stack and consent behavior as
 `agent-bundle serve-app` and the Workbench. Human mode prints
 `MCP App <server>/<app> at <url> (tool <tool>; Ctrl-C stops the server)` and runs until Ctrl-C /
@@ -207,8 +209,8 @@ agent-bundle uninstall <host> [--from <root>] [--scope <scope>] [--mode <mode>] 
 | `--from <root>` | `process.cwd()` | The composite root whose `agent-bundle.manifest.json` identifies the plugin (name, version, marketplace), read exactly as `install` reads it (`AB7001` on the same conditions). |
 | `--scope <scope>` | `user` | The scope the plugin was installed at (Claude). |
 | `--mode <mode>` | `local` | Cursor only: uninstall the `local` copy or the staged `marketplace` repository. |
-| `--keep-data` | on | Keep durable runtime state (`state/`: state kernel, notices journal; for a Cursor copy of an Agent Plugins pack, also the recorded `PLUGIN_DATA` directory). This is the default; the flag makes it explicit. |
-| `--purge-data` | off | Also remove durable runtime state. Refused (`AB7008`) without `--confirm-purge`. |
+| `--keep-data` | on | Keep legacy or in-place durable runtime state (`state/`: state kernel, notices journal; for a Cursor copy of an Agent Plugins pack, also the recorded `PLUGIN_DATA` directory). This is the default; the flag makes it explicit. (Artifacts built from this release keep framework state under `~/.agent-bundle/state/<plugin>-<digest>`, which `uninstall` does not remove.) |
+| `--purge-data` | off | Also remove the legacy or in-place durable runtime state (`state/`, recorded `PLUGIN_DATA`); the derived `~/.agent-bundle/state/<plugin>-<digest>` root stays. Refused (`AB7008`) without `--confirm-purge`. |
 | `--force` | off | Proceed without a receipt (legacy Cursor copy, host-only install) or when owned content, version, or staged `HEAD` no longer matches the receipt. A receipt or manifest naming another plugin is refused regardless. |
 | `--plan` | off | Print the exact paths and host registrations that would be removed and change nothing. |
 
@@ -222,8 +224,9 @@ install at another scope or in another project known only to Claude's `plugins/i
 registry). Unowned entries are retained and listed; a missing receipt is `AB7009` and a mismatch is `AB7007` unless `--force`; a
 second run is a `not-installed` no-op. The typed `data.outcome` says what happened to durable
 state per host: Cursor `kept` / `purged` / `absent`; Claude `retained-by-host` (the cached copy is
-orphaned for Claude's ~14-day grace period; a purge also removes `state/` and
-`plugins/data/<id>/`); Codex `removed-by-host` / `unavailable` (`codex plugin remove` deletes the
+orphaned for Claude's ~14-day grace period; a purge also removes legacy or in-place `state/` and
+`plugins/data/<id>/`, but not the current `~/.agent-bundle/state/<plugin>-<digest>` framework
+state); Codex `removed-by-host` / `unavailable` (`codex plugin remove` deletes the
 cached tree and has no keep-data option). The package-relative installer bin accepts
 `uninstall <host>` with the same flags; the emitted `install.mjs` accepts `--uninstall` with
 `--mode`, `--keep-data`, `--purge-data --confirm-purge`, `--force`, and `--plan`.

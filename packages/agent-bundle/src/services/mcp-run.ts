@@ -43,11 +43,11 @@ export interface ResolvedMcpStdioLaunch {
 export interface ResolveMcpStdioLaunchOptions {
   readonly artifact: string;
   /**
-   * Root that plugin-root path tokens in *env values* expand to — the
-   * durable-state anchors like `AGENT_BUNDLE_PLUGIN_ROOT`. Defaults to
-   * `workspaceRoot`: under `mcp run` the artifact is an ephemeral build
-   * product, so anchoring durable state on it would fragment that state per
-   * rebuild. Point it back at the artifact target root for a byte-faithful
+   * Root that plugin-root path tokens in *env values* expand to. Env-declared
+   * `AGENT_BUNDLE_PLUGIN_ROOT` expands to the project root by default so the
+   * derived state root (keyed by that root) survives artifact rebuilds;
+   * `AGENT_BUNDLE_STATE_ROOT` in the operator environment overrides the state
+   * location. Point it at the artifact target root for a byte-faithful
    * rehearsal of a copied-artifact launch.
    */
   readonly envPluginRoot?: string;

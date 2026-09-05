@@ -679,18 +679,16 @@ const readPluginRoot = (env: Record<string, string | undefined>): string | undef
 
 Inside a route there is no need to read the variable at all. Every generated shell — the MCP
 entry and its Flight worker, the routed CLI executable and its render worker, the hook wrappers —
-resolves the anchor once at startup with `resolvePluginRoot` from `@agent-bundle/runtime`, mounts
-its SQLite state, notice ledger, and lineage journal under `<root>/state`, and publishes the same
-value on every request it opens as `(await agent()).plugin`:
+resolves its code and framework state roots once at startup with `resolvePluginRoot` from
+`@agent-bundle/runtime` and publishes them on every request it opens as
+`(await agent()).plugin`:
 
 ```ts
 const { plugin } = await agent();
 if (plugin.state === 'available') {
-  plugin.value.root;      // the install root: AGENT_BUNDLE_PLUGIN_ROOT,
-                          // or the shell's fallback
-  plugin.value.stateRoot; // `<root>/state`, where defineState / notices / lineage
-                          // already live
-  plugin.source;          // 'native' from the variable, 'derived' from the fallback
+  plugin.value.root;      // the code root: AGENT_BUNDLE_PLUGIN_ROOT or the shell's fallback
+  plugin.value.stateRoot; // the framework state root: AGENT_BUNDLE_STATE_ROOT or the default
+  plugin.source;          // the code root is 'native' from the variable or 'derived'
 }
 ```
 
@@ -698,12 +696,17 @@ if (plugin.state === 'available') {
 means the shell fell back — to the artifact root (the parent of `mcp/`, `bin/`, or `hooks/`) inside
 a built artifact, or to `$PWD/.agent-bundle` for the npm package bin. A value still carrying an
 unexpanded `${…}` token (a host that passed its manifest through literally) is treated as unset,
-reported once on stderr, and never joined into a path. Conventional providers receive the same
-observed value as `plugin` in their factory context, beside `invocation` and `signal`, so a
-provider that keeps files beside the framework's state derives nothing itself. The route-unit and
-`mcp-in-memory` harnesses resolve it the same way (falling back to `<project root>/.agent-bundle`)
-and accept `context.plugin` as an override like every other axis; outside a generated scope the
-axis is `unavailable('not-provided')`.
+reported once on stderr, and never joined into a path. Artifact-hosted shells default
+`plugin.value.stateRoot` to `~/.agent-bundle/state/<plugin>-<digest>` (or
+`$XDG_STATE_HOME/agent-bundle/<plugin>-<digest>`), derived from the code root's safe basename and
+the first 16 hexadecimal characters of the SHA-256 digest of its real path.
+`AGENT_BUNDLE_STATE_ROOT` overrides that location; the npm package bin keeps
+`$PWD/.agent-bundle/state`. Conventional providers receive the same observed value as `plugin` in
+their factory context, beside `invocation` and `signal`, so a provider that keeps files beside the
+framework's state derives nothing itself. The route-unit and `mcp-in-memory` harnesses resolve it
+the same way (falling back to `<project root>/.agent-bundle`) and accept `context.plugin` as an
+override like every other axis; outside a generated scope the axis is
+`unavailable('not-provided')`.
 
 ## MCP Apps
 
@@ -1040,8 +1043,10 @@ launches the plugin's own MCP server from its `executables.mcpServers[]` `launch
 (`node <root>/<launch.entry> <args>` — `artifact` arguments resolve under `<root>`, literals have
 their path tokens expanded — with `AGENT_BUNDLE_PLUGIN_ROOT=<root>` and the declared static env,
 path tokens expanded; the plugin-data token resolves outside the artifact, under
-`~/.agent-bundle/web-data/<plugin>-<digest>/<server>`, so a read-only install still launches),
-calls the opening tool once, serves the App at `http://127.0.0.1:<port>/` on a loopback origin with a
+`~/.agent-bundle/web-data/<plugin>-<digest>/<server>`, so a read-only install still launches).
+The spawned server's own durable framework state likewise lives outside the artifact under
+`~/.agent-bundle/state/<plugin>-<digest>` (or `AGENT_BUNDLE_STATE_ROOT`). It calls the opening
+tool once and serves the App at `http://127.0.0.1:<port>/` on a loopback origin with a
 second loopback sandbox origin for the App document (the same host stack and consent behavior as
 `agent-bundle serve-app` and the Workbench), prints
 `MCP App <server>/<app> at <url> (tool <tool>; Ctrl-C stops the server)` (or one JSON line with

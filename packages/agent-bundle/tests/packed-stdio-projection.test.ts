@@ -4,9 +4,11 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
+import { userDataStateRoot } from '@agent-bundle/runtime';
 import { specTypeSchemas as clientSchemas } from '@modelcontextprotocol/client';
 import { expect, it } from '@rstest/core';
 
+import { exists } from '../src/core/paths.ts';
 import { requestEventRuntime } from '../src/events/ipc.ts';
 import { compileTestManifest } from '../src/test/manifest.ts';
 import { runPackedContractMatrix } from '../src/test/contract.ts';
@@ -44,12 +46,18 @@ interface McpJson {
  * (tests/projection/) covers the same route protocol surface at a fraction of
  * the cost and explicitly does not claim any of this.
  */
-it('serves compiled routes and durable state across packed process restarts', async () => {
+it.each([
+  ['release', 'agent-bundle'],
+  ['private runtime sibling', 'agent-bundle-runtime-rebundle'],
+] as const)('serves compiled routes from the %s package across packed process restarts', async (_variant, packageName) => {
   const [agentBundle, runtime, markdownStream] = await Promise.all([
-    sharedPackedTarball('agent-bundle'),
+    sharedPackedTarball(packageName),
     sharedPackedTarball('runtime'),
     sharedPackedTarball('markdown-stream'),
   ]);
+  expect(agentBundle.variant).toBe(
+    packageName === 'agent-bundle-runtime-rebundle' ? 'runtime-rebundle' : undefined,
+  );
   const consumer = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-stdio-'));
   const project = join(consumer, 'project');
   const artifact = join(project, 'artifact');
@@ -123,6 +131,9 @@ it('serves compiled routes and durable state across packed process restarts', as
     expect(workerSource).toContain('node:sqlite');
     expect(workerSource).toContain('createSqliteStateDriver');
     expect(workerSource).toContain('AGENT_BUNDLE_PLUGIN_ROOT');
+    // Artifact-hosted shells anchor their state root under the user's state
+    // home, never beneath the installed (possibly read-only) code root.
+    expect(workerSource).toContain("stateAnchor: 'user-data'");
     expect(workerSource).toMatch(/new URL\(["']\.\.["'], import\.meta\.url\)/u);
     const harnessManifest = await compileTestManifest({ root: project });
     const artifactManifest = JSON.parse(
@@ -253,6 +264,9 @@ it('serves compiled routes and durable state across packed process restarts', as
       // fills `HARNESS_FROM_FILE` and `.env.local`'s `HARNESS_LOCAL`, the host's
       // exported `HARNESS_HOST_WINS` is untouched, and nothing was logged.
       for (const [name, value] of [
+        ...(packageName === 'agent-bundle-runtime-rebundle'
+          ? [['AGENT_BUNDLE_RUNTIME_REBUNDLE_FIXTURE_EXECUTED', '1'] as const]
+          : []),
         ['HARNESS_FROM_FILE', 's3cr3t-from-file'],
         ['HARNESS_LOCAL', 'from-local'],
         ['HARNESS_HOST_WINS', 'from-host'],
@@ -383,10 +397,14 @@ it('serves compiled routes and durable state across packed process restarts', as
       await firstSession.close();
     }
 
-    const stateRoot = join(pluginRoot, 'state');
+    // The server inherited the worker's XDG_STATE_HOME with `env`, so its
+    // SQLite kernel landed under the user-data state root for this code root
+    // (#637) and nothing was written beneath the installed artifact.
+    const stateRoot = userDataStateRoot(pluginRoot, env);
     expect(await readdir(stateRoot)).toEqual(expect.arrayContaining([
       expect.stringMatching(/\.sqlite$/u),
     ]));
+    expect(await exists(join(pluginRoot, 'state'))).toBe(false);
 
     if (secondSession === undefined) throw new TypeError('Contract matrix did not restart the packed session.');
     try {
