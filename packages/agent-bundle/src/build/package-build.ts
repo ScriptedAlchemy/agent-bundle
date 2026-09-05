@@ -203,6 +203,20 @@ const packagePath = (outputDir: string, value: JsonValue): JsonValue => {
   return value;
 };
 
+const packageScripts = (value: JsonValue): JsonValue => {
+  if (value === null || Array.isArray(value) || typeof value !== 'object') return value;
+  const omitted = new Set([
+    'postpack',
+    'postpublish',
+    'prepare',
+    'prepack',
+    'prepublish',
+    'prepublishOnly',
+    'publish',
+  ]);
+  return Object.fromEntries(Object.entries(value).filter(([name]) => !omitted.has(name)));
+};
+
 const packageDocument = async (
   projectRoot: string,
   packageBuild: NormalizedPackageBuild,
@@ -229,10 +243,12 @@ const packageDocument = async (
     return [bin.name, `./${executable.path}`];
   }));
   const transformed = Object.fromEntries(Object.entries(source)
-    .filter(([key]) => !['bin', 'files', 'scripts'].includes(key))
+    .filter(([key]) => !['bin', 'files'].includes(key))
     .map(([key, value]) => [
       key,
-      ['exports', 'main', 'module', 'types', 'typesVersions'].includes(key)
+      key === 'scripts'
+        ? packageScripts(value)
+        : ['exports', 'imports', 'main', 'module', 'types', 'typesVersions'].includes(key)
         ? packagePath(packageBuild.outputDir, value)
         : value,
     ]));

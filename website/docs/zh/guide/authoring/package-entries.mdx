@@ -346,7 +346,9 @@ hook、Skill、脚本与 npm 消费者都使用插件根目录，因此构建把
 `bin/<plugin-name>-flight.mjs`），由所有选中宿主共享。每个内置 target 都发布了准入它的 `cli` 能力。产物 bin 是一个
 带 Node shebang 和可执行位的自包含 ESM 模块。npm 根目录原样复制它，并让 `package.json` 的 `bin`
 直接指向它，因此帮助、argv 解析、输出模式、退出码、信号与完整命令集合都逐字节相同。两种形式都从
-`bin/` 的上级根目录解析插件代码，并遵循同一套运行时状态策略。
+`bin/` 的上级根目录解析插件代码，并从该代码根目录推导出同一个框架状态根目录——
+`~/.agent-bundle/state/<plugin>-<digest>`（或对应的 `XDG_STATE_HOME` 路径），或已设置的
+`AGENT_BUNDLE_STATE_ROOT`——因此 CLI 与 MCP 服务器共享同一份存储。
 
 从其他表面引用它时使用插件根 token——Claude Skill Markdown 与 hook 命令中写
 `${CLAUDE_PLUGIN_ROOT}/bin/<plugin-name>.mjs`，Codex hook 中写 `${PLUGIN_ROOT}/…`，Cursor hook 中写
@@ -399,8 +401,8 @@ npx agent-bundle prepack --root . --output artifact --json
 ```
 
 `prepack` 运行发布构建与 `npm pack --dry-run --json --ignore-scripts`，随后对精确的包与产物清单、
-清单哈希、包 bin 目标以及发布版本一致性设卡。生成的包元数据会移除源项目脚本，避免开发期生命周期命令
-从 `dist/` 运行。先运行门禁，再发布它已经校验的 npm 根目录：
+清单哈希、包 bin 目标以及发布版本一致性设卡。生成的包元数据会移除 pack 与 publish 生命周期钩子，
+避免源项目的 `prepack` 从 `dist/` 递归；消费者安装脚本保持不变。先运行门禁，再发布它已经校验的 npm 根目录：
 
 ```sh
 npm publish ./dist --ignore-scripts

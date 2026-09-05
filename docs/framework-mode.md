@@ -635,7 +635,8 @@ manifest. A root whose selection includes `cursor` or `portable` also
 includes a standalone `install.mjs`. Its staged copy is idempotent for identical
 content, records an install receipt (`.agent-bundle-install.json`: plugin,
 version, content hash, owned files and directories), replaces a same-version stale copy of its
-own plugin in place (owned files only; `state/` survives), and accepts
+own plugin in place (owned files only; legacy `state/` survives, while current builds keep
+framework state outside the plugin root), and accepts
 `--replace` (alias `--force`) to replace a different installed version or adopt
 a pre-receipt copy. Foreign directories are refused with a content-hash
 comparison. It never invokes sudo or changes PATH. `agent-bundle install <host>
@@ -669,7 +670,8 @@ node artifact/install.mjs --uninstall [--plan] [--mode marketplace]
 
 Uninstall removes exactly what the receipt owns and reverses exactly the
 registrations it recorded; anything else stays and is listed as retained.
-Durable runtime state (`state/`) is kept unless `--purge-data --confirm-purge`;
+Legacy durable runtime state (`state/`) is kept unless `--purge-data --confirm-purge`
+(current builds keep framework state outside the plugin root);
 the typed `data.outcome` says what the host itself decided where Agent Bundle
 cannot (`retained-by-host` for Claude's ~14-day orphaned copy,
 `removed-by-host` / `unavailable` for Codex, which has no keep-data option). A

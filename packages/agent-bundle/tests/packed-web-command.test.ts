@@ -51,6 +51,7 @@ let consumer = '';
 let project = '';
 let artifact = '';
 let packageRoot = '';
+let installedPackageRoot = '';
 let artifactBin = '';
 let bin = '';
 let packedPaths: readonly string[] = [];
@@ -128,7 +129,7 @@ beforeAll(async () => {
     ...cachedNpmInstallArguments,
     join(tarballs, packed.filename),
   ], { cwd: installedConsumer, env: installedEnvironment() });
-  const installedPackageRoot = join(installedConsumer, 'node_modules', pluginName);
+  installedPackageRoot = join(installedConsumer, 'node_modules', pluginName);
   const packageDocument = JSON.parse(
     await readFile(join(installedPackageRoot, 'package.json'), 'utf8'),
   ) as { readonly bin?: Readonly<Record<string, string>> };
@@ -273,7 +274,7 @@ it('serves the App from `web --json --no-open` as a real process out of the dele
   expect(seed.result).toMatchObject({
     structuredContent: {
       launch: {
-        args: ['--config', join(artifact, 'config', 'status.json')],
+        args: ['--config', join(installedPackageRoot, 'config', 'status.json')],
         cache: expect.stringMatching(/^(?!.*\/artifact\/).*\/\.agent-bundle\/web-data\/[^/]+\/status\/cache$/u),
         mode: 'packed',
       },

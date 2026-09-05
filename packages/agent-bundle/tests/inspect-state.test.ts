@@ -114,7 +114,7 @@ it('inspects volatile and workspace-durable state without inventing runtime path
           },
           declared: true,
           driver: 'sqlite',
-          durableLocation: '$AGENT_BUNDLE_PLUGIN_ROOT/state (falls back to the artifact root or ./.agent-bundle/state for CLI bins)',
+          durableLocation: '$AGENT_BUNDLE_STATE_ROOT, else ~/.agent-bundle/state/<plugin>-<digest> ($XDG_STATE_HOME/agent-bundle/<plugin>-<digest>) for an installed artifact, or ./.agent-bundle/state for the npm package bin',
           id: 'fixture/durable-state',
           lifetime: 'workspace-durable',
         },

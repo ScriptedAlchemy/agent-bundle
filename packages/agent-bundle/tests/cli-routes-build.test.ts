@@ -399,7 +399,11 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
   // The rendered .tsx script (#102 stage 3) ships beside plain scripts in
   // the target artifact with the same output contract.
   const scriptPath = join(root, 'artifact', 'scripts', 'summarize.mjs');
-  await expect(stat(join(root, 'artifact', 'scripts', 'summarize-flight.mjs'))).resolves.toMatchObject({});
+  // Its render worker anchors on the artifact root like the MCP worker and
+  // derives its state root from it (#637), never `<cwd>/.agent-bundle/state`.
+  const scriptWorker = await readFile(join(root, 'artifact', 'scripts', 'summarize-flight.mjs'), 'utf8');
+  expect(scriptWorker).toContain("stateAnchor: 'user-data'");
+  expect(scriptWorker).not.toContain("join(process.cwd(), '.agent-bundle')");
   const scriptMarkdown = await execFile(process.execPath, [scriptPath, 'alpha', 'beta']);
   expect(scriptMarkdown.stdout).toBe('Summarized 2 arguments.\n');
   // The rendered script's provider sees `invocation.kind === 'script'` (#313).

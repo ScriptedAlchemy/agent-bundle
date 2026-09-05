@@ -1,6 +1,7 @@
-import { isAbsolute, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 
 import { assertInside } from '../../core/paths.ts';
+import { pluginStateRootEnvAnchor } from '../../core/types.ts';
 import { resolveMcpPathTokens } from '../../services/mcp-path-tokens.ts';
 import type { ModernMcpServer, TargetMcpRuntimeContract } from '../../services/mcp-runtime.ts';
 import type { McpSessionInspectorConfig } from './mcp-session-protocol.ts';
@@ -110,11 +111,15 @@ export const resolveMcpSessionLaunch = (options: ResolveMcpSessionLaunchOptions)
     const inheritedEnv = Object.fromEntries(
       Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
     );
+    // A dev session runs a build epoch, not an install: its framework state
+    // lives beside that epoch and goes with it, instead of accumulating one
+    // user-data root per rebuild. Declared env still wins, as for every key.
+    const stateRoot = join(options.resolved.targetRoot, 'state');
     return Object.freeze({
       args: Object.freeze([...resolved.args]),
       command: resolved.command,
       cwd,
-      env: Object.freeze({ ...inheritedEnv, ...(resolved.env ?? {}) }),
+      env: Object.freeze({ ...inheritedEnv, [pluginStateRootEnvAnchor]: stateRoot, ...(resolved.env ?? {}) }),
       inspectorEnv: inspectorEnvironment(resolved.env),
       kind: 'stdio',
     });

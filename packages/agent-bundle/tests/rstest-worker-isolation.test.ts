@@ -74,6 +74,13 @@ it('pins the Playwright browser registry before the per-worker cache override hi
   expect(pinned?.startsWith(rstestWorkerRoot())).toBe(false);
 });
 
+it('anchors the user state home of every spawned shell under the worker root', () => {
+  // The setup file already isolated this worker: a generated shell with
+  // workspace-durable state derives `$XDG_STATE_HOME/agent-bundle/<segment>`
+  // from this value, so no pool writes beneath the developer's home.
+  expect(process.env['XDG_STATE_HOME']).toBe(join(rstestWorkerRoot(), 'cache', 'xdg-state'));
+});
+
 it('removes only the finished roots owned by one host temporary root', async () => {
   const parent = await mkdtemp(join(tmpdir(), 'ab-rstest-roots-parent-'));
   const legTmp = '/tmp/abci-deadbeef-verify-node24';

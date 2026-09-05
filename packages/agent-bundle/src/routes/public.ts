@@ -132,12 +132,15 @@ export interface AgentProviderWorkspaceIdentity {
 }
 
 /**
- * The plugin install root and durable-state anchor a generated scope resolved
- * (#468), as `(await agent()).plugin` observes it: `root` is the expanded
- * `AGENT_BUNDLE_PLUGIN_ROOT` (`source: 'native'`) or the shell's fallback
- * (`'derived'`), and `stateRoot` is `<root>/state`, where the SQLite kernel,
- * the notice ledger, and the lineage journal live. Structurally identical to
- * the runtime's `AgentPluginIdentity`.
+ * The plugin code root and framework state root a generated scope resolved
+ * (#468), as `(await agent()).plugin` observes it: `root` is the code root —
+ * the expanded `AGENT_BUNDLE_PLUGIN_ROOT` (`source: 'native'`) or the shell's
+ * fallback (`'derived'`) — and `stateRoot` is the framework state root
+ * (`AGENT_BUNDLE_STATE_ROOT`, else `~/.agent-bundle/state/<plugin>-<digest>`
+ * or `$XDG_STATE_HOME/agent-bundle/<plugin>-<digest>` for an installed
+ * artifact; `<root>/state` for the npm package bin and the test harnesses),
+ * where the SQLite kernel, the notice ledger, and the lineage journal live.
+ * Structurally identical to the runtime's `AgentPluginIdentity`.
  */
 export interface AgentProviderPluginRoot {
   readonly root: string;

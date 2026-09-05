@@ -1,5 +1,5 @@
 import { execFile as executeFile, spawnSync } from 'node:child_process';
-import { access, copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -96,16 +96,7 @@ beforeAll(async () => {
   });
 
   const installedPackageRoot = join(consumer, 'node_modules', packageName);
-  const installedArtifactRoot = join(consumer, 'packed-artifact');
-  const manifestName = 'agent-bundle.manifest.json';
-  const manifestText = await readFile(join(installedPackageRoot, manifestName), 'utf8');
-  const manifest = JSON.parse(manifestText) as { readonly files: readonly { readonly path: string }[] };
-  await mkdir(installedArtifactRoot);
-  for (const file of [...manifest.files, { path: manifestName }]) {
-    const destination = join(installedArtifactRoot, file.path);
-    await mkdir(dirname(destination), { recursive: true });
-    await copyFile(join(installedPackageRoot, file.path), destination);
-  }
+  const installedArtifactRoot = installedPackageRoot;
   await Promise.all([
     access(join(installedArtifactRoot, '.claude-plugin', 'plugin.json')),
     access(join(installedArtifactRoot, '.codex-plugin', 'plugin.json')),

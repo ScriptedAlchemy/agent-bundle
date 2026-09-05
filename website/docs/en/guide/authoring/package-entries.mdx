@@ -379,8 +379,10 @@ command renders), shared by every selected host. Every built-in target publishes
 capability that admits it. The artifact bin is a self-contained executable ESM module with a Node
 shebang. The npm root copies it unchanged and points `package.json` `bin` directly at it, so help,
 argv parsing, output modes, exit codes, signals, and the complete command set are byte-for-byte
-the same. Both forms resolve plugin code from the root above `bin/` and follow the same runtime
-state policy.
+the same. Both forms resolve plugin code from the root above `bin/` and derive the same framework
+state root from that code root — `~/.agent-bundle/state/<plugin>-<digest>` (or the
+`XDG_STATE_HOME` equivalent), or `AGENT_BUNDLE_STATE_ROOT` when set — so the CLI and MCP server
+share one store.
 
 Reach it from the other surfaces with the plugin-root token — `${CLAUDE_PLUGIN_ROOT}/bin/<plugin-name>.mjs`
 in Claude Skill Markdown and hook commands, `${PLUGIN_ROOT}/…` in Codex hooks, `${CURSOR_PLUGIN_ROOT}/…`
@@ -447,9 +449,9 @@ npx agent-bundle prepack --root . --output artifact --json
 
 `prepack` runs the release build and `npm pack --dry-run --json --ignore-scripts`, then gates the
 exact package and artifact inventory, manifest hashes, package bin targets, and release-version
-agreement. It removes source-project scripts from the generated package metadata, so development
-lifecycle commands cannot run from `dist/`. Run the gate first, then publish the npm root it
-validated:
+agreement. It removes pack and publish lifecycle hooks from the generated package metadata, so a
+source-project `prepack` cannot recurse from `dist/`; consumer install scripts remain intact. Run
+the gate first, then publish the npm root it validated:
 
 ```sh
 npm publish ./dist --ignore-scripts

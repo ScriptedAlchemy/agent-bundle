@@ -204,6 +204,9 @@ describe('generated entry templates', () => {
     expect(artifactBin).not.toContain(stdioPreludeSpecifier);
     expect(artifactBin).not.toContain('applyOperatorEnv');
     expect(artifactBin).toContain('import * as route0 from "/project/src/cli/report.ts";');
+    // An artifact-hosted bin keeps its state out of the installed artifact:
+    // the code root is the artifact, the state root the user state directory.
+    expect(artifactBin).toContain("const pluginRoot = resolvePluginRoot({ fallback: fileURLToPath(new URL('..', import.meta.url)), stateAnchor: 'user-data' });");
     const durableBin = entryShellModule.generatedCliBinEntrySource({
       commands: [command],
       plugin: { name: 'fixture', version: '1.0.0' },
@@ -238,6 +241,9 @@ describe('generated entry templates', () => {
     });
     expect(npmBin).not.toContain('agent-bundle/launch-env');
     expect(npmBin).not.toContain('applyOperatorEnv');
+    // The `cwd` fallback stays root-anchored: state lives under `<cwd>/.agent-bundle/state`.
+    expect(npmBin).toContain("const pluginRoot = resolvePluginRoot({ fallback: join(process.cwd(), '.agent-bundle') });");
+    expect(npmBin).not.toContain('stateAnchor');
   });
 
   it('conditionally wires the generated web command without changing non-web entry bytes', () => {
@@ -270,7 +276,7 @@ describe('generated entry templates', () => {
     expect(routed).toContain('import { runWebCommand } from "agent-bundle/web-host";');
     expect(routed).toContain("import webHostPage from 'agent-bundle/web-host-page';");
     expect(routed).toContain(
-      "const pluginRoot = resolvePluginRoot({ fallback: fileURLToPath(new URL(\"../\", import.meta.url)) });",
+      "const pluginRoot = resolvePluginRoot({ fallback: fileURLToPath(new URL(\"../\", import.meta.url)), stateAnchor: 'user-data' });",
     );
     expect(routed).toContain('const artifactRoot = fileURLToPath(new URL("../", import.meta.url));');
     expect(routed).toContain([
@@ -328,7 +334,8 @@ describe('generated entry templates', () => {
     // A routed bin without `web` carries no web wiring: its bytes are those of
     // the generator without #564 (hash of the same input on this commit's
     // `entry-shell.ts`; #596's projection steps and `kind: 'cli'` request
-    // moved the pin from the pre-#564 value).
+    // moved the pin from the pre-#564 value, #637's `stateAnchor` moved it
+    // again).
     const withoutWeb = entryShellModule.generatedCliBinEntrySource({
       commands: [command],
       plugin: { name: 'fixture', version: '1.0.0' },
@@ -336,7 +343,7 @@ describe('generated entry templates', () => {
       stateFallback: 'artifact',
     });
     expect(createHash('sha256').update(withoutWeb).digest('hex'))
-      .toBe('b177c34fc9ef98e972b5f5db1296c01219634572a455796fcae30bfaf070ba72');
+      .toBe('ad8c21f371af0043464162750a8ed557d968f6155cdd9521ee63c0275253710a');
     expect(withoutWeb).not.toContain('agent-bundle/web-host');
     expect(withoutWeb).not.toContain('web: Object.freeze({');
   });
@@ -613,9 +620,10 @@ it('journals the lineage registry through sqlite only for workspace-durable proj
   });
   expect(source).toContain("import { agentLineageStateDefinition, createAgentLineageRegistry } from '@agent-bundle/runtime/lineage'");
   expect(source).toContain("import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite'");
-  // One anchor per process (#468): the lineage journal opens on the same
-  // `pluginRoot` the server publishes as `request.plugin` and mounts state on.
-  expect(source).toContain("const pluginRoot = resolvePluginRoot({ fallback: fileURLToPath(new URL('..', import.meta.url)) });");
+  // One root resolution per process (#468): the lineage journal opens on the
+  // same `pluginRoot` the server publishes as `request.plugin` and mounts
+  // state on; the state root derives from the user state directory (#637).
+  expect(source).toContain("const pluginRoot = resolvePluginRoot({ fallback: fileURLToPath(new URL('..', import.meta.url)), stateAnchor: 'user-data' });");
   expect(source).toContain('createSqliteStateDriver({ root: pluginRoot.stateRoot })');
   expect(source).toContain('    pluginRoot: pluginRoot.identity,');
   expect(source).not.toContain('AGENT_BUNDLE_PLUGIN_ROOT');
@@ -666,7 +674,7 @@ it('generates the warm react-server Flight worker separately from the MCP dispat
   expect(source).toContain("lineage: message.lineage ?? unavailable('not-provided'),");
   expect(source).toContain("terminal: message.terminal ?? unavailable('not-provided'),");
   expect(createHash('sha256').update(source).digest('hex')).toBe(
-    '93cdfe64b98e0add920ed3f4daa3916620a3f750ec9dbcefc6be6419efab38e5',
+    '4e2c248b5358b7e13650f2156cf282b03f6f7ede20e2badabafc4b33ae5b4bd5',
   );
   expect(generate({
     artifactEpoch: 'route-fixture@1.2.3',
@@ -1588,7 +1596,7 @@ it('conditionally emits generated state mounting without leaking sqlite into vol
   expect(durableEntry).toContain("import { createGeneratedNoticeRuntime } from '@agent-bundle/runtime/mount';");
   expect(durableEntry).toContain("import { createNoticeInboxSignaller } from '@agent-bundle/runtime/notices';");
   expect(durableEntry).toContain("import { createSqliteStateDriver } from '@agent-bundle/runtime/state/sqlite';");
-  expect(durableEntry).toContain("const pluginRoot = resolvePluginRoot({ fallback: fileURLToPath(new URL('..', import.meta.url)) });");
+  expect(durableEntry).toContain("const pluginRoot = resolvePluginRoot({ fallback: fileURLToPath(new URL('..', import.meta.url)), stateAnchor: 'user-data' });");
   // The host's advertisement is declared once and handed to both the ledger
   // (whose sensitivity ceilings it carries) and the signaller (#99 item 7).
   expect(durableEntry).toContain(`const noticeDeliveryAdvertisement = Object.freeze(${stableJson(claudeAdapter.noticeDelivery)});`);
@@ -1711,7 +1719,7 @@ it('conditionally emits generated state mounting without leaking sqlite into vol
     state: state('workspace-durable'),
   });
   expect(durable).toContain("from '@agent-bundle/runtime/state/sqlite'");
-  expect(durable).toContain("const pluginRoot = resolvePluginRoot({ fallback: fileURLToPath(new URL('..', import.meta.url)) });");
+  expect(durable).toContain("const pluginRoot = resolvePluginRoot({ fallback: fileURLToPath(new URL('..', import.meta.url)), stateAnchor: 'user-data' });");
   expect(durable).toContain('createSqliteStateDriver({ root: pluginRoot.stateRoot })');
   expect(durable).not.toContain('AGENT_BUNDLE_PLUGIN_ROOT');
 

@@ -211,7 +211,8 @@ payload module's import, a `require`, `createRequire`, or `import.meta.resolve` 
 file that the compiler did not resolve as a module dependency, a packed declaration's reference,
 a consumer install script, or a `bin` command a packed file runs — since only JavaScript the
 framework did not compile can still import one. `--output` is an artifact path relative to `--root` that overrides the configured
-`output.distPath`, defaulting to `artifact`. The generated npm root omits source-project scripts.
+`output.distPath`, defaulting to `artifact`. The generated npm root omits pack and publish
+lifecycle hooks to prevent source-project recursion while retaining consumer install scripts.
 After the gate succeeds, publish exactly the root it validated with
 `npm publish ./dist --ignore-scripts`; no npm lifecycle performs a host install.
 

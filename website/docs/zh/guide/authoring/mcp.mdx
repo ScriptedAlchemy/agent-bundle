@@ -603,22 +603,25 @@ const readPluginRoot = (env: Record<string, string | undefined>): string | undef
 
 在路由内部完全不需要读取这个变量。每个生成的外壳——MCP 入口及其 Flight worker、路由式 CLI 可执行文件
 及其渲染 worker、hook 包装器——都在启动时用 `@agent-bundle/runtime` 的 `resolvePluginRoot` 解析一次
-锚点，把 SQLite 状态、通知账本与 lineage 日志挂载在 `<root>/state` 之下，并在它打开的每个请求上以
-`(await agent()).plugin` 发布同一个值：
+代码根目录与框架状态根目录，并在它打开的每个请求上以 `(await agent()).plugin` 发布这两个值：
 
 ```ts
 const { plugin } = await agent();
 if (plugin.state === 'available') {
-  plugin.value.root;      // 安装根目录：AGENT_BUNDLE_PLUGIN_ROOT，或外壳的回退值
-  plugin.value.stateRoot; // `<root>/state`，defineState / 通知 / lineage 已经存放于此
-  plugin.source;          // 来自变量为 'native'，来自回退为 'derived'
+  plugin.value.root;      // 代码根目录：AGENT_BUNDLE_PLUGIN_ROOT，或外壳的回退值
+  plugin.value.stateRoot; // 框架状态根目录：AGENT_BUNDLE_STATE_ROOT，或默认位置
+  plugin.source;          // 代码根目录来自变量为 'native'，来自回退为 'derived'
 }
 ```
 
 `source: 'native'` 表示宿主提供了已展开的 `AGENT_BUNDLE_PLUGIN_ROOT`；`'derived'` 表示外壳使用了回退——
 在构建产物内是产物根目录（`mcp/`、`bin/` 或 `hooks/` 的父目录），对 npm 包 bin 则是 `$PWD/.agent-bundle`。
 仍带有未展开 `${…}` token 的值（宿主把清单原样透传）会被视为未设置，在 stderr 上报告一次，且绝不会被
-拼接进路径。约定式 provider 在其工厂上下文中收到同样的被观察值 `plugin`，与 `invocation`、`signal` 并列，
+拼接进路径。产物宿主外壳把 `plugin.value.stateRoot` 默认为
+`~/.agent-bundle/state/<plugin>-<digest>`（或 `$XDG_STATE_HOME/agent-bundle/<plugin>-<digest>`），由
+代码根目录的安全 basename 及其真实路径 SHA-256 摘要的前 16 位十六进制字符推导而来。
+`AGENT_BUNDLE_STATE_ROOT` 覆盖该位置；npm 包 bin 仍使用 `$PWD/.agent-bundle/state`。约定式
+provider 在其工厂上下文中收到同样的被观察值 `plugin`，与 `invocation`、`signal` 并列，
 因此把文件放在框架状态旁边的 provider 自己不必再推导任何东西。route-unit 与 `mcp-in-memory` 测试层级
 以同样方式解析它（回退到 `<项目根目录>/.agent-bundle`），并像其他每个轴一样接受 `context.plugin` 覆盖；
 在生成的作用域之外，该轴为 `unavailable('not-provided')`。
@@ -903,7 +906,10 @@ node <root>/bin/<plugin>.mjs web [<server>/<app>] [--port N] [--open|--no-open] 
 （`node <root>/<launch.entry> <args>`——`artifact` 参数解析到 `<root>` 之下，literal 参数展开路径
 令牌——并带上 `AGENT_BUNDLE_PLUGIN_ROOT=<root>` 与已声明的静态 env，路径令牌同样展开；plugin-data
 令牌解析到产物之外的 `~/.agent-bundle/web-data/<plugin>-<digest>/<server>`，
-因此只读安装也能启动），先调用一次开场工具，然后在 `http://127.0.0.1:<port>/` 上用 loopback origin 提供 App，并为
+因此只读安装也能启动）。被拉起的服务器自己的持久框架状态同样落在产物之外的
+`~/.agent-bundle/state/<plugin>-<digest>`（或对应的 `XDG_STATE_HOME` 路径，或
+`AGENT_BUNDLE_STATE_ROOT`）。随后先调用一次开场工具，然后在 `http://127.0.0.1:<port>/` 上用
+loopback origin 提供 App，并为
 App 文档再开一个 loopback 沙箱 origin（与 `agent-bundle serve-app` 以及 Workbench 同一套宿主栈与
 同意行为），打印 `MCP App <server>/<app> at <url> (tool <tool>; Ctrl-C stops the server)`（或带
 `--json` 时打印一行 `{ app, server, tool, url, port, resourceUri, sandboxOrigin }`），并一直运行
