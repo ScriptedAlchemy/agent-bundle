@@ -198,7 +198,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     const activeEpoch = server.status().artifact;
     if (activeEpoch.state !== 'active') throw new Error('Expected an active compiled epoch.');
     const artifactRoot = join(project.root, '.agent-bundle', 'epochs', activeEpoch.activeEpoch.id);
-    const stateRoot = join(artifactRoot, 'state');
+    const stateRoot = join(project.root, '.agent-bundle', 'state');
     const toolResponse = await fetch(`${server.url}/api/routes/invocations`, {
       body: JSON.stringify({ input: { service: 'catalog', source: 'api' }, routeId: 'tool:status/report' }),
       headers,
@@ -505,6 +505,13 @@ it('invokes compiled tool and event routes through the foreground server', { tim
       result: { service: 'rebuilt-published' },
       status: 'succeeded',
     });
+    const republishedEpoch = server.status().artifact;
+    if (republishedEpoch.state !== 'active') throw new Error('Expected an active rebuilt epoch.');
+    expect(republishedEpoch.activeEpoch.id).not.toBe(activeEpoch.activeEpoch.id);
+    const republishedCounter = await counter();
+    const republishedIsolatedCounter = await counter('unit-render');
+    expect(republishedCounter.invocation.result).toEqual({ count: 3 });
+    expect(republishedIsolatedCounter.invocation.result).toEqual({ count: 1 });
 
     const missingApi = await fetch(`${server.url}/api/nope`);
     expect(missingApi.status).toBe(404);

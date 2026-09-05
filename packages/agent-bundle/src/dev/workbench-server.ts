@@ -9,7 +9,7 @@ import { DevCoordinator } from './coordinator.ts';
 import { DevPackageBuildService } from './package-build-service.ts';
 import { runDevEpochContracts } from './dev-contract-runner.ts';
 import { EpochAdoptionPolicy } from './epoch-adoption-policy.ts';
-import { devEpochStateRoot } from './epoch-paths.ts';
+import { devStateRoot } from './state-paths.ts';
 import { DevLogService } from './logs/dev-log-service.ts';
 import { attachProjectEventLogs, createMcpDevLogTraceSink, createProjectDevLogger } from './logs/dev-log-producers.ts';
 import { EpochStore, EpochStoreError } from './epoch-store.ts';
@@ -951,7 +951,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
           ...(prepared.model.state === undefined ? {} : { state: prepared.model.state }),
           targets,
         }),
-        stateRoot: devEpochStateRoot(reference.root),
+        stateRoot: devStateRoot(root),
         targets,
       });
       return {

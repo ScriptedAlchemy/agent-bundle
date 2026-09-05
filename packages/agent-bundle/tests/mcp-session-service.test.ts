@@ -255,9 +255,7 @@ it('keeps one generated server and plugin-data directory bound to the selected e
       readonly stateRoot: string;
     };
     expect(firstState.root).toBe(join(root, '.agent-bundle', 'epochs', 'epoch-1'));
-    // Dev sessions pin the framework state root beside the epoch (#637), so a
-    // rebuild never accumulates another `~/.agent-bundle/state` directory.
-    expect(firstState.stateRoot).toBe(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'state'));
+    expect(firstState.stateRoot).toBe(join(root, '.agent-bundle', 'state'));
     expect(firstState.inherited).toBe('resolved-on-open');
     await expect(access(firstState.data)).resolves.toBeUndefined();
     expect(session.events().some((event) => event.type === 'stderr' && event.text === 'fixture stderr\n')).toBe(true);

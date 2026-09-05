@@ -1141,8 +1141,10 @@ The proxy discovers the loopback server through the project's development lock a
 the stable Streamable HTTP endpoint at `/mcp/host/<serverName>`. `--target` defaults to
 `portable`, and `--url` overrides discovery. Successful rebuilds keep the stdio connection open,
 route new calls to the active epoch, let admitted calls finish against their original epoch, and
-forward MCP catalog change notifications. If the epoch or development server disappears, the
-proxy fails closed with an MCP error and an `AB8024` or `AB8025` diagnostic.
+forward MCP catalog change notifications. Dev MCP sessions and Workbench invocations share the
+project's `<project>/.agent-bundle/state` root, outside the retired epoch directories. If the
+epoch or development server disappears, the proxy fails closed with an MCP error and an `AB8024`
+or `AB8025` diagnostic.
 
 The endpoint is intentionally unauthenticated because the development server binds only to
 loopback and is never exposed beyond the local machine.
