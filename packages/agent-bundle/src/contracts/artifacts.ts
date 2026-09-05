@@ -3,6 +3,25 @@
  * diffs shown in the workbench. Type-only: inspection runs on the server.
  */
 export type {
+  ApplicationExplorer,
+  ApplicationExplorerApp,
+  ApplicationExplorerBin,
+  ApplicationExplorerCli,
+  ApplicationExplorerCliCommand,
+  ApplicationExplorerConfigHook,
+  ApplicationExplorerDistribution,
+  ApplicationExplorerDocument,
+  ApplicationExplorerEvent,
+  ApplicationExplorerEventHook,
+  ApplicationExplorerHookGroup,
+  ApplicationExplorerHost,
+  ApplicationExplorerIdentity,
+  ApplicationExplorerInstall,
+  ApplicationExplorerRoute,
+  ApplicationExplorerScript,
+  ApplicationExplorerServer,
+} from '../dev/artifacts/application-explorer.ts';
+export type {
   ArtifactEpochDiff,
   ArtifactInspectionBin,
   ArtifactInspection,

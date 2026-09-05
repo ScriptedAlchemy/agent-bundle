@@ -38,8 +38,44 @@ const agents: ArtifactInspectionFile = {
 };
 
 const inspection: ArtifactInspection = {
-  application: { id: 'application:fixture', name: 'fixture', version: '1.2.3' },
-  distribution: { channels: ['local'] },
+  application: {
+    cli: {
+      bins: [{ hosts: ['claude'], name: 'fixture', path: 'bin/fixture.mjs' }],
+      commands: [{ path: ['review'], routeId: 'cli:review' }],
+      mode: 'generated',
+    },
+    distribution: { channels: ['local'] },
+    events: [{
+      event: 'sessionStart',
+      hooks: [{ host: 'claude', kind: 'event-route', path: 'hooks/session-start.mjs', timeout: 30 }],
+      id: 'event:session-start',
+    }],
+    hooks: [],
+    hosts: [{
+      builtIn: true,
+      documents: [{ kind: 'plugin', path: '.claude-plugin/plugin.json' }],
+      host: 'claude',
+    }],
+    identity: { id: 'application:fixture', name: 'fixture', version: '1.2.3' },
+    scripts: [{ hosts: ['claude'], id: 'script:lint', mode: 'bundle', name: 'lint', path: 'scripts/lint.mjs' }],
+    servers: [{
+      apps: [{
+        id: 'app:review/dashboard',
+        name: 'Dashboard',
+        path: 'apps/dashboard.html',
+        resourceUri: 'ui://review/dashboard',
+      }],
+      entry: 'mcp/review/server.mjs',
+      hosts: ['claude'],
+      id: 'mcp:review',
+      kind: 'compiled',
+      name: 'review',
+      prompts: [{ id: 'prompt:review/check', name: 'prompt:review/check' }],
+      resources: [{ id: 'resource:review/summary', name: 'resource:review/summary' }],
+      tools: [{ id: 'tool:review/run', name: 'tool:review/run' }],
+      transport: 'stdio',
+    }],
+  },
   epochId: 'epoch-2',
   files: [agents, wrapper],
   project: {
@@ -138,22 +174,24 @@ const readyView = artifactViewFor({
   selectedProjection: 'claude',
 });
 
-it('renders the epoch identity, artifact tree, runtime metadata, and provenance', () => {
+it('renders the epoch identity, application tree, artifact tree, and provenance', () => {
   const markup = renderToStaticMarkup(createElement(ArtifactInspectionView, { view: readyView }));
 
   expect(markup).toContain('Build identity');
+  expect(markup).toContain('Application');
   expect(markup).toContain('Artifact tree');
-  expect(markup).toContain('Runtime');
   expect(markup).toContain('Provenance');
   expect(markup).toContain('revision-9');
   expect(markup).toContain('config-digest');
   expect(markup).toContain('hooks/session-start.mjs');
   expect(markup).toContain('0755');
-  expect(markup).toContain('session-start · sessionStart · claude');
-  expect(markup).toContain('review · compiled · claude');
-  expect(markup).toContain('.mcp.json');
+  expect(markup).toContain('tool:review/run');
+  expect(markup).toContain('resource:review/summary');
+  expect(markup).toContain('prompt:review/check');
+  expect(markup).toContain('ui://review/dashboard');
+  expect(markup).toContain('hooks/session-start.mjs');
+  expect(markup).toContain('scripts/lint.mjs');
   expect(markup).toContain('hooks/session-start.ts');
-  expect(markup).toContain('Bins');
   expect(markup).toContain('fixture');
   expect(markup).toContain('a'.repeat(64));
 });

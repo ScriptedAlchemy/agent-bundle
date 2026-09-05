@@ -274,7 +274,14 @@ const manifestFor = (
           source: 'src/runner.ts',
         }]
         : [],
-      servers: [],
+      servers: files.some((file) => file.path === 'mcp/runner.mjs')
+        ? [{
+          id: 'mcp:runner',
+          mode: 'generated',
+          name: 'runner',
+          routes: [],
+        }]
+        : [],
     },
     runtime: { node: '22.12.0' },
     validation: {
@@ -432,12 +439,19 @@ it('inspects one validated epoch as sorted, source-free artifact facts', async (
 
     const inspection = await new ArtifactInspectionService(store, registry).inspect('epoch-runtime');
 
-    expect(inspection.application).toEqual({
+    expect(inspection.application.identity).toEqual({
       id: 'application:fixture',
       name: 'fixture-application',
       version: '1.2.3',
     });
-    expect(inspection.distribution).toEqual({ channels: ['local'] });
+    expect(inspection.application.servers).toEqual([
+      expect.objectContaining({
+        entry: 'mcp/runner.mjs',
+        hosts: [fixtureTarget],
+        id: 'mcp:runner',
+        name: 'runner',
+      }),
+    ]);
     expect(inspection.epochId).toBe('epoch-runtime');
     expect(inspection.project).toEqual({
       configDigest: fixtureInputs[0]!.sha256,
