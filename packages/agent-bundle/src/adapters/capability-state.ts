@@ -1,6 +1,7 @@
 import { CapabilityStateError, unknownCapabilityStateError } from '../core/capabilities.ts';
 import type { CapabilityEvidence, CapabilityState } from '../core/capabilities.ts';
 import { featureCapabilityName } from '../core/components.ts';
+import type { JsonObject } from '../core/strict-json.ts';
 import {
   NOTICE_DELIVERY_ROUTES,
   NOTICE_SENSITIVITIES,
@@ -42,6 +43,24 @@ export const unavailableCapability = (reason: string): CapabilityState => Object
   reason,
   state: 'unavailable',
 });
+
+/** A row from a pinned host capability table. */
+export interface CapabilityRow {
+  readonly availability?: Readonly<Record<string, { readonly reason?: string; readonly state?: string }>>;
+  readonly evidence?: readonly string[];
+  readonly nativeEvent?: string;
+  readonly payload?: JsonObject;
+  readonly reason?: string;
+  readonly state?: string;
+}
+
+/** A loaded pinned host capability table and its source identity. */
+export interface HostCapabilityTable {
+  readonly data: JsonObject;
+  readonly fileName: string;
+  readonly host: string;
+  readonly version: string;
+}
 
 export interface EventRouteCapabilityTableEntry {
   readonly nativeEvent?: string;
@@ -90,8 +109,7 @@ export const supportedEventRouteNamesFrom = (
 ));
 
 /** A pinned capability-table row: JSON imports widen the state literal, so unknown states fail closed. */
-export interface CapabilityTableRow {
-  readonly reason?: string;
+export interface CapabilityTableRow extends CapabilityRow {
   readonly state: string;
 }
 
