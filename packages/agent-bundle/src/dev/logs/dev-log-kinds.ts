@@ -21,7 +21,7 @@ export const devLogKinds = Object.freeze({
   build: Object.freeze(['artifact.available', 'build.failed', 'build.started'] as const),
   diagnostic: Object.freeze([
     'artifact.available.diagnostic', 'artifact.status.diagnostic', 'build.failed.diagnostic', 'build.started.diagnostic',
-    'dev.contract.status.diagnostic', 'dev.host.sync.diagnostic', 'invalidation.diagnostic', 'runtime.event.diagnostic',
+    'dev.contract.status.diagnostic', 'dev.host.sync.diagnostic', 'invalidation.diagnostic', 'route.invocation.diagnostic', 'runtime.event.diagnostic',
     'source.changed.diagnostic', 'source.status.diagnostic',
   ] as const),
   eval: Object.freeze(['eval.run.completed', 'eval.run.failed', 'eval.run.started'] as const),
@@ -37,7 +37,7 @@ export const devLogKinds = Object.freeze({
   playground: Object.freeze(['playground.event.appended'] as const),
   project: Object.freeze([
     'artifact.status', 'dev.contract.status', 'dev.host.sync', 'dev.shutdown.completed', 'dev.shutdown.started', 'invalidation',
-    'project.events.replay-gap', 'project.invalid-source', 'project.load', 'project.prepared', 'runtime.event',
+    'project.events.replay-gap', 'project.invalid-source', 'project.load', 'project.prepared', 'route.invocation', 'runtime.event',
     'source.changed', 'source.status',
   ] as const),
 } satisfies { readonly [TProducer in DevLogProducer]: readonly string[] });

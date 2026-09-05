@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo, Socket } from 'node:net';
-import { basename } from 'node:path';
+import { basename, extname } from 'node:path';
 
 import { validateOriginHeader } from '@modelcontextprotocol/server';
 
@@ -24,9 +24,11 @@ import { RuntimeMcpRoutes } from './runtime-mcp-routes.ts';
 import { RuntimeRoutes, type AgentDocumentRuntimeModule } from './runtime-routes.ts';
 import type { DevRuntimeSession } from './runtime-provider.ts';
 import { PlaygroundRoutes, type PlaygroundRouteService } from './playground/playground-routes.ts';
+import { RouteInvocationRoutes, type RouteInvocationRouteService } from './routes/route-invocation-routes.ts';
 import { RouteManifestRoutes, type RouteManifestRouteService } from './routes/route-manifest-routes.ts';
 import { SkillDocumentError, type SkillDocumentService } from './skill-document-service.ts';
 import type { Invalidation, ProjectEventMessage, ProjectStatus } from './types.ts';
+import { isWorkbenchShellPath } from './workbench-shell-paths.ts';
 import {
   diagnostic,
   isJsonRequest,
@@ -185,6 +187,8 @@ export interface ForegroundServerOptions {
    * navigation from this one compiler pass; it never re-discovers routes.
    */
   readonly routeManifest?: RouteManifestRouteService;
+  /** Route execution over the same prepared compiler pass as `routeManifest`. */
+  readonly routeInvocations?: RouteInvocationRouteService;
   /** Optional runtime session; its lifecycle remains Workbench-owned. */
   readonly runtime?: DevRuntimeSession;
   /** Read-only Skill document/resource service for the workbench. */
@@ -411,6 +415,7 @@ export class ForegroundServer {
   readonly #playgroundRoutes: PlaygroundRoutes;
   readonly #port: number;
   readonly #routeManifestRoutes: RouteManifestRoutes;
+  readonly #routeInvocationRoutes: RouteInvocationRoutes;
   readonly #server: Server;
   readonly #skillDocuments: SkillDocumentService | undefined;
   readonly #sockets = new Set<Socket>();
@@ -518,6 +523,11 @@ export class ForegroundServer {
     this.#routeManifestRoutes = new RouteManifestRoutes({
       authorize: (request) => this.#assertMutationSession(request),
       ...(options.routeManifest === undefined ? {} : { service: options.routeManifest }),
+    });
+    this.#routeInvocationRoutes = new RouteInvocationRoutes({
+      authorize: (request) => this.#assertMutationSession(request),
+      eventHub: options.eventHub,
+      ...(options.routeInvocations === undefined ? {} : { service: options.routeInvocations }),
     });
     this.#evalRoutes = new EvalRoutes({
       authorize: (request) => this.#assertMutationSession(request),
@@ -666,6 +676,7 @@ export class ForegroundServer {
     this.#playgroundRoutes.close();
     this.#inspectorRoutes.close();
     this.#artifactRoutes.close();
+    this.#routeInvocationRoutes.close();
     this.#routeManifestRoutes.close();
     this.#lifecycleReplayRoutes.close();
     const releaseEvals = this.#evalRoutes.close();
@@ -757,6 +768,7 @@ export class ForegroundServer {
     if (await this.#playgroundRoutes.handle(request, response)) return;
     if (await this.#inspectorRoutes.handle(request, response)) return;
     if (await this.#artifactRoutes.handle(request, response)) return;
+    if (await this.#routeInvocationRoutes.handle(request, response)) return;
     if (this.#routeManifestRoutes.handle(request, response)) return;
     if (await this.#evalRoutes.handle(request, response)) return;
     if (await this.#devLogRoutes.handle(request, response)) return;
@@ -988,7 +1000,10 @@ export class ForegroundServer {
     if (method !== 'GET' && method !== 'HEAD') {
       return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
     }
-    const path = decodedAssetPath(request.url);
+    const pathname = rawPathname(request.url);
+    const path = method === 'GET' && isWorkbenchShellPath(pathname) && extname(pathname) === ''
+      ? 'index.html'
+      : decodedAssetPath(request.url);
     const asset = await this.#assets?.read(path);
     if (asset === undefined) return responseDiagnostic(response, diagnostic('AB8007', 'Route was not found.', 404));
     response.writeHead(200, { 'content-type': asset.contentType });
