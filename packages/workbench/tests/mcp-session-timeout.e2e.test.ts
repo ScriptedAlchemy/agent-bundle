@@ -69,7 +69,8 @@ e2e('opens one browser MCP session with an immutable timeout', { timeout: 90_000
     });
 
     await page.goto(`${foregroundOrigin}/advanced/protocol`);
-    await expect(page.getByRole('heading', { name: /Protocol/u })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByTestId('advanced-nav').getByRole('link', { name: 'Protocol' })).toHaveAttribute('aria-current', 'page');
     await page.locator('#mcp-target').selectOption('portable');
     await page.locator('#mcp-server-name').fill('fixture');
     await page.getByLabel('Session timeout (ms)').fill('0');

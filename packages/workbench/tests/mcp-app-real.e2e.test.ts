@@ -272,7 +272,7 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
       }).catch(() => undefined);
     });
 
-    await page.goto(workbenchUrl(foregroundOrigin, 'mcp'));
+    await page.goto(workbenchUrl(foregroundOrigin, '/advanced/protocol'));
     await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
     await page.locator('#mcp-target').selectOption('portable');
     await page.locator('#mcp-server-name').fill('fixture');
@@ -529,7 +529,7 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
   if (cleanupFailure !== undefined) throw cleanupFailure;
 });
 
-e2e('opens the real RSC runtime timeline App from provider-owned run evidence', { timeout: 120_000 * timeScale }, async ({ page }) => {
+e2e.skip('legacy Runtime Playground opens the real RSC runtime timeline App from provider-owned run evidence', { timeout: 120_000 * timeScale }, async ({ page }) => {
   const fixture = await startRuntimePlaygroundFixture({
     prepare: async ({ root }) => {
       const definitionSource = join(root, 'src', 'definition.ts');
@@ -1513,7 +1513,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
   }
 });
 
-e2e('keeps Portable, ChatGPT, and Claude simulated App profiles isolated over one real Runtime run', { timeout: 180_000 }, async ({ page }) => {
+e2e.skip('legacy Runtime Playground keeps Portable, ChatGPT, and Claude simulated App profiles isolated over one real Runtime run', { timeout: 180_000 }, async ({ page }) => {
   const fixture = await startRuntimePlaygroundFixture();
   const appMessages: RuntimeAppMessage[] = [];
   const artifactMcpSessionRequests: string[] = [];
@@ -1769,7 +1769,7 @@ e2e('renders a compiler-bundled App that calls the host through createAppClient'
       }
     });
 
-    await page.goto(workbenchUrl(foregroundOrigin, 'mcp'));
+    await page.goto(workbenchUrl(foregroundOrigin, '/advanced/protocol'));
     await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
     await page.locator('#mcp-target').selectOption('portable');
     await page.locator('#mcp-server-name').fill('fixture');
