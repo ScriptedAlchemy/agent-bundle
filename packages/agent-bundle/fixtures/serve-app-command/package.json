@@ -1,8 +1,0 @@
-{
-  "name": "serve-app-command-fixture",
-  "private": true,
-  "type": "module",
-  "devDependencies": {
-    "@modelcontextprotocol/server": "2.0.0"
-  }
-}
