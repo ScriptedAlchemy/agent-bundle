@@ -9,6 +9,7 @@ import ts from 'typescript';
 import { generatedReference } from './plugins/generated-reference.ts';
 import { cleanGeneratedApiMarkdown, mirrorApiLocale } from './plugins/mirror-api-locale.ts';
 import { rehypeTableCellBreaks } from './plugins/rehype-table-cell-breaks.ts';
+import { sitemapLastmod } from './plugins/sitemap-lastmod.ts';
 
 const websiteDir = import.meta.dirname;
 const docsDir = path.join(websiteDir, 'docs');
@@ -259,5 +260,6 @@ export default defineConfig({
       },
     ]),
     pluginSitemap(),
+    sitemapLastmod({ repoRoot }),
   ],
 });
