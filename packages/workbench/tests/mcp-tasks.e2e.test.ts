@@ -28,7 +28,8 @@ e2e('runs, polls, collects, and cancels a task-augmented tool call in real Chrom
   try {
     await page.goto(workbenchUrl(server.url, '/advanced/protocol'));
     await waitForSettledWorkbench(page);
-    await expect(page.getByRole('heading', { name: /Protocol/u })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByTestId('advanced-nav').getByRole('link', { name: 'Protocol' })).toHaveAttribute('aria-current', 'page');
     await page.locator('#mcp-target').selectOption('portable');
     await page.locator('#mcp-server-name').fill('host-test');
     await page.locator('#mcp-session-timeout').fill(String(browserTimeout * 4));

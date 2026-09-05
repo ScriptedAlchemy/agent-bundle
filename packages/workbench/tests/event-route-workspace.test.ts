@@ -71,12 +71,11 @@ describe('event fixtures', () => {
     expect(eventFixturesFor(undefined)).toEqual([]);
   });
 
-  it('attaches the host, and the fixture id only while the payload is the unedited fixture', () => {
-    const fixtures = eventFixturesFor(lifecycle);
+  it('attaches the host while submitting the editor payload directly', () => {
     const native = { hook_event_name: 'PreToolUse', tool_name: 'Bash' };
-    expect(eventRequestFor('canonical', fixtures, { input: { tool: {} } })).toEqual({ input: { tool: {} } });
-    expect(eventRequestFor('claude', fixtures, { input: native })).toEqual({ event: { fixtureId: 'claude:PreToolUse', host: 'claude' }, input: native });
-    expect(eventRequestFor('claude', fixtures, { input: { ...native, tool_name: 'Edit' } })).toEqual({
+    expect(eventRequestFor('canonical', { input: { tool: {} } })).toEqual({ input: { tool: {} } });
+    expect(eventRequestFor('claude', { input: native })).toEqual({ event: { host: 'claude' }, input: native });
+    expect(eventRequestFor('claude', { input: { ...native, tool_name: 'Edit' } })).toEqual({
       event: { host: 'claude' },
       input: { ...native, tool_name: 'Edit' },
     });

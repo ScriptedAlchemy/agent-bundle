@@ -68,15 +68,13 @@ export const eventFixturesFor = (lifecycle: Lifecycle | undefined): readonly Rou
     })),
 );
 
-/** Adds the host (and the fixture id when the payload is the unedited fixture) to an editor draft. */
+/** Adds the selected host to an editor draft; the editor already carries the fixture payload. */
 export const eventRequestFor = (
   host: EventHostSelection,
-  fixtures: readonly RouteInputFixture[],
   draft: RouteInvocationDraft,
 ): RouteInvocationDraft => {
   if (host === 'canonical') return draft;
-  const fixture = fixtures.find((candidate) => candidate.host === host && JSON.stringify(candidate.input) === JSON.stringify(draft.input));
-  return Object.freeze({ ...draft, event: Object.freeze({ host, ...(fixture === undefined ? {} : { fixtureId: fixture.id }) }) });
+  return Object.freeze({ ...draft, event: Object.freeze({ host }) });
 };
 
 const Rows = ({ rows }: { readonly rows: readonly { readonly label: string; readonly value: string }[] }): React.ReactNode => <dl className="inspector-rows">
@@ -281,7 +279,7 @@ export const EventRouteWorkspace = ({ clients, controller, leaf, onNavigate, tab
     key={host}
     leaf={leaf}
     onNavigate={onNavigate}
-    requestFor={(draft) => eventRequestFor(host, fixtures, draft)}
+    requestFor={(draft) => eventRequestFor(host, draft)}
     tab={tab}
     toolbar={toolbar}
   />;
