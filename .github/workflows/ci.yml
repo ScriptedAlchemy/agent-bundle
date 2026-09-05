@@ -158,6 +158,9 @@ jobs:
       - run: pnpm build
       - run: pnpm typecheck
       - run: pnpm lint
+      # Rstest's default reporters under GITHUB_ACTIONS=true are `default` plus
+      # `github-actions`, so failures already annotate the PR; no --reporter
+      # flag is needed on these legs (verified on @rstest/core 0.11.10).
       - run: pnpm test
 
   # Required-check anchor for the Verify matrix. When a matrix job is skipped

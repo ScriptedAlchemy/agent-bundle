@@ -55,6 +55,12 @@ export default async function Status({ input, signal }: ToolRouteProps<typeof in
 合法的 MCP 输出。Flight 是生成运行时内部的实现传输层——绝不是面向宿主的公开线上协议，原始 Flight
 字节也永远不会跨越 MCP 线路。
 
+降级后的值是一个 `McpCallToolResult`（由 `@agent-bundle/runtime` 导出，其内容块类型为
+`McpContentBlock`）：即 MCP SDK 的内容块，加上作为有限 JSON 对象的 `_meta` 与
+`structuredContent`。它可以赋值给 `@modelcontextprotocol/server` 2.x 与
+`@modelcontextprotocol/sdk` 1.x 两者的 `CallToolResult`，因此按任一 SDK 类型声明的处理函数都能
+原样接受它；`attachMcpStructuredContent` 返回的类型与传入的结果类型一致。
+
 这些 schema 以 JSON Schema 的形式到达宿主：`tools/list` 以 2020-12 方言公布 `inputSchema`，以及（当
 `resultSchema` 描述一个对象时）`outputSchema`，并经过一次投影，使 2020-12 校验器与非严格模式的
 draft-07 校验器都接受每一个合法取值。zod 元组（`z.tuple([...])`）被发出为 `prefixItems`，加上取各
@@ -62,11 +68,11 @@ draft-07 校验器都接受每一个合法取值。zod 元组（`z.tuple([...])`
 `items: false`——因此用 draft-07 关键字语义校验 `structuredContent` 的宿主（Cursor，否则它会以
 `MCP error -32602 … boolean schema is false` 拒绝一个合法的元组结果）能接受 2020-12 校验器接受的
 一切。`inputSchema` 经过同一投影，因此以同样方式校验参数的宿主也一并覆盖。`.rest()` 元组是唯一放宽
-2020-12 精度的地方：其 rest 位置也可以匹配某个前缀 schema。zod 发出的
-其他一切都原样通过：两种方言共有的关键字（`$ref`、`propertyNames`、`const`、数值型
-`exclusiveMinimum`）在两者下的校验方式相同，`$defs` 在任一方言下都通过 JSON 指针形式的 `$ref` 到达，
-而像 `unevaluatedProperties`、`dependentRequired` 这样仅属于 2020-12 的关键字会被宽松模式的
-draft-07 校验器忽略，而不会被错误地套用。
+2020-12 精度的地方：其 rest 位置也可以匹配某个前缀 schema。zod 发出的其他一切都原样通过：两种方言
+共有的关键字（`$ref`、`propertyNames`、`const`、数值型 `exclusiveMinimum`）在两者下的校验方式相同，
+`$defs` 在任一方言下都通过 JSON 指针形式的 `$ref` 到达，而像 `unevaluatedProperties`、
+`dependentRequired` 这样仅属于 2020-12 的关键字会被宽松模式的 draft-07 校验器忽略，而不会被错误地
+套用。
 
 路由可以从另一个模块重新导出自己的组件与 schema。当同一个工具需要放在两个生成的服务器上、而两处
 只有 `config` 不同时，就用这种写法——例如 MCP App 的 `tools/call` 会到达提供该 widget 的那台服务器：

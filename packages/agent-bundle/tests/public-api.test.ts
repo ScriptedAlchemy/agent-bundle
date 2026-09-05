@@ -48,7 +48,8 @@ interface PackageManifest {
   engines?: {
     node?: string;
   };
-  exports: Record<string, { import: string; types: string }>;
+  /** Code entries carry both conditions; `./package.json` is a plain file target. */
+  exports: Record<string, string | { import: string; types: string }>;
   version: string;
 }
 
@@ -202,6 +203,10 @@ it('publishes directly executable built entrypoints with declarations', async ()
   expect(manifest.engines?.node).toBe('>=22.19.0');
 
   for (const entrypoint of Object.values(manifest.exports)) {
+    if (typeof entrypoint === 'string') {
+      await expect(access(join(packageRoot, entrypoint))).resolves.toBeUndefined();
+      continue;
+    }
     await expect(access(join(packageRoot, entrypoint.import))).resolves.toBeUndefined();
     await expect(access(join(packageRoot, entrypoint.types))).resolves.toBeUndefined();
   }
@@ -270,6 +275,7 @@ it('keeps every public declaration graph free of effect', async () => {
   const effectImport = /from\s+["']effect(?:\/|["'])/u;
   const offenders: string[] = [];
   for (const [name, entrypoint] of Object.entries(manifest.exports)) {
+    if (typeof entrypoint === 'string') continue;
     const reachable = await reachableDeclarations(join(packageRoot, entrypoint.types));
     for (const [file, source] of reachable) {
       if (effectImport.test(source)) offenders.push(`${name} -> ${relative(packageRoot, file)}`);

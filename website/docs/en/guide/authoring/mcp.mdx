@@ -59,6 +59,13 @@ call renders through a warm internal Flight dispatcher and lowers the final Agen
 legal MCP output. Flight is an implementation transport inside the generated runtime — never a
 public host wire protocol, and raw Flight bytes never cross the MCP wire.
 
+The lowered value is an `McpCallToolResult` (exported from `@agent-bundle/runtime`, with
+`McpContentBlock` for its content blocks): the MCP SDK's content blocks, with `_meta` and
+`structuredContent` as finite JSON objects. It is assignable to the `CallToolResult` of both
+`@modelcontextprotocol/server` 2.x and `@modelcontextprotocol/sdk` 1.x, so a handler typed
+against either SDK accepts it as is; `attachMcpStructuredContent` returns whatever result type
+it was given.
+
 The schemas reach the host as JSON Schema: `tools/list` advertises `inputSchema` and, for a
 `resultSchema` that describes an object, `outputSchema` in the 2020-12 dialect, projected so that
 2020-12 validators and non-strict draft-07 validators both accept every valid value. A zod tuple
@@ -69,11 +76,11 @@ schemas, with `minItems` (and, for a closed tuple, `maxItems`) bounding the leng
 `MCP error -32602 … boolean schema is false`) accepts everything a 2020-12 validator accepts.
 `inputSchema` goes through the same projection, so a host that checks arguments the same way is
 covered too. A `.rest()` tuple is the one place 2020-12 precision is loosened: its rest positions
-may also match a prefix schema. Everything else zod emits passes through untouched: keywords both dialects
-share (`$ref`, `propertyNames`, `const`, numeric `exclusiveMinimum`) validate the same way under
-both, `$defs` is reached through JSON-pointer `$ref`s under either, and a 2020-12-only keyword
-such as `unevaluatedProperties` or `dependentRequired` is ignored by a lax draft-07 validator
-rather than misapplied.
+may also match a prefix schema. Everything else zod emits passes through untouched: keywords
+both dialects share (`$ref`, `propertyNames`, `const`, numeric `exclusiveMinimum`) validate the
+same way under both, `$defs` is reached through JSON-pointer `$ref`s under either, and a
+2020-12-only keyword such as `unevaluatedProperties` or `dependentRequired` is ignored by a lax
+draft-07 validator rather than misapplied.
 
 A route may re-export its component and schemas from another module. This is how one tool is
 placed on two generated servers when only `config` differs between the placements — an MCP App
