@@ -51,14 +51,14 @@ build/compose.ts  (composeProjections)       ← Projection layer
 CompositePlan  (entries, hookEntries, identity)
         │
         ▼
-build/build.ts + emit.ts + compile-stages
+build/build.ts + build/emit.ts + build/compile-stages.ts
         │
         ▼
 composite plugin root
   + agent-bundle.manifest.json
         │
         ▼
-validate-artifact*.ts / AB6005
+build/validate-artifact*.ts / AB6005
   / prepack AB7014, AB7015                   ← Artifact layer
 ```
 
@@ -141,7 +141,8 @@ planner reads. It holds:
 
 Config-declared hooks and `src/events/**` routes both land in
 `NormalizedPlugin.hooks`. The event-route branch sets `eventRoute` and an
-id of the form `hook:event-route:<event>`; the config branch does not.
+id such as `hook:event-route:tool-before` (`/` in the canonical event
+replaced by `-`); the config branch does not.
 Native host hook documents (Claude `hooks/hooks.json` sources, and so on)
 are a third collection, `nativeHooks`.
 
@@ -195,10 +196,10 @@ optional `hookEntries`, and `diagnostics`.
 
 | Host | Planner | Capability table |
 | --- | --- | --- |
-| `claude` | `planClaudeArtifacts` in `adapters/claude.ts` | `adapters/capabilities/claude.json` |
-| `codex` | `planCodexArtifacts` in `adapters/codex.ts` | `adapters/capabilities/codex.json` |
-| `cursor` | `planCursorArtifacts` in `adapters/cursor.ts` | `adapters/capabilities/cursor.json` |
-| `portable` | `portableAdapter.plan` in `adapters/portable.ts` | `adapters/capabilities/portable.json` |
+| `claude` | `planClaudeArtifacts` in `adapters/claude.ts` | `adapters/capabilities/claude-2.1.260.json` |
+| `codex` | `planCodexArtifacts` in `adapters/codex.ts` | `adapters/capabilities/codex-0.147.0.json` |
+| `cursor` | `planCursorArtifacts` in `adapters/cursor.ts` | `adapters/capabilities/cursor-2026-08-28.json` |
+| `portable` | `portableAdapter.plan` in `adapters/portable.ts` | `adapters/capabilities/portable-1.0.0.json` |
 
 The capability JSON files are the host evidence the registry and the
 generated [Hosts](../../reference/hosts.md) page read: observed versions,
@@ -268,7 +269,7 @@ embed their HTML), then the node surfaces.
 | --- | --- | --- |
 | Canonical manifest parse + file digest match | `build/validate-artifact.ts` | `AB60xx` family; parse errors throw from `parseArtifactManifest` |
 | Host-pack and package-build `dist` modules import only relative/`file:` specifiers or Node built-ins | `build/validate-artifact-modules.ts` | `AB6005` |
-| Skills / hooks / MCP documents match the selected hosts | `validate-artifact-skills.ts`, `validate-artifact-hooks.ts`, `validate-artifact-mcp.ts` | per-surface `AB60xx` |
+| Skills / hooks / MCP documents match the selected hosts | `build/validate-artifact-skills.ts`, `build/validate-artifact-hooks.ts`, `build/validate-artifact-mcp.ts` | per-surface `AB60xx` |
 | Artifact ownership of the output root | `build/validate-artifact.ts` | `AB6014` |
 | Packed tarball contains every manifest file and no unused install deps | `build/pack-inventory.ts` | `AB7010`, `AB7014`, `AB7015` |
 
@@ -343,9 +344,10 @@ lives in `packages/rsc-runtime/src/agent-document.ts` and is imported as
   `context`, `json`, `progress`, `image`, `audio`, `resource`, `error`)
 - optional `value` (JSON-serializable structured result)
 
-MCP lowers that document to `CallToolResult` content plus
-`structuredContent`. CLI human/JSON modes render the same document through
-the CLI output contract. The Workbench inspects it via
+MCP tool routes lower that document to `CallToolResult` content plus
+`structuredContent`. Resource and prompt routes return their validated
+protocol result from `document.value`. CLI human/JSON modes render the same
+document through the CLI output contract. The Workbench inspects it via
 `packages/workbench/src/runtime/agent-document-client.ts`. Raw
 `CallToolResult` is an interop boundary, not the authoring model.
 
@@ -404,18 +406,20 @@ Production readers call `parseArtifactManifest` or take an already-parsed
 | `build/validate-artifact-skills.ts` | `targets[]` (`manifestTargets`) plus the tree | Skill documents vs selected hosts |
 | `build/validate-artifact-hooks.ts` | `targets[]`, hook files | Hook documents vs selected hosts |
 | `build/validate-artifact-mcp.ts` | `targets[]`, MCP files | MCP documents vs selected hosts |
-| `build/pack-inventory.ts` | `files[]`, `targets[]` | Packed tarball must contain every manifest file; install-surface requirements derived from selected names (`AB7010`); digest drift; `AB7014` / `AB7015` |
+| `build/pack-inventory.ts` | `files[]`, `targets[]`, `project.packageVersion` | Packed tarball must contain every manifest file; install-surface requirements derived from selected names (`AB7010`); digest drift; release-version agreement; `AB7014` / `AB7015` |
 | `eval/artifact.ts` | `files[]`, `targets[]`, `runtime` | `evalTargetDigests`: one digest per selected host over the **whole** file table (same bytes, distinct identity) |
 | `dev/artifacts/artifact-inspection-service.ts` | `files[]`, `project`, `targets[]` | Workbench artifact inspector: rebuilds one tree from `files[]` and labels it once per selected host |
 | `dev/artifacts/artifact-script-catalog.ts` | `files[]`, `targets[]` | Browser-selectable scripts. Each selected host that lays out `scripts/` gets a catalog row pointing at the **same** root file |
 | `src/index.ts` | re-exports the types and `parse` / `serialize` / `assemble` | Public API |
 
 `install/install.ts` and `install/doctor.ts` **do not** read
-`agent-bundle.manifest.json`. `resolveBundleRoot` looks for the host
-`plugin.json` (`.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`,
-`.cursor-plugin/plugin.json`, or portable `plugin.json`) directly under
-`--from`. Identity comes from that host document and, for Claude/Codex, the
-marketplace document. Missing projection is `AB7001`.
+`agent-bundle.manifest.json`. `resolveBundleRoot` looks for the Claude,
+Codex, or Cursor plugin manifest (`.claude-plugin/plugin.json`,
+`.codex-plugin/plugin.json`, `.cursor-plugin/plugin.json`) directly under
+`--from`. Identity comes from that host document; Claude and Codex also
+read the marketplace name from `.claude-plugin/marketplace.json` or
+`.agents/plugins/marketplace.json`. There is no portable `install` /
+`doctor` host. Missing projection is `AB7001`.
 
 ### Step 3 gap list
 
@@ -438,9 +442,11 @@ in-memory `NormalizedPlugin` — none of it is in the manifest:
 3. **Hook semantics.** `agent-bundle.hooks.json` indexes wrappers; the
    artifact manifest does not. Config-declared vs event-route vs native
    origin is not recorded.
-4. **Install / doctor.** Host identity and marketplace name are read from
-   host `plugin.json` files. Selected-projection membership is "does this
-   host's manifest path exist," not `manifest.targets`.
+4. **Install / doctor.** Claude, Codex, and Cursor identity is read from
+   that host's `plugin.json`. Claude/Codex marketplace names come from the
+   corresponding marketplace document. Selected-projection membership is
+   "does this host's manifest path exist," not `manifest.targets`. Portable
+   is not an `install` / `doctor` host.
 5. **Capability view.** `targets[].schemas` pins host document schemas.
    Required capabilities, notice-delivery intersection, and omitted
    features are not in the manifest (`inspect` `omittedFeatures` comes from
@@ -492,7 +498,7 @@ Apps that need a typed client still hand-write `postMessage`
 [#564](https://github.com/ScriptedAlchemy/agent-bundle/issues/564)).
 
 **Filesystem probing next to the manifest.** `install` / `doctor`
-`resolveBundleRoot` probes host `plugin.json`. Eval and the Workbench
+`resolveBundleRoot` probes the Claude, Codex, or Cursor `plugin.json`. Eval and the Workbench
 inspector parse the artifact manifest for integrity, then still derive
 scripts and host trees from path prefixes and
 `registry.artifactLayout`. `evalTargetDigests` hashes the whole root once

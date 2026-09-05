@@ -47,14 +47,14 @@ build/compose.ts  (composeProjections)       ← Projection layer
 CompositePlan  (entries, hookEntries, identity)
         │
         ▼
-build/build.ts + emit.ts + compile-stages
+build/build.ts + build/emit.ts + build/compile-stages.ts
         │
         ▼
 composite plugin root
   + agent-bundle.manifest.json
         │
         ▼
-validate-artifact*.ts / AB6005
+build/validate-artifact*.ts / AB6005
   / prepack AB7014, AB7015                   ← Artifact layer
 ```
 
@@ -129,7 +129,8 @@ Skill、命令、规则、配置中声明的钩子、手写的 MCP 入口以及�
 - 可选的 `state`、`notices`、`packageBuild`、`marketplace` 与宿主扩展。
 
 配置声明的钩子与 `src/events/**` 路由都落在 `NormalizedPlugin.hooks` 中。事件路由分支会
-设置 `eventRoute` 以及形如 `hook:event-route:<event>` 的 id；配置分支则不会。宿主原生的
+设置 `eventRoute` 以及形如 `hook:event-route:tool-before` 的 id（规范事件名里的 `/`
+换成 `-`）；配置分支则不会。宿主原生的
 钩子文档（Claude 的 `hooks/hooks.json` 源等）是第三个集合 `nativeHooks`。
 
 `config/validate.ts` 针对同一个已发现的项目运行。它不会重新发现文件；它只判定发现阶段
@@ -174,10 +175,10 @@ Skill、命令、规则、钩子或脚本上声明级的 `targets` 仍然表示�
 
 | 宿主 | 规划器 | 能力表 |
 | --- | --- | --- |
-| `claude` | `adapters/claude.ts` 中的 `planClaudeArtifacts` | `adapters/capabilities/claude.json` |
-| `codex` | `adapters/codex.ts` 中的 `planCodexArtifacts` | `adapters/capabilities/codex.json` |
-| `cursor` | `adapters/cursor.ts` 中的 `planCursorArtifacts` | `adapters/capabilities/cursor.json` |
-| `portable` | `adapters/portable.ts` 中的 `portableAdapter.plan` | `adapters/capabilities/portable.json` |
+| `claude` | `adapters/claude.ts` 中的 `planClaudeArtifacts` | `adapters/capabilities/claude-2.1.260.json` |
+| `codex` | `adapters/codex.ts` 中的 `planCodexArtifacts` | `adapters/capabilities/codex-0.147.0.json` |
+| `cursor` | `adapters/cursor.ts` 中的 `planCursorArtifacts` | `adapters/capabilities/cursor-2026-08-28.json` |
+| `portable` | `adapters/portable.ts` 中的 `portableAdapter.plan` | `adapters/capabilities/portable-1.0.0.json` |
 
 这些能力 JSON 文件是注册表与生成的[宿主参考](../../reference/hosts.md)页面所读取的宿主
 证据：观察到的版本、清单路径、安装表面、路径 token、MCP 传输方式与组件支持。适配器据此
@@ -237,7 +238,7 @@ node 表面。
 | --- | --- | --- |
 | 规范清单解析 + 文件摘要匹配 | `build/validate-artifact.ts` | `AB60xx` 系列；解析错误由 `parseArtifactManifest` 抛出 |
 | 宿主包与包构建 `dist` 模块只导入相对/`file:` 说明符或 Node 内建模块 | `build/validate-artifact-modules.ts` | `AB6005` |
-| Skill / 钩子 / MCP 文档与所选宿主匹配 | `validate-artifact-skills.ts`、`validate-artifact-hooks.ts`、`validate-artifact-mcp.ts` | 按表面划分的 `AB60xx` |
+| Skill / 钩子 / MCP 文档与所选宿主匹配 | `build/validate-artifact-skills.ts`、`build/validate-artifact-hooks.ts`、`build/validate-artifact-mcp.ts` | 按表面划分的 `AB60xx` |
 | 产物对输出根目录的所有权 | `build/validate-artifact.ts` | `AB6014` |
 | 打包的 tarball 包含清单中的每个文件，且没有未使用的安装依赖 | `build/pack-inventory.ts` | `AB7010`、`AB7014`、`AB7015` |
 
@@ -304,7 +305,8 @@ artifact/
   `progress`、`image`、`audio`、`resource`、`error`）
 - 可选的 `value`（可 JSON 序列化的结构化结果）
 
-MCP 把这份文档降级为 `CallToolResult` 内容加 `structuredContent`。CLI 的人类可读/JSON 模式
+MCP 的 tool 路由把这份文档降级为 `CallToolResult` 内容加 `structuredContent`。resource 与
+prompt 路由则返回经校验的协议结果（来自 `document.value`）。CLI 的人类可读/JSON 模式
 通过 CLI 输出契约渲染同一份文档。Workbench 通过
 `packages/workbench/src/runtime/agent-document-client.ts` 检视它。原始的 `CallToolResult`
 是互操作边界，而不是编写模型。
@@ -356,16 +358,18 @@ CLI bin 的文件，只以 `files[]` 中一行的形式出现。
 | `build/validate-artifact-skills.ts` | `targets[]`（`manifestTargets`）加目录树 | Skill 文档对照所选宿主 |
 | `build/validate-artifact-hooks.ts` | `targets[]`、钩子文件 | 钩子文档对照所选宿主 |
 | `build/validate-artifact-mcp.ts` | `targets[]`、MCP 文件 | MCP 文档对照所选宿主 |
-| `build/pack-inventory.ts` | `files[]`、`targets[]` | 打包的 tarball 必须包含清单中的每个文件；由所选名称推导的安装表面要求（`AB7010`）；摘要漂移；`AB7014` / `AB7015` |
+| `build/pack-inventory.ts` | `files[]`、`targets[]`、`project.packageVersion` | 打包的 tarball 必须包含清单中的每个文件；由所选名称推导的安装表面要求（`AB7010`）；摘要漂移；发布版本对齐；`AB7014` / `AB7015` |
 | `eval/artifact.ts` | `files[]`、`targets[]`、`runtime` | `evalTargetDigests`：对**整张**文件表为每个所选宿主计算一个摘要（相同字节，不同身份） |
 | `dev/artifacts/artifact-inspection-service.ts` | `files[]`、`project`、`targets[]` | Workbench 产物检视器：从 `files[]` 重建一棵树，并为每个所选宿主各标注一次 |
 | `dev/artifacts/artifact-script-catalog.ts` | `files[]`、`targets[]` | 可在浏览器中选择的脚本。每个布局了 `scripts/` 的所选宿主都得到一行目录条目，指向**同一个**根文件 |
 | `src/index.ts` | 重新导出这些类型与 `parse` / `serialize` / `assemble` | 公开 API |
 
 `install/install.ts` 与 `install/doctor.ts` **不**读取 `agent-bundle.manifest.json`。
-`resolveBundleRoot` 直接在 `--from` 之下查找宿主 `plugin.json`（`.claude-plugin/plugin.json`、
-`.codex-plugin/plugin.json`、`.cursor-plugin/plugin.json`，或 portable 的 `plugin.json`）。
-身份来自该宿主文档，对 Claude/Codex 而言还来自市场文档。缺少投影是 `AB7001`。
+`resolveBundleRoot` 直接在 `--from` 之下查找 Claude、Codex 或 Cursor 的插件清单
+（`.claude-plugin/plugin.json`、`.codex-plugin/plugin.json`、
+`.cursor-plugin/plugin.json`）。身份来自该宿主文档；Claude 与 Codex 还会从
+`.claude-plugin/marketplace.json` 或 `.agents/plugins/marketplace.json` 读取市场名称。
+不存在 portable 的 `install` / `doctor` 宿主。缺少投影是 `AB7001`。
 
 ### 第 3 步的差距列表
 
@@ -383,8 +387,10 @@ CLI bin 的文件，只以 `files[]` 中一行的形式出现。
    `web` 段）。
 3. **钩子语义。** `agent-bundle.hooks.json` 索引了包装器；产物清单没有。配置声明、事件路由
    还是原生这三种来源没有被记录。
-4. **Install / doctor。** 宿主身份与市场名称从宿主的 `plugin.json` 文件读取。所选投影的
-   成员关系是“这个宿主的清单路径是否存在”，而不是 `manifest.targets`。
+4. **Install / doctor。** Claude、Codex 与 Cursor 的身份从该宿主的 `plugin.json`
+   读取。Claude/Codex 的市场名称来自对应的市场文档。所选投影的成员关系是“这个宿主的
+   清单路径是否存在”，而不是 `manifest.targets`。portable 不是 `install` / `doctor`
+   宿主。
 5. **能力视图。** `targets[].schemas` 固定了宿主文档 schema。所需能力、通知投递交集与被
    省略的特性都不在清单中（`inspect` 的 `omittedFeatures` 来自模型）。
 6. **作为一等行的可执行文件。** `files[]` 上的 mode 位标记了可执行文件。不存在带有复合
@@ -424,8 +430,8 @@ CLI bin 的文件，只以 `files[]` 中一行的形式出现。
 （[#594](https://github.com/ScriptedAlchemy/agent-bundle/issues/594)、
 [#564](https://github.com/ScriptedAlchemy/agent-bundle/issues/564)）。
 
-**与清单并存的文件系统探测。** `install` / `doctor` 的 `resolveBundleRoot` 探测宿主
-`plugin.json`。Eval 与 Workbench 检视器为完整性解析产物清单，随后仍从路径前缀与
+**与清单并存的文件系统探测。** `install` / `doctor` 的 `resolveBundleRoot` 探测
+Claude、Codex 或 Cursor 的 `plugin.json`。Eval 与 Workbench 检视器为完整性解析产物清单，随后仍从路径前缀与
 `registry.artifactLayout` 推导脚本与宿主目录树。`evalTargetDigests` 为每个所选宿主把整个
 根目录各哈希一遍，而不是记录一份按投影划分的视图。
 
