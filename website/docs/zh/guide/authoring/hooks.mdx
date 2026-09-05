@@ -210,22 +210,28 @@ export default async function AfterFileEdit(
 命名导出的 `preflight` 会在加载渲染式路由运行时之前，为同一条事件路由提供一道低开销门控。要真正避免
 提前加载路由运行时，应通过编译器可静态追踪的相对路径重新导出：
 
-```ts
+```tsx
 // src/events/tool/before.tsx
-export const config = { providers: ['projectPolicy'] };
+import type { AgentEventRouteConfig, AgentEventRouteProps } from 'agent-bundle';
+
+export const config = { providers: ['projectPolicy'] } satisfies AgentEventRouteConfig;
 export { default as preflight } from './before.preflight.js';
 
-export default async function BeforeTool({ canonical, signal }) {
-  // 完整渲染式事件路由只在 preflight 返回 "execute" 之后才会运行。
+export default async function BeforeTool(
+  { canonical, native, signal }: AgentEventRouteProps<'tool/before'>,
+) {
+  // 仅在 preflight 返回 'execute' 后运行。
 }
 ```
 
 ```ts
 // src/events/tool/before.preflight.ts
-export default ({ canonical }) =>
-  mentionsCargo(commandFrom(canonical.payload))
+import type { EventPreflight } from 'agent-bundle';
+
+export default (({ canonical }) =>
+  canonical.payload.toolName?.value === 'Write'
     ? 'execute'
-    : { outcome: 'continue' };
+    : { outcome: 'continue' }) satisfies EventPreflight<'tool/before'>;
 ```
 
 `preflight` 模块应保持为普通的 Node/应用代码：不要导入 React、RSC 辅助函数、渲染式路由模块或应用
@@ -233,6 +239,7 @@ provider。通过相对路径重新导出，编译器可以构建独立的 `pref
 再加载。直接在渲染式路由模块中声明函数，只是逻辑上先执行；由于求值该模块也会求值其静态渲染代码并加载
 provider，实际开销并不会降低。通过裸包名导入、形成循环、导出非函数，或采用其他无法静态追踪的方式提供
 `preflight`，都会导致构建错误；编译器不会悄悄退回高开销的路由路径。
+这些无效形式由 `inspect`、`validate`、`build` 和 `dev` 以 `AB4840` 报告。
 
 `preflight` 可以是同步或异步的，并且恰好只有三种结果：
 
@@ -254,6 +261,13 @@ notices、lineage 存储、渲染式布局、应用 provider、React/RSC 辅助�
 解码、宿主原生输入校验、规范化、能力转换、截止时间与中止、结果校验及宿主投影，仍由框架负责。如果门控
 必须检查尚未映射的原生字段，请改用配置声明的处理器，并从其第二个参数读取 `nativeInput`。
 
+| 字段 | 含义 |
+| --- | --- |
+| `canonical` | 与渲染式路由相同的规范事件身份与载荷。 |
+| `host` | 冻结的 `{ name, nativeEvent }` 编译宿主身份。 |
+| `signal` | 由 hook 截止时间控制的请求 `AbortSignal`。 |
+| `terminal` | 框架推导出的只读 `AgentTerminal` 能力视图。 |
+
 ### 执行跟踪事件
 
 导出的 `EventTraceEvent` 可辨识联合为开发工具提供稳定且不含载荷的事件内核视图：
@@ -269,6 +283,7 @@ notices、lineage 存储、渲染式布局、应用 provider、React/RSC 辅助�
 provider 是否按需加载由声明决定。`preflight` 不会实例化任何应用 provider。事件路由执行后，运行时只会
 加载并解析它静态声明的 provider 子集。选中的 provider 在每次请求中仍只实例化一次，并按确定的键名/来源
 顺序依次执行；`processLifetime` 会先注入，任何失败都会终止该请求。键名重复或未知都会导致构建错误。
+无效的 `config.providers` 声明由 `AB4841` 报告。
 
 声明方式是 `export const config = { providers: ['projectPolicy'] }`。provider 键由 `src/providers/`
 下的文件名转换为 camelCase；空数组表示不选择任何应用 provider。

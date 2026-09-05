@@ -265,8 +265,8 @@ it('inspects the per-host preflight wrapper under the composite identity', async
     expect(entry.target).toBe('claude+codex');
     expect(entry.generatedEntry).toContain('executeEventPreflight');
     expect(entry.generatedEntry).toContain(preflight.source);
-    expect(entry.generatedEntry).toContain('agent-bundle/event-ipc');
     expect(entry.generatedEntry).toContain('agent-bundle/event-project');
+    expect(entry.generatedEntry).toContain('.execute.mjs');
     expect(entry.generatedEntry).not.toContain('AGENT_BUNDLE_HOOK_HOST');
   }
 });
