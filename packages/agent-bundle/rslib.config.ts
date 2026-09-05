@@ -59,7 +59,7 @@ const appDeclarationEntrypointPlugin: RsbuildPlugin = {
 const buildCacheDirectory = process.env['AGENT_BUNDLE_RSLIB_CACHE_DIRECTORY'];
 
 /**
- * The `id` of the single lib entry. To Rslib an id is a name: it labels the
+ * The `id` of the public lib entry. To Rslib an id is a name: it labels the
  * Rsbuild environment the entry becomes (`esm` when unset —
  * `composeRsbuildEnvironments` in @rslib/core), so it shows in build logs,
  * selects the entry for `rslib build --lib`, and keys the persistent build
@@ -69,6 +69,38 @@ const buildCacheDirectory = process.env['AGENT_BUNDLE_RSLIB_CACHE_DIRECTORY'];
  * entry's fields into the pools' test build.
  */
 export const agentBundleLibId = 'esm-node';
+export const agentBundleRuntimeLibId = 'runtime-node';
+
+const publicEntries = {
+  api: './src/api.ts',
+  app: './src/app/index.ts',
+  cli: './src/cli.ts',
+  config: './src/config/index.ts',
+  eval: './src/eval/index.ts',
+  index: './src/index.ts',
+  'lifecycle-render-child': './src/dev/playground/lifecycle-render-child.ts',
+  'mcp-apps': './src/mcp-apps.ts',
+  'route-invocation-child': './src/dev/routes/route-invocation-child.ts',
+  rstest: './src/rstest/index.ts',
+  test: './src/test/index.ts',
+  'test/browser': './src/test/browser.ts',
+};
+
+const runtimeEntries = {
+  'cli-entry': './src/cli-entry.ts',
+  'event-ipc': './src/events/ipc.ts',
+  'event-project': './src/events/project.ts',
+  'install-entry': './src/install-entry.ts',
+  'launch-env': './src/launch-env.ts',
+  'mcp-entry': './src/mcp-entry.ts',
+  'mcp-server-runtime': process.env['AGENT_BUNDLE_RUNTIME_REBUNDLE_FIXTURE'] === '1'
+    ? './tests/fixtures/runtime-rebundle/mcp-server-runtime.ts'
+    : './src/mcp-server-runtime.ts',
+  meta: './src/meta.ts',
+  routes: './src/routes/public.ts',
+  'terminal-capability': './src/terminal-capability.ts',
+  'web-host': './src/web-host.ts',
+};
 
 export default defineConfig({
   lib: [
@@ -85,15 +117,36 @@ export default defineConfig({
       // no packed declaration, reachable or not, may import a devDependency.
       dts: true,
       format: 'esm',
+      output: {
+        copy: [
+          { from: resolve(import.meta.dirname, '../workbench/dist'), to: 'workbench', info: { minimized: true } },
+          { from: resolve(import.meta.dirname, 'web-host-dist'), to: 'web-host', info: { minimized: true } },
+        ],
+      },
+      plugins: [appDeclarationEntrypointPlugin],
+      source: {
+        entry: publicEntries,
+      },
+      syntax: 'es2022',
+    },
+    {
+      id: agentBundleRuntimeLibId,
+      bundle: true,
+      dts: true,
+      format: 'esm',
+      source: {
+        entry: runtimeEntries,
+      },
+      // These files are inputs to a second Rspack compilation when the
+      // compiler generates an artifact. Keeping their package build in one
+      // no-split compilation gives every transitive private module a stable,
+      // self-contained placement without promoting siblings to entries.
+      splitChunks: false,
       syntax: 'es2022',
     },
   ],
   output: {
     cleanDistPath: true,
-    copy: [
-      { from: resolve(import.meta.dirname, '../workbench/dist'), to: 'workbench', info: { minimized: true } },
-      { from: resolve(import.meta.dirname, 'web-host-dist'), to: 'web-host', info: { minimized: true } },
-    ],
     filenameHash: false,
     legalComments: 'linked',
     target: 'node',
@@ -104,7 +157,6 @@ export default defineConfig({
   plugins: [
     // Suggestions stay informational; errors and warnings block publishing.
     pluginPublint({ throwOn: 'warning' }),
-    appDeclarationEntrypointPlugin,
     // The bundled TypeScript 5 parser's eager `getNodeSystem()` reads the
     // CommonJS `__filename`/`__dirname` globals, which the ESM output does
     // not define and which Rspack's `node-module` rewrite (disabled below)
@@ -140,47 +192,6 @@ export default defineConfig({
     tsconfigPath: './tsconfig.build.json',
     define: {
       __AGENT_BUNDLE_VERSION__: JSON.stringify(packageManifest.version),
-    },
-    entry: {
-      api: './src/api.ts',
-      app: './src/app/index.ts',
-      cli: './src/cli.ts',
-      'cli-entry': './src/cli-entry.ts',
-      config: './src/config/index.ts',
-      eval: './src/eval/index.ts',
-      'event-ipc': './src/events/ipc.ts',
-      'event-project': './src/events/project.ts',
-      index: './src/index.ts',
-      'install-entry': './src/install-entry.ts',
-      'launch-env': './src/launch-env.ts',
-      'lifecycle-render-child': './src/dev/playground/lifecycle-render-child.ts',
-      'mcp-apps': './src/mcp-apps.ts',
-      'mcp-entry': './src/mcp-entry.ts',
-      meta: './src/meta.ts',
-      // Same reason as `mcp-tasks` below: the runtime's only other private
-      // sibling. Concatenated into the runtime's chunk it makes that chunk
-      // host two modules, so rslib synthesizes the runtime's namespace
-      // object (for `agent-bundle/test`'s dynamic import) through its own
-      // `__webpack_require__`, and the generated stdio entry fails to start
-      // with `__webpack_modules__[moduleId] is not a function`.
-      'mcp-schema-projection': './src/mcp-schema-projection.ts',
-      'mcp-server-runtime': './src/mcp-server-runtime.ts',
-      // Its own entry so it is emitted as a chunk beside the runtime rather
-      // than concatenated into it: a generated artifact bundles
-      // `dist/mcp-server-runtime.js`, and a chunk that also hosts a sibling
-      // module carries rslib's `__webpack_require__` runtime import, whose
-      // identifiers shadow the artifact bundler's own runtime.
-      'mcp-tasks': './src/mcp-tasks.ts',
-      // The route authoring surface: types plus the compile-time helpers a
-      // route module may import at run time without pulling the compiler
-      // into its generated bundle.
-      routes: './src/routes/public.ts',
-      'route-invocation-child': './src/dev/routes/route-invocation-child.ts',
-      rstest: './src/rstest/index.ts',
-      'terminal-capability': './src/terminal-capability.ts',
-      test: './src/test/index.ts',
-      'test/browser': './src/test/browser.ts',
-      'web-host': './src/web-host.ts',
     },
   },
 });

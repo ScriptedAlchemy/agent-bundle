@@ -44,7 +44,7 @@ interface McpJson {
  * (tests/projection/) covers the same route protocol surface at a fraction of
  * the cost and explicitly does not claim any of this.
  */
-it('serves compiled routes and durable state across packed process restarts', async () => {
+it('serves compiled routes with a private runtime sibling across packed process restarts', async () => {
   const [agentBundle, runtime, markdownStream] = await Promise.all([
     sharedPackedTarball('agent-bundle'),
     sharedPackedTarball('runtime'),

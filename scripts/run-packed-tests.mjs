@@ -35,7 +35,13 @@ const run = (command, args, extraEnvironment = {}) => new Promise((resolvePromis
   });
 });
 
-const buildExitCode = await run('pnpm', ['build'], { NODE_ENV: 'production' });
+// The packed package substitutes a wrapper that imports one extra private
+// runtime sibling. The packed deleted-source stdio journey must still start
+// after that sibling has crossed both package and artifact bundlers.
+const buildExitCode = await run('pnpm', ['build'], {
+  AGENT_BUNDLE_RUNTIME_REBUNDLE_FIXTURE: '1',
+  NODE_ENV: 'production',
+});
 if (buildExitCode !== 0) process.exit(buildExitCode);
 
 const packDirectory = await mkdtemp(join(tmpdir(), 'agent-bundle-shared-pack-'));
