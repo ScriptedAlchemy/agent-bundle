@@ -1,13 +1,6 @@
 import { expect, test } from '@rstest/core';
 
-import {
-  describeRspackCompileErrors,
-  formatRspackStatsError,
-  rspackErrorFile,
-  rspackErrorLocation,
-  rspackErrorText,
-  rspackStatsErrors,
-} from '../src/dev/compile-diagnostics.js';
+import { describeRspackCompileErrors } from '../src/dev/compile-diagnostics.js';
 
 const projectRoot = '/work/example';
 
@@ -41,43 +34,8 @@ const unresolvedImport = Object.freeze({
   moduleTrace: [],
 });
 
-test('renders the SWC frame location and strips the miette box from a syntax error', () => {
-  expect(rspackErrorLocation(syntaxError)).toEqual({ column: 6, line: 3 });
-  expect(rspackErrorText(syntaxError.message)).toBe(
-    'Module build failed (from builtin:swc-loader): Syntax Error: Unexpected token `=`. Expected yield, an identifier, [ or {',
-  );
-  expect(formatRspackStatsError(syntaxError, projectRoot)).toBe(
-    'src/bad.ts:3:6: Module build failed (from builtin:swc-loader): Syntax Error: Unexpected token `=`. Expected yield, an identifier, [ or {',
-  );
-});
-
-test('prefers the 1-based Rspack loc over the frame header and drops the code frame', () => {
-  expect(rspackErrorLocation(unresolvedImport)).toEqual({ column: 1, line: 1 });
-  expect(formatRspackStatsError(unresolvedImport, projectRoot)).toBe(
-    `src/ok.ts:1:1: Module not found: Can't resolve './missing-module' in '${projectRoot}/src'`,
-  );
-});
-
-test('resolves the file from file, then moduleName, then the loader-stripped identifier', () => {
-  expect(rspackErrorFile({ file: 'custom/name.ts', message: '', moduleName: './src/a.ts' }, projectRoot)).toBe('custom/name.ts');
-  expect(rspackErrorFile({ message: '', moduleName: './src/a.ts' }, projectRoot)).toBe('src/a.ts');
-  expect(rspackErrorFile({
-    message: '',
-    moduleIdentifier: `builtin:swc-loader??ruleSet[1]!${projectRoot}/src/nested/b.tsx`,
-  }, projectRoot)).toBe('src/nested/b.tsx');
-  // Modules outside the project root stay absolute so the path remains resolvable.
-  expect(rspackErrorFile({ message: '', moduleIdentifier: '/elsewhere/dep/index.js' }, projectRoot)).toBe('/elsewhere/dep/index.js');
-  expect(rspackErrorFile({ message: 'no module' }, projectRoot)).toBeUndefined();
-});
-
-test('omits the location when Rspack names a module without one and omits the file when it names none', () => {
-  expect(formatRspackStatsError({ message: '  × Something failed\n', moduleName: './src/c.ts' }, projectRoot))
-    .toBe('src/c.ts: Something failed');
-  expect(formatRspackStatsError({ message: '\u001B[31m  × Tsconfig not found: ./does-not-exist.json\u001B[0m\n' }, projectRoot))
-    .toBe('Tsconfig not found: ./does-not-exist.json');
-});
-
-test('reads a MultiStats document once and falls back to children when the top level lists nothing', () => {
+test('renders one project-relative file:line:col line per error under a counted headline', () => {
+  // A MultiStats document lists its children's errors once at the top level.
   const multi = {
     children: [
       { errors: [syntaxError], name: 'a' },
@@ -85,16 +43,32 @@ test('reads a MultiStats document once and falls back to children when the top l
     ],
     errors: [{ ...syntaxError, compilerPath: 'a' }, { ...unresolvedImport, compilerPath: 'b' }],
   };
-  expect(rspackStatsErrors(multi)).toHaveLength(2);
-  expect(rspackStatsErrors({ children: multi.children, errors: [] })).toHaveLength(2);
-  expect(rspackStatsErrors({ children: [{ children: [{ errors: [syntaxError] }] }] })).toHaveLength(1);
-  expect(rspackStatsErrors({})).toEqual([]);
-
-  expect(describeRspackCompileErrors(multi, projectRoot)).toBe([
+  const expected = [
     'RSC runtime compile reported 2 error(s):',
     'src/bad.ts:3:6: Module build failed (from builtin:swc-loader): Syntax Error: Unexpected token `=`. Expected yield, an identifier, [ or {',
     `src/ok.ts:1:1: Module not found: Can't resolve './missing-module' in '${projectRoot}/src'`,
+  ].join('\n');
+  expect(describeRspackCompileErrors(multi, projectRoot)).toBe(expected);
+  // An empty top-level list falls back to the children.
+  expect(describeRspackCompileErrors({ children: multi.children, errors: [] }, projectRoot)).toBe(expected);
+});
+
+test('names a module without a location, and a compilation-level error without a module', () => {
+  expect(describeRspackCompileErrors({
+    errors: [
+      { message: '  × Something failed\n', moduleName: './src/c.ts' },
+      { message: '\u001B[31m  × Tsconfig not found: ./does-not-exist.json\u001B[0m\n' },
+    ],
+  }, projectRoot)).toBe([
+    'RSC runtime compile reported 2 error(s):',
+    'src/c.ts: Something failed',
+    'Tsconfig not found: ./does-not-exist.json',
   ].join('\n'));
+});
+
+test('says so when a rejected compile left no stats errors behind', () => {
   expect(describeRspackCompileErrors({ errors: [] }, projectRoot))
+    .toBe('RSC runtime compile reported errors, but Rspack stats carried no error details.');
+  expect(describeRspackCompileErrors({}, projectRoot))
     .toBe('RSC runtime compile reported errors, but Rspack stats carried no error details.');
 });

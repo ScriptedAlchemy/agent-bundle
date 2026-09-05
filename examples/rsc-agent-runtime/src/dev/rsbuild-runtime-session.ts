@@ -8,11 +8,13 @@ import { createRsbuild, type StartDevServerResult } from '@rsbuild/core';
 
 import {
   createRscRuntimeRsbuildConfig,
+  RscRuntimeCompileError,
   type RscRuntimeCompileEnvironmentHashes,
   type RscRuntimeCompileFailureKind,
   type RscRuntimeCompileSnapshot,
 } from '../../rsbuild.config.js';
 import { projectName, projectVersion } from '../project-identity.js';
+import { describeRspackCompileErrors } from './compile-diagnostics.js';
 import {
   createRscEnvironmentCheckpointStore,
   type RscEnvironmentCheckpointStore,
@@ -561,13 +563,18 @@ const lifecycleDiagnostic = (error: unknown): DevRuntimeDiagnostic => Object.fre
 });
 
 /**
- * The compile observer's error carries the Rspack errors as
- * `file:line:col: message` lines (see `src/dev/compile-diagnostics.ts`); the
- * protocol diagnostic has no location field, so they ride in the message.
+ * The compile observer's `RscRuntimeCompileError` carries the rejected
+ * cohort's stats; they render here as `file:line:col: message` lines (see
+ * `src/dev/compile-diagnostics.ts`). The protocol diagnostic has no location
+ * field, so the lines ride in the message.
  */
-const sourceBuildDiagnostic = (error: unknown): DevRuntimeDiagnostic => Object.freeze({
+const sourceBuildDiagnostic = (error: unknown, projectRoot: string): DevRuntimeDiagnostic => Object.freeze({
   code: 'AB8206',
-  message: `RSC runtime source build failed: ${error instanceof Error ? error.message : 'RSC runtime compile reported errors.'}`,
+  message: `RSC runtime source build failed: ${
+    error instanceof RscRuntimeCompileError
+      ? describeRspackCompileErrors(error.stats, projectRoot)
+      : error instanceof Error ? error.message : 'RSC runtime compile reported errors.'
+  }`,
   phase: 'source/build',
   severity: 'error',
 });
@@ -2401,7 +2408,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     }
     if (!this.#closed) this.#setStatus(
       this.#active === undefined ? 'degraded' : 'active',
-      [kind === 'source-build' ? sourceBuildDiagnostic(error) : lifecycleDiagnostic(error)],
+      [kind === 'source-build' ? sourceBuildDiagnostic(error, this.#context.projectRoot) : lifecycleDiagnostic(error)],
     );
     this.#emit(Object.freeze({ type: 'runtime.generation.failed' }));
   }

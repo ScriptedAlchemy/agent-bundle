@@ -121,6 +121,8 @@ export {
 import { composeBundlerInspection, type BundlerInspection } from './build/inspect-bundler.ts';
 import { defaultPackageArtifactDistPath } from './config/normalize.ts';
 export type { BundlerInspection, BundlerInspectionEntry } from './build/inspect-bundler.ts';
+export { describeRspackStatsError, formatRspackStatsError, rspackStatsErrors } from './build/rspack-stats-errors.ts';
+export type { RspackStatsErrorDetail, RspackStatsErrorLocation } from './build/rspack-stats-errors.ts';
 import { validateArtifact, validateArtifactWithSnapshot } from './build/validate-artifact.ts';
 import { freezeDiagnostics, hasErrors, DiagnosticError, type Diagnostic } from './core/diagnostics.ts';
 export type { Diagnostic, DiagnosticSeverity } from './core/diagnostics.ts';

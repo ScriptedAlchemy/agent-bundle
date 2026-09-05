@@ -321,17 +321,23 @@ them.
 `agent-bundle dev` compiles views unminified so the Workbench preview is
 readable — about 2.7× the production bytes. A view whose readable document
 would exceed the 2 MiB host bound is recompiled with the production profile
-so the preview still renders it, and `AB4772` reports the substitution
+so the preview still renders it, and one `AB4772` reports the substitution
 instead: `MCP App "<name>" readable development output compiled to <size>,
 above the 2 MiB bound the Workbench and serve-app hosts accept; the preview
-renders the production build (<size>, <gzip> gzip) instead`. The 1 MiB
-advisory is a production concern and never fires on readable output.
+renders the production build (<size>, <gzip> gzip) instead; largest modules:
+…`. The production sizes in that notice stand in for the 1 MiB advisory, so
+a substituted view never carries two size advisories. When the production
+build itself exceeds 2 MiB the substitution buys nothing: the notice is not
+emitted, the preview receives that production document, and the ordinary
+over-bound `AB4772` names its sizes so the author knows the view does not
+render. The 1 MiB advisory is a production concern and never fires on
+readable output.
 
 | Code | Severity | Trigger | Recovery |
 | --- | --- | --- | --- |
 | `AB4770` | error (build) | One Rspack error while compiling an App view — a syntax error, an unresolved import, a `tsconfig.json` whose `extends` target is missing, or any other module failure. `MCP App "<name>" failed to compile: <file>:<line>:<column>: <message>`, without the location prefix when Rspack attributes the error to no module; `sourcePath` is the failing module, else the App's entry. | Fix the reported error in the named file and rebuild; run `agent-bundle build` for the full message. |
 | `AB4771` | warning | One Rspack warning while compiling an App view that the framework's ignore list does not cover; `MCP App "<name>" produced a warning while compiling: <file>:<line>:<column>: <message>`. | Address the warning in the named file; a warning that is bundler noise inside the framework's own dependency graph belongs on the documented ignore list. |
-| `AB4772` | warning | The emitted App HTML is 1 MiB or larger in a production build, or larger than 2 MiB in any build; `MCP App "<name>" compiled to <size> (<gzip> gzip), above the … bound; largest modules: …`. In `agent-bundle dev`, a view whose readable output would exceed 2 MiB was recompiled with the production profile for the preview: `MCP App "<name>" readable development output compiled to <size>, above the 2 MiB bound …; the preview renders the production build (…) instead`. | Trim the largest modules the message names — usually a dependency imported whole; a view over 2 MiB does not render in the Workbench or `serve-app` and must shrink before it ships. The development substitution costs only the readable source in the preview. |
+| `AB4772` | warning | The emitted App HTML is 1 MiB or larger in a production build, or larger than 2 MiB in any build; `MCP App "<name>" compiled to <size> (<gzip> gzip), above the … bound; largest modules: …`. In `agent-bundle dev`, a view whose readable output would exceed 2 MiB was recompiled with the production profile for the preview and that production build fits: `MCP App "<name>" readable development output compiled to <size>, above the 2 MiB bound …; the preview renders the production build (…) instead; largest modules: …` — the only size advisory that view receives; a production build that is itself over 2 MiB gets the ordinary over-bound message instead. | Trim the largest modules the message names — usually a dependency imported whole; a view over 2 MiB does not render in the Workbench or `serve-app` and must shrink before it ships. The development substitution costs only the readable source in the preview. |
 
 ## Release identity (`AB4001`, `AB4008`–`AB4011`, `AB4013`)
 

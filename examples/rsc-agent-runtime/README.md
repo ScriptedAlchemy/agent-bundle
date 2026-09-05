@@ -82,8 +82,13 @@ src/rsc/worker.tsx:177:6: Module build failed (from builtin:swc-loader): Syntax 
 ```
 
 The active generation stays served while the diagnostic is shown, and the next
-successful compile clears it. The compiler runs Rsbuild at `logLevel: 'error'`,
-so the diagnostic — not the process console — is where the message lands.
+successful compile clears it. The development session runs Rsbuild at
+`logLevel: 'silent'`, so the diagnostic — not the provider's console — is the
+one place the message lands; the errors are read with the `agent-bundle/api`
+helpers (`rspackStatsErrors`, `formatRspackStatsError`) the framework's own
+`AB4770` App diagnostics use. The production `rsbuild build` has no diagnostic
+channel, so it keeps `logLevel: 'error'` and prints the same errors to the
+console before rejecting.
 
 The published Agent Bundle library is built with Rslib. This example's separate
 production RSC/runtime artifacts are built by its explicit Rsbuild production

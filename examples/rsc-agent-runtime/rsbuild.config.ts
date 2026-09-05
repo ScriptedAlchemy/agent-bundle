@@ -13,7 +13,23 @@ import { pluginReact } from '@rsbuild/plugin-react';
 import { Layers, pluginRSC } from 'rsbuild-plugin-rsc';
 
 import { emitRuntimeArtifacts } from './src/build/emit-artifacts.js';
-import { describeRspackCompileErrors } from './src/dev/compile-diagnostics.js';
+
+/**
+ * A completed development cohort that Rspack rejected. The observer receives
+ * it through `failAttempt(…, 'source-build')` carrying the cohort's stats
+ * JSON — errors, children, module traces — and renders them itself (see
+ * `src/dev/compile-diagnostics.ts`); this config stays free of the framework
+ * API so a plain `rsbuild build` never loads it.
+ */
+export class RscRuntimeCompileError extends Error {
+  readonly stats: Rspack.StatsCompilation;
+
+  constructor(stats: Rspack.StatsCompilation) {
+    super('RSC runtime compile reported errors.');
+    this.name = 'RscRuntimeCompileError';
+    this.stats = stats;
+  }
+}
 
 export interface RscRuntimeCompileSnapshot {
   readonly attemptId: string;
@@ -244,15 +260,15 @@ const runtimeCompileObserverPlugin = (
         try {
           if (stats.hasErrors()) {
             capturedCohort = undefined;
-            // The console is not the diagnostic channel (`logLevel: 'error'`
-            // below keeps Rsbuild's own summary terse): the Rspack errors
-            // ride the failure into the session's `AB8206` diagnostic as
-            // `file:line:col: message` lines.
-            const detail = describeRspackCompileErrors(
-              stats.toJson({ all: false, children: true, errors: true, moduleTrace: true }),
-              api.context.rootPath,
+            // The console is not the diagnostic channel (development runs
+            // Rsbuild silent, see `logLevel` below): the Rspack errors ride
+            // the failure into the session's `AB8206` diagnostic, which
+            // renders them as `file:line:col: message` lines.
+            observer.failAttempt(
+              attemptId,
+              new RscRuntimeCompileError(stats.toJson({ all: false, children: true, errors: true, moduleTrace: true })),
+              'source-build',
             );
-            observer.failAttempt(attemptId, new Error(detail), 'source-build');
             return;
           }
           const json = stats.toJson({ all: false, children: true, hash: true });
@@ -336,10 +352,12 @@ export const createRscRuntimeRsbuildConfig = (
     // session URLs are built for. `options.mode` still selects the compile
     // topology (dev entries, compiler roots) independently of this flavor.
     mode: 'production',
-    // Compile errors reach consumers as diagnostics (`AB8206` in the dev
-    // session, the rejected build in production); Rsbuild's own console output
-    // is limited to errors so the message is not duplicated at info level.
-    logLevel: 'error',
+    // Compile errors reach consumers as diagnostics: the dev session's
+    // `AB8206` carries every Rspack error, so Rsbuild's own console output —
+    // which would print the same errors to the provider's stderr — is
+    // silenced there; a production `rsbuild build` rejects, and its console
+    // shows the errors (only those) since no diagnostic channel exists.
+    logLevel: development ? 'silent' : 'error',
     ...(development ? {
       dev: { writeToDisk: true },
       // Port 0 lets the OS assign the listener. Rsbuild's default (3000 with an

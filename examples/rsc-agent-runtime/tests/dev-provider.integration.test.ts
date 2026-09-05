@@ -14,9 +14,11 @@ import { EpochStore } from '../../../packages/agent-bundle/src/dev/epoch-store.t
 import { resolveDevRuntimeProvider } from '../../../packages/agent-bundle/src/dev/runtime-provider-loader.ts';
 import {
   createRscRuntimeRsbuildConfig,
+  RscRuntimeCompileError,
   type RscRuntimeActivationOutcome,
   type RscRuntimeCompileSnapshot,
 } from '../rsbuild.config.js';
+import { describeRspackCompileErrors } from '../src/dev/compile-diagnostics.js';
 import { createDevRuntimeProvider } from '../src/dev/provider.js';
 import { ResourceLedger, RsbuildRuntimeSession } from '../src/dev/rsbuild-runtime-session.js';
 import { copyExample, type CopiedExample } from './support/copy-example.ts';
@@ -50,7 +52,7 @@ const deferred = <T>() => {
 
 type CompileObserverContract = NonNullable<Parameters<typeof createRscRuntimeRsbuildConfig>[0]['onCompile']>;
 
-/** The fake plugin API's `context.rootPath`: the root compile errors are made relative to. */
+/** The project root the session would render a failed cohort's errors relative to. */
 const compileObserverRoot = join(tmpdir(), 'rsc-provider-observer-project');
 
 const compileObserver = (
@@ -70,7 +72,6 @@ const compileObserver = (
   let before: (() => void) | undefined;
   let after: ((input: unknown) => Promise<void>) | undefined;
   plugin.setup({
-    context: { rootPath: compileObserverRoot },
     onAfterDevCompile: (callback: unknown) => { after = callback as (input: unknown) => Promise<void>; },
     onAfterEnvironmentCompile: () => undefined,
     onBeforeDevCompile: (callback: unknown) => { before = callback as () => void; },
@@ -133,7 +134,6 @@ const interceptCompileObserver = () => {
       (candidate as { readonly name?: unknown }).name === 'agent-bundle:rsc-runtime-compile-observer');
     if (plugin === undefined) throw new Error('RSC compile observer plugin is unavailable.');
     plugin.setup({
-      context: { rootPath: input?.cwd ?? process.cwd() },
       onAfterDevCompile: (callback: unknown) => { after = callback as (input: unknown) => Promise<void>; },
       onAfterEnvironmentCompile: (callback: unknown) => { afterEnvironment = callback as (input: unknown) => Promise<void>; },
       onBeforeDevCompile: (callback: unknown) => { before = callback as () => void; },
@@ -742,9 +742,11 @@ test('classifies direct compiler errors as source build failures without capture
   expect(enqueued).toEqual([]);
   expect(failures).toHaveLength(1);
   expect(failures[0]?.[0]).toBe('attempt-source-build');
-  // The Rspack errors ride the failure as `file:line:col: message` lines.
-  expect(failures[0]?.[1]).toBeInstanceOf(Error);
-  expect((failures[0]?.[1] as Error).message).toBe(
+  // The failure carries the cohort's stats; the session renders them as
+  // `file:line:col: message` lines relative to its project root.
+  const failure = failures[0]?.[1];
+  expect(failure).toBeInstanceOf(RscRuntimeCompileError);
+  expect(describeRspackCompileErrors((failure as RscRuntimeCompileError).stats, compileObserverRoot)).toBe(
     'RSC runtime compile reported 1 error(s):\n'
     + "src/rsc/worker.tsx:4:1: Module not found: Can't resolve './missing' in '/src'",
   );

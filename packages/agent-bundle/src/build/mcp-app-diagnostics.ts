@@ -1,11 +1,16 @@
 import type { Rspack } from '@rsbuild/core';
 import { isAbsolute, resolve } from 'node:path';
-import { stripVTControlCharacters } from 'node:util';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { MAX_APP_HTML_BYTES } from '../core/mcp-app-limits.ts';
-import { isInside, toPosixRelative } from '../core/paths.ts';
 import { formatByteSize } from '../core/strings.ts';
+import {
+  describeRspackStatsError,
+  displayPath,
+  loaderChainTarget,
+  normalizeStatsMessage,
+  renderRspackStatsErrorDetail,
+} from './rspack-stats-errors.ts';
 
 /**
  * The `AB477x` family: what the MCP App view compiler reports about one
@@ -77,12 +82,6 @@ export interface McpAppDiagnosticContext {
   readonly projectRoot: string;
 }
 
-export interface StatsErrorLocation {
-  /** As printed by Rspack: `loc` columns are 1-based, SWC's miette frame columns 0-based. */
-  readonly column: number;
-  readonly line: number;
-}
-
 /** Ranked entry of the `AB4772` advisory: a leaf module and its stats size. */
 export interface RankedModule {
   /** Project-relative, `node_modules/<package>/…`, or absolute when outside both. */
@@ -90,100 +89,20 @@ export interface RankedModule {
   readonly size: number;
 }
 
-const rspackLocation = /^(?<line>\d+):(?<column>\d+)/u;
-/** miette's frame header names the span it opens: `╭─[1:10]`, or `╭─[file:1:10]`. */
-const mietteFrameHeader = /╭─\[(?:[^\]\n]*:)?(?<line>\d+):(?<column>\d+)\]/u;
-/** One code-frame line: a line number, the gutter, the source. */
-const codeFrameLine = /^\s*(?<line>\d+)\s*│/u;
-/** The marker line under a code-frame line: the gutter dot, then the span underlined with `─`. */
-const codeFrameMarker = /^\s*·/u;
-const codeFrameGutter = '·';
-const codeFrameUnderline = '─';
-
 /**
- * Where an error points. Rspack's own `loc` (`"1:1-41"`) wins; otherwise the
- * SWC/miette frame inside the message: its `╭─[line:col]` header when miette
- * printed one, else the caret line under the code frame (miette omits the
- * header when the span starts on the first line, which is exactly where a
- * one-line fixture fails). Both frame forms report miette's 0-based column.
+ * The leaves of a module list — what the emitted document is made of. A
+ * concatenated module reports its parts under `modules` and its own size as
+ * their sum, so only the parts are ranked. Those parts are also orphans of
+ * the chunk graph, and the stats (recorded with `orphanModules`) list each of
+ * them a second time at the top level; a top-level orphan is skipped, since
+ * it is either already ranked through the module that absorbed it or emitted
+ * nowhere at all (an export the bundler inlined at every use).
  */
-export const statsErrorLocation = (error: Rspack.StatsError): StatsErrorLocation | undefined => {
-  const located = error.loc === undefined ? undefined : rspackLocation.exec(error.loc)?.groups;
-  if (located !== undefined) return { column: Number(located.column), line: Number(located.line) };
-  const message = stripVTControlCharacters(error.message);
-  const header = mietteFrameHeader.exec(message)?.groups;
-  if (header !== undefined) return { column: Number(header.column), line: Number(header.line) };
-  const lines = message.split(/\r?\n/u);
-  for (const [index, line] of lines.entries()) {
-    const frame = codeFrameLine.exec(line)?.groups;
-    const marker = lines[index + 1];
-    if (frame === undefined || marker === undefined || !codeFrameMarker.test(marker)) continue;
-    const underline = marker.indexOf(codeFrameUnderline);
-    if (underline === -1) continue;
-    // The source starts two cells after the gutter (`│ ` above, `· ` below).
-    const column = underline - (marker.indexOf(codeFrameGutter) + 2);
-    if (column < 0) continue;
-    return { column, line: Number(frame.line) };
-  }
-  return undefined;
-};
-
-/**
- * The request a loader chain ends in: `builtin:swc-loader??ruleSet[…]!/abs/views/status.ts`
- * names `/abs/views/status.ts`; Rspack's inline match-resource form
- * (`<resource>!=!<loaders>`) names the resource, as Rsbuild's own
- * `removeLoaderChainDelimiter` reads it. A resource query is not a path.
- */
-const loaderChainTarget = (request: string): string => {
-  const resource = request.split('!=!')[0] ?? request;
-  const lastDelimiter = resource.lastIndexOf('!');
-  return (lastDelimiter === -1 ? resource : resource.slice(lastDelimiter + 1)).replace(/\?.*$/u, '');
-};
-
-/**
- * The absolute path of the module an error belongs to, resolved the way
- * Rsbuild's `resolveFileName` does: `file`, else `moduleName` (relative to
- * the compiler context, the project root), else the resource the
- * `moduleIdentifier` loader chain ends in. `undefined` for compilation-level
- * errors that name no module.
- */
-export const statsErrorFile = (error: Rspack.StatsError, projectRoot: string): string | undefined => {
-  const named = [error.file, error.moduleName, error.moduleIdentifier]
-    .find((candidate): candidate is string => typeof candidate === 'string' && candidate.length > 0);
-  if (named === undefined) return undefined;
-  const target = loaderChainTarget(named);
-  if (target.length === 0) return undefined;
-  return isAbsolute(target) ? target : resolve(projectRoot, target);
-};
-
-/** Project-relative with forward slashes inside the project root, absolute otherwise. */
-const displayPath = (projectRoot: string, path: string): string =>
-  isInside(projectRoot, path) ? toPosixRelative(projectRoot, path) : path;
-
-/** miette's decorations, in the order they must go: the arrow and the frame header before the bare glyph runs. */
-const mietteDecorations = /╰─▶|╭─\[[^\]\n]*\]|[×⚠│·╭╰╯╮─]+/gu;
-
-/**
- * One line of prose out of an Rspack message: ANSI stripped, miette's box
- * glyphs (`×` and its warning twin `⚠`, `╰─▶`, `╭─[…]`, `╰────`, `│`, `·`,
- * `─`) removed, code-frame lines (`<n> │ …`) and the marker lines under them
- * dropped, the remaining lines trimmed and joined with a single space.
- */
-export const normalizeStatsMessage = (message: string): string => stripVTControlCharacters(message)
-  .split(/\r?\n/u)
-  .filter((line) => !codeFrameLine.test(line))
-  .map((line) => line.replace(mietteDecorations, ' ').replace(/\s+/gu, ' ').trim())
-  .filter((line) => line.length > 0)
-  .join(' ');
-
-/**
- * The leaves of a module list: a concatenated module reports its parts under
- * `modules` and its own size as their sum, so only the parts are ranked.
- */
-const leafModules = (modules: readonly Rspack.StatsModule[]): readonly Rspack.StatsModule[] =>
-  modules.flatMap((module) => (
-    module.modules !== undefined && module.modules.length > 0 ? leafModules(module.modules) : [module]
-  ));
+const leafModules = (modules: readonly Rspack.StatsModule[], topLevel = true): readonly Rspack.StatsModule[] =>
+  modules.flatMap((module) => {
+    if (topLevel && module.orphan === true) return [];
+    return module.modules !== undefined && module.modules.length > 0 ? leafModules(module.modules, false) : [module];
+  });
 
 /**
  * The display name of one module: everything from the last `node_modules`
@@ -228,16 +147,13 @@ const statsSeverityText: Readonly<Record<StatsSeverity, { readonly code: string;
  */
 const statsDiagnostic = (context: McpAppDiagnosticContext, entry: Rspack.StatsError, severity: StatsSeverity): Diagnostic => {
   const { code, recovery, verb } = statsSeverityText[severity];
-  const file = statsErrorFile(entry, context.projectRoot);
-  const location = statsErrorLocation(entry);
-  const position = location === undefined ? '' : `:${String(location.line)}:${String(location.column)}`;
-  const where = file === undefined ? '' : `${displayPath(context.projectRoot, file)}${position}: `;
+  const detail = describeRspackStatsError(entry, context.projectRoot);
   return {
     code,
-    message: `MCP App ${JSON.stringify(context.appName)} ${verb}: ${where}${normalizeStatsMessage(entry.message)}`,
+    message: `MCP App ${JSON.stringify(context.appName)} ${verb}: ${renderRspackStatsErrorDetail(detail, context.projectRoot)}`,
     recovery,
     severity,
-    sourcePath: file ?? context.entrySource,
+    sourcePath: detail.file ?? context.entrySource,
   };
 };
 
@@ -317,34 +233,46 @@ export const mcpAppSizeDiagnostic = (
   const bound = aboveHostBound
     ? `, above the ${String(MAX_APP_HTML_BYTES / 1_048_576)} MiB bound the Workbench and serve-app hosts accept — the view will not render there`
     : `, above the ${String(MCP_APP_HTML_ADVISORY_BYTES / 1_048_576)} MiB advisory bound`;
-  const ranked = largestModules(options.modules, context.projectRoot);
-  const largest = ranked.length === 0
-    ? ''
-    : `; largest modules: ${ranked.map((module) => `${module.name} (${formatByteSize(module.size)})`).join(', ')}`;
   return {
     code: mcpAppSizeAdvisoryCode,
     message: `MCP App ${JSON.stringify(context.appName)} compiled to ${formatByteSize(options.size.bytes)} `
-      + `(${formatByteSize(options.size.gzipBytes)} gzip)${bound}${largest}`,
+      + `(${formatByteSize(options.size.gzipBytes)} gzip)${bound}${largestModulesClause(options.modules, context.projectRoot)}`,
     recovery: sizeAdvisoryRecovery,
     severity: 'warning',
     sourcePath: context.entrySource,
   };
 };
 
+/** `; largest modules: <name> (<size>), …` — empty when the stats carried no modules. */
+const largestModulesClause = (modules: readonly Rspack.StatsModule[], projectRoot: string): string => {
+  const ranked = largestModules(modules, projectRoot);
+  return ranked.length === 0
+    ? ''
+    : `; largest modules: ${ranked.map((module) => `${module.name} (${formatByteSize(module.size)})`).join(', ')}`;
+};
+
 /**
  * The `AB4772` a development compile reports when a view's readable output
- * would not render in the hosts and the production profile was emitted in
- * its place: the preview still shows the view, just not its readable source.
+ * would not render in the hosts and the production profile — which does fit
+ * — was emitted in its place: the preview still shows the view, just not its
+ * readable source. A replacement that itself exceeds the bound gets the plain
+ * {@link mcpAppSizeDiagnostic} instead; claiming the preview renders it would
+ * be false.
  */
 export const mcpAppReadableFallbackDiagnostic = (
   context: McpAppDiagnosticContext,
-  sizes: { readonly production: McpAppOutputSize; readonly readable: McpAppOutputSize },
+  options: {
+    readonly modules: readonly Rspack.StatsModule[];
+    readonly production: McpAppOutputSize;
+    readonly readable: McpAppOutputSize;
+  },
 ): Diagnostic => ({
   code: mcpAppSizeAdvisoryCode,
   message: `MCP App ${JSON.stringify(context.appName)} readable development output compiled to `
-    + `${formatByteSize(sizes.readable.bytes)}, above the ${String(MAX_APP_HTML_BYTES / 1_048_576)} MiB bound the `
+    + `${formatByteSize(options.readable.bytes)}, above the ${String(MAX_APP_HTML_BYTES / 1_048_576)} MiB bound the `
     + 'Workbench and serve-app hosts accept; the preview renders the production build '
-    + `(${formatByteSize(sizes.production.bytes)}, ${formatByteSize(sizes.production.gzipBytes)} gzip) instead`,
+    + `(${formatByteSize(options.production.bytes)}, ${formatByteSize(options.production.gzipBytes)} gzip) instead`
+    + largestModulesClause(options.modules, context.projectRoot),
   recovery: readableFallbackRecovery,
   severity: 'warning',
   sourcePath: context.entrySource,

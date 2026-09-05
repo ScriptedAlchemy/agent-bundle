@@ -86,8 +86,12 @@ export interface CompiledMcpAppsResult {
  * The stats every App environment records for the diagnostics: errors and
  * warnings (with their module traces, as Rsbuild's own reporter reads them)
  * and the complete module list with concatenated parts, which the `AB4772`
- * advisory ranks. Reasons, sources, and chunk membership are switched off:
- * they are paid for per module and nothing here reads them.
+ * advisory ranks. The parts of a concatenated module are orphans of the
+ * chunk graph, and without `orphanModules` Rspack collapses them — nested
+ * and top-level alike — into one nameless aggregate, so the advisory could
+ * name a CommonJS dependency but never the author's own ESM source.
+ * Reasons, sources, and chunk membership are switched off: they are paid for
+ * per module and nothing here reads them.
  */
 const mcpAppStatsOptions = {
   all: false,
@@ -97,6 +101,7 @@ const mcpAppStatsOptions = {
   moduleTrace: true,
   modules: true,
   nestedModules: true,
+  orphanModules: true,
   reasons: false,
   source: false,
   warnings: true,
@@ -503,13 +508,18 @@ export const compileMcpApps = async (
     size: sizes.get(app.name) ?? (() => { throw new Error(`Missing emitted size for MCP App ${JSON.stringify(app.name)}.`); })(),
     sourceInputs: evidenceByPath.get(`mcp-apps/${app.name}.html`) ?? (() => { throw new Error(`Missing bundled MCP App evidence for ${JSON.stringify(app.name)}.`); })(),
   })));
-  const appDiagnostics = (context: McpAppDiagnosticContext, index: number): readonly Diagnostic[] => {
+  /**
+   * One App's advisories: its Rspack warnings, then the size advisory for
+   * the document that was emitted for it — by default this compile's, or the
+   * production replacement's when the fallback below swapped it in.
+   */
+  const appDiagnostics = (
+    context: McpAppDiagnosticContext,
+    index: number,
+    emitted: { readonly mode: McpAppCompileMode; readonly size: McpAppOutputSize } = { mode, size: compiledApps[index]!.size },
+  ): readonly Diagnostic[] => {
     const stats = collectedStats.get(context.appName);
-    const size = mcpAppSizeDiagnostic(context, {
-      mode,
-      modules: stats?.modules ?? [],
-      size: compiledApps[index]!.size,
-    });
+    const size = mcpAppSizeDiagnostic(context, { modules: stats?.modules ?? [], ...emitted });
     return [
       ...mcpAppCompileWarningDiagnostics(context, stats?.warnings ?? []),
       ...(size === undefined ? [] : [size]),
@@ -517,7 +527,10 @@ export const compileMcpApps = async (
   };
   const oversized = mode === 'development' ? compiledApps.filter((app) => app.size.bytes > MAX_APP_HTML_BYTES) : [];
   if (oversized.length === 0) {
-    return Object.freeze({ apps: compiledApps, diagnostics: freezeDiagnostics(contexts.flatMap(appDiagnostics)) });
+    return Object.freeze({
+      apps: compiledApps,
+      diagnostics: freezeDiagnostics(contexts.flatMap((context, index) => appDiagnostics(context, index))),
+    });
   }
 
   // Readable output that would not render in the hosts gives way to the
@@ -548,14 +561,24 @@ export const compileMcpApps = async (
       const replacement = replaced.get(app.name);
       return replacement === undefined ? app : Object.freeze({ ...app, size: replacement.size, sourceInputs: replacement.sourceInputs });
     })),
-    diagnostics: freezeDiagnostics([
-      ...contexts.flatMap((context, index) => {
-        const replacement = replaced.get(context.appName);
-        return replacement === undefined
-          ? appDiagnostics(context, index)
-          : [mcpAppReadableFallbackDiagnostic(context, { production: replacement.size, readable: compiledApps[index]!.size })];
-      }),
-      ...production.diagnostics,
-    ]),
+    // The production compile's own diagnostics are not merged: its warnings
+    // are this compile's (same module graph), and each replaced App gets
+    // exactly one `AB4772` here — the substitution notice when the
+    // replacement fits the hosts, else the plain host-bound advisory, since a
+    // notice claiming the preview renders it would be false.
+    diagnostics: freezeDiagnostics(contexts.flatMap((context, index) => {
+      const replacement = replaced.get(context.appName);
+      if (replacement === undefined) return appDiagnostics(context, index);
+      if (replacement.size.bytes > MAX_APP_HTML_BYTES) return appDiagnostics(context, index, { mode: 'production', size: replacement.size });
+      const stats = collectedStats.get(context.appName);
+      return [
+        ...mcpAppCompileWarningDiagnostics(context, stats?.warnings ?? []),
+        mcpAppReadableFallbackDiagnostic(context, {
+          modules: stats?.modules ?? [],
+          production: replacement.size,
+          readable: compiledApps[index]!.size,
+        }),
+      ];
+    })),
   });
 };
