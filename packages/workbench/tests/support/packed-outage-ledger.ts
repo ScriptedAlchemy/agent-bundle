@@ -363,10 +363,18 @@ export const validateOutageLedger = (ledger: OutageLedger): void => {
     `project/session retry had a non-connection failure: ${JSON.stringify(retryAttempts)}`);
   assertOutageLedger(retryAttempts.at(-1) === firstSuccessfulBSession && firstSuccessfulBSession.status === 200,
     `project/session recovery did not finish with the first successful B session: ${JSON.stringify(retryAttempts)}`);
-  for (const [index, attempt] of retryAttempts.entries()) {
-    if (index > 0) assertOutageLedger(attempt.at - retryAttempts[index - 1]!.at >= 225,
-      `project/session retries began too quickly: ${JSON.stringify(retryAttempts)}`);
-  }
+  // `at` is stamped when Playwright delivers the `request` event to Node, not
+  // when the page issued the probe, and a delivery can only run late: one
+  // held-back event shortens the next measured gap by exactly what it
+  // lengthened its own (a 284 ms / 222 ms pair on a loaded host). The client
+  // waits 250 ms after every failed probe, so the cadence is asserted as a mean
+  // over the retry sequence, where delivery latency cancels, while a burst —
+  // two probes issued without the delay — still fails on its own gap.
+  const retryGaps = retryAttempts.slice(1).map((attempt, index) => attempt.at - retryAttempts[index]!.at);
+  assertOutageLedger(retryGaps.every((gap) => gap >= 125),
+    `project/session retries began too quickly: ${JSON.stringify(retryAttempts)}`);
+  assertOutageLedger(retryGaps.reduce((sum, gap) => sum + gap, 0) >= 225 * retryGaps.length,
+    `project/session retries were paced below the client's 250 ms delay: ${JSON.stringify(retryAttempts)}`);
   const retryTimeline = retryAttempts.flatMap((request) => [
     Object.freeze({ at: request.at, delta: 1 }),
     Object.freeze({ at: request.completedAt!, delta: -1 }),

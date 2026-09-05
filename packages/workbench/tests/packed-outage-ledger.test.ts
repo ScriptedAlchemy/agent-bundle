@@ -238,6 +238,26 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
       )),
     }),
   });
+  // Replaces the fixture's single project/session probe with `probeAts` refused
+  // probes (each paired with its console error) and a success at `successAt`.
+  const withRetryProbes = (probeAts: readonly number[], successAt: number): OutageLedger => Object.freeze({
+    ...valid,
+    consoleErrors: Object.freeze([
+      ...valid.consoleErrors.filter((consoleError) => consoleError.url !== `${valid.origin}/api/project/session`),
+      ...probeAts.map((at) => Object.freeze({ at: at + 2, text: 'Failed to load resource: net::ERR_CONNECTION_REFUSED', url: `${valid.origin}/api/project/session` })),
+    ]),
+    recoveredAt: successAt + 1,
+    requests: Object.freeze([
+      ...valid.requests.filter((request) => request.path !== '/api/project/session'),
+      ...probeAts.map((at) => ledgerRequest({ at, completedAt: at + 1, error: 'net::ERR_CONNECTION_REFUSED', method: 'GET', path: '/api/project/session' })),
+      ledgerRequest({ at: successAt, completedAt: successAt + 1, method: 'GET', path: '/api/project/session', status: 200 }),
+    ]),
+  });
+  // One probe's `request` event delivered 34 ms late: the gap before it reads
+  // 284 ms and the gap after it 222 ms, while the page kept its 250 ms delay.
+  const lateDeliveredRetry = withRetryProbes([1_010, 1_260, 1_544, 1_766], 2_016);
+  const burstRetry = withRetryProbes([1_010, 1_013], 1_263);
+  const underpacedRetries = withRetryProbes([1_010, 1_160, 1_310], 1_460);
   const malformedLedgers = [duplicateConsole, crossOriginConsole, missingCleanup];
 
   expect(malformedLedgers.map(legacyOutageLedgerPasses)).toEqual([true, true, true]);
@@ -253,6 +273,9 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
   expect(() => validateOutageLedger(validPostRecovery)).not.toThrow();
   expect(() => validateOutageLedger(navigationLiveStreamCancellation)).not.toThrow();
   expect(() => validateOutageLedger(navigationRespondedCatalogCancellation)).not.toThrow();
+  expect(() => validateOutageLedger(lateDeliveredRetry)).not.toThrow();
+  expect(() => validateOutageLedger(burstRetry)).toThrow(/project\/session retries began too quickly/u);
+  expect(() => validateOutageLedger(underpacedRetries)).toThrow(/project\/session retries were paced below the client's 250 ms delay/u);
   for (const malformed of malformedLedgers) expect(() => validateOutageLedger(malformed)).toThrow(/Foreground outage ledger rejected/u);
   for (const malformed of [
     resetWithAlteredQuery, resetWithResponse, resetWithUnknownSession, resetWithForeignOrigin, resetWithMismatchedConsoleUrl,
