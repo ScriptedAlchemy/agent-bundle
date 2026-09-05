@@ -565,23 +565,27 @@ it('toggles span details for traced spans that carry them and renders no toggle 
   });
   const controller = createRuntimePlaygroundController({ bootstrap: bootstrap({ history: Object.freeze([traced]) }), client: clientFor(), profiles });
   controller.dispatch({ tab: 'diagnostics', type: 'selection.tab' });
-  const toggles = (markup: string): readonly string[] => markup.match(/<button aria-expanded="(?:true|false)" type="button">(?:Show|Hide) span details<\/button>/gu) ?? [];
+  const toggles = (markup: string): ReadonlyArray<Readonly<{ expanded: string | undefined; label: string }>> =>
+    (markup.match(/<button[^>]*>(?:Show|Hide) span details<\/button>/gu) ?? []).map((button) => ({
+      expanded: /aria-expanded="([^"]*)"/u.exec(button)?.[1],
+      label: button.includes('Hide') ? 'Hide span details' : 'Show span details',
+    }));
 
   const collapsed = await renderWhenReady(createElement(RuntimePlayground, { controller }));
-  expect(toggles(collapsed)).toEqual(['<button aria-expanded="false" type="button">Show span details</button>']);
+  expect(toggles(collapsed)).toEqual([{ expanded: 'false', label: 'Show span details' }]);
   expect(collapsed).toContain('<li data-runtime-trace-parent="render"><strong>flight</strong>');
   expect(collapsed).not.toContain('&quot;step&quot;: &quot;render&quot;');
 
   controller.dispatch({ spanId: 'render', type: 'trace.toggle' });
   const expanded = await renderWhenReady(createElement(RuntimePlayground, { controller }));
   expect(controller.model.expandedTraceSpanIds).toEqual(['render']);
-  expect(toggles(expanded)).toEqual(['<button aria-expanded="true" type="button">Hide span details</button>']);
+  expect(toggles(expanded)).toEqual([{ expanded: 'true', label: 'Hide span details' }]);
   expect(expanded).toContain('&quot;step&quot;: &quot;render&quot;');
 
   controller.dispatch({ spanId: 'render', type: 'trace.toggle' });
   const recollapsed = await renderWhenReady(createElement(RuntimePlayground, { controller }));
   expect(controller.model.expandedTraceSpanIds).toEqual([]);
-  expect(toggles(recollapsed)).toEqual(['<button aria-expanded="false" type="button">Show span details</button>']);
+  expect(toggles(recollapsed)).toEqual([{ expanded: 'false', label: 'Show span details' }]);
   expect(recollapsed).not.toContain('&quot;step&quot;: &quot;render&quot;');
 });
 

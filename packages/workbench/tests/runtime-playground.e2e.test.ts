@@ -211,14 +211,41 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
     await expect(confirmation).toBeHidden();
     await expect(reset).toBeFocused({ timeout: browserTimeout });
     expect(resetRequests).toEqual([]);
+    const expectedResetRequest = {
+      expectedGenerationId: runtimeIdentity.activeVector.runtimeGenerationId,
+      stateStoreId: runtimeIdentity.activeVector.stateStoreId,
+    };
+
+    // A rejected reset surfaces as a focused alert, hands the controls back,
+    // and leaves the state untouched; the next attempt goes through. The
+    // rejection is the client's own: an invalid state wrapper is refused
+    // before any provider identity is trusted.
+    const resetRoute = '**/api/runtime/state/reset';
+    await page.route(resetRoute, (route) => route.fulfill({ body: '{}', contentType: 'application/json', status: 200 }));
     await reset.click();
     await expect(confirmation).toContainText('State store');
     await confirmation.getByRole('button', { name: 'Confirm' }).click();
-    await expect.poll(() => resetRequests).toHaveLength(1);
-    expect(resetRequests).toEqual([{
-      expectedGenerationId: runtimeIdentity.activeVector.runtimeGenerationId,
-      stateStoreId: runtimeIdentity.activeVector.stateStoreId,
-    }]);
+    const resetFailure = page.locator('.runtime-request-error[role="alert"]');
+    await expect(resetFailure).toHaveText('Runtime route returned an invalid state wrapper.', { timeout: browserTimeout });
+    await expect(resetFailure).toBeFocused({ timeout: browserTimeout });
+    await expect(page.locator('.runtime-status')).not.toBeFocused();
+    await expect(confirmation).toBeHidden();
+    await expect(run).toBeEnabled();
+    await expect(reset).toBeEnabled();
+    await expect(page.getByLabel('Runtime surface')).toBeEnabled();
+    await page.getByRole('tab', { name: 'Tree', exact: true }).click();
+    await expect(resetFailure).toBeVisible();
+    await expect(page.locator('.runtime-status')).not.toBeFocused();
+    await expect(identity).toHaveAttribute('data-runtime-state-version', String(stateVersionBeforeReset));
+    await page.unroute(resetRoute);
+    await expect.poll(() => resetRequests).toEqual([expectedResetRequest]);
+
+    await reset.click();
+    await expect(confirmation).toContainText('State store');
+    await confirmation.getByRole('button', { name: 'Confirm' }).click();
+    await expect.poll(() => resetRequests).toHaveLength(2);
+    expect(resetRequests).toEqual([expectedResetRequest, expectedResetRequest]);
+    await expect(resetFailure).toHaveCount(0, { timeout: browserTimeout });
     await expect.poll(async () => identity.getAttribute('data-runtime-state-version'), { timeout: browserTimeout }).not.toBe(stateVersionBeforeReset);
     await expect(page.locator('.runtime-status')).toBeFocused({ timeout: browserTimeout });
 
