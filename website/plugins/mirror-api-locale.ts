@@ -33,6 +33,61 @@ async function collectMarkdownFiles(directory: string, prefix = ''): Promise<str
   return collected;
 }
 
+function rspressMemberAnchor(title: string): string {
+  return title
+    .replace(/\\([\\_*[\]()])/g, '$1')
+    .replace(/<[^>]*>/g, '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^\p{L}\p{N}\s_-]/gu, '')
+    .replace(/\s/g, '-');
+}
+
+/**
+ * TypeDoc reserves some exported names while building its reflection URLs, so
+ * links to those `### Member` headings receive a spurious `-1`. Rspress runs
+ * github-slugger over the rendered headings instead, where the member's first
+ * occurrence has the unsuffixed anchor. Rewrite only such generated links;
+ * deeper duplicate headings (for example `##### cwd`) retain their suffixes.
+ */
+async function alignTypeDocMemberLinks(directory: string, files: string[]): Promise<void> {
+  const memberAnchorCounts = new Map<string, Map<string, number>>();
+
+  for (const relativePath of files) {
+    const filePath = path.join(directory, relativePath);
+    const markdown = await readFile(filePath, 'utf8');
+    const counts = new Map<string, number>();
+
+    for (const match of markdown.matchAll(/^### (.+)$/gm)) {
+      const anchor = rspressMemberAnchor(match[1]);
+      counts.set(anchor, (counts.get(anchor) ?? 0) + 1);
+    }
+    memberAnchorCounts.set(path.resolve(filePath), counts);
+  }
+
+  for (const relativePath of files) {
+    const filePath = path.join(directory, relativePath);
+    const markdown = await readFile(filePath, 'utf8');
+    const aligned = markdown.replace(
+      /(\]\()([^)\s#]*#)([\p{L}\p{N}_-]+)-\d+(\))/gu,
+      (link, opening: string, target: string, anchor: string, closing: string) => {
+        const linkedPath = target.slice(0, -1);
+        const targetPath = linkedPath
+          ? path.resolve(path.dirname(filePath), linkedPath)
+          : path.resolve(filePath);
+        if (memberAnchorCounts.get(targetPath)?.get(anchor) !== 1) {
+          return link;
+        }
+        return `${opening}${target}${anchor}${closing}`;
+      },
+    );
+
+    if (aligned !== markdown) {
+      await writeFile(filePath, aligned);
+    }
+  }
+}
+
 async function prunePlaceholderDirectories(directory: string): Promise<boolean> {
   const entries = await readDirectory(directory);
   let isEmpty = true;
@@ -137,6 +192,7 @@ export function mirrorApiLocale(options: MirrorApiLocaleOptions): RspressPlugin 
 
       const source = path.join(docsRoot, sourceDir);
       const generatedFiles = await collectMarkdownFiles(source);
+      await alignTypeDocMemberLinks(source, generatedFiles);
 
       for (const { dir, notice } of targets) {
         const target = path.join(docsRoot, dir);

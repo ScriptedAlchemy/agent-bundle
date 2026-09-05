@@ -1,39 +1,77 @@
 [
-  "index",
   {
-    "type": "dir",
-    "name": "modules",
-    "label": "模块",
-    "collapsed": true
+    "type": "file",
+    "name": "index",
+    "label": "agent-bundle"
   },
   {
-    "type": "dir",
-    "name": "functions",
-    "label": "函数",
-    "collapsed": true
+    "type": "file",
+    "name": "index-1",
+    "label": "index"
   },
   {
-    "type": "dir",
-    "name": "classes",
-    "label": "类",
-    "collapsed": true
+    "type": "file",
+    "name": "config",
+    "label": "config"
   },
   {
-    "type": "dir",
-    "name": "interfaces",
-    "label": "接口",
-    "collapsed": true
+    "type": "file",
+    "name": "api",
+    "label": "api"
   },
   {
-    "type": "dir",
-    "name": "types",
-    "label": "类型别名",
-    "collapsed": true
+    "type": "file",
+    "name": "routes/public",
+    "label": "routes/public"
   },
   {
-    "type": "dir",
-    "name": "variables",
-    "label": "变量",
-    "collapsed": true
+    "type": "file",
+    "name": "test",
+    "label": "test"
+  },
+  {
+    "type": "file",
+    "name": "test/browser",
+    "label": "test/browser"
+  },
+  {
+    "type": "file",
+    "name": "eval",
+    "label": "eval"
+  },
+  {
+    "type": "file",
+    "name": "rstest",
+    "label": "rstest"
+  },
+  {
+    "type": "file",
+    "name": "mcp-apps",
+    "label": "mcp-apps"
+  },
+  {
+    "type": "file",
+    "name": "mcp-entry",
+    "label": "mcp-entry"
+  },
+  {
+    "type": "file",
+    "name": "cli-entry",
+    "label": "cli-entry"
+  },
+  {
+    "type": "file",
+    "name": "serve-app-command",
+    "label": "serve-app-command"
+  },
+  {
+    "type": "file",
+    "name": "launch-env",
+    "label": "launch-env"
+  },
+  {
+    "type": "file",
+    "name": "meta",
+    "label": "meta"
   }
 ]
