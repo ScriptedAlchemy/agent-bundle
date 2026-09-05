@@ -1250,8 +1250,8 @@ export default defineConfig({
   declaration replaces a hand-rolled `hooks/hooks.json` per host. Prebuilt
   hook `args` (for example `--host claude`) accept shell-safe strings only.
 - **Prebuilt means opaque.** Payload files are exempt from compiler dependency
-  evidence and strict generated-JSON validation but
-  remain hash-locked to the manifest. Declaration provenance is recorded as
+  evidence and strict generated-JSON validation but remain hash-locked to the
+  manifest. Declaration provenance is recorded as
   `kind: 'prebuilt'`. Hooks with prebuilt handlers are packaged like native
   hook documents: they do not compile wrappers and do not appear in the
   simulatable hook index. MCP Apps declared on a prebuilt server stay a
@@ -1592,8 +1592,7 @@ usage are not reported), while an external bare import fails `AB6005` from
 the compiler's externals evidence. An expression request such as
 `import(spec)` remains outside the compiler's view and produces no `AB6005`
 finding. From an installed artifact the supported command is `<plugin> web`
-on
-`bin/<plugin>.mjs` (emitted when `web` is configured, even with no
+on `bin/<plugin>.mjs` (emitted when `web` is configured, even with no
 `src/cli/**` commands). It reads the manifest `web` section beside `bin/`,
 launches the plugin's own packed MCP server, and prints the same ready line
 `MCP App <server>/<app> at <url> (tool <tool>; Ctrl-C stops the server)` —
