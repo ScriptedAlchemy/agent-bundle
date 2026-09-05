@@ -68,7 +68,8 @@ const readJson = async <Document>(path: string): Promise<Document> =>
 
 it('exports definePrebuilt from the package and config entry points as an identity helper', () => {
   const entry = { runtimeDependencies: ['sharp'], source: './built/runtime' } as const;
-  expect([definePrebuiltFromIndex(entry) === entry, definePrebuiltFromConfig(entry) === entry]).toEqual([true, true]);
+  expect(definePrebuiltFromIndex(entry)).toBe(entry);
+  expect(definePrebuiltFromConfig(entry)).toBe(entry);
 });
 
 it('validates declared payload runtime dependencies and normalizes them sorted and unique', async () => {
@@ -158,9 +159,9 @@ it('accepts optionalDependencies as installed payload runtime dependencies', asy
 });
 
 it.each([
-  ["'sharp'", 'a string'],
-  ["['']", 'an empty package name'],
-])('reports runtimeDependencies with %s as AB4740', async (runtimeDependencies, _description) => {
+  "'sharp'",
+  "['']",
+])('reports runtimeDependencies with %s as AB4740', async (runtimeDependencies) => {
   const root = await createProject({
     payload: `  payload: { runtime: { source: './built/runtime', runtimeDependencies: ${runtimeDependencies} } },`,
   });

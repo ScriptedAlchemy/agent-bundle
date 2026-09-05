@@ -275,10 +275,9 @@ npx agent-bundle prepack --root . --output artifact --json
 并参与项目 revision 的哈希。请先运行你自己的构建——缺失或为空的 payload 在 `dev` 下只是警告，以便
 干净检出也能工作，但 `agent-bundle build` 会拒绝它。
 
-编译器从不打开 payload 文件，因此 `definePrebuilt` 是声明这些文件在运行时加载哪些包的类型化入口：
-`runtimeDependencies` 列出裸包名。不是裸包名的条目，或 `package.json` 未在 `dependencies` 或
-`optionalDependencies` 下声明的包名，会报 `AB4751`（`package.json` 缺失或无法解析时跳过声明检查）。
-prepack 未使用依赖门禁（`AB7014`）把任一 payload 的 `runtimeDependencies` 中声明的包名视为已使用。
+编译器不会打开 payload 文件，因此请用 `definePrebuilt` 和 `runtimeDependencies` 列出它们加载的裸包名。
+无效或未声明的包名会报 `AB4751`；`package.json` 缺失或无法解析时跳过声明检查。
+已声明的包名在 `AB7014` 中视为已使用。
 
 ```ts
 import { defineConfig, definePrebuilt } from 'agent-bundle';

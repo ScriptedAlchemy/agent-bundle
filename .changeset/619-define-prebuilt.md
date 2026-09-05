@@ -2,4 +2,8 @@
 "agent-bundle": minor
 ---
 
-Add `definePrebuilt` (exported from `agent-bundle` and `agent-bundle/config`) and the `runtimeDependencies` field on `payload` entries: a prebuilt payload declares the bare package names its files load at run time, since the compiler never opens a payload file. `agent-bundle validate` reports `AB4751` when an entry is not a bare package name or `package.json` does not declare it under `dependencies` or `optionalDependencies` (a malformed list is `AB4740`), and the prepack gate's `AB7014` now counts a declared runtime dependency as used. The normalized model carries `NormalizedPayload.runtimeDependencies`. (#619)
+Add `definePrebuilt` to `agent-bundle` and `agent-bundle/config`, with a
+`runtimeDependencies` field for the bare package names a prebuilt payload
+loads. Report malformed lists as `AB4740` and invalid or undeclared names as
+`AB4751`; count declared runtime dependencies as used for `AB7014` and expose
+them through `NormalizedPayload.runtimeDependencies`. (#630)

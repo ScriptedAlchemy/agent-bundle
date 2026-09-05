@@ -435,9 +435,9 @@ reports `AB6005` when a `dist` bundle or host-pack module keeps anything other t
 at all. The emitted-module walk remains behind that compile-time check, so the lexed `import` evidence below describes prebuilt payload modules and other packed scripts the
 framework did not compile. A `require`, `createRequire(…)(…)`, or `import.meta.resolve(…)` call the compiler
 does not resolve is not a module dependency; its evidence is read from every packed file, compiled bundles
-included. A prebuilt payload's `runtimeDependencies` declaration counts as
-use of the same standing: the compiler never opens a payload file, so the
-author states what it loads. The dependency evidence is read from the packed bytes themselves: every `.js`/`.mjs`/`.cjs` file
+included. Because the compiler never opens a payload file, its
+`runtimeDependencies` declaration also counts as dependency evidence. The
+dependency evidence is read from the packed bytes themselves: every `.js`/`.mjs`/`.cjs` file
 `npm pack --dry-run` lists is lexed for static and dynamic `import` specifiers and scanned for
 literal `require("…")` and `.resolve("…")` calls (`require.resolve`, `createRequire(…).resolve`,
 `import.meta.resolve`: a package located only to find an asset is still a runtime dependency; a

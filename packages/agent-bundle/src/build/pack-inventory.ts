@@ -165,7 +165,6 @@ const unresolvableRecovery = 'Depend on a published registry version, or bundle 
   + 'which only pnpm, Yarn, or Bun rewrite while packing.';
 
 const dependencyDiagnostics = async (options: {
-  /** Package names prebuilt payloads declare they load at run time (`definePrebuilt`). */
   readonly declaredRuntimeDependencies: ReadonlySet<string>;
   readonly packageDocument: Readonly<Record<string, unknown>>;
   readonly packedPaths: readonly string[];
