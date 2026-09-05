@@ -13,7 +13,8 @@ import {
 
 test('outage ledger rejects the legacy duplicate, cross-origin, and missing-cleanup false positives', () => {
   const valid = outageLedgerFixture();
-  const oldStreamPath = `/api/mcp/sessions/${encodeURIComponent(valid.oldSessionId)}/stream`;
+  const oldSessionPath = `/api/mcp/sessions/${encodeURIComponent(valid.oldSessionId)}`;
+  const oldStreamPath = `${oldSessionPath}/stream`;
   const resetRequest = ledgerRequest({
     at: 999,
     completedAt: 1_008,
@@ -106,18 +107,76 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
       ...valid.requests,
     ]),
   });
-  const resetSessionProbe = Object.freeze({
+  // The fixture's single failed project/session probe, and the console error
+  // it logged, failing with `code` instead of REFUSED.
+  const withSessionProbeCode = (code: string): OutageLedger => Object.freeze({
     ...valid,
     consoleErrors: Object.freeze(valid.consoleErrors.map((consoleError) =>
       consoleError.url === `${valid.origin}/api/project/session`
-        ? Object.freeze({ ...consoleError, text: 'Failed to load resource: net::ERR_CONNECTION_RESET' })
+        ? Object.freeze({ ...consoleError, text: `Failed to load resource: ${code}` })
         : consoleError,
     )),
     requests: Object.freeze(valid.requests.map((request) =>
       request.path === '/api/project/session' && request.error !== undefined
-        ? ledgerRequest({ ...request, error: 'net::ERR_CONNECTION_RESET' })
+        ? ledgerRequest({ ...request, error: code })
         : request,
     )),
+  });
+  const resetSessionProbe = withSessionProbeCode('net::ERR_CONNECTION_RESET');
+  const socketNotConnectedSessionProbe = withSessionProbeCode('net::ERR_SOCKET_NOT_CONNECTED');
+  // SOCKET_NOT_CONNECTED is a dying-server probe failure and nothing else: the
+  // old-session DELETE, a non-GET on the probe path, a probe that carries
+  // response headers, and a probe outside the outage window all stay rejected
+  // with their existing messages.
+  const socketNotConnectedDelete = Object.freeze({
+    ...valid,
+    consoleErrors: Object.freeze(valid.consoleErrors.map((consoleError) =>
+      consoleError.url === `${valid.origin}${oldSessionPath}`
+        ? Object.freeze({ ...consoleError, text: 'Failed to load resource: net::ERR_SOCKET_NOT_CONNECTED' })
+        : consoleError,
+    )),
+    requests: Object.freeze(valid.requests.map((request) =>
+      request.method === 'DELETE' ? ledgerRequest({ ...request, error: 'net::ERR_SOCKET_NOT_CONNECTED' }) : request,
+    )),
+  });
+  const socketNotConnectedSessionPost = Object.freeze({
+    ...valid,
+    consoleErrors: Object.freeze([
+      ...valid.consoleErrors,
+      Object.freeze({ at: 1_022, text: 'Failed to load resource: net::ERR_SOCKET_NOT_CONNECTED', url: `${valid.origin}/api/project/session` }),
+    ]),
+    requests: Object.freeze([
+      ...valid.requests,
+      ledgerRequest({ at: 1_020, completedAt: 1_021, error: 'net::ERR_SOCKET_NOT_CONNECTED', method: 'POST', path: '/api/project/session' }),
+    ]),
+  });
+  const socketNotConnectedRespondedProbe = Object.freeze({
+    ...socketNotConnectedSessionProbe,
+    requests: Object.freeze(socketNotConnectedSessionProbe.requests.map((request) =>
+      request.error === 'net::ERR_SOCKET_NOT_CONNECTED' ? ledgerRequest({ ...request, respondedAt: request.at, status: 503 }) : request,
+    )),
+  });
+  const socketNotConnectedPreOutageProbe = Object.freeze({
+    ...valid,
+    consoleErrors: Object.freeze([
+      Object.freeze({ at: 992, text: 'Failed to load resource: net::ERR_SOCKET_NOT_CONNECTED', url: `${valid.origin}/api/project/session` }),
+      ...valid.consoleErrors,
+    ]),
+    requests: Object.freeze([
+      ledgerRequest({ at: 990, completedAt: 991, error: 'net::ERR_SOCKET_NOT_CONNECTED', method: 'GET', path: '/api/project/session' }),
+      ...valid.requests,
+    ]),
+  });
+  // The code on the console error alone, or on the probe alone, pairs with
+  // nothing: a console error still needs its own request failure and a
+  // request failure its own console error.
+  const socketNotConnectedConsoleWithoutFailure = Object.freeze({
+    ...valid,
+    consoleErrors: socketNotConnectedSessionProbe.consoleErrors,
+  });
+  const socketNotConnectedProbeWithoutConsole = Object.freeze({
+    ...socketNotConnectedSessionProbe,
+    consoleErrors: Object.freeze(valid.consoleErrors.filter((consoleError) => consoleError.url !== `${valid.origin}/api/project/session`)),
   });
   const knownPreOutageCatalogCancellation = Object.freeze({
     ...valid,
@@ -294,21 +353,31 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
       )),
     }),
   });
-  // Replaces the fixture's single project/session probe with `probeAts` refused
+  // Replaces the fixture's single project/session probe with `probeAts` failed
   // probes (each paired with its console error) and a success at `successAt`.
-  const withRetryProbes = (probeAts: readonly number[], successAt: number): OutageLedger => Object.freeze({
+  // A probe is refused unless `codes` names its failure at the same index.
+  const withRetryProbes = (probeAts: readonly number[], successAt: number, codes: readonly string[] = []): OutageLedger => Object.freeze({
     ...valid,
     consoleErrors: Object.freeze([
       ...valid.consoleErrors.filter((consoleError) => consoleError.url !== `${valid.origin}/api/project/session`),
-      ...probeAts.map((at) => Object.freeze({ at: at + 2, text: 'Failed to load resource: net::ERR_CONNECTION_REFUSED', url: `${valid.origin}/api/project/session` })),
+      ...probeAts.map((at, index) => Object.freeze({
+        at: at + 2, text: `Failed to load resource: ${codes[index] ?? 'net::ERR_CONNECTION_REFUSED'}`, url: `${valid.origin}/api/project/session`,
+      })),
     ]),
     recoveredAt: successAt + 1,
     requests: Object.freeze([
       ...valid.requests.filter((request) => request.path !== '/api/project/session'),
-      ...probeAts.map((at) => ledgerRequest({ at, completedAt: at + 1, error: 'net::ERR_CONNECTION_REFUSED', method: 'GET', path: '/api/project/session' })),
+      ...probeAts.map((at, index) => ledgerRequest({
+        at, completedAt: at + 1, error: codes[index] ?? 'net::ERR_CONNECTION_REFUSED', method: 'GET', path: '/api/project/session',
+      })),
       ledgerRequest({ at: successAt, completedAt: successAt + 1, method: 'GET', path: '/api/project/session', status: 200 }),
     ]),
   });
+  // The CI shape (Release gates, runs 33933481002 and 33936651225): the first
+  // probe of the outage went out over a keep-alive connection the closing
+  // server had already shut and failed with SOCKET_NOT_CONNECTED; every later
+  // probe found the port closed, and recovery answered 200.
+  const socketNotConnectedFirstRetry = withRetryProbes([1_010, 1_266, 1_518], 1_770, ['net::ERR_SOCKET_NOT_CONNECTED']);
   // One probe's `request` event delivered 34 ms late: the gap before it reads
   // 284 ms and the gap after it 222 ms, while the page kept its 250 ms delay.
   const lateDeliveredRetry = withRetryProbes([1_010, 1_260, 1_544, 1_766], 2_016);
@@ -327,6 +396,14 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
   expect(() => validateOutageLedger(validOldStreamReset)).not.toThrow();
   expect(() => validateOutageLedger(validOldStreamSocketNotConnected)).not.toThrow();
   expect(() => validateOutageLedger(resetSessionProbe)).not.toThrow();
+  expect(() => validateOutageLedger(socketNotConnectedSessionProbe)).not.toThrow();
+  expect(() => validateOutageLedger(socketNotConnectedFirstRetry)).not.toThrow();
+  expect(() => validateOutageLedger(socketNotConnectedDelete)).toThrow(/old-session DELETE must succeed or fail exactly with ERR_CONNECTION_REFUSED/u);
+  expect(() => validateOutageLedger(socketNotConnectedSessionPost)).toThrow(/unknown outage failure/u);
+  expect(() => validateOutageLedger(socketNotConnectedRespondedProbe)).toThrow(/project\/session retry is missing or has multiple terminal states/u);
+  expect(() => validateOutageLedger(socketNotConnectedPreOutageProbe)).toThrow(/unexpected pre-outage failures/u);
+  expect(() => validateOutageLedger(socketNotConnectedConsoleWithoutFailure)).toThrow(/console error does not uniquely pair with an outage request failure/u);
+  expect(() => validateOutageLedger(socketNotConnectedProbeWithoutConsole)).toThrow(/outage request failures lack a unique paired console error/u);
   expect(() => validateOutageLedger(preStartedOutageStreamTermination)).not.toThrow();
   expect(() => validateOutageLedger(knownPreOutageCatalogCancellation)).not.toThrow();
   expect(() => validateOutageLedger(knownPreOutageSessionReplayCancellation)).not.toThrow();

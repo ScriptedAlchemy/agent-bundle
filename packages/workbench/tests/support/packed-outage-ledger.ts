@@ -200,8 +200,16 @@ export const hasCanonicalAfterCursor = (url: URL): boolean => {
   return Number.isSafeInteger(parsed) && parsed >= 0 && String(parsed) === after && url.search === `?after=${after}`;
 };
 
-/** A probe against a dying server can hit its half-open socket (RESET) instead of a closed port (REFUSED). */
-const downServerProbeCodes: ReadonlySet<string> = new Set(['net::ERR_CONNECTION_REFUSED', 'net::ERR_CONNECTION_RESET']);
+/**
+ * A probe against a dying server can hit its half-open socket (RESET), or go
+ * out over a keep-alive connection the server has already closed — Chromium
+ * reports that as SOCKET_NOT_CONNECTED — instead of a closed port (REFUSED).
+ * `closeChild` (`packed-release-harness.ts`) stops the server with SIGTERM, so
+ * the first probe of an outage races the server closing its idle sockets by
+ * sub-millisecond ordering (CI runs 33933481002 and 33936651225: 9 ms and
+ * 18 ms in, no response headers, every later probe REFUSED).
+ */
+const downServerProbeCodes: ReadonlySet<string> = new Set(['net::ERR_CONNECTION_REFUSED', 'net::ERR_CONNECTION_RESET', 'net::ERR_SOCKET_NOT_CONNECTED']);
 
 /** The wait the Workbench project client observes after every failed session probe (`project-client.ts`). */
 const projectSessionRetryDelayMs = 250;
