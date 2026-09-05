@@ -293,6 +293,19 @@ the event runtime endpoint.` / `Unable to release the event runtime endpoint cla
 启动失败时会先关掉已经起来的监听器，因此绝不会在错误背后留下一个活的服务端。崩溃进程留下的过期
 socket 或锁会由下一个服务端恢复：它探测端点，并回收所有者已被证明死亡的认领。
 
+**并发会话。** 宿主经常从同一个安装根目录运行同一插件的多个会话——Claude Desktop 启动的每个
+Claude Code 会话共享同一个 `--plugin-dir`，Cursor 也会从同一个缓存导入 Claude 安装的插件——因此多个
+端点相同的生成 MCP 服务端进程是常态。任一时刻恰好只有一个进程拥有 socket。启动时发现端点已被另一个
+进程拥有的服务端**不会**退出：它以 `standby` 角色启动，照常服务自己的 MCP 会话，向 stderr 写入
+`agent-bundle event runtime: <socket> is owned by another process; standing by`，并大约每秒探测一次
+端点。所有者一退出，某个待命者就会通过与无主启动完全相同的认领并监听路径接管 socket（并记录
+`… was released by its owner; took it over`）；若有多个待命者，认领锁保证恰好一个胜出，其余继续等待。
+钩子包装层无需任何改动：只要所有者活着，它们的回答与以前一样；在接管间隙（最多约一秒）里它们会看到
+`runtime-unavailable`，这正是上文 `fallback: 'standalone'` 路由覆盖的情形——仅共享的路由则对这一个事件
+以非零退出。接管因"socket 仍被占有"之外的任何原因失败时（无法写入的 socket 目录、永远不清除的认领），
+服务端会把失败报告到自己的 stderr——每种不同的失败一行，最多每 30 秒重复一次——并继续待命。因其他
+任何原因失败的启动仍然失败即关闭，所有者无法删除的过期 socket 也一样。
+
 `runtime: 'standalone'` 的路由把它的模块打进包装层自身：同样的规范身份、同样的投影、没有共享的进程状态。
 `AB4817` 会拒绝这样的路由：它需要共享运行时，但在某个 target 上没有生成的 MCP 入口承载它，也没有独立
 回退。

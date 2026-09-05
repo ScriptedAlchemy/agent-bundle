@@ -149,9 +149,13 @@ export default async function library({ invocation }: AgentProviderContext): Pro
 }
 ```
 
-Providers run once per request in deterministic key order before the request
-scope opens; a thrown factory fails that request closed, so return an honest
-unavailable-shaped value for expected degradation. The compiler validates the
+Providers run once per request in deterministic key order as the request's own
+resolver: after `runAgentRequest` freezes the identity axes and opens the
+notice lease, before the route runs, so the factory context carries `host`,
+`session`, `workspace`, `lineage`, and `plugin` as the route will read them plus
+the read-only `state` (`read`) and `notices` (`inbox`) handles (#459; see
+`entry-conventions.md`). A thrown factory fails that request closed, so return
+an honest unavailable-shaped value for expected degradation. The compiler validates the
 default export (`AB4940`), unique keys (`AB4941`), and the reserved
 framework-owned `processLifetime` key (`AB4942`).
 

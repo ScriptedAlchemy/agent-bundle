@@ -1051,7 +1051,7 @@ it('compiles each native hook through a virtual Rslib entry without sibling chun
   }
 });
 
-it('applies the operator .env layer of the installed pack before a hook handler runs, filling only what the host did not set (#469)', async () => {
+it('applies the operator .env layer of the installed pack before a hook handler module evaluates, filling only what the host did not set (#469)', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-operator-env-'));
   const sourceRoot = join(root, 'src', 'hooks');
   const outputRoot = join(root, 'dist');
@@ -1061,9 +1061,17 @@ it('applies the operator .env layer of the installed pack before a hook handler 
     await mkdir(sourceRoot, { recursive: true });
     await Promise.all([
       writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n'),
-      writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
+      // `sideEffects: false` is the consumer package.json declaration that
+      // would let the bundler drop the wrapper's bare import of the layer
+      // module; the build marks generated modules side-effectful regardless.
+      writeFile(join(root, 'package.json'), '{"type":"module","sideEffects":false}\n'),
+      // The module-level read is what the handler import evaluates before any
+      // statement of the wrapper; it must agree with the read inside the
+      // handler, so the layer import has to precede the handler import and
+      // survive bundling in that order.
       writeFile(join(sourceRoot, 'session-start.ts'), [
-        "export default () => ({ outcome: 'continue' as const, additionalContext: `${process.env.OPERATOR_TOKEN ?? 'unset'}:${process.env.HOST_WINS ?? 'unset'}` });",
+        "const atImport = process.env.OPERATOR_TOKEN ?? 'unset';",
+        "export default () => ({ outcome: 'continue' as const, additionalContext: `${atImport}=${process.env.OPERATOR_TOKEN ?? 'unset'}:${process.env.HOST_WINS ?? 'unset'}` });",
         '',
       ].join('\n')),
       writeFile(join(sourceRoot, 'check-command.ts'), "export default () => ({ outcome: 'continue' as const });\n"),
@@ -1083,25 +1091,25 @@ it('applies the operator .env layer of the installed pack before a hook handler 
       // No file: the wrapper is a no-op and the handler sees the host environment only.
       const withoutFile = await runNativeHook(wrapper, event);
       expect(withoutFile).toMatchObject({ code: 0, stderr: '' });
-      expect(context(withoutFile)).toBe('unset:unset');
+      expect(context(withoutFile)).toBe('unset=unset:unset');
 
       // `<plugin root>/.env` fills the gap; an exported variable still wins.
       await writeFile(join(pluginRoot, '.env'), 'OPERATOR_TOKEN=from-file\nHOST_WINS=from-file\n');
       const withFile = await runNodeScript({ args: [wrapper], env: { HOST_WINS: 'host' }, input: JSON.stringify(event) });
       expect(withFile).toMatchObject({ code: 0, stderr: '' });
-      expect(context(withFile)).toBe('from-file:host');
+      expect(context(withFile)).toBe('from-file=from-file:host');
 
       // The anchor the host injects decides the location: pointed elsewhere, the artifact's file is not read.
       const elsewhere = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-operator-env-anchor-'));
       try {
         await writeFile(join(elsewhere, '.env'), 'OPERATOR_TOKEN=from-anchor\n');
         const anchored = await runNodeScript({ args: [wrapper], env: { AGENT_BUNDLE_PLUGIN_ROOT: elsewhere }, input: JSON.stringify(event) });
-        expect(context(anchored)).toBe('from-anchor:unset');
+        expect(context(anchored)).toBe('from-anchor=from-anchor:unset');
         // An explicit AGENT_BUNDLE_ENV_FILE replaces the convention; `none` disables the layer.
         const explicit = await runNodeScript({ args: [wrapper], env: { AGENT_BUNDLE_ENV_FILE: join(elsewhere, '.env') }, input: JSON.stringify(event) });
-        expect(context(explicit)).toBe('from-anchor:unset');
+        expect(context(explicit)).toBe('from-anchor=from-anchor:unset');
         const disabled = await runNodeScript({ args: [wrapper], env: { AGENT_BUNDLE_ENV_FILE: 'none' }, input: JSON.stringify(event) });
-        expect(context(disabled)).toBe('unset:unset');
+        expect(context(disabled)).toBe('unset=unset:unset');
       } finally {
         await rm(elsewhere, { force: true, recursive: true });
       }
@@ -1382,9 +1390,15 @@ it('round-trips the documented Cursor subagent envelopes through published Curso
         join(sourceRoot, 'subagent-start.ts'),
         "export default (event: Record<string, unknown>) => ({ outcome: 'deny' as const, reason: `${String(event.sessionId)}:${String(event.agentId)}:${String(event.agentType)}:${String(event.toolUseId)}:${String(event.model)}` });\n",
       ),
+      // The module-level read proves the Cursor wrapper binds the handler
+      // after the operator `.env` layer (#469), like the native wrappers.
       writeFile(
         join(sourceRoot, 'subagent-stop.ts'),
-        "export default (event: Record<string, unknown>) => ({ outcome: 'deny' as const, reason: `${String(event.agentTranscriptPath)}:${String(event.stopHookActive)}:${String(event.lastAssistantMessage)}:${String(event.agentType)}` });\n",
+        [
+          "const atImport = process.env.CURSOR_OPERATOR ?? 'unset';",
+          "export default (event: Record<string, unknown>) => ({ outcome: 'deny' as const, reason: `${String(event.agentTranscriptPath)}:${String(event.stopHookActive)}:${String(event.lastAssistantMessage)}:${String(event.agentType)}:${atImport}` });",
+          '',
+        ].join('\n'),
       ),
     ]);
     await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
@@ -1421,9 +1435,19 @@ it('round-trips the documented Cursor subagent envelopes through published Curso
       code: 0,
       stderr: '',
       stdout: JSON.stringify({
-        followup_message: `${String(stopInput.agent_transcript_path)}:false:${String(stopInput.summary)}:${String(stopInput.subagent_type)}`,
+        followup_message: `${String(stopInput.agent_transcript_path)}:false:${String(stopInput.summary)}:${String(stopInput.subagent_type)}:unset`,
       }),
     });
+    // `<plugin root>/.env` is read before the handler module evaluates.
+    await writeFile(join(outputRoot, 'cursor', '.env'), 'CURSOR_OPERATOR=from-file\n');
+    await expect(runNativeHook(join(outputRoot, 'cursor', 'hooks', 'subagent-stop.mjs'), stopInput)).resolves.toEqual({
+      code: 0,
+      stderr: '',
+      stdout: JSON.stringify({
+        followup_message: `${String(stopInput.agent_transcript_path)}:false:${String(stopInput.summary)}:${String(stopInput.subagent_type)}:from-file`,
+      }),
+    });
+    await rm(join(outputRoot, 'cursor', '.env'));
     // The Claude/Codex agent_id/agent_type spelling is not the Cursor envelope.
     await expect(runNativeHook(join(outputRoot, 'cursor', 'hooks', 'subagent-start.mjs'), {
       agent_id: 'abc-123',
