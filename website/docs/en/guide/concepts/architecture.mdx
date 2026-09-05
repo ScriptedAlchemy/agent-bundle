@@ -418,20 +418,24 @@ keeps only the outline.
 
 ### Sections the writer emits
 
+The document has two parts with two version numbers. The **public
+contract** (`manifestVersion: 2`) is what consumers read. The
+**compiler record** (`compiler`, `recordVersion: 1`) is the operational
+account of the run — producer, project digests, provenance, adapter
+revisions, pinned schemas, validation — and changes without bumping
+`manifestVersion`; consumer readers never need it.
+
 | Section | What it records |
 | --- | --- |
-| `producer` | `{ name: 'agent-bundle', version }` from the framework package |
 | `manifestVersion` | `2` |
 | `application` | Host-independent identity: `id`, `name`, `version`, optional `description` |
-| `project` | `configPath`, `configDigest`, `modelDigest`, `revision`, `sourceInputs[]`, optional `packageName` / `packageVersion` |
-| `files[]` | Every emitted file except the manifest (`path`, `bytes`, `sha256`, `kind`, optional `mode`, `sourceInputs[]`) |
+| `files[]` | Every emitted file except the manifest (`path`, `bytes`, `sha256`, `kind`, optional `mode`) |
 | `runtime` | `{ node }` from `NormalizedPlugin.runtime` |
-| `projections[]` | One row per selected host. `host` is the selected name; `builtInHost` is the shipped adapter identity (absent for an advanced-registry adapter). Also `adapterRevision`, `observedVersion`, `schemas[]`, `documents` (`plugin?`, `marketplace?`, `mcp?`, `hooks?`), optional `marketplace.name`. Renamed from `targets[]`. |
+| `projections[]` | One row per selected host. `host` is the selected name; `builtInHost` is the shipped adapter identity (absent for an advanced-registry adapter); `documents` (`plugin?`, `marketplace?`, `mcp?`, `hooks?`) point at the derived host documents; optional `marketplace.name`. Renamed from `targets[]`. |
 | `routes` | Compiled route graph: `servers[]`, `events[]`, `scripts[]`, `cli?`, `providers[]`, `layouts[]`, `contracts[]`, `digest` |
 | `executables` | Processes the root can start: `bins[]`, `hooks[]` (`kind` is `config` \| `event-route`), `mcpServers[]` (`entry`, `apps[]`), `scripts[]` |
 | `distribution` | `channels` (`local` always; `npm` when packaged) and optional `install` pointers |
-| `agentSkills` | `specification`, `sourceRevision`, `schemaSha256` |
-| `validation` | `{ source, artifact, projections[] }` — every `status` is `'passed'` |
+| `compiler` | `recordVersion: 1`; `producer` (`{ name: 'agent-bundle', version }`); `project` (`configPath`, `configDigest`, `modelDigest`, `revision`, `sourceInputs[]`, optional `packageName` / `packageVersion`); `provenance[]` (one `{ path, sourceInputs[] }` per `files[]` row); `adapters[]` (one `{ host, adapterRevision, observedVersion, schemas[] }` per projection); `agentSkills` (`specification`, `sourceRevision`, `schemaSha256`); `validation` (`{ source, artifact, projections[] }`, every `status` is `'passed'`) |
 
 ### Who reads each field
 
@@ -441,14 +445,14 @@ harness.
 
 | Reader | Fields used | Purpose |
 | --- | --- | --- |
-| `build/validate-artifact.ts` | all of them | Re-parse the on-disk bytes, match `files[]` digests and modes, check `projections[]` (adapter revision, observed version, and `builtInHost` identity, `AB6010`) against the registry, pin `agentSkills` and `runtime.node`. There is no separate coherence pass: the host documents and the manifest are written from the same compiled plans in one build, and every document is a digest-pinned `files[]` row |
+| `build/validate-artifact.ts` | all of them | Re-parse the on-disk bytes, match `files[]` digests and modes, check `projections[]` and `compiler.adapters[]` (adapter revision, observed version, and `builtInHost` identity, `AB6010`) against the registry, pin `compiler.agentSkills` and `runtime.node`. There is no separate coherence pass: the host documents and the manifest are written from the same compiled plans in one build, and every document is a digest-pinned `files[]` row |
 | `build/validate-artifact-modules.ts` | `files[]` (bundle / `.mjs` rows) plus package-build `dist` | `AB6005` import graph |
 | `build/validate-artifact-skills.ts` | `projections[]` (`manifestTargets`) plus the tree | Skill documents vs selected hosts |
 | `build/validate-artifact-hooks.ts` | `executables.hooks[]`, `projections[]` | `AB6018`: hook rows vs host hook documents |
 | `build/validate-artifact-mcp.ts` | `projections[]`, MCP files | MCP documents vs selected hosts |
-| `build/pack-inventory.ts` | `files[]`, `projections[]`, `application.version`, `project.packageVersion` | Packed tarball must contain every manifest file (`AB7010`); digest drift; release-version agreement; `AB7014` / `AB7015` |
+| `build/pack-inventory.ts` | `files[]`, `projections[]`, `application.version`, `compiler.project.packageVersion` | Packed tarball must contain every manifest file (`AB7010`); digest drift; release-version agreement; `AB7014` / `AB7015` |
 | `eval/artifact.ts` | `files[]`, `projections[]`, `runtime` | `evalTargetDigests`: one digest per `projections[].host` over the **whole** file table (same bytes, distinct identity) |
-| `dev/artifacts/artifact-inspection-service.ts` | `files[]`, `project`, `application`, `distribution`, `projections[]`, `executables` | Workbench artifact inspector: one tree from `files[]`, labeled once per projection; bins / MCP servers / scripts from `executables` |
+| `dev/artifacts/artifact-inspection-service.ts` | `files[]`, `compiler.project`, `compiler.provenance[]`, `application`, `distribution`, `projections[]`, `routes`, `executables` | Workbench artifact inspector: one tree from `files[]`, labeled once per projection; the application tree through `dev/artifacts/application-explorer.ts` (`ArtifactInspection.application`), a thin projection rather than the manifest's raw shape |
 | `dev/artifacts/artifact-executables.ts` | `executables.scripts[]` | Host-scoped script rows (replaces `artifact-script-catalog.ts`) |
 | `services/hook-service.ts` | `executables.hooks[]` | `hooks list` / `simulate` |
 | `dev/playground/hook-playground-service.ts` | `executables.hooks[]` (via `hook-service`) | Workbench hook playground |

@@ -366,20 +366,23 @@ ENOENT）或 `invalid`。
 
 ### 写入器发出的分节
 
+文档分为两部分，各有自己的版本号。**公开契约**（`manifestVersion: 2`）
+是消费者读取的部分。**编译器记录**（`compiler`，`recordVersion: 1`）是
+这次运行的操作性账目——生产者、项目摘要、来源、适配器修订、固定的
+schema、验证结果——它的变化不会推动 `manifestVersion`；消费者读取方
+永远不需要它。
+
 | 分节 | 记录什么 |
 | --- | --- |
-| `producer` | `{ name: 'agent-bundle', version }`，来自框架包 |
 | `manifestVersion` | `2` |
 | `application` | 与宿主无关的身份：`id`、`name`、`version`，可选的 `description` |
-| `project` | `configPath`、`configDigest`、`modelDigest`、`revision`、`sourceInputs[]`，可选的 `packageName` / `packageVersion` |
-| `files[]` | 除清单自身外的每个发出文件（`path`、`bytes`、`sha256`、`kind`，可选的 `mode`、`sourceInputs[]`） |
+| `files[]` | 除清单自身外的每个发出文件（`path`、`bytes`、`sha256`、`kind`，可选的 `mode`） |
 | `runtime` | 来自 `NormalizedPlugin.runtime` 的 `{ node }` |
-| `projections[]` | 每个所选宿主一行。`host` 是所选名称；`builtInHost` 是随包适配器身份（高级注册表适配器则缺省）。还有 `adapterRevision`、`observedVersion`、`schemas[]`、`documents`（`plugin?`、`marketplace?`、`mcp?`、`hooks?`），以及可选的 `marketplace.name`。由 `targets[]` 更名而来。 |
+| `projections[]` | 每个所选宿主一行。`host` 是所选名称；`builtInHost` 是随包适配器身份（高级注册表适配器则缺省）；`documents`（`plugin?`、`marketplace?`、`mcp?`、`hooks?`）指向派生出的宿主文档；以及可选的 `marketplace.name`。由 `targets[]` 更名而来。 |
 | `routes` | 编译后的路由图：`servers[]`、`events[]`、`scripts[]`、`cli?`、`providers[]`、`layouts[]`、`contracts[]`、`digest` |
 | `executables` | 根目录能启动的进程：`bins[]`、`hooks[]`（`kind` 为 `config` \| `event-route`）、`mcpServers[]`（`entry`、`apps[]`）、`scripts[]` |
 | `distribution` | `channels`（始终有 `local`；已打包时有 `npm`）以及可选的 `install` 指针 |
-| `agentSkills` | `specification`、`sourceRevision`、`schemaSha256` |
-| `validation` | `{ source, artifact, projections[] }` —— 每个 `status` 都是 `'passed'` |
+| `compiler` | `recordVersion: 1`；`producer`（`{ name: 'agent-bundle', version }`）；`project`（`configPath`、`configDigest`、`modelDigest`、`revision`、`sourceInputs[]`，可选的 `packageName` / `packageVersion`）；`provenance[]`（每个 `files[]` 行一条 `{ path, sourceInputs[] }`）；`adapters[]`（每个投影一条 `{ host, adapterRevision, observedVersion, schemas[] }`）；`agentSkills`（`specification`、`sourceRevision`、`schemaSha256`）；`validation`（`{ source, artifact, projections[] }`，每个 `status` 都是 `'passed'`） |
 
 ### 谁读取各个字段
 
@@ -388,14 +391,14 @@ ENOENT）或 `invalid`。
 
 | 读取方 | 使用的字段 | 用途 |
 | --- | --- | --- |
-| `build/validate-artifact.ts` | 全部 | 重新解析磁盘上的字节，匹配 `files[]` 的摘要与 mode，对照注册表检查 `projections[]`（适配器修订、观测版本与 `builtInHost` 身份，`AB6010`），固定 `agentSkills` 与 `runtime.node`。没有单独的一致性检查：宿主文档与清单在同一次构建中由同一份编译计划写出，且每个文档都是带摘要的 `files[]` 行 |
+| `build/validate-artifact.ts` | 全部 | 重新解析磁盘上的字节，匹配 `files[]` 的摘要与 mode，对照注册表检查 `projections[]` 与 `compiler.adapters[]`（适配器修订、观测版本与 `builtInHost` 身份，`AB6010`），固定 `compiler.agentSkills` 与 `runtime.node`。没有单独的一致性检查：宿主文档与清单在同一次构建中由同一份编译计划写出，且每个文档都是带摘要的 `files[]` 行 |
 | `build/validate-artifact-modules.ts` | `files[]`（bundle / `.mjs` 行）以及包构建的 `dist` | `AB6005` 导入图 |
 | `build/validate-artifact-skills.ts` | `projections[]`（`manifestTargets`）加目录树 | Skill 文档对照所选宿主 |
 | `build/validate-artifact-hooks.ts` | `executables.hooks[]`、`projections[]` | `AB6018`：钩子行对照宿主钩子文档 |
 | `build/validate-artifact-mcp.ts` | `projections[]`、MCP 文件 | MCP 文档对照所选宿主 |
-| `build/pack-inventory.ts` | `files[]`、`projections[]`、`application.version`、`project.packageVersion` | 打包的 tarball 必须包含清单中的每个文件（`AB7010`）；摘要漂移；发布版本对齐；`AB7014` / `AB7015` |
+| `build/pack-inventory.ts` | `files[]`、`projections[]`、`application.version`、`compiler.project.packageVersion` | 打包的 tarball 必须包含清单中的每个文件（`AB7010`）；摘要漂移；发布版本对齐；`AB7014` / `AB7015` |
 | `eval/artifact.ts` | `files[]`、`projections[]`、`runtime` | `evalTargetDigests`：对**整张**文件表为每个 `projections[].host` 计算一个摘要（相同字节，不同身份） |
-| `dev/artifacts/artifact-inspection-service.ts` | `files[]`、`project`、`application`、`distribution`、`projections[]`、`executables` | Workbench 产物检视器：从 `files[]` 重建一棵树，按投影各标注一次；bin / MCP 服务器 / 脚本来自 `executables` |
+| `dev/artifacts/artifact-inspection-service.ts` | `files[]`、`compiler.project`、`compiler.provenance[]`、`application`、`distribution`、`projections[]`、`routes`、`executables` | Workbench 产物检视器：从 `files[]` 重建一棵树，按投影各标注一次；应用树经由 `dev/artifacts/application-explorer.ts`（`ArtifactInspection.application`）——一个薄投影，而不是清单的原始形状 |
 | `dev/artifacts/artifact-executables.ts` | `executables.scripts[]` | 按宿主划分的脚本行（取代 `artifact-script-catalog.ts`） |
 | `services/hook-service.ts` | `executables.hooks[]` | `hooks list` / `simulate` |
 | `dev/playground/hook-playground-service.ts` | `executables.hooks[]`（经由 `hook-service`） | Workbench 钩子演练场 |
