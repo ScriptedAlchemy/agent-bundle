@@ -140,6 +140,80 @@ it('reads the compiled manifest over the shared foreground session', async () =>
   expect(calls).toEqual([{ method: 'GET', token: 'foreground-token', url: '/api/routes/manifest' }]);
 });
 
+it('decodes a CLI surface projection and option aliases on the strict wire', async () => {
+  const projected = {
+    ...manifest.cli.commands[0],
+    mcp: { confirm: false, server: 'hauler', tool: 'hauler_request' },
+    options: [
+      { key: 'argv', kind: 'string', option: 'argv', positional: 0, repeated: true, required: true },
+      { key: 'cwd', kind: 'string', option: 'cwd', repeated: false, required: false },
+      {
+        aliases: ['lane-key'],
+        key: 'laneKey',
+        kind: 'string',
+        option: 'lane',
+        repeated: false,
+        required: false,
+      },
+    ],
+    path: ['request'],
+    projection: {
+      mapInput: true,
+      module: 'src/mcp/hauler/tools/hauler_request.cli.ts',
+      relaxed: ['cwd'],
+    },
+    routeId: 'tool:hauler/hauler_request',
+  };
+  const decoded = await clientFor(() => response({
+    manifest: {
+      ...manifest,
+      cli: { ...manifest.cli, commands: [projected] },
+    },
+  })).manifest();
+
+  expect(decoded.cli?.commands?.[0]?.projection).toEqual({
+    mapInput: true,
+    module: 'src/mcp/hauler/tools/hauler_request.cli.ts',
+    relaxed: ['cwd'],
+  });
+  expect(decoded.cli?.commands?.[0]?.options).toEqual(projected.options);
+});
+
+it('rejects projectionSources leaked onto the CLI surface', async () => {
+  const client = clientFor(() => response({
+    manifest: {
+      ...manifest,
+      cli: {
+        ...manifest.cli,
+        projectionSources: { 'tool:hauler/hauler_request': '/abs/hauler_request.cli.ts' },
+      },
+    },
+  }));
+
+  await expect(client.manifest()).rejects.toMatchObject({ code: 'AB8123' });
+});
+
+it('rejects an unknown field on a CLI surface projection', async () => {
+  const client = clientFor(() => response({
+    manifest: {
+      ...manifest,
+      cli: {
+        ...manifest.cli,
+        commands: [{
+          ...manifest.cli.commands[0],
+          projection: {
+            mapInput: false,
+            module: 'src/mcp/library/tools/echo.cli.ts',
+            sources: true,
+          },
+        }],
+      },
+    },
+  }));
+
+  await expect(client.manifest()).rejects.toMatchObject({ code: 'AB8123' });
+});
+
 it('preserves projected MCP provenance and confirmation policy', async () => {
   const projected = {
     ...manifest.cli.commands[0],

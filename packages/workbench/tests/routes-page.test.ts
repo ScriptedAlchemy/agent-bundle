@@ -158,11 +158,92 @@ it('renders honest state absence without an alert', () => {
   expect(markup.match(/This project declares no state module\.<\/p>/u)?.[0]).not.toContain('role="alert"');
 });
 
+it('renders a CLI surface projection beside usage and keeps the canonical editor', () => {
+  const projected: RouteManifest = {
+    ...manifest,
+    cli: {
+      commands: [{
+        aliases: ['req'],
+        description: 'Submit a background cargo request',
+        exitCode: 'zero',
+        mcp: { confirm: false, server: 'hauler', tool: 'hauler_request' },
+        options: [
+          { key: 'argv', kind: 'string', option: 'argv', positional: 0, repeated: true, required: true },
+          { key: 'cwd', kind: 'string', option: 'cwd', repeated: false, required: false },
+          { aliases: ['lane-key'], key: 'laneKey', kind: 'string', option: 'lane', repeated: false, required: false },
+        ],
+        path: ['request'],
+        projection: {
+          mapInput: true,
+          module: 'src/mcp/hauler/tools/hauler_request.cli.ts',
+          relaxed: ['cwd'],
+        },
+        routeId: 'tool:hauler/hauler_request',
+      }],
+      mode: 'generated',
+      routes: [{
+        config: [],
+        description: 'Submit a background cargo request',
+        id: 'tool:hauler/hauler_request',
+        inputSchema: {
+          additionalProperties: false,
+          properties: {
+            argv: { items: { type: 'string' }, type: 'array' },
+            cwd: { type: 'string' },
+            laneKey: { type: 'string' },
+          },
+          required: ['argv', 'cwd'],
+          type: 'object',
+        },
+        kind: 'tool',
+        provenance: { kind: 'conventional' },
+        source: 'src/mcp/hauler/tools/hauler_request.tsx',
+      }],
+    },
+  };
+  const markup = render(routeCatalogFor(projected));
+
+  expect(markup).toContain('request &lt;argv...&gt; [--cwd &lt;string&gt;] [--lane &lt;string&gt;]');
+  expect(markup).toContain('Projection src/mcp/hauler/tools/hauler_request.cli.ts · mapInput yes');
+  expect(markup).toContain('aria-label="CLI option mapping"');
+  expect(markup).toContain('>laneKey<');
+  expect(markup).toContain('>lane<');
+  expect(markup).toContain('>lane-key<');
+  expect(markup).toContain('>0<');
+  expect(markup).toContain('Relaxed on the CLI: cwd');
+  expect(markup).toContain('Generated input editor');
+  expect(markup).toContain('Argv (required)');
+  expect(markup).toContain('Cwd (required)');
+  expect(markup).toContain('Lane Key');
+});
+
 it('shows the argv projection of a compiled CLI command', () => {
   const markup = render(routeCatalogFor(manifest));
 
   expect(markup).toContain('library audit &lt;input&gt; [--verbose]');
   expect(markup).toContain('Schema not statically projectable');
+  expect(markup).not.toContain('Projection ');
+  expect(markup).not.toContain('Relaxed on the CLI');
+});
+
+it('renders mapInput no and omits the relaxed line when the projection has none', () => {
+  const projected: RouteManifest = {
+    ...manifest,
+    cli: {
+      ...manifest.cli!,
+      commands: [{
+        ...manifest.cli!.commands![0]!,
+        projection: {
+          mapInput: false,
+          module: 'src/mcp/hauler/tools/hauler_status.cli.ts',
+        },
+      }],
+    },
+  };
+  const markup = render(routeCatalogFor(projected));
+
+  expect(markup).toContain('Projection src/mcp/hauler/tools/hauler_status.cli.ts · mapInput no');
+  expect(markup).not.toContain('Relaxed on the CLI');
 });
 
 it('leads the usage line with positionals in argv order regardless of option order', () => {

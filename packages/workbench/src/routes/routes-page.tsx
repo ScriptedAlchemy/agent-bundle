@@ -3,6 +3,7 @@ import React from 'react';
 
 import type {
   RouteInputPropertySchema,
+  RouteManifestCliCommand,
   RouteManifestState,
 } from '../../../agent-bundle/src/contracts/routes.ts';
 import { routeEditorKey, routeEditorStateAtom } from './route-editor-atoms.ts';
@@ -299,8 +300,39 @@ const RouteInputEditor = ({ digest, entry, group, onOpenMcp }: {
   </section>;
 };
 
-const commandSummary = (entry: RouteCatalogEntry): string | undefined =>
-  entry.command === undefined ? undefined : cliCommandUsage(entry.command);
+const projectionCell = (option: RouteManifestCliCommand['options'][number], empty: string): string =>
+  option.aliases === undefined || option.aliases.length === 0 ? empty : option.aliases.join(', ');
+
+const CliCommandSurface = ({ command }: { readonly command: RouteManifestCliCommand }) => {
+  const projection = command.projection;
+  return <>
+    <span className="route-command">{cliCommandUsage(command)}</span>
+    {projection === undefined ? undefined : <>
+      <p className="route-projection">
+        Projection {projection.module} · mapInput {projection.mapInput ? 'yes' : 'no'}
+      </p>
+      <table aria-label="CLI option mapping" className="route-projection-map">
+        <thead>
+          <tr>
+            <th scope="col">Key</th>
+            <th scope="col">Option</th>
+            <th scope="col">Aliases</th>
+            <th scope="col">Positional</th>
+          </tr>
+        </thead>
+        <tbody>{command.options.map((option) => <tr key={option.key}>
+          <th scope="row">{option.key}</th>
+          <td>{option.option}</td>
+          <td>{projectionCell(option, '—')}</td>
+          <td>{option.positional === undefined ? '—' : String(option.positional)}</td>
+        </tr>)}</tbody>
+      </table>
+      {projection.relaxed === undefined || projection.relaxed.length === 0
+        ? undefined
+        : <p className="route-projection-relaxed">Relaxed on the CLI: {projection.relaxed.join(', ')}</p>}
+    </>}
+  </>;
+};
 
 const RouteGroup = ({ digest, group, onOpenMcp }: {
   readonly digest: string;
@@ -320,7 +352,7 @@ const RouteGroup = ({ digest, group, onOpenMcp }: {
       <th scope="row">
         <span className="route-id">{entry.id}</span>
         {entry.event === undefined ? undefined : <span className="route-event">{entry.event}</span>}
-        {commandSummary(entry) === undefined ? undefined : <span className="route-command">{commandSummary(entry)}</span>}
+        {entry.command === undefined ? undefined : <CliCommandSurface command={entry.command} />}
         {entry.description === undefined ? undefined : <span className="route-description">{entry.description}</span>}
       </th>
       <td className="route-source">{entry.source}<span className="route-provenance">{entry.provenance}</span></td>

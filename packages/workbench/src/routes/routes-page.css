@@ -36,6 +36,12 @@
 .route-table tbody th { font-weight: 600; width: 27%; }
 .route-id { display: block; font: 13px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-weight: 700; overflow-wrap: anywhere; }
 .route-event, .route-command { color: #345080; display: block; font: 12px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", monospace; margin-top: 4px; overflow-wrap: anywhere; }
+.route-projection, .route-projection-relaxed { color: #345080; font: 12px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", monospace; margin: 6px 0 0; overflow-wrap: anywhere; }
+.route-projection-relaxed { color: #596372; }
+.route-projection-map { border-collapse: collapse; margin-top: 8px; width: 100%; }
+.route-table .route-projection-map th, .route-table .route-projection-map td { border-bottom: 1px solid #e4e8ef; font: 11px/1.45 "SFMono-Regular", Consolas, "Liberation Mono", monospace; padding: 3px 8px 3px 0; text-align: left; vertical-align: top; width: auto; }
+.route-table .route-projection-map thead th { color: #596372; font-size: 10px; font-weight: 750; letter-spacing: .03em; text-transform: uppercase; }
+.route-table .route-projection-map tbody th { font-weight: 600; }
 .route-description { color: #596372; display: block; font-size: 13px; font-weight: 400; margin-top: 4px; }
 .route-source { font: 12px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", monospace; overflow-wrap: anywhere; width: 25%; }
 .route-provenance { color: #7a8492; display: block; font-family: inherit; font-size: 11px; margin-top: 4px; text-transform: uppercase; }
