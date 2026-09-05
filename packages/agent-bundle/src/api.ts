@@ -147,7 +147,22 @@ export {
   parseArtifactManifest,
   serializeArtifactManifest,
 } from './build/manifest.ts';
+import { readArtifactManifest } from './build/manifest-file.ts';
 export { readArtifactManifest, type ArtifactManifestReadResult } from './build/manifest-file.ts';
+export {
+  inspectManifestOutput,
+  resolveManifestHost,
+  resolveManifestHostFromRoot,
+  type InspectManifestInvalid,
+  type InspectManifestOutput,
+  type InspectManifestSummary,
+  type ResolveManifestHostOptions,
+} from './build/manifest-projection.ts';
+import {
+  inspectManifestOutput,
+  resolveManifestHostFromRoot,
+  type InspectManifestOutput,
+} from './build/manifest-projection.ts';
 import { composeBundlerInspection, type BundlerInspection } from './build/inspect-bundler.ts';
 import { defaultPackageArtifactDistPath } from './config/normalize.ts';
 export type { BundlerInspection, BundlerInspectionEntry } from './build/inspect-bundler.ts';
@@ -552,6 +567,7 @@ export interface ReadyInspectResult {
   readonly model: NormalizedPlugin;
   readonly output: {
     readonly distPath: string;
+    readonly manifest?: InspectManifestOutput;
   };
   readonly plans: readonly InspectionPlan[];
   readonly projectContext: ProjectContext;
@@ -631,7 +647,7 @@ export interface ArtifactOperationOptions extends ProjectOptions {
 
 export interface ListMcpOptions extends ArtifactOperationOptions {
   readonly server: string;
-  readonly target: string;
+  readonly target?: string;
   readonly timeoutMs?: number;
 }
 
@@ -671,7 +687,7 @@ export interface RunMcpOptions extends ArtifactOperationOptions {
   readonly server: string;
   /** Injectable only to make foreground process behavior deterministic in tests. */
   readonly spawnProcess?: Parameters<typeof runMcpForeground>[0]['spawnProcess'];
-  readonly target: string;
+  readonly target?: string;
 }
 
 export interface ServeAppOptions extends ArtifactOperationOptions, ServeMcpAppPublicOptions {
@@ -683,7 +699,7 @@ export interface ServeAppOptions extends ArtifactOperationOptions, ServeMcpAppPu
   readonly loadEnvFiles?: boolean;
   /** Root the env-declared plugin-root anchors expand to; see {@link RunMcpOptions.pluginRoot}. */
   readonly pluginRoot?: string;
-  /** The artifact target whose generated server to bind; defaults to `portable`. */
+  /** The artifact projection whose MCP server to bind; the only MCP projection that runs it when omitted. */
   readonly target?: string;
 }
 
@@ -1173,10 +1189,16 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
         : {}),
       ...(options.focus === 'state' ? { state: inspectState(model) } : {}),
     });
+  const manifest = inspectManifestOutput(
+    await readArtifactManifest(resolve(prepared.root, prepared.artifactDistPath)),
+  );
   return Object.freeze({
     diagnostics: prepared.diagnostics,
     model,
-    output: Object.freeze({ distPath: prepared.artifactDistPath }),
+    output: Object.freeze({
+      distPath: prepared.artifactDistPath,
+      ...(manifest === undefined ? {} : { manifest }),
+    }),
     plans,
     projectContext,
     ...(selected === undefined ? {} : { selected }),
@@ -1441,26 +1463,40 @@ export const compareEvals = async (options: CompareEvalsOptions): Promise<EvalCo
 
 export const listMcp = async (options: ListMcpOptions): Promise<McpListResult> => {
   const registry = registryFor(options);
-  return temporaryArtifact({ ...options, registry }, async (artifact) => new McpService({ registry }).list({
-    artifact,
-    server: options.server,
-    target: options.target,
-    timeoutMs: options.timeoutMs,
-    workspaceRoot: resolve(options.root),
-  } satisfies McpListOptions));
+  return temporaryArtifact({ ...options, registry }, async (artifact) => {
+    const { host } = await resolveManifestHostFromRoot(artifact, {
+      capability: 'mcp',
+      ...(options.target === undefined ? {} : { requested: options.target }),
+      server: options.server,
+    }, registry);
+    return new McpService({ registry }).list({
+      artifact,
+      server: options.server,
+      target: host,
+      timeoutMs: options.timeoutMs,
+      workspaceRoot: resolve(options.root),
+    });
+  });
 };
 
 export const invokeMcp = async (options: InvokeMcpOptions): Promise<McpInvokeResult> => {
   const registry = registryFor(options);
-  return temporaryArtifact({ ...options, registry }, async (artifact) => new McpService({ registry }).invoke({
-    artifact,
-    input: options.input,
-    server: options.server,
-    target: options.target,
-    timeoutMs: options.timeoutMs,
-    tool: options.tool,
-    workspaceRoot: resolve(options.root),
-  } satisfies McpInvokeOptions));
+  return temporaryArtifact({ ...options, registry }, async (artifact) => {
+    const { host } = await resolveManifestHostFromRoot(artifact, {
+      capability: 'mcp',
+      ...(options.target === undefined ? {} : { requested: options.target }),
+      server: options.server,
+    }, registry);
+    return new McpService({ registry }).invoke({
+      artifact,
+      input: options.input,
+      server: options.server,
+      target: host,
+      timeoutMs: options.timeoutMs,
+      tool: options.tool,
+      workspaceRoot: resolve(options.root),
+    });
+  });
 };
 
 /**
@@ -1476,19 +1512,26 @@ export const invokeMcp = async (options: InvokeMcpOptions): Promise<McpInvokeRes
 export const runMcp = async (options: RunMcpOptions): Promise<number> => {
   const registry = registryFor(options);
   const workspaceRoot = resolve(options.root);
-  return temporaryArtifact({ ...options, registry }, async (artifact) => runMcpForeground({
-    artifact,
-    ...(options.envFiles === undefined ? {} : { envFiles: options.envFiles }),
-    ...(options.pluginRoot === undefined ? {} : { envPluginRoot: resolve(options.pluginRoot) }),
-    ...(options.loadEnvFiles === undefined ? {} : { loadEnvFiles: options.loadEnvFiles }),
-    ...(options.mode === undefined ? {} : { mode: options.mode }),
-    pluginDataRoot: join(workspaceRoot, '.agent-bundle', 'mcp-run', options.target, mcpServerStateDirectory(options.server)),
-    registry,
-    server: options.server,
-    ...(options.spawnProcess === undefined ? {} : { spawnProcess: options.spawnProcess }),
-    target: options.target,
-    workspaceRoot,
-  }));
+  return temporaryArtifact({ ...options, registry }, async (artifact) => {
+    const { host } = await resolveManifestHostFromRoot(artifact, {
+      capability: 'mcp',
+      ...(options.target === undefined ? {} : { requested: options.target }),
+      server: options.server,
+    }, registry);
+    return runMcpForeground({
+      artifact,
+      ...(options.envFiles === undefined ? {} : { envFiles: options.envFiles }),
+      ...(options.pluginRoot === undefined ? {} : { envPluginRoot: resolve(options.pluginRoot) }),
+      ...(options.loadEnvFiles === undefined ? {} : { loadEnvFiles: options.loadEnvFiles }),
+      ...(options.mode === undefined ? {} : { mode: options.mode }),
+      pluginDataRoot: join(workspaceRoot, '.agent-bundle', 'mcp-run', host, mcpServerStateDirectory(options.server)),
+      registry,
+      server: options.server,
+      ...(options.spawnProcess === undefined ? {} : { spawnProcess: options.spawnProcess }),
+      target: host,
+      workspaceRoot,
+    });
+  });
 };
 
 /**
@@ -1532,8 +1575,7 @@ const scopedThrowawayArtifact = (
 export const serveApp = async (options: ServeAppOptions): Promise<ServedMcpApp> => {
   const registry = registryFor(options);
   const workspaceRoot = resolve(options.root);
-  const target = options.target ?? 'portable';
-  const { server } = parseServeAppSelector(options.app);
+  parseServeAppSelector(options.app);
   return serveMcpApp({
     app: options.app,
     artifact: options.artifact === undefined ? scopedThrowawayArtifact({ ...options, registry }) : resolve(options.artifact),
@@ -1545,11 +1587,10 @@ export const serveApp = async (options: ServeAppOptions): Promise<ServedMcpApp> 
     ...(options.mode === undefined ? {} : { mode: options.mode }),
     ...(options.open === undefined ? {} : { open: options.open }),
     ...(options.openBrowser === undefined ? {} : { openBrowser: options.openBrowser }),
-    pluginDataRoot: join(workspaceRoot, '.agent-bundle', 'mcp-run', target, mcpServerStateDirectory(server)),
     ...(options.port === undefined ? {} : { port: options.port }),
     ...(options.profile === undefined ? {} : { profile: options.profile }),
     registry,
-    target,
+    ...(options.target === undefined ? {} : { target: options.target }),
     ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
     ...(options.tool === undefined ? {} : { tool: options.tool }),
     workspaceRoot,
