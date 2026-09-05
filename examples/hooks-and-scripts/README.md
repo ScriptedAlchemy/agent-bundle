@@ -18,25 +18,25 @@ example keeps both modes covered.
 
 ## Workbench walkthrough
 
-1. **Overview** is the Bundle dashboard. It relates the authored Hook to its
-   emitted artifact, exercise trace, and evaluation pages; its status is the
-   authoritative current-or-stale epoch state.
-2. **Hooks** defaults to the Claude `sessionStart` binding and its populated
-   inline canonical JSON, including `"source": "workbench"`. Run the
+1. The shell header reports the authoritative current-or-stale epoch state and
+   links build diagnostics to **Problems**.
+2. Under **Application → Events / Hooks**, select the Claude `sessionStart`
+   binding and its populated inline canonical JSON, including
+   `"source": "workbench"`. Run the
    simulation, then use **Replay saved simulation** to rerun exactly that
    epoch-bound input. The result directs the release session through both
    checks.
-3. **Playground** defaults to Script execution, the Claude target, and
-   `verify-release`. Run it and wait until the session is finalized: the
+3. Under **Application → Scripts**, select `verify-release` and the Claude
+   target, then run it. The
    emitted script reads the packaged `release/release-manifest.json` relative
    to its module and reports release 2.4.0 ready for packaging.
 4. Change the target to portable and select `detect-risk`. Its emitted script
    reads `release/risk-register.json`, reports high-severity `REL-204`, exits
    with code 2, and finalizes a durable blocking trace.
-5. **Logs** filters those producer records by producer, level, kind, or
-   context; open a record to inspect raw details. **Artifacts** is the emitted
-   file/provenance view, while **Comparisons** aligns outcomes only after two
-   recorded eval runs.
+5. **Advanced → Raw logs** filters those producer records by producer, level,
+   kind, or context; open a record to inspect raw details. **Advanced →
+   Artifact** is the emitted file/provenance view, while **Advanced → Evals →
+   Compare** aligns outcomes only after two recorded eval runs.
 
 ## Reversible diagnostic walkthrough
 

@@ -123,17 +123,18 @@ the printed command, open the Agents pane, and use the same scenario prompt.
 
 ## Workbench walkthrough
 
-1. **Overview** lists the twenty event routes, both MCP servers, the skill, and
-   the routed CLI with their per-target capability judgments — `workspace/open`
+1. **Application** lists the twenty event routes, both MCP servers, the skill,
+   and the routed CLI with their per-target capability judgments — `workspace/open`
    is Cursor-only, `task/*` and `file/change` are Claude-only, and portable
    carries no hooks at all.
-2. **Hooks** simulates any family with canonical input; the route appends a
-   record to the log and returns an empty result (only `session/start` speaks
-   an `additional_context` line naming the log path).
-3. **Playground** runs `host-test dump` and the `dump` tool against the same
-   log, so a simulated hook is visible from the MCP surface immediately.
-4. **Lifecycles** replays checked-in native receipts and shows the request
-   context — and lineage — each replay mounted.
+2. Under **Application → Events / Hooks**, select any family and run it with
+   canonical input; the route appends a record to the log and returns an empty
+   result (only `session/start` speaks an `additional_context` line naming the
+   log path).
+3. Run the `host-test dump` CLI leaf or the MCP `dump` Tool leaf against the
+   same log, so a simulated hook is visible from the MCP surface immediately.
+4. Use the selected event route's **Replay** tab for checked-in native receipts;
+   each replay shows its request context and lineage.
 
 ## Noninteractive checks
 

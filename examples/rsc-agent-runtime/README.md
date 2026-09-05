@@ -338,7 +338,8 @@ surface is not treated as stable here: React `19.2.8`, `react-dom` `19.2.8`,
 Existing Agent Bundle skills, static MCPs, evaluations, and normal hooks neither require nor activate this runtime. Nothing under `packages/agent-bundle` imports the example or React/RSC runtime packages.
 
 `PlaygroundService` is the landed, provider-neutral durable whole-plugin
-authoring timeline foundation. Runtime Playground history is deliberately
+authoring timeline foundation. Runtime history now backs the selected
+Application route workspace rather than a separate destination. It remains
 provider-session-scoped and ephemeral in this example; wiring a provider
 adapter, authenticated API, timeline UI, durable Runtime export, or evaluation
 promotion onto that history is an explicit non-goal of this demo.
