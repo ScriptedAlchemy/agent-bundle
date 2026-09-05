@@ -204,6 +204,14 @@ export interface AgentBundleScriptEntry {
 
 /** One declared prebuilt payload directory with an optional target restriction. */
 export interface AgentBundlePayloadEntry {
+  /**
+   * Bare package names the payload's files load at run time. The compiler
+   * never opens a payload file, so this declaration is the only evidence
+   * that a `package.json` dependency is used by the payload (`AB7014`);
+   * each name must be one a consumer's npm installs — `dependencies`,
+   * `optionalDependencies`, or a peer not marked optional (`AB4751`).
+   */
+  runtimeDependencies?: readonly string[];
   source: string;
   targets?: readonly string[];
 }
@@ -602,6 +610,8 @@ export interface NormalizedPayload {
   /** The artifact-root destination directory name. */
   readonly name: string;
   readonly provenance: SourceProvenance;
+  /** Declared bare package names the payload loads at run time, sorted and unique. */
+  readonly runtimeDependencies: readonly string[];
   /** Absolute payload source directory. */
   readonly source: string;
   readonly targets: readonly string[];
@@ -867,6 +877,14 @@ export type ConfigFactory = (
 export const defineConfig = (
   config: AgentBundleConfig | ConfigFactory,
 ): AgentBundleConfig | ConfigFactory => config;
+
+/**
+ * Declares one prebuilt payload directory for the `payload` block: a tree the
+ * project compiled itself, packaged byte-for-byte, with the package names its
+ * files load at run time. The compiler treats the tree as opaque, so
+ * `runtimeDependencies` is what keeps those packages out of `AB7014`.
+ */
+export const definePrebuilt = (entry: AgentBundlePayloadEntry): AgentBundlePayloadEntry => entry;
 
 export const pathTokens = Object.freeze({
   pluginRoot: 'agent-bundle:path:plugin-root',
