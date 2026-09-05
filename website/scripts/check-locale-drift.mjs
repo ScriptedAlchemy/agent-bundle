@@ -207,9 +207,13 @@ const shapeOf = (value, locale) => {
     const shaped = {};
     for (const [key, item] of Object.entries(value)) {
       if (TRANSLATED_KEYS.has(key)) continue;
+      // `activeMatch` is a regex, so the locale prefix may open each `|` alternative.
       shaped[key] =
         LOCALE_PREFIXED_KEYS.has(key) && typeof item === 'string' && locale !== SOURCE_LOCALE
-          ? item.replace(new RegExp(`^/${locale}(?=/|$)`), '') || '/'
+          ? item
+              .split('|')
+              .map(branch => branch.replace(new RegExp(`^/${locale}(?=/|$)`), '') || '/')
+              .join('|')
           : shapeOf(item, locale);
     }
     return shaped;

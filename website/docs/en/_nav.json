@@ -7,7 +7,7 @@
   {
     "text": "Reference",
     "link": "/reference/",
-    "activeMatch": "/reference/"
+    "activeMatch": "/reference/(?!api$)"
   },
   {
     "text": "Examples",

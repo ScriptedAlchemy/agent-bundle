@@ -7,7 +7,7 @@
   {
     "text": "参考",
     "link": "/reference/",
-    "activeMatch": "/zh/reference/"
+    "activeMatch": "/zh/reference/(?!api$)"
   },
   {
     "text": "示例",
