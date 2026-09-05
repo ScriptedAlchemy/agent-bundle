@@ -499,6 +499,9 @@ importers:
       '@rspress/plugin-typedoc':
         specifier: 2.0.21
         version: 2.0.21(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0))(typescript@6.0.3)
+      '@rspress/shared':
+        specifier: 2.0.21
+        version: 2.0.21(supports-color@7.2.0)
       '@shikijs/transformers':
         specifier: 4.4.3
         version: 4.4.3

@@ -1,6 +1,6 @@
 import { execFile as executeFile } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -10,9 +10,9 @@ import { afterEach, describe, expect, it } from '@rstest/core';
 
 import { build, runMcp } from '../src/api.ts';
 import { runCli } from '../src/cli.ts';
-import { DiagnosticError } from '../src/core/diagnostics.ts';
+import { DiagnosticError, type Diagnostic } from '../src/core/diagnostics.ts';
 import { captureCliTerminal } from './support/cli-terminal.ts';
-import { mcpServerStateDirectory } from '../src/services/mcp-run.ts';
+import { mcpServerStateDirectory } from '../src/core/mcp-state-directory.ts';
 
 const execFile = promisify(executeFile);
 const workspaceNodeModules = join(process.cwd(), 'node_modules');
@@ -80,6 +80,45 @@ const conventionFixture = (): Readonly<Record<string, string>> => ({
     '',
   ].join('\n'),
 });
+
+const byMessage = (left: { message: string }, right: { message: string }): number =>
+  left.message.localeCompare(right.message);
+
+const withCode = (reported: readonly Diagnostic[], code: string): readonly Diagnostic[] =>
+  reported.filter((diagnostic) => diagnostic.code === code);
+
+const compileTimeExternal = (
+  asset: string,
+  request: string,
+  externalType: string,
+  issuers: readonly string[],
+): Diagnostic => ({
+  code: 'AB6005',
+  generatedPath: asset,
+  message: `Compiled module ${JSON.stringify(asset)} keeps ${JSON.stringify(request)} external (${externalType}) from ${issuers.join(', ')}; a generated executable bundles everything but Node built-ins.`,
+  recovery: 'Bundle every JavaScript dependency into the artifact, then rebuild it.',
+  severity: 'error',
+});
+
+const rspackExternalsMutator = (specifiers: readonly string[], extraLines: readonly string[] = []): string => [
+  '  tools: {',
+  '    rspack: (config) => {',
+  `      config.externals = [...(Array.isArray(config.externals) ? config.externals : [config.externals]).flat().filter(Boolean), ${specifiers.map((specifier) => JSON.stringify(specifier)).join(', ')}];`,
+  ...extraLines,
+  '    },',
+  '  },',
+].join('\n');
+
+const packageBuildFailure = async (root: string): Promise<unknown> =>
+  build({ output: 'artifact', packageOutputs: true, root }).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+
+const unpublishedPackageOutput = async (root: string): Promise<void> => {
+  await expect(stat(join(root, 'dist'))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect((await readdir(root)).filter((entry) => entry.startsWith('.dist.stage-'))).toEqual([]);
+};
 
 describe('framework-owned package build', () => {
   it('builds bin, lib, and dts outputs from conventions and stays deterministic', async () => {
@@ -229,12 +268,7 @@ describe('framework-owned package build', () => {
     expect(result.packageBuild?.files.some((file) => file.path === 'bin/package-build-fixture.js')).toBe(true);
   }, 120_000);
 
-  it('fails the package build with AB6005 when the tools hatch keeps a dependency external in a dist bundle', async () => {
-    // Every dist bundle is self-contained, exactly like a host pack: the
-    // `tools` hatch is no escape from that rule, and a literal dynamic import
-    // counts the same as a static one. Neither package is installed — the
-    // bundler never resolves an external — and `dts: false` keeps declaration
-    // generation (which would need their types) out of the picture.
+  it('fails the package build with AB4725 when tools.rsbuild.output.externals statically names a dependency', async () => {
     const root = await fixtureRoot({
       ...conventionFixture(),
       'agent-bundle.config.ts': [
@@ -265,28 +299,126 @@ describe('framework-owned package build', () => {
       ].join('\n'),
     });
 
-    const failure = await build({ output: 'artifact', packageOutputs: true, root }).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
+    const failure = await packageBuildFailure(root);
     expect(failure).toBeInstanceOf(DiagnosticError);
-    const unsupported = (generatedPath: string, specifier: string) => ({
-      code: 'AB6005',
-      generatedPath,
-      message: `Generated JavaScript import from ${JSON.stringify(generatedPath)} uses unsupported specifier ${JSON.stringify(specifier)}.`,
-      recovery: 'Bundle every JavaScript dependency into the artifact, then rebuild it.',
-      severity: 'error',
-    });
-    const byMessage = (left: { message: string }, right: { message: string }): number => left.message.localeCompare(right.message);
-    expect([...(failure as DiagnosticError).diagnostics].sort(byMessage)).toEqual([
-      unsupported('dist/bin/package-build-fixture.js', 'left-pad'),
-      unsupported('dist/bin/package-build-fixture.js', 'right-pad'),
-      unsupported('dist/index.js', 'left-pad'),
-    ].sort(byMessage));
+    const reported = [...withCode((failure as DiagnosticError).diagnostics, 'AB4725')].sort(byMessage);
+    expect(reported).toHaveLength(2);
+    expect(reported.every((diagnostic) => diagnostic.severity === 'error')).toBe(true);
+    expect(reported.map((diagnostic) => diagnostic.message).join('\n')).toContain('left-pad');
+    expect(reported.map((diagnostic) => diagnostic.message).join('\n')).toContain('right-pad');
+    await unpublishedPackageOutput(root);
+  }, 120_000);
 
-    // Nothing is published: no `dist`, and the staged tree is gone too.
-    await expect(stat(join(root, 'dist'))).rejects.toMatchObject({ code: 'ENOENT' });
-    expect((await readdir(root)).filter((entry) => entry.startsWith('.dist.stage-'))).toEqual([]);
+  it('fails the package build with compile-time AB6005 when a tools.rspack mutator keeps a dependency external', async () => {
+    const root = await fixtureRoot({
+      ...conventionFixture(),
+      'agent-bundle.config.ts': [
+        'export default {',
+        "  lib: { entry: './src/index.ts', dts: false },",
+        "  mcp: { servers: { echoer: {} } },",
+        "  plugin: { name: 'package-build-fixture', version: '1.0.0' },",
+        "  targets: ['portable'],",
+        rspackExternalsMutator(['left-pad', 'right-pad']),
+        '};',
+        '',
+      ].join('\n'),
+      'src/cli.ts': [
+        "import leftPad from 'left-pad';",
+        '',
+        'export const main = async (argv: readonly string[]): Promise<number> => {',
+        "  const { default: rightPad } = await import('right-pad');",
+        "  process.stdout.write(`${leftPad(argv.join(','), 8)}${rightPad('', 2)}\\n`);",
+        '  return 0;',
+        '};',
+        '',
+      ].join('\n'),
+      'src/index.ts': [
+        "import leftPad from 'left-pad';",
+        '',
+        'export const padded = (value: string): string => leftPad(value, 8);',
+        '',
+      ].join('\n'),
+    });
+
+    const failure = await packageBuildFailure(root);
+    expect(failure).toBeInstanceOf(DiagnosticError);
+    expect([...withCode((failure as DiagnosticError).diagnostics, 'AB6005')].sort(byMessage)).toEqual([
+      compileTimeExternal('dist/bin/package-build-fixture.js', 'left-pad', 'module', ['src/cli.ts']),
+      compileTimeExternal('dist/bin/package-build-fixture.js', 'right-pad', 'import', ['src/cli.ts']),
+      compileTimeExternal('dist/index.js', 'left-pad', 'module', ['src/index.ts']),
+    ].sort(byMessage));
+    await unpublishedPackageOutput(root);
+  }, 120_000);
+
+  it('fails the package build with compile-time AB6005 when a function-form tools.rspack external keeps a dependency external', async () => {
+    const root = await fixtureRoot({
+      ...conventionFixture(),
+      'agent-bundle.config.ts': [
+        'export default {',
+        '  lib: false,',
+        "  mcp: { servers: { echoer: {} } },",
+        "  plugin: { name: 'package-build-fixture', version: '1.0.0' },",
+        "  targets: ['portable'],",
+        '  tools: {',
+        '    rspack: (config) => {',
+        '      config.externals = [',
+        '        ...(Array.isArray(config.externals) ? config.externals : [config.externals]).flat().filter(Boolean),',
+        "        (data, cb) => data.request === 'left-pad' ? cb(undefined, 'module left-pad') : cb(),",
+        '      ];',
+        '    },',
+        '  },',
+        '};',
+        '',
+      ].join('\n'),
+      'src/cli.ts': [
+        "import leftPad from 'left-pad';",
+        '',
+        'export const main = async (argv: readonly string[]): Promise<number> => {',
+        "  process.stdout.write(`${leftPad(argv.join(','), 8)}\\n`);",
+        '  return 0;',
+        '};',
+        '',
+      ].join('\n'),
+    });
+
+    const failure = await packageBuildFailure(root);
+    expect(failure).toBeInstanceOf(DiagnosticError);
+    expect(withCode((failure as DiagnosticError).diagnostics, 'AB6005')).toEqual([
+      compileTimeExternal('dist/bin/package-build-fixture.js', 'left-pad', 'module', ['src/cli.ts']),
+    ]);
+    await unpublishedPackageOutput(root);
+  }, 120_000);
+
+  it('fails the package build with compile-time AB6005 when a tools.rspack mutator sets externalsType to node-commonjs', async () => {
+    const root = await fixtureRoot({
+      ...conventionFixture(),
+      'agent-bundle.config.ts': [
+        'export default {',
+        '  lib: false,',
+        "  mcp: { servers: { echoer: {} } },",
+        "  plugin: { name: 'package-build-fixture', version: '1.0.0' },",
+        "  targets: ['portable'],",
+        rspackExternalsMutator(['left-pad'], ["      config.externalsType = 'node-commonjs';"]),
+        '};',
+        '',
+      ].join('\n'),
+      'src/cli.ts': [
+        "import leftPad from 'left-pad';",
+        '',
+        'export const main = async (argv: readonly string[]): Promise<number> => {',
+        "  process.stdout.write(`${leftPad(argv.join(','), 8)}\\n`);",
+        '  return 0;',
+        '};',
+        '',
+      ].join('\n'),
+    });
+
+    const failure = await packageBuildFailure(root);
+    expect(failure).toBeInstanceOf(DiagnosticError);
+    expect(withCode((failure as DiagnosticError).diagnostics, 'AB6005')).toEqual([
+      compileTimeExternal('dist/bin/package-build-fixture.js', 'left-pad', 'node-commonjs', ['src/cli.ts']),
+    ]);
+    await unpublishedPackageOutput(root);
   }, 120_000);
 
   it('accepts Node built-ins under node: and bare specifiers in dist bundles', async () => {
@@ -304,29 +436,65 @@ describe('framework-owned package build', () => {
       'src/cli.ts': [
         "import { readFileSync } from 'node:fs';",
         "import { createRequire } from 'node:module';",
-        "import { join } from 'path';",
+        "import { join } from 'node:path';",
+        "import { hostname } from 'os';",
         '',
         'export const main = async (): Promise<number> => {',
         '  const requireFromHere = createRequire(import.meta.url);',
-        "  process.stdout.write(`${join('built', 'ins')}:${typeof readFileSync}:${typeof requireFromHere.resolve}\\n`);",
+        "  const shipped = requireFromHere('./shipped.cjs') as { marker: string };",
+        "  process.stdout.write(`${join('built', 'ins')}:${typeof readFileSync}:${typeof hostname}:${shipped.marker}\\n`);",
         '  return 0;',
         '};',
         '',
       ].join('\n'),
+      'src/shipped.cjs': "module.exports = { marker: 'relative' };\n",
     });
     const result = await build({ output: 'artifact', packageOutputs: true, root });
+    expect(withCode(result.diagnostics, 'AB6005')).toHaveLength(0);
+    expect(withCode(result.diagnostics, 'AB4725')).toHaveLength(0);
     expect(result.packageBuild?.files.map((file) => file.path)).toContain('bin/package-build-fixture.js');
 
     const binPath = join(root, 'dist', 'bin', 'package-build-fixture.js');
-    await expect(execFile(binPath, [])).resolves.toMatchObject({ stdout: 'built/ins:function:function\n' });
-    // Rspack keeps Node built-ins external, so the emitted module still
-    // imports them by specifier — under both spellings — and the walker
-    // accepts those imports (and `import.meta.url`) as it does relative ones.
+    await copyFile(join(root, 'src', 'shipped.cjs'), join(root, 'dist', 'bin', 'shipped.cjs'));
+    await expect(execFile(binPath, [])).resolves.toMatchObject({ stdout: 'built/ins:function:function:relative\n' });
     const binSource = await readFile(binPath, 'utf8');
     expect(binSource).toMatch(/from\s*["']node:fs["']/u);
     expect(binSource).toMatch(/from\s*["']node:module["']/u);
-    expect(binSource).toMatch(/from\s*["'](?:node:)?path["']/u);
+    expect(binSource).toMatch(/from\s*["']node:path["']/u);
+    expect(binSource).toMatch(/from\s*["'](?:node:)?os["']/u);
     expect(binSource).toContain('import.meta.url');
+    expect(binSource).toContain('./shipped.cjs');
+  }, 120_000);
+
+  it('accepts a sibling authored module that the package build bundles into the executable', async () => {
+    const root = await fixtureRoot({
+      ...conventionFixture(),
+      'agent-bundle.config.ts': [
+        'export default {',
+        '  lib: false,',
+        "  mcp: { servers: { echoer: {} } },",
+        "  plugin: { name: 'package-build-fixture', version: '1.0.0' },",
+        "  targets: ['portable'],",
+        '};',
+        '',
+      ].join('\n'),
+      'src/cli.ts': [
+        "import { label } from './helper';",
+        '',
+        'export const main = async (): Promise<number> => {',
+        '  process.stdout.write(`${label}\\n`);',
+        '  return 0;',
+        '};',
+        '',
+      ].join('\n'),
+      'src/helper.ts': "export const label = 'sibling';\n",
+    });
+    const result = await build({ output: 'artifact', packageOutputs: true, root });
+    expect(withCode(result.diagnostics, 'AB6005')).toHaveLength(0);
+    expect(withCode(result.diagnostics, 'AB4725')).toHaveLength(0);
+    await expect(execFile(join(root, 'dist', 'bin', 'package-build-fixture.js'), [])).resolves.toMatchObject({
+      stdout: 'sibling\n',
+    });
   }, 120_000);
 
   it('keeps colocated tests out of the declaration program and the package output', async () => {

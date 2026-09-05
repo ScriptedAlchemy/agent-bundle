@@ -4,6 +4,14 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      # website/ pins @rspress/core and @rspress/shared to the same exact
+      # version: plugins/mirror-api-locale.ts imports the slugger Rspress runs
+      # from @rspress/shared/github-slugger so heading ids match byte for byte,
+      # which only holds while the two move together. One PR per release.
+      rspress:
+        patterns:
+          - '@rspress/*'
     ignore:
       # typescript@7.0.x is a native compiler: import('typescript') is only
       # { version, versionMajorMinor }. website/rspress.config.ts,

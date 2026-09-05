@@ -2235,6 +2235,129 @@ it('discovers the canonical event families and validates their component contrac
   expect(graph.diagnostics[1]?.sourcePath).toBe(join(root, 'src/events/tool/before.tsx'));
 });
 
+it('attaches a statically followable event preflight re-export to the event route node', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    'src/events/tool/before.preflight.ts': 'export default ({ canonical }) => canonical.event === "tool/before" ? "execute" : { outcome: "continue" };\n',
+    'src/events/tool/before.tsx': [
+      "export { default as preflight } from './before.preflight.js';",
+      'export default async function BeforeTool() { return undefined; }',
+      '',
+    ].join('\n'),
+  });
+
+  const graph = await compileRouteGraph(root, fixtureConfig());
+
+  expect(graph.diagnostics).toEqual([]);
+  expect(graph.events).toHaveLength(1);
+  expect(graph.events[0]).toMatchObject({
+    id: 'event:tool/before',
+    preflight: {
+      provenance: { kind: 'conventional', relativePath: 'src/events/tool/before.preflight.ts' },
+      source: join(root, 'src/events/tool/before.preflight.ts'),
+    },
+  });
+  expect(Object.isFrozen(graph.events[0]!.preflight)).toBe(true);
+
+  const otherRoot = await createRoot();
+  await writeTree(otherRoot, {
+    'src/events/tool/before.preflight.ts': 'export default () => "execute";\n',
+    'src/events/tool/before.tsx': [
+      "export { default as preflight } from './before.preflight.js';",
+      'export default async function BeforeTool() { return undefined; }',
+      '',
+    ].join('\n'),
+  });
+  expect((await compileRouteGraph(otherRoot, fixtureConfig())).digest).toBe(graph.digest);
+});
+
+it('rejects a conventional event route reused as another route preflight', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    'src/events/session/start.ts': 'export default function SessionStart() { return { outcome: "continue" }; }\n',
+    'src/events/tool/before.ts': [
+      "export { default as preflight } from '../session/start.js';",
+      'export default async function BeforeTool() { return undefined; }',
+      '',
+    ].join('\n'),
+  });
+
+  const graph = await compileRouteGraph(root, fixtureConfig());
+
+  expect(graph.events.map((route) => route.id)).toEqual(['event:session/start', 'event:tool/before']);
+  expect(graph.events.find((route) => route.id === 'event:tool/before')?.preflight).toBeUndefined();
+  expect(graph.diagnostics).toEqual(expect.arrayContaining([
+    expect.objectContaining({ code: 'AB4840', sourcePath: join(root, 'src/events/tool/before.ts') }),
+  ]));
+});
+
+it('rejects event preflights that are inline, non-relative, unresolvable, cyclic, or non-functions', async () => {
+  const root = await createRoot();
+  const eventRoute = (preflight: string): string => [
+    preflight,
+    'export default async function EventRoute() { return undefined; }',
+    '',
+  ].join('\n');
+  await writeTree(root, {
+    'src/events/agent/start.ts': eventRoute('export const preflight = () => "execute";'),
+    'src/events/agent/stop.ts': eventRoute("export { default as preflight } from '@fixture/preflight';"),
+    'src/events/compact/after.ts': eventRoute("export { default as preflight } from './missing.js';"),
+    'src/events/compact/before.preflight.ts': "export { default } from './_before.preflight-cycle.js';\n",
+    'src/events/compact/_before.preflight-cycle.ts': "export { default } from './before.preflight.js';\n",
+    'src/events/compact/before.ts': eventRoute("export { default as preflight } from './before.preflight.js';"),
+    'src/events/session/end.preflight.ts': 'export default { outcome: "continue" };\n',
+    'src/events/session/end.ts': eventRoute("export { default as preflight } from './end.preflight.js';"),
+  });
+
+  const graph = await compileRouteGraph(root, fixtureConfig());
+
+  expect(graph.events.every((route) => route.preflight === undefined)).toBe(true);
+  expect(graph.diagnostics.map(({ code, sourcePath }) => ({
+    code,
+    source: sourcePath?.slice(root.length + 1).replaceAll('\\', '/'),
+  }))).toEqual([
+    { code: 'AB4840', source: 'src/events/agent/start.ts' },
+    { code: 'AB4840', source: 'src/events/agent/stop.ts' },
+    { code: 'AB4840', source: 'src/events/compact/after.ts' },
+    { code: 'AB4840', source: 'src/events/compact/before.ts' },
+    { code: 'AB4840', source: 'src/events/session/end.ts' },
+  ]);
+});
+
+it('validates event route provider declarations against conventional provider keys', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    'src/events/tool/before.ts': [
+      "export const config = { providers: ['projectAuth'] };",
+      'export default async function BeforeTool() { return undefined; }',
+      '',
+    ].join('\n'),
+    'src/events/tool/after.ts': [
+      "export const config = { providers: ['missing', 'projectAuth', 'projectAuth', 'processLifetime'] };",
+      'export default async function AfterTool() { return undefined; }',
+      '',
+    ].join('\n'),
+    'src/events/session/start.ts': [
+      "export const config = { providers: 'projectAuth' };",
+      'export default async function SessionStart() { return undefined; }',
+      '',
+    ].join('\n'),
+    'src/providers/project-auth.ts': 'export default () => ({ authenticated: true });\n',
+    'src/providers/zeta.ts': 'export default () => "zeta";\n',
+  });
+
+  const graph = await compileRouteGraph(root, fixtureConfig());
+
+  expect(graph.events.find((route) => route.id === 'event:tool/before')?.config).toMatchObject({
+    providers: ['projectAuth'],
+  });
+  expect(graph.diagnostics.filter(({ code }) => code === 'AB4841').map(({ sourcePath }) =>
+    sourcePath?.slice(root.length + 1).replaceAll('\\', '/'))).toEqual([
+    'src/events/session/start.ts',
+    'src/events/tool/after.ts',
+  ]);
+});
+
 it('fails unavailable event routes before packaging while admitting supported targets', async () => {
   const eventSource = 'export default async function WorkspaceOpen() { return undefined; }\n';
   const configSource = [

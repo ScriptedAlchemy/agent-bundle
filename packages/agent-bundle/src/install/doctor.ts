@@ -329,6 +329,13 @@ export interface DoctorEndpointReport {
   };
 }
 
+export interface DoctorWebSurface {
+  readonly apps: number;
+  /** `web: <n> App(s) exposed — run <plugin> web` */
+  readonly line: string;
+  readonly plugin: string;
+}
+
 export interface DoctorReport {
   readonly diagnostics: readonly Diagnostic[];
   readonly endpoints: DoctorEndpointReport;
@@ -338,6 +345,11 @@ export interface DoctorReport {
     readonly infos: number;
     readonly warnings: number;
   };
+  /**
+   * Present when `--from` points at a bundle whose `agent-bundle.manifest.json`
+   * has a `web` section.
+   */
+  readonly web?: DoctorWebSurface;
 }
 
 export const doctorEndpointDirectory = (): string => {
@@ -1163,6 +1175,37 @@ const readPublicHostListing = async (
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const artifactManifestName = 'agent-bundle.manifest.json';
+
+/**
+ * The `web.apps` count from the bundle root manifest, read leniently rather
+ * than through `readWebManifest`'s strict key contract: doctor reports what a
+ * bundle contains and never fails on a malformed manifest.
+ */
+const readWebSurface = async (
+  from: string | undefined,
+  pluginName: string | undefined,
+): Promise<DoctorWebSurface | undefined> => {
+  if (from === undefined) return undefined;
+  const manifestFile = join(resolve(from), artifactManifestName);
+  if (!(await exists(manifestFile))) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(manifestFile, 'utf8')) as unknown;
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(parsed) || parsed.web === undefined) return undefined;
+  const web = parsed.web;
+  const apps = isRecord(web) && Array.isArray(web.apps) ? web.apps.length : 0;
+  const plugin = pluginName === undefined || pluginName.length === 0 ? '<plugin>' : pluginName;
+  return Object.freeze({
+    apps,
+    line: `web: ${String(apps)} App(s) exposed — run ${plugin} web`,
+    plugin,
+  });
+};
 
 /**
  * The host's installed-plugin inventory from its pinned `plugin list --json`
@@ -2699,6 +2742,8 @@ export const runDoctor = async (options: DoctorOptions = {}): Promise<DoctorRepo
     ...hostReports.flatMap((report) => report.diagnostics),
     ...endpoints.diagnostics,
   ]);
+  const pluginName = hostReports.find((report) => report.bundle?.name !== undefined)?.bundle?.name;
+  const web = await readWebSurface(options.from, pluginName);
   return Object.freeze({
     diagnostics,
     endpoints,
@@ -2708,5 +2753,6 @@ export const runDoctor = async (options: DoctorOptions = {}): Promise<DoctorRepo
       infos: diagnostics.filter((entry) => entry.severity === 'info').length,
       warnings: diagnostics.filter((entry) => entry.severity === 'warning').length,
     }),
+    ...(web === undefined ? {} : { web }),
   });
 };

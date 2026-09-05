@@ -25,7 +25,7 @@ import {
   type McpAppJsonValue,
   type McpAppPreviewProfile,
 } from './mcp-app-client.ts';
-import { createMcpAppFrameRelay } from './mcp-app-frame.tsx';
+import { createMcpAppFrameRelay } from '../../../agent-bundle/src/web-host/browser/frame-relay.ts';
 import { mcpInspectorDeepLink, type McpInspectorLaunchModel } from './mcp-inspector-launch-model.ts';
 import type {
   McpBrowserSessionInvocation,

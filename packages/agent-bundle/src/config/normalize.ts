@@ -14,6 +14,7 @@ import {
   satisfiesGeneratedRuntimeFloor,
 } from '../core/runtime.ts';
 import { isRecord } from '../core/strict-json.ts';
+import { isServeAppAllowCapability } from '../core/mcp-app-allow.ts';
 import { conventionalEntryAt } from './conventional-entry.ts';
 import { pluginIdentity } from './plugin-identity.ts';
 import {
@@ -59,6 +60,8 @@ import type {
   NormalizedScript,
   NormalizedSkill,
   NormalizedStateDefinition,
+  NormalizedWeb,
+  NormalizedWebApp,
   SourceProvenance,
 } from '../core/types.ts';
 import { appRouteTemplatePath, resolveAppRouteTemplate } from '../routes/app-template.ts';
@@ -218,29 +221,31 @@ export const configuredArtifactDistPath = (
 };
 
 /**
- * The framework-generated routed-CLI bin (#102 stage 2): a generated-mode
- * `src/cli/**` surface with at least one compiled command becomes one
- * executable named after the plugin, exactly where the `src/cli.ts`
- * convention would have placed it. Rendered routes that compiled no command
- * are hard source-validation errors (AB4816), so omitting them here is
- * deterministic hygiene, never a silent choice.
+ * A configured web surface rides the generated routed-CLI executable and
+ * creates it when the plugin has no command route (#564).
  */
 const generatedCliBinEntry = (
   config: Readonly<AgentBundleConfig>,
+  configPath: string,
   routeCli: CompiledCliSurface | undefined,
 ): NormalizedBinEntry | undefined => {
-  if (routeCli?.mode !== 'generated' || !safePackageOutputName(config.plugin.name)) return undefined;
-  const commands = routeCli.commands ?? [];
-  if (commands.length === 0) return undefined;
+  if (!safePackageOutputName(config.plugin.name)) return undefined;
+  const web = Array.isArray(config.web?.apps) && config.web.apps.length > 0;
+  const generatedMode = routeCli?.mode === 'generated';
+  const commands = generatedMode ? (routeCli.commands ?? []) : [];
+  if (commands.length === 0 && !web) return undefined;
   const commandRouteIds = new Set(commands.map((command) => command.routeId));
-  const routes = routeCli.routes.filter((route) => commandRouteIds.has(route.id));
-  const source = routes[0]!.source;
+  const routes = generatedMode
+    ? routeCli.routes.filter((route) => commandRouteIds.has(route.id))
+    : [];
+  const source = routes[0]?.source ?? configPath;
   return {
     generatedCli: { commands, routes },
     id: `bin:${config.plugin.name}`,
     name: config.plugin.name,
     provenance: { kind: 'conventional', sourcePath: source },
     source,
+    ...(web ? { web: true } : {}),
   };
 };
 
@@ -250,8 +255,8 @@ const normalizeBinEntries = (
   configPath: string,
   routeCli: CompiledCliSurface | undefined,
 ): readonly NormalizedBinEntry[] => {
+  const generated = generatedCliBinEntry(config, configPath, routeCli);
   if (config.bin === false) return [];
-  const generated = generatedCliBinEntry(config, routeCli);
   if (config.bin !== undefined) {
     const explicit = Object.entries(config.bin)
       .sort(([left], [right]) => left.localeCompare(right))
@@ -266,13 +271,16 @@ const normalizeBinEntries = (
         };
       });
     // Config always wins one name: an explicit bin claiming the plugin name
-    // shadows the generated CLI, and source validation reports the collision.
+    // shadows the generated CLI, and validation reports the collision
+    // (source validation for command routes, AB4341 for the web surface).
     return generated === undefined || explicit.some((entry) => entry.name === generated.name)
       ? explicit
       : [...explicit, generated].sort((left, right) => left.name.localeCompare(right.name));
   }
-  if (generated !== undefined) return [generated];
   const conventional = conventionalCliEntrySource(root);
+  // A hand-written `src/cli.ts` keeps its executable: `web` alone never
+  // replaces authored code, and AB4341 names the collision instead.
+  if (generated !== undefined && ((generated.generatedCli?.commands.length ?? 0) > 0 || conventional === undefined)) return [generated];
   if (conventional === undefined || !safePackageOutputName(config.plugin.name)) return [];
   return [{
     id: `bin:${config.plugin.name}`,
@@ -528,10 +536,28 @@ const normalizeHooks = (
       : undefined;
     const fallback = route.config['fallback'] === 'standalone' ? 'standalone' as const : 'none' as const;
     const runtime = route.config['runtime'] === 'standalone' ? 'standalone' as const : 'shared' as const;
+    const configuredProviders = route.config['providers'];
+    const providers = Array.isArray(configuredProviders)
+      && configuredProviders.every((provider): provider is string => typeof provider === 'string')
+      ? [...configuredProviders]
+      : undefined;
     const eventName = event.replace('/', '-');
     hooks.push({
       event: hookEventForRoute[event],
-      eventRoute: Object.freeze({ event, fallback, runtime }),
+      eventRoute: Object.freeze({
+        event,
+        fallback,
+        ...(route.preflight === undefined
+          ? {}
+          : {
+            preflight: {
+              provenance: { ...route.preflight.provenance },
+              source: route.preflight.source,
+            },
+          }),
+        ...(providers === undefined ? {} : { providers }),
+        runtime,
+      }),
       id: `hook:event-route:${eventName}`,
       name: `event-route-${eventName}`,
       provenance: { kind: 'conventional', sourcePath: route.source },
@@ -871,6 +897,41 @@ const normalizeMcpApps = (
   }
 
   return apps.sort((left, right) => left.id.localeCompare(right.id));
+};
+
+const normalizeWeb = (
+  loaded: LoadedConfig,
+  apps: readonly NormalizedMcpApp[],
+): NormalizedWeb | undefined => {
+  const configured = loaded.config.web;
+  if (configured === undefined || !Array.isArray(configured.apps)) return undefined;
+  const normalizedApps: NormalizedWebApp[] = configured.apps.map((value) => {
+    const declaration = typeof value === 'string' ? { app: value } : value;
+    const selector = typeof declaration.app === 'string' ? declaration.app : '';
+    const separator = selector.indexOf('/');
+    const serverName = separator < 0 ? selector : selector.slice(0, separator);
+    const appName = separator < 0 ? '' : selector.slice(separator + 1);
+    const resolved = apps.find((app) => app.serverName === serverName && app.name === appName);
+    const allow = Array.isArray(declaration.allow)
+      ? declaration.allow.filter((capability: unknown): capability is NormalizedWebApp['allow'][number] =>
+        typeof capability === 'string' && isServeAppAllowCapability(capability))
+      : [];
+    return {
+      allow,
+      app: selector,
+      appName,
+      ...(isRecord(declaration.input) ? { input: structuredClone(declaration.input) } : {}),
+      resourceUri: resolved?.resourceUri ?? '',
+      serverId: resolved?.serverId ?? `mcp:${serverName}`,
+      serverName,
+      ...(typeof declaration.tool === 'string' ? { tool: declaration.tool } : {}),
+    };
+  });
+  return {
+    apps: normalizedApps,
+    open: configured.open === 'browser' ? 'browser' : 'never',
+    provenance: { sourcePath: loaded.configPath },
+  };
 };
 
 const bundleExtensions = new Set([
@@ -1240,6 +1301,8 @@ export const normalizeProject = async (
   const nativeHooks = await normalizeNativeHooks(loaded, targetNames, registry);
   const payloads = normalizePayloads(loaded, discovered, targetNames);
   const mcpServers = normalizeMcpServers(loaded, discovered, targetNames, payloads);
+  const mcpApps = normalizeMcpApps(loaded, discovered, mcpServers);
+  const web = normalizeWeb(loaded, mcpApps);
   const scripts = normalizeScripts(loaded, discovered, targetNames);
   const assets = normalizeAssets(loaded, discovered, targetNames);
   const commands = normalizeCommands(discovered, targetNames);
@@ -1282,7 +1345,7 @@ export const normalizeProject = async (
       provenance: configProvenance,
       version: identity.version,
     },
-    mcpApps: normalizeMcpApps(loaded, discovered, mcpServers),
+    mcpApps,
     mcpServers,
     hooks: normalizeHooks(loaded, discovered, targetNames, registry, payloads),
     ...(nativeHooks.length === 0 ? {} : { nativeHooks }),
@@ -1300,6 +1363,7 @@ export const normalizeProject = async (
       name,
       provenance: { ...configProvenance },
     })),
+    ...(web === undefined ? {} : { web }),
   };
 
   return deepFreeze(model);

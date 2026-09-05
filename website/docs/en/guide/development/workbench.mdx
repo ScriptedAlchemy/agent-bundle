@@ -97,7 +97,12 @@ to rerun its epoch-bound input; there is no separate lifecycle destination.
 ### App and Skill leaves
 
 An App leaf places the sandboxed MCP App preview in the center of the workspace, bound to its
-server. A bound App can also be reached from its tool's projection details.
+server. A bound App can also be reached from its tool's projection details. The same host stack
+serves one App standalone in a plain browser tab through `agent-bundle serve-app`; when the
+project configures [`web`](../../reference/configuration.mdx#web), `agent-bundle dev` also serves
+`GET /web/<server>/<app>` on the foreground server — the same page, relay, routes, sandbox proxy,
+and consent behavior, bound to the current epoch's server session. Apps not listed in `web.apps`
+are 404. See [Exposing an App in the browser](../authoring/mcp.mdx#exposing-an-app-in-the-browser).
 
 A Skill leaf renders the emitted Skill document by default. Source/generated differences,
 frontmatter, resources, and eval coverage live in the inspector. Raw HTML, JSX/MDX, and Mermaid

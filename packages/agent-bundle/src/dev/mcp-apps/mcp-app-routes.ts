@@ -106,9 +106,12 @@ export interface McpAppRoutesOptions {
    * page with the result). A create request that omits `input` and `result`
    * binds to this call, so a large result is never round-tripped through the
    * browser and past the request-body bound (#562); without it, both fields
-   * are required, as the Workbench sends them.
+   * are required, as the Workbench sends them. `opening` is the opaque
+   * per-page id a host that serves many pages over one session stamps into
+   * each page's seed, so concurrent pages never bind each other's call; a
+   * single-page host ignores it.
    */
-  readonly openingCall?: (sessionId: string, toolName: string) => McpAppOpeningCall | undefined;
+  readonly openingCall?: (sessionId: string, toolName: string, opening: string | undefined) => McpAppOpeningCall | undefined;
   /**
    * Test-only override for the graceful-close receipt window. Production
    * callers must leave this unset so the window keeps dominating the frame
@@ -312,19 +315,20 @@ const createRequest = (
   sessionId: string,
   openingCall: McpAppRoutesOptions['openingCall'],
 ): Parameters<McpAppRoutePreviewService['create']>[0] => {
-  if (!hasOnly(value, ['host', 'input', 'previewProfile', 'result', 'toolName']) || !nonemptyString(value.toolName)
-    || (value.previewProfile !== 'portable' && value.previewProfile !== 'chatgpt' && value.previewProfile !== 'claude')) {
+  if (!hasOnly(value, ['host', 'input', 'opening', 'previewProfile', 'result', 'toolName']) || !nonemptyString(value.toolName)
+    || (value.previewProfile !== 'portable' && value.previewProfile !== 'chatgpt' && value.previewProfile !== 'claude')
+    || (Object.hasOwn(value, 'opening') && !nonemptyString(value.opening))) {
     return invalidShape();
   }
-  // A request carrying neither field binds the call the host already made;
-  // one carrying both is the Workbench's own tool run. Anything in between
-  // is malformed.
+  // A request carrying neither field binds the call the host already made
+  // (optionally naming which one with `opening`); one carrying both is the
+  // Workbench's own tool run. Anything in between is malformed.
   const carriesCall = Object.hasOwn(value, 'input') || Object.hasOwn(value, 'result');
   const call = carriesCall
-    ? isJsonValue(value.input) && isJsonValue(value.result)
+    ? isJsonValue(value.input) && isJsonValue(value.result) && !Object.hasOwn(value, 'opening')
       ? { input: cloneJson(value.input), result: cloneJson(value.result) }
       : undefined
-    : openingCall?.(sessionId, value.toolName);
+    : openingCall?.(sessionId, value.toolName, typeof value.opening === 'string' ? value.opening : undefined);
   if (call === undefined) return invalidShape();
   return Object.freeze({
     host: hostContext(value.host),

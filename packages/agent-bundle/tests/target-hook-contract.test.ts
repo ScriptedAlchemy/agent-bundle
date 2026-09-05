@@ -17,7 +17,13 @@ import { TargetRegistry } from '../src/adapters/registry.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
 import { normalizeProject, type NormalizationTargetRegistry } from '../src/config/index.ts';
 import type { AgentBundleConfig, NormalizedHook, NormalizedPlugin } from '../src/core/types.ts';
+import type { CompiledEventPreflight } from '../src/routes/types.ts';
 import { build } from './support/build.ts';
+
+const eventPreflight: CompiledEventPreflight = Object.freeze({
+  provenance: Object.freeze({ kind: 'conventional', relativePath: 'src/events/tool/before.preflight.ts' }),
+  source: '/project/src/events/tool/before.preflight.ts',
+});
 
 const metadata = Object.freeze({
   adapterRevision: 'test',
@@ -364,6 +370,102 @@ it('plans a thin epoch-bound event-route client and keeps standalone execution e
   expect(degradedSource).toContain('await resolveStandaloneLineage(target, native)');
   expect(degradedSource).not.toContain('import * as routeModule');
   expect(degradedSource).not.toContain('renderStandaloneEventRoute');
+  expect(sharedSource).not.toContain('executeEventPreflight');
+  expect(degradedSource).not.toContain('executeEventPreflight');
+});
+
+const firstIndex = (source: string, snippet: string): number => {
+  const index = source.indexOf(snippet);
+  expect(index).toBeGreaterThanOrEqual(0);
+  return index;
+};
+
+const staticImportSpecifiers = (source: string): readonly string[] => Object.freeze([
+  ...source.matchAll(/\bimport\s+["']([^"']+)["']/gu),
+  ...source.matchAll(/\bfrom\s+["']([^"']+)["']/gu),
+].map((match) => match[1]!));
+
+it('runs event-route preflight in the per-host wrapper before shared IPC', () => {
+  const hook: NormalizedHook = {
+    ...planningHook('beforeTool', []),
+    eventRoute: { event: 'tool/before', fallback: 'none', preflight: eventPreflight, runtime: 'shared' },
+    timeoutMs: 1_250,
+  };
+  const contract: TargetHookContract = {
+    hostContractRevision: 'synthetic-1',
+    commandRoot: '${SYNTHETIC_PLUGIN_ROOT}',
+    ...playgroundCodec,
+    eventNames: {},
+    eventRouteNames: { 'tool/before': 'SyntheticPreToolUse' },
+    manifestPath: 'native-events/registration.json',
+    matchers: {},
+    wrapperPath: (candidate) => `hooks/${candidate.name}.synthetic.mjs`,
+    wrapperSource: () => 'config-hook-only\n',
+  };
+  const plan = planHooks(planningModel([hook]), 'synthetic', contract);
+  const entry = plan.hookEntries[0]!;
+  const source = entry.virtualSource;
+
+  expect(entry.relativePath).toBe('hooks/beforeTool.synthetic.mjs');
+  expect(entry.target).toBe('synthetic');
+  expect(source).toContain(`from ${JSON.stringify(eventPreflight.source)}`);
+  expect(source).toContain('validateNativeEventEnvelope');
+  expect(source).toContain('createCanonicalEventProps');
+  expect(source).toContain('executeEventPreflight');
+  expect(source).toContain('projectEventPreflightResult');
+  expect(entry.executeVirtualSource).toContain('requestEventRuntime');
+  expect(source).toContain('const timeoutMs = 1250;');
+  expect(source).toContain('AbortSignal.timeout(timeoutMs)');
+  expect(source).toContain('process.once(terminationSignal, terminate)');
+  expect(source).toContain('process.off(terminationSignal, terminate)');
+  expect(source).toContain('observedAt: props.canonical.observedAt, sequence: props.canonical.sequence');
+  expect(entry.executeVirtualSource).toContain('const observation = { observedAt, sequence };');
+  expect(entry.executeVirtualSource).toContain('observedAt: observation?.observedAt, sequence: observation?.sequence');
+  expect(source).not.toContain('AGENT_BUNDLE_HOOK_HOST');
+  expect(source).not.toContain('createAgentRenderDispatcher');
+  expect(source).not.toContain('import * as routeModule');
+  expect(source).not.toContain("from '@agent-bundle/runtime'");
+  expect(source).not.toContain("from '@agent-bundle/runtime/flight");
+  expect(source).not.toContain('import * as provider');
+  expect(staticImportSpecifiers(source).filter((specifier) =>
+    specifier === 'react' || specifier.startsWith('react/') || specifier.endsWith('.tsx'))).toEqual([]);
+
+  const runBody = source.slice(firstIndex(source, 'const run = async () => {'));
+  expect(firstIndex(runBody, 'validateNativeEventEnvelope')).toBeLessThan(firstIndex(runBody, 'createCanonicalEventProps'));
+  expect(firstIndex(runBody, 'createCanonicalEventProps')).toBeLessThan(firstIndex(runBody, 'executeEventPreflight'));
+  expect(firstIndex(runBody, 'executeEventPreflight')).toBeLessThan(runBody.search(/['"]execute['"]/u));
+  expect(runBody.search(/['"]execute['"]/u)).toBeLessThan(firstIndex(runBody, 'runExecutor'));
+  expect(firstIndex(runBody, 'projectEventPreflightResult')).toBeGreaterThan(firstIndex(runBody, 'executeEventPreflight'));
+});
+
+it('crosses the standalone Worker boundary only after preflight returns execute', () => {
+  const hook: NormalizedHook = {
+    ...planningHook('beforeTool', []),
+    eventRoute: { event: 'tool/before', fallback: 'none', preflight: eventPreflight, runtime: 'standalone' },
+  };
+  const contract: TargetHookContract = {
+    hostContractRevision: 'synthetic-1',
+    commandRoot: '${SYNTHETIC_PLUGIN_ROOT}',
+    ...playgroundCodec,
+    eventNames: {},
+    eventRouteNames: { 'tool/before': 'SyntheticPreToolUse' },
+    manifestPath: 'native-events/registration.json',
+    matchers: {},
+    wrapperPath: (candidate) => `hooks/${candidate.name}.synthetic.mjs`,
+    wrapperSource: () => 'config-hook-only\n',
+  };
+  const entry = planHooks(planningModel([hook]), 'synthetic', contract).hookEntries[0]!;
+  const source = entry.virtualSource;
+
+  expect(source).toContain('executeEventPreflight');
+  expect(source).toContain('projectEventPreflightResult');
+  expect(source).toContain('new URL(/* webpackIgnore: true */ "./beforeTool.synthetic.execute.mjs", import.meta.url)');
+  expect(entry.executeVirtualSource).toContain('new URL(/* webpackIgnore: true */ "./hooks-flight.mjs", import.meta.url)');
+  expect(entry.executeVirtualSource).toContain('createCanonicalEventProps(canonicalEvent, native, target, nativeEvent, capabilityRevision, signal, observation)');
+  expect(source).not.toContain('AGENT_BUNDLE_HOOK_HOST');
+  const runBody = source.slice(firstIndex(source, 'const run = async () => {'));
+  expect(firstIndex(runBody, 'executeEventPreflight')).toBeLessThan(runBody.search(/['"]execute['"]/u));
+  expect(runBody.search(/['"]execute['"]/u)).toBeLessThan(firstIndex(runBody, 'runExecutor'));
 });
 
 it('continues planning valid hooks after a prior hook mapping error', () => {

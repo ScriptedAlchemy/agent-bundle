@@ -296,6 +296,83 @@ describe('bin, lib, and tools validation', () => {
     });
     expect(diagnostics).toEqual([]);
   });
+
+  const toolsExternalization = {
+    message: 'generated executables bundle every dependency that is not a Node built-in.',
+    recovery: 'Remove the externalization from tools; the compiler bundles the dependency and fails the build if a non-built-in stays external (AB6005).',
+    severity: 'error' as const,
+  };
+
+  it('rejects tools.rsbuild.output.autoExternal that is not false with AB4725', async () => {
+    const diagnostics = await validated({
+      tools: { rsbuild: { output: { autoExternal: true } } },
+    });
+    expect(diagnostics).toEqual([expect.objectContaining({
+      code: 'AB4725',
+      message: 'Tools rsbuild output.autoExternal must stay false; generated executables bundle every dependency that is not a Node built-in.',
+      recovery: toolsExternalization.recovery,
+      severity: 'error',
+    })]);
+    expect(diagnostics[0]!.sourcePath).toMatch(/agent-bundle\.config\.ts$/u);
+  });
+
+  it.each([
+    { externals: 'left-pad', label: 'string' },
+    { externals: ['left-pad'], label: 'array' },
+    { externals: { 'left-pad': true }, label: 'object' },
+  ])('rejects a tools.rsbuild.output.externals $label that externalizes a non-built-in with AB4725', async ({ externals }) => {
+    const diagnostics = await validated({
+      tools: { rsbuild: { output: { externals } } },
+    });
+    expect(diagnostics).toEqual([expect.objectContaining({
+      ...toolsExternalization,
+      code: 'AB4725',
+      message: `Tools rsbuild output.externals externalizes ${JSON.stringify('left-pad')}; ${toolsExternalization.message}`,
+    })]);
+  });
+
+  it('accepts tools.rsbuild.output.externals that only name Node built-ins or use a RegExp', async () => {
+    const diagnostics = await validated({
+      tools: { rsbuild: { output: { externals: ['node:fs', 'fs', /^node:/] } } },
+    });
+    expect(diagnostics).toEqual([]);
+  });
+
+  it('accepts a tools.rsbuild.output.externals object that opts out with false', async () => {
+    const diagnostics = await validated({
+      tools: { rsbuild: { output: { externals: { 'left-pad': false } } } },
+    });
+    expect(diagnostics).toEqual([]);
+  });
+
+  it('rejects tools.rspack object-form externals that externalize a non-built-in with AB4725', async () => {
+    const diagnostics = await validated({
+      tools: { rspack: { externals: ['left-pad'] } },
+    });
+    expect(diagnostics).toEqual([expect.objectContaining({
+      ...toolsExternalization,
+      code: 'AB4725',
+      message: `Tools rspack externals externalizes ${JSON.stringify('left-pad')}; ${toolsExternalization.message}`,
+    })]);
+  });
+
+  it('rejects tools.rspack array-form object fragments that externalize a non-built-in with AB4725', async () => {
+    const diagnostics = await validated({
+      tools: { rspack: [{ externals: 'left-pad' }, () => {}] },
+    });
+    expect(diagnostics).toEqual([expect.objectContaining({
+      ...toolsExternalization,
+      code: 'AB4725',
+      message: `Tools rspack externals externalizes ${JSON.stringify('left-pad')}; ${toolsExternalization.message}`,
+    })]);
+  });
+
+  it('accepts a mutator-only tools.rspack without an AB4725', async () => {
+    const diagnostics = await validated({
+      tools: { rspack: (config: object) => config },
+    });
+    expect(diagnostics).toEqual([]);
+  });
 });
 
 describe('artifact output validation', () => {

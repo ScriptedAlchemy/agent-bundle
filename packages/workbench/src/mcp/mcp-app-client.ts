@@ -8,10 +8,20 @@ import type { McpAppProfileId } from '../../../agent-bundle/src/contracts/mcp-ap
 import type {
   CreateMcpAppPreviewRequest as RuntimeCreateRequest,
   McpAppBindingOperation,
+  McpAppBridgeLifecycle,
   McpAppConsentCreatedResponse,
   McpAppConsentDecisionResponse,
   McpAppPreviewSnapshot,
+  McpAppRelayFrame,
+  McpAppRouteClose,
+  McpAppRouteMessages,
   McpAppRuntimeInvalidationDetails,
+} from '../../../agent-bundle/src/contracts/mcp-apps.ts';
+export type {
+  McpAppBridgeLifecycle,
+  McpAppRelayFrame,
+  McpAppRouteClose,
+  McpAppRouteMessages,
 } from '../../../agent-bundle/src/contracts/mcp-apps.ts';
 import type {
   McpAppBoundOperationResult,
@@ -22,7 +32,7 @@ import type { McpAppConsentRequest, McpAppDocumentPolicySnapshot } from '../../.
 
 import { exactKeys, isRecord } from '../client-helpers.ts';
 import { hasOnlyOwnKeys } from '../strict-json.ts';
-import { finiteOrdinaryJsonByteLength } from './finite-json.ts';
+import { finiteOrdinaryJsonByteLength } from '../../../agent-bundle/src/web-host/browser/finite-json.ts';
 import { ForegroundRouteClient, ForegroundRouteClientError, sameRuntimeBinding, type McpRuntimeBindingIdentity } from './mcp-route-client.ts';
 
 export type McpAppJsonPrimitive = null | boolean | number | string;
@@ -36,7 +46,6 @@ export interface McpAppJsonObject {
 export type McpAppJsonValue = McpAppJsonArray | McpAppJsonObject | McpAppJsonPrimitive;
 
 export type McpAppPreviewProfile = McpAppProfileId;
-export type McpAppBridgeLifecycle = 'created' | 'initializing' | 'initialized' | 'closing' | 'closed';
 export type McpAppRequestId = string | number | null;
 
 export interface McpAppHostContext {
@@ -83,42 +92,11 @@ export interface McpAppPreviewCreateRequest {
   readonly toolName: string;
 }
 
-export interface McpAppRelayFrame {
-  readonly allow: string;
-  readonly documentPolicy?: Readonly<{
-    readonly allow: string;
-    readonly approvedPermissions: McpAppJsonValue;
-    readonly revision: number;
-    readonly warnings: readonly McpAppJsonValue[];
-  }>;
-  readonly policy: Readonly<{
-    readonly contentSecurityPolicy: string;
-    readonly iframeAllow: string;
-    readonly permissionsPolicy: string;
-  }>;
-  readonly referrerPolicy: 'no-referrer';
-  readonly relay: Readonly<{ readonly maxMessageBytes: number; readonly maxQueuedMessages: number }>;
-  readonly sandbox: 'allow-scripts allow-same-origin';
-  readonly src: string;
-  readonly targetOrigin: string;
-}
-
 export interface McpAppPreview {
   readonly bindingId: string;
   readonly frame?: McpAppRelayFrame;
   readonly profile: McpAppJsonValue;
   readonly resource: McpAppJsonValue;
-}
-
-export interface McpAppRouteMessages {
-  readonly accepted: boolean;
-  readonly lifecycle: McpAppBridgeLifecycle;
-  readonly messages: readonly McpAppJsonValue[];
-}
-
-export interface McpAppRouteClose {
-  readonly lifecycle: McpAppBridgeLifecycle;
-  readonly message?: McpAppJsonValue;
 }
 
 export interface McpAppConsentChallenge {

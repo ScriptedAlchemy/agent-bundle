@@ -1,6 +1,9 @@
 import { copyFile, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { RspressPlugin } from '@rspress/core';
+// The slugger Rspress itself runs over headings (`@rspress/core` re-exports it
+// from here for `mdx/remarkPlugins/toc.js`), so ids match byte for byte.
+import GithubSlugger from '@rspress/shared/github-slugger';
 
 const MARKDOWN_EXTENSION = '.md';
 const FRONTMATTER_FENCE = '---';
@@ -31,6 +34,87 @@ async function collectMarkdownFiles(directory: string, prefix = ''): Promise<str
   }
 
   return collected;
+}
+
+function headingText(raw: string): string {
+  return raw
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/\\([\\`*_{}[\]()#+\-.!<>|~])/g, '$1')
+    .trim();
+}
+
+interface PageAnchors {
+  readonly ids: Set<string>;
+  readonly members: Map<string, string>;
+}
+
+function memberName(text: string): string {
+  return text.replace(/\(\)$/, '');
+}
+
+function collectPageAnchors(markdown: string): PageAnchors {
+  const slugger = new GithubSlugger();
+  const ids = new Set<string>();
+  const members = new Map<string, string>();
+  const outsideFences = markdown.replace(/^`{3,}[\s\S]*?^`{3,}[ \t]*$/gm, '');
+
+  for (const match of outsideFences.matchAll(/^(#{1,6}) (.+)$/gm)) {
+    const text = headingText(match[2]);
+    const id = slugger.slug(text);
+    ids.add(id);
+    if (match[1].length === 3) {
+      members.set(id, memberName(text));
+    }
+  }
+  return { ids, members };
+}
+
+/**
+ * TypeDoc's first anchor pass hands compound slugs to nested reflections
+ * (`EvalRunStoreError.code` → `evalrunstoreerrorcode`), so a later link to the
+ * `### EvalRunStoreErrorCode` heading receives a spurious `-1`. Rspress runs
+ * github-slugger over the rendered headings instead, where the member's first
+ * occurrence has the unsuffixed anchor, so those links are dead. Rewrite a
+ * `#name-N` link to `#name` only when the fragment does not exist on the
+ * target page (the link is actually dead — a legitimate `#protocol-v1` whose
+ * heading exists is never touched), `name` is the id of a `###` member
+ * heading there, and the link's label is that member's exact name: ids are
+ * case-folded, so `FooCode` and `fooCode` share a base and only the label
+ * tells which one the link meant. Anything else is left as TypeDoc wrote it
+ * for the build's anchor check to judge.
+ */
+async function alignTypeDocMemberLinks(directory: string, files: string[]): Promise<void> {
+  const anchorsByPage = new Map<string, PageAnchors>();
+
+  for (const relativePath of files) {
+    const filePath = path.resolve(directory, relativePath);
+    anchorsByPage.set(filePath, collectPageAnchors(await readFile(filePath, 'utf8')));
+  }
+
+  for (const relativePath of files) {
+    const filePath = path.resolve(directory, relativePath);
+    const markdown = await readFile(filePath, 'utf8');
+    const aligned = markdown.replace(
+      /(\[([^\]]*)\]\()([^)\s#]*#)([^)\s#]+?)(-\d+)(\))/g,
+      (link, opening: string, label: string, target: string, base: string, suffix: string, closing: string) => {
+        const linkedPath = target.slice(0, -1);
+        const targetPath = linkedPath ? path.resolve(path.dirname(filePath), linkedPath) : filePath;
+        const anchors = anchorsByPage.get(targetPath);
+        if (
+          !anchors ||
+          anchors.ids.has(base + suffix) ||
+          anchors.members.get(base) !== memberName(headingText(label))
+        ) {
+          return link;
+        }
+        return `${opening}${target}${base}${closing}`;
+      },
+    );
+
+    if (aligned !== markdown) {
+      await writeFile(filePath, aligned);
+    }
+  }
 }
 
 async function prunePlaceholderDirectories(directory: string): Promise<boolean> {
@@ -137,6 +221,7 @@ export function mirrorApiLocale(options: MirrorApiLocaleOptions): RspressPlugin 
 
       const source = path.join(docsRoot, sourceDir);
       const generatedFiles = await collectMarkdownFiles(source);
+      await alignTypeDocMemberLinks(source, generatedFiles);
 
       for (const { dir, notice } of targets) {
         const target = path.join(docsRoot, dir);

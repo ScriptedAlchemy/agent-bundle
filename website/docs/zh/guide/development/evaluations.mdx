@@ -45,9 +45,9 @@ npx agent-bundle eval compare <baseline-run-id> <candidate-run-id>
 ### 编写一个结果 grader
 
 `expectOutcome({ script })` 指名一个默认导出一个 grader 函数的模块。路径相对套件文件解析，且不得越出套件
-目录（越过它的 `../` 会被拒绝；这项检查针对的是路径本身，因此套件内的符号链接会被跟随到它所指向的任何位置）。`agent-bundle/eval` 导出了它的契约：[`EvalGraderFunction`](../../api/types/eval.EvalGraderFunction.md)
-接收一个 [`EvalGraderContext`](../../api/interfaces/eval.EvalGraderContext.md)，并同步或以 promise 形式返回一个
-[`EvalScriptOutcome`](../../api/interfaces/eval.EvalScriptOutcome.md)。下面是
+目录（越过它的 `../` 会被拒绝；这项检查针对的是路径本身，因此套件内的符号链接会被跟随到它所指向的任何位置）。`agent-bundle/eval` 导出了它的契约：[`EvalGraderFunction`](../../api/eval.md#evalgraderfunction)
+接收一个 [`EvalGraderContext`](../../api/eval.md#evalgradercontext)，并同步或以 promise 形式返回一个
+[`EvalScriptOutcome`](../../api/eval.md#evalscriptoutcome)。下面是
 `examples/skills-starter/evals/graders/release-result.ts` 的原文；上面的套件指名的 `./graders/status-result.ts`
 在 `examples/mcp-app` 中具有同样的形状：
 

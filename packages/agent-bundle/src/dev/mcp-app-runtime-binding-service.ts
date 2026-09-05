@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { settleBeforeAbort } from '../core/abort.ts';
 import { cloneMcpAppFiniteJson, type McpAppJsonValue } from './mcp-app-metadata.ts';
 import { MCP_APP_PROFILE_DESCRIPTORS, type McpAppProfileId } from './mcp-app-profile-descriptors.ts';
 import type { DevRuntimeMcpSessionView } from './runtime-provider.ts';
@@ -190,26 +191,6 @@ const canonicalOperation = (request: McpAppRuntimeOperationRequest, expectedSess
 
 const abortReason = (signal: AbortSignal): unknown => signal.reason ?? new Error('Runtime MCP App operation was cancelled.');
 
-const settleOnAbort = <Value>(operation: Promise<Value>, signal: AbortSignal): Promise<Value> => new Promise((resolve, reject) => {
-  let settled = false;
-  const finish = (outcome: () => void): void => {
-    if (settled) return;
-    settled = true;
-    signal.removeEventListener('abort', onAbort);
-    outcome();
-  };
-  const onAbort = (): void => finish(() => reject(abortReason(signal)));
-  if (signal.aborted) {
-    onAbort();
-    return;
-  }
-  signal.addEventListener('abort', onAbort, { once: true });
-  void operation.then(
-    (value) => finish(() => resolve(value)),
-    (error: unknown) => finish(() => reject(error)),
-  );
-});
-
 export class McpAppRuntimeBindingService {
   readonly #entries = new Map<string, McpAppRuntimeBinding>();
   readonly #pendingReleases = new Map<string, McpAppRuntimeBinding>();
@@ -296,10 +277,10 @@ export class McpAppRuntimeBindingService {
     const active = Object.freeze({ controller, settled });
     entry.operations.add(active);
     try {
-      const operation = await settleOnAbort(Promise.resolve().then(async () => {
+      const operation = await settleBeforeAbort(Promise.resolve().then(async () => {
         if (controller.signal.aborted) throw abortReason(controller.signal);
         return entry.session.execute(canonical, Object.freeze({ signal: controller.signal }));
-      }), controller.signal);
+      }), controller.signal, () => abortReason(controller.signal));
       this.#assertActive(entry);
       return this.#operationResult(entry, operation);
     } finally {

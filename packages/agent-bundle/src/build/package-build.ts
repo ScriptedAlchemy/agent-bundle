@@ -5,6 +5,8 @@ import { basename, dirname, join, resolve } from 'node:path';
 import type { AgentBundleToolsConfig, NormalizedPlugin } from '../core/types.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { assertInside, toPosixRelative } from '../core/paths.ts';
+import type { CompileResult } from './compile-result.ts';
+import { buildWithRslib } from './compiler.ts';
 import { declarationBuildDiagnostics, replayDeclarationEmit } from './declaration-diagnostics.ts';
 import { listArtifactFiles, publishArtifact, resolveArtifactDestination } from './emit.ts';
 import { scanEntryExports } from './entry-exports.ts';
@@ -22,8 +24,7 @@ import {
 } from './entry-shell.ts';
 import { projectMeta } from './meta.ts';
 import { bundleSyntaxCheckFor } from './module-imports.ts';
-import type { BundledOutputEvidence } from './provenance.ts';
-import { buildWithRslib, isDeclarationGenerationFailure, type RslibEntry } from './rslib.ts';
+import { isDeclarationGenerationFailure, type RslibEntry } from './rslib.ts';
 import { runtimeIgnoredRoot } from './runtime-path.ts';
 import { validateJavaScriptModules } from './validate-artifact-modules.ts';
 
@@ -257,7 +258,7 @@ export const planPackageEntries = async (
 const buildPackageEntries = async (
   options: Parameters<typeof buildWithRslib>[0],
   declaration: { readonly entryName: string; readonly tsconfigPath: string } | undefined,
-): Promise<readonly BundledOutputEvidence[]> => {
+): Promise<CompileResult> => {
   try {
     return await buildWithRslib(options);
   } catch (error) {
@@ -324,6 +325,7 @@ export const buildPackageOutputs = async (options: {
     ])]);
     const evidence = await buildPackageEntries({
       cwd: projectRoot,
+      diagnosticPathPrefix: toPosixRelative(projectRoot, outputRoot),
       entries,
       ...(ignoredRuntimeRoots.length === 0 ? {} : { ignoredSourcePaths: ignoredRuntimeRoots }),
       logLevel: 'error',
@@ -333,7 +335,7 @@ export const buildPackageOutputs = async (options: {
     }, dtsTsconfig === undefined || packageBuild.lib === undefined
       ? undefined
       : { entryName: packageBuild.lib.name, tsconfigPath: dtsTsconfig.path });
-    const evidenceByPath = new Map(evidence.map((entry) => [entry.path, entry.sourceInputs]));
+    const evidenceByPath = new Map(evidence.assets.map((entry) => [entry.path, entry.sourceInputs]));
     await Promise.all(entries
       .filter((entry) => entry.executable)
       .map((entry) => chmod(resolveArtifactDestination(stageRoot, entry.outputRelativePath), executableMode)));

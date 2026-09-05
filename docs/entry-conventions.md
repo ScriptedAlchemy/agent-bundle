@@ -892,7 +892,10 @@ skills, and script routes ship with the **plugin root**, so the build also
 emits the same compiled command graph into that root whenever a selected host's
 adapter publishes the `cli` capability — all built-in hosts do (`claude`,
 `codex`, `cursor`, `portable`) — because the artifact root is
-already a plain directory Node executes `mcp/` and `scripts/` files from:
+already a plain directory Node executes `mcp/` and `scripts/` files from.
+The same `bin/<plugin-name>.mjs` is also emitted when `web` is configured,
+even if `src/cli/**` compiled no commands (the bin then carries only the
+framework-owned `web` command, or both surfaces when routed commands exist):
 
 ```text
 artifact/
@@ -1214,22 +1217,32 @@ The hatch is bounded: the framework invariant hook runs after the consumer's
 `tools.rspack`, and the resolved-config assertions still run after the merge.
 A hatch value that breaks an artifact contract (async chunks, output roots,
 self-containment) fails the build with a hard diagnostic instead of silently
-overriding the contract. Reserved module specifiers are protected the same
-way: a hatch that externalizes `agent-bundle/mcp-entry` or a generated
-module specifier (`agent-bundle/meta`, or a registry specifier such as
-`agent-bundle/mcp-apps`) fails the build with a hard diagnostic — at config inspection for statically visible `externals`,
-and through a post-build scan of the emitted bundle for function-form
-`externals` — because generated executables must stay self-contained. The
-hatch customizes *how code compiles*, never *what the artifact promises*. The
-framework's own profile keeps the same promise: `output.autoExternal` is
-`false`, `bundle: true`, `splitChunks: false`, and no `externals` are added, so
-Rslib's `node` target leaves only Node built-ins (and `pnpapi`) external, and
-`AB6005` fails any bare import specifier that is not a Node built-in in every
-compiled module — host-pack modules and the package build's `dist` bundles
-alike — so the hatch cannot externalize an import on the author's behalf (a
-`require`, `createRequire`, or `import.meta.resolve` call is not an import and
-is outside that walk; the prepack gate reads those as dependency evidence). Run-time
-path references are kept the same way: a `new URL(…, import.meta.url)` or
+overriding the contract. At config validation, `AB4725` rejects
+`tools.rsbuild.output.autoExternal` unless it is `false` and rejects statically
+visible string or object `externals` entries that name a package. Relative
+entries, RegExp and function-form externals, and anything a mutator installs
+are judged from the compilation's externals evidence (`AB6005`), where the
+emitted siblings are known. The invariant
+layer re-pins `output.autoExternal: false` after the hatch merge. Reserved
+module specifiers are protected the same way: a hatch that externalizes
+`agent-bundle/mcp-entry` or a generated module specifier (`agent-bundle/meta`,
+or a registry specifier such as `agent-bundle/mcp-apps`) fails the build with
+a hard diagnostic — at config inspection for statically visible `externals`,
+and from the emitted bundle's residual imports for function-form `externals`.
+The hatch customizes *how code compiles*, never *what the artifact promises*. The framework's own
+profile keeps the same promise: `output.autoExternal` is `false`, `bundle:
+true`, `splitChunks: false`, and no `externals` are added. The compiler service
+lowers every host-pack surface and package-build entry. The framework-owned
+`ArtifactDependencyAuditPlugin` taps `thisCompilation` and records every module
+Rspack kept external, and the service reads that evidence before trusting an
+asset. `AB6005` rejects anything Rspack kept external except a Node built-in,
+`pnpapi`, or an emitted sibling of the same artifact, whatever spelling the
+bundle uses. The emitted-module walk remains behind that check as defense in
+depth. A `require`,
+`createRequire(…)(…)`, or `import.meta.resolve(…)` call the compiler does not
+resolve is not a module dependency; content the compiler did not compile is
+opaque and must declare what it needs. Run-time path references are kept the
+same way: a `new URL(…, import.meta.url)` or
 `new Worker(new URL(…))` in consumer or generated code names a file beside the
 artifact, so the invariant layer turns the bundler's URL and worker asset
 processing off after the hatch and the expression reaches the artifact
@@ -1502,33 +1515,48 @@ resolve '../events'`). The route graph reports such an import first, as
 (`src/routes/framework-imports.ts`; the compiler-carrying entries are
 `agent-bundle`, `agent-bundle/api`, `agent-bundle/config`,
 `agent-bundle/eval`, `agent-bundle/rstest`, `agent-bundle/test`, and
-`agent-bundle/test/browser`, matched exactly, so the bundle-safe entries —
-`agent-bundle/app` among them — are never reported; `import type` and
-type-only usage are not reported either), while an external bare import
-(`AB6005 uses unsupported specifier`) or a non-literal `import(spec)` (`AB6005 has a
-non-literal dynamic import`) still fails artifact validation. The sanctioned
-shape is `spawnServeApp` from `agent-bundle/serve-app-command`
-(`src/serve-app-command.ts`, #558) — plain Node with no dependencies, so the
-bundler inlines it into the self-contained executable the way it inlines
-`agent-bundle/launch-env`. It lowers the `serveApp` options to `serve-app`
-argv (`serveAppArgv`; every `ServeAppOptions` key except the host-process-only
-`logger`, `registry`, `openBrowser`, `targets`, and `timeoutMs`), resolves the
-framework CLI from the `agent-bundle` package installed at or above `root`
-(`locateFrameworkCli`, through `src/core/dependency-manifest.ts`), spawns it
-with the child's stdout piped and its stderr inherited, relays every stdout
-line to stderr so the routed CLI keeps stdout for its result, resolves once
-the child prints the ready line `MCP App <app> at <url> (tool <tool>; Ctrl-C
-stops the server)` — the CLI writes it and the helper parses it through one
-module, `src/serve-app/command-contract.ts` — and turns the route `signal`
-into the child's `SIGTERM`. The result is `{ app, url, tool, server, port,
-pid, closed, close() }`; failures are `ServeAppCommandError` with `code`
-`framework-not-installed`, `artifact-missing`, `spawn-failed`,
-`exited-before-ready` (carrying the child's `exit`), `aborted`, or
-`stop-failed` (the running child refused the signal `close()` or the abort
-sent; it is still running). It is a
-checkout command: an installed host pack has neither `node_modules/agent-bundle`
-nor the artifact, and the first two codes say so before anything is spawned.
-The worked example is in the MCP Apps guide, "Serving an App standalone".
+`agent-bundle/test/browser`, matched exactly; `import type` and type-only
+usage are not reported), while an external bare import (`AB6005 uses
+unsupported specifier`) or a non-literal `import(spec)` (`AB6005 has a
+non-literal dynamic import`) still fails artifact validation. From an
+installed artifact the supported command is `<plugin> web` on
+`bin/<plugin>.mjs` (emitted when `web` is configured, even with no
+`src/cli/**` commands). It reads the manifest `web` section beside `bin/`,
+launches the plugin's own packed MCP server, and prints the same ready line
+`MCP App <server>/<app> at <url> (tool <tool>; Ctrl-C stops the server)` —
+`src/serve-app/command-contract.ts` is the shared contract for that line
+and for `--json` `{ app, server, tool, url, port, resourceUri, sandboxOrigin }`.
+`agent-bundle/serve-app-command` (`spawnServeApp`) is removed. The worked
+example is in the MCP Apps guide, "Exposing an App in the browser".
+
+## `<plugin> web`
+
+```sh
+node <root>/bin/<plugin>.mjs web [<server>/<app>] [--port N]
+  [--open|--no-open] [--tool T] [--input JSON] [--allow <cap>]...
+  [--profile portable|claude|chatgpt] [--json]
+```
+
+The framework-owned `web` command. Config is exposure/policy only:
+
+```ts
+web?: {
+  apps: ReadonlyArray<string | {
+    app: string;
+    tool?: string;
+    input?: Record<string, unknown>;
+    allow?: McpAppConsentCapability[];
+  }>;
+  open?: 'browser' | 'never'; // default 'never'
+}
+```
+
+`apps[]` selects among Apps already declared under `mcp.servers.<id>.apps`.
+Invalid `web` is `AB4341`. When configured, `agent-bundle.manifest.json`
+gains a `web` section and the bin exists even without authored CLI commands.
+`agent-bundle dev` serves the same host at `GET /web/<server>/<app>` (404
+for Apps not listed in `web.apps`). There is no `web/` directory in the
+artifact.
 
 ## `agent-bundle/app` — the App-side bridge client
 
@@ -1549,10 +1577,10 @@ mapping cannot replace the framework runtime. It is not one of the
 compiler-carrying entries `AB4837` rejects.
 
 The other half stays where it is: the host page, sandbox proxy, frame relay
-(`McpAppFrameRelay` in the Workbench, the inline relay in `serve-app`),
+(`McpAppFrameRelay` in `src/web-host/browser/frame-relay.ts`, shared by the Workbench, `serve-app`, dev `/web`, and `<plugin> web`),
 `/api/mcp/...` routes, consent authority, and `createMcpAppBridge`
 (`src/dev/mcp-apps/mcp-app-bridge.ts`) are host-side and owned by the
-Workbench, `serve-app`, and #564's production host; #594 adds no host bridge
+Workbench, `serve-app`, and the `<plugin> web` host (#564); #594 adds no host bridge
 and moves none of those modules. The one host-side behavior it adds is
 cancellation: `createMcpAppBridge` now honors the client's
 `notifications/cancelled` and threads the abort through the binding service

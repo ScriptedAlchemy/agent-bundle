@@ -46,6 +46,6 @@ export const composeToolsLayers = <Layer>(options: {
  * mutator can neither strip the generated modules nor undo the invariants.
  */
 export const frameworkInvariantLayer = <Mutator>(enforce: Mutator): {
-  readonly output: { readonly cleanDistPath: false };
+  readonly output: { readonly autoExternal: false; readonly cleanDistPath: false };
   readonly tools: { readonly rspack: Mutator };
-} => ({ output: { cleanDistPath: false }, tools: { rspack: enforce } });
+} => ({ output: { autoExternal: false, cleanDistPath: false }, tools: { rspack: enforce } });

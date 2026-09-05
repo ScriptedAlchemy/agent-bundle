@@ -83,7 +83,10 @@ epoch 的输入；没有单独的生命周期目的地。
 ### App 与 Skill 叶子
 
 App 叶子把沙箱化的 MCP App 预览放在工作区中央，并绑定到它的服务器。也可以从其工具的投影细节到达一个
-已绑定的 App。
+已绑定的 App。同一套宿主栈通过 `agent-bundle serve-app` 在普通浏览器标签页里独立托管一个 App；当项目配置了
+[`web`](../../reference/configuration.mdx#web)，`agent-bundle dev` 也会在前台服务器上提供
+`GET /web/<server>/<app>`——同样的页面、中继、路由、沙箱代理与同意行为，绑定到当前 epoch 的服务器会话。
+未列在 `web.apps` 中的 App 返回 404。见[在浏览器中暴露 App](../authoring/mcp.mdx#在浏览器中暴露-app)。
 
 Skill 叶子默认渲染输出的 Skill 文档。源码/生成差异、frontmatter、资源与 eval 覆盖位于检查器中。Skill
 Markdown 中的原始 HTML、JSX/MDX 与 Mermaid 保持惰性。

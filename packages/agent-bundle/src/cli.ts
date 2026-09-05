@@ -217,22 +217,22 @@ interface ServeAppCommandOptions extends JsonInputOptions {
 const collect = (value: string, previous: string[]): string[] => [...previous, value];
 
 const port = (value: string): number => {
-  if (!/^(0|[1-9]\d{0,4})$/u.test(value)) throw new TypeError('Port must be a TCP port number.');
+  if (!/^(0|[1-9]\d{0,4})$/u.test(value)) throw new InvalidArgumentError('Port must be a TCP port number.');
   const number = Number(value);
-  if (number > 65_535) throw new TypeError('Port must be a TCP port number.');
+  if (number > 65_535) throw new InvalidArgumentError('Port must be a TCP port number.');
   return number;
 };
 
 const trialCount = (value: string): number => {
-  if (!/^[1-9]\d{0,2}$/u.test(value)) throw new TypeError('Trials must be a positive integer.');
+  if (!/^[1-9]\d{0,2}$/u.test(value)) throw new InvalidArgumentError('Trials must be a positive integer.');
   const number = Number(value);
-  if (number > 100) throw new TypeError('Trials must be at most 100.');
+  if (number > 100) throw new InvalidArgumentError('Trials must be at most 100.');
   return number;
 };
 
 const installHost = (value: string): InstallHost => {
   if (value === 'claude' || value === 'codex' || value === 'cursor') return value;
-  throw new TypeError('Install host must be claude, codex, or cursor.');
+  throw new InvalidArgumentError('Install host must be claude, codex, or cursor.');
 };
 
 const collectInstallHost = (value: string, previous: readonly InstallHost[]): readonly InstallHost[] =>
@@ -240,12 +240,12 @@ const collectInstallHost = (value: string, previous: readonly InstallHost[]): re
 
 const installMode = (value: string): InstallMode => {
   if (value === 'local' || value === 'marketplace') return value;
-  throw new TypeError('Install mode must be local or marketplace.');
+  throw new InvalidArgumentError('Install mode must be local or marketplace.');
 };
 
 const installScope = (value: string): InstallScope => {
   if (value === 'user' || value === 'project' || value === 'local') return value;
-  throw new TypeError('Install scope must be user, project, or local.');
+  throw new InvalidArgumentError('Install scope must be user, project, or local.');
 };
 
 const mcpAppProfile = (value: string): McpAppProfileId => {
@@ -488,6 +488,9 @@ const humanDoctor = (result: DoctorReport): string => {
       out.push(`  operator env: ${uniqueEnvFiles.map((file) =>
         `${file.path} (${file.state === 'present' ? `${String(file.variables ?? 0)} variable${file.variables === 1 ? '' : 's'}` : file.state})`).join(', ')}\n`);
     }
+  }
+  if (result.web !== undefined) {
+    out.push(`${result.web.line}\n`);
   }
   out.push(
     `runtime endpoints: ${result.endpoints.status}; ${result.endpoints.summary.live} live, ` +

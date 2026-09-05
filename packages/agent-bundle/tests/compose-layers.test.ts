@@ -54,9 +54,12 @@ describe('composeToolsLayers', () => {
       .toEqual(['profile', { layer: 'rspack', hatch: rspackMutator }, 'invariants']);
   });
 
-  it('pins the invariant layer to cleanDistPath off plus the engine mutator', () => {
+  it('pins the invariant layer to automatic externalization and cleanDistPath off plus the engine mutator', () => {
     const enforce = (): void => undefined;
-    expect(frameworkInvariantLayer(enforce)).toEqual({ output: { cleanDistPath: false }, tools: { rspack: enforce } });
+    expect(frameworkInvariantLayer(enforce)).toEqual({
+      output: { autoExternal: false, cleanDistPath: false },
+      tools: { rspack: enforce },
+    });
   });
 });
 
@@ -95,6 +98,7 @@ describe('the shared layering reaches every synthesized config the same way', ()
       const mutators = invariantMutatorOf(config);
       expect(mutators).toHaveLength(1);
       expect((mutators[0] as { readonly name: string }).name).toBe('enforceInvariants');
+      expect(config.output?.autoExternal).toBe(false);
       expect(config.output?.cleanDistPath).toBe(false);
     }
   });

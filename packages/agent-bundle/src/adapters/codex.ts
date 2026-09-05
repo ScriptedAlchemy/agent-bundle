@@ -22,7 +22,9 @@ import {
   featureCapabilitiesFrom,
   noticeDeliveryAdvertisementFrom,
   supportedEventRouteNamesFrom,
+  capabilityFromTableRow,
   cliBinCapability,
+  webSurfaceCapability,
   supportedCapability,
   unavailableCapability,
 } from './capability-state.ts';
@@ -1267,6 +1269,7 @@ export const codexAdapter: TargetAdapter = Object.freeze({
     // The routed CLI bin rides the same plugin-root directory the pinned
     // contract already executes `mcp/` and `scripts/` files from (#387).
     [cliBinCapability]: supportedCapability(evidence),
+    [webSurfaceCapability]: capabilityFromTableRow(capabilityTable.plugin.web, evidence),
     // Component feature sets (#100): one row per host feature a kind may use.
     ...featureCapabilitiesFrom('hooks', capabilityTable.hooks.features, evidence),
     ...featureCapabilitiesFrom('skills', capabilityTable.plugin.skillFeatures, evidence),

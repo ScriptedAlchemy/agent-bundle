@@ -25,7 +25,9 @@ export {
   agentEventPayloadFields,
   agentEventPayloadNativeKeys,
   canonicalAgentEvents,
+  eventFamilyAllowsPreflightDeny,
   MAX_ROUTE_RENDER_ELAPSED_MS,
+  validateEventPreflightResult,
 } from './routes/public.ts';
 export type {
   AgentEventCanonicalIdentity,
@@ -44,6 +46,9 @@ export type {
   AgentEventRouteConfig,
   AgentEventRouteProps,
   AgentEventRuntimeMode,
+  EventPreflight,
+  EventPreflightContext,
+  EventPreflightResult,
   AgentLayoutRoute,
   AgentLayoutRouteKind,
   AgentProviderContext,
@@ -91,6 +96,35 @@ export type {
   ToolRouteProps,
   ToolTaskSupport,
 } from './routes/public.ts';
+export {
+  createEventTracer,
+  eventTraceEventKinds,
+  eventTraceExecution,
+  eventTraceObserver,
+  eventTracePhases,
+  installEventTraceObserver,
+  summarizeEventTraceError,
+} from './events/trace.ts';
+export type {
+  CreateEventTracerOptions,
+  EventTraceErrorSummary,
+  EventTraceEvent,
+  EventTraceEventKind,
+  EventTraceExecuteStart,
+  EventTraceExecution,
+  EventTraceFailure,
+  EventTraceObserver,
+  EventTracePhase,
+  EventTracePreflightOutcome,
+  EventTracePreflightOutcomeEvent,
+  EventTracePreflightStart,
+  EventTraceProvidersFinish,
+  EventTraceProvidersStart,
+  EventTracer,
+  EventTraceRenderFinish,
+  EventTraceRenderStart,
+  EventTraceRuntime,
+} from './events/trace.ts';
 export { compareEvals, runEvals, startDevServer } from './api.ts';
 export {
   createCodexEvalHarness,
@@ -157,6 +191,7 @@ export type AgentBundleConfig = CoreAgentBundleConfig
   & PortableConfigExtension;
 
 export type { PortableAuthorConfig, PortableManifestConfig } from './adapters/portable.ts';
+export type { CapabilityRow, HostCapabilityTable } from './adapters/capability-state.ts';
 
 // The config hook handler contract (#488): the payload a `hooks.<event>.handler`
 // receives and the result the generated wrapper admits, per canonical event.

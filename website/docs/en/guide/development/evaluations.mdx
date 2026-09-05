@@ -51,9 +51,9 @@ npx agent-bundle eval compare <baseline-run-id> <candidate-run-id>
 resolved relative to the suite file and must not climb out of the suite directory (`../` past it
 is rejected; the check is on the path, so a symlink inside the suite is followed wherever it
 points). `agent-bundle/eval`
-exports its contract: [`EvalGraderFunction`](../../api/types/eval.EvalGraderFunction.md) takes an
-[`EvalGraderContext`](../../api/interfaces/eval.EvalGraderContext.md) and returns an
-[`EvalScriptOutcome`](../../api/interfaces/eval.EvalScriptOutcome.md), synchronously or as a
+exports its contract: [`EvalGraderFunction`](../../api/eval.md#evalgraderfunction) takes an
+[`EvalGraderContext`](../../api/eval.md#evalgradercontext) and returns an
+[`EvalScriptOutcome`](../../api/eval.md#evalscriptoutcome), synchronously or as a
 promise. This is `examples/skills-starter/evals/graders/release-result.ts` verbatim; the suite
 above names `./graders/status-result.ts`, which has the same shape in `examples/mcp-app`:
 

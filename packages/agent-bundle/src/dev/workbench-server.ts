@@ -666,6 +666,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
   let foregroundClosing = false;
   let installingRuntimePreviews = false;
   let mcpApps: McpAppLifecycle | undefined;
+  let mcpAppSandboxOrigin: string | undefined;
   let previews: McpAppPreviewService | undefined;
   /**
    * Runtime topology is fixed at startup, but a valid model can arrive later
@@ -960,6 +961,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
     ),
     evals,
     evalLifecycle: evals,
+    epochs: epochStore,
     eventHub,
     hookPlayground,
     hostDiscovery,
@@ -968,6 +970,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
     lifecycleReplay,
     logs,
     mcpAppPreviews: appPreviews,
+    mcpAppSandboxOrigin: () => mcpAppSandboxOrigin,
     mcpProbe,
     mcpSessions,
     playground,
@@ -1003,6 +1006,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
   };
   try {
     const sandbox = await (options.testing?.createSandboxProxy ?? createMcpAppSandboxProxy)({ hostOrigin: foreground.url });
+    mcpAppSandboxOrigin = sandbox.origin;
     mcpApps = new McpAppLifecycle(sandbox);
     const bindings = new McpAppBindingService({ sessionAuthority: mcpSessions });
     previews = new McpAppPreviewService({

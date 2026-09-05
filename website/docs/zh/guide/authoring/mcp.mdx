@@ -860,25 +860,60 @@ MCP App <name> (<target>): mcp-apps/<name>.html <size> (<gzip size> gzip)
 点名该多余文件的错误结束，因为产物必须保持每个 App 一份自包含文档。当某个逃生舱取值没有落在你预期的
 位置时，`agent-bundle inspect --bundler` 会打印解析后的 App 配置。
 
-### 独立提供 App
+### 在浏览器中暴露 App
 
 在 MCP 宿主之外，App 通常通过在 Workbench 中选中 **Application → MCP → &lt;server&gt; → Apps** 下的
-叶子来访问。当插件想要一条“打开仪表盘”的命令——从终端
-出发，在一个普通浏览器标签页里实时查看它自己的服务器——`agent-bundle serve-app` 会独立托管一个已构建的
-App：
+叶子来访问。已经声明在 `mcp.servers.<id>.apps` 下的 App，也可以通过 [`web`](../../reference/configuration.mdx#web)
+配置键在普通浏览器标签页里从已安装插件打开——机器上不需要框架：
+
+```ts
+web: {
+  apps: [
+    'status/status',
+    { app: 'status/status', tool: 'show-status', input: {}, allow: ['call-tool'] },
+  ],
+  open: 'never', // 'browser' | 'never'（默认 'never'）
+}
+```
+
+`apps[]` 从那些已声明的 App 中选择（`<server>/<app>`）。`tool` 是开场工具（默认：唯一一个
+`_meta.ui.resourceUri` 指向该 App 的工具；有多个时必填）。`input` 是那次开场调用的参数（默认
+`{}`）。`allow` 预先批准由 App 发起的同意能力：`call-tool`、`download-file`、`open-external-link`、
+`request-display-mode`。浏览器硬件与剪贴板权限始终在宿主页面里询问。无效的 `web` 是 `AB4341`
+（error）；各消息形状见[诊断参考](../../reference/diagnostics.md)。
+
+配置了 `web` 时，组合产物的 `agent-bundle.manifest.json` 会增加 `web` 节，即使没有 `src/cli/**`
+命令也会输出 `bin/<plugin>.mjs`。宿主页面装在该 bin 里——产物中没有 `web/` 目录。`AB6005` 像遍历
+其他每个可执行文件一样遍历它。
+
+从已构建产物或已安装插件根目录运行：
+
+```sh
+node <root>/bin/<plugin>.mjs web [<server>/<app>] [--port N] [--open|--no-open] \
+  [--tool T] [--input JSON] [--allow <cap>]... [--profile portable|claude|chatgpt] [--json]
+```
+
+默认 App 是唯一被暴露的那个；暴露了多个却未选择时是用法错误（退出码 `2`）并列出它们。`bin/` 旁边
+缺少 `agent-bundle.manifest.json` 则以 `1` 退出。该命令启动插件自己的 MCP 服务器
+（`node <root>/mcp/<entry>.mjs`，`AGENT_BUNDLE_PLUGIN_ROOT=<root>`，已声明的静态 env 并展开路径
+令牌），先调用一次开场工具，然后在 `http://127.0.0.1:<port>/` 上用 loopback origin 提供 App，并为
+App 文档再开一个 loopback 沙箱 origin（与 `agent-bundle serve-app` 以及 Workbench 同一套宿主栈与
+同意行为），打印 `MCP App <server>/<app> at <url> (tool <tool>; Ctrl-C stops the server)`（或带
+`--json` 时打印一行 `{ app, server, tool, url, port, resourceUri, sandboxOrigin }`），并一直运行
+到 Ctrl-C / SIGTERM。`web` 出现在该 bin 的 `--help` 里。配置了 `web` 时，手写的 `src/cli/web.ts`
+会被 `AB4341` 拒绝。全部标志见[命令行参考](../../reference/cli.mdx#plugin-web)。
+
+`agent-bundle dev` 在前台服务器的 `GET /web/<server>/<app>` 上提供同一页面、中继、路由、沙箱代理
+与同意行为，绑定到当前 epoch 的服务器会话。未列入 `web.apps` 的 App 返回 404。
+
+`agent-bundle serve-app` 保持不变：它是 checkout 时的形态，会构建或指向一份产物，并需要已安装的
+框架。全部选项见[命令行参考](../../reference/cli.mdx#serve-app)。
 
 ```sh
 npx agent-bundle build
 npx agent-bundle serve-app status/status --artifact artifact \
   --input '{"service":"compiler"}' --open
 ```
-
-该命令以与 `mcp run` 完全相同的方式启动插件打包好的 MCP 服务器（同样的产物解析、同样的 `.env` 分层、
-同样的 plugin-data 根目录），通过 Workbench App 叶子所用的同一套宿主栈——沙箱代理、同意授权、
-`McpAppBridge`——把 App 绑定到它上面，先调用一次 App 的工具让它带着数据打开，然后打印 loopback URL。
-宿主只绑定 `127.0.0.1`，只提供一个页面加上由每次启动生成的令牌保护的 `/api/mcp/...` 路由，并且只通过
-桥接暴露那一个服务器；App 文档运行在框架沙箱内的第二个 loopback origin 上。它是本地预览宿主，不是部署
-目标。全部选项见[命令行参考](../../reference/cli.mdx#serve-app)。
 
 同一套宿主以 `agent-bundle/api` 中的 `serveApp` 提供编程形式。它返回 `{ url, close, closed }`：
 `close()` 拆除宿主与服务器，`closed` 在服务器连接因任何原因结束时落定——用完后务必 `close()`，因为
@@ -888,103 +923,10 @@ npx agent-bundle serve-app status/status --artifact artifact \
 
 `serveApp` 是一个**宿主进程 API**。它属于框架不编译的那些进程——第一方 CLI、Workbench、测试、插件自己的
 `package.json` 脚本或从 checkout 里运行的手写 `.mjs`——并且要求 `agent-bundle` 在该进程运行之处可被
-解析。绝不要在 MCP 服务器外壳里调用它。
-
-插件产物内部的路由式 CLI 命令无法导入它。路由式 CLI 的 bin 是自包含的（每个宿主包里的
-`bin/<plugin>.mjs`，以及 package build 里的 `dist/bin/<plugin>.js`），因此对 `agent-bundle/api`——或对任何
-其他携带编译器的入口：`agent-bundle`、`agent-bundle/config`、`agent-bundle/eval`、`agent-bundle/rstest`、
-`agent-bundle/test`、`agent-bundle/test/browser`——的值导入，都会让打包器把整个编译器内联进 bin，并在
-框架的运行时相对模块引用上失败。路由图会先一步报告它：`AB4837`，点名文件与说明符，无论该路由是自己
-导入了该入口，还是经由一个通过相对导入触达的辅助模块导入的，`inspect`、`validate`、`build` 与 `dev` 都会
-报告；`import type` 以及仅作为类型使用的导入不会被报告（见[诊断参考](../../reference/diagnostics.md)）。
-正式支持的形态是 `agent-bundle/serve-app-command` 中的 `spawnServeApp`：一个无依赖的入口，把
-`agent-bundle serve-app` 作为子进程启动，让框架留在自己的进程里，宿主包保持自包含。cargo-hauler 的
-`hauler dashboard` 正是这么做的，这也是 [#558](https://github.com/ScriptedAlchemy/agent-bundle/issues/558)
-的解决方案：
-
-```ts
-// src/cli/dashboard.ts —— `hauler dashboard`：针对插件自己的服务器打开 App。
-import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
-import { ServeAppCommandError, spawnServeApp } from 'agent-bundle/serve-app-command';
-import { z } from 'zod';
-
-export const config = {
-  description: 'Open the cargo-hauler dashboard in a browser (from the plugin checkout).',
-  exitCode: 'result',
-} satisfies CliRouteConfig;
-
-export const inputSchema = z.object({
-  noOpen: z.boolean().optional(),
-  port: z.number().int().min(0).max(65_535).optional(),
-}).strict();
-
-export const resultSchema = z.object({
-  exitCode: z.number().int(),
-  message: z.string(),
-  url: z.string().nullable(),
-}).strict();
-
-export default async function dashboard(
-  { input, signal }: CliRouteProps<typeof inputSchema>,
-) {
-  let served;
-  try {
-    served = await spawnServeApp({
-      app: 'hauler/dashboard',
-      root: process.cwd(),
-      artifact: 'artifact',
-      tool: 'hauler_status',
-      autoApprove: ['call-tool'],
-      open: input.noOpen !== true,
-      ...(input.port === undefined ? {} : { port: input.port }),
-      // 抵达路由式 CLI 的 Ctrl-C 会停止服务器。
-      signal,
-    });
-  } catch (error) {
-    if (error instanceof ServeAppCommandError) {
-      // framework-not-installed、artifact-missing、exited-before-ready……
-      return {
-        exitCode: 1,
-        message: `${error.message} In an MCP host, call hauler_status instead.`,
-        url: null,
-      };
-    }
-    throw error;
-  }
-  const exit = await served.closed;
-  return {
-    exitCode: exit.code ?? 1,
-    message: exit.code === 0
-      ? 'dashboard closed'
-      : `agent-bundle serve-app exited with ${exit.signal ?? exit.code}`,
-    url: served.url,
-  };
-}
-```
-
-`spawnServeApp` 把它的选项转换为 `agent-bundle serve-app` 的 argv（`serveAppArgv`），从安装在 `root` 或
-其上层的 `agent-bundle` 包中解析出框架 CLI（`locateFrameworkCli`），用当前的 Node 二进制启动它，把子进程
-stdout 的每一行转发到本进程的 stderr——或转发给一个 `relay` 回调——让路由式命令把 stdout 留给自己的 JSON
-结果，并在子进程打印出就绪行 `MCP App <app> at <url> (tool <tool>; Ctrl-C stops the server)` 时兑现。
-子进程的诊断留在 stderr 上。结果携带 `app`、`url`、`port`、`tool`、`server`、`pid`，一个随子进程退出
-`{ code, signal }` 落定的 `closed` promise，以及 `close()`——它发送 `SIGTERM` 并等待那次退出；中止 `signal`
-的效果相同，因此抵达路由式命令的 Ctrl-C 会抵达服务器。失败以 `ServeAppCommandError` 拒绝，其 `code` 为
-`framework-not-installed`（从 `root` 解析不到任何 `node_modules/agent-bundle`）、`artifact-missing`（给定的
-`artifact` 路径不存在）、`spawn-failed`、`exited-before-ready`（子进程在打印就绪行之前就退出了；`error.exit`
-保存着它的 `{ code, signal }`）、`aborted`（`signal` 在 App 被提供之前就已中止），或 `stop-failed`（正在运行的
-子进程拒绝了 `close()` 或中止所发送的 `SIGTERM`——`close()` 也以此拒绝——因此它仍在运行）。按下 Ctrl-C 时，
-路由式 CLI 外壳会在路由返回之前报告 `Aborted.` 并以 `130` 退出，因此上面的结果文档只在服务器自行退出或
-路由调用 `close()` 时才会打印。
-
-它是一条 **checkout 命令**：需要安装在 `root` 或其上层的 `agent-bundle`，以及一份已构建的产物。已发布的
-插件包与已安装的宿主包两者都没有，`framework-not-installed` 与 `artifact-missing` 会在启动任何东西之前
-就说明这一点。每个有 argv 形式的 `serveApp` 选项都会透传——`app`、`root`、`artifact`、`autoApprove`
-（即 `--allow` 的词汇表：`call-tool`、`download-file`、`open-external-link`、`request-display-mode`）、
-`configPath`、`envFiles`、`input`、`loadEnvFiles`、`mode`、`open`、`pluginRoot`、`port`、`profile`、`target`、
-`tool`——未设置的选项取 CLI 默认值（`--target portable`、`--profile portable`、`--mode production`、该 App
-唯一的工具、不打开浏览器）。相对路径按 CLI 的解析方式解析：`configPath` 相对 `root`，`artifact` 与
-`envFiles` 相对工作目录。没有 argv 形式的 `serveApp` 选项——`logger`、`registry`、`openBrowser`、`targets`、
-`timeoutMs`——仍留给宿主进程中的 `serveApp`。
+解析。绝不要在 MCP 服务器外壳里调用它。路由式 CLI 命令也不能导入它：那种值导入是 `AB4837`（见
+[诊断参考](../../reference/diagnostics.md)）。路由式命令不再启动 `agent-bundle serve-app`；从已安装
+根目录出发，受支持的方式是产物自己的 [`<plugin> web`](../../reference/cli.mdx#plugin-web) 命令。
+`AB4837` 的恢复文本点名该命令。
 
 ## 服务器模式
 

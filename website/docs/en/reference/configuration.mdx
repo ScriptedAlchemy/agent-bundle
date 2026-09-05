@@ -1,5 +1,5 @@
 ---
-description: 'Field reference for agent-bundle.config.ts: every top-level key, its accepted shapes, defaults, and validation rules, including the deprecated plugin.version.'
+description: 'Field reference for agent-bundle.config.ts: every top-level key, its accepted shapes, defaults, and validation rules, including the web exposure key (AB4341) and the deprecated plugin.version.'
 ---
 
 # Configuration
@@ -39,6 +39,7 @@ export default defineConfig({
 | `dev` | `{ agentApi?, contracts?, runtime? }` | None. |
 | `evals` | `{ include?, runsDir?, semanticGrader? }` | See below. |
 | `tools` | `{ rsbuild?, rspack? }` | None. |
+| `web` | `{ apps, open? }` | None — omit it and nothing is emitted. |
 
 Host-scoped extension keys (`claude`, `codex`, `cursor`, `portable`) are contributed by target
 adapters through declaration merging on `AgentBundleConfigExtensions`. Extension values must be
@@ -62,15 +63,15 @@ as `EVAL_CONFIG_INVALID`, `EVAL_INCLUDE_INVALID`, or `EVAL_RUNS_DIR_INVALID` err
 
 | Field | Type definition |
 | --- | --- |
-| whole config | [`AgentBundleConfig`](../api/types/index.AgentBundleConfig.md) · [`defineConfig`](../api/functions/index.defineConfig.md) · [`ConfigFactory`](../api/types/index.ConfigFactory.md) · [`ConfigFactoryContext`](../api/interfaces/index.ConfigFactoryContext.md) |
-| `mcp` | [`AgentBundleMcpConfig`](../api/interfaces/index.AgentBundleMcpConfig.md) · [`AgentBundleMcpServer`](../api/interfaces/index.AgentBundleMcpServer.md) · [`AgentBundleMcpApp`](../api/interfaces/index.AgentBundleMcpApp.md) · [`McpTransport`](../api/types/index.McpTransport.md) |
-| `payload` | [`AgentBundlePayloadConfig`](../api/types/index.AgentBundlePayloadConfig.md) · [`AgentBundlePayloadEntry`](../api/interfaces/index.AgentBundlePayloadEntry.md) · [`AgentBundlePrebuiltEntry`](../api/interfaces/index.AgentBundlePrebuiltEntry.md) |
-| `output` | [`AgentBundleOutputConfig`](../api/interfaces/config.AgentBundleOutputConfig.md) |
-| `runtime` | [`AgentBundleRuntimeConfig`](../api/interfaces/index.AgentBundleRuntimeConfig.md) |
-| `notices` | [`AgentBundleNoticesConfig`](../api/interfaces/index.AgentBundleNoticesConfig.md) · [`AgentBundleNoticeRetentionConfig`](../api/interfaces/index.AgentBundleNoticeRetentionConfig.md) |
-| `dev` | [`AgentBundleDevConfig`](../api/interfaces/index.AgentBundleDevConfig.md) · [`AgentBundleDevContractsConfig`](../api/interfaces/index.AgentBundleDevContractsConfig.md) · [`AgentBundleDevRuntimeConfig`](../api/interfaces/api.AgentBundleDevRuntimeConfig.md) |
-| host extensions | [`AgentBundleConfigExtensions`](../api/interfaces/index.AgentBundleConfigExtensions.md) · [`AgentBundlePortableConfig`](../api/interfaces/config.AgentBundlePortableConfig.md) |
-| validation | [`validateSource`](../api/functions/config.validateSource.md) · [`validateModel`](../api/functions/config.validateModel.md) · [`loadConfig`](../api/functions/config.loadConfig.md) |
+| whole config | [`AgentBundleConfig`](../api/index-1.md#agentbundleconfig) · [`defineConfig`](../api/index-1.md#defineconfig) · [`ConfigFactory`](../api/index-1.md#configfactory) · [`ConfigFactoryContext`](../api/index-1.md#configfactorycontext) |
+| `mcp` | [`AgentBundleMcpConfig`](../api/index-1.md#agentbundlemcpconfig) · [`AgentBundleMcpServer`](../api/index-1.md#agentbundlemcpserver) · [`AgentBundleMcpApp`](../api/index-1.md#agentbundlemcpapp) · [`McpTransport`](../api/index-1.md#mcptransport) |
+| `payload` | [`AgentBundlePayloadConfig`](../api/index-1.md#agentbundlepayloadconfig) · [`AgentBundlePayloadEntry`](../api/index-1.md#agentbundlepayloadentry) · [`AgentBundlePrebuiltEntry`](../api/index-1.md#agentbundleprebuiltentry) |
+| `output` | [`AgentBundleOutputConfig`](../api/config.md#agentbundleoutputconfig) |
+| `runtime` | [`AgentBundleRuntimeConfig`](../api/index-1.md#agentbundleruntimeconfig) |
+| `notices` | [`AgentBundleNoticesConfig`](../api/index-1.md#agentbundlenoticesconfig) · [`AgentBundleNoticeRetentionConfig`](../api/index-1.md#agentbundlenoticeretentionconfig) |
+| `dev` | [`AgentBundleDevConfig`](../api/index-1.md#agentbundledevconfig) · [`AgentBundleDevContractsConfig`](../api/index-1.md#agentbundledevcontractsconfig) · [`AgentBundleDevRuntimeConfig`](../api/api.md#agentbundledevruntimeconfig) |
+| host extensions | [`AgentBundleConfigExtensions`](../api/index-1.md#agentbundleconfigextensions) · [`AgentBundlePortableConfig`](../api/config.md#agentbundleportableconfig) |
+| validation | [`validateSource`](../api/config.md#validatesource) · [`validateModel`](../api/config.md#validatemodel) · [`loadConfig`](../api/config.md#loadconfig) |
 
 ## plugin
 
@@ -190,7 +191,55 @@ Development-only settings that never become part of a built artifact.
 | `dev.agentApi` | Exposes the authenticated, loopback-only Agent API from `agent-bundle dev`. The `--agent-api` / `--no-agent-api` flags override it. |
 | `dev.contracts.fixtures` | **Required when `dev.contracts` is set.** Project-relative module whose default export maps route ids to contract fixtures. Declaring `dev.contracts` switches `agent-bundle dev` from adopting every epoch directly to gating host-facing adoption on the development contract matrix: an epoch whose checks fail still publishes to the Workbench route workspace, but live host connections and development installs keep the last passing epoch (`AB7211`). A malformed block, a fixtures module that escapes the project root, cannot load, or exports the wrong shape is `AB7210`. |
 | `dev.contracts.server` | The MCP server the matrix checks. Optional only when the project compiles exactly one server. |
-| `dev.runtime.provider` | The development runtime provider module: it exports `createDevRuntimeProvider` ([`CreateDevRuntimeProvider`](../api/types/api.CreateDevRuntimeProvider.md)), returning a [`DevRuntimeProvider`](../api/interfaces/api.DevRuntimeProvider.md) whose `start` takes a [`DevRuntimeStartContext`](../api/interfaces/api.DevRuntimeStartContext.md) and returns a [`DevRuntimeSession`](../api/interfaces/api.DevRuntimeSession.md). The whole protocol a provider implements ships from `agent-bundle/api` — the inspection envelope ([`DevRuntimeInspectionEnvelope`](../api/interfaces/api.DevRuntimeInspectionEnvelope.md)), the MCP server descriptor ([`DevRuntimeMcpServerDescriptor`](../api/interfaces/api.DevRuntimeMcpServerDescriptor.md)), the errors it throws ([`DevRuntimeUnavailableError`](../api/classes/api.DevRuntimeUnavailableError.md), [`DevRuntimeGenerationConflictError`](../api/classes/api.DevRuntimeGenerationConflictError.md)), and the generation store and MCP registry a session drives, as contracts ([`DevRuntimeGenerationStore`](../api/interfaces/api.DevRuntimeGenerationStore.md), [`DevRuntimeProviderMcpRegistry`](../api/interfaces/api.DevRuntimeProviderMcpRegistry.md)) with their constructors ([`createRuntimeGenerationStore`](../api/functions/api.createRuntimeGenerationStore.md), [`createRuntimeMcpRegistry`](../api/functions/api.createRuntimeMcpRegistry.md)). |
+| `dev.runtime.provider` | The development runtime provider module: it exports `createDevRuntimeProvider` ([`CreateDevRuntimeProvider`](../api/api.md#createdevruntimeprovider)), returning a [`DevRuntimeProvider`](../api/api.md#devruntimeprovider) whose `start` takes a [`DevRuntimeStartContext`](../api/api.md#devruntimestartcontext) and returns a [`DevRuntimeSession`](../api/api.md#devruntimesession). The whole protocol a provider implements ships from `agent-bundle/api` — the inspection envelope ([`DevRuntimeInspectionEnvelope`](../api/api.md#devruntimeinspectionenvelope)), the MCP server descriptor ([`DevRuntimeMcpServerDescriptor`](../api/api.md#devruntimemcpserverdescriptor)), the errors it throws ([`DevRuntimeUnavailableError`](../api/api.md#devruntimeunavailableerror), [`DevRuntimeGenerationConflictError`](../api/api.md#devruntimegenerationconflicterror)), and the generation store and MCP registry a session drives, as contracts ([`DevRuntimeGenerationStore`](../api/api.md#devruntimegenerationstore), [`DevRuntimeProviderMcpRegistry`](../api/api.md#devruntimeprovidermcpregistry)) with their constructors ([`createRuntimeGenerationStore`](../api/api.md#createruntimegenerationstore), [`createRuntimeMcpRegistry`](../api/api.md#createruntimemcpregistry)). |
+
+## web
+
+Exposure and policy for the artifact-resident browser host. `web.apps` selects among MCP Apps
+already declared under `mcp.servers.<id>.apps`; it is not a second route graph and does not
+discover Apps from `src/web/**`. Omit the key and the build writes no `web` section, no
+framework-owned `web` command, and no extra bin.
+
+```ts
+web: {
+  apps: [
+    'status/status',
+    {
+      app: 'status/status',
+      tool: 'show-status',
+      input: {},
+      allow: ['call-tool'],
+    },
+  ],
+  open: 'never',
+}
+```
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `apps` | `(string \| { app, tool?, input?, allow? })[]` | **Required** when `web` is set. | Each entry is `<server>/<app>`, or an object with that `app` plus optional opening `tool`, opening `input` (default `{}`), and `allow`. A string is shorthand for `{ app }`. |
+| `apps[].tool` | `string` | the App's only tool | The opening tool: one whose `_meta.ui.resourceUri` is the App. Required when several tools advertise it. |
+| `apps[].input` | `Record<string, unknown>` | `{}` | Arguments for that opening `tools/call`. |
+| `apps[].allow` | `('call-tool' \| 'download-file' \| 'open-external-link' \| 'request-display-mode')[]` | none | Pre-approve App-initiated consent capabilities. Browser hardware and clipboard permissions always ask in the host page. |
+| `open` | `'browser' \| 'never'` | `'never'` | Whether `<plugin> web` opens the default browser. `--open` / `--no-open` override. |
+
+Invalid `web` is `AB4341` (error): an `app` no `mcp.servers.<id>.apps` declares; an unknown
+`allow` capability; `open` outside `browser` \| `never`; a duplicate `<server>/<app>`; a `tool`
+the route graph does not declare for that generated server; a generated-mode `src/cli/**`
+command (or top-level alias) spelled `web` while `web` is configured; or a `web` surface with no
+executable to carry it. A selected target whose adapter publishes no supported `web` capability
+row is an `AB4341` warning: its artifact does not host the surface. Message shapes and recoveries
+are in the [diagnostics reference](./diagnostics.md).
+
+The `web` command lives only in the framework-generated `bin/<plugin>.mjs`. `web` never
+displaces authored code: a hand-written `src/cli.ts`, a `bin` entry that claims the plugin name,
+or `bin: false` keeps the executable it describes, and `AB4341` reports that the web surface has
+nowhere to live — move the commands under `src/cli/**` (generated mode) or drop `web`.
+
+When `web` is valid, the composite artifact's `agent-bundle.manifest.json` gains a `web` section
+and `bin/<plugin>.mjs` exists even without `src/cli/**` — see
+[Targets and artifacts](./targets-artifacts.mdx) and
+[Exposing an App in the browser](../guide/authoring/mcp.mdx#exposing-an-app-in-the-browser).
 
 ## tools
 
@@ -200,7 +249,10 @@ hatch value that breaks an artifact contract is a hard diagnostic rather than a 
 (`AB472x`). `AB4720`–`AB4723` check the shape of `tools`, `tools.rsbuild`, and `tools.rspack`;
 `AB4724` rejects a `tools.rsbuild.plugins` entry that re-adds a framework-owned plugin
 (`@rsbuild/plugin-react`, `rsbuild:react`), because `plugins` arrays concatenate and Rsbuild
-never dedupes plugins by name — the framework registers it for you.
+never dedupes plugins by name — the framework registers it for you. `AB4725` rejects
+`tools.rsbuild.output.autoExternal` that is not `false`, and a string or object `externals`
+entry that names a package (neither a Node built-in, `pnpapi`, nor a relative path), in
+`tools.rsbuild.output` or an object-form `tools.rspack`.
 
 The hatch executes on one bundler engine — the `@rspack/core` behind agent-bundle's pinned
 `@rsbuild/core`, shared by the Rslib-compiled outputs (artifact scripts, MCP entries, hooks, the

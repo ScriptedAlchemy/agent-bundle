@@ -1,6 +1,11 @@
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { RspressPlugin } from '@rspress/core';
+import type {
+  CapabilityRow,
+  HostCapabilityTable,
+} from '../../packages/agent-bundle/src/adapters/capability-state.ts';
+import type { JsonObject, JsonValue } from '../../packages/agent-bundle/src/core/strict-json.ts';
 
 /**
  * Build-time reference pages rendered from repository sources of truth:
@@ -14,26 +19,6 @@ import type { RspressPlugin } from '@rspress/core';
  * pages take part in sidebar metadata, dead-link checks, search, and the LLM
  * artifacts exactly like authored pages, while never being committed.
  */
-
-type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
-type JsonObject = { [key: string]: JsonValue };
-
-interface CapabilityRow {
-  readonly state?: string;
-  readonly reason?: string;
-  readonly nativeEvent?: string;
-  readonly evidence?: readonly string[];
-  readonly availability?: Readonly<Record<string, { readonly state?: string; readonly reason?: string }>>;
-  /** Canonical payload field → host key (or `{ nativeKey, decode }`), on supported event-route rows. */
-  readonly payload?: JsonObject;
-}
-
-interface HostCapabilityTable {
-  readonly fileName: string;
-  readonly host: string;
-  readonly version: string;
-  readonly data: JsonObject;
-}
 
 export interface GeneratedReferenceLocale {
   /** Locale key, such as `en` or `zh`. */
@@ -79,7 +64,7 @@ const mcpPathTokenFields = (host: JsonObject): JsonObject => {
     return {};
   }
   const groups = asObject(substitution.fields);
-  const derived: JsonObject = {};
+  const derived: Record<string, JsonValue> = {};
   for (const group of ['mcpStdio', 'mcpRemote']) {
     const fields = groups[group];
     if (Array.isArray(fields)) {

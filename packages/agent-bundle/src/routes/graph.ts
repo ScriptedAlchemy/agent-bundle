@@ -19,6 +19,8 @@ import {
   resolveRouteConfigAppReferences,
 } from './config-extract.ts';
 import {
+  discoverEventRoutePreflight,
+  type EventRoutePreflightDiscovery,
   validateEventRouteModuleContract,
   validateLayoutModuleContract,
   validateProviderModuleContract,
@@ -27,6 +29,10 @@ import {
 import { validateRouteFrameworkImports } from './framework-imports.ts';
 import { extractInputSchema, type ExtractedInputSchema, type ResolvedSchemaOrigin } from './input-schema.ts';
 import { isLayoutRouteKind, layoutChainFor } from './layouts.ts';
+import {
+  requiredProviderKeyProblemMessage,
+  validateRequiredProviderKeys,
+} from './provider-execution.ts';
 import { providerKeyFromName } from './providers.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { digest } from '../core/digest.ts';
@@ -41,6 +47,7 @@ import {
   type CompiledAgentRoute,
   type CompiledCliMode,
   type CompiledCliSurface,
+  type CompiledEventPreflight,
   type CompiledLayout,
   type CompiledProvider,
   type CompiledRouteGraph,
@@ -109,6 +116,34 @@ const routeError = (code: string, message: string, recovery: string, sourcePath?
   severity: 'error',
   ...(sourcePath === undefined ? {} : { sourcePath }),
 });
+
+const eventProviderDeclarationDiagnostics = (
+  route: CompiledAgentRoute,
+  providerKeys: Iterable<string>,
+): readonly Diagnostic[] => {
+  const declared = route.config['providers'];
+  if (declared === undefined) return [];
+  const recovery =
+    'Declare config.providers as a distinct array of conventional provider keys, omit it to resolve every provider, or use [] to resolve none.';
+  if (!Array.isArray(declared) || declared.some((key) => typeof key !== 'string')) {
+    return [routeError(
+      'AB4841',
+      `Event route ${route.provenance.relativePath} config.providers must be an array of provider-key strings.`,
+      recovery,
+      route.source,
+    )];
+  }
+  const problems = validateRequiredProviderKeys(declared, providerKeys);
+  if (problems.length === 0) return [];
+  return [routeError(
+    'AB4841',
+    `Event route ${route.provenance.relativePath} has invalid config.providers: ${problems
+      .map(requiredProviderKeyProblemMessage)
+      .join(' ')}`,
+    recovery,
+    route.source,
+  )];
+};
 
 const configValue = (
   config: Readonly<AgentBundleConfig>,
@@ -519,6 +554,7 @@ const compiledRoute = (
   module: DiscoveredRouteModule,
   config: Readonly<Record<string, unknown>>,
   contract?: ContractBinding,
+  preflight?: CompiledEventPreflight,
 ): CompiledAgentRoute => ({
   config,
   ...(contract === undefined ? {} : { contract: contract.id }),
@@ -526,6 +562,7 @@ const compiledRoute = (
   id: module.id,
   ...(contract === undefined ? {} : { inputSchema: contract.input }),
   kind: module.kind,
+  ...(preflight === undefined ? {} : { preflight }),
   provenance: { kind: 'conventional', relativePath: module.relativePath },
   ...(module.serverName === undefined ? {} : { serverId: `mcp:${module.serverName}` }),
   source: module.source,
@@ -553,6 +590,8 @@ const readRouteModuleText = async (source: string): Promise<string | undefined> 
 interface ExtractedModuleMetadata {
   readonly extracted: ExtractedRouteConfig;
   readonly inputSchema?: ExtractedInputSchema;
+  readonly preflight?: CompiledEventPreflight;
+  readonly preflightDiagnostics: readonly Diagnostic[];
 }
 
 const emptyExtractedRouteConfig: ExtractedRouteConfig = deepFreeze({
@@ -565,15 +604,30 @@ const extractedModuleMetadata = (
   module: DiscoveredRouteModule,
   moduleText: string | undefined,
   projectRoot: string,
+  preflightDiscovery?: EventRoutePreflightDiscovery,
 ): ExtractedModuleMetadata => {
   if (moduleText === undefined) {
-    return { extracted: emptyExtractedRouteConfig };
+    return { extracted: emptyExtractedRouteConfig, preflightDiagnostics: [] };
   }
   const extracted = extractRouteConfig(moduleText, module.relativePath, module.source, { projectRoot });
   const inputSchema = extractInputSchema(moduleText, module.relativePath, { projectRoot, source: module.source });
+  const discovery = module.kind === 'event-route'
+    ? preflightDiscovery ?? discoverEventRoutePreflight(moduleText, module.relativePath, module.source)
+    : undefined;
+  const preflight = discovery?.source === undefined
+    ? undefined
+    : {
+        provenance: {
+          kind: 'conventional' as const,
+          relativePath: toPosixPath(relative(projectRoot, discovery.source)),
+        },
+        source: discovery.source,
+      };
   return {
     extracted,
     ...(inputSchema === undefined ? {} : { inputSchema }),
+    ...(preflight === undefined ? {} : { preflight }),
+    preflightDiagnostics: discovery?.diagnostics ?? [],
   };
 };
 
@@ -611,6 +665,7 @@ const routeIdentity = (route: CompiledAgentRoute): Readonly<Record<string, unkno
   id: route.id,
   ...(route.inputSchema === undefined ? {} : { inputSchema: route.inputSchema }),
   kind: route.kind,
+  ...(route.preflight === undefined ? {} : { preflight: route.preflight.provenance.relativePath }),
   relativePath: route.provenance.relativePath,
   ...(route.serverId === undefined ? {} : { serverId: route.serverId }),
 });
@@ -664,6 +719,50 @@ export const compileRouteGraph = async (
   })).sort((left, right) => left.localeCompare(right));
 
   const claimed = configClaimedSources(projectRoot, config);
+  const moduleTextBySource = new Map<string, string>();
+  const preflightDiscoveryBySource = new Map<string, EventRoutePreflightDiscovery>();
+  const preflightSupportSources = new Set<string>();
+  // Resolve preflight support modules before classifying every glob match:
+  // a colocated `before.preflight.ts` is application code named by the
+  // canonical `before.ts` route, not a second event route.
+  for (const source of sources) {
+    if (claimed.artifact.has(source)) continue;
+    const relativePath = toPosixPath(relative(projectRoot, source));
+    if (claimed.bin.has(source) && !isConventionalScriptPath(relativePath)) continue;
+    if (isPrivateRoutePath(relativePath) || isProjectPathIgnored(rules, projectRoot, source)) continue;
+    const module = classifyModule(source, relativePath);
+    if (
+      module.surface !== 'route'
+      || module.kind !== 'event-route'
+      || !canonicalAgentEvents.includes(module.event!)
+    ) {
+      continue;
+    }
+    const moduleText = await readRouteModuleText(source);
+    if (moduleText === undefined) continue;
+    moduleTextBySource.set(source, moduleText);
+    const discovery = discoverEventRoutePreflight(moduleText, relativePath, source);
+    preflightDiscoveryBySource.set(source, discovery);
+  }
+  for (const [source, discovery] of preflightDiscoveryBySource) {
+    if (discovery.candidateSource === undefined) continue;
+    if (!preflightDiscoveryBySource.has(discovery.candidateSource)) {
+      preflightSupportSources.add(discovery.candidateSource);
+      continue;
+    }
+    preflightDiscoveryBySource.set(source, Object.freeze({
+      candidateSource: discovery.candidateSource,
+      diagnostics: Object.freeze([
+        ...discovery.diagnostics,
+        routeError(
+          'AB4840',
+          `Event route ${toPosixPath(relative(projectRoot, source))} re-exports preflight from another conventional event route.`,
+          'Move preflight to a separate support module that is not itself an event route.',
+          source,
+        ),
+      ]),
+    }));
+  }
   const modules: DiscoveredModule[] = [];
   const modulesById = new Map<string, DiscoveredModule>();
   const providerModulesByKey = new Map<string, DiscoveredProviderModule>();
@@ -672,6 +771,7 @@ export const compileRouteGraph = async (
     const relativePath = toPosixPath(relative(projectRoot, source));
     if (claimed.bin.has(source) && !isConventionalScriptPath(relativePath)) continue;
     if (isPrivateRoutePath(relativePath) || isProjectPathIgnored(rules, projectRoot, source)) continue;
+    if (preflightSupportSources.has(source)) continue;
     const module = classifyModule(source, relativePath);
     // The documented opt-out: a server pinned to custom, command, or remote
     // keeps its own entry, so its layout never enters the graph — it is not
@@ -759,7 +859,6 @@ export const compileRouteGraph = async (
   const cliRoutes: CompiledAgentRoute[] = [];
   const providers: CompiledProvider[] = [];
   const layouts: CompiledLayout[] = [];
-  const moduleTextBySource = new Map<string, string>();
   // Config extraction runs over the whole tree before any route compiles:
   // an `appResourceUri()` reference resolves against every App route the
   // tree declares, wherever the App module sorts relative to its referrer.
@@ -802,11 +901,19 @@ export const compileRouteGraph = async (
       }
       continue;
     }
-    const moduleText = await readRouteModuleText(module.source);
+    const moduleText = moduleTextBySource.get(module.source) ?? await readRouteModuleText(module.source);
     if (moduleText !== undefined) {
       moduleTextBySource.set(module.source, moduleText);
     }
-    pending.push({ metadata: extractedModuleMetadata(module, moduleText, projectRoot), module });
+    pending.push({
+      metadata: extractedModuleMetadata(
+        module,
+        moduleText,
+        projectRoot,
+        preflightDiscoveryBySource.get(module.source),
+      ),
+      module,
+    });
   }
   const serverModes = new Map<string, ServerModeDecision>();
   for (const { module } of pending) {
@@ -845,10 +952,12 @@ export const compileRouteGraph = async (
       )
       : metadata.extracted;
     diagnostics.push(...resolved.diagnostics);
+    diagnostics.push(...metadata.preflightDiagnostics);
     const route = compiledRoute(
       module,
       resolved.config,
       metadata.inputSchema === undefined ? undefined : contractBindings.get(contractIdOf(metadata.inputSchema.origin)),
+      metadata.preflight,
     );
     if (route.kind === 'event-route' && moduleText !== undefined) {
       diagnostics.push(...validateEventRouteModuleContract(
@@ -868,6 +977,7 @@ export const compileRouteGraph = async (
         break;
       }
       case 'event-route':
+        diagnostics.push(...eventProviderDeclarationDiagnostics(route, providerModulesByKey.keys()));
         events.push(route);
         // Every event route ships as a hook wrapper of its own, so it is
         // judged here; MCP and CLI routes are judged once their server or

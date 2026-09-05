@@ -915,7 +915,11 @@
         "state": "unavailable"
       }
     },
-    "skills": true
+    "skills": true,
+    "web": {
+      "reason": "browser host inside the composite artifact; <plugin> web runs from the installed root on any host",
+      "state": "supported"
+    }
   },
   "validation": {
     "observedAt": "2026-09-02",

@@ -1,4 +1,8 @@
-import { hookWrapperAppliesOperatorEnv } from '../adapters/hook-contract.ts';
+import {
+  eventIpcRuntimeSpecifier,
+  eventProjectRuntimeSpecifier,
+  hookWrapperAppliesOperatorEnv,
+} from '../adapters/hook-contract.ts';
 import type { TargetHookEntry } from '../adapters/types.ts';
 import { isPlainRecord } from '../core/strict-json.ts';
 import type { AgentBundleToolsConfig, NormalizedPlugin } from '../core/types.ts';
@@ -21,7 +25,7 @@ import {
 import { launchEnvRuntimeSpecifier, operatorEnvLayerVirtualModule } from './launch-env-shell.ts';
 import { cliBinRslibEntries, planCompiledCliBins } from './cli-bins.ts';
 import type { CompositePlan } from './compose.ts';
-import { eventRuntimeHosting, planCompiledMcpEntries, selectedServerHosts } from './entries.ts';
+import { eventRuntimeHosting, eventRuntimeModulePath, planCompiledMcpEntries, selectedServerHosts } from './entries.ts';
 import { composeMcpAppsRsbuildConfig, planCompiledMcpApps } from './mcp-apps.ts';
 import { projectMeta } from './meta.ts';
 import { planPackageEntries } from './package-build.ts';
@@ -321,7 +325,15 @@ const hookEntries = (
   const outputRoot = artifactOutputToken;
   return entries.map((entry) => rslibInspectionEntry({
     entry: {
-      aliases: { [launchEnvRuntimeSpecifier]: launchEnvRuntimePath() },
+      aliases: {
+        [launchEnvRuntimeSpecifier]: launchEnvRuntimePath(),
+        ...(entry.hook.eventRoute === undefined
+          ? {}
+          : {
+            [eventIpcRuntimeSpecifier]: eventRuntimeModulePath('ipc'),
+            [eventProjectRuntimeSpecifier]: eventRuntimeModulePath('project'),
+          }),
+      },
       name: entry.relativePath.replaceAll('/', '-').replace(/\.mjs$/u, ''),
       outputRelativePath: entry.relativePath,
       source: entry.hook.source,
