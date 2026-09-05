@@ -24,7 +24,8 @@ present is not really self-contained, and the `packed-deleted-source` proof leve
 scripts and assets. Artifact validation compares real bytes against those digests, so a
 hand-edited generated file fails rather than passing because the path still exists. Referenced
 files are checked too — a manifest-declared `logo` that is missing from the artifact or escapes
-the deploy tree reports `AB6025`.
+the deploy tree reports `AB6025`. A listed compile evidence record that does not match the
+manifest file table reports `AB6039`.
 
 Self-containment is proven from the compilation's externals (`AB6005` at compile time). The
 compiler service lowers every host-pack surface and package-only entry (an authored bin or the
@@ -58,6 +59,43 @@ that list, so a value import of it is never `AB4837`; `import type` and imports 
 are not reported either. An installed artifact serves an App through
 [`<plugin> web`](../../reference/cli.mdx#plugin-web); see
 [Exposing an App in the browser](../authoring/mcp.mdx#exposing-an-app-in-the-browser).
+
+## Compile evidence record
+
+`agent-bundle build` writes `agent-bundle.compile-evidence.json` at the artifact
+root and lists it in `agent-bundle.manifest.json` as a `generated` file. The
+record is what the compiler service reported about each file it emitted, bound
+to those bytes. Each `assets[]` entry is one compiled file (`bundle` kind:
+`bin/*.mjs`, `scripts/*.mjs`, `hooks/*.mjs`, `mcp/*.mjs`, Flight workers,
+`mcp-apps/*.html`) and holds `path`, `sha256`, the kept `externals` (`kind`
+`artifact-relative` or `builtin`, `externalType`, `issuers`, `request`,
+`userRequest`, and `target` for a sibling), and the inlined `packages`. The
+record also carries policy `closed-world-externals@1`, producer
+`{ name: 'agent-bundle', rspack, version }`, `coverage.rewritable` (true when a
+`tools.rspack` or `tools.rsbuild` hatch took part, so emitted bytes may differ
+from the module graph), and `coverage.unobserved`.
+
+`agent-bundle validate --artifact` re-checks a listed record against the
+manifest file table without reading JavaScript (`AB6039`). The package build
+returns the same record in process (`PackageBuildResult.evidence`, paths
+`dist/bin/…`) and writes nothing to disk. `coverage.unobserved` lists the load forms Rslib leaves verbatim in the
+bundle, so the compiler neither bundles nor records them:
+`import(<expression>)`, `require(<expression>)`, `require.resolve(…)`,
+`createRequire(…)(…)`, `import.meta.resolve(…)`. No externals recorded
+therefore does not prove the absence of such a load.
+
+`AB6039` is an **error**. Recovery: rebuild the artifact so its compile
+evidence record describes the emitted files. Message forms:
+
+- `Compile evidence record <reason>.` (the strict parser's own message, e.g. `is not valid JSON`)
+- `Compile evidence record cannot be read.`
+- `Compile evidence was judged under policy <name>@<revision>; this validator applies closed-world-externals@1.`
+- `Compile evidence does not cover compiled file "<path>".`
+- `Compile evidence for "<path>" describes different bytes.`
+- `Compile evidence names "<path>", which the manifest does not list as a compiled file.`
+- `Compile evidence for "<path>" records "<request>" as a built-in; it is not one.`
+- `Compile evidence for "<path>" records sibling "<request>", which the artifact does not contain.`
+- `Compile evidence for "<path>" records "<request>" as an external; a view inlines every module it loads.`
 
 Every diagnostic is one structured record: a stable `AB` code, a severity, a message, and usually
 a `sourcePath` and a `recovery` hint. The diagnostic-gated commands — `build`, `prepack`,

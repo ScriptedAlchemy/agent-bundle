@@ -25,7 +25,7 @@
     },
     "keepData": {
       "evidence": [
-        "2026-09-03: `codex plugin remove` deletes the cached plugin tree, `state/` included, and codex-cli 0.147.0 documents no keep-data option; the uninstaller reports data outcome `unavailable` for --keep-data and `removed-by-host` for --purge-data instead of pretending to preserve state."
+        "2026-09-05: `codex plugin remove` deletes the cached plugin tree, `state/` included, and codex-cli 0.147.0 documents no keep-data option. Agent Bundle can preserve external framework state and web-data, but cannot preserve in-tree state through a Codex uninstall."
       ],
       "reason": "Codex owns the cached tree and removes it wholesale; durable state cannot be preserved through a Codex uninstall.",
       "state": "unavailable"

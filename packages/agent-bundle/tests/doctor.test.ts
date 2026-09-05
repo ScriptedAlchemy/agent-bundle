@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
+import { userDataStateRoot } from '@agent-bundle/runtime';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import type { TargetArtifactWrite } from '../src/adapters/types.ts';
@@ -514,7 +515,9 @@ it('accepts a versionless Cursor inventory manifest as installed', async () => {
 it('inventories durable SQLite stores and sidecars without opening them', async () => {
   const fixture = await temporaryDoctor();
   const pluginRoot = join(fixture.home, '.cursor', 'plugins', 'local', 'stateful');
-  const stateRoot = join(pluginRoot, 'state');
+  const environment = { XDG_STATE_HOME: join(fixture.root, 'state-home') };
+  const stateRoot = userDataStateRoot(pluginRoot, environment, fixture.home);
+  const legacyStateRoot = join(pluginRoot, 'state');
   const store = 'project-tasks-0123456789abcdef.sqlite';
   try {
     await Promise.all([
@@ -523,6 +526,7 @@ it('inventories durable SQLite stores and sidecars without opening them', async 
         { name: 'stateful', version: '1.0.0' },
       ),
       mkdir(stateRoot, { recursive: true }),
+      mkdir(legacyStateRoot, { recursive: true }),
     ]);
     await Promise.all([
       writeFile(join(stateRoot, store), 'database'),
@@ -533,6 +537,7 @@ it('inventories durable SQLite stores and sidecars without opening them', async 
 
     const report = await runDoctor({
       endpointDirectory: fixture.endpointDirectory,
+      environment,
       home: fixture.home,
       hosts: ['cursor'],
     });
@@ -541,6 +546,7 @@ it('inventories durable SQLite stores and sidecars without opening them', async 
     );
     expect(finding?.durableState).toMatchObject({
       directory: stateRoot,
+      exists: true,
       findings: [{
         bytes: 15,
         file: store,
@@ -549,18 +555,62 @@ it('inventories durable SQLite stores and sidecars without opening them', async 
       }],
       status: 'known',
       summary: { bytes: 15, stores: 1 },
+      writable: true,
     });
+    expect(report.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'AB7332',
+        message: expect.stringContaining(legacyStateRoot),
+      }),
+    ]));
 
     const human = captureCliTerminal();
     const humanCode = await runCli(['doctor'], human.output, { runDoctor: async () => report });
     expect(humanCode).toBe(0);
     expect(human.stdout()).toContain('durable state: 1 store, 15 B');
+    expect(human.stdout()).toContain(`state root: ${stateRoot} (exists, writable, derived)`);
 
     const json = captureCliTerminal();
     await runCli(['doctor', '--json'], json.output, { runDoctor: async () => report });
     expect(JSON.parse(json.stdout()).hosts[0].inventory.findings[0].durableState).toMatchObject({
       findings: [{ bytes: 15, file: store }],
+      exists: true,
       summary: { bytes: 15, stores: 1 },
+      writable: true,
+    });
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('reports a missing derived state root and a declared state-root override', async () => {
+  const fixture = await temporaryDoctor();
+  const pluginRoot = join(fixture.home, '.cursor', 'plugins', 'local', 'configured-state');
+  const declaredStateRoot = join(fixture.root, 'declared-state');
+  try {
+    await Promise.all([
+      writeJson(join(pluginRoot, '.cursor-plugin/plugin.json'), { name: 'configured-state', version: '1.0.0' }),
+      writeJson(join(pluginRoot, '.cursor-plugin/mcp.json'), {
+        mcpServers: {
+          configured: {
+            command: 'node',
+            env: { AGENT_BUNDLE_STATE_ROOT: declaredStateRoot },
+          },
+        },
+      }),
+    ]);
+    const report = await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      home: fixture.home,
+      hosts: ['cursor'],
+    });
+    const finding = hostReport(report, 'cursor').inventory.findings.find((entry) => entry.entry === 'configured-state');
+    expect(finding?.durableState).toMatchObject({
+      directory: declaredStateRoot,
+      exists: false,
+      findings: [],
+      summary: { bytes: 0, stores: 0 },
+      writable: false,
     });
   } finally {
     await fixture.cleanup();
@@ -1185,7 +1235,7 @@ it('inventories Claude and Codex installs from their pinned plugin list --json v
       hosts: ['claude', 'codex'],
     });
     expect(report.diagnostics.some((entry) => entry.code === 'AB7303')).toBe(false);
-    expect(hostReport(report, 'claude').inventory).toEqual({
+    expect(hostReport(report, 'claude').inventory).toMatchObject({
       findings: [
         {
           enabled: true,
@@ -1206,7 +1256,7 @@ it('inventories Claude and Codex installs from their pinned plugin list --json v
       ],
       status: 'known',
     });
-    expect(hostReport(report, 'codex').inventory).toEqual({
+    expect(hostReport(report, 'codex').inventory).toMatchObject({
       findings: [{
         entry: 'beta@beta-marketplace',
         name: 'beta',
@@ -1738,7 +1788,7 @@ it('reports a Claude copy the host refused to load as load-failed (AB7325) inste
       state: 'registered',
     });
     expect(host.bundle?.comparison).not.toHaveProperty('installedContentHash');
-    expect(host.inventory).toEqual({
+    expect(host.inventory).toMatchObject({
       findings: [{
         enabled: true,
         entry: 'doctor-fixture@doctor-fixture-marketplace (user)',
@@ -1801,7 +1851,7 @@ it('reports an installed-but-disabled Claude copy as disabled (AB7327) with the 
       },
       state: 'registered',
     });
-    expect(host.inventory).toEqual({
+    expect(host.inventory).toMatchObject({
       findings: [{
         enabled: false,
         entry: 'doctor-fixture@doctor-fixture-marketplace (project)',
@@ -2319,7 +2369,7 @@ it('explains a Cursor directory holding only preserved runtime state instead of 
     await uninstallBundle({ from: bundle, home: fixture.home, host: 'cursor' });
     const remnant = hostReport(await doctor(), 'cursor');
     expect(remnant.inventory.findings).toEqual([expect.objectContaining({
-      durableState: expect.objectContaining({ summary: { bytes: 8, stores: 1 } }),
+      legacyDurableState: expect.objectContaining({ summary: { bytes: 8, stores: 1 } }),
       name: 'doctor-fixture',
       path: destination,
       receipt: expect.objectContaining({ mode: 'local' }),

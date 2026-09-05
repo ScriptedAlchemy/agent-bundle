@@ -160,9 +160,16 @@ export interface InstallReceipt {
   /** Host registrations the installer performed, in the order it performed them. */
   readonly registrations: readonly InstallRegistration[];
   readonly scope: InstallReceiptScope;
+  /** Effective framework state root retained by a Cursor `--keep-data` uninstall. */
+  readonly stateRoot?: {
+    readonly root: string;
+    readonly source: 'derived' | 'native';
+  };
   /** When this receipt was last written (install or replacement); `installedAt` is the first install. */
   readonly updatedAt: string;
   readonly version: string;
+  /** Derived web-data root retained by a Cursor `--keep-data` uninstall. */
+  readonly webDataRoot?: string;
 }
 
 /** The lifecycle identity every receipt writer supplies; inventory and timestamps come from the write. */
@@ -555,6 +562,19 @@ const receiptFromDocument = (value: unknown): InstallReceipt | undefined => {
     return undefined;
   }
   const cursorExpansion = readCursorExpansion(record['cursorExpansion']);
+  const stateRootRecord = record['stateRoot'];
+  const stateRoot = stateRootRecord !== undefined &&
+    stateRootRecord !== null &&
+    typeof stateRootRecord === 'object' &&
+    !Array.isArray(stateRootRecord) &&
+    typeof (stateRootRecord as Record<string, unknown>)['root'] === 'string' &&
+    ((stateRootRecord as Record<string, unknown>)['source'] === 'derived' ||
+      (stateRootRecord as Record<string, unknown>)['source'] === 'native')
+    ? Object.freeze({
+        root: (stateRootRecord as Record<string, unknown>)['root'] as string,
+        source: (stateRootRecord as Record<string, unknown>)['source'] as 'derived' | 'native',
+      })
+    : undefined;
   const base = {
     contentHash: record['contentHash'],
     ...(cursorExpansion === undefined ? {} : { cursorExpansion }),
@@ -564,7 +584,9 @@ const receiptFromDocument = (value: unknown): InstallReceipt | undefined => {
     host: record['host'],
     installedAt: record['installedAt'],
     plugin: record['plugin'],
+    ...(stateRoot === undefined ? {} : { stateRoot }),
     version: record['version'],
+    ...(typeof record['webDataRoot'] === 'string' ? { webDataRoot: record['webDataRoot'] } : {}),
   } as const;
   if (format === legacyInstallReceiptFormat) {
     return Object.freeze({
@@ -635,6 +657,8 @@ export const createInstallReceipt = (options: InstallReceiptIdentity & {
   readonly cursorExpansion?: InstallReceiptCursorExpansion;
   readonly directories?: readonly string[];
   readonly inventory: TreeInventory;
+  readonly stateRoot?: InstallReceipt['stateRoot'];
+  readonly webDataRoot?: string;
 }): InstallReceipt => {
   const installedAt = options.installedAt ?? new Date().toISOString();
   return Object.freeze({
@@ -651,8 +675,10 @@ export const createInstallReceipt = (options: InstallReceiptIdentity & {
     ...(options.projectRoot === undefined ? {} : { projectRoot: options.projectRoot }),
     registrations: Object.freeze(options.registrations.map((registration) => Object.freeze({ ...registration }))),
     scope: options.scope,
+    ...(options.stateRoot === undefined ? {} : { stateRoot: Object.freeze({ ...options.stateRoot }) }),
     updatedAt: options.updatedAt ?? installedAt,
     version: options.version,
+    ...(options.webDataRoot === undefined ? {} : { webDataRoot: options.webDataRoot }),
   });
 };
 

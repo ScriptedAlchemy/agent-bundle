@@ -58,9 +58,10 @@ build/build.ts + build/emit.ts + build/compile-stages.ts
         ▼
 composite plugin root
   + agent-bundle.manifest.json
+  + agent-bundle.compile-evidence.json
         │
         ▼
-build/validate-artifact*.ts / AB6005
+build/validate-artifact*.ts / AB6005 / AB6039
   / prepack AB7014, AB7015                   ← Artifact layer
 ```
 
@@ -275,6 +276,7 @@ and writes one tree at `artifactRoot` (CLI default `artifact/`;
 | Plan entries | `build/emit.ts` `emitPlanEntries` | Host documents, skills, commands, rules, assets, `INSTALL.md` / `install.mjs` |
 | Scripts, hooks, MCP entries, CLI bins | `build/rslib.ts` `compileRslibSurfaces` via `build/entries.ts`, `build/cli-bins.ts` | `scripts/*.mjs`, `hooks/*.mjs`, `mcp/mcp-<server>-<hash>.mjs`, `bin/<plugin>.mjs` (+ `-flight.mjs` workers) |
 | MCP Apps | `build/mcp-apps.ts` `compileMcpApps` | `mcp-apps/<name>.html` (inlined into the generated server as well) |
+| Compile evidence | `build/compile-evidence.ts` `createCompileEvidenceRecord` | `agent-bundle.compile-evidence.json` (one `assets[]` entry per compiled file) |
 | Manifest | `build/build.ts` `manifestFor` + `build/emit.ts` `writeManifest` | `agent-bundle.manifest.json` |
 | Publish | `build/emit.ts` `publishArtifact` | Atomic rename of the stage directory onto `outputRoot` |
 
@@ -286,6 +288,7 @@ embed their HTML), then the node surfaces.
 | Check | Module | Code |
 | --- | --- | --- |
 | Canonical manifest parse + file digest match | `build/validate-artifact.ts` | `AB60xx` family; parse errors throw from `parseArtifactManifest` |
+| Compile evidence record vs manifest `bundle` files | `build/compile-evidence.ts` `compileEvidenceDiagnostics` | `AB6039` |
 | Host-pack and package-build `dist` modules import only relative/`file:` specifiers or Node built-ins | `build/validate-artifact-modules.ts` | `AB6005` |
 | Skills / hooks / MCP documents match the selected hosts | `build/validate-artifact-skills.ts`, `build/validate-artifact-hooks.ts` (`executables.hooks[]`, `AB6018`), `build/validate-artifact-mcp.ts` | per-surface `AB60xx` |
 | Artifact ownership of the output root | `build/validate-artifact.ts` | `AB6014` |
@@ -327,6 +330,7 @@ artifact/
 ├── bin/<plugin>.mjs, bin/<plugin>-flight.mjs
 ├── skills/, scripts/, commands/, rules/, assets/, mcp-apps/
 ├── INSTALL.md, install.mjs
+├── agent-bundle.compile-evidence.json
 └── agent-bundle.manifest.json
 ```
 
@@ -446,6 +450,7 @@ harness.
 | Reader | Fields used | Purpose |
 | --- | --- | --- |
 | `build/validate-artifact.ts` | all of them | Re-parse the on-disk bytes, match `files[]` digests and modes, check `projections[]` and `compiler.adapters[]` (adapter revision, observed version, and `builtInHost` identity, `AB6010`) against the registry, pin `compiler.agentSkills` and `runtime.node`. There is no separate coherence pass: the host documents and the manifest are written from the same compiled plans in one build, and every document is a digest-pinned `files[]` row |
+| `build/compile-evidence.ts` | `files[]` (`bundle` rows) | `AB6039`: re-check the persisted compile evidence record against the file table without parsing JavaScript |
 | `build/validate-artifact-modules.ts` | `files[]` (bundle / `.mjs` rows) plus package-build `dist` | `AB6005` import graph |
 | `build/validate-artifact-skills.ts` | `projections[]` (`manifestTargets`) plus the tree | Skill documents vs selected hosts |
 | `build/validate-artifact-hooks.ts` | `executables.hooks[]`, `projections[]` | `AB6018`: hook rows vs host hook documents |

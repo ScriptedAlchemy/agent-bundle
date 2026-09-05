@@ -187,6 +187,7 @@ describe('composite plugin root (#555)', () => {
       '.codex-plugin', // Codex manifest, hooks document, MCP document
       '.mcp.json', // Claude Code MCP document (conventional root path)
       'INSTALL.md',
+      'agent-bundle.compile-evidence.json', // compiler evidence per compiled file (AB6039)
       'agent-bundle.manifest.json',
       'commands',
       'hooks', // Claude Code hooks document + every compiled hook wrapper
@@ -217,6 +218,7 @@ describe('composite plugin root (#555)', () => {
       '.agents',
       '.codex-plugin',
       'INSTALL.md',
+      'agent-bundle.compile-evidence.json',
       'agent-bundle.manifest.json',
       'hooks',
       'mcp',
@@ -254,6 +256,7 @@ describe('composite plugin root (#555)', () => {
     });
     expect(await topLevel(output)).toEqual([
       'INSTALL.md',
+      'agent-bundle.compile-evidence.json',
       'agent-bundle.manifest.json',
       'install.mjs', // the self-contained local installer (S5 narrows it to Cursor)
       'mcp',
@@ -332,6 +335,7 @@ describe('composite plugin root (#555)', () => {
     expect(await topLevel(cursorOnly.output)).toEqual([
       '.cursor-plugin',
       'INSTALL.md',
+      'agent-bundle.compile-evidence.json',
       'agent-bundle.manifest.json',
       'commands',
       'hooks',
