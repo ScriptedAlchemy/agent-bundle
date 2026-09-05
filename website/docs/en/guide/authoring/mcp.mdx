@@ -827,28 +827,25 @@ the first-party CLI, the Workbench, tests, a plugin's own `package.json` scripts
 `.mjs` run from the checkout — and it needs `agent-bundle` resolvable where that process runs.
 Never call it from the MCP server shell.
 
-A routed CLI command inside the plugin artifact cannot import it today. Routed CLI bins are
+A routed CLI command inside the plugin artifact cannot import it. Routed CLI bins are
 self-contained (`bin/<plugin>.mjs` in every host pack, `dist/bin/<plugin>.js` in the package
-build), so a route with `await import('agent-bundle/api')` makes the bundler inline the whole
-compiler into the bin, where it fails on the framework's runtime-relative module references
-(`Module not found: Can't resolve '../events'`); leaving the import external is
-`AB6005 … uses unsupported specifier "agent-bundle/api"`, and a non-literal `import(spec)` is
-`AB6005 … has a non-literal dynamic import`. A helper a routed command can use is tracked in
-[#558](https://github.com/ScriptedAlchemy/agent-bundle/issues/558).
-
-The pattern that builds is a plain routed command that spawns `agent-bundle serve-app` as a child
-process, as cargo-hauler's `hauler dashboard` does. It is a **checkout command**: it needs
-`agent-bundle` under `node_modules` and the built `artifact/` beside the CLI, neither of which an
-installed host pack has, so it says so instead of failing inside the child.
+build), so a value import of `agent-bundle/api` — or of any other entry that carries the compiler:
+`agent-bundle`, `agent-bundle/config`, `agent-bundle/eval`, `agent-bundle/rstest`,
+`agent-bundle/test`, `agent-bundle/test/browser` — would make the bundler inline the whole
+compiler into the bin, where it fails on the framework's runtime-relative module references. The
+route graph reports it first: `AB4837`, naming the file and the specifier, whether the route
+imports the entry itself or through a helper it reaches by relative import, from `inspect`,
+`validate`, `build`, and `dev`; `import type` and imports used only as types are not reported
+(see the [diagnostics reference](../../reference/diagnostics.md)). The sanctioned shape is
+`spawnServeApp` from `agent-bundle/serve-app-command`: a dependency-free entry that spawns
+`agent-bundle serve-app` as a child process, so the framework stays in its own process and the
+host packs stay self-contained. This is what cargo-hauler's `hauler dashboard` does, and the
+resolution of [#558](https://github.com/ScriptedAlchemy/agent-bundle/issues/558):
 
 ```ts
-// src/cli/dashboard.ts — `hauler dashboard`: open the App against the running daemon.
-import { spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
+// src/cli/dashboard.ts — `hauler dashboard`: open the App against the plugin's own server.
 import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
+import { ServeAppCommandError, spawnServeApp } from 'agent-bundle/serve-app-command';
 import { z } from 'zod';
 
 export const config = {
@@ -856,7 +853,10 @@ export const config = {
   exitCode: 'result',
 } satisfies CliRouteConfig;
 
-export const inputSchema = z.object({ noOpen: z.boolean().optional() }).strict();
+export const inputSchema = z.object({
+  noOpen: z.boolean().optional(),
+  port: z.number().int().min(0).max(65_535).optional(),
+}).strict();
 
 export const resultSchema = z.object({
   exitCode: z.number().int(),
@@ -864,76 +864,72 @@ export const resultSchema = z.object({
   url: z.string().nullable(),
 }).strict();
 
-// The framework CLI, read from the `bin` of the nearest `node_modules/agent-bundle` at or
-// above the plugin root. Located by path, never imported: an `import()` of the package
-// would pull the framework into the bin.
-const frameworkCli = (root: string): string | undefined => {
-  for (let directory = root; ; directory = dirname(directory)) {
-    const manifestPath = join(directory, 'node_modules', 'agent-bundle', 'package.json');
-    if (existsSync(manifestPath)) {
-      const { bin } = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
-        bin?: string | Record<string, string>;
-      };
-      const relative = typeof bin === 'string' ? bin : bin?.['agent-bundle'];
-      if (relative === undefined) return undefined;
-      return resolve(dirname(manifestPath), relative);
-    }
-    if (directory === dirname(directory)) return undefined;
-  }
-};
-
 export default async function dashboard({ input, signal }: CliRouteProps<typeof inputSchema>) {
-  // `dist/bin/<plugin>.js` sits two levels under the checkout, which holds `artifact/`.
-  const root = fileURLToPath(new URL('../../', import.meta.url));
-  const cli = frameworkCli(root);
-  const artifact = join(root, 'artifact');
-  if (cli === undefined || !existsSync(join(artifact, 'agent-bundle.manifest.json'))) {
-    return {
-      exitCode: 1,
-      message: 'hauler dashboard runs from the plugin checkout (pnpm install, then '
-        + 'agent-bundle build); in an MCP host, call hauler_status instead.',
-      url: null,
-    };
-  }
-  return new Promise<z.infer<typeof resultSchema>>((done, fail) => {
-    const child = spawn(process.execPath, [
-      cli, 'serve-app', 'hauler/dashboard', '--root', root,
-      '--artifact', artifact, '--target', 'portable',
-      '--tool', 'hauler_status', '--allow', 'call-tool',
-      input.noOpen === true ? '--no-open' : '--open',
-    ], { stdio: ['ignore', 'pipe', 'inherit'] });
-    let url: string | null = null;
-    let pending = '';
-    child.stdout.on('data', (chunk: Buffer) => {
-      // The child prints `MCP App <app> at <url> (…)`; relay it to stderr so the routed
-      // CLI keeps stdout for its JSON result, and parse whole lines only — one write can
-      // arrive split across chunks.
-      const text = chunk.toString('utf8');
-      process.stderr.write(text);
-      pending += text;
-      const lines = pending.split('\n');
-      pending = lines.pop() ?? '';
-      for (const line of lines) {
-        url ??= /\bat (https?:\/\/\S+)/u.exec(line)?.[1] ?? null;
-      }
+  let served;
+  try {
+    served = await spawnServeApp({
+      app: 'hauler/dashboard',
+      root: process.cwd(),
+      artifact: 'artifact',
+      tool: 'hauler_status',
+      autoApprove: ['call-tool'],
+      open: input.noOpen !== true,
+      ...(input.port === undefined ? {} : { port: input.port }),
+      // Ctrl-C reaching the routed CLI stops the server.
+      signal,
     });
-    // Ctrl-C reaching the routed CLI becomes the child's SIGTERM.
-    signal.addEventListener('abort', () => child.kill('SIGTERM'), { once: true });
-    child.once('error', fail);
-    child.once('exit', (code) => done({
-      exitCode: code ?? 1,
-      message: code === 0
-        ? 'dashboard closed'
-        : `agent-bundle serve-app exited with ${String(code)}`,
-      url,
-    }));
-  });
+  } catch (error) {
+    if (error instanceof ServeAppCommandError) {
+      // framework-not-installed, artifact-missing, exited-before-ready, ...
+      return {
+        exitCode: 1,
+        message: `${error.message} In an MCP host, call hauler_status instead.`,
+        url: null,
+      };
+    }
+    throw error;
+  }
+  const exit = await served.closed;
+  return {
+    exitCode: exit.code ?? 1,
+    message: exit.code === 0
+      ? 'dashboard closed'
+      : `agent-bundle serve-app exited with ${exit.signal ?? exit.code}`,
+    url: served.url,
+  };
 }
 ```
 
-Every `serve-app` option — `--port`, `--input`, `--profile`, `--env-file`, `--plugin-root` —
-passes through as argv, and the host packs stay self-contained because the framework is spawned,
-never bundled.
+`spawnServeApp` lowers its options to `agent-bundle serve-app` argv (`serveAppArgv`), resolves
+the framework CLI from the `agent-bundle` package installed at or above `root`
+(`locateFrameworkCli`), spawns it under the current Node binary, relays every line of the child's
+stdout to this process's stderr — or to a `relay` callback — so the routed command keeps stdout
+for its own JSON result, and resolves once the child prints its ready line,
+`MCP App <app> at <url> (tool <tool>; Ctrl-C stops the server)`. The child's diagnostics stay on
+stderr. The result carries `app`, `url`, `port`, `tool`, `server`, `pid`, a `closed` promise
+that settles with the child's exit `{ code, signal }`, and `close()`, which sends `SIGTERM` and
+waits for that exit; aborting the `signal` does the same, so Ctrl-C reaching the routed command
+reaches the server. Failures reject with `ServeAppCommandError`, whose `code` is
+`framework-not-installed` (no `node_modules/agent-bundle` resolves from `root`),
+`artifact-missing` (the given `artifact` path does not exist), `spawn-failed`,
+`exited-before-ready` (the child exited without printing the ready line; `error.exit` holds its
+`{ code, signal }`), `aborted` (the `signal` aborted before the App was served), or `stop-failed`
+(the running child refused the `SIGTERM` that `close()` or the abort sent — also what `close()`
+rejects with — so it is still running). On Ctrl-C the
+routed CLI shell reports `Aborted.` and exits `130` before the route returns, so the result
+document above is printed only when the server exits on its own or the route calls `close()`.
+
+It is a **checkout command**: it needs `agent-bundle` installed at or above `root` and a built
+artifact. The published plugin package and an installed host pack have neither, and
+`framework-not-installed` and `artifact-missing` say so before anything is spawned. Every
+`serveApp` option with an argv form passes through — `app`, `root`, `artifact`, `autoApprove`
+(the `--allow` vocabulary: `call-tool`, `download-file`, `open-external-link`,
+`request-display-mode`), `configPath`, `envFiles`, `input`, `loadEnvFiles`, `mode`, `open`,
+`pluginRoot`, `port`, `profile`, `target`, `tool` — and an unset option takes the CLI default
+(`--target portable`, `--profile portable`, `--mode production`, the App's only tool, no browser).
+Relative paths resolve as the CLI resolves them: `configPath` against `root`, `artifact` and
+`envFiles` against the working directory. The `serveApp` options with no argv form — `logger`,
+`registry`, `openBrowser`, `targets`, `timeoutMs` — stay with `serveApp` in host processes.
 
 ## Server modes
 
