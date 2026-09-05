@@ -268,9 +268,17 @@ still sees the browser's real `Origin`.
 
 Without `--workbench-dev-origin`, the UI at `http://localhost:3000` refuses its own bootstrap as
 `AB8003` (the session body names the foreground origin, not the page's) and stays on the
-"Foreground connection unavailable" gate, reporting "Workbench request failed with HTTP 200."; the
-foreground refuses mutations carrying that `Origin` with `AB8003` as well. The foreground URL keeps
-working regardless.
+"Foreground connection unavailable" gate, reporting `AB8003 — Origin http://localhost:3000 is not
+allowed by the foreground server at http://127.0.0.1:3100. Open http://127.0.0.1:3100 instead, or
+start agent-bundle dev with --workbench-dev-origin http://localhost:3000 to allow this origin.`
+The gate appends `(HTTP <status>)` only when the foreground response itself failed — a 403
+`AB8003` from the foreground renders as `AB8003 — Request origin is not this foreground server.
+(HTTP 403)` — so the no-flag line carries no status: the foreground answered 200 and the UI
+refused the body. Restarting the foreground without the flag while the page is open ends on the same
+status-less `AB8003 — Origin …` line: the gate first reports `Foreground project event stream
+disconnected.`, then the refusal once the reconnect's own 200 bootstrap is turned away by the UI. The
+foreground still refuses mutations carrying
+that `Origin` with `AB8003`. The foreground URL keeps working regardless.
 
 ## Next
 
