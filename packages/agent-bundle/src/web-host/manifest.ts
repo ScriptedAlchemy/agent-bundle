@@ -9,7 +9,7 @@ import { isRelocatablePosixPath } from '../core/paths.ts';
 import { hasDataKeys, isPlainRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 
 /**
- * One argument of a compiled server's launch, after the entry. An author
+ * One argument of a server launch record, after the entry. An author
  * argument written as `agent-bundle:path:plugin-root/<path>` is an
  * `artifact` reference — a root-relative POSIX path inside the composite root
  * (a `files[]` row, or a path under a declared payload directory). Every other
@@ -23,15 +23,15 @@ export type ArtifactManifestLaunchArgument =
   | { readonly kind: 'literal'; readonly value: string };
 
 /**
- * The one launch record of a compiled MCP server (`executables.mcpServers[]`
- * with `kind: 'compiled'`): what `<plugin> web` starts and what every host
- * MCP document projects. Tokens in `args` and `env` are expanded by the
- * launcher, never by the manifest.
+ * The one launch record of a compiled or prebuilt MCP server
+ * (`executables.mcpServers[]` with `kind: 'compiled'` or `'prebuilt'`): what
+ * `<plugin> web` starts and what every host MCP document projects. Tokens in
+ * `args` and `env` are expanded by the launcher, never by the manifest.
  */
 export interface ArtifactManifestLaunch {
   /** Arguments after the entry, in order. */
   readonly args: readonly ArtifactManifestLaunchArgument[];
-  /** Root-relative POSIX path of the compiled entry (a `files[]` row). */
+  /** Root-relative POSIX path of the entry (a `files[]` row). */
   readonly entry: string;
   /** Declared environment; values may carry `agent-bundle:path:*` tokens. */
   readonly env: Readonly<Record<string, string>>;
@@ -173,8 +173,9 @@ export const parseWebManifest = (value: unknown): WebManifest => {
 
 /**
  * The web-relevant read of one artifact manifest: the exposed Apps, the
- * declared projections, and the launch record of every compiled server. Only
- * these slices are read; the rest of the document is not validated here.
+ * declared projections, and the launch record of every compiled or prebuilt
+ * server. Only these slices are read; the rest of the document is not
+ * validated here.
  */
 export interface WebManifestDocument {
   /** The projection names the artifact manifest declares for this composite root. */
@@ -198,7 +199,7 @@ const compiledLaunches = (value: unknown): ReadonlyMap<string, ArtifactManifestL
   const servers = isPlainRecord(value) ? value['mcpServers'] : undefined;
   if (!Array.isArray(servers)) return launches;
   servers.forEach((server: unknown, index: number) => {
-    if (!isPlainRecord(server) || server['kind'] !== 'compiled') return;
+    if (!isPlainRecord(server) || (server['kind'] !== 'compiled' && server['kind'] !== 'prebuilt')) return;
     const location = `executables.mcpServers[${index}]`;
     launches.set(string(server['name'], `${location}.name`), parseLaunch(server['launch'], `${location}.launch`));
   });

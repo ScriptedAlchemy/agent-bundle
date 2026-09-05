@@ -364,17 +364,17 @@ export interface ArtifactManifestMcpApp {
 }
 
 /**
- * One MCP server the artifact declares: `compiled` servers carry the one
- * `launch` record the artifact starts them from, `command` servers name a
- * host-run command, `remote` servers a URL — both live only in the host MCP
- * documents.
+ * One MCP server the artifact declares: `compiled` and `prebuilt` servers
+ * carry the one `launch` record the artifact starts them from, `command`
+ * servers name a host-run command, `remote` servers a URL — the last two live
+ * only in the host MCP documents.
  */
 export interface ArtifactManifestMcpServer {
   readonly apps: readonly ArtifactManifestMcpApp[];
   readonly hosts: readonly string[];
   readonly id: string;
   readonly kind: 'command' | 'compiled' | 'prebuilt' | 'remote';
-  /** Present exactly for `compiled` servers. */
+  /** Present exactly for `compiled` and `prebuilt` servers. */
   readonly launch?: ArtifactManifestLaunch;
   readonly name: string;
   readonly transport: string;

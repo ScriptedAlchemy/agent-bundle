@@ -103,14 +103,16 @@ it('reads the optional section and returns undefined when absent', async () => {
   }
 });
 
-it('reads the projection hosts and the compiled servers\' launch records beside the web section', async () => {
+it('reads the projection hosts and the compiled and prebuilt servers\' launch records beside the web section', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-web-manifest-'));
   const path = join(root, 'agent-bundle.manifest.json');
+  const prebuiltLaunch: ArtifactManifestLaunch = { args: [], entry: 'runtime/mcp/server.js', env: {} };
   try {
     await writeFile(path, JSON.stringify({
       executables: {
         mcpServers: [
           { apps: [], hosts: ['claude'], id: 'mcp:catalog', kind: 'compiled', launch: validLaunch(), name: 'catalog', transport: 'stdio' },
+          { apps: [], hosts: ['claude'], id: 'mcp:timeline', kind: 'prebuilt', launch: prebuiltLaunch, name: 'timeline', transport: 'stdio' },
           { apps: [], hosts: ['claude'], id: 'mcp:remote', kind: 'remote', name: 'remote', transport: 'streamable-http' },
         ],
       },
@@ -119,7 +121,7 @@ it('reads the projection hosts and the compiled servers\' launch records beside 
     }));
     const document = await readWebManifestDocument(path);
     expect(document.hosts).toEqual(['claude', 'codex']);
-    expect([...document.launches]).toEqual([['catalog', validLaunch()]]);
+    expect([...document.launches]).toEqual([['catalog', validLaunch()], ['timeline', prebuiltLaunch]]);
     expect(document.web).toEqual(validWeb());
 
     await writeFile(path, JSON.stringify({ producer: {} }));
