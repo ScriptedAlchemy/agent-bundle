@@ -38,7 +38,7 @@ import { DEV_INSTALL_MARKER, DevHostInstallManager } from '../../src/dev/host-in
 import { ProjectEventHub } from '../../src/dev/events.ts';
 import type { ArtifactEpoch } from '../../src/dev/types.ts';
 import { startDevServer } from '../../src/dev/workbench-server.ts';
-import { runDoctor } from '../../src/install/doctor.ts';
+import { runDoctor, type DoctorCommandRunner } from '../../src/install/doctor.ts';
 import { installBundle, type InstallHost } from '../../src/install/install.ts';
 import { readInstallReceipt } from '../../src/install/receipt.ts';
 import {
@@ -419,6 +419,20 @@ const run = async (
     });
   }
 };
+
+const doctorCommandRunner = (environment: Readonly<NodeJS.ProcessEnv>): DoctorCommandRunner =>
+  async (request) => {
+    const result = await run(request.executable, request.args, {
+      cwd: request.cwd,
+      environment: isolatedEnvironment(environment, request.environment ?? {}),
+    });
+    return Object.freeze({
+      exitCode: result.exitCode,
+      signal: null,
+      stderr: result.stderr,
+      stdout: result.stdout,
+    });
+  };
 
 const runNodeCli = (
   fixture: BuiltHostInstallFixture,
@@ -963,6 +977,17 @@ export const runClaudeHostInstallProof = async (
     assertProof(/\bSkills\s+\(1\)/iu.test(details.stdout), 'Claude component inventory did not report Skills (1).');
     assertProof(/\bHooks\s+\(1\)/iu.test(details.stdout), 'Claude component inventory did not report Hooks (1).');
     assertProof(/\bMCP servers\s+\(1\)/iu.test(details.stdout), 'Claude component inventory did not report MCP servers (1).');
+    const doctor = await runDoctor({
+      commandRunner: doctorCommandRunner(environment),
+      environment,
+      from: fixture.artifactRoot,
+      home,
+      hosts: ['claude'],
+    });
+    assertProof(
+      doctor.hosts.find((entry) => entry.host === 'claude')?.bundle?.comparison?.status === 'current',
+      `Doctor did not report the installed Claude npm root as current: ${JSON.stringify(doctor.diagnostics)}`,
+    );
 
     const skillPath = join(expectedInstallPath, 'skills', 'probe', 'SKILL.md');
     await access(skillPath).catch(() => fail('Claude cache did not contain skills/probe/SKILL.md.'));
@@ -976,16 +1001,6 @@ export const runClaudeHostInstallProof = async (
       },
       installedRoot: expectedInstallPath,
     });
-    const doctor = await runDoctor({
-      environment,
-      from: fixture.artifactRoot,
-      home,
-      hosts: ['claude'],
-    });
-    assertProof(
-      doctor.hosts.find((entry) => entry.host === 'claude')?.bundle?.comparison?.status === 'current',
-      `Doctor did not report the installed Claude npm root as current: ${JSON.stringify(doctor.diagnostics)}`,
-    );
     return Object.freeze({
       host: 'claude',
       install: Object.freeze({ sameVersionRebuild, state: 'installed', version }),
@@ -1102,6 +1117,17 @@ export const runCodexHostInstallProof = async (
         `Codex installed plugin manifest interface did not advertise ${capability}.`,
       );
     }
+    const doctor = await runDoctor({
+      commandRunner: doctorCommandRunner(environment),
+      environment,
+      from: fixture.artifactRoot,
+      home,
+      hosts: ['codex'],
+    });
+    assertProof(
+      doctor.hosts.find((entry) => entry.host === 'codex')?.bundle?.comparison?.status === 'current',
+      `Doctor did not report the installed Codex npm root as current: ${JSON.stringify(doctor.diagnostics)}`,
+    );
     const sameVersionRebuild = await proveSameVersionRebuild({
       bundle: fixture.bundles.codex,
       host: 'codex',
@@ -1112,16 +1138,6 @@ export const runCodexHostInstallProof = async (
       },
       installedRoot: cachePath,
     });
-    const doctor = await runDoctor({
-      environment,
-      from: fixture.artifactRoot,
-      home,
-      hosts: ['codex'],
-    });
-    assertProof(
-      doctor.hosts.find((entry) => entry.host === 'codex')?.bundle?.comparison?.status === 'current',
-      `Doctor did not report the installed Codex npm root as current: ${JSON.stringify(doctor.diagnostics)}`,
-    );
 
     return Object.freeze({
       host: 'codex',
