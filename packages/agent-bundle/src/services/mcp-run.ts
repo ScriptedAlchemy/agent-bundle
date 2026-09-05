@@ -11,12 +11,10 @@ import { validateArtifact } from '../build/validate-artifact.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { joinArtifact, resolveContained } from '../core/paths.ts';
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
-import { pluginRootEnvAnchor } from '../core/types.ts';
 import { runPromise } from '../effect/boundary.ts';
 import { liftPromise } from '../effect/lift.ts';
 import { readFileString, runWithPlatform } from '../effect/platform.ts';
 import { OPERATOR_ENV_FILE_NONE, OPERATOR_ENV_FILE_VARIABLE } from '../launch-env.ts';
-import { expandLaunchTokens } from '../web-host/manifest.ts';
 import { resolveMcpPathTokens } from './mcp-path-tokens.ts';
 import { forwardingSignals } from './mcp-run-signals.ts';
 import {
@@ -30,8 +28,8 @@ export { mcpServerStateDirectory } from '../core/mcp-state-directory.ts';
 /**
  * The foreground MCP server runner behind `agent-bundle mcp run`: it resolves
  * the compiled entry from the artifact manifest (`executables.mcpServers[]`)
- * and executes it with inherited stdio until the server exits. Host MCP
- * documents supply only the args/env the manifest row does not carry.
+ * and executes it with inherited stdio until the server exits, under the
+ * launch line the selected host's MCP document projects for that record.
  */
 
 export interface ResolvedMcpStdioLaunch {
@@ -66,8 +64,10 @@ const hostMcpDocument = async (
   runtime: TargetMcpRuntimeContract,
   host: string,
   server: string,
-): Promise<ModernMcpStdioServer | undefined> => {
-  if (documentPath === undefined) return undefined;
+): Promise<ModernMcpStdioServer> => {
+  if (documentPath === undefined) {
+    throw new Error(`Target ${JSON.stringify(host)} projects no MCP document, so it cannot run MCP server ${JSON.stringify(server)}.`);
+  }
   const manifestPath = joinArtifact(artifact, documentPath);
   let document: unknown;
   try {
@@ -76,7 +76,9 @@ const hostMcpDocument = async (
     throw new Error(`MCP manifest for target ${JSON.stringify(host)} is not valid JSON.`);
   }
   const result = readTargetMcpServer(runtime, document, server);
-  if (result.status === 'missing') return undefined;
+  if (result.status === 'missing') {
+    throw new Error(`MCP manifest for target ${JSON.stringify(host)} names no server ${JSON.stringify(server)}.`);
+  }
   if (result.status === 'invalid') {
     throw new Error(`MCP server ${JSON.stringify(server)} in target ${JSON.stringify(host)} is invalid.`);
   }
@@ -171,45 +173,18 @@ export const resolveMcpStdioLaunch = async (
     pluginRoot: targetRoot,
     workspaceRoot: resolve(options.workspaceRoot),
   };
-  const entry = joinArtifact(targetRoot, row.launch.entry);
+  joinArtifact(targetRoot, row.launch.entry);
   if (row.launch.worker !== undefined) {
     joinArtifact(targetRoot, row.launch.worker);
   }
-  const hostLaunch = hostStdio === undefined
-    ? undefined
-    : resolveMcpPathTokens({
-      roots,
-      runtime: launchRuntime,
-      server: hostStdio,
-      target: host,
-    });
-  if (hostLaunch !== undefined && hostLaunch.kind !== 'stdio') {
+  const hostLaunch = resolveMcpPathTokens({ roots, runtime: launchRuntime, server: hostStdio, target: host });
+  if (hostLaunch.kind !== 'stdio') {
     throw new Error(`MCP server ${JSON.stringify(options.server)} is not a stdio server; only stdio servers can run in the foreground.`);
   }
-  // Without a host document the record itself is the launch line, under the
-  // same per-field root split and plugin-root anchor the host projections get.
-  if (hostLaunch === undefined) {
-    const envRoots = { ...roots, pluginRoot: envPluginRoot };
-    return Object.freeze({
-      args: Object.freeze([
-        entry,
-        ...row.launch.args.map((argument) => argument.kind === 'artifact'
-          ? joinArtifact(targetRoot, argument.path)
-          : expandLaunchTokens(argument.value, roots)),
-      ]),
-      command: 'node',
-      cwd: targetRoot,
-      env: Object.freeze({
-        [pluginRootEnvAnchor]: envPluginRoot,
-        ...Object.fromEntries(
-          Object.entries(row.launch.env).map(([key, value]) => [key, expandLaunchTokens(value, envRoots)]),
-        ),
-      }),
-    });
-  }
-  // The host document is the adapter's own launch line for that entry — `AB6017`
-  // refused any build whose document skips it, and the digest walk above proved the
-  // document unchanged — so its argument order is the launch order.
+  // The host document is the adapter's own launch line for the manifest record:
+  // `AB6017` refused any build whose document renames the server or starts other
+  // bytes, and the digest walk above proved the document unchanged — so its
+  // argument order is the launch order.
   return Object.freeze({
     args: Object.freeze([...hostLaunch.args]),
     command: hostLaunch.command,

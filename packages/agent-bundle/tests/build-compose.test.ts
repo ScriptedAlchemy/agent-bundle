@@ -488,16 +488,15 @@ describe('composite plugin root (#555)', () => {
     });
   });
 
-  it('mcp run launches from the manifest record alone when the host document names no such server (#604)', { timeout: 180_000 }, async () => {
+  it('mcp run refuses a root whose host document names the manifest server differently (#604)', { timeout: 180_000 }, async () => {
     // Built with the adapter as shipped; run through a registry whose reader
-    // reports the document's servers under other names — the compiled entry
-    // stays referenced (AB6017 holds), but no document row is `fixture`, so
-    // only `executables.mcpServers[].launch` can describe the launch.
-    const { output, result } = await buildFixture(['synthetic'], {
+    // reports the document's servers under other names. The compiled entry
+    // stays referenced, but no document row is `fixture`: the document is no
+    // longer a projection of `executables.mcpServers[]`, and the manifest
+    // record alone is not a launch line, so `mcp run` refuses with `AB6017`.
+    const { output } = await buildFixture(['synthetic'], {
       registry: new TargetRegistry().register(syntheticAdapter, { default: true }),
     });
-    const record = result.build.manifest.executables.mcpServers[0]?.launch;
-    if (record === undefined) throw new Error('expected a compiled MCP entry');
     const aliasingRuntime: TargetMcpRuntimeContract = {
       ...syntheticMcpRuntime,
       readModernServers: (document) => {
@@ -508,26 +507,26 @@ describe('composite plugin root (#555)', () => {
       },
     };
     const blindRegistry = new TargetRegistry().register({ ...syntheticAdapter, mcpRuntime: aliasingRuntime }, { default: true });
-    const launches: { args: readonly string[]; command: string; cwd: string; env: Readonly<Record<string, string>> }[] = [];
-    const child = new EventEmitter() as ChildProcess;
-    child.kill = () => true;
-    const workspaceRoot = dirname(output);
+    const spawned: string[] = [];
     await expect(runMcp({
       artifact: output,
       loadEnvFiles: false,
       registry: blindRegistry,
-      root: workspaceRoot,
+      root: dirname(output),
       server: 'fixture',
-      spawnProcess: (command, args, options) => {
-        launches.push({ args, command, cwd: options.cwd, env: options.env });
-        queueMicrotask(() => child.emit('exit', 0, null));
-        return child;
+      spawnProcess: (command) => {
+        spawned.push(command);
+        throw new Error('unreachable');
       },
       target: 'synthetic',
-    })).resolves.toBe(0);
-    expect(launches).toHaveLength(1);
-    expect(launches[0]).toMatchObject({ args: [join(output, record.entry)], command: 'node', cwd: output });
-    expect(launches[0]?.env['AGENT_BUNDLE_PLUGIN_ROOT']).toBe(workspaceRoot);
+    })).rejects.toMatchObject({
+      diagnostics: [expect.objectContaining({
+        code: 'AB6017',
+        message: expect.stringContaining('the target document names no such server'),
+        target: 'synthetic',
+      })],
+    });
+    expect(spawned).toEqual([]);
   });
 
   it('judges the built-in hosts by adapter identity, so a custom adapter named like one earns no install surface (#592)', { timeout: 120_000 }, async () => {
