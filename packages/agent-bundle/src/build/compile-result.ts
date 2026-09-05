@@ -11,7 +11,6 @@ export interface CompilationEvidence {
   readonly compiler: string;
   readonly externals: readonly CompilationExternal[];
   readonly modules: readonly CompilationModule[];
-  readonly unresolved: readonly CompilationUnresolvedLoad[];
 }
 
 /** One `ExternalModule` of a compilation: a request the bundle loads at run time instead of inlining. */
@@ -31,16 +30,12 @@ export interface CompilationModule {
 }
 
 /**
- * A run-time load the compiler could not resolve to a module: a
- * `Critical dependency` warning about an expression request, which leaves a
- * `require(expr)` or `import(expr)` in the emitted bundle.
+ * How a kept-external request stands against the artifact contract. An
+ * expression request (`import(expr)`, `require(expr)`) never appears here:
+ * Rslib's profile leaves it verbatim in the bundle without parsing it, so it
+ * is neither a module nor an external — the compiler has no view of it.
  */
-export interface CompilationUnresolvedLoad {
-  readonly issuer?: string;
-  readonly message: string;
-}
-
-export type ExternalKind = 'artifact-relative' | 'builtin' | 'package' | 'unresolved';
+export type ExternalKind = 'artifact-relative' | 'builtin' | 'package';
 
 /** One run-time dependency of an emitted asset, classified against the artifact contract. */
 export interface ExternalIR {

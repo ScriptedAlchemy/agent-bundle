@@ -1214,22 +1214,26 @@ The hatch is bounded: the framework invariant hook runs after the consumer's
 `tools.rspack`, and the resolved-config assertions still run after the merge.
 A hatch value that breaks an artifact contract (async chunks, output roots,
 self-containment) fails the build with a hard diagnostic instead of silently
-overriding the contract. Reserved module specifiers are protected the same
-way: a hatch that externalizes `agent-bundle/mcp-entry` or a generated
-module specifier (`agent-bundle/meta`, or a registry specifier such as
-`agent-bundle/mcp-apps`) fails the build with a hard diagnostic — at config inspection for statically visible `externals`,
-and through a post-build scan of the emitted bundle for function-form
-`externals` — because generated executables must stay self-contained. The
-hatch customizes *how code compiles*, never *what the artifact promises*. The
-framework's own profile keeps the same promise: `output.autoExternal` is
-`false`, `bundle: true`, `splitChunks: false`, and no `externals` are added, so
-Rslib's `node` target leaves only Node built-ins (and `pnpapi`) external, and
-`AB6005` fails any bare import specifier that is not a Node built-in in every
-compiled module — host-pack modules and the package build's `dist` bundles
-alike — so the hatch cannot externalize an import on the author's behalf (a
-`require`, `createRequire`, or `import.meta.resolve` call is not an import and
-is outside that walk; the prepack gate reads those as dependency evidence). Run-time
-path references are kept the same way: a `new URL(…, import.meta.url)` or
+overriding the contract. At config validation, `AB4725` rejects
+`tools.rsbuild.output.autoExternal` unless it is `false` and rejects statically
+visible string or object `externals` entries that are not Node built-ins.
+RegExp and function-form externals, including those installed by a mutator,
+are judged from the compilation's externals evidence (`AB6005`). The invariant
+layer re-pins `output.autoExternal: false` after the hatch merge. The hatch customizes *how
+code compiles*, never *what the artifact promises*. The framework's own
+profile keeps the same promise: `output.autoExternal` is `false`, `bundle:
+true`, `splitChunks: false`, and no `externals` are added. The compiler service
+lowers every host-pack surface and package-build entry. The framework-owned
+`ArtifactDependencyAuditPlugin` taps `thisCompilation` and records every module
+Rspack kept external, and the service reads that evidence before trusting an
+asset. `AB6005` rejects anything Rspack kept external except a Node built-in,
+`pnpapi`, or an emitted sibling of the same artifact, whatever spelling the
+bundle uses. The emitted-module walk remains behind that check as defense in
+depth. A `require`,
+`createRequire(…)(…)`, or `import.meta.resolve(…)` call the compiler does not
+resolve is not a module dependency; content the compiler did not compile is
+opaque and must declare what it needs. Run-time path references are kept the
+same way: a `new URL(…, import.meta.url)` or
 `new Worker(new URL(…))` in consumer or generated code names a file beside the
 artifact, so the invariant layer turns the bundler's URL and worker asset
 processing off after the hatch and the expression reaches the artifact

@@ -4,6 +4,7 @@ import { basename, extname, isAbsolute, join, posix, relative, resolve, sep } fr
 import { capabilityIsSupported, cliBinCapability } from '../adapters/capability-state.ts';
 import { builtInHostNames, isBuiltInHost } from '../adapters/composite-layout.ts';
 import { type EntryExportScan, scanEntryExportsSource } from '../build/entry-exports.ts';
+import { externalizedSpecifiers } from '../build/external-policy.ts';
 import { frameworkOwnedPluginCollisions, frameworkOwnedRsbuildPlugins } from '../build/framework-plugins.ts';
 import type { CapabilityState } from '../core/capabilities.ts';
 import { toPosixRelative } from '../core/paths.ts';
@@ -1833,6 +1834,55 @@ const legacyConventionalDocumentErrors = (
 const isRspackHatchValue = (value: unknown): boolean =>
   typeof value === 'function' || isRecord(value);
 
+const toolsExternalizationRecovery =
+  'Remove the externalization from tools; the compiler bundles the dependency and fails the build if a non-built-in stays external (AB6005).';
+
+const toolsExternalizationDiagnostics = (
+  externals: unknown,
+  prefix: string,
+  configPath: string,
+): Diagnostic[] => externalizedSpecifiers(externals).map((specifier) => sourceDiagnostic(
+  'AB4725',
+  `${prefix} externalizes ${JSON.stringify(specifier)}; generated executables bundle every dependency that is not a Node built-in.`,
+  configPath,
+  toolsExternalizationRecovery,
+));
+
+const validateToolsRsbuildExternalization = (
+  rsbuild: Readonly<Record<string, unknown>>,
+  configPath: string,
+): Diagnostic[] => {
+  const output = rsbuild.output;
+  if (!isRecord(output)) return [];
+  const diagnostics: Diagnostic[] = [];
+  if (Object.hasOwn(output, 'autoExternal') && output.autoExternal !== false) {
+    diagnostics.push(sourceDiagnostic(
+      'AB4725',
+      'Tools rsbuild output.autoExternal must stay false; generated executables bundle every dependency that is not a Node built-in.',
+      configPath,
+      toolsExternalizationRecovery,
+    ));
+  }
+  diagnostics.push(...toolsExternalizationDiagnostics(
+    output.externals,
+    'Tools rsbuild output.externals',
+    configPath,
+  ));
+  return diagnostics;
+};
+
+const validateToolsRspackExternalization = (
+  rspack: unknown,
+  configPath: string,
+): Diagnostic[] => {
+  const fragments = isRecord(rspack) ? [rspack] : Array.isArray(rspack) ? rspack : [];
+  return fragments.flatMap((fragment) =>
+    isRecord(fragment)
+      ? toolsExternalizationDiagnostics(fragment.externals, 'Tools rspack externals', configPath)
+      : [],
+  );
+};
+
 const validateTools = (loaded: LoadedConfig): Diagnostic[] => {
   const tools = loaded.config.tools;
   if (tools === undefined) return [];
@@ -1849,7 +1899,7 @@ const validateTools = (loaded: LoadedConfig): Diagnostic[] => {
       ));
     }
   }
-  const rsbuild = (tools as Record<string, unknown>).rsbuild;
+  const rsbuild = tools.rsbuild;
   if (rsbuild !== undefined && !isRecord(rsbuild)) {
     diagnostics.push(sourceDiagnostic('AB4722', 'Tools rsbuild must be an Rsbuild environment-config object.', loaded.configPath));
   } else if (rsbuild !== undefined) {
@@ -1866,8 +1916,9 @@ const validateTools = (loaded: LoadedConfig): Diagnostic[] => {
         `Remove ${specifier} from tools.rsbuild.plugins; agent-bundle registers it in every config it synthesizes.`,
       ));
     }
+    diagnostics.push(...validateToolsRsbuildExternalization(rsbuild, loaded.configPath));
   }
-  const rspack = (tools as Record<string, unknown>).rspack;
+  const rspack = tools.rspack;
   if (
     rspack !== undefined &&
     !isRspackHatchValue(rspack) &&
@@ -1878,6 +1929,8 @@ const validateTools = (loaded: LoadedConfig): Diagnostic[] => {
       'Tools rspack must be an Rspack config object, a mutator function, or an array of both.',
       loaded.configPath,
     ));
+  } else if (rspack !== undefined) {
+    diagnostics.push(...validateToolsRspackExternalization(rspack, loaded.configPath));
   }
   return diagnostics;
 };
