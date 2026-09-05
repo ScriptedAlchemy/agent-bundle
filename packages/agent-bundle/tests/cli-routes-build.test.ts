@@ -205,7 +205,7 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
       "import { z } from 'zod';",
       "export const config = { annotations: { readOnlyHint: true }, description: 'Looks up one value.' };",
       'export const inputSchema = z.object({ message: z.string().default("ready") }).strict();',
-      "export const resultSchema = z.object({ invocation: z.literal('tool'), message: z.string(), operationId: z.string(), tooling: z.string(), view: z.unknown() }).strict();",
+      "export const resultSchema = z.object({ invocation: z.enum(['cli', 'tool']), message: z.string(), operationId: z.string(), tooling: z.string(), view: z.unknown() }).strict();",
       'export default async function Lookup({ input }) {',
       '  const context = await agent();',
       "  await context.progress.report({ completed: 1, message: 'lookup', total: 1 });",
@@ -219,7 +219,7 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
       "import { z } from 'zod';",
       "export const config = { description: 'Applies one value.' };",
       'export const inputSchema = z.object({ value: z.string() }).strict();',
-      "export const resultSchema = z.object({ invocation: z.literal('tool'), operationId: z.string(), value: z.string() }).strict();",
+      "export const resultSchema = z.object({ invocation: z.enum(['cli', 'tool']), operationId: z.string(), value: z.string() }).strict();",
       'export default async function Apply({ input }) {',
       '  const context = await agent();',
       '  const result = { invocation: context.invocation.kind, operationId: context.invocation.operationId, value: input.value };',
@@ -355,13 +355,13 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
   const projectedJson = await execFile(binPath, [
     'harness', 'lookup', '--input', '{"message":"packed"}', '--json',
   ]);
-  // The projected command's provider sees `invocation.kind === 'tool'`, not the
-  // CLI surface it was typed on (#319 review).
+  // The projected command and provider both see the CLI surface; the tool id
+  // remains the operation identity.
   expect(JSON.parse(projectedJson.stdout)).toEqual({
-    invocation: 'tool',
+    invocation: 'cli',
     message: 'packed',
     operationId: 'tool:harness/lookup',
-    tooling: 'tool:ffprobe 6.1',
+    tooling: 'cli:ffprobe 6.1',
     view: providerView,
   });
   const projectedNdjson = await execFile(binPath, [
@@ -383,7 +383,7 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
     'harness', 'apply', '--input', '{"value":"allowed"}', '--yes', '--json',
   ]);
   expect(JSON.parse(projectedMutation.stdout)).toEqual({
-    invocation: 'tool',
+    invocation: 'cli',
     operationId: 'tool:harness/apply',
     value: 'allowed',
   });

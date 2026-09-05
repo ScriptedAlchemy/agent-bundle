@@ -655,8 +655,15 @@ const parseMcpCommandInput = (
   command: CompiledCliCommand,
   parsed: ParsedArgv,
 ): ParsedArgv => {
-  if (command.projection !== undefined) return parsed;
   if (command.mcp === undefined) return parsed;
+  if (command.mcp.confirm && parsed.input['yes'] !== true) {
+    throw new CliUsageError(confirmationRequiredMessage(command.mcp.server, command.mcp.tool));
+  }
+  if (command.projection !== undefined) {
+    const input = { ...parsed.input };
+    delete input['yes'];
+    return { ...parsed, input };
+  }
   const raw = parsed.input['input'];
   let input: unknown = {};
   if (raw !== undefined) {
@@ -668,9 +675,6 @@ const parseMcpCommandInput = (
   }
   if (typeof input !== 'object' || input === null || Array.isArray(input)) {
     throw new CliUsageError('--input must be a JSON object; arrays, null, and scalar values are not accepted.');
-  }
-  if (command.mcp.confirm && parsed.input['yes'] !== true) {
-    throw new CliUsageError(confirmationRequiredMessage(command.mcp.server, command.mcp.tool));
   }
   return { ...parsed, input: input as Readonly<Record<string, unknown>> };
 };

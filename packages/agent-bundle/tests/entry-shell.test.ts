@@ -601,7 +601,7 @@ it('generates the warm react-server Flight worker separately from the MCP dispat
   })).toBe(source);
 });
 
-it('generates projected MCP commands with the same tool invocation and request contract as the MCP server', () => {
+it('generates bulk-projected MCP commands with the CLI invocation and preserves the tool route layout', () => {
   const route = {
     config: { annotations: { readOnlyHint: true } },
     id: 'tool:curator/read_item',
@@ -633,8 +633,8 @@ it('generates projected MCP commands with the same tool invocation and request c
   });
 
   expect(source).toContain('import * as route0 from "/project/src/mcp/curator/tools/read_item.tsx"');
-  expect(source).toContain("invocation: { kind: 'tool', props: { input: parsed, operationId: command.routeId } }");
-  expect(source).toContain('request: { artifactEpoch: "route-fixture@1.2.3", kind: \'tool\', operationId: command.routeId, surface: command.mcp.tool }');
+  expect(source).toContain("invocation: { kind: 'cli', props: { args: context.args, command: command.path.join(' ') } }");
+  expect(source).toContain("request: { kind: 'cli', operationId: command.routeId, surface: command.path.join(' ') }");
   expect(source).toContain('props: { input: parsed }');
   // The worker mounts providers from `message.invocation`, so the render
   // message must carry the dispatched invocation (#319 review) and the
@@ -704,18 +704,17 @@ it('imports explicit CLI projections and maps their input before canonical valid
   expect(source).toContain(
     '"tool:curator/submit": Object.freeze({ module: route0, projection: projection0 })',
   );
-  const confirmation = source.indexOf('if (command.projection !== undefined && command.mcp?.confirm === true)');
   const defaults = source.indexOf('for (const [key, value] of Object.entries(command.projection.defaults))');
   const mapping = source.indexOf('mapped = route.projection.mapInput(mapped)');
   const validation = source.indexOf('return route.module.inputSchema.parse(mapped)');
-  expect(confirmation).toBeGreaterThan(-1);
-  expect(confirmation).toBeLessThan(defaults);
+  expect(source).not.toContain('command.mcp?.confirm');
+  expect(source).not.toContain('confirmationRequiredMessage');
+  expect(source).not.toContain('delete mapped.yes');
+  expect(defaults).toBeGreaterThan(-1);
   expect(defaults).toBeLessThan(mapping);
   expect(mapping).toBeLessThan(validation);
-  expect(source).toContain('delete mapped.yes;');
   expect(source).toContain('if (!Object.hasOwn(mapped, key)) mapped[key] = value;');
   expect(source).not.toContain("Object.hasOwn(option, 'defaultValue')");
-  expect(source).toContain('confirmationRequiredMessage(command.mcp.server, command.mcp.tool)');
   expect(source).toContain("throw new TypeError(`CLI projection ${command.projection.module} for ${command.routeId} must export a mapInput function.`)");
   expect(source).toContain('throw new CliInputError(error instanceof Error ? error.message : String(error));');
   expect(source).toContain(
