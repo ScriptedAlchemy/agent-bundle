@@ -205,6 +205,25 @@ describe('static import value positions', () => {
     expect(reported('serveApp: for (const step of []) { break serveApp; }')).toBe(false);
   });
 
+  it('resolves a same-named parameter or local to its own declaration, not to the import', () => {
+    // The binding is used only as a type; the value read is the shadowing
+    // parameter, which SWC also resolves lexically, so the import is elided.
+    expect(reported('export default async ({ serveApp }: { serveApp: typeof serveApp }) => serveApp({ app: "x" });')).toBe(false);
+    expect(reported('export function open(serveApp: string) { return serveApp.length; }')).toBe(false);
+    expect(reported('export const open = () => { const serveApp = 1; return serveApp + 1; };')).toBe(false);
+    expect(reported('export const open = () => { function serveApp() { return 1; } return serveApp(); };')).toBe(false);
+    expect(reported('export const open = () => { try { return 1; } catch (serveApp) { return serveApp; } };')).toBe(false);
+    expect(reported('export const open = () => { for (const serveApp of []) { return serveApp; } };')).toBe(false);
+    expect(reported('let component: typeof ServeApp;\nexport function render(ServeApp: () => null) { return <ServeApp />; }', '{ ServeApp }', rendered)).toBe(false);
+    expect(reported('export function render(ServeApp: () => null) { return <ServeApp />; }\nexport const element = <ServeApp />;', '{ ServeApp }', rendered)).toBe(true);
+    // Outside the shadowing scope the same name is the import again.
+    expect(reported('export function open(serveApp: string) { return serveApp.length; }\nexport const run = serveApp;')).toBe(true);
+    expect(reported('export default async () => { { const serveApp = 1; } return serveApp({ app: "x" }); };')).toBe(true);
+    // `var` and function declarations hoist to their function scope.
+    expect(reported('export default async () => { if (Math.random()) { var serveApp = 1; } return serveApp; };')).toBe(false);
+    expect(reported('export default async () => serveApp();\nfunction serveApp() { return 1; }', '{ serveApp as api }')).toBe(false);
+  });
+
   it('reports default and namespace bindings by the same rule', () => {
     expect(specifiersOf(staticImport('export default async () => api.serveApp();', '* as api'))).toEqual(['static agent-bundle/api']);
     expect(staticImport('let options: api.ServeAppOptions;', '* as api')).toEqual([]);

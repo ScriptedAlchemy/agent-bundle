@@ -76,79 +76,50 @@ const scriptKindOf = (path: string): ts.ScriptKind => {
 const compareStrings = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
 
 /**
- * Whether one identifier occurrence reads the binding of that name at run
- * time. The bundler's SWC transform elides an import whose bindings are only
- * ever used as types — with or without the `type` keyword — so an import
- * counts as a value import only when some binding survives that elision.
- * Every position that is a *name* rather than a reference (`foo.serveApp`,
- * `{ serveApp: 1 }`, a declaration's own name, an import/export clause) is
- * ruled out first; then any ancestor that makes the occurrence a type-level
- * one (a type node, which covers `typeof x` type queries and `import('x')`
- * type nodes, an `implements` clause, a `type`/`interface`/type-parameter
- * declaration) or an ambient `declare` declaration rules it out too. Shadowing
- * declarations in nested scopes are not modelled: a same-named local
- * reference still counts, which errs toward reporting only in the
- * import-then-shadow-then-type-only case.
+ * A checker over the one parsed module — no library, nothing resolved. Only
+ * the binder's scope chain is wanted, so that an identifier occurrence names
+ * the declaration it actually refers to: a parameter or local spelled like an
+ * import binding resolves to itself, not to the import. Built lazily, and
+ * only for a module in which some identifier spells an import binding.
  */
-const isValueReference = (identifier: ts.Identifier): boolean => {
+const singleModuleChecker = (sourceFile: ts.SourceFile): ts.TypeChecker => {
+  const host: ts.CompilerHost = {
+    fileExists: (path) => path === sourceFile.fileName,
+    getCanonicalFileName: (path) => path,
+    getCurrentDirectory: () => '',
+    getDefaultLibFileName: () => 'lib.d.ts',
+    getNewLine: () => '\n',
+    getSourceFile: (path) => (path === sourceFile.fileName ? sourceFile : undefined),
+    readFile: (path) => (path === sourceFile.fileName ? sourceFile.text : undefined),
+    useCaseSensitiveFileNames: () => true,
+    writeFile: () => undefined,
+  };
+  const options: ts.CompilerOptions = { allowJs: true, noLib: true, noResolve: true, types: [] };
+  return ts.createProgram([sourceFile.fileName], options, host).getTypeChecker();
+};
+
+/**
+ * The declarations one identifier occurrence refers to at run time, per the
+ * binder — or none when the occurrence is not a reference at all: a property
+ * name (`foo.serveApp`, `{ serveApp: 1 }`), a declaration's own name, a
+ * label, an import clause, a type-only or remote export specifier. A
+ * shorthand property (`{ serveApp }`) and a local export (`export { serveApp
+ * as x }`) read the binding they spell, so those resolve to its declaration.
+ */
+const referencedDeclarations = (checker: ts.TypeChecker, identifier: ts.Identifier): readonly ts.Declaration[] => {
   const { parent } = identifier;
-  if (ts.isImportSpecifier(parent) || ts.isImportClause(parent) || ts.isNamespaceImport(parent)) return false;
-  if (ts.isExportSpecifier(parent)) return isLocalExportReference(identifier, parent);
-  if (ts.isPropertyAccessExpression(parent) && parent.name === identifier) return false;
-  if (ts.isMetaProperty(parent)) return false;
-  if (ts.isShorthandPropertyAssignment(parent)) return !isInTypeContext(parent);
-  if (
-    (ts.isPropertyAssignment(parent) ||
-      ts.isMethodDeclaration(parent) ||
-      ts.isPropertyDeclaration(parent) ||
-      ts.isPropertySignature(parent) ||
-      ts.isEnumMember(parent) ||
-      ts.isGetAccessorDeclaration(parent) ||
-      ts.isSetAccessorDeclaration(parent) ||
-      ts.isJsxAttribute(parent)) &&
-    parent.name === identifier
-  ) {
-    return false;
+  if (ts.isImportSpecifier(parent) || ts.isImportClause(parent) || ts.isNamespaceImport(parent)) return [];
+  let symbol: ts.Symbol | undefined;
+  if (ts.isShorthandPropertyAssignment(parent) && parent.name === identifier) {
+    symbol = checker.getShorthandAssignmentValueSymbol(parent);
+  } else if (ts.isExportSpecifier(parent)) {
+    const declaration = parent.parent.parent;
+    if (parent.isTypeOnly || declaration.isTypeOnly || declaration.moduleSpecifier !== undefined) return [];
+    symbol = checker.getExportSpecifierLocalTargetSymbol(parent);
+  } else {
+    symbol = checker.getSymbolAtLocation(identifier);
   }
-  if (ts.isBindingElement(parent) && (parent.propertyName === identifier || parent.name === identifier)) return false;
-  if (isDeclaredName(identifier, parent)) return false;
-  // A lowercase JSX tag is an intrinsic element, not a binding.
-  if (
-    (ts.isJsxOpeningLikeElement(parent) || ts.isJsxClosingElement(parent)) &&
-    parent.tagName === identifier &&
-    /^[a-z]/u.test(identifier.text)
-  ) {
-    return false;
-  }
-  return !isInTypeContext(parent);
-};
-
-/** `export { x }` / `export { x as y }` without a module specifier reads the local binding `x`. */
-const isLocalExportReference = (identifier: ts.Identifier, specifier: ts.ExportSpecifier): boolean => {
-  const declaration = specifier.parent.parent;
-  if (specifier.isTypeOnly || declaration.isTypeOnly || declaration.moduleSpecifier !== undefined) return false;
-  return (specifier.propertyName ?? specifier.name) === identifier;
-};
-
-/** True when the identifier is the declared name of its parent, not a reference. */
-const isDeclaredName = (identifier: ts.Identifier, parent: ts.Node): boolean => {
-  if (
-    ts.isVariableDeclaration(parent) ||
-    ts.isParameter(parent) ||
-    ts.isFunctionDeclaration(parent) ||
-    ts.isFunctionExpression(parent) ||
-    ts.isClassDeclaration(parent) ||
-    ts.isClassExpression(parent) ||
-    ts.isTypeAliasDeclaration(parent) ||
-    ts.isInterfaceDeclaration(parent) ||
-    ts.isEnumDeclaration(parent) ||
-    ts.isModuleDeclaration(parent) ||
-    ts.isTypeParameterDeclaration(parent)
-  ) {
-    return parent.name === identifier;
-  }
-  if (ts.isLabeledStatement(parent) || ts.isBreakOrContinueStatement(parent)) return parent.label === identifier;
-  return false;
+  return symbol?.declarations ?? [];
 };
 
 /** `class C extends X<T>`: the `X` expression is a value even though TypeScript types the node. */
@@ -183,23 +154,28 @@ const isInTypeContext = (start: ts.Node): boolean => {
   return false;
 };
 
-/** The local binding names an import declaration introduces as values (`type`-qualified specifiers excluded). */
-const valueBindingsOf = (clause: ts.ImportClause): readonly string[] => {
+/** A binding an import clause declares: the default name, the namespace, or one named specifier. */
+type ImportBinding = ts.ImportClause | ts.NamespaceImport | ts.ImportSpecifier;
+
+/** The bindings an import declaration introduces as values (`type`-qualified specifiers excluded). */
+const valueBindingsOf = (clause: ts.ImportClause): readonly ImportBinding[] => {
   if (clause.isTypeOnly) return [];
-  const names: string[] = [];
-  if (clause.name !== undefined) names.push(clause.name.text);
-  const bindings = clause.namedBindings;
-  if (bindings !== undefined) {
-    if (ts.isNamespaceImport(bindings)) {
-      names.push(bindings.name.text);
+  const bindings: ImportBinding[] = [];
+  if (clause.name !== undefined) bindings.push(clause);
+  const named = clause.namedBindings;
+  if (named !== undefined) {
+    if (ts.isNamespaceImport(named)) {
+      bindings.push(named);
     } else {
-      for (const element of bindings.elements) {
-        if (!element.isTypeOnly) names.push(element.name.text);
+      for (const element of named.elements) {
+        if (!element.isTypeOnly) bindings.push(element);
       }
     }
   }
-  return names;
+  return bindings;
 };
+
+const importBindingName = (binding: ImportBinding): string => binding.name!.text;
 
 /** Whether a re-export declaration emits JavaScript (SWC keeps every specifier not marked `type`). */
 const isValueReExport = (declaration: ts.ExportDeclaration): boolean => {
@@ -212,14 +188,32 @@ const isValueReExport = (declaration: ts.ExportDeclaration): boolean => {
 const moduleSpecifierText = (expression: ts.Expression | undefined): string | undefined =>
   expression !== undefined && ts.isStringLiteralLike(expression) ? expression.text : undefined;
 
-/** Every identifier text in `names` that some value position of the module reads. */
-const referencedValueBindings = (sourceFile: ts.SourceFile, names: ReadonlySet<string>): Set<string> => {
-  const referenced = new Set<string>();
+/**
+ * The import bindings among `bindings` that some value position of the module
+ * reads. The bundler's SWC transform elides an import whose bindings are only
+ * ever used as types — with or without the `type` keyword — so an import
+ * counts as a value import only when some binding survives that elision.
+ * An occurrence counts when no ancestor makes it type-level or ambient (a
+ * type node, which covers `typeof x` type queries and `import('x')` type
+ * nodes; an `implements` clause; a `type`/`interface`/type-parameter
+ * declaration; a `declare` declaration) and the binder resolves it to the
+ * import rather than to a same-named parameter or local.
+ */
+const referencedImportBindings = (
+  sourceFile: ts.SourceFile,
+  bindings: ReadonlySet<ImportBinding>,
+): Set<ImportBinding> => {
+  const names = new Set([...bindings].map(importBindingName));
+  const referenced = new Set<ImportBinding>();
+  let checker: ts.TypeChecker | undefined;
   const visit = (node: ts.Node): void => {
-    if (ts.isIdentifier(node) && names.has(node.text) && !referenced.has(node.text) && isValueReference(node)) {
-      referenced.add(node.text);
+    if (ts.isIdentifier(node) && names.has(node.text) && !isInTypeContext(node.parent)) {
+      checker ??= singleModuleChecker(sourceFile);
+      for (const declaration of referencedDeclarations(checker, node)) {
+        if ((bindings as ReadonlySet<ts.Declaration>).has(declaration)) referenced.add(declaration as ImportBinding);
+      }
     }
-    if (referenced.size < names.size) ts.forEachChild(node, visit);
+    if (referenced.size < bindings.size) ts.forEachChild(node, visit);
   };
   visit(sourceFile);
   return referenced;
@@ -250,7 +244,7 @@ interface ValueImport {
  */
 const valueImportsOf = (sourceFile: ts.SourceFile): readonly ValueImport[] => {
   const imports: ValueImport[] = [];
-  const staticBindings = new Map<string, Set<string>>();
+  const staticBindings = new Map<string, Set<ImportBinding>>();
   for (const statement of sourceFile.statements) {
     if (ts.isImportDeclaration(statement)) {
       const specifier = moduleSpecifierText(statement.moduleSpecifier);
@@ -261,7 +255,7 @@ const valueImportsOf = (sourceFile: ts.SourceFile): readonly ValueImport[] => {
       }
       const bindings = valueBindingsOf(statement.importClause);
       if (bindings.length === 0) continue;
-      const known = staticBindings.get(specifier) ?? new Set<string>();
+      const known = staticBindings.get(specifier) ?? new Set<ImportBinding>();
       for (const binding of bindings) known.add(binding);
       staticBindings.set(specifier, known);
       continue;
@@ -272,8 +266,8 @@ const valueImportsOf = (sourceFile: ts.SourceFile): readonly ValueImport[] => {
     }
   }
   if (staticBindings.size > 0) {
-    const names = new Set([...staticBindings.values()].flatMap((bindings) => [...bindings]));
-    const referenced = referencedValueBindings(sourceFile, names);
+    const all = new Set([...staticBindings.values()].flatMap((bindings) => [...bindings]));
+    const referenced = referencedImportBindings(sourceFile, all);
     for (const [specifier, bindings] of staticBindings) {
       if ([...bindings].some((binding) => referenced.has(binding))) imports.push({ form: 'static', specifier });
     }

@@ -25,7 +25,7 @@ import {
 } from './contract.ts';
 import { validateRouteFrameworkImports } from './framework-imports.ts';
 import { extractInputSchema } from './input-schema.ts';
-import { isLayoutRouteKind } from './layouts.ts';
+import { isLayoutRouteKind, layoutChainFor } from './layouts.ts';
 import { providerKeyFromName } from './providers.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { digest } from '../core/digest.ts';
@@ -751,19 +751,11 @@ export const compileRouteGraph = async (
       });
       const layoutText = await readRouteModuleText(module.source);
       if (layoutText !== undefined) {
+        moduleTextBySource.set(module.source, layoutText);
         diagnostics.push(...validateLayoutModuleContract(
           layoutText,
           module.relativePath,
           module.source,
-        ));
-        // A layout is inlined into every executable that renders the routes
-        // it wraps, so it bundles the compiler exactly as a route would.
-        diagnostics.push(...validateRouteFrameworkImports(
-          layoutText,
-          module.relativePath,
-          module.source,
-          'generated executable',
-          'Layout module',
         ));
       }
       continue;
@@ -777,19 +769,11 @@ export const compileRouteGraph = async (
       });
       const providerText = await readRouteModuleText(module.source);
       if (providerText !== undefined) {
+        moduleTextBySource.set(module.source, providerText);
         diagnostics.push(...validateProviderModuleContract(
           providerText,
           module.relativePath,
           module.source,
-        ));
-        // Providers mount in every generated request scope, so each
-        // executable inlines them.
-        diagnostics.push(...validateRouteFrameworkImports(
-          providerText,
-          module.relativePath,
-          module.source,
-          'generated executable',
-          'Provider module',
         ));
       }
       continue;
@@ -1038,6 +1022,43 @@ export const compileRouteGraph = async (
         ));
       }
       cli = { mode, routes: mode === 'conventional' ? [] : cliRoutes };
+    }
+  }
+
+  // AB4837 (#558) for layouts and providers, judged once the generated
+  // surfaces are known. A worker imports only the layouts some route it
+  // renders composes through (`workerLayouts` in build/entry-shell.ts), so a
+  // layout no generated rendered route reaches — a root layout in a project
+  // of Apps and event routes, a server layout of a custom server — is never
+  // bundled and is not judged. Providers mount in every generated request
+  // scope, so they are judged as soon as one generated executable exists.
+  const renderedRoutes = [
+    ...servers.filter((server) => server.mode === 'generated').flatMap((server) => server.routes),
+    ...(cli?.mode === 'generated' ? cli.routes : []),
+    ...scripts,
+  ];
+  for (const layout of layouts) {
+    const layoutText = moduleTextBySource.get(layout.source);
+    if (layoutText === undefined || !renderedRoutes.some((route) => layoutChainFor(route, [layout]).length > 0)) continue;
+    diagnostics.push(...validateRouteFrameworkImports(
+      layoutText,
+      layout.provenance.relativePath,
+      layout.source,
+      'generated executable',
+      'Layout module',
+    ));
+  }
+  if (renderedRoutes.length > 0 || events.length > 0) {
+    for (const provider of providers) {
+      const providerText = moduleTextBySource.get(provider.source);
+      if (providerText === undefined) continue;
+      diagnostics.push(...validateRouteFrameworkImports(
+        providerText,
+        provider.provenance.relativePath,
+        provider.source,
+        'generated executable',
+        'Provider module',
+      ));
     }
   }
 

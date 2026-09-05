@@ -261,6 +261,8 @@ export const spawnServeApp = async (options: SpawnServeAppOptions): Promise<Spaw
     }
     let ready: ServeAppReadyLine | undefined;
     let buffered = '';
+    let spawned = false;
+    let lateError: Error | undefined;
     let settledExit: ServeAppExit | undefined;
     let resolveExit: (exit: ServeAppExit) => void = () => undefined;
     const closed = new Promise<ServeAppExit>((resolveClosed) => {
@@ -309,7 +311,7 @@ export const spawnServeApp = async (options: SpawnServeAppOptions): Promise<Spaw
         reject(new ServeAppCommandError(
           'exited-before-ready',
           `agent-bundle serve-app exited with ${describeExit(exit)} before serving ${options.app}; its diagnostics are on stderr.`,
-          { exit },
+          { exit, ...(lateError === undefined ? {} : { cause: lateError }) },
         ));
       }
     };
@@ -320,7 +322,19 @@ export const spawnServeApp = async (options: SpawnServeAppOptions): Promise<Spaw
       buffered = lines.pop() ?? '';
       for (const line of lines) onLine(line);
     });
-    child.once('error', (error) => {
+    child.once('spawn', () => {
+      spawned = true;
+    });
+    child.on('error', (error) => {
+      // Before the process exists, `error` is the one notice Node gives and
+      // `close` may never follow: the spawn failed. Once the process runs,
+      // `error` reports a failed `kill()` and the process is still alive, so
+      // only its real `close` may settle `closed`; the error is kept as the
+      // cause should the child then exit before its ready line.
+      if (spawned) {
+        lateError = error;
+        return;
+      }
       finish(
         { code: null, signal: null },
         new ServeAppCommandError('spawn-failed', `agent-bundle serve-app could not be started from ${cli}.`, { cause: error }),

@@ -252,6 +252,54 @@ it('rejects spawn-failed with the cause whether spawn throws or the child report
   expect(reported.message).toContain(cli);
 });
 
+it('keeps closed pending through a post-spawn error until the child really exits', async () => {
+  // Node reports a failed `kill()` on a running child as `error`; unlike a
+  // spawn failure the process is still alive, so the exit must not be
+  // fabricated: `closed` settles with the real exit, `close()` still works.
+  const root = await temporaryDirectory();
+  const { cli } = await servingCli(root);
+  let child: ChildProcess | undefined;
+  const capturing = asSpawn((...args) => {
+    child = trackingSpawn(...args);
+    return child;
+  });
+  const served = await spawnServeApp({ app, cli, relay: relayInto([]), root, spawn: capturing });
+  child!.emit('error', new Error('kill EPERM'));
+  let settled = false;
+  void served.closed.then(() => { settled = true; });
+  await new Promise((resolve) => { setTimeout(resolve, 50); });
+  expect(settled).toBe(false);
+  expect(isAlive(served.pid)).toBe(true);
+  await expect(served.close()).resolves.toEqual({ code: 0, signal: null });
+  await untilGone(served.pid);
+});
+
+it('carries a post-spawn error as the cause when the child then exits before its ready line', async () => {
+  const root = await temporaryDirectory();
+  // The handler is installed before the noise line, so a SIGTERM that
+  // follows the line is never racing it.
+  const cli = await writeFakeCli(root, 'never-ready', [
+    "process.on('SIGTERM', () => { process.exit(3); });",
+    "process.stdout.write('Building…\\n');",
+    'setInterval(() => undefined, 60_000);',
+  ]);
+  let child: ChildProcess | undefined;
+  const capturing = asSpawn((...args) => {
+    child = trackingSpawn(...args);
+    return child;
+  });
+  const lines: string[] = [];
+  const pending = spawnServeApp({ app, cli, relay: relayInto(lines), root, spawn: capturing });
+  await eventuallyPasses(() => { expect(lines).toEqual(['Building…']); }, polling);
+  const late = new Error('kill EPERM');
+  child!.emit('error', late);
+  child!.kill('SIGTERM');
+  const failure = await rejection(pending);
+  expect(failure.code).toBe('exited-before-ready');
+  expect(failure.exit).toEqual({ code: 3, signal: null });
+  expect(failure.cause).toBe(late);
+});
+
 it('classifies the real CLI failing fast on a missing artifact manifest as exited-before-ready', async () => {
   const root = await temporaryDirectory();
   await writeFile(join(root, 'package.json'), '{"type":"module"}\n');
