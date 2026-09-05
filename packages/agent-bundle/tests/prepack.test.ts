@@ -1,7 +1,7 @@
 import { execFile as executeFile } from 'node:child_process';
 import { cp, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, relative } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { promisify } from 'node:util';
 import { gzipSync } from 'node:zlib';
 
@@ -9,7 +9,7 @@ import { afterAll, beforeAll, expect, it } from '@rstest/core';
 
 import { prepack } from '../src/api.ts';
 import { runCli } from '../src/cli.ts';
-import type { Diagnostic } from '../src/core/diagnostics.ts';
+import { type Diagnostic, DiagnosticError } from '../src/core/diagnostics.ts';
 import { captureCliTerminal } from './support/cli-terminal.ts';
 import {
   packInventoryDiagnostics,
@@ -856,6 +856,96 @@ it('accepts a dependency that packed JavaScript imports, requires, or only resol
     }
   },
 ));
+
+/**
+ * A sibling project under `cleanupRoot`, laid out like `projectRoot`: the
+ * workspace's node_modules, a manifest, a README, a config, and its files.
+ * Tests that run a whole `prepack` get their own project so the shared
+ * fixture's artifacts and manifest stay untouched.
+ */
+const createSiblingProject = async (
+  name: string,
+  packageDocument: Readonly<Record<string, unknown>>,
+  configLines: readonly string[],
+  files: Readonly<Record<string, string>>,
+): Promise<string> => {
+  const root = join(cleanupRoot, name);
+  await mkdir(join(root, 'src'), { recursive: true });
+  await symlink(workspaceNodeModules, join(root, 'node_modules'), 'dir');
+  await Promise.all([
+    writeFile(join(root, 'package.json'), `${JSON.stringify(packageDocument, null, 2)}\n`),
+    writeFile(join(root, 'README.md'), `# ${name}\n`),
+    writeFile(join(root, 'agent-bundle.config.ts'), `${configLines.join('\n')}\n`),
+    ...Object.entries(files).map(async ([path, content]) => {
+      await mkdir(dirname(join(root, path)), { recursive: true });
+      await writeFile(join(root, path), content);
+    }),
+  ]);
+  return root;
+};
+
+it('accepts a dependency that only a prebuilt payload module imports: prepack passes, AB6005 does not walk copied files', async () => {
+  const root = await createSiblingProject('prebuilt-project', {
+    bin: { 'prebuilt-fixture': './dist/bin/prebuilt-fixture.js' },
+    dependencies: { express: '^5.0.0' },
+    files: ['dist', 'host-packs', 'README.md'],
+    name: 'prebuilt-fixture',
+    type: 'module',
+    version: '1.2.3',
+  }, [
+    'export default {',
+    '  bin: false,',
+    "  lib: './src/index.ts',",
+    "  mcp: { servers: { timeline: { entry: { prebuilt: './built/runtime/mcp/server.js' }, transport: 'stdio' } } },",
+    "  output: { distPath: 'host-packs' },",
+    "  payload: { runtime: './built/runtime' },",
+    "  plugin: { name: 'prebuilt-fixture' },",
+    "  targets: ['cursor'],",
+    '};',
+  ], {
+    // A bare import in a module the framework copies rather than compiles: AB6005 never walks it, and the
+    // import is the usage evidence that keeps `express` out of AB7014.
+    'built/runtime/mcp/server.js': 'import express from "express";\nexport default express;\n',
+    'src/index.ts': 'export const value = 1;\n',
+  });
+  const packed = await prepack({ root });
+  const reported = [...packed.build.diagnostics, ...packed.diagnostics];
+  expect(withCode(reported, 'AB6005')).toHaveLength(0);
+  expect(withCode(reported, 'AB7014')).toHaveLength(0);
+  expect(packed.pack.files.map((file) => file.path)).toContain('host-packs/cursor/runtime/mcp/server.js');
+}, 180_000);
+
+it('fails prepack with AB6005, never AB7014, when only a compiled dist bundle imports a declared dependency', async () => {
+  const root = await createSiblingProject('externalized-project', {
+    dependencies: { 'left-pad': '^1.3.0' },
+    files: ['dist', 'host-packs', 'README.md'],
+    name: 'externalized-fixture',
+    type: 'module',
+    version: '1.2.3',
+  }, [
+    'export default {',
+    '  bin: false,',
+    "  lib: { entry: './src/index.ts', dts: false },",
+    "  output: { distPath: 'host-packs' },",
+    "  plugin: { name: 'externalized-fixture' },",
+    "  targets: ['cursor'],",
+    // The hatch keeps the import external, so the compiled bundle carries a bare specifier.
+    "  tools: { rsbuild: { output: { externals: ['left-pad'] } } },",
+    '};',
+  ], {
+    'src/index.ts': "import leftPad from 'left-pad';\nexport const pad = (value: string): string => leftPad(value, 4);\n",
+  });
+  const failure: unknown = await prepack({ root }).then(() => undefined, (error: unknown) => error);
+  expect(failure).toBeInstanceOf(DiagnosticError);
+  const reported = (failure as DiagnosticError).diagnostics;
+  expect(reported).toContainEqual(expect.objectContaining({
+    code: 'AB6005',
+    generatedPath: 'dist/index.js',
+    message: expect.stringContaining('"left-pad"'),
+  }));
+  // The build fails before the inventory runs, so the two gates cannot disagree about the same dependency.
+  expect(withCode(reported, 'AB7014')).toHaveLength(0);
+}, 180_000);
 
 it('installs a real packed tarball and runs its Cursor installer from node_modules', async () => {
   const tarballs = join(cleanupRoot, 'tarballs');
