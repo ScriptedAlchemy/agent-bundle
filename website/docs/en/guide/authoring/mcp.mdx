@@ -1068,7 +1068,12 @@ resolved launch identity; a successful rebuild retires unused sessions of older 
 still leasing one keep it until their last lease releases), and a failed rebuild retires
 nothing. An opening tool annotated
 `readOnlyHint: true` runs on every page load; any other opening tool runs once per session,
-tool, App, and input, and a refresh rebinds that retained result.
+tool, App, and input. Concurrent first loads share the same in-flight call, and refreshes rebind
+its retained result without gaining authority to repeat the operation. Results are bounded and
+may be evicted independently of the execution record; after eviction, after a failed call whose
+side effects are unknown, or when the bounded execution ledger is full, the page receives an
+error result directing the user to run the tool explicitly from the App instead of retrying it
+automatically.
 
 `agent-bundle serve-app` is unchanged: it is the checkout-time form that builds or points at an
 artifact and needs the framework installed. Every option is in the
