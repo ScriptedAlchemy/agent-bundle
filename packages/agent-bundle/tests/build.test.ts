@@ -5,6 +5,7 @@ import { dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { expect, it } from '@rstest/core';
 import { spawn } from 'node:child_process';
+import { createRslib } from '@rslib/core';
 import { createJiti } from 'jiti';
 
 import { build as buildArtifact, type BuildOptions as LowLevelBuildOptions, type BuildResult } from '../src/build/build.ts';
@@ -1157,6 +1158,115 @@ it('inlines reserved specifiers through exact-match aliases and virtual generate
       path: 'scripts/reserved-probe.mjs',
       sourceInputs: [join(root, 'src', 'entry.ts'), join(root, 'src', 'shell.ts')],
     }]);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 20_000);
+
+it('lowers every bundler config and builds under NODE_ENV=development, leaving NODE_ENV as it found it', async () => {
+  const { entry, root } = await reservedSpecifierProject();
+  const previousNodeEnv = process.env.NODE_ENV;
+  const inspectedConfigCounts: number[] = [];
+  process.env.NODE_ENV = 'development';
+  try {
+    await buildWithRslib({ cwd: root, entries: [entry], meta: testMeta, outputRoot: join(root, 'dist') }, {
+      createRslib: async (options) => {
+        const rslib = await createRslib(options);
+        return {
+          build: (buildOptions) => rslib.build(buildOptions),
+          inspectConfig: async (inspectOptions) => {
+            const inspection = await rslib.inspectConfig(inspectOptions);
+            inspectedConfigCounts.push(inspection.origin.bundlerConfigs.length);
+            return inspection;
+          },
+        };
+      },
+    });
+    // Rslib 1.x infers the inspect mode from NODE_ENV and, under development,
+    // inspects only `mf` libs — none here — unless the compiler asks for the
+    // production configs explicitly, which it does for every entry.
+    expect(inspectedConfigCounts).toEqual([1]);
+    // Rslib writes the inspected mode to NODE_ENV; the compiler hands the
+    // process its own value back.
+    expect(process.env.NODE_ENV).toBe('development');
+    await expect(readFile(join(root, 'dist', 'scripts', 'reserved-probe.mjs'), 'utf8')).resolves
+      .toContain('generated-wrapper-marker');
+  } finally {
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
+    await rm(root, { force: true, recursive: true });
+  }
+}, 20_000);
+
+it('leaves NODE_ENV unset when a failing inspection had set it', async () => {
+  const { entry, root } = await reservedSpecifierProject();
+  const previousNodeEnv = process.env.NODE_ENV;
+  delete process.env.NODE_ENV;
+  try {
+    await expect(buildWithRslib({ cwd: root, entries: [entry], meta: testMeta, outputRoot: join(root, 'dist') }, {
+      createRslib: async () => ({
+        build: () => Promise.reject(new Error('build must not run after a failed inspection')),
+        inspectConfig: async () => {
+          // Rslib writes the requested mode to NODE_ENV before it can fail.
+          process.env.NODE_ENV = 'production';
+          throw new Error('inspection failed');
+        },
+      }),
+    })).rejects.toThrow('inspection failed');
+    expect(process.env.NODE_ENV).toBeUndefined();
+  } finally {
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('leaves filesystem URL and worker expressions in the emitted bundle untouched', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-resource-references-'));
+  const sourceRoot = join(root, 'src');
+  await mkdir(sourceRoot, { recursive: true });
+  await writeFile(join(root, 'package.json'), '{"type":"module"}\n');
+  await writeFile(join(sourceRoot, 'sibling.json'), '{"present":true}\n');
+  // The shapes generated entries and plugin code spell: the artifact root, a
+  // sibling that exists only in the output, a sibling that exists beside the
+  // source, a templated sibling, and the Flight worker. Rslib 1.x would
+  // otherwise fail the build on the first two, copy the third into
+  // `static/`, turn the fourth into a directory lookup that throws at run
+  // time, and bundle the fifth as a worker entry.
+  await writeFile(join(sourceRoot, 'entry.ts'), [
+    "import { Worker } from 'node:worker_threads';",
+    "export const artifactRoot = new URL('../', import.meta.url);",
+    "export const generated = new URL('./generated.js', import.meta.url);",
+    "export const present = new URL('./sibling.json', import.meta.url);",
+    'export const templated = (name: string) => new URL(`./event-${name}.js`, import.meta.url);',
+    "export const spawn = () => new Worker(new URL('./entry-flight.mjs', import.meta.url), { stderr: true, stdout: true });",
+    '',
+  ].join('\n'));
+  try {
+    await buildWithRslib({
+      cwd: root,
+      entries: [{
+        name: 'references',
+        outputRelativePath: 'scripts/references.mjs',
+        source: join(sourceRoot, 'entry.ts'),
+        sourceInputs: [join(sourceRoot, 'entry.ts')],
+      }],
+      meta: testMeta,
+      outputRoot: join(root, 'dist'),
+    });
+    const bundle = await readFile(join(root, 'dist', 'scripts', 'references.mjs'), 'utf8');
+    for (const expression of [
+      "new URL('../', import.meta.url)",
+      "new URL('./generated.js', import.meta.url)",
+      "new URL('./sibling.json', import.meta.url)",
+      'new URL(`./event-${name}.js`, import.meta.url)',
+      "new Worker(new URL('./entry-flight.mjs', import.meta.url)",
+    ]) {
+      expect(bundle).toContain(expression);
+    }
+    // Nothing was copied out as a static asset or built as a worker entry.
+    await expect(readdir(join(root, 'dist'))).resolves.toEqual(['scripts']);
+    await expect(readdir(join(root, 'dist', 'scripts'))).resolves.toEqual(['references.mjs']);
   } finally {
     await rm(root, { force: true, recursive: true });
   }
