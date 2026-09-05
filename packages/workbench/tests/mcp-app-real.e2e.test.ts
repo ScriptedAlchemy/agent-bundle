@@ -117,20 +117,39 @@ const writeBundledAppProject = async (root: string): Promise<void> => {
     mkdir(join(root, 'src'), { recursive: true }),
     mkdir(join(root, 'views'), { recursive: true }),
     symlink(join(agentBundleNodeModules, '@modelcontextprotocol'), join(root, 'node_modules', '@modelcontextprotocol'), 'dir'),
+    symlink(join(workbenchNodeModules, 'zod'), join(root, 'node_modules', 'zod'), 'dir'),
   ]);
   await Promise.all([
     writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
     writeFile(join(root, 'views', 'dashboard.css'), '#view { color: rgb(18, 52, 86); font-weight: 700; }\n'),
     writeFile(join(root, 'views', 'dashboard.ts'), [
+      "import { createAppClient } from 'agent-bundle/app';",
       "import './dashboard.css';",
-      "document.querySelector('#view')!.textContent = 'packed release dashboard';",
+      '',
+      "const view = document.querySelector('#view')!;",
+      "view.textContent = 'connecting';",
+      'const client = createAppClient({',
+      "  appInfo: { name: 'bundled-app-fixture', version: '1.0.0' },",
+      '});',
+      'const run = async () => {',
+      '  await client.connect();',
+      "  view.textContent = 'connected';",
+      '  try {',
+      "    const called = await client.call('tool:fixture/inner-echo', { message: 'from-compiled-app' });",
+      '    view.textContent = JSON.stringify(called);',
+      '  } catch (error) {',
+      "    view.textContent = error instanceof Error ? error.message : 'call failed';",
+      '  }',
+      '};',
+      'void run();',
       '',
     ].join('\n')),
-    writeFile(join(root, 'views', 'shell.html'), '<!doctype html><html><body><main id="view"></main></body></html>\n'),
+    writeFile(join(root, 'views', 'shell.html'), '<!doctype html><html><body><main id="view">waiting</main></body></html>\n'),
     writeFile(join(root, 'src', 'server.ts'), [
       "import { McpServer } from '@modelcontextprotocol/server';",
       "import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';",
       "import apps from 'agent-bundle/mcp-apps';",
+      "import { z } from 'zod';",
       '',
       "const server = new McpServer({ name: 'bundled-app-fixture', version: '1.0.0' });",
       'for (const app of apps) {',
@@ -142,6 +161,11 @@ const writeBundledAppProject = async (root: string): Promise<void> => {
       "if (app === undefined) throw new Error('Expected one bundled MCP App.');",
       "server.registerTool('show-dashboard', { _meta: { ui: { resourceUri: app.resourceUri } } }, async () => ({",
       "  content: [{ text: 'Packed release dashboard.', type: 'text' }],",
+      "  structuredContent: { source: 'packed-release' },",
+      '}));',
+      "server.registerTool('inner-echo', { inputSchema: z.object({ message: z.string() }) }, async ({ message }) => ({",
+      "  content: [{ text: `Inner echo: ${message}`, type: 'text' }],",
+      '  structuredContent: { echo: message },',
       '}));',
       'await server.connect(new StdioServerTransport());',
       '',
@@ -1715,7 +1739,7 @@ e2e('keeps Portable, ChatGPT, and Claude simulated App profiles isolated over on
   }
 });
 
-e2e('renders a compiler-bundled App template through the canonical sandbox URL', { timeout: 90_000 * timeScale }, async ({ page }) => {
+e2e('renders a compiler-bundled App that calls the host through createAppClient', { timeout: 90_000 * timeScale }, async ({ page }) => {
   let project: Awaited<ReturnType<typeof createProjectFixture>> | undefined;
   let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
   let testFailure: unknown;
@@ -1761,21 +1785,29 @@ e2e('renders a compiler-bundled App template through the canonical sandbox URL',
     const source = await outerFrame.getAttribute('src');
     if (source === null) throw new Error('Expected the bundled App preview iframe to have a source.');
     expect(new URL(source).origin).not.toBe(foregroundOrigin);
+    await expect(outerFrame).toHaveAttribute('data-mcp-app-relay-state', 'ready', { timeout: browserTimeout });
     await expect.poll(() => page.frames().filter((frame) => frame.url() === 'about:blank').length, { timeout: browserTimeout }).toBe(1);
     const appFrame = page.frames().find((frame) => frame.url() === 'about:blank');
     if (appFrame === undefined) throw new Error('Expected the sandbox proxy to create the bundled App srcdoc frame.');
-    await expect(appFrame.locator('#view')).toHaveText('packed release dashboard', { timeout: browserTimeout });
+    await expect.poll(() => appRequests.some((request) => request.method === 'POST' && request.path.endsWith('/messages')), {
+      timeout: browserTimeout,
+    }).toBe(true);
+    const consent = page.getByLabel('MCP App consent');
+    await expect(consent).toContainText('Tool: inner-echo', { timeout: browserTimeout });
+    const allowCallTool = page.getByRole('button', { name: 'Allow call tool' });
+    await expect(allowCallTool).toBeEnabled({ timeout: browserTimeout });
+    await allowCallTool.click();
+    await expect(appFrame.locator('#view')).toHaveText('{"echo":"from-compiled-app"}', { timeout: browserTimeout });
     await expect(appFrame.locator('#view')).toHaveCSS('color', 'rgb(18, 52, 86)', { timeout: browserTimeout });
     await expect(appFrame.locator('#view')).toHaveCSS('font-weight', '700', { timeout: browserTimeout });
     expect(appRequests.some((request) => request.method === 'GET' && /^\/api\/mcp\/apps\/[^/]+$/u.test(request.path))).toBe(false);
 
-    const fallbackClosed = page.waitForResponse((response) => {
-      const request = response.request();
-      const url = new URL(response.url());
-      return request.method() === 'DELETE' && url.origin === foregroundOrigin && /^\/api\/mcp\/apps\/[^/]+$/u.test(url.pathname);
+    const closed = page.waitForRequest((request) => {
+      const url = new URL(request.url());
+      return url.origin === foregroundOrigin && request.url().startsWith(`${foregroundOrigin}/api/mcp/apps/`) && request.url().endsWith('/close');
     }, { timeout: 30_000 * timeScale });
     await page.getByRole('button', { name: 'Close App preview' }).click();
-    expect((await fallbackClosed).status()).toBe(200);
+    await closed;
     await expect(outerFrame).toBeHidden({ timeout: browserTimeout });
     expect(consoleErrors).toEqual([]);
     expect(pageErrors).toEqual([]);

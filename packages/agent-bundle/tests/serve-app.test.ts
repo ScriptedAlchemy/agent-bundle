@@ -6,14 +6,21 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, expect, it } from '@rstest/core';
 
 import { build, serveApp } from '../src/api.ts';
+import {
+  AppClientError,
+  type AppMessageEvent,
+  type AppMessageTarget,
+  type AppWindow,
+  createAppClient,
+} from '../src/app/index.ts';
 import { MCP_APP_PROTOCOL_VERSION } from '../src/dev/mcp-apps/mcp-app-bridge.ts';
 import { SERVE_APP_TOKEN_HEADER } from '../src/serve-app/serve-app-page.ts';
 import { timeScale } from './support/time-scale.ts';
 
 /**
  * `agent-bundle serve-app` end to end over a real packed server: build the
- * public MCP App example, serve its App, and drive the host document's
- * protocol by hand — the same `/api/mcp/...` routes the Workbench relay
+ * public MCP App example, serve its App, and drive the host through
+ * `createAppClient` — the same `/api/mcp/...` routes the Workbench relay
  * uses — from the initialize handshake through a consented `tools/call`,
  * then close and verify every listener is gone.
  */
@@ -220,46 +227,88 @@ it('serves the MCP App example standalone over its packed server and relays the 
     expect(await sandboxDocument.text()).toContain('MCP App sandbox');
 
     const messagesPath = `/api/mcp/apps/${encodeURIComponent(preview.bindingId)}/messages`;
-    const relay = async (message: JsonRpc): Promise<{ readonly lifecycle: string; readonly messages: readonly JsonRpc[] }> =>
-      await api('POST', messagesPath, { message }) as { readonly lifecycle: string; readonly messages: readonly JsonRpc[] };
-
-    // The MCP Apps handshake the App performs from inside the sandbox.
-    const initialized = await relay({
-      id: 1,
-      jsonrpc: '2.0',
-      method: 'ui/initialize',
-      params: {
-        appCapabilities: { availableDisplayModes: ['inline'] },
-        appInfo: { name: 'mcp-app-example', version: '1.0.0' },
-        protocolVersion: MCP_APP_PROTOCOL_VERSION,
-      },
-    });
-    expect(initialized.lifecycle).toBe('initializing');
-    expect(initialized.messages).toMatchObject([{
-      id: 1,
-      result: { hostInfo: { name: 'agent-bundle' }, protocolVersion: MCP_APP_PROTOCOL_VERSION },
-    }]);
-    const opening = await relay({ jsonrpc: '2.0', method: 'ui/notifications/initialized' });
-    expect(opening.lifecycle).toBe('initialized');
-    expect(opening.messages).toMatchObject([
-      { method: 'ui/notifications/tool-input', params: { arguments: { service: 'compiler' } } },
-      { method: 'ui/notifications/tool-result', params: { structuredContent: { service: 'compiler', status: 'healthy' } } },
-    ]);
-
-    // A tools/call from the App reaches the packed server only through consent, as in the Workbench.
-    const pending = await relay({ id: 2, jsonrpc: '2.0', method: 'tools/call', params: { arguments: { service: 'payments-api' }, name: 'show-status' } });
-    expect(pending.messages).toEqual([]);
     const consentPath = `/api/mcp/apps/${encodeURIComponent(preview.bindingId)}/consent`;
-    const challenges = (await api('GET', consentPath)).challenges as readonly { readonly id: string; readonly request: { readonly capability: string } }[];
-    expect(challenges).toMatchObject([{ request: { capability: 'call-tool', details: { arguments: { service: 'payments-api' }, name: 'show-status' } } }]);
-    const decided = await api('POST', consentPath, { approved: true, challengeId: challenges[0]!.id });
-    expect(decided.approved).toBe(true);
-    expect(decided.messages).toMatchObject([{
-      id: 2,
-      result: { structuredContent: { service: 'payments-api', status: 'degraded' } },
-    }]);
+    const hostMethods: string[] = [];
+    const openingInputs: unknown[] = [];
+    let approveCalls = true;
+
+    const decideConsent = async (approved: boolean): Promise<readonly JsonRpc[]> => {
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        const listed = await api('GET', consentPath);
+        const challenges = listed.challenges as readonly { readonly id: string }[];
+        const challenge = challenges[0];
+        if (challenge !== undefined) {
+          const decided = await api('POST', consentPath, { approved, challengeId: challenge.id });
+          return (decided.messages ?? []) as readonly JsonRpc[];
+        }
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      throw new Error('The serve-app host did not publish a consent challenge.');
+    };
+
+    const listeners = new Set<(event: AppMessageEvent) => void>();
+    const parent: AppMessageTarget = {
+      postMessage(message) {
+        void (async () => {
+          try {
+            const relayed = await api('POST', messagesPath, { message }) as {
+              readonly messages: readonly JsonRpc[];
+            };
+            let incoming = relayed.messages;
+            if (
+              incoming.length === 0
+              && typeof message === 'object'
+              && message !== null
+              && 'method' in message
+              && message.method === 'tools/call'
+            ) {
+              incoming = await decideConsent(approveCalls);
+            }
+            for (const data of incoming) {
+              if (typeof data === 'object' && data !== null && typeof data.method === 'string') {
+                hostMethods.push(data.method);
+              }
+              for (const listener of [...listeners]) {
+                listener({ data, origin, source: parent });
+              }
+            }
+          } catch {
+            // The client's pending request keeps its own timeout.
+          }
+        })();
+      },
+    };
+    const window: AppWindow = {
+      parent,
+      addEventListener(_type, listener) { listeners.add(listener); },
+      removeEventListener(_type, listener) { listeners.delete(listener); },
+    };
+
+    const client = createAppClient({
+      appInfo: { name: 'mcp-app-example', version: '1.0.0' },
+      window,
+    });
+    client.onToolInput('tool:status/show-status', (input) => { openingInputs.push(input); });
+
+    const initialized = await client.connect();
+    expect(initialized).toMatchObject({
+      hostInfo: { name: 'agent-bundle' },
+      protocolVersion: MCP_APP_PROTOCOL_VERSION,
+    });
+    expect(client.connected).toBe(true);
+    await expect.poll(() => openingInputs, { timeout: 5_000 * timeScale }).toEqual([{ service: 'compiler' }]);
+    await expect.poll(() => hostMethods.includes('ui/notifications/tool-result'), { timeout: 5_000 * timeScale }).toBe(true);
+
+    await expect(client.call('tool:status/show-status', { service: 'payments-api' }))
+      .resolves.toMatchObject({ service: 'payments-api', status: 'degraded' });
     expect(await api('GET', consentPath)).toMatchObject({ challenges: [] });
+
+    approveCalls = false;
+    const denied = client.call('tool:status/show-status', { service: 'payments-api' });
+    await expect(denied).rejects.toBeInstanceOf(AppClientError);
+    await expect(denied).rejects.toMatchObject({ code: 'consent-required' });
     expect(closed).toBe(false);
+    client.dispose();
   } finally {
     await served.close();
   }

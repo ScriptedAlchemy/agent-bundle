@@ -9,6 +9,7 @@ import { stableJson } from '../core/digest.ts';
 import type { NormalizedHook, NormalizedNoticeRetentionPolicy, NormalizedStateDefinition } from '../core/types.ts';
 import { orderedProviders } from '../routes/provider-execution.ts';
 import { layoutChainFor, layoutRouteName } from '../routes/layouts.ts';
+import { mcpRouteProtocolName } from '../routes/protocol-name.ts';
 import { providerKeyFromName } from '../routes/providers.ts';
 import type { CompiledAgentRoute, CompiledCliCommand, CompiledLayout, CompiledProvider } from '../routes/types.ts';
 
@@ -770,9 +771,6 @@ export const generatedRouteArtifactEpoch = (plugin: {
   readonly version: string;
 }): string => `${plugin.name}@${plugin.version}`;
 
-const routeProtocolName = (route: CompiledAgentRoute): string =>
-  route.id.slice(route.id.lastIndexOf('/') + 1);
-
 const executableMcpRoutes = (routes: readonly CompiledAgentRoute[]): readonly CompiledAgentRoute[] =>
   routes.filter((route) => route.kind !== 'app');
 
@@ -791,7 +789,7 @@ const routeRecords = (
   routes.map((route, index) => {
     const layoutFields = worker === undefined ? '' : layoutChainField(route, worker.layouts);
     const serverField = worker === undefined || route.serverId === undefined ? '' : `, serverId: ${JSON.stringify(route.serverId)}`;
-    return `  ${JSON.stringify(route.id)}: Object.freeze({ config: ${stableJson(route.config)}, id: ${JSON.stringify(route.id)}, kind: ${JSON.stringify(route.kind)}${layoutFields}, module: route${String(index)}, name: ${JSON.stringify(routeProtocolName(route))}${serverField} }),`;
+    return `  ${JSON.stringify(route.id)}: Object.freeze({ config: ${stableJson(route.config)}, id: ${JSON.stringify(route.id)}, kind: ${JSON.stringify(route.kind)}${layoutFields}, module: route${String(index)}, name: ${JSON.stringify(mcpRouteProtocolName(route.id))}${serverField} }),`;
   });
 
 const noticeInboxImport = (wired: boolean): readonly string[] =>
@@ -1057,7 +1055,7 @@ const assertRegistrableMcpRoutes = (
   injectNoticeInbox: boolean,
 ): void => {
   for (const route of routes) {
-    if (injectNoticeInbox && routeProtocolName(route) === 'notice-inbox') {
+    if (injectNoticeInbox && mcpRouteProtocolName(route.id) === 'notice-inbox') {
       throw new Error(
         `Generated MCP route ${JSON.stringify(route.id)} uses the reserved protocol name "notice-inbox".`,
       );

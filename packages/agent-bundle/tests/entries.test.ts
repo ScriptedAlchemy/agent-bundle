@@ -1,7 +1,8 @@
 import { describe, expect, it } from '@rstest/core';
 
+import { eventRuntimeHosting, selectedServerHosts } from '../src/build/entries.ts';
+import { runtimeIgnoredRoot } from '../src/build/runtime-path.ts';
 import type { NormalizedMcpServer } from '../src/core/types.ts';
-import { eventRuntimeHosting, runtimeIgnoredRoot, selectedServerHosts } from '../src/build/entries.ts';
 
 describe('runtime ignored root', () => {
   it('anchors a source runtime to its package when the checkout is under dist', () => {

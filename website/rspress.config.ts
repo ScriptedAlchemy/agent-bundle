@@ -67,6 +67,7 @@ const twoslashPaths: Record<string, string[]> = {
 const publicApiEntryPoints = [
   'index.ts',
   'api.ts',
+  'app/index.ts',
   'cli-entry.ts',
   'config/index.ts',
   'eval/index.ts',
