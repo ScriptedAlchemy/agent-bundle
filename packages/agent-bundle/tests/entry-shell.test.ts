@@ -325,8 +325,10 @@ describe('generated entry templates', () => {
     });
     expect(webOnlyWithState).toBe(webOnly);
 
-    // A routed bin without `web` is byte-identical to the pre-#564 generator
-    // (hash of the same input on the parent commit's `entry-shell.ts`).
+    // A routed bin without `web` carries no web wiring: its bytes are those of
+    // the generator without #564 (hash of the same input on this commit's
+    // `entry-shell.ts`; #596's projection steps and `kind: 'cli'` request
+    // moved the pin from the pre-#564 value).
     const withoutWeb = entryShellModule.generatedCliBinEntrySource({
       commands: [command],
       plugin: { name: 'fixture', version: '1.0.0' },
@@ -334,7 +336,7 @@ describe('generated entry templates', () => {
       stateFallback: 'artifact',
     });
     expect(createHash('sha256').update(withoutWeb).digest('hex'))
-      .toBe('b4fea3c82a3f5b3ec5df4dcdb7496f5bbf030fb230ae1550dbd01b65936b2e9f');
+      .toBe('b177c34fc9ef98e972b5f5db1296c01219634572a455796fcae30bfaf070ba72');
     expect(withoutWeb).not.toContain('agent-bundle/web-host');
     expect(withoutWeb).not.toContain('web: Object.freeze({');
   });
@@ -700,7 +702,7 @@ it('generates the warm react-server Flight worker separately from the MCP dispat
   })).toBe(source);
 });
 
-it('generates projected MCP commands with the same tool invocation and request contract as the MCP server', () => {
+it('generates bulk-projected MCP commands with the CLI invocation and preserves the tool route layout', () => {
   const route = {
     config: { annotations: { readOnlyHint: true } },
     id: 'tool:curator/read_item',
@@ -732,14 +734,96 @@ it('generates projected MCP commands with the same tool invocation and request c
   });
 
   expect(source).toContain('import * as route0 from "/project/src/mcp/curator/tools/read_item.tsx"');
-  expect(source).toContain("invocation: { kind: 'tool', props: { input: parsed, operationId: command.routeId } }");
-  expect(source).toContain('request: { artifactEpoch: "route-fixture@1.2.3", kind: \'tool\', operationId: command.routeId, surface: command.mcp.tool }');
+  expect(source).toContain("invocation: { kind: 'cli', props: { args: context.args, command: command.path.join(' ') } }");
+  expect(source).toContain("request: { kind: 'cli', operationId: command.routeId, surface: command.path.join(' ') }");
   expect(source).toContain('props: { input: parsed }');
   // The worker mounts providers from `message.invocation`, so the render
   // message must carry the dispatched invocation (#319 review) and the
   // executable's probed terminal (#511).
   expect(source).toContain("worker.postMessage({ id, invocation, props, request, routeId, terminal, type: 'render' })");
   expect(source).toContain('terminal: context.terminal,');
+});
+
+it('imports explicit CLI projections and maps their input before canonical validation', () => {
+  const route = {
+    config: {},
+    id: 'tool:curator/submit',
+    kind: 'tool' as const,
+    provenance: { kind: 'conventional' as const, relativePath: 'src/mcp/curator/tools/submit.tsx' },
+    serverId: 'mcp:curator',
+    source: '/project/src/mcp/curator/tools/submit.tsx',
+  };
+  const source = entryShellModule.generatedCliBinEntrySource({
+    commands: [{
+      aliases: [],
+      exitCode: 'zero',
+      mcp: { confirm: true, server: 'curator', tool: 'submit' },
+      options: [
+        {
+          defaultValue: '.',
+          key: 'cwd',
+          kind: 'string',
+          option: 'cwd',
+          repeated: false,
+          required: false,
+        },
+        {
+          defaultValue: 'main',
+          key: 'laneKey',
+          kind: 'string',
+          option: 'lane',
+          repeated: false,
+          required: false,
+        },
+        {
+          key: 'yes',
+          kind: 'boolean',
+          option: 'yes',
+          repeated: false,
+          required: false,
+        },
+      ],
+      path: ['submit'],
+      projection: {
+        defaults: { laneKey: 'main' },
+        mapInput: true,
+        module: 'src/mcp/curator/tools/submit.cli.ts',
+        relaxed: ['laneKey'],
+      },
+      rendered: true,
+      routeId: route.id,
+    }],
+    plugin: { name: 'route-fixture', version: '1.2.3' },
+    projectionSources: {
+      [route.id]: '/project/src/mcp/curator/tools/submit.cli.ts',
+    },
+    routes: [route],
+    workerFile: 'route-fixture-flight.mjs',
+  });
+
+  expect(source).toContain('import * as projection0 from "/project/src/mcp/curator/tools/submit.cli.ts";');
+  expect(source).toContain(
+    '"tool:curator/submit": Object.freeze({ module: route0, projection: projection0 })',
+  );
+  const defaults = source.indexOf('for (const [key, value] of Object.entries(command.projection.defaults))');
+  const mapping = source.indexOf('mapped = route.projection.mapInput(mapped)');
+  const validation = source.indexOf('return route.module.inputSchema.parse(mapped)');
+  expect(source).not.toContain('command.mcp?.confirm');
+  expect(source).not.toContain('confirmationRequiredMessage');
+  expect(source).not.toContain('delete mapped.yes');
+  expect(defaults).toBeGreaterThan(-1);
+  expect(defaults).toBeLessThan(mapping);
+  expect(mapping).toBeLessThan(validation);
+  expect(source).toContain('if (!Object.hasOwn(mapped, key)) mapped[key] = value;');
+  expect(source).not.toContain("Object.hasOwn(option, 'defaultValue')");
+  expect(source).toContain("throw new TypeError(`CLI projection ${command.projection.module} for ${command.routeId} must export a mapInput function.`)");
+  expect(source).toContain('throw new CliInputError(error instanceof Error ? error.message : String(error));');
+  expect(source).toContain(
+    "invocation: { kind: 'cli', props: { args: context.args, command: command.path.join(' ') } }",
+  );
+  expect(source).toContain(
+    "request: { kind: 'cli', operationId: command.routeId, surface: command.path.join(' ') }",
+  );
 });
 
 it('mounts the shell-probed terminal on every routed-CLI surface and forwards it under MCP and hooks (#511)', () => {

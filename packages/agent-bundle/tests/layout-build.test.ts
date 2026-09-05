@@ -28,7 +28,7 @@ const lookupRoute = [
   "import { z } from 'zod';",
   "export const config = { annotations: { readOnlyHint: true }, description: 'Looks up one value.' };",
   'export const inputSchema = z.object({ message: z.string().default("ready") }).strict();',
-  "export const resultSchema = z.object({ invocation: z.literal('tool'), message: z.string() }).strict();",
+  "export const resultSchema = z.object({ invocation: z.enum(['cli', 'tool']), message: z.string() }).strict();",
   'export default async function Lookup({ input }) {',
   '  const context = await agent();',
   '  const result = { invocation: context.invocation.kind, message: input.message };',
@@ -205,7 +205,9 @@ it('composes the root and server layouts around every rendered surface of one bu
   });
 
   // A projected MCP command keeps its tool route's server layout, and the
-  // route's own metadata merges beneath both layouts.
+  // route's own metadata merges beneath both layouts. The route table still
+  // says `tool` (`wrapped`), but the route and the layouts observe the CLI
+  // surface they ran from (`invocation`), unlike the MCP call above.
   const projected = await execFile(binPath, ['harness', 'lookup', '--input', '{"message":"projected"}']);
   expect(projected.stdout).toBe('server: mcp:harness\n\nLookup: projected\n\n> shell: tool lookup\n');
   const projectedEvents = await execFile(binPath, ['harness', 'lookup', '--input', '{"message":"events"}', '--ndjson']);
@@ -214,9 +216,9 @@ it('composes the root and server layouts around every rendered surface of one bu
     .findLast((event) => event.type === 'complete');
   expect(projectedComplete?.document).toMatchObject({
     root: {
-      metadata: { from: 'route', invocation: 'tool', layout: 'harness', route: 'tool:harness/lookup', shell: 'layout-fixture', wrapped: 'tool' },
+      metadata: { from: 'route', invocation: 'cli', layout: 'harness', route: 'tool:harness/lookup', shell: 'layout-fixture', wrapped: 'tool' },
     },
-    value: { invocation: 'tool', message: 'events' },
+    value: { invocation: 'cli', message: 'events' },
   });
   await expect(execFile(binPath, ['harness', 'explode', '--input', '{}'])).rejects.toMatchObject({
     code: 1,

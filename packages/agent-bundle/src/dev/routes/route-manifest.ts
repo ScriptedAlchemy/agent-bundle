@@ -5,11 +5,13 @@ import {
   type StateDefinitionProjection,
 } from '../../core/state-inspection.ts';
 import type { NormalizedNotices, NormalizedStateDefinition } from '../../core/types.ts';
+import type { CliProjectionFlagDefault } from '../../routes/public.ts';
 import type {
   CompiledAgentRoute,
   CompiledCliCommand,
   CompiledCliMode,
   CompiledCliOption,
+  CompiledCliProjection,
   CompiledCliSurface,
   CompiledProvider,
   CompiledRouteGraph,
@@ -94,6 +96,7 @@ export interface RouteManifestServer {
 
 /** One argv projection of a CLI route's input schema, without editor defaults. */
 export interface RouteManifestCliOption {
+  readonly aliases?: readonly string[];
   readonly choices?: readonly string[];
   readonly description?: string;
   readonly key: string;
@@ -104,6 +107,15 @@ export interface RouteManifestCliOption {
   readonly required: boolean;
 }
 
+/** Mirrors {@link CompiledCliProjection}: the explicit CLI surface projection of one tool. */
+export interface RouteManifestCliProjection {
+  /** Canonical key → the projection's `flags.<key>.default` literal (schema defaults are not listed); keys sorted. */
+  readonly defaults?: Readonly<Record<string, CliProjectionFlagDefault>>;
+  readonly mapInput: boolean;
+  readonly module: string;
+  readonly relaxed?: readonly string[];
+}
+
 /** One executable command compiled from a custom CLI route or projected MCP tool. */
 export interface RouteManifestCliCommand {
   readonly aliases: readonly string[];
@@ -112,6 +124,7 @@ export interface RouteManifestCliCommand {
   readonly mcp?: NonNullable<CompiledCliCommand['mcp']>;
   readonly options: readonly RouteManifestCliOption[];
   readonly path: readonly string[];
+  readonly projection?: RouteManifestCliProjection;
   readonly routeId: string;
 }
 
@@ -221,6 +234,7 @@ const manifestServer = (server: CompiledServerSurface): RouteManifestServer => (
 });
 
 const manifestCliOption = (option: CompiledCliOption): RouteManifestCliOption => ({
+  ...(option.aliases === undefined ? {} : { aliases: [...option.aliases] }),
   ...(option.choices === undefined ? {} : { choices: [...option.choices] }),
   ...(option.description === undefined ? {} : { description: option.description }),
   key: option.key,
@@ -231,6 +245,18 @@ const manifestCliOption = (option: CompiledCliOption): RouteManifestCliOption =>
   required: option.required,
 });
 
+const manifestCliProjection = (projection: CompiledCliProjection): RouteManifestCliProjection => ({
+  ...(projection.defaults === undefined
+    ? {}
+    : {
+      defaults: Object.fromEntries(Object.entries(projection.defaults)
+        .map(([key, value]) => [key, Array.isArray(value) ? [...value] : value])),
+    }),
+  mapInput: projection.mapInput,
+  module: projection.module,
+  ...(projection.relaxed === undefined ? {} : { relaxed: [...projection.relaxed] }),
+});
+
 const manifestCliCommand = (command: CompiledCliCommand): RouteManifestCliCommand => ({
   aliases: [...command.aliases],
   ...(command.description === undefined ? {} : { description: command.description }),
@@ -238,6 +264,7 @@ const manifestCliCommand = (command: CompiledCliCommand): RouteManifestCliComman
   ...(command.mcp === undefined ? {} : { mcp: { ...command.mcp } }),
   options: command.options.map(manifestCliOption),
   path: [...command.path],
+  ...(command.projection === undefined ? {} : { projection: manifestCliProjection(command.projection) }),
   routeId: command.routeId,
 });
 

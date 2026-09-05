@@ -537,6 +537,8 @@ export interface NormalizedBinEntry {
   /** The compiled routed-CLI surface a framework-generated bin executes (#102 stage 2). */
   readonly generatedCli?: {
     readonly commands: readonly CompiledCliCommand[];
+    /** routeId → absolute path of the tool's CLI projection module (#596); the bin bundles it beside the route. */
+    readonly projectionSources?: Readonly<Record<string, string>>;
     readonly routes: readonly CompiledAgentRoute[];
   };
   readonly id: string;

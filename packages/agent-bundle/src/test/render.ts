@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import type * as AgentFlightServer from '@agent-bundle/runtime/flight/server';
 import type * as AgentRuntime from '@agent-bundle/runtime';
@@ -25,7 +26,10 @@ import type {
 } from '@agent-bundle/runtime';
 import type * as React from 'react';
 
-import { cliInputError } from '../cli-entry.ts';
+import {
+  CliInputError,
+  cliInputError,
+} from '../cli-entry.ts';
 import type {
   CliRenderedEvent,
   GeneratedCliRenderContext,
@@ -44,6 +48,7 @@ import { claimProcessHit, harnessPluginRoot, mountProviders } from './providers.
 import { routeKindTerminal } from './terminal.ts';
 import {
   registeredManifestIdentity,
+  registeredProjectionLoader,
   registeredRouteLoader,
   registeredStateLoader,
   testManifest,
@@ -1051,8 +1056,69 @@ export interface PreparedCliRenderHost {
     command: CompiledCliCommand,
     input: Readonly<Record<string, unknown>>,
     context: GeneratedCliRenderContext,
+    projectionModule?: Readonly<Record<string, unknown>>,
   ) => GeneratedCliRenderSession;
 }
+
+/** Loads the dispatched command's explicit CLI projection through the generated registry. */
+export const loadCliProjectionModule = async (
+  manifest: AgentBundleTestManifest,
+  command: CompiledCliCommand,
+): Promise<Readonly<Record<string, unknown>> | undefined> => {
+  if (command.projection === undefined) return undefined;
+  const modulePath = join(manifest.projectRoot, command.projection.module);
+  try {
+    const loader = registeredProjectionLoader(manifest, command.routeId);
+    if (loader !== undefined) return await loader();
+    if (registeredManifestIdentity() !== undefined) {
+      throw new Error('The registered projection loaders belong to a different manifest.');
+    }
+    return await import(pathToFileURL(modulePath).href) as Readonly<Record<string, unknown>>;
+  } catch (cause) {
+    throw new AgentTestError(
+      'invalid-route-module',
+      `Unable to load CLI projection ${command.projection.module} for ${command.routeId}.`,
+      {
+        cause,
+        details: [`module path:   ${modulePath}`],
+        recovery: 'Build the Rstest configuration with agentBundleRstest() so the projection is transformed with the project modules.',
+      },
+    );
+  }
+};
+
+/**
+ * Mirrors the generated bin's explicit defaults, mapping, and canonical
+ * validation boundary; confirmation is the shell's (`parseMcpCommandInput`).
+ */
+export const parseCliCommandInput = (
+  command: CompiledCliCommand,
+  inputSchema: AgentRouteSchema,
+  projectionModule: Readonly<Record<string, unknown>> | undefined,
+  input: Readonly<Record<string, unknown>>,
+): unknown => {
+  const withDefaults: Record<string, unknown> = { ...input };
+  for (const [key, value] of Object.entries(command.projection?.defaults ?? {})) {
+    if (!Object.hasOwn(withDefaults, key)) withDefaults[key] = value;
+  }
+  let mapped: unknown = withDefaults;
+  if (command.projection?.mapInput === true) {
+    const mapInput = projectionModule?.['mapInput'];
+    if (typeof mapInput !== 'function') {
+      throw new TypeError(`CLI projection ${command.projection.module} for ${command.routeId} must export a mapInput function.`);
+    }
+    try {
+      mapped = mapInput(withDefaults);
+    } catch (error) {
+      throw new CliInputError(error instanceof Error ? error.message : String(error));
+    }
+  }
+  try {
+    return inputSchema.parse(mapped);
+  } catch (error) {
+    throw cliInputError(command, mapped, error);
+  }
+};
 
 /**
  * Accepts preloaded route modules and prepares the renderer and manifest
@@ -1085,6 +1151,7 @@ export const prepareCliRenderHost = async (
       command: CompiledCliCommand,
       input: Readonly<Record<string, unknown>>,
       execution: GeneratedCliRenderContext,
+      projectionModule?: Readonly<Record<string, unknown>>,
     ): GeneratedCliRenderSession => {
       const module = options.modules.get(command.routeId);
       if (module === undefined) {
@@ -1107,22 +1174,17 @@ export const prepareCliRenderHost = async (
           },
         );
       }
-      let parsed: unknown;
-      try {
-        parsed = module.inputSchema.parse(input);
-      } catch (error) {
-        throw cliInputError(command, input, error);
-      }
+      const parsed = parseCliCommandInput(
+        command,
+        module.inputSchema,
+        projectionModule,
+        input,
+      );
       const commandName = command.path.join(' ');
-      const invocation: AgentRenderInvocation = command.mcp === undefined
-        ? {
-            kind: 'cli',
-            props: { args: execution.args, command: commandName },
-          }
-        : {
-            kind: 'tool',
-            props: { input: parsed as never, operationId: command.routeId },
-          };
+      const invocation: AgentRenderInvocation = {
+        kind: 'cli',
+        props: { args: execution.args, command: commandName },
+      };
       const collected: AgentProgressUpdate[] = [];
       const descriptor = options.manifest.routes[command.routeId];
       const dispatcher = createFlightDispatcher({
@@ -1160,20 +1222,12 @@ export const prepareCliRenderHost = async (
             ...context,
             ...mounted.context,
             providers,
-            invocation: command.mcp === undefined
-              ? {
-                  kind: 'cli',
-                  operationId: command.routeId,
-                  surface: commandName,
-                  ...context.invocation,
-                }
-              : {
-                  artifactEpoch: `${options.manifest.plugin.name}@${options.manifest.plugin.version}`,
-                  kind: 'tool',
-                  operationId: command.routeId,
-                  surface: command.mcp.tool,
-                  ...context.invocation,
-                },
+            invocation: {
+              kind: 'cli',
+              operationId: command.routeId,
+              surface: commandName,
+              ...context.invocation,
+            },
             signal: request.signal,
           };
         },

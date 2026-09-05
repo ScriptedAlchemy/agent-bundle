@@ -6,6 +6,7 @@ import type {
   RouteManifest,
   RouteManifestCliCommand,
   RouteManifestCliOption,
+  RouteManifestCliProjection,
   RouteManifestCliSurface,
   RouteManifestConfigEntry,
   RouteManifestProvider,
@@ -120,6 +121,7 @@ const serverSchema: z.ZodType<RouteManifestServer> = z.strictObject({
 });
 
 const cliOptionSchema: z.ZodType<RouteManifestCliOption> = z.strictObject({
+  aliases: z.array(z.string()).optional(),
   choices: z.array(z.string()).optional(),
   description: z.string().optional(),
   key: z.string(),
@@ -128,6 +130,15 @@ const cliOptionSchema: z.ZodType<RouteManifestCliOption> = z.strictObject({
   positional: z.number().int().nonnegative().optional(),
   repeated: z.boolean(),
   required: z.boolean(),
+});
+
+const cliProjectionSchema: z.ZodType<RouteManifestCliProjection> = z.strictObject({
+  // The projection's own CLI defaults: the same literal shape a schema
+  // `.default()` takes on the wire, keyed by canonical key.
+  defaults: z.record(z.string(), inputSchemaLiteral).optional(),
+  mapInput: z.boolean(),
+  module: z.string(),
+  relaxed: z.array(z.string()).optional(),
 });
 
 const cliCommandSchema: z.ZodType<RouteManifestCliCommand> = z.strictObject({
@@ -141,6 +152,7 @@ const cliCommandSchema: z.ZodType<RouteManifestCliCommand> = z.strictObject({
   }).optional(),
   options: z.array(cliOptionSchema),
   path: z.array(z.string()),
+  projection: cliProjectionSchema.optional(),
   routeId: z.string(),
 });
 

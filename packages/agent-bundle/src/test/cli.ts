@@ -20,7 +20,7 @@
 import type * as AgentRuntime from '@agent-bundle/runtime';
 import type { RegisteredRouteId } from '@agent-bundle/runtime';
 
-import { cliInputError, runGeneratedCliEntry } from '../cli-entry.ts';
+import { runGeneratedCliEntry } from '../cli-entry.ts';
 import type { CliRenderedEvent } from '../cli-entry.ts';
 import { createProviderProcessLifetime } from '../routes/provider-execution.ts';
 import type { CompiledCliCommand } from '../routes/types.ts';
@@ -29,7 +29,13 @@ import { CLI_DISPATCH_PROOF_LEVEL, type AgentBundleTestManifest } from './manife
 import { parseCanonicalJsonLine, parseRenderedEventLines } from './output-modes.ts';
 import { claimProcessHit, harnessPluginRoot, mountProviders } from './providers.ts';
 import { registeredRouteLoader, testManifest } from './registry.ts';
-import { prepareCliRenderHost, type HarnessOptionsArguments, type RenderRouteContextInit } from './render.ts';
+import {
+  loadCliProjectionModule,
+  parseCliCommandInput,
+  prepareCliRenderHost,
+  type HarnessOptionsArguments,
+  type RenderRouteContextInit,
+} from './render.ts';
 import { harnessTerminal } from './terminal.ts';
 import type { AgentRouteModule, RenderedRouteProvenance } from './types.ts';
 
@@ -244,12 +250,12 @@ export const invokeCli = async (
             recovery: 'Export both zod schemas from the command module; the routed CLI validates argv through them.',
           });
         }
-        let parsed: unknown;
-        try {
-          parsed = module.inputSchema.parse(input);
-        } catch (error) {
-          throw cliInputError(command, input, error);
-        }
+        const parsed = parseCliCommandInput(
+          command,
+          module.inputSchema,
+          await loadCliProjectionModule(manifest, command),
+          input,
+        );
         const root = process.cwd();
         const plugin = harnessPluginRoot({ context, manifest, resolvePluginRoot: runtime.resolvePluginRoot });
         // Same provider invocation the generated plain-command path builds (#366).
@@ -292,9 +298,14 @@ export const invokeCli = async (
       ...(renderHost === undefined
         ? {}
         : {
-            render: (command, input, execution) => {
+            render: async (command, input, execution) => {
               executed = command;
-              return renderHost.render(command, input, execution);
+              return renderHost.render(
+                command,
+                input,
+                execution,
+                await loadCliProjectionModule(manifest, command),
+              );
             },
           }),
       signal,
