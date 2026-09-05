@@ -92,6 +92,10 @@ node ./install.mjs
 因为 `plugin update` 受版本门控；Codex 先 `codex plugin remove` 再 `add`。输出的 `INSTALL.md` 按宿主记录了
 同样的步骤。
 
+框架 CLI 从 `agent-bundle.manifest.json` 的 `files[]` 派生产物侧哈希与复制集合，校验每个列出的摘要，
+而不遍历产物目录。清单自身与约定的操作员 `.env` / `.env.local` 覆盖层也会被复制并哈希；未列出的
+多余文件会被忽略。某个列出的文件缺失或已改变时以 `AB7001` 失败。
+
 ## 操作者配置：已安装包的 `.env`
 
 通过环境变量配置的插件——会话 cookie、API 令牌、主机名——应在安装处配置，而不是在产物里：清单 `env` 是编译

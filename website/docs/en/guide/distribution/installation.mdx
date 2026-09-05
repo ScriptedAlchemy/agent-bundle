@@ -112,6 +112,12 @@ a pre-receipt copy. Claude replacement runs `claude plugin uninstall --keep-data
 reinstalling because `plugin update` is version-gated; Codex runs `codex plugin remove` before
 `add`. The emitted `INSTALL.md` documents the same recipe per host.
 
+The framework CLI derives the artifact-side hash and copy set from
+`agent-bundle.manifest.json` `files[]`, verifies every listed digest, and does not walk the artifact
+directory. The manifest itself and a conventional operator `.env` / `.env.local` overlay are also
+copied and hashed; an unlisted stray file is ignored. A missing or changed listed file fails as
+`AB7001`.
+
 ## Operator configuration: the installed pack's `.env`
 
 A plugin configured through environment variables — session cookies, API tokens, a host name — is
