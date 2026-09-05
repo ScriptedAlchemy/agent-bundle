@@ -172,6 +172,7 @@ const InvocationStatusLine = ({ backendKind, state }: { readonly backendKind?: s
     {backendKind === undefined ? undefined : <span className="route-status-backend">via {backendKind}</span>}
     {invocation === undefined ? undefined : <span className="route-status-id">{invocation.id}</span>}
     {invocation?.correlationId === undefined ? undefined : <span className="route-status-correlation">correlation {invocation.correlationId}</span>}
+    {invocation?.requestId === undefined ? undefined : <span className="route-status-request">request {invocation.requestId}</span>}
   </p>;
 };
 
@@ -328,7 +329,7 @@ export const ExecutableRouteWorkspace = ({
           <h2>Invocation not in this session</h2>
           <p>Invocation {invocationId} is not in this session.</p>
         </section>
-        : <ResultTabs controller={controller} extraTabs={extraTabs} leaf={leaf} onTabChange={changeTab} tab={resultTab} trace={trace} />}
+        : <ResultTabs controller={controller} extraTabs={extraTabs} leaf={leaf} onNavigate={onNavigate} onTabChange={changeTab} tab={resultTab} trace={trace} />}
     </div>
     <RouteInspector
       backendKind={controller.backendKind}

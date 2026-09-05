@@ -84,12 +84,22 @@ export interface McpRouteTrace {
   readonly overflow?: unknown;
 }
 
+/**
+ * The `params._meta` key the dev server's MCP session route stamps a `tools/call`
+ * `correlationId` under, and the key its trace publisher lifts back into a frame's
+ * `meta.correlationId`. In the browser it only travels between the session
+ * controller and the remote transport, which lowers it to the top-level field.
+ */
+export const mcpCorrelationMetaKey = 'agent-bundle/correlationId';
+
 export type McpRouteOperation =
   | Readonly<{ readonly operation: 'initialize' | 'prompts/list' | 'resources/list' | 'resources/templates/list' | 'tools/list' }>
   | Readonly<{ readonly arguments?: Readonly<Record<string, string>>; readonly name: string; readonly operation: 'prompts/get' }>
   | Readonly<{ readonly operation: 'resources/read'; readonly uri: string }>
   | Readonly<{
     readonly arguments: Readonly<Record<string, unknown>>;
+    /** The Workbench correlation id; the route stamps it into `params._meta` itself and refuses a browser-sent `_meta` (`AB8016`). */
+    readonly correlationId?: string;
     readonly name: string;
     readonly operation: 'tools/call';
     readonly requestId?: string;

@@ -54,6 +54,9 @@
 .trace-glyph--hook { color: #147b36; }
 .trace-glyph--log { color: #596372; }
 .trace-glyph--diagnostic { color: #b31b23; }
+.trace-link { color: #0759c7; font-weight: 700; text-decoration: none; }
+.trace-link:hover { text-decoration: underline; }
+.trace-status { font-size: 12px; font-weight: 750; text-transform: capitalize; }
 .trace-status--ok { color: #147b36; }
 .trace-status--error { color: #b31b23; }
 .trace-status--running { color: #8a5700; }

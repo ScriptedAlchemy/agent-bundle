@@ -21,7 +21,7 @@ import { InvocationClientError } from './invocation-client.ts';
 import { invocationSummaryOf } from './invocation-model.ts';
 
 export interface RuntimeInvocationClient {
-  createRun(request: DevRuntimeInvocationRequest & Readonly<{ readonly correlationId?: string }>): Promise<DevRuntimeRun>;
+  createRun(request: DevRuntimeInvocationRequest): Promise<DevRuntimeRun>;
   readRun(runId: string): Promise<DevRuntimeRun>;
   readRunDocument(
     runId: string,
@@ -316,7 +316,7 @@ export const createRuntimeBackend = ({
         input: request.input ?? Object.freeze({}),
         surfaceId: surface.id,
         target,
-      }) satisfies DevRuntimeInvocationRequest & Readonly<{ readonly correlationId?: string }>;
+      }) satisfies DevRuntimeInvocationRequest;
       const run = await runtimeClient.createRun(runtimeRequest);
       abortIfRequested(signal);
       if (request.correlationId !== undefined) {

@@ -105,6 +105,21 @@
   gap: 0.45rem;
 }
 
+.mcp-page-frame-facts {
+  color: #a8b8ca;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 0.8rem;
+  gap: 0.35rem 0.9rem;
+  margin: 0 0 0.35rem;
+}
+
+.mcp-page-frame-direction { font-weight: 700; }
+.mcp-page-frame-direction--client { color: #8ab4f8; }
+.mcp-page-frame-direction--server { color: #81c995; }
+.mcp-page-frame-link { color: #8ab4f8; font-weight: 700; text-decoration: none; }
+.mcp-page-frame-link:hover { text-decoration: underline; }
+
 .mcp-page-binding,
 .mcp-page-catalog-grid {
   align-items: start;

@@ -2,7 +2,7 @@ import { expect, it } from '@rstest/core';
 import type { JSONRPCMessage } from '@modelcontextprotocol/client';
 
 import { AgentBundleRemoteTransport, dispatchAgentBundleMcpRequest } from '../src/mcp/agent-bundle-remote-transport.ts';
-import { McpRouteClient } from '../src/mcp/mcp-route-client.ts';
+import { mcpCorrelationMetaKey, McpRouteClient } from '../src/mcp/mcp-route-client.ts';
 import { deferred, eventually } from './support/async.ts';
 
 interface RecordedRequest {
@@ -539,6 +539,34 @@ it('defaults omitted modern tool arguments and gives known invalid parameters a 
     { error: { code: -32602, message: 'MCP method "tools/call" has invalid parameters.' }, id: 11, jsonrpc: '2.0' },
     { error: { code: -32601, message: 'MCP method "unregistered/method" is not supported by the Agent Bundle remote transport.' }, id: 12, jsonrpc: '2.0' },
   ]);
+  await transport.close();
+});
+
+it('lowers the SDK-side _meta correlation to the route body\'s top-level correlationId and sends no _meta', async () => {
+  const stream = heldStream();
+  const fixture = routeFetch({
+    operation: () => ({ content: [] }),
+    streams: [stream.response],
+  });
+  const transport = new AgentBundleRemoteTransport({ binding, routes: new McpRouteClient({ fetch: fixture.fetch }) });
+  const messages: JSONRPCMessage[] = [];
+  transport.onmessage = (message) => messages.push(message);
+
+  await transport.start();
+  await transport.send({ id: 20, jsonrpc: '2.0', method: 'tools/call', params: {
+    _meta: { [mcpCorrelationMetaKey]: 'corr-app', progressToken: 'p1' },
+    arguments: { city: 'London' },
+    name: 'forecast',
+  } });
+  await transport.send({ id: 21, jsonrpc: '2.0', method: 'tools/call', params: { _meta: { progressToken: 'p2' }, arguments: {}, name: 'forecast' } });
+  await eventually(() => messages.length === 2);
+
+  const bodies = fixture.requests.filter((request) => request.url.endsWith('/operations')).map((request) => request.body);
+  expect(bodies).toEqual([
+    '{"arguments":{"city":"London"},"correlationId":"corr-app","name":"forecast","operation":"tools/call","requestId":"number:20"}',
+    '{"arguments":{},"name":"forecast","operation":"tools/call","requestId":"number:21"}',
+  ]);
+  expect(bodies.some((body) => body?.includes('_meta'))).toBe(false);
   await transport.close();
 });
 

@@ -3,8 +3,30 @@ import { expect, it } from '@rstest/core';
 import {
   createMcpBrowserSessionModel,
   invocationHistoryFor,
+  isMcpFrameEntry,
   reduceMcpBrowserSession,
 } from '../src/mcp/mcp-session-model.ts';
+
+it('carries the lifted id, method, and _meta keys on a frame and narrows only frames', () => {
+  let model = createMcpBrowserSessionModel('session-weather');
+  model = reduceMcpBrowserSession(model, { binding: { epochId: 'epoch-a', serverName: 'weather', target: 'claude' }, type: 'open' });
+  const meta = { correlationId: 'corr-1', requestId: 'req-1', sessionId: 'sess-1' };
+  model = reduceMcpBrowserSession(model, {
+    entry: { direction: 'client', id: 'number:7', kind: 'frame', message: { id: 7, method: 'tools/call' }, meta, method: 'tools/call', occurredAt: 100, sequence: 1 },
+    type: 'trace',
+  });
+  model = reduceMcpBrowserSession(model, {
+    entry: { kind: 'logging', occurredAt: 101, payload: { message: 'hi' }, sequence: 2 },
+    type: 'trace',
+  });
+
+  const [frame, logging] = model.timeline.entries;
+  expect(frame).toEqual({ direction: 'client', id: 'number:7', kind: 'frame', message: { id: 7, method: 'tools/call' }, meta, method: 'tools/call', occurredAt: 100, sequence: 1 });
+  expect(Object.isFrozen(frame) && isMcpFrameEntry(frame) && Object.isFrozen(frame.meta)).toBe(true);
+  expect(isMcpFrameEntry(logging)).toBe(false);
+  expect(isMcpFrameEntry({ direction: 'client', kind: 'frame' })).toBe(false);
+  expect(model.conciseTrace).toBe(model.timeline.entries);
+});
 
 it('snapshots and freezes the selected session binding, connection, catalogs, and config', () => {
   const binding = { epochId: 'epoch-a', serverName: 'weather', target: 'claude' as const };
