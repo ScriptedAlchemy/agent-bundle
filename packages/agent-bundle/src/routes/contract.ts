@@ -25,7 +25,7 @@ const unwrappedExpression = (expression: ts.Expression): ts.Expression => {
 };
 
 const diagnostic = (
-  code: 'AB4810' | 'AB4811' | 'AB4830' | 'AB4838' | 'AB4839' | 'AB4940',
+  code: 'AB4810' | 'AB4811' | 'AB4830' | 'AB4840' | 'AB4940',
   message: string,
   sourcePath: string,
   recovery: string,
@@ -360,7 +360,7 @@ export const discoverEventRoutePreflight = (
   if (preflightExports !== 1 || declarations.length !== 1) {
     return Object.freeze({
       diagnostics: Object.freeze([diagnostic(
-        'AB4838',
+        'AB4840',
         `Event route module ${relativePath} exports preflight, but it is not exactly one named default re-export from a separate module.`,
         sourcePath,
         eventPreflightRecovery,
@@ -372,7 +372,7 @@ export const discoverEventRoutePreflight = (
   if (!isRelativeSpecifier(declaration!.specifier)) {
     return Object.freeze({
       diagnostics: Object.freeze([diagnostic(
-        'AB4838',
+        'AB4840',
         `Event route module ${relativePath} re-exports preflight from non-relative specifier ${JSON.stringify(declaration!.specifier)}.`,
         sourcePath,
         eventPreflightRecovery,
@@ -384,7 +384,7 @@ export const discoverEventRoutePreflight = (
   if (followed === undefined) {
     return Object.freeze({
       diagnostics: Object.freeze([diagnostic(
-        'AB4838',
+        'AB4840',
         `Event route module ${relativePath} re-exports preflight from ${JSON.stringify(declaration!.specifier)}, but that target is missing, unreadable, or cyclic.`,
         sourcePath,
         eventPreflightRecovery,
@@ -397,7 +397,7 @@ export const discoverEventRoutePreflight = (
     return Object.freeze({
       candidateSource: followed.source,
       diagnostics: Object.freeze([diagnostic(
-        'AB4838',
+        'AB4840',
         `Event route module ${relativePath} re-exports preflight from ${JSON.stringify(declaration!.specifier)}, but its default export cannot be followed through an acyclic relative module chain.`,
         sourcePath,
         eventPreflightRecovery,
@@ -408,7 +408,7 @@ export const discoverEventRoutePreflight = (
     return Object.freeze({
       candidateSource: followed.source,
       diagnostics: Object.freeze([diagnostic(
-        'AB4838',
+        'AB4840',
         `Event route module ${relativePath} re-exports preflight from ${JSON.stringify(declaration!.specifier)}, whose default export is not a function.`,
         sourcePath,
         eventPreflightRecovery,

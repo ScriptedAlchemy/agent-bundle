@@ -94,14 +94,48 @@ export interface RouteInputSchema {
   readonly type: 'object';
 }
 
+/**
+ * Where a contract's schema is declared: the module and the binding whose
+ * initializer is the schema expression, at the end of any alias chain.
+ */
+export interface RouteContractOrigin {
+  /** The declaring binding: `statusInputSchema`; `inputSchema` for a route-local literal. */
+  readonly binding: string;
+  /** Project-relative POSIX path of the declaring module, e.g. `src/lib/protocol-schemas.ts`. */
+  readonly module: string;
+}
+
+/**
+ * One canonical input contract of the Application IR (#592 §1): a route's
+ * `inputSchema` declaration, normalized once into the bounded JSON Schema
+ * subset and shared by every route that binds the same declared schema.
+ * Identity is the declaration site, so two routes importing one binding
+ * share one contract while a route-local literal is
+ * `contract:<route relativePath>#inputSchema`. Routes reference a contract
+ * by {@link CompiledAgentRoute.contract}; projections consume it — the
+ * routed CLI derives its argv grammar from `input`, generated route types
+ * and the Workbench read it — instead of re-reading the route module.
+ */
+export interface RouteContract {
+  /** `contract:<origin.module>#<origin.binding>`. */
+  readonly id: string;
+  /** Deep-frozen; the same object as each bound route's {@link CompiledAgentRoute.inputSchema}. */
+  readonly input: RouteInputSchema;
+  readonly origin: RouteContractOrigin;
+  /** Sorted ids of the graph routes bound to this contract. */
+  readonly routes: readonly string[];
+}
+
 /** One conventional route module compiled into the immutable route graph. */
 export interface CompiledAgentRoute {
   /** Statically extracted from the module's `export const config` declaration; {@link emptyRouteConfig} when absent or rejected. */
   readonly config: Readonly<Record<string, unknown>>;
+  /** Id of the {@link RouteContract} this route binds; absent when no static contract was extracted. */
+  readonly contract?: string;
   /** Canonical event identity; present only when {@link kind} is `event-route`. */
   readonly event?: CanonicalAgentEvent;
   readonly id: string;
-  /** Statically projected bounded JSON Schema subset; absent for missing or richer input schemas. */
+  /** Statically projected bounded JSON Schema subset — the bound contract's `input` object; absent for missing or richer input schemas. */
   readonly inputSchema?: RouteInputSchema;
   readonly kind: CompiledRouteKind;
   /** Static cheap gate; present only on event routes that declare a valid relative default re-export. */
@@ -249,6 +283,8 @@ export interface CompiledCliSurface {
  */
 export interface CompiledRouteGraph {
   readonly cli?: CompiledCliSurface;
+  /** Sorted by id; absent when no route has a static contract, so pre-#593 graphs digest unchanged. */
+  readonly contracts?: readonly RouteContract[];
   readonly diagnostics: readonly Diagnostic[];
   /** sha256 over the graph's project-relative identity. */
   readonly digest: string;

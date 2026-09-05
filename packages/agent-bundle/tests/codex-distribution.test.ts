@@ -84,9 +84,8 @@ const marketplace = (...sources: readonly unknown[]) => ({
   plugins: sources.map(entry),
 });
 
-it('records dated four-state Codex distribution rows mirrored by the adapter and intersected by the unified bundle', () => {
+it('records dated four-state Codex distribution rows mirrored by the adapter', () => {
   const registry = createDefaultRegistry();
-  const unified = registry.get('plugin');
   const table = codexCapabilityTable.distribution as Readonly<Record<string, {
     readonly evidence: readonly string[];
     readonly reason?: string;
@@ -110,8 +109,6 @@ it('records dated four-state Codex distribution rows mirrored by the adapter and
       expect(codexAdapter.capabilities[capability]).toMatchObject({ reason: row.reason, state: expectedState });
     }
     expect(registry.supports('codex', capability)).toBe(expectedState === 'supported');
-    expect(unified.capabilities[capability]).toMatchObject({ state: 'unavailable' });
-    expect(registry.supports('plugin', capability)).toBe(false);
   }
   expect(table.pluginCliLifecycle).toMatchObject({ commands: ['add', 'list', 'remove'] });
   expect(table.marketplaceCliLifecycle).toMatchObject({ commands: ['add', 'list', 'upgrade', 'remove'] });
@@ -340,7 +337,6 @@ it.each([
 
 it('records the overview-level plugin parts (optional MCP UI, browser extensions, scheduled task templates) as dated rows', () => {
   const registry = createDefaultRegistry();
-  const unified = registry.get('plugin');
   const table = codexCapabilityTable.plugin.overviewSurfaces as Readonly<Record<string, {
     readonly evidence: readonly string[];
     readonly reason: string;
@@ -361,8 +357,6 @@ it('records the overview-level plugin parts (optional MCP UI, browser extensions
       ...(expectedState === 'degraded' ? { evidence: { observedVersion: '0.147.0', target: 'codex' } } : {}),
     });
     expect(registry.supports('codex', capability)).toBe(false);
-    expect(unified.capabilities[capability]).toMatchObject({ state: 'unavailable' });
-    expect(registry.supports('plugin', capability)).toBe(false);
   }
   // No authoring field is inferred: the closed manifest schema rejects any attempt.
   expect(table.mcpUi!.evidence.some((line) => line.includes('_meta.ui.resourceUri'))).toBe(true);

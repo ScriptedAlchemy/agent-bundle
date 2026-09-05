@@ -4,15 +4,12 @@ import { AGENT_NOTICE_DELIVERY_ROUTES, resolveNoticeDisclosure, selectNoticeDeli
 import type { AgentNoticeDeliveryAdvertisement, AgentNoticeDeliveryRoute } from '@agent-bundle/runtime/notices';
 
 import {
-  capabilityBooleanView,
   capabilityEvidence,
   capabilityIsSupported,
-  intersectCapabilityStates,
   intersectNoticeDeliveryAdvertisements,
   noticeDeliveryAdvertisementFrom,
   supportedCapability,
   unavailableCapability,
-  unionCapabilityStates,
 } from '../src/adapters/capability-state.ts';
 import claudeCapabilityTable from '../src/adapters/capabilities/claude-2.1.260.json' with { type: 'json' };
 import codexCapabilityTable from '../src/adapters/capabilities/codex-0.147.0.json' with { type: 'json' };
@@ -29,23 +26,6 @@ const evidence = (target: string): CapabilityEvidence => Object.freeze({
   observedVersion: `${target}-version`,
   target,
 });
-const state = (value: CapabilityState): CapabilityState => Object.freeze(value);
-
-it('keeps the plugin Boolean capability view as the three-host intersection except for LSP', () => {
-  const registry = createDefaultRegistry();
-
-  for (const capability of ['commands', 'marketplace', 'hooks', 'mcp', 'rules', 'skills']) {
-    expect(registry.supports('plugin', capability)).toBe(
-      registry.supports('claude', capability) &&
-      registry.supports('codex', capability) &&
-      registry.supports('cursor', capability),
-    );
-  }
-  expect(registry.supports('plugin', 'lsp')).toBe(
-    registry.supports('claude', 'lsp') && registry.supports('codex', 'lsp'),
-  );
-});
-
 it('records an honest four-state commands row on every adapter', () => {
   const registry = createDefaultRegistry();
   for (const target of ['cursor', 'claude'] as const) {
@@ -62,13 +42,6 @@ it('records an honest four-state commands row on every adapter', () => {
     reason: 'The portable Agent Plugin contract (1.0.0) defines only skills and MCP components; it has no commands surface.',
     state: 'unavailable',
   });
-  expect(registry.get('plugin').capabilities.commands).toEqual(intersectCapabilityStates(
-    intersectCapabilityStates(
-      registry.get('claude').capabilities.commands!,
-      registry.get('codex').capabilities.commands!,
-    ),
-    registry.get('cursor').capabilities.commands!,
-  ));
 });
 
 it('records an honest four-state rules row on every adapter', () => {
@@ -89,13 +62,6 @@ it('records an honest four-state rules row on every adapter', () => {
     reason: 'The portable Agent Plugin contract (1.0.0) defines only skills and MCP components; it has no rules surface.',
     state: 'unavailable',
   });
-  expect(registry.get('plugin').capabilities.rules).toEqual(intersectCapabilityStates(
-    intersectCapabilityStates(
-      registry.get('claude').capabilities.rules!,
-      registry.get('codex').capabilities.rules!,
-    ),
-    registry.get('cursor').capabilities.rules!,
-  ));
 });
 
 const codexParityCapabilityRows = {
@@ -127,7 +93,6 @@ const codexParityCapabilityRows = {
 it('records dated Codex interface, apps, policy, and hook-environment capability rows', () => {
   const registry = createDefaultRegistry();
   const codex = registry.get('codex');
-  const unified = registry.get('plugin');
   const expectedStates = {
     apps: { registeredMcpMappings: 'supported' },
     hookEnvironment: {
@@ -175,11 +140,7 @@ it('records dated Codex interface, apps, policy, and hook-environment capability
         }),
         state: expectedState,
       });
-      // The unified bundle intersects every Codex-only surface with an
-      // honest unavailable row for the hosts that lack it.
-      expect(unified.capabilities[capability]).toMatchObject({ state: 'unavailable' });
       expect(registry.supports('codex', capability)).toBe(expectedState === 'supported');
-      expect(registry.supports('plugin', capability)).toBe(false);
     }
   }
 
@@ -190,7 +151,7 @@ it('records dated Codex interface, apps, policy, and hook-environment capability
   });
 });
 
-it('reports Claude LSP support and honest unavailable composite coverage', () => {
+it('reports Claude LSP support and honest unavailable coverage on other hosts', () => {
   const registry = createDefaultRegistry();
 
   expect(registry.get('claude').capabilities.lsp).toMatchObject({
@@ -204,13 +165,8 @@ it('reports Claude LSP support and honest unavailable composite coverage', () =>
     reason: expect.stringContaining('no LSP server surface'),
     state: 'unavailable',
   });
-  expect(registry.get('plugin').capabilities.lsp).toMatchObject({
-    reason: expect.stringContaining('no LSP server surface'),
-    state: 'unavailable',
-  });
   expect(registry.supports('claude', 'lsp')).toBe(true);
   expect(registry.supports('codex', 'lsp')).toBe(false);
-  expect(registry.supports('plugin', 'lsp')).toBe(false);
 });
 
 it('publishes a dated four-state lsp row on every adapter so no host is judged by silence (#100)', () => {
@@ -228,16 +184,9 @@ it('publishes a dated four-state lsp row on every adapter so no host is judged b
     reason: codexCapabilityTable.plugin.components.lsp.reason,
     state: 'unavailable',
   });
-  // Emission dispatch: the composite still writes Claude's `.lsp.json`, so
-  // inspection judges the `lsp` kind by the union while the three-host
-  // intersection above stays honestly unavailable.
-  expect(registry.get('plugin').componentCapabilities?.lsp).toMatchObject({
-    evidence: { target: 'claude' },
-    state: 'supported',
-  });
 });
 
-it('records dated unavailable native-diagnostics and native-extension rows on every host and the composite (#100)', () => {
+it('records dated unavailable native-diagnostics and native-extension rows on every host (#100)', () => {
   const registry = createDefaultRegistry();
   const tables = {
     claude: claudeCapabilityTable.plugin,
@@ -257,8 +206,6 @@ it('records dated unavailable native-diagnostics and native-extension rows on ev
       reason: expect.stringContaining('Agent Plugin contract (1.0.0)'),
       state: 'unavailable',
     });
-    expect(registry.get('plugin').capabilities[capability]).toMatchObject({ state: 'unavailable' });
-    expect(registry.get('plugin').componentCapabilities?.[capability]).toMatchObject({ state: 'unavailable' });
   }
   // Claude's row points at the LSP `diagnostics` option rather than inventing a component.
   expect(claudeCapabilityTable.plugin.nativeDiagnostics.reason).toContain('`lsp` kind');
@@ -271,7 +218,6 @@ it('publishes dated component feature rows per kind and host (#100 feature sets)
   const codex = registry.get('codex').capabilities;
   const cursor = registry.get('cursor').capabilities;
   const portable = registry.get('portable').capabilities;
-  const plugin = registry.get('plugin');
 
   // Commands: Claude documents the five frontmatter fields; Cursor's commands
   // surface is frontmatter-free, so every field row is unavailable there.
@@ -283,9 +229,6 @@ it('publishes dated component feature rows per kind and host (#100 feature sets)
     expect(cursor[`commands.${field}`]).toEqual({ reason: cursorCapabilityTable.plugin.commandFrontmatter.reason, state: 'unavailable' });
     expect(codex[`commands.${field}`]).toBeUndefined();
     expect(portable[`commands.${field}`]).toBeUndefined();
-    // Composite: intersection stays honest, emission dispatch follows the Claude half.
-    expect(plugin.capabilities[`commands.${field}`]).toMatchObject({ state: 'unavailable' });
-    expect(plugin.componentCapabilities?.[`commands.${field}`]).toMatchObject({ evidence: { target: 'claude' }, state: 'supported' });
   }
   expect(cursorCapabilityTable.plugin.commandFrontmatter.evidence.some((entry) => entry.startsWith('2026-09-03: '))).toBe(true);
 
@@ -293,7 +236,6 @@ it('publishes dated component feature rows per kind and host (#100 feature sets)
   for (const field of ['alwaysApply', 'description', 'globs']) {
     expect(cursor[`rules.${field}`]).toMatchObject({ evidence: { target: 'cursor' }, state: 'supported' });
     expect(claude[`rules.${field}`]).toBeUndefined();
-    expect(plugin.componentCapabilities?.[`rules.${field}`]).toMatchObject({ evidence: { target: 'cursor' }, state: 'supported' });
   }
   expect(cursorCapabilityTable.plugin.ruleFrontmatter.evidence[0]).toMatch(/^retrieved 2026-09-03: https:\/\/cursor\.com\/docs\/context\/rules/u);
 
@@ -313,22 +255,6 @@ it('publishes dated component feature rows per kind and host (#100 feature sets)
   for (const capabilities of [codex, cursor, portable]) {
     expect(capabilities['skills.markdownTokens']).toMatchObject({ reason: expect.stringContaining('AB3008'), state: 'unavailable' });
   }
-  // The composite's shared skills/ tree falls back to the portable document for
-  // any skill with a host extension or token, so neither feature reaches it.
-  for (const capability of ['skills.hostFrontmatter', 'skills.markdownTokens']) {
-    expect(plugin.componentCapabilities?.[capability]).toMatchObject({ reason: expect.stringContaining('portable document'), state: 'unavailable' });
-    expect(plugin.capabilities[capability]).toEqual(plugin.componentCapabilities?.[capability]);
-  }
-});
-
-it('judges composite event routes by the same intersection validation applies (#100 event-route kind)', () => {
-  const registry = createDefaultRegistry();
-  const plugin = registry.get('plugin');
-  for (const [capability, state] of Object.entries(plugin.capabilities)) {
-    if (!capability.startsWith('event:')) continue;
-    expect(plugin.componentCapabilities?.[capability]).toEqual(state);
-  }
-  expect(plugin.componentCapabilities?.['event:session/start']).toMatchObject({ state: 'supported' });
 });
 
 it('reports Claude bin support without inventing coverage on other native hosts', () => {
@@ -341,21 +267,13 @@ it('reports Claude bin support without inventing coverage on other native hosts'
     },
     state: 'supported',
   });
-  expect(registry.get('plugin').capabilities.bin).toMatchObject({
-    reason: expect.stringContaining('Claude-only bin'),
-    state: 'unavailable',
-  });
   for (const target of ['codex', 'cursor', 'portable'] as const) {
     expect(registry.get(target).capabilities.bin).toBeUndefined();
   }
   expect(registry.supports('claude', 'bin')).toBe(true);
-  expect(registry.supports('plugin', 'bin')).toBe(false);
 });
 
-it.each([
-  ['outputStyles', 'output styles'],
-  ['workflows', 'workflows'],
-] as const)('reports Claude %s support and honest unavailable composite coverage', (capability, label) => {
+it.each(['outputStyles', 'workflows'] as const)('reports Claude %s support and honest unavailable coverage on other hosts', (capability) => {
   const registry = createDefaultRegistry();
 
   expect(registry.get('claude').capabilities[capability]).toMatchObject({
@@ -365,16 +283,11 @@ it.each([
     },
     state: 'supported',
   });
-  expect(registry.get('plugin').capabilities[capability]).toEqual({
-    reason: `The unified bundle emits Claude-only ${label}, but the pinned Codex and Cursor contracts declare no shared ${label} surface.`,
-    state: 'unavailable',
-  });
   for (const target of ['codex', 'cursor', 'portable'] as const) {
     expect(registry.get(target).capabilities[capability]).toBeUndefined();
     expect(registry.supports(target, capability)).toBe(false);
   }
   expect(registry.supports('claude', capability)).toBe(true);
-  expect(registry.supports('plugin', capability)).toBe(false);
 });
 
 it('reports Claude plugin settings support and honest unavailable composite coverage', () => {
@@ -387,10 +300,6 @@ it('reports Claude plugin settings support and honest unavailable composite cove
     },
     state: 'supported',
   });
-  expect(registry.get('plugin').capabilities.settings).toMatchObject({
-    reason: expect.stringContaining('no plugin settings-defaults surface'),
-    state: 'unavailable',
-  });
   // Codex and Cursor declare no settings row at all, so an absent capability
   // stays an honest "not declared" rather than an inferred support claim.
   for (const target of ['codex', 'cursor', 'portable'] as const) {
@@ -398,7 +307,6 @@ it('reports Claude plugin settings support and honest unavailable composite cove
     expect(registry.supports(target, 'settings')).toBe(false);
   }
   expect(registry.supports('claude', 'settings')).toBe(true);
-  expect(registry.supports('plugin', 'settings')).toBe(false);
 });
 
 const claudeAgentCapabilityRows = {
@@ -422,7 +330,7 @@ const claudeAgentCapabilityRows = {
   tools: 'agents.tools',
 } as const;
 
-it('records dated unavailable Claude agent rows and mirrors them through the unified adapter', () => {
+it('records dated unavailable Claude agent rows', () => {
   const registry = createDefaultRegistry();
   const agents = (
     claudeCapabilityTable.plugin as unknown as {
@@ -457,22 +365,7 @@ it('records dated unavailable Claude agent rows and mirrors them through the uni
       reason: row.reason,
       state: 'unavailable',
     });
-    expect(registry.get('plugin').capabilities[capability]).toEqual(rowName === 'component'
-      ? intersectCapabilityStates(
-          intersectCapabilityStates(
-            registry.get('claude').capabilities.agents!,
-            registry.get('cursor').capabilities.agents!,
-          ),
-          unavailableCapability('The pinned Codex plugin contract publishes no plugin agents component.'),
-        )
-      : intersectCapabilityStates(
-          registry.get('claude').capabilities[capability]!,
-          unavailableCapability(
-            'The pinned Codex plugin contract publishes no plugin agents component, and the pinned Cursor agents component documents only name and description frontmatter, so no shared agent-frontmatter surface exists.',
-          ),
-        ));
     expect(registry.supports('claude', capability)).toBe(false);
-    expect(registry.supports('plugin', capability)).toBe(false);
   }
 });
 
@@ -517,7 +410,7 @@ it('records the dated G5-gated Cursor agents component row beside the documented
   expect(registry.supports('cursor', 'agents')).toBe(false);
 });
 
-it('reports Claude userConfig support and honest unavailable composite coverage', () => {
+it('reports Claude userConfig support and honest unavailable coverage on other hosts', () => {
   const registry = createDefaultRegistry();
 
   expect(registry.get('claude').capabilities.userConfig).toMatchObject({
@@ -527,18 +420,13 @@ it('reports Claude userConfig support and honest unavailable composite coverage'
     },
     state: 'supported',
   });
-  expect(registry.get('plugin').capabilities.userConfig).toMatchObject({
-    reason: expect.stringContaining('Claude-only userConfig'),
-    state: 'unavailable',
-  });
   for (const target of ['codex', 'cursor', 'portable'] as const) {
     expect(registry.get(target).capabilities.userConfig).toBeUndefined();
   }
   expect(registry.supports('claude', 'userConfig')).toBe(true);
-  expect(registry.supports('plugin', 'userConfig')).toBe(false);
 });
 
-it('reports Claude channels support and honest unavailable composite coverage', () => {
+it('reports Claude channels support and honest unavailable coverage on other hosts', () => {
   const registry = createDefaultRegistry();
 
   expect(registry.get('claude').capabilities.channels).toMatchObject({
@@ -548,21 +436,13 @@ it('reports Claude channels support and honest unavailable composite coverage', 
     },
     state: 'supported',
   });
-  expect(registry.get('plugin').capabilities.channels).toEqual({
-    reason: 'The unified bundle emits the Claude-only channels manifest field, but the pinned Codex and Cursor contracts declare no shared message-channel surface.',
-    state: 'unavailable',
-  });
   for (const target of ['codex', 'cursor', 'portable'] as const) {
     expect(registry.get(target).capabilities.channels).toBeUndefined();
   }
   expect(registry.supports('claude', 'channels')).toBe(true);
-  expect(registry.supports('plugin', 'channels')).toBe(false);
 });
 
-it.each([
-  ['themes', 'experimental themes'],
-  ['monitors', 'background monitors'],
-] as const)('reports Claude %s support without inventing shared composite coverage', (capability, reason) => {
+it.each(['themes', 'monitors'] as const)('reports Claude %s support without inventing coverage on other hosts', (capability) => {
   const registry = createDefaultRegistry();
 
   expect(registry.get('claude').capabilities[capability]).toMatchObject({
@@ -572,19 +452,14 @@ it.each([
     },
     state: 'supported',
   });
-  expect(registry.get('plugin').capabilities[capability]).toMatchObject({
-    reason: expect.stringContaining(reason),
-    state: 'unavailable',
-  });
   for (const target of ['codex', 'cursor', 'portable'] as const) {
     expect(registry.get(target).capabilities[capability]).toBeUndefined();
     expect(registry.supports(target, capability)).toBe(false);
   }
   expect(registry.supports('claude', capability)).toBe(true);
-  expect(registry.supports('plugin', capability)).toBe(false);
 });
 
-it('reports Claude dependency support and honest unavailable composite coverage', () => {
+it('reports Claude dependency support and honest unavailable coverage on other hosts', () => {
   const registry = createDefaultRegistry();
 
   expect(registry.get('claude').capabilities.dependencies).toMatchObject({
@@ -594,16 +469,11 @@ it('reports Claude dependency support and honest unavailable composite coverage'
     },
     state: 'supported',
   });
-  expect(registry.get('plugin').capabilities.dependencies).toMatchObject({
-    reason: expect.stringContaining('Claude Code only'),
-    state: 'unavailable',
-  });
   for (const target of ['codex', 'cursor', 'portable'] as const) {
     expect(registry.get(target).capabilities.dependencies).toBeUndefined();
     expect(registry.supports(target, 'dependencies')).toBe(false);
   }
   expect(registry.supports('claude', 'dependencies')).toBe(true);
-  expect(registry.supports('plugin', 'dependencies')).toBe(false);
 });
 
 const claudeDistributionPolicyCapabilities = [
@@ -679,9 +549,6 @@ it('records dated unavailable Claude distribution and policy capability rows', (
         state: 'unavailable',
       });
     }
-    expect(registry.get('plugin').capabilities[capability]).toMatchObject({
-      state: 'unavailable',
-    });
   }
   expect(distributionPolicy.pluginCliLifecycle.commands).toEqual([
     'init',
@@ -740,9 +607,6 @@ it('records dated Claude package, cache, and data lifecycle capability rows', ()
       reason: row.reason,
       state: row.state,
     });
-    expect(registry.get('plugin').capabilities[capability]).toMatchObject({
-      state: 'unavailable',
-    });
   }
 });
 
@@ -774,10 +638,7 @@ it('pins the documented Claude dependency precedence and substitution field tabl
   });
 });
 
-it.each([
-  ['marketplaceManifest', 'completed marketplace manifest'],
-  ['allowCrossMarketplaceDependenciesOn', 'cross-marketplace dependency allowlist'],
-] as const)('reports Claude %s support and honest unavailable composite coverage', (capability, reason) => {
+it.each(['marketplaceManifest', 'allowCrossMarketplaceDependenciesOn'] as const)('reports Claude %s support and honest unavailable coverage on other hosts', (capability) => {
   const registry = createDefaultRegistry();
 
   expect(registry.get('claude').capabilities[capability]).toMatchObject({
@@ -786,10 +647,6 @@ it.each([
       target: 'claude',
     },
     state: 'supported',
-  });
-  expect(registry.get('plugin').capabilities[capability]).toMatchObject({
-    reason: expect.stringContaining(reason),
-    state: 'unavailable',
   });
   for (const target of ['codex', 'portable'] as const) {
     expect(registry.get(target).capabilities[capability]).toBeUndefined();
@@ -808,7 +665,6 @@ it.each([
     expect(registry.supports('cursor', capability)).toBe(false);
   }
   expect(registry.supports('claude', capability)).toBe(true);
-  expect(registry.supports('plugin', capability)).toBe(false);
 });
 
 it('pins the authored Claude marketplace source matrix and version gates', () => {
@@ -826,7 +682,7 @@ it('pins the authored Claude marketplace source matrix and version gates', () =>
   });
 });
 
-it('reports Claude manifestPaths support without inventing shared composite coverage', () => {
+it('reports Claude manifestPaths support without inventing coverage on other hosts', () => {
   const registry = createDefaultRegistry();
 
   expect(registry.get('claude').capabilities.manifestPaths).toMatchObject({
@@ -836,10 +692,6 @@ it('reports Claude manifestPaths support without inventing shared composite cove
     },
     state: 'supported',
   });
-  expect(registry.get('plugin').capabilities.manifestPaths).toMatchObject({
-    reason: expect.stringContaining('custom manifest path rules'),
-    state: 'unavailable',
-  });
   // Neither the pinned Cursor contract nor Agent Plugins 1.0.0 (#307) defines
   // custom manifest path rules.
   for (const target of ['cursor', 'portable'] as const) {
@@ -847,10 +699,9 @@ it('reports Claude manifestPaths support without inventing shared composite cove
     expect(registry.supports(target, 'manifestPaths')).toBe(false);
   }
   expect(registry.supports('claude', 'manifestPaths')).toBe(true);
-  expect(registry.supports('plugin', 'manifestPaths')).toBe(false);
 });
 
-it('reports manifest metadata support on every native host and the three-host composite', () => {
+it('reports manifest metadata support on every native host', () => {
   const registry = createDefaultRegistry();
 
   for (const target of ['claude', 'codex', 'cursor'] as const) {
@@ -860,10 +711,6 @@ it('reports manifest metadata support on every native host and the three-host co
     });
     expect(registry.supports(target, 'manifestMetadata')).toBe(true);
   }
-  expect(registry.get('plugin').capabilities.manifestMetadata).toMatchObject({
-    evidence: { target: 'claude+codex+cursor' },
-    state: 'supported',
-  });
   // Agent Plugins 1.0.0 §5.4 defines manifest metadata for the portable manifest (#307).
   expect(registry.get('portable').capabilities.manifestMetadata).toMatchObject({
     evidence: { observedVersion: '1.0.0', target: 'portable' },
@@ -941,106 +788,6 @@ it('records dated Codex manifest and package capability rows', () => {
   ]);
 });
 
-it('mirrors Codex manifest metadata and path states through the unified adapter', () => {
-  const registry = createDefaultRegistry();
-
-  expect(registry.get('codex').capabilities.manifestMetadata).toMatchObject({
-    evidence: { target: 'codex' },
-    state: 'supported',
-  });
-  expect(registry.get('codex').capabilities.manifestPaths).toMatchObject({
-    evidence: { target: 'codex' },
-    reason: expect.stringContaining('canonical'),
-    state: 'degraded',
-  });
-  expect(registry.get('plugin').capabilities.manifestMetadata).toEqual(intersectCapabilityStates(
-    intersectCapabilityStates(
-      registry.get('claude').capabilities.manifestMetadata!,
-      registry.get('codex').capabilities.manifestMetadata!,
-    ),
-    registry.get('cursor').capabilities.manifestMetadata!,
-  ));
-  expect(registry.get('plugin').capabilities.manifestPaths).toEqual(intersectCapabilityStates(
-    intersectCapabilityStates(
-      registry.get('claude').capabilities.manifestPaths!,
-      registry.get('codex').capabilities.manifestPaths!,
-    ),
-    unavailableCapability(
-      'The pinned Cursor plugin contract does not share the Codex and Claude custom manifest path rules.',
-    ),
-  ));
-});
-
-it('intersects supported composite capabilities and merges both evidence records', () => {
-  const intersection = intersectCapabilityStates(
-    supportedCapability(evidence('claude')),
-    supportedCapability(evidence('codex')),
-  );
-
-  expect(intersection.state).toBe('supported');
-  if (intersection.state !== 'supported') throw new Error('Expected a supported capability intersection.');
-  expect(intersection.evidence).toMatchObject({
-    observedVersion: 'claude@claude-version+codex@codex-version',
-    target: 'claude+codex',
-  });
-});
-
-it('applies prohibited, unavailable, degraded, and supported intersection precedence', () => {
-  const supported = supportedCapability(evidence('supported'));
-  const degraded = state({ state: 'degraded', reason: 'degraded host', evidence: evidence('degraded') });
-  const unavailable = state({ state: 'unavailable', reason: 'unavailable host' });
-  const prohibited = state({ state: 'prohibited', reason: 'prohibited host' });
-
-  for (const other of [supported, degraded, unavailable]) {
-    expect(intersectCapabilityStates(other, prohibited)).toEqual(prohibited);
-    expect(intersectCapabilityStates(prohibited, other)).toEqual(prohibited);
-  }
-  for (const other of [supported, degraded]) {
-    expect(intersectCapabilityStates(other, unavailable)).toEqual(unavailable);
-    expect(intersectCapabilityStates(unavailable, other)).toEqual(unavailable);
-  }
-  expect(intersectCapabilityStates(supported, degraded)).toMatchObject({
-    state: 'degraded',
-    reason: 'degraded host',
-  });
-  expect(intersectCapabilityStates(degraded, supported)).toMatchObject({
-    state: 'degraded',
-    reason: 'degraded host',
-  });
-});
-
-it('unions host capability states according to composite emission dispatch', () => {
-  const supported = supportedCapability(evidence('supported'));
-  const unavailable = unavailableCapability('unavailable host');
-  const prohibited = state({ state: 'prohibited', reason: 'prohibited host' });
-
-  expect(unionCapabilityStates(supported, unavailable)).toEqual(supported);
-  expect(unionCapabilityStates(unavailable, supported)).toEqual(supported);
-  expect(unionCapabilityStates(
-    unavailableCapability('second unavailable host'),
-    unavailable,
-  )).toEqual({
-    reason: 'second unavailable host; unavailable host',
-    state: 'unavailable',
-  });
-  expect(unionCapabilityStates(prohibited, supported)).toEqual(supported);
-  expect(unionCapabilityStates(supported, prohibited)).toEqual(supported);
-});
-
-it('keeps the Boolean compatibility view thin and exhaustive', () => {
-  expect(capabilityBooleanView({
-    degraded: { state: 'degraded', reason: 'partial' },
-    prohibited: { state: 'prohibited', reason: 'policy' },
-    supported: supportedCapability(evidence('supported')),
-    unavailable: { state: 'unavailable', reason: 'missing' },
-  })).toEqual({
-    degraded: false,
-    prohibited: false,
-    supported: true,
-    unavailable: false,
-  });
-});
-
 const malformed = (value: unknown): CapabilityState => value as CapabilityState;
 
 it('recognizes only the four contract states with their required fields', () => {
@@ -1063,15 +810,11 @@ it('recognizes only the four contract states with their required fields', () => 
 
 it('raises a typed error for an unknown state instead of fabricating a truthy one', () => {
   const unknown = malformed({ state: 'suported' });
-  const supported = supportedCapability(evidence('cursor'));
 
   // The bug this covers: the exhaustive default returned the capability object,
   // so an untyped adapter's typo read as truthy support.
   expect(() => capabilityIsSupported(unknown)).toThrow(CapabilityStateError);
   expect(() => capabilityIsSupported(unknown)).toThrow(/outside the degraded\/prohibited\/supported\/unavailable contract/u);
-  expect(() => capabilityBooleanView({ mcp: unknown })).toThrow(CapabilityStateError);
-  expect(() => intersectCapabilityStates(unknown, supported)).toThrow(CapabilityStateError);
-  expect(() => intersectCapabilityStates(supported, unknown)).toThrow(CapabilityStateError);
 
   const thrown = (() => {
     try {
@@ -1168,31 +911,6 @@ it('publishes the routed CLI bin capability with its bin layout on every built-i
   expect(registry.hostsComponent('unknown-target', 'cli')).toBe(false);
 });
 
-it('validates lowersConfigExtensions at registration and answers extension lowering per target (#100)', () => {
-  const source = createDefaultRegistry().get('cursor');
-  for (const malformedValue of ['claude', ['claude', 42], [' ']]) {
-    expect(() => new TargetRegistry().register({
-      ...source,
-      lowersConfigExtensions: malformedValue as never,
-    })).toThrow(/lowersConfigExtensions must be an array of nonempty extension keys/u);
-  }
-  const registry = createDefaultRegistry();
-  // Own key, declared composite sides, and nothing else.
-  expect(registry.lowersConfigExtension('claude', 'claude')).toBe(true);
-  expect(registry.lowersConfigExtension('plugin', 'claude')).toBe(true);
-  expect(registry.lowersConfigExtension('plugin', 'codex')).toBe(true);
-  expect(registry.lowersConfigExtension('cursor', 'claude')).toBe(false);
-  expect(registry.lowersConfigExtension('portable', 'claude')).toBe(false);
-  expect(registry.lowersConfigExtension('missing', 'claude')).toBe(false);
-  // Ownership is answered from the registration snapshot: mutating a live
-  // adapter's configExtension afterwards changes nothing.
-  const mutable = { ...createDefaultRegistry().get('cursor'), configExtension: { key: 'mutable' }, name: 'mutable-host' };
-  const snapshotted = new TargetRegistry().register(mutable);
-  mutable.configExtension.key = 'renamed';
-  expect(snapshotted.lowersConfigExtension('mutable-host', 'mutable')).toBe(true);
-  expect(snapshotted.lowersConfigExtension('mutable-host', 'renamed')).toBe(false);
-});
-
 it('rejects a malformed inspection component capability when the adapter registers', () => {
   const source = createDefaultRegistry().get('cursor');
 
@@ -1281,33 +999,6 @@ it('reports the evidence-backed G10 event family matrix without inferred support
       state: 'unavailable',
     });
   }
-  for (const capability of [
-    'event:agent/start',
-    'event:agent/stop',
-    'event:compact/before',
-    'event:prompt/submit',
-    'event:session/end',
-  ]) {
-    expect(registry.get('plugin').capabilities[capability]).toMatchObject({
-      evidence: { target: 'claude+codex+cursor' },
-      state: 'supported',
-    });
-  }
-  expect(registry.get('plugin').capabilities['event:tool/failure']).toMatchObject({
-    reason: expect.stringContaining('no tool-failure'),
-    state: 'unavailable',
-  });
-  expect(registry.get('plugin').capabilities['event:compact/after']).toMatchObject({
-    reason: expect.stringContaining('no postCompact'),
-    state: 'unavailable',
-  });
-  const workspaceOpen = registry.get('plugin').capabilities['event:workspace/open'];
-  expect(workspaceOpen).toMatchObject({
-    reason: expect.not.stringContaining('pluginPaths'),
-    state: 'unavailable',
-  });
-  expect(workspaceOpen).toMatchObject({ reason: expect.stringContaining('Claude Code 2.1.260') });
-  expect(workspaceOpen).toMatchObject({ reason: expect.stringContaining('Codex 0.147.0') });
 });
 
 it('reports evidence-backed installation support only for real host targets', () => {
@@ -1320,13 +1011,11 @@ it('reports evidence-backed installation support only for real host targets', ()
     });
     expect(registry.supports(target, 'install')).toBe(true);
   }
-  for (const target of ['portable', 'plugin'] as const) {
-    expect(registry.get(target).capabilities.install).toMatchObject({
-      reason: expect.stringContaining('profile'),
-      state: 'unavailable',
-    });
-    expect(registry.supports(target, 'install')).toBe(false);
-  }
+  expect(registry.get('portable').capabilities.install).toMatchObject({
+    reason: expect.stringContaining('profile'),
+    state: 'unavailable',
+  });
+  expect(registry.supports('portable', 'install')).toBe(false);
 });
 
 it('pins dated deferral rows for every explicitly deferred native callback from #258', async () => {
@@ -1499,10 +1188,9 @@ it('pins every documented Cursor hook event exactly once across canonical routes
   });
 });
 
-it('records dated Cursor contract rows and mirrors every one through the unified adapter (#189)', () => {
+it('records dated Cursor contract rows (#189)', () => {
   const registry = createDefaultRegistry();
   const cursor = registry.get('cursor');
-  const unified = registry.get('plugin');
   const expectedStates = {
     agentPluginFormat: 'unavailable',
     agents: 'unavailable',
@@ -1547,13 +1235,6 @@ it('records dated Cursor contract rows and mirrors every one through the unified
       });
     }
     expect(registry.supports('cursor', capability)).toBe(expectedState === 'supported');
-    expect(unified.capabilities[capability]).toBeDefined();
-    if (capability === 'manifestMetadata') {
-      expect(unified.capabilities[capability]).toMatchObject({ state: 'supported' });
-    } else {
-      expect(unified.capabilities[capability]).toMatchObject({ state: 'unavailable' });
-      expect(registry.supports('plugin', capability)).toBe(false);
-    }
   }
   expect(cursorCapabilityTable.plugin.marketplaceManifest).toMatchObject({
     generatedEntryFields: ['name', 'source', 'description'],
@@ -1567,8 +1248,8 @@ it('records dated Cursor contract rows and mirrors every one through the unified
   });
   expect(cursorCapabilityTable.plugin.componentDiscovery.emitted).toEqual({
     commands: './commands/',
-    hooks: './hooks/hooks.json',
-    mcpServers: './mcp.json',
+    hooks: './.cursor-plugin/hooks.json',
+    mcpServers: './.cursor-plugin/mcp.json',
     rules: './rules/',
     skills: './skills/',
   });
@@ -1597,16 +1278,6 @@ it('exposes each host advertisement through the adapter and registry, typed for 
   expect(selectNoticeDeliveryRoutes(registry.noticeDelivery('portable')!)).toEqual({
     kind: 'selected',
     routes: ['mcp-resource-updated', 'mcp-inbox'],
-  });
-  // The unified bundle serves all three hosts, so it advertises their intersection.
-  const plugin = registry.noticeDelivery('plugin')!;
-  expect(plugin).toEqual(intersectNoticeDeliveryAdvertisements(
-    intersectNoticeDeliveryAdvertisements(registry.noticeDelivery('claude')!, registry.noticeDelivery('codex')!),
-    registry.noticeDelivery('cursor')!,
-  ));
-  expect(selectNoticeDeliveryRoutes(plugin)).toEqual({
-    kind: 'selected',
-    routes: ['mcp-resource-updated', 'mcp-inbox', 'next-event'],
   });
   expect(() => registry.noticeDelivery('unknown')).toThrow(/Unknown target adapter/u);
 });
@@ -1643,16 +1314,13 @@ it('advertises dated sensitivity ceilings per route and host (#99 acceptance ite
   expect(ceiling('portable', 'mcp-inbox')).toBe('internal');
   expect(ceiling('portable', 'mcp-resource-updated')).toBe('internal');
   // Every named ceiling carries dated evidence.
-  for (const host of ['claude', 'codex', 'cursor', 'portable', 'plugin']) {
+  for (const host of ['claude', 'codex', 'cursor', 'portable']) {
     for (const route of NOTICE_DELIVERY_ROUTES) {
       const entry = registry.noticeDelivery(host)![route];
       if (entry.state !== 'supported' || entry.sensitivity === undefined) continue;
       expect(entry.sensitivityEvidence).toMatch(/2026-09-03/u);
     }
   }
-  // The composite plugin target takes the lowest ceiling of its hosts.
-  expect(ceiling('plugin', 'next-event')).toBe('secret');
-  expect(ceiling('plugin', 'mcp-inbox')).toBe('internal');
   // The runtime resolves the same ceilings into disclosure decisions.
   expect(resolveNoticeDisclosure('mcp-inbox', 'secret', registry.noticeDelivery('claude')!))
     .toEqual({ kind: 'withheld', reason: 'sensitivity-exceeds-route' });

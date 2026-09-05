@@ -147,8 +147,6 @@ it('projects subagent-stop continuation only through supported host contracts', 
   });
   expect(() => projectEventDocument(feedback.document, 'agent/stop', 'codex', 'SubagentStop'))
     .toThrow(/not supported by the Codex SubagentStop output schema/u);
-  expect(() => projectEventDocument(feedback.document, 'agent/stop', 'plugin', 'SubagentStop'))
-    .toThrow(/must resolve the invoking host/u);
 });
 
 it('projects the Cursor subagent lifecycle through its documented permission and followup_message channels only', async () => {

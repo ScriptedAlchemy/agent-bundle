@@ -42,6 +42,7 @@ import {
   payloadCopyEntries,
   routedCliBinLayout,
   schemaDescriptorsFrom,
+  sortedEntries,
   sourceInputs,
   validateJsonSchemaDocument,
   validateModernMcpDocument,
@@ -50,9 +51,7 @@ import {
   type TargetArtifactEntry,
   type TargetArtifactPlan,
 } from './types.ts';
-import { withInstallSurface } from '../install/surface.ts';
 import { deepFreeze } from '../core/freeze.ts';
-
 
 /** Agent Plugins 1.0.0 §5.4 `author` object: optional `name`, `email`, and `url` strings. */
 export interface PortableAuthorConfig {
@@ -603,11 +602,11 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
     }
   }
 
-  return withInstallSurface(deepFreeze({
+  return deepFreeze({
     diagnostics: diagnostics,
-    entries: entries,
+    entries: sortedEntries(entries),
     hookEntries: [],
-  }), model, 'portable');
+  });
 };
 
 export const portableAdapter: TargetAdapter = Object.freeze({

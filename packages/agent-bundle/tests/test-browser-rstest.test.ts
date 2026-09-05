@@ -1,5 +1,6 @@
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 
 import { describe, expect, it } from '@rstest/core';
 
@@ -58,6 +59,36 @@ describe('agentBundleBrowserRstest', () => {
     expect(metaModule).toContain('export const name = "route-harness";');
     expect(metaModule).toContain('export const version = "1.0.0";');
     expect(metaModule).toContain('export const packageName = undefined;');
+  });
+
+  it('mounts each app as one host of a composite selection, never as the selection identity (#555, #592)', { timeout: 60_000 }, async () => {
+    // The apps compile once for the whole selection the build stages; the
+    // registry's `target` is the host the harness mounts the app as — its
+    // preview profile and the binding's `target` — so a Claude+Codex project
+    // registers `claude`, not `claude+codex`, and an override names one host.
+    const root = await mkdtemp(join(tmpdir(), 'agent-bundle-browser-pool-'));
+    try {
+      await cp(fixtureRoot, root, { recursive: true });
+      const configPath = join(root, 'agent-bundle.config.ts');
+      const config = await readFile(configPath, 'utf8');
+      await writeFile(configPath, config.replace("targets: ['claude'],", "targets: ['codex', 'claude'],"));
+
+      const overridden = await agentBundleBrowserRstest({ root, target: 'claude' });
+      const overriddenSetup = await readFile(overridden.setupFiles[0]!, 'utf8');
+      expect(overriddenSetup).toContain('"target":"claude"');
+      expect(overriddenSetup).not.toContain('claude+codex');
+
+      const defaulted = await agentBundleBrowserRstest({ root });
+      const defaultedSetup = await readFile(defaulted.setupFiles[0]!, 'utf8');
+      expect(defaultedSetup).toMatch(/"target":"(?:claude|codex)"/u);
+      expect(defaultedSetup).not.toContain('claude+codex');
+
+      await expect(agentBundleBrowserRstest({ root, target: 'cursor' })).rejects.toThrow(
+        'MCP App "panel" has no browser mount host selected by the project.',
+      );
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
   });
 
   it('rejects a browser pool whose compiled manifest declares no apps', async () => {

@@ -26,8 +26,9 @@ npx agent-bundle dev --root . --port 3100 --no-open
 | 页面 | 内容 |
 | --- | --- |
 | Overview | 项目标识、规范化模型与诊断。 |
+| Routes | 来自与 `inspect --routes` 相同编译器 pass 的已编译路由目录：每条路由的源码模块、配置摘要与生成的输入编辑器；带静态契约的路由还会指明契约的声明模块及共享该契约的其他路由。 |
 | Skills | 每个 Skill 文档，包括各宿主降级后的输出。 |
-| Artifacts | 带 provenance 与 epoch 对比的产物树。 |
+| Artifacts | 复合插件根目录——无论聚焦哪个选中宿主，都是同一棵树——以及 provenance 与 epoch 对比。 |
 | MCP | 绑定到产物的 playground，带原始协议轨迹、MCP App 预览，以及独立 MCP Inspector 的启动器。 |
 | Hooks | 运行输出的钩子包装层的 playground。 |
 | Playground | 可重放、可导出的持久有序轨迹。 |
@@ -130,7 +131,8 @@ agent-bundle dev proxy --root <projectRoot> --server <serverName> --target <host
 重建绝不会用某个 epoch 路径替换这条稳定命令，而宿主进程 `PATH` 的内容也不影响项目本地的框架能否被
 启动。
 
-之后每个 `artifact.available` 事件都会把新的 target 复制成一个不可变的已安装世代。顶层目录通过原子的
+所有选中宿主都从同一个复合 epoch 根目录安装。之后每个 `artifact.available` 事件都会为每个宿主把该根目录
+复制成一个不可变的已安装世代。顶层目录通过原子的
 符号链接（或 Windows junction）重命名切换，顶层文件通过原子的同级文件重命名切换，因此宿主看到的要么是
 旧的、要么是新的完整条目，任何被同步的目录都不会在两个世代之间消失。发布失败会把指针回滚到先前世代，
 并在 `dev.host.sync` 上发出一条 `AB7202` 诊断；构建失败则根本不会发出 `artifact.available`，因此

@@ -65,11 +65,14 @@ const measureOnce = async (hookPath) => {
 };
 
 const findGeneratedHook = async (artifactRoot) => {
-  const claudeHooks = join(artifactRoot, 'claude', 'hooks');
-  const names = await readdir(claudeHooks);
-  const hook = names.find((name) => name.endsWith('.mjs') && !name.includes('cursor'));
-  if (hook === undefined) throw new Error(`No generated stdio hook under ${claudeHooks}`);
-  return join(claudeHooks, hook);
+  // The built artifact is the plugin root itself (#555): `hooks/` sits at its
+  // top, and the claude-only fixture compiles one unsuffixed `hooks/<name>.mjs`
+  // wrapper (a hook several selected hosts share would be `<name>.<host>.mjs`).
+  const hooksDirectory = join(artifactRoot, 'hooks');
+  const names = await readdir(hooksDirectory);
+  const hook = names.find((name) => name.endsWith('.mjs'));
+  if (hook === undefined) throw new Error(`No generated stdio hook under ${hooksDirectory}`);
+  return join(hooksDirectory, hook);
 };
 
 const measure = async () => {
@@ -109,7 +112,7 @@ const measure = async () => {
     const rounded = samplesMs.map((value) => Math.round(value * 100) / 100);
     return {
       effect: '4.0.0-rc.112',
-      hookPath: 'claude/hooks/<generated-session-start>.mjs',
+      hookPath: 'hooks/<generated-session-start>.mjs',
       kind: 'generated-stdio-hook-cold-start',
       maxMs: Math.round(Math.max(...rounded) * 100) / 100,
       measuredAt: new Date().toISOString(),

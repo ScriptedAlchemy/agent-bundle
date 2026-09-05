@@ -10,10 +10,20 @@ import {
   type DevRuntimeClientSurfaceEndpoint,
 } from '../src/dev/index.ts';
 import { runtimeAppMessageLimits } from '../src/dev/runtime-app-message-limits.ts';
+import {
+  defaultRuntimeClientSurfaceUpstreamRequestTimeoutMs,
+  type RuntimeClientSurfaceProxyOptions,
+} from '../src/dev/runtime-client-surface-proxy.ts';
 
 const foregroundOrigin = 'http://127.0.0.1:41999';
 const noopSubscribeReload = (): (() => void) => () => undefined;
 const reloadFrame = (generation: number): string => JSON.stringify({ generation, kind: 'runtime-app-reload' });
+/**
+ * Deadline tests bound the upstream far below the production default: long
+ * enough for the loopback bootstrap fetch that shares the bound, short enough
+ * that the file no longer waits on the real 15 s.
+ */
+const shortUpstreamRequestTimeout: RuntimeClientSurfaceProxyOptions = Object.freeze({ upstreamRequestTimeoutMs: 500 });
 
 /** Provider-side reload authority stub: the trusted channel the proxy relays. */
 const createReloadSource = () => {
@@ -31,7 +41,8 @@ const RuntimeClientSurfaceProxy = Object.freeze({
   open: (
     input: DevRuntimeClientSurfaceEndpoint,
     listener: Parameters<typeof RuntimeClientSurfaceProxyImplementation.open>[1],
-  ) => RuntimeClientSurfaceProxyImplementation.open(input, listener, foregroundOrigin),
+    options?: RuntimeClientSurfaceProxyOptions,
+  ) => RuntimeClientSurfaceProxyImplementation.open(input, listener, foregroundOrigin, undefined, options),
 });
 
 const listen = async (server: ReturnType<typeof createServer>): Promise<string> => {
@@ -573,6 +584,19 @@ it('rejects a custom-prototype child policy before opening a proxy binding', asy
   }, () => undefined, foregroundOrigin, policy as never)).rejects.toThrow('plain policy record');
 });
 
+it('bounds upstream requests at 15 s by default and rejects out-of-range overrides before opening', async () => {
+  expect(defaultRuntimeClientSurfaceUpstreamRequestTimeoutMs).toBe(15_000);
+  for (const upstreamRequestTimeoutMs of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2_147_483_648]) {
+    await expect(RuntimeClientSurfaceProxy.open({
+      entryPath: '/app/index.html',
+      httpOrigin: 'http://127.0.0.1:41998',
+      httpPathPrefixes: ['/app/'],
+      surfaceId: 'app.weather',
+      subscribeReload: noopSubscribeReload,
+    }, () => undefined, { upstreamRequestTimeoutMs })).rejects.toThrow('upstreamRequestTimeoutMs from 1 to');
+  }
+});
+
 it('does not reinstall the opaque child when a held refresh fetch resolves after pagehide', async () => {
   const upstream = createServer((request, response) => {
     if (serveBootstrapEntry(request, response)) return;
@@ -1020,19 +1044,20 @@ it('bounds an upstream HTTP request before headers arrive', async () => {
     httpPathPrefixes: ['/app/'],
     surfaceId: 'app.weather',
     subscribeReload: noopSubscribeReload,
-  }, () => undefined);
+  }, () => undefined, shortUpstreamRequestTimeout);
 
   try {
     const cookie = await bootstrapCookie(binding);
     const pending = fetch(`${binding.origin}/app/index.html`, { headers: { cookie } });
     void pending.catch(() => undefined);
-    await expect(within(pending, 16_000)).resolves.toMatchObject({ status: 502 });
+    // Well under the 15 s default: a proxy that ignored the override would fail here.
+    await expect(within(pending, 2_000)).resolves.toMatchObject({ status: 502 });
   } finally {
     await binding.close();
     upstream.closeAllConnections();
     await close(upstream);
   }
-}, 20_000);
+});
 
 it('releases a reload-channel client that writes into the strictly one-way channel', async () => {
   const upstream = createServer((request, response) => {
@@ -1162,7 +1187,7 @@ it('keeps a completed 502 response intact when a response body stalls after head
     httpPathPrefixes: ['/app/'],
     surfaceId: 'app.weather',
     subscribeReload: noopSubscribeReload,
-  }, () => undefined);
+  }, () => undefined, shortUpstreamRequestTimeout);
 
   try {
     const cookie = await bootstrapCookie(binding);
@@ -1171,14 +1196,15 @@ it('keeps a completed 502 response intact when a response body stalls after head
       status: response.status,
     }));
     void pending.catch(() => undefined);
-    await expect(within(pending, 16_000)).resolves.toEqual({ body: 'Not Found', status: 502 });
+    // Well under the 15 s default: a proxy that ignored the override would fail here.
+    await expect(within(pending, 2_000)).resolves.toEqual({ body: 'Not Found', status: 502 });
     await expect(within(socketClosed, 250)).resolves.toBeUndefined();
   } finally {
     await binding.close();
     upstream.closeAllConnections();
     await close(upstream);
   }
-}, 20_000);
+});
 
 it('bounds chunked upstream assets and releases their socket immediately', async () => {
   let resolveSocketClosed: (() => void) | undefined;

@@ -91,7 +91,8 @@ export default defineConfig({
 import type { HookHandler } from 'agent-bundle';
 
 export default ((event) => ({
-  additionalContext: `Run verify-release from ${event.cwd ?? process.cwd()} before publishing.`,
+  additionalContext:
+    `Run verify-release from ${event.cwd ?? process.cwd()} before publishing.`,
   outcome: 'continue',
 })) satisfies HookHandler<'sessionStart'>;
 ```
@@ -117,20 +118,23 @@ export default ((event) => ({
 
 | 键 | 契约 |
 | --- | --- |
-| `outcome` | `continue`、`deny` 或 `stop`。 |
+| `outcome` | `continue` 或 `deny`。没有任何事件接受 `stop`：`HookHandler<E>` 的类型把它排除在外，生成的包装层在运行时也会拒绝它。 |
 | `reason` | 非空字符串，仅在拒绝 `beforeTool`、`stop` 或 `agentStop` 钩子时有效。拒绝其中之一却不给出原因会失败。 |
 | `additionalContext` | 追加到智能体上下文的字符串。 |
 | `updatedInput` | 用于替换待执行调用的输入。 |
 
 逐事件的限制是被强制执行的，而不是「写在文档里、希望有人遵守」：
 
-- `sessionStart`、`afterTool` 与 `agentStart` 不能拒绝、停止或替换输入。
+- `sessionStart`、`afterTool` 与 `agentStart` 不能拒绝、停止或替换输入。类型契约（以及 Claude 与 Codex 的
+  包装层）拒绝 `agentStart` 的拒绝结果；只有 Cursor 的运行时包装层容忍带原因的 `agentStart` 拒绝，并把它
+  投影为 `permission: 'deny'`——因此它只能从未带类型的结果触及。
 - `beforeTool` 不能停止，也不能在拒绝的同时替换输入。继续（`continue`）的 `beforeTool` 处理器
   **不做**任何权限决定：宿主的决定字段不会被写入，因此其正常的权限提示仍然适用；`updatedInput`
   改写会由该流程针对改写后的输入进行评估。只有 `deny` 会被投影为决定。若要显式批准一次调用，请使用
   [事件路由](#事件路由)并返回 `outcome: 'allow'`。
 - `stop` 只接受 `continue`，或带原因的 `deny`。
-- `agentStop` 不能停止父流程或替换输入；在 Codex 上也不能追加上下文。
+- `agentStop` 不能停止父流程或替换输入；在 Codex 与 Cursor 上也不能追加上下文——只有 Claude Code 会投递
+  `agentStop` 的 `additionalContext`。
 
 未知的键、错误的类型，或违反上述任一规则，都会让钩子以清晰的错误消息失败，而不是被投影成一份行为
 异常却毫无声响的宿主文档。
@@ -180,13 +184,17 @@ export const config = {
   tools: ['file.write'], // 规范选择器 -> 各宿主的原生匹配器
 } satisfies AgentEventRouteConfig;
 
-export default async function AfterFileEdit({ canonical, native, signal }: AgentEventRouteProps<'tool/after'>) {
+export default async function AfterFileEdit(
+  { canonical, native, signal }: AgentEventRouteProps<'tool/after'>,
+) {
   // canonical.provenance = { host, hostContractRevision, nativeEvent, source: 'native' }
   // 在每个宿主上，canonical.payload.toolName = { value: 'Write', nativeKey: 'tool_name' }
   const tool = canonical.payload.toolName?.value ?? 'a tool';
   return (
     <Agent.Result>
-      <Agent.Context>{`Recorded an edit by ${tool}, reported by ${canonical.provenance.host}.`}</Agent.Context>
+      <Agent.Context>
+        {`Recorded an edit by ${tool}, reported by ${canonical.provenance.host}.`}
+      </Agent.Context>
     </Agent.Result>
   );
 }
@@ -281,7 +289,9 @@ Claude 的 `background_tasks`、只有一个宿主才有的 `duration`——仍�
 import { createEventRouteInput, renderRoute } from 'agent-bundle/test';
 
 const rendered = await renderRoute('event:tool/after', {
-  input: createEventRouteInput('tool/after', claudePostToolUseEnvelope, { host: 'claude' }),
+  input: createEventRouteInput('tool/after', claudePostToolUseEnvelope, {
+    host: 'claude',
+  }),
 });
 ```
 
@@ -317,15 +327,18 @@ const rendered = await renderRoute('event:tool/after', {
 
 ### 线上到底传了什么
 
-两种形态共享输出的 `hooks/hooks.json` 接线，并且都编译成宿主以
-`node "${CLAUDE_PLUGIN_ROOT}/hooks/<wrapper>.mjs"`（或宿主自己的根令牌）调用的包装层。统一 `plugin`
-target 还会为 Cursor 写出 `hooks/hooks-cursor.json` 与 `hooks/<name>.cursor.mjs`（`preToolUse` /
-`postToolUse` 小驼峰）。Claude Code 与 Codex 按约定加载 `hooks/hooks.json`，且从不扫描 `hooks/`
-下的其他文档，因此 Claude 清单不写 `hooks` 指针：Claude Code 会把指向约定文件的指针报告为重复的
-hooks 文件（`manifest.hooks` 只用于额外文档）。每个包装层都拿信封里的 `hook_event_name` 与为
-自己宿主烘焙的拼写比较（Claude 与 Codex 为 `PreToolUse` / `PostToolUse`），所以 Claude 会话里出现
-`native hook_event_name must equal postToolUse`，说明 Claude 插件根目录下装的是为 Cursor 构建的
-包装层，而不是 Claude 发送了小驼峰。配置声明的处理器
+两种形态都编译成位于根目录 `hooks/` 下的包装层，由宿主以
+`node "${CLAUDE_PLUGIN_ROOT}/hooks/<wrapper>.mjs"`（或宿主自己的根令牌）调用。只有一个选中宿主
+接收的钩子编译为 `hooks/<name>.mjs`；被多个选中宿主共享的钩子则为每个宿主各编译一份
+`hooks/<name>.<host>.mjs`，因为每个包装层都烘焙了自己宿主的事件拼写——Claude Code 与 Codex 为
+`PreToolUse` / `PostToolUse`，Cursor 为小驼峰的 `preToolUse` / `postToolUse`——而每个宿主的文档
+都指向它自己的包装层。Claude Code 的文档是 `hooks/hooks.json`，它按约定加载该文件且从不扫描
+`hooks/` 下的其他文档，因此 Claude 清单不写 `hooks` 指针：Claude Code 会把指向约定文件的指针
+报告为重复的 hooks 文件（`manifest.hooks` 只用于额外文档）。Codex 与 Cursor 的清单带有显式的
+`hooks` 指针，因此它们的文档紧挨着各自的清单，分别是 `.codex-plugin/hooks.json` 与
+`.cursor-plugin/hooks.json`。每个包装层都拿信封里的 `hook_event_name` 与为自己宿主烘焙的拼写
+比较，所以 Claude 会话里出现 `native hook_event_name must equal postToolUse`，说明 Claude 的
+文档调用的是为 Cursor 构建的包装层，而不是 Claude 发送了小驼峰。配置声明的处理器
 在该包装层进程内运行。`runtime: 'shared'` 的事件路由则转发给生成的 MCP 服务器进程内的常驻运行时，
 因此钩子与工具共享状态：
 
@@ -368,6 +381,11 @@ Claude Code 会话共享同一个 `--plugin-dir`，Cursor 也会从同一个缓�
 服务端会把失败报告到自己的 stderr——每种不同的失败一行，最多每 30 秒重复一次——并继续待命。因其他
 任何原因失败的启动仍然失败即关闭，所有者无法删除的过期 socket 也一样。
 
+在同一个复合根目录里，每个所选宿主都通过自己 MCP 文档所列出的第一个生成式 MCP 服务器到达该运行时——
+当所有所选宿主都列出同一个服务器时是一个进程，否则每个宿主一个。运行时的 socket 只由制品本身标识（它的
+epoch 与根目录，而非 `targets` 选择），发起调用的宿主随每个请求一起传递，因此无论哪个进程持有该 socket，
+都会应答所有所选宿主的包装层。
+
 `runtime: 'standalone'` 的路由把它的模块打进包装层自身：同样的规范身份、同样的投影、没有共享的进程状态。
 `AB4817` 会拒绝这样的路由：它需要共享运行时，但在某个 target 上没有生成的 MCP 入口承载它，也没有独立
 回退。
@@ -381,7 +399,8 @@ npx agent-bundle inspect --root . --hooks
 npx agent-bundle hooks list --artifact artifact --target claude
 npx agent-bundle hooks simulate --artifact artifact --target claude \
   --hook session-start-session-start-7ab7e8a5 \
-  --input '{"sessionId":"local","transcriptPath":"/tmp/transcript.jsonl","cwd":"/tmp/project","source":"startup"}'
+  --input '{"sessionId":"local","transcriptPath":"/tmp/transcript.jsonl",
+    "cwd":"/tmp/project","source":"startup"}'
 ```
 
 `--hook` 必须是 `hooks list` 打印出的精确 `name`（或 `id`）——规范化会把它推导为

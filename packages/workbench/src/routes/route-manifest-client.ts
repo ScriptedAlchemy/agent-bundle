@@ -87,7 +87,20 @@ const inputSchema: z.ZodType<RouteInputSchema> = z.strictObject({
   type: z.literal('object'),
 });
 
+type RouteManifestContract = NonNullable<RouteManifest['contracts']>[number];
+
+const contractSchema: z.ZodType<RouteManifestContract> = z.strictObject({
+  id: z.string(),
+  input: inputSchema,
+  origin: z.strictObject({
+    binding: z.string(),
+    module: z.string(),
+  }),
+  routes: z.array(z.string()),
+});
+
 const routeSchema: z.ZodType<RouteManifestRoute> = z.strictObject({
+  contract: z.string().optional(),
   config: z.array(configEntrySchema),
   description: z.string().optional(),
   event: z.string().optional(),
@@ -181,6 +194,7 @@ const stateSchema: z.ZodType<RouteManifestState> = z.strictObject({
 
 const manifestSchema: z.ZodType<RouteManifest> = z.strictObject({
   cli: cliSchema.optional(),
+  contracts: z.array(contractSchema).optional(),
   diagnostics: z.array(diagnosticSchema),
   digest: z.string(),
   events: z.array(routeSchema),

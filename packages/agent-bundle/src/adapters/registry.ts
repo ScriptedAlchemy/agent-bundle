@@ -17,10 +17,10 @@ import {
 } from './capability-state.ts';
 import { claudeAdapter } from './claude.ts';
 import { codexAdapter } from './codex.ts';
+import type { BuiltInHost } from './composite-layout.ts';
 import { cursorAdapter } from './cursor.ts';
 import { readStandardNativeHookCommands, type TargetHookContract } from './hook-contract.ts';
 import { portableAdapter } from './portable.ts';
-import { pluginAdapter } from './plugin.ts';
 import {
   routedCliBinLayout,
   type TargetAdapter,
@@ -369,20 +369,6 @@ const snapshotNativeHookSource = (adapter: TargetAdapter): NativeHookSource | un
   return source;
 };
 
-/**
- * The registry is the boundary where unchecked JavaScript adapters are
- * validated, so a malformed `lowersConfigExtensions` fails registration
- * instead of throwing later inside normalization.
- */
-const snapshotLowersConfigExtensions = (adapter: TargetAdapter): readonly string[] => {
-  const declared = adapter.lowersConfigExtensions;
-  if (declared === undefined) return Object.freeze([]);
-  if (!Array.isArray(declared) || declared.some((key) => typeof key !== 'string' || key.trim().length === 0)) {
-    throw new Error(`Target adapter "${adapter.name}" lowersConfigExtensions must be an array of nonempty extension keys.`);
-  }
-  return Object.freeze([...new Set(declared)]);
-};
-
 const snapshotBinSource = (adapter: TargetAdapter): BinSource | undefined => {
   const source = adapter.binSource;
   if (source !== undefined && typeof source !== 'function') {
@@ -516,6 +502,18 @@ const assertCapabilityContract = (adapter: TargetAdapter): void => {
   }
 };
 
+/**
+ * The shipped adapters by identity. An advanced registry may register its own
+ * adapter under a built-in host's name; only these four are the built-in
+ * hosts, whatever an adapter is called.
+ */
+const builtInAdapters: ReadonlyMap<TargetAdapter, BuiltInHost> = new Map<TargetAdapter, BuiltInHost>([
+  [claudeAdapter, 'claude'],
+  [codexAdapter, 'codex'],
+  [cursorAdapter, 'cursor'],
+  [portableAdapter, 'portable'],
+]);
+
 export class TargetRegistry implements NormalizationTargetRegistry {
   readonly #adapters = new Map<string, TargetAdapter>();
   readonly #artifactLayouts = new Map<string, TargetArtifactLayout>();
@@ -524,7 +522,6 @@ export class TargetRegistry implements NormalizationTargetRegistry {
   readonly #defaults: string[] = [];
   readonly #extensions = new Map<string, NormalizationConfigExtension>();
   readonly #hookContracts = new Map<string, TargetHookContract>();
-  readonly #lowersConfigExtensions = new Map<string, readonly string[]>();
   readonly #metadata = new Map<string, TargetAdapterMetadata>();
   readonly #mcpRuntimes = new Map<string, TargetMcpRuntimeContract>();
   readonly #nativeHookSources = new Map<string, NativeHookSource>();
@@ -550,11 +547,9 @@ export class TargetRegistry implements NormalizationTargetRegistry {
     const hookContract = snapshotHookContract(adapter);
     const mcpRuntime = snapshotMcpRuntime(adapter);
     const artifactLayout = snapshotArtifactLayout(adapter, hookContract, mcpRuntime);
-    const lowersConfigExtensions = snapshotLowersConfigExtensions(adapter);
     const noticeDelivery = snapshotNoticeDelivery(adapter);
 
     this.#adapters.set(adapter.name, adapter);
-    this.#lowersConfigExtensions.set(adapter.name, lowersConfigExtensions);
     this.#artifactValidations.set(adapter.name, artifactValidation);
     this.#artifactLayouts.set(adapter.name, artifactLayout);
     this.#metadata.set(adapter.name, metadata);
@@ -627,6 +622,25 @@ export class TargetRegistry implements NormalizationTargetRegistry {
 
   has(name: string): boolean {
     return this.#adapters.has(name);
+  }
+
+  /**
+   * The built-in host the adapter registered under `name` is — judged by the
+   * adapter's identity, never its name, so an advanced registry's own adapter
+   * called `portable` is not mistaken for the shipped one (#592). `undefined`
+   * for a custom adapter or an unknown name.
+   */
+  builtInHost(name: string): BuiltInHost | undefined {
+    const adapter = this.#adapters.get(name);
+    return adapter === undefined ? undefined : builtInAdapters.get(adapter);
+  }
+
+  /** The built-in hosts among `names`, by adapter identity, in the order given. */
+  builtInHosts(names: readonly string[]): readonly BuiltInHost[] {
+    return Object.freeze(names.flatMap((name) => {
+      const host = this.builtInHost(name);
+      return host === undefined ? [] : [host];
+    }));
   }
 
   hookContract(name: string): TargetHookContract | undefined {
@@ -752,13 +766,6 @@ export class TargetRegistry implements NormalizationTargetRegistry {
     return adapter === undefined ? undefined : (adapter.componentCapabilities ?? adapter.capabilities)[capability];
   }
 
-  lowersConfigExtension(name: string, key: string): boolean {
-    if (!this.#adapters.has(name)) return false;
-    // Ownership comes from the snapshots taken at registration, never from
-    // the live adapter object an unchecked JavaScript caller could mutate.
-    return this.#extensions.get(key)?.target === name || (this.#lowersConfigExtensions.get(name) ?? []).includes(key);
-  }
-
   supports(name: string, capability: string): boolean {
     return capabilityIsSupported(this.capabilityState(name, capability));
   }
@@ -782,5 +789,4 @@ export const createDefaultRegistry = (): TargetRegistry =>
     .register(portableAdapter, { default: true })
     .register(codexAdapter)
     .register(claudeAdapter)
-    .register(cursorAdapter)
-    .register(pluginAdapter);
+    .register(cursorAdapter);

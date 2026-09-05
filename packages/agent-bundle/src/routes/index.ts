@@ -2,7 +2,7 @@ export { compileRouteGraph, emptyCompiledRouteGraph, isEmptyRouteGraph } from '.
 export { cliArgvGrammar, extractCliArgv, reservedCliOptionNames } from './cli-argv.ts';
 export type { ExtractedCliArgv } from './cli-argv.ts';
 export { cliCommandPath, compileCliCommands, isRenderedCliRoute } from './cli-commands.ts';
-export type { CompiledCliCommandSurface } from './cli-commands.ts';
+export type { CompileCliCommandsOptions, CompiledCliCommandSurface } from './cli-commands.ts';
 export {
   appResourceUriHelperName,
   extractRouteConfig,
@@ -38,6 +38,8 @@ export type {
   CompiledRouteKind,
   CompiledServerMode,
   CompiledServerSurface,
+  RouteContract,
+  RouteContractOrigin,
   RouteProvenance,
 } from './types.ts';
 export { generateRouteTypes, routeTypesRelativePath, writeRouteTypes } from './typegen.ts';

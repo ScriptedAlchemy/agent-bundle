@@ -11,32 +11,33 @@ rendering.
 
 ## The package build
 
-`agent-bundle build` always emits host artifacts. When the project declares
-`bin`/`lib` (or provides them by convention), the CLI build also produces the
-node-consumable package build under `dist/` — the outputs `package.json`
-`bin` and `exports` point at:
+`agent-bundle build` always emits the composite plugin root. When the project
+declares `bin`/`lib` (or provides them by convention), the CLI build also
+produces the node-consumable package build under `dist/` — the outputs
+`package.json` `bin` and `exports` point at:
 
 | Config | Output | Notes |
 | --- | --- | --- |
 | `bin: { '<name>': './src/cli.ts' }` | `dist/bin/<name>.js` | Self-executing ESM bundle, `#!/usr/bin/env node` shebang, executable bit. |
 | `lib: { entry: './src/index.ts', dts: true }` | `dist/<stem>.js` + `dist/**/*.d.ts` | Single-entry ESM profile, node target, es2022 syntax. |
 
-- When package outputs and at least one Claude, Codex, or Cursor host pack are
-  built inside the project, the framework also emits one self-contained
+- When package outputs are built inside the project and the plugin root
+  carries at least one of the `claude`, `codex`, or `cursor` projections, the
+  framework also emits one self-contained
   package-relative installer. It is `dist/bin/<plugin-name>.js` when that name
   is free, otherwise `dist/bin/<plugin-name>-install.js`; if both are occupied,
   a numeric suffix (`-install-2`, `-install-3`, …) guarantees a free name.
   Declare the matching `package.json` `bin` value. Its grammar is
   `install <host> [--scope <scope>] [--json]`; help lists only built hosts.
-  The baked URL resolves the shipped artifact directory from `import.meta.url`,
+  The baked URL resolves the shipped plugin root from `import.meta.url`,
   never the caller's working directory, and delegates to the same
   `installBundle` implementation as `agent-bundle install`.
 - `agent-bundle prepack [--root <root>] [--output <artifact>] [--json]` runs
   the release build and `npm pack --dry-run --json --ignore-scripts`, then
   gates the exact package/artifact inventory, manifest hashes, package bin
   targets, and release-version agreement. With no `--output`, prepack uses
-  configured `output.distPath` when present and otherwise writes artifacts to
-  `artifact/`, leaving the package build in `dist/`. Use it as an npm `prepack`
+  configured `output.distPath` when present and otherwise writes the plugin
+  root to `artifact/`, leaving the package build in `dist/`. Use it as an npm `prepack`
   script; `--ignore-scripts` prevents recursion and npm install never runs the
   host installer.
 - The package build runs for `agent-bundle build` (CLI, or
@@ -77,9 +78,9 @@ entries carry `provenance.kind: 'conventional'` in the normalized model.
 | `src/mcp/<server-id>.ts` | Stdio entry for the declared MCP server `<server-id>` that names no `entry`, `command`, or `url`. | Declare `entry` explicitly |
 | `src/mcp/<server>/{tools,resources,prompts}/*.{ts,tsx}` | Generated MCP server routes; path supplies identity and each executable module supplies static `config`, schemas, and one async default Server Component. | Set `routes.servers.<server>` to `custom`, `command`, or `remote` |
 | `src/mcp/<server>/apps/*.{ts,tsx}` | Browser MCP App entry compiled to self-contained HTML and registered on the generated server; static `config.resourceUri` is required (`AB4812`), and two App routes of one server sharing a URI are `AB4829` (the same URI on different servers is not a collision). An optional `config.template` HTML shell resolves relative to the route module like its imports (`'./dashboard.html'`); the legacy project-root-relative form is accepted only while unambiguous (`AB4827` otherwise). Tools, resources, and prompts reference the App from their own static `config` with `appResourceUri('<app>')` from `agent-bundle/routes` or a shared `const` string literal instead of repeating the `ui://` literal. | Use a custom server or prefix the file with `_` |
-| `src/scripts/<name>.ts` | Plain script compiled to `scripts/<name>.mjs` in every selected target artifact — the same pipeline explicit `scripts` entries use, with ordinary Node stdout/stderr semantics. A `scripts` entry that references the file claims it. Nested modules are hard errors (`AB4808`). A `bin` entry that references the file does **not** claim it: the module ships as both the npm bin and the artifact script (see [Which config keys claim a conventional module](#which-config-keys-claim-a-conventional-module)); export `main` or make the module self-executing, because a `default`-only module would run as the bin but ship as an inert script (`AB4738`). | Prefix a path segment with `_`, or claim the file with an explicit `scripts` entry |
+| `src/scripts/<name>.ts` | Plain script compiled once to `scripts/<name>.mjs` in the plugin root, shared by every selected host — the same pipeline explicit `scripts` entries use, with ordinary Node stdout/stderr semantics. A `scripts` entry that references the file claims it. Nested modules are hard errors (`AB4808`). A `bin` entry that references the file does **not** claim it: the module ships as both the npm bin and the artifact script (see [Which config keys claim a conventional module](#which-config-keys-claim-a-conventional-module)); export `main` or make the module self-executing, because a `default`-only module would run as the bin but ship as an inert script (`AB4738`). | Prefix a path segment with `_`, or claim the file with an explicit `scripts` entry |
 | `src/scripts/<name>.tsx` | Rendered script: the async default component receives `{ argv, signal }` and renders through the Agent renderer with the CLI output contract (`--json`, `--ndjson`, TTY progress, piped Markdown). Compiles to `scripts/<name>.mjs` plus a `scripts/<name>-flight.mjs` react-server worker. The extension is the explicit, visible contract — plain `.ts` scripts are never wrapped in React behavior, and explicit `scripts` config entries stay plain regardless of extension. A `bin` entry that references a rendered script is `AB4737` unless the module exports both the default component (for the script) and a named `main` (for the bin envelope); with both, the module serves both surfaces. | Rename to `.ts`, prefix a path segment with `_`, or claim the file with an explicit `scripts` entry |
-| `src/cli/**/*.{ts,tsx}` | Routed CLI commands compiled into one collision-checked command graph and one generated package executable named after `plugin.name` (superseding the `src/cli.ts` bin convention for the project), plus the same executable as `bin/<plugin-name>.mjs` in every selected host artifact whose target publishes the `cli` capability (all built-in targets). Nesting is identity: `src/cli/library/audit.ts` runs as `<bin> library audit`. Plain `.ts` commands execute directly and print one canonical JSON line; `.tsx` commands render through the dispatcher with the four output modes. | `bin: false`, `routes.cli: 'conventional'`, or prefix a path segment with `_` |
+| `src/cli/**/*.{ts,tsx}` | Routed CLI commands compiled into one collision-checked command graph and one generated package executable named after `plugin.name` (superseding the `src/cli.ts` bin convention for the project), plus the same executable as `bin/<plugin-name>.mjs` in the plugin root whenever a selected host publishes the `cli` capability (all built-in hosts do). Nesting is identity: `src/cli/library/audit.ts` runs as `<bin> library audit`. Plain `.ts` commands execute directly and print one canonical JSON line; `.tsx` commands render through the dispatcher with the four output modes. | `bin: false`, `routes.cli: 'conventional'`, or prefix a path segment with `_` |
 | `src/events/<family>/<event>.{ts,tsx}`, `src/events/stop.{ts,tsx}` | Semantic event route: the path is the canonical event family (`src/events/tool/after.tsx` is `tool/after`; `stop` is the one top-level family) and must be one of the admitted `canonicalAgentEvents`. The optional static `config` (`AgentEventRouteConfig`: `targets`, `tools`, `runtime: 'shared' \| 'standalone'`, `fallback`, `delivery`, `timeoutMs`) restricts hosts and selects the execution mode; the async default Server Component receives `AgentEventRouteProps<E>` (`{ canonical, native, signal }`) and returns `Agent.*` output that the selected host adapter encodes into its native hook envelope. `canonical.payload` is the family's cross-host reading of the envelope (#466) — the fields at least two hosts report (`toolName`, `toolInput`, `toolResponse`, `sessionId`, `transcriptPath`, `cwd`, `prompt`, `agentId`/`agentType`, `reentry`, …), each as `{ value, nativeKey }` naming the host key it came from and absent when the host did not send it; `E` narrows it to the route's family. The per-family field table is `agentEventPayloadFields` and the per-host key table `agentEventPayloadNativeKeys` (`routes/events.ts`), mirrored under `hooks.eventRoutes.<event>.payload` in each pinned capability table so the generated events reference documents the mapping per host. Application code never branches on host JSON or emits native hook documents; per-host support is a capability state (`supported`/`degraded`/`unavailable`/`prohibited`) surfaced by `inspect` and enforced at build time (`AB4817`, `AB4823`–`AB4825`). | Restrict `config.targets`, or prefix a path segment with `_` |
 | `src/state.ts` | Project state definition: default-exports `defineState({ ... })`; generated MCP, routed-CLI, and rendered-script request scopes mount `(await agent()).state` and `.notices`. | `state: false`, or rename the file to `_state.ts` |
 | `src/providers/<name>.{ts,tsx}` | Request context provider: default-exports a factory receiving `{ invocation, signal, host, session, workspace, plugin, lineage, state?, notices? }` — the request's observed identity (plugin root included) and lineage plus read-only views of the mounted state (`read`) and notice (`inbox`, `published`) handles; its value is mounted at `(await agent()).providers.<camelCaseName>` for generated MCP and event routes, projected MCP commands, plain and rendered routed CLI commands, and rendered scripts. | Prefix the file with `_` |
@@ -155,7 +156,7 @@ the worker derives the artifact root from the parent of its own `mcp/`
 directory. The npm package's routed CLI bin and rendered scripts use
 `$AGENT_BUNDLE_PLUGIN_ROOT/state` when present and otherwise
 `$PWD/.agent-bundle/state`; the artifact-hosted routed CLI bin
-(`<target>/bin/<name>.mjs`) derives the artifact root from the parent of its
+(`bin/<name>.mjs` in the plugin root) derives the artifact root from the parent of its
 own `bin/` directory instead, like the MCP worker. Each generated process
 resolves that anchor exactly once (`resolvePluginRoot` from
 `@agent-bundle/runtime`, #468): the state kernel, the notice ledger, the
@@ -172,14 +173,15 @@ on the notice principal, so `recipient.conversation` / `recipient.root` are
 matched against `request.lineage` on every surface — while application
 authorization policy is deferred.
 
-Each cross-request notice route is selected from the target host's pinned
+Each cross-request notice route is selected from the host's pinned
 `noticeDelivery` table, exposed as `TargetAdapter.noticeDelivery` /
 `TargetRegistry.noticeDelivery(target)` (a local `NoticeDeliveryAdvertisement`
 shape, structurally identical to the runtime's so it types for
 `selectNoticeDeliveryRoutes` without making the optional `@agent-bundle/runtime`
-peer a declaration dependency); the unified `plugin` target advertises the
-intersection of its three hosts, and a target with no advertisement wires no
-cross-request route. The `agent-bundle://notices/inbox` resource is registered
+peer a declaration dependency). The shared MCP entries and every host's hook
+wrappers in one composite root are wired from the intersection of the selected
+hosts' advertisements, and a selection that includes a host with no
+advertisement wires no cross-request route. The `agent-bundle://notices/inbox` resource is registered
 in the server and mounted in its worker only for stateful projects whose host
 advertises `mcp-inbox` (the worker still mounts the ledger so routes can
 publish; only the unadvertised read surface is withheld, and the reserved name
@@ -716,7 +718,7 @@ Per surface, the value the generated request scope mounts:
 
 | Surface | `hostSurface` | `stdout` / `stderr` | Source |
 | --- | --- | --- | --- |
-| Routed CLI executable (`dist/bin/<name>.js`, `<target>/bin/<name>.mjs`), plain or rendered command, projected MCP command | `cli` | Probed from the executable's own process; a rendered command's worker thread receives the executable's probe, never its own pipes. Machine output owns fd 1, so `stdout` describes where the rendered document lands and `stderr` the channel a route may write to itself. | `native` |
+| Routed CLI executable (`dist/bin/<name>.js`, plugin-root `bin/<name>.mjs`), plain or rendered command, projected MCP command | `cli` | Probed from the executable's own process; a rendered command's worker thread receives the executable's probe, never its own pipes. Machine output owns fd 1, so `stdout` describes where the rendered document lands and `stderr` the channel a route may write to itself. | `native` |
 | Rendered script (`scripts/<name>.mjs` from `src/scripts/<name>.tsx`) | `script` | Probed, as above. | `native` |
 | Generated MCP server (any transport) | `mcp` | `none` on both, `color: 'none'`, `sharesTarget: false` — stdout is the protocol wire and stderr the host's log. Never probed, whatever the descriptors are. | `derived` |
 | Event route (shared runtime or standalone hook process) | `hook` | `none` on both — stdout is the host's hook envelope. Never probed. | `derived` |
@@ -821,7 +823,7 @@ export default async function inspect({ input, signal }: CliRouteProps<typeof in
 
 The compiler statically projects `inputSchema` onto argv (the bounded grammar
 and every policy rule are documented in
-[Diagnostics](diagnostics.md#route-graph-state-layout-and-provider-conventions-ab4800ab4832-ab4940ab4942)), generates nested
+[Diagnostics](diagnostics.md#route-graph-state-layout-and-provider-conventions-ab4800ab4839-ab4940ab4942)), generates nested
 help (`--help` at every level, `--version` at the root), and emits
 `dist/bin/<plugin-name>.js` with the shebang and executable bit through the
 same Rslib synthesis as every other bin. At run time the shell resolves the
@@ -835,6 +837,17 @@ or input failure; 130/143 on SIGINT/SIGTERM, which reach the route's
 already emit the canonical JSON document. Routed CLI projects need
 `@agent-bundle/runtime` as a dependency — the generated executable installs
 the request context through it.
+
+The schema need not be written inline: an `inputSchema` bound to a schema
+`export const`-ed by a relative module inside the project
+(`export const inputSchema = statusInputSchema`, through any number of alias
+hops, the `.js` specifier mapping onto its `.ts`/`.tsx` source) is resolved
+statically, parsed in the declaring module's scope under the same grammar,
+and normalized once into a `RouteContract` shared by every route — CLI
+command or MCP tool — that binds it; a reference the resolver cannot follow
+is `AB4838` and a cyclic one `AB4839`, both documented in the same
+[Diagnostics](diagnostics.md#route-graph-state-layout-and-provider-conventions-ab4800ab4839-ab4940ab4942)
+section.
 
 When the module's `inputSchema` rejects the parsed argv, the shell reports
 each issue in CLI terms rather than the raw schema issue JSON (#465): one
@@ -872,17 +885,17 @@ machine output owns stdout. Rendered scripts
 (`src/scripts/<name>.tsx`) share the same shell and output contract with
 `{ argv, signal }` component props and status-derived exit codes.
 
-#### The routed CLI inside host artifacts
+#### The routed CLI inside the plugin root
 
 The package bin only reaches users who install the npm package. Hooks,
-skills, and script routes ship with the **host artifact**, so the build also
-emits the same compiled command graph into every selected target whose
-adapter publishes the `cli` capability — all built-in targets (`claude`,
-`codex`, `cursor`, `portable`, `plugin`), because the artifact root is
+skills, and script routes ship with the **plugin root**, so the build also
+emits the same compiled command graph into that root whenever a selected host's
+adapter publishes the `cli` capability — all built-in hosts do (`claude`,
+`codex`, `cursor`, `portable`) — because the artifact root is
 already a plain directory Node executes `mcp/` and `scripts/` files from:
 
 ```text
-artifact/<target>/
+artifact/
   bin/<plugin-name>.mjs           # the routed CLI: node bin/<plugin-name>.mjs <command> [args]
   bin/<plugin-name>-flight.mjs    # react-server worker, present when any command renders
   scripts/<name>.mjs
@@ -1293,8 +1306,8 @@ agent-bundle inspect --bundler [--target <t>] [--json]
 ```
 
 Dumps the synthesized bundler configuration for every output the build
-composes — artifact scripts, MCP entries, hook wrappers, the per-target MCP
-Apps Rsbuild config, and the `dist/` package build — exactly as the build
+composes — artifact scripts, MCP entries, hook wrappers, the composite root's
+MCP Apps Rsbuild config, and the `dist/` package build — exactly as the build
 lowers it: in production mode whatever `NODE_ENV` says, the framework profile
 with the consumer `tools` hatch merged over it and the invariant hook appended
 last (functions render as `[function <name>]`). Entries the framework wraps also carry the generated
@@ -1303,8 +1316,8 @@ functions the build uses, so the dump cannot drift from what compiles.
 
 Nothing is redacted (this is a local debugging surface), but two build-time
 values are replaced with stable tokens so output is deterministic for one
-project: the artifact output root (chosen per build) appears as
-`<output>/<target>`, and the synthesized declaration tsconfig (a temporary
+project: the composite artifact root (chosen per build) appears as
+`<output>`, and the synthesized declaration tsconfig (a temporary
 file generated per package build) appears as `<generated-dts-tsconfig>`. The
 package build's output root appears as its published destination, `dist`,
 although each real build stages outputs before publishing them atomically.
@@ -1442,8 +1455,8 @@ and plugin-root tokens in *env values* — including the injected
 Targets without token interpolation (Codex serializes the anchor as a `./`
 path) re-anchor their relative env values against the same durable root.
 `args` and `cwd` stay artifact-rooted (the first argument is the
-content-hashed bundle inside the target root). `--plugin-root <path>`
-overrides the env-anchor root, e.g. point it at `artifact/<target>` for a
+content-hashed bundle inside the composite root). `--plugin-root <path>`
+overrides the env-anchor root, e.g. point it at a copy of `artifact/` for a
 byte-faithful rehearsal of a copied-artifact launch; under a host install the
 anchor still means the durable install root, exactly as before.
 

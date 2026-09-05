@@ -159,6 +159,89 @@ describe('generated server lineage correlation', () => {
       await server.close();
     }
   });
+
+  // The fallback host for a client that does not name itself is a projection,
+  // never the artifact's own identity (#592). The binding's `hosts` is the
+  // selected hosts whose MCP documents list this server — the hosts that can
+  // have spawned it — distinct from `allowedTargets`, the hosts whose hook
+  // wrappers the runtime it hosts accepts: a Claude-only server hosting the
+  // runtime of a Claude+Codex root accepts both hosts' wrappers yet assumes
+  // Claude, and a server several hosts list has no single host to assume and
+  // leaves the axis to the client's name.
+  const lineageFallbackFor = async (
+    hosts: readonly string[],
+    allowedTargets: readonly string[] = hosts,
+  ): Promise<readonly (string | undefined)[]> => {
+    const queries: LineageToolCallQuery[] = [];
+    const lineage: AgentLineageRegistry = {
+      observe: async () => unavailable('id-not-resolvable'),
+      resolveToolCall: async (query) => {
+        queries.push(query);
+        return unavailable('id-not-resolvable');
+      },
+      snapshot: () => ({ nodes: {}, openCalls: [], pendingChildren: [], pendingSpawns: [], seenStarts: [] }),
+    };
+    const { host } = stubs();
+    const server = await createGeneratedRouteMcpServer({
+      artifactEpoch: 'epoch',
+      events: {
+        allowedTargets,
+        artifactEpoch: 'epoch',
+        createCanonicalEventProps: (() => {
+          throw new Error('not invoked');
+        }) as never,
+        createEventRuntimeServer: (async () => ({
+          close: async () => undefined,
+          onRoleChange: () => () => undefined,
+          role: () => 'owner',
+        })) as never,
+        endpointId: `lineage-fallback:${hosts.join('+')}:${allowedTargets.join('+')}`,
+        hosts,
+        projectEventDocument: (() => {
+          throw new Error('not invoked');
+        }) as never,
+      },
+      host,
+      lineage,
+      plugin: { name: 'lineage-fallback', version: '0.0.0' },
+      routes: {
+        'mcp/fallback/tools/probe': {
+          config: {},
+          id: 'mcp/fallback/tools/probe',
+          kind: 'tool',
+          module: {
+            default: () => undefined,
+            inputSchema: z.object({}).strict(),
+            resultSchema: z.object({ ok: z.boolean() }).strict(),
+          },
+          name: 'probe',
+        },
+      },
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    // A client whose name maps to no host, so only the fallback can supply one.
+    const client = new Client({ name: 'anonymous-mcp-client', version: '1.0.0' });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      await client.callTool({ arguments: {}, name: 'probe' }, { signal: AbortSignal.timeout(5_000) });
+      return queries.map((query) => query.host);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  };
+
+  it('assumes the one host whose MCP document lists the server when the client does not name itself', async () => {
+    await expect(lineageFallbackFor(['claude'])).resolves.toEqual(['claude']);
+  });
+
+  it('assumes the one launching host however many hosts the runtime it hosts accepts', async () => {
+    await expect(lineageFallbackFor(['claude'], ['claude', 'codex'])).resolves.toEqual(['claude']);
+  });
+
+  it('assumes no host when several selected hosts list the server', async () => {
+    await expect(lineageFallbackFor(['claude', 'codex'])).resolves.toEqual([undefined]);
+  });
 });
 
 describe('generated server render completion', () => {
@@ -301,10 +384,10 @@ describe('generated server teardown', () => {
           role: () => 'owner',
         })) as never,
         endpointId: 'teardown-test',
+        hosts: ['claude'],
         projectEventDocument: (() => {
           throw new Error('not invoked');
         }) as never,
-        target: 'claude',
       },
       host,
       notices,
@@ -409,10 +492,10 @@ describe('generated server standby diagnostics', () => {
             };
           }) as never,
           endpointId: 'standby-diagnostics-test',
+          hosts: ['claude'],
           projectEventDocument: (() => {
             throw new Error('not invoked');
           }) as never,
-          target: 'claude',
         },
         host,
         notices,

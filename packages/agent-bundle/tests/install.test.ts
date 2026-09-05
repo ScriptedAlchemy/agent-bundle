@@ -105,11 +105,12 @@ const makeFifo = async (path: string): Promise<void> => {
 
 const createHostBundle = async (
   host: 'claude' | 'codex' | 'cursor',
-  options: { readonly artifactRoot?: boolean } = {},
+  /** `nestedUnder` writes the bundle one directory below `from`, the pre-#555 `<from>/<host>` layout nothing probes any more. */
+  options: { readonly nestedUnder?: string } = {},
 ): Promise<{ readonly bundleRoot: string; readonly cleanupRoot: string; readonly from: string }> => {
   const cleanupRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-install-'));
-  const from = options.artifactRoot === true ? cleanupRoot : join(cleanupRoot, 'bundle');
-  const bundleRoot = options.artifactRoot === true ? join(cleanupRoot, host) : from;
+  const from = join(cleanupRoot, 'bundle');
+  const bundleRoot = options.nestedUnder === undefined ? from : join(from, options.nestedUnder);
   await mkdir(bundleRoot, { recursive: true });
   await writeFile(join(bundleRoot, 'payload.txt'), 'payload\n');
 
@@ -567,24 +568,34 @@ it('honours --replace for Codex through remove + add and fails closed without a 
   }
 });
 
-it('accepts an artifact root containing the requested host target', async () => {
-  const fixture = await createHostBundle('claude', { artifactRoot: true });
-  const { calls, runner } = recordingRunner();
-  try {
-    const result = await installBundle({
-      ...isolated(fixture),
-      commandRunner: runner,
-      from: fixture.from,
-      host: 'claude',
-      scope: 'user',
-    });
-
-    expect(result.bundleRoot).toBe(fixture.bundleRoot);
-    expect(calls[0]).toMatchObject({ cwd: fixture.bundleRoot });
-  } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
-  }
-});
+it.each(['claude', 'codex', 'cursor'] as const)(
+  'refuses --from that names a directory above the %s plugin root instead of probing into it (#555)',
+  async (host) => {
+    // The bundle sits under `<from>/<host>`, the pre-composite partition: every
+    // host reads the one root it is given, so nothing nested is probed, no host
+    // CLI runs, and the refusal names the root that lacks the manifest.
+    const fixture = await createHostBundle(host, { nestedUnder: host });
+    const { calls, runner } = recordingRunner();
+    try {
+      await expect(installBundle({
+        ...isolated(fixture),
+        commandRunner: runner,
+        from: fixture.from,
+        host,
+        scope: 'user',
+      })).rejects.toMatchObject({
+        diagnostics: [expect.objectContaining({
+          code: 'AB7001',
+          message: `No ${host} bundle manifest was found in ${JSON.stringify(fixture.from)}.`,
+          target: host,
+        })],
+      });
+      expect(calls).toEqual([]);
+    } finally {
+      await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    }
+  },
+);
 
 it('fails with a typed diagnostic when the public host CLI is missing', async () => {
   const fixture = await createHostBundle('codex');

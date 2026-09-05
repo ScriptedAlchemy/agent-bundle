@@ -27,7 +27,7 @@ import {
   validateRouteModuleContract,
 } from './contract.ts';
 import { validateRouteFrameworkImports } from './framework-imports.ts';
-import { extractInputSchema } from './input-schema.ts';
+import { extractInputSchema, type ExtractedInputSchema, type ResolvedSchemaOrigin } from './input-schema.ts';
 import { isLayoutRouteKind, layoutChainFor } from './layouts.ts';
 import {
   requiredProviderKeyProblemMessage,
@@ -54,6 +54,7 @@ import {
   type CompiledRouteKind,
   type CompiledServerMode,
   type CompiledServerSurface,
+  type RouteContract,
   type RouteInputSchema,
 } from './types.ts';
 
@@ -126,7 +127,7 @@ const eventProviderDeclarationDiagnostics = (
     'Declare config.providers as a distinct array of conventional provider keys, omit it to resolve every provider, or use [] to resolve none.';
   if (!Array.isArray(declared) || declared.some((key) => typeof key !== 'string')) {
     return [routeError(
-      'AB4839',
+      'AB4841',
       `Event route ${route.provenance.relativePath} config.providers must be an array of provider-key strings.`,
       recovery,
       route.source,
@@ -135,7 +136,7 @@ const eventProviderDeclarationDiagnostics = (
   const problems = validateRequiredProviderKeys(declared, providerKeys);
   if (problems.length === 0) return [];
   return [routeError(
-    'AB4839',
+    'AB4841',
     `Event route ${route.provenance.relativePath} has invalid config.providers: ${problems
       .map(requiredProviderKeyProblemMessage)
       .join(' ')}`,
@@ -289,7 +290,7 @@ interface ConfigClaimedSources {
   /**
    * Modules explicit `bin` entries compile. They leave route discovery too,
    * except a direct `src/scripts/<name>` child: `dist/bin/<name>.js` and
-   * `<target>/scripts/<name>.mjs` are disjoint outputs and both envelopes
+   * the artifact's `scripts/<name>.mjs` are disjoint outputs and both envelopes
    * run the same `main`, so one entry ships as both an npm bin and an
    * artifact script instead of silently losing the script (#389).
    */
@@ -535,16 +536,31 @@ const routeFrameworkImportDiagnostics = (
   return validateRouteFrameworkImports(moduleText, route.provenance.relativePath, route.source, executable);
 };
 
+/** The contract a route binds: the id and the one normalized `input` object every bound route shares. */
+interface ContractBinding {
+  readonly id: string;
+  readonly input: RouteInputSchema;
+  readonly origin: ResolvedSchemaOrigin;
+}
+
+/** Contract identity is the declaration site: `contract:<module>#<binding>`. */
+const contractIdOf = (origin: ResolvedSchemaOrigin): string => `contract:${origin.module}#${origin.binding}`;
+
+/** The contract id a route-local `export const inputSchema = z.object({ ... })` literal declares. */
+const inlineContractIdOf = (route: CompiledAgentRoute): string =>
+  contractIdOf({ binding: 'inputSchema', module: route.provenance.relativePath });
+
 const compiledRoute = (
   module: DiscoveredRouteModule,
   config: Readonly<Record<string, unknown>>,
-  inputSchema?: RouteInputSchema,
+  contract?: ContractBinding,
   preflight?: CompiledEventPreflight,
 ): CompiledAgentRoute => ({
   config,
+  ...(contract === undefined ? {} : { contract: contract.id }),
   ...(module.event === undefined ? {} : { event: module.event }),
   id: module.id,
-  ...(inputSchema === undefined ? {} : { inputSchema }),
+  ...(contract === undefined ? {} : { inputSchema: contract.input }),
   kind: module.kind,
   ...(preflight === undefined ? {} : { preflight }),
   provenance: { kind: 'conventional', relativePath: module.relativePath },
@@ -573,7 +589,7 @@ const readRouteModuleText = async (source: string): Promise<string | undefined> 
  */
 interface ExtractedModuleMetadata {
   readonly extracted: ExtractedRouteConfig;
-  readonly inputSchema?: RouteInputSchema;
+  readonly inputSchema?: ExtractedInputSchema;
   readonly preflight?: CompiledEventPreflight;
   readonly preflightDiagnostics: readonly Diagnostic[];
 }
@@ -594,7 +610,7 @@ const extractedModuleMetadata = (
     return { extracted: emptyExtractedRouteConfig, preflightDiagnostics: [] };
   }
   const extracted = extractRouteConfig(moduleText, module.relativePath, module.source, { projectRoot });
-  const inputSchema = extractInputSchema(moduleText, module.relativePath);
+  const inputSchema = extractInputSchema(moduleText, module.relativePath, { projectRoot, source: module.source });
   const discovery = module.kind === 'event-route'
     ? preflightDiscovery ?? discoverEventRoutePreflight(moduleText, module.relativePath, module.source)
     : undefined;
@@ -636,8 +652,15 @@ const appReferenceTargets = (
     : [];
 });
 
+/**
+ * A route's project-relative identity. An imported contract joins it by id:
+ * which shared declaration a route binds is part of what the route is. A
+ * route-local literal's contract is the route's own `inputSchema`, already
+ * covered, so inline-only graphs digest exactly as before #593.
+ */
 const routeIdentity = (route: CompiledAgentRoute): Readonly<Record<string, unknown>> => ({
   config: route.config,
+  ...(route.contract === undefined || route.contract === inlineContractIdOf(route) ? {} : { contract: route.contract }),
   ...(route.event === undefined ? {} : { event: route.event }),
   id: route.id,
   ...(route.inputSchema === undefined ? {} : { inputSchema: route.inputSchema }),
@@ -881,6 +904,17 @@ export const compileRouteGraph = async (
     }
   }
   const appTargets = appReferenceTargets(pending, serverModes);
+  // Routes declaring one schema — the same module and binding at the end of
+  // the alias chain — bind one contract and share its normalized `input`
+  // object; the first route by id supplies it.
+  const contractBindings = new Map<string, ContractBinding>();
+  for (const { metadata } of [...pending].sort((left, right) => left.module.id.localeCompare(right.module.id))) {
+    if (metadata.inputSchema === undefined) continue;
+    const id = contractIdOf(metadata.inputSchema.origin);
+    if (!contractBindings.has(id)) {
+      contractBindings.set(id, { id, input: metadata.inputSchema.schema, origin: metadata.inputSchema.origin });
+    }
+  }
   for (const { metadata, module } of pending) {
     const moduleText = moduleTextBySource.get(module.source);
     // Routes of a server that is not generated never ship their config: the
@@ -901,7 +935,12 @@ export const compileRouteGraph = async (
       : metadata.extracted;
     diagnostics.push(...resolved.diagnostics);
     diagnostics.push(...metadata.preflightDiagnostics);
-    const route = compiledRoute(module, resolved.config, metadata.inputSchema, metadata.preflight);
+    const route = compiledRoute(
+      module,
+      resolved.config,
+      metadata.inputSchema === undefined ? undefined : contractBindings.get(contractIdOf(metadata.inputSchema.origin)),
+      metadata.preflight,
+    );
     if (route.kind === 'event-route' && moduleText !== undefined) {
       diagnostics.push(...validateEventRouteModuleContract(
         moduleText,
@@ -1091,7 +1130,7 @@ export const compileRouteGraph = async (
     }
     if (mode === 'generated') {
       const compiled = await compileCliCommands(cliRoutes, async (route) =>
-        moduleTextBySource.get(route.source), projected);
+        moduleTextBySource.get(route.source), projected, { projectRoot });
       diagnostics.push(...compiled.diagnostics);
       // The routed CLI executable inlines every command route (AB4837, #558).
       for (const route of cliRoutes) {
@@ -1161,6 +1200,25 @@ export const compileRouteGraph = async (
     }
   }
 
+  // Contracts are read off the final route set: a route of a custom, command,
+  // or remote server left the graph with its server and binds nothing here.
+  const contractRoutes = new Map<string, string[]>();
+  for (const route of new Map(
+    [...servers.flatMap((server) => server.routes), ...events, ...scripts, ...(cli?.routes ?? [])]
+      .map((route) => [route.id, route] as const),
+  ).values()) {
+    if (route.contract === undefined) continue;
+    const bound = contractRoutes.get(route.contract) ?? [];
+    bound.push(route.id);
+    contractRoutes.set(route.contract, bound);
+  }
+  const contracts: RouteContract[] = [...contractRoutes.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([id, routeIds]) => {
+      const { input, origin } = contractBindings.get(id)!;
+      return { id, input, origin, routes: [...routeIds].sort((left, right) => left.localeCompare(right)) };
+    });
+
   const identity = {
     ...(cli === undefined
       ? {}
@@ -1188,6 +1246,7 @@ export const compileRouteGraph = async (
 
   return deepFreeze({
     ...(cli === undefined ? {} : { cli }),
+    ...(contracts.length === 0 ? {} : { contracts }),
     diagnostics,
     digest: digest(identity),
     events,
