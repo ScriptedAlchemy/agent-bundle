@@ -163,8 +163,10 @@ e2e('admits a deterministic Eval promptly and renders refreshed durable evidence
     page.on('request', (request) => {
       if (request.method() === 'GET' && request.url().includes('/api/evals/runs/')) durableReads.push(request.url());
     });
-    await page.goto(workbenchUrl(server.url, 'evals'));
+    await page.goto(workbenchUrl(server.url, '/advanced/evals'));
     await expect(page.getByRole('heading', { name: 'Evals' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('tab', { name: 'Runs' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('tab', { name: 'Compare' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByRole('button', { name: 'Run deterministic suite' })).toBeEnabled({ timeout: browserTimeout });
     await expect(page.getByLabel('Harness')).toHaveValue('deterministic');
     await expect(page.getByText('Authored model pins are read-only')).toBeVisible();

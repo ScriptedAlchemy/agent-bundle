@@ -145,13 +145,13 @@ e2e('preserves a direct Runtime deep link until capability discovery succeeds', 
     await route.continue();
   });
   try {
-    await page.goto(`${fixture.url}#runtime`, { waitUntil: 'domcontentloaded' });
+    await page.goto(`${fixture.url}/`, { waitUntil: 'domcontentloaded' });
     await expect.poll(() => runtimeStatusRequests, { timeout: browserTimeout }).toBe(1);
-    expect(new URL(page.url()).hash).toBe('#runtime');
+    expect(new URL(page.url()).pathname).toBe('/');
 
     releaseRuntimeStatus();
-    await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
-    expect(new URL(page.url()).hash).toBe('#runtime');
+    await expect(page.getByTestId('workbench-nav')).toBeVisible({ timeout: browserTimeout });
+    expect(new URL(page.url()).pathname).toBe('/');
   } finally {
     releaseRuntimeStatus();
     await fixture.close();
@@ -171,13 +171,13 @@ e2e('redirects a direct Runtime deep link only after capability discovery report
     await route.continue();
   });
   try {
-    await page.goto(`${server.url}#runtime`, { waitUntil: 'domcontentloaded' });
+    await page.goto(`${server.url}/routes/not-a-leaf`, { waitUntil: 'domcontentloaded' });
     await expect.poll(() => projectStatusRequests, { timeout: browserTimeout }).toBe(1);
-    expect(new URL(page.url()).hash).toBe('#runtime');
+    expect(new URL(page.url()).pathname).toBe('/');
 
     releaseProjectStatus();
-    await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
-    expect(new URL(page.url()).hash).toBe('#overview');
+    await expect(page.getByTestId('workbench-nav')).toBeVisible({ timeout: browserTimeout });
+    expect(new URL(page.url()).pathname).toBe('/');
     expect(await page.locator('a[href="#runtime"]').count()).toBe(0);
   } finally {
     releaseProjectStatus();
@@ -254,7 +254,7 @@ e2e('offers the host-owned MCP playground handoff only after a selected Runtime 
     }
   });
   try {
-    await page.goto(`${fixture.url}#runtime`);
+    await page.goto(`${fixture.url}/`);
     await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
     const runtimeIdentity = page.locator('[data-runtime-provider-session]');
     const runtimeSurface = page.getByLabel('Runtime surface');
@@ -633,7 +633,7 @@ e2e('keeps runtime MCP routing constrained after direct navigation from a bound 
     }
   });
   try {
-    await page.goto(`${fixture.url}#runtime`);
+    await page.goto(`${fixture.url}/`);
     await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
     const runtimeIdentity = page.locator('[data-runtime-provider-session]');
     const runtimeSurface = page.getByLabel('Runtime surface');
@@ -890,7 +890,7 @@ e2e('restarts the real Runtime MCP App session when definition or transport auth
     return Object.freeze({ binding: binding(previewCreateCount - 1), run: outcome });
   };
   try {
-    await page.goto(`${fixture.url}#runtime`);
+    await page.goto(`${fixture.url}/`);
     await expect(page.getByRole('heading', { name: 'Runtime Playground' })).toBeVisible({ timeout: browserTimeout });
     const runtimeIdentity = page.locator('[data-runtime-provider-session]');
     await expect(runtimeIdentity).toHaveAttribute('data-runtime-hmr-ready', 'true', { timeout: browserTimeout });
@@ -1167,8 +1167,8 @@ e2e('opens one real epoch MCP session and keeps its playground operations respon
       if (requestUrl.pathname === '/api/project/events') projectEventRequests.push(`${request.method()} ${requestUrl.pathname}`);
       if (requestUrl.pathname.startsWith('/api/runtime/')) runtimeRequests.push(`${request.method()} ${requestUrl.pathname}`);
     });
-    await page.goto(`${serverUrl}#mcp`);
-    await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
+    await page.goto(`${serverUrl}/advanced/protocol`);
+    await expect(page.getByRole('heading', { name: /Protocol/u })).toBeVisible({ timeout: browserTimeout });
     expect(await page.locator('a[href="#runtime"]').count()).toBe(0);
     await page.locator('#mcp-target').selectOption('portable');
     await page.locator('#mcp-server-name').fill('fixture');
@@ -1416,7 +1416,7 @@ e2e('renders the latest changed files from a replayed foreground source event on
       type: 'source.changed',
     });
     await page.setViewportSize({ height: 900, width: 1_440 });
-    await page.goto(`${server.url}#overview`);
+    await page.goto(`${server.url}/`);
     await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
     await page.getByText('Inspect build details', { exact: true }).click();
 

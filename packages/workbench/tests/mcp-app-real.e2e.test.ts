@@ -1364,7 +1364,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     const destinationFrameHref = destinationController.url();
     const destinationHistory = await page.getByRole('region', { name: 'Invocation history' }).textContent();
     const destinationDeletePath = `/api/runtime/apps/${encodeURIComponent(destinationBinding.id)}`;
-    await page.evaluate(() => { window.location.hash = '#overview'; });
+    await page.evaluate(() => { window.history.pushState({}, '', '/'); });
     const teardownRequestForDestination = (): RuntimeAppMessage | undefined => appMessages.find((entry) =>
       entry.href === destinationFrameHref && entry.senderOrigin === fixture.url && entry.message !== null && typeof entry.message === 'object' &&
       (entry.message as Readonly<Record<string, unknown>>).method === 'ui/resource-teardown');
@@ -1384,7 +1384,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
     await expect(page.locator('.mcp-page-app-preview iframe')).toHaveCount(0);
     expect(runtimeCreates()).toHaveLength(2);
     const appMessagesBeforeThirdCreate = appMessages.length;
-    await page.evaluate(() => { window.location.hash = '#runtime'; });
+    await page.evaluate(() => { window.history.pushState({}, '', '/'); });
     await expect.poll(runtimeCreates, { timeout: 15_000 * timeScale }).toHaveLength(3);
     const thirdCreate = runtimeCreates()[2];
     expect(thirdCreate?.body).toEqual({ expectedGenerationId, profileId: 'portable', runId });
@@ -1434,7 +1434,7 @@ e2e('opens the real RSC runtime timeline App from provider-owned run evidence', 
       new URL(entry.href).origin === fixture.url && entry.senderOrigin === thirdOrigin &&
       entry.message !== null && typeof entry.message === 'object' &&
       (entry.message as Readonly<Record<string, unknown>>).method === 'ui/initialize').length, { timeout: 15_000 * timeScale }).toBeGreaterThan(0);
-    await page.evaluate(() => { window.location.hash = '#mcp'; });
+    await page.evaluate(() => { window.history.pushState({}, '', '/advanced/protocol'); });
     const teardownRequestForThird = (): RuntimeAppMessage | undefined => appMessages.find((entry) =>
       entry.href === thirdFrameHref && entry.senderOrigin === fixture.url && entry.message !== null && typeof entry.message === 'object' &&
       (entry.message as Readonly<Record<string, unknown>>).method === 'ui/resource-teardown');

@@ -26,17 +26,17 @@ e2e(
     const pageErrors: Error[] = [];
     page.on('pageerror', (error) => pageErrors.push(error));
     try {
-      await page.goto(workbenchUrl(fixture.url, 'lifecycles'));
+      await page.goto(workbenchUrl(fixture.url, '/routes/events/tool/after'));
       try {
-        await expect(page.getByRole('heading', { name: 'Lifecycles' })).toBeVisible({ timeout: browserTimeout });
+        await expect(page.getByTestId('route-workspace')).toBeVisible({ timeout: browserTimeout });
       } catch (reason) {
         throw new Error(
-          `Lifecycle page did not become ready at ${page.url()}.\n${await page.locator('body').innerText()}`,
+          `Event route workspace did not become ready at ${page.url()}.\n${await page.locator('body').innerText()}`,
           { cause: reason },
         );
       }
-      await expect(page.getByText(/Loading semantic lifecycles/u)).toHaveCount(0, { timeout: browserTimeout });
-      await expect(page.getByRole('link', { exact: true, name: 'Lifecycles' })).toHaveAttribute('aria-current', 'page');
+      await expect(page.getByText(/Loading/u)).toHaveCount(0, { timeout: browserTimeout });
+      await expect(page.getByTestId('workbench-nav').getByRole('link', { name: 'Application' })).toHaveAttribute('aria-current', 'page');
 
       const selector = page.getByLabel('Lifecycle and target');
       const input = page.locator('#lifecycle-native-input');

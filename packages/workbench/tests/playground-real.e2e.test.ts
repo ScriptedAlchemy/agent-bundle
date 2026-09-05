@@ -374,7 +374,7 @@ e2e('executes catalog-admitted native prompts through the real host harness', { 
 
     await phase('catalog admission on epoch A', async () => {
       mark('open Playground');
-      await page.goto(`${server!.url}#playground`);
+      await page.goto(`${server!.url}/`);
       mark('wait for Playground heading');
       await expect(page.getByRole('heading', { name: 'Playground' })).toBeVisible({ timeout: browserTimeout });
       await selectNativePrompt('Gate native Playground run until cancellation.');

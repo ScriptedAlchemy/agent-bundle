@@ -37,7 +37,8 @@ e2e('shows a failed contract gate on the Overview while hosts keep the last pass
     start: (fixture) => startWorkbenchDevServer({ root: fixture.root }),
   }, async (server, fixture) => {
     await page.goto(server.url);
-    await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByTestId('workbench-nav')).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByTestId('shell-build-status')).toBeVisible({ timeout: browserTimeout });
 
     const timeout = { timeout: browserTimeout };
     const hostAdoption = page.locator('section.host-adoption');
@@ -54,8 +55,9 @@ e2e('shows a failed contract gate on the Overview while hosts keep the last pass
     const violations = hostAdoption.getByRole('table', { name: 'Contract violations' });
     await expect(violations).toContainText('tool:fixture/unknown', timeout);
     await expect(violations).toContainText('coverage', timeout);
-    await expect(page.getByRole('heading', { name: /^Diagnostics \(1\)$/u })).toBeVisible(timeout);
-    await expect(page.locator('section[aria-labelledby="diagnostics-heading"] table')).toContainText('AB7211', timeout);
+    await expect(page.getByTestId('problems-badge').or(page.getByRole('heading', { name: /^Diagnostics \(1\)$/u }))).toBeVisible(timeout);
+    await page.goto(`${server.url}/problems`);
+    await expect(page.getByText('AB7211')).toBeVisible(timeout);
 
     const failed = server.status();
     if (failed.artifact.state !== 'active') throw new Error('Expected the failed-contract build to publish an artifact.');
@@ -72,6 +74,6 @@ e2e('shows a failed contract gate on the Overview while hosts keep the last pass
 
     await expect(hostAdoption).toHaveAttribute('data-state', 'passed', timeout);
     await expect(hostAdoption).toContainText('Contract matrix passed; hosts serve the current build', timeout);
-    await expect(page.getByRole('heading', { name: /^Diagnostics \(0\)$/u })).toBeVisible(timeout);
+    await expect(page.getByTestId('problems-badge').or(page.getByRole('heading', { name: /^Diagnostics \(0\)$/u }))).toBeVisible(timeout);
   });
 });

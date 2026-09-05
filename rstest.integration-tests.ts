@@ -89,6 +89,7 @@ export const integrationTestFiles: readonly string[] = [
   'packages/rsc-runtime/tests/notices-sqlite-cross-process.test.ts',
   'packages/rsc-runtime/tests/state-packaging.test.ts',
   'packages/rsc-runtime/tests/state-sqlite-cross-process.test.ts',
+  'packages/workbench/tests/audiobook-curator.acceptance.e2e.test.ts',
   'packages/workbench/tests/comparisons-page-client-scope-browser.test.ts',
   'packages/workbench/tests/contributor-hmr.e2e.test.ts',
   'packages/workbench/tests/discovery-atoms-disposal.test.ts',
