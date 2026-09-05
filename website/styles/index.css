@@ -49,7 +49,7 @@
 }
 
 /*
- * Contrast (#590). Ratios are WCAG 2.x, computed from the declared colours
+ * Contrast. Ratios are WCAG 2.x, computed from the declared colours
  * composited over the theme backgrounds (#fff / #121212 unless noted); text
  * below 18.66 px bold needs 4.5:1.
  *
@@ -61,9 +61,7 @@
  *
  * Code blocks use Shiki's `css-variables` theme, so token colours are these
  * variables (`styles/vars/shiki-vars.css`, declared through `:where()`).
- * The light string token measured 3.04:1; the light comment (2.06:1) and
- * parameter (2.30:1) tokens and the dark comment token (3.84:1) fail the same
- * way and are corrected alongside it. Each pick keeps the original hue.
+ * Each pick keeps the original hue.
  */
 :root:not(.rp-dark) {
   /* #3c3c3c at 75 %: 5.18:1 on #fff, 5.01:1 on --rp-c-bg-soft, 4.86:1 on --rp-c-bg-mute. */
@@ -94,10 +92,8 @@
 }
 
 /*
- * Keyboard access (#590). The appearance switch (theme/index.tsx) is now a
- * tab stop; its focus ring is declared here so the two custom controls (this
- * switch and the skip link) share one visible style instead of the UA default.
- * Ring is --rp-c-brand on --rp-c-bg: 4.83:1 light, 10.06:1 dark.
+ * Appearance-switch focus ring, shared with the skip link instead of the UA
+ * default. Ring is --rp-c-brand on --rp-c-bg: 4.83:1 light, 10.06:1 dark.
  */
 .rp-switch-appearance:focus-visible {
   border-radius: 4px;
@@ -111,8 +107,7 @@
 }
 
 /*
- * Skip link (theme/index.tsx `SkipLink`): the first focusable element on the
- * page, clipped until it receives focus, then pinned over the sticky nav.
+ * Skip link: clipped until focused, then pinned over the sticky nav.
  * Text is --rp-c-brand on --rp-c-bg: 4.83:1 light, 10.06:1 dark.
  */
 .ab-skip-link {

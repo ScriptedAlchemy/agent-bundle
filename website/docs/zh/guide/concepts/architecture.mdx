@@ -340,7 +340,7 @@ prompt 路由则返回经校验的协议结果（来自 `document.value`）。CL
 
 写入器是 `build/build.ts` 的 `manifestFor`。它组装出一个 `ArtifactManifest`
 （`build/manifest.ts`；TypeDoc：
-[`ArtifactManifest`](../../api/interfaces/index.ArtifactManifest.md)），`writeManifest`
+[`ArtifactManifest`](../../api/index-1.md#artifactmanifest)），`writeManifest`
 再用 `assembleArtifactManifest` 将其序列化：规范的
 `stableJson` 加一个末尾换行。`parseArtifactManifest` 拒绝任何其他字节序列、重复键、未知键、
 缺失键、未排序的数组，以及指向清单自身的文件条目。

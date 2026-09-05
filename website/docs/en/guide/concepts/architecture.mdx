@@ -387,7 +387,7 @@ session identity the host did not supply.
 
 The writer is `build/build.ts` `manifestFor`. It assembles an
 `ArtifactManifest` (`build/manifest.ts`; TypeDoc:
-[`ArtifactManifest`](../../api/interfaces/index.ArtifactManifest.md)) and
+[`ArtifactManifest`](../../api/index-1.md#artifactmanifest)) and
 `writeManifest` serializes it with `assembleArtifactManifest`: canonical
 `stableJson` plus a trailing newline. `parseArtifactManifest` rejects any other byte sequence, duplicate
 keys, unknown keys, missing keys, unsorted arrays, and a file entry that
