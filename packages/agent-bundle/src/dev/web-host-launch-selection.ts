@@ -1,10 +1,10 @@
 import { readFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 
 import type { TargetRegistry } from '../adapters/registry.ts';
 import { digest } from '../core/digest.ts';
 import { CodedError } from '../core/errors.ts';
-import { assertInside, joinArtifact } from '../core/paths.ts';
+import { assertInside, isInsideOrEqual, joinArtifact } from '../core/paths.ts';
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { resolveMcpPathTokens } from '../services/mcp-path-tokens.ts';
 import {
@@ -64,6 +64,22 @@ interface LaunchCandidate {
   readonly target: string;
 }
 
+const normalizedStdioArgument = (
+  value: string,
+  artifactRoot: string,
+  cwd: string,
+): string => {
+  if (
+    !isAbsolute(value) &&
+    !value.startsWith('./') &&
+    !value.startsWith('../') &&
+    !value.includes('/') &&
+    !value.includes('\\')
+  ) return value;
+  const resolved = resolve(cwd, value);
+  return isInsideOrEqual(artifactRoot, resolved) ? resolved : value;
+};
+
 /**
  * The normalized-launch runtime view of one projection: env values pass
  * through the target's stdio-argument rule after token resolution, exactly
@@ -122,7 +138,7 @@ const launchIdentityOf = async (
         ? artifactRoot
         : assertInside(artifactRoot, resolve(artifactRoot, resolved.cwd));
       return digest({
-        args: resolved.args,
+        args: resolved.args.map((argument) => normalizedStdioArgument(argument, artifactRoot, cwd)),
         command: resolved.command,
         cwd,
         env: resolved.env ?? {},
