@@ -51,6 +51,7 @@ import {
   installReceiptStoreDirectory,
   isRemnantReceipt,
   isRuntimeStateRemnant,
+  listStoredInstallReceipts,
   readInstallReceipt,
   readInstallReceiptFile,
   treeInventory,
@@ -75,7 +76,10 @@ import {
 } from './cursor-hooks-registration.ts';
 import { cursorMarketplacePluginPath, cursorMarketplaceRoot } from './cursor-marketplace.ts';
 import { bundleInventory, readBundleIdentity, type PluginIdentity } from './identity.ts';
-import { resolveInstalledStateRoot } from './state-root.ts';
+import {
+  inspectInstalledStateOwnership,
+  resolveInstalledStateRoots,
+} from './state-root.ts';
 
 export type DoctorHost = InstallHost;
 export type DoctorHostProbeStatus = 'available' | 'failed' | 'unavailable';
@@ -135,6 +139,8 @@ export interface DoctorFinding {
   /** Git commit of a staged Cursor marketplace repository. */
   readonly commit?: string;
   readonly durableState?: DoctorDurableStateReport;
+  /** Every current per-server state root, deduplicated by directory. */
+  readonly durableStates?: readonly DoctorDurableStateReport[];
   /** Pre-#640 `<plugin root>/state`, reported separately from the effective state root. */
   readonly legacyDurableState?: DoctorDurableStateReport;
   /** The operator `.env` layer the installed pack's shells read at launch (#469); names and counts only, never values. */
@@ -252,6 +258,10 @@ export interface DoctorDurableStateReport {
   readonly directory: string;
   readonly exists: boolean;
   readonly findings: readonly DoctorDurableStateStore[];
+  readonly ownership: 'derived' | 'legacy' | 'marker' | 'unowned' | 'unrecorded';
+  readonly ownershipReason?: string;
+  readonly purgeable: boolean;
+  readonly servers: readonly string[];
   readonly stateSource: 'derived' | 'legacy' | 'native';
   readonly status: 'known' | 'warnings';
   readonly summary: {
@@ -465,6 +475,10 @@ const durableStateReport = (
   stateSource: DoctorDurableStateReport['stateSource'],
   findings: readonly DoctorDurableStateStore[],
   diagnostics: readonly Diagnostic[],
+  ownership: DoctorDurableStateReport['ownership'] = stateSource === 'legacy' ? 'legacy' : 'unrecorded',
+  purgeable = false,
+  servers: readonly string[] = [],
+  ownershipReason?: string,
 ): DoctorDurableStateReport => {
   const frozenDiagnostics = freezeDiagnostics(diagnostics);
   return Object.freeze({
@@ -472,6 +486,10 @@ const durableStateReport = (
     directory,
     exists,
     findings: Object.freeze(findings.map((finding) => Object.freeze({ ...finding }))),
+    ownership,
+    ...(ownershipReason === undefined ? {} : { ownershipReason }),
+    purgeable,
+    servers: Object.freeze([...servers]),
     stateSource,
     status: frozenDiagnostics.length === 0 ? 'known' : 'warnings',
     summary: Object.freeze({
@@ -636,27 +654,75 @@ const inspectInstalledDurableState = async (
 ): Promise<{
   readonly diagnostics: readonly Diagnostic[];
   readonly effective: DoctorDurableStateReport;
+  readonly effectiveAll: readonly DoctorDurableStateReport[];
   readonly legacy?: DoctorDurableStateReport;
 }> => {
-  const resolved = receipt?.stateRoot ??
-    await resolveInstalledStateRoot(pluginRoot, host, environment, home);
-  const effective = await inspectDurableState(resolved.root, resolved.source, host);
+  const locations = await resolveInstalledStateRoots(pluginRoot, host, environment, home);
+  const grouped = new Map<string, { servers: string[]; source: 'declared' | 'derived' }>();
+  for (const location of locations) {
+    if (location.root === undefined) continue;
+    const current = grouped.get(location.root);
+    if (current === undefined) grouped.set(location.root, { servers: [location.server], source: location.source });
+    else current.servers.push(location.server);
+  }
+  const effectiveAll: DoctorDurableStateReport[] = [];
+  for (const [root, current] of grouped) {
+    const recorded = receipt?.state?.roots.find((candidate) => candidate.root === root);
+    const decision = recorded === undefined || receipt?.state === undefined
+      ? undefined
+      : await inspectInstalledStateOwnership(receipt.state, recorded);
+    const ownership = recorded?.ownership.kind ?? 'unrecorded';
+    const inspected = await inspectDurableState(
+      root,
+      current.source === 'derived' ? 'derived' : 'native',
+      host,
+    );
+    effectiveAll.push(Object.freeze({
+      ...inspected,
+      ownership,
+      ...(recorded?.ownership.kind === 'unowned'
+        ? { ownershipReason: recorded.ownership.reason }
+        : decision?.reason === undefined ? {} : { ownershipReason: decision.reason }),
+      purgeable: decision?.action === 'purge',
+      servers: Object.freeze(current.servers),
+    }));
+  }
+  const unresolvedServers = locations
+    .filter((location) => location.status === 'unproven')
+    .map((location) => location.server);
+  const effective = effectiveAll[0] ?? durableStateReport(
+    `<unresolved state root: ${unresolvedServers.join(', ')}>`,
+    false,
+    false,
+    'native',
+    [],
+    [],
+    'unrecorded',
+    false,
+    unresolvedServers,
+    'relative override has no provable execution directory',
+  );
+  const reportedAll = effectiveAll.length === 0 ? Object.freeze([effective]) : Object.freeze(effectiveAll);
+  const effectiveDiagnostics = reportedAll.flatMap((entry) => entry.diagnostics);
   const legacyRoot = join(pluginRoot, 'state');
-  if (legacyRoot === resolved.root) {
-    return { diagnostics: effective.diagnostics, effective };
+  if (reportedAll.some((entry) => entry.directory === legacyRoot)) {
+    return { diagnostics: freezeDiagnostics(effectiveDiagnostics), effective, effectiveAll: reportedAll };
   }
   const legacy = await inspectDurableState(legacyRoot, 'legacy', host);
-  if (!legacy.exists) return { diagnostics: effective.diagnostics, effective };
+  if (!legacy.exists) {
+    return { diagnostics: freezeDiagnostics(effectiveDiagnostics), effective, effectiveAll: reportedAll };
+  }
   const legacyDiagnostic = diagnostic(
     'AB7332',
-    `Legacy durable state remains at ${JSON.stringify(legacyRoot)} while this install resolves framework state to ${JSON.stringify(resolved.root)}.`,
+    `Legacy durable state remains at ${JSON.stringify(legacyRoot)} while this install resolves framework state to ${JSON.stringify(effective.directory)}.`,
     'Run `agent-bundle uninstall <host> --purge-data --confirm-purge` for this install to remove both roots, or move required pre-#640 data before deleting the legacy directory.',
     'info',
     host,
   );
   return {
-    diagnostics: freezeDiagnostics([...effective.diagnostics, ...legacy.diagnostics, legacyDiagnostic]),
+    diagnostics: freezeDiagnostics([...effectiveDiagnostics, ...legacy.diagnostics, legacyDiagnostic]),
     effective,
+    effectiveAll: reportedAll,
     legacy,
   };
 };
@@ -1022,6 +1088,7 @@ const cursorInventory = async (
         diagnostics.push(await remnantDiagnostic(`Cursor plugin entry ${JSON.stringify(path)}`, path, remnantReceipt));
         findings.push({
           durableState: durableState.effective,
+          durableStates: durableState.effectiveAll,
           ...(durableState.legacy === undefined ? {} : { legacyDurableState: durableState.legacy }),
           entry,
           ...(remnantReceipt === undefined ? {} : { name: remnantReceipt.plugin, receipt: receiptSummary(remnantReceipt), version: remnantReceipt.version }),
@@ -1073,14 +1140,6 @@ const cursorInventory = async (
     }
     diagnostics.push(...staticDiagnostics);
     if (launch !== undefined) diagnostics.push(...launch.diagnostics);
-    const durableState = await inspectInstalledDurableState(path, 'cursor', environment, home);
-    diagnostics.push(...durableState.diagnostics);
-    const operatorEnv = await inspectOperatorEnv(path, 'cursor');
-    diagnostics.push(...operatorEnv.diagnostics);
-    const hooks = manifest.manifest === cursorManifestCandidates[0]
-      ? await inspectCursorPluginHooks(path, home, { caseInsensitivePaths: platform === 'win32' })
-      : undefined;
-    if (hooks !== undefined) diagnostics.push(...hooks.diagnostics);
     // The in-tree receipt is read-only evidence here: a pre-lifecycle receipt is diagnosed, never rewritten.
     let receipt: InstallReceipt | undefined;
     try {
@@ -1088,11 +1147,20 @@ const cursorInventory = async (
     } catch {
       receipt = undefined;
     }
+    const durableState = await inspectInstalledDurableState(path, 'cursor', environment, home, receipt);
+    diagnostics.push(...durableState.diagnostics);
+    const operatorEnv = await inspectOperatorEnv(path, 'cursor');
+    diagnostics.push(...operatorEnv.diagnostics);
+    const hooks = manifest.manifest === cursorManifestCandidates[0]
+      ? await inspectCursorPluginHooks(path, home, { caseInsensitivePaths: platform === 'win32' })
+      : undefined;
+    if (hooks !== undefined) diagnostics.push(...hooks.diagnostics);
     if (receipt?.migratedFrom !== undefined) {
       diagnostics.push(migratedReceiptDiagnostic('cursor', join(path, installReceiptFile), receipt));
     }
     findings.push({
       durableState: durableState.effective,
+      durableStates: durableState.effectiveAll,
       ...(durableState.legacy === undefined ? {} : { legacyDurableState: durableState.legacy }),
       entry,
       ...(hooks === undefined ? {} : { hooks: hooks.registration }),
@@ -1204,6 +1272,7 @@ const publicHostInventory = async (
   }
   const findings: DoctorFinding[] = [];
   const diagnostics: Diagnostic[] = [];
+  const storedReceipts = await listStoredInstallReceipts(publicHostRoot(host, environment, home));
   if (host === 'claude') {
     if (!Array.isArray(document)) return unknown('not an array');
     for (const row of document) {
@@ -1222,14 +1291,28 @@ const publicHostInventory = async (
       // `enabled: false` is a copy the user switched off (`claude plugin disable`): installed, but no
       // hooks, MCP servers, or skills reach a session until it is enabled again (#476).
       const enabled = typeof row['enabled'] === 'boolean' ? row['enabled'] : undefined;
-      const durableState = await inspectInstalledDurableState(row['installPath'], host, environment, home);
+      const name = row['id'].slice(0, row['id'].indexOf('@') === -1 ? undefined : row['id'].indexOf('@'));
+      const receiptCandidates = storedReceipts.receipts.filter((stored) =>
+        stored.receipt.plugin === name &&
+        stored.receipt.scope === row['scope'] &&
+        stored.receipt.version === row['version']
+      );
+      const rowProjectRoot = typeof row['projectPath'] === 'string' ? resolve(row['projectPath']) : undefined;
+      const matchingReceipts = rowProjectRoot === undefined
+        ? receiptCandidates
+        : receiptCandidates.filter((stored) =>
+            stored.receipt.projectRoot !== undefined &&
+            resolve(stored.receipt.projectRoot) === rowProjectRoot);
+      const receipt = matchingReceipts.length === 1 ? matchingReceipts[0]?.receipt : undefined;
+      const durableState = await inspectInstalledDurableState(row['installPath'], host, environment, home, receipt);
       diagnostics.push(...durableState.diagnostics);
       findings.push({
         durableState: durableState.effective,
+        durableStates: durableState.effectiveAll,
         ...(enabled === undefined ? {} : { enabled }),
         entry: `${row['id']} (${row['scope']})`,
         ...(errors.length === 0 ? {} : { errors }),
-        name: row['id'].slice(0, row['id'].indexOf('@') === -1 ? undefined : row['id'].indexOf('@')),
+        name,
         path: row['installPath'],
         ...(durableState.legacy === undefined ? {} : { legacyDurableState: durableState.legacy }),
         state: errors.length > 0 ? 'failed' : enabled === false ? 'disabled' : 'installed',
@@ -1247,10 +1330,15 @@ const publicHostInventory = async (
       const name = separator === -1 ? row['pluginId'] : row['pluginId'].slice(0, separator);
       const marketplace = separator === -1 ? '' : row['pluginId'].slice(separator + 1);
       const path = join(publicHostCacheRoot(host, environment, home), marketplace, name, row['version']);
-      const durableState = await inspectInstalledDurableState(path, host, environment, home);
+      const receipt = storedReceipts.receipts.find((stored) =>
+        stored.receipt.plugin === name &&
+        stored.receipt.version === row['version']
+      )?.receipt;
+      const durableState = await inspectInstalledDurableState(path, host, environment, home, receipt);
       diagnostics.push(...durableState.diagnostics);
       findings.push({
         durableState: durableState.effective,
+        durableStates: durableState.effectiveAll,
         entry: row['pluginId'],
         name,
         path,

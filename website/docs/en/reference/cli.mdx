@@ -195,6 +195,9 @@ before `add`. Every install writes a lifecycle receipt (format `agent-bundle-ins
 version, content hash, mode, scope, owned paths, host registrations, timestamps) — in-tree for
 Cursor local copies, under `<host root>/agent-bundle/receipts/` for Claude, Codex, and Cursor
 marketplace mode — that `uninstall` and `doctor` consume.
+During install, an explicit state root that does not yet exist is created and receives
+`.agent-bundle-state-owner.json`, which records the installation identity. Parent directories may
+be created to reach it but are never claimed or recursively removed.
 
 ## uninstall
 
@@ -209,8 +212,8 @@ agent-bundle uninstall <host> [--from <root>] [--scope <scope>] [--mode <mode>] 
 | `--from <root>` | `process.cwd()` | The composite root whose `agent-bundle.manifest.json` identifies the plugin (name, version, marketplace), read exactly as `install` reads it (`AB7001` on the same conditions). |
 | `--scope <scope>` | `user` | The scope the plugin was installed at (Claude). |
 | `--mode <mode>` | `local` | Cursor only: uninstall the `local` copy or the staged `marketplace` repository. |
-| `--keep-data` | on | Keep the effective framework state root (`AGENT_BUNDLE_STATE_ROOT`, else `~/.agent-bundle/state/<plugin>-<digest>` or `$XDG_STATE_HOME/agent-bundle/<plugin>-<digest>`), derived web-data, legacy `state/`, and a recorded Cursor `PLUGIN_DATA` directory. This is the default; the flag makes it explicit. |
-| `--purge-data` | off | Remove those durable-data roots for the exact installed code root. Refused (`AB7008`) without `--confirm-purge`. |
+| `--keep-data` | on | Keep every recorded framework state root, derived web-data, legacy `state/`, and a recorded Cursor `PLUGIN_DATA` directory. This is the default; the flag makes it explicit and preserves the ownership receipt for a later purge. |
+| `--purge-data` | off | Remove only receipt-recorded, installation-owned durable-data roots. Refused (`AB7008`) without `--confirm-purge`; shared, externally managed, marker-less, foreign-marker, and otherwise unproven roots are retained and listed. |
 | `--force` | off | Proceed without a receipt (legacy Cursor copy, host-only install) or when owned content, version, or staged `HEAD` no longer matches the receipt. A receipt or manifest naming another plugin is refused regardless. |
 | `--plan` | off | Print the exact paths and host registrations that would be removed and change nothing. |
 
@@ -229,6 +232,17 @@ derived web-data, legacy `state/`, and `plugins/data/<id>/`); Codex keeps extern
 and removes it on a confirmed purge while `codex plugin remove` deletes the cached tree. The package-relative installer bin accepts
 `uninstall <host>` with the same flags; the emitted `install.mjs` accepts `--uninstall` with
 `--mode`, `--keep-data`, `--purge-data --confirm-purge`, `--force`, and `--plan`.
+
+State receipts keep three facts separate. The installed MCP documents determine each server's
+runtime location (including relative overrides resolved from that server's execution directory);
+the receipt records the locations observed for this installation; and only independent ownership
+evidence authorizes deletion. The default
+`~/.agent-bundle/state/<plugin>-<digest>` (or
+`$XDG_STATE_HOME/agent-bundle/<plugin>-<digest>`) namespace is owned by construction. An explicit
+`AGENT_BUNDLE_STATE_ROOT` is owned only when installation created the previously absent directory
+and wrote its install-identity marker. A pre-existing directory is never recursively removed merely
+because a server or the current uninstall environment names it. Multiple servers and roots are
+recorded and judged independently.
 
 ## doctor
 
@@ -260,8 +274,9 @@ surface exposes it (`AB7330`). It inventories the Agent Bundle receipt store und
 and warns about receipts the host no longer honours (`AB7328`), and reports receipts written
 before format 2 as migrated (`AB7329`). A Cursor directory holding only preserved runtime state
 from `uninstall --keep-data` is reported `missing` with an `AB7307` info, not corrupt or foreign.
-For every installed copy Doctor reports the resolved framework state root, its `native` or
-`derived` source, whether it exists, and whether it is writable. A pre-#640
+For every installed copy Doctor reports every per-server framework state root, its `native` or
+`derived` source, receipt ownership (`derived`, `marker`, `unowned`, or `unrecorded`), whether its
+evidence is currently purgeable, the servers using it, whether it exists, and whether it is writable. A pre-#640
 `<plugin root>/state` is reported separately and flagged with `AB7332`.
 
 ## validate

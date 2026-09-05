@@ -475,14 +475,20 @@ const humanDoctor = (result: DoctorReport): string => {
       }
     }
     const reports = [
-      ...host.inventory.findings.map((finding) => finding.durableState),
+      ...host.inventory.findings.flatMap((finding) => finding.durableStates ?? (
+        finding.durableState === undefined ? [] : [finding.durableState]
+      )),
       host.bundle?.durableState,
     ].filter((report): report is DoctorDurableStateReport => report !== undefined);
     const uniqueReports = [...new Map(reports.map((report) => [report.directory, report])).values()];
     for (const report of uniqueReports) {
       out.push(
         `  state root: ${report.directory} (${report.exists ? 'exists' : 'missing'}, ` +
-        `${report.writable ? 'writable' : 'not writable'}, ${report.stateSource})\n`,
+        `${report.writable ? 'writable' : 'not writable'}, ${report.stateSource}); ` +
+        `ownership: ${report.ownership}${report.ownershipReason === undefined ? '' : ` (${report.ownershipReason})`}, ` +
+        `${report.purgeable ? 'purgeable' : 'retained'}${
+          report.servers.length === 0 ? '' : `, servers: ${report.servers.join(', ')}`
+        }\n`,
       );
     }
     const legacyReports = host.inventory.findings
