@@ -263,9 +263,10 @@ export const openInstalledHostMcpServer = async (
   } else {
     failures.push({ check: 'manifest-schema', reason: 'built artifact manifest was unavailable or invalid' });
   }
-  const target = artifactManifest?.projections.find((candidate) => candidate.host === options.host);
+  // The installed host is the shipped adapter's projection, by recorded identity (#578 audit).
+  const target = artifactManifest?.projections.find((candidate) => candidate.builtInHost === options.host);
   if (target === undefined) {
-    failures.push({ check: 'manifest-schema', reason: `artifact manifest did not declare projection ${options.host}` });
+    failures.push({ check: 'manifest-schema', reason: `artifact manifest did not declare a ${options.host} projection` });
   }
   const identity = await readBundleIdentity(artifactRoot, options.host).catch(() => {
     failures.push({ check: 'manifest-schema', reason: `artifact identity could not be read for ${options.host}` });
@@ -282,7 +283,7 @@ export const openInstalledHostMcpServer = async (
   }
   const hooksDocumentPath = identity?.documents.hooks;
   if (
-    artifactManifest?.executables.hooks.some((hook) => hook.host === options.host) === true &&
+    artifactManifest?.executables.hooks.some((hook) => hook.host === target?.host) === true &&
     hooksDocumentPath === undefined
   ) {
     failures.push({ check: 'manifest-schema', reason: `artifact manifest did not point at the ${options.host} hooks document` });
@@ -354,7 +355,7 @@ export const openInstalledHostMcpServer = async (
   // unreadable manifest already failed `manifest-schema` above.
   const installedHooks = artifactManifest === undefined
     ? undefined
-    : artifactManifest.executables.hooks.filter((hook) => hook.host === options.host);
+    : artifactManifest.executables.hooks.filter((hook) => hook.host === target?.host);
   if (installedHooks !== undefined && installedHooks.length > 0) {
     const hookDocument = await readJsonRecord(
       join(installedRoot, hooksDocumentPath ?? ''),

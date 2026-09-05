@@ -383,6 +383,16 @@
         "adapterRevision": {
           "$ref": "#/$defs/nonEmptyString"
         },
+        "builtInHost": {
+          "type": "string",
+          "enum": [
+            "claude",
+            "codex",
+            "cursor",
+            "portable"
+          ],
+          "description": "The shipped adapter that planned this projection, by identity; absent for an advanced-registry adapter."
+        },
         "documents": {
           "$ref": "#/$defs/projectionDocuments"
         },

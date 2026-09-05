@@ -22,8 +22,10 @@ export const writeFixtureManifest = async (options: {
   const projectionMetadata = options.targets
     .map((host) => {
       const metadata = registry.metadata(host);
+      const builtInHost = registry.builtInHost(host);
       return {
         adapterRevision: metadata.adapterRevision,
+        ...(builtInHost === undefined ? {} : { builtInHost }),
         host,
         observedVersion: metadata.observedVersion,
         schemas: [...metadata.schemas].sort((left, right) => left.name.localeCompare(right.name)),

@@ -3,6 +3,7 @@ import type { CompiledCliMode } from '../routes/types.ts';
 import type {
   ArtifactManifest,
   ArtifactManifestApplication,
+  ArtifactManifestBuiltInHost,
   ArtifactManifestMcpServer,
   ArtifactManifestProjectionDocuments,
 } from './manifest.ts';
@@ -35,6 +36,7 @@ export type InspectManifestSummary = Readonly<{
   readonly manifestVersion: number;
   readonly path: string;
   readonly projections: readonly {
+    readonly builtInHost?: ArtifactManifestBuiltInHost;
     readonly documents: ArtifactManifestProjectionDocuments;
     readonly host: string;
   }[];
@@ -178,6 +180,7 @@ export const inspectManifestOutput = (read: ArtifactManifestReadResult): Inspect
         manifestVersion: read.manifest.manifestVersion,
         path: read.path,
         projections: Object.freeze(read.manifest.projections.map((projection) => Object.freeze({
+          ...(projection.builtInHost === undefined ? {} : { builtInHost: projection.builtInHost }),
           documents: projection.documents,
           host: projection.host,
         }))),

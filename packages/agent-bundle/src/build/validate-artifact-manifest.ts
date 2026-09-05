@@ -211,7 +211,7 @@ const mcpDocumentDiagnostics = (
   // framework derives from the model; an advanced-registry adapter writes its
   // own document and may declare servers the model never named (#578: judged
   // by adapter identity, not by name).
-  const derivedDocument = options.registry.builtInHost(host) !== undefined;
+  const derivedDocument = projection.builtInHost !== undefined;
   for (const [name] of declared) {
     if (!derivedDocument || listed.has(name)) continue;
     diagnostics.push(diagnostic(
@@ -255,6 +255,21 @@ const projectionDiagnostics = async (options: CoherenceOptions): Promise<readonl
     const host = projection.host;
     // Unknown hosts are AB6009; without their contract there is nothing to compare against.
     if (!options.registry.has(host)) continue;
+    // The recorded adapter identity is what a consumer holding only the manifest
+    // keys on (`install`, `doctor`, the installed harness); it must be the
+    // identity the registry assigns the adapter under this name.
+    const builtInHost = options.registry.builtInHost(host);
+    if (projection.builtInHost !== builtInHost) {
+      diagnostics.push(diagnostic(
+        'AB6039',
+        `Manifest projections[${host}].builtInHost records ${JSON.stringify(projection.builtInHost)}, but the adapter registered under ${JSON.stringify(host)} is ${
+          builtInHost === undefined ? 'not a shipped adapter' : `the shipped ${JSON.stringify(builtInHost)} adapter`
+        }.`,
+        artifactManifestName,
+        host,
+      ));
+      continue;
+    }
     const contractDocuments = options.registry.artifactValidation(host).documents;
     const contractPath = (schema: string): string | undefined =>
       contractDocuments.find((document) => document.schema === schema)?.path;

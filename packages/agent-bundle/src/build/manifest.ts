@@ -121,9 +121,20 @@ export interface ArtifactManifestProjectionMarketplace {
  * One selected host projection of the composite root (#555): targets select
  * projections, they are not identity. `host` is the adapter name.
  */
+/**
+ * The shipped adapters, by identity. A projection planned by one of them
+ * records which, so a consumer holding only the manifest judges "is this the
+ * Claude projection" the way the build did — by adapter, never by the name
+ * the project selected it under (#578 audit: names are selection, not identity).
+ */
+export type ArtifactManifestBuiltInHost = 'claude' | 'codex' | 'cursor' | 'portable';
+
 export interface ArtifactManifestProjection {
   readonly adapterRevision: string;
+  /** The shipped adapter that planned this projection; absent for an advanced-registry adapter. */
+  readonly builtInHost?: ArtifactManifestBuiltInHost;
   readonly documents: ArtifactManifestProjectionDocuments;
+  /** The target name the project selected the projection under (its directory key in `targets`). */
   readonly host: string;
   /** The marketplace the projection's marketplace document registers; absent when none was emitted. */
   readonly marketplace?: ArtifactManifestProjectionMarketplace;
@@ -594,7 +605,7 @@ const parseProjections = (value: unknown): readonly ArtifactManifestProjection[]
       projection,
       location,
       ['adapterRevision', 'documents', 'host', 'observedVersion', 'schemas'],
-      ['marketplace'],
+      ['builtInHost', 'marketplace'],
     );
     const documents = parseProjectionDocuments(projection.documents, `${location}.documents`);
     let marketplace: ArtifactManifestProjectionMarketplace | undefined;
@@ -608,6 +619,9 @@ const parseProjections = (value: unknown): readonly ArtifactManifestProjection[]
     }
     return {
       adapterRevision: requireString(projection.adapterRevision, `${location}.adapterRevision`),
+      ...(projection.builtInHost === undefined ? {} : {
+        builtInHost: requireOneOf(projection.builtInHost, `${location}.builtInHost`, ['claude', 'codex', 'cursor', 'portable'] as const),
+      }),
       documents,
       host: requireString(projection.host, `${location}.host`),
       ...(marketplace === undefined ? {} : { marketplace }),

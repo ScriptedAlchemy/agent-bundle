@@ -12,6 +12,7 @@ import addFormats from 'ajv-formats';
 import cursorMarketplaceSchema from '../src/adapters/schemas/cursor/marketplace.schema.json' with { type: 'json' };
 import { stageCursorMarketplace } from '../src/install/cursor-marketplace.ts';
 import { formatInstallResult } from '../src/install/format.ts';
+import { stableJson } from '../src/core/digest.ts';
 import { readBundleIdentity } from '../src/install/identity.ts';
 import { installBundle, type InstallCommandRunner } from '../src/install/install.ts';
 import {
@@ -655,9 +656,31 @@ it('reports a host absent from manifest projections as AB7001', async () => {
     await expect(readBundleIdentity(fixture.bundleRoot, 'cursor')).rejects.toMatchObject({
       diagnostics: [expect.objectContaining({
         code: 'AB7001',
-        message: `The artifact at ${fixture.bundleRoot} was built for projections []; cursor is not among them. ` +
+        message: `The artifact at ${fixture.bundleRoot} was built for projections []; none is the shipped cursor adapter. ` +
           'Rebuild with --target cursor (or add it to targets in agent-bundle.config.ts).',
         target: 'cursor',
+      })],
+    });
+  } finally {
+    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+  }
+});
+
+it('selects the host projection by adapter identity, not by the selected name', async () => {
+  const fixture = await createHostBundle('cursor');
+  try {
+    const path = join(fixture.bundleRoot, 'agent-bundle.manifest.json');
+    const manifest = JSON.parse(await readFile(path, 'utf8')) as {
+      projections: { builtInHost?: string; host: string }[];
+    };
+    // A projection selected under the name `cursor` but planned by an advanced-registry
+    // adapter records no identity: the Cursor CLI has nothing to install.
+    for (const projection of manifest.projections) delete projection.builtInHost;
+    await writeFile(path, `${stableJson(manifest)}\n`);
+    await expect(readBundleIdentity(fixture.bundleRoot, 'cursor')).rejects.toMatchObject({
+      diagnostics: [expect.objectContaining({
+        code: 'AB7001',
+        message: expect.stringContaining('was built for projections [cursor]; none is the shipped cursor adapter.'),
       })],
     });
   } finally {

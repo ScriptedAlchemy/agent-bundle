@@ -67,12 +67,18 @@ export const readBundleIdentity = async (
         host,
       );
     case 'ok': {
-      const projection = result.manifest.projections.find((candidate) => candidate.host === host);
+      // The host CLI installs the projection the shipped adapter planned — judged by the
+      // recorded adapter identity, not by the name the project selected it under.
+      const projection = result.manifest.projections.find((candidate) => candidate.builtInHost === host);
       if (projection === undefined) {
-        const projections = result.manifest.projections.map((candidate) => candidate.host).join(', ');
+        const projections = result.manifest.projections
+          .map((candidate) => candidate.builtInHost === undefined || candidate.builtInHost === candidate.host
+            ? candidate.host
+            : `${candidate.host} (${candidate.builtInHost})`)
+          .join(', ');
         throw failure(
           'AB7001',
-          `The artifact at ${result.root} was built for projections [${projections}]; ${host} is not among them. ` +
+          `The artifact at ${result.root} was built for projections [${projections}]; none is the shipped ${host} adapter. ` +
             `Rebuild with --target ${host} (or add it to targets in agent-bundle.config.ts).`,
           host,
         );

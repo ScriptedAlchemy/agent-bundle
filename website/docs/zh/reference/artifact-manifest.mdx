@@ -101,7 +101,8 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 
 | 字段 | 必填 | 内容 |
 | --- | --- | --- |
-| `host` | 是 | 适配器名：`claude`、`codex`、`cursor`、`portable`，或已注册的适配器。 |
+| `host` | 是 | 项目选择该投影时所用的目标名：`claude`、`codex`、`cursor`、`portable`，或已注册适配器的名字。名字是选择，不是身份。 |
+| `builtInHost` | 由内置适配器规划时 | 规划该投影的内置适配器身份：`claude`、`codex`、`cursor` 或 `portable`。高级注册表的适配器缺省此字段——即使它注册在内置名字下。`install`、`doctor` 与已安装宿主测试工具都按此字段选取宿主投影，而不是按 `host`。 |
 | `adapterRevision` | 是 | 适配器由仓库维护的单调递增修订。 |
 | `observedVersion` | 是 | 记录其能力证据时观察到的宿主版本。 |
 | `schemas[]` | 是 | 该投影据以校验的固定宿主文档 schema：`{ name, revision, sha256 }`，按 `name` 排序。 |

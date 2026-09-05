@@ -309,8 +309,10 @@ const manifestProjections = (options: {
     const marketplace = emitted(documents?.marketplace?.path);
     const mcp = emitted(options.registry.mcpRuntime(host)?.manifestPath);
     const hooks = emitted(options.registry.hookContract(host)?.manifestPath);
+    const builtInHost = options.registry.builtInHost(host);
     return Object.freeze({
       adapterRevision: metadata.adapterRevision,
+      ...(builtInHost === undefined ? {} : { builtInHost }),
       documents: Object.freeze({
         ...(hooks === undefined ? {} : { hooks }),
         ...(marketplace === undefined ? {} : { marketplace }),

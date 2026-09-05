@@ -115,6 +115,7 @@ const validManifest = (): ArtifactManifest => ({
   projections: [
     {
       adapterRevision: 'claude-adapter-v1',
+      builtInHost: 'claude',
       documents: { hooks: 'claude/hooks.json', plugin: 'claude/plugin.json' },
       host: 'claude',
       observedVersion: '1.0.0',

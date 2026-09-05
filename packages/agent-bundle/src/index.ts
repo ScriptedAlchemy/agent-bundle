@@ -144,6 +144,7 @@ export type {
   ArtifactManifestSourceInput,
   ArtifactManifestApplication,
   ArtifactManifestBin,
+  ArtifactManifestBuiltInHost,
   ArtifactManifestCli,
   ArtifactManifestCliCommand,
   ArtifactManifestCliCommandMcp,

@@ -367,6 +367,21 @@ it('AB6039 names a documents.mcp pointer the host never reads', async () => {
   })]);
 });
 
+it('AB6039 names a projection whose recorded adapter identity is not the registry\'s', async () => {
+  const root = await copyArtifact();
+  await rewriteManifest(root, (current) => withProjection(current, 'claude', (projection) => ({
+    ...projection,
+    builtInHost: 'codex',
+  })));
+
+  const diagnostics = await validateArtifact({ artifactRoot: root });
+  expectOnly(diagnostics, 'AB6039');
+  expect(diagnostics).toEqual([expect.objectContaining({
+    message: 'Manifest projections[claude].builtInHost records "codex", but the adapter registered under "claude" is the shipped "claude" adapter.',
+    target: 'claude',
+  })]);
+});
+
 it('AB6039 names documents.plugin and documents.marketplace pointers the host never reads', async () => {
   const root = await copyArtifact();
   const manifest = await readManifest(root);

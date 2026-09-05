@@ -109,7 +109,8 @@ One row per selected host, sorted by `host`. Targets select projections; they ar
 
 | Field | Required | Contents |
 | --- | --- | --- |
-| `host` | yes | The adapter name: `claude`, `codex`, `cursor`, `portable`, or a registered adapter. |
+| `host` | yes | The target name the project selected the projection under: `claude`, `codex`, `cursor`, `portable`, or a registered adapter's name. A name is selection, not identity. |
+| `builtInHost` | when a shipped adapter planned it | The shipped adapter that planned the projection, by identity: `claude`, `codex`, `cursor`, or `portable`. Absent for an advanced-registry adapter, even one registered under a built-in name. `install`, `doctor`, and the installed-host test harness pick a host's projection by this field, never by `host`. |
 | `adapterRevision` | yes | The adapter's repository-owned, monotonic revision. |
 | `observedVersion` | yes | The host version its capability evidence was recorded against. |
 | `schemas[]` | yes | The pinned host document schemas the projection was validated against: `{ name, revision, sha256 }`, sorted by `name`. |

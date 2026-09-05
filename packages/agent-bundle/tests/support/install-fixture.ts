@@ -49,6 +49,8 @@ export const writeInstallFixtureManifest = async (
     if (projection.mcp !== undefined) documentPaths.add(projection.mcp);
     projectionRows.push({
       adapterRevision: `${projection.host}-fixture-v1`,
+      // The fixture hosts are the shipped adapters, so identity and name coincide.
+      builtInHost: projection.host,
       documents: {
         ...(marketplace === undefined ? {} : { marketplace }),
         ...(projection.mcp === undefined ? {} : { mcp: projection.mcp }),
