@@ -16,9 +16,17 @@ const resultWith = (externals: readonly ExternalIR[]): CompileResult => ({
 
 describe('classifyExternal', () => {
   const emittedAssets = new Set(['scripts/probe.mjs', 'scripts/sibling.mjs']);
-  const classify = (request: string) => classifyExternal(request, {
+  const classify = (request: string, externalType = 'module') => classifyExternal({ externalType, request }, {
     asset: 'scripts/probe.mjs',
     emittedAssets,
+  });
+
+  it('rejects any request under an external type that does not load a module', () => {
+    expect(classify('node:fs', 'global')).toBe('package');
+    expect(classify('fs', 'var')).toBe('package');
+    expect(classify('./sibling.mjs', 'window')).toBe('package');
+    expect(classify('node:fs', 'node-commonjs')).toBe('builtin');
+    expect(classify('node:fs', 'import')).toBe('builtin');
   });
 
   it('accepts Node builtins and Yarn PnP', () => {
@@ -80,6 +88,14 @@ describe('selfContainmentDiagnostics', () => {
     expect(selfContainmentDiagnostics(resultWith([
       {
         asset: 'scripts/probe.mjs',
+        externalType: 'global',
+        issuers: ['src/probe.ts'],
+        kind: 'package',
+        request: 'node:fs',
+        userRequest: 'node:fs',
+      },
+      {
+        asset: 'scripts/probe.mjs',
         externalType: 'module',
         issuers: ['src/probe.ts'],
         kind: 'package',
@@ -97,6 +113,7 @@ describe('selfContainmentDiagnostics', () => {
     ])).map((diagnostic) => diagnostic.message)).toEqual([
       'Compiled module "scripts/probe.mjs" keeps "./missing.mjs" external (module), imported as "./missing.ts", from src/probe.ts; it names no module emitted by this artifact.',
       'Compiled module "scripts/probe.mjs" keeps "lp" external (module), imported as "left-pad", from src/probe.ts; a generated executable bundles everything but Node built-ins.',
+      'Compiled module "scripts/probe.mjs" keeps "node:fs" external (global) from src/probe.ts; external type global reads a variable instead of loading a module.',
     ]);
   });
 

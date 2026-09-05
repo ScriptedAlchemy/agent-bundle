@@ -11,10 +11,32 @@ export const isAllowedExternalRequest = (request: string): boolean => isBuiltin(
 
 const isRelativeRequest = (request: string): boolean => request.startsWith('./') || request.startsWith('../');
 
+/**
+ * Rspack external types whose emitted code loads the request as a module. The
+ * others (`var`, `global`, `this`, `window`, `assign`, `umd`, `amd`, `system`,
+ * `jsonp`, `promise`, `script`, …) read a variable or evaluate an expression,
+ * so even a built-in request would fail at run time.
+ */
+const moduleLoadingExternalTypes: ReadonlySet<string> = new Set([
+  'commonjs',
+  'commonjs-module',
+  'commonjs-static',
+  'commonjs2',
+  'import',
+  'module',
+  'module-import',
+  'node-commonjs',
+]);
+
+export const isModuleLoadingExternalType = (externalType: string): boolean =>
+  moduleLoadingExternalTypes.has(externalType);
+
 export const classifyExternal = (
-  request: string,
+  external: { readonly externalType: string; readonly request: string },
   options: { readonly asset: string; readonly emittedAssets: ReadonlySet<string> },
 ): ExternalKind => {
+  const { externalType, request } = external;
+  if (!isModuleLoadingExternalType(externalType)) return 'package';
   if (isAllowedExternalRequest(request)) return 'builtin';
   if (isRelativeRequest(request)) {
     const target = posix.join(posix.dirname(options.asset), request);
@@ -31,9 +53,11 @@ const externalMessage = (external: ExternalIR): string => {
       return `Compiled module ${JSON.stringify(external.asset)} keeps ${JSON.stringify(external.request)} external (${external.externalType})`
         + `${external.userRequest === external.request ? '' : `, imported as ${JSON.stringify(external.userRequest)},`}`
         + `${external.issuers.length === 0 ? '' : ` from ${external.issuers.join(', ')}`}; `
-        + (isRelativeRequest(external.request)
-          ? 'it names no module emitted by this artifact.'
-          : 'a generated executable bundles everything but Node built-ins.');
+        + (!isModuleLoadingExternalType(external.externalType)
+          ? `external type ${external.externalType} reads a variable instead of loading a module.`
+          : isRelativeRequest(external.request)
+            ? 'it names no module emitted by this artifact.'
+            : 'a generated executable bundles everything but Node built-ins.');
     case 'artifact-relative':
     case 'builtin':
       throw new Error(`Allowed external ${JSON.stringify(external.request)} has no diagnostic message.`);

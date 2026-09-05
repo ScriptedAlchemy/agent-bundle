@@ -876,7 +876,7 @@ export const buildRslibSurfaces = async (
         asset: entry.outputRelativePath,
         externalType: external.externalType,
         issuers: external.issuers.map((issuer) => projectIssuer(options.cwd, issuer)),
-        kind: classifyExternal(external.request, { asset: entry.outputRelativePath, emittedAssets }),
+        kind: classifyExternal(external, { asset: entry.outputRelativePath, emittedAssets }),
         request: external.request,
         userRequest: external.userRequest,
       }));

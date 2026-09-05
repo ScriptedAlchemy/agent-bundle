@@ -108,6 +108,12 @@ const externalsMutator = (...externals: readonly Rspack.ExternalItem[]): RspackM
   config.externals = [...(current === undefined ? [] : Array.isArray(current) ? current : [current]), ...externals];
 };
 
+/** Rspack takes the first matching declaration, so overriding Rslib's own built-in externals means going first. */
+const prependedExternalsMutator = (...externals: readonly Rspack.ExternalItem[]): RspackMutator => (config) => {
+  const current = config.externals;
+  config.externals = [...externals, ...(current === undefined ? [] : Array.isArray(current) ? current : [current])];
+};
+
 const buildFixture = async (
   root: string,
   scripts: Readonly<Record<string, string>>,
@@ -157,6 +163,32 @@ describe('compiler evidence on host-pack builds', () => {
     expect(ab6005(failure)).toEqual([
       compileTimeExternal('scripts/pad.mjs', 'left-pad', 'node-commonjs', ['src/scripts/pad.ts']),
     ]);
+  }, 120_000);
+
+  it('rejects a built-in kept under an external type that reads a variable instead of loading a module', async () => {
+    const root = await fixtureRoot({
+      'agent-bundle.config.ts': 'export default {};\n',
+      'package.json': '{"name":"compiler-evidence-fixture","type":"module","private":true}\n',
+      'src/scripts/pad.ts': [
+        "import { readFileSync } from 'node:fs';",
+        '',
+        'export const main = async (): Promise<number> => {',
+        "  process.stdout.write(String(readFileSync(process.argv[2]!, 'utf8').length));",
+        '  return 0;',
+        '};',
+        '',
+      ].join('\n'),
+    });
+    const scriptPath = join(root, 'src', 'scripts', 'pad.ts');
+    const failure = await buildFixture(root, { pad: scriptPath }, { rspack: prependedExternalsMutator({ 'node:fs': 'global fs' }) });
+
+    const [reported, ...rest] = ab6005(failure);
+    expect(rest).toEqual([]);
+    expect(reported).toMatchObject({ code: 'AB6005', generatedPath: 'scripts/pad.mjs' });
+    // The framework's bundled entry wrapper imports node:fs too, so it is an issuer beside the script.
+    expect(reported?.message).toMatch(
+      /^Compiled module "scripts\/pad\.mjs" keeps "fs" external \(global\), imported as "node:fs", from .*src\/scripts\/pad\.ts; external type global reads a variable instead of loading a module\.$/u,
+    );
   }, 120_000);
 
   it('judges the run-time target of an object-map external, not the authored specifier', async () => {
