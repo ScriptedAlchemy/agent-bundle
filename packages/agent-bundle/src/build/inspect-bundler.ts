@@ -21,7 +21,7 @@ import {
 import { launchEnvRuntimeSpecifier, operatorEnvLayerVirtualModule } from './launch-env-shell.ts';
 import { cliBinRslibEntries, planCompiledCliBins } from './cli-bins.ts';
 import type { CompositePlan } from './compose.ts';
-import { eventAllowedTargets, planCompiledMcpEntries } from './entries.ts';
+import { eventRuntimeHosting, planCompiledMcpEntries, selectedServerHosts } from './entries.ts';
 import { composeMcpAppsRsbuildConfig, planCompiledMcpApps } from './mcp-apps.ts';
 import { projectMeta } from './meta.ts';
 import { planPackageEntries } from './package-build.ts';
@@ -210,6 +210,7 @@ const mcpEntryEntries = async (
   const target = composite.identity;
   const noticeDelivery = composite.noticeDelivery;
   const planned = planCompiledMcpEntries(model.mcpServers, { outDir: outputRoot, target, targets: composite.selected });
+  const hosting = eventRuntimeHosting(model.mcpServers, composite.selected);
   const entries: BundlerInspectionEntry[] = [];
   for (const entry of planned) {
     const server = model.mcpServers.find((candidate) => candidate.id === entry.id);
@@ -220,7 +221,8 @@ const mcpEntryEntries = async (
     const routeSource = generatedRoutes === undefined || server === undefined
       ? undefined
       : generatedRouteMcpEntrySource({
-        allowedTargets: eventAllowedTargets(server, composite.selected),
+        allowedTargets: hosting.serverIds.has(server.id) ? hosting.allowedTargets : [],
+        hosts: selectedServerHosts(server, composite.selected),
         ...(noticeDelivery === undefined ? {} : { noticeDelivery }),
         ...(model.notices === undefined ? {} : { noticeRetention: model.notices.retention.resolved }),
         plugin: { name: model.metadata.name, version: model.metadata.version },

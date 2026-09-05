@@ -368,7 +368,8 @@ it('generates one final-only Flight MCP factory from filesystem routes', () => {
       },
     ],
     serverName: 'curator',
-    allowedTargets: ['claude'],
+    allowedTargets: ['claude', 'codex'],
+    hosts: ['claude'],
     workerFile: 'mcp-curator-flight.mjs',
   });
 
@@ -406,8 +407,13 @@ it('generates one final-only Flight MCP factory from filesystem routes', () => {
   // The endpoint is the artifact's identity alone (epoch + root); the hosts
   // that may deliver events ride separately as the allowed set (#592).
   expect(source).toContain('endpointId: `${EVENT_ARTIFACT_EPOCH}:${dirname(dirname(resolve(process.argv[1])))}`');
-  expect(source).toContain('const EVENT_ALLOWED_TARGETS = Object.freeze(["claude"]);');
-  expect(source).not.toContain('EVENT_TARGET');
+  // The hosts whose wrappers the shared runtime accepts and the hosts that can
+  // have launched this entry are two sets: a Claude-only server in a
+  // Claude+Codex root hosts the runtime for both, yet only Claude spawns it.
+  expect(source).toContain('const EVENT_ALLOWED_TARGETS = Object.freeze(["claude","codex"]);');
+  expect(source).toContain('const EVENT_HOSTS = Object.freeze(["claude"]);');
+  expect(source).toContain('  hosts: EVENT_HOSTS,');
+  expect(source).not.toContain('EVENT_TARGET ');
   expect(source).toContain('events,');
   // Nothing else the shared runtime owns may be re-templated here.
   expect(source).not.toContain('server.register');

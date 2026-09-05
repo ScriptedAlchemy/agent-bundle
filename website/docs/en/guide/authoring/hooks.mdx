@@ -360,6 +360,12 @@ that never clears) is reported on the server's stderr — one line per distinct 
 at most every 30 seconds — while the server keeps standing by. A startup that fails for any
 other reason still fails closed, as does a stale socket the owner cannot remove.
 
+Inside one composite root each selected host reaches that runtime through the first generated
+MCP server its own MCP document lists — one process when every selected host lists the same
+server, one per host otherwise. The runtime's socket is identified by the artifact alone (its
+epoch and root directory, never the `targets` selection), and the invoking host rides on each
+request, so whichever process owns the socket answers every selected host's wrappers.
+
 A route with `runtime: 'standalone'` bundles its module into the wrapper itself: the same
 canonical identity, the same projection, no shared process state. `AB4817` refuses a route
 that requires the shared runtime on a target where no generated MCP entry hosts it and no

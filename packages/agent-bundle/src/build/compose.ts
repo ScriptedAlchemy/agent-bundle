@@ -252,7 +252,7 @@ export const planComposite = (model: NormalizedPlugin, registry: TargetRegistry)
   });
   const merged = mergeEntries([
     ...projections.map((projection) => ({ entries: projection.plan.entries, owner: projection.name })),
-    { entries: installSurfaceEntries(model, selected), owner: 'install surface' },
+    { entries: installSurfaceEntries(model, registry.builtInHosts(selected)), owner: 'install surface' },
   ]);
   diagnostics.push(...merged.diagnostics, ...scopeLeakDiagnostics(model, registry, selected));
   return Object.freeze({

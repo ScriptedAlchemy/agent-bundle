@@ -327,7 +327,7 @@ const validateTargetContracts = async (options: {
   const files = new Set(options.files.map((file) => file.path));
   const selected = manifestTargets(options.manifest);
 
-  for (const relativePath of installSurfaceRequirements(selected)) {
+  for (const relativePath of installSurfaceRequirements(options.registry.builtInHosts(selected))) {
     if (files.has(relativePath)) continue;
     diagnostics.push(diagnostic(
       relativePath === 'INSTALL.md' ? 'AB6023' : 'AB6024',

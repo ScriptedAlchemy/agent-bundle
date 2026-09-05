@@ -161,13 +161,17 @@ describe('generated server lineage correlation', () => {
   });
 
   // The fallback host for a client that does not name itself is a projection,
-  // never the artifact's own identity (#592). The binding's `allowedTargets`
-  // is the selected hosts whose MCP documents list this server — the hosts
-  // that can have spawned it — so a server one host lists (a Claude-only
-  // server in a Claude+Codex root included) assumes that host, and a server
-  // several hosts list has no single host to assume and leaves the axis to
-  // the client's name.
-  const lineageFallbackFor = async (allowedTargets: readonly string[]): Promise<readonly (string | undefined)[]> => {
+  // never the artifact's own identity (#592). The binding's `hosts` is the
+  // selected hosts whose MCP documents list this server — the hosts that can
+  // have spawned it — distinct from `allowedTargets`, the hosts whose hook
+  // wrappers the runtime it hosts accepts: a Claude-only server hosting the
+  // runtime of a Claude+Codex root accepts both hosts' wrappers yet assumes
+  // Claude, and a server several hosts list has no single host to assume and
+  // leaves the axis to the client's name.
+  const lineageFallbackFor = async (
+    hosts: readonly string[],
+    allowedTargets: readonly string[] = hosts,
+  ): Promise<readonly (string | undefined)[]> => {
     const queries: LineageToolCallQuery[] = [];
     const lineage: AgentLineageRegistry = {
       observe: async () => unavailable('id-not-resolvable'),
@@ -191,7 +195,8 @@ describe('generated server lineage correlation', () => {
           onRoleChange: () => () => undefined,
           role: () => 'owner',
         })) as never,
-        endpointId: `lineage-fallback:${allowedTargets.join('+')}`,
+        endpointId: `lineage-fallback:${hosts.join('+')}:${allowedTargets.join('+')}`,
+        hosts,
         projectEventDocument: (() => {
           throw new Error('not invoked');
         }) as never,
@@ -228,6 +233,10 @@ describe('generated server lineage correlation', () => {
 
   it('assumes the one host whose MCP document lists the server when the client does not name itself', async () => {
     await expect(lineageFallbackFor(['claude'])).resolves.toEqual(['claude']);
+  });
+
+  it('assumes the one launching host however many hosts the runtime it hosts accepts', async () => {
+    await expect(lineageFallbackFor(['claude'], ['claude', 'codex'])).resolves.toEqual(['claude']);
   });
 
   it('assumes no host when several selected hosts list the server', async () => {
@@ -375,6 +384,7 @@ describe('generated server teardown', () => {
           role: () => 'owner',
         })) as never,
         endpointId: 'teardown-test',
+        hosts: ['claude'],
         projectEventDocument: (() => {
           throw new Error('not invoked');
         }) as never,
@@ -482,6 +492,7 @@ describe('generated server standby diagnostics', () => {
             };
           }) as never,
           endpointId: 'standby-diagnostics-test',
+          hosts: ['claude'],
           projectEventDocument: (() => {
             throw new Error('not invoked');
           }) as never,

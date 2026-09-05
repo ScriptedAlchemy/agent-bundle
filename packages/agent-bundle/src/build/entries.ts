@@ -303,14 +303,44 @@ const localMcpOutputName = (server: NormalizedMcpServer): string => {
   return match[1];
 };
 
-/**
- * The hosts whose hook wrappers may deliver events to a server: the selected
- * hosts the server itself targets, so a Claude-only server in a Claude+Codex
- * root never accepts a Codex-attributed request (#555). The build bakes this
- * into the entry and `inspect --bundler` describes the same set.
- */
-export const eventAllowedTargets = (server: NormalizedMcpServer, selected: readonly string[]): readonly string[] =>
+/** The selected hosts whose MCP documents list `server` — the hosts that can launch it — in selection order. */
+export const selectedServerHosts = (server: NormalizedMcpServer, selected: readonly string[]): readonly string[] =>
   selected.filter((target) => server.targets.includes(target));
+
+/**
+ * Where a composite root hosts its shared event runtime (#555). Each selected
+ * host reaches the runtime through the first generated-route server its MCP
+ * document lists — the rule every per-host artifact applied before the roots
+ * merged — so a root whose hosts launch different servers hosts the runtime
+ * in each of them, and a host that lists no generated-route server is not
+ * served (`AB4817` refuses that for a route without standalone fallback). The
+ * endpoint is the artifact's alone (#592) and whichever hosting process owns
+ * it answers every host's wrappers, so every hosting server accepts the same
+ * set: the selected hosts that list a hosting server. The build bakes this
+ * into the entries and `inspect --bundler` describes the same hosting.
+ */
+export interface EventRuntimeHosting {
+  /** The selected hosts whose hook wrappers may deliver events, in selection order. */
+  readonly allowedTargets: readonly string[];
+  /** The ids of the generated-route servers that host the runtime. */
+  readonly serverIds: ReadonlySet<string>;
+}
+
+export const eventRuntimeHosting = (
+  servers: readonly NormalizedMcpServer[],
+  selected: readonly string[],
+): EventRuntimeHosting => {
+  const generated = servers.filter((server) => server.source !== undefined && server.generatedRoutes !== undefined);
+  const hostedBy = new Map<string, string>();
+  for (const host of selected) {
+    const server = generated.find((candidate) => candidate.targets.includes(host));
+    if (server !== undefined) hostedBy.set(host, server.id);
+  }
+  return Object.freeze({
+    allowedTargets: Object.freeze([...hostedBy.keys()]),
+    serverIds: new Set(hostedBy.values()),
+  });
+};
 
 /**
  * The MCP entries of one artifact root: every server that reaches one of the
@@ -380,10 +410,8 @@ export const planMcpEntriesSurface = async (
   },
 ): Promise<RslibSurfacePlan<readonly CompiledMcpEntry[]>> => {
   const compiled = planCompiledMcpEntries(servers, options);
-  const allowedTargetsFor = (server: NormalizedMcpServer): readonly string[] =>
-    eventAllowedTargets(server, options.targets);
-  const eventHostId = compiled.find((entry) =>
-    servers.find((server) => server.id === entry.id)?.generatedRoutes !== undefined)?.id;
+  const hosting = eventRuntimeHosting(servers, options.targets);
+  const hostsRuntime = (id: string): boolean => hosting.serverIds.has(id);
   const virtualSources = await Promise.all(compiled.map(async (entry) => {
     const records = await Promise.all((options.apps ?? [])
       .filter((app) => app.serverIds.includes(entry.id))
@@ -408,14 +436,15 @@ export const planMcpEntriesSurface = async (
       ? undefined
       : generatedRouteMcpEntrySource({
         artifactEpoch: options.artifactEpoch,
-        eventRoutes: entry.id === eventHostId ? options.eventHooks : [],
+        eventRoutes: hostsRuntime(entry.id) ? options.eventHooks : [],
         ...(options.noticeDelivery === undefined ? {} : { noticeDelivery: options.noticeDelivery }),
         plugin: options.plugin,
         routes: server.generatedRoutes,
         serverName: server.name,
         ...(options.noticeRetention === undefined ? {} : { noticeRetention: options.noticeRetention }),
         ...(options.state === undefined ? {} : { state: options.state }),
-        allowedTargets: allowedTargetsFor(server),
+        allowedTargets: hostsRuntime(entry.id) ? hosting.allowedTargets : [],
+        hosts: selectedServerHosts(server, options.targets),
         workerFile: `${entry.name}-flight.mjs`,
       });
   });
@@ -425,7 +454,7 @@ export const planMcpEntriesSurface = async (
       ? undefined
       : generatedRouteFlightWorkerSource({
         artifactEpoch: generatedRouteArtifactEpoch(options.plugin),
-        eventRoutes: entry.id === eventHostId ? options.eventHooks : [],
+        eventRoutes: hostsRuntime(entry.id) ? options.eventHooks : [],
         layouts: options.layouts ?? [],
         ...(options.noticeDelivery === undefined ? {} : { noticeDelivery: options.noticeDelivery }),
         providers: options.providers ?? [],
@@ -469,7 +498,7 @@ export const planMcpEntriesSurface = async (
         ? {}
         : {
           [mcpEntryRuntimeSpecifier]: runtimeShell,
-          ...(id !== eventHostId || eventIpcRuntime === undefined || eventProjectRuntime === undefined
+          ...(!hostsRuntime(id) || eventIpcRuntime === undefined || eventProjectRuntime === undefined
             ? {}
             : {
               [eventIpcRuntimeSpecifier]: eventIpcRuntime,

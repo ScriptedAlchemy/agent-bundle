@@ -4,10 +4,11 @@ import { dirname, join, relative } from 'node:path';
 
 import { afterEach, describe, expect, it } from '@rstest/core';
 
-import { codexArtifactPaths } from '../src/adapters/codex.ts';
-import { cursorArtifactPaths } from '../src/adapters/cursor.ts';
+import { claudeAdapter } from '../src/adapters/claude.ts';
+import { codexAdapter, codexArtifactPaths } from '../src/adapters/codex.ts';
+import { cursorAdapter, cursorArtifactPaths } from '../src/adapters/cursor.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
-import { build, type BuildProjectResult, createDefaultRegistry, type TargetRegistry, validate } from '../src/api.ts';
+import { build, type BuildProjectResult, createDefaultRegistry, TargetRegistry, validate } from '../src/api.ts';
 import { parseArtifactHookIndex } from '../src/build/hook-index.ts';
 import { parseArtifactManifest } from '../src/build/manifest.ts';
 import { sha256Hex } from '../src/core/digest.ts';
@@ -129,7 +130,7 @@ const syntheticMcpRuntime = createTargetMcpRuntime({
  * compiled surfaces (MCP entries, scripts), so alone it builds a clean root;
  * beside another target only `AB4106` can be at issue.
  */
-const syntheticAdapter: TargetAdapter = Object.freeze({
+const syntheticAdapterNamed = (name: string): TargetAdapter => Object.freeze({
   artifactLayout: Object.freeze({
     mcpEntries: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'mcp' }),
     scripts: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'scripts' }),
@@ -137,10 +138,10 @@ const syntheticAdapter: TargetAdapter = Object.freeze({
   capabilities: supportedCapabilities('mcp'),
   mcpRuntime: syntheticMcpRuntime,
   metadata: Object.freeze({ adapterRevision: 'test', observedVersion: 'test', schemas: Object.freeze([]) }),
-  name: syntheticTarget,
+  name,
   plan: (model: NormalizedPlugin) => {
     const servers = Object.fromEntries(model.mcpServers
-      .filter((server) => server.targets.includes(syntheticTarget))
+      .filter((server) => server.targets.includes(name))
       .map((server) => [server.name, {
         ...(server.args === undefined ? {} : { args: server.args }),
         command: server.command,
@@ -157,6 +158,8 @@ const syntheticAdapter: TargetAdapter = Object.freeze({
     });
   },
 });
+
+const syntheticAdapter = syntheticAdapterNamed(syntheticTarget);
 
 const readJson = async (path: string): Promise<unknown> => JSON.parse(await readFile(path, 'utf8'));
 
@@ -411,5 +414,33 @@ describe('composite plugin root (#555)', () => {
     expect(await topLevel(alone.output)).toContain(syntheticMcpRuntime.manifestPath);
     expect(builtIn.result.build.manifest.targets.map((target) => target.name)).toEqual(['claude', 'codex']);
     expect(await topLevel(builtIn.output)).not.toContain(syntheticMcpRuntime.manifestPath);
+  });
+
+  it('judges the built-in hosts by adapter identity, so a custom adapter named like one earns no install surface (#592)', { timeout: 120_000 }, async () => {
+    // An advanced registry may register its own adapter under a built-in
+    // host's name. The install surface belongs to the shipped adapters, so the
+    // composite root emits none for it — and the artifact validators demand
+    // none — while the shipped adapters keep theirs under their own names.
+    const registry = new TargetRegistry()
+      .register(syntheticAdapterNamed('portable'), { default: true })
+      .register(claudeAdapter)
+      .register(codexAdapter)
+      .register(cursorAdapter);
+    expect(registry.builtInHost('portable')).toBeUndefined();
+    expect(registry.builtInHost('claude')).toBe('claude');
+    expect(registry.builtInHosts(['portable', 'cursor', 'unknown', 'claude'])).toEqual(['cursor', 'claude']);
+    expect(createDefaultRegistry().builtInHost('portable')).toBe('portable');
+
+    const [custom, shipped] = await Promise.all([
+      buildFixture(['portable'], { registry }),
+      buildFixture(['portable'], {}),
+    ]);
+    expect(custom.result.build.manifest.targets.map((target) => target.name)).toEqual(['portable']);
+    const customTree = await topLevel(custom.output);
+    expect(customTree).toContain(syntheticMcpRuntime.manifestPath);
+    expect(customTree).not.toContain('INSTALL.md');
+    expect(customTree).not.toContain('install.mjs');
+    expect(custom.result.diagnostics.filter((entry) => entry.code === 'AB6023' || entry.code === 'AB6024')).toEqual([]);
+    expect(await topLevel(shipped.output)).toEqual(expect.arrayContaining(['INSTALL.md', 'install.mjs', 'plugin.json']));
   });
 });
