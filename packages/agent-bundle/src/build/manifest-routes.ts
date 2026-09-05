@@ -32,7 +32,6 @@ import type {
 const byId = <Row extends { readonly id: string }>(rows: readonly Row[]): readonly Row[] =>
   [...rows].sort((left, right) => left.id.localeCompare(right.id));
 
-/** `config.description` when it is a non-blank string. */
 export const routeDescription = (config: Readonly<Record<string, unknown>>): string | undefined => {
   const value = config['description'];
   return typeof value === 'string' && value.trim().length > 0 ? value : undefined;

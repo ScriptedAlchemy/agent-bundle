@@ -381,16 +381,19 @@ const manifestHooks = (options: {
   // row per hook and host, pointing at the wrapper its host contract simulates.
   return Object.freeze(options.compiledHooks
     .filter((entry) => entry.indexed !== false)
-    .map((entry): ArtifactManifestHook => Object.freeze({
-      event: entry.event,
-      host: entry.target,
-      id: entry.id,
-      kind: eventRoutes.has(entry.id) ? 'event-route' : 'config',
-      name: entry.name,
-      path: artifactPath(options.artifactRoot, entry.output),
-      ...(eventRoutes.has(entry.id) ? { routeId: eventRoutes.get(entry.id)! } : {}),
-      ...(entry.timeout === undefined ? {} : { timeout: entry.timeout }),
-    }))
+    .map((entry): ArtifactManifestHook => {
+      const routeId = eventRoutes.get(entry.id);
+      return Object.freeze({
+        event: entry.event,
+        host: entry.target,
+        id: entry.id,
+        kind: routeId === undefined ? 'config' : 'event-route',
+        name: entry.name,
+        path: artifactPath(options.artifactRoot, entry.output),
+        ...(routeId === undefined ? {} : { routeId }),
+        ...(entry.timeout === undefined ? {} : { timeout: entry.timeout }),
+      });
+    })
     .sort(compareArtifactManifestHooks));
 };
 

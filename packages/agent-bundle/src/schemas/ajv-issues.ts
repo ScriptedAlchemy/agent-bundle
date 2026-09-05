@@ -1,5 +1,5 @@
 import { Ajv2020, type ErrorObject, type Options } from 'ajv/dist/2020.js';
-import addFormats from 'ajv-formats';
+import formatsModule from 'ajv-formats';
 
 /** Issue shape shared by every Ajv-backed schema contract. */
 export interface SchemaIssue {
@@ -9,9 +9,6 @@ export interface SchemaIssue {
   readonly message: string;
 }
 
-/** ajv-formats ships CJS-flavored typings; this single cast localizes the mismatch. */
-const installFormats = addFormats as unknown as (target: Ajv2020) => void;
-
 /**
  * Each contract keeps its own instance so schema `$id` registration cannot
  * collide. Strict mode is the baseline; a contract passes `options` only to
@@ -19,7 +16,7 @@ const installFormats = addFormats as unknown as (target: Ajv2020) => void;
  */
 export const createSchemaValidator = (options: Options = {}): Ajv2020 => {
   const validator = new Ajv2020({ allErrors: true, strict: true, ...options });
-  installFormats(validator);
+  formatsModule.default(validator);
   return validator;
 };
 

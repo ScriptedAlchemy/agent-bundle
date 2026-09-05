@@ -129,6 +129,8 @@ export interface ApplicationExplorerDistribution {
   readonly install?: ApplicationExplorerInstall;
 }
 
+const documentKinds = ['hooks', 'marketplace', 'mcp', 'plugin'] as const;
+
 const byId = <Value extends { readonly id: string }>(left: Value, right: Value): number =>
   left.id.localeCompare(right.id);
 
@@ -142,11 +144,11 @@ const hostsFor = (manifest: ArtifactManifest): ApplicationExplorerHost[] =>
   manifest.projections
     .map((projection): ApplicationExplorerHost => ({
       builtIn: projection.builtInHost !== undefined,
-      documents: Object.entries(projection.documents)
-        .map(([kind, path]): ApplicationExplorerDocument => ({
-          kind: kind as ApplicationExplorerDocument['kind'],
-          path,
-        }))
+      documents: documentKinds
+        .flatMap((kind): ApplicationExplorerDocument[] => {
+          const path = projection.documents[kind];
+          return path === undefined ? [] : [{ kind, path }];
+        })
         .sort((left, right) => left.kind.localeCompare(right.kind)),
       host: projection.host,
       ...(projection.marketplace === undefined ? {} : { marketplace: projection.marketplace.name }),

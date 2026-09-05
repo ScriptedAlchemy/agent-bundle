@@ -175,7 +175,6 @@ const ApplicationTree = ({ application }: { readonly application: ApplicationExp
   </ul>}
 </section>;
 
-/** Epoch identity, application tree, emitted file tree, and declared provenance of one epoch. */
 export const ArtifactInspectionView = ({ view }: ArtifactInspectionViewProps) => <div className="artifact-inspection">
   <p className="artifact-summary" role="status">{view.summary}</p>
   {view.diagnostics.length === 0 ? undefined : <div className="artifact-diagnostics" role="alert">

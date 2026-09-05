@@ -95,7 +95,8 @@ export const resolveManifestHost = (
     if (!registry.supports(host, options.capability)) return false;
     return serverHosts === undefined || serverHosts.has(host);
   });
-  if (candidates.length === 1) return candidates[0]!;
+  const [candidate] = candidates;
+  if (candidate !== undefined && candidates.length === 1) return candidate;
   const name = options.server ?? 'MCP';
   if (candidates.length === 0) {
     throw new Error(`No projection of this artifact runs MCP server ${name}.`);

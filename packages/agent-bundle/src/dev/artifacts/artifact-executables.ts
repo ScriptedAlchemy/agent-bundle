@@ -17,7 +17,6 @@ const compareScriptExecutions = (
   ? left.id.localeCompare(right.id)
   : left.target.localeCompare(right.target);
 
-/** Expands each authoritative manifest script into its host-scoped execution rows. */
 export const artifactManifestScriptExecutions = (
   manifest: ArtifactManifest,
 ): readonly ArtifactManifestScriptExecution[] => {

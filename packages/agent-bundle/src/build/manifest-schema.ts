@@ -1,5 +1,7 @@
-import { deepFreeze } from '../core/freeze.ts';
-import type { JsonObject } from '../dev/types.ts';
+import {
+  type JsonObject,
+  snapshotStrictJsonValue,
+} from '../core/strict-json.ts';
 import {
   compareSchemaIssues,
   createSchemaValidator,
@@ -18,9 +20,9 @@ import schema from '../../schemas/agent-bundle.manifest.schema.json' with { type
  * authority for what a schema cannot state: canonical bytes, sorted arrays,
  * cross-references between sections, digests, and the runtime floor.
  */
-// TypeScript infers `key?: undefined` members for the heterogeneous `anyOf`/
-// `oneOf` arrays, which no JSON type admits; the module is JSON by construction.
-export const artifactManifestSchema: JsonObject = deepFreeze(schema as unknown as JsonObject);
+export const artifactManifestSchema: JsonObject = Object.freeze(Object.fromEntries(
+  Object.entries(schema).map(([key, value]) => [key, snapshotStrictJsonValue(value)]),
+));
 
 // The schema states "present exactly when" rules as `if`/`then`/`else`
 // conditionals whose `required` keys are declared under the sibling
