@@ -128,7 +128,8 @@
   dead-link, dead-anchor, dead-image, and language-parity checks. Parity
   fails the build if one locale gains a page the other lacks. Run it before
   pushing anything under `website/`, and after any change to public
-  exports, since TypeDoc compiles `packages/agent-bundle/src` directly.
+  exports, after `pnpm build`, since TypeDoc compiles the declarations under
+  `packages/agent-bundle/dist`.
 - The site is desktop-first, like the Workbench. Wide tables scroll; code
   samples wrap at roughly 90 columns so they render without horizontal
   overflow at the default content width.
