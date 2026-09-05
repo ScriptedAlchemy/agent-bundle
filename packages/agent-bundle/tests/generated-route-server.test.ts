@@ -628,7 +628,7 @@ it('compiles createAppClient().call against generated AppRegister contracts with
   expect(wrongInput).toHaveLength(1);
   expect(wrongInput[0]).toMatch(/Type 'number' is not assignable to type 'string'/u);
 
-  const html = await readFile(join(output, 'portable', 'mcp-apps', 'dashboard.html'), 'utf8');
+  const html = await readFile(join(output, 'mcp-apps', 'dashboard.html'), 'utf8');
   expect(html).toContain('2026-01-26');
   expect(html).toContain('from-app');
   expect([
@@ -641,7 +641,7 @@ it('compiles createAppClient().call against generated AppRegister contracts with
   const server = compiled.model.mcpServers[0]!;
   const client = new Client({ name: 'generated-app-client-test', version: '0.0.0' });
   const transport = new StdioClientTransport({
-    args: [join(output, 'portable', server.args![0]!)],
+    args: [join(output, server.args![0]!)],
     command: process.execPath,
     stderr: 'pipe',
   });

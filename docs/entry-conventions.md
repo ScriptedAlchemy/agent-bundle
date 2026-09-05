@@ -1581,7 +1581,7 @@ capability needs consent.
 | Member | Contract |
 | --- | --- |
 | `connect(options?)` | Performs the `ui/initialize` handshake once and resolves the validated `AppInitializeResult` (`protocolVersion` `2026-01-26` — `APP_PROTOCOL_VERSION` — plus `hostInfo`, `hostCapabilities`, `hostContext`), then sends `ui/notifications/initialized` and records the opening tool name from `hostContext.toolInfo.tool.name` for the opening-notification listeners. Idempotent: a connected client resolves the cached result, a connecting one returns the in-flight promise; a handshake that `rebind()` overtakes rejects with `connection-rebound`. |
-| `call(routeId, input, options?)` | `tools/call` for the tool a `tool:<server>/<name>` route id names — the wire name is the final segment, derived the way the generated server derives it (`src/routes/protocol-name.ts`); any other shape rejects with a `TypeError`. The server segment is not on the wire: `tools/call` carries `name` alone and the host dispatches it to the server the App is bound to, so an id naming another server's tool reaches the bound server's tool of that name, or fails there. `input` must be a finite strict-JSON object (`invalid-message` otherwise). Resolves the result's `structuredContent` **directly**; rejects a result with `isError: true` (`rpc`, whole result on `error.data`), one without an object `structuredContent`, or a malformed envelope (`invalid-message`). The MCP projection emits `structuredContent` for object-valued results only (`advertisedOutputSchema` in `src/mcp-server-runtime.ts`), so a tool whose `resultSchema` is scalar- or array-rooted is typed by the generated map but never resolves through `call()`. |
+| `call(routeId, input, options?)` | `tools/call` for the tool a `tool:<server>/<name>` route id names — the standard wire name is the final segment, derived the way the generated server derives it (`src/routes/protocol-name.ts`); any other shape rejects with a `TypeError`. The client also carries the canonical id in framework-private `_meta`, and `createMcpAppBridge` rejects it with `-32602` unless both server and tool match the bound server before dispatch. `input` must be a finite strict-JSON object (`invalid-message` otherwise). Resolves the result's `structuredContent` **directly**; rejects a result with `isError: true` (`rpc`, whole result on `error.data`), one without an object `structuredContent`, or a malformed envelope (`invalid-message`). The MCP projection emits `structuredContent` for object-valued results only (`advertisedOutputSchema` in `src/mcp-server-runtime.ts`), so a tool whose `resultSchema` is scalar- or array-rooted is typed by the generated map but never resolves through `call()`. |
 | `request(method, params?, options?)` | The typed JSON-RPC escape hatch for `resources/read` and supported `ui/*` methods; resolves the raw result. An empty method rejects with a `TypeError`. |
 | `onToolInput(routeId, listener)` / `onToolResult(routeId, listener)` / `onToolError(routeId, listener)` | The opening call's `ui/notifications/tool-input` arguments, the decoded `structuredContent` of a successful `ui/notifications/tool-result`, and that notification's failures as an `AppClientError` — `isError: true` is `rpc` with the whole result on `data`; a malformed envelope or one without an object `structuredContent` is `invalid-message`; a failed result never reaches `onToolResult`. The notifications carry no tool name, so dispatch keys on the tool the handshake named: `hostContext.toolInfo.tool.name` from the initialize result, matched against the final segment of each registered route id. Listeners for other tools stay silent; when the initialize result names no tool, `tool-input` and `tool-result` reach no listener. Listeners run on a microtask, exceptions dropped. Each returns its unsubscribe function. |
 | `onToolCancelled(listener)` | `ui/notifications/tool-cancelled` as `{ reason? }`, unfiltered; returns its unsubscribe function. |
@@ -1593,9 +1593,9 @@ capability needs consent.
 `agent-bundle-app` / `1.0.0`), `appCapabilities` (a finite JSON object,
 default `{}`), `timeoutMs` (integer milliseconds, 1 to 2³¹ − 1, default
 15 000), and the connect options `parent`, `targetOrigin`, `window`. Every
-request takes `{ signal, timeoutMs }`. `signal` is typed as the ambient
-`AbortSignal` of whichever `lib` the App program compiles against (DOM in a
-view, Node in the unit tests) and is used structurally: the client reads
+request takes `{ signal, timeoutMs }`. `signal` uses the exported structural
+`AppAbortSignal` contract, which the ambient DOM or Node `AbortSignal`
+satisfies: the client reads
 `aborted`, adds one `abort` listener, and removes it when the request settles.
 A request that times out or is aborted rejects with `timeout` / `aborted` and,
 once connected, sends `notifications/cancelled` with the request id and the
@@ -1635,8 +1635,8 @@ threaded through `McpAppBindingService.callTool`/`readResource` and the
 with `AbortSignal.any`, so the bound MCP session's request is cancelled too. A
 cancellation for an unknown or finished id is a no-op; one arriving before the
 App is initialized is ignored; one carrying an `id` is rejected as malformed;
-and a duplicate in-flight request id is rejected `-32602` without touching the
-original. Re-initialization and close abort every in-flight request.
+and a duplicate in-flight request id aborts the ambiguous original operation
+and is rejected `-32602`. Re-initialization and close abort every in-flight request.
 `tests/mcp-app-bridge-cancellation.test.ts` covers each of those, including
 that cancellation cannot bypass consent or reach a request the App did not
 start. Hosts outside the framework apply their own policy; the client's

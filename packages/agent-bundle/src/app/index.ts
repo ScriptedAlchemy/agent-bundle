@@ -1,4 +1,7 @@
-import { MCP_APP_PROTOCOL_VERSION } from '../contracts/mcp-app-protocol.ts';
+import {
+  MCP_APP_PROTOCOL_VERSION,
+  MCP_APP_ROUTE_ID_META_KEY,
+} from '../contracts/mcp-app-protocol.ts';
 import {
   type JsonObject,
   type JsonValue,
@@ -649,7 +652,11 @@ export const createAppClient = (options: CreateAppClientOptions = {}): AppClient
     } catch {
       throw new AppClientError('invalid-message', `Input for ${routeId} must be a finite strict JSON object.`);
     }
-    const response = await request<JsonValue>('tools/call', { arguments: argumentsValue, name }, requestOptions);
+    const response = await request<JsonValue>('tools/call', {
+      _meta: { [MCP_APP_ROUTE_ID_META_KEY]: routeId },
+      arguments: argumentsValue,
+      name,
+    }, requestOptions);
     const result = toolResultEnvelope(response);
     if (result === undefined) {
       throw new AppClientError('invalid-message', `Tool ${routeId} returned an invalid result envelope.`);

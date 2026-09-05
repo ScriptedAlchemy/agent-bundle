@@ -719,7 +719,10 @@ client.dispose();
 ```
 
 **路由 id 与类型。** 工具以 `tool:<server>/<name>` 路由 id 寻址。客户端与生成的服务器一样从最后一段
-推导 wire tool name；其他形状属于调用方误用，会抛出 `TypeError`。当路由图至少包含一条工具路由时，
+推导 wire tool name；其他形状属于调用方误用，会抛出 `TypeError`。`tools/call` 以最后一段作为标准
+`name`，并在框架私有 `_meta` 中携带规范路由 id；`createMcpAppBridge` 会在分派之前拒绝 server 段或
+工具名与当前绑定服务器不符的路由。其他 MCP App 宿主可以忽略这项私有 metadata，因此仍应只寻址注册该
+App 的服务器工具。当路由图至少包含一条工具路由时，
 生成的 `.agent-bundle/routes.d.ts` 会为 `agent-bundle/app` 恰好添加一次 augmentation：
 
 ```ts

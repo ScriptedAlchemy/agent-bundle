@@ -246,7 +246,11 @@ it('calls a route by its protocol tool name and returns structuredContent direct
       id: 2,
       jsonrpc: '2.0',
       method: 'tools/call',
-      params: { arguments: { limit: 40 }, name: 'hauler_status' },
+      params: {
+        _meta: { 'io.agent-bundle/route-id': 'tool:hauler/hauler_status' },
+        arguments: { limit: 40 },
+        name: 'hauler_status',
+      },
     },
     targetOrigin: hostOrigin,
   });

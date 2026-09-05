@@ -806,9 +806,11 @@ client.dispose();
 
 **Route ids and types.** A tool is addressed by its route id, `tool:<server>/<name>`. The client
 derives the wire tool name from the final segment, exactly as the generated server does, and any
-other shape is a `TypeError`. The server segment never reaches the wire: `tools/call` carries the
-tool name alone, and the host dispatches it to the one server the App is bound to, so address the
-tools of the server that registered the App. The types come from the compiler: when the route
+other shape is a `TypeError`. `tools/call` carries the final segment as its standard `name` and
+the canonical route id in framework-private `_meta`; `createMcpAppBridge` rejects a route whose
+server segment or name does not match the bound server before dispatch. Other MCP App hosts may
+ignore that private metadata, so address the tools of the server that registered the App. The
+types come from the compiler: when the route
 graph has at least one tool route, the generated `.agent-bundle/routes.d.ts` adds exactly one
 augmentation on `agent-bundle/app`,
 

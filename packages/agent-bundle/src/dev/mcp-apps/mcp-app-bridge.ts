@@ -1,3 +1,4 @@
+import { MCP_APP_ROUTE_ID_META_KEY } from '../../contracts/mcp-app-protocol.ts';
 import { MAX_APP_HTML_BYTES } from '../../core/mcp-app-limits.ts';
 import {
   validateMcpAppDownloadRequest,
@@ -71,6 +72,7 @@ export class McpAppBridgeCloseError extends Error {
 export interface McpAppBridgeToolCall {
   readonly arguments?: McpAppJsonValue;
   readonly name: string;
+  readonly routeId?: string;
 }
 
 export interface McpAppBridgeResourceRead {
@@ -198,6 +200,7 @@ interface BridgeBindingSnapshot {
   readonly input: McpAppJsonValue;
   readonly resourceUri: string;
   readonly result: McpAppJsonValue;
+  readonly serverName: string;
   readonly toolDefinition: McpAppBinding['toolDefinition'];
 }
 
@@ -296,7 +299,9 @@ const normalizedQueuedHostMessageBytes = (value: number | undefined): number => 
 };
 
 const snapshotBinding = (value: McpAppBinding): BridgeBindingSnapshot => {
-  if (!nonempty(value.id) || !nonempty(value.resourceUri)) throw new TypeError('MCP App bridge binding must contain nonempty id and resource URI values.');
+  if (!nonempty(value.id) || !nonempty(value.resourceUri) || !nonempty(value.serverName)) {
+    throw new TypeError('MCP App bridge binding must contain nonempty id, resource URI, and server name values.');
+  }
   const input = jsonRecord(value.input);
   const result = validToolResult(value.result);
   const toolDefinition = jsonRecord(value.toolDefinition);
@@ -306,6 +311,7 @@ const snapshotBinding = (value: McpAppBinding): BridgeBindingSnapshot => {
     input,
     resourceUri: value.resourceUri,
     result,
+    serverName: value.serverName,
     toolDefinition: toolDefinition as McpAppBinding['toolDefinition'],
   });
 };
@@ -636,7 +642,15 @@ const validToolCall = (params: McpAppJsonValue | undefined): McpAppBridgeToolCal
   const record = jsonRecord(params);
   if (record === undefined || !nonempty(record.name)) return undefined;
   if (record.arguments !== undefined && jsonRecord(record.arguments) === undefined) return undefined;
-  return Object.freeze({ ...(record.arguments === undefined ? {} : { arguments: cloneJson(record.arguments) }), name: record.name });
+  const meta = record._meta === undefined ? undefined : jsonRecord(record._meta);
+  if (record._meta !== undefined && meta === undefined) return undefined;
+  const routeId = meta?.[MCP_APP_ROUTE_ID_META_KEY];
+  if (routeId !== undefined && !nonempty(routeId)) return undefined;
+  return Object.freeze({
+    ...(record.arguments === undefined ? {} : { arguments: cloneJson(record.arguments) }),
+    name: record.name,
+    ...(routeId === undefined ? {} : { routeId }),
+  });
 };
 
 const validResourceRead = (params: McpAppJsonValue | undefined): McpAppBridgeResourceRead | undefined => {
@@ -1145,6 +1159,12 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
       case 'tools/call': {
         const request = validToolCall(message.params);
         if (request === undefined) return fail(id, -32602, 'tools/call requires a name and finite JSON arguments.');
+        if (
+          request.routeId !== undefined
+          && request.routeId !== `tool:${binding.serverName}/${request.name}`
+        ) {
+          return fail(id, -32602, 'tools/call route id does not match the bound MCP server and tool.');
+        }
         const controller = beginInFlight(id);
         if (controller === undefined) return rejectDuplicateInFlight(id);
         const details = Object.freeze({ ...(request.arguments === undefined ? {} : { arguments: request.arguments }), name: request.name });
