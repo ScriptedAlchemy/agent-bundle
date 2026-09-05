@@ -76,9 +76,11 @@ const preserveResourceReferences: RslibBundlerChain = (chain) => {
  * production build `rslib.build()` runs. Rslib 1.x otherwise infers the mode
  * from `NODE_ENV`, and under `development` inspects only `mf` libs — none
  * here — so `assertExecutableConfig` and `inspect --bundler` would fail. Rslib
- * writes the inspected mode back to `NODE_ENV`; a process that had set it
- * (a development server, a test runner) keeps its own value, while an unset
- * one is left at `production`, exactly as `rslib.build()` leaves it.
+ * writes the inspected mode back to `NODE_ENV`; the process gets its own value
+ * back — set or unset — whether the inspection succeeded or threw, so a
+ * development server or test runner that inspects a config is not left
+ * running as `production`. (`rslib.build()` sets `production` itself when it
+ * finds `NODE_ENV` unset; that is the build's business, not the inspection's.)
  */
 const inspectProductionConfig = async (
   rslib: Pick<RslibInstance, 'inspectConfig'>,
@@ -87,7 +89,8 @@ const inspectProductionConfig = async (
   try {
     return await rslib.inspectConfig({ mode: 'production' });
   } finally {
-    if (nodeEnv !== undefined) process.env.NODE_ENV = nodeEnv;
+    if (nodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = nodeEnv;
   }
 };
 type RslibLibConfig = LibConfig;

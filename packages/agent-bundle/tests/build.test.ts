@@ -1198,6 +1198,29 @@ it('lowers every bundler config and builds under NODE_ENV=development, leaving N
   }
 }, 20_000);
 
+it('leaves NODE_ENV unset when a failing inspection had set it', async () => {
+  const { entry, root } = await reservedSpecifierProject();
+  const previousNodeEnv = process.env.NODE_ENV;
+  delete process.env.NODE_ENV;
+  try {
+    await expect(buildWithRslib({ cwd: root, entries: [entry], meta: testMeta, outputRoot: join(root, 'dist') }, {
+      createRslib: async () => ({
+        build: () => Promise.reject(new Error('build must not run after a failed inspection')),
+        inspectConfig: async () => {
+          // Rslib writes the requested mode to NODE_ENV before it can fail.
+          process.env.NODE_ENV = 'production';
+          throw new Error('inspection failed');
+        },
+      }),
+    })).rejects.toThrow('inspection failed');
+    expect(process.env.NODE_ENV).toBeUndefined();
+  } finally {
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 it('leaves filesystem URL and worker expressions in the emitted bundle untouched', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-resource-references-'));
   const sourceRoot = join(root, 'src');
