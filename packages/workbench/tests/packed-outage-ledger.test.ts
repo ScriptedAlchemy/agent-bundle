@@ -157,6 +157,29 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
       ...valid.requests,
     ]),
   });
+  // Leaving the Logs page before the replay answered: Chromium reports the
+  // abort with neither a status nor a response instant.
+  const knownPreOutageLogsReplayPreHeaderCancellation = Object.freeze({
+    ...valid,
+    requests: Object.freeze([
+      ledgerRequest({ at: 900, completedAt: 901, error: 'net::ERR_ABORTED', method: 'GET', path: '/api/logs/replay' }),
+      ...valid.requests,
+    ]),
+  });
+  const logsReplayCancellationWithoutTerminal = Object.freeze({
+    ...valid,
+    requests: Object.freeze([
+      ledgerRequest({ at: 900, error: 'net::ERR_ABORTED', method: 'GET', path: '/api/logs/replay' }),
+      ...valid.requests,
+    ]),
+  });
+  const logsReplayCancellationAfterFailure = Object.freeze({
+    ...valid,
+    requests: Object.freeze([
+      ledgerRequest({ at: 900, completedAt: 901, error: 'net::ERR_ABORTED', method: 'GET', path: '/api/logs/replay', respondedAt: 900, status: 500 }),
+      ...valid.requests,
+    ]),
+  });
   const preStartedOutageStreamTermination = Object.freeze({
     ...valid,
     requests: Object.freeze(valid.requests.map((request) =>
@@ -229,6 +252,14 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
       ledgerRequest({ at: 1_335, completedAt: 1_336, error: 'net::ERR_ABORTED', method: 'POST', path: '/api/playground/runs' }),
     ]),
   });
+  // A fresh-B stream abort delivered before the test clicked Close is not the
+  // close's doing, however close to the click it lands.
+  const preCloseFreshStreamCancellation = Object.freeze({
+    ...validPostRecovery,
+    requests: Object.freeze(validPostRecovery.requests.map((request) =>
+      request.path.startsWith('/api/mcp/sessions/fresh-browser-mcp-session/') ? ledgerRequest({ ...request, completedAt: 1_319 }) : request,
+    )),
+  });
   const navigationCancellationBeforeDeparture = Object.freeze({
     ...validPostRecovery,
     postRecovery: Object.freeze({
@@ -270,6 +301,10 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
   expect(() => validateOutageLedger(knownPreOutageSessionReplayCancellation)).not.toThrow();
   expect(() => validateOutageLedger(knownPreOutageSessionReadCancellation)).not.toThrow();
   expect(() => validateOutageLedger(knownPreOutageLogsReplayCancellation)).not.toThrow();
+  expect(() => validateOutageLedger(knownPreOutageLogsReplayPreHeaderCancellation)).not.toThrow();
+  expect(() => validateOutageLedger(logsReplayCancellationWithoutTerminal)).toThrow(/unexpected pre-outage failures/u);
+  expect(() => validateOutageLedger(logsReplayCancellationAfterFailure)).toThrow(/unexpected pre-outage failures/u);
+  expect(() => validateOutageLedger(preCloseFreshStreamCancellation)).toThrow(/fresh B MCP stream cancellation is not action-induced/u);
   expect(() => validateOutageLedger(validPostRecovery)).not.toThrow();
   expect(() => validateOutageLedger(navigationLiveStreamCancellation)).not.toThrow();
   expect(() => validateOutageLedger(navigationRespondedCatalogCancellation)).not.toThrow();

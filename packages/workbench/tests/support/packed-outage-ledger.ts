@@ -23,13 +23,14 @@ export interface OutageLedger {
   readonly outageStartedAt: number;
   readonly postRecovery?: Readonly<{
     /**
-     * The B-generation browser MCP session, located by its own wire entries:
-     * `openedAt` is the `POST /api/mcp/sessions` request instant, and the
-     * close window `[closeStartedAt, closeCompletedAt]` spans from the
-     * completion of the session's last operation to the completion of its
-     * `DELETE`. The page aborts both of its session streams before it issues
-     * that `DELETE`, so every close-induced stream abort lands inside the
-     * window while a mid-session or post-close abort does not.
+     * The B-generation browser MCP session: `openedAt` is the
+     * `POST /api/mcp/sessions` request instant, and the close window
+     * `[closeStartedAt, closeCompletedAt]` spans from the stamp the test took
+     * before clicking Close (the click is issued from the test, so nothing it
+     * causes can be delivered earlier) to the completion of the session's
+     * `DELETE` wire entry. The page aborts both of its session streams before
+     * it issues that `DELETE`, so every close-induced stream abort lands inside
+     * the window while a pre-click or post-close abort does not.
      */
     readonly freshMcpSession: Readonly<{ readonly closeCompletedAt: number; readonly closeStartedAt: number; readonly id: string; readonly openedAt: number }>;
     /**
@@ -169,7 +170,8 @@ const isPlaygroundSessionReadCancellation = (request: NetworkLedgerEntry): boole
  * deliberate navigation; an abort after a non-2xx answer is still rejected.
  */
 const isLogsReplayCancellation = (request: NetworkLedgerEntry): boolean =>
-  request.path === '/api/logs/replay' && (responseIsAbsent(request) || isSuccessStatus(request.status));
+  request.path === '/api/logs/replay' && request.completedAt !== undefined && request.at <= request.completedAt &&
+  (responseIsAbsent(request) || isSuccessStatus(request.status));
 
 /**
  * The playground screen retires a superseded in-flight catalog request when

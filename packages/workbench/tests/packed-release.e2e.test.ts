@@ -968,37 +968,30 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
         response.request().method() === 'POST' && response.ok(),
       );
       await page.getByRole('button', { name: 'Call show-dashboard' }).click();
-      const browserMcpSessionBOperationResponse = await browserMcpSessionBOperation;
+      await browserMcpSessionBOperation;
       await expect(page.getByRole('region', { name: 'Invocation history' })).toContainText('packed dashboard ready', { timeout: browserTimeout });
       const closedBrowserMcpSessionB = page.waitForResponse((response) =>
         response.url() === `${origin}/api/mcp/sessions/${encodeURIComponent(browserMcpSessionBId)}` &&
         response.request().method() === 'DELETE' && response.ok(),
       );
+      // The close window opens on a stamp taken before the click — the click
+      // is issued from here, so nothing it causes can reach the ledger earlier
+      // — and closes on the DELETE's own completion entry: the page aborts both
+      // session streams before it issues that DELETE, so the close-induced
+      // aborts are delivered inside the window however late Playwright hands
+      // them over, while an abort before the click stays outside it. Completion
+      // events trail their responses, so the DELETE entry is awaited.
+      const browserMcpSessionBCloseStartedAt = Date.now();
       await page.getByRole('button', { name: 'Close MCP session' }).click();
       const closedBrowserMcpSessionBResponse = await closedBrowserMcpSessionB;
       expect(closedBrowserMcpSessionBResponse.request().headers()['x-agent-bundle-session']).toBe(browserGenerationBToken);
       await expect(page.locator('.mcp-page-phase')).toContainText('Session closed', { timeout: browserTimeout });
-      // The ledger's close window is bounded by the session's own wire entries,
-      // not by clock stamps around the click: it opens when the last operation
-      // the session served completed and closes when its DELETE completed. The
-      // page aborts both session streams before it issues that DELETE, so the
-      // close-induced aborts are delivered inside the window however late
-      // Playwright hands them over. Completion events trail their responses,
-      // so the two entries are awaited rather than read at once.
-      const browserMcpSessionBOperationRequest = browserRequestByPlaywrightRequest.get(browserMcpSessionBOperationResponse.request());
       const browserMcpSessionBCloseRequest = browserRequestByPlaywrightRequest.get(closedBrowserMcpSessionBResponse.request());
-      if (browserMcpSessionBOperationRequest === undefined || browserMcpSessionBCloseRequest === undefined) {
-        throw new Error('The fresh B browser MCP operation or session close was not recorded in the network ledger.');
-      }
-      const browserMcpSessionBCloseWindowRequests = [browserMcpSessionBOperationRequest, browserMcpSessionBCloseRequest];
-      await expect.poll(() => browserMcpSessionBCloseWindowRequests.filter((request) => request.completedAt === undefined)
-        .map((request) => `${request.method} ${request.url}`), { timeout: browserTimeout }).toEqual([]);
-      const browserMcpSessionBCloseStartedAt = browserMcpSessionBOperationRequest.completedAt;
+      if (browserMcpSessionBCloseRequest === undefined) throw new Error('The fresh B browser MCP session close was not recorded in the network ledger.');
+      await expect.poll(() => browserMcpSessionBCloseRequest.completedAt, { timeout: browserTimeout }).toBeDefined();
       const browserMcpSessionBCloseCompletedAt = browserMcpSessionBCloseRequest.completedAt;
-      // Narrowing only: the poll above settled both entries.
-      if (browserMcpSessionBCloseStartedAt === undefined || browserMcpSessionBCloseCompletedAt === undefined) {
-        throw new Error('The fresh B browser MCP close window is missing a completed wire entry.');
-      }
+      // Narrowing only: the poll above settled the entry.
+      if (browserMcpSessionBCloseCompletedAt === undefined) throw new Error('The fresh B browser MCP close window is missing its completed DELETE entry.');
 
       phase = 'desktop navigation floor';
       const navigationFloorRequestIndex = browserRequests.length;
@@ -1007,7 +1000,12 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
         { heading: 'MCP playground', label: 'MCP playground' }, { heading: 'Artifacts', label: 'Artifacts' }, { heading: 'Playground', label: 'Playground' },
         { heading: 'Logs', label: 'Logs' }, { heading: 'Evals', label: 'Evals' }, { heading: 'Comparisons', label: 'Comparisons' },
       ];
+      // Every abortable request a route issues on mount, so leaving the route
+      // before a loaded server answers is claimed by the route's record rather
+      // than reported as an unknown post-recovery failure.
       const postRecoveryNavigationUrls = new Map<string, readonly string[]>([
+        // Skills lists the authored suites for its eval-coverage column.
+        ['Skills', [`${origin}/api/evals/suites`]],
         ['Hooks', [`${origin}/api/hooks?epochId=${encodeURIComponent(recoveredEpochId)}`]],
         ['MCP playground', [`${origin}/api/artifacts/epochs/${encodeURIComponent(recoveredEpochId)}`]],
         ['Playground', [`${origin}/api/playground/catalog?epochId=${encodeURIComponent(recoveredEpochId)}`]],
