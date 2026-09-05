@@ -6,7 +6,6 @@ settings:
 
 overrides:
   '@agent-bundle/runtime': workspace:*
-  rsc-markdown-stream: workspace:*
 
 patchedDependencies:
   '@rspress/core@2.0.21': 555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c
@@ -390,7 +389,7 @@ importers:
         specifier: 0.1.0
         version: 0.1.0(@rspack/core@2.2.2(@swc/helpers@0.5.23))(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       rsc-markdown-stream:
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../rsc-markdown-stream
       zod:
         specifier: 4.5.4

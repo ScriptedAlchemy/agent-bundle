@@ -101,8 +101,11 @@ because they change no publishable package.
   `agent-bundle` explicitly rather than through a workspace range.
 - `updateInternalDependencies: "patch"` with
   `bumpVersionsWithWorkspaceProtocolOnly: true`: only `workspace:` ranges
-  between publishable packages would trigger dependent patch bumps, and
-  there are none today.
+  between publishable packages trigger dependent patch bumps. The one such
+  range is `@agent-bundle/runtime`'s `rsc-markdown-stream: workspace:^`, so
+  a `rsc-markdown-stream` release also patch-bumps the runtime and
+  re-publishes it with the new caret (`pnpm publish` rewrites `workspace:^`
+  to `^<version>` in the shipped manifest).
 - `access` stays `"restricted"` at the repository level until the release
   owner decides the npm package names and access policy
   (`docs/preview-packages.md`). `@agent-bundle/runtime` and
