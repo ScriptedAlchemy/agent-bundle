@@ -148,7 +148,7 @@ it('posts a host-invoked hook execution to the dev server as hook.received / hoo
     href: '/routes/events/tool/before',
     source: 'hook',
     status: 'ok',
-    summary: 'claude PreToolUse → tool · before received',
+    summary: 'claude PreToolUse → tool/before received',
   });
   expect(received.correlation.executionId).toMatch(/^[0-9a-f-]{36}$/u);
   expect(completed.correlation).toEqual(received.correlation);
@@ -164,7 +164,7 @@ it('posts a host-invoked hook execution to the dev server as hook.received / hoo
     },
     href: '/routes/events/tool/before',
     status: 'ok',
-    summary: 'claude PreToolUse → tool · before completed',
+    summary: 'claude PreToolUse → tool/before completed',
   });
   expect(typeof completed.durationMs).toBe('number');
   const serialized = JSON.stringify(afterEnv);
