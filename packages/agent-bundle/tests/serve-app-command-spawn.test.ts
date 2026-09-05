@@ -331,6 +331,26 @@ it('rejects stop-failed from close() and from a pre-ready abort when the running
   restore!();
   process.kill(pid!, 'SIGTERM');
   await untilGone(pid!);
+
+  // An abort during the artifact check is re-checked right after the spawn,
+  // before the child's `spawn` event: the refused `kill()` emits `error`
+  // synchronously, so the handler must already be attached and must read it
+  // as the stop failure rather than as a spawn failure or an unhandled event.
+  const early = new AbortController();
+  const artifact = await temporaryDirectory();
+  const earlyPending = spawnServeApp({
+    app, artifact, cli: await neverReadyCli(root), relay: relayInto([]), root, signal: early.signal, spawn: refusing,
+  });
+  early.abort();
+  const earlyFailure = await rejection(earlyPending);
+  expect(earlyFailure.code).toBe('stop-failed');
+  expect(earlyFailure.cause).toMatchObject({ code: 'EPERM' });
+  const [earlyPid] = spawnedPids.slice(-1);
+  expect(earlyPid).not.toBe(pid);
+  expect(isAlive(earlyPid!)).toBe(true);
+  restore!();
+  process.kill(earlyPid!, 'SIGTERM');
+  await untilGone(earlyPid!);
 });
 
 it('carries a post-spawn error as the cause when the child then exits before its ready line', async () => {

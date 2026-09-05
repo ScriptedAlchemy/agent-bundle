@@ -288,8 +288,11 @@ export const spawnServeApp = async (options: SpawnServeAppOptions): Promise<Spaw
       if (settledExit !== undefined) return undefined;
       stopFailure = undefined;
       stopping = true;
-      child.kill('SIGTERM');
-      stopping = false;
+      try {
+        child.kill('SIGTERM');
+      } finally {
+        stopping = false;
+      }
       if (stopFailure === undefined) return undefined;
       return new ServeAppCommandError(
         'stop-failed',
@@ -322,10 +325,6 @@ export const spawnServeApp = async (options: SpawnServeAppOptions): Promise<Spaw
       // App is the caller's and `close()` reports the same failure.
       if (failure !== undefined && ready === undefined) reject(failure);
     };
-    options.signal?.addEventListener('abort', onAbort, { once: true });
-    // An abort that landed while the CLI was being resolved has already
-    // dispatched its event; the listener above would wait forever.
-    if (options.signal?.aborted === true) onAbort();
     const finish = (exit: ServeAppExit, failure?: ServeAppCommandError): void => {
       if (settledExit !== undefined) return;
       settledExit = exit;
@@ -357,13 +356,14 @@ export const spawnServeApp = async (options: SpawnServeAppOptions): Promise<Spaw
       spawned = true;
     });
     child.on('error', (error) => {
-      // Before the process exists, `error` is the one notice Node gives and
-      // `close` may never follow: the spawn failed. Once the process runs,
-      // `error` reports a failed `kill()` and the process is still alive, so
-      // only its real `close` may settle `closed`: `stop()` surfaces the
-      // failure to whoever asked, and it is kept as the cause should the
-      // child then exit before its ready line.
-      if (spawned) {
+      // While `stop()` runs, `error` is Node's report of a refused `kill()`
+      // (EPERM) and the process is alive — whether or not its `spawn` event
+      // has been observed yet — so it is the stop failure and only the real
+      // `close` may settle `closed`. Otherwise, before the process exists,
+      // `error` is the one notice Node gives and `close` may never follow:
+      // the spawn failed. Once the process runs, a later `error` is kept as
+      // the cause should the child then exit before its ready line.
+      if (stopping || spawned) {
         lateError = error;
         if (stopping) stopFailure = error;
         return;
@@ -376,5 +376,12 @@ export const spawnServeApp = async (options: SpawnServeAppOptions): Promise<Spaw
     child.once('close', (code, signal) => {
       finish({ code, signal });
     });
+    // Registered after the child's own listeners: an abort that landed while
+    // the CLI or artifact was being resolved has already dispatched its
+    // event, so the listener alone would wait forever and the re-check below
+    // stops the child at once — through `kill()`, whose refusal Node emits
+    // synchronously as `error`, which must already have a handler.
+    options.signal?.addEventListener('abort', onAbort, { once: true });
+    if (options.signal?.aborted === true) onAbort();
   });
 };
