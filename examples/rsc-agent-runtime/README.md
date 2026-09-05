@@ -95,13 +95,13 @@ production RSC/runtime artifacts are built by its explicit Rsbuild production
 command (`pnpm --filter @agent-bundle/rsc-agent-runtime-demo build`); its provider
 uses a separate long-lived Rsbuild development/HMR session only when an
 `agent-bundle dev` project opts into `dev.runtime.provider`. That session
-keeps the RSC and widget environments in development mode (development React
-and react-server-dom, readable identifiers) while overriding only the App
-environment to production: Rsbuild 2.2 inlines scripts and styles only in
-production mode and otherwise emits source-map siblings, both incompatible
-with the App's single-file contract. `rsbuild build --mode production` stays
-production for every environment so Flight payloads and packaged App HTML
-remain compact. `@rsbuild/plugin-react` is configured as
+keeps its compiler topology and Flight widget in development mode while
+overriding the RSC and App environments to production. RSC Flight crosses a
+process boundary into the framework decoder, so its wire format must remain
+portable; Rsbuild 2.2 inlines App scripts and styles only in production mode
+and otherwise emits source-map siblings, both incompatible with the App's
+single-file contract. `rsbuild build --mode production` stays production for
+every environment. `@rsbuild/plugin-react` is configured as
 `pluginReact({ fastRefresh: false })`: the compiler App is an opaque srcdoc
 child with `hmr: false`, and the runtime-surface outer document owns the one
 HMR socket. The `widget` and `app` web environments set

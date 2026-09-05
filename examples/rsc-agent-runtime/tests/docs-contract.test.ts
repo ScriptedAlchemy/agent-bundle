@@ -38,12 +38,13 @@ test('documents the ordinary-CI micro-eval spot-check', async () => {
   expect(source).toMatch(/contacts\s+no real host and needs no credentials/u);
 });
 
-test('documents the App-only production override, Fast Refresh off, and the Chromium 144 browserslist', async () => {
+test('documents portable production Flight, Fast Refresh off, and the Chromium 144 browserslist', async () => {
   const source = await readme();
 
-  expect(source).toContain('keeps the RSC and widget environments in development mode');
-  expect(source).toMatch(/overriding only the App\s+environment to production/u);
-  expect(source).toMatch(/inlines scripts and styles only in\s+production mode/u);
+  expect(source).toContain('keeps its compiler topology and Flight widget in development mode');
+  expect(source).toMatch(/overriding the RSC and App environments to production/u);
+  expect(source).toMatch(/Flight crosses a\s+process boundary into the framework decoder/u);
+  expect(source).toMatch(/inlines App scripts and styles only in production mode/u);
   expect(source).toContain('`rsbuild build --mode production`');
   expect(source).toContain('`pluginReact({ fastRefresh: false })`');
   expect(source).toContain("`overrideBrowserslist: ['chrome >= 144']`");
