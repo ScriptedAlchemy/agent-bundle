@@ -18,6 +18,7 @@ import {
   McpSession,
   McpSessionError,
   McpSessionService,
+  type McpSessionTraceSubscription,
 } from '../src/dev/mcp-session/mcp-session-service.ts';
 import type { ArtifactEpoch } from '../src/dev/types.ts';
 import { pathTokens, type NormalizationTargetRegistry } from '../src/core/types.ts';
@@ -67,6 +68,30 @@ const textFrom = (value: { readonly content: readonly { readonly type: string }[
     throw new Error('Expected the fixture to return a text content block.');
   }
   return content.text;
+};
+
+const isToolCallFrame = (message: unknown, name: string): boolean =>
+  typeof message === 'object'
+  && message !== null
+  && (message as { readonly method?: unknown }).method === 'tools/call'
+  && (message as { readonly params?: { readonly name?: unknown } }).params?.name === name;
+
+/**
+ * Resolves once the session puts the `tools/call` for `name` on the wire. The
+ * request slot is admitted before the SDK sends, so from then on `cancel()`
+ * finds it — an ordering a fixed sleep can only approximate.
+ */
+const toolCallSent = (session: McpSession, name: string): Promise<void> => {
+  const afterSequence = session.trace().entries.at(-1)?.sequence ?? 0;
+  let subscription: McpSessionTraceSubscription | undefined;
+  const sent = new Promise<void>((resolvePromise) => {
+    subscription = session.subscribeTrace({ afterSequence }, (entry) => {
+      if ('kind' in entry && entry.kind === 'frame' && entry.direction === 'client' && isToolCallFrame(entry.message, name)) {
+        resolvePromise();
+      }
+    });
+  });
+  return sent.finally(() => subscription?.unsubscribe());
 };
 
 const publishFixtureEpoch = async (
@@ -268,8 +293,9 @@ it('keeps one generated server and plugin-data directory bound to the selected e
     expect(restartedState.root).toBe(firstState.root);
     expect(restartedState.pid).not.toBe(firstState.pid);
 
+    const pendingSent = toolCallSent(session, 'hang');
     const pending = session.callTool({ arguments: {}, name: 'hang', requestId: 'pending-hang' });
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+    await pendingSent;
     expect(session.cancel('pending-hang')).toBe(true);
     await expect(pending).rejects.toBeDefined();
 
@@ -1089,13 +1115,21 @@ it('fails admission, lifecycle, and service misuse closed with coded McpSessionE
     const epochStore = await publishFixtureEpoch(root, 'epoch-1');
     const releases: Array<() => void> = [];
     const signals: AbortSignal[] = [];
+    // Each call the stub receives resolves the oldest admission waiter: by
+    // then the session has admitted the request and registered its signal.
+    const admissions: Array<() => void> = [];
+    const nextAdmission = (): Promise<void> => new Promise<void>((resolvePromise) => {
+      admissions.push(resolvePromise);
+    });
     const service = new McpSessionService({
       createClient: () => ({
         callTool: async (_params: unknown, options?: { readonly signal?: AbortSignal }) => {
           if (options?.signal !== undefined) signals.push(options.signal);
-          await new Promise<void>((resolvePromise) => {
+          const released = new Promise<void>((resolvePromise) => {
             releases.push(resolvePromise);
           });
+          admissions.shift()?.();
+          await released;
           return { content: [] };
         },
         close: async () => undefined,
@@ -1133,8 +1167,9 @@ it('fails admission, lifecycle, and service misuse closed with coded McpSessionE
       'MCP session requestId must be nonempty.',
     );
 
+    const firstAdmitted = nextAdmission();
     const first = session.callTool({ arguments: {}, name: 'fixture', requestId: 'shared' });
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
+    await firstAdmitted;
     expect(signals).toHaveLength(1);
     await expectSessionError(
       session.callTool({ arguments: {}, name: 'fixture', requestId: 'shared' }),
@@ -1146,8 +1181,9 @@ it('fails admission, lifecycle, and service misuse closed with coded McpSessionE
     await expect(first).resolves.toEqual({ content: [] });
     // Releasing the request slot aborts its controller and frees the id.
     expect(signals[0]?.aborted).toBe(true);
+    const reusedAdmitted = nextAdmission();
     const reused = session.callTool({ arguments: {}, name: 'fixture', requestId: 'shared' });
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 10));
+    await reusedAdmitted;
     expect(signals).toHaveLength(2);
     releases.shift()?.();
     await expect(reused).resolves.toEqual({ content: [] });

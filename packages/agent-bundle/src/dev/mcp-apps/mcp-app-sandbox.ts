@@ -35,7 +35,7 @@ const SHELL = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MCP App sandbox</title>
-<style>html,body,iframe{border:0;height:100%;margin:0;width:100%}</style>
+<style>html,body{height:100%;margin:0;overflow:hidden}iframe{border:0;display:block;height:100%;width:100%}</style>
 <iframe id="app" sandbox="allow-scripts" referrerpolicy="no-referrer"></iframe>
 <script>
   'use strict';
