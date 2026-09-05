@@ -41,6 +41,14 @@ const defaultRoot = (): string => resolve(packageRoot, 'dist', 'workbench');
 
 const contentTypeFor = (path: string): string => contentTypes[extname(path).toLowerCase()] ?? 'application/octet-stream';
 
+const contentHashedAsset = /(?:^|\/)[^/]+\.[a-f0-9]{8}(?:\.[^./]+)+$/iu;
+
+export const workbenchDocumentCacheControl = 'no-store';
+export const workbenchHashedAssetCacheControl = 'public, max-age=31536000, immutable';
+
+export const workbenchAssetCacheControl = (servedPath: string): string =>
+  contentHashedAsset.test(servedPath) ? workbenchHashedAssetCacheControl : workbenchDocumentCacheControl;
+
 /**
  * Reads only regular files from the fixed prebuilt workbench tree. The HTTP
  * server already rejects malformed request paths; this source makes direct

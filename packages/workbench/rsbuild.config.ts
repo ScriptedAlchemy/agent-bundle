@@ -13,7 +13,10 @@ const sourceRoot = resolve(import.meta.dirname, 'src');
  * so the foreground must allowlist this dev origin; `strictPort` fails loudly
  * on a busy port instead of silently moving the UI to one it has not allowed.
  */
-export const createWorkbenchConfig = (apiProxyTarget = process.env.AGENT_BUNDLE_WORKBENCH_API_PROXY) => ({
+export const createWorkbenchConfig = (
+  apiProxyTarget = process.env.AGENT_BUNDLE_WORKBENCH_API_PROXY,
+  mode: 'development' | 'production' = 'production',
+) => ({
   html: {
     template: resolve(import.meta.dirname, 'index.html'),
   },
@@ -26,12 +29,18 @@ export const createWorkbenchConfig = (apiProxyTarget = process.env.AGENT_BUNDLE_
     distPath: {
       root: 'dist',
     },
-    filenameHash: false,
-    filename: {
-      assets: '[name][ext]',
-      css: '[name].css',
-      js: '[name].js',
-    },
+    filenameHash: mode === 'production',
+    filename: mode === 'production'
+      ? {
+          assets: '[name].[contenthash:8][ext]',
+          css: '[name].[contenthash:8].css',
+          js: '[name].[contenthash:8].js',
+        }
+      : {
+          assets: '[name][ext]',
+          css: '[name].css',
+          js: '[name].js',
+        },
   },
   plugins: [pluginReact()],
   root: import.meta.dirname,
@@ -55,7 +64,10 @@ export const createWorkbenchConfig = (apiProxyTarget = process.env.AGENT_BUNDLE_
 // runner), which disables the NODE_ENV define and minification and ships a
 // bundle that crashes in the browser with "process is not defined". Pinning
 // the mode to the CLI command keeps builds hermetic regardless of caller env.
-export default defineConfig(({ command }) => ({
-  mode: command === 'dev' ? ('development' as const) : ('production' as const),
-  ...createWorkbenchConfig(),
-}));
+export default defineConfig(({ command }) => {
+  const mode = command === 'dev' ? ('development' as const) : ('production' as const);
+  return {
+    mode,
+    ...createWorkbenchConfig(undefined, mode),
+  };
+});

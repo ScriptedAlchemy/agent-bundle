@@ -43,10 +43,10 @@ const workbenchBrowserAliases = {
  *   carry no manual `source.define` copy.
  * - `pluginReact()` and `workbenchBrowserAliases`.
  * - A flat, unhashed `assets/` layout (`<name>.html`, `assets/<name>.js`,
- *   `assets/<name>.css`). It differs from the production `static/` tree on
- *   purpose: it is the layout the fixtures have always emitted and their
- *   servers have always served, and `cleanDistPath: false` because the dist is
- *   a fresh `mkdtemp` child the test removes itself.
+ *   `assets/<name>.css`). Production emits a content-hashed `static/` tree;
+ *   fixtures keep the layout their servers have always served, and
+ *   `cleanDistPath: false` because the dist is a fresh `mkdtemp` child the
+ *   test removes itself.
  *
  * Anything a fixture needs beyond this is an explicit, typed option here — a
  * test never mutates the returned config.
