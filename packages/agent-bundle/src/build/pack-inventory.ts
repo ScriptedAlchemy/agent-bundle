@@ -10,16 +10,14 @@ import { isRecord } from '../core/strict-json.ts';
 import { readFileBytes, readFileString, runWithPlatform } from '../effect/platform.ts';
 import { artifactManifestName } from './emit.ts';
 import { parseArtifactManifest } from './manifest.ts';
+import { declaredDependencies, type DeclaredDependency, type InstalledDependencyField } from '../core/package-dependencies.ts';
 import {
   classifyDependency,
-  declaredDependencies,
   importedPackageNames,
   isWorkspaceProtocol,
   packagedSourceInstallable,
   packagedSourcePath,
-  type DeclaredDependency,
   type DependencyKind,
-  type InstalledDependencyField,
 } from './pack-dependencies.ts';
 import type { PackageBuildResult } from './package-build.ts';
 

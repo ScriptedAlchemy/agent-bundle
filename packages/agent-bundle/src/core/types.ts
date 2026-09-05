@@ -208,8 +208,8 @@ export interface AgentBundlePayloadEntry {
    * Bare package names the payload's files load at run time. The compiler
    * never opens a payload file, so this declaration is the only evidence
    * that a `package.json` dependency is used by the payload (`AB7014`);
-   * each name must be declared under `dependencies` or
-   * `optionalDependencies` (`AB4751`).
+   * each name must be one a consumer's npm installs — `dependencies`,
+   * `optionalDependencies`, or a peer not marked optional (`AB4751`).
    */
   runtimeDependencies?: readonly string[];
   source: string;

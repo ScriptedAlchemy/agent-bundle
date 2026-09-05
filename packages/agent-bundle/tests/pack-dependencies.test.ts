@@ -2,13 +2,13 @@ import { expect, it } from '@rstest/core';
 
 import {
   classifyDependency,
-  declaredDependencies,
   isWorkspaceProtocol,
   declarationSpecifiers,
   packageNameOf,
   rewritesWorkspaceProtocols,
   shellWords,
 } from '../src/build/pack-dependencies.ts';
+import { declaredDependencies, isBarePackageName } from '../src/core/package-dependencies.ts';
 
 it.each([
   // Registry: versions, ranges (npm's loose grammar included), and dist-tags.
@@ -245,4 +245,9 @@ it('marks bundleDependencies entries, by name list or wholesale, as bundled', ()
     peerDependencies: { peer: 'file:../peer' },
   }).map((d) => [d.name, d.bundled])).toEqual([['optional', true], ['peer', false]]);
   expect(declaredDependencies({ bundleDependencies: true, optionalDependencies: { optional: '^1' } })[0]?.bundled).toBe(false);
+});
+
+it('reads a bare package name as npm does: a name with no selector, subpath, path, or scheme', () => {
+  expect(['sharp', '@scope/name', 'JSONStream'].filter(isBarePackageName)).toEqual(['sharp', '@scope/name', 'JSONStream']);
+  expect(['sharp/lib', '@scope/name/sub', 'sharp@1', './x', 'node:fs', 'npm:foo', 'bad name', '@scope/', ''].filter(isBarePackageName)).toEqual([]);
 });

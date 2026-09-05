@@ -110,49 +110,36 @@ it('reports a payload runtime dependency that is not a bare package name', async
   }
 });
 
-it('reports a payload runtime dependency absent from package.json dependencies', async () => {
+const undeclaredMessage = 'Payload "runtime" runtimeDependencies names "sharp", which package.json does not declare as a dependency a consumer installs (dependencies, optionalDependencies, or a peer not marked optional).';
+
+it.each([
+  ['nothing', '{"name":"prebuilt-fixture","version":"1.0.0"}'],
+  // npm never installs an optional peer, so no packed file can rely on it.
+  ['an optional peer', '{"name":"prebuilt-fixture","version":"1.0.0","peerDependencies":{"sharp":"^0.33.0"},"peerDependenciesMeta":{"sharp":{"optional":true}}}'],
+])('reports a payload runtime dependency package.json installs as %s', async (_declared, packageJson) => {
   const root = await createProject({
-    files: {
-      'package.json': '{"name":"prebuilt-fixture","version":"1.0.0"}\n',
-    },
-    payload: "  payload: { runtime: { source: './built/runtime', runtimeDependencies: ['not-declared'] } },",
+    files: { 'package.json': `${packageJson}\n` },
+    payload: "  payload: { runtime: { source: './built/runtime', runtimeDependencies: ['sharp'] } },",
   });
   try {
-    expect((await validate({ root })).diagnostics).toContainEqual(expect.objectContaining({
-      code: 'AB4751',
-      message: 'Payload "runtime" runtimeDependencies names "not-declared", which package.json does not declare under dependencies or optionalDependencies.',
-    }));
+    expect((await validate({ root })).diagnostics).toContainEqual(expect.objectContaining({ code: 'AB4751', message: undeclaredMessage }));
   } finally {
     await removeProjectFixture(root);
   }
 });
 
-it('does not treat peerDependencies as installed payload runtime dependencies', async () => {
+it.each([
+  ['optionalDependencies', '{"name":"prebuilt-fixture","version":"1.0.0","optionalDependencies":{"sharp":"^0.33.0"}}'],
+  // npm 7+ installs a required peer for every consumer, the same reading AB7014 applies.
+  ['a required peer', '{"name":"prebuilt-fixture","version":"1.0.0","peerDependencies":{"sharp":"^0.33.0"}}'],
+])('accepts a payload runtime dependency package.json installs through %s', async (_declared, packageJson) => {
   const root = await createProject({
-    files: {
-      'package.json': '{"name":"prebuilt-fixture","version":"1.0.0","peerDependencies":{"sharp":"^0.33.0"}}\n',
-    },
+    files: { 'package.json': `${packageJson}\n` },
     payload: "  payload: { runtime: { source: './built/runtime', runtimeDependencies: ['sharp'] } },",
   });
   try {
-    expect((await validate({ root })).diagnostics).toContainEqual(expect.objectContaining({
-      code: 'AB4751',
-      message: expect.stringContaining('package.json does not declare under dependencies or optionalDependencies'),
-    }));
-  } finally {
-    await removeProjectFixture(root);
-  }
-});
-
-it('accepts optionalDependencies as installed payload runtime dependencies', async () => {
-  const root = await createProject({
-    files: {
-      'package.json': '{"name":"prebuilt-fixture","version":"1.0.0","optionalDependencies":{"sharp":"^0.33.0"}}\n',
-    },
-    payload: "  payload: { runtime: { source: './built/runtime', runtimeDependencies: ['sharp'] } },",
-  });
-  try {
-    expect((await validate({ root })).diagnostics.filter((diagnostic) => diagnostic.code === 'AB4751')).toEqual([]);
+    // No payload diagnostic at all: an earlier AB474x would have skipped the runtime-dependency check.
+    expect((await validate({ root })).diagnostics.filter((diagnostic) => /^AB47[45]\d$/u.test(diagnostic.code))).toEqual([]);
   } finally {
     await removeProjectFixture(root);
   }

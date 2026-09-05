@@ -6,16 +6,16 @@ import { builtInHostNames, isBuiltInHost } from '../adapters/composite-layout.ts
 import { type EntryExportScan, scanEntryExportsSource } from '../build/entry-exports.ts';
 import { externalizedSpecifiers } from '../build/external-policy.ts';
 import { frameworkOwnedPluginCollisions, frameworkOwnedRsbuildPlugins } from '../build/framework-plugins.ts';
-import { declaredDependencies } from '../build/pack-dependencies.ts';
 import type { CapabilityState } from '../core/capabilities.ts';
 import { toPosixRelative } from '../core/paths.ts';
 import { isPlainRecord, isRecord } from '../core/strict-json.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { stableJson } from '../core/digest.ts';
 import { unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
+import { declaredDependencies, isBarePackageName } from '../core/package-dependencies.ts';
 import {
   developmentFallbackVersion,
-  isValidPackageName,
+  readPackageDocument,
   snapshotPackageIdentity,
   type PackageIdentityIssueKind,
 } from '../core/project-context.ts';
@@ -1660,20 +1660,16 @@ const payloadTargetDiagnostics = (
 };
 
 /**
- * The names `package.json` installs for a consumer (`dependencies` and
- * `optionalDependencies`), or undefined when there is no readable package
- * document — a normal development state AB4009–AB4011 already describe.
+ * The names a consumer's npm installs — `dependencies`, `optionalDependencies`,
+ * and peers not marked optional — the same set `AB7014` judges; undefined when
+ * the package document is absent or is one AB4009–AB4011 already report
+ * (unparsable, outside the root).
  */
 const installedDependencyNames = (projectRoot: string): ReadonlySet<string> | undefined => {
-  let document: unknown;
-  try {
-    document = JSON.parse(readFileSync(join(projectRoot, 'package.json'), 'utf8'));
-  } catch {
-    return undefined;
-  }
-  if (!isRecord(document)) return undefined;
-  return new Set(declaredDependencies(document)
-    .filter((dependency) => dependency.field !== 'peerDependencies')
+  const read = readPackageDocument(projectRoot);
+  if (read.kind !== 'document') return undefined;
+  return new Set(declaredDependencies(read.document)
+    .filter((dependency) => dependency.installed)
     .map((dependency) => dependency.name));
 };
 
@@ -1681,7 +1677,7 @@ const installedDependencyNames = (projectRoot: string): ReadonlySet<string> | un
  * AB4740/AB4751: one payload declaration's optional `runtimeDependencies`.
  * The compiler never opens a payload file, so this list is the payload's
  * only dependency evidence (`AB7014`); every name must be a bare package
- * name the project installs for its consumers.
+ * name (npm's own grammar) a consumer's npm installs.
  */
 const payloadRuntimeDependencyDiagnostics = (
   name: string,
@@ -1698,7 +1694,7 @@ const payloadRuntimeDependencyDiagnostics = (
     )];
   }
   return runtimeDependencies.flatMap((dependency: string) => {
-    if (!isValidPackageName(dependency)) {
+    if (!isBarePackageName(dependency)) {
       return [sourceDiagnostic(
         'AB4751',
         `Payload ${JSON.stringify(name)} runtimeDependencies entry ${JSON.stringify(dependency)} is not a bare package name.`,
@@ -1709,7 +1705,7 @@ const payloadRuntimeDependencyDiagnostics = (
     if (installed !== undefined && !installed.has(dependency)) {
       return [sourceDiagnostic(
         'AB4751',
-        `Payload ${JSON.stringify(name)} runtimeDependencies names ${JSON.stringify(dependency)}, which package.json does not declare under dependencies or optionalDependencies.`,
+        `Payload ${JSON.stringify(name)} runtimeDependencies names ${JSON.stringify(dependency)}, which package.json does not declare as a dependency a consumer installs (dependencies, optionalDependencies, or a peer not marked optional).`,
         loaded.configPath,
         'Declare the package under dependencies or optionalDependencies so a consumer installs it, or remove it from runtimeDependencies.',
       )];

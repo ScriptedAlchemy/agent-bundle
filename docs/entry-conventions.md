@@ -1199,11 +1199,12 @@ export default defineConfig({
   the payload already serves the resource.
 - **Declare what the payload loads.** Because payload trees are opaque,
   `runtimeDependencies` on a `definePrebuilt` entry lists the bare package
-  names its files load. Invalid names and names absent from `dependencies`
-  or `optionalDependencies` are `AB4751`; a malformed list is `AB4740`.
-  The declaration check is skipped when `package.json` is missing or
-  unparsable (`AB4009`–`AB4011`), and declared names count as used for
-  `AB7014`.
+  names its files load. A name npm would not read as a bare package name,
+  or one `package.json` does not install for a consumer (`dependencies`,
+  `optionalDependencies`, or a peer not marked optional), is `AB4751`; a
+  malformed list is `AB4740`. The declaration check is skipped when
+  `package.json` is missing (silent) or unparsable (`AB4009`–`AB4011`), and
+  declared names count as used for `AB7014`.
 - **Ordering.** Run your own build before `agent-bundle build`: a missing or
   empty payload is a validation warning (`AB4743`/`AB4745`) so `dev` works
   from a clean checkout, but `agent-bundle build` refuses it
