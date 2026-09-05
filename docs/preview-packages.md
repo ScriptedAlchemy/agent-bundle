@@ -60,7 +60,8 @@ npm i https://pkg.pr.new/ScriptedAlchemy/agent-bundle/@agent-bundle/runtime@5685
 npm i https://pkg.pr.new/ScriptedAlchemy/agent-bundle/rsc-markdown-stream@5685521
 ```
 
-pnpm and yarn accept the same URLs (`pnpm add <url>`, `yarn add agent-bundle@<url>`).
+pnpm and yarn accept the same URLs (`pnpm add <url>`, `yarn add agent-bundle@<url>`);
+pnpm 11 additionally needs the `blockExoticSubdeps` setting described below.
 
 Previews carry the version string `0.0.0-preview-<sha>`, and the publish
 (`--peerDeps`) rewrites every peer range that points at a sibling workspace
@@ -78,6 +79,13 @@ before the peer rewrite landed (PR #46, fixing #45) still carry the original
 `agent-bundle@^0.1.0` range on the then-named `@agent-bundle/rsc-runtime`
 package, so pair-installing those older shas with npm still requires
 `--legacy-peer-deps`.
+
+That rewrite is what pnpm 11 rejects by default: `blockExoticSubdeps` (default
+`true` since pnpm 11) forbids a transitive dependency resolved from a tarball
+URL, so `pnpm add` of a preview `@agent-bundle/runtime` fails with
+`ERR_PNPM_EXOTIC_SUBDEP` on its rewritten `rsc-markdown-stream` dependency. Set
+`blockExoticSubdeps: false` in the consuming project's `pnpm-workspace.yaml`,
+or install previews with npm.
 
 ## How an npm release will flow
 

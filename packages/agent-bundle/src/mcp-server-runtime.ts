@@ -29,8 +29,10 @@ import {
   runAgentRequest,
   unavailable,
 } from '@agent-bundle/runtime';
+import { isRecord } from './core/strict-json.ts';
 import type { createEventRuntimeServer, EventRuntimeTransportError } from './events/ipc.ts';
 import type { createCanonicalEventProps, projectEventDocument } from './events/project.ts';
+import { interoperableStandardSchema } from './mcp-schema-projection.ts';
 import { createTaskAugmentedMcpServer, type TaskAugmentedMcpServer } from './mcp-tasks.ts';
 import { canonicalAgentEvents, type CanonicalAgentEvent } from './routes/public.ts';
 import { routeRenderLimits } from './routes/render-budget.ts';
@@ -295,7 +297,12 @@ const selectedConfig = (
   keys.filter((key) => config[key] !== undefined).map((key) => [key, config[key]]),
 );
 
-/** The JSON Schema draft the MCP SDK targets when it advertises a Standard Schema. */
+/**
+ * The JSON Schema draft the MCP SDK targets when it advertises a Standard
+ * Schema. The object-rootedness probe below asks for the same draft; what the
+ * server then advertises is that draft's output passed through the
+ * interoperable projection (`mcp-schema-projection.ts`, #563).
+ */
 const JSON_SCHEMA_TARGET = 'draft-2020-12';
 
 interface StandardJsonSchemaSource {
@@ -305,9 +312,6 @@ interface StandardJsonSchemaSource {
     };
   };
 }
-
-const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 /**
  * A typeless JSON Schema root is object-shaped when it carries object keywords
@@ -333,6 +337,10 @@ const objectRootedJsonSchema = (schema: unknown): boolean => {
  * advertises none, while an object schema keeps the SDK's fail-closed output
  * validation. A schema that cannot describe itself as JSON Schema is handed
  * to the SDK unchanged so its own conversion decides.
+ *
+ * Returns the route's own schema (or `undefined`); registration wraps it in
+ * `interoperableStandardSchema`, so `tools/list` advertises the interoperable
+ * projection of its JSON Schema while validation stays the schema's own.
  */
 export const advertisedOutputSchema = (schema: unknown): unknown => {
   const toJsonSchema = (schema as StandardJsonSchemaSource | null | undefined)?.['~standard']?.jsonSchema?.output;
@@ -396,8 +404,8 @@ export const registerGeneratedRoutes = (
         const outputSchema = advertisedOutputSchema(route.module.resultSchema);
         const registered = server.registerTool(route.name, {
           ...selectedConfig(route.config, ['_meta', 'annotations', 'description', 'icons', 'title']),
-          inputSchema: route.module.inputSchema,
-          ...(outputSchema === undefined ? {} : { outputSchema }),
+          inputSchema: interoperableStandardSchema(route.module.inputSchema),
+          ...(outputSchema === undefined ? {} : { outputSchema: interoperableStandardSchema(outputSchema) }),
         } as never, (async (input: unknown, context: GeneratedRouteRequestContext) => settled(async () => {
           const clientName = server.server.getClientVersion()?.name;
           const rawArguments = options.rawArguments?.take(context.mcpReq.id);
@@ -444,6 +452,7 @@ export const registerGeneratedRoutes = (
       case 'prompt':
         server.registerPrompt(route.name, {
           ...selectedConfig(route.config, ['_meta', 'description', 'icons', 'title']),
+          // Not projected: prompts advertise flat `arguments` (name, description, required), not JSON Schema.
           argsSchema: route.module.inputSchema,
         } as never, (async (input: unknown, context: GeneratedRouteRequestContext) => settled(async () => {
           const clientName = server.server.getClientVersion()?.name;
