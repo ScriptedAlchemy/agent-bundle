@@ -34,6 +34,11 @@ PR 引用会解析到**该 PR 最近一次发布的预览**，因此 `@1` 表示
 在 peer 改写落地（PR #46）之前发布的预览包仍携带原始的 `agent-bundle@^0.1.0` peer 范围，因此用 npm
 配对安装那些较早的 SHA 仍然需要 `--legacy-peer-deps`。更新的预览包用原生 npm 即可安装。
 
+原生 pnpm 11 是例外。`@agent-bundle/runtime` 的预览包会把它的 `rsc-markdown-stream` 依赖指向渲染器同一
+SHA 的预览 tarball，而 pnpm 11 的 `blockExoticSubdeps`（默认 `true`）会拒绝从 tarball URL 解析的传递依赖，
+报 `ERR_PNPM_EXOTIC_SUBDEP`。请在消费项目的 `pnpm-workspace.yaml` 中设置 `blockExoticSubdeps: false`，
+或改用 npm 安装预览包。
+
 脚手架发布在同一条通道上，其设计意图是直接运行而不是安装：
 
 ```sh
@@ -59,8 +64,8 @@ npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-
 `scripts/check-declaration-imports.mjs` 检查同一份文件清单：消费者能从 `exports` 触达的每个 `.d.ts`
 只能导入包内文件、包自身通过 `exports` 公开的子路径、能被 `imports` 映射解析的 `#` 导入、Node 内建模块，以及在 `dependencies`、
 `peerDependencies` 或 `optionalDependencies` 中声明的包——绝对路径和 URL 在消费者的安装中永远无法解析，
-可触达声明里出现 `zod` 这类 devDependency 会让门禁失败，而没有任何
-入口触达的内部声明只报告为 warning（`--strict` 会让它们也失败；`lint:release` 默认不传该参数）。可触达性从
+任何打包声明里出现 `zod` 这类 devDependency 都会让门禁失败——`lint:release` 以 `--strict`
+运行该检查，因此没有任何入口触达的内部声明与可触达声明一样会失败（不带该参数时只报告为 warning）。可触达性从
 `exports` 下的每个 `types` 目标以及旧式 `types` 字段出发；`/// <reference types>` 按裸导入同样检查；相对导入、
 `/// <reference path>` 或 `exports` 目标指向压缩包中不存在的文件时也会失败。publint 不是单独的门禁：每个可发布包的
 `rslib build` 都会通过 `rsbuild-plugin-publint` 运行它，并在出现 warning 时让构建失败。该门禁仅用于
