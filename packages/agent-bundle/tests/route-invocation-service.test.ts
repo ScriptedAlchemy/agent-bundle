@@ -2,9 +2,12 @@ import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { expect, it } from '@rstest/core';
 
+import type { TraceEntry, TraceEntryInput } from '../src/dev/trace/trace-entry.ts';
+import type { TracePublisher } from '../src/dev/trace/trace-hub.ts';
 import type { RouteInvocation } from '../src/dev/routes/route-invocation-result.ts';
 import {
   InvocationRingBuffer,
@@ -49,14 +52,37 @@ const invocation = (id: string, completedAt: string): RouteInvocation => ({
   timings: [],
 });
 
+const collectingTrace = (): Readonly<{
+  readonly entries: TraceEntryInput[];
+  readonly publisher: TracePublisher;
+}> => {
+  const entries: TraceEntryInput[] = [];
+  return {
+    entries,
+    publisher: {
+      publish: (input): TraceEntry => {
+        entries.push(input);
+        return {
+          ...input,
+          id: `trace-${String(entries.length)}`,
+          occurredAt: input.occurredAt ?? '2026-09-05T00:00:00.000Z',
+          sequence: entries.length,
+        };
+      },
+    },
+  };
+};
+
 it('strictly validates invocation request fields and event options', () => {
   expect(parseRouteInvocationRequest({
     correlationId: 'browser-1',
     input: { query: 'Dune' },
+    requestId: 'request-1',
     routeId: 'tool:curator/search_audible',
   })).toEqual({
     correlationId: 'browser-1',
     input: { query: 'Dune' },
+    requestId: 'request-1',
     routeId: 'tool:curator/search_audible',
   });
   expect(parseRouteInvocationRequest({
@@ -72,6 +98,7 @@ it('strictly validates invocation request fields and event options', () => {
     { routeId: '' },
     { routeId: 'tool:x/y', unknown: true },
     { args: ['ok', 1], routeId: 'cli:x' },
+    { requestId: '', routeId: 'tool:x/y' },
     { event: { host: 'other' }, routeId: 'event:tool/after' },
     { event: { fixtureId: '' }, routeId: 'event:tool/after' },
   ]) {
@@ -108,6 +135,225 @@ it('retains a bounded newest-first invocation history', () => {
   expect(history.list(1)).toEqual([expect.objectContaining({ id: 'inv_three' })]);
   expect(history.read('inv_one')).toBeUndefined();
   expect(history.read('inv_two')?.id).toBe('inv_two');
+});
+
+it('publishes correlated invocation and kernel entries with slim details', async () => {
+  const route = {
+    config: [],
+    id: 'tool:fixture/echo',
+    kind: 'tool',
+    provenance: { kind: 'conventional' },
+    serverId: 'mcp:fixture',
+    source: 'src/mcp/fixture/tools/echo.tsx',
+  } as const;
+  const trace = collectingTrace();
+  let currentTime = Date.parse('2026-09-05T00:00:00.000Z');
+  const service = new RouteInvocationService({
+    manifest: {
+      manifest: () => ({
+        diagnostics: [],
+        digest: 'digest',
+        events: [],
+        providers: [{ id: 'provider:clock', name: 'clock', source: 'src/providers/clock.ts' }],
+        scripts: [],
+        servers: [{ id: 'mcp:fixture', mode: 'generated', name: 'fixture', routes: [route] }],
+        sourceRevision: 'revision',
+      }),
+    },
+    now: () => new Date(currentTime += 5),
+    prepared: () => ({
+      artifact: { epochId: 'epoch-1', target: 'claude' },
+      manifest: { projectRoot: '/project' } as never,
+      targets: ['claude'],
+    }),
+    renderChild: async (_request, _signal, publishKernelEvent) => {
+      publishKernelEvent({
+        at: 8,
+        count: 1,
+        durationMs: 3,
+        execution: {
+          event: 'tool/before',
+          executionId: 'execution-1',
+          host: 'claude',
+          nativeEvent: 'PreToolUse',
+        },
+        kind: 'providers.finish',
+        phase: 'providers',
+        sequence: 0,
+      });
+      const document = {
+        root: { kind: 'text' as const, text: 'Echo' },
+        status: 'success' as const,
+        version: 1 as const,
+      };
+      return {
+        document,
+        events: [{ document, sequence: 1, type: 'complete' }],
+        input: { value: 'echo' },
+        mcp: { content: [] },
+        renderDurationMs: 4,
+      };
+    },
+    trace: trace.publisher,
+  });
+
+  const result = await service.invoke({
+    correlationId: 'correlation-1',
+    input: { value: 'echo' },
+    requestId: 'request-1',
+    routeId: route.id,
+  });
+
+  expect(result.requestId).toBe('request-1');
+  expect(result.timings.find((entry) => entry.phase === 'providers')?.durationMs).toBe(3);
+  expect(trace.entries).toEqual([
+    expect.objectContaining({
+      correlation: {
+        correlationId: 'correlation-1',
+        epochId: 'epoch-1',
+        invocationId: result.id,
+        requestId: 'request-1',
+        routeId: route.id,
+      },
+      details: { status: 'running' },
+      href: `/routes/mcp/fixture/tool/echo?invocation=${result.id}`,
+      kind: 'invocation.started',
+      source: 'invocation',
+      status: 'running',
+      summary: 'MCP tool fixture/echo · running',
+    }),
+    expect.objectContaining({
+      correlation: {
+        correlationId: 'correlation-1',
+        epochId: 'epoch-1',
+        executionId: 'execution-1',
+        host: 'claude',
+        invocationId: result.id,
+        requestId: 'request-1',
+        routeId: route.id,
+      },
+      details: {
+        count: 1,
+        event: 'tool/before',
+        nativeEvent: 'PreToolUse',
+        phase: 'providers',
+        sequence: 0,
+      },
+      durationMs: 3,
+      kind: 'kernel.providers.finish',
+      source: 'kernel',
+      status: 'ok',
+      summary: 'event tool/before (claude) · providers finished',
+    }),
+    expect.objectContaining({
+      correlation: {
+        correlationId: 'correlation-1',
+        epochId: 'epoch-1',
+        invocationId: result.id,
+        requestId: 'request-1',
+        routeId: route.id,
+      },
+      details: {
+        diagnosticCodes: [],
+        projectionKind: 'mcp',
+        providers: [{ durationMs: 0, name: 'clock' }],
+        status: 'succeeded',
+      },
+      durationMs: 10,
+      href: `/routes/mcp/fixture/tool/echo?invocation=${result.id}`,
+      kind: 'invocation.completed',
+      source: 'invocation',
+      status: 'ok',
+      summary: 'MCP tool fixture/echo · 10.0 ms',
+    }),
+  ]);
+});
+
+it('publishes failed event invocations with native provenance', async () => {
+  const route = {
+    config: [],
+    event: 'tool/after',
+    id: 'event:tool/after',
+    kind: 'event-route',
+    provenance: { kind: 'conventional' },
+    source: 'src/events/tool/after.tsx',
+  } as const;
+  const trace = collectingTrace();
+  let currentTime = Date.parse('2026-09-05T00:00:00.000Z');
+  const service = new RouteInvocationService({
+    manifest: {
+      manifest: () => ({
+        diagnostics: [],
+        digest: 'digest',
+        events: [route],
+        providers: [],
+        scripts: [],
+        servers: [],
+        sourceRevision: 'revision',
+      }),
+    },
+    now: () => new Date(currentTime += 5),
+    prepared: () => ({
+      artifact: { epochId: 'epoch-1', target: 'claude' },
+      manifest: { projectRoot: '/project' } as never,
+      targets: ['claude'],
+    }),
+    renderChild: async () => {
+      throw new Error('render exploded');
+    },
+    trace: trace.publisher,
+  });
+
+  const result = await service.invoke({
+    event: { host: 'claude' },
+    input: {
+      cwd: '/workspace',
+      hook_event_name: 'PostToolUse',
+      session_id: 'session-1',
+      tool_input: {},
+      tool_name: 'Write',
+      tool_response: { ok: true },
+      tool_use_id: 'use-1',
+      transcript_path: '/workspace/transcript.json',
+    },
+    requestId: 'request-2',
+    routeId: route.id,
+  });
+
+  expect(result.context.session).toEqual({
+    source: 'receipt',
+    state: 'available',
+    value: { sessionId: 'session-1' },
+  });
+  expect(result.context.lineage).toMatchObject({
+    source: 'receipt',
+    state: 'available',
+    value: { conversation: 'session-1', root: 'session-1' },
+  });
+  expect(trace.entries).toHaveLength(2);
+  expect(trace.entries[1]).toMatchObject({
+    correlation: {
+      conversationId: 'session-1',
+      epochId: 'epoch-1',
+      host: 'claude',
+      invocationId: result.id,
+      requestId: 'request-2',
+      routeId: route.id,
+      sessionId: 'session-1',
+    },
+    details: {
+      diagnosticCodes: ['AB8236'],
+      projectionKind: 'none',
+      providers: [],
+      status: 'failed',
+    },
+    durationMs: 5,
+    href: `/routes/events/tool/after?invocation=${result.id}`,
+    kind: 'invocation.failed',
+    source: 'invocation',
+    status: 'error',
+    summary: 'event tool/after (claude) · failed',
+  });
 });
 
 it('aborts and drains a running render when the service closes', async () => {
@@ -304,5 +550,131 @@ it('reaps the render child and its descendants when the service closes mid-rende
     });
   } finally {
     await rm(project.root, { force: true, recursive: true });
+  }
+});
+
+it('forwards kernel events from tool and event routes rendered in the real child', { timeout: 30_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-route-invocation-trace-'));
+  const toolSource = join(root, 'src/mcp/fixture/tools/traced.tsx');
+  const eventSource = join(root, 'src/events/tool/before.tsx');
+  const traceModule = fileURLToPath(new URL('../src/events/trace.ts', import.meta.url));
+  await Promise.all([
+    mkdir(dirname(toolSource), { recursive: true }),
+    mkdir(dirname(eventSource), { recursive: true }),
+  ]);
+  const routeSource = (executionId: string, event: string, nativeEvent: string): string => [
+    "import { Agent } from '@agent-bundle/runtime';",
+    "import { createElement } from 'react';",
+    `import { createEventTracer, eventTraceExecution } from ${JSON.stringify(traceModule)};`,
+    '',
+    'export default async function Traced() {',
+    `  const trace = createEventTracer({ execution: eventTraceExecution({ event: ${JSON.stringify(event)}, executionId: ${JSON.stringify(executionId)}, host: 'claude', nativeEvent: ${JSON.stringify(nativeEvent)} }) });`,
+    '  trace.renderStart();',
+    '  trace.renderFinish();',
+    "  return createElement(Agent.Result, null, createElement(Agent.Text, null, 'traced'));",
+    '}',
+    '',
+  ].join('\n');
+  await Promise.all([
+    writeFile(toolSource, routeSource('execution-tool', 'tool/before', 'PreToolUse')),
+    writeFile(eventSource, routeSource('execution-event', 'tool/before', 'PreToolUse')),
+  ]);
+  const toolRoute = {
+    config: {},
+    id: 'tool:fixture/traced',
+    kind: 'tool',
+    provenance: { kind: 'conventional', relativePath: 'src/mcp/fixture/tools/traced.tsx' },
+    serverId: 'mcp:fixture',
+    source: toolSource,
+  } as const;
+  const eventRoute = {
+    config: { runtime: 'standalone' },
+    event: 'tool/before',
+    id: 'event:tool/before',
+    kind: 'event-route',
+    provenance: { kind: 'conventional', relativePath: 'src/events/tool/before.tsx' },
+    source: eventSource,
+  } as const;
+  const graph = {
+    diagnostics: [],
+    digest: 'digest',
+    events: [eventRoute],
+    providers: [],
+    scripts: [],
+    servers: [{ id: 'mcp:fixture', mode: 'generated', name: 'fixture', routes: [toolRoute] }],
+  } satisfies CompiledRouteGraph;
+  const manifest: RouteManifest = {
+    diagnostics: [],
+    digest: 'digest',
+    events: [{
+      config: [],
+      event: eventRoute.event,
+      id: eventRoute.id,
+      kind: eventRoute.kind,
+      provenance: { kind: 'conventional' },
+      source: eventRoute.provenance.relativePath,
+    }],
+    providers: [],
+    scripts: [],
+    servers: [{
+      id: 'mcp:fixture',
+      mode: 'generated',
+      name: 'fixture',
+      routes: [{
+        config: [],
+        id: toolRoute.id,
+        kind: toolRoute.kind,
+        provenance: { kind: 'conventional' },
+        serverId: toolRoute.serverId,
+        source: toolRoute.provenance.relativePath,
+      }],
+    }],
+    sourceRevision: 'revision',
+  };
+  const trace = collectingTrace();
+  const service = new RouteInvocationService({
+    manifest: { manifest: () => manifest },
+    prepared: () => ({
+      manifest: testManifestFromRouteGraph({ graph, projectRoot: root }),
+      targets: ['claude'],
+    }),
+    trace: trace.publisher,
+  });
+  try {
+    const tool = await service.invoke({ routeId: toolRoute.id });
+    const event = await service.invoke({ input: {}, routeId: eventRoute.id });
+    const kernel = trace.entries.filter((entry) => entry.source === 'kernel');
+
+    expect(kernel.map((entry) => entry.correlation)).toEqual([
+      expect.objectContaining({
+        executionId: 'execution-tool',
+        invocationId: tool.id,
+        routeId: toolRoute.id,
+      }),
+      expect.objectContaining({
+        executionId: 'execution-tool',
+        invocationId: tool.id,
+        routeId: toolRoute.id,
+      }),
+      expect.objectContaining({
+        executionId: 'execution-event',
+        invocationId: event.id,
+        routeId: eventRoute.id,
+      }),
+      expect.objectContaining({
+        executionId: 'execution-event',
+        invocationId: event.id,
+        routeId: eventRoute.id,
+      }),
+    ]);
+    expect(kernel.map((entry) => entry.kind)).toEqual([
+      'kernel.render.start',
+      'kernel.render.finish',
+      'kernel.render.start',
+      'kernel.render.finish',
+    ]);
+  } finally {
+    await service.close();
+    await rm(root, { force: true, recursive: true });
   }
 });

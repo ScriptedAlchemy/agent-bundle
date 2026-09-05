@@ -133,7 +133,11 @@ it('invokes compiled tool and event routes through the foreground server', { tim
       headers: { cookie, origin: server.url },
     });
     const toolResponse = await fetch(`${server.url}/api/routes/invocations`, {
-      body: JSON.stringify({ input: { service: 'catalog' }, routeId: 'tool:status/report' }),
+      body: JSON.stringify({
+        input: { service: 'catalog' },
+        requestId: 'request-tool-1',
+        routeId: 'tool:status/report',
+      }),
       headers,
       method: 'POST',
     });
@@ -143,6 +147,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     expect(tool.invocation.events.at(-1)?.type).toBe('complete');
     expect(tool.invocation.document).toBeDefined();
     expect(tool.invocation.projection.mcp).toBeDefined();
+    expect(tool.invocation.requestId).toBe('request-tool-1');
     expect(tool.invocation.providers).toEqual([
       expect.objectContaining({ name: 'clock', status: 'mounted' }),
     ]);
@@ -160,6 +165,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
           tool_use_id: 'use-1',
           transcript_path: join(project.root, 'transcript.json'),
         },
+        requestId: 'request-event-1',
         routeId: 'event:tool/after',
       }),
       headers,
@@ -172,6 +178,17 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     expect(event.invocation.events.at(-1)?.type).toBe('complete');
     expect(event.invocation.document).toBeDefined();
     expect(event.invocation.projection.hosts?.[0]).toMatchObject({ host: 'claude' });
+    expect(event.invocation.context.session).toEqual({
+      source: 'receipt',
+      state: 'available',
+      value: { sessionId: 'session-1' },
+    });
+    expect(event.invocation.context.lineage).toMatchObject({
+      source: 'receipt',
+      state: 'available',
+      value: { conversation: 'session-1', root: 'session-1' },
+    });
+    expect(event.invocation.requestId).toBe('request-event-1');
 
     const cliResponse = await fetch(`${server.url}/api/routes/invocations`, {
       body: JSON.stringify({ input: { name: 'Ada' }, routeId: 'cli:greet' }),

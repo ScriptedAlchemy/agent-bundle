@@ -27,18 +27,31 @@ import type {
   RequestProvenanceUnavailableReason,
 } from '../../contracts/request-provenance.ts';
 import { createCanonicalEventProps, projectEventDocument } from '../../events/projection.ts';
-import type { CanonicalAgentEvent } from '../../routes/public.ts';
+import {
+  eventTraceEventKinds,
+  type EventTraceEvent,
+  type EventTracePreflightOutcome,
+} from '../../events/trace.ts';
+import {
+  canonicalAgentEvents,
+  type CanonicalAgentEvent,
+} from '../../routes/public.ts';
 import { taskkill, terminateProcessTree, waitForProcessTreeExit } from '../../services/process-tree.ts';
 import type { AgentBundleTestManifest, TestableScriptDescriptor } from '../../test/manifest.ts';
 import type { ScriptPlaygroundResult, ScriptPlaygroundRunRequest } from '../playground/script-playground-service.ts';
+import type { TraceCorrelation, TraceStatus } from '../trace/trace-entry.ts';
+import type { TracePublisher } from '../trace/trace-hub.ts';
+import { applicationNodePath, applicationNodeRefForRouteId } from './application-node.ts';
 import type { RouteInvocation } from './route-invocation-result.ts';
-import type {
-  RouteInvocationEventHost,
-  RouteInvocationKind,
-  RouteInvocationProvider,
-  RouteInvocationRequest,
-  RouteInvocationSummary,
-  RouteInvocationTiming,
+import {
+  nativeEventRequestContext,
+  type RouteInvocationProjection,
+  type RouteInvocationEventHost,
+  type RouteInvocationKind,
+  type RouteInvocationProvider,
+  type RouteInvocationRequest,
+  type RouteInvocationSummary,
+  type RouteInvocationTiming,
 } from './route-invocation.ts';
 import type { RouteManifest, RouteManifestRoute } from './route-manifest.ts';
 import type { RouteManifestRouteService } from './route-manifest-routes.ts';
@@ -94,9 +107,11 @@ export interface RouteInvocationServiceOptions {
   readonly renderChild?: (
     request: RouteInvocationChildRequest,
     signal: AbortSignal,
+    publishKernelEvent: (event: EventTraceEvent) => void,
   ) => Promise<RouteInvocationChildResult>;
   readonly scripts?: RouteInvocationScriptRunner;
   readonly timeoutMs?: number;
+  readonly trace?: TracePublisher;
 }
 
 export interface RouteInvocationChildRequest {
@@ -120,6 +135,7 @@ export interface RouteInvocationChildResult {
 
 export type RouteInvocationChildResponse =
   | Readonly<{ readonly result: RouteInvocationChildResult; readonly type: 'result' }>
+  | Readonly<{ readonly event: EventTraceEvent; readonly type: 'trace' }>
   | Readonly<{
     readonly error: Readonly<{ readonly message: string; readonly name: string }>;
     readonly type: 'error';
@@ -174,12 +190,14 @@ const eventOptions = (value: unknown): RouteInvocationRequest['event'] => {
 export const parseRouteInvocationRequest = (
   value: Readonly<Record<string, unknown>>,
 ): RouteInvocationRequest => {
-  if (!hasOnlyOwnKeys(value, ['args', 'correlationId', 'event', 'input', 'routeId'])) return malformed();
+  if (!hasOnlyOwnKeys(value, ['args', 'correlationId', 'event', 'input', 'requestId', 'routeId'])) return malformed();
   const routeId = value.routeId;
   const correlationId = value.correlationId;
+  const requestId = value.requestId;
   const args = value.args;
   if (!boundedString(routeId)) return malformed();
   if (correlationId !== undefined && !boundedString(correlationId, 256)) return malformed();
+  if (requestId !== undefined && !boundedString(requestId, 256)) return malformed();
   if (args !== undefined && (!Array.isArray(args) || args.length > 1_024 || args.some((argument) => !boundedString(argument, 16_384)))) {
     return malformed();
   }
@@ -197,6 +215,7 @@ export const parseRouteInvocationRequest = (
     ...(correlationId === undefined ? {} : { correlationId }),
     ...(event === undefined ? {} : { event }),
     ...(input === undefined ? {} : { input }),
+    ...(requestId === undefined ? {} : { requestId }),
     routeId,
   });
 };
@@ -356,9 +375,80 @@ const runPlainScript = async (
   });
 };
 
+const eventTracePhases = new Set(['preflight', 'execute', 'providers', 'render']);
+const canonicalEvents = new Set<string>(canonicalAgentEvents);
+const finiteNonnegative = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value) && value >= 0;
+
+const isEventTraceEvent = (value: unknown): value is EventTraceEvent => {
+  if (!isRecord(value) || !isRecord(value.execution)) return false;
+  const execution = value.execution;
+  if (
+    typeof value.kind !== 'string'
+    || !(eventTraceEventKinds as readonly string[]).includes(value.kind)
+    || typeof value.phase !== 'string'
+    || !eventTracePhases.has(value.phase)
+    || !finiteNonnegative(value.at)
+    || !Number.isSafeInteger(value.sequence)
+    || (value.sequence as number) < 0
+    || typeof execution.event !== 'string'
+    || !canonicalEvents.has(execution.event)
+    || typeof execution.executionId !== 'string'
+    || typeof execution.host !== 'string'
+    || typeof execution.nativeEvent !== 'string'
+    || !hasOnlyOwnKeys(execution, ['event', 'executionId', 'host', 'nativeEvent'])
+  ) {
+    return false;
+  }
+  const durationValid = value.durationMs === undefined || finiteNonnegative(value.durationMs);
+  switch (value.kind) {
+    case 'preflight.start':
+      return value.phase === 'preflight'
+        && hasOnlyOwnKeys(value, ['at', 'execution', 'kind', 'phase', 'sequence']);
+    case 'preflight.outcome':
+      return value.phase === 'preflight'
+        && durationValid
+        && (value.outcome === 'continue' || value.outcome === 'deny' || value.outcome === 'execute')
+        && hasOnlyOwnKeys(value, ['at', 'durationMs', 'execution', 'kind', 'outcome', 'phase', 'sequence']);
+    case 'execute.start':
+      return value.phase === 'execute'
+        && (value.runtime === 'shared' || value.runtime === 'standalone')
+        && hasOnlyOwnKeys(value, ['at', 'execution', 'kind', 'phase', 'runtime', 'sequence']);
+    case 'providers.start':
+      return value.phase === 'providers'
+        && hasOnlyOwnKeys(value, ['at', 'execution', 'kind', 'phase', 'sequence']);
+    case 'providers.finish':
+      return value.phase === 'providers'
+        && durationValid
+        && Number.isSafeInteger(value.count)
+        && (value.count as number) >= 0
+        && hasOnlyOwnKeys(value, ['at', 'count', 'durationMs', 'execution', 'kind', 'phase', 'sequence']);
+    case 'render.start':
+      return value.phase === 'render'
+        && hasOnlyOwnKeys(value, ['at', 'execution', 'kind', 'phase', 'sequence']);
+    case 'render.finish':
+      return value.phase === 'render'
+        && durationValid
+        && hasOnlyOwnKeys(value, ['at', 'durationMs', 'execution', 'kind', 'phase', 'sequence']);
+    case 'failure':
+      return durationValid
+        && isRecord(value.error)
+        && typeof value.error.name === 'string'
+        && typeof value.error.message === 'string'
+        && (value.error.code === undefined || typeof value.error.code === 'string')
+        && hasOnlyOwnKeys(value.error, ['code', 'message', 'name'])
+        && hasOnlyOwnKeys(value, ['at', 'durationMs', 'error', 'execution', 'kind', 'phase', 'sequence']);
+    default:
+      return false;
+  }
+};
+
 const isChildResponse = (value: unknown): value is RouteInvocationChildResponse => {
   if (!isRecord(value)) return false;
   if (value.type === 'result') return isRecord(value.result);
+  if (value.type === 'trace') {
+    return hasOnlyOwnKeys(value, ['event', 'type']) && isEventTraceEvent(value.event);
+  }
   return value.type === 'error' && isRecord(value.error)
     && typeof value.error.name === 'string' && typeof value.error.message === 'string';
 };
@@ -402,6 +492,7 @@ const terminateChild = async (child: ChildProcess): Promise<void> => {
 const renderInChild = async (
   request: RouteInvocationChildRequest,
   signal: AbortSignal,
+  publishKernelEvent: (event: EventTraceEvent) => void,
 ): Promise<RouteInvocationChildResult> => {
   if (signal.aborted) throw signal.reason;
   const executable = childPath();
@@ -436,6 +527,10 @@ const renderInChild = async (
       )));
     const receive = (message: unknown): void => {
       if (!isChildResponse(message)) return settle(() => rejectPromise(new Error('Route invocation child returned an invalid response.')));
+      if (message.type === 'trace') {
+        publishKernelEvent(message.event);
+        return;
+      }
       if (message.type === 'error') {
         const error = new Error(message.error.message);
         error.name = message.error.name;
@@ -448,7 +543,7 @@ const renderInChild = async (
     // still emits `error`, and an unobserved one would crash the dev server.
     child.on('error', fail);
     child.once('exit', exited);
-    child.once('message', receive);
+    child.on('message', receive);
     child.send(request, (error) => {
       if (error !== null) fail(error);
     });
@@ -470,6 +565,182 @@ const eventContract = (
   const hostContractRevision = contract?.hostContractRevision;
   if (contract === undefined || !boundedString(nativeEvent) || !boundedString(hostContractRevision)) return undefined;
   return Object.freeze({ contract, hostContractRevision, nativeEvent });
+};
+
+const contextForRequest = (
+  route: RouteManifestRoute,
+  root: string,
+  request: RouteInvocationRequest,
+  nativeInput: JsonValue,
+  registry: TargetRegistry,
+): RequestContextProvenance => {
+  const host = request.event?.host;
+  if (route.kind !== 'event-route' || host === undefined || !isJsonRecord(nativeInput)) {
+    return contextFor(route, root, host);
+  }
+  const mapped = eventContract(registry, host, route.event as CanonicalAgentEvent);
+  if (mapped === undefined) return contextFor(route, root, host);
+  return nativeEventRequestContext({
+    event: route.event!,
+    hostContractRevision: mapped.hostContractRevision,
+    native: nativeInput,
+    routeId: route.id,
+    target: host,
+  });
+};
+
+const routeHref = (routeId: string, invocationId: string): string | undefined => {
+  const node = applicationNodeRefForRouteId(routeId);
+  return node === undefined
+    ? undefined
+    : `${applicationNodePath(node)}?invocation=${encodeURIComponent(invocationId)}`;
+};
+
+const routeLabel = (
+  kind: RouteInvocationKind,
+  routeId: string,
+  event: string | undefined,
+  host: RouteInvocationEventHost | undefined,
+): string => {
+  const identity = routeId.slice(routeId.indexOf(':') + 1);
+  switch (kind) {
+    case 'tool':
+    case 'resource':
+    case 'prompt':
+      return `MCP ${kind} ${identity}`;
+    case 'event-route':
+      return `event ${event ?? identity}${host === undefined ? '' : ` (${host})`}`;
+    case 'cli':
+      return `CLI ${identity}`;
+    case 'script':
+      return `script ${identity}`;
+    default: {
+      const exhaustive: never = kind;
+      return exhaustive;
+    }
+  }
+};
+
+const durationText = (durationMs: number): string => `${durationMs.toFixed(1)} ms`;
+
+const traceCorrelation = (
+  request: RouteInvocationRequest,
+  context: RequestContextProvenance,
+  invocationId: string,
+  epochId: string | undefined,
+): TraceCorrelation => ({
+  ...(request.correlationId === undefined ? {} : { correlationId: request.correlationId }),
+  ...(context.lineage.state === 'available'
+    ? { conversationId: context.lineage.value.conversation }
+    : {}),
+  ...(epochId === undefined ? {} : { epochId }),
+  ...(context.host.state === 'available' ? { host: context.host.value.name } : {}),
+  invocationId,
+  ...(request.requestId === undefined ? {} : { requestId: request.requestId }),
+  routeId: request.routeId,
+  ...(context.session.state === 'available'
+    ? { sessionId: context.session.value.sessionId }
+    : {}),
+});
+
+const projectionKind = (projection: RouteInvocationProjection): 'cli' | 'hosts' | 'mcp' | 'none' => {
+  if (projection.mcp !== undefined) return 'mcp';
+  if (projection.cli !== undefined) return 'cli';
+  if (projection.hosts !== undefined) return 'hosts';
+  return 'none';
+};
+
+const invocationTraceDetails = (invocation: RouteInvocation): JsonObject => ({
+  diagnosticCodes: invocation.diagnostics.map((entry) => entry.code),
+  ...(invocation.projection.cli === undefined ? {} : { exitCode: invocation.projection.cli.exitCode }),
+  projectionKind: projectionKind(invocation.projection),
+  providers: invocation.providers.map((provider) => ({
+    ...(provider.durationMs === undefined ? {} : { durationMs: provider.durationMs }),
+    name: provider.name,
+  })),
+  status: invocation.status,
+});
+
+const kernelStatus = (event: EventTraceEvent): TraceStatus => {
+  switch (event.kind) {
+    case 'failure':
+      return 'error';
+    case 'preflight.outcome':
+    case 'providers.finish':
+    case 'render.finish':
+      return 'ok';
+    case 'preflight.start':
+    case 'execute.start':
+    case 'providers.start':
+    case 'render.start':
+      return 'running';
+    default: {
+      const exhaustive: never = event;
+      return exhaustive;
+    }
+  }
+};
+
+const kernelSummary = (event: EventTraceEvent): string => {
+  const label = `event ${event.execution.event} (${event.execution.host})`;
+  switch (event.kind) {
+    case 'preflight.start':
+      return `${label} · preflight started`;
+    case 'preflight.outcome':
+      return `${label} · ${event.outcome}`;
+    case 'execute.start':
+      return `${label} · ${event.runtime} execution`;
+    case 'providers.start':
+      return `${label} · providers started`;
+    case 'providers.finish':
+      return `${label} · providers finished`;
+    case 'render.start':
+      return `${label} · render started`;
+    case 'render.finish':
+      return `${label} · render finished`;
+    case 'failure':
+      return `${label} · ${event.error.name}: ${event.error.message}`;
+    default: {
+      const exhaustive: never = event;
+      return exhaustive;
+    }
+  }
+};
+
+const kernelDetails = (event: EventTraceEvent): JsonObject => {
+  const base = {
+    event: event.execution.event,
+    nativeEvent: event.execution.nativeEvent,
+    phase: event.phase,
+    sequence: event.sequence,
+  };
+  switch (event.kind) {
+    case 'preflight.start':
+    case 'providers.start':
+    case 'render.start':
+      return base;
+    case 'preflight.outcome':
+      return { ...base, outcome: event.outcome };
+    case 'execute.start':
+      return { ...base, runtime: event.runtime };
+    case 'providers.finish':
+      return { ...base, count: event.count };
+    case 'render.finish':
+      return base;
+    case 'failure':
+      return {
+        ...base,
+        error: {
+          ...(event.error.code === undefined ? {} : { code: event.error.code }),
+          message: event.error.message,
+          name: event.error.name,
+        },
+      };
+    default: {
+      const exhaustive: never = event;
+      return exhaustive;
+    }
+  }
 };
 
 const eventInput = (
@@ -626,6 +897,7 @@ const failedInvocation = (input: {
     manifestDigest: input.manifest.digest,
     projection: {},
     providers: providerProjection(input.manifest, 0, 'failed'),
+    ...(input.request.requestId === undefined ? {} : { requestId: input.request.requestId }),
     routeId: input.route.id,
     source: input.route.source,
     sourceRevision: input.manifest.sourceRevision,
@@ -647,6 +919,7 @@ export class RouteInvocationService {
   readonly #scripts: RouteInvocationScriptRunner | undefined;
   readonly #semaphore: InvocationSemaphore;
   readonly #timeoutMs: number;
+  readonly #trace: TracePublisher | undefined;
   #closed = false;
 
   constructor(options: RouteInvocationServiceOptions) {
@@ -659,6 +932,7 @@ export class RouteInvocationService {
     this.#scripts = options.scripts;
     this.#semaphore = new InvocationSemaphore(options.concurrency ?? defaultConcurrency);
     this.#timeoutMs = options.timeoutMs ?? defaultTimeoutMs;
+    this.#trace = options.trace;
     if (!Number.isSafeInteger(this.#timeoutMs) || this.#timeoutMs < 1) throw new RangeError('Invocation timeout must be positive.');
   }
 
@@ -723,7 +997,22 @@ export class RouteInvocationService {
       : rawInput;
     const id = `inv_${this.#now().getTime().toString(36)}${randomBytes(8).toString('hex')}`;
     const startedAt = this.#now();
-    const context = contextFor(route, prepared.manifest.projectRoot, request.event?.host);
+    const context = contextForRequest(route, prepared.manifest.projectRoot, request, rawInput, this.#registry);
+    const correlation = traceCorrelation(request, context, id, prepared.artifact?.epochId);
+    const href = routeHref(route.id, id);
+    const label = routeLabel(route.kind as RouteInvocationKind, route.id, route.event, request.event?.host);
+    this.#trace?.publish({
+      correlation,
+      details: { status: 'running' },
+      ...(href === undefined ? {} : { href }),
+      kind: 'invocation.started',
+      occurredAt: startedAt.toISOString(),
+      source: 'invocation',
+      status: 'running',
+      summary: `${label} · running`,
+    });
+    let eventOutcome: EventTracePreflightOutcome | undefined;
+    let providersDurationMs = 0;
     const running = this.#semaphore.run<RouteInvocation>(async () => {
       const controller = new AbortController();
       this.#controllers.add(controller);
@@ -733,6 +1022,28 @@ export class RouteInvocationService {
       const timeout = setTimeout(() => controller.abort(new DOMException('Route invocation timed out.', 'TimeoutError')), this.#timeoutMs);
       let child: RouteInvocationChildResult;
       const plainScript = plainScriptFor(prepared, route);
+      const publishKernelEvent = (event: EventTraceEvent): void => {
+        if (event.kind === 'preflight.outcome') eventOutcome = event.outcome;
+        if (event.kind === 'providers.finish' && event.durationMs !== undefined) {
+          providersDurationMs = event.durationMs;
+        }
+        this.#trace?.publish({
+          correlation: {
+            ...correlation,
+            executionId: event.execution.executionId,
+            host: event.execution.host,
+          },
+          details: kernelDetails(event),
+          ...('durationMs' in event && event.durationMs !== undefined
+            ? { durationMs: event.durationMs }
+            : {}),
+          ...(href === undefined ? {} : { href }),
+          kind: `kernel.${event.kind}`,
+          source: 'kernel',
+          status: kernelStatus(event),
+          summary: kernelSummary(event),
+        });
+      };
       try {
         child = plainScript === undefined
           ? await this.#renderChild({
@@ -741,7 +1052,7 @@ export class RouteInvocationService {
             input,
             manifest: prepared.manifest,
             routeId: route.id,
-          }, controller.signal)
+          }, controller.signal, publishKernelEvent)
           : await runPlainScript(this.#scripts, prepared, plainScript, input, controller.signal);
       } catch (error) {
         const completedAt = this.#now();
@@ -804,6 +1115,7 @@ export class RouteInvocationService {
         manifestDigest: manifest.digest,
         projection,
         providers: providerProjection(manifest, 0, 'mounted'),
+        ...(request.requestId === undefined ? {} : { requestId: request.requestId }),
         ...(child.result === undefined ? {} : { result: child.result }),
         routeId: route.id,
         source: route.source,
@@ -811,7 +1123,7 @@ export class RouteInvocationService {
         startedAt: startedAt.toISOString(),
         status: 'succeeded',
         timings: [
-          timing('providers', startedAt, 0),
+          timing('providers', startedAt, providersDurationMs),
           ...manifest.providers.map((provider) => timing(`provider:${provider.name}`, startedAt, 0)),
           timing('handler', startedAt, 0),
           timing('render', startedAt, child.renderDurationMs),
@@ -827,6 +1139,20 @@ export class RouteInvocationService {
       this.#pending.delete(running);
     }
     this.#history.push(invocation);
+    const durationMs = new Date(invocation.completedAt).getTime() - new Date(invocation.startedAt).getTime();
+    this.#trace?.publish({
+      correlation,
+      details: invocationTraceDetails(invocation),
+      durationMs,
+      ...(href === undefined ? {} : { href }),
+      kind: invocation.status === 'succeeded' ? 'invocation.completed' : 'invocation.failed',
+      occurredAt: invocation.completedAt,
+      source: 'invocation',
+      status: invocation.status === 'succeeded' ? 'ok' : 'error',
+      summary: invocation.status === 'succeeded'
+        ? `${label} · ${route.kind === 'event-route' && eventOutcome !== undefined ? eventOutcome : durationText(durationMs)}`
+        : `${label} · failed`,
+    });
     return invocation;
   }
 }

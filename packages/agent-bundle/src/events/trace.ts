@@ -145,7 +145,7 @@ export const installEventTraceObserver = (observer: EventTraceObserver): (() => 
 export interface EventTracer {
   /** True once `failure` was recorded; later calls are dropped. */
   readonly closed: boolean;
-  /** False when the tracer was created without an observer: every method is a no-op. */
+  /** Whether an explicit or process-local observer is currently available. */
   readonly enabled: boolean;
   readonly execution: EventTraceExecution;
   preflightStart(): void;
@@ -162,7 +162,7 @@ export interface CreateEventTracerOptions {
   readonly execution: EventTraceExecution;
   /** Monotonic clock in milliseconds; `performance.now` when absent. */
   readonly now?: () => number;
-  /** Absent means tracing is off for this execution. */
+  /** When absent, each emission reads the process-local observer. */
   readonly observer?: EventTraceObserver;
 }
 
@@ -252,36 +252,17 @@ const preflightOutcomeOf = (result: EventPreflightResult): EventTracePreflightOu
 const durationField = (since: number | undefined, at: number): { readonly durationMs?: number } =>
   since === undefined ? {} : { durationMs: at - since };
 
-/** A tracer that records nothing and reads no clock; only `closed` flips on `failure`. */
-const disabledTracer = (execution: EventTraceExecution): EventTracer => {
-  let closed = false;
-  const noop = (): void => undefined;
-  return {
-    get closed() { return closed; },
-    enabled: false,
-    execution,
-    executeStart: noop,
-    failure: () => { closed = true; },
-    preflightOutcome: noop,
-    preflightStart: noop,
-    providersFinish: noop,
-    providersStart: noop,
-    renderFinish: noop,
-    renderStart: noop,
-  };
-};
-
 /**
- * Creates the emitter for one execution. Without `observer` every method is
- * a no-op. With one, each method builds a frozen event, assigns the next
- * `sequence`, stamps `at` from `now`, and hands it to the observer inside a
- * try/catch: a throwing observer, a throwing clock, or re-entry from inside
- * the observer never changes what the caller sees.
+ * Creates the emitter for one execution. An explicit observer is fixed for
+ * the tracer's lifetime; otherwise every emission reads the process slot so
+ * a framework-created tracer can outlive observer installation. With an
+ * observer, each method builds a frozen event, assigns the next `sequence`,
+ * stamps `at` from `now`, and hands it to the observer inside a try/catch: a
+ * throwing observer, clock, or re-entry never changes what the caller sees.
  */
 export const createEventTracer = (options: CreateEventTracerOptions): EventTracer => {
   const execution = options.execution;
-  const observer = options.observer ?? eventTraceObserver();
-  if (observer === undefined) return disabledTracer(execution);
+  const explicitObserver = options.observer;
   const now = options.now ?? (() => performance.now());
   let sequence = 0;
   let closed = false;
@@ -296,7 +277,7 @@ export const createEventTracer = (options: CreateEventTracerOptions): EventTrace
     }
   };
 
-  const deliver = (event: EventTraceEvent): void => {
+  const deliver = (observer: EventTraceObserver, event: EventTraceEvent): void => {
     try {
       observer(event);
     } catch {
@@ -309,6 +290,11 @@ export const createEventTracer = (options: CreateEventTracerOptions): EventTrace
     terminal = false,
   ): void => {
     if (closed) return;
+    const observer = explicitObserver ?? eventTraceObserver();
+    if (observer === undefined) {
+      if (terminal) closed = true;
+      return;
+    }
     const at = readClock();
     if (at === undefined) return;
     const traceStartedAt = firstAt;
@@ -316,12 +302,12 @@ export const createEventTracer = (options: CreateEventTracerOptions): EventTrace
     const event = build(at, sequence, traceStartedAt);
     sequence += 1;
     if (terminal) closed = true;
-    deliver(Object.freeze(event));
+    deliver(observer, Object.freeze(event));
   };
 
   return {
     get closed() { return closed; },
-    enabled: true,
+    get enabled() { return (explicitObserver ?? eventTraceObserver()) !== undefined; },
     execution,
     executeStart: (runtime) => {
       emit((at, next) => {
