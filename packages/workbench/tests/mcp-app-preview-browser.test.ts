@@ -10,6 +10,7 @@ import { pluginReact } from '@rsbuild/plugin-react';
 import { chromium } from 'playwright';
 
 import { workbenchBrowserAliases } from './support/workbench-browser-modules.ts';
+import { browserLaunchOptions } from './support/workbench-e2e.ts';
 
 const workspaceRoot = join(import.meta.dirname, '..', '..', '..');
 const previewComponent = join(workspaceRoot, 'packages', 'workbench', 'src', 'mcp', 'mcp-app-preview.tsx');
@@ -145,7 +146,7 @@ const mountedPreviewFixture = async () => {
 describe('MCP App preview browser', () => {
   it('mounts the preview in Chrome for ready, error, fallback, and unmount-race states', async () => {
     const fixture = await mountedPreviewFixture();
-    const browser = await chromium.launch({ channel: 'chrome' });
+    const browser = await chromium.launch(browserLaunchOptions);
     const page = await browser.newPage({ viewport: { height: 900, width: 1440 } });
     const browserErrors: string[] = [];
     const responses: string[] = [];
@@ -208,7 +209,7 @@ describe('MCP App preview browser', () => {
 
   it('keeps one runtime owner across same-authority StrictMode renders and drains the old owner before replacement', async () => {
     const fixture = await mountedPreviewFixture();
-    const browser = await chromium.launch({ channel: 'chrome' });
+    const browser = await chromium.launch(browserLaunchOptions);
     const page = await browser.newPage({ viewport: { height: 800, width: 390 } });
     const browserErrors: string[] = [];
     page.on('pageerror', (error) => { browserErrors.push(error.message); });
@@ -362,7 +363,7 @@ describe('MCP App preview browser', () => {
 
   it('renders declared runtime document permissions as unavailable without consent or remount', async () => {
     const fixture = await mountedPreviewFixture();
-    const browser = await chromium.launch({ channel: 'chrome' });
+    const browser = await chromium.launch(browserLaunchOptions);
     const page = await browser.newPage({ viewport: { height: 800, width: 390 } });
     const browserErrors: string[] = [];
     page.on('pageerror', (error) => { browserErrors.push(error.message); });
@@ -406,7 +407,7 @@ describe('MCP App preview browser', () => {
 
   it('retains a failed runtime lifecycle tombstone until its exact host handle retries, and ignores an abandoned concurrent authority', async () => {
     const fixture = await mountedPreviewFixture();
-    const browser = await chromium.launch({ channel: 'chrome' });
+    const browser = await chromium.launch(browserLaunchOptions);
     const page = await browser.newPage({ viewport: { height: 800, width: 390 } });
     const browserErrors: string[] = [];
     page.on('pageerror', (error) => { browserErrors.push(error.message); });

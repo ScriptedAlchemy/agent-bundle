@@ -1,5 +1,6 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { Effect, FileSystem, Option } from 'effect';
 import type { PlatformError } from 'effect/PlatformError';
@@ -208,14 +209,16 @@ const compareGeneratedSchemas = async (
   strict: boolean,
   target: string,
 ): Promise<readonly Diagnostic[]> => {
-  const pinnedDirectory = new URL('../adapters/schemas/codex/generated/', import.meta.url);
+  // A path, not `new URL(…, import.meta.url)`: the package's own Rslib build
+  // would otherwise try to bundle the directory as a static asset.
+  const pinnedDirectory = join(dirname(fileURLToPath(import.meta.url)), '..', 'adapters', 'schemas', 'codex', 'generated');
   const missing: string[] = [];
   const changed: string[] = [];
   for (const name of generatedSchemaNames) {
     try {
       const [live, pinned] = await Promise.all([
         readFile(join(liveDirectory, name)),
-        readFile(new URL(name, pinnedDirectory)),
+        readFile(join(pinnedDirectory, name)),
       ]);
       if (sha256Hex(live) !== sha256Hex(pinned)) changed.push(name);
     } catch (error) {

@@ -73,6 +73,7 @@ export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/rsc-runtime-topology-script.test.ts',
   'packages/agent-bundle/tests/rstest-meta-consumer.test.ts',
   'packages/agent-bundle/tests/script-playground-service.test.ts',
+  'packages/agent-bundle/tests/self-contained-bundler-config.test.ts',
   'packages/agent-bundle/tests/serve-app.test.ts',
   'packages/agent-bundle/tests/target-hook-contract.test.ts',
   'packages/agent-bundle/tests/target-mcp-runtime.test.ts',

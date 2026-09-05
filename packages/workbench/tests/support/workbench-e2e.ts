@@ -7,15 +7,29 @@ import { test, type PlaywrightOptions } from '@rstest/playwright';
 import { createWorkbenchAssetSource } from '../../../agent-bundle/src/dev/workbench-assets.ts';
 import { startDevServer, type DevServerSession, type StartDevServerOptions } from '../../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture, type ProjectFixture } from '../../../agent-bundle/tests/helpers/project-fixture.ts';
+import { browserLaunchOptions } from './browser-launch-options.ts';
 
+export { browserLaunchOptions };
 export const execFile = promisify(executeFile);
 export const workspaceRoot = process.cwd();
 export const workbenchAssets = join(workspaceRoot, 'packages', 'workbench', 'dist');
 
+/**
+ * Playwright trace policy for the shared `e2e` fixture and its per-file forks.
+ * On CI (`CI=true`) every failed test keeps `trace.zip`, `trace-summary.json`,
+ * and `debug.md` under `<repo>/.rstest/playwright-traces/<test-name>-<hash>/`
+ * (gitignored; the workflow uploads that directory). Elsewhere the key stays
+ * undefined so the default (off) applies and `RSTEST_PLAYWRIGHT_TRACE` keeps
+ * working — `@rstest/playwright` only reads that variable when `trace` is
+ * undefined, so an explicit `'off'` here would silently disable it.
+ */
+export const browserTrace: PlaywrightOptions['trace'] = process.env['CI'] === 'true' ? 'retain-on-failure' : undefined;
+
 export const e2e = test.extend({
   playwright: {
-    launchOptions: { channel: 'chrome' },
+    launchOptions: browserLaunchOptions,
     contextOptions: { viewport: { height: 900, width: 1440 } },
+    trace: browserTrace,
   } satisfies PlaywrightOptions,
 });
 

@@ -311,7 +311,7 @@ for stateless consumers because the driver lives behind its own subpath. It is
 suitable local single-workspace storage, not concurrent/distributed production
 storage. The RSC-facing packages are exact pins because their framework-facing
 surface is not treated as stable here: React `19.2.8`, `react-dom` `19.2.8`,
-`react-server-dom-rspack` `0.1.0`, Rsbuild `2.2.1`, and `rsbuild-plugin-rsc`
+`react-server-dom-rspack` `0.1.0`, Rsbuild `2.2.3`, and `rsbuild-plugin-rsc`
 `0.1.1`.
 
 Existing Agent Bundle skills, static MCPs, evaluations, and normal hooks neither require nor activate this runtime. Nothing under `packages/agent-bundle` imports the example or React/RSC runtime packages.
