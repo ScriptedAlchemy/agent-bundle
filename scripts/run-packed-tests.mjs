@@ -9,7 +9,7 @@
  * to rstest.
  */
 import { execFile as executeFile, spawn } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,13 +35,7 @@ const run = (command, args, extraEnvironment = {}) => new Promise((resolvePromis
   });
 });
 
-// The packed package substitutes a wrapper that imports one extra private
-// runtime sibling. The packed deleted-source stdio journey must still start
-// after that sibling has crossed both package and artifact bundlers.
-const buildExitCode = await run('pnpm', ['build'], {
-  AGENT_BUNDLE_RUNTIME_REBUNDLE_FIXTURE: '1',
-  NODE_ENV: 'production',
-});
+const buildExitCode = await run('pnpm', ['build'], { NODE_ENV: 'production' });
 if (buildExitCode !== 0) process.exit(buildExitCode);
 
 const packDirectory = await mkdtemp(join(tmpdir(), 'agent-bundle-shared-pack-'));
@@ -65,6 +59,53 @@ try {
       `${JSON.stringify({ packOutput, tarball: join(packDirectory, packOutput.filename) })}\n`,
     );
   }));
+  // Build the synthetic private sibling into a separate package image. The
+  // normal dist and shared release tarball above remain the publish candidate.
+  const fixtureDist = join(packDirectory, 'runtime-rebundle-dist');
+  await execFile(join(repositoryRoot, 'node_modules', '.bin', 'rslib'), [
+    'build',
+    '--config',
+    join(repositoryRoot, 'packages', 'agent-bundle', 'rslib.config.ts'),
+    '--dist-path',
+    fixtureDist,
+  ], {
+    cwd: repositoryRoot,
+    env: {
+      ...environment,
+      AGENT_BUNDLE_RUNTIME_REBUNDLE_FIXTURE: '1',
+      NODE_ENV: 'production',
+    },
+  });
+  const fixturePackage = join(packDirectory, 'runtime-rebundle-package');
+  await mkdir(fixturePackage);
+  await Promise.all([
+    'LICENSE',
+    'NOTICE',
+    'README.md',
+    'bin',
+    'package.json',
+  ].map((name) => cp(
+    join(repositoryRoot, 'packages', 'agent-bundle', name),
+    join(fixturePackage, name),
+    { recursive: true },
+  )));
+  await cp(fixtureDist, join(fixturePackage, 'dist'), { recursive: true });
+  const fixturePackDirectory = join(packDirectory, 'runtime-rebundle-pack');
+  await mkdir(fixturePackDirectory);
+  const { stdout: fixturePacked } = await execFile('npm', [
+    'pack',
+    '--json',
+    '--pack-destination',
+    fixturePackDirectory,
+  ], {
+    cwd: fixturePackage,
+    env: { ...environment, NODE_ENV: 'production' },
+  });
+  const fixturePackOutput = packOutputFromJson(fixturePacked, 'agent-bundle');
+  await writeFile(
+    join(packDirectory, 'agent-bundle-runtime-rebundle.json'),
+    `${JSON.stringify({ packOutput: fixturePackOutput, tarball: join(fixturePackDirectory, fixturePackOutput.filename) })}\n`,
+  );
   process.exitCode = await run('pnpm', ['exec', 'rstest', '--config', 'rstest.packed.config.ts', ...rstestArguments], {
     AGENT_BUNDLE_PACKAGE_PREBUILT: '1',
     ...(releasePool ? { AGENT_BUNDLE_PACKED_RELEASE: '1' } : {}),
@@ -74,9 +115,4 @@ try {
   });
 } finally {
   await rm(packDirectory, { force: true, recursive: true });
-  const restoreExitCode = await run('pnpm', ['--filter', 'agent-bundle', 'build'], {
-    AGENT_BUNDLE_RUNTIME_REBUNDLE_FIXTURE: '',
-    NODE_ENV: 'production',
-  });
-  if (restoreExitCode !== 0) process.exitCode = restoreExitCode;
 }

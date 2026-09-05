@@ -46,7 +46,7 @@ interface McpJson {
  */
 it('serves compiled routes with a private runtime sibling across packed process restarts', async () => {
   const [agentBundle, runtime, markdownStream] = await Promise.all([
-    sharedPackedTarball('agent-bundle'),
+    sharedPackedTarball('agent-bundle-runtime-rebundle'),
     sharedPackedTarball('runtime'),
     sharedPackedTarball('markdown-stream'),
   ]);
