@@ -5,9 +5,11 @@ import { describe, expect, it } from '@rstest/core';
 
 import type { AgentDocument, AgentRenderEvent } from '../src/runtime/agent-document-client.ts';
 import {
-  AgentDocumentStage,
+  agentDocumentNodeRenderers,
+  agentRenderEventLabel,
   foldAgentDocumentEvents,
-} from '../src/runtime/agent-document-stage.tsx';
+  RenderedAgentDocument,
+} from '../src/application/rendered-document.tsx';
 
 const document = (
   label: string,
@@ -42,6 +44,7 @@ describe('Agent Document event fold', () => {
       children: [{ kind: 'text', text: 'Replacement' }],
     });
     expect(beforeComplete.finalStatus).toBeUndefined();
+    expect(beforeComplete.complete).toBe(false);
 
     const folded = foldAgentDocumentEvents(events);
     expect(folded.document?.root).toMatchObject({
@@ -56,10 +59,25 @@ describe('Agent Document event fold', () => {
     });
     expect(folded.errors).toEqual([events[4]]);
     expect(folded.finalStatus).toBe('represented-error');
+    expect(folded.complete).toBe(true);
+  });
+
+  it('labels every render event kind for timelines', () => {
+    expect(agentRenderEventLabel({ document: document('x'), sequence: 0, type: 'shell' })).toBe('Shell · #0');
+    expect(agentRenderEventLabel({ completed: 1, message: 'Live', sequence: 1, total: 2, type: 'progress' })).toBe('Progress · #1 · Live · 1 / 2');
+    expect(agentRenderEventLabel({ boundaryId: 'b', document: document('x'), sequence: 2, type: 'replace' })).toBe('Replace · #2 · b');
+    expect(agentRenderEventLabel({ error: { code: 'E', message: 'm' }, sequence: 3, type: 'error' })).toBe('Error · #3 · E');
+    expect(agentRenderEventLabel({ document: document('x', 'failed'), sequence: 4, type: 'complete' })).toBe('Complete · #4 · failed');
   });
 });
 
-describe('Agent Document stage', () => {
+describe('Rendered Agent Document', () => {
+  it('has a browser renderer for every semantic node kind', () => {
+    expect(Object.keys(agentDocumentNodeRenderers).sort()).toEqual([
+      'audio', 'context', 'error', 'image', 'json', 'markdown', 'progress', 'resource', 'result', 'text',
+    ]);
+  });
+
   it('renders every node kind through the shared projector and rich media data URIs', () => {
     const rich: AgentDocument = {
       root: {
@@ -92,23 +110,52 @@ describe('Agent Document stage', () => {
       { document: rich, sequence: 3, type: 'complete' },
     ];
 
-    const markup = renderToStaticMarkup(createElement(AgentDocumentStage, { events }));
+    const markup = renderToStaticMarkup(createElement(RenderedAgentDocument, { events }));
 
+    expect(markup).toContain('data-testid="rendered-document"');
     expect(markup).toContain('class="skill-heading skill-heading--one"');
     expect(markup).toContain('<strong>Rendered Markdown</strong>');
     expect(markup).toContain('Additional context');
     expect(markup).toContain('&quot;answer&quot;: 42');
     expect(markup).toContain('In-document progress');
+    expect(markup).toContain('<progress class="agent-document-progress-bar" max="2" value="1">');
     expect(markup).toContain('src="data:image/png;base64,iVBORw0KGgo="');
     expect(markup).toContain('src="data:audio/wav;base64,UklGRg=="');
     expect(markup).toContain('agent://evidence/1');
     expect(markup).toContain('REPRESENTED');
     expect(markup).toContain('STREAM_ERROR');
-    expect(markup).toContain('Live progress');
-    expect(markup).toContain('represented-error');
+    expect(markup).toContain('Result metadata');
+    expect(markup).toContain('Document value');
+    expect(markup).toContain('rendered-document-badge--represented-error');
     expect(markup).toContain('Version 1');
-    expect(markup).toContain('Shell · #0');
-    expect(markup).toContain('Complete · #3');
+    // The stream completed, so the live progress line is gone and the pane is not pending.
+    expect(markup).not.toContain('Live progress');
+    expect(markup).toContain('aria-busy="false"');
+  });
+
+  it('shows the shell and live progress as pending while the stream is incomplete', () => {
+    const events: readonly AgentRenderEvent[] = [
+      { document: document('Shell placeholder'), sequence: 0, type: 'shell' },
+      { completed: 1, message: 'Fetching', sequence: 1, total: 4, type: 'progress' },
+    ];
+
+    const markup = renderToStaticMarkup(createElement(RenderedAgentDocument, { events, streaming: true }));
+
+    expect(markup).toContain('aria-busy="true"');
+    expect(markup).toContain('rendered-document--pending');
+    expect(markup).toContain('Shell placeholder');
+    expect(markup).toContain('Fetching · 1 / 4');
+    expect(markup).toContain('rendering · success');
+  });
+
+  it('explains an empty stream and a still-waiting stream differently', () => {
+    const idle = renderToStaticMarkup(createElement(RenderedAgentDocument, { emptyLabel: 'Nothing yet.', events: [] }));
+    const waiting = renderToStaticMarkup(createElement(RenderedAgentDocument, { events: [], streaming: true }));
+
+    expect(idle).toContain('Nothing yet.');
+    expect(idle).toContain('No document');
+    expect(waiting).toContain('Waiting for the first render event…');
+    expect(waiting).toContain('Rendering…');
   });
 
   it('keeps remote Markdown images inert while rendering data URI images', () => {
@@ -129,7 +176,7 @@ describe('Agent Document stage', () => {
       version: 1,
     };
 
-    const markup = renderToStaticMarkup(createElement(AgentDocumentStage, {
+    const markup = renderToStaticMarkup(createElement(RenderedAgentDocument, {
       events: [{ document: projected, sequence: 0, type: 'complete' }],
     }));
 
