@@ -120,6 +120,7 @@ it('matches runtime surfaces and maps a completed run into the shared invocation
   });
 
   expect(setup.requests).toEqual([{
+    correlationId: 'correlation-a',
     expectedGenerationId: 'generation-a',
     input: { title: 'Dune' },
     surfaceId: surface.id,

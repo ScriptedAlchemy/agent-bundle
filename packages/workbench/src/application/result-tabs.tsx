@@ -5,10 +5,15 @@
  * produced them), and this leaf's trace as secondary tabs. Event workspaces
  * append their codec panes through `extraTabs`.
  */
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 
-import type { RouteInvocation, RouteInvocationSummary } from '../../../agent-bundle/src/contracts/invocations.ts';
+import type { RouteInvocation } from '../../../agent-bundle/src/contracts/invocations.ts';
+import {
+  isTraceReplayGap,
+  type TraceEntry,
+} from '../../../agent-bundle/src/contracts/trace.ts';
 import type { WorkbenchLocation } from '../shell/workbench-location.ts';
+import type { TraceClient } from '../trace/trace-client.ts';
 import type { ApplicationLeaf } from './application-tree-model.ts';
 import { agentRenderEventLabel, displayAgentDocumentValue, RenderedAgentDocument } from './rendered-document.tsx';
 import { invocationOf, type RouteInvocationController, type WorkspaceResultTab } from './workspace-contracts.ts';
@@ -25,9 +30,10 @@ export interface ResultTabsProps {
   /** Codec panes appended after the core tabs (event workspaces). */
   readonly extraTabs?: readonly ResultTabDefinition[];
   readonly leaf: ApplicationLeaf;
-  readonly onNavigate: (location: WorkbenchLocation) => void;
+  readonly onNavigate?: (location: WorkbenchLocation) => void;
   readonly onTabChange: (tab: WorkspaceResultTab) => void;
   readonly tab: WorkspaceResultTab;
+  readonly trace?: TraceClient;
 }
 
 const coreTabLabels: Readonly<Record<'cli' | 'mcp' | 'raw' | 'rendered' | 'structured' | 'trace', string>> = Object.freeze({
@@ -46,11 +52,6 @@ const panelId = (leafKey: string): string => `result-panel-${leafKey}`.replace(/
 const formatTime = (iso: string): string => {
   const date = new Date(iso);
   return Number.isNaN(date.getTime()) ? iso : date.toLocaleTimeString();
-};
-
-const durationOf = (summary: Pick<RouteInvocationSummary, 'completedAt' | 'startedAt'>): string => {
-  const ms = new Date(summary.completedAt).getTime() - new Date(summary.startedAt).getTime();
-  return Number.isFinite(ms) && ms >= 0 ? `${String(ms)} ms` : '—';
 };
 
 const StructuredResult = ({ invocation }: { readonly invocation?: RouteInvocation }): React.ReactNode => {
@@ -107,37 +108,89 @@ const CliProjection = ({ invocation }: { readonly invocation?: RouteInvocation }
   </div>;
 };
 
-const TraceList = ({ current, history, leaf, onNavigate, onSelect }: {
-  readonly current?: string;
-  readonly history: readonly RouteInvocationSummary[];
-  readonly leaf: ApplicationLeaf;
-  readonly onNavigate: (location: WorkbenchLocation) => void;
-  readonly onSelect: (invocationId: string) => void;
-}): React.ReactNode => history.length === 0
-  ? <p className="result-empty" role="status">No invocations of this route have been recorded in this dev session.</p>
-  : <ol aria-label="Invocations of this route" className="result-trace">
-    {history.map((summary) => <li className={summary.id === current ? 'result-trace-entry result-trace-entry--current' : 'result-trace-entry'} key={summary.id}>
-      <button
-        aria-current={summary.id === current ? 'true' : undefined}
-        onClick={() => {
-          onSelect(summary.id);
-          onNavigate({ area: 'application', invocationId: summary.id, node: leaf.ref, tab: 'rendered' });
-        }}
-        type="button"
-      >
-        <span className={`result-trace-status result-trace-status--${summary.status}`}>{summary.status}</span>
-        <span className="result-trace-time">{formatTime(summary.startedAt)}</span>
-        <span className="result-trace-duration">{durationOf(summary)}</span>
-        {summary.event?.host === undefined ? undefined : <span className="result-trace-host">{summary.event.host}</span>}
-        <span className="result-trace-id">{summary.id}</span>
-      </button>
-    </li>)}
+const traceMatches = (
+  entry: TraceEntry,
+  invocationId: string,
+  correlationId: string | undefined,
+): boolean => entry.correlation.invocationId === invocationId ||
+  (correlationId !== undefined && entry.correlation.correlationId === correlationId);
+
+const orderedTraceEntries = (
+  entries: readonly TraceEntry[],
+  invocationId: string,
+  correlationId: string | undefined,
+): readonly TraceEntry[] => entries
+  .filter((entry) => traceMatches(entry, invocationId, correlationId))
+  .sort((left, right) => left.sequence - right.sequence);
+
+const TraceRow = ({ entry }: { readonly entry: TraceEntry }): React.ReactNode => <li className={`result-trace-row${entry.status === 'error' ? ' result-trace-row--error' : ''}`}>
+  <a href={`/trace/${encodeURIComponent(entry.id)}`}>
+    <time className="result-trace-time" dateTime={entry.occurredAt}>{formatTime(entry.occurredAt)}</time>
+    <span className="result-trace-kind">{entry.kind.replaceAll('.', ' · ')}</span>
+    <span className="result-trace-summary">{entry.summary}</span>
+    <span className="result-trace-duration">{entry.durationMs === undefined ? '—' : `${String(entry.durationMs)} ms`}</span>
+  </a>
+</li>;
+
+export const TraceTimeline = ({ correlationId, entries, invocationId }: {
+  readonly correlationId?: string;
+  readonly entries: readonly TraceEntry[];
+  readonly invocationId: string;
+}): React.ReactNode => {
+  const matching = orderedTraceEntries(entries, invocationId, correlationId);
+  if (matching.length === 0) {
+    return <p className="result-empty" role="status">No correlated trace entries have arrived for this invocation.</p>;
+  }
+  const kernel = matching.filter((entry) => entry.source === 'kernel');
+  const outer = matching.filter((entry) => entry.source !== 'kernel');
+  return <ol aria-label="Correlated invocation trace" className="result-trace">
+    {outer.map((entry, index) => <React.Fragment key={entry.id}>
+      <TraceRow entry={entry} />
+      {index === 0 && kernel.length > 0
+        ? <li className="result-trace-kernel">
+          <ol aria-label="Kernel phases">{kernel.map((phase) => <TraceRow entry={phase} key={phase.id} />)}</ol>
+        </li>
+        : undefined}
+    </React.Fragment>)}
+    {outer.length === 0 ? kernel.map((entry) => <TraceRow entry={entry} key={entry.id} />) : undefined}
   </ol>;
+};
+
+type TraceLoadState =
+  | Readonly<{ readonly state: 'loading' }>
+  | Readonly<{ readonly entries: readonly TraceEntry[]; readonly state: 'ready' }>;
+
+const useTraceEntries = (trace: TraceClient | undefined): TraceLoadState => {
+  const [state, setState] = useState<TraceLoadState>({ state: 'loading' });
+  useEffect(() => {
+    if (trace === undefined) return;
+    const controller = new AbortController();
+    void trace.replay().then((replay) => {
+      if (controller.signal.aborted) return;
+      setState({ entries: replay.entries, state: 'ready' });
+      return trace.stream(replay.latestSequence, (message) => {
+        if (isTraceReplayGap(message)) return;
+        setState((current) => {
+          const entries = current.state === 'ready' ? current.entries : [];
+          return {
+            entries: Object.freeze([...entries.filter((entry) => entry.id !== message.id), message]),
+            state: 'ready',
+          };
+        });
+      }, controller.signal);
+    }).catch(() => {
+      if (!controller.signal.aborted) setState({ entries: Object.freeze([]), state: 'ready' });
+    });
+    return () => controller.abort();
+  }, [trace]);
+  return state;
+};
 
 /** The tabbed result pane; `rendered` is the default and always present. */
-export const ResultTabs = ({ controller, extraTabs = [], leaf, onNavigate, onTabChange, tab }: ResultTabsProps): React.ReactNode => {
+export const ResultTabs = ({ controller, extraTabs = [], leaf, onTabChange, tab, trace }: ResultTabsProps): React.ReactNode => {
   const invocation = invocationOf(controller.state);
   const running = controller.state.phase === 'running';
+  const traceState = useTraceEntries(trace);
   const definitions: readonly ResultTabDefinition[] = [
     { id: 'rendered', label: coreTabLabels.rendered, render: () => <RenderedAgentDocument
       emptyLabel={controller.backendKind === undefined ? 'No backend can run this route.' : undefined}
@@ -149,18 +202,19 @@ export const ResultTabs = ({ controller, extraTabs = [], leaf, onNavigate, onTab
     ...(invocation?.projection.mcp === undefined ? [] : [{ id: 'mcp' as const, label: coreTabLabels.mcp, render: () => <McpProjection invocation={invocation} /> }]),
     ...(invocation?.projection.cli === undefined ? [] : [{ id: 'cli' as const, label: coreTabLabels.cli, render: () => <CliProjection invocation={invocation} /> }]),
     ...extraTabs,
-    { id: 'trace', label: coreTabLabels.trace, render: () => <TraceList
-      current={invocation?.id}
-      history={controller.history}
-      leaf={leaf}
-      onNavigate={onNavigate}
-      onSelect={controller.load}
-    /> },
+    { id: 'trace', label: coreTabLabels.trace, render: () => invocation === undefined
+      ? <p className="result-empty" role="status">Run the route to see its correlated trace.</p>
+      : traceState.state === 'loading'
+        ? <p className="result-empty" role="status">Loading correlated trace…</p>
+        : <TraceTimeline correlationId={invocation.correlationId} entries={traceState.entries} invocationId={invocation.id} /> },
   ];
   const active = definitions.find((definition) => definition.id === tab) ?? definitions[0]!;
   const panel = panelId(leaf.key);
 
   return <section aria-label="Result" className="result-tabs">
+    {invocation?.correlationId === undefined ? undefined : <div className="result-actions">
+      <a href={`/trace?correlation=${encodeURIComponent(invocation.correlationId)}`}>Open in Trace</a>
+    </div>}
     <div aria-label="Result views" className="result-tablist" role="tablist">
       {definitions.map((definition) => <button
         aria-controls={panel}

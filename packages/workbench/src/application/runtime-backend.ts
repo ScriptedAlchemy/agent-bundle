@@ -21,7 +21,7 @@ import { InvocationClientError } from './invocation-client.ts';
 import { invocationSummaryOf } from './invocation-model.ts';
 
 export interface RuntimeInvocationClient {
-  createRun(request: DevRuntimeInvocationRequest): Promise<DevRuntimeRun>;
+  createRun(request: DevRuntimeInvocationRequest & Readonly<{ readonly correlationId?: string }>): Promise<DevRuntimeRun>;
   readRun(runId: string): Promise<DevRuntimeRun>;
   readRunDocument(
     runId: string,
@@ -305,7 +305,8 @@ export const createRuntimeBackend = ({
         );
       }
       leafBySurfaceId.set(surface.id, leaf);
-      const run = await runtimeClient.createRun(Object.freeze({
+      const runtimeRequest = Object.freeze({
+        ...(request.correlationId === undefined ? {} : { correlationId: request.correlationId }),
         ...(controller.model.status?.activeVector === undefined
           ? {}
           : {
@@ -315,7 +316,8 @@ export const createRuntimeBackend = ({
         input: request.input ?? Object.freeze({}),
         surfaceId: surface.id,
         target,
-      }));
+      }) satisfies DevRuntimeInvocationRequest & Readonly<{ readonly correlationId?: string }>;
+      const run = await runtimeClient.createRun(runtimeRequest);
       abortIfRequested(signal);
       if (request.correlationId !== undefined) {
         correlationByRunId.set(run.id, request.correlationId);
