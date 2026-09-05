@@ -886,7 +886,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       await expect(page.locator('.eval-raw-result')).toContainText('The deterministic packed fixture passed.', { timeout: browserTimeout });
       await waitForBrowserRequestsAfter(evalsBrowserRequestIndex);
       phase = 'Evals comparison run availability';
-      const comparisonsOpenedAt = Date.now();
+      const comparisonsOpenedIndex = browserRequests.length;
       await page.getByRole('link', { name: 'Comparisons', exact: true }).click();
       await expect(page.getByRole('heading', { name: 'Comparisons' })).toBeVisible({ timeout: browserTimeout });
       await expect.poll(async () => page.locator('#comparison-base option').count(), { timeout: browserTimeout }).toBeGreaterThanOrEqual(2);
@@ -934,13 +934,16 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       // The recovered session hands the Comparisons page new clients, and its
       // effect re-lists /api/evals/runs; leaving for Overview before a loaded
       // server answers aborts that listing, which the ledger must be able to
-      // attribute to this departure like every later one.
+      // attribute to this departure like every later one. A visit owns the
+      // requests recorded between its arrival and departure stamps — delivery
+      // order, which a millisecond cannot establish (see the ledger).
       const postRecoveryNavigation: Array<Readonly<{
         leftAt: number;
-        openedAt: number;
+        leftIndex: number;
+        openedIndex: number;
         respondedStream?: true;
         url: string;
-      }>> = [Object.freeze({ leftAt: Date.now(), openedAt: comparisonsOpenedAt, url: `${origin}/api/evals/runs` })];
+      }>> = [Object.freeze({ leftAt: Date.now(), leftIndex: browserRequests.length, openedIndex: comparisonsOpenedIndex, url: `${origin}/api/evals/runs` })];
       await page.getByRole('link', { name: 'Overview', exact: true }).click();
       await page.getByRole('button', { name: 'Rebuild' }).click();
       const rebuiltWithRecoveredSessionResponse = await rebuiltWithRecoveredSession;
@@ -1025,26 +1028,28 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
         ['Comparisons', [`${origin}/api/evals/runs`]],
       ]);
       const respondedNavigationStreams = new Set<string>();
-      let activeNavigationRoute: Readonly<{ openedAt: number; urls?: readonly string[] }> | undefined;
-      const leaveActiveNavigationRoute = (leftAt: number): void => {
+      let activeNavigationRoute: Readonly<{ openedIndex: number; urls?: readonly string[] }> | undefined;
+      // A departure is a test action with no wire event of its own, so it is
+      // stamped twice before the click: the instant, which the abort it
+      // provokes must not precede, and the ledger length, which orders the
+      // requests already handed over (the departed page's) against those that
+      // follow (the next page's) even when both share the instant's millisecond.
+      const leaveActiveNavigationRoute = (): void => {
         if (activeNavigationRoute === undefined) return;
+        const leftAt = Date.now();
+        const leftIndex = browserRequests.length;
         for (const url of activeNavigationRoute.urls ?? []) postRecoveryNavigation.push(Object.freeze({
           leftAt,
-          openedAt: activeNavigationRoute.openedAt,
+          leftIndex,
+          openedIndex: activeNavigationRoute.openedIndex,
           ...(respondedNavigationStreams.has(url) ? { respondedStream: true as const } : {}),
           url,
         }));
         activeNavigationRoute = undefined;
       };
-      // A departure is a test action with no wire event of its own — the next
-      // route's first request is not ordered against the aborts it provokes —
-      // so the arrival and departure instants are clock stamps taken before
-      // each click. The ledger treats both as inclusive bounds: a request the
-      // page issued before the click can still be handed over in the same
-      // millisecond as the stamp when Playwright delivers a batch of events.
       for (const route of navigationRoutes) {
-        const openedAt = Date.now();
-        leaveActiveNavigationRoute(openedAt);
+        leaveActiveNavigationRoute();
+        const openedIndex = browserRequests.length;
         const logsStreamResponse = route.label === 'Logs'
           ? page.waitForResponse((response) => {
             const url = new URL(response.url());
@@ -1064,15 +1069,15 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
           const streamUrl = response.url();
           const stream = browserRequestByPlaywrightRequest.get(response.request());
           if (
-            stream === undefined || stream.at < openedAt || stream.respondedAt === undefined ||
+            stream === undefined || browserRequests.indexOf(stream) < openedIndex || stream.respondedAt === undefined ||
             stream.status !== response.status()
           ) throw new Error('The Logs navigation stream response was not recorded in the network ledger.');
           respondedNavigationStreams.add(streamUrl);
           routeUrls.push(streamUrl);
         }
-        activeNavigationRoute = Object.freeze({ openedAt, urls: Object.freeze(routeUrls) });
+        activeNavigationRoute = Object.freeze({ openedIndex, urls: Object.freeze(routeUrls) });
       }
-      leaveActiveNavigationRoute(Date.now());
+      leaveActiveNavigationRoute();
       await page.getByRole('link', { name: 'Overview', exact: true }).focus();
       await page.keyboard.press('Enter');
       await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });

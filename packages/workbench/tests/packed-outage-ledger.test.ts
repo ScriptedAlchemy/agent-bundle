@@ -202,6 +202,8 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
       ledgerRequest({ at: 1_350, completedAt: 1_351, error: 'net::ERR_ABORTED', method: 'GET', path: '/api/unknown/stream' }),
     ]),
   });
+  // Index of a request appended after the post-recovery fixture's own entries.
+  const appendedIndex = validPostRecovery.requests.length;
   const navigationLiveStreamCancellation = Object.freeze({
     ...validPostRecovery,
     postRecovery: Object.freeze({
@@ -210,7 +212,8 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
         ...validPostRecovery.postRecovery!.navigation,
         Object.freeze({
           leftAt: 1_350,
-          openedAt: 1_345,
+          leftIndex: appendedIndex + 1,
+          openedIndex: appendedIndex,
           respondedStream: true as const,
           url: `${valid.origin}/api/logs/stream?after=32`,
         }),
@@ -232,7 +235,8 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
         ...validPostRecovery.postRecovery!.navigation,
         Object.freeze({
           leftAt: 1_350,
-          openedAt: 1_345,
+          leftIndex: appendedIndex + 1,
+          openedIndex: appendedIndex,
           url: `${valid.origin}/api/playground/catalog?epochId=recovered-epoch`,
         }),
       ]),
@@ -259,6 +263,27 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
     requests: Object.freeze(validPostRecovery.requests.map((request) =>
       request.path.startsWith('/api/mcp/sessions/fresh-browser-mcp-session/') ? ledgerRequest({ ...request, completedAt: 1_319 }) : request,
     )),
+  });
+  const hooksNavigation = validPostRecovery.postRecovery!.navigation[0]!;
+  const hooksRequest = validPostRecovery.requests.at(-1)!;
+  // The CI shape: the Hooks request and its response arrived in one batch and
+  // the awaiting test stamped its departure in the same millisecond. Delivery
+  // order still places the request before the stamp, so the visit owns it.
+  const sameMillisecondDepartedRequest = Object.freeze({
+    ...validPostRecovery,
+    requests: Object.freeze([
+      ...validPostRecovery.requests.slice(0, -1),
+      ledgerRequest({ ...hooksRequest, at: hooksNavigation.leftAt }),
+    ]),
+  });
+  // The mirror image: a request handed over after the departure stamp is the
+  // next page's, however it is timestamped, and its abort stays unexplained.
+  const sameMillisecondNextPageRequest = Object.freeze({
+    ...validPostRecovery,
+    requests: Object.freeze([
+      ...validPostRecovery.requests,
+      ledgerRequest({ ...hooksRequest, at: hooksNavigation.leftAt, completedAt: hooksNavigation.leftAt + 1 }),
+    ]),
   });
   const navigationCancellationBeforeDeparture = Object.freeze({
     ...validPostRecovery,
@@ -287,8 +312,14 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
   // One probe's `request` event delivered 34 ms late: the gap before it reads
   // 284 ms and the gap after it 222 ms, while the page kept its 250 ms delay.
   const lateDeliveredRetry = withRetryProbes([1_010, 1_260, 1_544, 1_766], 2_016);
+  // The first probe's event delivered 100 ms late shortens only the first gap.
+  const lateDeliveredFirstRetry = withRetryProbes([1_110, 1_260], 1_510);
   const burstRetry = withRetryProbes([1_010, 1_013], 1_263);
   const underpacedRetries = withRetryProbes([1_010, 1_160, 1_310], 1_460);
+  // Two short gaps then a long one: lateness cannot be borrowed from a gap that
+  // has not happened yet, so the second short gap is rejected even though the
+  // three gaps average well above the client's delay.
+  const borrowedRetryLateness = withRetryProbes([1_010, 1_135, 1_260], 1_735);
   const malformedLedgers = [duplicateConsole, crossOriginConsole, missingCleanup];
 
   expect(malformedLedgers.map(legacyOutageLedgerPasses)).toEqual([true, true, true]);
@@ -308,9 +339,13 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
   expect(() => validateOutageLedger(validPostRecovery)).not.toThrow();
   expect(() => validateOutageLedger(navigationLiveStreamCancellation)).not.toThrow();
   expect(() => validateOutageLedger(navigationRespondedCatalogCancellation)).not.toThrow();
+  expect(() => validateOutageLedger(sameMillisecondDepartedRequest)).not.toThrow();
+  expect(() => validateOutageLedger(sameMillisecondNextPageRequest)).toThrow(/unknown post-recovery failure/u);
   expect(() => validateOutageLedger(lateDeliveredRetry)).not.toThrow();
-  expect(() => validateOutageLedger(burstRetry)).toThrow(/project\/session retries began too quickly/u);
-  expect(() => validateOutageLedger(underpacedRetries)).toThrow(/project\/session retries were paced below the client's 250 ms delay/u);
+  expect(() => validateOutageLedger(lateDeliveredFirstRetry)).not.toThrow();
+  expect(() => validateOutageLedger(burstRetry)).toThrow(/project\/session retries began too quickly \(attempt 2 arrived 122 ms before/u);
+  expect(() => validateOutageLedger(underpacedRetries)).toThrow(/project\/session retries began too quickly \(attempt 3 arrived 75 ms before/u);
+  expect(() => validateOutageLedger(borrowedRetryLateness)).toThrow(/project\/session retries began too quickly \(attempt 3 arrived 125 ms before/u);
   for (const malformed of malformedLedgers) expect(() => validateOutageLedger(malformed)).toThrow(/Foreground outage ledger rejected/u);
   for (const malformed of [
     resetWithAlteredQuery, resetWithResponse, resetWithUnknownSession, resetWithForeignOrigin, resetWithMismatchedConsoleUrl,

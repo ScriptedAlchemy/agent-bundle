@@ -35,15 +35,19 @@ export interface OutageLedger {
     readonly freshMcpSession: Readonly<{ readonly closeCompletedAt: number; readonly closeStartedAt: number; readonly id: string; readonly openedAt: number }>;
     /**
      * Exact page-owned requests cancelled when the test deliberately navigated
-     * away. A request belongs to the visit when it was observed no earlier
-     * than `openedAt` and no later than `leftAt`; both bounds are inclusive
-     * because Playwright hands the ledger batches of network events, so a
-     * request, its response, and the test's departure stamp can all share one
-     * millisecond.
+     * away. Membership is by delivery order, not by clock: `requests` grows in
+     * the order Playwright hands events over, and `openedIndex`/`leftIndex`
+     * are its length when the test stamped the arrival and the departure, so
+     * a request belongs to the visit when it sits in `[openedIndex, leftIndex)`.
+     * A millisecond cannot order a request against a departure — a batch of
+     * events and the stamp that follows it share one — but the array can. The
+     * abort itself must complete no earlier than `leftAt`: an abort that
+     * finished before the departure was not the departure's doing.
      */
     readonly navigation: readonly Readonly<{
       readonly leftAt: number;
-      readonly openedAt: number;
+      readonly leftIndex: number;
+      readonly openedIndex: number;
       readonly respondedStream?: true;
       readonly url: string;
     }>[];
@@ -93,8 +97,9 @@ export const postRecoveryCancellationFixture = (): OutageLedger => {
     ...base,
     postRecovery: Object.freeze({
       freshMcpSession: Object.freeze({ closeCompletedAt: 1_321, closeStartedAt: 1_320, id: freshMcpSessionId, openedAt: 1_310 }),
+      // The Hooks visit owns exactly the last request of the ledger below.
       navigation: Object.freeze([
-        Object.freeze({ leftAt: 1_340, openedAt: 1_330, url: hooksUrl }),
+        Object.freeze({ leftAt: 1_340, leftIndex: base.requests.length + 2, openedIndex: base.requests.length + 1, url: hooksUrl }),
       ]),
     }),
     requests: Object.freeze([
@@ -198,6 +203,16 @@ export const hasCanonicalAfterCursor = (url: URL): boolean => {
 /** A probe against a dying server can hit its half-open socket (RESET) instead of a closed port (REFUSED). */
 const downServerProbeCodes: ReadonlySet<string> = new Set(['net::ERR_CONNECTION_REFUSED', 'net::ERR_CONNECTION_RESET']);
 
+/** The wait the Workbench project client observes after every failed session probe (`project-client.ts`). */
+const projectSessionRetryDelayMs = 250;
+
+/**
+ * How late Playwright may hand a network event to the ledger on a loaded
+ * runner before the ledger stops explaining a short retry gap with it: half
+ * the client's delay, so a probe issued without any delay can never pass.
+ */
+const maximumDeliveryDelayMs = 125;
+
 /** Chromium reports a severed old-stream socket as RESET or, when the reconnect never attached, SOCKET_NOT_CONNECTED. */
 const oldStreamSeveranceCodes: ReadonlySet<string> = new Set(['net::ERR_CONNECTION_RESET', 'net::ERR_SOCKET_NOT_CONNECTED']);
 
@@ -263,13 +278,14 @@ export const validateOutageLedger = (ledger: OutageLedger): void => {
     }
     const navigationFailures = new Set<NetworkLedgerEntry>();
     for (const navigation of postRecovery.navigation) {
-      // Inclusive on both ends (see OutageLedger.postRecovery.navigation): a
-      // request delivered in the same millisecond the test stamped its
-      // departure still belongs to the visit it was issued from.
-      const failures = postRecoveryFailures.filter((request) =>
-        request.url === navigation.url && request.at >= navigation.openedAt && request.at <= navigation.leftAt &&
-        ledgerFailureAt(request) >= navigation.leftAt,
-      );
+      // Membership by delivery order (see OutageLedger.postRecovery.navigation):
+      // the visit owns the requests handed over between its arrival and its
+      // departure stamps, whatever millisecond they carry.
+      const failures = postRecoveryFailures.filter((request) => {
+        const index = ledger.requests.indexOf(request);
+        return request.url === navigation.url && index >= navigation.openedIndex && index < navigation.leftIndex &&
+          ledgerFailureAt(request) >= navigation.leftAt;
+      });
       assertOutageLedger(failures.length <= 1,
         `multiple action-induced navigation cancellations: ${JSON.stringify({ failures, navigation })}`);
       for (const failure of failures) {
@@ -291,9 +307,7 @@ export const validateOutageLedger = (ledger: OutageLedger): void => {
       }
       for (const failure of failures) navigationFailures.add(failure);
     }
-    // Two adjacent routes may list the same URL, and the departure stamp of one
-    // is the arrival stamp of the next, so one abort can satisfy two records;
-    // what must hold is that every post-recovery failure is claimed by some
+    // What must hold is that every post-recovery failure is claimed by some
     // contract. Report only the unclaimed ones — a dump of every failure reads
     // as if the recognized ones were at fault.
     const unrecognizedPostRecoveryFailures = postRecoveryFailures.filter((request) =>
@@ -366,17 +380,22 @@ export const validateOutageLedger = (ledger: OutageLedger): void => {
   assertOutageLedger(retryAttempts.at(-1) === firstSuccessfulBSession && firstSuccessfulBSession.status === 200,
     `project/session recovery did not finish with the first successful B session: ${JSON.stringify(retryAttempts)}`);
   // `at` is stamped when Playwright delivers the `request` event to Node, not
-  // when the page issued the probe, and a delivery can only run late: one
-  // held-back event shortens the next measured gap by exactly what it
-  // lengthened its own (a 284 ms / 222 ms pair on a loaded host). The client
-  // waits 250 ms after every failed probe, so the cadence is asserted as a mean
-  // over the retry sequence, where delivery latency cancels, while a burst —
-  // two probes issued without the delay — still fails on its own gap.
-  const retryGaps = retryAttempts.slice(1).map((attempt, index) => attempt.at - retryAttempts[index]!.at);
-  assertOutageLedger(retryGaps.every((gap) => gap >= 125),
-    `project/session retries began too quickly: ${JSON.stringify(retryAttempts)}`);
-  assertOutageLedger(retryGaps.reduce((sum, gap) => sum + gap, 0) >= 225 * retryGaps.length,
-    `project/session retries were paced below the client's 250 ms delay: ${JSON.stringify(retryAttempts)}`);
+  // when the page issued the probe, and a delivery can only run late — by at
+  // most `maximumDeliveryDelayMs` here — so a held-back event lengthens its own
+  // gap and shortens the next by the same amount (a 284 ms / 222 ms pair on a
+  // loaded host). A gap may therefore fall short of the client's 250 ms only by
+  // lateness already accumulated: the credit starts at the ceiling (the first
+  // probe may itself have been delivered late), every gap adds or spends its
+  // difference from 250 ms, capped at the ceiling, and it may never go
+  // negative. A burst (one probe issued without the delay) overspends at once;
+  // an under-paced client cannot borrow from gaps it has not produced yet.
+  let deliveryLatenessCredit = maximumDeliveryDelayMs;
+  for (const [index, attempt] of retryAttempts.entries()) {
+    if (index === 0) continue;
+    deliveryLatenessCredit = Math.min(maximumDeliveryDelayMs, deliveryLatenessCredit + (attempt.at - retryAttempts[index - 1]!.at) - projectSessionRetryDelayMs);
+    assertOutageLedger(deliveryLatenessCredit >= 0,
+      `project/session retries began too quickly (attempt ${String(index + 1)} arrived ${String(-deliveryLatenessCredit)} ms before any delivery lateness could explain): ${JSON.stringify(retryAttempts)}`);
+  }
   const retryTimeline = retryAttempts.flatMap((request) => [
     Object.freeze({ at: request.at, delta: 1 }),
     Object.freeze({ at: request.completedAt!, delta: -1 }),
@@ -388,7 +407,7 @@ export const validateOutageLedger = (ledger: OutageLedger): void => {
     maxInFlight = Math.max(maxInFlight, inFlight);
   }
   assertOutageLedger(maxInFlight <= 1 && inFlight === 0, `project/session retry concurrency exceeded one: ${JSON.stringify(retryAttempts)}`);
-  const retryUpperBound = 2 + Math.ceil((ledger.recoveredAt - ledger.outageStartedAt) / 250);
+  const retryUpperBound = 2 + Math.ceil((ledger.recoveredAt - ledger.outageStartedAt) / projectSessionRetryDelayMs);
   assertOutageLedger(retryAttempts.length <= retryUpperBound,
     `project/session retries exceeded the bounded cadence (${String(retryUpperBound)}): ${JSON.stringify(retryAttempts)}`);
 
