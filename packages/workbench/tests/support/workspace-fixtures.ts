@@ -115,7 +115,7 @@ export const tree: ApplicationTree = Object.freeze({
   diagnostics: Object.freeze([]),
   groups: Object.freeze([]),
   leafCount: 6,
-  state: 'current',
+  state: 'fresh',
 });
 
 export const status: ProjectStatus = {

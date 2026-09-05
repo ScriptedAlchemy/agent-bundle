@@ -4,6 +4,7 @@ import type { RouteInvocation } from '../../agent-bundle/src/contracts/invocatio
 import type { ApplicationLeaf } from '../src/application/application-tree-model.ts';
 import type { InvocationBackend } from '../src/application/invocation-backend.ts';
 import {
+  idleInvocationState,
   invocationSummaryOf,
   readLastInput,
   reduceInvocationState,
@@ -75,20 +76,20 @@ afterEach(() => {
 });
 
 it('reduces invocation lifecycle states without retaining stale failures', () => {
-  const running = reduceInvocationState({ status: 'idle' }, {
-    request: { input: { title: 'Dune' }, routeId: invocation.routeId },
-    type: 'invoke.started',
-  });
-  expect(running).toMatchObject({ status: 'running' });
-  expect(reduceInvocationState(running, { invocation, type: 'invoke.succeeded' })).toEqual({
+  const running = reduceInvocationState(idleInvocationState, { correlationId: 'c1', startedAt: 1_000, type: 'start' });
+  expect(running).toEqual({ correlationId: 'c1', phase: 'running', startedAt: 1_000 });
+  expect(reduceInvocationState(running, { completedAt: 1_250, invocation, type: 'settle' })).toEqual({
+    durationMs: 250,
     invocation,
-    status: 'succeeded',
+    phase: 'succeeded',
   });
   expect(reduceInvocationState(running, {
-    error: new Error('render failed'),
-    type: 'invoke.failed',
-  })).toMatchObject({ error: expect.any(Error), status: 'failed' });
-  expect(reduceInvocationState(running, { type: 'reset' })).toEqual({ status: 'idle' });
+    completedAt: 1_100,
+    failure: { code: 'AB8237', message: 'render failed' },
+    type: 'fail',
+  })).toEqual({ diagnostics: [], durationMs: 100, failure: { code: 'AB8237', message: 'render failed' }, phase: 'failed' });
+  expect(reduceInvocationState(idleInvocationState, { invocation, type: 'load' })).toEqual({ invocation, phase: 'succeeded' });
+  expect(reduceInvocationState(running, { type: 'reset' })).toBe(idleInvocationState);
 });
 
 it('stores strict JSON last-input snapshots by leaf key and tolerates unavailable storage', () => {
@@ -96,7 +97,7 @@ it('stores strict JSON last-input snapshots by leaf key and tolerates unavailabl
   expect(readLastInput(leaf.key)).toEqual({ regions: ['us'], title: 'Dune' });
   globalThis.sessionStorage.setItem(`agent-bundle:invocation-input:${leaf.key}`, '{"title":NaN}');
   expect(readLastInput(leaf.key)).toBeUndefined();
-  expect(() => writeLastInput(leaf.key, undefined)).not.toThrow();
+  expect(() => writeLastInput(leaf.key, { nested: { fn: undefined } } as never)).not.toThrow();
 });
 
 it('selects the first accepting backend and creates exact summaries', () => {
