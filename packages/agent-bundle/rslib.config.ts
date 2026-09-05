@@ -47,6 +47,14 @@ export default defineConfig({
   lib: [
     {
       bundle: true,
+      // One `.d.ts` per source module. Bundling them per entry
+      // (`dts: { bundle: true }`, API Extractor) was measured and rejected:
+      // it fails inside a devDependency's `.d.cts` (zod), takes ~6x longer,
+      // emits ~30% more bytes by inlining shared types into every entry, and
+      // renames colliding public names (`AgentBundleConfig_2`). What keeps
+      // the shipped declarations honest instead is the release gate
+      // (scripts/check-declaration-imports.mjs via `pnpm lint:release`): no
+      // declaration a consumer can reach may import a devDependency.
       dts: true,
       format: 'esm',
       syntax: 'es2022',
