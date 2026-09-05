@@ -27,8 +27,7 @@ import type {
 import type * as React from 'react';
 
 import {
-  CliInputError,
-  cliInputError,
+  mapGeneratedCliInput,
 } from '../cli-entry.ts';
 import type {
   CliRenderedEvent,
@@ -1096,29 +1095,7 @@ export const parseCliCommandInput = (
   inputSchema: AgentRouteSchema,
   projectionModule: Readonly<Record<string, unknown>> | undefined,
   input: Readonly<Record<string, unknown>>,
-): unknown => {
-  const withDefaults: Record<string, unknown> = { ...input };
-  for (const [key, value] of Object.entries(command.projection?.defaults ?? {})) {
-    if (!Object.hasOwn(withDefaults, key)) withDefaults[key] = value;
-  }
-  let mapped: unknown = withDefaults;
-  if (command.projection?.mapInput === true) {
-    const mapInput = projectionModule?.['mapInput'];
-    if (typeof mapInput !== 'function') {
-      throw new TypeError(`CLI projection ${command.projection.module} for ${command.routeId} must export a mapInput function.`);
-    }
-    try {
-      mapped = mapInput(withDefaults);
-    } catch (error) {
-      throw new CliInputError(error instanceof Error ? error.message : String(error));
-    }
-  }
-  try {
-    return inputSchema.parse(mapped);
-  } catch (error) {
-    throw cliInputError(command, mapped, error);
-  }
-};
+): unknown => mapGeneratedCliInput(command, inputSchema, projectionModule, input);
 
 /**
  * Accepts preloaded route modules and prepares the renderer and manifest

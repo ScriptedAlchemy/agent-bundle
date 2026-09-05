@@ -164,10 +164,16 @@ Workbench 外壳，因此路由、trace、Problems 与 Advanced 的深度链接�
 - `GET /api/routes/invocations/<id>` 返回一次调用。
 - `/api/project/events` 以 `route.invocation` 事件发布已完成的摘要。
 
+请求默认使用 `mode: "production"`。生产模式从最近发布的编译器 epoch 执行所选路由，因此编译器
+alias 与 define、生成入口的请求作用域、providers、持久状态、CLI `mapInput` 与确认、事件
+preflight 以及渲染语义都与已安装制品一致。`mode: "unit-render"` 是显式的组件预览后备模式：
+它通过 route-unit 测试工具加载实时源码并挂载一次性状态，不能作为制品一致性的证明。
+
 该信封在可用时携带规范输入、请求上下文、providers、有序渲染事件、最终的 Agent Document、结构化结果、
 投影、诊断与执行计时。被表示的 `Agent.Error` 仍是一份已渲染结果；未知路由或 invocation id（`AB8231`）、
 不可用的 epoch（`AB8232`）、渲染超时或崩溃（`AB8236`）、格式错误的请求（`AB8237`）与未知 fixture id
-（`AB8238`）会作为诊断报告。
+（`AB8238`）、不可用的编译制品（`AB8250`）、缺失的已编译路由可执行项（`AB8251`），以及已编译投影或
+preflight 失败（`AB8252`）会作为诊断报告。
 各条触发条件与恢复指引见[诊断参考](../../reference/diagnostics.md)。
 
 ## 以编程方式使用同一个会话

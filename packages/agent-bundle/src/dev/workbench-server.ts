@@ -934,6 +934,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
           ...(prepared.model.state === undefined ? {} : { state: prepared.model.state }),
           targets,
         }),
+        stateRoot: join(prepared.root, '.agent-bundle', 'state'),
         targets,
       });
     },

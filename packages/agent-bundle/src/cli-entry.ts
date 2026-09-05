@@ -514,7 +514,7 @@ const treeHelp = (
   return `${lines.join('\n')}\n`;
 };
 
-interface ParsedArgv {
+export interface ParsedGeneratedCliArgv {
   readonly input: Readonly<Record<string, unknown>>;
   readonly json: boolean;
   readonly ndjson: boolean;
@@ -573,7 +573,7 @@ const coercePositional = (option: CompiledCliOption, value: string): unknown => 
 };
 
 /** Parses one resolved command's remaining argv against its compiled option surface. */
-const parseCommandArgv = (command: CompiledCliCommand, argv: readonly string[]): ParsedArgv => {
+const parseCommandArgv = (command: CompiledCliCommand, argv: readonly string[]): ParsedGeneratedCliArgv => {
   const options = new Map<string, CompiledCliOption>();
   for (const option of namedOptions(command)) {
     options.set(option.option, option);
@@ -673,8 +673,8 @@ const parseCommandArgv = (command: CompiledCliCommand, argv: readonly string[]):
 
 const parseMcpCommandInput = (
   command: CompiledCliCommand,
-  parsed: ParsedArgv,
-): ParsedArgv => {
+  parsed: ParsedGeneratedCliArgv,
+): ParsedGeneratedCliArgv => {
   if (command.mcp === undefined) return parsed;
   if (command.mcp.confirm && parsed.input['yes'] !== true) {
     throw new CliUsageError(confirmationRequiredMessage(command.mcp.server, command.mcp.tool));
@@ -698,6 +698,46 @@ const parseMcpCommandInput = (
     throw new CliUsageError('--input must be a JSON object; arrays, null, and scalar values are not accepted.');
   }
   return { ...parsed, input: input as Readonly<Record<string, unknown>> };
+};
+
+/** Parses argv and applies projected-tool confirmation exactly as the generated CLI shell does. */
+export const parseGeneratedCliArgv = (
+  command: CompiledCliCommand,
+  argv: readonly string[],
+): ParsedGeneratedCliArgv => parseMcpCommandInput(command, parseCommandArgv(command, argv));
+
+export interface GeneratedCliInputSchema {
+  parse(input: unknown): unknown;
+}
+
+/** Applies projection defaults, `mapInput`, and the route schema at the generated CLI boundary. */
+export const mapGeneratedCliInput = (
+  command: CompiledCliCommand,
+  inputSchema: GeneratedCliInputSchema,
+  projectionModule: Readonly<Record<string, unknown>> | undefined,
+  input: Readonly<Record<string, unknown>>,
+): unknown => {
+  const withDefaults: Record<string, unknown> = { ...input };
+  for (const [key, value] of Object.entries(command.projection?.defaults ?? {})) {
+    if (!Object.hasOwn(withDefaults, key)) withDefaults[key] = value;
+  }
+  let mapped: unknown = withDefaults;
+  if (command.projection?.mapInput === true) {
+    const mapInput = projectionModule?.['mapInput'];
+    if (typeof mapInput !== 'function') {
+      throw new TypeError(`CLI projection ${command.projection.module} for ${command.routeId} must export a mapInput function.`);
+    }
+    try {
+      mapped = mapInput(withDefaults);
+    } catch (error) {
+      throw new CliInputError(error instanceof Error ? error.message : String(error));
+    }
+  }
+  try {
+    return inputSchema.parse(mapped);
+  } catch (error) {
+    throw cliInputError(command, mapped, error);
+  }
 };
 
 const resultExitCode = (policy: 'result' | 'zero', result: unknown): number => {
@@ -913,7 +953,7 @@ export const runGeneratedCliEntry = async (options: RunGeneratedCliOptions): Pro
 
   let node = tree;
   let index = 0;
-  let parsed: ParsedArgv | undefined;
+  let parsed: ParsedGeneratedCliArgv | undefined;
   const web = options.web !== undefined;
   try {
     if (options.argv[0] === '--version') {
@@ -960,7 +1000,7 @@ export const runGeneratedCliEntry = async (options: RunGeneratedCliOptions): Pro
       writeOut(commandHelp(options.name, command));
       return 0;
     }
-    parsed = parseMcpCommandInput(command, parseCommandArgv(command, rest));
+    parsed = parseGeneratedCliArgv(command, rest);
     signal.throwIfAborted();
     // Probed once: the same value selects the output mode and reaches the
     // route as `request.terminal`, so the two can never disagree.

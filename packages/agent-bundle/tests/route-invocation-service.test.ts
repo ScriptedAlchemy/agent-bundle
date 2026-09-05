@@ -47,6 +47,18 @@ const invocation = (id: string, completedAt: string): RouteInvocation => ({
   startedAt: completedAt,
   status: 'succeeded',
   timings: [],
+  trace: [{
+    at: 0,
+    execution: {
+      event: 'tool/after',
+      executionId: id,
+      host: 'claude',
+      nativeEvent: 'PostToolUse',
+    },
+    kind: 'preflight.start',
+    phase: 'preflight',
+    sequence: 0,
+  }],
 });
 
 it('strictly validates invocation request fields and event options', () => {
@@ -61,10 +73,17 @@ it('strictly validates invocation request fields and event options', () => {
   });
   expect(parseRouteInvocationRequest({
     event: { fixtureId: 'starter', host: 'claude' },
+    mode: 'unit-render',
     routeId: 'event:tool/after',
   })).toEqual({
     event: { fixtureId: 'starter', host: 'claude' },
+    mode: 'unit-render',
     routeId: 'event:tool/after',
+  });
+  expect(parseRouteInvocationRequest({
+    routeId: 'tool:curator/search_audible',
+  })).toEqual({
+    routeId: 'tool:curator/search_audible',
   });
 
   for (const value of [
@@ -74,6 +93,7 @@ it('strictly validates invocation request fields and event options', () => {
     { args: ['ok', 1], routeId: 'cli:x' },
     { event: { host: 'other' }, routeId: 'event:tool/after' },
     { event: { fixtureId: '' }, routeId: 'event:tool/after' },
+    { mode: 'preview', routeId: 'tool:x/y' },
   ]) {
     expect(() => parseRouteInvocationRequest(value)).toThrow(RouteInvocationRequestError);
   }
@@ -93,6 +113,7 @@ it('projects summaries without retaining heavy invocation payloads', () => {
   expect(summary).not.toHaveProperty('projection');
   expect(summary).not.toHaveProperty('providers');
   expect(summary).not.toHaveProperty('result');
+  expect(summary).not.toHaveProperty('trace');
 });
 
 it('retains a bounded newest-first invocation history', () => {
@@ -133,6 +154,7 @@ it('aborts and drains a running render when the service closes', async () => {
     },
     prepared: () => ({
       manifest: { projectRoot: '/project' } as never,
+      stateRoot: '/project/.agent-bundle/state',
       targets: ['claude'],
     }),
     renderChild: (_request, signal) => new Promise((_resolve, reject) => {
@@ -140,7 +162,7 @@ it('aborts and drains a running render when the service closes', async () => {
     }),
   });
 
-  const pending = service.invoke({ input: {}, routeId: route.id });
+  const pending = service.invoke({ input: {}, mode: 'unit-render', routeId: route.id });
   await Promise.resolve();
   await service.close();
 
@@ -217,6 +239,7 @@ const leakingRouteProject = async (behaviour: 'hang' | 'reply'): Promise<Leaking
   };
   const prepared = Object.freeze({
     manifest: testManifestFromRouteGraph({ graph, projectRoot: root }),
+    stateRoot: join(root, '.agent-bundle', 'state'),
     targets: ['claude' as const],
   });
   return {
@@ -254,7 +277,7 @@ const recordedPids = async (project: LeakingRouteProject): Promise<Readonly<{ ch
 it('reaps the render child and its descendants after a successful reply', { timeout: 30_000 }, async () => {
   const project = await leakingRouteProject('reply');
   try {
-    const invocation = await project.service().invoke({ input: {}, routeId: 'tool:fixture/leak' });
+    const invocation = await project.service().invoke({ input: {}, mode: 'unit-render', routeId: 'tool:fixture/leak' });
     const pids = await project.pids();
 
     expect(invocation.status).toBe('succeeded');
@@ -270,7 +293,7 @@ it('reaps the render child and its descendants when the invocation times out', {
   const project = await leakingRouteProject('hang');
   try {
     const service = project.service({ timeoutMs: 8_000 });
-    const pending = service.invoke({ input: {}, routeId: 'tool:fixture/leak' });
+    const pending = service.invoke({ input: {}, mode: 'unit-render', routeId: 'tool:fixture/leak' });
     const pids = await recordedPids(project);
     expect(alive(pids.child)).toBe(true);
     expect(alive(pids.descendant)).toBe(true);
@@ -290,7 +313,7 @@ it('reaps the render child and its descendants when the service closes mid-rende
   const project = await leakingRouteProject('hang');
   try {
     const service = project.service();
-    const pending = service.invoke({ input: {}, routeId: 'tool:fixture/leak' });
+    const pending = service.invoke({ input: {}, mode: 'unit-render', routeId: 'tool:fixture/leak' });
     const pids = await recordedPids(project);
     expect(alive(pids.child)).toBe(true);
     expect(alive(pids.descendant)).toBe(true);

@@ -28,6 +28,7 @@ import type {
 } from '../../contracts/request-provenance.ts';
 import { createCanonicalEventProps, projectEventDocument } from '../../events/projection.ts';
 import type { CanonicalAgentEvent } from '../../routes/public.ts';
+import type { EventTraceEvent } from '../../events/trace.ts';
 import { taskkill, terminateProcessTree, waitForProcessTreeExit } from '../../services/process-tree.ts';
 import type { AgentBundleTestManifest, TestableScriptDescriptor } from '../../test/manifest.ts';
 import type { ScriptPlaygroundResult, ScriptPlaygroundRunRequest } from '../playground/script-playground-service.ts';
@@ -48,6 +49,9 @@ export const ROUTE_INVOCATION_MANIFEST_UNAVAILABLE_CODE = 'AB8232';
 export const ROUTE_INVOCATION_CHILD_FAILURE_CODE = 'AB8236';
 export const ROUTE_INVOCATION_MALFORMED_REQUEST_CODE = 'AB8237';
 export const ROUTE_INVOCATION_UNKNOWN_FIXTURE_CODE = 'AB8238';
+export const ROUTE_INVOCATION_ARTIFACT_UNAVAILABLE_CODE = 'AB8250';
+export const ROUTE_INVOCATION_COMPILED_ROUTE_UNAVAILABLE_CODE = 'AB8251';
+export const ROUTE_INVOCATION_PREPARATION_FAILURE_CODE = 'AB8252';
 
 const defaultHistoryLimit = 200;
 const defaultTimeoutMs = 60_000;
@@ -77,6 +81,7 @@ export interface RouteInvocationPreparedProject {
   readonly artifact?: Readonly<{ epochId: string; target: string }>;
   readonly fixtures?: Readonly<Record<string, readonly RouteInvocationFixture[]>>;
   readonly manifest: AgentBundleTestManifest;
+  readonly stateRoot: string;
   readonly targets: readonly RouteInvocationEventHost[];
 }
 
@@ -101,10 +106,15 @@ export interface RouteInvocationServiceOptions {
 
 export interface RouteInvocationChildRequest {
   readonly args?: readonly string[];
+  readonly artifactEpoch?: string;
+  readonly artifactRoot?: string;
   readonly context: RequestContextProvenance;
+  readonly eventTarget?: RouteInvocationEventHost;
   readonly input: JsonValue;
   readonly manifest: AgentBundleTestManifest;
+  readonly mode?: 'production' | 'unit-render';
   readonly routeId: string;
+  readonly stateRoot: string;
 }
 
 export interface RouteInvocationChildResult {
@@ -114,14 +124,19 @@ export interface RouteInvocationChildResult {
   readonly input: JsonValue;
   /** Runtime-owned MCP projection, computed inside the runtime-bound child. */
   readonly mcp?: JsonObject;
+  readonly observed?: {
+    readonly providers: readonly RouteInvocationProvider[];
+    readonly timings: readonly RouteInvocationTiming[];
+  };
   readonly renderDurationMs: number;
   readonly result?: JsonValue;
+  readonly trace?: readonly EventTraceEvent[];
 }
 
 export type RouteInvocationChildResponse =
   | Readonly<{ readonly result: RouteInvocationChildResult; readonly type: 'result' }>
   | Readonly<{
-    readonly error: Readonly<{ readonly message: string; readonly name: string }>;
+    readonly error: Readonly<{ readonly code?: string; readonly message: string; readonly name: string }>;
     readonly type: 'error';
   }>;
 
@@ -174,12 +189,14 @@ const eventOptions = (value: unknown): RouteInvocationRequest['event'] => {
 export const parseRouteInvocationRequest = (
   value: Readonly<Record<string, unknown>>,
 ): RouteInvocationRequest => {
-  if (!hasOnlyOwnKeys(value, ['args', 'correlationId', 'event', 'input', 'routeId'])) return malformed();
+  if (!hasOnlyOwnKeys(value, ['args', 'correlationId', 'event', 'input', 'mode', 'routeId'])) return malformed();
   const routeId = value.routeId;
   const correlationId = value.correlationId;
   const args = value.args;
+  const mode = value.mode;
   if (!boundedString(routeId)) return malformed();
   if (correlationId !== undefined && !boundedString(correlationId, 256)) return malformed();
+  if (mode !== undefined && mode !== 'production' && mode !== 'unit-render') return malformed();
   if (args !== undefined && (!Array.isArray(args) || args.length > 1_024 || args.some((argument) => !boundedString(argument, 16_384)))) {
     return malformed();
   }
@@ -197,6 +214,7 @@ export const parseRouteInvocationRequest = (
     ...(correlationId === undefined ? {} : { correlationId }),
     ...(event === undefined ? {} : { event }),
     ...(input === undefined ? {} : { input }),
+    ...(mode === undefined ? {} : { mode }),
     routeId,
   });
 };
@@ -210,6 +228,7 @@ export const invocationSummary = (invocation: RouteInvocation): RouteInvocationS
     projection: _projection,
     providers: _providers,
     result: _result,
+    trace: _trace,
     ...summary
   } = invocation;
   return deepFreeze(summary);
@@ -439,6 +458,7 @@ const renderInChild = async (
       if (message.type === 'error') {
         const error = new Error(message.error.message);
         error.name = message.error.name;
+        if (message.error.code !== undefined) Object.assign(error, { code: message.error.code });
         return settle(() => rejectPromise(error));
       }
       settle(() => resolvePromise(message.result));
@@ -702,7 +722,11 @@ export class RouteInvocationService {
     }
     if (
       (request.event !== undefined && route.kind !== 'event-route')
-      || (request.args !== undefined && route.kind !== 'cli')
+      || (
+        request.args !== undefined
+        && route.kind !== 'cli'
+        && !prepared.manifest.cliCommands.some((command) => command.routeId === route.id)
+      )
     ) {
       return malformed();
     }
@@ -737,16 +761,33 @@ export class RouteInvocationService {
         child = plainScript === undefined
           ? await this.#renderChild({
             ...(request.args === undefined ? {} : { args: request.args }),
+            ...(prepared.artifact === undefined
+              ? {}
+              : {
+                  artifactEpoch: `${prepared.manifest.plugin.name}@${prepared.manifest.plugin.version}`,
+                  artifactRoot: join(prepared.manifest.projectRoot, '.agent-bundle', 'epochs', prepared.artifact.epochId),
+                }),
             context,
+            ...(request.event?.host === undefined ? {} : { eventTarget: request.event.host }),
             input,
             manifest: prepared.manifest,
+            ...(request.mode === undefined ? {} : { mode: request.mode }),
             routeId: route.id,
+            stateRoot: prepared.stateRoot,
           }, controller.signal)
           : await runPlainScript(this.#scripts, prepared, plainScript, input, controller.signal);
       } catch (error) {
         const completedAt = this.#now();
+        const childCode = typeof error === 'object' && error !== null && 'code' in error
+          && (
+            error.code === ROUTE_INVOCATION_ARTIFACT_UNAVAILABLE_CODE
+            || error.code === ROUTE_INVOCATION_COMPILED_ROUTE_UNAVAILABLE_CODE
+            || error.code === ROUTE_INVOCATION_PREPARATION_FAILURE_CODE
+          )
+          ? error.code
+          : ROUTE_INVOCATION_CHILD_FAILURE_CODE;
         return failedInvocation({
-          code: ROUTE_INVOCATION_CHILD_FAILURE_CODE,
+          code: childCode,
           completedAt,
           context,
           id,
@@ -810,6 +851,7 @@ export class RouteInvocationService {
         sourceRevision: manifest.sourceRevision,
         startedAt: startedAt.toISOString(),
         status: 'succeeded',
+        ...(child.trace === undefined ? {} : { trace: child.trace }),
         timings: [
           timing('providers', startedAt, 0),
           ...manifest.providers.map((provider) => timing(`provider:${provider.name}`, startedAt, 0)),

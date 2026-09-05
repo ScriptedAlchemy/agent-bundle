@@ -193,11 +193,20 @@ The route workspace uses one authenticated, origin-guarded foreground API:
 - `GET /api/routes/invocations/<id>` returns one invocation.
 - `/api/project/events` publishes completed summaries as `route.invocation` events.
 
+Requests default to `mode: "production"`. Production mode executes the selected route from the
+last published compiler epoch, so compiler aliases and defines, generated-entry request scope,
+providers, persistent state, CLI `mapInput` and confirmation, event preflight, and render
+semantics match the installed artifact. `mode: "unit-render"` is an explicit component-preview
+fallback: it loads live source with the route-unit harness and mounts disposable state. It is not
+an artifact-parity receipt.
+
 The envelope carries canonical input, request context, providers, ordered render events, the
 final Agent Document, structured result, projections, diagnostics, and execution timings when
 available. A represented `Agent.Error` remains a rendered result; unknown routes or invocation
 ids (`AB8231`), unavailable epochs (`AB8232`), render timeouts or crashes (`AB8236`), malformed
-requests (`AB8237`), and unknown fixture ids (`AB8238`) are reported as diagnostics.
+requests (`AB8237`), unknown fixture ids (`AB8238`), unavailable compiled artifacts (`AB8250`),
+missing compiled route executables (`AB8251`), and compiled projection or preflight failures
+(`AB8252`) are reported as diagnostics.
 See the [diagnostics reference](../../reference/diagnostics.md) for the individual triggers and
 recovery guidance.
 

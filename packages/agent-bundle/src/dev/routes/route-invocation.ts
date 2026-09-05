@@ -40,6 +40,8 @@ export interface RouteInvocationRequest {
   readonly event?: RouteInvocationEventOptions;
   /** Tool/prompt/script input, event payload (canonical or native — see `event.host`), or resource parameters. */
   readonly input?: JsonValue;
+  /** Generated-entry parity by default; component-only rendering is an explicit fallback. */
+  readonly mode?: 'production' | 'unit-render';
   /** The compiled route id, for example `tool:curator/search_audible`, `event:tool/before`, `cli:audible/search`, `script:sync`. */
   readonly routeId: string;
 }

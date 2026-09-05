@@ -59,6 +59,18 @@ const invocation = Object.freeze({
     phase: 'render',
     startedAt: '2026-09-05T07:00:00.000Z',
   }]),
+  trace: Object.freeze([{
+    at: 1,
+    execution: Object.freeze({
+      event: 'tool/after' as const,
+      executionId: 'event-execution-a',
+      host: 'claude',
+      nativeEvent: 'PostToolUse',
+    }),
+    kind: 'preflight.start' as const,
+    phase: 'preflight' as const,
+    sequence: 0,
+  }]),
 }) satisfies RouteInvocation;
 
 const foreground = (handler: (path: string, init: RequestInit) => Response | Promise<Response>): ForegroundRequestAuthority => ({
@@ -70,7 +82,7 @@ it('strictly decodes invoke, list, and read responses', async () => {
   const client = new InvocationClient({ foreground: foreground((path, init) => {
     requests.push([path, init]);
     return Response.json(path.includes('?limit=')
-      ? { invocations: [{ ...invocation, context: undefined, document: undefined, events: undefined, projection: undefined, providers: undefined, result: undefined }] }
+      ? { invocations: [{ ...invocation, context: undefined, document: undefined, events: undefined, projection: undefined, providers: undefined, result: undefined, trace: undefined }] }
       : { invocation });
   }) });
 

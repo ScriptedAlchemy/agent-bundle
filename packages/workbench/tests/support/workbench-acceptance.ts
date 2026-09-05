@@ -242,8 +242,15 @@ export const editWatchedSource = async (
 };
 
 export const runSelectedRoute = async (page: Page, timeout = browserTimeout): Promise<void> => {
-  await workbenchTestId(page, 'routeRun').click();
   const status = workbenchTestId(page, 'routeStatus');
+  const invocationId = status.locator('.route-status-id');
+  const previousId = await invocationId.count() === 0 ? undefined : await invocationId.textContent();
+  await workbenchTestId(page, 'routeRun').click();
+  await expect.poll(async () => {
+    const className = await status.getAttribute('class');
+    const currentId = await invocationId.count() === 0 ? undefined : await invocationId.textContent();
+    return className?.includes('route-status--running') === true || currentId !== previousId;
+  }, { timeout }).toBe(true);
   await expect(status).toHaveClass(/route-status--succeeded/u, { timeout });
 };
 
