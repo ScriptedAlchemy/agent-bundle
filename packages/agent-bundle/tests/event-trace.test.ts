@@ -202,6 +202,21 @@ it('uses the process observer for framework-created tracers and restores it safe
   expect(createEventTracer({ execution }).enabled).toBe(false);
 });
 
+it('observes framework-created tracers when the process observer is installed after creation', () => {
+  const { events, observer } = collect();
+  const tracer = createEventTracer({ execution, now: ticking() });
+  expect(tracer.enabled).toBe(false);
+
+  const dispose = installEventTraceObserver(observer);
+  expect(tracer.enabled).toBe(true);
+  tracer.preflightStart();
+  dispose();
+  expect(tracer.enabled).toBe(false);
+  tracer.preflightOutcome('execute');
+
+  expect(events.map((event) => event.kind)).toEqual(['preflight.start']);
+});
+
 it('summarizes gate results without carrying the reason text', () => {
   const { events, observer } = collect();
   const tracer = createEventTracer({ execution, now: ticking(), observer });

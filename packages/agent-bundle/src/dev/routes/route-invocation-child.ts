@@ -7,6 +7,10 @@ import * as React from 'react';
 
 import type { JsonObject } from '../../core/strict-json.ts';
 import {
+  installEventTraceObserver,
+  type EventTraceEvent,
+} from '../../events/trace.ts';
+import {
   AGENT_TEST_REGISTRY_VERSION,
   registerTestRoutes,
   type AgentLayoutModuleLoader,
@@ -105,6 +109,10 @@ const respond = (response: RouteInvocationChildResponse): Promise<void> => new P
   });
 });
 
+const forwardEventTrace = (event: EventTraceEvent): void => {
+  process.send?.({ event, type: 'trace' } satisfies RouteInvocationChildResponse);
+};
+
 const render = async (request: RouteInvocationChildRequest): Promise<RouteInvocationChildResult> => {
   installManifest(request);
   const startedAt = performance.now();
@@ -139,15 +147,19 @@ const render = async (request: RouteInvocationChildRequest): Promise<RouteInvoca
 };
 
 process.once('message', (request: RouteInvocationChildRequest) => {
+  const disposeTraceObserver = installEventTraceObserver(forwardEventTrace);
   void render(request)
-    .then((result) => respond({ result, type: 'result' }))
-    .catch((error: unknown) => respond({
-      error: {
-        message: error instanceof Error ? error.message : String(error),
-        name: error instanceof Error ? error.name : 'Error',
-      },
-      type: 'error',
-    }))
+    .then(
+      (result) => respond({ result, type: 'result' }),
+      (error: unknown) => respond({
+        error: {
+          message: error instanceof Error ? error.message : String(error),
+          name: error instanceof Error ? error.name : 'Error',
+        },
+        type: 'error',
+      }),
+    )
+    .finally(disposeTraceObserver)
     .then(() => process.disconnect?.())
     .catch((error: unknown) => {
       console.error(error);
