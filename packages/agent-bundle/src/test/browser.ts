@@ -68,6 +68,8 @@ export interface MountBrowserAppOptions {
   readonly operations: McpAppBridgeBindingOperations;
   readonly profile?: McpAppProfileId;
   readonly scriptedConsent?: BrowserAppScriptedConsent;
+  /** MCP server to bind when one compiled App is shared by several servers. */
+  readonly serverName?: string;
   readonly timeoutMs?: number;
   readonly toolDefinition?: McpAppToolDefinition;
   readonly toolInput?: McpAppBridgeJsonRecord;
@@ -235,6 +237,13 @@ const bindingFor = (
   options: MountBrowserAppOptions,
 ): McpAppBinding => {
   const toolName = options.toolName ?? `show-${app.name}`;
+  const serverNames = app.serverIds.map((id) => id.startsWith('mcp:') ? id.slice('mcp:'.length) : id);
+  const serverName = options.serverName ?? (serverNames.length === 1 ? serverNames[0] : undefined);
+  if (serverName === undefined || !serverNames.includes(serverName)) {
+    throw new TypeError(
+      `Browser App ${JSON.stringify(app.name)} requires one serverName from ${JSON.stringify(serverNames)}.`,
+    );
+  }
   return Object.freeze({
     epochId: `browser-app:${app.name}`,
     id: `browser-app-binding-${String(nextBindingId++)}`,
@@ -242,7 +251,7 @@ const bindingFor = (
     previewProfile: selectedProfile(app, options.profile),
     resourceUri: app.resourceUri,
     result: options.toolResult,
-    serverName: app.serverIds.join(','),
+    serverName,
     sessionId: `browser-app-session:${app.name}`,
     target: app.target,
     toolDefinition: options.toolDefinition ?? Object.freeze({

@@ -62,6 +62,63 @@ const providerDeclarations = (providers: readonly CompiledProvider[]): readonly 
     ];
 
 /**
+ * Whether the graph has a route an MCP App can call: the generated servers'
+ * tool routes. Prompts, resources, Apps, CLI commands, and event routes are
+ * not `tools/call` targets, so a graph with only those registers nothing on
+ * `agent-bundle/app`.
+ */
+const hasToolRoutes = (routes: readonly CompiledAgentRoute[]): boolean =>
+  routes.some((route) => route.kind === 'tool');
+
+/**
+ * The App half of the generated declarations: `AgentBundleAppRouteContracts`
+ * is the MCP tool subset of `AgentBundleRoutes` — the `tool:<server>/<name>`
+ * ids filtered at the type level, so every route id is spelled once and the
+ * contracts reuse the same type-only route module imports — one
+ * `{ input, result }` per tool from the module's own `inputSchema` and
+ * `resultSchema` output. The filter is inlined in the mapped type rather than
+ * named first so `keyof` the map (what an App client's route-id parameter
+ * resolves to) prints as the tool ids in a rejection, not as an alias name.
+ * Omitted for graphs without a tool route.
+ */
+const appDeclarations = (routes: readonly CompiledAgentRoute[]): readonly string[] =>
+  hasToolRoutes(routes)
+    ? [
+      '/** The registered App contract map: one `{ input, result }` per MCP tool route id, for `agent-bundle/app`\'s `AppRegister`. */',
+      'export type AgentBundleAppRouteContracts = {',
+      '  readonly [Id in Extract<RouteId, `tool:${string}/${string}`>]: Readonly<{ input: RouteInput<Id>; result: RouteResult<Id> }>;',
+      '};',
+      '/** The MCP tool route ids: the routes an MCP App calls through `agent-bundle/app`. */',
+      'export type AppToolRouteId = keyof AgentBundleAppRouteContracts;',
+      '',
+    ]
+    : [];
+
+/**
+ * The single `agent-bundle/app` augmentation: `AppRegister.routes` registers
+ * the tool contract map (the same `Register` pattern as the runtime
+ * augmentation below), so `createAppClient().call(id, input)` narrows its
+ * route id to the project's tools, `input` to that tool's `inputSchema`
+ * output, and its resolved value to the `resultSchema` output. Type-only:
+ * the App bundle never loads a route module, Zod, or Node through it.
+ * Omitted with the contract map for graphs without a tool route, so the
+ * augmentation never references a module the project has no reason to
+ * depend on; where `agent-bundle/app` is not resolvable, TypeScript drops an
+ * ambient augmentation of it silently.
+ */
+const appAugmentation = (routes: readonly CompiledAgentRoute[]): readonly string[] =>
+  hasToolRoutes(routes)
+    ? [
+      "declare module 'agent-bundle/app' {",
+      '  interface AppRegister {',
+      '    readonly routes: AgentBundleAppRouteContracts;',
+      '  }',
+      '}',
+      '',
+    ]
+    : [];
+
+/**
  * The single `@agent-bundle/runtime` augmentation. Its `Register.routes`
  * member registers the thin `{ input, result }` contract map (TanStack
  * Router's `Register` pattern), so `agent-bundle/test`'s `renderRoute` narrows
@@ -154,8 +211,10 @@ export const generateRouteTypes = (graph: CompiledRouteGraph): string => {
     '  readonly [Id in RouteId]: Readonly<{ input: HarnessInput<AgentBundleRoutes[Id]>; result: HarnessResult<AgentBundleRoutes[Id]> }>;',
     '};',
     '',
+    ...appDeclarations(routes),
     ...providerDeclarations(providers),
     ...runtimeAugmentation(routes, providers),
+    ...appAugmentation(routes),
   ].join('\n');
 };
 

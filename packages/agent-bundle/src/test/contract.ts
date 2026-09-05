@@ -58,6 +58,7 @@ import {
   requestEventRuntimeStatus,
   type EventRuntimeStatusResult,
 } from '../events/ipc.ts';
+import { mcpRouteProtocolName } from '../routes/protocol-name.ts';
 import { AgentTestError, captured } from './errors.ts';
 import {
   DEV_EPOCH_PROOF_LEVEL,
@@ -472,7 +473,7 @@ interface LiveSurface {
 }
 
 const routeProtocolName = (descriptor: TestableRouteDescriptor): string =>
-  descriptor.id.slice(descriptor.id.lastIndexOf('/') + 1);
+  mcpRouteProtocolName(descriptor.id);
 
 const routeResourceUri = (descriptor: TestableRouteDescriptor): string | undefined => {
   const uri = descriptor.config.uri;

@@ -62,6 +62,7 @@ import type {
   SourceProvenance,
 } from '../core/types.ts';
 import { appRouteTemplatePath, resolveAppRouteTemplate } from '../routes/app-template.ts';
+import { mcpRouteProtocolName } from '../routes/protocol-name.ts';
 import type { CompiledCliSurface } from '../routes/types.ts';
 import { type DiscoveredProject, payloadDeclarationSource } from './discover.ts';
 import type { LoadedConfig } from './load.ts';
@@ -860,7 +861,7 @@ const normalizeMcpApps = (
       if (route.kind !== 'app') continue;
       const resourceUri = route.config['resourceUri'];
       if (typeof resourceUri !== 'string' || resourceUri.trim() === '') continue;
-      const name = route.id.slice(route.id.lastIndexOf('/') + 1);
+      const name = mcpRouteProtocolName(route.id);
       const declaredTargets = route.config['targets'];
       const targets = Array.isArray(declaredTargets) && declaredTargets.every((target) => typeof target === 'string')
         ? declaredTargets

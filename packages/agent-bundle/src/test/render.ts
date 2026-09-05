@@ -32,6 +32,7 @@ import type {
   GeneratedCliRenderSession,
 } from '../cli-entry.ts';
 import { settleBeforeAbort } from '../core/abort.ts';
+import { parseMcpRouteProtocolId } from '../routes/protocol-name.ts';
 import { createProviderProcessLifetime, type ProviderProcessLifetime } from '../routes/provider-execution.ts';
 import { routeRenderLimits, type RouteRenderBudget } from '../routes/render-budget.ts';
 import type { CompiledCliCommand } from '../routes/types.ts';
@@ -358,8 +359,16 @@ interface ResolvedTarget {
   readonly render?: RouteRenderBudget;
 }
 
-/** The protocol name a generated server registers, and the request surface it records. */
-const protocolName = (routeId: string): string => routeId.slice(routeId.lastIndexOf('/') + 1);
+/**
+ * The protocol name a generated server registers, and the request surface it
+ * records: the shared derivation for a canonical MCP route id
+ * (`tool:harness/echo` -> `echo`). A module rendered directly may carry any
+ * `routeId` — `custom/group/name`, or the `(module passed to renderRoute)`
+ * placeholder — and keeps the harness's own fallback for it: the id's final
+ * slash segment, the whole id when it has none.
+ */
+const protocolName = (routeId: string): string =>
+  parseMcpRouteProtocolId(routeId)?.name ?? routeId.slice(routeId.lastIndexOf('/') + 1);
 
 /**
  * Props the route component receives. MCP route kinds get exactly the public

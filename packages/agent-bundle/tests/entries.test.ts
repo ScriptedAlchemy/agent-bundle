@@ -1,7 +1,8 @@
 import { describe, expect, it } from '@rstest/core';
 
 import { planHooks } from '../src/adapters/hook-contract.ts';
-import { eventRuntimeHosting, planCompiledHooks, planHooksSurface, runtimeIgnoredRoot, selectedServerHosts } from '../src/build/entries.ts';
+import { eventRuntimeHosting, planCompiledHooks, planHooksSurface, selectedServerHosts } from '../src/build/entries.ts';
+import { runtimeIgnoredRoot } from '../src/build/runtime-path.ts';
 import type { NormalizedHook, NormalizedMcpServer, NormalizedPlugin } from '../src/core/types.ts';
 import type { CompiledEventPreflight } from '../src/routes/types.ts';
 

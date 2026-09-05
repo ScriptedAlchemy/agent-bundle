@@ -12,7 +12,7 @@ import { discoverProject } from '../src/config/discover.ts';
 import type { AgentBundleConfig } from '../src/core/types.ts';
 import { compileRouteGraph, emptyCompiledRouteGraph, isEmptyRouteGraph } from '../src/routes/graph.ts';
 import * as routesModule from '../src/routes/index.ts';
-import { emptyRouteConfig, type CompiledRouteGraph } from '../src/routes/types.ts';
+import { emptyRouteConfig, type CompiledAgentRoute, type CompiledRouteGraph } from '../src/routes/types.ts';
 
 const roots: string[] = [];
 
@@ -1470,6 +1470,105 @@ it('generates deterministic route-specific types from the compiled graph', () =>
   expect(first).not.toContain('AgentBundleProviders');
   expect(first).not.toContain('AgentProviderValues');
   expect(first).toContain("declare module '@agent-bundle/runtime' {\n  interface Register {\n    readonly routes: AgentBundleRouteContracts;\n  }\n}");
+  // The App contract map is the MCP tool subset of the same registration, filtered at the type level so every
+  // route id is spelled once; its one `agent-bundle/app` augmentation registers it on `AppRegister` (#594).
+  expect(first).toContain('export type AgentBundleAppRouteContracts = {\n  readonly [Id in Extract<RouteId, `tool:${string}/${string}`>]: Readonly<{ input: RouteInput<Id>; result: RouteResult<Id> }>;\n};');
+  expect(first).toContain('/** The MCP tool route ids: the routes an MCP App calls through `agent-bundle/app`. */\nexport type AppToolRouteId = keyof AgentBundleAppRouteContracts;');
+  expect(first).toContain("declare module 'agent-bundle/app' {\n  interface AppRegister {\n    readonly routes: AgentBundleAppRouteContracts;\n  }\n}");
+  expect(first.match(/declare module 'agent-bundle\/app'/gu)).toHaveLength(1);
+  expect(first.match(/declare module '@agent-bundle\/runtime'/gu)).toHaveLength(1);
+  expect(first.match(/"tool:curator\/inspect"/gu)).toHaveLength(1);
+  expect(first.match(/"event:workspace\/open"/gu)).toHaveLength(1);
+  // Declarations only: every import is type-only, so nothing here reaches an App bundle at runtime.
+  expect(first.split('\n').filter((line) => line.startsWith('import'))).toEqual([
+    'import type * as route0 from "../src/events/workspace/open.js";',
+    'import type * as route1 from "../src/mcp/curator/tools/inspect.js";',
+  ]);
+  expect(first).not.toMatch(/from ["'](?:zod|node:|agent-bundle|@agent-bundle)/u);
+});
+
+it('omits the App registration for graphs without an MCP tool route', () => {
+  const server = (routes: readonly CompiledAgentRoute[]): CompiledRouteGraph['servers'] => [{
+    id: 'mcp:curator',
+    mode: 'generated',
+    name: 'curator',
+    routes,
+  }];
+  const mcpRoute = (kind: 'app' | 'prompt' | 'resource' | 'tool', collection: string, name: string): CompiledAgentRoute => ({
+    config: emptyRouteConfig,
+    id: `${kind}:curator/${name}`,
+    kind,
+    provenance: { kind: 'conventional', relativePath: `src/mcp/curator/${collection}/${name}.ts` },
+    serverId: 'mcp:curator',
+    source: `/workspace/project/src/mcp/curator/${collection}/${name}.ts`,
+  });
+  // Every executable route kind but a tool: CLI commands, event routes, prompts, resources, plus an App
+  // route (never typed) and a provider.
+  const toolFree: CompiledRouteGraph = {
+    cli: {
+      mode: 'generated',
+      routes: [{
+        config: emptyRouteConfig,
+        id: 'cli:report',
+        kind: 'cli',
+        provenance: { kind: 'conventional', relativePath: 'src/cli/report.ts' },
+        source: '/workspace/project/src/cli/report.ts',
+      }],
+    },
+    diagnostics: [],
+    digest: 'tool-free-typegen-digest',
+    events: [{
+      config: emptyRouteConfig,
+      event: 'workspace/open',
+      id: 'event:workspace/open',
+      kind: 'event-route',
+      provenance: { kind: 'conventional', relativePath: 'src/events/workspace/open.tsx' },
+      source: '/workspace/project/src/events/workspace/open.tsx',
+    }],
+    providers: [{
+      id: 'provider:git-worktree',
+      name: 'git-worktree',
+      provenance: { kind: 'conventional', relativePath: 'src/providers/git-worktree.ts' },
+      source: '/workspace/project/src/providers/git-worktree.ts',
+    }],
+    scripts: [],
+    servers: server([
+      mcpRoute('app', 'apps', 'dashboard'),
+      mcpRoute('prompt', 'prompts', 'brief'),
+      mcpRoute('resource', 'resources', 'catalog'),
+    ]),
+  };
+
+  const declarations = routesModule.generateRouteTypes(toolFree);
+  expect(routesModule.generateRouteTypes(structuredClone(toolFree))).toBe(declarations);
+  // The harness registration and provider surface are unchanged by the absence of tools...
+  expect(declarations).toContain('"cli:report": RouteContract<typeof route0.inputSchema, typeof route0.resultSchema>;');
+  expect(declarations).toContain('"event:workspace/open": EventRouteContract<typeof route1.default, "workspace/open">;');
+  expect(declarations).toContain('"prompt:curator/brief": RouteContract<typeof route2.inputSchema, typeof route2.resultSchema>;');
+  expect(declarations).toContain('"resource:curator/catalog": RouteContract<typeof route3.inputSchema, typeof route3.resultSchema>;');
+  expect(declarations).not.toContain('app:curator/dashboard');
+  expect(declarations).toContain("declare module '@agent-bundle/runtime' {\n  interface Register {\n    readonly routes: AgentBundleRouteContracts;\n  }\n  interface AgentProviderValues {\n    readonly \"gitWorktree\": ProviderValueOf<typeof provider0.default>;\n  }\n}");
+  // ...while nothing registers on `agent-bundle/app`: none of these routes is a `tools/call` target.
+  expect(declarations).not.toContain('agent-bundle/app');
+  expect(declarations).not.toContain('AppRegister');
+  expect(declarations).not.toContain('AgentBundleAppRouteContracts');
+  expect(declarations).not.toContain('AppToolRouteId');
+  expect(declarations.endsWith('}\n')).toBe(true);
+
+  // One tool beside them brings the map and exactly one augmentation, whatever else the graph holds.
+  const withTool: CompiledRouteGraph = {
+    ...toolFree,
+    servers: server([...toolFree.servers[0]!.routes, mcpRoute('tool', 'tools', 'inspect')]),
+  };
+  const registered = routesModule.generateRouteTypes(withTool);
+  expect(registered.match(/declare module 'agent-bundle\/app'/gu)).toHaveLength(1);
+  expect(registered.match(/"tool:curator\/inspect"/gu)).toHaveLength(1);
+  expect(registered.match(/"prompt:curator\/brief"/gu)).toHaveLength(1);
+  expect(registered).toContain('export type AgentBundleAppRouteContracts = {\n  readonly [Id in Extract<RouteId, `tool:${string}/${string}`>]: Readonly<{ input: RouteInput<Id>; result: RouteResult<Id> }>;\n};');
+  // The runtime augmentation is byte-identical with and without the App registration.
+  const runtimeBlock = /declare module '@agent-bundle\/runtime' \{[\s\S]*?\n\}\n/u;
+  expect(registered.match(runtimeBlock)?.[0]).toBe(declarations.match(runtimeBlock)?.[0]);
+  expect(registered.indexOf("declare module '@agent-bundle/runtime'")).toBeLessThan(registered.indexOf("declare module 'agent-bundle/app'"));
 });
 
 it('generates provider declarations and the runtime augmentation in execution order', () => {
@@ -1524,7 +1623,7 @@ it('generates provider declarations and the runtime augmentation in execution or
   expect(first.indexOf('AgentBundleRoutes')).toBeLessThan(first.indexOf('AgentBundleProviders'));
 });
 
-it('resolves generated helper types for schema and event route contracts', async () => {
+it('resolves generated helper types for schema and event route contracts and the App tool registration', async () => {
   const root = await createRoot();
   await writeTree(root, {
     'package.json': '{"type":"module"}\n',
@@ -1540,6 +1639,14 @@ it('resolves generated helper types for schema and event route contracts', async
       '}',
       '',
     ].join('\n'),
+    'src/mcp/curator/prompts/brief.ts': [
+      'export interface BriefInput { readonly topic: string; }',
+      'export interface BriefResult { readonly messages: readonly string[]; }',
+      'export const inputSchema = {} as { readonly _output: BriefInput };',
+      'export const resultSchema = {} as { readonly _output: BriefResult };',
+      'export default async function Brief() { return undefined; }',
+      '',
+    ].join('\n'),
     'src/mcp/curator/tools/inspect.ts': [
       'export interface InspectInput { readonly source: string; }',
       'export interface InspectResult { readonly accepted: boolean; }',
@@ -1552,49 +1659,101 @@ it('resolves generated helper types for schema and event route contracts', async
 
   const graph = await compileRouteGraph(root, fixtureConfig());
   expect(graph.diagnostics).toEqual([]);
+  // The same project without its tool: the App registration must vanish with it while everything else stays.
+  const toolFree: CompiledRouteGraph = {
+    ...graph,
+    servers: graph.servers.map((server) => ({ ...server, routes: server.routes.filter((route) => route.kind !== 'tool') })),
+  };
+  const equalityHelpers = [
+    'type Equal<Left, Right> =',
+    '  (<Value>() => Value extends Left ? 1 : 2) extends',
+    '  (<Value>() => Value extends Right ? 1 : 2) ? true : false;',
+    'type Assert<Value extends true> = Value;',
+  ];
   await writeTree(root, {
     '.agent-bundle/routes.d.ts': routesModule.generateRouteTypes(graph),
-    // A stand-in for the runtime's empty `Register`, so the augmentation has a declaration to merge into.
+    // Published from a sibling directory so its `../src/...` imports resolve the same way.
+    'tool-free/routes.d.ts': routesModule.generateRouteTypes(toolFree),
+    // Stand-ins for the runtime's empty `Register` and `agent-bundle/app`'s empty `AppRegister`, so each
+    // augmentation has a declaration to merge into.
     'runtime-stub.d.ts': 'export interface Register {}\n',
+    'app-stub.d.ts': 'export interface AppRegister {}\n',
     'assertions.ts': [
       "import type { Register } from '@agent-bundle/runtime';",
-      "import type { RouteId, RouteInput, RouteResult } from './.agent-bundle/routes.js';",
+      "import type { AppRegister } from 'agent-bundle/app';",
+      "import type { AgentBundleAppRouteContracts, AppToolRouteId, RouteId, RouteInput, RouteResult } from './.agent-bundle/routes.js';",
       "import type { WorkspaceOpenInput, WorkspaceOpenResult } from './src/events/workspace/open.js';",
+      "import type { BriefInput, BriefResult } from './src/mcp/curator/prompts/brief.js';",
       "import type { InspectInput, InspectResult } from './src/mcp/curator/tools/inspect.js';",
       '',
-      'type Equal<Left, Right> =',
-      '  (<Value>() => Value extends Left ? 1 : 2) extends',
-      '  (<Value>() => Value extends Right ? 1 : 2) ? true : false;',
-      'type Assert<Value extends true> = Value;',
+      ...equalityHelpers,
       '',
+      "export type Ids = Assert<Equal<RouteId, 'event:workspace/open' | 'prompt:curator/brief' | 'tool:curator/inspect'>>;",
       "export type SchemaInput = Assert<Equal<RouteInput<'tool:curator/inspect'>, InspectInput>>;",
       "export type SchemaResult = Assert<Equal<RouteResult<'tool:curator/inspect'>, InspectResult>>;",
       "export type EventInput = Assert<Equal<RouteInput<'event:workspace/open'>, WorkspaceOpenInput>>;",
       "export type EventResult = Assert<Equal<RouteResult<'event:workspace/open'>, WorkspaceOpenResult>>;",
-      'export type AllInputs = Assert<Equal<RouteInput<RouteId>, InspectInput | WorkspaceOpenInput>>;',
-      'export type AllResults = Assert<Equal<RouteResult<RouteId>, InspectResult | WorkspaceOpenResult>>;',
+      'export type AllInputs = Assert<Equal<RouteInput<RouteId>, BriefInput | InspectInput | WorkspaceOpenInput>>;',
+      'export type AllResults = Assert<Equal<RouteResult<RouteId>, BriefResult | InspectResult | WorkspaceOpenResult>>;',
       '// The augmentation registers the same contracts on the runtime, keyed by route id.',
       "export type RegisteredIds = Assert<Equal<keyof Register['routes'], RouteId>>;",
       "export type RegisteredInspect = Assert<Equal<Register['routes']['tool:curator/inspect'], Readonly<{ input: InspectInput; result: InspectResult }>>>;",
       '// An event route registers the harness payload (props without the signal the harness injects) and no result.',
       "export type RegisteredEvent = Assert<Equal<Register['routes']['event:workspace/open'], Readonly<{ input: Omit<WorkspaceOpenInput, 'signal'>; result: undefined }>>>;",
       "export type RegisteredEventInput = Assert<Equal<keyof Register['routes']['event:workspace/open']['input'], 'canonical' | 'native'>>;",
+      '// The App registration is the MCP tool subset of the same contracts: the prompt and event routes are not',
+      '// `tools/call` targets, so an App client cannot name them; the tool keeps its own schema types.',
+      "export type AppIds = Assert<Equal<AppToolRouteId, 'tool:curator/inspect'>>;",
+      "export type AppRegisteredIds = Assert<Equal<keyof AppRegister['routes'], 'tool:curator/inspect'>>;",
+      "export type AppRegisteredContracts = Assert<Equal<AppRegister['routes'], AgentBundleAppRouteContracts>>;",
+      "export type AppRegisteredInspect = Assert<Equal<AppRegister['routes']['tool:curator/inspect'], Readonly<{ input: InspectInput; result: InspectResult }>>>;",
+      "export type AppRegisteredInput = Assert<Equal<AppRegister['routes'][AppToolRouteId]['input'], InspectInput>>;",
+      "export type AppRegisteredResult = Assert<Equal<AppRegister['routes'][AppToolRouteId]['result'], InspectResult>>;",
+      '',
+    ].join('\n'),
+    'wrong-app-id.ts': [
+      "import type { AppRegister } from 'agent-bundle/app';",
+      "export const prompt: keyof AppRegister['routes'] = 'prompt:curator/brief';",
+      '',
+    ].join('\n'),
+    'tool-free.ts': [
+      "import type { Register } from '@agent-bundle/runtime';",
+      "import type { AppRegister } from 'agent-bundle/app';",
+      "import type { RouteId } from './tool-free/routes.js';",
+      '',
+      ...equalityHelpers,
+      '',
+      "export type Ids = Assert<Equal<RouteId, 'event:workspace/open' | 'prompt:curator/brief'>>;",
+      "export type RegisteredIds = Assert<Equal<keyof Register['routes'], RouteId>>;",
+      '// Without a tool route the generated file registers nothing on `agent-bundle/app`: `AppRegister` stays empty.',
+      'export type NoAppRegistration = Assert<Equal<keyof AppRegister, never>>;',
       '',
     ].join('\n'),
   });
 
-  const program = ts.createProgram([join(root, 'assertions.ts')], {
-    module: ts.ModuleKind.NodeNext,
-    moduleResolution: ts.ModuleResolutionKind.NodeNext,
-    noEmit: true,
-    paths: { '@agent-bundle/runtime': [join(root, 'runtime-stub.d.ts')] },
-    skipLibCheck: false,
-    strict: true,
-    target: ts.ScriptTarget.ES2022,
-  });
-  const diagnostics = ts.getPreEmitDiagnostics(program)
-    .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'));
-  expect(diagnostics).toEqual([]);
+  // `declarations` joins the program the way a project's `tsconfig.json` `include` would.
+  const typecheck = (entry: string, ...declarations: readonly string[]): readonly string[] => {
+    const program = ts.createProgram([entry, ...declarations].map((file) => join(root, file)), {
+      module: ts.ModuleKind.NodeNext,
+      moduleResolution: ts.ModuleResolutionKind.NodeNext,
+      noEmit: true,
+      paths: {
+        '@agent-bundle/runtime': [join(root, 'runtime-stub.d.ts')],
+        'agent-bundle/app': [join(root, 'app-stub.d.ts')],
+      },
+      skipLibCheck: false,
+      strict: true,
+      target: ts.ScriptTarget.ES2022,
+    });
+    return ts.getPreEmitDiagnostics(program)
+      .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'));
+  };
+  expect(typecheck('assertions.ts')).toEqual([]);
+  // The rejection names the registered tool, not `never`, and admits no prompt id.
+  expect(typecheck('wrong-app-id.ts', '.agent-bundle/routes.d.ts')).toEqual([
+    'Type \'"prompt:curator/brief"\' is not assignable to type \'"tool:curator/inspect"\'.',
+  ]);
+  expect(typecheck('tool-free.ts', 'tool-free/routes.d.ts')).toEqual([]);
 });
 
 it('validates the single async route-module authoring contract statically', async () => {

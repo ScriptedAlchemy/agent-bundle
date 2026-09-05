@@ -1,3 +1,4 @@
+import { mcpRouteProtocolName } from './protocol-name.ts';
 import type { AgentLayoutRouteKind } from './public.ts';
 import type { CompiledAgentRoute, CompiledLayout, CompiledRouteKind } from './types.ts';
 
@@ -60,18 +61,19 @@ export const isLayoutRouteKind = (kind: CompiledRouteKind): kind is AgentLayoutR
  * or prompt name, the space-joined CLI command path, or the script name.
  */
 export const layoutRouteName = (route: Pick<LayoutRouteTarget, 'id' | 'kind'>): string => {
-  const identity = route.id.slice(route.id.indexOf(':') + 1);
   switch (route.kind) {
     case 'tool':
     case 'resource':
     case 'prompt':
     case 'app':
-      return identity.slice(identity.lastIndexOf('/') + 1);
-    case 'cli':
+      return mcpRouteProtocolName(route.id);
+    case 'cli': {
+      const identity = route.id.slice(route.id.indexOf(':') + 1);
       return identity.split('/').join(' ');
+    }
     case 'script':
     case 'event-route':
-      return identity;
+      return route.id.slice(route.id.indexOf(':') + 1);
     default: {
       const unreachable: never = route.kind;
       throw new TypeError(`Unhandled route kind ${String(unreachable)}.`);
