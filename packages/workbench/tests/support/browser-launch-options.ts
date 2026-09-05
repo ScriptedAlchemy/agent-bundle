@@ -20,10 +20,10 @@ import type { LaunchOptions } from 'playwright';
  * (on Linux) from `XDG_CACHE_HOME`/`~/.cache` + `ms-playwright`, resolved once
  * when `playwright` is first imported. Rstest workers run under
  * rstest.worker-isolation.ts, which points `XDG_CACHE_HOME` at an empty
- * per-worker directory, so `chromium` launches only when the process
- * environment also carries `PLAYWRIGHT_BROWSERS_PATH` (the real install,
- * `~/.cache/ms-playwright` by default). Branded Chrome is a system install
- * and never consults that directory.
+ * per-worker directory — and, first, pins `PLAYWRIGHT_BROWSERS_PATH` to the
+ * registry Playwright would have resolved without that override, so
+ * `chromium` finds the same install inside a worker as outside. Branded
+ * Chrome is a system install and never consults that directory.
  *
  * This module is a leaf on purpose: the `.mjs` capture script cannot load
  * workbench-e2e.ts (its `test.extend` needs a running Rstest worker), so both

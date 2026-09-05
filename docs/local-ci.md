@@ -2,13 +2,15 @@
 
 `pnpm check:local-ci` proves what the hosted CI gate proves, on the
 development machine, in one command — including the full Node matrix. It
-exists because a hosted Verify leg takes ~7 minutes by current measurement.
-PR CI runs only the Node 24 Verify leg, while pushes to `main` and
-`workflow_dispatch` run the full 22.19/24/26 matrix. The local gate keeps all
-three legs because local green is used to merge and must prove what the
-post-merge `main` run will prove. A many-core development machine can run all
-three legs plus the release gates concurrently. The local-merge workflow it
-enables:
+exists because the hosted Verify work for one Node version takes ~13 minutes
+of runner time by current measurement (hosted CI splits it into a `fast` leg
+and two integration shards that run in parallel, see below). PR CI runs every
+leg on Node 24 plus the `fast` leg on Node 26, while pushes to `main` and
+`workflow_dispatch` run every leg on the full 22.19/24/26 matrix. The local
+gate keeps all three Node versions because local green is used to merge and
+must prove what the post-merge `main` run will prove. A many-core development
+machine can run all three legs plus the release gates concurrently. The
+local-merge workflow it enables:
 
 1. Run `pnpm check:local-ci` on the branch's HEAD commit.
 2. If the gate is green, the branch is mergeable — merge it.
@@ -56,14 +58,19 @@ accumulate worker caches or interrupted-test fixtures under `/tmp`. Legs live un
 `.worktrees/local-ci/` (gitignored), are reused across runs for warm caches,
 and can be recreated with `--fresh`.
 
-The three Verify legs below mirror the hosted `main`-push matrix. On PRs,
-only `verify (24)` runs hosted.
+The three Verify legs below mirror the hosted `main`-push matrix. Hosted CI
+runs each Node version as three parallel jobs — `Verify (fast, Node N)`
+(build, typecheck, lint, unit, route-unit, projection) and
+`Verify (integration-1|2, Node N)` (build, then one `--shard N/2` of the
+integration pool) — fanned into the required `Verify gate` check; a local leg
+runs the same pools serially in one worktree, which proves the same union.
+On PRs, hosted CI runs every leg on Node 24 and the `fast` leg on Node 26.
 
 | Local leg | Node | Steps | Mirrors hosted job |
 | --- | --- | --- | --- |
-| `verify-node22` | 22.19.x | `install`, `playwright install chrome`, `build` (publint runs inside each package's `rslib build`), `typecheck`, `lint`, `test:unit`, `test:integration` | `verify (22.19.0)` |
-| `verify-node24` | 24.x | same | `verify (24)` |
-| `verify-node26` | 26.x | same | `verify (26)` |
+| `verify-node22` | 22.19.x | `install`, `playwright install chrome`, `build` (publint runs inside each package's `rslib build`), `typecheck`, `lint`, `test:unit`, `test:integration` | `Verify (fast \| integration-1 \| integration-2, Node 22.19.0)` |
+| `verify-node24` | 24.x | same | `Verify (…, Node 24)` |
+| `verify-node26` | 26.x | same | `Verify (…, Node 26)` |
 | `gates-node22` | 22.19.x | `install`, `examples:check`, `check:release`, `eval:spot` | `examples-check`, `release-gates`, `rsc-runtime-micro-eval` |
 
 The three hosted Node-22.19 jobs fold into one `gates-node22` worktree
@@ -189,11 +196,21 @@ attempt, so one edit is exactly one build.
 
 ## Infrastructure failures and their retry policy
 
-One failure shape in the hosted Release gates is registry or runner
-infrastructure, not the tree under test. It gets no code-level retry, and it
-is not a reason to weaken the gate; the policy is to re-run the job once the
-cause has cleared, then treat a repeat as a real signal.
+One failure shape in hosted CI is registry or runner infrastructure, not the
+tree under test. It is never a reason to weaken a gate; where the failure
+happens before any repository code runs it gets a bounded retry, and
+everywhere else the policy is to re-run the job once the cause has cleared,
+then treat a repeat as a real signal.
 
+- **Registry 5xx while setting up the job.** Every hosted job installs pnpm,
+  Node, and dependencies through the shared `.github/actions/setup-workspace`
+  action. `pnpm/setup@v2` downloads the pnpm executable from the npm registry
+  as its first network call and exposes no retry input, so the action retries
+  it once after 15 s, then runs `pnpm install --frozen-lockfile` up to three
+  times (10 s, then 20 s back-off). A persistent outage still fails the job
+  within about a minute of extra wall time. The trigger was 2026-09-04, when
+  `@pnpm/exe` returned `504 Gateway Timeout` on eight CI runs that were all
+  green on rerun (#576).
 - **Runner network stalls during `npm install`** in the packed pool. The
   pool's consumer installs are cache-backed per worker
   (`rstest.worker-isolation.ts`): each worker pays for one cold download of
@@ -218,15 +235,22 @@ cause has cleared, then treat a repeat as a real signal.
   or the proof suites.
 - **native-host-smoke** needs signed-in Claude/Codex CLIs and is opt-in even
   on hosted CI.
-- **Environment skew**: hosted runners are `ubuntu-latest`, and hosted jobs
-  use the Google Chrome stable that ships preinstalled (with its OS
-  dependencies) on the runner image, falling back to
-  `playwright install --with-deps chrome` only if the image ever drops it. A
-  green local run on a different distro, glibc, or Chrome build is strong but
-  not identical evidence — this is the main reason hosted CI remains the
-  post-merge safety net. The local `browsers` step only validates/installs
-  the browser itself (`playwright install chrome`); the OS dependencies
-  (`--with-deps`) are one-time machine setup and may need root.
+- **Environment skew**: hosted runners are `ubuntu-latest`. Hosted Workbench
+  browser suites launch Playwright's bundled Chromium — pinned by the
+  Playwright version in the lockfile and selected with
+  `AGENT_BUNDLE_PLAYWRIGHT_CHANNEL=chromium` (read by
+  `packages/workbench/tests/support/workbench-e2e.ts`) — so the browser under
+  test only changes with a commit. The local gate keeps the developer default,
+  branded Google Chrome (`playwright install chrome` in its `browsers` step;
+  the OS dependencies, `--with-deps`, are one-time machine setup and may need
+  root). Export `AGENT_BUNDLE_PLAYWRIGHT_CHANNEL=chromium` after
+  `pnpm exec playwright install chromium` to run the hosted browser locally.
+  The one hosted suite still on the image's Chrome is `examples/mcp-app`'s
+  browser-app pool, because the shipped `agentBundleBrowserRstest` helper
+  targets branded Chrome; the `examples-check` job records that Chrome
+  version in its step summary. A green local run on a different distro,
+  glibc, or browser build is strong but not identical evidence — this is the
+  main reason hosted CI remains the post-merge safety net.
 - **Job isolation**: hosted gives every job a fresh VM; local legs reuse
   worktrees for speed. `--fresh` restores cold-start fidelity when staleness
   is suspected.

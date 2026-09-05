@@ -1,15 +1,17 @@
 # MCP conformance evidence
 
-The MCP conformance lane is intentionally opt-in. Run it locally with:
+The MCP conformance lane is opt-in for local runs. Run it with:
 
 ```sh
 pnpm test:mcp-conformance
 ```
 
-CI exposes the same command through the manually dispatched `MCP conformance`
-workflow. The lane uses one Node version and one existing fixture, and uploads
-the official runner's `checks.json` artifacts from `artifacts/mcp-conformance`.
-It is not part of pull request, push, scheduled, or default Rstest execution.
+CI runs the same command as the `MCP conformance` job of the `Nightly`
+workflow (`.github/workflows/nightly.yml`) — on the daily schedule and on
+manual dispatch from any ref. The lane uses one Node version and one existing
+fixture, and uploads the official runner's `checks.json` artifacts from
+`artifacts/mcp-conformance`. It is not part of pull request, push, or default
+Rstest execution.
 
 ## Transport and fixture
 

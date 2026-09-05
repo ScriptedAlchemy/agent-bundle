@@ -12,23 +12,34 @@ on:
   # is dormant until the repository moves to an organization.
   merge_group:
     branches: [main]
-  # Nightly release-boundary matrix (packed-matrix job): the scaffolder
-  # template tests beyond the per-PR minimal-template smoke.
-  schedule:
-    - cron: '17 6 * * *'
+  # A manual dispatch runs the full main-push matrix on any ref. The nightly
+  # lanes (release-boundary packed matrix, evidence capture, MCP conformance)
+  # live in nightly.yml so a red nightly never hides behind a PR job and a
+  # PR job never waits on a nightly.
   workflow_dispatch:
 
 permissions:
   contents: read
 
 # PR pushes cancel the superseded run of the same PR (only the latest commit
-# matters). Pushes to main, merge-queue entries, the nightly schedule, and
-# manual dispatches get SHA-keyed groups with no cancellation, so a new main
-# push can never kill an in-flight main, queue, or nightly run. Same pattern
-# as package-preview.yml.
+# matters). Pushes to main, merge-queue entries, and manual dispatches get
+# SHA-keyed groups with no cancellation, so a new main push can never kill an
+# in-flight main or queue run. Same pattern as package-preview.yml.
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Workbench browser suites launch Playwright's bundled Chromium — pinned by
+  # the Playwright version in pnpm-lock.yaml and installed by the
+  # setup-workspace action — instead of the Google Chrome the ubuntu-latest
+  # image happens to ship that week, so a browser change is always a commit
+  # (#576). The switch is read by packages/workbench/tests/support/
+  # workbench-e2e.ts (`browserLaunchOptions`); unset, tests keep launching
+  # branded Chrome, which is what developers have locally. The shipped
+  # `agentBundleBrowserRstest` helper still targets branded Chrome, so the
+  # examples-check job is the one place that keeps the image's Chrome.
+  AGENT_BUNDLE_PLAYWRIGHT_CHANNEL: chromium
 
 jobs:
   # PR-only docs allowlist: docs/**, agent-patterns/**, website/** (the
@@ -93,100 +104,182 @@ jobs:
             --changed-files-count "$changed_files" \
             --listing "$files_file"
 
-  # Builds and checks every public example through its own toolchain.
+  # Builds and checks every public example through its own toolchain, then
+  # runs examples/mcp-app's browser-app suite — the repository's only
+  # `@rstest/browser` consumer, which `pnpm examples:check` (each example's
+  # `check` script) does not include (#576).
   examples-check:
     needs: changes
     if: >-
-      ${{ !cancelled() && github.event_name != 'schedule' &&
+      ${{ !cancelled() &&
       (github.event_name != 'pull_request' || needs.changes.outputs.docs_only != 'true') }}
     name: Examples check (Node 22.19)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - uses: pnpm/setup@v2
+      - uses: ./.github/actions/setup-workspace
         with:
-          cache: true
-          install: false
-          runtime: node@22.19.0
-      - run: pnpm install --frozen-lockfile
+          node-version: 22.19.0
+      # The shipped `agentBundleBrowserRstest` helper launches branded Chrome
+      # (`channel: 'chrome'`), which Playwright cannot pin to a version, so
+      # this suite runs on the Chrome preinstalled on the runner image and the
+      # exact build is recorded in the step summary for bisecting a red run
+      # after an image refresh. Falls back to the full install (browser + OS
+      # deps) if the image ever drops Chrome.
+      - name: Ensure branded Chrome for the browser-app suite
+        run: |
+          if ! command -v google-chrome >/dev/null 2>&1; then
+            pnpm exec playwright install --with-deps chrome
+          fi
+          version="$(google-chrome --version)"
+          echo "Using $version"
+          echo "Browser-app suite ran on $version" >> "$GITHUB_STEP_SUMMARY"
       - run: pnpm examples:check
+      - name: examples/mcp-app browser-app suite
+        run: pnpm --filter @agent-bundle-example/mcp-app test:browser-app
 
+  # The Verify matrix has two dimensions. `leg` splits the former serial
+  # `pnpm test` (unit → route-unit → projection → integration, 13.8 min on a
+  # PR, 66% of it the integration pool on 2 workers) into a `fast` leg
+  # (build, typecheck, lint, unit, route-unit, projection, ≈4 min) and two
+  # integration shards (`rstest --shard N/2` over rstest.integration.config.ts,
+  # sorted paths in contiguous slices, ≈6 and ≈4.5 min), so the PR critical
+  # path is the slower shard, not the sum (#576). `node-version` follows the
+  # event: PRs and merge-queue entries run Node 24 for every leg plus the
+  # `fast` leg on Node 26 — 20 of the 24 main-push failures in #576's
+  # 200-run window were Node-26-only breaks in the unit/projection pools that
+  # no PR leg had exercised — while main pushes and manual dispatches run
+  # every leg on the full supported matrix (22.19.0 = engines floor, 24, 26).
+  # Branch protection requires the static "Verify gate" context below, never
+  # a leg name (#549, #557), so this shape can change without touching it.
   verify:
     needs: changes
     if: >-
-      ${{ !cancelled() && github.event_name != 'schedule' &&
+      ${{ !cancelled() &&
       (github.event_name != 'pull_request' || needs.changes.outputs.docs_only != 'true') }}
-    name: Verify (Node ${{ matrix.node-version }})
+    name: Verify (${{ matrix.leg }}, Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    # Measured PR Verify cost was 3 legs × ~7 minutes, about 75% of PR
-    # runner-minutes. PRs and merge-queue entries run newest-LTS Node 24
-    # (main requires the static "Verify gate" job below, never a leg name);
-    # every main push and manual dispatch still gates on the full matrix.
+    # Slowest leg measured ≈6.5 min; ≥2.5× headroom for cold caches, but a
+    # hung Chrome or dev server no longer burns 45 minutes per leg.
+    timeout-minutes: 20
+    env:
+      # Read by the shard steps and by the partition guard in the fast leg;
+      # changing the count changes both (and the matrix `leg` list).
+      INTEGRATION_SHARD_COUNT: '2'
     strategy:
       fail-fast: false
       matrix:
+        leg: [fast, integration-1, integration-2]
         node-version: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && fromJSON('["24"]') || fromJSON('["22.19.0","24","26"]') }}
+        include: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && fromJSON('[{"leg":"fast","node-version":"26"}]') || fromJSON('[]') }}
     steps:
       - uses: actions/checkout@v7
-      - uses: pnpm/setup@v2
+      - uses: ./.github/actions/setup-workspace
         with:
-          cache: true
-          install: false
-          runtime: node@${{ matrix.node-version }}
-      - run: pnpm install --frozen-lockfile
-      # Tests launch branded Chrome (`channel: 'chrome'`), which Playwright
-      # installs system-wide via apt — never into ~/.cache/ms-playwright, so
-      # a browser cache cannot help. In CI, `playwright install chrome`
-      # unconditionally removes and re-downloads ~120 MB of Chrome per job,
-      # while ubuntu-latest images already ship Google Chrome stable with its
-      # OS deps. Reuse it; fall back to the full install (browser + deps) if
-      # the runner image ever drops it.
-      - name: Ensure branded Chrome for Playwright
-        run: |
-          if command -v google-chrome >/dev/null 2>&1; then
-            echo "Using preinstalled $(google-chrome --version)"
-          else
-            pnpm exec playwright install --with-deps chrome
-          fi
-      # Build first: checked-in suites and API tests import the package's built type
-      # declarations, so typecheck requires dist (same order as `pnpm check`).
+          node-version: ${{ matrix.node-version }}
+          # Only the integration pool drives a browser; the unit, route-unit,
+          # and projection pools never launch one.
+          playwright-browser: ${{ startsWith(matrix.leg, 'integration-') && 'chromium' || '' }}
+      # Build first: checked-in suites and API tests import the package's built
+      # type declarations, so typecheck requires dist (same order as
+      # `pnpm check`), and the integration pool reads the prebuilt
+      # packages/{agent-bundle,workbench}/dist (`test:integration:run`).
       # publint runs inside each publishable package's `rslib build`
       # (rsbuild-plugin-publint, throwOn: 'warning'), so a manifest warning
       # already fails this step; there is no separate publint step.
       - run: pnpm build
-      - run: pnpm typecheck
-      - run: pnpm lint
+      - if: matrix.leg == 'fast'
+        run: pnpm typecheck
+      - if: matrix.leg == 'fast'
+        run: pnpm lint
       # Rstest's default reporters under GITHUB_ACTIONS=true are `default` plus
       # `github-actions`, so failures already annotate the PR; no --reporter
-      # flag is needed on these legs (verified on @rstest/core 0.11.10).
-      - run: pnpm test
+      # flag is needed on these steps (verified on @rstest/core 0.11.10).
+      - if: matrix.leg == 'fast'
+        run: pnpm test:unit
+      - if: matrix.leg == 'fast'
+        run: pnpm test:route-unit
+      - if: matrix.leg == 'fast'
+        run: pnpm test:projection
+      # Proves the shards partition the integration pool: `rstest list` for
+      # the whole pool and for each `--shard i/N` must be disjoint and add up
+      # to the full file list, so a shard-count or manifest change can never
+      # silently drop a test file from CI. Runs in the fast leg (it finishes
+      # long before the shards) and the gate requires the fast leg.
+      - if: matrix.leg == 'fast'
+        name: Integration shards cover every integration test file
+        run: node scripts/verify-rstest-shards.mjs --config rstest.integration.config.ts --count "$INTEGRATION_SHARD_COUNT"
+      # No `--` before --shard: pnpm forwards the flag to the script either
+      # way, but rstest's CLI parser discards everything after a `--`
+      # separator, so `pnpm test:integration:run -- --shard 1/2` ran the whole
+      # pool on both shards and reported green (the same shape as the
+      # native-host-smoke filter bug, #576). The banner check turns that
+      # regression into a failure: rstest prints "Running shard i of N (...)"
+      # only when the flag took effect.
+      - if: startsWith(matrix.leg, 'integration-')
+        name: Integration pool shard (${{ matrix.leg }})
+        env:
+          LEG: ${{ matrix.leg }}
+        run: |
+          index="${LEG#integration-}"
+          log="$RUNNER_TEMP/integration-shard.log"
+          pnpm test:integration:run --shard "${index}/${INTEGRATION_SHARD_COUNT}" 2>&1 | tee "$log"
+          if ! grep -q "^Running shard ${index} of ${INTEGRATION_SHARD_COUNT} " "$log"; then
+            echo "::error::rstest did not run as shard ${index}/${INTEGRATION_SHARD_COUNT} (no 'Running shard' banner) — the --shard flag was dropped and the whole pool ran."
+            exit 1
+          fi
+      # The shared e2e fixture records a Playwright trace per test and keeps
+      # it only when the test fails (`trace: 'retain-on-failure'` under CI in
+      # packages/workbench/tests/support/workbench-e2e.ts); this preserves
+      # those traces so a red browser test can be replayed with
+      # `playwright show-trace` instead of diagnosed from reporter text.
+      - if: failure() && startsWith(matrix.leg, 'integration-')
+        name: Preserve Playwright traces of failed browser tests
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-traces-${{ matrix.leg }}-node-${{ matrix.node-version }}
+          path: .rstest/playwright-traces
+          if-no-files-found: ignore
+          retention-days: 7
 
   # Required-check anchor for the Verify matrix. When a matrix job is skipped
   # (docs-only PRs), GitHub reports it under its unexpanded name
-  # "Verify (Node ${{ matrix.node-version }})", so a branch protection that
-  # requires "Verify (Node 24)" never sees that context and blocks the PR for
-  # good. This job has a static name and always runs after Verify: it passes
-  # when every leg passed or the matrix was skipped (a skipped job satisfies
-  # a required check, like the other docs-only skips) and fails when a leg
-  # failed or was cancelled. Require "Verify gate" on main, not a leg name.
+  # "Verify (${{ matrix.leg }}, Node ${{ matrix.node-version }})", so a branch
+  # protection that requires a leg name never sees that context and blocks the
+  # PR for good. This job has a static name and always runs after Verify. It
+  # passes only when every leg and shard passed (`needs.verify.result` is
+  # `success` only if the whole matrix succeeded) or when the matrix was
+  # skipped for the one legitimate reason — a docs-only pull request; a
+  # failed, cancelled, or otherwise skipped matrix fails the gate, so a shard
+  # that never ran can never be mistaken for a green one. Require
+  # "Verify gate" on main, not a leg name.
   verify-gate:
-    needs: verify
-    if: always() && github.event_name != 'schedule'
+    needs: [changes, verify]
+    if: always()
     name: Verify gate
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Require every Verify leg to have passed or been skipped
+      - name: Require every Verify leg and shard to have passed
         env:
           VERIFY_RESULT: ${{ needs.verify.result }}
+          DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
-          echo "Verify matrix result: $VERIFY_RESULT"
+          echo "Verify matrix result: $VERIFY_RESULT (event: $EVENT_NAME, docs_only: ${DOCS_ONLY:-unset})"
           case "$VERIFY_RESULT" in
-            success|skipped) exit 0 ;;
+            success) exit 0 ;;
+            skipped)
+              if [ "$EVENT_NAME" = pull_request ] && [ "$DOCS_ONLY" = true ]; then
+                echo "Docs-only pull request: the Verify matrix is skipped by design."
+                exit 0
+              fi
+              echo "::error::The Verify matrix was skipped, but this is not a docs-only pull request; no leg or shard ran."
+              exit 1
+              ;;
             *)
-              echo "::error::Verify matrix result is '$VERIFY_RESULT'; see the Verify (Node …) jobs."
+              echo "::error::Verify matrix result is '$VERIFY_RESULT'; see the Verify (…) jobs."
               exit 1
               ;;
           esac
@@ -194,31 +287,30 @@ jobs:
   release-gates:
     needs: changes
     if: >-
-      ${{ !cancelled() && github.event_name != 'schedule' &&
+      ${{ !cancelled() &&
       (github.event_name != 'pull_request' || needs.changes.outputs.docs_only != 'true') }}
     name: Release gates (Node 22.19)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - uses: pnpm/setup@v2
+      # The packed pool includes packed-release.e2e, a Workbench browser suite.
+      - uses: ./.github/actions/setup-workspace
         with:
-          cache: true
-          install: false
-          runtime: node@22.19.0
-      - run: pnpm install --frozen-lockfile
-      # Reuse the runner image's Chrome; see the Verify job for the rationale.
-      - name: Ensure branded Chrome for Playwright
-        run: |
-          if command -v google-chrome >/dev/null 2>&1; then
-            echo "Using preinstalled $(google-chrome --version)"
-          else
-            pnpm exec playwright install --with-deps chrome
-          fi
+          node-version: 22.19.0
+          playwright-browser: chromium
       # Per-PR packed pool: single pack+install proofs plus the
       # minimal-template scaffolder smoke. The full template matrix runs in
-      # the nightly packed-matrix job and in pre-publish `pnpm check:release`.
+      # nightly.yml's packed-matrix job and in pre-publish `pnpm check:release`.
       - run: pnpm check:release:ci
+      - if: failure()
+        name: Preserve Playwright traces of failed browser tests
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-traces-release-gates
+          path: .rstest/playwright-traces
+          if-no-files-found: ignore
+          retention-days: 7
 
   # Binary-gated real-host install proofs. The proof suites skip their Claude
   # and Codex legs when the CLIs are absent, which is how #364 changed the
@@ -235,19 +327,16 @@ jobs:
   host-install-proofs:
     needs: changes
     if: >-
-      ${{ !cancelled() && github.event_name != 'schedule' &&
+      ${{ !cancelled() &&
       (github.event_name != 'pull_request' || needs.changes.outputs.docs_only != 'true') }}
     name: Host install proofs (Node 22.19)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - uses: pnpm/setup@v2
+      - uses: ./.github/actions/setup-workspace
         with:
-          cache: true
-          install: false
-          runtime: node@22.19.0
-      - run: pnpm install --frozen-lockfile
+          node-version: 22.19.0
       - name: Read pinned host CLI versions
         id: pins
         run: node scripts/host-cli-pins.mjs print
@@ -280,35 +369,6 @@ jobs:
           AGENT_BUNDLE_PACKAGE_PREBUILT: '1'
         run: pnpm test:packed:native
 
-  # Release-boundary scaffolder template matrix (mcp-server, cli-tool) plus
-  # the full packed pool — the nightly form of pre-publish `check:release`.
-  packed-matrix:
-    if: github.event_name == 'schedule'
-    name: Packed release matrix (Node 22.19)
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/setup@v2
-        with:
-          cache: true
-          install: false
-          runtime: node@22.19.0
-      - run: pnpm install --frozen-lockfile
-      # Reuse the runner image's Chrome; see the Verify job for the rationale.
-      - name: Ensure branded Chrome for Playwright
-        run: |
-          if command -v google-chrome >/dev/null 2>&1; then
-            echo "Using preinstalled $(google-chrome --version)"
-          else
-            pnpm exec playwright install --with-deps chrome
-          fi
-      - run: pnpm check:release
-      # Nightly evidence-capture pool: documentation-artifact browser
-      # journeys whose behavioral contracts are already proven per PR by the
-      # integration pool (see nightlyEvidenceTestFiles).
-      - run: pnpm test:evidence
-
   rsc-runtime-micro-eval:
     # Deterministic end-to-end spot-check of the built RSC runtime artifacts
     # (hook -> RSC worker -> shared kernel state -> MCP tool lowering) without
@@ -317,19 +377,16 @@ jobs:
     # the manually dispatched native-host-smoke workflow on purpose.
     needs: changes
     if: >-
-      ${{ !cancelled() && github.event_name != 'schedule' &&
+      ${{ !cancelled() &&
       (github.event_name != 'pull_request' || needs.changes.outputs.docs_only != 'true') }}
     name: RSC runtime micro-eval (Node 22.19)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v7
-      - uses: pnpm/setup@v2
+      - uses: ./.github/actions/setup-workspace
         with:
-          cache: true
-          install: false
-          runtime: node@22.19.0
-      - run: pnpm install --frozen-lockfile
+          node-version: 22.19.0
       - run: pnpm eval:spot
 
   dependency-review:
