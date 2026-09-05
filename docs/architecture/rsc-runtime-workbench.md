@@ -49,6 +49,13 @@ packages/
     src/dev/runtime-routes.ts
     src/dev/workbench-server.ts
     src/index.ts
+    tests/claude-hook-event-name.test.ts
+    tests/claude-hooks-schema.test.ts
+    tests/claude-plugin-validate-acceptance.test.ts
+    tests/claude-plugin-validation.test.ts
+    tests/codex-distribution.test.ts
+    tests/codex-hook-contract.test.ts
+    tests/codex-plugin-validation.test.ts
     tests/dev-artifact-service.test.ts
     tests/dev-workbench-packaging.test.ts
     tests/dev-workbench.test.ts
@@ -68,6 +75,7 @@ packages/
     tests/normalization.test.ts
     tests/playground-service.test.ts
     tests/portable-adapter.test.ts
+    tests/portable-plugin-validation.test.ts
     tests/public-api-packed.test.ts
     tests/public-api.test.ts
     tests/rsc-runtime-optional-packaging.test.ts
@@ -114,12 +122,13 @@ packages/
     tests/runtime-consent-dialog.test.ts
     tests/runtime-consent-queue.test.ts
     tests/runtime-contract-compile.test.ts
+    tests/runtime-document-atoms-disposal.test.ts
     tests/runtime-inspector.test.ts
     tests/runtime-mcp-handoff.test.ts
     tests/runtime-model.test.ts
+    tests/runtime-playground-capture-cleanup.test.ts
     tests/runtime-playground-capture.test.ts
     tests/runtime-playground-hmr.e2e.test.ts
-    tests/runtime-playground.browser.test.tsx
     tests/runtime-playground.e2e.test.ts
     tests/runtime-playground.test.ts
     tests/runtime-stage.test.ts
@@ -134,6 +143,7 @@ examples/
     src/build/emit-artifacts.ts
     src/build/serialize-definition.ts
     src/definition.ts
+    src/dev/canonical-json.ts
     src/dev/definition-entry.ts
     src/dev/environment-checkpoint-store.ts
     src/dev/generation-materializer.ts
@@ -144,6 +154,7 @@ examples/
     src/dev/serialize-inspection.ts
     src/flight/request-render.ts
     src/hook/cli.ts
+    src/hook/eval-probe.ts
     src/hook/normalize.ts
     src/hook/project-document.ts
     src/mcp/create-server.ts
