@@ -158,6 +158,14 @@ it('prefers a token query URL and falls back to the first localhost URL', () => 
   expect(parseInspectorStdoutUrl('http://localhost:6274/?MCP_PROXY_AUTH_')).toBeUndefined();
 });
 
+it('accepts every loopback spelling, including a bracketed IPv6 literal', () => {
+  for (const origin of ['http://localhost:6274', 'http://127.0.0.1:6274', 'http://[::1]:6274', 'http://LOCALHOST:6274']) {
+    expect(parseInspectorStdoutUrl(`${origin}?MCP_INSPECTOR_API_TOKEN=abc\n`)).toBe(
+      `${origin.toLowerCase()}/?MCP_INSPECTOR_API_TOKEN=abc`,
+    );
+  }
+});
+
 it('never publishes a token URL on a non-loopback host, even when no loopback URL follows', () => {
   expect(parseInspectorStdoutUrl('http://0.0.0.0:6274/?MCP_INSPECTOR_API_TOKEN=abc\n')).toBeUndefined();
   expect(parseInspectorStdoutUrl('https://inspector.example.com/?MCP_INSPECTOR_API_TOKEN=abc\n')).toBeUndefined();

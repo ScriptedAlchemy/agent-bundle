@@ -75,13 +75,15 @@ class McpInspectorLaunchControllerImpl implements McpInspectorLaunchController {
   }
 
   /**
-   * A status read is evidence about the moment it was requested. One that completes while a
-   * launch is in flight, or after a launch that began later, is superseded and discarded: it
-   * would otherwise turn a fresh `ready` back into `idle` or erase a launch diagnostic.
+   * A status read is evidence about the moment it was requested. One that began while a launch
+   * was in flight, completes while one is in flight, or completes after a later launch began is
+   * superseded and discarded: it would otherwise turn a fresh `ready` back into `idle` or erase
+   * a launch diagnostic.
    */
   async refresh(): Promise<void> {
     const launches = this.#launches;
-    const superseded = (): boolean => this.#launching !== undefined || launches !== this.#launches;
+    const beganDuringLaunch = this.#launching !== undefined;
+    const superseded = (): boolean => beganDuringLaunch || this.#launching !== undefined || launches !== this.#launches;
     try {
       const status = await this.#routes.inspectorStatus();
       if (superseded()) return;

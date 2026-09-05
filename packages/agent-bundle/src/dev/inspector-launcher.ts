@@ -111,9 +111,10 @@ const inspectableUrl = (raw: string): URL | undefined => {
 const hasTokenQuery = (url: URL): boolean =>
   [...url.searchParams.keys()].some((key) => key.toLowerCase().includes('token'));
 
+/** `URL.hostname` keeps the brackets of an IPv6 literal, so `[::1]` is the spelling that arrives. */
 const isLocalhost = (url: URL): boolean => {
   const host = url.hostname.toLowerCase();
-  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+  return host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1';
 };
 
 /**

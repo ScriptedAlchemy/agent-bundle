@@ -343,6 +343,44 @@ describe('MCP Inspector launch controller', () => {
     expect(models.map((model) => model.phase)).toEqual(['idle', 'starting', 'ready']);
   });
 
+  it('discards a status refresh that began during a launch and lands after the launch settled', async () => {
+    const launch = deferred<Readonly<{ readonly url: string }>>();
+    const status = deferred<McpInspectorRouteStatus>();
+    const { routes } = fakeRoutes({ launch: () => launch.promise, status: () => status.promise });
+    const controller = createMcpInspectorLaunchController({ routes });
+    const models = observed(controller);
+
+    const pending = controller.launch();
+    const refreshing = controller.refresh();
+    launch.resolve({ url: inspectorUrl });
+    await pending;
+    expect(controller.model).toEqual({ phase: 'ready', url: inspectorUrl });
+
+    status.resolve({ state: 'idle' });
+    await expect(refreshing).resolves.toBeUndefined();
+
+    expect(controller.model).toEqual({ phase: 'ready', url: inspectorUrl });
+    expect(models.map((model) => model.phase)).toEqual(['idle', 'starting', 'ready']);
+  });
+
+  it('keeps a launch diagnostic when a refresh that began during the launch fails afterwards', async () => {
+    const launch = deferred<Readonly<{ readonly url: string }>>();
+    const status = deferred<McpInspectorRouteStatus>();
+    const { routes } = fakeRoutes({ launch: () => launch.promise, status: () => status.promise });
+    const controller = createMcpInspectorLaunchController({ routes });
+
+    const pending = controller.launch();
+    const refreshing = controller.refresh();
+    launch.reject(codedError(launchFailure.code, launchFailure.message));
+    await pending;
+    expect(controller.model).toEqual({ diagnostic: launchFailure, phase: 'error' });
+
+    status.reject(codedError(routesUnavailable.code, routesUnavailable.message));
+    await expect(refreshing).resolves.toBeUndefined();
+
+    expect(controller.model).toEqual({ diagnostic: launchFailure, phase: 'error' });
+  });
+
   it('applies a status refresh that begins after a launch has settled', async () => {
     let status: McpInspectorRouteStatus = { state: 'running', url: inspectorUrl };
     const { routes } = fakeRoutes({ status: async () => status });
