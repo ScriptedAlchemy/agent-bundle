@@ -26,6 +26,7 @@ import type { NormalizedNotices, NormalizedStateDefinition } from '../core/types
 import {
   applicationTreeForManifest,
   type ApplicationLeaf,
+  type ApplicationTreeManifestSources,
   type ApplicationTree,
 } from '../dev/routes/application-tree.ts';
 import { applicationNodePath } from '../dev/routes/application-node.ts';
@@ -244,11 +245,7 @@ export interface WorkbenchSurfaceFromGraphInput {
   readonly configPath?: string;
   readonly counts: WorkbenchCapabilityCounts;
   readonly graph: CompiledRouteGraph;
-  readonly inspection?: Readonly<{
-    readonly hooks: readonly { readonly event: string; readonly name: string; readonly source?: string }[];
-    readonly mcpServers: readonly { readonly name: string }[];
-    readonly scripts: readonly { readonly name: string; readonly source?: string }[];
-  }>;
+  readonly inspection?: NonNullable<ApplicationTreeManifestSources['inspection']>;
   readonly lifecycles: LifecycleListResponse;
   readonly projectRoot: string;
   readonly sourceRevision: string;
@@ -401,16 +398,30 @@ export const inspectWorkbenchSurface = async (
     }),
     graph,
     inspection: {
-      hooks: model.hooks.filter((hook) => hook.targets.some((target) => targets.includes(target))).map((hook) => ({
-        event: hook.eventRoute?.event ?? hook.event,
-        name: hook.name,
-        source: hook.provenance.sourcePath,
-      })),
-      mcpServers: model.mcpServers.map((server) => ({ name: server.name })),
-      scripts: model.scripts.filter((script) => script.targets.some((target) => targets.includes(target))).map((script) => ({
-        name: script.name,
-        source: script.provenance.sourcePath,
-      })),
+      hooks: model.hooks.flatMap((hook) => hook.targets
+        .filter((target) => targets.includes(target))
+        .map((target) => ({
+          event: hook.eventRoute?.event ?? hook.event,
+          id: hook.id,
+          name: hook.name,
+          path: hook.provenance.sourcePath,
+          target,
+        }))),
+      mcpServers: model.mcpServers.flatMap((server) => server.targets
+        .filter((target) => targets.includes(target))
+        .map((target) => ({
+          kind: server.transport,
+          name: server.name,
+          target,
+        }))),
+      scripts: model.scripts.flatMap((script) => script.targets
+        .filter((target) => targets.includes(target))
+        .map((target) => ({
+          file: { path: script.provenance.sourcePath },
+          id: script.id,
+          name: script.name,
+          target,
+        }))),
     },
     lifecycles,
     projectRoot: prepared.root,

@@ -206,7 +206,11 @@ describe('the Workbench surface of the configured-only examples', () => {
     expect(surface.catalog.routeCount).toBe(0);
     expect(surface.catalog.groups).toEqual([]);
     expect(surface.catalog.stateDefinition).toBeUndefined();
-    expect(surface.application.groups.map((group) => group.kind)).toEqual(['events', 'scripts', 'skills']);
+    expect(surface.application.groups.map((group) => group.kind)).toEqual(['mcp', 'events', 'scripts', 'skills']);
+    expect(applicationGroup(surface, 'mcp')).toMatchObject({
+      label: 'MCP',
+      servers: [expect.objectContaining({ label: 'status', mode: 'stdio', subgroups: [] })],
+    });
     expect(applicationGroup(surface, 'events')).toMatchObject({ label: 'Events / Hooks' });
     expect(applicationGroup(surface, 'scripts')).toMatchObject({ label: 'Scripts' });
     expect(surface.advanced).toEqual(['evals', 'artifact', 'protocol', 'hosts', 'logs']);
