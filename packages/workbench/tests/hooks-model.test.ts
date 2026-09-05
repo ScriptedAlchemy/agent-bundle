@@ -16,11 +16,11 @@ import {
 const hooks: readonly HookPlaygroundHook[] = [
   {
     binding: { epochId: 'epoch-1', hook: 'hook:stop', target: 'claude' },
-    hook: { event: 'stop', id: 'hook:stop', name: 'stop', path: 'hooks/stop.mjs', target: 'claude' },
+    hook: { event: 'stop', host: 'claude', id: 'hook:stop', kind: 'config', name: 'stop', path: 'hooks/stop.mjs' },
   },
   {
     binding: { epochId: 'epoch-1', hook: 'hook:session-start', target: 'claude' },
-    hook: { event: 'sessionStart', id: 'hook:session-start', name: 'session-start', path: 'hooks/session-start.mjs', target: 'claude', timeout: 30 },
+    hook: { event: 'sessionStart', host: 'claude', id: 'hook:session-start', kind: 'config', name: 'session-start', path: 'hooks/session-start.mjs', timeout: 30 },
   },
 ];
 

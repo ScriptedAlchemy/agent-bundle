@@ -16,7 +16,7 @@ import { hookPlaygroundViewFor } from '../src/hooks/hooks-model.ts';
 
 const hooks: readonly HookPlaygroundHook[] = [{
   binding: { epochId: 'epoch-1', hook: 'hook:session-start', target: 'claude' },
-  hook: { event: 'sessionStart', id: 'hook:session-start', name: 'session-start', path: 'hooks/session-start.mjs', target: 'claude' },
+  hook: { event: 'sessionStart', host: 'claude', id: 'hook:session-start', kind: 'config', name: 'session-start', path: 'hooks/session-start.mjs' },
 }];
 
 const simulation: HookPlaygroundSimulation = {
