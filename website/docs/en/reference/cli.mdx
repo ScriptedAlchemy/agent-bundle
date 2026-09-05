@@ -295,8 +295,8 @@ a name) and the same `--input` / `--input-file` pair as `mcp invoke`.
 | Code | Meaning |
 | --- | --- |
 | `0` | Success, including `--help` and `--version`. |
-| `1` | A reported failure: an error diagnostic, an invalid model from `inspect`, a failing or inconclusive eval run, or an uncaught error written to stderr as one `AB5000` diagnostic. Option values checked outside the parser land here: an invalid `install` / `uninstall` `<host>`, `--scope`, or `--mode`, an invalid `--port`, `--trials`, or `dev --install-host`, and a malformed `--input` / `--input-file` document. |
-| `2` | A parser-level failure from the command-line parser: an unknown command or option, a missing required argument or option, or an invalid `serve-app --profile`, `serve-app --allow`, or `doctor --host` value. |
+| `1` | A reported failure: an error diagnostic, an invalid model from `inspect`, a failing or inconclusive eval run, or an uncaught error written to stderr as one `AB5000` diagnostic. A malformed `--input` / `--input-file` document is a runtime input failure and lands here. |
+| `2` | A parser-level failure from the command-line parser: an unknown command or option, a missing required argument or option, or an invalid value for `--port`, `eval --trials`, `dev --install-host`, `install` / `uninstall` `<host>`, `--scope`, or `--mode`, `serve-app --profile`, `serve-app --allow`, or `doctor --host`. |
 
 An eval run exits `1` when any trial **fails or is inconclusive** — an inconclusive trial produced
 no evidence, so it cannot report success either.
