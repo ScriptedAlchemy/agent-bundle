@@ -32,6 +32,7 @@
   "files": [
     "bin",
     "dist",
+    "schemas",
     "LICENSE",
     "NOTICE",
     "README.md"
@@ -96,6 +97,7 @@
       "types": "./dist/test/browser.d.ts",
       "import": "./dist/test/browser.js"
     },
+    "./schemas/agent-bundle.manifest.schema.json": "./schemas/agent-bundle.manifest.schema.json",
     "./web-host": {
       "types": "./dist/web-host.d.ts",
       "import": "./dist/web-host.js"

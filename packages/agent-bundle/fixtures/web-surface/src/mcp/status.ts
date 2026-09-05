@@ -21,7 +21,15 @@ export default function createStatusServer(): McpServer {
   }, async () => ({
     _meta: { ui: { resourceUri: app.resourceUri } },
     content: [{ text: 'status: healthy', type: 'text' }],
-    structuredContent: { status: 'healthy' },
+    // Echoes the launch so the packed proof can read what the host started.
+    structuredContent: {
+      launch: {
+        args: process.argv.slice(2),
+        cache: process.env['STATUS_CACHE'] ?? null,
+        mode: process.env['STATUS_MODE'] ?? null,
+      },
+      status: 'healthy',
+    },
   }));
 
   return server;

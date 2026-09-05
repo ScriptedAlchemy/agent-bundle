@@ -290,7 +290,7 @@ const connectGeneratedServer = async (
   return {
     client: connection.client,
     close: connection.close,
-    endpointId: `${compiled.build.manifest.project.revision}:${dirname(dirname(resolve(entry)))}`,
+    endpointId: `${compiled.build.manifest.compiler.project.revision}:${dirname(dirname(resolve(entry)))}`,
   };
 };
 
@@ -1072,7 +1072,7 @@ it('keeps a second generated server from the same install alive while the first 
   const server = compiled.model.mcpServers[0];
   if (server?.args?.[0] === undefined) throw new Error('expected a generated MCP entry');
   const entry = join(output, server.args[0]);
-  const endpointId = `${compiled.build.manifest.project.revision}:${dirname(dirname(resolve(entry)))}`;
+  const endpointId = `${compiled.build.manifest.compiler.project.revision}:${dirname(dirname(resolve(entry)))}`;
   const endpoint = eventRuntimeEndpoint(endpointId);
   const status = (): Promise<unknown> => requestEventRuntimeStatus({ endpointId, timeoutMs: 1_000 });
 
@@ -1233,7 +1233,7 @@ it('renders one tool/after event route through two native thin clients', { retry
 
     // The endpoint is the artifact's alone — epoch and root — however many
     // projections the root carries (#592); the invoking host rides each request.
-    const endpointId = `${compiled.build.manifest.project.revision}:${dirname(dirname(resolve(mcp.output)))}`;
+    const endpointId = `${compiled.build.manifest.compiler.project.revision}:${dirname(dirname(resolve(mcp.output)))}`;
     const expectedEndpoint = eventRuntimeEndpoint(endpointId);
     await expect(stat(expectedEndpoint)).resolves.toMatchObject({ mode: expect.any(Number) });
     const firstStatus = await requestEventRuntimeStatus({ endpointId, timeoutMs: 1_000 });
@@ -1369,9 +1369,9 @@ it('renders composite root events through each selected host in one warm runtime
   const transport = new StdioClientTransport({ args: [mcp.output], command: process.execPath, stderr: 'pipe' });
   await client.connect(transport);
   try {
-    const endpointId = `${compiled.build.manifest.project.revision}:${dirname(dirname(resolve(mcp.output)))}`;
+    const endpointId = `${compiled.build.manifest.compiler.project.revision}:${dirname(dirname(resolve(mcp.output)))}`;
     await expect(requestEventRuntime({
-      artifactEpoch: compiled.build.manifest.project.revision,
+      artifactEpoch: compiled.build.manifest.compiler.project.revision,
       endpointId,
       event: 'tool/after',
       hostContractRevision: 'test',

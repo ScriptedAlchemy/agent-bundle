@@ -2,7 +2,9 @@ import { createHash, randomUUID } from 'node:crypto';
 import { lstat, mkdir, open, readFile, readdir, realpath, rm, rmdir } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
+import { readArtifactManifest } from '../build/manifest-file.ts';
 import { isErrno } from '../core/errors.ts';
+import { isRecord } from '../core/strict-json.ts';
 import { pluginStateRootEnvAnchor } from '../core/types.ts';
 import { webPluginDataRoot } from '../web-host/launch.ts';
 import type { InstallHost } from './install.ts';
@@ -28,24 +30,6 @@ export interface InstalledStateLocation {
 
 export const stateOwnershipMarkerFile = '.agent-bundle-state-owner.json';
 
-const manifestCandidates = (host: InstallHost): readonly string[] => {
-  switch (host) {
-    case 'claude':
-      return ['.mcp.json'];
-    case 'codex':
-      return ['.codex-plugin/mcp.json'];
-    case 'cursor':
-      return ['.cursor-plugin/mcp.json', 'mcp.json'];
-    default: {
-      const exhaustive: never = host;
-      throw new TypeError(`Unknown install host ${String(exhaustive)}.`);
-    }
-  }
-};
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  value !== null && typeof value === 'object' && !Array.isArray(value);
-
 const safePluginSegment = /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/u;
 
 // The CLI cannot load the optional React runtime. Uninstall tests pin this spelling against
@@ -64,32 +48,37 @@ const installedUserDataStateRoot = (
   return join(stateHome, safePluginSegment.test(name) ? `${name}-${digest}` : `plugin-${digest}`);
 };
 
+const installedMcpDocument = async (pluginRoot: string, host: InstallHost): Promise<string | undefined> => {
+  const read = await readArtifactManifest(pluginRoot);
+  if (read.status !== 'ok') return undefined;
+  return read.manifest.projections.find((projection) => projection.builtInHost === host)?.documents.mcp;
+};
+
 const installedServers = async (
   pluginRoot: string,
   host: InstallHost,
 ): Promise<readonly { readonly cwd?: string; readonly environment: Readonly<NodeJS.ProcessEnv>; readonly name: string }[]> => {
-  for (const relativePath of manifestCandidates(host)) {
-    let document: unknown;
-    try {
-      document = JSON.parse(await readFile(join(pluginRoot, relativePath), 'utf8')) as unknown;
-    } catch (error) {
-      if (isErrno(error, 'ENOENT') || error instanceof SyntaxError) continue;
-      throw error;
-    }
-    if (!isRecord(document) || !isRecord(document['mcpServers'])) continue;
-    return Object.entries(document['mcpServers'])
-      .filter((entry): entry is [string, Record<string, unknown>] => isRecord(entry[1]))
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([name, server]) => ({
-        ...(typeof server['cwd'] === 'string' ? { cwd: server['cwd'] } : {}),
-        environment: isRecord(server['env'])
-          ? Object.fromEntries(Object.entries(server['env']).filter((entry): entry is [string, string] =>
-              typeof entry[1] === 'string'))
-          : {},
-        name,
-      }));
+  const relativePath = await installedMcpDocument(pluginRoot, host);
+  if (relativePath === undefined) return [];
+  let document: unknown;
+  try {
+    document = JSON.parse(await readFile(join(pluginRoot, relativePath), 'utf8')) as unknown;
+  } catch (error) {
+    if (isErrno(error, 'ENOENT') || error instanceof SyntaxError) return [];
+    throw error;
   }
-  return [];
+  if (!isRecord(document) || !isRecord(document['mcpServers'])) return [];
+  return Object.entries(document['mcpServers'])
+    .filter((entry): entry is [string, Record<string, unknown>] => isRecord(entry[1]))
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, server]) => ({
+      ...(typeof server['cwd'] === 'string' ? { cwd: server['cwd'] } : {}),
+      environment: isRecord(server['env'])
+        ? Object.fromEntries(Object.entries(server['env']).filter((entry): entry is [string, string] =>
+            typeof entry[1] === 'string'))
+        : {},
+      name,
+    }));
 };
 
 const expandPluginRoot = (value: string, pluginRoot: string): string =>

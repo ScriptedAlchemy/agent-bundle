@@ -106,7 +106,10 @@ const revisionOf = (frame: McpAppRelayFrame | undefined): number =>
   frame?.documentPolicy?.revision ?? 0;
 
 const start = async (): Promise<void> => {
-  setStatus(`Binding ${seed.toolName} to the App…`);
+  setStatus(
+    seed.openingNotice ?? `Binding ${seed.toolName} to the App…`,
+    seed.openingNotice === undefined ? 'info' : 'warn',
+  );
   const created = await api<Readonly<{ readonly preview: Preview }>>(
     'POST',
     `/api/mcp/sessions/${encodeURIComponent(seed.sessionId)}/apps`,
@@ -275,7 +278,10 @@ const start = async (): Promise<void> => {
       event.data.method !== 'ui/notifications/sandbox-proxy-ready' ||
       Object.hasOwn(event.data, 'id')
     ) return;
-    setStatus(`Serving ${seed.title} over the bound session.`, 'ok');
+    setStatus(
+      seed.openingNotice ?? `Serving ${seed.title} over the bound session.`,
+      seed.openingNotice === undefined ? 'ok' : 'warn',
+    );
   });
 
   frameHost.replaceChildren(iframe);

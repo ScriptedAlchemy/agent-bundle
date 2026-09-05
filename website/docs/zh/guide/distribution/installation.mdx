@@ -16,10 +16,12 @@ npx agent-bundle install codex --from artifact
 npx agent-bundle install cursor --from artifact
 ```
 
-`--from` 指定的是**产物根目录**：直接存放所选宿主清单（`.claude-plugin/plugin.json`、
-`.codex-plugin/plugin.json` 或 `.cursor-plugin/plugin.json`）的那个目录。它不需要项目源码，也不存在
-`<from>/<host>` 查找——缺少该宿主清单的根目录会被拒绝（`AB7001`）。构建不会写出可供指向的
-`artifact/<host>` 子目录；根目录本身就是捆绑包。
+`--from` 指定的是**组合根目录**：存放 `agent-bundle.manifest.json` 的那个目录。安装器只读这一个文件来了解
+自己在安装什么——插件名与版本来自 `application`，市场名来自 `projections[host].marketplace`，宿主被指向的
+文件来自 `projections[host].documents.plugin`（见[产物清单](../../reference/artifact-manifest.mdx)）。它不需要
+项目源码，也不存在 `<from>/<host>` 查找：构建不会写出 `artifact/<host>` 子目录，根目录本身就是捆绑包。
+以下情形会以 `AB7001` 拒绝：清单缺失或不是规范字节；没有该宿主的投影；投影没有宿主插件清单（或所指文件
+不存在）；`claude` 或 `codex` 没有声明市场身份；或 `cursor` 的插件名不是安全的本地插件名。
 
 ## 各宿主接受什么
 
@@ -92,6 +94,10 @@ node ./install.mjs
 无法证明归属的覆盖根都会保留。Claude 的替换先运行 `claude plugin uninstall --keep-data` 再重新安装，
 因为 `plugin update` 受版本门控；Codex 先 `codex plugin remove` 再 `add`。输出的 `INSTALL.md` 按宿主记录了
 同样的步骤。
+
+框架 CLI 从 `agent-bundle.manifest.json` 的 `files[]` 派生产物侧哈希与复制集合，校验每个列出的摘要，
+而不遍历产物目录。清单自身与约定的操作员 `.env` / `.env.local` 覆盖层也会被复制并哈希；未列出的
+多余文件会被忽略。某个列出的文件缺失或已改变时以 `AB7001` 失败。
 
 ## 操作者配置：已安装包的 `.env`
 
@@ -172,7 +178,9 @@ npx agent-bundle doctor --host claude --host cursor --json
 npx agent-bundle doctor --from artifact --json
 ```
 
-Doctor 是只读的。它探测宿主、清点已安装的捆绑包、把它们与提供的捆绑包做比对、检查注册证明、采样运行时
+Doctor 是只读的。`--from` 就是 `install` 接受的那个组合根目录，读取方式也相同：插件身份与每个被检查宿主的
+插件清单都来自 `agent-bundle.manifest.json`（`application`、`projections[host]`），清单没有为该宿主描述的
+根目录是 `AB7001`。它探测宿主、清点已安装的捆绑包、把它们与提供的捆绑包做比对、检查注册证明、采样运行时
 端点的健康状况与身份、清点持久状态，并对已安装的字节重新运行被固定的、无进程的文档与加载器校验器。它
 绝不修复任何东西。带 `--from` 时，它按宿主把已安装副本报告为 `current`、`stale`（`AB7308`）、`version-mismatch`
 （`AB7309`）、`foreign`（`AB7321`）、`load-failed`（`AB7325`）或 `not-installed`（`AB7307`），以及它的生命周期阶段——placed →

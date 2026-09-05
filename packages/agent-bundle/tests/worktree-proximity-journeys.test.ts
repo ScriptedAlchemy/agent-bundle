@@ -271,7 +271,7 @@ beforeAll(async () => {
     return compiledHook.output;
   };
   const pluginRoot = dirname(dirname(resolve(mcp.output)));
-  const endpointId = `${compiled.build.manifest.project.revision}:${pluginRoot}`;
+  const endpointId = `${compiled.build.manifest.compiler.project.revision}:${pluginRoot}`;
   fixture = {
     endpoint: eventRuntimeEndpoint(endpointId),
     entry: mcp.output,

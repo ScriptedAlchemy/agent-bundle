@@ -20,6 +20,7 @@ import {
 import { recordInstalledState } from '../src/install/state-root.ts';
 import { uninstallBundle, type UninstallResult } from '../src/install/uninstall.ts';
 import { captureCliTerminal } from './support/cli-terminal.ts';
+import { writeInstallFixtureManifest } from './support/install-fixture.ts';
 import { diffTreeSnapshots, snapshotTree, treesIdentical } from './support/tree-snapshot.ts';
 
 interface CommandCall {
@@ -38,7 +39,16 @@ interface Fixture {
   readonly home: string;
 }
 
-const createFixture = async (host: 'claude' | 'codex' | 'cursor'): Promise<Fixture> => {
+const mcpDocuments = {
+  claude: '.mcp.json',
+  codex: '.codex-plugin/mcp.json',
+  cursor: '.cursor-plugin/mcp.json',
+} as const;
+
+const createFixture = async (
+  host: 'claude' | 'codex' | 'cursor',
+  options: { readonly mcpDocument?: unknown } = {},
+): Promise<Fixture> => {
   const cleanupRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-uninstall-'));
   const bundleRoot = join(cleanupRoot, 'bundle');
   const home = join(cleanupRoot, 'home');
@@ -69,7 +79,35 @@ const createFixture = async (host: 'claude' | 'codex' | 'cursor'): Promise<Fixtu
   } else {
     await writeJson(join(bundleRoot, '.cursor-plugin/plugin.json'), { name: 'uninstall-fixture', version: '1.2.3' });
   }
+  const mcp = options.mcpDocument === undefined ? undefined : mcpDocuments[host];
+  if (mcp !== undefined) await writeJson(join(bundleRoot, mcp), options.mcpDocument);
+  await writeInstallFixtureManifest(
+    bundleRoot,
+    { name: 'uninstall-fixture', version: '1.2.3' },
+    [{
+      host,
+      ...(host === 'cursor' ? {} : { marketplace: 'uninstall-fixture-marketplace' }),
+      ...(mcp === undefined ? {} : { mcp }),
+    }],
+  );
   return { bundleRoot, cleanupRoot, home };
+};
+
+const writeFixtureMcp = async (
+  fixture: Fixture,
+  host: 'claude' | 'codex' | 'cursor',
+  document: unknown,
+): Promise<void> => {
+  await writeJson(join(fixture.bundleRoot, mcpDocuments[host]), document);
+  await writeInstallFixtureManifest(
+    fixture.bundleRoot,
+    { name: 'uninstall-fixture', version: '1.2.3' },
+    [{
+      host,
+      ...(host === 'cursor' ? {} : { marketplace: 'uninstall-fixture-marketplace' }),
+      mcp: mcpDocuments[host],
+    }],
+  );
 };
 
 const failureOf = async (promise: Promise<unknown>): Promise<DiagnosticError> => {
@@ -401,23 +439,16 @@ it('keeps created host directories receipt-owned across a --keep-data cycle in a
   }
 });
 
-it('purges AGENT_BUNDLE_STATE_ROOT from the installed host manifest', async () => {
-  const fixture = await createFixture('cursor');
+it('purges AGENT_BUNDLE_STATE_ROOT from the host MCP document the installed manifest points at', async () => {
+  const cleanupRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-uninstall-state-'));
+  const declaredStateRoot = join(cleanupRoot, 'declared-state');
+  const fixture = await createFixture('cursor', {
+    mcpDocument: { mcpServers: { stateful: { command: 'node', env: { AGENT_BUNDLE_STATE_ROOT: declaredStateRoot } } } },
+  });
   const cursorRoot = join(fixture.home, '.cursor');
-  const declaredStateRoot = join(fixture.cleanupRoot, 'declared-state');
   const options = { from: fixture.bundleRoot, home: fixture.home, host: 'cursor' as const };
   try {
-    await Promise.all([
-      mkdir(cursorRoot, { recursive: true }),
-      writeJson(join(fixture.bundleRoot, '.cursor-plugin/mcp.json'), {
-        mcpServers: {
-          stateful: {
-            command: 'node',
-            env: { AGENT_BUNDLE_STATE_ROOT: declaredStateRoot },
-          },
-        },
-      }),
-    ]);
+    await mkdir(cursorRoot, { recursive: true });
     await installBundle(options);
     expect(await readInstallReceipt(join(cursorRoot, 'plugins', 'local', 'uninstall-fixture')))
       .toMatchObject({
@@ -446,7 +477,10 @@ it('purges AGENT_BUNDLE_STATE_ROOT from the installed host manifest', async () =
     expect(purged.data).toMatchObject({ outcome: 'purged', paths: [declaredStateRoot] });
     await expect(readdir(declaredStateRoot)).rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
-    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+    await Promise.all([
+      rm(fixture.cleanupRoot, { force: true, recursive: true }),
+      rm(cleanupRoot, { force: true, recursive: true }),
+    ]);
   }
 });
 
@@ -460,7 +494,7 @@ it('never purges a pre-existing declared state root or its unrelated sentinel', 
     await Promise.all([
       mkdir(cursorRoot, { recursive: true }),
       mkdir(sharedRoot, { recursive: true }),
-      writeJson(join(fixture.bundleRoot, '.cursor-plugin/mcp.json'), {
+      writeFixtureMcp(fixture, 'cursor', {
         mcpServers: {
           stateful: {
             command: 'node',
@@ -507,7 +541,7 @@ it('prunes a newly marked explicit root when no runtime state was written', asyn
   try {
     await Promise.all([
       mkdir(cursorRoot, { recursive: true }),
-      writeJson(join(fixture.bundleRoot, '.cursor-plugin/mcp.json'), {
+      writeFixtureMcp(fixture, 'cursor', {
         mcpServers: {
           stateful: {
             command: 'node',
@@ -535,7 +569,7 @@ it('records an inaccessible declared root as unproven without failing installati
     await Promise.all([
       mkdir(cursorRoot, { recursive: true }),
       writeFile(blockedParent, 'file\n'),
-      writeJson(join(fixture.bundleRoot, '.cursor-plugin/mcp.json'), {
+      writeFixtureMcp(fixture, 'cursor', {
         mcpServers: {
           stateful: {
             command: 'node',
@@ -564,7 +598,7 @@ it('rolls back earlier state markers when a later root cannot be recorded', asyn
   const firstRoot = join(fixture.cleanupRoot, 'first-state');
   const invalidRoot = join(fixture.cleanupRoot, 'x'.repeat(300));
   try {
-    await writeJson(join(fixture.bundleRoot, '.cursor-plugin/mcp.json'), {
+    await writeFixtureMcp(fixture, 'cursor', {
       mcpServers: {
         first: {
           command: 'node',
@@ -633,7 +667,7 @@ it('records and purges each server state root using its execution cwd', async ()
   try {
     await Promise.all([
       mkdir(cursorRoot, { recursive: true }),
-      writeJson(join(fixture.bundleRoot, '.cursor-plugin/mcp.json'), {
+      writeFixtureMcp(fixture, 'cursor', {
         mcpServers: {
           alpha: {
             command: 'node',
@@ -679,7 +713,7 @@ it('retains a marked root when its marker is replaced by another install identit
   try {
     await Promise.all([
       mkdir(cursorRoot, { recursive: true }),
-      writeJson(join(fixture.bundleRoot, '.cursor-plugin/mcp.json'), {
+      writeFixtureMcp(fixture, 'cursor', {
         mcpServers: {
           stateful: {
             command: 'node',
@@ -728,8 +762,8 @@ it('lets only the owning installation purge a root shared by two installs', asyn
     await Promise.all([
       mkdir(join(owner.home, '.cursor'), { recursive: true }),
       mkdir(join(observer.home, '.cursor'), { recursive: true }),
-      writeJson(join(owner.bundleRoot, '.cursor-plugin/mcp.json'), manifest),
-      writeJson(join(observer.bundleRoot, '.cursor-plugin/mcp.json'), manifest),
+      writeFixtureMcp(owner, 'cursor', manifest),
+      writeFixtureMcp(observer, 'cursor', manifest),
     ]);
     await installBundle({ from: owner.bundleRoot, home: owner.home, host: 'cursor' });
     await installBundle({ from: observer.bundleRoot, home: observer.home, host: 'cursor' });
@@ -777,7 +811,7 @@ it('retains a marked root when a symlinked ancestor is retargeted', async () => 
       mkdir(cursorRoot, { recursive: true }),
       mkdir(firstTarget),
       mkdir(secondTarget),
-      writeJson(join(fixture.bundleRoot, '.cursor-plugin/mcp.json'), {
+      writeFixtureMcp(fixture, 'cursor', {
         mcpServers: {
           stateful: {
             command: 'node',

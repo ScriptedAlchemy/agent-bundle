@@ -93,6 +93,22 @@ const sortedUnique = (values: readonly string[]): readonly string[] =>
 export const bundledPackagesOf = (result: CompileResult, asset: string): readonly string[] =>
   sortedUnique(result.modules.flatMap((module) => (module.asset === asset && module.package !== undefined ? [module.package] : [])));
 
+/**
+ * The literal requests the compiler accounted for in each recorded asset — its
+ * externals — keyed by the asset's path with `pathPrefix` removed. Every other
+ * literal import the compiler bundled, so a literal request still present in
+ * a proven file that is neither a Node built-in nor one of these was left
+ * verbatim: an import the build was told to ignore (`webpackIgnore`,
+ * `rspackIgnore`), which Rspack neither resolves, records, nor warns about.
+ */
+export const accountedRequestsOf = (
+  record: CompileEvidenceRecord,
+  pathPrefix?: string,
+): ReadonlyMap<string, ReadonlySet<string>> => new Map(record.assets.map((asset) => [
+  pathPrefix === undefined ? asset.path : posix.relative(pathPrefix, asset.path),
+  new Set(asset.externals.map((external) => external.request)),
+]));
+
 const recordedExternal = (external: ExternalIR, recorded: (path: string) => string): CompileEvidenceExternal => {
   switch (external.kind) {
     case 'artifact-relative':

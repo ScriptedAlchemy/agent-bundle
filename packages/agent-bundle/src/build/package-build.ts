@@ -9,6 +9,7 @@ import { DiagnosticError } from '../core/diagnostics.ts';
 import { assertInside, toPosixRelative } from '../core/paths.ts';
 import { cliBinSourceInputs } from './cli-bins.ts';
 import {
+  accountedRequestsOf,
   createCompileEvidenceRecord,
   type CompileEvidenceRecord,
 } from './compile-evidence.ts';
@@ -30,7 +31,6 @@ import {
   terminalCapabilityRuntimeSpecifier,
 } from './entry-shell.ts';
 import { projectMeta } from './meta.ts';
-import { bundleSyntaxCheckFor } from './module-imports.ts';
 import { isDeclarationGenerationFailure, type RslibEntry } from './rslib.ts';
 import { runtimeIgnoredRoot } from './runtime-path.ts';
 import { validateJavaScriptModules } from './validate-artifact-modules.ts';
@@ -84,7 +84,7 @@ export interface PlannedPackageEntry extends RslibEntry {
  * package output, exactly like the dedicated build tsconfig consumers
  * previously maintained by hand.
  */
-const synthesizeDtsTsconfig = async (options: {
+export const synthesizeDtsTsconfig = async (options: {
   readonly projectRoot: string;
   readonly sourceDir: string;
 }): Promise<{ readonly cleanup: () => Promise<void>; readonly path: string }> => {
@@ -379,34 +379,30 @@ export const buildPackageOutputs = async (options: {
       throw new Error(`Package build did not emit expected declarations ${JSON.stringify(`${lib.name}.d.ts`)}.`);
     }
 
-    // The npm form of the plugin is held to the same line as its host packs:
-    // every emitted `dist` module is walked as an ES module, and a bare
-    // specifier that is not a Node built-in — an import the `tools` hatch
-    // kept external — fails the build (`AB6005`) before `dist` is published,
-    // so a `dist/bin` executable imports nothing from a consumer's
-    // `node_modules`. The walk reads import specifiers (static and literal
-    // dynamic); a `createRequire(…)(…)` or `import.meta.resolve(…)` call is
-    // not an import and is outside it, in `dist` as in a host pack — the
-    // prepack gate reads those as dependency evidence. Declarations are not
-    // modules and are not walked; they may still reference declared
-    // dependencies.
-    const selfContainment = await validateJavaScriptModules({
-      artifactRoot: stageRoot,
-      bundledPaths: new Set(files.filter((file) => file.kind === 'bundle').map((file) => file.path)),
-      bundleSyntaxCheck: bundleSyntaxCheckFor(options.tools),
-      files: staged,
-      reportedRoot: toPosixRelative(projectRoot, outputRoot),
-      validJson: new Set(),
-    });
-    if (selfContainment.length > 0) throw new DiagnosticError(selfContainment);
-
+    const rewritable = options.tools?.rspack !== undefined || options.tools?.rsbuild !== undefined;
     const evidence = await createCompileEvidenceRecord({
       pathPrefix: publishedPrefix,
       results: [compileResult],
-      rewritable: options.tools?.rspack !== undefined || options.tools?.rsbuild !== undefined,
+      rewritable,
       root: stageRoot,
       rspackVersion: rspack.rspackVersion,
     });
+    // The npm form of the plugin is held to the same line as its host packs.
+    // The bundles the compiler emitted are lexed and their imports held to
+    // the record — a Node built-in or a recorded external passes, an
+    // expression `import()` or an import the build ignored is reported —
+    // unless a `tools` hatch may have rewritten the emitted bytes, in which
+    // case every module is parsed in full and its imports resolved.
+    // Declarations are not modules and are not walked; they may still
+    // reference declared dependencies.
+    const selfContainment = await validateJavaScriptModules({
+      artifactRoot: stageRoot,
+      files: staged,
+      provenModules: rewritable ? new Map() : accountedRequestsOf(evidence, publishedPrefix),
+      reportedRoot: publishedPrefix,
+      validJson: new Set(),
+    });
+    if (selfContainment.length > 0) throw new DiagnosticError(selfContainment);
     await publishArtifact({ outputRoot, stageRoot });
     return Object.freeze({ evidence, files: Object.freeze(files), outputRoot });
   } finally {

@@ -4,28 +4,19 @@ import { posix, relative, resolve } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 
 import npa from 'npm-package-arg';
+import ts from 'typescript-5';
 
-import { sha256Hex } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
 import { isRecord } from '../core/strict-json.ts';
-import { readModuleImports, type ModuleImport } from './module-imports.ts';
 
 /**
  * Evidence for the npm prepack dependency gate (`AB7014`/`AB7015`, emitted by
- * `pack-inventory.ts`): what `package.json` asks npm to install alongside the
- * package, and which packages the packed JavaScript and declaration files
- * actually reference. JavaScript the framework compiled — the `dist` bundles
- * and the host-pack modules — never carries a bare package `import`, static
- * or dynamic, since `AB6005` fails the build first and `prepack` builds
- * before it packs; the import evidence read here is therefore that of
- * prebuilt payload modules and other packed scripts the framework copied
- * rather than compiled. The `require`, `createRequire`, and
- * `import.meta.resolve` evidence is different: those are calls the bundler
- * leaves in place and `AB6005` does not walk, so they are read from every
- * packed file, compiled bundles included — as are the `bin`-command,
- * declaration, `imports`-map, and install-script evidence (a compiled bundle
- * may run a dependency's command, `spawnSync("tsc")`, which is not an
- * import).
+ * `pack-inventory.ts`): how a consumer's npm reads each `package.json`
+ * dependency entry, and which of them a consumer must have installed — the
+ * packages the packed declaration files reference, as TypeScript reads them,
+ * and the packages the consumer-side install scripts name or run. Packed
+ * JavaScript is never read: a compiled bundle inlines its imports (`AB6005`),
+ * and a prebuilt payload declares what it loads (`runtimeDependencies`).
  */
 
 /** Relative, package-imports (`#`), absolute, and URL-scheme specifiers (`node:`, `data:`, `file:`, `C:\`) name no package. */
@@ -201,304 +192,10 @@ export const packagedSourceInstallable = async (
   return tarHoldsPackage(archive);
 };
 
-/** A single- or double-quoted string literal; the group after the opening quote is its body. */
-const quotedLiteral = String.raw`(["'])((?:(?!\1)[^\\\n]|\\.)+)\1`;
+/** The `bin` commands of each declared dependency, by package name; the unscoped name stands in when no manifest is readable. */
+type ExecutableCommands = ReadonlyMap<string, readonly string[]>;
 
-const escapeSequence = /\\(?:x(?<hex>[0-9A-Fa-f]{2})|u\{(?<point>[0-9A-Fa-f]+)\}|u(?<unit>[0-9A-Fa-f]{4})|(?<other>.))/gsu;
-const controlEscapes: Readonly<Record<string, string>> = { 0: '\0', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v' };
-
-/**
- * The string a JavaScript literal's body denotes: `\x66oo` is `foo`,
- * `foo\u002fsubpath` is `foo/subpath`, `\/` is `/`. Node resolves the value,
- * not the source text, so a package name compared textually has to be
- * decoded first.
- */
-const decodeLiteral = (body: string): string => body.replace(escapeSequence, (...args) => {
-  const groups = args.at(-1) as Record<string, string | undefined>;
-  if (groups.hex !== undefined) return String.fromCharCode(Number.parseInt(groups.hex, 16));
-  if (groups.unit !== undefined) return String.fromCharCode(Number.parseInt(groups.unit, 16));
-  if (groups.point !== undefined) {
-    const point = Number.parseInt(groups.point, 16);
-    // Beyond Unicode the literal is a syntax error; the file never loads anything.
-    return point > 0x10_ff_ff ? '' : String.fromCodePoint(point);
-  }
-  const other = groups.other ?? '';
-  return controlEscapes[other] ?? other;
-});
-
-/**
- * A `require("…")` call, or a resolution-only use — `require.resolve("…")`,
- * `createRequire(…).resolve("…")`, `import.meta.resolve("…")` — with a
- * literal argument. The ESM lexer reports `import` forms only; CommonJS
- * payloads a consumer prebuilt reach the package through `require`, and a
- * package located only to find an asset or executable is still a runtime
- * dependency. Only these resolvers count: `path.resolve("foo")` or
- * `Promise.resolve("foo")` never make an unused `foo` look reachable. A match
- * inside a comment or string can only mark a dependency as imported, never as
- * unused, so the pattern otherwise errs toward keeping a declaration.
- */
-/**
- * A parenthesised argument list with calls nested up to two deep —
- * `(new URL("./entry.js", import.meta.url))`, `(join(dirname(x), "y"))` — the
- * shapes a `createRequire` argument takes.
- */
-const callArguments = (() => {
-  const flat = String.raw`[(][^()]*[)]`;
-  const nested = String.raw`[(](?:[^()]|${flat})*[)]`;
-  return String.raw`[(](?:[^()]|${nested})*[)]`;
-})();
-
-// Whitespace and comments, the trivia JavaScript allows around a call's parentheses: `require /* x */ ("y")`.
-const trivia = String.raw`(?:\s|/\*[\s\S]*?\*/|//[^\n]*\n)*`;
-
-/**
- * What may qualify a factory: nothing (`createRequire(…)` after a named
- * import), a dotted namespace (`Module.createRequire(…)` after `import * as
- * Module from "node:module"`, `module.createRequire(…)`), or a CommonJS load
- * (`require("node:module").createRequire(…)`, `require('module')…`; any
- * argument, since a same-named factory from elsewhere can only keep a
- * declaration). No capture group: the literal patterns after it count theirs
- * by number.
- */
-const factoryQualifier = String.raw`(?:(?:[A-Za-z_$][\w$]*\s*\.\s*)*|\brequire\s*${callArguments}\s*\.\s*)`;
-
-/** A factory call producing a loader, qualified or not: `createRequire(import.meta.url)`, `Module.createRequire(…)`, `require("node:module").createRequire(…)`. */
-const factoryCall = (factories: readonly string[]): string =>
-  String.raw`${factoryQualifier}\b(?:${factories.join('|')})${trivia}${callArguments}`;
-
-/** The resolvers a file loads packages through, each followed by its argument list. */
-const loadCall = (loaders: readonly string[], factories: readonly string[]): string =>
-  String.raw`(?:\b(?:${loaders.join('|')})(?:\.resolve)?|\bimport\.meta\.resolve|${factoryCall(factories)}(?:\.resolve)?)${trivia}[(]${trivia}`;
-
-const literalLoad = (loaders: readonly string[], factories: readonly string[]): RegExp => new RegExp(
-  String.raw`${loadCall(loaders, factories)}${quotedLiteral}${trivia}[)]`,
-  'gu',
-);
-
-/**
- * A CommonJS load or resolution whose argument is not a string literal —
- * `require(x)`, `require.resolve(x)`, `import.meta.resolve(x)`, or a direct
- * `createRequire(…)(x)` — selecting a package at runtime, which no literal can
- * prove. An argument that merely starts with a literal, `require("driver/" +
- * variant)`, is computed too. Bundler runtimes (`__webpack_require__(…)`) have
- * no word boundary before `require` and never match; `path.resolve(x)` and
- * `Promise.resolve(x)` are not resolution and never match.
- */
-const computedLoad = (loaders: readonly string[], factories: readonly string[]): RegExp => new RegExp(
-  // A comment is trivia the call prefix already consumed, not the start of a computed argument.
-  String.raw`${loadCall(loaders, factories)}(?:(?!/[*/])[^"'\s)]|"[^"\n]*"${trivia}(?!/[*/])[^)\s]|'[^'\n]*'${trivia}(?!/[*/])[^)\s])`,
-  'u',
-);
-
-const escapeIdentifier = (name: string): string => name.replace(/\$/gu, String.raw`\$`);
-
-/**
- * `createRequire` renamed on import or destructuring: `import { createRequire
- * as makeRequire } from "node:module"` or `const { createRequire: makeRequire }
- * = require("node:module")`. Each alias is a factory like `createRequire` itself.
- */
-const createRequireAlias = /\bcreateRequire\s*(?:as|:)\s*([A-Za-z_$][\w$]*)/gu;
-
-const factoryNames = (source: string): readonly string[] => [
-  'createRequire',
-  ...Array.from(source.matchAll(createRequireAlias), (match) => escapeIdentifier(match[1] ?? '')),
-];
-
-/**
- * `const load = <factory>(…)`, the factory qualified as `factoryQualifier`
- * allows or not: the binding is a loader, called like `require` from then on.
- */
-const loaderBinding = (factories: readonly string[]): RegExp => new RegExp(
-  String.raw`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*${factoryQualifier}\b(?:${factories.join('|')})\s*[(]`,
-  'gu',
-);
-
-/**
- * The identifiers a file loads packages through: `require` itself plus every
- * name bound to a `createRequire(…)` result — under the factory's own name or
- * an alias — so `const load = createRequire(import.meta.url); load("driver")`
- * counts like `require("driver")`.
- */
-const loaderNames = (source: string): readonly string[] => [
-  'require',
-  ...Array.from(source.matchAll(loaderBinding(factoryNames(source))), (match) => escapeIdentifier(match[1] ?? '')),
-];
-
-/**
- * JavaScript comments and string literals, each replaced by a space: the
- * text that is not code. Bundled docblocks are prose ("may fail, require
- * Effect services"), and a scan for a bare identifier has to skip them.
- * Regular-expression literals are not recognised; one containing a quote
- * can misalign the strings after it on the same line, which at worst hides
- * or invents a bare reference there.
- */
-const codeOnly = (source: string): string =>
-  source.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\[\s\S])*`/gu, ' ');
-
-/**
- * A loader passed on as a value rather than called — `const load = require`,
- * `fn(require)`, `[require]`, `{ require }`, `module.exports = require`,
- * `return require`, `x ? require : y` — after which packages may be loaded
- * under a name this scan never sees, so the file's evidence is incomplete
- * like a computed load's. A call (`require("x")`), a property access
- * (`require.resolve`), and `typeof require` pass nothing on and never match.
- * Run on `codeOnly` text, so a mention in a comment or string is not one.
- */
-const loaderReference = (loaders: readonly string[]): RegExp => new RegExp(
-  String.raw`(?:=>|\breturn|[=(,[{:?|&])\s*\b(?:${loaders.join('|')})\b\s*(?=[;,)\]}:]|$)`,
-  'mu',
-);
-
-/**
- * Every module specifier a declaration file resolves: `from "…"`,
- * `import("…")`, `import x = require("…")`, `declare module "…"` (an
- * augmentation of that package's types, in an external-module declaration),
- * and `/// <reference types="…" />`.
- * A consumer needs the package that provides these types even though the
- * bundled JavaScript has no runtime import. Declarations are not ES modules
- * the lexer accepts, so this is a text scan with the same keep-only bias.
- */
-const declarationSpecifier = new RegExp(
-  String.raw`\b(?:from|import|require|declare\s+module)\s*\(?\s*${quotedLiteral}|<reference\s+types\s*=\s*(["'])([^"'\n]+)\3`,
-  'gu',
-);
-
-/**
- * The package a `/// <reference types="name" />` directive resolves through:
- * `name` itself when it ships declarations, or its DefinitelyTyped package
- * (`@types/name`; `@types/scope__name` for a scoped name). Both are reported,
- * since the declaration cannot say which one the consumer needs.
- */
-const typeDirectivePackages = (name: string): readonly string[] => [
-  name,
-  name.startsWith('@') ? `@types/${name.slice(1).replace('/', '__')}` : `@types/${name}`,
-];
-
-/** The literal module specifiers a declaration file resolves, in order of appearance. */
-export const declarationSpecifiers = (source: string): readonly string[] =>
-  Array.from(source.matchAll(declarationSpecifier)).flatMap((match) =>
-    (match[4] === undefined ? [decodeLiteral(match[2] ?? '')] : typeDirectivePackages(match[4])));
-
-/** The `bin` commands of each declared dependency, by package name. */
-type ExecutableCommands = ReadonlyMap<string, DependencyExecutables>;
-
-interface DependencyExecutables {
-  /** The commands the dependency's own manifest declares; empty when it declares none. */
-  readonly commands: readonly string[];
-  /**
-   * Whether `commands` was read from the manifest rather than guessed. With no
-   * manifest under `node_modules` (Plug'n'Play, a platform-specific optional
-   * dependency not installed here) the unscoped package name stands in — npm's
-   * default bin name — which is evidence enough in a shell script but too
-   * loose for JavaScript, where the bare name is also how the package is
-   * mentioned in a comment or docblock.
-   */
-  readonly known: boolean;
-}
-
-/** What one packed file proves about the packages it resolves. */
-interface FileEvidence {
-  readonly specifiers: readonly string[];
-  /** Dependencies the file runs as executables rather than loading as modules. */
-  readonly executed: readonly string[];
-  /** `false` when a computed `import(expression)` or `require(expression)`, or a `require` passed on as a value, means the file may load a package no literal names. */
-  readonly complete: boolean;
-}
-
-const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
-
-/**
- * A string literal that is a shell command running `command`: the bare name
- * (`spawnSync("foo", ["--version"])`) or the name followed by its arguments
- * (`execSync("foo --version")`). A dependency a CLI package only ever shells
- * out to is still one the consumer needs installed; the match is keep-only,
- * so a name inside a comment or an unrelated string merely keeps a declaration.
- */
-const commandLiteral = (command: string): RegExp =>
-  new RegExp(String.raw`(["'\x60])${escapeRegExp(command)}(?:\s[^"'\x60\n]*)?\1`, 'u');
-
-/**
- * The module specifiers packed JavaScript resolves: the lexer's static and
- * dynamic literal imports — never a mention inside a comment or string,
- * which bundled library docblocks are full of — plus literal `require` calls;
- * and the dependencies it runs by one of their `bin` commands.
- */
-/**
- * The module specifiers JavaScript source loads — the lexer's static and
- * dynamic literal imports, plus literal `require`/`createRequire` calls —
- * and whether that is all of them: a computed `import(x)` or `require(x)`,
- * or a loader passed on as a value, means it is not — and so does source the
- * lexer rejects, whose `import()` calls it could not report (syntax itself is
- * another gate's concern). Packed files and inline `node -e` programs are
- * read alike.
- */
-const moduleLoads = async (source: string, sha256?: string): Promise<Pick<FileEvidence, 'complete' | 'specifiers'>> => {
-  let imports: readonly ModuleImport[];
-  let lexed = true;
-  try {
-    imports = await readModuleImports(source, { check: 'lexed', ...(sha256 === undefined ? {} : { sha256 }) });
-  } catch {
-    imports = [];
-    lexed = false;
-  }
-  const loaders = loaderNames(source);
-  const factories = factoryNames(source);
-  return {
-    complete: lexed
-      && imports.every((record) => record.kind !== 'dynamic' || record.specifier !== undefined)
-      && !computedLoad(loaders, factories).test(source)
-      && !loaderReference(loaders).test(codeOnly(source)),
-    specifiers: [
-      ...imports.flatMap((record) => (record.specifier === undefined ? [] : [record.specifier])),
-      ...Array.from(source.matchAll(literalLoad(loaders, factories)), (match) => decodeLiteral(match[2] ?? '')),
-    ],
-  };
-};
-
-const javaScriptEvidence = async (bytes: Buffer, executables: ExecutableCommands): Promise<FileEvidence> => {
-  const source = bytes.toString('utf8');
-  return {
-    ...await moduleLoads(source, sha256Hex(bytes)),
-    executed: [...executables]
-      .filter(([, { commands, known }]) => known && commands.some((command) => commandLiteral(command).test(source)))
-      .map(([name]) => name),
-  };
-};
-
-const javaScriptSuffix = /\.[cm]?js$/u;
 const declarationSuffix = /\.d\.[cm]?ts$/u;
-
-const fileEvidence = async (path: string, executables: ExecutableCommands): Promise<FileEvidence> => {
-  let bytes: Buffer;
-  try {
-    bytes = await readFile(path);
-  } catch (error) {
-    // npm listed the file; only its absence is a benign inconsistency.
-    if (isErrno(error, 'ENOENT')) return { complete: true, executed: [], specifiers: [] };
-    throw error;
-  }
-  return declarationSuffix.test(path)
-    ? { complete: true, executed: [], specifiers: declarationSpecifiers(bytes.toString('utf8')) }
-    : javaScriptEvidence(bytes, executables);
-};
-
-export interface ImportedPackages {
-  /** Every package name the packed files name literally, run as an executable, or need during a consumer's install. */
-  readonly names: ReadonlySet<string>;
-  /**
-   * The subset a consumer's install lifecycle needs: run as a command by a
-   * script, or loaded by a packed file the script runs. An optional dependency
-   * npm skipped after a failed fetch is then missing from `PATH` or
-   * `node_modules`, so the install fails after all.
-   */
-  readonly installScripts: ReadonlySet<string>;
-  /**
-   * Whether `names` is the whole story. A computed `import(expression)` or
-   * `require(expression)` in packed JavaScript may load any declared package,
-   * so no declaration can then be called unused.
-   */
-  readonly complete: boolean;
-}
 
 /** Every string target in a `package.json` `imports` map, through conditional and nested targets. */
 const importMapTargets = (value: unknown): readonly string[] => {
@@ -589,7 +286,7 @@ const unscopedName = (name: string): string => name.replace(/^@[^/]+\//u, '');
  * manifest's unscoped `name` — `real` for an alias `"wrapper":
  * "npm:@scope/real@1"`, not `wrapper`. When the manifest is unreadable —
  * absent, not JSON, or not an object — the dependency's unscoped name stands
- * in, marked as a guess; a broken install never fails the gate.
+ * in (npm's default bin name); a broken install never fails the gate.
  */
 const executableCommands = async (names: readonly string[], projectRoot: string): Promise<ExecutableCommands> => {
   const readManifest = async (name: string): Promise<Readonly<Record<string, unknown>> | undefined> => {
@@ -602,22 +299,24 @@ const executableCommands = async (names: readonly string[], projectRoot: string)
       return undefined;
     }
   };
-  const binCommands = async (name: string): Promise<DependencyExecutables> => {
+  const binCommands = async (name: string): Promise<readonly string[]> => {
     const parsed = await readManifest(name);
-    if (parsed === undefined) return { commands: [unscopedName(name)], known: false };
+    if (parsed === undefined) return [unscopedName(name)];
     const bin = parsed.bin;
-    if (isRecord(bin)) return { commands: Object.keys(bin), known: true };
-    if (typeof bin !== 'string') return { commands: [], known: true };
-    return { commands: [unscopedName(typeof parsed.name === 'string' ? parsed.name : name)], known: true };
+    if (isRecord(bin)) return Object.keys(bin);
+    if (typeof bin !== 'string') return [];
+    return [unscopedName(typeof parsed.name === 'string' ? parsed.name : name)];
   };
   return new Map(await Promise.all(names.map(async (name) => [name, await binCommands(name)] as const)));
 };
+
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
 
 /**
  * Dependencies a consumer's install lifecycle mentions: npm puts every
  * dependency's executables on `PATH` for `preinstall`/`install`/`postinstall`,
  * so a script that names a dependency, or one of its `bin` commands, anywhere
- * may need it installed even though no packed JavaScript imports it. Keep-only
+ * may need it installed even though nothing else references it. Keep-only
  * evidence for `AB7014`: a mention in an argument or `echo` string cannot
  * report a dependency, but neither does it prove the script runs it.
  */
@@ -625,7 +324,7 @@ const installScriptMentions = (text: string, executables: ExecutableCommands): r
   if (text === '') return [];
   const runs = (command: string): boolean => new RegExp(String.raw`(?<![\w-])${escapeRegExp(command)}(?![\w-])`, 'u').test(text);
   return [...executables]
-    .filter(([name, { commands }]) => text.includes(name) || commands.some(runs))
+    .filter(([name, commands]) => text.includes(name) || commands.some(runs))
     .map(([name]) => name);
 };
 
@@ -805,31 +504,20 @@ const valuedNodeOptions = new Set([
 ]);
 /** Node's preloads, loaded before the program: `-r`/`--require` (CommonJS), `--import`, and `--loader`/`--experimental-loader` (ES modules). */
 const preloadOptions = /^(?:-r|--require|--import|--loader|--experimental-loader)$/u;
-/** Node's inline programs: `-e`/`--eval`, `-p`/`--print`, and the one short combination Node accepts, `-pe`. */
-const inlineOptions = /^(?:-e|--eval|-p|-pe|--print)$/u;
-
-interface NodeCommand {
-  readonly options: readonly ParsedOption[];
-  /** The script Node runs, when the command names one: the first positional, unless an inline program makes it an argument. */
-  readonly program: string | undefined;
-}
 
 /**
- * A `node` command read as Node does — `node [options] [script | -e code | -]
- * [arguments]`: options up to the first positional or a `--`, that positional
- * the program (an argument instead when `-e`/`-p` supply the program), and
- * nothing after it Node's (`node install.js --require x` passes `--require
- * x` to `install.js`). A `NODE_OPTIONS` assignment on the same command
- * (`NODE_OPTIONS=--require=x node install.js`, `cross-env NODE_OPTIONS="-r x"
- * node .`) supplies options Node applies before the command line's; one
- * exported by an earlier command is not read.
+ * The options of a `node` command, read as Node does — `node [options]
+ * [script | -e code | -] [arguments]`: everything up to the first positional
+ * or a `--`, nothing after it (`node install.js --require x` passes
+ * `--require x` to `install.js`). A `NODE_OPTIONS` assignment on the same
+ * command (`NODE_OPTIONS=--require=x node install.js`, `cross-env
+ * NODE_OPTIONS="-r x" node .`) supplies options Node applies before the
+ * command line's; one exported by an earlier command is not read.
  */
-const nodeCommand = ({ environment, operands }: SimpleCommand): NodeCommand => {
-  const inherited = leadingOptions(shellWords(environment.get('NODE_OPTIONS') ?? ''), valuedNodeOptions).options;
-  const { options, positional } = leadingOptions(operands, valuedNodeOptions);
-  const inline = options.some((option) => inlineOptions.test(option.name));
-  return { options: [...inherited, ...options], program: inline ? undefined : operands[positional] };
-};
+const nodeCommand = ({ environment, operands }: SimpleCommand): readonly ParsedOption[] => [
+  ...leadingOptions(shellWords(environment.get('NODE_OPTIONS') ?? ''), valuedNodeOptions).options,
+  ...leadingOptions(operands, valuedNodeOptions).options,
+];
 
 /**
  * The values a script gives one of `node`'s options, across every `node`
@@ -839,235 +527,111 @@ const nodeCommand = ({ environment, operands }: SimpleCommand): NodeCommand => {
  * is never Node's.
  */
 const nodeOptionValues = (commands: readonly SimpleCommand[], options: RegExp): readonly string[] =>
-  commands.filter(({ command }) => command === 'node').flatMap((command) => nodeCommand(command).options
+  commands.filter(({ command }) => command === 'node').flatMap((command) => nodeCommand(command)
     .flatMap(({ name, value }) => (options.test(name) && value !== undefined ? [value] : [])));
 
+/** The package names among `specifiers`: bare ones by `packageNameOf`, `#` ones through the manifest's `imports` map. */
+const packageNames = (packageDocument: Readonly<Record<string, unknown>>, specifiers: readonly string[]): readonly string[] =>
+  specifiers
+    .flatMap((specifier) => (specifier.startsWith('#') ? packageImportTargets(packageDocument, specifier) : [specifier]))
+    .flatMap((specifier) => {
+      const name = packageNameOf(specifier);
+      return name === undefined ? [] : [name];
+    });
+
 /**
- * Dependencies a consumer's install lifecycle demonstrably needs: one of
- * their `bin` commands in command position (`setup-tool --init`, `npx
- * setup-tool`, `./node_modules/.bin/setup-tool`), a file of theirs run
- * directly (`node node_modules/setup-tool/install.js`), or a load in an
- * inline `node -e` program (`node -e "require('setup-tool')"`, `node
- * --input-type=module -e "await import('setup-tool')"`, read as a packed
- * file is; a computed load there may reach any declared package). An optional dependency npm
- * skipped after a failed fetch then fails the script, so this is what turns
- * a survivable `AB7015` fatal; `echo setup-tool` never does. The packages
- * the files and preloads a `node` command runs then load are
- * `installScriptModuleDependencies`'s.
+ * Dependencies a consumer's install lifecycle fails without: one of their
+ * `bin` commands in command position (`setup-tool --init`, `npx setup-tool`,
+ * `./node_modules/.bin/setup-tool`), a file of theirs run directly (`node
+ * node_modules/setup-tool/install.js`), or a bare preload (`node -r
+ * setup-tool/register .`, `NODE_OPTIONS=--import=setup-tool node .`); a
+ * relative preload names no package. An optional dependency npm skipped
+ * after a failed fetch then fails the script, so this is what turns a
+ * survivable `AB7015` fatal; `echo setup-tool` never does.
  */
-const installScriptCommandDependencies = async (
+const installScriptNeeds = (
   text: string,
   commands: readonly SimpleCommand[],
   executables: ExecutableCommands,
-  declared: readonly string[],
-): Promise<readonly string[]> => {
-  if (text === '') return [];
+  packageDocument: Readonly<Record<string, unknown>>,
+): readonly string[] => {
   const run = new Set(commands.map(({ command }) => command));
   const words = shellWords(text);
-  const names = new Set<string>();
-  for (const [name, { commands: bins }] of executables) {
-    if (bins.some((command) => run.has(command))) names.add(name);
-    if (words.some((word) => word.replace(/^\.\//u, '').startsWith(`node_modules/${name}/`))) names.add(name);
-  }
-  for (const program of nodeOptionValues(commands, inlineOptions)) {
-    const { complete, specifiers } = await moduleLoads(program);
-    if (!complete) for (const name of declared) names.add(name);
-    for (const specifier of specifiers) {
-      const name = packageNameOf(specifier);
-      if (name !== undefined) names.add(name);
-    }
-  }
-  return [...names];
+  return [
+    ...[...executables]
+      .filter(([name, bins]) => bins.some((command) => run.has(command))
+        || words.some((word) => word.replace(/^\.\//u, '').startsWith(`node_modules/${name}/`)))
+      .map(([name]) => name),
+    ...packageNames(packageDocument, nodeOptionValues(commands, preloadOptions)),
+  ];
 };
 
-/** The packed files a module resolves through: the module files, and each packed directory manifest's `main`. */
-interface PackedModules {
-  readonly files: ReadonlySet<string>;
-  /** Directory → the path its packed `package.json` `main` names, as Node reads it for `require("./dir")`. */
-  readonly mains: ReadonlyMap<string, string>;
+export interface InstallScriptDependencies {
+  /** Every package a consumer-side install script names or runs: keep-only evidence for `AB7014`. */
+  readonly names: ReadonlySet<string>;
+  /** The subset the install fails without (`installScriptNeeds`), which escalates an optional dependency's `AB7015`. */
+  readonly needed: ReadonlySet<string>;
 }
 
+/** What the consumer-side install scripts (`installScriptText`) say about the installed dependencies `declared`. */
+export const installScriptDependencies = async (options: {
+  readonly declared: readonly string[];
+  readonly packageDocument: Readonly<Record<string, unknown>>;
+  readonly projectRoot: string;
+}): Promise<InstallScriptDependencies> => {
+  const executables = await executableCommands(options.declared, resolve(options.projectRoot));
+  const text = installScriptText(isRecord(options.packageDocument.scripts) ? options.packageDocument.scripts : {});
+  const needed = new Set(installScriptNeeds(text, simpleCommands(text), executables, options.packageDocument));
+  return { names: new Set([...installScriptMentions(text, executables), ...needed]), needed };
+};
+
 /**
- * Directory → the `main` of its packed manifest (`lib/package.json` with
- * `"main": "setup.cjs"` → `lib` → `lib/setup.cjs`), which Node consults before
- * the `index.js` fallback when a directory is required or run: the package's
- * own manifest for `.` (what `node .` runs), read from the document since
- * the inventory's `package.json` is the package itself, and every other
- * packed manifest outside `node_modules`, whose manifests belong to bundled
- * dependencies.
+ * The package a `/// <reference types="name" />` directive resolves through:
+ * `name` itself when it ships declarations, or its DefinitelyTyped package
+ * (`@types/name`; `@types/scope__name` for a scoped name). Both are reported,
+ * since the declaration cannot say which one the consumer needs.
  */
-const packedMains = async (
-  paths: readonly string[],
-  projectRoot: string,
-  packageDocument: Readonly<Record<string, unknown>>,
-): Promise<ReadonlyMap<string, string>> => {
-  const manifests = paths.filter((path) => /^(?!node_modules\/).+\/package\.json$/u.test(path));
-  const entries = await Promise.all(manifests.map(async (path): Promise<readonly [string, string] | undefined> => {
-    try {
-      const parsed: unknown = JSON.parse(await readFile(resolve(projectRoot, path), 'utf8'));
-      if (!isRecord(parsed) || typeof parsed.main !== 'string') return undefined;
-      const directory = posix.dirname(path);
-      return [directory, posix.join(directory, parsed.main)];
-    } catch {
-      return undefined;
-    }
-  }));
-  return new Map([
-    ...(typeof packageDocument.main === 'string' ? [['.', posix.join('.', packageDocument.main)] as const] : []),
-    ...entries.filter((entry): entry is readonly [string, string] => entry !== undefined),
+const typeDirectivePackages = (name: string): readonly string[] => [
+  name,
+  name.startsWith('@') ? `@types/${name.slice(1).replace('/', '__')}` : `@types/${name}`,
+];
+
+/**
+ * Package names a declaration file makes a consumer need, as TypeScript reads
+ * it (`preProcessFile`, string escapes already decoded): every `importedFiles`
+ * entry (`import`/`export … from`, `import x = require("…")`, `import("…")`
+ * types, module augmentations in an external-module file) and every
+ * `typeReferenceDirectives` entry with its `@types` twin. The
+ * `ambientExternalModules` — `declare module "x"` in a file with no imports —
+ * declare that module themselves and make nothing needed. Relative and
+ * built-in specifiers name no package; a `#subpath` specifier reaches
+ * whatever the manifest's `imports` map gives it (`packageImportTargets`).
+ */
+export const declarationPackageReferences = (text: string, packageDocument: Readonly<Record<string, unknown>>): readonly string[] => {
+  const { importedFiles, typeReferenceDirectives } = ts.preProcessFile(text, true, false);
+  return packageNames(packageDocument, [
+    ...importedFiles.map((file) => file.fileName),
+    ...typeReferenceDirectives.flatMap((directive) => typeDirectivePackages(directive.fileName)),
   ]);
 };
 
-/**
- * The packed module a path names, in the order Node's CommonJS loader tries
- * for `require("./lib")` or `node scripts/install`: the exact file, the `.js`
- * extension, then the directory — its manifest's `main` as a file, with
- * `.js`, or as a directory index, and finally `index.js`. Node never tries
- * `.cjs` or `.mjs` there. A trailing slash names the same directory (`node
- * scripts/`, `node ./`), and `.` is the package root.
- */
-const packedModule = (path: string, modules: PackedModules): string | undefined => {
-  const base = posix.normalize(path).replace(/(?<=.)\/$/u, '');
-  const main = modules.mains.get(base);
-  const candidates = [
-    base,
-    `${base}.js`,
-    ...(main === undefined ? [] : [main, `${main}.js`, posix.join(main, 'index.js')]),
-    posix.join(base, 'index.js'),
-  ];
-  return candidates.find((candidate) => javaScriptSuffix.test(candidate) && modules.files.has(candidate));
-};
-
-/** `.` or `./`: the package directory, which `node .` runs through the root manifest's `main`. */
-const packageDirectory = /^\.\/*$/u;
-
-/**
- * The packed JavaScript files an install script runs: `node install.cjs`,
- * `node ./scripts/setup.mjs`, `node scripts/install`, `node "scripts/my
- * install.cjs"`. Every word is tried; a word that is not a packed module is
- * not one, and the empty word `""` names no path. The package directory
- * itself counts only as a `node` program (`node .`, `node -r dotenv/config
- * .`): elsewhere `.` is the working directory an option names (`npm --prefix
- * . run setup`), not a program.
- */
-const installScriptFiles = (text: string, commands: readonly SimpleCommand[], modules: PackedModules): readonly string[] => [
-  ...shellWords(text).filter((word) => word !== '' && !packageDirectory.test(word)),
-  ...commands.filter(({ command }) => command === 'node').flatMap((command) => {
-    const { program } = nodeCommand(command);
-    return program !== undefined && packageDirectory.test(program) ? [program] : [];
-  }),
-].flatMap((word) => {
-  const module = packedModule(word, modules);
-  return module === undefined ? [] : [module];
-});
-
-const relativeSpecifier = /^\.\.?\//u;
-
-/**
- * The packages a consumer's install lifecycle loads through the packed
- * JavaScript it runs — `"postinstall": "node install.cjs"` with `install.cjs`
- * requiring a driver — and through the modules `node` preloads before the
- * program (`node -r dotenv/config install.cjs`, `node --import ./setup.mjs
- * .`), following relative imports and the manifest's `imports` map through
- * the tarball. A computed load in any of those files could reach any declared
- * package, so every declared name then counts as needed at install time.
- */
-const installScriptModuleDependencies = (options: {
-  /** The packed files run directly. */
-  readonly roots: readonly string[];
-  /** The specifiers preloaded from the package root, where npm runs the lifecycle. */
-  readonly preloads: readonly string[];
-  readonly evidenceByPath: ReadonlyMap<string, FileEvidence>;
-  readonly modules: PackedModules;
-  readonly packageDocument: Readonly<Record<string, unknown>>;
-  readonly declared: readonly string[];
-}): readonly string[] => {
-  const { declared, evidenceByPath, modules, packageDocument } = options;
-  const names = new Set<string>();
-  const seen = new Set<string>();
-  const queue = [...options.roots];
-  // What one specifier resolved from `directory` reaches: a relative one a packed module to follow, a bare one a
-  // package, a `#` one whatever the `imports` map gives it — a package, or the package's own file
-  // (`"#setup": "./setup.js"`), relative to the package root.
-  const follow = (specifier: string, directory: string): void => {
-    if (relativeSpecifier.test(specifier)) {
-      const target = packedModule(posix.join(directory, specifier), modules);
-      if (target !== undefined) queue.push(target);
-      return;
-    }
-    for (const target of specifier.startsWith('#') ? packageImportTargets(packageDocument, specifier) : [specifier]) {
-      if (relativeSpecifier.test(target)) {
-        const module = packedModule(target, modules);
-        if (module !== undefined) queue.push(module);
-        continue;
-      }
-      const name = packageNameOf(target);
-      if (name !== undefined) names.add(name);
-    }
-  };
-  for (const specifier of options.preloads) follow(specifier, '.');
-  for (let path = queue.shift(); path !== undefined; path = queue.shift()) {
-    const evidence = evidenceByPath.get(path);
-    if (seen.has(path) || evidence === undefined) continue;
-    seen.add(path);
-    if (!evidence.complete) for (const name of declared) names.add(name);
-    for (const name of evidence.executed) names.add(name);
-    for (const specifier of evidence.specifiers) follow(specifier, posix.dirname(path));
-  }
-  return [...names];
-};
-
-/**
- * Every package name the packed JavaScript imports, requires, resolves, or
- * runs as an executable, the packed declarations reference, a packed `#`
- * import may reach through the manifest's `imports` map, or a consumer's
- * install script runs or loads — read from the bytes npm would publish.
- */
-export const importedPackageNames = async (options: {
-  /** Names to test for executable and install-script use; every other source is scanned whole. */
-  readonly declared: readonly string[];
+/** Package names the packed declaration files reference; `paths` is the pack inventory (POSIX, no `./`). */
+export const packedDeclarationReferences = async (options: {
   readonly packageDocument: Readonly<Record<string, unknown>>;
   readonly paths: readonly string[];
   readonly projectRoot: string;
-}): Promise<ImportedPackages> => {
+}): Promise<ReadonlySet<string>> => {
   const projectRoot = resolve(options.projectRoot);
-  const executables = await executableCommands(options.declared, projectRoot);
-  const evidenceByPath = new Map(await Promise.all(options.paths
-    .filter((path) => javaScriptSuffix.test(path) || declarationSuffix.test(path))
-    .map(async (path) => [path, await fileEvidence(resolve(projectRoot, path), executables)] as const)));
-  const modules: PackedModules = {
-    files: new Set(evidenceByPath.keys()),
-    mains: await packedMains(options.paths, projectRoot, options.packageDocument),
-  };
-  const evidence = [...evidenceByPath.values()];
-  const scriptText = installScriptText(isRecord(options.packageDocument.scripts) ? options.packageDocument.scripts : {});
-  const commands = simpleCommands(scriptText);
-  const neededByScripts = [
-    ...await installScriptCommandDependencies(scriptText, commands, executables, options.declared),
-    ...installScriptModuleDependencies({
-      declared: options.declared,
-      evidenceByPath,
-      modules,
-      packageDocument: options.packageDocument,
-      preloads: nodeOptionValues(commands, preloadOptions),
-      roots: installScriptFiles(scriptText, commands, modules),
-    }),
-  ];
-  const specifiers = evidence.flatMap((file) => file.specifiers);
-  const reachable = specifiers
-    .filter((specifier) => specifier.startsWith('#'))
-    .flatMap((specifier) => packageImportTargets(options.packageDocument, specifier));
-  return {
-    complete: evidence.every((file) => file.complete),
-    installScripts: new Set(neededByScripts),
-    names: new Set([
-      ...[...specifiers, ...reachable].flatMap((specifier) => {
-        const name = packageNameOf(specifier);
-        return name === undefined ? [] : [name];
-      }),
-      ...evidence.flatMap((file) => file.executed),
-      ...installScriptMentions(scriptText, executables),
-      ...neededByScripts,
-    ]),
-  };
+  const references = await Promise.all(options.paths.filter((path) => declarationSuffix.test(path)).map(async (path) => {
+    let text: string;
+    try {
+      text = await readFile(resolve(projectRoot, path), 'utf8');
+    } catch (error) {
+      // npm listed the file; only its absence is a benign inconsistency.
+      if (isErrno(error, 'ENOENT')) return [];
+      throw error;
+    }
+    return declarationPackageReferences(text, options.packageDocument);
+  }));
+  return new Set(references.flat());
 };
