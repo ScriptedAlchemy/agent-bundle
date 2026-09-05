@@ -181,6 +181,18 @@ list and each `host` names a `projections[]` row.
 | `channels[]` | yes | `local` always; `npm` exactly when `compiler.project.packageName` is present. Sorted. |
 | `install` | no | Root-relative pointers to the install surface: `{ instructions?: 'INSTALL.md', script?: 'install.mjs' }`, present when the root carries at least one of them. |
 
+### `web`
+
+The one optional root key. Present exactly when the configuration's
+[`web`](./configuration.mdx#web) exposes at least one App whose `targets` intersect the
+selection; `<plugin> web`, `agent-bundle dev` `/web/<server>/<app>`, and `doctor` read it and
+never rediscover Apps from `src/**`.
+
+| Field | Required | Contents |
+| --- | --- | --- |
+| `open` | yes | `browser` or `never`: whether `<plugin> web` opens the default browser once the host listens. |
+| `apps[]` | yes | Sorted by `app`, unique. Each row: `app` (`<server>/<name>`), `name`, `server`, `resourceUri`, `entry` (the root-relative compiled MCP executable; a `files[]` row), `args` (the server's declared arguments after its entry) and `env` (its declared static environment), both with `agent-bundle:path:*` tokens unexpanded, `allow[]` (pre-approved App-initiated consent capabilities), and optional `tool` and `input` for the opening call. |
+
 ## Compiler record (`compiler`, `recordVersion`)
 
 Operational record of the compiler run. Versioned by `recordVersion` independently of
@@ -238,7 +250,7 @@ A reader enforces these before it accepts the document:
 - `compiler.adapters` hosts equal `projections[]` hosts.
 - Every pointer — `projections[].documents.*`, `executables.*[].path` and `worker`,
   `executables.mcpServers[].entry.*`, `executables.mcpServers[].apps[].path`,
-  `distribution.install.*` — names a `files[]` row.
+  `distribution.install.*`, `web.apps[].entry` — names a `files[]` row.
 - Every `hosts[]` entry and every `hooks[].host` names a `projections[]` row.
 - `compiler.validation.projections[]` hosts equal `projections[]` hosts.
 - `executables.scripts[].rendered.routeId` names a `routes.scripts[]` route.

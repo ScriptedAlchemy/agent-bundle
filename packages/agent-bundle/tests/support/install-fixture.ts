@@ -9,6 +9,7 @@ import {
   type ArtifactManifestCompilerAdapter,
   type ArtifactManifestProjection,
 } from '../../src/build/manifest.ts';
+import type { WebManifest } from '../../src/web-host/manifest.ts';
 import { digest, sha256Hex } from '../../src/core/digest.ts';
 import type { InstallHost } from '../../src/install/install.ts';
 
@@ -51,6 +52,7 @@ export const writeInstallFixtureManifest = async (
   bundleRoot: string,
   application: { readonly name: string; readonly version: string },
   projections: readonly InstallFixtureProjection[],
+  web?: WebManifest,
 ): Promise<void> => {
   const sourceInputs = Object.freeze([Object.freeze({
     path: 'agent-bundle.config.ts',
@@ -131,6 +133,7 @@ export const writeInstallFixtureManifest = async (
     files,
     manifestVersion: 2,
     projections: projectionRows,
+    ...(web === undefined ? {} : { web }),
     routes: {
       digest: sha256Hex('install fixture routes\n'),
       events: [],

@@ -10,7 +10,9 @@ import {
 } from '../core/diagnostics.ts';
 import { mapConcurrent } from '../core/async.ts';
 import { isErrno } from '../core/errors.ts';
+import { readArtifactManifest } from '../build/manifest-file.ts';
 import { exists } from '../core/paths.ts';
+import { isRecord } from '../core/strict-json.ts';
 import {
   validateClaudePlugin,
   validateClaudePluginFiles,
@@ -1093,33 +1095,13 @@ const readPublicHostListing = async (
   return { status: 'available', stdout: result.stdout };
 };
 
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-
-const artifactManifestName = 'agent-bundle.manifest.json';
-
-/**
- * The `web.apps` count from the bundle root manifest, read leniently rather
- * than through `readWebManifest`'s strict key contract: doctor reports what a
- * bundle contains and never fails on a malformed manifest.
- */
-const readWebSurface = async (
-  from: string | undefined,
-  pluginName: string | undefined,
-): Promise<DoctorWebSurface | undefined> => {
+/** The `web.apps` count of the authoritative manifest at `--from`; absent when the manifest is not readable or exposes no App. */
+const readWebSurface = async (from: string | undefined): Promise<DoctorWebSurface | undefined> => {
   if (from === undefined) return undefined;
-  const manifestFile = join(resolve(from), artifactManifestName);
-  if (!(await exists(manifestFile))) return undefined;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(await readFile(manifestFile, 'utf8')) as unknown;
-  } catch {
-    return undefined;
-  }
-  if (!isRecord(parsed) || parsed.web === undefined) return undefined;
-  const web = parsed.web;
-  const apps = isRecord(web) && Array.isArray(web.apps) ? web.apps.length : 0;
-  const plugin = pluginName === undefined || pluginName.length === 0 ? '<plugin>' : pluginName;
+  const read = await readArtifactManifest(from);
+  if (read.status !== 'ok' || read.manifest.web === undefined) return undefined;
+  const apps = read.manifest.web.apps.length;
+  const plugin = read.manifest.application.name;
   return Object.freeze({
     apps,
     line: `web: ${String(apps)} App(s) exposed — run ${plugin} web`,
@@ -2666,8 +2648,7 @@ export const runDoctor = async (options: DoctorOptions = {}): Promise<DoctorRepo
     ...hostReports.flatMap((report) => report.diagnostics),
     ...endpoints.diagnostics,
   ]);
-  const pluginName = hostReports.find((report) => report.bundle?.name !== undefined)?.bundle?.name;
-  const web = await readWebSurface(options.from, pluginName);
+  const web = await readWebSurface(options.from);
   return Object.freeze({
     diagnostics,
     endpoints,

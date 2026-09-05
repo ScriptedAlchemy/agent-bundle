@@ -653,7 +653,7 @@ it('publishes a deep-frozen draft 2020-12 schema pinned to manifestVersion 2 tha
   expect(artifactManifestSchema.additionalProperties).toBe(false);
   expect(artifactManifestSchema.required).toEqual(Object.keys(minimalManifest()).sort());
   const properties = asObject(artifactManifestSchema.properties);
-  expect(Object.keys(properties)).toEqual(Object.keys(minimalManifest()).sort());
+  expect(Object.keys(properties)).toEqual([...Object.keys(minimalManifest()), 'web'].sort());
   expect(asObject(properties.manifestVersion).const).toBe(2);
 
   expect(Object.isFrozen(artifactManifestSchema)).toBe(true);

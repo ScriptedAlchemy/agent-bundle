@@ -346,7 +346,7 @@ it('round-trips and deeply freezes the optional web section', () => {
         allow: ['call-tool'],
         app: 'catalog/details',
         args: [],
-        entry: 'mcp/mcp-catalog-01234567.mjs',
+        entry: 'codex/scripts/review.mjs',
         env: { TOKEN: 'agent-bundle:path:plugin-data/token' },
         name: 'details',
         resourceUri: 'ui://catalog/details',

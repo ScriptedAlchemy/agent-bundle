@@ -638,9 +638,24 @@ it('prints a web surface line when the bundle manifest exposes Apps', async () =
   const fixture = await temporaryDoctor();
   try {
     const bundle = await createBundle(fixture.root, 'cursor');
-    await writeJson(join(bundle, 'agent-bundle.manifest.json'), {
-      web: { apps: [{ app: 'status/status' }, { app: 'status/other' }] },
+    await mkdir(join(bundle, 'mcp'), { recursive: true });
+    await writeFile(join(bundle, 'mcp/status.mjs'), '// server\n');
+    const app = (name: string) => ({
+      allow: [],
+      app: `status/${name}`,
+      args: [],
+      entry: 'mcp/status.mjs',
+      env: {},
+      name,
+      resourceUri: `ui://status/${name}`,
+      server: 'status',
     });
+    await writeInstallFixtureManifest(
+      bundle,
+      { name: 'doctor-fixture', version: '1.2.3' },
+      [{ host: 'cursor' }],
+      { apps: [app('other'), app('status')], open: 'never' },
+    );
     const report = await runDoctor({
       endpointDirectory: fixture.endpointDirectory,
       from: bundle,

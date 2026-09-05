@@ -170,6 +170,17 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 | `channels[]` | 是 | 始终有 `local`；恰当 `compiler.project.packageName` 存在时有 `npm`。已排序。 |
 | `install` | 否 | 指向安装表面的根相对指针：`{ instructions?: 'INSTALL.md', script?: 'install.mjs' }`，根目录至少携带其一时出现。 |
 
+### `web`
+
+唯一的可选根键。恰当配置中的 [`web`](./configuration.mdx#web) 暴露了至少一个 `targets`
+与所选投影相交的 App 时出现；`<plugin> web`、`agent-bundle dev` 的 `/web/<server>/<app>` 与
+`doctor` 读取它，绝不会从 `src/**` 重新发现 App。
+
+| 字段 | 必填 | 内容 |
+| --- | --- | --- |
+| `open` | 是 | `browser` 或 `never`：宿主开始监听后 `<plugin> web` 是否打开默认浏览器。 |
+| `apps[]` | 是 | 按 `app` 排序且唯一。每行包含 `app`（`<server>/<name>`）、`name`、`server`、`resourceUri`、`entry`（根相对的已编译 MCP 可执行文件，对应一行 `files[]`）、`args`（服务器在 entry 之后声明的参数）与 `env`（其声明的静态环境，二者的 `agent-bundle:path:*` 令牌均不展开）、`allow[]`（预先批准的 App 发起的同意能力），以及打开调用可选的 `tool` 与 `input`。 |
+
 ## 编译器记录（`compiler`，`recordVersion`）
 
 编译器运行的操作记录。由 `recordVersion` 独立于 `manifestVersion` 版本化：这里的变更不是消费者读取的产物契约变更。该对象恰有七个键，全部必填：`adapters`、`agentSkills`、`producer`、`project`、`provenance`、`recordVersion`、`validation`。
@@ -223,7 +234,7 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 - `compiler.adapters` 的宿主等于 `projections[]` 的宿主。
 - 每个指针——`projections[].documents.*`、`executables.*[].path` 与 `worker`、
   `executables.mcpServers[].entry.*`、`executables.mcpServers[].apps[].path`、
-  `distribution.install.*`——都指向一行 `files[]`。
+  `distribution.install.*`、`web.apps[].entry`——都指向一行 `files[]`。
 - 每个 `hosts[]` 项与每个 `hooks[].host` 都指向一行 `projections[]`。
 - `compiler.validation.projections[]` 的宿主等于 `projections[]` 的宿主。
 - `executables.scripts[].rendered.routeId` 指向一条 `routes.scripts[]` 路由。
