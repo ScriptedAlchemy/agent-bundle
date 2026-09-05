@@ -912,7 +912,8 @@ it('accepts a dependency that only a prebuilt payload module imports: prepack pa
   const reported = [...packed.build.diagnostics, ...packed.diagnostics];
   expect(withCode(reported, 'AB6005')).toHaveLength(0);
   expect(withCode(reported, 'AB7014')).toHaveLength(0);
-  expect(packed.pack.files.map((file) => file.path)).toContain('host-packs/cursor/runtime/mcp/server.js');
+  // The payload is copied once into the composite root (#555): no `<target>/` partition under `distPath`.
+  expect(packed.pack.files.map((file) => file.path)).toContain('host-packs/runtime/mcp/server.js');
 }, 180_000);
 
 it('fails prepack with AB6005, never AB7014, when only a compiled dist bundle imports a declared dependency', async () => {
