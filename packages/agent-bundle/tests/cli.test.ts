@@ -702,7 +702,8 @@ it('dumps the synthesized bundler configuration with inspect --bundler', async (
     const script = document.selected.bundler.entries.find((entry) => entry.kind === 'script');
     expect(script).toMatchObject({
       config: {
-        output: { distPath: { root: '<output>/portable' } },
+        // Scripts compile into the one plugin root (#555), not a `<target>/` directory.
+        output: { distPath: { root: '<output>' } },
         tools: {
           rspack: [
             { resolve: { extensionAlias: { '.js': ['.js', '.ts'] } } },

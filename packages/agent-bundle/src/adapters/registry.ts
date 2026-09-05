@@ -20,7 +20,13 @@ import { codexAdapter } from './codex.ts';
 import { cursorAdapter } from './cursor.ts';
 import { readStandardNativeHookCommands, type TargetHookContract } from './hook-contract.ts';
 import { portableAdapter } from './portable.ts';
-import { pluginAdapter } from './plugin.ts';
+import {
+  compositeHookContract,
+  compositeHostRoot,
+  compositeMcpRuntime,
+  compositeTargetName,
+  createCompositeAdapter,
+} from './composite.ts';
 import {
   routedCliBinLayout,
   type TargetAdapter,
@@ -530,6 +536,7 @@ export class TargetRegistry implements NormalizationTargetRegistry {
   readonly #nativeHookSources = new Map<string, NativeHookSource>();
   readonly #noticeDeliveries = new Map<string, NoticeDeliveryAdvertisement>();
   readonly #outputStylesSources = new Map<string, OutputStylesSource>();
+  readonly #roots = new Map<string, ArtifactRootContracts>();
   readonly #workflowsSources = new Map<string, WorkflowsSource>();
 
   register(adapter: TargetAdapter, options: { readonly default?: boolean } = {}): this {
@@ -775,6 +782,87 @@ export class TargetRegistry implements NormalizationTargetRegistry {
   defaultTargetNames(): readonly string[] {
     return Object.freeze([...this.#defaults]);
   }
+
+  /**
+   * The contracts of one plugin root projecting `targetNames` (#555): the
+   * registered snapshots of a single target, or the composite that plans
+   * and validates several hosts in one root. Every name must be registered.
+   */
+  root(targetNames: readonly string[]): ArtifactRootContracts {
+    const names = [...new Set(targetNames)];
+    for (const name of names) {
+      if (!this.#adapters.has(name)) throw new Error(`Unknown target adapter "${name}".`);
+    }
+    if (names.length === 0) throw new Error('A plugin root projects at least one target.');
+    if (names.length === 1) {
+      const name = names[0]!;
+      const hookContract = this.#hookContracts.get(name);
+      return Object.freeze({
+        adapter: this.get(name),
+        artifactLayout: this.artifactLayout(name),
+        artifactValidation: this.artifactValidation(name),
+        ...(hookContract === undefined ? {} : { hookContract }),
+        hookContractFor: (host: string) => (host === name ? hookContract : undefined),
+        hostRoot: () => '',
+        ...(this.#mcpRuntimes.has(name) ? { mcpRuntime: this.#mcpRuntimes.get(name)! } : {}),
+        mcpRuntimeFor: (host: string) => (host === name ? this.#mcpRuntimes.get(name) : undefined),
+        metadata: this.metadata(name),
+        name,
+        ...(this.#noticeDeliveries.has(name) ? { noticeDelivery: this.#noticeDeliveries.get(name)! } : {}),
+        targets: Object.freeze([name]),
+      });
+    }
+    const key = compositeTargetName(names);
+    const cached = this.#roots.get(key);
+    if (cached !== undefined) return cached;
+    // Only the built-in hosts compose into one root; an advanced registry's
+    // own adapters are built one target per output.
+    const adapter = createCompositeAdapter(names);
+    const hookContract = snapshotHookContract(adapter);
+    const mcpRuntime = snapshotMcpRuntime(adapter);
+    const noticeDelivery = snapshotNoticeDelivery(adapter);
+    const root: ArtifactRootContracts = Object.freeze({
+      adapter,
+      artifactLayout: snapshotArtifactLayout(adapter, hookContract, mcpRuntime),
+      artifactValidation: snapshotArtifactValidation(adapter, snapshotMetadata(adapter.metadata)),
+      ...(hookContract === undefined ? {} : { hookContract }),
+      hookContractFor: (host: string) => compositeHookContract(names, host),
+      hostRoot: (host: string) => compositeHostRoot(names, host),
+      ...(mcpRuntime === undefined ? {} : { mcpRuntime }),
+      mcpRuntimeFor: (host: string) => compositeMcpRuntime(names, host),
+      metadata: snapshotMetadata(adapter.metadata),
+      name: key,
+      ...(noticeDelivery === undefined ? {} : { noticeDelivery }),
+      targets: Object.freeze([...names]),
+    });
+    this.#roots.set(key, root);
+    return root;
+  }
+}
+
+/** The contracts one plugin root follows as a whole; see TargetRegistry.root. */
+export interface ArtifactRootContracts {
+  readonly adapter: TargetAdapter;
+  readonly artifactLayout: TargetArtifactLayout;
+  readonly artifactValidation: TargetArtifactValidationContract;
+  /** The contract of the host owning the conventional hook document, when any host lowers hooks. */
+  readonly hookContract?: TargetHookContract;
+  /** One host's hook contract inside this root, with the document path the composition relocated it to. */
+  readonly hookContractFor: (host: string) => TargetHookContract | undefined;
+  /**
+   * The directory, relative to the root, one host reads as its plugin root:
+   * '' for every host at the root itself, `portable` for the Agent Plugins
+   * view of a composite root.
+   */
+  readonly hostRoot: (host: string) => string;
+  readonly mcpRuntime?: TargetMcpRuntimeContract;
+  /** One host's MCP runtime contract inside this root, with the document path the composition relocated it to. */
+  readonly mcpRuntimeFor: (host: string) => TargetMcpRuntimeContract | undefined;
+  readonly metadata: TargetAdapterMetadata;
+  /** The root's identity: the host name, or the composite name of several hosts. */
+  readonly name: string;
+  readonly noticeDelivery?: NoticeDeliveryAdvertisement;
+  readonly targets: readonly string[];
 }
 
 export const createDefaultRegistry = (): TargetRegistry =>
@@ -782,5 +870,4 @@ export const createDefaultRegistry = (): TargetRegistry =>
     .register(portableAdapter, { default: true })
     .register(codexAdapter)
     .register(claudeAdapter)
-    .register(cursorAdapter)
-    .register(pluginAdapter);
+    .register(cursorAdapter);

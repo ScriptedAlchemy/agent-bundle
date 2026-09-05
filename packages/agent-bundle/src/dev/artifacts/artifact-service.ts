@@ -85,15 +85,21 @@ const failureDiagnostics = (
   }]);
 };
 
+/**
+ * One digest per projected target. Every target reads the same plugin root
+ * (#555), so the digests share the root's file listing and differ only by the
+ * target name they are keyed under.
+ */
 const targetDigests = async (
   artifactRoot: string,
   model: NormalizedPlugin,
-): Promise<Readonly<Record<string, string>>> => Object.freeze(Object.fromEntries(
-  await Promise.all(model.targets.map(async (target) => [
+): Promise<Readonly<Record<string, string>>> => {
+  const files = await listArtifactFiles(artifactRoot);
+  return Object.freeze(Object.fromEntries(model.targets.map((target) => [
     target.name,
-    digest(await listArtifactFiles(join(artifactRoot, target.name))),
-  ])),
-));
+    digest({ files, target: target.name }),
+  ])));
+};
 
 const createAttempt = async (projectRoot: string): Promise<string> => {
   const attemptsRoot = join(resolve(projectRoot), '.agent-bundle', 'attempts');

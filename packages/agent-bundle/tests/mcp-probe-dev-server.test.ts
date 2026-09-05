@@ -59,7 +59,8 @@ it('runs an authenticated initialize and tools/list probe against a real built s
       port: 0,
       root: project.root,
     });
-    await access(join(project.root, 'dist', 'claude', '.mcp.json'));
+    // A single-host root is the plugin root itself (#555).
+    await access(join(project.root, 'dist', '.mcp.json'));
 
     const unauthenticated = await fetch(`${server.url}/api/discovery/probes`, {
       body: JSON.stringify({ host: 'claude', serverName: 'timeline' }),

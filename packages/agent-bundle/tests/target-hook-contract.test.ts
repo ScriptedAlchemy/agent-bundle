@@ -13,7 +13,7 @@ import {
   readTargetNativeHookCommands,
   type TargetHookContract,
 } from '../src/adapters/hook-contract.ts';
-import { pluginAdapter } from '../src/adapters/plugin.ts';
+import { createCompositeAdapter } from '../src/adapters/composite.ts';
 import { TargetRegistry } from '../src/adapters/registry.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
 import { normalizeProject, type NormalizationTargetRegistry } from '../src/config/index.ts';
@@ -254,10 +254,10 @@ it('builds adapter-owned native hook event, layout, and wrapper source', async (
     });
 
     expect(result.compiledHooks[0]).toMatchObject({ target: 'synthetic' });
-    const wrapper = join(outputRoot, 'synthetic', 'runtime', 'synthetic-before-tool.mjs');
+    const wrapper = join(outputRoot, 'runtime', 'synthetic-before-tool.mjs');
     await expect(readFile(wrapper, 'utf8')).resolves.toContain('synthetic-wrapper-marker');
     await expect(runWrapper(wrapper)).resolves.toBe('synthetic-wrapper-marker:{"nativeEvent":"SyntheticBeforeWrite"}');
-    await expect(readFile(join(outputRoot, 'synthetic', 'native-events', 'registration.json'), 'utf8')
+    await expect(readFile(join(outputRoot, 'native-events', 'registration.json'), 'utf8')
       .then(JSON.parse)).resolves.toEqual({
       hooks: {
         SyntheticBeforeWrite: [{
@@ -367,21 +367,22 @@ it('plans a thin epoch-bound event-route client and keeps standalone execution e
   expect(degradedSource).not.toContain('renderStandaloneEventRoute');
 });
 
-it('bakes the concrete Cursor target only into the plugin Cursor event wrapper', () => {
+it('bakes the concrete Cursor target only into the composite root\'s Cursor event wrapper', () => {
+  const hosts = ['claude', 'codex', 'cursor'];
   const hook: NormalizedHook = {
     ...planningHook('afterTool', []),
     eventRoute: { event: 'tool/after', fallback: 'none', runtime: 'shared' },
-    targets: ['plugin'],
+    targets: hosts,
   };
   const model: NormalizedPlugin = {
     ...planningModel([hook]),
-    targets: [{
-      id: 'target:plugin',
-      name: 'plugin',
+    targets: hosts.map((name) => ({
+      id: `target:${name}`,
+      name,
       provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
-    }],
+    })),
   };
-  const plan = pluginAdapter.plan(model);
+  const plan = createCompositeAdapter(hosts).plan(model);
   const hookEntries = plan.hookEntries ?? [];
   const shared = hookEntries.find((entry) => !entry.relativePath.endsWith('.cursor.mjs'));
   const cursor = hookEntries.find((entry) => entry.relativePath.endsWith('.cursor.mjs'));

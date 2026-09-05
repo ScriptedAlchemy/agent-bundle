@@ -7,6 +7,7 @@ import { Client, type JSONRPCMessage, type Transport } from '@modelcontextprotoc
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
+import { hostMcpRuntime, hostRootDirectory, readArtifactRootContracts } from '../src/build/artifact-root.ts';
 import { build } from './support/build.ts';
 import { loadedProject } from './support/loaded-project.ts';
 
@@ -148,8 +149,12 @@ class AgentBundleRemoteTransport implements Transport {
 }
 
 const generatedServer = async (artifact: string, target: string, serverName: string, workspaceRoot: string): Promise<GeneratedStdioServer> => {
-  const targetRoot = join(artifact, target);
-  const runtime = createDefaultRegistry().mcpRuntime(target);
+  // The built artifact is one plugin root (#555): the host's root and its MCP
+  // document come from the root contracts the manifest's targets select.
+  const registry = createDefaultRegistry();
+  const contracts = await readArtifactRootContracts(artifact, registry);
+  const targetRoot = hostRootDirectory(artifact, contracts, target);
+  const runtime = hostMcpRuntime(contracts, registry, target);
   if (runtime === undefined) throw new Error(`Missing MCP runtime for ${JSON.stringify(target)}.`);
   const document: unknown = JSON.parse(await readFile(join(targetRoot, runtime.manifestPath), 'utf8'));
   const result = readTargetMcpServer(runtime, document, serverName);

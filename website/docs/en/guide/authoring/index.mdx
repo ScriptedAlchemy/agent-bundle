@@ -38,15 +38,29 @@ identity from `agent-bundle/meta` instead of a hand-maintained version module.
 
 ## Targets
 
-`targets` selects the artifact layouts the build emits:
+`targets` selects the hosts the build projects into one plugin root:
 
 | Target | What it emits |
 | --- | --- |
-| `plugin` | One multi-host bundle with `.claude-plugin/`, `.codex-plugin/`, and `.cursor-plugin/` manifests over shared component directories. |
-| `claude` | The Claude Code plugin layout. |
-| `codex` | The Codex plugin layout. |
-| `cursor` | The Cursor plugin layout. |
-| `portable` | The [Agent Plugins open standard](https://agent-plugins.org) (specification 1.0.0). Cursor, Codex, VS Code, GitHub Copilot, Kiro, and ChatGPT are native clients. |
+| `claude` | The Claude Code plugin layout: `.claude-plugin/plugin.json` and `marketplace.json`, `.mcp.json`, `hooks/hooks.json`. |
+| `codex` | The Codex plugin layout: `.codex-plugin/plugin.json` and `.agents/plugins/marketplace.json`. |
+| `cursor` | The Cursor plugin layout: `.cursor-plugin/plugin.json` (plus `marketplace.json` with `marketplace: true`) and the root `mcp.json`. |
+| `portable` | The [Agent Plugins open standard](https://agent-plugins.org) (specification 1.0.0): `plugin.json` and `mcp.json` at the root, or the namespaced `portable/` pack beside other hosts. Cursor, Codex, VS Code, GitHub Copilot, Kiro, and ChatGPT are native clients. |
+
+Select one target and the root is that host's layout unchanged. Select several and their
+projections compose into the same root: `skills/`, `scripts/`, `mcp/`, `mcp-apps/`, `bin/`, and
+`assets/` are emitted once and shared, each host's manifests sit in their own directory, and the
+build adds an `AGENTS.md` describing how each host reads the root beside one `INSTALL.md` with a
+section per host. Where two hosts would read one conventional document, the composition either
+relocates the document behind an explicit manifest pointer — Codex beside Claude Code reads
+`.codex-plugin/hooks.json` and `.codex-plugin/mcp.json`, Cursor beside another host reads
+`hooks/hooks-cursor.json` — or reports a diagnostic (`AB4104` when a skill or command selects
+only some of the hosts that share one directory, `AB4105` when two projections emit different
+bytes for one path); it never widens a declaration's host scope silently. Only these built-in
+hosts compose: an adapter registered on an advanced `TargetRegistry` is built alone, one target per
+`--output`, and selecting it beside a built-in host is refused (`AB4106`). Omitting `targets`
+selects `portable`. `plugin` is not a target name and is rejected as unknown (`AB4100`). The
+emitted layout is in [Project structure](../start/project-structure.mdx#host-artifacts).
 
 The portable standard packages only Skills and MCP servers, so rules, commands, and hooks are
 honestly unavailable on that target rather than silently dropped. Claude Code consumes the
@@ -57,7 +71,7 @@ standard only through CLI translation, which is why its dedicated target remains
 | Field | Owns |
 | --- | --- |
 | `plugin` | Project identity. Required. |
-| `targets` | Which artifact layouts to emit. |
+| `targets` | Which hosts the plugin root is projected for. |
 | `skills` | Explicit Skill paths or globs, replacing the `src/skills/*` convention. See [Skills](./skills.mdx). |
 | `hooks` | Lifecycle hook handlers, keyed by canonical event. See [Hooks](./hooks.mdx). |
 | `mcp` | MCP server declarations and their MCP Apps. See [MCP servers and Apps](./mcp.mdx). |
@@ -106,8 +120,8 @@ host version actually honours.
 Two Claude Code surfaces deserve a closer look because their contracts are narrower than their
 names suggest:
 
-- **`claude.lspServers`** — emitted as a plugin-root `.lsp.json` by the `claude` target and the
-  Claude half of `plugin`. Path tokens expand only in `command`, `args`, `env`, and
+- **`claude.lspServers`** — emitted as a plugin-root `.lsp.json` by any root that projects
+  `claude`. Path tokens expand only in `command`, `args`, `env`, and
   `workspaceFolder`. agent-bundle does not include the language-server binary; install it
   separately so the declared command is available on `PATH`. Codex, Cursor, and the portable
   format do not receive this configuration.

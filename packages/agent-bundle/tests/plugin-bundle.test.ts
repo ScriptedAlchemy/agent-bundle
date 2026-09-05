@@ -11,6 +11,10 @@ import { pathTokens, type NormalizedPlugin } from '../src/core/types.ts';
 
 const configPath = '/workspace/agent-bundle.config.ts';
 
+// One plugin root projecting every real host at once (#555): the old `plugin`
+// composite target is gone, so a multi-host selection is the composition.
+const compositeHosts = Object.freeze(['claude', 'codex', 'cursor']);
+
 const bundleModel = Object.freeze({
   extensions: Object.freeze({}),
   hooks: Object.freeze([
@@ -20,7 +24,7 @@ const bundleModel = Object.freeze({
       name: 'session-start',
       provenance: Object.freeze({ kind: 'config' as const, sourcePath: configPath }),
       source: '/workspace/src/hooks/session-start.ts',
-      targets: Object.freeze(['plugin']),
+      targets: compositeHosts,
       tools: Object.freeze([]),
     }),
     Object.freeze({
@@ -29,7 +33,7 @@ const bundleModel = Object.freeze({
       name: 'record-write',
       provenance: Object.freeze({ kind: 'config' as const, sourcePath: configPath }),
       source: '/workspace/src/hooks/record-write.ts',
-      targets: Object.freeze(['plugin']),
+      targets: compositeHosts,
       tools: Object.freeze(['file.write' as const]),
     }),
   ]),
@@ -42,7 +46,7 @@ const bundleModel = Object.freeze({
       id: 'mcp:status',
       name: 'status',
       provenance: Object.freeze({ kind: 'config' as const, sourcePath: configPath }),
-      targets: Object.freeze(['plugin']),
+      targets: compositeHosts,
       transport: 'stdio' as const,
     }),
   ]),
@@ -69,15 +73,15 @@ const bundleModel = Object.freeze({
         Object.freeze({ bytes: 8, relativePath: 'references/guide.md', source: '/workspace/src/skills/review/references/guide.md' }),
       ]),
       source: '/workspace/src/skills/review/SKILL.md',
-      targets: Object.freeze(['plugin']),
+      targets: compositeHosts,
     }),
   ]),
-  targets: Object.freeze([
-    Object.freeze({ id: 'target:plugin', name: 'plugin', provenance: Object.freeze({ kind: 'config' as const, sourcePath: configPath }) }),
-  ]),
+  targets: Object.freeze(compositeHosts.map((name) =>
+    Object.freeze({ id: `target:${name}`, name, provenance: Object.freeze({ kind: 'config' as const, sourcePath: configPath }) }))),
 } satisfies NormalizedPlugin);
 
-const planBundle = (model: NormalizedPlugin) => createDefaultRegistry().get('plugin').plan(model);
+// `build()` plans a multi-host root through the registry, so the tests do too.
+const planBundle = (model: NormalizedPlugin) => createDefaultRegistry().root(compositeHosts).adapter.plan(model);
 
 const writeContents = (model: NormalizedPlugin): Record<string, string> => Object.fromEntries(
   planBundle(model).entries
@@ -85,7 +89,7 @@ const writeContents = (model: NormalizedPlugin): Record<string, string> => Objec
     .map((entry) => [entry.relativePath, entry.content]),
 );
 
-it('lays both host manifests over one shared bundle root', () => {
+it('lays every host manifest over one shared plugin root', () => {
   const plan = planBundle(bundleModel);
   expect(plan.diagnostics).toEqual([]);
   const documents = writeContents(bundleModel);
@@ -96,8 +100,12 @@ it('lays both host manifests over one shared bundle root', () => {
   // the same file as a duplicate hooks file, so the manifest never names it.
   expect(claudePlugin).not.toHaveProperty('hooks');
 
+  // Beside Claude Code, Codex reads its hooks and MCP documents through
+  // manifest pointers at `.codex-plugin/`, leaving the conventional slots
+  // (`hooks/hooks.json`, `.mcp.json`) to Claude Code.
   const codexPlugin = JSON.parse(documents['.codex-plugin/plugin.json']!) as Record<string, unknown>;
   expect(codexPlugin).toMatchObject({
+    hooks: './.codex-plugin/hooks.json',
     mcpServers: './.codex-plugin/mcp.json',
     name: 'bundle-example',
     skills: './skills/',
@@ -117,11 +125,17 @@ it('lays both host manifests over one shared bundle root', () => {
   expect(codexMcp.mcpServers['status']!.cwd).toBe('./');
   expect(codexMcp.mcpServers['status']!.env).toEqual({ AGENT_BUNDLE_PLUGIN_ROOT: './' });
 
+  // Both Claude-format documents reference the same host-detecting wrappers,
+  // each with its own host's native tool matcher.
   const hooks = documents['hooks/hooks.json']!;
   expect(hooks).toContain('${CLAUDE_PLUGIN_ROOT}/hooks/session-start.mjs');
   expect(hooks).toContain('${CLAUDE_PLUGIN_ROOT}/hooks/record-write.mjs');
-  expect(hooks).toContain('apply_patch|Edit|Write');
-  expect(codexPlugin).not.toHaveProperty('hooks');
+  expect(hooks).toContain('^(?:Write|Edit)$');
+  const codexHooks = documents['.codex-plugin/hooks.json']!;
+  expect(codexHooks).toContain('hooks/session-start.mjs');
+  expect(codexHooks).toContain('hooks/record-write.mjs');
+  expect(codexHooks).toContain('apply_patch|Edit|Write');
+  expect(documents).not.toHaveProperty('hooks/hooks-codex.json');
 
   expect(documents['.claude-plugin/marketplace.json']).toContain('bundle-example-marketplace');
   expect(documents['.agents/plugins/marketplace.json']).toContain('bundle-example-marketplace');
@@ -134,16 +148,20 @@ it('lays both host manifests over one shared bundle root', () => {
       source: './',
     }],
   });
-  expect(documents['AGENTS.md']).toContain('multi-host agent plugin bundle');
+  expect(documents['AGENTS.md']).toContain('multi-host agent plugin root');
   expect(documents['AGENTS.md']).toContain('Claude Code');
   expect(documents['AGENTS.md']).toContain('Codex');
   expect(documents['AGENTS.md']).toContain('Cursor');
-  expect(documents['AGENTS.md']).toContain('See `INSTALL.md` for exact Claude Code, Codex, and Cursor commands');
+  expect(documents['AGENTS.md']).toContain('See `INSTALL.md` for exact Claude Code, Codex, Cursor commands');
   expect(documents['AGENTS.md']).toContain('`node ./install.mjs`');
+  expect(documents['AGENTS.md']).toContain('VS Code / GitHub Copilot');
+  expect(documents['AGENTS.md']).toContain('share one host-detecting wrapper per hook');
+  // One install surface for the whole root, with a section per selected host.
   expect(documents['INSTALL.md']).toContain('claude plugin install bundle-example@bundle-example-marketplace --scope user');
   expect(documents['INSTALL.md']).toContain('codex plugin add bundle-example@bundle-example-marketplace');
+  expect(documents['INSTALL.md']).toContain('Cursor');
   expect(documents['install.mjs']).toContain("join(cursorRoot, 'plugins', 'local')");
-  expect(documents['AGENTS.md']).toContain('VS Code / GitHub Copilot');
+  expect(plan.entries.filter((entry) => entry.relativePath === 'INSTALL.md')).toHaveLength(1);
 
   const cursorPlugin = JSON.parse(documents['.cursor-plugin/plugin.json']!) as Record<string, unknown>;
   expect(cursorPlugin).toMatchObject({
@@ -171,7 +189,7 @@ it('lays both host manifests over one shared bundle root', () => {
   });
 });
 
-it('keeps the Claude marketplace overlay host-specific in the unified bundle', () => {
+it('keeps the Claude marketplace overlay host-specific in the composite root', () => {
   const model: NormalizedPlugin = {
     ...bundleModel,
     extensions: {
@@ -254,7 +272,7 @@ it('emits Cursor logo and omits it from Claude and Codex manifests', () => {
   }));
 });
 
-it('bundles subagent hooks at Codex default hooks/hooks.json location', () => {
+it('relocates Codex subagent hooks beside Claude Code through the manifest pointer', () => {
   const model: NormalizedPlugin = {
     ...bundleModel,
     hooks: [
@@ -276,15 +294,22 @@ it('bundles subagent hooks at Codex default hooks/hooks.json location', () => {
   };
   const documents = writeContents(model);
   const codexManifest = JSON.parse(documents['.codex-plugin/plugin.json']!) as Record<string, unknown>;
-  const hooks = JSON.parse(documents['hooks/hooks.json']!) as {
+  const claudeHooks = JSON.parse(documents['hooks/hooks.json']!) as {
+    readonly hooks: Readonly<Record<string, readonly unknown[]>>;
+  };
+  const codexHooks = JSON.parse(documents['.codex-plugin/hooks.json']!) as {
     readonly hooks: Readonly<Record<string, readonly unknown[]>>;
   };
 
-  // Codex discovers this plugin-root path by convention when the manifest
-  // omits `hooks`; both documented plugin-bundled forms are compliant.
-  expect(codexManifest).not.toHaveProperty('hooks');
-  expect(hooks.hooks.SubagentStart).toHaveLength(1);
-  expect(hooks.hooks.SubagentStop).toHaveLength(1);
+  // Claude Code owns the conventional hooks/hooks.json, so Codex reads its
+  // own document through the manifest pointer; both name the same wrappers.
+  expect(codexManifest).toHaveProperty('hooks', './.codex-plugin/hooks.json');
+  expect(claudeHooks.hooks.SubagentStart).toHaveLength(1);
+  expect(claudeHooks.hooks.SubagentStop).toHaveLength(1);
+  expect(codexHooks.hooks.SubagentStart).toHaveLength(1);
+  expect(codexHooks.hooks.SubagentStop).toHaveLength(1);
+  expect(documents['.codex-plugin/hooks.json']).toContain('hooks/agent-start.mjs');
+  expect(documents['.codex-plugin/hooks.json']).toContain('hooks/agent-stop.mjs');
 });
 
 it('emits Claude-only LSP configuration at the shared composite root', () => {
@@ -325,7 +350,7 @@ it('emits Claude-only LSP configuration at the shared composite root', () => {
   expect(documents['AGENTS.md']).toContain('claude --debug');
 });
 
-it('emits Claude userConfig from the unified plugin target only into the Claude manifest', () => {
+it('emits Claude userConfig from the composite root only into the Claude manifest', () => {
   const model = {
     ...bundleModel,
     extensions: {
@@ -367,7 +392,7 @@ it('emits Claude userConfig from the unified plugin target only into the Claude 
     .toContain('/workspace/claude.config.ts');
 });
 
-it('emits Claude manifest metadata from the unified target only into the Claude manifest', () => {
+it('emits Claude manifest metadata from the composite root only into the Claude manifest', () => {
   const model = {
     ...bundleModel,
     extensions: {
@@ -405,7 +430,7 @@ it('emits Claude manifest metadata from the unified target only into the Claude 
     .toContain('/workspace/claude-metadata.config.ts');
 });
 
-it('emits Claude channels from the unified target only into the Claude manifest', () => {
+it('emits Claude channels from the composite root only into the Claude manifest', () => {
   const model = {
     ...bundleModel,
     extensions: {
@@ -452,7 +477,7 @@ it('emits Claude channels from the unified target only into the Claude manifest'
     .toContain('/workspace/channels.config.ts');
 });
 
-it('emits the Claude bin directory from the unified plugin target', () => {
+it('emits the Claude bin directory at the composite root', () => {
   const model: NormalizedPlugin = {
     ...bundleModel,
     hostBins: [{
@@ -464,7 +489,7 @@ it('emits the Claude bin directory from the unified plugin target', () => {
       }],
       provenance: { kind: 'config', sourcePath: configPath },
       source: '/workspace/tools',
-      target: 'plugin',
+      target: 'claude',
     }],
   };
   const plan = planBundle(model);
@@ -481,7 +506,7 @@ it('emits the Claude bin directory from the unified plugin target', () => {
   expect(writeContents(model)['AGENTS.md']).toContain('`bin/`');
 });
 
-it('emits Claude workflows and output styles from the unified plugin target', () => {
+it('emits Claude workflows and output styles at the composite root', () => {
   const model: NormalizedPlugin = {
     ...bundleModel,
     hostOutputStyles: [{
@@ -493,7 +518,7 @@ it('emits Claude workflows and output styles from the unified plugin target', ()
       }],
       provenance: { kind: 'config', sourcePath: configPath },
       source: '/workspace/styles',
-      target: 'plugin',
+      target: 'claude',
     }],
     hostWorkflows: [{
       files: [{
@@ -504,7 +529,7 @@ it('emits Claude workflows and output styles from the unified plugin target', ()
       }],
       provenance: { kind: 'config', sourcePath: configPath },
       source: '/workspace/workflows',
-      target: 'plugin',
+      target: 'claude',
     }],
   };
   const plan = planBundle(model);
@@ -612,7 +637,7 @@ it('emits Claude-only experimental themes and monitors at the shared composite r
   expect(JSON.parse(documents['.cursor-plugin/plugin.json']!)).not.toHaveProperty('experimental');
 });
 
-it('emits Claude-only dependencies from the unified plugin target', () => {
+it('emits Claude-only dependencies at the composite root', () => {
   const model = {
     ...bundleModel,
     extensions: {
@@ -649,6 +674,8 @@ it('emits each shared surface exactly once with no duplicate artifact paths', ()
   expect(paths.filter((path) => path === 'skills/review/references/guide.md')).toHaveLength(1);
   expect(new Set(paths).size).toBe(paths.length);
 
+  // One host-detecting wrapper per hook for Claude Code and Codex, one
+  // dedicated Cursor wrapper per hook; every wrapper records the hosts it serves.
   const hookEntries = plan.hookEntries ?? [];
   expect(hookEntries.map((entry) => entry.relativePath).sort()).toEqual([
     'hooks/record-write.cursor.mjs',
@@ -656,7 +683,13 @@ it('emits each shared surface exactly once with no duplicate artifact paths', ()
     'hooks/session-start.cursor.mjs',
     'hooks/session-start.mjs',
   ]);
-  expect(new Set(hookEntries.map((entry) => entry.target))).toEqual(new Set(['plugin']));
+  expect(Object.fromEntries(hookEntries.map((entry) => [entry.relativePath, [...(entry.hosts ?? [])].sort()]))).toEqual({
+    'hooks/record-write.cursor.mjs': ['cursor'],
+    'hooks/record-write.mjs': ['claude', 'codex'],
+    'hooks/session-start.cursor.mjs': ['cursor'],
+    'hooks/session-start.mjs': ['claude', 'codex'],
+  });
+  expect(new Set(hookEntries.map((entry) => entry.artifactTarget))).toEqual(new Set(['claude+codex+cursor']));
 });
 
 it('emits Cursor-only rules once at the shared root and documents the honest host boundary', () => {
@@ -672,7 +705,7 @@ it('emits Cursor-only rules once at the shared root and documents the honest hos
       name: 'focused',
       provenance: { kind: 'conventional', sourcePath: '/workspace/src/rules/focused.mdc' },
       source: '/workspace/src/rules/focused.mdc',
-      targets: ['plugin'],
+      targets: ['cursor'],
     }],
   };
   const plan = planBundle(model);
@@ -685,9 +718,7 @@ it('emits Cursor-only rules once at the shared root and documents the honest hos
   expect(JSON.parse(documents['.cursor-plugin/plugin.json']!)).toMatchObject({ rules: './rules/' });
   expect(JSON.parse(documents['.claude-plugin/plugin.json']!)).not.toHaveProperty('rules');
   expect(JSON.parse(documents['.codex-plugin/plugin.json']!)).not.toHaveProperty('rules');
-  expect(documents['AGENTS.md']).toContain(
-    '- `rules/` — Cursor rules (`.mdc`), Cursor only; Claude Code and Codex have no rules surface.',
-  );
+  expect(documents['AGENTS.md']).toContain('- `rules/` — Cursor rules (`.mdc`). Cursor only.');
 
   const ruleFree = planBundle(bundleModel);
   expect(ruleFree.entries.some((entry) => entry.relativePath.startsWith('rules/'))).toBe(false);
@@ -696,22 +727,19 @@ it('emits Cursor-only rules once at the shared root and documents the honest hos
 });
 
 it('emits Claude-format commands without pointing Cursor at the shared directory', () => {
-  const model: NormalizedPlugin = {
-    ...bundleModel,
-    commands: [{
-      body: 'Review the staged diff.\n',
-      frontmatter: {
-        argumentHint: '[path]',
-        description: 'Review changes',
-      },
-      id: 'command:review',
-      markdown: '---\ndescription: Review changes\nargumentHint: "[path]"\n---\nReview the staged diff.\n',
-      name: 'review',
-      provenance: { kind: 'conventional', sourcePath: '/workspace/src/commands/review.md' },
-      source: '/workspace/src/commands/review.md',
-      targets: ['plugin'],
-    }],
+  const command = {
+    body: 'Review the staged diff.\n',
+    frontmatter: {
+      argumentHint: '[path]',
+      description: 'Review changes',
+    },
+    id: 'command:review',
+    markdown: '---\ndescription: Review changes\nargumentHint: "[path]"\n---\nReview the staged diff.\n',
+    name: 'review',
+    provenance: { kind: 'conventional' as const, sourcePath: '/workspace/src/commands/review.md' },
+    source: '/workspace/src/commands/review.md',
   };
+  const model: NormalizedPlugin = { ...bundleModel, commands: [{ ...command, targets: ['claude'] }] };
   const plan = planBundle(model);
   const documents = writeContents(model);
 
@@ -725,9 +753,17 @@ it('emits Claude-format commands without pointing Cursor at the shared directory
     '',
   ].join('\n'));
   expect(JSON.parse(documents['.cursor-plugin/plugin.json']!)).not.toHaveProperty('commands');
-  expect(documents['AGENTS.md']).toContain(
-    '- `commands/` — Claude Code command prompts; Codex has no commands surface; the Cursor manifest deliberately does not point at Claude-format command files.',
-  );
+  expect(documents['AGENTS.md']).toContain('- `commands/` — Claude Code command prompts. Claude Code only.');
+
+  // Cursor reads plain Markdown prompts from the same commands/ directory, so
+  // a command cannot select Cursor beside Claude Code in one root (AB4104).
+  const overlapping = planBundle({ ...bundleModel, commands: [{ ...command, targets: ['claude', 'cursor'] }] });
+  expect(overlapping.diagnostics).toEqual([expect.objectContaining({
+    code: 'AB4104',
+    severity: 'error',
+    sourcePath: '/workspace/src/commands/review.md',
+  })]);
+  expect(overlapping.entries).toEqual([]);
 
   const commandFree = planBundle(bundleModel);
   expect(commandFree.entries.some((entry) => entry.relativePath.startsWith('commands/'))).toBe(false);
@@ -760,10 +796,11 @@ it('reports a bundle-target conflict instead of silently overwriting an entry', 
     ],
   };
   const plan = planBundle(model);
-  expect(plan.diagnostics).toEqual([expect.objectContaining({ code: 'plugin.artifact.conflict', severity: 'error' })]);
+  expect(plan.diagnostics).toEqual([expect.objectContaining({ code: 'AB4105', severity: 'error' })]);
+  expect(plan.entries.filter((entry) => entry.relativePath === 'skills/review/SKILL.md')).toHaveLength(1);
 });
 
-it('builds the unified bundle root on disk with a compiled universal hook wrapper', async () => {
+it('builds the composite plugin root on disk with a compiled universal hook wrapper', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-plugin-bundle-'));
   const outputRoot = join(root, 'dist');
   const skillRoot = join(root, 'src', 'skills', 'review');
@@ -799,21 +836,27 @@ it('builds the unified bundle root on disk with a compiled universal hook wrappe
       ],
       source: join(skillRoot, 'SKILL.md'),
     }],
-    targets: [
-      { id: 'target:plugin', name: 'plugin', provenance: { kind: 'config', sourcePath: join(root, 'agent-bundle.config.ts') } },
-    ],
+    targets: compositeHosts.map((name) => ({
+      id: `target:${name}`,
+      name,
+      provenance: { kind: 'config', sourcePath: join(root, 'agent-bundle.config.ts') },
+    })),
   };
 
   try {
     await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
-    const bundleRoot = join(outputRoot, 'plugin');
+    // Every host manifest and compiled file lives directly at the output root.
+    const bundleRoot = outputRoot;
     const claudePlugin = JSON.parse(await readFile(join(bundleRoot, '.claude-plugin', 'plugin.json'), 'utf8')) as Record<string, unknown>;
     expect(claudePlugin).toMatchObject({ name: 'bundle-example' });
     expect(claudePlugin).not.toHaveProperty('hooks');
-    await expect(readFile(join(bundleRoot, '.codex-plugin', 'plugin.json'), 'utf8')).resolves.toContain('./skills/');
-    await expect(readFile(join(bundleRoot, 'AGENTS.md'), 'utf8')).resolves.toContain('multi-host agent plugin bundle');
+    const codexPlugin = JSON.parse(await readFile(join(bundleRoot, '.codex-plugin', 'plugin.json'), 'utf8')) as Record<string, unknown>;
+    expect(codexPlugin).toMatchObject({ hooks: './.codex-plugin/hooks.json', skills: './skills/' });
+    await expect(readFile(join(bundleRoot, 'AGENTS.md'), 'utf8')).resolves.toContain('multi-host agent plugin root');
+    await expect(readFile(join(bundleRoot, 'INSTALL.md'), 'utf8')).resolves.toContain('claude plugin install bundle-example');
     await expect(readFile(join(bundleRoot, 'skills', 'review', 'SKILL.md'), 'utf8')).resolves.toBe(skillMarkdown);
     await expect(readFile(join(bundleRoot, 'hooks', 'hooks.json'), 'utf8')).resolves.toContain('${CLAUDE_PLUGIN_ROOT}/hooks/session-start.mjs');
+    await expect(readFile(join(bundleRoot, '.codex-plugin', 'hooks.json'), 'utf8')).resolves.toContain('hooks/session-start.mjs');
     const wrapper = join(bundleRoot, 'hooks', 'session-start.mjs');
     const nativeInput = JSON.stringify({
       cwd: '/workspace', hook_event_name: 'SessionStart', session_id: 'session-1', source: 'startup', transcript_path: '/workspace/transcript.json',
@@ -846,17 +889,31 @@ it('builds the unified bundle root on disk with a compiled universal hook wrappe
       readonly files: readonly { readonly path: string }[];
       readonly targets: readonly { readonly name: string }[];
     };
-    expect(manifest.targets.map(({ name }) => name)).toEqual(['plugin']);
+    expect(manifest.targets.map(({ name }) => name)).toEqual(['claude', 'codex', 'cursor']);
     expect(manifest.files.map((file) => file.path)).toEqual(expect.arrayContaining([
-      'plugin/.claude-plugin/plugin.json',
-      'plugin/.codex-plugin/plugin.json',
-      'plugin/.cursor-plugin/marketplace.json',
-      'plugin/.cursor-plugin/plugin.json',
-      'plugin/AGENTS.md',
-      'plugin/hooks/hooks-cursor.json',
-      'plugin/hooks/session-start.cursor.mjs',
-      'plugin/skills/review/SKILL.md',
+      '.claude-plugin/plugin.json',
+      '.codex-plugin/hooks.json',
+      '.codex-plugin/plugin.json',
+      '.cursor-plugin/marketplace.json',
+      '.cursor-plugin/plugin.json',
+      'AGENTS.md',
+      'INSTALL.md',
+      'hooks/hooks-cursor.json',
+      'hooks/hooks.json',
+      'hooks/session-start.cursor.mjs',
+      'hooks/session-start.mjs',
+      'skills/review/SKILL.md',
     ]));
+    expect(manifest.files.some((file) => file.path.startsWith('plugin/') || file.path.startsWith('claude/'))).toBe(false);
+    // The hook index lists the shared wrapper once per host it serves.
+    const hookIndex = JSON.parse(await readFile(join(outputRoot, 'agent-bundle.hooks.json'), 'utf8')) as {
+      readonly hooks: readonly { readonly path: string; readonly target: string }[];
+    };
+    expect(hookIndex.hooks.map(({ path, target }) => ({ path, target }))).toEqual([
+      { path: 'hooks/session-start.mjs', target: 'claude' },
+      { path: 'hooks/session-start.mjs', target: 'codex' },
+      { path: 'hooks/session-start.cursor.mjs', target: 'cursor' },
+    ]);
   } finally {
     await rm(root, { force: true, recursive: true });
   }

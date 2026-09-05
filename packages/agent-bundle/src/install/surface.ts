@@ -14,7 +14,10 @@ import {
   preservedRuntimeEntries,
 } from './receipt.ts';
 
-export type BuiltInTarget = 'claude' | 'codex' | 'cursor' | 'plugin' | 'portable';
+export type BuiltInTarget = 'claude' | 'codex' | 'cursor' | 'portable';
+
+/** The order host sections take in a composite root's `INSTALL.md`. */
+const hostSectionOrder: readonly BuiltInTarget[] = Object.freeze(['claude', 'codex', 'cursor', 'portable']);
 
 const marketplaceName = (model: NormalizedPlugin): string => `${model.metadata.name}-marketplace`;
 
@@ -185,11 +188,17 @@ const cursorInstructions = (model: NormalizedPlugin): string[] => [
   '',
 ];
 
-const portableInstructions = (): string[] => [
+const portableInstructions = (packDirectory = ''): string[] => [
   '## Portable Agent Plugin',
   '',
   'Portable is a distribution profile, not a host runtime with one universal install location.',
-  'This bundle follows the Agent Plugins open standard (Agent Plugins 1.0.0, https://agent-plugins.org).',
+  ...(packDirectory === ''
+    ? ['This bundle follows the Agent Plugins open standard (Agent Plugins 1.0.0, https://agent-plugins.org).']
+    : [
+        `The \`${packDirectory}/\` directory of this root is the Agent Plugins pack (Agent Plugins 1.0.0,`,
+        'https://agent-plugins.org): point Agent Plugins clients at that directory, or at this root through',
+        `\`agent-bundle install portable --from ./\`, which resolves \`./${packDirectory}\` itself.`,
+      ]),
   'Cursor loads this format natively from `~/.cursor/plugins/local/<name>`; restart Cursor or run',
   '`Developer: Reload Window` after copying it. Codex, VS Code, GitHub Copilot, Kiro, and ChatGPT',
   'are also native clients. The bundled installer provides the Cursor local copy:',
@@ -236,27 +245,40 @@ const portableInstructions = (): string[] => [
   '',
 ];
 
-const installMarkdown = (model: NormalizedPlugin, target: BuiltInTarget): string => {
-  const sections = (() => {
-    switch (target) {
-      case 'claude':
-        return claudeInstructions(model);
-      case 'codex':
-        return codexInstructions(model);
-      case 'cursor':
-        return cursorInstructions(model);
-      case 'portable':
-        return portableInstructions();
-      case 'plugin':
-        return [...claudeInstructions(model), ...codexInstructions(model), ...cursorInstructions(model)];
-      default: {
-        const exhaustive: never = target;
-        throw new TypeError(`Unknown built-in install target ${String(exhaustive)}.`);
-      }
+const hostInstructions = (model: NormalizedPlugin, target: BuiltInTarget, packDirectory: string): string[] => {
+  switch (target) {
+    case 'claude':
+      return claudeInstructions(model);
+    case 'codex':
+      return codexInstructions(model);
+    case 'cursor':
+      return cursorInstructions(model);
+    case 'portable':
+      return portableInstructions(packDirectory);
+    default: {
+      const exhaustive: never = target;
+      throw new TypeError(`Unknown built-in install target ${String(exhaustive)}.`);
     }
-  })();
-  return [...header(model), ...sections].join('\n');
+  }
 };
+
+/**
+ * One `INSTALL.md` for the hosts a root actually projects (#555): a single
+ * host's section alone, or every selected host's section in host order.
+ */
+const installMarkdown = (model: NormalizedPlugin, targets: readonly BuiltInTarget[]): string => [
+  ...header(model),
+  ...hostSectionOrder
+    .filter((host) => targets.includes(host))
+    .flatMap((host) => hostInstructions(model, host, portablePackDirectory(targets))),
+].join('\n');
+
+/**
+ * Where the Agent Plugins pack lives relative to the root: the root itself for
+ * a portable-only root, `portable/` beside other hosts (#555).
+ */
+const portablePackDirectory = (targets: readonly string[]): string =>
+  targets.includes('portable') && targets.length > 1 ? 'portable' : '';
 
 /**
  * The `--uninstall` half of the standalone installer, mirroring
@@ -606,7 +628,12 @@ const cursorUninstallerSource = (): readonly string[] => [
  * owned-files-only in-place replacement. `tests/install-surface.test.ts` and
  * the host-install proofs pin the two implementations to each other.
  */
-const cursorInstallerSource = (model: NormalizedPlugin): string => {
+/**
+ * @param packDirectory The Cursor-loadable pack relative to the installer: the
+ * root itself (a Cursor Plugin, or a portable-only root), or the `portable/`
+ * Agent Plugins view when the root projects no Cursor Plugin beside it.
+ */
+const cursorInstallerSource = (model: NormalizedPlugin, packDirectory = ''): string => {
   const name = JSON.stringify(model.metadata.name);
   const version = JSON.stringify(model.metadata.version);
   return [
@@ -627,7 +654,7 @@ const cursorInstallerSource = (model: NormalizedPlugin): string => {
     '// Runtime roots match case-insensitively: on case-insensitive filesystems State/ is state/.',
     'const isPreservedRoot = (name) => preservedEntries.includes(String(name).toLowerCase());',
     `const markerFiles = ${JSON.stringify(installSurfaceMarkerFiles)};`,
-    "const source = resolve(fileURLToPath(new URL('.', import.meta.url)));",
+    `const source = resolve(fileURLToPath(new URL(${JSON.stringify(packDirectory === '' ? '.' : `./${packDirectory}/`)}, import.meta.url)));`,
     "const cursorRoot = join(homedir(), '.cursor');",
     "const installRoot = join(cursorRoot, 'plugins', 'local');",
     'const destination = join(installRoot, pluginName);',
@@ -1340,45 +1367,55 @@ const cursorInstallerSource = (model: NormalizedPlugin): string => {
   ].join('\n');
 };
 
-const needsCursorInstaller = (target: BuiltInTarget): boolean =>
-  target === 'cursor' || target === 'plugin' || target === 'portable';
+/** The self-contained installer ships only when a selected host has no complete native lifecycle CLI (#555 §5). */
+const needsCursorInstaller = (targets: readonly string[]): boolean =>
+  targets.includes('cursor') || targets.includes('portable');
 
+const isBuiltInTarget = (target: string): target is BuiltInTarget =>
+  (hostSectionOrder as readonly string[]).includes(target);
+
+/**
+ * The install-surface files a root projecting `targets` must carry: every
+ * built-in host contributes `INSTALL.md`; Cursor and the portable projection
+ * add the standalone `install.mjs`.
+ */
 export const installSurfaceRequirements = (
-  target: string,
+  targets: readonly string[] | string,
 ): readonly string[] => {
-  if (target === 'cursor' || target === 'plugin' || target === 'portable') {
-    return Object.freeze(['INSTALL.md', 'install.mjs']);
-  }
-  if (target === 'claude' || target === 'codex') {
-    return Object.freeze(['INSTALL.md']);
-  }
-  return Object.freeze([]);
+  const selected = (typeof targets === 'string' ? [targets] : targets).filter(isBuiltInTarget);
+  if (selected.length === 0) return Object.freeze([]);
+  return Object.freeze(needsCursorInstaller(selected) ? ['INSTALL.md', 'install.mjs'] : ['INSTALL.md']);
 };
 
 export const installSurfaceEntries = (
   model: NormalizedPlugin,
-  target: BuiltInTarget,
-): readonly TargetArtifactWrite[] => Object.freeze([
+  target: BuiltInTarget | readonly BuiltInTarget[],
+): readonly TargetArtifactWrite[] => {
+  const targets = typeof target === 'string' ? [target] : target;
+  return Object.freeze([
   Object.freeze({
-    content: installMarkdown(model, target),
+    content: installMarkdown(model, targets),
     kind: 'write' as const,
     relativePath: 'INSTALL.md',
     sourceInputs: sourceInputs(model.metadata.provenance.sourcePath),
   }),
-  ...(needsCursorInstaller(target)
+  ...(needsCursorInstaller(targets)
     ? [Object.freeze({
-        content: cursorInstallerSource(model),
+        // A root projecting a Cursor Plugin installs the root; otherwise the
+        // installer copies the Agent Plugins pack, at the root or in `portable/`.
+        content: cursorInstallerSource(model, targets.includes('cursor') ? '' : portablePackDirectory(targets)),
         kind: 'write' as const,
         relativePath: 'install.mjs',
         sourceInputs: sourceInputs(model.metadata.provenance.sourcePath),
       })]
     : []),
-]);
+  ]);
+};
 
 export const withInstallSurface = (
   plan: TargetArtifactPlan,
   model: NormalizedPlugin,
-  target: BuiltInTarget,
+  target: BuiltInTarget | readonly BuiltInTarget[],
 ): TargetArtifactPlan => Object.freeze({
   ...plan,
   entries: sortedEntries([...plan.entries, ...installSurfaceEntries(model, target)]),

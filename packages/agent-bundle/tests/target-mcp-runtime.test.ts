@@ -389,28 +389,33 @@ it('delegates one-shot and persistent MCP operations to an injected target runti
 
     expect(calls).toEqual(['list', 'native-tool']);
     expect(stdio).toHaveLength(1);
+    // The single-target root is the plugin root itself (#555): `$SYNTHETIC_ROOT`
+    // resolves to the artifact directory, not to a `<target>/` namespace in it.
     expect(stdio[0]).toMatchObject({
       args: [
-        join(artifact, 'synthetic-mcp', 'scripts', 'server.mjs'),
-        join(artifact, 'synthetic-mcp', 'scripts', 'resource.mjs'),
+        join(artifact, 'scripts', 'server.mjs'),
+        join(artifact, 'scripts', 'resource.mjs'),
       ],
       command: 'runner-$SYNTHETIC_ROOT',
-      cwd: join(artifact, 'synthetic-mcp'),
+      cwd: artifact,
       env: { SESSION: expect.any(String) },
     });
     expect(http).toEqual([{
       headers: { Authorization: expect.stringMatching(/^Bearer \/.+/) },
-      url: `https://mcp.example.test/${artifact}/synthetic-mcp`,
+      url: `https://mcp.example.test/${artifact}`,
     }]);
     await expect(access(stdio[0]!.env.SESSION!)).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(access(http[0]!.headers!.Authorization.slice('Bearer '.length))).rejects.toMatchObject({ code: 'ENOENT' });
 
     const epochStore = new EpochStore({ projectRoot: root });
     const staging = await epochStore.createStagingEpoch({ epoch: epoch(root), targets: ['synthetic-mcp'] });
+    // An epoch is the plugin root itself: its documents and compiled
+    // directories sit beside the manifest, without a `<target>/` directory.
     await Promise.all([
       cp(join(artifact, 'agent-bundle.hooks.json'), join(staging.root, 'agent-bundle.hooks.json')),
       cp(join(artifact, 'agent-bundle.manifest.json'), join(staging.root, 'agent-bundle.manifest.json')),
-      cp(join(artifact, 'synthetic-mcp'), join(staging.root, 'synthetic-mcp'), { recursive: true }),
+      cp(join(artifact, 'native'), join(staging.root, 'native'), { recursive: true }),
+      cp(join(artifact, 'scripts'), join(staging.root, 'scripts'), { recursive: true }),
     ]);
     await staging.publish(async () => undefined);
 
@@ -447,14 +452,15 @@ it('delegates one-shot and persistent MCP operations to an injected target runti
       serverName: 'stdio',
       target: 'synthetic-mcp',
     });
+    const epochRoot = join(root, '.agent-bundle', 'epochs', 'synthetic-epoch');
     expect(persistentStdio).toHaveLength(1);
     expect(persistentStdio[0]).toMatchObject({
       args: [
-        join(root, '.agent-bundle', 'epochs', 'synthetic-epoch', 'synthetic-mcp', 'scripts', 'server.mjs'),
-        join(root, '.agent-bundle', 'epochs', 'synthetic-epoch', 'synthetic-mcp', 'scripts', 'resource.mjs'),
+        join(epochRoot, 'scripts', 'server.mjs'),
+        join(epochRoot, 'scripts', 'resource.mjs'),
       ],
       command: stdio[0]!.command,
-      cwd: join(root, '.agent-bundle', 'epochs', 'synthetic-epoch', 'synthetic-mcp'),
+      cwd: epochRoot,
       env: { SESSION: expect.any(String) },
     });
     await Promise.all([session.close(), persistent.close()]);

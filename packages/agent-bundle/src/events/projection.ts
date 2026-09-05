@@ -493,7 +493,7 @@ export const projectEventDocument = (
   nativeEvent: string,
   nativeInput?: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> | undefined => {
-  if (target === 'plugin') {
+  if (target.includes('+')) {
     throw new TypeError('Composite plugin event projection must resolve the invoking host before projecting output.');
   }
   const contexts: string[] = [];

@@ -153,9 +153,10 @@ Opt out with `bin: false`, `routes.cli: 'conventional'`, or by prefixing a path 
 ### The routed CLI inside host artifacts
 
 The package bin only reaches users who install the npm package, while hooks, Skills, and scripts
-ship with the host artifact. So the build also emits the same compiled command graph into every
-selected target as `<target>/bin/<plugin-name>.mjs` (plus `bin/<plugin-name>-flight.mjs` when any
-command renders). Every built-in target publishes the `cli` capability that admits it. The
+ship with the host artifact. So the build also emits the same compiled command graph once into the
+plugin root as `bin/<plugin-name>.mjs` (plus `bin/<plugin-name>-flight.mjs` when any command
+renders), shared by every selected target. Every built-in target publishes the `cli` capability
+that admits it. The
 artifact bin is a self-contained ESM module with no shebang or executable bit — run it as
 `node <plugin-root>/bin/<plugin-name>.mjs <command>`, exactly like `scripts/*.mjs`. Help, argv
 parsing, output modes, exit codes, and signals match the package bin; the one difference is that

@@ -15,6 +15,7 @@ import { resolve } from 'node:path';
 import { Effect, FileSystem } from 'effect';
 
 import { createDefaultRegistry, type TargetRegistry } from '../../adapters/registry.ts';
+import { hostMcpRuntime, readArtifactRootContracts } from '../../build/artifact-root.ts';
 import type {
   McpProbeFailure,
   McpProbeFailureKind,
@@ -447,7 +448,7 @@ export class McpProbeService {
         `No prepared ${options.host} bundle is available for MCP probing.`,
       );
     }
-    const runtime = this.#runtime(options.host);
+    const runtime = await this.#runtime(bundleRoot, options.host);
     const server = await this.#server(bundleRoot, options.host, runtime, options.serverName);
     const pluginData = await this.#createPluginData();
     let launch: ResolvedMcpSessionLaunch;
@@ -543,10 +544,14 @@ export class McpProbeService {
     void pending.then(() => this.#pendingTeardowns.delete(pending));
   }
 
-  #runtime(host: McpProbeHost): TargetMcpRuntimeContract {
+  /**
+   * The host's MCP runtime at the prepared root: the bundle may compose
+   * several hosts (#555), relocating this host's MCP document.
+   */
+  async #runtime(bundleRoot: string, host: McpProbeHost): Promise<TargetMcpRuntimeContract> {
     let runtime: TargetMcpRuntimeContract | undefined;
     try {
-      runtime = this.#registry.mcpRuntime(host);
+      runtime = hostMcpRuntime(await readArtifactRootContracts(bundleRoot, this.#registry), this.#registry, host);
     } catch {
       runtime = undefined;
     }

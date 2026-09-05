@@ -1,4 +1,4 @@
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -99,23 +99,29 @@ e2e(
         },
         prepare: async ({ configSource, root }) => {
           const source = await readFile(configSource, 'utf8');
-          const anchor = '    servers: {\n      timeline: {';
-          if (!source.includes(anchor)) throw new Error('Discovery probe fixture config anchor is missing.');
-          await writeFile(configSource, source.replace(anchor, `    servers: {
+          const serversAnchor = '    servers: {\n      timeline: {';
+          const outputAnchor = '  portable: {},\n';
+          if (!source.includes(serversAnchor) || !source.includes(outputAnchor)) {
+            throw new Error('Discovery probe fixture config anchor is missing.');
+          }
+          // The built artifact is one plugin root carrying every host's manifest
+          // (#555); declaring it as the artifact output makes it the bundle the
+          // Doctor inspects, with no per-host copy.
+          await writeFile(configSource, source
+            .replace(serversAnchor, `    servers: {
       'probe-down': {
         args: ['-e', 'process.exit(0)'],
         command: 'node',
         targets: ['portable', 'claude', 'codex'],
         transport: 'stdio',
       },
-      timeline: {`));
-          const output = join(root, 'dist', 'plugins');
-          const result = await build({ output, root });
+      timeline: {`)
+            .replace(outputAnchor, `  output: { distPath: 'dist/plugins' },\n${outputAnchor}`));
+          const result = await build({ output: join(root, 'dist', 'plugins'), root });
           const errors = result.diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
           if (errors.length > 0) {
             throw new Error(`Discovery probe fixture build failed: ${JSON.stringify(errors)}`);
           }
-          await cp(join(output, 'claude'), join(root, 'dist', 'claude'), { recursive: true });
         },
       });
       await page.goto(workbenchUrl(fixture.url, 'hosts'));

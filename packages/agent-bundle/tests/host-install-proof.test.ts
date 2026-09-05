@@ -65,7 +65,7 @@ beforeAll(async () => {
           "    version: '1.0.0',",
           '  },',
           '  routes: { mcpCommands: true },',
-          "  targets: ['claude', 'codex', 'cursor', 'plugin'],",
+          "  targets: ['claude', 'codex', 'cursor'],",
           '};',
           '',
         ].join('\n'));
@@ -233,19 +233,15 @@ it('accepts an installed artifact whose manifest declares no resource components
     const artifactManifest = JSON.parse(await readFile(artifactManifestPath, 'utf8')) as {
       readonly files: readonly { readonly path: string }[];
     };
+    // Resource directories sit at the top of the one plugin root (#555).
     await writeFile(artifactManifestPath, `${stableJson({
       ...artifactManifest,
       files: artifactManifest.files.filter((file) =>
-        !/^[^/]+\/(?:assets|commands|skills)\//u.test(file.path)),
+        !/^(?:assets|commands|skills)\//u.test(file.path)),
     })}\n`);
     const clonedFixture: BuiltHostInstallFixture = Object.freeze({
       artifactRoot,
-      bundles: Object.freeze({
-        claude: join(artifactRoot, 'claude'),
-        codex: join(artifactRoot, 'codex'),
-        cursor: join(artifactRoot, 'cursor'),
-        plugin: join(artifactRoot, 'plugin'),
-      }),
+      bundles: Object.freeze({ claude: artifactRoot, codex: artifactRoot, cursor: artifactRoot }),
       cli: builtFixture().cli,
       root: cloneRoot,
     });
@@ -371,6 +367,7 @@ codexPluginIt(
         version: '1.0.0',
       },
       skill: 'plugins/cache/host-install-proof-marketplace/host-install-proof/1.0.0/skills/probe/SKILL.md',
+      // One root shares a portable SKILL.md with every host (#555): no Codex sidecar.
       skillSidecar: {
         matchesBuiltArtifact: true,
         path: 'skills/probe/agents/openai.yaml',

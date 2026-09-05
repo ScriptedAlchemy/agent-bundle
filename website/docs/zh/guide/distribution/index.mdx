@@ -1,11 +1,11 @@
 ---
-description: 'agent-bundle 项目如何变成宿主可以安装的东西：构建、校验，并把每个 target 目录作为可独立分发的捆绑包交付。'
+description: 'agent-bundle 项目如何变成宿主可以安装的东西：构建一个所有所选宿主共同读取的插件根目录，校验它，然后原样交付。'
 ---
 
 # 交付捆绑包
 
-`agent-bundle build` 让每个 target 目录都**可独立分发**。构建之后没有额外的打包步骤，也没有逐宿主的
-重新打包脚本：target 目录就是你复制、发布或交给宿主 CLI 的那个单位。
+`agent-bundle build` 输出一个**可以原样分发**的插件根目录。构建之后没有额外的打包步骤，也没有逐宿主的
+重新打包脚本：无论它为哪些宿主构建，根目录就是你提交、发布或让宿主 CLI 指向的那个单位。
 
 ```sh
 npx agent-bundle build --root . --output artifact
@@ -15,22 +15,22 @@ npx agent-bundle build --root . --output artifact
 
 | 步骤 | 命令 | 产出什么 |
 | --- | --- | --- |
-| 构建 | `agent-bundle build` | 每个所选 target 一个目录；当项目声明了 `bin`/`lib` 时，还有 `dist/` 包构建。 |
-| 校验 | `agent-bundle validate --artifact <dir> --strict` | 内容寻址地证明输出字节与清单一致，外加在宿主发布了校验器时的宿主工具结论。 |
-| 安装 | `agent-bundle install <host> --from <dir>` | 把捆绑包注册进 Claude、Codex 或 Cursor。 |
+| 构建 | `agent-bundle build` | 一个容纳所有所选 target 投影的插件根目录；当项目声明了 `bin`/`lib` 时，还有 `dist/` 包构建。 |
+| 校验 | `agent-bundle validate --artifact <root> --strict` | 内容寻址地证明输出字节与清单一致，外加在宿主发布了校验器时的宿主工具结论。 |
+| 安装 | `agent-bundle install <host> --from <root>` | 把根目录注册进 Claude、Codex 或 Cursor。 |
 
 构建在写出任何东西之前就已经校验过项目，因此针对源码单独运行一次 `validate` 更像是快速的预检，而不是
 必需的阶段。真正有意思的是校验**产物**，因为它完全不需要项目源码。
 
-### 一个 target 如何编译
+### 根目录如何编译
 
-构建先为每个 target 做规划，然后把该 target 的输出最多分两个阶段降级到同一个暂存根目录，待产物校验通过后
-原子地发布：
+构建先规划根目录——把所有所选宿主的投影组合成一个布局，共享的 `skills/`、`scripts/`、`mcp/` 与 `bin/`
+内容只规划一次——然后把它的输出最多分两个阶段降级到同一个暂存目录，待产物校验通过后原子地发布：
 
 1. **MCP Apps**——浏览器环境，通过 `@rsbuild/core` 编译。只有当项目声明了 App 路由时这一阶段才存在，并且
    始终最先运行：MCP 入口会内嵌它产出的 HTML。
 2. **智能体宿主面**——路由式 CLI bin、打包的脚本、hook 包装器、MCP stdio 入口，以及每个面各自的
-   react-server Flight worker，全部一起通过**每个 target 一个 Rslib 实例**降级（每个输出一个 Rsbuild
+   react-server Flight worker，全部一起通过**一个 Rslib 实例**降级（每个输出一个 Rsbuild
    environment，一个 Rspack 多编译器）。宿主面在运行时按文件名找到它的 worker，因此阶段内二者无需排序；
    每个面为清单保留各自的源码证据。
 
@@ -38,18 +38,24 @@ npx agent-bundle build --root . --output artifact
 框架不变量——见 [`tools`](../../reference/configuration.mdx#tools)。`agent-bundle inspect --bundler` 会
 打印合成结果。
 
-## 一个 target 目录里发布了什么
+## 根目录里发布了什么
 
-每个已构建 target 都包含一份生成的 `INSTALL.md`，其中使用捆绑包**真实的**插件名与市场名——而不是
-占位符——因此这份文件可以逐字照做。多宿主的 `plugin` target 还带有一份生成的 `AGENTS.md`，说明如何把它
-安装到各个宿主。
+根目录包含一份生成的 `INSTALL.md`，按所选宿主分节，其中使用捆绑包**真实的**插件名与市场名——而不是
+占位符——因此这份文件可以逐字照做。投影两个或更多宿主的根目录还带有一份生成的 `AGENTS.md`，说明各宿主
+如何读取它：Claude Code 拥有约定位置的 `hooks/hooks.json` 与 `.mcp.json`，与它并列的 Codex 通过自己清单中的
+指针读取 `.codex-plugin/hooks.json` 与 `.codex-plugin/mcp.json`，与其他宿主并列的 Cursor 读取
+`hooks/hooks-cursor.json` 与根目录的 `mcp.json`，而可移植投影是带命名空间的 `portable/` 包，其
+`portable/mcp/<name>.mjs` 垫片运行共享的已编译服务器。
 
-Claude 与 Codex target 始终包含本地市场清单，正是这一点让它们的公开 CLI 能够直接安装输出的目录。
-Cursor、portable 与组合 target 则包含一个独立的 `install.mjs`，因为 Cursor 提供了市场管理能力，却没有
-非交互式的插件安装动词。
+投影了 Claude Code 或 Codex 的根目录始终包含它们的本地市场清单（`.claude-plugin/marketplace.json`、
+`.agents/plugins/marketplace.json`），正是这一点让它们的公开 CLI 能够直接安装根目录。投影了 Cursor 或
+portable 的根目录则包含一个独立的 `install.mjs`，因为 Cursor 提供了市场管理能力，却没有非交互式的插件
+安装动词。
 
-`agent-bundle.manifest.json` 记录每个输出文件及其 SHA-256，因此校验比对的是真实字节，而不是检查某个
-路径是否存在。各 target 自身的布局在[项目结构](../start/project-structure.mdx)中介绍。
+`agent-bundle.manifest.json` 以相对根目录的路径记录每个输出文件及其 SHA-256，因此校验比对的是真实字节，
+而不是检查某个路径是否存在；它的 `targets[]` 列出根目录投影的宿主。`agent-bundle.hooks.json` 为钩子包装脚本
+建立索引，每个钩子、每个宿主一条，因此 Claude Code 与 Codex 共享的包装脚本会按宿主各出现一次。布局本身在
+[项目结构](../start/project-structure.mdx#宿主产物)中介绍。
 
 构建是可复现的：对同一份未改动的源码树构建两次，会得到逐字节相同的产物——相同的清单、相同的摘要——
 无论 `--output` 叫什么名字，也无论每次构建的暂存目录叫什么名字。打包器写进编译入口里的模块标识只由

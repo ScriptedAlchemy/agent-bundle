@@ -94,8 +94,8 @@ It cannot be handed a browser-supplied command.
 
 ## Assets
 
-Files under a root `assets/` directory copy byte-for-byte into every target artifact's `assets/`
-directory. That convention needs no configuration.
+Files under a root `assets/` directory copy byte-for-byte into the plugin root's `assets/`
+directory, shared by every selected target. That convention needs no configuration.
 
 A top-level `assets` list **replaces** that convention with explicit entries — literal file
 paths, whole directories, or globs, all resolved from the project root:

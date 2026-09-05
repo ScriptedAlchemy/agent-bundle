@@ -133,8 +133,8 @@ manifests at files inside those payloads without compiling them. Payload files c
 
 ### Validate Claude bundles with Claude Code
 
-When Claude Code is on `PATH`, artifact validation runs its validator for emitted `claude` and
-unified `plugin` targets. Claude Code treats a directory that holds both `.claude-plugin/plugin.json`
+When Claude Code is on `PATH`, artifact validation runs its validator over a built root that
+projects `claude`. Claude Code treats a directory that holds both `.claude-plugin/plugin.json`
 and `.claude-plugin/marketplace.json` as a marketplace and then never opens the plugin's hook,
 skill, agent, or command files, so Agent Bundle names each manifest:
 
@@ -163,26 +163,27 @@ claude --plugin-dir dist/claude plugin list --json
 
 ## Distribute and install bundles
 
-Every built target directory contains a generated `INSTALL.md` with commands
-that use the bundle's real plugin and marketplace names. Claude and Codex
-targets always include local marketplace manifests, so their public CLIs can
-install the emitted directory directly:
+A build emits one plugin root (`artifact/` by default) that every selected
+target installs from; it contains a generated `INSTALL.md` with a section per
+selected host and commands that use the bundle's real plugin and marketplace
+names. Claude and Codex always include local marketplace manifests, so their
+public CLIs can install the emitted root directly:
 
 ```sh
-agent-bundle install claude --from artifact/claude --scope user
-agent-bundle install codex --from artifact/codex
+agent-bundle install claude --from artifact --scope user
+agent-bundle install codex --from artifact
 ```
 
 The installer delegates to `claude plugin marketplace add` /
 `claude plugin install` and `codex plugin marketplace add` /
 `codex plugin add`; it fails with a typed diagnostic when the selected host
-binary is unavailable. Cursor has no non-interactive install verb, so Cursor,
-portable, and composite targets include `install.mjs`, which safely copies the
-bundle into `~/.cursor/plugins/local/<name>` without overwriting collisions:
+binary is unavailable. Cursor has no non-interactive install verb, so a root
+that selects `cursor` or `portable` includes `install.mjs`, which safely copies
+the bundle into `~/.cursor/plugins/local/<name>` without overwriting collisions:
 
 ```sh
-agent-bundle install cursor --from artifact/cursor
-# or, from the emitted target directory:
+agent-bundle install cursor --from artifact
+# or, from the emitted root:
 node ./install.mjs
 ```
 
@@ -208,8 +209,9 @@ the shipped document in the install receipt (`cursorExpansion`), and
 itself stays spec-conformant for other Agent Plugins clients.
 
 Cursor installation is user-scoped. Claude also accepts `--scope project` and
-`--scope local`; Codex is user-scoped. A source-free artifact root is accepted
-by `--from` when it contains the selected host target directory.
+`--scope local`; Codex is user-scoped. `--from` takes the built root; beside
+other hosts the portable Agent Plugins pack is its `portable/` directory, which
+`install portable --from artifact` resolves itself.
 
 ### Reinstall after a same-version rebuild
 

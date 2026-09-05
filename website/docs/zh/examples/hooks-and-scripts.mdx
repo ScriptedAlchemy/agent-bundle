@@ -19,13 +19,13 @@ description: '钩子与脚本示例：一个 session-start 钩子、两个输出
 - **钩子是写成处理函数，而不是宿主文档。** `src/hooks/session-start.ts` 只是一个模块。构建会把它降级为
   各宿主自己的钩子文档形状，并输出运行它的包装器。见[钩子](../guide/authoring/hooks.mdx)。
 - **两种脚本声明方式都在。** `verify-release` 按约定发布——`src/scripts/` 下任何未被声明占用的普通脚本
-  都会被发现——而 `detect-risk` 保持显式配置，因为它要把自己的 target 限制为 `portable`。示例故意让两种
+  都会被发现——而 `detect-risk` 保持显式配置，因为它选择了宿主：只有投影 `portable` 的根目录才会输出它，并且像每个脚本一样输出到该根目录所有宿主共享的 `scripts/`。示例故意让两种
   方式都有覆盖。
 - **进程外壳属于框架。** 两个脚本都导出 `main` 并返回退出码。argv 处理、等待与退出码采纳都归生成的外壳
   所有，因此一个非零返回值会变成真正的阻断性退出，而不是被吞掉的返回值。见
   [脚本与资源](../guide/authoring/scripts-assets.mdx)。
-- **输出的脚本自行解析自己的资源。** `assets: ['release/*.json']` 把发布清单与风险登记表复制进每个
-  target，而每个输出脚本都相对自己所在的模块去读取它们——而不是相对 shell 的工作目录。
+- **输出的脚本自行解析自己的资源。** `assets: ['release/*.json']` 把发布清单与风险登记表复制进插件
+  根目录的 `assets/`，而每个输出脚本都相对自己所在的模块去读取它们——而不是相对 shell 的工作目录。
 - **失败的重建保留上一个可用产物。** 这就是下面那段可逆演练。
 
 ## 编写了什么
@@ -34,7 +34,7 @@ description: '钩子与脚本示例：一个 session-start 钩子、两个输出
 | --- | --- |
 | `src/hooks/session-start.ts` | `sessionStart` 处理函数，把发布会话导向那两项检查。 |
 | `src/scripts/verify-release.ts` | 以清单为依据的打包检查，按约定被发现。 |
-| `src/scripts/detect-risk.ts` | 风险登记表检查，显式配置以限制它的 target。 |
+| `src/scripts/detect-risk.ts` | 风险登记表检查，显式配置为选择 `portable` 宿主。 |
 | `release/release-manifest.json` | 被作为资源复制的打包发布清单。 |
 | `release/risk-register.json` | 阻断性检查读取的风险登记表。 |
 

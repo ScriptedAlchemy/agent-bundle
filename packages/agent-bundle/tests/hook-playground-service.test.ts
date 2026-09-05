@@ -170,12 +170,12 @@ const publishHookEpoch = async (
   );
   await build({ model, outputRoot: artifact, projectRoot: root, registry: createDefaultRegistry() });
 
-  const targetDigests = Object.freeze(Object.fromEntries(await Promise.all(
-    ['claude', 'codex'].map(async (target) => [
-      target,
-      digest(await listArtifactFiles(join(artifact, target))),
-    ]),
-  )));
+  // Every target reads the same plugin root (#555): one digest per target,
+  // each computed over the root's file listing and keyed by the target name.
+  const files = await listArtifactFiles(artifact);
+  const targetDigests = Object.freeze(Object.fromEntries(
+    ['claude', 'codex'].map((target) => [target, digest({ files, target })]),
+  ));
   const store = epochStore;
   const staging = await store.createStagingEpoch({ epoch: epochFor(root, id, targetDigests), targets: ['codex', 'claude'] });
   await Promise.all((await readdir(artifact)).map((entry) => cp(join(artifact, entry), join(staging.root, entry), { recursive: true })));
@@ -282,6 +282,8 @@ it('uses the injected adapter hook contract for custom manifests, mappings, matc
       mkdir(dirname(join(sourceArtifact, manifestPath)), { recursive: true }),
       mkdir(dirname(join(sourceArtifact, hook.path)), { recursive: true }),
     ]);
+    // The synthetic artifact is the plugin root itself (#555): its hook
+    // document and wrapper sit beside the artifact manifest at the root.
     await Promise.all([
       writeFile(join(sourceArtifact, manifestPath), `${JSON.stringify({
         hooks: {
@@ -292,16 +294,17 @@ it('uses the injected adapter hook contract for custom manifests, mappings, matc
         },
       })}\n`),
       writeFile(join(sourceArtifact, hook.path), 'export default undefined;\n'),
+      writeFile(join(sourceArtifact, 'agent-bundle.manifest.json'), '{}\n'),
     ]);
     const epochStore = new EpochStore({ projectRoot: root });
     const staging = await epochStore.createStagingEpoch({
-      epoch: epochFor(root, 'epoch-1', { synthetic: digest(await listArtifactFiles(sourceArtifact)) }),
+      epoch: epochFor(root, 'epoch-1', {
+        synthetic: digest({ files: await listArtifactFiles(sourceArtifact), target: 'synthetic' }),
+      }),
       targets: ['synthetic'],
     });
-    await Promise.all([
-      cp(sourceArtifact, join(staging.root, 'synthetic'), { recursive: true }),
-      writeFile(join(staging.root, 'agent-bundle.manifest.json'), '{}\n'),
-    ]);
+    await Promise.all((await readdir(sourceArtifact)).map((entry) =>
+      cp(join(sourceArtifact, entry), join(staging.root, entry), { recursive: true })));
     await staging.publish(async () => undefined);
 
     const hookService = {
@@ -417,7 +420,8 @@ it('runs fixture and inline canonical input through the epoch-bound wrapper and 
         nativeProjection: 'deterministic',
         nativeSelector: 'PreToolUse',
         target: 'codex',
-        wrapperPath: `codex/hooks/${epochOne.hooks.beforeTool.name}.mjs`,
+        // One host-detecting wrapper serves Claude Code and Codex from the root (#555).
+        wrapperPath: `hooks/${epochOne.hooks.beforeTool.name}.mjs`,
       },
       nativeInput: {
         cwd: '/workspace',
@@ -542,7 +546,7 @@ it('projects every emitted Codex and Claude event deterministically and exposes 
           nativeProjection: 'deterministic',
           nativeSelector: trace.hostMapping.nativeEvent,
           target,
-          wrapperPath: `${target}/hooks/${epoch.hooks[event].name}.mjs`,
+          wrapperPath: `hooks/${epoch.hooks[event].name}.mjs`,
         });
         await expect(runNativeHook(
           join(root, '.agent-bundle', 'epochs', 'epoch-1', trace.hostMapping.wrapperPath),
@@ -583,7 +587,7 @@ it('isolates malicious relative writes from the referenced epoch and rejects coo
     await expect(readFile(manifestPath, 'utf8')).resolves.toBe(manifestBefore);
     await expect(access(join(epochRoot, 'simulation-only.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
 
-    const wrapperPath = `codex/hooks/${epoch.hooks.beforeTool.name}.mjs`;
+    const wrapperPath = `hooks/${epoch.hooks.beforeTool.name}.mjs`;
     const wrapper = join(epochRoot, wrapperPath);
     const tamperedWrapper = "process.stdout.write('');\n";
     await writeFile(wrapper, tamperedWrapper);
@@ -689,7 +693,7 @@ it('distinguishes an unsupported canonical event from an unsupported target', as
           event: 'futureEvent',
           id: 'hook:future',
           name: 'future',
-          path: 'codex/hooks/future.mjs',
+          path: 'hooks/future.mjs',
           target: 'codex',
         }],
         simulate: async () => {

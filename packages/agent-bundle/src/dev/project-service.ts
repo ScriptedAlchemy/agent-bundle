@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
+import { isCompositeHost } from '../adapters/composite-hosts.ts';
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { readFileBytes } from '../effect/platform.ts';
 import { platformRunOf } from './platform-run.ts';
@@ -938,10 +939,12 @@ export class ProjectService {
         ...(command === 'validate' ? routeTypesProgramDiagnostics(root) : []),
         ...validateModel(model, registry),
       ];
-      for (const target of model.targets) {
-        if (!registry.has(target.name)) continue;
-        const adapter = registry.get(target.name);
-        diagnostics.push(...adapter.plan(model).diagnostics);
+      // The build plans the one root every selected target shares (#555), so
+      // its judgment — including the composition rules (AB4104, AB4105) — is
+      // the plan judged here; a set that cannot compose is already AB4106.
+      const rootTargets = [...new Set(model.targets.map((target) => target.name).filter((name) => registry.has(name)))];
+      if (rootTargets.length === 1 || (rootTargets.length > 1 && rootTargets.every(isCompositeHost))) {
+        diagnostics.push(...registry.root(rootTargets).adapter.plan(model).diagnostics);
       }
     } catch {
       return failedPreparation(

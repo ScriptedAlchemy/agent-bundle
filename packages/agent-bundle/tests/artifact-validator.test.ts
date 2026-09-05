@@ -241,12 +241,12 @@ it('validates and owns every concrete document matched by an optional schema fam
   const registry = wildcardRegistry();
   const target = targetFromRegistry(registry, customTarget);
   const validRoot = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
-    { contents: '{"base":"dark"}\n', kind: 'generated', path: 'custom/themes/dracula.json' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
+    { contents: '{"base":"dark"}\n', kind: 'generated', path: 'themes/dracula.json' },
   ], true, [target]);
   const invalidRoot = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
-    { contents: '{"name":"Missing base"}\n', kind: 'generated', path: 'custom/themes/invalid.json' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
+    { contents: '{"name":"Missing base"}\n', kind: 'generated', path: 'themes/invalid.json' },
   ], true, [target]);
 
   try {
@@ -254,7 +254,7 @@ it('validates and owns every concrete document matched by an optional schema fam
     expect(await validateArtifact({ artifactRoot: invalidRoot, registry })).toContainEqual(
       expect.objectContaining({
         code: 'AB6012',
-        generatedPath: 'custom/themes/invalid.json',
+        generatedPath: 'themes/invalid.json',
         target: customTarget,
       }),
     );
@@ -276,11 +276,11 @@ const skillMarkdown = (name: string, body: string): string => [
 ].join('\n');
 
 const customSkillFiles = (body: string, resources: readonly ArtifactFixtureFile[] = []): readonly ArtifactFixtureFile[] => [
-  { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+  { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
   {
     contents: skillMarkdown('artifact-skill', body),
     kind: 'copy',
-    path: 'custom/skills/artifact-skill/SKILL.md',
+    path: 'skills/artifact-skill/SKILL.md',
   },
   ...resources,
 ];
@@ -289,12 +289,12 @@ it('admits only direct .mdc files in a declared rules layout', async () => {
   const registry = customRegistry();
   const target = targetFromRegistry(registry, customTarget);
   const validRoot = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
-    { contents: '# Rule\n', kind: 'generated', path: 'custom/rules/review.mdc' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
+    { contents: '# Rule\n', kind: 'generated', path: 'rules/review.mdc' },
   ], true, [target]);
   const invalidRoot = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
-    { contents: '# Rule\n', kind: 'generated', path: 'custom/rules/review.md' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
+    { contents: '# Rule\n', kind: 'generated', path: 'rules/review.md' },
   ], true, [target]);
 
   try {
@@ -302,7 +302,7 @@ it('admits only direct .mdc files in a declared rules layout', async () => {
     expect(await validateArtifact({ artifactRoot: invalidRoot, registry })).toContainEqual(
       expect.objectContaining({
         code: 'AB6014',
-        generatedPath: 'custom/rules/review.md',
+        generatedPath: 'rules/review.md',
         target: customTarget,
       }),
     );
@@ -318,12 +318,12 @@ it('admits only direct .md files in a declared commands layout', async () => {
   const registry = customRegistry();
   const target = targetFromRegistry(registry, customTarget);
   const validRoot = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
-    { contents: '# Command\n', kind: 'generated', path: 'custom/commands/review.md' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
+    { contents: '# Command\n', kind: 'generated', path: 'commands/review.md' },
   ], true, [target]);
   const invalidRoot = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
-    { contents: '# Command\n', kind: 'generated', path: 'custom/commands/review.mdc' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
+    { contents: '# Command\n', kind: 'generated', path: 'commands/review.mdc' },
   ], true, [target]);
 
   try {
@@ -331,7 +331,7 @@ it('admits only direct .md files in a declared commands layout', async () => {
     expect(await validateArtifact({ artifactRoot: invalidRoot, registry })).toContainEqual(
       expect.objectContaining({
         code: 'AB6014',
-        generatedPath: 'custom/commands/review.mdc',
+        generatedPath: 'commands/review.mdc',
         target: customTarget,
       }),
     );
@@ -530,7 +530,7 @@ it('validates an emitted Skill and copied resources from the artifact only', asy
     [{
       contents: '# Resource\n',
       kind: 'copy',
-      path: 'custom/skills/artifact-skill/resources/with space.md',
+      path: 'skills/artifact-skill/resources/with space.md',
     }],
   );
   const root = await writeArtifact(files, true, [customManifestTarget]);
@@ -544,7 +544,7 @@ it('validates an emitted Skill and copied resources from the artifact only', asy
 
 it('returns frozen validated evidence without changing the diagnostics-only validator API', async () => {
   const root = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
   ], true, [customManifestTarget]);
 
   try {
@@ -580,9 +580,9 @@ it('returns frozen validated evidence without changing the diagnostics-only vali
   }
 });
 
-it('rejects a rehashed top-level artifact file outside declared target namespaces', async () => {
+it('rejects a rehashed top-level artifact file outside the plugin root emitted layouts', async () => {
   const files = [
-    { contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'custom/document.json' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'document.json' },
     { contents: 'not compiler metadata\n', kind: 'generated' as const, path: 'top-level.txt' },
   ];
   const root = await writeArtifact(files, true, [customManifestTarget]);
@@ -602,15 +602,15 @@ it('rejects a rehashed top-level artifact file outside declared target namespace
 
 it('rejects a rehashed file outside a declared target emitted layout', async () => {
   const files = [
-    { contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'custom/document.json' },
-    { contents: 'not a compiler output\n', kind: 'generated' as const, path: 'custom/unexpected.txt' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'document.json' },
+    { contents: 'not a compiler output\n', kind: 'generated' as const, path: 'unexpected.txt' },
   ];
   const root = await writeArtifact(files, true, [customManifestTarget]);
 
   try {
     const diagnostics = await validateArtifact({ artifactRoot: root, registry: customRegistry() });
     expect(diagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB6014', generatedPath: 'custom/unexpected.txt', target: customTarget }),
+      expect.objectContaining({ code: 'AB6014', generatedPath: 'unexpected.txt', target: customTarget }),
     ]));
     expect(diagnostics).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'AB6004' }),
@@ -622,11 +622,11 @@ it('rejects a rehashed file outside a declared target emitted layout', async () 
 
 it('accepts a manifested target asset emitted by the core build', async () => {
   const root = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
     {
       contents: '{"version":"1.0.0"}\n',
       kind: 'copy',
-      path: 'custom/assets/release/release-manifest.json',
+      path: 'assets/release/release-manifest.json',
     },
   ], true, [customManifestTarget]);
 
@@ -639,16 +639,16 @@ it('accepts a manifested target asset emitted by the core build', async () => {
 
 it('rejects malformed and unmanifested target asset paths', async () => {
   const malformedRoot = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
-    { contents: 'not an asset path\n', kind: 'copy', path: 'custom/assets' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
+    { contents: 'not an asset path\n', kind: 'copy', path: 'assets' },
   ], true, [customManifestTarget]);
   const unmanifestedRoot = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
   ], true, [customManifestTarget]);
 
   try {
-    await mkdir(join(unmanifestedRoot, 'custom', 'assets', 'release'), { recursive: true });
-    await writeFile(join(unmanifestedRoot, 'custom', 'assets', 'release', 'unmanifested.json'), '{}\n');
+    await mkdir(join(unmanifestedRoot, 'assets', 'release'), { recursive: true });
+    await writeFile(join(unmanifestedRoot, 'assets', 'release', 'unmanifested.json'), '{}\n');
 
     const [malformedDiagnostics, unmanifestedDiagnostics] = await Promise.all([
       validateArtifact({ artifactRoot: malformedRoot, registry: customRegistry() }),
@@ -656,7 +656,7 @@ it('rejects malformed and unmanifested target asset paths', async () => {
     ]);
 
     expect(malformedDiagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB6014', generatedPath: 'custom/assets', target: customTarget }),
+      expect.objectContaining({ code: 'AB6014', generatedPath: 'assets', target: customTarget }),
     ]));
     expect(unmanifestedDiagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'AB6004' }),
@@ -668,16 +668,16 @@ it('rejects malformed and unmanifested target asset paths', async () => {
 });
 
 it('rejects an artifact symlink even when the manifest remains self-consistent', async () => {
-  const files = [{ contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'custom/document.json' }];
+  const files = [{ contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'document.json' }];
   const root = await writeArtifact(files, true, [customManifestTarget]);
 
   try {
-    await symlink(join(root, 'custom', 'document.json'), join(root, 'custom', 'unexpected-link.json'));
+    await symlink(join(root, 'document.json'), join(root, 'unexpected-link.json'));
     const diagnostics = await validateArtifact({ artifactRoot: root, registry: customRegistry() });
     expect(diagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB6013', generatedPath: 'custom/unexpected-link.json' }),
+      expect.objectContaining({ code: 'AB6013', generatedPath: 'unexpected-link.json' }),
     ]));
-    expect(diagnostics.filter((entry) => entry.code === 'AB6013' && entry.generatedPath === 'custom/unexpected-link.json')).toHaveLength(1);
+    expect(diagnostics.filter((entry) => entry.code === 'AB6013' && entry.generatedPath === 'unexpected-link.json')).toHaveLength(1);
     expect(diagnostics).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'AB6004' }),
     ]));
@@ -688,7 +688,7 @@ it('rejects an artifact symlink even when the manifest remains self-consistent',
 
 it('rejects a special manifest without following its symlink target', async () => {
   const root = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
   ], true, [customManifestTarget]);
   const outside = await mkdtemp(join(tmpdir(), 'agent-bundle-outside-manifest-'));
 
@@ -712,7 +712,7 @@ it('rejects a special manifest without following its symlink target', async () =
 
 it('rejects a canonical manifest whose runtime is below the generated floor', async () => {
   const root = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
   ], true, [customManifestTarget]);
 
   try {
@@ -731,7 +731,7 @@ it('rejects a canonical manifest whose runtime is below the generated floor', as
 
 it('settles promptly when the artifact manifest is a FIFO', async () => {
   const root = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
   ], true, [customManifestTarget]);
 
   try {
@@ -751,14 +751,14 @@ it('settles promptly when the artifact manifest is a FIFO', async () => {
   }
 });
 
-it('rejects empty declared and undeclared target directories independently of manifest hashes', async () => {
+it('rejects empty directories in bare and populated plugin roots independently of manifest hashes', async () => {
   const emptyRoot = await writeArtifact([], true, [customManifestTarget]);
   const declaredRoot = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
   ], true, [customManifestTarget]);
 
   try {
-    await mkdir(join(emptyRoot, customTarget));
+    await mkdir(join(emptyRoot, 'skills'));
     await mkdir(join(declaredRoot, 'undeclared'));
 
     const [emptyDiagnostics, undeclaredDiagnostics] = await Promise.all([
@@ -767,10 +767,10 @@ it('rejects empty declared and undeclared target directories independently of ma
     ]);
 
     expect(emptyDiagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB6014', generatedPath: customTarget, target: customTarget }),
+      expect.objectContaining({ code: 'AB6014', generatedPath: 'skills', target: customTarget }),
     ]));
     expect(undeclaredDiagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB6014', generatedPath: 'undeclared' }),
+      expect.objectContaining({ code: 'AB6014', generatedPath: 'undeclared', target: customTarget }),
     ]));
     expect([...emptyDiagnostics, ...undeclaredDiagnostics]).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'AB6004' }),
@@ -781,16 +781,16 @@ it('rejects empty declared and undeclared target directories independently of ma
   }
 });
 
-it('rejects a nested empty directory under an otherwise valid target namespace', async () => {
-  const files = [{ contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'custom/document.json' }];
+it('rejects a nested empty directory under an otherwise valid plugin root', async () => {
+  const files = [{ contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'document.json' }];
   const root = await writeArtifact(files, true, [customManifestTarget]);
 
   try {
-    await mkdir(join(root, 'custom', 'skills', 'orphan'), { recursive: true });
+    await mkdir(join(root, 'skills', 'orphan'), { recursive: true });
 
     await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ code: 'AB6014', generatedPath: 'custom/skills/orphan', target: customTarget }),
+        expect.objectContaining({ code: 'AB6014', generatedPath: 'skills/orphan', target: customTarget }),
       ]),
     );
   } finally {
@@ -802,20 +802,20 @@ it('rejects forged hook output for a target without a hook contract', async () =
   const registry = createDefaultRegistry();
   const portable = targetFromRegistry(registry, 'portable');
   const files = [
-    { contents: '# Install portable-test\n', kind: 'generated' as const, path: 'portable/INSTALL.md' },
-    { contents: 'export {};\n', kind: 'generated' as const, path: 'portable/install.mjs' },
+    { contents: '# Install portable-test\n', kind: 'generated' as const, path: 'INSTALL.md' },
+    { contents: 'export {};\n', kind: 'generated' as const, path: 'install.mjs' },
     {
       contents: '{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","description":"Valid portable plugin.","name":"portable-test","version":"1.0.0"}\n',
       kind: 'generated' as const,
-      path: 'portable/plugin.json',
+      path: 'plugin.json',
     },
-    { contents: 'forged hook\n', kind: 'generated' as const, path: 'portable/hooks/junk.txt' },
+    { contents: 'forged hook\n', kind: 'generated' as const, path: 'hooks/junk.txt' },
   ];
   const root = await writeArtifact(files, true, [portable]);
 
   try {
     await expect(validateArtifact({ artifactRoot: root, registry })).resolves.toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB6014', generatedPath: 'portable/hooks/junk.txt', target: 'portable' }),
+      expect.objectContaining({ code: 'AB6014', generatedPath: 'hooks/junk.txt', target: 'portable' }),
     ]));
   } finally {
     await rm(root, { force: true, recursive: true });
@@ -829,16 +829,16 @@ it('rejects a canonically rehashed script with an unsupported extension', async 
     {
       contents: '{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","description":"Valid portable plugin.","name":"portable-test","version":"1.0.0"}\n',
       kind: 'generated' as const,
-      path: 'portable/plugin.json',
+      path: 'plugin.json',
     },
-    { contents: 'forged script\n', kind: 'copy' as const, path: 'portable/scripts/junk.exe' },
+    { contents: 'forged script\n', kind: 'copy' as const, path: 'scripts/junk.exe' },
   ];
   const root = await writeArtifact(files, true, [portable]);
 
   try {
     const diagnostics = await validateArtifact({ artifactRoot: root, registry });
     expect(diagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB6014', generatedPath: 'portable/scripts/junk.exe', target: 'portable' }),
+      expect.objectContaining({ code: 'AB6014', generatedPath: 'scripts/junk.exe', target: 'portable' }),
     ]));
     expect(diagnostics).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'AB6004' }),
@@ -852,12 +852,12 @@ it('fails ordinary artifact validation when an emitted portable tree breaks the 
   const registry = createDefaultRegistry();
   const portable = targetFromRegistry(registry, 'portable');
   const files = [
-    { contents: '# Install portable-test\n', kind: 'generated' as const, path: 'portable/INSTALL.md' },
-    { contents: 'export {};\n', kind: 'generated' as const, path: 'portable/install.mjs' },
+    { contents: '# Install portable-test\n', kind: 'generated' as const, path: 'INSTALL.md' },
+    { contents: 'export {};\n', kind: 'generated' as const, path: 'install.mjs' },
     {
       contents: '{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","description":"Valid portable plugin.","name":"portable-test","version":"1.0.0"}\n',
       kind: 'generated' as const,
-      path: 'portable/plugin.json',
+      path: 'plugin.json',
     },
     {
       contents: JSON.stringify({
@@ -872,7 +872,7 @@ it('fails ordinary artifact validation when an emitted portable tree breaks the 
         },
       }) + '\n',
       kind: 'generated' as const,
-      path: 'portable/mcp.json',
+      path: 'mcp.json',
     },
   ];
   const root = await writeArtifact(files, true, [portable]);
@@ -905,12 +905,12 @@ it('does not follow a symlinked portable document into the byte lane once the in
   const registry = createDefaultRegistry();
   const portable = targetFromRegistry(registry, 'portable');
   const root = await writeArtifact([
-    { contents: '# Install portable-test\n', kind: 'generated', path: 'portable/INSTALL.md' },
-    { contents: 'export {};\n', kind: 'generated', path: 'portable/install.mjs' },
+    { contents: '# Install portable-test\n', kind: 'generated', path: 'INSTALL.md' },
+    { contents: 'export {};\n', kind: 'generated', path: 'install.mjs' },
     {
       contents: '{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","description":"Valid portable plugin.","name":"portable-test","version":"1.0.0"}\n',
       kind: 'generated',
-      path: 'portable/plugin.json',
+      path: 'plugin.json',
     },
   ], true, [portable]);
   const outside = await mkdtemp(join(tmpdir(), 'agent-bundle-outside-mcp-'));
@@ -920,11 +920,11 @@ it('does not follow a symlinked portable document into the byte lane once the in
       $schema: 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json',
       mcpServers: { forged: { command: 'bin/server', type: 'stdio' } },
     }));
-    await symlink(join(outside, 'forged-mcp.json'), join(root, 'portable', 'mcp.json'));
+    await symlink(join(outside, 'forged-mcp.json'), join(root, 'mcp.json'));
 
     const diagnostics = await validateArtifact({ artifactRoot: root, registry });
     expect(diagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB6013', generatedPath: 'portable/mcp.json' }),
+      expect.objectContaining({ code: 'AB6013', generatedPath: 'mcp.json' }),
     ]));
     // The forged content was never read: no schema or normative finding from behind the link.
     expect(diagnostics.filter((entry) => ['AB6035', 'AB6036', 'AB6037'].includes(entry.code))).toEqual([]);
@@ -947,7 +947,7 @@ it('leaves an advanced registry adapter that reuses the portable name to its own
   } satisfies TargetAdapter);
   const target = targetFromRegistry(registry, 'portable');
   const root = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'portable/document.json' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
   ], true, [target]);
 
   try {
@@ -960,18 +960,18 @@ it('leaves an advanced registry adapter that reuses the portable name to its own
   }
 });
 
-it('admits nested project assets in the target-owned recursive asset namespace', async () => {
+it('admits nested project assets in the recursive asset layout', async () => {
   const registry = createDefaultRegistry();
   const portable = targetFromRegistry(registry, 'portable');
   const files = [
-    { contents: '# Install portable-test\n', kind: 'generated' as const, path: 'portable/INSTALL.md' },
-    { contents: 'export {};\n', kind: 'generated' as const, path: 'portable/install.mjs' },
+    { contents: '# Install portable-test\n', kind: 'generated' as const, path: 'INSTALL.md' },
+    { contents: 'export {};\n', kind: 'generated' as const, path: 'install.mjs' },
     {
       contents: '{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","description":"Valid portable plugin.","name":"portable-test","version":"1.0.0"}\n',
       kind: 'generated' as const,
-      path: 'portable/plugin.json',
+      path: 'plugin.json',
     },
-    { contents: '<svg/>\n', kind: 'copy' as const, path: 'portable/assets/branding/logo.svg' },
+    { contents: '<svg/>\n', kind: 'copy' as const, path: 'assets/branding/logo.svg' },
   ];
   const root = await writeArtifact(files, true, [portable]);
 
@@ -984,9 +984,9 @@ it('admits nested project assets in the target-owned recursive asset namespace',
 
 it('admits executable commands and nested support files in a recursive bin namespace', async () => {
   const files = [
-    { contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'custom/document.json' },
-    { contents: '#!/usr/bin/env sh\n', kind: 'prebuilt' as const, mode: 0o751, path: 'custom/bin/review-tool' },
-    { contents: '{"enabled":true}\n', kind: 'prebuilt' as const, path: 'custom/bin/lib/config.json' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'document.json' },
+    { contents: '#!/usr/bin/env sh\n', kind: 'prebuilt' as const, mode: 0o751, path: 'bin/review-tool' },
+    { contents: '{"enabled":true}\n', kind: 'prebuilt' as const, path: 'bin/lib/config.json' },
   ];
   const root = await writeArtifact(files, true, [customManifestTarget]);
 
@@ -1008,7 +1008,7 @@ it.each([
     expect(diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({
         code: 'AB6016',
-        generatedPath: 'custom/skills/artifact-skill/SKILL.md',
+        generatedPath: 'skills/artifact-skill/SKILL.md',
         recovery: artifactDiagnosticRecoveries.AB6016,
         target: customTarget,
       }),
@@ -1029,7 +1029,7 @@ it('rejects emitted Skill Markdown without instruction body content', async () =
       expect.arrayContaining([
         expect.objectContaining({
           code: 'AB6034',
-          generatedPath: 'custom/skills/artifact-skill/SKILL.md',
+          generatedPath: 'skills/artifact-skill/SKILL.md',
           recovery: artifactDiagnosticRecoveries.AB6034,
           target: customTarget,
         }),
@@ -1042,11 +1042,11 @@ it('rejects emitted Skill Markdown without instruction body content', async () =
 
 it('validates emitted Skill frontmatter against the pinned contract and directory name', async () => {
   const files = [
-    { contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'custom/document.json' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'document.json' },
     {
       contents: skillMarkdown('wrong-name', '# Wrong-name instructions'),
       kind: 'copy' as const,
-      path: 'custom/skills/artifact-skill/SKILL.md',
+      path: 'skills/artifact-skill/SKILL.md',
     },
   ];
   const root = await writeArtifact(files, true, [customManifestTarget]);
@@ -1056,7 +1056,7 @@ it('validates emitted Skill frontmatter against the pinned contract and director
     expect(diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({
         code: 'AB6015',
-        generatedPath: 'custom/skills/artifact-skill/SKILL.md',
+        generatedPath: 'skills/artifact-skill/SKILL.md',
         recovery: artifactDiagnosticRecoveries.AB6015,
         target: customTarget,
       }),
@@ -1093,9 +1093,9 @@ it('rejects noncanonical and duplicate-key manifests as strict parse failures', 
 
 it('matches a canonical nested manifest file table by path instead of directory traversal position', async () => {
   const root = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
-    { contents: skillMarkdown('table', '# Table instructions'), kind: 'copy', path: 'custom/skills/table/SKILL.md' },
-    { contents: '{}\n', kind: 'copy', path: 'custom/skills/table/resources/entry.json' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
+    { contents: skillMarkdown('table', '# Table instructions'), kind: 'copy', path: 'skills/table/SKILL.md' },
+    { contents: '{}\n', kind: 'copy', path: 'skills/table/resources/entry.json' },
   ], true, [customManifestTarget]);
 
   try {
@@ -1155,19 +1155,19 @@ it('reports an orphan compiler MCP output after the artifact is rehashed', async
     {
       contents: '{"mcpServers":{"server":{"args":["mcp/mcp-server-deadbeef.mjs"],"command":"node","type":"stdio"}}}\n',
       kind: 'generated' as const,
-      path: 'coherent/native/servers.json',
+      path: 'native/servers.json',
     },
-    { contents: 'export const server = true;\n', kind: 'bundle' as const, path: 'coherent/mcp/mcp-server-deadbeef.mjs' },
-    { contents: 'export const orphan = true;\n', kind: 'bundle' as const, path: 'coherent/mcp/mcp-junk-deadbeef.mjs' },
-    { contents: 'export const orphanWorker = true;\n', kind: 'bundle' as const, path: 'coherent/mcp/mcp-junk-deadbeef-flight.mjs' },
+    { contents: 'export const server = true;\n', kind: 'bundle' as const, path: 'mcp/mcp-server-deadbeef.mjs' },
+    { contents: 'export const orphan = true;\n', kind: 'bundle' as const, path: 'mcp/mcp-junk-deadbeef.mjs' },
+    { contents: 'export const orphanWorker = true;\n', kind: 'bundle' as const, path: 'mcp/mcp-junk-deadbeef-flight.mjs' },
   ];
   const root = await writeArtifact(files, true, [coherenceManifestTarget]);
 
   try {
     const diagnostics = await validateArtifact({ artifactRoot: root, registry: coherenceRegistry() });
     expect(diagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB6017', generatedPath: 'coherent/mcp/mcp-junk-deadbeef.mjs', target: coherenceTarget }),
-      expect.objectContaining({ code: 'AB6017', generatedPath: 'coherent/mcp/mcp-junk-deadbeef-flight.mjs', target: coherenceTarget }),
+      expect.objectContaining({ code: 'AB6017', generatedPath: 'mcp/mcp-junk-deadbeef.mjs', target: coherenceTarget }),
+      expect.objectContaining({ code: 'AB6017', generatedPath: 'mcp/mcp-junk-deadbeef-flight.mjs', target: coherenceTarget }),
     ]));
     expect(diagnostics).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'AB6004' }),
@@ -1177,18 +1177,25 @@ it('reports an orphan compiler MCP output after the artifact is rehashed', async
   }
 });
 
-it('does not attribute compiler MCP outputs to an equal-length sibling target', async () => {
+/**
+ * Custom adapters are built one target per plugin root (#555), so a registry
+ * holding two of them validates each root by the contracts of the one target
+ * its manifest declares: a sibling's MCP document is neither read nor counted
+ * as a reference to the root's compiled servers.
+ */
+it('validates each custom target root by its own declared MCP runtime, not a registered sibling', async () => {
   const siblingTarget = 'neighbor';
   const siblingMetadata = Object.freeze({
     adapterRevision: 'neighbor-adapter-v1',
     observedVersion: 'neighbor-observed-v1',
     schemas: Object.freeze([]),
   });
+  const siblingManifestTarget = Object.freeze({ ...siblingMetadata, name: siblingTarget });
   const registry = coherenceRegistry().register({
     artifactLayout: { mcpEntries: { allowedSuffixes: ['.mjs'], directory: 'mcp' } },
     capabilities: supportedCapabilities('mcp'),
     mcpRuntime: createTargetMcpRuntime({
-      manifestPath: 'native/servers.json',
+      manifestPath: 'native/neighbor-servers.json',
       remoteTypes: ['streamable-http'],
       resolveValue: createMcpPathTokenResolver({ target: siblingTarget, tokens: {} }),
     }),
@@ -1196,28 +1203,39 @@ it('does not attribute compiler MCP outputs to an equal-length sibling target', 
     name: siblingTarget,
     plan: () => ({ diagnostics: [], entries: [] }),
   } satisfies TargetAdapter);
-  const root = await writeArtifact([
-    {
-      contents: '{"mcpServers":{"server":{"args":["mcp/mcp-server-deadbeef.mjs"],"command":"node","type":"stdio"}}}\n',
-      kind: 'generated',
-      path: 'coherent/native/servers.json',
-    },
-    { contents: 'export const coherent = true;\n', kind: 'bundle', path: 'coherent/mcp/mcp-server-deadbeef.mjs' },
-    {
-      contents: '{"mcpServers":{"server":{"args":["mcp/mcp-server-deadbeef.mjs"],"command":"node","type":"stdio"}}}\n',
-      kind: 'generated',
-      path: 'neighbor/native/servers.json',
-    },
-    { contents: 'export const neighbor = true;\n', kind: 'bundle', path: 'neighbor/mcp/mcp-server-deadbeef.mjs' },
-  ], true, [coherenceManifestTarget, Object.freeze({ ...siblingMetadata, name: siblingTarget })]);
+  const document = '{"mcpServers":{"server":{"args":["mcp/mcp-server-deadbeef.mjs"],"command":"node","type":"stdio"}}}\n';
+  const entry = { contents: 'export const server = true;\n', kind: 'bundle' as const, path: 'mcp/mcp-server-deadbeef.mjs' };
+  const coherentRoot = await writeArtifact([
+    { contents: document, kind: 'generated', path: 'native/servers.json' },
+    entry,
+  ], true, [coherenceManifestTarget]);
+  const siblingRoot = await writeArtifact([
+    { contents: document, kind: 'generated', path: 'native/neighbor-servers.json' },
+    entry,
+  ], true, [siblingManifestTarget]);
+  const crossedRoot = await writeArtifact([
+    { contents: document, kind: 'generated', path: 'native/servers.json' },
+    entry,
+  ], true, [siblingManifestTarget]);
 
   try {
-    expect(coherenceTarget).toHaveLength(siblingTarget.length);
-    expect(await validateArtifact({ artifactRoot: root, registry })).not.toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB6017' }),
+    const [coherentDiagnostics, siblingDiagnostics, crossedDiagnostics] = await Promise.all([
+      validateArtifact({ artifactRoot: coherentRoot, registry }),
+      validateArtifact({ artifactRoot: siblingRoot, registry }),
+      validateArtifact({ artifactRoot: crossedRoot, registry }),
+    ]);
+    expect(coherentDiagnostics).toEqual([]);
+    expect(siblingDiagnostics).toEqual([]);
+    expect(crossedDiagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6014', generatedPath: 'native/servers.json', target: siblingTarget }),
+      expect.objectContaining({ code: 'AB6017', generatedPath: 'mcp/mcp-server-deadbeef.mjs', target: siblingTarget }),
     ]));
   } finally {
-    await rm(root, { force: true, recursive: true });
+    await Promise.all([
+      rm(coherentRoot, { force: true, recursive: true }),
+      rm(siblingRoot, { force: true, recursive: true }),
+      rm(crossedRoot, { force: true, recursive: true }),
+    ]);
   }
 });
 
@@ -1234,12 +1252,12 @@ it.each([
       mcpServers: { server: { args: [argument], command: 'node', type: 'stdio' } },
     })}\n`,
     kind: 'generated',
-    path: 'coherent/native/servers.json',
+    path: 'native/servers.json',
   }], true, [coherenceManifestTarget]);
 
   try {
     const diagnostics = await validateArtifact({ artifactRoot: root, registry: coherenceRegistry() });
-    const matching = diagnostics.some((entry) => entry.code === 'AB6017' && entry.generatedPath === 'coherent/native/servers.json');
+    const matching = diagnostics.some((entry) => entry.code === 'AB6017' && entry.generatedPath === 'native/servers.json');
     expect(matching).toBe(expectsDiagnostic);
   } finally {
     await rm(root, { force: true, recursive: true });
@@ -1247,7 +1265,7 @@ it.each([
 });
 
 it('rejects a target-local file URL argument that is absent from the artifact', async () => {
-  const nativePath = 'coherent/native/servers.json';
+  const nativePath = 'native/servers.json';
   const root = await writeArtifact([{
     contents: '{"mcpServers":{}}\n',
     kind: 'generated',
@@ -1255,7 +1273,7 @@ it('rejects a target-local file URL argument that is absent from the artifact', 
   }], true, [coherenceManifestTarget]);
 
   try {
-    const argument = `--config=${pathToFileURL(join(root, 'coherent', 'mcp', 'missing space.mjs')).href}`;
+    const argument = `--config=${pathToFileURL(join(root, 'mcp', 'missing space.mjs')).href}`;
     const nativeContents = `${JSON.stringify({
       mcpServers: { server: { args: [argument], command: 'node', type: 'stdio' } },
     })}\n`;
@@ -1287,14 +1305,14 @@ it.each([
     {
       contents: `${JSON.stringify({ mcpServers })}\n`,
       kind: 'generated',
-      path: 'coherent/native/servers.json',
+      path: 'native/servers.json',
     },
-    { contents: 'export const server = true;\n', kind: 'bundle', path: 'coherent/mcp/mcp-server-deadbeef.mjs' },
+    { contents: 'export const server = true;\n', kind: 'bundle', path: 'mcp/mcp-server-deadbeef.mjs' },
   ], true, [coherenceManifestTarget]);
 
   try {
     expect(await validateArtifact({ artifactRoot: root, registry: coherenceRegistry() })).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB6017', generatedPath: 'coherent/mcp/mcp-server-deadbeef.mjs', target: coherenceTarget }),
+      expect.objectContaining({ code: 'AB6017', generatedPath: 'mcp/mcp-server-deadbeef.mjs', target: coherenceTarget }),
     ]));
   } finally {
     await rm(root, { force: true, recursive: true });
@@ -1306,13 +1324,13 @@ it('rejects duplicate keys in a canonically manifested native MCP document', asy
   const root = await writeArtifact([{
     contents: `{"mcpServers":{"server":${server},"server":${server}}}\n`,
     kind: 'generated',
-    path: 'coherent/native/servers.json',
+    path: 'native/servers.json',
   }], true, [coherenceManifestTarget]);
 
   try {
     const diagnostics = await validateArtifact({ artifactRoot: root, registry: coherenceRegistry() });
     expect(diagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB6017', generatedPath: 'coherent/native/servers.json', target: coherenceTarget }),
+      expect.objectContaining({ code: 'AB6017', generatedPath: 'native/servers.json', target: coherenceTarget }),
     ]));
     expect(diagnostics).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'AB6004' }),
@@ -1329,9 +1347,9 @@ it('requires the canonical hook index when native hook metadata is present', asy
         hooks: { Start: [{ hooks: [{ command: 'node "${HOOK_ROOT}/hooks/start.mjs"', type: 'command' }] }] },
       })}\n`,
       kind: 'generated',
-      path: 'hooked/hooks/hooks.json',
+      path: 'hooks/hooks.json',
     },
-    { contents: 'export const start = true;\n', kind: 'bundle', path: 'hooked/hooks/start.mjs' },
+    { contents: 'export const start = true;\n', kind: 'bundle', path: 'hooks/start.mjs' },
   ], true, [hookCoherenceManifestTarget], false);
 
   try {
@@ -1351,16 +1369,16 @@ it('reports a compiler-pattern native hook command that is not indexed', async (
         hooks: { Start: [{ hooks: [{ command: 'node "${HOOK_ROOT}/hooks/start.mjs"', type: 'command' }] }] },
       })}\n`,
       kind: 'generated' as const,
-      path: 'hooked/hooks/hooks.json',
+      path: 'hooks/hooks.json',
     },
-    { contents: 'export const start = true;\n', kind: 'bundle' as const, path: 'hooked/hooks/start.mjs' },
+    { contents: 'export const start = true;\n', kind: 'bundle' as const, path: 'hooks/start.mjs' },
   ];
   const root = await writeArtifact(files, true, [hookCoherenceManifestTarget]);
 
   try {
     const diagnostics = await validateArtifact({ artifactRoot: root, registry: hookCoherenceRegistry() });
     expect(diagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB6018', generatedPath: 'hooked/hooks/hooks.json', target: hookCoherenceTarget }),
+      expect.objectContaining({ code: 'AB6018', generatedPath: 'hooks/hooks.json', target: hookCoherenceTarget }),
     ]));
     expect(diagnostics).not.toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'AB6004' }),
@@ -1376,8 +1394,8 @@ it.each([
   ['a missing deferred literal dynamic import', "const load = () => import('./missing.mjs');\nexport { load };\n"],
 ])('rejects generated JavaScript with %s', async (_name, contents) => {
   const root = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
-    { contents, kind: 'bundle', path: 'custom/scripts/missing-dependency.mjs' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
+    { contents, kind: 'bundle', path: 'scripts/missing-dependency.mjs' },
   ], true, [customManifestTarget]);
 
   try {
@@ -1385,7 +1403,7 @@ it.each([
       expect.arrayContaining([
         expect.objectContaining({
           code: 'AB6005',
-          generatedPath: 'custom/scripts/missing-dependency.mjs',
+          generatedPath: 'scripts/missing-dependency.mjs',
           recovery: 'Bundle every JavaScript dependency into the artifact, then rebuild it.',
         }),
       ]),
@@ -1397,10 +1415,10 @@ it.each([
 
 it('accepts inert top-level throws, rejections, and never-settling awaits', async () => {
   const root = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
-    { contents: 'throw new Error("top-level artifact failure");\n', kind: 'bundle', path: 'custom/scripts/throws.mjs' },
-    { contents: 'await Promise.reject(new Error("top-level artifact rejection"));\n', kind: 'bundle', path: 'custom/scripts/rejects.mjs' },
-    { contents: 'await new Promise(() => undefined);\n', kind: 'bundle', path: 'custom/scripts/never-settles.mjs' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
+    { contents: 'throw new Error("top-level artifact failure");\n', kind: 'bundle', path: 'scripts/throws.mjs' },
+    { contents: 'await Promise.reject(new Error("top-level artifact rejection"));\n', kind: 'bundle', path: 'scripts/rejects.mjs' },
+    { contents: 'await new Promise(() => undefined);\n', kind: 'bundle', path: 'scripts/never-settles.mjs' },
   ], true, [customManifestTarget]);
 
   try {
@@ -1416,8 +1434,8 @@ it.each([
   ['an unbundled bare package', 'unbundled-package'],
 ])('rejects generated JavaScript with %s import specifiers', async (_name, specifier) => {
   const root = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
-    { contents: `import ${JSON.stringify(specifier)};\n`, kind: 'bundle', path: 'custom/scripts/unsupported.mjs' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
+    { contents: `import ${JSON.stringify(specifier)};\n`, kind: 'bundle', path: 'scripts/unsupported.mjs' },
   ], true, [customManifestTarget]);
 
   try {
@@ -1425,7 +1443,7 @@ it.each([
       expect.arrayContaining([
         expect.objectContaining({
           code: 'AB6005',
-          generatedPath: 'custom/scripts/unsupported.mjs',
+          generatedPath: 'scripts/unsupported.mjs',
           recovery: 'Bundle every JavaScript dependency into the artifact, then rebuild it.',
         }),
       ]),
@@ -1437,7 +1455,7 @@ it.each([
 
 it('allows Node builtins and manifest-listed JSON terminal imports', async () => {
   const root = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
     {
       contents: [
         "import fs from 'node:fs';",
@@ -1447,9 +1465,9 @@ it('allows Node builtins and manifest-listed JSON terminal imports', async () =>
         '',
       ].join('\n'),
       kind: 'bundle',
-      path: 'custom/scripts/builtins.mjs',
+      path: 'scripts/builtins.mjs',
     },
-    { contents: '{"kind":"artifact"}\n', kind: 'generated', path: 'custom/scripts/data.json' },
+    { contents: '{"kind":"artifact"}\n', kind: 'generated', path: 'scripts/data.json' },
   ], true, [customManifestTarget]);
 
   try {
@@ -1461,8 +1479,8 @@ it('allows Node builtins and manifest-listed JSON terminal imports', async () =>
 
 it('rejects non-literal dynamic imports', async () => {
   const root = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
-    { contents: 'const specifier = "./known.mjs";\nawait import(specifier);\n', kind: 'bundle', path: 'custom/scripts/non-literal.mjs' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
+    { contents: 'const specifier = "./known.mjs";\nawait import(specifier);\n', kind: 'bundle', path: 'scripts/non-literal.mjs' },
   ], true, [customManifestTarget]);
 
   try {
@@ -1470,7 +1488,7 @@ it('rejects non-literal dynamic imports', async () => {
       expect.arrayContaining([
         expect.objectContaining({
           code: 'AB6005',
-          generatedPath: 'custom/scripts/non-literal.mjs',
+          generatedPath: 'scripts/non-literal.mjs',
           recovery: 'Bundle every JavaScript dependency into the artifact, then rebuild it.',
         }),
       ]),
@@ -1482,8 +1500,8 @@ it('rejects non-literal dynamic imports', async () => {
 
 it('imports a self-contained generated module at a path with spaces', async () => {
   const root = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
-    { contents: 'export const artifact = "self-contained";\n', kind: 'bundle', path: 'custom/scripts/with space.mjs' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
+    { contents: 'export const artifact = "self-contained";\n', kind: 'bundle', path: 'scripts/with space.mjs' },
   ], true, [customManifestTarget]);
 
   try {
@@ -1497,11 +1515,11 @@ it('rejects generated JavaScript that resolves a dependency outside the artifact
   const outside = await mkdtemp(join(tmpdir(), 'agent-bundle-artifact-validator-outside-'));
   const outsideModule = join(outside, 'source-tree-dependency.mjs');
   const root = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
     {
       contents: `import ${JSON.stringify(pathToFileURL(outsideModule).href)};\n`,
       kind: 'bundle',
-      path: 'custom/scripts/external-dependency.mjs',
+      path: 'scripts/external-dependency.mjs',
     },
   ], true, [customManifestTarget]);
 
@@ -1511,7 +1529,7 @@ it('rejects generated JavaScript that resolves a dependency outside the artifact
       expect.arrayContaining([
         expect.objectContaining({
           code: 'AB6005',
-          generatedPath: 'custom/scripts/external-dependency.mjs',
+          generatedPath: 'scripts/external-dependency.mjs',
           recovery: 'Bundle every JavaScript dependency into the artifact, then rebuild it.',
         }),
       ]),
@@ -1526,14 +1544,14 @@ it('rejects generated JavaScript that resolves a dependency outside the artifact
 
 it('rejects an existing JavaScript dependency omitted from the manifest', async () => {
   const root = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
-    { contents: "import './omitted.mjs';\n", kind: 'bundle', path: 'custom/scripts/importer.mjs' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
+    { contents: "import './omitted.mjs';\n", kind: 'bundle', path: 'scripts/importer.mjs' },
   ], true, [customManifestTarget]);
 
   try {
-    await writeFile(join(root, 'custom', 'scripts', 'omitted.mjs'), 'export const omitted = true;\n');
+    await writeFile(join(root, 'scripts', 'omitted.mjs'), 'export const omitted = true;\n');
     await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB6005', generatedPath: 'custom/scripts/importer.mjs' }),
+      expect.objectContaining({ code: 'AB6005', generatedPath: 'scripts/importer.mjs' }),
       expect.objectContaining({ code: 'AB6004', generatedPath: 'agent-bundle.manifest.json' }),
     ]));
   } finally {
@@ -1543,9 +1561,9 @@ it('rejects an existing JavaScript dependency omitted from the manifest', async 
 
 it('accepts deterministic cycles between manifested JavaScript modules', async () => {
   const root = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
-    { contents: "import './cycle-b.mjs';\nexport const cycleA = true;\n", kind: 'bundle', path: 'custom/scripts/cycle-a.mjs' },
-    { contents: "import './cycle-a.mjs';\nexport const cycleB = true;\n", kind: 'bundle', path: 'custom/scripts/cycle-b.mjs' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
+    { contents: "import './cycle-b.mjs';\nexport const cycleA = true;\n", kind: 'bundle', path: 'scripts/cycle-a.mjs' },
+    { contents: "import './cycle-a.mjs';\nexport const cycleB = true;\n", kind: 'bundle', path: 'scripts/cycle-b.mjs' },
   ], true, [customManifestTarget]);
 
   try {
@@ -1580,8 +1598,8 @@ it('does not execute artifact JavaScript while validating deferred imports', asy
       '',
     ].join('\n'))}`;
     const files = [
-      { contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'custom/document.json' },
-      { contents: "process.exit(0);\nconst deferred = () => import('./missing-exit.mjs');\nexport { deferred };\n", kind: 'bundle' as const, path: 'custom/scripts/process-exit.mjs' },
+      { contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'document.json' },
+      { contents: "process.exit(0);\nconst deferred = () => import('./missing-exit.mjs');\nexport { deferred };\n", kind: 'bundle' as const, path: 'scripts/process-exit.mjs' },
       {
         contents: [
           "import { writeFile } from 'node:fs/promises';",
@@ -1591,12 +1609,12 @@ it('does not execute artifact JavaScript while validating deferred imports', asy
           '',
         ].join('\n'),
         kind: 'bundle' as const,
-        path: 'custom/scripts/filesystem.mjs',
+        path: 'scripts/filesystem.mjs',
       },
       {
         contents: `await fetch(${JSON.stringify(`http://127.0.0.1:${address.port}/artifact`)});\nconst deferred = () => import('./missing-network.mjs');\nexport { deferred };\n`,
         kind: 'bundle' as const,
-        path: 'custom/scripts/network.mjs',
+        path: 'scripts/network.mjs',
       },
       {
         contents: [
@@ -1607,7 +1625,7 @@ it('does not execute artifact JavaScript while validating deferred imports', asy
           '',
         ].join('\n'),
         kind: 'bundle' as const,
-        path: 'custom/scripts/child.mjs',
+        path: 'scripts/child.mjs',
       },
       {
         contents: [
@@ -1618,9 +1636,9 @@ it('does not execute artifact JavaScript while validating deferred imports', asy
           '',
         ].join('\n'),
         kind: 'bundle' as const,
-        path: 'custom/scripts/loader.mjs',
+        path: 'scripts/loader.mjs',
       },
-      { contents: 'await new Promise(() => undefined);\n', kind: 'bundle' as const, path: 'custom/scripts/top-level-await.mjs' },
+      { contents: 'await new Promise(() => undefined);\n', kind: 'bundle' as const, path: 'scripts/top-level-await.mjs' },
     ];
     for (const file of files) {
       const path = join(root, file.path);
@@ -1630,11 +1648,11 @@ it('does not execute artifact JavaScript while validating deferred imports', asy
     await writeFile(join(root, 'agent-bundle.manifest.json'), assembleArtifactManifest(manifestFor(withHookIndex(files), true, [customManifestTarget])).bytes);
 
     await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB6005', generatedPath: 'custom/scripts/process-exit.mjs' }),
-      expect.objectContaining({ code: 'AB6005', generatedPath: 'custom/scripts/filesystem.mjs' }),
-      expect.objectContaining({ code: 'AB6005', generatedPath: 'custom/scripts/network.mjs' }),
-      expect.objectContaining({ code: 'AB6005', generatedPath: 'custom/scripts/child.mjs' }),
-      expect.objectContaining({ code: 'AB6005', generatedPath: 'custom/scripts/loader.mjs' }),
+      expect.objectContaining({ code: 'AB6005', generatedPath: 'scripts/process-exit.mjs' }),
+      expect.objectContaining({ code: 'AB6005', generatedPath: 'scripts/filesystem.mjs' }),
+      expect.objectContaining({ code: 'AB6005', generatedPath: 'scripts/network.mjs' }),
+      expect.objectContaining({ code: 'AB6005', generatedPath: 'scripts/child.mjs' }),
+      expect.objectContaining({ code: 'AB6005', generatedPath: 'scripts/loader.mjs' }),
     ]));
     await new Promise((resolvePromise) => { setTimeout(resolvePromise, 100); });
     await expect(access(filesystemSentinel)).rejects.toThrow();
@@ -1649,11 +1667,11 @@ it('does not execute artifact JavaScript while validating deferred imports', asy
 
 it('reports one structural change for a file mutation during validation', async () => {
   const files = [
-    { contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'custom/document.json' },
-    { contents: 'export const original = true;\n', kind: 'bundle' as const, mode: 0o755, path: 'custom/scripts/mutable.mjs' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'document.json' },
+    { contents: 'export const original = true;\n', kind: 'bundle' as const, mode: 0o755, path: 'scripts/mutable.mjs' },
   ];
   const root = await writeArtifact(files, true, [customManifestTarget]);
-  const mutableModule = join(root, 'custom', 'scripts', 'mutable.mjs');
+  const mutableModule = join(root, 'scripts', 'mutable.mjs');
   let mutated = false;
   const registry = customRegistry(() => {
     writeFileSync(mutableModule, 'export const changed = true;\n');
@@ -1664,7 +1682,7 @@ it('reports one structural change for a file mutation during validation', async 
 
   try {
     const diagnostics = await validateArtifact({ artifactRoot: root, registry });
-    expect(diagnostics.filter((entry) => entry.code === 'AB6004' && entry.generatedPath === 'custom/scripts/mutable.mjs')).toHaveLength(1);
+    expect(diagnostics.filter((entry) => entry.code === 'AB6004' && entry.generatedPath === 'scripts/mutable.mjs')).toHaveLength(1);
     expect(mutated).toBe(true);
   } finally {
     await rm(root, { force: true, recursive: true });
@@ -1673,18 +1691,18 @@ it('reports one structural change for a file mutation during validation', async 
 
 it('rejects a special entry added during validation without returning a snapshot', async () => {
   const root = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
   ], true, [customManifestTarget]);
-  const linkPath = join(root, 'custom', 'late-link.json');
+  const linkPath = join(root, 'late-link.json');
   const registry = customRegistry(() => {
-    symlinkSync(join(root, 'custom', 'document.json'), linkPath);
+    symlinkSync(join(root, 'document.json'), linkPath);
     return [];
   });
 
   try {
     const result = await validateArtifactWithSnapshot({ artifactRoot: root, registry });
 
-    expect(result.diagnostics.filter((entry) => entry.code === 'AB6013' && entry.generatedPath === 'custom/late-link.json')).toHaveLength(1);
+    expect(result.diagnostics.filter((entry) => entry.code === 'AB6013' && entry.generatedPath === 'late-link.json')).toHaveLength(1);
     expect(result.snapshot).toBeUndefined();
   } finally {
     await rm(root, { force: true, recursive: true });
@@ -1693,9 +1711,9 @@ it('rejects a special entry added during validation without returning a snapshot
 
 it('rejects an empty directory added during validation without returning a snapshot', async () => {
   const root = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
   ], true, [customManifestTarget]);
-  const emptyDirectory = join(root, 'custom', 'late-empty');
+  const emptyDirectory = join(root, 'late-empty');
   const registry = customRegistry(() => {
     mkdirSync(emptyDirectory);
     return [];
@@ -1704,16 +1722,26 @@ it('rejects an empty directory added during validation without returning a snaps
   try {
     const result = await validateArtifactWithSnapshot({ artifactRoot: root, registry });
 
-    expect(result.diagnostics.filter((entry) => entry.code === 'AB6014' && entry.generatedPath === 'custom/late-empty')).toHaveLength(1);
+    expect(result.diagnostics.filter((entry) => entry.code === 'AB6014' && entry.generatedPath === 'late-empty')).toHaveLength(1);
     expect(result.snapshot).toBeUndefined();
   } finally {
     await rm(root, { force: true, recursive: true });
   }
 });
 
+/**
+ * One validation pass resolves the single-target root once per root-contract
+ * consumer — ownership, target contracts, the portable byte lane, MCP
+ * coherence, hook coherence, emitted Skills — and each resolution reads the
+ * registered artifact-validation snapshot. Pinning the count fixes the last
+ * registry re-entry a pass may make: a mutation scheduled one call later must
+ * never run, because it would land after the final evidence snapshots.
+ */
+const artifactValidationReadsPerPass = 6;
+
 it('does not re-enter artifact validation after taking final evidence snapshots', async () => {
   const root = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
   ], true, [customManifestTarget]);
   const manifestPath = join(root, 'agent-bundle.manifest.json');
   const initialManifest = readFileSync(manifestPath);
@@ -1722,14 +1750,14 @@ it('does not re-enter artifact validation after taking final evidence snapshots'
   let artifactValidationCalls = 0;
   registry.artifactValidation = (target) => {
     artifactValidationCalls += 1;
-    if (artifactValidationCalls === 3) writeFileSync(manifestPath, '{"invalid":true}\n');
+    if (artifactValidationCalls === artifactValidationReadsPerPass + 1) writeFileSync(manifestPath, '{"invalid":true}\n');
     return artifactValidation(target);
   };
 
   try {
     const result = await validateArtifactWithSnapshot({ artifactRoot: root, registry });
 
-    expect(artifactValidationCalls).toBe(2);
+    expect(artifactValidationCalls).toBe(artifactValidationReadsPerPass);
     expect(readFileSync(manifestPath)).toEqual(initialManifest);
     expect(result.diagnostics).toEqual([]);
     expect(result.snapshot).toBeDefined();
@@ -1740,22 +1768,22 @@ it('does not re-enter artifact validation after taking final evidence snapshots'
 
 it('does not allow a late registry re-entry to create an unvalidated empty directory', async () => {
   const root = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
   ], true, [customManifestTarget]);
-  const emptyDirectory = join(root, 'custom', 'too-late-empty');
+  const emptyDirectory = join(root, 'too-late-empty');
   const registry = customRegistry();
   const artifactValidation = registry.artifactValidation.bind(registry);
   let artifactValidationCalls = 0;
   registry.artifactValidation = (target) => {
     artifactValidationCalls += 1;
-    if (artifactValidationCalls === 3) mkdirSync(emptyDirectory);
+    if (artifactValidationCalls === artifactValidationReadsPerPass + 1) mkdirSync(emptyDirectory);
     return artifactValidation(target);
   };
 
   try {
     const result = await validateArtifactWithSnapshot({ artifactRoot: root, registry });
 
-    expect(artifactValidationCalls).toBe(2);
+    expect(artifactValidationCalls).toBe(artifactValidationReadsPerPass);
     await expect(access(emptyDirectory)).rejects.toThrow();
     expect(result.diagnostics).toEqual([]);
     expect(result.snapshot).toBeDefined();
@@ -1774,7 +1802,7 @@ it.each([
   ['removed', (manifestPath: string) => { rmSync(manifestPath); }],
 ])('rejects a manifest %s during a synchronous schema callback', async (_name, mutateManifest) => {
   const root = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
   ], true, [customManifestTarget]);
   const manifestPath = join(root, 'agent-bundle.manifest.json');
   const registry = customRegistry(() => {
@@ -1792,11 +1820,11 @@ it.each([
 
 it('does not repeat JavaScript diagnostics after a validation-side mutation', async () => {
   const files = [
-    { contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'custom/document.json' },
-    { contents: 'export const valid = true;\n', kind: 'bundle' as const, path: 'custom/scripts/mutable.mjs' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'document.json' },
+    { contents: 'export const valid = true;\n', kind: 'bundle' as const, path: 'scripts/mutable.mjs' },
   ];
   const root = await writeArtifact(files, true, [customManifestTarget]);
-  const modulePath = join(root, 'custom', 'scripts', 'mutable.mjs');
+  const modulePath = join(root, 'scripts', 'mutable.mjs');
   const registry = customRegistry(() => {
     writeFileSync(modulePath, 'export const broken = `;\n');
     return [];
@@ -1804,8 +1832,8 @@ it('does not repeat JavaScript diagnostics after a validation-side mutation', as
 
   try {
     const diagnostics = await validateArtifact({ artifactRoot: root, registry });
-    expect(diagnostics.filter((entry) => entry.code === 'AB6005' && entry.generatedPath === 'custom/scripts/mutable.mjs')).toHaveLength(1);
-    expect(diagnostics.filter((entry) => entry.code === 'AB6004' && entry.generatedPath === 'custom/scripts/mutable.mjs')).toHaveLength(1);
+    expect(diagnostics.filter((entry) => entry.code === 'AB6005' && entry.generatedPath === 'scripts/mutable.mjs')).toHaveLength(1);
+    expect(diagnostics.filter((entry) => entry.code === 'AB6004' && entry.generatedPath === 'scripts/mutable.mjs')).toHaveLength(1);
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -1823,31 +1851,31 @@ it('does not repeat JavaScript diagnostics after a validation-side mutation', as
 it('parses copied and generated modules in full and trusts compiler bundles to the ESM lexer', async () => {
   const brokenStatement = 'export const broken = ;\n';
   const root = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
-    { contents: brokenStatement, kind: 'copy', path: 'custom/scripts/copied.mjs' },
-    { contents: brokenStatement, kind: 'generated', path: 'custom/scripts/generated.mjs' },
-    { contents: brokenStatement, kind: 'bundle', path: 'custom/scripts/bundled.mjs' },
-    { contents: 'export const unterminated = `;\n', kind: 'bundle', path: 'custom/scripts/unterminated.mjs' },
-    { contents: "export { missing } from './missing.mjs';\n", kind: 'bundle', path: 'custom/scripts/dangling.mjs' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
+    { contents: brokenStatement, kind: 'copy', path: 'scripts/copied.mjs' },
+    { contents: brokenStatement, kind: 'generated', path: 'scripts/generated.mjs' },
+    { contents: brokenStatement, kind: 'bundle', path: 'scripts/bundled.mjs' },
+    { contents: 'export const unterminated = `;\n', kind: 'bundle', path: 'scripts/unterminated.mjs' },
+    { contents: "export { missing } from './missing.mjs';\n", kind: 'bundle', path: 'scripts/dangling.mjs' },
   ], true, [customManifestTarget]);
 
   try {
     const diagnostics = await validateArtifact({ artifactRoot: root, registry: customRegistry() });
     expect(diagnostics.filter((entry) => entry.code === 'AB6005').map((entry) => [entry.generatedPath, entry.message])).toEqual([
-      ['custom/scripts/copied.mjs', 'Generated JavaScript import from "custom/scripts/copied.mjs" has invalid syntax.'],
-      ['custom/scripts/dangling.mjs', 'Generated JavaScript import from "custom/scripts/dangling.mjs" is missing "./missing.mjs".'],
-      ['custom/scripts/generated.mjs', 'Generated JavaScript import from "custom/scripts/generated.mjs" has invalid syntax.'],
-      ['custom/scripts/unterminated.mjs', 'Generated JavaScript import from "custom/scripts/unterminated.mjs" has invalid syntax.'],
+      ['scripts/copied.mjs', 'Generated JavaScript import from "scripts/copied.mjs" has invalid syntax.'],
+      ['scripts/dangling.mjs', 'Generated JavaScript import from "scripts/dangling.mjs" is missing "./missing.mjs".'],
+      ['scripts/generated.mjs', 'Generated JavaScript import from "scripts/generated.mjs" has invalid syntax.'],
+      ['scripts/unterminated.mjs', 'Generated JavaScript import from "scripts/unterminated.mjs" has invalid syntax.'],
     ]);
     // A build whose consumer hatch may have rewritten the emitted assets asks
     // for the full parse of bundles too; nothing else changes.
     const parsed = await validateArtifact({ artifactRoot: root, bundleSyntaxCheck: 'parsed', registry: customRegistry() });
     expect(parsed.filter((entry) => entry.code === 'AB6005').map((entry) => entry.generatedPath)).toEqual([
-      'custom/scripts/bundled.mjs',
-      'custom/scripts/copied.mjs',
-      'custom/scripts/dangling.mjs',
-      'custom/scripts/generated.mjs',
-      'custom/scripts/unterminated.mjs',
+      'scripts/bundled.mjs',
+      'scripts/copied.mjs',
+      'scripts/dangling.mjs',
+      'scripts/generated.mjs',
+      'scripts/unterminated.mjs',
     ]);
   } finally {
     await rm(root, { force: true, recursive: true });
@@ -1856,8 +1884,8 @@ it('parses copied and generated modules in full and trusts compiler bundles to t
 
 it('does not import copied non-JavaScript resources', async () => {
   const root = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'custom/document.json' },
-    { contents: 'this is not JavaScript\n', kind: 'copy', path: 'custom/scripts/not-a-module.sh' },
+    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
+    { contents: 'this is not JavaScript\n', kind: 'copy', path: 'scripts/not-a-module.sh' },
   ], true, [customManifestTarget]);
 
   try {
@@ -1892,7 +1920,7 @@ it('fails closed when Agent Skills provenance does not equal the pinned contract
 });
 
 it('requires manifest target metadata to match the supplied registry exactly', async () => {
-  const files = [{ contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'custom/document.json' }];
+  const files = [{ contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'document.json' }];
   const root = await writeArtifact(files, true, [customManifestTarget]);
 
   try {
@@ -1928,18 +1956,17 @@ it('requires registered target-native documents and validates their pinned schem
 
   try {
     await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB6011', generatedPath: 'custom/document.json', target: customTarget }),
+      expect.objectContaining({ code: 'AB6011', generatedPath: 'document.json', target: customTarget }),
     ]));
 
-    const invalidFiles = [{ contents: '{"kind":"invalid"}\n', kind: 'generated' as const, path: 'custom/document.json' }];
-    await mkdir(join(root, 'custom'), { recursive: true });
-    await writeFile(join(root, 'custom', 'document.json'), invalidFiles[0]!.contents);
+    const invalidFiles = [{ contents: '{"kind":"invalid"}\n', kind: 'generated' as const, path: 'document.json' }];
+    await writeFile(join(root, 'document.json'), invalidFiles[0]!.contents);
     await writeFile(
       join(root, 'agent-bundle.manifest.json'),
       assembleArtifactManifest(manifestFor(withHookIndex(invalidFiles), true, [customManifestTarget])).bytes,
     );
     await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB6012', generatedPath: 'custom/document.json', target: customTarget }),
+      expect.objectContaining({ code: 'AB6012', generatedPath: 'document.json', target: customTarget }),
     ]));
   } finally {
     await rm(root, { force: true, recursive: true });
@@ -1958,8 +1985,8 @@ it.each([
       version: '1.0.0',
     },
     target: 'portable' as const,
-    mcpPath: 'portable/mcp.json',
-    pluginPath: 'portable/plugin.json',
+    mcpPath: 'mcp.json',
+    pluginPath: 'plugin.json',
   },
   {
     mcp: { mcpServers: { events: { type: 'sse', url: 'https://mcp.example.test/events' } } },
@@ -1970,8 +1997,8 @@ it.each([
       version: '1.0.0',
     },
     target: 'claude' as const,
-    mcpPath: 'claude/.mcp.json',
-    pluginPath: 'claude/.claude-plugin/plugin.json',
+    mcpPath: '.mcp.json',
+    pluginPath: '.claude-plugin/plugin.json',
   },
 ])('rejects a self-consistent $target artifact containing an SSE MCP document', async ({ mcp, mcpPath, plugin, pluginPath, target }) => {
   const registry = createDefaultRegistry();
@@ -1994,7 +2021,7 @@ it.each([
 it('validates Claude plugin artifacts carrying the pinned userConfig contract', async () => {
   const registry = createDefaultRegistry();
   const target = targetFromRegistry(registry, 'claude');
-  const pluginPath = 'claude/.claude-plugin/plugin.json';
+  const pluginPath = '.claude-plugin/plugin.json';
   const basePlugin = {
     author: { name: 'Agent Bundle' },
     description: 'Claude userConfig artifact fixture.',
@@ -2002,7 +2029,7 @@ it('validates Claude plugin artifacts carrying the pinned userConfig contract', 
     version: '1.0.0',
   };
   const validFiles = [
-    { contents: '# Install claude-user-config-artifact\n', kind: 'generated' as const, path: 'claude/INSTALL.md' },
+    { contents: '# Install claude-user-config-artifact\n', kind: 'generated' as const, path: 'INSTALL.md' },
     {
       contents: `${JSON.stringify({
         ...basePlugin,
@@ -2067,8 +2094,8 @@ it('validates Claude plugin artifacts carrying the pinned userConfig contract', 
 it('validates an enriched Claude marketplace against the full closed pinned contract', async () => {
   const registry = createDefaultRegistry();
   const target = targetFromRegistry(registry, 'claude');
-  const marketplacePath = 'claude/.claude-plugin/marketplace.json';
-  const pluginPath = 'claude/.claude-plugin/plugin.json';
+  const marketplacePath = '.claude-plugin/marketplace.json';
+  const pluginPath = '.claude-plugin/plugin.json';
   const plugin = {
     author: { name: 'Agent Bundle' },
     description: 'Claude marketplace artifact fixture.',
@@ -2098,7 +2125,7 @@ it('validates an enriched Claude marketplace against the full closed pinned cont
     renames: { 'legacy-marketplace-artifact': 'claude-marketplace-artifact' },
   };
   const validFiles = [
-    { contents: '# Install claude-marketplace-artifact\n', kind: 'generated' as const, path: 'claude/INSTALL.md' },
+    { contents: '# Install claude-marketplace-artifact\n', kind: 'generated' as const, path: 'INSTALL.md' },
     { contents: `${JSON.stringify(marketplace)}\n`, kind: 'generated' as const, path: marketplacePath },
     { contents: `${JSON.stringify(plugin)}\n`, kind: 'generated' as const, path: pluginPath },
   ];
@@ -2163,9 +2190,9 @@ it('validates a canonically rehashed Codex marketplace at its emitted path', asy
     }],
   };
   const validFiles = [
-    { contents: '# Install codex-test\n', kind: 'generated' as const, path: 'codex/INSTALL.md' },
-    { contents: `${JSON.stringify(plugin)}\n`, kind: 'generated' as const, path: 'codex/.codex-plugin/plugin.json' },
-    { contents: `${JSON.stringify(marketplace)}\n`, kind: 'generated' as const, path: 'codex/.agents/plugins/marketplace.json' },
+    { contents: '# Install codex-test\n', kind: 'generated' as const, path: 'INSTALL.md' },
+    { contents: `${JSON.stringify(plugin)}\n`, kind: 'generated' as const, path: '.codex-plugin/plugin.json' },
+    { contents: `${JSON.stringify(marketplace)}\n`, kind: 'generated' as const, path: '.agents/plugins/marketplace.json' },
   ];
   const root = await writeArtifact(validFiles, true, [target]);
 
@@ -2175,9 +2202,9 @@ it('validates a canonically rehashed Codex marketplace at its emitted path', asy
     const invalidFiles = [
       validFiles[0]!,
       validFiles[1]!,
-      { contents: '{}\n', kind: 'generated' as const, path: 'codex/.agents/plugins/marketplace.json' },
+      { contents: '{}\n', kind: 'generated' as const, path: '.agents/plugins/marketplace.json' },
     ];
-    await writeFile(join(root, 'codex', '.agents', 'plugins', 'marketplace.json'), '{}\n');
+    await writeFile(join(root, '.agents', 'plugins', 'marketplace.json'), '{}\n');
     await writeFile(
       join(root, 'agent-bundle.manifest.json'),
       assembleArtifactManifest(manifestFor(withHookIndex(invalidFiles), true, [target])).bytes,
@@ -2190,7 +2217,7 @@ it('validates a canonically rehashed Codex marketplace at its emitted path', asy
     expect(diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({
         code: 'AB6012',
-        generatedPath: 'codex/.agents/plugins/marketplace.json',
+        generatedPath: '.agents/plugins/marketplace.json',
         target: 'codex',
       }),
     ]));
@@ -2245,7 +2272,7 @@ const malformedValidatorCases = [
 ] as const satisfies readonly (readonly [string, () => unknown])[];
 
 it.each(malformedValidatorCases)('reports $0 through the stable schema diagnostic', async (_name, callback) => {
-  const files = [{ contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'custom/document.json' }];
+  const files = [{ contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'document.json' }];
   const root = await writeArtifact(files, true, [customManifestTarget]);
 
   try {
@@ -2255,7 +2282,7 @@ it.each(malformedValidatorCases)('reports $0 through the stable schema diagnosti
     })).resolves.toEqual(expect.arrayContaining([
       expect.objectContaining({
         code: 'AB6012',
-        generatedPath: 'custom/document.json',
+        generatedPath: 'document.json',
         message: expect.stringContaining('schema validation failed.'),
         target: customTarget,
       }),
@@ -2311,7 +2338,7 @@ const installSurfaceModel = (target: string): NormalizedPlugin => ({
 });
 
 const installSurfaceArtifact = async (
-  target: 'claude' | 'codex' | 'cursor' | 'plugin' | 'portable',
+  target: 'claude' | 'codex' | 'cursor' | 'portable',
   omitted: string,
 ): Promise<string> => {
   const registry = createDefaultRegistry();
@@ -2321,12 +2348,12 @@ const installSurfaceArtifact = async (
     .map((entry) => ({
       contents: entry.content,
       kind: 'generated' as const,
-      path: `${target}/${entry.relativePath}`,
+      path: entry.relativePath,
     }));
   return writeArtifact(files, true, [targetFromRegistry(registry, target)]);
 };
 
-it.each(['claude', 'codex', 'cursor', 'plugin', 'portable'] as const)(
+it.each(['claude', 'codex', 'cursor', 'portable'] as const)(
   'rejects a %s artifact without INSTALL.md',
   async (target) => {
     const root = await installSurfaceArtifact(target, 'INSTALL.md');
@@ -2334,7 +2361,7 @@ it.each(['claude', 'codex', 'cursor', 'plugin', 'portable'] as const)(
       await expect(validateArtifact({ artifactRoot: root })).resolves.toEqual(expect.arrayContaining([
         expect.objectContaining({
           code: 'AB6023',
-          generatedPath: `${target}/INSTALL.md`,
+          generatedPath: 'INSTALL.md',
           target,
         }),
       ]));
@@ -2344,7 +2371,7 @@ it.each(['claude', 'codex', 'cursor', 'plugin', 'portable'] as const)(
   },
 );
 
-it.each(['cursor', 'plugin', 'portable'] as const)(
+it.each(['cursor', 'portable'] as const)(
   'rejects a %s fallback artifact without install.mjs',
   async (target) => {
     const root = await installSurfaceArtifact(target, 'install.mjs');
@@ -2352,7 +2379,7 @@ it.each(['cursor', 'plugin', 'portable'] as const)(
       await expect(validateArtifact({ artifactRoot: root })).resolves.toEqual(expect.arrayContaining([
         expect.objectContaining({
           code: 'AB6024',
-          generatedPath: `${target}/install.mjs`,
+          generatedPath: 'install.mjs',
           target,
         }),
       ]));
@@ -2393,9 +2420,9 @@ const claudeSettingsFiles = async (settings: string): Promise<string> => {
     .map((entry) => ({
       contents: entry.relativePath === 'settings.json' ? settings : entry.content,
       kind: 'generated' as const,
-      path: `claude/${entry.relativePath}`,
+      path: entry.relativePath,
     }));
-  expect(files.some((file) => file.path === 'claude/settings.json')).toBe(true);
+  expect(files.some((file) => file.path === 'settings.json')).toBe(true);
   return writeArtifact(files, true, [targetFromRegistry(registry, 'claude')]);
 };
 
@@ -2413,7 +2440,7 @@ it('rejects a rehashed Claude settings document that carries an unsupported key'
   try {
     await expect(validateArtifact({ artifactRoot: root })).resolves.toEqual([expect.objectContaining({
       code: 'AB6012',
-      generatedPath: 'claude/settings.json',
+      generatedPath: 'settings.json',
       message: expect.stringContaining('"settings"'),
       target: 'claude',
     })]);
@@ -2440,14 +2467,14 @@ const claudeDependenciesFiles = async (dependencies: unknown): Promise<string> =
     .filter((entry): entry is TargetArtifactWrite => entry.kind === 'write')
     .map((entry) => {
       if (entry.relativePath !== '.claude-plugin/plugin.json') {
-        return { contents: entry.content, kind: 'generated' as const, path: `claude/${entry.relativePath}` };
+        return { contents: entry.content, kind: 'generated' as const, path: entry.relativePath };
       }
       const manifest = JSON.parse(entry.content) as Record<string, unknown>;
       manifest.dependencies = dependencies;
       return {
         contents: `${JSON.stringify(manifest)}\n`,
         kind: 'generated' as const,
-        path: 'claude/.claude-plugin/plugin.json',
+        path: '.claude-plugin/plugin.json',
       };
     });
   return writeArtifact(files, true, [targetFromRegistry(registry, 'claude')]);
@@ -2470,7 +2497,7 @@ it('rejects a rehashed Claude plugin manifest carrying invalid dependencies', as
   try {
     await expect(validateArtifact({ artifactRoot: root })).resolves.toEqual([expect.objectContaining({
       code: 'AB6012',
-      generatedPath: 'claude/.claude-plugin/plugin.json',
+      generatedPath: '.claude-plugin/plugin.json',
       message: expect.stringContaining('schema "plugin"'),
       target: 'claude',
     })]);
@@ -2479,7 +2506,7 @@ it('rejects a rehashed Claude plugin manifest carrying invalid dependencies', as
   }
 });
 
-const logoSurfaceModel = (target: 'cursor' | 'plugin'): NormalizedPlugin => ({
+const logoSurfaceModel = (target: 'cursor'): NormalizedPlugin => ({
   ...installSurfaceModel(target),
   metadata: {
     ...installSurfaceModel(target).metadata,
@@ -2498,14 +2525,14 @@ it('fails artifact validation when a Cursor manifest logo is missing from the de
     .map((entry) => ({
       contents: entry.content,
       kind: 'generated' as const,
-      path: `cursor/${entry.relativePath}`,
+      path: entry.relativePath,
     }));
   const root = await writeArtifact(files, true, [targetFromRegistry(registry, 'cursor')]);
   try {
     await expect(validateArtifact({ artifactRoot: root })).resolves.toEqual(expect.arrayContaining([
       expect.objectContaining({
         code: 'AB6025',
-        generatedPath: 'cursor/.cursor-plugin/plugin.json',
+        generatedPath: '.cursor-plugin/plugin.json',
         target: 'cursor',
       }),
     ]));
@@ -2522,12 +2549,12 @@ it('accepts a Cursor manifest logo that resolves inside the artifact', async () 
       .map((entry) => ({
         contents: entry.content,
         kind: 'generated' as const,
-        path: `cursor/${entry.relativePath}`,
+        path: entry.relativePath,
       })),
     {
       contents: '<svg xmlns="http://www.w3.org/2000/svg"/>\n',
       kind: 'copy' as const,
-      path: 'cursor/assets/docs/media/logo.svg',
+      path: 'assets/docs/media/logo.svg',
     },
   ];
   const root = await writeArtifact(files, true, [targetFromRegistry(registry, 'cursor')]);

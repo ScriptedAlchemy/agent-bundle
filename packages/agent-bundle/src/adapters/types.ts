@@ -298,17 +298,24 @@ export const standardPluginArtifactPlan = (input: StandardPluginArtifactsInput):
       ),
     });
   }
-  for (const skill of input.sharedCopyEntries === false ? [] : model.skills) {
+  // Shared copies (the skill document, its resources, assets, payloads) are
+  // emitted by one host of a composite root; a host's sidecars (Codex
+  // `agents/openai.yaml`) are its own files beside the shared document, so
+  // every host still emits those (#555).
+  const sharedCopies = input.sharedCopyEntries !== false;
+  for (const skill of model.skills) {
     if (!isSelected(skill.targets)) continue;
     const hostDocument = skill.hostDocuments?.[targetName];
     const generatedSkill = hostDocument !== undefined && !hostDocument.passThrough;
     if (generatedSkill) {
-      entries.push({
-        content: hostDocument.skillMarkdown,
-        kind: 'write',
-        relativePath: `skills/${skill.name}/SKILL.md`,
-        sourceInputs: sourceInputs(skill.source),
-      });
+      if (sharedCopies) {
+        entries.push({
+          content: hostDocument.skillMarkdown,
+          kind: 'write',
+          relativePath: `skills/${skill.name}/SKILL.md`,
+          sourceInputs: sourceInputs(skill.source),
+        });
+      }
       for (const sidecar of hostDocument.sidecars) {
         if (sidecar.content === undefined) continue;
         entries.push({
@@ -318,7 +325,7 @@ export const standardPluginArtifactPlan = (input: StandardPluginArtifactsInput):
           sourceInputs: sourceInputs(skill.source, sidecar.source),
         });
       }
-    } else if (skill.markdown !== undefined) {
+    } else if (sharedCopies && skill.markdown !== undefined) {
       // A rendered skill's SKILL.md is compiled from its component module.
       entries.push({
         content: skill.markdown,
@@ -327,6 +334,7 @@ export const standardPluginArtifactPlan = (input: StandardPluginArtifactsInput):
         sourceInputs: sourceInputs(skill.source),
       });
     }
+    if (!sharedCopies) continue;
     const skipCopies = new Set(generatedSkill
       ? ['SKILL.md', ...hostDocument.sidecars.map((sidecar) => sidecar.relativePath)]
       : []);

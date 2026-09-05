@@ -38,8 +38,14 @@ type ArtifactClass =
   | 'mcp-framework-shell'
   | 'mcp-raw-stdio-server';
 
+/**
+ * Classes are fixed by the root-relative layout of the one plugin root (#555).
+ * A host's namespaced view (`portable/mcp/<name>.mjs`) holds re-export shims
+ * of the root bundles, not bundles, so a three-segment path classifies as
+ * nothing.
+ */
 const classify = (relativePath: string): ArtifactClass | undefined => {
-  const [, kind, file] = relativePath.split('/');
+  const [kind, file] = relativePath.split('/');
   if (kind === 'install.mjs' && file === undefined) return 'install-script';
   if (file === undefined || !file.endsWith('.mjs')) return undefined;
   switch (kind) {

@@ -21,7 +21,7 @@ export default defineConfig({
 | 字段 | 类型 | 默认值 |
 | --- | --- | --- |
 | `plugin` | `{ name, description?, logo?, ... }` | **必填。** |
-| `targets` | `string[]` | 由适配器选择。 |
+| `targets` | `string[]`——`claude`、`codex`、`cursor`、`portable`，投影进同一个根目录 | `['portable']`。 |
 | `skills` | `string[]` | `src/skills/*` 约定。 |
 | `hooks` | `Partial<Record<CanonicalHookEvent, ...>>` | `src/hooks/*` 约定。 |
 | `mcp` | `{ servers: Record<string, ...> }` | `src/mcp/*` 约定。 |

@@ -4,44 +4,47 @@ description: '把已构建的 agent-bundle 安装进 Claude Code、Codex 或 Cur
 
 # 宿主安装
 
-每个已构建 target 目录都包含一份生成的 `INSTALL.md`，其中的命令使用捆绑包真实的插件名与市场名。框架
-CLI 执行的正是同样的操作：
+构建出的根目录包含一份生成的 `INSTALL.md`，按所选宿主分节，其中的命令使用捆绑包真实的插件名与市场名。框架
+CLI 执行的正是同样的操作，而且每个宿主都从同一个根目录安装：
 
 ```sh
-npx agent-bundle install claude --from artifact/claude --scope user
-npx agent-bundle install codex --from artifact/codex
-npx agent-bundle install cursor --from artifact/cursor
+npx agent-bundle install claude --from artifact --scope user
+npx agent-bundle install codex --from artifact
+npx agent-bundle install cursor --from artifact
 ```
 
-`--from` 既接受一个 target 捆绑包目录，也接受一个**不含源码的产物根目录**，只要该根目录包含所选宿主的
-target 目录。
+`--from` 指向**不含源码的插件根目录**——即包含所选宿主清单（`.claude-plugin/`、`.codex-plugin/`、
+`.cursor-plugin/` 或可移植 `plugin.json`）的那个目录。对于与其他宿主并列的可移植视图，`--from <root>/portable`
+同样可用。在组合根目录之前构建的产物中的 `<root>/<host>` 与 `<root>/plugin` 目录仍会被探测，但仅限于那些
+旧产物。
 
 ## 各宿主接受什么
 
 | 宿主 | 机制 | 作用域 |
 | --- | --- | --- |
-| Claude Code | 委托给 `claude plugin marketplace add` 与 `claude plugin install`。Claude Code 会自行加载插件根目录下的 `hooks/hooks.json`，因此 `.claude-plugin/plugin.json` 不带 `hooks` 指针（Claude Code 会把指向该文件的指针报告为重复的 hooks 文件）；统一 `plugin` 捆绑包的 `hooks/hooks-cursor.json` 从不会被 Claude Code 读取。对于 `directory` 类型的市场，Claude Code 会把 `${CLAUDE_PLUGIN_ROOT}` 解析为该目录本身而不是其插件缓存，因此重新构建该目录会改变正在运行的会话所执行的钩子。 | `user`、`project`、`local` |
-| Codex | 委托给 `codex plugin marketplace add` 与 `codex plugin add`。 | `user` |
-| Cursor | 把捆绑包复制到 `~/.cursor/plugins/local/<name>`（默认的 `--mode local`），因为 Cursor 未发布非交互式安装动词；`--mode marketplace` 则在 `~/.cursor/agent-bundle/marketplaces/<name>` 下暂存一个已提交的本地市场仓库，并打印 Customize → Plugins →“Add Plugins from Local Repository”这一步。无论哪种方式，Cursor 都加载插件清单所指定的 hooks 文档（`cursor` 目标为 `hooks/hooks.json`，统一 `plugin` 目标为 `hooks/hooks-cursor.json`），因此插件 hook 会在替换 `${CURSOR_PLUGIN_ROOT}` 后运行，无需 `~/.cursor/hooks.json` 条目。 | `user` |
+| Claude Code | 委托给 `claude plugin marketplace add` 与 `claude plugin install`。Claude Code 会自行加载插件根目录下的 `hooks/hooks.json`，因此 `.claude-plugin/plugin.json` 不带 `hooks` 指针（Claude Code 会把指向该文件的指针报告为重复的 hooks 文件）；多宿主根目录中的 `hooks/hooks-cursor.json` 与 `.codex-plugin/hooks.json` 从不会被 Claude Code 读取。对于 `directory` 类型的市场，Claude Code 会把 `${CLAUDE_PLUGIN_ROOT}` 解析为该目录本身而不是其插件缓存，因此重新构建该目录会改变正在运行的会话所执行的钩子。 | `user`、`project`、`local` |
+| Codex | 委托给 `codex plugin marketplace add` 与 `codex plugin add`。Codex 读取其 `.codex-plugin/plugin.json` 所指向的 hooks 与 MCP 文档——当它是唯一拥有这两份文档的宿主时是 `hooks/hooks.json` 与 `.mcp.json`，与 Claude Code 并列时是 `.codex-plugin/hooks.json` 与 `.codex-plugin/mcp.json`。 | `user` |
+| Cursor | 把根目录复制到 `~/.cursor/plugins/local/<name>`（默认的 `--mode local`），因为 Cursor 未发布非交互式安装动词；`--mode marketplace` 则在 `~/.cursor/agent-bundle/marketplaces/<name>` 下暂存一个已提交的本地市场仓库，并打印 Customize → Plugins →“Add Plugins from Local Repository”这一步。无论哪种方式，Cursor 都加载插件清单所指定的 hooks 文档（Cursor 是唯一宿主时为 `hooks/hooks.json`，与其他宿主并列时为 `hooks/hooks-cursor.json`），因此插件 hook 会在替换 `${CURSOR_PLUGIN_ROOT}` 后运行，无需 `~/.cursor/hooks.json` 条目。 | `user` |
 
-由于 Claude 与 Codex target 始终随行本地市场清单，它们的公开 CLI 可以直接安装输出的目录。当所选宿主
+由于投影了 Claude Code 或 Codex 的根目录始终随行它们的本地市场清单，它们的公开 CLI 可以直接安装根目录。当所选宿主
 二进制文件不可用时，安装器会以一条带类型的诊断失败，而不是报告一次它并未完成的成功。宿主安装诊断属于
 `AB700x` 家族：捆绑包标识、宿主可用性、作用域、命令失败与冲突检查。
 
 ## 独立安装器
 
-Cursor、portable 与组合 target 包含一个 `install.mjs`，它把捆绑包复制到
-`~/.cursor/plugins/local/<name>`，且不会覆盖冲突内容：
+投影了 Cursor 或 portable 的根目录包含一个 `install.mjs`，它把 Cursor 可加载的包复制到
+`~/.cursor/plugins/local/<name>`，且不会覆盖冲突内容——选择了 `cursor` 时复制根目录本身，否则复制
+Agent Plugins 包（与其他宿主并列时是 `portable/`，只含 portable 的构建则是根目录）：
 
 ```sh
-npx agent-bundle install cursor --from artifact/cursor
-# 或者，在输出的 target 目录中执行：
+npx agent-bundle install cursor --from artifact
+# 或者，在输出的根目录中执行：
 node ./install.mjs
 ```
 
 它的分阶段复制对内容相同的情况是幂等的，并会拒绝版本或内容冲突。它绝不调用 `sudo`，也绝不修改 `PATH`。
 
-对于 `portable`（Agent Plugins 1.0.0）捆绑包，安装器还会在 `mcp.json` 的 Cursor 副本中展开该标准的占位符，
+对于 `portable`（Agent Plugins 1.0.0）包，安装器还会在 `mcp.json` 的 Cursor 副本中展开该标准的占位符，
 因为 Cursor 3.18.25 自己不会展开：它把 `args`、`env` 值和 `cwd` 中的 `${PLUGIN_ROOT}` / `${PLUGIN_DATA}`
 原样留下，不提供 `PLUGIN_ROOT` / `PLUGIN_DATA` 变量（规范 §9.1），把省略的 `cwd` 默认为主目录，并把相对插件的
 `./` 命令解析到工作区文件夹（规范 §7.2.1），因此每个符合规范的 stdio 服务器都无法启动。Cursor 副本会得到绝对的
@@ -50,7 +53,7 @@ node ./install.mjs
 客户端仍然符合规范；展开前的文档保存在安装回执中（`cursorExpansion`），`agent-bundle doctor --host cursor` 以
 `AB7326` 证明这次展开。这里没有任何内容是 Cursor 的行为：来源为 `derived`，而 `cursor` target 的捆绑包绝不会被重写。
 
-产物校验会拒绝缺少必需安装表面的内置 target，因此捆绑包不可能在缺少它所承诺的安装器的情况下发布。
+产物校验会拒绝缺少必需安装表面的根目录，因此捆绑包不可能在缺少它所承诺的安装器的情况下发布。
 
 ## 相对包的安装器 bin
 
@@ -123,11 +126,12 @@ CLI 路由模块仍只看到宿主环境，因为这些模块是其包装器的�
 ## 按回执卸载
 
 ```sh
-npx agent-bundle uninstall cursor --from artifact/cursor --plan   # 确切路径，不做改动
-npx agent-bundle uninstall cursor --from artifact/cursor          # 回执归属的文件；保留 state/
-npx agent-bundle uninstall claude --from artifact/claude          # claude plugin uninstall --keep-data + marketplace remove
-npx agent-bundle uninstall codex --from artifact/codex --purge-data --confirm-purge
-node artifact/cursor/install.mjs --uninstall [--mode marketplace]
+npx agent-bundle uninstall cursor --from artifact --plan   # 确切路径，不做改动
+npx agent-bundle uninstall cursor --from artifact          # 回执归属的文件；保留 state/
+# 先 claude plugin uninstall --keep-data，再 marketplace remove
+npx agent-bundle uninstall claude --from artifact
+npx agent-bundle uninstall codex --from artifact --purge-data --confirm-purge
+node artifact/install.mjs --uninstall [--mode marketplace]
 ```
 
 每次安装都会写入生命周期回执（`agent-bundle-install-receipt/2`）：版本、内容哈希、投递模式、作用域、归属的文件与
@@ -181,7 +185,7 @@ Doctor 还会清点每个宿主根目录下的回执仓库并与宿主交叉核�
 | `AB7324` | info / warning / error | 由 `install cursor --mode marketplace` 暂存的市场已被导入（`registered`）、仍在等待 Customize 导入步骤（`unregistered`），或不完整（`corrupt`）。 |
 | `AB7326` | info / warning / error | `~/.cursor/plugins/local` 下的某个 Agent Plugins 安装：其 `mcp.json` 占位符已由输出的 `install.mjs` 展开且每个展开后的路径仍可解析（`expanded`）；仍带有 Cursor 3.18.25 不会解析的规范形式，因此其 stdio 服务器无法启动（`unexpanded`）；或在记录展开之后被移动、复制或编辑（`drifted`，条目为 `corrupt`）。请在当前位置用捆绑包的 `install.mjs` 重新安装。 |
 | `AB7327` | warning | `doctor --from` 比对了一份其 `claude plugin list --json` 行报告 `enabled: false` 的已安装 Claude 副本；修复方式是 `claude plugin enable <name>@<marketplace> [--scope <scope>]`。 |
-| `AB7320` | error / info | 当某个 `.cursor-plugin/plugin.json` 安装违反 Cursor 被固定的文档 schema 或 token 位置规则（检查的 hooks 文档是清单 `hooks` 字段所指定的那个，因此统一 `plugin` 捆绑包中与 `hooks/hooks-cursor.json` 并存的 Claude 格式 `hooks/hooks.json` 不构成发现），或某个本地插件包含逃逸出 `~/.cursor/plugins/local` 的符号链接时为 error，该清点条目被报告为 `corrupt`。当某个 `.claude-plugin/plugin.json` 或根 `plugin.json` 安装没有 Cursor 侧被固定的静态文档契约时为 info，被加载器识别的条目仍为 `installed`。 |
+| `AB7320` | error / info | 当某个 `.cursor-plugin/plugin.json` 安装违反 Cursor 被固定的文档 schema 或 token 位置规则（检查的 hooks 文档是清单 `hooks` 字段所指定的那个，因此多宿主根目录中与 `hooks/hooks-cursor.json` 并存的 Claude 格式 `hooks/hooks.json` 不构成发现），或某个本地插件包含逃逸出 `~/.cursor/plugins/local` 的符号链接时为 error，该清点条目被报告为 `corrupt`。当某个 `.claude-plugin/plugin.json` 或根 `plugin.json` 安装没有 Cursor 侧被固定的静态文档契约时为 info，被加载器识别的条目仍为 `installed`。 |
 
 ## 下一步
 

@@ -150,8 +150,8 @@ describe('framework-owned package build', () => {
     // Both outputs exist and run.
     expect(result.packageBuild?.files.map((file) => file.path)).toContain('bin/hauler.js');
     await expect(execFile(join(root, 'dist', 'bin', 'hauler.js'), ['alpha'])).resolves.toMatchObject({ stdout: 'hauled:alpha\n' });
-    expect(result.build.outputProvenance.map((record) => record.path)).toContain('portable/scripts/hauler.mjs');
-    const script = join(root, 'artifact', 'portable', 'scripts', 'hauler.mjs');
+    expect(result.build.outputProvenance.map((record) => record.path)).toContain('scripts/hauler.mjs');
+    const script = join(root, 'artifact', 'scripts', 'hauler.mjs');
     await expect(execFile(process.execPath, [script, 'beta'])).resolves.toMatchObject({ stdout: 'hauled:beta\n' });
   }, 120_000);
 
@@ -332,7 +332,8 @@ describe('mcp run', () => {
     expect(launches).toHaveLength(1);
     expect(launches[0]!.command).toBe('node');
     expect(launches[0]!.args[0]).toMatch(/mcp-echoer-[a-f\d]{8}\.mjs$/u);
-    expect(launches[0]!.cwd).toBe(join(artifact, 'portable'));
+    // A portable-only build is the plugin root itself: the server runs from the artifact root.
+    expect(launches[0]!.cwd).toBe(artifact);
     await expect(stat(join(launches[0]!.cwd, launches[0]!.args[0]!))).resolves.toMatchObject({});
   }, 120_000);
 
@@ -383,6 +384,8 @@ describe('mcp run', () => {
     expect(bare.env.FROM_DOTENV).toBe('dotenv');
     expect(bare.env.SHARED).toBe('dotenv');
     // args/cwd stay artifact-rooted: args[0] is the content-hashed bundle.
+    // Beside Codex, the Agent Plugins pack is the namespaced `portable/` view
+    // of the root, so that view is the portable server's plugin root.
     expect(bare.args[0]).toMatch(/mcp-echoer-[a-f\d]{8}\.mjs$/u);
     expect(bare.cwd).toBe(join(artifact, 'portable'));
     // Loading never leaks .env values into the runner's own environment.
@@ -476,7 +479,7 @@ describe('mcp run', () => {
     expect(state.anchor).toBe(root);
     expect(state.cookie).toBe('secret');
     // Nothing durable may land inside the rebuildable artifact.
-    await expect(stat(join(root, 'artifact', 'portable', '.runtime'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(join(root, 'artifact', '.runtime'))).rejects.toMatchObject({ code: 'ENOENT' });
   }, 120_000);
 
   it('rejects --env-file combined with --no-env', async () => {

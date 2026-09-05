@@ -55,7 +55,7 @@ import { defineConfig } from 'agent-bundle/config';
 
 export default defineConfig({
   plugin: { name: 'my-plugin', description: 'What it does.' },
-  targets: ['plugin'],
+  targets: ['claude', 'codex', 'cursor'],
   skills: ['src/skills/*'],
   hooks: { sessionStart: { handler: './src/session-start.ts' } },
   mcp: { servers: { tools: { entry: './src/mcp.ts' } } },
@@ -81,12 +81,12 @@ deprecated compatibility axis, but a value that disagrees with `package.json` re
 ## Build, or work interactively
 
 ```sh
-npx agent-bundle build --root .                 # write installable artifacts to artifact/
+npx agent-bundle build --root .                 # write the plugin root to artifact/
 npx agent-bundle dev --root .                   # local workbench with live rebuilds
 ```
 
-`build` validates the project and writes the artifact, plus the `bin`/`lib` package build when
-declared. `dev` serves the loopback developer Workbench and rebuilds as inputs change: project
+`build` validates the project and writes one plugin root that every selected target reads, plus
+the `bin`/`lib` package build when declared. `dev` serves the loopback developer Workbench and rebuilds as inputs change: project
 overview and diagnostics, Skill documents, the artifact tree with provenance and epoch
 comparison, an artifact-bound MCP playground with the raw protocol trace, a hook playground that
 runs the emitted wrapper, and eval runs.
@@ -104,22 +104,25 @@ that a convention was actually picked up.
 
 ## Install the result
 
-Every built target directory contains a generated `INSTALL.md` with commands that use the
-bundle's real plugin and marketplace names. With the `portable`, `codex`, and `claude` targets
-built above, the host installs are:
+The built root contains one generated `INSTALL.md`, a section per selected host, with commands
+that use the bundle's real plugin and marketplace names. With the `portable`, `codex`, and
+`claude` targets built above, the host installs all point at the root:
 
 ```sh
-npx agent-bundle install claude --from artifact/claude --scope user
-npx agent-bundle install codex --from artifact/codex
+npx agent-bundle install claude --from artifact --scope user
+npx agent-bundle install codex --from artifact
 ```
 
-Add `cursor` to `targets` to build `artifact/cursor`, and `npx agent-bundle install cursor --from
-artifact/cursor` installs it the same way. A `plugin` build has one `INSTALL.md` covering every host.
+Add `cursor` to `targets` and `npx agent-bundle install cursor --from artifact` installs the same
+root. The portable pack — read natively by Cursor, Codex, VS Code, GitHub Copilot, Kiro, and
+ChatGPT — is the root itself when `portable` is the only target and the root's `portable/`
+directory beside other hosts; the root's `install.mjs` copies it into Cursor's local plugin
+directory without the framework CLI.
 
 For an install-free development loop against Claude Code:
 
 ```sh
-claude --plugin-dir artifact/claude plugin list --json
+claude --plugin-dir artifact plugin list --json
 ```
 
 ## Next steps

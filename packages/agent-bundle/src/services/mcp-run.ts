@@ -6,6 +6,7 @@ import { parseEnv } from 'node:util';
 import { Effect, FileSystem } from 'effect';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
+import { hostMcpRuntime, hostRootDirectory, readArtifactRootContracts } from '../build/artifact-root.ts';
 import { validateArtifact } from '../build/validate-artifact.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { sha256Hex } from '../core/digest.ts';
@@ -77,8 +78,7 @@ export const resolveMcpStdioLaunch = async (
   if (!registry.has(options.target) || !registry.supports(options.target, 'mcp')) {
     throw new Error(`Unsupported MCP target ${JSON.stringify(options.target)}.`);
   }
-  const runtime = registry.mcpRuntime(options.target);
-  if (runtime === undefined) {
+  if (registry.mcpRuntime(options.target) === undefined) {
     throw new Error(`Unsupported MCP target ${JSON.stringify(options.target)}.`);
   }
 
@@ -87,8 +87,15 @@ export const resolveMcpStdioLaunch = async (
   const errors = diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
   if (errors.length > 0) throw new DiagnosticError(errors);
 
-  const targetRoot = joinArtifact(artifact, options.target);
-  const manifestPath = joinArtifact(targetRoot, runtime.manifestPath);
+  // Every target reads the one plugin root (#555); the runtime contract and
+  // the host's plugin root come from the artifact's root contracts.
+  const rootContracts = await readArtifactRootContracts(artifact, registry);
+  const runtime = hostMcpRuntime(rootContracts, registry, options.target);
+  if (runtime === undefined) throw new Error(`Unsupported MCP target ${JSON.stringify(options.target)}.`);
+  // The host's plugin root (`${PLUGIN_ROOT}`, the default cwd); the MCP
+  // document path is root-relative, so it is read from the artifact root.
+  const targetRoot = hostRootDirectory(artifact, rootContracts, options.target);
+  const manifestPath = joinArtifact(artifact, runtime.manifestPath);
   let document: unknown;
   try {
     document = parseJsonWithoutDuplicateKeys(await runWithPlatform(readFileString(manifestPath)));

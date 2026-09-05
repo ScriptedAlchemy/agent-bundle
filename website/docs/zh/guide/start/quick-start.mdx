@@ -50,7 +50,7 @@ import { defineConfig } from 'agent-bundle/config';
 
 export default defineConfig({
   plugin: { name: 'my-plugin', description: 'What it does.' },
-  targets: ['plugin'],
+  targets: ['claude', 'codex', 'cursor'],
   skills: ['src/skills/*'],
   hooks: { sessionStart: { handler: './src/session-start.ts' } },
   mcp: { servers: { tools: { entry: './src/mcp.ts' } } },
@@ -74,11 +74,11 @@ export default defineConfig({
 ## 构建，或交互式开发
 
 ```sh
-npx agent-bundle build --root .                 # 把可安装产物写到 artifact/
+npx agent-bundle build --root .                 # 把插件根目录写到 artifact/
 npx agent-bundle dev --root .                   # 带实时重建的本地 Workbench
 ```
 
-`build` 会校验项目并写出产物；声明了 `bin`/`lib` 时还会一并完成包构建。`dev` 在 loopback 上提供
+`build` 会校验项目并写出一个所有所选 target 共同读取的插件根目录；声明了 `bin`/`lib` 时还会一并完成包构建。`dev` 在 loopback 上提供
 开发者 Workbench，并随输入变化持续重建：项目概览与诊断、Skill 文档、带 provenance 与 epoch 对比的
 产物树、绑定到产物、带原始协议轨迹的 MCP playground、运行真实生成包装层的钩子 playground，以及
 eval 运行。
@@ -95,21 +95,23 @@ npx agent-bundle validate --root .           # 检查项目源码
 
 ## 安装结果
 
-每个构建出的 target 目录中都包含生成的 `INSTALL.md`，其中的命令使用该捆绑包真实的插件名与市场名。按上文构建出
-`portable`、`codex` 与 `claude` 三个 target 后，宿主安装命令是：
+构建出的根目录中包含一份生成的 `INSTALL.md`，按所选宿主分节，其中的命令使用该捆绑包真实的插件名与市场名。
+按上文构建出 `portable`、`codex` 与 `claude` 三个 target 后，宿主安装命令全都指向这个根目录：
 
 ```sh
-npx agent-bundle install claude --from artifact/claude --scope user
-npx agent-bundle install codex --from artifact/codex
+npx agent-bundle install claude --from artifact --scope user
+npx agent-bundle install codex --from artifact
 ```
 
-把 `cursor` 加入 `targets` 就会构建出 `artifact/cursor`，然后用 `npx agent-bundle install cursor --from
-artifact/cursor` 以同样方式安装。`plugin` 构建则只有一份覆盖所有宿主的 `INSTALL.md`。
+把 `cursor` 加入 `targets`，`npx agent-bundle install cursor --from artifact` 就会安装同一个根目录。
+可移植包——Cursor、Codex、VS Code、GitHub Copilot、Kiro 与 ChatGPT 原生读取——在 `portable` 是唯一 target
+时就是根目录本身，与其他宿主并列时则是根目录下的 `portable/` 目录；根目录中的 `install.mjs` 无需框架 CLI
+即可把它复制到 Cursor 的本地插件目录。
 
 若想在 Claude Code 上进行免安装的开发循环：
 
 ```sh
-claude --plugin-dir artifact/claude plugin list --json
+claude --plugin-dir artifact plugin list --json
 ```
 
 ## 下一步

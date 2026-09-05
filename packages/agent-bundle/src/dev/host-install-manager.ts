@@ -13,6 +13,8 @@ import { basename, join, relative, resolve } from 'node:path';
 
 import { Effect, FileSystem } from 'effect';
 
+import { compositeMcpRuntime } from '../adapters/composite.ts';
+import { readArtifactTargets } from '../build/artifact-root.ts';
 import { stableJson } from '../core/digest.ts';
 import { isPlatformErrno, readFileString, type PlatformRun } from '../effect/platform.ts';
 import { platformRunOf } from './platform-run.ts';
@@ -64,7 +66,16 @@ interface DevInstallMarker {
   readonly schemaVersion: 1;
 }
 
-const mcpDocumentPath = (host: InstallHost): string => {
+/**
+ * The MCP document the host reads inside the installed root. A root that
+ * projects several hosts relocates some of them (#555: Codex beside Claude
+ * Code reads `.codex-plugin/mcp.json`), so the root's own target list decides;
+ * a root without a manifest falls back to the host's conventional document.
+ */
+const mcpDocumentPath = async (bundleRoot: string, host: InstallHost): Promise<string> => {
+  const targets = await readArtifactTargets(bundleRoot);
+  const relocated = targets === undefined ? undefined : compositeMcpRuntime(targets, host)?.manifestPath;
+  if (relocated !== undefined) return relocated;
   switch (host) {
     case 'claude':
     case 'codex':
@@ -87,7 +98,7 @@ const rewriteMcpDocument = async (
   projectRoot: string,
   run: PlatformRun,
 ): Promise<void> => {
-  const path = join(bundleRoot, mcpDocumentPath(host));
+  const path = join(bundleRoot, await mcpDocumentPath(bundleRoot, host));
   let document: unknown;
   try {
     document = JSON.parse(await run(readFileString(path))) as unknown;
@@ -401,7 +412,8 @@ export class DevHostInstallManager {
   }
 
   async #syncHost(epochRoot: string, epochId: string, host: InstallHost): Promise<void> {
-    const prepared = await prepareDevBundle(join(epochRoot, host), host, epochId, this.#projectRoot, this.#run);
+    // Every host reads the same plugin root (#555).
+    const prepared = await prepareDevBundle(epochRoot, host, epochId, this.#projectRoot, this.#run);
     try {
       let installed = this.#installed.get(host);
       if (installed === undefined) {

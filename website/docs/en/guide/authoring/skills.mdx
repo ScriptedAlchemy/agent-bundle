@@ -87,6 +87,18 @@ their host so they reach only that adapter:
 `targets: ['claude']` is `AB3006`. A Skill is emitted to every target the project selects — there
 is no per-Skill artifact restriction.
 
+One plugin root holds one `skills/<name>/SKILL.md`, and every host the root projects discovers it
+conventionally. When the project selects several targets, a Skill therefore lowers to the one
+document all of them accept: the authored Markdown unchanged when every selected host would pass
+it through as is — no host extension keys, no path tokens — and otherwise the portable document,
+whose frontmatter is the portable metadata alone (the `targets.<host>` keys above are not written
+into the shared file) and which admits no placeholder syntax, so a canonical token in such a Skill
+reports `AB3008`. A Skill that needs one host's extension keys or tokens belongs in a root built
+for that host alone (a separate `--output`). The exception is a file no other host reads: Codex's
+`agents/openai.yaml` sidecar, lowered from `targets.codex`, is still written beside the shared
+`SKILL.md`. The portable projection beside other hosts carries its own copy under
+`portable/skills/`.
+
 ## Path tokens
 
 Host placeholder syntax differs — `${CLAUDE_PLUGIN_ROOT}` is not what Cursor or the portable

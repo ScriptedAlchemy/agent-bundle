@@ -709,7 +709,14 @@ export interface GeneratedRouteMcpEntryOptions {
   /** The project's resolved `notices.retention`; the runtime defaults apply when absent. */
   readonly noticeRetention?: NormalizedNoticeRetentionPolicy;
   readonly state?: NormalizedStateDefinition;
+  /**
+   * The artifact identity the event endpoint is named after (the host, or the
+   * composite name of a root projecting several hosts, #555); hook wrappers
+   * of the same root name it identically.
+   */
   readonly target?: string;
+  /** The hosts whose hook wrappers may reach this entry's event endpoint; defaults to `[target]`. */
+  readonly eventTargets?: readonly string[];
   readonly workerFile: string;
 }
 
@@ -1069,9 +1076,7 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
   const artifactEpoch = generatedRouteArtifactEpoch(options.plugin);
   const hasEvents = (options.eventRoutes?.length ?? 0) > 0;
   const eventTarget = options.target ?? 'unknown';
-  const allowedEventTargets = eventTarget === 'plugin'
-    ? ['claude', 'codex', 'cursor']
-    : [eventTarget];
+  const allowedEventTargets = options.eventTargets ?? [eventTarget];
   const wiresInbox = wiresInboxRoute(options);
   const wiresResourceUpdated = wiresResourceUpdatedRoute(options);
   // The lineage registry journals durably only where the project already

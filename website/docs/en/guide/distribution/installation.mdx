@@ -4,47 +4,53 @@ description: 'Install a built agent-bundle into Claude Code, Codex, or Cursor: t
 
 # Host installation
 
-Every built target directory contains a generated `INSTALL.md` with commands that use the
-bundle's real plugin and marketplace names. The framework CLI performs those same operations:
+The built root contains one generated `INSTALL.md`, a section per selected host, with commands
+that use the bundle's real plugin and marketplace names. The framework CLI performs those same
+operations, and every host is installed from the same root:
 
 ```sh
-npx agent-bundle install claude --from artifact/claude --scope user
-npx agent-bundle install codex --from artifact/codex
-npx agent-bundle install cursor --from artifact/cursor
+npx agent-bundle install claude --from artifact --scope user
+npx agent-bundle install codex --from artifact
+npx agent-bundle install cursor --from artifact
 ```
 
-`--from` accepts either a target bundle directory or a **source-free artifact root**, as long as
-the root contains the selected host's target directory.
+`--from` names the **source-free plugin root** — the directory holding the selected host's
+manifest (`.claude-plugin/`, `.codex-plugin/`, `.cursor-plugin/`, or a portable `plugin.json`).
+For the portable view beside other hosts, `--from <root>/portable` also works. The `<root>/<host>`
+and `<root>/plugin` directories of artifacts built before the composite root are still probed,
+only for those older artifacts.
 
 ## What each host accepts
 
 | Host | Mechanism | Scopes |
 | --- | --- | --- |
-| Claude Code | Delegates to `claude plugin marketplace add` and `claude plugin install`. Claude Code loads `hooks/hooks.json` from the plugin root on its own, so `.claude-plugin/plugin.json` carries no `hooks` pointer (Claude Code reports one at that file as a duplicate hooks file); the unified `plugin` bundle's `hooks/hooks-cursor.json` is never read by Claude Code. For a `directory` marketplace, Claude Code resolves `${CLAUDE_PLUGIN_ROOT}` to that directory itself, not to its plugin cache, so rebuilding it changes the hooks a running session executes. | `user`, `project`, `local` |
-| Codex | Delegates to `codex plugin marketplace add` and `codex plugin add`. | `user` |
-| Cursor | Copies the bundle into `~/.cursor/plugins/local/<name>` (`--mode local`, the default), because Cursor publishes no non-interactive install verb; `--mode marketplace` instead stages a committed local marketplace repository under `~/.cursor/agent-bundle/marketplaces/<name>` and prints the Customize → Plugins → "Add Plugins from Local Repository" step. Either way Cursor loads the hooks document the plugin manifest names (`hooks/hooks.json` for the `cursor` target, `hooks/hooks-cursor.json` for the unified `plugin` target), so plugin hooks run with `${CURSOR_PLUGIN_ROOT}` substituted and need no `~/.cursor/hooks.json` entry. | `user` |
+| Claude Code | Delegates to `claude plugin marketplace add` and `claude plugin install`. Claude Code loads `hooks/hooks.json` from the plugin root on its own, so `.claude-plugin/plugin.json` carries no `hooks` pointer (Claude Code reports one at that file as a duplicate hooks file); a multi-host root's `hooks/hooks-cursor.json` and `.codex-plugin/hooks.json` are never read by Claude Code. For a `directory` marketplace, Claude Code resolves `${CLAUDE_PLUGIN_ROOT}` to that directory itself, not to its plugin cache, so rebuilding it changes the hooks a running session executes. | `user`, `project`, `local` |
+| Codex | Delegates to `codex plugin marketplace add` and `codex plugin add`. Codex reads the hooks and MCP documents its `.codex-plugin/plugin.json` points at — `hooks/hooks.json` and `.mcp.json` when it is the only host that owns them, `.codex-plugin/hooks.json` and `.codex-plugin/mcp.json` beside Claude Code. | `user` |
+| Cursor | Copies the root into `~/.cursor/plugins/local/<name>` (`--mode local`, the default), because Cursor publishes no non-interactive install verb; `--mode marketplace` instead stages a committed local marketplace repository under `~/.cursor/agent-bundle/marketplaces/<name>` and prints the Customize → Plugins → "Add Plugins from Local Repository" step. Either way Cursor loads the hooks document the plugin manifest names (`hooks/hooks.json` when Cursor is the only host, `hooks/hooks-cursor.json` beside another host), so plugin hooks run with `${CURSOR_PLUGIN_ROOT}` substituted and need no `~/.cursor/hooks.json` entry. | `user` |
 
-Because Claude and Codex targets always ship local marketplace manifests, their public CLIs can
-install the emitted directory directly. The installer fails with a typed diagnostic when the
+Because a root that projects Claude Code or Codex always ships their local marketplace manifests,
+their public CLIs can install the root directly. The installer fails with a typed diagnostic when the
 selected host binary is unavailable, rather than reporting a success it did not achieve. Host
 installation diagnostics are the `AB700x` family: bundle identity, host availability, scope,
 command failure, and collision checks.
 
 ## The standalone installer
 
-Cursor, portable, and composite targets include an `install.mjs` that copies the bundle into
-`~/.cursor/plugins/local/<name>` without overwriting collisions:
+A root that projects Cursor or portable includes an `install.mjs` that copies the Cursor-loadable
+pack into `~/.cursor/plugins/local/<name>` without overwriting collisions — the root itself when
+`cursor` is selected, otherwise the Agent Plugins pack (`portable/` beside other hosts, the root
+for a portable-only build):
 
 ```sh
-npx agent-bundle install cursor --from artifact/cursor
-# or, from the emitted target directory:
+npx agent-bundle install cursor --from artifact
+# or, from the emitted root:
 node ./install.mjs
 ```
 
 Its staged copy is idempotent for identical content and refuses version or content collisions. It
 never invokes `sudo` and never changes `PATH`.
 
-For a `portable` (Agent Plugins 1.0.0) bundle the installer also expands the standard's
+For a `portable` (Agent Plugins 1.0.0) pack the installer also expands the standard's
 placeholders in the Cursor copy of `mcp.json`, because Cursor 3.18.25 does not: it leaves
 `${PLUGIN_ROOT}` / `${PLUGIN_DATA}` unexpanded in `args`, `env` values, and `cwd`, provides no
 `PLUGIN_ROOT` / `PLUGIN_DATA` variables (spec §9.1), defaults an omitted `cwd` to the home
@@ -57,9 +63,8 @@ Plugins clients; the pre-expansion document is kept in the install receipt (`cur
 and `agent-bundle doctor --host cursor` proves the expansion with `AB7326`. Nothing here is
 Cursor behaviour: the provenance is `derived`, and a `cursor`-target bundle is never rewritten.
 
-Artifact validation rejects a built-in target
-whose required install surface is missing, so a bundle cannot ship without the installer it
-promises.
+Artifact validation rejects a root whose required install surface is missing, so a bundle cannot
+ship without the installer it promises.
 
 ## The package-relative installer bin
 
@@ -146,11 +151,12 @@ variables each declares (`AB7331`, informational) — never a name or a value.
 ## Uninstalling by receipt
 
 ```sh
-npx agent-bundle uninstall cursor --from artifact/cursor --plan   # exact paths, nothing changes
-npx agent-bundle uninstall cursor --from artifact/cursor          # receipt-owned files; state/ kept
-npx agent-bundle uninstall claude --from artifact/claude          # claude plugin uninstall --keep-data + marketplace remove
-npx agent-bundle uninstall codex --from artifact/codex --purge-data --confirm-purge
-node artifact/cursor/install.mjs --uninstall [--mode marketplace]
+npx agent-bundle uninstall cursor --from artifact --plan   # exact paths, nothing changes
+npx agent-bundle uninstall cursor --from artifact          # receipt-owned files; state/ kept
+# claude plugin uninstall --keep-data, then marketplace remove
+npx agent-bundle uninstall claude --from artifact
+npx agent-bundle uninstall codex --from artifact --purge-data --confirm-purge
+node artifact/install.mjs --uninstall [--mode marketplace]
 ```
 
 Every install writes a lifecycle receipt (`agent-bundle-install-receipt/2`): version, content
@@ -216,7 +222,7 @@ registration proof and the rows' `errors` already hold that verdict.
 | `AB7324` | info / warning / error | A marketplace staged by `install cursor --mode marketplace` is imported (`registered`), still awaiting the Customize import step (`unregistered`), or incomplete (`corrupt`). |
 | `AB7326` | info / warning / error | An Agent Plugins install under `~/.cursor/plugins/local` had its `mcp.json` placeholders expanded by the emitted `install.mjs` and every expanded path still resolves (`expanded`); still carries the spec forms Cursor 3.18.25 does not resolve, so its stdio servers cannot spawn (`unexpanded`); or was moved, duplicated, or edited after the expansion was recorded (`drifted`, entry `corrupt`). Reinstall with the bundle's `install.mjs` at the current location. |
 | `AB7327` | warning | `doctor --from` compared an installed Claude copy whose `claude plugin list --json` row reports `enabled: false`; the recovery is `claude plugin enable <name>@<marketplace> [--scope <scope>]`. |
-| `AB7320` | error / info | Error when a `.cursor-plugin/plugin.json` install violates Cursor's pinned document schemas or token-location rules (the hooks document checked is the one the manifest `hooks` field names, so the unified `plugin` bundle's Claude-format `hooks/hooks.json` beside `hooks/hooks-cursor.json` is not a finding), or when a local plugin contains a symlink escaping `~/.cursor/plugins/local`; the inventory entry is reported as `corrupt`. Info when a `.claude-plugin/plugin.json` or root `plugin.json` install has no Cursor-side pinned static document contract, and the loader-recognized entry stays `installed`. |
+| `AB7320` | error / info | Error when a `.cursor-plugin/plugin.json` install violates Cursor's pinned document schemas or token-location rules (the hooks document checked is the one the manifest `hooks` field names, so a multi-host root's Claude-format `hooks/hooks.json` beside `hooks/hooks-cursor.json` is not a finding), or when a local plugin contains a symlink escaping `~/.cursor/plugins/local`; the inventory entry is reported as `corrupt`. Info when a `.claude-plugin/plugin.json` or root `plugin.json` install has no Cursor-side pinned static document contract, and the loader-recognized entry stays `installed`. |
 
 ## Next
 

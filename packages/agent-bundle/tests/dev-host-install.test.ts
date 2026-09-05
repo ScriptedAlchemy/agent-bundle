@@ -69,8 +69,9 @@ const writeEpoch = async (
   id: string,
   values: { readonly hook: string; readonly skill: string },
 ): Promise<string> => {
+  // The epoch is the plugin root itself (#555): the host reads it directly.
   const root = join(projectRoot, '.agent-bundle', 'epochs', id);
-  const target = join(root, 'cursor');
+  const target = root;
   await Promise.all([
     mkdir(join(target, '.cursor-plugin'), { recursive: true }),
     mkdir(join(target, 'hooks'), { recursive: true }),

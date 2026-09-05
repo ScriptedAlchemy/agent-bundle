@@ -76,7 +76,7 @@ pnpm --filter @agent-bundle-example/host-test probe:uninstall claude
 - `probe:install` builds when needed, creates the isolated home plus a scratch
   git workspace, copies the host's sign-in file byte-for-byte into the isolated
   home (`--no-auth` skips it; the copy is removed by `probe:uninstall`), and
-  runs `agent-bundle install <host> --from artifact/<host>` with `HOME`,
+  runs `agent-bundle install <host> --from artifact` (one root serves every host) with `HOME`,
   `CLAUDE_CONFIG_DIR`, or `CODEX_HOME` pointed at the isolated home. For Cursor
   it prints the isolated IDE launch line (`--user-data-dir`, `--extensions-dir`).
 - `probe:capture` runs the scenario prompt through `claude -p`, `codex exec`, or

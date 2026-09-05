@@ -323,7 +323,7 @@ it('low-level build writes and returns the exact canonical manifest for a config
       registry: new TargetRegistry().register((await import('../src/adapters/portable.ts')).portableAdapter, { default: true }),
     });
 
-    const emittedScript = join(project.outputRoot, 'portable', 'scripts', 'greeting.mjs');
+    const emittedScript = join(project.outputRoot, 'scripts', 'greeting.mjs');
     expect(result.compiledEntries).toMatchObject([
       { name: 'greeting', output: emittedScript, source: project.scriptPath },
     ]);
@@ -368,35 +368,35 @@ it('low-level build writes and returns the exact canonical manifest for a config
     for (const file of files.filter((entry) => entry.path.endsWith('.json'))) {
       expect(JSON.parse(await readFile(join(project.outputRoot, file.path), 'utf8'))).toBeDefined();
     }
-    await expect(readFile(join(project.outputRoot, 'portable', 'skills', 'review', 'assets', 'icon.bin'))).resolves.toEqual(
+    await expect(readFile(join(project.outputRoot, 'skills', 'review', 'assets', 'icon.bin'))).resolves.toEqual(
       Buffer.from([0, 1, 2, 255]),
     );
-    await expect(stat(join(project.outputRoot, 'portable', 'skills', 'review', 'assets', 'icon.bin'))).resolves.toMatchObject({
+    await expect(stat(join(project.outputRoot, 'skills', 'review', 'assets', 'icon.bin'))).resolves.toMatchObject({
       mode: expect.any(Number),
     });
     expect(
-      (await stat(join(project.outputRoot, 'portable', 'skills', 'review', 'assets', 'icon.bin'))).mode & 0o777,
+      (await stat(join(project.outputRoot, 'skills', 'review', 'assets', 'icon.bin'))).mode & 0o777,
     ).toBe(0o751);
-    const emittedProjectAsset = join(project.outputRoot, 'portable', 'assets', 'branding', 'logo.svg');
+    const emittedProjectAsset = join(project.outputRoot, 'assets', 'branding', 'logo.svg');
     await expect(readFile(emittedProjectAsset)).resolves.toEqual(await readFile(project.assetPath));
     expect(manifest.files).toContainEqual(expect.objectContaining({
       kind: 'copy',
-      path: 'portable/assets/branding/logo.svg',
+      path: 'assets/branding/logo.svg',
       sourceInputs: ['assets/branding/logo.svg'],
     }));
     for (const resource of model.skills[0]!.resources) {
       await expect(
-        readFile(join(project.outputRoot, 'portable', 'skills', 'review', resource.relativePath)),
+        readFile(join(project.outputRoot, 'skills', 'review', resource.relativePath)),
       ).resolves.toEqual(await readFile(resource.source));
     }
 
     const copiedScriptResources = [
       {
-        path: 'portable/skills/review/scripts/review helper.sh',
+        path: 'skills/review/scripts/review helper.sh',
         source: project.shellScriptPath,
       },
       {
-        path: 'portable/skills/review/scripts/review helper.py',
+        path: 'skills/review/scripts/review helper.py',
         source: project.pythonScriptPath,
       },
     ] as const;
@@ -412,7 +412,7 @@ it('low-level build writes and returns the exact canonical manifest for a config
         path: resource.path,
         sha256: sha256Hex(contents),
         sourceInputs: expect.arrayContaining([
-          resource.path.replace('portable/', 'src/'),
+          `src/${resource.path}`,
           'src/skills/review/SKILL.md',
         ]),
       }));
@@ -481,11 +481,11 @@ it('embeds a script dynamic import in its single planned output file', async () 
       registry,
     });
 
-    await expect(runModule(join(project.outputRoot, 'portable', 'scripts', 'greeting.mjs'), project.root)).resolves.toEqual({
+    await expect(runModule(join(project.outputRoot, 'scripts', 'greeting.mjs'), project.root)).resolves.toEqual({
       code: 0,
       output: 'hello from skill bundle\n',
     });
-    expect(await readdir(join(project.outputRoot, 'portable', 'scripts'))).toEqual(['greeting.mjs']);
+    expect(await readdir(join(project.outputRoot, 'scripts'))).toEqual(['greeting.mjs']);
   } finally {
     await cleanupProject(project);
   }
@@ -510,7 +510,7 @@ it('reports complete immutable output provenance for a Skill copy and bundled sc
     expect(provenance.map((record) => record.path)).toEqual(artifactPaths);
     expect(provenance).toContainEqual({
       kind: 'bundle',
-      path: 'portable/scripts/greeting.mjs',
+      path: 'scripts/greeting.mjs',
       sourceInputs: [
         'src/skills/review/scripts/greeting script.ts',
         'src/skills/review/scripts/local greeting module.ts',
@@ -518,7 +518,7 @@ it('reports complete immutable output provenance for a Skill copy and bundled sc
     });
     expect(provenance).toContainEqual({
       kind: 'copy',
-      path: 'portable/skills/review/scripts/review helper.sh',
+      path: 'skills/review/scripts/review helper.sh',
       sourceInputs: [
         'src/skills/review/scripts/review helper.sh',
         'src/skills/review/SKILL.md',
@@ -612,7 +612,7 @@ it('rejects hook entries stamped for a target other than their selected adapter'
       projectRoot: project.root,
       registry: new TargetRegistry().register(adapter, { default: true }),
     })).rejects.toThrow(
-      'Agent Bundle compilation failed with 1 error:\n[AB5000] Target adapter "portable" planned hook "hook:malicious" for target "wrong-target", expected "portable".',
+      'Agent Bundle compilation failed with 1 error:\n[AB5000] Plugin root "portable" planned hook "hook:malicious" for ["wrong-target"], which it does not project.',
     );
     await expect(readFile(join(project.outputRoot, 'previous.txt'), 'utf8')).resolves.toBe('previous\n');
     await expect(readFile(join(project.outputRoot, 'agent-bundle.manifest.json'), 'utf8')).rejects.toMatchObject({
@@ -871,40 +871,43 @@ it('rejects duplicate planned destinations before replacing an existing artifact
   }
 });
 
-it('rejects an escaped target name before it can write outside the staging artifact', async () => {
+it('never uses a target name as a path component of the plugin root', async () => {
+  // The output directory is the one plugin root (#555): a target name is never
+  // joined onto it, so even an escaping name cannot reach outside the artifact.
   const project = await createProject();
   const targetName = '../escaped-target';
+  const configPath = join(project.root, 'agent-bundle.config.ts');
   const adapter: TargetAdapter = {
+    artifactLayout: { rootDocuments: ['plugin.json'] },
     capabilities: {},
     metadata: testAdapterMetadata,
     name: targetName,
     plan: () => ({
       diagnostics: [],
-      entries: [{ content: 'escaped\n', kind: 'write', relativePath: 'plugin.json', sourceInputs: [] }],
+      entries: [{ content: '{"escaped":true}\n', kind: 'write', relativePath: 'plugin.json', sourceInputs: [configPath] }],
       hookEntries: [],
     }),
   };
 
   try {
-    await mkdir(project.outputRoot, { recursive: true });
-    await writeFile(join(project.outputRoot, 'previous.txt'), 'previous\n');
-
-    await expect(
-      build({
-        model: {
-          ...modelFor(project),
-          scripts: [],
-          targets: [{ ...modelFor(project).targets[0]!, name: targetName }],
-        },
-        outputRoot: project.outputRoot,
-        projectRoot: project.root,
-        registry: new TargetRegistry().register(adapter, { default: true }),
-      }),
-    ).rejects.toThrow(/outside/i);
-    await expect(readFile(join(project.outputRoot, 'previous.txt'), 'utf8')).resolves.toBe('previous\n');
+    await build({
+      model: {
+        ...modelFor(project),
+        scripts: [],
+        targets: [{ ...modelFor(project).targets[0]!, name: targetName }],
+      },
+      outputRoot: project.outputRoot,
+      projectRoot: project.root,
+      registry: new TargetRegistry().register(adapter, { default: true }),
+    });
+    await expect(readFile(join(project.outputRoot, 'plugin.json'), 'utf8')).resolves.toBe('{"escaped":true}\n');
     await expect(readFile(join(project.root, 'escaped-target', 'plugin.json'), 'utf8')).rejects.toMatchObject({
       code: 'ENOENT',
     });
+    await expect(readdir(project.root)).resolves.not.toContain('escaped-target');
+    const manifest = parseArtifactManifest(await readFile(join(project.outputRoot, 'agent-bundle.manifest.json'), 'utf8'));
+    expect(manifest.targets.map((target) => target.name)).toEqual([targetName]);
+    expect(manifest.files.map((file) => file.path)).toContain('plugin.json');
   } finally {
     await cleanupProject(project);
   }
@@ -964,7 +967,7 @@ it('rejects a script name that exits its target scripts directory', async () => 
       }),
     ).rejects.toThrow(/outside/i);
     await expect(readFile(join(project.outputRoot, 'previous.txt'), 'utf8')).resolves.toBe('previous\n');
-    await expect(readFile(join(project.outputRoot, 'portable', 'leaked.mjs'), 'utf8')).rejects.toMatchObject({
+    await expect(readFile(join(project.outputRoot, 'leaked.mjs'), 'utf8')).rejects.toMatchObject({
       code: 'ENOENT',
     });
   } finally {
@@ -1180,7 +1183,7 @@ it('parses emitted bundles in full when a tools hatch could have rewritten them'
         },
       },
     })).rejects.toThrow(
-      'Agent Bundle compilation failed with 1 error:\n[AB6005] Generated JavaScript import from "portable/scripts/greeting.mjs" has invalid syntax.',
+      'Agent Bundle compilation failed with 1 error:\n[AB6005] Generated JavaScript import from "scripts/greeting.mjs" has invalid syntax.',
     );
     await expect(readFile(join(project.outputRoot, 'agent-bundle.manifest.json'), 'utf8')).rejects.toMatchObject({
       code: 'ENOENT',

@@ -716,13 +716,12 @@ const temporaryArtifact = async <Result>(
   ));
 };
 
-type HostValidatedTarget = 'claude' | 'codex' | 'cursor' | 'plugin' | 'portable';
+type HostValidatedTarget = 'claude' | 'codex' | 'cursor' | 'portable';
 
 const hostValidatedTargets: ReadonlySet<string> = new Set<HostValidatedTarget>([
   'claude',
   'codex',
   'cursor',
-  'plugin',
   'portable',
 ]);
 
@@ -741,7 +740,6 @@ const hostValidationReport = (
     case 'portable':
       return validatePortablePlugin({ pluginDirectory, target });
     case 'claude':
-    case 'plugin':
       return validateClaudePlugin({ pluginDirectory, strict, target });
     default: {
       const exhaustive: never = target;
@@ -762,10 +760,14 @@ export const validate = async (options: ValidateOptions): Promise<ValidateResult
       if (validated.snapshot === undefined) {
         return Object.freeze({ diagnostics: freezeDiagnostics(validated.diagnostics) });
       }
-      const reports = await Promise.all(validated.snapshot.manifest.targets
-        .map((target) => target.name)
+      // Every projected host reads the same plugin root (#555); the portable
+      // projection beside other hosts is its namespaced `portable/` view.
+      const registry = registryFor(options);
+      const targetNames = validated.snapshot.manifest.targets.map((target) => target.name);
+      const root = registry.root(targetNames.filter((name) => registry.has(name)));
+      const reports = await Promise.all(targetNames
         .filter(isHostValidatedTarget)
-        .map((target) => hostValidationReport(target, join(artifact, target), options.strict)));
+        .map((target) => hostValidationReport(target, join(artifact, root.hostRoot(target)), options.strict)));
       return Object.freeze({
         diagnostics: freezeDiagnostics([
           ...validated.diagnostics,
@@ -1068,11 +1070,16 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
   let plans: readonly InspectionPlan[];
   try {
     const components = inspectableComponents(model);
+    // Every selected target is projected into one root (#555): the entries
+    // and hook entries shown per target are the root's plan, while component
+    // accounting stays the host's own judgment.
+    const rootContracts = prepared.registry.root(model.targets.map((target) => target.name));
+    const rootPlan = rootContracts.adapter.plan(model);
     plans = Object.freeze(model.targets
       .filter((candidate) => options.target === undefined || candidate.name === options.target)
       .map((target) => {
         const adapter = prepared.registry.get(target.name);
-        const plan = adapter.plan(model);
+        const plan = rootPlan;
         const accounted = accountComponentsFor(
           components,
           target.name,
@@ -1101,18 +1108,19 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
   let bundler: BundlerInspection | undefined;
   if (options.focus === 'bundler') {
     try {
+      // The bundler composes the one plugin root every target shares (#555).
+      const hosts = model.targets.map((target) => target.name);
+      const rootContracts = prepared.registry.root(hosts);
       bundler = await composeBundlerInspection({
         model,
         projectRoot: prepared.root,
-        targets: plans.map((plan) => {
-          const noticeDelivery = prepared.registry.noticeDelivery(plan.target);
-          return {
-            cliBin: targetHostsCliBin(prepared.registry, plan.target),
-            hookEntries: plan.hookEntries,
-            name: plan.target,
-            ...(noticeDelivery === undefined ? {} : { noticeDelivery }),
-          };
-        }),
+        root: {
+          cliBin: hosts.some((host) => targetHostsCliBin(prepared.registry, host)),
+          hookEntries: rootContracts.adapter.plan(model).hookEntries ?? [],
+          hosts,
+          name: rootContracts.name,
+          ...(rootContracts.noticeDelivery === undefined ? {} : { noticeDelivery: rootContracts.noticeDelivery }),
+        },
         ...(prepared.tools === undefined ? {} : { tools: prepared.tools }),
       });
     } catch {
@@ -1234,7 +1242,7 @@ export const build = async (options: BuildOptions): Promise<BuildProjectResult> 
   });
 };
 
-const claudeValidatedTargets: ReadonlySet<string> = new Set<HostValidatedTarget>(['claude', 'plugin']);
+const claudeValidatedTargets: ReadonlySet<string> = new Set<HostValidatedTarget>(['claude']);
 
 /**
  * `build --host-validation`: the Claude developer validator (`plugin validate`
@@ -1257,7 +1265,7 @@ const buildHostValidation = async (
       continue;
     }
     const report = await validateClaudePlugin({
-      pluginDirectory: join(output, target),
+      pluginDirectory: output,
       ...(options.hostValidationRunner === undefined ? {} : { run: options.hostValidationRunner }),
       ...(options.strict === undefined ? {} : { strict: options.strict }),
       target,

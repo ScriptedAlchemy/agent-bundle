@@ -216,7 +216,8 @@ it('runs a signed-in trial with an explicit plugin directory, never --bare, and 
     expect(execution?.args).toEqual([
       '-p',
       '--plugin-dir',
-      join(context.artifact.root, 'claude'),
+      // The built artifact is the plugin root Claude Code loads (#555).
+      context.artifact.root,
       '--model',
       'claude-sonnet-4-5',
       '--output-format',

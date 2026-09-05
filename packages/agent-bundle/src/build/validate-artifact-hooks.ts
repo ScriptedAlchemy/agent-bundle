@@ -9,7 +9,7 @@ import {
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { readFileString, runWithPlatform } from '../effect/platform.ts';
 import { artifactDiagnostic as diagnostic } from './artifact-diagnostics.ts';
-import { matchesManifestFile, pathInTargetOutputLayout, targetArtifactPath } from './artifact-layout.ts';
+import { isDirectOutputLayoutPath, matchesManifestFile } from './artifact-layout.ts';
 import {
   artifactHookIndexName,
   type ArtifactFile,
@@ -51,6 +51,10 @@ export const validateHookCoherence = async (options: {
   const files = new Map(options.files.map((file) => [file.path, file]));
   const manifestFiles = new Map(options.manifest.files.map((file) => [file.path, file]));
   const targets = new Set(options.manifest.targets.map((target) => target.name));
+  // One root projects every declared host (#555): wrapper layout and each
+  // host's (possibly relocated) hook document come from the root contracts.
+  const rootTargets = [...targets].filter((target) => options.registry.has(target));
+  const root = rootTargets.length === 0 ? undefined : options.registry.root(rootTargets);
   const indexedByTarget = new Map<string, typeof index.hooks>();
   for (const hook of index.hooks) {
     const entries = indexedByTarget.get(hook.target) ?? [];
@@ -67,16 +71,14 @@ export const validateHookCoherence = async (options: {
       ));
       continue;
     }
-    if (!options.registry.has(hook.target)) continue;
-    const contract = options.registry.hookContract(hook.target);
-    const layout = options.registry.artifactLayout(hook.target).hookWrappers;
-    const expectedPrefix = `${hook.target}/`;
+    if (!options.registry.has(hook.target) || root === undefined) continue;
+    const contract = root.hookContractFor(hook.target);
+    const layout = root.artifactLayout.hookWrappers;
     const file = files.get(hook.path);
     const manifestFile = manifestFiles.get(hook.path);
     if (
       contract === undefined ||
-      !hook.path.startsWith(expectedPrefix) ||
-      !pathInTargetOutputLayout(hook.path, hook.target, layout) ||
+      !isDirectOutputLayoutPath(hook.path, layout) ||
       file === undefined ||
       manifestFile === undefined ||
       !matchesManifestFile(file, manifestFile)
@@ -91,11 +93,11 @@ export const validateHookCoherence = async (options: {
   }
 
   for (const { name: target } of options.manifest.targets) {
-    if (!options.registry.has(target) || !options.registry.supports(target, 'hooks')) continue;
-    const contract = options.registry.hookContract(target);
+    if (!options.registry.has(target) || !options.registry.supports(target, 'hooks') || root === undefined) continue;
+    const contract = root.hookContractFor(target);
     if (contract === undefined) continue;
     const hooks = indexedByTarget.get(target) ?? [];
-    const manifestPath = targetArtifactPath(target, contract.manifestPath);
+    const manifestPath = contract.manifestPath;
     if (!files.has(manifestPath)) {
       if (hooks.length === 0) continue;
       diagnostics.push(diagnostic(
@@ -130,7 +132,7 @@ export const validateHookCoherence = async (options: {
     }
     const relativePaths = new Map<string, number>();
     for (const hook of hooks) {
-      const relativePath = hook.path.slice(target.length + 1);
+      const relativePath = hook.path;
       relativePaths.set(relativePath, (relativePaths.get(relativePath) ?? 0) + 1);
       const command = generatedHookCommand(contract, relativePath);
       const occurrences = commands.commands.filter((candidate) => candidate.command === command).length;
@@ -143,7 +145,7 @@ export const validateHookCoherence = async (options: {
         ));
       }
     }
-    const wrapperLayout = options.registry.artifactLayout(target).hookWrappers;
+    const wrapperLayout = root.artifactLayout.hookWrappers;
     for (const command of commands.commands) {
       const relativePath = compilerHookWrapperPath(contract, command.command);
       if (relativePath === undefined) continue;
@@ -151,7 +153,7 @@ export const validateHookCoherence = async (options: {
       // command without arguments parses like a wrapper command but points
       // into its payload directory, outside the wrapper layout, and is
       // deliberately absent from the hook index (like native hooks).
-      if (!pathInTargetOutputLayout(targetArtifactPath(target, relativePath), target, wrapperLayout)) continue;
+      if (!isDirectOutputLayoutPath(relativePath, wrapperLayout)) continue;
       const entries = relativePaths.get(relativePath) ?? 0;
       if (entries === 1) continue;
       diagnostics.push(diagnostic(

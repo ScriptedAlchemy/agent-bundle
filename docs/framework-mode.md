@@ -567,9 +567,9 @@ bundler `context` — on purpose: Rspack writes module identifiers relative to
 concatenated modules), so a namespace under the staging root would stamp the
 per-build token into the artifact.
 
-`agent-bundle build` makes each target directory independently distributable.
-Every target includes `INSTALL.md` generated with its real plugin and
-marketplace names. Claude and Codex bundles include local marketplace manifests
+`agent-bundle build` emits one plugin root that every selected target installs
+from (#555); it includes one `INSTALL.md` generated with the real plugin and
+marketplace names and a section per selected host. Claude and Codex bundles include local marketplace manifests
 and install through their public plugin CLIs; Cursor bundles use the documented
 `~/.cursor/plugins/local/<name>` location because Cursor exposes marketplace
 management but no non-interactive plugin install verb.
@@ -610,13 +610,13 @@ document. The bundle stays spec-conformant; the provenance is `derived`.
 The framework CLI performs those same operations:
 
 ```sh
-agent-bundle install claude --from artifact/claude --scope user
-agent-bundle install codex --from artifact/codex
-agent-bundle install cursor --from artifact/cursor
+agent-bundle install claude --from artifact --scope user
+agent-bundle install codex --from artifact
+agent-bundle install cursor --from artifact
 ```
 
-Cursor-compatible `cursor`, `portable`, and multi-host `plugin` targets also
-include a standalone `install.mjs`. Its staged copy is idempotent for identical
+A root that selects `cursor` or `portable` also includes a standalone
+`install.mjs`. Its staged copy is idempotent for identical
 content, records an install receipt (`.agent-bundle-install.json`: plugin,
 version, content hash, owned files and directories), replaces a same-version stale copy of its
 own plugin in place (owned files only; `state/` survives), and accepts
@@ -643,11 +643,11 @@ a receipt written before #101 is read with its lifecycle fields synthesized and
 diagnosed (`AB7329`), never rejected.
 
 ```sh
-agent-bundle uninstall claude --from artifact/claude --plan      # exact paths and host verbs, no writer
-agent-bundle uninstall claude --from artifact/claude             # claude plugin uninstall --keep-data, marketplace remove, receipt
-agent-bundle uninstall cursor --from artifact/cursor             # receipt-owned files, directories, remnant state kept
-agent-bundle uninstall cursor --from artifact/cursor --purge-data --confirm-purge
-node artifact/cursor/install.mjs --uninstall [--plan] [--mode marketplace]
+agent-bundle uninstall claude --from artifact --plan      # exact paths and host verbs, no writer
+agent-bundle uninstall claude --from artifact             # claude plugin uninstall --keep-data, marketplace remove, receipt
+agent-bundle uninstall cursor --from artifact             # receipt-owned files, directories, remnant state kept
+agent-bundle uninstall cursor --from artifact --purge-data --confirm-purge
+node artifact/install.mjs --uninstall [--plan] [--mode marketplace]
 ```
 
 Uninstall removes exactly what the receipt owns and reverses exactly the

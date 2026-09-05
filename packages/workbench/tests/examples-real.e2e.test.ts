@@ -223,9 +223,13 @@ e2e('drives Hooks, scripts, logs, diagnostics, and repair in real Chrome', { tim
 
     await page.getByRole('link', { name: 'Playground', exact: true }).click();
     await waitForSettledWorkbench(page);
-    await page.waitForFunction(() => document.querySelector<HTMLSelectElement>('#playground-script-id')?.value === 'script:verify-release', undefined, { timeout: browserTimeout });
+    // One plugin root shares its scripts/ directory with every projected host
+    // (#555), so each target catalogues both scripts and the picker defaults
+    // to the first by id.
+    await page.waitForFunction(() => document.querySelector<HTMLSelectElement>('#playground-script-id')?.value === 'script:detect-risk', undefined, { timeout: browserTimeout });
     expect(await page.locator('#playground-target').inputValue()).toBe('claude');
     expect(await page.locator('#playground-operation').inputValue()).toBe('script.run');
+    await page.locator('#playground-script-id').selectOption('script:verify-release');
     expect(await page.locator('#playground-script-id').inputValue()).toBe('script:verify-release');
     await page.getByRole('button', { name: 'Run script' }).click();
     await expect(page.getByText('script.completed')).toBeVisible({ timeout: browserTimeout });
@@ -355,7 +359,15 @@ e2e('drives every populated MCP App workflow surface in real Chrome', { timeout:
     await page.getByRole('link', { name: 'Artifacts', exact: true }).click();
     await waitForSettledWorkbench(page);
     await expect(page.getByRole('heading', { name: 'Artifacts', exact: true })).toBeVisible({ timeout: browserTimeout });
+    // Beside Claude and Codex the portable projection is the namespaced
+    // `portable/` view (#555): its own pack whose mcp.json reaches the shared
+    // compiled server through a shim, while the compiled MCP App HTML is a
+    // shared root surface listed under the root hosts.
     await page.locator('#artifact-target').selectOption('portable');
+    await expect(page.locator('.artifact-table').first()).toContainText('portable/mcp.json', { timeout: browserTimeout });
+    await expect(page.locator('.artifact-table').first()).toContainText('portable/mcp/mcp-status-', { timeout: browserTimeout });
+    await expect(page.locator('.artifact-table').first()).not.toContainText('mcp-apps/status.html');
+    await page.locator('#artifact-target').selectOption('claude');
     await expect(page.locator('.artifact-table').first()).toContainText('mcp-apps/status.html', { timeout: browserTimeout });
     await captureExampleState(page, 'mcp-app', 'artifacts-populated');
 

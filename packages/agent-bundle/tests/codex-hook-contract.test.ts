@@ -104,9 +104,8 @@ const emittedHooks = (model: NormalizedPlugin): unknown => {
   return JSON.parse(entry.content);
 };
 
-it('records dated four-state Codex hook-contract rows mirrored by the adapter and intersected by the unified bundle', () => {
+it('records dated four-state Codex hook-contract rows mirrored by the adapter', () => {
   const registry = createDefaultRegistry();
-  const unified = registry.get('plugin');
   const contract = codexCapabilityTable.hooks.contract as Readonly<Record<string, {
     readonly evidence: readonly string[];
     readonly reason?: string;
@@ -135,8 +134,6 @@ it('records dated four-state Codex hook-contract rows mirrored by the adapter an
       });
     }
     expect(registry.supports('codex', capability)).toBe(expectedState === 'supported');
-    expect(unified.capabilities[capability]).toMatchObject({ state: 'unavailable' });
-    expect(registry.supports('plugin', capability)).toBe(false);
   }
 });
 

@@ -256,7 +256,7 @@ it('accepts claude.userConfig through the public inspection and build APIs', asy
 
     await build({ output: artifact, root });
     const manifest = JSON.parse(
-      await readFile(join(artifact, 'claude', '.claude-plugin', 'plugin.json'), 'utf8'),
+      await readFile(join(artifact, '.claude-plugin', 'plugin.json'), 'utf8'),
     ) as Record<string, unknown>;
     expect(manifest).toHaveProperty('userConfig.api_token.sensitive', true);
   } finally {
@@ -419,7 +419,9 @@ it('build runs the Claude developer validator and load check over built claude t
   const root = await createProject();
   try {
     const artifact = join(root, 'artifact');
-    const claudeBundle = join(artifact, 'claude');
+    // Claude Code reads the plugin root itself (#555): the Codex projection
+    // shares it, so the validator and load check run over the root.
+    const claudeBundle = artifact;
     const calls: string[][] = [];
     const runner: ClaudePluginCommandRunner = async (request) => {
       calls.push([...request.args]);
@@ -454,7 +456,7 @@ it('build runs the Claude developer validator and load check over built claude t
       ['plugin', 'validate', join(claudeBundle, '.claude-plugin', 'marketplace.json'), '--strict', '--json'],
       ['--plugin-dir', claudeBundle, 'plugin', 'list', '--json'],
     ]);
-    // Codex is built too, but only claude/plugin targets have a Claude validator.
+    // Codex is built into the same root, but only the claude target has a Claude validator.
     expect(validated.build.manifest.targets.map((target) => target.name).sort()).toEqual(['claude', 'codex']);
     expect(validated.hostValidation).toEqual([
       expect.objectContaining({ host: 'claude', load: { status: 'loaded' }, status: 'warnings', target: 'claude', version: '2.1.259' }),
@@ -477,7 +479,7 @@ it('build surfaces a Claude load refusal as AB7325 even when plugin validate --s
   const root = await createProject();
   try {
     const artifact = join(root, 'artifact');
-    const claudeBundle = join(artifact, 'claude');
+    const claudeBundle = artifact;
     const errors = ['Hook load failed: Duplicate hooks file detected: ./hooks/hooks.json resolves to already-loaded file.'];
     const runner: ClaudePluginCommandRunner = async (request) => {
       if (request.args[0] === '--version') return { exitCode: 0, signal: null, stderr: '', stdout: '2.1.259 (Claude Code)\n' };
@@ -506,13 +508,13 @@ it('build surfaces a Claude load refusal as AB7325 even when plugin validate --s
   }
 }, 30_000);
 
-it('build reports one informational AB6019 skip for all Claude-validated targets when claude is absent (#476)', async () => {
+it('build reports one informational AB6019 skip for the Claude-validated target when claude is absent (#476)', async () => {
   const root = await createProject();
   try {
     await writeFile(join(root, 'agent-bundle.config.ts'), [
       'export default {',
       "  plugin: { name: 'api-fixture', version: '1.0.0' },",
-      "  targets: ['claude', 'plugin', 'codex'],",
+      "  targets: ['claude', 'codex'],",
       '};',
       '',
     ].join('\n'));
@@ -528,7 +530,6 @@ it('build reports one informational AB6019 skip for all Claude-validated targets
     expect(spawns).toBe(1);
     expect(result.hostValidation?.map((report) => [report.target, report.status, report.diagnostics.length])).toEqual([
       ['claude', 'unavailable', 1],
-      ['plugin', 'unavailable', 0],
     ]);
     expect(result.diagnostics.filter((entry) => entry.code === 'AB6019')).toEqual([
       expect.objectContaining({ severity: 'info', target: 'claude' }),
@@ -838,6 +839,19 @@ it('returns an invalid inspection for selected targets outside the normalized pr
 
 it('reports skipped target/component pairs against each target emission surface', async () => {
   const root = await createProject();
+  const cursorOnlyDocuments = [
+    join(root, 'src', 'commands', 'cursor-only.md'),
+    join(root, 'src', 'rules', 'cursor-only.mdc'),
+  ];
+  const configure = (targets: readonly string[]): Promise<void> => writeFile(join(root, 'agent-bundle.config.ts'), [
+    'export default {',
+    "  hooks: { sessionStart: { handler: './src/hook.ts' } },",
+    "  plugin: { name: 'api-fixture', version: '1.0.0' },",
+    "  scripts: { report: { entry: './src/report.ts', targets: ['codex'] } },",
+    `  targets: ${JSON.stringify(targets)},`,
+    '};',
+    '',
+  ].join('\n'));
   try {
     await Promise.all([
       mkdir(join(root, 'src', 'commands'), { recursive: true }),
@@ -848,24 +862,23 @@ it('reports skipped target/component pairs against each target emission surface'
       writeFile(
         // Cursor's commands surface is frontmatter-free, so a Cursor-required
         // command carries only the authoring-only `targets` key (#100 feature sets).
-        join(root, 'src', 'commands', 'cursor-only.md'),
+        cursorOnlyDocuments[0]!,
         '---\ntargets:\n  - cursor\n---\nCursor command prompt.\n',
       ),
       writeFile(join(root, 'src', 'report.ts'), 'export const report = true;\n'),
       writeFile(join(root, 'src', 'rules', 'shared.mdc'), '---\ndescription: Shared rule\n---\nShared guidance.\n'),
       writeFile(
-        join(root, 'src', 'rules', 'cursor-only.mdc'),
+        cursorOnlyDocuments[1]!,
         '---\ndescription: Cursor-only rule\ntargets:\n  - cursor\n---\nCursor guidance.\n',
       ),
-      writeFile(join(root, 'agent-bundle.config.ts'), [
-        'export default {',
-        "  hooks: { sessionStart: { handler: './src/hook.ts' } },",
-        "  plugin: { name: 'api-fixture', version: '1.0.0' },",
-        "  scripts: { report: { entry: './src/report.ts', targets: ['codex'] } },",
-        "  targets: ['portable', 'codex', 'claude', 'cursor', 'plugin'],",
-        '};',
-        '',
-      ].join('\n')),
+      // One plugin root cannot carry Cursor commands beside Claude Code
+      // (AB4104: `commands/` is Claude Code frontmatter Markdown there), and a
+      // document selecting a host the root does not project is refused, not
+      // skipped. So the Cursor accounting is inspected from a root without
+      // Claude Code and the Claude Code accounting, below, from a root without
+      // the Cursor-only documents; the per-host judgments do not depend on
+      // which hosts share the root.
+      configure(['portable', 'codex', 'cursor']),
     ]);
 
     const result = await readyInspection({ root });
@@ -894,7 +907,7 @@ it('reports skipped target/component pairs against each target emission surface'
     expect(planFor('portable')?.selected).toEqual([
       expect.objectContaining({ capability: expect.objectContaining({ name: 'skills', state: 'supported' }), kind: 'skill', name: 'review' }),
     ]);
-    // Cursor emits both surfaces with dated evidence; Claude emits commands but no rules.
+    // Cursor emits both surfaces with dated evidence.
     expect(planFor('cursor')?.selected).toEqual(expect.arrayContaining([
       expect.objectContaining({
         capability: expect.objectContaining({ evidence: expect.objectContaining({ target: 'cursor' }), name: 'commands', state: 'supported' }),
@@ -907,9 +920,6 @@ it('reports skipped target/component pairs against each target emission surface'
         name: 'cursor-only',
       }),
     ]));
-    expect(planFor('claude')?.selected.some((component) => component.kind === 'command' && component.name === 'shared')).toBe(true);
-    expect(planFor('claude')?.skipped.find((component) => component.kind === 'rule' && component.name === 'shared')?.capability)
-      .toEqual({ name: 'rules', reason: expect.any(String), state: 'unavailable' });
     for (const plan of result.plans) {
       expect(Object.isFrozen(plan.selected)).toBe(true);
       expect(plan.selected.length + plan.skipped.length).toBe(
@@ -922,29 +932,50 @@ it('reports skipped target/component pairs against each target emission surface'
       expect.objectContaining({ kind: 'rule', name: 'cursor-only', reason: 'excluded-by-targets' }),
       expect.objectContaining({ kind: 'rule', name: 'shared', reason: 'unsupported-capability' }),
     ]);
-    expect(planFor('claude')?.skipped).toEqual([
-      expect.objectContaining({ kind: 'command', name: 'cursor-only', reason: 'excluded-by-targets' }),
-      expect.objectContaining({ kind: 'rule', name: 'cursor-only', reason: 'excluded-by-targets' }),
-      expect.objectContaining({ kind: 'rule', name: 'shared', reason: 'unsupported-capability' }),
-      expect.objectContaining({ kind: 'script', name: 'report', reason: 'excluded-by-targets' }),
-    ]);
     expect(planFor('cursor')?.skipped).toEqual([
       expect.objectContaining({ kind: 'script', name: 'report', reason: 'excluded-by-targets' }),
     ]);
-    expect(planFor('claude')?.skipped.some((component) =>
-      component.kind === 'command' && component.name === 'shared')).toBe(false);
     expect(planFor('cursor')?.skipped.some((component) => component.kind === 'command')).toBe(false);
     expect(planFor('cursor')?.skipped.some((component) => component.kind === 'rule')).toBe(false);
-    expect(planFor('plugin')?.skipped).toEqual([
-      expect.objectContaining({ kind: 'command', name: 'cursor-only', reason: 'excluded-by-targets' }),
-      expect.objectContaining({ kind: 'rule', name: 'cursor-only', reason: 'excluded-by-targets' }),
-      expect.objectContaining({ kind: 'script', name: 'report', reason: 'excluded-by-targets' }),
-    ]);
-    expect(planFor('plugin')?.entries).toEqual(expect.arrayContaining([
+    // The entries are the one root's plan (#555): the shared command and rule
+    // land at the root once for every host that reads them.
+    expect(planFor('cursor')?.entries).toEqual(expect.arrayContaining([
       expect.objectContaining({ relativePath: 'commands/shared.md' }),
       expect.objectContaining({ relativePath: 'rules/shared.mdc' }),
     ]));
+    expect(planFor('codex')?.entries).toEqual(planFor('cursor')?.entries);
     expect(Object.isFrozen(planFor('portable')?.skipped)).toBe(true);
+
+    // Claude Code emits commands but no rules.
+    await Promise.all(cursorOnlyDocuments.map((path) => rm(path)));
+    await configure(['portable', 'codex', 'claude']);
+    const claudeRoot = await readyInspection({ root });
+    const claudePlanFor = (target: string) => claudeRoot.plans.find((plan) => plan.target === target);
+
+    expect(claudePlanFor('claude')?.selected.some((component) => component.kind === 'command' && component.name === 'shared')).toBe(true);
+    expect(claudePlanFor('claude')?.skipped.find((component) => component.kind === 'rule' && component.name === 'shared')?.capability)
+      .toEqual({ name: 'rules', reason: expect.any(String), state: 'unavailable' });
+    expect(claudePlanFor('claude')?.skipped).toEqual([
+      expect.objectContaining({ kind: 'rule', name: 'shared', reason: 'unsupported-capability' }),
+      expect.objectContaining({ kind: 'script', name: 'report', reason: 'excluded-by-targets' }),
+    ]);
+    expect(claudePlanFor('claude')?.skipped.some((component) =>
+      component.kind === 'command' && component.name === 'shared')).toBe(false);
+    expect(claudePlanFor('portable')?.skipped).toEqual([
+      expect.objectContaining({ kind: 'command', name: 'shared', reason: 'unsupported-capability' }),
+      expect.objectContaining({ kind: 'hook', name: 'sessionStart', reason: 'excluded-by-targets' }),
+      expect.objectContaining({ kind: 'rule', name: 'shared', reason: 'unsupported-capability' }),
+      expect.objectContaining({ kind: 'script', name: 'report', reason: 'excluded-by-targets' }),
+    ]);
+    for (const plan of claudeRoot.plans) {
+      expect(plan.selected.length + plan.skipped.length).toBe(
+        claudePlanFor('claude')!.selected.length + claudePlanFor('claude')!.skipped.length,
+      );
+    }
+    expect(claudePlanFor('claude')?.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ relativePath: 'commands/shared.md' }),
+    ]));
+    expect(claudePlanFor('claude')?.entries.some((entry) => entry.relativePath.startsWith('rules/'))).toBe(false);
   } finally {
     await rm(join(root, '..'), { force: true, recursive: true });
   }
@@ -956,7 +987,7 @@ it('accounts lsp servers and event routes as distinct canonical kinds with a per
     await mkdir(join(root, 'src', 'events', 'session'), { recursive: true });
     await Promise.all([
       writeFile(join(root, 'src', 'events', 'session', 'start.tsx'), [
-        "export const config = { runtime: 'standalone', targets: ['claude', 'codex', 'cursor', 'plugin'] };",
+        "export const config = { runtime: 'standalone', targets: ['claude', 'codex', 'cursor'] };",
         'export default async function SessionStart() {',
         '  return null;',
         '}',
@@ -971,7 +1002,7 @@ it('accounts lsp servers and event routes as distinct canonical kinds with a per
         '  },',
         "  hooks: { sessionStart: { handler: './src/hook.ts' } },",
         "  plugin: { name: 'api-fixture', version: '1.0.0' },",
-        "  targets: ['portable', 'codex', 'claude', 'cursor', 'plugin'],",
+        "  targets: ['portable', 'codex', 'claude', 'cursor'],",
         '};',
         '',
       ].join('\n')),
@@ -985,10 +1016,12 @@ it('accounts lsp servers and event routes as distinct canonical kinds with a per
     ];
 
     // The Claude-declared LSP server is one `lsp` component. Its declaration
-    // is host-scoped, so it targets only the adapters that lower `claude.*`
-    // (Claude and the composite, which plans the Claude side); every other
-    // host reads as excluded by the declaration and still carries its own
-    // dated `lsp` judgment so the omission is explained in the host's words.
+    // is host-scoped, so it targets only the adapter that lowers `claude.*`;
+    // every other host reads as excluded by the declaration and still carries
+    // its own dated `lsp` judgment so the omission is explained in the host's
+    // words. The entries are the one root's plan (#555): `.lsp.json` is
+    // emitted once, at the root Claude Code reads, and never into the portable
+    // view.
     expect(componentsOf('claude', 'lsp')).toEqual([expect.objectContaining({
       capability: expect.objectContaining({ evidence: expect.objectContaining({ target: 'claude' }), name: 'lsp', state: 'supported' }),
       id: 'lsp:claude:typescript',
@@ -996,11 +1029,6 @@ it('accounts lsp servers and event routes as distinct canonical kinds with a per
       outcome: 'selected',
     })]);
     expect(planFor('claude').entries).toEqual(expect.arrayContaining([expect.objectContaining({ relativePath: '.lsp.json' })]));
-    expect(componentsOf('plugin', 'lsp')).toEqual([expect.objectContaining({
-      capability: expect.objectContaining({ name: 'lsp', state: 'supported' }),
-      outcome: 'selected',
-    })]);
-    expect(planFor('plugin').entries).toEqual(expect.arrayContaining([expect.objectContaining({ relativePath: '.lsp.json' })]));
     for (const target of ['codex', 'cursor', 'portable']) {
       expect(componentsOf(target, 'lsp')).toEqual([expect.objectContaining({
         capability: { name: 'lsp', reason: expect.stringMatching(/no LSP server/u), state: 'unavailable' },
@@ -1008,14 +1036,16 @@ it('accounts lsp servers and event routes as distinct canonical kinds with a per
         outcome: 'skipped',
         reason: 'excluded-by-targets',
       })]);
-      expect(planFor(target).entries.some((entry) => entry.relativePath === '.lsp.json')).toBe(false);
+      expect(planFor(target).entries).toEqual(planFor('claude').entries);
     }
+    expect(planFor('claude').entries.filter((entry) => entry.relativePath.endsWith('.lsp.json')).map((entry) => entry.relativePath))
+      .toEqual(['.lsp.json']);
     expect(result.model.lspServers).toEqual([{
       declaredBy: 'claude',
       id: 'lsp:claude:typescript',
       name: 'typescript',
       provenance: { kind: 'config', sourcePath: join(root, 'agent-bundle.config.ts') },
-      targets: ['claude', 'plugin'],
+      targets: ['claude'],
     }]);
 
     // Filesystem event routes report separately from config-declared hooks,
@@ -1025,7 +1055,7 @@ it('accounts lsp servers and event routes as distinct canonical kinds with a per
       name: 'sessionStart',
       outcome: 'selected',
     })]);
-    for (const target of ['claude', 'codex', 'cursor', 'plugin']) {
+    for (const target of ['claude', 'codex', 'cursor']) {
       expect(componentsOf(target, 'event-route')).toEqual([expect.objectContaining({
         capability: expect.objectContaining({ name: 'event:session/start', state: 'supported' }),
         id: 'hook:event-route:session-start',
@@ -1079,11 +1109,6 @@ it('accounts lsp servers and event routes as distinct canonical kinds with a per
     // A host that publishes no row at all reads as an honest unavailable, never a silent pass.
     expect(planFor('portable').kinds.find((report) => report.kind === 'agent')).toMatchObject({
       capability: { name: 'agents', reason: 'The portable adapter publishes no agents capability row.', state: 'unavailable' },
-    });
-    // The composite judges kinds by emission dispatch but keeps every published
-    // intersection row, so its G5 agents deferral reason survives into inspect.
-    expect(planFor('plugin').kinds.find((report) => report.kind === 'agent')).toMatchObject({
-      capability: { name: 'agents', reason: expect.stringContaining('#220'), state: 'unavailable' },
     });
     expect(planFor('portable').kinds.find((report) => report.kind === 'event-route')).toEqual({ kind: 'event-route', selected: 0, skipped: 1 });
   } finally {
@@ -1154,6 +1179,9 @@ it('judges event-route admission and lsp inheritance by the component-emission o
   // top-level rows are honest intersections, its component overrides decide
   // emission. A second adapter that lowers the `synthetic` extension inherits
   // the LSP declaration because the override, not the intersection, governs.
+  // Advanced adapters are built one target per root (#555), so each adapter
+  // is inspected as its own root over the one project.
+  const loweringTarget = 'lowering';
   const registry = new TargetRegistry()
     .register({
       ...syntheticAdapter,
@@ -1174,7 +1202,7 @@ it('judges event-route admission and lsp inheritance by the component-emission o
       capabilities: supportedCapabilities('hooks', 'lsp', 'mcp'),
       configExtension: undefined,
       lowersConfigExtensions: ['synthetic'],
-      name: 'composite',
+      name: loweringTarget,
       plan: () => Object.freeze({ diagnostics: [], entries: Object.freeze([]) }),
     });
   try {
@@ -1191,7 +1219,7 @@ it('judges event-route admission and lsp inheritance by the component-emission o
         'export default {',
         "  synthetic: { lspServers: { rust: { command: 'rust-analyzer' } } },",
         "  plugin: { name: 'api-fixture', version: '1.0.0' },",
-        `  targets: ['${syntheticTarget}', 'composite'],`,
+        `  targets: ['${syntheticTarget}'],`,
         '};',
         '',
       ].join('\n')),
@@ -1205,7 +1233,20 @@ it('judges event-route admission and lsp inheritance by the component-emission o
       expect.objectContaining({ capability: expect.objectContaining({ name: 'event:session/start', state: 'supported' }), kind: 'event-route' }),
       expect.objectContaining({ capability: expect.objectContaining({ name: 'lsp', state: 'supported' }), kind: 'lsp', name: 'rust' }),
     ]));
-    expect(result.model.lspServers).toEqual([expect.objectContaining({ declaredBy: 'synthetic', targets: [syntheticTarget, 'composite'] })]);
+    expect(result.model.lspServers).toEqual([expect.objectContaining({ declaredBy: 'synthetic', targets: [syntheticTarget] })]);
+
+    // The lowering adapter's root inherits the declaration even though the
+    // declaring adapter is not selected there; the route it never selected
+    // reads as excluded.
+    const lowering = await readyInspection({ registry, root, targets: [loweringTarget] });
+    const loweringPlan = lowering.plans.find((plan) => plan.target === loweringTarget)!;
+    expect(lowering.model.lspServers).toEqual([expect.objectContaining({ declaredBy: 'synthetic', targets: [loweringTarget] })]);
+    expect(loweringPlan.selected).toEqual(expect.arrayContaining([
+      expect.objectContaining({ capability: expect.objectContaining({ name: 'lsp', state: 'supported' }), kind: 'lsp', name: 'rust' }),
+    ]));
+    expect(loweringPlan.skipped).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'event-route', name: 'session/start', reason: 'excluded-by-targets' }),
+    ]));
   } finally {
     await rm(join(root, '..'), { force: true, recursive: true });
   }
@@ -1256,49 +1297,50 @@ it('reports omitted component features per target from the host feature rows (#1
         'export default {',
         "  hooks: { beforeTool: { handler: './src/hook.ts', timeout: 3, tools: ['shell'] } },",
         "  plugin: { name: 'api-fixture', version: '1.0.0' },",
-        "  targets: ['claude', 'cursor', 'plugin'],",
+        "  targets: ['cursor'],",
         '};',
         '',
       ].join('\n')),
     ]);
 
-    const result = await readyInspection({ root });
-    const selectedOn = (target: string, kind: string) =>
+    // Cursor commands cannot share one plugin root with Claude Code (AB4104),
+    // so the configured root is Cursor's and Claude Code is inspected as its
+    // own root over the same project.
+    const cursor = await readyInspection({ root });
+    const claude = await readyInspection({ root, targets: ['claude'] });
+    const selectedOn = (result: Awaited<ReturnType<typeof readyInspection>>, target: string, kind: string) =>
       result.plans.find((plan) => plan.target === target)!.selected.find((component) => component.kind === kind)!;
 
     // Cursor ships the command body only: both authored fields are reported as
     // omitted with the host's own `commands.<field>` judgment, in feature order.
-    expect(selectedOn('cursor', 'command').omittedFeatures).toEqual([
+    expect(selectedOn(cursor, 'cursor', 'command').omittedFeatures).toEqual([
       { capability: { name: 'commands.argumentHint', reason: expect.stringContaining('frontmatter-free'), state: 'unavailable' }, feature: 'argumentHint' },
       { capability: { name: 'commands.description', reason: expect.stringContaining('frontmatter-free'), state: 'unavailable' }, feature: 'description' },
     ]);
-    expect(Object.isFrozen(selectedOn('cursor', 'command').omittedFeatures)).toBe(true);
-    // Claude documents every field and the composite emits Claude-format
-    // commands, so neither omits anything; a component with no omissions has no key.
-    expect(selectedOn('claude', 'command')).not.toHaveProperty('omittedFeatures');
-    expect(selectedOn('plugin', 'command')).not.toHaveProperty('omittedFeatures');
+    expect(Object.isFrozen(selectedOn(cursor, 'cursor', 'command').omittedFeatures)).toBe(true);
+    // Claude documents every field, so it omits nothing; a component with no
+    // omissions has no key.
+    expect(selectedOn(claude, 'claude', 'command')).not.toHaveProperty('omittedFeatures');
     // Cursor documents every .mdc field; hooks pin timeout and matchers on both hosts.
-    expect(selectedOn('cursor', 'rule')).not.toHaveProperty('omittedFeatures');
-    expect(selectedOn('plugin', 'rule')).not.toHaveProperty('omittedFeatures');
-    for (const target of ['claude', 'cursor', 'plugin']) {
-      expect(selectedOn(target, 'hook')).not.toHaveProperty('omittedFeatures');
-    }
-    // A skill with a Claude host extension keeps it on Claude, but the
-    // composite's shared skills/ tree lowers it to the portable document, so
-    // the composite reports the host frontmatter as omitted.
+    expect(selectedOn(cursor, 'cursor', 'rule')).not.toHaveProperty('omittedFeatures');
+    expect(selectedOn(cursor, 'cursor', 'hook')).not.toHaveProperty('omittedFeatures');
+    expect(selectedOn(claude, 'claude', 'hook')).not.toHaveProperty('omittedFeatures');
+    // A skill with a Claude host extension keeps it in a Claude Code root. A
+    // root shared with another host carries the one skills/ document every
+    // projected host accepts — the portable document — which strips the host
+    // extension (#555).
     await writeFile(
       join(root, 'src', 'skills', 'review', 'SKILL.md'),
       '---\nname: review\ndescription: Reviews changes\ntargets:\n  claude:\n    model: sonnet\n---\n# Review\n',
     );
-    const withExtension = await readyInspection({ root });
-    const skillOn = (target: string) =>
-      withExtension.plans.find((plan) => plan.target === target)!.selected.find((component) => component.kind === 'skill')!;
-    expect(skillOn('claude')).not.toHaveProperty('omittedFeatures');
-    expect(skillOn('plugin').omittedFeatures).toEqual([
-      { capability: { name: 'skills.hostFrontmatter', reason: expect.stringContaining('portable document'), state: 'unavailable' }, feature: 'hostFrontmatter' },
-    ]);
-    const pluginSkill = withExtension.model.skills[0]!.hostDocuments?.plugin;
-    expect(pluginSkill?.frontmatter).not.toHaveProperty('model');
+    const withExtension = await readyInspection({ root, targets: ['claude'] });
+    expect(selectedOn(withExtension, 'claude', 'skill')).not.toHaveProperty('omittedFeatures');
+    expect(withExtension.model.skills[0]!.hostDocuments?.claude?.frontmatter).toHaveProperty('model', 'sonnet');
+    const shared = await readyInspection({ root, targets: ['claude', 'codex'] });
+    for (const host of ['claude', 'codex']) {
+      expect(shared.model.skills[0]!.hostDocuments?.[host]?.frontmatter).toEqual({ description: 'Reviews changes', name: 'review' });
+    }
+    expect(shared.plans[0]!.entries.filter((entry) => entry.relativePath === 'skills/review/SKILL.md')).toHaveLength(1);
     // `validate` surfaces the matching omit-with-reason warnings for the
     // implicit Cursor target; inspect stays a ready plan.
     const validated = await validate({ root });
@@ -1307,6 +1349,48 @@ it('reports omitted component features per target from the host feature rows (#1
       expect.objectContaining({ message: expect.stringContaining('Command "deploy" uses description, which cursor omits'), severity: 'warning', target: 'cursor' }),
     ]);
     expect(validated.diagnostics.some((diagnostic) => diagnostic.code === 'AB4927' || diagnostic.code === 'AB4907' || diagnostic.code === 'AB4908')).toBe(false);
+  } finally {
+    await rm(join(root, '..'), { force: true, recursive: true });
+  }
+});
+
+it('judges the one plugin root every selected target shares in validate and inspect (#555)', async () => {
+  const root = await createProject();
+  try {
+    // A conventional command selects every target; Cursor reads plain Markdown
+    // prompts from the same commands/ directory Claude Code fills with
+    // frontmatter, so a claude+cursor root refuses it (AB4104). The build
+    // judges the shared root; `validate` and `inspect` must say the same
+    // instead of leaving the refusal to `build`.
+    await mkdir(join(root, 'src', 'commands'), { recursive: true });
+    await writeFile(join(root, 'src', 'commands', 'deploy.md'), '---\ndescription: Deploy\n---\nDeploy prompt.\n');
+    const composition = await validate({ root, targets: ['claude', 'cursor'] });
+    expect(composition.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB4104', severity: 'error', sourcePath: join(root, 'src', 'commands', 'deploy.md') }),
+    ]));
+    const inspected = await inspect({ root, targets: ['claude', 'cursor'] });
+    expect(inspected.state).toBe('invalid');
+    expect(inspected.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'AB4104' })]));
+    // Each host alone is a valid root over the same project.
+    expect((await validate({ root, targets: ['cursor'] })).diagnostics.filter(({ code }) => code === 'AB4104')).toEqual([]);
+    expect((await validate({ root, targets: ['claude'] })).diagnostics.filter(({ code }) => code === 'AB4104')).toEqual([]);
+
+    // Only the built-in hosts compose: an advanced registry's own adapter
+    // beside one of them is a target set no root can hold (AB4106), named on
+    // the adapter's target rather than thrown from the planner.
+    const registry = createDefaultRegistry().register(syntheticAdapter);
+    const mixed = await validate({ registry, root, targets: ['claude', syntheticTarget] });
+    expect(mixed.diagnostics.filter(({ code }) => code === 'AB4106')).toEqual([expect.objectContaining({
+      message: expect.stringContaining(`Target "${syntheticTarget}" cannot share one plugin root`),
+      severity: 'error',
+      target: syntheticTarget,
+    })]);
+    const mixedInspection = await inspect({ registry, root, targets: ['claude', syntheticTarget] });
+    expect(mixedInspection.state).toBe('invalid');
+    expect(mixedInspection.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'AB4106' })]));
+    await expect(build({ output: join(root, 'artifact'), registry, root, targets: ['claude', syntheticTarget] }))
+      .rejects.toMatchObject({ diagnostics: expect.arrayContaining([expect.objectContaining({ code: 'AB4106' })]) });
+    expect((await validate({ registry, root, targets: [syntheticTarget] })).diagnostics.filter(({ code }) => code === 'AB4106')).toEqual([]);
   } finally {
     await rm(join(root, '..'), { force: true, recursive: true });
   }
@@ -1324,50 +1408,55 @@ it('never counts an opaque third-party lspServers declaration as emitted by a ho
       "  synthetic: { lspServers: { rust: { command: 'rust-analyzer' } } },",
       "  hooks: { sessionStart: { handler: './src/hook.ts' } },",
       "  plugin: { name: 'api-fixture', version: '1.0.0' },",
-      "  targets: ['claude', 'synthetic'],",
+      "  targets: ['claude'],",
       '};',
       '',
     ].join('\n'));
 
+    // An advanced adapter is built one target per root (#555), so the Claude
+    // Code root and the synthetic root are inspected over the same project.
     const result = await readyInspection({ registry, root });
     const planFor = (target: string) => result.plans.find((plan) => plan.target === target)!;
     // Claude publishes `lsp: supported`, but its planner reads only
     // `claude.lspServers`; the synthetic declaration is excluded for Claude
     // and writes no `.lsp.json` there, while the declaring adapter selects it.
-    expect(result.model.lspServers).toEqual([expect.objectContaining({ declaredBy: 'synthetic', name: 'rust', targets: ['synthetic'] })]);
+    expect(result.model.lspServers).toEqual([expect.objectContaining({ declaredBy: 'synthetic', name: 'rust', targets: [] })]);
     expect(planFor('claude').skipped).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'lsp', name: 'rust', reason: 'excluded-by-targets' }),
     ]));
     expect(planFor('claude').selected.some((component) => component.kind === 'lsp')).toBe(false);
     expect(planFor('claude').entries.some((entry) => entry.relativePath === '.lsp.json')).toBe(false);
-    expect(planFor('synthetic').selected).toEqual(expect.arrayContaining([
+    const synthetic = await readyInspection({ registry, root, targets: ['synthetic'] });
+    expect(synthetic.model.lspServers).toEqual([expect.objectContaining({ declaredBy: 'synthetic', name: 'rust', targets: ['synthetic'] })]);
+    expect(synthetic.plans.find((plan) => plan.target === 'synthetic')!.selected).toEqual(expect.arrayContaining([
       expect.objectContaining({ capability: expect.objectContaining({ name: 'lsp', state: 'supported' }), kind: 'lsp', name: 'rust' }),
     ]));
 
-    // A composite that lowers a host's extension inherits its LSP declaration
-    // only when that host can lower LSP servers: `codex.lspServers` reaches
-    // neither the Codex half (unavailable) nor the composite bundle.
+    // A root projecting several hosts inherits a host's LSP declaration only
+    // through the host that lowers it: `codex.lspServers` reaches neither the
+    // Codex projection (unavailable) nor Claude Code, which lowers only
+    // `claude.lspServers`, so the shared root writes no `.lsp.json`.
     await writeFile(join(root, 'agent-bundle.config.ts'), [
       'export default {',
       "  codex: { lspServers: { rust: { command: 'rust-analyzer' } } },",
       "  hooks: { sessionStart: { handler: './src/hook.ts' } },",
       "  plugin: { name: 'api-fixture', version: '1.0.0' },",
-      "  targets: ['codex', 'plugin'],",
+      "  targets: ['codex', 'claude'],",
       '};',
       '',
     ].join('\n'));
     const codexDeclared = await readyInspection({ registry, root });
     expect(codexDeclared.model.lspServers).toEqual([expect.objectContaining({ declaredBy: 'codex', targets: ['codex'] })]);
     const codexPlan = codexDeclared.plans.find((plan) => plan.target === 'codex')!;
-    const compositePlan = codexDeclared.plans.find((plan) => plan.target === 'plugin')!;
+    const claudePlan = codexDeclared.plans.find((plan) => plan.target === 'claude')!;
     expect(codexPlan.skipped).toEqual(expect.arrayContaining([
       expect.objectContaining({ capability: expect.objectContaining({ name: 'lsp', state: 'unavailable' }), kind: 'lsp', reason: 'unsupported-capability' }),
     ]));
-    expect(compositePlan.skipped).toEqual(expect.arrayContaining([
+    expect(claudePlan.skipped).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'lsp', name: 'rust', reason: 'excluded-by-targets' }),
     ]));
-    expect(compositePlan.selected.some((component) => component.kind === 'lsp')).toBe(false);
-    expect(compositePlan.entries.some((entry) => entry.relativePath === '.lsp.json')).toBe(false);
+    expect(claudePlan.selected.some((component) => component.kind === 'lsp')).toBe(false);
+    expect(claudePlan.entries.some((entry) => entry.relativePath === '.lsp.json')).toBe(false);
   } finally {
     await rm(join(root, '..'), { force: true, recursive: true });
   }
@@ -1472,7 +1561,7 @@ it('keeps one supplied registry through advanced artifact, hook, and MCP operati
     })]);
     expect(built.build.manifest.targets).toEqual([expect.objectContaining({ name: syntheticTarget })]);
     expect(built.build.manifest.files).toEqual(expect.arrayContaining([
-      expect.objectContaining({ path: 'synthetic/synthetic-mcp.json' }),
+      expect.objectContaining({ path: 'synthetic-mcp.json' }),
     ]));
     const filesystem = await inspectArtifactFilesystem(artifact);
     expect(filesystem.entries
@@ -1540,11 +1629,15 @@ it('prepares a factory-configured project into a frozen inspection and build res
 
     const hookArtifact = join(root, 'hooks-artifact');
     const hooks = await build({ output: hookArtifact, root });
-    for (const target of ['claude', 'codex']) {
-      expect(hooks.build.manifest.files).toEqual(expect.arrayContaining([
-        expect.objectContaining({ path: expect.stringMatching(new RegExp(`^${target}/hooks/.+\\.mjs$`, 'u')) }),
-      ]));
-    }
+    // Claude Code and Codex share one root (#555): a single host-detecting
+    // wrapper at `hooks/` serves Claude Code's conventional hooks document and
+    // the Codex document relocated beside it.
+    expect(hooks.build.manifest.files).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: expect.stringMatching(/^hooks\/.+\.mjs$/u) }),
+      expect.objectContaining({ path: 'hooks/hooks.json' }),
+      expect.objectContaining({ path: '.codex-plugin/hooks.json' }),
+    ]));
+    expect(hooks.build.manifest.files.filter((file) => /^hooks\/.+\.mjs$/u.test(file.path))).toHaveLength(1);
     await expect(validate({ artifact: hookArtifact, root })).resolves.toEqual({ diagnostics: [] });
   } finally {
     await rm(join(root, '..'), { force: true, recursive: true });
@@ -1582,10 +1675,13 @@ it('returns an output-independent project context without absolute project paths
 
 it('keeps rule and command model digests root-independent and sensitive to content', async () => {
   const [leftRoot, rightRoot] = await Promise.all([createProject(), createProject()]);
+  // Cursor beside Codex: Codex reads neither commands/ nor rules/, so a
+  // Cursor-only command shares the root without a scope conflict (AB4104
+  // refuses Cursor commands beside Claude Code, which fills commands/ too).
   const config = [
     'export default {',
     "  plugin: { name: 'rule-digest-fixture', version: '1.0.0' },",
-    "  targets: ['cursor', 'claude'],",
+    "  targets: ['cursor', 'codex'],",
     '};',
     '',
   ].join('\n');
@@ -1894,8 +1990,8 @@ it('builds conventional src/scripts modules beside explicit entries', async () =
         targets: ['portable'],
       },
     ]);
-    await expect(readFile(join(output, 'portable', 'scripts', 'greet.mjs'), 'utf8')).resolves.toContain('hello from convention');
-    await expect(stat(join(output, 'portable', 'scripts', 'claimed.mjs'))).resolves.toBeDefined();
+    await expect(readFile(join(output, 'scripts', 'greet.mjs'), 'utf8')).resolves.toContain('hello from convention');
+    await expect(stat(join(output, 'scripts', 'claimed.mjs'))).resolves.toBeDefined();
   } finally {
     await rm(parent, { force: true, recursive: true });
   }
@@ -1982,8 +2078,10 @@ it('copies every supported top-level script output suffix byte-for-byte with sou
       [sourceShell, 'shell.sh'],
       [sourcePython, 'python.py'],
     ] as const;
-    const checks = await Promise.all(['claude', 'codex', 'portable'].flatMap((target) =>
-      copyOutputs.map(([source, name]) => [source, join(output, target, 'scripts', name)] as const),
+    // Every selected host shares the root's `scripts/` (#555): one copy serves
+    // Claude Code, Codex, and the portable view alike.
+    const checks = await Promise.all(copyOutputs.map(([source, name]) =>
+      [source, join(output, 'scripts', name)] as const,
     ).map(async ([source, generated]) => {
       const [sourceContents, generatedContents, sourceMetadata, generatedMetadata] = await Promise.all([
         readFile(source!),
@@ -2016,30 +2114,31 @@ it('copies every supported top-level script output suffix byte-for-byte with sou
       expect.objectContaining({
         kind: 'copy',
         mode: 0o741,
-        path: 'portable/scripts/bash.bash',
+        path: 'scripts/bash.bash',
         sourceInputs: ['agent-bundle.config.ts', 'src/run.BASH'],
       }),
       expect.objectContaining({
         kind: 'bundle',
-        path: 'portable/scripts/bundle.mjs',
+        path: 'scripts/bundle.mjs',
         sourceInputs: ['agent-bundle.config.ts', 'src/bundle.ts'],
       }),
       expect.objectContaining({
         kind: 'copy',
         mode: 0o751,
-        path: 'portable/scripts/shell.sh',
+        path: 'scripts/shell.sh',
         sourceInputs: ['agent-bundle.config.ts', 'src/run.SH'],
       }),
       expect.objectContaining({
         kind: 'copy',
         mode: 0o711,
-        path: 'portable/scripts/python.py',
+        path: 'scripts/python.py',
         sourceInputs: ['agent-bundle.config.ts', 'src/run.Py'],
       }),
     ]));
+    expect(manifest.files.filter((file) => file.path.endsWith('/scripts/shell.sh'))).toEqual([]);
     await expect(validate({ artifact: output, root })).resolves.toEqual({ diagnostics: [] });
 
-    await chmod(join(output, 'portable', 'scripts', 'shell.sh'), 0o644);
+    await chmod(join(output, 'scripts', 'shell.sh'), 0o644);
     await expect(validate({ artifact: output, root })).resolves.toMatchObject({
       diagnostics: [{ code: 'AB6004', generatedPath: 'agent-bundle.manifest.json' }],
     });
@@ -2068,23 +2167,23 @@ it('canonicalizes copied script extensions in emitted artifact paths', async () 
 
   try {
     const result = await build({ output, root });
-    const generated = join(output, 'portable', 'scripts', 'upper.sh');
+    const generated = join(output, 'scripts', 'upper.sh');
 
     await expect(readFile(generated, 'utf8')).resolves.toBe(await readFile(source, 'utf8'));
-    await expect(readFile(join(output, 'portable', 'scripts', 'upper.SH'), 'utf8')).rejects.toMatchObject({
+    await expect(readFile(join(output, 'scripts', 'upper.SH'), 'utf8')).rejects.toMatchObject({
       code: 'ENOENT',
     });
     expect(result.build.manifest.files).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: 'copy',
-        path: 'portable/scripts/upper.sh',
+        path: 'scripts/upper.sh',
         sourceInputs: ['agent-bundle.config.ts', 'src/run.SH'],
       }),
     ]));
     expect(result.build.outputProvenance).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: 'copy',
-        path: 'portable/scripts/upper.sh',
+        path: 'scripts/upper.sh',
         sourceInputs: ['agent-bundle.config.ts', 'src/run.SH'],
       }),
     ]));

@@ -108,7 +108,7 @@ agent-bundle dev proxy --root <projectRoot> --server <serverName> --target <host
 Rebuilds never replace that stable command with an epoch path, and the contents of the host
 process `PATH` do not affect whether the project-local framework can be spawned.
 
-Each later `artifact.available` event copies the new target into an immutable installed
+Each later `artifact.available` event copies the new plugin root into an immutable installed
 generation. Top-level directories switch by atomic symlink (or Windows junction) rename and
 top-level files by atomic sibling-file rename, so a host sees an old or a new complete entry and
 no synchronized directory disappears between generations. A failed publication rolls the pointers

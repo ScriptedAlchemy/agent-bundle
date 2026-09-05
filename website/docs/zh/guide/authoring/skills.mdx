@@ -82,6 +82,14 @@ export default defineConfig({
 Skill frontmatter 中的 `targets` 就是上述按宿主划分的对象，别无他用；写成列表（如 `targets: ['claude']`）是
 `AB3006`。Skill 会输出到项目选择的每一个 target——不存在按 Skill 限制产物的机制。
 
+一个插件根目录只有一份 `skills/<name>/SKILL.md`，根目录投影的每个宿主都按约定发现它。因此当项目选择了多个
+target 时，Skill 会降低为它们全都接受的那一份文档：当每个所选宿主都会原样透传时，就是未经改动的原始
+Markdown——没有宿主扩展键，也没有路径 token——否则就是可移植文档，其 frontmatter 只含可移植元数据（上面的
+`targets.<host>` 键不会写入共享文件），且不接受任何占位符语法，因此这样的 Skill 中出现规范 token 会报告
+`AB3008`。需要某个宿主的扩展键或 token 的 Skill，应放进只为该宿主构建的根目录（单独的 `--output`）。
+例外是没有其他宿主会读取的文件：由 `targets.codex` 降低而来的 Codex `agents/openai.yaml` sidecar 仍会写在
+共享的 `SKILL.md` 旁边。与其他宿主并列的可移植投影在 `portable/skills/` 下带有自己的一份副本。
+
 ## 路径 token
 
 各宿主的占位符语法并不相同——`${CLAUDE_PLUGIN_ROOT}` 并不是 Cursor 或可移植标准所使用的写法。请改为

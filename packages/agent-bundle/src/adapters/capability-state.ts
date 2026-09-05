@@ -297,22 +297,6 @@ export const capabilityBooleanView = (
   Object.entries(capabilities).map(([name, capability]) => [name, capabilityIsSupported(capability)]),
 ));
 
-const evidenceFor = (capability: CapabilityState): CapabilityEvidence | undefined => {
-  switch (capability.state) {
-    case 'supported':
-      return capability.evidence;
-    case 'degraded':
-      return capability.evidence;
-    case 'unavailable':
-    case 'prohibited':
-      return undefined;
-    default: {
-      const exhaustive: never = capability;
-      throw unknownCapabilityStateError(exhaustive);
-    }
-  }
-};
-
 const precedenceFor = (capability: CapabilityState): 0 | 1 | 2 | 3 => {
   switch (capability.state) {
     case 'supported':
@@ -369,46 +353,6 @@ export const mergeCapabilityEvidence = (
     observedVersion: evidence.map((entry) => `${entry.target}@${entry.observedVersion}`).join('+'),
     target: evidence.map((entry) => entry.target).join('+'),
   });
-};
-
-/**
- * Intersects two host judgments for a composite adapter. Prohibition dominates,
- * then unavailability, then degradation; two supported states merge evidence.
- */
-export const intersectCapabilityStates = (
-  left: CapabilityState,
-  right: CapabilityState,
-): CapabilityState => {
-  const leftPrecedence = precedenceFor(left);
-  const rightPrecedence = precedenceFor(right);
-  const precedence = leftPrecedence > rightPrecedence ? leftPrecedence : rightPrecedence;
-  switch (precedence) {
-    case 0:
-      if (left.state !== 'supported' || right.state !== 'supported') {
-        throw new Error('Supported capability intersection lost its evidence invariant.');
-      }
-      return supportedCapability(mergeCapabilityEvidence(left.evidence, right.evidence));
-    case 1: {
-      const leftEvidence = evidenceFor(left);
-      const rightEvidence = evidenceFor(right);
-      const evidence = leftEvidence === undefined || rightEvidence === undefined
-        ? undefined
-        : mergeCapabilityEvidence(leftEvidence, rightEvidence);
-      return Object.freeze({
-        ...(evidence === undefined ? {} : { evidence }),
-        reason: mergedReason(left, right, precedence),
-        state: 'degraded',
-      });
-    }
-    case 2:
-      return Object.freeze({ reason: mergedReason(left, right, precedence), state: 'unavailable' });
-    case 3:
-      return Object.freeze({ reason: mergedReason(left, right, precedence), state: 'prohibited' });
-    default: {
-      const exhaustive: never = precedence;
-      throw new CapabilityStateError(`Capability precedence ${String(exhaustive)} has no intersection rule.`);
-    }
-  }
 };
 
 /**

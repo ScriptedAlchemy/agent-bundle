@@ -177,9 +177,9 @@ Each cross-request notice route is selected from the target host's pinned
 `TargetRegistry.noticeDelivery(target)` (a local `NoticeDeliveryAdvertisement`
 shape, structurally identical to the runtime's so it types for
 `selectNoticeDeliveryRoutes` without making the optional `@agent-bundle/runtime`
-peer a declaration dependency); the unified `plugin` target advertises the
-intersection of its three hosts, and a target with no advertisement wires no
-cross-request route. The `agent-bundle://notices/inbox` resource is registered
+peer a declaration dependency); a root projecting several hosts wires only the
+routes every projected host advertises (the intersection), and a target with
+no advertisement wires no cross-request route. The `agent-bundle://notices/inbox` resource is registered
 in the server and mounted in its worker only for stateful projects whose host
 advertises `mcp-inbox` (the worker still mounts the ledger so routes can
 publish; only the unadvertised read surface is withheld, and the reserved name

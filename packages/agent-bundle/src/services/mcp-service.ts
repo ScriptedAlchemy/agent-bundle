@@ -16,6 +16,7 @@ import { Effect, type FileSystem } from 'effect';
 import type { PlatformError } from 'effect/PlatformError';
 
 import { createDefaultRegistry, TargetRegistry } from '../adapters/registry.ts';
+import { hostMcpRuntime, hostRootDirectory, readArtifactRootContracts } from '../build/artifact-root.ts';
 import { validateArtifact } from '../build/validate-artifact.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { joinArtifact, resolveContained } from '../core/paths.ts';
@@ -220,18 +221,25 @@ export class McpService {
     ) => Promise<Result>,
   ): Promise<{ readonly connection: McpConnectionState; readonly value: Result }> {
     const artifact = resolve(options.artifact);
-    const runtime = this.#runtime(options.target);
+    this.#assertMcpTarget(options.target);
     const diagnostics = await validateArtifact({ artifactRoot: artifact, registry: this.#registry });
     const errors = diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
     if (errors.length > 0) throw new DiagnosticError(errors);
 
-    const targetRoot = joinArtifact(artifact, options.target);
+    // Every target reads the one plugin root (#555); the runtime contract and
+    // the host's plugin root come from the artifact's root contracts.
+    const rootContracts = await readArtifactRootContracts(artifact, this.#registry);
+    const runtime = hostMcpRuntime(rootContracts, this.#registry, options.target);
+    if (runtime === undefined) throw new Error(`Unsupported MCP target ${JSON.stringify(options.target)}.`);
+    // The host's plugin root (`${PLUGIN_ROOT}`, the default cwd); the MCP
+    // document path is root-relative, so it is read from the artifact root.
+    const targetRoot = hostRootDirectory(artifact, rootContracts, options.target);
     // The per-connection plugin-data directory lives exactly as long as the
     // connection: `withTempDirectory` is the `mkdtemp` + `finally rm` bracket
     // (cleanup failure wins, as the throwing `finally` did). The client and
     // stderr capture are closed inside the bracket, before the removal.
     return runWithPlatform(Effect.gen({ self: this }, function* (this: McpService) {
-      const server = yield* this.#server(targetRoot, options.target, runtime, options.server);
+      const server = yield* this.#server(artifact, options.target, runtime, options.server);
       return yield* withTempDirectory(
         { directory: tmpdir(), prefix: 'agent-bundle-mcp-' },
         (pluginData) => liftPromise(() => this.#connect(options, operation, { pluginData, runtime, server, targetRoot })),
@@ -297,7 +305,7 @@ export class McpService {
   }
 
   #server(
-    targetRoot: string,
+    artifact: string,
     target: string,
     runtime: TargetMcpRuntimeContract,
     name: string,
@@ -305,7 +313,7 @@ export class McpService {
     if (name.trim().length === 0) {
       return Effect.fail(new Error('MCP server name must be nonempty.'));
     }
-    const path = joinArtifact(targetRoot, runtime.manifestPath);
+    const path = joinArtifact(artifact, runtime.manifestPath);
     return Effect.flatMap(readFileString(path), (contents) => Effect.suspend(() => {
       let document: unknown;
       try {
@@ -324,15 +332,10 @@ export class McpService {
     }));
   }
 
-  #runtime(name: string): TargetMcpRuntimeContract {
-    if (!this.#registry.has(name) || !this.#registry.supports(name, 'mcp')) {
+  #assertMcpTarget(name: string): void {
+    if (!this.#registry.has(name) || !this.#registry.supports(name, 'mcp') || this.#registry.mcpRuntime(name) === undefined) {
       throw new Error(`Unsupported MCP target ${JSON.stringify(name)}.`);
     }
-    const runtime = this.#registry.mcpRuntime(name);
-    if (runtime === undefined) {
-      throw new Error(`Unsupported MCP target ${JSON.stringify(name)}.`);
-    }
-    return runtime;
   }
 
   #throwIfStderrExceeded(capture: StderrCapture | undefined): void {

@@ -22,15 +22,16 @@ an authored script.
   runs it. See [Hooks](../guide/authoring/hooks.mdx).
 - **Both script declaration modes.** `verify-release` ships by convention — any unclaimed plain
   script under `src/scripts/` is discovered — while `detect-risk` stays explicitly configured
-  because it restricts its targets to `portable`. The example keeps both modes covered on
+  because it selects a host: it is emitted only into a root that projects `portable`, into the
+  shared `scripts/` every host of that root reads. The example keeps both modes covered on
   purpose.
 - **The framework owns the process envelope.** Both scripts export `main` and return an exit
   code. Argv handling, awaiting, and exit-code adoption belong to the generated envelope, so a
   nonzero return becomes a real blocking exit rather than a swallowed value. See
   [Scripts and assets](../guide/authoring/scripts-assets.mdx).
 - **Emitted scripts resolve their own assets.** `assets: ['release/*.json']` copies the release
-  manifest and risk register into every target, and each emitted script reads them relative to
-  its own module — never relative to the shell's working directory.
+  manifest and risk register into the plugin root's `assets/`, and each emitted script reads them
+  relative to its own module — never relative to the shell's working directory.
 - **A failed rebuild keeps the last-good artifact.** That is the reversible walkthrough below.
 
 ## What is authored
@@ -39,7 +40,7 @@ an authored script.
 | --- | --- |
 | `src/hooks/session-start.ts` | The `sessionStart` handler that directs a release session through both checks. |
 | `src/scripts/verify-release.ts` | The manifest-backed packaging check, discovered by convention. |
-| `src/scripts/detect-risk.ts` | The risk-register check, explicitly configured to restrict its targets. |
+| `src/scripts/detect-risk.ts` | The risk-register check, explicitly configured to select the `portable` host. |
 | `release/release-manifest.json` | The packaged release manifest, copied as an asset. |
 | `release/risk-register.json` | The risk register the blocking check reads. |
 

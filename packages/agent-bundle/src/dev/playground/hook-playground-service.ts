@@ -166,7 +166,7 @@ const matcherFor = async (
 ): Promise<string | undefined | HookPlaygroundDiagnosticResult> => {
   let document: unknown;
   try {
-    document = JSON.parse(await run(readFileString(join(artifact, hook.target, contract.manifestPath))));
+    document = JSON.parse(await run(readFileString(join(artifact, contract.manifestPath))));
   } catch (error) {
     if (isErrno(error, 'ENOENT')) return missingManifest(hook.target, hook.event, contract.manifestPath);
     return undefined;
@@ -174,10 +174,7 @@ const matcherFor = async (
   if (!isRecord(document) || !isRecord(document.hooks)) return undefined;
   const groups = document.hooks[nativeSelector];
   if (!Array.isArray(groups)) return undefined;
-  const targetPrefix = `${hook.target}/`;
-  const wrapperPath = hook.path.startsWith(targetPrefix)
-    ? hook.path.slice(targetPrefix.length)
-    : hook.path;
+  const wrapperPath = hook.path;
   for (const group of groups) {
     if (!isRecord(group) || !Array.isArray(group.hooks)) continue;
     const hasWrapper = group.hooks.some((entry) =>
@@ -234,7 +231,8 @@ const assertTargetDigest = async (
 ): Promise<void> => {
   let actual: string;
   try {
-    actual = digest(await listArtifactFiles(join(artifact, target)));
+    // Every target reads the same plugin root (#555); the digest is keyed by target.
+    actual = digest({ files: await listArtifactFiles(artifact), target });
   } catch {
     throw new Error(`Hook playground target ${JSON.stringify(target)} cannot be verified against its stored digest.`);
   }
@@ -288,7 +286,12 @@ export class HookPlaygroundService {
       const selected = matching.filter((hook) => hook.target === options.target);
       const example = matching[0]!;
       if (!this.#registry.has(options.target)) return unsupportedTarget(options.target, example.event);
-      const contract = this.#registry.hookContract(options.target);
+      // The host's contract inside this root, with the document path the
+      // composition may have relocated it to (#555).
+      const rootTargets = Object.keys(reference.epoch.targetDigests).filter((name) => this.#registry.has(name));
+      const contract = rootTargets.includes(options.target)
+        ? this.#registry.root(rootTargets).hookContractFor(options.target)
+        : undefined;
       if (contract === undefined) return unsupportedTarget(options.target, example.event);
       if (selected.length !== 1) return unsupportedTarget(options.target, example.event);
       const target = options.target;

@@ -260,19 +260,31 @@ export class ArtifactInspectionService {
     });
   }
 
+  /**
+   * One tree per projected target (#555): every target reads the same root,
+   * so each tree holds the root's files, except a host projected as a
+   * namespaced view (`portable/` beside other hosts), whose tree holds that
+   * view's files.
+   */
   #targets(
     manifest: ArtifactManifest,
     files: readonly ArtifactInspectionFile[],
   ): readonly ArtifactInspectionTarget[] {
+    const known = manifest.targets.map((target) => target.name).filter((name) => this.#registry.has(name));
+    const root = known.length === 0 ? undefined : this.#registry.root(known);
+    const hostRoots = new Set(known.map((name) => root!.hostRoot(name)).filter((hostRoot) => hostRoot !== ''));
     return Object.freeze(manifest.targets.map((target): ArtifactInspectionTarget => {
-      const root = emptyTreeBuildDirectory();
-      const prefix = `${target.name}/`;
+      const tree = emptyTreeBuildDirectory();
+      const hostRoot = root === undefined || !known.includes(target.name) ? '' : root.hostRoot(target.name);
+      const prefix = hostRoot === '' ? '' : `${hostRoot}/`;
       for (const file of files) {
         if (!file.path.startsWith(prefix)) continue;
+        // A root host's tree leaves out the namespaced views of other hosts.
+        if (prefix === '' && [...hostRoots].some((view) => file.path.startsWith(`${view}/`))) continue;
         const segments = file.path.slice(prefix.length).split('/');
         const fileName = segments.pop();
         if (fileName === undefined) continue;
-        let directory = root;
+        let directory = tree;
         for (const segment of segments) {
           let child = directory.directories.get(segment);
           if (child === undefined) {
@@ -283,7 +295,7 @@ export class ArtifactInspectionService {
         }
         directory.files.set(fileName, file);
       }
-      return Object.freeze({ name: target.name, tree: treeNode(target.name, target.name, root) });
+      return Object.freeze({ name: target.name, tree: treeNode(target.name, target.name, tree) });
     }));
   }
 
@@ -324,7 +336,7 @@ export class ArtifactInspectionService {
     const hooks: ArtifactInspectionHook[] = [];
     for (const hook of runtime.hooks) {
       const file = filesByPath.get(hook.path);
-      if (file === undefined || !hook.path.startsWith(`${hook.target}/`)) {
+      if (file === undefined) {
         throw this.#runtimeError('Validated hook evidence references an unmanifested wrapper.', hook.path, hook.target);
       }
       hooks.push(Object.freeze({
@@ -349,11 +361,11 @@ export class ArtifactInspectionService {
   ): readonly ArtifactInspectionMcpServer[] {
     const servers: ArtifactInspectionMcpServer[] = [];
     for (const server of runtime.mcpServers) {
-      if (!server.manifestPath.startsWith(`${server.target}/`) || !filesByPath.has(server.manifestPath)) {
+      if (!filesByPath.has(server.manifestPath)) {
         throw this.#runtimeError('Validated MCP evidence references an unmanifested target manifest.', server.manifestPath, server.target);
       }
       for (const path of server.entryPaths) {
-        if (!path.startsWith(`${server.target}/`) || !filesByPath.has(path)) {
+        if (!filesByPath.has(path)) {
           throw this.#runtimeError('Validated MCP evidence references an unmanifested target file.', path, server.target);
         }
       }

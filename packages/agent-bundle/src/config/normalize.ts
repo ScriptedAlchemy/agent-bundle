@@ -69,7 +69,7 @@ import { type DiscoveredProject, payloadDeclarationSource } from './discover.ts'
 import type { LoadedConfig } from './load.ts';
 import type { CanonicalAgentEvent } from '../routes/public.ts';
 import type { SkillIr } from '../skills/ir.ts';
-import { decideSkillTreeLayout, lowerSkillIr, lowerSkillIrForHosts } from '../skills/lower.ts';
+import { codexSkillSidecars, decideSkillTreeLayout, lowerSkillIr, lowerSkillIrForHosts } from '../skills/lower.ts';
 import { parseSkillIr } from '../skills/parse-ir.ts';
 import type { SkillHost } from '../skills/tokens.ts';
 import { normalizeNoticeRetention } from './notice-retention.ts';
@@ -81,23 +81,38 @@ const isSkillHost = (name: string): name is SkillHost =>
 const loweringHosts = (targetNames: readonly string[]): SkillHost[] => {
   const hosts = new Set<SkillHost>();
   for (const name of targetNames) {
-    if (name === 'plugin') {
-      hosts.add('claude');
-      hosts.add('codex');
-    } else if (isSkillHost(name)) {
-      hosts.add(name);
-    }
+    if (isSkillHost(name)) hosts.add(name);
   }
   return [...hosts];
 };
 
-const pluginSharedDocument = (skillIr: SkillIr) => {
-  const claude = lowerSkillIr(skillIr, 'claude');
-  const codex = lowerSkillIr(skillIr, 'codex');
-  if (claude.passThrough && codex.passThrough && claude.skillMarkdown === codex.skillMarkdown) {
-    return claude;
-  }
-  return lowerSkillIr(skillIr, 'portable');
+/**
+ * One plugin root holds one `skills/<name>/SKILL.md` read by every projected
+ * host (#555). When several hosts are selected the skill lowers to the one
+ * document all of them accept: the authored pass-through Markdown when every
+ * host would pass it through unchanged, otherwise the portable document,
+ * which strips every host extension and admits no host placeholder.
+ */
+const sharedSkillDocuments = (skillIr: SkillIr, hosts: readonly SkillHost[]) => {
+  const lowered = hosts.map((host) => lowerSkillIr(skillIr, host));
+  const first = lowered[0];
+  const shared = first !== undefined
+    && lowered.every((document) => document.passThrough && document.skillMarkdown === first.skillMarkdown)
+    ? first
+    : lowerSkillIr(skillIr, 'portable');
+  // Codex's `agents/openai.yaml` is a file of its own beside the shared
+  // SKILL.md that no other host reads, so Codex keeps it in a shared root.
+  const codex = hosts.includes('codex') ? codexSkillSidecars(skillIr) : undefined;
+  return Object.fromEntries(hosts.map((host) => [
+    host,
+    host === 'codex' && codex !== undefined && codex.sidecars.length > 0
+      ? deepFreeze({
+        ...shared,
+        diagnostics: [...shared.diagnostics, ...codex.diagnostics],
+        sidecars: codex.sidecars,
+      })
+      : shared,
+  ]));
 };
 
 const unique = (values: readonly string[]): string[] => [...new Set(values)];
@@ -1232,10 +1247,9 @@ export const normalizeProject = async (
         : basename(skill.dir);
     const description = frontmatter.description;
     const skillIr = parseSkillIr(skill);
-    const hostDocuments = {
-      ...lowerSkillIrForHosts(skillIr, skillHosts),
-      ...(targetNames.includes('plugin') ? { plugin: pluginSharedDocument(skillIr) } : {}),
-    };
+    const hostDocuments = skillHosts.length > 1
+      ? sharedSkillDocuments(skillIr, skillHosts)
+      : lowerSkillIrForHosts(skillIr, skillHosts);
 
     return {
       body: skill.body,

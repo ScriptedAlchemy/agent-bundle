@@ -167,7 +167,7 @@ it('composes the root and server layouts around every rendered surface of one bu
   // keeps the route's value as structuredContent.
   const server = result.model.mcpServers[0];
   if (server?.args?.[0] === undefined) throw new Error('expected a generated MCP entry');
-  const session = await connectServer(root, join(output, 'portable', server.args[0]));
+  const session = await connectServer(root, join(output, server.args[0]));
   try {
     const lookup = await session.client.callTool({ arguments: { message: 'wired' }, name: 'lookup' }, { signal: AbortSignal.timeout(20_000) });
     expect(lookup).toMatchObject({
@@ -224,22 +224,22 @@ it('composes the root and server layouts around every rendered surface of one bu
     stdout: '',
   });
 
-  // The artifact-hosted executable (`<target>/bin/<name>.mjs`) composes the
-  // same chains as the package-built one, and its worker lists the layouts
-  // among its source inputs.
+  // The artifact-hosted executable (`bin/<name>.mjs` at the plugin root)
+  // composes the same chains as the package-built one, and its worker lists
+  // the layouts among its source inputs.
   const hostedBin = result.build.compiledCliBins.find((bin) => bin.target === 'portable');
   expect(hostedBin?.workerSourceInputs).toEqual(expect.arrayContaining([
     join(root, 'src/layout.tsx'),
     join(root, 'src/mcp/harness/layout.tsx'),
   ]));
-  const hostedBinPath = join(output, 'portable', 'bin', 'layout-fixture.mjs');
+  const hostedBinPath = join(output, 'bin', 'layout-fixture.mjs');
   const hostedReport = await execFile(process.execPath, [hostedBinPath, 'report', '/library']);
   expect(hostedReport.stdout).toBe(piped.stdout);
   const hostedProjected = await execFile(process.execPath, [hostedBinPath, 'harness', 'lookup', '--input', '{"message":"projected"}']);
   expect(hostedProjected.stdout).toBe(projected.stdout);
 
   // A rendered script takes the root layout.
-  const scriptPath = join(output, 'portable', 'scripts', 'summarize.mjs');
+  const scriptPath = join(output, 'scripts', 'summarize.mjs');
   const scriptMarkdown = await execFile(process.execPath, [scriptPath, 'alpha', 'beta']);
   expect(scriptMarkdown.stdout).toBe('Summarized 2 arguments.\n\n> shell: script summarize\n');
   const scriptJson = await execFile(process.execPath, [scriptPath, 'alpha', '--json']);
@@ -259,7 +259,7 @@ it('ships byte-identical surfaces when no layout exists and refuses an invalid l
   expect(piped.stdout).toBe('Found **2** books under /library.\n');
   const projected = await execFile(binPath, ['harness', 'lookup', '--input', '{"message":"plain"}']);
   expect(projected.stdout).toBe('Lookup: plain\n');
-  const scriptMarkdown = await execFile(process.execPath, [join(output, 'portable', 'scripts', 'summarize.mjs'), 'alpha']);
+  const scriptMarkdown = await execFile(process.execPath, [join(output, 'scripts', 'summarize.mjs'), 'alpha']);
   expect(scriptMarkdown.stdout).toBe('Summarized 1 arguments.\n');
 
   // An invalid layout module is a compile-time error (AB4830), never a runtime surprise.

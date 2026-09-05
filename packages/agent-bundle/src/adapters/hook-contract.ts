@@ -16,8 +16,21 @@ import { deepFreeze } from '../core/freeze.ts';
 
 
 export interface TargetHookWrapper {
+  /**
+   * The artifact identity the wrapper's event endpoint is named after; the
+   * generated MCP entry of the same root names its endpoint identically. It
+   * equals `target` for a single-host root and the composite name when the
+   * root hosts several projections (#555).
+   */
+  readonly artifactTarget?: string;
   readonly event: NormalizedHookEvent;
   readonly hook: NormalizedHook;
+  /**
+   * Every host projection this one wrapper serves. Absent means exactly
+   * `target`; several hosts mean the wrapper detects the calling host at run
+   * time (the shared Claude/Codex document of a composite root, #555).
+   */
+  readonly hosts?: readonly string[];
   /** False when this wrapper is a host-document variant of an indexed hook rather than its canonical entry. */
   readonly indexed?: false;
   readonly nativeEvent: string;
@@ -25,6 +38,20 @@ export interface TargetHookWrapper {
   readonly nativeMatcher?: string;
   readonly relativePath: string;
   readonly target: string;
+}
+
+/** Options a root composed of several host projections threads into hook planning (#555). */
+export interface HookPlanRootOptions {
+  /** The composite root's identity, shared with its generated MCP entry's event endpoint. */
+  readonly artifactTarget?: string;
+  /**
+   * The provenance revision a wrapper serving several hosts records (the
+   * shared hosts' observed versions joined); a single-host wrapper keeps its
+   * host contract's own revision.
+   */
+  readonly hostContractRevision?: string;
+  /** The hosts one planned wrapper may serve; a wrapper serves those of them its hook selects. */
+  readonly hosts?: readonly string[];
 }
 
 export interface TargetHookEntry extends TargetHookWrapper {
@@ -638,15 +665,20 @@ const eventRouteHookWrapperSource = (
   // then) retires the durable lineage journal itself, so roots never outlive
   // their session; only projects whose state is workspace-durable have one.
   const retiresLineage = standalone && durableLineage && route.event === 'session/end';
+  // A wrapper shared by several hosts (the composite root's one Claude-format
+  // document serves Claude Code and Codex) detects the calling host at run
+  // time; a single-host wrapper is its host.
   const targetSource = concreteTarget !== undefined
     ? [`const target = ${JSON.stringify(concreteTarget)};`]
-    : entry.target === 'plugin'
+    : (entry.hosts?.length ?? 1) > 1
     ? [
         'const declaredHost = process.env.AGENT_BUNDLE_HOOK_HOST;',
         'const target = declaredHost === "claude" || declaredHost === "codex"',
         '  ? declaredHost',
         '  : process.env.PLUGIN_ROOT === undefined ? "claude" : "codex";',
       ]
+    : entry.hosts?.length === 1
+    ? [`const target = ${JSON.stringify(entry.hosts[0])};`]
     : ['const target = artifactTarget;'];
   return [
     "import { dirname, resolve } from 'node:path';",
@@ -675,7 +707,7 @@ const eventRouteHookWrapperSource = (
     `const canonicalEvent = ${JSON.stringify(route.event)};`,
     `const capabilityRevision = ${JSON.stringify(hostContractRevision)};`,
     `const nativeEvent = ${JSON.stringify(entry.nativeEvent)};`,
-    `const artifactTarget = ${JSON.stringify(entry.target)};`,
+    `const artifactTarget = ${JSON.stringify(entry.artifactTarget ?? entry.target)};`,
     ...targetSource,
     `const runtimeMode = ${JSON.stringify(route.runtime)};`,
     `const fallbackMode = ${JSON.stringify(route.fallback)};`,
@@ -1114,6 +1146,7 @@ export const planHooks = (
   target: string,
   contract: TargetHookContract,
   concreteEventTarget?: string,
+  root: HookPlanRootOptions = {},
 ): HookPlan => {
   const diagnostics: Diagnostic[] = [];
   const selected = model.hooks
@@ -1169,9 +1202,14 @@ export const planHooks = (
       : contract.documentEntry(entryInput);
     (groups[nativeEvent] ??= []).push(group);
     if (prebuilt) continue;
+    // The hosts of the composite root this hook actually selects: one wrapper
+    // serves them all, so it is host-detecting when there are several.
+    const hosts = root.hosts?.filter((host) => hook.targets.includes(host));
     const wrapper: TargetHookWrapper = {
+      ...(root.artifactTarget === undefined ? {} : { artifactTarget: root.artifactTarget }),
       event: hook.event,
       hook,
+      ...(hosts === undefined ? {} : { hosts }),
       ...(contract.indexedWrappers === false ? { indexed: false as const } : {}),
       nativeEvent,
       ...(matcher === undefined ? {} : { nativeMatcher: matcher }),
@@ -1185,7 +1223,7 @@ export const planHooks = (
         ? contract.wrapperSource(wrapper)
         : eventRouteHookWrapperSource(
             wrapper,
-            contract.hostContractRevision ?? target,
+            ((hosts?.length ?? 1) > 1 ? root.hostContractRevision : undefined) ?? contract.hostContractRevision ?? target,
             concreteEventTarget,
             model.state?.lifetime === 'workspace-durable',
           ),

@@ -1196,7 +1196,7 @@ it('admits documented Codex component path and inline manifest forms', async () 
 
 it('plans byte-stable native Codex and Claude plugin trees from the same frozen model', async () => {
   const registry = createDefaultRegistry();
-  expect(registry.names()).toEqual(['portable', 'codex', 'claude', 'cursor', 'plugin']);
+  expect(registry.names()).toEqual(['portable', 'codex', 'claude', 'cursor']);
   expect(registry.defaultTargetNames()).toEqual(['portable']);
   expect(Object.isFrozen(plugin)).toBe(true);
 
@@ -3024,7 +3024,7 @@ it('reports malformed remote MCP URLs through independently validated host schem
   expect(claude.entries.some((entry) => entry.relativePath === '.mcp.json')).toBe(false);
 });
 
-it('filters host components and builds portable, Codex, and Claude target roots', async () => {
+it('filters host components and builds one root projecting portable, Codex, and Claude', async () => {
   const filtered = {
     ...plugin,
     mcpServers: plugin.mcpServers.map((server) => ({ ...server, targets: ['claude'] })),
@@ -3076,9 +3076,13 @@ it('filters host components and builds portable, Codex, and Claude target roots'
 
   try {
     await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+    // One root: Claude Code and Codex manifests live at the root; the Agent
+    // Plugins pack beside other hosts is the namespaced `portable/` view.
     await expect(readFile(join(outputRoot, 'portable', 'plugin.json'), 'utf8')).resolves.toContain('review-tools');
-    await expect(readFile(join(outputRoot, 'codex', '.codex-plugin', 'plugin.json'), 'utf8')).resolves.toContain('review-tools');
-    await expect(readFile(join(outputRoot, 'claude', '.claude-plugin', 'plugin.json'), 'utf8')).resolves.toContain('review-tools');
+    await expect(readFile(join(outputRoot, '.codex-plugin', 'plugin.json'), 'utf8')).resolves.toContain('review-tools');
+    await expect(readFile(join(outputRoot, '.claude-plugin', 'plugin.json'), 'utf8')).resolves.toContain('review-tools');
+    await expect(readFile(join(outputRoot, 'skills', 'review', 'SKILL.md'), 'utf8')).resolves.toBe(skillMarkdown);
+    await expect(readFile(join(outputRoot, 'portable', 'skills', 'review', 'SKILL.md'), 'utf8')).resolves.toBe(skillMarkdown);
     const manifest = JSON.parse(await readFile(join(outputRoot, 'agent-bundle.manifest.json'), 'utf8')) as {
       readonly files: readonly { readonly path: string }[];
       readonly targets: readonly { readonly name: string }[];
@@ -3086,9 +3090,12 @@ it('filters host components and builds portable, Codex, and Claude target roots'
     expect(manifest.targets.map(({ name }) => name)).toEqual(['claude', 'codex', 'portable']);
     expect(manifest.files.map((file) => file.path)).toEqual(expect.arrayContaining([
       'portable/plugin.json',
-      'codex/.codex-plugin/plugin.json',
-      'claude/.claude-plugin/plugin.json',
+      '.codex-plugin/plugin.json',
+      '.claude-plugin/plugin.json',
+      'AGENTS.md',
+      'INSTALL.md',
     ]));
+    expect(manifest.files.some((file) => file.path.startsWith('codex/') || file.path.startsWith('claude/'))).toBe(false);
   } finally {
     await rm(root, { force: true, recursive: true });
   }

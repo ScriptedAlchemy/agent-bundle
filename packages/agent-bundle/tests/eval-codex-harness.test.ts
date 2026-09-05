@@ -30,12 +30,13 @@ const marketplace = {
 };
 
 interface TrialWorld {
+  /** The built plugin root; every host reads it directly (#555). */
+  readonly artifact: string;
   readonly commands: CodexCommandInput[];
   readonly normalCodexHome: string;
   readonly observed: { authMode?: number; authSize?: number; codexHome?: string; pluginRoots: string[] };
   readonly root: string;
   readonly suiteDir: string;
-  readonly target: string;
 }
 
 const evalCase = (invocation: EvalCase['invocation'] = { mode: 'automatic' }): EvalCase => normalizeEvalCase({
@@ -55,26 +56,26 @@ const evalCase = (invocation: EvalCase['invocation'] = { mode: 'automatic' }): E
 const seedWorld = async (): Promise<TrialWorld> => {
   const root = await mkdtemp(join(tmpdir(), 'agent bundle codex harness '));
   const suiteDir = join(root, 'evals');
-  const target = join(root, 'artifact', 'codex');
+  const artifact = join(root, 'artifact');
   const normalCodexHome = join(root, 'normal-codex-home');
   await mkdir(join(suiteDir, 'fixtures', 'repo'), { recursive: true });
-  await mkdir(join(target, '.agents', 'plugins'), { recursive: true });
-  await mkdir(join(target, 'skills', 'release-notes'), { recursive: true });
+  await mkdir(join(artifact, '.agents', 'plugins'), { recursive: true });
+  await mkdir(join(artifact, 'skills', 'release-notes'), { recursive: true });
   await mkdir(join(normalCodexHome, 'plugins'), { recursive: true });
   await writeFile(join(suiteDir, 'fixtures', 'repo', 'input.txt'), 'release me\n');
-  await writeFile(join(target, '.agents', 'plugins', 'marketplace.json'), `${JSON.stringify(marketplace)}\n`);
-  await writeFile(join(target, 'skills', 'release-notes', 'SKILL.md'), '---\nname: release-notes\n---\n');
+  await writeFile(join(artifact, '.agents', 'plugins', 'marketplace.json'), `${JSON.stringify(marketplace)}\n`);
+  await writeFile(join(artifact, 'skills', 'release-notes', 'SKILL.md'), '---\nname: release-notes\n---\n');
   await writeFile(join(normalCodexHome, 'auth.json'), '{"opaque":"session"}\n');
   await chmod(join(normalCodexHome, 'auth.json'), 0o600);
   await writeFile(join(normalCodexHome, 'config.toml'), 'model = "gpt-5-codex"\n');
   await writeFile(join(normalCodexHome, 'plugins', 'installed.json'), '{"installed":[]}\n');
   return {
+    artifact,
     commands: [],
     normalCodexHome,
     observed: { pluginRoots: [] },
     root,
     suiteDir,
-    target,
   };
 };
 
@@ -136,7 +137,7 @@ const runTrial = async (
     return await runCodexEvalTrial({
       artifact: {
         binding: { manifestPath: 'pending', source: 'explicit', targetDigests: { codex: 'target-digest' } },
-        root: join(world.root, 'artifact'),
+        root: world.artifact,
       },
       environment: {
         ANTHROPIC_API_KEY: 'must-not-reach-the-child',

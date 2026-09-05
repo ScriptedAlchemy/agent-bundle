@@ -3,7 +3,7 @@ import { basename, dirname, join, relative, resolve } from 'node:path';
 
 import packageManifest from '../../package.json' with { type: 'json' };
 
-import type { TargetRegistry } from '../adapters/registry.ts';
+import type { ArtifactRootContracts, TargetRegistry } from '../adapters/registry.ts';
 import type { TargetArtifactEntry, TargetHookEntry } from '../adapters/types.ts';
 import { deduplicateDiagnostics, DiagnosticBag, DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
 import type { ProjectContext } from '../core/project-context.ts';
@@ -75,15 +75,24 @@ export interface BuildOptions {
   readonly tools?: AgentBundleToolsConfig;
 }
 
-interface PlannedTarget {
-  /** True when the target's adapter publishes the `cli` capability, admitting the routed CLI bin. */
+/**
+ * The one plugin root a build emits (#555): every selected target's projection
+ * planned into the same directory. A single target is its adapter's plan; two
+ * or more are composed by the registry's root contracts.
+ */
+interface PlannedRoot {
+  /** True when any projected host publishes the `cli` capability, admitting the routed CLI bin. */
   readonly cliBin: boolean;
+  readonly contracts: ArtifactRootContracts;
   readonly entries: readonly TargetArtifactEntry[];
   readonly hookEntries: readonly TargetHookEntry[];
+  /** The root's identity: the host name, or the composite name of several hosts. */
   readonly name: string;
+  /** The projected hosts, in the order the model selected them. */
+  readonly targets: readonly string[];
 }
 
-interface StagedTarget extends PlannedTarget {
+interface StagedRoot extends PlannedRoot {
   readonly compiledCliBins: readonly CompiledCliBin[];
   readonly compiledEntries: readonly CompiledEntry[];
   readonly compiledHooks: readonly CompiledHookEntry[];
@@ -152,73 +161,58 @@ const prebuiltPayloadDiagnostics = (
   return diagnostics;
 };
 
-const planTargets = (options: BuildOptions): readonly PlannedTarget[] => {
+const planRoot = (options: BuildOptions): PlannedRoot => {
   const diagnostics: Diagnostic[] = [];
-  const planned: PlannedTarget[] = [];
-
-  for (const target of options.model.targets) {
-    const adapter = options.registry.get(target.name);
-    const plan = adapter.plan(options.model);
-    diagnostics.push(...plan.diagnostics);
-    const hookEntries = plan.hookEntries ?? Object.freeze([]);
-    for (const hookEntry of hookEntries) {
-      if (hookEntry.target !== target.name) {
-        diagnostics.push({
-          code: 'AB5000',
-          message: `Target adapter ${JSON.stringify(target.name)} planned hook ${JSON.stringify(hookEntry.hook.id)} for target ${JSON.stringify(hookEntry.target)}, expected ${JSON.stringify(target.name)}.`,
-          severity: 'error',
-          target: target.name,
-        });
-      }
+  const targets = options.model.targets.map((target) => target.name);
+  const contracts = options.registry.root(targets);
+  const plan = contracts.adapter.plan(options.model);
+  diagnostics.push(...plan.diagnostics);
+  const hookEntries = plan.hookEntries ?? Object.freeze([]);
+  for (const hookEntry of hookEntries) {
+    const served = hookEntry.hosts ?? [hookEntry.target];
+    const foreign = served.filter((host) => !targets.includes(host));
+    if (foreign.length > 0) {
+      diagnostics.push({
+        code: 'AB5000',
+        message: `Plugin root ${JSON.stringify(contracts.name)} planned hook ${JSON.stringify(hookEntry.hook.id)} for ${JSON.stringify(foreign)}, which it does not project.`,
+        severity: 'error',
+      });
     }
-    const cliBin = targetHostsCliBin(options.registry, target.name);
-    if (cliBin) diagnostics.push(...cliBinCollisionDiagnostics(options.model, target.name, plan.entries));
-    planned.push({
-      cliBin,
-      entries: plan.entries,
-      hookEntries,
-      name: target.name,
-    });
   }
+  const cliBin = targets.some((target) => targetHostsCliBin(options.registry, target));
+  if (cliBin) diagnostics.push(...cliBinCollisionDiagnostics(options.model, contracts.name, plan.entries));
   new DiagnosticBag(deduplicateDiagnostics(diagnostics)).throwIfErrors();
-  return planned;
+  return Object.freeze({ cliBin, contracts, entries: plan.entries, hookEntries, name: contracts.name, targets });
 };
 
-const planStagedTargets = (options: {
+const planStagedRoot = (options: {
   readonly artifactRoot: string;
   readonly model: NormalizedPlugin;
+  readonly planned: PlannedRoot;
   readonly projectRoot: string;
-  readonly targets: readonly PlannedTarget[];
-}): readonly StagedTarget[] => options.targets.map((target) => {
-  const root = assertInside(options.artifactRoot, resolve(options.artifactRoot, target.name));
-  const scripts = options.model.scripts.filter((script) => script.targets.includes(target.name));
+}): StagedRoot => {
+  const { planned } = options;
+  const root = options.artifactRoot;
+  const selection = { hosts: planned.targets, target: planned.name };
+  const scripts = options.model.scripts.filter((script) => script.targets.some((target) => planned.targets.includes(target)));
   const compiledEntries = planCompiledEntries(scripts, { cwd: options.projectRoot, outDir: root });
-  const compiledHooks = planCompiledHooks(target.hookEntries, { outDir: root });
-  const compiledMcpApps = planCompiledMcpApps(options.model.mcpApps ?? [], {
-    outDir: root,
-    target: target.name,
-  });
-  const compiledMcpEntries = planCompiledMcpEntries(options.model.mcpServers, {
-    outDir: root,
-    target: target.name,
-  });
-  const compiledCliBins = target.cliBin
-    ? planCompiledCliBins(options.model, { outDir: root, target: target.name })
+  const compiledHooks = planCompiledHooks(planned.hookEntries, { outDir: root });
+  const compiledMcpApps = planCompiledMcpApps(options.model.mcpApps ?? [], { outDir: root, ...selection });
+  const compiledMcpEntries = planCompiledMcpEntries(options.model.mcpServers, { outDir: root, ...selection });
+  const compiledCliBins = planned.cliBin
+    ? planCompiledCliBins(options.model, { outDir: root, target: planned.name })
     : Object.freeze([]);
-  return { ...target, compiledCliBins, compiledEntries, compiledHooks, compiledMcpApps, compiledMcpEntries, root };
-});
+  return { ...planned, compiledCliBins, compiledEntries, compiledHooks, compiledMcpApps, compiledMcpEntries, root };
+};
 
-const plannedDestinations = (targets: readonly StagedTarget[]): readonly string[] =>
-  targets.flatMap((target) => [
-    ...target.entries.map((entry) =>
-      resolveArtifactDestination(target.root, entry.relativePath),
-    ),
-    ...target.compiledCliBins.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
-    ...target.compiledEntries.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
-    ...target.compiledHooks.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
-    ...target.compiledMcpApps.map((entry) => entry.output),
-    ...target.compiledMcpEntries.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
-  ]);
+const plannedDestinations = (staged: StagedRoot): readonly string[] => [
+  ...staged.entries.map((entry) => resolveArtifactDestination(staged.root, entry.relativePath)),
+  ...staged.compiledCliBins.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
+  ...staged.compiledEntries.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
+  ...staged.compiledHooks.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
+  ...staged.compiledMcpApps.map((entry) => entry.output),
+  ...staged.compiledMcpEntries.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
+];
 
 const hookIndexSourceInputs = (
   model: NormalizedPlugin,
@@ -239,15 +233,15 @@ const outputCandidatesFor = (options: {
   readonly compiledMcpApps: readonly CompiledMcpApp[];
   readonly compiledMcpEntries: readonly CompiledMcpEntry[];
   readonly model: NormalizedPlugin;
-  readonly targets: readonly StagedTarget[];
+  readonly staged: StagedRoot;
 }): readonly ArtifactOutputCandidate[] => [
-  ...options.targets.flatMap((target) => target.entries.map((entry) => ({
+  ...options.staged.entries.map((entry) => ({
     kind: entry.kind !== 'copy'
       ? 'generated' as const
       : entry.prebuilt === true ? 'prebuilt' as const : 'copy' as const,
-    path: resolveArtifactDestination(target.root, entry.relativePath),
+    path: resolveArtifactDestination(options.staged.root, entry.relativePath),
     sourceInputs: entry.sourceInputs,
-  }))),
+  })),
   ...options.compiledCliBins.flatMap((entry) => [{
     kind: 'bundle' as const,
     path: entry.output,
@@ -310,11 +304,12 @@ const assertOutputProvenanceSources = (options: {
   }
 };
 
+/** The manifest names the real host projections of the root, never the composite identity. */
 const manifestTargets = (
   registry: TargetRegistry,
-  targets: readonly StagedTarget[],
+  targets: readonly string[],
 ): ArtifactManifest['targets'] => Object.freeze(targets
-  .map(({ name }) => {
+  .map((name) => {
     const metadata = registry.metadata(name);
     return Object.freeze({
       adapterRevision: metadata.adapterRevision,
@@ -332,7 +327,7 @@ const manifestFor = (options: {
   readonly model: NormalizedPlugin;
   readonly projectContext: ProjectContext;
   readonly registry: TargetRegistry;
-  readonly targets: readonly StagedTarget[];
+  readonly targets: readonly string[];
 }): ArtifactManifest => {
   const targets = manifestTargets(options.registry, options.targets);
   return {
@@ -354,14 +349,14 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
   const outputRoot = resolve(options.outputRoot);
   const payloadDiagnostics = prebuiltPayloadDiagnostics(options.model, outputRoot);
   if (payloadDiagnostics.length > 0) throw new DiagnosticError(payloadDiagnostics);
-  const planned = planTargets(options);
-  const preflightTargets = planStagedTargets({
+  const planned = planRoot(options);
+  const preflight = planStagedRoot({
     artifactRoot: outputRoot,
     model: options.model,
+    planned,
     projectRoot: options.projectRoot,
-    targets: planned,
   });
-  assertUniqueArtifactDestinations(plannedDestinations(preflightTargets));
+  assertUniqueArtifactDestinations(plannedDestinations(preflight));
   const stageParent = dirname(outputRoot);
   await mkdir(stageParent, { recursive: true });
   const stageRoot = await mkdtemp(join(stageParent, `.${basename(outputRoot)}.stage-`));
@@ -369,13 +364,13 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
     assertInside(outputRoot, resolve(outputRoot, relative(stageRoot, entry.output)));
 
   try {
-    const stagedTargets = planStagedTargets({
+    const staged = planStagedRoot({
       artifactRoot: stageRoot,
       model: options.model,
+      planned,
       projectRoot: options.projectRoot,
-      targets: planned,
     });
-    assertUniqueArtifactDestinations(plannedDestinations(stagedTargets));
+    assertUniqueArtifactDestinations(plannedDestinations(staged));
 
     const compiledCliBins: CompiledCliBin[] = [];
     const compiledEntries: CompiledEntry[] = [];
@@ -391,81 +386,82 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
     // manifest, `inspect`, and dev status report (issue #237).
     const meta = projectMeta(options.model.metadata);
     const plugin = { name: options.model.metadata.name, version: options.model.metadata.version };
-    for (const target of stagedTargets) {
-      let targetMcpApps: readonly CompiledMcpApp[] = Object.freeze([]);
-      for (const stage of planTargetStages(target)) {
-        switch (stage.kind) {
-          case 'mcp-apps':
-            // The optional browser stage, always first: the MCP entries
-            // embed its HTML, and its Rsbuild pass asserts the target root
-            // holds nothing but that HTML.
-            targetMcpApps = await compileMcpApps(options.model.mcpApps ?? [], {
-              cwd: options.projectRoot,
-              meta,
-              outDir: target.root,
-              target: target.name,
-              ...tools,
-            });
-            compiledMcpApps.push(...targetMcpApps);
-            break;
-          case 'node-surfaces': {
-            await emitPlanEntries({ entries: target.entries, root: target.root });
-            const noticeDelivery = options.registry.noticeDelivery(target.name);
-            // Every agent-host surface of the target lowers through one Rslib
-            // instance; each surface keeps its own evidence and result.
-            const [cliBins, scripts, hooks, mcpEntries] = await compileRslibSurfaces(
-              { cwd: options.projectRoot, meta, outputRoot: target.root, ...tools },
-              [
-                target.cliBin
-                  ? planCliBinsSurface(options.model, { outDir: target.root, target: target.name })
-                  : settledRslibSurface<readonly CompiledCliBin[]>(Object.freeze([])),
-                await planScriptsSurface(
-                  options.model.scripts.filter((script) => script.targets.includes(target.name)),
-                  {
-                    cwd: options.projectRoot,
-                    layouts: options.model.layouts ?? [],
-                    outDir: target.root,
-                    ...noticePolicy,
-                    providers: options.model.providers ?? [],
-                    ...(options.model.state === undefined ? {} : { state: options.model.state }),
-                  },
-                ),
-                planHooksSurface(target.hookEntries, {
-                  artifactEpoch: options.projectContext.revision,
-                  ...(noticeDelivery === undefined ? {} : { noticeDelivery }),
-                  ...noticePolicy,
-                  outDir: target.root,
-                  plugin,
-                  providers: options.model.providers ?? [],
-                  ...(options.model.state === undefined ? {} : { state: options.model.state }),
-                }),
-                await planMcpEntriesSurface(options.model.mcpServers, {
-                  apps: targetMcpApps,
-                  artifactEpoch: options.projectContext.revision,
-                  eventHooks: target.hookEntries
-                    .filter((entry) => entry.hook.eventRoute !== undefined)
-                    .map((entry) => entry.hook),
+    const selection = { hosts: staged.targets, target: staged.name };
+    let rootMcpApps: readonly CompiledMcpApp[] = Object.freeze([]);
+    for (const stage of planTargetStages(staged)) {
+      switch (stage.kind) {
+        case 'mcp-apps':
+          // The optional browser stage, always first: the MCP entries embed
+          // its HTML, and its Rsbuild pass asserts the root holds nothing but
+          // that HTML.
+          rootMcpApps = await compileMcpApps(options.model.mcpApps ?? [], {
+            cwd: options.projectRoot,
+            meta,
+            outDir: staged.root,
+            ...selection,
+            ...tools,
+          });
+          compiledMcpApps.push(...rootMcpApps);
+          break;
+        case 'node-surfaces': {
+          await emitPlanEntries({ entries: staged.entries, root: staged.root });
+          // The generated entries serve every projected host, so they wire
+          // only the cross-request routes all of them advertise.
+          const noticeDelivery = staged.contracts.noticeDelivery;
+          // Every agent-host surface of the root lowers through one Rslib
+          // instance; each surface keeps its own evidence and result.
+          const [cliBins, scripts, hooks, mcpEntries] = await compileRslibSurfaces(
+            { cwd: options.projectRoot, meta, outputRoot: staged.root, ...tools },
+            [
+              staged.cliBin
+                ? planCliBinsSurface(options.model, { outDir: staged.root, target: staged.name })
+                : settledRslibSurface<readonly CompiledCliBin[]>(Object.freeze([])),
+              await planScriptsSurface(
+                options.model.scripts.filter((script) => script.targets.some((target) => staged.targets.includes(target))),
+                {
+                  cwd: options.projectRoot,
                   layouts: options.model.layouts ?? [],
-                  ...(noticeDelivery === undefined ? {} : { noticeDelivery }),
+                  outDir: staged.root,
                   ...noticePolicy,
-                  outDir: target.root,
-                  plugin,
                   providers: options.model.providers ?? [],
                   ...(options.model.state === undefined ? {} : { state: options.model.state }),
-                  target: target.name,
-                }),
-              ],
-            );
-            compiledCliBins.push(...cliBins);
-            compiledEntries.push(...scripts);
-            compiledHooks.push(...hooks);
-            compiledMcpEntries.push(...mcpEntries);
-            break;
-          }
-          default: {
-            const exhaustive: never = stage;
-            throw new Error(`Unknown target compile stage ${JSON.stringify(exhaustive)}.`);
-          }
+                },
+              ),
+              planHooksSurface(staged.hookEntries, {
+                artifactEpoch: options.projectContext.revision,
+                ...(noticeDelivery === undefined ? {} : { noticeDelivery }),
+                ...noticePolicy,
+                outDir: staged.root,
+                plugin,
+                providers: options.model.providers ?? [],
+                ...(options.model.state === undefined ? {} : { state: options.model.state }),
+              }),
+              await planMcpEntriesSurface(options.model.mcpServers, {
+                apps: rootMcpApps,
+                artifactEpoch: options.projectContext.revision,
+                eventHooks: staged.hookEntries
+                  .filter((entry) => entry.hook.eventRoute !== undefined)
+                  .map((entry) => entry.hook),
+                layouts: options.model.layouts ?? [],
+                ...(noticeDelivery === undefined ? {} : { noticeDelivery }),
+                ...noticePolicy,
+                outDir: staged.root,
+                plugin,
+                providers: options.model.providers ?? [],
+                ...(options.model.state === undefined ? {} : { state: options.model.state }),
+                ...selection,
+              }),
+            ],
+          );
+          compiledCliBins.push(...cliBins);
+          compiledEntries.push(...scripts);
+          compiledHooks.push(...hooks);
+          compiledMcpEntries.push(...mcpEntries);
+          break;
+        }
+        default: {
+          const exhaustive: never = stage;
+          throw new Error(`Unknown target compile stage ${JSON.stringify(exhaustive)}.`);
         }
       }
     }
@@ -478,16 +474,19 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
     await writeHookIndex({
       artifactRoot: stageRoot,
       // Host-document wrapper variants stay out of the canonical index: it
-      // keeps exactly one entry per hook and target, pointing at the
-      // canonical wrapper their target contract simulates.
-      hooks: compiledHooks.filter((entry) => entry.indexed !== false).map((entry) => ({
-        event: entry.event,
-        id: entry.id,
-        name: entry.name,
-        path: relative(stageRoot, entry.output).replaceAll('\\', '/'),
-        target: entry.target,
-        ...(entry.timeout === undefined ? {} : { timeout: entry.timeout }),
-      })),
+      // keeps exactly one entry per hook and host projection, pointing at the
+      // canonical wrapper that host's contract simulates. One wrapper shared
+      // by several hosts is listed once per host it serves (#555).
+      hooks: compiledHooks
+        .filter((entry) => entry.indexed !== false)
+        .flatMap((entry) => (entry.hosts ?? [entry.target]).map((target) => ({
+          event: entry.event,
+          id: entry.id,
+          name: entry.name,
+          path: relative(stageRoot, entry.output).replaceAll('\\', '/'),
+          target,
+          ...(entry.timeout === undefined ? {} : { timeout: entry.timeout }),
+        }))),
     });
     const outputProvenance = createOutputProvenance({
       artifactRoot: stageRoot,
@@ -499,7 +498,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
         compiledMcpApps,
         compiledMcpEntries,
         model: options.model,
-        targets: stagedTargets,
+        staged,
       }),
       projectRoot: options.projectRoot,
     });
@@ -532,7 +531,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
         model: options.model,
         projectContext: options.projectContext,
         registry: options.registry,
-        targets: stagedTargets,
+        targets: staged.targets,
       }),
     });
     const diagnostics = await validateArtifact({ artifactRoot: stageRoot, bundleSyntaxCheck, registry: options.registry });

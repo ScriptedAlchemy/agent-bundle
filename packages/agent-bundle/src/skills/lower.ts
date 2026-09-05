@@ -183,6 +183,22 @@ const lowerBody = (
   return { body, diagnostics, tokenLowering };
 };
 
+/**
+ * The Codex `agents/openai.yaml` sidecar a skill's `codex` extension declares,
+ * with its schema diagnostics. A file of its own beside `SKILL.md` that no
+ * other host reads, so a root shared with other hosts (#555) still emits it.
+ */
+export const codexSkillSidecars = (
+  ir: SkillIr,
+): { readonly diagnostics: readonly Diagnostic[]; readonly sidecars: readonly SkillSidecarRef[] } => {
+  if (ir.passThrough || ir.extensions.codex === undefined) return { diagnostics: [], sidecars: [] };
+  const sidecar = codexSidecarDocument(ir.extensions.codex);
+  return {
+    diagnostics: schemaIssues('codex', validateCodexOpenaiYaml(sidecar), ir.source),
+    sidecars: [{ content: stringifyYaml(sidecar), relativePath: 'agents/openai.yaml' }],
+  };
+};
+
 export const lowerSkillIr = (ir: SkillIr, host: SkillHost): SkillHostDocument => {
   if (ir.passThrough) {
     return deepFreeze({
@@ -208,17 +224,13 @@ export const lowerSkillIr = (ir: SkillIr, host: SkillHost): SkillHostDocument =>
     case 'cursor':
       frontmatter = cursorFrontmatter(ir.portable, ir.extensions.cursor);
       break;
-    case 'codex':
+    case 'codex': {
       frontmatter = portableFrontmatter(ir.portable);
-      if (ir.extensions.codex !== undefined) {
-        const sidecar = codexSidecarDocument(ir.extensions.codex);
-        diagnostics.push(...schemaIssues(host, validateCodexOpenaiYaml(sidecar), ir.source));
-        sidecars.push({
-          content: stringifyYaml(sidecar),
-          relativePath: 'agents/openai.yaml',
-        });
-      }
+      const codex = codexSkillSidecars(ir);
+      diagnostics.push(...codex.diagnostics);
+      sidecars.push(...codex.sidecars);
       break;
+    }
     case 'portable':
       frontmatter = portableFrontmatter(ir.portable);
       break;

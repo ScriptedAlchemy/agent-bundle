@@ -1,4 +1,4 @@
-import { access, cp, mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, cp, mkdtemp, mkdir, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -53,6 +53,15 @@ const epochFor = (
   projectRevision: 'project-revision',
   targetDigests: Object.fromEntries(targets.map((target) => [target, `${target}-digest`])),
 });
+
+/**
+ * Stages one built plugin root as an epoch the way the artifact service does
+ * (#555): the epoch is the root itself, so every top-level entry moves over.
+ */
+const copyArtifactIntoStaging = async (artifact: string, stagingRoot: string): Promise<void> => {
+  await Promise.all((await readdir(artifact)).map((entry) =>
+    cp(join(artifact, entry), join(stagingRoot, entry), { recursive: true })));
+};
 
 const textFrom = (value: { readonly content: readonly { readonly type: string }[] }): string => {
   const content: unknown = value.content[0];
@@ -138,11 +147,7 @@ const publishFixtureEpoch = async (
     epoch: epochFor(root, id, undefined, targets),
     targets,
   });
-  await Promise.all([
-    cp(join(artifact, 'agent-bundle.hooks.json'), join(staging.root, 'agent-bundle.hooks.json')),
-    cp(join(artifact, 'agent-bundle.manifest.json'), join(staging.root, 'agent-bundle.manifest.json')),
-    ...targets.map((target) => cp(join(artifact, target), join(staging.root, target), { recursive: true })),
-  ]);
+  await copyArtifactIntoStaging(artifact, staging.root);
   await staging.publish(async () => undefined);
   const epochRoot = join(root, '.agent-bundle', 'epochs', id);
   await expect(validateArtifact({
@@ -178,11 +183,7 @@ const publishRemoteEpoch = async (root: string, id: string): Promise<EpochStore>
 
   const store = new EpochStore({ projectRoot: root });
   const staging = await store.createStagingEpoch({ epoch: epochFor(root, id), targets: ['portable'] });
-  await Promise.all([
-    cp(join(artifact, 'agent-bundle.hooks.json'), join(staging.root, 'agent-bundle.hooks.json')),
-    cp(join(artifact, 'agent-bundle.manifest.json'), join(staging.root, 'agent-bundle.manifest.json')),
-    cp(join(artifact, 'portable'), join(staging.root, 'portable'), { recursive: true }),
-  ]);
+  await copyArtifactIntoStaging(artifact, staging.root);
   await staging.publish(async () => undefined);
   return store;
 };
@@ -198,11 +199,7 @@ const publishEpochCopy = async (
     epoch: epochFor(root, epochId, createdAt),
     targets: ['portable'],
   });
-  await Promise.all([
-    cp(join(sourceRoot, 'agent-bundle.hooks.json'), join(staging.root, 'agent-bundle.hooks.json')),
-    cp(join(sourceRoot, 'agent-bundle.manifest.json'), join(staging.root, 'agent-bundle.manifest.json')),
-    cp(join(sourceRoot, 'portable'), join(staging.root, 'portable'), { recursive: true }),
-  ]);
+  await copyArtifactIntoStaging(sourceRoot, staging.root);
   await staging.publish(async () => undefined);
 };
 
@@ -240,7 +237,7 @@ it('keeps one generated server and plugin-data directory bound to the selected e
       readonly pid: number;
       readonly root: string;
     };
-    expect(firstState.root).toBe(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'portable'));
+    expect(firstState.root).toBe(join(root, '.agent-bundle', 'epochs', 'epoch-1'));
     expect(firstState.inherited).toBe('resolved-on-open');
     await expect(access(firstState.data)).resolves.toBeUndefined();
     expect(session.events().some((event) => event.type === 'stderr' && event.text === 'fixture stderr\n')).toBe(true);
@@ -402,7 +399,7 @@ it('uses the configured project root as the default workspace from a decoy cwd',
       readonly cwd: string;
       readonly workspace: string;
     };
-    const targetRoot = join(root, '.agent-bundle', 'epochs', 'epoch-workspace', 'claude');
+    const targetRoot = join(root, '.agent-bundle', 'epochs', 'epoch-workspace');
     expect(first).toMatchObject({ cwd: targetRoot, workspace: root });
 
     await session.restart();
@@ -438,11 +435,11 @@ it('pins the selected epoch until the persistent session closes', async () => {
       );
     }
     await epochStore.cleanup();
-    await expect(access(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'portable', 'mcp.json'))).resolves.toBeUndefined();
+    await expect(access(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'mcp.json'))).resolves.toBeUndefined();
 
     await session.close();
     await epochStore.cleanup();
-    await expect(access(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'portable', 'mcp.json'))).rejects.toMatchObject({
+    await expect(access(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'mcp.json'))).rejects.toMatchObject({
       code: 'ENOENT',
     });
     await service.close();
@@ -511,9 +508,9 @@ it('executes only the acquired epoch reference root when service and store roots
     const result = await session.callTool({ arguments: {}, name: 'inspect' });
     const state = JSON.parse(textFrom(result)) as { readonly root: string };
 
-    expect(state.root).toBe(join(storeRoot, '.agent-bundle', 'epochs', 'epoch-1', 'portable'));
+    expect(state.root).toBe(join(storeRoot, '.agent-bundle', 'epochs', 'epoch-1'));
     await session.close();
-    await expect(access(join(serviceRoot, '.agent-bundle', 'epochs', 'epoch-1', 'portable', 'mcp.json'))).resolves.toBeUndefined();
+    await expect(access(join(serviceRoot, '.agent-bundle', 'epochs', 'epoch-1', 'mcp.json'))).resolves.toBeUndefined();
     await service.close();
   } finally {
     await Promise.all([
@@ -582,7 +579,7 @@ it('closes an in-flight open instead of returning an untracked epoch-pinning ses
       );
     }
     await epochStore.cleanup();
-    await expect(access(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'portable', 'mcp.json'))).rejects.toMatchObject({
+    await expect(access(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'mcp.json'))).rejects.toMatchObject({
       code: 'ENOENT',
     });
   } finally {
@@ -652,7 +649,7 @@ it('retains a rejected cleanup from an opening drained during service close', as
       );
     }
     await epochStore.cleanup();
-    await expect(access(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'portable', 'mcp.json'))).rejects.toMatchObject({
+    await expect(access(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'mcp.json'))).rejects.toMatchObject({
       code: 'ENOENT',
     });
   } finally {

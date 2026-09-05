@@ -25,11 +25,12 @@ source tree:
 npx agent-bundle build --root .
 ```
 
-With `targets: ['plugin']`, that single command emits one multi-host bundle at `artifact/plugin/`:
-`.claude-plugin/`, `.codex-plugin/`, and `.cursor-plugin/` manifests over shared `skills/`,
-`hooks/`, `mcp/`, and `scripts/` directories. The bundle's generated `AGENTS.md` explains how to
-install it into each host. Per-host layouts are available as the `claude`, `codex`, `cursor`,
-and `portable` targets.
+With `targets: ['claude', 'codex', 'cursor']`, that single command emits one plugin root at
+`artifact/`: `.claude-plugin/`, `.codex-plugin/`, and `.cursor-plugin/` manifests over shared
+`skills/`, `hooks/`, `mcp/`, and `scripts/` directories, a generated `AGENTS.md` explaining how
+each host reads the root, and an `INSTALL.md` with a section per host. The targets are `claude`,
+`codex`, `cursor`, and `portable` (the Agent Plugins open standard): select one and the root is
+that host's layout, select several and they compose into the same root.
 
 ## What the config owns
 
@@ -40,7 +41,7 @@ import { defineConfig } from 'agent-bundle/config';
 
 export default defineConfig({
   plugin: { name: 'my-plugin', description: 'What it does.' }, // [!code highlight]
-  targets: ['plugin'],
+  targets: ['claude', 'codex', 'cursor'],
   skills: ['src/skills/*'],
   hooks: { sessionStart: { handler: './src/session-start.ts' } },
   mcp: { servers: { tools: { entry: './src/mcp.ts' } } },

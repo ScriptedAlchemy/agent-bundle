@@ -284,8 +284,7 @@ const renderInChild = (
 };
 
 const expandedTargets = (targets: readonly string[]): readonly string[] => Object.freeze(
-  [...new Set(targets.flatMap((target) => target === 'plugin' ? ['claude', 'codex'] : [target]))]
-    .sort((left, right) => left.localeCompare(right)),
+  [...new Set(targets)].sort((left, right) => left.localeCompare(right)),
 );
 
 const preparedManifestDigest = (prepared: LifecyclePreparedProject): string =>

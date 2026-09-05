@@ -466,15 +466,21 @@ const validateBundleFiles = async (
   }
 };
 
+/**
+ * The composite plugin root is canonical (#555): the supplied directory holds
+ * the host's manifest directly. Nested `<root>/<host>` and `<root>/plugin`
+ * directories are read only as the layout of artifacts built before #555.
+ */
 export const resolveBundleRoot = async (from: string, host: DoctorHost): Promise<string> => {
   const root = resolve(from);
   const manifest = manifestPath(host);
   if (await exists(join(root, manifest))) return root;
-  const targetRoot = join(root, host);
-  if (await exists(join(targetRoot, manifest))) return targetRoot;
+  for (const legacy of [join(root, host), join(root, 'plugin')]) {
+    if (await exists(join(legacy, manifest))) return legacy;
+  }
   throw new Error(
-    `No ${host} bundle manifest was found in ${JSON.stringify(root)} or its ` +
-    `${JSON.stringify(host)} target directory.`,
+    `No ${host} bundle manifest was found in ${JSON.stringify(root)} (nor, for an artifact built before one composite root, in its ` +
+    `${JSON.stringify(host)} or "plugin" directory).`,
   );
 };
 

@@ -19,5 +19,5 @@ export default {
   },
   skills: ['src/skills/probe'],
   // `plugin` is the unified bundle whose Cursor manifest names `hooks/hooks-cursor.json` (#438).
-  targets: ['claude', 'codex', 'cursor', 'plugin'],
+  targets: ['claude', 'codex', 'cursor'],
 };

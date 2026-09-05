@@ -30,10 +30,14 @@ export const artifactScriptCatalog = (
 ): readonly ArtifactScriptCatalogEntry[] => {
   const entries: ArtifactScriptCatalogEntry[] = [];
   const identities = new Set<string>();
+  // Every target reads the same plugin root (#555): the shared `scripts/`
+  // directory is catalogued once per projected target.
+  const targets = manifest.targets.map((target) => target.name).filter((name) => registry.has(name));
+  const scripts = targets.length === 0 ? undefined : registry.root(targets).artifactLayout.scripts;
   for (const target of manifest.targets) {
-    const layout = registry.artifactLayout(target.name).scripts;
+    const layout = targets.includes(target.name) ? scripts : undefined;
     if (layout === undefined) continue;
-    const prefix = `${target.name}/${layout.directory}/`;
+    const prefix = `${layout.directory}/`;
     for (const manifestFile of manifest.files) {
       if (!manifestFile.path.startsWith(prefix)) continue;
       const file = manifestFile.path.slice(prefix.length);

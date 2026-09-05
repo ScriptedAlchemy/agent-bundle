@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { isAbsolute, resolve } from 'node:path';
 
 import { createDefaultRegistry, TargetRegistry } from '../../adapters/registry.ts';
+import { hostMcpRuntime, hostRootDirectory } from '../../build/artifact-root.ts';
 import { validateArtifact } from '../../build/validate-artifact.ts';
 import { DiagnosticError } from '../../core/diagnostics.ts';
 import { joinArtifact } from '../../core/paths.ts';
@@ -312,7 +313,7 @@ export class McpSessionService {
         });
       const program = Effect.gen({ self: this }, function* (this: McpSessionService) {
         const target = options.target;
-        const runtime = yield* liftTry(() => this.#runtime(target));
+        yield* liftTry(() => this.#assertMcpTarget(target));
         if (options.serverName.trim().length === 0) {
           return yield* Effect.fail(McpSessionError.invalidServerName());
         }
@@ -328,8 +329,21 @@ export class McpSessionService {
         }));
         const errors = diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
         if (errors.length > 0) return yield* Effect.fail(new DiagnosticError(errors));
-        const targetRoot = yield* liftTry(() => joinArtifact(epochRoot, target));
-        const server = yield* liftPromise(() => this.#server(targetRoot, target, runtime, options.serverName));
+        // Every target reads the epoch root itself (#555); the runtime contract
+        // and the host's plugin root come from the epoch's root contracts.
+        const rootContracts = yield* liftTry(() => {
+          const known = Object.keys(epochReference.epoch.targetDigests).filter((name) => this.#registry.has(name));
+          return known.length === 0 ? undefined : this.#registry.root(known);
+        });
+        const runtime = yield* liftTry(() => {
+          const contract = hostMcpRuntime(rootContracts, this.#registry, target);
+          if (contract === undefined) throw new Error(`Unsupported MCP target ${JSON.stringify(target)}.`);
+          return contract;
+        });
+        // The host's plugin root (`${PLUGIN_ROOT}`, the default cwd); the MCP
+        // document path is root-relative, so it is read from the epoch root.
+        const targetRoot = yield* liftTry(() => hostRootDirectory(epochRoot, rootContracts, target));
+        const server = yield* liftPromise(() => this.#server(epochRoot, target, runtime, options.serverName));
         const fs = yield* FileSystem.FileSystem;
         const pluginDataScope = yield* Scope.make();
         const releasePluginData = (): Promise<void> => runPromise(Scope.close(pluginDataScope, Exit.void));
@@ -486,22 +500,19 @@ export class McpSessionService {
     return entry;
   }
 
-  #runtime(name: string): TargetMcpRuntimeContract {
-    if (!this.#registry.has(name) || !this.#registry.supports(name, 'mcp')) {
+  #assertMcpTarget(name: string): void {
+    if (!this.#registry.has(name) || !this.#registry.supports(name, 'mcp') || this.#registry.mcpRuntime(name) === undefined) {
       throw new Error(`Unsupported MCP target ${JSON.stringify(name)}.`);
     }
-    const runtime = this.#registry.mcpRuntime(name);
-    if (runtime === undefined) throw new Error(`Unsupported MCP target ${JSON.stringify(name)}.`);
-    return runtime;
   }
 
   async #server(
-    targetRoot: string,
+    epochRoot: string,
     target: string,
     runtime: TargetMcpRuntimeContract,
     name: string,
   ): Promise<ModernMcpServer> {
-    const path = joinArtifact(targetRoot, runtime.manifestPath);
+    const path = joinArtifact(epochRoot, runtime.manifestPath);
     let document: unknown;
     try {
       document = parseJsonWithoutDuplicateKeys(await this.#run(readFileString(path)));

@@ -147,7 +147,9 @@ it('projects subagent-stop continuation only through supported host contracts', 
   });
   expect(() => projectEventDocument(feedback.document, 'agent/stop', 'codex', 'SubagentStop'))
     .toThrow(/not supported by the Codex SubagentStop output schema/u);
-  expect(() => projectEventDocument(feedback.document, 'agent/stop', 'plugin', 'SubagentStop'))
+  // A composite root's identity (the hosts joined with '+', #555) is never a
+  // projection target: the wrapper resolves the calling host first.
+  expect(() => projectEventDocument(feedback.document, 'agent/stop', 'claude+codex', 'SubagentStop'))
     .toThrow(/must resolve the invoking host/u);
 });
 

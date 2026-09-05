@@ -42,14 +42,29 @@ const modelFor = (target: string): NormalizedPlugin => ({
   }],
 });
 
+/**
+ * The install surface of a root projecting `target`: one host's own plan, or
+ * the composite root of several hosts (#555) — the retired `plugin` target's
+ * successor is `'claude+codex+cursor'`.
+ */
 const writesFor = (target: string): ReadonlyMap<string, string> => {
-  const plan = createDefaultRegistry().get(target).plan(modelFor(target));
+  const hosts = target.split('+');
+  const registry = createDefaultRegistry();
+  const model = hosts.length === 1 ? modelFor(target) : {
+    ...modelFor(hosts[0]!),
+    targets: hosts.map((name) => ({
+      id: `target:${name}`,
+      name,
+      provenance: { kind: 'config' as const, sourcePath: '/project/agent-bundle.config.ts' },
+    })),
+  };
+  const plan = registry.root(hosts).adapter.plan(model);
   return new Map(plan.entries
     .filter((entry): entry is TargetArtifactWrite => entry.kind === 'write')
     .map((entry) => [entry.relativePath, entry.content]));
 };
 
-it.each(['claude', 'codex', 'cursor', 'portable', 'plugin'])(
+it.each(['claude', 'codex', 'cursor', 'portable', 'claude+codex+cursor'])(
   'emits a concrete INSTALL.md for the %s target',
   (target) => {
     const install = writesFor(target).get('INSTALL.md');
@@ -86,7 +101,7 @@ it('emits always-installable Claude and Codex local marketplaces with exact comm
 });
 
 it('emits a standalone safe-copy installer only for Cursor-compatible fallback profiles', () => {
-  for (const target of ['cursor', 'portable', 'plugin']) {
+  for (const target of ['cursor', 'portable', 'claude+codex+cursor']) {
     const writes = writesFor(target);
     expect(writes.get('INSTALL.md')).toContain('node ./install.mjs');
     expect(writes.get('install.mjs')).toContain("join(cursorRoot, 'plugins', 'local')");
@@ -360,8 +375,8 @@ it('emitted install.mjs expands Agent Plugins placeholders for the Cursor copy o
   }
 }, 60_000);
 
-it('documents every real host path from the composite profile', () => {
-  const install = writesFor('plugin').get('INSTALL.md');
+it('documents every real host path from the composite root', () => {
+  const install = writesFor('claude+codex+cursor').get('INSTALL.md');
 
   expect(install).toContain('claude plugin install install-fixture@install-fixture-marketplace --scope user');
   expect(install).toContain('codex plugin add install-fixture@install-fixture-marketplace');
@@ -381,7 +396,7 @@ it('documents the same-version reinstall recipe per host, including Claude\'s ve
   expect(codex).toContain('codex plugin remove install-fixture@install-fixture-marketplace');
   expect(codex).toContain('--replace');
 
-  for (const target of ['cursor', 'portable', 'plugin']) {
+  for (const target of ['cursor', 'portable', 'claude+codex+cursor']) {
     const install = writesFor(target).get('INSTALL.md') ?? '';
     expect(install).toContain(installReceiptFile);
     expect(install).toContain('--replace');

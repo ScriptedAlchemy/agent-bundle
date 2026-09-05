@@ -22,10 +22,11 @@ agent-bundle 把这件事反转过来。宿主专属布局是编译器的职责�
 npx agent-bundle build --root .
 ```
 
-当 `targets: ['plugin']` 时，这一条命令会在 `artifact/plugin/` 生成一份多宿主捆绑包：`.claude-plugin/`、
-`.codex-plugin/` 与 `.cursor-plugin/` 三份清单，共享同一套 `skills/`、`hooks/`、`mcp/` 与 `scripts/`
-目录。捆绑包中生成的 `AGENTS.md` 会说明如何把它安装到各个宿主。单宿主布局则由 `claude`、`codex`、
-`cursor` 与 `portable` 这几个 target 提供。
+当 `targets: ['claude', 'codex', 'cursor']` 时，这一条命令会在 `artifact/` 生成一个插件根目录：
+`.claude-plugin/`、`.codex-plugin/` 与 `.cursor-plugin/` 三份清单位于共享的 `skills/`、`hooks/`、`mcp/`
+与 `scripts/` 目录之上，外加一份说明各宿主如何读取该根目录的生成 `AGENTS.md`，以及按宿主分节的 `INSTALL.md`。
+可选的 target 是 `claude`、`codex`、`cursor` 与 `portable`（Agent Plugins 开放标准）：只选一个，根目录就是
+该宿主的布局；选多个，它们就组合进同一个根目录。
 
 ## 配置负责什么
 
@@ -36,7 +37,7 @@ import { defineConfig } from 'agent-bundle/config';
 
 export default defineConfig({
   plugin: { name: 'my-plugin', description: 'What it does.' }, // [!code highlight]
-  targets: ['plugin'],
+  targets: ['claude', 'codex', 'cursor'],
   skills: ['src/skills/*'],
   hooks: { sessionStart: { handler: './src/session-start.ts' } },
   mcp: { servers: { tools: { entry: './src/mcp.ts' } } },

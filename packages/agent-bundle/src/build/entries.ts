@@ -102,6 +102,8 @@ interface PlannedScriptEntry extends CompiledEntry {
 
 export interface CompiledHookEntry extends CompiledEntry {
   readonly event: TargetHookEntry['event'];
+  /** Every host projection this one wrapper serves; absent means exactly `target` (#555). */
+  readonly hosts?: readonly string[];
   readonly id: string;
   /** False when this wrapper is a host-document variant excluded from the canonical hook index. */
   readonly indexed?: false;
@@ -111,11 +113,24 @@ export interface CompiledHookEntry extends CompiledEntry {
 }
 
 export interface CompiledMcpEntry extends CompiledEntry {
+  /** The host projections this entry serves; absent means exactly `target` (#555). */
+  readonly hosts?: readonly string[];
   readonly id: string;
   readonly workerOutput?: string;
   readonly workerSourceInputs?: readonly string[];
+  /** The artifact identity (a host, or the composite name of several hosts). */
   readonly target: string;
 }
+
+/** Selection of the declarations one plugin root compiles: its identity plus the hosts it projects. */
+export interface CompiledRootSelection {
+  /** The hosts whose declarations are compiled; defaults to `[target]`. */
+  readonly hosts?: readonly string[];
+  readonly target: string;
+}
+
+export const selectsRoot = (targets: readonly string[], selection: CompiledRootSelection): boolean =>
+  (selection.hosts ?? [selection.target]).some((host) => targets.includes(host));
 
 const outputName = (script: NormalizedScript): string =>
   script.mode === 'bundle' ? `${script.name}.mjs` : `${script.name}${extname(script.source).toLowerCase()}`;
@@ -285,7 +300,8 @@ export const planScriptsSurface = async (
   };
 };
 
-const localMcpOutputName = (server: NormalizedMcpServer): string => {
+/** The compiled `mcp/<name>.mjs` file name a local MCP server's alias names. */
+export const localMcpOutputName = (server: NormalizedMcpServer): string => {
   const output = server.args?.[0];
   const match = typeof output === 'string'
     ? mcpEntryAliasPattern.exec(output)
@@ -298,11 +314,11 @@ const localMcpOutputName = (server: NormalizedMcpServer): string => {
 
 export const planCompiledMcpEntries = (
   servers: readonly NormalizedMcpServer[],
-  options: { readonly outDir: string; readonly target: string },
+  options: { readonly outDir: string } & CompiledRootSelection,
 ): readonly CompiledMcpEntry[] => {
   const names = new Set<string>();
   return Object.freeze(servers
-    .filter((server) => server.source !== undefined && server.targets.includes(options.target))
+    .filter((server) => server.source !== undefined && selectsRoot(server.targets, options))
     .map((server) => {
       const outputName = localMcpOutputName(server);
       const name = outputName.slice(0, -extname(outputName).length);
@@ -316,6 +332,7 @@ export const planCompiledMcpEntries = (
         ...(server.generatedRoutes ?? []).map((route) => route.source),
       ])]);
       return Object.freeze({
+        ...(options.hosts === undefined ? {} : { hosts: options.hosts }),
         id: server.id,
         name,
         output: resolveArtifactDestination(resolve(options.outDir, 'mcp'), outputName),
@@ -351,8 +368,7 @@ export const planMcpEntriesSurface = async (
     readonly providers?: readonly CompiledProvider[];
     readonly noticeRetention?: NormalizedNoticeRetentionPolicy;
     readonly state?: NormalizedStateDefinition;
-    readonly target: string;
-  },
+  } & CompiledRootSelection,
 ): Promise<RslibSurfacePlan<readonly CompiledMcpEntry[]>> => {
   const compiled = planCompiledMcpEntries(servers, options);
   const eventHostId = compiled.find((entry) =>
@@ -389,6 +405,7 @@ export const planMcpEntriesSurface = async (
         ...(options.noticeRetention === undefined ? {} : { noticeRetention: options.noticeRetention }),
         ...(options.state === undefined ? {} : { state: options.state }),
         target: options.target,
+        ...(options.hosts === undefined ? {} : { eventTargets: options.hosts }),
         workerFile: `${entry.name}-flight.mjs`,
       });
   });
@@ -526,6 +543,7 @@ export const planCompiledHooks = (
     .flatMap((entry) => [entry.hook.provenance.sourcePath, entry.hook.source]))]);
   return deepFreeze(entries.map((entry, index) => ({
     event: entry.event,
+    ...(entry.hosts === undefined ? {} : { hosts: entry.hosts }),
     id: entry.hook.id,
     ...(entry.indexed === false ? { indexed: false as const } : {}),
     name: entry.hook.name,

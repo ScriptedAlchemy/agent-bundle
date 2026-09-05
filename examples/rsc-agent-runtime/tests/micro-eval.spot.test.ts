@@ -32,7 +32,7 @@ test('micro-eval spot-check: built hook and MCP server share one RSC-rendered ru
   });
 
   const runHookOnce = async (): Promise<void> => {
-    const hook = spawn(process.execPath, [join(process.cwd(), 'dist/plugins/claude/hooks/event-route-tool-after.mjs')], {
+    const hook = spawn(process.execPath, [join(process.cwd(), 'dist/plugins/hooks/event-route-tool-after.mjs')], {
       env: { ...process.env, AGENT_RUNTIME_STATE_FILE: stateFile },
       stdio: ['pipe', 'pipe', 'pipe'],
     });

@@ -248,32 +248,32 @@ const runtimeFiles = (): readonly FixtureFile[] => [
     event: 'beforeTool',
     id: 'hook-1',
     name: 'Check command',
-    path: 'synthetic/hooks/run.mjs',
+    path: 'hooks/run.mjs',
     target: fixtureTarget,
   }]),
   {
     contents: '{"mcpServers":{"runner":{"args":["./mcp/runner.mjs"],"command":"node","env":{"SECRET":"do-not-expose"},"type":"stdio"}}}\n',
     kind: 'generated',
-    path: 'synthetic/mcp.json',
+    path: 'mcp.json',
   },
-  { contents: 'export const runner = true;\n', kind: 'bundle', mode: 0o755, path: 'synthetic/mcp/runner.mjs', sourceInputs: [runnerSourcePath] },
-  { contents: '{}\n', kind: 'generated', path: 'synthetic/hooks/hooks.json' },
-  { contents: 'export const check = true;\n', kind: 'bundle', mode: 0o755, path: 'synthetic/hooks/run.mjs', sourceInputs: [runnerSourcePath] },
-  { contents: 'export const alpha = true;\n', kind: 'bundle', path: 'synthetic/scripts/alpha.mjs' },
-  { contents: 'export const zeta = true;\n', kind: 'copy', path: 'synthetic/scripts/zeta.mjs' },
+  { contents: 'export const runner = true;\n', kind: 'bundle', mode: 0o755, path: 'mcp/runner.mjs', sourceInputs: [runnerSourcePath] },
+  { contents: '{}\n', kind: 'generated', path: 'hooks/hooks.json' },
+  { contents: 'export const check = true;\n', kind: 'bundle', mode: 0o755, path: 'hooks/run.mjs', sourceInputs: [runnerSourcePath] },
+  { contents: 'export const alpha = true;\n', kind: 'bundle', path: 'scripts/alpha.mjs' },
+  { contents: 'export const zeta = true;\n', kind: 'copy', path: 'scripts/zeta.mjs' },
 ];
 
 const diffFiles = (variant: 'base' | 'candidate'): readonly FixtureFile[] => {
   const candidate = variant === 'candidate';
   return [
-    ...(candidate ? [{ contents: 'export const added = true;\n', kind: 'generated' as const, path: 'synthetic/scripts/added.mjs' }] : []),
-    { contents: candidate ? 'b' : 'a', kind: 'generated', path: 'synthetic/scripts/digest.mjs' },
-    { contents: candidate ? 'longer' : 'short', kind: 'generated', path: 'synthetic/scripts/bytes.mjs' },
-    { contents: 'export const mode = true;\n', kind: 'generated', mode: candidate ? 0o744 : 0o755, path: 'synthetic/scripts/mode.mjs' },
-    { contents: 'export const kind = true;\n', kind: candidate ? 'copy' : 'generated', path: 'synthetic/scripts/kind.mjs' },
-    { contents: 'export const source = true;\n', kind: 'generated', path: 'synthetic/scripts/source.mjs', sourceInputs: candidate ? [runnerSourcePath] : [configPath] },
-    { contents: 'export const same = true;\n', kind: 'generated', path: 'synthetic/scripts/unchanged.mjs' },
-    ...(candidate ? [] : [{ contents: 'export const removed = true;\n', kind: 'generated' as const, path: 'synthetic/scripts/removed.mjs' }]),
+    ...(candidate ? [{ contents: 'export const added = true;\n', kind: 'generated' as const, path: 'scripts/added.mjs' }] : []),
+    { contents: candidate ? 'b' : 'a', kind: 'generated', path: 'scripts/digest.mjs' },
+    { contents: candidate ? 'longer' : 'short', kind: 'generated', path: 'scripts/bytes.mjs' },
+    { contents: 'export const mode = true;\n', kind: 'generated', mode: candidate ? 0o744 : 0o755, path: 'scripts/mode.mjs' },
+    { contents: 'export const kind = true;\n', kind: candidate ? 'copy' : 'generated', path: 'scripts/kind.mjs' },
+    { contents: 'export const source = true;\n', kind: 'generated', path: 'scripts/source.mjs', sourceInputs: candidate ? [runnerSourcePath] : [configPath] },
+    { contents: 'export const same = true;\n', kind: 'generated', path: 'scripts/unchanged.mjs' },
+    ...(candidate ? [] : [{ contents: 'export const removed = true;\n', kind: 'generated' as const, path: 'scripts/removed.mjs' }]),
   ];
 };
 
@@ -299,7 +299,7 @@ class TrackingEpochStore extends EpochStore {
 class ReadFailingEpochStore extends TrackingEpochStore {
   override async acquireEpochReference(epochId: string) {
     const reference = await super.acquireEpochReference(epochId);
-    await rm(join(reference.root, 'synthetic', 'mcp', 'runner.mjs'));
+    await rm(join(reference.root, 'mcp', 'runner.mjs'));
     return reference;
   }
 }
@@ -343,37 +343,37 @@ it('inspects one validated epoch as sorted, source-free artifact facts', async (
     });
     expect(inspection.files.map((file) => file.path)).toEqual([
       'agent-bundle.hooks.json',
-      'synthetic/hooks/hooks.json',
-      'synthetic/hooks/run.mjs',
-      'synthetic/mcp.json',
-      'synthetic/mcp/runner.mjs',
-      'synthetic/scripts/alpha.mjs',
-      'synthetic/scripts/zeta.mjs',
+      'hooks/hooks.json',
+      'hooks/run.mjs',
+      'mcp.json',
+      'mcp/runner.mjs',
+      'scripts/alpha.mjs',
+      'scripts/zeta.mjs',
     ]);
     expect(inspection.targets).toEqual([
       expect.objectContaining({ name: fixtureTarget, tree: expect.objectContaining({ path: fixtureTarget }) }),
     ]);
     expect(inspection.provenance).toContainEqual({
-      outputPath: 'synthetic/mcp/runner.mjs',
+      outputPath: 'mcp/runner.mjs',
       sourceInputs: [{ path: runnerSourcePath, sha256: fixtureInputs[1]!.sha256 }],
     });
     expect(inspection.runtime.executables.map((file) => file.path)).toEqual([
-      'synthetic/hooks/run.mjs',
-      'synthetic/mcp/runner.mjs',
+      'hooks/run.mjs',
+      'mcp/runner.mjs',
     ]);
     expect(inspection.runtime.hooks).toEqual([
-      expect.objectContaining({ path: 'synthetic/hooks/run.mjs', target: fixtureTarget }),
+      expect.objectContaining({ path: 'hooks/run.mjs', target: fixtureTarget }),
     ]);
     expect(inspection.runtime.mcpServers).toEqual([{
-      entryPaths: ['synthetic/mcp/runner.mjs'],
+      entryPaths: ['mcp/runner.mjs'],
       kind: 'stdio',
-      manifestPath: 'synthetic/mcp.json',
+      manifestPath: 'mcp.json',
       name: 'runner',
       target: fixtureTarget,
     }]);
     expect(inspection.runtime.scripts).toEqual([
-      expect.objectContaining({ id: 'script:alpha', name: 'alpha', target: fixtureTarget, file: expect.objectContaining({ path: 'synthetic/scripts/alpha.mjs' }) }),
-      expect.objectContaining({ id: 'script:zeta', name: 'zeta', target: fixtureTarget, file: expect.objectContaining({ path: 'synthetic/scripts/zeta.mjs' }) }),
+      expect.objectContaining({ id: 'script:alpha', name: 'alpha', target: fixtureTarget, file: expect.objectContaining({ path: 'scripts/alpha.mjs' }) }),
+      expect.objectContaining({ id: 'script:zeta', name: 'zeta', target: fixtureTarget, file: expect.objectContaining({ path: 'scripts/zeta.mjs' }) }),
     ]);
     expect(JSON.stringify(inspection)).not.toContain('do-not-expose');
   } finally {
@@ -394,7 +394,7 @@ it('revalidates an epoch on each inspection so post-publication corruption is vi
       epochId: 'epoch-revalidation',
     });
     await writeFile(
-      join(root, '.agent-bundle', 'epochs', 'epoch-revalidation', 'synthetic', 'scripts', 'alpha.mjs'),
+      join(root, '.agent-bundle', 'epochs', 'epoch-revalidation', 'scripts', 'alpha.mjs'),
       'export const alpha = false;\n',
     );
 
@@ -450,9 +450,9 @@ it('uses callback facts captured during validation and excludes unmanifested mut
     expect(calls.reads).toBe(1);
     expect(calls.resolutions).toBe(1);
     expect(inspection.runtime.mcpServers).toEqual([{
-      entryPaths: ['synthetic/mcp/runner.mjs'],
+      entryPaths: ['mcp/runner.mjs'],
       kind: 'stdio',
-      manifestPath: 'synthetic/mcp.json',
+      manifestPath: 'mcp.json',
       name: 'runner',
       target: fixtureTarget,
     }]);
@@ -483,7 +483,7 @@ it('preserves the supplied runtime resolver call sequence while inspecting valid
 
     expect(inspectionCalls).toEqual(['./mcp/runner.mjs', './mcp/runner.mjs']);
     expect(inspection.runtime.mcpServers).toEqual([expect.objectContaining({
-      entryPaths: ['synthetic/mcp/runner.mjs'],
+      entryPaths: ['mcp/runner.mjs'],
       name: 'runner',
     })]);
   } finally {
@@ -534,21 +534,21 @@ it('retains immutable inspection evidence when manifest and hook bytes are repla
         event: 'beforeTool',
         id: 'replacement-hook',
         name: 'Replacement hook',
-        path: 'synthetic/hooks/replacement.mjs',
+        path: 'hooks/replacement.mjs',
         target: fixtureTarget,
       }]),
       ...runtimeFiles().filter((file) => file.path !== 'agent-bundle.hooks.json'),
-      { contents: 'export const replacement = true;\n', kind: 'bundle' as const, mode: 0o755, path: 'synthetic/hooks/replacement.mjs' },
+      { contents: 'export const replacement = true;\n', kind: 'bundle' as const, mode: 0o755, path: 'hooks/replacement.mjs' },
     ];
     await writeFile(join(artifactRoot, 'agent-bundle.hooks.json'), replacementFiles[0]!.contents);
-    await writeFile(join(artifactRoot, 'synthetic', 'hooks', 'replacement.mjs'), replacementFiles.at(-1)!.contents);
+    await writeFile(join(artifactRoot, 'hooks', 'replacement.mjs'), replacementFiles.at(-1)!.contents);
     await writeFile(
       join(artifactRoot, 'agent-bundle.manifest.json'),
       assembleArtifactManifest(manifestFor(registry, replacementFiles)).bytes,
     );
 
     expect(result.snapshot).toMatchObject({
-      manifest: { files: expect.not.arrayContaining([expect.objectContaining({ path: 'synthetic/hooks/replacement.mjs' })]) },
+      manifest: { files: expect.not.arrayContaining([expect.objectContaining({ path: 'hooks/replacement.mjs' })]) },
       runtime: { hooks: [expect.objectContaining({ id: 'hook-1' })] },
     });
     expect(Object.isFrozen(result.snapshot)).toBe(true);
@@ -646,18 +646,18 @@ it('diffs exact epochs by artifact facts with stable lexical records', async () 
     const service = new ArtifactInspectionService(store, registry);
     const diff = await service.diff('epoch-base', 'epoch-candidate');
 
-    expect(diff.added.map((record) => record.path)).toEqual(['synthetic/scripts/added.mjs']);
-    expect(diff.removed.map((record) => record.path)).toEqual(['synthetic/scripts/removed.mjs']);
+    expect(diff.added.map((record) => record.path)).toEqual(['scripts/added.mjs']);
+    expect(diff.removed.map((record) => record.path)).toEqual(['scripts/removed.mjs']);
     expect(diff.changed.map((record) => record.path)).toEqual([
-      'synthetic/scripts/bytes.mjs',
-      'synthetic/scripts/digest.mjs',
-      'synthetic/scripts/kind.mjs',
-      'synthetic/scripts/mode.mjs',
-      'synthetic/scripts/source.mjs',
+      'scripts/bytes.mjs',
+      'scripts/digest.mjs',
+      'scripts/kind.mjs',
+      'scripts/mode.mjs',
+      'scripts/source.mjs',
     ]);
     expect(diff.unchanged.map((record) => record.path)).toEqual([
       'agent-bundle.hooks.json',
-      'synthetic/scripts/unchanged.mjs',
+      'scripts/unchanged.mjs',
     ]);
     expect(diff.changed.find((record) => record.path.endsWith('/source.mjs'))).toMatchObject({
       after: { sourceInputs: [{ path: runnerSourcePath }] },
@@ -675,13 +675,13 @@ it('diffs exact epochs by artifact facts with stable lexical records', async () 
     expect(same).toMatchObject({ added: [], changed: [], removed: [] });
     expect(same.unchanged.map((record) => record.path)).toEqual([
       'agent-bundle.hooks.json',
-      'synthetic/scripts/bytes.mjs',
-      'synthetic/scripts/digest.mjs',
-      'synthetic/scripts/kind.mjs',
-      'synthetic/scripts/mode.mjs',
-      'synthetic/scripts/removed.mjs',
-      'synthetic/scripts/source.mjs',
-      'synthetic/scripts/unchanged.mjs',
+      'scripts/bytes.mjs',
+      'scripts/digest.mjs',
+      'scripts/kind.mjs',
+      'scripts/mode.mjs',
+      'scripts/removed.mjs',
+      'scripts/source.mjs',
+      'scripts/unchanged.mjs',
     ]);
     expect(store).toMatchObject({ acquired: 4, closed: 4 });
   } finally {
@@ -729,7 +729,7 @@ it('compares canonical file source-input paths rather than project input hashes'
   const files = [{
     contents: 'export const source = true;\n',
     kind: 'generated' as const,
-    path: 'synthetic/scripts/source.mjs',
+    path: 'scripts/source.mjs',
     sourceInputs: [runnerSourcePath],
   }];
   const changedProjectInputs = Object.freeze([
@@ -753,7 +753,7 @@ it('compares canonical file source-input paths rather than project input hashes'
     expect(diff.changed).toEqual([]);
     expect(diff.unchanged.map((record) => record.path)).toEqual([
       'agent-bundle.hooks.json',
-      'synthetic/scripts/source.mjs',
+      'scripts/source.mjs',
     ]);
   } finally {
     await rm(root, { force: true, recursive: true });

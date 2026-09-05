@@ -783,32 +783,10 @@ export class EpochStore {
       throw new EpochStoreError('EPOCH_STAGING_INVALID', 'The staging root escapes the epoch store.');
     }
 
-    for (const target of record.targets) {
-      const targetPath = join(record.root, target);
-      let targetMetadata;
-      try {
-        targetMetadata = await lstat(targetPath);
-      } catch (error) {
-        if (isErrno(error, 'ENOENT')) {
-          throw new EpochStoreError(
-            'EPOCH_STAGING_INVALID',
-            `Staged epoch is missing selected target ${JSON.stringify(target)}.`,
-          );
-        }
-        throw error;
-      }
-      if (!targetMetadata.isDirectory() || targetMetadata.isSymbolicLink()) {
-        throw new EpochStoreError(
-          'EPOCH_STAGING_INVALID',
-          `Staged epoch target ${JSON.stringify(target)} must be a contained non-symlink directory.`,
-        );
-      }
-      if (!isInside(stagingRoot, await realpath(targetPath))) {
-        throw new EpochStoreError(
-          'EPOCH_STAGING_INVALID',
-          `Staged epoch target ${JSON.stringify(target)} escapes the staging root.`,
-        );
-      }
+    // Every selected target reads the staged root itself (#555); the
+    // selection is recorded, not laid out as per-target directories.
+    if (record.targets.length === 0) {
+      throw new EpochStoreError('EPOCH_STAGING_INVALID', 'Staged epoch selects no target.');
     }
 
     const manifestPath = join(record.root, this.#manifestRelativePath(record.epoch));
@@ -857,32 +835,10 @@ export class EpochStore {
       throw new EpochStoreError('EPOCH_METADATA_INVALID', 'Active epoch directory escapes the epoch store.');
     }
 
-    for (const target of Object.keys(epoch.targetDigests)) {
-      const targetPath = join(epochRoot, target);
-      let targetMetadata;
-      try {
-        targetMetadata = await lstat(targetPath);
-      } catch (error) {
-        if (isErrno(error, 'ENOENT')) {
-          throw new EpochStoreError(
-            'EPOCH_METADATA_INVALID',
-            `Active epoch is missing target ${JSON.stringify(target)}.`,
-          );
-        }
-        throw error;
-      }
-      if (!targetMetadata.isDirectory() || targetMetadata.isSymbolicLink()) {
-        throw new EpochStoreError(
-          'EPOCH_METADATA_INVALID',
-          `Active epoch target ${JSON.stringify(target)} must be a non-symlink directory.`,
-        );
-      }
-      if (!isInside(activeEpochRoot, await realpath(targetPath))) {
-        throw new EpochStoreError(
-          'EPOCH_METADATA_INVALID',
-          `Active epoch target ${JSON.stringify(target)} escapes the epoch directory.`,
-        );
-      }
+    // Every target reads the same plugin root (#555): the epoch directory
+    // itself is the root every recorded target digest describes.
+    if (Object.keys(epoch.targetDigests).length === 0) {
+      throw new EpochStoreError('EPOCH_METADATA_INVALID', 'Active epoch records no target.');
     }
 
     let manifestRelativePath: string;

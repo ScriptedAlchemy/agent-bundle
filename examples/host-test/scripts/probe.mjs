@@ -62,7 +62,8 @@ if (!['install', 'capture', 'uninstall', 'status'].includes(command) || !HOSTS.i
 
 const root = resolve(flags.root ?? process.env.HOST_TEST_ROOT ?? '/tmp/host-test');
 const paths = {
-  artifact: join(exampleRoot, 'artifact', host),
+  // One composite root serves every selected host (agent-bundle #555).
+  artifact: join(exampleRoot, 'artifact'),
   captures: join(root, host),
   home: join(root, `${host}-home`),
   logDir: join(root, host, 'log'),

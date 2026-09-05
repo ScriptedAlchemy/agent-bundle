@@ -4,7 +4,7 @@ import { expect, it } from '@rstest/core';
 
 import claudeCapabilityTable from '../src/adapters/capabilities/claude-2.1.260.json' with { type: 'json' };
 import { claudeAdapter } from '../src/adapters/claude.ts';
-import { pluginAdapter } from '../src/adapters/plugin.ts';
+import { createCompositeAdapter } from '../src/adapters/composite.ts';
 import type { NormalizedHook, NormalizedHookEvent, NormalizedPlugin } from '../src/core/types.ts';
 import { validateNativeEventEnvelope } from '../src/events/projection.ts';
 import type { CanonicalAgentEvent } from '../src/routes/public.ts';
@@ -122,7 +122,7 @@ const routeHook = (
   };
 };
 
-const model = (target: string, hooks: readonly NormalizedHook[]): NormalizedPlugin => ({
+const model = (target: string | readonly string[], hooks: readonly NormalizedHook[]): NormalizedPlugin => ({
   extensions: {},
   hooks,
   mcpServers: [],
@@ -136,12 +136,15 @@ const model = (target: string, hooks: readonly NormalizedHook[]): NormalizedPlug
   runtime: { node: '22.12.0' },
   scripts: [],
   skills: [],
-  targets: [{
-    id: `target:${target}`,
-    name: target,
+  targets: (typeof target === 'string' ? [target] : target).map((name) => ({
+    id: `target:${name}`,
+    name,
     provenance: { kind: 'config', sourcePath: configPath },
-  }],
+  })),
 });
+
+const allHosts = ['claude', 'codex', 'cursor'] as const;
+const compositeAdapter = createCompositeAdapter(allHosts);
 
 const nativeEnvelope = async (
   native: string | Readonly<Record<string, unknown>>,
@@ -209,10 +212,10 @@ it('accepts the live PostToolUse:Bash envelope under the Claude wrapper and name
   )).toThrow('Agent Bundle event route error: native hook_event_name must equal preToolUse');
 });
 
-it('keeps the shared and Cursor wrappers of the unified plugin bundle on their own host spellings', () => {
-  const plan = pluginAdapter.plan(model('plugin', [
-    routeHook('tool/after', 'afterTool', ['plugin']),
-    routeHook('session/start', 'sessionStart', ['plugin']),
+it('keeps the shared and Cursor wrappers of one composite root on their own host spellings', () => {
+  const plan = compositeAdapter.plan(model(allHosts, [
+    routeHook('tool/after', 'afterTool', [...allHosts]),
+    routeHook('session/start', 'sessionStart', [...allHosts]),
   ]));
   expect(plan.diagnostics).toEqual([]);
 
@@ -227,6 +230,8 @@ it('keeps the shared and Cursor wrappers of the unified plugin bundle on their o
 
   const documents = writes(plan);
   expect(Object.keys((JSON.parse(documents['hooks/hooks.json']!) as { hooks: object }).hooks).sort()).toEqual(['PostToolUse', 'SessionStart']);
+  // Codex reads its own document beside Claude Code's conventional one (#555).
+  expect(Object.keys((JSON.parse(documents['.codex-plugin/hooks.json']!) as { hooks: object }).hooks).sort()).toEqual(['PostToolUse', 'SessionStart']);
   expect(Object.keys((JSON.parse(documents['hooks/hooks-cursor.json']!) as { hooks: object }).hooks).sort()).toEqual(['postToolUse', 'sessionStart']);
 });
 
@@ -242,12 +247,13 @@ it('emits no manifest hooks pointer for Claude Code, which auto-loads hooks/hook
   expect(claude['hooks/hooks.json']).toBeDefined();
   expect(JSON.parse(claude['.claude-plugin/plugin.json']!)).not.toHaveProperty('hooks');
 
-  const bundle = writes(pluginAdapter.plan(model('plugin', [routeHook('tool/after', 'afterTool', ['plugin'])])));
+  const bundle = writes(compositeAdapter.plan(model(allHosts, [routeHook('tool/after', 'afterTool', [...allHosts])])));
   expect(bundle['hooks/hooks.json']).toBeDefined();
+  expect(bundle['.codex-plugin/hooks.json']).toBeDefined();
   expect(bundle['hooks/hooks-cursor.json']).toBeDefined();
   expect(JSON.parse(bundle['.claude-plugin/plugin.json']!)).not.toHaveProperty('hooks');
-  // Codex discovers the same conventional file; Cursor's own contract needs
-  // the explicit pointer because its document does not live at the default.
-  expect(JSON.parse(bundle['.codex-plugin/plugin.json']!)).not.toHaveProperty('hooks');
+  // Claude Code owns the conventional file; Codex and Cursor read their own
+  // documents through explicit manifest pointers (#555).
+  expect(JSON.parse(bundle['.codex-plugin/plugin.json']!)).toMatchObject({ hooks: './.codex-plugin/hooks.json' });
   expect(JSON.parse(bundle['.cursor-plugin/plugin.json']!)).toMatchObject({ hooks: './hooks/hooks-cursor.json' });
 });

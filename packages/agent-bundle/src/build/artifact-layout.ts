@@ -19,11 +19,3 @@ export const isDirectOutputLayoutPath = (
     layout.allowedSuffixes.some((suffix) => file.length > suffix.length && file.endsWith(suffix));
 };
 
-export const targetArtifactPath = (target: string, path: string): string => `${target}/${path}`;
-
-export const pathInTargetOutputLayout = (
-  targetPath: string,
-  target: string,
-  layout: TargetArtifactOutputLayout | undefined,
-): boolean => targetPath.startsWith(`${target}/`) &&
-  isDirectOutputLayoutPath(targetPath.slice(target.length + 1), layout);

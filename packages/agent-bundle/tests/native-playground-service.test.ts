@@ -241,9 +241,9 @@ it('retains an exact epoch catalog across service restart after fixture source c
     const epochRoot = join(root, '.agent-bundle', 'epochs', 'epoch-retained');
     const suiteDir = join(root, 'evals');
     const fixtureFile = join(suiteDir, 'fixture', 'input.txt');
-    await mkdir(join(epochRoot, 'claude', '.claude-plugin'), { recursive: true });
+    await mkdir(join(epochRoot, '.claude-plugin'), { recursive: true });
     await mkdir(join(suiteDir, 'fixture'), { recursive: true });
-    await writeFile(join(epochRoot, 'claude', '.claude-plugin', 'plugin.json'), '{"name":"review"}\n');
+    await writeFile(join(epochRoot, '.claude-plugin', 'plugin.json'), '{"name":"review"}\n');
     await writeFile(fixtureFile, 'first fixture bytes\n');
     const reference = epoch('epoch-retained', epochRoot);
     let discoveryCalls = 0;
@@ -866,9 +866,9 @@ it('refuses fixture bytes changed after cataloging without recomputing the serve
     const artifact = join(root, 'artifact');
     const suiteDir = join(root, 'evals');
     const fixtureFile = join(suiteDir, 'fixture', 'input.txt');
-    await mkdir(join(artifact, 'claude', '.claude-plugin'), { recursive: true });
+    await mkdir(join(artifact, '.claude-plugin'), { recursive: true });
     await mkdir(join(suiteDir, 'fixture'), { recursive: true });
-    await writeFile(join(artifact, 'claude', '.claude-plugin', 'plugin.json'), '{"name":"review"}\n');
+    await writeFile(join(artifact, '.claude-plugin', 'plugin.json'), '{"name":"review"}\n');
     await writeFile(fixtureFile, 'catalog baseline\n');
     const reference = epoch('epoch-native-stale-fixture', artifact);
     const commands: string[] = [];
@@ -988,9 +988,9 @@ it('projects only awaited normalized Claude completion evidence and removes its 
   try {
     const artifact = join(root, 'artifact');
     const suiteDir = join(root, 'evals');
-    await mkdir(join(artifact, 'claude', '.claude-plugin'), { recursive: true });
+    await mkdir(join(artifact, '.claude-plugin'), { recursive: true });
     await mkdir(join(suiteDir, 'fixture'), { recursive: true });
-    await writeFile(join(artifact, 'claude', '.claude-plugin', 'plugin.json'), '{"name":"review"}\n');
+    await writeFile(join(artifact, '.claude-plugin', 'plugin.json'), '{"name":"review"}\n');
     await writeFile(join(suiteDir, 'fixture', 'input.txt'), 'baseline only\n');
     await writeFile(join(suiteDir, 'grader.mjs'), 'export default () => ({ detail: "sk-proj-1234567890abcdef /private/native/grader", outcome: "pass" });\n');
     const reference = epoch('epoch-native-run', artifact);
@@ -1090,9 +1090,9 @@ it('bounds normalized native evidence before it reaches durable Playground event
   try {
     const artifact = join(root, 'artifact');
     const suiteDir = join(root, 'evals');
-    await mkdir(join(artifact, 'claude', '.claude-plugin'), { recursive: true });
+    await mkdir(join(artifact, '.claude-plugin'), { recursive: true });
     await mkdir(join(suiteDir, 'fixture'), { recursive: true });
-    await writeFile(join(artifact, 'claude', '.claude-plugin', 'plugin.json'), '{"name":"review"}\n');
+    await writeFile(join(artifact, '.claude-plugin', 'plugin.json'), '{"name":"review"}\n');
     await writeFile(join(suiteDir, 'fixture', 'input.txt'), 'baseline only\n');
     const response = 'bounded response '.repeat(32_768);
     const stream = [
@@ -1157,10 +1157,10 @@ it('redacts hostile normalized Codex MCP labels without changing observed eviden
     const artifact = join(root, 'artifact');
     const suiteDir = join(root, 'evals');
     const normalCodexHome = join(root, 'normal-codex-home');
-    await mkdir(join(artifact, 'codex', '.agents', 'plugins'), { recursive: true });
+    await mkdir(join(artifact, '.agents', 'plugins'), { recursive: true });
     await mkdir(join(suiteDir, 'fixture'), { recursive: true });
     await mkdir(normalCodexHome, { recursive: true });
-    await writeFile(join(artifact, 'codex', '.agents', 'plugins', 'marketplace.json'), JSON.stringify({
+    await writeFile(join(artifact, '.agents', 'plugins', 'marketplace.json'), JSON.stringify({
       name: 'native-marketplace',
       plugins: [{ name: 'native-review', source: { path: './', source: 'local' } }],
     }));
@@ -1226,10 +1226,10 @@ it('awaits a cancelled Codex child, preserves its harness failure, and removes a
     const artifact = join(root, 'artifact');
     const suiteDir = join(root, 'evals');
     const normalCodexHome = join(root, 'normal-codex-home');
-    await mkdir(join(artifact, 'codex', '.agents', 'plugins'), { recursive: true });
+    await mkdir(join(artifact, '.agents', 'plugins'), { recursive: true });
     await mkdir(join(suiteDir, 'fixture'), { recursive: true });
     await mkdir(normalCodexHome, { recursive: true });
-    await writeFile(join(artifact, 'codex', '.agents', 'plugins', 'marketplace.json'), JSON.stringify({
+    await writeFile(join(artifact, '.agents', 'plugins', 'marketplace.json'), JSON.stringify({
       name: 'native-marketplace',
       plugins: [{ name: 'native-review', source: { path: './', source: 'local' } }],
     }));
@@ -1314,13 +1314,13 @@ it('eagerly captures every epoch catalog before a later build can replace author
     const epochARoot = join(root, '.agent-bundle', 'epochs', 'epoch-eager-a');
     const epochBRoot = join(root, '.agent-bundle', 'epochs', 'epoch-eager-b');
     await Promise.all([
-      mkdir(join(epochARoot, 'claude', '.claude-plugin'), { recursive: true }),
-      mkdir(join(epochBRoot, 'claude', '.claude-plugin'), { recursive: true }),
+      mkdir(join(epochARoot, '.claude-plugin'), { recursive: true }),
+      mkdir(join(epochBRoot, '.claude-plugin'), { recursive: true }),
       mkdir(join(suiteDir, 'fixture'), { recursive: true }),
     ]);
     await Promise.all([
-      writeFile(join(epochARoot, 'claude', '.claude-plugin', 'plugin.json'), '{"name":"review"}\n'),
-      writeFile(join(epochBRoot, 'claude', '.claude-plugin', 'plugin.json'), '{"name":"review"}\n'),
+      writeFile(join(epochARoot, '.claude-plugin', 'plugin.json'), '{"name":"review"}\n'),
+      writeFile(join(epochBRoot, '.claude-plugin', 'plugin.json'), '{"name":"review"}\n'),
       writeFile(fixtureFile, 'epoch A fixture bytes\n'),
     ]);
     const referenceA = epoch('epoch-eager-a', epochARoot);
@@ -2317,12 +2317,12 @@ it('does not deadlock when a direct native Codex abort listener awaits a reentra
     const suiteDir = join(root, 'evals');
     const normalCodexHome = join(root, 'normal-codex-home');
     await Promise.all([
-      mkdir(join(artifact, 'codex', '.agents', 'plugins'), { recursive: true }),
+      mkdir(join(artifact, '.agents', 'plugins'), { recursive: true }),
       mkdir(join(suiteDir, 'fixture'), { recursive: true }),
       mkdir(normalCodexHome, { recursive: true }),
     ]);
     await Promise.all([
-      writeFile(join(artifact, 'codex', '.agents', 'plugins', 'marketplace.json'), JSON.stringify({ name: 'native-marketplace', plugins: [{ name: 'native-review', source: { path: './', source: 'local' } }] })),
+      writeFile(join(artifact, '.agents', 'plugins', 'marketplace.json'), JSON.stringify({ name: 'native-marketplace', plugins: [{ name: 'native-review', source: { path: './', source: 'local' } }] })),
       writeFile(join(suiteDir, 'fixture', 'input.txt'), 'baseline only\n'),
       writeFile(join(normalCodexHome, 'auth.json'), '{"opaque":"session"}\n'),
     ]);
@@ -2390,12 +2390,12 @@ it('does not deadlock when caller cancellation reaches a native Codex close list
     const suiteDir = join(root, 'evals');
     const normalCodexHome = join(root, 'normal-codex-home');
     await Promise.all([
-      mkdir(join(artifact, 'codex', '.agents', 'plugins'), { recursive: true }),
+      mkdir(join(artifact, '.agents', 'plugins'), { recursive: true }),
       mkdir(join(suiteDir, 'fixture'), { recursive: true }),
       mkdir(normalCodexHome, { recursive: true }),
     ]);
     await Promise.all([
-      writeFile(join(artifact, 'codex', '.agents', 'plugins', 'marketplace.json'), JSON.stringify({ name: 'native-marketplace', plugins: [{ name: 'native-review', source: { path: './', source: 'local' } }] })),
+      writeFile(join(artifact, '.agents', 'plugins', 'marketplace.json'), JSON.stringify({ name: 'native-marketplace', plugins: [{ name: 'native-review', source: { path: './', source: 'local' } }] })),
       writeFile(join(suiteDir, 'fixture', 'input.txt'), 'baseline only\n'),
       writeFile(join(normalCodexHome, 'auth.json'), '{"opaque":"session"}\n'),
     ]);

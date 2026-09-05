@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
+import { compositeHookContract, compositeMcpRuntime } from '../adapters/composite.ts';
 import { artifactManifestName } from '../build/emit.ts';
 import { parseArtifactHookIndex, type ArtifactHook } from '../build/hook-index.ts';
 import { parseArtifactManifest } from '../build/manifest.ts';
@@ -124,21 +125,34 @@ const hostManifestPath = (host: InstallHost): string => {
   }
 };
 
-const hostMcpPath = (host: InstallHost): string =>
-  host === 'cursor' ? 'mcp.json' : '.mcp.json';
+/**
+ * The MCP document the installed host reads. A root that projects several
+ * hosts relocates some of them (#555: Codex beside Claude Code reads
+ * `.codex-plugin/mcp.json`), so the built artifact's target list decides;
+ * without a manifest the host's conventional document applies.
+ */
+const hostMcpPath = (host: InstallHost, targets: readonly string[] | undefined): string =>
+  (targets === undefined ? undefined : compositeMcpRuntime(targets, host)?.manifestPath)
+    ?? (host === 'cursor' ? 'mcp.json' : '.mcp.json');
 
 /**
- * The hook document the installed host loads. Claude and Codex read the
- * pinned `hooks/hooks.json`; Cursor reads whatever the installed
- * `.cursor-plugin/plugin.json` `hooks` field names (the unified `plugin`
- * target points it at `hooks/hooks-cursor.json`, #438), falling back to
- * `hooks/hooks.json` folder discovery when the field is absent.
+ * The hook document the installed host loads. Claude Code reads the pinned
+ * `hooks/hooks.json`; Codex reads the same unless it shares the root with
+ * Claude Code, where its `.codex-plugin/plugin.json` points at
+ * `.codex-plugin/hooks.json` (#555); Cursor reads whatever the installed
+ * `.cursor-plugin/plugin.json` `hooks` field names (`hooks/hooks-cursor.json`
+ * beside another host, #438), falling back to `hooks/hooks.json` folder
+ * discovery when the field is absent.
  */
-const hostHookPath = (host: InstallHost, installedManifest: Readonly<Record<string, unknown>>): string => {
+const hostHookPath = (
+  host: InstallHost,
+  installedManifest: Readonly<Record<string, unknown>>,
+  targets: readonly string[] | undefined,
+): string => {
   switch (host) {
     case 'claude':
     case 'codex':
-      return 'hooks/hooks.json';
+      return (targets === undefined ? undefined : compositeHookContract(targets, host)?.manifestPath) ?? 'hooks/hooks.json';
     case 'cursor': {
       const source = resolveCursorHooksSource(installedManifest);
       return source.kind === 'file' ? source.path : cursorDefaultHooksPath;
@@ -306,21 +320,23 @@ export const openInstalledHostMcpServer = async (
     failures.push({ check: 'manifest-schema', reason: 'built artifact manifest was unavailable or invalid' });
   }
   const target = artifactManifest?.targets.find((candidate) => candidate.name === options.host);
+  const rootTargets = artifactManifest?.targets.map((candidate) => candidate.name);
   if (target === undefined) {
     failures.push({ check: 'manifest-schema', reason: `artifact manifest did not declare target ${options.host}` });
   }
   const builtRoot = await resolveBundleRoot(artifactRoot, options.host).catch(() => {
     failures.push({ check: 'manifest-schema', reason: `Doctor could not discover the built ${options.host} bundle root` });
-    return join(artifactRoot, options.host);
+    return artifactRoot;
   });
 
-  const prefix = `${options.host}/`;
-  const targetFiles = artifactManifest?.files.filter((file) => file.path.startsWith(prefix)) ?? [];
+  // Every projected host reads the same plugin root (#555), so the manifest's
+  // files are the host's component files.
+  const targetFiles = artifactManifest?.files ?? [];
   if (targetFiles.length === 0) {
     failures.push({ check: 'component-paths', reason: `artifact manifest declared no ${options.host} component files` });
   }
   for (const file of targetFiles) {
-    const targetRelative = file.path.slice(prefix.length);
+    const targetRelative = file.path;
     const [builtHash, installedHash] = await Promise.all([
       fileHash(join(artifactRoot, file.path)),
       fileHash(join(installedRoot, targetRelative)),
@@ -336,12 +352,10 @@ export const openInstalledHostMcpServer = async (
     }
   }
 
-  const resourceFiles = targetFiles.filter((file) => {
-    const path = file.path.slice(prefix.length);
-    return path.startsWith('assets/') || path.startsWith('skills/') || path.startsWith('commands/');
-  });
+  const resourceFiles = targetFiles.filter((file) =>
+    file.path.startsWith('assets/') || file.path.startsWith('skills/') || file.path.startsWith('commands/'));
   for (const resource of resourceFiles) {
-    const path = resource.path.slice(prefix.length);
+    const path = resource.path;
     if (await fileHash(join(installedRoot, path)) === undefined) {
       failures.push({ check: 'resources', reason: `installed resource ${path} was missing` });
     }
@@ -393,7 +407,7 @@ export const openInstalledHostMcpServer = async (
   }
   if (installedHooks !== undefined && installedHooks.length > 0) {
     const hookDocument = await readJsonRecord(
-      join(installedRoot, hostHookPath(options.host, installedManifest)),
+      join(installedRoot, hostHookPath(options.host, installedManifest, rootTargets)),
       'hook-commands',
       'installed hook document',
       failures,
@@ -403,7 +417,7 @@ export const openInstalledHostMcpServer = async (
       failures.push({ check: 'hook-commands', reason: 'installed hook document exposed no commands' });
     }
     for (const hook of installedHooks) {
-      const path = hook.path.startsWith(prefix) ? hook.path.slice(prefix.length) : hook.path;
+      const path = hook.path;
       if (await fileHash(join(installedRoot, path)) === undefined) {
         failures.push({ check: 'hook-commands', reason: `installed hook command target ${path} was missing` });
       }
@@ -411,7 +425,7 @@ export const openInstalledHostMcpServer = async (
   }
 
   const mcpDocument = await readJsonRecord(
-    join(installedRoot, hostMcpPath(options.host)),
+    join(installedRoot, hostMcpPath(options.host, rootTargets)),
     'mcp-command',
     'installed MCP document',
     failures,

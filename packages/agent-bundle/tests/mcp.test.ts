@@ -535,11 +535,14 @@ it('bundles each local MCP entry once and maps every target manifest to that art
       registry: createDefaultRegistry(),
     });
     expect(await validateArtifact({ artifactRoot: outputRoot })).toEqual([]);
+    // One composite root compiles the server once for every selected host
+    // (#555): the entry names the hosts it serves and the root's identity.
     expect(result.compiledMcpEntries).toEqual([
       {
+        hosts: ['portable', 'codex', 'claude'],
         id: 'mcp:local server',
         name: 'mcp-local-server-f45eb99f',
-        output: join(outputRoot, 'portable', 'mcp', outputName),
+        output: join(outputRoot, 'mcp', outputName),
         outputKind: 'bundle',
         source: join(root, 'src', 'local server.ts'),
         sourceInputs: [
@@ -547,51 +550,28 @@ it('bundles each local MCP entry once and maps every target manifest to that art
           join(root, 'src', 'local server.ts'),
           join(root, 'src', 'message.ts'),
         ],
-        target: 'portable',
-      },
-      {
-        id: 'mcp:local server',
-        name: 'mcp-local-server-f45eb99f',
-        output: join(outputRoot, 'codex', 'mcp', outputName),
-        outputKind: 'bundle',
-        source: join(root, 'src', 'local server.ts'),
-        sourceInputs: [
-          join(root, 'agent-bundle.config.ts'),
-          join(root, 'src', 'local server.ts'),
-          join(root, 'src', 'message.ts'),
-        ],
-        target: 'codex',
-      },
-      {
-        id: 'mcp:local server',
-        name: 'mcp-local-server-f45eb99f',
-        output: join(outputRoot, 'claude', 'mcp', outputName),
-        outputKind: 'bundle',
-        source: join(root, 'src', 'local server.ts'),
-        sourceInputs: [
-          join(root, 'agent-bundle.config.ts'),
-          join(root, 'src', 'local server.ts'),
-          join(root, 'src', 'message.ts'),
-        ],
-        target: 'claude',
+        target: 'claude+codex+portable',
       },
     ]);
 
-    const bundles = await Promise.all(['portable', 'codex', 'claude'].map(async (target) => {
-      const mcpRoot = join(outputRoot, target, 'mcp');
-      expect(await readdir(mcpRoot)).toEqual([outputName]);
-      const bundle = await readFile(join(mcpRoot, outputName), 'utf8');
-      expect(bundle).toContain('bundled');
-      expect(bundle).not.toContain('./message.ts');
-      expect(bundle).not.toContain('agent-bundle');
-      return bundle;
-    }));
-    expect(new Set(bundles).size).toBe(1);
+    const mcpRoot = join(outputRoot, 'mcp');
+    expect(await readdir(mcpRoot)).toEqual([outputName]);
+    const bundle = await readFile(join(mcpRoot, outputName), 'utf8');
+    expect(bundle).toContain('bundled');
+    expect(bundle).not.toContain('./message.ts');
+    expect(bundle).not.toContain('agent-bundle');
+    // Beside other hosts the portable projection is the namespaced view
+    // `portable/`, whose `mcp/` holds a shim onto the shared compiled server.
+    expect(await readdir(join(outputRoot, 'portable', 'mcp'))).toEqual([outputName]);
+    expect(await readFile(join(outputRoot, 'portable', 'mcp', outputName), 'utf8')).toBe(
+      `import '../../mcp/${outputName}';\n`,
+    );
 
+    // Codex relocates its MCP document under `.codex-plugin/` beside Claude Code.
     const [portable, codex, claude] = await Promise.all([
       readFile(join(outputRoot, 'portable', 'mcp.json'), 'utf8'),
-      readFile(join(outputRoot, 'codex', '.mcp.json'), 'utf8'),
-      readFile(join(outputRoot, 'claude', '.mcp.json'), 'utf8'),
+      readFile(join(outputRoot, '.codex-plugin', 'mcp.json'), 'utf8'),
+      readFile(join(outputRoot, '.mcp.json'), 'utf8'),
     ]);
     expect(JSON.parse(portable)).toMatchObject({
       mcpServers: {
@@ -633,9 +613,7 @@ it('bundles each local MCP entry once and maps every target manifest to that art
       projectRoot: root,
       registry: createDefaultRegistry(),
     });
-    expect(await readFile(join(secondOutput, 'portable', 'mcp', outputName), 'utf8')).toBe(
-      bundles[0],
-    );
+    expect(await readFile(join(secondOutput, 'mcp', outputName), 'utf8')).toBe(bundle);
 
     const collisionRegistry = new TargetRegistry().register({
       capabilities: supportedCapabilities('mcp'),
@@ -659,14 +637,18 @@ it('bundles each local MCP entry once and maps every target manifest to that art
       registry: collisionRegistry,
     })).rejects.toThrow('Duplicate planned artifact destination');
 
-    await rm(join(secondOutput, 'portable', 'mcp', outputName));
+    // Every host document references the one shared server, and the portable
+    // view's shim imports it, so removing it breaks each of them at once.
+    await rm(join(secondOutput, 'mcp', outputName));
     expect(await validateArtifact({ artifactRoot: secondOutput })).toMatchObject([
       { code: 'AB6004' },
-      { code: 'AB6014', generatedPath: 'portable/mcp', target: 'portable' },
+      { code: 'AB6014', generatedPath: 'mcp' },
+      { code: 'AB6007', generatedPath: '.mcp.json' },
+      { code: 'AB6007', generatedPath: '.codex-plugin/mcp.json' },
       { code: 'AB6007', generatedPath: 'portable/mcp.json' },
+      { code: 'AB6005', generatedPath: `portable/mcp/${outputName}` },
     ]);
 
-    const previousBundle = bundles[0]!;
     await writeFile(join(root, 'src', 'local server.ts'), 'export const = ;\n');
     await expect(build({
       model,
@@ -674,9 +656,7 @@ it('bundles each local MCP entry once and maps every target manifest to that art
       projectRoot: root,
       registry: createDefaultRegistry(),
     })).rejects.toThrow();
-    expect(await readFile(join(outputRoot, 'portable', 'mcp', outputName), 'utf8')).toBe(
-      previousBundle,
-    );
+    expect(await readFile(join(outputRoot, 'mcp', outputName), 'utf8')).toBe(bundle);
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -725,8 +705,8 @@ it('inlines agent-bundle/launch-env into a self-connecting entry so it can apply
     expect(bundle).toContain('AGENT_BUNDLE_ENV_FILE');
 
     // `<plugin root>/.env` is one directory above `mcp/`; it fills the gap and
-    // an exported variable still wins.
-    const pluginRoot = join(outputRoot, 'portable');
+    // an exported variable still wins. A single-host root is the artifact itself.
+    const pluginRoot = outputRoot;
     const probe = async (env: Readonly<Record<string, string>>): Promise<unknown> => {
       const run = await runNodeScript({ args: [entry!.output], env });
       expect(run).toMatchObject({ code: 0, stderr: '' });
@@ -808,37 +788,36 @@ it('builds one deterministic self-contained MCP App view and injects it through 
       join(root, 'views', 'dashboard.ts'),
       join(root, 'views', 'shell.html'),
     ];
-    expect(compiled).toEqual(expect.arrayContaining(['claude', 'codex', 'portable'].map((target) => expect.objectContaining({
+    // One composite root compiles the App once, under the root's identity (#555).
+    expect(compiled).toEqual([expect.objectContaining({
       _meta: { ui: { prefersBorder: true } },
       id: 'mcp-app:fixture:dashboard',
       mimeType: 'text/html;profile=mcp-app',
       name: 'dashboard',
-      output: join(outputRoot, target, 'mcp-apps', 'dashboard.html'),
+      output: join(outputRoot, 'mcp-apps', 'dashboard.html'),
       resourceUri: 'ui://agent-bundle/dashboard.html',
       serverIds: ['mcp:fixture'],
       source: join(root, 'views', 'dashboard.ts'),
       sourceInputs,
-      target,
-    }))));
-    expect(compiled).toHaveLength(3);
+      target: 'claude+codex+portable',
+    })]);
     expect(compiled.every((entry) => Object.isFrozen(entry.sourceInputs))).toBe(true);
-    const html = await readFile(join(outputRoot, 'portable', 'mcp-apps', 'dashboard.html'), 'utf8');
+    const html = await readFile(join(outputRoot, 'mcp-apps', 'dashboard.html'), 'utf8');
     expect(html).toContain('dashboard-ready');
     expect(html).toContain('<script');
     expect(html).toContain('<style');
     expect(html.indexOf('<script')).toBeGreaterThan(html.indexOf('<main id="view"'));
     expect(html).not.toMatch(/<(?:script|link)\b[^>]+(?:src|href)=/iu);
-    expect(await readdir(join(outputRoot, 'portable', 'mcp-apps'))).toEqual(['dashboard.html']);
-    for (const target of ['claude', 'codex']) {
-      expect(await readdir(join(outputRoot, target, 'mcp-apps'))).toEqual(['dashboard.html']);
-    }
-    const serverBundle = await readFile(join(outputRoot, 'portable', 'mcp', 'mcp-fixture-f16d05ec.mjs'), 'utf8');
+    expect(await readdir(join(outputRoot, 'mcp-apps'))).toEqual(['dashboard.html']);
+    // The portable view shims onto the shared server; it carries no App copy.
+    expect(await readdir(join(outputRoot, 'portable'))).not.toContain('mcp-apps');
+    const serverBundle = await readFile(join(outputRoot, 'mcp', 'mcp-fixture-f16d05ec.mjs'), 'utf8');
     expect(serverBundle).toContain('ui://agent-bundle/dashboard.html');
     expect(serverBundle).toContain('text/html;profile=mcp-app');
     expect(serverBundle).toContain('prefersBorder');
     expect(result.outputProvenance).toContainEqual({
       kind: 'bundle',
-      path: 'portable/mcp-apps/dashboard.html',
+      path: 'mcp-apps/dashboard.html',
       sourceInputs: [
         'agent-bundle.config.ts',
         'views/dashboard.css',
@@ -849,7 +828,7 @@ it('builds one deterministic self-contained MCP App view and injects it through 
     expect(await validateArtifact({ artifactRoot: outputRoot })).toEqual([]);
     expect(result.outputProvenance).toContainEqual({
       kind: 'bundle',
-      path: 'portable/mcp/mcp-fixture-f16d05ec.mjs',
+      path: 'mcp/mcp-fixture-f16d05ec.mjs',
       sourceInputs: [
         'agent-bundle.config.ts',
         'src/server.ts',
@@ -925,13 +904,13 @@ it('injects one release identity into both the Node bundle and the browser MCP A
     const outputRoot = join(root, 'dist');
     await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
 
-    const serverBundle = await readFile(join(outputRoot, 'portable', 'mcp', 'mcp-fixture-f16d05ec.mjs'), 'utf8');
+    const serverBundle = await readFile(join(outputRoot, 'mcp', 'mcp-fixture-f16d05ec.mjs'), 'utf8');
     for (const injected of ['meta-fixture', '4.5.6', '@scope/meta-fixture']) {
       expect(serverBundle).toContain(injected);
     }
     expect(serverBundle).not.toContain('agent-bundle/meta');
 
-    const html = await readFile(join(outputRoot, 'portable', 'mcp-apps', 'dashboard.html'), 'utf8');
+    const html = await readFile(join(outputRoot, 'mcp-apps', 'dashboard.html'), 'utf8');
     for (const injected of ['meta-fixture', '4.5.6']) {
       expect(html).toContain(injected);
     }
@@ -992,13 +971,13 @@ it('compiles one shared MCP App once and serves it from every identically declar
       resourceUri: 'ui://agent-bundle/widget.html',
       serverIds: ['mcp:library', 'mcp:public'],
     })]);
-    expect(await readdir(join(outputRoot, 'portable', 'mcp-apps'))).toEqual(['widget.html']);
+    expect(await readdir(join(outputRoot, 'mcp-apps'))).toEqual(['widget.html']);
 
-    const bundleNames = await readdir(join(outputRoot, 'portable', 'mcp'));
+    const bundleNames = await readdir(join(outputRoot, 'mcp'));
     for (const serverName of ['library', 'public']) {
       const bundleName = bundleNames.find((entry) => entry.startsWith(`mcp-${serverName}-`));
       expect(bundleName).toBeDefined();
-      const bundle = await readFile(join(outputRoot, 'portable', 'mcp', bundleName!), 'utf8');
+      const bundle = await readFile(join(outputRoot, 'mcp', bundleName!), 'utf8');
       expect(bundle).toContain('ui://agent-bundle/widget.html');
       expect(bundle).toContain('widget-ready');
       expect(bundle).toContain('prefersBorder');
@@ -1193,7 +1172,7 @@ it('uses the selected streamable HTTP manifest with propagated cancellation and 
     expect(closes).toBe(1);
     await expect(access(http[0]!.headers!['X-Data']!)).rejects.toMatchObject({ code: 'ENOENT' });
 
-    await writeFile(join(artifact, 'claude', '.claude-plugin', 'plugin.json'), '{"name":"tampered"}\n');
+    await writeFile(join(artifact, '.claude-plugin', 'plugin.json'), '{"name":"tampered"}\n');
     await expect(service.list({ artifact, server: 'http', target: 'claude' })).rejects.toThrow();
     expect(closes).toBe(1);
   } finally {
@@ -1372,7 +1351,7 @@ it('serves compiler-bundled MCP App resources from a copied artifact without pro
     const outputRoot = join(root, 'dist');
     const artifact = join(consumer, 'installed-plugin');
     await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
-    const expectedHtml = await readFile(join(outputRoot, 'portable', 'mcp-apps', 'dashboard.html'), 'utf8');
+    const expectedHtml = await readFile(join(outputRoot, 'mcp-apps', 'dashboard.html'), 'utf8');
     await cp(outputRoot, artifact, { recursive: true });
     await rm(join(root, 'src'), { force: true, recursive: true });
     await rm(join(root, 'views'), { force: true, recursive: true });
@@ -1380,7 +1359,7 @@ it('serves compiler-bundled MCP App resources from a copied artifact without pro
 
     const client = new Client({ name: 'app-resource-consumer', version: '1.0.0' });
     await client.connect(new StdioClientTransport({
-      args: [join(artifact, 'portable', 'mcp', 'mcp-fixture-f16d05ec.mjs')],
+      args: [join(artifact, 'mcp', 'mcp-fixture-f16d05ec.mjs')],
       command: process.execPath,
       stderr: 'pipe',
     }));
@@ -1557,7 +1536,8 @@ it('lists tools from a validated copied artifact without reading project source'
       readonly data: string;
       readonly root: string;
     };
-    expect(firstSession.root).toBe(join(artifact, 'portable'));
+    // A single-host root is the plugin root itself (#555).
+    expect(firstSession.root).toBe(artifact);
     await expect(access(firstSession.data)).rejects.toMatchObject({ code: 'ENOENT' });
 
     const nextInvocation = await new api.McpService!().invoke({

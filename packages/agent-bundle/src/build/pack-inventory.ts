@@ -6,6 +6,7 @@ import type { NormalizedPlugin } from '../core/types.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { deepFreeze } from '../core/freeze.ts';
 import { readFileBytes, readFileString, runWithPlatform } from '../effect/platform.ts';
+import { compositeHostRoot } from '../adapters/composite.ts';
 import { installSurfaceRequirements } from '../install/surface.ts';
 import { artifactManifestName } from './emit.ts';
 import { parseArtifactManifest } from './manifest.ts';
@@ -102,12 +103,6 @@ const hostManifestPaths = (target: string): readonly string[] => {
       return Object.freeze(['.codex-plugin/plugin.json']);
     case 'cursor':
       return Object.freeze(['.cursor-plugin/plugin.json']);
-    case 'plugin':
-      return Object.freeze([
-        '.claude-plugin/plugin.json',
-        '.codex-plugin/plugin.json',
-        '.cursor-plugin/plugin.json',
-      ]);
     case 'portable':
       return Object.freeze(['plugin.json']);
     default:
@@ -149,8 +144,8 @@ export const packInventoryDiagnostics = async (options: {
     ...options.packageBuild.files.map((file) => `${packagePrefix}/${file.path}`),
     `${artifactPrefix}/${artifactManifestName}`,
     ...manifest.files.map((file) => `${artifactPrefix}/${file.path}`),
-    ...manifest.targets.flatMap((target) =>
-      installSurfaceRequirements(target.name).map((path) => `${artifactPrefix}/${target.name}/${path}`)),
+    // The install surface lives at the one plugin root every target shares (#555).
+    ...installSurfaceRequirements(manifest.targets.map((target) => target.name)).map((path) => `${artifactPrefix}/${path}`),
     'README.md',
   ]);
 
@@ -196,11 +191,15 @@ export const packInventoryDiagnostics = async (options: {
     ['normalized plugin', options.model.metadata.version],
     ['artifact provenance', manifest.project.packageVersion],
   ];
+  // Every host manifest lives at the one plugin root (#555); the portable
+  // projection beside other hosts is its namespaced `portable/` view.
+  const targetNames = manifest.targets.map((target) => target.name);
   for (const target of manifest.targets) {
     for (const path of hostManifestPaths(target.name)) {
-      const absolute = join(artifactRoot, target.name, path);
+      const relativePath = `${compositeHostRoot(targetNames, target.name)}${compositeHostRoot(targetNames, target.name) === '' ? '' : '/'}${path}`;
+      const absolute = join(artifactRoot, relativePath);
       if (await exists(absolute)) {
-        versions.push([`${target.name}/${path}`, (await jsonRecord(absolute)).version]);
+        versions.push([relativePath, (await jsonRecord(absolute)).version]);
       }
     }
   }

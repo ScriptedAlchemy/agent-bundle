@@ -1,6 +1,7 @@
 import { lstat, readdir, realpath } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
 
+import { compositeHostRoot } from '../adapters/composite.ts';
 import { projectMeta } from '../build/meta.ts';
 import { parseSkill, type SkillDocument, type SkillResource } from '../config/skill.ts';
 import { freezeDiagnostics } from '../core/diagnostics.ts';
@@ -360,7 +361,14 @@ export class SkillDocumentService {
         }
         throw error;
       });
-      const targetRoot = join(realEpochRoot, target);
+      // Every target reads the epoch root itself (#555); a host projected as a
+      // namespaced view (`portable/` beside other hosts) reads that view.
+      const targets = Object.keys(reference.epoch.targetDigests);
+      if (!targets.includes(target)) {
+        throw new SkillDocumentError('SKILL_TARGET_UNAVAILABLE', 'Artifact target is not available in this epoch.');
+      }
+      const hostRoot = compositeHostRoot(targets, target);
+      const targetRoot = hostRoot === '' ? realEpochRoot : join(realEpochRoot, hostRoot);
       const realTargetRoot = await assertedDirectory(targetRoot).catch((error: unknown) => {
         if (error instanceof SkillDocumentError) {
           throw new SkillDocumentError('SKILL_TARGET_UNAVAILABLE', 'Artifact target is not available in this epoch.');

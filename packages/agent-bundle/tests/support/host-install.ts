@@ -11,8 +11,11 @@ import { parse as parseYaml } from 'yaml';
 
 import portableMcpSchema from '../../src/adapters/schemas/portable/mcp.schema.json' with { type: 'json' };
 import portablePluginSchema from '../../src/adapters/schemas/portable/plugin.schema.json' with { type: 'json' };
+import { claudeArtifactPaths } from '../../src/adapters/claude.ts';
 import { codexArtifactPaths, codexInterfaceFields, codexPluginDocumentValidator } from '../../src/adapters/codex.ts';
+import { compositeHookContract, compositeMcpRuntime } from '../../src/adapters/composite.ts';
 import {
+  cursorArtifactPaths,
   cursorHooksValidator,
   cursorMcpValidator,
   cursorPluginValidator,
@@ -67,7 +70,19 @@ const portableMcpSchemaIdentifier =
 const portablePluginSchemaIdentifier =
   'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json';
 const skillSidecarPath = join('skills', 'probe', 'agents', 'openai.yaml');
+const claudeManifestPath = claudeArtifactPaths.plugin;
 const codexManifestPath = codexArtifactPaths.plugin;
+const cursorManifestPath = cursorArtifactPaths.plugin;
+/** The hosts the host-install fixture projects into its one composite root (#555). */
+const fixtureHosts: readonly InstallHost[] = Object.freeze(['claude', 'codex', 'cursor']);
+/** The MCP document one host reads at the fixture root: Codex's relocates under `.codex-plugin/` beside Claude. */
+const hostMcpDocument = (host: InstallHost): string =>
+  compositeMcpRuntime(fixtureHosts, host)?.manifestPath
+    ?? fail(`Host ${host} declares no MCP runtime contract in the composite fixture root.`);
+/** Cursor's hooks document at the fixture root: `hooks/hooks-cursor.json` beside another host. */
+const cursorHooksDocument = (): string =>
+  compositeHookContract(fixtureHosts, 'cursor')?.manifestPath
+    ?? fail('Cursor declares no hook contract in the composite fixture root.');
 const validateCodexPluginManifest = codexPluginDocumentValidator(codexArtifactPaths.mcp);
 const portableSchemaValidator = createAdapterValidator();
 
@@ -149,8 +164,11 @@ export interface BuiltFixtureProject {
 }
 
 export interface BuiltHostInstallFixture extends BuiltFixtureProject {
-  /** Per-host bundles plus the unified `plugin` bundle (one root, three host manifests). */
-  readonly bundles: Readonly<Record<'claude' | 'codex' | 'cursor' | 'plugin', string>>;
+  /**
+   * The directory each host reads as its plugin root. Every host reads the
+   * one composite root itself (#555): three host manifests, one root.
+   */
+  readonly bundles: Readonly<Record<'claude' | 'codex' | 'cursor', string>>;
 }
 
 export interface BuiltHostInstallTokenFixture extends BuiltFixtureProject {
@@ -244,6 +262,11 @@ export interface CodexHostInstallReport {
     readonly version: '1.0.0';
   };
   readonly skill: string;
+  /**
+   * A multi-host root shares one `skills/<name>/SKILL.md` with every host
+   * (#555); Codex's `agents/openai.yaml` is its own file beside it, read by no
+   * other host, so the shared root still emits it.
+   */
   readonly skillSidecar: {
     readonly matchesBuiltArtifact: true;
     readonly path: string;
@@ -582,9 +605,10 @@ const proveSameVersionRebuild = async (options: {
  */
 const buildFixtureProject = async (options: {
   readonly buildCommand?: 'build' | 'prepack';
-  readonly bundleNames: readonly string[];
   readonly environment: Readonly<NodeJS.ProcessEnv>;
   readonly fixture: string;
+  /** Root-relative host manifests the built plugin root must carry (#555). */
+  readonly hostManifests: readonly string[];
   readonly prepareProject?: (projectRoot: string) => Promise<void>;
 }): Promise<BuiltFixtureProject> => {
   const root = await mkdtemp(join(tmpdir(), `agent-bundle-${options.fixture}-build-`));
@@ -607,7 +631,7 @@ const buildFixtureProject = async (options: {
       timeout: 180_000,
     });
     assertProof(result.exitCode === 0, `${options.fixture} fixture build failed: ${commandDetail(result)}`);
-    await Promise.all(options.bundleNames.map((name) => access(join(artifactRoot, name))));
+    await Promise.all(options.hostManifests.map((path) => access(join(artifactRoot, path))));
     return Object.freeze({ artifactRoot, cli, root });
   } catch (error) {
     await rm(root, { force: true, recursive: true });
@@ -622,18 +646,17 @@ export const buildHostInstallFixture = async (options: {
 }): Promise<BuiltHostInstallFixture> => {
   const built = await buildFixtureProject({
     ...(options.buildCommand === undefined ? {} : { buildCommand: options.buildCommand }),
-    bundleNames: ['claude', 'codex', 'cursor', 'plugin'],
     environment: options.environment,
     fixture: 'host-install',
+    hostManifests: [claudeManifestPath, codexManifestPath, cursorManifestPath],
     ...(options.prepareProject === undefined ? {} : { prepareProject: options.prepareProject }),
   });
   return Object.freeze({
     ...built,
     bundles: Object.freeze({
-      claude: join(built.artifactRoot, 'claude'),
-      codex: join(built.artifactRoot, 'codex'),
-      cursor: join(built.artifactRoot, 'cursor'),
-      plugin: join(built.artifactRoot, 'plugin'),
+      claude: built.artifactRoot,
+      codex: built.artifactRoot,
+      cursor: built.artifactRoot,
     }),
   });
 };
@@ -648,11 +671,11 @@ export const buildHostInstallTokenFixture = async (options: {
   readonly environment: Readonly<NodeJS.ProcessEnv>;
 }): Promise<BuiltHostInstallTokenFixture> => {
   const built = await buildFixtureProject({
-    bundleNames: ['claude'],
     environment: options.environment,
     fixture: 'host-install-tokens',
+    hostManifests: [claudeManifestPath],
   });
-  const claudeBundle = join(built.artifactRoot, 'claude');
+  const claudeBundle = built.artifactRoot;
   return Object.freeze({
     ...built,
     claudeBundle,
@@ -664,13 +687,13 @@ export const buildPortableHostInstallFixture = async (options: {
   readonly environment: Readonly<NodeJS.ProcessEnv>;
 }): Promise<BuiltPortableHostInstallFixture> => {
   const built = await buildFixtureProject({
-    bundleNames: ['portable'],
     environment: options.environment,
     fixture: 'host-install-portable',
+    hostManifests: ['plugin.json'],
   });
   return Object.freeze({
     ...built,
-    portableBundle: join(built.artifactRoot, 'portable'),
+    portableBundle: built.artifactRoot,
   });
 };
 
@@ -746,7 +769,7 @@ export const runDevHostInstallProof = async (
   const destination = host === 'cursor'
     ? join(home, '.cursor', 'plugins', 'local', plugin)
     : join(marketplaceRoot, 'plugins', 'cache', marketplace, plugin, version);
-  const mcpPath = host === 'cursor' ? 'mcp.json' : '.mcp.json';
+  const mcpPath = hostMcpDocument(host);
   try {
     manager.start();
     const first = identity('epoch-1', fixture.artifactRoot);
@@ -774,11 +797,12 @@ export const runDevHostInstallProof = async (
       `${host} development proxy did not report AB8025: ${commandDetail(spawned)}`,
     );
     const skillBefore = await readFile(join(destination, 'skills', 'probe', 'SKILL.md'), 'utf8');
-    const hookName = (await readdir(join(epoch2Root, host, 'hooks'))).find((name) => name.endsWith('.mjs'));
+    // The epoch is the plugin root itself (#555): its hooks/ and skills/ are the host's.
+    const hookName = (await readdir(join(epoch2Root, 'hooks'))).find((name) => name.endsWith('.mjs'));
     assertProof(hookName !== undefined, `${host} proof epoch contained no generated hook module.`);
     await Promise.all([
-      writeFile(join(epoch2Root, host, 'skills', 'probe', 'SKILL.md'), `${skillBefore}\nDev epoch two.\n`),
-      writeFile(join(epoch2Root, host, 'hooks', hookName), 'export default () => ({ outcome: "continue", additionalContext: "epoch two" });\n'),
+      writeFile(join(epoch2Root, 'skills', 'probe', 'SKILL.md'), `${skillBefore}\nDev epoch two.\n`),
+      writeFile(join(epoch2Root, 'hooks', hookName), 'export default () => ({ outcome: "continue", additionalContext: "epoch two" });\n'),
     ]);
     const callsAfterInstall = hostCommandCalls;
     const second = identity('epoch-2', epoch2Root);
@@ -1038,6 +1062,15 @@ export const runCodexHostInstallProof = async (
     const skillPath = join(cachePath, 'skills', 'probe', 'SKILL.md');
     await access(skillPath).catch(() => fail('Codex cache did not contain skills/probe/SKILL.md.'));
 
+    // The root shares one SKILL.md with every host (#555); Codex's
+    // agents/openai.yaml sidecar is its own file beside it and still ships.
+    assertProof(
+      await readText(skillPath, 'Codex installed skill') === await readText(
+        join(fixture.bundles.codex, 'skills', 'probe', 'SKILL.md'),
+        'Codex built skill',
+      ),
+      'Codex install did not copy skills/probe/SKILL.md byte-identically from the built root.',
+    );
     const installedSidecar = await readText(join(cachePath, skillSidecarPath), 'Codex installed skill sidecar');
     const builtSidecar = await readText(
       join(fixture.bundles.codex, skillSidecarPath),
@@ -1045,7 +1078,7 @@ export const runCodexHostInstallProof = async (
     );
     assertProof(
       installedSidecar === builtSidecar,
-      'Codex install did not copy skills/probe/agents/openai.yaml byte-identically from the built bundle.',
+      'Codex install did not copy skills/probe/agents/openai.yaml byte-identically from the built root.',
     );
     const sidecarDocument = parseYaml(installedSidecar) as unknown;
     const sidecar = record(sidecarDocument);
@@ -1284,10 +1317,11 @@ const assertCursorMarketplaceStaging = async (
 };
 
 /**
- * Installs the unified `plugin` bundle as a Cursor local plugin in a fresh isolated home and asks Doctor
- * for the static and registration verdicts. The bundle carries both `hooks/hooks.json` (Claude/Codex
- * format) and `hooks/hooks-cursor.json` (Cursor format, named by `.cursor-plugin/plugin.json`), so a
- * validator that ignored the manifest would report AB7320/AB6027 against a byte-for-byte install (#438).
+ * Installs the composite root itself as a Cursor local plugin in a fresh isolated home and asks Doctor
+ * for the static and registration verdicts. Beside Claude and Codex the root carries both
+ * `hooks/hooks.json` (Claude/Codex format) and `hooks/hooks-cursor.json` (Cursor format, named by
+ * `.cursor-plugin/plugin.json`) (#555), so a validator that ignored the manifest would report
+ * AB7320/AB6027 against a byte-for-byte install (#438).
  */
 const assertUnifiedBundleCursorInstall = async (
   fixture: BuiltHostInstallFixture,
@@ -1297,8 +1331,8 @@ const assertUnifiedBundleCursorInstall = async (
   try {
     await mkdir(join(home, '.cursor'), { recursive: true });
     const environment = isolatedEnvironment(options.environment, { HOME: home });
-    const result = await runNodeCli(fixture, ['install', 'cursor', '--from', fixture.bundles.plugin, '--json'], {
-      cwd: fixture.bundles.plugin,
+    const result = await runNodeCli(fixture, ['install', 'cursor', '--from', fixture.artifactRoot, '--json'], {
+      cwd: fixture.artifactRoot,
       environment,
     });
     assertProof(result.exitCode === 0, `Unified bundle Cursor install failed: ${commandDetail(result)}`);
@@ -1378,7 +1412,8 @@ export const runCursorHostInstallProof = async (
       `Cursor plugin logo ${JSON.stringify(logo)} does not resolve inside the deploy tree.`,
     );
     await access(logoPath).catch(() => fail(`Cursor plugin logo ${JSON.stringify(logo)} is missing from the deploy tree.`));
-    const hooksText = await readText(join(destination, 'hooks', 'hooks.json'), 'Cursor hooks document');
+    // Beside Claude and Codex, Cursor's hooks document is hooks/hooks-cursor.json (#555).
+    const hooksText = await readText(join(destination, cursorHooksDocument()), 'Cursor hooks document');
     const hooksDocument = parseJson<unknown>(hooksText, 'Cursor hooks document');
     assertProof(cursorHooksValidator(hooksDocument), `Cursor hooks document failed its pinned schema: ${JSON.stringify(cursorHooksValidator.errors)}`);
     const mcpText = await readText(join(destination, 'mcp.json'), 'Cursor MCP document');
@@ -1808,8 +1843,6 @@ const liveSkillSource = (version: 'v1' | 'v2'): string => [
 
 const liveHookSource = (version: 'v1' | 'v2'): string =>
   `export default () => ({ additionalContext: 'live development proof ${version}', outcome: 'continue' as const });\n`;
-
-const hostMcpDocument = (host: InstallHost): string => host === 'cursor' ? 'mcp.json' : '.mcp.json';
 
 const liveHostDestination = (
   host: InstallHost,

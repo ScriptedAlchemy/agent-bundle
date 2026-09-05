@@ -36,15 +36,25 @@ export default defineConfig({
 
 ## Targets
 
-`targets` 选择构建要输出的产物布局：
+`targets` 选择构建要投影到同一个插件根目录中的宿主：
 
 | Target | 输出什么 |
 | --- | --- |
-| `plugin` | 一份多宿主捆绑包，`.claude-plugin/`、`.codex-plugin/` 与 `.cursor-plugin/` 三份清单共享同一套组件目录。 |
-| `claude` | Claude Code 插件布局。 |
-| `codex` | Codex 插件布局。 |
-| `cursor` | Cursor 插件布局。 |
-| `portable` | [Agent Plugins 开放标准](https://agent-plugins.org)（规范 1.0.0）。Cursor、Codex、VS Code、GitHub Copilot、Kiro 与 ChatGPT 都是原生客户端。 |
+| `claude` | Claude Code 插件布局：`.claude-plugin/plugin.json` 与 `marketplace.json`、`.mcp.json`、`hooks/hooks.json`。 |
+| `codex` | Codex 插件布局：`.codex-plugin/plugin.json` 与 `.agents/plugins/marketplace.json`。 |
+| `cursor` | Cursor 插件布局：`.cursor-plugin/plugin.json`（`marketplace: true` 时还有 `marketplace.json`）与根目录的 `mcp.json`。 |
+| `portable` | [Agent Plugins 开放标准](https://agent-plugins.org)（规范 1.0.0）：根目录的 `plugin.json` 与 `mcp.json`，与其他宿主并列时则是带命名空间的 `portable/` 包。Cursor、Codex、VS Code、GitHub Copilot、Kiro 与 ChatGPT 都是原生客户端。 |
+
+只选一个 target，根目录就是该宿主原本的布局。选多个，它们的投影就组合进同一个根目录：`skills/`、`scripts/`、
+`mcp/`、`mcp-apps/`、`bin/` 与 `assets/` 只输出一次并共享，每个宿主的清单位于各自的目录中，构建还会加上一份
+说明各宿主如何读取根目录的 `AGENTS.md`，以及按宿主分节的一份 `INSTALL.md`。当两个宿主会读取同一份约定位置的
+文档时，组合要么把某个宿主读取的文档搬到显式清单指针之后——与 Claude Code 并列的 Codex 读取
+`.codex-plugin/hooks.json` 与 `.codex-plugin/mcp.json`，与其他宿主并列的 Cursor 读取 `hooks/hooks-cursor.json`——
+要么报告诊断（某个 skill 或命令只选择了共享同一目录的部分宿主时是 `AB4104`，两个投影对同一路径输出不同字节时
+是 `AB4105`）；它绝不会悄悄扩大声明的宿主范围。只有这些内置宿主可以组合：注册在高级 `TargetRegistry` 上的
+适配器单独构建，每个 target 一个 `--output`，将它与内置宿主一起选中会被拒绝（`AB4106`）。省略 `targets` 时选中
+`portable`。`plugin` 不是 target 名称，会作为未知 target 被拒绝（`AB4100`）。输出的布局见
+[项目结构](../start/project-structure.mdx#宿主产物)。
 
 可移植标准只打包 Skills 与 MCP 服务器，因此规则、命令与钩子在该 target 上是诚实地不可用，而不是被
 悄悄丢弃。Claude Code 只能通过 CLI 转译消费该标准，这正是它仍需要专属 target 的原因。
@@ -54,7 +64,7 @@ export default defineConfig({
 | 字段 | 负责 |
 | --- | --- |
 | `plugin` | 项目标识。必填。 |
-| `targets` | 要输出哪些产物布局。 |
+| `targets` | 插件根目录要为哪些宿主投影。 |
 | `skills` | 显式的 Skill 路径或 glob，取代 `src/skills/*` 约定。见 [Skills](./skills.mdx)。 |
 | `hooks` | 按规范事件分键的生命周期钩子处理器。见[钩子](./hooks.mdx)。 |
 | `mcp` | MCP 服务器声明及其 MCP App。见 [MCP 服务器与 MCP App](./mcp.mdx)。 |
@@ -98,7 +108,7 @@ Cursor 插件的其余一切都从跨宿主模型推导。[宿主参考](../../r
 
 有两个 Claude Code 表面值得细看，因为它们的契约比名字所暗示的更窄：
 
-- **`claude.lspServers`** —— 由 `claude` target 以及 `plugin` 的 Claude 那一半输出为插件根目录的
+- **`claude.lspServers`** —— 由任何投影了 `claude` 的根目录输出为插件根目录的
   `.lsp.json`。路径 token 只在 `command`、`args`、`env` 与 `workspaceFolder` 中展开。agent-bundle
   不包含语言服务器二进制文件，请单独安装它，以确保所声明的命令位于 `PATH` 上。Codex、Cursor 与
   可移植格式不会收到这份配置。

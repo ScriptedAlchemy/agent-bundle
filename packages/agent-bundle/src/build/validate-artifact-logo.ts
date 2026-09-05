@@ -3,7 +3,6 @@ import { posix } from 'node:path';
 import { isContainedRelativePath, safeArtifactPath } from '../core/paths.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { artifactDiagnostic as diagnostic } from './artifact-diagnostics.ts';
-import { targetArtifactPath } from './artifact-layout.ts';
 
 const isRemoteLogoReference = (value: string): boolean => {
   try {
@@ -30,7 +29,7 @@ export const manifestLogoPathDiagnostics = (options: {
       options.target,
     )]);
   }
-  const artifactPath = targetArtifactPath(options.target, relativePath);
+  const artifactPath = relativePath;
   if (options.files.has(artifactPath)) return Object.freeze([]);
   return Object.freeze([diagnostic(
     'AB6025',

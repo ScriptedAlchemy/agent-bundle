@@ -2,7 +2,7 @@ import { lstat, readFile } from 'node:fs/promises';
 import { dirname, posix, resolve } from 'node:path';
 
 import { portableAdapter } from '../adapters/portable.ts';
-import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
+import { createDefaultRegistry, type ArtifactRootContracts, type TargetRegistry } from '../adapters/registry.ts';
 import type {
   TargetArtifactDocumentIssue,
   TargetArtifactDocumentValidator,
@@ -43,7 +43,7 @@ import { validateJavaScriptModules } from './validate-artifact-modules.ts';
 import { validateHookCoherence } from './validate-artifact-hooks.ts';
 import { manifestLogoPathDiagnostics } from './validate-artifact-logo.ts';
 import { validateMcpCoherence } from './validate-artifact-mcp.ts';
-import { pathTarget, targetNamespaces, validateEmittedSkills } from './validate-artifact-skills.ts';
+import { manifestTargetNames, validateEmittedSkills } from './validate-artifact-skills.ts';
 import { installSurfaceRequirements } from '../install/surface.ts';
 
 export { artifactDiagnosticRecoveries, type ArtifactDiagnosticCode } from './artifact-diagnostics.ts';
@@ -346,6 +346,7 @@ const validateTargetContracts = async (options: {
 }): Promise<readonly Diagnostic[]> => {
   const diagnostics: Diagnostic[] = [];
   const files = new Set(options.files.map((file) => file.path));
+  const knownTargets = manifestTargetNames(options.manifest).filter((target) => options.registry.has(target));
 
   for (const target of options.manifest.targets) {
     if (!options.registry.has(target.name)) {
@@ -366,72 +367,75 @@ const validateTargetContracts = async (options: {
       ));
       continue;
     }
+  }
+  if (knownTargets.length === 0) return Object.freeze(diagnostics);
 
-    for (const relativePath of installSurfaceRequirements(target.name)) {
-      const generatedPath = `${target.name}/${relativePath}`;
-      if (files.has(generatedPath)) continue;
-      diagnostics.push(diagnostic(
-        relativePath === 'INSTALL.md' ? 'AB6023' : 'AB6024',
-        `Target ${JSON.stringify(target.name)} is missing required install surface ${JSON.stringify(relativePath)}.`,
-        generatedPath,
-        target.name,
-      ));
+  // One root projects every declared host (#555): the install surface and
+  // the host documents (relocated where the composition moved them) all live
+  // at the root, validated by the root's contracts.
+  const root = options.registry.root(knownTargets);
+  // A single-host root's diagnostics name that host; a composite root's name
+  // no projection, since the whole root is at issue.
+  const rootTarget = root.targets.length === 1 ? root.targets[0] : undefined;
+  for (const relativePath of installSurfaceRequirements(knownTargets)) {
+    if (files.has(relativePath)) continue;
+    diagnostics.push(diagnostic(
+      relativePath === 'INSTALL.md' ? 'AB6023' : 'AB6024',
+      `Plugin root ${JSON.stringify(root.name)} is missing required install surface ${JSON.stringify(relativePath)}.`,
+      relativePath,
+      rootTarget,
+    ));
+  }
+
+  const validation = root.artifactValidation;
+  const validators = new Map(validation.schemas.map((schema) => [schema.name, schema.validate]));
+  for (const document of validation.documents) {
+    const generatedPaths = document.path.includes('*')
+      ? [...files]
+        .filter((path) => matchesArtifactDocumentPath(document.path, path))
+        .sort((left, right) => left.localeCompare(right))
+      : [document.path].filter((path) => files.has(path));
+    if (generatedPaths.length === 0) {
+      if (document.required) {
+        diagnostics.push(diagnostic(
+          'AB6011',
+          `Plugin root ${JSON.stringify(root.name)} is missing required document ${JSON.stringify(document.path)}.`,
+          document.path,
+          rootTarget,
+        ));
+      }
+      continue;
     }
-
-    const validation = options.registry.artifactValidation(target.name);
-    const validators = new Map(validation.schemas.map((schema) => [schema.name, schema.validate]));
-    for (const document of validation.documents) {
-      const targetPrefix = `${target.name}/`;
-      const generatedPaths = document.path.includes('*')
-        ? [...files]
-          .filter((path) =>
-            path.startsWith(targetPrefix) &&
-            matchesArtifactDocumentPath(document.path, path.slice(targetPrefix.length)))
-          .sort((left, right) => left.localeCompare(right))
-        : [`${targetPrefix}${document.path}`].filter((path) => files.has(path));
-      if (generatedPaths.length === 0) {
-        if (document.required) {
-          diagnostics.push(diagnostic(
-            'AB6011',
-            `Target ${JSON.stringify(target.name)} is missing required document ${JSON.stringify(document.path)}.`,
-            `${targetPrefix}${document.path}`,
-            target.name,
-          ));
-        }
+    for (const generatedPath of generatedPaths) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(await runWithPlatform(readFileString(resolve(options.artifactRoot, generatedPath)))) as unknown;
+      } catch {
         continue;
       }
-      for (const generatedPath of generatedPaths) {
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(await runWithPlatform(readFileString(resolve(options.artifactRoot, generatedPath)))) as unknown;
-        } catch {
-          continue;
-        }
-        const validate = validators.get(document.schema);
-        if (validate === undefined) continue;
-        const issues = validateSchemaDocument(validate, parsed);
-        const issue = issues[0];
-        if (issue !== undefined) {
-          const relativePath = generatedPath.slice(targetPrefix.length);
-          diagnostics.push(diagnostic(
-            'AB6012',
-            `Target ${JSON.stringify(target.name)} document ${JSON.stringify(relativePath)} is invalid for schema ${JSON.stringify(document.schema)} at ${issue.instancePath || '/'}: ${issue.message}.`,
-            generatedPath,
-            target.name,
-          ));
-        }
-        if (
-          document.path.endsWith('plugin.json') &&
-          isRecord(parsed) &&
-          typeof parsed.logo === 'string'
-        ) {
-          diagnostics.push(...manifestLogoPathDiagnostics({
-            files,
-            generatedPath,
-            logo: parsed.logo,
-            target: target.name,
-          }));
-        }
+      const validate = validators.get(document.schema);
+      if (validate === undefined) continue;
+      const issues = validateSchemaDocument(validate, parsed);
+      const issue = issues[0];
+      if (issue !== undefined) {
+        diagnostics.push(diagnostic(
+          'AB6012',
+          `Plugin root ${JSON.stringify(root.name)} document ${JSON.stringify(generatedPath)} is invalid for schema ${JSON.stringify(document.schema)} at ${issue.instancePath || '/'}: ${issue.message}.`,
+          generatedPath,
+          rootTarget,
+        ));
+      }
+      if (
+        document.path.endsWith('plugin.json') &&
+        isRecord(parsed) &&
+        typeof parsed.logo === 'string'
+      ) {
+        diagnostics.push(...manifestLogoPathDiagnostics({
+          files,
+          generatedPath,
+          logo: parsed.logo,
+          target: root.name,
+        }));
       }
     }
   }
@@ -457,17 +461,22 @@ const validatePortableTargets = async (options: {
   readonly registry: TargetRegistry;
 }): Promise<readonly Diagnostic[]> => {
   const diagnostics: Diagnostic[] = [];
+  const knownTargets = manifestTargetNames(options.manifest).filter((target) => options.registry.has(target));
+  const root = knownTargets.length === 0 ? undefined : options.registry.root(knownTargets);
   for (const target of options.manifest.targets) {
-    if (!options.registry.has(target.name) || options.registry.get(target.name) !== portableAdapter) continue;
-    const prefix = `${target.name}/`;
+    if (root === undefined || !options.registry.has(target.name) || options.registry.get(target.name) !== portableAdapter) continue;
+    // The portable pack is the root itself, or its namespaced `portable/`
+    // view beside other hosts (#555).
+    const hostRoot = root.hostRoot(target.name);
+    const prefix = hostRoot === '' ? '' : `${hostRoot}/`;
     if (!options.filesystem.files.some((file) => file.path.startsWith(prefix))) continue;
     const unsupported = options.filesystem.entries.some((entry) =>
-      (entry.path === target.name || entry.path.startsWith(prefix)) &&
+      (prefix === '' || entry.path === hostRoot || entry.path.startsWith(prefix)) &&
       entry.kind !== 'directory' &&
       entry.kind !== 'file');
     if (unsupported) continue;
     for (const entry of await validatePortablePluginFiles({
-      pluginDirectory: resolve(options.artifactRoot, target.name),
+      pluginDirectory: resolve(options.artifactRoot, hostRoot),
       target: target.name,
     })) {
       diagnostics.push(Object.freeze({ ...entry, message: `Target ${JSON.stringify(target.name)}: ${entry.message}` }));
@@ -494,18 +503,47 @@ const isRecursiveArtifactPath = (relativePath: string, directory: string | undef
 const isAdapterRootDocument = (relativePath: string, rootDocuments: readonly string[] | undefined): boolean =>
   rootDocuments?.includes(relativePath) === true;
 
-const isTargetArtifactPath = (
-  path: string,
-  target: string,
+/**
+ * True when a root-relative path belongs to a layout the root's contracts
+ * declare: the compiler-owned directories, any projected host's hook or MCP
+ * document (relocated where the composition moved it), or a host document.
+ */
+/**
+ * True when a path inside a host's namespaced view (the `portable/` Agent
+ * Plugins pack of a composite root) belongs to that host's own layout: its
+ * documents, skills, assets, payloads, and the `mcp/` shims onto the shared
+ * compiled servers.
+ */
+const isHostViewArtifactPath = (
+  relativePath: string,
+  host: string,
   registry: TargetRegistry,
 ): boolean => {
-  const relativePath = path.slice(target.length + 1);
-  // Unknown targets are diagnosed by the target-contract validator; without their
-  // registry contract there is no trustworthy layout against which to classify files.
-  if (!registry.has(target)) return true;
-  const layout = registry.artifactLayout(target);
-  const hookContract = registry.hookContract(target);
-  const mcpRuntime = registry.mcpRuntime(target);
+  const layout = registry.artifactLayout(host);
+  const hookContract = registry.hookContract(host);
+  const mcpRuntime = registry.mcpRuntime(host);
+  return isRecursiveArtifactPath(relativePath, layout.assets) ||
+    isDirectOutputLayoutPath(relativePath, layout.mcpEntries) ||
+    isSkillArtifactPath(relativePath, layout.skills) ||
+    isAdapterRootDocument(relativePath, layout.rootDocuments) ||
+    relativePath === hookContract?.manifestPath ||
+    relativePath === mcpRuntime?.manifestPath ||
+    registry.artifactValidation(host).documents.some((document) =>
+      matchesArtifactDocumentPath(document.path, relativePath));
+};
+
+const isRootArtifactPath = (
+  relativePath: string,
+  root: ArtifactRootContracts,
+  registry: TargetRegistry,
+): boolean => {
+  for (const host of root.targets) {
+    const hostRoot = root.hostRoot(host);
+    if (hostRoot !== '' && relativePath.startsWith(`${hostRoot}/`)) {
+      return isHostViewArtifactPath(relativePath.slice(hostRoot.length + 1), host, registry);
+    }
+  }
+  const layout = root.artifactLayout;
   return isRecursiveArtifactPath(relativePath, layout.assets) ||
     isRecursiveArtifactPath(relativePath, layout.bin) ||
     isDirectOutputLayoutPath(relativePath, layout.cliBin) ||
@@ -517,9 +555,10 @@ const isTargetArtifactPath = (
     isDirectOutputLayoutPath(relativePath, layout.scripts) ||
     isSkillArtifactPath(relativePath, layout.skills) ||
     isAdapterRootDocument(relativePath, layout.rootDocuments) ||
-    relativePath === hookContract?.manifestPath ||
-    relativePath === mcpRuntime?.manifestPath ||
-    registry.artifactValidation(target).documents.some((document) =>
+    root.targets.some((host) =>
+      relativePath === root.hookContractFor(host)?.manifestPath ||
+      relativePath === root.mcpRuntimeFor(host)?.manifestPath) ||
+    root.artifactValidation.documents.some((document) =>
       matchesArtifactDocumentPath(document.path, relativePath));
 };
 
@@ -530,56 +569,37 @@ const validateArtifactOwnership = (options: {
   readonly registry: TargetRegistry;
 }): readonly Diagnostic[] => {
   const diagnostics: Diagnostic[] = [];
-  const targets = targetNamespaces(options.manifest);
+  const knownTargets = manifestTargetNames(options.manifest).filter((target) => options.registry.has(target));
+  // Unknown targets are diagnosed by the target-contract validator; without
+  // their registry contracts there is no trustworthy layout to classify against.
+  if (knownTargets.length === 0 || knownTargets.length !== options.manifest.targets.length) return Object.freeze(diagnostics);
+  const root = options.registry.root(knownTargets);
+  const rootTarget = root.targets.length === 1 ? root.targets[0] : undefined;
   const manifestKinds = new Map(options.manifest.files.map((file) => [file.path, file.kind]));
 
   for (const file of options.files) {
     if (artifactRootMetadata.has(file.path)) continue;
-    const target = pathTarget(file.path, targets);
-    if (target !== undefined && isTargetArtifactPath(file.path, target, options.registry)) continue;
-    // Prebuilt payload files live in config-named directories under their
-    // target namespace, so no emitted layout describes them.
-    if (target !== undefined && manifestKinds.get(file.path) === 'prebuilt') continue;
+    if (isRootArtifactPath(file.path, root, options.registry)) continue;
+    // Prebuilt payload files live in config-named directories at the root,
+    // so no emitted layout describes them.
+    if (manifestKinds.get(file.path) === 'prebuilt') continue;
     diagnostics.push(diagnostic(
       'AB6014',
-      `Artifact file ${JSON.stringify(file.path)} is outside declared target emitted layouts.`,
+      `Artifact file ${JSON.stringify(file.path)} is outside the plugin root's emitted layouts.`,
       file.path,
-      target,
+      rootTarget,
       ownershipRecovery,
     ));
   }
 
   for (const entry of options.filesystem.entries) {
     if (entry.kind !== 'directory' || entry.path === '.') continue;
-    const target = pathTarget(entry.path, targets);
-    if (!entry.path.includes('/') && !targets.has(entry.path)) {
-      diagnostics.push(diagnostic(
-        'AB6014',
-        `Artifact directory ${JSON.stringify(entry.path)} does not name a declared target namespace.`,
-        entry.path,
-        undefined,
-        ownershipRecovery,
-      ));
-      continue;
-    }
     if (!options.files.some((file) => file.path.startsWith(`${entry.path}/`))) {
       diagnostics.push(diagnostic(
         'AB6014',
         `Artifact directory ${JSON.stringify(entry.path)} is empty.`,
         entry.path,
-        target,
-        ownershipRecovery,
-      ));
-    }
-  }
-
-  for (const target of options.manifest.targets) {
-    if (!options.files.some((file) => file.path.startsWith(`${target.name}/`))) {
-      diagnostics.push(diagnostic(
-        'AB6014',
-        `Declared target ${JSON.stringify(target.name)} has no emitted namespace.`,
-        target.name,
-        target.name,
+        rootTarget,
         ownershipRecovery,
       ));
     }

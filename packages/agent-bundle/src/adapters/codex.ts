@@ -38,6 +38,7 @@ import {
   planHooks,
   readStandardNativeHookCommands,
   validatedNativeHookDocument,
+  type HookPlanRootOptions,
   type TargetHookContract,
 } from './hook-contract.ts';
 import appSchema from './schemas/codex/app.schema.json' with { type: 'json' };
@@ -175,7 +176,9 @@ const hookContract = Object.freeze({
   },
   readNativeCommands: readStandardNativeHookCommands,
   wrapperPath: (hook: NormalizedPlugin['hooks'][number]) => `hooks/${hook.name}.mjs`,
-  wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Codex'),
+  // See the Claude contract: a wrapper shared with Claude Code in one composite
+  // root (#555) carries the Universal body so both sides emit identical bytes.
+  wrapperSource: (entry) => nativeHookWrapperSource(entry, (entry.hosts?.length ?? 1) > 1 ? 'Universal' : 'Codex'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
   adapterRevision: '1.13.0',
@@ -1103,6 +1106,18 @@ const planMcpServer = (
 };
 
 export interface CodexArtifactPlanOptions {
+  /**
+   * Set when this plan is the Codex projection of a root composed with other
+   * hosts (#555): the composite owns the install surface and names the event
+   * endpoint every wrapper and generated MCP entry of that root shares.
+   */
+  readonly composite?: HookPlanRootOptions;
+  /**
+   * Artifact-relative path for the Codex hooks document. A composite root that
+   * also hosts Claude Code relocates it (Claude Code owns the conventional
+   * `hooks/hooks.json`); Codex reads the manifest pointer instead of the default.
+   */
+  readonly hooksRelativePath?: string;
   /** Artifact-relative path for the Codex MCP document; the unified bundle relocates it. */
   readonly mcpRelativePath?: string;
   /** See StandardPluginArtifactsInput.sharedCopyEntries; the unified bundle emits shared copies once. */
@@ -1117,6 +1132,7 @@ export const planCodexArtifacts = (
 ): TargetArtifactPlan => {
   const targetName = options.targetName ?? codexName;
   const mcpRelativePath = options.mcpRelativePath ?? codexArtifactPaths.mcp;
+  const hooksRelativePath = options.hooksRelativePath ?? hookContract.manifestPath;
   const isSelected = (targets: readonly string[]): boolean => targets.includes(targetName);
   const diagnostics: Diagnostic[] = [];
   const servers: Record<string, Record<string, unknown>> = Object.create(null) as Record<string, Record<string, unknown>>;
@@ -1131,7 +1147,7 @@ export const planCodexArtifacts = (
   const mcpValid = mcp !== undefined && validateMcp(mcp);
   if (mcp !== undefined) diagnostics.push(...schemaDiagnostics('mcp', mcpValid, validateMcp.errors));
   diagnostics.push(...codexHostedToolDiagnostics(model, isSelected));
-  const generatedHooks = planHooks(model, targetName, hookContract);
+  const generatedHooks = planHooks(model, targetName, hookContract, undefined, options.composite ?? {});
   diagnostics.push(...generatedHooks.diagnostics);
   if (generatedHooks.document !== undefined) {
     diagnostics.push(...schemaDiagnostics('hooks', validateHooks(generatedHooks.document), validateHooks.errors));
@@ -1189,7 +1205,7 @@ export const planCodexArtifacts = (
     interface: interfacePlan.value,
     ...(appsValid ? { apps: `./${codexArtifactPaths.apps}` } : {}),
     ...(mcp === undefined ? {} : { mcpServers: `./${mcpRelativePath}` }),
-    ...(hookDocument === undefined ? {} : { hooks: `./${hookContract.manifestPath}` }),
+    ...(hookDocument === undefined ? {} : { hooks: `./${hooksRelativePath}` }),
     name: model.metadata.name,
     skills: './skills/',
     version: model.metadata.version,
@@ -1235,7 +1251,7 @@ export const planCodexArtifacts = (
     hookDocument,
     hookDocumentValid,
     hookEntries: generatedHooks.hookEntries,
-    hookManifestPath: hookContract.manifestPath,
+    hookManifestPath: hooksRelativePath,
     isSelected,
     marketplace,
     marketplaceRelativePath: codexArtifactPaths.marketplace,
@@ -1255,7 +1271,7 @@ export const planCodexArtifacts = (
   const plan = options.sharedCopyEntries === false
     ? basePlan
     : Object.freeze({ ...basePlan, entries: withPluginLogoEntry(basePlan.entries, model) });
-  return withInstallSurface(plan, model, targetName === 'plugin' ? 'plugin' : 'codex');
+  return options.composite === undefined ? withInstallSurface(plan, model, 'codex') : plan;
 };
 
 export const codexAdapter: TargetAdapter = Object.freeze({

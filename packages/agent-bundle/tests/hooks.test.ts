@@ -178,6 +178,13 @@ const runPublishedHook = async (wrapper: string, input: string) => runNodeScript
 const runNativeHook = async (wrapper: string, input: Record<string, unknown>) =>
   runNodeScript({ args: [wrapper], input: JSON.stringify(input) });
 
+/**
+ * A root projecting Claude Code and Codex compiles one host-detecting wrapper
+ * per hook (#555); the harness pin runs it as one host deterministically.
+ */
+const runNativeHookAs = async (target: 'claude' | 'codex', wrapper: string, input: Record<string, unknown>) =>
+  runNodeScript({ args: [wrapper], env: { AGENT_BUNDLE_HOOK_HOST: target }, input: JSON.stringify(input) });
+
 const importPublishedHook = async (wrapper: string) =>
   runNodeScript({
     args: ['--input-type=module', '--eval', `await import(${JSON.stringify(pathToFileURL(wrapper).href)}); process.exit(0);`],
@@ -710,7 +717,7 @@ it('lists and simulates only validated wrappers from a clean copied artifact', a
     await cp(outputRoot, artifact, { recursive: true });
     await rm(root, { force: true, recursive: true });
 
-    await expect(importPublishedHook(join(artifact, 'codex', 'hooks', 'session-start-session-start-7ab7e8a5.mjs'))).resolves.toEqual({
+    await expect(importPublishedHook(join(artifact, 'hooks', 'session-start-session-start-7ab7e8a5.mjs'))).resolves.toEqual({
       code: 0,
       stderr: '',
       stdout: '',
@@ -727,9 +734,12 @@ it('lists and simulates only validated wrappers from a clean copied artifact', a
       expect.objectContaining({ event: 'sessionStart', target: 'codex' }),
       expect.objectContaining({ event: 'stop', target: 'codex' }),
     ]);
-    expect(listed.find((hook) => hook.id === 'hook:session-start:session-start:7ab7e8a5' && hook.target === 'codex')).toMatchObject({
-      path: 'codex/hooks/session-start-session-start-7ab7e8a5.mjs',
-    });
+    // One shared wrapper serves both hosts, so the index lists the same path per host.
+    for (const target of ['claude', 'codex'] as const) {
+      expect(listed.find((hook) => hook.id === 'hook:session-start:session-start:7ab7e8a5' && hook.target === target)).toMatchObject({
+        path: 'hooks/session-start-session-start-7ab7e8a5.mjs',
+      });
+    }
     const epochMarker = join(artifact, '.agent-bundle-epoch-stage.json');
     await writeFile(epochMarker, '{"token":"00000000-0000-4000-8000-000000000000"}\n');
     await expect(service.list({ artifact })).rejects.toThrow(/artifact files do not match/i);
@@ -773,7 +783,7 @@ it('lists and simulates only validated wrappers from a clean copied artifact', a
       })).resolves.toBeUndefined();
     }
 
-    await writeFile(join(artifact, 'codex', 'hooks', 'session-start-session-start-7ab7e8a5.mjs'), 'broken');
+    await writeFile(join(artifact, 'hooks', 'session-start-session-start-7ab7e8a5.mjs'), 'broken');
     await expect(service.simulate({
       artifact,
       hook: 'hook:session-start:session-start:7ab7e8a5',
@@ -1028,16 +1038,15 @@ it('compiles each native hook through a virtual Rslib entry without sibling chun
     const hookIndex = await readFile(join(outputRoot, 'agent-bundle.hooks.json'), 'utf8');
     expect(await readFile(join(repeatedOutputRoot, 'agent-bundle.hooks.json'), 'utf8')).toBe(hookIndex);
 
-    for (const target of ['codex', 'claude']) {
-      const hooksRoot = join(outputRoot, target, 'hooks');
-      expect((await readdir(hooksRoot)).filter((name) => name.endsWith('.mjs')).sort()).toEqual(
-        names.map((name) => `${name}.mjs`),
-      );
-      for (const name of names) {
-        const wrapper = await readFile(join(hooksRoot, `${name}.mjs`), 'utf8');
-        expect(wrapper).toContain('compiled from local TypeScript');
-        expect(wrapper).not.toMatch(/from\s+['"](?:agent-bundle|@rstackjs\/|@rspack\/)[^'"]*['"]/);
-      }
+    // Claude Code and Codex share one wrapper per hook at the root's hooks/.
+    const hooksRoot = join(outputRoot, 'hooks');
+    expect((await readdir(hooksRoot)).filter((name) => name.endsWith('.mjs')).sort()).toEqual(
+      names.map((name) => `${name}.mjs`),
+    );
+    for (const name of names) {
+      const wrapper = await readFile(join(hooksRoot, `${name}.mjs`), 'utf8');
+      expect(wrapper).toContain('compiled from local TypeScript');
+      expect(wrapper).not.toMatch(/from\s+['"](?:agent-bundle|@rstackjs\/|@rspack\/)[^'"]*['"]/);
     }
     expect(await readdir(join(root, 'src', 'hooks'))).toEqual([
       'check-command.ts',
@@ -1077,17 +1086,19 @@ it('applies the operator .env layer of the installed pack before a hook handler 
     };
     const context = (result: { readonly stdout: string }): string =>
       (JSON.parse(result.stdout) as { hookSpecificOutput: { additionalContext: string } }).hookSpecificOutput.additionalContext;
-    for (const target of ['codex', 'claude']) {
-      const pluginRoot = join(outputRoot, target);
-      const wrapper = join(pluginRoot, 'hooks', 'session-start-session-start-7ab7e8a5.mjs');
+    // The root is the plugin root for both hosts; one shared wrapper serves them.
+    const pluginRoot = outputRoot;
+    const wrapper = join(pluginRoot, 'hooks', 'session-start-session-start-7ab7e8a5.mjs');
+    for (const target of ['codex', 'claude'] as const) {
+      const hostPin = { AGENT_BUNDLE_HOOK_HOST: target };
       // No file: the wrapper is a no-op and the handler sees the host environment only.
-      const withoutFile = await runNativeHook(wrapper, event);
+      const withoutFile = await runNativeHookAs(target, wrapper, event);
       expect(withoutFile).toMatchObject({ code: 0, stderr: '' });
       expect(context(withoutFile)).toBe('unset:unset');
 
       // `<plugin root>/.env` fills the gap; an exported variable still wins.
       await writeFile(join(pluginRoot, '.env'), 'OPERATOR_TOKEN=from-file\nHOST_WINS=from-file\n');
-      const withFile = await runNodeScript({ args: [wrapper], env: { HOST_WINS: 'host' }, input: JSON.stringify(event) });
+      const withFile = await runNodeScript({ args: [wrapper], env: { ...hostPin, HOST_WINS: 'host' }, input: JSON.stringify(event) });
       expect(withFile).toMatchObject({ code: 0, stderr: '' });
       expect(context(withFile)).toBe('from-file:host');
 
@@ -1095,15 +1106,16 @@ it('applies the operator .env layer of the installed pack before a hook handler 
       const elsewhere = await mkdtemp(join(tmpdir(), 'agent-bundle-hooks-operator-env-anchor-'));
       try {
         await writeFile(join(elsewhere, '.env'), 'OPERATOR_TOKEN=from-anchor\n');
-        const anchored = await runNodeScript({ args: [wrapper], env: { AGENT_BUNDLE_PLUGIN_ROOT: elsewhere }, input: JSON.stringify(event) });
+        const anchored = await runNodeScript({ args: [wrapper], env: { ...hostPin, AGENT_BUNDLE_PLUGIN_ROOT: elsewhere }, input: JSON.stringify(event) });
         expect(context(anchored)).toBe('from-anchor:unset');
         // An explicit AGENT_BUNDLE_ENV_FILE replaces the convention; `none` disables the layer.
-        const explicit = await runNodeScript({ args: [wrapper], env: { AGENT_BUNDLE_ENV_FILE: join(elsewhere, '.env') }, input: JSON.stringify(event) });
+        const explicit = await runNodeScript({ args: [wrapper], env: { ...hostPin, AGENT_BUNDLE_ENV_FILE: join(elsewhere, '.env') }, input: JSON.stringify(event) });
         expect(context(explicit)).toBe('from-anchor:unset');
-        const disabled = await runNodeScript({ args: [wrapper], env: { AGENT_BUNDLE_ENV_FILE: 'none' }, input: JSON.stringify(event) });
+        const disabled = await runNodeScript({ args: [wrapper], env: { ...hostPin, AGENT_BUNDLE_ENV_FILE: 'none' }, input: JSON.stringify(event) });
         expect(context(disabled)).toBe('unset:unset');
       } finally {
         await rm(elsewhere, { force: true, recursive: true });
+        await rm(join(pluginRoot, '.env'), { force: true });
       }
     }
   } finally {
@@ -1136,16 +1148,16 @@ it('runs the embedded Codex and Claude native codecs through their published wra
     ]);
     await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
 
-    for (const target of ['codex', 'claude']) {
-      const hooksRoot = join(outputRoot, target, 'hooks');
-      await expect(runNativeHook(join(hooksRoot, 'session-start-session-start-7ab7e8a5.mjs'), {
+    const hooksRoot = join(outputRoot, 'hooks');
+    for (const target of ['codex', 'claude'] as const) {
+      await expect(runNativeHookAs(target, join(hooksRoot, 'session-start-session-start-7ab7e8a5.mjs'), {
         cwd: '/workspace', hook_event_name: 'SessionStart', session_id: 'session-1', source: 'startup', transcript_path: '/workspace/transcript.json',
       })).resolves.toEqual({
         code: 0,
         stderr: '',
         stdout: '{"hookSpecificOutput":{"additionalContext":"session-1","hookEventName":"SessionStart"}}',
       });
-      await expect(runNativeHook(join(hooksRoot, 'before-tool-check-command-1f5b5818.mjs'), {
+      await expect(runNativeHookAs(target, join(hooksRoot, 'before-tool-check-command-1f5b5818.mjs'), {
         cwd: '/workspace', hook_event_name: 'PreToolUse', session_id: 'session-1', tool_input: { command: 'blocked' }, tool_name: 'Bash', tool_use_id: 'use-1', transcript_path: '/workspace/transcript.json',
       })).resolves.toEqual({
         code: 0,
@@ -1155,24 +1167,24 @@ it('runs the embedded Codex and Claude native codecs through their published wra
       // A continuing beforeTool handler writes no decision, so the host's own
       // permission prompt still applies (#461): nothing on stdout without a
       // rewrite, and a rewrite alone without permissionDecision.
-      await expect(runNativeHook(join(hooksRoot, 'before-tool-check-command-1f5b5818.mjs'), {
+      await expect(runNativeHookAs(target, join(hooksRoot, 'before-tool-check-command-1f5b5818.mjs'), {
         cwd: '/workspace', hook_event_name: 'PreToolUse', session_id: 'session-1', tool_input: { command: 'ls' }, tool_name: 'Write', tool_use_id: 'use-1', transcript_path: '/workspace/transcript.json',
       })).resolves.toEqual({ code: 0, stderr: '', stdout: '' });
-      await expect(runNativeHook(join(hooksRoot, 'before-tool-check-command-1f5b5818.mjs'), {
+      await expect(runNativeHookAs(target, join(hooksRoot, 'before-tool-check-command-1f5b5818.mjs'), {
         cwd: '/workspace', hook_event_name: 'PreToolUse', session_id: 'session-1', tool_input: { file_path: '/etc/passwd' }, tool_name: 'Edit', tool_use_id: 'use-1', transcript_path: '/workspace/transcript.json',
       })).resolves.toEqual({
         code: 0,
         stderr: '',
         stdout: '{"hookSpecificOutput":{"hookEventName":"PreToolUse","updatedInput":{"file_path":"/workspace/safe.ts"}}}',
       });
-      await expect(runNativeHook(join(hooksRoot, 'after-tool-record-87785f02.mjs'), {
+      await expect(runNativeHookAs(target, join(hooksRoot, 'after-tool-record-87785f02.mjs'), {
         cwd: '/workspace', hook_event_name: 'PostToolUse', session_id: 'session-1', tool_input: {}, tool_response: { value: 'observed' }, tool_name: 'Write', tool_use_id: 'use-2', transcript_path: '/workspace/transcript.json',
       })).resolves.toEqual({
         code: 0,
         stderr: '',
         stdout: '{"hookSpecificOutput":{"additionalContext":"[object Object]","hookEventName":"PostToolUse"}}',
       });
-      await expect(runNativeHook(join(hooksRoot, 'stop-stop-bb2d7935.mjs'), {
+      await expect(runNativeHookAs(target, join(hooksRoot, 'stop-stop-bb2d7935.mjs'), {
         cwd: '/workspace', hook_event_name: 'Stop', last_assistant_message: 'done', session_id: 'session-1', stop_hook_active: false, transcript_path: '/workspace/transcript.json',
       })).resolves.toEqual({ code: 0, stderr: '', stdout: '' });
     }
@@ -1180,7 +1192,7 @@ it('runs the embedded Codex and Claude native codecs through their published wra
     // The pinned rust-v0.147.0 post-tool-use input schema types tool_response
     // (and tool_input) as any JSON value, so scalar payloads reach the handler.
     for (const toolResponse of ['observed', 42, false, null]) {
-      await expect(runNativeHook(join(outputRoot, 'codex', 'hooks', 'after-tool-record-87785f02.mjs'), {
+      await expect(runNativeHookAs('codex', join(hooksRoot, 'after-tool-record-87785f02.mjs'), {
         cwd: '/workspace', hook_event_name: 'PostToolUse', model: 'gpt-5-codex', permission_mode: 'default', session_id: 'session-1', tool_input: 'raw', tool_name: 'Write', tool_response: toolResponse, tool_use_id: 'use-2', transcript_path: null, turn_id: 'turn-1',
       })).resolves.toEqual({
         code: 0,
@@ -1303,8 +1315,11 @@ it('round-trips Claude and Codex subagent fields through published wrappers', as
     ]);
     await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
 
+    // Claude Code keeps the conventional hooks/hooks.json; Codex beside it
+    // reads .codex-plugin/hooks.json. Both name the same shared wrappers.
+    const hookDocuments = { claude: join('hooks', 'hooks.json'), codex: join('.codex-plugin', 'hooks.json') } as const;
     for (const target of ['codex', 'claude'] as const) {
-      const manifest = JSON.parse(await readFile(join(outputRoot, target, 'hooks', 'hooks.json'), 'utf8')) as {
+      const manifest = JSON.parse(await readFile(join(outputRoot, hookDocuments[target]), 'utf8')) as {
         readonly hooks: Readonly<Record<string, readonly unknown[]>>;
       };
       expect(manifest.hooks.SubagentStart).toHaveLength(1);
@@ -1319,7 +1334,7 @@ it('round-trips Claude and Codex subagent fields through published wrappers', as
         'utf8',
       )) as Record<string, unknown>;
       const expectedTurn = target === 'codex' ? 'turn-codex-1' : 'undefined';
-      await expect(runNativeHook(join(outputRoot, target, 'hooks', 'subagent-start.mjs'), startInput)).resolves.toEqual({
+      await expect(runNativeHookAs(target, join(outputRoot, 'hooks', 'subagent-start.mjs'), startInput)).resolves.toEqual({
         code: 0,
         stderr: '',
         stdout: JSON.stringify({
@@ -1329,7 +1344,7 @@ it('round-trips Claude and Codex subagent fields through published wrappers', as
           },
         }),
       });
-      await expect(runNativeHook(join(outputRoot, target, 'hooks', 'subagent-stop.mjs'), stopInput)).resolves.toEqual({
+      await expect(runNativeHookAs(target, join(outputRoot, 'hooks', 'subagent-stop.mjs'), stopInput)).resolves.toEqual({
         code: 0,
         stderr: '',
         stdout: JSON.stringify({
@@ -1389,7 +1404,7 @@ it('round-trips the documented Cursor subagent envelopes through published Curso
     ]);
     await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
 
-    const document = JSON.parse(await readFile(join(outputRoot, 'cursor', 'hooks', 'hooks.json'), 'utf8')) as {
+    const document = JSON.parse(await readFile(join(outputRoot, 'hooks', 'hooks.json'), 'utf8')) as {
       readonly hooks: Readonly<Record<string, readonly unknown[]>>;
       readonly version: number;
     };
@@ -1406,7 +1421,7 @@ it('round-trips the documented Cursor subagent envelopes through published Curso
       'utf8',
     )) as Record<string, unknown>;
     // https://cursor.com/docs/hooks#subagentstart: { permission, user_message }.
-    await expect(runNativeHook(join(outputRoot, 'cursor', 'hooks', 'subagent-start.mjs'), startInput)).resolves.toEqual({
+    await expect(runNativeHook(join(outputRoot, 'hooks', 'subagent-start.mjs'), startInput)).resolves.toEqual({
       code: 0,
       stderr: '',
       stdout: JSON.stringify({
@@ -1417,7 +1432,7 @@ it('round-trips the documented Cursor subagent envelopes through published Curso
       }),
     });
     // https://cursor.com/docs/hooks#subagentstop: { followup_message }.
-    await expect(runNativeHook(join(outputRoot, 'cursor', 'hooks', 'subagent-stop.mjs'), stopInput)).resolves.toEqual({
+    await expect(runNativeHook(join(outputRoot, 'hooks', 'subagent-stop.mjs'), stopInput)).resolves.toEqual({
       code: 0,
       stderr: '',
       stdout: JSON.stringify({
@@ -1425,7 +1440,7 @@ it('round-trips the documented Cursor subagent envelopes through published Curso
       }),
     });
     // The Claude/Codex agent_id/agent_type spelling is not the Cursor envelope.
-    await expect(runNativeHook(join(outputRoot, 'cursor', 'hooks', 'subagent-start.mjs'), {
+    await expect(runNativeHook(join(outputRoot, 'hooks', 'subagent-start.mjs'), {
       agent_id: 'abc-123',
       agent_type: 'explore',
       conversation_id: 'conv-456',
@@ -1439,12 +1454,12 @@ it('round-trips the documented Cursor subagent envelopes through published Curso
     // subagent envelope also carries parent_conversation_id; the parent id is
     // not a substitute for the session identifier.
     const { conversation_id: _conversationId, ...startWithoutConversation } = startInput;
-    await expect(runNativeHook(join(outputRoot, 'cursor', 'hooks', 'subagent-start.mjs'), startWithoutConversation)).resolves.toEqual({
+    await expect(runNativeHook(join(outputRoot, 'hooks', 'subagent-start.mjs'), startWithoutConversation)).resolves.toEqual({
       code: 1,
       stderr: 'Agent Bundle hook error: native session_id or conversation_id must be a string\n',
       stdout: '',
     });
-    await expect(runNativeHook(join(outputRoot, 'cursor', 'hooks', 'subagent-stop.mjs'), {
+    await expect(runNativeHook(join(outputRoot, 'hooks', 'subagent-stop.mjs'), {
       ...stopInput,
       status: 'cancelled',
     })).resolves.toEqual({
@@ -1455,7 +1470,7 @@ it('round-trips the documented Cursor subagent envelopes through published Curso
     // followup_message is consumed only when status is "completed"; a denial
     // on an errored or aborted subagent fails instead of emitting ignored output.
     for (const status of ['error', 'aborted']) {
-      await expect(runNativeHook(join(outputRoot, 'cursor', 'hooks', 'subagent-stop.mjs'), { ...stopInput, status })).resolves.toEqual({
+      await expect(runNativeHook(join(outputRoot, 'hooks', 'subagent-stop.mjs'), { ...stopInput, status })).resolves.toEqual({
         code: 1,
         stderr: `Agent Bundle hook error: Cursor subagentStop consumes followup_message only when status is "completed"; this subagent reported "${status}"\n`,
         stdout: '',
@@ -1464,7 +1479,7 @@ it('round-trips the documented Cursor subagent envelopes through published Curso
     // Every documented field except git_branch is mandatory: a malformed
     // envelope must fail closed before the handler runs with undefined fields.
     const { git_branch: _gitBranch, ...startWithoutGitBranch } = startInput;
-    await expect(runNativeHook(join(outputRoot, 'cursor', 'hooks', 'subagent-start.mjs'), startWithoutGitBranch))
+    await expect(runNativeHook(join(outputRoot, 'hooks', 'subagent-start.mjs'), startWithoutGitBranch))
       .resolves.toMatchObject({ code: 0, stderr: '' });
     for (const [field, message] of [
       ['tool_call_id', 'native tool_call_id must be a string'],
@@ -1473,7 +1488,7 @@ it('round-trips the documented Cursor subagent envelopes through published Curso
       ['is_parallel_worker', 'native is_parallel_worker must be a boolean'],
     ] as const) {
       const { [field]: _omitted, ...missing } = startInput;
-      await expect(runNativeHook(join(outputRoot, 'cursor', 'hooks', 'subagent-start.mjs'), missing)).resolves.toEqual({
+      await expect(runNativeHook(join(outputRoot, 'hooks', 'subagent-start.mjs'), missing)).resolves.toEqual({
         code: 1,
         stderr: `Agent Bundle hook error: ${message}\n`,
         stdout: '',
@@ -1486,7 +1501,7 @@ it('round-trips the documented Cursor subagent envelopes through published Curso
       ['agent_transcript_path', 'native agent_transcript_path must be a string or null'],
     ] as const) {
       const { [field]: _omitted, ...missing } = stopInput;
-      await expect(runNativeHook(join(outputRoot, 'cursor', 'hooks', 'subagent-stop.mjs'), missing)).resolves.toEqual({
+      await expect(runNativeHook(join(outputRoot, 'hooks', 'subagent-stop.mjs'), missing)).resolves.toEqual({
         code: 1,
         stderr: `Agent Bundle hook error: ${message}\n`,
         stdout: '',
@@ -1513,14 +1528,14 @@ it('rejects malformed event-specific native input before calling generated Codex
     ]);
     await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
 
-    for (const target of ['codex', 'claude']) {
-      const hooksRoot = join(outputRoot, target, 'hooks');
-      await expect(runNativeHook(join(hooksRoot, 'session-start-session-start-7ab7e8a5.mjs'), {})).resolves.toEqual({
+    const hooksRoot = join(outputRoot, 'hooks');
+    for (const target of ['codex', 'claude'] as const) {
+      await expect(runNativeHookAs(target, join(hooksRoot, 'session-start-session-start-7ab7e8a5.mjs'), {})).resolves.toEqual({
         code: 1,
         stderr: 'Agent Bundle hook error: native session_id must be a string\n',
         stdout: '',
       });
-      await expect(runNativeHook(join(hooksRoot, 'session-start-session-start-7ab7e8a5.mjs'), {
+      await expect(runNativeHookAs(target, join(hooksRoot, 'session-start-session-start-7ab7e8a5.mjs'), {
         ...common, hook_event_name: 'SessionStart',
       })).resolves.toEqual({
         code: 1,
@@ -1531,7 +1546,7 @@ it('rejects malformed event-specific native input before calling generated Codex
       // Claude documents both as objects.
       const toolInputError = target === 'codex' ? 'tool_input is required' : 'tool_input must be an object';
       const toolResponseError = 'tool_response is required';
-      await expect(runNativeHook(join(hooksRoot, 'before-tool-check-command-1f5b5818.mjs'), {
+      await expect(runNativeHookAs(target, join(hooksRoot, 'before-tool-check-command-1f5b5818.mjs'), {
         ...common, hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 'use-1',
         ...(target === 'codex' ? {} : { tool_input: [] }),
       })).resolves.toEqual({
@@ -1539,14 +1554,14 @@ it('rejects malformed event-specific native input before calling generated Codex
         stderr: `Agent Bundle hook error: native PreToolUse ${toolInputError}\n`,
         stdout: '',
       });
-      await expect(runNativeHook(join(hooksRoot, 'after-tool-record-87785f02.mjs'), {
+      await expect(runNativeHookAs(target, join(hooksRoot, 'after-tool-record-87785f02.mjs'), {
         ...common, hook_event_name: 'PostToolUse', tool_input: {}, tool_name: 'Write', tool_use_id: 'use-2',
       })).resolves.toEqual({
         code: 1,
         stderr: `Agent Bundle hook error: native PostToolUse ${toolResponseError}\n`,
         stdout: '',
       });
-      await expect(runNativeHook(join(hooksRoot, 'stop-stop-bb2d7935.mjs'), {
+      await expect(runNativeHookAs(target, join(hooksRoot, 'stop-stop-bb2d7935.mjs'), {
         ...common, hook_event_name: 'Stop', last_assistant_message: 'done', stop_hook_active: 'false',
       })).resolves.toEqual({
         code: 1,
@@ -1590,7 +1605,7 @@ it('rejects canonical reason combinations whose selected native hook cannot repr
       writeFile(join(sourceRoot, 'stop-deny.ts'), "export default () => ({ outcome: 'deny' as const, reason: '' });\n"),
     ]);
     await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
-    const hooksRoot = join(outputRoot, 'codex', 'hooks');
+    const hooksRoot = join(outputRoot, 'hooks');
     const assertions: readonly [string, Record<string, unknown>, string][] = [
       ['session-reason-00000001.mjs', { ...common, hook_event_name: 'SessionStart', source: 'startup' }, 'reason is only valid for a denied beforeTool, stop, or agentStop hook'],
       ['before-allow-reason-00000002.mjs', { ...common, hook_event_name: 'PreToolUse', tool_input: {}, tool_name: 'Bash', tool_use_id: 'use-1' }, 'reason is only valid for a denied beforeTool, stop, or agentStop hook'],
@@ -1639,17 +1654,17 @@ it('rejects malformed native hook input, exports, and handler results concisely'
     ]);
     await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
 
-    await expect(runPublishedHook(join(outputRoot, 'codex', 'hooks', 'valid-00000001.mjs'), '{not json')).resolves.toEqual({
+    await expect(runPublishedHook(join(outputRoot, 'hooks', 'valid-00000001.mjs'), '{not json')).resolves.toEqual({
       code: 1,
       stderr: 'Agent Bundle hook error: stdin must contain exactly one JSON value\n',
       stdout: '',
     });
-    await expect(runPublishedHook(join(outputRoot, 'codex', 'hooks', 'export-00000002.mjs'), '{}')).resolves.toEqual({
+    await expect(runPublishedHook(join(outputRoot, 'hooks', 'export-00000002.mjs'), '{}')).resolves.toEqual({
       code: 1,
       stderr: 'Agent Bundle hook error: default export must be a function\n',
       stdout: '',
     });
-    await expect(runPublishedHook(join(outputRoot, 'codex', 'hooks', 'result-00000003.mjs'), JSON.stringify({
+    await expect(runPublishedHook(join(outputRoot, 'hooks', 'result-00000003.mjs'), JSON.stringify({
       cwd: '/workspace', hook_event_name: 'SessionStart', session_id: 'session-1', source: 'startup', transcript_path: '/workspace/transcript.json',
     }))).resolves.toEqual({
       code: 1,
@@ -1659,7 +1674,7 @@ it('rejects malformed native hook input, exports, and handler results concisely'
     // #492: a handler that throws is the same wire outcome as a malformed one —
     // the message on stderr, nothing on stdout, exit 1 (a non-blocking error on
     // every supported host, so the pending action proceeds).
-    await expect(runPublishedHook(join(outputRoot, 'codex', 'hooks', 'throws-00000004.mjs'), JSON.stringify({
+    await expect(runPublishedHook(join(outputRoot, 'hooks', 'throws-00000004.mjs'), JSON.stringify({
       cwd: '/workspace', hook_event_name: 'SessionStart', session_id: 'session-1', source: 'startup', transcript_path: '/workspace/transcript.json',
     }))).resolves.toEqual({
       code: 1,

@@ -21,7 +21,7 @@ afterEach(async () => {
 const fixture = async (options: {
   readonly author?: string;
   readonly bin?: false | readonly string[];
-  readonly target: 'cursor' | 'plugin' | 'portable';
+  readonly targets: readonly ('claude' | 'codex' | 'cursor' | 'portable')[];
 }): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-installer-entry-'));
   roots.push(root);
@@ -43,7 +43,7 @@ const fixture = async (options: {
       ...(options.author === undefined ? [] : [`  cursor: { author: { name: ${JSON.stringify(options.author)} } },`]),
       "  lib: './src/index.ts',",
       "  plugin: { name: 'installer-fixture' },",
-      `  targets: [${JSON.stringify(options.target)}],`,
+      `  targets: ${JSON.stringify(options.targets)},`,
       '};',
       '',
     ].join('\n')),
@@ -72,7 +72,7 @@ const run = async (
 };
 
 it('builds a package-relative installer with fallback naming and built-host argv validation', async () => {
-  const root = await fixture({ bin: ['installer-fixture'], target: 'cursor' });
+  const root = await fixture({ bin: ['installer-fixture'], targets: ['cursor'] });
   const result = await build({
     output: 'nested/non-default-host-packs',
     packageOutputs: true,
@@ -199,7 +199,7 @@ it('builds a package-relative installer with fallback naming and built-host argv
 it('chooses an unused installer name when both primary candidates are bins', async () => {
   const root = await fixture({
     bin: ['installer-fixture', 'installer-fixture-install'],
-    target: 'cursor',
+    targets: ['cursor'],
   });
   const result = await build({ output: 'host-packs', packageOutputs: true, root });
 
@@ -213,7 +213,7 @@ it('chooses an unused installer name when both primary candidates are bins', asy
 }, 120_000);
 
 it('handles installer help when the project path contains a percent sign', async () => {
-  const originalRoot = await fixture({ bin: ['installer-fixture'], target: 'cursor' });
+  const originalRoot = await fixture({ bin: ['installer-fixture'], targets: ['cursor'] });
   const root = `${originalRoot}%build`;
   await rename(originalRoot, root);
   roots.splice(roots.indexOf(originalRoot), 1, root);
@@ -226,11 +226,11 @@ it('handles installer help when the project path contains a percent sign', async
 }, 120_000);
 
 it('uses the plugin name when free and skips portable-only artifacts', async () => {
-  const cursorRoot = await fixture({ author: 'Fixture Owner', bin: false, target: 'cursor' });
+  const cursorRoot = await fixture({ author: 'Fixture Owner', bin: false, targets: ['cursor'] });
   const cursor = await build({ output: 'host-packs', packageOutputs: true, root: cursorRoot });
   expect(cursor.packageBuild?.files.map((file) => file.path)).toContain('bin/installer-fixture.js');
 
-  const portableRoot = await fixture({ bin: false, target: 'portable' });
+  const portableRoot = await fixture({ bin: false, targets: ['portable'] });
   const portable = await build({ output: 'host-packs', packageOutputs: true, root: portableRoot });
   expect(portable.packageBuild?.files.map((file) => file.path))
     .not.toContain('bin/installer-fixture.js');
@@ -239,7 +239,7 @@ it('uses the plugin name when free and skips portable-only artifacts', async () 
   await mkdir(join(portableHome, '.cursor'), { recursive: true });
   const portableMarketplace = await run(
     process.execPath,
-    [join(portableRoot, 'host-packs', 'portable', 'install.mjs'), '--mode', 'marketplace'],
+    [join(portableRoot, 'host-packs', 'install.mjs'), '--mode', 'marketplace'],
     { cwd: tmpdir(), env: { ...process.env, HOME: portableHome } },
   );
   expect(portableMarketplace.code).toBe(1);
@@ -248,23 +248,24 @@ it('uses the plugin name when free and skips portable-only artifacts', async () 
 
   // A bundle carrying nested Git metadata would be committed as an empty gitlink; the emitted installer refuses it.
   const cursorHome = join(cursorRoot, 'home');
+  const cursorPack = join(cursorRoot, 'host-packs');
   await mkdir(join(cursorHome, '.cursor'), { recursive: true });
-  await mkdir(join(cursorRoot, 'host-packs', 'cursor', 'vendor', '.git'), { recursive: true });
+  await mkdir(join(cursorPack, 'vendor', '.git'), { recursive: true });
   const nestedGit = await run(
     process.execPath,
-    [join(cursorRoot, 'host-packs', 'cursor', 'install.mjs'), '--mode', 'marketplace'],
+    [join(cursorPack, 'install.mjs'), '--mode', 'marketplace'],
     { cwd: tmpdir(), env: { ...process.env, HOME: cursorHome } },
   );
   expect(nestedGit.code).toBe(1);
   expect(nestedGit.stderr).toContain('refuses bundle-internal Git metadata at "vendor/.git"');
   await expect(stat(join(cursorHome, '.cursor', 'agent-bundle'))).rejects.toMatchObject({ code: 'ENOENT' });
-  await rm(join(cursorRoot, 'host-packs', 'cursor', 'vendor'), { recursive: true });
+  await rm(join(cursorPack, 'vendor'), { recursive: true });
 
   // The emitted install.mjs and `agent-bundle install cursor --mode marketplace` derive owner/description from the
   // same emitted manifest (authored cursor.author here), so staging with one and rerunning the other is idempotent.
   const stagedByScript = await run(
     process.execPath,
-    [join(cursorRoot, 'host-packs', 'cursor', 'install.mjs'), '--mode', 'marketplace'],
+    [join(cursorPack, 'install.mjs'), '--mode', 'marketplace'],
     { cwd: tmpdir(), env: { ...process.env, HOME: cursorHome } },
   );
   expect(stagedByScript).toMatchObject({ code: 0, stderr: '' });
@@ -274,14 +275,15 @@ it('uses the plugin name when free and skips portable-only artifacts', async () 
   ));
   expect(stagedManifest.owner).toEqual({ name: 'Fixture Owner' });
   const rerunByCli = await installBundle({
-    from: join(cursorRoot, 'host-packs', 'cursor'),
+    from: cursorPack,
     home: cursorHome,
     host: 'cursor',
     mode: 'marketplace',
   });
   expect(rerunByCli).toMatchObject({ mode: 'marketplace', state: 'already-installed' });
 
-  const pluginRoot = await fixture({ bin: false, target: 'plugin' });
+  // A multi-host root installs every projected host from one package bin.
+  const pluginRoot = await fixture({ bin: false, targets: ['claude', 'codex', 'cursor'] });
   const plugin = await build({ output: 'host-packs', packageOutputs: true, root: pluginRoot });
   const pluginInstaller = join(pluginRoot, 'dist', 'bin', 'installer-fixture.js');
   expect(plugin.packageBuild?.files.map((file) => file.path)).toContain('bin/installer-fixture.js');

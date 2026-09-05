@@ -113,14 +113,18 @@ const appIdentity = (app: NormalizedMcpApp): string => stableJson({
 });
 
 export type McpAppTargetSelection =
-  | Readonly<{ readonly target: string; readonly targets?: never }>
-  | Readonly<{ readonly target?: never; readonly targets: Readonly<Record<string, string>> }>;
+  /** One root: its identity, and the hosts it projects (defaults to the identity itself, #555). */
+  | Readonly<{ readonly hosts?: readonly string[]; readonly target: string; readonly targets?: never }>
+  | Readonly<{ readonly hosts?: never; readonly target?: never; readonly targets: Readonly<Record<string, string>> }>;
 
 const selectedAppTarget = (
   app: NormalizedMcpApp,
   selection: McpAppTargetSelection,
 ): string | undefined => {
-  const target = selection.target ?? selection.targets[app.id];
+  if (selection.target !== undefined) {
+    return (selection.hosts ?? [selection.target]).some((host) => app.targets.includes(host)) ? selection.target : undefined;
+  }
+  const target = selection.targets[app.id];
   return target !== undefined && app.targets.includes(target) ? target : undefined;
 };
 
@@ -250,7 +254,9 @@ export const compileMcpApps = async (
 ): Promise<readonly CompiledMcpApp[]> => {
   const compiled = planCompiledMcpApps(apps, {
     outDir: options.outDir,
-    ...(options.target === undefined ? { targets: options.targets } : { target: options.target }),
+    ...(options.target === undefined
+      ? { targets: options.targets }
+      : { target: options.target, ...(options.hosts === undefined ? {} : { hosts: options.hosts }) }),
   });
   if (compiled.length === 0) {
     return compiled;

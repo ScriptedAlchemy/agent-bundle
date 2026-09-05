@@ -21,7 +21,7 @@ export default defineConfig({
 | Field | Type | Default |
 | --- | --- | --- |
 | `plugin` | `{ name, description?, logo?, ... }` | **Required.** |
-| `targets` | `string[]` | Adapter-selected. |
+| `targets` | `string[]` — `claude`, `codex`, `cursor`, `portable`, projected into one root | `['portable']`. |
 | `skills` | `string[]` | The `src/skills/*` convention. |
 | `hooks` | `Partial<Record<CanonicalHookEvent, ...>>` | The `src/hooks/*` convention. |
 | `mcp` | `{ servers: Record<string, ...> }` | The `src/mcp/*` convention. |

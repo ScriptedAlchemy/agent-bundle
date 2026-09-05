@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../../adapters/registry.ts';
+import { hostMcpRuntime, readArtifactRootContracts } from '../../build/artifact-root.ts';
 import type {
   DiscoveryBundleFinding,
   DiscoveryDiagnostic,
@@ -124,7 +125,9 @@ const enumerateMcpServers = async (
   const bundleRoot = value.bundle?.bundleRoot;
   if (bundleRoot === undefined) return undefined;
   try {
-    const runtime = registry.mcpRuntime(value.host);
+    // The installed root may compose several hosts (#555), relocating this
+    // host's MCP document; its root contracts name the path that applies.
+    const runtime = hostMcpRuntime(await readArtifactRootContracts(bundleRoot, registry), registry, value.host);
     if (runtime === undefined) return undefined;
     const document = parseJsonWithoutDuplicateKeys(
       await run(readFileString(join(bundleRoot, runtime.manifestPath))),

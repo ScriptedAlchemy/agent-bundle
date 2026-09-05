@@ -15,7 +15,7 @@ even when no error diagnostic was reported.
 | --- | --- |
 | `AB30xx` | Skill documents: Markdown parsing (`AB3000`–`AB3002`: unreadable, missing or malformed frontmatter) and rendered-skill compilation (`AB3003`: module failed to load, `AB3004`: missing/invalid default component or `frontmatter` export, `AB3005`: content outside the supported Markdown element subset). |
 | `AB40xx` | Plugin metadata and Skill source validation (`AB4000`/`AB4001`: name/version; `AB4002`–`AB4007`: Skill fields; `AB4008`–`AB4011` and `AB4013`: release identity, see below; `AB4012`: declared `plugin.logo` is missing, not a file, or outside the project). |
-| `AB41xx` | Normalized model invariants (unknown targets, duplicate IDs and outputs). |
+| `AB41xx` | Normalized model invariants (`AB4100`: unknown target — `plugin` is no longer a target name; duplicate IDs and outputs) and composite plugin root composition (`AB4104`: a declaration selects some but not all of the hosts that share one root directory; `AB4105`: two host projections emitted different bytes for one root path; `AB4106`: a target set no root can hold — an advanced adapter beside a built-in host; see below). |
 | `AB42xx` | Hook configuration and native hook sources. |
 | `AB43xx` | MCP server and MCP App configuration (`AB4340`: a declaration for a route-generated server redeclares `entry`/`command`/`url`; see below). |
 | `AB44xx` | Script configuration. |
@@ -49,7 +49,7 @@ even when no error diagnostic was reported.
 ## Claude Code host validation (`AB6019`–`AB6022`, `AB7311`, `AB7325`)
 
 `agent-bundle validate --artifact <dir>` and `agent-bundle build` run the
-installed Claude Code validator for the `claude` and `plugin` targets when
+installed Claude Code validator over a built root that projects `claude` when
 `--host-validation` is on (the default for both commands; `--no-host-validation`
 skips it, and programmatic `build()` calls skip it unless `hostValidation: true`
 is passed). `agent-bundle doctor --host claude --from <dir>` runs the same
@@ -86,7 +86,7 @@ readable `.claude-plugin/plugin.json` name (the validation runs already report
 that manifest). Doctor does not repeat it: its registration proof and the
 inventory rows' `errors` already carry the same verdicts. Without `claude` on
 `PATH`, `build` spawns once, reports one `AB6019`, and marks the remaining
-`claude`/`plugin` targets `unavailable` without spawning again.
+`claude` roots `unavailable` without spawning again.
 
 | Code | Severity | Meaning | Recovery |
 | --- | --- | --- | --- |
@@ -467,6 +467,31 @@ that claims the same path. See “The routed CLI shell” in
 | --- | --- | --- |
 | `AB4765` | warning | The project has a routed CLI but a selected target's adapter publishes no supported `cli` capability, so that artifact ships no `bin/<name>.mjs`. Skills, hooks, and scripts in that artifact cannot invoke the routed CLI. `inspect` lists the same omission as an `unsupported-capability` skip of the `cli` component. Publish the capability (with a `cliBin` artifact layout) on the adapter, or keep references to the bin out of that target's surfaces. |
 | `AB4766` | error (build) | A target plan already emits `bin/<name>.mjs` or `bin/<name>-flight.mjs` (for example a Claude `claude.bin` directory shipping a file of that name), compared case-insensitively because those are one file on macOS and Windows. The routed CLI owns those paths, so the build refuses instead of choosing. Rename or remove the host-emitted file, or set `bin: false` to keep it and drop the routed CLI executable. |
+
+## Composite plugin root composition (`AB4104`–`AB4106`)
+
+`agent-bundle build` emits one plugin root for every selected target (#555):
+host manifests in their own directories over shared `skills/`, `scripts/`,
+`mcp/`, `bin/`, and `assets/` content, with the portable (Agent Plugins)
+projection namespaced under `portable/` beside other hosts. Where two hosts
+would read one conventional document the composition relocates the one a host
+reads through an explicit manifest pointer (Codex beside Claude Code reads
+`.codex-plugin/hooks.json` and `.codex-plugin/mcp.json`; Cursor beside another
+host reads `hooks/hooks-cursor.json`). Where it cannot isolate a declaration
+it refuses instead of widening the declaration's host scope. `AB4104` and
+`AB4105` come from the assembler for a root that projects two or more hosts,
+name no `target` because the whole root is at issue, and are never emitted for
+a single-host root; `validate` and `inspect` plan the same root the build
+does, so they report them too. `AB4106` is judged on the normalized model,
+before any planning: only the built-in hosts (`claude`, `codex`, `cursor`,
+`portable`) know how to share a root, so an advanced registry's own adapter is
+built alone, one target per `--output`.
+
+| Code | Severity | Trigger |
+| --- | --- | --- |
+| `AB4104` | error | A declaration whose emitted file every projected host discovers conventionally selects some but not all of those hosts, so one root cannot hide it from the rest: a skill selects a strict subset of the hosts that share the root's `skills/` directory (the `portable/` view carries its own copy, so only the hosts reading the root's `skills/` must agree), or a command selects `cursor` in a root that also projects `claude` (`commands/` carries Claude Code frontmatter there, and Cursor reads plain Markdown prompts from the same directory). Select every projected host (or none of them) on the declaration, or build the hosts that differ into a separate `--output`. |
+| `AB4105` | error | Two host projections of the root emitted different bytes for the same root-relative path — a generated document, a copied file, or a hook wrapper. Identical bytes merge silently and pool their source inputs; differing bytes are refused rather than letting one host overwrite another's file. Build the hosts that differ into a separate `--output`. |
+| `AB4106` | error | The project selects two or more targets and one of them is not a built-in host — an adapter registered on an advanced `TargetRegistry` — so no plugin root can project the whole set. Named on that target, with its config provenance. Build the adapter's target alone into its own `--output`, and the built-in hosts into another. |
 
 ## Config beside a route-generated MCP server (`AB4340`)
 
@@ -1175,7 +1200,7 @@ that array instead of treating every listed row as a healthy install. The
 observed instance is the manifest `hooks` pointer at the auto-loaded
 `hooks/hooks.json` ("Hook load failed: Duplicate hooks file detected …
 manifest.hooks should only reference additional hook files"), which the
-`claude` and unified `plugin` targets no longer emit (#470) and which the
+`claude` projection no longer emits (#470) and which the
 pinned Claude `plugin` schema now rejects (`AB6012` at `/hooks`).
 
 | Code | Severity | Trigger | Recovery |

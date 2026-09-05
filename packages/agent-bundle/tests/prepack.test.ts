@@ -50,7 +50,7 @@ beforeAll(async () => {
     writeFile(join(projectRoot, 'src', 'index.ts'), 'export const value = 1;\n'),
   ]);
   result = await prepack({ root: projectRoot });
-  payloadPath = join(projectRoot, 'host-packs', 'cursor', 'INSTALL.md');
+  payloadPath = join(projectRoot, 'host-packs', 'INSTALL.md');
   payloadBytes = await readFile(payloadPath, 'utf8');
 });
 
@@ -132,7 +132,7 @@ it('exposes --root, --output, and --json through the prepack command', async () 
 it('reports missing allowlisted artifacts as AB7010', async () => {
   const pack = {
     ...result.pack,
-    files: result.pack.files.filter((file) => file.path !== 'host-packs/cursor/INSTALL.md'),
+    files: result.pack.files.filter((file) => file.path !== 'host-packs/INSTALL.md'),
   };
   expect(await diagnostics(pack)).toContainEqual(expect.objectContaining({ code: 'AB7010' }));
 });

@@ -8,34 +8,40 @@ target 表格——各 target 输出哪种布局，以及 portable 标准为何�
 [配置模型](../guide/authoring/index.mdx)中。目录布局在
 [项目结构](../guide/start/project-structure.mdx)中。本页讲的是这些布局必须满足的产物契约。
 
-## 每个 target 目录都可分发
+## 根目录即可分发
 
-已构建的 target 目录就是分发单位：构建之后没有打包步骤。每个目录都携带宿主要读取的组件、一份使用捆绑包
-真实插件名与市场名写成的生成式 `INSTALL.md`，以及该 target 所需的安装表面。
+已构建的插件根目录就是分发单位：构建之后没有打包步骤，也没有逐宿主的重新打包。一个根目录携带所有所选宿主
+的清单、它们共享的已编译内容、一份按宿主分节且使用捆绑包真实插件名与市场名写成的生成式 `INSTALL.md`，
+以及每个所选 target 所需的安装表面。
 
-| Target | 市场清单 | 安装表面 |
+| Target | 根目录下的宿主清单 | 安装表面 |
 | --- | --- | --- |
-| `claude` | 本地市场清单。 | `claude plugin marketplace add` + `claude plugin install`。 |
-| `codex` | 本地市场清单。 | `codex plugin marketplace add` + `codex plugin add`。 |
-| `cursor` | `marketplace: true` 时生成本地市场清单（`.cursor-plugin/marketplace.json`）。 | `install.mjs`。 |
-| `portable` | —— | `install.mjs`。 |
-| `plugin` | Claude、Codex 与 Cursor 三份清单，外加一份生成的 `AGENTS.md`。 | `install.mjs` 与各宿主 CLI。 |
+| `claude` | `.claude-plugin/plugin.json` 与本地市场清单 `.claude-plugin/marketplace.json`。 | `claude plugin marketplace add` + `claude plugin install`。 |
+| `codex` | `.codex-plugin/plugin.json` 与本地市场清单 `.agents/plugins/marketplace.json`。 | `codex plugin marketplace add` + `codex plugin add`。 |
+| `cursor` | `.cursor-plugin/plugin.json`，`marketplace: true` 时还有 `.cursor-plugin/marketplace.json`。 | `install.mjs`。 |
+| `portable` | 只含 portable 的根目录为 `plugin.json`；与其他宿主并列时为带命名空间的 `portable/` 包。 | `install.mjs`。 |
 
-当某个 target 缺少必需的安装表面文件时，产物校验会报错，因此捆绑包不可能在缺少其 `INSTALL.md` 所承诺的
+投影两个或更多宿主的根目录还带有一份生成的 `AGENTS.md`。当两个宿主会读取同一份约定位置的文档时，组合会把
+某个宿主读取的文档搬到显式指针之后——与 Claude Code 并列的 Codex 读取 `.codex-plugin/hooks.json` 与
+`.codex-plugin/mcp.json`，与其他宿主并列的 Cursor 读取 `hooks/hooks-cursor.json`——而同时选择 Claude Code
+与 Codex 的钩子会编译成一个能识别宿主的 `hooks/<name>.mjs`，被两份文档同时引用。`plugin` 不是 target
+名称（`AB4100`）。
+
+当根目录缺少必需的安装表面文件时，产物校验会报错，因此捆绑包不可能在缺少其 `INSTALL.md` 所承诺的
 安装器的情况下发布。npm pack 清单会检查同样的路径（`AB7010`）。
 
 ## agent-bundle.manifest.json
 
-每份产物输出一份清单，它是之后每一项完整性检查的输入 —— `validate --artifact`、`prepack`、
+根目录输出一份清单，它是之后每一项完整性检查的输入 —— `validate --artifact`、`prepack`、
 `doctor --from`，以及 packed 与 installed-host 证明级别。
 
 | 字段 | 内容 |
 | --- | --- |
 | `producer` | `{ name: 'agent-bundle', version }`。 |
 | `project` | `configPath`、`configDigest`、`modelDigest`、`revision`、经过校验的 `packageName` 与 `packageVersion`（未打包的开发项目中不存在），以及 `sourceInputs`。 |
-| `files` | 每个输出文件：`path`、`bytes`、`sha256`、`kind`、可选的 `mode`，以及它所派生自的 `sourceInputs`。 |
+| `files` | 每个输出文件：相对根目录的 `path`、`bytes`、`sha256`、`kind`、可选的 `mode`，以及它所派生自的 `sourceInputs`。 |
 | `runtime` | `{ node }` —— 所选的生成式可执行文件下限。 |
-| `targets` | 每个 target 的：`name`、`adapterRevision`、`observedVersion`，以及它据以校验的固定 `schemas`。 |
+| `targets` | 每个被投影宿主一行——`claude`、`codex`、`cursor`、`portable`：`name`、`adapterRevision`、`observedVersion`，以及它据以校验的固定 `schemas`。 |
 | `agentSkills` | Agent Skills 规范固定值：`specification`、`sourceRevision`、`schemaSha256`。 |
 | `validation` | `source`、`artifact` 与各 target 的已记录状态。 |
 
@@ -45,6 +51,13 @@ target 表格——各 target 输出哪种布局，以及 portable 标准为何�
 
 由于每个文件都携带摘要，校验比对的是**真实字节**，而不是检查路径是否存在，因此被手工改过的生成文件会
 失败。正是这一契约，让 `validate --artifact`、`mcp` 与 `hooks` 能在项目源码已被删除的产物上工作。
+
+## agent-bundle.hooks.json
+
+清单旁边的钩子索引为每个钩子**以及**它服务的每个宿主列出一条——`event`、`id`、`name`、相对根目录的
+包装脚本 `path`、`target`，以及可选的 `timeout`——按 `(target, id)` 排序。因此 Claude Code 与 Codex 共享的
+包装脚本会按宿主各出现一次，`path` 相同。`agent-bundle hooks list` 与 `hooks simulate` 读取这份索引，
+`--target` 按宿主过滤它。
 
 ## 版本与修订
 

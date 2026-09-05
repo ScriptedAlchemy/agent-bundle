@@ -9,36 +9,43 @@ commands, and hooks — is in [Configuration model](../guide/authoring/index.mdx
 layouts are in [Project structure](../guide/start/project-structure.mdx). This page is the
 artifact contract those layouts have to satisfy.
 
-## Every target directory is distributable
+## The root is distributable
 
-A built target directory is the unit of distribution: no packaging step follows the build. Each
-one carries the components the host reads, a generated `INSTALL.md` written with the bundle's
-real plugin and marketplace names, and the install surface that target requires.
+The built plugin root is the unit of distribution: no packaging step follows the build, and there
+is no per-host repackaging. One root carries every selected host's manifests, the compiled content
+they share, a generated `INSTALL.md` with a section per host written with the bundle's real
+plugin and marketplace names, and the install surface each selected target requires.
 
-| Target | Marketplace manifests | Install surface |
+| Target | Host manifests at the root | Install surface |
 | --- | --- | --- |
-| `claude` | Local marketplace manifest. | `claude plugin marketplace add` + `claude plugin install`. |
-| `codex` | Local marketplace manifest. | `codex plugin marketplace add` + `codex plugin add`. |
-| `cursor` | Local marketplace manifest (`.cursor-plugin/marketplace.json`) when `marketplace: true`. | `install.mjs`. |
-| `portable` | — | `install.mjs`. |
-| `plugin` | Claude, Codex, and Cursor manifests, plus a generated `AGENTS.md`. | `install.mjs` and the host CLIs. |
+| `claude` | `.claude-plugin/plugin.json` and the local marketplace `.claude-plugin/marketplace.json`. | `claude plugin marketplace add` + `claude plugin install`. |
+| `codex` | `.codex-plugin/plugin.json` and the local marketplace `.agents/plugins/marketplace.json`. | `codex plugin marketplace add` + `codex plugin add`. |
+| `cursor` | `.cursor-plugin/plugin.json`, plus `.cursor-plugin/marketplace.json` when `marketplace: true`. | `install.mjs`. |
+| `portable` | `plugin.json` for a portable-only root; the namespaced `portable/` pack beside other hosts. | `install.mjs`. |
 
-Artifact validation errors when a target is missing a required install-surface file, so a bundle
+A root that projects two or more hosts also carries a generated `AGENTS.md`. Where two hosts would
+read one conventional document, the composition relocates the one a host reads through an
+explicit pointer — Codex beside Claude Code reads `.codex-plugin/hooks.json` and
+`.codex-plugin/mcp.json`, Cursor beside another host reads `hooks/hooks-cursor.json` — and a hook
+selecting both Claude Code and Codex compiles to one host-detecting `hooks/<name>.mjs` that both
+documents name. `plugin` is not a target name (`AB4100`).
+
+Artifact validation errors when the root is missing a required install-surface file, so a bundle
 cannot ship without the installer its `INSTALL.md` promises. The npm pack inventory checks the
 same paths (`AB7010`).
 
 ## agent-bundle.manifest.json
 
-One manifest is emitted per artifact and is the input to every later integrity check —
+One manifest is emitted at the root and is the input to every later integrity check —
 `validate --artifact`, `prepack`, `doctor --from`, and the packed and installed-host proof levels.
 
 | Field | Contents |
 | --- | --- |
 | `producer` | `{ name: 'agent-bundle', version }`. |
 | `project` | `configPath`, `configDigest`, `modelDigest`, `revision`, the validated `packageName` and `packageVersion` (absent for unpackaged development projects), and `sourceInputs`. |
-| `files` | Every emitted file: `path`, `bytes`, `sha256`, `kind`, optional `mode`, and the `sourceInputs` it derives from. |
+| `files` | Every emitted file: root-relative `path`, `bytes`, `sha256`, `kind`, optional `mode`, and the `sourceInputs` it derives from. |
 | `runtime` | `{ node }` — the selected generated-executable floor. |
-| `targets` | Per target: `name`, `adapterRevision`, `observedVersion`, and the pinned `schemas` it was validated against. |
+| `targets` | One row per projected host — `claude`, `codex`, `cursor`, `portable`: `name`, `adapterRevision`, `observedVersion`, and the pinned `schemas` it was validated against. |
 | `agentSkills` | The Agent Skills specification pin: `specification`, `sourceRevision`, `schemaSha256`. |
 | `validation` | Recorded status for `source`, `artifact`, and each target. |
 
@@ -50,6 +57,14 @@ Because every file carries a digest, validation compares **real bytes** rather t
 a path exists, and a hand-edited generated file fails. That contract is what makes
 `validate --artifact`, `mcp`, and `hooks` work against an artifact whose project sources have been
 deleted.
+
+## agent-bundle.hooks.json
+
+The hook index beside the manifest lists one entry per hook **and** per host it serves — `event`,
+`id`, `name`, the root-relative wrapper `path`, `target`, and an optional `timeout` — ordered by
+`(target, id)`. A wrapper shared by Claude Code and Codex therefore appears once per host with the
+same `path`. `agent-bundle hooks list` and `hooks simulate` read this index, and `--target` filters
+it by host.
 
 ## Versions and revisions
 

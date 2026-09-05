@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'n
 import { basename, extname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 
 import { capabilityIsSupported, cliBinCapability } from '../adapters/capability-state.ts';
+import { compositeHostNames, isCompositeHost } from '../adapters/composite-hosts.ts';
 import { type EntryExportScan, scanEntryExportsSource } from '../build/entry-exports.ts';
 import { frameworkOwnedPluginCollisions, frameworkOwnedRsbuildPlugins } from '../build/framework-plugins.ts';
 import type { CapabilityState } from '../core/capabilities.ts';
@@ -2315,6 +2316,30 @@ const routedCliBinTargetDiagnostics = (
   return diagnostics;
 };
 
+/**
+ * Every selected target is projected into one plugin root (#555), and only
+ * the built-in hosts know how to share one: an advanced registry's own adapter
+ * is built alone, one target per `--output`. Judged here so `validate` and
+ * `inspect` name the target instead of the build refusing the root.
+ */
+const compositeRootDiagnostics = (
+  model: NormalizedPlugin,
+  registry: NormalizationTargetRegistry,
+): Diagnostic[] => {
+  const known = model.targets.filter((target) => registry.has(target.name));
+  if (new Set(known.map((target) => target.name)).size < 2) return [];
+  return known
+    .filter((target) => !isCompositeHost(target.name))
+    .map((target) => ({
+      code: 'AB4106',
+      message: `Target ${JSON.stringify(target.name)} cannot share one plugin root with the other selected targets: a root of several targets projects the built-in hosts only (${compositeHostNames.join(', ')}).`,
+      recovery: `Build ${JSON.stringify(target.name)} alone into its own --output, and the built-in hosts into another.`,
+      severity: 'error',
+      sourcePath: target.provenance.sourcePath,
+      target: target.name,
+    }));
+};
+
 export const validateModel = (
   model: NormalizedPlugin,
   registry: NormalizationTargetRegistry,
@@ -2322,16 +2347,24 @@ export const validateModel = (
   const diagnostics: Diagnostic[] = [];
 
   for (const target of model.targets) {
-    if (!registry.has(target.name)) {
-      diagnostics.push({
-        code: 'AB4100',
-        message: `Unknown target ${JSON.stringify(target.name)}.`,
-        severity: 'error',
-        sourcePath: target.provenance.sourcePath,
-        target: target.name,
-      });
-    }
+    if (registry.has(target.name)) continue;
+    // `plugin` was the Claude Code + Codex composite before every selected
+    // target was projected into one root (#555); name its replacement.
+    const retiredComposite = target.name === 'plugin' && !registry.has('plugin');
+    diagnostics.push({
+      code: 'AB4100',
+      message: retiredComposite
+        ? 'Unknown target "plugin": the plugin target was retired; every selected target is now projected into one plugin root.'
+        : `Unknown target ${JSON.stringify(target.name)}.`,
+      ...(retiredComposite
+        ? { recovery: "Select the hosts it stood for instead — targets: ['claude', 'codex'] — and read the built root from the artifact directory itself." }
+        : {}),
+      severity: 'error',
+      sourcePath: target.provenance.sourcePath,
+      target: target.name,
+    });
   }
+  diagnostics.push(...compositeRootDiagnostics(model, registry));
 
   diagnostics.push(...routedCliBinTargetDiagnostics(model, registry));
 

@@ -60,19 +60,19 @@ features:
     link: /zh/guide/development/evaluations
     span: 4
   - icon: 📦
-    title: 每个 target 都能独立交付
-    details: 已构建的 target 目录就是你安装的那个单位——它自带宿主清单与生成的 INSTALL.md。旁边的产物根目录保存着 agent-bundle.manifest.json，即校验、MCP、钩子与评测所读取的 SHA-256 记录。
+    title: 一个根目录，所有宿主
+    details: 一次构建就是一个插件根目录——也就是你安装的那个单位——它在所选宿主共享的 Skill、钩子包装脚本与 MCP 服务器之上携带每个宿主的清单，附带按宿主分节的生成 INSTALL.md，以及 agent-bundle.manifest.json，即校验、MCP、钩子与评测所读取的 SHA-256 记录。
     link: /zh/guide/distribution/
     span: 4
 ---
 
-import { Steps, Tab, Tabs } from '@rspress/core/theme';
+import { Steps } from '@rspress/core/theme';
 
 ## 你写下什么，得到什么
 
-输入是一份配置文件加一棵按约定组织的 `src/` 目录树。输出是每个宿主各一个可直接安装的目录，
-各自带有自己的宿主清单、生成的包装脚本，以及用捆绑包真实名称写成的安装说明——它们共同位于一个产物根目录之下，
-根目录还保存着整个产物据以校验的 `agent-bundle.manifest.json`。
+输入是一份配置文件加一棵按约定组织的 `src/` 目录树。输出是一个所有所选宿主共同读取的插件根目录——
+每个宿主自己的清单位于它们共享的已编译 Skill、包装脚本与服务器之上，附带用捆绑包真实名称写成的安装说明，
+以及整个产物据以校验的 `agent-bundle.manifest.json`。
 
 <div className="ab-compare">
 <div>
@@ -113,69 +113,46 @@ Skill、MCP 服务器与脚本都按约定被发现。只有钩子需要声明�
 
 ### 编译器输出
 
-<Tabs>
-<Tab label="Claude Code">
-
-```text title="artifact/claude/"
-artifact/claude/
+```text title="artifact/"
+artifact/
 ├── .claude-plugin/
 │   ├── plugin.json
 │   └── marketplace.json
-├── .mcp.json
-├── hooks/
+├── .codex-plugin/
+│   ├── plugin.json              # 指向下面两份文档
 │   ├── hooks.json
-│   └── session-start-….mjs
-├── mcp/mcp-status-….mjs
-├── scripts/check-service.mjs
-├── skills/release-review/
-│   ├── SKILL.md
-│   └── references/policy.md
-└── INSTALL.md
-```
-
-</Tab>
-<Tab label="Codex">
-
-```text title="artifact/codex/"
-artifact/codex/
-├── .codex-plugin/plugin.json
+│   └── mcp.json
 ├── .agents/plugins/marketplace.json
-├── .mcp.json
+├── .mcp.json                    # Claude Code 的 MCP 文档
 ├── hooks/
-│   ├── hooks.json
-│   └── session-start-….mjs
-├── mcp/mcp-status-….mjs
+│   ├── hooks.json               # Claude Code 的钩子文档
+│   └── session-start-….mjs      # 一个包装脚本，被两份钩子文档同时引用
+├── mcp/mcp-status-….mjs         # 只编译一次，所有宿主共同运行
 ├── scripts/check-service.mjs
 ├── skills/release-review/
 │   ├── SKILL.md
 │   └── references/policy.md
-└── INSTALL.md
-```
-
-</Tab>
-<Tab label="Portable">
-
-```text title="artifact/portable/"
-artifact/portable/
-├── plugin.json
-├── mcp.json
-├── mcp/mcp-status-….mjs
-├── scripts/check-service.mjs
-├── skills/release-review/
-│   ├── SKILL.md
-│   └── references/policy.md
+├── portable/                    # 同一根目录的 Agent Plugins 视图
+│   ├── plugin.json
+│   ├── mcp.json
+│   ├── mcp/mcp-status-….mjs     # 运行上面共享服务器的垫片
+│   └── skills/release-review/…
+├── AGENTS.md
+├── INSTALL.md
 ├── install.mjs
-└── INSTALL.md
+├── agent-bundle.hooks.json
+└── agent-bundle.manifest.json
 ```
 
-Agent Plugins 开放标准没有钩子这一表面。上面的钩子没有声明 `targets`，因此只继承所选 target 中支持钩子的那些，`portable`
-在这里会被跳过且不产生诊断。若显式写出 `targets: ['portable']`，构建时则会得到 `AB4204`。
+所有所选宿主读取的都是这一个目录。Claude Code 拥有约定位置的 `hooks/hooks.json` 与 `.mcp.json`；
+与它并列的 Codex 通过自己清单中的显式指针读取 `.codex-plugin/hooks.json` 与 `.codex-plugin/mcp.json`，
+而同时选择两者的钩子会编译成一个能识别宿主的包装脚本。Agent Plugins 开放标准没有钩子这一表面——
+上面的钩子没有声明 `targets`，因此只继承所选 target 中支持钩子的那些，`portable` 会被跳过且不产生诊断
+（若显式写出 `targets: ['portable']`，构建时则会得到 `AB4204`）。与其他宿主并列时，它的投影是带命名空间的
+`portable/` 包，其 `mcp.json` 通过一个垫片到达共享的已编译服务器。
 
-</Tab>
-</Tabs>
-
-生成的包装脚本文件名以一段短摘要结尾，摘要来自编译它的声明，而非文件内容。`artifact/agent-bundle.manifest.json`
-记录每个输出文件及其 SHA-256，因此后续校验比对的是真实字节，而不是检查某个路径是否存在。
+生成的包装脚本文件名以一段短摘要结尾，摘要来自编译它的声明，而非文件内容。`agent-bundle.manifest.json`
+以相对根目录的路径记录每个输出文件及其 SHA-256，因此后续校验比对的是真实字节，而不是检查某个路径是否存在。
 
 </div>
 </div>
@@ -202,8 +179,8 @@ CLI 安装的捆绑包——并运行结果为通过、失败或不确定的[评
 
 ### 交付
 
-`agent-bundle build` 校验项目并为每个 target 写出一个目录。[校验](/zh/guide/distribution/validation)
-依据清单检查产物，[安装](/zh/guide/distribution/installation)则走每个宿主自己的安装路径。
+`agent-bundle build` 校验项目并写出一个所有所选宿主共同读取的插件根目录。[校验](/zh/guide/distribution/validation)
+依据清单检查产物，[安装](/zh/guide/distribution/installation)则让每个宿主自己的安装路径指向这个根目录。
 
 </Steps>
 
@@ -214,13 +191,12 @@ CLI 安装的捆绑包——并运行结果为通过、失败或不确定的[评
 | `claude` | Claude Code 插件布局，含插件清单与本地 marketplace 清单。 | `claude plugin marketplace add` 与 `claude plugin install`，或 `agent-bundle install claude`。 |
 | `codex` | Codex 插件布局，含插件清单与本地 marketplace 清单。 | `codex plugin marketplace add` 与 `codex plugin add`，或 `agent-bundle install codex`。 |
 | `cursor` | Cursor 插件布局。 | 生成的 `install.mjs`，或 `agent-bundle install cursor`。 |
-| `portable` | [Agent Plugins](https://agent-plugins.org) 开放标准——Skill 与 MCP 服务器——Cursor、Codex、VS Code、GitHub Copilot、Kiro 与 ChatGPT 原生读取。 | 生成的 `install.mjs`。 |
-| `plugin` | 一个多宿主捆绑包，在共享的组件目录之上同时携带 Claude、Codex 与 Cursor 清单。 | `install.mjs` 或任一宿主 CLI。 |
+| `portable` | [Agent Plugins](https://agent-plugins.org) 开放标准——Skill 与 MCP 服务器——Cursor、Codex、VS Code、GitHub Copilot、Kiro 与 ChatGPT 原生读取。与其他宿主并列时，它就是根目录下的 `portable/` 目录。 | 生成的 `install.mjs`。 |
 
-各宿主能加载的内容不同，编译器会在构建时明确指出：你为某个 target 选择了它无法表达的表面，就会得到一条
-被报告的诊断，绝不会被悄悄省略。唯一有意为之的例外是没有自己的 `targets` 的钩子：它只继承支持钩子的
-宿主——正如上面的 `portable` 标签页所示——而不是让构建失败。每条诊断都有稳定的 `AB` 代码，记录在
-[诊断参考](/zh/reference/diagnostics)中。
+只选一个 target，根目录就是该宿主原本的布局；选多个，它们的投影就组合进同一个根目录。各宿主能加载的内容不同，
+编译器会在构建时明确指出：你为某个 target 选择了它无法表达的表面，就会得到一条被报告的诊断，绝不会被悄悄省略。
+唯一有意为之的例外是没有自己的 `targets` 的钩子：它只继承支持钩子的宿主——正如上面的 `portable/` 包所示——
+而不是让构建失败。每条诊断都有稳定的 `AB` 代码，记录在[诊断参考](/zh/reference/diagnostics)中。
 
 ## 从这里开始
 

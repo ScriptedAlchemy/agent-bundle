@@ -189,7 +189,7 @@ it('enumerates lsp components with unambiguous ids for any server name (#100)', 
       },
     },
     plugin: { name: 'claude-lsp-fixture', version: '1.0.0' },
-    targets: ['claude', 'cursor', 'plugin'],
+    targets: ['claude', 'cursor'],
   }), { skills: [] }, createDefaultRegistry());
 
   // Separator and escape characters are escaped so the (key, name) tuple is
@@ -201,9 +201,10 @@ it('enumerates lsp components with unambiguous ids for any server name (#100)', 
     'lsp:claude:typescript',
   ]));
   expect(model.lspServers).toHaveLength(4);
-  // Only adapters that lower the `claude` extension are targeted.
+  // Only the host that lowers the `claude` extension is targeted; Cursor
+  // shares the root (#555) but never reads `.lsp.json`.
   for (const server of model.lspServers ?? []) {
-    expect(server).toMatchObject({ declaredBy: 'claude', targets: ['claude', 'plugin'] });
+    expect(server).toMatchObject({ declaredBy: 'claude', targets: ['claude'] });
   }
   expect(Object.isFrozen(model.lspServers)).toBe(true);
 });
@@ -295,11 +296,13 @@ it('enumerates claude.bin relative to the config file into immutable executable 
     expect(Object.isFrozen(model.hostBins?.[0]?.files)).toBe(true);
     expect(Object.isFrozen(model.hostBins?.[0]?.files[0])).toBe(true);
 
-    const pluginModel = await normalizeProject({
+    // A root shared with Codex (#555) still keys the bin payload to the
+    // host that declared it.
+    const compositeModel = await normalizeProject({
       ...loaded,
-      config: { ...loaded.config, targets: ['plugin'] },
+      config: { ...loaded.config, targets: ['claude', 'codex'] },
     }, { skills: [] }, createDefaultRegistry());
-    expect(pluginModel.hostBins?.[0]?.target).toBe('plugin');
+    expect(compositeModel.hostBins?.map((bin) => bin.target)).toEqual(['claude']);
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -365,12 +368,14 @@ it('enumerates Claude workflows and output styles relative to the config file in
     expect(Object.isFrozen(model.hostOutputStyles)).toBe(true);
     expect(Object.isFrozen(model.hostOutputStyles?.[0]?.files[0])).toBe(true);
 
-    const pluginModel = await normalizeProject({
+    // A root shared with Codex (#555) still keys the payloads to the host
+    // that declared them.
+    const compositeModel = await normalizeProject({
       ...loaded,
-      config: { ...loaded.config, targets: ['plugin'] },
+      config: { ...loaded.config, targets: ['claude', 'codex'] },
     }, { skills: [] }, createDefaultRegistry());
-    expect(pluginModel.hostWorkflows?.[0]?.target).toBe('plugin');
-    expect(pluginModel.hostOutputStyles?.[0]?.target).toBe('plugin');
+    expect(compositeModel.hostWorkflows?.map((entry) => entry.target)).toEqual(['claude']);
+    expect(compositeModel.hostOutputStyles?.map((entry) => entry.target)).toEqual(['claude']);
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -982,6 +987,25 @@ it('reports unknown targets, duplicate IDs, and portable output collisions', asy
   expect(diagnostics.find(({ code }) => code === 'AB4100')).toMatchObject({
     target: 'future-host',
   });
+  expect(diagnostics.find(({ code }) => code === 'AB4100')).not.toHaveProperty('recovery');
+
+  // The retired `plugin` composite (#555) names its replacement instead of
+  // reading as a typo.
+  const retired = validateModel(
+    await normalizeProject(
+      loadedProject({ plugin: { name: 'review-tools', version: '1.0.0' }, targets: ['plugin'] }),
+      { skills: [] },
+      registry,
+    ),
+    registry,
+  );
+  expect(retired).toEqual([expect.objectContaining({
+    code: 'AB4100',
+    message: expect.stringContaining('the plugin target was retired'),
+    recovery: expect.stringContaining("targets: ['claude', 'codex']"),
+    severity: 'error',
+    target: 'plugin',
+  })]);
   expect(diagnostics.filter(({ code }) => code === 'AB4102')).toMatchObject([
     { generatedPath: 'portable/skills/duplicate/SKILL.md' },
     { generatedPath: 'future-host/skills/duplicate/SKILL.md' },

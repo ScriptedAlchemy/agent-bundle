@@ -137,9 +137,11 @@ it.concurrent('scaffolds the cli-tool template with a routed bin, lib, and artif
     // package-keyed object), unlike a bare array destructure.
     const packedPaths = packOutputFromJson(stdout).files.map((file) => file.path);
     expect(packedPaths).toContain('artifact/agent-bundle.manifest.json');
+    // One composite root (#555): the portable pack is its `portable/` view
+    // beside the Claude Code and Codex manifests at the root.
     expect(packedPaths).toContain('artifact/portable/plugin.json');
-    expect(packedPaths).toContain('artifact/codex/.codex-plugin/plugin.json');
-    expect(packedPaths).toContain('artifact/claude/.claude-plugin/plugin.json');
+    expect(packedPaths).toContain('artifact/.codex-plugin/plugin.json');
+    expect(packedPaths).toContain('artifact/.claude-plugin/plugin.json');
     expect(packedPaths).toContain('dist/bin/greeter-install.js');
   } finally {
     await rm(packDestination, { force: true, recursive: true });

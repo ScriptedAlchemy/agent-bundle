@@ -8,7 +8,7 @@ import { resolveMcpPathTokens } from '../services/mcp-path-tokens.ts';
 import { readTargetMcpServers } from '../services/mcp-runtime.ts';
 import { artifactDiagnostic as diagnostic, artifactDiagnosticRecoveries } from './artifact-diagnostics.ts';
 import { readFileString, runWithPlatform } from '../effect/platform.ts';
-import { matchesManifestFile, pathInTargetOutputLayout, targetArtifactPath } from './artifact-layout.ts';
+import { isDirectOutputLayoutPath, matchesManifestFile } from './artifact-layout.ts';
 import type { ValidatedArtifactMcpServerEvidence } from './artifact-validation-types.ts';
 import type { ArtifactFile, ManifestFile } from './emit.ts';
 import type { ArtifactManifest } from './manifest.ts';
@@ -82,7 +82,7 @@ const validateMcpArtifactReference = (options: {
     )]);
   }
 
-  const path = targetArtifactPath(options.target, reference.path);
+  const path = reference.path;
   const file = options.files.get(path);
   const manifestFile = options.manifestFiles.get(path);
   const diagnostics: Diagnostic[] = [];
@@ -125,16 +125,33 @@ export const validateMcpCoherence = async (options: {
   const manifestFiles = new Map(options.manifest.files.map((file) => [file.path, file]));
   const artifactRoot = resolve(options.artifactRoot);
 
+  // One root projects every declared host (#555): each host's MCP document
+  // (possibly relocated by the composition) references the shared `mcp/`.
+  const rootTargets = options.manifest.targets.map((target) => target.name).filter((target) => options.registry.has(target));
+  const root = rootTargets.length === 0 ? undefined : options.registry.root(rootTargets);
+  // A compiled server must be referenced by at least one projected host's
+  // document (a server declared for one host is compiled once at the root),
+  // and by any one document at most once.
+  const rootReferences = new Map<string, number>();
+  const rootMcpEntries = root === undefined
+    ? []
+    : options.files.filter((file) => isDirectOutputLayoutPath(file.path, root.artifactLayout.mcpEntries));
+  for (const file of rootMcpEntries) rootReferences.set(file.path, 0);
+  let rootReferencingTarget: string | undefined;
   for (const target of options.manifest.targets) {
-    if (!options.registry.has(target.name) || !options.registry.supports(target.name, 'mcp')) continue;
-    const runtime = options.registry.mcpRuntime(target.name);
+    if (root === undefined || !options.registry.has(target.name) || !options.registry.supports(target.name, 'mcp')) continue;
+    const runtime = root.mcpRuntimeFor(target.name);
     if (runtime === undefined) continue;
-    const manifestPath = targetArtifactPath(target.name, runtime.manifestPath);
-    const targetRoot = resolve(artifactRoot, target.name);
-    const mcpLayout = options.registry.artifactLayout(target.name).mcpEntries;
+    const manifestPath = runtime.manifestPath;
+    // A host projected as a namespaced view (`portable/`) resolves `${PLUGIN_ROOT}`
+    // to that view; every other host resolves it to the root itself.
+    const hostRoot = root.hostRoot(target.name);
+    const targetRoot = hostRoot === '' ? artifactRoot : resolve(artifactRoot, hostRoot);
     const referenceCounts = new Map<string, McpReferenceOccurrence[]>();
-    const mcpEntries = options.files.filter((file) => pathInTargetOutputLayout(file.path, target.name, mcpLayout));
-    for (const file of mcpEntries) referenceCounts.set(file.path, []);
+    if (hostRoot === '') {
+      rootReferencingTarget ??= target.name;
+      for (const file of rootMcpEntries) referenceCounts.set(file.path, []);
+    }
 
     const manifestFile = files.get(manifestPath);
     if (manifestFile !== undefined) {
@@ -233,7 +250,7 @@ export const validateMcpCoherence = async (options: {
                 value: server.command,
               });
               if (commandReference.status === 'artifact-local') {
-                const path = targetArtifactPath(target.name, commandReference.path);
+                const path = commandReference.path;
                 recordMcpReference(referenceCounts, path, { field: 'command', server: entry.name });
                 entryPaths.add(path);
               }
@@ -257,7 +274,7 @@ export const validateMcpCoherence = async (options: {
                 value: argument,
               });
               if (argumentReference.status === 'artifact-local') {
-                const path = targetArtifactPath(target.name, argumentReference.path);
+                const path = argumentReference.path;
                 recordMcpReference(referenceCounts, path, { field: 'argument', server: entry.name });
                 entryPaths.add(path);
               }
@@ -275,24 +292,31 @@ export const validateMcpCoherence = async (options: {
     }
 
     for (const [path, occurrences] of referenceCounts) {
-      if (occurrences.length === 1) continue;
-      if (occurrences.length === 0 && path.endsWith('-flight.mjs')) {
-        const mainPath = path.slice(0, -'-flight.mjs'.length) + '.mjs';
-        const mainReferences = referenceCounts.get(mainPath);
-        if (mainReferences?.length === 1) {
-          const mainSource = await runWithPlatform(readFileString(resolve(artifactRoot, mainPath)));
-          if (mainSource.includes(`./${posix.basename(path)}`)) continue;
-        }
-      }
+      if (rootReferences.has(path)) rootReferences.set(path, rootReferences.get(path)! + occurrences.length);
+      if (occurrences.length <= 1) continue;
       diagnostics.push(diagnostic(
         'AB6017',
-        occurrences.length === 0
-          ? `Compiler MCP entry ${JSON.stringify(path)} is not referenced by a server in target ${JSON.stringify(target.name)}.`
-          : `Compiler MCP entry ${JSON.stringify(path)} is referenced ${occurrences.length} times in target ${JSON.stringify(target.name)}.`,
+        `Compiler MCP entry ${JSON.stringify(path)} is referenced ${occurrences.length} times in target ${JSON.stringify(target.name)}.`,
         path,
         target.name,
       ));
     }
+  }
+  for (const [path, occurrences] of rootReferences) {
+    if (occurrences > 0) continue;
+    if (path.endsWith('-flight.mjs')) {
+      const mainPath = path.slice(0, -'-flight.mjs'.length) + '.mjs';
+      if ((rootReferences.get(mainPath) ?? 0) > 0) {
+        const mainSource = await runWithPlatform(readFileString(resolve(artifactRoot, mainPath)));
+        if (mainSource.includes(`./${posix.basename(path)}`)) continue;
+      }
+    }
+    diagnostics.push(diagnostic(
+      'AB6017',
+      `Compiler MCP entry ${JSON.stringify(path)} is not referenced by a server in any projected host document.`,
+      path,
+      rootReferencingTarget,
+    ));
   }
   return Object.freeze(diagnostics);
 };

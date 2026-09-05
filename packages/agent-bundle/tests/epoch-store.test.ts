@@ -1069,7 +1069,7 @@ it('fails closed when active metadata points at a ghost epoch and leaves cleanup
   }
 });
 
-it('fails closed when active metadata differs from its epoch metadata or targets on disk', async () => {
+it('fails closed when active metadata differs from its epoch metadata or its manifest is missing on disk', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent bundle inconsistent active epoch '));
 
   try {
@@ -1084,7 +1084,9 @@ it('fails closed when active metadata differs from its epoch metadata or targets
 
     await expect(store.readActiveEpoch()).rejects.toMatchObject({ code: 'EPOCH_METADATA_INVALID' });
     await writeFile(activeMetadataPathFor(root), `${JSON.stringify({ epoch })}\n`);
-    await rm(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'codex'), { force: true, recursive: true });
+    // Every target reads the epoch root itself (#555), so the root's manifest
+    // is the on-disk evidence the active metadata must still agree with.
+    await rm(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'agent-bundle.manifest.json'), { force: true });
     await expect(store.cleanup()).rejects.toMatchObject({ code: 'EPOCH_METADATA_INVALID' });
     await expect(readFile(epochMetadataPathFor(root, 'epoch-1'), 'utf8')).resolves.toContain('epoch-1');
   } finally {

@@ -1,12 +1,12 @@
 ---
-description: 'How an agent-bundle project becomes something a host can install: build, validate, and ship each target directory as an independently distributable bundle.'
+description: 'How an agent-bundle project becomes something a host can install: build one plugin root that every selected host reads, validate it, and ship it as is.'
 ---
 
 # Shipping a bundle
 
-`agent-bundle build` makes each target directory **independently distributable**. There is no
-packaging step after the build and no per-host repackaging script: a target directory is the unit
-you copy, publish, or hand to a host CLI.
+`agent-bundle build` emits one plugin root that is **distributable as is**. There is no packaging
+step after the build and no per-host repackaging script: the root is the unit you commit, publish,
+or point a host CLI at, whichever hosts it was built for.
 
 ```sh
 npx agent-bundle build --root . --output artifact
@@ -16,46 +16,56 @@ npx agent-bundle build --root . --output artifact
 
 | Step | Command | What it produces |
 | --- | --- | --- |
-| Build | `agent-bundle build` | One directory per selected target, plus the `dist/` package build when the project declares `bin`/`lib`. |
-| Validate | `agent-bundle validate --artifact <dir> --strict` | Content-addressed proof that the emitted bytes match the manifest, plus host-tool findings where a host publishes a validator. |
-| Install | `agent-bundle install <host> --from <dir>` | The bundle registered in Claude, Codex, or Cursor. |
+| Build | `agent-bundle build` | One plugin root holding every selected target's projection, plus the `dist/` package build when the project declares `bin`/`lib`. |
+| Validate | `agent-bundle validate --artifact <root> --strict` | Content-addressed proof that the emitted bytes match the manifest, plus host-tool findings where a host publishes a validator. |
+| Install | `agent-bundle install <host> --from <root>` | The root registered in Claude, Codex, or Cursor. |
 
 The build already validates the project before it writes anything, so a separate `validate` run
 against source is a fast pre-flight rather than a required stage. Validating the **artifact** is
 the interesting one, because it needs no project sources at all.
 
-### How a target compiles
+### How the root compiles
 
-The build plans every target first, then lowers each target's outputs in at most two stages
-into one staged root, published atomically once the artifact validates:
+The build plans the root first — every selected host's projection composed into one layout, with
+the shared `skills/`, `scripts/`, `mcp/`, and `bin/` content planned once — then lowers its
+outputs in at most two stages into one staged directory, published atomically once the artifact
+validates:
 
-1. **MCP Apps** — the browser environment, compiled through `@rsbuild/core`. Present only for a
-   target whose project declares App routes, and always first: the MCP entries embed its HTML.
+1. **MCP Apps** — the browser environment, compiled through `@rsbuild/core`. Present only when
+   the project declares App routes, and always first: the MCP entries embed its HTML.
 2. **Agent-host surfaces** — the routed CLI bin, bundled scripts, hook wrappers, MCP stdio
    entries, and each surface's react-server Flight worker, lowered together through **one Rslib
-   instance per target** (one Rsbuild environment per output, one Rspack multi-compiler). A
-   surface reaches its worker by file name at run time, so nothing orders the two within the
-   stage, and each surface keeps its own source evidence for the manifest.
+   instance** (one Rsbuild environment per output, one Rspack multi-compiler). A surface reaches
+   its worker by file name at run time, so nothing orders the two within the stage, and each
+   surface keeps its own source evidence for the manifest.
 
 Both stages and the `dist/` package build compose their bundler config the same way — profile,
 `tools.rsbuild`, `tools.rspack`, then the framework invariants — as described under
 [`tools`](../../reference/configuration.mdx#tools). `agent-bundle inspect --bundler` prints the
 result.
 
-## What ships inside a target directory
+## What ships inside the root
 
-Every built target contains a generated `INSTALL.md` written with the bundle's **real** plugin
-and marketplace names — not placeholders — so the file can be followed verbatim. The multi-host
-`plugin` target also carries a generated `AGENTS.md` explaining how to install it into each host.
+The root contains one generated `INSTALL.md`, a section per selected host, written with the
+bundle's **real** plugin and marketplace names — not placeholders — so the file can be followed
+verbatim. A root that projects two or more hosts also carries a generated `AGENTS.md` explaining
+how each host reads it: Claude Code owns the conventional `hooks/hooks.json` and `.mcp.json`,
+Codex beside it reads `.codex-plugin/hooks.json` and `.codex-plugin/mcp.json` through pointers in
+its manifest, Cursor beside another host reads `hooks/hooks-cursor.json` and the root `mcp.json`,
+and the portable projection is the namespaced `portable/` pack whose `portable/mcp/<name>.mjs`
+shims run the shared compiled servers.
 
-Claude and Codex targets always include local marketplace manifests, which is what lets their
-public CLIs install the emitted directory directly. Cursor, portable, and composite targets
-include a standalone `install.mjs`, because Cursor exposes marketplace management but no
-non-interactive plugin install verb.
+A root that projects Claude Code or Codex always includes their local marketplace manifests
+(`.claude-plugin/marketplace.json`, `.agents/plugins/marketplace.json`), which is what lets their
+public CLIs install the root directly. A root that projects Cursor or portable includes a
+standalone `install.mjs`, because Cursor exposes marketplace management but no non-interactive
+plugin install verb.
 
-`agent-bundle.manifest.json` records every emitted file with its SHA-256, so validation compares
-real bytes rather than checking that a path exists. The per-target layouts themselves are covered
-in [Project structure](../start/project-structure.mdx).
+`agent-bundle.manifest.json` records every emitted file, root-relative, with its SHA-256, so
+validation compares real bytes rather than checking that a path exists; its `targets[]` lists the
+hosts the root projects. `agent-bundle.hooks.json` indexes the hook wrappers with one entry per
+hook and host, so a wrapper shared by Claude Code and Codex appears once per host. The layout
+itself is covered in [Project structure](../start/project-structure.mdx#host-artifacts).
 
 Builds are reproducible: two builds of one unchanged source tree emit byte-identical artifacts —
 the same manifest and the same digests — whatever `--output` names and however the per-build

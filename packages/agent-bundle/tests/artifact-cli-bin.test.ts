@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 
 import { afterEach, expect, it } from '@rstest/core';
 
+import { compositeTargetName } from '../src/adapters/composite.ts';
 import { createDefaultRegistry, TargetRegistry } from '../src/adapters/registry.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
 import { build, inspect } from '../src/api.ts';
@@ -26,7 +27,7 @@ const writeProjectFile = async (root: string, path: string, contents: string): P
 };
 
 const pluginName = 'cli-bin-artifact';
-const hostTargets = ['claude', 'codex', 'cursor', 'portable', 'plugin'] as const;
+const hostTargets = ['claude', 'codex', 'cursor', 'portable'] as const;
 
 /**
  * A host adapter that publishes no `cli` capability row: it stands in for a
@@ -156,44 +157,108 @@ const createFixture = async (options: {
 const parseJsonLine = (stdout: string): unknown => JSON.parse(stdout) as unknown;
 
 /**
- * The artifact-hosted routed CLI proof (#387): one build ships the compiled
- * `src/cli/**` command graph into every host artifact whose adapter publishes
- * the `cli` capability, as `bin/<plugin-name>.mjs` (+ Flight worker), the bin
- * runs end to end under `node`, a script route reaches it as a sibling, a
- * skill reaches it through the plugin-root token, validation accepts the new
- * `bin/` layout, and a target without the capability omits it with an inspect
- * entry and an AB4765 warning.
+ * The artifact-hosted routed CLI proof (#387) on the composite plugin root
+ * (#555): one build ships the compiled `src/cli/**` command graph once, as
+ * `bin/<plugin-name>.mjs` (+ Flight worker) at the root every selected host
+ * shares, the bin runs end to end under `node`, a script route reaches it as
+ * a sibling, validation accepts the `bin/` layout, and `inspect` accounts
+ * for it as a `cli` component of every projected host.
  */
-it('emits the routed CLI bin into every capable host artifact and omits it elsewhere', { retry: 1, timeout: 300_000 }, async () => {
-  const root = await createFixture({ targets: [...hostTargets, 'legacy-host'] });
+it('emits the routed CLI bin once into the plugin root every capable host shares', { retry: 1, timeout: 300_000 }, async () => {
+  const root = await createFixture({ targets: hostTargets });
+
+  const result = await build({ output: 'artifact', root });
+  const artifactRoot = join(root, 'artifact');
+
+  // The root hosts one executable and one rendered-command worker; no host
+  // gets a namespaced copy of its own.
+  expect(result.build.compiledCliBins.map((bin) => bin.target)).toEqual([compositeTargetName(hostTargets)]);
+  const binPath = join(artifactRoot, 'bin', `${pluginName}.mjs`);
+  await expect(stat(binPath)).resolves.toMatchObject({});
+  await expect(stat(join(artifactRoot, 'bin', `${pluginName}-flight.mjs`))).resolves.toMatchObject({});
+  for (const target of hostTargets) {
+    await expect(stat(join(artifactRoot, target, 'bin'))).rejects.toMatchObject({ code: 'ENOENT' });
+  }
+  const binSource = await readFile(binPath, 'utf8');
+  expect(binSource).not.toMatch(/from\s*['"]agent-bundle\/cli-entry['"]/u);
+  expect(binSource).not.toMatch(/from\s*['"]agent-bundle\/meta['"]/u);
+  expect(result.diagnostics.filter((entry) => entry.code === 'AB4765')).toEqual([]);
+
+  // `node <artifact>/bin/<name>.mjs <route args>` prints the routed CLI output.
+  const status = await execFile(process.execPath, [binPath, 'status', 'ticket-7', '--json']);
+  expect(parseJsonLine(status.stdout)).toEqual({
+    invocation: 'cli',
+    status: 'idle',
+    surface: 'status',
+    ticket: 'ticket-7',
+  });
+
+  // Help, version, and the rendered .tsx command ride the same executable.
+  const help = await execFile(process.execPath, [binPath, '--help']);
+  expect(help.stdout).toContain(`${pluginName} 3.8.7`);
+  expect(help.stdout).toContain('Artifact routed CLI fixture.');
+  expect(help.stdout).toContain('status');
+  expect(help.stdout).toContain('report');
+  await expect(execFile(process.execPath, [binPath, '--version'])).resolves.toMatchObject({ stdout: `${pluginName} 3.8.7\n` });
+  const piped = await execFile(process.execPath, [binPath, 'report', '/builds']);
+  expect(piped.stdout).toBe('Found **3** builds under /builds.\n');
+  const reportJson = await execFile(process.execPath, [binPath, 'report', '/builds', '--json']);
+  expect(parseJsonLine(reportJson.stdout)).toEqual({ builds: 3, root: '/builds' });
+  await expect(execFile(process.execPath, [binPath, 'unknown'])).rejects.toMatchObject({ code: 2, stdout: '' });
+
+  // A script route reaches the bin as its documented sibling and forwards argv.
+  const forwarded = await execFile(process.execPath, [join(artifactRoot, 'scripts', 'hauler.mjs'), 'status', '--verbose', '--json']);
+  expect(parseJsonLine(forwarded.stdout)).toEqual({ invocation: 'cli', status: 'idle', surface: 'status (verbose)' });
+
+  // The multi-host root's AGENTS.md documents the shared executable.
+  const agents = await readFile(join(artifactRoot, 'AGENTS.md'), 'utf8');
+  expect(agents).toContain(`\`bin/${pluginName}.mjs\``);
+
+  // The manifest lists every projected host and inventories the bin once,
+  // with bundle provenance naming every command route.
+  expect(result.build.manifest.targets.map((target) => target.name).sort()).toEqual([...hostTargets].sort());
+  const manifestFile = result.build.manifest.files.find((file) => file.path === `bin/${pluginName}.mjs`);
+  expect(manifestFile).toMatchObject({ kind: 'bundle' });
+  expect(manifestFile?.sourceInputs).toEqual(expect.arrayContaining(['src/cli/report.tsx', 'src/cli/status.ts']));
+  expect(result.build.manifest.files.find((file) => file.path === `bin/${pluginName}-flight.mjs`)).toMatchObject({ kind: 'bundle' });
+  expect(result.build.manifest.files.filter((file) => file.path.includes('/bin/'))).toEqual([]);
+
+  // Artifact validation accepts the framework-owned `bin/` layout of the root.
+  const validation = await validateArtifact({ artifactRoot });
+  expect(validation.filter((entry) => entry.severity === 'error')).toEqual([]);
+
+  // `inspect` accounts for the bin as a `cli` component of every projected host.
+  const inspected = await inspect({ root });
+  expect(inspected.state).toBe('ready');
+  if (inspected.state !== 'ready') throw new Error('unreachable');
+  for (const target of hostTargets) {
+    const plan = inspected.plans.find((candidate) => candidate.target === target);
+    expect(plan?.selected).toContainEqual({
+      capability: { evidence: expect.objectContaining({ target }), name: 'cli', state: 'supported' },
+      id: `bin:${pluginName}`,
+      kind: 'cli',
+      name: pluginName,
+    });
+  }
+});
+
+/**
+ * A third-party host without the `cli` capability is built one target per
+ * root (#555): that root receives no `bin/` at all, while its other compiled
+ * surfaces are untouched, and the omission is reported — an AB4765 warning
+ * from the build and a skipped `cli` component from `inspect`.
+ */
+it('omits the routed CLI bin from a host without the cli capability and reports it', { retry: 1, timeout: 240_000 }, async () => {
+  const root = await createFixture({ targets: ['legacy-host'] });
   const registry = registryWithLegacyHost();
 
   const result = await build({ output: 'artifact', registry, root });
   const artifactRoot = join(root, 'artifact');
 
-  // Every capable target hosts the executable and its rendered-command worker.
-  expect(result.build.compiledCliBins.map((bin) => bin.target).sort()).toEqual([...hostTargets].sort());
-  for (const target of hostTargets) {
-    const binPath = join(artifactRoot, target, 'bin', `${pluginName}.mjs`);
-    await expect(stat(binPath)).resolves.toMatchObject({});
-    await expect(stat(join(artifactRoot, target, 'bin', `${pluginName}-flight.mjs`))).resolves.toMatchObject({});
-    const binSource = await readFile(binPath, 'utf8');
-    expect(binSource).not.toMatch(/from\s*['"]agent-bundle\/cli-entry['"]/u);
-    expect(binSource).not.toMatch(/from\s*['"]agent-bundle\/meta['"]/u);
-
-    // `node <artifact>/bin/<name>.mjs <route args>` prints the routed CLI output.
-    const status = await execFile(process.execPath, [binPath, 'status', 'ticket-7', '--json']);
-    expect(parseJsonLine(status.stdout)).toEqual({
-      invocation: 'cli',
-      status: 'idle',
-      surface: 'status',
-      ticket: 'ticket-7',
-    });
-  }
-  // The target without the capability receives no `bin/` at all, while its
-  // other compiled surfaces are untouched.
-  await expect(stat(join(artifactRoot, 'legacy-host', 'bin'))).rejects.toMatchObject({ code: 'ENOENT' });
-  await expect(stat(join(artifactRoot, 'legacy-host', 'scripts', 'hauler.mjs'))).resolves.toMatchObject({});
+  expect(result.build.compiledCliBins).toEqual([]);
+  await expect(stat(join(artifactRoot, 'bin'))).rejects.toMatchObject({ code: 'ENOENT' });
+  await expect(stat(join(artifactRoot, 'scripts', 'hauler.mjs'))).resolves.toMatchObject({});
+  expect(result.build.manifest.files.some((file) => file.path.startsWith('bin/'))).toBe(false);
   expect(result.diagnostics).toContainEqual(expect.objectContaining({
     code: 'AB4765',
     severity: 'warning',
@@ -201,50 +266,9 @@ it('emits the routed CLI bin into every capable host artifact and omits it elsew
   }));
   expect(result.diagnostics.filter((entry) => entry.code === 'AB4765')).toHaveLength(1);
 
-  // Help, version, and the rendered .tsx command ride the same executable.
-  const claudeBin = join(artifactRoot, 'claude', 'bin', `${pluginName}.mjs`);
-  const help = await execFile(process.execPath, [claudeBin, '--help']);
-  expect(help.stdout).toContain(`${pluginName} 3.8.7`);
-  expect(help.stdout).toContain('Artifact routed CLI fixture.');
-  expect(help.stdout).toContain('status');
-  expect(help.stdout).toContain('report');
-  await expect(execFile(process.execPath, [claudeBin, '--version'])).resolves.toMatchObject({ stdout: `${pluginName} 3.8.7\n` });
-  const piped = await execFile(process.execPath, [claudeBin, 'report', '/builds']);
-  expect(piped.stdout).toBe('Found **3** builds under /builds.\n');
-  const reportJson = await execFile(process.execPath, [claudeBin, 'report', '/builds', '--json']);
-  expect(parseJsonLine(reportJson.stdout)).toEqual({ builds: 3, root: '/builds' });
-  await expect(execFile(process.execPath, [claudeBin, 'unknown'])).rejects.toMatchObject({ code: 2, stdout: '' });
-
-  // A script route reaches the bin as its documented sibling and forwards argv.
-  const forwarded = await execFile(process.execPath, [join(artifactRoot, 'codex', 'scripts', 'hauler.mjs'), 'status', '--verbose', '--json']);
-  expect(parseJsonLine(forwarded.stdout)).toEqual({ invocation: 'cli', status: 'idle', surface: 'status (verbose)' });
-
-  // The composite bundle's AGENTS.md documents the shared executable.
-  const agents = await readFile(join(artifactRoot, 'plugin', 'AGENTS.md'), 'utf8');
-  expect(agents).toContain(`\`bin/${pluginName}.mjs\``);
-
-  // The manifest inventories the bin with bundle provenance naming every command route.
-  const manifestFile = result.build.manifest.files.find((file) => file.path === `portable/bin/${pluginName}.mjs`);
-  expect(manifestFile).toMatchObject({ kind: 'bundle' });
-  expect(manifestFile?.sourceInputs).toEqual(expect.arrayContaining(['src/cli/report.tsx', 'src/cli/status.ts']));
-  expect(result.build.manifest.files.find((file) => file.path === `portable/bin/${pluginName}-flight.mjs`)).toMatchObject({ kind: 'bundle' });
-  expect(result.build.manifest.files.some((file) => file.path.startsWith('legacy-host/bin/'))).toBe(false);
-
-  // Artifact validation accepts the framework-owned `bin/` layout on every target.
-  const validation = await validateArtifact({ artifactRoot, registry });
-  expect(validation.filter((entry) => entry.severity === 'error')).toEqual([]);
-
-  // `inspect` accounts for the bin as a `cli` component per target.
   const inspected = await inspect({ registry, root });
   expect(inspected.state).toBe('ready');
   if (inspected.state !== 'ready') throw new Error('unreachable');
-  const claudePlan = inspected.plans.find((plan) => plan.target === 'claude');
-  expect(claudePlan?.selected).toContainEqual({
-    capability: { evidence: expect.objectContaining({ target: 'claude' }), name: 'cli', state: 'supported' },
-    id: `bin:${pluginName}`,
-    kind: 'cli',
-    name: pluginName,
-  });
   const legacyPlan = inspected.plans.find((plan) => plan.target === 'legacy-host');
   expect(legacyPlan?.skipped).toContainEqual({
     capability: { name: 'cli', reason: expect.stringContaining('publishes no cli capability row'), state: 'unavailable' },
@@ -253,31 +277,41 @@ it('emits the routed CLI bin into every capable host artifact and omits it elsew
     name: pluginName,
     reason: 'unsupported-capability',
   });
+});
 
-  // `inspect --bundler` dumps the per-target bin composition beside the
-  // scripts; the npm package bin (no target) keeps its own entry.
-  const bundler = await inspect({ focus: 'bundler', registry, root });
+/**
+ * `inspect --bundler` describes the composition the build really runs: one
+ * Rslib pass over the root, so the bin and its worker appear once at their
+ * root-relative output paths, while the npm package bin (no target) keeps
+ * its own entry.
+ */
+it('inspects the routed CLI bin composition once for the plugin root', { timeout: 120_000 }, async () => {
+  const root = await createFixture({ targets: hostTargets });
+
+  const bundler = await inspect({ focus: 'bundler', root });
+  expect(bundler.state).toBe('ready');
   if (bundler.state !== 'ready') throw new Error('unreachable');
-  const binEntries = (bundler.selected?.bundler?.entries ?? [])
-    .filter((entry) => entry.kind === 'bin' && entry.target !== undefined);
-  expect((bundler.selected?.bundler?.entries ?? []).some((entry) =>
+  const entries = bundler.selected?.bundler?.entries ?? [];
+  expect(entries.some((entry) =>
     entry.kind === 'bin' && entry.target === undefined && entry.outputPath === `dist/bin/${pluginName}.js`)).toBe(true);
-  expect(binEntries.map((entry) => entry.outputPath).sort()).toEqual(hostTargets
-    .flatMap((target) => [`${target}/bin/${pluginName}.mjs`, `${target}/bin/${pluginName}-flight.mjs`])
-    .sort());
+  const binEntries = entries.filter((entry) => entry.kind === 'bin' && entry.target !== undefined);
+  expect(binEntries.map((entry) => entry.outputPath).sort()).toEqual([
+    `bin/${pluginName}-flight.mjs`,
+    `bin/${pluginName}.mjs`,
+  ]);
 });
 
 it('lets a skill reach the artifact bin through the plugin-root token', { retry: 1, timeout: 240_000 }, async () => {
   const root = await createFixture({ skill: true, targets: ['claude'] });
   const result = await build({ output: 'artifact', root });
-  const claudeRoot = join(root, 'artifact', 'claude');
+  const artifactRoot = join(root, 'artifact');
 
   // The skill's `${CLAUDE_PLUGIN_ROOT}` reference lowers to a path the same
   // artifact really ships, and that file is the working routed CLI.
-  const skill = await readFile(join(claudeRoot, 'skills', 'daemon-status', 'SKILL.md'), 'utf8');
+  const skill = await readFile(join(artifactRoot, 'skills', 'daemon-status', 'SKILL.md'), 'utf8');
   const reference = `\${CLAUDE_PLUGIN_ROOT}/bin/${pluginName}.mjs`;
   expect(skill).toContain(reference);
-  const binPath = join(claudeRoot, reference.slice('${CLAUDE_PLUGIN_ROOT}/'.length));
+  const binPath = join(artifactRoot, reference.slice('${CLAUDE_PLUGIN_ROOT}/'.length));
   await expect(stat(binPath)).resolves.toMatchObject({});
   const status = await execFile(process.execPath, [binPath, 'status', '--json']);
   expect(parseJsonLine(status.stdout)).toEqual({ invocation: 'cli', status: 'idle', surface: 'status' });

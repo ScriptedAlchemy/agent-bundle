@@ -40,6 +40,7 @@ import {
   planHooks,
   readStandardNativeHookCommands,
   validatedNativeHookDocument,
+  type HookPlanRootOptions,
   type TargetHookContract,
 } from './hook-contract.ts';
 import schemaProvenance from './schemas/claude/PROVENANCE.json' with { type: 'json' };
@@ -428,7 +429,9 @@ const hookContract = Object.freeze({
   },
   readNativeCommands: readStandardNativeHookCommands,
   wrapperPath: (hook: NormalizedPlugin['hooks'][number]) => `hooks/${hook.name}.mjs`,
-  wrapperSource: (entry) => nativeHookWrapperSource(entry, 'Claude'),
+  // A wrapper one composite root serves to Claude Code and Codex alike (#555)
+  // carries the host-detecting Universal body; byte-identical from both sides.
+  wrapperSource: (entry) => nativeHookWrapperSource(entry, (entry.hosts?.length ?? 1) > 1 ? 'Universal' : 'Claude'),
 } satisfies TargetHookContract);
 const metadata = Object.freeze({
   adapterRevision: '1.28.0',
@@ -3090,6 +3093,12 @@ export const planClaudeMonitors = (
 };
 
 export interface ClaudeArtifactPlanOptions {
+  /**
+   * Set when this plan is the Claude projection of a root composed with other
+   * hosts (#555): the composite owns the install surface and names the event
+   * endpoint every wrapper and generated MCP entry of that root shares.
+   */
+  readonly composite?: HookPlanRootOptions;
   /** Target name used for selection and provenance; native hooks stay keyed to Claude. */
   readonly targetName?: string;
 }
@@ -3145,7 +3154,7 @@ export const planClaudeArtifacts = (
   diagnostics.push(...monitors.diagnostics);
   const dependencies = planClaudeDependencies(model, new Set([model.metadata.name]));
   diagnostics.push(...dependencies.diagnostics);
-  const generatedHooks = planHooks(model, targetName, hookContract);
+  const generatedHooks = planHooks(model, targetName, hookContract, undefined, options.composite ?? {});
   diagnostics.push(...generatedHooks.diagnostics);
   if (generatedHooks.document !== undefined) {
     diagnostics.push(...schemaDiagnostics('hooks', validateHooks(generatedHooks.document), validateHooks.errors));
@@ -3235,7 +3244,7 @@ export const planClaudeArtifacts = (
     pluginRelativePath: claudeArtifactPaths.plugin,
     targetName,
   });
-  return withInstallSurface(Object.freeze({
+  const plan = Object.freeze({
     ...basePlan,
     entries: sortedEntries([
       ...basePlan.entries,
@@ -3244,7 +3253,8 @@ export const planClaudeArtifacts = (
       ...workflows.entries,
       ...commandWriteEntries(model, isSelected, claudeCommandMarkdown),
     ]),
-  }), model, targetName === 'plugin' ? 'plugin' : 'claude');
+  });
+  return options.composite === undefined ? withInstallSurface(plan, model, 'claude') : plan;
 };
 
 const artifactLayout: TargetArtifactLayout = Object.freeze({

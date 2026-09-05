@@ -6,7 +6,7 @@ import { afterAll, expect, it } from '@rstest/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import { cursorAdapter, cursorPluginValidator } from '../src/adapters/cursor.ts';
-import { pluginAdapter } from '../src/adapters/plugin.ts';
+import { createCompositeAdapter } from '../src/adapters/composite.ts';
 import { normalizeProject, validateSource } from '../src/config/index.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
 import type { AgentBundleConfig, NormalizedPlugin } from '../src/core/types.ts';
@@ -42,7 +42,9 @@ const loadedProject = async (
   };
 };
 
-const logoModel = (target: 'cursor' | 'plugin'): NormalizedPlugin => ({
+const allHosts = ['claude', 'codex', 'cursor'] as const;
+
+const logoModel = (target: 'cursor' | readonly string[]): NormalizedPlugin => ({
   extensions: {},
   hooks: [],
   metadata: {
@@ -61,11 +63,11 @@ const logoModel = (target: 'cursor' | 'plugin'): NormalizedPlugin => ({
   runtime: { node: '22.12.0' },
   scripts: [],
   skills: [],
-  targets: [{
-    id: `target:${target}`,
-    name: target,
+  targets: (typeof target === 'string' ? [target] : target).map((name) => ({
+    id: `target:${name}`,
+    name,
     provenance: { kind: 'config', sourcePath: '/workspace/agent-bundle.config.ts' },
-  }],
+  })),
 });
 
 it('rejects a missing or invalid plugin.logo with AB4012', async () => {
@@ -166,8 +168,8 @@ it('emits Cursor plugin.json logo and copies the image into the artifact', () =>
 });
 
 it('omits logo from Claude and Codex manifests while still emitting it for Cursor', () => {
-  const model = logoModel('plugin');
-  const plan = pluginAdapter.plan(model);
+  const model = logoModel(allHosts);
+  const plan = createCompositeAdapter(allHosts).plan(model);
   expect(plan.diagnostics).toEqual([]);
   const documents = Object.fromEntries(
     plan.entries

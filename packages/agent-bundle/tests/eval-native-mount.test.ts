@@ -251,15 +251,8 @@ it('runs a native Claude trial through the service with the pinned model and no 
     const execution = world.requests[2]!;
     expect(execution.executable).toBe('claude');
     expect(execution.args).not.toContain('--bare');
-    const pluginDirectory = join(
-      project.root,
-      '.agent-bundle',
-      'runs',
-      result.run.id,
-      'artifacts',
-      'target',
-      'claude',
-    );
+    // The run-owned artifact root is the plugin root itself; no per-target directory (#555).
+    const pluginDirectory = join(project.root, '.agent-bundle', 'runs', result.run.id, 'artifacts', 'target');
     expect(execution.args.slice(0, 3)).toEqual(['-p', '--plugin-dir', pluginDirectory]);
     expect(execution.args).toContain('--model');
     expect(execution.args[execution.args.indexOf('--model') + 1]).toBe(claudeModel);
@@ -543,7 +536,8 @@ it('keeps native Claude plugin and fixture failures path-free after they are mou
       claudeRun: async (request) => {
         if (request.args[0] === '--version') return { exitCode: 0, stderr: '', stdout: '2.1.240 (Claude Code)\n' };
         if (request.args[0] === 'auth') {
-          await rm(join(request.cwd, 'claude'), { force: true, recursive: true });
+          // Preflight runs in the plugin root; dropping its Claude manifest makes the candidate unreadable.
+          await rm(join(request.cwd, '.claude-plugin'), { force: true, recursive: true });
           return {
             exitCode: 0,
             stderr: '',

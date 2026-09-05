@@ -288,13 +288,16 @@ in [What happens when a route throws](./mcp.mdx#what-happens-when-a-route-throws
 
 ### What is on the wire
 
-Both shapes share the emitted `hooks/hooks.json` wiring, and both compile into a wrapper the host
-invokes as `node "${CLAUDE_PLUGIN_ROOT}/hooks/<wrapper>.mjs"` (or the host's own root token). The
-unified `plugin` target also writes `hooks/hooks-cursor.json` and `hooks/<name>.cursor.mjs` for
-Cursor (`preToolUse` / `postToolUse` camelCase). Claude Code and Codex load `hooks/hooks.json` by
-convention and never scan `hooks/` for other documents, so the Claude manifest carries no `hooks`
-pointer: Claude Code reports a pointer at the conventional file as a duplicate hooks file
-(`manifest.hooks` is for additional documents only). Each wrapper compares the envelope's
+Both shapes share the emitted hooks-document wiring, and both compile into a wrapper the host
+invokes as `node "${CLAUDE_PLUGIN_ROOT}/hooks/<wrapper>.mjs"` (or the host's own root token). In a
+root that projects several hosts, Claude Code owns the conventional `hooks/hooks.json`; Codex
+beside it reads `.codex-plugin/hooks.json` through the `hooks` pointer in `.codex-plugin/plugin.json`,
+and a hook selecting both compiles to one host-detecting `hooks/<name>.mjs` that both documents
+name. Cursor beside another host reads `hooks/hooks-cursor.json` over its own
+`hooks/<name>.cursor.mjs` wrappers (`preToolUse` / `postToolUse` camelCase). Claude Code loads
+`hooks/hooks.json` by convention and never scans `hooks/` for other documents, so the Claude
+manifest carries no `hooks` pointer: Claude Code reports a pointer at the conventional file as a
+duplicate hooks file (`manifest.hooks` is for additional documents only). Each wrapper compares the envelope's
 `hook_event_name` against the spelling baked for its own host (`PreToolUse` / `PostToolUse` for
 Claude and Codex), so `native hook_event_name must equal postToolUse` on a Claude session means a
 Cursor-built wrapper is installed under the Claude plugin root, not that Claude sends camelCase. A
