@@ -272,13 +272,14 @@ describe('generated entry templates', () => {
     expect(routed).toContain(
       "const pluginRoot = resolvePluginRoot({ fallback: fileURLToPath(new URL(\"../\", import.meta.url)) });",
     );
+    expect(routed).toContain('const artifactRoot = fileURLToPath(new URL("../", import.meta.url));');
     expect(routed).toContain([
       '  web: Object.freeze({',
       '    run: (argv, context) => runWebCommand({',
       '      argv,',
       '      manifestPath: fileURLToPath(new URL("../agent-bundle.manifest.json", import.meta.url)),',
       '      pageScript: webHostPage,',
-      '      pluginRoot: pluginRoot.root,',
+      '      pluginRoot: artifactRoot,',
       '      ...context,',
       '    }),',
       '  }),',
@@ -294,15 +295,22 @@ describe('generated entry templates', () => {
     expect(webOnly).toContain('const commands = Object.freeze([]);');
     expect(webOnly).toContain('web: Object.freeze({');
     expect(webOnly).not.toContain('import * as route0');
+    // A web-only plugin owes no `@agent-bundle/runtime`: nothing opens a request scope.
+    expect(webOnly).not.toContain('@agent-bundle/runtime');
+    expect(webOnly).not.toContain('resolvePluginRoot');
+    expect(webOnly).toContain('const artifactRoot = fileURLToPath(new URL("../", import.meta.url));');
+    expect(routed).toContain('@agent-bundle/runtime');
 
+    // A routed bin without `web` is byte-identical to the pre-#564 generator
+    // (hash of the same input on the parent commit's `entry-shell.ts`).
     const withoutWeb = entryShellModule.generatedCliBinEntrySource({
-      commands: [],
+      commands: [command],
       plugin: { name: 'fixture', version: '1.0.0' },
-      routes: [],
+      routes: [route],
       stateFallback: 'artifact',
     });
     expect(createHash('sha256').update(withoutWeb).digest('hex'))
-      .toBe('013f79381c1e5ab10e0d67dbf2861bd726a7ee6b9e45dc2fe08b42fec4371462');
+      .toBe('b4fea3c82a3f5b3ec5df4dcdb7496f5bbf030fb230ae1550dbd01b65936b2e9f');
     expect(withoutWeb).not.toContain('agent-bundle/web-host');
     expect(withoutWeb).not.toContain('web: Object.freeze({');
   });

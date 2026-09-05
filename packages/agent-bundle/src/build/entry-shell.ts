@@ -392,6 +392,11 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
   const providers = orderedProviders(options.providers ?? []);
   const plainIndent = options.state === undefined ? '  ' : '    ';
   const stateFallback = options.stateFallback ?? 'cwd';
+  // A bin that compiles no command and mounts no state (a `web`-only plugin,
+  // #564) never opens a request scope, so it does not import
+  // `@agent-bundle/runtime`: that optional peer is owed only by projects with
+  // route modules, and the artifact-resident host must build without it.
+  const runtimeBacked = commandRoutes.length > 0 || options.state !== undefined;
   return [
     // The artifact-hosted executable is part of an installed pack, so it
     // applies the pack's operator `.env` layer (#469) — first, before the
@@ -406,16 +411,24 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
         `import { runWebCommand } from ${JSON.stringify(webHostRuntimeSpecifier)};`,
         "import webHostPage from 'agent-bundle/web-host-page';",
       ]),
-    rendered
-      ? "import { available, createAgentRenderDispatcher, resolvePluginRoot, runAgentRequest, unavailable } from '@agent-bundle/runtime';"
-      : "import { available, resolvePluginRoot, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
+    ...(runtimeBacked
+      ? [rendered
+        ? "import { available, createAgentRenderDispatcher, resolvePluginRoot, runAgentRequest, unavailable } from '@agent-bundle/runtime';"
+        : "import { available, resolvePluginRoot, runAgentRequest, unavailable } from '@agent-bundle/runtime';"]
+      : []),
     ...pluginRootImports(stateFallback, options.web?.pluginRootRelativeUrl),
     ...(rendered ? ["import { Worker } from 'node:worker_threads';"] : []),
     ...generatedStateImports(options.state),
     ...routeImports(commandRoutes),
     ...providerImports(providers),
     '',
-    pluginRootDeclaration(stateFallback, options.web?.pluginRootRelativeUrl),
+    ...(runtimeBacked ? [pluginRootDeclaration(stateFallback, options.web?.pluginRootRelativeUrl)] : []),
+    // The `web` command hosts the artifact this module ships in: its manifest
+    // is read beside `bin/`, so the root the MCP executable launches from is
+    // that same directory, whatever `AGENT_BUNDLE_PLUGIN_ROOT` names.
+    ...(options.web === undefined
+      ? []
+      : [`const artifactRoot = ${pluginRootFallbackExpression(stateFallback, options.web.pluginRootRelativeUrl)};`]),
     ...generatedStateOwner(options.state, options),
     'const processLifetime = { hits: 0, instanceId: crypto.randomUUID(), pid: process.pid };',
     ...providerRegistrySource(providers),
@@ -439,6 +452,12 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     // Plain commands mount the same conventional providers as every other
     // generated request scope (#313, #459): once per request, in deterministic
     // key order, fail-closed, as the typed Agent request's own resolver.
+    ...(runtimeBacked ? [] : [
+      // Nothing compiles into `routes`, so the shell's usage error answers
+      // every authored-command path before `execute` could be reached.
+      "const execute = async (command) => { throw new TypeError(`This plugin compiles no CLI command (${command.path.join(' ')}).`); };",
+    ]),
+    ...(runtimeBacked ? [
     'const execute = async (command, input, context) => {',
     '  const route = routes[command.routeId];',
     "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated CLI route must default-export an async function.');",
@@ -474,6 +493,7 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
       ? []
       : ['  } finally {', '    await bindings.close();', '  }']),
     '};',
+    ] : []),
     '',
     ...(rendered
       ? [
@@ -524,7 +544,7 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
         '      argv,',
         `      manifestPath: fileURLToPath(new URL(${JSON.stringify(options.web.manifestRelativeUrl)}, import.meta.url)),`,
         '      pageScript: webHostPage,',
-        '      pluginRoot: pluginRoot.root,',
+        '      pluginRoot: artifactRoot,',
         '      ...context,',
         '    }),',
         '  }),',
