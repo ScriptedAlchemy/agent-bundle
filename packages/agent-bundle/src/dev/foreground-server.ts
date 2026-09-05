@@ -27,7 +27,7 @@ import { PlaygroundRoutes, type PlaygroundRouteService } from './playground/play
 import { RouteManifestRoutes, type RouteManifestRouteService } from './routes/route-manifest-routes.ts';
 import { SkillDocumentError, type SkillDocumentService } from './skill-document-service.ts';
 import type { Invalidation, ProjectEventMessage, ProjectStatus } from './types.ts';
-import { WebHostRoutes, type WebHostEpochSource } from './web-host-routes.ts';
+import { WebHostRoutes, type WebHostEpochSource, type WebHostLaunchOptions } from './web-host-routes.ts';
 import {
   diagnostic,
   isJsonRequest,
@@ -198,6 +198,8 @@ export interface ForegroundServerOptions {
   readonly sessionToken?: string;
   /** Test-only foreground stream observation; production callers never supply this. */
   readonly testing?: ForegroundServerTesting;
+  /** How the development web host selects the launch of a web-exposed server across declared projections. */
+  readonly webHostLaunch?: WebHostLaunchOptions;
   /**
    * Contributor HMR only: browser origins of a separately started Workbench
    * Rsbuild dev server that proxies /api here. Loopback http(s) origins only;
@@ -421,6 +423,7 @@ export class ForegroundServer {
   readonly #sockets = new Set<Socket>();
   readonly #streamSubscriptions = new Set<ProjectEventSubscription>();
   readonly #testing: ForegroundServerTesting | undefined;
+  readonly #webHostEpochSubscription: ProjectEventSubscription | undefined;
   readonly #webHostRoutes: WebHostRoutes;
   readonly #workbenchDevOrigins: ReadonlySet<string>;
   #closePromise: Promise<void> | undefined;
@@ -469,11 +472,25 @@ export class ForegroundServer {
     this.#webHostRoutes = new WebHostRoutes({
       authorize: (request) => this.#assertWebHostNavigation(request),
       ...(options.epochs === undefined ? {} : { epochs: options.epochs }),
+      ...(options.webHostLaunch === undefined ? {} : { launch: options.webHostLaunch }),
       ...(options.mcpSessions === undefined ? {} : { mcpSessions: options.mcpSessions }),
       ...(options.mcpAppPreviews === undefined ? {} : { previews: options.mcpAppPreviews }),
       sandboxOrigin: options.mcpAppSandboxOrigin ?? (() => undefined),
       sessionToken: this.sessionToken,
     });
+    // Web-host session retirement follows successful epoch publications only:
+    // a failed rebuild publishes no artifact.available and retires nothing.
+    // Subscribed only when the web host is functional, so a foreground server
+    // without it keeps the hub's SSE-only subscription accounting.
+    this.#webHostEpochSubscription =
+      options.epochs === undefined || options.mcpSessions === undefined || options.webHostLaunch === undefined
+        ? undefined
+        : options.eventHub.subscribe(
+          { afterSequence: options.eventHub.latestSequence },
+          (event) => {
+            if (event.type === 'artifact.available') this.#webHostRoutes.adoptActiveEpoch(event.epochId);
+          },
+        );
     this.#mcpAppRoutes = new McpAppRoutes({
       authorize: (request) => this.#assertMutationSession(request),
       openingCall: (sessionId, toolName, opening) => this.#webHostRoutes.openingCall(sessionId, toolName, opening),
@@ -662,6 +679,7 @@ export class ForegroundServer {
   }
 
   async #release(): Promise<readonly ForegroundServerCloseFailure[]> {
+    this.#webHostEpochSubscription?.unsubscribe();
     this.#webHostRoutes.close();
     this.#mcpAppRoutes.close();
     this.#hostMcpRoutes?.close();

@@ -70,13 +70,21 @@ const matchingResourceUris = (resourceUris: readonly string[], request: OpenAppR
   return resourceUris.filter((uri) => appNameOf(uri) === request.name);
 };
 
+/** An App opening resolved against the live server, before its opening tool has been called. */
+export interface ResolvedAppOpening {
+  readonly input: Readonly<Record<string, McpAppJsonValue>>;
+  readonly resourceUri: string;
+  readonly server: string;
+  readonly tool: McpAppToolDefinition;
+}
+
 /**
- * Resolves the App and its opening tool against the live server, then calls
- * the tool once. A known `resourceUri` skips name matching but is still
+ * Resolves the App and its opening tool against the live server without
+ * calling the tool. A known `resourceUri` skips name matching but is still
  * verified against what the server serves; the tool must advertise the App
  * as `_meta.ui.resourceUri`, and without `tool` exactly one may.
  */
-export const openApp = async (source: AppSelectionSource, request: OpenAppRequest): Promise<AppSelection> => {
+export const resolveAppOpening = async (source: AppSelectionSource, request: OpenAppRequest): Promise<ResolvedAppOpening> => {
   if (request.resourceUri === undefined && request.name === undefined) {
     throw new Error('MCP App must be named as <server>/<app> or a ui:// resource URI.');
   }
@@ -112,6 +120,12 @@ export const openApp = async (source: AppSelectionSource, request: OpenAppReques
       : `Several tools open MCP App ${resourceUri} (${appTools.map((tool) => tool.name).join(', ')}); choose one with --tool.`);
   }
   const input = requireJsonObject(request.input ?? {}, 'MCP App tool input');
-  const result = await source.callTool(selectedTool.name, input);
-  return Object.freeze({ input, resourceUri, result, server: request.server, tool: selectedTool });
+  return Object.freeze({ input, resourceUri, server: request.server, tool: selectedTool });
+};
+
+/** {@link resolveAppOpening}, then exactly one call of the resolved opening tool. */
+export const openApp = async (source: AppSelectionSource, request: OpenAppRequest): Promise<AppSelection> => {
+  const resolved = await resolveAppOpening(source, request);
+  const result = await source.callTool(resolved.tool.name, resolved.input);
+  return Object.freeze({ ...resolved, result });
 };

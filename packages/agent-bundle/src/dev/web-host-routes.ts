@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { join } from 'node:path';
 
+import type { TargetRegistry } from '../adapters/registry.ts';
+import { digest } from '../core/digest.ts';
 import { isRecord } from '../core/strict-json.ts';
 import type {
   McpAppJsonValue,
@@ -29,19 +31,25 @@ import {
   responseDiagnostic,
 } from './http.ts';
 import {
-  readWebManifest,
+  readWebManifestDocument,
   type WebManifestApp,
 } from '../web-host/manifest.ts';
 import { renderWebHostPage, webHostContentSecurityPolicy } from '../web-host/page.ts';
 import { readWebHostPageScript } from '../web-host/page-script.ts';
 import {
-  openApp,
+  resolveAppOpening,
   type AppSelectionSource,
+  type ResolvedAppOpening,
 } from '../web-host/select-app.ts';
+import {
+  selectWebLaunch,
+  WebLaunchSelectionError,
+  type SelectedWebLaunch,
+} from './web-host-launch-selection.ts';
 
-const devWebHostTarget = 'portable';
 const manifestFileName = 'agent-bundle.manifest.json';
 const maxRetainedOpeningCalls = 64;
+const maxRetainedOpeningResults = 64;
 
 interface WebHostEpochReference {
   close(): Promise<void>;
@@ -58,9 +66,16 @@ interface RegisteredSession {
   readonly session: McpSession;
 }
 
+/** How the launch of a web-exposed server is selected across the artifact's declared projections. */
+export interface WebHostLaunchOptions {
+  readonly projectRoot: string;
+  readonly registry: TargetRegistry;
+}
+
 export interface WebHostRoutesOptions {
   readonly authorize: (request: IncomingMessage) => void;
   readonly epochs?: WebHostEpochSource;
+  readonly launch?: WebHostLaunchOptions;
   readonly mcpSessions?: McpSessionService;
   readonly previews?: McpAppRoutePreviewService;
   readonly sandboxOrigin: () => string | undefined;
@@ -70,6 +85,8 @@ export interface WebHostRoutesOptions {
 interface WebHostRoute {
   readonly app: string;
   readonly server: string;
+  /** Explicit projection choice from `?target=`; validated, never a fallback. */
+  readonly target?: string;
 }
 
 const routeSegment = (value: string): string =>
@@ -79,12 +96,31 @@ const routeSegment = (value: string): string =>
     rejectBlank: true,
   });
 
-const route = (requestTarget: string | undefined): WebHostRoute | false | undefined => {
-  const pathname = rawPathname(requestTarget);
+const requestedTarget = (requestUrl: string | undefined): string | undefined => {
+  let target: string | null;
+  try {
+    target = new URL(requestUrl ?? '', 'http://localhost').searchParams.get('target');
+  } catch {
+    throw requestError(diagnostic('AB8020', 'Web host route path is not valid.', 400));
+  }
+  if (target === null) return undefined;
+  if (target.trim().length === 0) {
+    throw requestError(diagnostic('AB8020', 'The target query parameter must name a declared projection.', 400));
+  }
+  return target;
+};
+
+const route = (requestUrl: string | undefined): WebHostRoute | false | undefined => {
+  const pathname = rawPathname(requestUrl);
   if (pathname !== '/web' && !pathname.startsWith('/web/')) return undefined;
   const parts = pathname.split('/');
   if (parts.length !== 4 || parts[0] !== '' || parts[1] !== 'web') return false;
-  return Object.freeze({ app: routeSegment(parts[3]!), server: routeSegment(parts[2]!) });
+  const requested = requestedTarget(requestUrl);
+  return Object.freeze({
+    app: routeSegment(parts[3]!),
+    server: routeSegment(parts[2]!),
+    ...(requested === undefined ? {} : { target: requested }),
+  });
 };
 
 const jsonInput = (
@@ -133,17 +169,20 @@ const writePage = (
 export class WebHostRoutes {
   readonly #authorize: (request: IncomingMessage) => void;
   readonly #epochs: WebHostEpochSource | undefined;
+  readonly #launch: WebHostLaunchOptions | undefined;
   readonly #mcpSessions: McpSessionService | undefined;
   readonly #previews: McpAppRoutePreviewService | undefined;
   readonly #sandboxOrigin: () => string | undefined;
   readonly #sessionToken: string;
   readonly #openingCalls = new Map<string, McpAppOpeningCall>();
+  readonly #openingResults = new Map<string, McpAppOpeningCall>();
   readonly #sessions = new Map<string, Promise<RegisteredSession>>();
   #closed = false;
 
   constructor(options: WebHostRoutesOptions) {
     this.#authorize = options.authorize;
     this.#epochs = options.epochs;
+    this.#launch = options.launch;
     this.#mcpSessions = options.mcpSessions;
     this.#previews = options.previews;
     this.#sandboxOrigin = options.sandboxOrigin;
@@ -154,10 +193,34 @@ export class WebHostRoutes {
     if (this.#closed) return;
     this.#closed = true;
     this.#openingCalls.clear();
+    this.#openingResults.clear();
     const sessions = [...this.#sessions.values()];
     this.#sessions.clear();
     for (const session of sessions) {
       void session.then((registered) => registered.dispose()).catch(() => undefined);
+    }
+  }
+
+  /**
+   * Retires sessions of every epoch but the newly published one. New page
+   * loads acquire sessions on the new epoch; an old session nobody leases
+   * beyond this registry closes and releases its process and epoch
+   * reference, while one that pages still lease stays valid for them — it is
+   * only no longer handed out. A failed rebuild publishes no epoch, so it
+   * never reaches this method and the last working session is kept.
+   */
+  adoptActiveEpoch(activeEpochId: string): void {
+    if (this.#closed) return;
+    const service = this.#mcpSessions;
+    for (const [key, opening] of [...this.#sessions.entries()]) {
+      if (key.startsWith(`${activeEpochId}\0`)) continue;
+      this.#sessions.delete(key);
+      void opening.then(async (registered) => {
+        if (service === undefined || service.appLeaseCount(registered.session.id) > 1) return;
+        this.#dropSessionState(registered.session.id);
+        await registered.dispose();
+        await service.closeSession(registered.session.id);
+      }).catch(() => undefined);
     }
   }
 
@@ -185,15 +248,16 @@ export class WebHostRoutes {
     }
     if (this.#closed) throw requestError(diagnostic('AB8022', 'Web host routes are not available.', 503));
     const epochs = this.#epochs;
+    const launchOptions = this.#launch;
     const mcpSessions = this.#mcpSessions;
     const sandboxOrigin = this.#sandboxOrigin();
-    if (epochs === undefined || mcpSessions === undefined || this.#previews === undefined || sandboxOrigin === undefined) {
+    if (epochs === undefined || launchOptions === undefined || mcpSessions === undefined || this.#previews === undefined || sandboxOrigin === undefined) {
       throw requestError(diagnostic('AB8022', 'Web host routes are not available.', 404));
     }
 
     try {
-      const exposed = await this.#exposedApp(epochs, parsed);
-      if (exposed.app === undefined) {
+      const exposed = await this.#exposedApp(epochs, launchOptions, parsed);
+      if (exposed.app === undefined || exposed.launch === undefined) {
         const suffix = exposed.names.length === 0
           ? ' No Apps are exposed.'
           : ` Exposed Apps: ${exposed.names.join(', ')}.`;
@@ -207,52 +271,83 @@ export class WebHostRoutes {
         );
         return true;
       }
-      const { app, epochId } = exposed;
+      const { app, epochId, launch } = exposed;
       if (method === 'HEAD') {
         writePage(response, method, sandboxOrigin, '');
         return true;
       }
-      const registered = await this.#session(mcpSessions, epochId, app.server);
-      const selection = await openApp(selectionSource(registered.session), {
+      const registered = await this.#session(mcpSessions, epochId, app.server, launch);
+      const source = selectionSource(registered.session);
+      const resolved = await resolveAppOpening(source, {
         input: jsonInput(app.input),
         resourceUri: app.resourceUri,
         server: app.server,
         ...(app.tool === undefined ? {} : { tool: app.tool }),
       });
+      const call = await this.#openingCallFor(source, registered.session.id, resolved);
       const opening = randomUUID();
       this.#retainOpeningCall(
-        this.#openingCallKey(registered.session.id, selection.tool.name, opening),
-        Object.freeze({ input: selection.input, result: selection.result }),
+        this.#openingCallKey(registered.session.id, resolved.tool.name, opening),
+        call,
       );
       const body = renderWebHostPage({
         script: await readWebHostPageScript(),
         seed: {
           autoApprove: app.allow,
-          input: selection.input,
+          input: call.input,
           opening,
           previewProfile: 'portable',
-          result: selection.result,
+          result: call.result,
           sessionId: registered.session.id,
           title: app.app,
           token: this.#sessionToken,
           tokenHeader: 'x-agent-bundle-session',
-          toolName: selection.tool.name,
+          toolName: resolved.tool.name,
         },
       });
       writePage(response, method, sandboxOrigin, body);
     } catch (error) {
+      if (error instanceof WebLaunchSelectionError) {
+        responseDiagnostic(response, diagnostic('AB8023', error.message, error.code === 'launch-ambiguous' ? 409 : 404));
+        return true;
+      }
       if (isRequestDiagnostic(error)) throw error;
       throw requestError(diagnostic('AB8023', 'MCP App could not be opened.', 502));
     }
     return true;
   }
 
+  /**
+   * The call that opens the page. A tool annotated `readOnlyHint: true` runs
+   * once per page load — a refresh re-reads live state. Any other opening
+   * tool may mutate, so a page open is not an unbounded mutation: its first
+   * result per session, tool, App, and input is retained and every later
+   * load of the same page rebinds that result instead of re-running the
+   * tool; a new session (a new epoch after rebuild) runs it once again.
+   */
+  async #openingCallFor(
+    source: AppSelectionSource,
+    sessionId: string,
+    resolved: ResolvedAppOpening,
+  ): Promise<McpAppOpeningCall> {
+    const readOnly = isRecord(resolved.tool['annotations']) && resolved.tool['annotations']['readOnlyHint'] === true;
+    const key = `${sessionId}\0${resolved.tool.name}\0${resolved.resourceUri}\0${digest(resolved.input)}`;
+    const retained = readOnly ? undefined : this.#openingResults.get(key);
+    if (retained !== undefined) return retained;
+    const result = await source.callTool(resolved.tool.name, resolved.input);
+    const call: McpAppOpeningCall = Object.freeze({ input: resolved.input, result });
+    if (!readOnly) this.#retainOpeningResult(key, call);
+    return call;
+  }
+
   async #exposedApp(
     epochs: WebHostEpochSource,
+    launchOptions: WebHostLaunchOptions,
     requested: WebHostRoute,
   ): Promise<Readonly<{
     readonly app?: WebManifestApp;
     readonly epochId: string;
+    readonly launch?: SelectedWebLaunch;
     readonly names: readonly string[];
   }>> {
     let reference: WebHostEpochReference;
@@ -262,26 +357,42 @@ export class WebHostRoutes {
       throw requestError(diagnostic('AB8022', 'Web host routes are not available without an active artifact epoch.', 404));
     }
     try {
-      const manifest = await readWebManifest(join(reference.root, manifestFileName));
-      const apps: readonly WebManifestApp[] = manifest?.apps ?? [];
+      const document = await readWebManifestDocument(join(reference.root, manifestFileName));
+      const apps: readonly WebManifestApp[] = document.web?.apps ?? [];
       const requestedName = `${requested.server}/${requested.app}`;
       const app = apps.find((candidate) => candidate.app === requestedName);
       const names = Object.freeze(apps.map((candidate) => candidate.app).sort((left, right) => left.localeCompare(right)));
-      return Object.freeze({
-        ...(app === undefined ? {} : { app }),
-        epochId: reference.epoch.id,
-        names,
+      if (app === undefined) {
+        return Object.freeze({ epochId: reference.epoch.id, names });
+      }
+      const launch = await selectWebLaunch({
+        artifactRoot: reference.root,
+        declaredTargets: document.targets,
+        registry: launchOptions.registry,
+        ...(requested.target === undefined ? {} : { requestedTarget: requested.target }),
+        serverName: app.server,
+        workspaceRoot: launchOptions.projectRoot,
       });
+      return Object.freeze({ app, epochId: reference.epoch.id, launch, names });
     } finally {
       await reference.close();
     }
   }
 
-  async #session(service: McpSessionService, epochId: string, serverName: string): Promise<RegisteredSession> {
-    const key = `${epochId}\0${serverName}`;
+  async #session(
+    service: McpSessionService,
+    epochId: string,
+    serverName: string,
+    launch: SelectedWebLaunch,
+  ): Promise<RegisteredSession> {
+    // The resolved launch identity keys the session beside the epoch and
+    // server: two projections sharing one normalized launch share the
+    // session, while explicit targets with materially different launches
+    // never collide on epoch + server alone.
+    const key = `${epochId}\0${serverName}\0${launch.launchId}`;
     const existing = this.#sessions.get(key);
     if (existing !== undefined) return existing;
-    const opening = this.#openSession(service, key, epochId, serverName);
+    const opening = this.#openSession(service, key, epochId, serverName, launch.target);
     this.#sessions.set(key, opening);
     try {
       return await opening;
@@ -296,8 +407,9 @@ export class WebHostRoutes {
     key: string,
     epochId: string,
     serverName: string,
+    target: string,
   ): Promise<RegisteredSession> {
-    const session = await service.open({ epochId, serverName, target: devWebHostTarget });
+    const session = await service.open({ epochId, serverName, target });
     const lease: McpAppSessionLease = await service.acquireAppLease(session.id);
     let disposed = false;
     let unsubscribe = (): void => undefined;
@@ -324,13 +436,21 @@ export class WebHostRoutes {
   }
 
   #forgetSession(key: string, sessionId: string): void {
+    this.#dropSessionState(sessionId);
     const current = this.#sessions.get(key);
     if (current === undefined) return;
     this.#sessions.delete(key);
-    for (const openingKey of this.#openingCalls.keys()) {
-      if (openingKey.startsWith(`${sessionId}\0`)) this.#openingCalls.delete(openingKey);
-    }
     void current.then((registered) => registered.dispose()).catch(() => undefined);
+  }
+
+  #dropSessionState(sessionId: string): void {
+    const prefix = `${sessionId}\0`;
+    for (const openingKey of this.#openingCalls.keys()) {
+      if (openingKey.startsWith(prefix)) this.#openingCalls.delete(openingKey);
+    }
+    for (const resultKey of this.#openingResults.keys()) {
+      if (resultKey.startsWith(prefix)) this.#openingResults.delete(resultKey);
+    }
   }
 
   #retainOpeningCall(key: string, call: McpAppOpeningCall): void {
@@ -338,6 +458,14 @@ export class WebHostRoutes {
     for (const oldest of this.#openingCalls.keys()) {
       if (this.#openingCalls.size <= maxRetainedOpeningCalls) break;
       this.#openingCalls.delete(oldest);
+    }
+  }
+
+  #retainOpeningResult(key: string, call: McpAppOpeningCall): void {
+    this.#openingResults.set(key, call);
+    for (const oldest of this.#openingResults.keys()) {
+      if (this.#openingResults.size <= maxRetainedOpeningResults) break;
+      this.#openingResults.delete(oldest);
     }
   }
 
