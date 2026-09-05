@@ -120,7 +120,7 @@ export const loadWorkbenchCapabilities = async ({
     mcpServers: inspection.runtime.mcpServers.length,
     scripts: inspection.runtime.scripts.length,
     skills: skillTree.skills.length,
-    targets: inspection.targets.length,
+    targets: inspection.projections.length,
   });
   return Object.freeze({
     buildId,

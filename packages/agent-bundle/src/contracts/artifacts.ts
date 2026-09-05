@@ -4,14 +4,18 @@
  */
 export type {
   ArtifactEpochDiff,
+  ArtifactInspectionBin,
   ArtifactInspection,
   ArtifactInspectionDirectoryNode,
   ArtifactInspectionFile,
   ArtifactInspectionFileNode,
+  ArtifactInspectionHook,
+  ArtifactInspectionMcpApp,
+  ArtifactInspectionMcpServer,
+  ArtifactInspectionProjection,
   ArtifactInspectionProvenance,
   ArtifactInspectionRuntime,
   ArtifactInspectionScript,
   ArtifactInspectionSourceInput,
-  ArtifactInspectionTarget,
   ArtifactInspectionTreeNode,
 } from '../dev/types.ts';

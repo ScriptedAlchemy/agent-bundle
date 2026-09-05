@@ -14,6 +14,8 @@ const file = (path: string) => ({
 });
 
 const inspection = ({ hooks = 0, mcpServers = 0, scripts = 0, targets = 1 } = {}): ArtifactInspection => ({
+  application: { id: 'application:fixture', name: 'fixture', version: '1.2.3' },
+  distribution: { channels: ['local'] },
   epochId: 'build-a',
   files: [],
   project: {
@@ -23,20 +25,28 @@ const inspection = ({ hooks = 0, mcpServers = 0, scripts = 0, targets = 1 } = {}
     revision: digest,
     sourceInputs: [],
   },
+  projections: Array.from({ length: targets }, (_, index) => ({
+    documents: {},
+    host: `target-${String(index)}`,
+    tree: { children: [], kind: 'directory' as const, name: `target-${String(index)}`, path: `target-${String(index)}` },
+  })),
   provenance: [],
   runtime: {
+    bins: [],
     executables: [],
     hooks: Array.from({ length: hooks }, (_, index) => ({
       event: 'sessionStart',
       file: file(`hooks/hook-${String(index)}.mjs`),
       id: `hook:${String(index)}`,
+      kind: 'event-route',
       name: `hook-${String(index)}`,
       path: `hooks/hook-${String(index)}.mjs`,
       target: 'claude',
     })),
     mcpServers: Array.from({ length: mcpServers }, (_, index) => ({
+      apps: [],
       entryPaths: [`mcp/server-${String(index)}.mjs`],
-      kind: 'stdio' as const,
+      kind: 'compiled' as const,
       manifestPath: `mcp/server-${String(index)}.json`,
       name: `server-${String(index)}`,
       target: 'portable',
@@ -44,14 +54,11 @@ const inspection = ({ hooks = 0, mcpServers = 0, scripts = 0, targets = 1 } = {}
     scripts: Array.from({ length: scripts }, (_, index) => ({
       file: file(`scripts/script-${String(index)}.mjs`),
       id: `script:${String(index)}`,
+      mode: 'bundle' as const,
       name: `script-${String(index)}`,
       target: 'portable',
     })),
   },
-  targets: Array.from({ length: targets }, (_, index) => ({
-    name: `target-${String(index)}`,
-    tree: { children: [], kind: 'directory' as const, name: `target-${String(index)}`, path: `target-${String(index)}` },
-  })),
 });
 
 const skill = {

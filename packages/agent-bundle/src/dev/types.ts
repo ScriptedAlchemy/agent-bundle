@@ -1,5 +1,10 @@
 import type { Diagnostic } from '../core/diagnostics.ts';
 import type { ProjectContext } from '../core/project-context.ts';
+import type {
+  ArtifactManifestApplication,
+  ArtifactManifestDistribution,
+  ArtifactManifestProjectionDocuments,
+} from '../build/manifest.ts';
 
 export type JsonPrimitive = boolean | null | number | string;
 export type JsonArray = readonly JsonValue[];
@@ -58,16 +63,14 @@ export interface ArtifactInspectionDirectoryNode {
   readonly path: string;
 }
 
-/** One immutable tree node within a declared artifact target. */
+/** One immutable tree node within a declared artifact projection. */
 export type ArtifactInspectionTreeNode = ArtifactInspectionDirectoryNode | ArtifactInspectionFileNode;
 
-/**
- * One selected host projection and the tree it reads. Every projection reads
- * the whole composite root (#555), so each target's tree is that root, named
- * after the host; S3 collapses the per-target view to the single root.
- */
-export interface ArtifactInspectionTarget {
-  readonly name: string;
+/** One selected host projection and the composite-root tree it reads. */
+export interface ArtifactInspectionProjection {
+  readonly documents: ArtifactManifestProjectionDocuments;
+  readonly host: string;
+  readonly marketplace?: string;
   readonly tree: ArtifactInspectionDirectoryNode;
 }
 
@@ -81,16 +84,25 @@ export interface ArtifactInspectionHook {
   readonly event: string;
   readonly file: ArtifactInspectionFile;
   readonly id: string;
+  readonly kind: 'config' | 'event-route';
   readonly name: string;
   readonly path: string;
   readonly target: string;
   readonly timeout?: number;
 }
 
+export interface ArtifactInspectionMcpApp {
+  readonly id: string;
+  readonly name: string;
+  readonly path?: string;
+  readonly resourceUri: string;
+}
+
 /** Non-secret runtime facts for one strict modern MCP server declaration. */
 export interface ArtifactInspectionMcpServer {
+  readonly apps: readonly ArtifactInspectionMcpApp[];
   readonly entryPaths: readonly string[];
-  readonly kind: 'stdio' | 'streamable-http';
+  readonly kind: 'command' | 'compiled' | 'remote';
   readonly manifestPath: string;
   readonly name: string;
   readonly target: string;
@@ -99,11 +111,22 @@ export interface ArtifactInspectionMcpServer {
 export interface ArtifactInspectionScript {
   readonly file: ArtifactInspectionFile;
   readonly id: string;
+  readonly mode: 'bundle' | 'copy';
   readonly name: string;
+  readonly rendered?: string;
   readonly target: string;
+  readonly worker?: ArtifactInspectionFile;
+}
+
+export interface ArtifactInspectionBin {
+  readonly file: ArtifactInspectionFile;
+  readonly hosts: readonly string[];
+  readonly name: string;
+  readonly worker?: ArtifactInspectionFile;
 }
 
 export interface ArtifactInspectionRuntime {
+  readonly bins: readonly ArtifactInspectionBin[];
   readonly executables: readonly ArtifactInspectionFile[];
   readonly hooks: readonly ArtifactInspectionHook[];
   readonly mcpServers: readonly ArtifactInspectionMcpServer[];
@@ -112,12 +135,14 @@ export interface ArtifactInspectionRuntime {
 
 /** Detached facts from one strictly validated, published Artifact Manifest epoch. */
 export interface ArtifactInspection {
+  readonly application: ArtifactManifestApplication;
+  readonly distribution: ArtifactManifestDistribution;
   readonly epochId: string;
   readonly files: readonly ArtifactInspectionFile[];
   readonly project: ProjectContext;
+  readonly projections: readonly ArtifactInspectionProjection[];
   readonly provenance: readonly ArtifactInspectionProvenance[];
   readonly runtime: ArtifactInspectionRuntime;
-  readonly targets: readonly ArtifactInspectionTarget[];
 }
 
 export interface ArtifactEpochAddedFile {

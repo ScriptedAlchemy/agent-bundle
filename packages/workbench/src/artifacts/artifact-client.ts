@@ -72,36 +72,74 @@ const isProvenance = (value: unknown): boolean =>
   exactRecord(value, ['outputPath', 'sourceInputs']) && typeof value.outputPath === 'string' &&
   arrayOf(value.sourceInputs, isSourceInput);
 
+const isApplication = (value: unknown): boolean =>
+  exactRecord(value, ['id', 'name', 'version'], ['description']) &&
+  typeof value.id === 'string' && typeof value.name === 'string' && typeof value.version === 'string' &&
+  (!Object.hasOwn(value, 'description') || typeof value.description === 'string');
+
+const isDistribution = (value: unknown): boolean => {
+  if (!exactRecord(value, ['channels'], ['install']) ||
+    !arrayOf(value.channels, (channel) => channel === 'local' || channel === 'npm')) return false;
+  if (!Object.hasOwn(value, 'install')) return true;
+  return exactRecord(value.install, [], ['instructions', 'script']) &&
+    (!Object.hasOwn(value.install, 'instructions') || typeof value.install.instructions === 'string') &&
+    (!Object.hasOwn(value.install, 'script') || typeof value.install.script === 'string');
+};
+
 const isHook = (value: unknown): boolean =>
-  exactRecord(value, ['event', 'file', 'id', 'name', 'path', 'target'], ['timeout']) &&
+  exactRecord(value, ['event', 'file', 'id', 'kind', 'name', 'path', 'target'], ['timeout']) &&
   typeof value.event === 'string' && isArtifactFile(value.file) && typeof value.id === 'string' &&
+  (value.kind === 'config' || value.kind === 'event-route') &&
   typeof value.name === 'string' && typeof value.path === 'string' && typeof value.target === 'string' &&
   (!Object.hasOwn(value, 'timeout') || finiteNumber(value.timeout));
 
+const isMcpApp = (value: unknown): boolean =>
+  exactRecord(value, ['id', 'name', 'resourceUri'], ['path']) &&
+  typeof value.id === 'string' && typeof value.name === 'string' && typeof value.resourceUri === 'string' &&
+  (!Object.hasOwn(value, 'path') || typeof value.path === 'string');
+
 const isMcpServer = (value: unknown): boolean =>
-  exactRecord(value, ['entryPaths', 'kind', 'manifestPath', 'name', 'target']) &&
+  exactRecord(value, ['apps', 'entryPaths', 'kind', 'manifestPath', 'name', 'target']) &&
+  arrayOf(value.apps, isMcpApp) &&
   arrayOf(value.entryPaths, (entry) => typeof entry === 'string') &&
-  (value.kind === 'stdio' || value.kind === 'streamable-http') && typeof value.manifestPath === 'string' &&
+  (value.kind === 'command' || value.kind === 'compiled' || value.kind === 'remote') &&
+  typeof value.manifestPath === 'string' &&
   typeof value.name === 'string' && typeof value.target === 'string';
 
 const isScript = (value: unknown): boolean =>
-  exactRecord(value, ['file', 'id', 'name', 'target']) && isArtifactFile(value.file) &&
-  typeof value.id === 'string' && typeof value.name === 'string' && typeof value.target === 'string';
+  exactRecord(value, ['file', 'id', 'mode', 'name', 'target'], ['rendered', 'worker']) &&
+  isArtifactFile(value.file) && typeof value.id === 'string' && (value.mode === 'bundle' || value.mode === 'copy') &&
+  typeof value.name === 'string' && typeof value.target === 'string' &&
+  (!Object.hasOwn(value, 'rendered') || typeof value.rendered === 'string') &&
+  (!Object.hasOwn(value, 'worker') || isArtifactFile(value.worker));
+
+const isBin = (value: unknown): boolean =>
+  exactRecord(value, ['file', 'hosts', 'name'], ['worker']) &&
+  isArtifactFile(value.file) && arrayOf(value.hosts, (host) => typeof host === 'string') &&
+  typeof value.name === 'string' && (!Object.hasOwn(value, 'worker') || isArtifactFile(value.worker));
 
 const isRuntime = (value: unknown): boolean =>
-  exactRecord(value, ['executables', 'hooks', 'mcpServers', 'scripts']) &&
-  arrayOf(value.executables, isArtifactFile) && arrayOf(value.hooks, isHook) &&
+  exactRecord(value, ['bins', 'executables', 'hooks', 'mcpServers', 'scripts']) &&
+  arrayOf(value.bins, isBin) && arrayOf(value.executables, isArtifactFile) && arrayOf(value.hooks, isHook) &&
   arrayOf(value.mcpServers, isMcpServer) && arrayOf(value.scripts, isScript);
 
-const isTarget = (value: unknown): boolean =>
-  exactRecord(value, ['name', 'tree']) && typeof value.name === 'string' &&
+const isProjectionDocuments = (value: unknown): boolean =>
+  exactRecord(value, [], ['hooks', 'marketplace', 'mcp', 'plugin']) &&
+  ['hooks', 'marketplace', 'mcp', 'plugin'].every((key) =>
+    !Object.hasOwn(value, key) || typeof value[key] === 'string');
+
+const isProjection = (value: unknown): boolean =>
+  exactRecord(value, ['documents', 'host', 'tree'], ['marketplace']) &&
+  isProjectionDocuments(value.documents) && typeof value.host === 'string' &&
+  (!Object.hasOwn(value, 'marketplace') || typeof value.marketplace === 'string') &&
   exactRecord(value.tree, ['children', 'kind', 'name', 'path']) && value.tree.kind === 'directory' &&
   typeof value.tree.name === 'string' && typeof value.tree.path === 'string' && arrayOf(value.tree.children, isTreeNode);
 
 const isInspection = (value: unknown): value is ArtifactInspection =>
-  exactRecord(value, ['epochId', 'files', 'project', 'provenance', 'runtime', 'targets']) &&
-  typeof value.epochId === 'string' && arrayOf(value.files, isArtifactFile) && isProject(value.project) &&
-  arrayOf(value.provenance, isProvenance) && isRuntime(value.runtime) && arrayOf(value.targets, isTarget);
+  exactRecord(value, ['application', 'distribution', 'epochId', 'files', 'project', 'projections', 'provenance', 'runtime']) &&
+  isApplication(value.application) && isDistribution(value.distribution) && typeof value.epochId === 'string' &&
+  arrayOf(value.files, isArtifactFile) && isProject(value.project) && arrayOf(value.projections, isProjection) &&
+  arrayOf(value.provenance, isProvenance) && isRuntime(value.runtime);
 
 const isAddedFile = (value: unknown): boolean =>
   exactRecord(value, ['after', 'path']) && isArtifactFile(value.after) && typeof value.path === 'string';
