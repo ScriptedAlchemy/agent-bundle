@@ -36,6 +36,7 @@ import {
   type McpAppCompileMode,
   type PlannedMcpApp,
 } from './mcp-apps.ts';
+import { bundleSyntaxCheckFor } from './module-imports.ts';
 import { compileRslibSurfaces, settledRslibSurface } from './rslib.ts';
 import { planTargetStages } from './target-stages.ts';
 import {
@@ -532,12 +533,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
       files: await listArtifactFiles(stageRoot),
       outputProvenance,
     });
-    // The bundler's own output is trusted to the ESM lexer; once a consumer
-    // hatch can rewrite emitted assets (a banner, a processAssets pass), the
-    // final bytes are no longer the bundler's proof and are parsed in full.
-    const bundleSyntaxCheck = options.tools?.rspack === undefined && options.tools?.rsbuild === undefined
-      ? 'lexed'
-      : 'parsed';
+    const bundleSyntaxCheck = bundleSyntaxCheckFor(options.tools);
     const preManifestDiagnostics = await validateArtifactFiles({
       artifactRoot: stageRoot,
       bundleSyntaxCheck,
