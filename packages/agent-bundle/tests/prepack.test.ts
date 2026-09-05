@@ -884,10 +884,10 @@ const createSiblingProject = async (
   return root;
 };
 
-it('accepts a dependency that only a prebuilt payload module imports: prepack passes, AB6005 does not walk copied files', async () => {
+it('accepts a dependency that only a prebuilt payload module imports or requires: prepack passes, AB6005 does not walk prebuilt payloads', async () => {
   const root = await createSiblingProject('prebuilt-project', {
     bin: { 'prebuilt-fixture': './dist/bin/prebuilt-fixture.js' },
-    dependencies: { express: '^5.0.0' },
+    dependencies: { 'body-parser': '^2.0.0', cors: '^2.8.5', express: '^5.0.0' },
     files: ['dist', 'host-packs', 'README.md'],
     name: 'prebuilt-fixture',
     type: 'module',
@@ -903,9 +903,18 @@ it('accepts a dependency that only a prebuilt payload module imports: prepack pa
     "  targets: ['cursor'],",
     '};',
   ], {
-    // A bare import in a module the framework copies rather than compiles: AB6005 never walks it, and the
-    // import is the usage evidence that keeps `express` out of AB7014.
-    'built/runtime/mcp/server.js': 'import express from "express";\nexport default express;\n',
+    // A bare import, a `require()`, and a `require.resolve()` in a module the framework copies rather than
+    // compiles: AB6005 never walks it — the prebuilt payload stays opaque to the load scan as to the import
+    // walk — while the shared scanner still reads all three as the usage evidence that keeps `express`,
+    // `body-parser`, and `cors` out of AB7014.
+    'built/runtime/mcp/server.js': [
+      'import express from "express";',
+      'const body = require("body-parser");',
+      'const where = require.resolve("cors");',
+      'export default express;',
+      'export { body, where };',
+      '',
+    ].join('\n'),
     'src/index.ts': 'export const value = 1;\n',
   });
   const packed = await prepack({ root });

@@ -1211,11 +1211,15 @@ hatch customizes *how code compiles*, never *what the artifact promises*. The
 framework's own profile keeps the same promise: `output.autoExternal` is
 `false`, `bundle: true`, `splitChunks: false`, and no `externals` are added, so
 Rslib's `node` target leaves only Node built-ins (and `pnpapi`) external, and
-`AB6005` fails any bare import specifier that is not a Node built-in in every
+`AB6005` fails any bare specifier that is not a Node built-in in every
 compiled module — host-pack modules and the package build's `dist` bundles
-alike — so the hatch cannot externalize an import on the author's behalf (a
-`require`, `createRequire`, or `import.meta.resolve` call is not an import and
-is outside that walk; the prepack gate reads those as dependency evidence). Run-time
+alike — whether Rspack emitted it as an ES `import` or as the `require`,
+`createRequire(…)` loader, or `import.meta.resolve` call a `commonjs` or
+`node-commonjs` external becomes
+(`const load = createRequire(import.meta.url); load("x")`), so the hatch
+cannot keep a dependency external in any emitted form (one scanner,
+`src/build/module-loads.ts`, reads those loads for `AB6005` and for the
+prepack gate alike). Run-time
 path references are kept the same way: a `new URL(…, import.meta.url)` or
 `new Worker(new URL(…))` in consumer or generated code names a file beside the
 artifact, so the invariant layer turns the bundler's URL and worker asset

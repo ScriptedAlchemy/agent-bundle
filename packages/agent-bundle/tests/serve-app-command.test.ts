@@ -368,7 +368,7 @@ describe('locateFrameworkCli', () => {
       .resolves.toBe(join(root, 'node_modules/agent-bundle/bin/agent-bundle.js'));
   });
 
-  it('walks the ancestor node_modules by hand when the package exports hide its manifest', async () => {
+  it('finds the manifest whether or not the package exports it: the walk never asks the resolver', async () => {
     const root = await temporaryDirectory();
     await writeManifest(root, {
       bin: { 'agent-bundle': './bin/agent-bundle.js' },

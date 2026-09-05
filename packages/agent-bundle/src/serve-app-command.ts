@@ -151,12 +151,16 @@ export class ServeAppCommandError extends CodedError<ServeAppCommandErrorCode> {
 /**
  * The `agent-bundle` CLI entry (`bin/agent-bundle.js`) of the framework
  * installed for the project at `root`, resolved the way the framework itself
- * finds a dependency: through Node's resolution from the project's
- * `package.json` (which honours hoisting and pnpm's layout), then by the
- * ancestor `node_modules` walk when the package's `exports` hide its
- * manifest. `undefined` when the framework is not installed: the published
- * plugin package and an installed host pack ship no runtime dependencies, so
- * only a checkout (or a consumer that installed `agent-bundle`) can serve.
+ * finds a dependency: the first `node_modules/agent-bundle/package.json` in
+ * `root` or an ancestor directory — the ancestor `node_modules` walk Node's
+ * resolver performs for a bare specifier, done by hand
+ * (`core/dependency-manifest.ts`), which honours hoisting and pnpm's layout
+ * and never calls `createRequire(…).resolve(…)`, a load `AB6005` would
+ * refuse in the executable this module is bundled into. The bin path is
+ * `bin` from that manifest resolved beside it. `undefined` when the framework
+ * is not installed: the published plugin package and an installed host pack
+ * ship no runtime dependencies, so only a checkout (or a consumer that
+ * installed `agent-bundle`) can serve.
  */
 export const locateFrameworkCli = async (root: string): Promise<string | undefined> => {
   const manifestPath = await dependencyManifestPath(resolve(root), 'agent-bundle');

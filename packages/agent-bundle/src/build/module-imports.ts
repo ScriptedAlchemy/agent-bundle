@@ -1,6 +1,7 @@
 import { parse as parseJavaScript } from 'acorn';
 import { init, parse } from 'es-module-lexer';
 
+import { DigestCache } from '../core/digest.ts';
 import type { AgentBundleToolsConfig } from '../core/types.ts';
 
 /**
@@ -43,22 +44,12 @@ const importKind = (dynamic: number): ModuleImport['kind'] =>
 
 /**
  * Imports already read from bytes with a known SHA-256, keyed by check level
- * and digest. Within one process the same emitted bundle is scanned by the
- * post-compile self-containment check and then by artifact validation, twice
- * (before and after the manifest is written); the bytes never change between
- * those passes, so the imports of a multi-megabyte bundle are lexed once.
- * The records are a few dozen specifiers per module; the map stays bounded.
+ * and digest (a full parse is a stronger claim than a lex, so each level is
+ * remembered on its own); see `DigestCache` for why the same bundle is read
+ * several times per process. The records are a few dozen specifiers per
+ * module; the cache stays bounded.
  */
-const importsByDigest = new Map<string, readonly ModuleImport[]>();
-const importsByDigestLimit = 512;
-
-const remember = (key: string, imports: readonly ModuleImport[]): void => {
-  if (importsByDigest.size >= importsByDigestLimit) {
-    const oldest = importsByDigest.keys().next();
-    if (!oldest.done) importsByDigest.delete(oldest.value);
-  }
-  importsByDigest.set(key, imports);
-};
+const importsByDigest = new DigestCache<readonly ModuleImport[]>(512);
 
 /**
  * Reads the imports of one ES module source, throwing on invalid syntax
@@ -82,6 +73,6 @@ export const readModuleImports = async (
     kind: importKind(record.d),
     specifier: record.n,
   })));
-  if (options.sha256 !== undefined) remember(`${options.check}:${options.sha256}`, imports);
+  if (options.sha256 !== undefined) importsByDigest.set(`${options.check}:${options.sha256}`, imports);
   return imports;
 };

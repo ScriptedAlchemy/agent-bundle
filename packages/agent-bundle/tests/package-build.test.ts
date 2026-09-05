@@ -289,6 +289,100 @@ describe('framework-owned package build', () => {
     expect((await readdir(root)).filter((entry) => entry.startsWith('.dist.stage-'))).toEqual([]);
   }, 120_000);
 
+  it('fails the package build with AB6005 when node-commonjs externals reach dist through the createRequire shim', async () => {
+    // Under `externalsType: 'node-commonjs'` Rspack reaches an external not
+    // through an `import` but through the loader shim it emits into ESM output
+    // (`const __rspack_createRequire_require = __rspack_createRequire(import.meta.url)`),
+    // so no import record names `left-pad`: the load scan is what holds the line.
+    const root = await fixtureRoot({
+      ...conventionFixture(),
+      'agent-bundle.config.ts': [
+        'export default {',
+        '  lib: false,',
+        "  plugin: { name: 'package-build-fixture', version: '1.0.0' },",
+        "  targets: ['portable'],",
+        "  tools: { rsbuild: { output: { externals: ['left-pad'] } }, rspack: { externalsType: 'node-commonjs' } },",
+        '};',
+        '',
+      ].join('\n'),
+      'src/cli.ts': [
+        "import leftPad from 'left-pad';",
+        '',
+        'export const main = async (argv: readonly string[]): Promise<number> => {',
+        "  process.stdout.write(`${leftPad(argv.join(','), 8)}\\n`);",
+        '  return 0;',
+        '};',
+        '',
+      ].join('\n'),
+    });
+
+    const failure = await build({ output: 'artifact', packageOutputs: true, root }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(DiagnosticError);
+    expect((failure as DiagnosticError).diagnostics).toEqual([{
+      code: 'AB6005',
+      generatedPath: 'dist/bin/package-build-fixture.js',
+      message: 'Generated JavaScript import from "dist/bin/package-build-fixture.js" uses unsupported specifier "left-pad"'
+        + ' in __rspack_createRequire_require("left-pad"), a createRequire(…) loader.',
+      recovery: 'Bundle every JavaScript dependency into the artifact, then rebuild it.',
+      severity: 'error',
+    }]);
+    await expect(stat(join(root, 'dist'))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect((await readdir(root)).filter((entry) => entry.startsWith('.dist.stage-'))).toEqual([]);
+  }, 120_000);
+
+  it('fails the package build with AB6005 when source loads a package through createRequire(), literal or computed', async () => {
+    // Neither call is an import, so the bundler never resolves `left-pad` (it
+    // is not installed) and both reach the emitted bin verbatim; the walk
+    // reports the literal one by specifier and the computed one as such, in
+    // source order.
+    const root = await fixtureRoot({
+      ...conventionFixture(),
+      'agent-bundle.config.ts': [
+        'export default {',
+        '  lib: false,',
+        "  plugin: { name: 'package-build-fixture', version: '1.0.0' },",
+        "  targets: ['portable'],",
+        '};',
+        '',
+      ].join('\n'),
+      'src/cli.ts': [
+        "import { createRequire } from 'node:module';",
+        '',
+        'type Pad = (value: string, size: number) => string;',
+        '',
+        'export const main = async (argv: readonly string[]): Promise<number> => {',
+        "  const literal = createRequire(import.meta.url)('left-pad') as Pad;",
+        "  const chosen = createRequire(import.meta.url)(argv[0] ?? 'left-pad') as Pad;",
+        "  process.stdout.write(`${literal('', 2)}${chosen('', 2)}\\n`);",
+        '  return 0;',
+        '};',
+        '',
+      ].join('\n'),
+    });
+
+    const failure = await build({ output: 'artifact', packageOutputs: true, root }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(DiagnosticError);
+    const bin = 'dist/bin/package-build-fixture.js';
+    const load = (detail: string) => ({
+      code: 'AB6005',
+      generatedPath: bin,
+      message: `Generated JavaScript import from ${JSON.stringify(bin)} ${detail}`,
+      recovery: 'Bundle every JavaScript dependency into the artifact, then rebuild it.',
+      severity: 'error',
+    });
+    expect((failure as DiagnosticError).diagnostics).toEqual([
+      load('uses unsupported specifier "left-pad" in createRequire(…)("left-pad").'),
+      load('loads a non-literal specifier through createRequire(…)(…).'),
+    ]);
+    await expect(stat(join(root, 'dist'))).rejects.toMatchObject({ code: 'ENOENT' });
+  }, 120_000);
+
   it('accepts Node built-ins under node: and bare specifiers in dist bundles', async () => {
     const root = await fixtureRoot({
       ...conventionFixture(),
@@ -308,7 +402,10 @@ describe('framework-owned package build', () => {
         '',
         'export const main = async (): Promise<number> => {',
         '  const requireFromHere = createRequire(import.meta.url);',
-        "  process.stdout.write(`${join('built', 'ins')}:${typeof readFileSync}:${typeof requireFromHere.resolve}\\n`);",
+        "  // Prose naming require('left-pad') is a comment, never a load.",
+        "  const os = requireFromHere('node:os') as { platform(): string };",
+        "  process.stdout.write(`${join('built', 'ins')}:${typeof readFileSync}:${typeof requireFromHere.resolve}"
+          + ":${typeof os.platform}:${requireFromHere.resolve('fs')}:${import.meta.resolve('node:path')}\\n`);",
         '  return 0;',
         '};',
         '',
@@ -318,7 +415,7 @@ describe('framework-owned package build', () => {
     expect(result.packageBuild?.files.map((file) => file.path)).toContain('bin/package-build-fixture.js');
 
     const binPath = join(root, 'dist', 'bin', 'package-build-fixture.js');
-    await expect(execFile(binPath, [])).resolves.toMatchObject({ stdout: 'built/ins:function:function\n' });
+    await expect(execFile(binPath, [])).resolves.toMatchObject({ stdout: 'built/ins:function:function:function:fs:node:path\n' });
     // Rspack keeps Node built-ins external, so the emitted module still
     // imports them by specifier — under both spellings — and the walker
     // accepts those imports (and `import.meta.url`) as it does relative ones.
@@ -327,6 +424,14 @@ describe('framework-owned package build', () => {
     expect(binSource).toMatch(/from\s*["']node:module["']/u);
     expect(binSource).toMatch(/from\s*["'](?:node:)?path["']/u);
     expect(binSource).toContain('import.meta.url');
+    // The built-in loads reach the emitted bin as written — a bound
+    // `createRequire()` loader, its `resolve`, and `import.meta.resolve` —
+    // and the walk accepts every one under either spelling, while the comment
+    // that names a package is stepped over rather than read as a load.
+    expect(binSource).toMatch(/requireFromHere\(["']node:os["']\)/u);
+    expect(binSource).toMatch(/requireFromHere\.resolve\(["']fs["']\)/u);
+    expect(binSource).toMatch(/import\.meta\.resolve\(["']node:path["']\)/u);
+    expect(binSource).toContain("require('left-pad')");
   }, 120_000);
 
   it('keeps colocated tests out of the declaration program and the package output', async () => {

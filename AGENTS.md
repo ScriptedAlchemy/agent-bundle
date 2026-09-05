@@ -71,34 +71,52 @@
   every dependency of a generated executable — `output.autoExternal: false`,
   `bundle: true`, `splitChunks: false`, no `externals`. Rslib's `node` target
   leaves only Node built-ins (and `pnpapi`) external, and the only bare
-  import specifiers `AB6005` accepts in a host-pack module are Node built-ins. The
+  specifiers `AB6005` accepts in a host-pack module are Node built-ins. The
   package build's `dist` bundles are walked by the same `AB6005` rule
   (`src/build/package-build.ts` reuses `validateJavaScriptModules` from
   `src/build/validate-artifact-modules.ts`), so a generated executable in a
-  host pack or in `dist` imports nothing but Node built-ins from outside its
-  tree. The walk reads import specifiers, static and literal dynamic; a
-  `createRequire(…)(…)` or `import.meta.resolve(…)` call is not an import and
-  is outside `AB6005` in either output — the prepack gate reads those calls
-  as dependency evidence. MCP App views (`src/build/mcp-apps.ts`) inline every script and style
-  into one HTML file. The framework never adds `externals` to a plugin build;
+  host pack or in `dist` loads nothing but Node built-ins from outside its
+  tree. The walk reads every way an emitted `.js`/`.mjs` module loads
+  another (prebuilt payload modules excepted, `.d.ts` never walked): its ES
+  import records — static, literal dynamic `import()`; a non-literal one is
+  a finding — and the CommonJS-style loads Rspack leaves in emitted output:
+  `require("…")`, `require.resolve("…")`, `createRequire(…)("…")` and its
+  `.resolve("…")`, a loader bound to a name
+  (`const load = createRequire(import.meta.url); load("…")` — the shim
+  Rspack emits for a `tools.rspack` `externalsType: 'node-commonjs'`
+  external and for a builtin `require` inside a bundled dependency), and
+  `import.meta.resolve("…")`. A Node built-in passes; a relative or `file:`
+  target must be a listed regular `.js`/`.mjs` file inside the tree (or
+  listed valid JSON, host packs only) and is then walked; a bare package
+  name fails, a non-literal argument fails, and a loader passed on as a
+  value rather than called fails. One scanner, `src/build/module-loads.ts`,
+  reads those loads for `AB6005` and for the prepack gate alike. MCP App
+  views (`src/build/mcp-apps.ts`) inline every script and style into one
+  HTML file. The framework never adds `externals` to a plugin build;
   the `externals` handling in `rslib.ts` (`reservedExternalsViolation`,
   `guardReservedExternals`) only rejects reserved specifiers in the resolved
   externals, which come from the author's `tools` hatch and Rslib's built-in
   list, never from the profile.
 - No refactor, toolchain upgrade, or "leaner install" change may enable
   `autoExternal` or externalize a dependency on the author's behalf. A package
-  a consumer must install is the author's explicit decision, and an import
-  kept external through the `tools` hatch is not a way to make it anywhere:
-  `AB6005` fails such an import in a host pack and in `dist` alike. What
-  legitimately puts a package under `dependencies` is a packed declaration
-  reference, a prebuilt payload module that imports it, an install script,
+  a consumer must install is the author's explicit decision, and keeping a
+  dependency external through the `tools` hatch is not how that decision is
+  made, in any emitted form: an ES `import` external and a
+  `commonjs`/`node-commonjs` `require` shim both fail `AB6005` in a host
+  pack and in `dist` alike. What legitimately puts a package under
+  `dependencies` is a packed declaration reference, an import or a
+  `require`/`createRequire`/`import.meta.resolve` load in a file `AB6005`
+  never walked (a prebuilt payload module, or JavaScript the `files`
+  allowlist packs from outside the artifact and `dist`), an install script,
   or a `bin` command packed JavaScript runs — and the prepack gate judges
   those: `AB7014` demands that evidence, `AB7015` a specifier a consumer's
   npm can install.
 - Proof is bytes and processes, not config: every artifact build walks the
   compiled host-pack modules and every package build walks its emitted `dist`
-  bundles (`AB6005` fails a bare package specifier in either), the prepack
-  gate then judges what remains declared, and the packed pool
+  bundles (`AB6005` fails a bare package specifier in either, imported or
+  loaded through `require`, a `createRequire(…)` loader, or
+  `import.meta.resolve`), the prepack gate then judges what remains
+  declared, and the packed pool
   (`pnpm test:packed`) installs the packed tarball into a clean consumer,
   builds, removes the project source, and spawns the generated entry as a
   real process (`packed-deleted-source`).

@@ -9,23 +9,26 @@ import { sha256Hex } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
 import { isRecord } from '../core/strict-json.ts';
 import { readModuleImports, type ModuleImport } from './module-imports.ts';
+import { decodeLiteral, quotedLiteral, scanModuleLoads } from './module-loads.ts';
 
 /**
  * Evidence for the npm prepack dependency gate (`AB7014`/`AB7015`, emitted by
  * `pack-inventory.ts`): what `package.json` asks npm to install alongside the
  * package, and which packages the packed JavaScript and declaration files
  * actually reference. JavaScript the framework compiled — the `dist` bundles
- * and the host-pack modules — never carries a bare package `import`, static
- * or dynamic, since `AB6005` fails the build first and `prepack` builds
- * before it packs; the import evidence read here is therefore that of
- * prebuilt payload modules and other packed scripts the framework copied
- * rather than compiled. The `require`, `createRequire`, and
- * `import.meta.resolve` evidence is different: those are calls the bundler
- * leaves in place and `AB6005` does not walk, so they are read from every
- * packed file, compiled bundles included — as are the `bin`-command,
- * declaration, `imports`-map, and install-script evidence (a compiled bundle
- * may run a dependency's command, `spawnSync("tsc")`, which is not an
- * import).
+ * and the host-pack modules — never carries a bare package name, since
+ * `AB6005` fails the build first and `prepack` builds before it packs: it
+ * walks a compiled module's `import` records, static and dynamic, and its
+ * literal and computed `require`, `createRequire(…)`, and
+ * `import.meta.resolve` loads alike (`module-loads.ts`, the scanner both
+ * gates share). A bare package name in the load evidence read here can
+ * therefore come only from where a bare import can — a module `AB6005`
+ * never walked: a prebuilt payload module, JavaScript the `files` allowlist
+ * packs outside the artifact and `dist` — and from an inline `node -e`
+ * program in an install script. The `bin`-command, declaration,
+ * `imports`-map, and install-script evidence are read from every packed
+ * file as before (a compiled bundle may run a dependency's command,
+ * `spawnSync("tsc")`, which is not an import).
  */
 
 /**
@@ -290,154 +293,6 @@ export const packagedSourceInstallable = async (
   return tarHoldsPackage(archive);
 };
 
-/** A single- or double-quoted string literal; the group after the opening quote is its body. */
-const quotedLiteral = String.raw`(["'])((?:(?!\1)[^\\\n]|\\.)+)\1`;
-
-const escapeSequence = /\\(?:x(?<hex>[0-9A-Fa-f]{2})|u\{(?<point>[0-9A-Fa-f]+)\}|u(?<unit>[0-9A-Fa-f]{4})|(?<other>.))/gsu;
-const controlEscapes: Readonly<Record<string, string>> = { 0: '\0', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v' };
-
-/**
- * The string a JavaScript literal's body denotes: `\x66oo` is `foo`,
- * `foo\u002fsubpath` is `foo/subpath`, `\/` is `/`. Node resolves the value,
- * not the source text, so a package name compared textually has to be
- * decoded first.
- */
-const decodeLiteral = (body: string): string => body.replace(escapeSequence, (...args) => {
-  const groups = args.at(-1) as Record<string, string | undefined>;
-  if (groups.hex !== undefined) return String.fromCharCode(Number.parseInt(groups.hex, 16));
-  if (groups.unit !== undefined) return String.fromCharCode(Number.parseInt(groups.unit, 16));
-  if (groups.point !== undefined) {
-    const point = Number.parseInt(groups.point, 16);
-    // Beyond Unicode the literal is a syntax error; the file never loads anything.
-    return point > 0x10_ff_ff ? '' : String.fromCodePoint(point);
-  }
-  const other = groups.other ?? '';
-  return controlEscapes[other] ?? other;
-});
-
-/**
- * A `require("…")` call, or a resolution-only use — `require.resolve("…")`,
- * `createRequire(…).resolve("…")`, `import.meta.resolve("…")` — with a
- * literal argument. The ESM lexer reports `import` forms only; CommonJS
- * payloads a consumer prebuilt reach the package through `require`, and a
- * package located only to find an asset or executable is still a runtime
- * dependency. Only these resolvers count: `path.resolve("foo")` or
- * `Promise.resolve("foo")` never make an unused `foo` look reachable. A match
- * inside a comment or string can only mark a dependency as imported, never as
- * unused, so the pattern otherwise errs toward keeping a declaration.
- */
-/**
- * A parenthesised argument list with calls nested up to two deep —
- * `(new URL("./entry.js", import.meta.url))`, `(join(dirname(x), "y"))` — the
- * shapes a `createRequire` argument takes.
- */
-const callArguments = (() => {
-  const flat = String.raw`[(][^()]*[)]`;
-  const nested = String.raw`[(](?:[^()]|${flat})*[)]`;
-  return String.raw`[(](?:[^()]|${nested})*[)]`;
-})();
-
-// Whitespace and comments, the trivia JavaScript allows around a call's parentheses: `require /* x */ ("y")`.
-const trivia = String.raw`(?:\s|/\*[\s\S]*?\*/|//[^\n]*\n)*`;
-
-/**
- * What may qualify a factory: nothing (`createRequire(…)` after a named
- * import), a dotted namespace (`Module.createRequire(…)` after `import * as
- * Module from "node:module"`, `module.createRequire(…)`), or a CommonJS load
- * (`require("node:module").createRequire(…)`, `require('module')…`; any
- * argument, since a same-named factory from elsewhere can only keep a
- * declaration). No capture group: the literal patterns after it count theirs
- * by number.
- */
-const factoryQualifier = String.raw`(?:(?:[A-Za-z_$][\w$]*\s*\.\s*)*|\brequire\s*${callArguments}\s*\.\s*)`;
-
-/** A factory call producing a loader, qualified or not: `createRequire(import.meta.url)`, `Module.createRequire(…)`, `require("node:module").createRequire(…)`. */
-const factoryCall = (factories: readonly string[]): string =>
-  String.raw`${factoryQualifier}\b(?:${factories.join('|')})${trivia}${callArguments}`;
-
-/** The resolvers a file loads packages through, each followed by its argument list. */
-const loadCall = (loaders: readonly string[], factories: readonly string[]): string =>
-  String.raw`(?:\b(?:${loaders.join('|')})(?:\.resolve)?|\bimport\.meta\.resolve|${factoryCall(factories)}(?:\.resolve)?)${trivia}[(]${trivia}`;
-
-const literalLoad = (loaders: readonly string[], factories: readonly string[]): RegExp => new RegExp(
-  String.raw`${loadCall(loaders, factories)}${quotedLiteral}${trivia}[)]`,
-  'gu',
-);
-
-/**
- * A CommonJS load or resolution whose argument is not a string literal —
- * `require(x)`, `require.resolve(x)`, `import.meta.resolve(x)`, or a direct
- * `createRequire(…)(x)` — selecting a package at runtime, which no literal can
- * prove. An argument that merely starts with a literal, `require("driver/" +
- * variant)`, is computed too. Bundler runtimes (`__webpack_require__(…)`) have
- * no word boundary before `require` and never match; `path.resolve(x)` and
- * `Promise.resolve(x)` are not resolution and never match.
- */
-const computedLoad = (loaders: readonly string[], factories: readonly string[]): RegExp => new RegExp(
-  // A comment is trivia the call prefix already consumed, not the start of a computed argument.
-  String.raw`${loadCall(loaders, factories)}(?:(?!/[*/])[^"'\s)]|"[^"\n]*"${trivia}(?!/[*/])[^)\s]|'[^'\n]*'${trivia}(?!/[*/])[^)\s])`,
-  'u',
-);
-
-const escapeIdentifier = (name: string): string => name.replace(/\$/gu, String.raw`\$`);
-
-/**
- * `createRequire` renamed on import or destructuring: `import { createRequire
- * as makeRequire } from "node:module"` or `const { createRequire: makeRequire }
- * = require("node:module")`. Each alias is a factory like `createRequire` itself.
- */
-const createRequireAlias = /\bcreateRequire\s*(?:as|:)\s*([A-Za-z_$][\w$]*)/gu;
-
-const factoryNames = (source: string): readonly string[] => [
-  'createRequire',
-  ...Array.from(source.matchAll(createRequireAlias), (match) => escapeIdentifier(match[1] ?? '')),
-];
-
-/**
- * `const load = <factory>(…)`, the factory qualified as `factoryQualifier`
- * allows or not: the binding is a loader, called like `require` from then on.
- */
-const loaderBinding = (factories: readonly string[]): RegExp => new RegExp(
-  String.raw`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*${factoryQualifier}\b(?:${factories.join('|')})\s*[(]`,
-  'gu',
-);
-
-/**
- * The identifiers a file loads packages through: `require` itself plus every
- * name bound to a `createRequire(…)` result — under the factory's own name or
- * an alias — so `const load = createRequire(import.meta.url); load("driver")`
- * counts like `require("driver")`.
- */
-const loaderNames = (source: string): readonly string[] => [
-  'require',
-  ...Array.from(source.matchAll(loaderBinding(factoryNames(source))), (match) => escapeIdentifier(match[1] ?? '')),
-];
-
-/**
- * JavaScript comments and string literals, each replaced by a space: the
- * text that is not code. Bundled docblocks are prose ("may fail, require
- * Effect services"), and a scan for a bare identifier has to skip them.
- * Regular-expression literals are not recognised; one containing a quote
- * can misalign the strings after it on the same line, which at worst hides
- * or invents a bare reference there.
- */
-const codeOnly = (source: string): string =>
-  source.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\[\s\S])*`/gu, ' ');
-
-/**
- * A loader passed on as a value rather than called — `const load = require`,
- * `fn(require)`, `[require]`, `{ require }`, `module.exports = require`,
- * `return require`, `x ? require : y` — after which packages may be loaded
- * under a name this scan never sees, so the file's evidence is incomplete
- * like a computed load's. A call (`require("x")`), a property access
- * (`require.resolve`), and `typeof require` pass nothing on and never match.
- * Run on `codeOnly` text, so a mention in a comment or string is not one.
- */
-const loaderReference = (loaders: readonly string[]): RegExp => new RegExp(
-  String.raw`(?:=>|\breturn|[=(,[{:?|&])\s*\b(?:${loaders.join('|')})\b\s*(?=[;,)\]}:]|$)`,
-  'mu',
-);
-
 /**
  * Every module specifier a declaration file resolves: `from "…"`,
  * `import("…")`, `import x = require("…")`, `declare module "…"` (an
@@ -445,7 +300,9 @@ const loaderReference = (loaders: readonly string[]): RegExp => new RegExp(
  * and `/// <reference types="…" />`.
  * A consumer needs the package that provides these types even though the
  * bundled JavaScript has no runtime import. Declarations are not ES modules
- * the lexer accepts, so this is a text scan with the same keep-only bias.
+ * the lexer accepts, so this is a plain text scan, comments included — a
+ * keep-only bias it can afford, since a match inside a doc comment at worst
+ * keeps a declaration and never reports one.
  */
 const declarationSpecifier = new RegExp(
   String.raw`\b(?:from|import|require|declare\s+module)\s*\(?\s*${quotedLiteral}|<reference\s+types\s*=\s*(["'])([^"'\n]+)\3`,
@@ -507,19 +364,18 @@ const commandLiteral = (command: string): RegExp =>
   new RegExp(String.raw`(["'\x60])${escapeRegExp(command)}(?:\s[^"'\x60\n]*)?\1`, 'u');
 
 /**
- * The module specifiers packed JavaScript resolves: the lexer's static and
- * dynamic literal imports — never a mention inside a comment or string,
- * which bundled library docblocks are full of — plus literal `require` calls;
- * and the dependencies it runs by one of their `bin` commands.
- */
-/**
  * The module specifiers JavaScript source loads — the lexer's static and
- * dynamic literal imports, plus literal `require`/`createRequire` calls —
- * and whether that is all of them: a computed `import(x)` or `require(x)`,
- * or a loader passed on as a value, means it is not — and so does source the
- * lexer rejects, whose `import()` calls it could not report (syntax itself is
- * another gate's concern). Packed files and inline `node -e` programs are
- * read alike.
+ * dynamic literal imports, then the literal `require`, `createRequire(…)`,
+ * bound-loader, and `import.meta.resolve` loads `scanModuleLoads` reports, in
+ * source order — and whether that is all of them: a computed `import(x)`, a
+ * computed load (`require(x)`, `require("driver/" + v)`), or a loader passed
+ * on as a value means it is not — and so does source the lexer rejects, whose
+ * `import()` calls it could not report (syntax itself is another gate's
+ * concern). Both readers see code only: the lexer by construction, the
+ * scanner by stepping over comments, strings, templates, and regex literals
+ * as tokens, so a `require` in a bundled docblock or an error message neither
+ * keeps a declaration nor withholds `AB7014`. Packed files and inline `node
+ * -e` programs are read alike.
  */
 const moduleLoads = async (source: string, sha256?: string): Promise<Pick<FileEvidence, 'complete' | 'specifiers'>> => {
   let imports: readonly ModuleImport[];
@@ -530,16 +386,14 @@ const moduleLoads = async (source: string, sha256?: string): Promise<Pick<FileEv
     imports = [];
     lexed = false;
   }
-  const loaders = loaderNames(source);
-  const factories = factoryNames(source);
+  const loads = scanModuleLoads(source, sha256 === undefined ? {} : { sha256 });
   return {
     complete: lexed
       && imports.every((record) => record.kind !== 'dynamic' || record.specifier !== undefined)
-      && !computedLoad(loaders, factories).test(source)
-      && !loaderReference(loaders).test(codeOnly(source)),
+      && loads.every((load) => load.kind === 'literal'),
     specifiers: [
       ...imports.flatMap((record) => (record.specifier === undefined ? [] : [record.specifier])),
-      ...Array.from(source.matchAll(literalLoad(loaders, factories)), (match) => decodeLiteral(match[2] ?? '')),
+      ...loads.flatMap((load) => (load.kind === 'literal' ? [load.specifier] : [])),
     ],
   };
 };
