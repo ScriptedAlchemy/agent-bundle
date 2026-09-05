@@ -226,7 +226,7 @@ npx agent-bundle prepack --root . --output artifact --json
 
 逃生舱是*并列*合并到框架配置旁边的：`plugins` 数组会拼接，而 Rsbuild 从不按名称去重插件。通过
 `tools.rsbuild.plugins` 再次添加框架已经注册的插件——`@rsbuild/plugin-react`（`rsbuild:react`），
-每个合成入口与每个使用 React 语法的 MCP App 视图都带着它——会让它运行两次，因此 `agent-bundle validate`
+每个合成入口与每个 MCP App 视图都带着它——会让它运行两次，因此 `agent-bundle validate`
 会以 `AB4724` 报告，并点名该插件及其包名。删除这一项即可；框架会替你注册它。
 
 有一个双引擎注意事项：产物脚本、MCP 入口、钩子包装层与包构建通过 Rslib 编译，运行在 `@rslib/core`

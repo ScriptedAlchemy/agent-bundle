@@ -192,12 +192,20 @@ against an imported `@rspack/core` — use the `utils` argument passed to `tools
 functions (`(config, { rspack }) => ...`), which always hands you the executing engine's own
 `rspack` object.
 
+MCP App builds keep Rsbuild's default `resolve.aliasStrategy` (`prefer-tsconfig`), so the
+project's `tsconfig.json` `paths` resolve inside a compiled view as they do anywhere else. The
+reserved `agent-bundle/meta` specifier is the exception: the compiler rewrites that exact import
+to the generated identity module before resolution starts, ahead of both `paths` and any
+`resolve.alias`, so no `paths` mapping can shadow it. The resolved-config assertion refuses a
+hatch value that removes that rewrite, as it refuses one that breaks the self-contained output.
+
 ### Plugins
 
 The framework registers exactly one Rsbuild plugin in the configs it synthesizes:
 `@rsbuild/plugin-react` (plugin name `rsbuild:react`), on every artifact entry — routes are
-authored as TSX and the plugin selects the automatic JSX runtime — and on every MCP App view whose
-source is `.jsx`/`.tsx`. That set is `frameworkOwnedRsbuildPlugins` in
+authored as TSX and the plugin selects the automatic JSX runtime — and on every MCP App view,
+whatever its entry's extension (fast refresh off), so a `.ts` entry importing `.tsx` components
+compiles to the same automatic runtime. That set is `frameworkOwnedRsbuildPlugins` in
 `packages/agent-bundle/src/build/framework-plugins.ts`; a unit test derives it from the synthesized
 configs, so it cannot drift, and `validateTools` reads the same map to report `AB4724` when a
 `tools.rsbuild.plugins` entry re-adds one of its names.

@@ -560,9 +560,14 @@ const lifecycleDiagnostic = (error: unknown): DevRuntimeDiagnostic => Object.fre
   severity: 'error',
 });
 
-const sourceBuildDiagnostic = (): DevRuntimeDiagnostic => Object.freeze({
+/**
+ * The compile observer's error carries the Rspack errors as
+ * `file:line:col: message` lines (see `src/dev/compile-diagnostics.ts`); the
+ * protocol diagnostic has no location field, so they ride in the message.
+ */
+const sourceBuildDiagnostic = (error: unknown): DevRuntimeDiagnostic => Object.freeze({
   code: 'AB8206',
-  message: 'RSC runtime source build failed.',
+  message: `RSC runtime source build failed: ${error instanceof Error ? error.message : 'RSC runtime compile reported errors.'}`,
   phase: 'source/build',
   severity: 'error',
 });
@@ -2294,7 +2299,14 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     }
     if (input.hasErrors) {
       this.#settleCompileObservation();
-      await this.#failAttempt(input.attemptId, new Error('RSC runtime compilation failed.'), 'source-build');
+      // The observer plugin fails erroring cohorts before capture with the
+      // Rspack error detail; a caller that still reports `hasErrors` here has
+      // no stats to quote.
+      await this.#failAttempt(
+        input.attemptId,
+        new Error('RSC runtime compile reported errors, but Rspack stats carried no error details.'),
+        'source-build',
+      );
       return undefined;
     }
     if (input.sourceRevision.length === 0) {
@@ -2389,7 +2401,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     }
     if (!this.#closed) this.#setStatus(
       this.#active === undefined ? 'degraded' : 'active',
-      [kind === 'source-build' ? sourceBuildDiagnostic() : lifecycleDiagnostic(error)],
+      [kind === 'source-build' ? sourceBuildDiagnostic(error) : lifecycleDiagnostic(error)],
     );
     this.#emit(Object.freeze({ type: 'runtime.generation.failed' }));
   }

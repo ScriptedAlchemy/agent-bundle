@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { access, chmod, cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { once } from 'node:events';
 import { tmpdir } from 'node:os';
-import { dirname, join, normalize } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { Readable } from 'node:stream';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -170,48 +170,37 @@ test('materializes self-contained Claude and Codex native plugin artifacts', asy
     expect(appHtml).not.toMatch(/<script[^>]+src=|<link[^>]+rel=["']stylesheet["']/iu);
   }
   // A skill-less plugin emits no `skills/` directory, while the manifest's
-  // `./skills/` pointer stays ‚Äî as in every framework-built Codex artifact.
+  // `./skills/` pointer stays ó as in every framework-built Codex artifact.
   for (const relative of ['.agents/plugins/marketplace.json', '.codex-plugin/plugin.json', '.mcp.json', 'hooks/hooks.json']) {
     await access(join(codexRoot, relative));
   }
 });
 
-test('keeps fresh production App legal payload names stable and package-identical', async () => {
+test('emits each production App as one self-contained HTML document carrying its legal comments', async () => {
   await runProductionBuild();
   const appDigest = await artifactDigest(join(exampleRoot, 'dist/app'));
+  // Exactly the HTML documents: no sibling `*.LICENSE.txt`, chunk, or asset
+  // file. `selfContainedAppPlugin` in rsbuild.config.ts fails the compile
+  // otherwise; this pins the packaged shape it protects.
   expect(appDigest.map((entry) => entry.path)).toEqual([
     'edit-timeline-v1.html',
-    'lib-react.js.LICENSE.txt',
     'standalone.html',
   ]);
-  const legalNotice = appDigest.find((entry) => entry.path === 'lib-react.js.LICENSE.txt');
-  expect(legalNotice).toMatchObject({ path: 'lib-react.js.LICENSE.txt' });
-  const legalNoticeContent = await readFile(join(exampleRoot, 'dist/app/lib-react.js.LICENSE.txt'), 'utf8');
-  expect(legalNoticeContent).toContain('LICENSE file');
 
-  for (const entry of appDigest) {
-    expect(entry.path).not.toMatch(/(?:^|\/)[^/]*\.[a-f\d]{8,}\.(?:js|css)(?:\.LICENSE\.txt)?$/iu);
-  }
   for (const appRoot of [join(exampleRoot, 'dist/app'), ...['claude', 'codex'].map((host) => join(pluginsRoot, host, 'app'))]) {
     const payload = await artifactDigest(appRoot);
     expect(payload).toEqual(appDigest);
-    let legalReferences = 0;
-    for (const artifact of payload.filter((entry) => /\.(?:css|html|js)$/iu.test(entry.path))) {
+    for (const artifact of payload) {
       const source = await readFile(join(appRoot, artifact.path), 'utf8');
-      for (const match of source.matchAll(/\/\*!\s*LICENSE:\s*([^*\r\n]+?)\s*\*\//gu)) {
-        legalReferences += 1;
-        const target = normalize(join(dirname(artifact.path), match[1]!.trim()));
-        expect(target).not.toMatch(/^(?:\.\.\/|\/)/u);
-        expect(payload.some((entry) => entry.path === target)).toBe(true);
-        expect(await readFile(join(appRoot, target), 'utf8')).toBe(legalNoticeContent);
-      }
-      if (artifact.path.endsWith('.html')) {
-        expect(source).toContain('<script');
-        expect(source).toContain('<style');
-        expect(source).not.toMatch(/<script[^>]+src=|<link[^>]+rel=["']stylesheet["']/iu);
-      }
+      expect(source).toContain('<script');
+      expect(source).toContain('<style');
+      expect(source).not.toMatch(/<script[^>]+src=|<link[^>]+rel=["']stylesheet["']/iu);
+      // `legalComments: 'inline'` keeps the React licence text inside the
+      // document instead of an extracted `/*! LICENSE: ù */` link.
+      expect(source).toContain('@license React');
+      expect(source).toContain('LICENSE file');
+      expect(source).not.toMatch(/\/\*!\s*LICENSE:/u);
     }
-    expect(legalReferences).toBeGreaterThan(0);
   }
 });
 

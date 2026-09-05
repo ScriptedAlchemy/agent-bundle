@@ -69,6 +69,22 @@ node packages/workbench/scripts/capture-runtime-playground.mjs \
   --evidence /tmp/rsc-runtime-delivery/evidence.json
 ```
 
+The `--compile-error` capture shows the Workbench diagnostic the provider
+publishes when a source change fails to compile: code `AB8206`, phase
+`source/build`, and a message that carries the Rspack errors themselves — one
+`file:line:col: message` line per error, with the path relative to the example
+root, ANSI colour and the SWC code frame stripped. Breaking `src/rsc/worker.tsx`
+produces, for example:
+
+```text
+RSC runtime source build failed: RSC runtime compile reported 1 error(s):
+src/rsc/worker.tsx:177:6: Module build failed (from builtin:swc-loader): Syntax Error: Unexpected token `=`. Expected yield, an identifier, [ or {
+```
+
+The active generation stays served while the diagnostic is shown, and the next
+successful compile clears it. The compiler runs Rsbuild at `logLevel: 'error'`,
+so the diagnostic — not the process console — is where the message lands.
+
 The published Agent Bundle library is built with Rslib. This example's separate
 production RSC/runtime artifacts are built by its explicit Rsbuild production
 command (`pnpm --filter @agent-bundle/rsc-agent-runtime-demo build`); its provider
@@ -86,7 +102,7 @@ Installing
 [the optional RSC Runtime topology](../../docs/architecture/rsc-runtime-workbench.md)
 for the full ownership boundary.
 
-The build emits `dist/runtime` (including `dist/runtime/agent-runtime.manifest.json`), self-contained `dist/app` MCP App documents, and self-contained native plugin artifacts under `dist/plugins`. The packaging step can also be rerun directly against the current Rsbuild output:
+The build emits `dist/runtime` (including `dist/runtime/agent-runtime.manifest.json`), self-contained `dist/app` MCP App documents, and self-contained native plugin artifacts under `dist/plugins`. `dist/app` holds exactly one HTML file per App entry (`edit-timeline-v1.html`, `standalone.html`) with every script, style, asset, and licence comment inlined — the same invariants the framework's MCP App compiler enforces (`splitChunks: false`, unbounded `dataUriLimit`, no async chunks, `legalComments: 'inline'`); the build fails if the resolved configuration drifts from them or any sibling file would be emitted. The packaging step can also be rerun directly against the current Rsbuild output:
 
 ```bash
 pnpm --filter @agent-bundle/rsc-agent-runtime-demo exec agent-bundle build --json --output dist/plugins

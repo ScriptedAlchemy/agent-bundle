@@ -1,15 +1,35 @@
-import { createRsbuild, mergeRsbuildConfig, rspack, type RsbuildConfig, type Rspack } from '@rsbuild/core';
+import {
+  createRsbuild,
+  mergeRsbuildConfig,
+  rspack,
+  type RsbuildConfig,
+  type RsbuildPlugin,
+  type Rspack,
+} from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
-import { readFile } from 'node:fs/promises';
-import { extname, resolve } from 'node:path';
+import { copyFile, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { gzipSync } from 'node:zlib';
 
-import type { Diagnostic } from '../core/diagnostics.ts';
+import { DiagnosticError, freezeDiagnostics, type Diagnostic } from '../core/diagnostics.ts';
 import type { AgentBundleToolsConfig, NormalizedMcpApp } from '../core/types.ts';
 import { stableJson } from '../core/digest.ts';
+import { MAX_APP_HTML_BYTES } from '../core/mcp-app-limits.ts';
+import { escapeRegExp } from '../core/strings.ts';
 import type { AgentBundleMeta } from '../meta.ts';
 import { composeToolsLayers, frameworkInvariantLayer } from './compose-layers.ts';
 import { listArtifactFiles, resolveArtifactDestination } from './emit.ts';
+import {
+  mcpAppBundlerFailureDiagnostic,
+  mcpAppCompileErrorDiagnostics,
+  mcpAppCompileWarningDiagnostics,
+  mcpAppReadableFallbackDiagnostic,
+  mcpAppSizeDiagnostic,
+  type McpAppCompileMode,
+  type McpAppDiagnosticContext,
+  type McpAppOutputSize,
+} from './mcp-app-diagnostics.ts';
 import {
   assertGeneratedModulesRootAbsent,
   generatedMetaModulePath,
@@ -19,6 +39,8 @@ import {
   virtualModulesPluginConstructor,
 } from './meta.ts';
 import { collectBundledOutputEvidence } from './provenance.ts';
+
+export type { McpAppCompileMode, McpAppOutputSize } from './mcp-app-diagnostics.ts';
 
 export const mcpAppMimeType = 'text/html;profile=mcp-app';
 
@@ -49,39 +71,113 @@ export interface PlannedMcpApp {
   readonly target: string;
 }
 
-/** The emitted size of one self-contained MCP App HTML document. */
-export interface McpAppOutputSize {
-  /** UTF-8 bytes of the emitted HTML as written to the artifact. */
-  readonly bytes: number;
-  /** Bytes of the same document after gzip, the size a compressing transport would carry. */
-  readonly gzipBytes: number;
-}
-
 /** A planned MCP App after its self-contained HTML was emitted and measured. */
 export interface CompiledMcpApp extends PlannedMcpApp {
   readonly size: McpAppOutputSize;
 }
 
-/**
- * Which profile the view compiler emits. `production` is the artifact
- * profile every `agent-bundle build` ships; `development` is the Workbench
- * dev-loop profile (readable output with inline source maps), still
- * self-contained.
- */
-export type McpAppCompileMode = 'development' | 'production';
-
 export interface CompiledMcpAppsResult {
   readonly apps: readonly CompiledMcpApp[];
-  /** Compile warnings and advisories that did not fail the build; errors throw a `DiagnosticError` instead. */
+  /** Compile warnings (`AB4771`) and size advisories (`AB4772`) that did not fail the build; errors throw a `DiagnosticError` of `AB4770`s instead. */
   readonly diagnostics: readonly Diagnostic[];
 }
 
-const usesReactSyntax = (source: string): boolean => /\.[jt]sx$/iu.test(extname(source));
+/**
+ * The stats every App environment records for the diagnostics: errors and
+ * warnings (with their module traces, as Rsbuild's own reporter reads them)
+ * and the complete module list with concatenated parts, which the `AB4772`
+ * advisory ranks. Reasons, sources, and chunk membership are switched off:
+ * they are paid for per module and nothing here reads them.
+ */
+const mcpAppStatsOptions = {
+  all: false,
+  assets: true,
+  chunkModules: false,
+  errors: true,
+  moduleTrace: true,
+  modules: true,
+  nestedModules: true,
+  reasons: false,
+  source: false,
+  warnings: true,
+} as const;
+
+/**
+ * Compile-time collector: `onAfterEnvironmentCompile` fires with the
+ * environment's stats even when the compile failed (the build then rejects
+ * with Rspack's bare `Rspack build failed.`), so this is where the errors the
+ * `AB4770`s carry come from. `logLevel` stays `silent`; these diagnostics are
+ * the one channel. Added through `addPlugins` in `compileMcpApps`, never in
+ * the composed profile `inspect --bundler` renders.
+ */
+const mcpAppStatsCollectorPlugin = (collected: Map<string, Rspack.StatsCompilation>): RsbuildPlugin => ({
+  name: 'agent-bundle:mcp-app-stats',
+  setup(api) {
+    api.onAfterEnvironmentCompile(({ environment, stats }) => {
+      if (stats === undefined) return;
+      collected.set(environment.name, stats.toJson(mcpAppStatsOptions));
+    });
+  },
+});
+
+/**
+ * The document defaults a template-less view ships and an authored template
+ * keeps only where it left a gap: `lang="en"` on a root element that
+ * declares no language, and a `<title>` naming the App when the document has
+ * none (right after the charset declaration so the encoding stays first, else
+ * right after `<head>`). Rsbuild's `html.title` already adds the title to a
+ * template without one; this keeps the guarantee when a `tools.rsbuild` hatch
+ * clears it. A template with its own `lang` or `<title>` is untouched.
+ *
+ * The title is the App name verbatim: config validation (`AB4324`) admits
+ * only lowercase kebab-case names, so there is nothing to escape. A name that
+ * reached the compiler another way and could break the markup is refused
+ * rather than written.
+ */
+const withMcpAppHtmlDefaults = (html: string, appName: string): string => {
+  const withLanguage = html.replace(/<html(?<attributes>[^>]*)>/iu, (rootElement, attributes: string) => (
+    /\slang\s*=/iu.test(attributes) ? rootElement : `<html lang="en"${attributes}>`
+  ));
+  if (/<title[\s>]/iu.test(withLanguage)) return withLanguage;
+  if (/[&<>"']/u.test(appName)) {
+    throw new Error(`MCP App name ${JSON.stringify(appName)} is not the kebab-case name config validation guarantees.`);
+  }
+  const title = `<title>${appName}</title>`;
+  const anchor = /<meta\s[^>]*charset\s*=[^>]*>|<head(?:\s[^>]*)?>/iu.exec(withLanguage);
+  if (anchor === null) return withLanguage;
+  const insertAt = anchor.index + anchor[0].length;
+  return `${withLanguage.slice(0, insertAt)}${title}${withLanguage.slice(insertAt)}`;
+};
+
+const mcpAppHtmlDefaultsPlugin = (): RsbuildPlugin => ({
+  name: 'agent-bundle:mcp-app-html-defaults',
+  setup(api) {
+    // The environment is the App: its name is the view's name.
+    api.modifyHTML((html, { environment }) => withMcpAppHtmlDefaults(html, environment.name));
+  },
+});
+
+/**
+ * Rspack consults a consumer tsconfig `paths` entry before `resolve.alias`
+ * (Rsbuild's default `prefer-tsconfig`, which is what lets a view import
+ * through the author's own `paths`), so an entry for `agent-bundle/meta` would
+ * shadow the generated identity module. This replacement rewrites the exact
+ * specifier to the virtual module's path before resolution starts, ahead of
+ * both; the alias stays as the declared mapping the inspection renders.
+ */
+const metaModuleReplacement = (metaModulePath: string): InstanceType<typeof rspack.NormalModuleReplacementPlugin> =>
+  new rspack.NormalModuleReplacementPlugin(new RegExp(`^${escapeRegExp(metaModuleSpecifier)}$`, 'u'), metaModulePath);
+
+const isMetaModuleReplacement = (plugin: unknown, metaModulePath: string): boolean =>
+  plugin instanceof rspack.NormalModuleReplacementPlugin
+  && plugin._args[0].test(metaModuleSpecifier)
+  && plugin._args[1] === metaModulePath;
 
 const assertResolvedViewConfig = (
   inspection: Awaited<ReturnType<Awaited<ReturnType<typeof createRsbuild>>['inspectConfig']>>,
   appNames: readonly string[],
   outputRoot: string,
+  metaModulePath: string,
 ): void => {
   const environments = inspection.origin.environmentConfigs;
   const bundlers = inspection.origin.bundlerConfigs;
@@ -106,7 +202,13 @@ const assertResolvedViewConfig = (
     }
   }
   for (const bundler of bundlers) {
-    if (bundler.output?.asyncChunks !== false || bundler.output.path !== outputRoot) {
+    if (
+      bundler.output?.asyncChunks !== false ||
+      bundler.output.path !== outputRoot ||
+      // The reserved `agent-bundle/meta` specifier must beat a consumer
+      // tsconfig `paths` entry that shadows it (see `metaModuleReplacement`).
+      !(bundler.plugins ?? []).some((plugin) => isMetaModuleReplacement(plugin, metaModulePath))
+    ) {
       throw new Error('Rsbuild resolved an invalid self-contained MCP App configuration.');
     }
   }
@@ -123,8 +225,17 @@ const assertSelfContainedViews = async (
 ): Promise<ReadonlyMap<string, McpAppOutputSize>> => {
   const expected = new Set(compiled.map((entry) => entry.output));
   const files = await listArtifactFiles(outputRoot);
-  if (files.length !== expected.size || files.some((entry) => !expected.has(resolve(outputRoot, entry.path)))) {
-    throw new Error('Rsbuild emitted files beyond the stable self-contained MCP App HTML output.');
+  const unexpected = files.filter((entry) => !expected.has(resolve(outputRoot, entry.path))).map((entry) => entry.path);
+  if (unexpected.length > 0) {
+    throw new Error(
+      `Rsbuild emitted files beyond the stable self-contained MCP App HTML output: ${unexpected.join(', ')}. `
+      + 'Only inline source maps keep a view self-contained; a `tools.rsbuild` output.sourceMap other than inline-source-map emits .map siblings.',
+    );
+  }
+  if (files.length !== expected.size) {
+    const emitted = new Set(files.map((entry) => resolve(outputRoot, entry.path)));
+    const missing = [...expected].filter((output) => !emitted.has(output));
+    throw new Error(`Rsbuild did not emit the planned MCP App HTML output: ${missing.join(', ')}.`);
   }
 
   const sizes = new Map<string, McpAppOutputSize>();
@@ -217,6 +328,8 @@ export const composeMcpAppsRsbuildConfig = (
     readonly cwd: string;
     /** The project identity served to widget source as `agent-bundle/meta`. */
     readonly meta: AgentBundleMeta;
+    /** Defaults to `production`; see {@link McpAppCompileMode}. */
+    readonly mode?: McpAppCompileMode;
     readonly outDir: string;
     readonly tools?: AgentBundleToolsConfig;
   },
@@ -224,14 +337,22 @@ export const composeMcpAppsRsbuildConfig = (
   const metaModulePath = generatedMetaModulePath(options.cwd);
   const profile: RsbuildConfig = {
     environments: Object.fromEntries(sources.map((source) => [source.name, {
-      ...(usesReactSyntax(source.source) ? { plugins: [pluginReact()] } : {}),
+      // Every view carries the React plugin, whatever its entry extension: a
+      // `.ts` entry importing a `.tsx` component needs the automatic runtime
+      // just as much as a `.tsx` entry, and without the plugin its JSX lowers
+      // to a `React.createElement` no module has in scope.
+      plugins: [pluginReact({ fastRefresh: false })],
       html: {
         inject: 'body' as const,
+        mountId: 'root',
+        title: source.name,
         ...(source.template === undefined ? {} : { template: source.template }),
       },
       source: { entry: { [source.name]: source.source } },
     }])),
     logLevel: 'silent' as const,
+    // Both compile modes build the production profile (production React, no
+    // refresh runtime); development only makes the output readable.
     mode: 'production' as const,
     output: {
       dataUriLimit: Number.MAX_SAFE_INTEGER,
@@ -241,9 +362,19 @@ export const composeMcpAppsRsbuildConfig = (
       inlineScripts: true,
       inlineStyles: true,
       legalComments: 'inline' as const,
+      // Development keeps the output readable (real identifiers, one
+      // `// CONCATENATED MODULE: ./views/…` marker per module), about 2.7× the
+      // production bytes. No source map in either mode: an inline map that
+      // carries the sources is another ~7× (a 617 KiB ext-apps view becomes
+      // 4.2 MiB), past the host bound; `tools.rsbuild.output.sourceMap` opts a
+      // small view in, and only the inline forms keep it one file.
+      ...(options.mode === 'development' ? { minify: false } : {}),
       sourceMap: false,
       target: 'web' as const,
     },
+    // Rsbuild's default `resolve.aliasStrategy` (`prefer-tsconfig`) stays: it
+    // is what hands the author's tsconfig `paths` to the view compiler. The
+    // reserved specifier wins through `metaModuleReplacement` instead.
     server: { publicDir: false },
     splitChunks: false,
   };
@@ -260,6 +391,7 @@ export const composeMcpAppsRsbuildConfig = (
     const VirtualModulesPlugin = rsbuildVirtualModulesPlugin();
     config.plugins = [
       ...(config.plugins ?? []),
+      metaModuleReplacement(metaModulePath),
       new VirtualModulesPlugin({ [metaModulePath]: generatedMetaModuleSource(options.meta) }),
     ];
     return config;
@@ -305,21 +437,49 @@ export const compileMcpApps = async (
     return source;
   });
 
+  const mode: McpAppCompileMode = options.mode ?? 'production';
   const rsbuild = await createRsbuild({
     cwd: options.cwd,
     config: composeMcpAppsRsbuildConfig(sources, {
       cwd: options.cwd,
       meta: options.meta,
+      mode,
       outDir: options.outDir,
       ...(options.tools === undefined ? {} : { tools: options.tools }),
     }),
   });
+  const collectedStats = new Map<string, Rspack.StatsCompilation>();
+  rsbuild.addPlugins([mcpAppStatsCollectorPlugin(collectedStats), mcpAppHtmlDefaultsPlugin()]);
   const inspection = await rsbuild.inspectConfig({ mode: 'production' });
-  assertResolvedViewConfig(inspection, compiled.map((app) => app.name), options.outDir);
+  assertResolvedViewConfig(inspection, compiled.map((app) => app.name), options.outDir, generatedMetaModulePath(options.cwd));
+  const contexts: readonly McpAppDiagnosticContext[] = compiled.map((app) => ({
+    appName: app.name,
+    entrySource: app.source,
+    projectRoot: options.cwd,
+  }));
+  /**
+   * Every Rspack error the collector recorded, as `AB4770`s; when the bundler
+   * rejected without leaving a stats error (a compiler-level failure rather
+   * than a module's), its own message, attributed to each App of the run.
+   */
+  const compileFailure = (error: unknown): DiagnosticError => {
+    const fromStats = contexts.flatMap((context) =>
+      mcpAppCompileErrorDiagnostics(context, collectedStats.get(context.appName)?.errors ?? []));
+    if (fromStats.length > 0) return new DiagnosticError(fromStats);
+    const failure = error instanceof Error ? error.message : String(error);
+    return new DiagnosticError(contexts.map((context) => mcpAppBundlerFailureDiagnostic(context, failure)));
+  };
+  const buildViews = async (): Promise<Awaited<ReturnType<typeof rsbuild.build>>> => {
+    try {
+      return await rsbuild.build();
+    } catch (error) {
+      throw compileFailure(error);
+    }
+  };
   const evidenceByPath = new Map<string, readonly string[]>();
   let result: Awaited<ReturnType<typeof rsbuild.build>> | undefined;
   try {
-    result = await rsbuild.build();
+    result = await buildViews();
     const evidence = collectBundledOutputEvidence({
       expectedAssets: compiled.map((app) => ({
         allowUnassociatedHtml: true,
@@ -343,5 +503,59 @@ export const compileMcpApps = async (
     size: sizes.get(app.name) ?? (() => { throw new Error(`Missing emitted size for MCP App ${JSON.stringify(app.name)}.`); })(),
     sourceInputs: evidenceByPath.get(`mcp-apps/${app.name}.html`) ?? (() => { throw new Error(`Missing bundled MCP App evidence for ${JSON.stringify(app.name)}.`); })(),
   })));
-  return Object.freeze({ apps: compiledApps, diagnostics: Object.freeze([]) });
+  const appDiagnostics = (context: McpAppDiagnosticContext, index: number): readonly Diagnostic[] => {
+    const stats = collectedStats.get(context.appName);
+    const size = mcpAppSizeDiagnostic(context, {
+      mode,
+      modules: stats?.modules ?? [],
+      size: compiledApps[index]!.size,
+    });
+    return [
+      ...mcpAppCompileWarningDiagnostics(context, stats?.warnings ?? []),
+      ...(size === undefined ? [] : [size]),
+    ];
+  };
+  const oversized = mode === 'development' ? compiledApps.filter((app) => app.size.bytes > MAX_APP_HTML_BYTES) : [];
+  if (oversized.length === 0) {
+    return Object.freeze({ apps: compiledApps, diagnostics: freezeDiagnostics(contexts.flatMap(appDiagnostics)) });
+  }
+
+  // Readable output that would not render in the hosts gives way to the
+  // production profile for that view, so the Workbench preview shows every
+  // view `agent-bundle build` ships. The production compile lands in its own
+  // directory: the staged root already holds the other views, which the
+  // self-containment assertion would count as strays.
+  const fallbackRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-app-production-'));
+  let production: CompiledMcpAppsResult;
+  try {
+    production = await compileMcpApps(
+      apps.filter((app) => oversized.some((entry) => entry.name === app.name)),
+      { ...options, mode: 'production', outDir: fallbackRoot },
+    );
+    for (const app of oversized) {
+      const replacement = production.apps.find((entry) => entry.name === app.name);
+      if (replacement === undefined) {
+        throw new Error(`MCP App ${JSON.stringify(app.name)} disappeared during its production fallback compile.`);
+      }
+      await copyFile(replacement.output, app.output);
+    }
+  } finally {
+    await rm(fallbackRoot, { force: true, recursive: true });
+  }
+  const replaced = new Map(production.apps.map((app) => [app.name, app]));
+  return Object.freeze({
+    apps: Object.freeze(compiledApps.map((app) => {
+      const replacement = replaced.get(app.name);
+      return replacement === undefined ? app : Object.freeze({ ...app, size: replacement.size, sourceInputs: replacement.sourceInputs });
+    })),
+    diagnostics: freezeDiagnostics([
+      ...contexts.flatMap((context, index) => {
+        const replacement = replaced.get(context.appName);
+        return replacement === undefined
+          ? appDiagnostics(context, index)
+          : [mcpAppReadableFallbackDiagnostic(context, { production: replacement.size, readable: compiledApps[index]!.size })];
+      }),
+      ...production.diagnostics,
+    ]),
+  });
 };

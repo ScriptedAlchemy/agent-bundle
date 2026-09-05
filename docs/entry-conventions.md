@@ -1213,8 +1213,8 @@ The hatch merges *beside* the framework profile, not over it: `plugins`
 arrays concatenate, and Rsbuild's plugin manager appends every plugin it is
 handed without deduping by name. So a `tools.rsbuild.plugins` entry that
 re-adds a plugin the framework already registers — `@rsbuild/plugin-react`
-(`rsbuild:react`), carried by every synthesized Rslib entry and every
-React-syntax MCP App view — would run it twice. `agent-bundle validate`
+(`rsbuild:react`), carried by every synthesized Rslib entry and every MCP
+App view — would run it twice. `agent-bundle validate`
 reports that as `AB4724` (an error, like the other `tools` shape checks) with
 the plugin and package name; remove the entry, the framework already
 registers it.

@@ -1,6 +1,7 @@
 import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
+import { stripVTControlCharacters } from 'node:util';
 
 import { expect, test } from '@rstest/core';
 import { createRsbuild, type StartDevServerResult } from '@rsbuild/core';
@@ -49,6 +50,9 @@ const deferred = <T>() => {
 
 type CompileObserverContract = NonNullable<Parameters<typeof createRscRuntimeRsbuildConfig>[0]['onCompile']>;
 
+/** The fake plugin API's `context.rootPath`: the root compile errors are made relative to. */
+const compileObserverRoot = join(tmpdir(), 'rsc-provider-observer-project');
+
 const compileObserver = (
   onCompile: Omit<CompileObserverContract, 'stageEnvironmentCheckpoint'> & Partial<Pick<CompileObserverContract, 'stageEnvironmentCheckpoint'>>,
 ) => {
@@ -66,6 +70,7 @@ const compileObserver = (
   let before: (() => void) | undefined;
   let after: ((input: unknown) => Promise<void>) | undefined;
   plugin.setup({
+    context: { rootPath: compileObserverRoot },
     onAfterDevCompile: (callback: unknown) => { after = callback as (input: unknown) => Promise<void>; },
     onAfterEnvironmentCompile: () => undefined,
     onBeforeDevCompile: (callback: unknown) => { before = callback as () => void; },
@@ -76,6 +81,7 @@ const compileObserver = (
   };
   const completeAttempt = async (input: Readonly<{
     readonly children?: readonly unknown[];
+    readonly errors?: readonly unknown[];
     readonly hasErrors?: boolean;
   }> = {}): Promise<void> => {
     if (after === undefined) throw new Error('RSC compiler observer after hook is unavailable.');
@@ -88,6 +94,7 @@ const compileObserver = (
             { hash: 'widget-hash', name: 'widget' },
             { hash: 'app-hash', name: 'app' },
           ],
+          ...(input.errors === undefined ? {} : { errors: input.errors }),
         }),
       },
     });
@@ -95,6 +102,7 @@ const compileObserver = (
   return Object.freeze({
     async compile(input: Readonly<{
       readonly children?: readonly unknown[];
+      readonly errors?: readonly unknown[];
       readonly hasErrors?: boolean;
     }> = {}): Promise<void> {
       observeCompileStart();
@@ -125,6 +133,7 @@ const interceptCompileObserver = () => {
       (candidate as { readonly name?: unknown }).name === 'agent-bundle:rsc-runtime-compile-observer');
     if (plugin === undefined) throw new Error('RSC compile observer plugin is unavailable.');
     plugin.setup({
+      context: { rootPath: input?.cwd ?? process.cwd() },
       onAfterDevCompile: (callback: unknown) => { after = callback as (input: unknown) => Promise<void>; },
       onAfterEnvironmentCompile: (callback: unknown) => { afterEnvironment = callback as (input: unknown) => Promise<void>; },
       onBeforeDevCompile: (callback: unknown) => { before = callback as () => void; },
@@ -246,12 +255,20 @@ const changeWorkerImplementation = async (projectRoot: string, marker: string): 
   );
 };
 
-const introduceWorkerSyntaxError = async (projectRoot: string): Promise<void> => {
+/** Appends an invalid statement to the RSC worker; resolves to its 1-based line. */
+const introduceWorkerSyntaxError = async (projectRoot: string): Promise<number> => {
+  let line = 0;
   await replaceSource(
     projectRoot,
     join(projectRoot, 'src', 'rsc', 'worker.tsx'),
-    (source) => `${source}\nconst = ;\n`,
+    (source) => {
+      // The source ends with a newline, so the blank separator line precedes
+      // the statement: original line count + 1 (blank) + 1 (statement).
+      line = source.split('\n').length + 1;
+      return `${source}\nconst = ;\n`;
+    },
   );
+  return line;
 };
 
 test('requires the App environment through the public Rsbuild compiler hook', async () => {
@@ -712,12 +729,25 @@ test('classifies direct compiler errors as source build failures without capture
     observeCompileStart: () => undefined,
   });
 
-  await observer.compile({ hasErrors: true });
+  await observer.compile({
+    errors: [{
+      loc: '4:1-27',
+      message: "  × Module not found: Can't resolve './missing' in '/src'\n   ╭─[4:0]\n 4 │ import { x } from './missing';\n   ╰────\n",
+      moduleIdentifier: `builtin:swc-loader??ruleSet[1]!${join(compileObserverRoot, 'src', 'rsc', 'worker.tsx')}`,
+    }],
+    hasErrors: true,
+  });
 
   expect(captured).toEqual([]);
   expect(enqueued).toEqual([]);
   expect(failures).toHaveLength(1);
   expect(failures[0]?.[0]).toBe('attempt-source-build');
+  // The Rspack errors ride the failure as `file:line:col: message` lines.
+  expect(failures[0]?.[1]).toBeInstanceOf(Error);
+  expect((failures[0]?.[1] as Error).message).toBe(
+    'RSC runtime compile reported 1 error(s):\n'
+    + "src/rsc/worker.tsx:4:1: Module not found: Can't resolve './missing' in '/src'",
+  );
   expect(failures[0]?.[2]).toBe('source-build');
 });
 
@@ -930,7 +960,7 @@ test('keeps the active generation while publishing a source build diagnostic bef
     const beforeSurfaces = session.surfaces();
     const beforeRuns = session.runs(50);
 
-    await introduceWorkerSyntaxError(copied.projectRoot);
+    const brokenLine = await introduceWorkerSyntaxError(copied.projectRoot);
     await waitFor(() => events.filter((event) => event.type === 'runtime.generation.failed').length === 1);
 
     expect(failedStatuses).toHaveLength(1);
@@ -938,13 +968,23 @@ test('keeps the active generation while publishing a source build diagnostic bef
       activeVector: beforeStatus.activeVector,
       diagnostics: [{
         code: 'AB8206',
-        message: 'RSC runtime source build failed.',
+        message: expect.stringMatching(/^RSC runtime source build failed: RSC runtime compile reported \d+ error\(s\):\n/u),
         phase: 'source/build',
         severity: 'error',
       }],
       lastGoodVector: beforeStatus.lastGoodVector,
       state: 'active',
     });
+    // The diagnostic carries the Rspack error as `file:line:col: message`:
+    // the broken module, project-relative, with the SWC frame location and
+    // the syntax error text, so the Workbench shows where to look.
+    const [, ...errorLines] = failedStatuses[0]!.diagnostics[0]!.message.split('\n');
+    expect(errorLines.length).toBeGreaterThan(0);
+    for (const line of errorLines) {
+      expect(line).toMatch(new RegExp(`^src/rsc/worker\\.tsx:${String(brokenLine)}:\\d+: Module build failed \\(from builtin:swc-loader\\): Syntax Error: Unexpected token \`=\``, 'u'));
+      expect(line).not.toMatch(/[│╭╰×·]/u);
+      expect(stripVTControlCharacters(line)).toBe(line);
+    }
     expect(session.status()).toEqual(failedStatuses[0]);
     expect(session.surfaces()).toEqual(beforeSurfaces);
     expect(session.runs(50)).toEqual(beforeRuns);

@@ -149,13 +149,21 @@ it('surfaces every synthesized bundler config with the tools hatch merged over t
   expect(apps.bundler).toBe('rsbuild');
   expect(apps.config).toMatchObject({
     environments: {
-      dashboard: { source: { entry: { dashboard: `${root}/src/view.tsx` } } },
+      dashboard: {
+        // Every view carries the React plugin and the document defaults
+        // (mount point, title = the App name), whatever its entry extension.
+        html: { inject: 'body', mountId: 'root', title: 'dashboard' },
+        plugins: [{ name: 'rsbuild:react' }],
+        source: { entry: { dashboard: `${root}/src/view.tsx` } },
+      },
     },
     output: {
       distPath: { html: 'mcp-apps', root: '<output>/portable' },
       inlineScripts: true,
       // The consumer rsbuild hatch also merges over the view profile.
       legalComments: 'linked',
+      // The inspection renders the production profile: no source maps.
+      sourceMap: false,
     },
     tools: {
       rspack: [
