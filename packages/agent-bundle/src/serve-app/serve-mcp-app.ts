@@ -486,8 +486,15 @@ const serveProgram = (options: ServeMcpAppOptions): Effect.Effect<ServedMcpAppSh
       throw requestError(diagnostic('AB8004', 'A valid MCP App host token is required.', 403));
     }
   };
+  // The page binds the opening call this host already made instead of
+  // posting the result back: a large result would otherwise exceed the
+  // request-body bound and drop the App to the fallback panel (#562).
+  const openingCall = (sessionId: string, toolName: string) =>
+    sessionId === session.sessionId && toolName === selection.tool.name
+      ? Object.freeze({ input: selection.input, result: selection.result })
+      : undefined;
   const routes = yield* Effect.acquireRelease(
-    Effect.sync(() => new McpAppRoutes({ authorize, service: previews })),
+    Effect.sync(() => new McpAppRoutes({ authorize, openingCall, service: previews })),
     (created) => Effect.sync(() => { created.close(); }),
   );
   const page = renderServeAppPage({

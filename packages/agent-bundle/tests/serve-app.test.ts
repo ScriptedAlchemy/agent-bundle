@@ -196,9 +196,12 @@ it('serves the MCP App example standalone over its packed server and relays the 
       return json;
     };
 
-    // Binding the App through the same preview service the Workbench uses.
+    // Binding the App through the same preview service the Workbench uses —
+    // by tool name alone, as the page does: the host already made the opening
+    // call, so its result never crosses the request-body bound (#562).
+    expect(html).not.toContain('result: seed.result, toolName');
     const created = await api('POST', `/api/mcp/sessions/${encodeURIComponent(seed.sessionId)}/apps`, {
-      host: browserHost, input: seed.input, previewProfile: seed.previewProfile, result: seed.result, toolName: seed.toolName,
+      host: browserHost, previewProfile: seed.previewProfile, toolName: seed.toolName,
     });
     const preview = created.preview as {
       readonly bindingId: string;
