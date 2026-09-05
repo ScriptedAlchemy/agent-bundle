@@ -90,9 +90,12 @@ const catalogRow = (kind: 'compiled' | 'prebuilt' = 'compiled') => ({
   apps: [], hosts: ['claude'], id: 'mcp:catalog', kind, launch: validLaunch(), name: 'catalog', transport: 'stdio',
 });
 
+const fileRows = (...paths: readonly string[]) => paths.map((path) => ({ bytes: 1, kind: 'generated', path, sha256: 'x' }));
+
 const document = (overrides: Readonly<Record<string, unknown>> = {}): Readonly<Record<string, unknown>> => ({
   application: { id: 'application:fixture', name: 'fixture', version: '1.0.0' },
   executables: { mcpServers: [catalogRow()] },
+  files: fileRows(validLaunch().entry, validLaunch().worker!, 'payload/config.json'),
   manifestVersion: 2,
   projections: [{ host: 'claude' }],
   web: validWeb(),
@@ -140,6 +143,7 @@ it('reads the projection hosts and the compiled and prebuilt servers\' launch re
         { apps: [], hosts: ['claude'], id: 'mcp:remote', kind: 'remote', name: 'remote', transport: 'streamable-http' },
       ],
     },
+    files: fileRows(validLaunch().entry, validLaunch().worker!, 'payload/config.json', prebuiltLaunch.entry),
     projections: [{ host: 'claude' }, { host: 'codex' }],
   }));
   const read = await readWebManifestDocument(path);
@@ -175,6 +179,26 @@ it('refuses malformed launch references instead of skipping the row', () => with
     await write(document({ executables }));
     await expect(readWebManifestDocument(path)).rejects.toThrow(message);
   }
+}));
+
+it('refuses a launch record naming bytes the manifest does not index', () => withDocument(async (path, write) => {
+  const cases: readonly [unknown, string][] = [
+    [fileRows(validLaunch().worker!, 'payload/config.json'), 'executables.mcpServers[catalog].launch.entry names "mcp/mcp-catalog-01234567.mjs", which is not a manifest file.'],
+    [fileRows(validLaunch().entry, 'payload/config.json'), 'executables.mcpServers[catalog].launch.worker names "mcp/mcp-catalog-01234567-flight.mjs", which is not a manifest file.'],
+    [fileRows(validLaunch().entry, validLaunch().worker!), 'executables.mcpServers[catalog].launch.args[1].path names "payload/config.json", which is not inside the artifact.'],
+    [[{ path: '../escaped.mjs' }], 'files[0].path must be a safe relative POSIX path.'],
+    [['mcp/mcp-catalog-01234567.mjs'], 'files[0] must be a plain object.'],
+    [undefined, 'files must be an array.'],
+  ];
+  for (const [files, message] of cases) {
+    await write(document({ files }));
+    await expect(readWebManifestDocument(path)).rejects.toThrow(message);
+  }
+  // A directory argument is inside the artifact when the manifest indexes a file under it.
+  await write(document({
+    executables: { mcpServers: [{ ...catalogRow(), launch: { ...validLaunch(), args: [{ kind: 'artifact', path: 'payload' }] } }] },
+  }));
+  expect((await readWebManifestDocument(path)).launches.get('catalog')?.args).toEqual([{ kind: 'artifact', path: 'payload' }]);
 }));
 
 it('refuses an exposed App whose server has no launch record', () => withDocument(async (path, write) => {

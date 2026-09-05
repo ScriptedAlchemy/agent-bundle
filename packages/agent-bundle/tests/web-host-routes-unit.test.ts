@@ -70,6 +70,7 @@ const writeFixture = async (root: string, options: FixtureOptions): Promise<void
         transport: 'stdio',
       }],
     },
+    files: [{ path: 'mcp/mcp-status.mjs' }],
     manifestVersion: 2,
     projections: options.targets.map((host) => ({ host })),
     web: {

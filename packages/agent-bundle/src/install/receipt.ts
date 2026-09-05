@@ -969,12 +969,18 @@ export interface StagedArtifact {
   readonly root: string;
 }
 
-/** Copies exactly one already-validated inventory without enumerating the source tree. */
+/**
+ * Copies exactly one already-validated inventory without enumerating the
+ * source tree, then re-measures the copy: the bytes that landed are the bytes
+ * the manifest was verified against, or the copy is refused — a source that
+ * changed under the installer never becomes an installed root whose receipt
+ * and compile evidence describe other bytes.
+ */
 export const copyInventoryFiles = async (
   sourceRoot: string,
   destinationRoot: string,
   inventory: TreeInventory,
-): Promise<void> => {
+): Promise<TreeInventory> => {
   await mkdir(destinationRoot, { recursive: true });
   for (const directory of directoriesOf(inventory.files)) {
     await mkdir(join(destinationRoot, directory), { recursive: true });
@@ -986,6 +992,14 @@ export const copyInventoryFiles = async (
       verbatimSymlinks: true,
     });
   }
+  const copied = await treeInventory(destinationRoot);
+  if (copied.hash !== inventory.hash) {
+    throw new Error(
+      `--from root changed while it was being copied: copied content ${shortHash(copied.hash)} `
+      + `differs from verified content ${shortHash(inventory.hash)}.`,
+    );
+  }
+  return copied;
 };
 
 /**
@@ -1003,9 +1017,7 @@ export const stageArtifact = async (options: {
   const parent = await mkdtemp(join(options.stageRoot, `.${basename(options.destination)}.stage-`));
   const root = join(parent, 'bundle');
   try {
-    const artifactRoot = resolve(options.artifactRoot);
-    await copyInventoryFiles(artifactRoot, root, options.inventory);
-    const inventory = await treeInventory(root);
+    const inventory = await copyInventoryFiles(resolve(options.artifactRoot), root, options.inventory);
     await writeFile(
       join(root, installReceiptFile),
       receiptDocument(createInstallReceipt({ ...options.receipt, inventory })),

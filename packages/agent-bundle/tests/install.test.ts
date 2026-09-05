@@ -16,6 +16,7 @@ import { stableJson } from '../src/core/digest.ts';
 import { readBundleIdentity } from '../src/install/identity.ts';
 import { installBundle, type InstallCommandRunner } from '../src/install/install.ts';
 import {
+  copyInventoryFiles,
   installReceiptFile,
   installReceiptFormat,
   manifestInventory,
@@ -837,6 +838,27 @@ it('matches manifest inventory to the walk inventory for a built root', async ()
     expect(indexed).toEqual(walked);
   } finally {
     await rm(fixture.cleanupRoot, { force: true, recursive: true });
+  }
+});
+
+it('refuses a copy whose landed bytes are not the verified inventory', async () => {
+  const fixture = await createHostBundle('cursor');
+  const staging = await mkdtemp(join(tmpdir(), 'agent-bundle-copy-'));
+  try {
+    const identity = await readBundleIdentity(fixture.bundleRoot, 'cursor');
+    const verified = await manifestInventory(fixture.bundleRoot, identity.manifest);
+    const same = await copyInventoryFiles(fixture.bundleRoot, join(staging, 'same'), verified);
+    expect(same).toEqual(verified);
+
+    // The source changes between verification and copy: the copy is refused, not installed beside a stale receipt.
+    await writeFile(join(fixture.bundleRoot, '.cursor-plugin', 'plugin.json'), '{"name":"install-fixture","version":"9.9.9"}\n');
+    await expect(copyInventoryFiles(fixture.bundleRoot, join(staging, 'changed'), verified))
+      .rejects.toThrow(/^--from root changed while it was being copied: copied content [0-9a-f]{12} differs from verified content [0-9a-f]{12}\.$/u);
+  } finally {
+    await Promise.all([
+      rm(fixture.cleanupRoot, { force: true, recursive: true }),
+      rm(staging, { force: true, recursive: true }),
+    ]);
   }
 });
 

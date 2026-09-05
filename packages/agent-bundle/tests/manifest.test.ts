@@ -454,12 +454,12 @@ it('binds the launch record to compiled servers and every exposed App to a launc
   const unlistedEntry = withWeb();
   (unlistedEntry.executables.mcpServers[0]!.launch as { entry: string }).entry = 'codex/scripts/missing.mjs';
   expect(() => serializeArtifactManifest(unlistedEntry))
-    .toThrow('executables.mcpServers[mcp:catalog].launch.entry names "codex/scripts/missing.mjs", which is not a manifest file.');
+    .toThrow('executables.mcpServers[catalog].launch.entry names "codex/scripts/missing.mjs", which is not a manifest file.');
 
   const escapedArgument = withWeb();
   (escapedArgument.executables.mcpServers[0]!.launch!.args as unknown[])[1] = { kind: 'artifact', path: 'codex/missing' };
   expect(() => serializeArtifactManifest(escapedArgument))
-    .toThrow('executables.mcpServers[mcp:catalog].launch.args[1].path names "codex/missing", which is not inside the artifact.');
+    .toThrow('executables.mcpServers[catalog].launch.args[1].path names "codex/missing", which is not inside the artifact.');
 
   const directoryArgument = withWeb();
   (directoryArgument.executables.mcpServers[0]!.launch!.args as unknown[])[1] = { kind: 'artifact', path: 'codex/scripts' };

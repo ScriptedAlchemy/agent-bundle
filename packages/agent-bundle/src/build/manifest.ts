@@ -25,6 +25,7 @@ import {
   parseProjectionHosts,
   parseServerLaunches,
   parseWebManifest,
+  requireLaunchFiles,
   requireLaunchReferences,
   requireManifestVersion,
   type ArtifactManifestLaunch,
@@ -1400,9 +1401,8 @@ const referencedPaths = (manifest: {
   for (const hook of manifest.executables.hooks) {
     reference(`executables.hooks[${hook.host}/${hook.id}].path`, hook.path);
   }
+  // Launch entries, workers, and artifact arguments are checked by `requireLaunchFiles`.
   for (const server of manifest.executables.mcpServers) {
-    reference(`executables.mcpServers[${server.id}].launch.entry`, server.launch?.entry);
-    reference(`executables.mcpServers[${server.id}].launch.worker`, server.launch?.worker);
     for (const app of server.apps) {
       reference(`executables.mcpServers[${server.id}].apps[${app.id}].path`, app.path);
     }
@@ -1416,32 +1416,13 @@ const referencedPaths = (manifest: {
   return references;
 };
 
-/**
- * An `artifact` launch argument names a file of the root or a directory under
- * it (a payload tree the compiler never indexed file by file), never a path
- * the root does not contain.
- */
-const requireArtifactArguments = (
-  servers: readonly ArtifactManifestMcpServer[],
-  files: readonly ArtifactManifestFile[],
-  filePaths: ReadonlySet<string>,
-): void => {
-  const inRoot = (path: string): boolean =>
-    filePaths.has(path) || files.some((file) => file.path.startsWith(`${path}/`));
-  for (const server of servers) {
-    for (const [index, argument] of (server.launch?.args ?? []).entries()) {
-      if (argument.kind === 'artifact' && !inRoot(argument.path)) {
-        fail(`executables.mcpServers[${server.id}].launch.args[${index}].path names ${JSON.stringify(argument.path)}, which is not inside the artifact.`);
-      }
-    }
-  }
-};
+const launchesOf = (servers: readonly ArtifactManifestMcpServer[]): ReadonlyMap<string, ArtifactManifestLaunch> =>
+  new Map(servers.flatMap((server) => server.launch === undefined ? [] : [[server.name, server.launch] as const]));
 
 const parseWeb = (value: unknown, servers: readonly ArtifactManifestMcpServer[]): WebManifest | undefined => {
   if (value === undefined) return undefined;
   const web = parseWebManifest(value);
-  requireLaunchReferences(web, new Map(servers.flatMap((server) =>
-    server.launch === undefined ? [] : [[server.name, server.launch] as const])));
+  requireLaunchReferences(web, launchesOf(servers));
   return web;
 };
 
@@ -1615,7 +1596,7 @@ const validateManifest = (value: unknown): ArtifactManifest => {
   for (const [location, path] of referencedPaths({ distribution, executables, projections })) {
     if (!filePaths.has(path)) fail(`${location} names ${JSON.stringify(path)}, which is not a manifest file.`);
   }
-  requireArtifactArguments(executables.mcpServers, files, filePaths);
+  requireLaunchFiles(launchesOf(executables.mcpServers), filePaths);
 
   return {
     application,

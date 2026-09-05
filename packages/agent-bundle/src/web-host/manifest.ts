@@ -244,6 +244,41 @@ export const parseServerLaunches = (value: unknown): ReadonlyMap<string, Artifac
   return launches;
 };
 
+/** The root-relative paths of the `files[]` rows: the only bytes a launch record may name. */
+export const parseFilePaths = (value: unknown): ReadonlySet<string> => {
+  if (!Array.isArray(value)) throw invalid('files must be an array.');
+  return new Set(value.map((candidate: unknown, index: number) =>
+    relativePath(record(candidate, `files[${index}]`)['path'], `files[${index}].path`)));
+};
+
+/**
+ * A launch record names indexed bytes only: its entry and worker are `files[]`
+ * rows, and an `artifact` argument is a row or a directory under the root that
+ * holds rows (a payload tree indexed file by file), never a path the root does
+ * not contain.
+ */
+export const requireLaunchFiles = (
+  launches: ReadonlyMap<string, ArtifactManifestLaunch>,
+  filePaths: ReadonlySet<string>,
+): void => {
+  const paths = [...filePaths];
+  const inRoot = (path: string): boolean => filePaths.has(path) || paths.some((file) => file.startsWith(`${path}/`));
+  for (const [name, launch] of launches) {
+    const location = `executables.mcpServers[${name}].launch`;
+    if (!filePaths.has(launch.entry)) {
+      fail(`${location}.entry names ${JSON.stringify(launch.entry)}, which is not a manifest file.`);
+    }
+    if (launch.worker !== undefined && !filePaths.has(launch.worker)) {
+      fail(`${location}.worker names ${JSON.stringify(launch.worker)}, which is not a manifest file.`);
+    }
+    launch.args.forEach((argument, index) => {
+      if (argument.kind === 'artifact' && !inRoot(argument.path)) {
+        fail(`${location}.args[${index}].path names ${JSON.stringify(argument.path)}, which is not inside the artifact.`);
+      }
+    });
+  }
+};
+
 /** Every exposed App's `server` is a row with the launch record `<plugin> web` starts. */
 export const requireLaunchReferences = (
   web: WebManifest,
@@ -276,6 +311,7 @@ export const readWebManifestDocument = async (manifestPath: string): Promise<Web
     const manifest = record(document, 'manifest');
     requireManifestVersion(manifest);
     const launches = parseServerLaunches(manifest['executables']);
+    requireLaunchFiles(launches, parseFilePaths(manifest['files']));
     const web = manifest['web'] === undefined ? undefined : parseWebManifest(manifest['web']);
     if (web !== undefined) requireLaunchReferences(web, launches);
     return {
