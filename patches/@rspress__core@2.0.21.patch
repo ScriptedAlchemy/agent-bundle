@@ -1,0 +1,20 @@
+diff --git a/dist/theme/components/Search/logic/providers/LocalProvider.js b/dist/theme/components/Search/logic/providers/LocalProvider.js
+index 1f49672061c56144b8299aef61d6b25029b143c4..3bb16cddef4176194a939202c5a1ec6a581dd82a 100644
+--- a/dist/theme/components/Search/logic/providers/LocalProvider.js
++++ b/dist/theme/components/Search/logic/providers/LocalProvider.js
+@@ -78,12 +78,12 @@ class LocalProvider {
+                 finalize: (str)=>str.flatMap((s)=>tokenize(s, cyrillicRegex))
+             }
+         });
++        const pending = [];
+         for (const item of pagesForSearch){
+             const flexSearchItem = item;
+-            this.#index.addAsync(item.routePath, flexSearchItem);
+-            this.#cjkIndex.addAsync(item.routePath, flexSearchItem);
+-            this.#cyrillicIndex.addAsync(item.routePath, flexSearchItem);
++            pending.push(this.#index.addAsync(item.routePath, flexSearchItem), this.#cjkIndex.addAsync(item.routePath, flexSearchItem), this.#cyrillicIndex.addAsync(item.routePath, flexSearchItem));
+         }
++        await Promise.all(pending);
+     }
+     async search(query) {
+         const { keyword, limit } = query;

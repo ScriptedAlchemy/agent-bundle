@@ -1,5 +1,5 @@
 ---
-description: 'Test agent-bundle routes through the framework harness: the rstest configuration helper, renderRoute, the eleven proof levels, and the generated-plugin contract matrix.'
+description: 'Test agent-bundle routes through the framework harness: the rstest config helper, renderRoute, eleven proof levels, and the generated-plugin contract matrix.'
 ---
 
 # Testing
@@ -69,7 +69,9 @@ alternatives — while `input` and `result` come from that route's own `inputSch
 `resultSchema`:
 
 ```ts
-const { result } = await renderRoute('tool:library/summarize', { input: { title: 'Dune' } });
+const { result } = await renderRoute('tool:library/summarize', {
+  input: { title: 'Dune' },
+});
 const chapters: number | undefined = result?.chapters; // no cast
 ```
 
@@ -125,7 +127,8 @@ import { loadRouteModule, testManifest } from 'agent-bundle/test';
 
 // Schemas are the MCP route contract; event routes and scripts export none.
 const mcpRoutes = Object.values(testManifest().routes)
-  .filter((route) => route.kind === 'tool' || route.kind === 'prompt' || route.kind === 'resource');
+  .filter((route) =>
+    route.kind === 'tool' || route.kind === 'prompt' || route.kind === 'resource');
 
 for (const route of mcpRoutes) {
   const module = await loadRouteModule(route.id);
@@ -162,8 +165,14 @@ import type { TopologyEvents, TopologyState } from '../../src/state.js';
 
 const topology = await mountTestState<TopologyState, TopologyEvents>();
 try {
-  await renderRoute('event:session/start', { context: { ...topology.context(), host, workspace }, input: start });
-  await renderRoute('event:tool/before', { context: { ...topology.context(), host, workspace }, input: intent });
+  await renderRoute('event:session/start', {
+    context: { ...topology.context(), host, workspace },
+    input: start,
+  });
+  await renderRoute('event:tool/before', {
+    context: { ...topology.context(), host, workspace },
+    input: intent,
+  });
 
   const snapshot = await topology.read(); // AgentStateSnapshot<TopologyState>
   expect(snapshot.state.activities).toHaveLength(1);

@@ -98,7 +98,8 @@ canonical event, so a `satisfies` clause is the whole contract:
 import type { HookHandler } from 'agent-bundle';
 
 export default ((event) => ({
-  additionalContext: `Run verify-release from ${event.cwd ?? process.cwd()} before publishing.`,
+  additionalContext:
+    `Run verify-release from ${event.cwd ?? process.cwd()} before publishing.`,
   outcome: 'continue',
 })) satisfies HookHandler<'sessionStart'>;
 ```
@@ -129,21 +130,25 @@ are accepted, and each one is checked:
 
 | Key | Contract |
 | --- | --- |
-| `outcome` | `continue`, `deny`, or `stop`. |
-| `reason` | A non-empty string, valid only when denying a `beforeTool`, `stop`, or `agentStop` hook. Denying one of those without a reason fails. |
+| `outcome` | `continue` or `deny`. `'stop'` is not a legal result on any event: `HookHandler<E>` excludes it and the generated wrapper rejects it at run time. |
+| `reason` | A non-empty string, valid only when denying a `beforeTool`, `stop`, or `agentStop` hook (Cursor's wrapper also takes one on the `agentStart` denial it alone admits). Denying one of those without a reason fails. |
 | `additionalContext` | A string appended to the agent's context. |
 | `updatedInput` | Replacement input for the pending call. |
 
 Per-event restrictions are enforced, not documented-and-hoped:
 
-- `sessionStart`, `afterTool`, and `agentStart` cannot deny, stop, or replace input.
+- `sessionStart`, `afterTool`, and `agentStart` cannot deny, stop, or replace input. The typed
+  contract rejects all three, and so do the Claude and Codex wrappers; Cursor's wrapper alone
+  tolerates a denying `agentStart` with a reason, projected as `permission: 'deny'`.
 - `beforeTool` cannot stop, and cannot replace input while denying. A continuing `beforeTool`
   handler makes **no** permission decision: nothing is written to the host's decision field, so
   its normal permission prompt still applies, and a `updatedInput` rewrite is evaluated by that
   flow against the rewritten input. Only `deny` is projected as a decision. To approve a call
   explicitly, use an [event route](#event-routes) and return `outcome: 'allow'`.
 - `stop` accepts only `continue`, or `deny` with a reason.
-- `agentStop` cannot stop the parent flow or replace input, and on Codex it cannot add context.
+- `agentStop` cannot stop the parent flow or replace input, and only Claude Code carries
+  `additionalContext` from it — Codex and Cursor reject it, and the typed contract excludes it
+  everywhere.
 
 An unknown key, a wrong type, or a violation of any rule above fails the hook with a clear
 message instead of being projected into a host document that would misbehave silently.
@@ -195,13 +200,17 @@ export const config = {
   tools: ['file.write'], // canonical selector -> per-host native matcher
 } satisfies AgentEventRouteConfig;
 
-export default async function AfterFileEdit({ canonical, native, signal }: AgentEventRouteProps<'tool/after'>) {
+export default async function AfterFileEdit(
+  { canonical, native, signal }: AgentEventRouteProps<'tool/after'>,
+) {
   // canonical.provenance = { host, hostContractRevision, nativeEvent, source: 'native' }
   // canonical.payload.toolName = { value: 'Write', nativeKey: 'tool_name' } on every host
   const tool = canonical.payload.toolName?.value ?? 'a tool';
   return (
     <Agent.Result>
-      <Agent.Context>{`Recorded an edit by ${tool}, reported by ${canonical.provenance.host}.`}</Agent.Context>
+      <Agent.Context>
+        {`Recorded an edit by ${tool}, reported by ${canonical.provenance.host}.`}
+      </Agent.Context>
     </Agent.Result>
   );
 }
@@ -243,7 +252,9 @@ Route-unit tests build the same props from a host envelope with `createEventRout
 import { createEventRouteInput, renderRoute } from 'agent-bundle/test';
 
 const rendered = await renderRoute('event:tool/after', {
-  input: createEventRouteInput('tool/after', claudePostToolUseEnvelope, { host: 'claude' }),
+  input: createEventRouteInput('tool/after', claudePostToolUseEnvelope, {
+    host: 'claude',
+  }),
 });
 ```
 
@@ -381,7 +392,8 @@ npx agent-bundle inspect --root . --hooks
 npx agent-bundle hooks list --artifact artifact --target claude
 npx agent-bundle hooks simulate --artifact artifact --target claude \
   --hook session-start-session-start-7ab7e8a5 \
-  --input '{"sessionId":"local","transcriptPath":"/tmp/transcript.jsonl","cwd":"/tmp/project","source":"startup"}'
+  --input '{"sessionId":"local","transcriptPath":"/tmp/transcript.jsonl",
+    "cwd":"/tmp/project","source":"startup"}'
 ```
 
 `--hook` must be the exact `name` (or `id`) that `hooks list` printed — normalization derives it

@@ -146,6 +146,75 @@ export const npmRun = async (projectRoot: string, script: string): Promise<strin
   return `${stdout}${stderr}`;
 };
 
+/**
+ * Rstest's `json` report for one pool of a scaffolded project, run through
+ * the project's own npm script with the reporter requested on the command
+ * line. The default reporter's prose is not a contract: it expands per-test
+ * lines only for single-file runs, and under an AI-agent environment Rstest
+ * swaps in the `md` reporter altogether (which is where a `"failedTests"`
+ * key used to come from). A failing pool exits non-zero with its report
+ * already written, and the report names the failing test where the exit code
+ * alone would not, so a non-zero exit is read rather than thrown — and kept,
+ * because the exit is npm's verdict on the whole script where the report is
+ * only Rstest's.
+ */
+interface PoolReport {
+  readonly files: readonly { readonly status: string }[];
+  readonly status: 'fail' | 'pass';
+  readonly summary: { readonly failedTests: number };
+  readonly tests: readonly { readonly name: string; readonly status: string }[];
+}
+
+interface PoolRun {
+  /** `0`, or the exit code — or the signal or spawn error code when there is none. */
+  readonly exit: number | string;
+  readonly report: PoolReport;
+  readonly stderr: string;
+}
+
+const poolRun = async (projectRoot: string, script: string): Promise<PoolRun> => {
+  const run = await execFile('npm', ['run', script, '--', '--reporter=json'], {
+    cwd: projectRoot,
+    env: installedEnvironment(),
+  }).then(
+    (result) => ({ exit: 0, stderr: result.stderr, stdout: result.stdout }),
+    (error: unknown) => {
+      const failed = error as { readonly code?: number | string; readonly signal?: string; readonly stderr?: string; readonly stdout?: string };
+      if (typeof failed.stdout !== 'string') throw error;
+      return { exit: failed.code ?? failed.signal ?? 'unknown', stderr: failed.stderr ?? '', stdout: failed.stdout };
+    },
+  );
+  // npm's script banner and Rstest's own precede the report on stdout; the
+  // report is the only thing there that opens a line with `{`.
+  const start = run.stdout.search(/^\{$/mu);
+  if (start === -1) {
+    throw new Error(`\`npm run ${script}\` wrote no Rstest JSON report (exit ${String(run.exit)}):\n${run.stdout}${run.stderr}`);
+  }
+  return { exit: run.exit, report: JSON.parse(run.stdout.slice(start)) as PoolReport, stderr: run.stderr };
+};
+
+/**
+ * The pool passed and ran the named tests. Failing entries come first — a
+ * test's, then a file's, for a file that failed before it had tests — because
+ * they carry the error where the counts would only say that something
+ * failed. The names catch a dropped or empty pool, which Rstest reports as
+ * `fail` with zero tests — and `failedTests: 0`. Last, the script itself must
+ * have exited 0: a report that says `pass` while npm exited non-zero (a
+ * lifecycle script, a crash after the report was written) is not a pass.
+ */
+export const expectPassedPool = async (
+  projectRoot: string,
+  script: string,
+  testNames: readonly string[],
+): Promise<void> => {
+  const { exit, report, stderr } = await poolRun(projectRoot, script);
+  expect(report.tests.filter((test) => test.status === 'fail')).toEqual([]);
+  expect(report.files.filter((file) => file.status === 'fail')).toEqual([]);
+  expect(report.tests.map((test) => test.name)).toEqual(expect.arrayContaining([...testNames]));
+  expect(report).toMatchObject({ status: 'pass', summary: { failedTests: 0 } });
+  if (exit !== 0) throw new Error(`\`npm run ${script}\` exited ${String(exit)} although its report says pass:\n${stderr}`);
+};
+
 /** Zero diagnostics — including the informational AB473x migration nudges. */
 export const expectCleanValidate = async (projectRoot: string): Promise<void> => {
   const cli = join(projectRoot, 'node_modules', '.bin', 'agent-bundle');
