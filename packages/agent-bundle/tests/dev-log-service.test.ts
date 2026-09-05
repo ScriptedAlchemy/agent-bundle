@@ -2,7 +2,12 @@ import { Buffer } from 'node:buffer';
 
 import { expect, it } from '@rstest/core';
 
-import { DevLogService, type DevLogInput } from '../src/dev/logs/dev-log-service.ts';
+import {
+  DevLogService,
+  type DevLogInput,
+  type DevLogServiceOptions,
+} from '../src/dev/logs/dev-log-service.ts';
+import { TraceHub } from '../src/dev/trace/trace-hub.ts';
 
 it('records detached redacted details and replaces its own project root', () => {
   const service = new DevLogService({
@@ -36,6 +41,87 @@ it('records detached redacted details and replaces its own project root', () => 
   expect(record).not.toHaveProperty('schemaVersion');
   expect(Object.isFrozen(record)).toBe(true);
   expect(Object.isFrozen(record.details)).toBe(true);
+});
+
+it('publishes warnings, errors, and correlated records to trace without plain info chatter', () => {
+  const trace = new TraceHub();
+  const service = new DevLogService({
+    projectRoot: '/work/project',
+    trace,
+  } as DevLogServiceOptions);
+
+  service.log({
+    context: { target: 'codex' },
+    kind: 'project.load',
+    level: 'info',
+    producer: 'project',
+    summary: 'Plain project chatter.',
+  });
+  service.log({
+    context: {
+      conversationId: 'conversation-1',
+      correlationId: 'correlation-1',
+      executionId: 'execution-1',
+      mcpSessionId: 'mcp-session-1',
+      requestId: 'request-1',
+    },
+    kind: 'project.prepared',
+    level: 'info',
+    producer: 'project',
+    summary: 'Correlated project event.',
+  });
+  service.log({
+    kind: 'mcp.stderr',
+    level: 'warning',
+    producer: 'mcp',
+    summary: 'Uncorrelated warning.',
+  });
+  service.log({
+    context: {
+      invocationId: 'invocation-1',
+      mcpRequestId: 'request-1',
+      routeId: 'tool:curator/search',
+    },
+    kind: 'route.invocation',
+    level: 'error',
+    producer: 'project',
+    summary: 'Route failed.',
+  });
+
+  expect(trace.replay().entries).toMatchObject([
+    {
+      correlation: {
+        conversationId: 'conversation-1',
+        correlationId: 'correlation-1',
+        executionId: 'execution-1',
+        mcpSessionId: 'mcp-session-1',
+        requestId: 'request-1',
+      },
+      href: '/advanced/logs?sequence=2',
+      kind: 'log.project.project.prepared',
+      source: 'log',
+      summary: 'Correlated project event.',
+    },
+    {
+      correlation: {},
+      href: '/advanced/logs?sequence=3',
+      kind: 'log.mcp.mcp.stderr',
+      source: 'log',
+      summary: 'Uncorrelated warning.',
+    },
+    {
+      correlation: {
+        invocationId: 'invocation-1',
+        mcpRequestId: 'request-1',
+        routeId: 'tool:curator/search',
+      },
+      href: '/routes/mcp/curator/tool/search?invocation=invocation-1',
+      kind: 'log.project.route.invocation',
+      source: 'log',
+      status: 'error',
+      summary: 'Route failed.',
+    },
+  ]);
 });
 
 it('rejects hostile envelopes without breaking the producer', () => {
