@@ -632,10 +632,6 @@ export const eventFlightArtifactEpochToken = '__AGENT_BUNDLE_EVENT_FLIGHT_ARTIFA
 const standaloneEventRoute = (route: NonNullable<NormalizedHook['eventRoute']>): boolean =>
   route.runtime === 'standalone' || route.fallback === 'standalone';
 
-export const eventRoutePreflight = (
-  route: NormalizedHook['eventRoute'],
-): NonNullable<NormalizedHook['eventRoute']>['preflight'] => route?.preflight;
-
 /**
  * True when a wrapper runs plugin code in its own process and therefore
  * imports the operator `.env` layer (#469): every handler-executing wrapper,
@@ -648,7 +644,7 @@ export const eventRoutePreflight = (
 export const hookWrapperAppliesOperatorEnv = (entry: TargetHookWrapper): boolean =>
   entry.hook.eventRoute === undefined
   || standaloneEventRoute(entry.hook.eventRoute)
-  || eventRoutePreflight(entry.hook.eventRoute) !== undefined;
+  || entry.hook.eventRoute.preflight !== undefined;
 
 /**
  * The wrapper reaches the warm MCP runtime through an endpoint identified by
@@ -860,7 +856,7 @@ const eventRoutePreflightWrapperSource = (
   hostContractRevision: string,
 ): string => {
   const route = entry.hook.eventRoute!;
-  const preflight = eventRoutePreflight(route)!;
+  const preflight = route.preflight!;
   const executorFile = entry.relativePath.split('/').at(-1)!.replace(/\.mjs$/u, '.execute.mjs');
   const projectBindings = [
     'createCanonicalEventProps',
@@ -1307,7 +1303,7 @@ export const planHooks = (
       target,
       ...(timeout === undefined ? {} : { timeout }),
     };
-    const preflight = eventRoutePreflight(hook.eventRoute);
+    const preflight = hook.eventRoute?.preflight;
     const hostRevision = contract.hostContractRevision ?? target;
     const durableLineage = model.state?.lifetime === 'workspace-durable';
     const renderedSource = hook.eventRoute === undefined

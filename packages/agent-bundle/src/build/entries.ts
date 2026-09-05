@@ -9,7 +9,6 @@ import {
   eventFlightArtifactEpochToken,
   eventIpcRuntimeSpecifier,
   eventProjectRuntimeSpecifier,
-  eventRoutePreflight,
   hookWrapperAppliesOperatorEnv,
   type TargetHookEntry,
 } from '../adapters/hook-contract.ts';
@@ -557,7 +556,7 @@ export const planMcpEntriesSurface = async (
 };
 
 const hookEntrySourceInputs = (entry: TargetHookEntry): readonly string[] => {
-  const preflight = eventRoutePreflight(entry.hook.eventRoute);
+  const preflight = entry.hook.eventRoute?.preflight;
   return Object.freeze([
     entry.hook.provenance.sourcePath,
     entry.hook.source,
@@ -661,7 +660,6 @@ export const planHooksSurface = (
     entries: [
       ...compiled.flatMap((entry, index) => {
         const hook = entries[index]!;
-        const executorRelativePath = hook.relativePath.replace(/\.mjs$/u, '.execute.mjs');
         const aliases = {
           [launchEnvRuntimeSpecifier]: launchEnvRuntime,
           ...(hook.hook.eventRoute === undefined || eventIpcRuntime === undefined
@@ -672,26 +670,27 @@ export const planHooksSurface = (
             }),
         };
         const wrapperEntry = {
-      // One hook can compile into several host wrappers (for example a shared
-      // Claude/Codex wrapper plus a Cursor-codec wrapper), so the bundler
-      // library id derives from the unique output path, not the hook name.
-      name: hook.relativePath.replaceAll('/', '-').replace(/\.mjs$/u, ''),
-      outputRelativePath: hook.relativePath,
-      ...(hook.executeVirtualSource === undefined && (hook.hook.eventRoute?.runtime === 'standalone'
-        || hook.hook.eventRoute?.fallback === 'standalone')
-        ? { rscManifest: true as const }
-        : {}),
-      aliases,
-      source: entry.source,
-      sourceInputs: entry.sourceInputs,
-      virtualSource: hook.virtualSource
-        .replaceAll(eventArtifactEpochToken, options.artifactEpoch)
-        .replaceAll(eventFlightArtifactEpochToken, workerArtifactEpoch),
-      // The layer module the wrapper imports first; a shared-runtime
-      // event-route wrapper runs no plugin code and imports none.
-      ...(hookWrapperAppliesOperatorEnv(hook) ? { virtualModules: [operatorEnvLayerVirtualModule()] } : {}),
+          // One hook can compile into several host wrappers (for example a shared
+          // Claude/Codex wrapper plus a Cursor-codec wrapper), so the bundler
+          // library id derives from the unique output path, not the hook name.
+          name: hook.relativePath.replaceAll('/', '-').replace(/\.mjs$/u, ''),
+          outputRelativePath: hook.relativePath,
+          ...(hook.executeVirtualSource === undefined && (hook.hook.eventRoute?.runtime === 'standalone'
+            || hook.hook.eventRoute?.fallback === 'standalone')
+            ? { rscManifest: true as const }
+            : {}),
+          aliases,
+          source: entry.source,
+          sourceInputs: entry.sourceInputs,
+          virtualSource: hook.virtualSource
+            .replaceAll(eventArtifactEpochToken, options.artifactEpoch)
+            .replaceAll(eventFlightArtifactEpochToken, workerArtifactEpoch),
+          // The layer module the wrapper imports first; a shared-runtime
+          // event-route wrapper runs no plugin code and imports none.
+          ...(hookWrapperAppliesOperatorEnv(hook) ? { virtualModules: [operatorEnvLayerVirtualModule()] } : {}),
         };
         if (hook.executeVirtualSource === undefined) return [wrapperEntry];
+        const executorRelativePath = hook.relativePath.replace(/\.mjs$/u, '.execute.mjs');
         return [
           wrapperEntry,
           {

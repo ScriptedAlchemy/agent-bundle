@@ -323,18 +323,15 @@ const hookEntries = (
   tools: AgentBundleToolsConfig | undefined,
 ): readonly BundlerInspectionEntry[] => {
   const outputRoot = artifactOutputToken;
-  return entries.map((entry) => {
-    const eventIpcRuntime = entry.hook.eventRoute === undefined ? undefined : eventRuntimeModulePath('ipc');
-    const eventProjectRuntime = entry.hook.eventRoute === undefined ? undefined : eventRuntimeModulePath('project');
-    return rslibInspectionEntry({
+  return entries.map((entry) => rslibInspectionEntry({
     entry: {
       aliases: {
         [launchEnvRuntimeSpecifier]: launchEnvRuntimePath(),
-        ...(eventIpcRuntime === undefined
+        ...(entry.hook.eventRoute === undefined
           ? {}
           : {
-            [eventIpcRuntimeSpecifier]: eventIpcRuntime,
-            ...(eventProjectRuntime === undefined ? {} : { [eventProjectRuntimeSpecifier]: eventProjectRuntime }),
+            [eventIpcRuntimeSpecifier]: eventRuntimeModulePath('ipc'),
+            [eventProjectRuntimeSpecifier]: eventRuntimeModulePath('project'),
           }),
       },
       name: entry.relativePath.replaceAll('/', '-').replace(/\.mjs$/u, ''),
@@ -353,8 +350,7 @@ const hookEntries = (
     source: entry.hook.source,
     target,
     ...(tools === undefined ? {} : { tools }),
-    });
-  });
+  }));
 };
 
 const mcpAppsEntry = (
