@@ -121,9 +121,10 @@ interface VirtualModulesEngine {
  * surface is the cost of never touching the artifact tree with build-time
  * scratch files. This narrow feature check turns an upstream rename or
  * removal into an actionable diagnostic instead of an opaque resolution
- * failure deep inside a build. Rsbuild and Rslib carry independent Rspack
- * copies (the dual-engine reality documented on `AgentBundleToolsConfig`),
- * so each build path checks its own `rspack` and names its own package.
+ * failure deep inside a build. Rsbuild and Rslib resolve their Rspack
+ * independently (one engine today, held by a packed test; see
+ * `AgentBundleToolsConfig`), so each build path checks the `rspack` it
+ * actually executes under and names its own package.
  */
 export const virtualModulesPluginConstructor = <Engine extends VirtualModulesEngine>(
   rspack: Engine,

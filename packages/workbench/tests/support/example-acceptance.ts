@@ -107,6 +107,12 @@ const allowedUnmountCancellation = ({ error, request }: FailedRequest, origin: s
   }
   return url.pathname === '/api/logs/stream'
     || url.pathname === '/api/logs/replay'
+    // The MCP page's server-catalog effect (main.tsx) inspects the active
+    // epoch under an AbortController it aborts on unmount, so leaving the page
+    // while that GET is in flight is a designed cancellation. Whether the
+    // abort is ever observed is a browser scheduling race: it never was under
+    // branded Chrome 152 and always is under Playwright's Chromium 151.
+    || /^\/api\/artifacts\/epochs\/[^/]+$/u.test(url.pathname)
     || /^\/api\/evals\/runs\/[^/]+\/(?:events|stream)$/u.test(url.pathname)
     || /^\/api\/mcp\/sessions\/[^/]+\/stream$/u.test(url.pathname)
     || /^\/api\/playground\/sessions\/[^/]+\/(?:replay|stream)$/u.test(url.pathname);

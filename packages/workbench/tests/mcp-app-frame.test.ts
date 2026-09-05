@@ -11,6 +11,7 @@ import { createRsbuild } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 
 import { workbenchBrowserAliases } from './support/workbench-browser-modules.ts';
+import { browserLaunchOptions } from './support/workbench-e2e.ts';
 import { chromium } from 'playwright';
 
 import {
@@ -695,7 +696,7 @@ describe('MCP App frame relay', () => {
 describe('Secure AppRenderer in Chrome', () => {
   it('holds one real iframe at about:blank until policy attributes are applied, then makes one bootstrap request', async () => {
     const fixture = await mountedSecureRendererFixture();
-    const browser = await chromium.launch({ channel: 'chrome' });
+    const browser = await chromium.launch(browserLaunchOptions);
     const page = await browser.newPage();
     const errors: string[] = [];
     page.on('pageerror', (error) => { errors.push(error.message); });
