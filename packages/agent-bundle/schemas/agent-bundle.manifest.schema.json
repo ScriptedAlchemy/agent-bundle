@@ -1,0 +1,1444 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scriptedalchemy.github.io/agent-bundle/schemas/agent-bundle.manifest.schema.json",
+  "title": "agent-bundle artifact manifest",
+  "description": "The authoritative `agent-bundle.manifest.json` written at the root of every compiled artifact (manifestVersion 2). Keys are closed at every level. This schema mirrors the structural rules of `parseArtifactManifest`; the parser additionally enforces what JSON Schema cannot express: canonical `stableJson` bytes, sorted arrays with unique sort keys, cross-references between sections (hosts name declared projections, referenced paths name manifest files, `project.revision` and `project.configDigest` match `project.sourceInputs`, `validation.projections` mirror `projections`, server routes carry their server's id, rendered scripts name a script route, `inputSchema.required` names declared properties), the generated runtime floor for `runtime.node`, and npm package-name and semantic-version validity for `project.packageName` and `project.packageVersion`.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "agentSkills": {
+      "$ref": "#/$defs/agentSkills"
+    },
+    "application": {
+      "$ref": "#/$defs/application"
+    },
+    "distribution": {
+      "$ref": "#/$defs/distribution"
+    },
+    "executables": {
+      "$ref": "#/$defs/executables"
+    },
+    "files": {
+      "type": "array",
+      "description": "Every file the artifact ships, sorted by `path` with no duplicates; never names the manifest itself.",
+      "items": {
+        "$ref": "#/$defs/file"
+      },
+      "uniqueItems": true
+    },
+    "manifestVersion": {
+      "const": 2
+    },
+    "producer": {
+      "$ref": "#/$defs/producer"
+    },
+    "project": {
+      "$ref": "#/$defs/project"
+    },
+    "projections": {
+      "type": "array",
+      "description": "One entry per selected host, sorted by `host` with no duplicates.",
+      "items": {
+        "$ref": "#/$defs/projection"
+      },
+      "uniqueItems": true
+    },
+    "routes": {
+      "$ref": "#/$defs/routes"
+    },
+    "runtime": {
+      "$ref": "#/$defs/runtime"
+    },
+    "validation": {
+      "$ref": "#/$defs/validation"
+    }
+  },
+  "required": [
+    "agentSkills",
+    "application",
+    "distribution",
+    "executables",
+    "files",
+    "manifestVersion",
+    "producer",
+    "project",
+    "projections",
+    "routes",
+    "runtime",
+    "validation"
+  ],
+  "if": {
+    "properties": {
+      "project": {
+        "type": "object",
+        "required": [
+          "packageName"
+        ]
+      }
+    }
+  },
+  "then": {
+    "description": "`distribution.channels` lists \"npm\" exactly when `project.packageName` is present.",
+    "properties": {
+      "distribution": {
+        "type": "object",
+        "properties": {
+          "channels": {
+            "type": "array",
+            "contains": {
+              "const": "npm"
+            }
+          }
+        }
+      }
+    }
+  },
+  "else": {
+    "properties": {
+      "distribution": {
+        "type": "object",
+        "properties": {
+          "channels": {
+            "type": "array",
+            "not": {
+              "contains": {
+                "const": "npm"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sha256": {
+      "type": "string",
+      "description": "Lowercase hexadecimal SHA-256 digest.",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "relativePath": {
+      "type": "string",
+      "description": "Safe relative POSIX path from the artifact root: non-empty, no leading slash, no backslash or NUL, and no empty, `.`, or `..` segment.",
+      "pattern": "^(?:(?!\\.{1,2}(?:/|$))[^/\\\\\\u0000]+/)*(?!\\.{1,2}(?:/|$))[^/\\\\\\u0000]+$"
+    },
+    "nonNegativeSafeInteger": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "positiveSafeInteger": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "hosts": {
+      "type": "array",
+      "description": "Hosts an executable is projected for. Sorted, unique, and every entry names a declared projection (the parser enforces the cross-reference).",
+      "items": {
+        "$ref": "#/$defs/nonEmptyString"
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "agentSkills": {
+      "type": "object",
+      "description": "The Agent Skills specification revision the artifact was validated against.",
+      "additionalProperties": false,
+      "properties": {
+        "schemaSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "sourceRevision": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "specification": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      },
+      "required": [
+        "schemaSha256",
+        "sourceRevision",
+        "specification"
+      ]
+    },
+    "application": {
+      "type": "object",
+      "description": "The application identity that was compiled.",
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "name": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "version": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "version"
+      ]
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "const": "agent-bundle"
+        },
+        "version": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ]
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "node": {
+          "type": "string",
+          "description": "Canonical `major.minor.patch` Node.js version; the parser also enforces the generated runtime floor.",
+          "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)$"
+        }
+      },
+      "required": [
+        "node"
+      ]
+    },
+    "sourceInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "executable": {
+          "type": "boolean"
+        },
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ]
+    },
+    "project": {
+      "type": "object",
+      "description": "The project the artifact was compiled from. `configDigest` equals the hash of the `configPath` source input and `revision` is the digest of `sourceInputs` (parser-enforced).",
+      "additionalProperties": false,
+      "properties": {
+        "configDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "configPath": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "modelDigest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "packageName": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "packageVersion": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "revision": {
+          "$ref": "#/$defs/sha256"
+        },
+        "sourceInputs": {
+          "type": "array",
+          "description": "Sorted by `path` with no duplicates.",
+          "items": {
+            "$ref": "#/$defs/sourceInput"
+          },
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "configDigest",
+        "configPath",
+        "modelDigest",
+        "revision",
+        "sourceInputs"
+      ]
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bytes": {
+          "$ref": "#/$defs/nonNegativeSafeInteger"
+        },
+        "kind": {
+          "enum": [
+            "bundle",
+            "copy",
+            "generated",
+            "prebuilt"
+          ]
+        },
+        "mode": {
+          "type": "integer",
+          "description": "POSIX permission bits, 0 through 0o777.",
+          "minimum": 0,
+          "maximum": 511
+        },
+        "path": {
+          "$ref": "#/$defs/relativePath",
+          "not": {
+            "const": "agent-bundle.manifest.json"
+          }
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "sourceInputs": {
+          "type": "array",
+          "description": "Sorted, unique, and each entry names a `project.sourceInputs` path (parser-enforced).",
+          "items": {
+            "$ref": "#/$defs/relativePath"
+          },
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "bytes",
+        "kind",
+        "path",
+        "sha256",
+        "sourceInputs"
+      ]
+    },
+    "projectionSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "revision": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "required": [
+        "name",
+        "revision",
+        "sha256"
+      ]
+    },
+    "projectionDocuments": {
+      "type": "object",
+      "description": "Root-relative pointers to the host documents the projection derived; each names a manifest file (parser-enforced).",
+      "additionalProperties": false,
+      "properties": {
+        "hooks": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "marketplace": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "mcp": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "plugin": {
+          "$ref": "#/$defs/relativePath"
+        }
+      }
+    },
+    "projectionMarketplace": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "projection": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "adapterRevision": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "documents": {
+          "$ref": "#/$defs/projectionDocuments"
+        },
+        "host": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "marketplace": {
+          "$ref": "#/$defs/projectionMarketplace"
+        },
+        "observedVersion": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "schemas": {
+          "type": "array",
+          "description": "Sorted by `name` with no duplicates.",
+          "items": {
+            "$ref": "#/$defs/projectionSchema"
+          },
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "adapterRevision",
+        "documents",
+        "host",
+        "observedVersion",
+        "schemas"
+      ],
+      "dependentSchemas": {
+        "marketplace": {
+          "description": "A marketplace record requires a `documents.marketplace` pointer.",
+          "properties": {
+            "documents": {
+              "type": "object",
+              "required": [
+                "marketplace"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "routeProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "conventional"
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
+    "routeInputLiteral": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "routeInputArrayItems": {
+      "type": "object",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "enum": [
+                "boolean",
+                "number"
+              ]
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "enum": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/nonEmptyString"
+              }
+            },
+            "type": {
+              "const": "string"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        }
+      ]
+    },
+    "routeInputProperty": {
+      "type": "object",
+      "description": "One property of a bounded route input schema: a boolean, number, string (optionally enumerated), or a flat array of those.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "default": {
+              "$ref": "#/$defs/routeInputLiteral"
+            },
+            "description": {
+              "$ref": "#/$defs/nonEmptyString"
+            },
+            "type": {
+              "enum": [
+                "boolean",
+                "number"
+              ]
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "default": {
+              "$ref": "#/$defs/routeInputLiteral"
+            },
+            "description": {
+              "$ref": "#/$defs/nonEmptyString"
+            },
+            "enum": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/nonEmptyString"
+              }
+            },
+            "type": {
+              "const": "string"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "default": {
+              "$ref": "#/$defs/routeInputLiteral"
+            },
+            "description": {
+              "$ref": "#/$defs/nonEmptyString"
+            },
+            "items": {
+              "$ref": "#/$defs/routeInputArrayItems"
+            },
+            "type": {
+              "const": "array"
+            }
+          },
+          "required": [
+            "items",
+            "type"
+          ]
+        }
+      ]
+    },
+    "routeInputSchema": {
+      "type": "object",
+      "description": "The bounded JSON Schema projection a route accepts as input (`RouteInputSchema`): a closed object of scalar or flat-array properties. `required` names declared properties (parser-enforced).",
+      "additionalProperties": false,
+      "properties": {
+        "additionalProperties": {
+          "const": false
+        },
+        "properties": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/routeInputProperty"
+          }
+        },
+        "required": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        },
+        "type": {
+          "const": "object"
+        }
+      },
+      "required": [
+        "additionalProperties",
+        "properties",
+        "type"
+      ]
+    },
+    "route": {
+      "type": "object",
+      "description": "One compiled route. `event` is present exactly for event-route routes; `serverId` is present exactly for MCP route kinds (app, prompt, resource, tool).",
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "event": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "inputSchema": {
+          "$ref": "#/$defs/routeInputSchema"
+        },
+        "kind": {
+          "enum": [
+            "app",
+            "cli",
+            "event-route",
+            "prompt",
+            "resource",
+            "script",
+            "tool"
+          ]
+        },
+        "provenance": {
+          "$ref": "#/$defs/routeProvenance"
+        },
+        "serverId": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "source": {
+          "$ref": "#/$defs/relativePath"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "provenance",
+        "source"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "event-route"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "event"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "event"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "app",
+                  "prompt",
+                  "resource",
+                  "tool"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "serverId"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "serverId"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "server": {
+      "type": "object",
+      "description": "One compiled MCP server. Every route carries this server's id (parser-enforced).",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "mode": {
+          "enum": [
+            "command",
+            "conflict",
+            "custom",
+            "generated",
+            "remote"
+          ]
+        },
+        "name": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "routes": {
+          "type": "array",
+          "description": "Sorted by `id` with no duplicates.",
+          "items": {
+            "type": "object",
+            "$ref": "#/$defs/route",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "app",
+                  "prompt",
+                  "resource",
+                  "tool"
+                ]
+              }
+            }
+          },
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "id",
+        "mode",
+        "name",
+        "routes"
+      ]
+    },
+    "cliOption": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "choices": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        },
+        "description": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "key": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "kind": {
+          "enum": [
+            "boolean",
+            "enum",
+            "number",
+            "string"
+          ]
+        },
+        "option": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "positional": {
+          "$ref": "#/$defs/nonNegativeSafeInteger"
+        },
+        "repeated": {
+          "type": "boolean"
+        },
+        "required": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "key",
+        "kind",
+        "option",
+        "repeated",
+        "required"
+      ]
+    },
+    "cliCommandMcp": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "confirm": {
+          "type": "boolean"
+        },
+        "server": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "tool": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      },
+      "required": [
+        "confirm",
+        "server",
+        "tool"
+      ]
+    },
+    "cliCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "aliases": {
+          "type": "array",
+          "description": "Sorted with no duplicates.",
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "uniqueItems": true
+        },
+        "description": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "exitCode": {
+          "enum": [
+            "result",
+            "zero"
+          ]
+        },
+        "mcp": {
+          "$ref": "#/$defs/cliCommandMcp"
+        },
+        "options": {
+          "type": "array",
+          "description": "Sorted by `key` with no duplicates.",
+          "items": {
+            "$ref": "#/$defs/cliOption"
+          },
+          "uniqueItems": true
+        },
+        "path": {
+          "type": "array",
+          "description": "Command path segments; at least one.",
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "minItems": 1
+        },
+        "routeId": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      },
+      "required": [
+        "aliases",
+        "exitCode",
+        "options",
+        "path",
+        "routeId"
+      ]
+    },
+    "cli": {
+      "type": "object",
+      "description": "The compiled CLI surface. `commands` is present exactly in generated mode.",
+      "additionalProperties": false,
+      "properties": {
+        "commands": {
+          "type": "array",
+          "description": "Sorted by the joined `path` with no duplicates.",
+          "items": {
+            "$ref": "#/$defs/cliCommand"
+          },
+          "uniqueItems": true
+        },
+        "mode": {
+          "enum": [
+            "conflict",
+            "conventional",
+            "generated"
+          ]
+        },
+        "routes": {
+          "type": "array",
+          "description": "Sorted by `id` with no duplicates; cli routes only.",
+          "items": {
+            "type": "object",
+            "$ref": "#/$defs/route",
+            "properties": {
+              "kind": {
+                "const": "cli"
+              }
+            }
+          },
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "mode",
+        "routes"
+      ],
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "generated"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "commands"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "commands"
+          ]
+        }
+      }
+    },
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "name": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "source": {
+          "$ref": "#/$defs/relativePath"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "source"
+      ]
+    },
+    "layout": {
+      "type": "object",
+      "description": "`serverId` is present exactly for server-scoped layouts and names a declared server (parser-enforced).",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "scope": {
+          "enum": [
+            "root",
+            "server"
+          ]
+        },
+        "serverId": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "source": {
+          "$ref": "#/$defs/relativePath"
+        }
+      },
+      "required": [
+        "id",
+        "scope",
+        "source"
+      ],
+      "if": {
+        "properties": {
+          "scope": {
+            "const": "server"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "serverId"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "serverId"
+          ]
+        }
+      }
+    },
+    "routes": {
+      "type": "object",
+      "description": "The compiled route graph.",
+      "additionalProperties": false,
+      "properties": {
+        "cli": {
+          "$ref": "#/$defs/cli"
+        },
+        "digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "events": {
+          "type": "array",
+          "description": "Sorted by `id` with no duplicates; event-route routes only.",
+          "items": {
+            "type": "object",
+            "$ref": "#/$defs/route",
+            "properties": {
+              "kind": {
+                "const": "event-route"
+              }
+            }
+          },
+          "uniqueItems": true
+        },
+        "layouts": {
+          "type": "array",
+          "description": "Sorted by `id` with no duplicates.",
+          "items": {
+            "$ref": "#/$defs/layout"
+          },
+          "uniqueItems": true
+        },
+        "providers": {
+          "type": "array",
+          "description": "Sorted by `id` with no duplicates.",
+          "items": {
+            "$ref": "#/$defs/provider"
+          },
+          "uniqueItems": true
+        },
+        "scripts": {
+          "type": "array",
+          "description": "Sorted by `id` with no duplicates; script routes only.",
+          "items": {
+            "type": "object",
+            "$ref": "#/$defs/route",
+            "properties": {
+              "kind": {
+                "const": "script"
+              }
+            }
+          },
+          "uniqueItems": true
+        },
+        "servers": {
+          "type": "array",
+          "description": "Sorted by `id` with no duplicates.",
+          "items": {
+            "$ref": "#/$defs/server"
+          },
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "digest",
+        "events",
+        "layouts",
+        "providers",
+        "scripts",
+        "servers"
+      ]
+    },
+    "bin": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "hosts": {
+          "$ref": "#/$defs/hosts"
+        },
+        "name": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "worker": {
+          "$ref": "#/$defs/relativePath"
+        }
+      },
+      "required": [
+        "hosts",
+        "name",
+        "path"
+      ]
+    },
+    "hook": {
+      "type": "object",
+      "description": "`host` names a declared projection (parser-enforced).",
+      "additionalProperties": false,
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "host": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "kind": {
+          "enum": [
+            "config",
+            "event-route"
+          ]
+        },
+        "name": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "timeout": {
+          "$ref": "#/$defs/positiveSafeInteger"
+        }
+      },
+      "required": [
+        "event",
+        "host",
+        "id",
+        "kind",
+        "name",
+        "path"
+      ]
+    },
+    "mcpApp": {
+      "type": "object",
+      "description": "An MCP App view. Carries a `path` exactly when it is not `prebuilt`.",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "name": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "prebuilt": {
+          "const": true
+        },
+        "resourceUri": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "resourceUri"
+      ],
+      "if": {
+        "required": [
+          "prebuilt"
+        ]
+      },
+      "then": {
+        "not": {
+          "required": [
+            "path"
+          ]
+        }
+      },
+      "else": {
+        "required": [
+          "path"
+        ]
+      }
+    },
+    "mcpEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "worker": {
+          "$ref": "#/$defs/relativePath"
+        }
+      },
+      "required": [
+        "path"
+      ]
+    },
+    "mcpServer": {
+      "type": "object",
+      "description": "`entry` is present exactly for compiled servers.",
+      "additionalProperties": false,
+      "properties": {
+        "apps": {
+          "type": "array",
+          "description": "Sorted by `id` with no duplicates.",
+          "items": {
+            "$ref": "#/$defs/mcpApp"
+          },
+          "uniqueItems": true
+        },
+        "entry": {
+          "$ref": "#/$defs/mcpEntry"
+        },
+        "hosts": {
+          "$ref": "#/$defs/hosts"
+        },
+        "id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "kind": {
+          "enum": [
+            "command",
+            "compiled",
+            "remote"
+          ]
+        },
+        "name": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "transport": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      },
+      "required": [
+        "apps",
+        "hosts",
+        "id",
+        "kind",
+        "name",
+        "transport"
+      ],
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "compiled"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "entry"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "entry"
+          ]
+        }
+      }
+    },
+    "scriptRendered": {
+      "type": "object",
+      "description": "Names the script route this executable renders (parser-enforced cross-reference).",
+      "additionalProperties": false,
+      "properties": {
+        "routeId": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      },
+      "required": [
+        "routeId"
+      ]
+    },
+    "script": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "hosts": {
+          "$ref": "#/$defs/hosts"
+        },
+        "id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "mode": {
+          "enum": [
+            "bundle",
+            "copy"
+          ]
+        },
+        "name": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "rendered": {
+          "$ref": "#/$defs/scriptRendered"
+        },
+        "worker": {
+          "$ref": "#/$defs/relativePath"
+        }
+      },
+      "required": [
+        "hosts",
+        "id",
+        "mode",
+        "name",
+        "path"
+      ]
+    },
+    "executables": {
+      "type": "object",
+      "description": "Every executable the artifact root can start. Paths name manifest files (parser-enforced).",
+      "additionalProperties": false,
+      "properties": {
+        "bins": {
+          "type": "array",
+          "description": "Sorted by `name` with no duplicates.",
+          "items": {
+            "$ref": "#/$defs/bin"
+          },
+          "uniqueItems": true
+        },
+        "hooks": {
+          "type": "array",
+          "description": "Sorted by `(host, id)` with no duplicates.",
+          "items": {
+            "$ref": "#/$defs/hook"
+          },
+          "uniqueItems": true
+        },
+        "mcpServers": {
+          "type": "array",
+          "description": "Sorted by `id` with no duplicates.",
+          "items": {
+            "$ref": "#/$defs/mcpServer"
+          },
+          "uniqueItems": true
+        },
+        "scripts": {
+          "type": "array",
+          "description": "Sorted by `id` with no duplicates.",
+          "items": {
+            "$ref": "#/$defs/script"
+          },
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "bins",
+        "hooks",
+        "mcpServers",
+        "scripts"
+      ]
+    },
+    "distributionChannel": {
+      "enum": [
+        "local",
+        "npm"
+      ]
+    },
+    "distributionInstall": {
+      "type": "object",
+      "description": "Install pointers; at least one, each naming a manifest file (parser-enforced).",
+      "additionalProperties": false,
+      "properties": {
+        "instructions": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "script": {
+          "$ref": "#/$defs/relativePath"
+        }
+      },
+      "minProperties": 1
+    },
+    "distribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "channels": {
+          "type": "array",
+          "description": "Sorted, unique, and always includes \"local\".",
+          "items": {
+            "$ref": "#/$defs/distributionChannel"
+          },
+          "enum": [
+            [
+              "local"
+            ],
+            [
+              "local",
+              "npm"
+            ]
+          ]
+        },
+        "install": {
+          "$ref": "#/$defs/distributionInstall"
+        }
+      },
+      "required": [
+        "channels"
+      ]
+    },
+    "validationRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "const": "passed"
+        }
+      },
+      "required": [
+        "status"
+      ]
+    },
+    "projectionValidation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "status": {
+          "const": "passed"
+        }
+      },
+      "required": [
+        "host",
+        "status"
+      ]
+    },
+    "validation": {
+      "type": "object",
+      "description": "Validation outcomes recorded at build time. `projections` mirrors the `projections` hosts in order (parser-enforced).",
+      "additionalProperties": false,
+      "properties": {
+        "artifact": {
+          "$ref": "#/$defs/validationRecord"
+        },
+        "projections": {
+          "type": "array",
+          "description": "Sorted by `host` with no duplicates.",
+          "items": {
+            "$ref": "#/$defs/projectionValidation"
+          },
+          "uniqueItems": true
+        },
+        "source": {
+          "$ref": "#/$defs/validationRecord"
+        }
+      },
+      "required": [
+        "artifact",
+        "projections",
+        "source"
+      ]
+    }
+  }
+}

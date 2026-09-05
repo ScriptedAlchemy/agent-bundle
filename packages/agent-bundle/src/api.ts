@@ -163,6 +163,7 @@ import {
   resolveManifestHostFromRoot,
   type InspectManifestOutput,
 } from './build/manifest-projection.ts';
+export { artifactManifestSchema, validateArtifactManifestSchema } from './build/manifest-schema.ts';
 import { composeBundlerInspection, type BundlerInspection } from './build/inspect-bundler.ts';
 import { defaultArtifactDistPath, defaultPackageArtifactDistPath } from './config/normalize.ts';
 export type { BundlerInspection, BundlerInspectionEntry } from './build/inspect-bundler.ts';
