@@ -323,12 +323,12 @@ describe('<plugin> web', () => {
       expect(run.stderr()).toBe(`Cannot read the web section of ${run.manifestPath}: web.apps[0].entry must be a string.\n`);
     });
 
-    it('requires the exposed App\'s server to have a compiled launch record', async () => {
+    it('requires the exposed App\'s server to have a launch record', async () => {
       const { runtime, launches: resolved } = recorded({ manifest: async () => documentOf(manifestOf([statusApp]), new Map()) });
       const run = await invoke([], runtime);
       expect(await run.done).toBe(1);
       expect(run.stderr()).toBe(
-        `${run.manifestPath} exposes status/status, but executables.mcpServers has no compiled launch record for server "status"; rebuild the plugin.\n`,
+        `${run.manifestPath} exposes status/status, but executables.mcpServers has no launch record for server "status"; rebuild the plugin.\n`,
       );
       expect(resolved).toEqual([]);
     });

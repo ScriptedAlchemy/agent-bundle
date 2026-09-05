@@ -566,7 +566,7 @@ const schemaEncodedRules: readonly { readonly apply: (manifest: MutableManifest)
   { apply: (manifest) => { manifest.routes.scripts[0]!.kind = 'event-route'; }, rule: 'script routes are script routes' },
   { apply: (manifest) => { manifest.routes.servers[0]!.routes[0]!.kind = 'cli'; }, rule: 'server routes are MCP route kinds' },
   { apply: (manifest) => { manifest.routes.layouts[0]!.serverId = 'review'; }, rule: 'root layouts carry no serverId' },
-  { apply: (manifest) => { manifest.executables.mcpServers[0]!.kind = 'remote'; }, rule: 'only compiled servers carry a launch record' },
+  { apply: (manifest) => { manifest.executables.mcpServers[0]!.kind = 'remote'; }, rule: 'only compiled and prebuilt servers carry a launch record' },
   { apply: (manifest) => { (manifest.executables.mcpServers[0]!.launch!.args[0] as Record_).kind = 'file'; }, rule: 'launch arguments are artifact or literal' },
   { apply: (manifest) => { manifest.executables.mcpServers[0]!.launch!.args[1] = { kind: 'artifact', path: '../escape' }; }, rule: 'launch artifact arguments are relocatable paths' },
   { apply: (manifest) => { manifest.executables.mcpServers[0]!.apps[1]!.path = 'runtime/mcp/apps/vendor.html'; }, rule: 'prebuilt apps carry no path' },

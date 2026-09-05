@@ -109,10 +109,13 @@ const isExplorerRoute = (value: unknown): boolean =>
   typeof value.id === 'string' && typeof value.name === 'string' &&
   (!Object.hasOwn(value, 'description') || typeof value.description === 'string');
 
+const isMcpServerKind = (value: unknown): boolean =>
+  value === 'command' || value === 'compiled' || value === 'prebuilt' || value === 'remote';
+
 const isExplorerServer = (value: unknown): boolean =>
   exactRecord(value, ['apps', 'hosts', 'id', 'kind', 'name', 'prompts', 'resources', 'tools', 'transport'], ['entry']) &&
   arrayOf(value.apps, isMcpApp) && arrayOf(value.hosts, (host) => typeof host === 'string') &&
-  typeof value.id === 'string' && (value.kind === 'command' || value.kind === 'compiled' || value.kind === 'remote') &&
+  typeof value.id === 'string' && isMcpServerKind(value.kind) &&
   typeof value.name === 'string' && arrayOf(value.prompts, isExplorerRoute) &&
   arrayOf(value.resources, isExplorerRoute) && arrayOf(value.tools, isExplorerRoute) &&
   typeof value.transport === 'string' &&
@@ -183,7 +186,7 @@ const isMcpServer = (value: unknown): boolean =>
   exactRecord(value, ['apps', 'entryPaths', 'kind', 'manifestPath', 'name', 'target', 'transport']) &&
   arrayOf(value.apps, isMcpApp) &&
   arrayOf(value.entryPaths, (entry) => typeof entry === 'string') &&
-  (value.kind === 'command' || value.kind === 'compiled' || value.kind === 'remote') &&
+  isMcpServerKind(value.kind) &&
   typeof value.manifestPath === 'string' &&
   typeof value.name === 'string' && typeof value.target === 'string' && typeof value.transport === 'string';
 

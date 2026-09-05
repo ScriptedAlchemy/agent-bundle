@@ -431,12 +431,12 @@ it('binds the launch record to compiled servers and every exposed App to a launc
   const commandWithLaunch = withWeb();
   (commandWithLaunch.executables.mcpServers[0] as { kind: string }).kind = 'command';
   expect(() => serializeArtifactManifest(commandWithLaunch))
-    .toThrow('executables.mcpServers[0].launch is present exactly for compiled servers.');
+    .toThrow('executables.mcpServers[0].launch is present exactly for compiled and prebuilt servers.');
 
   const compiledWithoutLaunch = withWeb();
   delete (compiledWithoutLaunch.executables.mcpServers[0] as { launch?: unknown }).launch;
   expect(() => serializeArtifactManifest(compiledWithoutLaunch))
-    .toThrow('executables.mcpServers[0].launch is present exactly for compiled servers.');
+    .toThrow('executables.mcpServers[0].launch is present exactly for compiled and prebuilt servers.');
 
   const unlistedEntry = withWeb();
   (unlistedEntry.executables.mcpServers[0]!.launch as { entry: string }).entry = 'codex/scripts/missing.mjs';
@@ -456,7 +456,7 @@ it('binds the launch record to compiled servers and every exposed App to a launc
   const unknownServer = withWeb();
   (unknownServer.web!.apps[0] as { server: string }).server = 'other';
   expect(() => serializeArtifactManifest(unknownServer))
-    .toThrow('web.apps[catalog/details].server names "other", which is not a compiled MCP server with a launch record.');
+    .toThrow('web.apps[catalog/details].server names "other", which is not an MCP server with a launch record.');
 });
 
 it('accepts a project without package identity and rejects invalid identity values', () => {

@@ -311,7 +311,7 @@ const launchOf = (exposed: ExposedApps, app: WebManifestApp): ArtifactManifestLa
   if (launch === undefined) {
     throw new WebCommandError(
       'manifest-invalid',
-      `${exposed.manifestPath} exposes ${app.app}, but executables.mcpServers has no compiled launch record for server ${JSON.stringify(app.server)}; rebuild the plugin.`,
+      `${exposed.manifestPath} exposes ${app.app}, but executables.mcpServers has no launch record for server ${JSON.stringify(app.server)}; rebuild the plugin.`,
     );
   }
   return launch;

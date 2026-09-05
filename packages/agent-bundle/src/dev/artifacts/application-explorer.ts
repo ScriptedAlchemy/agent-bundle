@@ -59,7 +59,7 @@ export interface ApplicationExplorerServer {
   readonly entry?: string;
   readonly hosts: readonly string[];
   readonly id: string;
-  readonly kind: 'command' | 'compiled' | 'remote';
+  readonly kind: 'command' | 'compiled' | 'prebuilt' | 'remote';
   readonly name: string;
   readonly prompts: readonly ApplicationExplorerRoute[];
   readonly resources: readonly ApplicationExplorerRoute[];

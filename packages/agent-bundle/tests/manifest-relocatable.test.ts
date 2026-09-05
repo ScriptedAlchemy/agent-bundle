@@ -312,6 +312,6 @@ it('emits a relocatable manifest that survives moving the composite root', async
   const unlaunchableWebServer = forge();
   unlaunchableWebServer.web.apps[0]!.server = 'nobody';
   expect(() => parseArtifactManifest(`${stableJson(unlaunchableWebServer)}\n`)).toThrow(
-    /web\.apps\[echo\/echo\]\.server names "nobody", which is not a compiled MCP server with a launch record/u,
+    /web\.apps\[echo\/echo\]\.server names "nobody", which is not an MCP server with a launch record/u,
   );
 }, 180_000);

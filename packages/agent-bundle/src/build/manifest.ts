@@ -373,7 +373,7 @@ export interface ArtifactManifestMcpServer {
   readonly apps: readonly ArtifactManifestMcpApp[];
   readonly hosts: readonly string[];
   readonly id: string;
-  readonly kind: 'command' | 'compiled' | 'remote';
+  readonly kind: 'command' | 'compiled' | 'prebuilt' | 'remote';
   /** Present exactly for `compiled` servers. */
   readonly launch?: ArtifactManifestLaunch;
   readonly name: string;
@@ -1232,9 +1232,9 @@ const parseMcpServers = (value: unknown, hosts: ReadonlySet<string>): readonly A
     const location = `executables.mcpServers[${index}]`;
     const server = requireRecord(candidate, location);
     requireExactKeys(server, location, ['apps', 'hosts', 'id', 'kind', 'name', 'transport'], ['launch']);
-    const kind = requireOneOf(server.kind, `${location}.kind`, ['command', 'compiled', 'remote'] as const);
-    if ((kind === 'compiled') !== (server.launch !== undefined)) {
-      fail(`${location}.launch is present exactly for compiled servers.`);
+    const kind = requireOneOf(server.kind, `${location}.kind`, ['command', 'compiled', 'prebuilt', 'remote'] as const);
+    if ((kind === 'compiled' || kind === 'prebuilt') !== (server.launch !== undefined)) {
+      fail(`${location}.launch is present exactly for compiled and prebuilt servers.`);
     }
     return {
       apps: parseMcpApps(server.apps, `${location}.apps`),
@@ -1429,14 +1429,14 @@ const requireArtifactArguments = (
   }
 };
 
-/** Every exposed App's `server` is a compiled server whose launch record `<plugin> web` starts. */
+/** Every exposed App's `server` is a server with the launch record `<plugin> web` starts. */
 const parseWeb = (value: unknown, servers: readonly ArtifactManifestMcpServer[]): WebManifest | undefined => {
   if (value === undefined) return undefined;
   const web = parseWebManifest(value);
   const launchable = new Set(servers.filter((server) => server.launch !== undefined).map((server) => server.name));
   for (const app of web.apps) {
     if (!launchable.has(app.server)) {
-      fail(`web.apps[${app.app}].server names ${JSON.stringify(app.server)}, which is not a compiled MCP server with a launch record.`);
+      fail(`web.apps[${app.app}].server names ${JSON.stringify(app.server)}, which is not an MCP server with a launch record.`);
     }
   }
   return web;

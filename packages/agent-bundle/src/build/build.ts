@@ -6,7 +6,7 @@ import packageManifest from '../../package.json' with { type: 'json' };
 import type { TargetRegistry } from '../adapters/registry.ts';
 import { deduplicateDiagnostics, DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
 import type { ProjectContext } from '../core/project-context.ts';
-import { pathTokens, type AgentBundleToolsConfig, type NormalizedPlugin } from '../core/types.ts';
+import { pathTokens, type AgentBundleToolsConfig, type NormalizedMcpServer, type NormalizedPlugin } from '../core/types.ts';
 import { assertInside, isInsideOrEqual, isRelocatablePosixPath } from '../core/paths.ts';
 import { agentSkillsSchemaRevision } from '../schemas/agent-skills/contract.ts';
 import {
@@ -53,6 +53,7 @@ import {
   type ArtifactManifestPayload,
   type ArtifactManifestExecutables,
   type ArtifactManifestHook,
+  type ArtifactManifestLaunch,
   type ArtifactManifestLaunchArgument,
   type ArtifactManifestMcpApp,
   type ArtifactManifestMcpServer,
@@ -422,6 +423,41 @@ const manifestLaunchArguments = (args: readonly string[]): readonly ArtifactMani
   )));
 };
 
+const manifestMcpServerKind = (
+  server: NormalizedMcpServer,
+  entry: CompiledMcpEntry | undefined,
+): ArtifactManifestMcpServer['kind'] => {
+  if (entry !== undefined) return 'compiled';
+  if (server.provenance.kind === 'prebuilt') return 'prebuilt';
+  return server.url !== undefined ? 'remote' : 'command';
+};
+
+/**
+ * The one launch record of a server the artifact starts. A compiled server's
+ * normalized `args[0]` is its entry; a prebuilt server's is the payload path
+ * anchored on the plugin-root token (`config/normalize.ts`). The author's
+ * arguments follow in both cases.
+ */
+const manifestLaunch = (
+  artifactRoot: string,
+  server: NormalizedMcpServer,
+  entry: CompiledMcpEntry | undefined,
+): ArtifactManifestLaunch | undefined => {
+  const [first, ...rest] = server.args ?? [];
+  const launchEntry = entry !== undefined
+    ? artifactPath(artifactRoot, entry.output)
+    : server.provenance.kind === 'prebuilt' && first !== undefined
+      ? first.slice(`${pathTokens.pluginRoot}/`.length)
+      : undefined;
+  if (launchEntry === undefined) return undefined;
+  return Object.freeze({
+    args: manifestLaunchArguments(rest),
+    entry: launchEntry,
+    env: Object.freeze({ ...(server.env ?? {}) }),
+    ...(entry?.workerOutput === undefined ? {} : { worker: artifactPath(artifactRoot, entry.workerOutput) }),
+  });
+};
+
 const manifestMcpServers = (options: {
   readonly artifactRoot: string;
   readonly compiledMcpApps: readonly CompiledMcpApp[];
@@ -436,6 +472,7 @@ const manifestMcpServers = (options: {
     .filter(({ hosts }) => hosts.length > 0)
     .map(({ hosts, server }): ArtifactManifestMcpServer => {
       const entry = entries.get(server.id);
+      const launch = manifestLaunch(options.artifactRoot, server, entry);
       const compiledApps = options.compiledMcpApps
         .filter((app) => app.serverIds.includes(server.id))
         .map((app): ArtifactManifestMcpApp => Object.freeze({
@@ -457,19 +494,8 @@ const manifestMcpServers = (options: {
         apps: Object.freeze([...compiledApps, ...prebuiltApps].sort((left, right) => left.id.localeCompare(right.id))),
         hosts,
         id: server.id,
-        kind: entry !== undefined ? 'compiled' : server.url !== undefined ? 'remote' : 'command',
-        // A compiled server's normalized `args[0]` is its entry; the author's
-        // arguments follow it.
-        ...(entry === undefined
-          ? {}
-          : {
-            launch: Object.freeze({
-              args: manifestLaunchArguments(server.args?.slice(1) ?? []),
-              entry: artifactPath(options.artifactRoot, entry.output),
-              env: Object.freeze({ ...(server.env ?? {}) }),
-              ...(entry.workerOutput === undefined ? {} : { worker: artifactPath(options.artifactRoot, entry.workerOutput) }),
-            }),
-          }),
+        kind: manifestMcpServerKind(server, entry),
+        ...(launch === undefined ? {} : { launch }),
         name: server.name,
         transport: server.transport,
       });

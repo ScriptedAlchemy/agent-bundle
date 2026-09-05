@@ -23,6 +23,7 @@
     "executables.mcpServers[].kind": [
       "command",
       "compiled",
+      "prebuilt",
       "remote"
     ],
     "executables.mcpServers[].launch.args[].kind": [

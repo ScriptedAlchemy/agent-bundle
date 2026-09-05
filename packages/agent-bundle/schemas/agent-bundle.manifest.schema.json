@@ -1372,7 +1372,7 @@
     },
     "mcpServer": {
       "type": "object",
-      "description": "`launch` is present exactly for compiled servers.",
+      "description": "`launch` is present exactly for compiled and prebuilt servers.",
       "additionalProperties": false,
       "properties": {
         "apps": {
@@ -1393,6 +1393,7 @@
           "enum": [
             "command",
             "compiled",
+            "prebuilt",
             "remote"
           ]
         },
@@ -1417,7 +1418,10 @@
       "if": {
         "properties": {
           "kind": {
-            "const": "compiled"
+            "enum": [
+              "compiled",
+              "prebuilt"
+            ]
           }
         }
       },

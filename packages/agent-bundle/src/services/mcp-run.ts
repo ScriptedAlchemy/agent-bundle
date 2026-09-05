@@ -110,11 +110,12 @@ export const resolveMcpStdioLaunch = async (
   }
   switch (row.kind) {
     case 'compiled':
+    case 'prebuilt':
       break;
     case 'command':
     case 'remote':
       throw new Error(
-        `MCP server ${options.server} is a ${row.kind} server; only compiled servers can be run from the artifact.`,
+        `MCP server ${options.server} is a ${row.kind} server; only compiled and prebuilt servers can be run from the artifact.`,
       );
     default: {
       const exhaustive: never = row.kind;
@@ -123,7 +124,7 @@ export const resolveMcpStdioLaunch = async (
   }
   if (row.launch === undefined) {
     throw new Error(
-      `MCP server ${options.server} is a compiled server without a launch record; only compiled servers can be run from the artifact.`,
+      `MCP server ${options.server} is a ${row.kind} server without a launch record; only compiled and prebuilt servers can be run from the artifact.`,
     );
   }
   const runtime = registry.mcpRuntime(host);
