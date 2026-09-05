@@ -49,6 +49,7 @@ import {
   isPreservedRuntimeRoot,
   isRemnantReceipt,
   isRuntimeStateRemnant,
+  listStoredInstallReceipts,
   readInstallReceipt,
   readInstallReceiptFile,
   treeInventory,
@@ -1361,6 +1362,7 @@ const publicHostInventory = async (
   }
   const findings: DoctorFinding[] = [];
   const diagnostics: Diagnostic[] = [];
+  const storedReceipts = await listStoredInstallReceipts(publicHostRoot(host, environment, home));
   if (host === 'claude') {
     if (!Array.isArray(document)) return unknown('not an array');
     for (const row of document) {
@@ -1379,7 +1381,13 @@ const publicHostInventory = async (
       // `enabled: false` is a copy the user switched off (`claude plugin disable`): installed, but no
       // hooks, MCP servers, or skills reach a session until it is enabled again (#476).
       const enabled = typeof row['enabled'] === 'boolean' ? row['enabled'] : undefined;
-      const durableState = await inspectInstalledDurableState(row['installPath'], host, environment, home);
+      const name = row['id'].slice(0, row['id'].indexOf('@') === -1 ? undefined : row['id'].indexOf('@'));
+      const receipt = storedReceipts.receipts.find((stored) =>
+        stored.receipt.plugin === name &&
+        stored.receipt.scope === row['scope'] &&
+        stored.receipt.version === row['version']
+      )?.receipt;
+      const durableState = await inspectInstalledDurableState(row['installPath'], host, environment, home, receipt);
       diagnostics.push(...durableState.diagnostics);
       findings.push({
         durableState: durableState.effective,
@@ -1387,7 +1395,7 @@ const publicHostInventory = async (
         ...(enabled === undefined ? {} : { enabled }),
         entry: `${row['id']} (${row['scope']})`,
         ...(errors.length === 0 ? {} : { errors }),
-        name: row['id'].slice(0, row['id'].indexOf('@') === -1 ? undefined : row['id'].indexOf('@')),
+        name,
         path: row['installPath'],
         ...(durableState.legacy === undefined ? {} : { legacyDurableState: durableState.legacy }),
         state: errors.length > 0 ? 'failed' : enabled === false ? 'disabled' : 'installed',
@@ -1405,7 +1413,11 @@ const publicHostInventory = async (
       const name = separator === -1 ? row['pluginId'] : row['pluginId'].slice(0, separator);
       const marketplace = separator === -1 ? '' : row['pluginId'].slice(separator + 1);
       const path = join(publicHostCacheRoot(host, environment, home), marketplace, name, row['version']);
-      const durableState = await inspectInstalledDurableState(path, host, environment, home);
+      const receipt = storedReceipts.receipts.find((stored) =>
+        stored.receipt.plugin === name &&
+        stored.receipt.version === row['version']
+      )?.receipt;
+      const durableState = await inspectInstalledDurableState(path, host, environment, home, receipt);
       diagnostics.push(...durableState.diagnostics);
       findings.push({
         durableState: durableState.effective,

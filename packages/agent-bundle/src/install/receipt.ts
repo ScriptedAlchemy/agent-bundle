@@ -623,7 +623,6 @@ const receiptFromDocument = (value: unknown): InstallReceipt | undefined => {
     host: record['host'],
     installedAt: record['installedAt'],
     plugin: record['plugin'],
-    ...(state === undefined ? {} : { state }),
     ...(stateRoot === undefined ? {} : { stateRoot }),
     version: record['version'],
     ...(typeof record['webDataRoot'] === 'string' ? { webDataRoot: record['webDataRoot'] } : {}),
@@ -654,6 +653,14 @@ const receiptFromDocument = (value: unknown): InstallReceipt | undefined => {
     if (registration === undefined) return undefined;
     registrations.push(registration);
   }
+  const ownedState = state !== undefined &&
+    state.owner.host === record['host'] &&
+    state.owner.mode === record['mode'] &&
+    state.owner.plugin === record['plugin'] &&
+    state.owner.scope === record['scope'] &&
+    state.owner.projectRoot === record['projectRoot']
+    ? state
+    : undefined;
   return Object.freeze({
     ...base,
     hostDirectories: Object.freeze([...record['hostDirectories']]),
@@ -661,6 +668,7 @@ const receiptFromDocument = (value: unknown): InstallReceipt | undefined => {
     ...(typeof record['projectRoot'] === 'string' ? { projectRoot: record['projectRoot'] } : {}),
     registrations: Object.freeze(registrations),
     scope: record['scope'],
+    ...(ownedState === undefined ? {} : { state: ownedState }),
     updatedAt: record['updatedAt'],
   });
 };

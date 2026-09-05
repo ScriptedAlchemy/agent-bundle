@@ -110,6 +110,23 @@ export const resolveInstalledStateRoots = async (
   });
   const servers = await installedServers(canonicalRoot, host);
   if (servers.length === 0) {
+    const inherited = environment[pluginStateRootEnvAnchor];
+    if (inherited !== undefined && inherited.trim() !== '') {
+      const expanded = expandPluginRoot(inherited, canonicalRoot);
+      if (!/\$\{[^}]*\}/u.test(expanded) && isAbsolute(expanded)) {
+        return Object.freeze([Object.freeze({
+          root: resolve(expanded),
+          server: 'default',
+          source: 'declared' as const,
+          status: 'resolved' as const,
+        })]);
+      }
+      return Object.freeze([Object.freeze({
+        server: 'default',
+        source: 'declared' as const,
+        status: 'unproven' as const,
+      })]);
+    }
     return Object.freeze([Object.freeze({
       root: installedUserDataStateRoot(canonicalRoot, environment, home),
       server: 'default',
@@ -118,7 +135,8 @@ export const resolveInstalledStateRoots = async (
     })]);
   }
   return Object.freeze(servers.map((server) => {
-    const declared = server.environment[pluginStateRootEnvAnchor];
+    const declared = server.environment[pluginStateRootEnvAnchor] ??
+      environment[pluginStateRootEnvAnchor];
     if (declared === undefined || declared.trim() === '') {
       return Object.freeze({
         root: installedUserDataStateRoot(canonicalRoot, environment, home),

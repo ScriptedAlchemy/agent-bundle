@@ -484,22 +484,18 @@ it('never purges a pre-existing declared state root or its unrelated sentinel', 
   }
 });
 
-it('purges recorded derived state despite an uninstall environment change', async () => {
+it('purges only the install-time AGENT_BUNDLE_STATE_ROOT when the uninstall environment changes', async () => {
   const fixture = await createFixture('cursor');
   const cursorRoot = join(fixture.home, '.cursor');
-  const destination = join(cursorRoot, 'plugins', 'local', 'uninstall-fixture');
-  const installEnvironment = { XDG_STATE_HOME: join(fixture.cleanupRoot, 'install-state-home') };
-  const uninstallEnvironment = { XDG_STATE_HOME: join(fixture.cleanupRoot, 'uninstall-state-home') };
-  const recordedRoot = userDataStateRoot(destination, installEnvironment, fixture.home);
-  const unrelatedRoot = userDataStateRoot(destination, uninstallEnvironment, fixture.home);
+  const recordedRoot = join(fixture.cleanupRoot, 'install-state-root');
+  const unrelatedRoot = join(fixture.cleanupRoot, 'uninstall-state-root');
+  const installEnvironment = { AGENT_BUNDLE_STATE_ROOT: recordedRoot };
+  const uninstallEnvironment = { AGENT_BUNDLE_STATE_ROOT: unrelatedRoot };
   const sentinel = join(unrelatedRoot, 'unrelated.txt');
   try {
     await mkdir(cursorRoot, { recursive: true });
     await installBundle({ environment: installEnvironment, from: fixture.bundleRoot, home: fixture.home, host: 'cursor' });
-    await Promise.all([
-      mkdir(recordedRoot, { recursive: true }),
-      mkdir(unrelatedRoot, { recursive: true }),
-    ]);
+    await mkdir(unrelatedRoot, { recursive: true });
     await Promise.all([
       writeFile(join(recordedRoot, 'plugin.sqlite'), 'owned\n'),
       writeFile(sentinel, 'keep\n'),
@@ -606,6 +602,59 @@ it('retains a marked root when its marker is replaced by another install identit
     expect(await readFile(sentinel, 'utf8')).toBe('keep\n');
   } finally {
     await rm(fixture.cleanupRoot, { force: true, recursive: true });
+  }
+});
+
+it('lets only the owning installation purge a root shared by two installs', async () => {
+  const owner = await createFixture('cursor');
+  const observer = await createFixture('cursor');
+  const sharedRoot = join(owner.cleanupRoot, 'shared-state');
+  const manifest = {
+    mcpServers: {
+      stateful: {
+        command: 'node',
+        env: { AGENT_BUNDLE_STATE_ROOT: sharedRoot },
+      },
+    },
+  };
+  try {
+    await Promise.all([
+      mkdir(join(owner.home, '.cursor'), { recursive: true }),
+      mkdir(join(observer.home, '.cursor'), { recursive: true }),
+      writeJson(join(owner.bundleRoot, '.cursor-plugin/mcp.json'), manifest),
+      writeJson(join(observer.bundleRoot, '.cursor-plugin/mcp.json'), manifest),
+    ]);
+    await installBundle({ from: owner.bundleRoot, home: owner.home, host: 'cursor' });
+    await installBundle({ from: observer.bundleRoot, home: observer.home, host: 'cursor' });
+    const observerRoot = join(observer.home, '.cursor', 'plugins', 'local', 'uninstall-fixture');
+    expect((await readInstallReceipt(observerRoot))?.state?.roots[0]?.ownership).toEqual({
+      kind: 'unowned',
+      reason: 'foreign-marker',
+    });
+    const sentinel = join(sharedRoot, 'sentinel.txt');
+    await writeFile(sentinel, 'keep\n');
+    const retained = await uninstallBundle({
+      confirmPurge: true,
+      from: observer.bundleRoot,
+      home: observer.home,
+      host: 'cursor',
+      purgeData: true,
+    });
+    expect(retained.data.retained).toEqual([{ path: sharedRoot, reason: 'foreign-marker' }]);
+    expect(await readFile(sentinel, 'utf8')).toBe('keep\n');
+    await uninstallBundle({
+      confirmPurge: true,
+      from: owner.bundleRoot,
+      home: owner.home,
+      host: 'cursor',
+      purgeData: true,
+    });
+    await expect(readdir(sharedRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await Promise.all([
+      rm(owner.cleanupRoot, { force: true, recursive: true }),
+      rm(observer.cleanupRoot, { force: true, recursive: true }),
+    ]);
   }
 });
 
