@@ -239,6 +239,14 @@ describe('declarationImportViolations', () => {
     // A string or conditions-only `exports` serves the root alone.
     expect(check('./dist/index.js', ['self', 'self/routes'])).toEqual(['self/routes']);
     expect(check({ types: './dist/index.d.ts', import: './dist/index.js' }, ['self', 'self/routes'])).toEqual(['self/routes']);
+    // Conditions: a target no active condition selects is not served; the
+    // first selected condition wins even when it is `null`, whether nested or
+    // not; an array skips `null` entries and keeps looking.
+    expect(check({ '.': { browser: './dist/browser.js' } }, ['self'])).toEqual(['self']);
+    expect(check({ '.': { import: null, default: './dist/index.js' } }, ['self'])).toEqual(['self']);
+    expect(check({ '.': { types: { node: null }, default: './dist/index.js' } }, ['self'])).toEqual(['self']);
+    expect(check({ '.': [null, './dist/index.js'] }, ['self'])).toEqual([]);
+    expect(check({ browser: './dist/browser.js' }, ['self'])).toEqual(['self']);
     // No `exports` at all: every file resolves by path.
     expect(check(undefined, ['self', 'self/dist/anything.js'])).toEqual([]);
   });
@@ -253,6 +261,8 @@ describe('declarationImportViolations', () => {
           '#browser-only': { browser: './dist/browser.js' },
           '#dev': 'zod',
           '#blocked': null,
+          '#blocked-condition': { import: null, default: './dist/pkg.js' },
+          '#array-fallback': [null, './dist/pkg.js'],
         },
       },
       packedPaths: [...packedPaths, 'dist/internal/thing.d.ts', 'dist/pkg.d.ts'],
@@ -262,10 +272,12 @@ describe('declarationImportViolations', () => {
           text: [
             "import type { Thing } from '#internal/thing';",
             "import type { Pkg } from '#pkg';",
+            "import type { Fallback } from '#array-fallback';",
             "import type { Missing } from '#internal/missing';",
             "import type { Browser } from '#browser-only';",
             "import type { Dev } from '#dev';",
             "import type { Blocked } from '#blocked';",
+            "import type { BlockedCondition } from '#blocked-condition';",
             "import type { Unmapped } from '#nope';",
           ].join('\n'),
         },
@@ -277,6 +289,7 @@ describe('declarationImportViolations', () => {
       'subpath-import #browser-only',
       'dev-dependency #dev',
       'subpath-import #blocked',
+      'subpath-import #blocked-condition',
       'subpath-import #nope',
     ]);
     expect(report.errors[0]?.message).toBe(

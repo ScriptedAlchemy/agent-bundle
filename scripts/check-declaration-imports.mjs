@@ -266,32 +266,50 @@ const resolveSubpathMap = (map, subpath) => {
 /** Conditions a Node ESM consumer's type checker matches, in the object order Node honours. */
 const activeConditions = new Set(['types', 'import', 'node', 'default']);
 
-/** The string a target resolves to under the active conditions, or `undefined` when it resolves to nothing. */
+/**
+ * The string a target resolves to under the active conditions; `null` when
+ * the selected branch blocks it, `undefined` when nothing is selected. As in
+ * Node, a conditions object stops at the first active condition even when its
+ * value is `null`, while an array skips `null` entries and keeps looking.
+ */
 const targetString = (target) => {
-  if (typeof target === 'string') return target;
-  if (Array.isArray(target)) return target.map(targetString).find((entry) => entry !== undefined);
+  if (target === null || typeof target === 'string') return target;
+  if (Array.isArray(target)) {
+    let blocked = false;
+    for (const entry of target) {
+      const resolved = targetString(entry);
+      if (typeof resolved === 'string') return resolved;
+      if (resolved === null) blocked = true;
+    }
+    return blocked ? null : undefined;
+  }
   if (!isRecord(target)) return undefined;
-  return Object.entries(target)
-    .filter(([condition]) => activeConditions.has(condition))
-    .map(([, value]) => targetString(value))
-    .find((entry) => entry !== undefined);
+  for (const [condition, value] of Object.entries(target)) {
+    if (!activeConditions.has(condition)) continue;
+    const resolved = targetString(value);
+    if (resolved !== undefined) return resolved;
+  }
+  return undefined;
 };
+
+/** Whether a resolved `exports`/`imports` target names a file under the active conditions. */
+const resolvesToFile = (target) => typeof targetString(target) === 'string';
 
 /**
  * Whether the package's own `exports` serves `subpath` (`.` or `./x`): a
- * string or conditions-object `exports` serves only `.`; a subpath map is
- * resolved like Node does, so a `null` entry blocks what a broader pattern
- * would otherwise expose; a manifest without `exports` serves any file by
- * path.
+ * string, array, or conditions-object `exports` serves only `.`; a subpath
+ * map is resolved like Node does, so a `null` entry blocks what a broader
+ * pattern would otherwise expose and a target no active condition selects is
+ * not served; a manifest without `exports` serves any file by path.
  */
 const exportsSubpath = (manifest, subpath) => {
   const { exports } = manifest;
   if (exports === undefined || exports === null) return true;
-  if (typeof exports === 'string' || Array.isArray(exports)) return subpath === '.';
+  if (typeof exports === 'string' || Array.isArray(exports)) return subpath === '.' && resolvesToFile(exports);
   if (!isRecord(exports)) return false;
-  if (!Object.keys(exports).some((key) => key.startsWith('.'))) return subpath === '.';
+  if (!Object.keys(exports).some((key) => key.startsWith('.'))) return subpath === '.' && resolvesToFile(exports);
   const resolved = resolveSubpathMap(exports, subpath);
-  return resolved !== undefined && resolved.target !== null;
+  return resolved !== undefined && resolvesToFile(resolved.target);
 };
 
 /**
@@ -302,7 +320,8 @@ const exportsSubpath = (manifest, subpath) => {
 const importsTarget = (manifest, specifier) => {
   if (!isRecord(manifest.imports)) return undefined;
   const resolved = resolveSubpathMap(manifest.imports, specifier);
-  return resolved === undefined ? undefined : targetString(resolved.target);
+  const mapped = resolved === undefined ? undefined : targetString(resolved.target);
+  return typeof mapped === 'string' ? mapped : undefined;
 };
 
 /**
