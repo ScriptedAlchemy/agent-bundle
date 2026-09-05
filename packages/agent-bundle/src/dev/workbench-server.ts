@@ -76,6 +76,8 @@ import {
 } from './runtime-provider.ts';
 import { ScriptPlaygroundService } from './playground/script-playground-service.ts';
 import { SkillDocumentService } from './skill-document-service.ts';
+import { TraceHub } from './trace/trace-hub.ts';
+import { attachProjectEventTrace } from './trace/trace-project-events.ts';
 import { createWorkbenchAssetSource } from './workbench-assets.ts';
 import type { Invalidation, ProjectStatus } from './types.ts';
 import { deepFreeze } from '../core/freeze.ts';
@@ -441,6 +443,7 @@ export interface DevServerRuntimeLifecycleResources {
 export interface DevServerLifecycleOptions {
   readonly coordinator: Closeable;
   readonly detachProjectLogs?: () => void;
+  readonly detachProjectTrace?: () => void;
   readonly epochAdoption?: Closeable;
   readonly hostInstalls?: Closeable;
   readonly logs?: DevLogService;
@@ -449,12 +452,14 @@ export interface DevServerLifecycleOptions {
   readonly mcpSessions: Closeable;
   readonly playground?: Closeable;
   readonly runtimeResources?: DevServerRuntimeLifecycleResources;
+  readonly trace?: TraceHub;
 }
 
 /** Closes persistent MCP state alongside the coordinator, preserving all cleanup failures. */
 export const closeDevServerLifecycle = async ({
   coordinator,
   detachProjectLogs,
+  detachProjectTrace,
   epochAdoption,
   hostInstalls,
   inspector,
@@ -463,6 +468,7 @@ export const closeDevServerLifecycle = async ({
   mcpSessions,
   playground,
   runtimeResources,
+  trace,
 }: DevServerLifecycleOptions): Promise<void> => {
   // ForegroundServer owns the Agent API admission gate. This lifecycle owns
   // only the shared services that are released after foreground routing ends.
@@ -495,6 +501,8 @@ export const closeDevServerLifecycle = async ({
   }
   try { detachProjectLogs?.(); }
   catch { /* The subscription is observability-only and cannot hold shutdown. */ }
+  try { detachProjectTrace?.(); }
+  catch { /* The subscription is observability-only and cannot hold shutdown. */ }
   logs?.log({
     details: { failures: failures.length },
     kind: 'dev.shutdown.completed',
@@ -503,6 +511,7 @@ export const closeDevServerLifecycle = async ({
     summary: failures.length === 0 ? 'Development workbench shutdown completed.' : 'Development workbench shutdown completed with failures.',
   });
   if (logs !== undefined) await closeResource('logs', logs);
+  trace?.close();
   if (failures.length > 0) throw new DevServerLifecycleCloseError(failures);
 };
 
@@ -516,6 +525,8 @@ const withMcpSessionLifecycle = (
   playground: Closeable,
   logs: DevLogService,
   detachProjectLogs: () => void,
+  trace: TraceHub,
+  detachProjectTrace: () => void,
   inspector: Closeable,
   epochAdoption: EpochAdoptionPolicy,
   hostInstalls?: DevHostInstallManager,
@@ -525,6 +536,7 @@ const withMcpSessionLifecycle = (
     return closeDevServerLifecycle({
       coordinator,
       detachProjectLogs,
+      detachProjectTrace,
       epochAdoption,
       hostInstalls,
       inspector,
@@ -533,6 +545,7 @@ const withMcpSessionLifecycle = (
       mcpSessions,
       playground,
       runtimeResources: { clientSurfaces, runtime },
+      trace,
     });
   },
   publishServerUrl: (url: string) => coordinator.publishServerUrl(url),
@@ -596,8 +609,10 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
   const openBrowser = options.openBrowser ?? openInBrowser;
   const eventHub = new ProjectEventHub();
   const epochStore = new EpochStore({ projectRoot: root });
-  const logs = new DevLogService({ projectRoot: root });
+  const traceHub = new TraceHub({ projectRoot: root });
+  const logs = new DevLogService({ projectRoot: root, trace: traceHub });
   const detachProjectLogs = attachProjectEventLogs(logs, eventHub);
+  const detachProjectTrace = attachProjectEventTrace(traceHub, eventHub);
   const projectService = new ProjectService({
     includeDevRuntime: true,
     logger: createProjectDevLogger(logs),
@@ -661,6 +676,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
       provider,
       providerLoadError,
       storageRoot: join(root, '.agent-bundle', 'runtime'),
+      trace: traceHub,
     });
   }
   const appPreviews = new DeferredMcpAppPreviewService();
@@ -773,6 +789,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
     projectRoot: root,
     registry,
     platformRuntime,
+    trace: traceHub,
     traceSink: createMcpDevLogTraceSink(logs),
   });
   const epochAdoption = new EpochAdoptionPolicy({
@@ -846,7 +863,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
   const artifacts = new ArtifactInspectionService(epochStore, registry);
   const evals = new EvalService({ logger: logs, projectRoot: root, registry, platformRuntime });
   // The resolved root is the project's stable identity: a store copied elsewhere must not reopen.
-  const trace = new PlaygroundService({
+  const playgroundTrace = new PlaygroundService({
     logger: logs,
     projectId: root,
     projectRoot: root,
@@ -861,7 +878,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
     native: new NativePlaygroundService({ projectRoot: root, platformRuntime }),
     scripts: scriptPlayground,
     skillDocuments,
-    trace,
+    trace: playgroundTrace,
   });
   const inspector = createInspectorLauncher({ projectRoot: root });
   // The manifest is a projection of the prepared project's own compiler pass;
@@ -939,6 +956,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
     },
     registry,
     scripts: scriptPlayground,
+    trace: traceHub,
   });
   const agentApi = agentApiEnabled
     ? new AgentApi({
@@ -972,6 +990,8 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
       playground,
       logs,
       detachProjectLogs,
+      traceHub,
+      detachProjectTrace,
       inspector,
       epochAdoption,
       hostInstalls,
@@ -996,6 +1016,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
     routeInvocations,
     ...(runtime === undefined ? {} : { runtime }),
     skillDocuments,
+    trace: traceHub,
     ...(options.workbenchDevOrigins === undefined || options.workbenchDevOrigins.length === 0
       ? {}
       : { workbenchDevOrigins: options.workbenchDevOrigins }),

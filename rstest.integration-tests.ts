@@ -86,6 +86,7 @@ export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/target-hook-contract.test.ts',
   'packages/agent-bundle/tests/target-mcp-runtime.test.ts',
   'packages/agent-bundle/tests/test-browser-rstest.test.ts',
+  'packages/agent-bundle/tests/trace-dev-server.test.ts',
   'packages/agent-bundle/tests/workbench-surface-dev-server.test.ts',
   'packages/agent-bundle/tests/worktree-proximity-journeys.test.ts',
   'packages/rsc-markdown-stream/tests/react-server.test.ts',
