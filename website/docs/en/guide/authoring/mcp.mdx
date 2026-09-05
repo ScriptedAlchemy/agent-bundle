@@ -67,9 +67,10 @@ emitted as `prefixItems` plus `items` set to the union of the positional schemas
 arguments and `structuredContent` with draft-07 keyword semantics (Cursor, which otherwise
 rejects a valid tuple with `MCP error -32602 … boolean schema is false`) accepts everything a
 2020-12 validator accepts. A `.rest()` tuple is the one place 2020-12 precision is loosened: its
-rest positions may also match a prefix schema. Everything else zod emits — `$defs`/`$ref`,
-`propertyNames`, `const`, numeric `exclusiveMinimum`, and so on — already validates the same way
-under both dialects and passes through untouched.
+rest positions may also match a prefix schema. Everything else zod emits passes through
+untouched: `$defs`/`$ref`, `propertyNames`, `const`, numeric `exclusiveMinimum`, and so on
+validate the same way under both dialects, and a 2020-12-only keyword such as
+`unevaluatedProperties` is ignored by a lax draft-07 validator rather than misapplied.
 
 A route may re-export its component and schemas from another module. This is how one tool is
 placed on two generated servers when only `config` differs between the placements — an MCP App
