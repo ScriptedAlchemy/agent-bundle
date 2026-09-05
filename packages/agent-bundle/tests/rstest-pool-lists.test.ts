@@ -1,5 +1,5 @@
-import { globSync, statSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { globSync, readdirSync, statSync } from 'node:fs';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from '@rstest/core';
@@ -18,7 +18,12 @@ import * as poolLists from '../../../rstest.integration-tests.ts';
  */
 const workspaceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 
+/** Workspace-relative, `/`-separated, whatever the platform hands back. */
+const toPosix = (path: string): string => path.split(sep).join('/');
+
 const isGlob = (entry: string): boolean => /[*?[\]{}]/u.test(entry);
+
+const isTestFileName = (name: string): boolean => /\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(name);
 
 const isFile = (entry: string): boolean => {
   try {
@@ -28,16 +33,35 @@ const isFile = (entry: string): boolean => {
   }
 };
 
-/** Rstest's default exclusions, so a dependency's or build output's tests never count. */
-const isBuildOrDependencyPath = (path: string): boolean => /(?:^|\/)(?:node_modules|dist)(?:\/|$)/u.test(path);
+/** What Rstest's default `exclude` prunes, so a dependency's or build output's tests never count. */
+const prunedSegments: ReadonlySet<string> = new Set(['node_modules', 'dist', '.idea', '.git', '.cache', '.output', '.temp']);
+
+const isPrunedPath = (path: string): boolean => toPosix(path).split('/').some((segment) => prunedSegments.has(segment));
 
 const matchingFiles = (pattern: string): readonly string[] => globSync(pattern, {
   cwd: workspaceRoot,
-  exclude: (path: string) => isBuildOrDependencyPath(path),
-}).filter(isFile).sort();
+  exclude: (path: string) => isPrunedPath(path),
+}).map(toPosix).filter(isFile).sort();
 
 /** Files a pool entry collects: the entry itself when literal, its matches when a glob. */
 const collectedFiles = (entry: string): readonly string[] => (isGlob(entry) ? matchingFiles(entry) : [entry]);
+
+/**
+ * Rstest globs with `dot: true`; Node's `fs.globSync` never enters or returns
+ * a dot path and has no option to. The two views agree exactly as long as no
+ * test file lives under a hidden path, so this walk — which does see dot
+ * paths, and prunes what Rstest prunes — reports every test file that breaks
+ * the agreement.
+ */
+const hiddenTestFiles = (directory: string): readonly string[] => readdirSync(directory, { withFileTypes: true })
+  .flatMap((entry) => {
+    if (prunedSegments.has(entry.name)) return [];
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) return hiddenTestFiles(path);
+    if (!entry.isFile() || !isTestFileName(entry.name)) return [];
+    const relativePath = toPosix(relative(workspaceRoot, path));
+    return relativePath.split('/').some((segment) => segment.startsWith('.')) ? [relativePath] : [];
+  });
 
 const { workspaceTestFileGlob, ...exportedLists } = poolLists;
 const lists = Object.entries(exportedLists) as ReadonlyArray<readonly [string, readonly string[]]>;
@@ -50,6 +74,10 @@ it('exports the include glob plus non-empty string lists, so every pool below is
     expect(entries.length, `${name} is empty`).toBeGreaterThan(0);
     expect(entries.every((entry) => typeof entry === 'string'), `${name} holds a non-string entry`).toBe(true);
   }
+});
+
+it('keeps every test file on a visible path, so the glob checks below see what Rstest collects', () => {
+  expect(hiddenTestFiles(join(workspaceRoot, 'packages')), 'test files under a hidden path (Rstest collects them; this guard cannot)').toEqual([]);
 });
 
 describe.each(lists)('%s', (name, entries) => {
