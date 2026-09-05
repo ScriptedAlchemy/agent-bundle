@@ -39,7 +39,7 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 | `doctor --from <root>` | 与 `install` 相同的身份、固定路径文件集合与内容哈希读取，按被检查的宿主逐一进行；它对树运行的静态校验（`AB7319`）继续按投影进行。 |
 | `serve-app`、`mcp list` / `invoke` / `run` | 从 `executables.mcpServers[]` 取服务器编译后的 `entry` 及其 `apps[]`；省略 `--target` 时从 `projections[]` 选出宿主。 |
 | `hooks list` / `simulate` | `executables.hooks[]`——可被模拟的编译器 wrapper。 |
-| `inspect --json` | 当产物输出位置存在已构建的清单时，追加一份 `output.manifest` 摘要——投影与可执行文件——因此 JSON 消费者无需第二次探测。 |
+| `inspect --json` | 当产物输出位置存在已构建的清单时，追加一份 `output.manifest` 摘要——投影与可执行文件——因此 JSON 消费者无需第二次探测。`inspect --artifact <root>` 通过该文件读取裸的复合根，并打印 Workbench 渲染的同一份 `application` 投影。 |
 | `eval --artifact`、`agent-bundle/test` 的已安装宿主证明 | 用 `projections[]` 与 `executables.hooks[]` 取代任何宿主文档。 |
 | Workbench 产物页 | 通过 `ArtifactInspection.application` 上的 application-explorer 投影读取清单：应用身份、宿主及其文档、合并后的服务器路由与可执行信息、事件与钩子、CLI、脚本和分发信息。输出文件树仍是独立的检查证据；浏览器不会把清单原始形状用作应用树模型。 |
 | `validate --artifact`、`build` | 整份文档：存在性与规范字节（`AB6000`、`AB6001`）、`files[]` 与树的比对（`AB6004`），以及基于 `executables.hooks[]` 的钩子一致性（`AB6018`）。 |

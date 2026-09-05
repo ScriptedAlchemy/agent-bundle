@@ -632,6 +632,13 @@ it('includes a built-manifest summary on inspect --json after a build, and omits
     const human = await runSourceCliWithOutput(['inspect', '--root', project.root]);
     expect(human).toMatchObject({ code: 0, stderr: '' });
     expect(human.stdout).toContain('Built manifest: v2 cli-fixture (codex, portable)');
+
+    const artifact = await runSourceCliWithOutput([
+      'inspect', '--artifact', join(project.root, 'dist'), '--json',
+    ]);
+    expect(artifact).toMatchObject({ code: 0, stderr: '' });
+    expect(JSON.parse(artifact.stdout).manifest.application.id).toBe('plugin:cli-fixture');
+    expect(JSON.parse(artifact.stdout).application.identity.id).toBe('plugin:cli-fixture');
   } finally {
     await rm(resolve(project.root, '..'), { force: true, recursive: true });
   }

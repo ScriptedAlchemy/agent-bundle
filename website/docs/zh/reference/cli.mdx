@@ -231,7 +231,9 @@ keep-data 选项）。相对包的安装器 bin 接受带同样标志的 `uninst
 ## inspect
 
 `inspect` 接受 `--root`、`--config`、`--mode`、`--json` 与单个 `--target <target>` 过滤器
-（不可重复），外加**至多一个**聚焦标志：
+（不可重复），外加**至多一个**聚焦标志。`--artifact <path>` 改为通过已复制构建产物根目录上的
+`agent-bundle.manifest.json` 检查该根，而不是检查项目源码树；它与 `--root`、`--config` 互斥
+（用法错误）。清单缺失或非规范时以 `AB7001` 失败。
 
 | 标志 | 聚焦于 |
 | --- | --- |
@@ -246,6 +248,11 @@ keep-data 选项）。相对包的安装器 bin 接受带同样标志的 `uninst
 带 `--json` 时，只要产物输出位置存在已构建的 `agent-bundle.manifest.json`，文档就会多出一份
 `output.manifest` 摘要——已构建的 `projections[]` 与 `executables`——因此 JSON 消费者无需自行探测根目录就能
 看到上一次构建输出了什么。源码侧的模型与计划视图不变。
+
+`inspect --artifact <path>` 不加载项目配置。`--json` 打印 `{ manifest, application }`：与
+`output.manifest` 相同的 `InspectManifestSummary`，以及 Workbench 渲染的同一份 `application`
+投影（`applicationExplorerFor`）。不带 `--json` 时，人类可读输出是应用 id/名称/版本、带
+`builtInHost` 的投影、带工具计数的服务器、按宿主分组的钩子、以及 bins 与 scripts。
 
 每份检查计划都会以规范组件类型报告每个组件——`agent`、`cli`、`command`、`event-route`、`hook`、`lsp`、
 `mcp-app`、`mcp-server`、`native-diagnostics`、`native-extension`、`rule`、`script`、`skill`（来自

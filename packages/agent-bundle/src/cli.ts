@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { Command, CommanderError, InvalidArgumentError } from 'commander';
+import { Command, CommanderError, InvalidArgumentError, Option } from 'commander';
 import type { Layer } from 'effect';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -19,6 +19,7 @@ import type {
   build,
   compareEvals,
   inspect,
+  inspectArtifact,
   prepack,
   runEvals,
   serveApp,
@@ -158,6 +159,7 @@ interface EvalCommandOptions extends SourceCommandOptions {
 }
 
 interface InspectCommandOptions {
+  readonly artifact?: string;
   readonly bundler?: boolean;
   readonly config?: string;
   readonly hooks?: boolean;
@@ -295,6 +297,7 @@ const configureInspectOptions = (command: Command): Command => command
   .option('--config <path>', 'Configuration file relative to --root')
   .option('--mode <mode>', 'Configuration mode', 'production')
   .option('--target <target>', 'Filter inspection plans to one target')
+  .addOption(new Option('--artifact <path>', 'Inspect exactly this built artifact').conflicts(['root', 'config']))
   .option('--json', 'Write one machine-readable JSON document');
 
 const configureArtifactOptions = (
@@ -571,6 +574,31 @@ const humanInspect = (result: Awaited<ReturnType<typeof inspect>>): string => {
   const built = result.output.manifest;
   if (built !== undefined) out.push(formatBuiltManifest(built));
   return out.join('');
+};
+
+const humanInspectArtifact = (result: Awaited<ReturnType<typeof inspectArtifact>>): string => {
+  const { application, manifest } = result;
+  const projections = manifest.projections
+    .map((projection) => projection.builtInHost === undefined || projection.builtInHost === projection.host
+      ? projection.host
+      : `${projection.host} (${projection.builtInHost})`)
+    .join(', ');
+  const servers = application.servers
+    .map((server) => `${server.name} (${String(server.tools.length)} tool${server.tools.length === 1 ? '' : 's'})`)
+    .join(', ');
+  const hooks = application.hooks
+    .map((group) => `${group.host}: ${String(group.hooks.length)}`)
+    .join(', ');
+  const bins = application.cli?.bins.map((bin) => bin.name).join(', ') ?? '';
+  const scripts = application.scripts.map((script) => script.name).join(', ');
+  return [
+    `Application: ${application.identity.name} (${application.identity.id}) ${application.identity.version}\n`,
+    `Projections: ${projections}\n`,
+    servers.length === 0 ? '' : `Servers: ${servers}\n`,
+    hooks.length === 0 ? '' : `Hooks: ${hooks}\n`,
+    bins.length === 0 ? '' : `Bins: ${bins}\n`,
+    scripts.length === 0 ? '' : `Scripts: ${scripts}\n`,
+  ].join('');
 };
 
 const formatBuiltManifest = (built: InspectManifestOutput): string => {
@@ -1052,6 +1080,12 @@ export const runCli = async (
     .option('--skills', 'Include the skill focus')
     .option('--state', 'Include the state lifetime focus');
   inspectCommand.action(async (options: InspectCommandOptions) => {
+    if (options.artifact !== undefined) {
+      const { inspectArtifact: inspectBuiltArtifact } = await import('./api.ts');
+      const result = await inspectBuiltArtifact(options.artifact);
+      await (options.json === true ? machine(result) : show(humanInspectArtifact(result)));
+      return;
+    }
     const focuses = [
       options.bundler,
       options.hooks,

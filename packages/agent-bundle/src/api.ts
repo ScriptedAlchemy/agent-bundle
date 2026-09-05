@@ -160,6 +160,7 @@ import { readArtifactManifest, type ArtifactManifestReadResult } from './build/m
 export { readArtifactManifest, type ArtifactManifestReadResult } from './build/manifest-file.ts';
 export {
   inspectManifestOutput,
+  inspectManifestSummary,
   resolveManifestHost,
   resolveManifestHostFromRoot,
   type InspectManifestInvalid,
@@ -278,6 +279,7 @@ export type {
 
 export { HookService } from './services/hook-service.ts';
 export type { HookListOptions, HookSimulationOptions } from './services/hook-service.ts';
+export { inspectArtifactRoot as inspectArtifact, type InspectArtifactResult } from './services/inspect-artifact.ts';
 export { createDefaultRegistry, TargetRegistry } from './adapters/registry.ts';
 export { CapabilityStateError, capabilityStateNames, isCapabilityState } from './core/capabilities.ts';
 export type {
