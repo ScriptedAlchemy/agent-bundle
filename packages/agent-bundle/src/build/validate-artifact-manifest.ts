@@ -206,8 +206,14 @@ const mcpDocumentDiagnostics = (
     .filter((server) => server.target === host)
     .map((server) => [server.name, server]));
   const listed = new Set(rows.map((row) => row.name));
+  // Every row must be in the host document. The converse — every declared
+  // server has a row — holds for the shipped hosts, whose documents the
+  // framework derives from the model; an advanced-registry adapter writes its
+  // own document and may declare servers the model never named (#578: judged
+  // by adapter identity, not by name).
+  const derivedDocument = options.registry.builtInHost(host) !== undefined;
   for (const [name] of declared) {
-    if (listed.has(name)) continue;
+    if (!derivedDocument || listed.has(name)) continue;
     diagnostics.push(diagnostic(
       'AB6039',
       `Manifest executables.mcpServers has no row listing host ${JSON.stringify(host)} for MCP server ${JSON.stringify(name)} (${JSON.stringify(documentPath)} declares it).`,

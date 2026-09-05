@@ -644,6 +644,6 @@ describe('mcp run', () => {
       root,
       server: 'remote',
       target: 'portable',
-    })).rejects.toThrow(/not a stdio server/u);
+    })).rejects.toThrow(/is a remote server/u);
   }, 120_000);
 });
