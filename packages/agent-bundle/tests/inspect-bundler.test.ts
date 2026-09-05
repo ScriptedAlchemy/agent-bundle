@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -34,6 +34,9 @@ const createProject = async (): Promise<string> => {
   await Promise.all([
     symlink(join(workspaceNodeModules, 'typescript'), join(root, 'node_modules', 'typescript'), 'dir'),
     writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
+    writeFile(join(root, 'tsconfig.json'), JSON.stringify({
+      compilerOptions: { experimentalDecorators: true },
+    })),
     writeFile(
       join(root, 'agent-bundle.config.ts'),
       [
@@ -206,6 +209,12 @@ it('renders the lowered Rspack configuration of every compiled output with the t
   const lib = entryOf(entries, 'lib', 'index');
   expect(lib.outputPath).toBe('dist/index.js');
   expect(loweredConfig(lib).resolve?.tsConfig).toEqual({ configFile: '<generated-dts-tsconfig>', references: 'auto' });
+  const legacyDecorators = (entry: BundlerInspectionEntry): boolean =>
+    stableJson(entry.config).includes('"legacyDecorator":true');
+  expect(legacyDecorators(lib)).toBe(true);
+  expect(legacyDecorators(lib)).toBe(legacyDecorators(script));
+  expect((await readdir(join(root, 'node_modules')))
+    .filter((name) => name.startsWith('.agent-bundle-dts-'))).toEqual([]);
 
   const app = entryOf(entries, 'mcp-app', 'dashboard');
   expect(app).toMatchObject({
@@ -279,6 +288,8 @@ it('reports a tools hatch the lowering refuses as an invalid inspection naming t
     code: 'AB7001',
     message: expect.stringContaining('The tools escape hatch must not alias the reserved specifier matched by "agent-bundle/meta"'),
   })]);
+  expect((await readdir(join(root, 'node_modules')))
+    .filter((name) => name.startsWith('.agent-bundle-dts-'))).toEqual([]);
 });
 
 it('inspects the per-host preflight wrapper under the composite identity', async () => {

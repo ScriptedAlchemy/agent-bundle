@@ -1,4 +1,4 @@
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 
 import {
   eventIpcRuntimeSpecifier,
@@ -30,7 +30,7 @@ import type { CompositePlan } from './compose.ts';
 import { eventRuntimeHosting, eventRuntimeModulePath, planCompiledMcpEntries, selectedServerHosts } from './entries.ts';
 import { inspectMcpAppsConfig, planCompiledMcpApps } from './mcp-apps.ts';
 import { projectMeta } from './meta.ts';
-import { planPackageEntries } from './package-build.ts';
+import { planPackageEntries, synthesizeDtsTsconfig } from './package-build.ts';
 import { inspectRslibEntries, type RslibEntry } from './rslib.ts';
 import { deepFreeze } from '../core/freeze.ts';
 import type { AgentBundleMeta } from '../meta.ts';
@@ -313,11 +313,13 @@ const hookEntries = (entries: readonly TargetHookEntry[], target: string): reado
     target,
   }));
 
-const packageBuildEntries = async (model: NormalizedPlugin): Promise<readonly PlannedRslibInspection[]> => {
+const packageBuildEntries = async (
+  model: NormalizedPlugin,
+  dtsTsconfigPath: string | undefined,
+): Promise<readonly PlannedRslibInspection[]> => {
   const packageBuild = model.packageBuild;
   if (packageBuild === undefined) return [];
-  const dtsTsconfig = packageBuild.lib?.dts === true ? generatedDtsTsconfigToken : undefined;
-  const planned = await planPackageEntries(model, dtsTsconfig);
+  const planned = await planPackageEntries(model, dtsTsconfigPath);
   return planned.map((entry) => {
     const bin = entry.executable;
     return {
@@ -410,42 +412,52 @@ export const composeBundlerInspection = async (options: {
 }): Promise<BundlerInspection> => {
   const { composite, model, projectRoot, tools } = options;
   const meta = projectMeta(model.metadata);
+  const packageLib = model.packageBuild?.lib;
+  const dtsTsconfig = packageLib?.dts === true
+    ? await synthesizeDtsTsconfig({ projectRoot, sourceDir: dirname(packageLib.source) })
+    : undefined;
   // The output roots are absolute, as the build passes them and as the
   // resolved-config assertions expect them; the rendering folds the token
   // root back to its token.
   const artifactOutputRoot = resolve(projectRoot, artifactOutputToken);
   const tokens: PathTokens = [
     [artifactOutputRoot, artifactOutputToken],
-    [resolve(projectRoot, generatedDtsTsconfigToken), generatedDtsTsconfigToken],
-  ];
-  // The artifact surfaces ride one Rslib run, as the build stages them; the
-  // package build is its own run with its own output root.
-  const artifactSurfaces: readonly PlannedRslibInspection[] = [
-    ...(composite.cliBin ? cliBinEntries(model, artifactOutputRoot, composite.identity) : []),
-    ...(await scriptEntries(model, composite)),
-    ...(await mcpEntryEntries(model, composite, artifactOutputRoot)),
-    ...hookEntries(composite.hookEntries, composite.identity),
-  ];
-  const entries: BundlerInspectionEntry[] = [
-    ...(await loweredRslibEntries(artifactSurfaces, {
-      meta,
-      outputRoot: artifactOutputRoot,
-      projectRoot,
-      tokens,
-      ...(tools === undefined ? {} : { tools }),
-    })),
-    ...(await mcpAppEntries(model, projectRoot, composite, artifactOutputRoot, tokens, tools)),
-    ...(model.packageBuild === undefined
+    ...(dtsTsconfig === undefined
       ? []
-      : await loweredRslibEntries(await packageBuildEntries(model), {
+      : [[dtsTsconfig.path, generatedDtsTsconfigToken] as const]),
+  ];
+  try {
+    // The artifact surfaces ride one Rslib run, as the build stages them; the
+    // package build is its own run with its own output root.
+    const artifactSurfaces: readonly PlannedRslibInspection[] = [
+      ...(composite.cliBin ? cliBinEntries(model, artifactOutputRoot, composite.identity) : []),
+      ...(await scriptEntries(model, composite)),
+      ...(await mcpEntryEntries(model, composite, artifactOutputRoot)),
+      ...hookEntries(composite.hookEntries, composite.identity),
+    ];
+    const entries: BundlerInspectionEntry[] = [
+      ...(await loweredRslibEntries(artifactSurfaces, {
         meta,
-        outputRoot: resolve(projectRoot, model.packageBuild.outputDir),
+        outputRoot: artifactOutputRoot,
         projectRoot,
         tokens,
         ...(tools === undefined ? {} : { tools }),
       })),
-  ];
-  return deepFreeze({
-    entries: entries.sort(entryOrder),
-  });
+      ...(await mcpAppEntries(model, projectRoot, composite, artifactOutputRoot, tokens, tools)),
+      ...(model.packageBuild === undefined
+        ? []
+        : await loweredRslibEntries(await packageBuildEntries(model, dtsTsconfig?.path), {
+          meta,
+          outputRoot: resolve(projectRoot, model.packageBuild.outputDir),
+          projectRoot,
+          tokens,
+          ...(tools === undefined ? {} : { tools }),
+        })),
+    ];
+    return deepFreeze({
+      entries: entries.sort(entryOrder),
+    });
+  } finally {
+    await dtsTsconfig?.cleanup();
+  }
 };
