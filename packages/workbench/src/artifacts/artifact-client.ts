@@ -171,12 +171,12 @@ const isMcpApp = (value: unknown): boolean =>
   (!Object.hasOwn(value, 'path') || typeof value.path === 'string');
 
 const isMcpServer = (value: unknown): boolean =>
-  exactRecord(value, ['apps', 'entryPaths', 'kind', 'manifestPath', 'name', 'target']) &&
+  exactRecord(value, ['apps', 'entryPaths', 'kind', 'manifestPath', 'name', 'target', 'transport']) &&
   arrayOf(value.apps, isMcpApp) &&
   arrayOf(value.entryPaths, (entry) => typeof entry === 'string') &&
   (value.kind === 'command' || value.kind === 'compiled' || value.kind === 'remote') &&
   typeof value.manifestPath === 'string' &&
-  typeof value.name === 'string' && typeof value.target === 'string';
+  typeof value.name === 'string' && typeof value.target === 'string' && typeof value.transport === 'string';
 
 const isScript = (value: unknown): boolean =>
   exactRecord(value, ['file', 'id', 'mode', 'name', 'target'], ['rendered', 'worker']) &&

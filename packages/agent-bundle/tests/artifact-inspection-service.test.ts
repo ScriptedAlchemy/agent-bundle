@@ -530,6 +530,7 @@ it('inspects one validated epoch as sorted, source-free artifact facts', async (
       manifestPath: 'mcp.json',
       name: 'runner',
       target: fixtureTarget,
+      transport: 'stdio',
     }]);
     expect(inspection.runtime.scripts).toEqual([
       expect.objectContaining({
@@ -657,6 +658,7 @@ it('uses callback facts captured during validation and excludes unmanifested mut
       manifestPath: 'mcp.json',
       name: 'runner',
       target: fixtureTarget,
+      transport: 'stdio',
     }]);
     expect(JSON.stringify(inspection.runtime)).not.toContain('not-manifested.mjs');
   } finally {

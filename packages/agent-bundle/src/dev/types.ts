@@ -104,6 +104,7 @@ export interface ArtifactInspectionMcpServer {
   readonly manifestPath: string;
   readonly name: string;
   readonly target: string;
+  readonly transport: string;
 }
 
 export interface ArtifactInspectionScript {

@@ -1220,7 +1220,7 @@ A generated tool may also carry an opt-in CLI surface projection: a
 colocated `<tool>.cli.{ts,tsx}` beside the tool route. The module is never
 a route — `RouteContract.routes` does not list it — and the compiled
 command's `routeId` stays the tool id. `inspect --routes` prints
-`cli.commands[].projection` (`module`, `mapInput`, `relaxed?`) and the
+`cli.commands[].projection` (`module`, `mapInput`, `defaults?`, `relaxed?`) and the
 mapped `options[]` (`key`, `option`, `aliases`). A projection that cannot
 compile has no correct partial output, so every finding is an error
 (`AB4843`–`AB4845`).

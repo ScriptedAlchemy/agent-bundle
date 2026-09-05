@@ -78,7 +78,15 @@ const inspection: ArtifactInspection = {
       path: 'hooks/configured.mjs',
       target: 'claude',
     }],
-    mcpServers: [],
+    mcpServers: [{
+      apps: [],
+      entryPaths: [],
+      kind: 'remote',
+      manifestPath: 'mcp.json',
+      name: 'external',
+      target: 'portable',
+      transport: 'streamable-http',
+    }],
     scripts: [{
       file,
       id: 'script:configured',
@@ -98,6 +106,9 @@ it('adapts Workbench skill and artifact sources into the shared pure tree', () =
   });
 
   expect(tree.state).toBe('fresh');
+  const mcp = tree.groups.find((group) => group.kind === 'mcp');
+  if (mcp?.kind !== 'mcp') throw new Error('Expected an MCP group.');
+  expect(mcp.servers.map((server) => [server.server, server.mode])).toEqual([['external', 'streamable-http']]);
   expect(applicationLeaves(tree).map((leaf) => ({
     description: leaf.description,
     kind: leaf.ref.kind,

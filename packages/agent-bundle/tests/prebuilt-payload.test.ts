@@ -167,6 +167,24 @@ it.each([
   }
 });
 
+it('records a payload only for the selected hosts it targets and omits payloads no selected host packages', async () => {
+  const root = await createProject({
+    payload: "  payload: { app: { source: './built/app', targets: ['codex'] }, runtime: { source: './built/runtime', targets: ['claude'] } },",
+  });
+  try {
+    await build({ output: join(root, 'out'), root, targets: ['claude', 'portable'] });
+    const manifest = parseArtifactManifest(await readFile(join(root, 'out', 'agent-bundle.manifest.json'), 'utf8'));
+    expect(manifest.projections.map((projection) => projection.host)).toEqual(['claude', 'portable']);
+    expect(manifest.distribution.payloads).toEqual([{ hosts: ['claude'], name: 'runtime', runtimeDependencies: [] }]);
+    expect(manifest.files.filter((file) => file.path.startsWith('app/'))).toEqual([]);
+    expect(manifest.files.filter((file) => file.path.startsWith('runtime/')).map((file) => file.kind)).toEqual(
+      expect.arrayContaining(['prebuilt']),
+    );
+  } finally {
+    await removeProjectFixture(root);
+  }
+});
+
 it('normalizes string-form payload declarations with no runtime dependencies', async () => {
   const root = await createProject({
     payload: "  payload: { app: './built/app' },",

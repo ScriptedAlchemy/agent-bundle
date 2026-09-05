@@ -1542,10 +1542,10 @@ const validateManifest = (value: unknown): ArtifactManifest => {
   }
   const web = parseWeb(manifest.web);
   const filePaths = new Set(files.map((file) => file.path));
-  for (const payload of distribution.payloads) {
+  for (const [index, payload] of distribution.payloads.entries()) {
     const prefix = `${payload.name}/`;
     if (!files.some((file) => file.kind === 'prebuilt' && file.path.startsWith(prefix))) {
-      fail(`distribution.payloads[${payload.name}] names a directory with no prebuilt manifest file.`);
+      fail(`distribution.payloads[${index}].name names a directory with no prebuilt manifest file.`);
     }
   }
   for (const [location, path] of referencedPaths({ distribution, executables, projections, web })) {

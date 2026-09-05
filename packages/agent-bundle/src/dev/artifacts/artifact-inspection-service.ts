@@ -407,6 +407,7 @@ export class ArtifactInspectionService {
           manifestPath,
           name: server.name,
           target,
+          transport: server.transport,
         }));
       }
     }

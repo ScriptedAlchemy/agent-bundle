@@ -120,6 +120,7 @@ const inspection: ArtifactInspection = {
       manifestPath: '.mcp.json',
       name: 'review',
       target: 'claude',
+      transport: 'stdio',
     }],
     scripts: [],
   },

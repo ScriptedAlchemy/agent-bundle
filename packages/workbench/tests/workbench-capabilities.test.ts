@@ -82,6 +82,7 @@ const inspection = ({ hooks = 0, mcpServers = 0, scripts = 0, targets = 1 } = {}
       manifestPath: `mcp/server-${String(index)}.json`,
       name: `server-${String(index)}`,
       target: 'portable',
+      transport: 'stdio',
     })),
     scripts: Array.from({ length: scripts }, (_, index) => ({
       file: file(`scripts/script-${String(index)}.mjs`),
