@@ -589,6 +589,24 @@ it('isolates malicious relative writes from the referenced epoch and rejects coo
     manifestEntry.bytes = Buffer.byteLength(tamperedWrapper);
     manifestEntry.sha256 = sha256Hex(tamperedWrapper);
     await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
+    // The compile evidence record still describes the compiler's bytes, so the
+    // artifact validator catches the coordinated file + manifest rewrite first.
+    await expect(service.simulate(request)).rejects.toThrow(/AB6039.*describes different bytes/u);
+
+    const evidencePath = join(epochRoot, 'agent-bundle.compile-evidence.json');
+    const evidence = JSON.parse(await readFile(evidencePath, 'utf8')) as {
+      readonly assets: Array<{ path: string; sha256: string }>;
+    };
+    const evidenceEntry = evidence.assets.find((entry) => entry.path === wrapperPath);
+    if (evidenceEntry === undefined) throw new Error('Expected wrapper compile evidence entry.');
+    evidenceEntry.sha256 = sha256Hex(tamperedWrapper);
+    const tamperedEvidence = `${JSON.stringify(evidence)}\n`;
+    await writeFile(evidencePath, tamperedEvidence);
+    const evidenceManifestEntry = manifest.files.find((entry) => entry.path === 'agent-bundle.compile-evidence.json');
+    if (evidenceManifestEntry === undefined) throw new Error('Expected compile evidence manifest entry.');
+    evidenceManifestEntry.bytes = Buffer.byteLength(tamperedEvidence);
+    evidenceManifestEntry.sha256 = sha256Hex(tamperedEvidence);
+    await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
     await expect(service.simulate(request)).rejects.toThrow(/stored digest/i);
   } finally {
     await rm(root, { force: true, recursive: true });
