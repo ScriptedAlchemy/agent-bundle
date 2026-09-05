@@ -38,6 +38,7 @@ export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/dev-host-install.test.ts',
   'packages/agent-bundle/tests/dev-live-host.test.ts',
   'packages/agent-bundle/tests/dev-package-build.test.ts',
+  'packages/agent-bundle/tests/dev-web-host-routes.test.ts',
   'packages/agent-bundle/tests/dev-workbench.test.ts',
   'packages/agent-bundle/tests/emitted-artifact-effect-surface.test.ts',
   'packages/agent-bundle/tests/eval-claude-harness.test.ts',
