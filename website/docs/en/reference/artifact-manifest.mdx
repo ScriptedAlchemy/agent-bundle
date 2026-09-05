@@ -412,7 +412,8 @@ compatible**: a reader of version N rejects any key or enumerated value it does 
   keys. An internal compiler refactor that changes only those facts bumps `recordVersion` and
   never forces a `manifestVersion` bump. Readers refuse any other `recordVersion`.
 
-Read an artifact with the framework version that built it, or a newer one.
+Read an artifact with a framework version whose `manifestVersion` matches the document; a
+mismatch in either direction is a rebuild, not a fallback.
 
 ## Diagnostics
 

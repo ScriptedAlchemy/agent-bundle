@@ -393,7 +393,7 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
   `recordVersion`，而不会迫使 `manifestVersion` 递增。读取方拒绝任何其他 `recordVersion`。当前值为
   `1`。
 
-请用构建该产物的框架版本或更新的版本读取它。
+请用 `manifestVersion` 与文档一致的框架版本读取产物；无论哪个方向的不一致都意味着重新构建，而不是回退。
 
 ## 诊断
 
