@@ -13,8 +13,9 @@ agent-bundle 把一个项目编译为宿主原生的插件。本页描述的是�
 那些——目前还不存在 `ApplicationIR`、`ProjectionIR` 或 `ArtifactIR` 类型。
 
 本页描述的输出布局是**复合插件根目录**：产物输出处只有一个目录，由 `targets` 选择其中出现
-哪些宿主投影。该布局是 #555 Wave 1 的契约
-（[PR #578](https://github.com/ScriptedAlchemy/agent-bundle/pull/578)）。不存在
+哪些宿主投影
+（[#555](https://github.com/ScriptedAlchemy/agent-bundle/issues/555) Wave 1，
+[PR #578](https://github.com/ScriptedAlchemy/agent-bundle/pull/578)）。不存在
 `artifact/<host>/` 分区，也不存在 `plugin` target。
 
 ## 三层
@@ -105,13 +106,17 @@ src/scripts/**/*.{ts,tsx,jsx}
 - `providers[]` —— `CompiledProvider`（不是路由 kind；它们包裹执行）。
 - `layouts?` —— `CompiledLayout`（`root` 或 `server` 作用域）。事件路由与浏览器 App
   永不被包裹。
+- `contracts?` —— `RouteContract` 行（`id` = `contract:<module>#<binding>`），每个静态
+  解析到的 `inputSchema` 声明一份。导入同一绑定的路由共享一份契约
+  （[#593](https://github.com/ScriptedAlchemy/agent-bundle/issues/593)）。
 - `digest` —— 对相对项目的身份计算的 sha256。
-- `diagnostics` —— 路由图错误（`AB4800`–`AB4806` 及其邻近代码）。
+- `diagnostics` —— 路由图错误（`AB4800`–`AB4806`，以及无法跟随 schema 导入时的
+  `AB4838` / `AB4839`）。
 
 每个 `CompiledAgentRoute` 携带 `id`、`kind`、`source`、约定式的 `provenance`、一份静态
-提取的 `config`（或 `emptyRouteConfig`）、可选的有界 `inputSchema`，以及——对 MCP 路由
-而言——`serverId`。事件路由还携带 `event`（来自 `routes/public.ts` 的
-`CanonicalAgentEvent`）。
+提取的 `config`（或 `emptyRouteConfig`）、可选的有界 `inputSchema`、可选的 `contract`
+（共享的 `RouteContract` id），以及——对 MCP 路由而言——`serverId`。事件路由还携带
+`event`（来自 `routes/public.ts` 的 `CanonicalAgentEvent`）。
 
 Skill、命令、规则、配置中声明的钩子、手写的 MCP 入口以及宿主原生的钩子文档**不在**这张
 图里。它们留在与之并列的 `DiscoveredProject` / `NormalizedPlugin` 上。
@@ -119,7 +124,9 @@ Skill、命令、规则、配置中声明的钩子、手写的 MCP 入口以及�
 ### 规范化向前传递什么
 
 `config/normalize.ts` 消费 `DiscoveredProject` 与已加载的配置，发出一个 `NormalizedPlugin`
-（`core/types.ts`）。它就是之后每个规划器读取的对象。它持有：
+（`core/types.ts`）。它就是之后每个规划器读取的对象。它**并不**保留
+`CompiledRouteGraph`；`PreparedProject`（`dev/project-service.ts`）把 `model` 与
+`routeGraph` 作为并列字段携带。插件对象持有：
 
 - 身份（`metadata`）与所选的 `targets`（`NormalizedTarget[]`，排序去重后的名称）；
 - `skills`、`commands`、`rules`、`hooks`、`nativeHooks`、`mcpServers`、`mcpApps`、
@@ -158,6 +165,9 @@ Skill、命令、规则、配置中声明的钩子、手写的 MCP 入口以及�
    `sortedProjections(model.targets.map((t) => t.name))`，并且**只**对这些名称运行
    `registry.get(name).plan(model)`。
 4. `plugin` 不是 target。`targets: ['plugin']` 与 `--target plugin` 都是 `AB4100`。
+5. `inspect --target` 是 `api.ts` 的 `inspect()` 上的**显示过滤器**：它只在打印的
+   `plans` 中保留该名称（未知名称是 `AB7004`）。它不会改变 `selectedTargets` 或复合
+   身份。`inspect --bundler` 仍然组合完整的所选集合。
 
 `adapters/composite-layout.ts` 拥有选择相关的辅助函数：`sortedProjections`、
 `projectionIdentity`（排序后的名称以 `+` 连接，例如 `claude+codex`）、`hookWrapperPath`
@@ -208,7 +218,10 @@ Skill、命令、规则、钩子或脚本上声明级的 `targets` 仍然表示�
   另一个宿主的文件。
 
 构建阶段拿到的 `CompositePlan` 携带 `entries`、`hookEntries`、`selected`、`identity`、
-`cliBin`（当任一所选宿主接纳路由式 CLI 时为 true）以及 `noticeDelivery`。
+`projections`（每个所选宿主一份已规划的投影）、`cliBin`（当任一所选宿主接纳路由式 CLI
+时为 true）以及 `noticeDelivery`。`AB4106` 更早在模型上判定，位于
+`config/validate.ts`：把高级注册表上的适配器与任何其他 target 混在一起的选择不能共享
+一个根目录。
 
 编译后的 MCP 入口、脚本、路由式 CLI bin 与 MCP App **不会**按宿主重新规划。
 `build/build.ts` 以 `target: composite.identity` 把它们编译一次，并写到根目录。
@@ -253,7 +266,7 @@ node 表面。
 JavaScript、声明文件、`imports` 或消费者侧安装脚本中（`AB7014`），并且消费者的 npm 必须
 能够抓取它（`AB7015`）。
 
-### 复合根目录（#578 之后）
+### 复合根目录
 
 以 `targets: ['claude', 'codex', 'cursor', 'portable']` 构建时，host-test 示例的根目录为：
 
@@ -271,7 +284,7 @@ artifact/
 ├── hooks/hooks-flight.mjs
 ├── mcp/mcp-<server>-<hash>.mjs (+ -flight)
 ├── bin/<plugin>.mjs, bin/<plugin>-flight.mjs
-├── skills/, scripts/, assets/, mcp-apps/
+├── skills/, scripts/, commands/, rules/, assets/, mcp-apps/
 ├── INSTALL.md, install.mjs
 ├── agent-bundle.manifest.json
 └── agent-bundle.hooks.json
@@ -282,14 +295,18 @@ artifact/
 
 ## 执行内核与 Agent Document
 
-上面的编译器流水线止于磁盘上的文件。请求时是另一套独立的栈。它还不是同一个内核。
+上面的编译器流水线止于磁盘上的文件。请求时是另一套独立的栈。**已经存在**的请求内核是
+`runAgentRequest`（`packages/rsc-runtime/src/agent-request.ts`，以
+`@agent-bundle/runtime` 导入）。生成式 MCP 路由、事件路由与渲染式 CLI 命令会调用它。
+配置声明的钩子与原生钩子**绕过**它：包装器解码宿主信封并直接调用作者的函数，没有
+provider、布局或 Agent Document。
 
 | 表面 | 入口 | 请求路径 |
 | --- | --- | --- |
-| 生成式 MCP stdio | `mcp-entry.ts`（生命周期：stdout 守卫、信号、关闭），然后是来自 `build/entry-shell.ts` 的生成入口 | `mcp-server-runtime.ts` 注册路由、运行 `runAgentRequest`、通过预热的 Flight worker 渲染，并用 `attachMcpStructuredContent` 对 Agent Document 做降级 |
-| 事件路由 | 同一个生成的 MCP 服务器（`events/ipc.ts` 中的 `createEventRuntimeServer`） | `events/project.ts` 把宿主信封规范化，并投影文档（`projectEventDocument`） |
-| 配置 / 原生钩子 | 由 `adapters/hook-contract.ts` 生成的 `hooks/<name>.mjs` | 包装器中的宿主原生编解码器；没有 Agent Document、没有 provider、没有布局 |
-| 路由式 CLI | `cli-entry.ts` 的 `runGeneratedCliEntry` | 来自路由图的命令树；渲染式 `.tsx` 命令使用 Agent 渲染器与 CLI 输出契约 |
+| 生成式 MCP stdio | `mcp-entry.ts`（仅生命周期：stdout 守卫、信号、关闭），然后是来自 `build/entry-shell.ts` 的生成入口 | `mcp-server-runtime.ts` 注册路由、运行 `runAgentRequest`、通过预热的 Flight worker 渲染，并用 `attachMcpStructuredContent` 对 tool 结果做降级 |
+| 事件路由 | 同一个生成的 MCP 服务器（`events/ipc.ts` 中的 `createEventRuntimeServer`） | `events/project.ts` 把宿主信封规范化，并经 `runAgentRequest` 投影文档（`projectEventDocument`） |
+| 配置 / 原生钩子 | 由 `adapters/hook-contract.ts` 生成的 `hooks/<name>.mjs` | 包装器中的宿主原生编解码器；**不**调用 `runAgentRequest` |
+| 路由式 CLI | `cli-entry.ts` 的 `runGeneratedCliEntry` | 来自路由图的命令树；渲染式 `.tsx` 命令使用 `runAgentRequest`。CLI 文档类型位于 `cli-entry.ts`，并不导入 `@agent-bundle/runtime` |
 | 浏览器 App | 宿主 `ui/*` 桥接（Workbench 的 `McpAppFrameRelay`、`serve-app` 的 `HOST_SCRIPT`） | App 是工具结果之上的一个视图，而不是第二张路由图 |
 
 `mcp-entry.ts` 是 stdio 进程外壳。它不构造请求上下文。构造请求上下文的是
@@ -318,7 +335,9 @@ prompt 路由则返回经校验的协议结果（来自 `document.value`）。CL
 ## `agent-bundle.manifest.json` 的现状
 
 写入器是 `build/build.ts` 的 `manifestFor`。它组装出一个 `ArtifactManifest`
-（`build/manifest.ts`），`writeManifest` 再用 `assembleArtifactManifest` 将其序列化：规范的
+（`build/manifest.ts`；TypeDoc：
+[`ArtifactManifest`](../../api/interfaces/index.ArtifactManifest.md)），`writeManifest`
+再用 `assembleArtifactManifest` 将其序列化：规范的
 `stableJson` 加一个末尾换行。`parseArtifactManifest` 拒绝任何其他字节序列、重复键、未知键、
 缺失键、未排序的数组，以及指向清单自身的文件条目。
 
@@ -378,12 +397,13 @@ CLI bin 的文件，只以 `files[]` 中一行的形式出现。
 成为编译后的应用数据库。今天，下列内容都是通过重新读取源码、重新探测目录树或查询内存中的
 `NormalizedPlugin` 推断出来的——没有一项在清单里：
 
-1. **路由图。** 服务器、工具、资源、提示、App、CLI 命令、事件路由、provider 与布局只存在于
-   `CompiledRouteGraph` / `NormalizedPlugin` 中。Workbench 的路由页面与 `inspect` 是从项目
-   而不是从产物重建或保留这张图的。
+1. **路由图。** 服务器、工具、资源、提示、App、CLI 命令、事件路由、provider 与布局存在于
+   `CompiledRouteGraph`（`PreparedProject.routeGraph`）以及 `NormalizedPlugin` 上复制过来
+   的集合中。Workbench 的路由页面与 `inspect` 是从项目而不是从产物重建或保留这张图的。
 2. **MCP / CLI / App 清点。** `files[]` 把 `mcp/*.mjs` 与 `bin/*.mjs` 列为不透明路径。
    不存在带有 id、`resourceUri`、打开工具或 env 的 `servers[]`。`serve-app` 仍然从活跃
-   服务器与项目/epoch 解析 App，而不是从清单解析
+   服务器与项目/epoch 解析 App，而不是从清单解析。`dev/epoch-store.ts` 与 `serve-app`
+   都不解析 `agent-bundle.manifest.json`
    （[#564](https://github.com/ScriptedAlchemy/agent-bundle/issues/564) 提议增加一个
    `web` 段）。
 3. **钩子语义。** `agent-bundle.hooks.json` 索引了包装器；产物清单没有。配置声明、事件路由
@@ -421,9 +441,10 @@ CLI bin 的文件，只以 `files[]` 中一行的形式出现。
 **重复的 MCP / CLI 路由模块。** 自动的 MCP 到 CLI 投影是存在的（`routes/cli-commands.ts`
 的 `compileMcpCliCommands`），但成熟的 CLI 在需要自己的命令路径、位置参数或标志名时，
 仍会在 `src/cli/**` 下另写一个模块
-（[#596](https://github.com/ScriptedAlchemy/agent-bundle/issues/596)）。静态 `inputSchema`
-提取不跟随本地 schema 导入（`AB4814`），因此同一个 zod 对象的 CLI 副本与 MCP 副本可能分叉
-（[#593](https://github.com/ScriptedAlchemy/agent-bundle/issues/593)）。
+（[#596](https://github.com/ScriptedAlchemy/agent-bundle/issues/596)）。本地 `inputSchema`
+导入现在会解析成一份 `RouteContract`
+（[#593](https://github.com/ScriptedAlchemy/agent-bundle/issues/593) 已落地）：无法跟随的
+链是 `AB4838`，环是 `AB4839`，已解析 schema 内部的语法错误仍是 `AB4814`。
 
 **浏览器桥接被分叉。** Workbench 的 `packages/workbench/src/mcp/mcp-app-frame.tsx`
 `McpAppFrameRelay` 与 `serve-app/serve-app-page.ts` 的 `HOST_SCRIPT` 实现了同一个中继。
@@ -453,8 +474,8 @@ Claude、Codex 或 Cursor 的 `plugin.json`。Eval 与 Workbench 检视器为完
 
 | Issue | 切片 |
 | --- | --- |
-| [#555](https://github.com/ScriptedAlchemy/agent-bundle/issues/555) | 复合插件根目录；`targets` 作为投影选择（Wave 1 = PR #578） |
-| [#593](https://github.com/ScriptedAlchemy/agent-bundle/issues/593) | 把本地 schema 导入解析进同一份路由契约 |
+| [#555](https://github.com/ScriptedAlchemy/agent-bundle/issues/555) | 复合插件根目录；`targets` 作为投影选择（Wave 1 已作为 PR #578 落地） |
+| [#593](https://github.com/ScriptedAlchemy/agent-bundle/issues/593) | 把本地 schema 导入解析进同一份路由契约（**已落地**） |
 | [#596](https://github.com/ScriptedAlchemy/agent-bundle/issues/596) | 一个操作，地道的 MCP + CLI 投影 |
 | [#595](https://github.com/ScriptedAlchemy/agent-bundle/issues/595) | 事件路由内核上的预检 / 惰性 provider |
 | [#594](https://github.com/ScriptedAlchemy/agent-bundle/issues/594) | 生成的类型化 App 客户端 + 共享桥接 |
@@ -471,4 +492,5 @@ Claude、Codex 或 Cursor 的 `plugin.json`。Eval 与 Workbench 检视器为完
   作者最先遇到的两个可执行表面。
 - [Target 与产物](../../reference/targets-artifacts.mdx) —— 复合根目录与更简短的清单
   字段表。
+- [交付捆绑包](../distribution/index.mdx) —— 根目录如何编译，以及其中装了什么。
 - [产物校验](../distribution/validation.mdx) —— 重新读取这份清单的那些检查。

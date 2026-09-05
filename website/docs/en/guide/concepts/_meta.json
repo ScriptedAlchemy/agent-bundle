@@ -1,7 +1,1 @@
-[
-  {
-    "type": "file",
-    "name": "architecture",
-    "label": "Compiler architecture"
-  }
-]
+["architecture"]
