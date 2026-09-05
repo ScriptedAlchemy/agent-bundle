@@ -1,10 +1,3 @@
-/**
- * The Workbench shell (#600 §10): a left rail with the primary destinations
- * Application · Trace · Problems · Advanced (Sessions arrives in PR 3), a header
- * with project name · build state · failure badge · connection, and the area
- * content the caller switches on the location. The Application area lays out a
- * 320 px tree column beside the route workspace. Desktop-only.
- */
 import React, { type ReactNode } from 'react';
 
 import type { ProjectStatus } from '../../../agent-bundle/src/contracts/project.ts';
@@ -23,7 +16,7 @@ export interface WorkbenchNavItem {
   readonly location: WorkbenchLocation;
 }
 
-/** The primary destinations PR 1 ships, in rail order. */
+/** Primary destinations in rail order. */
 export const workbenchNavItems: readonly WorkbenchNavItem[] = Object.freeze([
   Object.freeze({ area: 'application' as const, glyph: '⌸', label: 'Application', location: Object.freeze({ area: 'application' as const }) }),
   Object.freeze({ area: 'trace' as const, glyph: '≡', label: 'Trace', location: Object.freeze({ area: 'trace' as const }) }),

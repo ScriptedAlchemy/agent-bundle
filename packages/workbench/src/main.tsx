@@ -497,4 +497,6 @@ const Workbench = () => {
   </>;
 };
 
-createRoot(document.getElementById('root')!).render(<RegistryProvider><Workbench /></RegistryProvider>);
+const root = document.getElementById('root');
+if (root === null) throw new Error('Workbench root element is missing.');
+createRoot(root).render(<RegistryProvider><Workbench /></RegistryProvider>);

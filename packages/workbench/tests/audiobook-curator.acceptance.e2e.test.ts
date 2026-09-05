@@ -30,12 +30,8 @@ import {
   workbenchTestIds,
 } from './support/workbench-acceptance.ts';
 import { buildWorkbench, e2e, waitForWorkbenchIdle, workbenchAssets, workbenchUrl } from './support/workbench-e2e.ts';
-import {
-  applicationLeafForRouteId,
-  findApplicationLeaf,
-  inspectWorkbenchSurface,
-  workbenchLeafPath,
-} from './support/workbench-surface.ts';
+import { inspectWorkbenchSurface, workbenchLeafPath } from '../../agent-bundle/src/test/index.ts';
+import { applicationLeafForRouteId, applicationLeaves } from '../src/application/application-tree-model.ts';
 
 const browserTimeout = 15_000 * timeScale;
 const rebuildTimeout = 60_000 * timeScale;
@@ -69,9 +65,9 @@ e2e('accepts the audiobook-curator Application workspace at 1440×900', { timeou
   });
   const ledger = createExampleErrorLedger(page, server.url);
   try {
-    const surface = await inspectWorkbenchSurface(project.root);
+    const surface = await inspectWorkbenchSurface({ root: project.root });
     const searchLeaf = applicationLeafForRouteId(surface.application, 'tool:curator/search_audible')
-      ?? findApplicationLeaf(surface.application, (leaf) => leaf.ref.kind === 'tool' && leaf.ref.name === 'search_audible');
+      ?? applicationLeaves(surface.application).find((leaf) => leaf.ref.kind === 'tool' && leaf.ref.name === 'search_audible');
     if (searchLeaf === undefined) {
       throw new Error('inspectWorkbenchSurface did not project tool:curator/search_audible as an Application leaf.');
     }
@@ -84,7 +80,7 @@ e2e('accepts the audiobook-curator Application workspace at 1440×900', { timeou
 
     await openWorkbench(page, server.url, '/');
     await expectPrimaryNav(page);
-    const firstLeaf = findApplicationLeaf(surface.application, (leaf) => leaf.routeId === 'tool:curator/inventory_sources')
+    const firstLeaf = applicationLeaves(surface.application).find((leaf) => leaf.routeId === 'tool:curator/inventory_sources')
       ?? searchLeaf;
     await selectApplicationLeaf(page, server.url, firstLeaf);
     await expectApplicationTree(page, surface.application);

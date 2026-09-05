@@ -1,11 +1,4 @@
-/**
- * Trace, PR 1 minimal (#600 §6): this dev session's route invocations, newest
- * first, from the invocation backends' `history` and `subscribe`; every row
- * deep-links to the route workspace with that invocation loaded
- * (`/routes/…?invocation=<id>`), and `/trace/<id>` shows one entry. PR 2
- * replaces this with the unified trace over the execution kernel; the module
- * stays small on purpose.
- */
+/** Route invocations from the current dev session, newest first. */
 import React, { useEffect, useState } from 'react';
 
 import type { RouteInvocation, RouteInvocationSummary } from '../../../agent-bundle/src/contracts/invocations.ts';

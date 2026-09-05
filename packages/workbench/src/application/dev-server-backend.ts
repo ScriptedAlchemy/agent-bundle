@@ -1,5 +1,4 @@
 import type {
-  RouteInvocationEventPayload,
   RouteInvocationRequest,
 } from '../../../agent-bundle/src/contracts/invocations.ts';
 import type { ProjectEventMessage } from '../../../agent-bundle/src/contracts/project.ts';
@@ -13,23 +12,6 @@ export interface DevServerBackendOptions {
     subscribe(listener: (event: ProjectEventMessage) => void): () => void;
   }>;
 }
-
-type RouteInvocationProjectEvent = Readonly<{
-  readonly payload: RouteInvocationEventPayload;
-  readonly type: 'route.invocation';
-}>;
-
-const routeInvocationEvent = (
-  event: ProjectEventMessage,
-): RouteInvocationProjectEvent | undefined => {
-  const candidate = event as unknown as Partial<RouteInvocationProjectEvent>;
-  return candidate.type === 'route.invocation' &&
-      candidate.payload !== null &&
-      typeof candidate.payload === 'object' &&
-      candidate.payload.invocation !== undefined
-    ? candidate as RouteInvocationProjectEvent
-    : undefined;
-};
 
 export const createDevServerBackend = ({
   client,
@@ -51,7 +33,6 @@ export const createDevServerBackend = ({
   read: (invocationId: string, signal?: AbortSignal) =>
     client.read(invocationId, signal),
   subscribe: (listener: Parameters<InvocationBackend['subscribe']>[0]) => events.subscribe((event) => {
-    const invocation = routeInvocationEvent(event);
-    if (invocation !== undefined) listener(invocation.payload.invocation);
+    if (event.type === 'route.invocation') listener(event.payload.invocation);
   }),
 });

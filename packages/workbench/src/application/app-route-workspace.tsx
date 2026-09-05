@@ -13,7 +13,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { ProjectStatus } from '../../../agent-bundle/src/contracts/project.ts';
 import type { JsonObject } from '../../../agent-bundle/src/contracts/strict-json.ts';
 import { errorMessage, isRecord } from '../client-helpers.ts';
-import type { McpAppHostContext, McpAppJsonValue, McpAppPreviewProfile } from '../mcp/mcp-app-client.ts';
+import { workbenchMcpAppHostContext, type McpAppJsonValue, type McpAppPreviewProfile } from '../mcp/mcp-app-client.ts';
 import { McpAppPreview } from '../mcp/mcp-app-preview.tsx';
 import { McpJsonInput } from '../mcp/mcp-json-input.tsx';
 import { supportedMcpAppPreviewProfiles } from '../mcp/mcp-page.tsx';
@@ -68,30 +68,6 @@ export const orderedToolsForApp = (tools: readonly McpCatalogTool[], resourceUri
   ...tools.filter((tool) => resourceUri === undefined || tool.resourceUri !== resourceUri),
 ]);
 
-/**
- * The App host context the preview reports to the App. The protocol
- * inspector derives the same values privately; LANE-NOTES asks for that
- * helper to be exported so both share it.
- */
-const workbenchAppHost = (): McpAppHostContext => {
-  const browser = typeof window === 'undefined' ? undefined : window;
-  const locale = browser?.navigator.language;
-  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  return Object.freeze({
-    availableDisplayModes: Object.freeze(['inline']),
-    containerDimensions: Object.freeze({ height: Math.max(0, browser?.innerHeight ?? 0), width: Math.max(0, browser?.innerWidth ?? 0) }),
-    deviceCapabilities: Object.freeze({}),
-    displayMode: 'inline',
-    locale: typeof locale === 'string' && locale.length > 0 ? locale : 'en',
-    platform: 'web',
-    safeAreaInsets: Object.freeze({ bottom: 0, left: 0, right: 0, top: 0 }),
-    styles: Object.freeze({}),
-    theme: browser?.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
-    timeZone: typeof timeZone === 'string' && timeZone.length > 0 ? timeZone : 'UTC',
-    userAgent: browser?.navigator.userAgent ?? 'unknown',
-  });
-};
-
 interface ToolCall {
   readonly input: JsonObject;
   readonly result: McpAppJsonValue;
@@ -118,7 +94,7 @@ export const AppRouteWorkspace = ({ clients, leaf, onNavigate, status }: AppRout
   const [callError, setCallError] = useState<string>();
   const [call, setCall] = useState<ToolCall>();
   const controllerRef = useRef<McpSessionController | undefined>(undefined);
-  const host = useMemo(workbenchAppHost, []);
+  const host = useMemo(workbenchMcpAppHostContext, []);
 
   useEffect(() => {
     setTarget((previous) => previous !== undefined && targets.includes(previous) ? previous : preferredTarget(targets));
