@@ -210,7 +210,7 @@ and `splitChunks: false`, and the framework adds no `externals` of its own; Rsli
 leaves only Node built-ins (`node:fs`, `path`, plus Yarn PnP's `pnpapi`) external. MCP App views
 inline every script and style into one HTML file. Artifact validation holds the compiled host-pack
 bytes to the same line, and the package build holds its `dist` bundles to it before publishing
-them: a bare specifier that is not a Node built-in is `AB6005`, so a generated executable — in a
+them: a bare import specifier that is not a Node built-in is `AB6005`, so a generated executable — in a
 host pack or in `dist` — imports nothing but built-ins from outside its tree. An import kept
 external through the [`tools` hatch](../../reference/configuration.mdx#tools) is not a way around
 that: it fails the build in either output and never reaches the prepack inventory. A

@@ -181,7 +181,7 @@ CLI、MCP 入口、钩子包装层以及包构建的 JavaScript bundle——都�
 `splitChunks: false` 的配置编译，框架自身也不添加任何 `externals`；Rslib 的 `node` target 只把 Node 内建模块（`node:fs`、`path`，
 以及 Yarn PnP 的 `pnpapi`）保持外部化。MCP App 视图则把每个脚本与样式都内联进同一个 HTML 文件。产物校验对
 编译出的宿主包字节坚持同一条界线，包构建也在发布 `dist` bundle 之前对它们坚持同一条界线：任何不是 Node 内建
-模块的裸说明符即为 `AB6005`，因此生成的可执行文件——无论位于宿主包还是 `dist`——从自己的输出树之外导入的只有
+模块的裸导入说明符即为 `AB6005`，因此生成的可执行文件——无论位于宿主包还是 `dist`——从自己的输出树之外导入的只有
 内建模块。通过 [`tools` 逃生舱](../../reference/configuration.mdx#tools)保持外部化的导入并不能绕过这条界线：
 它在两种输出中都会让构建失败，永远到不了 prepack 的清单检查。因此，`dependencies` 条目只留给打包后的文件
 有据可证地需要从已编译 bundle 之外获取的内容——预构建的 `.js`/`.mjs`/`.cjs` payload 模块导入的包（预构建

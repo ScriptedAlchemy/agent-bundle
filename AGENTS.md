@@ -69,7 +69,7 @@
   every dependency of a generated executable — `output.autoExternal: false`,
   `bundle: true`, `splitChunks: false`, no `externals`. Rslib's `node` target
   leaves only Node built-ins (and `pnpapi`) external, and the only bare
-  specifiers `AB6005` accepts in a host-pack module are Node built-ins. The
+  import specifiers `AB6005` accepts in a host-pack module are Node built-ins. The
   package build's `dist` bundles are walked by the same `AB6005` rule
   (`src/build/package-build.ts` reuses `validateJavaScriptModules` from
   `src/build/validate-artifact-modules.ts`), so a generated executable in a
