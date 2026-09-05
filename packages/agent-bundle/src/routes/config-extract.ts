@@ -8,8 +8,8 @@ import ts from 'typescript-5';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { deepFreeze } from '../core/freeze.ts';
-import { hasExportModifier, positionOf, unwrapExpression } from './input-schema.ts';
 import { isRelativeSpecifier, moduleCandidates, readModuleFromDisk } from './module-candidates.ts';
+import { hasExportModifier, positionOf, unwrapExpression } from './syntax.ts';
 import { emptyRouteConfig } from './types.ts';
 
 /** The package subpath route modules import compile-time authoring helpers from. */

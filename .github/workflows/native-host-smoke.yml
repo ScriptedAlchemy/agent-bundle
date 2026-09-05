@@ -50,10 +50,17 @@ jobs:
         if: inputs.host == 'both' || inputs.host == matrix.host
         with:
           node-version: 22.19.0
+      # One build for every pool below, on a runner that starts from a fresh
+      # checkout: every pool refuses to start over a missing or stale dist
+      # (rstest.dist-freshness.setup.ts), `test:integration:run` reads the
+      # prebuilt dist (AGENT_BUNDLE_*_PREBUILT=1), and the host install proofs
+      # spawn packages/agent-bundle/dist/cli.js (tests/support/host-install.ts).
+      - run: pnpm build
+        if: inputs.host == 'both' || inputs.host == matrix.host
       # The source smokes run each pool's script with that pool's files. A single
       # `pnpm test -- <files>` cannot target them: pnpm appends the arguments to
-      # the end of the `test` chain (`test:unit && test:route-unit &&
-      # test:projection && test:integration`), so only the last command receives
+      # the end of the `test` chain (`build && test:unit && test:route-unit &&
+      # test:projection && test:integration:run`), so only the last command receives
       # them and unit, route-unit and projection run unfiltered (~3.5 min of
       # unrelated tests); and rstest's CLI parser (cac) keeps everything after
       # `--` out of the positional filters, so the integration pool ran
@@ -67,13 +74,6 @@ jobs:
           AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE: ${{ matrix.host == 'claude' && '1' || '' }}
           AGENT_BUNDLE_NATIVE_CODEX_SMOKE: ${{ matrix.host == 'codex' && '1' || '' }}
         run: pnpm test:unit ${{ matrix.unit_tests }}
-      # One build for every dist consumer below, on a runner that starts from a
-      # fresh checkout: `test:integration:run` reads the prebuilt dist
-      # (AGENT_BUNDLE_*_PREBUILT=1), and the host install proofs spawn
-      # packages/agent-bundle/dist/cli.js (tests/support/host-install.ts). The
-      # unit pool above is build-free, so it runs first and fails fast.
-      - run: pnpm build
-        if: inputs.host == 'both' || inputs.host == matrix.host
       - name: ${{ matrix.host }} source signed-in smoke (integration pool)
         if: matrix.integration_tests != '' && (inputs.host == 'both' || inputs.host == matrix.host)
         env:

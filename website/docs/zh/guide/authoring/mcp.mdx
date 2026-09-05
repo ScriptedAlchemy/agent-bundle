@@ -61,6 +61,19 @@ export default async function Status({ input, signal }: ToolRouteProps<typeof in
 `@modelcontextprotocol/sdk` 1.x 两者的 `CallToolResult`，因此按任一 SDK 类型声明的处理函数都能
 原样接受它；`attachMcpStructuredContent` 返回的类型与传入的结果类型一致。
 
+这些 schema 以 JSON Schema 的形式到达宿主：`tools/list` 以 2020-12 方言公布 `inputSchema`，以及（当
+`resultSchema` 描述一个对象时）`outputSchema`，并经过一次投影，使 2020-12 校验器与非严格模式的
+draft-07 校验器都接受每一个合法取值。zod 元组（`z.tuple([...])`）被发出为 `prefixItems`，加上取各
+位置 schema 并集的 `items`，并以 `minItems`（闭合元组还有 `maxItems`）限定长度——绝不会是
+`items: false`——因此用 draft-07 关键字语义校验 `structuredContent` 的宿主（Cursor，否则它会以
+`MCP error -32602 … boolean schema is false` 拒绝一个合法的元组结果）能接受 2020-12 校验器接受的
+一切。`inputSchema` 经过同一投影，因此以同样方式校验参数的宿主也一并覆盖。`.rest()` 元组是唯一放宽
+2020-12 精度的地方：其 rest 位置也可以匹配某个前缀 schema。zod 发出的其他一切都原样通过：两种方言
+共有的关键字（`$ref`、`propertyNames`、`const`、数值型 `exclusiveMinimum`）在两者下的校验方式相同，
+`$defs` 在任一方言下都通过 JSON 指针形式的 `$ref` 到达，而像 `unevaluatedProperties`、
+`dependentRequired` 这样仅属于 2020-12 的关键字会被宽松模式的 draft-07 校验器忽略，而不会被错误地
+套用。
+
 路由可以从另一个模块重新导出自己的组件与 schema。当同一个工具需要放在两个生成的服务器上、而两处
 只有 `config` 不同时，就用这种写法——例如 MCP App 的 `tools/call` 会到达提供该 widget 的那台服务器：
 
@@ -618,6 +631,93 @@ export default defineConfig({
 
 声明在*预构建*服务器上的 App 仍属于开发期表面：Workbench 会实时编译它，而构建假定 payload 已经在
 提供该资源。
+
+### 编译出的文档
+
+每个 App 都编译为恰好一个自包含的 HTML 文件——在每个被选中的 target 下为 `mcp-apps/<name>.html`——
+脚本与样式全部内联。没有 `template` 的 App 会得到框架外壳：`<html lang="en">`、等于 App 名称的
+`<title>`、charset 与 viewport 的 `<meta>` 标签，以及挂载点 `<div id="root"></div>`。入口渲染到该
+节点上：
+
+```ts
+// src/mcp/status/apps/status.ts —— 一个 .ts 入口；JSX 位于它导入的 .tsx 中。
+import type { AppRouteConfig } from 'agent-bundle';
+
+import { mountStatusPanel } from './StatusPanel.tsx';
+
+export const config = {
+  resourceUri: 'ui://mcp-app-example/status.html',
+} satisfies AppRouteConfig;
+
+const root = document.getElementById('root');
+if (root === null) throw new Error('The App document has no #root mount point.');
+mountStatusPanel(root);
+```
+
+`template` 会完全替换这个外壳，因此模板拥有挂载 id、标题与 `lang` 属性。框架只在模板未声明 `lang`
+时为 `<html>` 补上 `lang="en"`，并在模板没有 `<title>` 时插入一个等于 App 名称的 `<title>`；自己
+设置了这两项的模板不会被改动。
+
+无论入口的扩展名是什么，每次 App 构建都会编译 JSX：带自动运行时（`react/jsx-runtime`，关闭 fast
+refresh）的 `@rsbuild/plugin-react` 注册在每个 App 环境上，因此 `StatusPanel.tsx` 渲染的
+`<StatusPanel />` 在 `.ts` 入口之后与在 `.tsx` 入口之后的编译方式完全相同——绝不会变成需要作用域内
+有 `React` 导入的 `React.createElement` 调用。JSX 语法本身仍然只能写在 `.tsx`/`.jsx` 文件里，因为
+打包器按扩展名识别模块的语法。
+
+### 保留标识符优先
+
+你的 `tsconfig.json` `paths` 在视图内照常生效（`@lib/*`、`@/components/*` 等）：Rsbuild 会像往常
+一样把它们交给打包器，并在所有别名之前解析。唯一不受它们影响的标识符是 `agent-bundle/meta`：编译器
+会在解析开始之前就把这个精确的导入改写为生成的身份模块，因此针对 `agent-bundle/meta` 的 `paths`
+映射在编译出的视图内不起作用——无论哪次构建、无论哪份 tsconfig，App 导入的都是框架的身份模块。
+若某个 `tools` 逃生舱移除了这一改写，已解析配置断言会拒绝该构建。
+
+### 编译错误与体积
+
+视图编译期间，打包器自己的日志输出被静音；框架改为读取 Rspack 的 stats，并把每个错误报告为一条
+`AB4770` 诊断，携带出错文件、其 `line:column` 以及打包器的消息（`sourcePath` 即出错文件）：
+
+```text
+MCP App "status" failed to compile: views/status.ts:1:10: Module build failed
+  (from builtin:swc-loader): Syntax Error: Expression expected
+```
+
+`agent-bundle build` 以退出码 `1` 结束并把这些诊断写到 stderr——绝不会是 `AB5000` 兜底码。未导致
+构建失败的警告是同样形状的 `AB4771`；它们以 `AB4771 (warning): …` 行打印在 `Built …` 之前，并在
+`--json` 中同时出现在 `diagnostics` 与 `build.diagnostics` 里。
+[诊断参考](../../reference/diagnostics.md#mcp-app-view-compilation-ab4770ab4772)列出了每种形状，
+包括 `tsconfig.json` 问题那种不带位置的形式。
+
+成功的构建会在 `Built …` 之后为每个 App 打印一行，按 target 与 App 名称排序，给出输出体积及其
+gzip 体积（`--json` 中为 `build.compiledMcpApps[].size.bytes` 与 `.gzipBytes`）：
+
+```text
+Built mcp-app-example to …/mcp-app-example/artifact
+MCP App status (portable): mcp-apps/status.html 427.1 KiB (102.1 KiB gzip)
+```
+
+这个例子已接近下限。任何导入 `@modelcontextprotocol/ext-apps` 的视图都会带上 `zod`（v3 与 v4）、
+`@modelcontextprotocol/sdk`、`zod-to-json-schema` 以及 `ext-apps` 本身——在你写下第一行自己的代码
+之前就约有 437 kB（gzip 后 104 kB）——因此一个健康的视图远在 1 MiB 以下。生产构建的输出达到或超过
+1 MiB 时会报告 `AB4772` 建议性诊断并点名最大的五个模块；任何超过 2 MiB 的构建也会报告它，因为
+2 MiB 是 Workbench 与 `serve-app` 宿主拒绝该资源的上限，超过后视图在那里将不再渲染。阈值是固定的；
+没有配置键可以改变它们。
+
+### 开发构建与生产构建
+
+`agent-bundle dev`（Workbench）以未压缩的方式编译视图，因此预览的源码在浏览器开发者工具中可读：
+真实的标识符，以及每个模块一条 `// CONCATENATED MODULE: ./src/mcp/status/apps/StatusPanel.tsx`
+标记。输出仍然是每个 App 恰好一份自包含 HTML 文档，约为生产体积的 2.7 倍（一个 617 KiB 的
+`ext-apps` 视图会变成 1.6 MiB），这正是 1 MiB 建议性诊断不适用于开发构建、而 2 MiB 宿主上限仍然
+适用的原因。可读文档会越过该上限的视图会改用生产配置重新编译，以便预览继续渲染它，并由 `AB4772`
+说明这一点。`agent-bundle build` 交付生产配置：已压缩、无 source map。
+
+两种配置默认都不输出 source map：携带原始源码的 map 会再增加约 7 倍（同一视图会达到 4.2 MiB），
+超出宿主所能接受的范围。对于小视图，可通过逃生舱选择加入——
+`tools.rsbuild = { output: { sourceMap: { js: 'inline-source-map' } } }`——它与其他每个 `tools`
+片段一样，会到达每一份合成配置。只有内联 map 可用：HTML 旁边的外部 `.map` 文件会让构建失败，并以一条
+点名该多余文件的错误结束，因为产物必须保持每个 App 一份自包含文档。当某个逃生舱取值没有落在你预期的
+位置时，`agent-bundle inspect --bundler` 会打印解析后的 App 配置。
 
 ### 独立提供 App
 

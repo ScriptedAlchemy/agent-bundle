@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { rstestWorkerRootOwnerFile } from './scripts/rstest-worker-roots.mjs';
+import { rstestRunIdVariable, rstestWorkerRootOwnerFile } from './scripts/rstest-worker-roots.mjs';
 
 export const rstestWorkerId = (): string => process.env['RSTEST_WORKER_ID'] ?? '0';
 
@@ -12,13 +12,17 @@ const hostTemporaryRoot = tmpdir();
 /**
  * Owner marker for a hashed worker root. The root's name is not predictable
  * from outside (the hash includes this process id), so the marker is how a
- * runner that owns `temporaryRoot` — scripts/local-ci.mjs and its per-leg
- * TMPDIR — recognizes and removes the roots a finished run left behind
- * without touching another run's live roots.
+ * sweeper recognizes and removes the roots a finished run left behind without
+ * touching another run's live roots: the pool's own teardown
+ * (rstest.global-setup.ts) matches `runId`, the id of the Rstest invocation
+ * this worker belongs to; scripts/local-ci.mjs matches `temporaryRoot`, its
+ * per-leg TMPDIR. `runId` is absent when the pool ran without the global
+ * setup, so no teardown can claim such a root.
  */
 export interface RstestWorkerRootOwner {
   readonly cwd: string;
   readonly pid: number;
+  readonly runId?: string;
   readonly temporaryRoot: string;
   readonly workerId: string;
 }
@@ -32,9 +36,11 @@ export const rstestWorkerRootOwner = (root: string): RstestWorkerRootOwner | und
 const writeOwnerMarker = (root: string, workerId: string): void => {
   const path = join(root, rstestWorkerRootOwnerFile);
   if (existsSync(path)) return;
+  const runId = process.env[rstestRunIdVariable];
   const owner: RstestWorkerRootOwner = {
     cwd: process.cwd(),
     pid: process.pid,
+    ...(runId === undefined || runId === '' ? {} : { runId }),
     temporaryRoot: hostTemporaryRoot,
     workerId,
   };

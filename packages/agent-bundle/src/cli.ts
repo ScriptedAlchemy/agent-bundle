@@ -51,6 +51,7 @@ import { errorMessage } from './core/errors.ts';
 import { formatInstallResult, formatUninstallResult } from './install/format.ts';
 import { projectVersionLabel } from './core/project-context.ts';
 import { stableJson } from './core/digest.ts';
+import { formatByteSize } from './core/strings.ts';
 import { formatServeAppReadyLine, isServeAppAllowCapability, type ServeAppAllowCapability } from './serve-app/command-contract.ts';
 import type { EvalComparisonDelta, EvalConditionMetrics } from './eval/compare.ts';
 import type { CliTerminal } from './effect/cli-runtime.ts';
@@ -357,6 +358,16 @@ const humanBuild = (result: Awaited<ReturnType<typeof build>>): string => {
     out.push(`${diagnostic.code} (${diagnostic.severity}): ${diagnostic.message}\n`);
   }
   out.push(`Built ${result.model.metadata.name} to ${result.build.outputRoot}\n`);
+  // One line per compiled MCP App view (#572): the artifact-relative document
+  // and its measured size, the number the `AB4772` advisory bounds.
+  const compiledMcpApps = [...result.build.compiledMcpApps]
+    .sort((left, right) => left.target.localeCompare(right.target) || left.name.localeCompare(right.name));
+  for (const app of compiledMcpApps) {
+    out.push(
+      `MCP App ${app.name} (${app.target}): mcp-apps/${app.name}.html ` +
+        `${formatByteSize(app.size.bytes)} (${formatByteSize(app.size.gzipBytes)} gzip)\n`,
+    );
+  }
   for (const report of result.hostValidation ?? []) {
     out.push(
       `Host validation (${report.target}): ${report.status}` +
@@ -420,13 +431,6 @@ const describeInstallComparison = (comparison: DoctorInstallComparison): string 
       throw new TypeError(`Unknown install comparison ${String(exhaustive)}.`);
     }
   }
-};
-
-const formatByteSize = (bytes: number): string => {
-  if (bytes < 1024) return `${bytes} B`;
-  const kibibytes = bytes / 1024;
-  if (kibibytes < 1024) return `${kibibytes.toFixed(1).replace(/\.0$/u, '')} KiB`;
-  return `${(kibibytes / 1024).toFixed(1).replace(/\.0$/u, '')} MiB`;
 };
 
 const humanDoctor = (result: DoctorReport): string => {
