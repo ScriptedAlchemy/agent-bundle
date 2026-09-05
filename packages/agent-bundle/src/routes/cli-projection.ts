@@ -125,13 +125,12 @@ export const orphanCliProjectionError = (
   sourcePath: string,
 ): Diagnostic => ({
   code: 'AB4840',
-  message: `CLI projection ${relativePath} has no sibling tool route src/mcp/${module.server}/tools/${module.stem}.{ts,tsx} to project (${module.siblingId}); a projection is never a route of its own.`,
+  message: `${projectionSubject(relativePath, module.siblingId)}: has no sibling tool route src/mcp/${module.server}/tools/${module.stem}.{ts,tsx} to project; a projection is never a route of its own.`,
   recovery: 'Rename the module so its stem matches the tool route beside it, or prefix the file name with _ to park it; then inspect again.',
   severity: 'error',
   sourcePath,
 });
 
-/** AB4840: a `.cli.{ts,tsx}` module under `resources/`, `prompts/`, or `apps/`, where no route takes a CLI projection. */
 /** AB4840 for the second of `<tool>.cli.ts` and `<tool>.cli.tsx`: a tool takes one projection module. */
 export const duplicateCliProjectionError = (
   relativePath: string,
@@ -140,15 +139,20 @@ export const duplicateCliProjectionError = (
   sourcePath: string,
 ): Diagnostic => ({
   code: 'AB4840',
-  message: `CLI projection modules ${existingRelativePath} and ${relativePath} both project ${module.siblingId}; a tool takes one projection module.`,
+  message: `${projectionSubject(relativePath, module.siblingId)}: ${existingRelativePath} already projects this tool, and a tool takes one projection module.`,
   recovery: 'Keep exactly one of the .cli.ts and .cli.tsx modules, or prefix one file name with _ to park it; then inspect again.',
   severity: 'error',
   sourcePath,
 });
 
+/**
+ * AB4840: a `.cli.{ts,tsx}` module under `resources/`, `prompts/`, or
+ * `apps/`, where no route takes a CLI projection. There is no tool to name,
+ * so the subject is the module alone.
+ */
 export const misplacedCliProjectionError = (relativePath: string, sourcePath: string): Diagnostic => ({
   code: 'AB4840',
-  message: `CLI projection ${relativePath} sits where only a tool route takes the .cli suffix (src/mcp/<server>/tools/<tool>.cli.{ts,tsx}); resources, prompts, and Apps have no argv surface to project.`,
+  message: `CLI projection ${relativePath}: sits under resources/, prompts/, or apps/, where no route takes the .cli suffix; only src/mcp/<server>/tools/<tool>.cli.{ts,tsx} projects a tool, and resources, prompts, and Apps have no argv surface to project.`,
   recovery: 'Move the module beside the tool route it projects, rename it so it does not end in .cli.ts or .cli.tsx, or prefix the file name with _ to park it; then inspect again.',
   severity: 'error',
   sourcePath,
@@ -261,12 +265,16 @@ const validateProjectionConfig = (raw: Readonly<Record<string, unknown>>): Confi
   };
 };
 
+const positionalSpellingRecovery = (key: string): string =>
+  `Remove name and aliases from config.flags.${key}, or drop ${JSON.stringify(key)} from config.positionals so it is an option; then inspect again.`;
+
 /**
  * Binds a validated config to the tool's canonical contract: `flags` and
- * `positionals` must name contract keys and `command` segments must be safe
- * identity segments (AB4842); relaxing a canonical-required key needs
- * `mapInput` to supply it (AB4841). Spelling rules run later, inside the one
- * argv policy, on the final `--options`.
+ * `positionals` must name contract keys, a positional key takes no option
+ * spelling, and `command` segments must be safe identity segments (AB4842);
+ * relaxing a canonical-required key needs `mapInput` to supply it (AB4841).
+ * Spelling rules run later, inside the one argv policy, on the final
+ * `--options`.
  */
 const bindProjectionConfig = (
   config: CliProjectionConfigRecord,
@@ -285,6 +293,23 @@ const bindProjectionConfig = (
         'Use command segments of letters, digits, and inner ".", "_", "-" only, then inspect again.',
       ));
     }
+  }
+  // A positional is consumed as a bare argument; the parser never reads a
+  // `--spelling` for it, so `name` and `aliases` would advertise spellings
+  // that do not exist. `description`, `default`, and `required: false`
+  // still apply to the key.
+  for (const key of new Set(config.positionals ?? [])) {
+    const flag = config.flags?.[key];
+    if (flag === undefined) continue;
+    const fields = [
+      ...(flag.name === undefined ? [] : ['name']),
+      ...(flag.aliases === undefined ? [] : ['aliases']),
+    ];
+    if (fields.length === 0) continue;
+    diagnostics.push(report.binding(
+      `config.flags.${key} is positional; ${fields.join(' and ')} ${fields.length === 1 && fields[0] === 'name' ? 'does' : 'do'} not apply to a bare argument`,
+      positionalSpellingRecovery(key),
+    ));
   }
   // Without a static contract the tool's own argv parse reports why
   // (AB4814/AB4838/AB4839, relabelled); nothing here can be judged.

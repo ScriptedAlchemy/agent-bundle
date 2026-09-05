@@ -150,6 +150,7 @@ describe('MCP tool CLI surface projections', () => {
       '  laneKey: z.string(),',
       '  limit: z.number(),',
       '  tickets: z.array(z.string()).optional(),',
+      '  verbose: z.boolean().default(false),',
       '}).strict()',
     ].join('\n');
     const projection = cliModule([
@@ -214,6 +215,14 @@ describe('MCP tool CLI surface projections', () => {
           required: false,
         },
         {
+          defaultValue: false,
+          key: 'verbose',
+          kind: 'boolean',
+          option: 'verbose',
+          repeated: false,
+          required: false,
+        },
+        {
           description: 'Confirm running this mutation-capable MCP tool.',
           key: 'yes',
           kind: 'boolean',
@@ -224,6 +233,9 @@ describe('MCP tool CLI surface projections', () => {
       ],
       path: ['req'],
       projection: {
+        // Only the projection's own default is the shell's to apply; the
+        // schema-defaulted `verbose` shows its default in help and is absent.
+        defaults: { limit: 20 },
         mapInput: true,
         module: projectionPath,
         relaxed: ['cwd', 'limit'],
@@ -231,6 +243,37 @@ describe('MCP tool CLI surface projections', () => {
       rendered: true,
       routeId: 'tool:demo/submit',
     }]);
+  });
+
+  it('records projection defaults apart from schema defaults, sorted, and omits the record without one', async () => {
+    const schema = [
+      'z.object({',
+      "  mode: z.enum(['fast', 'full']).default('fast'),",
+      '  retries: z.number().optional(),',
+      '  tags: z.array(z.string()).optional(),',
+      '}).strict()',
+    ].join('\n');
+    const projected = await compileProjection(
+      cliModule("{ flags: { mode: { default: 'full' }, tags: { default: ['a', 'b'] } } }"),
+      { tool: toolModule({ schema }) },
+    );
+    expect(projected.graph.diagnostics).toEqual([]);
+    const command = projected.graph.cli!.commands![0]!;
+    expect(command.projection).toEqual({
+      defaults: { mode: 'full', tags: ['a', 'b'] },
+      mapInput: false,
+      module: projectionPath,
+    });
+    expect(Object.keys(command.projection!.defaults!)).toEqual(['mode', 'tags']);
+    // Help shows the projection's default over the schema's.
+    expect(command.options.find((option) => option.key === 'mode')).toMatchObject({ defaultValue: 'full', required: false });
+    expect(command.options.find((option) => option.key === 'retries')).not.toHaveProperty('defaultValue');
+
+    const schemaOnly = await compileProjection(cliModule('{}'), { tool: toolModule({ schema }) });
+    expect(schemaOnly.graph.diagnostics).toEqual([]);
+    expect(schemaOnly.graph.cli?.commands?.[0]?.projection).toEqual({ mapInput: false, module: projectionPath });
+    expect(schemaOnly.graph.cli?.commands?.[0]?.options.find((option) => option.key === 'mode'))
+      .toMatchObject({ defaultValue: 'fast' });
   });
 
   it('derives confirmation and metadata defaults while honoring projection and tool overrides', async () => {
@@ -278,7 +321,7 @@ describe('MCP tool CLI surface projections', () => {
     expect(commands['tool:demo/override']!.options.map((option) => option.option)).not.toContain('yes');
   });
 
-  it('reports AB4840 for orphan and misplaced projections while private projections stay parked', async () => {
+  it('reports AB4840 for orphan, duplicate, and misplaced projections while private projections stay parked', async () => {
     const orphanRoot = await createRoot();
     await writeTree(orphanRoot, {
       'src/mcp/demo/tools/ghost.cli.ts': cliModule('{}'),
@@ -288,9 +331,23 @@ describe('MCP tool CLI surface projections', () => {
       orphan,
       'AB4840',
       orphanRoot,
-      ['CLI projection src/mcp/demo/tools/ghost.cli.ts', 'tool:demo/ghost', 'no sibling'],
+      ['CLI projection src/mcp/demo/tools/ghost.cli.ts for tool:demo/ghost: has no sibling tool route'],
       'src/mcp/demo/tools/ghost.cli.ts',
     );
+
+    const duplicate = await compileProjection(cliModule('{}'), {
+      extraFiles: { 'src/mcp/demo/tools/submit.cli.tsx': cliModule('{}') },
+    });
+    expectOnlyDiagnostic(
+      duplicate.graph,
+      'AB4840',
+      duplicate.root,
+      [
+        'CLI projection src/mcp/demo/tools/submit.cli.tsx for tool:demo/submit: src/mcp/demo/tools/submit.cli.ts already projects this tool',
+      ],
+      'src/mcp/demo/tools/submit.cli.tsx',
+    );
+    expect(duplicate.graph.cli?.commands?.map((command) => command.projection?.module)).toEqual([projectionPath]);
 
     const misplacedRoot = await createRoot();
     await writeTree(misplacedRoot, {
@@ -301,9 +358,10 @@ describe('MCP tool CLI surface projections', () => {
       misplaced,
       'AB4840',
       misplacedRoot,
-      ['CLI projection src/mcp/demo/resources/submit.cli.ts', 'tool'],
+      ['CLI projection src/mcp/demo/resources/submit.cli.ts: sits under resources/', 'tool'],
       'src/mcp/demo/resources/submit.cli.ts',
     );
+    expect(misplaced.diagnostics[0]!.message).not.toContain(' for tool:');
 
     const parkedRoot = await createRoot();
     await writeTree(parkedRoot, {
@@ -385,6 +443,73 @@ describe('MCP tool CLI surface projections', () => {
       const result = await compileProjection(projection, { tool: toolSource });
       expectOnlyDiagnostic(result.graph, 'AB4842', result.root, fragments);
     }
+  });
+
+  it('reports AB4842 when a confirming command projects a tool whose contract has a key yes, whatever its spelling', async () => {
+    const confirming = toolModule({
+      config: "{ annotations: { readOnlyHint: false }, description: 'Submit work.' }",
+      schema: 'z.object({ laneKey: z.string(), yes: z.string() }).strict()',
+    });
+    for (const projection of [cliModule('{}'), cliModule("{ flags: { yes: { name: 'assent' } } }")]) {
+      const result = await compileProjection(projection, { tool: confirming });
+      expectOnlyDiagnostic(result.graph, 'AB4842', result.root, [
+        `CLI projection ${projectionPath} for tool:demo/submit:`,
+        'key "yes"',
+        'confirming command reserves',
+        'set confirm: false or rename the key',
+      ]);
+      expect(result.graph.diagnostics[0]!.recovery).toContain('confirm: false');
+      expect(result.graph.cli?.commands).toEqual([]);
+    }
+
+    // Without confirmation the key is an ordinary option.
+    const unconfirmed = await compileProjection(cliModule('{ confirm: false }'), { tool: confirming });
+    expect(unconfirmed.graph.diagnostics).toEqual([]);
+    expect(unconfirmed.graph.cli?.commands?.[0]?.options.map((option) => option.option)).toEqual(['lane-key', 'yes']);
+    expect(unconfirmed.graph.cli?.commands?.[0]?.options.find((option) => option.key === 'yes'))
+      .toMatchObject({ kind: 'string', required: true });
+  });
+
+  it('rejects name and aliases on a positional key with AB4842 while description, default, and required stay legal', async () => {
+    const schema = 'z.object({ argv: z.array(z.string()).min(1), cwd: z.string().optional() }).strict()';
+    const rejected: readonly [projection: string, fragments: readonly string[]][] = [
+      [cliModule("{ positionals: ['argv'], flags: { argv: { name: 'command' } } }"), ['config.flags.argv is positional; name does not apply']],
+      [cliModule("{ positionals: ['argv'], flags: { argv: { aliases: ['command'] } } }"), ['config.flags.argv is positional; aliases do not apply']],
+      [
+        cliModule("{ positionals: ['argv'], flags: { argv: { aliases: ['command'], name: 'cmd' } } }"),
+        ['config.flags.argv is positional; name and aliases do not apply'],
+      ],
+    ];
+    for (const [projection, fragments] of rejected) {
+      const result = await compileProjection(projection, { tool: toolModule({ schema }) });
+      expectOnlyDiagnostic(result.graph, 'AB4842', result.root, fragments);
+      expect(result.graph.diagnostics[0]!.recovery).toContain('config.positionals');
+    }
+
+    const legal = await compileProjection(
+      cliModule(
+        "{ positionals: ['argv'], flags: { argv: { default: ['ls'], description: 'The command line.', required: false } } }",
+        'export const mapInput = (input) => input;',
+      ),
+      { tool: toolModule({ schema }) },
+    );
+    expect(legal.graph.diagnostics).toEqual([]);
+    expect(legal.graph.cli?.commands?.[0]?.options.find((option) => option.key === 'argv')).toEqual({
+      defaultValue: ['ls'],
+      description: 'The command line.',
+      key: 'argv',
+      kind: 'string',
+      option: 'argv',
+      positional: 0,
+      repeated: true,
+      required: false,
+    });
+    expect(legal.graph.cli?.commands?.[0]?.projection).toEqual({
+      defaults: { argv: ['ls'] },
+      mapInput: true,
+      module: projectionPath,
+      relaxed: ['argv'],
+    });
   });
 
   it('excludes explicit projections from bulk MCP commands and diagnoses projected-only includes', async () => {

@@ -1,5 +1,5 @@
 import type { Diagnostic } from '../core/diagnostics.ts';
-import type { CanonicalAgentEvent } from './public.ts';
+import type { CanonicalAgentEvent, CliProjectionFlagDefault } from './public.ts';
 
 /**
  * Every route kind the conventional source tree can declare. Context
@@ -213,9 +213,11 @@ export interface CompiledCliOption {
   /** Accepted values of a `z.enum([...])` base. */
   readonly choices?: readonly string[];
   /**
-   * The static `.default(<literal>)` value, surfaced in generated help — or a
-   * CLI projection's `flags.<key>.default`, which the shell applies to an
-   * absent option before the canonical `inputSchema` reads the input.
+   * The effective default generated help shows: a CLI projection's
+   * `flags.<key>.default` when the projection declares one, else the schema's
+   * static `.default(<literal>)`. Display only — the shell fills in
+   * `CompiledCliProjection.defaults` alone before `mapInput`; a schema
+   * default is zod's to apply when the canonical `inputSchema` parses.
    */
   readonly defaultValue?: unknown;
   /** The static `.describe('<text>')` string, surfaced in generated help. */
@@ -243,6 +245,15 @@ export interface CompiledCliOption {
  * `options`.
  */
 export interface CompiledCliProjection {
+  /**
+   * Canonical key → the projection's `flags.<key>.default` literal: the
+   * CLI-only default the shell fills in for an option absent from argv
+   * before `mapInput` runs, so the mapper sees the projection's value and
+   * nothing else stands in for an omission (a schema `.default()` is applied
+   * by zod, after `mapInput`). Present only when at least one flag declares
+   * `default`; keys sorted.
+   */
+  readonly defaults?: Readonly<Record<string, CliProjectionFlagDefault>>;
   /** True when the module exports a `mapInput` function the shell applies before `inputSchema`. */
   readonly mapInput: boolean;
   /** Project-relative POSIX path of the projection module. */

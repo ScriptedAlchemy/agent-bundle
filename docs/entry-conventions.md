@@ -1051,7 +1051,7 @@ id; at run time the tool runs with
 `agent().invocation.kind` while the operation stays the tool. The bulk
 `--input` projection is unchanged and still runs as `kind: 'tool'`.
 `inspect --routes` prints `cli.commands[].projection`
-(`module`, `mapInput`, `relaxed?`) and `options[].{key,option,aliases}`.
+(`module`, `mapInput`, `defaults?`, `relaxed?`) and `options[].{key,option,aliases}`.
 
 ### The stdio MCP lifecycle shell
 

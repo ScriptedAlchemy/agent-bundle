@@ -5,6 +5,7 @@ import {
   type StateDefinitionProjection,
 } from '../../core/state-inspection.ts';
 import type { NormalizedNotices, NormalizedStateDefinition } from '../../core/types.ts';
+import type { CliProjectionFlagDefault } from '../../routes/public.ts';
 import type {
   CompiledAgentRoute,
   CompiledCliCommand,
@@ -108,6 +109,8 @@ export interface RouteManifestCliOption {
 
 /** Mirrors {@link CompiledCliProjection}: the explicit CLI surface projection of one tool. */
 export interface RouteManifestCliProjection {
+  /** Canonical key → the projection's `flags.<key>.default` literal (schema defaults are not listed); keys sorted. */
+  readonly defaults?: Readonly<Record<string, CliProjectionFlagDefault>>;
   readonly mapInput: boolean;
   readonly module: string;
   readonly relaxed?: readonly string[];
@@ -243,6 +246,12 @@ const manifestCliOption = (option: CompiledCliOption): RouteManifestCliOption =>
 });
 
 const manifestCliProjection = (projection: CompiledCliProjection): RouteManifestCliProjection => ({
+  ...(projection.defaults === undefined
+    ? {}
+    : {
+      defaults: Object.fromEntries(Object.entries(projection.defaults)
+        .map(([key, value]) => [key, Array.isArray(value) ? [...value] : value])),
+    }),
   mapInput: projection.mapInput,
   module: projection.module,
   ...(projection.relaxed === undefined ? {} : { relaxed: [...projection.relaxed] }),

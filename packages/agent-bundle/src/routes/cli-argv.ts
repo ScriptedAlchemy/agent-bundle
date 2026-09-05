@@ -63,6 +63,19 @@ export interface CliOptionOverride {
 }
 
 /**
+ * Why one canonical key cannot appear on a command at all, whatever it is
+ * spelled: the shell keys parsed values by canonical key, so a key it owns
+ * (`yes` on a confirming command, which the shell reads and strips) is
+ * unreachable by the route even under a `name` override. Reported through
+ * `CliOptionPolicy.overrideError`; `detail` continues the message subject
+ * without a final period.
+ */
+export interface CliReservedKey {
+  readonly detail: string;
+  readonly recovery?: string;
+}
+
+/**
  * What one caller adds to the default argv policy. `label` names the schema's
  * owner in AB4814/AB4838/AB4839 messages (`CLI route <path>` when absent); a
  * projected tool relabels them so the tool module, not a CLI route, is named.
@@ -71,13 +84,15 @@ export interface CliOptionOverride {
  * outside the key's kind — is reported through `overrideError`, whose detail
  * continues `flags.<key>...`, instead of as a grammar error of the schema.
  * `reserved` extends the shell-owned spellings (`yes` for a confirming
- * command).
+ * command); `reservedKeys` names canonical keys the shell owns outright, each
+ * with the detail `overrideError` reports for it.
  */
 export interface CliOptionPolicy {
   readonly label?: string;
-  readonly overrideError?: (detail: string) => Diagnostic;
+  readonly overrideError?: (detail: string, recovery?: string) => Diagnostic;
   readonly overrides?: Readonly<Record<string, CliOptionOverride>>;
   readonly reserved?: readonly string[];
+  readonly reservedKeys?: Readonly<Record<string, CliReservedKey>>;
 }
 
 const grammarRecovery = `Restrict the inputSchema initializer to the bounded argv grammar (${cliArgvGrammar}), then inspect again.`;
@@ -140,9 +155,10 @@ interface CliPropertyProjection {
 /** The resolved policy one projection runs under: the label, the reserved set, and the override reporter. */
 interface ResolvedCliOptionPolicy {
   readonly label: string;
-  readonly overrideError: (detail: string) => Diagnostic;
+  readonly overrideError: (detail: string, recovery?: string) => Diagnostic;
   readonly overrides: Readonly<Record<string, CliOptionOverride>>;
   readonly reserved: ReadonlySet<string>;
+  readonly reservedKeys: Readonly<Record<string, CliReservedKey>>;
   readonly sourcePath: string;
 }
 
@@ -154,6 +170,7 @@ const resolvePolicy = (policy: CliOptionPolicy, relativePath: string, sourcePath
     ?? ((detail) => argvError(`${policy.label ?? defaultLabel(relativePath)} ${detail}.`, sourcePath)),
   overrides: policy.overrides ?? {},
   reserved: new Set([...reservedCliOptionNames, ...(policy.reserved ?? [])]),
+  reservedKeys: policy.reservedKeys ?? {},
   sourcePath,
 });
 
@@ -179,16 +196,21 @@ const matchesKind = (base: ScalarBase, value: unknown): boolean => {
 };
 
 /**
- * The argv policy for one schema property: flag rule, kebab-case naming, and
- * reserved names, applied to the final spelling — a projection's `name` and
- * `aliases` included — and the projection's `default` judged against the
- * key's kind.
+ * The argv policy for one schema property: reserved keys, the flag rule,
+ * kebab-case naming, and reserved names, applied to the final spelling — a
+ * projection's `name` and `aliases` included — and the projection's
+ * `default` judged against the key's kind.
  */
 const cliOptionFor = (
   property: StaticInputSchemaProperty,
   policy: ResolvedCliOptionPolicy,
 ): CliPropertyProjection => {
   const { key } = property;
+  // A key the shell owns is judged before any spelling: no `name` reaches it.
+  const reservedKey = policy.reservedKeys[key];
+  if (reservedKey !== undefined) {
+    return { diagnostic: policy.overrideError(reservedKey.detail, reservedKey.recovery) };
+  }
   const override = policy.overrides[key] ?? {};
   const canonicallyRequired = !property.optional && !property.hasDefault;
   const relaxed = canonicallyRequired && (override.required === false || override.default !== undefined);
@@ -250,6 +272,8 @@ const cliOptionFor = (
     option: {
       ...(aliases.length === 0 ? {} : { aliases }),
       ...(property.base.choices === undefined ? {} : { choices: property.base.choices }),
+      // Help shows the effective default; only the projection's own default
+      // is also recorded in `defaults` for the shell to apply.
       ...(override.default !== undefined
         ? { defaultValue: override.default }
         : property.hasDefault
@@ -267,11 +291,15 @@ const cliOptionFor = (
 
 /**
  * The option surface one schema projects onto; `options` is absent whenever a
- * diagnostic fired. `relaxed` lists, sorted, the canonical-required keys a
- * projection override (`required: false` or a CLI `default`) made optional on
- * argv; absent when none was.
+ * diagnostic fired. `defaults` maps, keys sorted, each canonical key whose
+ * projection override declared a CLI `default` to that literal — the
+ * schema's own `.default()` values are not in it; absent when no override
+ * did. `relaxed` lists, sorted, the canonical-required keys a projection
+ * override (`required: false` or a CLI `default`) made optional on argv;
+ * absent when none was.
  */
 export interface ProjectedCliOptions {
+  readonly defaults?: Readonly<Record<string, CliProjectionFlagDefault>>;
   readonly diagnostics: readonly Diagnostic[];
   readonly options?: readonly CompiledCliOption[];
   readonly relaxed?: readonly string[];
@@ -288,6 +316,7 @@ const projectOptions = (
   entries: readonly ParsedInputSchemaEntry[],
   policy: ResolvedCliOptionPolicy,
 ): ProjectedCliOptions => {
+  const defaults: Record<string, CliProjectionFlagDefault> = {};
   const diagnostics: Diagnostic[] = [];
   const options: CompiledCliOption[] = [];
   const relaxed: string[] = [];
@@ -305,6 +334,7 @@ const projectOptions = (
     if (projected.relaxed === true) relaxed.push(entry.property.key);
     const option = projected.option!;
     const override = policy.overrides[option.key] ?? {};
+    if (override.default !== undefined) defaults[option.key] = override.default;
     const spellings: readonly SpellingClaim[] = [
       { key: option.key, overridden: override.name !== undefined },
       ...(option.aliases ?? []).map(() => ({ key: option.key, overridden: true })),
@@ -330,7 +360,11 @@ const projectOptions = (
     options.push(option);
   }
   if (diagnostics.length > 0) return { diagnostics };
+  const defaultKeys = Object.keys(defaults).sort((left, right) => left.localeCompare(right));
   return {
+    ...(defaultKeys.length === 0
+      ? {}
+      : { defaults: Object.fromEntries(defaultKeys.map((key) => [key, defaults[key]!])) }),
     diagnostics: [],
     options: [...options].sort((left, right) => left.option.localeCompare(right.option)),
     ...(relaxed.length === 0 ? {} : { relaxed: [...relaxed].sort((left, right) => left.localeCompare(right)) }),

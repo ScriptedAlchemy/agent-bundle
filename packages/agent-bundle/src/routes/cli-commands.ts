@@ -5,6 +5,7 @@ import {
   projectInputSchemaOptions,
   type CliOptionOverride,
   type CliOptionPolicy,
+  type CliReservedKey,
   type ExtractedCliArgv,
 } from './cli-argv.ts';
 import {
@@ -455,6 +456,16 @@ export interface CompiledProjectedCliCommandSurface extends CompiledMcpCliComman
 const positionalsRecovery = 'Name existing scalar inputSchema keys in argument order; only the last positional may be an array. Then inspect again.';
 
 /**
+ * AB4842 on a confirming projection whose tool contract has a key `yes`: the
+ * shell keys parsed values by canonical key and reads and strips `yes` as
+ * the confirmation, so the tool could never receive it — under any `name`.
+ */
+const confirmationKeyReservation: CliReservedKey = {
+  detail: 'the tool\'s inputSchema has a key "yes", which a confirming command reserves for its --yes confirmation and strips before the tool runs, whatever the key is spelled; set confirm: false or rename the key',
+  recovery: 'Declare confirm: false in the projection, or rename the tool\'s "yes" input key; then inspect again.',
+};
+
+/**
  * Compiles each tool's explicit CLI surface (#596): the projection module's
  * `config` respells the tool's canonical input onto argv under the one
  * option policy CLI routes use, so kebab-case, reserved-name, and collision
@@ -511,9 +522,9 @@ export const compileProjectedCliCommands = (
     for (const [key, flag] of Object.entries(config.flags ?? {})) overrides[key] = flag;
     const argv = routeArgv(tool, pair.toolText ?? '', compileOptions, {
       label: `Tool route ${tool.provenance.relativePath} (CLI projection ${relativePath})`,
-      overrideError: (detail) => binding(detail),
+      overrideError: (detail, recovery) => binding(detail, recovery),
       overrides,
-      ...(confirm ? { reserved: ['yes'] } : {}),
+      ...(confirm ? { reserved: ['yes'], reservedKeys: { yes: confirmationKeyReservation } } : {}),
     });
     // A tool without an extractable inputSchema is judged by its server's
     // contract diagnostics; the projection has nothing to bind until then.
@@ -573,6 +584,7 @@ export const compileProjectedCliCommands = (
       options,
       path: config.command ?? [module.stem],
       projection: {
+        ...(argv.defaults === undefined ? {} : { defaults: argv.defaults }),
         mapInput: extracted.mapInput,
         module: relativePath,
         ...(argv.relaxed === undefined ? {} : { relaxed: argv.relaxed }),

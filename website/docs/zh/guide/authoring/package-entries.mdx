@@ -304,7 +304,7 @@ export const mapInput = (
 | `flags.<key>.name` | CLI 拼写（kebab-case，不带前导短横线）；默认为 `kebab(key)`。 |
 | `flags.<key>.aliases` | 额外的长格式 `--spellings`，使用 kebab-case，不带前导短横线。 |
 | `flags.<key>.description` | 覆盖 schema 的 `.describe()`。 |
-| `flags.<key>.default` | shell 在 `mapInput` 之前应用的 CLI 专用默认值。 |
+| `flags.<key>.default` | shell 在 `mapInput` 之前应用的 CLI 专用默认值（记录在 `projection.defaults` 中；schema 的 `.default()` 由 zod 在 `mapInput` 之后应用）。 |
 | `flags.<key>.required` | `false` 会放宽一个规范必填键；仅当导出了 `mapInput` 时合法。 |
 | `aliases` | 命令别名（规则与 `src/cli` 路由的 `config.aliases` 相同）。 |
 | `confirm` | 默认为 `!(tool config.annotations.readOnlyHint === true)`。 |
@@ -316,13 +316,16 @@ export const mapInput = (
 `config`、封闭集合之外的键、形状错误的字段、静态上不是函数的 `mapInput`，或在没有 `mapInput` 时对
 规范必填键使用 `required: false` / CLI `default`，会触发 `AB4841`。契约中不存在的
 `flags`/`positionals` 键、不符合 kebab-case、为保留名（`help`、`json`、`ndjson`、`version`，以及
-启用确认时的 `yes`）或相互冲突的 `name`/别名，以及不是安全身份段的 `command` 段，会触发 `AB4842`。
-每条消息都是 `CLI projection <module> for tool:<server>/<tool>: <detail>.`。工具一旦有了投影，原本没有
+启用确认时的 `yes`）或相互冲突的 `name`/别名、位置参数键上的 `name` 或 `aliases`（裸参数没有
+`--spelling`）、启用确认的命令所投影的契约含有键 `yes`（无论如何拼写，shell 都会把 `yes` 当作确认
+剥离），以及不是安全身份段的 `command` 段，会触发 `AB4842`。
+每条消息都是 `CLI projection <module> for tool:<server>/<tool>: <detail>.`（位置错误的模块没有可指名的
+工具：`CLI projection <module>: <detail>.`）。工具一旦有了投影，原本没有
 静态契约的 schema 就成为不可或缺的语法：`AB4814`/`AB4838`/`AB4839` 会在工具模块上触发，前缀为
 `Tool route <path> (CLI projection <module>)`。
 
 `agent-bundle inspect --routes` 会转储编译后的路由图，因此无需额外的 renderer 即可看到
-`cli.commands[].projection`（`module`、`mapInput`、`relaxed?`）与
+`cli.commands[].projection`（`module`、`mapInput`、`defaults?`、`relaxed?`）与
 `options[].{key,option,aliases}`。Workbench 的 CLI 行会在规范输入编辑器旁显示同样的信息。
 编译后命令的 `routeId` 是工具 id；运行时的 `invocation.kind` 为 `'cli'`，`operationId` 则为该工具 id。
 

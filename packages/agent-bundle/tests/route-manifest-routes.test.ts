@@ -273,6 +273,7 @@ it('projects a CLI surface projection and option aliases without leaking project
         ],
         path: ['request'],
         projection: {
+          defaults: { cwd: '.', laneKey: ['main', 'next'] },
           mapInput: true,
           module: 'src/mcp/hauler/tools/hauler_request.cli.ts',
           relaxed: ['cwd'],
@@ -299,10 +300,14 @@ it('projects a CLI surface projection and option aliases without leaking project
   const command = manifest.cli?.commands?.[0];
 
   expect(command?.projection).toEqual({
+    defaults: { cwd: '.', laneKey: ['main', 'next'] },
     mapInput: true,
     module: 'src/mcp/hauler/tools/hauler_request.cli.ts',
     relaxed: ['cwd'],
   });
+  expect(command?.projection?.defaults).not.toBe(graph.cli!.commands![0]!.projection!.defaults);
+  expect(command?.projection?.defaults?.['laneKey']).not.toBe(graph.cli!.commands![0]!.projection!.defaults!['laneKey']);
+  expect(Object.isFrozen(command?.projection?.defaults?.['laneKey'])).toBe(true);
   expect(command?.options).toEqual([
     { key: 'argv', kind: 'string', option: 'argv', positional: 0, repeated: true, required: true },
     { key: 'cwd', kind: 'string', option: 'cwd', repeated: false, required: false },

@@ -158,6 +158,7 @@ it('decodes a CLI surface projection and option aliases on the strict wire', asy
     ],
     path: ['request'],
     projection: {
+      defaults: { cwd: '.', laneKey: ['main', 'next'], limit: 20, verbose: false },
       mapInput: true,
       module: 'src/mcp/hauler/tools/hauler_request.cli.ts',
       relaxed: ['cwd'],
@@ -172,11 +173,31 @@ it('decodes a CLI surface projection and option aliases on the strict wire', asy
   })).manifest();
 
   expect(decoded.cli?.commands?.[0]?.projection).toEqual({
+    defaults: { cwd: '.', laneKey: ['main', 'next'], limit: 20, verbose: false },
     mapInput: true,
     module: 'src/mcp/hauler/tools/hauler_request.cli.ts',
     relaxed: ['cwd'],
   });
   expect(decoded.cli?.commands?.[0]?.options).toEqual(projected.options);
+});
+
+it('rejects a projection default that is not a JSON literal of the argv grammar', async () => {
+  for (const defaults of [{ cwd: null }, { cwd: { nested: true } }, { tags: [['a']] }]) {
+    const client = clientFor(() => response({
+      manifest: {
+        ...manifest,
+        cli: {
+          ...manifest.cli,
+          commands: [{
+            ...manifest.cli.commands[0],
+            projection: { defaults, mapInput: false, module: 'src/mcp/library/tools/echo.cli.ts' },
+          }],
+        },
+      },
+    }));
+
+    await expect(client.manifest()).rejects.toMatchObject({ code: 'AB8123' });
+  }
 });
 
 it('rejects projectionSources leaked onto the CLI surface', async () => {

@@ -328,7 +328,7 @@ is recorded statically and loaded only by the CLI bin; the MCP worker never sees
 | `flags.<key>.name` | CLI spelling (kebab-case, no leading dashes); default `kebab(key)`. |
 | `flags.<key>.aliases` | Extra long-form `--spellings`, kebab-case, no leading dashes. |
 | `flags.<key>.description` | Overrides the schema `.describe()`. |
-| `flags.<key>.default` | CLI-only default the shell applies before `mapInput`. |
+| `flags.<key>.default` | CLI-only default the shell applies before `mapInput` (recorded in `projection.defaults`; a schema `.default()` is zod's to apply, after `mapInput`). |
 | `flags.<key>.required` | `false` relaxes a canonical-required key; legal only when `mapInput` is exported. |
 | `aliases` | Command aliases (same rules as a `src/cli` route's `config.aliases`). |
 | `confirm` | Default: `!(tool config.annotations.readOnlyHint === true)`. |
@@ -341,14 +341,17 @@ suffix is reserved under `src/mcp/**`; prefix `_` parks it. An orphan, or a `.cl
 the closed set, a field of the wrong shape, a `mapInput` that is not statically a function, or
 `required: false` / a CLI `default` on a canonical-required key without `mapInput`, is `AB4841`.
 A `flags`/`positionals` key absent from the contract, a `name`/alias that is not kebab-case, is
-reserved (`help`, `json`, `ndjson`, `version`, and `yes` when confirm), or collides, or a
+reserved (`help`, `json`, `ndjson`, `version`, and `yes` when confirm), or collides, `name` or
+`aliases` on a positional key (a bare argument has no `--spelling`), a contract key `yes` on a
+confirming command (the shell strips `yes` as the confirmation, whatever it is spelled), or a
 `command` segment that is not a safe identity segment, is `AB4842`. Every message is
-`CLI projection <module> for tool:<server>/<tool>: <detail>.` A tool whose schema has no static
+`CLI projection <module> for tool:<server>/<tool>: <detail>.` (a misplaced module has no tool to
+name: `CLI projection <module>: <detail>.`). A tool whose schema has no static
 contract becomes load-bearing once it has a projection: `AB4814`/`AB4838`/`AB4839` fire on the
 tool module with the prefix `Tool route <path> (CLI projection <module>)`.
 
 `agent-bundle inspect --routes` dumps the compiled graph, so
-`cli.commands[].projection` (`module`, `mapInput`, `relaxed?`) and
+`cli.commands[].projection` (`module`, `mapInput`, `defaults?`, `relaxed?`) and
 `options[].{key,option,aliases}` appear with no extra renderer. The Workbench CLI row shows the
 same facts beside the canonical input editor. The compiled command's `routeId` is the tool id;
 at run time `invocation.kind` is `'cli'` and `operationId` is that tool id.
