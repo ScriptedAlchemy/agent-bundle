@@ -22,9 +22,11 @@ import { DigestCache } from '../core/digest.ts';
  * `ns.default.createRequire(…)`, `require("node:module").createRequire(…)`),
  * or under an alias bound by `import { createRequire as mk }` or
  * `{ createRequire: mk }`; a loader bound from a factory by `const`, `let`,
- * or `var` — `const load = createRequire(import.meta.url); load("x")`,
- * `load.resolve("x")`, the shim Rspack emits for an external kept as
- * `node-commonjs`, and `const require = createRequire(…)` alike; and
+ * or `var` whose initializer ends with the factory call — `const load =
+ * createRequire(import.meta.url); load("x")`, `load.resolve("x")`, the shim
+ * Rspack emits for an external kept as `node-commonjs`, and `const require =
+ * createRequire(…)` alike, but not `const pad = createRequire(u)("x")`, which
+ * binds a module and is the factory load itself; and
  * `import.meta.resolve("x")`. Whitespace and comments may separate the callee
  * from its parentheses and the argument from either parenthesis, and `?.` may
  * precede the argument list or `resolve` (`require?.("x")`,
@@ -248,10 +250,14 @@ const factoryQualifier = String.raw`(?:(?:${identifier}\s*\.\s*)*|\brequire\s*${
 /**
  * `const load = <factory>(…)` — `let` and `var` too — the factory qualified as
  * `factoryQualifier` allows or not: the binding is a loader, called like
- * `require` from then on.
+ * `require` from then on. The factory call must end the initializer: with a
+ * call, a member, an index, or `?.` after it — `const pad =
+ * createRequire(u)("left-pad")`, `const where = createRequire(u).resolve(…)` —
+ * the binding holds a module or a path, not a loader, and the load is the
+ * factory call itself, reported where it stands.
  */
 const loaderBinding = (factories: readonly string[]): RegExp => new RegExp(
-  String.raw`\b(?:const|let|var)\s+(${identifier})\s*=\s*${factoryQualifier}(?<![\w$#])(?:${factories.join('|')})\s*[(]`,
+  String.raw`\b(?:const|let|var)\s+(${identifier})\s*=\s*${factoryQualifier}(?<![\w$#])(?:${factories.join('|')})\s*${callArguments}(?!\s*[(.[?])`,
   'gu',
 );
 

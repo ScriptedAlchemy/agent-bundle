@@ -79,6 +79,11 @@ describe('scanModuleLoads reports a literal load', () => {
       literal('require', 'require', '4'),
     ]],
     ['a bound loader called in a template substitution', 'const load = createRequire(import.meta.url);\nconst v = `${load("driver-package")}`;\n', [literal('bound-loader', 'load', 'driver-package')]],
+    [
+      'a module bound from a factory call, then called: the load is the factory call, the binding is not a loader',
+      'const pad = createRequire(import.meta.url)("driver-package");\nconst where = createRequire(import.meta.url).resolve("asset-pkg");\nexport const v = `${pad("", 2)}${where.length}`;\npad(name, 2);\n',
+      [literal('createRequire', 'createRequire', 'driver-package'), literal('createRequire.resolve', 'createRequire', 'asset-pkg')],
+    ],
     ['a template beyond the nesting budget, whose text is scanned as code', 'const v = `${ {a:{b:{c: require("x")}}} }`;\n', [literal('require', 'require', 'x')]],
     // A `/` after `++` or `--` is division, so the operand after it is code.
     ['a load after a postfix increment and a division', 'count++ / require("left-pad") / divisor\n', [literal('require', 'require', 'left-pad')]],

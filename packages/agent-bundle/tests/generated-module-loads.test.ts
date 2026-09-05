@@ -14,14 +14,19 @@
  * - `build/cli-bins.ts` produces no source of its own: `cliBinRslibEntries`
  *   delegates every entry to `generatedCliBinEntrySource` and
  *   `generatedRenderedRouteWorkerSource`, both rendered below.
- * - The composite plugin root's `bin/` and `mcp/` entries (#555 W1,
- *   PR #578) are planned from these same generators with
- *   `target: composite.identity`, so they are covered by the same templates
- *   and need no rendering of their own.
+ * - The composite plugin root (#555 W1, PR #578) renders no JavaScript of
+ *   its own: `build/compose.ts` merges the adapters' planned entries, its
+ *   `bin/` entries come from `cliBinRslibEntries`
+ *   (`generatedCliBinEntrySource`, `generatedRenderedRouteWorkerSource`) and
+ *   its `mcp/` entries from `planMcpEntriesSurface`
+ *   (`generatedRouteMcpEntrySource` with `allowedTargets`/`hosts`,
+ *   `generatedStdioMcpEntrySource`, `generatedRouteFlightWorkerSource`), all
+ *   rendered below.
  * - The event-route wrapper source is module-private to
  *   `adapters/hook-contract.ts`; it is reached through `planHooks` with each
- *   adapter's real hook contract, and every planned `virtualSource` is
- *   scanned.
+ *   adapter's real hook contract — and, for a composite root, the per-plan
+ *   Cursor contract whose wrapper paths `hookWrapperPath` assigns — and every
+ *   planned `virtualSource` is scanned.
  */
 import { isBuiltin } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -29,7 +34,8 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from '@rstest/core';
 
-import { createCursorHookContract } from '../src/adapters/cursor.ts';
+import { type BuiltInHost, builtInHostNames, hookWrapperPath } from '../src/adapters/composite-layout.ts';
+import { createCursorHookContract, cursorArtifactPaths } from '../src/adapters/cursor.ts';
 import {
   cursorHookWrapperSource,
   nativeHookWrapperSource,
@@ -60,7 +66,7 @@ import type {
   NormalizedStateDefinition,
   SourceProvenance,
 } from '../src/core/types.ts';
-import { type BuiltInTarget, installSurfaceEntries } from '../src/install/surface.ts';
+import { installSurfaceEntries } from '../src/install/surface.ts';
 import type { CompiledAgentRoute, CompiledCliCommand, CompiledLayout, CompiledProvider } from '../src/routes/types.ts';
 
 /** A literal load the bundler inlines or Node serves itself: a built-in, a relative path, or a `file:` URL. */
@@ -164,9 +170,10 @@ const renderedCommand: CompiledCliCommand = {
 };
 const plugin = { name: 'fixture', version: '1.0.0' };
 
-const hookTargets: readonly string[] = ['claude', 'codex', 'cursor', 'plugin'];
+/** The hosts of a composite root that receive hooks; `portable` hosts none. */
+const hookTargets: readonly string[] = ['claude', 'codex', 'cursor'];
 
-/** A config-declared hook: the wrapper the native (Claude/Codex/Universal) and Cursor codecs render directly. */
+/** A config-declared hook: the wrapper the native (Claude/Codex) and Cursor codecs render directly. */
 const configHook: NormalizedHook = {
   event: 'sessionStart',
   id: 'hook:sessionStart:probe',
@@ -215,7 +222,7 @@ const model = (state?: NormalizedStateDefinition): NormalizedPlugin => ({
   scripts: [],
   skills: [],
   ...(state === undefined ? {} : { state }),
-  targets: ['claude', 'codex', 'cursor', 'plugin', 'portable'].map((name) => ({
+  targets: builtInHostNames.map((name) => ({
     id: `target:${name}`,
     name,
     provenance: configProvenance,
@@ -224,30 +231,29 @@ const model = (state?: NormalizedStateDefinition): NormalizedPlugin => ({
 
 /**
  * Every hook contract the framework binds a `wrapperSource` to, with the
- * target name `planHooks` selects hooks by and, for the composite bundle's
- * Cursor half (`adapters/plugin.ts`), the concrete host the wrappers serve.
+ * target name `planHooks` selects hooks by: each adapter's registered
+ * contract, plus the per-plan Cursor contract a composite root uses
+ * (`adapters/cursor.ts`), whose wrapper paths carry the host suffix
+ * `hookWrapperPath` assigns when a hook reaches several selected hosts (#555).
  */
 const hookPlanners: ReadonlyArray<{
-  readonly concreteEventTarget?: string;
   readonly contract: TargetHookContract;
   readonly label: string;
   readonly target: string;
 }> = [
-  // Intentionally enumerate the production hook list: Claude, Codex, Cursor,
-  // Universal plugin, and its Cursor variant; portable declares hooks unavailable.
+  // The production hook list comes from the registry: Claude, Codex, and Cursor bind a contract;
+  // portable declares hooks unavailable.
   ...registry.names().flatMap((target) => {
     const contract = registry.hookContract(target);
     return contract === undefined ? [] : [{ contract, label: target, target }];
   }),
   {
-    concreteEventTarget: 'cursor',
     contract: createCursorHookContract({
-      indexedWrappers: false,
-      manifestPath: 'hooks/hooks-cursor.json',
-      wrapperPath: (hook) => `hooks/${hook.name}.cursor.mjs`,
+      manifestPath: cursorArtifactPaths.hooks,
+      wrapperPath: (hook) => hookWrapperPath('cursor', hook.name, hook.targets, builtInHostNames),
     }),
-    label: 'plugin, cursor variant',
-    target: 'plugin',
+    label: 'cursor, composite-root wrapper paths',
+    target: 'cursor',
   },
 ];
 
@@ -397,17 +403,18 @@ describe('generated JavaScript loads nothing by a bare package specifier', () =>
       generatedRouteMcpEntrySource({ plugin, routes: [toolRoute], serverName: 'curator', workerFile: 'mcp-curator-flight.mjs' }),
     );
     expectNoBareLoads(
-      'generatedRouteMcpEntrySource(event routes, durable state, notices, plugin target)',
+      'generatedRouteMcpEntrySource(event routes, durable state, notices, composite root hosting the event runtime)',
       generatedRouteMcpEntrySource({
+        allowedTargets: hookTargets,
         artifactEpoch: 'fixture@1.0.0',
         eventRoutes: eventRouteHooks,
+        hosts: builtInHostNames,
         noticeDelivery,
         noticeRetention,
         plugin,
         routes: [toolRoute, resourceRoute],
         serverName: 'curator',
         state: durableState,
-        target: 'plugin',
         workerFile: 'mcp-curator-flight.mjs',
       }),
     );
@@ -444,14 +451,15 @@ describe('generated JavaScript loads nothing by a bare package specifier', () =>
       name: 'curator',
       provenance: configProvenance,
       source: import.meta.filename,
-      targets: ['plugin'],
+      targets: ['claude'],
       transport: 'stdio',
     }], {
       artifactEpoch: 'fixture@1',
       eventHooks: [],
       outDir: join(tmpdir(), 'agent-bundle-generated-module-loads'),
       plugin,
-      target: 'plugin',
+      target: 'claude',
+      targets: ['claude'],
     });
     const mcpApps = declared(
       surface.entries
@@ -473,7 +481,6 @@ describe('generated JavaScript loads nothing by a bare package specifier', () =>
 
     expectNoBareLoads('nativeHookWrapperSource(Claude)', nativeHookWrapperSource(wrapper, 'Claude'));
     expectNoBareLoads('nativeHookWrapperSource(Codex)', nativeHookWrapperSource({ ...wrapper, target: 'codex' }, 'Codex'));
-    expectNoBareLoads('nativeHookWrapperSource(Universal)', nativeHookWrapperSource({ ...wrapper, target: 'plugin' }, 'Universal'));
     expectNoBareLoads(
       'cursorHookWrapperSource',
       cursorHookWrapperSource({ ...wrapper, nativeEvent: 'sessionStart', target: 'cursor' }),
@@ -484,7 +491,7 @@ describe('generated JavaScript loads nothing by a bare package specifier', () =>
     for (const [stateLabel, state] of [['stateless', undefined], ['durable state', durableState]] as const) {
       for (const planner of hookPlanners) {
         const label = `planHooks(${planner.label}; ${stateLabel})`;
-        const plan = planHooks(model(state), planner.target, planner.contract, planner.concreteEventTarget);
+        const plan = planHooks(model(state), planner.target, planner.contract);
 
         expect(plan.diagnostics, `${label} diagnostics`).toEqual([]);
         expect(plan.hookEntries.length, `${label} planned no wrapper`).toBeGreaterThan(0);
@@ -500,17 +507,23 @@ describe('generated JavaScript loads nothing by a bare package specifier', () =>
     }
   });
 
-  it('install/surface: the verbatim installer of every target that emits one', () => {
-    const targets: readonly BuiltInTarget[] = ['claude', 'codex', 'cursor', 'plugin', 'portable'];
+  it('install/surface: the verbatim installer of every selection that emits one', () => {
+    // One install surface per composite root (#555): each built-in host alone, and all four together.
+    const selections: readonly (readonly BuiltInHost[])[] = [
+      ...builtInHostNames.map((host): readonly BuiltInHost[] => [host]),
+      builtInHostNames,
+    ];
     const emitting: string[] = [];
-    for (const target of targets) {
-      for (const entry of installSurfaceEntries(model(), target)) {
+    for (const hosts of selections) {
+      const label = hosts.join('+');
+      for (const entry of installSurfaceEntries(model(), hosts)) {
         if (!/\.(?:mjs|js)$/u.test(entry.relativePath)) continue;
-        emitting.push(target);
-        expectNoBareLoads(`installSurfaceEntries(${target}) ${entry.relativePath}`, entry.content);
+        emitting.push(label);
+        expectNoBareLoads(`installSurfaceEntries(${label}) ${entry.relativePath}`, entry.content);
       }
     }
-    // install.mjs is emitted verbatim, never bundled, so it is scanned as written.
-    expect(emitting).toEqual(expect.arrayContaining(['cursor', 'plugin', 'portable']));
+    // install.mjs is emitted verbatim, never bundled, so it is scanned as written; it ships whenever
+    // Cursor or the portable format is among the selected hosts.
+    expect(emitting).toEqual(['cursor', 'portable', 'claude+codex+cursor+portable']);
   });
 });
