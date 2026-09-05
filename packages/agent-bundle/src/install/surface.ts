@@ -240,8 +240,8 @@ const portableInstructions = (packDirectory = ''): string[] => [
     ? ['This bundle follows the Agent Plugins open standard (Agent Plugins 1.0.0, https://agent-plugins.org).']
     : [
         `The \`${packDirectory}/\` directory of this root is the Agent Plugins pack (Agent Plugins 1.0.0,`,
-        'https://agent-plugins.org): point Agent Plugins clients at that directory, or at this root through',
-        `\`agent-bundle install portable --from ./\`, which resolves \`./${packDirectory}\` itself.`,
+        'https://agent-plugins.org): point Agent Plugins clients at that directory. Cursor loads it through',
+        `\`agent-bundle install cursor --from ./${packDirectory}\` or the bundled installer below.`,
       ]),
   'Cursor loads this format natively from `~/.cursor/plugins/local/<name>`; restart Cursor or run',
   '`Developer: Reload Window` after copying it. Codex, VS Code, GitHub Copilot, Kiro, and ChatGPT',

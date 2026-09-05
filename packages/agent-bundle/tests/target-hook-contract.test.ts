@@ -8,6 +8,7 @@ import { expect, it } from '@rstest/core';
 
 import {
   canonicalHookEventFor,
+  hostDetectionSource,
   planHooks,
   readStandardNativeHookCommands,
   readTargetNativeHookCommands,
@@ -392,7 +393,7 @@ it('bakes the concrete Cursor target only into the composite root\'s Cursor even
   expect(shared?.virtualSource).toContain('const nativeEvent = "PostToolUse"');
   expect(cursor?.virtualSource).toContain('const nativeEvent = "postToolUse"');
   expect(shared?.virtualSource).toContain('const declaredHost = process.env.AGENT_BUNDLE_HOOK_HOST;');
-  expect(shared?.virtualSource).toContain('process.env.PLUGIN_ROOT === undefined ? "claude" : "codex"');
+  for (const line of hostDetectionSource) expect(shared?.virtualSource).toContain(line);
   expect(shared?.virtualSource).toContain('requestEventRuntime({ artifactEpoch, endpointId, event: canonicalEvent, hostContractRevision: capabilityRevision, native, signal: controller.signal, target, timeoutMs })');
   expect(cursor?.virtualSource).toContain('const target = "cursor";');
   expect(cursor?.virtualSource).not.toContain('AGENT_BUNDLE_HOOK_HOST');

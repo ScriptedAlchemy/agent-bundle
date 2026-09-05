@@ -9,7 +9,7 @@ import { expect, it, rs } from '@rstest/core';
 import { rspack } from '@rslib/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
-import { nativeHookWrapperSource, type TargetHookWrapper } from '../src/adapters/hook-contract.ts';
+import { hostDetectionSource, nativeHookWrapperSource, type TargetHookWrapper } from '../src/adapters/hook-contract.ts';
 import { build } from './support/build.ts';
 import { runNodeScript } from './support/run-node-script.ts';
 import { writeHookIndex } from '../src/build/emit.ts';
@@ -159,12 +159,7 @@ it('keeps the Claude and Codex native wrapper codecs byte-identical apart from i
   expect(universalSource).toContain('process.env.PLUGIN_ROOT');
   expect(universalSource).toContain('AGENT_BUNDLE_HOOK_HOST');
 
-  const hostDetectionLines = new Set([
-    'const declaredHost = process.env.AGENT_BUNDLE_HOOK_HOST;',
-    'const target = declaredHost === "claude" || declaredHost === "codex"',
-    '  ? declaredHost',
-    '  : process.env.PLUGIN_ROOT === undefined ? "claude" : "codex";',
-  ]);
+  const hostDetectionLines = new Set(hostDetectionSource);
   const universalWithoutHostDetection = universalSource
     .split('\n')
     .filter((line) => !hostDetectionLines.has(line))

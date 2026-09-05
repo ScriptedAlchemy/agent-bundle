@@ -104,11 +104,20 @@ interface PlannedScriptEntry extends CompiledEntry {
 
 export interface CompiledHookEntry extends CompiledEntry {
   readonly event: TargetHookEntry['event'];
-  /** Every host projection this one wrapper serves; absent means exactly `target` (#555). */
+  /**
+   * Every host projection this one wrapper serves; absent means exactly
+   * `target` (#555). Authoritative for "which hosts run this file": a wrapper
+   * shared by Claude Code and Codex lists both here.
+   */
   readonly hosts?: readonly string[];
   readonly id: string;
   /** False when this wrapper is a host-document variant excluded from the canonical hook index. */
   readonly indexed?: false;
+  /**
+   * The host whose native hook format the wrapper follows (the document that
+   * names it) — one host even when `hosts` lists several. Unlike
+   * `CompiledMcpEntry.target`, never the composite root's name.
+   */
   readonly target: string;
   /** Native hook timeout in seconds. Omit it to use the host default. */
   readonly timeout?: number;

@@ -668,6 +668,29 @@ const standaloneEventRoute = (route: NonNullable<NormalizedHook['eventRoute']>):
 export const hookWrapperAppliesOperatorEnv = (entry: TargetHookWrapper): boolean =>
   entry.hook.eventRoute === undefined || standaloneEventRoute(entry.hook.eventRoute);
 
+/**
+ * How a wrapper shared by Claude Code and Codex learns which host invoked it.
+ * Codex exports `PLUGIN_ROOT` to plugin hook commands (and `CLAUDE_PLUGIN_ROOT`
+ * as an alias of the same path); Claude Code exports `CLAUDE_PLUGIN_ROOT`
+ * only. So `PLUGIN_ROOT` names Codex when it agrees with any
+ * `CLAUDE_PLUGIN_ROOT` present — one that disagrees is ambient shell state,
+ * not a host. The simulation harness pins a host through
+ * `AGENT_BUNDLE_HOOK_HOST`. The block is shared verbatim by the composite
+ * wrapper and the Universal codec (see the parity invariant on
+ * nativeHookWrapperSource).
+ */
+export const hostDetectionSource: readonly string[] = Object.freeze([
+  // No new identifiers besides `declaredHost` and `target`: the block is
+  // spliced into a module whose own bindings (`pluginRoot`, ...) it must not shadow.
+  'const declaredHost = process.env.AGENT_BUNDLE_HOOK_HOST;',
+  'const target = declaredHost === "claude" || declaredHost === "codex"',
+  '  ? declaredHost',
+  '  : process.env.PLUGIN_ROOT !== undefined',
+  '    && (process.env.CLAUDE_PLUGIN_ROOT === undefined || process.env.CLAUDE_PLUGIN_ROOT === process.env.PLUGIN_ROOT)',
+  '  ? "codex"',
+  '  : "claude";',
+]);
+
 const eventRouteHookWrapperSource = (
   entry: TargetHookWrapper,
   hostContractRevision: string,
@@ -686,12 +709,7 @@ const eventRouteHookWrapperSource = (
   const targetSource = concreteTarget !== undefined
     ? [`const target = ${JSON.stringify(concreteTarget)};`]
     : (entry.hosts?.length ?? 1) > 1
-    ? [
-        'const declaredHost = process.env.AGENT_BUNDLE_HOOK_HOST;',
-        'const target = declaredHost === "claude" || declaredHost === "codex"',
-        '  ? declaredHost',
-        '  : process.env.PLUGIN_ROOT === undefined ? "claude" : "codex";',
-      ]
+    ? hostDetectionSource
     : entry.hosts?.length === 1
     ? [`const target = ${JSON.stringify(entry.hosts[0])};`]
     : ['const target = artifactTarget;'];
@@ -1288,12 +1306,7 @@ export const nativeHookWrapperSource = (
   // is allowed from the shared Claude/Codex body below it (see the parity
   // invariant documented on nativeHookWrapperSource above).
   const targetSource = codecName === 'Universal'
-    ? [
-        'const declaredHost = process.env.AGENT_BUNDLE_HOOK_HOST;',
-        'const target = declaredHost === "claude" || declaredHost === "codex"',
-        '  ? declaredHost',
-        '  : process.env.PLUGIN_ROOT === undefined ? "claude" : "codex";',
-      ]
+    ? hostDetectionSource
     : [`const target = ${JSON.stringify(entry.target)};`];
   return [
     // The installed pack's operator `.env` layer (#469): the first import, so

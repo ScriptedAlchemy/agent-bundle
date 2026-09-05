@@ -17,8 +17,9 @@ npx agent-bundle install cursor --from artifact
 ```
 
 `--from` 指向**不含源码的插件根目录**——即包含所选宿主清单（`.claude-plugin/`、`.codex-plugin/`、
-`.cursor-plugin/` 或可移植 `plugin.json`）的那个目录。对于与其他宿主并列的可移植视图，`--from <root>/portable`
-同样可用。在组合根目录之前构建的产物中的 `<root>/<host>` 与 `<root>/plugin` 目录仍会被探测，但仅限于那些
+`.cursor-plugin/` 或可移植 `plugin.json`）的那个目录。对于与其他宿主并列的可移植视图，用
+`install cursor --from <root>/portable` 安装该包（Cursor 原生加载 Agent Plugins 格式；没有 `portable` 这个安装
+宿主）。在组合根目录之前构建的产物中的 `<root>/<host>` 与 `<root>/plugin` 目录仍会被探测，但仅限于那些
 旧产物。
 
 ## 各宿主接受什么

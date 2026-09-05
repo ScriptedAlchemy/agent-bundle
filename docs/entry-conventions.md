@@ -1289,8 +1289,8 @@ functions the build uses, so the dump cannot drift from what compiles.
 
 Nothing is redacted (this is a local debugging surface), but two build-time
 values are replaced with stable tokens so output is deterministic for one
-project: the artifact output root (chosen per build) appears as
-`<output>/<target>`, and the synthesized declaration tsconfig (a temporary
+project: the artifact output root (chosen per build) appears as `<output>` —
+one plugin root for every selected target (#555) — and the synthesized declaration tsconfig (a temporary
 file generated per package build) appears as `<generated-dts-tsconfig>`. The
 package build's output root appears as its published destination, `dist`,
 although each real build stages outputs before publishing them atomically.

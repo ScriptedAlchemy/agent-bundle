@@ -155,10 +155,10 @@ CI should use strict validation:
 agent-bundle validate --artifact dist --strict
 ```
 
-During development, load a built target without installing it and verify registration:
+During development, load the built root without installing it and verify registration:
 
 ```sh
-claude --plugin-dir dist/claude plugin list --json
+claude --plugin-dir dist plugin list --json
 ```
 
 ## Distribute and install bundles
@@ -211,7 +211,8 @@ itself stays spec-conformant for other Agent Plugins clients.
 Cursor installation is user-scoped. Claude also accepts `--scope project` and
 `--scope local`; Codex is user-scoped. `--from` takes the built root; beside
 other hosts the portable Agent Plugins pack is its `portable/` directory, which
-`install portable --from artifact` resolves itself.
+`install cursor --from artifact/portable` (or `node artifact/install.mjs`)
+copies into Cursor's local plugins.
 
 ### Reinstall after a same-version rebuild
 

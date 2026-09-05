@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
+import { hostDetectionSource } from '../src/adapters/hook-contract.ts';
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import { runNodeScript } from './support/run-node-script.ts';
 import { build } from './support/build.ts';
@@ -774,7 +775,7 @@ it('emits Claude-format commands without pointing Cursor at the shared directory
 it('bakes runtime host detection into the universal wrapper source', () => {
   const plan = planBundle(bundleModel);
   const wrapper = (plan.hookEntries ?? []).find((entry) => entry.relativePath === 'hooks/session-start.mjs');
-  expect(wrapper?.virtualSource).toContain('process.env.PLUGIN_ROOT === undefined ? "claude" : "codex"');
+  for (const line of hostDetectionSource) expect(wrapper?.virtualSource).toContain(line);
   expect(wrapper?.virtualSource).toContain('AGENT_BUNDLE_HOOK_HOST');
 });
 

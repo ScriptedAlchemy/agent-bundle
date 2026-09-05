@@ -20,7 +20,8 @@ npx agent-bundle install cursor --from artifact
 
 `--from` names the **source-free plugin root** — the directory holding the selected host's
 manifest (`.claude-plugin/`, `.codex-plugin/`, `.cursor-plugin/`, or a portable `plugin.json`).
-For the portable view beside other hosts, `--from <root>/portable` also works. The `<root>/<host>`
+For the portable view beside other hosts, `install cursor --from <root>/portable` installs that pack
+(Cursor loads the Agent Plugins format natively; there is no `portable` install host). The `<root>/<host>`
 and `<root>/plugin` directories of artifacts built before the composite root are still probed,
 only for those older artifacts.
 

@@ -57,8 +57,13 @@ export interface BuildResult {
   /** The routed-CLI executables emitted into host artifacts (#387), one per hosting target. */
   readonly compiledCliBins: readonly CompiledCliBin[];
   readonly compiledEntries: readonly CompiledEntry[];
+  /**
+   * One entry per emitted hook wrapper. `hosts` lists every host projection a
+   * wrapper serves; `target` is the host whose native format it follows (#555).
+   */
   readonly compiledHooks: readonly CompiledHookEntry[];
   readonly compiledMcpApps: readonly CompiledMcpApp[];
+  /** One entry per compiled MCP server; `target` is the root's identity (a host, or `claude+codex`), `hosts` the projections it serves. */
   readonly compiledMcpEntries: readonly CompiledMcpEntry[];
   readonly manifest: ArtifactManifest;
   readonly outputProvenance: readonly ArtifactOutputProvenance[];
