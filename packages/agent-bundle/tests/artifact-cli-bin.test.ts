@@ -194,6 +194,42 @@ const createFixture = async (options: {
   return root;
 };
 
+const webOnlyPluginName = 'web-only-artifact';
+/** A live framework import surviving in a generated executable: `from "agent-bundle/..."` or `import("agent-bundle/...")`. */
+const agentBundleImport = /(?:\bfrom\s*|\bimport\s*\(\s*)['"]agent-bundle(?:\/[^'"]*)?['"]/u;
+
+/**
+ * A project with no `src/cli/**` at all: one MCP server with one App, exposed
+ * through `web.apps` (#564). The App view and the server entry are plain
+ * TypeScript, so the build needs no runtime dependencies beyond the config
+ * entry the audiobook example's installed tree resolves.
+ */
+const createWebOnlyFixture = async (): Promise<string> => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-web-only-artifact-'));
+  roots.push(root);
+  await symlink(join(process.cwd(), 'examples', 'audiobook-curator', 'node_modules'), join(root, 'node_modules'), 'dir');
+  await Promise.all([
+    writeProjectFile(root, 'package.json', JSON.stringify({ name: webOnlyPluginName, type: 'module', version: '1.0.0' })),
+    writeProjectFile(root, 'agent-bundle.config.ts', [
+      "import { defineConfig } from 'agent-bundle/config';",
+      'export default defineConfig({',
+      '  mcp: { servers: { status: {',
+      "    apps: { status: { entry: './views/status.ts', resourceUri: 'ui://web-only-artifact/status.html', template: './views/status.html' } },",
+      "    entry: './src/mcp/status.ts',",
+      '  } } },',
+      `  plugin: { description: 'Web-only artifact fixture.', name: ${JSON.stringify(webOnlyPluginName)}, version: '1.0.0' },`,
+      "  targets: ['portable'],",
+      "  web: { apps: ['status/status'] },",
+      '});',
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/mcp/status.ts', "process.stderr.write('status server\\n');\n"),
+    writeProjectFile(root, 'views/status.html', '<!doctype html><html><body><main id="view"></main></body></html>\n'),
+    writeProjectFile(root, 'views/status.ts', "document.querySelector('#view')!.textContent = 'web-only status';\n"),
+  ]);
+  return root;
+};
+
 const parseJsonLine = (stdout: string): unknown => JSON.parse(stdout) as unknown;
 
 /**
@@ -381,6 +417,49 @@ it('lists authored commands and web in one generated artifact bin', { retry: 1, 
   expect(help.stdout).toContain('status');
   expect(help.stdout).toContain('web');
   expect(await readFile(binPath, 'utf8')).toContain('agent-bundle-web-host-seed');
+});
+
+/**
+ * The `web` surface rides the same executable (#564): a project that authors
+ * no `src/cli/**` command but exposes an App through `web.apps` still gets
+ * `bin/<plugin>.mjs` in its composite root, self-contained, with the
+ * framework-owned `web` command listed by `--help`, and the manifest's `web`
+ * section naming the exposed App.
+ */
+it('emits bin/<plugin>.mjs for a project with web.apps and no src/cli, and its --help lists web (#564)', { retry: 1, timeout: 240_000 }, async () => {
+  const root = await createWebOnlyFixture();
+  const result = await build({ output: 'artifact', root });
+  const artifactRoot = join(root, 'artifact');
+
+  const binPath = join(artifactRoot, 'bin', `${webOnlyPluginName}.mjs`);
+  await expect(stat(binPath)).resolves.toMatchObject({});
+  expect(result.build.manifest.files.find((file) => file.path === `bin/${webOnlyPluginName}.mjs`)).toMatchObject({ kind: 'bundle' });
+  expect(result.diagnostics.filter((entry) => entry.severity === 'error')).toEqual([]);
+  expect(await readFile(binPath, 'utf8')).not.toMatch(agentBundleImport);
+
+  // `<plugin> --help` lists the framework-owned command among the plugin's.
+  const help = await execFile(process.execPath, [binPath, '--help']);
+  expect(help.stdout).toContain(`${webOnlyPluginName} 1.0.0`);
+  expect(help.stdout).toMatch(/^Commands:$/mu);
+  expect(help.stdout).toMatch(/^\s+web\b/mu);
+
+  // The manifest's `web` section (web-host/manifest.ts) names the exposed
+  // App and the compiled MCP executable the host launches.
+  const manifest = JSON.parse(await readFile(join(artifactRoot, 'agent-bundle.manifest.json'), 'utf8')) as { readonly web?: unknown };
+  const mcpEntries = result.build.manifest.files.filter((file) => file.path.startsWith('mcp/')).map((file) => file.path);
+  expect(mcpEntries).toHaveLength(1);
+  expect(manifest.web).toEqual({
+    apps: [{
+      allow: [],
+      app: 'status/status',
+      entry: mcpEntries[0]!,
+      env: {},
+      name: 'status',
+      resourceUri: 'ui://web-only-artifact/status.html',
+      server: 'status',
+    }],
+    open: 'never',
+  });
 });
 
 it('refuses a host-emitted file that collides with the routed CLI bin (AB4766)', { timeout: 120_000 }, async () => {

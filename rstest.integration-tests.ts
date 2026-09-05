@@ -78,7 +78,6 @@ export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/rstest-meta-consumer.test.ts',
   'packages/agent-bundle/tests/script-playground-service.test.ts',
   'packages/agent-bundle/tests/self-contained-bundler-config.test.ts',
-  'packages/agent-bundle/tests/serve-app-command-spawn.test.ts',
   'packages/agent-bundle/tests/serve-app.test.ts',
   'packages/agent-bundle/tests/target-hook-contract.test.ts',
   'packages/agent-bundle/tests/target-mcp-runtime.test.ts',
@@ -118,6 +117,7 @@ export const integrationTestFiles: readonly string[] = [
   'packages/workbench/tests/runtime-playground-capture-cleanup.test.ts',
   'packages/workbench/tests/runtime-playground.e2e.test.ts',
   'packages/workbench/tests/runtime-playground-hmr.e2e.test.ts',
+  'packages/workbench/tests/web-command.e2e.test.ts',
   'packages/workbench/tests/workbench-dev-command.test.ts',
 ];
 
@@ -174,8 +174,8 @@ export const packedTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/packed-consumer-typescript.test.ts',
   'packages/agent-bundle/tests/packed-host-install-proof.test.ts',
   'packages/agent-bundle/tests/packed-native-smoke.test.ts',
-  'packages/agent-bundle/tests/packed-serve-app-command.test.ts',
   'packages/agent-bundle/tests/packed-stdio-projection.test.ts',
+  'packages/agent-bundle/tests/packed-web-command.test.ts',
   'packages/agent-bundle/tests/public-api-packed.test.ts',
   'packages/agent-bundle/tests/rsc-runtime-optional-packaging.test.ts',
   'packages/create-agent-bundle/tests/scaffold-packed.e2e.test.ts',
