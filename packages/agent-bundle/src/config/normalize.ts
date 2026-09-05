@@ -542,11 +542,11 @@ const normalizeHooks = (
         ...(route.preflight === undefined
           ? {}
           : {
-              preflight: {
-                provenance: { ...route.preflight.provenance },
-                source: route.preflight.source,
-              },
-            }),
+            preflight: {
+              provenance: { ...route.preflight.provenance },
+              source: route.preflight.source,
+            },
+          }),
         ...(providers === undefined ? {} : { providers }),
         runtime,
       }),
