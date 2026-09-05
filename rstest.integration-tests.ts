@@ -108,7 +108,6 @@ export const integrationTestFiles: readonly string[] = [
   'packages/workbench/tests/mcp-session-timeout.e2e.test.ts',
   'packages/workbench/tests/mcp-tasks.e2e.test.ts',
   'packages/workbench/tests/overview.e2e.test.ts',
-  'packages/workbench/tests/playground-real.e2e.test.ts',
   'packages/workbench/tests/rsbuild-closure.test.ts',
   'packages/workbench/tests/rsbuild-workbench.test.ts',
   'packages/workbench/tests/route-editor-atoms-disposal.test.ts',

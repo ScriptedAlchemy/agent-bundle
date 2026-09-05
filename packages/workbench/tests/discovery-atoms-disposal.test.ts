@@ -210,44 +210,44 @@ describe('Discovery atoms', () => {
 
       for (let cycle = 1; cycle <= 5; cycle += 1) {
         await page.evaluate(() => window.__discoveryAtoms.mount('resolving'));
-        await page.getByRole('region', { name: 'Host discovery' }).waitFor({ timeout: 5_000 });
-        await page.getByText('Generated at', { exact: true }).waitFor({ timeout: 5_000 });
+        await page.getByRole('region', { name: 'Host diagnostics' }).waitFor({ timeout: 5_000 });
+        await page.getByRole('button', { name: 'Re-run discovery' }).first().waitFor({ timeout: 5_000 });
         expect(await page.evaluate(() => window.__discoveryAtoms.stats.resolvingCalls)).toBeLessThanOrEqual(cycle);
         await page.evaluate(() => window.__discoveryAtoms.unmount());
         await page.getByText('Discovery unmounted', { exact: true }).waitFor({ timeout: 5_000 });
       }
 
       await page.evaluate(() => window.__discoveryAtoms.mount('resolving'));
-      await page.getByText('Generated at', { exact: true }).waitFor({ timeout: 5_000 });
+      await page.getByRole('button', { name: 'Re-run discovery' }).first().waitFor({ timeout: 5_000 });
       const callsBeforeRerun = await page.evaluate(() => window.__discoveryAtoms.stats.resolvingCalls);
       await page.getByRole('button', { name: 'Re-run discovery' }).first().click();
       await expect.poll(() => page.evaluate(() => window.__discoveryAtoms.stats.resolvingCalls)).toBe(callsBeforeRerun + 1);
 
       expect(await page.evaluate(() => window.__discoveryAtoms.stats.probeCalls)).toBe(0);
-      await page.getByRole('button', { name: 'Probe timeline' }).click();
+      await page.getByRole('button', { name: /Probe MCP handshake/u }).click();
       await page.getByRole('button', { name: 'Cancel' }).click();
       expect(await page.evaluate(() => window.__discoveryAtoms.stats.probeCalls)).toBe(0);
-      await page.getByRole('button', { name: 'Probe timeline' }).click();
-      await page.getByRole('button', { name: 'Run live probe' }).click();
-      await page.getByText('Connected', { exact: true }).waitFor({ timeout: 5_000 });
+      await page.getByRole('button', { name: /Probe MCP handshake/u }).click();
+      await page.getByRole('button', { name: 'Run handshake' }).click();
+      await page.getByText('Handshake ok', { exact: true }).waitFor({ timeout: 5_000 });
       expect(await page.evaluate(() => window.__discoveryAtoms.stats.probeCalls)).toBe(1);
 
       await page.evaluate(() => window.__discoveryAtoms.unmount());
       await page.getByText('Discovery unmounted', { exact: true }).waitFor({ timeout: 5_000 });
       await page.evaluate(() => window.__discoveryAtoms.mount('resolving'));
-      await page.getByRole('button', { name: 'Probe timeline' }).waitFor({ timeout: 5_000 });
-      await expect.poll(() => page.getByText('Connected', { exact: true }).count()).toBe(0);
+      await page.getByRole('button', { name: /Probe MCP handshake/u }).waitFor({ timeout: 5_000 });
+      await expect.poll(() => page.getByText('Handshake ok', { exact: true }).count()).toBe(0);
 
       await page.evaluate(() => window.__discoveryAtoms.unmount());
       await page.evaluate(() => window.__discoveryAtoms.mount('probe-never'));
-      await page.getByRole('button', { name: 'Probe timeline' }).click();
-      await page.getByRole('button', { name: 'Run live probe' }).click();
+      await page.getByRole('button', { name: /Probe MCP handshake/u }).click();
+      await page.getByRole('button', { name: 'Run handshake' }).click();
       await expect.poll(() => page.evaluate(() => window.__discoveryAtoms.stats.probeCalls)).toBe(2);
       await page.evaluate(() => window.__discoveryAtoms.unmount());
       await expect.poll(() => page.evaluate(() => window.__discoveryAtoms.stats.probeAborted)).toBe(1);
       await page.evaluate(() => window.__discoveryAtoms.mount('resolving'));
-      await page.getByRole('button', { name: 'Probe timeline' }).waitFor({ timeout: 5_000 });
-      await expect.poll(() => page.getByText('Connected', { exact: true }).count()).toBe(0);
+      await page.getByRole('button', { name: /Probe MCP handshake/u }).waitFor({ timeout: 5_000 });
+      await expect.poll(() => page.getByText('Handshake ok', { exact: true }).count()).toBe(0);
       expect(errors).toEqual([]);
     } finally {
       await browser.close();
