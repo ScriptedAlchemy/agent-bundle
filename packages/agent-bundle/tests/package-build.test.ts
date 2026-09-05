@@ -40,6 +40,11 @@ const fixtureRoot = async (files: Readonly<Record<string, string>>): Promise<str
   if ('packages/linked-dep/package.json' in files) {
     await mkdir(join(root, 'node_modules'), { recursive: true });
     await symlink(join(root, 'packages', 'linked-dep'), join(root, 'node_modules', 'linked-dep'), 'dir');
+    await symlink(
+      join(root, 'packages', 'linked-dep', 'vendor', 'linked-nested'),
+      join(root, 'node_modules', 'linked-nested'),
+      'dir',
+    );
   }
   return root;
 };
@@ -57,8 +62,12 @@ const conventionFixture = (): Readonly<Record<string, string>> => ({
   'node_modules/evidence-package/index.js': 'globalThis.__evidencePackageLoaded = true;\n',
   'node_modules/evidence-package/package.json': '{"name":"evidence-package","type":"module","version":"1.0.0"}\n',
   // Linked into node_modules below, as a package manager links a workspace dependency.
-  'packages/linked-dep/index.js': 'globalThis.__linkedDepLoaded = true;\n',
-  'packages/linked-dep/package.json': '{"name":"linked-dep","type":"module","version":"1.0.0"}\n',
+  'packages/linked-dep/index.js': "import 'linked-nested';\nglobalThis.__linkedDepLoaded = true;\n",
+  'packages/linked-dep/package.json':
+    '{"name":"linked-dep","type":"module","version":"1.0.0","dependencies":{"linked-nested":"1.0.0"}}\n',
+  // A linked dependency's own linked dependency, whose real root sits inside the parent's.
+  'packages/linked-dep/vendor/linked-nested/index.js': 'globalThis.__linkedNestedLoaded = true;\n',
+  'packages/linked-dep/vendor/linked-nested/package.json': '{"name":"linked-nested","type":"module","version":"1.0.0"}\n',
   'tsconfig.json': JSON.stringify({
     compilerOptions: {
       module: 'esnext',
@@ -155,10 +164,10 @@ describe('framework-owned package build', () => {
     expect(packageBuild!.evidence.assets.flatMap((asset) => asset.externals)
       .every((external) => external.kind === 'builtin')).toBe(true);
     // A package under `node_modules` is named by its path; a workspace-linked one, which Rspack records at its
-    // real path, by the declaration that reached it.
+    // real path, by the declaration that reached it — the deepest such root when one sits inside another.
     expect(packageBuild!.evidence.assets
       .find((asset) => asset.path === 'dist/bin/package-build-fixture.js')?.packages)
-      .toEqual(['evidence-package', 'linked-dep']);
+      .toEqual(['evidence-package', 'linked-dep', 'linked-nested']);
     for (const file of packageBuild!.files) {
       expect(file.sourceInputs).toEqual([...file.sourceInputs].sort((left, right) => left.localeCompare(right)));
     }

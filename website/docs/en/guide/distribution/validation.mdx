@@ -269,7 +269,7 @@ or `dist` when Rspack kept anything except a built-in, `pnpapi`, or an emitted s
 An external kept through the [`tools` hatch](../../reference/configuration.mdx#tools) is therefore
 not a way around the contract and never reaches the prepack inventory.
 
-`AB7014` accepts exactly four kinds of consumer-runtime evidence:
+`AB7014` accepts exactly three kinds of consumer-runtime evidence:
 
 1. `runtimeDependencies` on a prebuilt payload declared with `definePrebuilt`;
 2. a packed declaration file reference, as TypeScript's `preProcessFile` reads it: imports,

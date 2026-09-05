@@ -732,12 +732,15 @@ const assertDistinctLibIds = (entries: readonly RslibEntry[]): void => {
   }
 };
 
-/** The package a module belongs to: named by its `node_modules` segment, or by the declared dependency root that contains it. */
+/** The package a module belongs to: named by its `node_modules` segment, or by the deepest declared dependency root that contains it. */
 const packageNameOfResource = (resource: string, dependencyRoots: ReadonlyMap<string, string>): string | undefined => {
   const segments = resource.replaceAll('\\', '/').split('/');
   const nodeModules = segments.lastIndexOf('node_modules');
   if (nodeModules === -1) {
-    const root = [...dependencyRoots.keys()].find((candidate) => isInsideOrEqual(candidate, resource));
+    let root: string | undefined;
+    for (const candidate of dependencyRoots.keys()) {
+      if (isInsideOrEqual(candidate, resource) && (root === undefined || candidate.length > root.length)) root = candidate;
+    }
     return root === undefined ? undefined : dependencyRoots.get(root);
   }
   const name = segments[nodeModules + 1];
