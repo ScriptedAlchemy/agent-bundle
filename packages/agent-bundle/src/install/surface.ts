@@ -1,5 +1,5 @@
 import type { NormalizedPlugin } from '../core/types.ts';
-import { type BuiltInHost, builtInHostNames, isBuiltInHost } from '../adapters/composite-layout.ts';
+import { type BuiltInHost, builtInHostNames } from '../adapters/composite-layout.ts';
 import { sourceInputs, type TargetArtifactWrite } from '../adapters/types.ts';
 import {
   installReceiptFile,
@@ -1395,16 +1395,16 @@ const needsCursorInstaller = (selected: readonly string[]): boolean =>
 /**
  * The install-surface files a composite root with these selected projections
  * must contain: `INSTALL.md` whenever a built-in host is selected, plus
- * `install.mjs` when Cursor or the portable format is among them. Callers with
- * a registry pass `TargetRegistry.builtInHosts(selected)` so an advanced
- * registry's own adapter named like a built-in host earns no surface (#592);
- * the pack inventory, which has only the manifest's names, judges by name.
+ * `install.mjs` when Cursor or the portable format is among them. `hosts` is
+ * the selection resolved by adapter identity (`TargetRegistry.builtInHosts`),
+ * so an advanced registry's own adapter named like a built-in host requires
+ * no surface (#592).
  */
 export const installSurfaceRequirements = (
-  selected: readonly string[],
+  hosts: readonly BuiltInHost[],
 ): readonly string[] => {
-  if (selected.filter(isBuiltInHost).length === 0) return Object.freeze([]);
-  return needsCursorInstaller(selected)
+  if (hosts.length === 0) return Object.freeze([]);
+  return needsCursorInstaller(hosts)
     ? Object.freeze(['INSTALL.md', 'install.mjs'])
     : Object.freeze(['INSTALL.md']);
 };

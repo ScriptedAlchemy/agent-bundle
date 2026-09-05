@@ -2332,8 +2332,12 @@ const compositeRootTargetDiagnostics = (
   const known = model.targets.filter((target) => registry.has(target.name));
   const selected = [...new Set(known.map((target) => target.name))];
   if (selected.length < 2) return [];
+  // Built-in by adapter identity where the registry can tell (#592): a custom
+  // adapter registered under a built-in host's name has made no agreement.
+  const isBuiltIn = (name: string): boolean =>
+    registry.builtInHost === undefined ? isBuiltInHost(name) : registry.builtInHost(name) !== undefined;
   return known
-    .filter((target) => !isBuiltInHost(target.name))
+    .filter((target) => !isBuiltIn(target.name))
     .map((target) => ({
       code: 'AB4106',
       message: `Target ${JSON.stringify(target.name)} cannot share one composite root with the other selected targets (${selected.filter((name) => name !== target.name).join(', ')}): only the built-in hosts (${builtInHostNames.join(', ')}) project into a shared root.`,

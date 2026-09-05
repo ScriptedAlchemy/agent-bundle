@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { Effect, type Scope } from 'effect';
 
 import { capabilityIsSupported, unavailableCapability } from './adapters/capability-state.ts';
-import { type BuiltInHost, isBuiltInHost } from './adapters/composite-layout.ts';
+import type { BuiltInHost } from './adapters/composite-layout.ts';
 import { createDefaultRegistry, TargetRegistry } from './adapters/registry.ts';
 import type { TargetArtifactEntry, TargetHookEntry } from './adapters/types.ts';
 import { build as buildArtifact, type BuildResult } from './build/build.ts';
@@ -761,10 +761,13 @@ export const validate = async (options: ValidateOptions): Promise<ValidateResult
       if (validated.snapshot === undefined) {
         return Object.freeze({ diagnostics: freezeDiagnostics(validated.diagnostics) });
       }
-      const reports = await Promise.all(validated.snapshot.manifest.targets
-        .map((target) => target.name)
-        .filter(isBuiltInHost)
-        .map((target) => hostValidationReport(target, artifact, options.strict)));
+      // The shipped validators judge the shipped adapters' projections, by
+      // adapter identity: a custom adapter named like a built-in host is not
+      // held to that host's contract (#592).
+      const reports = await Promise.all(
+        registryFor(options).builtInHosts(validated.snapshot.manifest.targets.map((target) => target.name))
+          .map((target) => hostValidationReport(target, artifact, options.strict)),
+      );
       return Object.freeze({
         diagnostics: freezeDiagnostics([
           ...validated.diagnostics,
@@ -1215,7 +1218,7 @@ export const build = async (options: BuildOptions): Promise<BuildProjectResult> 
     if (packageBuild !== undefined) assertPackageOutputSources(packageBuild, projectContext);
   }
   const hostValidation = options.hostValidation === true
-    ? await buildHostValidation(result.manifest.targets.map((target) => target.name), output, options)
+    ? await buildHostValidation(prepared.registry.builtInHosts(result.manifest.targets.map((target) => target.name)), output, options)
     : undefined;
   return Object.freeze({
     build: result,
@@ -1231,24 +1234,23 @@ export const build = async (options: BuildOptions): Promise<BuildProjectResult> 
   });
 };
 
-const claudeValidatedTargets: ReadonlySet<string> = new Set<BuiltInHost>(['claude']);
-
 /**
  * `build --host-validation`: the Claude developer validator (`plugin validate`
  * over both manifests, then the `--plugin-dir … plugin list --json` load check)
- * over every built `claude` target (#476). Targets run one after
- * another: once the CLI proves absent (`AB6019`), the remaining targets are
- * marked `unavailable` without another spawn, so a build without `claude` on
- * `PATH` costs one failed spawn and reports the skip once.
+ * over the built `claude` projection (#476) — the shipped Claude adapter by
+ * identity, never a custom adapter under that name (#592). Targets run one
+ * after another: once the CLI proves absent (`AB6019`), the remaining targets
+ * are marked `unavailable` without another spawn, so a build without `claude`
+ * on `PATH` costs one failed spawn and reports the skip once.
  */
 const buildHostValidation = async (
-  targets: readonly string[],
+  hosts: readonly BuiltInHost[],
   output: string,
   options: Pick<BuildOptions, 'hostValidationRunner' | 'strict'>,
 ): Promise<{ readonly diagnostics: readonly Diagnostic[]; readonly reports: readonly ClaudePluginValidationReport[] }> => {
   const reports: ClaudePluginValidationReport[] = [];
   let unavailable = false;
-  for (const target of targets.filter((name) => claudeValidatedTargets.has(name))) {
+  for (const target of hosts.filter((host) => host === 'claude')) {
     if (unavailable) {
       reports.push(Object.freeze({ diagnostics: freezeDiagnostics([]), host: 'claude', status: 'unavailable', target }));
       continue;

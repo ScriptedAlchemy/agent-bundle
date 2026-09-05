@@ -442,5 +442,21 @@ describe('composite plugin root (#555)', () => {
     expect(customTree).not.toContain('install.mjs');
     expect(custom.result.diagnostics.filter((entry) => entry.code === 'AB6023' || entry.code === 'AB6024')).toEqual([]);
     expect(await topLevel(shipped.output)).toEqual(expect.arrayContaining(['INSTALL.md', 'install.mjs', 'plugin.json']));
+
+    // The same identity judgment gates the shared root (`AB4106`) and the
+    // host validators: beside Claude Code the custom `portable` is refused
+    // like any advanced-registry adapter, and alone it is held to no shipped
+    // host's validator.
+    const mixed = await mkdtemp(join(tmpdir(), 'agent-bundle-composite-identity-'));
+    roots.push(mixed);
+    await writeProject(mixed, { targets: ['claude', 'portable'] });
+    const refused = await validate({ registry, root: mixed });
+    expect(refused.diagnostics.filter((entry) => entry.code === 'AB4106').map((entry) => entry.target)).toEqual(['portable']);
+    const alone = await mkdtemp(join(tmpdir(), 'agent-bundle-composite-identity-'));
+    roots.push(alone);
+    await writeProject(alone, { targets: ['portable'] });
+    const validated = await validate({ hostValidation: true, registry, root: alone });
+    expect(validated.diagnostics.filter((entry) => entry.severity === 'error')).toEqual([]);
+    expect(validated.hostValidation).toBeUndefined();
   });
 });
