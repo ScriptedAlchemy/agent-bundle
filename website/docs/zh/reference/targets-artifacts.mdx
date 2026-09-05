@@ -136,7 +136,7 @@ MCP 入口、脚本、路由式 CLI bin 与 MCP App 只编译**一次**，归属
 | `targets` | 每个所选投影一行，按名称排序：`name`、`adapterRevision`、`observedVersion`，以及它据以校验的固定 `schemas`。 |
 | `agentSkills` | Agent Skills 规范固定值：`specification`、`sourceRevision`、`schemaSha256`。 |
 | `validation` | `source`、`artifact` 与各所选投影的已记录状态。 |
-| `web` | **除非配置了 [`web`](./configuration.mdx#web)，否则不出现。** `{ open, apps[] }`，每个 app 为 `{ allow, app, entry, env, name, resourceUri, server, tool?, input? }`。`entry` 是产物相对的 MCP 可执行文件（`mcp/<name>.mjs`）；`env` 是该服务器已声明的静态 env，`agent-bundle:path:*` 令牌保持未展开。App 按 `app` 排序。`<plugin> web` 命令、`agent-bundle dev` 的 `/web/<server>/<app>` 与 `doctor` 读取这一节，绝不会从 `src/**` 重新发现 App。 |
+| `web` | **除非配置了 [`web`](./configuration.mdx#web)，否则不出现。** `{ open, apps[] }`，每个 app 为 `{ allow, app, args, entry, env, name, resourceUri, server, tool?, input? }`。`args` 是该服务器在 entry 之后声明的 `mcp.servers.<id>.args`，`agent-bundle:path:*` 令牌同样不展开；`targets` 落在本根选择范围之外的已暴露 App 会被省略（若一个都不剩则整个小节省略），因为随附的服务器无法提供它。`entry` 是产物相对的 MCP 可执行文件（`mcp/<name>.mjs`）；`env` 是该服务器已声明的静态 env，`agent-bundle:path:*` 令牌保持未展开。App 按 `app` 排序。`<plugin> web` 命令、`agent-bundle dev` 的 `/web/<server>/<app>` 与 `doctor` 读取这一节，绝不会从 `src/**` 重新发现 App。 |
 
 `kind` 取值为 `bundle`、`copy`、`generated` 或 `prebuilt` —— 分别是打包入口、按字节复制、编译器生成的
 文档，或预构建 payload 文件。`sourceInputs` 记录每个输入路径及其自身的 SHA-256，并在相关时记录它是否

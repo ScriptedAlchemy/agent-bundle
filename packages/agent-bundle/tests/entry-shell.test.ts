@@ -301,6 +301,30 @@ describe('generated entry templates', () => {
     expect(webOnly).toContain('const artifactRoot = fileURLToPath(new URL("../", import.meta.url));');
     expect(routed).toContain('@agent-bundle/runtime');
 
+    // A project's state and providers belong to its request scope; a bin with
+    // no command opens none, so the web-only bin mounts neither and their
+    // modules cannot keep `<plugin> web` from starting.
+    const webOnlyWithState = entryShellModule.generatedCliBinEntrySource({
+      commands: [],
+      plugin: { name: 'fixture', version: '1.0.0' },
+      providers: [{
+        id: 'provider:project-auth',
+        name: 'project-auth',
+        provenance: { kind: 'conventional', relativePath: 'src/providers/project-auth.ts' },
+        source: '/project/src/providers/project-auth.ts',
+      }],
+      routes: [],
+      state: {
+        id: 'project/tasks',
+        lifetime: 'workspace-durable',
+        provenance: { kind: 'conventional', sourcePath: '/project/src/state.ts' },
+        source: '/project/src/state.ts',
+      },
+      stateFallback: 'artifact',
+      web,
+    });
+    expect(webOnlyWithState).toBe(webOnly);
+
     // A routed bin without `web` is byte-identical to the pre-#564 generator
     // (hash of the same input on the parent commit's `entry-shell.ts`).
     const withoutWeb = entryShellModule.generatedCliBinEntrySource({

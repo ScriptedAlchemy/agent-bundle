@@ -13,6 +13,7 @@ const validWeb = (): WebManifest => ({
   apps: [{
     allow: ['call-tool'],
     app: 'catalog/details',
+    args: [],
     entry: 'mcp/mcp-catalog-01234567.mjs',
     env: { CATALOG_TOKEN: 'agent-bundle:path:plugin-data/token' },
     input: { sku: '42' },
@@ -35,6 +36,10 @@ it('rejects exact-key, consent-vocabulary, and ordering violations', () => {
     ...validWeb(),
     apps: [{ ...validWeb().apps[0], allow: ['camera'] }],
   })).toThrow(/App-initiated consent capability/u);
+  expect(() => parseWebManifest({
+    ...validWeb(),
+    apps: [{ ...validWeb().apps[0], args: ['--flag', 1] }],
+  })).toThrow('apps[0].args[1] must be a string.');
   expect(() => parseWebManifest({
     ...validWeb(),
     apps: [

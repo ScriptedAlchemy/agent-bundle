@@ -298,9 +298,5 @@
     "packageModel": "4",
     "placeholderExpansion": "9",
     "versioning": "10"
-  },
-  "web": {
-    "reason": "browser host inside the composite artifact; <plugin> web runs from the installed root on any host",
-    "state": "supported"
   }
 }

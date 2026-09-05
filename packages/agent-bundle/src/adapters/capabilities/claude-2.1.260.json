@@ -1306,9 +1306,5 @@
       "2026-09-01: https://code.claude.com/docs/en/plugins-reference documents workflow scripts only as files in `workflows/`, without a deeper file schema, so Agent Bundle treats regular workflow files as opaque payloads.",
       "2026-09-01: Local host proof against Claude Code 2.1.257: `claude plugin validate --strict` accepts an emitted plugin with `workflows/release-audit.js` and frontmatter-bearing `output-styles/terse.md`. A second probe accepts `output-styles/missing-frontmatter.md` containing plain Markdown and does not name that file, so the CLI does not inspect output-style frontmatter during strict plugin validation (host-adapters.native.test.ts)."
     ]
-  },
-  "web": {
-    "reason": "browser host inside the composite artifact; <plugin> web runs from the installed root on any host",
-    "state": "supported"
   }
 }

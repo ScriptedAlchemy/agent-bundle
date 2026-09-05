@@ -878,7 +878,7 @@ web: {
 `_meta.ui.resourceUri` 指向该 App 的工具；有多个时必填）。`input` 是那次开场调用的参数（默认
 `{}`）。`allow` 预先批准由 App 发起的同意能力：`call-tool`、`download-file`、`open-external-link`、
 `request-display-mode`。浏览器硬件与剪贴板权限始终在宿主页面里询问。无效的 `web` 是 `AB4341`
-（error）；六种消息形状见[诊断参考](../../reference/diagnostics.md)。
+（error）；各消息形状见[诊断参考](../../reference/diagnostics.md)。
 
 配置了 `web` 时，组合产物的 `agent-bundle.manifest.json` 会增加 `web` 节，即使没有 `src/cli/**`
 命令也会输出 `bin/<plugin>.mjs`。宿主页面装在该 bin 里——产物中没有 `web/` 目录。`AB6005` 像遍历

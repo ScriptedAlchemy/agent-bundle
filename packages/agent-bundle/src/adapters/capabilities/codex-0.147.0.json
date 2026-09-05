@@ -1039,9 +1039,5 @@
       "retrieved 2026-09-02: rust-v0.147.0 stop.command.input.schema.json requires cwd, hook_event_name, nullable last_assistant_message, model, permission_mode, session_id, stop_hook_active, nullable transcript_path, and turn_id (upstream sha256 7db4793c404b5c46b230c27b9507eb1a558fd958689d8715221c5dd81351a06a); its output schema admits decision block, reason, and the common fields with no hookSpecificOutput (upstream sha256 dc2b30e84c97beca5825aa64ca46e1337e402781dc5a9142b67111d10523f15c). The Codex wrapper and envelope validator accept a null last_assistant_message for Stop because this pinned schema allows it.",
       "retrieved 2026-09-02: the GitHub contents API for codex-rs/hooks/schema/generated at rust-v0.147.0 lists exactly 21 files and no interrupt schema; the same directory on main adds interrupt.command.{input,output}.schema.json, and the latest release at retrieval time was rust-v0.153.0, so Interrupt remains deferred until the Codex pin moves."
     ]
-  },
-  "web": {
-    "reason": "browser host inside the composite artifact; <plugin> web runs from the installed root on any host",
-    "state": "supported"
   }
 }

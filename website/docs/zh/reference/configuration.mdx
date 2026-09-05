@@ -204,8 +204,9 @@ web: {
 
 无效的 `web` 是 `AB4341`（error）：`app` 未被任何 `mcp.servers.<id>.apps` 声明；未知的 `allow`
 能力；`open` 不在 `browser` \| `never` 中；重复的 `<server>/<app>`；路由图未为该生成式服务器声明的
-`tool`；在已配置 `web` 时，生成模式下 `src/cli/**` 命令的第一路径段为 `web`；或 `web` 面没有任何
-可执行文件可以承载。消息形状与恢复方式见[诊断参考](./diagnostics.md)。
+`tool`；在已配置 `web` 时，生成模式下 `src/cli/**` 命令（或顶层别名）拼作 `web`；或 `web` 面没有任何
+可执行文件可以承载。所选目标的适配器若未发布受支持的 `web` 能力行，则是 `AB4341` 警告：其产物不承载
+该面。消息形状与恢复方式见[诊断参考](./diagnostics.md)。
 
 `web` 命令只存在于框架生成的 `bin/<plugin>.mjs` 中。`web` 从不取代作者代码：手写的 `src/cli.ts`、
 占用插件名的 `bin` 条目或 `bin: false` 都保留其所描述的可执行文件，并由 `AB4341` 报告 web 面无处

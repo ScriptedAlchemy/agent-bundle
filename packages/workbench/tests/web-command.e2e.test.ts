@@ -128,6 +128,7 @@ e2e('serves examples/mcp-app through `<plugin> web` from its composite root and 
       apps: [{
         allow: ['call-tool'],
         app,
+        args: [],
         entry: `mcp/${mcpEntries[0]!}`,
         env: {},
         name: 'status',

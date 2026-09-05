@@ -39,8 +39,21 @@ export interface StdioAppSession {
   readonly sessionId: string;
   readonly stderr: () => string;
   close(): Promise<void>;
-  watchClosed(listener: () => void): () => void;
+  watchClosed(listener: WebHostCloseListener): () => void;
 }
+
+export type WebHostCloseListener = () => Promise<void> | void;
+
+// Teardown listeners belong to the App bindings, not to the transport: one
+// that throws or rejects must not abort the others or escape the transport's
+// close callback, matching `McpSessionService`'s watcher dispatch.
+const notifyClosed = (listener: WebHostCloseListener): void => {
+  try {
+    void Promise.resolve(listener()).catch(() => undefined);
+  } catch {
+    // Isolated above; a synchronous throw is the same failure surfaced early.
+  }
+};
 
 const captureStderr = (stream: Stream | null): (() => string) => {
   if (stream === null) return () => '';
@@ -69,14 +82,15 @@ export const openStdioAppSession = async (
   });
   const stderr = captureStderr(transport.stderr);
   const closedGate = Promise.withResolvers<void>();
-  const listeners = new Set<() => void>();
+  const listeners = new Set<WebHostCloseListener>();
   let closed = false;
   const markClosed = (): void => {
     if (closed) return;
     closed = true;
     closedGate.resolve();
-    for (const listener of listeners) listener();
+    const pending = [...listeners];
     listeners.clear();
+    for (const listener of pending) notifyClosed(listener);
   };
   transport.onclose = markClosed;
   try {
@@ -165,9 +179,9 @@ export const openStdioAppSession = async (
     selection,
     sessionId,
     stderr,
-    watchClosed: (listener: () => void) => {
+    watchClosed: (listener: WebHostCloseListener) => {
       if (closed) {
-        listener();
+        notifyClosed(listener);
         return () => undefined;
       }
       listeners.add(listener);
@@ -186,7 +200,7 @@ export const sessionAuthorityFor = (session: StdioAppSession): McpAppSessionAuth
         let closedNow = false;
         const unsubscribe = session.watchClosed(() => {
           closedNow = true;
-          void listener();
+          return listener();
         });
         return Object.freeze({ closed: closedNow, unsubscribe });
       },

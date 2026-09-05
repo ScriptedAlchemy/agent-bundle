@@ -309,10 +309,18 @@ const manifestTargets = (
   })
   .sort((left, right) => left.name.localeCompare(right.name)));
 
+/**
+ * The manifest `web` section for this composite root: the exposed Apps whose
+ * declaration targets intersect the selection, exactly the Apps
+ * `planCompiledMcpApps` compiles into it. An App scoped to a host outside the
+ * selection is not advertised, since the server the root ships cannot serve
+ * it; a selection that exposes none leaves the section out.
+ */
 const webManifestFor = (options: {
   readonly artifactRoot: string;
   readonly compiledMcpEntries: readonly CompiledMcpEntry[];
   readonly model: NormalizedPlugin;
+  readonly selected: readonly string[];
 }): WebManifest | undefined => {
   if (options.model.web === undefined) return undefined;
   const entries = new Map(options.compiledMcpEntries.map((entry) => [
@@ -320,7 +328,12 @@ const webManifestFor = (options: {
     relative(options.artifactRoot, entry.output).replaceAll('\\', '/'),
   ]));
   const servers = new Map(options.model.mcpServers.map((server) => [server.id, server]));
-  const apps = options.model.web.apps.map((app) => {
+  const selectedApps = (options.model.mcpApps ?? []).filter((app) =>
+    app.targets.some((target) => options.selected.includes(target)));
+  const exposed = options.model.web.apps.filter((app) =>
+    selectedApps.some((candidate) => candidate.serverId === app.serverId && candidate.name === app.appName));
+  if (exposed.length === 0) return undefined;
+  const apps = exposed.map((app) => {
     const server = servers.get(app.serverId);
     const declaredEntry = server?.args?.[0];
     const pluginRootPrefix = `${pathTokens.pluginRoot}/`;
@@ -334,6 +347,7 @@ const webManifestFor = (options: {
     return {
       allow: [...app.allow],
       app: app.app,
+      args: server.args?.slice(1) ?? [],
       entry,
       env: { ...(server.env ?? {}) },
       ...(app.input === undefined ? {} : { input: structuredClone(app.input) }),

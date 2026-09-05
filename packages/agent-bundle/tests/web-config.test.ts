@@ -64,6 +64,13 @@ const discovered = (options: {
               path: ['web'],
               rendered: false,
               routeId: 'cli:web',
+            }, {
+              aliases: ['web'],
+              exitCode: 'zero',
+              options: [],
+              path: ['dashboard'],
+              rendered: false,
+              routeId: 'cli:dashboard',
             }],
             mode: 'generated',
             routes: [{
@@ -72,6 +79,12 @@ const discovered = (options: {
               kind: 'cli',
               provenance: { kind: 'conventional', relativePath: 'src/cli/web.ts' },
               source: `${root}/src/cli/web.ts`,
+            }, {
+              config: { aliases: ['web'] },
+              id: 'cli:dashboard',
+              kind: 'cli',
+              provenance: { kind: 'conventional', relativePath: 'src/cli/dashboard.ts' },
+              source: `${root}/src/cli/dashboard.ts`,
             }],
           } as const,
         }
@@ -191,6 +204,11 @@ it('reports unknown Apps, duplicate Apps, invalid generated tools, and reserved 
     'web.apps[2] names catalog/details twice.',
     "web.apps[2].tool missing-tool is not a tool this project's route graph declares for catalog.",
     'CLI command "web" is reserved by the web surface (web.apps is configured).',
+    'CLI alias "web" of dashboard is reserved by the web surface (web.apps is configured).',
+  ]);
+  expect(diagnostics.filter(({ message }) => message.includes('reserved')).map(({ sourcePath }) => sourcePath)).toEqual([
+    `${root}/src/cli/web.ts`,
+    `${root}/src/cli/dashboard.ts`,
   ]);
 });
 
@@ -274,4 +292,19 @@ it('keeps a conventional src/cli.ts executable when only web is configured', asy
   } finally {
     await rm(fixtureRoot, { force: true, recursive: true });
   }
+});
+
+it('warns with AB4341 when a selected target publishes no web capability row', async () => {
+  const withoutWeb: NormalizationTargetRegistry = {
+    ...registry,
+    capabilityState: (_name, capability) =>
+      capability === 'web' ? undefined : { evidence: { observedVersion: '1', target: 'portable' }, state: 'supported' },
+  };
+  const model = await normalizeProject(loaded(baseConfig({ apps: ['catalog/details'] })), discovered(), withoutWeb);
+  expect(validateModel(model, withoutWeb).filter(({ code }) => code === 'AB4341').map(({ message, severity, target }) => ({ message, severity, target }))).toEqual([{
+    message: 'The web surface is not hosted by target "portable": the target publishes no web capability row. Its artifact carries no working catalog-tools web command.',
+    severity: 'warning',
+    target: 'portable',
+  }]);
+  expect(validateModel(model, registry).filter(({ code }) => code === 'AB4341')).toEqual([]);
 });

@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 
-import { cliBinCapability } from '../adapters/capability-state.ts';
+import { cliBinCapability, webSurfaceCapability } from '../adapters/capability-state.ts';
 import type { TargetRegistry } from '../adapters/registry.ts';
 import { routedCliBinLayout, type TargetArtifactEntry } from '../adapters/types.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
@@ -51,12 +51,19 @@ export const routedCliBins = (model: NormalizedPlugin): readonly NormalizedBinEn
     bin.generatedCli !== undefined || bin.web === true));
 
 /**
- * True when the target's adapter admits the routed CLI bin into its artifact —
- * by the component judgment (`componentCapabilities ?? capabilities`), so
- * emission and `inspect` accounting can never disagree.
+ * True when the target's adapter admits the generated executable into its
+ * artifact — by the component judgment (`componentCapabilities ??
+ * capabilities`), so emission and `inspect` accounting can never disagree.
+ * The `cli` capability judges a bin that compiles authored commands; the
+ * `web` capability judges one that exists only to carry `<plugin> web`
+ * (#564). A project without a generated bin is judged on `cli`, as the
+ * routed-CLI collision checks always were.
  */
-export const targetHostsCliBin = (registry: TargetRegistry, target: string): boolean =>
-  registry.hostsComponent(target, cliBinCapability);
+export const targetHostsGeneratedBin = (registry: TargetRegistry, model: NormalizedPlugin, target: string): boolean => {
+  const bin = routedCliBins(model)[0];
+  const capability = bin === undefined || bin.generatedCli !== undefined ? cliBinCapability : webSurfaceCapability;
+  return registry.hostsComponent(target, capability);
+};
 
 export interface CompiledCliBin extends CompiledEntry {
   readonly id: string;

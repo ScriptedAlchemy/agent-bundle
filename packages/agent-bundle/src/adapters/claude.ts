@@ -28,6 +28,7 @@ import {
   noticeDeliveryAdvertisementFrom,
   supportedEventRouteNamesFrom,
   cliBinCapability,
+  webSurfaceCapability,
   supportedCapability,
   unavailableCapability,
 } from './capability-state.ts';
@@ -3295,6 +3296,7 @@ export const claudeAdapter: TargetAdapter = Object.freeze({
     // The routed CLI bin rides the same plugin-root directory the pinned
     // contract already executes `mcp/` and `scripts/` files from (#387).
     [cliBinCapability]: supportedCapability(evidence),
+    [webSurfaceCapability]: capabilityFromTableRow(capabilityTable.plugin.web, evidence),
     commands: capabilityStateFromSupport(
       capabilityTable.plugin.commands,
       evidence,

@@ -379,9 +379,16 @@ const renderedSessionSource = (workerFile: string): readonly string[] => [
  * exit 2); the route module's zod schemas stay the runtime validation
  * boundary.
  */
-export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions): string => {
-  const commandRoutes = options.routes.filter((route) =>
-    options.commands.some((command) => command.routeId === route.id));
+export const generatedCliBinEntrySource = (input: GeneratedCliBinEntryOptions): string => {
+  const commandRoutes = input.routes.filter((route) =>
+    input.commands.some((command) => command.routeId === route.id));
+  // A bin that compiles no command opens no request scope (a `web`-only
+  // plugin, #564): it mounts neither the project's state nor its providers
+  // and never imports the optional `@agent-bundle/runtime` they need, so a
+  // state or provider module's evaluation cannot keep `<plugin> web` from
+  // starting.
+  const runtimeBacked = commandRoutes.length > 0;
+  const options: GeneratedCliBinEntryOptions = runtimeBacked ? input : { ...input, providers: [], state: undefined };
   const rendered = options.commands.some((command) => command.rendered);
   if (rendered && options.workerFile === undefined) {
     throw new Error('A generated CLI with rendered commands requires a worker file.');
@@ -389,8 +396,6 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
   const providers = orderedProviders(options.providers ?? []);
   const plainIndent = options.state === undefined ? '  ' : '    ';
   const stateFallback = options.stateFallback ?? 'cwd';
-  // Web-only bins must not acquire the optional route runtime (#564).
-  const runtimeBacked = commandRoutes.length > 0 || options.state !== undefined;
   return [
     // The artifact-hosted executable is part of an installed pack, so it
     // applies the pack's operator `.env` layer (#469) — first, before the

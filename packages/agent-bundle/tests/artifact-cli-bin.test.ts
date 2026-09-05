@@ -207,12 +207,17 @@ const createWebOnlyFixture = async (): Promise<string> => {
       "import { defineConfig } from 'agent-bundle/config';",
       'export default defineConfig({',
       '  mcp: { servers: { status: {',
-      "    apps: { status: { entry: './views/status.ts', resourceUri: 'ui://web-only-artifact/status.html', template: './views/status.html' } },",
+      '    apps: {',
+      "      status: { entry: './views/status.ts', resourceUri: 'ui://web-only-artifact/status.html', template: './views/status.html' },",
+      "      'claude-only': { entry: './views/status.ts', resourceUri: 'ui://web-only-artifact/claude-only.html', targets: ['claude'], template: './views/status.html' },",
+      '    },',
+      "    args: ['--verbose'],",
       "    entry: './src/mcp/status.ts',",
+      "    targets: ['claude', 'portable'],",
       '  } } },',
       `  plugin: { description: 'Web-only artifact fixture.', name: ${JSON.stringify(webOnlyPluginName)}, version: '1.0.0' },`,
-      "  targets: ['portable'],",
-      "  web: { apps: ['status/status'] },",
+      "  targets: ['claude', 'portable'],",
+      "  web: { apps: ['status/claude-only', 'status/status'] },",
       '});',
       '',
     ].join('\n')),
@@ -414,7 +419,10 @@ it('lists authored commands and web in one generated artifact bin', { retry: 1, 
 
 it('emits bin/<plugin>.mjs for a project with web.apps and no src/cli, and its --help lists web (#564)', { retry: 1, timeout: 240_000 }, async () => {
   const root = await createWebOnlyFixture();
-  const result = await build({ output: 'artifact', root });
+  // The `claude`-only App is exposed but out of this root's selection: it
+  // is neither compiled nor advertised, so `<plugin> web` cannot pick an App
+  // the shipped server does not serve.
+  const result = await build({ output: 'artifact', root, targets: ['portable'] });
   const artifactRoot = join(root, 'artifact');
 
   const binPath = join(artifactRoot, 'bin', `${webOnlyPluginName}.mjs`);
@@ -431,10 +439,12 @@ it('emits bin/<plugin>.mjs for a project with web.apps and no src/cli, and its -
   const manifest = JSON.parse(await readFile(join(artifactRoot, 'agent-bundle.manifest.json'), 'utf8')) as { readonly web?: unknown };
   const mcpEntries = result.build.manifest.files.filter((file) => file.path.startsWith('mcp/')).map((file) => file.path);
   expect(mcpEntries).toHaveLength(1);
+  expect(result.build.manifest.files.filter((file) => file.path.startsWith('mcp-apps/')).map((file) => file.path)).toEqual(['mcp-apps/status.html']);
   expect(manifest.web).toEqual({
     apps: [{
       allow: [],
       app: 'status/status',
+      args: ['--verbose'],
       entry: mcpEntries[0]!,
       env: {},
       name: 'status',

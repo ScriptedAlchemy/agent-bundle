@@ -26,6 +26,7 @@ afterEach(async () => {
 const app = (overrides: Partial<WebManifestApp> = {}): WebManifestApp => ({
   allow: [],
   app: 'status/status',
+  args: [],
   entry: 'mcp/mcp-status-073c1634.mjs',
   env: {},
   name: 'status',
@@ -43,6 +44,16 @@ describe('resolveWebLaunch', () => {
     expect(launch.cwd).toBe(root);
     expect(Object.isFrozen(launch)).toBe(true);
     expect(Object.isFrozen(launch.env)).toBe(true);
+  });
+
+  it('passes the server\'s declared arguments after the entry, path tokens expanded', async () => {
+    const root = await artifactRoot();
+    const launch = await resolveWebLaunch({
+      app: app({ args: ['--config', `${pathTokens.pluginRoot}/status.json`, '--verbose'] }),
+      env: {},
+      pluginRoot: root,
+    });
+    expect(launch.args).toEqual([join(root, 'mcp', 'mcp-status-073c1634.mjs'), '--config', join(root, 'status.json'), '--verbose']);
   });
 
   it('normalizes the plugin root before anchoring anything on it', async () => {

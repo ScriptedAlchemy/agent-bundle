@@ -23,6 +23,7 @@ afterEach(async () => {
 const statusApp: WebManifestApp = Object.freeze<WebManifestApp>({
   allow: ['open-external-link'],
   app: 'status/status',
+  args: [],
   entry: 'mcp/mcp-status-073c1634.mjs',
   env: { STATUS_TOKEN: 'from-manifest' },
   input: { verbose: true },
@@ -35,6 +36,7 @@ const statusApp: WebManifestApp = Object.freeze<WebManifestApp>({
 const notesApp: WebManifestApp = Object.freeze<WebManifestApp>({
   allow: [],
   app: 'notes/notes',
+  args: [],
   entry: 'mcp/mcp-notes-1a2b3c4d.mjs',
   env: {},
   name: 'notes',

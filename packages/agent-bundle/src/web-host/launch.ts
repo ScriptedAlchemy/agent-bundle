@@ -61,7 +61,7 @@ export const resolveWebLaunch = async (options: ResolveWebLaunchOptions): Promis
     await mkdir(pluginData, { recursive: true });
   }
   return Object.freeze({
-    args: Object.freeze([entry]),
+    args: Object.freeze([entry, ...app.args.map(expand)]),
     command: process.execPath,
     cwd: pluginRoot,
     env: Object.freeze({

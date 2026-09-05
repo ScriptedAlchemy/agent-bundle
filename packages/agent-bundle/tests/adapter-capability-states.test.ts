@@ -920,8 +920,13 @@ it('pins a supported web surface row on every host capability table (#564)', () 
   };
   expect(webSurfaceCapability).toBe('web');
   for (const table of [claudeCapabilityTable, codexCapabilityTable, cursorCapabilityTable, portableCapabilityTable]) {
-    expect(table.web).toEqual(row);
     expect(table.plugin.web).toEqual(row);
+  }
+  // The row is what emission consults: every built-in host hosts the web-only bin.
+  const registry = createDefaultRegistry();
+  for (const host of ['claude', 'codex', 'cursor', 'portable']) {
+    expect(registry.hostsComponent(host, webSurfaceCapability), host).toBe(true);
+    expect(registry.capabilityState(host, webSurfaceCapability)?.state, host).toBe('supported');
   }
 });
 

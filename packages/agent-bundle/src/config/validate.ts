@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 
-import { capabilityIsSupported, cliBinCapability } from '../adapters/capability-state.ts';
+import { capabilityIsSupported, cliBinCapability, webSurfaceCapability } from '../adapters/capability-state.ts';
 import { builtInHostNames, isBuiltInHost } from '../adapters/composite-layout.ts';
 import { type EntryExportScan, scanEntryExportsSource } from '../build/entry-exports.ts';
 import { frameworkOwnedPluginCollisions, frameworkOwnedRsbuildPlugins } from '../build/framework-plugins.ts';
@@ -2292,46 +2292,11 @@ const routedCliBinTargetDiagnostics = (
   registry: NormalizationTargetRegistry,
 ): Diagnostic[] => {
   const diagnostics: Diagnostic[] = [];
-  // The judgment must be the one emission and `inspect` use: the adapter's
-  // component override when published, otherwise its plain capabilities. A
-  // registry exposing neither accessor falls back to its boolean view.
-  const judgmentFor = (target: string): { readonly known: true; readonly state: CapabilityState | undefined } | { readonly known: false } => {
-    if (registry.componentCapabilityState !== undefined) {
-      return { known: true, state: registry.componentCapabilityState(target, cliBinCapability) };
-    }
-    if (registry.capabilityState !== undefined) {
-      return { known: true, state: registry.capabilityState(target, cliBinCapability) };
-    }
-    return { known: false };
-  };
   for (const bin of model.packageBuild?.bins ?? []) {
     if (bin.generatedCli === undefined) continue;
     for (const target of model.targets) {
-      if (!registry.has(target.name)) continue;
-      const judged = judgmentFor(target.name);
-      const supported = judged.known
-        ? capabilityIsSupported(judged.state)
-        : registry.supports(target.name, cliBinCapability);
-      if (supported) continue;
-      const capability = judged.known ? judged.state : undefined;
-      let judgment: string;
-      if (capability === undefined) {
-        judgment = `the target publishes no ${cliBinCapability} capability row`;
-      } else {
-        switch (capability.state) {
-          case 'supported':
-            continue;
-          case 'degraded':
-          case 'unavailable':
-          case 'prohibited':
-            judgment = `its ${cliBinCapability} capability is ${capability.state}: ${capability.reason}`;
-            break;
-          default: {
-            const exhaustive: never = capability;
-            return exhaustive;
-          }
-        }
-      }
+      const judgment = unsupportedCapabilityJudgment(registry, target.name, cliBinCapability);
+      if (judgment === undefined) continue;
       diagnostics.push({
         code: 'AB4765',
         message: `Routed CLI ${JSON.stringify(bin.name)} is not emitted into target ${JSON.stringify(target.name)}: ${judgment}. Skills, hooks, and scripts in that artifact cannot invoke bin/${bin.name}.mjs.`,
@@ -2343,6 +2308,38 @@ const routedCliBinTargetDiagnostics = (
     }
   }
   return diagnostics;
+};
+
+/**
+ * Why `target` does not host the component `capability` gates, or
+ * `undefined` when it does. The judgment must be the one emission and
+ * `inspect` use: the adapter's component override when published, otherwise
+ * its plain capabilities. A registry exposing neither accessor falls back to
+ * its boolean view. Unknown targets are AB4100's, not judged here.
+ */
+const unsupportedCapabilityJudgment = (
+  registry: NormalizationTargetRegistry,
+  target: string,
+  capability: string,
+): string | undefined => {
+  if (!registry.has(target)) return undefined;
+  const judge = registry.componentCapabilityState ?? registry.capabilityState;
+  const noRow = `the target publishes no ${capability} capability row`;
+  if (judge === undefined) return registry.supports(target, capability) ? undefined : noRow;
+  const state = judge.call(registry, target, capability);
+  if (state === undefined) return noRow;
+  switch (state.state) {
+    case 'supported':
+      return undefined;
+    case 'degraded':
+    case 'unavailable':
+    case 'prohibited':
+      return `its ${capability} capability is ${state.state}: ${state.reason}`;
+    default: {
+      const exhaustive: never = state;
+      return exhaustive;
+    }
+  }
 };
 
 /**
@@ -2385,7 +2382,7 @@ const webToolResourceUri = (route: { readonly config: Readonly<Record<string, un
   return isRecord(ui) && typeof ui['resourceUri'] === 'string' ? ui['resourceUri'] : undefined;
 };
 
-const webDiagnostics = (model: NormalizedPlugin): Diagnostic[] => {
+const webDiagnostics = (model: NormalizedPlugin, registry: NormalizationTargetRegistry): Diagnostic[] => {
   if (model.web === undefined) return [];
   const diagnostics: Diagnostic[] = [];
   const seen = new Set<string>();
@@ -2430,13 +2427,21 @@ const webDiagnostics = (model: NormalizedPlugin): Diagnostic[] => {
   }
   const bins = model.packageBuild?.bins ?? [];
   for (const bin of bins) {
-    if (bin.generatedCli?.commands.some((command) => command.path[0] === 'web') !== true) continue;
-    diagnostics.push(sourceDiagnostic(
-      'AB4341',
-      'CLI command "web" is reserved by the web surface (web.apps is configured).',
-      bin.provenance.sourcePath,
-      'Rename the command or remove web.apps.',
-    ));
+    for (const command of bin.generatedCli?.commands ?? []) {
+      // The generated shell dispatches a first argument of `web` before the
+      // authored tree, so a top-level command or alias spelled `web` is
+      // unreachable, not merely shadowed in help.
+      const spelling = command.path[0] === 'web'
+        ? 'command'
+        : command.path.length === 1 && command.aliases.includes('web') ? 'alias' : undefined;
+      if (spelling === undefined) continue;
+      diagnostics.push(sourceDiagnostic(
+        'AB4341',
+        `CLI ${spelling} "web"${spelling === 'alias' ? ` of ${command.path.join(' ')}` : ''} is reserved by the web surface (web.apps is configured).`,
+        bin.generatedCli?.routes.find((route) => route.id === command.routeId)?.source ?? bin.provenance.sourcePath,
+        `Rename the ${spelling} or remove web.apps.`,
+      ));
+    }
   }
   if (model.web.apps.length > 0 && !bins.some((bin) => bin.web === true)) {
     const owner = bins.find((bin) => bin.name === model.metadata.name);
@@ -2450,6 +2455,21 @@ const webDiagnostics = (model: NormalizedPlugin): Diagnostic[] => {
         ? 'Remove bin: false (or choose a safe plugin name), or remove web.apps.'
         : 'Move that executable\'s commands under src/cli/** so the framework generates the bin, or remove web.apps.',
     ));
+  }
+  // The `web` capability row gates the web-only bin's emission
+  // (`targetHostsGeneratedBin`) the way `cli` gates a routed CLI (AB4765);
+  // a target that does not publish it is told so here, never silently.
+  for (const target of model.targets) {
+    const judgment = unsupportedCapabilityJudgment(registry, target.name, webSurfaceCapability);
+    if (judgment === undefined) continue;
+    diagnostics.push({
+      code: 'AB4341',
+      message: `The web surface is not hosted by target ${JSON.stringify(target.name)}: ${judgment}. Its artifact carries no working ${model.metadata.name} web command.`,
+      recovery: `Publish a supported ${webSurfaceCapability} capability on the ${target.name} adapter, or drop the target.`,
+      severity: 'warning',
+      sourcePath: model.web.provenance.sourcePath,
+      target: target.name,
+    });
   }
   return diagnostics;
 };
@@ -2475,7 +2495,7 @@ export const validateModel = (
   diagnostics.push(...compositeRootTargetDiagnostics(model, registry));
 
   diagnostics.push(...routedCliBinTargetDiagnostics(model, registry));
-  diagnostics.push(...webDiagnostics(model));
+  diagnostics.push(...webDiagnostics(model, registry));
 
   const ids = new Map<string, string>();
   const components = [

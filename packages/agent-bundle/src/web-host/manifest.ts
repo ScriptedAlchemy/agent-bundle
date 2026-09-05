@@ -10,6 +10,8 @@ import { hasDataKeys, isPlainRecord, parseJsonWithoutDuplicateKeys } from '../co
 export interface WebManifestApp {
   readonly allow: readonly ServeAppAllowCapability[];
   readonly app: string;
+  /** The server's declared arguments after its entry, path tokens unexpanded. */
+  readonly args: readonly string[];
   readonly entry: string;
   readonly env: Readonly<Record<string, string>>;
   readonly input?: Readonly<Record<string, unknown>>;
@@ -54,6 +56,12 @@ const string = (value: unknown, location: string): string =>
     ? value
     : fail(`${location} must be a non-empty string.`);
 
+const stringArray = (value: unknown, location: string): readonly string[] => {
+  if (!Array.isArray(value)) throw invalid(`${location} must be an array.`);
+  return value.map((entry: unknown, index: number) =>
+    typeof entry === 'string' ? entry : fail(`${location}[${index}] must be a string.`));
+};
+
 const stringRecord = (value: unknown, location: string): Readonly<Record<string, string>> => {
   const candidate = record(value, location);
   const result: Record<string, string> = {};
@@ -72,7 +80,7 @@ const parseApp = (value: unknown, index: number): WebManifestApp => {
   const app = keyedRecord(
     value,
     location,
-    ['allow', 'app', 'entry', 'env', 'name', 'resourceUri', 'server'],
+    ['allow', 'app', 'args', 'entry', 'env', 'name', 'resourceUri', 'server'],
     ['input', 'tool'],
   );
   if (!Array.isArray(app.allow)) throw invalid(`${location}.allow must be an array.`);
@@ -85,6 +93,7 @@ const parseApp = (value: unknown, index: number): WebManifestApp => {
   return {
     allow,
     app: string(app.app, `${location}.app`),
+    args: stringArray(app.args, `${location}.args`),
     entry: string(app.entry, `${location}.entry`),
     env: stringRecord(app.env, `${location}.env`),
     ...(app.input === undefined ? {} : { input: inputRecord(app.input, `${location}.input`) }),

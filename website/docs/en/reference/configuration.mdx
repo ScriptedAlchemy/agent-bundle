@@ -226,9 +226,10 @@ web: {
 Invalid `web` is `AB4341` (error): an `app` no `mcp.servers.<id>.apps` declares; an unknown
 `allow` capability; `open` outside `browser` \| `never`; a duplicate `<server>/<app>`; a `tool`
 the route graph does not declare for that generated server; a generated-mode `src/cli/**`
-command whose first path segment is `web` while `web` is configured; or a `web` surface with no
-executable to carry it. Message shapes and recoveries are in the
-[diagnostics reference](./diagnostics.md).
+command (or top-level alias) spelled `web` while `web` is configured; or a `web` surface with no
+executable to carry it. A selected target whose adapter publishes no supported `web` capability
+row is an `AB4341` warning: its artifact does not host the surface. Message shapes and recoveries
+are in the [diagnostics reference](./diagnostics.md).
 
 The `web` command lives only in the framework-generated `bin/<plugin>.mjs`. `web` never
 displaces authored code: a hand-written `src/cli.ts`, a `bin` entry that claims the plugin name,

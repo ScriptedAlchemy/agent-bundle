@@ -134,7 +134,7 @@ node <root>/bin/<plugin>.mjs web [<server>/<app>] [--port N] [--open|--no-open] 
 loopback origin 提供 App，并为 App 文档再开一个 loopback 沙箱 origin——与 `agent-bundle serve-app`
 以及 Workbench 同一套宿主栈与同意行为。人类模式打印
 `MCP App <server>/<app> at <url> (tool <tool>; Ctrl-C stops the server)`，并一直运行到 Ctrl-C /
-SIGTERM。当配置了 `web` 时，手写的 `src/cli/web.ts`（或任何第一路径段为 `web` 的生成式命令）会被
+SIGTERM。当配置了 `web` 时，手写的 `src/cli/web.ts`（或任何拼作 `web` 的生成式命令或顶层别名）会被
 `AB4341` 拒绝。
 
 ## build 与 prepack

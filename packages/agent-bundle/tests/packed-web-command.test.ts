@@ -122,6 +122,7 @@ it('builds the exposed App into the composite root: a manifest web section and o
     apps: [{
       allow: ['call-tool'],
       app,
+      args: [],
       entry: `mcp/${mcpEntries[0]!}`,
       env: {},
       name: 'status',
