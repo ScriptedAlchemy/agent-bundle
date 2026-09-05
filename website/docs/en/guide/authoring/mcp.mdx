@@ -1027,8 +1027,9 @@ Invalid `web` is `AB4341` (error); the message shapes are in the
 
 When `web` is configured, the composite artifact's `agent-bundle.manifest.json` gains a `web`
 section and the build emits `bin/<plugin>.mjs` even without `src/cli/**` commands. The host page
-lives inside that bin — there is no `web/` directory in the artifact. `AB6005` walks the bin
-like every other executable.
+lives inside that bin — there is no `web/` directory in the artifact. Its compilation contributes
+the same external-module evidence as every other executable, so `AB6005` rejects any external
+other than a Node built-in, `pnpapi`, or an emitted sibling.
 
 From the built artifact or the installed plugin root:
 
@@ -1039,9 +1040,10 @@ node <root>/bin/<plugin>.mjs web [<server>/<app>] [--port N] [--open|--no-open] 
 
 The default App is the only exposed one; several without a selector is a usage error (exit `2`)
 that lists them. Missing `agent-bundle.manifest.json` beside `bin/` exits `1`. The command
-launches the plugin's own MCP server (`node <root>/mcp/<entry>.mjs`,
-`AGENT_BUNDLE_PLUGIN_ROOT=<root>`, declared static env with path tokens expanded — the
-plugin-data token resolves outside the artifact, under
+launches the plugin's own MCP server from its `executables.mcpServers[]` `launch` record
+(`node <root>/<launch.entry> <args>` — `artifact` arguments resolve under `<root>`, literals have
+their path tokens expanded — with `AGENT_BUNDLE_PLUGIN_ROOT=<root>` and the declared static env,
+path tokens expanded; the plugin-data token resolves outside the artifact, under
 `~/.agent-bundle/web-data/<plugin>-<digest>/<server>`, so a read-only install still launches).
 The spawned server's own durable framework state likewise lives outside the artifact under
 `~/.agent-bundle/state/<plugin>-<digest>` (or `AGENT_BUNDLE_STATE_ROOT`). It calls the opening
@@ -1067,7 +1069,12 @@ resolved launch identity; a successful rebuild retires unused sessions of older 
 still leasing one keep it until their last lease releases), and a failed rebuild retires
 nothing. An opening tool annotated
 `readOnlyHint: true` runs on every page load; any other opening tool runs once per session,
-tool, App, and input, and a refresh rebinds that retained result.
+tool, App, and input. Concurrent first loads share the same in-flight call, and refreshes rebind
+its retained result without gaining authority to repeat the operation. Results are bounded and
+may be evicted independently of the execution record; after eviction, after a failed call whose
+side effects are unknown, or when the bounded execution ledger is full, the page receives an
+error result directing the user to run the tool explicitly from the App instead of retrying it
+automatically.
 
 `agent-bundle serve-app` is unchanged: it is the checkout-time form that builds or points at an
 artifact and needs the framework installed. Every option is in the
@@ -1113,10 +1120,12 @@ npx agent-bundle mcp invoke --artifact artifact --target claude --server curator
 npx agent-bundle mcp run --artifact artifact --target claude --server curator
 ```
 
-`mcp run` executes one built stdio server in the foreground: it resolves the generated entry
-(named with a digest of the server name) from the target's MCP manifest, expands path tokens through the target adapter,
-loads the project-root `.env` set, and forwards the child's exit code. Without `--artifact`, a
-temporary artifact is built first.
+`mcp run` executes one built stdio server in the foreground: it resolves the compiled entry
+(named with a digest of the server name) from the artifact manifest's `executables.mcpServers[]`
+row, expands path tokens through the host adapter, loads the project-root `.env` set, and forwards
+the child's exit code. `--target` is optional — omit it and the manifest's `projections[]` must
+name exactly one MCP-capable host; several are an error naming the choices. Without
+`--artifact`, a temporary artifact is built first.
 
 ## Live host MCP proxy
 

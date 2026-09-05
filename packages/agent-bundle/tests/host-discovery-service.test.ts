@@ -1,4 +1,4 @@
-import { mkdtemp, rm, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -7,6 +7,7 @@ import { expect, it } from '@rstest/core';
 import type { TargetRegistry } from '../src/adapters/registry.ts';
 import type { HostDiscoveryReport } from '../src/contracts/discovery.ts';
 import { HostDiscoveryService } from '../src/dev/playground/host-discovery-service.ts';
+import { writeInstallFixtureManifest } from './support/install-fixture.ts';
 import type {
   DoctorCommandRunner,
   DoctorOptions,
@@ -165,10 +166,25 @@ it('shares only an in-flight scan and starts a fresh scan after settlement', asy
   expect(freshReport).not.toBe(firstReport);
 });
 
+/**
+ * A built Claude bundle root: the artifact manifest points the projection at
+ * its host documents, and discovery reads the MCP document through that
+ * pointer rather than by convention.
+ */
+const writeClaudeBundle = async (root: string, mcpDocument: string): Promise<void> => {
+  await mkdir(join(root, '.claude-plugin'), { recursive: true });
+  await writeFile(join(root, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'demo', version: '1.0.0' }));
+  await writeFile(join(root, '.claude-plugin', 'marketplace.json'), JSON.stringify({ name: 'agent-bundle' }));
+  await writeFile(join(root, '.mcp.json'), mcpDocument);
+  await writeInstallFixtureManifest(root, { name: 'demo', version: '1.0.0' }, [
+    { host: 'claude', marketplace: 'agent-bundle', mcp: '.mcp.json' },
+  ]);
+};
+
 it('enumerates sorted modern MCP servers from a valid bundle manifest', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-discovery-mcp-'));
   try {
-    await writeFile(join(root, '.mcp.json'), JSON.stringify({
+    await writeClaudeBundle(root, JSON.stringify({
       mcpServers: {
         zeta: { headers: {}, type: 'http', url: 'https://example.com/mcp' },
         alpha: { args: [], command: 'node', type: 'stdio' },
@@ -214,7 +230,7 @@ it('distinguishes empty MCP manifests from manifests that could not be enumerate
       }),
     });
 
-    await writeFile(join(root, '.mcp.json'), '{"mcpServers":{}}');
+    await writeClaudeBundle(root, '{"mcpServers":{}}');
     expect((await service.discover()).hosts[0]?.bundle?.mcpServers).toEqual([]);
 
     await writeFile(join(root, '.mcp.json'), '{"mcpServers":{"broken":');

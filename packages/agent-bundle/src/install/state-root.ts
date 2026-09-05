@@ -2,7 +2,9 @@ import { createHash } from 'node:crypto';
 import { readFile, realpath } from 'node:fs/promises';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 
+import { readArtifactManifest } from '../build/manifest-file.ts';
 import { isErrno } from '../core/errors.ts';
+import { isRecord } from '../core/strict-json.ts';
 import { pluginStateRootEnvAnchor } from '../core/types.ts';
 import { webPluginDataRoot } from '../web-host/launch.ts';
 import type { InstallHost } from './install.ts';
@@ -11,24 +13,6 @@ export interface InstalledStateRoot {
   readonly root: string;
   readonly source: 'derived' | 'native';
 }
-
-const manifestCandidates = (host: InstallHost): readonly string[] => {
-  switch (host) {
-    case 'claude':
-      return ['.mcp.json'];
-    case 'codex':
-      return ['.codex-plugin/mcp.json'];
-    case 'cursor':
-      return ['.cursor-plugin/mcp.json', 'mcp.json'];
-    default: {
-      const exhaustive: never = host;
-      throw new TypeError(`Unknown install host ${String(exhaustive)}.`);
-    }
-  }
-};
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  value !== null && typeof value === 'object' && !Array.isArray(value);
 
 const safePluginSegment = /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/u;
 
@@ -48,27 +32,33 @@ const installedUserDataStateRoot = (
   return join(stateHome, safePluginSegment.test(name) ? `${name}-${digest}` : `plugin-${digest}`);
 };
 
+const installedMcpDocument = async (pluginRoot: string, host: InstallHost): Promise<string | undefined> => {
+  const read = await readArtifactManifest(pluginRoot);
+  if (read.status !== 'ok') return undefined;
+  return read.manifest.projections.find((projection) => projection.builtInHost === host)?.documents.mcp;
+};
+
 const declaredStateRoot = async (pluginRoot: string, host: InstallHost): Promise<string | undefined> => {
-  for (const relativePath of manifestCandidates(host)) {
-    let document: unknown;
-    try {
-      document = JSON.parse(await readFile(join(pluginRoot, relativePath), 'utf8')) as unknown;
-    } catch (error) {
-      if (isErrno(error, 'ENOENT') || error instanceof SyntaxError) continue;
-      throw error;
-    }
-    if (!isRecord(document) || !isRecord(document['mcpServers'])) continue;
-    for (const server of Object.values(document['mcpServers'])) {
-      if (!isRecord(server) || !isRecord(server['env'])) continue;
-      const declared = server['env'][pluginStateRootEnvAnchor];
-      if (typeof declared !== 'string' || declared.trim() === '') continue;
-      const expanded = declared
-        .replaceAll('${CLAUDE_PLUGIN_ROOT}', pluginRoot)
-        .replaceAll('${CURSOR_PLUGIN_ROOT}', pluginRoot)
-        .replaceAll('${PLUGIN_ROOT}', pluginRoot);
-      if (/\$\{[^}]*\}/u.test(expanded)) continue;
-      return isAbsolute(expanded) ? resolve(expanded) : resolve(pluginRoot, expanded);
-    }
+  const relativePath = await installedMcpDocument(pluginRoot, host);
+  if (relativePath === undefined) return undefined;
+  let document: unknown;
+  try {
+    document = JSON.parse(await readFile(join(pluginRoot, relativePath), 'utf8')) as unknown;
+  } catch (error) {
+    if (isErrno(error, 'ENOENT') || error instanceof SyntaxError) return undefined;
+    throw error;
+  }
+  if (!isRecord(document) || !isRecord(document['mcpServers'])) return undefined;
+  for (const server of Object.values(document['mcpServers'])) {
+    if (!isRecord(server) || !isRecord(server['env'])) continue;
+    const declared = server['env'][pluginStateRootEnvAnchor];
+    if (typeof declared !== 'string' || declared.trim() === '') continue;
+    const expanded = declared
+      .replaceAll('${CLAUDE_PLUGIN_ROOT}', pluginRoot)
+      .replaceAll('${CURSOR_PLUGIN_ROOT}', pluginRoot)
+      .replaceAll('${PLUGIN_ROOT}', pluginRoot);
+    if (/\$\{[^}]*\}/u.test(expanded)) continue;
+    return isAbsolute(expanded) ? resolve(expanded) : resolve(pluginRoot, expanded);
   }
   return undefined;
 };

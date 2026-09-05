@@ -172,7 +172,7 @@ const leafForRoute = (
     ...(route.inputSchema === undefined ? {} : { inputSchema: route.inputSchema }),
     key: applicationNodeKey(ref),
     label: routeLabel(ref),
-    ...(route.preflight === undefined ? {} : { preflight: route.preflight }),
+    ...(route.execution?.preflight === undefined ? {} : { preflight: route.execution.preflight }),
     ref,
     routeId: route.id,
     source: route.source,

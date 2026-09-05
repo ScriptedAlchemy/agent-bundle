@@ -7,7 +7,6 @@ import { readFile, realpath } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 
 import { dependencyManifestPath } from '../core/dependency-manifest.ts';
-import { sha256Hex } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
 import { isInsideOrEqual, posixRelativeWhenInside } from '../core/paths.ts';
 import { isRecord } from '../core/strict-json.ts';
@@ -32,7 +31,6 @@ import {
   metaModuleSpecifier,
   virtualModulesPluginConstructor,
 } from './meta.ts';
-import { readModuleImports, type ModuleImport } from './module-imports.ts';
 import { collectBundledOutputEvidence } from './provenance.ts';
 
 export interface RslibVirtualModule {
@@ -81,22 +79,22 @@ const preserveResourceReferences: RslibBundlerChain = (chain) => {
 };
 
 /**
- * Lowers the composed lib configs to bundler configs, always as the
- * production build `rslib.build()` runs. Rslib 1.x otherwise infers the mode
- * from `NODE_ENV`, and under `development` inspects only `mf` libs — none
- * here — so `assertExecutableConfig` and `inspect --bundler` would fail. Rslib
- * writes the inspected mode back to `NODE_ENV`; the process gets its own value
- * back — set or unset — whether the inspection succeeded or threw, so a
- * development server or test runner that inspects a config is not left
- * running as `production`. (`rslib.build()` sets `production` itself when it
- * finds `NODE_ENV` unset; that is the build's business, not the inspection's.)
+ * Lowers composed configs to bundler configs, always as the production build
+ * runs. Rslib 1.x otherwise infers the mode from `NODE_ENV`, and under
+ * `development` inspects only `mf` libs — none here — so
+ * `assertExecutableConfig` and `inspect --bundler` would fail. Rslib and
+ * Rsbuild write the inspected mode back to `NODE_ENV`; the process gets its
+ * own value back — set or unset — whether the inspection succeeded or threw,
+ * so a development server or test runner that inspects a config is not left
+ * running as `production`. (`build()` sets `production` itself when it finds
+ * `NODE_ENV` unset; that is the build's business, not the inspection's.)
  */
-const inspectProductionConfig = async (
-  rslib: Pick<RslibInstance, 'inspectConfig'>,
-): Promise<Awaited<ReturnType<RslibInstance['inspectConfig']>>> => {
+export const inspectProductionConfig = async <Inspection>(
+  instance: { readonly inspectConfig: (options: { readonly mode: 'production' }) => Promise<Inspection> },
+): Promise<Inspection> => {
   const nodeEnv = process.env.NODE_ENV;
   try {
-    return await rslib.inspectConfig({ mode: 'production' });
+    return await instance.inspectConfig({ mode: 'production' });
   } finally {
     if (nodeEnv === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = nodeEnv;
@@ -213,7 +211,7 @@ const reservedExternalError = (specifier: string): Error => new Error(
  * object entry whose value is `false` explicitly opts out of
  * externalization, so it is not a violation. Function externals cannot be
  * inspected here; {@link guardReservedExternals} intercepts those at build
- * time and the post-build residual-import scan fails closed behind both.
+ * time.
  */
 const reservedExternalsViolation = (externals: unknown, reserved: readonly string[]): string | undefined => {
   if (externals === undefined || externals === null) return undefined;
@@ -302,42 +300,6 @@ const reservedAliasViolation = (
   return reserved.some((specifier) => specifier === base || (!exact && specifier.startsWith(`${base}/`)));
 });
 
-/**
- * Fail-closed self-containment check on the emitted bundles themselves:
- * no reserved specifier may survive bundling as a live import. This is the
- * belt behind the static externals check and the function-external guard.
- * The bundle is lexed as an ES module (the emitted format by contract), so
- * string literals or comments that merely mention a reserved specifier are
- * not violations. The lex is keyed by the bundle's digest, so artifact
- * validation, which scans these same bytes next, reads the imports once.
- */
-const assertNoResidualReservedImports = async (
-  entries: readonly RslibEntry[],
-  outputRoot: string,
-): Promise<void> => {
-  await Promise.all(entries.map(async (entry) => {
-    const reserved = reservedSpecifiers(entry);
-    const bytes = await readFile(resolve(outputRoot, entry.outputRelativePath));
-    let imports: readonly ModuleImport[];
-    try {
-      imports = await readModuleImports(bytes.toString('utf8'), { check: 'lexed', sha256: sha256Hex(bytes) });
-    } catch {
-      throw new Error(`Generated executable ${JSON.stringify(entry.outputRelativePath)} did not parse as an ES module.`);
-    }
-    const residual = imports
-      .map((record) => record.specifier)
-      .find((specifier) => specifier !== undefined && reserved.includes(specifier));
-    if (residual !== undefined) {
-      throw new Error(
-        `Generated executable ${JSON.stringify(entry.outputRelativePath)} is not self-contained: `
-        + `the reserved module specifier ${JSON.stringify(residual)} survived bundling. `
-        + 'The tools escape hatch must not externalize '
-        + `${reserved.map((specifier) => JSON.stringify(specifier)).join(', ')}.`,
-      );
-    }
-  }));
-};
-
 const projectDependencyFields = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'] as const;
 /** What a dependency's bundle can pull in: its devDependencies never ship. */
 const runtimeDependencyFields = ['dependencies', 'optionalDependencies', 'peerDependencies'] as const;
@@ -395,9 +357,15 @@ const canonicalProjectRoot = async (cwd: string): Promise<string> => {
  * inside the project (`<project>/packages/dep`, `file:./vendor/dep`) is still
  * a dependency and is excluded like any other.
  */
-const declaredDependencyRoots = async (cwd: string): Promise<readonly string[]> => {
+/**
+ * Real root → package name of every declared dependency, transitively through
+ * workspace-linked ones. Rspack records a symlinked dependency's modules at
+ * their real path, where no `node_modules` segment names the package, so the
+ * name is kept from the declaration that reached it.
+ */
+const declaredDependencyRoots = async (cwd: string): Promise<ReadonlyMap<string, string>> => {
   const projectRoot = await canonicalProjectRoot(cwd);
-  const roots = new Set<string>();
+  const roots = new Map<string, string>();
   const visited = new Set<string>();
   const visit = async (packageRoot: string, fields: readonly string[]): Promise<void> => {
     if (visited.has(packageRoot)) return;
@@ -409,12 +377,12 @@ const declaredDependencyRoots = async (cwd: string): Promise<readonly string[]> 
       if (manifestPath === undefined) return;
       const root = await realpath(dirname(manifestPath));
       if (root === projectRoot) return;
-      roots.add(root);
+      if (!roots.has(root)) roots.set(root, name);
       if (!isBeneathNodeModules(root)) await visit(root, runtimeDependencyFields);
     }));
   };
   await visit(projectRoot, projectDependencyFields);
-  return Object.freeze([...roots].sort((left, right) => left.localeCompare(right)));
+  return new Map([...roots].sort(([left], [right]) => left.localeCompare(right)));
 };
 
 interface InspectedBundlerConfig {
@@ -516,8 +484,9 @@ const assertExecutableConfig = (
  * shared `composeToolsLayers` order — the framework profile, the consumer
  * `tools` escape hatch over it, the invariant enforcer hook last — with
  * Rslib's own `mergeRslibConfig` keyed by the synthesized lib id.
- * `buildWithRslib` lowers exactly this composition and `inspect --bundler`
- * surfaces it, so the two can never drift.
+ * `buildRslibSurfaces` and `inspectRslibEntries` lower exactly this
+ * composition through one shared step, so the build and `inspect --bundler`
+ * can never drift.
  */
 export const composeEntryLibConfig = (
   entry: RslibEntry,
@@ -764,10 +733,17 @@ const assertDistinctLibIds = (entries: readonly RslibEntry[]): void => {
   }
 };
 
-const packageNameOfResource = (resource: string): string | undefined => {
+/** The package a module belongs to: named by its `node_modules` segment, or by the deepest declared dependency root that contains it. */
+const packageNameOfResource = (resource: string, dependencyRoots: ReadonlyMap<string, string>): string | undefined => {
   const segments = resource.replaceAll('\\', '/').split('/');
   const nodeModules = segments.lastIndexOf('node_modules');
-  if (nodeModules === -1) return undefined;
+  if (nodeModules === -1) {
+    let root: string | undefined;
+    for (const candidate of dependencyRoots.keys()) {
+      if (isInsideOrEqual(candidate, resource) && (root === undefined || candidate.length > root.length)) root = candidate;
+    }
+    return root === undefined ? undefined : dependencyRoots.get(root);
+  }
   const name = segments[nodeModules + 1];
   if (name === undefined) return undefined;
   return name.startsWith('@') && segments[nodeModules + 2] !== undefined
@@ -781,7 +757,7 @@ export const compileResultOf = (
   options: {
     readonly asset: AssetIR;
     readonly cwd: string;
-    readonly dependencyRoots: readonly string[];
+    readonly dependencyRoots: ReadonlyMap<string, string>;
     readonly emittedAssets: ReadonlySet<string>;
   },
 ): CompileResult => {
@@ -798,7 +774,7 @@ export const compileResultOf = (
       userRequest: external.userRequest,
     }))),
     modules: Object.freeze(record.modules.map((module): ModuleIR => {
-      const packageName = module.resource === undefined ? undefined : packageNameOfResource(module.resource);
+      const packageName = module.resource === undefined ? undefined : packageNameOfResource(module.resource, options.dependencyRoots);
       return {
         asset,
         identifier: module.identifier,
@@ -813,16 +789,72 @@ export const compileResultOf = (
 const moduleKindOf = (
   resource: string | undefined,
   cwd: string,
-  dependencyRoots: readonly string[],
+  dependencyRoots: ReadonlyMap<string, string>,
 ): ModuleIR['kind'] => {
   if (resource !== undefined && isInsideOrEqual(generatedModulesRoot(cwd), resource)) return 'generated';
-  if (
-    resource !== undefined
-    && (packageNameOfResource(resource) !== undefined || dependencyRoots.some((root) => isInsideOrEqual(root, resource)))
-  ) {
-    return 'dependency';
-  }
+  if (resource !== undefined && packageNameOfResource(resource, dependencyRoots) !== undefined) return 'dependency';
   return 'authored';
+};
+
+/**
+ * Creates the Rslib instance for one run — every entry composed through
+ * {@link composeEntryLibConfig} — and lowers it to the resolved Rsbuild
+ * environments and Rspack configurations, judged by
+ * {@link assertExecutableConfig} before anything compiles. The build and
+ * `inspect --bundler` share this step, so what the inspection renders is
+ * exactly what the build compiles.
+ */
+const lowerEntries = async (
+  options: RslibRunOptions,
+  entries: readonly RslibEntry[],
+  lowering: {
+    readonly createRslib: NonNullable<RslibDependencies['createRslib']>;
+    readonly logLevel: 'error' | 'silent';
+    readonly onCompilationEvidence?: (evidence: CompilationEvidence) => void;
+    readonly onReservedExternal?: (specifier: string) => void;
+  },
+): Promise<{
+  readonly inspection: Awaited<ReturnType<RslibInstance['inspectConfig']>>;
+  readonly rslib: Awaited<ReturnType<NonNullable<RslibDependencies['createRslib']>>>;
+}> => {
+  const rslib = await lowering.createRslib({
+    cwd: options.cwd,
+    config: {
+      logLevel: lowering.logLevel,
+      lib: entries.map((entry) => composeEntryLibConfig(entry, {
+        cwd: options.cwd,
+        meta: options.meta,
+        ...(lowering.onCompilationEvidence === undefined ? {} : { onCompilationEvidence: lowering.onCompilationEvidence }),
+        ...(lowering.onReservedExternal === undefined ? {} : { onReservedExternal: lowering.onReservedExternal }),
+        outputRoot: options.outputRoot,
+        ...(options.tools === undefined ? {} : { tools: options.tools }),
+      })),
+    },
+  });
+  const inspection = await inspectProductionConfig(rslib);
+  assertExecutableConfig(entries, inspection.origin, options);
+  return { inspection, rslib };
+};
+
+/**
+ * The lowered Rspack configuration of every entry, in entry order, from one
+ * Rslib instance that never builds: the same composition, mode, and
+ * invariant assertions as {@link buildRslibSurfaces}, stopping where the
+ * build would start compiling. Rslib reads every authored entry from disk
+ * while resolving, exactly as the build does.
+ */
+export const inspectRslibEntries = async (
+  options: RslibRunOptions,
+  entries: readonly RslibEntry[],
+): Promise<readonly Rspack.Configuration[]> => {
+  if (entries.length === 0) return Object.freeze([]);
+  assertDistinctLibIds(entries);
+  const { inspection } = await lowerEntries(options, entries, { createRslib, logLevel: 'silent' });
+  // `assertExecutableConfig` has matched exactly one lowered config per entry by lib id.
+  return Object.freeze(entries.map((entry) => {
+    const id = entryLibId(entry);
+    return inspection.origin.bundlerConfigs.find((config) => config.name === id)!;
+  }));
 };
 
 /**
@@ -850,24 +882,13 @@ export const buildRslibSurfaces = async (
 
   const reservedExternalViolations: string[] = [];
   const compilationEvidence: CompilationEvidence[] = [...(dependencies.compilationEvidence ?? [])];
-  const rslib = await (dependencies.createRslib ?? createRslib)({
-    cwd: options.cwd,
-    config: {
-      // The run reports at the most verbose level any surface asks for.
-      logLevel: surfaces.some((surface) => surface.logLevel === 'error') ? 'error' : 'silent',
-      lib: entries.map((entry) => composeEntryLibConfig(entry, {
-        cwd: options.cwd,
-        meta: options.meta,
-        onCompilationEvidence: (evidence) => compilationEvidence.push(evidence),
-        onReservedExternal: (specifier) => reservedExternalViolations.push(specifier),
-        outputRoot: options.outputRoot,
-        ...(options.tools === undefined ? {} : { tools: options.tools }),
-      })),
-    },
+  const { rslib } = await lowerEntries(options, entries, {
+    createRslib: dependencies.createRslib ?? createRslib,
+    // The run reports at the most verbose level any surface asks for.
+    logLevel: surfaces.some((surface) => surface.logLevel === 'error') ? 'error' : 'silent',
+    onCompilationEvidence: (evidence) => compilationEvidence.push(evidence),
+    onReservedExternal: (specifier) => reservedExternalViolations.push(specifier),
   });
-
-  const inspection = await inspectProductionConfig(rslib);
-  assertExecutableConfig(entries, inspection.origin, options);
   let result: Awaited<ReturnType<RslibInstance['build']>> | undefined;
   try {
     try {
@@ -889,12 +910,11 @@ export const buildRslibSurfaces = async (
         // Generated wrapper/registry modules are virtual, but they still
         // surface in stats as modules under this reserved namespace.
         resolve(generatedModulesRoot(options.cwd)),
-        ...dependencyRoots,
+        ...dependencyRoots.keys(),
       ],
       projectRoot: options.cwd,
       stats: result.stats,
     });
-    await assertNoResidualReservedImports(entries, options.outputRoot);
     const emittedAssets = new Set(entries.map((entry) => entry.outputRelativePath));
     const evidenceByPath = new Map(evidence.map((asset) => [asset.path, asset]));
     const resultByEntry = new Map(entries.map((entry) => {

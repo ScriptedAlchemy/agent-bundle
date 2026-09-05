@@ -84,6 +84,7 @@ export interface ValidateClaudePluginOptions {
 }
 
 export interface ValidateClaudePluginFilesOptions {
+  readonly files?: readonly string[];
   readonly pluginDirectory: string;
   readonly target: string;
 }
@@ -151,6 +152,7 @@ export const claudePluginRowErrors = (row: Readonly<Record<string, unknown>>): r
 const matchingDocumentPaths = async (
   root: string,
   contractPath: string,
+  files?: readonly string[],
 ): Promise<readonly string[]> => {
   const wildcard = contractPath.indexOf('*');
   if (wildcard === -1) return Object.freeze([contractPath]);
@@ -159,6 +161,16 @@ const matchingDocumentPaths = async (
   const nameWildcard = name.indexOf('*');
   const prefix = name.slice(0, nameWildcard);
   const suffix = name.slice(nameWildcard + 1);
+  if (files !== undefined) {
+    return Object.freeze(files.filter((path) => {
+      const candidateDirectory = posix.dirname(path);
+      const candidate = posix.basename(path);
+      return candidateDirectory === directory &&
+        candidate.startsWith(prefix) &&
+        candidate.endsWith(suffix) &&
+        candidate.length > prefix.length + suffix.length;
+    }));
+  }
   let entries;
   try {
     entries = await readdir(join(root, directory), { withFileTypes: true });
@@ -219,7 +231,8 @@ const validateClaudePluginFilesProgram = Effect.fnUntraced(function* (
   );
   const diagnostics: Diagnostic[] = [];
   for (const contract of claudeArtifactValidation.documents) {
-    const listed = yield* liftPromise(() => matchingDocumentPaths(pluginDirectory, contract.path)).pipe(Effect.option);
+    const listed = yield* liftPromise(() =>
+      matchingDocumentPaths(pluginDirectory, contract.path, options.files)).pipe(Effect.option);
     if (Option.isNone(listed)) {
       diagnostics.push(localDiagnostic(
         'AB6012',

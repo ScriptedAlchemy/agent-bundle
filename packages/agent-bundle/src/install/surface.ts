@@ -1,4 +1,5 @@
 import type { NormalizedPlugin } from '../core/types.ts';
+import { preservedRuntimeEntries } from '../core/paths.ts';
 import { type BuiltInHost, builtInHostNames } from '../adapters/composite-layout.ts';
 import { sourceInputs, type TargetArtifactWrite } from '../adapters/types.ts';
 import {
@@ -7,7 +8,6 @@ import {
   installRegistrationKinds,
   installSurfaceMarkerFiles,
   legacyInstallReceiptFormat,
-  preservedRuntimeEntries,
 } from './receipt.ts';
 
 const marketplaceName = (model: NormalizedPlugin): string => `${model.metadata.name}-marketplace`;

@@ -595,7 +595,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
       entries.push({
         content: `${stableJson(mcp)}\n`,
         kind: 'write',
-        relativePath: 'mcp.json',
+        relativePath: mcpRuntime.manifestPath,
         sourceInputs: sourceInputs(...model.mcpServers
           .filter((server) => hasPortableTarget(server.targets))
           .map((server) => server.provenance.sourcePath)),
@@ -605,6 +605,7 @@ const plan = (model: NormalizedPlugin): TargetArtifactPlan => {
 
   return deepFreeze({
     diagnostics: diagnostics,
+    documents: { plugin: 'plugin.json' },
     entries: sortedEntries(entries),
     hookEntries: [],
   });

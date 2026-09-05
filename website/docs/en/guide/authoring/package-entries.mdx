@@ -501,7 +501,12 @@ silently overriding the contract. Reserved module specifiers are protected the s
 that externalizes `agent-bundle/mcp-entry`, `agent-bundle/meta`, or `agent-bundle/mcp-apps` fails
 the build. Externalization in general is bounded too: `AB4725` rejects statically visible
 package `externals`, while relative, function-form, and mutator externals are judged from the
-compilation's own evidence (`AB6005`). Run-time path references are kept the same way: a
+compilation's own evidence (`AB6005`). A hatch also runs after the compiler judged the module graph
+and can rewrite the emitted bytes, so the build's compile evidence record marks
+`coverage.rewritable` and artifact validation parses every emitted module in full and resolves its
+imports, instead of trusting the record; without a hatch a compiled module is lexed and its literal
+imports held to the record's externals (an `rspackIgnore` import fails `AB6005`). Run-time
+path references are kept the same way: a
 `new URL(…, import.meta.url)` or `new Worker(new URL(…))` in your code or a generated entry names
 a file beside the artifact, so the invariant layer turns the bundler's URL and worker asset
 processing off after the hatch and the expression reaches the artifact verbatim. The hatch
@@ -537,9 +542,15 @@ npx agent-bundle inspect --bundler --root .
 npx agent-bundle inspect --bundler --root . --target claude --json
 ```
 
-That dumps the synthesized configuration for every output the build composes, exactly as the
-build lowers it, using the same functions the build uses — so the dump cannot drift from what
-compiles. Entries the framework wraps also carry the generated wrapper module source.
+That dumps the lowered Rspack configuration of every output the build compiles — one entry per
+compiler, produced by the build's own Rslib (executables) or Rsbuild (MCP App views) lowering and
+stopped where the build would start compiling — so the dump cannot drift from what compiles. You
+see the resolved `resolve.alias` map (framework runtime modules beside your own aliases), the
+`externals` list, the plugins as `[object <ClassName>]`, functions as `[function <name>]`, and
+`output.path` as `<output>` (the artifact root) or `<project root>/dist` (the package build). A
+hatch value the build's invariants refuse — aliasing a reserved `agent-bundle/*` specifier, for
+instance — makes the inspection invalid with `AB7001` naming the refusal. Entries the framework
+wraps also carry the generated wrapper module source.
 
 The full contract for everything on this page is in
 [Entry conventions](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/entry-conventions.md).

@@ -1,0 +1,24 @@
+{
+  // Twoslash compiles documentation samples against package source so editor
+  // examples do not depend on the declarations TypeDoc consumes.
+  "extends": "../packages/agent-bundle/tsconfig.build.json",
+  "compilerOptions": {
+    "rootDir": "../packages",
+    "paths": {
+      "@agent-bundle/runtime": ["../packages/rsc-runtime/src/index.ts"],
+      "@agent-bundle/runtime/plugin": ["../packages/rsc-runtime/src/plugin.ts"],
+      "@agent-bundle/runtime/flight/server": ["../packages/rsc-runtime/src/flight/server.ts"],
+      "@agent-bundle/runtime/lineage": ["../packages/rsc-runtime/src/lineage/index.ts"],
+      "@agent-bundle/runtime/mount": ["../packages/rsc-runtime/src/mount/index.ts"],
+      "@agent-bundle/runtime/notices": ["../packages/rsc-runtime/src/notices/index.ts"],
+      "@agent-bundle/runtime/notices/inbox-route": ["../packages/rsc-runtime/src/notices/inbox-route.ts"],
+      "@agent-bundle/runtime/state": ["../packages/rsc-runtime/src/state/index.ts"],
+      "@agent-bundle/runtime/state/sqlite": ["../packages/rsc-runtime/src/state/sqlite.ts"],
+      "rsc-markdown-stream": ["../packages/rsc-markdown-stream/src/index.d.ts"]
+    }
+  },
+  "include": [
+    "../packages/agent-bundle/src/**/*.ts",
+    "../packages/rsc-runtime/src/react-server-dom-rspack.d.ts"
+  ]
+}

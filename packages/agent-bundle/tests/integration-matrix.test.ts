@@ -180,7 +180,7 @@ it('builds the checked-in fixture matrix from a path with spaces', async () => {
         transcriptPath: join(root, 'transcript.json'),
       },
       root,
-      target: hooks[0]!.target,
+      target: hooks[0]!.host,
     })).resolves.toEqual({ additionalContext: 'hook:fixture', outcome: 'continue' });
   } finally {
     await rm(parent, { force: true, recursive: true });

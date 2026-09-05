@@ -403,7 +403,7 @@ const resolvedSurface = (
       return surface;
     case 'event':
       if (route.kind !== 'event-route') return malformed();
-      if (route.preflight !== undefined && surface.host === undefined) {
+      if (route.execution?.preflight !== undefined && surface.host === undefined) {
         throw new RouteInvocationRequestError(
           ROUTE_INVOCATION_EVENT_HOST_REQUIRED_CODE,
           `Event route ${JSON.stringify(route.id)} has compiled preflight; select an event host surface with a concrete host.`,

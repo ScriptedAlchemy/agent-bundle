@@ -43,7 +43,7 @@ import {
   virtualModulesPluginConstructor,
 } from './meta.ts';
 import { collectBundledOutputEvidence } from './provenance.ts';
-import { compileResultOf } from './rslib.ts';
+import { compileResultOf, inspectProductionConfig } from './rslib.ts';
 import { runtimeIgnoredRoot } from './runtime-path.ts';
 
 export type { McpAppCompileMode, McpAppOutputSize } from './mcp-app-diagnostics.ts';
@@ -461,6 +461,54 @@ const assertViewsSelfContained = (
   return Object.freeze(records);
 };
 
+/**
+ * The Rsbuild instance every view of one composite root compiles through —
+ * the composed profile plus the compile-time plugins the build adds beside
+ * it — lowered to its resolved environments and Rspack configurations and
+ * judged by {@link assertResolvedViewConfig} before anything compiles. The
+ * build and `inspect --bundler` share this step, so what the inspection
+ * renders is exactly what the build compiles.
+ */
+const lowerViews = async (
+  compiled: readonly PlannedMcpApp[],
+  sources: readonly Pick<NormalizedMcpApp, 'name' | 'source' | 'template'>[],
+  options: Parameters<typeof composeMcpAppsRsbuildConfig>[1],
+  collectedStats: Map<string, Rspack.StatsCompilation>,
+): Promise<{
+  readonly inspection: Awaited<ReturnType<Awaited<ReturnType<typeof createRsbuild>>['inspectConfig']>>;
+  readonly rsbuild: Awaited<ReturnType<typeof createRsbuild>>;
+}> => {
+  const rsbuild = await createRsbuild({ cwd: options.cwd, config: composeMcpAppsRsbuildConfig(sources, options) });
+  rsbuild.addPlugins([mcpAppStatsCollectorPlugin(collectedStats), mcpAppHtmlDefaultsPlugin()]);
+  const inspection = await inspectProductionConfig(rsbuild);
+  assertResolvedViewConfig(
+    inspection,
+    compiled.map((app) => app.name),
+    options.outDir,
+    generatedMetaModulePath(options.cwd),
+    appRuntimePath(),
+  );
+  return { inspection, rsbuild };
+};
+
+/**
+ * The lowered Rspack configuration of every planned view, in plan order,
+ * from one Rsbuild instance that never builds: the same composition, mode,
+ * and invariant assertions as {@link compileMcpApps}, stopping where the
+ * build would start compiling. Rsbuild reads every view entry from disk
+ * while resolving, exactly as the build does.
+ */
+export const inspectMcpAppsConfig = async (
+  compiled: readonly PlannedMcpApp[],
+  sources: readonly Pick<NormalizedMcpApp, 'name' | 'source' | 'template'>[],
+  options: Parameters<typeof composeMcpAppsRsbuildConfig>[1],
+): Promise<readonly Rspack.Configuration[]> => {
+  if (compiled.length === 0) return Object.freeze([]);
+  const { inspection } = await lowerViews(compiled, sources, options, new Map());
+  // `assertResolvedViewConfig` has matched the compiler names to the app names.
+  return Object.freeze(compiled.map((app) => inspection.origin.bundlerConfigs.find((config) => config.name === app.name)!));
+};
+
 export const compileMcpApps = async (
   apps: readonly NormalizedMcpApp[],
   options: Readonly<{
@@ -493,28 +541,15 @@ export const compileMcpApps = async (
 
   const mode: McpAppCompileMode = options.mode ?? 'production';
   const compilationEvidence: CompilationEvidence[] = [];
-  const rsbuild = await createRsbuild({
-    cwd: options.cwd,
-    config: composeMcpAppsRsbuildConfig(sources, {
-      cwd: options.cwd,
-      meta: options.meta,
-      mode,
-      onCompilationEvidence: (evidence) => compilationEvidence.push(evidence),
-      outDir: options.outDir,
-      ...(options.tools === undefined ? {} : { tools: options.tools }),
-    }),
-  });
   const collectedStats = new Map<string, Rspack.StatsCompilation>();
-  rsbuild.addPlugins([mcpAppStatsCollectorPlugin(collectedStats), mcpAppHtmlDefaultsPlugin()]);
-  const inspection = await rsbuild.inspectConfig({ mode: 'production' });
-  const runtimePath = appRuntimePath();
-  assertResolvedViewConfig(
-    inspection,
-    compiled.map((app) => app.name),
-    options.outDir,
-    generatedMetaModulePath(options.cwd),
-    runtimePath,
-  );
+  const { rsbuild } = await lowerViews(compiled, sources, {
+    cwd: options.cwd,
+    meta: options.meta,
+    mode,
+    onCompilationEvidence: (evidence) => compilationEvidence.push(evidence),
+    outDir: options.outDir,
+    ...(options.tools === undefined ? {} : { tools: options.tools }),
+  }, collectedStats);
   const contexts: readonly McpAppDiagnosticContext[] = compiled.map((app) => ({
     appName: app.name,
     entrySource: app.source,
@@ -553,7 +588,7 @@ export const compileMcpApps = async (
       // stats as a module under this reserved namespace.
       ignoredSourcePaths: [
         resolve(generatedModulesRoot(options.cwd)),
-        runtimeIgnoredRoot(runtimePath),
+        runtimeIgnoredRoot(appRuntimePath()),
       ],
       projectRoot: options.cwd,
       stats: result.stats,
@@ -574,7 +609,7 @@ export const compileMcpApps = async (
   const compileResults = Object.freeze(compiledApps.map((app, index) => compileResultOf(viewEvidence[index]!, {
     asset: { path: `mcp-apps/${app.name}.html`, sourceInputs: app.sourceInputs },
     cwd: options.cwd,
-    dependencyRoots: [],
+    dependencyRoots: new Map(),
     emittedAssets,
   })));
   /**

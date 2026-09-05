@@ -15,6 +15,7 @@ import {
 } from '../src/adapters/hook-contract.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
 import { inspectArtifactFilesystem } from '../src/build/emit.ts';
+import { parseArtifactManifest } from '../src/build/manifest.ts';
 import type { CapabilityState } from '../src/core/capabilities.ts';
 import type { Diagnostic } from '../src/core/diagnostics.ts';
 import { pathTokens, type NormalizedPlugin } from '../src/core/types.ts';
@@ -455,7 +456,7 @@ it('build runs the Claude developer validator and load check over built claude t
       ['--plugin-dir', claudeBundle, 'plugin', 'list', '--json'],
     ]);
     // Codex is built too, but only the claude projection has a Claude validator.
-    expect(validated.build.manifest.targets.map((target) => target.name).sort()).toEqual(['claude', 'codex']);
+    expect(validated.build.manifest.projections.map((projection) => projection.host).sort()).toEqual(['claude', 'codex']);
     expect(validated.hostValidation).toEqual([
       expect.objectContaining({ host: 'claude', load: { status: 'loaded' }, status: 'warnings', target: 'claude', version: '2.1.259' }),
     ]);
@@ -1455,7 +1456,7 @@ it('keeps one supplied registry through advanced artifact, hook, and MCP operati
       hookEntries: [expect.objectContaining({ target: syntheticTarget })],
       target: syntheticTarget,
     })]);
-    expect(built.build.manifest.targets).toEqual([expect.objectContaining({ name: syntheticTarget })]);
+    expect(built.build.manifest.projections).toEqual([expect.objectContaining({ host: syntheticTarget })]);
     expect(built.build.manifest.files).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: 'synthetic-mcp.json' }),
     ]));
@@ -1469,7 +1470,7 @@ it('keeps one supplied registry through advanced artifact, hook, and MCP operati
       diagnostics: [expect.objectContaining({ code: 'AB6009', target: syntheticTarget })],
     });
     const hooks = await listHooks({ artifact, registry, root, target: syntheticTarget });
-    expect(hooks).toEqual([expect.objectContaining({ target: syntheticTarget })]);
+    expect(hooks).toEqual([expect.objectContaining({ host: syntheticTarget })]);
     await expect(simulateHook({
       artifact,
       hook: hooks[0]!.id,
@@ -1991,38 +1992,33 @@ it('copies every supported top-level script output suffix byte-for-byte with sou
       expect(check.generatedMode).toBe(check.sourceMode);
     }
 
-    const manifest = JSON.parse(await readFile(join(output, 'agent-bundle.manifest.json'), 'utf8')) as {
-      readonly files: readonly {
-        readonly kind: 'bundle' | 'copy' | 'generated';
-        readonly mode?: number;
-        readonly path: string;
-        readonly sourceInputs: readonly string[];
-      }[];
-    };
+    const manifest = parseArtifactManifest(await readFile(join(output, 'agent-bundle.manifest.json'), 'utf8'));
     expect(manifest.files).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: 'copy',
         mode: 0o741,
         path: 'scripts/bash.bash',
-        sourceInputs: ['agent-bundle.config.ts', 'src/run.BASH'],
       }),
       expect.objectContaining({
         kind: 'bundle',
         path: 'scripts/bundle.mjs',
-        sourceInputs: ['agent-bundle.config.ts', 'src/bundle.ts'],
       }),
       expect.objectContaining({
         kind: 'copy',
         mode: 0o751,
         path: 'scripts/shell.sh',
-        sourceInputs: ['agent-bundle.config.ts', 'src/run.SH'],
       }),
       expect.objectContaining({
         kind: 'copy',
         mode: 0o711,
         path: 'scripts/python.py',
-        sourceInputs: ['agent-bundle.config.ts', 'src/run.Py'],
       }),
+    ]));
+    expect(manifest.compiler.provenance).toEqual(expect.arrayContaining([
+      { path: 'scripts/bash.bash', sourceInputs: ['agent-bundle.config.ts', 'src/run.BASH'] },
+      { path: 'scripts/bundle.mjs', sourceInputs: ['agent-bundle.config.ts', 'src/bundle.ts'] },
+      { path: 'scripts/shell.sh', sourceInputs: ['agent-bundle.config.ts', 'src/run.SH'] },
+      { path: 'scripts/python.py', sourceInputs: ['agent-bundle.config.ts', 'src/run.Py'] },
     ]));
     await expect(validate({ artifact: output, root })).resolves.toEqual({ diagnostics: [] });
 
@@ -2062,12 +2058,11 @@ it('canonicalizes copied script extensions in emitted artifact paths', async () 
       code: 'ENOENT',
     });
     expect(result.build.manifest.files).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        kind: 'copy',
-        path: 'scripts/upper.sh',
-        sourceInputs: ['agent-bundle.config.ts', 'src/run.SH'],
-      }),
+      expect.objectContaining({ kind: 'copy', path: 'scripts/upper.sh' }),
     ]));
+    expect(result.build.manifest.compiler.provenance).toContainEqual(
+      { path: 'scripts/upper.sh', sourceInputs: ['agent-bundle.config.ts', 'src/run.SH'] },
+    );
     expect(result.build.outputProvenance).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: 'copy',
@@ -2170,8 +2165,8 @@ it('lists hooks across artifact targets and rejects an explicit unknown target',
     await build({ output: artifact, root });
 
     await expect(listHooks({ artifact, root })).resolves.toMatchObject([
-      { event: 'sessionStart', target: 'claude' },
-      { event: 'sessionStart', target: 'codex' },
+      { event: 'sessionStart', host: 'claude' },
+      { event: 'sessionStart', host: 'codex' },
     ]);
     await expect(listHooks({ artifact, root, target: 'unsupported' })).rejects.toThrow('Unknown target');
   } finally {

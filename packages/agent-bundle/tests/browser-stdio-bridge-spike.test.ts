@@ -7,6 +7,7 @@ import { Client, type JSONRPCMessage, type Transport } from '@modelcontextprotoc
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
+import { emptyCompiledRouteGraph } from '../src/routes/graph.ts';
 import { build } from './support/build.ts';
 import { loadedProject } from './support/loaded-project.ts';
 
@@ -236,7 +237,13 @@ it('bridges a browser-bound session to a generated stdio artifact without exposi
       createDefaultRegistry(),
     );
     const artifact = join(root, 'dist');
-    await build({ model, outputRoot: artifact, projectRoot: root, registry: createDefaultRegistry() });
+    await build({
+      model,
+      outputRoot: artifact,
+      projectRoot: root,
+      registry: createDefaultRegistry(),
+      routeGraph: emptyCompiledRouteGraph,
+    });
 
     const frames: ProtocolFrame[] = [];
     const stderr: string[] = [];

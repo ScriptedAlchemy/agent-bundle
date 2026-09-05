@@ -372,8 +372,8 @@ it('rejects a canonical event surface when the compiled route has preflight', as
     config: [],
     event: 'tool/before',
     id: 'event:tool/before',
+    execution: { fallback: 'standalone', preflight: 'src/events/tool/before.preflight.ts', runtime: 'standalone' },
     kind: 'event-route',
-    preflight: 'src/events/tool/before.preflight.ts',
     provenance: { kind: 'conventional' },
     source: 'src/events/tool/before.tsx',
   } as const;

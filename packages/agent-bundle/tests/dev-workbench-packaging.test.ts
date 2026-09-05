@@ -23,11 +23,17 @@ const buildPackage = async (): Promise<void> => {
 };
 
 describe.sequential('workbench package build', () => {
-it('copies stable prebuilt workbench assets and the exact app-renderer license into the package distribution', async () => {
+const hashedWorkbenchBundle = (kind: 'css' | 'js'): RegExp =>
+  kind === 'css' ? /^index\.[a-f0-9]{8}\.css$/u : /^index\.[a-f0-9]{8}\.js$/u;
+
+it('copies content-hashed prebuilt workbench assets and the exact app-renderer license into the package distribution', async () => {
   await buildPackage();
 
   await expect(access(join(packageRoot, 'dist', 'workbench', 'index.html'))).resolves.toBeUndefined();
-  await expect(readFile(join(packageRoot, 'dist', 'workbench', 'static', 'js', 'index.js'), 'utf8')).resolves.toContain('Workbench navigation');
+  const jsRoot = join(packageRoot, 'dist', 'workbench', 'static', 'js');
+  const hashedJs = (await readdir(jsRoot)).find((name) => hashedWorkbenchBundle('js').test(name));
+  if (hashedJs === undefined) throw new Error('Expected a content-hashed workbench index.js.');
+  await expect(readFile(join(jsRoot, hashedJs), 'utf8')).resolves.toContain('Workbench navigation');
   await expect(readFile(join(packageRoot, 'dist', 'workbench', 'THIRD_PARTY_NOTICES'), 'utf8')).resolves.toContain('MCP Inspector');
   await expect(readFile(join(packageRoot, 'dist', 'workbench', appRendererLicense), 'utf8')).resolves.toBe(
     await readFile(join(workbenchRoot, appRendererLicense), 'utf8'),
@@ -71,7 +77,8 @@ it('serves prebuilt workbench assets from an installed tarball without the repos
     expect(listing.stdout).toContain('package/dist/workbench/THIRD_PARTY_NOTICES');
     expect(listing.stdout).toContain('package/dist/workbench/src/mcp/APP-RENDERER-LICENSE');
     expect(listing.stdout).not.toMatch(/package\/dist\/workbench\/.*\.map$/mu);
-    expect(listing.stdout).not.toMatch(/package\/dist\/workbench\/.*-[a-f0-9]{8,}/iu);
+    expect(listing.stdout).toMatch(/package\/dist\/workbench\/static\/js\/index\.[a-f0-9]{8}\.js$/mu);
+    expect(listing.stdout).toMatch(/package\/dist\/workbench\/static\/css\/index\.[a-f0-9]{8}\.css$/mu);
 
     await writeFile(join(consumer, 'package.json'), '{"type":"module"}\n');
     await execFile('npm', ['install', ...cachedNpmInstallArguments, tarball], { cwd: consumer, env: installedEnvironment() });

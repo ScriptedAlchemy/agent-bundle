@@ -8,6 +8,7 @@ import { userDataStateRoot } from '@agent-bundle/runtime';
 import { specTypeSchemas as clientSchemas } from '@modelcontextprotocol/client';
 import { expect, it } from '@rstest/core';
 
+import { runtimeRebundleFixtureMarker } from '../../../scripts/dist-freshness.mjs';
 import { exists } from '../src/core/paths.ts';
 import { requestEventRuntime } from '../src/events/ipc.ts';
 import { compileTestManifest } from '../src/test/manifest.ts';
@@ -138,9 +139,9 @@ it.each([
     const harnessManifest = await compileTestManifest({ root: project });
     const artifactManifest = JSON.parse(
       await readFile(join(artifact, 'agent-bundle.manifest.json'), 'utf8'),
-    ) as { readonly project: { readonly revision: string } };
+    ) as { readonly compiler: { readonly project: { readonly revision: string } } };
     const eventRuntimeEndpointId =
-      `${artifactManifest.project.revision}:${dirname(dirname(resolve(entry)))}`;
+      `${artifactManifest.compiler.project.revision}:${dirname(dirname(resolve(entry)))}`;
     const deletedSource = await removeProjectSource({ projectRoot: project });
 
     // The artifact-hosted routed CLI and the `main`-envelope script probe
@@ -265,7 +266,7 @@ it.each([
       // exported `HARNESS_HOST_WINS` is untouched, and nothing was logged.
       for (const [name, value] of [
         ...(packageName === 'agent-bundle-runtime-rebundle'
-          ? [['AGENT_BUNDLE_RUNTIME_REBUNDLE_FIXTURE_EXECUTED', '1'] as const]
+          ? [[runtimeRebundleFixtureMarker, '1'] as const]
           : []),
         ['HARNESS_FROM_FILE', 's3cr3t-from-file'],
         ['HARNESS_LOCAL', 'from-local'],
@@ -415,7 +416,7 @@ it.each([
       let eventResponse: unknown;
       try {
         eventResponse = await requestEventRuntime({
-          artifactEpoch: artifactManifest.project.revision,
+          artifactEpoch: artifactManifest.compiler.project.revision,
           endpointId: eventRuntimeEndpointId,
           event: 'tool/after',
           hostContractRevision: 'packed-proof',

@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 
 import { afterAll, afterEach, beforeAll, describe, expect, it } from '@rstest/core';
 
-import { build, type ReadyInspectResult, validate } from '../src/api.ts';
+import { build, parseArtifactManifest, type ReadyInspectResult, validate } from '../src/api.ts';
 import { runCli } from '../src/cli.ts';
 import { DiagnosticError } from '../src/core/diagnostics.ts';
 import { captureCliTerminal } from './support/cli-terminal.ts';
@@ -748,5 +748,16 @@ describe('the CLI surface projection in the generated routed-CLI executable', ()
       'tool:demo/purge',
       'tool:demo/submit',
     ]);
+  });
+
+  it('serializes the projection onto the artifact manifest command from the same compiled graph', async () => {
+    const manifest = parseArtifactManifest(await readFile(join(root, 'artifact', 'agent-bundle.manifest.json'), 'utf8'));
+    const commands = manifest.routes.cli?.commands ?? [];
+    expect(commands.map((command) => command.path.join(' '))).toEqual(['demo ping', 'purge', 'submit']);
+    expect(commands.find((command) => command.routeId === 'tool:demo/submit')?.projection)
+      .toEqual({ mapInput: true, module: projectionModule });
+    expect(commands.find((command) => command.routeId === 'tool:demo/purge')?.projection)
+      .toEqual({ mapInput: true, module: 'src/mcp/demo/tools/purge.cli.ts' });
+    expect(commands.find((command) => command.routeId === 'tool:demo/ping')).not.toHaveProperty('projection');
   });
 });

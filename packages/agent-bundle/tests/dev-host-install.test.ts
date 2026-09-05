@@ -22,6 +22,7 @@ import {
   runDevHostInstallProof,
   type BuiltHostInstallFixture,
 } from './support/host-install.ts';
+import { writeInstallFixtureManifest } from './support/install-fixture.ts';
 
 const roots: string[] = [];
 let fixture: BuiltHostInstallFixture | undefined;
@@ -90,6 +91,11 @@ const writeEpoch = async (
     ),
     writeFile(join(root, 'skills', 'probe', 'SKILL.md'), values.skill),
   ]);
+  await writeInstallFixtureManifest(
+    root,
+    { name: 'dev-proof', version: '1.0.0' },
+    [{ host: 'cursor', mcp: '.cursor-plugin/mcp.json' }],
+  );
   return root;
 };
 

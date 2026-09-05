@@ -140,7 +140,7 @@ manifests at files inside those payloads without compiling them. Payload files c
 | `agent-bundle doctor` | Read-only host inspection: host probes, installed inventory, effective and legacy state roots with existence and writability, store receipts cross-checked against the host, and, with `--from`, the installed copy compared against the built artifact by version and content hash (`current`, `stale`, `version-mismatch`, `foreign`, `not-installed`) plus the lifecycle stage (placed → registered → enabled → active, unobservable stages typed `unavailable`). |
 | `agent-bundle validate` | Validate project source, or an artifact with `--artifact`. |
 | `agent-bundle inspect` | Inspect the normalized model and each selected host projection's plan from source, with per-host component accounting: which skills, commands, rules, hooks, MCP surfaces, and scripts each host emits and, for every omission, whether the author excluded it or the host's pinned capability judgment (`degraded`/`unavailable`/`prohibited`, with reason) ruled it out. |
-| `agent-bundle inspect --bundler` | Dump the synthesized Rslib/Rsbuild configs (post-`tools`-hatch merge) for every generated output. |
+| `agent-bundle inspect --bundler` | Dump the lowered Rspack config (post-`tools`-hatch merge, as Rslib/Rsbuild hand it to the compiler) for every generated output. |
 | `agent-bundle mcp list` / `mcp invoke` | List or invoke one MCP tool from an artifact. |
 | `agent-bundle mcp run` | Run one built stdio MCP server in the foreground, resolving its hashed entry, loading the project-root `.env` set (`--env-file`/`--no-env` to override), and expanding env state anchors to the project root (`--plugin-root` to override). Environment precedence: manifest env < `.env` files < operator `process.env`. |
 | `agent-bundle hooks list` / `hooks simulate` | List generated hooks, or run one emitted wrapper. |
@@ -228,9 +228,12 @@ the shipped document in the install receipt (`cursorExpansion`), and
 itself stays spec-conformant for other Agent Plugins clients.
 
 Cursor installation is user-scoped. Claude also accepts `--scope project` and
-`--scope local`; Codex is user-scoped. `--from` names the plugin root itself —
-the directory that holds the selected host's manifest — and a source-free copy
-of that root is accepted.
+`--scope local`; Codex is user-scoped. `--from` names the composite root itself —
+the directory that holds `agent-bundle.manifest.json` — and a source-free copy
+of that root is accepted. Identity (name, version, marketplace) and the host
+plugin document come from that manifest's `application` and `projections[]`
+rows, never from probing host files; a root whose manifest is missing, not
+canonical, or has no projection for the host is refused with `AB7001`.
 
 ### Reinstall after a same-version rebuild
 

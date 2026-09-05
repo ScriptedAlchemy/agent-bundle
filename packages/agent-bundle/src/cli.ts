@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { Command, CommanderError, InvalidArgumentError } from 'commander';
+import { Command, CommanderError, InvalidArgumentError, Option } from 'commander';
 import type { Layer } from 'effect';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -19,6 +19,7 @@ import type {
   build,
   compareEvals,
   inspect,
+  inspectArtifact,
   prepack,
   runEvals,
   serveApp,
@@ -26,6 +27,7 @@ import type {
   validate,
   InspectionComponentCapability,
   InspectionSkippedComponent,
+  InspectManifestOutput,
   McpAppProfileId,
   ProjectOptions,
 } from './api.ts';
@@ -157,6 +159,7 @@ interface EvalCommandOptions extends SourceCommandOptions {
 }
 
 interface InspectCommandOptions {
+  readonly artifact?: string;
   readonly bundler?: boolean;
   readonly config?: string;
   readonly hooks?: boolean;
@@ -210,7 +213,7 @@ interface ServeAppCommandOptions extends JsonInputOptions {
   readonly port?: number;
   readonly profile: McpAppProfileId;
   readonly root: string;
-  readonly target: string;
+  readonly target?: string;
   readonly tool?: string;
 }
 
@@ -294,17 +297,22 @@ const configureInspectOptions = (command: Command): Command => command
   .option('--config <path>', 'Configuration file relative to --root')
   .option('--mode <mode>', 'Configuration mode', 'production')
   .option('--target <target>', 'Filter inspection plans to one target')
+  .addOption(new Option('--artifact <path>', 'Inspect exactly this built artifact').conflicts(['root', 'config']))
   .option('--json', 'Write one machine-readable JSON document');
 
-const configureArtifactOptions = (command: Command, targetRequired = false): Command => {
+const configureArtifactOptions = (
+  command: Command,
+  targetRequired = false,
+  targetHelp = 'Artifact target',
+): Command => {
   const configured = command
     .option('--root <root>', 'Project root', process.cwd())
     .option('--config <path>', 'Configuration file relative to --root')
     .option('--mode <mode>', 'Configuration mode', 'production')
     .option('--artifact <path>', 'Use exactly this built artifact');
   const targetOption = targetRequired
-    ? configured.requiredOption('--target <target>', 'Artifact target')
-    : configured.option('--target <target>', 'Artifact target');
+    ? configured.requiredOption('--target <target>', targetHelp)
+    : configured.option('--target <target>', targetHelp);
   return targetOption.option('--json', 'Write one machine-readable JSON document');
 };
 
@@ -528,7 +536,7 @@ const humanInspect = (result: Awaited<ReturnType<typeof inspect>>): string => {
     return out.join('');
   }
   if (result.selected?.bundler !== undefined) {
-    // The bundler focus is a debugging dump: the full synthesized
+    // The bundler focus is a debugging dump: the full lowered
     // configuration is the human output, not a one-line summary.
     out.push(`${JSON.stringify(result.selected.bundler, null, 2)}\n`);
     return out.join('');
@@ -578,7 +586,61 @@ const humanInspect = (result: Awaited<ReturnType<typeof inspect>>): string => {
       out.push(`  kinds this host cannot emit: ${unsupportedKinds.join(', ')}\n`);
     }
   }
+  const built = result.output.manifest;
+  if (built !== undefined) out.push(formatBuiltManifest(built));
   return out.join('');
+};
+
+const humanInspectArtifact = (result: Awaited<ReturnType<typeof inspectArtifact>>): string => {
+  const { application, manifest } = result;
+  const projections = manifest.projections
+    .map((projection) => projection.builtInHost === undefined || projection.builtInHost === projection.host
+      ? projection.host
+      : `${projection.host} (${projection.builtInHost})`)
+    .join(', ');
+  const servers = application.servers
+    .map((server) => `${server.name} (${String(server.tools.length)} tool${server.tools.length === 1 ? '' : 's'})`)
+    .join(', ');
+  const hooks = application.hooks
+    .map((group) => `${group.host}: ${String(group.hooks.length)}`)
+    .join(', ');
+  const bins = application.cli?.bins.map((bin) => bin.name).join(', ') ?? '';
+  const scripts = application.scripts.map((script) => script.name).join(', ');
+  const payloads = application.distribution.payloads
+    .map((payload) => {
+      const hosts = payload.hosts.join(', ');
+      const dependencies = payload.runtimeDependencies.join(', ');
+      return dependencies.length === 0
+        ? `${payload.name} (${hosts})`
+        : `${payload.name} (${hosts}: ${dependencies})`;
+    })
+    .join('; ');
+  return [
+    `Application: ${application.identity.name} (${application.identity.id}) ${application.identity.version}\n`,
+    `Projections: ${projections}\n`,
+    servers.length === 0 ? '' : `Servers: ${servers}\n`,
+    hooks.length === 0 ? '' : `Hooks: ${hooks}\n`,
+    bins.length === 0 ? '' : `Bins: ${bins}\n`,
+    scripts.length === 0 ? '' : `Scripts: ${scripts}\n`,
+    payloads.length === 0 ? '' : `Payloads: ${payloads}\n`,
+  ].join('');
+};
+
+const formatBuiltManifest = (built: InspectManifestOutput): string => {
+  if ('status' in built) {
+    return `Built manifest: invalid (${built.path}): ${built.detail}\n`;
+  }
+  const servers = built.executables.mcpServers
+    .map((server) => `${server.name} (${server.kind}) → ${server.hosts.join(', ')}`)
+    .join('; ');
+  return [
+    `Built manifest: v${String(built.manifestVersion)} ${built.application.name}`
+    + ` (${built.projections.map((projection) => projection.host).join(', ')})\n`,
+    servers.length === 0 ? '' : `  MCP servers: ${servers}\n`,
+    `  hooks: ${String(built.executables.hooks)}`
+    + `${built.executables.bins.length === 0 ? '' : `; bins: ${built.executables.bins.join(', ')}`}`
+    + `${built.executables.scripts.length === 0 ? '' : `; scripts: ${built.executables.scripts.join(', ')}`}\n`,
+  ].join('');
 };
 
 const formatCapabilityJudgment = (capability: InspectionComponentCapability): string => {
@@ -797,7 +859,7 @@ export const runCli = async (
     .option('--config <path>', 'Configuration file relative to --root')
     .option('--mode <mode>', 'Configuration mode', 'production')
     .option('--artifact <path>', 'Use exactly this built artifact')
-    .option('--target <target>', 'Artifact target containing the MCP server', 'portable')
+    .option('--target <target>', 'Artifact projection whose MCP server to run (default: the only projection that runs it)')
     .option('--tool <tool>', 'Tool whose result opens the App (default: the only tool that declares the App)')
     .option('--input <json>', 'Inline JSON object input for the opening tool call')
     .option('--input-file <path>', 'JSON object input file for the opening tool call')
@@ -834,7 +896,7 @@ export const runCli = async (
       ...(options.port === undefined ? {} : { port: options.port }),
       profile: options.profile,
       root: options.root,
-      target: options.target,
+      ...(options.target === undefined ? {} : { target: options.target }),
       ...(options.tool === undefined ? {} : { tool: options.tool }),
     });
     await show(`${formatServeAppReadyLine({ app, tool: served.tool, url: served.url })}\n`);
@@ -1037,12 +1099,18 @@ export const runCli = async (
   const inspectCommand = configureInspectOptions(
     program.command('inspect').description('Inspect normalized targets and adapter plans'),
   )
-    .option('--bundler', 'Include the synthesized bundler configuration focus')
+    .option('--bundler', 'Include the lowered bundler configuration focus')
     .option('--hooks', 'Include the hook focus')
     .option('--routes', 'Include the compiled route-graph focus')
     .option('--skills', 'Include the skill focus')
     .option('--state', 'Include the state lifetime focus');
   inspectCommand.action(async (options: InspectCommandOptions) => {
+    if (options.artifact !== undefined) {
+      const { inspectArtifact: inspectBuiltArtifact } = await import('./api.ts');
+      const result = await inspectBuiltArtifact(options.artifact);
+      await (options.json === true ? machine(result) : show(humanInspectArtifact(result)));
+      return;
+    }
     const focuses = [
       options.bundler,
       options.hooks,
@@ -1068,23 +1136,26 @@ export const runCli = async (
   });
 
   const mcpCommand = program.command('mcp').description('Operate an MCP server from an artifact');
+  const mcpProjectionHelp = 'Artifact projection whose MCP server to run (default: the only projection that runs it)';
   const mcpListCommand = configureArtifactOptions(
     mcpCommand.command('list').description('List tools from one MCP server'),
-    true,
+    false,
+    mcpProjectionHelp,
   ).requiredOption('--server <server>', 'MCP server name');
-  mcpListCommand.action(async (options: ArtifactCommandOptions & { readonly server: string; readonly target: string }) => {
+  mcpListCommand.action(async (options: ArtifactCommandOptions & { readonly server: string }) => {
     const { listMcp } = await import('./api.ts');
     const result = await listMcp({
       ...artifactOptions(options),
       server: options.server,
-      target: options.target,
+      ...(options.target === undefined ? {} : { target: options.target }),
     });
     await (options.json === true ? machine(result) : show(`Listed ${result.tools.length} tool(s) from ${options.server}\n`));
   });
 
   const mcpInvokeCommand = configureArtifactOptions(
     mcpCommand.command('invoke').description('Invoke one MCP tool'),
-    true,
+    false,
+    mcpProjectionHelp,
   )
     .requiredOption('--server <server>', 'MCP server name')
     .requiredOption('--tool <tool>', 'MCP tool name')
@@ -1092,7 +1163,6 @@ export const runCli = async (
     .option('--input-file <path>', 'JSON object input file');
   mcpInvokeCommand.action(async (options: ArtifactCommandOptions & JsonInputOptions & {
     readonly server: string;
-    readonly target: string;
     readonly tool: string;
   }) => {
     const { invokeMcp } = await import('./api.ts');
@@ -1100,7 +1170,7 @@ export const runCli = async (
       ...artifactOptions(options),
       input: await parseJsonObject(options),
       server: options.server,
-      target: options.target,
+      ...(options.target === undefined ? {} : { target: options.target }),
       tool: options.tool,
     });
     await (options.json === true ? machine(result) : show(`Invoked ${options.tool} on ${options.server}\n`));
@@ -1108,7 +1178,8 @@ export const runCli = async (
 
   const mcpRunCommand = configureArtifactOptions(
     mcpCommand.command('run').description('Run one stdio MCP server in the foreground from an artifact'),
-    true,
+    false,
+    mcpProjectionHelp,
   )
     .requiredOption('--server <server>', 'MCP server name')
     .option('--env-file <path>', 'Load exactly this .env file, replacing the project-root set (repeatable)', collect, [])
@@ -1119,7 +1190,6 @@ export const runCli = async (
     readonly envFile: readonly string[];
     readonly pluginRoot?: string;
     readonly server: string;
-    readonly target: string;
   }) => {
     if (options.env === false && options.envFile.length > 0) {
       throw new TypeError('Use either --env-file or --no-env, not both.');
@@ -1133,7 +1203,7 @@ export const runCli = async (
       ...(options.env === false ? { loadEnvFiles: false } : {}),
       ...(options.pluginRoot === undefined ? {} : { pluginRoot: options.pluginRoot }),
       server: options.server,
-      target: options.target,
+      ...(options.target === undefined ? {} : { target: options.target }),
     });
   });
 

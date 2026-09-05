@@ -20,11 +20,13 @@ import type { AgentBundleMeta } from '../src/meta.ts';
 import { publishArtifact } from '../src/build/emit.ts';
 import type { TargetHookContract } from '../src/adapters/hook-contract.ts';
 import { parseArtifactManifest, serializeArtifactManifest } from '../src/build/manifest.ts';
+import { validateArtifact } from '../src/build/validate-artifact.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
 import { createDefaultRegistry, TargetRegistry } from '../src/adapters/registry.ts';
 import { createProjectContext } from '../src/core/project-context.ts';
 import type { NormalizedPlugin } from '../src/core/types.ts';
 import { sha256Hex } from '../src/core/digest.ts';
+import { emptyCompiledRouteGraph } from '../src/routes/graph.ts';
 
 const testMeta: AgentBundleMeta = Object.freeze({
   name: 'reserved-probe-plugin',
@@ -188,14 +190,15 @@ const projectContextFor = async (
 };
 
 const build = async (
-  options: Omit<LowLevelBuildOptions, 'projectContext'>,
+  options: Omit<LowLevelBuildOptions, 'projectContext' | 'routeGraph'>,
 ): Promise<BuildResult> => buildArtifact({
   ...options,
   projectContext: await projectContextFor(options.projectRoot, options.outputRoot, options.model),
+  routeGraph: emptyCompiledRouteGraph,
 });
 
 const buildFromSource = async (
-  options: Omit<LowLevelBuildOptions, 'projectContext'>,
+  options: Omit<LowLevelBuildOptions, 'projectContext' | 'routeGraph'>,
 ): Promise<BuildResult> => {
   const jiti = createJiti(import.meta.url, { interopDefault: false, moduleCache: false });
   const module = await jiti.import<typeof import('../src/build/build.ts')>(
@@ -204,6 +207,7 @@ const buildFromSource = async (
   return module.build({
     ...options,
     projectContext: await projectContextFor(options.projectRoot, options.outputRoot, options.model),
+    routeGraph: emptyCompiledRouteGraph,
   });
 };
 
@@ -372,20 +376,23 @@ it('low-level build writes and returns the exact canonical manifest for a config
     expect(manifestBytes).toBe(serializeArtifactManifest(result.manifest));
     expect(manifest).toMatchObject({
       files: files.map(({ bytes, path, sha256 }) => ({ bytes, path, sha256 })),
-      project: {
-        configPath: 'agent-bundle.config.ts',
-        sourceInputs: expect.arrayContaining([
-          expect.objectContaining({ path: 'agent-bundle.config.ts' }),
-          expect.objectContaining({ path: 'src/skills/review/SKILL.md' }),
-        ]),
+      compiler: {
+        project: {
+          configPath: 'agent-bundle.config.ts',
+          sourceInputs: expect.arrayContaining([
+            expect.objectContaining({ path: 'agent-bundle.config.ts' }),
+            expect.objectContaining({ path: 'src/skills/review/SKILL.md' }),
+          ]),
+        },
+        validation: {
+          artifact: { status: 'passed' },
+          projections: [{ host: 'portable', status: 'passed' }],
+          source: { status: 'passed' },
+        },
       },
+      manifestVersion: 2,
+      projections: [expect.objectContaining({ host: 'portable' })],
       runtime: { node: '22.12.0' },
-      targets: [expect.objectContaining({ name: 'portable' })],
-      validation: {
-        artifact: { status: 'passed' },
-        source: { status: 'passed' },
-        targets: [{ name: 'portable', status: 'passed' }],
-      },
     });
     for (const file of files.filter((entry) => entry.path.endsWith('.json'))) {
       expect(JSON.parse(await readFile(join(project.outputRoot, file.path), 'utf8'))).toBeDefined();
@@ -403,6 +410,9 @@ it('low-level build writes and returns the exact canonical manifest for a config
     await expect(readFile(emittedProjectAsset)).resolves.toEqual(await readFile(project.assetPath));
     expect(manifest.files).toContainEqual(expect.objectContaining({
       kind: 'copy',
+      path: 'assets/branding/logo.svg',
+    }));
+    expect(manifest.compiler.provenance).toContainEqual(expect.objectContaining({
       path: 'assets/branding/logo.svg',
       sourceInputs: ['assets/branding/logo.svg'],
     }));
@@ -433,6 +443,9 @@ it('low-level build writes and returns the exact canonical manifest for a config
         mode: 0o751,
         path: resource.path,
         sha256: sha256Hex(contents),
+      }));
+      expect(manifest.compiler.provenance).toContainEqual(expect.objectContaining({
+        path: resource.path,
         sourceInputs: expect.arrayContaining([
           resource.path.replace('', 'src/'),
           'src/skills/review/SKILL.md',
@@ -481,7 +494,7 @@ it('uses the package version in a manifest produced by the raw source build modu
       ),
     });
 
-    expect(result.manifest.producer).toEqual({ name: 'agent-bundle', version: packageManifest.version });
+    expect(result.manifest.compiler.producer).toEqual({ name: 'agent-bundle', version: packageManifest.version });
     await expect(readFile(join(project.outputRoot, 'agent-bundle.manifest.json'), 'utf8')).resolves.toContain(
       `"version":"${packageManifest.version}"`,
     );
@@ -565,11 +578,7 @@ it('reports complete immutable output provenance for a Skill copy and bundled sc
         'src/skills/review/SKILL.md',
       ],
     });
-    expect(provenance).toContainEqual({
-      kind: 'generated',
-      path: 'agent-bundle.hooks.json',
-      sourceInputs: ['agent-bundle.config.ts'],
-    });
+    expect(result.manifest.executables.hooks).toEqual([]);
     expect(provenance.every((record) => !record.path.includes(project.outputRoot))).toBe(true);
     expect(provenance.every((record) => record.sourceInputs.every((input) => !input.startsWith('/')))).toBe(true);
     expect(Object.isFrozen(provenance)).toBe(true);
@@ -782,6 +791,7 @@ it.each(['portable', 'codex', 'claude'] as const)(
         projectContext: await projectContextFor(project.root, project.outputRoot, base),
         projectRoot: project.root,
         registry: createDefaultRegistry(),
+        routeGraph: emptyCompiledRouteGraph,
       })).rejects.toThrow(/AB4339/);
       await expect(readFile(join(project.outputRoot, 'previous.txt'), 'utf8')).resolves.toBe('previous\n');
       await expect(readFile(join(project.outputRoot, 'agent-bundle.manifest.json'), 'utf8')).rejects.toMatchObject({
@@ -1140,9 +1150,9 @@ const reservedSpecifierProject = async (): Promise<{ readonly entry: RslibEntry;
   await writeFile(join(sourceRoot, 'entry.ts'), [
     "import { marker } from 'agent-bundle/mcp-entry';",
     "import registry from 'agent-bundle/mcp-apps';",
-    // A reserved specifier mentioned as data, not imported: the residual-import
-    // scan parses the emitted bundle instead of grepping it, so this survives
-    // into the output without failing the self-containment check.
+    // A reserved specifier mentioned as data, not imported: self-containment
+    // is judged from the module graph's externals, not from the emitted text,
+    // so this survives into the output without failing the check.
     "const mentioned = 'agent-bundle/mcp-entry';",
     'export const main = () => { console.log(marker, registry, mentioned); };',
     '',
@@ -1183,8 +1193,8 @@ it('inlines reserved specifiers through exact-match aliases and virtual generate
     expect(bundle).toContain('generated-registry');
     expect(bundle).toContain('generated-wrapper-marker');
     expect(bundle).not.toMatch(/from\s*["']agent-bundle\//u);
-    // The scan tolerates a reserved specifier that is only mentioned as a
-    // string literal; only a live import fails the build.
+    // A reserved specifier that is only mentioned as a string literal is not
+    // an external; only a live import kept external fails the build.
     expect(bundle).toContain('agent-bundle/mcp-entry');
     // The wrapper entry and registry module were served from memory at
     // guaranteed-nonexistent paths: the reserved namespace never reaches the
@@ -1439,11 +1449,151 @@ it('excludes linked dependencies that live inside the project directory', async 
   expect(evidence.assets).toEqual([{ path: 'scripts/linked.mjs', sourceInputs: linkedWorkspaceSourceInputs(root) }]);
 }, 20_000);
 
+it('fails the build on an expression import the compiler left verbatim in a compiled script', async () => {
+  // Rslib's profile bundles a literal `import()` but leaves `import(<expression>)`
+  // in the emitted bundle untouched, unrecorded, and unwarned; the evidence
+  // record lists that form as unobserved, and the walk over the emitted module
+  // is what still reports it.
+  const project = await createProject();
+  try {
+    const expressionImportSource = [
+      "export const load = (name: string) => import(name);",
+      "console.log(Object.keys(await load(process.argv[2] ?? 'node:os')).length);",
+      '',
+    ].join('\n');
+    await writeFile(project.scriptPath, expressionImportSource);
+    const model = modelFor(project);
+    await expect(build({
+      model: {
+        ...model,
+        skills: model.skills.map((skill) => ({
+          ...skill,
+          resources: skill.resources.map((resource) =>
+            resource.source === project.scriptPath
+              ? { ...resource, bytes: Buffer.byteLength(expressionImportSource) }
+              : resource,
+          ),
+        })),
+      },
+      outputRoot: project.outputRoot,
+      projectRoot: project.root,
+      registry: new TargetRegistry().register((await import('../src/adapters/portable.ts')).portableAdapter, { default: true }),
+    })).rejects.toThrow(
+      'Agent Bundle compilation failed with 1 error:\n[AB6005] Generated JavaScript import from "scripts/greeting.mjs" has a non-literal dynamic import.',
+    );
+  } finally {
+    await cleanupProject(project);
+  }
+}, 20_000);
+
+const ignoredImportSource = [
+  // Rspack honours `rspackIgnore`/`webpackIgnore`: the call survives verbatim with no module, no
+  // external, and no warning, so the compile evidence record cannot mention it.
+  "export const pad = () => import('left-pad' /* rspackIgnore: true */);",
+  "export const missing = () => import(/* webpackIgnore: true */ './missing.mjs');",
+  "export const outside = () => import(/* rspackIgnore: true */ '../../outside.mjs');",
+  "export const sibling = () => import(/* rspackIgnore: true */ './sibling.mjs');",
+  "console.log(typeof pad, typeof missing, typeof outside, typeof sibling);",
+  '',
+].join('\n');
+
+const ignoredImportDiagnostics = (importer: string): unknown[] => [
+  'left-pad',
+  './missing.mjs',
+  '../../outside.mjs',
+  './sibling.mjs',
+].map((request) => expect.objectContaining({
+  code: 'AB6005',
+  generatedPath: importer,
+  message: `Generated JavaScript import from ${JSON.stringify(importer)} loads ${JSON.stringify(request)}, which the compiler `
+    + 'neither bundled nor recorded as an external; an import the build ignored is a run-time load outside the artifact.',
+}));
+
+it('fails the build on a literal import the compiler was told to ignore, package or relative', async () => {
+  // The record proves the emitted bytes are the compiler's, not that every
+  // import in them was resolved: an ignored `import()` is neither bundled nor
+  // an external, so a proven bundle's lexed imports are held to the record.
+  const project = await createProject();
+  try {
+    await writeFile(project.scriptPath, ignoredImportSource);
+    const model = modelFor(project);
+    await expect(build({
+      model: {
+        ...model,
+        skills: model.skills.map((skill) => ({
+          ...skill,
+          resources: skill.resources.map((resource) =>
+            resource.source === project.scriptPath
+              ? { ...resource, bytes: Buffer.byteLength(ignoredImportSource) }
+              : resource,
+          ),
+        })),
+      },
+      outputRoot: project.outputRoot,
+      projectRoot: project.root,
+      registry: new TargetRegistry().register((await import('../src/adapters/portable.ts')).portableAdapter, { default: true }),
+    })).rejects.toMatchObject({
+      diagnostics: expect.arrayContaining(ignoredImportDiagnostics('scripts/greeting.mjs')),
+    });
+  } finally {
+    await cleanupProject(project);
+  }
+}, 20_000);
+
+it('validates a relocated artifact from its record alone and still reports an ignored import in a proven bundle', async () => {
+  // A copied artifact carries no compilation: the record travels with it and
+  // is what `validate --artifact` reads. Re-signed bytes are proven (lexed, not
+  // parsed), and the residual literal-import check still applies to them.
+  const project = await createProject();
+  const relocated = await mkdtemp(join(tmpdir(), 'agent-bundle-relocated-'));
+  try {
+    await build({
+      model: modelFor(project),
+      outputRoot: project.outputRoot,
+      projectRoot: project.root,
+      registry: new TargetRegistry().register((await import('../src/adapters/portable.ts')).portableAdapter, { default: true }),
+    });
+    const artifactRoot = join(relocated, 'artifact');
+    await rename(project.outputRoot, artifactRoot);
+    await rm(project.root, { force: true, recursive: true });
+    expect(await validateArtifact({ artifactRoot })).toEqual([]);
+
+    const manifestPath = join(artifactRoot, 'agent-bundle.manifest.json');
+    const recordPath = join(artifactRoot, compileEvidenceFileName);
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as {
+      readonly files: Array<{ bytes: number; path: string; sha256: string }>;
+    };
+    const record = JSON.parse(await readFile(recordPath, 'utf8')) as {
+      readonly assets: Array<{ path: string; sha256: string }>;
+    };
+    const entry = (path: string) => manifest.files.find((file) => file.path === path)
+      ?? (() => { throw new Error(`Expected manifest entry for ${path}.`); })();
+    const rewrite = async (path: string, contents: string): Promise<void> => {
+      await writeFile(join(artifactRoot, path), contents);
+      Object.assign(entry(path), { bytes: Buffer.byteLength(contents), sha256: sha256Hex(contents) });
+    };
+    // The lexer accepts this; acorn would not. A proven bundle is lexed, so
+    // the only findings are the ignored imports themselves.
+    const rewritten = `${ignoredImportSource}export const broken = ;\n`;
+    await rewrite('scripts/greeting.mjs', rewritten);
+    record.assets.find((asset) => asset.path === 'scripts/greeting.mjs')!.sha256 = sha256Hex(rewritten);
+    await rewrite(compileEvidenceFileName, `${JSON.stringify(record)}\n`);
+    await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
+    const diagnostics = await validateArtifact({ artifactRoot });
+    expect(diagnostics.filter((diagnostic) => diagnostic.code === 'AB6039')).toEqual([]);
+    expect(diagnostics.filter((diagnostic) => diagnostic.code === 'AB6005')).toEqual(ignoredImportDiagnostics('scripts/greeting.mjs'));
+  } finally {
+    await rm(relocated, { force: true, recursive: true });
+    await cleanupProject(project);
+  }
+}, 20_000);
+
 it('parses emitted bundles in full when a tools hatch could have rewritten them', async () => {
-  // A compiler bundle is trusted to the ESM lexer only while its bytes are the
-  // bundler's own. A hatch runs after Rspack parsed the source and can rewrite
-  // the emitted asset — here a raw banner that leaves the lexer satisfied but
-  // Node unable to start the module — so a hatch build keeps the full parse.
+  // A compiler bundle is trusted to the ESM lexer only while the evidence
+  // record covers its bytes from a build without a hatch. A hatch runs after
+  // Rspack parsed the source and can rewrite the emitted asset — here a raw
+  // banner that leaves the lexer satisfied but Node unable to start the module
+  // — so the record says `coverage.rewritable` and the walk keeps the full parse.
   const project = await createProject();
   try {
     await expect(build({
@@ -1462,6 +1612,57 @@ it('parses emitted bundles in full when a tools hatch could have rewritten them'
     await expect(readFile(join(project.outputRoot, 'agent-bundle.manifest.json'), 'utf8')).rejects.toMatchObject({
       code: 'ENOENT',
     });
+  } finally {
+    await cleanupProject(project);
+  }
+}, 20_000);
+
+it('lexes a compiled bundle the real build\'s evidence record proves and parses it once the record is rewritable', async () => {
+  // The same bytes, judged twice: covered by a clean record from a build
+  // without a hatch, the walk trusts the compiler and only lexes; with
+  // `coverage.rewritable` set, it parses in full and the syntax error surfaces.
+  const project = await createProject();
+  try {
+    await build({
+      model: modelFor(project),
+      outputRoot: project.outputRoot,
+      projectRoot: project.root,
+      registry: new TargetRegistry().register((await import('../src/adapters/portable.ts')).portableAdapter, { default: true }),
+    });
+    const manifestPath = join(project.outputRoot, 'agent-bundle.manifest.json');
+    const recordPath = join(project.outputRoot, compileEvidenceFileName);
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as {
+      readonly files: Array<{ bytes: number; path: string; sha256: string }>;
+    };
+    const record = JSON.parse(await readFile(recordPath, 'utf8')) as {
+      readonly assets: Array<{ path: string; sha256: string }>;
+      readonly coverage: { rewritable: boolean };
+    };
+    const entry = (path: string) => manifest.files.find((file) => file.path === path)
+      ?? (() => { throw new Error(`Expected manifest entry for ${path}.`); })();
+    const rewrite = async (path: string, contents: string): Promise<void> => {
+      await writeFile(join(project.outputRoot, path), contents);
+      Object.assign(entry(path), { bytes: Buffer.byteLength(contents), sha256: sha256Hex(contents) });
+    };
+    const writeRecord = async (): Promise<void> => {
+      await rewrite(compileEvidenceFileName, `${JSON.stringify(record)}\n`);
+      await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
+    };
+
+    const broken = 'export const broken = ;\n';
+    await rewrite('scripts/greeting.mjs', broken);
+    record.assets.find((asset) => asset.path === 'scripts/greeting.mjs')!.sha256 = sha256Hex(broken);
+    await writeRecord();
+    expect((await validateArtifact({ artifactRoot: project.outputRoot })).filter((diagnostic) => diagnostic.code === 'AB6005'))
+      .toEqual([]);
+
+    record.coverage.rewritable = true;
+    await writeRecord();
+    expect((await validateArtifact({ artifactRoot: project.outputRoot })).filter((diagnostic) => diagnostic.code === 'AB6005'))
+      .toEqual([expect.objectContaining({
+        generatedPath: 'scripts/greeting.mjs',
+        message: 'Generated JavaScript import from "scripts/greeting.mjs" has invalid syntax.',
+      })]);
   } finally {
     await cleanupProject(project);
   }

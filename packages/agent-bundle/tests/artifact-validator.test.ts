@@ -17,14 +17,21 @@ import {
   type TargetArtifactDocumentValidator,
   type TargetArtifactWrite,
 } from '../src/adapters/types.ts';
-import { composeProjections } from '../src/build/compose.ts';
 import {
   compileEvidenceFileName,
+  externalPolicy,
   serializeCompileEvidenceRecord,
+  unobservedLoadForms,
   type CompileEvidenceAsset,
   type CompileEvidenceExternal,
 } from '../src/build/compile-evidence.ts';
-import { assembleArtifactManifest, type ArtifactManifest } from '../src/build/manifest.ts';
+import { composeProjections } from '../src/build/compose.ts';
+import {
+  artifactCompilerRecordVersion,
+  artifactManifestVersion,
+  assembleArtifactManifest,
+  type ArtifactManifest,
+} from '../src/build/manifest.ts';
 import { artifactDiagnosticRecoveries, validateArtifact, validateArtifactWithSnapshot } from '../src/build/validate-artifact.ts';
 import { digest, sha256Hex } from '../src/core/digest.ts';
 import { agentSkillsSchemaRevision } from '../src/schemas/agent-skills/contract.ts';
@@ -48,57 +55,88 @@ interface ArtifactFixtureFile {
   readonly path: string;
 }
 
-const withHookIndex = (files: readonly ArtifactFixtureFile[]): readonly ArtifactFixtureFile[] =>
-  files.some((file) => file.path === 'agent-bundle.hooks.json')
-    ? files
-    : [{ contents: '{"hooks":[]}\n', kind: 'generated', path: 'agent-bundle.hooks.json' }, ...files];
+type FixtureProjection = ArtifactManifest['projections'][number] & {
+  readonly adapterRevision: string;
+  readonly observedVersion: string;
+  readonly schemas: ArtifactManifest['compiler']['adapters'][number]['schemas'];
+};
 
 const manifestFor = (
   files: readonly ArtifactFixtureFile[],
   includeModes = true,
-  targets: readonly ArtifactManifest['targets'][number][] = [],
+  projections: readonly FixtureProjection[] = [],
 ): ArtifactManifest => {
   const configHash = hash('export default {};\n');
   const sourceInputs = [{ path: 'agent-bundle.config.ts', sha256: configHash }];
+  const manifestFiles = files
+    .map((file) => ({
+      bytes: Buffer.byteLength(file.contents),
+      kind: file.kind,
+      ...(includeModes && file.mode !== undefined ? { mode: file.mode } : {}),
+      path: file.path,
+      sha256: hash(file.contents),
+    }))
+    .sort((left, right) => left.path.localeCompare(right.path));
+  const publicProjections = [...projections]
+    .map(({ adapterRevision: _adapterRevision, observedVersion: _observedVersion, schemas: _schemas, ...projection }) =>
+      projection)
+    .sort((left, right) => left.host.localeCompare(right.host));
+  const adapters = [...projections]
+    .map((projection) => ({
+      adapterRevision: projection.adapterRevision,
+      host: projection.host,
+      observedVersion: projection.observedVersion,
+      schemas: projection.schemas,
+    }))
+    .sort((left, right) => left.host.localeCompare(right.host));
   return {
-    agentSkills: agentSkillsSchemaRevision,
-    files: files
-      .map((file) => ({
-        bytes: Buffer.byteLength(file.contents),
-        kind: file.kind,
-        ...(includeModes && file.mode !== undefined ? { mode: file.mode } : {}),
+    application: { id: 'plugin:fixture', name: 'fixture', version: '1.0.0' },
+    compiler: {
+      adapters,
+      agentSkills: agentSkillsSchemaRevision,
+      producer: { name: 'agent-bundle', version: '0.1.0' },
+      project: {
+        configDigest: configHash,
+        configPath: 'agent-bundle.config.ts',
+        modelDigest: 'b'.repeat(64),
+        revision: digest({ inputs: sourceInputs }),
+        sourceInputs,
+      },
+      provenance: manifestFiles.map((file) => ({
         path: file.path,
-        sha256: hash(file.contents),
         sourceInputs: ['agent-bundle.config.ts'],
-      }))
-      .sort((left, right) => left.path.localeCompare(right.path)),
-    producer: { name: 'agent-bundle', version: '0.1.0' },
-    project: {
-      configDigest: configHash,
-      configPath: 'agent-bundle.config.ts',
-      modelDigest: 'b'.repeat(64),
-      revision: digest({ inputs: sourceInputs }),
-      sourceInputs,
+      })),
+      recordVersion: artifactCompilerRecordVersion,
+      validation: {
+        artifact: { status: 'passed' },
+        projections: publicProjections.map(({ host }) => ({ host, status: 'passed' })),
+        source: { status: 'passed' },
+      },
+    },
+    distribution: { channels: ['local'], payloads: [] },
+    executables: { bins: [], hooks: [], mcpServers: [], scripts: [] },
+    files: manifestFiles,
+    manifestVersion: artifactManifestVersion,
+    projections: publicProjections,
+    routes: {
+      digest: 'c'.repeat(64),
+      events: [],
+      layouts: [],
+      providers: [],
+      scripts: [],
+      servers: [],
     },
     runtime: { node: '22.12.0' },
-    targets,
-    validation: {
-      artifact: { status: 'passed' },
-      source: { status: 'passed' },
-      targets: targets.map(({ name }) => ({ name, status: 'passed' })),
-    },
   };
 };
 
 const writeArtifact = async (
   files: readonly ArtifactFixtureFile[],
   includeModes = true,
-  targets: readonly ArtifactManifest['targets'][number][] = [],
-  includeHookIndex = true,
+  projections: readonly FixtureProjection[] = [],
 ): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-artifact-validator-'));
-  const artifactFiles = includeHookIndex ? withHookIndex(files) : files;
-  for (const file of artifactFiles) {
+  for (const file of files) {
     const path = join(root, file.path);
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, file.contents);
@@ -106,7 +144,7 @@ const writeArtifact = async (
   }
   await writeFile(
     join(root, 'agent-bundle.manifest.json'),
-    assembleArtifactManifest(manifestFor(artifactFiles, includeModes, targets)).bytes,
+    assembleArtifactManifest(manifestFor(files, includeModes, projections)).bytes,
   );
   return root;
 };
@@ -286,7 +324,8 @@ const customMetadata = Object.freeze({
 
 const customManifestTarget = Object.freeze({
   ...customMetadata,
-  name: customTarget,
+  documents: Object.freeze({}),
+  host: customTarget,
 });
 
 const coherenceTarget = 'coherent';
@@ -296,7 +335,7 @@ const coherenceMetadata = Object.freeze({
   schemas: Object.freeze([]),
 });
 
-const coherenceManifestTarget = Object.freeze({ ...coherenceMetadata, name: coherenceTarget });
+const coherenceManifestTarget = Object.freeze({ ...coherenceMetadata, documents: Object.freeze({}), host: coherenceTarget });
 
 const coherenceRegistry = (): TargetRegistry => new TargetRegistry().register({
   artifactLayout: { mcpEntries: { allowedSuffixes: ['.mjs'], directory: 'mcp' } },
@@ -318,7 +357,11 @@ const hookCoherenceMetadata = Object.freeze({
   schemas: Object.freeze([]),
 });
 
-const hookCoherenceManifestTarget = Object.freeze({ ...hookCoherenceMetadata, name: hookCoherenceTarget });
+const hookCoherenceManifestTarget = Object.freeze({
+  ...hookCoherenceMetadata,
+  documents: Object.freeze({}),
+  host: hookCoherenceTarget,
+});
 
 const hookCoherenceContract = {
   commandRoot: '${HOOK_ROOT}',
@@ -397,11 +440,15 @@ const wildcardRegistry = (): TargetRegistry => new TargetRegistry().register({
   plan: () => ({ diagnostics: [], entries: [] }),
 } satisfies TargetAdapter);
 
-const targetFromRegistry = (registry: TargetRegistry, name: string): ArtifactManifest['targets'][number] => {
-  const metadata = registry.metadata(name);
+const targetFromRegistry = (registry: TargetRegistry, host: string): FixtureProjection => {
+  const metadata = registry.metadata(host);
+  const builtInHost = registry.builtInHost(host);
   return {
-    ...metadata,
-    name,
+    adapterRevision: metadata.adapterRevision,
+    ...(builtInHost === undefined ? {} : { builtInHost }),
+    documents: {},
+    host,
+    observedVersion: metadata.observedVersion,
     schemas: [...metadata.schemas].sort((left, right) => left.name.localeCompare(right.name)),
   };
 };
@@ -718,29 +765,27 @@ it('returns frozen validated evidence without changing the diagnostics-only vali
     const result = await validateArtifactWithSnapshot({ artifactRoot: root, registry: customRegistry() });
 
     expect(result.diagnostics).toEqual([]);
-    expect(result.snapshot!.manifest.files).toEqual(expect.arrayContaining([
-      expect.objectContaining({ path: 'agent-bundle.hooks.json' }),
-    ]));
+    expect(result.snapshot!.manifest.executables.hooks).toEqual([]);
     expect(result.snapshot!.runtime).toEqual({ hooks: [], mcpServers: [] });
     expect(Object.isFrozen(result.snapshot)).toBe(true);
     expect(Object.isFrozen(result.snapshot!.manifest)).toBe(true);
-    expect(Object.isFrozen(result.snapshot!.manifest.agentSkills)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.compiler.agentSkills)).toBe(true);
     expect(Object.isFrozen(result.snapshot!.manifest.files)).toBe(true);
     expect(Object.isFrozen(result.snapshot!.manifest.files[0]!)).toBe(true);
-    expect(Object.isFrozen(result.snapshot!.manifest.files[0]!.sourceInputs)).toBe(true);
-    expect(Object.isFrozen(result.snapshot!.manifest.producer)).toBe(true);
-    expect(Object.isFrozen(result.snapshot!.manifest.project)).toBe(true);
-    expect(Object.isFrozen(result.snapshot!.manifest.project.sourceInputs)).toBe(true);
-    expect(Object.isFrozen(result.snapshot!.manifest.project.sourceInputs[0]!)).toBe(true);
-    expect(Object.isFrozen(result.snapshot!.manifest.targets)).toBe(true);
-    expect(Object.isFrozen(result.snapshot!.manifest.targets[0]!)).toBe(true);
-    expect(Object.isFrozen(result.snapshot!.manifest.targets[0]!.schemas)).toBe(true);
-    expect(Object.isFrozen(result.snapshot!.manifest.targets[0]!.schemas[0]!)).toBe(true);
-    expect(Object.isFrozen(result.snapshot!.manifest.validation)).toBe(true);
-    expect(Object.isFrozen(result.snapshot!.manifest.validation.artifact)).toBe(true);
-    expect(Object.isFrozen(result.snapshot!.manifest.validation.source)).toBe(true);
-    expect(Object.isFrozen(result.snapshot!.manifest.validation.targets)).toBe(true);
-    expect(Object.isFrozen(result.snapshot!.manifest.validation.targets[0]!)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.compiler.provenance[0]!.sourceInputs)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.compiler.producer)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.compiler.project)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.compiler.project.sourceInputs)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.compiler.project.sourceInputs[0]!)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.projections)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.projections[0]!)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.compiler.adapters[0]!.schemas)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.compiler.adapters[0]!.schemas[0]!)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.compiler.validation)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.compiler.validation.artifact)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.compiler.validation.source)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.compiler.validation.projections)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.compiler.validation.projections[0]!)).toBe(true);
     expect(await validateArtifact({ artifactRoot: root, registry: customRegistry() })).toEqual([]);
   } finally {
     await rm(root, { force: true, recursive: true });
@@ -1238,7 +1283,7 @@ it('rejects noncanonical and duplicate-key manifests as strict parse failures', 
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-manifest-validator-'));
 
   try {
-    const canonical = assembleArtifactManifest(manifestFor(withHookIndex([]))).bytes;
+    const canonical = assembleArtifactManifest(manifestFor([])).bytes;
     for (const bytes of [
       JSON.stringify(JSON.parse(canonical), null, 2),
       canonical.replace(
@@ -1379,7 +1424,11 @@ it('does not attribute compiler MCP outputs to an equal-length sibling target', 
       path: 'neighbor/native/servers.json',
     },
     { contents: 'export const neighbor = true;\n', kind: 'bundle', path: 'neighbor/mcp/mcp-server-deadbeef.mjs' },
-  ], true, [coherenceManifestTarget, Object.freeze({ ...siblingMetadata, name: siblingTarget })]);
+  ], true, [coherenceManifestTarget, Object.freeze({
+    ...siblingMetadata,
+    documents: Object.freeze({}),
+    host: siblingTarget,
+  })]);
 
   try {
     expect(coherenceTarget).toHaveLength(siblingTarget.length);
@@ -1433,7 +1482,7 @@ it('rejects a target-local file URL argument that is absent from the artifact', 
     await writeFile(join(root, nativePath), nativeContents);
     await writeFile(
       join(root, 'agent-bundle.manifest.json'),
-      assembleArtifactManifest(manifestFor(withHookIndex(files), true, [coherenceManifestTarget])).bytes,
+      assembleArtifactManifest(manifestFor(files, true, [coherenceManifestTarget])).bytes,
     );
 
     expect(await validateArtifact({ artifactRoot: root, registry: coherenceRegistry() })).toEqual(expect.arrayContaining([
@@ -1492,7 +1541,7 @@ it('rejects duplicate keys in a canonically manifested native MCP document', asy
   }
 });
 
-it('requires the canonical hook index when native hook metadata is present', async () => {
+it('requires a manifest hook row when native hook metadata is present', async () => {
   const root = await writeArtifact([
     {
       contents: `${JSON.stringify({
@@ -1502,11 +1551,11 @@ it('requires the canonical hook index when native hook metadata is present', asy
       path: 'hooks/hooks.json',
     },
     { contents: 'export const start = true;\n', kind: 'bundle', path: 'hooks/start.mjs' },
-  ], true, [hookCoherenceManifestTarget], false);
+  ], true, [hookCoherenceManifestTarget]);
 
   try {
     expect(await validateArtifact({ artifactRoot: root, registry: hookCoherenceRegistry() })).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB6018', generatedPath: 'agent-bundle.hooks.json', target: 'artifact' }),
+      expect.objectContaining({ code: 'AB6018', generatedPath: 'hooks/hooks.json', target: hookCoherenceTarget }),
     ]));
   } finally {
     await rm(root, { force: true, recursive: true });
@@ -1515,7 +1564,6 @@ it('requires the canonical hook index when native hook metadata is present', asy
 
 it('reports a compiler-pattern native hook command that is not indexed', async () => {
   const files = [
-    { contents: '{"hooks":[]}\n', kind: 'generated' as const, path: 'agent-bundle.hooks.json' },
     {
       contents: `${JSON.stringify({
         hooks: { Start: [{ hooks: [{ command: 'node "${HOOK_ROOT}/hooks/start.mjs"', type: 'command' }] }] },
@@ -1797,7 +1845,7 @@ it('does not execute artifact JavaScript while validating deferred imports', asy
       await mkdir(dirname(path), { recursive: true });
       await writeFile(path, file.contents);
     }
-    await writeFile(join(root, 'agent-bundle.manifest.json'), assembleArtifactManifest(manifestFor(withHookIndex(files), true, [customManifestTarget])).bytes);
+    await writeFile(join(root, 'agent-bundle.manifest.json'), assembleArtifactManifest(manifestFor(files, true, [customManifestTarget])).bytes);
 
     await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'AB6005', generatedPath: 'scripts/process-exit.mjs' }),
@@ -1981,47 +2029,112 @@ it('does not repeat JavaScript diagnostics after a validation-side mutation', as
   }
 });
 
+/** A compile evidence record covering every `bundle` fixture file with its exact bytes and the externals given per path. */
+const compileEvidenceFor = (
+  files: readonly ArtifactFixtureFile[],
+  rewritable = false,
+  externals: Readonly<Record<string, readonly CompileEvidenceExternal[]>> = {},
+): ArtifactFixtureFile => ({
+  contents: serializeCompileEvidenceRecord({
+    assets: files
+      .filter((file) => file.kind === 'bundle')
+      .map((file) => ({ externals: externals[file.path] ?? [], packages: [], path: file.path, sha256: hash(file.contents) }))
+      .sort((left, right) => left.path.localeCompare(right.path)),
+    coverage: { rewritable, unobserved: unobservedLoadForms },
+    policy: externalPolicy,
+    producer: { name: 'agent-bundle', rspack: '2.2.2', version: '0.1.0' },
+  }),
+  kind: 'generated',
+  path: compileEvidenceFileName,
+});
+
 /**
- * The syntax check a module gets follows who produced it. A module the
- * framework compiled (manifest kind `bundle`) is the bundler's own output:
- * only the ESM lexer runs over it, so re-parsing megabytes of bundler output
- * no longer dominates every build, and a bare `export const broken = ;` —
- * which no bundler emits — passes while unterminated input still fails. A
- * module the framework did not compile (a copied consumer script, a
- * generated installer) is parsed in full and keeps the complete check.
+ * The check a module gets follows what the compiler proved. A manifest
+ * `bundle` file the compile evidence record covers — same bytes, from a build
+ * without a `tools` hatch — is the compiler's output: only the ESM lexer runs
+ * over it, so a bare `export const broken = ;` (which no bundler emits) passes
+ * while unterminated input still fails, and each literal import it carries is
+ * held to the record rather than resolved — a Node built-in or a recorded
+ * external passes, anything else is an import the build ignored. Every other
+ * module — a copied consumer script, a generated installer, a bundle without
+ * a record or from a build whose hatch may have rewritten it — is parsed in
+ * full and its imports resolved against the file table.
  */
-it('parses copied and generated modules in full and trusts compiler bundles to the ESM lexer', async () => {
+it('lexes compiled modules the evidence record proves and walks every other module in full', async () => {
   const brokenStatement = 'export const broken = ;\n';
-  const root = await writeArtifact([
+  const modules: readonly ArtifactFixtureFile[] = [
     { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
     { contents: brokenStatement, kind: 'copy', path: 'scripts/copied.mjs' },
     { contents: brokenStatement, kind: 'generated', path: 'scripts/generated.mjs' },
     { contents: brokenStatement, kind: 'bundle', path: 'scripts/bundled.mjs' },
     { contents: 'export const unterminated = `;\n', kind: 'bundle', path: 'scripts/unterminated.mjs' },
     { contents: "export { missing } from './missing.mjs';\n", kind: 'bundle', path: 'scripts/dangling.mjs' },
-  ], true, [customManifestTarget]);
+    { contents: "import 'unbundled-package';\n", kind: 'bundle', path: 'scripts/bare.mjs' },
+    { contents: "import 'unbundled-package';\n", kind: 'generated', path: 'scripts/uncompiled.mjs' },
+    { contents: "import 'node:fs';\nimport './sibling.mjs';\n", kind: 'bundle', path: 'scripts/accounted.mjs' },
+    { contents: 'export const sibling = true;\n', kind: 'bundle', path: 'scripts/sibling.mjs' },
+  ];
+  const accountedExternals = {
+    'scripts/accounted.mjs': [{
+      externalType: 'module',
+      issuers: ['src/accounted.ts'],
+      kind: 'artifact-relative' as const,
+      request: './sibling.mjs',
+      target: 'scripts/sibling.mjs',
+      userRequest: './sibling.mjs',
+    }],
+  };
+  const reported = async (files: readonly ArtifactFixtureFile[]): Promise<readonly (readonly (string | undefined)[])[]> => {
+    const root = await writeArtifact(files, true, [customManifestTarget]);
+    try {
+      return (await validateArtifact({ artifactRoot: root, registry: customRegistry() }))
+        .filter((entry) => entry.code === 'AB6005' || entry.code === 'AB6039')
+        .map((entry) => [entry.code, entry.generatedPath, entry.message]);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  };
+  const walkedInFull = [
+    ['AB6005', 'scripts/bare.mjs', 'Generated JavaScript import from "scripts/bare.mjs" uses unsupported specifier "unbundled-package".'],
+    ['AB6005', 'scripts/bundled.mjs', 'Generated JavaScript import from "scripts/bundled.mjs" has invalid syntax.'],
+    ['AB6005', 'scripts/copied.mjs', 'Generated JavaScript import from "scripts/copied.mjs" has invalid syntax.'],
+    ['AB6005', 'scripts/dangling.mjs', 'Generated JavaScript import from "scripts/dangling.mjs" is missing "./missing.mjs".'],
+    ['AB6005', 'scripts/generated.mjs', 'Generated JavaScript import from "scripts/generated.mjs" has invalid syntax.'],
+    ['AB6005', 'scripts/uncompiled.mjs', 'Generated JavaScript import from "scripts/uncompiled.mjs" uses unsupported specifier "unbundled-package".'],
+    ['AB6005', 'scripts/unterminated.mjs', 'Generated JavaScript import from "scripts/unterminated.mjs" has invalid syntax.'],
+  ];
 
-  try {
-    const diagnostics = await validateArtifact({ artifactRoot: root, registry: customRegistry() });
-    expect(diagnostics.filter((entry) => entry.code === 'AB6005').map((entry) => [entry.generatedPath, entry.message])).toEqual([
-      ['scripts/copied.mjs', 'Generated JavaScript import from "scripts/copied.mjs" has invalid syntax.'],
-      ['scripts/dangling.mjs', 'Generated JavaScript import from "scripts/dangling.mjs" is missing "./missing.mjs".'],
-      ['scripts/generated.mjs', 'Generated JavaScript import from "scripts/generated.mjs" has invalid syntax.'],
-      ['scripts/unterminated.mjs', 'Generated JavaScript import from "scripts/unterminated.mjs" has invalid syntax.'],
-    ]);
-    // A build whose consumer hatch may have rewritten the emitted assets asks
-    // for the full parse of bundles too; nothing else changes.
-    const parsed = await validateArtifact({ artifactRoot: root, bundleSyntaxCheck: 'parsed', registry: customRegistry() });
-    expect(parsed.filter((entry) => entry.code === 'AB6005').map((entry) => entry.generatedPath)).toEqual([
-      'scripts/bundled.mjs',
-      'scripts/copied.mjs',
-      'scripts/dangling.mjs',
-      'scripts/generated.mjs',
-      'scripts/unterminated.mjs',
-    ]);
-  } finally {
-    await rm(root, { force: true, recursive: true });
-  }
+  // Without a record nothing is proven: every module is parsed and resolved.
+  expect(await reported(modules)).toEqual(walkedInFull);
+  // A record covering the bundles proves their bytes, not their imports: the
+  // lexer still rejects unterminated input, a built-in and a recorded sibling
+  // pass, and a bare specifier or a dangling sibling the record does not
+  // account for — what an `rspackIgnore` import leaves behind — is reported
+  // without being resolved.
+  const unaccounted = (importer: string, request: string): readonly string[] => [
+    'AB6005',
+    importer,
+    `Generated JavaScript import from ${JSON.stringify(importer)} loads ${JSON.stringify(request)}, which the compiler `
+      + 'neither bundled nor recorded as an external; an import the build ignored is a run-time load outside the artifact.',
+  ];
+  expect(await reported([...modules, compileEvidenceFor(modules, false, accountedExternals)])).toEqual([
+    unaccounted('scripts/bare.mjs', 'unbundled-package'),
+    ['AB6005', 'scripts/copied.mjs', 'Generated JavaScript import from "scripts/copied.mjs" has invalid syntax.'],
+    unaccounted('scripts/dangling.mjs', './missing.mjs'),
+    ['AB6005', 'scripts/generated.mjs', 'Generated JavaScript import from "scripts/generated.mjs" has invalid syntax.'],
+    ['AB6005', 'scripts/uncompiled.mjs', 'Generated JavaScript import from "scripts/uncompiled.mjs" uses unsupported specifier "unbundled-package".'],
+    ['AB6005', 'scripts/unterminated.mjs', 'Generated JavaScript import from "scripts/unterminated.mjs" has invalid syntax.'],
+  ]);
+  // Without the sibling external in the record, the same import is unaccounted for.
+  expect(await reported([...modules, compileEvidenceFor(modules)])).toContainEqual(unaccounted('scripts/accounted.mjs', './sibling.mjs'));
+  // A hatch may have rewritten the emitted bytes after the compiler judged
+  // them: the record says so and proves nothing.
+  expect(await reported([...modules, compileEvidenceFor(modules, true, accountedExternals)])).toEqual(walkedInFull);
+  // A record that does not parse is reported once and proves nothing.
+  expect(await reported([...modules, { contents: '{', kind: 'generated', path: compileEvidenceFileName }])).toEqual([
+    ['AB6039', compileEvidenceFileName, 'Compile evidence record is not valid JSON.'],
+    ...walkedInFull,
+  ]);
 });
 
 it('does not import copied non-JavaScript resources', async () => {
@@ -2043,13 +2156,13 @@ it('fails closed when Agent Skills provenance does not equal the pinned contract
   try {
     const manifest = manifestFor([]);
     for (const agentSkills of [
-      { ...manifest.agentSkills, schemaSha256: '0'.repeat(64) },
-      { ...manifest.agentSkills, sourceRevision: '0'.repeat(40) },
-      { ...manifest.agentSkills, specification: 'https://example.test/forged-specification.mdx' },
+      { ...manifest.compiler.agentSkills, schemaSha256: '0'.repeat(64) },
+      { ...manifest.compiler.agentSkills, sourceRevision: '0'.repeat(40) },
+      { ...manifest.compiler.agentSkills, specification: 'https://example.test/forged-specification.mdx' },
     ]) {
       await writeFile(join(root, 'agent-bundle.manifest.json'), assembleArtifactManifest({
         ...manifest,
-        agentSkills,
+        compiler: { ...manifest.compiler, agentSkills },
       }).bytes);
 
       await expect(validateArtifact({ artifactRoot: root })).resolves.toEqual(expect.arrayContaining([
@@ -2083,11 +2196,29 @@ it('requires manifest target metadata to match the supplied registry exactly', a
         ],
       },
     ]) {
-      await writeFile(join(root, 'agent-bundle.manifest.json'), assembleArtifactManifest(manifestFor(withHookIndex(files), true, [target])).bytes);
+      await writeFile(join(root, 'agent-bundle.manifest.json'), assembleArtifactManifest(manifestFor(files, true, [target])).bytes);
       await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual(expect.arrayContaining([
         expect.objectContaining({ code: 'AB6010', target: customTarget }),
       ]));
     }
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('reports AB6010 when a projection records another built-in adapter identity', async () => {
+  const registry = createDefaultRegistry();
+  const target = { ...targetFromRegistry(registry, 'claude'), builtInHost: 'codex' as const };
+  const root = await writeArtifact([], true, [target]);
+
+  try {
+    await expect(validateArtifact({ artifactRoot: root, registry })).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'AB6010',
+        message: expect.stringContaining('metadata and adapter identity'),
+        target: 'claude',
+      }),
+    ]));
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -2105,7 +2236,7 @@ it('requires registered target-native documents and validates their pinned schem
         await writeFile(join(root, 'document.json'), invalidFiles[0]!.contents);
     await writeFile(
       join(root, 'agent-bundle.manifest.json'),
-      assembleArtifactManifest(manifestFor(withHookIndex(invalidFiles), true, [customManifestTarget])).bytes,
+      assembleArtifactManifest(manifestFor(invalidFiles, true, [customManifestTarget])).bytes,
     );
     await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'AB6012', generatedPath: 'document.json', target: customTarget }),
@@ -2222,7 +2353,7 @@ it('validates Claude plugin artifacts carrying the pinned userConfig contract', 
     await writeFile(join(root, pluginPath), invalidFiles[1]!.contents);
     await writeFile(
       join(root, 'agent-bundle.manifest.json'),
-      assembleArtifactManifest(manifestFor(withHookIndex(invalidFiles), true, [target])).bytes,
+      assembleArtifactManifest(manifestFor(invalidFiles, true, [target])).bytes,
     );
 
     expect(await validateArtifact({ artifactRoot: root, registry })).toEqual(expect.arrayContaining([
@@ -2291,7 +2422,7 @@ it('validates an enriched Claude marketplace against the full closed pinned cont
     await writeFile(join(root, marketplacePath), invalidFiles[1]!.contents);
     await writeFile(
       join(root, 'agent-bundle.manifest.json'),
-      assembleArtifactManifest(manifestFor(withHookIndex(invalidFiles), true, [target])).bytes,
+      assembleArtifactManifest(manifestFor(invalidFiles, true, [target])).bytes,
     );
 
     expect(await validateArtifact({ artifactRoot: root, registry })).toEqual(expect.arrayContaining([
@@ -2349,7 +2480,7 @@ it('validates a canonically rehashed Codex marketplace at its emitted path', asy
     await writeFile(join(root, '.agents', 'plugins', 'marketplace.json'), '{}\n');
     await writeFile(
       join(root, 'agent-bundle.manifest.json'),
-      assembleArtifactManifest(manifestFor(withHookIndex(invalidFiles), true, [target])).bytes,
+      assembleArtifactManifest(manifestFor(invalidFiles, true, [target])).bytes,
     );
 
     const diagnostics = await validateArtifact({ artifactRoot: root, registry });

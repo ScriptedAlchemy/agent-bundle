@@ -50,7 +50,7 @@ const manifest: RouteManifest = {
   events: [
     route('event:tool/before', 'event-route', 'src/events/tool/before.ts', {
       event: 'tool/before',
-      preflight: 'src/events/tool/before.preflight.ts',
+      execution: { fallback: 'standalone', preflight: 'src/events/tool/before.preflight.ts', runtime: 'standalone' },
     }),
   ],
   providers: [],
