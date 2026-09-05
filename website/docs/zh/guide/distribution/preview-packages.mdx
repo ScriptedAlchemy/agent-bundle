@@ -53,10 +53,18 @@ npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-
 在启用这条路径之前，发布负责人必须解决两件事：最终的包名与许可证，以及 `agent-bundle` 仓库层面的
 `"access": "restricted"` 策略——目前它并没有被 `publishConfig.access` 覆盖。
 
-`pnpm release` 会在发布之前运行发布门禁 —— `pnpm pack:dry-run`、`pnpm lint:release`（对打包后的
-`agent-bundle` tarball 以 `esm-only` profile 运行 `attw`）与 `pnpm test:packed:release`。publint
-不是单独的门禁：每个可发布包的 `rslib build` 都会通过 `rsbuild-plugin-publint` 运行它，并在出现
-warning 时让构建失败。该门禁仅用于发布，并不替代日常的 `pnpm check` 交付门禁。
+`pnpm release` 会在发布之前运行发布门禁 —— `pnpm pack:dry-run`、`pnpm lint:release` 与
+`pnpm test:packed:release`。`lint:release` 先对打包后的 `agent-bundle`、`rsc-markdown-stream` 与
+`create-agent-bundle` tarball 以 `esm-only` profile 运行 `attw`，再用
+`scripts/check-declaration-imports.mjs` 检查同一份文件清单：消费者能从 `exports` 触达的每个 `.d.ts`
+只能导入包内文件、包自身通过 `exports` 公开的子路径、能被 `imports` 映射解析的 `#` 导入、Node 内建模块，以及在 `dependencies`、
+`peerDependencies` 或 `optionalDependencies` 中声明的包——绝对路径和 URL 在消费者的安装中永远无法解析，
+可触达声明里出现 `zod` 这类 devDependency 会让门禁失败，而没有任何
+入口触达的内部声明只报告为 warning（`--strict` 会让它们也失败；`lint:release` 默认不传该参数）。可触达性从
+`exports` 下的每个 `types` 目标以及旧式 `types` 字段出发；`/// <reference types>` 按裸导入同样检查；相对导入、
+`/// <reference path>` 或 `exports` 目标指向压缩包中不存在的文件时也会失败。publint 不是单独的门禁：每个可发布包的
+`rslib build` 都会通过 `rsbuild-plugin-publint` 运行它，并在出现 warning 时让构建失败。该门禁仅用于
+发布，并不替代日常的 `pnpm check` 交付门禁。
 
 ## 下一步
 
