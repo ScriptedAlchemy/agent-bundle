@@ -128,7 +128,7 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 | `servers[]` | 是 | 每个 MCP 服务器一行，按 `id` 排序：`{ id, name, mode, routes[] }`。`id` 为 `mcp:<name>`；`mode` 为 `generated`、`custom`、`command`、`remote` 或 `conflict`；`routes[]` 是该服务器的路由，每条的 `serverId` 等于服务器的 `id`。 |
 | `events[]` | 是 | `event-route` 路由，按 `id` 排序。 |
 | `scripts[]` | 是 | `script` 路由，按 `id` 排序。 |
-| `cli` | 否 | `{ mode, routes[], commands? }`：`mode` 为 `generated`、`conventional` 或 `conflict`；`routes[]` 是 `cli` 路由；`commands[]` 恰在 `generated` 模式下出现。 |
+| `cli` | 否 | `{ mode, routes[], commands? }`：`mode` 为 `generated`、`conventional` 或 `conflict`；`routes[]` 是 `cli` 路由，加上 `routes.mcpCommands` 投射进可执行文件的每个 MCP `tool` 路由；`commands[]` 恰在 `generated` 模式下出现，且每个命令的 `routeId` 指向其中一条路由。 |
 | `providers[]` | 是 | `{ id, name, source }`，按 `id` 排序；`id` 为 `provider:<stem>`。 |
 | `layouts[]` | 是 | `{ id, scope, serverId?, source }`，按 `id` 排序：`layout:root` 带 `scope: 'root'`，或 `layout:mcp:<server>` 带 `scope: 'server'` 且 `serverId` 指向已声明的服务器。 |
 
@@ -165,7 +165,7 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 | 字段 | 内容 |
 | --- | --- |
 | `bins[]` | 路由式 CLI 可执行文件，按 `name` 排序：`{ name, path, worker?, hosts[] }`。`path` 为 `bin/<name>.mjs`；`hosts[]` 是携带 CLI bin 的所选投影。 |
-| `hooks[]` | 每个宿主的每个编译器钩子 wrapper 一行，先按 `host` 再按 `id` 排序：`{ id, name, event, host, kind, path, timeout? }`。`kind` 为 `event-route`（分派 `src/events/**` 路由的 wrapper）或 `config`（配置中声明的钩子）；`event` 是钩子事件（`afterTool`、`sessionStart`……）；`timeout` 是以秒计的原生钩子超时。作者直接写进宿主钩子文档的原生命令与预构建 payload 命令不是行。 |
+| `hooks[]` | 每个宿主的每个编译器钩子 wrapper 一行，先按 `host` 再按 `id` 排序：`{ id, name, event, host, kind, path, routeId?, timeout? }`。`kind` 为 `event-route`（分派 `src/events/**` 路由的 wrapper）或 `config`（配置中声明的钩子）；`routeId` 指向 `event-route` wrapper 所分派的 `routes.events[]` 行，且仅在该 `kind` 下出现；`event` 是钩子事件（`afterTool`、`sessionStart`……）；`timeout` 是以秒计的原生钩子超时。作者直接写进宿主钩子文档的原生命令与预构建 payload 命令不是行。 |
 | `mcpServers[]` | 每个触达所选宿主的 MCP 服务器一行，按 `id` 排序：`{ id, name, transport, kind, hosts[], entry?, apps[] }`。`kind` 为 `compiled`（产物启动 `entry.path`，`entry.worker` 是其 Flight worker）、`command`（宿主运行配置的命令）或 `remote`（宿主连接一个 URL）；`entry` 恰对 `compiled` 服务器出现。`apps[]` 按 `id` 排序：编译后的 MCP App 视图为 `{ id, name, resourceUri, path? }`（`path` 是其自包含 HTML），由预构建 payload 提供的 App 为 `{ id, name, resourceUri, prebuilt: true }`。 |
 | `scripts[]` | 每个输出脚本一行，按 `id` 排序：`{ id, name, path, worker?, mode, hosts[], rendered? }`。`mode` 为 `bundle` 或 `copy`；`rendered: { routeId }` 指向渲染式脚本所渲染的 `routes.scripts[]` 路由。 |
 

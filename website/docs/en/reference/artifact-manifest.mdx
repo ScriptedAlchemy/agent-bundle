@@ -137,7 +137,7 @@ Workbench's display-only fields are absent.
 | `servers[]` | yes | One row per MCP server, sorted by `id`: `{ id, name, mode, routes[] }`. `id` is `mcp:<name>`; `mode` is `generated`, `custom`, `command`, `remote`, or `conflict`; `routes[]` holds the server's routes, each with `serverId` equal to the server's `id`. |
 | `events[]` | yes | The `event-route` routes, sorted by `id`. |
 | `scripts[]` | yes | The `script` routes, sorted by `id`. |
-| `cli` | no | `{ mode, routes[], commands? }`: `mode` is `generated`, `conventional`, or `conflict`; `routes[]` holds the `cli` routes; `commands[]` is present exactly in `generated` mode. |
+| `cli` | no | `{ mode, routes[], commands? }`: `mode` is `generated`, `conventional`, or `conflict`; `routes[]` holds the `cli` routes plus every MCP `tool` route `routes.mcpCommands` projects into the executable; `commands[]` is present exactly in `generated` mode, and each command's `routeId` names one of those routes. |
 | `providers[]` | yes | `{ id, name, source }`, sorted by `id`; `id` is `provider:<stem>`. |
 | `layouts[]` | yes | `{ id, scope, serverId?, source }`, sorted by `id`: `layout:root` with `scope: 'root'`, or `layout:mcp:<server>` with `scope: 'server'` and `serverId` naming a declared server. |
 
@@ -174,7 +174,7 @@ list and each `host` names a `projections[]` row.
 | Field | Contents |
 | --- | --- |
 | `bins[]` | The routed CLI executable, sorted by `name`: `{ name, path, worker?, hosts[] }`. `path` is `bin/<name>.mjs`; `hosts[]` are the selected projections that carry a CLI bin. |
-| `hooks[]` | One row per compiler hook wrapper per host, sorted by `host` then `id`: `{ id, name, event, host, kind, path, timeout? }`. `kind` is `event-route` for a wrapper that dispatches a `src/events/**` route and `config` for a hook declared in the configuration; `event` is the hook event (`afterTool`, `sessionStart`, …); `timeout` is the native hook timeout in seconds. Native commands an author writes into a host hooks document and prebuilt-payload commands are not rows. |
+| `hooks[]` | One row per compiler hook wrapper per host, sorted by `host` then `id`: `{ id, name, event, host, kind, path, routeId?, timeout? }`. `kind` is `event-route` for a wrapper that dispatches a `src/events/**` route and `config` for a hook declared in the configuration; `routeId` names the `routes.events[]` row an `event-route` wrapper dispatches and is present exactly for that kind; `event` is the hook event (`afterTool`, `sessionStart`, …); `timeout` is the native hook timeout in seconds. Native commands an author writes into a host hooks document and prebuilt-payload commands are not rows. |
 | `mcpServers[]` | One row per MCP server reaching a selected host, sorted by `id`: `{ id, name, transport, kind, hosts[], entry?, apps[] }`. `kind` is `compiled` (the artifact starts `entry.path`, with `entry.worker` its Flight worker), `command` (the host runs a configured command), or `remote` (the host connects to a URL); `entry` is present exactly for `compiled` servers. `apps[]` is sorted by `id`: `{ id, name, resourceUri, path? }` for a compiled MCP App view (`path` is its self-contained HTML), or `{ id, name, resourceUri, prebuilt: true }` for an App a prebuilt payload already serves. |
 | `scripts[]` | One row per emitted script, sorted by `id`: `{ id, name, path, worker?, mode, hosts[], rendered? }`. `mode` is `bundle` or `copy`; `rendered: { routeId }` names the `routes.scripts[]` route a rendered script renders. |
 
