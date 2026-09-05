@@ -188,7 +188,10 @@ bundle——都不能把裸包保持外部化：编译器会在 `prepack` 触及
 CLI、MCP 入口、钩子包装层以及包构建的 JavaScript bundle——都以禁用 Rslib 的 `autoExternal`、`bundle: true` 与
 `splitChunks: false` 的配置编译，框架自身也不添加任何 `externals`；Rslib 的 `node` target 只把 Node
 内建模块（`node:fs`、`path`，以及 Yarn PnP 的 `pnpapi`）保持外部化。MCP App 视图则把每个脚本与样式都
-内联进同一个 HTML 文件。`AB4725` 会拒绝不为 `false` 的 `tools.rsbuild.output.autoExternal`，以及静态可见、
+内联进同一个 HTML 文件，同一个审计插件也位于它们的 Rsbuild 编译器中：浏览器文档不允许任何 external，
+因此视图编译保持外部化的任何模块——比如通过逃生舱映射到全局变量的 `react`——都会让该视图以 `AB6005`
+失败（`Compiled MCP App view "mcp-apps/<name>.html" keeps … external …`）。`AB4725` 会拒绝不为 `false`
+的 `tools.rsbuild.output.autoExternal`，以及静态可见、
 点名某个包的字符串或对象 `externals` 条目。RegExp、函数形式、相对路径与 mutator 添加的 externals 则由编译过程
 自身的证据判断：若 Rspack 在宿主包或 `dist` 的生成可执行文件中保持了内建模块、`pnpapi` 或已输出同级文件
 之外的任何 external，`AB6005` 就会失败。输出模块遍历仍留在这项编译期检查之后。通过

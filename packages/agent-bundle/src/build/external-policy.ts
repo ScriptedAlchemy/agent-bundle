@@ -2,9 +2,10 @@ import { isBuiltin } from 'node:module';
 import { posix } from 'node:path';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
+import { posixRelativeWhenInside } from '../core/paths.ts';
 import { isRecord } from '../core/strict-json.ts';
 import { artifactDiagnostic } from './artifact-diagnostics.ts';
-import type { CompileResult, ExternalIR, ExternalKind } from './compile-result.ts';
+import type { CompilationEvidence, CompileResult, ExternalIR, ExternalKind } from './compile-result.ts';
 
 /** A request a generated executable may load at run time: a Node built-in, or Yarn PnP's runtime API. */
 export const isAllowedExternalRequest = (request: string): boolean => isBuiltin(request) || request === 'pnpapi';
@@ -67,6 +68,25 @@ const externalMessage = (external: ExternalIR): string => {
     }
   }
 };
+
+/**
+ * A browser view has no allowable external at all: no Node built-ins, and no
+ * sibling module, since the document inlines every script. Every external the
+ * view's compilation kept is an `AB6005` against the emitted document.
+ */
+export const viewSelfContainmentDiagnostics = (
+  evidence: CompilationEvidence,
+  asset: string,
+  projectRoot: string,
+): readonly Diagnostic[] =>
+  evidence.externals.map((external) => artifactDiagnostic(
+    'AB6005',
+    `Compiled MCP App view ${JSON.stringify(asset)} keeps ${JSON.stringify(external.request)} external (${external.externalType})`
+      + `${external.userRequest === external.request ? '' : `, imported as ${JSON.stringify(external.userRequest)},`}`
+      + `${external.issuers.length === 0 ? '' : ` from ${external.issuers.map((issuer) => posixRelativeWhenInside(projectRoot, issuer)).join(', ')}`}; `
+      + 'a view inlines every module it loads.',
+    asset,
+  ));
 
 export const selfContainmentDiagnostics = (result: CompileResult): readonly Diagnostic[] =>
   result.externals
