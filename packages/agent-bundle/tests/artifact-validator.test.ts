@@ -960,9 +960,10 @@ it('leaves an advanced registry adapter that reuses the portable name to its own
 
   try {
     const diagnostics = await validateArtifact({ artifactRoot: root, registry });
-    // No AB6035 for the absent Agent Plugins plugin.json: the byte lane keys on the
-    // built-in adapter identity. Only the name-keyed install-surface requirement remains.
-    expect(diagnostics.map((entry) => entry.code).sort()).toEqual(['AB6023', 'AB6024']);
+    // No AB6035 for the absent Agent Plugins plugin.json, and no AB6023/AB6024
+    // for the absent install surface: both lanes key on the built-in adapter
+    // identity, so a custom adapter under the portable name owes neither (#592).
+    expect(diagnostics).toEqual([]);
   } finally {
     await rm(root, { force: true, recursive: true });
   }
