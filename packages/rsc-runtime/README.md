@@ -156,7 +156,8 @@ projections run — `inputSchema.parse` → `execute` → `resultSchema.parse` �
 while `cli` and `mcp` are optional per-surface declarations. `render` is
 required on every operation but consumed only by the MCP projection, where
 `lowerMcpResult` synchronously lowers its element tree into the
-`CallToolResult`; the `runRscCli` compatibility path never renders JSX and
+`CallToolResult` (typed `McpCallToolResult`, assignable to both MCP SDK
+lines' `CallToolResult`); the `runRscCli` compatibility path never renders JSX and
 instead prints the validated result as one line of JSON. Operation modules
 are `.tsx` only because `render` returns JSX. (Routed `src/cli/**` commands
 are the framework-mode CLI: there, `.tsx` routes do render — through the
