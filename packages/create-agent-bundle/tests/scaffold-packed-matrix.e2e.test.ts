@@ -11,6 +11,7 @@ import { installedEnvironment, packOutputFromJson } from '../../agent-bundle/tes
 import {
   cleanupScaffoldFixture,
   expectCleanValidate,
+  expectPassedPool,
   installScaffoldedProject,
   npmRun,
   scaffoldProject,
@@ -45,12 +46,10 @@ it.concurrent('scaffolds the mcp-server template and serves the conventional ent
   expect(checked).toContain('tests/projection/mcp-in-memory.test.ts');
   // The route-unit pool renders through the framework's own generated setup,
   // resolved from the packed tarball's `agent-bundle/rstest` export.
-  const routes = await npmRun(projectRoot, 'test:routes');
-  expect(routes).toContain('renders a known service into a final Agent Document');
-  expect(routes).toContain('"failedTests": 0');
-  const projection = await npmRun(projectRoot, 'test:projection');
-  expect(projection).toContain('projects the rendered document into the protocol result the server returns');
-  expect(projection).toContain('"failedTests": 0');
+  await expectPassedPool(projectRoot, 'test:routes', ['renders a known service into a final Agent Document']);
+  await expectPassedPool(projectRoot, 'test:projection', [
+    'projects the rendered document into the protocol result the server returns',
+  ]);
 
   const artifact = join(projectRoot, 'artifact');
   const manifest = JSON.parse(await readFile(join(artifact, 'portable', 'mcp.json'), 'utf8')) as {
@@ -92,10 +91,10 @@ it.concurrent('scaffolds the cli-tool template with a routed bin, lib, and artif
   await npmRun(projectRoot, 'prepack');
   // The projection pool dispatches through the framework's own generated
   // setup, resolved from the packed tarball's `agent-bundle/rstest` export.
-  const projection = await npmRun(projectRoot, 'test:projection');
-  expect(projection).toContain('greets through the routed CLI shell and prints one canonical JSON line');
-  expect(projection).toContain('greets through the main process envelope');
-  expect(projection).toContain('"failedTests": 0');
+  await expectPassedPool(projectRoot, 'test:projection', [
+    'greets through the routed CLI shell and prints one canonical JSON line',
+    'greets through the main process envelope',
+  ]);
 
   // The src/cli/** convention produced the routed executable package bin:
   // generated help, the compiled argv grammar, and one canonical JSON line.
