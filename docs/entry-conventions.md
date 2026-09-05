@@ -1548,6 +1548,28 @@ gains a `web` section and the bin exists even without authored CLI commands.
 for Apps not listed in `web.apps`). There is no `web/` directory in the
 artifact.
 
+`--profile` (and the dev page's preview profile) is browser presentation
+only; it never selects a host artifact. The dev `/web` route resolves the
+server's launch from the projections the artifact manifest declares: an
+explicit `?target=<projection>` is validated against the declared
+projections that launch the server (invalid is an error, never a fallback);
+without one, every candidate's normalized launch descriptor (command,
+arguments, cwd, declared env, runtime binding) is compared, materially
+identical launches proceed unprompted whatever the host order, and
+materially different ones answer 409 naming the choices. No portable
+projection or `mcp.json` is required — a Claude- or Codex-only build opens
+`/web/<server>/<app>` from its own projection. Web sessions are cached by
+epoch, server, and resolved launch identity; a successful rebuild retires
+unused sessions of older epochs (pages still leasing one keep it), and a
+failed rebuild retires nothing. Opening an App page is not an unbounded
+mutation: an opening tool annotated `readOnlyHint: true` runs on every page
+load, while any other opening tool runs once per session, tool, App, and
+input, and a refresh rebinds that retained result. `<plugin> web` keeps the
+installed artifact immutable: framework-owned per-server web state
+(`${PLUGIN_DATA}` in declared env) lives under the user's home
+(`~/.agent-bundle/web-data/<plugin>-<digest>/<server>`), never inside the
+plugin root, so a read-only install still launches.
+
 ## `agent-bundle/app` — the App-side bridge client
 
 `agent-bundle/app` (`src/app/index.ts`, #594) is the half of the MCP Apps
