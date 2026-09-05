@@ -17,8 +17,9 @@
  * rebuilds the example payload instead of short-circuiting on a stale one.
  *
  * Comparison. A package is `missing` when its output directory is absent or
- * holds no file, `stale` when the newest input mtime is later than the
- * newest output mtime, `fresh` otherwise. Inputs count files and
+ * holds no file, `contaminated` when an output contains the packed runtime
+ * fixture marker, `stale` when the newest input mtime is later than the
+ * newest output mtime, and `fresh` otherwise. Inputs count files and
  * directories: a directory's mtime moves when an entry is created, renamed
  * or deleted, which is how a removed source file is noticed. Outputs count
  * files only — the bytes a test loads. While walking, `node_modules`,
@@ -222,10 +223,10 @@ export const checkDistFreshness = (descriptors) => descriptors.map(distFreshness
 const timestamp = (mtimeMs) => new Date(mtimeMs).toISOString();
 
 /**
- * One actionable message naming every stale or missing output and ending
- * with the fix, or the empty string when every result is fresh. Paths print
- * relative to `relativeTo` (default: the working directory) when they lie
- * under it.
+ * One actionable message naming every stale, missing, or contaminated output
+ * and ending with the fix, or the empty string when every result is fresh.
+ * Paths print relative to `relativeTo` (default: the working directory) when
+ * they lie under it.
  *
  * @param {readonly DistFreshness[]} results
  * @param {{ readonly relativeTo?: string }} [options]
@@ -263,7 +264,7 @@ export const formatDistFreshnessFailure = (results, options = {}) => {
 
 /**
  * Throws an Error carrying `formatDistFreshnessFailure`'s message when any
- * descriptor's output is stale or missing.
+ * descriptor's output is stale, missing, or contaminated.
  *
  * @param {readonly DistDescriptor[]} descriptors
  * @param {{ readonly relativeTo?: string }} [options]

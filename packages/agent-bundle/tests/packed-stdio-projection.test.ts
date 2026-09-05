@@ -8,6 +8,7 @@ import { userDataStateRoot } from '@agent-bundle/runtime';
 import { specTypeSchemas as clientSchemas } from '@modelcontextprotocol/client';
 import { expect, it } from '@rstest/core';
 
+import { runtimeRebundleFixtureMarker } from '../../../scripts/dist-freshness.mjs';
 import { exists } from '../src/core/paths.ts';
 import { requestEventRuntime } from '../src/events/ipc.ts';
 import { compileTestManifest } from '../src/test/manifest.ts';
@@ -265,7 +266,7 @@ it.each([
       // exported `HARNESS_HOST_WINS` is untouched, and nothing was logged.
       for (const [name, value] of [
         ...(packageName === 'agent-bundle-runtime-rebundle'
-          ? [['AGENT_BUNDLE_RUNTIME_REBUNDLE_FIXTURE_EXECUTED', '1'] as const]
+          ? [[runtimeRebundleFixtureMarker, '1'] as const]
           : []),
         ['HARNESS_FROM_FILE', 's3cr3t-from-file'],
         ['HARNESS_LOCAL', 'from-local'],

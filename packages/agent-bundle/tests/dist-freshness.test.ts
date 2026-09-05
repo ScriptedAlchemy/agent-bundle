@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { lstat, mkdir, mkdtemp, readdir, rm, utimes, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
@@ -81,6 +81,14 @@ const createPackageFixture = async (): Promise<PackageFixture> => {
 const touch = (path: string, mtime: Date): Promise<void> => utimes(path, mtime, mtime);
 
 describe('distFreshness', () => {
+  it('checks the marker emitted by the runtime fixture', async () => {
+    const fixture = await readFile(
+      join(workspaceRoot, 'packages/agent-bundle/tests/fixtures/runtime-rebundle/private-sibling.ts'),
+      'utf8',
+    );
+    expect(fixture).toContain(`'${runtimeRebundleFixtureMarker}'`);
+  });
+
   it('is fresh when every input predates the newest built file, ignoring declared inputs that do not exist', async () => {
     const { descriptor, root } = await createPackageFixture();
     const result = distFreshness(descriptor);
