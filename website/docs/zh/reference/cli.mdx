@@ -72,7 +72,8 @@ proxy 从父命令 `dev` 继承 `--root`，并把诊断写到 stderr。
 ## serve-app
 
 ```sh
-agent-bundle serve-app <server>/<app> [--artifact <path>] [--tool <tool>] [--input <json>] [--port <port>] [--open]
+agent-bundle serve-app <server>/<app> [--artifact <path>] [--tool <tool>] \
+  [--input <json>] [--port <port>] [--open]
 ```
 
 在一个普通浏览器标签页里独立提供一个已构建的 MCP App——不在任何 MCP 宿主之内，也不需要
@@ -130,7 +131,8 @@ JSON 文档在 `hostValidation` 下携带这些报告，每个被校验的 targe
 ## install
 
 ```sh
-agent-bundle install <host> [--from <bundle-dir>] [--scope <scope>] [--mode <mode>] [--replace] [--json]
+agent-bundle install <host> [--from <bundle-dir>] [--scope <scope>] [--mode <mode>] \
+  [--replace] [--json]
 ```
 
 | 选项 | 默认值 | 含义 |
@@ -151,7 +153,8 @@ agent-bundle install <host> [--from <bundle-dir>] [--scope <scope>] [--mode <mod
 ## uninstall
 
 ```sh
-agent-bundle uninstall <host> [--from <bundle-dir>] [--scope <scope>] [--mode <mode>] [--keep-data | --purge-data --confirm-purge] [--force] [--plan] [--json]
+agent-bundle uninstall <host> [--from <bundle-dir>] [--scope <scope>] [--mode <mode>] \
+  [--keep-data | --purge-data --confirm-purge] [--force] [--plan] [--json]
 ```
 
 | 选项 | 默认值 | 含义 |

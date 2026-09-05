@@ -1,5 +1,5 @@
 ---
-description: 'Field reference for agent-bundle.config.ts: every top-level key, its accepted shapes, defaults, and validation rules, including the deprecated plugin.version field.'
+description: 'Field reference for agent-bundle.config.ts: every top-level key, its accepted shapes, defaults, and validation rules, including the deprecated plugin.version.'
 ---
 
 # Configuration
@@ -21,7 +21,7 @@ export default defineConfig({
 | Field | Type | Default |
 | --- | --- | --- |
 | `plugin` | `{ name, description?, logo?, ... }` | **Required.** |
-| `targets` | `string[]` | Adapter-selected. |
+| `targets` | `string[]` | `['portable']` — the only adapter registered as a default; a `--target` flag overrides both the default and a declared list. |
 | `skills` | `string[]` | The `src/skills/*` convention. |
 | `hooks` | `Partial<Record<CanonicalHookEvent, ...>>` | The `src/hooks/*` convention. |
 | `mcp` | `{ servers: Record<string, ...> }` | The `src/mcp/*` convention. |
@@ -35,7 +35,7 @@ export default defineConfig({
 | `payload` | `Record<string, string \| { source, targets? }>` | None. |
 | `state` | `false` | The `src/state.ts` convention. |
 | `notices` | `{ retention?: { terminalTtl?, maxTerminal?, maxJournalBytes? } }` | Runtime defaults (`7d`, `500`, `16777216`). |
-| `marketplace` | `boolean` | Adapter-selected. |
+| `marketplace` | `boolean` | `false`. Only `marketplace: true` is carried into the normalized model; it is what makes the Cursor marketplace plan emit `.cursor-plugin/marketplace.json`. |
 | `dev` | `{ agentApi?, contracts?, runtime? }` | None. |
 | `evals` | `{ include?, runsDir?, semanticGrader? }` | See below. |
 | `tools` | `{ rsbuild?, rspack? }` | None. |
@@ -52,6 +52,13 @@ The config is a TypeScript contract, not a runtime schema: `defineConfig` accept
 `AgentBundleConfig` (or a factory returning one), and `validateSource` enforces the rules on this
 page with structured diagnostics. The exact shapes below are generated from the package source
 by TypeDoc on every documentation build, so they cannot drift from the published types.
+Two keys in the table above are not members of `AgentBundleConfig`: `evals` and `routes` are read
+through its `[key: string]: unknown` index signature, so `tsc` does not check their shape. The
+route compiler still parses `routes` during discovery, so `agent-bundle validate` reports a
+malformed override through the route graph's diagnostics; `validateSource` never reads `evals` —
+the [`evals` rules below](#evals) fire when `agent-bundle eval` or the Workbench loads the config,
+as `EVAL_CONFIG_INVALID`, `EVAL_INCLUDE_INVALID`, or `EVAL_RUNS_DIR_INVALID` errors rather than
+`AB` diagnostics.
 
 | Field | Type definition |
 | --- | --- |

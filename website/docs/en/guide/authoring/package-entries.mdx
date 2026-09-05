@@ -60,7 +60,10 @@ function, receives the generated process envelope:
 // src/cli.ts — the whole CLI entry a consumer writes
 import type { ExecutableMainContext } from 'agent-bundle';
 
-export const main = async (argv: readonly string[], { terminal }: ExecutableMainContext): Promise<number> => {
+export const main = async (
+  argv: readonly string[],
+  { terminal }: ExecutableMainContext,
+): Promise<number> => {
   if (terminal.stderr.color !== 'none') { /* paint progress on stderr */ }
   return 0;
 };
@@ -100,7 +103,9 @@ export const inputSchema = z.object({
 
 export const resultSchema = z.object({ scanned: z.number().int() }).strict();
 
-export default async function inspect({ input, signal }: CliRouteProps<typeof inputSchema>) {
+export default async function inspect(
+  { input, signal }: CliRouteProps<typeof inputSchema>,
+) {
   signal.throwIfAborted();
   return { scanned: input.maxFiles ?? 0 };
 }

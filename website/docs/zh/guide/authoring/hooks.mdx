@@ -91,7 +91,8 @@ export default defineConfig({
 import type { HookHandler } from 'agent-bundle';
 
 export default ((event) => ({
-  additionalContext: `Run verify-release from ${event.cwd ?? process.cwd()} before publishing.`,
+  additionalContext:
+    `Run verify-release from ${event.cwd ?? process.cwd()} before publishing.`,
   outcome: 'continue',
 })) satisfies HookHandler<'sessionStart'>;
 ```
@@ -179,13 +180,17 @@ export const config = {
   tools: ['file.write'], // 规范选择器 -> 各宿主的原生匹配器
 } satisfies AgentEventRouteConfig;
 
-export default async function AfterFileEdit({ canonical, native, signal }: AgentEventRouteProps<'tool/after'>) {
+export default async function AfterFileEdit(
+  { canonical, native, signal }: AgentEventRouteProps<'tool/after'>,
+) {
   // canonical.provenance = { host, hostContractRevision, nativeEvent, source: 'native' }
   // 在每个宿主上，canonical.payload.toolName = { value: 'Write', nativeKey: 'tool_name' }
   const tool = canonical.payload.toolName?.value ?? 'a tool';
   return (
     <Agent.Result>
-      <Agent.Context>{`Recorded an edit by ${tool}, reported by ${canonical.provenance.host}.`}</Agent.Context>
+      <Agent.Context>
+        {`Recorded an edit by ${tool}, reported by ${canonical.provenance.host}.`}
+      </Agent.Context>
     </Agent.Result>
   );
 }
@@ -219,7 +224,9 @@ Claude 的 `background_tasks`、只有一个宿主才有的 `duration`——仍�
 import { createEventRouteInput, renderRoute } from 'agent-bundle/test';
 
 const rendered = await renderRoute('event:tool/after', {
-  input: createEventRouteInput('tool/after', claudePostToolUseEnvelope, { host: 'claude' }),
+  input: createEventRouteInput('tool/after', claudePostToolUseEnvelope, {
+    host: 'claude',
+  }),
 });
 ```
 
@@ -319,7 +326,8 @@ npx agent-bundle inspect --root . --hooks
 npx agent-bundle hooks list --artifact artifact --target claude
 npx agent-bundle hooks simulate --artifact artifact --target claude \
   --hook session-start-session-start-7ab7e8a5 \
-  --input '{"sessionId":"local","transcriptPath":"/tmp/transcript.jsonl","cwd":"/tmp/project","source":"startup"}'
+  --input '{"sessionId":"local","transcriptPath":"/tmp/transcript.jsonl",
+    "cwd":"/tmp/project","source":"startup"}'
 ```
 
 `--hook` 必须是 `hooks list` 打印出的精确 `name`（或 `id`）——规范化会把它推导为
