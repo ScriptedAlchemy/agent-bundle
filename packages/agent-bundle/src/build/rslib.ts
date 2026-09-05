@@ -105,12 +105,13 @@ const rslibVirtualModulesPlugin = (): typeof rspack.experiments.VirtualModulesPl
   virtualModulesPluginConstructor(rspack, '@rslib/core', 'serve generated wrapper and registry modules');
 
 /**
- * The tools escape hatch is typed against the workspace `@rsbuild/core` (the
- * engine of the MCP Apps path), while this build path executes under the
- * Rsbuild/Rspack copies nested in `@rslib/core` (the dual-engine reality
- * documented on {@link AgentBundleToolsConfig}). These two functions are the
- * single deliberate crossing between those type universes; everything else
- * in this module stays inside Rslib's own types.
+ * The tools escape hatch is typed against the workspace `@rsbuild/core`,
+ * while this build path speaks Rslib's `LibConfig`, which imports its
+ * Rsbuild types through `@rslib/core`'s own dependency edge (the same
+ * package today — see {@link AgentBundleToolsConfig} — but a separate type
+ * universe for the compiler). These two functions are the single deliberate
+ * crossing between them; everything else in this module stays inside Rslib's
+ * own types.
  */
 const asRslibEnvironmentFragment = (
   fragment: NonNullable<AgentBundleToolsConfig['rsbuild']>,
