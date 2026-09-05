@@ -316,6 +316,10 @@ it('re-syncs the isolated Cursor install from coordinator epochs and ignores a f
   });
   const coordinator = new DevCoordinator({
     acquireLock: async () => ({ close: async () => undefined }),
+    // A no-op watcher: the real ProjectWatcher would turn this test's own source
+    // writes into an unrequested second rebuild that races the explicit
+    // rebuild() calls and can rewrite the install marker after settled() (#576).
+    createWatcher: () => ({ close: async () => undefined }),
     epochStore,
     eventHub,
     prepareCommand: 'dev',

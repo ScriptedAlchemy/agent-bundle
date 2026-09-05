@@ -29,6 +29,8 @@ export interface McpAppFrameTarget {
 
 export interface McpAppFrameIframe {
   readonly contentWindow: McpAppFrameTarget | null;
+  /** A DOM iframe publishes the relay lifecycle through this (`relayStateAttribute`); fakes may omit it. */
+  setAttribute?(name: string, value: string): void;
 }
 
 export interface McpAppFrameWindow {
@@ -74,6 +76,18 @@ export interface SecureAppRendererProps {
 }
 
 type RelayState = 'closed' | 'closing' | 'open';
+
+/**
+ * Relay lifecycle as published on the outer iframe's `data-mcp-app-relay-state`
+ * attribute, so the host UI and browser tests observe the state the relay is
+ * in instead of inferring it from route traffic. `loading`: listening, but the
+ * proxy has not signalled readiness, so `close()` releases the binding with a
+ * forced DELETE. `ready`: the proxy holds the resource, so `close()` runs the
+ * graceful `POST …/close` teardown handshake. `closing` and `closed` mirror
+ * `RelayState`.
+ */
+type RelayFrameState = 'closed' | 'closing' | 'loading' | 'ready';
+const relayStateAttribute = 'data-mcp-app-relay-state';
 
 interface CanonicalResource {
   readonly csp?: McpAppJsonValue;
@@ -193,6 +207,7 @@ export class McpAppFrameRelay {
     if (this.#state !== 'open' || this.#listening) return false;
     this.#window.addEventListener('message', this.#listener);
     this.#listening = true;
+    this.#publishFrameState();
     return true;
   }
 
@@ -209,6 +224,7 @@ export class McpAppFrameRelay {
     if (isProxyReady(message)) {
       if (this.#resourceProvided) return false;
       this.#resourceProvided = true;
+      this.#publishFrameState();
       return this.#post(messageForResource(this.#frame, this.#resource), false);
     }
     if (!this.#resourceProvided) return false;
@@ -219,6 +235,7 @@ export class McpAppFrameRelay {
     if (this.#state === 'closed') return closedRelay;
     if (this.#closePromise !== undefined) return this.#closePromise;
     this.#state = 'closing';
+    this.#publishFrameState();
     this.#closePromise = new Promise<void>((resolve) => { this.#finishClose = resolve; });
     // Before the proxy signals readiness there is no app to tear down and no
     // window that can acknowledge a teardown frame: the proxy document is
@@ -361,6 +378,7 @@ export class McpAppFrameRelay {
   #completeClose(): void {
     if (this.#state === 'closed') return;
     this.#state = 'closed';
+    this.#publishFrameState();
     this.#queue.length = 0;
     if (this.#closeTimer !== undefined) clearTimeout(this.#closeTimer);
     this.#closeTimer = undefined;
@@ -368,6 +386,12 @@ export class McpAppFrameRelay {
     this.#listening = false;
     this.#finishClose?.();
     this.#finishClose = undefined;
+  }
+
+  /** Mirrors `#state` and `#resourceProvided` onto the iframe on the same event that changes them. */
+  #publishFrameState(): void {
+    const state: RelayFrameState = this.#state === 'open' ? (this.#resourceProvided ? 'ready' : 'loading') : this.#state;
+    this.#iframe.setAttribute?.(relayStateAttribute, state);
   }
 
   #teardownId(): string {

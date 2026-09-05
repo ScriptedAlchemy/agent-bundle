@@ -165,6 +165,7 @@ const writeBundledAppProject = async (root: string): Promise<void> => {
 
 interface AppRouteRequest {
   readonly body: unknown;
+  readonly method: string;
   readonly path: string;
 }
 
@@ -174,7 +175,6 @@ interface AppRouteResponse extends AppRouteRequest {
 
 interface RuntimeAppRouteRequest extends AppRouteRequest {
   readonly headers: Readonly<Record<string, string>>;
-  readonly method: string;
 }
 
 interface RuntimeAppRouteResponse extends RuntimeAppRouteRequest {
@@ -233,7 +233,7 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
     page.on('request', (request) => {
       const requestUrl = new URL(request.url());
       if (requestUrl.origin !== foregroundOrigin || !requestUrl.pathname.startsWith('/api/mcp/apps/')) return;
-      appRequests.push({ body: requestBody(request.postData()), path: requestUrl.pathname });
+      appRequests.push({ body: requestBody(request.postData()), method: request.method(), path: requestUrl.pathname });
     });
     page.on('response', (response) => {
       const responseUrl = new URL(response.url());
@@ -244,7 +244,7 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
       const responseUrl = new URL(response.url());
       if (responseUrl.origin !== foregroundOrigin || !responseUrl.pathname.endsWith('/messages')) return;
       void response.json().then((body) => {
-        appResponses.push({ body: requestBody(response.request().postData()), path: responseUrl.pathname, response: body });
+        appResponses.push({ body: requestBody(response.request().postData()), method: response.request().method(), path: responseUrl.pathname, response: body });
       }).catch(() => undefined);
     });
 
@@ -432,22 +432,53 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
     await expect(historyEntries).toHaveCount(2, { timeout: browserTimeout });
     await expect(page.locator('.mcp-page-phase')).toContainText('Session ready', { timeout: browserTimeout });
 
+    const reopenedPreview = page.waitForResponse((response) =>
+      response.url() === `${foregroundOrigin}/api/mcp/sessions/${openedSession.session.id}/apps` && response.request().method() === 'POST', { timeout: browserTimeout });
     await page.getByRole('button', { name: 'Open App preview for mcp-page-1' }).click();
+    const reopened = await (await reopenedPreview).json() as Readonly<{ readonly preview: Readonly<{ readonly bindingId: string }> }>;
+    const reopenedAppPath = `/api/mcp/apps/${encodeURIComponent(reopened.preview.bindingId)}`;
     await expect(outerFrame).toBeVisible({ timeout: browserTimeout });
-    // A visible iframe only proves the element mounted. The graceful /close
-    // handshake below needs a proxy that has loaded and an app that has
-    // initialized (a preview closed before its proxy signals readiness is
-    // released by DELETE, with nothing to acknowledge a teardown), so wait for
-    // the reopened binding's own `initialized` notification first.
-    await expect.poll(() => appRequests.filter((request) => {
+    // A visible iframe only proves the element mounted. The relay sends the
+    // graceful POST …/close only once it has seen the proxy's ready
+    // notification; before that, close() releases the binding with a forced
+    // DELETE and nothing can acknowledge a teardown. McpAppFrameRelay publishes
+    // that state on the iframe, so wait on it directly, then on the reopened
+    // App's own `initialized` so the teardown below is acknowledged instead of
+    // riding out the force-close timer.
+    await expect(outerFrame).toHaveAttribute('data-mcp-app-relay-state', 'ready', { timeout: browserTimeout });
+    await expect.poll(() => appRequests.some((request) => {
       const message = (request.body as { readonly message?: { readonly method?: string } } | undefined)?.message;
-      return request.path.endsWith('/messages') && message?.method === 'ui/notifications/initialized';
-    }).length, { timeout: browserTimeout }).toBe(2);
-    const secondClose = page.waitForRequest((request) => request.url().startsWith(`${foregroundOrigin}/api/mcp/apps/`) && request.url().endsWith('/close'), { timeout: 30_000 * timeScale });
+      return request.path === `${reopenedAppPath}/messages` && message?.method === 'ui/notifications/initialized';
+    }), { message: 'The reopened App preview never sent ui/notifications/initialized.', timeout: browserTimeout }).toBe(true);
     const closedSession = page.waitForRequest((request) =>
-      request.url() === `${foregroundOrigin}/api/mcp/sessions/${openedSession.session.id}` && request.method() === 'DELETE', { timeout: 30_000 * timeScale });
-    await page.getByRole('button', { name: 'Close MCP session' }).click();
-    await secondClose;
+      request.url() === `${foregroundOrigin}/api/mcp/sessions/${openedSession.session.id}` && request.method() === 'DELETE', { timeout: browserTimeout });
+    // The session controls sit ~2000 px above the reopened App's cross-origin
+    // iframe. Letting click() scroll that far and dispatch in the same breath
+    // lets Chromium route the pointer to the frame that used to occupy the
+    // point (its hit-test regions update asynchronously), so the click is
+    // swallowed under load. Settle the scroll first, then confirm the click
+    // landed: run('close') disables the button synchronously and it stays
+    // disabled through the terminal phase.
+    const closeSession = page.getByRole('button', { name: 'Close MCP session' });
+    await closeSession.scrollIntoViewIfNeeded();
+    await expect(closeSession).toBeInViewport({ timeout: browserTimeout });
+    await closeSession.click();
+    await expect(closeSession, 'The Close MCP session click did not start the close action.').toBeDisabled({ timeout: browserTimeout });
+    // The first route call the close makes for this binding decides its path.
+    // Observing the DELETE too makes a force-close fail here, in milliseconds,
+    // instead of waiting out a /close that will never be sent.
+    const reopenedClose = () => appRequests.find((request) =>
+      (request.method === 'POST' && request.path === `${reopenedAppPath}/close`) || (request.method === 'DELETE' && request.path === reopenedAppPath));
+    await expect.poll(reopenedClose, { message: 'Closing the session sent no close request for the reopened App preview.', timeout: browserTimeout }).toBeDefined();
+    const secondClose = reopenedClose();
+    if (secondClose?.method !== 'POST') {
+      throw new Error(`Expected the reopened App preview to close gracefully (POST ${reopenedAppPath}/close); the relay sent ${secondClose === undefined ? 'no close request' : `${secondClose.method} ${secondClose.path}`} instead.`);
+    }
+    const secondCloseBody = secondClose.body as Readonly<{ readonly id: string }>;
+    await expect.poll(() => appRequests.some((request) => {
+      const message = (request.body as { readonly message?: { readonly id?: string; readonly result?: unknown } } | undefined)?.message;
+      return request.path === `${reopenedAppPath}/messages` && message?.id === secondCloseBody.id && message.result !== undefined;
+    }), { message: 'The reopened App preview never acknowledged the graceful teardown.', timeout: browserTimeout }).toBe(true);
     await closedSession;
     await expect(page.locator('.mcp-page-phase')).toContainText('Session closed', { timeout: browserTimeout });
     await expect(outerFrame).toBeHidden({ timeout: browserTimeout });
