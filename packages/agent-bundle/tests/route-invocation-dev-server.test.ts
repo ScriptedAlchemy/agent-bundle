@@ -210,10 +210,16 @@ it('invokes compiled tool and event routes through the foreground server', { tim
       source: 'api',
     });
     expect(tool.invocation.providers).toEqual([
-      expect.objectContaining({ name: 'clock', status: 'unobserved' }),
+      expect.objectContaining({ durationMs: expect.any(Number), id: 'provider:clock', name: 'clock', status: 'mounted' }),
     ]);
-    expect(tool.invocation.providers[0]).not.toHaveProperty('durationMs');
-    expect(tool.invocation.timings.map((entry) => entry.phase)).toEqual(['render', 'projection']);
+    expect(tool.invocation.timings.map((entry) => entry.phase)).toEqual([
+      'provider:clock',
+      'providers',
+      'handler',
+      'render',
+      'projection',
+    ]);
+    for (const entry of tool.invocation.timings) expect(entry.durationMs).toBeGreaterThanOrEqual(0);
 
     const eventResponse = await fetch(`${server.url}/api/routes/invocations`, {
       body: JSON.stringify({
