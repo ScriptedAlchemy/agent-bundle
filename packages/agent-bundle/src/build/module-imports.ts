@@ -48,21 +48,21 @@ const remember = (key: string, imports: readonly ModuleImport[]): void => {
   importsByDigest.set(key, imports);
 };
 
-/** Imports previously read (this process) from bytes with this digest at this check level. */
-export const rememberedModuleImports = (
-  check: ModuleSyntaxCheck,
-  sha256: string,
-): readonly ModuleImport[] | undefined => importsByDigest.get(`${check}:${sha256}`);
-
 /**
  * Reads the imports of one ES module source, throwing on invalid syntax
  * (the lexer's or, for `parsed`, acorn's). When the source's SHA-256 is
- * known the result is remembered for the next pass over the same bytes.
+ * known, a result remembered for those bytes at this check level is
+ * returned as is, and a fresh read is remembered for the next pass over the
+ * same bytes.
  */
 export const readModuleImports = async (
   source: string,
   options: { readonly check: ModuleSyntaxCheck; readonly sha256?: string },
 ): Promise<readonly ModuleImport[]> => {
+  if (options.sha256 !== undefined) {
+    const known = importsByDigest.get(`${options.check}:${options.sha256}`);
+    if (known !== undefined) return known;
+  }
   await init;
   if (options.check === 'parsed') parseJavaScript(source, { ecmaVersion: 'latest', sourceType: 'module' });
   const [records] = parse(source);

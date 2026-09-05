@@ -120,6 +120,29 @@ const createFixture = async (options: {
       '}',
       '',
     ].join('\n')),
+    // The operator `.env` probe (#469): a route and a provider that both read
+    // `process.env` at module top level — what a static import evaluates
+    // before any statement of the bin — and again when they run.
+    writeProjectFile(root, 'src/cli/env-probe.ts', [
+      "import { agent } from '@agent-bundle/runtime';",
+      "import { z } from 'zod';",
+      "const atImport = process.env.CLI_OPERATOR_TOKEN ?? 'unset';",
+      "export const config = { description: 'Report the operator token as the bin sees it.' };",
+      'export const inputSchema = z.object({}).strict();',
+      'export const resultSchema = z.object({ atImport: z.string(), atRun: z.string(), providerAtImport: z.string() }).strict();',
+      'export default async function envProbe() {',
+      '  const context = await agent();',
+      "  return { atImport, atRun: process.env.CLI_OPERATOR_TOKEN ?? 'unset', providerAtImport: context.providers.operatorToken };",
+      '}',
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/providers/operator-token.ts', [
+      "const atImport = process.env.CLI_OPERATOR_TOKEN ?? 'unset';",
+      'export default async function operatorToken() {',
+      '  return atImport;',
+      '}',
+      '',
+    ].join('\n')),
     // A plain script route forwarding to the routed CLI through the
     // documented sibling convention: `../bin/<plugin-name>.mjs` relative to
     // the script's own `import.meta.url` inside the artifact.
@@ -301,7 +324,7 @@ it('inspects the routed CLI bin composition once for the plugin root', { timeout
   ]);
 });
 
-it('lets a skill reach the artifact bin through the plugin-root token', { retry: 1, timeout: 240_000 }, async () => {
+it('lets a skill reach the artifact bin through the plugin-root token, and the bin applies the operator .env layer before its route and provider modules evaluate (#469)', { retry: 1, timeout: 240_000 }, async () => {
   const root = await createFixture({ skill: true, targets: ['claude'] });
   const result = await build({ output: 'artifact', root });
   const artifactRoot = join(root, 'artifact');
@@ -316,6 +339,18 @@ it('lets a skill reach the artifact bin through the plugin-root token', { retry:
   const status = await execFile(process.execPath, [binPath, 'status', '--json']);
   expect(parseJsonLine(status.stdout)).toEqual({ invocation: 'cli', status: 'idle', surface: 'status' });
   expect(result.diagnostics.filter((entry) => entry.code === 'AB4765')).toEqual([]);
+
+  // `<plugin root>/.env` is read before the route and provider modules
+  // evaluate, so their module-level reads agree with the read at run time;
+  // an exported variable still wins, and `none` disables the layer.
+  const { CLI_OPERATOR_TOKEN: _token, ...hostEnv } = process.env;
+  const probe = async (env: Readonly<Record<string, string>>): Promise<unknown> =>
+    parseJsonLine((await execFile(process.execPath, [binPath, 'env-probe', '--json'], { env: { ...hostEnv, ...env } })).stdout);
+  expect(await probe({})).toEqual({ atImport: 'unset', atRun: 'unset', providerAtImport: 'unset' });
+  await writeFile(join(claudeRoot, '.env'), 'CLI_OPERATOR_TOKEN=from-file\n');
+  expect(await probe({})).toEqual({ atImport: 'from-file', atRun: 'from-file', providerAtImport: 'from-file' });
+  expect(await probe({ CLI_OPERATOR_TOKEN: 'from-host' })).toEqual({ atImport: 'from-host', atRun: 'from-host', providerAtImport: 'from-host' });
+  expect(await probe({ AGENT_BUNDLE_ENV_FILE: 'none' })).toEqual({ atImport: 'unset', atRun: 'unset', providerAtImport: 'unset' });
 });
 
 it('refuses a host-emitted file that collides with the routed CLI bin (AB4766)', { timeout: 120_000 }, async () => {

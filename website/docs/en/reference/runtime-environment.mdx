@@ -69,10 +69,13 @@ scratch object, so the real `process.env` is never mutated.
 A host launches an installed pack directly, so the pack's own shells apply the same layer
 themselves: the stdio MCP entries, the hook wrappers that run plugin code, and the artifact CLI
 `bin/<name>.mjs` read `<plugin root>/.env` then `.env.local` at launch (or the files
-`AGENT_BUNDLE_ENV_FILE` names), filling only variables the host did not set — host environment and
-manifest `env` win, `.env.local` beats `.env`, values are never logged, a missing file costs
-nothing, an unreadable one is skipped. The plugin root is `AGENT_BUNDLE_PLUGIN_ROOT` when the host
-set it, otherwise the directory above the shell's own. No `${VAR}` interpolation is performed.
+`AGENT_BUNDLE_ENV_FILE` names), filling only variables the host did not set — an exported variable
+wins, a manifest `env` default the host passed through yields to the file (the stdio entry carries
+its server's declared block to tell the two apart), `.env.local` beats `.env`, values are never
+logged, a missing file costs nothing, an unreadable one is skipped. The layer is applied before the
+server, handler, route, provider, and state modules evaluate, so a module-level `process.env` read
+sees it. The plugin root is `AGENT_BUNDLE_PLUGIN_ROOT` when the host set it, otherwise the
+directory above the shell's own. No `${VAR}` interpolation is performed.
 Under `mcp run` the plugin root is the project root, so the shell re-reads the files `mcp run`
 already composed and changes nothing; `--env-file` and `--no-env` travel down as
 `AGENT_BUNDLE_ENV_FILE`. The npm package bin reads no pack file. Doctor reports the presence and

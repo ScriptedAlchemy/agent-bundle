@@ -37,9 +37,7 @@
     "@types/node": "26.4.0",
     "agent-bundle": "workspace:*",
     "typescript": "7.0.2",
-    "@types/react": "19.2.18"
-  },
-  "dependencies": {
+    "@types/react": "19.2.18",
     "@agent-bundle/runtime": "workspace:*",
     "react": "19.2.8",
     "zod": "4.4.3"

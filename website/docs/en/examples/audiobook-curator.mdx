@@ -37,6 +37,12 @@ those features, not the build. This example has no hooks.
 - **Presentation is shared, not duplicated.** `src/components/` is one report library composed by
   both the MCP routes and the rendered CLI routes, so an MCP tool and its CLI counterpart cannot
   drift into two presenters.
+- **Markdown blocks are JSX.** The library's `DataList` and `FileList` primitives and the
+  duplicate analysis's measured-files table author their Markdown through the runtime's
+  [`MarkdownContent`](../guide/authoring/mcp.mdx#rich-markdown-blocks-as-jsx) component —
+  `<ul>`/`<li>`, `<strong>`, and a GFM `<table>` — instead of hand-concatenated strings, so
+  escaping belongs to the renderer and piped CLI Markdown and MCP text content come from one
+  output.
 - **Request context is observed, not assumed.** The conventional `src/providers/library.ts`
   probes `ffmpeg -version` and `ffprobe -version` per request and publishes tool availability
   with the probe time. The catalog resource reads it through `await agent()` and renders either

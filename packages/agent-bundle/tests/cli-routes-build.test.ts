@@ -22,6 +22,25 @@ const writeProjectFile = async (root: string, path: string, contents: string): P
 };
 
 /**
+ * What the fixture's `library-tooling` provider observes of the request on
+ * every generated surface (#459): a routed-CLI executable mounts no host
+ * conversation, so `host`/`lineage` carry the typed `unsupported-surface`
+ * reason the route reads too; the process-lifetime `src/state.ts` mounts the
+ * `read`-only state handle and the `inbox`/`published`-only notice handle; `useAgent()`
+ * throws `outside-invocation` because the resolver runs outside the request.
+ */
+const providerView = {
+  handle: 'outside-invocation',
+  host: 'unsupported-surface',
+  lineage: 'unsupported-surface',
+  notices: ['inbox', 'published'],
+  plugin: 'available',
+  session: 'not-provided',
+  state: { keys: ['lifetime', 'read'], lifetime: 'process', revision: 0 },
+  workspace: process.cwd(),
+};
+
+/**
  * The routed-CLI packaging proof (#102 stage 2): `src/cli/**` routes feed the
  * existing package-build pipeline as one generated Rslib executable, and the
  * emitted bin serves help, JSON output, exit codes, and usage failures per
@@ -68,16 +87,50 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
       '}',
       '',
     ].join('\n')),
+    // Process-lifetime state, so every generated scope mounts a state handle
+    // and a notice ledger without touching the plugin root on disk.
+    writeProjectFile(root, 'src/state.ts', [
+      "import { defineState } from '@agent-bundle/runtime/state';",
+      "import { z } from 'zod';",
+      'export default defineState({',
+      '  events: { noted: z.object({ note: z.string() }).strict() },',
+      "  id: 'cli-bin-fixture/notes',",
+      '  initial: { notes: [] },',
+      "  lifetime: 'process',",
+      '  reduce: (state, event) => ({ notes: [...state.notes, event.payload.note] }),',
+      '  schema: z.object({ notes: z.array(z.string()) }).strict(),',
+      '});',
+      '',
+    ].join('\n')),
     // A conventional request context provider (#313): every generated request
     // scope — plain CLI, rendered CLI, projected MCP command, rendered script —
-    // mounts the same value.
+    // mounts the same value. Beside the invocation it reports the request view
+    // the scope resolved it over (#459): the identity axes as the route reads
+    // them, the read-only state and notice handles, and the runtime error
+    // `useAgent()` raises because providers run outside the request context.
     writeProjectFile(root, 'src/providers/library-tooling.ts', [
-      'export default async function libraryTooling({ invocation, signal }) {',
+      "import { AgentRequestError, useAgent } from '@agent-bundle/runtime';",
+      'export default async function libraryTooling(context) {',
+      '  const { invocation, signal } = context;',
       "  if (signal.aborted) throw new DOMException('aborted', 'AbortError');",
+      '  let handle;',
+      "  try { useAgent(); handle = 'reachable'; } catch (error) { handle = error instanceof AgentRequestError ? error.code : 'unexpected'; }",
+      '  const view = {',
+      '    handle,',
+      "    host: context.host.state === 'available' ? context.host.value.name : context.host.reason,",
+      "    lineage: context.lineage.state === 'available' ? context.lineage.value.conversation : context.lineage.reason,",
+      '    notices: context.notices === undefined ? null : Object.keys(context.notices).sort(),',
+      '    plugin: context.plugin.state,',
+      "    session: context.session.state === 'available' ? context.session.value.sessionId : context.session.reason,",
+      '    state: context.state === undefined',
+      '      ? null',
+      '      : { keys: Object.keys(context.state).sort(), lifetime: context.state.lifetime, revision: (await context.state.read()).revision },',
+      "    workspace: context.workspace.state === 'available' ? context.workspace.value.root : context.workspace.reason,",
+      '  };',
       // Branching on the documented kind fails loudly if a surface ever posts
       // no invocation to its worker again (#319 review).
       "  switch (invocation.kind) {",
-      "    case 'cli': case 'script': case 'tool': return { kind: invocation.kind, tool: 'ffprobe 6.1' };",
+      "    case 'cli': case 'script': case 'tool': return { kind: invocation.kind, tool: 'ffprobe 6.1', view };",
       "    default: throw new Error(`unexpected invocation kind ${String(invocation.kind)}`);",
       '  }',
       '}',
@@ -90,7 +143,7 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
       'export const inputSchema = z.object({}).strict();',
       'export const resultSchema = z.object({',
       '  hits: z.number().int().min(1),',
-      "  libraryTooling: z.object({ kind: z.literal('cli'), tool: z.string() }).strict(),",
+      "  libraryTooling: z.object({ kind: z.literal('cli'), tool: z.string(), view: z.unknown() }).strict(),",
       '}).strict();',
       'export default async function tooling() {',
       '  const context = await agent();',
@@ -121,12 +174,12 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
       "import { z } from 'zod';",
       "export const config = { description: 'Render a library report.', positionals: ['root'] };",
       'export const inputSchema = z.object({ root: z.string().min(1) }).strict();',
-      'export const resultSchema = z.object({ books: z.number(), root: z.string(), tooling: z.string() }).strict();',
+      'export const resultSchema = z.object({ books: z.number(), root: z.string(), tooling: z.string(), view: z.unknown() }).strict();',
       'export default async function Report({ input, signal }) {',
       "  if (signal.aborted) throw new DOMException('aborted', 'AbortError');",
       '  const context = await agent();',
       "  await context.progress.report({ completed: 1, message: 'scanning', total: 2 });",
-      '  const result = { books: 2, root: input.root, tooling: `${context.providers.libraryTooling.kind}:${context.providers.libraryTooling.tool}` };',
+      '  const result = { books: 2, root: input.root, tooling: `${context.providers.libraryTooling.kind}:${context.providers.libraryTooling.tool}`, view: context.providers.libraryTooling.view };',
       '  return (',
       '    <Agent.Result value={result}>',
       '      <Agent.Markdown>{`Found **2** books under ${input.root}.`}</Agent.Markdown>',
@@ -149,11 +202,11 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
       "import { z } from 'zod';",
       "export const config = { annotations: { readOnlyHint: true }, description: 'Looks up one value.' };",
       'export const inputSchema = z.object({ message: z.string().default("ready") }).strict();',
-      "export const resultSchema = z.object({ invocation: z.literal('tool'), message: z.string(), operationId: z.string(), tooling: z.string() }).strict();",
+      "export const resultSchema = z.object({ invocation: z.literal('tool'), message: z.string(), operationId: z.string(), tooling: z.string(), view: z.unknown() }).strict();",
       'export default async function Lookup({ input }) {',
       '  const context = await agent();',
       "  await context.progress.report({ completed: 1, message: 'lookup', total: 1 });",
-      '  const result = { invocation: context.invocation.kind, message: input.message, operationId: context.invocation.operationId, tooling: `${context.providers.libraryTooling.kind}:${context.providers.libraryTooling.tool}` };',
+      '  const result = { invocation: context.invocation.kind, message: input.message, operationId: context.invocation.operationId, tooling: `${context.providers.libraryTooling.kind}:${context.providers.libraryTooling.tool}`, view: context.providers.libraryTooling.view };',
       '  return <Agent.Result value={result}><Agent.Markdown>{`Lookup: ${input.message}`}</Agent.Markdown></Agent.Result>;',
       '}',
       '',
@@ -186,7 +239,7 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
       'export default async function Summarize({ argv, signal }) {',
       "  if (signal.aborted) throw new DOMException('aborted', 'AbortError');",
       '  const context = await agent();',
-      '  const result = { arguments: argv.length, tooling: `${context.providers.libraryTooling.kind}:${context.providers.libraryTooling.tool}` };',
+      '  const result = { arguments: argv.length, tooling: `${context.providers.libraryTooling.kind}:${context.providers.libraryTooling.tool}`, view: context.providers.libraryTooling.view };',
       '  return (',
       '    <Agent.Result value={result}>',
       '      <Agent.Text>{`Summarized ${String(argv.length)} arguments.`}</Agent.Text>',
@@ -236,7 +289,7 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
   // Plain .ts commands mount conventional providers once per request (#313),
   // with the framework-owned processLifetime value beside them.
   const tooling = await execFile(binPath, ['tooling']);
-  expect(JSON.parse(tooling.stdout)).toEqual({ hits: 1, libraryTooling: { kind: 'cli', tool: 'ffprobe 6.1' } });
+  expect(JSON.parse(tooling.stdout)).toEqual({ hits: 1, libraryTooling: { kind: 'cli', tool: 'ffprobe 6.1', view: providerView } });
 
   // Nested commands parse positionals/options and honor the result exit-code policy.
   const audit = await execFile(binPath, ['library', 'audit', 'a', 'b']);
@@ -282,7 +335,7 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
   // --json returns the canonical validated final value; the rendered command
   // observed the same conventional provider as the plain command (#313).
   const reportJson = await execFile(binPath, ['report', '/library', '--json']);
-  expect(JSON.parse(reportJson.stdout)).toEqual({ books: 2, root: '/library', tooling: 'cli:ffprobe 6.1' });
+  expect(JSON.parse(reportJson.stdout)).toEqual({ books: 2, root: '/library', tooling: 'cli:ffprobe 6.1', view: providerView });
   // --ndjson exposes the sequence-numbered render-event stream, including
   // the progress the component reported through the request context.
   const reportEvents = await execFile(binPath, ['report', '/library', '--ndjson']);
@@ -306,6 +359,7 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
     message: 'packed',
     operationId: 'tool:harness/lookup',
     tooling: 'tool:ffprobe 6.1',
+    view: providerView,
   });
   const projectedNdjson = await execFile(binPath, [
     'harness', 'lookup', '--input', '{"message":"events"}', '--ndjson',
@@ -347,7 +401,7 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
   expect(scriptMarkdown.stdout).toBe('Summarized 2 arguments.\n');
   // The rendered script's provider sees `invocation.kind === 'script'` (#313).
   const scriptJson = await execFile(process.execPath, [scriptPath, 'alpha', '--json']);
-  expect(JSON.parse(scriptJson.stdout)).toEqual({ arguments: 1, tooling: 'script:ffprobe 6.1' });
+  expect(JSON.parse(scriptJson.stdout)).toEqual({ arguments: 1, tooling: 'script:ffprobe 6.1', view: providerView });
 
   // #102 acceptance: one build ships custom, MCP-generated, plain, and rendered commands/scripts.
   const plainScriptPath = join(root, 'artifact', 'scripts', 'checksum.mjs');

@@ -1,7 +1,7 @@
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { dataArrayValues, hasDataKeys, isPlainDataRecord, isRecord, ownDataValue } from '../core/strict-json.ts';
 import { escapeRegExp } from '../core/strings.ts';
-import { operatorEnvImports, operatorEnvStatement } from '../build/launch-env-shell.ts';
+import { operatorEnvLayerImport } from '../build/launch-env-shell.ts';
 import type { CanonicalAgentEvent } from '../routes/public.ts';
 import {
   canonicalHookEvents,
@@ -653,6 +653,21 @@ export const eventProjectRuntimeSpecifier = 'agent-bundle/event-project';
 export const eventArtifactEpochToken = '__AGENT_BUNDLE_EVENT_ARTIFACT_EPOCH__';
 export const eventFlightArtifactEpochToken = '__AGENT_BUNDLE_EVENT_FLIGHT_ARTIFACT_EPOCH__';
 
+/** True when an event-route wrapper may render in-process rather than forward to the warm MCP runtime. */
+const standaloneEventRoute = (route: NonNullable<NormalizedHook['eventRoute']>): boolean =>
+  route.runtime === 'standalone' || route.fallback === 'standalone';
+
+/**
+ * True when a wrapper runs plugin code in its own process and therefore
+ * imports the operator `.env` layer (#469): every handler-executing wrapper,
+ * and an event-route wrapper that can render standalone. A shared-runtime
+ * event-route wrapper forwards the event to the warm MCP process, which
+ * applied the layer itself when it started. The build serves the layer module
+ * to exactly these wrappers.
+ */
+export const hookWrapperAppliesOperatorEnv = (entry: TargetHookWrapper): boolean =>
+  entry.hook.eventRoute === undefined || standaloneEventRoute(entry.hook.eventRoute);
+
 const eventRouteHookWrapperSource = (
   entry: TargetHookWrapper,
   hostContractRevision: string,
@@ -660,7 +675,7 @@ const eventRouteHookWrapperSource = (
   durableLineage = false,
 ): string => {
   const route = entry.hook.eventRoute!;
-  const standalone = route.runtime === 'standalone' || route.fallback === 'standalone';
+  const standalone = standaloneEventRoute(route);
   // A standalone `session/end` (the warm runtime has usually already exited by
   // then) retires the durable lineage journal itself, so roots never outlive
   // their session; only projects whose state is workspace-durable have one.
@@ -681,11 +696,12 @@ const eventRouteHookWrapperSource = (
     ? [`const target = ${JSON.stringify(entry.hosts[0])};`]
     : ['const target = artifactTarget;'];
   return [
-    "import { dirname, resolve } from 'node:path';",
     // Only a wrapper that can render in-process needs the operator `.env`
     // layer (#469): a shared-runtime wrapper forwards the event to the warm
-    // MCP process, which applied the layer itself when it started.
-    ...(standalone ? operatorEnvImports({ importsFileUrlToPath: retiresLineage }) : []),
+    // MCP process, which applied the layer itself when it started. First,
+    // so it evaluates before every other module of the bundle.
+    ...(standalone ? [operatorEnvLayerImport] : []),
+    "import { dirname, resolve } from 'node:path';",
     ...(standalone ? ["import { Worker } from 'node:worker_threads';"] : []),
     ...(standalone
       ? [
@@ -713,7 +729,6 @@ const eventRouteHookWrapperSource = (
     `const fallbackMode = ${JSON.stringify(route.fallback)};`,
     `const timeoutMs = ${String(entry.hook.timeoutMs ?? 5_000)};`,
     "const endpointId = `${artifactEpoch}:${artifactTarget}:${dirname(dirname(resolve(process.argv[1])))}`;",
-    ...(standalone ? [operatorEnvStatement] : []),
     '',
     'const fail = (message) => { throw new Error(`Agent Bundle event route error: ${message}`); };',
     ...(standalone
@@ -856,11 +871,11 @@ const eventRouteHookWrapperSource = (
 
 /** Emits the published Cursor hook wrapper source; see encodeCursorPlaygroundInput for the envelope contract. */
 export const cursorHookWrapperSource = (entry: TargetHookWrapper): string => [
-  ...operatorEnvImports({ importsFileUrlToPath: false }),
+  // The installed pack's operator `.env` layer (#469): the first import, so
+  // it evaluates before the handler module — a module-level `process.env`
+  // read there sees the composed environment.
+  operatorEnvLayerImport,
   `import * as handlerModule from ${JSON.stringify(entry.hook.source)};`,
-  // The installed pack's operator `.env` layer (#469), applied before the
-  // handler runs; the handler module itself is a static import.
-  operatorEnvStatement,
   'const target = "cursor";',
   `const canonicalEvent = ${JSON.stringify(entry.event)};`,
   `const nativeEvent = ${JSON.stringify(entry.nativeEvent)};`,
@@ -1281,11 +1296,10 @@ export const nativeHookWrapperSource = (
       ]
     : [`const target = ${JSON.stringify(entry.target)};`];
   return [
-    ...operatorEnvImports({ importsFileUrlToPath: false }),
+    // The installed pack's operator `.env` layer (#469): the first import, so
+    // it evaluates before the handler module (see cursorHookWrapperSource).
+    operatorEnvLayerImport,
     `import * as handlerModule from ${JSON.stringify(entry.hook.source)};`,
-    // The installed pack's operator `.env` layer (#469), applied before the
-    // handler runs; the handler module itself is a static import.
-    operatorEnvStatement,
     ...targetSource,
     `const canonicalEvent = ${JSON.stringify(entry.event)};`,
     `const nativeEvent = ${JSON.stringify(nativeEvent)};`,

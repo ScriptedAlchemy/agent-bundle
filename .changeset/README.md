@@ -13,6 +13,7 @@ versions; `changeset publish` (when enabled) publishes the result.
 | ----------------------- | ------------------------------ | ---------------------------------------- |
 | `agent-bundle`          | `packages/agent-bundle`        | publishable                              |
 | `@agent-bundle/runtime` | `packages/rsc-runtime`         | publishable                              |
+| `rsc-markdown-stream`   | `packages/rsc-markdown-stream` | publishable                              |
 | `create-agent-bundle`   | `packages/create-agent-bundle` | publishable                              |
 | `agent-bundle-workbench`| `packages/workbench`           | private, ignored                         |
 | `@agent-bundle-example/*`, `@agent-bundle/rsc-agent-runtime-demo` | `examples/*` | private, ignored |

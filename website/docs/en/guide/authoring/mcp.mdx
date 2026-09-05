@@ -208,6 +208,59 @@ should return an honest unavailable-shaped value instead. The `agent-bundle/test
 its providers the same view, so a route-unit test that injects `context.lineage` or mounts state
 sees them reflected in `providers.<key>`; an explicit `context.providers` map is mounted verbatim.
 
+## Rich Markdown blocks as JSX
+
+`Agent.Markdown` carries one Markdown string, and hand-concatenating that string — one
+`- **${label}:** ${value}` per row — is where tables, nested lists, and escaping go wrong. The
+async `MarkdownContent` component from `@agent-bundle/runtime` renders its JSX children to one
+GitHub Flavored Markdown string and lowers it into `Agent.Markdown`, so a route authors the block
+as markup:
+
+```tsx
+import React from 'react';
+import { MarkdownContent } from '@agent-bundle/runtime';
+
+interface MeasuredFile {
+  readonly path: string;
+  readonly bytes: number;
+}
+
+export const MeasuredFiles = ({ files }: { readonly files: readonly MeasuredFile[] }) => (
+  <MarkdownContent>
+    <table>
+      <thead>
+        <tr><th>File</th><th align="right">Bytes</th></tr>
+      </thead>
+      <tbody>
+        {files.map((file) => (
+          <tr key={file.path}><td>{file.path}</td><td>{file.bytes}</td></tr>
+        ))}
+      </tbody>
+    </table>
+  </MarkdownContent>
+);
+```
+
+Headings `h1`–`h6`, paragraphs, `strong`/`em`/`del`, `code` and `pre`, links and images,
+blockquotes, `ul`/`ol` (nested, and `start` on `ol`), GFM task lists (`<input type="checkbox">`
+inside `li`), `table` with `align` on its cells, `dt`/`dd`, `br`, and `hr` serialize to their
+Markdown forms; unknown elements pass their children through. Sync and async components anywhere
+in the children — including ones that call `React.use` — resolve before the block is emitted.
+Text is escaped, so literal `*stars*`, `[x]`, `<tag>`, `&amp;`, and a line-leading `-`, `#`,
+`1.`, or `>` survive as text when the document is parsed again. The rendered block carries no
+trailing newline: Agent Document projections own the blank-line joining between sibling blocks,
+so `MarkdownContent` sits beside `Agent.Text` and other nodes exactly like a handwritten
+`Agent.Markdown`.
+
+`components` maps extra host tag names to serializers, `(props, { inline, blocks }) => string`,
+when a custom element needs its own Markdown — `inline()` and `blocks()` render the element's
+children as inline text or as blank-line-joined blocks. The renderer is exported too:
+`renderToMarkdown(children, options?)` resolves to the string and
+`renderToMarkdownStream(children, options?)` yields a `ReadableStream<Uint8Array>` of UTF-8
+blocks in document order. Its output is pinned against micromark with the GFM extension — the
+parser under the Workbench's `react-markdown`/`remark-gfm` — so what a route authors is the
+structure the consumer parses.
+
 ## Streaming and progress
 
 A route streams by rendering React `Suspense`: the shell goes out first with the fallback in
@@ -482,12 +535,15 @@ Source validation reports the informational `AB4730` nudge suggesting the factor
 never an error.
 
 The same lifecycle is public API for hand-rolled entries, and so is the operator `.env` layer the
-generated shell applies before it imports the server module (see
+generated shell imports ahead of the server module, so that even a `process.env` read at the
+module's top level sees the composed environment (see
 [Installation](../distribution/installation.mdx#operator-configuration-the-installed-packs-env)).
 Both imports are inlined into the emitted entry, which stays self-contained;
 `agent-bundle/launch-env` is aliased into every stdio entry, so it resolves whether or not the
 entry has a shell. A self-connecting entry that needs the layer applies it first thing, anchored
-the way the generated shell is (the artifact root is the parent of `mcp/`):
+the way the generated shell is (the artifact root is the parent of `mcp/`), and may pass its own
+declared `env` block as `manifestEnv` so that a manifest default the host passed through yields to
+the file the way it does in the generated shell:
 
 ```ts
 import { fileURLToPath } from 'node:url';
@@ -495,12 +551,14 @@ import { applyOperatorEnv, operatorEnvPluginRoot } from 'agent-bundle/launch-env
 import { redirectConsoleToStderr, runStdioServer } from 'agent-bundle/mcp-entry';
 
 applyOperatorEnv({
+  manifestEnv: { LIBRARY_URL: 'https://library.example' },
   pluginRoot: operatorEnvPluginRoot(fileURLToPath(new URL('..', import.meta.url))),
 });
 ```
 
 `operatorEnvPluginRoot` prefers an `AGENT_BUNDLE_PLUGIN_ROOT` the host set over the directory you
-pass, so the entry reads the same files as the pack's hook wrappers and CLI.
+pass, so the entry reads the same files as the pack's hook wrappers and CLI. Without `manifestEnv`
+every variable the host set is kept, manifest defaults included.
 
 ## Declaring servers in config
 
@@ -649,55 +707,126 @@ exposes only that server through the bridge; the App document runs on a second l
 the framework's sandbox. It is a local preview host, not a deployment target. Every option is in
 the [CLI reference](../../reference/cli.mdx#serve-app).
 
-The same host is available programmatically as `serveApp` in `agent-bundle/api`, so a plugin's
-own routed CLI can offer the command. It returns `{ url, close, closed }`: `close()` tears down the
-host and the server, `closed` settles when the server connection ends for any reason.
+The same host is available programmatically as `serveApp` in `agent-bundle/api`. It returns
+`{ url, close, closed }`: `close()` tears down the host and the server, `closed` settles when the
+server connection ends for any reason — always `close()` when you are done, because `closed`
+settling means the server connection ended, not that the host was torn down. `autoApprove` grants
+the listed consent capabilities on the operator's behalf as the App requests them (`call-tool`
+lets a polling dashboard refresh without a prompt); anything else waits for an Allow/Deny decision
+in the host page, as in the Workbench.
+
+`serveApp` is a **host-process API**. It belongs to processes the framework does not compile —
+the first-party CLI, the Workbench, tests, a plugin's own `package.json` scripts or a hand-written
+`.mjs` run from the checkout — and it needs `agent-bundle` resolvable where that process runs.
+Never call it from the MCP server shell.
+
+A routed CLI command inside the plugin artifact cannot import it today. Routed CLI bins are
+self-contained (`bin/<plugin>.mjs` in every host pack, `dist/bin/<plugin>.js` in the package
+build), so a route with `await import('agent-bundle/api')` makes the bundler inline the whole
+compiler into the bin, where it fails on the framework's runtime-relative module references
+(`Module not found: Can't resolve '../events'`); leaving the import external is
+`AB6005 … uses unsupported specifier "agent-bundle/api"`, and a non-literal `import(spec)` is
+`AB6005 … has a non-literal dynamic import`. A helper a routed command can use is tracked in
+[#558](https://github.com/ScriptedAlchemy/agent-bundle/issues/558).
+
+The pattern that builds is a plain routed command that spawns `agent-bundle serve-app` as a child
+process, as cargo-hauler's `hauler dashboard` does. It is a **checkout command**: it needs
+`agent-bundle` under `node_modules` and the built `artifact/` beside the CLI, neither of which an
+installed host pack has, so it says so instead of failing inside the child.
 
 ```ts
 // src/cli/dashboard.ts — `hauler dashboard`: open the App against the running daemon.
+import { spawn } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
 import { z } from 'zod';
 
 export const config = {
-  description: 'Open the cargo-hauler dashboard in a browser.',
+  description: 'Open the cargo-hauler dashboard in a browser (from the plugin checkout).',
+  exitCode: 'result',
 } satisfies CliRouteConfig;
 
-export const inputSchema = z.object({ open: z.boolean().default(true) }).strict();
+export const inputSchema = z.object({ noOpen: z.boolean().optional() }).strict();
 
-export const resultSchema = z.object({ url: z.string() }).strict();
+export const resultSchema = z.object({
+  exitCode: z.number().int(),
+  message: z.string(),
+  url: z.string().nullable(),
+}).strict();
+
+// The framework CLI, read from the `bin` of the nearest `node_modules/agent-bundle` at or
+// above the plugin root. Located by path, never imported: an `import()` of the package
+// would pull the framework into the bin.
+const frameworkCli = (root: string): string | undefined => {
+  for (let directory = root; ; directory = dirname(directory)) {
+    const manifestPath = join(directory, 'node_modules', 'agent-bundle', 'package.json');
+    if (existsSync(manifestPath)) {
+      const { bin } = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+        bin?: string | Record<string, string>;
+      };
+      const relative = typeof bin === 'string' ? bin : bin?.['agent-bundle'];
+      if (relative === undefined) return undefined;
+      return resolve(dirname(manifestPath), relative);
+    }
+    if (directory === dirname(directory)) return undefined;
+  }
+};
 
 export default async function dashboard({ input, signal }: CliRouteProps<typeof inputSchema>) {
-  const { serveApp } = await import('agent-bundle/api');
-  const served = await serveApp({
-    app: 'hauler/dashboard',
-    artifact: new URL('../../artifact', import.meta.url).pathname,
-    autoApprove: ['call-tool'],
-    open: input.open,
-    root: process.cwd(),
-    target: 'cursor',
-    tool: 'hauler_status',
-  });
-  signal.addEventListener('abort', () => { void served.close(); }, { once: true });
-  try {
-    // Settles on Ctrl-C (through the signal) or when the daemon exits on its own.
-    await served.closed;
-  } finally {
-    // `closed` tracks only the server connection; close() also releases the
-    // host, the sandbox proxy, and any throwaway artifact.
-    await served.close();
+  // `dist/bin/<plugin>.js` sits two levels under the checkout, which holds `artifact/`.
+  const root = fileURLToPath(new URL('../../', import.meta.url));
+  const cli = frameworkCli(root);
+  const artifact = join(root, 'artifact');
+  if (cli === undefined || !existsSync(join(artifact, 'agent-bundle.manifest.json'))) {
+    return {
+      exitCode: 1,
+      message: 'hauler dashboard runs from the plugin checkout (pnpm install, then '
+        + 'agent-bundle build); in an MCP host, call hauler_status instead.',
+      url: null,
+    };
   }
-  return { url: served.url };
+  return new Promise<z.infer<typeof resultSchema>>((done, fail) => {
+    const child = spawn(process.execPath, [
+      cli, 'serve-app', 'hauler/dashboard', '--root', root,
+      '--artifact', artifact, '--target', 'portable',
+      '--tool', 'hauler_status', '--allow', 'call-tool',
+      input.noOpen === true ? '--no-open' : '--open',
+    ], { stdio: ['ignore', 'pipe', 'inherit'] });
+    let url: string | null = null;
+    let pending = '';
+    child.stdout.on('data', (chunk: Buffer) => {
+      // The child prints `MCP App <app> at <url> (…)`; relay it to stderr so the routed
+      // CLI keeps stdout for its JSON result, and parse whole lines only — one write can
+      // arrive split across chunks.
+      const text = chunk.toString('utf8');
+      process.stderr.write(text);
+      pending += text;
+      const lines = pending.split('\n');
+      pending = lines.pop() ?? '';
+      for (const line of lines) {
+        url ??= /\bat (https?:\/\/\S+)/u.exec(line)?.[1] ?? null;
+      }
+    });
+    // Ctrl-C reaching the routed CLI becomes the child's SIGTERM.
+    signal.addEventListener('abort', () => child.kill('SIGTERM'), { once: true });
+    child.once('error', fail);
+    child.once('exit', (code) => done({
+      exitCode: code ?? 1,
+      message: code === 0
+        ? 'dashboard closed'
+        : `agent-bundle serve-app exited with ${String(code)}`,
+      url,
+    }));
+  });
 }
 ```
 
-`serveApp` runs in the plugin's dev-time or CLI process, never inside the MCP server shell: import
-it lazily from the route that needs it, as above, so the emitted artifact stays free of the host
-runtime, and expect `agent-bundle` to be resolvable where that CLI runs. Always `close()` when
-you are done — `closed` settling means the server connection ended, not that the host was torn
-down. `autoApprove` grants the
-listed consent capabilities on the operator's behalf as the App requests them (`call-tool` lets a
-polling dashboard refresh without a prompt); anything else waits for an Allow/Deny decision in the
-host page, as in the Workbench.
+Every `serve-app` option — `--port`, `--input`, `--profile`, `--env-file`, `--plugin-root` —
+passes through as argv, and the host packs stay self-contained because the framework is spawned,
+never bundled.
 
 ## Server modes
 

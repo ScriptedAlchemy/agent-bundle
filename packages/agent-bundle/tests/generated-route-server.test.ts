@@ -13,6 +13,7 @@ import {
   requestEventRuntime,
   requestEventRuntimeStatus,
 } from '../src/events/ipc.ts';
+import { eventuallyPasses } from './support/eventually.ts';
 
 const roots: string[] = [];
 
@@ -237,6 +238,40 @@ const writeGeneratedProject = async (
   ]);
 };
 
+interface GeneratedEntryConnection {
+  readonly client: Client;
+  readonly close: () => Promise<void>;
+  readonly pid: number | undefined;
+  /** Everything the server process wrote to stderr so far — stdout is the protocol wire. */
+  readonly stderr: () => string;
+}
+
+/** Spawns one built stdio entry and completes `initialize` against it. */
+const connectGeneratedEntry = async (
+  entry: string,
+  name = 'generated-route-test',
+): Promise<GeneratedEntryConnection> => {
+  const client = new Client({ name, version: '0.0.0' });
+  const transport = new StdioClientTransport({ args: [entry], command: process.execPath, stderr: 'pipe' });
+  let diagnostics = '';
+  transport.stderr?.on('data', (chunk) => { diagnostics += String(chunk); });
+  try {
+    await client.connect(transport);
+  } catch (error) {
+    throw new Error(`Generated route server failed to connect: ${diagnostics}`, { cause: error });
+  }
+  let closing: Promise<void> | undefined;
+  return {
+    client,
+    close: () => {
+      closing ??= client.close();
+      return closing;
+    },
+    pid: transport.pid ?? undefined,
+    stderr: () => diagnostics,
+  };
+};
+
 const connectGeneratedServer = async (
   root: string,
   target: 'cursor' | 'portable' = 'portable',
@@ -249,25 +284,13 @@ const connectGeneratedServer = async (
   const compiled = await build({ output, root, targets: [target] });
   const server = compiled.model.mcpServers[0];
   if (server?.args?.[0] === undefined) throw new Error('expected a generated MCP entry');
-  const client = new Client({ name: 'generated-route-test', version: '0.0.0' });
-  const transport = new StdioClientTransport({
-    args: [join(output, server.args[0])],
-    command: process.execPath,
-    stderr: 'pipe',
-  });
-  let diagnostics = '';
-  transport.stderr?.on('data', (chunk) => { diagnostics += String(chunk); });
-  try {
-    await client.connect(transport);
-  } catch (error) {
-    throw new Error(`Generated route server failed to connect: ${diagnostics}`, { cause: error });
-  }
+  // Every target reads the one plugin root (#555): the entry sits at the root.
+  const entry = join(output, server.args[0]);
+  const connection = await connectGeneratedEntry(entry);
   return {
-    client,
-    close: async () => {
-      await client.close();
-    },
-    endpointId: `${compiled.build.manifest.project.revision}:${target}:${dirname(dirname(resolve(join(output, server.args[0]))))}`,
+    client: connection.client,
+    close: connection.close,
+    endpointId: `${compiled.build.manifest.project.revision}:${target}:${dirname(dirname(resolve(entry)))}`,
   };
 };
 
@@ -876,6 +899,74 @@ it('fails closed when the generated runtime worker restarts', { retry: 2, timeou
   } finally {
     await session.close();
   }
+});
+
+it('keeps a second generated server from the same install alive while the first owns the event runtime socket, then hands the socket over', { retry: 2, timeout: 90_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-generated-standby-'));
+  roots.push(root);
+  await writeGeneratedProject(root, {
+    'src/mcp/curator/tools/ping.tsx': [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      "import { z } from 'zod';",
+      "export const config = { annotations: { readOnlyHint: true }, description: 'Answer from this process.' };",
+      'export const inputSchema = z.object({}).strict();',
+      'export const resultSchema = z.object({ pid: z.number() }).strict();',
+      'export default async function Ping() {',
+      "  return createElement(Agent.Result, { value: { pid: process.pid } }, createElement(Agent.Text, null, 'pong'));",
+      '}',
+      '',
+    ].join('\n'),
+    'src/events/session/start.tsx': [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      "export const config = { targets: ['cursor'] };",
+      "export default async function SessionStart() { return createElement(Agent.Text, null, 'ready'); }",
+      '',
+    ].join('\n'),
+  }, 'cursor');
+  const output = join(root, 'artifact');
+  const compiled = await build({ output, root, targets: ['cursor'] });
+  const server = compiled.model.mcpServers[0];
+  if (server?.args?.[0] === undefined) throw new Error('expected a generated MCP entry');
+  const entry = join(output, 'cursor', server.args[0]);
+  const endpointId = `${compiled.build.manifest.project.revision}:cursor:${dirname(dirname(resolve(entry)))}`;
+  const endpoint = eventRuntimeEndpoint(endpointId);
+  const status = (): Promise<unknown> => requestEventRuntimeStatus({ endpointId, timeoutMs: 1_000 });
+
+  // Two host sessions launch the same plugin from the same install root: the
+  // second finds the event runtime socket owned and must still come up.
+  const first = await connectGeneratedEntry(entry, 'generated-standby-first');
+  let second: GeneratedEntryConnection | undefined;
+  try {
+    second = await connectGeneratedEntry(entry, 'generated-standby-second');
+    const [firstTools, secondTools] = await Promise.all([first.client.listTools(), second.client.listTools()]);
+    expect(firstTools.tools.map((tool) => tool.name)).toEqual(['ping']);
+    expect(secondTools.tools.map((tool) => tool.name)).toEqual(['ping']);
+    await expect(second.client.callTool({ arguments: {}, name: 'ping' }, { signal: AbortSignal.timeout(10_000) }))
+      .resolves.toMatchObject({ structuredContent: { pid: second.pid } });
+    await eventuallyPasses(() => {
+      expect(second!.stderr()).toContain(`agent-bundle event runtime: ${endpoint} is owned by another process; standing by`);
+    }, { attempts: 100, delayMs: 50 });
+    expect(first.stderr()).not.toContain('standing by');
+    await expect(status()).resolves.toMatchObject({ pid: first.pid, status: 'available' });
+
+    // The owner exits; the standby takes the socket over without restarting.
+    await first.close();
+    await eventuallyPasses(async () => {
+      await expect(status()).resolves.toMatchObject({ pid: second!.pid, status: 'available' });
+    }, { attempts: 100, delayMs: 100 });
+    expect(second.stderr()).toContain(`agent-bundle event runtime: ${endpoint} was released by its owner; took it over`);
+    await expect(second.client.callTool({ arguments: {}, name: 'ping' }, { signal: AbortSignal.timeout(10_000) }))
+      .resolves.toMatchObject({ structuredContent: { pid: second.pid } });
+  } finally {
+    await first.close();
+    await second?.close();
+  }
+  // The last owner out removes the socket it bound.
+  await eventuallyPasses(async () => {
+    await expect(stat(endpoint)).rejects.toMatchObject({ code: 'ENOENT' });
+  }, { attempts: 100, delayMs: 50 });
 });
 
 it('renders one tool/after event route through two native thin clients', { retry: 2, timeout: 90_000 }, async () => {

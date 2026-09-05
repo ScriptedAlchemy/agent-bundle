@@ -5,8 +5,12 @@ description: 'Install a built agent-bundle into Claude Code, Codex, or Cursor: t
 # Host installation
 
 The built root contains one generated `INSTALL.md`, a section per selected host, with commands
-that use the bundle's real plugin and marketplace names. The framework CLI performs those same
-operations, and every host is installed from the same root:
+that use the bundle's real plugin and marketplace names. Every command in it is a host command
+(`claude plugin …`, `codex plugin …`) or the bundled `install.mjs`, so a consumer who receives the
+built root — from npm, a marketplace checkout, or a zip — never needs the `agent-bundle` CLI to
+install, reinstall, or uninstall it; `INSTALL.md` says so and marks the CLI optional wherever it is
+mentioned. The framework CLI performs those same operations for developers who have it, and every
+host is installed from the same root:
 
 ```sh
 npx agent-bundle install claude --from artifact --scope user
@@ -125,9 +129,22 @@ the artifact CLI `bin/<name>.mjs` — under one rule:
 
 | Precedence | Layer | Contents |
 | --- | --- | --- |
-| 3 (highest) | Host environment | What the host exported and what its manifest `env` declared (including `AGENT_BUNDLE_PLUGIN_ROOT`). An exported variable always wins. |
-| 2 | `.env.local` | Fills gaps only; beats `.env` for the same key. |
-| 1 (lowest) | `.env` | Fills gaps only. |
+| 4 (highest) | Host environment | What the host exported. An exported variable always wins. |
+| 3 | `.env.local` | Fills gaps only; beats `.env` for the same key. |
+| 2 | `.env` | Fills gaps only. |
+| 1 (lowest) | Manifest `env` | What the server's manifest `env` block declared, as the host merged it into the process environment. |
+
+The same order `agent-bundle mcp run` composes — manifest `env` under the files under the
+operator's exports. A host hands a stdio server its manifest `env` and its own exports as one
+environment, so the generated entry carries the server's declared `env` block as build-time
+literals and treats a variable that still holds its manifest default as unset: the file may
+override it. A variable whose value differs from the default was exported by the host or the
+operator and is kept. Two consequences follow. An operator export that happens to equal the
+manifest default is indistinguishable from the pass-through and yields to the file too. A manifest
+value carrying a path token (`AGENT_BUNDLE_PLUGIN_ROOT`, or a declared `env` value that uses one)
+is expanded by the host before launch, so it never equals its literal default and is always kept.
+Hook wrappers and the artifact CLI have no manifest `env`, so for them the host environment is
+simply what the host exported.
 
 The location is the plugin root the pack resolved — `AGENT_BUNDLE_PLUGIN_ROOT` when the host set
 it, otherwise the directory above the shell's own (`mcp/`, `hooks/`, `bin/`). `AGENT_BUNDLE_ENV_FILE`
@@ -138,11 +155,11 @@ double-, or backtick-quoted values (double quotes expand `\n`), multi-line quote
 skipped so the pack still starts. Values are never logged. The file is not owned by the install
 receipt, so `install --replace` and a same-version rebuild leave it in place, and `uninstall` never
 removes unowned entries: the file survives an uninstall too (Doctor then reports the directory as a
-remnant, `AB7307`), so delete it by hand when the credentials should go. Route and provider code sees the composed
-environment when it runs; a hook handler or CLI route module that reads `process.env` at import
-time still sees the host environment only, because those modules are static imports of their
-wrapper — MCP server modules load after the layer and see it everywhere. `agent-bundle mcp run`
-composes the same three layers itself and hands `--env-file` / `--no-env` down as
+remnant, `AB7307`), so delete it by hand when the credentials should go. The layer is the first
+import of every shell that applies it, ahead of the server module, the hook handler, and the CLI
+route, provider, and state modules, so plugin code sees the composed environment even in a
+`process.env` read at module top level, not only when it runs. `agent-bundle mcp run`
+composes the same layers itself and hands `--env-file` / `--no-env` down as
 `AGENT_BUNDLE_ENV_FILE`, so a rehearsal and an installed pack read the same files.
 
 `agent-bundle doctor` reports whether an installed copy carries `.env` or `.env.local` and how many

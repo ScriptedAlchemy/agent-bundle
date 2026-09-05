@@ -721,6 +721,186 @@ it('inlines agent-bundle/launch-env into a self-connecting entry so it can apply
   }
 }, 30_000);
 
+it('lets the operator .env beat a manifest env default the host passed through, never a host export, before the server module evaluates (#469)', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-manifest-env-'));
+  try {
+    await mkdir(join(root, 'src'), { recursive: true });
+    await mkdir(join(root, 'node_modules'), { recursive: true });
+    await symlink(
+      join(agentBundleNodeModules, '@modelcontextprotocol'),
+      join(root, 'node_modules', '@modelcontextprotocol'),
+      'dir',
+    );
+    await writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n');
+    await writeFile(join(root, 'package.json'), '{"type":"module"}\n');
+    // A factory entry that reports the composed environment twice: once at
+    // module top level (what a static import evaluates first) and once when
+    // the factory runs, then exits before the lifecycle opens the transport.
+    const names = ['MANIFEST_ONLY', 'MANIFEST_KEPT', 'HOST_EXPORTED', 'HOST_ONLY', 'ABSENT_EVERYWHERE'] as const;
+    await writeFile(join(root, 'src', 'server.ts'), [
+      "import { McpServer } from '@modelcontextprotocol/server';",
+      `const names = ${JSON.stringify(names)};`,
+      "const snapshot = () => Object.fromEntries(names.map((name) => [name, process.env[name] ?? null]));",
+      'const atImport = snapshot();',
+      'export default () => {',
+      "  process.stderr.write(`${JSON.stringify({ atImport, atRun: snapshot() })}\\n`);",
+      '  process.exit(0);',
+      "  return new McpServer({ name: 'manifest-env', version: '1.0.0' });",
+      '};',
+      '',
+    ].join('\n'));
+    const model = await normalizeProject(
+      loadedProject(root, {
+        mcp: {
+          servers: {
+            probe: {
+              entry: './src/server.ts',
+              env: { HOST_EXPORTED: 'manifest-default', MANIFEST_KEPT: 'manifest-default', MANIFEST_ONLY: 'manifest-default' },
+            },
+          },
+        },
+        plugin: { name: 'mcp-manifest-env', version: '1.0.0' },
+        targets: ['claude'],
+      }),
+      { skills: [] },
+      registry,
+    );
+    const outputRoot = join(root, 'artifact');
+    const result = await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+    const [entry] = result.compiledMcpEntries;
+    const pluginRoot = join(outputRoot, 'claude');
+
+    // The host reads the manifest, expands its plugin-root token, and merges
+    // the `env` block into the child environment beneath its own exports —
+    // so the child sees a manifest default and a host export the same way.
+    const manifest = JSON.parse(await readFile(join(pluginRoot, '.mcp.json'), 'utf8')) as {
+      readonly mcpServers: Readonly<Record<string, { readonly env: Readonly<Record<string, string>> }>>;
+    };
+    const manifestEnv = Object.fromEntries(Object.entries(manifest.mcpServers['probe']!.env)
+      .map(([key, value]) => [key, value.replaceAll('${CLAUDE_PLUGIN_ROOT}', pluginRoot)]));
+    expect(manifestEnv).toEqual({
+      AGENT_BUNDLE_PLUGIN_ROOT: pluginRoot,
+      HOST_EXPORTED: 'manifest-default',
+      MANIFEST_KEPT: 'manifest-default',
+      MANIFEST_ONLY: 'manifest-default',
+    });
+    const hostExports = { HOST_EXPORTED: 'from-host', HOST_ONLY: 'from-host' };
+    const launch = async (overrides: Readonly<Record<string, string>> = {}): Promise<unknown> => {
+      const run = await runNodeScript({ args: [entry!.output], env: { ...manifestEnv, ...hostExports, ...overrides } });
+      expect(run).toMatchObject({ code: 0, stdout: '' });
+      const report = JSON.parse(run.stderr) as { readonly atImport: unknown; readonly atRun: unknown };
+      // The layer lands before the server module's own top level.
+      expect(report.atImport).toEqual(report.atRun);
+      return report.atRun;
+    };
+    // No file: the host environment as delivered.
+    const delivered = {
+      ABSENT_EVERYWHERE: null,
+      HOST_EXPORTED: 'from-host',
+      HOST_ONLY: 'from-host',
+      MANIFEST_KEPT: 'manifest-default',
+      MANIFEST_ONLY: 'manifest-default',
+    };
+    expect(await launch()).toEqual(delivered);
+
+    await writeFile(join(pluginRoot, '.env'), [
+      'MANIFEST_ONLY=from-file',
+      'HOST_EXPORTED=from-file',
+      'HOST_ONLY=from-file',
+      'ABSENT_EVERYWHERE=from-file',
+      '',
+    ].join('\n'));
+    // manifest < .env < host: a passed-through manifest default yields to the
+    // file, a host export never does, a gap is filled, an untouched manifest
+    // default stays.
+    expect(await launch()).toEqual({
+      ABSENT_EVERYWHERE: 'from-file',
+      HOST_EXPORTED: 'from-host',
+      HOST_ONLY: 'from-host',
+      MANIFEST_KEPT: 'manifest-default',
+      MANIFEST_ONLY: 'from-file',
+    });
+    // `AGENT_BUNDLE_ENV_FILE=none` disables the layer: the manifest default stands.
+    expect(await launch({ AGENT_BUNDLE_ENV_FILE: 'none' })).toEqual(delivered);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 60_000);
+
+it('redirects stdout written at module scope by the server module to stderr before the protocol stream opens, and discards a module-scope wrapper over stdout', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-module-scope-stdout-'));
+  try {
+    await mkdir(join(root, 'src'), { recursive: true });
+    await mkdir(join(root, 'node_modules'), { recursive: true });
+    await symlink(
+      join(agentBundleNodeModules, '@modelcontextprotocol'),
+      join(root, 'node_modules', '@modelcontextprotocol'),
+      'dir',
+    );
+    await writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n');
+    await writeFile(join(root, 'package.json'), '{"type":"module"}\n');
+    // A factory entry whose module top level writes to stdout both ways a
+    // consumer module can: the console and the raw stream. The server module
+    // is a static import of the shell, so it evaluates before the shell body;
+    // only a guard installed by an earlier import keeps these off the wire.
+    // It then wraps `process.stdout.write` the way a logging library might:
+    // the wrapper sits over the redirect, and the guard must discard it when
+    // the protocol stream opens rather than adopt it as the original.
+    await writeFile(join(root, 'src', 'server.ts'), [
+      "import { McpServer } from '@modelcontextprotocol/server';",
+      "console.log('hello');",
+      "process.stdout.write('raw\\n');",
+      'const previous = process.stdout.write;',
+      'process.stdout.write = ((chunk, ...rest) => previous.call(process.stdout, `wrapped:${chunk}`, ...rest)) as typeof process.stdout.write;',
+      "process.stdout.write('after wrap\\n');",
+      'export default () => {',
+      "  console.log('factory');",
+      "  const server = new McpServer({ name: 'module-scope-stdout', version: '1.0.0' });",
+      "  server.registerTool('ping', { description: 'Reply.' }, async () => {",
+      "    console.log('tool');",
+      "    return { content: [{ type: 'text' as const, text: 'pong' }] };",
+      '  });',
+      '  return server;',
+      '};',
+      '',
+    ].join('\n'));
+    const model = await normalizeProject(
+      loadedProject(root, {
+        mcp: { servers: { chatty: { entry: './src/server.ts' } } },
+        plugin: { name: 'mcp-module-scope-stdout', version: '1.0.0' },
+        targets: ['portable'],
+      }),
+      { skills: [] },
+      registry,
+    );
+    const result = await build({ model, outputRoot: join(root, 'artifact'), projectRoot: root, registry: createDefaultRegistry() });
+    const [entry] = result.compiledMcpEntries;
+
+    const stderrChunks: string[] = [];
+    const transport = new StdioClientTransport({ args: [entry!.output], command: process.execPath, stderr: 'pipe' });
+    transport.stderr?.on('data', (chunk: Buffer | string) => stderrChunks.push(String(chunk)));
+    const client = new Client({ name: 'module-scope-stdout-consumer', version: '1.0.0' });
+    await client.connect(transport);
+    try {
+      // initialize completed above; tools/list and a call prove the protocol
+      // stream stayed clean end to end.
+      expect((await client.listTools()).tools).toMatchObject([{ name: 'ping' }]);
+      expect(await client.callTool({ arguments: {}, name: 'ping' })).toMatchObject({ content: [{ text: 'pong', type: 'text' }] });
+    } finally {
+      await client.close();
+    }
+    const stderr = stderrChunks.join('');
+    expect(stderr).toContain('hello\nraw\nwrapped:after wrap\n');
+    expect(stderr).toContain('a module replaced process.stdout.write while console output was redirected to stderr');
+    expect(stderr).toContain('factory\n');
+    expect(stderr).toContain('tool\n');
+    // The frames themselves never went through the wrapper.
+    expect(stderr).not.toContain('wrapped:{');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 60_000);
+
 it('builds one deterministic self-contained MCP App view and injects it through the virtual module', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-app-build-'));
   try {
