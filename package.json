@@ -70,8 +70,6 @@
     "@rslib/core": "0.23.2",
     "@rslint/core": "0.8.2",
     "@rstest/adapter-rslib": "0.11.10",
-    "@rstest/browser": "0.11.10",
-    "@rstest/browser-react": "0.11.10",
     "@rstest/core": "0.11.10",
     "@rstest/playwright": "0.11.10",
     "@types/node": "26.4.0",

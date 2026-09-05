@@ -1,4 +1,13 @@
 /**
+ * What the workspace pools collect before the lists below subtract from it:
+ * `rstest.unit.config.ts` runs this minus every list; `rstest.config.ts` (the
+ * whole-workspace run) minus the lists that need their own process shape. A
+ * test file this glob does not match (another extension, another directory)
+ * runs only if a list names it — rstest-pool-lists.test.ts enforces that.
+ */
+export const workspaceTestFileGlob = 'packages/**/tests/**/*.test.ts';
+
+/**
  * Test files that run real builds (Rslib/Rsbuild), spawn child processes, or
  * drive a browser. They run through rstest.integration.config.ts: per-test
  * fixtures via `mkdtemp`, servers on ephemeral ports, and only READS of the
