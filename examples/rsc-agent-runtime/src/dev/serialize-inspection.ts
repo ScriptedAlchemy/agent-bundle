@@ -1,12 +1,12 @@
 import { isValidElement, type ReactNode } from 'react';
 
 import type { JsonObject, JsonValue } from 'agent-bundle';
-import { maximumDevRuntimeFlightPreviewBytes } from 'agent-bundle/api';
 import type {
   DevRuntimeInspectionEnvelope,
   DevRuntimeTraceSpan,
   DevRuntimeTreeNode,
 } from 'agent-bundle/api';
+import { maximumDevRuntimeFlightPreviewBytes } from 'agent-bundle/runtime-contracts';
 
 const inspectionStartedAt = '1970-01-01T00:00:00.000Z';
 

@@ -89,6 +89,10 @@
       "types": "./dist/rstest/index.d.ts",
       "import": "./dist/rstest.js"
     },
+    "./runtime-contracts": {
+      "types": "./dist/contracts/runtime.d.ts",
+      "import": "./dist/runtime-contracts.js"
+    },
     "./test": {
       "types": "./dist/test/index.d.ts",
       "import": "./dist/test.js"

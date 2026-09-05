@@ -68,6 +68,7 @@ const publicEntries = {
   'mcp-apps': './src/mcp-apps.ts',
   'route-invocation-child': './src/dev/routes/route-invocation-child.ts',
   rstest: './src/rstest/index.ts',
+  'runtime-contracts': './src/contracts/runtime.ts',
   test: './src/test/index.ts',
   'test/browser': './src/test/browser.ts',
 };
