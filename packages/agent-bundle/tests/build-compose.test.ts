@@ -453,7 +453,7 @@ describe('composite plugin root (#555)', () => {
     await writeProject(mixed, { targets: ['claude', 'portable'] });
     const refused = await validate({ registry, root: mixed });
     expect(refused.diagnostics.filter((entry) => entry.code === 'AB4106').map((entry) => entry.target)).toEqual(['portable']);
-    const validated = await validate({ artifact: custom.output, hostValidation: true, registry });
+    const validated = await validate({ artifact: custom.output, hostValidation: true, registry, root: dirname(custom.output) });
     expect(validated.diagnostics.filter((entry) => entry.severity === 'error')).toEqual([]);
     expect(validated.hostValidation).toBeUndefined();
 
