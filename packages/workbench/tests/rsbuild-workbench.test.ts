@@ -21,6 +21,16 @@ it('pins production mode for builds so ambient NODE_ENV cannot select mode none'
   expect(resolveConfig('dev')).toMatchObject({ mode: 'development' });
 });
 
+it('targets the desktop Chromium floor in production and development', () => {
+  for (const command of ['build', 'dev'] as const) {
+    expect(resolveConfig(command)).toMatchObject({
+      output: {
+        overrideBrowserslist: ['chrome >= 120'],
+      },
+    });
+  }
+});
+
 it('hashes production JS, CSS, and assets so the foreground can cache them immutably', () => {
   expect(resolveConfig('build')).toMatchObject({
     mode: 'production',

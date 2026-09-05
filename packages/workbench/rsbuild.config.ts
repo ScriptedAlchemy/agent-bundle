@@ -22,6 +22,9 @@ export const createWorkbenchConfig = (
   },
   output: {
     assetPrefix: '/',
+    // Desktop floor: Electron 28 embeds Chromium 120.
+    // https://releases.electronjs.org/release/v28.0.0
+    overrideBrowserslist: ['chrome >= 120'],
     copy: [
       { from: resolve(import.meta.dirname, 'THIRD_PARTY_NOTICES'), to: 'THIRD_PARTY_NOTICES', toType: 'file' },
       { from: resolve(sourceRoot, 'mcp', 'APP-RENDERER-LICENSE'), to: 'src/mcp/APP-RENDERER-LICENSE', toType: 'file' },
