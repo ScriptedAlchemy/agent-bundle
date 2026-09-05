@@ -206,10 +206,18 @@ it('uses only an installed tarball after source deletion', async () => {
         agentBundleImport,
       );
     }
+    // Beside Claude and Codex the portable pack is the namespaced `portable/`
+    // view of the one plugin root (#555): its `mcp.json` names a
+    // `portable/mcp/<name>.mjs` shim that re-exports the compiled entry the
+    // root hosts share at `mcp/<name>.mjs`.
     const localServer = JSON.parse(await readFile(join(artifact, 'portable', 'mcp.json'), 'utf8')) as {
       readonly mcpServers: { readonly local: { readonly args: readonly [string, ...string[]] } };
     };
-    const localServerBundle = join(artifact, 'portable', localServer.mcpServers.local.args[0]);
+    const localServerPath = localServer.mcpServers.local.args[0];
+    expect(localServerPath).toMatch(/^mcp\/[^/]+\.mjs$/u);
+    const localServerBundle = join(artifact, 'portable', localServerPath);
+    await expect(readFile(localServerBundle, 'utf8')).resolves.toBe(`import '../../${localServerPath}';\n`);
+    await expect(readFile(join(artifact, localServerPath), 'utf8')).resolves.toContain('ordinary local import');
 
     await Promise.all([
       rm(join(projectRoot, 'agent-bundle.config.ts')),
@@ -253,23 +261,27 @@ it('uses only an installed tarball after source deletion', async () => {
       .sort();
     expect(validationDocument.diagnostics.map((diagnostic) => diagnostic.code).sort()).toEqual(hostDiagnosticCodes);
 
-    const bundlePath = join(artifact, 'portable', 'scripts', 'bundle.mjs');
+    // Scripts are emitted once at the top of the plugin root every selected
+    // host shares (#555); the portable view carries no copy of its own.
+    const scriptsRoot = join(artifact, 'scripts');
+    await expect(access(join(artifact, 'portable', 'scripts'))).rejects.toMatchObject({ code: 'ENOENT' });
+    const bundlePath = join(scriptsRoot, 'bundle.mjs');
     await expect(execFile(process.execPath, [
       '--input-type=module',
       '--eval',
       "const module = await import(process.argv[1]); console.log(module.bundleMessage);",
       pathToFileURL(bundlePath).href,
     ], { cwd: projectRoot, env: installedEnvironment() })).resolves.toMatchObject({ stdout: 'bundled fixture\n' });
-    await expect(execFile(join(artifact, 'portable', 'scripts', 'shell.sh'), [], {
+    await expect(execFile(join(scriptsRoot, 'shell.sh'), [], {
       cwd: projectRoot,
       env: installedEnvironment(),
     })).resolves.toMatchObject({ stdout: 'shell fixture\n' });
-    await expect(execFile('python3', [join(artifact, 'portable', 'scripts', 'python.py')], {
+    await expect(execFile('python3', [join(scriptsRoot, 'python.py')], {
       cwd: projectRoot,
       env: installedEnvironment(),
     })).resolves.toMatchObject({ stdout: 'python fixture\n' });
-    expect((await stat(join(artifact, 'portable', 'scripts', 'shell.sh'))).mode & 0o777).toBe(sourceShellMode);
-    expect((await stat(join(artifact, 'portable', 'scripts', 'python.py'))).mode & 0o777).toBe(sourcePythonMode);
+    expect((await stat(join(scriptsRoot, 'shell.sh'))).mode & 0o777).toBe(sourceShellMode);
+    expect((await stat(join(scriptsRoot, 'python.py'))).mode & 0o777).toBe(sourcePythonMode);
 
     const { stdout: hooks } = await runInstalled(cli, projectRoot, [
       'hooks', 'list', '--json', '--root', projectRoot, '--artifact', artifact, '--target', 'codex',
@@ -379,10 +391,16 @@ it('uses only an installed tarball after source deletion', async () => {
     expect(packedLib.packedAnswer.value).toBe(42);
     await expect(readFile(join(frameworkRoot, 'dist', 'index.d.ts'), 'utf8')).resolves.toContain('PackedAnswer');
 
+    // The portable view's `mcp.json` names its `portable/mcp/<name>.mjs` shim;
+    // the compiled entry the shim re-exports is the root's `mcp/<name>.mjs`
+    // (#555), and that is where the packaged lifecycle shell lives.
     const greeterManifest = JSON.parse(await readFile(join(frameworkArtifact, 'portable', 'mcp.json'), 'utf8')) as {
       readonly mcpServers: { readonly greeter: { readonly args: readonly [string, ...string[]] } };
     };
-    const greeterEntry = join(frameworkArtifact, 'portable', greeterManifest.mcpServers.greeter.args[0]);
+    const greeterPath = greeterManifest.mcpServers.greeter.args[0];
+    expect(greeterPath).toMatch(/^mcp\/[^/]+\.mjs$/u);
+    await expect(readFile(join(frameworkArtifact, 'portable', greeterPath), 'utf8')).resolves.toBe(`import '../../${greeterPath}';\n`);
+    const greeterEntry = join(frameworkArtifact, greeterPath);
     const greeterBundle = await readFile(greeterEntry, 'utf8');
     expect(greeterBundle).not.toMatch(agentBundleImport);
     expect(greeterBundle).toContain('stdio heartbeat');

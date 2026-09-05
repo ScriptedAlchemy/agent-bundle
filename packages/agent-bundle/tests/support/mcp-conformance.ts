@@ -364,7 +364,8 @@ export const runMcpConformance = async (): Promise<McpConformanceReport> => {
     bridge = await startGeneratedMcpBridge({
       cwd: project,
       entry: entry.output,
-      pluginRoot: join(artifact, 'claude'),
+      // A Claude-only build is the plugin root itself (#555).
+      pluginRoot: artifact,
     });
     const result = await runBoundedChildProcess({
       args: [

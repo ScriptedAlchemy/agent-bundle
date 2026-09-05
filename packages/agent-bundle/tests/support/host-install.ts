@@ -75,6 +75,15 @@ const codexManifestPath = codexArtifactPaths.plugin;
 const cursorManifestPath = cursorArtifactPaths.plugin;
 /** The hosts the host-install fixture projects into its one composite root (#555). */
 const fixtureHosts: readonly InstallHost[] = Object.freeze(['claude', 'codex', 'cursor']);
+/**
+ * Root-relative host manifests the built host-install root must carry: one
+ * per projected host, all at the top of the same root (#555).
+ */
+export const hostInstallFixtureManifests: readonly string[] = Object.freeze([
+  claudeManifestPath,
+  codexManifestPath,
+  cursorManifestPath,
+]);
 /** The MCP document one host reads at the fixture root: Codex's relocates under `.codex-plugin/` beside Claude. */
 const hostMcpDocument = (host: InstallHost): string =>
   compositeMcpRuntime(fixtureHosts, host)?.manifestPath
@@ -648,7 +657,7 @@ export const buildHostInstallFixture = async (options: {
     ...(options.buildCommand === undefined ? {} : { buildCommand: options.buildCommand }),
     environment: options.environment,
     fixture: 'host-install',
-    hostManifests: [claudeManifestPath, codexManifestPath, cursorManifestPath],
+    hostManifests: hostInstallFixtureManifests,
     ...(options.prepareProject === undefined ? {} : { prepareProject: options.prepareProject }),
   });
   return Object.freeze({

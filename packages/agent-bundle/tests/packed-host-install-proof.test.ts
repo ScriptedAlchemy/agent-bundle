@@ -10,6 +10,7 @@ import {
   buildHostInstallFixture,
   disposeHostInstallFixture,
   expectedCodexInterfaceFields,
+  hostInstallFixtureManifests,
   runClaudeHostInstallProof,
   runCodexHostInstallProof,
   runCursorHostInstallProof,
@@ -102,12 +103,11 @@ beforeAll(async () => {
   const installedPackageRoot = join(consumer, 'node_modules', packageName);
   const installedArtifactRoot = join(installedPackageRoot, 'artifact');
   const installedBin = join(consumer, 'node_modules', '.bin', pluginName);
+  // The shipped artifact is one composite plugin root (#555): every host's
+  // manifest sits at its top, and there is no per-host directory to find.
   await Promise.all([
     access(installedBin),
-    access(join(installedArtifactRoot, 'claude')),
-    access(join(installedArtifactRoot, 'codex')),
-    access(join(installedArtifactRoot, 'cursor')),
-    access(join(installedArtifactRoot, 'plugin')),
+    ...hostInstallFixtureManifests.map((path) => access(join(installedArtifactRoot, path))),
   ]);
 
   await rm(projectRoot, { force: true, recursive: true });
@@ -117,11 +117,11 @@ beforeAll(async () => {
 
   packedFixture = Object.freeze({
     artifactRoot: installedArtifactRoot,
+    // Each host reads the installed root itself as its plugin root (#555).
     bundles: Object.freeze({
-      claude: join(installedArtifactRoot, 'claude'),
-      codex: join(installedArtifactRoot, 'codex'),
-      cursor: join(installedArtifactRoot, 'cursor'),
-      plugin: join(installedArtifactRoot, 'plugin'),
+      claude: installedArtifactRoot,
+      codex: installedArtifactRoot,
+      cursor: installedArtifactRoot,
     }),
     cli: sourceFixture.cli,
     root: cleanupRoot,

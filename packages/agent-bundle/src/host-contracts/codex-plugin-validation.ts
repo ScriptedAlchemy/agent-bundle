@@ -8,6 +8,7 @@ import type { Diagnostic, DiagnosticSeverity } from '../core/diagnostics.ts';
 import { freezeDiagnostics } from '../core/diagnostics.ts';
 import { sha256Hex } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
+import { safeArtifactPath } from '../core/paths.ts';
 import capabilityTable from '../adapters/capabilities/codex-0.147.0.json' with { type: 'json' };
 import hooksSchema from '../adapters/schemas/codex/hooks.schema.json' with { type: 'json' };
 import marketplaceSchema from '../adapters/schemas/codex/marketplace.schema.json' with { type: 'json' };
@@ -80,28 +81,47 @@ interface PinnedDocumentContract {
 }
 
 const schemaValidator = createAdapterValidator();
-const pinnedDocumentContracts = Object.freeze<PinnedDocumentContract[]>([
-  Object.freeze({
-    path: '.codex-plugin/plugin.json',
-    required: true,
-    validate: validateJsonSchemaDocument(schemaValidator.compile(pluginSchema)),
-  }),
-  Object.freeze({
-    path: 'hooks/hooks.json',
-    required: false,
-    validate: validateJsonSchemaDocument(schemaValidator.compile(hooksSchema)),
-  }),
-  Object.freeze({
-    path: '.mcp.json',
-    required: false,
-    validate: validateJsonSchemaDocument(schemaValidator.compile(mcpSchema)),
-  }),
-  Object.freeze({
-    path: '.agents/plugins/marketplace.json',
-    required: false,
-    validate: validateJsonSchemaDocument(schemaValidator.compile(marketplaceSchema)),
-  }),
-]);
+const codexPluginManifestPath = '.codex-plugin/plugin.json';
+const validatePluginDocument = validateJsonSchemaDocument(schemaValidator.compile(pluginSchema));
+const validateHooksDocument = validateJsonSchemaDocument(schemaValidator.compile(hooksSchema));
+const validateMcpDocument = validateJsonSchemaDocument(schemaValidator.compile(mcpSchema));
+const validateMarketplaceDocument = validateJsonSchemaDocument(schemaValidator.compile(marketplaceSchema));
+
+/**
+ * A `.codex-plugin/plugin.json` pointer (`hooks`, `mcpServers`) as the
+ * plugin-relative path it names, or the conventional path when the manifest
+ * does not name one — or names something outside the plugin.
+ */
+const pointedDocumentPath = (value: unknown, conventional: string): string => {
+  if (typeof value !== 'string') return conventional;
+  const relative = value.startsWith('./') ? value.slice(2) : value;
+  return safeArtifactPath(relative) ? relative : conventional;
+};
+
+/**
+ * The documents Codex reads from a plugin: the manifest, the marketplace, and
+ * the hooks and MCP documents the manifest points at. Codex follows those
+ * pointers, so a root that also projects Claude Code (#555) — where Codex's
+ * documents live under `.codex-plugin/` beside Claude's conventional ones —
+ * is checked against Codex's own files, not Claude's.
+ */
+const pinnedDocumentContracts = async (pluginDirectory: string): Promise<readonly PinnedDocumentContract[]> => {
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(await readFile(join(pluginDirectory, codexPluginManifestPath), 'utf8'));
+  } catch {
+    manifest = undefined;
+  }
+  const pointers = typeof manifest === 'object' && manifest !== null && !Array.isArray(manifest)
+    ? (manifest as Readonly<Record<string, unknown>>)
+    : {};
+  return Object.freeze([
+    Object.freeze({ path: codexPluginManifestPath, required: true, validate: validatePluginDocument }),
+    Object.freeze({ path: pointedDocumentPath(pointers['hooks'], 'hooks/hooks.json'), required: false, validate: validateHooksDocument }),
+    Object.freeze({ path: pointedDocumentPath(pointers['mcpServers'], '.mcp.json'), required: false, validate: validateMcpDocument }),
+    Object.freeze({ path: '.agents/plugins/marketplace.json', required: false, validate: validateMarketplaceDocument }),
+  ]);
+};
 
 const runCodexCommand: CodexPluginCommandRunner = (request) => runBoundedChildProcess(request, {
   labels: { outputLimit: 'output-limit', timedOut: 'timed-out' },
@@ -143,7 +163,7 @@ const validatePinnedDocuments = async (
   target: string,
 ): Promise<readonly Diagnostic[]> => {
   const diagnostics: Diagnostic[] = [];
-  for (const contract of pinnedDocumentContracts) {
+  for (const contract of await pinnedDocumentContracts(pluginDirectory)) {
     const path = join(pluginDirectory, contract.path);
     let source: string;
     try {

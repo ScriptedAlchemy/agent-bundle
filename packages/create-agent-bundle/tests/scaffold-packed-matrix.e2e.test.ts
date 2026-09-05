@@ -52,13 +52,17 @@ it.concurrent('scaffolds the mcp-server template and serves the conventional ent
   expect(projection).toContain('projects the rendered document into the protocol result the server returns');
   expect(projection).toContain('"failedTests": 0');
 
+  // Beside Claude Code and Codex the portable pack is the `portable/` view of
+  // the one plugin root (#555): its mcp.json names a shim onto the compiled
+  // entry every host shares at the root's `mcp/<name>.mjs`.
   const artifact = join(projectRoot, 'artifact');
   const manifest = JSON.parse(await readFile(join(artifact, 'portable', 'mcp.json'), 'utf8')) as {
     readonly mcpServers: { readonly status: { readonly args: readonly [string, ...string[]] } };
   };
-  const entry = join(artifact, 'portable', manifest.mcpServers.status.args[0]);
+  const entryPath = manifest.mcpServers.status.args[0];
+  await expect(readFile(join(artifact, 'portable', entryPath), 'utf8')).resolves.toBe(`import '../../${entryPath}';\n`);
   // The factory export was wrapped in the framework stdio lifecycle shell.
-  await expect(readFile(entry, 'utf8')).resolves.toContain('stdio heartbeat');
+  await expect(readFile(join(artifact, entryPath), 'utf8')).resolves.toContain('stdio heartbeat');
 
   const cli = join(projectRoot, 'node_modules', '.bin', 'agent-bundle');
   const { stdout: listed } = await execFile(cli, [
@@ -120,9 +124,10 @@ it.concurrent('scaffolds the cli-tool template with a routed bin, lib, and artif
   expect(library.greet('World').message).toBe('Hello, World!');
   await expect(readFile(join(projectRoot, 'dist', 'index.d.ts'), 'utf8')).resolves.toContain('Greeting');
 
-  // The conventional plain script shipped inside the host artifact with the
-  // framework process envelope around its `main` export.
-  const script = join(projectRoot, 'artifact', 'portable', 'scripts', 'hello.mjs');
+  // The conventional plain script shipped once at the top of the plugin root
+  // every host shares (#555), with the framework process envelope around its
+  // `main` export.
+  const script = join(projectRoot, 'artifact', 'scripts', 'hello.mjs');
   await expect(execFile(process.execPath, [script, 'World'], { cwd: projectRoot, env: environment }))
     .resolves.toMatchObject({ stdout: 'Hello, World!\n' });
   await expect(execFile(process.execPath, [script], { cwd: projectRoot, env: environment }))

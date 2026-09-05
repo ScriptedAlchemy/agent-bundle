@@ -87,14 +87,16 @@ it('serves compiled routes and durable state across packed process restarts', as
     ], { cwd: project, env: installedEnvironment() });
 
     // The fixture selects `claude`, the only target whose capabilities cover
-    // its event route; Claude Code reads `.mcp.json` at the plugin root.
+    // its event route. The built artifact is the plugin root itself (#555):
+    // Claude Code reads `.mcp.json` at its top, beside `bin/`, `scripts/`,
+    // and the compiled `mcp/` entries.
     const cli = join(project, 'node_modules', '.bin', 'agent-bundle');
     await execFile(cli, ['build', '--root', project, '--output', artifact], {
       cwd: project,
       env: installedEnvironment(),
     });
 
-    const pluginRoot = join(artifact, 'claude');
+    const pluginRoot = artifact;
     const manifest = JSON.parse(await readFile(join(pluginRoot, '.mcp.json'), 'utf8')) as McpJson;
     const serverConfig = manifest.mcpServers['harness']!;
     // Claude Code expands ${CLAUDE_PLUGIN_ROOT} to the installed plugin root

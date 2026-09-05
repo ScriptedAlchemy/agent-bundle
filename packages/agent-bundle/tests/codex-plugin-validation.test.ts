@@ -292,6 +292,45 @@ it('reports app-server-only schema output as unassessable information even in st
   }
 });
 
+it('checks the hooks and MCP documents the Codex manifest points at, not the conventional paths beside them (#555)', async () => {
+  // A root shared with Claude Code: Claude's `.mcp.json` carries an `http`
+  // server Codex's schema rejects, while Codex's own documents live under
+  // `.codex-plugin/` where `.codex-plugin/plugin.json` points.
+  const pluginDirectory = await writeBundle({
+    '.codex-plugin/plugin.json': {
+      ...validDocuments['.codex-plugin/plugin.json'],
+      hooks: './.codex-plugin/hooks.json',
+      mcpServers: './.codex-plugin/mcp.json',
+    },
+    '.codex-plugin/hooks.json': validDocuments['hooks/hooks.json'],
+    '.codex-plugin/mcp.json': validDocuments['.mcp.json'],
+    '.mcp.json': { mcpServers: { remote: { type: 'http', url: 'https://example.test/mcp' } } },
+    'hooks/hooks.json': { hooks: { Stop: [{ hooks: [{ command: '', type: 'command' }] }] } },
+  });
+  try {
+    const report = await validateCodexPlugin({ pluginDirectory, run: runWith('match').run, target: 'codex' });
+    expect(report.diagnostics.filter((entry) => entry.code === 'AB6032')).toEqual([]);
+    expect(report.status).toBe('passed');
+  } finally {
+    await rm(pluginDirectory, { force: true, recursive: true });
+  }
+
+  // A pointer that escapes the plugin is ignored in favour of the
+  // conventional document (the manifest itself is rejected separately).
+  const escaping = await writeBundle({
+    '.codex-plugin/plugin.json': { ...validDocuments['.codex-plugin/plugin.json'], mcpServers: './../outside.json' },
+    '.mcp.json': { mcpServers: { fixture: { type: 'streamable-http', url: 'not a uri' } } },
+  });
+  try {
+    const report = await validateCodexPlugin({ pluginDirectory: escaping, run: runWith('match').run, target: 'codex' });
+    expect(report.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'AB6032', generatedPath: '.mcp.json', severity: 'error' }),
+    ]));
+  } finally {
+    await rm(escaping, { force: true, recursive: true });
+  }
+});
+
 it('rejects malformed fixtures for every locally validated Codex schema', async () => {
   const malformed = [
     ['.codex-plugin/plugin.json', { ...validDocuments['.codex-plugin/plugin.json'], name: 'Invalid Name' }],

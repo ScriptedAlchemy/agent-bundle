@@ -327,7 +327,8 @@ export const runPackedClaudePluginProof = async (options: {
     ], { cwd: project, environment });
     if (built.exitCode !== 0) throw new Error('packed-claude-proof:build');
 
-    const pluginDirectory = join(artifact, 'claude');
+    // The built artifact is the one plugin root Claude Code loads (#555).
+    const pluginDirectory = artifact;
     const version = await run('claude', ['--version'], { cwd: project, environment });
     const versionNumber = /(?:^|\s)(\d+\.\d+\.\d+)(?:\s|$)/u.exec(version.stdout)?.[1];
     if (version.exitCode !== 0 || versionNumber === undefined) {

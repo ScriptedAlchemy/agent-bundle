@@ -451,11 +451,11 @@ test('production and development runtime graphs exclude state test controls', as
   };
 
   assertExcluded(await readRuntimeSources(join(process.cwd(), 'dist/runtime')));
-  for (const host of ['claude', 'codex']) {
-    const packagedRuntime = join(process.cwd(), 'dist/plugins', host, 'runtime');
-    assertExcluded(await readRuntimeSources(packagedRuntime));
-    await expect(import(pathToFileURL(join(packagedRuntime, 'state-file-test-support.js')).href)).rejects.toThrow();
-  }
+  // One plugin root serves Claude Code and Codex (#555): the runtime payload
+  // is packaged once at `dist/plugins/runtime`, not per host.
+  const packagedRuntime = join(process.cwd(), 'dist/plugins/runtime');
+  assertExcluded(await readRuntimeSources(packagedRuntime));
+  await expect(import(pathToFileURL(join(packagedRuntime, 'state-file-test-support.js')).href)).rejects.toThrow();
 
   const compilerRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-state-graph-'));
   const rsbuild = await createRsbuild({
