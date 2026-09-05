@@ -100,6 +100,89 @@ it('serves prebuilt workbench assets from an installed tarball without the repos
   }
 }, 60_000);
 
+it('packages both react-server render children and renders a route invocation from an installed tarball', async () => {
+  await buildPackage();
+  await expect(access(join(packageRoot, 'dist', 'lifecycle-render-child.js'))).resolves.toBeUndefined();
+  await expect(access(join(packageRoot, 'dist', 'route-invocation-child.js'))).resolves.toBeUndefined();
+
+  const [agentBundle, runtime, markdownStream] = await Promise.all([
+    sharedPackedTarball('agent-bundle'),
+    sharedPackedTarball('runtime'),
+    sharedPackedTarball('markdown-stream'),
+  ]);
+  const listing = await execFile('tar', ['-tf', agentBundle.tarball]);
+  expect(listing.stdout).toContain('package/dist/lifecycle-render-child.js');
+  expect(listing.stdout).toContain('package/dist/route-invocation-child.js');
+
+  const consumer = await mkdtemp(join(tmpdir(), 'agent-bundle-route-invocation-consumer-'));
+  const project = join(consumer, 'project');
+  try {
+    await writeFile(join(consumer, 'package.json'), '{"type":"module"}\n');
+    await execFile('npm', ['install', ...cachedNpmInstallArguments,
+      agentBundle.tarball,
+      runtime.tarball,
+      markdownStream.tarball,
+      'react@19.2.8',
+      'react-dom@19.2.8',
+      'zod@4.4.3',
+    ], { cwd: consumer, env: installedEnvironment() });
+    await mkdir(join(project, 'src', 'mcp', 'status', 'tools'), { recursive: true });
+    await Promise.all([
+      writeFile(join(project, 'package.json'), '{"type":"module"}\n'),
+      writeFile(join(project, 'agent-bundle.config.ts'), "export default { plugin: { name: 'packed-route-invocation', version: '1.0.0' }, targets: ['claude'] };\n"),
+      writeFile(join(project, 'src', 'mcp', 'status', 'tools', 'report.tsx'), [
+        "import { Agent } from '@agent-bundle/runtime';",
+        "import { createElement } from 'react';",
+        "import { z } from 'zod';",
+        '',
+        "export const config = { annotations: { readOnlyHint: true }, description: 'Reports one service.' };",
+        'export const inputSchema = z.object({ service: z.string().min(1) }).strict();',
+        'export const resultSchema = z.object({ service: z.string() }).strict();',
+        '',
+        'export default async function Report({ input }) {',
+        '  return createElement(Agent.Result, { value: { service: input.service } }, createElement(Agent.Text, null, `Service ${input.service}`));',
+        '}',
+        '',
+      ].join('\n')),
+    ]);
+
+    const script = [
+      "import { startDevServer } from 'agent-bundle';",
+      `const session = await startDevServer({ open: false, port: 0, root: ${JSON.stringify(project)} });`,
+      'try {',
+      "  const bootstrap = await fetch(`${session.url}/api/project/session`, { headers: { 'sec-fetch-site': 'same-origin' } });",
+      '  const { token } = await bootstrap.json();',
+      "  const headers = { 'content-type': 'application/json', origin: session.url, 'x-agent-bundle-session': token };",
+      '  const deadline = Date.now() + 60_000;',
+      '  while ((await fetch(`${session.url}/api/routes/manifest`, { headers })).status !== 200) {',
+      "    if (Date.now() > deadline) throw new Error('The route manifest never became available.');",
+      '    await new Promise((resolve) => setTimeout(resolve, 250));',
+      '  }',
+      '  const response = await fetch(`${session.url}/api/routes/invocations`, {',
+      "    body: JSON.stringify({ input: { service: 'catalog' }, routeId: 'tool:status/report' }),",
+      '    headers,',
+      "    method: 'POST',",
+      '  });',
+      '  console.log(JSON.stringify({ body: await response.json(), status: response.status }));',
+      '} finally { await session.close(); }',
+    ].join('\n');
+    const invoked = await execFile(process.execPath, ['--input-type=module', '--eval', script], { cwd: consumer, env: installedEnvironment() });
+    expect(JSON.parse(invoked.stdout)).toMatchObject({
+      body: {
+        invocation: {
+          diagnostics: [],
+          projection: { mcp: { structuredContent: { service: 'catalog' } } },
+          result: { service: 'catalog' },
+          status: 'succeeded',
+        },
+      },
+      status: 200,
+    });
+  } finally {
+    await rm(consumer, { force: true, recursive: true });
+  }
+}, 180_000);
+
 it('runs the Agent API from an omit-dev installed tarball with its runtime MCP dependencies', async () => {
   const { tarball } = await sharedPackedTarball('agent-bundle');
   const consumer = await mkdtemp(join(tmpdir(), 'agent-bundle-agent-api-consumer-'));

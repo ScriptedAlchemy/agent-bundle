@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { fork } from 'node:child_process';
+import { fork, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
@@ -10,6 +10,7 @@ import type { AgentDocument } from '@agent-bundle/runtime';
 import { createDefaultRegistry, type TargetRegistry } from '../../adapters/registry.ts';
 import type { TargetHookContract } from '../../adapters/hook-contract.ts';
 import { projectCliDocumentToMarkdown } from '../../cli-entry.ts';
+import { sleep } from '../../core/async.ts';
 import type { Diagnostic } from '../../core/diagnostics.ts';
 import { deepFreeze } from '../../core/freeze.ts';
 import {
@@ -27,6 +28,7 @@ import type {
 } from '../../contracts/request-provenance.ts';
 import { createCanonicalEventProps, projectEventDocument } from '../../events/projection.ts';
 import type { CanonicalAgentEvent } from '../../routes/public.ts';
+import { taskkill, terminateProcessTree, waitForProcessTreeExit } from '../../services/process-tree.ts';
 import type { AgentBundleTestManifest, TestableScriptDescriptor } from '../../test/manifest.ts';
 import type { ScriptPlaygroundResult, ScriptPlaygroundRunRequest } from '../playground/script-playground-service.ts';
 import type { RouteInvocation } from './route-invocation-result.ts';
@@ -50,6 +52,8 @@ export const ROUTE_INVOCATION_UNKNOWN_FIXTURE_CODE = 'AB8238';
 const defaultHistoryLimit = 200;
 const defaultTimeoutMs = 60_000;
 const defaultConcurrency = 2;
+const childTerminationGraceMs = 250;
+const childTerminationPollMs = 10;
 const concreteHosts = new Set<RouteInvocationEventHost>(['claude', 'codex', 'cursor']);
 const invocationKinds = new Set<RouteInvocationKind>(['cli', 'event-route', 'prompt', 'resource', 'script', 'tool']);
 
@@ -359,26 +363,67 @@ const isChildResponse = (value: unknown): value is RouteInvocationChildResponse 
     && typeof value.error.name === 'string' && typeof value.error.message === 'string';
 };
 
-const renderInChild = (
+const alreadyExited = (child: ChildProcess): boolean =>
+  child.pid === undefined || typeof child.exitCode === 'number' || typeof child.signalCode === 'string';
+
+const waitForExit = (child: ChildProcess): Promise<void> => new Promise((resolvePromise) => {
+  if (alreadyExited(child)) {
+    resolvePromise();
+    return;
+  }
+  child.once('exit', () => resolvePromise());
+});
+
+const terminateTree = (child: ChildProcess, signal: NodeJS.Signals): Promise<boolean> =>
+  terminateProcessTree(child, signal, {
+    onTreeTerminationFailure: () => undefined,
+    platform: process.platform,
+    taskkill,
+  });
+
+const treeExited = (child: ChildProcess): Promise<boolean> => waitForProcessTreeExit(child, {
+  platform: process.platform,
+  pollMilliseconds: childTerminationPollMs,
+  timeoutMilliseconds: childTerminationGraceMs,
+});
+
+/**
+ * The child is detached into its own process group so that route or provider
+ * code that leaves an interval, a socket, or a forked descendant behind is
+ * reaped with it. SIGTERM first; SIGKILL to whatever the grace period leaves.
+ */
+const terminateChild = async (child: ChildProcess): Promise<void> => {
+  await terminateTree(child, 'SIGTERM');
+  const graceful = await Promise.race([
+    waitForExit(child).then(() => true),
+    sleep(childTerminationGraceMs).then(() => false),
+  ]);
+  if (graceful && await treeExited(child)) return;
+  await terminateTree(child, 'SIGKILL');
+  await waitForExit(child);
+  await treeExited(child);
+};
+
+const renderInChild = async (
   request: RouteInvocationChildRequest,
   signal: AbortSignal,
 ): Promise<RouteInvocationChildResult> => {
-  if (signal.aborted) return Promise.reject(signal.reason);
+  if (signal.aborted) throw signal.reason;
   const executable = childPath();
   const jitiRegister = join(dirname(createRequire(import.meta.url).resolve('jiti/package.json')), 'lib', 'jiti-register.mjs');
   const child = fork(executable, [], {
     cwd: request.manifest.projectRoot,
+    detached: process.platform !== 'win32',
     execArgv: ['--conditions=react-server', ...(executable.endsWith('.ts') ? ['--import', jitiRegister] : [])],
     serialization: 'json',
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
   child.stdout?.on('data', (chunk: Uint8Array) => process.stderr.write(chunk));
   child.stderr?.on('data', (chunk: Uint8Array) => process.stderr.write(chunk));
-  return new Promise((resolvePromise, rejectPromise) => {
+  const response = new Promise<RouteInvocationChildResult>((resolvePromise, rejectPromise) => {
     let settled = false;
     const cleanup = (): void => {
       signal.removeEventListener('abort', abort);
-      child.removeListener('error', fail);
       child.removeListener('exit', exited);
       child.removeListener('message', receive);
     };
@@ -388,10 +433,7 @@ const renderInChild = (
       cleanup();
       action();
     };
-    const abort = (): void => {
-      child.kill('SIGKILL');
-      settle(() => rejectPromise(signal.reason));
-    };
+    const abort = (): void => settle(() => rejectPromise(signal.reason));
     const fail = (error: Error): void => settle(() => rejectPromise(error));
     const exited = (code: number | null, exitSignal: NodeJS.Signals | null): void =>
       settle(() => rejectPromise(new Error(
@@ -407,13 +449,20 @@ const renderInChild = (
       settle(() => resolvePromise(message.result));
     };
     signal.addEventListener('abort', abort, { once: true });
-    child.once('error', fail);
+    // Kept for the child's whole life: a `kill()` that fails after the reply
+    // still emits `error`, and an unobserved one would crash the dev server.
+    child.on('error', fail);
     child.once('exit', exited);
     child.once('message', receive);
     child.send(request, (error) => {
       if (error !== null) fail(error);
     });
   });
+  try {
+    return await response;
+  } finally {
+    await terminateChild(child);
+  }
 };
 
 const eventContract = (

@@ -175,6 +175,7 @@ export default defineConfig({
       // route module may import at run time without pulling the compiler
       // into its generated bundle.
       routes: './src/routes/public.ts',
+      'route-invocation-child': './src/dev/routes/route-invocation-child.ts',
       rstest: './src/rstest/index.ts',
       'terminal-capability': './src/terminal-capability.ts',
       test: './src/test/index.ts',
