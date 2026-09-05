@@ -21,6 +21,7 @@ import {
   matchesManifestFile,
 } from './artifact-layout.ts';
 import {
+  accountedRequestsOf,
   compileEvidenceDiagnostics,
   compileEvidenceFileName,
   parseCompileEvidenceRecord,
@@ -33,7 +34,6 @@ import {
   type ManifestFile,
 } from './emit.ts';
 import { parseArtifactManifest, type ArtifactManifest, type ArtifactManifestHook } from './manifest.ts';
-import type { ModuleSyntaxCheck } from './module-imports.ts';
 import type {
   ValidateArtifactOptions,
   ValidatedArtifactMcpServerEvidence,
@@ -52,7 +52,6 @@ export { artifactDiagnosticRecoveries, type ArtifactDiagnosticCode } from './art
 export type * from './artifact-validation-types.ts';
 
 const epochStagingMarkerName = '.agent-bundle-epoch-stage.json';
-const artifactRootMetadata = new Set([compileEvidenceFileName]);
 
 const matchesManifestFileTable = (
   files: readonly ArtifactFile[],
@@ -534,8 +533,7 @@ const validateArtifactOwnership = (options: {
   const manifestKinds = new Map(options.manifest.files.map((file) => [file.path, file.kind]));
 
   for (const file of options.files) {
-    if (admitsEverything) continue;
-    if (artifactRootMetadata.has(file.path)) continue;
+    if (file.path === compileEvidenceFileName || admitsEverything) continue;
     if (known.some((target) => isProjectionArtifactPath(file.path, target, options.registry))) continue;
     // Prebuilt payload files live in config-named directories under the
     // root, so no emitted layout describes them.
@@ -592,32 +590,43 @@ const validateArtifactStructure = (options: {
   return Object.freeze(diagnostics);
 };
 
+/**
+ * Reads the compile evidence record the manifest lists and re-checks it
+ * against the file table (`AB6039`). A clean record from a build without a
+ * `tools` hatch proves every manifest `bundle` file: the module walk lexes
+ * them and holds their imports to the recorded externals. A missing,
+ * failing, or rewritable record proves nothing and every module is walked
+ * in full.
+ */
 const validateCompileEvidence = async (options: {
   readonly artifactRoot: string;
-  readonly manifest: ArtifactManifest;
-}): Promise<readonly Diagnostic[]> => {
-  if (!options.manifest.files.some((file) => file.path === compileEvidenceFileName)) return Object.freeze([]);
+  readonly manifestFiles: readonly ManifestFile[];
+}): Promise<{ readonly diagnostics: readonly Diagnostic[]; readonly provenModules: ReadonlyMap<string, ReadonlySet<string>> }> => {
+  const unproven = (diagnostics: readonly Diagnostic[]) =>
+    Object.freeze({ diagnostics: Object.freeze(diagnostics), provenModules: new Map<string, ReadonlySet<string>>() });
+  if (!options.manifestFiles.some((file) => file.path === compileEvidenceFileName)) return unproven([]);
   const bytes = await runWithPlatform(readFileString(resolve(options.artifactRoot, compileEvidenceFileName)))
     .catch(() => undefined);
   if (bytes === undefined) {
-    return Object.freeze([diagnostic('AB6039', 'Compile evidence record cannot be read.', compileEvidenceFileName)]);
+    return unproven([diagnostic('AB6039', 'Compile evidence record cannot be read.', compileEvidenceFileName)]);
   }
   let record: ReturnType<typeof parseCompileEvidenceRecord>;
   try {
     record = parseCompileEvidenceRecord(bytes);
   } catch (error) {
     if (!(error instanceof TypeError)) throw error;
-    return Object.freeze([diagnostic('AB6039', error.message, compileEvidenceFileName)]);
+    return unproven([diagnostic('AB6039', error.message, compileEvidenceFileName)]);
   }
-  return compileEvidenceDiagnostics(
+  const diagnostics = compileEvidenceDiagnostics(
     record,
-    new Map(options.manifest.files.map((file) => [file.path, { kind: file.kind, sha256: file.sha256 }])),
+    new Map(options.manifestFiles.map((file) => [file.path, { kind: file.kind, sha256: file.sha256 }])),
   );
+  if (diagnostics.length > 0 || record.coverage.rewritable) return unproven(diagnostics);
+  return Object.freeze({ diagnostics, provenModules: accountedRequestsOf(record) });
 };
 
 const validateGeneratedFiles = async (options: {
   readonly artifactRoot: string;
-  readonly bundleSyntaxCheck?: ModuleSyntaxCheck;
   readonly files: readonly ArtifactFile[];
   readonly manifestFiles?: readonly ManifestFile[];
   readonly prebuiltPaths?: ReadonlySet<string>;
@@ -645,17 +654,16 @@ const validateGeneratedFiles = async (options: {
     }
   }
 
+  const evidence = options.manifestFiles === undefined
+    ? { diagnostics: [], provenModules: new Map<string, ReadonlySet<string>>() }
+    : await validateCompileEvidence({ artifactRoot: options.artifactRoot, manifestFiles: options.manifestFiles });
+  diagnostics.push(...evidence.diagnostics);
   diagnostics.push(...await validateJavaScriptModules({
     artifactRoot: options.artifactRoot,
-    ...(options.bundleSyntaxCheck === undefined ? {} : { bundleSyntaxCheck: options.bundleSyntaxCheck }),
     files: options.files,
-    ...(options.manifestFiles === undefined
-      ? {}
-      : {
-        bundledPaths: new Set(options.manifestFiles.filter((file) => file.kind === 'bundle').map((file) => file.path)),
-        manifestFiles: new Set(options.manifestFiles.map((file) => file.path)),
-      }),
+    ...(options.manifestFiles === undefined ? {} : { manifestFiles: new Set(options.manifestFiles.map((file) => file.path)) }),
     prebuiltPaths,
+    provenModules: evidence.provenModules,
     validJson,
   }));
 
@@ -665,8 +673,8 @@ const validateGeneratedFiles = async (options: {
 /**
  * The pre-manifest content pass `build` runs over a staged tree before it
  * writes the manifest. The planned manifest file table, when given, tells
- * the JavaScript validator which modules the compiler emitted; without it
- * every module is parsed in full.
+ * the JavaScript validator which modules the compile evidence record proves;
+ * without it every module is parsed in full.
  */
 export const validateArtifactFiles = async (
   context: ValidateArtifactOptions & { readonly manifestFiles?: readonly ManifestFile[] },
@@ -676,7 +684,6 @@ export const validateArtifactFiles = async (
     ...filesystemDiagnostics(inspection.filesystem),
     ...await validateGeneratedFiles({
       artifactRoot: context.artifactRoot,
-      ...(context.bundleSyntaxCheck === undefined ? {} : { bundleSyntaxCheck: context.bundleSyntaxCheck }),
       files: inspection.files,
       ...(context.manifestFiles === undefined ? {} : { manifestFiles: context.manifestFiles }),
       ...(context.prebuiltPaths === undefined ? {} : { prebuiltPaths: context.prebuiltPaths }),
@@ -775,7 +782,6 @@ export const validateArtifactWithSnapshot = async (
   // Read-only validators over the same immutable inspection run concurrently;
   // collecting in this fixed order keeps the diagnostics sequence deterministic.
   const [
-    compileEvidenceRecordDiagnostics,
     targetContractDiagnostics,
     portableTargetDiagnostics,
     mcpCoherenceDiagnostics,
@@ -783,7 +789,6 @@ export const validateArtifactWithSnapshot = async (
     emittedSkillDiagnostics,
     generatedFileDiagnostics,
   ] = await Promise.all([
-    validateCompileEvidence({ artifactRoot, manifest }),
     validateTargetContracts({
       artifactRoot,
       files: inspection.files,
@@ -817,13 +822,11 @@ export const validateArtifactWithSnapshot = async (
     }),
     validateGeneratedFiles({
       artifactRoot,
-      ...(context.bundleSyntaxCheck === undefined ? {} : { bundleSyntaxCheck: context.bundleSyntaxCheck }),
       files: inspection.files,
       manifestFiles: manifest.files,
     }),
   ]);
   diagnostics.push(
-    ...compileEvidenceRecordDiagnostics,
     ...targetContractDiagnostics,
     ...portableTargetDiagnostics,
     ...mcpCoherenceDiagnostics,

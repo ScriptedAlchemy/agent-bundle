@@ -17,6 +17,7 @@ import type {
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { assertInside, toPosixRelative } from '../core/paths.ts';
 import {
+  accountedRequestsOf,
   createCompileEvidenceRecord,
   packageCompileEvidenceFileName,
   serializeCompileEvidenceRecord,
@@ -35,7 +36,6 @@ import {
 import { readArtifactManifest } from './manifest-file.ts';
 import { artifactManifestName, type ArtifactManifest, type ArtifactManifestFileKind } from './manifest.ts';
 import { projectMeta } from './meta.ts';
-import { bundleSyntaxCheckFor } from './module-imports.ts';
 import { isDeclarationGenerationFailure, type RslibEntry } from './rslib.ts';
 import { runtimeIgnoredRoot } from './runtime-path.ts';
 import { validateJavaScriptModules } from './validate-artifact-modules.ts';
@@ -510,11 +510,11 @@ export const buildPackageOutputs = async (options: {
     // prepack gate reads those as dependency evidence. Declarations are not
     // modules and are not walked; they may still reference declared
     // dependencies.
+    const rewritable = options.tools?.rspack !== undefined || options.tools?.rsbuild !== undefined;
     const selfContainment = await validateJavaScriptModules({
       artifactRoot: stageRoot,
-      bundledPaths: new Set(files.filter((file) => file.kind === 'bundle').map((file) => file.path)),
-      bundleSyntaxCheck: bundleSyntaxCheckFor(options.tools),
       files: staged.filter((file) => !artifactByPath.has(file.path)),
+      provenModules: rewritable ? new Map() : accountedRequestsOf(evidence),
       reportedRoot: toPosixRelative(projectRoot, outputRoot),
       validJson: new Set(),
     });

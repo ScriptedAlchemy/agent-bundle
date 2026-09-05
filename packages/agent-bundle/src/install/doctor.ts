@@ -13,7 +13,7 @@ import {
 import { mapConcurrent } from '../core/async.ts';
 import { errorMessage, isErrno } from '../core/errors.ts';
 import { readArtifactManifest } from '../build/manifest-file.ts';
-import { exists } from '../core/paths.ts';
+import { exists, isPreservedRuntimeRoot } from '../core/paths.ts';
 import { isRecord } from '../core/strict-json.ts';
 import {
   validateClaudePlugin,
@@ -49,7 +49,6 @@ import {
   installReceiptFile,
   installReceiptFormat,
   installReceiptStoreDirectory,
-  isPreservedRuntimeRoot,
   isRemnantReceipt,
   isRuntimeStateRemnant,
   listStoredInstallReceipts,

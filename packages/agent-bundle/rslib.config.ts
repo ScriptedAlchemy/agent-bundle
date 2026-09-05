@@ -90,7 +90,6 @@ const runtimeEntries = {
   'cli-entry': './src/cli-entry.ts',
   'event-ipc': './src/events/ipc.ts',
   'event-project': './src/events/project.ts',
-  'install-entry': './src/install-entry.ts',
   'launch-env': './src/launch-env.ts',
   'mcp-entry': './src/mcp-entry.ts',
   'mcp-server-runtime': process.env['AGENT_BUNDLE_RUNTIME_REBUNDLE_FIXTURE'] === '1'
