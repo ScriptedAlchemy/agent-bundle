@@ -31,7 +31,6 @@ const SKIPPED_SCHEMES = /^(?:mailto:|javascript:|tel:|data:|https?:\/\/|\/\/)/i;
 const ANCHOR_ELEMENT = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
 const API_MEMBER_LINK = new RegExp(`^${BASE.replace(/[/]/g, '\\/')}(?:zh\\/)?api\\/[^#?]+#(.+)$`);
 const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
-/** Visible text of an HTML fragment, as a reader compares it: tags (incl. `<wbr/>`) and entities gone, `()` dropped. */
 const visibleText = html => unescapeHtml(html.replace(/<[^>]*>/g, '')).replace(/\(\)$/, '').trim();
 
 const usage = `Usage: node scripts/check-built-links.mjs [--dir <doc_build>]

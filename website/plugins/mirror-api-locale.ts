@@ -36,7 +36,6 @@ async function collectMarkdownFiles(directory: string, prefix = ''): Promise<str
   return collected;
 }
 
-/** Heading text as Rspress's TOC plugin sees it: escapes resolved, code spans unwrapped. */
 function headingText(raw: string): string {
   return raw
     .replace(/`([^`]*)`/g, '$1')
@@ -45,9 +44,7 @@ function headingText(raw: string): string {
 }
 
 interface PageAnchors {
-  /** Every id Rspress will assign on the page, in document order. */
   readonly ids: Set<string>;
-  /** Ids of `### Member` headings only — the targets TypeDoc mislinks. */
   readonly memberIds: Set<string>;
 }
 
