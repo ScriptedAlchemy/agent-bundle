@@ -11,6 +11,8 @@ import type {
 import {
   executeProviders,
   providerProcessLifetimeValue,
+  requiredProviderKeyProblemMessage,
+  selectRequiredProviders,
   type ExecutableProvider,
   type ProviderProcessLifetime,
   type ProviderProcessLifetimeValue,
@@ -63,6 +65,41 @@ export interface MountProvidersOptions {
   readonly processHit: ProviderProcessLifetimeValue;
   readonly provenance?: RenderedRouteProvenance;
 }
+
+/**
+ * Chooses the manifest providers one route request may load. Event routes
+ * honor `config.providers`; every other surface preserves the all-provider
+ * compatibility contract.
+ */
+export const selectManifestProviderDescriptors = (
+  manifest: AgentBundleTestManifest,
+  routeId: string | undefined,
+): readonly TestableProviderDescriptor[] => {
+  const descriptors = manifest.providers ?? [];
+  const route = routeId === undefined ? undefined : manifest.routes[routeId];
+  const declaration = route?.kind === 'event-route' ? route.config['providers'] : undefined;
+  if (declaration !== undefined && !(
+    Array.isArray(declaration)
+    && declaration.every((key): key is string => typeof key === 'string')
+  )) {
+    throw new AgentTestError(
+      'contract-violation',
+      `Event route ${JSON.stringify(routeId)} has malformed config.providers in the compiled test manifest.`,
+    );
+  }
+  const selection = selectRequiredProviders(
+    descriptors,
+    declaration,
+  );
+  if (!selection.ok) {
+    throw new AgentTestError(
+      'contract-violation',
+      `Event route ${JSON.stringify(routeId)} has invalid config.providers in the compiled test manifest.`,
+      { details: selection.problems.map(requiredProviderKeyProblemMessage) },
+    );
+  }
+  return selection.providers;
+};
 
 const loadProvider = async (
   manifest: AgentBundleTestManifest,
@@ -138,7 +175,7 @@ export const mountProviders = (options: MountProvidersOptions): AgentProviderVal
   }
   return async (request) => {
     const providers: ExecutableProvider[] = [];
-    for (const descriptor of manifest.providers ?? []) {
+    for (const descriptor of selectManifestProviderDescriptors(manifest, options.provenance?.routeId)) {
       providers.push(await loadProvider(manifest, descriptor, options.provenance));
     }
     return executeProviders({

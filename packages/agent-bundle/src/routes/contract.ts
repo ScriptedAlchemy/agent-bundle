@@ -25,7 +25,7 @@ const unwrappedExpression = (expression: ts.Expression): ts.Expression => {
 };
 
 const diagnostic = (
-  code: 'AB4810' | 'AB4811' | 'AB4830' | 'AB4940',
+  code: 'AB4810' | 'AB4811' | 'AB4830' | 'AB4840' | 'AB4940',
   message: string,
   sourcePath: string,
   recovery: string,
@@ -80,6 +80,11 @@ export interface ScanRouteModuleOptions {
 interface PendingReExport {
   readonly name: string;
   readonly specifier: string;
+}
+
+interface FollowedReExport {
+  readonly exports: ScannedModuleExports;
+  readonly source: string;
 }
 
 /** Scans one route module's top-level export surface without evaluating it. */
@@ -228,7 +233,7 @@ const scanModuleExports = (
   // that route a single time.
   const targets = new Map<string, ScannedModuleExports | undefined>();
   const shapeOf = ({ name, specifier }: PendingReExport): BindingShape => {
-    if (!targets.has(specifier)) targets.set(specifier, followReExport(specifier, options, visited));
+    if (!targets.has(specifier)) targets.set(specifier, followReExport(specifier, options, visited)?.exports);
     const exports = targets.get(specifier);
     return exports === undefined
       ? { asyncFunction: false, function: false, unresolved: true }
@@ -270,7 +275,7 @@ const followReExport = (
   specifier: string,
   options: ScanRouteModuleOptions,
   visited: ReadonlySet<string>,
-): ScannedModuleExports | undefined => {
+): FollowedReExport | undefined => {
   if (options.source === undefined || !isRelativeSpecifier(specifier)) return undefined;
   const read = options.readModule ?? readModuleFromDisk;
   const seen = new Set([...visited, options.source]);
@@ -280,9 +285,141 @@ const followReExport = (
     if (seen.has(candidate)) return undefined;
     const text = read(candidate);
     if (text === undefined) continue;
-    return scanModuleExports(text, candidate, { ...options, source: candidate }, seen);
+    return {
+      exports: scanModuleExports(text, candidate, { ...options, source: candidate }, seen),
+      source: candidate,
+    };
   }
   return undefined;
+};
+
+/** Static metadata for the independently bundleable event preflight module. */
+export interface EventRoutePreflightDiscovery {
+  /**
+   * The readable module directly named by the relative re-export. Present
+   * even when its default binding is rejected, so route discovery does not
+   * mistake a colocated support module for another event route.
+   */
+  readonly candidateSource?: string;
+  readonly diagnostics: readonly Diagnostic[];
+  /** Present only when the target resolves through an acyclic chain to a function default export. */
+  readonly source?: string;
+}
+
+const eventPreflightRecovery =
+  "Use exactly `export { default as preflight } from './name.js'`, where the relative target resolves to a sync or async default function.";
+
+/**
+ * Discovers an event route's physically separate preflight entry without
+ * evaluating either module. Inline bindings and non-relative or non-followable
+ * re-exports are rejected because they cannot form a cheap independent entry.
+ */
+export const discoverEventRoutePreflight = (
+  moduleText: string,
+  relativePath: string,
+  sourcePath: string,
+  options: ScanRouteModuleOptions = {},
+): EventRoutePreflightDiscovery => {
+  const scanOptions = { ...options, source: options.source ?? sourcePath };
+  const exports = scanRouteModuleExports(moduleText, relativePath, scanOptions);
+  if (!exports.named.has('preflight')) return Object.freeze({ diagnostics: Object.freeze([]) });
+
+  const sourceFile = ts.createSourceFile(relativePath, moduleText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const declarations: PendingReExport[] = [];
+  let preflightExports = 0;
+  for (const statement of sourceFile.statements) {
+    if (exported(statement)) {
+      if (ts.isFunctionDeclaration(statement) && statement.name?.text === 'preflight') preflightExports += 1;
+      if (ts.isClassDeclaration(statement) && statement.name?.text === 'preflight') preflightExports += 1;
+      if (ts.isVariableStatement(statement)) {
+        preflightExports += statement.declarationList.declarations.filter(
+          (declaration) => ts.isIdentifier(declaration.name) && declaration.name.text === 'preflight',
+        ).length;
+      }
+    }
+    if (
+      !ts.isExportDeclaration(statement)
+      || statement.isTypeOnly
+      || statement.exportClause === undefined
+      || !ts.isNamedExports(statement.exportClause)
+    ) {
+      continue;
+    }
+    const specifier = statement.moduleSpecifier !== undefined && ts.isStringLiteral(statement.moduleSpecifier)
+      ? statement.moduleSpecifier.text
+      : undefined;
+    for (const element of statement.exportClause.elements) {
+      if (element.isTypeOnly || element.name.text !== 'preflight') continue;
+      preflightExports += 1;
+      if (specifier !== undefined && element.propertyName?.text === 'default') {
+        declarations.push({ name: 'default', specifier });
+      }
+    }
+  }
+
+  if (preflightExports !== 1 || declarations.length !== 1) {
+    return Object.freeze({
+      diagnostics: Object.freeze([diagnostic(
+        'AB4840',
+        `Event route module ${relativePath} exports preflight, but it is not exactly one named default re-export from a separate module.`,
+        sourcePath,
+        eventPreflightRecovery,
+      )]),
+    });
+  }
+
+  const [declaration] = declarations;
+  if (!isRelativeSpecifier(declaration!.specifier)) {
+    return Object.freeze({
+      diagnostics: Object.freeze([diagnostic(
+        'AB4840',
+        `Event route module ${relativePath} re-exports preflight from non-relative specifier ${JSON.stringify(declaration!.specifier)}.`,
+        sourcePath,
+        eventPreflightRecovery,
+      )]),
+    });
+  }
+
+  const followed = followReExport(declaration!.specifier, scanOptions, new Set());
+  if (followed === undefined) {
+    return Object.freeze({
+      diagnostics: Object.freeze([diagnostic(
+        'AB4840',
+        `Event route module ${relativePath} re-exports preflight from ${JSON.stringify(declaration!.specifier)}, but that target is missing, unreadable, or cyclic.`,
+        sourcePath,
+        eventPreflightRecovery,
+      )]),
+    });
+  }
+
+  const shape = bindingShape(followed.exports, 'default');
+  if (shape.unresolved) {
+    return Object.freeze({
+      candidateSource: followed.source,
+      diagnostics: Object.freeze([diagnostic(
+        'AB4840',
+        `Event route module ${relativePath} re-exports preflight from ${JSON.stringify(declaration!.specifier)}, but its default export cannot be followed through an acyclic relative module chain.`,
+        sourcePath,
+        eventPreflightRecovery,
+      )]),
+    });
+  }
+  if (!shape.function) {
+    return Object.freeze({
+      candidateSource: followed.source,
+      diagnostics: Object.freeze([diagnostic(
+        'AB4840',
+        `Event route module ${relativePath} re-exports preflight from ${JSON.stringify(declaration!.specifier)}, whose default export is not a function.`,
+        sourcePath,
+        eventPreflightRecovery,
+      )]),
+    });
+  }
+  return Object.freeze({
+    candidateSource: followed.source,
+    diagnostics: Object.freeze([]),
+    source: followed.source,
+  });
 };
 
 /**

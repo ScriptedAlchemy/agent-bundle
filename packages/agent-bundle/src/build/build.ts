@@ -195,7 +195,11 @@ const plannedDestinations = (composite: CompositePlan, staged: StagedRoot): read
   ...composite.entries.map((entry) => resolveArtifactDestination(staged.root, entry.relativePath)),
   ...staged.compiledCliBins.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
   ...staged.compiledEntries.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
-  ...staged.compiledHooks.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
+  ...staged.compiledHooks.flatMap((entry) => [
+    entry.output,
+    ...(entry.executorOutput === undefined ? [] : [entry.executorOutput]),
+    ...(entry.workerOutput === undefined ? [] : [entry.workerOutput]),
+  ]),
   ...staged.compiledMcpApps.map((entry) => entry.output),
   ...staged.compiledMcpEntries.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
 ];
@@ -250,7 +254,11 @@ const outputCandidatesFor = (options: {
     kind: 'bundle' as const,
     path: entry.output,
     sourceInputs: entry.sourceInputs,
-  }, ...(entry.workerOutput === undefined ? [] : [{
+  }, ...(entry.executorOutput === undefined ? [] : [{
+    kind: 'bundle' as const,
+    path: entry.executorOutput,
+    sourceInputs: entry.executorSourceInputs ?? entry.sourceInputs,
+  }]), ...(entry.workerOutput === undefined ? [] : [{
     kind: 'bundle' as const,
     path: entry.workerOutput,
     sourceInputs: entry.workerSourceInputs ?? entry.sourceInputs,
@@ -537,6 +545,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
       compiledHooks: Object.freeze(compiledHooks.map((entry) => Object.freeze({
         ...entry,
         output: publishedOutput(entry),
+        ...(entry.executorOutput === undefined ? {} : { executorOutput: publishedOutput({ output: entry.executorOutput }) }),
         ...(entry.workerOutput === undefined ? {} : { workerOutput: publishedOutput({ output: entry.workerOutput }) }),
       }))),
       compiledMcpApps: Object.freeze(compiledMcpApps.map((entry) => Object.freeze({

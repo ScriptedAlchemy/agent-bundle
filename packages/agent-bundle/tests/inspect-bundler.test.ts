@@ -4,8 +4,12 @@ import { join } from 'node:path';
 
 import { afterEach, expect, it } from '@rstest/core';
 
+import { planHooks } from '../src/adapters/hook-contract.ts';
 import { inspect, type BundlerInspectionEntry, type ReadyInspectResult } from '../src/api.ts';
+import { composeBundlerInspection } from '../src/build/inspect-bundler.ts';
 import { stableJson } from '../src/core/digest.ts';
+import type { NormalizedHook, NormalizedPlugin } from '../src/core/types.ts';
+import type { CompiledEventPreflight } from '../src/routes/types.ts';
 
 const roots: string[] = [];
 
@@ -193,4 +197,76 @@ it('keeps the bundler focus out of unfocused inspections', async () => {
   const result = await inspect({ root });
   expect(result.state).toBe('ready');
   expect((result as ReadyInspectResult).selected).toBeUndefined();
+});
+
+it('inspects the per-host preflight wrapper under the composite identity', async () => {
+  const preflight: CompiledEventPreflight = Object.freeze({
+    provenance: Object.freeze({ kind: 'conventional' as const, relativePath: 'src/events/tool/before.preflight.ts' }),
+    source: '/project/src/events/tool/before.preflight.ts',
+  });
+  const hook: NormalizedHook = {
+    event: 'beforeTool',
+    eventRoute: { event: 'tool/before', fallback: 'none', preflight, runtime: 'shared' },
+    id: 'hook:event-route:tool-before',
+    name: 'event-route-tool-before',
+    provenance: { kind: 'conventional', sourcePath: '/project/src/events/tool/before.tsx' },
+    source: '/project/src/events/tool/before.tsx',
+    targets: ['claude', 'codex'],
+    tools: [],
+  };
+  const model: NormalizedPlugin = {
+    extensions: {},
+    hooks: [hook],
+    mcpServers: [],
+    metadata: {
+      id: 'plugin:preflight-inspect',
+      name: 'preflight-inspect',
+      provenance: { kind: 'config', sourcePath: '/project/agent-bundle.config.ts' },
+      version: '1.0.0',
+    },
+    runtime: { node: '22.12.0' },
+    scripts: [],
+    skills: [],
+    targets: ['claude', 'codex'].map((name) => ({
+      id: `target:${name}`,
+      name,
+      provenance: { kind: 'config' as const, sourcePath: '/project/agent-bundle.config.ts' },
+    })),
+  };
+  const hookEntries = ['claude', 'codex'].flatMap((host) => planHooks(model, host, {
+    commandRoot: host === 'claude' ? '${CLAUDE_PLUGIN_ROOT}' : '${PLUGIN_ROOT}',
+    encodePlaygroundInput: (input) => input,
+    encodePlaygroundOutput: (result) => result,
+    eventNames: {},
+    eventRouteNames: { 'tool/before': 'PreToolUse' },
+    hostContractRevision: '2026-09-02',
+    manifestPath: 'hooks/hooks.json',
+    matchers: {},
+    wrapperPath: () => `hooks/${hook.name}.${host}.mjs`,
+    wrapperSource: () => 'config-hook-only\n',
+  }).hookEntries);
+  const inspection = await composeBundlerInspection({
+    composite: {
+      cliBin: false,
+      hookEntries,
+      identity: 'claude+codex',
+      noticeDelivery: undefined,
+      selected: ['claude', 'codex'],
+    },
+    model,
+    projectRoot: '/project',
+  });
+  const hooks = inspection.entries.filter((entry) => entry.kind === 'hook');
+  expect(hooks.map((entry) => entry.outputPath).sort()).toEqual([
+    'hooks/event-route-tool-before.claude.mjs',
+    'hooks/event-route-tool-before.codex.mjs',
+  ]);
+  for (const entry of hooks) {
+    expect(entry.target).toBe('claude+codex');
+    expect(entry.generatedEntry).toContain('executeEventPreflight');
+    expect(entry.generatedEntry).toContain(preflight.source);
+    expect(entry.generatedEntry).toContain('agent-bundle/event-project');
+    expect(entry.generatedEntry).toContain('.execute.mjs');
+    expect(entry.generatedEntry).not.toContain('AGENT_BUNDLE_HOOK_HOST');
+  }
 });

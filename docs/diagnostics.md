@@ -30,7 +30,7 @@ even when no error diagnostic was reported.
 | `AB4765`–`AB4766` | Artifact-hosted routed CLI: a target without the `cli` capability omits `bin/<name>.mjs`; a host-emitted file collides with it (see below). |
 | `AB477x` | MCP App view compilation (`AB4770`: compile error with file, line, column and the bundler message; `AB4771`: compile warning; `AB4772`: emitted-size advisory; see below). |
 | `AB490x`/`AB492x` | Conventional host components (#100 stage 2): rules `src/rules/*.mdc` (`AB4900`–`AB4908`) and commands `src/commands/*.md` (`AB4920`–`AB4928`), including per-host feature-set enforcement (`AB4907`/`AB4908`, `AB4927`/`AB4928`); see below. |
-| `AB48xx`/`AB494x` | Route graph, state, layout (`AB4830`–`AB4832`), generated route declarations outside the TypeScript program (`AB4834`), route render budgets (`AB4835`), tool task support (`AB4836`), a route module that value-imports a compiler-carrying framework entry (`AB4837`), a CLI route `inputSchema` reference the static resolver cannot follow (`AB4838`) or that cycles (`AB4839`), and provider conventions (see below). |
+| `AB48xx`/`AB494x` | Route graph, state, layout (`AB4830`–`AB4832`), generated route declarations outside the TypeScript program (`AB4834`), route render budgets (`AB4835`), tool task support (`AB4836`), a route module that value-imports a compiler-carrying framework entry (`AB4837`), a CLI route `inputSchema` reference the static resolver cannot follow (`AB4838`) or that cycles (`AB4839`), an event route's `preflight` gate export (`AB4840`), an event route's declared provider keys (`AB4841`), and provider conventions (see below). |
 | `AB5000` | General CLI and adapter failures (see below). |
 | `AB60xx` | Built-artifact validation, including schema documents and referenced files (`AB6005`: the compiler finds a host-pack surface or package-build entry (`dist/bin/*.js`, the Flight workers, or the `lib` entry) that keeps something other than a Node built-in, `pnpapi`, or an emitted sibling external; the emitted-module walk remains behind that compile-time check and reports residual import, syntax, and relative-target findings; a `dist` finding names `dist/<path>`; `AB6011`/`AB6012`: a target's required pinned-schema document is missing or invalid; `AB6025`: a manifest-declared `logo` path is missing from the artifact or escapes the deploy tree; `AB6034`: emitted Skill Markdown has no instruction body; `AB6035`–`AB6038`: Agent Plugins portable validation, see below). |
 | `AB6200`–`AB6202` | Workbench artifact inspection over published epochs: `AB6200` the epoch does not validate or its provenance is inconsistent, `AB6201` an epoch reference could not be released, `AB6202` unsafe runtime metadata (see below). |
@@ -1195,6 +1195,56 @@ graphs whose schemas are all inline keep their recorded digests.
 Workbench route detail shows a route's contract origin and the other routes
 sharing it.
 
+An event route (`src/events/<family>/*`) may add a **preflight gate** (#595):
+a named `preflight` export the generated hook entry runs after envelope
+decoding, host validation, and canonical event construction, and before any
+of the rendered route runtime — React, the RSC renderer, layouts, providers,
+state, notices — is loaded. The gate is sync or async, receives a frozen
+context of the `canonical` identity and payload the route would receive, the
+compiled host identity and native event name, the request `signal` owned by
+the hook deadline, and translated `terminal` capability metadata (never
+`native`, state, notices, lineage, providers, or
+the request context), and returns exactly one of `'execute'` (load the route
+runtime, resolve its declared providers, render), `{ outcome: 'continue' }`
+(pass through with no host decision), or `{ outcome: 'deny', reason }` (a
+denial projected through the family's canonical outcome rules;
+observation-only families cannot deny). `undefined`, an unknown outcome, an
+extra field, or an empty reason fails closed at hook time. A gate is only
+cheap when the compiler can bundle it on its own, so exactly one authoring
+form is accepted: a single `export { default as preflight } from './<name>.js'`
+in the route module, whose relative target (a `.js` specifier resolves to the
+`.ts`/`.tsx` source, as route imports do) is a readable module whose default
+export is a function — followed, like a route's default re-export, through an
+acyclic chain of relative default re-exports. The compiler records that module
+on the route's own graph node (`preflight` on the compiled route, part of the
+graph digest) and keeps it out of route discovery, so
+`src/events/tool/before.preflight.ts` beside `before.tsx` is application code
+the route names, never a second event route. A `preflight` declared inline in
+the route module (`export const preflight = …`, `export function preflight`)
+is rejected too: evaluating the route module evaluates its rendering and
+provider imports, the very cost the gate exists to avoid. Every rejected form
+is `AB4840`, once per route on the route module; the route compiles without a
+gate beside the error, and because the diagnostic is an error the build fails
+instead of silently taking the expensive path.
+
+Provider laziness is declaration-driven (#595). Preflight materializes no
+application providers. An executed event route with no provider declaration
+resolves every conventional provider, as before; a route that declares the
+provider keys it requires — `config.providers: ['<key>', …]`, string literals
+inside the static config grammar — loads and resolves only that subset, still
+once per request, sequentially in the deterministic key-then-source order
+(never declaration order), fail-closed, with the framework-owned
+`processLifetime` seeded first. `[]` is a valid declaration that mounts
+`processLifetime` alone. Keys are the camel-cased `src/providers/<name>.*`
+stems the graph derives (`retry-policy.ts` is `retryPolicy`), the same keys
+the generated `AgentBundleProviders` declares; `processLifetime` is not one of
+them and must not be declared. The declaration is judged when the route graph
+compiles: a declaration that is not an array of string literals, a key listed
+twice, the reserved `processLifetime`, or a key naming no discovered provider
+module is `AB4841`, once per route with every defect in one message; a
+declaration with any defect selects nothing, so the build fails rather than
+resolving a provider set the author did not write.
+
 | Code | Severity | Trigger |
 | --- | --- | --- |
 | `AB4800` | error | An MCP server has both discovered route modules under `src/mcp/<id>/` and an existing entry claim (the conventional `src/mcp/<id>.ts` module, or a declared `entry`/`command`/`url`) without an explicit `routes.servers.<id>` mode. |
@@ -1237,6 +1287,8 @@ sharing it.
 | `AB4837` | error | A route module of any kind except an App — a `src/cli/**` command, a `src/scripts/**` script, a tool, resource, or prompt route of a generated server, an event route — a layout, or a provider, or a module one of them reaches through relative value imports, imports `agent-bundle`, `agent-bundle/api`, `agent-bundle/config`, `agent-bundle/eval`, `agent-bundle/rstest`, `agent-bundle/test`, or `agent-bundle/test/browser` as a value (a static import whose binding is read at run time, `import 'agent-bundle/api'`, `import('agent-bundle/api')` with a literal specifier, or a non-type re-export). Those entries carry the compiler, and the generated executable is self-contained (#387): the bundler would inline the compiler and fail on the framework's runtime-relative module references (`Module not found: Can't resolve '../events'`), or the artifact validator would reject the inlined compiler's non-literal dynamic imports with `AB6005` — either way naming a generated file instead of the route (#558). Judged statically when the route graph compiles, so `inspect`, `validate`, `build`, and `dev` all report it, once per module, naming the route and the helper the import lives in. `import type`, `type`-qualified specifiers, and imports used only in type positions are elided by the bundler and never reported; routes of a server that is not generated (`custom`/`command`/`remote`, or an `AB4800` conflict) or of a CLI that is not generated (`conventional`, or an `AB4801` conflict) are never bundled, so they are not judged; likewise a layout that no bundled rendered route composes through (a worker imports only the layouts its routes reach: the tool, resource, and prompt routes of a generated server, the rendered `.tsx` commands of a generated CLI, and rendered `.tsx` scripts), and a provider in a project whose only executables are plain `.ts` scripts, which are bundled from their own source and mount none. Spawn the framework instead of importing it: serve an MCP App from a routed command with `spawnServeApp` from `agent-bundle/serve-app-command`, which runs `agent-bundle serve-app` as a child process; keep other framework calls in host processes (`package.json` scripts, a hand-written `.mjs` run from the checkout). The bundle-safe entries stay allowed: `agent-bundle/app` (the browser MCP App client, a leaf with no Zod, Node, or compiler import), `agent-bundle/routes`, `agent-bundle/launch-env`, `agent-bundle/meta`, `agent-bundle/mcp-apps`, `agent-bundle/mcp-entry`, `agent-bundle/cli-entry`, `agent-bundle/terminal-capability`, and `agent-bundle/serve-app-command`. |
 | `AB4838` | error | A CLI route's `inputSchema` references a binding the static resolver cannot follow. The message is `CLI route <path> inputSchema: <chain> <reason>.` — the chain is the reference path from `inputSchema`, each step `<binding>`, or `<binding> (<module>)` when it crosses into another module (`inputSchema -> statusInputSchema (src/lib/protocol-schemas.ts) -> requestStatusSchema -> requestStatuses`), and the reason names the boundary: a specifier that `is not a relative module path`, one that `resolves outside the project` or `does not resolve to a module inside the project` (missing or unreadable), a target module that does not declare a top-level `export const <name>`, a binding that is not a top-level `const` (`let`/`var`, destructuring, a function, a class, a default or namespace import — the message says what it is), an identifier that `is neither a top-level const in this module nor a named import from a relative module`, or a dynamic initializer — one that is neither a method chain, an object or array literal, nor a static literal (`whose initializer is a call expression`, `a function expression`, `a template literal with substitutions`). Reported on the route module; the recovery names the supported forms — relative imports inside the project, `export const`, alias chains — then says to inspect again. Only CLI routes raise it, because only there the static contract is load-bearing: an MCP, script, or event route whose schema the resolver cannot follow compiles without a static contract, as an out-of-grammar inline schema does, and the runtime derives its MCP JSON Schema from the real zod object. A reference that resolves but whose schema leaves the grammar is `AB4814`. |
 | `AB4839` | error | A CLI route's `inputSchema` reference chain is cyclic — `a` → `b` → `a`, within one module or across several: every visited `<module>#<binding>` is recorded and revisiting one stops the walk. The message is `CLI route <path> inputSchema: <chain> is a reference cycle.` and prints the cycle; it is reported on the route module, with the same recovery and the same CLI-only rule as `AB4838`. |
+| `AB4840` | error | An event route's `preflight` gate (#595) is not the one physically cheap form the compiler can bundle on its own. Rejected: `preflight` declared inline in the route module (`export const preflight = …`, `export function preflight`) or exported more than once; re-exported under a binding other than `default` (`export { gate as preflight } from './gate.js'`, `export { preflight } from './gate.js'`); re-exported from a non-relative specifier (a bare package such as `'@scope/gate'`); a relative target that is missing, unreadable, or part of a re-export cycle; a target default export that cannot be followed through an acyclic chain of relative default re-exports; or a target default export that is not a function the scan can see. The message names the route module and, once a re-export was found, its specifier. Judged statically when the route graph compiles, so `inspect`, `validate`, `build`, and `dev` all report it, once per route with the route module as `sourcePath`; the route compiles without a gate beside the error, and the build fails rather than silently taking the expensive rendered path. Write exactly `export { default as preflight } from './<name>.js'` in the route module, and make that module default-export one sync or async function receiving `{ canonical, host, signal, terminal }` and returning `'execute'`, `{ outcome: 'continue' }`, or `{ outcome: 'deny', reason }`. |
+| `AB4841` | error | An event route's static required-provider declaration (#595) does not select a known set of conventional providers: `config.providers` is not an array of provider-key strings; a key is declared more than once; a key is the reserved `processLifetime`; or a key matches no conventional provider the route graph discovered under `src/providers/`. The message names the route and every offending key. Declare each key exactly once, spelled as the camel-cased stem of its `src/providers/<name>.*` module, drop `processLifetime`, declare `[]` to mount `processLifetime` alone, or omit `config.providers` to preserve the all-provider compatibility default. |
 | `AB4940` | error | A conventional provider module has no default export or its default export is not a function. Default-export a factory receiving `{ invocation, plugin, signal }`. |
 | `AB4941` | error | Two provider filenames derive the same camel-cased provider key. Rename one file so every provider key is unique. |
 | `AB4942` | error | A provider filename derives the reserved `processLifetime` key. Rename the file so its camel-cased key does not collide with the framework-owned provider. |

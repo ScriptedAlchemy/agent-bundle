@@ -174,7 +174,7 @@ it('bakes the pinned Claude hook_event_name into every Claude event-route wrappe
     expect(wrapper!.nativeEvent, entry.route).toBe(expectedNativeEvent);
     expect(wrapper!.virtualSource, entry.route).toContain(`const nativeEvent = ${JSON.stringify(expectedNativeEvent)};`);
     expect(wrapper!.virtualSource, entry.route).toContain('const target = "claude";');
-    expect(wrapper!.virtualSource, entry.route).toContain('validateNativeEventEnvelope(parsed, { canonicalEvent, nativeEvent, target })');
+    expect(wrapper!.virtualSource, entry.route).toContain('validateNativeEventEnvelope(nativeInput, { canonicalEvent, nativeEvent, target })');
 
     const native = await nativeEnvelope(entry.native);
     expect(native.hook_event_name, entry.route).toBe(expectedNativeEvent);
