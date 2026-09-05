@@ -891,8 +891,9 @@ web: {
 （error）；各消息形状见[诊断参考](../../reference/diagnostics.md)。
 
 配置了 `web` 时，组合产物的 `agent-bundle.manifest.json` 会增加 `web` 节，即使没有 `src/cli/**`
-命令也会输出 `bin/<plugin>.mjs`。宿主页面装在该 bin 里——产物中没有 `web/` 目录。`AB6005` 像遍历
-其他每个可执行文件一样遍历它。
+命令也会输出 `bin/<plugin>.mjs`。宿主页面装在该 bin 里——产物中没有 `web/` 目录。它的编译与其他
+每个可执行文件一样提供 external-module 证据，因此 `AB6005` 会拒绝 Node 内建模块、`pnpapi` 或已输出
+同级文件之外的任何 external。
 
 从已构建产物或已安装插件根目录运行：
 

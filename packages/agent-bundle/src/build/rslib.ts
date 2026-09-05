@@ -7,7 +7,6 @@ import { readFile, realpath } from 'node:fs/promises';
 import { dirname, join, resolve, sep } from 'node:path';
 
 import { dependencyManifestPath } from '../core/dependency-manifest.ts';
-import { sha256Hex } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
 import { isInsideOrEqual, posixRelativeWhenInside } from '../core/paths.ts';
 import { isRecord } from '../core/strict-json.ts';
@@ -32,7 +31,6 @@ import {
   metaModuleSpecifier,
   virtualModulesPluginConstructor,
 } from './meta.ts';
-import { readModuleImports, type ModuleImport } from './module-imports.ts';
 import { collectBundledOutputEvidence } from './provenance.ts';
 
 export interface RslibVirtualModule {
@@ -213,7 +211,7 @@ const reservedExternalError = (specifier: string): Error => new Error(
  * object entry whose value is `false` explicitly opts out of
  * externalization, so it is not a violation. Function externals cannot be
  * inspected here; {@link guardReservedExternals} intercepts those at build
- * time and the post-build residual-import scan fails closed behind both.
+ * time.
  */
 const reservedExternalsViolation = (externals: unknown, reserved: readonly string[]): string | undefined => {
   if (externals === undefined || externals === null) return undefined;
@@ -301,42 +299,6 @@ const reservedAliasViolation = (
   const base = exact ? key.slice(0, -1) : key;
   return reserved.some((specifier) => specifier === base || (!exact && specifier.startsWith(`${base}/`)));
 });
-
-/**
- * Fail-closed self-containment check on the emitted bundles themselves:
- * no reserved specifier may survive bundling as a live import. This is the
- * belt behind the static externals check and the function-external guard.
- * The bundle is lexed as an ES module (the emitted format by contract), so
- * string literals or comments that merely mention a reserved specifier are
- * not violations. The lex is keyed by the bundle's digest, so artifact
- * validation, which scans these same bytes next, reads the imports once.
- */
-const assertNoResidualReservedImports = async (
-  entries: readonly RslibEntry[],
-  outputRoot: string,
-): Promise<void> => {
-  await Promise.all(entries.map(async (entry) => {
-    const reserved = reservedSpecifiers(entry);
-    const bytes = await readFile(resolve(outputRoot, entry.outputRelativePath));
-    let imports: readonly ModuleImport[];
-    try {
-      imports = await readModuleImports(bytes.toString('utf8'), { check: 'lexed', sha256: sha256Hex(bytes) });
-    } catch {
-      throw new Error(`Generated executable ${JSON.stringify(entry.outputRelativePath)} did not parse as an ES module.`);
-    }
-    const residual = imports
-      .map((record) => record.specifier)
-      .find((specifier) => specifier !== undefined && reserved.includes(specifier));
-    if (residual !== undefined) {
-      throw new Error(
-        `Generated executable ${JSON.stringify(entry.outputRelativePath)} is not self-contained: `
-        + `the reserved module specifier ${JSON.stringify(residual)} survived bundling. `
-        + 'The tools escape hatch must not externalize '
-        + `${reserved.map((specifier) => JSON.stringify(specifier)).join(', ')}.`,
-      );
-    }
-  }));
-};
 
 const projectDependencyFields = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'] as const;
 /** What a dependency's bundle can pull in: its devDependencies never ship. */
@@ -894,7 +856,6 @@ export const buildRslibSurfaces = async (
       projectRoot: options.cwd,
       stats: result.stats,
     });
-    await assertNoResidualReservedImports(entries, options.outputRoot);
     const emittedAssets = new Set(entries.map((entry) => entry.outputRelativePath));
     const evidenceByPath = new Map(evidence.map((asset) => [asset.path, asset]));
     const resultByEntry = new Map(entries.map((entry) => {

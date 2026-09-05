@@ -30,7 +30,6 @@ import {
   terminalCapabilityRuntimeSpecifier,
 } from './entry-shell.ts';
 import { projectMeta } from './meta.ts';
-import { bundleSyntaxCheckFor } from './module-imports.ts';
 import { isDeclarationGenerationFailure, type RslibEntry } from './rslib.ts';
 import { runtimeIgnoredRoot } from './runtime-path.ts';
 import { validateJavaScriptModules } from './validate-artifact-modules.ts';
@@ -379,23 +378,20 @@ export const buildPackageOutputs = async (options: {
       throw new Error(`Package build did not emit expected declarations ${JSON.stringify(`${lib.name}.d.ts`)}.`);
     }
 
-    // The npm form of the plugin is held to the same line as its host packs:
-    // every emitted `dist` module is walked as an ES module, and a bare
-    // specifier that is not a Node built-in — an import the `tools` hatch
-    // kept external — fails the build (`AB6005`) before `dist` is published,
-    // so a `dist/bin` executable imports nothing from a consumer's
-    // `node_modules`. The walk reads import specifiers (static and literal
-    // dynamic); a `createRequire(…)(…)` or `import.meta.resolve(…)` call is
-    // not an import and is outside it, in `dist` as in a host pack — the
-    // prepack gate reads those as dependency evidence. Declarations are not
-    // modules and are not walked; they may still reference declared
-    // dependencies.
+    const rewritable = options.tools?.rspack !== undefined || options.tools?.rsbuild !== undefined;
+    // The npm form of the plugin is held to the same line as its host packs.
+    // The compiler resolved every literal import of the bundles it emitted
+    // (`AB6005` failed the build on anything but a Node built-in), so the
+    // walk lexes them for the one form the compiler leaves verbatim — an
+    // expression `import()` — unless a `tools` hatch may have rewritten the
+    // emitted bytes, in which case every module is parsed in full and its
+    // imports resolved. Declarations are not modules and are not walked;
+    // they may still reference declared dependencies.
     const selfContainment = await validateJavaScriptModules({
       artifactRoot: stageRoot,
-      bundledPaths: new Set(files.filter((file) => file.kind === 'bundle').map((file) => file.path)),
-      bundleSyntaxCheck: bundleSyntaxCheckFor(options.tools),
       files: staged,
-      reportedRoot: toPosixRelative(projectRoot, outputRoot),
+      provenPaths: new Set(rewritable ? [] : files.filter((file) => file.kind === 'bundle').map((file) => file.path)),
+      reportedRoot: publishedPrefix,
       validJson: new Set(),
     });
     if (selfContainment.length > 0) throw new DiagnosticError(selfContainment);
@@ -403,7 +399,7 @@ export const buildPackageOutputs = async (options: {
     const evidence = await createCompileEvidenceRecord({
       pathPrefix: publishedPrefix,
       results: [compileResult],
-      rewritable: options.tools?.rspack !== undefined || options.tools?.rsbuild !== undefined,
+      rewritable,
       root: stageRoot,
       rspackVersion: rspack.rspackVersion,
     });

@@ -29,7 +29,8 @@ manifest file table reports `AB6039`.
 
 Self-containment is proven from the compilation's externals (`AB6005` at compile time). The
 compiler service lowers every host-pack surface and package-build entry (`dist/bin/*.js`, a
-rendered route's Flight worker `.mjs`, and the `lib` entry). The framework-owned
+rendered route's Flight worker `.mjs`, and the `lib` entry), plus every MCP App view. The
+framework-owned
 `ArtifactDependencyAuditPlugin` taps `thisCompilation` to record every module Rspack kept
 external, and the service reads that evidence before trusting an asset. Only Node built-ins
 (`node:fs`, `fs`), `pnpapi`, and an emitted sibling of the same artifact may remain external; any
@@ -37,18 +38,22 @@ other request fails whatever spelling Rspack emitted (`import`, `require`, or it
 shim). An expression request (`import(expr)`, `require(expr)`) is outside the compiler's view:
 Rslib's profile leaves it verbatim without parsing it, so it is neither bundled nor external.
 
-The emitted-module walk remains behind that compiler evidence as defense in depth. It walks each
-emitted JavaScript module as an ES module and rejects residual unsupported imports, non-literal
-dynamic imports, and targets missing from or outside the emitted tree; a `dist` finding names its
-file as `dist/<path>`. How thoroughly syntax is checked follows who produced the bytes. A module
-the framework compiled (manifest kind `bundle`) is the bundler's own output, so only the ESM lexer
-runs over it, rejecting unterminated strings, templates, comments, and regexps and unbalanced
-braces. A module the framework did not compile — a copied consumer script or generated installer
-— is parsed in full, as is every bundle of a build whose
-[`tools` hatch](../../reference/configuration.mdx#tools) could have rewritten the emitted assets.
-Prebuilt payloads (`kind: 'prebuilt'`) stay opaque and hash-locked only, and declaration files
-(`.d.ts`) are not walked. The route graph guards the same
-self-containment before the bundler runs: a route module, layout, or provider — or a module one of
+The emitted-module walk remains behind that compiler evidence for exactly what the compiler cannot
+see. It reads every emitted `.js`/`.mjs` module as an ES module and, in any of them, compiled ones
+included, fails an expression `import()` (`AB6005 has a non-literal dynamic import`). A module the
+compile evidence record proves — a manifest `bundle` file the record covers with the same bytes,
+from a build without a [`tools` hatch](../../reference/configuration.mdx#tools) — is lexed for
+syntax only: the compiler already resolved its literal imports as bundled, built-in, or an emitted
+sibling, so the walk does not resolve them again. Every other module is parsed in full and its
+imports resolved against the manifest — a generated `install.mjs`, a copied consumer script, every
+module of an artifact without a record, and every module of a build whose hatch could have rewritten
+the emitted assets (the record's `coverage.rewritable`). Those findings are the residual `AB6005`
+forms: unsupported or invalid specifiers, targets missing from or outside the emitted tree, invalid
+syntax; a `dist` finding names its file as `dist/<path>`. Prebuilt payloads (`kind: 'prebuilt'`)
+stay opaque and hash-locked only, and declaration files (`.d.ts`) are not walked.
+
+The route graph guards the same self-containment before the bundler runs: a route module, layout,
+or provider — or a module one of
 them reaches through relative imports — that value-imports a compiler-carrying framework entry
 (`agent-bundle`, `agent-bundle/api`, `agent-bundle/config`, `agent-bundle/eval`,
 `agent-bundle/rstest`, `agent-bundle/test`, `agent-bundle/test/browser`) is reported as `AB4837`
@@ -243,11 +248,8 @@ dependency into `dist/bin` and the host packs, so a published plugin should inst
 declare the framework, `@agent-bundle/runtime`, `react`, `zod`, and the rest of the stack under
 `devDependencies`. A compiled bundle — a host-pack module or a `dist` bundle alike — cannot keep
 a bare package external: the compiler reports `AB6005` before `prepack` reaches the inventory. So
-`dependencies` is only for what the packed files demonstrably need by other means — a prebuilt
-payload module's import, a `require`, `createRequire`, or `import.meta.resolve` call in a packed
-file that the compiler did not resolve as a module dependency, a packed declaration's reference,
-a consumer install script, or a `bin` command a packed file runs — since only JavaScript the
-framework did not compile can still import one. `--output` is an artifact path relative to `--root` that overrides the configured
+bundling a package does not prove that consumers need it installed. `--output` is an artifact path
+relative to `--root` that overrides the configured
 `output.distPath`, defaulting to `artifact`. Use it as an npm `prepack` script; `--ignore-scripts`
 prevents recursion, and no npm lifecycle ever performs a host install.
 
@@ -264,19 +266,27 @@ external — a `react` mapped to a global through the hatch, say — fails the v
 `externals` entries that name packages. RegExp, function-form, relative, and mutator externals are
 judged from the compilation's own evidence: `AB6005` fails a generated executable in a host pack
 or `dist` when Rspack kept anything except a built-in, `pnpapi`, or an emitted sibling external.
-The emitted-module walk remains behind this compile-time check. An external kept through the
-[`tools` hatch](../../reference/configuration.mdx#tools) is therefore not a way around the
-contract and never reaches the prepack inventory. A
-`dependencies` entry is therefore only for what the packed files demonstrably need from outside a
-compiled bundle — a package a prebuilt `.js`/`.mjs`/`.cjs` payload module imports (prebuilt files
-are opaque to `AB6005`, and `AB7014` scans only those extensions, so an extensionless prebuilt
-module counts for nothing), one a packed file loads through a `require`, `createRequire`, or
-`import.meta.resolve` call that the compiler does not resolve as a module dependency, one a
-consumer-side install script runs, one whose `bin` a packed file executes, or one a
-packed declaration file references (`.d.ts` outputs are not walked by `AB6005`), or one a
-prebuilt payload names in `runtimeDependencies` — and `AB7014`
-reports a declared dependency with none of that evidence, while `AB7015` reports one a consumer's
-npm cannot install.
+An external kept through the [`tools` hatch](../../reference/configuration.mdx#tools) is therefore
+not a way around the contract and never reaches the prepack inventory.
+
+`AB7014` accepts exactly four kinds of consumer-runtime evidence:
+
+1. `runtimeDependencies` on a prebuilt payload declared with `definePrebuilt`;
+2. a packed declaration file reference, as TypeScript's `preProcessFile` reads it: imports,
+   exports, import-equals `require`, `import("…")` types, module augmentations in an
+   external-module file, and `/// <reference types>` (including its `@types` twin); an ambient
+   `declare module` in a file with no imports counts for nothing, while a `#subpath` follows the
+   package `imports` map;
+3. a consumer-side `preinstall`, `install`, or `postinstall` script, including delegated scripts,
+   that names the dependency or runs one of its `bin` commands; and
+4. the framework's process-dependency record, which is currently empty.
+
+A package merely inlined into a compiled bundle is not used. When that is the only evidence,
+`AB7014` names the `dist` bundles that inlined it, for example:
+`The build inlined "a" into dist/bin/x.js; every consumer installs them for nothing.` Move
+build-only packages to `devDependencies`; compiled bundles inline their imports (`AB6005`). Keep a
+runtime dependency only for what a packed declaration file references, a consumer install script
+names or runs, or a prebuilt payload declares in `runtimeDependencies` (`definePrebuilt`).
 
 | Code | Meaning |
 | --- | --- |
@@ -284,33 +294,8 @@ npm cannot install.
 | `AB7011` | An on-disk artifact file no longer matches its manifest SHA-256. Rebuild, and do not modify generated host packs. |
 | `AB7012` | A `package.json` bin points outside the packed `dist` output (including `src/`) or names a file npm omitted. Point it at the generated `dist/bin` file. |
 | `AB7013` | `package.json`, normalized plugin metadata, a host manifest, or artifact provenance reports a different release version. Make every release identity agree. |
-| `AB7014` | A `dependencies`, `optionalDependencies`, or `peerDependencies` field names packages nothing in the pack uses — no packed JavaScript imports, requires, or resolves them (compiled bundles inline their imports and `AB6005` fails one they kept external, so `import` evidence comes from prebuilt payload modules and other scripts the framework did not compile, while `require`, `createRequire`, and `import.meta.resolve` calls count from any packed file), no packed declaration references them, no `imports` mapping or consumer install script reaches them, and no prebuilt payload names them in `runtimeDependencies` (one diagnostic per field; optional peers are skipped here but their specifier is still checked by `AB7015`, and an `optionalDependencies` entry supersedes the same name under `dependencies`). Every consumer would install them for nothing. Move build-only packages to `devDependencies`. For `peerDependencies` this is a warning, since a required peer nothing imports may be a deliberate host-compatibility contract; mark it optional in `peerDependenciesMeta` if npm should stop installing it. |
-| `AB7015` | A `dependencies`, `optionalDependencies`, or `peerDependencies` entry a consumer's npm cannot resolve through a registry. Name and specifier are read with `npm-package-arg`, npm's own parser, and come out as one of three kinds: registry (a version, range, dist-tag, or `npm:` alias of one), fetched (a git, GitHub-shorthand, remote-tarball, or path source — npm 12 refuses git and remote fetches by default (`allow-git`, `allow-remote`), and a path never exists on the consumer's disk), or unparseable (a name npm rejects, a scheme it lacks such as `link:`, `portal:`, or a typo, a selector that is neither a range nor a URL-safe dist-tag, an alias of a non-registry target, or an invalid URL — the manifest read itself fails, so this is reported even on an optional peer). A fetched `optionalDependencies` entry warns instead of failing, since npm continues without it; it stays an error when unparseable, or when a consumer install script needs the skipped package (runs its command — not merely mentions it — loads it from an inline `node -e` program — scanned for `require`, `createRequire`, and `import()` like a packed file — preloads it with `node -r`/`--require`/`--import`/`--loader`, or runs a packed file that imports it, `node .` running the root `main` included; each command after `&&`, `;`, or a newline is read on its own, shell quotes and backslash escapes resolved, and `node`'s options belong to `node` alone and end at the program — `node install.js --require x` preloads nothing, while a `NODE_OPTIONS=--require=x` assignment on the same `node` command does; every script word naming a packed JavaScript file counts as run, deliberately, so that runners the gate does not model — `tsx`, `zx`, `bun`, `deno run` — still have their file's dependencies traced, at the cost of a rare escalation for a word such as `echo install.js`, which the diagnostic makes visible by naming the file). A peer that `dependencies` or `optionalDependencies` also names is judged by that concrete entry; npm never reads the duplicate peer's selector. `workspace:`/`catalog:` are reported too unless the `prepack` lifecycle runs under pnpm, Yarn, or Bun, which rewrite them at pack time — `npm publish` does not, so under npm `AB7015` fires; entries the tarball itself carries — `bundleDependencies` npm actually packed (never peers), and a `file:` path inside the package whose packed source is installable (a directory with a parseable `package.json`, or a well-formed tarball whose `package.json` parses) — are not reported. Depend on a published version, or bundle the package and declare it under `devDependencies`. |
-
-A prebuilt payload's `runtimeDependencies` declaration counts as use, since the compiler never opens a
-payload file. The remaining dependency evidence is read from the packed bytes: every `.js`/`.mjs`/`.cjs` file npm would
-publish is lexed for `import` specifiers and scanned for literal `require("…")`, `require.resolve("…")`, and
-`import.meta.resolve("…")` calls (a `createRequire(…)` binding counts as `require`, even with the factory
-renamed on import, as do direct `Module.createRequire(…)("…")` and `require("node:module").createRequire(…)("…")` calls; `path.resolve("…")` does not count), and every
-packed `.d.ts` is scanned for the modules its types reference (a `/// <reference types>` directive
-counts for the package and its `@types/*` twin); specifiers are reduced to package names, string escapes
-decoded first, with Node built-ins ignored. A dependency packed code runs as an executable — a string literal
-that is one of the `bin` commands its installed manifest declares, such as `spawnSync("tsc", ["--version"])` —
-counts as used, as does one a
-`#subpath` import may reach through the `imports` map, and a
-dependency a consumer-side `preinstall`/`install`/`postinstall` script — not `prepare`, which npm never runs
-for a published tarball — or any script it delegates to with `npm run` (the first positional after `run`; options
-before or after `run`, valued or not, are skipped, and later words such as `npm run setup -- dormant` are that
-script's arguments) or a direct `npm test`/`start`/`stop`/`restart` names (`npm restart` without a `restart` script running `stop` then `start`) (or whose `bin` command it runs; a
-string-form `bin` is named after the installed manifest, read as npm reads it — the last of duplicate keys
-wins — and the unscoped name stands in when the dependency is not installed locally or its manifest is not
-JSON). A
-computed `import(expression)` or `require(expression)` (likewise `require.resolve`, `import.meta.resolve`,
-a direct `createRequire(…)(…)`, or a `createRequire` binding) in packed code could load any declared
-package, so it withholds `AB7014` altogether; so does packed source the ESM lexer rejects, whose `import()`
-calls it cannot report, and so does `require` passed on as a value (`const load = require`,
-`fn(require)`) rather than called, since packages may then be loaded under a name the scan never sees. A mention inside a comment can only keep a dependency, never
-report one; `devDependencies` are never inspected, and an `npm:` alias counts as a registry specifier when its target does.
+| `AB7014` | A `dependencies`, `optionalDependencies`, or `peerDependencies` field names packages a consumer never needs installed. Use requires one of the four evidence sources above; compiled bundles that inline a package do not count. The diagnostic names any `dist` bundles that inlined an otherwise unused package. It is an error for `dependencies` and `optionalDependencies`, and a warning for `peerDependencies`; optional peers are skipped, and an `optionalDependencies` entry supersedes the same name under `dependencies`. |
+| `AB7015` | A `dependencies`, `optionalDependencies`, or `peerDependencies` entry a consumer's npm cannot resolve through a registry. Name and specifier are read with `npm-package-arg`, npm's own parser, and come out as one of three kinds: registry (a version, range, dist-tag, or `npm:` alias of one), fetched (a git, GitHub-shorthand, remote-tarball, or path source — npm 12 refuses git and remote fetches by default (`allow-git`, `allow-remote`), and a path never exists on the consumer's disk), or unparseable (a name npm rejects, a scheme it lacks such as `link:`, `portal:`, or a typo, a selector that is neither a range nor a URL-safe dist-tag, an alias of a non-registry target, or an invalid URL — the manifest read itself fails, so this is reported even on an optional peer). A fetched `optionalDependencies` entry warns because npm can continue without it, but escalates to an error when an install script needs the package: its `bin` command appears in command position, a `node_modules/<name>/` file is run, or a bare package is preloaded with `-r`/`--require`/`--import`/`--loader` (including through `NODE_OPTIONS`). A peer also present in `dependencies` or `optionalDependencies` is judged by that concrete entry. `workspace:`/`catalog:` are allowed only when the pack lifecycle rewrites them; packed `bundleDependencies` and installable in-package `file:` sources are not reported. Depend on a published version, or bundle the package and declare it under `devDependencies`. |
 
 A release build also refuses a project with **no** release version at all (`AB4013`), so a
 published artifact never carries the `0.0.0-dev.<short-revision>` development fallback. A

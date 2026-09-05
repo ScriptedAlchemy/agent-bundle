@@ -100,19 +100,24 @@ const resolveJavaScriptImport = async (options: {
   return { module: artifactPath };
 };
 
+/**
+ * Walks every JavaScript module of the artifact for what the compiler could
+ * not see. A module in `provenPaths` is one the compiler emitted and whose
+ * evidence covers these exact bytes: the compiler resolved every literal
+ * import (bundled, built-in, or an emitted sibling), so the module is lexed
+ * for syntax and only an expression load — the one form Rslib's profile
+ * leaves verbatim — is reported. Every other module (a generated installer,
+ * a copied script, a bundle a `tools` hatch may have rewritten) is parsed in
+ * full and its imports are resolved against the file table.
+ */
 export const validateJavaScriptModules = async (options: {
   readonly artifactRoot: string;
-  /**
-   * Modules the framework compiled (manifest kind `bundle`), checked at
-   * `bundleSyntaxCheck`; every other module is parsed in full (`parsed`).
-   */
-  readonly bundledPaths?: ReadonlySet<string>;
-  /** How a bundled module's syntax is checked; `lexed` unless a caller knows the bundler output may have been rewritten. */
-  readonly bundleSyntaxCheck?: ModuleSyntaxCheck;
   readonly files: readonly ArtifactFile[];
   readonly manifestFiles?: ReadonlySet<string>;
   /** Prebuilt payload files: opaque consumer outputs excluded from graph validation. */
   readonly prebuiltPaths?: ReadonlySet<string>;
+  /** Compiled modules whose evidence record covers their bytes; lexed, not import-resolved. */
+  readonly provenPaths: ReadonlySet<string>;
   /**
    * POSIX directory under which diagnostics name the validated modules, for
    * a tree validated before it is published under another path: the package
@@ -139,7 +144,8 @@ export const validateJavaScriptModules = async (options: {
       return;
     }
     visiting.add(path);
-    const check = options.bundledPaths?.has(path) === true ? options.bundleSyntaxCheck ?? 'lexed' : 'parsed';
+    const proven = options.provenPaths.has(path);
+    const check: ModuleSyntaxCheck = proven ? 'lexed' : 'parsed';
     let bytes: Buffer;
     try {
       bytes = await runWithPlatform(readFileBytes(resolve(artifactRoot, path)));
@@ -167,6 +173,7 @@ export const validateJavaScriptModules = async (options: {
         diagnostics.push(graphDiagnostic(reported(path), 'has a non-literal dynamic import.'));
         continue;
       }
+      if (proven) continue;
       const resolved = await resolveJavaScriptImport({
         artifactRoot,
         files,

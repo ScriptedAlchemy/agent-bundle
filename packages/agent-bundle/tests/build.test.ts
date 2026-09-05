@@ -1439,11 +1439,49 @@ it('excludes linked dependencies that live inside the project directory', async 
   expect(evidence.assets).toEqual([{ path: 'scripts/linked.mjs', sourceInputs: linkedWorkspaceSourceInputs(root) }]);
 }, 20_000);
 
+it('fails the build on an expression import the compiler left verbatim in a compiled script', async () => {
+  // Rslib's profile bundles a literal `import()` but leaves `import(<expression>)`
+  // in the emitted bundle untouched, unrecorded, and unwarned; the evidence
+  // record lists that form as unobserved, and the walk over the emitted module
+  // is what still reports it.
+  const project = await createProject();
+  try {
+    const expressionImportSource = [
+      "export const load = (name: string) => import(name);",
+      "console.log(Object.keys(await load(process.argv[2] ?? 'node:os')).length);",
+      '',
+    ].join('\n');
+    await writeFile(project.scriptPath, expressionImportSource);
+    const model = modelFor(project);
+    await expect(build({
+      model: {
+        ...model,
+        skills: model.skills.map((skill) => ({
+          ...skill,
+          resources: skill.resources.map((resource) =>
+            resource.source === project.scriptPath
+              ? { ...resource, bytes: Buffer.byteLength(expressionImportSource) }
+              : resource,
+          ),
+        })),
+      },
+      outputRoot: project.outputRoot,
+      projectRoot: project.root,
+      registry: new TargetRegistry().register((await import('../src/adapters/portable.ts')).portableAdapter, { default: true }),
+    })).rejects.toThrow(
+      'Agent Bundle compilation failed with 1 error:\n[AB6005] Generated JavaScript import from "scripts/greeting.mjs" has a non-literal dynamic import.',
+    );
+  } finally {
+    await cleanupProject(project);
+  }
+}, 20_000);
+
 it('parses emitted bundles in full when a tools hatch could have rewritten them', async () => {
-  // A compiler bundle is trusted to the ESM lexer only while its bytes are the
-  // bundler's own. A hatch runs after Rspack parsed the source and can rewrite
-  // the emitted asset — here a raw banner that leaves the lexer satisfied but
-  // Node unable to start the module — so a hatch build keeps the full parse.
+  // A compiler bundle is trusted to the ESM lexer only while the evidence
+  // record covers its bytes from a build without a hatch. A hatch runs after
+  // Rspack parsed the source and can rewrite the emitted asset — here a raw
+  // banner that leaves the lexer satisfied but Node unable to start the module
+  // — so the record says `coverage.rewritable` and the walk keeps the full parse.
   const project = await createProject();
   try {
     await expect(build({

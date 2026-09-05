@@ -79,8 +79,8 @@ interface EmittedModuleReport {
  * an emitted module may import; every other specifier must be a relative
  * path (`./` or `../`) to a file inside the same output tree. The author's
  * own `tools` hatch is the only way a non-builtin may remain external, and
- * this fixture declares none. `AB6005` (src/build/validate-artifact-modules.ts)
- * enforces the same rule inside every build; this walk proves it on the
+ * this fixture declares none. `AB6005` (src/build/external-policy.ts, compiler.ts)
+ * enforces the same rule at compile time; this walk proves it on the
  * outputs a real consumer builds from the installed tarball.
  */
 const emittedModuleReport = async (root: string): Promise<EmittedModuleReport> => {
