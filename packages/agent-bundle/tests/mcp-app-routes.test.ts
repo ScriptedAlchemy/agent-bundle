@@ -7,6 +7,7 @@ import { expect, it } from '@rstest/core';
 import {
   McpAppRoutes,
   type McpAppRoutePreviewService,
+  type McpAppRoutesOptions,
 } from '../src/dev/mcp-apps/mcp-app-routes.ts';
 import { runtimeAppMessageLimits } from '../src/dev/runtime-app-message-limits.ts';
 import { McpAppRuntimePreviewError } from '../src/dev/mcp-app-runtime-preview-service.ts';
@@ -152,10 +153,12 @@ class RecordingPreviewService implements McpAppRoutePreviewService {
 const startRoutes = async (
   service = new RecordingPreviewService(),
   gracefulCloseReceiptTimeoutMs?: number,
+  openingCall?: McpAppRoutesOptions['openingCall'],
 ): Promise<StartedRoutes> => {
   const routes = new McpAppRoutes({
     authorize,
     ...(gracefulCloseReceiptTimeoutMs === undefined ? {} : { gracefulCloseReceiptTimeoutMs }),
+    ...(openingCall === undefined ? {} : { openingCall }),
     service,
   });
   const server = createServer((request, response) => {
@@ -601,6 +604,65 @@ it('creates an App preview from only session-scoped JSON data', async () => {
     }]);
   } finally {
     await started.close();
+  }
+});
+
+it('binds the host\'s own opening call when a create request omits input and result (#562)', async () => {
+  // A result far past the 64 KiB request-body bound: the host holds it, so the
+  // page never sends it back.
+  const large = { structuredContent: { rows: Array.from({ length: 4000 }, (_, index) => ({ index, text: 'x'.repeat(24) })) } };
+  expect(Buffer.byteLength(JSON.stringify(large))).toBeGreaterThan(64 * 1024);
+  const service = new RecordingPreviewService();
+  const started = await startRoutes(service, undefined, (sessionId, toolName) =>
+    sessionId === 'session-a' && toolName === 'show-weather' ? { input: { city: 'Oslo' }, result: large } : undefined);
+  try {
+    const bound = await fetch(`${started.url}/api/mcp/sessions/session-a/apps`, {
+      body: JSON.stringify({ host, previewProfile: 'portable', toolName: 'show-weather' }),
+      headers: { ...headers(), 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    expect(bound.status).toBe(200);
+    expect(service.calls).toEqual([{
+      kind: 'create',
+      options: { host, input: { city: 'Oslo' }, previewProfile: 'portable', result: large, sessionId: 'session-a', toolName: 'show-weather' },
+    }]);
+
+    // Another tool, or a session the host did not open, has no call to bind.
+    for (const body of [
+      { host, previewProfile: 'portable', toolName: 'other-tool' },
+      { host, input: { city: 'Oslo' }, previewProfile: 'portable', toolName: 'show-weather' },
+    ]) {
+      const response = await fetch(`${started.url}/api/mcp/sessions/session-a/apps`, {
+        body: JSON.stringify(body),
+        headers: { ...headers(), 'content-type': 'application/json' },
+        method: 'POST',
+      });
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toEqual({ diagnostic: { code: 'AB8021', message: 'MCP App request has an invalid shape.' } });
+    }
+    const otherSession = await fetch(`${started.url}/api/mcp/sessions/session-b/apps`, {
+      body: JSON.stringify({ host, previewProfile: 'portable', toolName: 'show-weather' }),
+      headers: { ...headers(), 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    expect(otherSession.status).toBe(400);
+    expect(service.calls).toHaveLength(1);
+  } finally {
+    await started.close();
+  }
+
+  // Without a host-made call, the Workbench shape stays required.
+  const plain = await startRoutes();
+  try {
+    const response = await fetch(`${plain.url}/api/mcp/sessions/session-a/apps`, {
+      body: JSON.stringify({ host, previewProfile: 'portable', toolName: 'show-weather' }),
+      headers: { ...headers(), 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    expect(response.status).toBe(400);
+    expect(plain.service.calls).toEqual([]);
+  } finally {
+    await plain.close();
   }
 });
 
