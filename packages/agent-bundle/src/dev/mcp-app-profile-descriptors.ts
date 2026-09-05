@@ -1,7 +1,8 @@
+import { MCP_APP_PROTOCOL_VERSION } from '../contracts/mcp-app-protocol.ts';
 import { deepFreeze } from '../core/freeze.ts';
 
 /** Browser-safe MCP App profile identity and descriptor registry. */
-export const MCP_APP_PROTOCOL_VERSION = '2026-01-26';
+export { MCP_APP_PROTOCOL_VERSION };
 
 export type McpAppProfileId = 'chatgpt' | 'claude' | 'portable';
 

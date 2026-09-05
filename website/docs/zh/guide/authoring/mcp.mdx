@@ -688,13 +688,126 @@ refresh）的 `@rsbuild/plugin-react` 注册在每个 App 环境上，因此 `St
 有 `React` 导入的 `React.createElement` 调用。JSX 语法本身仍然只能写在 `.tsx`/`.jsx` 文件里，因为
 打包器按扩展名识别模块的语法。
 
+### 带类型的 App 客户端
+
+`agent-bundle/app` 是只面向浏览器的入口，不导入 Zod、Node built-in、Effect 或编译器代码。
+`createAppClient()` 负责 MCP Apps 握手、request id、pending request、超时与取消、JSON-RPC 与结果
+envelope 解码，以及 parent-window transport，因此视图不需要手写 `postMessage` frame 或
+`structuredContent` reader：
+
+```ts
+// src/mcp/hauler/apps/dashboard.ts
+import { createAppClient } from 'agent-bundle/app';
+
+const client = createAppClient({
+  appInfo: { name: 'hauler-dashboard', version: '1' },
+  timeoutMs: 15_000,
+});
+
+await client.connect();
+
+// 直接得到由 resultSchema 定型的结构化结果对象。
+const status = await client.call('tool:hauler/hauler_status', { limit: 40 });
+
+const stop = client.onToolResult('tool:hauler/hauler_status', (opening) => { /* 已定型 */ });
+client.onToolInput('tool:hauler/hauler_status', (input) => { /* 已定型 */ });
+client.onToolError('tool:hauler/hauler_status', (error) => { /* opening tool 失败 */ });
+client.onToolCancelled(({ reason }) => { /* opening call 未产生结果便结束 */ });
+
+stop();
+client.dispose();
+```
+
+**路由 id 与类型。** 工具以 `tool:<server>/<name>` 路由 id 寻址。客户端与生成的服务器一样从最后一段
+推导 wire tool name；其他形状属于调用方误用，会抛出 `TypeError`。`tools/call` 以最后一段作为标准
+`name`，并在框架私有 `_meta` 中携带规范路由 id；`createMcpAppBridge` 会在分派之前拒绝 server 段或
+工具名与当前绑定服务器不符的路由。其他 MCP App 宿主可以忽略这项私有 metadata，因此仍应只寻址注册该
+App 的服务器工具。当路由图至少包含一条工具路由时，
+生成的 `.agent-bundle/routes.d.ts` 会为 `agent-bundle/app` 恰好添加一次 augmentation：
+
+```ts
+declare module 'agent-bundle/app' {
+  interface AppRegister {
+    readonly routes: AgentBundleAppRouteContracts;
+  }
+}
+```
+
+成员就是项目生成的 MCP **工具**路由：`input` 来自各路由的 `inputSchema`，`result` 来自
+`resultSchema`。该声明以 type-only 方式导入路由模块，所以不会把路由模块、schema 或服务器代码带入 App
+文档。模板已经在 `tsconfig.json` 的 `include` 中列出 `".agent-bundle/routes.d.ts"`；路由项目漏掉它时
+会收到 `AB4834`。没有 augmentation 时——例如手写服务器——`call()` 仍能以 `unknown` 输入与结果工作，视图也可以
+通过同一个结构化 `AppRegister` seam 声明自己的本地契约 map；[MCP App 示例](../../examples/mcp-app.mdx)
+就为手写的 `status` 服务器这样声明 `show-status` 与 `refresh-status`。`AppRouteId`、
+`AppRouteInput<Id>` 与 `AppRouteResult<Id>` 为 wrapper 命名同一套类型表面。
+
+**调用与结果。** `call()` 直接返回结构化结果对象；MCP 的 `content`、`_meta` 与 `isError` envelope
+只是 transport 数据。工具结果带有 `isError: true` 时，它会以 `code: 'rpc'` 拒绝，并把完整结果保存在
+`error.data`；没有 object `structuredContent` 或结果格式不合法时则以 `invalid-message` 拒绝。只有根为
+对象的 `resultSchema` 才会产生 `structuredContent`；契约表仍会定型 scalar 或 array 路由，但对它们的
+`call()` 每次都会以 `invalid-message` 拒绝。
+`request(method, params?)` 是读取 `resources/read` 及宿主支持的 `ui/*` method 的底层逃生舱，按原样返回
+JSON-RPC result。两者都会在尚未 `connect()` 时先连接；每个请求都接受
+`{ signal?: AbortSignal, timeoutMs?: number }`。客户端默认超时为 15 秒，也可在
+`createAppClient({ timeoutMs })` 或单次请求上覆盖。超时或中止分别以 `timeout`、`aborted` 拒绝，并向
+宿主发送带 request id 与原因的 `notifications/cancelled`。
+
+**打开时的 notification。** `onToolInput(routeId, listener)` 与
+`onToolResult(routeId, listener)` 观察打开 App 的工具调用；宿主所带的工具名会按注册路由 id 的最后一段
+筛选，因此其他工具的 opening notification 不会送到该 listener。`onToolResult` 交付解码后的
+`structuredContent`，而不是 envelope。`onToolCancelled(listener)` 接收终止性的
+`ui/notifications/tool-cancelled` 及可选 `reason`。`onToolError(routeId, listener)` 以同样的路由名
+筛选 opening tool failure：`isError: true` 交付 `code: 'rpc'` 的 `AppClientError`，无效 envelope 或
+缺少 object `structuredContent` 则交付 `invalid-message`；错误不会同时送到 `onToolResult`。每次注册
+都返回 unsubscribe 函数。
+
+**完整公开表面。** 该入口导出 `createAppClient`、`AppClient`、`AppRegister`、
+`AppRouteContract`、`AppRoutes`、`AppRouteId`、`AppRouteInput`、`AppRouteResult`、
+`AppClientError`、`AppClientErrorCode`、`AppConnectOptions`、`CreateAppClientOptions`、
+`AppRequestOptions`、`AppAbortSignal`、`AppImplementation`、`AppInitializeResult`、`AppMessageEvent`、
+`AppToolInputListener`、`AppToolResultListener`、`AppToolErrorListener`、
+`AppToolCancelledListener`、可注入的 `AppWindow` / `AppMessageTarget` port，以及
+`APP_PROTOCOL_VERSION`。`AppClient` 提供只读 `connected` / `disposed` 状态与 `connect`、
+`request`、`call`、`onToolInput`、`onToolResult`、`onToolError`、`onToolCancelled`、`rebind`、
+`dispose`。
+
+**错误与调用方误用。** 运行时、连接与能力失败统一使用 `AppClientError`，其 `code` 恰好是八种：
+`timeout`、`aborted`、`disposed`、`connection-rebound`、`invalid-message`、`rpc`、
+`capability-unavailable`、`consent-required`。宿主 JSON-RPC 的 `-32601` 映射为
+`capability-unavailable`，`-32001` 映射为 `consent-required`，其他 code 映射为 `rpc`，同时保留
+`rpcCode` 与 `data`。参数种类或契约形状的同步误用——例如错误的 route id、非函数 listener、非精确
+`targetOrigin`、缺少浏览器 window，或非法的 `appInfo` / `appCapabilities`——抛出 `TypeError`；
+超时不是 1 到 2,147,483,647 毫秒之间的安全整数则抛出 `RangeError`。这些都不是 `AB` 诊断。
+
+**生命周期与 origin pin。** Workbench 与 `serve-app` 把 App 渲染为 opaque、no-referrer 的 `srcdoc`
+sandbox，所以文档事先不知道宿主 origin。`connect()` 只向 `'*'` 发送一帧——框架拥有的
+`ui/initialize`——并且只接受 configured parent window（`event.source`）以同一 request id 返回的有效
+initialize result（协议版本 `2026-01-26`，以及 `hostInfo`、`hostCapabilities`、`hostContext`）。
+客户端拒绝 opaque `null` origin，固定响应的 `event.origin`，发送
+`ui/notifications/initialized`，之后只向该精确 origin 发送并只接受同时匹配 source 与 origin 的消息。
+能预先给出可信 origin 的宿主可传入精确的 `http:` / `https:` `targetOrigin`；`'*'` 会被拒绝，且不会有
+任何 wildcard frame。`connect()` 幂等。`rebind({ parent?, targetOrigin?, window? })` 以
+`connection-rebound` 拒绝旧 generation 的 pending request、撤销 pin，再对新 parent 握手。
+`dispose()` 同样幂等：移除 listener，以 `disposed` 拒绝 pending request，并丢弃所有注册；宿主发来的
+`ui/resource-teardown` request 会先得到确认，再 dispose 客户端。可注入的 `window` 与 `parent` 让测试
+及非 DOM 宿主能驱动同一个客户端。
+
+**宿主侧边界。** 客户端只是 iframe 内的半座桥。frame relay、sandbox proxy、宿主页面、
+`/api/mcp/...` 路由与 consent authority 都属于宿主；Workbench MCP 页面、`agent-bundle serve-app`、
+嵌入 App 的 MCP 宿主，以及 [#564](https://github.com/ScriptedAlchemy/agent-bundle/issues/564)
+计划的独立生产宿主，都会通过同一份 wire contract（`McpAppBridge`）服务这个客户端。由宿主而不是 App
+决定 call 到达哪台服务器、哪些能力需要同意；App 不能绕过 relay 访问前台服务器或 MCP backend。
+
+`agent-bundle/app` 不携带编译器，编译器会像其他依赖一样从已安装的包把它内联进 App 文档，因此 App 中的
+值导入不会触发保护自包含可执行文件的 `AB4837`。
+
 ### 保留标识符优先
 
 你的 `tsconfig.json` `paths` 在视图内照常生效（`@lib/*`、`@/components/*` 等）：Rsbuild 会像往常
-一样把它们交给打包器，并在所有别名之前解析。唯一不受它们影响的标识符是 `agent-bundle/meta`：编译器
-会在解析开始之前就把这个精确的导入改写为生成的身份模块，因此针对 `agent-bundle/meta` 的 `paths`
-映射在编译出的视图内不起作用——无论哪次构建、无论哪份 tsconfig，App 导入的都是框架的身份模块。
-若某个 `tools` 逃生舱移除了这一改写，已解析配置断言会拒绝该构建。
+一样把它们交给打包器，并在所有别名之前解析。不受它们影响的标识符是 `agent-bundle/meta` 与
+`agent-bundle/app`：编译器会在解析开始之前改写这两个精确导入，因此 `paths` 映射既不能替换生成的
+身份模块，也不能替换框架的浏览器运行时。若某个 `tools` 逃生舱移除了任一改写，已解析配置断言会拒绝
+该构建。
 
 ### 编译错误与体积
 
@@ -716,11 +829,14 @@ MCP App "status" failed to compile: views/status.ts:1:10: Module build failed
 gzip 体积（`--json` 中为 `build.compiledMcpApps[].size.bytes` 与 `.gzipBytes`）：
 
 ```text
-Built mcp-app-example to …/mcp-app-example/artifact
-MCP App status (portable): mcp-apps/status.html 427.1 KiB (102.1 KiB gzip)
+Built <plugin> to …/<plugin>/artifact
+MCP App <name> (<target>): mcp-apps/<name>.html <size> (<gzip size> gzip)
 ```
 
-这个例子已接近下限。任何导入 `@modelcontextprotocol/ext-apps` 的视图都会带上 `zod`（v3 与 v4）、
+数字来自当次实际
+输出；不要把某次示例构建的体积当作固定契约。
+
+任何导入 `@modelcontextprotocol/ext-apps` 的视图都会带上 `zod`（v3 与 v4）、
 `@modelcontextprotocol/sdk`、`zod-to-json-schema` 以及 `ext-apps` 本身——在你写下第一行自己的代码
 之前就约有 437 kB（gzip 后 104 kB）——因此一个健康的视图远在 1 MiB 以下。生产构建的输出达到或超过
 1 MiB 时会报告 `AB4772` 建议性诊断并点名最大的五个模块；任何超过 2 MiB 的构建也会报告它，因为

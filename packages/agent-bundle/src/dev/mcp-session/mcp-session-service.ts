@@ -168,14 +168,22 @@ const createMcpAppSessionLease = (entry: ActiveSession): McpAppSessionLease => {
     if (entry.closed) throw new Error('MCP App session is closed.');
   };
   const bridgeSession: McpAppBridgeSession = Object.freeze({
-    callTool: async ({ arguments: toolArguments, name }: {
+    callTool: async ({ arguments: toolArguments, name, signal }: {
       readonly arguments: McpAppJsonValue | undefined;
       readonly name: string;
+      readonly signal?: AbortSignal;
     }) => {
       assertActive();
+      if (signal?.aborted) {
+        throw signal.reason instanceof Error ? signal.reason : new Error('MCP App tool call was aborted.');
+      }
       const argumentsSnapshot = canonicalMcpAppJson(toolArguments ?? {}, 'MCP App tool arguments');
       if (!isRecord(argumentsSnapshot)) throw new TypeError('MCP App tool arguments must be a JSON object.');
-      const result = await entry.session.callTool({ arguments: argumentsSnapshot, name });
+      const result = await entry.session.callTool({
+        arguments: argumentsSnapshot,
+        name,
+        ...(signal === undefined ? {} : { signal }),
+      });
       assertActive();
       return canonicalMcpAppJson(
         result,
@@ -198,9 +206,15 @@ const createMcpAppSessionLease = (entry: ActiveSession): McpAppSessionLease => {
       assertActive();
       return tools;
     },
-    readResource: async ({ uri }: { readonly uri: string }) => {
+    readResource: async ({ uri, signal }: { readonly signal?: AbortSignal; readonly uri: string }) => {
       assertActive();
-      const result = await entry.session.readResource({ uri });
+      if (signal?.aborted) {
+        throw signal.reason instanceof Error ? signal.reason : new Error('MCP App resource read was aborted.');
+      }
+      const result = await entry.session.readResource({
+        uri,
+        ...(signal === undefined ? {} : { signal }),
+      });
       assertActive();
       return canonicalMcpAppJson(result, 'MCP App resource result');
     },

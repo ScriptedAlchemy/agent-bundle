@@ -15,6 +15,7 @@ Every public entry point is documented from its declarations:
 | --- | --- |
 | `agent-bundle` | The authoring and orchestration surface: `defineSkill`, `canonicalAgentEvents`, `startDevServer`, `runEvals`, `compareEvals`, the eval harness factories, and the artifact-manifest helpers. |
 | `agent-bundle/api` | The programmatic compiler: `build`, `validate`, `inspect`, `prepack`, their option and result types, the `AgentComponentKind` / `componentKindCapability` component-kind helpers, and the artifact operations `listMcp`, `invokeMcp`, `runMcp`, `serveApp` (a built MCP App served standalone in a browser — a host-process API for scripts and tests; a routed CLI command inside the artifact uses `spawnServeApp` from `agent-bundle/serve-app-command` instead, see [Serving an App standalone](../guide/authoring/mcp.mdx#serving-an-app-standalone)), `listHooks`, and `simulateHook`; plus the Rspack stats formatters `rspackStatsErrors`, `describeRspackStatsError`, and `formatRspackStatsError`, which render a compile error as the same `<file>:<line>:<column>: <message>` line the compiler's `AB4770` carries, for tools that drive their own Rsbuild compile. |
+| `agent-bundle/app` | The browser-safe MCP App client: `createAppClient`, the `AppClient` lifecycle (`connect`, `call`, `request`, `onToolInput`, `onToolResult`, `onToolError`, `onToolCancelled`, `rebind`, `dispose`), `AppClientError` and its `code` union for every wire and lifecycle failure (option misuse is a plain `TypeError` or `RangeError`), the `AppRegister` interface the generated `.agent-bundle/routes.d.ts` augments with the project's `tool:<server>/<name>` contracts, `AppRouteId` / `AppRouteInput` / `AppRouteResult`, the injectable `AppWindow` / `AppMessageTarget` ports, and `APP_PROTOCOL_VERSION`. Imports nothing from Zod, Node, or the compiler; for App views only. |
 | `agent-bundle/config` | `defineConfig` and the configuration types. |
 | `agent-bundle/test` | The route-testing harness, matchers, and contract matrices. |
 | `agent-bundle/test/browser` | The MCP App bridge harness for browser-rendered views. |
@@ -47,5 +48,7 @@ this Reference — are complete translations.
 ## Where to start
 
 - Compiling from a script: `build` and `validate` in `agent-bundle/api`.
+- Calling typed tools from an MCP App: `createAppClient` in `agent-bundle/app`, explained in
+  [The typed App client](../guide/authoring/mcp.mdx#the-typed-app-client).
 - Writing tests: `renderRoute`, `expectDocument`, and the matrices in `agent-bundle/test`, explained in [Testing](../guide/development/testing.mdx).
 - Writing evals: `defineEvalSuite` and the assertions in `agent-bundle/eval`, explained in [Evaluations](../guide/development/evaluations.mdx).

@@ -49,6 +49,7 @@ describe('compilerCarryingSpecifiers', () => {
 
   it('matches specifiers exactly and leaves bundle-safe entries and other packages alone', () => {
     const clean = scan(lines(
+      "import { createAppClient } from 'agent-bundle/app';",
       "import 'agent-bundle/routes';",
       "import { appResourceUri } from 'agent-bundle/routes';",
       "import { launchEnv } from 'agent-bundle/launch-env';",
@@ -58,7 +59,7 @@ describe('compilerCarryingSpecifiers', () => {
       "import { local } from './local';",
       "export * from 'agent-bundle/meta';",
       "const later = await import('agent-bundle/mcp-entry');",
-      'export default async () => [appResourceUri, launchEnv, spawnServeApp, deeper, z, local, later];',
+      'export default async () => [createAppClient, appResourceUri, launchEnv, spawnServeApp, deeper, z, local, later];',
     ));
     expect(clean).toEqual([]);
     expect(Object.isFrozen(clean)).toBe(true);
