@@ -1,9 +1,9 @@
-const marker = Symbol.for('agent-bundle.runtime-rebundle-fixture');
+const marker = 'AGENT_BUNDLE_RUNTIME_REBUNDLE_FIXTURE_EXECUTED';
 
-Reflect.set(globalThis, marker, true);
+process.env[marker] = '1';
 
 export const assertPrivateSiblingLoaded = (): void => {
-  if (Reflect.get(globalThis, marker) !== true) {
+  if (process.env[marker] !== '1') {
     throw new Error('Synthetic runtime sibling did not execute.');
   }
 };

@@ -68,9 +68,15 @@ try {
   process.exitCode = await run('pnpm', ['exec', 'rstest', '--config', 'rstest.packed.config.ts', ...rstestArguments], {
     AGENT_BUNDLE_PACKAGE_PREBUILT: '1',
     ...(releasePool ? { AGENT_BUNDLE_PACKED_RELEASE: '1' } : {}),
+    AGENT_BUNDLE_RUNTIME_REBUNDLE_FIXTURE: '1',
     AGENT_BUNDLE_SHARED_PACK_DIR: packDirectory,
     AGENT_BUNDLE_WORKBENCH_PREBUILT: '1',
   });
 } finally {
   await rm(packDirectory, { force: true, recursive: true });
+  const restoreExitCode = await run('pnpm', ['--filter', 'agent-bundle', 'build'], {
+    AGENT_BUNDLE_RUNTIME_REBUNDLE_FIXTURE: '',
+    NODE_ENV: 'production',
+  });
+  if (restoreExitCode !== 0) process.exitCode = restoreExitCode;
 }

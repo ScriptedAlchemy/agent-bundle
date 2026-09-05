@@ -73,7 +73,6 @@ export const agentBundleRuntimeLibId = 'runtime-node';
 
 const publicEntries = {
   api: './src/api.ts',
-  app: './src/app/index.ts',
   cli: './src/cli.ts',
   config: './src/config/index.ts',
   eval: './src/eval/index.ts',
@@ -87,6 +86,7 @@ const publicEntries = {
 };
 
 const runtimeEntries = {
+  app: './src/app/index.ts',
   'cli-entry': './src/cli-entry.ts',
   'event-ipc': './src/events/ipc.ts',
   'event-project': './src/events/project.ts',
@@ -132,16 +132,15 @@ export default defineConfig({
     {
       id: agentBundleRuntimeLibId,
       bundle: true,
-      dts: true,
+      dts: false,
       format: 'esm',
       source: {
         entry: runtimeEntries,
       },
-      // These files are inputs to a second Rspack compilation when the
-      // compiler generates an artifact. Keeping their package build in one
-      // no-split compilation gives every transitive private module a stable,
-      // self-contained placement without promoting siblings to entries.
-      splitChunks: false,
+      // These entries are inputs to a second Rspack compilation when the
+      // compiler generates an artifact. Keeping them outside the public
+      // graph's dynamic runtime import gives their transitive private modules
+      // a re-bundle-safe placement without promoting siblings to entries.
       syntax: 'es2022',
     },
   ],

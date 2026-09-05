@@ -37,12 +37,13 @@ describe('rstest.rslib.ts', () => {
       agentBundleRuntimeLibId,
     ]);
     expect(agentBundleRslibConfig.lib?.find((lib) => lib.id === agentBundleRuntimeLibId)).toMatchObject({
+      dts: false,
       source: {
         entry: {
+          app: './src/app/index.ts',
           'mcp-server-runtime': './src/mcp-server-runtime.ts',
         },
       },
-      splitChunks: false,
     });
   });
 
