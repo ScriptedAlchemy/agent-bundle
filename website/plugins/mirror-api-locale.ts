@@ -1,6 +1,9 @@
 import { copyFile, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { RspressPlugin } from '@rspress/core';
+// The slugger Rspress itself runs over headings (`@rspress/core` re-exports it
+// from here for `mdx/remarkPlugins/toc.js`), so ids match byte for byte.
+import GithubSlugger from '@rspress/shared/github-slugger';
 
 const MARKDOWN_EXTENSION = '.md';
 const FRONTMATTER_FENCE = '---';
@@ -33,30 +36,6 @@ async function collectMarkdownFiles(directory: string, prefix = ''): Promise<str
   return collected;
 }
 
-/**
- * github-slugger 2.x, the algorithm `@rspress/core` bundles for heading ids
- * (`node/mdx/remarkPlugins/toc.js`): lowercase, strip this punctuation set,
- * spaces to hyphens, then `-1`, `-2`, … for a repeated slug, counted per page
- * in document order. Rspress ships it bundled, not as an importable package.
- */
-const SLUG_PUNCTUATION = /[\u2000-\u206F\u2E00-\u2E7F\\'!"#$%&()*+,./:;<=>?@[\]^`{|}~]/g;
-
-class HeadingSlugger {
-  readonly #occurrences = new Map<string, number>();
-
-  slug(text: string): string {
-    const base = text.toLowerCase().trim().replace(SLUG_PUNCTUATION, '').replace(/ /g, '-');
-    let slug = base;
-    while (this.#occurrences.has(slug)) {
-      const next = (this.#occurrences.get(base) ?? 0) + 1;
-      this.#occurrences.set(base, next);
-      slug = `${base}-${next}`;
-    }
-    this.#occurrences.set(slug, 0);
-    return slug;
-  }
-}
-
 /** Heading text as Rspress's TOC plugin sees it: escapes resolved, code spans unwrapped. */
 function headingText(raw: string): string {
   return raw
@@ -73,7 +52,7 @@ interface PageAnchors {
 }
 
 function collectPageAnchors(markdown: string): PageAnchors {
-  const slugger = new HeadingSlugger();
+  const slugger = new GithubSlugger();
   const ids = new Set<string>();
   const memberIds = new Set<string>();
   const outsideFences = markdown.replace(/^```[\s\S]*?^```[ \t]*$/gm, '');
