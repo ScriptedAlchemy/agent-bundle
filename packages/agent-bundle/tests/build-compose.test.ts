@@ -8,7 +8,7 @@ import { claudeAdapter } from '../src/adapters/claude.ts';
 import { codexAdapter, codexArtifactPaths } from '../src/adapters/codex.ts';
 import { cursorAdapter, cursorArtifactPaths } from '../src/adapters/cursor.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
-import { build, type BuildProjectResult, createDefaultRegistry, type TargetRegistry, validate } from '../src/api.ts';
+import { build, type BuildProjectResult, createDefaultRegistry, TargetRegistry, validate } from '../src/api.ts';
 import { parseArtifactManifest } from '../src/build/manifest.ts';
 import { sha256Hex } from '../src/core/digest.ts';
 import { DiagnosticError } from '../src/core/diagnostics.ts';
