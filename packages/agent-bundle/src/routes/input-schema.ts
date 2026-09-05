@@ -3,7 +3,15 @@
 import ts from 'typescript-5';
 
 import { deepFreeze } from '../core/freeze.ts';
-import { hasExportModifier, positionOf, unwrapExpression } from './syntax.ts';
+import {
+  createModuleScopeResolver,
+  rootReferencePath,
+  type ModuleScope,
+  type ModuleScopeResolver,
+  type ModuleSourceFile,
+  type ReferencePath,
+} from './module-scope.ts';
+import { hasExportModifier, positionOf, unwrapExpression, type SyntaxNode } from './syntax.ts';
 import type {
   RouteInputArrayItemSchema,
   RouteInputPropertySchema,
@@ -11,19 +19,47 @@ import type {
   RouteInputSchemaLiteral,
 } from './types.ts';
 
-// The zod-chain grammar below is this module's own; nothing else imports it.
-// Keeping it module-private also keeps `ts.*` out of the shipped declaration
-// (see syntax.ts), where `typescript-5` would be unresolvable for consumers.
-interface ChainCall {
-  readonly args: readonly ts.Expression[];
-  readonly method: string;
-  readonly node: ts.Node;
+// The scope model hands out structural node slices so its shipped declaration
+// never names typescript-5 (see module-scope.ts); every slice is a compiler
+// node, narrowed back here, once, at the boundary.
+const compilerExpression = (node: SyntaxNode): ts.Expression => node as ts.Expression;
+const compilerSourceFile = (sourceFile: ModuleSourceFile): ts.SourceFile => sourceFile as ts.SourceFile;
+
+/** How `parseInputSchema` reads the modules a schema reference leads to. */
+export interface InputSchemaExtractionOptions {
+  /** Absolute project root; a relative import resolving outside it is rejected. Unset = unconstrained (tests). */
+  readonly projectRoot?: string;
+  /** Reads one module's text by absolute path; undefined when unreadable. Defaults to a sync fs read. */
+  readonly readModule?: (path: string) => string | undefined;
+  /**
+   * Absolute path of the route module; relative imports resolve against its
+   * directory. Without it an import reference is rejected (the reason names
+   * the missing source path).
+   */
+  readonly source?: string;
 }
 
-interface ZodChain {
-  readonly base: ChainCall;
-  readonly calls: readonly ChainCall[];
+/**
+ * Where a schema is declared: the module and the binding whose initializer is
+ * the schema expression, at the end of any alias chain. `module` is
+ * project-relative POSIX when the project root is known (or the route's own
+ * relativePath for a route-local declaration); otherwise the path as read.
+ */
+export interface ResolvedSchemaOrigin {
+  readonly binding: string;
+  readonly module: string;
 }
+
+/**
+ * Why a reference in an `inputSchema` declaration could not be followed. The
+ * chain is printable: `inputSchema` first, then each binding reached, as
+ * `<binding>` when declared in the same module as the previous step and
+ * `<binding> (<module>)` otherwise. `reason` continues the last step
+ * (`imported from "x", which ...`, `which is ...`).
+ */
+export type InputSchemaResolutionFailure =
+  | { readonly chain: readonly string[]; readonly kind: 'unresolved'; readonly reason: string }
+  | { readonly chain: readonly string[]; readonly kind: 'cycle' };
 
 export type ScalarBaseKind = 'boolean' | 'enum' | 'number' | 'string';
 
@@ -45,28 +81,144 @@ export interface StaticInputSchemaProperty {
 export interface ParsedInputSchema {
   readonly entries?: readonly ParsedInputSchemaEntry[];
   readonly found: boolean;
+  /**
+   * AB4814-class grammar issues in their existing wording; a position in a
+   * module other than the route is qualified as `<module>:<line>:<col>`.
+   */
   readonly issues: readonly string[];
+  /** Present whenever the export was found and its declaration site is known. */
+  readonly origin?: ResolvedSchemaOrigin;
   readonly properties?: readonly StaticInputSchemaProperty[];
+  /**
+   * Present when a reference could not be followed; `entries` and
+   * `properties` are then absent, and `issues` holds what was judged before
+   * the reference was reached.
+   */
+  readonly resolution?: InputSchemaResolutionFailure;
 }
 
 export type ParsedInputSchemaEntry =
   | Readonly<{ readonly issue: string }>
   | Readonly<{ readonly property: StaticInputSchemaProperty }>;
 
-/** Flattens `z.base(...).m1(...).m2(...)` into base + ordered calls. */
-const flattenZodChain = (expression: ts.Expression): ZodChain | undefined => {
-  const calls: ChainCall[] = [];
-  let current = unwrapExpression(expression);
-  while (ts.isCallExpression(current) && ts.isPropertyAccessExpression(current.expression)) {
-    const target = unwrapExpression(current.expression.expression);
-    calls.unshift({ args: current.arguments, method: current.expression.name.text, node: current });
-    if (ts.isIdentifier(target) && target.text === 'z') {
-      const base = calls.shift()!;
-      return { base, calls };
+/** One route's statically projected input contract and where it is declared. */
+export interface ExtractedInputSchema {
+  readonly origin: ResolvedSchemaOrigin;
+  readonly schema: RouteInputSchema;
+}
+
+/**
+ * An expression together with the reference path it is read in: every
+ * identifier inside it resolves from `path`, so a schema imported from
+ * another module reads that module's bindings, not the route's.
+ */
+interface Located<Node extends ts.Node = ts.Expression> {
+  readonly node: Node;
+  readonly path: ReferencePath;
+}
+
+// The zod-chain grammar below is this module's own; nothing else imports it.
+// Keeping it module-private also keeps `ts.*` out of the shipped declaration
+// (see syntax.ts), where `typescript-5` would be unresolvable for consumers.
+interface ChainCall {
+  readonly args: readonly ts.Expression[];
+  readonly method: string;
+  readonly node: ts.Node;
+  /** Where the call and its arguments live. */
+  readonly path: ReferencePath;
+}
+
+interface ZodChain {
+  readonly base: ChainCall;
+  readonly calls: readonly ChainCall[];
+}
+
+/** One extraction: the route module's scope, its display path, and the resolver every reference shares. */
+interface Parser {
+  readonly relativePath: string;
+  readonly resolver: ModuleScopeResolver;
+  readonly root: ModuleScope;
+}
+
+type ResolutionFailed = { readonly failure: InputSchemaResolutionFailure; readonly kind: 'failure' };
+
+type Dereferenced =
+  | ResolutionFailed
+  | { readonly kind: 'expression'; readonly located: Located };
+
+/** `undefined` is a value, not a binding to follow; every other identifier is a reference. */
+const isReference = (node: ts.Node): node is ts.Identifier => ts.isIdentifier(node) && node.text !== 'undefined';
+
+/**
+ * The 1-based position every issue quotes, qualified with the module when
+ * the node lies outside the route module.
+ */
+const locate = (parser: Parser, located: Located<ts.Node>): string => {
+  const position = positionOf(located.path.scope.sourceFile, located.node);
+  return located.path.scope === parser.root ? position : `${located.path.scope.relativePath}:${position}`;
+};
+
+/**
+ * Follows a bare identifier through the resolver to the expression it stands
+ * for, read in its declaring scope; any other expression stands as written
+ * (wrappers removed).
+ */
+const dereference = (located: Located, parser: Parser): Dereferenced => {
+  const node = unwrapExpression(located.node);
+  if (!isReference(node)) return { kind: 'expression', located: { node, path: located.path } };
+  const resolution = parser.resolver.resolve(located.path, node.text);
+  switch (resolution.kind) {
+    case 'resolved': {
+      const { binding, chain, scope, visited } = resolution;
+      return {
+        kind: 'expression',
+        located: {
+          node: unwrapExpression(compilerExpression(resolution.initializer)),
+          path: { binding, chain, scope, visited },
+        },
+      };
     }
-    current = target;
+    case 'unresolved':
+      return { failure: { chain: resolution.chain, kind: 'unresolved', reason: resolution.reason }, kind: 'failure' };
+    case 'cycle':
+      return { failure: { chain: resolution.chain, kind: 'cycle' }, kind: 'failure' };
+    default: {
+      const unreachable: never = resolution;
+      throw new TypeError(`Unhandled reference resolution ${String(unreachable)}.`);
+    }
   }
-  return undefined;
+};
+
+type ChainOutcome =
+  | ResolutionFailed
+  | { readonly chain: ZodChain; readonly kind: 'chain' }
+  | { readonly kind: 'outside'; readonly located: Located };
+
+/**
+ * Flattens `z.base(...).m1(...).m2(...)` into base + ordered calls. A chain
+ * may also be rooted at a reference (`shared` or `shared.optional()`): the
+ * referenced chain is flattened in its own scope and its calls come first,
+ * then the local ones. `outside` names an expression that is not a chain.
+ */
+const flattenZodChain = (located: Located, parser: Parser): ChainOutcome => {
+  const calls: ChainCall[] = [];
+  let current = unwrapExpression(located.node);
+  while (ts.isCallExpression(current) && ts.isPropertyAccessExpression(current.expression)) {
+    calls.unshift({ args: current.arguments, method: current.expression.name.text, node: current, path: located.path });
+    current = unwrapExpression(current.expression.expression);
+    if (ts.isIdentifier(current) && current.text === 'z') {
+      const base = calls.shift()!;
+      return { chain: { base, calls }, kind: 'chain' };
+    }
+  }
+  if (!isReference(current)) {
+    return { kind: 'outside', located: { node: unwrapExpression(located.node), path: located.path } };
+  }
+  const resolved = dereference({ node: current, path: located.path }, parser);
+  if (resolved.kind === 'failure') return resolved;
+  const referenced = flattenZodChain(resolved.located, parser);
+  if (referenced.kind !== 'chain' || calls.length === 0) return referenced;
+  return { chain: { base: referenced.chain.base, calls: [...referenced.chain.calls, ...calls] }, kind: 'chain' };
 };
 
 type StaticLiteral =
@@ -131,39 +283,37 @@ export const validationOnlyMethods: Readonly<Record<ScalarBaseKind | 'array', Re
 });
 
 type ScalarBaseResult =
-  | { readonly base: ScalarBase; readonly ok: true }
-  | { readonly message: string; readonly ok: false };
+  | ResolutionFailed
+  | { readonly base: ScalarBase; readonly kind: 'base' }
+  | { readonly kind: 'issue'; readonly message: string };
 
 /** Interprets one `z.<base>(...)` call as a bounded scalar projection base. */
-const scalarBaseOf = (
-  chain: ZodChain,
-  sourceFile: ts.SourceFile,
-  relativePath: string,
-  key: string,
-): ScalarBaseResult => {
-  const { args, method, node } = chain.base;
+const scalarBaseOf = (chain: ZodChain, parser: Parser, key: string): ScalarBaseResult => {
+  const { args, method, node, path } = chain.base;
   const reject = (detail: string): ScalarBaseResult => ({
-    message: `CLI route ${relativePath} property ${JSON.stringify(key)}: ${detail} at ${positionOf(sourceFile, node)} is outside the bounded argv grammar.`,
-    ok: false,
+    kind: 'issue',
+    message: `CLI route ${parser.relativePath} property ${JSON.stringify(key)}: ${detail} at ${locate(parser, { node, path })} is outside the bounded argv grammar.`,
   });
   switch (method) {
     case 'string':
     case 'number':
     case 'boolean': {
       if (args.length > 0) return reject(`z.${method} with arguments`);
-      return { base: { kind: method }, ok: true };
+      return { base: { kind: method }, kind: 'base' };
     }
     case 'url': {
       if (args.length > 0) return reject('z.url with arguments');
-      return { base: { kind: 'string' }, ok: true };
+      return { base: { kind: 'string' }, kind: 'base' };
     }
     case 'enum': {
-      const argument = args.length === 1 ? unwrapExpression(args[0]!) : undefined;
-      if (argument === undefined || !ts.isArrayLiteralExpression(argument)) {
-        return reject('z.enum without one array-literal argument');
-      }
+      if (args.length !== 1) return reject('z.enum without one array-literal argument');
+      // `z.enum(requestStatuses)` reads the referenced `as const` array in its own module.
+      const argument = dereference({ node: args[0]!, path }, parser);
+      if (argument.kind === 'failure') return argument;
+      const members = argument.located.node;
+      if (!ts.isArrayLiteralExpression(members)) return reject('z.enum without one array-literal argument');
       const choices: string[] = [];
-      for (const element of argument.elements) {
+      for (const element of members.elements) {
         const literal = unwrapExpression(element as ts.Expression);
         if (!ts.isStringLiteral(literal) && !ts.isNoSubstitutionTemplateLiteral(literal)) {
           return reject('a non-string-literal z.enum member');
@@ -171,7 +321,7 @@ const scalarBaseOf = (
         choices.push(literal.text);
       }
       if (choices.length === 0) return reject('an empty z.enum');
-      return { base: { choices, kind: 'enum' }, ok: true };
+      return { base: { choices, kind: 'enum' }, kind: 'base' };
     }
     default:
       return reject(`the zod base z.${method}`);
@@ -184,47 +334,45 @@ const validationOnlyChain = (
 ): ChainCall | undefined => calls.find((call) => !validationOnlyMethods[kind].has(call.method));
 
 type PropertyProjection =
-  | { readonly issue: string }
-  | { readonly property: StaticInputSchemaProperty };
+  | ResolutionFailed
+  | { readonly issue: string; readonly kind: 'issue' }
+  | { readonly kind: 'property'; readonly property: StaticInputSchemaProperty };
 
-const projectProperty = (
-  key: string,
-  initializer: ts.Expression,
-  sourceFile: ts.SourceFile,
-  relativePath: string,
-): PropertyProjection => {
-  const reject = (detail: string, node: ts.Node): PropertyProjection => ({
-    issue: `CLI route ${relativePath} property ${JSON.stringify(key)}: ${detail} at ${positionOf(sourceFile, node)} is outside the bounded argv grammar.`,
+const projectProperty = (key: string, initializer: Located, parser: Parser): PropertyProjection => {
+  const reject = (detail: string, at: Located<ts.Node>): PropertyProjection => ({
+    issue: `CLI route ${parser.relativePath} property ${JSON.stringify(key)}: ${detail} at ${locate(parser, at)} is outside the bounded argv grammar.`,
+    kind: 'issue',
   });
-  const chain = flattenZodChain(initializer);
-  if (chain === undefined) {
-    const node = unwrapExpression(initializer);
-    const description = ts.isIdentifier(node)
-      ? `a reference to the identifier ${JSON.stringify(node.text)}`
-      : 'an expression outside the z.<base>(...) chain form';
-    return reject(description, node);
+  const flattened = flattenZodChain(initializer, parser);
+  if (flattened.kind === 'failure') return flattened;
+  if (flattened.kind === 'outside') {
+    return reject('an expression outside the z.<base>(...) chain form', flattened.located);
   }
+  const { chain } = flattened;
 
   let base: ScalarBase;
   let repeated = false;
   if (chain.base.method === 'array') {
     repeated = true;
-    const argument = chain.base.args.length === 1 ? chain.base.args[0]! : undefined;
-    const element = argument === undefined ? undefined : flattenZodChain(argument);
-    if (element === undefined) return reject('z.array without one z.<base>(...) chain argument', chain.base.node);
-    const scalar = scalarBaseOf(element, sourceFile, relativePath, key);
-    if (!scalar.ok) return { issue: scalar.message };
+    const invalidArray = (): PropertyProjection =>
+      reject('z.array without one z.<base>(...) chain argument', chain.base);
+    if (chain.base.args.length !== 1) return invalidArray();
+    const element = flattenZodChain({ node: chain.base.args[0]!, path: chain.base.path }, parser);
+    if (element.kind === 'failure') return element;
+    if (element.kind === 'outside') return invalidArray();
+    const scalar = scalarBaseOf(element.chain, parser, key);
+    if (scalar.kind !== 'base') return scalar.kind === 'issue' ? { issue: scalar.message, kind: 'issue' } : scalar;
     if (scalar.base.kind === 'boolean') {
-      return reject('z.array of z.boolean cannot be projected onto argv;', chain.base.node);
+      return reject('z.array of z.boolean cannot be projected onto argv;', chain.base);
     }
-    const invalidElementCall = validationOnlyChain(element.calls, scalar.base.kind);
+    const invalidElementCall = validationOnlyChain(element.chain.calls, scalar.base.kind);
     if (invalidElementCall !== undefined) {
-      return reject(`the array-element method .${invalidElementCall.method}()`, invalidElementCall.node);
+      return reject(`the array-element method .${invalidElementCall.method}()`, invalidElementCall);
     }
     base = scalar.base;
   } else {
-    const scalar = scalarBaseOf(chain, sourceFile, relativePath, key);
-    if (!scalar.ok) return { issue: scalar.message };
+    const scalar = scalarBaseOf(chain, parser, key);
+    if (scalar.kind !== 'base') return scalar.kind === 'issue' ? { issue: scalar.message, kind: 'issue' } : scalar;
     base = scalar.base;
   }
 
@@ -235,32 +383,36 @@ const projectProperty = (
   const validationKind = repeated ? 'array' : base.kind;
   for (const call of chain.calls) {
     if (call.method === 'optional') {
-      if (call.args.length > 0) return reject('.optional() with arguments', call.node);
+      if (call.args.length > 0) return reject('.optional() with arguments', call);
       optional = true;
       continue;
     }
     if (call.method === 'default') {
-      const argument = call.args.length === 1 ? staticLiteral(call.args[0]!) : undefined;
-      if (argument === undefined || argument.kind === 'dynamic') {
-        return reject('.default() without one static literal argument', call.node);
-      }
-      defaultValue = argument.value;
+      const invalidDefault = (): PropertyProjection => reject('.default() without one static literal argument', call);
+      if (call.args.length !== 1) return invalidDefault();
+      // `.default(defaultStatus)` reads the referenced literal in its own module.
+      const argument = dereference({ node: call.args[0]!, path: call.path }, parser);
+      if (argument.kind === 'failure') return argument;
+      const literal = staticLiteral(argument.located.node);
+      if (literal.kind === 'dynamic') return invalidDefault();
+      defaultValue = literal.value;
       hasDefault = true;
       continue;
     }
     if (call.method === 'describe') {
       const argument = call.args.length === 1 ? unwrapExpression(call.args[0]!) : undefined;
       if (argument === undefined || (!ts.isStringLiteral(argument) && !ts.isNoSubstitutionTemplateLiteral(argument))) {
-        return reject('.describe() without one string-literal argument', call.node);
+        return reject('.describe() without one string-literal argument', call);
       }
       description = argument.text;
       continue;
     }
     if (validationOnlyMethods[validationKind].has(call.method)) continue;
-    return reject(`the method .${call.method}()`, call.node);
+    return reject(`the method .${call.method}()`, call);
   }
 
   return {
+    kind: 'property',
     property: {
       base,
       ...(hasDefault ? { defaultValue } : {}),
@@ -307,13 +459,101 @@ const findInputSchemaExport = (sourceFile: ts.SourceFile): InputSchemaExportSite
   return undefined;
 };
 
+type ParsedShape = Pick<ParsedInputSchema, 'entries' | 'issues' | 'properties' | 'resolution'>;
+
+/** Parses the declared schema expression — `z.object({ ... })` and its properties — in the scope that declares it. */
+const parseObjectSchema = (declared: Located, parser: Parser): ParsedShape => {
+  const { relativePath } = parser;
+  const flattened = flattenZodChain(declared, parser);
+  if (flattened.kind === 'failure') return { issues: [], resolution: flattened.failure };
+  const objectBase = flattened.kind === 'chain' &&
+    (flattened.chain.base.method === 'object' || flattened.chain.base.method === 'strictObject')
+    ? flattened.chain
+    : undefined;
+  if (objectBase === undefined) {
+    return {
+      issues: [
+        `CLI route ${relativePath} has an inputSchema outside the argv grammar: the top level must be z.object({ ... }) or z.strictObject({ ... }).`,
+      ],
+    };
+  }
+  const invalidTopLevelCall = objectBase.calls.find((call) => call.method !== 'strict');
+  if (invalidTopLevelCall !== undefined) {
+    return {
+      issues: [
+        `CLI route ${relativePath} has an inputSchema outside the argv grammar: the top-level method .${invalidTopLevelCall.method}() at ${locate(parser, invalidTopLevelCall)} is not supported.`,
+      ],
+    };
+  }
+  const invalidShape: ParsedShape = {
+    issues: [
+      `CLI route ${relativePath} has an inputSchema outside the argv grammar: z.${objectBase.base.method} requires one object-literal argument.`,
+    ],
+  };
+  if (objectBase.base.args.length !== 1) return invalidShape;
+  // `z.object(shape)` reads the referenced object literal in its own module.
+  const shapeArgument = dereference({ node: objectBase.base.args[0]!, path: objectBase.base.path }, parser);
+  if (shapeArgument.kind === 'failure') return { issues: [], resolution: shapeArgument.failure };
+  const shape = shapeArgument.located;
+  if (!ts.isObjectLiteralExpression(shape.node)) return invalidShape;
+
+  const issues: string[] = [];
+  const entries: ParsedInputSchemaEntry[] = [];
+  const properties: StaticInputSchemaProperty[] = [];
+  for (const property of shape.node.properties) {
+    if (!ts.isPropertyAssignment(property)) {
+      const issue = `CLI route ${relativePath} has an inputSchema property outside the argv grammar at ${locate(parser, { node: property, path: shape.path })}; use plain \`key: z...\` property assignments.`;
+      issues.push(issue);
+      entries.push({ issue });
+      continue;
+    }
+    const name = ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)
+      ? property.name.text
+      : undefined;
+    if (name === undefined) {
+      const issue = `CLI route ${relativePath} has a computed inputSchema property name at ${locate(parser, { node: property.name, path: shape.path })}; property names must be identifiers or string literals.`;
+      issues.push(issue);
+      entries.push({ issue });
+      continue;
+    }
+    const projected = projectProperty(name, { node: property.initializer, path: shape.path }, parser);
+    switch (projected.kind) {
+      case 'failure':
+        return { issues, resolution: projected.failure };
+      case 'issue':
+        issues.push(projected.issue);
+        entries.push({ issue: projected.issue });
+        break;
+      case 'property':
+        properties.push(projected.property);
+        entries.push({ property: projected.property });
+        break;
+      default: {
+        const unreachable: never = projected;
+        throw new TypeError(`Unhandled property projection ${String(unreachable)}.`);
+      }
+    }
+  }
+  return { entries, issues, properties };
+};
+
 /**
- * Parses the shared bounded input-schema grammar. Issues intentionally retain
- * the existing CLI diagnostic wording; non-CLI projection simply ignores them.
+ * Parses the shared bounded input-schema grammar. The `inputSchema`
+ * initializer may be a reference: it is followed through same-module
+ * `const` aliases and named relative imports (module-scope.ts) to the
+ * declaring expression, which is then read in its own module's scope, so a
+ * schema shared through `src/lib` projects exactly as the inline form. Issues
+ * intentionally retain the existing CLI diagnostic wording; non-CLI
+ * projection simply ignores them.
  */
-export const parseInputSchema = (moduleText: string, relativePath: string): ParsedInputSchema => {
-  const sourceFile = ts.createSourceFile(relativePath, moduleText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const site = findInputSchemaExport(sourceFile);
+export const parseInputSchema = (
+  moduleText: string,
+  relativePath: string,
+  options: InputSchemaExtractionOptions = {},
+): ParsedInputSchema => {
+  const resolver = createModuleScopeResolver(options);
+  const root = resolver.scopeOf(moduleText, relativePath, options.source);
+  const site = findInputSchemaExport(compilerSourceFile(root.sourceFile));
   if (site === undefined) return { found: false, issues: [] };
   if (site.initializer === undefined) {
     return {
@@ -324,66 +564,15 @@ export const parseInputSchema = (moduleText: string, relativePath: string): Pars
     };
   }
 
-  const chain = flattenZodChain(site.initializer);
-  const objectBase = chain !== undefined && (chain.base.method === 'object' || chain.base.method === 'strictObject')
-    ? chain
-    : undefined;
-  if (objectBase === undefined) {
-    return {
-      found: true,
-      issues: [
-        `CLI route ${relativePath} has an inputSchema outside the argv grammar: the top level must be z.object({ ... }) or z.strictObject({ ... }).`,
-      ],
-    };
-  }
-  const invalidTopLevelCall = objectBase.calls.find((call) => call.method !== 'strict');
-  if (invalidTopLevelCall !== undefined) {
-    return {
-      found: true,
-      issues: [
-        `CLI route ${relativePath} has an inputSchema outside the argv grammar: the top-level method .${invalidTopLevelCall.method}() at ${positionOf(sourceFile, invalidTopLevelCall.node)} is not supported.`,
-      ],
-    };
-  }
-  const shape = objectBase.base.args.length === 1 ? unwrapExpression(objectBase.base.args[0]!) : undefined;
-  if (shape === undefined || !ts.isObjectLiteralExpression(shape)) {
-    return {
-      found: true,
-      issues: [
-        `CLI route ${relativePath} has an inputSchema outside the argv grammar: z.${objectBase.base.method} requires one object-literal argument.`,
-      ],
-    };
-  }
-
-  const issues: string[] = [];
-  const entries: ParsedInputSchemaEntry[] = [];
-  const properties: StaticInputSchemaProperty[] = [];
-  for (const property of shape.properties) {
-    if (!ts.isPropertyAssignment(property)) {
-      const issue = `CLI route ${relativePath} has an inputSchema property outside the argv grammar at ${positionOf(sourceFile, property)}; use plain \`key: z...\` property assignments.`;
-      issues.push(issue);
-      entries.push({ issue });
-      continue;
-    }
-    const name = ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)
-      ? property.name.text
-      : undefined;
-    if (name === undefined) {
-      const issue = `CLI route ${relativePath} has a computed inputSchema property name at ${positionOf(sourceFile, property.name)}; property names must be identifiers or string literals.`;
-      issues.push(issue);
-      entries.push({ issue });
-      continue;
-    }
-    const projected = projectProperty(name, property.initializer, sourceFile, relativePath);
-    if ('issue' in projected) {
-      issues.push(projected.issue);
-      entries.push({ issue: projected.issue });
-    } else {
-      properties.push(projected.property);
-      entries.push({ property: projected.property });
-    }
-  }
-  return { entries, found: true, issues, properties };
+  const parser: Parser = { relativePath, resolver, root };
+  // The declaration site is the end of the alias chain from the export.
+  const declared = dereference({ node: site.initializer, path: rootReferencePath(root, 'inputSchema') }, parser);
+  if (declared.kind === 'failure') return { found: true, issues: [], resolution: declared.failure };
+  const origin: ResolvedSchemaOrigin = {
+    binding: declared.located.path.binding,
+    module: declared.located.path.scope.relativePath,
+  };
+  return { ...parseObjectSchema(declared.located, parser), found: true, origin };
 };
 
 const inputSchemaLiteral = (value: unknown): value is RouteInputSchemaLiteral => {
@@ -411,13 +600,20 @@ const scalarSchema = (base: ScalarBase): RouteInputArrayItemSchema => {
   }
 };
 
-/** Statically projects a route module without ever importing or executing it. */
+/**
+ * Statically projects a route module without ever importing or executing it.
+ * `undefined` when the export is absent, a reference cannot be followed, or
+ * the schema leaves the grammar: non-CLI routes stay silent either way.
+ */
 export const extractInputSchema = (
   moduleText: string,
   relativePath: string,
-): RouteInputSchema | undefined => {
-  const parsed = parseInputSchema(moduleText, relativePath);
-  if (!parsed.found || parsed.issues.length > 0 || parsed.properties === undefined) return undefined;
+  options: InputSchemaExtractionOptions = {},
+): ExtractedInputSchema | undefined => {
+  const parsed = parseInputSchema(moduleText, relativePath, options);
+  if (!parsed.found || parsed.issues.length > 0 || parsed.properties === undefined || parsed.origin === undefined) {
+    return undefined;
+  }
   if (parsed.properties.some((property) =>
     property.hasDefault && !inputSchemaLiteral(property.defaultValue))) return undefined;
 
@@ -434,9 +630,12 @@ export const extractInputSchema = (
     if (!property.optional && !property.hasDefault) required.push(property.key);
   }
   return deepFreeze({
-    additionalProperties: false,
-    properties,
-    ...(required.length === 0 ? {} : { required }),
-    type: 'object',
+    origin: parsed.origin,
+    schema: {
+      additionalProperties: false,
+      properties,
+      ...(required.length === 0 ? {} : { required }),
+      type: 'object',
+    },
   });
 };
