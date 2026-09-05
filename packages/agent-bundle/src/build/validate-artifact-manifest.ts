@@ -5,8 +5,8 @@ import type { TargetArtifactLayout, TargetArtifactOutputLayout } from '../adapte
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { isPlainRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { readFileString, runWithPlatform } from '../effect/platform.ts';
-import { readTargetMcpServers } from '../services/mcp-runtime.ts';
 import { artifactDiagnostic as diagnostic } from './artifact-diagnostics.ts';
+import type { ValidatedArtifactMcpServerEvidence } from './artifact-validation-types.ts';
 import { isDirectOutputLayoutPath } from './artifact-layout.ts';
 import {
   artifactManifestName,
@@ -32,6 +32,10 @@ import {
 interface CoherenceOptions {
   readonly artifactRoot: string;
   readonly manifest: ArtifactManifest;
+  /** The servers the MCP lane read from each host document — one read per document, shared with this lane. */
+  readonly mcpEvidence: readonly ValidatedArtifactMcpServerEvidence[];
+  /** Hosts whose MCP document the MCP lane already faulted (`AB6006`/`AB6017`); their rows are not re-judged here. */
+  readonly mcpUnprovenHosts: ReadonlySet<string>;
   readonly registry: TargetRegistry;
 }
 
@@ -152,14 +156,15 @@ const readStrictJson = async (artifactRoot: string, path: string): Promise<unkno
  * AB6039 for one selected host's MCP surface: the manifest's `documents.mcp`
  * pointer must name the document the host actually reads, and that document
  * must declare exactly the servers whose rows list the host, each with the
- * transport its row records. Unreadable or non-modern documents are `AB6017`'s
- * and are not re-reported here.
+ * transport its row records. The declared servers come from the MCP lane's
+ * evidence, so a host document is read once per validation; documents that
+ * lane already faulted (`AB6006`/`AB6017`) are not re-reported here.
  */
-const mcpDocumentDiagnostics = async (
+const mcpDocumentDiagnostics = (
   options: CoherenceOptions,
   projection: ArtifactManifestProjection,
   rows: readonly ArtifactManifestMcpServer[],
-): Promise<readonly Diagnostic[]> => {
+): readonly Diagnostic[] => {
   const host = projection.host;
   const diagnostics: Diagnostic[] = [];
   const runtime = options.registry.mcpRuntime(host);
@@ -195,12 +200,10 @@ const mcpDocumentDiagnostics = async (
     ));
     return diagnostics;
   }
-  const document = await readStrictJson(options.artifactRoot, documentPath);
-  if (document === undefined) return diagnostics;
-  const servers = readTargetMcpServers(runtime, document);
-  if (servers.status === 'invalid') return diagnostics;
-
-  const declared = new Map(servers.servers.map((entry) => [entry.name, entry.server]));
+  if (options.mcpUnprovenHosts.has(host)) return diagnostics;
+  const declared = new Map(options.mcpEvidence
+    .filter((server) => server.target === host)
+    .map((server) => [server.name, server]));
   const listed = new Set(rows.map((row) => row.name));
   for (const [name] of declared) {
     if (listed.has(name)) continue;
@@ -257,7 +260,7 @@ const projectionDiagnostics = async (options: CoherenceOptions): Promise<readonl
       ));
     }
     const rows = options.manifest.executables.mcpServers.filter((server) => server.hosts.includes(host));
-    diagnostics.push(...await mcpDocumentDiagnostics(options, projection, rows));
+    diagnostics.push(...mcpDocumentDiagnostics(options, projection, rows));
   }
   return diagnostics;
 };

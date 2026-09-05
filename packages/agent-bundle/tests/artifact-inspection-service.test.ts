@@ -55,6 +55,7 @@ const runtimeRegistry = (
   }),
 ): TargetRegistry => new TargetRegistry().register({
   artifactLayout: {
+    cliBin: { allowedSuffixes: ['.mjs'], directory: 'bin' },
     hookWrappers: { allowedSuffixes: ['.mjs'], directory: 'hooks' },
     mcpEntries: { allowedSuffixes: ['.mjs'], directory: 'mcp' },
     scripts: { allowedSuffixes: ['.mjs'], directory: 'scripts' },
@@ -196,7 +197,7 @@ const manifestFor = (
         name: 'alpha',
         path: 'scripts/alpha.mjs',
         rendered: { routeId: 'script:render-alpha' },
-        worker: 'hooks/run.mjs',
+        worker: 'scripts/alpha.worker.mjs',
       }]
       : []),
     ...(files.some((file) => file.path === 'scripts/zeta.mjs')
@@ -218,8 +219,8 @@ const manifestFor = (
     },
     distribution: { channels: ['local'] },
     executables: {
-      bins: files.some((file) => file.path === 'mcp/runner.mjs')
-        ? [{ hosts: [fixtureTarget], name: 'fixture', path: 'mcp/runner.mjs', worker: 'hooks/run.mjs' }]
+      bins: files.some((file) => file.path === 'bin/fixture.mjs')
+        ? [{ hosts: [fixtureTarget], name: 'fixture', path: 'bin/fixture.mjs', worker: 'bin/fixture.worker.mjs' }]
         : [],
       hooks: hookRows,
       mcpServers: files.some((file) => file.path === 'mcp/runner.mjs')
@@ -299,6 +300,8 @@ const publish = async (options: {
   readonly files: readonly FixtureFile[];
   readonly id: string;
   readonly omitMcpDocument?: boolean;
+  /** Validation codes the published fixture is expected to trip instead of validating clean. */
+  readonly expectValidationCodes?: readonly string[];
   readonly registry: TargetRegistry;
   readonly root: string;
   readonly sourceInputs?: typeof fixtureInputs;
@@ -330,6 +333,10 @@ const publish = async (options: {
         artifactRoot,
         registry: options.registry,
       });
+      if (options.expectValidationCodes !== undefined) {
+        expect(diagnostics.map((diagnostic) => diagnostic.code)).toEqual(options.expectValidationCodes);
+        return;
+      }
       if (diagnostics.length > 0) throw new Error(diagnostics.map((diagnostic) => diagnostic.message).join('\n'));
     });
   } catch (error) {
@@ -345,6 +352,9 @@ const runtimeFiles = (): readonly FixtureFile[] => [
     path: 'mcp.json',
   },
   { contents: 'export const runner = true;\n', kind: 'bundle', mode: 0o755, path: 'mcp/runner.mjs', sourceInputs: [runnerSourcePath] },
+  { contents: 'export const fixture = true;\n', kind: 'bundle', mode: 0o755, path: 'bin/fixture.mjs', sourceInputs: [runnerSourcePath] },
+  { contents: 'export const fixtureWorker = true;\n', kind: 'bundle', path: 'bin/fixture.worker.mjs', sourceInputs: [runnerSourcePath] },
+  { contents: 'export const alphaWorker = true;\n', kind: 'bundle', path: 'scripts/alpha.worker.mjs' },
   { contents: '{}\n', kind: 'generated', path: 'hooks/hooks.json' },
   { contents: 'export const check = true;\n', kind: 'bundle', mode: 0o755, path: 'hooks/run.mjs', sourceInputs: [runnerSourcePath] },
   { contents: 'export const alpha = true;\n', kind: 'bundle', path: 'scripts/alpha.mjs' },
@@ -437,11 +447,14 @@ it('inspects one validated epoch as sorted, source-free artifact facts', async (
       sourceInputs: fixtureInputs,
     });
     expect(inspection.files.map((file) => file.path)).toEqual([
+      'bin/fixture.mjs',
+      'bin/fixture.worker.mjs',
       'hooks/hooks.json',
       'hooks/run.mjs',
       'mcp.json',
       'mcp/runner.mjs',
       'scripts/alpha.mjs',
+      'scripts/alpha.worker.mjs',
       'scripts/not-manifested-as-script.mjs',
       'scripts/zeta.mjs',
     ]);
@@ -465,15 +478,16 @@ it('inspects one validated epoch as sorted, source-free artifact facts', async (
       sourceInputs: [{ path: runnerSourcePath, sha256: fixtureInputs[1]!.sha256 }],
     });
     expect(inspection.runtime.executables.map((file) => file.path)).toEqual([
+      'bin/fixture.mjs',
       'hooks/run.mjs',
       'mcp/runner.mjs',
     ]);
     expect(inspection.runtime.bins).toEqual([
       expect.objectContaining({
-        file: expect.objectContaining({ path: 'mcp/runner.mjs' }),
+        file: expect.objectContaining({ path: 'bin/fixture.mjs' }),
         hosts: [fixtureTarget],
         name: 'fixture',
-        worker: expect.objectContaining({ path: 'hooks/run.mjs' }),
+        worker: expect.objectContaining({ path: 'bin/fixture.worker.mjs' }),
       }),
     ]);
     expect(inspection.runtime.hooks).toEqual([
@@ -495,7 +509,7 @@ it('inspects one validated epoch as sorted, source-free artifact facts', async (
         name: 'alpha',
         rendered: 'script:render-alpha',
         target: fixtureTarget,
-        worker: expect.objectContaining({ path: 'hooks/run.mjs' }),
+        worker: expect.objectContaining({ path: 'scripts/alpha.worker.mjs' }),
       }),
       expect.objectContaining({
         file: expect.objectContaining({ path: 'scripts/zeta.mjs' }),
@@ -517,7 +531,10 @@ it('rejects a manifested MCP host without its projection MCP document', async ()
   const store = new EpochStore({ projectRoot: root });
 
   try {
+    // The validator's manifest-coherence pass (AB6039) refuses the row before
+    // inspection ever reaches its own AB6202 guard.
     await publish({
+      expectValidationCodes: ['AB6039'],
       files: runtimeFiles(),
       id: 'epoch-missing-mcp-document',
       omitMcpDocument: true,
@@ -528,8 +545,8 @@ it('rejects a manifested MCP host without its projection MCP document', async ()
 
     await expect(new ArtifactInspectionService(store, registry).inspect('epoch-missing-mcp-document'))
       .rejects.toMatchObject({
-        code: 'ARTIFACT_INSPECTION_RUNTIME_INVALID',
-        diagnostics: [expect.objectContaining({ code: 'AB6202', target: fixtureTarget })],
+        code: 'ARTIFACT_INSPECTION_INVALID',
+        diagnostics: [expect.objectContaining({ code: 'AB6039' })],
       });
   } finally {
     await rm(root, { force: true, recursive: true });

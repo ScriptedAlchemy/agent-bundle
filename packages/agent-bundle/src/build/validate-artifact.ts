@@ -740,7 +740,6 @@ export const validateArtifactWithSnapshot = async (
     portableTargetDiagnostics,
     mcpCoherenceDiagnostics,
     hookCoherenceDiagnostics,
-    manifestCoherenceDiagnostics,
     emittedSkillDiagnostics,
     generatedFileDiagnostics,
   ] = await Promise.all([
@@ -769,9 +768,6 @@ export const validateArtifactWithSnapshot = async (
       manifest,
       registry,
     }),
-    fileTableVerified
-      ? validateManifestCoherence({ artifactRoot, manifest, registry })
-      : Promise.resolve(Object.freeze([])),
     validateEmittedSkills({
       artifactRoot,
       files: inspection.files,
@@ -785,6 +781,18 @@ export const validateArtifactWithSnapshot = async (
       manifestFiles: manifest.files,
     }),
   ]);
+  // The manifest coherence lane compares the manifest rows against the MCP
+  // evidence the single document read above captured, so it runs after it and
+  // never re-reads a host document.
+  const manifestCoherenceDiagnostics = fileTableVerified
+    ? await validateManifestCoherence({
+      artifactRoot,
+      manifest,
+      mcpEvidence: runtimeEvidence.mcpServers,
+      mcpUnprovenHosts: new Set(mcpCoherenceDiagnostics.flatMap((entry) => entry.target === undefined ? [] : [entry.target])),
+      registry,
+    })
+    : Object.freeze([]);
   diagnostics.push(
     ...targetContractDiagnostics,
     ...portableTargetDiagnostics,

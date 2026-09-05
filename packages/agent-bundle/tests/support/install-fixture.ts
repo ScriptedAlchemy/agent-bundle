@@ -24,6 +24,8 @@ const marketplaceDocuments: Readonly<Record<Exclude<InstallHost, 'cursor'>, stri
 export interface InstallFixtureProjection {
   readonly host: InstallHost;
   readonly marketplace?: string;
+  /** Root-relative host MCP document to point `documents.mcp` at; it must already exist under the bundle root. */
+  readonly mcp?: string;
 }
 
 export const writeInstallFixtureManifest = async (
@@ -44,10 +46,12 @@ export const writeInstallFixtureManifest = async (
       : marketplaceDocuments[projection.host];
     documentPaths.add(plugin);
     if (marketplace !== undefined) documentPaths.add(marketplace);
+    if (projection.mcp !== undefined) documentPaths.add(projection.mcp);
     projectionRows.push({
       adapterRevision: `${projection.host}-fixture-v1`,
       documents: {
         ...(marketplace === undefined ? {} : { marketplace }),
+        ...(projection.mcp === undefined ? {} : { mcp: projection.mcp }),
         plugin,
       },
       host: projection.host,
