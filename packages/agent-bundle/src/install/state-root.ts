@@ -3,11 +3,11 @@ import { isAbsolute, join, resolve } from 'node:path';
 
 import {
   PLUGIN_STATE_ROOT_ENV_ANCHOR,
-  pluginStateSegment,
   userDataStateRoot,
 } from '@agent-bundle/runtime';
 
 import { isErrno } from '../core/errors.ts';
+import { webPluginDataRoot } from '../web-host/launch.ts';
 import type { InstallHost } from './install.ts';
 
 export interface InstalledStateRoot {
@@ -80,4 +80,4 @@ export const resolveInstalledStateRoot = async (
 };
 
 export const installedWebDataRoot = (pluginRoot: string, home: string): string =>
-  join(home, '.agent-bundle', 'web-data', pluginStateSegment(resolve(pluginRoot)));
+  webPluginDataRoot(pluginRoot, home);

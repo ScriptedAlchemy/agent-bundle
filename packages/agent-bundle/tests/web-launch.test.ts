@@ -1,12 +1,13 @@
-import { chmod, mkdir, mkdtemp, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { pluginStateSegment } from '@agent-bundle/runtime';
 import { afterEach, describe, expect, it } from '@rstest/core';
 
 import { exists } from '../src/core/paths.ts';
 import { pathTokens, pluginRootEnvAnchor } from '../src/core/types.ts';
+import { installedWebDataRoot } from '../src/install/state-root.ts';
 import { resolveWebLaunch, WebLaunchError, webPluginDataDirectory } from '../src/web-host/launch.ts';
 import type { WebManifestApp } from '../src/web-host/manifest.ts';
 
@@ -139,6 +140,16 @@ describe('resolveWebLaunch', () => {
       const second = await artifactRoot();
       expect(webPluginDataDirectory(first, 'status', home)).not.toBe(webPluginDataDirectory(second, 'status', home));
       expect(webPluginDataDirectory(first, 'status', home)).toBe(webPluginDataDirectory(`${first}/mcp/..`, 'status', home));
+    });
+
+    it('shares web-data derivation with uninstall through a symlinked plugin root', async () => {
+      const home = await homeRoot();
+      const root = await artifactRoot();
+      const link = `${root}-link`;
+      roots.push(link);
+      await symlink(root, link, 'dir');
+      expect(installedWebDataRoot(link, home))
+        .toBe(dirname(webPluginDataDirectory(link, 'status', home)));
     });
 
     it('keys the web data directory on the same segment the runtime keys the state root on', async () => {
