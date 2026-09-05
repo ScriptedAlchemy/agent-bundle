@@ -4,12 +4,11 @@
 import { pluginReact } from '@rsbuild/plugin-react';
 import { createRslib, mergeRslibConfig, rspack, type LibConfig, type Rspack } from '@rslib/core';
 import { readFile, realpath } from 'node:fs/promises';
-import { createRequire } from 'node:module';
 import { dirname, join, resolve, sep } from 'node:path';
 
+import { dependencyManifestPath } from '../core/dependency-manifest.ts';
 import { sha256Hex } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
-import { exists } from '../core/paths.ts';
 import { isRecord } from '../core/strict-json.ts';
 import type { AgentBundleToolsConfig } from '../core/types.ts';
 import type { AgentBundleMeta } from '../meta.ts';
@@ -318,30 +317,6 @@ const readManifest = async (packageRoot: string): Promise<Record<string, unknown
 };
 
 const isBeneathNodeModules = (path: string): boolean => path.split(sep).includes('node_modules');
-
-/**
- * The manifest of dependency `name` as Node resolves it from `packageRoot`,
- * which honours hoisting: npm, Yarn, and pnpm with a hoist pattern place a
- * workspace dependency in an ancestor `node_modules`, where Rspack finds it
- * too. A package whose `exports` map hides `package.json` makes that lookup
- * throw, so the same ancestor walk is then performed by hand.
- */
-const dependencyManifestPath = async (packageRoot: string, name: string): Promise<string | undefined> => {
-  try {
-    return createRequire(join(packageRoot, 'package.json')).resolve(`${name}/package.json`);
-  } catch (error) {
-    if (isErrno(error, 'MODULE_NOT_FOUND')) return undefined;
-    if (!isErrno(error, 'ERR_PACKAGE_PATH_NOT_EXPORTED')) throw error;
-  }
-  let directory = packageRoot;
-  while (true) {
-    const candidate = join(directory, 'node_modules', ...name.split('/'), 'package.json');
-    if (await exists(candidate)) return candidate;
-    const parent = dirname(directory);
-    if (parent === directory) return undefined;
-    directory = parent;
-  }
-};
 
 /**
  * The project root as Rspack records it, so a dependency link back onto the

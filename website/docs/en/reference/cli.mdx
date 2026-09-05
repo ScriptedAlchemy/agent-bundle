@@ -79,7 +79,13 @@ Serves one built MCP App in a plain browser tab, outside any MCP host and withou
 Workbench: the command launches the plugin's packed MCP server exactly as `mcp run` does, binds
 the App to it through the same host stack the Workbench MCP page uses (sandbox proxy, consent
 authority, bridge), calls the App's tool once so it opens populated, and prints the loopback URL.
-It runs in the foreground until a termination signal or until the server exits on its own.
+Its output is a contract: once the host is listening, stdout carries exactly one line,
+`MCP App <app> at <url> (tool <tool>; Ctrl-C stops the server)` — `<app>` as given on the command
+line, `<tool>` the tool that opened the App — and every diagnostic goes to stderr. The command
+then runs in the foreground: `SIGINT` or `SIGTERM` closes the host and its server and exits `0`;
+when the bound MCP server exits on its own, one `AB5000` diagnostic is written to stderr and the
+command exits `1`. `spawnServeApp` in `agent-bundle/serve-app-command` waits on the same line
+(`parseServeAppReadyLine`), so a routed command can rely on it.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
@@ -100,8 +106,9 @@ routes (a per-launch token plus same-origin checks; `AB8003` / `AB8004` on refus
 only the selected server through the bridge. The App document itself runs on a second loopback
 origin inside the framework's sandbox. It is a local preview host, not a deployment target. The
 programmatic form for scripts and tests is `serveApp` in `agent-bundle/api`; a plugin's own routed
-CLI command spawns this command instead, because the self-contained bin cannot import
-`agent-bundle/api` — see
+CLI command uses `spawnServeApp` from `agent-bundle/serve-app-command`, which runs this command as
+a child process with the same options lowered to argv, because the self-contained bin cannot
+import `agent-bundle/api` (the route graph reports the attempt as `AB4837`) — see
 [Serving an App standalone](../guide/authoring/mcp.mdx#serving-an-app-standalone).
 
 ## build and prepack

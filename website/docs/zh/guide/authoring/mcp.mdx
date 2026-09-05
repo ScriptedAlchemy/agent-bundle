@@ -641,27 +641,22 @@ npx agent-bundle serve-app status/status --artifact artifact --input '{"service"
 `package.json` 脚本或从 checkout 里运行的手写 `.mjs`——并且要求 `agent-bundle` 在该进程运行之处可被
 解析。绝不要在 MCP 服务器外壳里调用它。
 
-插件产物内部的路由式 CLI 命令今天无法导入它。路由式 CLI 的 bin 是自包含的（每个宿主包里的
-`bin/<plugin>.mjs`，以及 package build 里的 `dist/bin/<plugin>.js`），因此一条写着
-`await import('agent-bundle/api')` 的路由会让打包器把整个编译器内联进 bin，并在框架的运行时相对模块引用上
-失败（`Module not found: Can't resolve '../events'`）；把该导入留作外部依赖会得到
-`AB6005 … uses unsupported specifier "agent-bundle/api"`，而非字面量的 `import(spec)` 则是
-`AB6005 … has a non-literal dynamic import`。可供路由式命令使用的辅助函数在
-[#558](https://github.com/ScriptedAlchemy/agent-bundle/issues/558) 中跟踪。
-
-能够构建的模式，是一条普通的路由式命令把 `agent-bundle serve-app` 作为子进程启动——cargo-hauler 的
-`hauler dashboard` 正是这么做的。它是一条 **checkout 命令**：需要 `node_modules` 下的 `agent-bundle`
-和 CLI 旁边已构建的 `artifact/`，而已安装的宿主包两者都没有，所以它直接说明这一点，而不是在子进程里
-失败。
+插件产物内部的路由式 CLI 命令无法导入它。路由式 CLI 的 bin 是自包含的（每个宿主包里的
+`bin/<plugin>.mjs`，以及 package build 里的 `dist/bin/<plugin>.js`），因此对 `agent-bundle/api`——或对任何
+其他携带编译器的入口：`agent-bundle`、`agent-bundle/config`、`agent-bundle/eval`、`agent-bundle/rstest`、
+`agent-bundle/test`、`agent-bundle/test/browser`——的值导入，都会让打包器把整个编译器内联进 bin，并在
+框架的运行时相对模块引用上失败。路由图会先一步报告它：`AB4837`，点名文件与说明符，无论该路由是自己
+导入了该入口，还是经由一个通过相对导入触达的辅助模块导入的，`inspect`、`validate`、`build` 与 `dev` 都会
+报告；`import type` 以及仅作为类型使用的导入不会被报告（见[诊断参考](../../reference/diagnostics.md)）。
+正式支持的形态是 `agent-bundle/serve-app-command` 中的 `spawnServeApp`：一个无依赖的入口，把
+`agent-bundle serve-app` 作为子进程启动，让框架留在自己的进程里，宿主包保持自包含。cargo-hauler 的
+`hauler dashboard` 正是这么做的，这也是 [#558](https://github.com/ScriptedAlchemy/agent-bundle/issues/558)
+的解决方案：
 
 ```ts
-// src/cli/dashboard.ts —— `hauler dashboard`：针对正在运行的守护进程打开 App。
-import { spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
+// src/cli/dashboard.ts —— `hauler dashboard`：针对插件自己的服务器打开 App。
 import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
+import { ServeAppCommandError, spawnServeApp } from 'agent-bundle/serve-app-command';
 import { z } from 'zod';
 
 export const config = {
@@ -669,7 +664,10 @@ export const config = {
   exitCode: 'result',
 } satisfies CliRouteConfig;
 
-export const inputSchema = z.object({ noOpen: z.boolean().optional() }).strict();
+export const inputSchema = z.object({
+  noOpen: z.boolean().optional(),
+  port: z.number().int().min(0).max(65_535).optional(),
+}).strict();
 
 export const resultSchema = z.object({
   exitCode: z.number().int(),
@@ -677,73 +675,64 @@ export const resultSchema = z.object({
   url: z.string().nullable(),
 }).strict();
 
-// 框架 CLI：从插件根目录向上找到最近的 `node_modules/agent-bundle`，读取其 `bin`。
-// 按路径定位、绝不导入：对该包做 `import()` 会把框架拖进 bin。
-const frameworkCli = (root: string): string | undefined => {
-  for (let directory = root; ; directory = dirname(directory)) {
-    const manifestPath = join(directory, 'node_modules', 'agent-bundle', 'package.json');
-    if (existsSync(manifestPath)) {
-      const { bin } = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
-        bin?: string | Record<string, string>;
-      };
-      const relative = typeof bin === 'string' ? bin : bin?.['agent-bundle'];
-      if (relative === undefined) return undefined;
-      return resolve(dirname(manifestPath), relative);
-    }
-    if (directory === dirname(directory)) return undefined;
-  }
-};
-
 export default async function dashboard({ input, signal }: CliRouteProps<typeof inputSchema>) {
-  // `dist/bin/<plugin>.js` 位于 checkout 下两层；checkout 的 `artifact/` 已构建。
-  const root = fileURLToPath(new URL('../../', import.meta.url));
-  const cli = frameworkCli(root);
-  const artifact = join(root, 'artifact');
-  if (cli === undefined || !existsSync(join(artifact, 'agent-bundle.manifest.json'))) {
-    return {
-      exitCode: 1,
-      message: 'hauler dashboard runs from the plugin checkout (pnpm install, then '
-        + 'agent-bundle build); in an MCP host, call hauler_status instead.',
-      url: null,
-    };
-  }
-  return new Promise<z.infer<typeof resultSchema>>((done, fail) => {
-    const child = spawn(process.execPath, [
-      cli, 'serve-app', 'hauler/dashboard', '--root', root,
-      '--artifact', artifact, '--target', 'portable',
-      '--tool', 'hauler_status', '--allow', 'call-tool',
-      input.noOpen === true ? '--no-open' : '--open',
-    ], { stdio: ['ignore', 'pipe', 'inherit'] });
-    let url: string | null = null;
-    let pending = '';
-    child.stdout.on('data', (chunk: Buffer) => {
-      // 子进程打印 `MCP App <app> at <url> (…)`；转发到 stderr，让路由式 CLI 的 stdout
-      // 留给 JSON 结果，并且只解析完整的行——一次写入可能被拆成多个 chunk 到达。
-      const text = chunk.toString('utf8');
-      process.stderr.write(text);
-      pending += text;
-      const lines = pending.split('\n');
-      pending = lines.pop() ?? '';
-      for (const line of lines) {
-        url ??= /\bat (https?:\/\/\S+)/u.exec(line)?.[1] ?? null;
-      }
+  let served;
+  try {
+    served = await spawnServeApp({
+      app: 'hauler/dashboard',
+      root: process.cwd(),
+      artifact: 'artifact',
+      tool: 'hauler_status',
+      autoApprove: ['call-tool'],
+      open: input.noOpen !== true,
+      ...(input.port === undefined ? {} : { port: input.port }),
+      // 抵达路由式 CLI 的 Ctrl-C 会停止服务器。
+      signal,
     });
-    // 抵达路由式 CLI 的 Ctrl-C 变成子进程的 SIGTERM。
-    signal.addEventListener('abort', () => child.kill('SIGTERM'), { once: true });
-    child.once('error', fail);
-    child.once('exit', (code) => done({
-      exitCode: code ?? 1,
-      message: code === 0
-        ? 'dashboard closed'
-        : `agent-bundle serve-app exited with ${String(code)}`,
-      url,
-    }));
-  });
+  } catch (error) {
+    if (error instanceof ServeAppCommandError) {
+      // framework-not-installed、artifact-missing、exited-before-ready……
+      return {
+        exitCode: 1,
+        message: `${error.message} In an MCP host, call hauler_status instead.`,
+        url: null,
+      };
+    }
+    throw error;
+  }
+  const exit = await served.closed;
+  return {
+    exitCode: exit.code ?? 1,
+    message: exit.code === 0
+      ? 'dashboard closed'
+      : `agent-bundle serve-app exited with ${exit.signal ?? exit.code}`,
+    url: served.url,
+  };
 }
 ```
 
-`serve-app` 的每个选项——`--port`、`--input`、`--profile`、`--env-file`、`--plugin-root`——都以 argv
-形式透传；宿主包保持自包含，因为框架是被启动的，而不是被打包进去的。
+`spawnServeApp` 把它的选项转换为 `agent-bundle serve-app` 的 argv（`serveAppArgv`），从安装在 `root` 或
+其上层的 `agent-bundle` 包中解析出框架 CLI（`locateFrameworkCli`），用当前的 Node 二进制启动它，把子进程
+stdout 的每一行转发到本进程的 stderr——或转发给一个 `relay` 回调——让路由式命令把 stdout 留给自己的 JSON
+结果，并在子进程打印出就绪行 `MCP App <app> at <url> (tool <tool>; Ctrl-C stops the server)` 时兑现。
+子进程的诊断留在 stderr 上。结果携带 `app`、`url`、`port`、`tool`、`server`、`pid`，一个随子进程退出
+`{ code, signal }` 落定的 `closed` promise，以及 `close()`——它发送 `SIGTERM` 并等待那次退出；中止 `signal`
+的效果相同，因此抵达路由式命令的 Ctrl-C 会抵达服务器。失败以 `ServeAppCommandError` 拒绝，其 `code` 为
+`framework-not-installed`（从 `root` 解析不到任何 `node_modules/agent-bundle`）、`artifact-missing`（给定的
+`artifact` 路径不存在）、`spawn-failed`、`exited-before-ready`（子进程在打印就绪行之前就退出了；`error.exit`
+保存着它的 `{ code, signal }`），或 `aborted`（`signal` 在 App 被提供之前就已中止）。按下 Ctrl-C 时，
+路由式 CLI 外壳会在路由返回之前报告 `Aborted.` 并以 `130` 退出，因此上面的结果文档只在服务器自行退出或
+路由调用 `close()` 时才会打印。
+
+它是一条 **checkout 命令**：需要安装在 `root` 或其上层的 `agent-bundle`，以及一份已构建的产物。已发布的
+插件包与已安装的宿主包两者都没有，`framework-not-installed` 与 `artifact-missing` 会在启动任何东西之前
+就说明这一点。每个有 argv 形式的 `serveApp` 选项都会透传——`app`、`root`、`artifact`、`autoApprove`
+（即 `--allow` 的词汇表：`call-tool`、`download-file`、`open-external-link`、`request-display-mode`）、
+`configPath`、`envFiles`、`input`、`loadEnvFiles`、`mode`、`open`、`pluginRoot`、`port`、`profile`、`target`、
+`tool`——未设置的选项取 CLI 默认值（`--target portable`、`--profile portable`、`--mode production`、该 App
+唯一的工具、不打开浏览器）。相对路径按 CLI 的解析方式解析：`configPath` 相对 `root`，`artifact` 与
+`envFiles` 相对工作目录。没有 argv 形式的 `serveApp` 选项——`logger`、`registry`、`openBrowser`、`targets`、
+`timeoutMs`——仍留给宿主进程中的 `serveApp`。
 
 ## 服务器模式
 

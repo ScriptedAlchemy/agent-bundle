@@ -23,6 +23,7 @@ import {
   validateProviderModuleContract,
   validateRouteModuleContract,
 } from './contract.ts';
+import { validateRouteFrameworkImports } from './framework-imports.ts';
 import { extractInputSchema } from './input-schema.ts';
 import { isLayoutRouteKind } from './layouts.ts';
 import { providerKeyFromName } from './providers.ts';
@@ -460,6 +461,44 @@ const decideServerMode = (
   return withEntry('conflict');
 };
 
+/**
+ * AB4837 (#558) for one route module a generated executable bundles: the
+ * caller decides *whether* the route ships (a generated server or CLI, a
+ * conventional script, an event route); this names the self-contained
+ * executable the module is inlined into. App routes are browser builds and
+ * never bundle into a Node executable, so they are exempt.
+ */
+const routeFrameworkImportDiagnostics = (
+  route: CompiledAgentRoute,
+  moduleText: string | undefined,
+): readonly Diagnostic[] => {
+  if (moduleText === undefined) return [];
+  let executable: string;
+  switch (route.kind) {
+    case 'app':
+      return [];
+    case 'cli':
+      executable = 'routed CLI executable';
+      break;
+    case 'script':
+      executable = 'script executable';
+      break;
+    case 'tool':
+    case 'resource':
+    case 'prompt':
+      executable = 'generated MCP server';
+      break;
+    case 'event-route':
+      executable = 'hook wrapper';
+      break;
+    default: {
+      const unreachable: never = route.kind;
+      throw new TypeError(`Unhandled route kind ${String(unreachable)}.`);
+    }
+  }
+  return validateRouteFrameworkImports(moduleText, route.provenance.relativePath, route.source, executable);
+};
+
 const compiledRoute = (
   module: DiscoveredRouteModule,
   config: Readonly<Record<string, unknown>>,
@@ -717,6 +756,15 @@ export const compileRouteGraph = async (
           module.relativePath,
           module.source,
         ));
+        // A layout is inlined into every executable that renders the routes
+        // it wraps, so it bundles the compiler exactly as a route would.
+        diagnostics.push(...validateRouteFrameworkImports(
+          layoutText,
+          module.relativePath,
+          module.source,
+          'generated executable',
+          'Layout module',
+        ));
       }
       continue;
     }
@@ -733,6 +781,15 @@ export const compileRouteGraph = async (
           providerText,
           module.relativePath,
           module.source,
+        ));
+        // Providers mount in every generated request scope, so each
+        // executable inlines them.
+        diagnostics.push(...validateRouteFrameworkImports(
+          providerText,
+          module.relativePath,
+          module.source,
+          'generated executable',
+          'Provider module',
         ));
       }
       continue;
@@ -789,12 +846,19 @@ export const compileRouteGraph = async (
       }
       case 'event-route':
         events.push(route);
+        // Every event route ships as a hook wrapper of its own, so it is
+        // judged here; MCP and CLI routes are judged once their server or
+        // CLI surface is known to be generated, because a route of a
+        // custom/command/remote server or a conventional CLI never bundles.
+        diagnostics.push(...routeFrameworkImportDiagnostics(route, moduleText));
         break;
       case 'cli':
         cliRoutes.push(route);
         break;
       case 'script':
         scripts.push(route);
+        // Conventional scripts compile into every selected target.
+        diagnostics.push(...routeFrameworkImportDiagnostics(route, moduleText));
         break;
       default: {
         const unreachable: never = route.kind;
@@ -890,6 +954,9 @@ export const compileRouteGraph = async (
             route.source,
           ));
         }
+        // The generated server inlines the route, so a compiler-carrying
+        // framework import would break its bundle (AB4837, #558).
+        diagnostics.push(...routeFrameworkImportDiagnostics(route, moduleText));
         // The route's render budget (#454) is read by the generated server
         // from this compiled config, so it is validated here, once.
         diagnostics.push(...validateRouteRenderConfig(route, 'MCP route').diagnostics);
@@ -950,6 +1017,10 @@ export const compileRouteGraph = async (
       const compiled = await compileCliCommands(cliRoutes, async (route) =>
         moduleTextBySource.get(route.source), projected);
       diagnostics.push(...compiled.diagnostics);
+      // The routed CLI executable inlines every command route (AB4837, #558).
+      for (const route of cliRoutes) {
+        diagnostics.push(...routeFrameworkImportDiagnostics(route, moduleTextBySource.get(route.source)));
+      }
       cli = {
         commands: compiled.commands,
         mode,

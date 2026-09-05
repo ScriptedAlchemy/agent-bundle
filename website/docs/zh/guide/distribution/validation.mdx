@@ -28,7 +28,12 @@ Node 内建模块（`node:fs`、`fs`），要么以相对或 `file:` 说明符�
 模块（清单 kind 为 `bundle`）是打包器自己的输出，因此只由 ESM 词法分析器扫描，它会拒绝未终止的字符串、模板、
 注释与正则以及不配对的花括号。框架没有编译的模块——被复制的消费者脚本、生成的安装器——则会被完整解析；若一次
 构建的 [`tools` 逃生口](../../reference/configuration.mdx#tools)有可能改写了输出资源，该构建的每个 bundle 也会被完整解析。
-预构建载荷（`kind: 'prebuilt'`）保持不透明，只做哈希锁定。
+预构建载荷（`kind: 'prebuilt'`）保持不透明，只做哈希锁定。路由图会在打包器运行之前守住同一份自包含性：
+路由模块、布局或 provider——或它们之一通过相对导入触达的模块——若值导入了携带编译器的框架入口
+（`agent-bundle`、`agent-bundle/api`、`agent-bundle/config`、`agent-bundle/eval`、`agent-bundle/rstest`、
+`agent-bundle/test`、`agent-bundle/test/browser`），会由 `inspect`、`validate`、`build` 与 `dev` 报告为
+`AB4837`，点名文件与说明符，而不是在打包器内部失败；`import type` 以及仅作为类型使用的导入不会被报告，
+需要框架的路由式命令则改为通过 [`spawnServeApp`](../authoring/mcp.mdx#独立提供-app) 提供 App。
 
 每条诊断都是一份结构化记录：稳定的 `AB` 代码、一个严重级别、一条消息，通常还有 `sourcePath` 与一条
 `recovery` 提示。由诊断把关的命令——`build`、`prepack`、`validate`、`doctor`、`install` 与 `dev`——只有
