@@ -764,16 +764,7 @@ export class RouteInvocationService {
         404,
       );
     }
-    if (
-      (request.event !== undefined && route.kind !== 'event-route')
-      || (
-        request.args !== undefined
-        && route.kind !== 'cli'
-        && !prepared.manifest.cliCommands.some((command) => command.routeId === route.id)
-      )
-    ) {
-      return malformed();
-    }
+    if (request.event !== undefined && route.kind !== 'event-route') return malformed();
     const id = `inv_${this.#now().getTime().toString(36)}${randomBytes(8).toString('hex')}`;
     const startedAt = this.#now();
     const running = this.#semaphore.run<RouteInvocation>(async () => {
@@ -800,6 +791,13 @@ export class RouteInvocationService {
             ROUTE_INVOCATION_STALE_REVISION_MESSAGE,
             409,
           );
+        }
+        if (
+          request.args !== undefined
+          && route.kind !== 'cli'
+          && !prepared.manifest.cliCommands.some((command) => command.routeId === route.id)
+        ) {
+          return malformed();
         }
         const fixtureId = request.event?.fixtureId;
         const fixture = fixtureId === undefined
