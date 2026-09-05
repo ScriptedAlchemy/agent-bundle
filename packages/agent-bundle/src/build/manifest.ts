@@ -199,6 +199,7 @@ export interface ArtifactManifestCli {
   /** Present only in `generated` mode, matching the compiler surface. */
   readonly commands?: readonly ArtifactManifestCliCommand[];
   readonly mode: CompiledCliMode;
+  /** The custom `cli` routes plus every MCP `tool` route `routes.mcpCommands` projects into the executable. */
   readonly routes: readonly ArtifactManifestRoute[];
 }
 
@@ -803,7 +804,14 @@ const parseCli = (value: unknown): ArtifactManifestCli => {
   requireExactKeys(cli, 'routes.cli', ['mode', 'routes'], ['commands']);
   const mode = requireOneOf(cli.mode, 'routes.cli.mode', cliModes);
   const routes = parseRoutesList(cli.routes, 'routes.cli.routes');
-  if (routes.some((route) => route.kind !== 'cli')) fail('routes.cli.routes must hold cli routes only.');
+  // Custom `cli` routes, plus the MCP `tool` routes `routes.mcpCommands`
+  // projects into the executable (they keep their kind and owning server).
+  for (const route of routes) {
+    if (route.kind === 'cli') continue;
+    if (route.kind !== 'tool' || route.serverId === undefined) {
+      fail(`routes.cli.routes[${route.id}] must be a cli route or a projected MCP tool route.`);
+    }
+  }
   if ((mode === 'generated') !== (cli.commands !== undefined)) {
     fail('routes.cli.commands is present exactly in generated mode.');
   }
