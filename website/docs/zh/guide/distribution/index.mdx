@@ -37,8 +37,9 @@ npx agent-bundle build --root . --output artifact
    保留各自的源码证据。
 
 编译产出面只构建一次，归属于**组合身份**——所选宿主按名称排序并以 `+` 连接，例如 `claude+codex`——
-绝不会逐宿主各编译一次。两个阶段与 `dist/` 包构建以同样的方式合成打包器配置——profile、`tools.rsbuild`、
-`tools.rspack`，最后是框架不变量——见 [`tools`](../../reference/configuration.mdx#tools)。
+绝不会逐宿主各编译一次。两个阶段与包专用的库入口、手写 bin 以同样的方式合成打包器配置——profile、
+`tools.rsbuild`、`tools.rspack`，最后是框架不变量——见
+[`tools`](../../reference/configuration.mdx#tools)。
 `agent-bundle inspect --bundler` 会打印合成结果；它的 `distPath.root` 就是产物输出本身。
 
 ## 根目录里发布了什么
@@ -67,9 +68,13 @@ Claude 与 Codex 投影始终包含本地市场清单，正是这一点让它们
 
 ## 面向 npm 的那一半
 
-同时作为 npm 包发布的项目还有第二份输出：`dist/bin/<name>.js` 可执行文件与一个库入口，见
-[包入口](../authoring/package-entries.mdx)。当包输出与至少选中了一个内置宿主的根目录被一起构建时，框架
-还会输出一个相对包的安装器 bin ——见[宿主安装](./installation.mdx)。
+同时作为 npm 包发布的项目还有第二份输出 `dist/`，但它不是第二次插件构建。`dist/` 就是 npm 包根目录：
+它包含完整的组合产物、`package.json`、标准包文档，以及[包入口](../authoring/package-entries.mdx)所述的
+包专用库入口或手写 bin。
+
+对于生成的路由式 CLI，已安装包的 `bin` 直接指向 `bin/<name>.mjs`；该文件从已校验产物原样复制。因此
+npm CLI 与产物 CLI 拥有完全相同的命令（包括 `web`）和完全相同的字节。tarball 中没有嵌套的
+`artifact/` 目录；框架不会并行编译另一份 `dist/bin/<name>.js` 应用，也不会生成相对包的安装器 bin。
 
 `agent-bundle prepack` 是这一半的门禁：它运行发布构建、以不执行脚本的方式 dry-run `npm pack`，并核实
 打包后的输出、产物哈希、bin 与版本号。

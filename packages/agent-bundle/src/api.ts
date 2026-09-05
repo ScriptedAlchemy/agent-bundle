@@ -1321,7 +1321,7 @@ export const build = async (options: BuildOptions): Promise<BuildProjectResult> 
   let packageBuild: PackageBuildResult | undefined;
   if (packageOutputRoot !== undefined) {
     packageBuild = await buildPackageOutputs({
-      ...(isInsideOrEqual(prepared.root, output) ? { artifactRoot: output } : {}),
+      artifactRoot: output,
       model,
       projectRoot: prepared.root,
       ...(prepared.tools === undefined ? {} : { tools: prepared.tools }),
@@ -1395,7 +1395,7 @@ export const prepack = async (options: BuildOptions): Promise<PrepackResult> => 
     }]);
   }
   const { stdout } = await execFile('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
-    cwd: resolve(options.root),
+    cwd: result.packageBuild.outputRoot,
   });
   const pack = packOutputFromJson(stdout);
   const diagnostics = await packInventoryDiagnostics({

@@ -45,7 +45,11 @@ export interface DevPackageBuildOutcome {
 }
 
 export interface DevPackageBuilder {
-  build(prepared: PreparedProject, invalidation: Invalidation): Promise<DevPackageBuildOutcome>;
+  build(
+    prepared: PreparedProject,
+    invalidation: Invalidation,
+    artifactRoot?: string,
+  ): Promise<DevPackageBuildOutcome>;
 }
 
 export interface DevPackageBuildServiceOptions {
@@ -106,7 +110,11 @@ export class DevPackageBuildService implements DevPackageBuilder {
     this.#run = platformRunOf(options.platformRuntime);
   }
 
-  async build(prepared: PreparedProject, invalidation: Invalidation): Promise<DevPackageBuildOutcome> {
+  async build(
+    prepared: PreparedProject,
+    invalidation: Invalidation,
+    artifactRoot = join(prepared.root, prepared.artifactDistPath),
+  ): Promise<DevPackageBuildOutcome> {
     const model = prepared.model;
     if (model?.packageBuild === undefined) {
       this.#last = undefined;
@@ -121,6 +129,7 @@ export class DevPackageBuildService implements DevPackageBuilder {
     }
     try {
       const result = await this.#buildOutputs({
+        artifactRoot,
         model,
         projectRoot: prepared.root,
         ...(prepared.tools === undefined ? {} : { tools: prepared.tools }),

@@ -1,5 +1,5 @@
 import { lstat } from 'node:fs/promises';
-import { join, relative, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import type { NormalizedPlugin } from '../core/types.ts';
 import type { Diagnostic, DiagnosticSeverity } from '../core/diagnostics.ts';
@@ -81,9 +81,6 @@ export const packOutputFromJson = (stdout: string, packageName?: string): PackOu
   return Object.freeze({ filename: entry.filename, files: Object.freeze(files) });
 };
 
-const toPosixRelative = (root: string, path: string): string =>
-  relative(resolve(root), resolve(path)).replaceAll('\\', '/');
-
 /** Stays on `lstat`: a dangling symlink at a host manifest path still counts as present. */
 const exists = async (path: string): Promise<boolean> => {
   try {
@@ -149,6 +146,7 @@ const unresolvableRecovery = 'Depend on a published registry version, or bundle 
 
 const dependencyDiagnostics = async (options: {
   readonly declaredRuntimeDependencies: ReadonlySet<string>;
+  readonly dependencyRoot: string;
   readonly packageDocument: Readonly<Record<string, unknown>>;
   readonly packedPaths: readonly string[];
   readonly packerRewritesWorkspaceProtocols: boolean;
@@ -161,6 +159,7 @@ const dependencyDiagnostics = async (options: {
   // `require`/`createRequire`/`import.meta.resolve` evidence is not an import and may come from any packed file.
   const imported = await importedPackageNames({
     declared: declared.filter((dependency) => dependency.installed).map((dependency) => dependency.name),
+    dependencyRoot: options.dependencyRoot,
     packageDocument: options.packageDocument,
     paths: options.packedPaths,
     projectRoot: options.projectRoot,
@@ -242,21 +241,14 @@ export const packInventoryDiagnostics = async (options: {
   readonly packerRewritesWorkspaceProtocols: boolean;
   readonly projectRoot: string;
 }): Promise<readonly Diagnostic[]> => {
-  const projectRoot = resolve(options.projectRoot);
   const artifactRoot = resolve(options.artifactRoot);
-  const artifactPrefix = toPosixRelative(projectRoot, artifactRoot);
-  const packagePrefix = toPosixRelative(projectRoot, options.packageBuild.outputRoot);
+  const packageRoot = resolve(options.packageBuild.outputRoot);
   const manifestPath = join(artifactRoot, artifactManifestName);
   const manifest = parseArtifactManifest(await runWithPlatform(readFileString(manifestPath)));
-  const packageDocument = await jsonRecord(join(projectRoot, 'package.json'));
+  const packageDocument = await jsonRecord(join(packageRoot, 'package.json'));
   const packed = new Set(options.packOutput.files.map((file) => file.path.replace(/^\.\//u, '')));
   const expected = new Set<string>([
-    ...options.packageBuild.files.map((file) => `${packagePrefix}/${file.path}`),
-    `${artifactPrefix}/${artifactManifestName}`,
-    // Every emitted file is manifested, the install surface included: the
-    // artifact validator (`AB6023`/`AB6024`) already judged its presence by
-    // adapter identity, so the pack expects exactly what the manifest lists.
-    ...manifest.files.map((file) => `${artifactPrefix}/${file.path}`),
+    ...options.packageBuild.files.map((file) => file.path),
     'README.md',
   ]);
 
@@ -266,14 +258,14 @@ export const packInventoryDiagnostics = async (options: {
     diagnostics.push(diagnostic(
       'AB7010',
       `npm pack omits expected files: ${quoteAll(missing)}.`,
-      'Add the exact paths (including dist and the artifact directory) to the package.json "files" allowlist.',
+      'Pack the generated npm root without excluding its files.',
     ));
   }
 
   const stale: string[] = [];
   for (const file of manifest.files) {
     const bytes = await runWithPlatform(readFileBytes(join(artifactRoot, file.path)));
-    if (sha256Hex(bytes) !== file.sha256) stale.push(`${artifactPrefix}/${file.path}`);
+    if (sha256Hex(bytes) !== file.sha256) stale.push(file.path);
   }
   if (stale.length > 0) {
     diagnostics.push(diagnostic(
@@ -286,14 +278,14 @@ export const packInventoryDiagnostics = async (options: {
   const invalidBins = binEntries(packageDocument.bin)
     .filter(([, target]) => {
       const normalized = target.replace(/^\.\//u, '');
-      return !normalized.startsWith(`${packagePrefix}/`) || normalized.startsWith('src/') || !packed.has(normalized);
+      return normalized.startsWith('src/') || !packed.has(normalized);
     });
   if (invalidBins.length > 0) {
     diagnostics.push(diagnostic(
       'AB7012',
-      `package.json bins must name packed dist outputs: ${invalidBins.map(([name, target]) =>
+      `package.json bins must name files in the packed npm root: ${invalidBins.map(([name, target]) =>
         `${JSON.stringify(name)} -> ${JSON.stringify(target)}`).join(', ')}.`,
-      'Point every package.json bin value at its generated file under dist/bin and include that file in "files".',
+      'Point routed CLIs at their manifest-declared bin/<name>.mjs and authored bins at generated bin/*.js files.',
     ));
   }
 
@@ -328,10 +320,11 @@ export const packInventoryDiagnostics = async (options: {
 
   diagnostics.push(...await dependencyDiagnostics({
     declaredRuntimeDependencies: new Set((options.model.payloads ?? []).flatMap((payload) => payload.runtimeDependencies)),
+    dependencyRoot: resolve(options.projectRoot),
     packageDocument,
     packedPaths: [...packed],
     packerRewritesWorkspaceProtocols: options.packerRewritesWorkspaceProtocols,
-    projectRoot,
+    projectRoot: packageRoot,
   }));
 
   return deepFreeze(diagnostics.sort((left, right) => left.code.localeCompare(right.code)));

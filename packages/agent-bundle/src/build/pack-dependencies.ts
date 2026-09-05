@@ -1026,12 +1026,17 @@ const installScriptModuleDependencies = (options: {
 export const importedPackageNames = async (options: {
   /** Names to test for executable and install-script use; every other source is scanned whole. */
   readonly declared: readonly string[];
+  /** Root whose node_modules supplies dependency bin metadata while packing. */
+  readonly dependencyRoot?: string;
   readonly packageDocument: Readonly<Record<string, unknown>>;
   readonly paths: readonly string[];
   readonly projectRoot: string;
 }): Promise<ImportedPackages> => {
   const projectRoot = resolve(options.projectRoot);
-  const executables = await executableCommands(options.declared, projectRoot);
+  const executables = await executableCommands(
+    options.declared,
+    resolve(options.dependencyRoot ?? projectRoot),
+  );
   const evidenceByPath = new Map(await Promise.all(options.paths
     .filter((path) => javaScriptSuffix.test(path) || declarationSuffix.test(path))
     .map(async (path) => [path, await fileEvidence(resolve(projectRoot, path), executables)] as const)));

@@ -185,8 +185,8 @@ agent-bundle install <host> [--from <root>] [--scope <scope>] [--mode <mode>] \
 | `--mode <mode>` | `local` | Cursor only. `local` copies the bundle into `~/.cursor/plugins/local/<name>`; `marketplace` stages a committed local marketplace repository under `~/.cursor/agent-bundle/marketplaces/<name>` and prints the Customize → Plugins → "Add Plugins from Local Repository" step that makes Cursor manage the plugin as a marketplace install. |
 | `--replace` (alias `--force`) | off | Replace an existing agent-bundle install of this plugin even when its version differs. Without it, an identical copy is an `already-installed` no-op, a same-version copy whose content hash differs is replaced automatically, and a different version is `AB7005`. Foreign directories are always refused (`AB7005`). |
 
-The emitted standalone `install.mjs` and the package-relative installer bin accept the same
-`--replace`. Cursor copies carry an install receipt (`.agent-bundle-install.json`), replacement
+The emitted standalone `install.mjs` accepts the same `--replace`. Cursor copies carry an install
+receipt (`.agent-bundle-install.json`), replacement
 touches owned files only, and `--replace` adopts a pre-receipt copy; Claude replacement runs
 `claude plugin uninstall --keep-data` before reinstalling and Codex runs `codex plugin remove`
 before `add`. Every install writes a lifecycle receipt (format `agent-bundle-install-receipt/2`:
@@ -224,8 +224,7 @@ second run is a `not-installed` no-op. The typed `data.outcome` says what happen
 state per host: Cursor `kept` / `purged` / `absent`; Claude `retained-by-host` (the cached copy is
 orphaned for Claude's ~14-day grace period; a purge also removes `state/` and
 `plugins/data/<id>/`); Codex `removed-by-host` / `unavailable` (`codex plugin remove` deletes the
-cached tree and has no keep-data option). The package-relative installer bin accepts
-`uninstall <host>` with the same flags; the emitted `install.mjs` accepts `--uninstall` with
+cached tree and has no keep-data option). The emitted `install.mjs` accepts `--uninstall` with
 `--mode`, `--keep-data`, `--purge-data --confirm-purge`, `--force`, and `--plan`.
 
 ## doctor

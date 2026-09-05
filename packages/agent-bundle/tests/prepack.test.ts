@@ -1,8 +1,6 @@
-import { execFile as executeFile } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
-import { promisify } from 'node:util';
 import { gzipSync } from 'node:zlib';
 
 import { afterAll, beforeAll, expect, it } from '@rstest/core';
@@ -18,7 +16,6 @@ import {
   type PackOutput,
 } from '../src/build/pack-inventory.ts';
 
-const execFile = promisify(executeFile);
 const workspaceNodeModules = join(process.cwd(), 'node_modules');
 
 /** A gzipped ustar archive in npm's layout: one `package/package.json` entry with the given manifest text. */
@@ -52,8 +49,6 @@ beforeAll(async () => {
   await symlink(workspaceNodeModules, join(projectRoot, 'node_modules'), 'dir');
   await Promise.all([
     writeFile(join(projectRoot, 'package.json'), `${JSON.stringify({
-      bin: { 'installer-fixture': './dist/bin/installer-fixture.js' },
-      files: ['dist', 'host-packs', 'README.md'],
       name: 'installer-fixture',
       type: 'module',
       version: '1.2.3',
@@ -125,8 +120,8 @@ it('selects the intended pack entry by package name when npm lists sibling works
 
 it('prepack validates the complete dry-run inventory', async () => {
   expect(await diagnostics()).toEqual([]);
-  expect(result.pack.files.map((file) => file.path)).toContain('dist/bin/installer-fixture.js');
-  expect(result.pack.files.map((file) => file.path)).toContain('host-packs/agent-bundle.manifest.json');
+  expect(result.pack.files.map((file) => file.path)).toContain('index.js');
+  expect(result.pack.files.map((file) => file.path)).toContain('agent-bundle.manifest.json');
 });
 
 it('exposes --root, --output, and --json through the prepack command', async () => {
@@ -157,7 +152,7 @@ it('exposes --root, --output, and --json through the prepack command', async () 
 it('reports missing allowlisted artifacts as AB7010', async () => {
   const pack = {
     ...result.pack,
-    files: result.pack.files.filter((file) => file.path !== 'host-packs/INSTALL.md'),
+    files: result.pack.files.filter((file) => file.path !== 'INSTALL.md'),
   };
   expect(await diagnostics(pack)).toContainEqual(expect.objectContaining({ code: 'AB7010' }));
 });
@@ -193,14 +188,20 @@ const withPackageDocument = async (
   mutate: (document: Record<string, unknown>) => void,
   run: () => Promise<void>,
 ): Promise<void> => {
-  const packagePath = join(projectRoot, 'package.json');
+  const sourcePackagePath = join(projectRoot, 'package.json');
+  const packagePath = join(projectRoot, 'dist', 'package.json');
+  const sourceOriginal = await readFile(sourcePackagePath, 'utf8');
   const original = await readFile(packagePath, 'utf8');
+  const sourceDocument = JSON.parse(sourceOriginal) as Record<string, unknown>;
   const document = JSON.parse(original) as Record<string, unknown>;
+  mutate(sourceDocument);
   mutate(document);
+  await writeFile(sourcePackagePath, `${JSON.stringify(sourceDocument, null, 2)}\n`);
   await writeFile(packagePath, `${JSON.stringify(document, null, 2)}\n`);
   try {
     await run();
   } finally {
+    await writeFile(sourcePackagePath, sourceOriginal);
     await writeFile(packagePath, original);
   }
 };
@@ -309,7 +310,7 @@ it('accepts a package loaded through a createRequire() binding, literal or compu
       '',
     ].join('\n'));
     try {
-      const pack = { ...result.pack, files: [...result.pack.files, { path: 'dist/aliased.mjs' }] };
+      const pack = { ...result.pack, files: [...result.pack.files, { path: 'aliased.mjs' }] };
       const [reported] = withCode(await diagnostics(pack), 'AB7014');
       expect(reported?.message).toContain('"never-loaded"');
       expect(reported?.message).not.toContain('"driver-package"');
@@ -361,7 +362,7 @@ it.each([
     const consumer = join(projectRoot, 'dist', source.startsWith('import') ? 'qualified.mjs' : 'qualified.cjs');
     await writeFile(consumer, `${source}\n`);
     try {
-      const pack = { ...result.pack, files: [...result.pack.files, { path: relative(projectRoot, consumer) }] };
+      const pack = { ...result.pack, files: [...result.pack.files, { path: relative(join(projectRoot, 'dist'), consumer) }] };
       const [reported] = withCode(await diagnostics(pack), 'AB7014');
       expect(reported?.message).toContain('"never-loaded"');
       expect(reported?.message).not.toContain('"driver-package"');
@@ -380,7 +381,7 @@ it.each([
     const consumer = join(projectRoot, 'dist', source.startsWith('import') ? 'qualified.mjs' : 'qualified.cjs');
     await writeFile(consumer, `${source}\n`);
     try {
-      const pack = { ...result.pack, files: [...result.pack.files, { path: relative(projectRoot, consumer) }] };
+      const pack = { ...result.pack, files: [...result.pack.files, { path: relative(join(projectRoot, 'dist'), consumer) }] };
       expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
     } finally {
       await rm(consumer, { force: true });
@@ -465,24 +466,25 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
     };
   },
   async () => {
-    await mkdir(join(projectRoot, 'scripts', 'lib'), { recursive: true });
-    await mkdir(join(projectRoot, 'vendor', 'vendored'), { recursive: true });
-    await mkdir(join(projectRoot, 'vendor', 'bad-manifest'), { recursive: true });
+    const packageRoot = join(projectRoot, 'dist');
+    await mkdir(join(packageRoot, 'scripts', 'lib'), { recursive: true });
+    await mkdir(join(packageRoot, 'vendor', 'vendored'), { recursive: true });
+    await mkdir(join(packageRoot, 'vendor', 'bad-manifest'), { recursive: true });
     await Promise.all([
-      writeFile(join(projectRoot, 'scripts', 'install.js'), 'import "./driver-setup.cjs";\n'),
-      writeFile(join(projectRoot, 'scripts', 'driver-setup.cjs'), 'module.exports = require("optional-driver");\n'),
-      writeFile(join(projectRoot, 'scripts', 'my install.cjs'), 'require("optional-tester");\n'),
-      writeFile(join(projectRoot, 'scripts', 'hooks.cjs'), 'require("#hooks/hook");\nrequire("./lib");\n'),
-      writeFile(join(projectRoot, 'scripts', 'hook-setup.cjs'), 'require("optional-hook");\n'),
-      writeFile(join(projectRoot, 'scripts', 'lib', 'package.json'), '{ "main": "setup.cjs" }\n'),
-      writeFile(join(projectRoot, 'scripts', 'lib', 'setup.cjs'), 'require("optional-main");\n'),
-      writeFile(join(projectRoot, 'scripts', 'preload.mjs'), 'import "optional-imported";\n'),
-      writeFile(join(projectRoot, 'scripts', 'root-setup.cjs'), 'require("optional-root");\n'),
-      writeFile(join(projectRoot, 'vendor', 'vendored', 'package.json'), '{ "name": "vendored", "version": "1.0.0" }\n'),
-      writeFile(join(projectRoot, 'vendor', 'bad-manifest', 'package.json'), '{\n'),
-      writeFile(join(projectRoot, 'vendor', 'tarred.tgz'), packageTarball('{ "name": "tarred", "version": "1.0.0" }')),
-      writeFile(join(projectRoot, 'vendor', 'bad-tarred-manifest.tgz'), packageTarball('not json\n')),
-      writeFile(join(projectRoot, 'vendor', 'not-archive.tgz'), 'not a tarball\n'),
+      writeFile(join(packageRoot, 'scripts', 'install.js'), 'import "./driver-setup.cjs";\n'),
+      writeFile(join(packageRoot, 'scripts', 'driver-setup.cjs'), 'module.exports = require("optional-driver");\n'),
+      writeFile(join(packageRoot, 'scripts', 'my install.cjs'), 'require("optional-tester");\n'),
+      writeFile(join(packageRoot, 'scripts', 'hooks.cjs'), 'require("#hooks/hook");\nrequire("./lib");\n'),
+      writeFile(join(packageRoot, 'scripts', 'hook-setup.cjs'), 'require("optional-hook");\n'),
+      writeFile(join(packageRoot, 'scripts', 'lib', 'package.json'), '{ "main": "setup.cjs" }\n'),
+      writeFile(join(packageRoot, 'scripts', 'lib', 'setup.cjs'), 'require("optional-main");\n'),
+      writeFile(join(packageRoot, 'scripts', 'preload.mjs'), 'import "optional-imported";\n'),
+      writeFile(join(packageRoot, 'scripts', 'root-setup.cjs'), 'require("optional-root");\n'),
+      writeFile(join(packageRoot, 'vendor', 'vendored', 'package.json'), '{ "name": "vendored", "version": "1.0.0" }\n'),
+      writeFile(join(packageRoot, 'vendor', 'bad-manifest', 'package.json'), '{\n'),
+      writeFile(join(packageRoot, 'vendor', 'tarred.tgz'), packageTarball('{ "name": "tarred", "version": "1.0.0" }')),
+      writeFile(join(packageRoot, 'vendor', 'bad-tarred-manifest.tgz'), packageTarball('not json\n')),
+      writeFile(join(packageRoot, 'vendor', 'not-archive.tgz'), 'not a tarball\n'),
     ]);
     const pack = { ...result.pack, files: [...result.pack.files,
       { path: 'node_modules/embedded/package.json' },
@@ -536,8 +538,8 @@ it('reports git, GitHub-shorthand, remote-tarball, and path dependency specifier
     for (const name of ['alias', 'tilde', 'versioned', 'embedded', 'vendored', 'tarred']) {
       expect(reported[0]?.message).not.toContain(JSON.stringify(name));
     }
-    await rm(join(projectRoot, 'scripts'), { force: true, recursive: true });
-    await rm(join(projectRoot, 'vendor'), { force: true, recursive: true });
+    await rm(join(packageRoot, 'scripts'), { force: true, recursive: true });
+    await rm(join(packageRoot, 'vendor'), { force: true, recursive: true });
     expect(reported[0]?.recovery).toContain('registry');
 
     const underPnpm = withCode(await diagnostics(pack, true), 'AB7015');
@@ -551,7 +553,7 @@ it('withholds AB7014 when packed JavaScript has a computed import() that could l
     const consumer = join(projectRoot, 'dist', 'computed.mjs');
     await writeFile(consumer, 'export const load = (name) => import(name);\n');
     try {
-      const pack = { ...result.pack, files: [...result.pack.files, { path: 'dist/computed.mjs' }] };
+      const pack = { ...result.pack, files: [...result.pack.files, { path: 'computed.mjs' }] };
       expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
       // Without that file the same declaration is reported.
       expect(withCode(await diagnostics(), 'AB7014')).toHaveLength(1);
@@ -568,7 +570,7 @@ it('withholds AB7014 when packed JavaScript the lexer rejects may hide an import
     // An unbalanced call: the lexer throws before reporting any import, so nothing proves the package unused.
     await writeFile(consumer, 'export const load = () => import("chosen-at-runtime"\n');
     try {
-      const pack = { ...result.pack, files: [...result.pack.files, { path: 'dist/unlexable.mjs' }] };
+      const pack = { ...result.pack, files: [...result.pack.files, { path: 'unlexable.mjs' }] };
       expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
     } finally {
       await rm(consumer, { force: true });
@@ -589,7 +591,7 @@ it.each([
     const consumer = join(projectRoot, 'dist', source.startsWith('module.exports') ? 'computed.cjs' : 'computed.mjs');
     await writeFile(consumer, `${source}\n`);
     try {
-      const pack = { ...result.pack, files: [...result.pack.files, { path: relative(projectRoot, consumer) }] };
+      const pack = { ...result.pack, files: [...result.pack.files, { path: relative(join(projectRoot, 'dist'), consumer) }] };
       expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
     } finally {
       await rm(consumer, { force: true });
@@ -610,7 +612,7 @@ it.each([
     const consumer = join(projectRoot, 'dist', source.startsWith('import') ? 'alias.mjs' : 'alias.cjs');
     await writeFile(consumer, `${source}\n`);
     try {
-      const pack = { ...result.pack, files: [...result.pack.files, { path: relative(projectRoot, consumer) }] };
+      const pack = { ...result.pack, files: [...result.pack.files, { path: relative(join(projectRoot, 'dist'), consumer) }] };
       expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
     } finally {
       await rm(consumer, { force: true });
@@ -631,7 +633,7 @@ it.each([
     const consumer = join(projectRoot, 'dist', 'not-alias.cjs');
     await writeFile(consumer, `${source}\n`);
     try {
-      const pack = { ...result.pack, files: [...result.pack.files, { path: 'dist/not-alias.cjs' }] };
+      const pack = { ...result.pack, files: [...result.pack.files, { path: 'not-alias.cjs' }] };
       const [reported] = withCode(await diagnostics(pack), 'AB7014');
       expect(reported?.message).toContain('"never-loaded"');
     } finally {
@@ -650,7 +652,7 @@ it('still reports AB7014 when the only resolve() calls are path or Promise resol
       '',
     ].join('\n'));
     try {
-      const pack = { ...result.pack, files: [...result.pack.files, { path: 'dist/resolvers.mjs' }] };
+      const pack = { ...result.pack, files: [...result.pack.files, { path: 'resolvers.mjs' }] };
       expect(withCode(await diagnostics(pack), 'AB7014')[0]?.message).toContain('"never-loaded"');
     } finally {
       await rm(consumer, { force: true });
@@ -707,7 +709,7 @@ it('accepts a dependency reached through a package imports map or run by a consu
     await mkdir(wrapper, { recursive: true });
     await writeFile(join(wrapper, 'package.json'), JSON.stringify({ name: '@scope/real', version: '1.0.0', bin: 'cli.js' }));
     try {
-      const pack = { ...result.pack, files: [...result.pack.files, { path: 'dist/mapped.mjs' }] };
+      const pack = { ...result.pack, files: [...result.pack.files, { path: 'mapped.mjs' }] };
       // `#driver` reaches driver-package; the script names named-in-script directly, typescript through its `tsc` bin,
       // and the alias through `real`, the bin npm derives from the installed manifest's name. `prepare` proves nothing.
       const [withImport] = withCode(await diagnostics(pack), 'AB7014');
@@ -809,23 +811,17 @@ it('reads an installed manifest as npm does, so the last of duplicate name keys 
   },
 ));
 
-it('prepack succeeds and surfaces the warning when the only finding is an unresolvable optional dependency', () => withPackageDocument(
+it('prepack rejects an unused unresolvable optional dependency and retains its fetch warning', () => withPackageDocument(
   (document) => {
     document.optionalDependencies = { 'optional-native': 'github:owner/optional-native' };
-    // The build rewrites dist, so the packed module that loads the optional package lives in its own packed
-    // directory; an install script naming it instead would make the failed fetch fatal.
-    document.files = [...(document.files as readonly string[]), 'extras'];
   },
   async () => {
-    const extras = join(projectRoot, 'extras');
-    await mkdir(extras, { recursive: true });
-    await writeFile(join(extras, 'optional.mjs'), 'export const native = await import("optional-native").catch(() => undefined);\n');
-    try {
-      const packed = await prepack({ root: projectRoot });
-      expect(packed.diagnostics.map((diagnostic) => [diagnostic.code, diagnostic.severity])).toEqual([['AB7015', 'warning']]);
-    } finally {
-      await rm(extras, { force: true, recursive: true });
-    }
+    await expect(prepack({ root: projectRoot })).rejects.toMatchObject({
+      diagnostics: [
+        expect.objectContaining({ code: 'AB7014', severity: 'error' }),
+        expect.objectContaining({ code: 'AB7015', severity: 'warning' }),
+      ],
+    });
   },
 ));
 
@@ -841,7 +837,7 @@ it('accepts a dependency that only packed declaration files reference, including
       '',
     ].join('\n'));
     try {
-      const pack = { ...result.pack, files: [...result.pack.files, { path: 'dist/consumer.d.ts' }] };
+      const pack = { ...result.pack, files: [...result.pack.files, { path: 'consumer.d.ts' }] };
       expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
     } finally {
       await rm(declaration, { force: true });
@@ -881,7 +877,7 @@ it('accepts a dependency that packed JavaScript imports, requires, or only resol
       '',
     ].join('\n'));
     try {
-      const pack = { ...result.pack, files: [...result.pack.files, { path: 'dist/consumer.mjs' }] };
+      const pack = { ...result.pack, files: [...result.pack.files, { path: 'consumer.mjs' }] };
       expect(withCode(await diagnostics(pack), 'AB7014')).toHaveLength(0);
     } finally {
       await rm(consumer, { force: true });
@@ -945,7 +941,7 @@ it('accepts a dependency that only a prebuilt payload module imports: prepack pa
   expect(withCode(reported, 'AB6005')).toHaveLength(0);
   expect(withCode(reported, 'AB7014')).toHaveLength(0);
   // The payload is copied once into the composite root (#555): no `<target>/` partition under `distPath`.
-  expect(packed.pack.files.map((file) => file.path)).toContain('host-packs/runtime/mcp/server.js');
+  expect(packed.pack.files.map((file) => file.path)).toContain('runtime/mcp/server.js');
 }, 180_000);
 
 it('fails prepack with compile-time AB6005, never AB7014, when only a compiled dist bundle imports a declared dependency', async () => {
@@ -983,34 +979,3 @@ it('fails prepack with compile-time AB6005, never AB7014, when only a compiled d
   });
   expect(withCode(reported, 'AB7014')).toHaveLength(0);
 }, 180_000);
-
-it('installs a real packed tarball and runs its Cursor installer from node_modules', async () => {
-  const tarballs = join(cleanupRoot, 'tarballs');
-  const consumer = join(cleanupRoot, 'consumer');
-  const home = join(cleanupRoot, 'home');
-  await Promise.all([
-    mkdir(tarballs),
-    mkdir(consumer),
-    mkdir(join(home, '.cursor'), { recursive: true }),
-  ]);
-  const { stdout } = await execFile('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', tarballs], {
-    cwd: projectRoot,
-  });
-  const packed = packOutputFromJson(stdout);
-  await writeFile(join(consumer, 'package.json'), '{"private":true}\n');
-  await execFile('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', join(tarballs, packed.filename)], {
-    cwd: consumer,
-  });
-  const sourceCopy = join(cleanupRoot, 'source-copy');
-  await cp(projectRoot, sourceCopy, { recursive: true, filter: (source) => source !== join(projectRoot, 'node_modules') });
-  await rm(projectRoot, { force: true, recursive: true });
-
-  const installedBin = join(consumer, 'node_modules', '.bin', 'installer-fixture');
-  const installed = await execFile(installedBin, ['install', 'cursor', '--json'], {
-    cwd: consumer,
-    env: { ...process.env, HOME: home },
-  });
-  expect(JSON.parse(installed.stdout)).toMatchObject({ host: 'cursor', state: 'installed' });
-  await expect(stat(join(home, '.cursor', 'plugins', 'local', 'installer-fixture'))).resolves.toBeDefined();
-  expect(await readFile(join(sourceCopy, 'src', 'index.ts'), 'utf8')).toBe('export const value = 1;\n');
-});

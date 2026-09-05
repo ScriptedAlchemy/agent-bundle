@@ -27,18 +27,18 @@ const webHostPageScript = await readWebHostPageScript();
 
 /**
  * The artifact-hosted routed CLI (#387). A generated-mode `src/cli/**`
- * surface already compiles into the npm package bin (`dist/bin/<name>.js`);
- * this module emits the same compiled command graph into every host artifact
+ * surface compiles here into every host artifact
  * whose adapter publishes the `cli` capability, as `bin/<name>.mjs` beside
  * an optional `bin/<name>-flight.mjs` react-server worker. The bin is a
- * plain self-contained ESM module invoked as `node <root>/bin/<name>.mjs`,
- * exactly like the artifact's `scripts/*.mjs`, so hooks, skills, and script
+ * self-contained executable ESM module, so hooks, skills, scripts, and the npm
+ * package bin
  * routes installed with the plugin can reach the routed CLI without a
- * separate npm install. The package build's own bin emission is untouched.
+ * share one proven command surface without a second compilation.
  */
 
 /** The one directory the compiler emits the routed CLI into; the registry pins every `cliBin` layout to it. */
 export const cliBinDirectory: string = routedCliBinLayout.directory;
+export const cliBinExecutableMode = 0o755;
 
 /** The artifact-relative executable path for one routed-CLI bin. */
 export const cliBinArtifactPath = (name: string): string => `${cliBinDirectory}/${name}.mjs`;
@@ -156,6 +156,7 @@ export const cliBinRslibEntries = (
       [launchEnvRuntimeSpecifier]: launchEnvRuntimePath(),
       ...(entry.bin.web === true ? { [webHostRuntimeSpecifier]: webHostRuntimePath() } : {}),
     },
+    banner: '#!/usr/bin/env node',
     name: `bin-${entry.name}`,
     virtualModules: [
       operatorEnvLayerVirtualModule(),

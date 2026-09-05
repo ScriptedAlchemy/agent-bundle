@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 
 import packageManifest from '../../package.json' with { type: 'json' };
@@ -20,7 +20,12 @@ import {
   type CompiledHookEntry,
   type CompiledMcpEntry,
 } from './entries.ts';
-import { planCliBinsSurface, planCompiledCliBins, type CompiledCliBin } from './cli-bins.ts';
+import {
+  cliBinExecutableMode,
+  planCliBinsSurface,
+  planCompiledCliBins,
+  type CompiledCliBin,
+} from './cli-bins.ts';
 import { composeProjections, type CompositePlan } from './compose.ts';
 import { projectMeta } from './meta.ts';
 import {
@@ -770,6 +775,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
         }
       }
     }
+    await Promise.all(compiledCliBins.map((entry) => chmod(entry.output, cliBinExecutableMode)));
     const publishedCompiledEntries = deepFreeze(compiledEntries.map((entry) =>
       ({
         ...entry,

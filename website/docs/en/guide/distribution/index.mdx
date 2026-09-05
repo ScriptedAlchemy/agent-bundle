@@ -43,8 +43,8 @@ once the artifact validates:
 
 Compiled surfaces are built once and attributed to the **composite identity** — the selected
 hosts sorted and joined by `+`, such as `claude+codex` — never once per host. Both stages and the
-`dist/` package build compose their bundler config the same way — profile, `tools.rsbuild`,
-`tools.rspack`, then the framework invariants — as described under
+package-only library and authored-bin entries compose their bundler config the same way —
+profile, `tools.rsbuild`, `tools.rspack`, then the framework invariants — as described under
 [`tools`](../../reference/configuration.mdx#tools). `agent-bundle inspect --bundler` prints the
 result; its `distPath.root` is the artifact output itself.
 
@@ -80,10 +80,16 @@ occupies that directory.
 
 ## The npm-facing half
 
-A project that also ships as an npm package has a second output: `dist/bin/<name>.js` executables
-and a library entry, described in [Package entries](../authoring/package-entries.mdx). When
-package outputs and a root with at least one built-in host are built together, the framework also
-emits a package-relative installer bin — see [Host installation](./installation.mdx).
+A project that also ships as an npm package has a second output, `dist/`, but it is not a second
+plugin build. `dist/` is the npm package root: it contains the complete composite artifact,
+`package.json`, the standard package documentation files, and any package-only library or
+authored-bin entries described in [Package entries](../authoring/package-entries.mdx).
+
+For a generated routed CLI, the installed package's `bin` points directly at
+`bin/<name>.mjs`, copied unchanged from the validated artifact. The npm CLI therefore has the
+same commands — including `web` — and the same bytes as the artifact CLI. The tarball has no
+nested `artifact/` directory, and the framework does not compile a parallel `dist/bin/<name>.js`
+application or generate a package-relative installer bin.
 
 `agent-bundle prepack` is the gate for that half: it runs the release build, dry-runs `npm pack`
 without scripts, and verifies packaged outputs, artifact hashes, bins, and versions.

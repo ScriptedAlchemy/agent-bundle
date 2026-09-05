@@ -1,28 +1,31 @@
 import { existsSync } from 'node:fs';
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 
-import type { AgentBundleToolsConfig, NormalizedPlugin } from '../core/types.ts';
+import {
+  parseJsonWithoutDuplicateKeys,
+  snapshotStrictJsonValue,
+  type JsonValue,
+} from '../core/strict-json.ts';
+import type {
+  AgentBundleToolsConfig,
+  NormalizedPackageBuild,
+  NormalizedPlugin,
+} from '../core/types.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { assertInside, toPosixRelative } from '../core/paths.ts';
-import { cliBinSourceInputs } from './cli-bins.ts';
 import type { CompileResult } from './compile-result.ts';
 import { buildWithRslib } from './compiler.ts';
 import { declarationBuildDiagnostics, replayDeclarationEmit } from './declaration-diagnostics.ts';
 import { listArtifactFiles, publishArtifact, resolveArtifactDestination } from './emit.ts';
 import { scanEntryExports } from './entry-exports.ts';
 import {
-  cliEntryRuntimePath,
-  cliEntryRuntimeSpecifier,
-  generatedCliBinEntrySource,
   generatedExecutableEntrySource,
-  generatedInstallBinEntrySource,
-  generatedRenderedRouteWorkerSource,
-  installEntryRuntimePath,
-  installEntryRuntimeSpecifier,
   terminalCapabilityRuntimePath,
   terminalCapabilityRuntimeSpecifier,
 } from './entry-shell.ts';
+import { readArtifactManifest } from './manifest-file.ts';
+import { artifactManifestName, type ArtifactManifest, type ArtifactManifestFileKind } from './manifest.ts';
 import { projectMeta } from './meta.ts';
 import { bundleSyntaxCheckFor } from './module-imports.ts';
 import { isDeclarationGenerationFailure, type RslibEntry } from './rslib.ts';
@@ -30,13 +33,10 @@ import { runtimeIgnoredRoot } from './runtime-path.ts';
 import { validateJavaScriptModules } from './validate-artifact-modules.ts';
 
 /**
- * The framework-owned npm package build: `bin` entries become self-executing
- * `dist/bin/<name>.js` bundles (shebang + executable bit) and the `lib` entry
- * becomes `dist/<name>.js` (+ a bundleless `.d.ts` declaration graph), all
- * through the same Rslib synthesis, invariant assertions, staged atomic
- * publication, and self-containment rule (`AB6005`) as artifact executables.
- * This is the build audiobook-curator previously needed a second bundler
- * config, a tsconfig, and a hand-written bin shim to produce.
+ * The framework-owned npm root: the proven artifact tree is copied unchanged,
+ * then authored package-only bins and the optional library entry are added.
+ * Routed CLI bins are never recompiled here; package.json points at the
+ * artifact executable recorded by agent-bundle.manifest.json.
  */
 
 const binShebang = '#!/usr/bin/env node';
@@ -44,7 +44,7 @@ const executableMode = 0o755;
 
 export interface PackageOutputFile {
   readonly bytes: number;
-  readonly kind: 'bundle' | 'generated';
+  readonly kind: ArtifactManifestFileKind;
   /** Present only for executable outputs. */
   readonly mode?: number;
   /** POSIX path relative to the package output root. */
@@ -108,72 +108,12 @@ const synthesizeDtsTsconfig = async (options: {
 export const planPackageEntries = async (
   model: NormalizedPlugin,
   dtsTsconfigPath: string | undefined,
-  options: {
-    readonly artifactRoot?: string;
-    readonly packageOutputRoot?: string;
-  } = {},
 ): Promise<readonly PlannedPackageEntry[]> => {
   const packageBuild = model.packageBuild;
   if (packageBuild === undefined) return Object.freeze([]);
   const entries: PlannedPackageEntry[] = [];
   for (const bin of packageBuild.bins) {
-    if (bin.generatedCli !== undefined) {
-      // A routed-CLI bin compiles the framework-generated command program;
-      // the cli-entry runtime shell is aliased in so the emitted executable
-      // stays self-contained, exactly like generated stdio MCP entries.
-      // Rendered commands add one sibling react-server Flight worker.
-      const rendered = bin.generatedCli.commands.some((command) => command.rendered);
-      const workerFile = `${bin.name}-flight.mjs`;
-      const sourceInputs = cliBinSourceInputs(model, bin);
-      const generatedCli = bin.generatedCli;
-      entries.push({
-        aliases: { [cliEntryRuntimeSpecifier]: cliEntryRuntimePath() },
-        banner: binShebang,
-        executable: true,
-        name: `bin-${bin.name}`,
-        outputRelativePath: `bin/${bin.name}.js`,
-        ...(rendered ? { rscManifest: true as const } : {}),
-        source: bin.source,
-        sourceInputs,
-        virtualSource: generatedCliBinEntrySource({
-          commands: generatedCli.commands,
-          plugin: {
-            ...(model.metadata.description === undefined ? {} : { description: model.metadata.description }),
-            name: model.metadata.name,
-            version: model.metadata.version,
-          },
-          ...(model.notices === undefined ? {} : { noticeRetention: model.notices.retention.resolved }),
-          providers: model.providers ?? [],
-          ...(generatedCli.projectionSources === undefined
-            ? {}
-            : { projectionSources: generatedCli.projectionSources }),
-          routes: generatedCli.routes,
-          ...(model.state === undefined ? {} : { state: model.state }),
-          ...(rendered ? { workerFile } : {}),
-        }),
-      });
-      if (rendered) {
-        const renderedRoutes = bin.generatedCli.routes.filter((route) =>
-          bin.generatedCli!.commands.some((command) => command.rendered && command.routeId === route.id));
-        entries.push({
-          executable: false,
-          name: `bin-${bin.name}-flight`,
-          outputRelativePath: `bin/${workerFile}`,
-          reactServer: true,
-          rscManifest: true,
-          source: bin.source,
-          sourceInputs,
-          virtualSource: generatedRenderedRouteWorkerSource({
-            layouts: model.layouts ?? [],
-            ...(model.notices === undefined ? {} : { noticeRetention: model.notices.retention.resolved }),
-            providers: model.providers ?? [],
-            routes: renderedRoutes,
-            ...(model.state === undefined ? {} : { state: model.state }),
-          }),
-        });
-      }
-      continue;
-    }
+    if (bin.generatedCli !== undefined) continue;
     // A bin entry exporting `main` (or a default function) receives the
     // generated process envelope; a self-executing module bundles directly.
     const exports = await scanEntryExports(bin.source);
@@ -193,42 +133,6 @@ export const planPackageEntries = async (
           aliases: { [terminalCapabilityRuntimeSpecifier]: terminalCapabilityRuntimePath() },
           virtualSource: generatedExecutableEntrySource({ entrySource: bin.source, exportName, hostSurface: 'cli' }),
         }),
-    });
-  }
-  const installHosts = Object.freeze((['claude', 'codex', 'cursor'] as const)
-    .filter((host) => model.targets.some((target) => target.name === host)));
-  if (
-    installHosts.length > 0 &&
-    options.artifactRoot !== undefined &&
-    options.packageOutputRoot !== undefined
-  ) {
-    const occupiedNames = new Set(packageBuild.bins.map((bin) => bin.name));
-    let name = model.metadata.name;
-    if (occupiedNames.has(name)) {
-      name = `${model.metadata.name}-install`;
-      let suffix = 2;
-      while (occupiedNames.has(name)) {
-        name = `${model.metadata.name}-install-${String(suffix)}`;
-        suffix += 1;
-      }
-    }
-    const outputRelativePath = `bin/${name}.js`;
-    const emittedBinDirectory = dirname(resolve(options.packageOutputRoot, outputRelativePath));
-    const relativeArtifact = toPosixRelative(emittedBinDirectory, options.artifactRoot);
-    const source = packageBuild.bins[0]?.source ?? packageBuild.lib!.source;
-    entries.push({
-      aliases: { [installEntryRuntimeSpecifier]: installEntryRuntimePath() },
-      banner: binShebang,
-      executable: true,
-      name: `bin-${name}`,
-      outputRelativePath,
-      source,
-      sourceInputs: Object.freeze([model.metadata.provenance.sourcePath, source]),
-      virtualSource: generatedInstallBinEntrySource({
-        artifactRelativeUrl: relativeArtifact === '' ? './' : `${relativeArtifact}/`,
-        hosts: installHosts,
-        name,
-      }),
     });
   }
   if (packageBuild.lib !== undefined) {
@@ -284,8 +188,84 @@ const declarationSource = (sourceDir: string, declarationPath: string): string |
   return undefined;
 };
 
+const packagePath = (outputDir: string, value: JsonValue): JsonValue => {
+  if (typeof value === 'string') {
+    const directory = outputDir.replaceAll('\\', '/');
+    const explicitPrefix = `./${directory}/`;
+    if (value.startsWith(explicitPrefix)) return `./${value.slice(explicitPrefix.length)}`;
+    const prefix = `${directory}/`;
+    return value.startsWith(prefix) ? value.slice(prefix.length) : value;
+  }
+  if (Array.isArray(value)) return value.map((entry) => packagePath(outputDir, entry));
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, packagePath(outputDir, entry)]));
+  }
+  return value;
+};
+
+const packageDocument = async (
+  projectRoot: string,
+  packageBuild: NormalizedPackageBuild,
+  manifest: ArtifactManifest,
+): Promise<Readonly<Record<string, JsonValue>>> => {
+  const source = snapshotStrictJsonValue(
+    parseJsonWithoutDuplicateKeys(await readFile(join(projectRoot, 'package.json'), 'utf8')),
+  );
+  if (source === null || Array.isArray(source) || typeof source !== 'object') {
+    throw new Error('package.json must contain a JSON object.');
+  }
+  const bins = Object.fromEntries(packageBuild.bins.map((bin) => {
+    if (bin.generatedCli === undefined) return [bin.name, `./bin/${bin.name}.js`];
+    const executable = manifest.executables.bins.find((entry) => entry.name === bin.name);
+    if (executable === undefined) {
+      throw new Error(`Artifact manifest does not declare routed CLI executable ${JSON.stringify(bin.name)}.`);
+    }
+    return [bin.name, `./${executable.path}`];
+  }));
+  const transformed = Object.fromEntries(Object.entries(source)
+    .filter(([key]) => key !== 'files' && key !== 'bin')
+    .map(([key, value]) => [
+      key,
+      ['exports', 'main', 'module', 'types', 'typesVersions'].includes(key)
+        ? packagePath(packageBuild.outputDir, value)
+        : value,
+    ]));
+  return Object.freeze({
+    ...transformed,
+    ...(Object.keys(bins).length === 0 ? {} : { bin: bins }),
+  });
+};
+
+const copyArtifactRoot = async (
+  artifactRoot: string,
+  stageRoot: string,
+  manifest: ArtifactManifest,
+): Promise<void> => {
+  for (const file of [...manifest.files, { path: artifactManifestName }]) {
+    const destination = resolveArtifactDestination(stageRoot, file.path);
+    await mkdir(dirname(destination), { recursive: true });
+    await copyFile(resolveArtifactDestination(artifactRoot, file.path), destination);
+  }
+};
+
+const copyStandardPackageFiles = async (
+  projectRoot: string,
+  stageRoot: string,
+): Promise<Map<string, string>> => {
+  const sources = new Map<string, string>();
+  for (const name of ['README.md', 'LICENSE', 'LICENSE.md', 'NOTICE', 'NOTICE.md']) {
+    const source = join(projectRoot, name);
+    if (!existsSync(source)) continue;
+    const destination = join(stageRoot, name);
+    if (existsSync(destination)) throw new Error(`Package metadata collides with artifact file ${JSON.stringify(name)}.`);
+    await copyFile(source, destination);
+    sources.set(name, source);
+  }
+  return sources;
+};
+
 export const buildPackageOutputs = async (options: {
-  readonly artifactRoot?: string;
+  readonly artifactRoot: string;
   readonly model: NormalizedPlugin;
   readonly projectRoot: string;
   readonly tools?: AgentBundleToolsConfig;
@@ -293,72 +273,107 @@ export const buildPackageOutputs = async (options: {
   const packageBuild = options.model.packageBuild;
   if (packageBuild === undefined) return undefined;
   const projectRoot = resolve(options.projectRoot);
+  const artifactRoot = resolve(options.artifactRoot);
+  const manifestRead = await readArtifactManifest(artifactRoot);
+  if (manifestRead.status !== 'ok') {
+    throw new Error(`Cannot build npm root from ${JSON.stringify(manifestRead.path)}: ${manifestRead.status}.`);
+  }
+  const manifest = manifestRead.manifest;
   const outputRoot = assertInside(projectRoot, resolve(projectRoot, packageBuild.outputDir));
   const libSourceDir = packageBuild.lib === undefined ? undefined : dirname(packageBuild.lib.source);
   const dtsTsconfig = packageBuild.lib?.dts === true && libSourceDir !== undefined
     ? await synthesizeDtsTsconfig({ projectRoot, sourceDir: libSourceDir })
     : undefined;
-  const entries = await planPackageEntries(options.model, dtsTsconfig?.path, {
-    ...(options.artifactRoot === undefined ? {} : { artifactRoot: resolve(options.artifactRoot) }),
-    packageOutputRoot: outputRoot,
-  });
-  if (entries.length === 0) {
-    await dtsTsconfig?.cleanup();
-    return undefined;
-  }
+  const entries = await planPackageEntries(options.model, dtsTsconfig?.path);
 
   const stageParent = dirname(outputRoot);
   await mkdir(stageParent, { recursive: true });
   const stageRoot = await mkdtemp(join(stageParent, `.${basename(outputRoot)}.stage-`));
+  const compileRoot = await mkdtemp(join(stageParent, `.${basename(outputRoot)}.compile-`));
   try {
     const ignoredRuntimeRoots = Object.freeze([...new Set([
-      ...(entries.some((entry) => entry.aliases?.[cliEntryRuntimeSpecifier] !== undefined)
-        ? [runtimeIgnoredRoot(cliEntryRuntimePath())]
-        : []),
-      ...(entries.some((entry) => entry.aliases?.[installEntryRuntimeSpecifier] !== undefined)
-        ? [runtimeIgnoredRoot(installEntryRuntimePath())]
-        : []),
       ...(entries.some((entry) => entry.aliases?.[terminalCapabilityRuntimeSpecifier] !== undefined)
         ? [runtimeIgnoredRoot(terminalCapabilityRuntimePath())]
         : []),
     ])]);
-    const evidence = await buildPackageEntries({
-      cwd: projectRoot,
-      diagnosticPathPrefix: toPosixRelative(projectRoot, outputRoot),
-      entries,
-      ...(ignoredRuntimeRoots.length === 0 ? {} : { ignoredSourcePaths: ignoredRuntimeRoots }),
-      logLevel: 'error',
-      meta: projectMeta(options.model.metadata),
-      outputRoot: stageRoot,
-      ...(options.tools === undefined ? {} : { tools: options.tools }),
-    }, dtsTsconfig === undefined || packageBuild.lib === undefined
-      ? undefined
-      : { entryName: packageBuild.lib.name, tsconfigPath: dtsTsconfig.path });
+    const evidence = entries.length === 0
+      ? { assets: Object.freeze([]), diagnostics: Object.freeze([]) }
+      : await buildPackageEntries({
+        cwd: projectRoot,
+        diagnosticPathPrefix: toPosixRelative(projectRoot, outputRoot),
+        entries,
+        ...(ignoredRuntimeRoots.length === 0 ? {} : { ignoredSourcePaths: ignoredRuntimeRoots }),
+        logLevel: 'error',
+        meta: projectMeta(options.model.metadata),
+        outputRoot: compileRoot,
+        ...(options.tools === undefined ? {} : { tools: options.tools }),
+      }, dtsTsconfig === undefined || packageBuild.lib === undefined
+        ? undefined
+        : { entryName: packageBuild.lib.name, tsconfigPath: dtsTsconfig.path });
     const evidenceByPath = new Map(evidence.assets.map((entry) => [entry.path, entry.sourceInputs]));
     await Promise.all(entries
       .filter((entry) => entry.executable)
-      .map((entry) => chmod(resolveArtifactDestination(stageRoot, entry.outputRelativePath), executableMode)));
+      .map((entry) => chmod(resolveArtifactDestination(compileRoot, entry.outputRelativePath), executableMode)));
+
+    await copyArtifactRoot(artifactRoot, stageRoot, manifest);
+    for (const file of await listArtifactFiles(compileRoot)) {
+      const destination = resolveArtifactDestination(stageRoot, file.path);
+      if (existsSync(destination)) throw new Error(`Package output collides with artifact file ${JSON.stringify(file.path)}.`);
+      await mkdir(dirname(destination), { recursive: true });
+      await copyFile(resolveArtifactDestination(compileRoot, file.path), destination);
+    }
+    const packageJsonSource = join(projectRoot, 'package.json');
+    if (existsSync(join(stageRoot, 'package.json'))) {
+      throw new Error('Package metadata collides with artifact file "package.json".');
+    }
+    await writeFile(
+      join(stageRoot, 'package.json'),
+      `${JSON.stringify(await packageDocument(projectRoot, packageBuild, manifest), null, 2)}\n`,
+      'utf8',
+    );
+    const packageSources = await copyStandardPackageFiles(projectRoot, stageRoot);
+    packageSources.set('package.json', packageJsonSource);
 
     const lib = packageBuild.lib;
+    const provenanceByPath = new Map(manifest.compiler.provenance.map((entry) => [entry.path, entry.sourceInputs]));
+    const artifactByPath = new Map(manifest.files.map((entry) => [entry.path, entry]));
     const staged = await listArtifactFiles(stageRoot);
     const files = staged.map((file): PackageOutputFile => {
       const bundled = evidenceByPath.get(file.path);
+      const artifact = artifactByPath.get(file.path);
+      const packageSource = packageSources.get(file.path);
       const declared = lib?.dts === true && libSourceDir !== undefined && file.path.endsWith('.d.ts')
         ? declarationSource(libSourceDir, file.path) ?? lib.source
         : undefined;
-      if (bundled === undefined && declared === undefined) {
+      if (
+        bundled === undefined &&
+        declared === undefined &&
+        artifact === undefined &&
+        packageSource === undefined &&
+        file.path !== artifactManifestName
+      ) {
         throw new Error(`Package build emitted unexpected output ${JSON.stringify(file.path)}.`);
+      }
+      let generatedSourceInputs: readonly string[];
+      if (bundled !== undefined) {
+        generatedSourceInputs = bundled;
+      } else if (declared !== undefined) {
+        if (lib === undefined) {
+          throw new Error(`Declaration output has no package library entry: ${JSON.stringify(file.path)}.`);
+        }
+        generatedSourceInputs = [lib.provenance.sourcePath, declared];
+      } else {
+        generatedSourceInputs = [packageSource ?? options.model.metadata.provenance.sourcePath];
       }
       return {
         bytes: file.bytes,
-        kind: bundled === undefined ? 'generated' : 'bundle',
+        kind: artifact?.kind ?? (bundled === undefined ? 'generated' : 'bundle'),
         ...((file.mode & 0o111) === 0 ? {} : { mode: file.mode }),
         path: file.path,
         sha256: file.sha256,
-        sourceInputs: relativeSourceInputs(
-          projectRoot,
-          bundled ?? [lib!.provenance.sourcePath, declared!],
-        ),
+        sourceInputs: artifact === undefined
+          ? relativeSourceInputs(projectRoot, generatedSourceInputs)
+          : provenanceByPath.get(file.path) ?? Object.freeze([]),
       };
     }).sort((left, right) => left.path.localeCompare(right.path));
     for (const entry of entries) {
@@ -385,7 +400,7 @@ export const buildPackageOutputs = async (options: {
       artifactRoot: stageRoot,
       bundledPaths: new Set(files.filter((file) => file.kind === 'bundle').map((file) => file.path)),
       bundleSyntaxCheck: bundleSyntaxCheckFor(options.tools),
-      files: staged,
+      files: staged.filter((file) => !artifactByPath.has(file.path)),
       reportedRoot: toPosixRelative(projectRoot, outputRoot),
       validJson: new Set(),
     });
@@ -396,6 +411,7 @@ export const buildPackageOutputs = async (options: {
   } finally {
     // publishArtifact removes the stage on success; a failed build leaves it.
     await rm(stageRoot, { force: true, recursive: true });
+    await rm(compileRoot, { force: true, recursive: true });
     await dtsTsconfig?.cleanup();
   }
 };

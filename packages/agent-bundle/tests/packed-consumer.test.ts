@@ -442,15 +442,12 @@ it('uses only an installed tarball after source deletion', async () => {
     expect(packageModules.violations).toEqual([]);
     expect(artifactModules.modules.filter((module) => /^mcp\/[^/]+\.mjs$/u.test(module.path))).toHaveLength(1);
     expect(packageModules.modules.map((module) => module.path)).toEqual(expect.arrayContaining([
-      'bin/framework-build-fixture-install.js',
       'bin/framework-build-fixture.js',
       'index.js',
     ]));
 
     const packedBin = join(frameworkRoot, 'dist', 'bin', 'framework-build-fixture.js');
-    const packedInstallerBin = join(frameworkRoot, 'dist', 'bin', 'framework-build-fixture-install.js');
     expect((await stat(packedBin)).mode & 0o111).not.toBe(0);
-    expect((await stat(packedInstallerBin)).mode & 0o111).not.toBe(0);
     expect((await readFile(packedBin, 'utf8')).startsWith('#!/usr/bin/env node\n')).toBe(true);
     await expect(execFile(packedBin, ['alpha'], { cwd: frameworkRoot, env: installedEnvironment() }))
       .resolves.toMatchObject({ stdout: 'packed bin ran:alpha\n' });

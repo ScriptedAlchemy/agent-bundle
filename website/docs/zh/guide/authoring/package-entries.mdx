@@ -104,7 +104,7 @@ export default async function inspect(
 ```
 
 编译器把 `inputSchema` 静态投影到 argv 上，生成分层帮助（每一层都有 `--help`，根层有 `--version`），
-并通过与其他 bin 相同的打包器合成流程输出 `dist/bin/<plugin-name>.js`。运行时，外壳解析命令路径、
+并在组合产物中输出 `bin/<plugin-name>.mjs`。运行时，外壳解析命令路径、
 解析并强制转换 argv、用模块自身的 schema 校验、在带类型的 Agent 请求上下文中执行默认函数、向 stdout
 写出一行规范 JSON，并确定性地映射退出码：
 
@@ -130,7 +130,7 @@ Run 'curator doctor --help' for usage.
 携带相同 `error` 对象的 `type: "error"` 事件。
 
 `.tsx` 命令路由把默认函数换成一个具有相同 props 的 async 默认 Server Component，并通过运行时分发器
-针对同级的 `dist/bin/<plugin-name>-flight.mjs` worker 渲染。它由此获得
+针对同级的 `bin/<plugin-name>-flight.mjs` worker 渲染。它由此获得
 [脚本与资源](./scripts-assets.mdx)中描述的四种输出模式。路由式 CLI 项目需要把 `@agent-bundle/runtime`
 作为依赖，因为生成的可执行文件通过它装配请求上下文。
 
@@ -339,24 +339,22 @@ id。只要路由从生成的 CLI 可执行文件运行，无论命令由哪种�
 
 短格式 `-x` 别名（shell 目前会拒绝单短横线 token）与异步 `mapInput` 暂不支持。
 
-### 宿主产物中的路由式 CLI
+### 每种分发中的同一个路由式 CLI
 
-包 bin 只能到达安装了 npm 包的用户，而 hook、Skill 与脚本是随宿主产物一起交付的。因此构建还会把同一张
-编译后的命令图只发射一次到产物根目录，路径为 `bin/<plugin-name>.mjs`（若有任一命令需要渲染，则再加上
+hook、Skill、脚本与 npm 消费者都使用插件根目录，因此构建把编译后的命令图只发射一次到产物根目录，
+路径为 `bin/<plugin-name>.mjs`（若有任一命令需要渲染，则再加上
 `bin/<plugin-name>-flight.mjs`），由所有选中宿主共享。每个内置 target 都发布了准入它的 `cli` 能力。产物 bin 是一个
-自包含的 ESM 模块，没有 shebang 也没有可执行位——像 `scripts/*.mjs` 一样以
-`node <plugin-root>/bin/<plugin-name>.mjs <command>` 运行。帮助、argv 解析、输出模式、退出码与信号都与
-包 bin 一致；唯一的区别是，在宿主未提供 `AGENT_BUNDLE_PLUGIN_ROOT` 时，工作区级持久状态锚定在产物根目录
-（`bin/` 的父目录，与生成的 MCP worker 使用同一个回退），而不是 `$PWD/.agent-bundle/state`，这样一起安装
-的 CLI 与服务器观察到的是同一份存储。
+带 Node shebang 和可执行位的自包含 ESM 模块。npm 根目录原样复制它，并让 `package.json` 的 `bin`
+直接指向它，因此帮助、argv 解析、输出模式、退出码、信号与完整命令集合都逐字节相同。两种形式都从
+`bin/` 的上级根目录解析插件代码，并遵循同一套运行时状态策略。
 
 从其他表面引用它时使用插件根 token——Claude Skill Markdown 与 hook 命令中写
 `${CLAUDE_PLUGIN_ROOT}/bin/<plugin-name>.mjs`，Codex hook 中写 `${PLUGIN_ROOT}/…`，Cursor hook 中写
 `${CURSOR_PLUGIN_ROOT}/…`——或者在编译后的脚本里用同级引用
 `new URL('../bin/<plugin-name>.mjs', import.meta.url)`。`inspect` 把该 bin 记为每个 target 的一个 `cli`
 组件，产物清单会记录这两个文件。不具备 `cli` 能力的 target 会省略该 bin 并报告 `AB4765`；宿主在同一路径
-发射的文件（例如 `claude.bin` 目录中交付的 `<plugin-name>.mjs`）是 `AB4766`。包构建的
-`dist/bin/<plugin-name>.js` 保持不变。
+发射的文件（例如 `claude.bin` 目录中交付的 `<plugin-name>.mjs`）是 `AB4766`。npm 根目录复制清单声明的
+这个可执行文件，不再编译另一份路由式 CLI。
 
 ### 把 MCP 工具投影进 CLI
 
@@ -389,14 +387,12 @@ import meta, { name, packageName, packageVersion, version } from 'agent-bundle/m
 在 agent-bundle 编译之外，已发布的该模块会抛出错误，而不是报告一个伪造的标识；完全没有发布版本号的
 发布构建会被拒绝（`AB4013`）。
 
-## 打包与安装器
+## 打包 npm 根目录
 
-当包输出与至少一个 Claude、Codex 或 Cursor 投影在同一项目内构建时，框架还会输出一个自包含、相对
-包路径的安装器，位于 `dist/bin/<plugin-name>.js`——若该名称已被占用则为 `<plugin-name>-install.js`，
-两者都被占用时再追加数字后缀。请在 `package.json` 的 `bin` 中声明对应取值。它的语法是
-`install <host> [--scope <scope>] [--json]`，帮助中只列出已构建的宿主；它通过 `import.meta.url` 而
-不是调用者的工作目录来定位随包发布的产物目录，因此无论当前目录在哪里，从 `node_modules` 中都能正常
-工作。没有任何 npm 生命周期会执行安装。
+启用包输出后，`dist/` 包含完整的已校验组合产物，以及包元数据、标准文档和包专用入口。生成的路由式 CLI
+不会再次编译：已安装的 `package.json` 指向 `agent-bundle.manifest.json` 声明并从产物原样复制的
+`bin/<plugin-name>.mjs`。因此 tarball 只有一个插件根和一个路由式 CLI，没有嵌套的 `artifact/` 目录或
+相对包的安装器包装器。没有任何 npm 生命周期会执行宿主安装。
 
 ```sh
 npx agent-bundle prepack --root . --output artifact --json

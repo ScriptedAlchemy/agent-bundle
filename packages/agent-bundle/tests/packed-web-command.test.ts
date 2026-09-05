@@ -1,5 +1,5 @@
 import { execFile as executeFile, type ChildProcess } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -13,7 +13,12 @@ import { WEB_HOST_SEED_ELEMENT_ID, type WebHostPageSeed } from '../src/web-host/
 import { WEB_HOST_TOKEN_HEADER } from '../src/web-host/page.ts';
 import { awaitStdoutLine, connectionRefused, isProcessGone, killAll, runBin, type BinRun } from './support/bin-process.ts';
 import { eventuallyPasses, within } from './support/eventually.ts';
-import { cachedNpmInstallArguments, installedEnvironment, sharedPackedTarball } from './support/shared-pack.ts';
+import {
+  cachedNpmInstallArguments,
+  installedEnvironment,
+  packOutputFromJson,
+  sharedPackedTarball,
+} from './support/shared-pack.ts';
 import { timeScale } from './support/time-scale.ts';
 
 const execFile = promisify(executeFile);
@@ -45,7 +50,10 @@ const webReadyKeys: readonly (keyof WebReadyDocument)[] = ['app', 'port', 'resou
 let consumer = '';
 let project = '';
 let artifact = '';
+let packageRoot = '';
+let artifactBin = '';
 let bin = '';
+let packedPaths: readonly string[] = [];
 const spawned = new Set<ChildProcess>();
 const observedProcessIds = new Set<number>();
 
@@ -80,6 +88,7 @@ beforeAll(async () => {
   consumer = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-web-command-'));
   project = join(consumer, 'project');
   artifact = join(project, 'artifact');
+  packageRoot = join(project, 'dist');
   await cp(fixtureRoot, project, { recursive: true });
   // The generated routed-CLI bin resolves `@agent-bundle/runtime` (and its
   // React peer) from the consumer, exactly like the packed stdio proof.
@@ -96,7 +105,38 @@ beforeAll(async () => {
     cwd: project,
     env: installedEnvironment(),
   });
-  bin = join(artifact, 'bin', `${pluginName}.mjs`);
+  artifactBin = join(artifact, 'bin', `${pluginName}.mjs`);
+
+  const tarballs = join(consumer, 'tarballs');
+  const installedConsumer = join(consumer, 'installed-consumer');
+  await Promise.all([
+    mkdir(tarballs),
+    mkdir(installedConsumer),
+  ]);
+  await writeFile(join(installedConsumer, 'package.json'), '{"private":true}\n');
+  const { stdout: packJson } = await execFile('npm', [
+    'pack',
+    '--json',
+    '--ignore-scripts',
+    '--pack-destination',
+    tarballs,
+  ], { cwd: packageRoot, env: installedEnvironment() });
+  const packed = packOutputFromJson(packJson, pluginName);
+  packedPaths = packed.files.map((file) => file.path);
+  await execFile('npm', [
+    'install',
+    ...cachedNpmInstallArguments,
+    join(tarballs, packed.filename),
+  ], { cwd: installedConsumer, env: installedEnvironment() });
+  const installedPackageRoot = join(installedConsumer, 'node_modules', pluginName);
+  const packageDocument = JSON.parse(
+    await readFile(join(installedPackageRoot, 'package.json'), 'utf8'),
+  ) as { readonly bin?: Readonly<Record<string, string>> };
+  const declaredBin = packageDocument.bin?.[pluginName];
+  if (declaredBin === undefined) {
+    throw new Error(`Packed ${pluginName} package does not declare its executable.`);
+  }
+  bin = resolve(installedPackageRoot, declaredBin);
   // `packed-deleted-source`: the bin serves out of the artifact alone, so the
   // config, the routes, the server, and the App view are removed and verified
   // absent before any process runs.
@@ -141,6 +181,39 @@ it('builds the exposed App into the composite root: a manifest web section and o
   expect(source).not.toMatch(effectImport);
   expect(source).toContain('Ctrl-C stops the server');
   expect(source).toContain(WEB_HOST_SEED_ELEMENT_ID);
+});
+
+it('packs the composite root as the npm root and runs the package.json bin with the artifact command surface byte-for-byte', async () => {
+  expect(packedPaths).toContain('agent-bundle.manifest.json');
+  expect(packedPaths).toContain(`bin/${pluginName}.mjs`);
+  expect(packedPaths.some((path) => path.startsWith('artifact/'))).toBe(false);
+  await expect(readFile(bin)).resolves.toEqual(await readFile(artifactBin));
+
+  const [artifactHelp, packedHelp] = [artifactBin, bin].map((executable) =>
+    spawnBin(executable, ['--help']));
+  await Promise.all([
+    expect(within(artifactHelp.exit, 30_000 * timeScale)).resolves.toEqual({ code: 0, signal: null }),
+    expect(within(packedHelp.exit, 30_000 * timeScale)).resolves.toEqual({ code: 0, signal: null }),
+  ]);
+  expect(packedHelp.stdout()).toBe(artifactHelp.stdout());
+  expect(packedHelp.stdout()).toMatch(/^\s+dashboard\b/mu);
+  expect(packedHelp.stdout()).toMatch(/^\s+web\b/mu);
+
+  const [artifactDashboard, packedDashboard] = [artifactBin, bin].map((executable) =>
+    spawnBin(executable, ['dashboard', '--json']));
+  await Promise.all([
+    expect(within(artifactDashboard.exit, 30_000 * timeScale)).resolves.toEqual({ code: 0, signal: null }),
+    expect(within(packedDashboard.exit, 30_000 * timeScale)).resolves.toEqual({ code: 0, signal: null }),
+  ]);
+  expect(packedDashboard.stdout()).toBe(artifactDashboard.stdout());
+
+  const [artifactWebHelp, packedWebHelp] = [artifactBin, bin].map((executable) =>
+    spawnBin(executable, ['web', '--help']));
+  await Promise.all([
+    expect(within(artifactWebHelp.exit, 30_000 * timeScale)).resolves.toEqual({ code: 0, signal: null }),
+    expect(within(packedWebHelp.exit, 30_000 * timeScale)).resolves.toEqual({ code: 0, signal: null }),
+  ]);
+  expect(packedWebHelp.stdout()).toBe(artifactWebHelp.stdout());
 });
 
 it('serves the App from `web --json --no-open` as a real process out of the deleted-source consumer, gates its routes by token, and tears down on SIGINT', { timeout: 120_000 }, async () => {

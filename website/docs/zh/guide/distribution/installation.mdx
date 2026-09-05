@@ -1,5 +1,5 @@
 ---
-description: '把已构建的 agent-bundle 安装进 Claude Code、Codex 或 Cursor：install 命令、宿主作用域、独立的 install.mjs、相对包的安装器 bin，以及 Doctor。'
+description: '把已构建的 agent-bundle 安装进 Claude Code、Codex 或 Cursor：install 命令、宿主作用域、独立的 install.mjs、npm CLI 一致性，以及 Doctor。'
 ---
 
 # 宿主安装
@@ -61,19 +61,12 @@ node ./install.mjs
 
 产物校验会拒绝缺少必需安装表面的根目录，因此捆绑包不可能在缺少它所承诺的安装器的情况下发布。
 
-## 相对包的安装器 bin
+## npm 安装的 CLI
 
-当包输出与选中了内置宿主的根目录一起发布时，构建还会输出一个相对包的安装器 bin。当没有配置的 bin 占用该名字时，它使用
-插件名，否则使用 `<plugin-name>-install`（两者都被占用时追加数字后缀）。请在 `package.json` 中把这个
-名字映射到生成的 `dist/bin/*.js` 文件；消费者随后运行：
-
-```sh
-<bin> install <host> [--scope <scope>] [--json]
-```
-
-帮助信息只列出实际构建出来的宿主。该可执行文件通过 `import.meta.url` 在已安装包旁边定位产物目录，绝不
-依赖调用方的工作目录，因此无论从哪里调用，它在 `node_modules` 中都能工作。**任何 npm 生命周期都不会执行
-安装**——安装一个包绝不会改动宿主的插件状态。
+npm 包根目录本身就包含组合插件根。对于生成的路由式 CLI，`package.json` 的 `bin` 指向产物公开的同一个
+`bin/<name>.mjs` 可执行文件，不会再次编译，也没有包装器。因此它的完整命令面（包括 `web`）从
+`node_modules` 运行时与从复制的产物运行完全一致。**任何 npm 生命周期都不会执行宿主安装**——安装一个包
+绝不会改动宿主的插件状态。
 
 ## 开发期安装是另一回事
 
@@ -83,7 +76,7 @@ node ./install.mjs
 
 ## 重建后重新安装
 
-每个输出的安装器——`agent-bundle install <host>`、相对包的 bin 与独立的 `install.mjs`——共用同一套替换策略。
+每个输出的安装器——`agent-bundle install <host>` 与独立的 `install.mjs`——共用同一套替换策略。
 内容完全相同的副本是 `already-installed` 空操作。**版本相同但内容哈希不同**的副本会被自动替换，因此不升版本
 地重建不再需要卸载加 `rm -rf`。版本不同则以 `AB7005` 拒绝，除非传入 `--replace`（别名 `--force`）；外来目录
 ——不是本插件安装器放置的——无论如何都会被拒绝。Cursor 副本携带安装回执（`.agent-bundle-install.json`：

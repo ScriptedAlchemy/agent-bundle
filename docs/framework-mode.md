@@ -271,11 +271,11 @@ the handwritten `runRscCli` compatibility path still serializes validated
 results and never renders JSX. Routed `src/cli/**` commands and
 `src/scripts/**` scripts follow one sentence: `.tsx` renders through the
 Agent renderer (TTY progress, piped Markdown, `--json`, `--ndjson`); `.ts`
-is plain. The routed CLI ships twice from one build: as the npm package bin
-(`dist/bin/<name>.js`) for users who install the package, and as
-`bin/<name>.mjs` inside the plugin root so the plugin's own skills,
-hooks, and scripts can run it with `node` from the installed plugin root
-(see [Entry conventions](entry-conventions.md#the-routed-cli-inside-the-plugin-root)).
+is plain. The routed CLI compiles once as `bin/<name>.mjs` in the plugin root;
+the npm root copies that proven executable unchanged and points its
+`package.json` `bin` at it, so npm users and the plugin's own skills, hooks,
+and scripts run the same command surface (see
+[Entry conventions](entry-conventions.md#the-routed-cli-inside-every-distribution)).
 
 ## Release identity in source: `agent-bundle/meta`
 

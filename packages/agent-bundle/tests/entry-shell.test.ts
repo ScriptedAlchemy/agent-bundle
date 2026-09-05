@@ -361,17 +361,6 @@ describe('generated entry templates', () => {
     expect(path.endsWith('terminal-capability.ts') || path.endsWith('terminal-capability.js')).toBe(true);
   });
 
-  it('defers installer filesystem URL conversion to the guarded runtime', () => {
-    const source = entryShellModule.generatedInstallBinEntrySource({
-      artifactRelativeUrl: '../../artifact/',
-      hosts: ['cursor'],
-      name: 'installer',
-    });
-
-    expect(source).toContain('artifactRoot: new URL("../../artifact/", import.meta.url)');
-    expect(source).not.toContain('fileURLToPath');
-  });
-
   it('routes a rejected progress report into the generated request failure path', async () => {
     const generated = generatedRenderedScriptEntrySource({
       name: 'report',

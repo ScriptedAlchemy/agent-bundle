@@ -13,25 +13,20 @@ rendering.
 
 `agent-bundle build` always emits the composite plugin root. When the project
 declares `bin`/`lib` (or provides them by convention), the CLI build also
-produces the node-consumable package build under `dist/` — the outputs
-`package.json` `bin` and `exports` point at:
+produces the node-consumable npm root under `dist/`. It copies the validated
+composite artifact there and adds `package.json`, standard package docs, and
+package-only entries:
 
 | Config | Output | Notes |
 | --- | --- | --- |
-| `bin: { '<name>': './src/cli.ts' }` | `dist/bin/<name>.js` | Self-executing ESM bundle, `#!/usr/bin/env node` shebang, executable bit. |
+| `bin: { '<name>': './src/cli.ts' }` | `dist/bin/<name>.js` | Authored self-executing ESM bundle, `#!/usr/bin/env node` shebang, executable bit. |
+| generated `src/cli/**` routes | `dist/bin/<plugin-name>.mjs` | The manifest-declared artifact executable, copied byte-for-byte; `package.json` `bin` points directly at it. |
 | `lib: { entry: './src/index.ts', dts: true }` | `dist/<stem>.js` + `dist/**/*.d.ts` | Single-entry ESM profile, node target, es2022 syntax. |
 
-- When package outputs are built inside the project and the plugin root
-  carries at least one of the `claude`, `codex`, or `cursor` projections, the
-  framework also emits one self-contained
-  package-relative installer. It is `dist/bin/<plugin-name>.js` when that name
-  is free, otherwise `dist/bin/<plugin-name>-install.js`; if both are occupied,
-  a numeric suffix (`-install-2`, `-install-3`, …) guarantees a free name.
-  Declare the matching `package.json` `bin` value. Its grammar is
-  `install <host> [--scope <scope>] [--json]`; help lists only built hosts.
-  The baked URL resolves the shipped plugin root from `import.meta.url`,
-  never the caller's working directory, and delegates to the same
-  `installBundle` implementation as `agent-bundle install`.
+- The npm root is not a parallel plugin compilation and contains no nested
+  `artifact/` directory. Generated routed CLI commands, including `web`, run
+  from the one artifact executable; no package-relative installer wrapper is
+  generated.
 - `agent-bundle prepack [--root <root>] [--output <artifact>] [--json]` runs
   the release build and `npm pack --dry-run --json --ignore-scripts`, then
   gates the exact package/artifact inventory, manifest hashes, package bin
@@ -825,8 +820,8 @@ The compiler statically projects `inputSchema` onto argv (the bounded grammar
 and every policy rule are documented in
 [Diagnostics](diagnostics.md#route-graph-state-layout-and-provider-conventions-ab4800ab4842-ab4940ab4942)), generates nested
 help (`--help` at every level, `--version` at the root), and emits
-`dist/bin/<plugin-name>.js` with the shebang and executable bit through the
-same Rslib synthesis as every other bin. At run time the shell resolves the
+`bin/<plugin-name>.mjs` in the composite artifact with the shebang and
+executable bit. At run time the shell resolves the
 command path, parses and coerces argv, validates through the module's own
 zod schemas, executes the default function inside the typed Agent request
 context (`invocation.kind: 'cli'`), writes one canonical JSON line to
@@ -874,7 +869,7 @@ is 2 in every mode.
 A `.tsx` command route swaps the default function for an async default
 Server Component with the same `{ input, signal }` props and renders through
 the runtime dispatcher's public `stream()` against a sibling
-`dist/bin/<plugin-name>-flight.mjs` react-server worker (one warm worker per
+`bin/<plugin-name>-flight.mjs` react-server worker (one warm worker per
 invocation; raw Flight bytes never reach the terminal). The four output
 modes: an interactive TTY updates progress in place and prints the final
 document as Markdown; piped output emits exactly one final Markdown document
@@ -886,11 +881,10 @@ machine output owns stdout. Rendered scripts
 (`src/scripts/<name>.tsx`) share the same shell and output contract with
 `{ argv, signal }` component props and status-derived exit codes.
 
-#### The routed CLI inside the plugin root
+#### The routed CLI inside every distribution
 
-The package bin only reaches users who install the npm package. Hooks,
-skills, and script routes ship with the **plugin root**, so the build also
-emits the same compiled command graph into that root whenever a selected host's
+Hooks, skills, script routes, and npm consumers all use the **plugin root**,
+so the build emits one compiled command graph there whenever a selected host's
 adapter publishes the `cli` capability — all built-in hosts do (`claude`,
 `codex`, `cursor`, `portable`) — because the artifact root is
 already a plain directory Node executes `mcp/` and `scripts/` files from.
@@ -906,15 +900,11 @@ artifact/
   mcp/…
 ```
 
-The artifact bin is a self-contained ESM module with no shebang or
-executable bit — invoke it as `node <plugin-root>/bin/<plugin-name>.mjs
-<args>`, exactly like `scripts/*.mjs`. Help, argv parsing, output modes,
-exit codes, and signals are identical to the package bin. One deliberate
-difference: workspace-durable state without a host-supplied
-`AGENT_BUNDLE_PLUGIN_ROOT` anchors on the **artifact root** (the parent of
-`bin/`, the same fallback the generated MCP worker beside it uses) rather
-than `$PWD/.agent-bundle/state`, so a co-installed CLI and server observe
-one store. The npm package bin keeps its `cwd` fallback.
+The artifact bin is a self-contained executable ESM module with a Node
+shebang. The npm root copies it unchanged and points `package.json` `bin`
+directly at it, so help, argv parsing, output modes, exit codes, signals, and
+the full command set are byte-for-byte the same. Both forms resolve plugin
+code from the root above `bin/` and follow the same runtime state policy.
 
 Reaching the bin from the other surfaces:
 
@@ -945,7 +935,8 @@ capability without that layout, or with a `cliBin` layout naming another
 directory or omitting `.mjs`, is rejected at registration. A target without the
 capability omits the bin and reports `AB4765`; a host-emitted file at the
 same path (a Claude `claude.bin` directory shipping `<plugin-name>.mjs`) is
-`AB4766`. The package build's `dist/bin/<plugin-name>.js` is unchanged.
+`AB4766`. The npm root copies this manifest-declared executable; it does not
+compile another routed CLI.
 
 #### Project generated MCP tools into the CLI (power tier)
 
@@ -1484,8 +1475,9 @@ treats a missing file as the normal case and an unreadable one as skipped.
 The dotenv grammar has no `${VAR}` interpolation. Under `mcp run` the plugin
 root is the project root, so the shell's pass is a no-op; `--env-file` and
 `--no-env` are handed down as `AGENT_BUNDLE_ENV_FILE` so the shell follows the
-operator's choice. The npm package bin reads no pack file. Doctor reports the
-presence and variable count of each file (`AB7331`).
+operator's choice. Because the npm bin is this same artifact executable, it
+reads the same pack files. Doctor reports the presence and variable count of
+each file (`AB7331`).
 
 Two details keep the installed order equal to the `mcp run` table above:
 
