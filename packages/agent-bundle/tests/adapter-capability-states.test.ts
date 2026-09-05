@@ -6,6 +6,7 @@ import type { AgentNoticeDeliveryAdvertisement, AgentNoticeDeliveryRoute } from 
 import {
   capabilityEvidence,
   capabilityIsSupported,
+  cliBinCapability,
   intersectNoticeDeliveryAdvertisements,
   noticeDeliveryAdvertisementFrom,
   supportedCapability,
@@ -21,8 +22,11 @@ import { cursorContractCapabilityRows } from '../src/adapters/cursor.ts';
 import { NOTICE_DELIVERY_ROUTES } from '../src/adapters/notice-delivery.ts';
 import type { NoticeDeliveryAdvertisement, NoticeDeliveryRoute } from '../src/adapters/notice-delivery.ts';
 import { TargetRegistry, createDefaultRegistry } from '../src/adapters/registry.ts';
+import { generatedBinCapability } from '../src/build/cli-bins.ts';
 import { CapabilityStateError, isCapabilityState } from '../src/core/capabilities.ts';
 import type { CapabilityEvidence, CapabilityState } from '../src/core/capabilities.ts';
+import type { NormalizedBinEntry } from '../src/core/types.ts';
+import type { CompiledCliCommand } from '../src/routes/types.ts';
 
 const evidence = (target: string): CapabilityEvidence => Object.freeze({
   observedVersion: `${target}-version`,
@@ -928,6 +932,41 @@ it('pins a supported web surface row on every host capability table (#564)', () 
     expect(registry.hostsComponent(host, webSurfaceCapability), host).toBe(true);
     expect(registry.capabilityState(host, webSurfaceCapability)?.state, host).toBe('supported');
   }
+});
+
+it('judges a web-only bin on the web row and a routed bin on the cli row', () => {
+  const cursor = createDefaultRegistry().get('cursor');
+  const webOnlyHost = new TargetRegistry();
+  webOnlyHost.register({
+    ...cursor,
+    capabilities: { ...cursor.capabilities, [cliBinCapability]: unavailableCapability('no routed CLI here') },
+  });
+  const cliOnlyHost = new TargetRegistry();
+  cliOnlyHost.register({
+    ...cursor,
+    capabilities: { ...cursor.capabilities, [webSurfaceCapability]: unavailableCapability('no browser here') },
+  });
+  const bin: NormalizedBinEntry = {
+    id: 'bin:fixture',
+    name: 'fixture',
+    provenance: { kind: 'conventional', sourcePath: '/project/agent-bundle.config.ts' },
+    source: '/project/agent-bundle.config.ts',
+  };
+  const command: CompiledCliCommand = { aliases: [], exitCode: 'zero', options: [], path: ['report'], rendered: false, routeId: 'cli:report' };
+  const webOnly: NormalizedBinEntry = { ...bin, generatedCli: { commands: [], routes: [] }, web: true };
+  const routed: NormalizedBinEntry = { ...bin, generatedCli: { commands: [command], routes: [] } };
+  const routedWithWeb: NormalizedBinEntry = { ...routed, web: true };
+
+  // A generated web bin carries an empty `generatedCli`; the command count, not
+  // the field's presence, decides which capability row admits it.
+  expect(generatedBinCapability(webOnly)).toBe(webSurfaceCapability);
+  expect(generatedBinCapability(routed)).toBe(cliBinCapability);
+  expect(generatedBinCapability(routedWithWeb)).toBe(cliBinCapability);
+  expect(generatedBinCapability(undefined)).toBe(cliBinCapability);
+  expect(webOnlyHost.hostsComponent('cursor', generatedBinCapability(webOnly))).toBe(true);
+  expect(cliOnlyHost.hostsComponent('cursor', generatedBinCapability(webOnly))).toBe(false);
+  expect(webOnlyHost.hostsComponent('cursor', generatedBinCapability(routed))).toBe(false);
+  expect(cliOnlyHost.hostsComponent('cursor', generatedBinCapability(routed))).toBe(true);
 });
 
 it('rejects a malformed inspection component capability when the adapter registers', () => {

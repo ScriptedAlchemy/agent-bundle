@@ -61,8 +61,18 @@ export const routedCliBins = (model: NormalizedPlugin): readonly NormalizedBinEn
  */
 export const targetHostsGeneratedBin = (registry: TargetRegistry, model: NormalizedPlugin, target: string): boolean => {
   const bin = routedCliBins(model)[0];
-  const capability = bin === undefined || bin.generatedCli !== undefined ? cliBinCapability : webSurfaceCapability;
-  return registry.hostsComponent(target, capability);
+  return registry.hostsComponent(target, generatedBinCapability(bin));
+};
+
+/**
+ * The capability row that judges a generated bin: `web` for one that
+ * compiles no command and exists only to carry `<plugin> web` — its
+ * `generatedCli` is present but empty, so the command count decides, not the
+ * field's presence — and `cli` otherwise.
+ */
+export const generatedBinCapability = (bin: NormalizedBinEntry | undefined): string => {
+  if (bin === undefined || bin.web !== true) return cliBinCapability;
+  return (bin.generatedCli?.commands.length ?? 0) > 0 ? cliBinCapability : webSurfaceCapability;
 };
 
 export interface CompiledCliBin extends CompiledEntry {
