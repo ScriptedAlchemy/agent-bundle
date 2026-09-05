@@ -20,7 +20,7 @@ import type {
 } from '../../contracts/lifecycles.ts';
 import type { RequestContextProvenance } from '../../contracts/request-provenance.ts';
 import { deepFreeze } from '../../core/freeze.ts';
-import { isJsonRecord, isRecord, snapshotStrictJsonValue } from '../../core/strict-json.ts';
+import { isJsonRecord, isRecord, snapshotStrictJsonValue, type JsonObject } from '../../core/strict-json.ts';
 import {
   createCanonicalEventProps,
   projectEventDocument,
@@ -34,6 +34,7 @@ import type { CompiledAgentRoute, CompiledRouteGraph } from '../../routes/types.
 import type { RenderRouteContext, renderRouteEvents } from '../../test/render.ts';
 import type { AgentRouteModule } from '../../test/types.ts';
 import type { DevLogKindFor, DevLogSink } from '../logs/dev-log-service.ts';
+import { nativeEventRequestContext } from '../routes/route-invocation.ts';
 import type {
   LifecycleRenderChildRequest,
   LifecycleRenderChildResponse,
@@ -43,74 +44,6 @@ import { YieldableFrameworkError } from '../../effect/errors.ts';
 
 const concreteHosts = new Set(['claude', 'codex', 'cursor']);
 const projectionDiagnosticCode = 'lifecycle.projection.unsupported';
-
-const nativeText = (native: Readonly<Record<string, unknown>>, key: string): string | undefined => {
-  const value = native[key];
-  return typeof value === 'string' && value.trim() !== '' ? value : undefined;
-};
-
-/**
- * What one replayed receipt proves about its place in the conversation tree:
- * a Claude or Codex payload with no `agent_id` is the root itself; anything
- * subagent-shaped (and every Cursor payload) needs the warm runtime's registry,
- * which a deterministic replay does not have.
- */
-const replayLineage = (
-  native: Readonly<Record<string, unknown>>,
-  target: string,
-): RequestContextProvenance['lineage'] => {
-  if (!concreteHosts.has(target)) return { reason: 'no-subagent-events', state: 'unavailable' };
-  if (target === 'cursor') return { reason: 'no-shared-runtime', state: 'unavailable' };
-  const root = nativeText(native, 'session_id');
-  const agentId = nativeText(native, 'agent_id');
-  if (root === undefined || agentId !== undefined) return { reason: 'no-shared-runtime', state: 'unavailable' };
-  const generation = target === 'codex' ? nativeText(native, 'turn_id') : nativeText(native, 'prompt_id');
-  return {
-    source: 'receipt',
-    state: 'available',
-    value: {
-      conversation: root,
-      depth: 0,
-      ...(generation === undefined ? {} : { generation }),
-      resolution: 'native',
-      root,
-    },
-  };
-};
-
-const replayRequestContext = (
-  event: CanonicalAgentEvent,
-  native: Readonly<Record<string, unknown>>,
-  routeId: string,
-  target: string,
-  hostContractRevision: string,
-): RequestContextProvenance => {
-  const sessionId = nativeText(native, 'session_id') ?? nativeText(native, 'conversation_id');
-  const workspaceRoots = native['workspace_roots'];
-  const firstWorkspaceRoot = Array.isArray(workspaceRoots) &&
-    typeof workspaceRoots[0] === 'string' &&
-    workspaceRoots[0].trim() !== ''
-    ? workspaceRoots[0]
-    : undefined;
-  const workspaceRoot = nativeText(native, 'cwd') ?? firstWorkspaceRoot;
-  return deepFreeze({
-    actor: { reason: 'not-provided', state: 'unavailable' },
-    host: { source: 'receipt', state: 'available', value: { name: target } },
-    invocation: {
-      hostContractRevision,
-      kind: 'event',
-      operationId: routeId,
-      surface: event,
-    },
-    lineage: replayLineage(native, target),
-    session: sessionId === undefined
-      ? { reason: 'not-provided', state: 'unavailable' }
-      : { source: 'receipt', state: 'available', value: { sessionId } },
-    workspace: workspaceRoot === undefined
-      ? { reason: 'not-provided', state: 'unavailable' }
-      : { source: 'receipt', state: 'available', value: { root: workspaceRoot } },
-  });
-};
 
 const renderContext = (requestContext: RequestContextProvenance): RenderRouteContext => deepFreeze({
   actor: requestContext.actor,
@@ -461,9 +394,11 @@ export class LifecycleReplayService {
       );
     }
     let nativeInput: Readonly<Record<string, unknown>>;
+    let strictNativeInput: JsonObject;
     try {
       const snapshot = snapshotStrictJsonValue(request.native);
       if (!isJsonRecord(snapshot)) throw new TypeError('stdin JSON value must be an object');
+      strictNativeInput = snapshot;
       nativeInput = validateNativeEventEnvelope(snapshot, {
         canonicalEvent: event,
         nativeEvent: target.nativeEvent,
@@ -473,13 +408,13 @@ export class LifecycleReplayService {
       const message = error instanceof Error ? error.message : String(error);
       throw new LifecycleReplayRequestError('AB8211', message, 400);
     }
-    const requestContext = replayRequestContext(
+    const requestContext = nativeEventRequestContext({
       event,
-      nativeInput,
-      route.id,
-      target.target,
-      target.hostContractRevision,
-    );
+      hostContractRevision: target.hostContractRevision,
+      native: strictNativeInput,
+      routeId: route.id,
+      target: target.target,
+    });
     let rendered: LifecycleRenderChildResult;
     if (this.#renderInProcess) {
       const props = createCanonicalEventProps(

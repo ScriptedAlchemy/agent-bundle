@@ -340,7 +340,7 @@ const instantAfter = (startedAt: string, receipt: EventTraceReceipt, at: number 
 };
 
 const describe = (receipt: EventTraceReceipt): string =>
-  `${receipt.execution.host} ${receipt.execution.nativeEvent} → ${receipt.execution.event}`;
+  `${receipt.execution.host} ${receipt.execution.nativeEvent} → ${receipt.execution.event.replaceAll('/', ' · ')}`;
 
 /**
  * Lowers one decoded receipt into the entries a `TracePublisher` receives, in

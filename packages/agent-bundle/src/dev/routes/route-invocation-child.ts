@@ -5,11 +5,14 @@ import * as AgentRuntime from '@agent-bundle/runtime';
 import { createJiti, type JitiOptions, type TransformOptions } from 'jiti';
 import * as React from 'react';
 
-import type { JsonObject } from '../../core/strict-json.ts';
+import { isJsonRecord, type JsonObject } from '../../core/strict-json.ts';
 import {
+  createEventTracer,
+  eventTraceExecution,
   installEventTraceObserver,
   type EventTraceEvent,
 } from '../../events/trace.ts';
+import { canonicalAgentEvents } from '../../routes/public.ts';
 import {
   AGENT_TEST_REGISTRY_VERSION,
   registerTestRoutes,
@@ -117,19 +120,41 @@ const render = async (request: RouteInvocationChildRequest): Promise<RouteInvoca
   installManifest(request);
   const startedAt = performance.now();
   const input = request.input;
-  const rendered = await renderRouteEvents(request.routeId, {
-    ...(request.args === undefined ? {} : { args: request.args }),
-    context: {
-      actor: request.context.actor,
-      host: request.context.host,
-      invocation: request.context.invocation,
-      lineage: request.context.lineage,
-      session: request.context.session,
-      workspace: request.context.workspace,
-    },
-    input,
-    manifest: request.manifest,
-  });
+  const eventName = request.routeId.startsWith('event:')
+    ? canonicalAgentEvents.find((event) => event === request.routeId.slice('event:'.length))
+    : undefined;
+  const nativeInput = isJsonRecord(input) ? input.native : undefined;
+  const nativeEvent = nativeInput !== undefined && isJsonRecord(nativeInput) && typeof nativeInput.hook_event_name === 'string'
+    ? nativeInput.hook_event_name
+    : eventName;
+  const host = request.context.host.state === 'available'
+    ? request.context.host.value.name
+    : 'workbench';
+  const trace = eventName === undefined || nativeEvent === undefined
+    ? undefined
+    : createEventTracer({ execution: eventTraceExecution({ event: eventName, host, nativeEvent }) });
+  trace?.executeStart('standalone');
+  trace?.renderStart();
+  let rendered: Awaited<ReturnType<typeof renderRouteEvents>>;
+  try {
+    rendered = await renderRouteEvents(request.routeId, {
+      ...(request.args === undefined ? {} : { args: request.args }),
+      context: {
+        actor: request.context.actor,
+        host: request.context.host,
+        invocation: request.context.invocation,
+        lineage: request.context.lineage,
+        session: request.context.session,
+        workspace: request.context.workspace,
+      },
+      input,
+      manifest: request.manifest,
+    });
+    trace?.renderFinish();
+  } catch (error) {
+    trace?.failure('render', error);
+    throw error;
+  }
   return Object.freeze({
     document: rendered.document,
     events: rendered.events,
