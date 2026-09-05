@@ -6,13 +6,15 @@
  *
  *   /                                   Application (no selection)
  *   /routes/…                           One application leaf (see application-node.ts)
- *   /trace  ·  /trace/<invocationId>    Live trace, one entry
+ *   /trace  ·  /trace/<entryId>         Live trace, one selected entry
  *   /problems                           Diagnostics
  *   /sessions  ·  /sessions/<host>      Embedded host sessions (PR 3)
  *   /advanced/<section>                 evals | artifact | protocol | hosts | logs
  *
  * `?invocation=<id>` on a route path opens that route with the named
  * invocation snapshot loaded; `?tab=<tab>` selects a workspace tab.
+ * `?correlation=<id>` on `/trace` selects the correlated group holding any
+ * entry that carries that id.
  */
 import {
   type ApplicationNodeRef,
@@ -43,7 +45,8 @@ export type WorkbenchArea = 'advanced' | 'application' | 'problems' | 'sessions'
 
 export type WorkbenchLocation =
   | Readonly<{ readonly area: 'application'; readonly invocationId?: string; readonly node?: ApplicationNodeRef; readonly tab?: string }>
-  | Readonly<{ readonly area: 'trace'; readonly invocationId?: string }>
+  /** `invocationId` is the selected trace entry id (`/trace/<id>`); the name predates the unified trace and still accepts an `inv_…` id. */
+  | Readonly<{ readonly area: 'trace'; readonly correlation?: string; readonly invocationId?: string }>
   | Readonly<{ readonly area: 'problems' }>
   | Readonly<{ readonly area: 'sessions'; readonly host?: string }>
   | Readonly<{ readonly area: 'advanced'; readonly section: AdvancedSection }>;
@@ -59,6 +62,9 @@ const decode = (value: string): string | undefined => {
   }
 };
 
+const nonempty = (value: string | null): string | undefined =>
+  value === null || value.length === 0 || value.includes('\0') ? undefined : value;
+
 const isAdvancedSection = (value: string): value is AdvancedSection => (advancedSections as readonly string[]).includes(value);
 
 const applicationRoot: WorkbenchLocation = Object.freeze({ area: 'application' });
@@ -73,6 +79,7 @@ export const parseWorkbenchLocation = (pathname: string, search = ''): Workbench
   const query = new URLSearchParams(search);
   const invocationId = query.get('invocation') ?? undefined;
   const tab = query.get('tab') ?? undefined;
+  const correlation = nonempty(query.get('correlation'));
   const [area, ...rest] = segments;
   switch (area) {
     case undefined:
@@ -89,7 +96,11 @@ export const parseWorkbenchLocation = (pathname: string, search = ''): Workbench
     }
     case 'trace': {
       const id = rest.length === 1 ? decode(rest[0]!) : undefined;
-      return Object.freeze({ area: 'trace', ...(id === undefined ? {} : { invocationId: id }) });
+      return Object.freeze({
+        area: 'trace',
+        ...(correlation === undefined ? {} : { correlation }),
+        ...(id === undefined ? {} : { invocationId: id }),
+      });
     }
     case 'problems':
       return Object.freeze({ area: 'problems' });
@@ -117,8 +128,10 @@ export const formatWorkbenchLocation = (location: WorkbenchLocation): string => 
       const search = query.toString();
       return `${applicationNodePath(location.node)}${search.length === 0 ? '' : `?${search}`}`;
     }
-    case 'trace':
-      return location.invocationId === undefined ? '/trace' : `/trace/${segment(location.invocationId)}`;
+    case 'trace': {
+      const path = location.invocationId === undefined ? '/trace' : `/trace/${segment(location.invocationId)}`;
+      return location.correlation === undefined ? path : `${path}?correlation=${segment(location.correlation)}`;
+    }
     case 'problems':
       return '/problems';
     case 'sessions':
