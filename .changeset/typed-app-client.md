@@ -2,4 +2,4 @@
 "agent-bundle": patch
 ---
 
-Export `createAppClient` from `agent-bundle/app` so MCP App views call typed host routes without importing the compiler, and reword `AB4837` to name Apps as the exception. (#601)
+Export `createAppClient` from `agent-bundle/app` with generated `AppRegister` route contracts, make `createMcpAppBridge` cancel App-owned requests and reject duplicate request ids, and reword `AB4837` to name Apps as the bundle-safe exception. (#601)

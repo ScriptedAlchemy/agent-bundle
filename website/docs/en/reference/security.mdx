@@ -62,8 +62,8 @@ It is a local preview host, not a deployment target.
 
 Inside the App document, the `agent-bundle/app` client trusts no arbitrary `postMessage` sender.
 The sandbox is an opaque, no-referrer `srcdoc`, so the document cannot know its host's origin
-before the first frame: `connect()` sends exactly one framework-owned `ui/initialize` request to
-`'*'`, accepts a response only from the configured parent window with that request's id and a
+before the first frame: each `connect()` handshake attempt sends one framework-owned
+`ui/initialize` request to `'*'`, accepts a response only from the configured parent window with that request's id and a
 valid initialize result, pins the responding origin — it must be an exact `http:`/`https:`
 origin; an opaque `null`, empty, or other-scheme origin fails the handshake — and from then on
 sends to and accepts from that exact `source` and `origin` only. A host that can name its origin

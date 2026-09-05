@@ -320,10 +320,15 @@ it('rejects malformed envelopes and tool results without retaining hostile value
     result: {
       content: [{ text: 'failed', type: 'text' }],
       isError: true,
-      structuredContent: { reason: 'unavailable' },
     },
   });
-  await expect(failed).rejects.toMatchObject({ code: 'rpc' });
+  await expect(failed).rejects.toMatchObject({
+    code: 'rpc',
+    data: {
+      content: [{ text: 'failed', type: 'text' }],
+      isError: true,
+    },
+  });
 
   const cyclic: Record<string, unknown> = {};
   cyclic.self = cyclic;
@@ -512,6 +517,22 @@ it('rejects old pending work on rebind and establishes a fresh exact-origin conn
   await expect(rebound).resolves.toEqual(initializeResult);
   await oldFailure;
   expect(client.connected).toBe(true);
+});
+
+it('validates a rebind origin before changing the live connection', async () => {
+  const target = harness();
+  const client = createAppClient({ window: target.window });
+  await connect(client, target);
+  const pending = client.request('slow', {});
+  const pendingId = responseId(target.posts.at(-1)!);
+  const postCount = target.posts.length;
+
+  await expect(client.rebind({ targetOrigin: '*' })).rejects.toThrow(/exact trusted origin/u);
+  expect(client.connected).toBe(true);
+  expect(target.posts).toHaveLength(postCount);
+
+  target.emit({ id: pendingId, jsonrpc: '2.0', result: { kept: true } });
+  await expect(pending).resolves.toEqual({ kept: true });
 });
 
 it('keeps one fresh handshake when rebinding during connect and inherits targetOrigin', async () => {

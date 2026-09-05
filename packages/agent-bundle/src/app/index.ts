@@ -309,11 +309,6 @@ const toolResultEnvelope = (value: JsonValue): JsonObject | undefined => {
   return value;
 };
 
-const toolResult = (value: JsonValue): JsonObject | undefined => {
-  const result = toolResultEnvelope(value);
-  return result !== undefined && isPlainDataRecord(result.structuredContent) ? result : undefined;
-};
-
 const errorFromRpc = (error: RpcError): AppClientError => {
   const code: AppClientErrorCode = error.code === -32601
     ? 'capability-unavailable'
@@ -655,12 +650,15 @@ export const createAppClient = (options: CreateAppClientOptions = {}): AppClient
       throw new AppClientError('invalid-message', `Input for ${routeId} must be a finite strict JSON object.`);
     }
     const response = await request<JsonValue>('tools/call', { arguments: argumentsValue, name }, requestOptions);
-    const result = toolResult(response);
+    const result = toolResultEnvelope(response);
     if (result === undefined) {
-      throw new AppClientError('invalid-message', `Tool ${routeId} returned an invalid structured result.`);
+      throw new AppClientError('invalid-message', `Tool ${routeId} returned an invalid result envelope.`);
     }
     if (result.isError === true) {
       throw new AppClientError('rpc', `Tool ${routeId} returned an error.`, { data: result });
+    }
+    if (!isPlainDataRecord(result.structuredContent)) {
+      throw new AppClientError('invalid-message', `Tool ${routeId} returned an invalid structured result.`);
     }
     return result.structuredContent as AppRouteResult<Id>;
   };
@@ -697,6 +695,9 @@ export const createAppClient = (options: CreateAppClientOptions = {}): AppClient
     },
     async rebind(rebindOptions: AppConnectOptions = {}): Promise<AppInitializeResult> {
       if (isDisposed) throw new AppClientError('disposed', 'The App client was disposed.');
+      const nextOrigin = hasOwn(rebindOptions, 'targetOrigin')
+        ? trustedOrigin(rebindOptions.targetOrigin)
+        : configuredOrigin;
       connectionGeneration += 1;
       rejectPending(
         'connection-rebound',
@@ -714,9 +715,7 @@ export const createAppClient = (options: CreateAppClientOptions = {}): AppClient
         boundWindow.addEventListener('message', receive);
       }
       parent = rebindOptions.parent ?? boundWindow.parent;
-      if (hasOwn(rebindOptions, 'targetOrigin')) {
-        configuredOrigin = trustedOrigin(rebindOptions.targetOrigin);
-      }
+      configuredOrigin = nextOrigin;
       pinnedOrigin = configuredOrigin;
       return await connect();
     },
