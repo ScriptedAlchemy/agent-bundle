@@ -1053,7 +1053,8 @@ artifact manifest declares, never from the browser presentation profile: an expl
 different launches answer 409 naming the choices — a Claude- or Codex-only build opens its App
 without a portable projection or `mcp.json`. Web sessions are cached by epoch, server, and
 resolved launch identity; a successful rebuild retires unused sessions of older epochs (pages
-still leasing one keep it), and a failed rebuild retires nothing. An opening tool annotated
+still leasing one keep it until their last lease releases), and a failed rebuild retires
+nothing. An opening tool annotated
 `readOnlyHint: true` runs on every page load; any other opening tool runs once per session,
 tool, App, and input, and a refresh rebinds that retained result.
 

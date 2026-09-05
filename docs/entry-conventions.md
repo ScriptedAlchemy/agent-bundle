@@ -1584,8 +1584,8 @@ materially different ones answer 409 naming the choices. No portable
 projection or `mcp.json` is required — a Claude- or Codex-only build opens
 `/web/<server>/<app>` from its own projection. Web sessions are cached by
 epoch, server, and resolved launch identity; a successful rebuild retires
-unused sessions of older epochs (pages still leasing one keep it), and a
-failed rebuild retires nothing. Opening an App page is not an unbounded
+unused sessions of older epochs (pages still leasing one keep it until
+their last lease releases), and a failed rebuild retires nothing. Opening an App page is not an unbounded
 mutation: an opening tool annotated `readOnlyHint: true` runs on every page
 load, while any other opening tool runs once per session, tool, App, and
 input, and a refresh rebinds that retained result. `<plugin> web` keeps the

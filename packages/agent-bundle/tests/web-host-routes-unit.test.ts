@@ -94,7 +94,11 @@ class FakeSessionService {
   readonly opened: OpenedSession[] = [];
   toolCalls = 0;
   readOnlyOpeningTool = false;
+  failNextToolCall = false;
+  readonly toolCallReleases: (() => void)[] = [];
+  gateToolCalls = false;
   readonly #leases = new Map<string, number>();
+  readonly #retire = new Set<string>();
 
   async open(options: { readonly epochId: string; readonly serverName: string; readonly target: string }): Promise<McpSession> {
     const id = `session-${String(this.opened.length + 1)}`;
@@ -103,6 +107,11 @@ class FakeSessionService {
     const session = {
       callTool: async () => {
         this.toolCalls += 1;
+        if (this.gateToolCalls) await new Promise<void>((release) => this.toolCallReleases.push(release));
+        if (this.failNextToolCall) {
+          this.failNextToolCall = false;
+          throw new Error('opening tool failed');
+        }
         return { content: [], structuredContent: { status: 'healthy' } };
       },
       id,
@@ -125,7 +134,9 @@ class FakeSessionService {
       release: async () => {
         if (released) return;
         released = true;
-        this.#leases.set(sessionId, Math.max(0, (this.#leases.get(sessionId) ?? 1) - 1));
+        const remaining = Math.max(0, (this.#leases.get(sessionId) ?? 1) - 1);
+        this.#leases.set(sessionId, remaining);
+        if (remaining === 0 && this.#retire.delete(sessionId)) void this.closeSession(sessionId);
       },
       session: {},
       watchSessionClosed: () => ({ closed: false, unsubscribe: () => undefined }),
@@ -136,9 +147,20 @@ class FakeSessionService {
     return this.#leases.get(sessionId) ?? 0;
   }
 
+  closeSessionWhenUnleased(sessionId: string): boolean {
+    if (!this.#leases.has(sessionId)) return false;
+    if ((this.#leases.get(sessionId) ?? 0) === 0) {
+      void this.closeSession(sessionId);
+      return true;
+    }
+    this.#retire.add(sessionId);
+    return false;
+  }
+
   async closeSession(sessionId: string): Promise<boolean> {
     this.closed.push(sessionId);
     this.#leases.delete(sessionId);
+    this.#retire.delete(sessionId);
     return true;
   }
 
@@ -327,6 +349,9 @@ describe('WebHostRoutes session retirement', () => {
     expect(harness.service.closed).toEqual([]);
     expect(harness.service.appLeaseCount(sessionId)).toBeGreaterThan(0);
     await secondTab.release();
+    // The retired session closes at the release of its last page lease.
+    await settle();
+    expect(harness.service.closed).toEqual([sessionId]);
 
     expect((await fetch(`${harness.url}/web/status/status`)).status).toBe(200);
     expect(harness.service.opened).toHaveLength(2);
@@ -367,6 +392,35 @@ describe('WebHostRoutes opening-tool policy', () => {
     const harness = await startHarness(root);
     harness.service.readOnlyOpeningTool = true;
     expect((await fetch(`${harness.url}/web/status/status`)).status).toBe(200);
+    expect((await fetch(`${harness.url}/web/status/status`)).status).toBe(200);
+    expect(harness.service.toolCalls).toBe(2);
+  });
+
+  it('shares one in-flight mutating opening call across concurrent first loads', async () => {
+    const root = await artifactRoot();
+    await writeFixture(root, { projections: { '.mcp.json': claudeServer() }, targets: ['claude'] });
+    const harness = await startHarness(root);
+    harness.service.gateToolCalls = true;
+    const loads = Promise.all([
+      fetch(`${harness.url}/web/status/status`),
+      fetch(`${harness.url}/web/status/status`),
+    ]);
+    for (let turn = 0; turn < 200 && harness.service.toolCallReleases.length === 0; turn += 1) {
+      await new Promise((done) => setTimeout(done, 5));
+    }
+    await settle();
+    harness.service.toolCallReleases.splice(0).forEach((release) => release());
+    const responses = await loads;
+    expect(responses.map((response) => response.status)).toEqual([200, 200]);
+    expect(harness.service.toolCalls).toBe(1);
+  });
+
+  it('drops a failed mutating opening call so the next load retries', async () => {
+    const root = await artifactRoot();
+    await writeFixture(root, { projections: { '.mcp.json': claudeServer() }, targets: ['claude'] });
+    const harness = await startHarness(root);
+    harness.service.failNextToolCall = true;
+    expect((await fetch(`${harness.url}/web/status/status`)).status).toBe(502);
     expect((await fetch(`${harness.url}/web/status/status`)).status).toBe(200);
     expect(harness.service.toolCalls).toBe(2);
   });

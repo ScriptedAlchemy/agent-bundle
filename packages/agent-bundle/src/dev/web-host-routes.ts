@@ -175,7 +175,7 @@ export class WebHostRoutes {
   readonly #sandboxOrigin: () => string | undefined;
   readonly #sessionToken: string;
   readonly #openingCalls = new Map<string, McpAppOpeningCall>();
-  readonly #openingResults = new Map<string, McpAppOpeningCall>();
+  readonly #openingResults = new Map<string, Promise<McpAppOpeningCall>>();
   readonly #sessions = new Map<string, Promise<RegisteredSession>>();
   #closed = false;
 
@@ -204,10 +204,11 @@ export class WebHostRoutes {
   /**
    * Retires sessions of every epoch but the newly published one. New page
    * loads acquire sessions on the new epoch; an old session nobody leases
-   * beyond this registry closes and releases its process and epoch
-   * reference, while one that pages still lease stays valid for them — it is
-   * only no longer handed out. A failed rebuild publishes no epoch, so it
-   * never reaches this method and the last working session is kept.
+   * beyond this registry closes now, releasing its process and epoch
+   * reference, while one that pages still lease stays valid for them — no
+   * longer handed out, and closed at the release of its last page lease. A
+   * failed rebuild publishes no epoch, so it never reaches this method and
+   * the last working session is kept.
    */
   adoptActiveEpoch(activeEpochId: string): void {
     if (this.#closed) return;
@@ -216,10 +217,11 @@ export class WebHostRoutes {
       if (key.startsWith(`${activeEpochId}\0`)) continue;
       this.#sessions.delete(key);
       void opening.then(async (registered) => {
-        if (service === undefined || service.appLeaseCount(registered.session.id) > 1) return;
-        this.#dropSessionState(registered.session.id);
+        if (service === undefined) return;
         await registered.dispose();
-        await service.closeSession(registered.session.id);
+        if (service.closeSessionWhenUnleased(registered.session.id)) {
+          this.#dropSessionState(registered.session.id);
+        }
       }).catch(() => undefined);
     }
   }
@@ -321,23 +323,34 @@ export class WebHostRoutes {
    * The call that opens the page. A tool annotated `readOnlyHint: true` runs
    * once per page load — a refresh re-reads live state. Any other opening
    * tool may mutate, so a page open is not an unbounded mutation: its first
-   * result per session, tool, App, and input is retained and every later
-   * load of the same page rebinds that result instead of re-running the
-   * tool; a new session (a new epoch after rebuild) runs it once again.
+   * call per session, tool, App, and input is retained while still in
+   * flight (concurrent first loads share it) and every later load of the
+   * same page rebinds its result instead of re-running the tool; a failed
+   * call is dropped so the next load retries, and a new session (a new
+   * epoch after rebuild) runs the tool once again.
    */
   async #openingCallFor(
     source: AppSelectionSource,
     sessionId: string,
     resolved: ResolvedAppOpening,
   ): Promise<McpAppOpeningCall> {
+    const call = async (): Promise<McpAppOpeningCall> => Object.freeze({
+      input: resolved.input,
+      result: await source.callTool(resolved.tool.name, resolved.input),
+    });
     const readOnly = isRecord(resolved.tool['annotations']) && resolved.tool['annotations']['readOnlyHint'] === true;
+    if (readOnly) return call();
     const key = `${sessionId}\0${resolved.tool.name}\0${resolved.resourceUri}\0${digest(resolved.input)}`;
-    const retained = readOnly ? undefined : this.#openingResults.get(key);
+    const retained = this.#openingResults.get(key);
     if (retained !== undefined) return retained;
-    const result = await source.callTool(resolved.tool.name, resolved.input);
-    const call: McpAppOpeningCall = Object.freeze({ input: resolved.input, result });
-    if (!readOnly) this.#retainOpeningResult(key, call);
-    return call;
+    const pending = call();
+    this.#retainOpeningResult(key, pending);
+    try {
+      return await pending;
+    } catch (error) {
+      if (this.#openingResults.get(key) === pending) this.#openingResults.delete(key);
+      throw error;
+    }
   }
 
   async #exposedApp(
@@ -461,7 +474,7 @@ export class WebHostRoutes {
     }
   }
 
-  #retainOpeningResult(key: string, call: McpAppOpeningCall): void {
+  #retainOpeningResult(key: string, call: Promise<McpAppOpeningCall>): void {
     this.#openingResults.set(key, call);
     for (const oldest of this.#openingResults.keys()) {
       if (this.#openingResults.size <= maxRetainedOpeningResults) break;

@@ -1699,6 +1699,47 @@ it('leases immutable canonical MCP App data without closing the control-owned se
   }
 }, 30_000);
 
+it('closes an unleased session immediately on closeSessionWhenUnleased and a leased one at its last release', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-app-retire-'));
+  try {
+    const epochStore = await publishFixtureEpoch(root, 'epoch-retire');
+    let clientCloses = 0;
+    const service = new McpSessionService({
+      createClient: () => ({
+        ...mcpCatalogStub(),
+        callTool: async () => ({ content: [] }),
+        close: async () => {
+          clientCloses += 1;
+        },
+        connect: async () => undefined,
+      }),
+      createStdioTransport: () => stdioTransportStub() as never,
+      epochStore,
+      projectRoot: root,
+    });
+
+    const unleased = await service.open({ epochId: 'epoch-retire', serverName: 'fixture', target: 'portable' });
+    expect(service.closeSessionWhenUnleased(unleased.id)).toBe(true);
+    expect(service.get(unleased.id)).toBeUndefined();
+
+    const leased = await service.open({ epochId: 'epoch-retire', serverName: 'fixture', target: 'portable' });
+    const registryLease = await service.acquireAppLease(leased.id);
+    const pageLease = await service.acquireAppLease(leased.id);
+    await registryLease.release();
+    expect(service.closeSessionWhenUnleased(leased.id)).toBe(false);
+    expect(service.get(leased.id)).toBe(leased);
+    expect(service.appLeaseCount(leased.id)).toBe(1);
+    await pageLease.release();
+    expect(service.get(leased.id)).toBeUndefined();
+    await new Promise((done) => setTimeout(done, 0));
+    expect(clientCloses).toBe(2);
+    expect(service.closeSessionWhenUnleased(leased.id)).toBe(false);
+    await service.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
 it('synchronously invalidates App leases when the control session closes during binding creation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-app-close-race-'));
   try {
