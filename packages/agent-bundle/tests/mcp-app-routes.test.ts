@@ -397,6 +397,38 @@ it('forwards one request-owned abort signal to each admitted runtime App operati
   }
 });
 
+it('decodes a bounded runtime App tool correlation id', async () => {
+  const operations: unknown[] = [];
+  const runtime: McpAppRuntimeRoutePreviewService = {
+    close: async () => undefined,
+    create: async () => { throw new Error('unused'); },
+    createConsent: async () => { throw new Error('unused'); },
+    decideConsent: async () => { throw new Error('unused'); },
+    get: (bindingId) => bindingId === 'runtime-binding'
+      ? Object.freeze({ binding: Object.freeze({ id: bindingId }), kind: 'fallback' }) as never
+      : undefined,
+    operate: async (_bindingId, operation) => {
+      operations.push(operation);
+      return deepFreeze({ result: { content: Object.freeze([]) } }) as never;
+    },
+  };
+  const started = await startRoutes(Object.assign(new RecordingPreviewService(), { runtime }));
+  const call = (correlationId: string): Promise<Response> => fetch(`${started.url}/api/runtime/apps/runtime-binding/operations`, {
+    body: JSON.stringify({ arguments: {}, correlationId, kind: 'tools/call', name: 'forecast' }),
+    headers: { ...headers(), 'content-type': 'application/json' },
+    method: 'POST',
+  });
+  try {
+    expect((await call('corr-runtime-app')).status).toBe(200);
+    expect((await call('x'.repeat(257))).status).toBe(400);
+    expect(operations).toEqual([
+      { arguments: {}, correlationId: 'corr-runtime-app', kind: 'tools/call', name: 'forecast' },
+    ]);
+  } finally {
+    await started.close();
+  }
+});
+
 it('aborts an admitted runtime App operation when its HTTP client disconnects', async () => {
   let operationSignal: AbortSignal | undefined;
   const runtime: McpAppRuntimeRoutePreviewService = {

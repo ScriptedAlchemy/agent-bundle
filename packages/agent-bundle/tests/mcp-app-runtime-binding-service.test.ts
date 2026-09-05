@@ -150,11 +150,22 @@ it('executes against the stable session revision while retaining the originating
   const binding = await service.createBinding(optionsFor(fixture));
 
   const read = await service.execute(binding.id, { kind: 'read-resource', uri: 'ui://rsc-agent-runtime/edit-timeline-v1.html' });
-  const call = await service.execute(binding.id, { arguments: {}, kind: 'call-tool', name: 'render_edit_timeline' });
+  const call = await service.execute(binding.id, {
+    arguments: {},
+    correlationId: 'corr-runtime-app',
+    kind: 'call-tool',
+    name: 'render_edit_timeline',
+  });
 
   expect(fixture.executeRequests).toEqual([
     { expectedSessionRevision: 3, kind: 'read-resource', uri: 'ui://rsc-agent-runtime/edit-timeline-v1.html' },
-    { arguments: {}, expectedSessionRevision: 3, kind: 'call-tool', name: 'render_edit_timeline' },
+    {
+      arguments: {},
+      correlationId: 'corr-runtime-app',
+      expectedSessionRevision: 3,
+      kind: 'call-tool',
+      name: 'render_edit_timeline',
+    },
   ]);
   expect(read.vector.runtimeGenerationId).toBe('g7');
   expect(call.vector.runtimeGenerationId).toBe('g8');

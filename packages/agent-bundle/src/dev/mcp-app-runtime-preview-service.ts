@@ -43,7 +43,13 @@ import type { DevRuntimeMcpAppRunBinding, DevRuntimeMcpConnectionState, RuntimeV
 export type McpAppBindingOperation =
   | Readonly<{ readonly kind: 'tools/list' }>
   | Readonly<{ readonly kind: 'resources/list' }>
-  | Readonly<{ readonly arguments?: McpAppJsonValue; readonly consentId?: string; readonly kind: 'tools/call'; readonly name: string }>
+  | Readonly<{
+      readonly arguments?: McpAppJsonValue;
+      readonly consentId?: string;
+      readonly correlationId?: string;
+      readonly kind: 'tools/call';
+      readonly name: string;
+    }>
   | Readonly<{ readonly kind: 'resources/read'; readonly uri: string }>;
 
 export interface CreateMcpAppPreviewRequest {
@@ -542,7 +548,12 @@ export class McpAppRuntimePreviewService implements McpAppRuntimeRoutePreviewSer
         if (request.consentId === undefined || !entry.consent.consume({ actionDigest: createMcpAppConsentActionDigest('call-tool', Object.freeze({ arguments: request.arguments ?? {}, name })), authorizationId: request.consentId, bindingId, capability: 'call-tool', profile: entry.binding.profileId })) {
           throw new Error('Runtime MCP App tool call requires an approved consent grant.');
         }
-        result = await this.#bindingAuthority.execute(bindingId, { arguments: request.arguments, kind: 'call-tool', name }, Object.freeze({ signal: operation.controller.signal }));
+        result = await this.#bindingAuthority.execute(bindingId, {
+          arguments: request.arguments,
+          ...(request.correlationId === undefined ? {} : { correlationId: request.correlationId }),
+          kind: 'call-tool',
+          name,
+        }, Object.freeze({ signal: operation.controller.signal }));
       }
       return Object.freeze({ result });
     } catch (error) {

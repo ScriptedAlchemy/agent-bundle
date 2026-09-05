@@ -77,7 +77,8 @@ export type {
   OpenMcpSessionOptions,
 } from './mcp-session-types.ts';
 export type { McpSessionTraceSink } from './mcp-session-trace.ts';
-export { createMcpSessionTraceSink, liftMcpFrame, mcpCorrelationMetaKey } from './mcp-session-trace-publisher.ts';
+export { mcpCorrelationMetaKey } from '../../contracts/mcp-session.ts';
+export { createMcpSessionTraceSink, liftMcpFrame } from './mcp-session-trace-publisher.ts';
 
 export type {
   McpSessionBinding,

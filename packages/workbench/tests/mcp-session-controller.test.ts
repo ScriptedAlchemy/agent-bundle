@@ -1,5 +1,6 @@
 import { expect, it } from '@rstest/core';
 import { specTypeSchemas, type Client, type Transport } from '@modelcontextprotocol/client';
+import { mcpCorrelationMetaKey } from '../../agent-bundle/src/contracts/mcp-session.ts';
 import type { McpAppBoundOperationResult } from '../../agent-bundle/src/dev/mcp-app-runtime-binding-service.ts';
 import type { McpAppBindingOperation } from '../../agent-bundle/src/dev/mcp-app-runtime-preview-service.ts';
 
@@ -9,7 +10,7 @@ import {
   type McpSessionControllerRoutes,
   type McpSessionControllerTransport,
 } from '../src/mcp/mcp-session-controller.ts';
-import { mcpCorrelationMetaKey, McpRouteClientError, type McpRouteCatalog } from '../src/mcp/mcp-route-client.ts';
+import { McpRouteClientError, type McpRouteCatalog } from '../src/mcp/mcp-route-client.ts';
 
 const binding = Object.freeze({ epochId: 'epoch-a', serverName: 'weather', target: 'portable' as const });
 const connection = Object.freeze({
@@ -304,7 +305,12 @@ it('attaches one non-owning runtime App client through one exact App authority a
   await attachedTransport.send({ id: 1, jsonrpc: '2.0', method: 'tools/list' });
   await attachedTransport.send({ id: 2, jsonrpc: '2.0', method: 'resources/list' });
   await attachedTransport.send({ id: 3, jsonrpc: '2.0', method: 'resources/read', params: { uri: 'weather://today' } });
-  await attachedTransport.send({ id: 4, jsonrpc: '2.0', method: 'tools/call', params: { arguments: { city: 'Paris' }, name: 'forecast' } });
+  await attachedTransport.send({
+    id: 4,
+    jsonrpc: '2.0',
+    method: 'tools/call',
+    params: { _meta: { [mcpCorrelationMetaKey]: 'corr-runtime-app' }, arguments: { city: 'Paris' }, name: 'forecast' },
+  });
   await attachedTransport.send({ id: 5, jsonrpc: '2.0', method: 'prompts/list' });
   await expect(attachedTransport.send({ jsonrpc: '2.0', method: 'notifications/progress', params: { progress: 1 } })).rejects.toThrow(
     'MCP remote transport received an invalid notification.',
@@ -323,7 +329,7 @@ it('attaches one non-owning runtime App client through one exact App authority a
     { kind: 'tools/list' },
     { kind: 'resources/list' },
     { kind: 'resources/read', uri: 'weather://today' },
-    { arguments: { city: 'Paris' }, kind: 'tools/call', name: 'forecast' },
+    { arguments: { city: 'Paris' }, correlationId: 'corr-runtime-app', kind: 'tools/call', name: 'forecast' },
   ]);
   expect(calls).toEqual([]);
   expect(controller.history).toEqual([

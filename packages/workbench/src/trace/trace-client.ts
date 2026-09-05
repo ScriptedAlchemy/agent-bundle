@@ -21,6 +21,7 @@ import { errorMessage, exactKeys, hasAllowedKeys, isAbortError, isRecord, parseS
 import { deepFreeze } from '../freeze.ts';
 import { awaitWithAbort, ForegroundRouteClientError, type ForegroundRequestAuthority } from '../mcp/mcp-route-client.ts';
 import { readNdjsonResponseFrames } from '../ndjson.ts';
+import { hasControlCharacters, pathLikeText } from '../shell/wire-text.ts';
 import { mergeTraceEntries } from './trace-model.ts';
 
 /** What the Trace page and the route workspace (T6) code against; `ForegroundTraceClient` is the production implementation. */
@@ -69,16 +70,7 @@ const safeInteger = (value: unknown, minimum = 0): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= minimum;
 const isDate = (value: unknown): value is string =>
   typeof value === 'string' && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString() === value;
-const hasControlCharacters = (value: string): boolean => {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code <= 0x1f || code === 0x7f) return true;
-  }
-  return false;
-};
 const identifier = /^[A-Za-z0-9_][A-Za-z0-9._:@+/-]*$/u;
-/** A token that is an absolute POSIX path (two or more segments), a Windows path, a UNC path, or a `file:` URL. */
-const pathLikeText = /(?:^|[\s"'`([=:,])(?:\/[^\s/]+){2,}|file:|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|\\\\/u;
 
 /**
  * Free text the server promised was already safe (`safeDevWireText`): no

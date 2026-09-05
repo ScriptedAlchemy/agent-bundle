@@ -1,10 +1,10 @@
 import type { JSONRPCMessage, Transport, TransportSendOptions } from '@modelcontextprotocol/client';
 
+import { mcpCorrelationMetaKey } from '../../../agent-bundle/src/contracts/mcp-session.ts';
 import type { RuntimeVector } from '../../../agent-bundle/src/contracts/runtime.ts';
 import { isRecord, parseStrictResponseJson } from '../client-helpers.ts';
 import { readNdjsonResponseFrames } from '../ndjson.ts';
 import {
-  mcpCorrelationMetaKey,
   McpRouteClient,
   type McpRouteConnection,
   type McpRouteOperation,

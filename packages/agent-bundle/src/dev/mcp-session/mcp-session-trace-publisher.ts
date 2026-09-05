@@ -1,4 +1,5 @@
 import { isRecord, type JsonValue } from '../../core/strict-json.ts';
+import { mcpCorrelationMetaKey } from '../../contracts/mcp-session.ts';
 import { nonemptyString } from '../http.ts';
 import { hasControlOrSeparators } from '../logs/dev-log-kinds.ts';
 import { safeDevWireText } from '../logs/dev-log-service.ts';
@@ -16,13 +17,6 @@ import type {
   McpSessionTraceMeta,
 } from './mcp-session-protocol.ts';
 import type { McpSessionTraceSink } from './mcp-session-trace.ts';
-
-/**
- * The `params._meta` key the Workbench stamps on a `tools/call` it makes
- * through a session route so the frame joins the route workspace's run
- * (`RouteInvocationRequest.correlationId`) on the unified trace.
- */
-export const mcpCorrelationMetaKey = 'agent-bundle/correlationId';
 
 /** The `_meta` keys lifted onto a frame and their trace vocabulary, per `docs/entry-conventions.md`. */
 const claudeToolUseIdKey = 'claudecode/toolUseId';

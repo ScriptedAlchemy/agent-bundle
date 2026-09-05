@@ -1,8 +1,9 @@
 import { expect, it } from '@rstest/core';
 import type { JSONRPCMessage } from '@modelcontextprotocol/client';
+import { mcpCorrelationMetaKey } from '../../agent-bundle/src/contracts/mcp-session.ts';
 
 import { AgentBundleRemoteTransport, dispatchAgentBundleMcpRequest } from '../src/mcp/agent-bundle-remote-transport.ts';
-import { mcpCorrelationMetaKey, McpRouteClient } from '../src/mcp/mcp-route-client.ts';
+import { McpRouteClient } from '../src/mcp/mcp-route-client.ts';
 import { deferred, eventually } from './support/async.ts';
 
 interface RecordedRequest {

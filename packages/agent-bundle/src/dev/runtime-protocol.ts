@@ -239,6 +239,7 @@ export type DevRuntimeMcpOperationRequest = DevRuntimeMcpOperationBase & (
   | Readonly<{ readonly kind: 'list-tools' }>
   | Readonly<{
       readonly arguments: JsonObject;
+      readonly correlationId?: string;
       readonly kind: 'call-tool';
       readonly name: string;
       readonly requestId?: string;
