@@ -50,7 +50,7 @@ import { PlaygroundOrchestrationService } from './playground/playground-orchestr
 import { PlaygroundStore as PlaygroundService } from './playground/playground-store.ts';
 import { createDevPlatformRuntime } from './platform-run.ts';
 import type { DevPlatformRuntime } from './platform-runtime.ts';
-import { ProjectService } from './project-service.ts';
+import { ProjectService, type PreparedProject } from './project-service.ts';
 import { emptyCompiledRouteGraph } from '../routes/graph.ts';
 import { testManifestFromRouteGraph } from '../test/manifest.ts';
 import type { RouteInvocationEventHost } from './routes/route-invocation.ts';
@@ -608,6 +608,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
   let latestValidPreparedProject = initialPreparedProject.source.state === 'ready' && initialPreparedProject.model !== undefined
     ? initialPreparedProject
     : undefined;
+  let latestPublishedPreparedProject: PreparedProject | undefined = latestValidPreparedProject;
   const topologyProviderSessionId = randomUUID();
   let runtimeTopologyChanged = false;
   let status: () => ProjectStatus = () => deepFreeze({
@@ -749,6 +750,9 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
         });
       }
     },
+    onPublishedProject: (prepared) => {
+      latestPublishedPreparedProject = prepared;
+    },
     outputPaths: [
       'dist',
       initialPreparedProject.artifactDistPath,
@@ -860,7 +864,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
   // route discovery never runs a second time for the browser.
   const routeManifest: RouteManifestRouteService = {
     manifest: () => {
-      const prepared = latestValidPreparedProject;
+      const prepared = latestPublishedPreparedProject;
       if (
         prepared === undefined ||
         prepared.model === undefined ||
@@ -870,7 +874,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
       }
       return routeManifestFor(
         prepared.routeGraph ?? emptyCompiledRouteGraph,
-        prepared.source.revision,
+        status().source.revision ?? prepared.source.revision,
         prepared.model.state,
         prepared.model.notices,
       );
@@ -879,7 +883,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
   const routeInvocations = new RouteInvocationService({
     manifest: routeManifest,
     prepared: () => {
-      const prepared = latestValidPreparedProject;
+      const prepared = latestPublishedPreparedProject;
       if (prepared === undefined || prepared.model === undefined) {
         throw new Error('No valid prepared project is available for route invocation.');
       }

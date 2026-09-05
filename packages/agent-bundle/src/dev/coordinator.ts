@@ -86,6 +86,7 @@ export interface DevCoordinatorOptions {
   readonly initialPreparedProject?: PreparedProject;
   readonly ignoredPaths?: readonly string[];
   readonly onPreparedProject?: (prepared: PreparedProject) => Promise<void>;
+  readonly onPublishedProject?: (prepared: PreparedProject, epoch: ArtifactEpoch) => void;
   readonly outputPaths?: readonly string[];
   /** Rebuilds the framework-owned package build (bin/lib) after successful artifact rebuilds. */
   readonly packageBuildService?: DevPackageBuilder;
@@ -209,6 +210,7 @@ export class DevCoordinator {
   readonly #ignoredPaths: readonly string[];
   readonly #outputPaths: readonly string[];
   readonly #onPreparedProject: ((prepared: PreparedProject) => Promise<void>) | undefined;
+  readonly #onPublishedProject: ((prepared: PreparedProject, epoch: ArtifactEpoch) => void) | undefined;
   readonly #packageBuildService: DevPackageBuilder;
   readonly #prepareCommand: 'build' | 'dev';
   readonly #projectService: ProjectPreparer;
@@ -248,6 +250,7 @@ export class DevCoordinator {
     this.#now = options.now ?? (() => new Date());
     this.#nextPreparedProject = options.initialPreparedProject;
     this.#onPreparedProject = options.onPreparedProject;
+    this.#onPublishedProject = options.onPublishedProject;
     this.#packageBuildService = options.packageBuildService ?? new DevPackageBuildService();
     this.#outputPaths = Object.freeze([...new Set([
       ...(options.outputPaths ?? ['dist']),
@@ -563,6 +566,7 @@ export class DevCoordinator {
         startedAt: running.startedAt,
       });
       this.#activeEpoch = result.epoch;
+      this.#onPublishedProject?.(prepared, result.epoch);
       const artifact = artifactStatusFor(this.#activeEpoch, source.revision);
       this.#status = freezeProjectStatus({
         artifact,
