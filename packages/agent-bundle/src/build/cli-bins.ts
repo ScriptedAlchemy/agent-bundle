@@ -5,6 +5,7 @@ import type { TargetRegistry } from '../adapters/registry.ts';
 import { routedCliBinLayout, type TargetArtifactEntry } from '../adapters/types.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import type { NormalizedBinEntry, NormalizedPlugin } from '../core/types.ts';
+import { readWebHostPageScript } from '../web-host/page-script.ts';
 import { resolveArtifactDestination } from './emit.ts';
 import type { CompiledEntry } from './entries.ts';
 import { launchEnvRuntimeSpecifier, operatorEnvLayerVirtualModule } from './launch-env-shell.ts';
@@ -14,9 +15,14 @@ import {
   generatedCliBinEntrySource,
   generatedRenderedRouteWorkerSource,
   launchEnvRuntimePath,
+  webHostRuntimePath,
+  webHostRuntimeSpecifier,
 } from './entry-shell.ts';
 import type { RslibEntry, RslibSurfacePlan } from './rslib.ts';
 import { runtimeIgnoredRoot } from './runtime-path.ts';
+
+const webHostPageVirtualModuleSpecifier = 'agent-bundle/web-host-page';
+const webHostPageScript = await readWebHostPageScript();
 
 /**
  * The artifact-hosted routed CLI (#387). A generated-mode `src/cli/**`
@@ -41,7 +47,8 @@ export const cliBinWorkerArtifactPath = (name: string): string => `${cliBinDirec
 
 /** The framework-generated routed-CLI bins of a project (never hand-written `bin` entries). */
 export const routedCliBins = (model: NormalizedPlugin): readonly NormalizedBinEntry[] =>
-  Object.freeze((model.packageBuild?.bins ?? []).filter((bin) => bin.generatedCli !== undefined));
+  Object.freeze((model.packageBuild?.bins ?? []).filter((bin) =>
+    bin.generatedCli !== undefined || bin.web === true));
 
 /**
  * True when the target's adapter admits the routed CLI bin into its artifact —
@@ -78,6 +85,7 @@ export const planCompiledCliBins = (
     const rendered = cli.commands.some((command) => command.rendered);
     const sourceInputs = Object.freeze([...new Set([
       bin.provenance.sourcePath,
+      model.metadata.provenance.sourcePath,
       ...cli.routes.map((route) => route.source),
       ...(model.layouts ?? []).map((layout) => layout.source),
       ...(model.providers ?? []).map((provider) => provider.source),
@@ -115,9 +123,21 @@ export const cliBinRslibEntries = (
   const workerFile = `${entry.name}-flight.mjs`;
   const entries: RslibEntry[] = [{
     // The artifact-hosted bin applies the pack's operator `.env` layer (#469).
-    aliases: { [cliEntryRuntimeSpecifier]: cliEntryRuntimePath(), [launchEnvRuntimeSpecifier]: launchEnvRuntimePath() },
+    aliases: {
+      [cliEntryRuntimeSpecifier]: cliEntryRuntimePath(),
+      [launchEnvRuntimeSpecifier]: launchEnvRuntimePath(),
+      ...(entry.bin.web === true ? { [webHostRuntimeSpecifier]: webHostRuntimePath() } : {}),
+    },
     name: `bin-${entry.name}`,
-    virtualModules: [operatorEnvLayerVirtualModule()],
+    virtualModules: [
+      operatorEnvLayerVirtualModule(),
+      ...(entry.bin.web === true
+        ? [{
+          name: webHostPageVirtualModuleSpecifier,
+          source: `const script = ${JSON.stringify(webHostPageScript)}; export default script;`,
+        }]
+        : []),
+    ],
     outputRelativePath: cliBinArtifactPath(entry.name),
     ...(entry.rendered ? { rscManifest: true as const } : {}),
     source: entry.source,
@@ -137,6 +157,14 @@ export const cliBinRslibEntries = (
       // the same fallback the generated MCP worker beside it uses, so a
       // co-installed CLI and server observe one store.
       stateFallback: 'artifact',
+      ...(entry.bin.web === true
+        ? {
+          web: {
+            manifestRelativeUrl: '../agent-bundle.manifest.json',
+            pluginRootRelativeUrl: '../',
+          },
+        }
+        : {}),
       ...(entry.rendered ? { workerFile } : {}),
     }),
   }];
@@ -198,7 +226,13 @@ export const planCliBinsSurface = (
           }),
       })));
     },
-    ignoredSourcePaths: [runtimeIgnoredRoot(cliEntryRuntimePath()), runtimeIgnoredRoot(launchEnvRuntimePath())],
+    ignoredSourcePaths: [
+      runtimeIgnoredRoot(cliEntryRuntimePath()),
+      runtimeIgnoredRoot(launchEnvRuntimePath()),
+      ...(planned.some((entry) => entry.bin.web === true)
+        ? [runtimeIgnoredRoot(webHostRuntimePath())]
+        : []),
+    ],
     logLevel: 'error',
   };
 };

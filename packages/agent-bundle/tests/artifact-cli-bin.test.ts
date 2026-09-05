@@ -60,6 +60,7 @@ const createFixture = async (options: {
   /** Ship a Claude skill referencing the bin through the plugin-root token (Claude-only Skill Markdown syntax). */
   readonly skill?: boolean;
   readonly targets: readonly string[];
+  readonly web?: boolean;
 }): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-cli-bin-artifact-'));
   roots.push(root);
@@ -80,6 +81,7 @@ const createFixture = async (options: {
       'export default defineConfig({',
       `  plugin: { description: 'Artifact routed CLI fixture.', name: ${JSON.stringify(pluginName)}, version: '3.8.7' },`,
       `  targets: ${JSON.stringify(options.targets)},`,
+      ...(options.web === true ? ["  web: { apps: ['curator/dashboard'] },"] : []),
       '});',
       '',
     ].join('\n')),
@@ -144,6 +146,20 @@ const createFixture = async (options: {
       '}',
       '',
     ].join('\n')),
+    ...(options.web === true
+      ? [
+        writeProjectFile(root, 'src/mcp/curator/apps/dashboard.ts', [
+          "export const config = { resourceUri: 'ui://curator/dashboard.html', template: './dashboard.html' };",
+          'export default async () => ({});',
+          '',
+        ].join('\n')),
+        writeProjectFile(
+          root,
+          'src/mcp/curator/apps/dashboard.html',
+          '<!doctype html><html><body>dashboard</body></html>\n',
+        ),
+      ]
+      : []),
     // A plain script route forwarding to the routed CLI through the
     // documented sibling convention: `../bin/<plugin-name>.mjs` relative to
     // the script's own `import.meta.url` inside the artifact.
@@ -337,6 +353,34 @@ it('lets a skill reach the artifact bin through the plugin-root token, and the b
   expect(await probe({})).toEqual({ atImport: 'from-file', atRun: 'from-file', providerAtImport: 'from-file' });
   expect(await probe({ CLI_OPERATOR_TOKEN: 'from-host' })).toEqual({ atImport: 'from-host', atRun: 'from-host', providerAtImport: 'from-host' });
   expect(await probe({ AGENT_BUNDLE_ENV_FILE: 'none' })).toEqual({ atImport: 'unset', atRun: 'unset', providerAtImport: 'unset' });
+});
+
+it('emits a self-contained routed bin for a web-only plugin', { retry: 1, timeout: 240_000 }, async () => {
+  const root = await createFixture({ targets: ['portable'], web: true });
+  await rm(join(root, 'src', 'cli'), { force: true, recursive: true });
+
+  const result = await build({ output: 'artifact', root });
+  const binPath = join(root, 'artifact', 'bin', `${pluginName}.mjs`);
+  const source = await readFile(binPath, 'utf8');
+
+  await expect(stat(binPath)).resolves.toMatchObject({});
+  expect(result.build.manifest.files.find((file) => file.path === `bin/${pluginName}.mjs`))
+    .toMatchObject({ kind: 'bundle' });
+  expect(source).toContain('agent-bundle-web-host-seed');
+  expect(source).not.toMatch(/from\s*['"]agent-bundle\//u);
+  expect((await validateArtifact({ artifactRoot: join(root, 'artifact') }))
+    .filter((entry) => entry.code === 'AB6005')).toEqual([]);
+});
+
+it('lists authored commands and web in one generated artifact bin', { retry: 1, timeout: 240_000 }, async () => {
+  const root = await createFixture({ targets: ['portable'], web: true });
+  await build({ output: 'artifact', root });
+
+  const binPath = join(root, 'artifact', 'bin', `${pluginName}.mjs`);
+  const help = await execFile(process.execPath, [binPath, '--help']);
+  expect(help.stdout).toContain('status');
+  expect(help.stdout).toContain('web');
+  expect(await readFile(binPath, 'utf8')).toContain('agent-bundle-web-host-seed');
 });
 
 it('refuses a host-emitted file that collides with the routed CLI bin (AB4766)', { timeout: 120_000 }, async () => {

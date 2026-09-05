@@ -161,6 +161,12 @@ export const cliEntryRuntimeSpecifier = 'agent-bundle/cli-entry';
  */
 export const cliEntryRuntimePath = (): string => runtimeModulePath('cli-entry');
 
+/** The framework-owned runtime behind an artifact CLI's generated `web` command. */
+export const webHostRuntimeSpecifier = 'agent-bundle/web-host';
+
+/** The on-disk `agent-bundle/web-host` module, aliased so generated bins remain self-contained. */
+export const webHostRuntimePath = (): string => runtimeModulePath('web-host');
+
 export const installEntryRuntimeSpecifier = 'agent-bundle/install-entry';
 
 export const installEntryRuntimePath = (): string => runtimeModulePath('install-entry');
@@ -200,6 +206,11 @@ export interface GeneratedCliBinEntryOptions {
   readonly state?: NormalizedStateDefinition;
   /** Durable-state anchor fallback; defaults to `cwd` (the npm package bin). */
   readonly stateFallback?: GeneratedStateFallback;
+  /** Framework-owned `web` command locations relative to this generated executable. */
+  readonly web?: {
+    readonly manifestRelativeUrl: string;
+    readonly pluginRootRelativeUrl: string;
+  };
   /** The sibling react-server worker bundle; required when any command is rendered. */
   readonly workerFile?: string;
 }
@@ -210,15 +221,23 @@ export interface GeneratedCliBinEntryOptions {
  * the npm bin anchors on the caller's `.agent-bundle`. Emitted once per
  * generated module, ahead of every other `node:path` / `node:url` import.
  */
-const pluginRootImports = (fallback: GeneratedStateFallback): readonly string[] =>
-  fallback === 'artifact'
+const pluginRootImports = (
+  fallback: GeneratedStateFallback,
+  relativeUrl?: string,
+): readonly string[] =>
+  fallback === 'artifact' || relativeUrl !== undefined
     ? ["import { fileURLToPath } from 'node:url';"]
     : ["import { join } from 'node:path';"];
 
-const pluginRootFallbackExpression = (fallback: GeneratedStateFallback): string =>
-  fallback === 'artifact'
-    ? "fileURLToPath(new URL('..', import.meta.url))"
-    : "join(process.cwd(), '.agent-bundle')";
+const pluginRootFallbackExpression = (
+  fallback: GeneratedStateFallback,
+  relativeUrl?: string,
+): string =>
+  relativeUrl !== undefined
+    ? `fileURLToPath(new URL(${JSON.stringify(relativeUrl)}, import.meta.url))`
+    : fallback === 'artifact'
+      ? "fileURLToPath(new URL('..', import.meta.url))"
+      : "join(process.cwd(), '.agent-bundle')";
 
 /**
  * The one plugin-root resolution of a generated module (#468): the SQLite
@@ -226,8 +245,11 @@ const pluginRootFallbackExpression = (fallback: GeneratedStateFallback): string 
  * module opens read `pluginRoot`, so `(await agent()).plugin.stateRoot` is the
  * directory they mount by construction.
  */
-const pluginRootDeclaration = (fallback: GeneratedStateFallback): string =>
-  `const pluginRoot = resolvePluginRoot({ fallback: ${pluginRootFallbackExpression(fallback)} });`;
+const pluginRootDeclaration = (
+  fallback: GeneratedStateFallback,
+  relativeUrl?: string,
+): string =>
+  `const pluginRoot = resolvePluginRoot({ fallback: ${pluginRootFallbackExpression(fallback, relativeUrl)} });`;
 
 const generatedStateImports = (
   state: NormalizedStateDefinition | undefined,
@@ -378,16 +400,22 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     // npm package bin runs from the operator's own shell and reads none.
     ...(stateFallback === 'artifact' ? [operatorEnvLayerImport] : []),
     `import { cliInputError, runGeneratedCliProcess } from ${JSON.stringify(cliEntryRuntimeSpecifier)};`,
+    ...(options.web === undefined
+      ? []
+      : [
+        `import { runWebCommand } from ${JSON.stringify(webHostRuntimeSpecifier)};`,
+        "import webHostPage from 'agent-bundle/web-host-page';",
+      ]),
     rendered
       ? "import { available, createAgentRenderDispatcher, resolvePluginRoot, runAgentRequest, unavailable } from '@agent-bundle/runtime';"
       : "import { available, resolvePluginRoot, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
-    ...pluginRootImports(stateFallback),
+    ...pluginRootImports(stateFallback, options.web?.pluginRootRelativeUrl),
     ...(rendered ? ["import { Worker } from 'node:worker_threads';"] : []),
     ...generatedStateImports(options.state),
     ...routeImports(commandRoutes),
     ...providerImports(providers),
     '',
-    pluginRootDeclaration(stateFallback),
+    pluginRootDeclaration(stateFallback, options.web?.pluginRootRelativeUrl),
     ...generatedStateOwner(options.state, options),
     'const processLifetime = { hits: 0, instanceId: crypto.randomUUID(), pid: process.pid };',
     ...providerRegistrySource(providers),
@@ -488,6 +516,19 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     `  name: ${JSON.stringify(options.plugin.name)},`,
     ...(rendered ? ['  render,'] : []),
     `  version: ${JSON.stringify(options.plugin.version)},`,
+    ...(options.web === undefined
+      ? []
+      : [
+        '  web: Object.freeze({',
+        '    run: (argv, context) => runWebCommand({',
+        '      argv,',
+        `      manifestPath: fileURLToPath(new URL(${JSON.stringify(options.web.manifestRelativeUrl)}, import.meta.url)),`,
+        '      pageScript: webHostPage,',
+        '      pluginRoot: pluginRoot.root,',
+        '      ...context,',
+        '    }),',
+        '  }),',
+      ]),
     '});',
     ...(options.state === undefined
       ? []
