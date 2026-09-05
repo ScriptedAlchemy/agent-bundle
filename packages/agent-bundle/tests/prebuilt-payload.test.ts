@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -353,7 +353,7 @@ it('carries prebuilt args and env through the launch record and the web launcher
     expect(pluginData.startsWith(home)).toBe(true);
     expect(pluginData.startsWith(artifact)).toBe(false);
   } finally {
-    await removeProjectFixture(root);
+    await Promise.all([removeProjectFixture(root), rm(home, { force: true, recursive: true })]);
   }
 });
 
