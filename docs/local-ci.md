@@ -68,7 +68,7 @@ On PRs, hosted CI runs every leg on Node 24 and the `fast` leg on Node 26.
 
 | Local leg | Node | Steps | Mirrors hosted job |
 | --- | --- | --- | --- |
-| `verify-node22` | 22.19.x | `install`, `playwright install chrome`, `build` (publint runs inside each package's `rslib build`), `typecheck`, `lint`, `test:unit`, `test:integration` | `Verify (fast \| integration-1 \| integration-2, Node 22.19.0)` |
+| `verify-node22` | 22.19.x | `install`, `playwright install chrome`, `build` (publint runs inside each package's `rslib build`), `typecheck`, `lint`, `test:unit`, `test:route-unit`, `test:projection`, `test:integration` | `Verify (fast \| integration-1 \| integration-2, Node 22.19.0)` |
 | `verify-node24` | 24.x | same | `Verify (…, Node 24)` |
 | `verify-node26` | 26.x | same | `Verify (…, Node 26)` |
 | `gates-node22` | 22.19.x | `install`, `examples:check`, `check:release`, `eval:spot` | `examples-check`, `release-gates`, `rsc-runtime-micro-eval` |

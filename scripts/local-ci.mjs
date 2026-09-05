@@ -12,8 +12,8 @@
  *   `Verify gate` (Node 22.19 / 24 / 26 on main pushes; Node 24 plus the
  *   `fast` leg on Node 26 for PRs) → legs `verify-node22|24|26`: install,
  *   playwright chrome, build (publint runs inside it), typecheck, lint,
- *   test:unit, test:integration — the hosted legs' union, serially in one
- *   worktree.
+ *   test:unit, test:route-unit, test:projection, test:integration — the
+ *   hosted legs' union, serially in one worktree.
  * - examples-check + release-gates + rsc-runtime-micro-eval (all Node 22.19)
  *   → leg `gates-node22`: examples:check, check:release, eval:spot run
  *   sequentially in one worktree. Each of those scripts starts from
@@ -370,6 +370,8 @@ const main = async () => {
     { id: 'typecheck', hostedJob: 'verify', command: ['pnpm', 'typecheck'] },
     { id: 'lint', hostedJob: 'verify', command: ['pnpm', 'lint'] },
     { id: 'test:unit', hostedJob: 'verify', command: ['pnpm', 'test:unit', ...unitCapArguments] },
+    { id: 'test:route-unit', hostedJob: 'verify', command: ['pnpm', 'test:route-unit', ...unitCapArguments] },
+    { id: 'test:projection', hostedJob: 'verify', command: ['pnpm', 'test:projection', ...unitCapArguments] },
     { id: 'test:integration', hostedJob: 'verify', command: ['pnpm', 'test:integration'] },
   ];
 

@@ -11,7 +11,14 @@ import type { LaunchOptions } from 'playwright';
  * - `chromium` — Playwright's bundled Chromium for the installed Playwright
  *   version (`pnpm exec playwright install chromium`). CI sets this so a run
  *   tests one build, cached by Playwright version, instead of the Chrome the
- *   runner image happens to ship that week.
+ *   runner image happens to ship that week. Launched as `channel: 'chromium'`,
+ *   which is the full Chromium build in the same new headless mode branded
+ *   Chrome runs in — not the `chromium_headless_shell` build a bare headless
+ *   `chromium.launch()` picks. The shell's legacy headless mode reports the
+ *   MCP App sandbox's `srcdoc` frames differently and mcp-app-real.e2e's two
+ *   frame-URL polls never settle under it (reproduced with Playwright 1.62.1,
+ *   Chromium 151); `playwright install chromium` installs both builds, so the
+ *   choice costs nothing.
  *
  * Any other value fails at module load rather than silently launching the
  * wrong browser.
@@ -38,7 +45,7 @@ const selectLaunchOptions = (channel: string | undefined): LaunchOptions => {
     case 'chrome':
       return { channel: 'chrome' };
     case 'chromium':
-      return {};
+      return { channel: 'chromium' };
     default:
       throw new Error(`${playwrightChannelVariable} must be "chrome" or "chromium", got ${JSON.stringify(channel)}.`);
   }
