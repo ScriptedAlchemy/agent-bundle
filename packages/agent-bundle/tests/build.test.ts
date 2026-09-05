@@ -20,6 +20,7 @@ import type { AgentBundleMeta } from '../src/meta.ts';
 import { publishArtifact } from '../src/build/emit.ts';
 import type { TargetHookContract } from '../src/adapters/hook-contract.ts';
 import { parseArtifactManifest, serializeArtifactManifest } from '../src/build/manifest.ts';
+import { validateArtifact } from '../src/build/validate-artifact.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
 import { createDefaultRegistry, TargetRegistry } from '../src/adapters/registry.ts';
 import { createProjectContext } from '../src/core/project-context.ts';
@@ -1500,6 +1501,57 @@ it('parses emitted bundles in full when a tools hatch could have rewritten them'
     await expect(readFile(join(project.outputRoot, 'agent-bundle.manifest.json'), 'utf8')).rejects.toMatchObject({
       code: 'ENOENT',
     });
+  } finally {
+    await cleanupProject(project);
+  }
+}, 20_000);
+
+it('lexes a compiled bundle the real build\'s evidence record proves and parses it once the record is rewritable', async () => {
+  // The same bytes, judged twice: covered by a clean record from a build
+  // without a hatch, the walk trusts the compiler and only lexes; with
+  // `coverage.rewritable` set, it parses in full and the syntax error surfaces.
+  const project = await createProject();
+  try {
+    await build({
+      model: modelFor(project),
+      outputRoot: project.outputRoot,
+      projectRoot: project.root,
+      registry: new TargetRegistry().register((await import('../src/adapters/portable.ts')).portableAdapter, { default: true }),
+    });
+    const manifestPath = join(project.outputRoot, 'agent-bundle.manifest.json');
+    const recordPath = join(project.outputRoot, compileEvidenceFileName);
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as {
+      readonly files: Array<{ bytes: number; path: string; sha256: string }>;
+    };
+    const record = JSON.parse(await readFile(recordPath, 'utf8')) as {
+      readonly assets: Array<{ path: string; sha256: string }>;
+      readonly coverage: { rewritable: boolean };
+    };
+    const entry = (path: string) => manifest.files.find((file) => file.path === path)
+      ?? (() => { throw new Error(`Expected manifest entry for ${path}.`); })();
+    const rewrite = async (path: string, contents: string): Promise<void> => {
+      await writeFile(join(project.outputRoot, path), contents);
+      Object.assign(entry(path), { bytes: Buffer.byteLength(contents), sha256: sha256Hex(contents) });
+    };
+    const writeRecord = async (): Promise<void> => {
+      await rewrite(compileEvidenceFileName, `${JSON.stringify(record)}\n`);
+      await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
+    };
+
+    const broken = 'export const broken = ;\n';
+    await rewrite('scripts/greeting.mjs', broken);
+    record.assets.find((asset) => asset.path === 'scripts/greeting.mjs')!.sha256 = sha256Hex(broken);
+    await writeRecord();
+    expect((await validateArtifact({ artifactRoot: project.outputRoot })).filter((diagnostic) => diagnostic.code === 'AB6005'))
+      .toEqual([]);
+
+    record.coverage.rewritable = true;
+    await writeRecord();
+    expect((await validateArtifact({ artifactRoot: project.outputRoot })).filter((diagnostic) => diagnostic.code === 'AB6005'))
+      .toEqual([expect.objectContaining({
+        generatedPath: 'scripts/greeting.mjs',
+        message: 'Generated JavaScript import from "scripts/greeting.mjs" has invalid syntax.',
+      })]);
   } finally {
     await cleanupProject(project);
   }

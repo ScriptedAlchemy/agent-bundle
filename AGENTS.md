@@ -91,12 +91,13 @@
   a consumer must install is the author's explicit decision, and an import
   kept external through the `tools` hatch is not a way to make it anywhere:
   `AB6005` fails such an import in a host pack and in `dist` alike. What
-  legitimately puts a package under `dependencies` is one of four `AB7014`
+  legitimately puts a package under `dependencies` is one of three `AB7014`
   evidence sources: `runtimeDependencies` on a prebuilt payload
-  (`definePrebuilt`), a packed declaration reference, a consumer-side install
-  script that names or runs it, or the framework's process-dependency record
-  (empty today). `AB7015` additionally requires a specifier a consumer's npm
-  can install.
+  (`definePrebuilt`), a packed declaration reference, or a consumer-side
+  install script that names or runs it. The framework's own runtime modules
+  load no package at run time (`generated-module-evidence.test.ts`), so there
+  is no framework process-dependency record to read. `AB7015` additionally
+  requires a specifier a consumer's npm can install.
 - Proof is compiler evidence, the persisted record, and packed-process
   tests: each compilation's own external and module records are judged before
   emission, `build` writes them beside the emitted files as

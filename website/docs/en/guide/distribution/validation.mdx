@@ -278,8 +278,10 @@ not a way around the contract and never reaches the prepack inventory.
    `declare module` in a file with no imports counts for nothing, while a `#subpath` follows the
    package `imports` map;
 3. a consumer-side `preinstall`, `install`, or `postinstall` script, including delegated scripts,
-   that names the dependency or runs one of its `bin` commands; and
-4. the framework's process-dependency record, which is currently empty.
+   that names the dependency or runs one of its `bin` commands.
+
+The framework's own runtime modules load no package at run time, so there is no framework
+process-dependency record to read as a fourth source.
 
 A package merely inlined into a compiled bundle is not used. When that is the only evidence,
 `AB7014` names the `dist` bundles that inlined it, for example:
@@ -294,7 +296,7 @@ names or runs, or a prebuilt payload declares in `runtimeDependencies` (`defineP
 | `AB7011` | An on-disk artifact file no longer matches its manifest SHA-256. Rebuild, and do not modify generated host packs. |
 | `AB7012` | A `package.json` bin points outside the packed `dist` output (including `src/`) or names a file npm omitted. Point it at the generated `dist/bin` file. |
 | `AB7013` | `package.json`, normalized plugin metadata, a host manifest, or artifact provenance reports a different release version. Make every release identity agree. |
-| `AB7014` | A `dependencies`, `optionalDependencies`, or `peerDependencies` field names packages a consumer never needs installed. Use requires one of the four evidence sources above; compiled bundles that inline a package do not count. The diagnostic names any `dist` bundles that inlined an otherwise unused package. It is an error for `dependencies` and `optionalDependencies`, and a warning for `peerDependencies`; optional peers are skipped, and an `optionalDependencies` entry supersedes the same name under `dependencies`. |
+| `AB7014` | A `dependencies`, `optionalDependencies`, or `peerDependencies` field names packages a consumer never needs installed. Use requires one of the three evidence sources above; compiled bundles that inline a package do not count. The diagnostic names any `dist` bundles that inlined an otherwise unused package. It is an error for `dependencies` and `optionalDependencies`, and a warning for `peerDependencies`; optional peers are skipped, and an `optionalDependencies` entry supersedes the same name under `dependencies`. |
 | `AB7015` | A `dependencies`, `optionalDependencies`, or `peerDependencies` entry a consumer's npm cannot resolve through a registry. Name and specifier are read with `npm-package-arg`, npm's own parser, and come out as one of three kinds: registry (a version, range, dist-tag, or `npm:` alias of one), fetched (a git, GitHub-shorthand, remote-tarball, or path source — npm 12 refuses git and remote fetches by default (`allow-git`, `allow-remote`), and a path never exists on the consumer's disk), or unparseable (a name npm rejects, a scheme it lacks such as `link:`, `portal:`, or a typo, a selector that is neither a range nor a URL-safe dist-tag, an alias of a non-registry target, or an invalid URL — the manifest read itself fails, so this is reported even on an optional peer). A fetched `optionalDependencies` entry warns because npm can continue without it, but escalates to an error when an install script needs the package: its `bin` command appears in command position, a `node_modules/<name>/` file is run, or a bare package is preloaded with `-r`/`--require`/`--import`/`--loader` (including through `NODE_OPTIONS`). A peer also present in `dependencies` or `optionalDependencies` is judged by that concrete entry. `workspace:`/`catalog:` are allowed only when the pack lifecycle rewrites them; packed `bundleDependencies` and installable in-package `file:` sources are not reported. Depend on a published version, or bundle the package and declare it under `devDependencies`. |
 
 A release build also refuses a project with **no** release version at all (`AB4013`), so a

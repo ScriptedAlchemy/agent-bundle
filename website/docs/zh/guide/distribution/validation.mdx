@@ -233,7 +233,7 @@ CLI、MCP 入口、钩子包装层以及包构建的 JavaScript bundle——都�
 [`tools` 逃生舱](../../reference/configuration.mdx#tools)保持外部化并不能绕过契约，也永远到不了 prepack
 的清单检查。
 
-`AB7014` 只接受四类消费者运行时证据：
+`AB7014` 只接受三类消费者运行时证据：
 
 1. 通过 `definePrebuilt` 声明的预构建 payload 上的 `runtimeDependencies`；
 2. TypeScript 的 `preProcessFile` 从打包后声明文件读出的引用：import、export、import-equals
@@ -241,8 +241,9 @@ CLI、MCP 入口、钩子包装层以及包构建的 JavaScript bundle——都�
    `/// <reference types>`（连同其 `@types` 对应包）；没有 import 的文件中的环境式
    `declare module` 不算证据，而 `#子路径` 会经由包的 `imports` 映射解析；
 3. 消费者侧 `preinstall`、`install` 或 `postinstall` 脚本（包括其委托的脚本）点名该依赖，或运行其
-   `bin` 命令；以及
-4. 框架的进程依赖记录；该记录目前为空。
+   `bin` 命令。
+
+框架自身的运行时模块在运行时不加载任何包，因此不存在可作为第四类证据读取的框架进程依赖记录。
 
 仅仅内联进已编译 bundle 的包不算已使用。当这是唯一证据时，`AB7014` 会点名内联它的 `dist` bundle，
 例如：`The build inlined "a" into dist/bin/x.js; every consumer installs them for nothing.`
@@ -256,7 +257,7 @@ CLI、MCP 入口、钩子包装层以及包构建的 JavaScript bundle——都�
 | `AB7011` | 磁盘上的某个产物文件与其清单 SHA-256 不再匹配。请重新构建，且不要修改生成的宿主包。 |
 | `AB7012` | 某个 `package.json` bin 指向了打包后的 `dist` 输出之外（包括 `src/`），或指名了一个被 npm 忽略的文件。请把它指向生成的 `dist/bin` 文件。 |
 | `AB7013` | `package.json`、规范化后的插件元数据、某份宿主清单或产物 provenance 报告了不同的发布版本。请让每处发布标识一致。 |
-| `AB7014` | `dependencies`、`optionalDependencies` 或 `peerDependencies` 字段点名了消费者无需安装的包。必须有上列四类证据之一才算使用；已编译 bundle 内联该包不算。诊断会点名内联了这个未使用包的所有 `dist` bundle。对 `dependencies` 与 `optionalDependencies` 是 error，对 `peerDependencies` 是 warning；可选 peer 会跳过，`optionalDependencies` 中的同名项优先于 `dependencies`。 |
+| `AB7014` | `dependencies`、`optionalDependencies` 或 `peerDependencies` 字段点名了消费者无需安装的包。必须有上列三类证据之一才算使用；已编译 bundle 内联该包不算。诊断会点名内联了这个未使用包的所有 `dist` bundle。对 `dependencies` 与 `optionalDependencies` 是 error，对 `peerDependencies` 是 warning；可选 peer 会跳过，`optionalDependencies` 中的同名项优先于 `dependencies`。 |
 | `AB7015` | `dependencies`、`optionalDependencies` 或 `peerDependencies` 中的某一项无法被消费者的 npm 经由注册表解析。包名与说明符一并交给 npm 自己的解析器 `npm-package-arg` 读取，结果分为三类：注册表类（版本、范围、dist-tag，或指向它们的 `npm:` 别名）、抓取类（git、GitHub 简写、远程 tarball 或路径来源——npm 12 默认拒绝 git 与远程抓取（`allow-git`、`allow-remote`），而路径在消费者磁盘上并不存在），以及不可解析类（npm 不接受的包名、它不支持的协议如 `link:`、`portal:` 或拼写错误、既非范围也非 URL 安全 dist-tag 的选择器、指向非注册表目标的别名，或非法 URL——清单本身就读不下去，因此即使出现在可选 peer 上也会被报告）。抓取类的 `optionalDependencies` 项只发出警告，因为 npm 可以在没有它时继续；但消费者安装脚本需要该包时会升级为错误：其 `bin` 命令位于命令位置、运行了 `node_modules/<name>/` 文件，或通过 `-r`/`--require`/`--import`/`--loader`（包括 `NODE_OPTIONS`）预加载了裸包。若 `dependencies` 或 `optionalDependencies` 也声明了同名 peer，则只按该具体条目判断。`workspace:`/`catalog:` 仅在打包生命周期会重写它们时允许；已打包的 `bundleDependencies` 与包内可安装的 `file:` 来源不会被报告。请依赖已发布的版本，或把该包打包进产物并声明在 `devDependencies` 下。 |
 
 发布构建同样会拒绝**完全没有**发布版本的项目（`AB4013`），因此已发布的产物绝不会携带

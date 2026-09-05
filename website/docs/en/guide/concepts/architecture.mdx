@@ -306,8 +306,7 @@ That is the self-containment rule enforced by `build/compiler.ts` and
 
 `AB7014` / `AB7015` are the prepack gate: a `package.json` install-time
 dependency must be justified by prebuilt `runtimeDependencies`, a packed
-declaration reference, a consumer install script, or the framework's
-currently empty process-dependency record (`AB7014`), and a consumer's npm
+declaration reference, or a consumer install script (`AB7014`), and a consumer's npm
 must be able to fetch it (`AB7015`). A package inlined into a bundle is not
 used; compile evidence records the `dist` bundles named in the diagnostic.
 

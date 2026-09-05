@@ -37,6 +37,10 @@ const fixtureRoot = async (files: Readonly<Record<string, string>>): Promise<str
     await mkdir(join(destination, '..'), { recursive: true });
     await writeFile(destination, contents);
   }
+  if ('packages/linked-dep/package.json' in files) {
+    await mkdir(join(root, 'node_modules'), { recursive: true });
+    await symlink(join(root, 'packages', 'linked-dep'), join(root, 'node_modules', 'linked-dep'), 'dir');
+  }
   return root;
 };
 
@@ -49,9 +53,12 @@ const conventionFixture = (): Readonly<Record<string, string>> => ({
     '};',
     '',
   ].join('\n'),
-  'package.json': '{"name":"package-build-fixture","type":"module","private":true}\n',
+  'package.json': '{"name":"package-build-fixture","type":"module","private":true,"dependencies":{"linked-dep":"1.0.0"}}\n',
   'node_modules/evidence-package/index.js': 'globalThis.__evidencePackageLoaded = true;\n',
   'node_modules/evidence-package/package.json': '{"name":"evidence-package","type":"module","version":"1.0.0"}\n',
+  // Linked into node_modules below, as a package manager links a workspace dependency.
+  'packages/linked-dep/index.js': 'globalThis.__linkedDepLoaded = true;\n',
+  'packages/linked-dep/package.json': '{"name":"linked-dep","type":"module","version":"1.0.0"}\n',
   'tsconfig.json': JSON.stringify({
     compilerOptions: {
       module: 'esnext',
@@ -63,6 +70,7 @@ const conventionFixture = (): Readonly<Record<string, string>> => ({
   }),
   'src/cli.ts': [
     "import 'evidence-package';",
+    "import 'linked-dep';",
     '',
     'export const main = async (argv: readonly string[]): Promise<number> => {',
     "  process.stdout.write(`ran:${argv.join(',')}\\n`);",
@@ -146,9 +154,11 @@ describe('framework-owned package build', () => {
     );
     expect(packageBuild!.evidence.assets.flatMap((asset) => asset.externals)
       .every((external) => external.kind === 'builtin')).toBe(true);
+    // A package under `node_modules` is named by its path; a workspace-linked one, which Rspack records at its
+    // real path, by the declaration that reached it.
     expect(packageBuild!.evidence.assets
       .find((asset) => asset.path === 'dist/bin/package-build-fixture.js')?.packages)
-      .toContain('evidence-package');
+      .toEqual(['evidence-package', 'linked-dep']);
     for (const file of packageBuild!.files) {
       expect(file.sourceInputs).toEqual([...file.sourceInputs].sort((left, right) => left.localeCompare(right)));
     }

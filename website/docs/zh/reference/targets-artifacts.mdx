@@ -160,7 +160,7 @@ MCP 入口、脚本、路由式 CLI bin 与 MCP App 只编译**一次**，归属
 
 `host-install` 证明级别会记录全部四者，并在任何一项缺失或不一致时以失败告终。`prepack` 则为前两者，外加
 规范化后的插件元数据与宿主清单把关（`AB7013`），并拒绝这样的 `package.json`：安装期依赖字段点名了
-打包后声明文件、消费者安装脚本、预构建 `runtimeDependencies` 或框架进程依赖记录都不能证明消费者需要的包
+打包后声明文件、消费者安装脚本或预构建 `runtimeDependencies` 都不能证明消费者需要的包
 （`AB7014`），或消费者的 npm 无法从注册表抓取的包（`AB7015`）。仅仅内联进已编译 bundle 的包不算已使用。
 [验证指南](../guide/distribution/validation.mdx)列出了每一种证据来源。
 
