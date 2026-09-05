@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import type { Diagnostic } from '../../agent-bundle/src/contracts/diagnostics.ts';
-import { exactKeys, isRecord } from './client-helpers.ts';
+import { errorMessage, exactKeys, isRecord } from './client-helpers.ts';
 import {
   freezeJsonValue,
   type ArtifactEpoch,
@@ -68,13 +68,34 @@ interface QueuedProjectEvent {
 
 export class ProjectClientError extends Error {
   readonly code: string | undefined;
+  /**
+   * Status of the failed foreground response (4xx/5xx); absent when the client
+   * constructed the failure itself — it refused an HTTP 200 bootstrap body, or
+   * the session was superseded or invalidated while a request was in flight.
+   */
+  readonly status: number | undefined;
 
-  constructor(message: string, code?: string) {
+  constructor(message: string, code?: string, status?: number) {
     super(message);
     this.name = 'ProjectClientError';
     this.code = code;
+    this.status = status;
   }
 }
+
+/**
+ * The one-line account of a project client failure the connection gate, the
+ * topbar, and the Overview rebuild alert show: `<code> — <message> (HTTP <status>)`,
+ * omitting the parts a failure lacks. Other errors keep their message; a
+ * hostile reason falls back.
+ */
+export const projectFailureText = (reason: unknown, fallback: string): string => {
+  const message = errorMessage(reason, fallback);
+  if (!(reason instanceof ProjectClientError)) return message;
+  const code = reason.code === undefined ? '' : `${reason.code} — `;
+  const status = reason.status === undefined ? '' : ` (HTTP ${reason.status})`;
+  return `${code}${message}${status}`;
+};
 
 const projectEventTypes = [
   'artifact.available',
@@ -241,7 +262,7 @@ const projectStatusResponse = (value: unknown): ProjectStatusResponse => {
 
 const projectError = (error: unknown): ProjectClientError | unknown =>
   error instanceof ForegroundRouteClientError
-    ? new ProjectClientError(`Workbench request failed with HTTP ${error.status}.`, error.code)
+    ? new ProjectClientError(error.message, error.code, error.responseStatus)
     : error;
 
 const isSequence = (value: unknown): value is number =>
@@ -344,6 +365,7 @@ export class ProjectClient {
   #eventRefreshQueued = false;
   #highestQueuedEventId = -1;
   #lastEventId = 0;
+  #lastReportedFailure: string | undefined;
   #lastSourceChangeSequence = -1;
   #errorListener: ProjectClientErrorListener | undefined;
   #listener: ((status: ProjectStatus) => void) | undefined;
@@ -533,8 +555,9 @@ export class ProjectClient {
         source.addEventListener('open', () => { void this.#refreshRecoveredSource(version); });
         this.#setConnection({ generation: snapshot.generation, instanceId: snapshot.instanceId, state: 'connecting' });
         return;
-      } catch {
+      } catch (error) {
         if (this.#closed || recoveryVersion !== this.#recoveryVersion) return;
+        this.#reportRecoveryFailure(projectError(error));
         await this.#retryDelay(retryDelayMilliseconds);
       }
     }
@@ -555,7 +578,7 @@ export class ProjectClient {
       this.#eventSource = undefined;
       source.close();
       this.#setConnection({ ...this.#connection, state: 'unavailable' });
-      this.#reportError(error);
+      this.#reportError(projectError(error));
       this.#startRecovery(version);
     }
   }
@@ -718,11 +741,23 @@ export class ProjectClient {
 
   #reportError(reason: unknown): void {
     if (this.#closed) return;
+    this.#lastReportedFailure = projectFailureText(reason, '');
     try {
       this.#errorListener?.(reason);
     } catch {
       // Consumer callbacks must not reintroduce an unhandled background rejection.
     }
+  }
+
+  /**
+   * Recovery retries every {@link retryDelayMilliseconds}; a failed attempt is
+   * reported only when its line differs from the last report, so the gate moves
+   * from `Foreground project event stream disconnected.` to the refusal that
+   * keeps recovery from completing (e.g. `AB8003`) without flooding the listener.
+   */
+  #reportRecoveryFailure(reason: unknown): void {
+    if (projectFailureText(reason, '') === this.#lastReportedFailure) return;
+    this.#reportError(reason);
   }
 
   #publishEvent(event: ProjectEventMessage): void {
