@@ -23,7 +23,7 @@ directory layout to find out.
 | Canonical bytes | The file is the canonical JSON serialization of the document — object keys sorted, no insignificant whitespace, one trailing newline. Every reader re-serializes what it parsed and rejects the file unless the bytes are identical. A hand edit, a reformat, or a duplicate key fails the read. |
 | Closed keys | Every object admits exactly its documented keys. An unknown key at any level is a parse error. |
 | Sorted arrays | Every array has an explicit sort key (named per section below) and no duplicates. |
-| Paths | Every path is POSIX, relative to the root, and safe: no leading `/`, no backslash, no `.` or `..` segment. Every path a section points at — a host document, an executable, an App view, an install file — is also a `files[]` row. |
+| Paths | Every path is POSIX, relative to the root, and safe: no leading `/`, no backslash, no `.` or `..` segment, and never a build-machine absolute path. Moving the entire composite root to a different absolute directory keeps every reader working: every path stays root-relative and resolves inside the moved tree. Every path a section points at — a host document, an executable, an App view, an install file — is also a `files[]` row. |
 
 ## Who writes it
 
