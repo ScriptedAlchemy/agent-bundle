@@ -1,5 +1,5 @@
 ---
-description: 'agent-bundle build 输出的组合插件根目录：各宿主投影把清单、钩子与 MCP 文档放在何处、钩子 wrapper 的命名规则、AB4103/AB4105/AB4106 组合规则，以及产物清单契约。'
+description: 'agent-bundle build 输出的组合插件根目录：各宿主投影把清单、钩子与 MCP 文档放在何处、钩子 wrapper 的命名规则、AB4103/AB4105/AB4106 组合规则、可选的清单 web 节，以及产物清单契约。'
 ---
 
 # Target 与产物
@@ -42,7 +42,7 @@ artifact/
 ├── hooks/<hook>.<host>.mjs               # wrapper：钩子被多个所选宿主共享
 ├── hooks/hooks-flight.mjs
 ├── mcp/mcp-<server>-<hash>.mjs           # 编译后的 MCP 入口（+ -flight.mjs）
-├── bin/<plugin>.mjs, bin/<plugin>-flight.mjs   # 路由式 CLI（存在 src/cli 时）
+├── bin/<plugin>.mjs, bin/<plugin>-flight.mjs   # 路由式 CLI 和/或 <plugin> web
 ├── scripts/, skills/, commands/, rules/, assets/, mcp-apps/   # 只输出一次
 ├── INSTALL.md                            # 选中了任一内置宿主时
 ├── install.mjs                           # 选中了 cursor 或 portable 时
@@ -52,7 +52,9 @@ artifact/
 
 宿主清单位于根目录下各自的点目录中。`skills/`、`hooks/`、`mcp/`、`scripts/`、`bin/` 与 `assets/` 是共享的，
 只输出**一次**——没有逐宿主副本。根目录下不会出现其他任何东西：没有生成的 `AGENTS.md`，也没有
-`hooks/hooks-cursor.json`。
+`hooks/hooks-cursor.json`，也没有 `web/` 目录。已配置 MCP App 的浏览器宿主作为框架拥有的 `web` 命令
+装在 `bin/<plugin>.mjs` 里。该 bin 在 `src/cli/**` 编译出至少一条命令时、在配置了
+[`web`](./configuration.mdx#web) 时（即使没有手写 CLI 命令），或两者兼有时输出。
 
 ### 各宿主从哪里读取文档
 
@@ -134,6 +136,7 @@ MCP 入口、脚本、路由式 CLI bin 与 MCP App 只编译**一次**，归属
 | `targets` | 每个所选投影一行，按名称排序：`name`、`adapterRevision`、`observedVersion`，以及它据以校验的固定 `schemas`。 |
 | `agentSkills` | Agent Skills 规范固定值：`specification`、`sourceRevision`、`schemaSha256`。 |
 | `validation` | `source`、`artifact` 与各所选投影的已记录状态。 |
+| `web` | **除非配置了 [`web`](./configuration.mdx#web)，否则不出现。** `{ open, apps[] }`，每个 app 为 `{ allow, app, entry, env, name, resourceUri, server, tool?, input? }`。`entry` 是产物相对的 MCP 可执行文件（`mcp/<name>.mjs`）；`env` 是该服务器已声明的静态 env，`agent-bundle:path:*` 令牌保持未展开。App 按 `app` 排序。`<plugin> web` 命令、`agent-bundle dev` 的 `/web/<server>/<app>` 与 `doctor` 读取这一节，绝不会从 `src/**` 重新发现 App。 |
 
 `kind` 取值为 `bundle`、`copy`、`generated` 或 `prebuilt` —— 分别是打包入口、按字节复制、编译器生成的
 文档，或预构建 payload 文件。`sourceInputs` 记录每个输入路径及其自身的 SHA-256，并在相关时记录它是否

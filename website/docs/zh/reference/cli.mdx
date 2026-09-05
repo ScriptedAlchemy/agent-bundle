@@ -1,5 +1,5 @@
 ---
-description: '完整的 agent-bundle 命令行表面：dev、serve-app、build、prepack、install、doctor、validate、eval、inspect、mcp 与 hooks，及其全部选项与退出码。'
+description: '完整的 agent-bundle 命令行表面：dev、serve-app、build、prepack、install、doctor、validate、eval、inspect、mcp 与 hooks，以及产物内的 <plugin> web 命令，及其全部选项与退出码。'
 ---
 
 # 命令行
@@ -83,8 +83,7 @@ Workbench：该命令以与 `mcp run` 完全相同的方式启动插件打包好
 `MCP App <app> at <url> (tool <tool>; Ctrl-C stops the server)`——`<app>` 为命令行上给出的原样，`<tool>` 为
 打开该 App 的工具——而每条诊断都写到 stderr。随后命令在前台运行：`SIGINT` 或 `SIGTERM` 会关闭宿主及其
 服务器并以 `0` 退出；当被绑定的 MCP 服务器自行退出时，一条 `AB5000` 诊断会写到 stderr，命令以 `1` 退出。
-`agent-bundle/serve-app-command` 中的 `spawnServeApp` 等待的正是同一行（`parseServeAppReadyLine`），因此
-路由式命令可以依赖它。
+[`<plugin> web`](#plugin-web) 打印同一条就绪行契约。
 
 | 选项 | 默认值 | 含义 |
 | --- | --- | --- |
@@ -103,9 +102,40 @@ Workbench：该命令以与 `mcp run` 完全相同的方式启动插件打包好
 宿主只绑定 `127.0.0.1`，只提供一份文档与经过认证的 `/api/mcp/...` 路由（每次启动一个令牌，加同源检查；
 拒绝时为 `AB8003` / `AB8004`），并且只通过桥接暴露所选的那个服务器。App 文档本身运行在框架沙箱内的第二个
 loopback origin 上。它是本地预览宿主，不是部署目标。面向脚本与测试的编程形式是 `agent-bundle/api` 中的
-`serveApp`；插件自己的路由式 CLI 命令则使用 `agent-bundle/serve-app-command` 中的 `spawnServeApp`，它把同样
-的选项转换为 argv，并把这条命令作为子进程运行，因为自包含的 bin 无法导入 `agent-bundle/api`（路由图会把这种
-尝试报告为 `AB4837`）——见[独立提供 App](../guide/authoring/mcp.mdx#独立提供-app)。
+`serveApp`。从已安装产物出发，受支持的命令是 [`<plugin> web`](#plugin-web)，它从 `bin/<plugin>.mjs`
+运行同一套宿主栈，机器上不需要框架——见
+[在浏览器中暴露 App](../guide/authoring/mcp.mdx#在浏览器中暴露-app)。
+
+## `<plugin> web`
+
+```sh
+node <root>/bin/<plugin>.mjs web [<server>/<app>] [--port N] [--open|--no-open] \
+  [--tool T] [--input JSON] [--allow <cap>]... [--profile portable|claude|chatgpt] [--json]
+```
+
+组合产物 `bin/<plugin>.mjs` 上由框架拥有的 `web` 命令。只要项目配置了
+[`web`](./configuration.mdx#web)，即使 `src/cli/**` 没有编译出任何命令，也会输出该 bin，并出现在
+它的 `--help` 里。从已构建产物或已安装插件根目录运行——`agent-bundle.manifest.json` 必须位于
+`bin/` 旁边（否则退出码 `1`）。
+
+| 选项 | 默认值 | 含义 |
+| --- | --- | --- |
+| `<server>/<app>` | 唯一被暴露的 App | 在清单 `web` 节列出的 App 中选择。暴露了多个时必填；省略则是用法错误（退出码 `2`）并列出它们。 |
+| `--port <port>` | 临时端口 | 宿主页面的 loopback TCP 端口。 |
+| `--open` / `--no-open` | 配置中的 `web.open` | 宿主开始监听后是否打开默认浏览器。配置默认值是 `never`。 |
+| `--tool <tool>` | 该 App 已配置或唯一的工具 | 用其结果打开 App 的工具。 |
+| `--input <json>` | 已配置的 `input`，否则为 `{}` | 那次开场工具调用的 JSON 对象输入。 |
+| `--allow <capability>` | 已配置的 `allow` | 批准一项同意能力：`call-tool`、`download-file`、`open-external-link` 或 `request-display-mode`。可重复。 |
+| `--profile <profile>` | `portable` | 模拟的 MCP Apps 宿主 profile：`portable`、`claude` 或 `chatgpt`。 |
+| `--json` | 关闭 | 打印一行 JSON `{ app, server, tool, url, port, resourceUri, sandboxOrigin }` 代替人类可读就绪行，然后继续运行。 |
+
+该命令启动插件自己的 MCP 服务器（`node <root>/mcp/<entry>.mjs`，`AGENT_BUNDLE_PLUGIN_ROOT=<root>`，
+已声明的静态 env 并展开路径令牌），先调用一次开场工具，然后在 `http://127.0.0.1:<port>/` 上用
+loopback origin 提供 App，并为 App 文档再开一个 loopback 沙箱 origin——与 `agent-bundle serve-app`
+以及 Workbench 同一套宿主栈与同意行为。人类模式打印
+`MCP App <server>/<app> at <url> (tool <tool>; Ctrl-C stops the server)`，并一直运行到 Ctrl-C /
+SIGTERM。当配置了 `web` 时，手写的 `src/cli/web.ts`（或任何第一路径段为 `web` 的生成式命令）会被
+`AB4341` 拒绝。
 
 ## build 与 prepack
 

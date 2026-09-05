@@ -101,10 +101,11 @@ own packed server, launched as `mcp run` launches it. `serveApp` in
 the Workbench, tests, a plugin's own scripts — never the MCP shell, and a
 local preview host, not a deployment target. A plugin's own "open the
 dashboard" CLI route cannot import it — the routed CLI bin is self-contained,
-and the route graph reports the value import as `AB4837` — so it calls
-`spawnServeApp` from `agent-bundle/serve-app-command`, which spawns
-`agent-bundle serve-app` as a child process (#558); see
-[Entry conventions](entry-conventions.md#agent-bundle-serve-app).
+and the route graph reports the value import as `AB4837`. From an installed
+artifact the supported command is `<plugin> web` on `bin/<plugin>.mjs`,
+emitted when the `web` config key lists declared Apps; `agent-bundle dev`
+serves the same host at `/web/<server>/<app>`. See
+[Entry conventions](entry-conventions.md#plugin-web).
 
 The compiler statically reads `config`, imports schemas and implementations
 only into generated entries, installs `runAgentRequest`, and derives the real

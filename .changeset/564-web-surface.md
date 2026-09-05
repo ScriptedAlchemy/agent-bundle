@@ -1,0 +1,5 @@
+---
+"agent-bundle": minor
+---
+
+Add the `web` config key to expose declared MCP Apps in a browser: `web.apps` selects `<server>/<app>` entries already under `mcp.servers.<id>.apps`, `web.open` is `browser` or `never` (default `never`), and invalid exposure reports `AB4341`. When `web` is configured, the composite artifact's `agent-bundle.manifest.json` gains a `web` section and `bin/<plugin>.mjs` carries the framework-owned `<plugin> web` command even without `src/cli/**`; `agent-bundle dev` serves the same host at `/web/<server>/<app>`. Remove `agent-bundle/serve-app-command` (`spawnServeApp`, `serveAppArgv`, `locateFrameworkCli`, `ServeAppCommandError`); the supported path from an installed artifact is `<plugin> web`. (#PR)
