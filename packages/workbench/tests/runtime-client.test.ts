@@ -381,6 +381,23 @@ it('rejects invalid runtime history before it can enter browser state', async ()
   }
 });
 
+it('accepts a development-sized Flight preview above the generic text limit', async () => {
+  const base = run();
+  if (base.status !== 'succeeded') throw new Error('Expected succeeded fixture run.');
+  const preview = Buffer.alloc(3_359).toString('base64');
+  expect(preview).toHaveLength(4_480);
+  const fixture = runtimeFetch({ runs: [Object.freeze({
+    ...base,
+    result: Object.freeze({
+      ...base.result,
+      flight: Object.freeze({ bytes: 3_359, preview, truncated: false }),
+    }),
+  })] });
+
+  await expect(new RuntimeClient(new ForegroundRouteClient({ fetch: fixture.fetch })).bootstrap())
+    .resolves.toMatchObject({ kind: 'available', history: [{ result: { flight: { preview } } }] });
+});
+
 it('uses the exact imported request bodies and encoded opaque runtime paths', async () => {
   const fixture = runtimeFetch();
   const client = new RuntimeClient(new ForegroundRouteClient({ fetch: fixture.fetch }));

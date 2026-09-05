@@ -431,6 +431,7 @@ export type {
   DevRuntimeTreeNode,
   RuntimeVector,
 } from './dev/runtime-protocol.ts';
+export { maximumDevRuntimeFlightPreviewBytes } from './dev/runtime-protocol.ts';
 // The generation store and MCP registry a session drives, as effect-free
 // contracts plus their constructors: the classes behind them throw
 // `YieldableFrameworkError`s and so may not enter a public declaration graph.

@@ -18,6 +18,7 @@ import type {
   DevRuntimeTraceSpan,
   RuntimeVector,
 } from '../../agent-bundle/src/contracts/runtime.ts';
+import { maximumDevRuntimeFlightPreviewBytes } from '../../agent-bundle/src/contracts/runtime.ts';
 import { ForegroundRouteClient, ForegroundRouteClientError } from './mcp/mcp-route-client.ts';
 import { hasOnlyOwnKeys, isPlainRecord } from './strict-json.ts';
 import {
@@ -39,6 +40,7 @@ export type RuntimeBootstrap =
 const runtimeAssetLimit = 4 * 1024 * 1024;
 const runtimeAssetContentTypes = new Set(['application/javascript', 'application/json', 'text/css', 'text/html']);
 const runtimeErrorCode = 'AB8206';
+const maximumFlightPreviewCharacters = 4 * Math.ceil(maximumDevRuntimeFlightPreviewBytes / 3);
 type RuntimeJsonValue = DevRuntimeInvocationRequest['input'];
 type RuntimeJsonObject = NonNullable<DevRuntimeSurface['inputSchema']>;
 const diagnosticPhases = new Set([
@@ -59,8 +61,8 @@ const isRecord = isPlainRecord;
 
 const hasOnly: (value: Readonly<Record<string, unknown>>, fields: readonly string[]) => boolean = hasOnlyOwnKeys;
 
-const nonemptyString = (value: unknown): value is string =>
-  typeof value === 'string' && value.length > 0 && value.length <= 4_096 && !value.includes('\0');
+const nonemptyString = (value: unknown, maximumLength = 4_096): value is string =>
+  typeof value === 'string' && value.length > 0 && value.length <= maximumLength && !value.includes('\0');
 
 const nonnegativeInteger = (value: unknown): value is number =>
   typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
@@ -280,7 +282,8 @@ const inspection = (value: unknown, runId: string): DevRuntimeInspectionEnvelope
   }
   const flight = response.flight === undefined ? undefined : record(response.flight, 'Runtime route returned an invalid Flight inspection.');
   if (flight !== undefined && (!hasOnly(flight, ['bytes', 'downloadPath', 'preview', 'truncated']) || !nonnegativeInteger(flight.bytes) ||
-    (flight.downloadPath !== undefined && !nonemptyString(flight.downloadPath)) || !nonemptyString(flight.preview) || typeof flight.truncated !== 'boolean')) {
+    (flight.downloadPath !== undefined && !nonemptyString(flight.downloadPath)) ||
+    !nonemptyString(flight.preview, maximumFlightPreviewCharacters) || typeof flight.truncated !== 'boolean')) {
     throw invalid('Runtime route returned an invalid Flight inspection.');
   }
   const flightDownloadPath = flight === undefined ? undefined : `/api/runtime/runs/${opaqueSegment(runId, 'Runtime run ID')}/flight`;

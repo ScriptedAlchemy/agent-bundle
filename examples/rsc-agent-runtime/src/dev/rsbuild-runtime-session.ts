@@ -48,6 +48,7 @@ import {
   DevRuntimeUnavailableError,
   createRuntimeGenerationStore,
   createRuntimeMcpRegistry,
+  maximumDevRuntimeFlightPreviewBytes,
   type DevRuntimeAsset,
   type DevRuntimeAssetRequest,
   type DevRuntimeClientSurfaceEndpoint,
@@ -102,7 +103,6 @@ const maximumInvocationStderrBytes = 256 * 1024;
 export const defaultMaximumRunHistory = 50;
 const invocationTimeoutMs = 10_000;
 const invocationTerminationGraceMs = 100;
-const flightPreviewBytes = 32 * 1024;
 const windowsJobOwnerPhaseDeadlineMs = 2_000;
 const noFixtures: readonly DevRuntimeFixture[] = Object.freeze([]);
 const claudePostToolUseFixture: DevRuntimeFixture = Object.freeze({
@@ -1491,8 +1491,8 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
       flight: Object.freeze({
         bytes: flight.byteLength,
         downloadPath: `/api/runtime/runs/${encodeURIComponent(runId)}/flight`,
-        preview: flight.subarray(0, flightPreviewBytes).toString('base64'),
-        truncated: flight.byteLength > flightPreviewBytes,
+        preview: flight.subarray(0, maximumDevRuntimeFlightPreviewBytes).toString('base64'),
+        truncated: flight.byteLength > maximumDevRuntimeFlightPreviewBytes,
       }),
       state: Object.freeze({
         ...inspection.state,

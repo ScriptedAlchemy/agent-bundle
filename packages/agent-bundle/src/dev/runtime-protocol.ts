@@ -1,5 +1,7 @@
 import type { JsonObject, JsonValue } from './types.ts';
 
+export const maximumDevRuntimeFlightPreviewBytes = 32 * 1024;
+
 export interface RuntimeVector {
   readonly artifactEpochId?: string;
   readonly providerSessionId: string;

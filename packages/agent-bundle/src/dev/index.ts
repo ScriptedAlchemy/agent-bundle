@@ -263,6 +263,7 @@ export type {
   DevRuntimeTreeNode,
   RuntimeVector,
 } from './runtime-protocol.ts';
+export { maximumDevRuntimeFlightPreviewBytes } from './runtime-protocol.ts';
 export {
   ProjectService,
   type PreparedProject,

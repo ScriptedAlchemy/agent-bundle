@@ -1,6 +1,7 @@
 import { isValidElement, type ReactNode } from 'react';
 
 import type { JsonObject, JsonValue } from 'agent-bundle';
+import { maximumDevRuntimeFlightPreviewBytes } from 'agent-bundle/api';
 import type {
   DevRuntimeInspectionEnvelope,
   DevRuntimeTraceSpan,
@@ -8,7 +9,6 @@ import type {
 } from 'agent-bundle/api';
 
 const inspectionStartedAt = '1970-01-01T00:00:00.000Z';
-const flightPreviewBytes = 32 * 1024;
 
 const stripped = Symbol('inspection-stripped');
 type JsonCandidate = JsonValue | typeof stripped;
@@ -236,8 +236,8 @@ export const serializeInspection = (input: SerializeInspectionInput): DevRuntime
     ...(agentVisible === undefined || agentVisible === stripped ? {} : { agentVisible }),
     flight: Object.freeze({
       bytes: rawFlight.byteLength,
-      preview: rawFlight.subarray(0, flightPreviewBytes).toString('base64'),
-      truncated: rawFlight.byteLength > flightPreviewBytes,
+      preview: rawFlight.subarray(0, maximumDevRuntimeFlightPreviewBytes).toString('base64'),
+      truncated: rawFlight.byteLength > maximumDevRuntimeFlightPreviewBytes,
     }),
     ...(modelVisible === undefined || modelVisible === stripped ? {} : { modelVisible }),
     ...(native === undefined || native === stripped ? {} : { native }),
