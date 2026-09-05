@@ -1,4 +1,4 @@
-import { dirname, extname, isAbsolute, relative, resolve } from 'node:path';
+import { dirname, extname, resolve } from 'node:path';
 
 // Aliased: the workspace toolchain is typescript@7 (native compiler, no
 // single-file parse API), and a plain `typescript` dependency here would
@@ -8,9 +8,23 @@ import ts from 'typescript-5';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { deepFreeze } from '../core/freeze.ts';
-import { isRelativeSpecifier, moduleCandidates, readModuleFromDisk } from './module-candidates.ts';
-import { hasExportModifier, positionOf, unwrapExpression } from './syntax.ts';
+import { isRelativeSpecifier } from './module-candidates.ts';
+import {
+  createModuleScopeResolver,
+  describeExpression,
+  rootReferencePath,
+  type ModuleScopeResolver,
+  type ModuleSourceFile,
+  type ReferencePath,
+} from './module-scope.ts';
+import { hasExportModifier, positionOf, unwrapExpression, type SyntaxNode } from './syntax.ts';
 import { emptyRouteConfig } from './types.ts';
+
+// The scope model hands out structural node slices so its shipped declaration
+// never names typescript-5 (see module-scope.ts); every slice is a compiler
+// node, narrowed back here, once, at the boundary.
+const compilerExpression = (node: SyntaxNode): ts.Expression => node as ts.Expression;
+const compilerSourceFile = (sourceFile: ModuleSourceFile): ts.SourceFile => sourceFile as ts.SourceFile;
 
 /** The package subpath route modules import compile-time authoring helpers from. */
 export const routeHelpersSpecifier = 'agent-bundle/routes';
@@ -76,8 +90,9 @@ export interface RouteConfigExtractionOptions {
  *   accepted form (they unwrap to their inner expression);
  * - two constrained reference forms for string values: an identifier bound
  *   to a top-level `const` whose initializer is a string literal, declared
- *   in the same module or `export const`-ed by a module reached through a
- *   relative import inside the project; and `appResourceUri('<app>')`
+ *   in the same module or `export const`-ed by a module reached through
+ *   relative imports inside the project, following alias hops
+ *   (`export const a = b`) any depth (module-scope.ts); and `appResourceUri('<app>')`
  *   imported from `agent-bundle/routes`, which the route-graph compiler
  *   replaces with the referenced App route's `resourceUri`.
  *
@@ -117,105 +132,13 @@ type Extraction =
 const dynamic = (description: string, node: ts.Node): Extraction =>
   ({ dynamic: { description, node }, kind: 'dynamic' });
 
-/** One `import { name as local } from '<specifier>'` binding of the route module. */
-interface ImportedBinding {
-  readonly importedName: string;
-  readonly node: ts.Node;
-  readonly specifier: string;
-}
-
-/** The top-level bindings of one parsed module the reference forms may consult. */
-interface ModuleScope {
-  /** Top-level `const` declarations by local name; the flag records `export`. */
-  readonly consts: ReadonlyMap<string, { readonly exported: boolean; readonly initializer: ts.Expression | undefined }>;
-  readonly imports: ReadonlyMap<string, ImportedBinding>;
-  /** Local names bound by `let`/`var`, functions, classes, or non-named imports: known, but never static. */
-  readonly nonConst: ReadonlySet<string>;
-  readonly sourceFile: ts.SourceFile;
-}
-
-const collectBindingNames = (name: ts.BindingName, into: Set<string>): void => {
-  if (ts.isIdentifier(name)) {
-    into.add(name.text);
-    return;
-  }
-  for (const element of name.elements) {
-    if (!ts.isOmittedExpression(element)) collectBindingNames(element.name, into);
-  }
-};
-
-const scopeOf = (sourceFile: ts.SourceFile): ModuleScope => {
-  const consts = new Map<string, { readonly exported: boolean; readonly initializer: ts.Expression | undefined }>();
-  const imports = new Map<string, ImportedBinding>();
-  const nonConst = new Set<string>();
-  for (const statement of sourceFile.statements) {
-    if (ts.isVariableStatement(statement)) {
-      const isConst = (statement.declarationList.flags & ts.NodeFlags.Const) !== 0;
-      const exported = hasExportModifier(statement);
-      for (const declaration of statement.declarationList.declarations) {
-        if (isConst && ts.isIdentifier(declaration.name)) {
-          consts.set(declaration.name.text, { exported, initializer: declaration.initializer });
-        } else {
-          collectBindingNames(declaration.name, nonConst);
-        }
-      }
-      continue;
-    }
-    if (ts.isImportDeclaration(statement)) {
-      const clause = statement.importClause;
-      if (clause === undefined || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
-      const specifier = statement.moduleSpecifier.text;
-      if (clause.name !== undefined) nonConst.add(clause.name.text);
-      const bindings = clause.namedBindings;
-      if (bindings === undefined) continue;
-      if (ts.isNamespaceImport(bindings)) {
-        nonConst.add(bindings.name.text);
-        continue;
-      }
-      for (const element of bindings.elements) {
-        if (clause.isTypeOnly || element.isTypeOnly) continue;
-        const importedName = element.propertyName?.text ?? element.name.text;
-        imports.set(element.name.text, { importedName, node: element, specifier });
-      }
-      continue;
-    }
-    if ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name !== undefined) {
-      nonConst.add(statement.name.text);
-    }
-  }
-  return { consts, imports, nonConst, sourceFile };
-};
-
-/** Names one rejected construct for the AB4806 message. */
-const describeExpression = (node: ts.Node): string => {
-  if (ts.isIdentifier(node)) {
-    return node.text === 'undefined'
-      ? 'the non-JSON value `undefined`'
-      : `a reference to the identifier ${JSON.stringify(node.text)}`;
-  }
-  if (ts.isCallExpression(node)) return 'a call expression';
-  if (ts.isTemplateExpression(node)) return 'a template literal with substitutions';
-  if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) return 'a function expression';
-  if (ts.isSpreadAssignment(node) || ts.isSpreadElement(node)) return 'a spread';
-  if (ts.isShorthandPropertyAssignment(node)) return 'a shorthand property reference';
-  if (ts.isMethodDeclaration(node) || ts.isGetAccessorDeclaration(node) || ts.isSetAccessorDeclaration(node)) {
-    return 'a method or accessor';
-  }
-  if (ts.isComputedPropertyName(node)) return 'a computed property name';
-  if (ts.isOmittedExpression(node)) return 'an array hole';
-  if (node.kind === ts.SyntaxKind.BigIntLiteral) return 'a bigint literal';
-  if (node.kind === ts.SyntaxKind.RegularExpressionLiteral) return 'a regular expression literal';
-  return `a ${ts.SyntaxKind[node.kind] ?? 'dynamic'} expression`;
-};
-
 const literalPropertyName = (name: ts.PropertyName): string | undefined => {
   if (ts.isIdentifier(name)) return name.text;
   if (ts.isStringLiteral(name) || ts.isNumericLiteral(name)) return name.text;
   return undefined;
 };
 
-const stringLiteralText = (expression: ts.Expression | undefined): string | undefined => {
-  if (expression === undefined) return undefined;
+const stringLiteralText = (expression: ts.Expression): string | undefined => {
   const node = unwrapExpression(expression);
   return ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) ? node.text : undefined;
 };
@@ -231,100 +154,56 @@ const finiteNumber = (value: number, node: ts.Node): Extraction =>
     ? { kind: 'value', value }
     : dynamic(`the non-finite number \`${String(value)}\``, node);
 
-const scriptKindOf = (relativePath: string): ts.ScriptKind => {
-  if (relativePath.endsWith('.tsx')) return ts.ScriptKind.TSX;
-  if (relativePath.endsWith('.jsx')) return ts.ScriptKind.JSX;
-  return ts.ScriptKind.TS;
-};
-
-const parseModule = (path: string, text: string): ts.SourceFile =>
-  ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true, scriptKindOf(path));
-
-const insideProject = (projectRoot: string | undefined, path: string): boolean => {
-  if (projectRoot === undefined) return true;
-  const relativePath = relative(projectRoot, path);
-  return relativePath !== '' && !relativePath.startsWith('..') && !isAbsolute(relativePath);
-};
-
-/** Per-extraction state: the route module's scope, the reference sink, and a sibling-module cache. */
+/** Per-extraction state: the route module's `config` reference path, the shared resolver, and the App-reference sink. */
 interface ExtractionContext {
   readonly appReferences: RouteConfigAppReference[];
-  readonly options: RouteConfigExtractionOptions;
-  readonly readModule: (path: string) => string | undefined;
-  readonly scope: ModuleScope;
-  readonly siblingScopes: Map<string, ModuleScope | undefined>;
-  readonly sourceDirectory: string;
+  readonly resolver: ModuleScopeResolver;
+  /** The `config` binding in the route module: every identifier in the initializer resolves from here. */
+  readonly root: ReferencePath;
 }
 
-type ImportedConstResolution =
-  | { readonly kind: 'value'; readonly value: string }
-  | { readonly kind: 'rejected'; readonly reason: string };
-
-const resolveImportedConst = (
-  binding: ImportedBinding,
-  context: ExtractionContext,
-): ImportedConstResolution => {
-  const from = JSON.stringify(binding.specifier);
-  if (!isRelativeSpecifier(binding.specifier)) {
-    return { kind: 'rejected', reason: `imported from ${from}, which is not a relative module path` };
-  }
-  const candidates = moduleCandidates(context.sourceDirectory, binding.specifier);
-  let scope: ModuleScope | undefined;
-  for (const candidate of candidates) {
-    if (!insideProject(context.options.projectRoot, candidate)) {
-      return { kind: 'rejected', reason: `imported from ${from}, which resolves outside the project` };
-    }
-    if (context.siblingScopes.has(candidate)) {
-      scope = context.siblingScopes.get(candidate);
-    } else {
-      const text = context.readModule(candidate);
-      scope = text === undefined ? undefined : scopeOf(parseModule(candidate, text));
-      context.siblingScopes.set(candidate, scope);
-    }
-    if (scope !== undefined) break;
-  }
-  if (scope === undefined) {
-    return { kind: 'rejected', reason: `imported from ${from}, which does not resolve to a module inside the project` };
-  }
-  const declaration = scope.consts.get(binding.importedName);
-  if (declaration === undefined || !declaration.exported) {
-    return {
-      kind: 'rejected',
-      reason: `imported from ${from}, which does not declare a top-level \`export const ${binding.importedName}\``,
-    };
-  }
-  const value = stringLiteralText(declaration.initializer);
-  if (value === undefined) {
-    return {
-      kind: 'rejected',
-      reason: `imported from ${from}, whose \`export const ${binding.importedName}\` initializer is not a string literal`,
-    };
-  }
-  return { kind: 'value', value };
-};
-
-/** Resolves one identifier through the two constrained reference forms. */
+/**
+ * Resolves one identifier through the const string-literal reference form:
+ * a top-level `const` in this module or an `export const` of a module reached
+ * through relative imports inside the project, following alias hops
+ * (`export const a = b`) any depth. The first hop keeps the wording the
+ * grammar documents; a failure deeper in the chain prints the chain, so the
+ * boundary is named where it lies.
+ */
 const extractIdentifier = (node: ts.Identifier, context: ExtractionContext): Extraction => {
   if (node.text === 'undefined') return dynamic(describeExpression(node), node);
   const reference = `a reference to the identifier ${JSON.stringify(node.text)}`;
-  const local = context.scope.consts.get(node.text);
-  if (local !== undefined) {
-    const value = stringLiteralText(local.initializer);
-    return value === undefined
-      ? dynamic(`${reference}, whose top-level const initializer is not a string literal`, node)
-      : { kind: 'value', value };
+  const resolved = context.resolver.resolve(context.root, node.text);
+  switch (resolved.kind) {
+    case 'resolved': {
+      const value = stringLiteralText(compilerExpression(resolved.initializer));
+      if (value !== undefined) return { kind: 'value', value };
+      return resolved.scope === context.root.scope
+        ? dynamic(`${reference}, whose top-level const initializer is not a string literal`, node)
+        : dynamic(
+          `${reference}, declared in ${resolved.scope.relativePath}, whose \`export const ${resolved.binding}\` initializer is not a string literal`,
+          node,
+        );
+    }
+    case 'unresolved': {
+      if (resolved.chain.length > 2) {
+        return dynamic(`${reference} resolving through ${resolved.chain.slice(1).join(' -> ')}, ${resolved.reason}`, node);
+      }
+      if (resolved.boundary === 'non-const') {
+        return dynamic(`${reference}, which is not a top-level \`const\` string literal`, node);
+      }
+      if (resolved.boundary === 'unknown') {
+        return dynamic(`${reference}, which is neither a top-level const string literal in this module nor a named import from a relative module`, node);
+      }
+      return dynamic(`${reference}, ${resolved.reason}`, node);
+    }
+    case 'cycle':
+      return dynamic(`${reference}, whose alias chain ${resolved.chain.slice(1).join(' -> ')} is a reference cycle`, node);
+    default: {
+      const unreachable: never = resolved;
+      throw new TypeError(`Unhandled reference resolution ${String(unreachable)}.`);
+    }
   }
-  const imported = context.scope.imports.get(node.text);
-  if (imported !== undefined) {
-    const resolved = resolveImportedConst(imported, context);
-    return resolved.kind === 'value'
-      ? { kind: 'value', value: resolved.value }
-      : dynamic(`${reference}, ${resolved.reason}`, node);
-  }
-  if (context.scope.nonConst.has(node.text)) {
-    return dynamic(`${reference}, which is not a top-level \`const\` string literal`, node);
-  }
-  return dynamic(`${reference}, which is neither a top-level const string literal in this module nor a named import from a relative module`, node);
 };
 
 /** Recognizes `appResourceUri('<app>')` imported from the route helpers subpath. */
@@ -335,7 +214,7 @@ const extractAppReferenceCall = (
 ): Extraction => {
   const callee = unwrapExpression(node.expression);
   if (!ts.isIdentifier(callee)) return dynamic(describeExpression(node), node);
-  const binding = context.scope.imports.get(callee.text);
+  const binding = context.root.scope.imports.get(callee.text);
   if (binding === undefined || binding.importedName !== appResourceUriHelperName) {
     if (callee.text === appResourceUriHelperName) {
       return dynamic(`a call to ${JSON.stringify(callee.text)} that is not imported from ${routeHelpersSpecifier}`, node);
@@ -359,7 +238,7 @@ const extractAppReferenceCall = (
   }
   context.appReferences.push({
     path,
-    position: positionOf(context.scope.sourceFile, node),
+    position: positionOf(context.root.scope.sourceFile, node),
     reference: extracted.value,
   });
   // The reference text stands in until the graph compiler substitutes the
@@ -489,13 +368,9 @@ export const extractRouteConfig = (
   sourcePath: string,
   options: RouteConfigExtractionOptions = {},
 ): ExtractedRouteConfig => {
-  const sourceFile = ts.createSourceFile(
-    relativePath,
-    moduleText,
-    ts.ScriptTarget.Latest,
-    true,
-    scriptKindOf(relativePath),
-  );
+  const resolver = createModuleScopeResolver(options);
+  const scope = resolver.scopeOf(moduleText, relativePath, sourcePath);
+  const sourceFile = compilerSourceFile(scope.sourceFile);
   const site = findConfigExport(sourceFile);
   if (site === undefined) return emptyExtraction;
   if (site.initializer === undefined) {
@@ -512,11 +387,8 @@ export const extractRouteConfig = (
   }
   const context: ExtractionContext = {
     appReferences: [],
-    options,
-    readModule: options.readModule ?? readModuleFromDisk,
-    scope: scopeOf(sourceFile),
-    siblingScopes: new Map(),
-    sourceDirectory: dirname(sourcePath),
+    resolver,
+    root: rootReferencePath(scope, 'config'),
   };
   const extracted = extractExpression(site.initializer, [], context);
   if (extracted.kind === 'dynamic') {

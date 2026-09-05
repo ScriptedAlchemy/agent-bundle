@@ -5,6 +5,7 @@ import ts from 'typescript-5';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { isInside, toPosixPath, toPosixRelative } from '../core/paths.ts';
 import { isRelativeSpecifier, moduleCandidates, readModuleFromDisk } from './module-candidates.ts';
+import { parseModule } from './module-scope.ts';
 
 /**
  * Framework entries whose module graph carries the compiler. Every generated
@@ -65,13 +66,6 @@ export interface ScanFrameworkValueImportsOptions {
   /** The scanned module's absolute path; relative imports resolve against its directory. */
   readonly source: string;
 }
-
-const scriptKindOf = (path: string): ts.ScriptKind => {
-  if (path.endsWith('.tsx')) return ts.ScriptKind.TSX;
-  if (path.endsWith('.jsx')) return ts.ScriptKind.JSX;
-  if (path.endsWith('.js') || path.endsWith('.mjs') || path.endsWith('.cjs')) return ts.ScriptKind.JS;
-  return ts.ScriptKind.TS;
-};
 
 const compareStrings = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
 
@@ -283,7 +277,9 @@ const scanModule = (
   visited: Set<string>,
   findings: FrameworkValueImport[],
 ): void => {
-  const sourceFile = ts.createSourceFile(source, moduleText, ts.ScriptTarget.Latest, true, scriptKindOf(source));
+  // parseModule keeps `ts.*` out of module-scope's signatures; the structural
+  // ModuleSourceFile it returns is the compiler's SourceFile.
+  const sourceFile = parseModule(source, moduleText) as ts.SourceFile;
   for (const { form, specifier } of valueImportsOf(sourceFile)) {
     if (compilerCarrying.has(specifier)) {
       findings.push({ form, importer: source, specifier });
