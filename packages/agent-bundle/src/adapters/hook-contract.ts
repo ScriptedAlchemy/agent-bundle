@@ -632,7 +632,6 @@ export const eventFlightArtifactEpochToken = '__AGENT_BUNDLE_EVENT_FLIGHT_ARTIFA
 const standaloneEventRoute = (route: NonNullable<NormalizedHook['eventRoute']>): boolean =>
   route.runtime === 'standalone' || route.fallback === 'standalone';
 
-/** The independently bundleable preflight leaf on an event route, when present. */
 export const eventRoutePreflight = (
   route: NormalizedHook['eventRoute'],
 ): NonNullable<NormalizedHook['eventRoute']>['preflight'] => route?.preflight;
@@ -672,11 +671,8 @@ const eventRouteHookWrapperSource = (
   // their session; only projects whose state is workspace-durable have one.
   const retiresLineage = standalone && durableLineage && route.event === 'session/end';
   const projectBindings = [
-    ...new Set([
-      ...(standalone ? ['createCanonicalEventProps'] : []),
-      ...(standalone ? ['projectEventDocument'] : []),
-      'validateNativeEventEnvelope',
-    ]),
+    ...(standalone ? ['createCanonicalEventProps', 'projectEventDocument'] : []),
+    'validateNativeEventEnvelope',
   ];
   return [
     // Only a wrapper that can render in-process needs the operator `.env`
@@ -1311,26 +1307,17 @@ export const planHooks = (
       ...(timeout === undefined ? {} : { timeout }),
     };
     const preflight = eventRoutePreflight(hook.eventRoute);
+    const hostRevision = contract.hostContractRevision ?? target;
+    const durableLineage = model.state?.lifetime === 'workspace-durable';
+    const renderedSource = hook.eventRoute === undefined
+      ? contract.wrapperSource(wrapper)
+      : eventRouteHookWrapperSource(wrapper, hostRevision, durableLineage);
     hookEntries.push({
       ...wrapper,
-      ...(hook.eventRoute === undefined || preflight === undefined
-        ? {}
-        : {
-          executeVirtualSource: eventRouteHookWrapperSource(
-            wrapper,
-            contract.hostContractRevision ?? target,
-            model.state?.lifetime === 'workspace-durable',
-          ),
-        }),
-      virtualSource: hook.eventRoute === undefined
-        ? contract.wrapperSource(wrapper)
-        : preflight === undefined
-          ? eventRouteHookWrapperSource(
-              wrapper,
-              contract.hostContractRevision ?? target,
-              model.state?.lifetime === 'workspace-durable',
-            )
-          : eventRoutePreflightWrapperSource(wrapper, contract.hostContractRevision ?? target),
+      ...(preflight === undefined ? {} : { executeVirtualSource: renderedSource }),
+      virtualSource: preflight === undefined
+        ? renderedSource
+        : eventRoutePreflightWrapperSource(wrapper, hostRevision),
     });
   }
 

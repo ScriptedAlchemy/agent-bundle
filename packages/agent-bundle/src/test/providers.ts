@@ -78,10 +78,10 @@ export const selectManifestProviderDescriptors = (
   const descriptors = manifest.providers ?? [];
   const route = routeId === undefined ? undefined : manifest.routes[routeId];
   const declaration = route?.kind === 'event-route' ? route.config['providers'] : undefined;
-  if (
-    declaration !== undefined
-    && (!Array.isArray(declaration) || declaration.some((key) => typeof key !== 'string'))
-  ) {
+  if (declaration !== undefined && !(
+    Array.isArray(declaration)
+    && declaration.every((key): key is string => typeof key === 'string')
+  )) {
     throw new AgentTestError(
       'contract-violation',
       `Event route ${JSON.stringify(routeId)} has malformed config.providers in the compiled test manifest.`,
@@ -89,7 +89,7 @@ export const selectManifestProviderDescriptors = (
   }
   const selection = selectRequiredProviders(
     descriptors,
-    declaration as readonly string[] | undefined,
+    declaration === undefined ? undefined : declaration,
   );
   if (!selection.ok) {
     throw new AgentTestError(

@@ -1,4 +1,5 @@
 import { settleBeforeAbort } from '../core/abort.ts';
+import { isRecord } from '../core/strict-json.ts';
 import type { CanonicalAgentEvent } from '../routes/events.ts';
 import type { AgentEventCanonicalIdentity } from '../routes/public.ts';
 import type { AgentTerminal } from '../terminal-capability.ts';
@@ -23,13 +24,11 @@ export type EventPreflightResult =
  */
 export interface EventPreflightContext<E extends CanonicalAgentEvent = CanonicalAgentEvent> {
   readonly canonical: AgentEventCanonicalIdentity<E>;
-  /** Target-specific host identity already known from the compiled hook. */
   readonly host: Readonly<{ readonly name: string; readonly nativeEvent: string }>;
   readonly signal: AbortSignal;
   readonly terminal: AgentTerminal;
 }
 
-/** Sync or async gate export on an event route module. */
 export type EventPreflight<E extends CanonicalAgentEvent = CanonicalAgentEvent> = (
   context: EventPreflightContext<E>,
 ) => EventPreflightResult | Promise<EventPreflightResult>;
@@ -38,9 +37,6 @@ type PreflightObjectOutcome = 'continue' | 'deny';
 
 const isPreflightObjectOutcome = (value: unknown): value is PreflightObjectOutcome =>
   value === 'continue' || value === 'deny';
-
-const isPlainObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
 
 const unsupportedResult = (detail: string): never => {
   throw new TypeError(`Event preflight result ${detail}`);
@@ -103,7 +99,7 @@ export const validateEventPreflightResult = (
   event: CanonicalAgentEvent,
 ): EventPreflightResult => {
   if (value === 'execute') return 'execute';
-  if (!isPlainObject(value)) {
+  if (!isRecord(value)) {
     return unsupportedResult('must be "execute" or a continue/deny object.');
   }
   const outcome = value.outcome;

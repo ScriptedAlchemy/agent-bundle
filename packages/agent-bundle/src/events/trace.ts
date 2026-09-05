@@ -73,7 +73,6 @@ interface EventTraceEventBase<K extends EventTraceEventKind, P extends EventTrac
   readonly execution: EventTraceExecution;
   readonly kind: K;
   readonly phase: P;
-  /** Position within this execution's trace, starting at 0. */
   readonly sequence: number;
 }
 
@@ -89,7 +88,6 @@ export interface EventTraceExecuteStart extends EventTraceEventBase<'execute.sta
 }
 export type EventTraceProvidersStart = EventTraceEventBase<'providers.start', 'providers'>;
 export interface EventTraceProvidersFinish extends EventTraceEventBase<'providers.finish', 'providers'> {
-  /** Providers materialized for this request. */
   readonly count: number;
   /** Present when `providers.start` was observed on this tracer. */
   readonly durationMs?: number;
@@ -306,12 +304,6 @@ export const createEventTracer = (options: CreateEventTracerOptions): EventTrace
     }
   };
 
-  /**
-   * `build` receives the timestamp, the next sequence number, and the trace's
-   * first timestamp before this event (undefined when this is the first).
-   * The sequence advances only when an event is actually built, so a broken
-   * clock leaves no gap.
-   */
   const emit = (build: (at: number, sequence: number, traceStartedAt: number | undefined) => EventTraceEvent): void => {
     if (closed) return;
     const at = readClock();
