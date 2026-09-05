@@ -91,8 +91,6 @@ it('validates declared payload runtime dependencies and normalizes them sorted a
     expect(built.model.payloads).toMatchObject([
       { name: 'runtime', runtimeDependencies: ['sharp', 'zod'] },
     ]);
-    // The manifest row is the normalized payload, serialized: the same hosts the
-    // payload was packaged for and the same sorted, unique dependency list.
     const manifest = parseArtifactManifest(await readFile(join(root, 'out', 'agent-bundle.manifest.json'), 'utf8'));
     expect(manifest.distribution.payloads).toEqual([
       { hosts: ['claude', 'codex', 'portable'], name: 'runtime', runtimeDependencies: ['sharp', 'zod'] },
