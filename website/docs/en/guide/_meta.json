@@ -6,6 +6,11 @@
   },
   {
     "type": "dir-section-header",
+    "name": "concepts",
+    "label": "Concepts"
+  },
+  {
+    "type": "dir-section-header",
     "name": "authoring",
     "label": "Authoring"
   },
