@@ -732,7 +732,8 @@ declare module 'agent-bundle/app' {
 
 成员就是项目生成的 MCP **工具**路由：`input` 来自各路由的 `inputSchema`，`result` 来自
 `resultSchema`。该声明以 type-only 方式导入路由模块，所以不会把路由模块、schema 或服务器代码带入 App
-文档。没有 augmentation 时——例如手写服务器——`call()` 仍能以 `unknown` 输入与结果工作，视图也可以
+文档。模板已经在 `tsconfig.json` 的 `include` 中列出 `".agent-bundle/routes.d.ts"`；路由项目漏掉它时
+会收到 `AB4834`。没有 augmentation 时——例如手写服务器——`call()` 仍能以 `unknown` 输入与结果工作，视图也可以
 通过同一个结构化 `AppRegister` seam 声明自己的本地契约 map；[MCP App 示例](../../examples/mcp-app.mdx)
 就为手写的 `status` 服务器这样声明 `show-status` 与 `refresh-status`。`AppRouteId`、
 `AppRouteInput<Id>` 与 `AppRouteResult<Id>` 为 wrapper 命名同一套类型表面。
@@ -740,7 +741,8 @@ declare module 'agent-bundle/app' {
 **调用与结果。** `call()` 直接返回结构化结果对象；MCP 的 `content`、`_meta` 与 `isError` envelope
 只是 transport 数据。工具结果带有 `isError: true` 时，它会以 `code: 'rpc'` 拒绝，并把完整结果保存在
 `error.data`；没有 object `structuredContent` 或结果格式不合法时则以 `invalid-message` 拒绝。只有根为
-对象的 `resultSchema` 才会产生 `structuredContent`，因此 scalar 或 array 结果不是带类型的 App call。
+对象的 `resultSchema` 才会产生 `structuredContent`；契约表仍会定型 scalar 或 array 路由，但对它们的
+`call()` 每次都会以 `invalid-message` 拒绝。
 `request(method, params?)` 是读取 `resources/read` 及宿主支持的 `ui/*` method 的底层逃生舱，按原样返回
 JSON-RPC result。两者都会在尚未 `connect()` 时先连接；每个请求都接受
 `{ signal?: AbortSignal, timeoutMs?: number }`。客户端默认超时为 15 秒，也可在
@@ -759,7 +761,7 @@ JSON-RPC result。两者都会在尚未 `connect()` 时先连接；每个请求�
 **完整公开表面。** 该入口导出 `createAppClient`、`AppClient`、`AppRegister`、
 `AppRouteContract`、`AppRoutes`、`AppRouteId`、`AppRouteInput`、`AppRouteResult`、
 `AppClientError`、`AppClientErrorCode`、`AppConnectOptions`、`CreateAppClientOptions`、
-`AppRequestOptions`、`AppImplementation`、`AppInitializeResult`、`AppMessageEvent`、
+`AppRequestOptions`、`AppAbortSignal`、`AppImplementation`、`AppInitializeResult`、`AppMessageEvent`、
 `AppToolInputListener`、`AppToolResultListener`、`AppToolErrorListener`、
 `AppToolCancelledListener`、可注入的 `AppWindow` / `AppMessageTarget` port，以及
 `APP_PROTOCOL_VERSION`。`AppClient` 提供只读 `connected` / `disposed` 状态与 `connect`、
@@ -821,7 +823,14 @@ MCP App "status" failed to compile: views/status.ts:1:10: Module build failed
 包括 `tsconfig.json` 问题那种不带位置的形式。
 
 成功的构建会在 `Built …` 之后为每个 App 打印一行，按 target 与 App 名称排序，给出输出体积及其
-gzip 体积（`--json` 中为 `build.compiledMcpApps[].size.bytes` 与 `.gzipBytes`）。数字来自当次实际
+gzip 体积（`--json` 中为 `build.compiledMcpApps[].size.bytes` 与 `.gzipBytes`）：
+
+```text
+Built <plugin> to …/<plugin>/artifact
+MCP App <name> (<target>): mcp-apps/<name>.html <size> (<gzip size> gzip)
+```
+
+数字来自当次实际
 输出；不要把某次示例构建的体积当作固定契约。
 
 任何导入 `@modelcontextprotocol/ext-apps` 的视图都会带上 `zod`（v3 与 v4）、
