@@ -8,6 +8,7 @@ import { userDataStateRoot } from '@agent-bundle/runtime';
 import { expect, it } from '@rstest/core';
 
 import { rstestWorkerRoot } from '../../../rstest.worker-isolation.ts';
+import { parseArtifactManifest } from '../src/api.ts';
 import { exists } from '../src/core/paths.ts';
 import { openPackedMcpServer, removeProjectSource } from '../src/test/packed.ts';
 import { resolveWebLaunch } from '../src/web-host/launch.ts';
@@ -127,7 +128,10 @@ it('serves a state-writing tool from a read-only installed artifact without writ
     const webManifest = await readWebManifest(join(artifact, 'agent-bundle.manifest.json'));
     const declaredApp = webManifest?.apps.find((candidate) => candidate.app === app);
     if (declaredApp === undefined) throw new Error(`The artifact manifest exposes no ${app} App: ${JSON.stringify(webManifest)}`);
-    const launch = await resolveWebLaunch({ app: declaredApp, env, pluginRoot: artifact });
+    const manifest = parseArtifactManifest(await readFile(join(artifact, 'agent-bundle.manifest.json'), 'utf8'));
+    const server = manifest.executables.mcpServers.find((candidate) => candidate.name === declaredApp.server);
+    if (server?.launch === undefined) throw new Error(`The artifact manifest declares no launch for ${declaredApp.server}.`);
+    const launch = await resolveWebLaunch({ app: declaredApp, env, launch: server.launch, pluginRoot: artifact });
     expect(launch.command).toBe(process.execPath);
     expect(launch.cwd).toBe(artifact);
     expect(launch.env['AGENT_BUNDLE_PLUGIN_ROOT']).toBe(artifact);

@@ -114,6 +114,7 @@ it('keeps failed epochs inactive and adopts the next passing epoch on one live h
     });
     await waitForActive(server);
     client = await openProxy(project.root, server.url);
+    const activeClient = client;
     events = await projectEvents(server.url);
     await events.opened;
     await within(events.until('"summary":"Development contract matrix passed."'), 30_000, 'initial matrix');
@@ -176,7 +177,7 @@ it('keeps failed epochs inactive and adopts the next passing epoch on one live h
         adoption.contracts?.state === 'passed' &&
         adoption.adoptedEpochId !== initialEpoch.activeEpoch.id;
     });
-    await waitFor(async () => await versionOf(client) === 'v3');
+    await waitFor(async () => await versionOf(activeClient) === 'v3');
     const passingEpoch = server.status().artifact;
     if (passingEpoch.state !== 'active') throw new Error('Expected the repaired build to publish an artifact.');
     const passingWire = await within(
@@ -208,6 +209,7 @@ it('adopts artifact.available directly when development contracts are not declar
     server = await startDevServer({ open: false, port: 0, root: project.root });
     await waitForActive(server);
     client = await openProxy(project.root, server.url);
+    const activeClient = client;
     expect(await versionOf(client)).toBe('v1');
     const changed = Promise.withResolvers<void>();
     client.setNotificationHandler('notifications/tools/list_changed', async () => changed.resolve());
@@ -215,7 +217,7 @@ it('adopts artifact.available directly when development contracts are not declar
     await replaceWatchedSource(project.root, source, toolSource('v3', project.root));
     await within(changed.promise);
 
-    await waitFor(async () => await versionOf(client) === 'v3');
+    await waitFor(async () => await versionOf(activeClient) === 'v3');
     const artifact = server.status().artifact;
     if (artifact.state !== 'active') throw new Error('Expected the rebuilt artifact to be active.');
     expect(server.status().hostAdoption).toEqual({ adoptedEpochId: artifact.activeEpoch.id, mode: 'direct' });

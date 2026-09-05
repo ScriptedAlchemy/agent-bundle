@@ -308,6 +308,7 @@ export const treeInventory = async (root: string): Promise<TreeInventory> => {
 export const manifestInventory = async (
   root: string,
   manifest: ArtifactManifest,
+  options: { readonly verifyHashes?: boolean } = {},
 ): Promise<TreeInventory> => {
   const rootMetadata = await lstat(root);
   if (rootMetadata.isSymbolicLink() || !rootMetadata.isDirectory()) throw unsupportedEntry('.');
@@ -341,6 +342,7 @@ export const manifestInventory = async (
     }
     const row = rows.get(relativePath);
     if (
+      options.verifyHashes !== false &&
       row !== undefined &&
       createHash('sha256').update(bytes).digest('hex') !== row.sha256
     ) {
