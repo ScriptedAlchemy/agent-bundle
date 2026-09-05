@@ -28,7 +28,6 @@ import {
   installReceiptStorePath,
   isRemnantReceipt,
   isRuntimeStateRemnant,
-  manifestInventory,
   readInstallReceiptFile,
   replaceInstalledTree,
   stageArtifact,
@@ -513,7 +512,7 @@ const installPublicCli = async (
     destination = join(dirname(entry.installPath), identity.version);
     let installed: TreeInventory | undefined;
     try {
-      installed = await manifestInventory(entry.installPath, identity.manifest);
+      installed = await bundleInventory(await readBundleIdentity(entry.installPath, host));
     } catch (error) {
       // The host says a copy is installed but it cannot be compared: never let that pass as "no drift".
       if (options.replace !== true) {

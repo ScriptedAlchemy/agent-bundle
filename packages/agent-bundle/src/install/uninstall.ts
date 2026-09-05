@@ -32,7 +32,7 @@ import {
   type InstallScope,
   type PublicHostInstalledEntry,
 } from './install.ts';
-import { readBundleIdentity, type PluginIdentity } from './identity.ts';
+import { bundleInventory, readBundleIdentity, type PluginIdentity } from './identity.ts';
 import {
   assertRealAncestors,
   createInstallReceipt,
@@ -1191,7 +1191,7 @@ const uninstallPublicCli = async (
     } else {
       let installedHash: string | undefined;
       try {
-        installedHash = (await treeInventory(entry.installPath)).hash;
+        installedHash = (await bundleInventory(await readBundleIdentity(entry.installPath, host))).hash;
       } catch (error) {
         if (!isErrno(error, 'ENOENT')) {
           if (!force) {
