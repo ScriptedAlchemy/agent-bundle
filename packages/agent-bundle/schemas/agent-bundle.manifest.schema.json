@@ -297,8 +297,17 @@
         },
         "path": {
           "$ref": "#/$defs/relativePath",
+          "description": "Root-relative POSIX path of the file; never the manifest itself and never under the runtime-owned `state/` root (any letter case).",
           "not": {
-            "const": "agent-bundle.manifest.json"
+            "anyOf": [
+              {
+                "const": "agent-bundle.manifest.json"
+              },
+              {
+                "type": "string",
+                "pattern": "^[Ss][Tt][Aa][Tt][Ee](/|$)"
+              }
+            ]
           }
         },
         "sha256": {

@@ -7,7 +7,7 @@ import { Effect } from 'effect';
 
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { errorMessage, isErrno } from '../core/errors.ts';
-import { exists } from '../core/paths.ts';
+import { exists, isPreservedRuntimeRoot } from '../core/paths.ts';
 import { runPromise } from '../effect/boundary.ts';
 import { liftPromise } from '../effect/lift.ts';
 import { cacheHasPlugin, readHeadCommit } from './cursor-hooks-registration.ts';
@@ -43,7 +43,6 @@ import {
   installReceiptFile,
   installReceiptFormat,
   installReceiptStoreDirectory,
-  isPreservedRuntimeRoot,
   isRemnantReceipt,
   listStoredInstallReceipts,
   pruneEmptyDirectory,

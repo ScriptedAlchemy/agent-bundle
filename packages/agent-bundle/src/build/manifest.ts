@@ -4,7 +4,7 @@ import {
   parseRuntimeVersion,
   satisfiesGeneratedRuntimeFloor,
 } from '../core/runtime.ts';
-import { isRelocatablePosixPath } from '../core/paths.ts';
+import { isPreservedRuntimeRoot, isRelocatablePosixPath, preservedRuntimeEntries } from '../core/paths.ts';
 import { isValidPackageName, isValidPackageVersion } from '../core/project-context.ts';
 import { isPlainRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { providerKeyFromName } from '../routes/providers.ts';
@@ -629,6 +629,9 @@ const parseFiles = (value: unknown): readonly ArtifactManifestFile[] => {
     }
     const path = requirePath(file.path, `files[${index}].path`);
     if (path === artifactManifestName) fail(`files[${index}].path must not name the manifest itself.`);
+    if (isPreservedRuntimeRoot(path.split('/')[0]!)) {
+      fail(`files[${index}].path must not be under the runtime-owned root ${JSON.stringify(`${preservedRuntimeEntries[0]}/`)}.`);
+    }
     return {
       bytes: file.bytes as number,
       kind: file.kind as ArtifactManifestFileKind,

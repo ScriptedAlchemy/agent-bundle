@@ -778,7 +778,7 @@ simply not been built yet is a validation **warning** that only
 | Code | Severity | Trigger |
 | --- | --- | --- |
 | `AB4740` | error | The `payload` block, one entry, or its `targets` list is malformed, or a payload selects an unknown target. A `runtimeDependencies` list that is not an array of nonempty strings is also `AB4740`. |
-| `AB4741` | error | A payload destination is not a safe directory name, or shadows a compiler-owned artifact namespace (`assets`, `hooks`, `mcp`, `mcp-apps`, `scripts`, `skills`, root documents). |
+| `AB4741` | error | A payload destination is not a safe directory name, shadows a compiler-owned artifact namespace (`assets`, `hooks`, `mcp`, `mcp-apps`, `scripts`, `skills`, root documents), or names the runtime-owned `state` root in any letter case — the manifest never indexes a file under `state/`, and installers neither copy nor own that root. |
 | `AB4742` | error | A payload source escapes the project root, is not a directory, or contains another payload's source. |
 | `AB4743` | warning | A declared payload directory does not exist yet or contains no files. Run the project's own build first. |
 | `AB4744` | error | A `{ prebuilt: ... }` entry (MCP server or hook handler) does not resolve inside a declared payload, or its payload does not select every target the component needs. |

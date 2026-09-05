@@ -406,6 +406,7 @@ it('reports the prebuilt payload source diagnostics', async () => {
       "    bin: './built/app',",
       "    'mcp-apps': './built/app',",
       "    'output-styles': './built/app',",
+      "    State: './built/app',",
       "    workflows: './built/app',",
       "    absent: './built/never-built',",
       "    runtime: { source: './built/runtime', targets: ['claude'] },",
@@ -416,8 +417,8 @@ it('reports the prebuilt payload source diagnostics', async () => {
   try {
     const result = await validate({ root });
     const codes = result.diagnostics.map((diagnostic) => [diagnostic.code, diagnostic.severity] as const);
-    // The reserved destination name.
-    expect(codes.filter(([code]) => code === 'AB4741')).toHaveLength(4);
+    // The reserved destination names, the runtime-owned state root in any letter case among them.
+    expect(codes.filter(([code]) => code === 'AB4741')).toHaveLength(5);
     expect(result.diagnostics.find((diagnostic) =>
       diagnostic.code === 'AB4741' && diagnostic.message.includes('"bin"'))?.recovery).toContain('claude.bin');
     // The not-yet-built payload directory warns instead of failing validation.

@@ -18,7 +18,7 @@ import { basename, dirname, join, resolve, sep } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
-import { exists } from '../core/paths.ts';
+import { exists, isPreservedRuntimeRoot } from '../core/paths.ts';
 import { artifactManifestName, type ArtifactManifest } from '../build/manifest.ts';
 import { OPERATOR_ENV_FILE_NAMES } from '../launch-env.ts';
 
@@ -88,17 +88,6 @@ export interface InstallRegistration {
   readonly scope?: InstallReceiptScope;
 }
 
-/** Root entries owned by generated runtime code; installers never remove or rewrite them. */
-export const preservedRuntimeEntries: readonly string[] = Object.freeze(['state']);
-
-/**
- * Whether a root entry name is a preserved runtime root. Matched
- * case-insensitively: on case-insensitive filesystems `State/` *is* `state/`,
- * so no spelling of a runtime root may be inventoried, staged, or claimed by a
- * receipt.
- */
-export const isPreservedRuntimeRoot = (name: string): boolean =>
-  preservedRuntimeEntries.includes(name.toLowerCase());
 
 /**
  * Root files every emitted Cursor-compatible bundle carries. A receipt-less

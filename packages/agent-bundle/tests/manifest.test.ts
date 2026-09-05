@@ -413,6 +413,15 @@ it('round-trips and deeply freezes a compiled server launch record and the optio
   expect(Object.isFrozen(manifest.web?.apps[0])).toBe(true);
 });
 
+it('rejects a files[] row under the runtime-owned state root in any letter case', () => {
+  for (const path of ['state/index.json', 'State/index.json', 'state']) {
+    const manifest = clone() as unknown as { files: { path: string }[] };
+    manifest.files[0]!.path = path;
+    expect(() => parseArtifactManifest(canonicalBytes(manifest)))
+      .toThrow('files[0].path must not be under the runtime-owned root "state/".');
+  }
+});
+
 it('rejects any manifestVersion other than the closed current version', () => {
   const manifest = clone() as unknown as Record<string, unknown>;
   manifest.manifestVersion = 3;

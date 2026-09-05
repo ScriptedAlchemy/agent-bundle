@@ -54,6 +54,18 @@ export const assertInside = (root: string, candidate: string): string => {
 /** One case-insensitive alphanumeric-leading path segment; structurally unable to be `.` or `..`. */
 export const isSafePathSegment = (value: string): boolean => /^[a-z0-9][a-z0-9._-]*$/iu.test(value);
 
+/** Root entries owned by generated runtime code; the compiler never emits under them and installers never remove or rewrite them. */
+export const preservedRuntimeEntries: readonly string[] = Object.freeze(['state']);
+
+/**
+ * Whether a root entry name is a preserved runtime root. Matched
+ * case-insensitively: on case-insensitive filesystems `State/` *is* `state/`,
+ * so no spelling of a runtime root may be emitted, inventoried, staged, or
+ * claimed by a receipt.
+ */
+export const isPreservedRuntimeRoot = (name: string): boolean =>
+  preservedRuntimeEntries.includes(name.toLowerCase());
+
 /** A non-empty relative path (POSIX or Windows form) whose segments never traverse upward. */
 export const isContainedRelativePath = (value: string): boolean =>
   value.length > 0 &&

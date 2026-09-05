@@ -525,6 +525,8 @@ const schemaEncodedRules: readonly { readonly apply: (manifest: MutableManifest)
   { apply: (manifest) => { manifest.routes.digest = 'abc'; }, rule: 'sha256 fields are 64 characters' },
   { apply: (manifest) => { manifest.application.description = ''; }, rule: 'strings are non-empty' },
   { apply: (manifest) => { manifest.files[0]!.path = 'agent-bundle.manifest.json'; }, rule: 'files never name the manifest' },
+  { apply: (manifest) => { manifest.files[0]!.path = 'state/index.json'; }, rule: 'files are never under the runtime-owned state root' },
+  { apply: (manifest) => { manifest.files[0]!.path = 'State/index.json'; }, rule: 'files are never under the runtime-owned state root in any letter case' },
   { apply: (manifest) => { manifest.files[0]!.path = '../escape'; }, rule: 'paths have no .. segment' },
   { apply: (manifest) => { manifest.files[0]!.path = './claude/hooks.json'; }, rule: 'paths have no . segment' },
   { apply: (manifest) => { manifest.files[0]!.path = '/claude/hooks.json'; }, rule: 'paths are relative' },
