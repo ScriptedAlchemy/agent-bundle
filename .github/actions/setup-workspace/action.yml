@@ -1,0 +1,122 @@
+# Set up workspace: pnpm + Node.js via pnpm/setup@v2, then
+# `pnpm install --frozen-lockfile`, each with a bounded retry.
+#
+# Why this exists (#576, flake table): on 2026-09-04 `pnpm/setup@v2` failed
+# eight CI runs before any repository code ran —
+# `Could not download https://registry.npmjs.org/@pnpm/exe/11.23.0: 504
+# Gateway Timeout` / `fetch failed` — and every one was green on rerun. The
+# action downloads pnpm's executable from the npm registry as its very first
+# network call and exposes no retry input (its inputs are `version`, `dest`,
+# `runtime`, `cache`, `cache-dependency-path`, `working-directory`,
+# `package-json-file`, `require-lockfile`, `install`, `token`), so the retry
+# lives here instead of in every job:
+#
+#   1. `pnpm/setup@v2` with `continue-on-error`; on failure, wait 15 s and run
+#      it once more. The second attempt is not `continue-on-error`, so a
+#      second failure fails the job. (`steps.<id>.outcome` is the result
+#      before `continue-on-error` is applied, so it reads `failure` for a
+#      failed first attempt even though the step's conclusion is `success`.)
+#   2. `pnpm install --frozen-lockfile` in a 3-attempt loop (10 s, then 20 s
+#      back-off), for the same registry 5xx shape during package fetches.
+#
+# Both retries are bounded: a persistent registry outage still fails the job
+# within roughly a minute of extra wall time (15 s + 10 s + 20 s of sleeps)
+# instead of looping. A failed first `pnpm/setup` attempt leaves a harmless
+# post step behind — it finds no cache state and logs that it is not saving.
+#
+# Jobs whose pools launch a browser also pass `playwright-browser` (e.g.
+# `chromium`): the action then runs `pnpm exec playwright install` for that
+# browser, so the build the tests drive is the one pinned by the `playwright`
+# version in pnpm-lock.yaml, not whatever Chrome the runner image ships that
+# week (#576). No `--with-deps`: the ubuntu-latest image ships Google Chrome,
+# whose shared libraries are the ones the bundled Chromium needs, and
+# `--with-deps` would add an apt round-trip (one more network dependency per
+# job) to install what is already there. If a future image drops Chrome, the
+# launch error names the missing library — add `--with-deps` then.
+# Playwright's installer retries its own downloads.
+#
+# Every job that starts from a checkout uses it as
+#
+#   - uses: actions/checkout@v7
+#   - uses: ./.github/actions/setup-workspace
+#     with:
+#       node-version: ${{ matrix.node-version }}   # or a literal, e.g. 22.19.0
+#       playwright-browser: chromium                # only for browser-driving jobs
+#
+# A `./` action path resolves against the runner workspace, so
+# `actions/checkout` must run before it.
+name: Set up workspace
+description: >-
+  Install pnpm and Node.js with pnpm/setup@v2 (retried once on failure), run
+  `pnpm install --frozen-lockfile` (up to three attempts), and optionally install a
+  Playwright browser.
+
+inputs:
+  node-version:
+    description: Node.js version for pnpm/setup@v2's `runtime` input, e.g. `22.19.0`, `24`, `26`.
+    required: true
+  playwright-browser:
+    description: >-
+      Playwright browser to install with `pnpm exec playwright install` (e.g.
+      `chromium`), at the Playwright version pinned in pnpm-lock.yaml. Empty skips
+      the install.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Set up pnpm and Node.js
+      id: setup
+      uses: pnpm/setup@v2
+      continue-on-error: true
+      with:
+        cache: true
+        install: false
+        runtime: node@${{ inputs.node-version }}
+
+    - name: Wait before retrying pnpm/setup
+      if: steps.setup.outcome == 'failure'
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "::warning::pnpm/setup@v2 failed on the first attempt (registry 5xx or network error?); retrying in 15 s."
+        sleep 15
+
+    - name: Set up pnpm and Node.js (retry)
+      if: steps.setup.outcome == 'failure'
+      uses: pnpm/setup@v2
+      with:
+        cache: true
+        install: false
+        runtime: node@${{ inputs.node-version }}
+
+    - name: Install dependencies
+      shell: bash
+      run: |
+        set -euo pipefail
+        delays=(10 20)
+        for attempt in 1 2 3; do
+          if pnpm install --frozen-lockfile; then
+            echo "pnpm install --frozen-lockfile succeeded on attempt ${attempt} of 3."
+            exit 0
+          fi
+          if [ "${attempt}" -eq 3 ]; then
+            echo "::error::pnpm install --frozen-lockfile failed on all 3 attempts."
+            exit 1
+          fi
+          delay="${delays[attempt - 1]}"
+          echo "::warning::pnpm install --frozen-lockfile failed (attempt ${attempt} of 3); retrying in ${delay} s."
+          sleep "${delay}"
+        done
+
+    - name: Install Playwright ${{ inputs.playwright-browser }}
+      if: inputs.playwright-browser != ''
+      shell: bash
+      env:
+        PLAYWRIGHT_BROWSER: ${{ inputs.playwright-browser }}
+      run: |
+        set -euo pipefail
+        pnpm exec playwright --version
+        pnpm exec playwright install "$PLAYWRIGHT_BROWSER"
+        echo "Playwright $(pnpm exec playwright --version | awk '{print $2}') installed its $PLAYWRIGHT_BROWSER build" >> "$GITHUB_STEP_SUMMARY"

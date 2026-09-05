@@ -10,6 +10,7 @@ import { createRsbuild } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 
 import { workbenchBrowserAliases } from './support/workbench-browser-modules.ts';
+import { browserLaunchOptions } from './support/workbench-e2e.ts';
 import { chromium } from 'playwright';
 import { describe, expect, it } from '@rstest/core';
 import type { JsonValue } from '../../agent-bundle/src/dev/types.ts';
@@ -234,7 +235,7 @@ describe('MCP JSON input', () => {
 
   it('reports each controlled raw edit while canonical replacements leave the repair draft untouched', async () => {
     const fixture = await mountedControlledInputFixture();
-    const browser = await chromium.launch({ channel: 'chrome' });
+    const browser = await chromium.launch(browserLaunchOptions);
     try {
       const page = await browser.newPage();
       await page.goto(fixture.url);
@@ -270,7 +271,7 @@ describe('MCP JSON input', () => {
       '};',
       "createRoot(document.getElementById('root')).render(<App />);",
     ]);
-    const browser = await chromium.launch({ channel: 'chrome' });
+    const browser = await chromium.launch(browserLaunchOptions);
     const page = await browser.newPage({ viewport: { height: 844, width: 390 } });
     try {
       await page.goto(fixture.url);
@@ -378,7 +379,7 @@ describe('MCP JSON input', () => {
   });
 
   it('uses custom required presence validation and disables every mutation control in a browser', async () => {
-    const browser = await chromium.launch({ channel: 'chrome' });
+    const browser = await chromium.launch(browserLaunchOptions);
     const page = await browser.newPage();
     try {
       await page.setContent(renderToStaticMarkup(createElement(McpJsonInput, {
