@@ -179,6 +179,30 @@ describe('ArtifactDependencyAuditPlugin', () => {
     }
   }, 20_000);
 
+  it('reads a per-type map request at the resolved type and tolerates import attributes', async () => {
+    const { entry, root, source } = await probeProject([
+      "import data from './data.json' with { type: 'json' };",
+      "import lp from 'left-pad';",
+      'console.log(data, lp);',
+    ]);
+    await writeFile(join(root, 'src', 'data.json'), '{}\n');
+    try {
+      const [record] = await buildRecording(root, [entry], withExternals(
+        { './data.json': 'module ./data.json' },
+        (data, callback) => {
+          if (data.request === 'left-pad') callback(undefined, { module: ['lp', 'default'], 'node-commonjs': 'left-pad' });
+          else callback();
+        },
+      ));
+      expect(record?.externals).toEqual([
+        { externalType: 'module', issuers: [source], request: './data.json', userRequest: './data.json' },
+        { externalType: 'module', issuers: [source], request: 'lp', userRequest: 'left-pad' },
+      ]);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  }, 20_000);
+
   it('records an artifact-relative external kept by an object map', async () => {
     const { entry, root, source } = await probeProject(["import './sibling.js';", "console.log('probe');"]);
     try {

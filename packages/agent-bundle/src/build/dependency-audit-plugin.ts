@@ -1,50 +1,60 @@
 import { rspack, type Rspack } from '@rslib/core';
 
+import { isRecord } from '../core/strict-json.ts';
 import type { CompilationEvidence, CompilationExternal, CompilationModule } from './compile-result.ts';
 
 const pluginName = 'agent-bundle:dependency-audit';
 
-const externalIdentifierPrefix = /^external (\S+) (?=["[])/u;
+const externalIdentifierPrefix = /^external (\S+) (?=["[{])/u;
 
-/** Length of the JSON string or array of strings that opens `text`, or -1 when it never closes. */
+/** Length of the JSON string, array, or object that opens `text`, or -1 when it never closes. */
 const jsonPrefixLength = (text: string): number => {
+  let depth = 0;
   let inString = false;
   for (let index = 0; index < text.length; index += 1) {
     const char = text[index];
-    if (!inString) {
-      if (char === '"') inString = true;
-      else if (char === ']') return index + 1;
-      continue;
-    }
-    if (char === '\\') index += 1;
-    else if (char === '"') {
-      inString = false;
-      if (text[0] === '"') return index + 1;
+    if (inString) {
+      if (char === '\\') index += 1;
+      else if (char === '"') {
+        inString = false;
+        if (depth === 0) return index + 1;
+      }
+    } else if (char === '"') {
+      inString = true;
+    } else if (char === '[' || char === '{') {
+      depth += 1;
+    } else if (char === ']' || char === '}') {
+      depth -= 1;
+      if (depth === 0) return index + 1;
     }
   }
   return -1;
 };
 
 /**
- * `external <type> <request as JSON>`, optionally followed by `|<layer>|<issuer>`
- * segments. The JSON request is what the emitted code loads at run time; an
- * object-map external such as `{ 'left-pad': 'lp' }` names `"lp"` here and
- * `left-pad` in `userRequest`. An array request (`["lp", "default"]`) loads its
- * first element and reads the rest as property paths.
+ * `external <type> <request as JSON>`, then optional space-separated import
+ * attributes (`{"type":"json"}`) or phase (`phase=defer`), then optional
+ * `|`-separated layer and issuer segments. The JSON request is what the emitted
+ * code loads at run time: a string; an array whose first element is the module
+ * and whose rest are property paths; or a per-type map (`{"module":"lp"}`) read
+ * at the resolved type. An object-map external such as `{ 'left-pad': 'lp' }`
+ * names `"lp"` here and `left-pad` in `userRequest`.
  */
 const runtimeRequest = (module: Rspack.ExternalModule): { readonly externalType: string; readonly request: string } => {
   const identifier = module.identifier();
   const unexpected = (): Error => new Error(`Rspack ExternalModule has an unexpected identifier: ${JSON.stringify(identifier)}.`);
   const prefix = externalIdentifierPrefix.exec(identifier);
   if (prefix === null) throw unexpected();
+  const externalType = prefix[1]!;
   const json = identifier.slice(prefix[0].length);
   const length = jsonPrefixLength(json);
   const rest = json.slice(length);
-  if (length === -1 || (rest !== '' && !rest.startsWith('|'))) throw unexpected();
+  if (length === -1 || (rest !== '' && !rest.startsWith('|') && !rest.startsWith(' '))) throw unexpected();
   const parsed: unknown = JSON.parse(json.slice(0, length));
-  const request = Array.isArray(parsed) ? parsed[0] : parsed;
+  const byType = isRecord(parsed) ? parsed[externalType] : parsed;
+  const request = Array.isArray(byType) ? byType[0] : byType;
   if (typeof request !== 'string') throw unexpected();
-  return { externalType: prefix[1]!, request };
+  return { externalType, request };
 };
 
 const moduleResource = (module: Rspack.Module | null | undefined): string | undefined =>

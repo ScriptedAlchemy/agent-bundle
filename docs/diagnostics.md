@@ -967,7 +967,7 @@ framework-owned plugin twice by accident.
 | `AB4722` | error | `tools.rsbuild` is not an Rsbuild environment-config object. | Declare an object fragment. |
 | `AB4723` | error | `tools.rspack` is not an Rspack config object, a mutator function, or an array of both. | Use one of the three Rslib `tools.rspack` forms. |
 | `AB4724` | error | `tools.rsbuild.plugins` supplies a plugin whose `name` matches a framework-owned registration (`rsbuild:react` from `@rsbuild/plugin-react`). The message names the plugin and its package. | Remove the plugin from `tools.rsbuild.plugins`; agent-bundle registers it in every config it synthesizes. |
-| `AB4725` | error | `tools` externalizes a non-built-in (`tools.rsbuild.output.autoExternal` not `false`, or a string/object `externals` entry that names a package — neither a Node built-in nor a relative path — in `tools.rsbuild.output` or an object-form `tools.rspack`). | Remove the externalization; RegExp, function, and relative externals are judged by the compilation's evidence instead (AB6005), where the emitted siblings are known. |
+| `AB4725` | error | `tools` externalizes a non-built-in (`tools.rsbuild.output.autoExternal` not `false`, or a string/object `externals` entry that names a package — neither a Node built-in, `pnpapi`, nor a relative path — in `tools.rsbuild.output` or an object-form `tools.rspack`). | Remove the externalization; RegExp, function, and relative externals are judged by the compilation's evidence instead (AB6005), where the emitted siblings are known. |
 
 ## Route graph, state, layout, and provider conventions (`AB4800`–`AB4839`, `AB4940`–`AB4942`)
 
