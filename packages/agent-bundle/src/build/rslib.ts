@@ -9,11 +9,20 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { dependencyManifestPath } from '../core/dependency-manifest.ts';
 import { sha256Hex } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
+import { isInsideOrEqual, toPosixRelative } from '../core/paths.ts';
 import { isRecord } from '../core/strict-json.ts';
 import type { AgentBundleToolsConfig } from '../core/types.ts';
 import type { AgentBundleMeta } from '../meta.ts';
+import type {
+  CompilationEvidence,
+  CompileResult,
+  ExternalIR,
+  ModuleIR,
+} from './compile-result.ts';
 import { composeToolsLayers, frameworkInvariantLayer } from './compose-layers.ts';
+import { ArtifactDependencyAuditPlugin } from './dependency-audit-plugin.ts';
 import { mcpEntryRuntimeSpecifier } from './entry-shell.ts';
+import { classifyExternal } from './external-policy.ts';
 import {
   assertGeneratedModulesRootAbsent,
   generatedMetaModulePath,
@@ -23,7 +32,7 @@ import {
   virtualModulesPluginConstructor,
 } from './meta.ts';
 import { readModuleImports, type ModuleImport } from './module-imports.ts';
-import { collectBundledOutputEvidence, type BundledOutputEvidence } from './provenance.ts';
+import { collectBundledOutputEvidence } from './provenance.ts';
 
 export interface RslibVirtualModule {
   readonly name: string;
@@ -95,7 +104,8 @@ const inspectProductionConfig = async (
 type RslibLibConfig = LibConfig;
 type RslibToolsRspack = NonNullable<NonNullable<LibConfig['tools']>['rspack']>;
 
-interface RslibDependencies {
+export interface RslibDependencies {
+  readonly compilationEvidence?: readonly CompilationEvidence[];
   readonly createRslib?: (options: Parameters<typeof createRslib>[0]) => Promise<Pick<RslibInstance, 'build' | 'inspectConfig'>>;
 }
 
@@ -515,6 +525,7 @@ export const composeEntryLibConfig = (
     readonly cwd: string;
     /** The project identity served to plugin source as `agent-bundle/meta`. */
     readonly meta: AgentBundleMeta;
+    readonly onCompilationEvidence?: (evidence: CompilationEvidence) => void;
     /** Receives reserved specifiers that a function-form external resolved at build time. */
     readonly onReservedExternal?: (specifier: string) => void;
     readonly outputRoot: string;
@@ -602,8 +613,9 @@ export const composeEntryLibConfig = (
       ...(generatedModules.length > 0
         ? [new (rslibVirtualModulesPlugin())(Object.fromEntries(generatedModules.map((module) => [module.path, module.source])))]
         : []),
+      new ArtifactDependencyAuditPlugin(options.onCompilationEvidence ?? (() => undefined)),
     ];
-    if (frameworkPlugins.length > 0) config.plugins = [...(config.plugins ?? []), ...frameworkPlugins];
+    config.plugins = [...(config.plugins ?? []), ...frameworkPlugins];
     if (virtualSource !== undefined) {
       // Rslib validates `source.entry` against the real filesystem before
       // Rspack exists, so the profile keys the entry on the authored program
@@ -721,22 +733,6 @@ export interface RslibSurface {
   readonly logLevel?: 'error' | 'silent';
 }
 
-/**
- * A surface planned for a shared Rslib run: its entries plus the step that
- * turns the run's evidence for those entries back into compiled records.
- * Planning is separated from finishing so the orchestrator can gather every
- * surface of a target first and lower them together in one instance.
- */
-export interface RslibSurfacePlan<Result> extends RslibSurface {
-  readonly finish: (evidence: readonly BundledOutputEvidence[]) => Promise<Result>;
-}
-
-/** A surface with nothing to compile whose result is already settled (e.g. a target that hosts no CLI bin). */
-export const settledRslibSurface = <Result>(result: Result): RslibSurfacePlan<Result> => ({
-  entries: Object.freeze([]),
-  finish: async () => result,
-});
-
 export interface RslibRunOptions {
   readonly cwd: string;
   /** The project identity served to plugin source as `agent-bundle/meta`. */
@@ -767,26 +763,60 @@ const assertDistinctLibIds = (entries: readonly RslibEntry[]): void => {
   }
 };
 
+const packageNameOfResource = (resource: string): string | undefined => {
+  const segments = resource.replaceAll('\\', '/').split('/');
+  const nodeModules = segments.lastIndexOf('node_modules');
+  if (nodeModules === -1) return undefined;
+  const name = segments[nodeModules + 1];
+  if (name === undefined) return undefined;
+  return name.startsWith('@') && segments[nodeModules + 2] !== undefined
+    ? `${name}/${segments[nodeModules + 2]}`
+    : name;
+};
+
+const moduleKindOf = (
+  resource: string | undefined,
+  cwd: string,
+  dependencyRoots: readonly string[],
+): ModuleIR['kind'] => {
+  if (resource !== undefined && isInsideOrEqual(generatedModulesRoot(cwd), resource)) return 'generated';
+  if (
+    resource !== undefined
+    && (packageNameOfResource(resource) !== undefined || dependencyRoots.some((root) => isInsideOrEqual(root, resource)))
+  ) {
+    return 'dependency';
+  }
+  return 'authored';
+};
+
+const projectIssuer = (cwd: string, issuer: string): string =>
+  isInsideOrEqual(cwd, issuer) ? toPosixRelative(cwd, issuer) : issuer;
+
 /**
  * Lowers every surface's entries through one Rslib instance and returns the
- * bundled evidence per surface, in surface order. A surface without entries
- * contributes nothing and receives no evidence; with no entries at all no
- * instance is created.
+ * compiler result per surface, in surface order. A surface without entries
+ * contributes an empty result; with no entries at all no instance is created.
  */
 export const buildRslibSurfaces = async (
   options: RslibRunOptions,
   surfaces: readonly RslibSurface[],
   dependencies: RslibDependencies = {},
-): Promise<readonly (readonly BundledOutputEvidence[])[]> => {
+): Promise<readonly CompileResult[]> => {
   const entries = surfaces.flatMap((surface) => surface.entries);
   if (entries.length === 0) {
-    return Object.freeze(surfaces.map(() => Object.freeze([])));
+    return Object.freeze(surfaces.map(() => Object.freeze({
+      assets: Object.freeze([]),
+      diagnostics: Object.freeze([]),
+      externals: Object.freeze([]),
+      modules: Object.freeze([]),
+    })));
   }
   assertDistinctLibIds(entries);
   await assertGeneratedModulesRootAbsent(options.cwd);
   const dependencyRoots = await declaredDependencyRoots(options.cwd);
 
   const reservedExternalViolations: string[] = [];
+  const compilationEvidence: CompilationEvidence[] = [...(dependencies.compilationEvidence ?? [])];
   const rslib = await (dependencies.createRslib ?? createRslib)({
     cwd: options.cwd,
     config: {
@@ -795,6 +825,7 @@ export const buildRslibSurfaces = async (
       lib: entries.map((entry) => composeEntryLibConfig(entry, {
         cwd: options.cwd,
         meta: options.meta,
+        onCompilationEvidence: (evidence) => compilationEvidence.push(evidence),
         onReservedExternal: (specifier) => reservedExternalViolations.push(specifier),
         outputRoot: options.outputRoot,
         ...(options.tools === undefined ? {} : { tools: options.tools }),
@@ -831,42 +862,51 @@ export const buildRslibSurfaces = async (
       stats: result.stats,
     });
     await assertNoResidualReservedImports(entries, options.outputRoot);
-    // Evidence covers exactly every entry (a missing asset already threw),
-    // sorted by path; each surface takes back its own entries' records.
+    const emittedAssets = new Set(entries.map((entry) => entry.outputRelativePath));
+    const evidenceByPath = new Map(evidence.map((asset) => [asset.path, asset]));
+    const resultByEntry = new Map(entries.map((entry) => {
+      const records = compilationEvidence.filter((record) => record.compiler === entryLibId(entry));
+      const [record] = records;
+      if (record === undefined || records.length !== 1) {
+        throw new Error(
+          `Rslib did not record exactly one compilation evidence result for ${JSON.stringify(entry.outputRelativePath)}.`,
+        );
+      }
+      const externals = record.externals.map((external): ExternalIR => ({
+        asset: entry.outputRelativePath,
+        externalType: external.externalType,
+        issuers: external.issuers.map((issuer) => projectIssuer(options.cwd, issuer)),
+        kind: classifyExternal(external, { asset: entry.outputRelativePath, emittedAssets }),
+        request: external.request,
+        userRequest: external.userRequest,
+      }));
+      const modules = record.modules.map((module): ModuleIR => {
+        const packageName = module.resource === undefined ? undefined : packageNameOfResource(module.resource);
+        return {
+          asset: entry.outputRelativePath,
+          identifier: module.identifier,
+          kind: moduleKindOf(module.resource, options.cwd, dependencyRoots),
+          ...(packageName === undefined ? {} : { package: packageName }),
+          ...(module.resource === undefined ? {} : { resource: module.resource }),
+        };
+      });
+      return [entry, Object.freeze({
+        assets: Object.freeze([evidenceByPath.get(entry.outputRelativePath)!]),
+        diagnostics: Object.freeze([]),
+        externals: Object.freeze(externals),
+        modules: Object.freeze(modules),
+      })] as const;
+    }));
     return Object.freeze(surfaces.map((surface) => {
-      const paths = new Set(surface.entries.map((entry) => entry.outputRelativePath));
-      return Object.freeze(evidence.filter((record) => paths.has(record.path)));
+      const entryResults = surface.entries.map((entry) => resultByEntry.get(entry)!);
+      return Object.freeze({
+        assets: Object.freeze(entryResults.flatMap((entryResult) => entryResult.assets)),
+        diagnostics: Object.freeze(entryResults.flatMap((entryResult) => entryResult.diagnostics)),
+        externals: Object.freeze(entryResults.flatMap((entryResult) => entryResult.externals)),
+        modules: Object.freeze(entryResults.flatMap((entryResult) => entryResult.modules)),
+      });
     }));
   } finally {
     await result?.close();
   }
-};
-
-/** Lowers every planned surface in one Rslib run and finishes each with its own evidence, in order. */
-export const compileRslibSurfaces = async <const Plans extends readonly RslibSurfacePlan<unknown>[]>(
-  options: RslibRunOptions,
-  plans: Plans,
-): Promise<{ readonly [Index in keyof Plans]: Plans[Index] extends RslibSurfacePlan<infer Result> ? Result : never }> => {
-  const evidence = await buildRslibSurfaces(options, plans);
-  const results: unknown[] = [];
-  // Sequential on purpose: a finish step may emit sibling files into the
-  // shared staged root, and the former per-surface order is preserved.
-  for (const [index, plan] of plans.entries()) {
-    results.push(await plan.finish(evidence[index]!));
-  }
-  return results as { readonly [Index in keyof Plans]: Plans[Index] extends RslibSurfacePlan<infer Result> ? Result : never };
-};
-
-/** The single-surface run: the package build and direct callers. */
-export const buildWithRslib = async (
-  options: RslibRunOptions & RslibSurface,
-  dependencies: RslibDependencies = {},
-): Promise<readonly BundledOutputEvidence[]> => {
-  const { entries, ignoredSourcePaths, logLevel, ...run } = options;
-  const [evidence] = await buildRslibSurfaces(run, [{
-    entries,
-    ...(ignoredSourcePaths === undefined ? {} : { ignoredSourcePaths }),
-    ...(logLevel === undefined ? {} : { logLevel }),
-  }], dependencies);
-  return evidence!;
 };

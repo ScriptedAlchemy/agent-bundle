@@ -47,7 +47,8 @@ import {
 import { emptyRouteConfig, type CompiledLayout, type CompiledProvider } from '../routes/types.ts';
 import type { CompiledMcpApp } from './mcp-apps.ts';
 import type { ArtifactOutputKind } from './provenance.ts';
-import type { RslibEntry, RslibSurfacePlan } from './rslib.ts';
+import type { RslibSurfacePlan } from './compiler.ts';
+import type { RslibEntry } from './rslib.ts';
 import { runtimeIgnoredRoot } from './runtime-path.ts';
 
 /**

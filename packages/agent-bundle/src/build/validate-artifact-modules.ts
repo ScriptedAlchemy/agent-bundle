@@ -1,5 +1,4 @@
 import { lstat, realpath } from 'node:fs/promises';
-import { isBuiltin } from 'node:module';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -8,6 +7,7 @@ import type { Diagnostic } from '../core/diagnostics.ts';
 import { readFileBytes, runWithPlatform } from '../effect/platform.ts';
 import { artifactDiagnostic as diagnostic, artifactDiagnosticRecoveries } from './artifact-diagnostics.ts';
 import type { ArtifactFile } from './emit.ts';
+import { isAllowedExternalRequest } from './external-policy.ts';
 import { readModuleImports, type ModuleImport, type ModuleSyntaxCheck } from './module-imports.ts';
 
 const javaScriptModuleSuffix = /\.(?:m?js)$/u;
@@ -41,7 +41,7 @@ const resolveJavaScriptImport = async (options: {
   readonly validJson: ReadonlySet<string>;
 }): Promise<{ readonly diagnostic?: Diagnostic; readonly module?: string }> => {
   const importer = options.reportedImporter;
-  if (isBuiltin(options.specifier)) return {};
+  if (isAllowedExternalRequest(options.specifier)) return {};
   if (!options.specifier.startsWith('.') && !options.specifier.startsWith('file:')) {
     return { diagnostic: graphDiagnostic(importer, `uses unsupported specifier ${JSON.stringify(options.specifier)}.`) };
   }
