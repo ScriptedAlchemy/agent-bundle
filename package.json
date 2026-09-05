@@ -10,7 +10,7 @@
   "packageManager": "pnpm@11.23.0",
   "scripts": {
     "build": "pnpm --filter rsc-markdown-stream build && pnpm --filter @agent-bundle/runtime build && pnpm --filter agent-bundle build && pnpm --filter create-agent-bundle build",
-    "test": "pnpm test:unit && pnpm test:route-unit && pnpm test:projection && pnpm test:integration",
+    "test": "pnpm build && pnpm test:unit && pnpm test:route-unit && pnpm test:projection && pnpm test:integration:run",
     "test:unit": "rstest --config rstest.unit.config.ts",
     "test:route-unit": "rstest --config rstest.route-unit.config.ts",
     "test:projection": "rstest --config rstest.projection.config.ts",

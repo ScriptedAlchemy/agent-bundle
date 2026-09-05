@@ -40,6 +40,13 @@
  * serve to reopen the hole this closes. Add one when a flow that must run
  * over a deliberately prebuilt dist exists, and name that flow beside it.
  *
+ * The one false negative the comparison admits: a dist whose newest file
+ * postdates the inputs while other files in it are older — a build that
+ * failed after writing some outputs, or a hand-touched file. `pnpm build`
+ * always rewrites a package's dist whole, so the guard accepts that bound
+ * rather than a per-file manifest; a build that fails is reported by the
+ * build, and the next successful one restores the invariant.
+ *
  * Inputs per package (`workspaceBuildOutputs`), read from each build config:
  *
  * - Every package: `src` (the entries and everything they import), the
