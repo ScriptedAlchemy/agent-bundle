@@ -1,0 +1,350 @@
+---
+description: 'agent-bundle.manifest.json 契约（manifestVersion 2）：build 一次性写出的组合插件根目录索引——每个分节与字段、由谁写入、由谁读取、随包发布的 JSON Schema、保留键，以及版本规则。'
+---
+
+# 产物清单
+
+`agent-bundle.manifest.json` 位于 `agent-bundle build` 输出的组合插件根目录顶层（根目录布局见
+[Target 与产物](./targets-artifacts.mdx)）。它是**产物的索引**：一份文档记录了被编译的应用身份、编译后的
+路由图、被选中的宿主投影及每个投影派生出的宿主文档、根目录能启动的每一个可执行文件，以及根目录如何分发。
+每个消费者——`install`、`uninstall`、`doctor`、`serve-app`、`mcp`、`hooks`、`eval --artifact`、`inspect`、
+Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录包含什么。它们都不会去探测
+`.claude-plugin/plugin.json`、`.mcp.json` 或目录布局。
+
+## 契约
+
+| 属性 | 规则 |
+| --- | --- |
+| 只写一次 | 只有 `agent-bundle build` 在暂存根目录完成之后写出它。没有任何别的东西会创建或编辑它。 |
+| `manifestVersion` | `2`。读取方拒绝任何其他值。 |
+| 规范字节 | 文件就是该文档的规范 JSON 序列化——对象键已排序、没有无意义的空白、末尾恰有一个换行。每个读取方都会把解析结果重新序列化，字节不完全一致就拒绝该文件。手工编辑、重新格式化或重复键都会让读取失败。 |
+| 封闭键 | 每个对象只接受文档化的那些键。任何层级上的未知键都是解析错误。 |
+| 有序数组 | 每个数组都有显式的排序键（各分节下方注明），且没有重复项。 |
+| 路径 | 每个路径都是 POSIX 形式、相对根目录且安全：没有前导 `/`、没有反斜杠、没有 `.` 或 `..` 段。任何分节指向的路径——宿主文档、可执行文件、App 视图、安装文件——同时也是一行 `files[]`。 |
+
+## 由谁写入
+
+`agent-bundle build`，别无他者。文档中的一切都是**派生**的：作者声明 `agent-bundle.config.ts`（元数据、
+`targets`、钩子、MCP 服务器、脚本、市场）与约定文件系统（`src/mcp/**`、`src/cli/**`、`src/hooks/**`、
+`src/events/**`、`src/scripts/**`），构建则从规范化模型、编译后的路由图、组合计划以及它输出的文件写出清单。
+根目录中的宿主文档——Claude、Codex、Cursor 与 portable 的插件清单，市场、MCP 与钩子文档——由同一个模型写出。
+清单从不从宿主文档中复制任何值，产物校验会证明两者一致（`AB6039`、`AB6040`）。文件中没有任何可手工编辑的
+内容：修改配置或源码，然后重新构建。
+
+## 由谁读取
+
+| 消费者 | 读取什么 |
+| --- | --- |
+| `install <host> --from <root>`、`uninstall` | `<root>` 下的清单。身份——插件名与版本——来自 `application`；市场名来自 `projections[host].marketplace`；宿主被指向的文件来自 `projections[host].documents.plugin`。没有清单、清单不是规范字节、没有该宿主的投影，或投影没有宿主插件清单的根目录，都以 `AB7001` 拒绝。 |
+| `doctor --from <root>` | 与 `install` 相同的读取，按被检查的宿主逐一进行；它对树运行的静态校验（`AB7319`）继续按投影进行。 |
+| `serve-app`、`mcp list` / `invoke` / `run` | 从 `executables.mcpServers[]` 取服务器编译后的 `entry` 及其 `apps[]`；省略 `--target` 时从 `projections[]` 选出宿主。 |
+| `hooks list` / `simulate` | `executables.hooks[]`——可被模拟的编译器 wrapper。 |
+| `inspect --json` | 当产物输出位置存在已构建的清单时，追加一份 `output.manifest` 摘要——投影与可执行文件——因此 JSON 消费者无需第二次探测。 |
+| `eval --artifact`、`agent-bundle/test` 的已安装宿主证明 | 用 `projections[]` 与 `executables.hooks[]` 取代任何宿主文档。 |
+| Workbench 产物页 | 从 `executables.*` 取 bin、钩子、MCP 服务器与 App、脚本的行；从 `projections[]` 取所选宿主。不再扫描布局或文件名。 |
+| `validate --artifact`、`build` | 整份文档：存在性与规范字节（`AB6000`、`AB6001`）、`files[]` 与树的比对（`AB6004`）、基于 `executables.hooks[]` 的钩子一致性（`AB6018`）、行一致性（`AB6039`）与宿主文档一致性（`AB6040`）。 |
+| `prepack` | `files[]`、`projections[]` 与 `project.packageVersion`，用于打包清点（`AB7010`–`AB7013`）。 |
+
+## 分节
+
+顶层恰有十二个键，全部必填：`agentSkills`、`application`、`distribution`、`executables`、`files`、
+`manifestVersion`、`producer`、`project`、`projections`、`routes`、`runtime`、`validation`。
+
+### `producer`、`runtime`、`manifestVersion`
+
+| 字段 | 内容 |
+| --- | --- |
+| `manifestVersion` | `2`。 |
+| `producer` | `{ name: 'agent-bundle', version }`——写出该根目录的框架版本。`name` 始终为 `agent-bundle`。 |
+| `runtime` | `{ node }`——该根目录据以构建的生成式可执行文件运行时下限，为满足框架下限的规范 `major.minor.patch` 字符串。 |
+
+### `application`
+
+应用身份，只记录一次且与宿主无关。它是 `install`、`doctor` 与 `uninstall` 作用的对象；根目录中每份宿主
+插件清单都为其宿主重复 `name` 与 `version`，`AB6040` 证明它们一致。
+
+| 字段 | 必填 | 内容 |
+| --- | --- | --- |
+| `id` | 是 | 规范化插件的 `metadata.id`。 |
+| `name` | 是 | 插件名。 |
+| `version` | 是 | 插件版本。 |
+| `description` | 否 | 配置了的话，即 `metadata.description`。 |
+
+### `project`
+
+| 字段 | 必填 | 内容 |
+| --- | --- | --- |
+| `configPath` | 是 | 相对项目根目录的配置文件。它必须出现在 `sourceInputs` 中，且哈希等于 `configDigest`。 |
+| `configDigest` | 是 | 配置文件的 SHA-256。 |
+| `modelDigest` | 是 | 规范化模型的 SHA-256。 |
+| `revision` | 是 | 对 `sourceInputs` 的摘要；读取方会重新计算并拒绝不匹配。 |
+| `sourceInputs[]` | 是 | 构建读取的每个项目输入：`{ path, sha256, executable? }`，按 `path` 排序。 |
+| `packageName` | 否 | 经校验的 npm 包名；未打包的开发项目中不存在。 |
+| `packageVersion` | 否 | 经校验的发布版本；未打包的开发项目中不存在。 |
+
+### `files[]`
+
+除清单自身外的每个输出文件，按 `path` 排序。
+
+| 字段 | 必填 | 内容 |
+| --- | --- | --- |
+| `path` | 是 | 相对根目录的路径。绝不会是 `agent-bundle.manifest.json`。 |
+| `bytes` | 是 | 字节大小。 |
+| `sha256` | 是 | 内容摘要。校验比对的是真实字节，因此被手工改过的生成文件会失败。 |
+| `kind` | 是 | `bundle`（编译后的入口）、`copy`（逐字节复制）、`generated`（编译器写出的文档）或 `prebuilt`（预构建 payload 文件）。 |
+| `mode` | 否 | 构建设置了文件模式时的取值，`0` 至 `0o777`。 |
+| `sourceInputs[]` | 是 | 该文件派生自的 `project.sourceInputs` 路径，已排序。 |
+
+### `projections[]`
+
+每个所选宿主一行，按 `host` 排序。target 选择投影；它们不是身份。
+
+| 字段 | 必填 | 内容 |
+| --- | --- | --- |
+| `host` | 是 | 适配器名：`claude`、`codex`、`cursor`、`portable`，或已注册的适配器。 |
+| `adapterRevision` | 是 | 适配器由仓库维护的单调递增修订。 |
+| `observedVersion` | 是 | 记录其能力证据时观察到的宿主版本。 |
+| `schemas[]` | 是 | 该投影据以校验的固定宿主文档 schema：`{ name, revision, sha256 }`，按 `name` 排序。 |
+| `documents` | 是 | 指向该投影输出的宿主文档的根相对指针；每个存在的指针都是一行 `files[]`。见下文。 |
+| `marketplace` | 否 | `{ name }`——该投影的市场文档所注册的市场。只与 `documents.marketplace` 同时出现。 |
+
+`documents` 有四个可选键，每个键只在投影输出了对应文件时出现：
+
+| 键 | 内容 |
+| --- | --- |
+| `plugin` | 宿主插件清单（`.claude-plugin/plugin.json`、`.codex-plugin/plugin.json`、`.cursor-plugin/plugin.json` 或 portable 的 `plugin.json`）。缺失时，`install` 与 `doctor` 以 `AB7001` 拒绝该宿主。 |
+| `marketplace` | 市场文档（`.claude-plugin/marketplace.json`、`.agents/plugins/marketplace.json`、`.cursor-plugin/marketplace.json`）。 |
+| `mcp` | 宿主 MCP 文档（`.mcp.json`、`.codex-plugin/mcp.json`、`.cursor-plugin/mcp.json`、`mcp.json`）。 |
+| `hooks` | 宿主钩子文档（`hooks/hooks.json`、`.codex-plugin/hooks.json`、`.cursor-plugin/hooks.json`）。 |
+
+### `routes`
+
+产物据以构建的编译后路由图——应用 IR，与宿主无关。它与 Workbench 路由目录展示的是同一次编译器遍历的
+同一份投影；只是缺少 Workbench 仅用于展示的字段。
+
+| 字段 | 必填 | 内容 |
+| --- | --- | --- |
+| `digest` | 是 | 对路由图项目相对身份的 SHA-256。 |
+| `servers[]` | 是 | 每个 MCP 服务器一行，按 `id` 排序：`{ id, name, mode, routes[] }`。`id` 为 `mcp:<name>`；`mode` 为 `generated`、`custom`、`command`、`remote` 或 `conflict`；`routes[]` 是该服务器的路由，每条的 `serverId` 等于服务器的 `id`。 |
+| `events[]` | 是 | `event-route` 路由，按 `id` 排序。 |
+| `scripts[]` | 是 | `script` 路由，按 `id` 排序。 |
+| `cli` | 否 | `{ mode, routes[], commands? }`：`mode` 为 `generated`、`conventional` 或 `conflict`；`routes[]` 是 `cli` 路由；`commands[]` 恰在 `generated` 模式下出现。 |
+| `providers[]` | 是 | `{ id, name, source }`，按 `id` 排序；`id` 为 `provider:<stem>`。 |
+| `layouts[]` | 是 | `{ id, scope, serverId?, source }`，按 `id` 排序：`layout:root` 带 `scope: 'root'`，或 `layout:mcp:<server>` 带 `scope: 'server'` 且 `serverId` 指向已声明的服务器。 |
+
+每条路由行的形状相同：
+
+| 字段 | 必填 | 内容 |
+| --- | --- | --- |
+| `id` | 是 | 路由 id：`tool:<server>/<stem>`、`prompt:…`、`resource:…`、`app:<server>/<name>`、`event:<event>`、`cli:<path>`、`script:<path>`。 |
+| `kind` | 是 | `app`、`cli`、`event-route`、`prompt`、`resource`、`script` 或 `tool`。 |
+| `source` | 是 | 路由模块，项目相对的 POSIX 路径——路由的可移植身份。 |
+| `provenance` | 是 | `{ kind: 'conventional' }`。今天唯一的来源是文件系统发现；这个判别字段是将来投影路由挂接的位置。 |
+| `event` | 恰对 `event-route` | 规范事件，例如 `tool/after`。 |
+| `serverId` | 恰对 MCP 类型 | 所属服务器 `mcp:<name>`，出现在 `app`、`prompt`、`resource` 与 `tool` 路由上。 |
+| `description` | 否 | `config.description`，当它是非空白字符串时。 |
+| `inputSchema` | 否 | 路由输入的有界 JSON Schema 投影：一个 `additionalProperties: false` 的对象，属性类型为 `boolean`、`number`、`string`（可带 `enum`）或由它们组成的 `array`，每个属性可带 `default` 与 `description`，外加可选的 `required` 列表。路由 schema 超出这一语法时缺省。 |
+
+`routes.cli.commands[]` 的一行，按拼接后的 `path` 排序：
+
+| 字段 | 必填 | 内容 |
+| --- | --- | --- |
+| `routeId` | 是 | 该命令运行的 `cli:` 路由。 |
+| `path[]` | 是 | 命令段，至少一个。 |
+| `aliases[]` | 是 | 已排序的别名。 |
+| `options[]` | 是 | 路由输入 schema 的 argv 投影，按 `key` 排序：`{ key, option, kind, repeated, required, choices?, description?, positional? }`，`kind` 为 `boolean`、`enum`、`number`、`string` 之一。 |
+| `exitCode` | 是 | `result` 或 `zero`。 |
+| `mcp` | 否 | 当该命令是某个 MCP 工具的 CLI 投影时为 `{ server, tool, confirm }`。 |
+| `description` | 否 | 命令描述。 |
+
+### `executables`
+
+产物能启动的每一个进程，以及它的 Flight worker（如果有）。每个 `hosts[]` 列表与每个 `host` 都指向一行
+`projections[]`。
+
+| 字段 | 内容 |
+| --- | --- |
+| `bins[]` | 路由式 CLI 可执行文件，按 `name` 排序：`{ name, path, worker?, hosts[] }`。`path` 为 `bin/<name>.mjs`；`hosts[]` 是携带 CLI bin 的所选投影。 |
+| `hooks[]` | 每个宿主的每个编译器钩子 wrapper 一行，先按 `host` 再按 `id` 排序：`{ id, name, event, host, kind, path, timeout? }`。`kind` 为 `event-route`（分派 `src/events/**` 路由的 wrapper）或 `config`（配置中声明的钩子）；`event` 是钩子事件（`afterTool`、`sessionStart`……）；`timeout` 是以秒计的原生钩子超时。作者直接写进宿主钩子文档的原生命令与预构建 payload 命令不是行。 |
+| `mcpServers[]` | 每个触达所选宿主的 MCP 服务器一行，按 `id` 排序：`{ id, name, transport, kind, hosts[], entry?, apps[] }`。`kind` 为 `compiled`（产物启动 `entry.path`，`entry.worker` 是其 Flight worker）、`command`（宿主运行配置的命令）或 `remote`（宿主连接一个 URL）；`entry` 恰对 `compiled` 服务器出现。`apps[]` 按 `id` 排序：编译后的 MCP App 视图为 `{ id, name, resourceUri, path? }`（`path` 是其自包含 HTML），由预构建 payload 提供的 App 为 `{ id, name, resourceUri, prebuilt: true }`。 |
+| `scripts[]` | 每个输出脚本一行，按 `id` 排序：`{ id, name, path, worker?, mode, hosts[], rendered? }`。`mode` 为 `bundle` 或 `copy`；`rendered: { routeId }` 指向渲染式脚本所渲染的 `routes.scripts[]` 路由。 |
+
+### `distribution`
+
+| 字段 | 必填 | 内容 |
+| --- | --- | --- |
+| `channels[]` | 是 | 始终有 `local`；恰当 `project.packageName` 存在时有 `npm`。已排序。 |
+| `install` | 否 | 指向安装表面的根相对指针：`{ instructions?: 'INSTALL.md', script?: 'install.mjs' }`，根目录至少携带其一时出现。 |
+
+### `agentSkills`
+
+`{ specification, sourceRevision, schemaSha256 }`——Skill 文档据以校验的 Agent Skills 规范固定值。
+
+### `validation`
+
+`{ artifact: { status }, source: { status }, projections: [{ host, status }] }`。每个 `status` 都是
+`passed`——校验失败的根目录永远不会被写出——且 `projections[]` 恰好按同一顺序列出 `projections[]` 中的宿主。
+
+### 跨分节规则
+
+读取方在接受文档之前会强制这些规则：
+
+- `project.configPath` 是一条 `project.sourceInputs` 记录，其哈希为 `project.configDigest`，
+  且 `project.revision` 是 `project.sourceInputs` 的摘要。
+- 每个 `files[].sourceInputs` 路径都是一个 `project.sourceInputs` 路径。
+- 每个指针——`projections[].documents.*`、`executables.*[].path` 与 `worker`、
+  `executables.mcpServers[].entry.*`、`executables.mcpServers[].apps[].path`、
+  `distribution.install.*`——都指向一行 `files[]`。
+- 每个 `hosts[]` 项与每个 `hooks[].host` 都指向一行 `projections[]`。
+- `validation.projections[]` 的宿主等于 `projections[]` 的宿主。
+- `executables.scripts[].rendered.routeId` 指向一条 `routes.scripts[]` 路由。
+- `distribution.channels` 恰当 `project.packageName` 存在时包含 `npm`。
+
+## 一份精简示例
+
+一个只为 `claude` 构建的根目录，来自带有一个生成式 MCP 服务器、一个 MCP App、一个事件路由与一个路由式 CLI
+的插件。摘要已省略；键按规范（排序后的）顺序出现。
+
+```json
+{
+  "agentSkills": { "schemaSha256": "…", "sourceRevision": "…", "specification": "…" },
+  "application": { "id": "hauler", "name": "cargo-hauler", "version": "1.4.2" },
+  "distribution": {
+    "channels": ["local", "npm"],
+    "install": { "instructions": "INSTALL.md" }
+  },
+  "executables": {
+    "bins": [
+      { "hosts": ["claude"], "name": "cargo-hauler", "path": "bin/cargo-hauler.mjs",
+        "worker": "bin/cargo-hauler-flight.mjs" }
+    ],
+    "hooks": [
+      { "event": "afterTool", "host": "claude", "id": "hook:event-route:tool-after",
+        "kind": "event-route", "name": "event-route-tool-after",
+        "path": "hooks/event-route-tool-after-….mjs" }
+    ],
+    "mcpServers": [
+      { "apps": [
+          { "id": "mcp-app:hauler:dashboard", "name": "dashboard",
+            "path": "mcp-apps/dashboard.html", "resourceUri": "ui://hauler/dashboard" }
+        ],
+        "entry": { "path": "mcp/mcp-hauler-….mjs", "worker": "mcp/mcp-hauler-…-flight.mjs" },
+        "hosts": ["claude"], "id": "mcp:hauler", "kind": "compiled", "name": "hauler",
+        "transport": "stdio" }
+    ],
+    "scripts": []
+  },
+  "files": [
+    { "bytes": 412, "kind": "generated", "path": ".claude-plugin/plugin.json",
+      "sha256": "…", "sourceInputs": ["agent-bundle.config.ts"] }
+  ],
+  "manifestVersion": 2,
+  "producer": { "name": "agent-bundle", "version": "0.9.0" },
+  "project": {
+    "configDigest": "…", "configPath": "agent-bundle.config.ts", "modelDigest": "…",
+    "packageName": "cargo-hauler", "packageVersion": "1.4.2", "revision": "…",
+    "sourceInputs": [{ "path": "agent-bundle.config.ts", "sha256": "…" }]
+  },
+  "projections": [
+    { "adapterRevision": "…",
+      "documents": { "hooks": "hooks/hooks.json", "marketplace": ".claude-plugin/marketplace.json",
+        "mcp": ".mcp.json", "plugin": ".claude-plugin/plugin.json" },
+      "host": "claude", "marketplace": { "name": "cargo-hauler-marketplace" },
+      "observedVersion": "2.1.260",
+      "schemas": [{ "name": "plugin", "revision": "…", "sha256": "…" }] }
+  ],
+  "routes": {
+    "cli": {
+      "commands": [
+        { "aliases": [], "exitCode": "result", "options": [], "path": ["status"],
+          "routeId": "cli:status" }
+      ],
+      "mode": "generated",
+      "routes": [
+        { "id": "cli:status", "kind": "cli", "provenance": { "kind": "conventional" },
+          "source": "src/cli/status.tsx" }
+      ]
+    },
+    "digest": "…",
+    "events": [
+      { "event": "tool/after", "id": "event:tool/after", "kind": "event-route",
+        "provenance": { "kind": "conventional" }, "source": "src/events/tool/after.tsx" }
+    ],
+    "layouts": [], "providers": [], "scripts": [],
+    "servers": [
+      { "id": "mcp:hauler", "mode": "generated", "name": "hauler",
+        "routes": [
+          { "id": "tool:hauler/status", "kind": "tool", "provenance": { "kind": "conventional" },
+            "serverId": "mcp:hauler", "source": "src/mcp/hauler/status.tsx" }
+        ] }
+    ]
+  },
+  "runtime": { "node": "22.12.0" },
+  "validation": {
+    "artifact": { "status": "passed" },
+    "projections": [{ "host": "claude", "status": "passed" }],
+    "source": { "status": "passed" }
+  }
+}
+```
+
+## Schema 与编程访问
+
+该契约以 JSON Schema（draft 2020-12，每一层都是 `additionalProperties: false`）随包发布在
+`agent-bundle/schemas/agent-bundle.manifest.schema.json`，`agent-bundle` 入口点把它导出为
+`artifactManifestSchema`，旁边是 `validateArtifactManifestSchema`。TypeScript 类型、严格解析器与 schema
+互相测试，因此其中一个接受的文档另外两个也接受。
+
+同一入口点导出读取方：
+
+| 导出 | 用途 |
+| --- | --- |
+| `readArtifactManifest(root)` | 打开 `<root>/agent-bundle.manifest.json`，返回 `{ status: 'ok', manifest, path, root }`、`{ status: 'missing', … }` 或 `{ status: 'invalid', detail, … }`。这是框架自身的消费者打开已构建根目录的唯一方式。 |
+| `parseArtifactManifest(bytes)` | 把规范字节解析并校验为冻结的 `ArtifactManifest`；任何违规——包括重复键或非规范字节——都会抛出。 |
+| `artifactManifestName` | `'agent-bundle.manifest.json'`。 |
+| `artifactManifestVersion` | `2`。 |
+
+类型（`ArtifactManifest`、`ArtifactManifestProjection`、`ArtifactManifestExecutables`……）见生成的
+[类型 API](./api.mdx)。
+
+## 保留键
+
+这些键属于设计的一部分，但**不会输出**，v2 读取方会像对待任何未知键一样拒绝它们。在此列出，是为了让消费者
+不要自创拼写：
+
+| 保留键 | 预期内容 |
+| --- | --- |
+| `projections[].components` | `inspect` 打印的逐宿主组件清点（`selected` / `skipped` 及原因）。 |
+| `executables.noticeDelivery` | 烘焙进每个编译后 wrapper 与 MCP 入口的通知投递交集。 |
+| `executables.hooks[].preflight` | 钩子行上的门禁与预检声明。 |
+| `routes.*` 路由行上的 `contract` | 挂接到路由上的契约 id。 |
+| `executables.mcpServers[].apps[].client` | App 的生成式客户端与 `web` 环境。 |
+| `routes.cli.commands[].projection` | 当一个操作可以同时投影到两种表面时，CLI 命令投影的是哪个 MCP 工具。 |
+
+## 版本规则
+
+`manifestVersion` 在某个键被**重命名或删除**时改变；新增一个**可选**键不会改变它。版本 2 把 `targets[]`
+重命名为 `projections[]`，把过去由 `agent-bundle.hooks.json` 承载的钩子行移入 `executables.hooks[]` 并删除了
+该文件，并新增了 `application`、`routes`、`executables`、`distribution` 与 `projections[].documents`。
+由于键是封闭的，比写入方更旧的读取方会拒绝携带它不认识的键的文档——请用构建该产物的框架版本或更新的版本
+读取它。
+
+## 诊断
+
+| 代码 | 含义 |
+| --- | --- |
+| `AB6000` | 清单缺失，或根目录不是可读目录。 |
+| `AB6001` | 清单不是严格的规范清单，或在校验运行期间发生了变化。 |
+| `AB6004` | 某行 `files[]` 与树不一致。 |
+| `AB6018` | `executables.hooks[]` 与某份宿主钩子文档就编译器 wrapper 不一致。 |
+| `AB6039` | 某行 `executables`、`routes` 或 `distribution` 与树或适配器布局不一致。 |
+| `AB6040` | 某份宿主文档与清单身份（`application`、`projections[].marketplace`）不一致。 |
+| `AB7001` | `install`、`uninstall` 或 `doctor` 无法从 `--from` 下的清单解析出该宿主。 |
+
+全部说明见[诊断参考](./diagnostics.md)。
+
+## 下一步
+
+- [Target 与产物](./targets-artifacts.mdx)——清单所索引的根目录。
+- [产物校验](../guide/distribution/validation.mdx)——读取它的那些检查。
+- [宿主安装](../guide/distribution/installation.mdx)——`install` 与 `doctor` 如何使用它。

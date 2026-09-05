@@ -18,11 +18,16 @@ npx agent-bundle install codex --from artifact
 npx agent-bundle install cursor --from artifact
 ```
 
-`--from` names the **artifact root**: the directory that holds the selected host's manifest
-directly (`.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, or
-`.cursor-plugin/plugin.json`). It needs no project sources, and there is no `<from>/<host>`
-lookup — a root that lacks the host's manifest is refused (`AB7001`). Builds write no
-`artifact/<host>` subdirectory to point at; the root is the bundle.
+`--from` names the **composite root**: the directory that holds `agent-bundle.manifest.json`. The
+installer reads that one file and nothing else to learn what it is installing — the plugin name
+and version come from `application`, the marketplace name from `projections[host].marketplace`,
+and the file the host is pointed at from `projections[host].documents.plugin` (see the
+[Artifact manifest](../../reference/artifact-manifest.mdx)). It needs no project sources, and there
+is no `<from>/<host>` lookup: builds write no `artifact/<host>` subdirectory, and the root is the
+bundle. `AB7001` refuses a root whose manifest is missing or not canonical, that has no projection
+for the host, whose projection has no host plugin manifest (or whose pointed file is absent), that
+declares no marketplace identity for `claude` or `codex`, or whose plugin name is not a safe local
+plugin name for `cursor`.
 
 ## What each host accepts
 
@@ -200,7 +205,10 @@ npx agent-bundle doctor --host claude --host cursor --json
 npx agent-bundle doctor --from artifact --json
 ```
 
-Doctor is read-only. It probes hosts, inventories installed bundles, compares them against a
+Doctor is read-only. `--from` is the same composite root `install` takes, read the same way: the
+plugin identity and each inspected host's plugin manifest come from `agent-bundle.manifest.json`
+(`application`, `projections[host]`), and a root the manifest does not describe for that host is
+`AB7001`. It probes hosts, inventories installed bundles, compares them against a
 supplied bundle, checks registration proof, samples runtime endpoint health and identity,
 inventories durable state and the operator `.env` layer (`AB7331`), and re-runs the pinned process-free document and loader validators over
 installed bytes. It never repairs anything. With `--from`, it reports the installed copy per host as

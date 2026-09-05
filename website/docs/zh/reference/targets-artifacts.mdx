@@ -46,8 +46,7 @@ artifact/
 ├── scripts/, skills/, commands/, rules/, assets/, mcp-apps/   # 只输出一次
 ├── INSTALL.md                            # 选中了任一内置宿主时
 ├── install.mjs                           # 选中了 cursor 或 portable 时
-├── agent-bundle.manifest.json            # 所选投影 + 来源信息
-└── agent-bundle.hooks.json               # 覆盖所选宿主的钩子索引
+└── agent-bundle.manifest.json            # 产物索引（manifestVersion 2）
 ```
 
 宿主清单位于根目录下各自的点目录中。`skills/`、`hooks/`、`mcp/`、`scripts/`、`bin/` 与 `assets/` 是共享的，
@@ -80,8 +79,9 @@ Cursor 绝不会加载 Claude Code 的 `hooks/hooks.json`。
 
 钩子触达哪些宿主，由它的 `targets`（默认是全部 target）与所选宿主取交集决定，因此同一个源钩子在仅
 `claude` 的根目录中是 `hooks/audit.mjs`，在 `claude` + `cursor` 的根目录中则是 `hooks/audit.claude.mjs`
-加 `hooks/audit.cursor.mjs`。每个所选宿主的原生钩子都会保留。`agent-bundle.hooks.json` 为所选宿主的
-wrapper 建立索引。
+加 `hooks/audit.cursor.mjs`。每个所选宿主的原生钩子都会保留。清单的 `executables.hooks[]` 为每个宿主的每个
+wrapper 各记一行——没有单独的钩子索引文件——`hooks list`、`hooks simulate` 与产物校验（`AB6018`）读的就是
+这些行。
 
 ### 编译产出面
 
@@ -121,25 +121,28 @@ MCP 入口、脚本、路由式 CLI bin 与 MCP App 只编译**一次**，归属
 
 ## agent-bundle.manifest.json
 
-每个根目录输出一份清单，它是之后每一项完整性检查的输入 —— `validate --artifact`、`prepack`、
-`doctor --from`，以及 packed 与 installed-host 证明级别。
+每个根目录输出一份清单（`manifestVersion: 2`）。它是根目录的**索引**——每个消费者都通过这一份文档了解
+根目录包含什么——也是之后每一项完整性检查的输入：`validate --artifact`、`prepack`、`install`、
+`doctor --from`、`serve-app`、`mcp`、`hooks`，以及 packed 与 installed-host 证明级别。完整的字段参考见
+[产物清单](./artifact-manifest.mdx)页；概要如下：
 
-| 字段 | 内容 |
+| 分节 | 内容 |
 | --- | --- |
-| `producer` | `{ name: 'agent-bundle', version }`。 |
+| `producer`、`runtime` | `{ name: 'agent-bundle', version }` 与 `{ node }`，即所选的生成式可执行文件下限。 |
+| `application` | 身份，只记录一次且与宿主无关：`id`、`name`、`version`，可选的 `description`。这是 `install`、`doctor` 与 `uninstall` 作用的对象。 |
 | `project` | `configPath`、`configDigest`、`modelDigest`、`revision`、经过校验的 `packageName` 与 `packageVersion`（未打包的开发项目中不存在），以及 `sourceInputs`。 |
-| `files` | 每个输出文件：`path`、`bytes`、`sha256`、`kind`、可选的 `mode`，以及它所派生自的 `sourceInputs`。 |
-| `runtime` | `{ node }` —— 所选的生成式可执行文件下限。 |
-| `targets` | 每个所选投影一行，按名称排序：`name`、`adapterRevision`、`observedVersion`，以及它据以校验的固定 `schemas`。 |
+| `files[]` | 每个输出文件：`path`、`bytes`、`sha256`、`kind`（`bundle`、`copy`、`generated`、`prebuilt`）、可选的 `mode`，以及它所派生自的 `sourceInputs`。 |
+| `projections[]` | 每个所选宿主一行，按 `host` 排序：`adapterRevision`、`observedVersion`、固定的 `schemas`、指向该投影输出的宿主插件、市场、MCP 与钩子文档的 `documents` 指针，以及它的 `marketplace` 名。 |
+| `routes` | 编译后的路由图：`servers[]`、`events[]`、`scripts[]`、`cli`、`providers[]`、`layouts[]` 及其 `digest`。 |
+| `executables` | 根目录能启动的每个进程：`bins[]`、`hooks[]`（每个宿主的每个 wrapper 一行）、带 `entry` 与 `apps[]` 的 `mcpServers[]`，以及 `scripts[]`。 |
+| `distribution` | `channels`（`local`，项目有包身份时再加 `npm`）与指向 `INSTALL.md` / `install.mjs` 的 `install` 指针。 |
 | `agentSkills` | Agent Skills 规范固定值：`specification`、`sourceRevision`、`schemaSha256`。 |
-| `validation` | `source`、`artifact` 与各所选投影的已记录状态。 |
+| `validation` | `source`、`artifact` 与各投影已记录的 `passed` 状态。 |
 
-`kind` 取值为 `bundle`、`copy`、`generated` 或 `prebuilt` —— 分别是打包入口、按字节复制、编译器生成的
-文档，或预构建 payload 文件。`sourceInputs` 记录每个输入路径及其自身的 SHA-256，并在相关时记录它是否
-可执行。
-
-由于每个文件都携带摘要，校验比对的是**真实字节**，而不是检查路径是否存在，因此被手工改过的生成文件会
-失败。正是这一契约，让 `validate --artifact`、`mcp` 与 `hooks` 能在项目源码已被删除的产物上工作。
+只有 `build` 写它；其中的一切都派生自配置、约定文件系统与编译后的模型，字节是规范的——每个读取方都会拒绝
+被手工改过的副本。由于每个文件都携带摘要，校验比对的是**真实字节**，而不是检查路径是否存在，因此被手工
+改过的生成文件会失败。正是这一契约，让 `validate --artifact`、`mcp` 与 `hooks` 能在项目源码已被删除的产物
+上工作。根目录中的宿主文档与清单出自同一个模型，校验会证明它们与清单一致（`AB6039`、`AB6040`）。
 
 ## 版本与修订
 
@@ -155,13 +158,14 @@ MCP 入口、脚本、路由式 CLI bin 与 MCP App 只编译**一次**，归属
 没有打包后的声明文件引用它，也没有 `imports` 映射或消费者侧安装脚本触及它（`AB7014`）——或消费者的 npm 无法从注册表抓取它（`AB7015`）：
 已发布的插件只安装其打包文件所需的内容。[验证指南](../guide/distribution/validation.mdx)列出了每一种证据来源。
 
-target 行还记录 `adapterRevision`（单调递增，仓库自有）与 `observedVersion`（记录该能力证据时所观察到的
+投影行还记录 `adapterRevision`（单调递增，仓库自有）与 `observedVersion`（记录该能力证据时所观察到的
 宿主版本）。两者都不做哈希：Git 已经为仓库自有内容做了版本管理，在仓库内部再哈希一遍会让每次编辑表格
 都产生变动噪声。哈希固定只保留给 vendored 的外部内容 —— `src/adapters/schemas/*` 下带 `PROVENANCE.json`
 的宿主文档 schema、Agent Skills schema 固定值，以及输出文件与源输入。
 
 ## 下一步
 
+- [产物清单](./artifact-manifest.mdx) —— `agent-bundle.manifest.json` 的每个字段、由谁写入、由谁读取。
 - [产物校验](../guide/distribution/validation.mdx) —— 读取这份清单的那些检查。
 - [宿主安装](../guide/distribution/installation.mdx) —— 把根目录安装进各个宿主。
 - [运行时环境](./runtime-environment.mdx) —— 输出的可执行文件在运行时假定了什么。

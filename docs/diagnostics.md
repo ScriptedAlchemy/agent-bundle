@@ -32,8 +32,8 @@ even when no error diagnostic was reported.
 | `AB490x`/`AB492x` | Conventional host components (#100 stage 2): rules `src/rules/*.mdc` (`AB4900`–`AB4908`) and commands `src/commands/*.md` (`AB4920`–`AB4928`), including per-host feature-set enforcement (`AB4907`/`AB4908`, `AB4927`/`AB4928`); see below. |
 | `AB48xx`/`AB494x` | Route graph, state, layout (`AB4830`–`AB4832`), generated route declarations outside the TypeScript program (`AB4834`), route render budgets (`AB4835`), tool task support (`AB4836`), a route module that value-imports a compiler-carrying framework entry (`AB4837`), and provider conventions (see below). |
 | `AB5000` | General CLI and adapter failures. |
-| `AB60xx` | Built-artifact validation, including schema documents and referenced files (`AB6005`: an emitted JavaScript module — a host-pack module or a package build `dist` bundle (`dist/bin/*.js`, the Flight workers, the `lib` entry), prebuilt payloads excepted — has an import that is neither a Node built-in nor a relative or `file:` specifier resolving to a listed regular file inside its tree, or a non-literal dynamic import; a `dist` finding names `dist/<path>`; `AB6011`/`AB6012`: a target's required pinned-schema document is missing or invalid; `AB6025`: a manifest-declared `logo` path is missing from the artifact or escapes the deploy tree; `AB6034`: emitted Skill Markdown has no instruction body; `AB6035`–`AB6038`: Agent Plugins portable validation, see below). |
-| `AB700x` | Host installation and uninstallation: bundle identity (`AB7001`: the host's plugin manifest is not directly under `--from` — the composite root is every selected host's bundle root, so `install` never looks under `<from>/<host>` — or the manifest is unreadable or lacks a name or version), host availability, scope, command failure, and collision checks (`AB7005`: version collision, pre-receipt content collision, or foreign install; `AB7006`: the host lists the installed copy with load errors; see below), plus the `uninstall` refusals `AB7007`–`AB7009` (ownership or content mismatch, unconfirmed data purge, missing receipt; see below). |
+| `AB60xx` | Built-artifact validation, including schema documents and referenced files (`AB6005`: an emitted JavaScript module — a host-pack module or a package build `dist` bundle (`dist/bin/*.js`, the Flight workers, the `lib` entry), prebuilt payloads excepted — has an import that is neither a Node built-in nor a relative or `file:` specifier resolving to a listed regular file inside its tree, or a non-literal dynamic import; a `dist` finding names `dist/<path>`; `AB6011`/`AB6012`: a target's required pinned-schema document is missing or invalid; `AB6025`: a manifest-declared `logo` path is missing from the artifact or escapes the deploy tree; `AB6034`: emitted Skill Markdown has no instruction body; `AB6035`–`AB6038`: Agent Plugins portable validation, see below; `AB6039`–`AB6040`: an `agent-bundle.manifest.json` row disagrees with the tree or a host document disagrees with the manifest identity, see below). |
+| `AB700x` | Host installation and uninstallation: bundle identity (`AB7001`: the composite root at `--from` cannot be resolved for the host from its `agent-bundle.manifest.json` — the manifest is missing or not canonical, has no `projections[]` row for the host, the row has no host plugin manifest pointer or the pointed file is missing, `claude`/`codex` have no marketplace identity, or the `cursor` plugin name is not a safe local plugin name; `install`, `uninstall`, and `doctor` never probe `.claude-plugin/plugin.json` or look under `<from>/<host>`), host availability, scope, command failure, and collision checks (`AB7005`: version collision, pre-receipt content collision, or foreign install; `AB7006`: the host lists the installed copy with load errors; see below), plus the `uninstall` refusals `AB7007`–`AB7009` (ownership or content mismatch, unconfirmed data purge, missing receipt; see below). |
 | `AB7010`–`AB7015` | npm prepack inventory, artifact freshness, package bin targets, release-version agreement, and installed-dependency hygiene (`AB7014`: a dependency no packed file references; `AB7015`: a git, remote-tarball, path, or unrewritten workspace-protocol dependency specifier). |
 | `AB7200`–`AB7202`, `AB7210`–`AB7211` | Development rebuilds and live host surfaces: rebuild admission and phase failures, development host install sync, and the dev-epoch contract gate (see below). |
 | `AB7xxx` | Project preparation and development rebuilds (`AB7100`–`AB7102`: a development rebuild's compilation, publication, and cleanup; `AB7103`: the development package build; see below). |
@@ -178,6 +178,35 @@ Validation happens at three moments, all fail-closed:
 | `AB6036` | error | A normative-text rule the schemas cannot express is violated: `plugin.json` and `mcp.json` declare different Agent Plugins versions (§10.1); a stdio `command` is neither a bare executable name nor a bundled plugin-relative `./` file, or carries a placeholder (§7.2.1); a `./`, `${PLUGIN_ROOT}`, or `${PLUGIN_DATA}` `cwd` escapes its root after resolution (§4.1/§7.2.1); a remote `url` is not an absolute HTTP(S) URL, carries user information or a fragment, uses plain HTTP against a non-loopback host, or carries a placeholder; header names are invalid, repeat under different casing, or carry placeholders, or a header value contains anything other than visible ASCII, space, horizontal tab, or obs-text bytes (§7.2.1, RFC 9110 §5.5); an `env` key carries a placeholder (§9.2); `skills/` or `mcp.json` is present with the wrong filesystem kind (§6.2); or a `skills/<name>/` directory has no regular `SKILL.md` (§7.1). | Repair the generated portable layout or MCP entry to satisfy the Agent Plugins 1.0.0 normative text, then rebuild. |
 | `AB6037` | error | A symlink inside the plugin resolves outside the plugin root, or cannot be resolved at all (§4.1 containment). | Replace the escaping symlink with a file or a link that resolves inside the plugin root, then rebuild. |
 | `AB6038` | info | Every portable host-validation report states that Agent Plugins publishes no reference validator and names the pinned schema provenance (specification repository commit, retrieval and re-verification dates) used for local validation. | Review the pinned Agent Plugins provenance before changing the local validator contract. |
+
+## Artifact manifest coherence (`AB6039`–`AB6040`)
+
+`agent-bundle.manifest.json` (`manifestVersion: 2`) is the index of the composite
+root: `application` records the identity once, `projections[]` the selected
+hosts with pointers to the host documents each derived, `executables` every
+process the root can start (`bins`, `hooks`, `mcpServers` with their `apps`,
+`scripts`), `routes` the compiled route graph, and `distribution` the install
+surface. `install`, `uninstall`, `doctor`, `serve-app`, `mcp`, `hooks`, `eval`,
+the Workbench, and the prepack gate act on those rows instead of probing the
+tree, so `agent-bundle build` and `validate --artifact` prove that the rows and
+the tree agree before a root is accepted. The manifest's own parse already
+rejects a pointer that names no `files[]` row, a `hosts[]` entry that names no
+projection, or non-canonical bytes (`AB6001`); the two codes below cover what
+the parse alone cannot see. Hook coherence (`AB6018`) is part of the same pass
+and reads `executables.hooks[]` — there is no `agent-bundle.hooks.json` sidecar
+— proving that every row names an emitted wrapper inside the host's wrapper
+layout and that every compiler wrapper a host hooks document runs is exactly
+one row.
+
+Both are errors because a consumer acting on the manifest would otherwise
+install or launch something the tree does not contain. Neither is repaired by
+editing the manifest: its bytes are canonical, every reader rejects a hand edit,
+and the host documents are regenerated from the same model on every build.
+
+| Code | Severity | Meaning | Recovery |
+| --- | --- | --- | --- |
+| `AB6039` | error | An `executables`, `routes`, or `distribution` row disagrees with the tree or the adapter layout: a `bins[]`, `hooks[]`, `mcpServers[].entry`, `apps[]`, or `scripts[]` path lies outside the directory the host's artifact layout assigns to that kind; a `compiled` MCP server row has no `entry`, or a `command` or `remote` row has one; a host MCP document names a server that has no `mcpServers[]` row listing that host, or a row lists a host whose MCP document does not name the server. | Rebuild the artifact so the manifest rows and the emitted tree come from one build; never hand-edit `agent-bundle.manifest.json`. |
+| `AB6040` | error | A host document disagrees with the manifest identity: the host plugin manifest a `projections[].documents.plugin` pointer names declares a `name` or `version` other than `application.name` / `application.version`; the marketplace document names a marketplace other than `projections[].marketplace.name`; or a projection declares `marketplace` without a marketplace document, or emits a marketplace document without declaring `marketplace`. | Rebuild the artifact so every host document is regenerated from the normalized model the manifest records; never hand-edit a host document or the manifest. |
 
 ## npm prepack gate (`AB7010`–`AB7015`)
 

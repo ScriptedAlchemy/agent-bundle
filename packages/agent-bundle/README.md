@@ -210,9 +210,12 @@ the shipped document in the install receipt (`cursorExpansion`), and
 itself stays spec-conformant for other Agent Plugins clients.
 
 Cursor installation is user-scoped. Claude also accepts `--scope project` and
-`--scope local`; Codex is user-scoped. `--from` names the plugin root itself —
-the directory that holds the selected host's manifest — and a source-free copy
-of that root is accepted.
+`--scope local`; Codex is user-scoped. `--from` names the composite root itself —
+the directory that holds `agent-bundle.manifest.json` — and a source-free copy
+of that root is accepted. Identity (name, version, marketplace) and the host
+plugin document come from that manifest's `application` and `projections[]`
+rows, never from probing host files; a root whose manifest is missing, not
+canonical, or has no projection for the host is refused with `AB7001`.
 
 ### Reinstall after a same-version rebuild
 

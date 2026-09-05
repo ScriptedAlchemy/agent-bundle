@@ -51,8 +51,7 @@ artifact/
 ├── scripts/, skills/, commands/, rules/, assets/, mcp-apps/   # emitted once
 ├── INSTALL.md                            # when any built-in host is selected
 ├── install.mjs                           # when cursor or portable is selected
-├── agent-bundle.manifest.json            # selected projections + provenance
-└── agent-bundle.hooks.json               # hook index over selected hosts
+└── agent-bundle.manifest.json            # the artifact index (manifestVersion 2)
 ```
 
 Host manifests live in their dotfolders at the root. `skills/`, `hooks/`, `mcp/`, `scripts/`,
@@ -89,8 +88,9 @@ revision), so one wrapper cannot serve two hosts:
 Which hosts a hook reaches is its `targets` (every target, by default) intersected with the
 selection, so the same source hook is `hooks/audit.mjs` in a `claude`-only root and
 `hooks/audit.claude.mjs` plus `hooks/audit.cursor.mjs` in a `claude` + `cursor` root. Native hooks
-are preserved for every selected host. `agent-bundle.hooks.json` indexes the wrappers over the
-selected hosts.
+are preserved for every selected host. The manifest's `executables.hooks[]` carries one row per
+wrapper per host — there is no separate hook index file — and `hooks list`, `hooks simulate`, and
+artifact validation (`AB6018`) read those rows.
 
 ### Compiled surfaces
 
@@ -134,27 +134,32 @@ inventory checks the same paths (`AB7010`).
 
 ## agent-bundle.manifest.json
 
-One manifest is emitted per root and is the input to every later integrity check —
-`validate --artifact`, `prepack`, `doctor --from`, and the packed and installed-host proof levels.
+One manifest is emitted per root (`manifestVersion: 2`). It is the root's **index** — the one
+document every consumer reads to learn what the root contains — and the input to every later
+integrity check: `validate --artifact`, `prepack`, `install`, `doctor --from`, `serve-app`, `mcp`,
+`hooks`, and the packed and installed-host proof levels. The full field reference is the
+[Artifact manifest](./artifact-manifest.mdx) page; in outline:
 
-| Field | Contents |
+| Section | Contents |
 | --- | --- |
-| `producer` | `{ name: 'agent-bundle', version }`. |
+| `producer`, `runtime` | `{ name: 'agent-bundle', version }` and `{ node }`, the selected generated-executable floor. |
+| `application` | The identity, once and host-independent: `id`, `name`, `version`, optional `description`. What `install`, `doctor`, and `uninstall` act on. |
 | `project` | `configPath`, `configDigest`, `modelDigest`, `revision`, the validated `packageName` and `packageVersion` (absent for unpackaged development projects), and `sourceInputs`. |
-| `files` | Every emitted file: `path`, `bytes`, `sha256`, `kind`, optional `mode`, and the `sourceInputs` it derives from. |
-| `runtime` | `{ node }` — the selected generated-executable floor. |
-| `targets` | One row per selected projection, sorted by name: `name`, `adapterRevision`, `observedVersion`, and the pinned `schemas` it was validated against. |
+| `files[]` | Every emitted file: `path`, `bytes`, `sha256`, `kind` (`bundle`, `copy`, `generated`, `prebuilt`), optional `mode`, and the `sourceInputs` it derives from. |
+| `projections[]` | One row per selected host, sorted by `host`: `adapterRevision`, `observedVersion`, the pinned `schemas`, the `documents` pointers to the host plugin, marketplace, MCP, and hooks documents the projection emitted, and its `marketplace` name. |
+| `routes` | The compiled route graph: `servers[]`, `events[]`, `scripts[]`, `cli`, `providers[]`, `layouts[]`, and its `digest`. |
+| `executables` | Every process the root can start: `bins[]`, `hooks[]` (one row per wrapper per host), `mcpServers[]` with their `entry` and `apps[]`, and `scripts[]`. |
+| `distribution` | `channels` (`local`, plus `npm` when the project has a package identity) and the `install` pointers to `INSTALL.md` / `install.mjs`. |
 | `agentSkills` | The Agent Skills specification pin: `specification`, `sourceRevision`, `schemaSha256`. |
-| `validation` | Recorded status for `source`, `artifact`, and each selected projection. |
+| `validation` | Recorded `passed` status for `source`, `artifact`, and each projection. |
 
-`kind` is one of `bundle`, `copy`, `generated`, or `prebuilt` — a bundled entry, a byte-for-byte
-copy, a compiler-generated document, or a prebuilt payload file. `sourceInputs` records each
-input path with its own SHA-256 and, where relevant, whether it was executable.
-
-Because every file carries a digest, validation compares **real bytes** rather than checking that
-a path exists, and a hand-edited generated file fails. That contract is what makes
-`validate --artifact`, `mcp`, and `hooks` work against an artifact whose project sources have been
-deleted.
+Only `build` writes it; everything in it is derived from the configuration, the conventional
+filesystem, and the compiled model, and its bytes are canonical — every reader rejects a
+hand-edited copy. Because every file carries a digest, validation compares **real bytes** rather
+than checking that a path exists, and a hand-edited generated file fails. That contract is what
+makes `validate --artifact`, `mcp`, and `hooks` work against an artifact whose project sources
+have been deleted. The host documents in the root are written from the same model as the manifest,
+and validation proves they agree with it (`AB6039`, `AB6040`).
 
 ## Versions and revisions
 
@@ -173,7 +178,7 @@ packed JavaScript imports, requires, or resolves them, no packed declaration ref
 fetch from a registry (`AB7015`): a published plugin installs only what its packed files need. The
 [validation guide](../guide/distribution/validation.mdx) lists every source of evidence.
 
-Target rows also record an `adapterRevision` (monotonic, repository-owned) and an
+Projection rows also record an `adapterRevision` (monotonic, repository-owned) and an
 `observedVersion` (the host version the capability evidence was recorded against). Neither is
 hashed: Git already versions repository-owned content, and hashing it again inside the repository
 causes churn on every table edit. Hash pins are reserved for vendored external content — host
@@ -182,6 +187,7 @@ schema pin, and emitted files and source inputs.
 
 ## Next
 
+- [Artifact manifest](./artifact-manifest.mdx) — every field of `agent-bundle.manifest.json`, who writes it, who reads it.
 - [Artifact validation](../guide/distribution/validation.mdx) — the checks that read this manifest.
 - [Host installation](../guide/distribution/installation.mdx) — installing the root into each host.
 - [Runtime environment](./runtime-environment.mdx) — what the emitted executables assume at run time.

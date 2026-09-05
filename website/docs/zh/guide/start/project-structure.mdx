@@ -123,8 +123,7 @@ artifact/
 ├── scripts/, skills/, commands/, rules/, assets/, mcp-apps/   # 组件目录，只输出一次
 ├── INSTALL.md                        # 每个所选宿主一节
 ├── install.mjs                       # 选择了 cursor 或 portable 时出现
-├── agent-bundle.manifest.json        # 每个产出文件及其 SHA-256
-└── agent-bundle.hooks.json           # 覆盖所选宿主的钩子索引
+└── agent-bundle.manifest.json        # 产物索引：身份、投影、可执行文件、摘要
 ```
 
 宿主清单位于各自的点目录中；`skills/`、`hooks/`、`mcp/`、`scripts/`、`bin/` 与 `assets/` 只输出一次、
