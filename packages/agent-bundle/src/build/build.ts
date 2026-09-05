@@ -313,10 +313,10 @@ const manifestProjections = (options: {
     const documents = projection.plan.documents;
     const emitted = (path: string | undefined): string | undefined =>
       path !== undefined && options.filePaths.has(path) ? path : undefined;
-    const hooks = emitted(documents?.hooks);
     const plugin = emitted(documents?.plugin);
     const marketplace = emitted(documents?.marketplace?.path);
-    const mcp = emitted(documents?.mcp);
+    const mcp = emitted(options.registry.mcpRuntime(host)?.manifestPath);
+    const hooks = emitted(options.registry.hookContract(host)?.manifestPath);
     const builtInHost = options.registry.builtInHost(host);
     return Object.freeze({
       ...(builtInHost === undefined ? {} : { builtInHost }),

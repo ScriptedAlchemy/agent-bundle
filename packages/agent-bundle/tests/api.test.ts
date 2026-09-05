@@ -15,6 +15,7 @@ import {
 } from '../src/adapters/hook-contract.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
 import { inspectArtifactFilesystem } from '../src/build/emit.ts';
+import { parseArtifactManifest } from '../src/build/manifest.ts';
 import type { CapabilityState } from '../src/core/capabilities.ts';
 import type { Diagnostic } from '../src/core/diagnostics.ts';
 import { pathTokens, type NormalizedPlugin } from '../src/core/types.ts';
@@ -1991,38 +1992,33 @@ it('copies every supported top-level script output suffix byte-for-byte with sou
       expect(check.generatedMode).toBe(check.sourceMode);
     }
 
-    const manifest = JSON.parse(await readFile(join(output, 'agent-bundle.manifest.json'), 'utf8')) as {
-      readonly files: readonly {
-        readonly kind: 'bundle' | 'copy' | 'generated';
-        readonly mode?: number;
-        readonly path: string;
-        readonly sourceInputs: readonly string[];
-      }[];
-    };
+    const manifest = parseArtifactManifest(await readFile(join(output, 'agent-bundle.manifest.json'), 'utf8'));
     expect(manifest.files).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: 'copy',
         mode: 0o741,
         path: 'scripts/bash.bash',
-        sourceInputs: ['agent-bundle.config.ts', 'src/run.BASH'],
       }),
       expect.objectContaining({
         kind: 'bundle',
         path: 'scripts/bundle.mjs',
-        sourceInputs: ['agent-bundle.config.ts', 'src/bundle.ts'],
       }),
       expect.objectContaining({
         kind: 'copy',
         mode: 0o751,
         path: 'scripts/shell.sh',
-        sourceInputs: ['agent-bundle.config.ts', 'src/run.SH'],
       }),
       expect.objectContaining({
         kind: 'copy',
         mode: 0o711,
         path: 'scripts/python.py',
-        sourceInputs: ['agent-bundle.config.ts', 'src/run.Py'],
       }),
+    ]));
+    expect(manifest.compiler.provenance).toEqual(expect.arrayContaining([
+      { path: 'scripts/bash.bash', sourceInputs: ['agent-bundle.config.ts', 'src/run.BASH'] },
+      { path: 'scripts/bundle.mjs', sourceInputs: ['agent-bundle.config.ts', 'src/bundle.ts'] },
+      { path: 'scripts/shell.sh', sourceInputs: ['agent-bundle.config.ts', 'src/run.SH'] },
+      { path: 'scripts/python.py', sourceInputs: ['agent-bundle.config.ts', 'src/run.Py'] },
     ]));
     await expect(validate({ artifact: output, root })).resolves.toEqual({ diagnostics: [] });
 
@@ -2062,12 +2058,11 @@ it('canonicalizes copied script extensions in emitted artifact paths', async () 
       code: 'ENOENT',
     });
     expect(result.build.manifest.files).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        kind: 'copy',
-        path: 'scripts/upper.sh',
-        sourceInputs: ['agent-bundle.config.ts', 'src/run.SH'],
-      }),
+      expect.objectContaining({ kind: 'copy', path: 'scripts/upper.sh' }),
     ]));
+    expect(result.build.manifest.compiler.provenance).toContainEqual(
+      { path: 'scripts/upper.sh', sourceInputs: ['agent-bundle.config.ts', 'src/run.SH'] },
+    );
     expect(result.build.outputProvenance).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: 'copy',

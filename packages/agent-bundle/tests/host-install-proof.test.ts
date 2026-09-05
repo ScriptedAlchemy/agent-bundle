@@ -231,12 +231,14 @@ it('accepts an installed artifact whose manifest declares no resource components
     const artifactRoot = join(cloneRoot, 'project', 'artifact');
     const artifactManifestPath = join(artifactRoot, 'agent-bundle.manifest.json');
     const artifactManifest = JSON.parse(await readFile(artifactManifestPath, 'utf8')) as {
+      readonly compiler: { readonly provenance: readonly { readonly path: string }[] };
       readonly files: readonly { readonly path: string }[];
     };
+    const keeps = (file: { readonly path: string }): boolean => !/^(?:assets|commands|skills)\//u.test(file.path);
     await writeFile(artifactManifestPath, `${stableJson({
       ...artifactManifest,
-      files: artifactManifest.files.filter((file) =>
-        !/^(?:assets|commands|skills)\//u.test(file.path)),
+      compiler: { ...artifactManifest.compiler, provenance: artifactManifest.compiler.provenance.filter(keeps) },
+      files: artifactManifest.files.filter(keeps),
     })}\n`);
     const clonedFixture: BuiltHostInstallFixture = Object.freeze({
       artifactRoot,

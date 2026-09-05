@@ -157,14 +157,13 @@ const serversFor = (manifest: ArtifactManifest): ApplicationExplorerServer[] => 
   const routesByServer = new Map(manifest.routes.servers.map((server) => [server.id, server]));
   return manifest.executables.mcpServers
     .map((executable): ApplicationExplorerServer => {
+      // A server the route graph never compiled routes for (a prebuilt or remote
+      // server) is still a process the root runs; it simply has no route rows.
       const server = routesByServer.get(executable.id);
-      if (server === undefined) {
-        throw new TypeError(`Application explorer server ${JSON.stringify(executable.id)} has no route node.`);
-      }
       const tools: ApplicationExplorerRoute[] = [];
       const resources: ApplicationExplorerRoute[] = [];
       const prompts: ApplicationExplorerRoute[] = [];
-      for (const route of server.routes) {
+      for (const route of server?.routes ?? []) {
         switch (route.kind) {
           case 'tool':
             tools.push(routeForExplorer(route));
@@ -198,9 +197,9 @@ const serversFor = (manifest: ArtifactManifest): ApplicationExplorerServer[] => 
           .sort(byId),
         ...(executable.entry === undefined ? {} : { entry: executable.entry.path }),
         hosts: [...executable.hosts].sort((left, right) => left.localeCompare(right)),
-        id: server.id,
+        id: executable.id,
         kind: executable.kind,
-        name: server.name,
+        name: executable.name,
         prompts: prompts.sort(byId),
         resources: resources.sort(byId),
         tools: tools.sort(byId),

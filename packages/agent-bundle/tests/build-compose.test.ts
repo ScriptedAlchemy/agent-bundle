@@ -422,7 +422,8 @@ describe('composite plugin root (#555)', () => {
       buildFixture(['claude', 'codex'], { registry }),
     ]);
     expect(alone.result.build.manifest.projections.map((projection) => projection.host)).toEqual(['synthetic']);
-    expect(alone.result.build.manifest.projections[0]!.documents.mcp).toBeUndefined();
+    // The pointer comes from the adapter's runtime contract, so an advanced adapter's own document is indexed too.
+    expect(alone.result.build.manifest.projections[0]!.documents.mcp).toBe(syntheticMcpRuntime.manifestPath);
     expect(await topLevel(alone.output)).toContain(syntheticMcpRuntime.manifestPath);
     expect(builtIn.result.build.manifest.projections.map((projection) => projection.host)).toEqual(['claude', 'codex']);
     expect(await topLevel(builtIn.output)).not.toContain(syntheticMcpRuntime.manifestPath);
