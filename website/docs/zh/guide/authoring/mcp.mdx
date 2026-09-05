@@ -59,9 +59,10 @@ export default async function Status({ input, signal }: ToolRouteProps<typeof in
 `resultSchema` 描述一个对象时）`outputSchema`，并经过一次投影，使 2020-12 校验器与非严格模式的
 draft-07 校验器都接受每一个合法取值。zod 元组（`z.tuple([...])`）被发出为 `prefixItems`，加上取各
 位置 schema 并集的 `items`，并以 `minItems`（闭合元组还有 `maxItems`）限定长度——绝不会是
-`items: false`——因此用 draft-07 关键字语义校验参数与 `structuredContent` 的宿主（Cursor，否则它会以
-`MCP error -32602 … boolean schema is false` 拒绝一个合法的元组）能接受 2020-12 校验器接受的一切。
-`.rest()` 元组是唯一放宽 2020-12 精度的地方：其 rest 位置也可以匹配某个前缀 schema。zod 发出的
+`items: false`——因此用 draft-07 关键字语义校验 `structuredContent` 的宿主（Cursor，否则它会以
+`MCP error -32602 … boolean schema is false` 拒绝一个合法的元组结果）能接受 2020-12 校验器接受的
+一切。`inputSchema` 经过同一投影，因此以同样方式校验参数的宿主也一并覆盖。`.rest()` 元组是唯一放宽
+2020-12 精度的地方：其 rest 位置也可以匹配某个前缀 schema。zod 发出的
 其他一切都原样通过：两种方言共有的关键字（`$ref`、`propertyNames`、`const`、数值型
 `exclusiveMinimum`）在两者下的校验方式相同，`$defs` 在任一方言下都通过 JSON 指针形式的 `$ref` 到达，
 而像 `unevaluatedProperties`、`dependentRequired` 这样仅属于 2020-12 的关键字会被宽松模式的
