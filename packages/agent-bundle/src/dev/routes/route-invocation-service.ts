@@ -311,10 +311,7 @@ class InvocationSemaphore {
     this.#limit = limit;
   }
 
-  async run<T>(operation: () => Promise<T>): Promise<T> {
-    if (this.#active >= this.#limit) {
-      await new Promise<void>((resolvePromise) => this.#waiting.push(resolvePromise));
-    }
+  async #execute<T>(operation: () => Promise<T>): Promise<T> {
     this.#active += 1;
     try {
       return await operation();
@@ -322,6 +319,24 @@ class InvocationSemaphore {
       this.#active -= 1;
       this.#waiting.shift()?.();
     }
+  }
+
+  async run<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    signal?.throwIfAborted();
+    if (this.#active < this.#limit) return this.#execute(operation);
+    return new Promise<T>((resolvePromise, rejectPromise) => {
+      const start = (): void => {
+        signal?.removeEventListener('abort', abort);
+        void this.#execute(operation).then(resolvePromise, rejectPromise);
+      };
+      const abort = (): void => {
+        const index = this.#waiting.indexOf(start);
+        if (index !== -1) this.#waiting.splice(index, 1);
+        rejectPromise(signal?.reason);
+      };
+      this.#waiting.push(start);
+      signal?.addEventListener('abort', abort, { once: true });
+    });
   }
 }
 
@@ -880,7 +895,7 @@ export class RouteInvocationService {
   readonly #scripts: RouteInvocationScriptRunner | undefined;
   readonly #semaphore: InvocationSemaphore;
   readonly #timeoutMs: number;
-  #closed = false;
+  readonly #closeController = new AbortController();
 
   constructor(options: RouteInvocationServiceOptions) {
     this.#history = new InvocationRingBuffer(options.historyLimit);
@@ -904,14 +919,17 @@ export class RouteInvocationService {
   }
 
   async close(): Promise<void> {
-    this.#closed = true;
+    this.#closeController.abort(new DOMException('Route invocation service closed.', 'AbortError'));
     for (const controller of this.#controllers) {
       controller.abort(new DOMException('Route invocation service closed.', 'AbortError'));
     }
     await Promise.allSettled([...this.#pending]);
   }
 
-  async invoke(request: RouteInvocationRequest): Promise<RouteInvocation> {
+  async invoke(
+    request: RouteInvocationRequest,
+    options: Readonly<{ readonly signal?: AbortSignal }> = {},
+  ): Promise<RouteInvocation> {
     let queued: RouteManifest;
     try {
       queued = this.#manifest.manifest();
@@ -943,6 +961,9 @@ export class RouteInvocationService {
     const surface = resolvedSurface(route, request.surface, queued);
     const id = `inv_${this.#now().getTime().toString(36)}${randomBytes(8).toString('hex')}`;
     const startedAt = this.#now();
+    const admissionSignal = options.signal === undefined
+      ? this.#closeController.signal
+      : AbortSignal.any([this.#closeController.signal, options.signal]);
     const running = this.#semaphore.run<RouteInvocation>(async () => {
       let release: RouteInvocationPreparedLease['release'] | undefined;
       try {
@@ -985,10 +1006,10 @@ export class RouteInvocationService {
           : rawInput;
         const context = contextFor(route, prepared.manifest.projectRoot, surface);
         const controller = new AbortController();
+        const abort = (): void => controller.abort(admissionSignal.reason);
         this.#controllers.add(controller);
-        if (this.#closed) {
-          controller.abort(new DOMException('Route invocation service closed.', 'AbortError'));
-        }
+        admissionSignal.addEventListener('abort', abort, { once: true });
+        if (admissionSignal.aborted) abort();
         const timeout = setTimeout(() => controller.abort(new DOMException('Route invocation timed out.', 'TimeoutError')), this.#timeoutMs);
         let child: RouteInvocationChildResult;
         const plainScript = plainScriptFor(prepared, route);
@@ -1032,6 +1053,7 @@ export class RouteInvocationService {
           });
         } finally {
           clearTimeout(timeout);
+          admissionSignal.removeEventListener('abort', abort);
           this.#controllers.delete(controller);
         }
         const projectionStartedAt = this.#now();
@@ -1080,7 +1102,7 @@ export class RouteInvocationService {
       } finally {
         await release?.();
       }
-    });
+    }, admissionSignal);
     this.#pending.add(running);
     let invocation: RouteInvocation;
     try {

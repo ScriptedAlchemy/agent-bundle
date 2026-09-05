@@ -1,11 +1,16 @@
-import { mkdir, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
+import { Client } from '@modelcontextprotocol/client';
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
 import type { RouteInvocationResponse } from '../src/dev/routes/route-invocation-result.ts';
 import type { RouteInvocationListResponse } from '../src/dev/routes/route-invocation.ts';
 import type { RouteManifestResponse } from '../src/dev/routes/route-manifest.ts';
+import { confirmationRequiredMessage } from '../src/cli-entry.ts';
+import { stableJson } from '../src/core/digest.ts';
 import { pluginRootEnvAnchor, pluginStateRootEnvAnchor } from '../src/core/types.ts';
 import { createWorkbenchAssetSource } from '../src/dev/workbench-assets.ts';
 import { startDevServer } from '../src/dev/workbench-server.ts';
@@ -78,31 +83,55 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         '}',
         '',
       ].join('\n'),
-      'src/events/tool/after.preflight.ts': "export default () => 'execute';\n",
+      'src/events/tool/after.preflight.ts': [
+        "import { appendFileSync } from 'node:fs';",
+        "import { join } from 'node:path';",
+        '',
+        'export default () => {',
+        "  appendFileSync(join(process.cwd(), '.agent-bundle', 'defer-gate.marker'), 'gate\\n');",
+        "  return 'execute';",
+        '};',
+        '',
+      ].join('\n'),
       'src/events/tool/after.tsx': [
-        "import { Agent } from '@agent-bundle/runtime';",
+        "import { appendFileSync } from 'node:fs';",
+        "import { join } from 'node:path';",
+        "import { Agent, agent } from '@agent-bundle/runtime';",
         "import { createElement } from 'react';",
         "export { default as preflight } from './after.preflight.js';",
         '',
-        "export const config = { runtime: 'standalone' };",
+        "export const config = { providers: ['clock'], runtime: 'standalone' };",
         '',
         'export default async function AfterTool({ canonical }) {',
-        "  return createElement(Agent.Result, null, createElement(Agent.Context, null, `Observed ${canonical.payload.toolName}.`));",
+        '  const context = await agent();',
+        "  appendFileSync(join(process.cwd(), '.agent-bundle', 'defer-handler.marker'), 'run\\n');",
+        "  const value = { outcome: 'defer', providers: Object.keys(context.providers).sort() };",
+        "  return createElement(Agent.Result, { value }, createElement(Agent.Context, null, `Observed ${canonical.payload.toolName}.`));",
         '}',
         '',
       ].join('\n'),
       'src/events/prompt/submit.preflight.ts': "export default () => ({ outcome: 'continue' });\n",
       'src/events/prompt/submit.tsx': [
+        "import { writeFileSync } from 'node:fs';",
+        "import { join } from 'node:path';",
         "export { default as preflight } from './submit.preflight.js';",
         "export const config = { runtime: 'standalone' };",
-        "export default async function PromptSubmit() { throw new Error('continue preflight reached handler'); }",
+        "export default async function PromptSubmit() {",
+        "  writeFileSync(join(process.cwd(), '.agent-bundle', 'continue-handler.marker'), 'ran');",
+        "  throw new Error('continue preflight reached handler');",
+        '}',
         '',
       ].join('\n'),
       'src/events/tool/before.preflight.ts': "export default () => ({ outcome: 'deny', reason: 'blocked by preflight' });\n",
       'src/events/tool/before.tsx': [
+        "import { writeFileSync } from 'node:fs';",
+        "import { join } from 'node:path';",
         "export { default as preflight } from './before.preflight.js';",
         "export const config = { runtime: 'standalone' };",
-        "export default async function BeforeTool() { throw new Error('deny preflight reached handler'); }",
+        "export default async function BeforeTool() {",
+        "  writeFileSync(join(process.cwd(), '.agent-bundle', 'deny-handler.marker'), 'ran');",
+        "  throw new Error('deny preflight reached handler');",
+        '}',
         '',
       ].join('\n'),
       'src/mcp/status/tools/counter.tsx': [
@@ -137,6 +166,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         "import { ALIAS_VALUE } from '@fixture/value';",
         "import { createElement } from 'react';",
         "import { z } from 'zod';",
+        "import { Panel } from './panel.js';",
         'declare const __ROUTE_INVOCATION_DEFINE__: string;',
         '',
         "export const config = { annotations: { readOnlyHint: true }, description: 'Reports one service.' };",
@@ -147,12 +177,25 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         '  const context = await agent();',
         "  if (context.plugin.state !== 'available') throw new Error('plugin unavailable');",
         '  const value = { alias: ALIAS_VALUE, define: __ROUTE_INVOCATION_DEFINE__, pluginRoot: context.plugin.value.root, service: input.service, source: input.source, stateRoot: context.plugin.value.stateRoot };',
-        "  return createElement(Agent.Result, { value }, createElement(Agent.Text, null, `Service ${input.service}`));",
+        "  return createElement(Agent.Result, { value }, createElement(Panel), createElement(Agent.Text, null, './panel.js'), createElement(Agent.Text, null, `Service ${input.service}`));",
+        '}',
+        '',
+      ].join('\n'),
+      'src/mcp/status/tools/panel.tsx': [
+        "import { Agent } from '@agent-bundle/runtime';",
+        "import { createElement } from 'react';",
+        "import { z } from 'zod';",
+        '',
+        "export const Panel = () => createElement(Agent.Text, null, 'panel rendered');",
+        "export const inputSchema = z.object({}).strict();",
+        "export const resultSchema = z.object({ panel: z.literal(true) }).strict();",
+        'export default async function PanelRoute() {',
+        "  return createElement(Agent.Result, { value: { panel: true } }, createElement(Panel));",
         '}',
         '',
       ].join('\n'),
       'src/mcp/status/tools/report.cli.ts': [
-        "export const config = { command: ['report'], confirm: false, flags: { service: { name: 'name' }, source: { required: false } } };",
+        "export const config = { command: ['report'], confirm: true, flags: { service: { name: 'name' }, source: { required: false } } };",
         "export const mapInput = (input) => ({ ...input, source: input.source ?? 'cli-projection' });",
         '',
       ].join('\n'),
@@ -246,6 +289,30 @@ it('invokes compiled tool and event routes through the foreground server', { tim
       source: 'api',
       stateRoot,
     });
+    const mcpName = (await readdir(join(artifactRoot, 'mcp')))
+      .find((name) => name.endsWith('.mjs') && !name.endsWith('-flight.mjs'));
+    if (mcpName === undefined) throw new Error('Expected a generated MCP server.');
+    const mcpTransport = new StdioClientTransport({
+      args: [join(artifactRoot, 'mcp', mcpName)],
+      command: process.execPath,
+      cwd: project.root,
+      env: {
+        [pluginRootEnvAnchor]: artifactRoot,
+        [pluginStateRootEnvAnchor]: stateRoot,
+      },
+      stderr: 'pipe',
+    });
+    const mcpClient = new Client({ name: 'route-invocation-document-parity', version: '1.0.0' });
+    await mcpClient.connect(mcpTransport);
+    try {
+      const generatedMcp = await mcpClient.callTool({
+        arguments: { service: 'catalog', source: 'api' },
+        name: 'report',
+      });
+      expect(stableJson(tool.invocation.projection.mcp)).toBe(stableJson(generatedMcp));
+    } finally {
+      await mcpClient.close();
+    }
     expect(tool.invocation.providers).toEqual([
       expect.objectContaining({ durationMs: expect.any(Number), id: 'provider:clock', name: 'clock', status: 'mounted' }),
     ]);
@@ -297,10 +364,13 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     const eventFailure = eventResponse.status === 200 ? undefined : await eventResponse.clone().text();
     expect(eventResponse.status, eventFailure).toBe(200);
     const event = await eventResponse.json() as RouteInvocationResponse;
-    expect(event.invocation.status).toBe('succeeded');
+    expect(event.invocation.status, JSON.stringify(event.invocation.diagnostics)).toBe('succeeded');
     expect(event.invocation.outcome).toEqual({ kind: 'success' });
     expect(event.invocation.events.at(-1)?.type).toBe('complete');
     expect(event.invocation.document).toBeDefined();
+    expect(event.invocation.result).toEqual({ outcome: 'defer', providers: ['clock', 'processLifetime'] });
+    expect(await readFile(join(project.root, '.agent-bundle', 'defer-gate.marker'), 'utf8')).toBe('gate\n');
+    expect(await readFile(join(project.root, '.agent-bundle', 'defer-handler.marker'), 'utf8')).toBe('run\n');
     expect(event.invocation.projection.hosts?.[0]).toMatchObject({ host: 'claude' });
     expect(event.invocation.trace?.map((trace) => trace.kind)).toEqual([
       'preflight.start',
@@ -359,6 +429,10 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         'preflight.start',
         'preflight.outcome',
       ]);
+      expect(existsSync(join(
+        join(project.root, '.agent-bundle'),
+        routeId === 'event:tool/before' ? 'deny-handler.marker' : 'continue-handler.marker',
+      ))).toBe(false);
       if (routeId === 'event:tool/before') {
         expect(invoked.invocation.projection.hosts?.[0]?.native).toEqual({
           hookSpecificOutput: {
@@ -422,10 +496,24 @@ it('invokes compiled tool and event routes through the foreground server', { tim
       });
     }
 
-    const projectedCliResponse = await fetch(`${server.url}/api/routes/invocations`, {
+    const confirmationMessage = confirmationRequiredMessage('status', 'report');
+    const unconfirmedProjectedCliResponse = await fetch(`${server.url}/api/routes/invocations`, {
       body: JSON.stringify({
         routeId: 'tool:status/report',
         surface: { args: ['--name', 'projection'], command: 'report', kind: 'cli' },
+      }),
+      headers,
+      method: 'POST',
+    });
+    expect(unconfirmedProjectedCliResponse.status).toBe(200);
+    const unconfirmedProjectedCli = await unconfirmedProjectedCliResponse.json() as RouteInvocationResponse;
+    expect(unconfirmedProjectedCli.invocation.status).toBe('failed');
+    expect(unconfirmedProjectedCli.invocation.diagnostics[0]?.message).toContain(confirmationMessage);
+
+    const projectedCliResponse = await fetch(`${server.url}/api/routes/invocations`, {
+      body: JSON.stringify({
+        routeId: 'tool:status/report',
+        surface: { args: ['--name', 'projection', '--yes'], command: 'report', kind: 'cli' },
       }),
       headers,
       method: 'POST',
@@ -446,15 +534,25 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     });
     expect(projectedCli.invocation.projection.mcp).toBeUndefined();
     expect(projectedCli.invocation.surface).toEqual({
-      args: ['--name', 'projection'],
+      args: ['--name', 'projection', '--yes'],
       command: 'report',
       kind: 'cli',
     });
     const binName = (await readdir(join(artifactRoot, 'bin')))
       .find((name) => name.endsWith('.mjs') && !name.endsWith('-flight.mjs'));
     if (binName === undefined) throw new Error('Expected a generated routed CLI bin.');
-    const generatedBin = await runNodeScript({
+    const generatedUnconfirmed = await runNodeScript({
       args: [join(artifactRoot, 'bin', binName), 'report', '--name', 'projection', '--json'],
+      cwd: project.root,
+      env: {
+        [pluginRootEnvAnchor]: artifactRoot,
+        [pluginStateRootEnvAnchor]: stateRoot,
+      },
+    });
+    expect(generatedUnconfirmed.code).toBe(2);
+    expect(generatedUnconfirmed.stderr).toContain(confirmationMessage);
+    const generatedBin = await runNodeScript({
+      args: [join(artifactRoot, 'bin', binName), 'report', '--name', 'projection', '--yes', '--json'],
       cwd: project.root,
       env: {
         [pluginRootEnvAnchor]: artifactRoot,
