@@ -169,6 +169,8 @@ Workbench 外壳，因此路由、trace、Problems 与 Advanced 的深度链接�
 alias 与 define、生成入口的请求作用域、providers、持久状态、CLI `mapInput` 与确认、事件
 preflight 以及渲染语义都与已安装制品一致。`mode: "unit-render"` 是显式的组件预览后备模式：
 它通过 route-unit 测试工具加载实时源码并挂载一次性状态，不能作为制品一致性的证明。
+生产状态位于已发布 epoch 旁的 `<epoch>/state`，并通过 `AGENT_BUNDLE_STATE_ROOT` 与该 epoch 的开发期
+MCP 会话共享。
 
 该信封携带规范输入、请求上下文、providers、有序渲染事件、最终的 Agent Document、结构化结果、投影、
 诊断与执行计时。`providers` 列出子进程实际测到的结果（`mounted`、`failed` 或 `skipped`），仅在测到

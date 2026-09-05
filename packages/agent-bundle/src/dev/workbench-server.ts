@@ -9,6 +9,7 @@ import { DevCoordinator } from './coordinator.ts';
 import { DevPackageBuildService } from './package-build-service.ts';
 import { runDevEpochContracts } from './dev-contract-runner.ts';
 import { EpochAdoptionPolicy } from './epoch-adoption-policy.ts';
+import { devEpochStateRoot } from './epoch-paths.ts';
 import { DevLogService } from './logs/dev-log-service.ts';
 import { attachProjectEventLogs, createMcpDevLogTraceSink, createProjectDevLogger } from './logs/dev-log-producers.ts';
 import { EpochStore, EpochStoreError } from './epoch-store.ts';
@@ -60,7 +61,6 @@ import {
   ROUTE_INVOCATION_STALE_REVISION_MESSAGE,
   RouteInvocationRequestError,
   RouteInvocationService,
-  routeInvocationStateRoot,
 } from './routes/route-invocation-service.ts';
 import { routeManifestFor } from './routes/route-manifest.ts';
 import type { RouteManifestRouteService } from './routes/route-manifest-routes.ts';
@@ -916,6 +916,19 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
         .map((target) => target.name)
         .find((target) => registry.artifactLayout(target).scripts !== undefined);
       const epochId = artifact.activeEpoch.id;
+      let reference;
+      try {
+        reference = await epochStore.acquireEpochReference(epochId);
+      } catch (error) {
+        if (error instanceof EpochStoreError && error.code === 'EPOCH_NOT_FOUND') {
+          throw new RouteInvocationRequestError(
+            ROUTE_INVOCATION_STALE_REVISION_CODE,
+            ROUTE_INVOCATION_STALE_REVISION_MESSAGE,
+            409,
+          );
+        }
+        throw error;
+      }
       const project = Object.freeze({
         ...(scriptTarget === undefined ? {} : { artifact: { epochId, target: scriptTarget } }),
         manifest: testManifestFromRouteGraph({
@@ -938,22 +951,9 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
           ...(prepared.model.state === undefined ? {} : { state: prepared.model.state }),
           targets,
         }),
-        stateRoot: routeInvocationStateRoot(prepared.root),
+        stateRoot: devEpochStateRoot(reference.root),
         targets,
       });
-      let reference;
-      try {
-        reference = await epochStore.acquireEpochReference(epochId);
-      } catch (error) {
-        if (error instanceof EpochStoreError && error.code === 'EPOCH_NOT_FOUND') {
-          throw new RouteInvocationRequestError(
-            ROUTE_INVOCATION_STALE_REVISION_CODE,
-            ROUTE_INVOCATION_STALE_REVISION_MESSAGE,
-            409,
-          );
-        }
-        throw error;
-      }
       return {
         project,
         release: () => reference.close(),

@@ -15,6 +15,7 @@ import type {
   RouteInvocationChildResponse,
   RouteInvocationChildResult,
 } from './route-invocation-service.ts';
+import { ProductionRouteInvocationError } from './route-invocation-production-error.ts';
 import { renderProductionRoute } from './route-invocation-production.ts';
 import { createRouteModuleLoader } from './route-module-loader.ts';
 
@@ -97,7 +98,7 @@ process.once('message', (request: RouteInvocationChildRequest) => {
     .then((result) => respond({ result, type: 'result' }))
     .catch((error: unknown) => respond({
       error: {
-        ...(typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string'
+        ...(error instanceof ProductionRouteInvocationError
           ? { code: error.code }
           : {}),
         message: error instanceof Error ? error.message : String(error),
