@@ -594,6 +594,15 @@ const humanInspectArtifact = (result: Awaited<ReturnType<typeof inspectArtifact>
     .join(', ');
   const bins = application.cli?.bins.map((bin) => bin.name).join(', ') ?? '';
   const scripts = application.scripts.map((script) => script.name).join(', ');
+  const payloads = application.distribution.payloads
+    .map((payload) => {
+      const hosts = payload.hosts.join(', ');
+      const dependencies = payload.runtimeDependencies.join(', ');
+      return dependencies.length === 0
+        ? `${payload.name} (${hosts})`
+        : `${payload.name} (${hosts}: ${dependencies})`;
+    })
+    .join('; ');
   return [
     `Application: ${application.identity.name} (${application.identity.id}) ${application.identity.version}\n`,
     `Projections: ${projections}\n`,
@@ -601,6 +610,7 @@ const humanInspectArtifact = (result: Awaited<ReturnType<typeof inspectArtifact>
     hooks.length === 0 ? '' : `Hooks: ${hooks}\n`,
     bins.length === 0 ? '' : `Bins: ${bins}\n`,
     scripts.length === 0 ? '' : `Scripts: ${scripts}\n`,
+    payloads.length === 0 ? '' : `Payloads: ${payloads}\n`,
   ].join('');
 };
 

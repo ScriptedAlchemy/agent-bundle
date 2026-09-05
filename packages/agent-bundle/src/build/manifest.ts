@@ -33,8 +33,11 @@ import { parseWebManifest, type WebManifest } from '../web-host/manifest.ts';
  * bytes are canonical `stableJson`: any reader rejects a document that is not
  * byte-identical to its own serialization. `manifestVersion` versions the
  * public contract consumers read; `compiler.recordVersion` versions the
- * operational compiler record independently. `manifestVersion` bumps on a
- * public-contract rename or removal; an added optional key does not.
+ * operational compiler record independently. Either number bumps on any
+ * change an old closed reader would reject — adding, renaming, or removing a
+ * key (optional or not) or changing an enumerated value set the reader
+ * closes. Within one version the key inventory is frozen. Optional is not
+ * backward compatible. Readers refuse any other version.
  */
 
 export const artifactManifestName = 'agent-bundle.manifest.json';

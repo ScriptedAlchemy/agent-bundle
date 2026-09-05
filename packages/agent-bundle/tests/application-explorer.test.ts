@@ -15,7 +15,18 @@ const manifest = (): ArtifactManifest => ({
   distribution: {
     channels: ['local', 'npm'],
     install: { instructions: 'INSTALL.md', script: 'install.mjs' },
-    payloads: [],
+    payloads: [
+      {
+        hosts: ['codex', 'claude'],
+        name: 'tools',
+        runtimeDependencies: ['lodash', 'sharp'],
+      },
+      {
+        hosts: ['claude'],
+        name: 'native',
+        runtimeDependencies: [],
+      },
+    ],
   },
   executables: {
     bins: [{
@@ -284,6 +295,14 @@ it('projects one stable application tree by joining routes and executable rows',
   expect(explorer.distribution).toEqual({
     channels: ['local', 'npm'],
     install: { instructions: 'INSTALL.md', script: 'install.mjs' },
+    payloads: [
+      { hosts: ['claude'], name: 'native', runtimeDependencies: [] },
+      {
+        hosts: ['claude', 'codex'],
+        name: 'tools',
+        runtimeDependencies: ['lodash', 'sharp'],
+      },
+    ],
   });
 });
 
@@ -298,4 +317,5 @@ it('deep-freezes the complete browser projection', () => {
   expect(Object.isFrozen(explorer.hooks[0]!.hooks[0]!)).toBe(true);
   expect(Object.isFrozen(explorer.cli!.commands[0]!.path)).toBe(true);
   expect(Object.isFrozen(explorer.distribution.install!)).toBe(true);
+  expect(Object.isFrozen(explorer.distribution.payloads[0]!)).toBe(true);
 });

@@ -44,7 +44,7 @@ const inspection: ArtifactInspection = {
       commands: [{ path: ['review'], routeId: 'cli:review' }],
       mode: 'generated',
     },
-    distribution: { channels: ['local'] },
+    distribution: { channels: ['local'], payloads: [] },
     events: [{
       event: 'sessionStart',
       hooks: [{ host: 'claude', kind: 'event-route', path: 'hooks/session-start.mjs', timeout: 30 }],

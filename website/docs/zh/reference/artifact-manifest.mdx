@@ -39,7 +39,7 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 | `doctor --from <root>` | 与 `install` 相同的身份、固定路径文件集合与内容哈希读取，按被检查的宿主逐一进行；它对树运行的静态校验（`AB7319`）继续按投影进行。 |
 | `serve-app`、`mcp list` / `invoke` / `run` | 从 `executables.mcpServers[]` 取服务器编译后的 `entry` 及其 `apps[]`；省略 `--target` 时从 `projections[]` 选出宿主。 |
 | `hooks list` / `simulate` | `executables.hooks[]`——可被模拟的编译器 wrapper。 |
-| `inspect --json` | 当产物输出位置存在已构建的清单时，追加一份 `output.manifest` 摘要——投影与可执行文件——因此 JSON 消费者无需第二次探测。`inspect --artifact <root>` 通过该文件读取裸的复合根，并打印 Workbench 渲染的同一份 `application` 投影。 |
+| `inspect --json` | 当产物输出位置存在已构建的清单时，追加一份 `output.manifest` 摘要——投影与可执行文件——因此 JSON 消费者无需第二次探测。`inspect --artifact <root>` 通过该文件读取裸的复合根，并打印 Workbench 渲染的同一份 `application` 投影，包括 `distribution.payloads[]` 行。 |
 | `eval --artifact`、`agent-bundle/test` 的已安装宿主证明 | 用 `projections[]` 与 `executables.hooks[]` 取代任何宿主文档。 |
 | Workbench 产物页 | 通过 `ArtifactInspection.application` 上的 application-explorer 投影读取清单：应用身份、宿主及其文档、合并后的服务器路由与可执行信息、事件与钩子、CLI、脚本和分发信息。输出文件树仍是独立的检查证据；浏览器不会把清单原始形状用作应用树模型。 |
 | `validate --artifact`、`build` | 整份文档：存在性与规范字节（`AB6000`、`AB6001`）、`files[]` 与树的比对（`AB6004`），以及基于 `executables.hooks[]` 的钩子一致性（`AB6018`）。 |
@@ -170,7 +170,7 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 | --- | --- | --- |
 | `channels[]` | 是 | 始终有 `local`；恰当 `compiler.project.packageName` 存在时有 `npm`。已排序。 |
 | `install` | 否 | 指向安装表面的根相对指针：`{ instructions?: 'INSTALL.md', script?: 'install.mjs' }`，根目录至少携带其一时出现。 |
-| `payloads[]` | 是 | 每个为所选宿主打包的预构建负载目录（`definePrebuilt`）一行：`{ hosts, name, runtimeDependencies }`。`name` 是产物根下的目录名；`hosts` 是它所打包的投影；`runtimeDependencies` 是作者声明的、已排序去重的裸包名列表，即该目录树在运行时加载的包——编译器从不打开负载文件，因此这是唯一的记录。按 `name` 排序。 |
+| `payloads[]` | 是 | 每个为所选宿主打包的预构建负载目录（[`definePrebuilt`](../guide/authoring/package-entries.mdx#预构建-payload)）一行：`{ hosts, name, runtimeDependencies }`。`name` 是产物根下的目录名；`hosts` 是它所打包的投影；`runtimeDependencies` 是作者声明的、已排序去重的裸包名列表，即该目录树在运行时加载的包——编译器从不打开负载文件，因此这是唯一的记录。**产物专用消费者读取的就是这一行**（`install`、`doctor`、#555 S4 的 npm 根）——这些包必须存在于消费者运行时，产物从不打包它们。按 `name` 排序。 |
 
 ### `web`
 
@@ -376,19 +376,22 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 
 ## 版本规则
 
-每个根目录携带两个版本号：
+每个根目录携带两个版本号。键在每一层都是封闭的，因此**可选并不等于向后兼容**：版本 N 的读取方会拒绝
+任何它不认识的键或枚举值。
 
 - `manifestVersion` 为消费者读取的**公开契约**版本化（`application`、`files[]`、`runtime`、
-  `projections[]`、`routes`、`executables`、`distribution`）。公开契约键被**重命名或删除**时改变；
-  新增一个**可选**公开键不会改变它。版本 2 把 `targets[]` 重命名为 `projections[]`，把过去由
-  `agent-bundle.hooks.json` 承载的钩子行移入 `executables.hooks[]` 并删除了该文件，并新增了
-  `application`、`routes`、`executables`、`distribution` 与 `projections[].documents`。
-- `compiler.recordVersion` 为**编译器记录**版本化（`producer`、`project`、`provenance[]`、
-  `adapters[]`、`agentSkills`、`validation`）。记录形状变更时递增；内部编译器重构不会迫使
-  `manifestVersion` 递增。当前值为 `1`。
+  `projections[]`、`routes`、`executables`、`distribution`）。旧的封闭读取方会拒绝的**任何**变更
+  都会使其递增——新增、重命名或删除一个公开契约键（无论是否可选），或更改读取方封闭的枚举值集合。
+  同一版本内键清单冻结。读取方拒绝任何其他 `manifestVersion`。版本 2 把 `targets[]` 重命名为
+  `projections[]`，把过去由 `agent-bundle.hooks.json` 承载的钩子行移入 `executables.hooks[]` 并删除了
+  该文件，并新增了 `application`、`routes`、`executables`、`distribution` 与
+  `projections[].documents`。
+- `compiler.recordVersion` 按同样规则为**编译器记录**的键版本化（`producer`、`project`、
+  `provenance[]`、`adapters[]`、`agentSkills`、`validation`）。只改这些事实的内部编译器重构会递增
+  `recordVersion`，而不会迫使 `manifestVersion` 递增。读取方拒绝任何其他 `recordVersion`。当前值为
+  `1`。
 
-由于键是封闭的，比写入方更旧的读取方会拒绝携带它不认识的键的文档——请用构建该产物的框架版本或更新的版本
-读取它。
+请用构建该产物的框架版本或更新的版本读取它。
 
 ## 诊断
 
