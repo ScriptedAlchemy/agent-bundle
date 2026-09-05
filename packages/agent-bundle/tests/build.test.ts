@@ -1141,9 +1141,9 @@ const reservedSpecifierProject = async (): Promise<{ readonly entry: RslibEntry;
   await writeFile(join(sourceRoot, 'entry.ts'), [
     "import { marker } from 'agent-bundle/mcp-entry';",
     "import registry from 'agent-bundle/mcp-apps';",
-    // A reserved specifier mentioned as data, not imported: the residual-import
-    // scan parses the emitted bundle instead of grepping it, so this survives
-    // into the output without failing the self-containment check.
+    // A reserved specifier mentioned as data, not imported: self-containment
+    // is judged from the module graph's externals, not from the emitted text,
+    // so this survives into the output without failing the check.
     "const mentioned = 'agent-bundle/mcp-entry';",
     'export const main = () => { console.log(marker, registry, mentioned); };',
     '',
@@ -1184,8 +1184,8 @@ it('inlines reserved specifiers through exact-match aliases and virtual generate
     expect(bundle).toContain('generated-registry');
     expect(bundle).toContain('generated-wrapper-marker');
     expect(bundle).not.toMatch(/from\s*["']agent-bundle\//u);
-    // The scan tolerates a reserved specifier that is only mentioned as a
-    // string literal; only a live import fails the build.
+    // A reserved specifier that is only mentioned as a string literal is not
+    // an external; only a live import kept external fails the build.
     expect(bundle).toContain('agent-bundle/mcp-entry');
     // The wrapper entry and registry module were served from memory at
     // guaranteed-nonexistent paths: the reserved namespace never reaches the
