@@ -243,6 +243,7 @@ const outputCandidatesFor = (options: {
   readonly compiledMcpApps: readonly CompiledMcpApp[];
   readonly compiledMcpEntries: readonly CompiledMcpEntry[];
   readonly entries: CompositePlan['entries'];
+  readonly model: NormalizedPlugin;
 }): readonly ArtifactOutputCandidate[] => [
   ...options.entries.map((entry) => ({
     kind: entry.kind !== 'copy'
@@ -831,6 +832,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
         compiledMcpApps,
         compiledMcpEntries,
         entries: composite.entries,
+        model: options.model,
       }),
       projectRoot: options.projectRoot,
     });
