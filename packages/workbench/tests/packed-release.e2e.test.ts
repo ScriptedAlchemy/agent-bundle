@@ -886,6 +886,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       await expect(page.locator('.eval-raw-result')).toContainText('The deterministic packed fixture passed.', { timeout: browserTimeout });
       await waitForBrowserRequestsAfter(evalsBrowserRequestIndex);
       phase = 'Evals comparison run availability';
+      const comparisonsOpenedAt = Date.now();
       await page.getByRole('link', { name: 'Comparisons', exact: true }).click();
       await expect(page.getByRole('heading', { name: 'Comparisons' })).toBeVisible({ timeout: browserTimeout });
       await expect.poll(async () => page.locator('#comparison-base option').count(), { timeout: browserTimeout }).toBeGreaterThanOrEqual(2);
@@ -930,6 +931,16 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       const rebuiltWithRecoveredSession = page.waitForResponse((response) =>
         response.url() === `${origin}/api/project/rebuild` && response.request().method() === 'POST' && response.ok(),
       );
+      // The recovered session hands the Comparisons page new clients, and its
+      // effect re-lists /api/evals/runs; leaving for Overview before a loaded
+      // server answers aborts that listing, which the ledger must be able to
+      // attribute to this departure like every later one.
+      const postRecoveryNavigation: Array<Readonly<{
+        leftAt: number;
+        openedAt: number;
+        respondedStream?: true;
+        url: string;
+      }>> = [Object.freeze({ leftAt: Date.now(), openedAt: comparisonsOpenedAt, url: `${origin}/api/evals/runs` })];
       await page.getByRole('link', { name: 'Overview', exact: true }).click();
       await page.getByRole('button', { name: 'Rebuild' }).click();
       const rebuiltWithRecoveredSessionResponse = await rebuiltWithRecoveredSession;
@@ -1014,12 +1025,6 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
         ['Comparisons', [`${origin}/api/evals/runs`]],
       ]);
       const respondedNavigationStreams = new Set<string>();
-      const postRecoveryNavigation: Array<Readonly<{
-        leftAt: number;
-        openedAt: number;
-        respondedStream?: true;
-        url: string;
-      }>> = [];
       let activeNavigationRoute: Readonly<{ openedAt: number; urls?: readonly string[] }> | undefined;
       const leaveActiveNavigationRoute = (leftAt: number): void => {
         if (activeNavigationRoute === undefined) return;
