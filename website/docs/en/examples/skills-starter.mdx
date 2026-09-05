@@ -45,19 +45,20 @@ it is needed.
 
 ## Working in the Workbench
 
-1. **Overview** opens on the Bundle dashboard: the three Skills, the generated targets, build
-   health, and the next useful actions.
-2. **Skills** lists `dependency-upgrade`, `incident-triage`, and `release-review`. Browse their
-   linked checklists and report templates, and switch between Source and Generated per target.
-3. **Artifacts** shows the composite plugin root. Switching the target between portable, Codex,
-   and Claude changes which projection is in focus, but every choice shows the same tree — the
-   one directory all three hosts read — and each file's provenance.
-4. **Evals** defaults to the `release-readiness` suite. Run `release-artifact-is-ready` and
+1. **Application → Skills** lists `dependency-upgrade`, `incident-triage`, and `release-review`.
+   Select one to render its document, then use the inspector to browse linked checklists and
+   report templates or compare Source and Generated output.
+2. **Advanced → Artifact** shows the composite plugin root. Switching the target between
+   portable, Codex, and Claude changes which projection is in focus, but every choice shows the
+   same tree — the one directory all three hosts read; enable details for each file's provenance.
+3. **Advanced → Evals → Runs** defaults to the `release-readiness` suite. Run
+   `release-artifact-is-ready` and
    inspect the passing trial; it consumes only the checked-in evidence fixture.
-5. To practice repair, make a reversible edit to the release policy, press **Rebuild**, and wait
-   for a Failed or Idle result rather than a Building state. Restore the checked-in policy and
-   rebuild. The earlier eval is now stale for the changed build — rerun `release-readiness` to
-   record current, repaired evidence.
+4. To practice repair, make a reversible edit to the release policy, press **Rebuild**, and wait
+   for a Failed or Idle result rather than a Building state. On failure, open **Problems** from
+   the header count while Application keeps the last-good tree. Restore the checked-in policy
+   and rebuild. The earlier eval is now stale for the changed build — rerun `release-readiness`
+   to record current, repaired evidence.
 
 ## Noninteractive checks
 

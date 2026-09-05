@@ -72,6 +72,52 @@ export const isValidPackageName = (value: string): boolean =>
 /** True for a strict semver 2.0.0 version. */
 export const isValidPackageVersion = (value: string): boolean => packageVersionPattern.test(value);
 
+/** The outcome of reading `<root>/package.json` for any project-identity purpose. */
+export type PackageDocumentRead =
+  /** No package.json, or one that cannot be read: a normal development state. */
+  | { readonly kind: 'absent' }
+  | { readonly document: Readonly<Record<string, unknown>>; readonly kind: 'document' }
+  | { readonly issue: PackageIdentityIssue; readonly kind: 'issue' };
+
+/**
+ * Reads `<root>/package.json` the one way every identity-derived judgement
+ * shares. A package.json symlinked outside the project cannot join the
+ * identity: its bytes are invisible to the source snapshot, so anything
+ * derived from it could drift without a revision change.
+ */
+export const readPackageDocument = (root: string): PackageDocumentRead => {
+  let packageJsonPath: string;
+  let canonicalRoot: string;
+  try {
+    canonicalRoot = realpathSync(resolve(root));
+    packageJsonPath = realpathSync(join(resolve(root), 'package.json'));
+  } catch {
+    return { kind: 'absent' };
+  }
+  if (!isInsideOrEqual(canonicalRoot, packageJsonPath)) {
+    return {
+      issue: { kind: 'outside-root', message: 'package.json resolves outside the project root; package identity is ignored.' },
+      kind: 'issue',
+    };
+  }
+  let bytes: string;
+  try {
+    bytes = readFileSync(packageJsonPath, 'utf8');
+  } catch {
+    return { kind: 'absent' };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(bytes);
+  } catch {
+    return { issue: { kind: 'unparsable', message: 'package.json is not valid JSON.' }, kind: 'issue' };
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return { issue: { kind: 'unparsable', message: 'package.json must contain a JSON object.' }, kind: 'issue' };
+  }
+  return { document: parsed as Readonly<Record<string, unknown>>, kind: 'document' };
+};
+
 /**
  * Derives the release-identity axes from `<root>/package.json`. A missing
  * package.json (or missing name/version fields) is a normal development
@@ -80,38 +126,20 @@ export const isValidPackageVersion = (value: string): boolean => packageVersionP
  * invalid value is withheld from the derived identity.
  */
 export const snapshotPackageIdentity = (root: string): PackageIdentitySnapshot => {
-  let packageJsonPath: string;
-  let canonicalRoot: string;
-  try {
-    canonicalRoot = realpathSync(resolve(root));
-    packageJsonPath = realpathSync(join(resolve(root), 'package.json'));
-  } catch {
-    return deepFreeze({ issues: [] });
+  const read = readPackageDocument(root);
+  switch (read.kind) {
+    case 'absent':
+      return deepFreeze({ issues: [] });
+    case 'issue':
+      return deepFreeze({ issues: [read.issue] });
+    case 'document':
+      break;
+    default: {
+      const exhaustive: never = read;
+      throw new TypeError(`Unknown package document read ${String(exhaustive)}.`);
+    }
   }
-  // A package.json symlinked outside the project cannot join the identity:
-  // its bytes are invisible to the source snapshot, so deriving release
-  // identity from it would let identity drift without a revision change.
-  if (!isInsideOrEqual(canonicalRoot, packageJsonPath)) {
-    return deepFreeze({
-      issues: [{ kind: 'outside-root', message: 'package.json resolves outside the project root; package identity is ignored.' }],
-    });
-  }
-  let bytes: string;
-  try {
-    bytes = readFileSync(packageJsonPath, 'utf8');
-  } catch {
-    return deepFreeze({ issues: [] });
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(bytes);
-  } catch {
-    return deepFreeze({ issues: [{ kind: 'unparsable', message: 'package.json is not valid JSON.' }] });
-  }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    return deepFreeze({ issues: [{ kind: 'unparsable', message: 'package.json must contain a JSON object.' }] });
-  }
-  const record = parsed as Readonly<Record<string, unknown>>;
+  const record = read.document;
   const issues: PackageIdentityIssue[] = [];
   let packageName: string | undefined;
   if (record.name !== undefined) {

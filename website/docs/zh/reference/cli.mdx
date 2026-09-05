@@ -79,7 +79,7 @@ agent-bundle serve-app <server>/<app> [--artifact <path>] [--tool <tool>] \
 ```
 
 在一个普通浏览器标签页里独立提供一个已构建的 MCP App——不在任何 MCP 宿主之内，也不需要
-Workbench：该命令以与 `mcp run` 完全相同的方式启动插件打包好的 MCP 服务器，通过 Workbench MCP 页面
+Workbench：该命令以与 `mcp run` 完全相同的方式启动插件打包好的 MCP 服务器，通过 Workbench App 工作区
 所用的同一套宿主栈（沙箱代理、同意授权、桥接）把 App 绑定到它上面，先调用一次 App 的工具让它带着数据
 打开，然后打印 loopback URL。它的输出是一份契约：宿主开始监听后，stdout 恰好携带一行
 `MCP App <app> at <url> (tool <tool>; Ctrl-C stops the server)`——`<app>` 为命令行上给出的原样，`<tool>` 为

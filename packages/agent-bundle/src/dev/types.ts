@@ -2,6 +2,7 @@ import type { Diagnostic } from '../core/diagnostics.ts';
 import type { ProjectContext } from '../core/project-context.ts';
 import type { ArtifactManifestProjectionDocuments } from '../build/manifest.ts';
 import type { ApplicationExplorer } from './artifacts/application-explorer.ts';
+import type { RouteInvocationEventPayload } from './routes/route-invocation.ts';
 
 export type JsonPrimitive = boolean | null | number | string;
 export type JsonArray = readonly JsonValue[];
@@ -341,6 +342,7 @@ export interface ProjectEventPayloadMap {
   readonly 'dev.contract.status': DevContractStatusEvent;
   readonly 'dev.host.sync': DevHostSyncEvent;
   readonly invalidation: Invalidation;
+  readonly 'route.invocation': RouteInvocationEventPayload;
   readonly 'runtime.event': RuntimeEvent;
   readonly 'source.changed': Invalidation;
   readonly 'source.status': SourceStatus;

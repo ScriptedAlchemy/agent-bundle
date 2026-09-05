@@ -2,7 +2,7 @@ import { expect, it } from '@rstest/core';
 
 import type { ArtifactInspection } from '../../agent-bundle/src/contracts/artifacts.ts';
 import type { RouteManifest } from '../../agent-bundle/src/contracts/routes.ts';
-import { loadWorkbenchCapabilities } from '../src/workbench-capabilities.ts';
+import { applicationTreeSourcesFor, loadWorkbenchCapabilities } from '../src/workbench-capabilities.ts';
 
 const digest = '0'.repeat(64);
 const file = (path: string) => ({
@@ -178,42 +178,38 @@ const clientsFor = ({
   },
 });
 
-it('derives the Skills Starter routes from its validated catalogs', async () => {
+it('derives the Skills Starter features from its validated catalogs', async () => {
   const capabilities = await loadWorkbenchCapabilities({
     buildId: 'build-a',
     ...clientsFor({ evalSuites: 1, skills: 1, targets: 3 }),
   });
 
-  expect([...capabilities.pages]).toEqual([
-    'overview', 'routes', 'skills', 'artifacts', 'logs', 'evals', 'comparisons',
-  ]);
+  expect(capabilities.features).toEqual({ evals: true, hooks: false, mcp: false, runtime: false, scripts: false, skills: true });
   expect(capabilities.counts).toEqual({ evalSuites: 1, hooks: 0, mcpServers: 0, scripts: 0, skills: 1, targets: 3 });
   expect(capabilities.routes.state).toBe('current');
-  expect(capabilities.routes.routeCount).toBe(0);
+  expect(capabilities.routes.manifest?.servers).toEqual([]);
   expect(Object.isFrozen(capabilities)).toBe(true);
   expect(Object.isFrozen(capabilities.counts)).toBe(true);
+  expect(Object.isFrozen(capabilities.features)).toBe(true);
 });
 
-it('derives Hooks and Playground without advertising unrelated capabilities', async () => {
+it('detects hooks and scripts from the artifact catalog without advertising unrelated features', async () => {
   const capabilities = await loadWorkbenchCapabilities({
     buildId: 'build-a',
     ...clientsFor({ hooks: 1, scripts: 2, targets: 3 }),
   });
 
-  expect([...capabilities.pages]).toEqual([
-    'overview', 'routes', 'hooks', 'artifacts', 'playground', 'logs',
-  ]);
+  expect(capabilities.features).toEqual({ evals: false, hooks: true, mcp: false, runtime: false, scripts: true, skills: false });
 });
 
-it('derives the complete route set for a full bundle', async () => {
+it('detects the complete feature set for a full bundle and carries the runtime topology flag', async () => {
   const capabilities = await loadWorkbenchCapabilities({
     buildId: 'build-a',
+    runtime: true,
     ...clientsFor({ evalSuites: 1, hooks: 1, mcpServers: 1, scripts: 1, skills: 1, targets: 3 }),
   });
 
-  expect([...capabilities.pages]).toEqual([
-    'overview', 'routes', 'skills', 'hooks', 'mcp', 'artifacts', 'playground', 'logs', 'evals', 'comparisons',
-  ]);
+  expect(capabilities.features).toEqual({ evals: true, hooks: true, mcp: true, runtime: true, scripts: true, skills: true });
   expect(capabilities.inspection.epochId).toBe('build-a');
 });
 
@@ -224,25 +220,18 @@ it('rejects an inspection from a different build', async () => {
   })).rejects.toThrow('Capability catalog did not match the current build.');
 });
 
-it('opens Hooks, MCP, and Playground from the compiled route graph alone', async () => {
+it('detects hooks, MCP, and scripts from the compiled route graph alone', async () => {
   const capabilities = await loadWorkbenchCapabilities({
     buildId: 'build-a',
     ...clientsFor({ cliRoutes: 1, events: 1, routeScripts: 2, routeServers: 2 }),
   });
 
-  expect([...capabilities.pages]).toEqual([
-    'overview', 'routes', 'hooks', 'lifecycles', 'mcp', 'artifacts', 'playground', 'logs',
-  ]);
+  expect(capabilities.features).toEqual({ evals: false, hooks: true, mcp: true, runtime: false, scripts: true, skills: false });
   expect(capabilities.counts.hooks).toBe(0);
   expect(capabilities.counts.mcpServers).toBe(0);
-  expect(capabilities.routes.routeCount).toBe(6);
-  expect(capabilities.routes.groups.map((group) => group.label)).toEqual([
-    'server-0 · Tools',
-    'server-1 · Tools',
-    'Event routes',
-    'CLI commands',
-    'Scripts',
-  ]);
+  expect(capabilities.routes.manifest?.servers.map((server) => server.name)).toEqual(['server-0', 'server-1']);
+  expect(capabilities.routes.manifest?.events).toHaveLength(1);
+  expect(capabilities.routes.manifest?.cli?.routes).toHaveLength(1);
 });
 
 it('reports a manifest compiled from newer source than the published build as stale', async () => {
@@ -253,20 +242,37 @@ it('reports a manifest compiled from newer source than the published build as st
   });
 
   expect(capabilities.routes.state).toBe('stale');
-  expect(capabilities.pages.has('hooks')).toBe(true);
-  expect(capabilities.pages.has('lifecycles')).toBe(true);
+  expect(capabilities.routes.manifest).toBeDefined();
+  expect(capabilities.features.hooks).toBe(true);
 });
 
-it('keeps every artifact-derived page when the manifest route is unavailable', async () => {
+it('keeps every artifact-derived feature when the manifest route is unavailable', async () => {
   const capabilities = await loadWorkbenchCapabilities({
     buildId: 'build-a',
     ...clientsFor({ evalSuites: 1, hooks: 1, mcpServers: 1, scripts: 1, skills: 1, targets: 3 }),
     routeManifestClient: { manifest: async () => { throw new Error('Route manifest is not available.'); } },
   });
 
-  expect([...capabilities.pages]).toEqual([
-    'overview', 'routes', 'skills', 'hooks', 'mcp', 'artifacts', 'playground', 'logs', 'evals', 'comparisons',
-  ]);
-  expect(capabilities.routes.state).toBe('unavailable');
-  expect(capabilities.routes.message).toBe('Route manifest is not available.');
+  expect(capabilities.features).toEqual({ evals: true, hooks: true, mcp: true, runtime: false, scripts: true, skills: true });
+  expect(capabilities.routes).toEqual({ message: 'Route manifest is not available.', state: 'unavailable' });
+  expect(applicationTreeSourcesFor(capabilities)).toEqual({
+    inspection: capabilities.inspection,
+    message: 'Route manifest is not available.',
+    skillTree: capabilities.skillTree,
+    state: 'unavailable',
+  });
+});
+
+it('projects the manifest, catalog state, Skill tree, and inspection into the tree sources', async () => {
+  const capabilities = await loadWorkbenchCapabilities({
+    buildId: 'build-a',
+    ...clientsFor({ routeServers: 1, skills: 1 }),
+  });
+
+  const sources = applicationTreeSourcesFor(capabilities);
+  expect(sources.manifest).toBe(capabilities.routes.manifest);
+  expect(sources.skillTree).toBe(capabilities.skillTree);
+  expect(sources.inspection).toBe(capabilities.inspection);
+  expect(sources.state).toBe('current');
+  expect(sources.message).toBeUndefined();
 });

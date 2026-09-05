@@ -1,5 +1,5 @@
 import type { Diagnostic } from '../../../agent-bundle/src/contracts/diagnostics.ts';
-import type { JsonObject, JsonValue } from '../../../agent-bundle/src/contracts/runtime.ts';
+import type { JsonObject } from '../../../agent-bundle/src/contracts/runtime.ts';
 import type {
   RouteManifest,
   RouteManifestCliCommand,
@@ -120,10 +120,6 @@ export interface McpToolPrefill {
   readonly arguments: RouteInputArguments;
   readonly serverName: string;
   readonly toolName: string;
-}
-
-export interface McpToolPrefillNavigationState {
-  readonly mcpToolPrefill: McpToolPrefill;
 }
 
 const kindLabels: Readonly<Record<RouteManifestKind, string>> = Object.freeze({
@@ -543,60 +539,5 @@ export const validateRouteEditor = (
     argv: routeEditorArgv(command, validated.arguments),
     attempted: true,
     errors: Object.freeze({ ...validated.errors }),
-  });
-};
-
-export const mcpToolPrefillFor = (
-  group: RouteCatalogGroup,
-  entry: RouteCatalogEntry,
-  argumentsValue: RouteInputArguments,
-): McpToolPrefill | undefined => {
-  if (entry.kind !== 'tool' || group.serverId?.startsWith('mcp:') !== true) return undefined;
-  const slash = entry.id.lastIndexOf('/');
-  if (slash < 0 || slash === entry.id.length - 1) return undefined;
-  return Object.freeze({
-    arguments: argumentsValue,
-    serverName: group.serverId.slice('mcp:'.length),
-    toolName: entry.id.slice(slash + 1),
-  });
-};
-
-const navigationJsonValue = (value: unknown, ancestors = new WeakSet<object>()): value is JsonValue => {
-  if (value === null || typeof value === 'boolean' || typeof value === 'string') return true;
-  if (typeof value === 'number') return Number.isFinite(value);
-  if (typeof value !== 'object' || ancestors.has(value)) return false;
-  ancestors.add(value);
-  try {
-    if (Array.isArray(value)) return value.every((entry) => navigationJsonValue(entry, ancestors));
-    if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) return false;
-    return Object.values(value).every((entry) => navigationJsonValue(entry, ancestors));
-  } finally {
-    ancestors.delete(value);
-  }
-};
-
-const navigationJsonObject = (value: unknown): value is JsonObject =>
-  typeof value === 'object' && value !== null && !Array.isArray(value) && navigationJsonValue(value);
-
-export const mcpToolPrefillNavigationState = (
-  prefill: McpToolPrefill,
-): McpToolPrefillNavigationState => Object.freeze({ mcpToolPrefill: prefill });
-
-export const mcpToolPrefillFromNavigationState = (value: unknown): McpToolPrefill | undefined => {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
-  const prefill = Reflect.get(value, 'mcpToolPrefill') as unknown;
-  if (typeof prefill !== 'object' || prefill === null || Array.isArray(prefill)) return undefined;
-  const argumentsValue = Reflect.get(prefill, 'arguments') as unknown;
-  const serverName = Reflect.get(prefill, 'serverName') as unknown;
-  const toolName = Reflect.get(prefill, 'toolName') as unknown;
-  if (
-    typeof serverName !== 'string' || serverName.length === 0 ||
-    typeof toolName !== 'string' || toolName.length === 0 ||
-    !navigationJsonObject(argumentsValue)
-  ) return undefined;
-  return Object.freeze({
-    arguments: argumentsValue,
-    serverName,
-    toolName,
   });
 };

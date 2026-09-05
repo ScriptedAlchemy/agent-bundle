@@ -5,7 +5,7 @@ import type { PortableConfigExtension } from '../adapters/portable.ts';
 import type { AgentBundleConfig as CoreAgentBundleConfig } from '../core/types.ts';
 
 export { discoverProject } from './discover.ts';
-export { defineConfig } from '../core/types.ts';
+export { defineConfig, definePrebuilt } from '../core/types.ts';
 export type {
   AgentProviderContext,
   AgentProviderFactory,

@@ -5,7 +5,7 @@
  * test file this glob does not match (another extension, another directory)
  * runs only if a list names it — rstest-pool-lists.test.ts enforces that.
  */
-export const workspaceTestFileGlob = 'packages/**/tests/**/*.test.ts';
+export const workspaceTestFileGlob = 'packages/**/tests/**/*.test.{ts,tsx}';
 
 /**
  * Test files that run real builds (Rslib/Rsbuild), spawn child processes, or
@@ -77,6 +77,7 @@ export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/public-api.test.ts',
   'packages/agent-bundle/tests/publint-gate.test.ts',
   'packages/agent-bundle/tests/route-contract-imports.test.ts',
+  'packages/agent-bundle/tests/route-invocation-dev-server.test.ts',
   'packages/agent-bundle/tests/route-register-typegen.test.ts',
   'packages/agent-bundle/tests/rsc-runtime-topology-script.test.ts',
   'packages/agent-bundle/tests/rstest-meta-consumer.test.ts',
@@ -93,14 +94,14 @@ export const integrationTestFiles: readonly string[] = [
   'packages/rsc-runtime/tests/notices-sqlite-cross-process.test.ts',
   'packages/rsc-runtime/tests/state-packaging.test.ts',
   'packages/rsc-runtime/tests/state-sqlite-cross-process.test.ts',
-  'packages/workbench/tests/comparisons-page-client-scope-browser.test.ts',
+  'packages/workbench/tests/audiobook-curator.acceptance.e2e.test.ts',
+  'packages/workbench/tests/evals-compare-client-scope-browser.test.ts',
   'packages/workbench/tests/contributor-hmr.e2e.test.ts',
   'packages/workbench/tests/discovery-atoms-disposal.test.ts',
   'packages/workbench/tests/discovery.e2e.test.ts',
   'packages/workbench/tests/evals-real.e2e.test.ts',
   'packages/workbench/tests/examples-real.e2e.test.ts',
   'packages/workbench/tests/host-adoption.e2e.test.ts',
-  'packages/workbench/tests/lifecycles-page.browser.test.tsx',
   'packages/workbench/tests/lifecycles.e2e.test.ts',
   'packages/workbench/tests/logs-real.e2e.test.ts',
   'packages/workbench/tests/mcp-app-preview-browser.test.ts',
@@ -111,33 +112,11 @@ export const integrationTestFiles: readonly string[] = [
   'packages/workbench/tests/mcp-session-timeout.e2e.test.ts',
   'packages/workbench/tests/mcp-tasks.e2e.test.ts',
   'packages/workbench/tests/overview.e2e.test.ts',
-  'packages/workbench/tests/playground-real.e2e.test.ts',
   'packages/workbench/tests/rsbuild-closure.test.ts',
   'packages/workbench/tests/rsbuild-workbench.test.ts',
   'packages/workbench/tests/route-editor-atoms-disposal.test.ts',
-  'packages/workbench/tests/runtime-document-atoms-disposal.test.ts',
-  'packages/workbench/tests/runtime-inspector.test.ts',
-  'packages/workbench/tests/runtime-consent-dialog.test.ts',
-  'packages/workbench/tests/runtime-playground-capture-cleanup.test.ts',
-  'packages/workbench/tests/runtime-playground.e2e.test.ts',
-  'packages/workbench/tests/runtime-playground-hmr.e2e.test.ts',
   'packages/workbench/tests/web-command.e2e.test.ts',
   'packages/workbench/tests/workbench-dev-command.test.ts',
-];
-
-/**
- * Evidence-capture harnesses: browser journeys whose product is a
- * documentation artifact (screenshots + evidence.json), not a per-PR
- * behavioral proof. The behavioral contracts they exercise (HMR activation,
- * last-good retention, recovery) are already covered per PR by
- * runtime-playground.e2e.test.ts and runtime-playground-hmr.e2e.test.ts in
- * the integration pool. Fast capture cleanup contracts stay per PR in
- * runtime-playground-capture-cleanup.test.ts. The evidence journey runs
- * through the root `test:evidence` script in CI's nightly schedule instead —
- * evidence regenerates when the flow changes, not on every PR (#128).
- */
-export const nightlyEvidenceTestFiles: readonly string[] = [
-  'packages/workbench/tests/runtime-playground-capture.test.ts',
 ];
 
 /**

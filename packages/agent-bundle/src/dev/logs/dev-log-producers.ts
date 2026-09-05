@@ -41,6 +41,7 @@ const summaryFor = (event: ProjectEvent): string => {
   if (event.type === 'artifact.status') return 'Project artifact status was updated.';
   if (event.type === 'dev.contract.status') return 'Development contract matrix settled.';
   if (event.type === 'dev.host.sync') return 'Development host install was synchronized.';
+  if (event.type === 'route.invocation') return 'Workbench route invocation completed.';
   return 'Project runtime event was published.';
 };
 
@@ -104,6 +105,7 @@ const recordEvent = (sink: DevLogSink, message: ProjectEventMessage): void => {
     case 'dev.contract.status':
     case 'dev.host.sync':
     case 'invalidation':
+    case 'route.invocation':
     case 'runtime.event':
     case 'source.changed':
     case 'source.status':

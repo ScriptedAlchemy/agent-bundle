@@ -2,6 +2,7 @@ import React, { type Ref, useState } from 'react';
 
 import type { JsonObject, JsonValue } from '../../../agent-bundle/src/contracts/runtime.ts';
 import { isRecord } from '../client-helpers.ts';
+import './mcp-json-input.css';
 
 export type ImmutableJsonValue = JsonValue;
 export type ImmutableJsonRecord = JsonObject;

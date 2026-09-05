@@ -6,7 +6,9 @@ import { describe, expect, it } from '@rstest/core';
 import {
   AgentTestError,
   inspectWorkbenchSurface,
-  workbenchPageLabel,
+  workbenchLeafPath,
+  type ApplicationGroup,
+  type ApplicationLeaf,
   type WorkbenchRouteCatalogGroup,
   type WorkbenchSurface,
 } from '../src/test/index.ts';
@@ -22,7 +24,18 @@ const groupNamed = (surface: WorkbenchSurface, label: string): WorkbenchRouteCat
   return group;
 };
 
-const visibleLabels = (surface: WorkbenchSurface): readonly string[] => surface.pages.map(workbenchPageLabel);
+const applicationGroup = (surface: WorkbenchSurface, kind: ApplicationGroup['kind']): ApplicationGroup => {
+  const group = surface.application.groups.find((candidate) => candidate.kind === kind);
+  if (group === undefined) {
+    throw new Error(`Expected an application ${JSON.stringify(kind)} group; found ${JSON.stringify(surface.application.groups.map((candidate) => candidate.kind))}.`);
+  }
+  return group;
+};
+
+const applicationLeaves = (surface: WorkbenchSurface): readonly ApplicationLeaf[] =>
+  surface.application.groups.flatMap((group) => group.kind === 'mcp'
+    ? group.servers.flatMap((server) => server.subgroups.flatMap((subgroup) => subgroup.leaves))
+    : group.leaves);
 
 /**
  * These assertions are the ones `packages/workbench/tests/examples-real.e2e.test.ts`
@@ -47,7 +60,7 @@ describe('the Workbench surface of the audiobook curator', () => {
     expect(surface.catalog.diagnostics).toEqual([]);
   });
 
-  it('projects the State region the Routes page renders', async () => {
+  it('projects the effective State declaration', async () => {
     const { catalog } = await surfacePromise;
 
     expect(catalog.stateDefinition).toMatchObject({
@@ -87,6 +100,19 @@ describe('the Workbench surface of the audiobook curator', () => {
     expect(groupNamed(surface, 'curator · Resources').entries.find((entry) => entry.route.id === 'resource:curator/catalog')?.route.config)
       .toEqual(expect.arrayContaining([{ key: 'uri', kind: 'string', value: 'audiobook-curator://catalog' }]));
     expect(groupNamed(surface, 'curator · Prompts').entries.map((entry) => entry.route.id)).toContain('prompt:curator/curate');
+
+    const mcp = applicationGroup(surface, 'mcp');
+    if (mcp.kind !== 'mcp') throw new Error('Expected the MCP application group.');
+    expect(mcp.servers).toHaveLength(1);
+    expect(mcp.servers[0]).toMatchObject({ label: 'curator', mode: 'generated', server: 'curator' });
+    expect(mcp.servers[0]?.subgroups.map((subgroup) => subgroup.label)).toEqual(['Tools', 'Resources', 'Prompts']);
+    const search = applicationLeaves(surface).find((leaf) => leaf.routeId === 'tool:curator/search_audible');
+    expect(search).toMatchObject({
+      execution: 'invoke',
+      label: 'search_audible',
+      source: 'src/mcp/curator/tools/search_audible.tsx',
+    });
+    expect(search === undefined ? undefined : workbenchLeafPath(search)).toBe('/routes/mcp/curator/tool/search_audible');
   });
 
   it('lists the 16 authored commands beside one projected command per tool', async () => {
@@ -152,54 +178,65 @@ describe('the Workbench surface of the audiobook curator', () => {
     expect(surface.manifest.scripts).toEqual([]);
   });
 
-  it('derives the navigation the Workbench shows for this project', async () => {
+  it('derives the application tree and Advanced sections for this project', async () => {
     const surface = await surfacePromise;
 
-    expect(visibleLabels(surface)).toEqual(expect.arrayContaining(['Overview', 'Routes', 'Skills', 'MCP playground', 'Hosts', 'Artifacts', 'Logs']));
-    expect(surface.unavailablePages).toEqual(expect.arrayContaining(['hooks', 'lifecycles', 'playground']));
+    expect(surface.application.state).toBe('fresh');
+    expect(surface.application.groups.map((group) => group.kind)).toEqual(['mcp', 'cli', 'skills']);
+    expect(applicationGroup(surface, 'cli')).toMatchObject({ label: 'CLI', leaves: expect.any(Array) });
+    expect(applicationGroup(surface, 'skills')).toMatchObject({
+      label: 'Skills',
+      leaves: [expect.objectContaining({ execution: 'document', label: 'curate-audiobooks' })],
+    });
+    expect(surface.application.leafCount).toBe(applicationLeaves(surface).length);
+    expect(surface.advanced).toEqual(['artifact', 'protocol', 'hosts', 'logs']);
     // One MCP server shipped to two hosts: two instances, as the artifact inventory lists them.
     expect(surface.counts).toMatchObject({ hooks: 0, mcpServers: 2, scripts: 0, skills: 1, targets: 2 });
   });
 });
 
 /**
- * `examples-real.e2e.test.ts` asserts the MCP App example keeps all nine
- * configured pages while its compiled catalog is empty, and that the Skills
- * Starter shows no Hooks, MCP playground, or Playground link.
+ * Configured-only surfaces have no compiled route catalog, but authored
+ * hooks, scripts, and Skills still appear as application leaves.
  */
 describe('the Workbench surface of the configured-only examples', () => {
-  it('keeps every configured page while reporting an empty compiled graph for the MCP App example', async () => {
+  it('keeps configured leaves while reporting an empty compiled graph for the MCP App example', async () => {
     const surface = await inspectWorkbenchSurface({ root: exampleRoot('mcp-app') });
 
     expect(surface.catalog.routeCount).toBe(0);
     expect(surface.catalog.groups).toEqual([]);
     expect(surface.catalog.stateDefinition).toBeUndefined();
-    // The rail order of packages/workbench/src/main.tsx, minus the hidden Lifecycles link.
-    expect(visibleLabels(surface)).toEqual([
-      'Overview', 'Routes', 'Skills', 'Hooks', 'Hosts', 'MCP playground', 'Artifacts', 'Playground', 'Logs', 'Evals', 'Comparisons',
-    ]);
-    expect(surface.unavailablePages).toEqual(['lifecycles']);
+    expect(surface.application.groups.map((group) => group.kind)).toEqual(['mcp', 'events', 'scripts', 'skills']);
+    expect(applicationGroup(surface, 'mcp')).toMatchObject({
+      label: 'MCP',
+      servers: [expect.objectContaining({ label: 'status', mode: 'stdio', subgroups: [] })],
+    });
+    expect(applicationGroup(surface, 'events')).toMatchObject({ label: 'Events / Hooks' });
+    expect(applicationGroup(surface, 'scripts')).toMatchObject({ label: 'Scripts' });
+    expect(surface.advanced).toEqual(['evals', 'artifact', 'protocol', 'hosts', 'logs']);
     expect(surface.counts).toMatchObject({ evalSuites: 1, skills: 1, targets: 3 });
     expect(surface.counts.hooks).toBeGreaterThan(0);
     expect(surface.counts.mcpServers).toBeGreaterThan(0);
     expect(surface.counts.scripts).toBeGreaterThan(0);
   });
 
-  it('hides Hooks, MCP playground, and Playground for the Skills Starter', async () => {
+  it('shows only Skill leaves for the Skills Starter', async () => {
     const surface = await inspectWorkbenchSurface({ root: exampleRoot('skills-starter') });
 
-    for (const hidden of ['Hooks', 'MCP playground', 'Playground']) {
-      expect(visibleLabels(surface)).not.toContain(hidden);
-    }
-    expect(visibleLabels(surface)).toEqual(expect.arrayContaining(['Overview', 'Routes', 'Skills', 'Artifacts', 'Logs']));
+    expect(surface.application.groups.map((group) => group.kind)).toEqual(['skills']);
+    expect(applicationGroup(surface, 'skills')).toMatchObject({ leaves: expect.arrayContaining([
+      expect.objectContaining({ label: 'dependency-upgrade' }),
+      expect.objectContaining({ label: 'incident-triage' }),
+      expect.objectContaining({ label: 'release-review' }),
+    ]) });
+    expect(surface.advanced).toEqual(['evals', 'artifact', 'hosts', 'logs']);
     expect(surface.counts).toMatchObject({ hooks: 0, mcpServers: 0, scripts: 0, skills: 3, targets: 3 });
   });
 });
 
 /**
  * The Workbench counts what the built artifact lists — one instance per
- * declaration per target — and hides Hooks and Playground when nothing is
- * emitted. A declaration whose `targets` select none of the project's targets
+ * declaration per target. A declaration whose `targets` select none of the project's targets
  * is declared but emitted nowhere, so it must not count.
  */
 describe('capability counts', () => {
@@ -232,8 +269,8 @@ describe('capability counts', () => {
 
       // everywhere × 2 targets + codex-only × 1 + nowhere × 0; the hook selects no target.
       expect(surface.counts).toMatchObject({ hooks: 0, mcpServers: 0, scripts: 3, targets: 2 });
-      expect(surface.pages).toContain('playground');
-      expect(surface.pages).not.toContain('hooks');
+      expect(applicationGroup(surface, 'scripts')).toMatchObject({ leaves: expect.any(Array) });
+      expect(surface.application.groups.map((group) => group.kind)).not.toContain('events');
     } finally {
       await rm(project.root, { force: true, recursive: true });
     }
@@ -268,7 +305,7 @@ describe('capability counts', () => {
       const surface = await inspectWorkbenchSurface({ root: project.root });
 
       expect(surface.counts).toMatchObject({ hooks: 1, targets: 2 });
-      expect(surface.pages).toContain('hooks');
+      expect(applicationGroup(surface, 'events')).toMatchObject({ leaves: expect.any(Array) });
 
       const prebuiltOnly = await createProjectFixture({
         config: [
@@ -290,8 +327,7 @@ describe('capability counts', () => {
         const hidden = await inspectWorkbenchSurface({ root: prebuiltOnly.root });
 
         expect(hidden.counts).toMatchObject({ hooks: 0, targets: 1 });
-        expect(hidden.pages).not.toContain('hooks');
-        expect(hidden.unavailablePages).toContain('hooks');
+        expect(applicationGroup(hidden, 'events')).toMatchObject({ leaves: expect.any(Array) });
       } finally {
         await rm(prebuiltOnly.root, { force: true, recursive: true });
       }
@@ -300,7 +336,7 @@ describe('capability counts', () => {
     }
   });
 
-  it('hides Playground and Hooks when every declaration selects no target', async () => {
+  it('keeps application groups empty when every declaration selects no target', async () => {
     const project = await createProjectFixture({
       config: [
         'export default {',
@@ -322,7 +358,7 @@ describe('capability counts', () => {
       const surface = await inspectWorkbenchSurface({ root: project.root });
 
       expect(surface.counts).toMatchObject({ hooks: 0, scripts: 0, targets: 1 });
-      expect(surface.unavailablePages).toEqual(expect.arrayContaining(['hooks', 'playground']));
+      expect(surface.application.groups).toEqual([]);
     } finally {
       await rm(project.root, { force: true, recursive: true });
     }
@@ -381,12 +417,12 @@ describe('preparation parity with the Workbench server', () => {
       expect(surface.provenance.configPath).toBe(resolve(project.root, 'workbench.config.ts'));
       expect(surface.provenance.targets).toEqual(['claude', 'codex']);
       expect(surface.counts).toMatchObject({ evalSuites: 1, targets: 2 });
-      expect(surface.pages).toContain('evals');
+      expect(surface.advanced).toContain('evals');
 
       const byDefault = await inspectWorkbenchSurface({ root: project.root });
       expect(byDefault.provenance.configPath).toBe(project.configPath);
       expect(byDefault.counts).toMatchObject({ evalSuites: 0, targets: 2 });
-      expect(byDefault.unavailablePages).toContain('evals');
+      expect(byDefault.advanced).not.toContain('evals');
     } finally {
       await rm(project.root, { force: true, recursive: true });
     }

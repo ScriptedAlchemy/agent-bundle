@@ -31,17 +31,17 @@ required. Both eval suites are deterministic and read only checked-in fixtures.
 
 ## Workbench walkthrough
 
-1. **Overview** opens on the Bundle dashboard. It summarizes the three Skills,
-   generated targets, build health, and the next useful actions.
-2. **Skills** lists `dependency-upgrade`, `incident-triage`, and
-   `release-review`. Browse their linked checklists and report templates. Switch
-   between Source and Generated to see whether a target copied or adapted the
-   authored document. Every Skill shows its deterministic outcome-eval coverage;
+1. The shell header summarizes build health and current diagnostics.
+2. Under **Application → Skills**, select `dependency-upgrade`,
+   `incident-triage`, or `release-review`. Browse its linked checklists and
+   report templates. Use the inspector to compare Source and Generated output
+   and see whether a target copied or adapted the authored document. Every
+   Skill shows its deterministic outcome-eval coverage;
    it is labeled indirect because the deterministic harness cannot observe host
    Skill activation.
-3. **Artifacts** defaults to the Claude target. Change the target to compare
+3. **Advanced → Artifact** defaults to the Claude target. Change the target to compare
    the portable, Codex, and Claude output trees and their provenance.
-4. **Evals** defaults to the `release-readiness` suite. Run its deterministic
+4. **Advanced → Evals → Runs** defaults to the `release-readiness` suite. Run its deterministic
    `release-artifact-is-ready` case and inspect the passing trial. It consumes
    only the checked-in evidence fixture, so no model login or API key is needed.
 5. To practice repair, make a reversible policy edit, press **Rebuild**, and

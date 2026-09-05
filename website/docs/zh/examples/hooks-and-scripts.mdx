@@ -1,5 +1,5 @@
 ---
-description: '钩子与脚本示例：一个 session-start 钩子、两个输出脚本（其中一个带阻断性退出码）、持久的 Playground 轨迹，以及一次可逆的诊断演练。'
+description: '钩子与脚本示例：一个 session-start 钩子、两个脚本、调用轨迹，以及一次可逆的诊断演练。'
 ---
 
 # 钩子与脚本
@@ -42,24 +42,24 @@ description: '钩子与脚本示例：一个 session-start 钩子、两个输出
 
 ## 在 Workbench 中操作
 
-1. **Overview** 把编写好的钩子与它的输出产物、演练轨迹和评估页面关联起来。它的状态就是“当前或已过期”
-   epoch 状态的权威来源。
-2. **Hooks** 默认选中 Claude 的 `sessionStart` 绑定，并带有已填充的内联规范 JSON，其中包含
-   `"source": "workbench"`。运行这次模拟，然后用 **Replay saved simulation** 精确重放那份绑定到该
-   epoch 的输入。
-3. **Playground** 默认是脚本执行、Claude target 与 `verify-release`。运行它并等待会话定稿：输出的脚本
+1. 页眉是“当前或已过期”epoch 状态的权威来源。在 **Application → Events / Hooks** 下选中
+   `sessionStart`，选择 Claude 夹具并运行。事件路由工作区会展示规范输入——其中包括
+   `"source": "workbench"`——以及投影后的结果。用它的 **Replay** 标签重跑绑定到该 epoch 的输入。
+2. 在 **Application → Scripts** 下为 Claude target 选中 `verify-release` 并运行。输出的脚本
    读取自己模块旁边打包好的 `release/release-manifest.json`，并报告 2.4.0 版本已可打包。
-4. 把 target 换成 portable 并选择 `detect-risk`。它读取 `release/risk-register.json`，报告高严重级别的
+3. 把 target 换成 portable 并选择 `detect-risk`。它读取 `release/risk-register.json`，报告高严重级别的
    `REL-204`，以退出码 2 结束，并定稿一条持久的阻断性轨迹。
-5. **Logs** 可按生产者、级别、种类或上下文过滤这些生产者记录；打开某条记录即可查看原始细节。
-   **Artifacts** 是输出文件与来源视图，而 **Comparisons** 只有在有两次记录的 eval 运行之后才会对齐结果。
+4. 在 **Trace** 中跟随这些运行。用 **Advanced → Raw logs** 查看未关联的生产者细节，用
+   **Advanced → Artifact** 查看输出文件与 provenance，并在已有两次 eval 运行之后使用
+   **Advanced → Evals → Compare**。
 
 ## 可逆的诊断演练
 
 签入的项目是健康的，所以要看到“上一个可用产物”的行为，就得故意把它弄坏。把
 `src/hooks/session-start.ts` 的函数体临时替换为一个语法不完整的处理函数，按 **Rebuild**，并等待
-**Failed** 这个已完成状态。Workbench 会报告新的诊断，同时继续提供上一个可用产物。恢复签入的处理函数，
-再按一次 **Rebuild**，等到 **Idle**：一个新的活跃 epoch 会替换过期状态并清除该诊断。
+**Failed** 这个已完成状态。从页眉失败计数打开 **Problems**：Workbench 会报告新的诊断，同时
+Application 继续暴露上一个可用的树与产物。恢复签入的处理函数，
+再按一次 **Rebuild**，等到 **Idle**：一个新的活跃 epoch 会替换过期目录并清除该诊断。
 
 不要把 Building 状态读成修复已完成——新的活跃 epoch 才是证据。
 

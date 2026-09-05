@@ -22,51 +22,51 @@ e2e(
   'replays fixture and observed lifecycle receipts for Claude and Codex, then repairs stale manifest binding',
   { timeout: 180_000 },
   async ({ page }) => {
+    const nodeEnv = process.env['NODE_ENV'];
+    process.env['NODE_ENV'] = 'production';
     const fixture = await startRuntimePlaygroundFixture();
     const pageErrors: Error[] = [];
     page.on('pageerror', (error) => pageErrors.push(error));
     try {
-      await page.goto(workbenchUrl(fixture.url, 'lifecycles'));
+      await page.goto(workbenchUrl(fixture.url, '/routes/events/tool/after'));
       try {
-        await expect(page.getByRole('heading', { name: 'Lifecycles' })).toBeVisible({ timeout: browserTimeout });
+        await expect(page.getByTestId('route-workspace')).toBeVisible({ timeout: browserTimeout });
       } catch (reason) {
         throw new Error(
-          `Lifecycle page did not become ready at ${page.url()}.\n${await page.locator('body').innerText()}`,
+          `Event route workspace did not become ready at ${page.url()}.\n${await page.locator('body').innerText()}`,
           { cause: reason },
         );
       }
-      await expect(page.getByText(/Loading semantic lifecycles/u)).toHaveCount(0, { timeout: browserTimeout });
-      await expect(page.getByRole('link', { exact: true, name: 'Lifecycles' })).toHaveAttribute('aria-current', 'page');
+      await expect(page.getByText(/Loading/u)).toHaveCount(0, { timeout: browserTimeout });
+      await expect(page.getByTestId('workbench-nav').getByRole('link', { name: 'Application' })).toHaveAttribute('aria-current', 'page');
 
-      const selector = page.getByLabel('Lifecycle and target');
-      const input = page.locator('#lifecycle-native-input');
-      const run = page.getByRole('button', { name: 'Run replay' });
-      const provenance = page.getByLabel('Replay provenance');
-      const stage = page.getByLabel('Agent Document', { exact: true });
-      const timeline = page.getByLabel('Agent Document event timeline');
+      const host = page.getByLabel('Event host');
+      const editor = page.getByTestId('route-input-editor');
+      const input = editor.locator('textarea');
+      const fixtureSelector = editor.getByLabel('Fixture');
+      const run = page.getByTestId('route-run');
+      const stage = page.getByLabel('Rendered Agent Document');
 
-      await selector.selectOption('claude/event:tool/after');
+      await host.getByRole('button', { name: 'Claude' }).click();
+      await fixtureSelector.selectOption({ index: 1 });
       await expect(input).toHaveValue(/PostToolUse/u);
       await run.click();
-      await expect(provenance).toContainText('Fixture', { timeout: browserTimeout });
-      await expect(provenance).toContainText('not evidence that claude dispatched this event');
-      await expect(page.getByText('claude', { exact: true }).first()).toBeVisible();
-      await expect(page.getByText('PostToolUse', { exact: true }).first()).toBeVisible();
+      await expect(page.getByTestId('route-status')).toContainText('Succeeded', { timeout: browserTimeout });
       await expect(stage).toContainText(/Recorded .* from claude/u, { timeout: browserTimeout });
-      await expect(timeline.getByRole('button', { name: /^Complete/u })).toBeVisible({ timeout: browserTimeout });
-      await expect(page.locator('.lifecycle-detail').filter({ hasText: 'Native response' })).toContainText('hookSpecificOutput');
-      await expect(page.locator('.lifecycle-detail').filter({ hasText: 'Native response' })).toContainText('additionalContext');
+      await page.getByRole('tab', { name: 'Native in / out' }).click();
+      await expect(page.getByRole('tabpanel')).toContainText('hookSpecificOutput');
+      await expect(page.getByRole('tabpanel')).toContainText('additionalContext');
 
-      await selector.selectOption('codex/event:tool/after');
+      await host.getByRole('button', { name: 'Codex' }).click();
+      await fixtureSelector.selectOption({ index: 1 });
       await run.click();
-      await expect(provenance).toContainText('Fixture', { timeout: browserTimeout });
-      await expect(provenance).toContainText('not evidence that codex dispatched this event');
-      await expect(page.getByText('codex', { exact: true }).first()).toBeVisible();
-      await expect(page.getByText('PostToolUse', { exact: true }).first()).toBeVisible();
+      await expect(page.getByTestId('route-status')).toContainText('Succeeded', { timeout: browserTimeout });
+      await page.getByRole('tab', { name: 'Rendered' }).click();
       await expect(stage).toContainText(/Recorded .* from codex/u, { timeout: browserTimeout });
 
-      await selector.selectOption('claude/event:tool/after');
-      await page.getByRole('radio', { name: 'Observed native receipt' }).check();
+      await page.getByRole('tab', { name: 'Replay' }).click();
+      const replay = page.getByRole('tabpanel');
+      await replay.getByLabel('Host').selectOption('claude');
       const observedReceipt = JSON.stringify({
         cwd: '/tmp',
         hook_event_name: 'PostToolUse',
@@ -77,24 +77,18 @@ e2e(
         tool_use_id: 'lifecycle-observed-write',
         transcript_path: '/tmp/lifecycle-observed-transcript.jsonl',
       });
-      await input.fill(observedReceipt);
-      await run.click();
-      await expect(provenance).toContainText('Observed', { timeout: browserTimeout });
+      await replay.getByLabel('Native receipt (JSON)').fill(observedReceipt);
+      await replay.getByRole('button', { name: 'Replay receipt' }).click();
+      await expect(page.getByTestId('route-status')).toContainText('Succeeded', { timeout: browserTimeout });
+      await page.getByRole('tab', { name: 'Rendered' }).click();
       await expect(stage).toContainText('Recorded observed-lifecycle.txt from claude', { timeout: browserTimeout });
-      const requestContext = page.locator('.lifecycle-detail').filter({
-        has: page.getByRole('heading', { name: 'Request context' }),
-      });
-      await expect(requestContext).toContainText('claude · receipt');
-      await expect(requestContext).toContainText('lifecycle-observed · receipt');
-      await expect(requestContext).toContainText('/tmp · receipt');
+      await page.getByRole('tab', { name: 'Canonical → host mapping' }).click();
+      const requestContext = page.getByRole('tabpanel');
+      await expect(requestContext).toContainText('claude · derived');
+      await expect(requestContext).toContainText('lifecycle-observed');
+      await expect(requestContext).toContainText('/tmp');
       await expect(requestContext).toContainText('Unavailable · not-provided');
-      // A root Claude receipt proves its own depth-0 lineage; the chain renders the single root node.
-      await expect(requestContext).toContainText('lifecycle-observed · depth 0 · native · receipt');
-      const lineage = page.locator('.lifecycle-detail').filter({
-        has: page.getByRole('heading', { name: 'Conversation lineage' }),
-      });
-      await expect(lineage.locator('.lifecycle-lineage-node--current')).toContainText('lifecycle-observed');
-      await expect(lineage.locator('.lifecycle-lineage-node--current')).toContainText('this request');
+      await expect(requestContext).toContainText('Unavailable · no-shared-runtime');
 
       const sessionToken = await page.evaluate(async () => {
         const response = await fetch('/api/project/session', { credentials: 'same-origin' });
@@ -120,21 +114,30 @@ e2e(
       const source = await readFile(eventSource, 'utf8');
       await replaceWatchedSource(fixture.root, eventSource, `${source}\n// lifecycle stale-repair ${Date.now()}\n`);
       await expect.poll(manifestDigest, { timeout: browserTimeout }).not.toBe(staleDigest);
+      await expect.poll(
+        () => page.evaluate(async () => {
+          const response = await fetch('/api/project/status');
+          const body = await response.json() as { status: { artifact: { state: string } } };
+          return body.status.artifact.state;
+        }),
+        { timeout: browserTimeout },
+      ).toBe('active');
+      await page.goto(workbenchUrl(fixture.url, '/routes/events/tool/after'));
+      await expect(page.getByTestId('route-status')).toContainText('Not run yet', { timeout: browserTimeout });
 
-      await run.click();
-      await expect(page.getByRole('heading', { name: 'Stale compiled manifest' })).toBeVisible({ timeout: browserTimeout });
-      await expect(page.getByText(/compiled manifest changed|manifest.*stale/iu)).toBeVisible({ timeout: browserTimeout });
-      await page.getByRole('button', { name: 'Refresh lifecycle list' }).click();
-      await expect(page.getByText(/run replay explicitly against the current manifest/u)).toBeVisible({ timeout: browserTimeout });
-      await expect(input).toHaveValue(observedReceipt);
-      await run.click();
-      await expect(provenance).toContainText('Observed', { timeout: browserTimeout });
+      await page.getByRole('tab', { name: 'Replay' }).click();
+      const repairedReplay = page.getByRole('tabpanel');
+      await repairedReplay.getByLabel('Host').selectOption('claude');
+      await repairedReplay.getByLabel('Native receipt (JSON)').fill(observedReceipt);
+      await repairedReplay.getByRole('button', { name: 'Replay receipt' }).click();
+      await expect(page.getByTestId('route-status')).toContainText('Succeeded', { timeout: browserTimeout });
+      await page.getByRole('tab', { name: 'Rendered' }).click();
       await expect(stage).toContainText('Recorded observed-lifecycle.txt from claude', { timeout: browserTimeout });
-      await expect(requestContext).toContainText('lifecycle-observed · receipt');
-      await expect(requestContext).toContainText('Unavailable · not-provided');
       expect(pageErrors).toEqual([]);
     } finally {
       await fixture.close();
+      if (nodeEnv === undefined) delete process.env['NODE_ENV'];
+      else process.env['NODE_ENV'] = nodeEnv;
     }
   },
 );
