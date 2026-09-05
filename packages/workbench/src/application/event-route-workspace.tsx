@@ -68,7 +68,6 @@ export const eventFixturesFor = (lifecycle: Lifecycle | undefined): readonly Rou
     })),
 );
 
-/** Adds the selected host to an editor draft; the editor already carries the fixture payload. */
 export const eventRequestFor = (
   host: EventHostSelection,
   draft: RouteInvocationDraft,

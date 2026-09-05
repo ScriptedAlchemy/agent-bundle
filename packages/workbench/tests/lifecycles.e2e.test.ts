@@ -115,8 +115,6 @@ e2e(
       await replaceWatchedSource(fixture.root, eventSource, `${source}\n// lifecycle stale-repair ${Date.now()}\n`);
       await expect.poll(manifestDigest, { timeout: browserTimeout }).not.toBe(staleDigest);
 
-      // The Application tree refreshes the event leaf against the new manifest;
-      // replaying from the leaf is the repair flow now that the lifecycle page is gone.
       await page.getByRole('tab', { name: 'Replay' }).click();
       const repairedReplay = page.getByRole('tabpanel');
       await repairedReplay.getByLabel('Host').selectOption('claude');

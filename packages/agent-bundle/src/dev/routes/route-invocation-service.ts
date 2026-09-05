@@ -76,7 +76,6 @@ export interface RouteInvocationPreparedProject {
   readonly targets: readonly RouteInvocationEventHost[];
 }
 
-/** Runs one emitted script from a published artifact epoch; `ScriptPlaygroundService` in production. */
 export interface RouteInvocationScriptRunner {
   run(request: ScriptPlaygroundRunRequest): Promise<ScriptPlaygroundResult>;
 }
@@ -314,17 +313,14 @@ const childPath = (): string => {
   return found;
 };
 
-/** The plain script this route is, or `undefined` for every renderable route. */
 const plainScriptFor = (prepared: RouteInvocationPreparedProject, route: RouteManifestRoute): TestableScriptDescriptor | undefined =>
   route.kind === 'script'
     ? prepared.manifest.scripts.find((script) => script.routeId === route.id && !script.rendered)
     : undefined;
 
 /**
- * A plain script has no route component for the Agent renderer: it runs as
- * the emitted executable of the published build — the same engine the old
- * Playground drove — and its stdout becomes the document the CLI projection
- * reads, with the process status carried in `result`.
+ * Plain scripts have no route component for the Agent renderer. Run the
+ * emitted executable and project its output into the invocation result.
  */
 const runPlainScript = async (
   scripts: RouteInvocationScriptRunner | undefined,

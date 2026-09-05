@@ -33,7 +33,6 @@ const sourceLabels: Readonly<Record<ProblemSource, string>> = Object.freeze({
 const problemKey = (problem: Problem, index: number): string =>
   `${problem.source}-${problem.code ?? ''}-${String(index)}`;
 
-/** The banner for the documented stale-diagnostic flow: the published build no longer matches the source, and a rebuild repairs it. */
 const staleBannerFor = (model: BuildStatusModel, problems: readonly Problem[]): string | undefined => {
   if (model.build === 'failed') {
     return 'The latest build failed and published no new epoch; Application keeps the last good build until a rebuild succeeds.';

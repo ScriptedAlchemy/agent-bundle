@@ -13,7 +13,6 @@ const browserTimeout = 15_000 * timeScale;
 /** Upper bound for the watcher's debounce plus one full development rebuild. */
 export const rebuildTimeout = 60_000 * timeScale;
 
-/** The `data-testid` hooks the shell, tree, workspace, and Problems render (#600). */
 export const workbenchTestIds = Object.freeze({
   advancedNav: 'advanced-nav',
   applicationTree: 'application-tree',
@@ -81,7 +80,6 @@ const expectLeafItem = async (item: Locator, leaf: ApplicationLeaf, timeout: num
   await expect(item).toContainText(leaf.label);
 };
 
-/** Every group, server, subgroup, and leaf of the inspected tree is rendered, labelled, and in the documented group order. */
 export const expectApplicationTree = async (
   page: Page,
   tree: ApplicationTree,
@@ -243,14 +241,12 @@ export const editWatchedSource = async (
   await waitForBuildIdle(server, timeout);
 };
 
-/** Runs the selected leaf and waits for the invocation to settle successfully. */
 export const runSelectedRoute = async (page: Page, timeout = browserTimeout): Promise<void> => {
   await workbenchTestId(page, 'routeRun').click();
   const status = workbenchTestId(page, 'routeStatus');
   await expect(status).toHaveClass(/route-status--succeeded/u, { timeout });
 };
 
-/** The invocation id the workspace's status line reports for the shown invocation. */
 export const readInvocationId = async (page: Page, timeout = browserTimeout): Promise<string> => {
   const id = workbenchTestId(page, 'routeStatus').locator('.route-status-id');
   await expect(id).toBeVisible({ timeout });

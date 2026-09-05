@@ -1,5 +1,4 @@
-/* Live McpJsonInput form controls. Boolean fields use a 40px label target so
-   the checkbox stays wholly inside its click/keyboard hit area. */
+/* Keep the checkbox inside its 40px interaction target. */
 .mcp-json-input-boolean {
   align-items: center;
   display: inline-flex;
