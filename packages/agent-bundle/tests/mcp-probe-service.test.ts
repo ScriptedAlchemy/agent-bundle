@@ -150,6 +150,7 @@ const createBundle = async (
     },
     projections: [{
       adapterRevision: 'claude-fixture-v1',
+      builtInHost: 'claude',
       documents: {
         marketplace: '.claude-plugin/marketplace.json',
         mcp: '.mcp.json',
