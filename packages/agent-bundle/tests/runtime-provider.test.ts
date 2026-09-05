@@ -429,7 +429,7 @@ it('refreshes terminal run snapshots before completed or failed events without r
 
 it('publishes correlated runtime lifecycle entries from the run surface and inspection envelope', async () => {
   const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
-  const trace = new TraceHub({ now: () => new Date('2026-08-15T00:00:02.000Z') });
+  const trace = new TraceHub({ now: () => new Date('2026-08-15T00:00:02.000Z'), projectRoot: '/work/project' });
   let emit: Parameters<DevRuntimeProvider['start']>[0]['emit'] | undefined;
   const tracedSurface = { ...surface, routeId: 'event:tool/after' };
   const tracedRun = {
@@ -824,7 +824,7 @@ it('buffers synchronous startup failure and status until controller snapshots in
 it('buffers synchronous startup activation until controller snapshots install', async () => {
   const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
   const seen: Array<Readonly<{ readonly generation?: string; readonly state: string; readonly surfaceCount: number; readonly type: string }>> = [];
-  const trace = new TraceHub();
+  const trace = new TraceHub({ projectRoot: '/work/project' });
   const controller = new DevRuntimeController({
     artifactStatus: () => ({ state: 'missing' }),
     emit: (event) => {

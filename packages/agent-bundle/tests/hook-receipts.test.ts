@@ -304,7 +304,7 @@ const jsonHeaders = (token: string): Record<string, string> => ({
 });
 
 it('accepts a bearer-authenticated loopback receipt and publishes its lowering to the trace hub', async () => {
-  const hub = new TraceHub();
+  const hub = new TraceHub({ projectRoot: '/work/project' });
   const routes = new HookReceiptRoutes({ token: 'secret-token', trace: hub });
   const { url } = await listen((request, response) => routes.handle(request, response));
   const accepted = await post(url, JSON.stringify(receipt()), jsonHeaders('secret-token'));
@@ -317,7 +317,7 @@ it('accepts a bearer-authenticated loopback receipt and publishes its lowering t
 });
 
 it('refuses receipts without the token, with an Origin header, over the size cap, or malformed', async () => {
-  const hub = new TraceHub();
+  const hub = new TraceHub({ projectRoot: '/work/project' });
   const routes = new HookReceiptRoutes({ token: 'secret-token', trace: hub });
   const { url } = await listen((request, response) => routes.handle(request, response));
   const body = JSON.stringify(receipt());
@@ -356,7 +356,7 @@ it('refuses receipts without the token, with an Origin header, over the size cap
 it('publishes an owner-only endpoint record under the project and removes it on close', async () => {
   const projectRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-hook-receipts-'));
   cleanups.push(() => rm(projectRoot, { force: true, recursive: true }));
-  const hub = new TraceHub();
+  const hub = new TraceHub({ projectRoot: '/work/project' });
   const attachment = attachHookReceipts({ projectRoot, trace: hub });
   expect(attachment.token).toMatch(/^[A-Za-z0-9_-]{43}$/u);
   expect(attachment.routes).toBeInstanceOf(HookReceiptRoutes);
@@ -394,7 +394,7 @@ it('resolves the wrapper endpoint from the environment, else the dev install mar
   await expect(resolveEventTraceReceiptEndpoint({ anchor, env: {} })).resolves.toBeUndefined();
 
   const projectRoot = join(root, 'project');
-  const hub = new TraceHub();
+  const hub = new TraceHub({ projectRoot: '/work/project' });
   const attachment = attachHookReceipts({ projectRoot, trace: hub });
   await attachment.publishEndpoint('http://127.0.0.1:5001');
   await mkdir(join(root, 'bundle', 'hooks'), { recursive: true });

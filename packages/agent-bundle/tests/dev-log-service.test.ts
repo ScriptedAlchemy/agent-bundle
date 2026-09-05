@@ -44,7 +44,7 @@ it('records detached redacted details and replaces its own project root', () => 
 });
 
 it('publishes warnings, errors, and correlated records to trace without plain info chatter', () => {
-  const trace = new TraceHub();
+  const trace = new TraceHub({ projectRoot: '/work/project' });
   const service = new DevLogService({
     projectRoot: '/work/project',
     trace,

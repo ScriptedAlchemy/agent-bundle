@@ -125,7 +125,7 @@ it('posts a host-invoked hook execution to the dev server as hook.received / hoo
   expect(after).toBeDefined();
 
   const projectRoot = join(root, 'dev-project');
-  const hub = new TraceHub();
+  const hub = new TraceHub({ projectRoot });
   const { attachment, url } = await listen(hub, projectRoot);
 
   // (1) A dev-server-spawned simulation: the endpoint travels in the environment.
