@@ -191,6 +191,8 @@ export type GeneratedStateFallback = 'artifact' | 'cwd';
 export interface GeneratedCliBinEntryOptions {
   readonly commands: readonly CompiledCliCommand[];
   readonly plugin: { readonly description?: string; readonly name: string; readonly version: string };
+  /** Absolute projection-module sources keyed by their backing tool route id. */
+  readonly projectionSources?: Readonly<Record<string, string>>;
   /** Conventional request context providers, mounted for plain commands in this process (#313). */
   readonly providers?: readonly CompiledProvider[];
   readonly routes: readonly CompiledAgentRoute[];
@@ -362,6 +364,15 @@ const renderedSessionSource = (workerFile: string): readonly string[] => [
 export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions): string => {
   const commandRoutes = options.routes.filter((route) =>
     options.commands.some((command) => command.routeId === route.id));
+  const projectedCommands = options.commands.filter((command) => command.projection !== undefined);
+  const projectionSources = projectedCommands.map((command) => {
+    const source = options.projectionSources?.[command.routeId];
+    if (source === undefined) {
+      throw new Error(`Generated CLI projection ${JSON.stringify(command.projection!.module)} for ${command.routeId} requires an absolute source path.`);
+    }
+    return source;
+  });
+  const projectionIndexByRoute = new Map(projectedCommands.map((command, index) => [command.routeId, index]));
   const rendered = options.commands.some((command) => command.rendered);
   if (rendered && options.workerFile === undefined) {
     throw new Error('A generated CLI with rendered commands requires a worker file.');
@@ -376,7 +387,7 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     // module-level `process.env` read sees the composed environment. The
     // npm package bin runs from the operator's own shell and reads none.
     ...(stateFallback === 'artifact' ? [operatorEnvLayerImport] : []),
-    `import { cliInputError, runGeneratedCliProcess } from ${JSON.stringify(cliEntryRuntimeSpecifier)};`,
+    `import { CliInputError, CliUsageError, cliInputError, runGeneratedCliProcess } from ${JSON.stringify(cliEntryRuntimeSpecifier)};`,
     rendered
       ? "import { available, createAgentRenderDispatcher, resolvePluginRoot, runAgentRequest, unavailable } from '@agent-bundle/runtime';"
       : "import { available, resolvePluginRoot, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
@@ -384,6 +395,8 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     ...(rendered ? ["import { Worker } from 'node:worker_threads';"] : []),
     ...generatedStateImports(options.state),
     ...routeImports(commandRoutes),
+    ...projectionSources.map((source, index) =>
+      `import * as projection${String(index)} from ${JSON.stringify(source)};`),
     ...providerImports(providers),
     '',
     pluginRootDeclaration(stateFallback),
@@ -391,19 +404,41 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     'const processLifetime = { hits: 0, instanceId: crypto.randomUUID(), pid: process.pid };',
     ...providerRegistrySource(providers),
     'const routes = Object.freeze({',
-    ...commandRoutes.map((route, index) =>
-      `  ${JSON.stringify(route.id)}: Object.freeze({ module: route${String(index)} }),`),
+    ...commandRoutes.map((route, index) => {
+      const projectionIndex = projectionIndexByRoute.get(route.id);
+      return `  ${JSON.stringify(route.id)}: Object.freeze({ module: route${String(index)}${projectionIndex === undefined ? '' : `, projection: projection${String(projectionIndex)}`} }),`;
+    }),
     '});',
     '',
     `const commands = Object.freeze(${stableJson(options.commands)});`,
     '',
-    // A schema failure becomes a CliInputError whose issues name the CLI
-    // argument, the expectation, and the received value (#465).
+    // Projection defaults are identified by command.projection plus an
+    // option's own defaultValue field. This deliberately reapplies static zod
+    // defaults on projected commands; zod defaults are idempotent, while
+    // non-projected commands retain their existing schema-owned behavior.
     'const parseInput = (command, route, input) => {',
+    '  let mapped = { ...input };',
+    '  if (command.projection !== undefined && command.mcp?.confirm === true) {',
+    "    if (mapped.yes !== true) throw new CliUsageError(`MCP tool ${command.mcp.server}:${command.mcp.tool} is mutation-capable per its MCP annotations and requires --yes.`);",
+    '    delete mapped.yes;',
+    '  }',
+    '  if (command.projection !== undefined) {',
+    '    for (const option of command.options) {',
+    "      if (!Object.hasOwn(mapped, option.key) && Object.hasOwn(option, 'defaultValue')) mapped[option.key] = option.defaultValue;",
+    '    }',
+    '  }',
+    '  if (command.projection?.mapInput === true) {',
+    "    if (typeof route.projection?.mapInput !== 'function') throw new TypeError(`CLI projection ${command.projection.module} must export a mapInput function.`);",
+    '    try {',
+    '      mapped = route.projection.mapInput(mapped);',
+    '    } catch (error) {',
+    '      throw new CliInputError(error instanceof Error ? error.message : String(error));',
+    '    }',
+    '  }',
     '  try {',
-    '    return route.module.inputSchema.parse(input);',
+    '    return route.module.inputSchema.parse(mapped);',
     '  } catch (error) {',
-    '    throw cliInputError(command, input, error);',
+    '    throw cliInputError(command, mapped, error);',
     '  }',
     '};',
     '',
@@ -453,6 +488,18 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
         'const render = (command, input, context) => {',
         '  const route = routes[command.routeId];',
         '  const parsed = parseInput(command, route, input);',
+        '  if (command.projection !== undefined) {',
+        '    return openRenderedSession({',
+        "      invocation: { kind: 'cli', props: { args: context.args, command: command.path.join(' ') } },",
+        '      limits: command.render,',
+        '      props: { input: parsed },',
+        "      request: { kind: 'cli', operationId: command.routeId, surface: command.path.join(' ') },",
+        '      routeId: command.routeId,',
+        '      signal: context.signal,',
+        '      terminal: context.terminal,',
+        '      validate: (value) => route.module.resultSchema.parse(value),',
+        '    });',
+        '  }',
         '  if (command.mcp !== undefined) {',
         '    return openRenderedSession({',
         "      invocation: { kind: 'tool', props: { input: parsed, operationId: command.routeId } },",

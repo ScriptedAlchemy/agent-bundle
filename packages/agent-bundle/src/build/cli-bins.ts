@@ -5,6 +5,7 @@ import type { TargetRegistry } from '../adapters/registry.ts';
 import { routedCliBinLayout, type TargetArtifactEntry } from '../adapters/types.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import type { NormalizedBinEntry, NormalizedPlugin } from '../core/types.ts';
+import type { CompiledCliSurface } from '../routes/types.ts';
 import { resolveArtifactDestination } from './emit.ts';
 import { runtimeIgnoredRoot, type CompiledEntry } from './entries.ts';
 import { launchEnvRuntimeSpecifier, operatorEnvLayerVirtualModule } from './launch-env-shell.ts';
@@ -60,11 +61,30 @@ interface PlannedCliBin extends CompiledCliBin {
   readonly rendered: boolean;
 }
 
-const generatedCli = (bin: NormalizedBinEntry): NonNullable<NormalizedBinEntry['generatedCli']> => {
+export type GeneratedCliBinSurface = NonNullable<NormalizedBinEntry['generatedCli']>
+  & Pick<CompiledCliSurface, 'projectionSources'>;
+
+const generatedCli = (bin: NormalizedBinEntry): GeneratedCliBinSurface => {
   if (bin.generatedCli === undefined) {
     throw new Error(`Bin ${JSON.stringify(bin.name)} is not a framework-generated routed CLI.`);
   }
-  return bin.generatedCli;
+  return bin.generatedCli as GeneratedCliBinSurface;
+};
+
+/** Every project source that can change a generated routed-CLI executable. */
+export const cliBinSourceInputs = (
+  model: NormalizedPlugin,
+  bin: NormalizedBinEntry,
+): readonly string[] => {
+  const cli = generatedCli(bin);
+  return Object.freeze([...new Set([
+    bin.provenance.sourcePath,
+    ...cli.routes.map((route) => route.source),
+    ...Object.values(cli.projectionSources ?? {}),
+    ...(model.layouts ?? []).map((layout) => layout.source),
+    ...(model.providers ?? []).map((provider) => provider.source),
+    ...(model.state === undefined ? [] : [model.state.source]),
+  ])]);
 };
 
 export const planCompiledCliBins = (
@@ -75,13 +95,7 @@ export const planCompiledCliBins = (
   return Object.freeze(routedCliBins(model).map((bin): PlannedCliBin => {
     const cli = generatedCli(bin);
     const rendered = cli.commands.some((command) => command.rendered);
-    const sourceInputs = Object.freeze([...new Set([
-      bin.provenance.sourcePath,
-      ...cli.routes.map((route) => route.source),
-      ...(model.layouts ?? []).map((layout) => layout.source),
-      ...(model.providers ?? []).map((provider) => provider.source),
-      ...(model.state === undefined ? [] : [model.state.source]),
-    ])]);
+    const sourceInputs = cliBinSourceInputs(model, bin);
     return Object.freeze({
       bin,
       id: bin.id,
@@ -130,6 +144,7 @@ export const cliBinRslibEntries = (
       },
       ...(model.notices === undefined ? {} : { noticeRetention: model.notices.retention.resolved }),
       providers: model.providers ?? [],
+      ...(cli.projectionSources === undefined ? {} : { projectionSources: cli.projectionSources }),
       routes: cli.routes,
       ...(model.state === undefined ? {} : { state: model.state }),
       // Durable state anchors on the artifact root (the parent of `bin/`),

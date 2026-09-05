@@ -1,6 +1,8 @@
 import { describe, expect, it } from '@rstest/core';
 
 import { agent } from '@agent-bundle/runtime';
+import { cliInputError, runGeneratedCliEntry } from '../../src/cli-entry.ts';
+import type { CompiledCliCommand } from '../../src/routes/types.ts';
 import { cliJson, invokeCli } from '../../src/test/cli.ts';
 
 /**
@@ -15,6 +17,64 @@ import { cliJson, invokeCli } from '../../src/test/cli.ts';
  * session contract that the generated executable wires around the shell.
  */
 describe('the CLI dispatch level', () => {
+  it('accepts projected option aliases, prints projection help, and spells schema failures as projected flags', async () => {
+    const command: CompiledCliCommand = {
+      aliases: [],
+      description: 'Submit work.',
+      exitCode: 'zero',
+      mcp: { confirm: false, server: 'harness', tool: 'submit' },
+      options: [{
+        aliases: ['lane-key'],
+        key: 'laneKey',
+        kind: 'string',
+        option: 'lane',
+        repeated: false,
+        required: false,
+      }],
+      path: ['submit'],
+      projection: {
+        mapInput: false,
+        module: 'src/mcp/harness/tools/submit.cli.ts',
+      },
+      rendered: false,
+      routeId: 'tool:harness/submit',
+    };
+    const run = async (
+      argv: readonly string[],
+      execute: (input: Readonly<Record<string, unknown>>) => Promise<unknown>,
+    ): Promise<{ readonly code: number; readonly stderr: string; readonly stdout: string }> => {
+      let stderr = '';
+      let stdout = '';
+      const code = await runGeneratedCliEntry({
+        argv,
+        commands: [command],
+        execute: (_command, input) => execute(input),
+        name: 'route-harness',
+        version: '1.0.0',
+        writeErr: (text) => { stderr += text; },
+        writeOut: (text) => { stdout += text; },
+      });
+      return { code, stderr, stdout };
+    };
+
+    const dispatched = await run(['submit', '--lane-key', 'blue'], async (input) => input);
+    expect(dispatched).toEqual({ code: 0, stderr: '', stdout: '{"laneKey":"blue"}\n' });
+
+    const help = await run(['submit', '--help'], async () => ({}));
+    expect(help.code).toBe(0);
+    expect(help.stdout).toContain('MCP tool: harness:submit\nProjection: src/mcp/harness/tools/submit.cli.ts');
+    expect(help.stdout).toContain('--lane, --lane-key <string>');
+
+    const invalid = await run(['submit', '--lane', 'blue'], async (input) => {
+      throw cliInputError(command, input, {
+        issues: [{ code: 'invalid_type', expected: 'number', message: 'Expected number', path: ['laneKey'] }],
+      });
+    });
+    expect(invalid.code).toBe(2);
+    expect(invalid.stderr).toContain('Invalid value for --lane: expected number; received "blue".');
+    expect(invalid.stderr).not.toContain('--input.laneKey');
+  });
+
   it('resolves an argv vector to the compiled command and returns its canonical JSON line', async () => {
     const run = await invokeCli(['inventory', 'fiction', '--format', 'json']);
 

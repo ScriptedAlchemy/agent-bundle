@@ -20,7 +20,7 @@
 import type * as AgentRuntime from '@agent-bundle/runtime';
 import type { RegisteredRouteId } from '@agent-bundle/runtime';
 
-import { cliInputError, runGeneratedCliEntry } from '../cli-entry.ts';
+import { runGeneratedCliEntry } from '../cli-entry.ts';
 import type { CliRenderedEvent } from '../cli-entry.ts';
 import { createProviderProcessLifetime } from '../routes/provider-execution.ts';
 import type { CompiledCliCommand } from '../routes/types.ts';
@@ -29,7 +29,13 @@ import { CLI_DISPATCH_PROOF_LEVEL, type AgentBundleTestManifest } from './manife
 import { parseCanonicalJsonLine, parseRenderedEventLines } from './output-modes.ts';
 import { claimProcessHit, harnessPluginRoot, mountProviders } from './providers.ts';
 import { registeredRouteLoader, testManifest } from './registry.ts';
-import { prepareCliRenderHost, type HarnessOptionsArguments, type RenderRouteContextInit } from './render.ts';
+import {
+  loadCliProjectionModules,
+  parseCliCommandInput,
+  prepareCliRenderHost,
+  type HarnessOptionsArguments,
+  type RenderRouteContextInit,
+} from './render.ts';
 import { harnessTerminal } from './terminal.ts';
 import type { AgentRouteModule, RenderedRouteProvenance } from './types.ts';
 
@@ -186,6 +192,7 @@ export const invokeCli = async (
   // process identity at module load, so every separate run starts at hit 1.
   const processLifetime = createProviderProcessLifetime();
   const renderedCommands = manifest.cliCommands.filter((command) => command.rendered);
+  const projectionModules = await loadCliProjectionModules(manifest, manifest.cliCommands);
 
   let executed: CompiledCliCommand | undefined;
   let value: unknown;
@@ -206,6 +213,7 @@ export const invokeCli = async (
       modules: renderedModules,
       onValidated: (validated) => { value = validated; },
       processLifetime,
+      projectionModules,
       provenance: {
         kind: 'cli',
         manifestDigest: manifest.digest,
@@ -244,12 +252,12 @@ export const invokeCli = async (
             recovery: 'Export both zod schemas from the command module; the routed CLI validates argv through them.',
           });
         }
-        let parsed: unknown;
-        try {
-          parsed = module.inputSchema.parse(input);
-        } catch (error) {
-          throw cliInputError(command, input, error);
-        }
+        const parsed = parseCliCommandInput(
+          command,
+          module,
+          projectionModules.get(command.routeId),
+          input,
+        );
         const root = process.cwd();
         const plugin = harnessPluginRoot({ context, manifest, resolvePluginRoot: runtime.resolvePluginRoot });
         // Same provider invocation the generated plain-command path builds (#366).

@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import type * as AgentFlightServer from '@agent-bundle/runtime/flight/server';
 import type * as AgentRuntime from '@agent-bundle/runtime';
@@ -25,7 +26,7 @@ import type {
 } from '@agent-bundle/runtime';
 import type * as React from 'react';
 
-import { cliInputError } from '../cli-entry.ts';
+import { CliInputError, CliUsageError, cliInputError } from '../cli-entry.ts';
 import type {
   CliRenderedEvent,
   GeneratedCliRenderContext,
@@ -1029,6 +1030,7 @@ export interface PrepareCliRenderHostOptions {
   readonly manifest: AgentBundleTestManifest;
   readonly modules: ReadonlyMap<string, AgentRouteModule>;
   readonly onValidated: (value: unknown) => void;
+  readonly projectionModules: ReadonlyMap<string, Readonly<Record<string, unknown>>>;
   /** The invoking CLI's process identity; the rendered command runs inside that same simulated executable. */
   readonly processLifetime: ProviderProcessLifetime;
   readonly provenance: RenderedRouteProvenance;
@@ -1043,6 +1045,69 @@ export interface PreparedCliRenderHost {
     context: GeneratedCliRenderContext,
   ) => GeneratedCliRenderSession;
 }
+
+/** Loads every explicit CLI projection exactly as the generated bin imports it. */
+export const loadCliProjectionModules = async (
+  manifest: AgentBundleTestManifest,
+  commands: readonly CompiledCliCommand[],
+): Promise<ReadonlyMap<string, Readonly<Record<string, unknown>>>> => {
+  const modules = new Map<string, Readonly<Record<string, unknown>>>();
+  for (const command of commands) {
+    if (command.projection === undefined || modules.has(command.routeId)) continue;
+    const source = pathToFileURL(join(manifest.projectRoot, command.projection.module)).href;
+    modules.set(command.routeId, await import(source) as Readonly<Record<string, unknown>>);
+  }
+  return modules;
+};
+
+/**
+ * Mirrors the generated bin's projection boundary. A `defaultValue` on an
+ * explicit projection is applied when absent; this may also reapply a static
+ * zod default, which is idempotent.
+ */
+export const parseCliCommandInput = (
+  command: CompiledCliCommand,
+  module: AgentRouteModule,
+  projectionModule: Readonly<Record<string, unknown>> | undefined,
+  input: Readonly<Record<string, unknown>>,
+): unknown => {
+  let mapped: Readonly<Record<string, unknown>> = { ...input };
+  if (command.projection !== undefined && command.mcp?.confirm === true) {
+    if (mapped['yes'] !== true) {
+      throw new CliUsageError(
+        `MCP tool ${command.mcp.server}:${command.mcp.tool} is mutation-capable per its MCP annotations and requires --yes.`,
+      );
+    }
+    const withoutConfirmation = { ...mapped };
+    delete withoutConfirmation['yes'];
+    mapped = withoutConfirmation;
+  }
+  if (command.projection !== undefined) {
+    const withDefaults: Record<string, unknown> = { ...mapped };
+    for (const option of command.options) {
+      if (!Object.hasOwn(withDefaults, option.key) && Object.hasOwn(option, 'defaultValue')) {
+        withDefaults[option.key] = option.defaultValue;
+      }
+    }
+    mapped = withDefaults;
+  }
+  if (command.projection?.mapInput === true) {
+    const mapInput = projectionModule?.['mapInput'];
+    if (typeof mapInput !== 'function') {
+      throw new TypeError(`CLI projection ${command.projection.module} must export a mapInput function.`);
+    }
+    try {
+      mapped = mapInput(mapped) as Readonly<Record<string, unknown>>;
+    } catch (error) {
+      throw new CliInputError(error instanceof Error ? error.message : String(error));
+    }
+  }
+  try {
+    return module.inputSchema!.parse(mapped);
+  } catch (error) {
+    throw cliInputError(command, mapped, error);
+  }
+};
 
 /**
  * Accepts preloaded route modules and prepares the renderer and manifest
@@ -1097,14 +1162,14 @@ export const prepareCliRenderHost = async (
           },
         );
       }
-      let parsed: unknown;
-      try {
-        parsed = module.inputSchema.parse(input);
-      } catch (error) {
-        throw cliInputError(command, input, error);
-      }
+      const parsed = parseCliCommandInput(
+        command,
+        module,
+        options.projectionModules.get(command.routeId),
+        input,
+      );
       const commandName = command.path.join(' ');
-      const invocation: AgentRenderInvocation = command.mcp === undefined
+      const invocation: AgentRenderInvocation = command.mcp === undefined || command.projection !== undefined
         ? {
             kind: 'cli',
             props: { args: execution.args, command: commandName },
@@ -1150,7 +1215,7 @@ export const prepareCliRenderHost = async (
             ...context,
             ...mounted.context,
             providers,
-            invocation: command.mcp === undefined
+            invocation: command.mcp === undefined || command.projection !== undefined
               ? {
                   kind: 'cli',
                   operationId: command.routeId,

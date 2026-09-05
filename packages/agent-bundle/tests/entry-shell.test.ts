@@ -633,6 +633,77 @@ it('generates projected MCP commands with the same tool invocation and request c
   expect(source).toContain('terminal: context.terminal,');
 });
 
+it('imports explicit CLI projections and maps their input before canonical validation', () => {
+  const route = {
+    config: {},
+    id: 'tool:curator/submit',
+    kind: 'tool' as const,
+    provenance: { kind: 'conventional' as const, relativePath: 'src/mcp/curator/tools/submit.tsx' },
+    serverId: 'mcp:curator',
+    source: '/project/src/mcp/curator/tools/submit.tsx',
+  };
+  const source = entryShellModule.generatedCliBinEntrySource({
+    commands: [{
+      aliases: [],
+      exitCode: 'zero',
+      mcp: { confirm: true, server: 'curator', tool: 'submit' },
+      options: [
+        {
+          defaultValue: 'main',
+          key: 'laneKey',
+          kind: 'string',
+          option: 'lane',
+          repeated: false,
+          required: false,
+        },
+        {
+          key: 'yes',
+          kind: 'boolean',
+          option: 'yes',
+          repeated: false,
+          required: false,
+        },
+      ],
+      path: ['submit'],
+      projection: {
+        mapInput: true,
+        module: 'src/mcp/curator/tools/submit.cli.ts',
+        relaxed: ['laneKey'],
+      },
+      rendered: true,
+      routeId: route.id,
+    }],
+    plugin: { name: 'route-fixture', version: '1.2.3' },
+    projectionSources: {
+      [route.id]: '/project/src/mcp/curator/tools/submit.cli.ts',
+    },
+    routes: [route],
+    workerFile: 'route-fixture-flight.mjs',
+  });
+
+  expect(source).toContain('import * as projection0 from "/project/src/mcp/curator/tools/submit.cli.ts";');
+  expect(source).toContain(
+    '"tool:curator/submit": Object.freeze({ module: route0, projection: projection0 })',
+  );
+  const confirmation = source.indexOf('if (command.projection !== undefined && command.mcp?.confirm === true)');
+  const defaults = source.indexOf("if (!Object.hasOwn(mapped, option.key) && Object.hasOwn(option, 'defaultValue'))");
+  const mapping = source.indexOf('mapped = route.projection.mapInput(mapped)');
+  const validation = source.indexOf('return route.module.inputSchema.parse(mapped)');
+  expect(confirmation).toBeGreaterThan(-1);
+  expect(confirmation).toBeLessThan(defaults);
+  expect(defaults).toBeLessThan(mapping);
+  expect(mapping).toBeLessThan(validation);
+  expect(source).toContain('delete mapped.yes;');
+  expect(source).toContain("throw new TypeError(`CLI projection ${command.projection.module} must export a mapInput function.`)");
+  expect(source).toContain('throw new CliInputError(error instanceof Error ? error.message : String(error));');
+  expect(source).toContain(
+    "invocation: { kind: 'cli', props: { args: context.args, command: command.path.join(' ') } }",
+  );
+  expect(source).toContain(
+    "request: { kind: 'cli', operationId: command.routeId, surface: command.path.join(' ') }",
+  );
+});
+
 it('mounts the shell-probed terminal on every routed-CLI surface and forwards it under MCP and hooks (#511)', () => {
   const plainRoute = {
     config: {},

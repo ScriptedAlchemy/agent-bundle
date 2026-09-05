@@ -246,7 +246,7 @@ const pathSuffix = (path: readonly PropertyKey[]): string =>
  */
 const targetOf = (command: CompiledCliCommand, path: readonly PropertyKey[]): string => {
   if (path.length === 0) return 'input';
-  if (command.mcp !== undefined) return `--input${pathSuffix(path)}`;
+  if (command.mcp !== undefined && command.projection === undefined) return `--input${pathSuffix(path)}`;
   const [head, ...rest] = path;
   const option = command.options.find((candidate) => candidate.key === head);
   if (option === undefined) return `input${pathSuffix(path)}`;
@@ -438,6 +438,7 @@ const commandHelp = (name: string, command: CompiledCliCommand): string => {
     lines.push('', `MCP tool: ${command.mcp.server}:${command.mcp.tool}`);
     if (command.mcp.confirm) lines.push('Mutation-capable; requires --yes.');
   }
+  if (command.projection !== undefined) lines.push(`Projection: ${command.projection.module}`);
   const positionals = sortedPositionals(command);
   if (positionals.length > 0) {
     lines.push('', 'Arguments:', helpColumns(positionals.map((option) => [
@@ -451,7 +452,7 @@ const commandHelp = (name: string, command: CompiledCliCommand): string => {
   }
   const options = namedOptions(command);
   const optionRows: (readonly [string, string])[] = options.map((option) => [
-    `    --${option.option}${optionPlaceholder(option)}${option.repeated ? ' ...' : ''}`,
+    `    ${[option.option, ...(option.aliases ?? [])].map((spelling) => `--${spelling}`).join(', ')}${optionPlaceholder(option)}${option.repeated ? ' ...' : ''}`,
     [
       option.description ?? '',
       ...(option.required ? ['(required)'] : []),
@@ -549,7 +550,11 @@ const coercePositional = (option: CompiledCliOption, value: string): unknown => 
 
 /** Parses one resolved command's remaining argv against its compiled option surface. */
 const parseCommandArgv = (command: CompiledCliCommand, argv: readonly string[]): ParsedArgv => {
-  const options = new Map(namedOptions(command).map((option) => [option.option, option]));
+  const options = new Map<string, CompiledCliOption>();
+  for (const option of namedOptions(command)) {
+    options.set(option.option, option);
+    for (const alias of option.aliases ?? []) options.set(alias, option);
+  }
   const positionals = sortedPositionals(command);
   const values = new Map<string, unknown>();
   const bare: string[] = [];
@@ -646,6 +651,7 @@ const parseMcpCommandInput = (
   command: CompiledCliCommand,
   parsed: ParsedArgv,
 ): ParsedArgv => {
+  if (command.projection !== undefined) return parsed;
   if (command.mcp === undefined) return parsed;
   const raw = parsed.input['input'];
   let input: unknown = {};
