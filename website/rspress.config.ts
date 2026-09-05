@@ -214,6 +214,11 @@ export default defineConfig({
           member: ({ kind, name }: { kind: string; name: string }) =>
             `${kind}: ${name.replace(/\\_/g, '_')}`,
         });
+        // One page per entry point instead of one per exported symbol (#590):
+        // the plugin's default `kind` router emitted 916 pages per locale whose
+        // SSR'd sidebar was 93 % of the HTML. Members become headings on their
+        // module page; authored links use `/api/<module>#<member>`.
+        app.options.setValue('router', 'module');
         return app;
       },
     }),
