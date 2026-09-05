@@ -173,8 +173,8 @@ export default defineConfig({
 
 A prebuilt hook emits its native command as `node "<root>/<payload path>" <args…>` — one config
 declaration replacing a hand-rolled `hooks/hooks.json` per host. Prebuilt hooks are packaged like
-native hook documents: they do not compile wrappers and do not appear in the simulatable hook
-index.
+native hook documents: they do not compile wrappers and do not appear in the manifest's
+`executables.hooks[]` rows, so `hooks list` and `hooks simulate` do not see them.
 
 ## Event routes
 

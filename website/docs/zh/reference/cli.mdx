@@ -42,8 +42,10 @@ npx agent-bundle --version
 
 **产物命令** —— `mcp list`、`mcp invoke`、`mcp run`、`serve-app`、`hooks list`、`hooks simulate`：同样的
 `--root`、`--config`、`--mode` 与 `--json`，外加 `--artifact <path>`（精确使用某一份已构建产物）与
-`--target <target>`（选择宿主投影）。对 `mcp list`、`mcp invoke`、`mcp run` 与 `hooks simulate`
-来说，`--target` 是**必填**的；`serve-app` 默认取 `portable`，且不接受 `--json`。
+`--target <target>`（选择宿主投影）。对 `mcp list`、`mcp invoke`、`mcp run` 与 `serve-app` 来说，
+`--target` 是**可选**的：省略时，产物的 `agent-bundle.manifest.json` `projections[]` 会给出运行该服务器的
+唯一一个具备 MCP 能力的宿主；若投影让这一选择产生歧义，命令会以一条点名候选宿主的错误失败。
+`hooks simulate` 仍然必填，因为钩子 wrapper 是按宿主编译的。`serve-app` 不接受 `--json`。
 
 ## dev
 
@@ -90,7 +92,7 @@ Workbench：该命令以与 `mcp run` 完全相同的方式启动插件打包好
 | `<app>` | **必填** | `<server>/<app>`——生成的 MCP 服务器名与 App 名（其 `ui://` URI 去掉 `.html` 的最后一段，例如 `status/status`）——或 `<server>/ui://...` 以精确选择某个资源 URI。 |
 | `--root`、`--config`、`--mode` | 同产物命令 | 项目选项。 |
 | `--artifact <path>` | 一次性构建 | 精确使用这份已构建产物。不带它时，项目会被构建进根目录旁的暂存目录，并在宿主关闭时删除。 |
-| `--target <target>` | `portable` | 包含该 MCP 服务器的产物 target。 |
+| `--target <target>` | 清单中唯一具备 MCP 能力的宿主 | 其 MCP 服务器运行该 App 的宿主投影。可选：不带它时，产物清单的 `projections[]` 必须恰好指出一个具备 MCP 能力的宿主；有多个符合时命令失败并点名它们。 |
 | `--tool <tool>` | 该 App 唯一的工具 | 用其结果打开 App 的工具：声明了该 App `_meta.ui.resourceUri` 的那一个。有多个时必填。 |
 | `--input <json>` / `--input-file <path>` | `{}` | 那次开场工具调用的 JSON 对象输入；二者至多一个。 |
 | `--port <port>` | 临时端口 | 宿主页面的 loopback TCP 端口。 |
@@ -137,7 +139,7 @@ agent-bundle install <host> [--from <root>] [--scope <scope>] [--mode <mode>] [-
 | 选项 | 默认值 | 含义 |
 | --- | --- | --- |
 | `<host>` | **必填** | `claude`、`codex` 或 `cursor`。 |
-| `--from <root>` | `process.cwd()` | 产物根目录。宿主清单必须直接位于其下（`.claude-plugin/plugin.json`、`.codex-plugin/plugin.json` 或 `.cursor-plugin/plugin.json`）；不存在 `<from>/<host>` 查找，所有宿主都从同一个目录安装（清单缺失时为 `AB7001`）。 |
+| `--from <root>` | `process.cwd()` | 组合根目录：存放 `agent-bundle.manifest.json` 的目录。身份（名称、版本、市场）来自清单的 `application` 与 `projections[host]`，宿主被指向 `projections[host].documents.plugin`；不存在 `<from>/<host>` 查找，所有宿主都从同一个目录安装。清单缺失或不是规范字节、没有该宿主的投影、投影没有宿主插件清单或所指文件缺失、`claude`/`codex` 没有市场身份，或 `cursor` 插件名不安全时为 `AB7001`。见[产物清单](./artifact-manifest.mdx)。 |
 | `--scope <scope>` | `user` | `user`、`project` 或 `local`。Claude 接受全部三种；Codex 与 Cursor 是 user 作用域。 |
 | `--mode <mode>` | `local` | 仅限 Cursor。`local` 把捆绑包复制到 `~/.cursor/plugins/local/<name>`；`marketplace` 在 `~/.cursor/agent-bundle/marketplaces/<name>` 下暂存一个已提交的本地市场仓库，并打印 Customize → Plugins →“Add Plugins from Local Repository”这一步，让 Cursor 把该插件当作市场安装来管理。 |
 | `--replace`（别名 `--force`） | 关闭 | 即使版本不同，也替换该插件已有的 agent-bundle 安装。不带它时，内容完全相同的副本是 `already-installed` 空操作，版本相同但内容哈希不同的副本会被自动替换，版本不同则为 `AB7005`。外来目录总是被拒绝（`AB7005`）。 |
@@ -158,7 +160,7 @@ agent-bundle uninstall <host> [--from <root>] [--scope <scope>] [--mode <mode>] 
 | 选项 | 默认值 | 含义 |
 | --- | --- | --- |
 | `<host>` | **必填** | `claude`、`codex` 或 `cursor`。 |
-| `--from <root>` | `process.cwd()` | 用于识别插件（名称、版本、市场）的产物根目录，宿主清单直接位于其下，与 `install` 相同。 |
+| `--from <root>` | `process.cwd()` | 其 `agent-bundle.manifest.json` 用于识别插件（名称、版本、市场）的组合根目录，读取方式与 `install` 完全相同（相同条件下为 `AB7001`）。 |
 | `--scope <scope>` | `user` | 安装时使用的作用域（Claude）。 |
 | `--mode <mode>` | `local` | 仅限 Cursor：卸载 `local` 副本或已暂存的 `marketplace` 仓库。 |
 | `--keep-data` | 开启 | 保留持久运行时状态（`state/`：状态内核、通知日志；对 Agent Plugins 包的 Cursor 副本，还包括回执记录的 `PLUGIN_DATA` 目录）。这是默认行为；该标志只是显式声明。 |
@@ -183,7 +185,7 @@ keep-data 选项）。相对包的安装器 bin 接受带同样标志的 `uninst
 | 选项 | 默认值 | 含义 |
 | --- | --- | --- |
 | `--host <host>` | 全部受支持的宿主 | 要检查的宿主。可重复；取值为 `claude`、`codex` 或 `cursor`。 |
-| `--from <root>` | —— | 用于比对的产物根目录；每个被检查宿主的清单都必须直接位于其下。 |
+| `--from <root>` | —— | 用于比对的组合根目录，通过其 `agent-bundle.manifest.json` 按 `install` 的方式读取：身份来自 `application`，每个被检查的宿主来自它的 `projections[]` 行（清单未描述该宿主时为 `AB7001`）。 |
 | `--json` | 关闭 | 写出一份机器可读的 JSON 文档。 |
 
 当 Doctor 报告任何 error 级诊断时以 `1` 退出，并且绝不修改任何东西。带 `--from` 时，它按宿主把已安装副本报告为
@@ -238,6 +240,10 @@ keep-data 选项）。相对包的安装器 bin 接受带同样标志的 `uninst
 
 传入多个聚焦标志是错误。当规范化模型无效时，`inspect` 以 `1` 退出。
 
+带 `--json` 时，只要产物输出位置存在已构建的 `agent-bundle.manifest.json`，文档就会多出一份
+`output.manifest` 摘要——已构建的 `projections[]` 与 `executables`——因此 JSON 消费者无需自行探测根目录就能
+看到上一次构建输出了什么。源码侧的模型与计划视图不变。
+
 每份检查计划都会以规范组件类型报告每个组件——`agent`、`cli`、`command`、`event-route`、`hook`、`lsp`、
 `mcp-app`、`mcp-server`、`native-diagnostics`、`native-extension`、`rule`、`script`、`skill`（来自
 `agent-bundle/api` 的 `AgentComponentKind`）——标为 `selected` 或带原因的 `skipped`，并附一份 `kinds` 矩阵：
@@ -249,6 +255,10 @@ keep-data 选项）。相对包的安装器 bin 接受带同样标志的 `uninst
 
 `mcp list` 需要 `--server <server>`。`mcp invoke` 需要 `--server` 与 `--tool <tool>`，并且只接受
 `--input <json>` 与 `--input-file <path>` 二者之一；解析出的值必须是 JSON 对象，而不是数组或标量。
+
+三者都从产物的 `agent-bundle.manifest.json` 解析服务器：编译后的入口（及其 Flight worker）来自
+`executables.mcpServers[].entry`，App 来自 `executables.mcpServers[].apps[]`，省略 `--target` 时宿主来自唯一
+具备 MCP 能力的 `projections[]` 行；有歧义的选择是一条点名候选宿主的错误。
 
 `mcp run` 需要 `--server`，并以继承的 stdio 在前台运行一个 stdio 服务器：
 
@@ -263,8 +273,9 @@ keep-data 选项）。相对包的安装器 bin 接受带同样标志的 `uninst
 
 ## hooks
 
-`hooks list` 报告某份产物中的钩子。`hooks simulate` 需要 `--hook <hook>`（id 或名字），以及与
-`mcp invoke` 相同的 `--input` / `--input-file` 二选一。
+`hooks list` 报告某份产物中的钩子——即其 `agent-bundle.manifest.json` 的 `executables.hooks[]` 行。
+`hooks simulate` 需要 `--hook <hook>`（id 或名字），以及与 `mcp invoke` 相同的 `--input` / `--input-file`
+二选一。
 
 ## 退出码
 

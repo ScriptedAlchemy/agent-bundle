@@ -942,7 +942,8 @@ artifact. The published plugin package and an installed host pack have neither, 
 (the `--allow` vocabulary: `call-tool`, `download-file`, `open-external-link`,
 `request-display-mode`), `configPath`, `envFiles`, `input`, `loadEnvFiles`, `mode`, `open`,
 `pluginRoot`, `port`, `profile`, `target`, `tool` — and an unset option takes the CLI default
-(`--target portable`, `--profile portable`, `--mode production`, the App's only tool, no browser).
+(the artifact manifest's one MCP-capable host for `--target`, `--profile portable`,
+`--mode production`, the App's only tool, no browser).
 Relative paths resolve as the CLI resolves them: `configPath` against `root`, `artifact` and
 `envFiles` against the working directory. The `serveApp` options with no argv form — `logger`,
 `registry`, `openBrowser`, `targets`, `timeoutMs` — stay with `serveApp` in host processes.
@@ -964,10 +965,12 @@ npx agent-bundle mcp invoke --artifact artifact --target claude --server curator
 npx agent-bundle mcp run --artifact artifact --target claude --server curator
 ```
 
-`mcp run` executes one built stdio server in the foreground: it resolves the generated entry
-(named with a digest of the server name) from the target's MCP manifest, expands path tokens through the target adapter,
-loads the project-root `.env` set, and forwards the child's exit code. Without `--artifact`, a
-temporary artifact is built first.
+`mcp run` executes one built stdio server in the foreground: it resolves the compiled entry
+(named with a digest of the server name) from the artifact manifest's `executables.mcpServers[]`
+row, expands path tokens through the host adapter, loads the project-root `.env` set, and forwards
+the child's exit code. `--target` is optional — omit it and the manifest's `projections[]` must
+name exactly one MCP-capable host; several are an error naming the choices. Without
+`--artifact`, a temporary artifact is built first.
 
 ## Live host MCP proxy
 

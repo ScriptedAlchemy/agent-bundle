@@ -61,7 +61,7 @@ features:
     span: 4
   - icon: 📦
     title: 一个根目录，所有宿主
-    details: 产物根目录就是你安装的那个单位——每个所选宿主的清单各自放在自己的点目录中，共用同一套 Skill、钩子与 MCP 入口，旁边是生成的 INSTALL.md 与 agent-bundle.manifest.json，即校验、MCP、钩子与评测所读取的 SHA-256 记录。
+    details: 产物根目录就是你安装的那个单位——每个所选宿主的清单各自放在自己的点目录中，共用同一套 Skill、钩子与 MCP 入口，旁边是生成的 INSTALL.md 与 agent-bundle.manifest.json，即 install、doctor、校验、MCP、钩子与评测所读取的产物索引。
     link: /zh/guide/distribution/
     span: 4
 ---
@@ -140,8 +140,7 @@ artifact/
 │   └── references/policy.md
 ├── INSTALL.md                       # 每个所选宿主一节
 ├── install.mjs                      # portable 与 Cursor 的安装器
-├── agent-bundle.manifest.json       # 每个输出文件及其 SHA-256
-└── agent-bundle.hooks.json          # 覆盖所选宿主的钩子索引
+└── agent-bundle.manifest.json       # 产物索引：身份、投影、可执行文件、摘要
 ```
 
 每个所选宿主都把这同一个目录当作自己的插件根目录来读取：Claude Code 找到 `.claude-plugin/`、

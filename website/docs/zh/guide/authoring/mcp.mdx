@@ -836,8 +836,8 @@ stdout 的每一行转发到本进程的 stderr——或转发给一个 `relay` 
 就说明这一点。每个有 argv 形式的 `serveApp` 选项都会透传——`app`、`root`、`artifact`、`autoApprove`
 （即 `--allow` 的词汇表：`call-tool`、`download-file`、`open-external-link`、`request-display-mode`）、
 `configPath`、`envFiles`、`input`、`loadEnvFiles`、`mode`、`open`、`pluginRoot`、`port`、`profile`、`target`、
-`tool`——未设置的选项取 CLI 默认值（`--target portable`、`--profile portable`、`--mode production`、该 App
-唯一的工具、不打开浏览器）。相对路径按 CLI 的解析方式解析：`configPath` 相对 `root`，`artifact` 与
+`tool`——未设置的选项取 CLI 默认值（`--target` 取产物清单中唯一具备 MCP 能力的宿主、`--profile portable`、
+`--mode production`、该 App 唯一的工具、不打开浏览器）。相对路径按 CLI 的解析方式解析：`configPath` 相对 `root`，`artifact` 与
 `envFiles` 相对工作目录。没有 argv 形式的 `serveApp` 选项——`logger`、`registry`、`openBrowser`、`targets`、
 `timeoutMs`——仍留给宿主进程中的 `serveApp`。
 
@@ -857,9 +857,10 @@ npx agent-bundle mcp invoke --artifact artifact --target claude --server curator
 npx agent-bundle mcp run --artifact artifact --target claude --server curator
 ```
 
-`mcp run` 在前台执行一个已构建的 stdio 服务器：它从该 target 的 MCP 清单中解析出生成入口（其文件名带有
-服务器名称的摘要），通过 target 适配器展开路径 token，加载项目根目录的 `.env` 集合，并转发子进程的退出码。不带
-`--artifact` 时会先构建一个临时产物。
+`mcp run` 在前台执行一个已构建的 stdio 服务器：它从产物清单的 `executables.mcpServers[]` 行中解析出编译后
+的入口（其文件名带有服务器名称的摘要），通过宿主适配器展开路径 token，加载项目根目录的 `.env` 集合，并转发
+子进程的退出码。`--target` 是可选的——省略时，清单的 `projections[]` 必须恰好指出一个具备 MCP 能力的宿主；
+有多个时是一条点名候选宿主的错误。不带 `--artifact` 时会先构建一个临时产物。
 
 ## 实时宿主 MCP 代理
 
