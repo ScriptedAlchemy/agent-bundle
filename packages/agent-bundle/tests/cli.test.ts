@@ -1176,10 +1176,10 @@ it('reports invalid CLI arguments as Commander usage errors', async () => {
       reason: 'Install scope must be user, project, or local.',
       value: 'global',
     },
-  ] as const;
+  ];
 
   for (const { args, option, reason, value } of cases) {
-    const result = await runSourceCliWithOutput([...args]);
+    const result = await runSourceCliWithOutput(args);
     expect(result.code).toBe(2);
     expect(result.stderr).toContain(`error: option '${option}' argument '${value}' is invalid. ${reason}`);
     expect(result.stderr).not.toContain('AB5000');
