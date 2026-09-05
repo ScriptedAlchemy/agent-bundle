@@ -48,6 +48,13 @@ export const ROUTE_INVOCATION_MANIFEST_UNAVAILABLE_CODE = 'AB8232';
 export const ROUTE_INVOCATION_CHILD_FAILURE_CODE = 'AB8236';
 export const ROUTE_INVOCATION_MALFORMED_REQUEST_CODE = 'AB8237';
 export const ROUTE_INVOCATION_UNKNOWN_FIXTURE_CODE = 'AB8238';
+export const ROUTE_INVOCATION_STALE_REVISION_CODE = 'AB8239';
+export const ROUTE_INVOCATION_STALE_REVISION_MESSAGE =
+  'The published route manifest changed while this invocation waited to run. Retry against the current revision.';
+
+/** Writable state root generated entries mount for the npm-bin cwd fallback. */
+export const routeInvocationStateRoot = (projectRoot: string): string =>
+  join(projectRoot, '.agent-bundle', 'state');
 
 const defaultHistoryLimit = 200;
 const defaultTimeoutMs = 60_000;
@@ -77,7 +84,17 @@ export interface RouteInvocationPreparedProject {
   readonly artifact?: Readonly<{ epochId: string; target: string }>;
   readonly fixtures?: Readonly<Record<string, readonly RouteInvocationFixture[]>>;
   readonly manifest: AgentBundleTestManifest;
+  /**
+   * Writable state directory generated entries mount for this project
+   * (`<pluginRoot>/state`, never the code root).
+   */
+  readonly stateRoot: string;
   readonly targets: readonly RouteInvocationEventHost[];
+}
+
+export interface RouteInvocationPreparedLease {
+  readonly project: RouteInvocationPreparedProject;
+  readonly release: () => Promise<void> | void;
 }
 
 export interface RouteInvocationScriptRunner {
@@ -89,7 +106,10 @@ export interface RouteInvocationServiceOptions {
   readonly historyLimit?: number;
   readonly manifest: RouteManifestRouteService;
   readonly now?: () => Date;
-  readonly prepared: () => RouteInvocationPreparedProject;
+  readonly prepared: () =>
+    | RouteInvocationPreparedLease
+    | RouteInvocationPreparedProject
+    | Promise<RouteInvocationPreparedLease | RouteInvocationPreparedProject>;
   readonly registry?: TargetRegistry;
   readonly renderChild?: (
     request: RouteInvocationChildRequest,
@@ -105,6 +125,7 @@ export interface RouteInvocationChildRequest {
   readonly input: JsonValue;
   readonly manifest: AgentBundleTestManifest;
   readonly routeId: string;
+  readonly stateRoot: string;
 }
 
 export interface RouteInvocationChildResult {
@@ -138,7 +159,8 @@ export class RouteInvocationRequestError extends Error {
     | typeof ROUTE_INVOCATION_MALFORMED_REQUEST_CODE
     | typeof ROUTE_INVOCATION_UNKNOWN_FIXTURE_CODE
     | typeof ROUTE_INVOCATION_UNKNOWN_ROUTE_CODE
-    | typeof ROUTE_INVOCATION_MANIFEST_UNAVAILABLE_CODE;
+    | typeof ROUTE_INVOCATION_MANIFEST_UNAVAILABLE_CODE
+    | typeof ROUTE_INVOCATION_STALE_REVISION_CODE;
   readonly status: 400 | 404 | 409;
 
   constructor(
@@ -159,6 +181,18 @@ const malformed = (): never => {
     'Route invocation request has an invalid shape.',
     400,
   );
+};
+
+const isPreparedLease = (
+  value: RouteInvocationPreparedLease | RouteInvocationPreparedProject,
+): value is RouteInvocationPreparedLease =>
+  isRecord(value) && typeof value.release === 'function' && isRecord(value.project);
+
+const bindPrepared = async (
+  supplier: RouteInvocationServiceOptions['prepared'],
+): Promise<RouteInvocationPreparedLease> => {
+  const value = await supplier();
+  return isPreparedLease(value) ? value : { project: value, release: () => undefined };
 };
 
 const boundedString = (value: unknown, maxLength = 4_096): value is string =>
@@ -659,7 +693,7 @@ export class RouteInvocationService {
   readonly #manifest: RouteManifestRouteService;
   readonly #now: () => Date;
   readonly #pending = new Set<Promise<RouteInvocation>>();
-  readonly #prepared: () => RouteInvocationPreparedProject;
+  readonly #prepared: RouteInvocationServiceOptions['prepared'];
   readonly #registry: TargetRegistry;
   readonly #renderChild: NonNullable<RouteInvocationServiceOptions['renderChild']>;
   readonly #scripts: RouteInvocationScriptRunner | undefined;
@@ -697,11 +731,9 @@ export class RouteInvocationService {
   }
 
   async invoke(request: RouteInvocationRequest): Promise<RouteInvocation> {
-    let manifest: RouteManifest;
-    let prepared: RouteInvocationPreparedProject;
+    let queued: RouteManifest;
     try {
-      manifest = this.#manifest.manifest();
-      prepared = this.#prepared();
+      queued = this.#manifest.manifest();
     } catch (error) {
       if (error instanceof RouteInvocationRequestError) throw error;
       throw new RouteInvocationRequestError(
@@ -710,7 +742,7 @@ export class RouteInvocationService {
         409,
       );
     }
-    const route = allManifestRoutes(manifest).find((candidate) => candidate.id === request.routeId);
+    const route = allManifestRoutes(queued).find((candidate) => candidate.id === request.routeId);
     if (route === undefined || !invocationKinds.has(route.kind as RouteInvocationKind)) {
       throw new RouteInvocationRequestError(
         ROUTE_INVOCATION_UNKNOWN_ROUTE_CODE,
@@ -724,64 +756,89 @@ export class RouteInvocationService {
     ) {
       return malformed();
     }
-    const fixtureId = request.event?.fixtureId;
-    const fixture = fixtureId === undefined
-      ? undefined
-      : prepared.fixtures?.[route.id]?.find((candidate) => candidate.id === fixtureId);
-    if (fixtureId !== undefined && fixture === undefined) {
-      throw new RouteInvocationRequestError(
-        ROUTE_INVOCATION_UNKNOWN_FIXTURE_CODE,
-        `Fixture ${JSON.stringify(fixtureId)} is not available for route ${JSON.stringify(route.id)}.`,
-        400,
-      );
-    }
-    const rawInput = request.input ?? fixture?.input ?? {};
-    const input = route.kind === 'event-route'
-      ? eventInput(route, rawInput, request.event?.host, this.#registry)
-      : rawInput;
     const id = `inv_${this.#now().getTime().toString(36)}${randomBytes(8).toString('hex')}`;
     const startedAt = this.#now();
-    const context = contextFor(route, prepared.manifest.projectRoot, request.event?.host);
     const running = this.#semaphore.run<RouteInvocation>(async () => {
-      const controller = new AbortController();
-      this.#controllers.add(controller);
-      if (this.#closed) {
-        controller.abort(new DOMException('Route invocation service closed.', 'AbortError'));
-      }
-      const timeout = setTimeout(() => controller.abort(new DOMException('Route invocation timed out.', 'TimeoutError')), this.#timeoutMs);
-      let child: RouteInvocationChildResult;
-      const plainScript = plainScriptFor(prepared, route);
+      let release: RouteInvocationPreparedLease['release'] | undefined;
       try {
-        child = plainScript === undefined
-          ? await this.#renderChild({
-            ...(request.args === undefined ? {} : { args: request.args }),
+        let manifest: RouteManifest;
+        let prepared: RouteInvocationPreparedProject;
+        try {
+          const leased = await bindPrepared(this.#prepared);
+          release = leased.release;
+          prepared = leased.project;
+          manifest = this.#manifest.manifest();
+        } catch (error) {
+          if (error instanceof RouteInvocationRequestError) throw error;
+          throw new RouteInvocationRequestError(
+            ROUTE_INVOCATION_MANIFEST_UNAVAILABLE_CODE,
+            'No published build and route manifest are available.',
+            409,
+          );
+        }
+        if (manifest.digest !== queued.digest || manifest.sourceRevision !== queued.sourceRevision) {
+          throw new RouteInvocationRequestError(
+            ROUTE_INVOCATION_STALE_REVISION_CODE,
+            ROUTE_INVOCATION_STALE_REVISION_MESSAGE,
+            409,
+          );
+        }
+        const fixtureId = request.event?.fixtureId;
+        const fixture = fixtureId === undefined
+          ? undefined
+          : prepared.fixtures?.[route.id]?.find((candidate) => candidate.id === fixtureId);
+        if (fixtureId !== undefined && fixture === undefined) {
+          throw new RouteInvocationRequestError(
+            ROUTE_INVOCATION_UNKNOWN_FIXTURE_CODE,
+            `Fixture ${JSON.stringify(fixtureId)} is not available for route ${JSON.stringify(route.id)}.`,
+            400,
+          );
+        }
+        const rawInput = request.input ?? fixture?.input ?? {};
+        const input = route.kind === 'event-route'
+          ? eventInput(route, rawInput, request.event?.host, this.#registry)
+          : rawInput;
+        const context = contextFor(route, prepared.manifest.projectRoot, request.event?.host);
+        const controller = new AbortController();
+        this.#controllers.add(controller);
+        if (this.#closed) {
+          controller.abort(new DOMException('Route invocation service closed.', 'AbortError'));
+        }
+        const timeout = setTimeout(() => controller.abort(new DOMException('Route invocation timed out.', 'TimeoutError')), this.#timeoutMs);
+        let child: RouteInvocationChildResult;
+        const plainScript = plainScriptFor(prepared, route);
+        try {
+          child = plainScript === undefined
+            ? await this.#renderChild({
+              ...(request.args === undefined ? {} : { args: request.args }),
+              context,
+              input,
+              manifest: prepared.manifest,
+              routeId: route.id,
+              stateRoot: prepared.stateRoot,
+            }, controller.signal)
+            : await runPlainScript(this.#scripts, prepared, plainScript, input, controller.signal);
+        } catch (error) {
+          const completedAt = this.#now();
+          return failedInvocation({
+            code: ROUTE_INVOCATION_CHILD_FAILURE_CODE,
+            completedAt,
             context,
-            input,
-            manifest: prepared.manifest,
-            routeId: route.id,
-          }, controller.signal)
-          : await runPlainScript(this.#scripts, prepared, plainScript, input, controller.signal);
-      } catch (error) {
-        const completedAt = this.#now();
-        return failedInvocation({
-          code: ROUTE_INVOCATION_CHILD_FAILURE_CODE,
-          completedAt,
-          context,
-          id,
-          manifest,
-          message: controller.signal.reason instanceof DOMException && controller.signal.reason.name === 'TimeoutError'
-            ? 'Route invocation child timed out.'
-            : controller.signal.aborted
-              ? 'Route invocation child stopped because the service closed.'
-            : `${plainScript === undefined ? 'Route invocation child' : 'Script run'} failed: ${error instanceof Error ? error.message : String(error)}`,
-          request: { ...request, input },
-          route,
-          startedAt,
-        });
-      } finally {
-        clearTimeout(timeout);
-        this.#controllers.delete(controller);
-      }
+            id,
+            manifest,
+            message: controller.signal.reason instanceof DOMException && controller.signal.reason.name === 'TimeoutError'
+              ? 'Route invocation child timed out.'
+              : controller.signal.aborted
+                ? 'Route invocation child stopped because the service closed.'
+              : `${plainScript === undefined ? 'Route invocation child' : 'Script run'} failed: ${error instanceof Error ? error.message : String(error)}`,
+            request: { ...request, input },
+            route,
+            startedAt,
+          });
+        } finally {
+          clearTimeout(timeout);
+          this.#controllers.delete(controller);
+        }
       const projectionStartedAt = this.#now();
       const projection = invocationProjection(
         route,
@@ -830,6 +887,9 @@ export class RouteInvocationService {
         status: 'succeeded',
         timings: invocationTimings(child, startedAt, projectionStartedAt, completedAt),
       });
+      } finally {
+        await release?.();
+      }
     });
     this.#pending.add(running);
     let invocation: RouteInvocation;

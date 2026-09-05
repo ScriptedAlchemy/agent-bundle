@@ -173,7 +173,7 @@ provider 为 `unobserved` 且省略 `durationMs`；`0` 是测得的零，不是�
 时的 `handler`、`providers` 与 `provider:<name>`。失败的调用记录 `elapsed`（失败前的墙钟时间），
 不会伪造 `failed` 的 provider 行。被表示的 `Agent.Error` 仍是一份已渲染结果；未知路由或
 invocation id（`AB8231`）、不可用的 epoch（`AB8232`）、渲染超时或崩溃（`AB8236`）、格式错误的请求
-（`AB8237`）与未知 fixture id（`AB8238`）会作为诊断报告。
+（`AB8237`）、未知 fixture id（`AB8238`），以及在获得并发槽位前发布修订已变更的排队调用（`AB8239`）会作为诊断报告。
 各条触发条件与恢复指引见[诊断参考](../../reference/diagnostics.md)。
 
 ## 以编程方式使用同一个会话

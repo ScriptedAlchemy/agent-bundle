@@ -207,7 +207,8 @@ duration), `projection` (host-projection time in the service), and, when observe
 wall time until failure and does not invent `failed` provider rows. A represented
 `Agent.Error` remains a rendered result; unknown routes or invocation ids (`AB8231`),
 unavailable epochs (`AB8232`), render timeouts or crashes (`AB8236`), malformed requests
-(`AB8237`), and unknown fixture ids (`AB8238`) are reported as diagnostics.
+(`AB8237`), unknown fixture ids (`AB8238`), and a queued invocation whose published
+revision moved before it acquired a slot (`AB8239`) are reported as diagnostics.
 See the [diagnostics reference](../../reference/diagnostics.md) for the individual triggers and
 recovery guidance.
 
