@@ -74,6 +74,12 @@ draft-07 校验器都接受每一个合法取值。zod 元组（`z.tuple([...])`
 `dependentRequired` 这样仅属于 2020-12 的关键字会被宽松模式的 draft-07 校验器忽略，而不会被错误地
 套用。
 
+两个 schema 都不必写在路由模块中：`inputSchema` 与 `resultSchema` 都可以绑定到从项目内部相对模块
+导入的 schema（`export const inputSchema = statusInputSchema`）；每条绑定到同一个已声明
+`inputSchema` 的路由——这里的一个工具、别处的一条 `src/cli/**` 命令——都会在编译后的路由图中共享一个
+[路由契约](./index.mdx#路由契约application-ir)。解析规则以及 `AB4838`/`AB4839` 诊断见
+[在 MCP 与 CLI 之间共享同一份 schema](./package-entries.mdx#在-mcp-与-cli-之间共享同一份-schema)。
+
 路由可以从另一个模块重新导出自己的组件与 schema。当同一个工具需要放在两个生成的服务器上、而两处
 只有 `config` 不同时，就用这种写法——例如 MCP App 的 `tools/call` 会到达提供该 widget 的那台服务器：
 
