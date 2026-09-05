@@ -49,8 +49,21 @@ export interface RouteManifestProvenance {
   readonly kind: 'conventional';
 }
 
+/** Mirrors one compiler route contract without exposing server-only module paths. */
+export interface RouteManifestContract {
+  readonly id: string;
+  readonly input: RouteInputSchema;
+  readonly origin: {
+    readonly binding: string;
+    readonly module: string;
+  };
+  readonly routes: readonly string[];
+}
+
 /** One compiled route projected for the browser catalog. */
 export interface RouteManifestRoute {
+  /** Id of the compiler contract this route binds. */
+  readonly contract?: string;
   readonly config: readonly RouteManifestConfigEntry[];
   /** `config.description` when it is a string; the catalog's human label. */
   readonly description?: string;
@@ -128,6 +141,8 @@ export type RouteManifestState = StateDefinitionProjection;
  */
 export interface RouteManifest {
   readonly cli?: RouteManifestCliSurface;
+  /** Present only when the compiler graph carries route contracts. */
+  readonly contracts?: readonly RouteManifestContract[];
   readonly diagnostics: readonly Diagnostic[];
   /** The graph digest over project-relative route identity. */
   readonly digest: string;
@@ -185,6 +200,7 @@ const description = (config: Readonly<Record<string, unknown>>): string | undefi
 const manifestRoute = (route: CompiledAgentRoute): RouteManifestRoute => {
   const summary = description(route.config);
   return {
+    ...(route.contract === undefined ? {} : { contract: route.contract }),
     config: configSummary(route.config),
     ...(summary === undefined ? {} : { description: summary }),
     ...(route.event === undefined ? {} : { event: route.event }),
@@ -245,6 +261,14 @@ export const routeManifestFor = (
   notices?: NormalizedNotices,
 ): RouteManifest => deepFreeze({
   ...(graph.cli === undefined ? {} : { cli: manifestCli(graph.cli) }),
+  ...(graph.contracts === undefined ? {} : {
+    contracts: graph.contracts.map((contract) => ({
+      id: contract.id,
+      input: contract.input,
+      origin: { ...contract.origin },
+      routes: [...contract.routes],
+    })),
+  }),
   diagnostics: graph.diagnostics.map((diagnostic) => ({ ...diagnostic })),
   digest: graph.digest,
   events: graph.events.map(manifestRoute),
