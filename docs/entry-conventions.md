@@ -32,9 +32,9 @@ package-only entries:
   gates the exact package/artifact inventory, manifest hashes, package bin
   targets, and release-version agreement. With no `--output`, prepack uses
   configured `output.distPath` when present and otherwise writes the plugin
-  root to `artifact/`, leaving the package build in `dist/`. Use it as an npm `prepack`
-  script; `--ignore-scripts` prevents recursion and npm install never runs the
-  host installer.
+  root to `artifact/`, leaving the package build in `dist/`. Run it directly
+  (the templates expose `pack:check`), then publish the generated root with
+  `npm publish ./dist --ignore-scripts`.
 - The package build runs for `agent-bundle build` (CLI, or
   `build({ packageOutputs: true })` through the API) and inside the
   `agent-bundle dev` rebuild loop (see “Dev-watch of the package build”

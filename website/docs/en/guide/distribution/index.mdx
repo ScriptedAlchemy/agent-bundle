@@ -84,6 +84,8 @@ A project that also ships as an npm package has a second output, `dist/`, but it
 plugin build. `dist/` is the npm package root: it contains the complete composite artifact,
 `package.json`, the standard package documentation files, and any package-only library or
 authored-bin entries described in [Package entries](../authoring/package-entries.mdx).
+`validate --artifact` and other artifact-only commands still take the bare composite artifact;
+the manifest-aware `install --from` path accepts the npm root.
 
 For a generated routed CLI, the installed package's `bin` points directly at
 `bin/<name>.mjs`, copied unchanged from the validated artifact. The npm CLI therefore has the

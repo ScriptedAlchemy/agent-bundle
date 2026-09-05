@@ -71,6 +71,7 @@ Claude 与 Codex 投影始终包含本地市场清单，正是这一点让它们
 同时作为 npm 包发布的项目还有第二份输出 `dist/`，但它不是第二次插件构建。`dist/` 就是 npm 包根目录：
 它包含完整的组合产物、`package.json`、标准包文档，以及[包入口](../authoring/package-entries.mdx)所述的
 包专用库入口或手写 bin。
+`validate --artifact` 等仅面向产物的命令仍应接收纯组合产物；清单感知的 `install --from` 路径则接受 npm 根目录。
 
 对于生成的路由式 CLI，已安装包的 `bin` 直接指向 `bin/<name>.mjs`；该文件从已校验产物原样复制。因此
 npm CLI 与产物 CLI 拥有完全相同的命令（包括 `web`）和完全相同的字节。tarball 中没有嵌套的

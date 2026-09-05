@@ -257,8 +257,9 @@ declare the framework, `@agent-bundle/runtime`, `react`, `zod`, and the rest of 
 a bare package external: the compiler reports `AB6005` before `prepack` reaches the inventory. So
 bundling a package does not prove that consumers need it installed. `--output` is an artifact path
 relative to `--root` that overrides the configured
-`output.distPath`, defaulting to `artifact`. Use it as an npm `prepack` script; `--ignore-scripts`
-prevents recursion, and no npm lifecycle ever performs a host install.
+`output.distPath`, defaulting to `artifact`. Run the gate directly (generated projects expose
+`pack:check`), then publish the generated root with `npm publish ./dist --ignore-scripts`.
+No npm lifecycle ever performs a host install.
 
 Consumer `preinstall`, `install`, and `postinstall` scripts are preserved only when they do not
 invoke Node directly, or when they are one `node <generated-package-path>` command. Known authored

@@ -77,7 +77,9 @@ ship without the installer it promises.
 
 ## The npm-installed CLI
 
-The npm package root contains the composite plugin root itself. For a generated routed CLI,
+The npm package root contains every manifest-owned composite-plugin byte plus npm-only metadata
+and authored package entries. Commands such as `validate --artifact` still take the bare composite
+artifact; `install --from` is manifest-aware and accepts either root. For a generated routed CLI,
 `package.json` points its `bin` at the same `bin/<name>.mjs` executable the artifact exposes,
 without a second compilation or wrapper. Its complete command surface, including `web`, therefore
 works from `node_modules` exactly as it does from a copied artifact. **No npm lifecycle performs a

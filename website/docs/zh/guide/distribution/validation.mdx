@@ -221,8 +221,8 @@ npx agent-bundle prepack --root . --output artifact --json
 `zod` 以及其余技术栈都声明在 `devDependencies` 下。已编译的 bundle——无论是宿主包模块还是 `dist`
 bundle——都不能把裸包保持外部化：编译器会在 `prepack` 触及清单之前报告 `AB6005`。因此
 仅仅把包内联进 bundle 并不能证明消费者需要安装它。`--output` 是相对
-`--root` 的产物路径，会覆盖配置中的 `output.distPath`，默认值为 `artifact`。把它用作 npm 的 `prepack`
-脚本；`--ignore-scripts` 可防止递归，而且任何 npm 生命周期都绝不会执行宿主安装。
+`--root` 的产物路径，会覆盖配置中的 `output.distPath`，默认值为 `artifact`。请直接运行门禁（生成项目提供
+`pack:check`），再用 `npm publish ./dist --ignore-scripts` 发布生成根目录。任何 npm 生命周期都绝不会执行宿主安装。
 
 消费者的 `preinstall`、`install` 与 `postinstall` 脚本仅在不直接调用 Node，或恰好是一个
 `node <generated-package-path>` 命令时保留。源 `dist/` 下已知的手写输出路径会改写到生成根目录，并对照

@@ -63,7 +63,9 @@ node ./install.mjs
 
 ## npm 安装的 CLI
 
-npm 包根目录本身就包含组合插件根。对于生成的路由式 CLI，`package.json` 的 `bin` 指向产物公开的同一个
+npm 包根目录包含组合插件清单拥有的全部字节，并额外带有 npm 专属元数据与手写包入口。
+`validate --artifact` 等命令仍接收纯组合产物；清单感知的 `install --from` 接受任一根目录。
+对于生成的路由式 CLI，`package.json` 的 `bin` 指向产物公开的同一个
 `bin/<name>.mjs` 可执行文件，不会再次编译，也没有包装器。因此它的完整命令面（包括 `web`）从
 `node_modules` 运行时与从复制的产物运行完全一致。**任何 npm 生命周期都不会执行宿主安装**——安装一个包
 绝不会改动宿主的插件状态。
