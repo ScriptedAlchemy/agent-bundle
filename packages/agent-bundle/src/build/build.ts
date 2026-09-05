@@ -7,7 +7,7 @@ import type { TargetRegistry } from '../adapters/registry.ts';
 import { deduplicateDiagnostics, DiagnosticError, type Diagnostic } from '../core/diagnostics.ts';
 import type { ProjectContext } from '../core/project-context.ts';
 import { pathTokens, type AgentBundleToolsConfig, type NormalizedPlugin } from '../core/types.ts';
-import { assertInside, isInsideOrEqual } from '../core/paths.ts';
+import { assertInside, isInsideOrEqual, isRelocatablePosixPath } from '../core/paths.ts';
 import { agentSkillsSchemaRevision } from '../schemas/agent-skills/contract.ts';
 import {
   planCompiledEntries,
@@ -293,15 +293,7 @@ const sortedHosts = (hosts: Iterable<string>): readonly string[] =>
 /** Artifact-root-relative POSIX path; refuses anything the parser would reject. */
 const artifactPath = (artifactRoot: string, absolute: string): string => {
   const path = relative(artifactRoot, absolute).replaceAll('\\', '/');
-  const segments = path.split('/');
-  if (
-    path.length === 0 ||
-    path.includes('\\') ||
-    path.includes('\0') ||
-    path.startsWith('/') ||
-    /^[a-z]:/iu.test(path) ||
-    segments.some((segment) => segment.length === 0 || segment === '.' || segment === '..')
-  ) {
+  if (!isRelocatablePosixPath(path)) {
     throw new Error(`Artifact path ${JSON.stringify(absolute)} is not relocatable relative to ${JSON.stringify(artifactRoot)}.`);
   }
   return path;

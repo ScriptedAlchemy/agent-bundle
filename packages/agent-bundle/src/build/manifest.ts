@@ -4,6 +4,7 @@ import {
   parseRuntimeVersion,
   satisfiesGeneratedRuntimeFloor,
 } from '../core/runtime.ts';
+import { isRelocatablePosixPath } from '../core/paths.ts';
 import { isValidPackageName, isValidPackageVersion } from '../core/project-context.ts';
 import { isPlainRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import type {
@@ -451,17 +452,7 @@ const requireHash = (value: unknown, location: string): string => {
 
 const requirePath = (value: unknown, location: string): string => {
   const path = requireString(value, location);
-  const segments = path.split('/');
-  if (
-    path.includes('\\') ||
-    path.includes('\0') ||
-    path.startsWith('/') ||
-    /^[a-z]:/iu.test(path) ||
-    segments.some((segment) => segment.length === 0 || segment === '.' || segment === '..')
-  ) {
-    fail(`${location} must be a safe relative POSIX path.`);
-  }
-  return path;
+  return isRelocatablePosixPath(path) ? path : fail(`${location} must be a safe relative POSIX path.`);
 };
 
 const requireExactKeys = (
