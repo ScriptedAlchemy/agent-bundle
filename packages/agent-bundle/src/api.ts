@@ -148,6 +148,7 @@ export {
   serializeArtifactManifest,
 } from './build/manifest.ts';
 export { readArtifactManifest, type ArtifactManifestReadResult } from './build/manifest-file.ts';
+export { artifactManifestSchema, validateArtifactManifestSchema } from './build/manifest-schema.ts';
 import { composeBundlerInspection, type BundlerInspection } from './build/inspect-bundler.ts';
 import { defaultPackageArtifactDistPath } from './config/normalize.ts';
 export type { BundlerInspection, BundlerInspectionEntry } from './build/inspect-bundler.ts';

@@ -112,11 +112,13 @@ export type {
 } from './eval/index.ts';
 export {
   artifactManifestName,
+  artifactManifestSchema,
   artifactManifestVersion,
   assembleArtifactManifest,
   parseArtifactManifest,
   readArtifactManifest,
   serializeArtifactManifest,
+  validateArtifactManifestSchema,
 } from './api.ts';
 export type {
   EvalAssertionSummary,
