@@ -9,6 +9,6 @@ binding instead of two; `create-agent-bundle` templates pin `@rstest/core` 0.11.
 builds stay self-contained (`output.autoExternal: false`, Node builtins the only externals) and
 keep `new URL(…, import.meta.url)` and `new Worker(new URL(…))` expressions verbatim.
 `agent-bundle inspect --bundler` lowers in production mode regardless of `NODE_ENV` and shows the
-new `bundlerChain` invariant beside `tools.rspack`. Published `.d.ts` files now import their
-siblings with `.js` specifiers, and `@agent-bundle/runtime`'s shared chunks are named
-`<id>~0.js`; every `exports` entry resolves as before. (#575)
+new `bundlerChain` invariant beside `tools.rspack`. Published `.d.ts` files (`agent-bundle`,
+`@agent-bundle/runtime`) now import their siblings with `.js` specifiers; every `exports` entry
+resolves as before. (#575)
