@@ -116,20 +116,25 @@ const isLocalhost = (url: URL): boolean => {
   return host === 'localhost' || host === '127.0.0.1' || host === '::1';
 };
 
-/** First stdout http(s) URL with a token query param, else the first delimited localhost URL. */
+/**
+ * First delimited stdout http(s) URL with a token query param, else the first delimited
+ * localhost URL. A URL that ends the buffer is never chosen: stdout arrives in chunks, and a
+ * boundary inside the token value would otherwise publish a truncated token.
+ *
+ * Inspector 2.x prints `http://127.0.0.1:6274?MCP_INSPECTOR_API_TOKEN=…` (no slash before
+ * `?`; `new URL()` adds it) followed by a token-less
+ * `Sandbox (MCP Apps): http://127.0.0.1:6275/sandbox` line, which must not be selected.
+ */
 export const parseInspectorStdoutUrl = (stdout: string): string | undefined => {
   const text = stripAnsi(stdout);
-  const found: { readonly delimited: boolean; readonly url: URL }[] = [];
+  const found: URL[] = [];
   for (const match of text.matchAll(httpUrl)) {
     const url = inspectableUrl(match[0]!);
     if (url === undefined || match.index === undefined) continue;
     const next = text[match.index + match[0].length];
-    found.push(Object.freeze({
-      delimited: next !== undefined && urlDelimiter.test(next),
-      url,
-    }));
+    if (next !== undefined && urlDelimiter.test(next)) found.push(url);
   }
-  return (found.find((entry) => hasTokenQuery(entry.url)) ?? found.find((entry) => entry.delimited && isLocalhost(entry.url)))?.url.href;
+  return (found.find(hasTokenQuery) ?? found.find(isLocalhost))?.href;
 };
 
 const alreadyClosed = (child: ChildProcess): boolean =>

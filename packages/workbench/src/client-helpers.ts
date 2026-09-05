@@ -35,6 +35,17 @@ export const jsonEquivalent = (left: unknown, right: unknown): boolean => {
 export const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+/** An absolute `http:` or `https:` URL string; unparseable input is not one. */
+export const isHttpUrl = (value: unknown): value is string => {
+  if (typeof value !== 'string') return false;
+  try {
+    const { protocol } = new URL(value);
+    return protocol === 'http:' || protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
 /**
  * Hands the viewer a browser download. The object URL is revoked on a queued
  * task: a synchronous revoke can abort the scheduled download of larger blobs.
