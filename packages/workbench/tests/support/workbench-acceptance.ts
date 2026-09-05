@@ -1,14 +1,10 @@
 import { expect } from '@rstest/playwright';
 import type { Locator, Page } from 'playwright-core';
 
+import { workbenchLeafPath } from '../../../agent-bundle/src/test/index.ts';
 import { timeScale } from '../../../agent-bundle/tests/support/time-scale.ts';
+import { applicationLeaves, type ApplicationLeaf, type ApplicationTree } from '../../src/application/application-tree-model.ts';
 import { waitForWorkbenchIdle, workbenchUrl } from './workbench-e2e.ts';
-import {
-  applicationLeaves,
-  type ApplicationLeaf,
-  type ApplicationTree,
-  workbenchLeafPath,
-} from './workbench-surface.ts';
 
 const browserTimeout = 15_000 * timeScale;
 

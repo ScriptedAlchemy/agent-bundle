@@ -28,12 +28,8 @@ import {
   workbenchTestId,
 } from './support/workbench-acceptance.ts';
 import { buildWorkbench, e2e, waitForWorkbenchIdle, workbenchAssets, workbenchUrl } from './support/workbench-e2e.ts';
-import {
-  applicationLeaves,
-  findApplicationLeaf,
-  inspectWorkbenchSurface,
-  workbenchLeafPath,
-} from './support/workbench-surface.ts';
+import { inspectWorkbenchSurface, workbenchLeafPath } from '../../agent-bundle/src/test/index.ts';
+import { applicationLeaves } from '../src/application/application-tree-model.ts';
 
 const browserTimeout = 15_000 * timeScale;
 /** One watcher debounce plus a full development rebuild of an example under gate load. */
@@ -90,12 +86,12 @@ e2e('drives the populated Skills Starter in real Chrome', { timeout: 90_000 }, a
   });
   const ledger = createExampleErrorLedger(page, server.url);
   try {
-    const surface = await inspectWorkbenchSurface(exampleRoot('skills-starter'));
+    const surface = await inspectWorkbenchSurface({ root: exampleRoot('skills-starter') });
     await openWorkbench(page, server.url, '/');
     await expectPrimaryNav(page);
     await expectApplicationTree(page, surface.application);
     for (const skill of ['dependency-upgrade', 'incident-triage', 'release-review']) {
-      const leaf = findApplicationLeaf(surface.application, (entry) => entry.ref.kind === 'skill' && (
+      const leaf = applicationLeaves(surface.application).find((entry) => entry.ref.kind === 'skill' && (
         entry.ref.id === skill || entry.label === skill
       ));
       if (leaf === undefined) throw new Error(`Skills Starter surface is missing the ${skill} leaf.`);
@@ -137,13 +133,13 @@ e2e('reveals, retains, repairs, and removes capabilities without reloading Chrom
   try {
     await openWorkbench(page, server.url, '/');
     await expectPrimaryNav(page);
-    const before = await inspectWorkbenchSurface(project.root);
+    const before = await inspectWorkbenchSurface({ root: project.root });
     expect(applicationLeaves(before.application).some((leaf) => leaf.ref.kind === 'event')).toBe(false);
 
     await editWatchedSource(server, project.root, configPath, hookConfig, 'succeeded');
     await waitForWorkbenchIdle(page);
-    const revealed = await inspectWorkbenchSurface(project.root);
-    const eventLeaf = findApplicationLeaf(revealed.application, (leaf) => leaf.ref.kind === 'event');
+    const revealed = await inspectWorkbenchSurface({ root: project.root });
+    const eventLeaf = applicationLeaves(revealed.application).find((leaf) => leaf.ref.kind === 'event');
     if (eventLeaf === undefined) throw new Error('Adding a sessionStart hook did not project an Events leaf.');
     await expect(page.getByRole('treeitem', { name: new RegExp(eventLeaf.label, 'u') })).toBeVisible({ timeout: browserTimeout });
     await captureExampleState(page, 'skills-starter', 'capability-revealed');
@@ -185,11 +181,11 @@ e2e('drives event, script, logs, diagnostics, and repair in real Chrome', { time
   });
   const ledger = createExampleErrorLedger(page, server.url);
   try {
-    const surface = await inspectWorkbenchSurface(project.root);
+    const surface = await inspectWorkbenchSurface({ root: project.root });
     await openWorkbench(page, server.url, '/');
     await expectPrimaryNav(page);
-    const eventLeaf = findApplicationLeaf(surface.application, (leaf) => leaf.ref.kind === 'event')
-      ?? findApplicationLeaf(surface.application, (leaf) => /session/iu.test(leaf.label));
+    const eventLeaf = applicationLeaves(surface.application).find((leaf) => leaf.ref.kind === 'event')
+      ?? applicationLeaves(surface.application).find((leaf) => /session/iu.test(leaf.label));
     if (eventLeaf !== undefined) {
       await selectApplicationLeaf(page, server.url, eventLeaf);
       await workbenchTestId(page, 'routeRun').or(page.getByRole('button', { name: /Run/u })).click();
@@ -197,16 +193,16 @@ e2e('drives event, script, logs, diagnostics, and repair in real Chrome', { time
     }
     await captureExampleState(page, 'hooks-and-scripts', 'hooks-populated');
 
-    const scriptLeaf = findApplicationLeaf(surface.application, (leaf) => leaf.routeId === 'script:verify-release')
-      ?? findApplicationLeaf(surface.application, (leaf) => leaf.ref.kind === 'script' && /verify-release/u.test(leaf.label));
+    const scriptLeaf = applicationLeaves(surface.application).find((leaf) => leaf.routeId === 'script:verify-release')
+      ?? applicationLeaves(surface.application).find((leaf) => leaf.ref.kind === 'script' && /verify-release/u.test(leaf.label));
     if (scriptLeaf === undefined) throw new Error('hooks-and-scripts surface is missing script:verify-release.');
     await selectApplicationLeaf(page, server.url, scriptLeaf);
     await workbenchTestId(page, 'routeRun').or(page.getByRole('button', { name: /Run/u })).click();
     await expect(page.getByText(/script\.completed|ready for packaging/iu)).toBeVisible({ timeout: browserTimeout });
     await captureExampleState(page, 'hooks-and-scripts', 'script-success');
 
-    const riskLeaf = findApplicationLeaf(surface.application, (leaf) => leaf.routeId === 'script:detect-risk')
-      ?? findApplicationLeaf(surface.application, (leaf) => leaf.ref.kind === 'script' && /detect-risk/u.test(leaf.label));
+    const riskLeaf = applicationLeaves(surface.application).find((leaf) => leaf.routeId === 'script:detect-risk')
+      ?? applicationLeaves(surface.application).find((leaf) => leaf.ref.kind === 'script' && /detect-risk/u.test(leaf.label));
     if (riskLeaf !== undefined) {
       await selectApplicationLeaf(page, server.url, riskLeaf);
       await workbenchTestId(page, 'routeRun').or(page.getByRole('button', { name: /Run/u })).click();
@@ -247,26 +243,26 @@ e2e('drives every populated MCP App workflow surface in real Chrome', { timeout:
   });
   const ledger = createExampleErrorLedger(page, server.url);
   try {
-    const surface = await inspectWorkbenchSurface(project.root);
+    const surface = await inspectWorkbenchSurface({ root: project.root });
     await openWorkbench(page, server.url, '/');
     await expectPrimaryNav(page);
     await expectApplicationTree(page, surface.application);
     await captureExampleState(page, 'mcp-app', 'application-populated');
 
-    const skillLeaf = findApplicationLeaf(surface.application, (leaf) => leaf.ref.kind === 'skill');
+    const skillLeaf = applicationLeaves(surface.application).find((leaf) => leaf.ref.kind === 'skill');
     if (skillLeaf !== undefined) {
       await selectApplicationLeaf(page, server.url, skillLeaf);
       await captureExampleState(page, 'mcp-app', 'skills-populated');
     }
 
-    const eventLeaf = findApplicationLeaf(surface.application, (leaf) => leaf.ref.kind === 'event');
+    const eventLeaf = applicationLeaves(surface.application).find((leaf) => leaf.ref.kind === 'event');
     if (eventLeaf !== undefined) {
       await selectApplicationLeaf(page, server.url, eventLeaf);
       await workbenchTestId(page, 'routeRun').or(page.getByRole('button', { name: /Run/u })).click();
       await captureExampleState(page, 'mcp-app', 'hooks-populated');
     }
 
-    const scriptLeaf = findApplicationLeaf(surface.application, (leaf) => leaf.ref.kind === 'script');
+    const scriptLeaf = applicationLeaves(surface.application).find((leaf) => leaf.ref.kind === 'script');
     if (scriptLeaf !== undefined) {
       await selectApplicationLeaf(page, server.url, scriptLeaf);
       await workbenchTestId(page, 'routeRun').or(page.getByRole('button', { name: /Run/u })).click();
@@ -287,7 +283,7 @@ e2e('drives every populated MCP App workflow surface in real Chrome', { timeout:
     await expect(page.getByRole('heading', { name: /Protocol/u })).toBeVisible({ timeout: browserTimeout });
     await captureExampleState(page, 'mcp-app', 'mcp-session-ready');
 
-    const appLeaf = findApplicationLeaf(surface.application, (leaf) => leaf.ref.kind === 'app' || leaf.execution === 'preview');
+    const appLeaf = applicationLeaves(surface.application).find((leaf) => leaf.ref.kind === 'app' || leaf.execution === 'preview');
     if (appLeaf !== undefined) {
       await selectApplicationLeaf(page, server.url, appLeaf);
       const appText = async (selector: string): Promise<string | undefined> => {
@@ -334,8 +330,8 @@ e2e('renders the flagship compiled Application tree by server and kind in real C
   });
   const ledger = createExampleErrorLedger(page, server.url);
   try {
-    const surface = await inspectWorkbenchSurface(project.root);
-    const searchLeaf = findApplicationLeaf(surface.application, (leaf) => leaf.routeId === 'tool:curator/search_audible');
+    const surface = await inspectWorkbenchSurface({ root: project.root });
+    const searchLeaf = applicationLeaves(surface.application).find((leaf) => leaf.routeId === 'tool:curator/search_audible');
     if (searchLeaf === undefined) throw new Error('audiobook-curator surface is missing tool:curator/search_audible.');
     await openWorkbench(page, server.url, '/');
     await expectPrimaryNav(page);
