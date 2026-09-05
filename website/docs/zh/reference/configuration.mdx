@@ -183,11 +183,18 @@ export default defineConfig({
 传给 `tools.rspack` 变更函数的 `utils` 参数（`(config, { rspack }) => ...`），它总会交给你当前执行引擎
 自己的 `rspack` 对象。
 
+MCP App 构建保留 Rsbuild 默认的 `resolve.aliasStrategy`（`prefer-tsconfig`），因此项目
+`tsconfig.json` 中的 `paths` 在编译出的视图内部与其他地方一样生效。保留标识符 `agent-bundle/meta`
+是例外：编译器会在解析开始之前把这个精确的导入改写为生成的身份模块，先于 `paths` 与任何
+`resolve.alias`，因此没有任何 `paths` 映射能够遮蔽它。已解析配置断言会拒绝移除这一改写的逃生舱取值，
+就像它拒绝破坏自包含输出的取值一样。
+
 ### 插件
 
 框架在它合成的配置中只注册一个 Rsbuild 插件：`@rsbuild/plugin-react`（插件名 `rsbuild:react`），
-它作用于每个产物入口（路由以 TSX 编写，该插件选择自动 JSX 运行时）以及每个源文件为 `.jsx`/`.tsx` 的
-MCP App 视图。这个集合就是 `packages/agent-bundle/src/build/framework-plugins.ts` 中的
+它作用于每个产物入口（路由以 TSX 编写，该插件选择自动 JSX 运行时）以及每个 MCP App 视图——无论其
+入口扩展名是什么（关闭 fast refresh），因此导入 `.tsx` 组件的 `.ts` 入口也会编译到同一个自动运行时。
+这个集合就是 `packages/agent-bundle/src/build/framework-plugins.ts` 中的
 `frameworkOwnedRsbuildPlugins`；有一条单元测试从合成的配置中推导它，因此不会漂移，而 `validateTools`
 读取同一个映射，在 `tools.rsbuild.plugins` 条目重复添加其中某个名称时报告 `AB4724`。
 

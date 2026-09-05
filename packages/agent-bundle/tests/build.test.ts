@@ -534,6 +534,10 @@ it('reports complete immutable output provenance for a Skill copy and bundled sc
     expect(provenance.every((record) => record.sourceInputs.every((input) => !input.startsWith('/')))).toBe(true);
     expect(Object.isFrozen(provenance)).toBe(true);
     expect(provenance.every((record) => Object.isFrozen(record) && Object.isFrozen(record.sourceInputs))).toBe(true);
+    // The compiler's non-fatal findings (#572) ride the same frozen result; a
+    // build with no MCP App views has none to report.
+    expect(result.diagnostics).toEqual([]);
+    expect(Object.isFrozen(result.diagnostics)).toBe(true);
   } finally {
     await cleanupProject(project);
   }

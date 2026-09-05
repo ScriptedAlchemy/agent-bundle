@@ -194,7 +194,14 @@ export class ArtifactService {
     let result: ArtifactEpochResult;
 
     try {
-      await this.#compile({
+      // The dev loop is the one caller that reads its own output: MCP App
+      // views compile unminified (readable, still one self-contained HTML per
+      // App; a view too large to render that way falls back to the production
+      // profile). A failing compile throws a `DiagnosticError` carrying
+      // AB4770s, which `failureDiagnostics` forwards unchanged; only foreign
+      // throws fall back to AB7100.
+      const compiled = await this.#compile({
+        mode: 'development',
         model,
         outputRoot: artifactRoot,
         projectContext,
@@ -215,7 +222,10 @@ export class ArtifactService {
           snapshot: undefined,
       };
       const validationDiagnostics = freezeDiagnostics(firstValidation.diagnostics);
-      buildDiagnostics = freezeDiagnostics([...prepared.diagnostics, ...validationDiagnostics]);
+      // Non-fatal compiler findings (AB4771 warnings, AB4772 size advisories)
+      // ride the epoch's summary and the attempt's diagnostics like
+      // validation findings do.
+      buildDiagnostics = freezeDiagnostics([...prepared.diagnostics, ...compiled.diagnostics, ...validationDiagnostics]);
       if (hasErrors(buildDiagnostics)) throw new DiagnosticError(buildDiagnostics);
 
       const currentSource = await prepared.snapshotSource();

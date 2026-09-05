@@ -260,7 +260,7 @@ customizes *how code compiles*, never *what the artifact promises*.
 
 The hatch merges *beside* the framework profile: `plugins` arrays concatenate, and Rsbuild never
 dedupes plugins by name. Re-adding a plugin the framework already registers — `@rsbuild/plugin-react`
-(`rsbuild:react`), which every synthesized entry and every React-syntax MCP App view carries —
+(`rsbuild:react`), which every synthesized entry and every MCP App view carries —
 through `tools.rsbuild.plugins` would run it twice, so `agent-bundle validate` reports it as
 `AB4724` naming the plugin and its package. Remove the entry; the framework registers it for you.
 

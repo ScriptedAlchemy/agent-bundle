@@ -123,7 +123,7 @@ export const agentBundleBrowserRstest = async (
   const outputRoot = resolve(root, '.agent-bundle', 'test', 'browser-app-build');
   await rm(outputRoot, { force: true, recursive: true });
   await mkdir(outputRoot, { recursive: true });
-  const compiled = await compileMcpApps(normalized, {
+  const { apps: compiled } = await compileMcpApps(normalized, {
     cwd: root,
     meta: {
       name: manifest.plugin.name,

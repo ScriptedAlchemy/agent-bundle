@@ -48,10 +48,13 @@ describe('framework-owned Rsbuild plugin registry', () => {
     expect(registeredPluginNames(lib.plugins)).toEqual(owned);
   });
 
-  it('matches exactly the plugins a React-syntax MCP App view registers, and nothing for a plain view', () => {
+  it('matches exactly the plugins every MCP App view registers, whatever its entry extension', () => {
     const apps = composeMcpAppsRsbuildConfig([reactView, plainView], { cwd: '/project', meta, outDir: '/staged/portable' });
+    // A `.ts` entry importing a `.tsx` component needs the React plugin as
+    // much as a `.tsx` entry does, so the registration is not keyed on the
+    // entry extension.
     expect(registeredPluginNames(apps.environments?.[reactView.name]?.plugins)).toEqual(owned);
-    expect(registeredPluginNames(apps.environments?.[plainView.name]?.plugins)).toEqual([]);
+    expect(registeredPluginNames(apps.environments?.[plainView.name]?.plugins)).toEqual(owned);
     // The framework registers plugins per environment, never at the root the
     // consumer's `tools.rsbuild.plugins` merges into.
     expect(apps.plugins).toBeUndefined();

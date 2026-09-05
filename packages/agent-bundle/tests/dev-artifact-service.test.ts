@@ -6,8 +6,9 @@ import { join } from 'node:path';
 import { expect, it } from '@rstest/core';
 
 import { EpochStore, type CreateStagingEpochOptions, type EpochStaging, type StagingValidator } from '../src/dev/epoch-store.ts';
-import { build } from '../src/build/build.ts';
+import { build, type BuildOptions } from '../src/build/build.ts';
 import { validateArtifact } from '../src/build/validate-artifact.ts';
+import { DiagnosticError, type Diagnostic } from '../src/core/diagnostics.ts';
 import { ArtifactService } from '../src/dev/index.ts';
 import { NativePlaygroundService } from '../src/dev/playground/native-playground-service.ts';
 import { ProjectService } from '../src/dev/project-service.ts';
@@ -340,6 +341,86 @@ it('uses the prepared output exclusions when checking source changes after compi
     const result = await service.build(prepared);
 
     expect(result.outcome).toBe('succeeded');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('compiles in development mode and carries MCP App compile advisories onto the published epoch', async () => {
+  const root = await createProject();
+  const store = new EpochStore({ projectRoot: root });
+  const advisory: Diagnostic = {
+    code: 'AB4772',
+    message: 'MCP App "status" compiled to 1.3 MiB (412.0 KiB gzip), above the 1 MiB advisory bound; largest modules: node_modules/zod/index.js (300.0 KiB)',
+    severity: 'warning',
+    sourcePath: join(root, 'views', 'status.ts'),
+  };
+  const compileOptions: BuildOptions[] = [];
+  try {
+    const prepared = await new ProjectService({ root }).prepare('build');
+    const result = await new ArtifactService({
+      compile: async (options) => {
+        compileOptions.push(options);
+        const built = await build(options);
+        return { ...built, diagnostics: [advisory] };
+      },
+      createEpochId: () => 'epoch-compile-advisory',
+      epochStore: store,
+    }).build(prepared);
+
+    expect(compileOptions.map((options) => options.mode)).toEqual(['development']);
+    expect(result.outcome).toBe('succeeded');
+    if (result.outcome !== 'succeeded') throw new Error(result.diagnostics.map((diagnostic) => diagnostic.message).join('\n'));
+    expect(result.diagnostics).toContainEqual(advisory);
+    expect(result.epoch.diagnostics).toEqual({ errors: 0, infos: 0, warnings: 1 });
+    await expect(store.readActiveEpoch()).resolves.toEqual(result.epoch);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('reports a failed MCP App compile as the compiler\'s own AB4770 diagnostics, not AB7100', async () => {
+  const root = await createProject();
+  const store = new EpochStore({ projectRoot: root });
+  const compileError: Diagnostic = {
+    code: 'AB4770',
+    message: 'MCP App "status" failed to compile: views/status.ts:1:10: Syntax Error: Expression expected',
+    severity: 'error',
+    sourcePath: join(root, 'views', 'status.ts'),
+  };
+  try {
+    const prepared = await new ProjectService({ root }).prepare('build');
+    const result = await new ArtifactService({
+      compile: async () => { throw new DiagnosticError([compileError]); },
+      epochStore: store,
+    }).build(prepared);
+
+    expect(result).toEqual({ diagnostics: [compileError], outcome: 'failed' });
+    await expect(store.readActiveEpoch()).resolves.toBeUndefined();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('keeps AB7100 for compiler throws that carry no diagnostics', async () => {
+  const root = await createProject();
+  const store = new EpochStore({ projectRoot: root });
+  try {
+    const prepared = await new ProjectService({ root }).prepare('build');
+    const result = await new ArtifactService({
+      compile: async () => { throw new Error('Rspack build failed.'); },
+      epochStore: store,
+    }).build(prepared);
+
+    expect(result).toEqual({
+      diagnostics: [{
+        code: 'AB7100',
+        message: 'Unable to compile the build: Rspack build failed.',
+        severity: 'error',
+        sourcePath: prepared.configPath,
+      }],
+      outcome: 'failed',
+    });
   } finally {
     await rm(root, { force: true, recursive: true });
   }
