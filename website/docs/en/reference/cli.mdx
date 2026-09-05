@@ -55,6 +55,7 @@ to `portable` and takes no `--json`.
 | `--agent-api` / `--no-agent-api` | config `dev.agentApi` | Enable or disable the authenticated Agent API on `/mcp`. |
 | `--install-host <host>` | none | Install and re-sync a development host. Repeatable; `claude`, `codex`, or `cursor`. |
 | `--open` / `--no-open` | `--no-open` | Open the workbench after the foreground server starts. |
+| `--workbench-dev-origin <origin>` | none | Accept Workbench UI requests from this loopback contributor HMR origin (the Rsbuild dev server, for example `http://localhost:3000`). Repeatable; a non-loopback or non-origin value makes `agent-bundle dev` exit before serving anything. See [Contributor UI HMR](../guide/development/workbench.mdx#contributor-ui-hmr). |
 
 `dev` runs in the foreground and closes the session on a termination signal. See
 [Developer Workbench](../guide/development/workbench.mdx).
@@ -79,7 +80,13 @@ Serves one built MCP App in a plain browser tab, outside any MCP host and withou
 Workbench: the command launches the plugin's packed MCP server exactly as `mcp run` does, binds
 the App to it through the same host stack the Workbench MCP page uses (sandbox proxy, consent
 authority, bridge), calls the App's tool once so it opens populated, and prints the loopback URL.
-It runs in the foreground until a termination signal or until the server exits on its own.
+Its output is a contract: once the host is listening, stdout carries exactly one line,
+`MCP App <app> at <url> (tool <tool>; Ctrl-C stops the server)` — `<app>` as given on the command
+line, `<tool>` the tool that opened the App — and every diagnostic goes to stderr. The command
+then runs in the foreground: `SIGINT` or `SIGTERM` closes the host and its server and exits `0`;
+when the bound MCP server exits on its own, one `AB5000` diagnostic is written to stderr and the
+command exits `1`. `spawnServeApp` in `agent-bundle/serve-app-command` waits on the same line
+(`parseServeAppReadyLine`), so a routed command can rely on it.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
@@ -100,8 +107,9 @@ routes (a per-launch token plus same-origin checks; `AB8003` / `AB8004` on refus
 only the selected server through the bridge. The App document itself runs on a second loopback
 origin inside the framework's sandbox. It is a local preview host, not a deployment target. The
 programmatic form for scripts and tests is `serveApp` in `agent-bundle/api`; a plugin's own routed
-CLI command spawns this command instead, because the self-contained bin cannot import
-`agent-bundle/api` — see
+CLI command uses `spawnServeApp` from `agent-bundle/serve-app-command`, which runs this command as
+a child process with the same options lowered to argv, because the self-contained bin cannot
+import `agent-bundle/api` (the route graph reports the attempt as `AB4837`) — see
 [Serving an App standalone](../guide/authoring/mcp.mdx#serving-an-app-standalone).
 
 ## build and prepack
@@ -240,7 +248,7 @@ from `eval`.
 
 | Flag | Focus |
 | --- | --- |
-| `--bundler` | The synthesized bundler configuration. |
+| `--bundler` | The synthesized bundler configuration, lowered as the production build lowers it regardless of `NODE_ENV`. |
 | `--hooks` | Hooks. |
 | `--routes` | The compiled route graph. |
 | `--skills` | Skills. |

@@ -1,6 +1,5 @@
 import { execFile as executeFile, type ChildProcess } from 'node:child_process';
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:net';
 import { relative, isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -9,21 +8,6 @@ export { installedEnvironment } from '../../../agent-bundle/tests/support/shared
 export const execFile = promisify(executeFile);
 export const workspaceRoot = process.cwd();
 const packedServerStartupBudget = 45_000;
-
-export const availablePort = async (): Promise<number> => {
-  const server = createServer();
-  await new Promise<void>((resolvePromise, rejectPromise) => {
-    server.once('error', rejectPromise);
-    server.listen({ host: '127.0.0.1', port: 0 }, resolvePromise);
-  });
-  const address = server.address();
-  if (address === null || typeof address === 'string') throw new Error('Expected a TCP address.');
-  await new Promise<void>((resolvePromise, rejectPromise) => server.close((error) => {
-    if (error === undefined) resolvePromise();
-    else rejectPromise(error);
-  }));
-  return address.port;
-};
 
 export const awaitReady = async (origin: string, child: ChildProcess, output: () => string): Promise<void> => {
   const startedAt = Date.now();

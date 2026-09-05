@@ -14,10 +14,10 @@ import {
   validateOutageLedger,
   type ConsoleErrorRecord,
 } from './support/packed-outage-ledger.ts';
+import { availablePort } from '../../agent-bundle/tests/support/available-port.ts';
 import { cachedNpmInstallArguments, sharedPackedTarball } from '../../agent-bundle/tests/support/shared-pack.ts';
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import {
-  availablePort,
   awaitReady,
   closeChild,
   descendantProcessIds,
@@ -31,7 +31,7 @@ import {
   writeFakeClaude,
 } from './support/packed-release-harness.ts';
 import { replaceWatchedSource } from './support/watched-files.ts';
-import { workbenchUrl } from './support/workbench-e2e.ts';
+import { browserLaunchOptions, browserTrace, workbenchUrl } from './support/workbench-e2e.ts';
 import { deepFreeze } from '../src/freeze.ts';
 
 
@@ -61,8 +61,9 @@ const expectedAgentApiToolNames = [
 
 const e2e = test.extend({
   playwright: {
-    launchOptions: { channel: 'chrome' },
+    launchOptions: browserLaunchOptions,
     contextOptions: { viewport: { height: 900, width: 1440 } },
+    trace: browserTrace,
   } satisfies PlaywrightOptions,
 });
 

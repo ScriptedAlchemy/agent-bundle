@@ -2,11 +2,12 @@ import { createServer } from 'node:http';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, normalize, relative } from 'node:path';
 
-import { createRsbuild, type RsbuildConfig } from '@rsbuild/core';
+import { createRsbuild } from '@rsbuild/core';
 import { chromium } from 'playwright';
 import { describe, expect, it } from '@rstest/core';
 
-import { createWorkbenchConfig } from '../rsbuild.config.ts';
+import { createWorkbenchFixtureConfig } from './support/workbench-fixture-config.ts';
+import { browserLaunchOptions } from './support/workbench-e2e.ts';
 
 const contentType = (path: string): string => path.endsWith('.css')
   ? 'text/css'
@@ -82,17 +83,14 @@ describe('Runtime inspector', () => {
     const entry = join(temp, 'runtime-inspector-fixture.tsx');
     const output = join(temp, 'dist');
     await writeFile(entry, fixtureSource(root));
-    const config: RsbuildConfig = createWorkbenchConfig();
-    config.source = {
-      define: { 'process.env.NODE_ENV': JSON.stringify('production') },
-      entry: { 'runtime-inspector-fixture': entry },
-    };
-    config.output = { ...config.output, distPath: { root: output } };
-    const rsbuild = await createRsbuild({ config });
+    const rsbuild = await createRsbuild({
+      config: createWorkbenchFixtureConfig({ distRoot: output, entry: { 'runtime-inspector-fixture': entry } }),
+      cwd: root,
+    });
     const buildResult = await rsbuild.build();
     await buildResult.close();
     const { server, url } = await startStaticServer(output);
-    const browser = await chromium.launch({ channel: 'chrome' });
+    const browser = await chromium.launch(browserLaunchOptions);
     try {
       const page = await browser.newPage();
       const errors: string[] = [];

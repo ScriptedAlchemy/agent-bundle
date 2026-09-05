@@ -33,7 +33,7 @@
     "validate": "agent-bundle validate --json"
   },
   "devDependencies": {
-    "@rstest/core": "0.11.10",
+    "@rstest/core": "0.11.12",
     "@types/node": "26.4.0",
     "agent-bundle": "workspace:*",
     "typescript": "7.0.2",

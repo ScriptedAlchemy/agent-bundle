@@ -6,10 +6,10 @@ import { tmpdir } from 'node:os';
 
 import { describe, expect, it } from '@rstest/core';
 import { createRsbuild } from '@rsbuild/core';
-import { pluginReact } from '@rsbuild/plugin-react';
 import { chromium } from 'playwright';
 
-import { workbenchBrowserAliases } from './support/workbench-browser-modules.ts';
+import { createWorkbenchFixtureConfig } from './support/workbench-fixture-config.ts';
+import { browserLaunchOptions } from './support/workbench-e2e.ts';
 
 const workspaceRoot = join(import.meta.dirname, '..', '..', '..');
 const previewComponent = join(workspaceRoot, 'packages', 'workbench', 'src', 'mcp', 'mcp-app-preview.tsx');
@@ -73,22 +73,7 @@ const mountedPreviewFixture = async () => {
     '',
   ].join('\n'));
   const rsbuild = await createRsbuild({
-    config: {
-      output: {
-        cleanDistPath: false,
-        distPath: { css: 'assets', js: 'assets', root: dist },
-        filename: { css: '[name].css', js: '[name].js' },
-        filenameHash: false,
-      },
-      plugins: [pluginReact()],
-      resolve: {
-        alias: workbenchBrowserAliases,
-      },
-      source: {
-        define: { 'process.env.NODE_ENV': JSON.stringify('production') },
-        entry: { preview: entry },
-      },
-    },
+    config: createWorkbenchFixtureConfig({ distRoot: dist, entry: { preview: entry } }),
     cwd: workspaceRoot,
   });
   const build = await rsbuild.build();
@@ -145,7 +130,7 @@ const mountedPreviewFixture = async () => {
 describe('MCP App preview browser', () => {
   it('mounts the preview in Chrome for ready, error, fallback, and unmount-race states', async () => {
     const fixture = await mountedPreviewFixture();
-    const browser = await chromium.launch({ channel: 'chrome' });
+    const browser = await chromium.launch(browserLaunchOptions);
     const page = await browser.newPage({ viewport: { height: 900, width: 1440 } });
     const browserErrors: string[] = [];
     const responses: string[] = [];
@@ -217,7 +202,7 @@ describe('MCP App preview browser', () => {
 
   it('keeps one runtime owner across same-authority StrictMode renders and drains the old owner before replacement', async () => {
     const fixture = await mountedPreviewFixture();
-    const browser = await chromium.launch({ channel: 'chrome' });
+    const browser = await chromium.launch(browserLaunchOptions);
     const page = await browser.newPage({ viewport: { height: 800, width: 390 } });
     const browserErrors: string[] = [];
     page.on('pageerror', (error) => { browserErrors.push(error.message); });
@@ -371,7 +356,7 @@ describe('MCP App preview browser', () => {
 
   it('renders declared runtime document permissions as unavailable without consent or remount', async () => {
     const fixture = await mountedPreviewFixture();
-    const browser = await chromium.launch({ channel: 'chrome' });
+    const browser = await chromium.launch(browserLaunchOptions);
     const page = await browser.newPage({ viewport: { height: 800, width: 390 } });
     const browserErrors: string[] = [];
     page.on('pageerror', (error) => { browserErrors.push(error.message); });
@@ -415,7 +400,7 @@ describe('MCP App preview browser', () => {
 
   it('retains a failed runtime lifecycle tombstone until its exact host handle retries, and ignores an abandoned concurrent authority', async () => {
     const fixture = await mountedPreviewFixture();
-    const browser = await chromium.launch({ channel: 'chrome' });
+    const browser = await chromium.launch(browserLaunchOptions);
     const page = await browser.newPage({ viewport: { height: 800, width: 390 } });
     const browserErrors: string[] = [];
     page.on('pageerror', (error) => { browserErrors.push(error.message); });

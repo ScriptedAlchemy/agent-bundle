@@ -5,13 +5,6 @@ import { expect, it } from '@rstest/core';
 
 const srcRoot = fileURLToPath(new URL('../src', import.meta.url));
 
-// Vendored inspector code and its patches are third-party surface the
-// contract boundary does not govern.
-const excludedDirectories: ReadonlySet<string> = new Set([
-  join('inspector', 'vendor'),
-  join('inspector', 'patches'),
-]);
-
 const sourceFilePattern = /\.(?:ts|tsx)$/u;
 // Matches static `from '...'` clauses, dynamic `import('...')` calls, and
 // bare side-effect imports (`import '...'`).
@@ -23,7 +16,6 @@ const listSourceFiles = async (directory: string): Promise<readonly string[]> =>
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const entryPath = join(directory, entry.name);
     if (entry.isDirectory()) {
-      if (excludedDirectories.has(relative(srcRoot, entryPath))) continue;
       files.push(...(await listSourceFiles(entryPath)));
       continue;
     }

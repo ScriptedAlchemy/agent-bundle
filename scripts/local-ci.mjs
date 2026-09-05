@@ -7,9 +7,13 @@
  * contract (including what is deliberately NOT covered); keep it in sync.
  *
  * Hosted job → local leg mapping:
- * - verify (Node 22.19 / 24 / 26) → legs `verify-node22|24|26`: install,
- *   playwright chrome, build (publint runs inside it), typecheck, lint, test:unit,
- *   test:integration — the same package scripts in the same order.
+ * - verify — hosted as three parallel jobs per Node version, `fast` plus
+ *   integration shards `integration-1|2`, fanned into the required
+ *   `Verify gate` (Node 22.19 / 24 / 26 on main pushes; Node 24 plus the
+ *   `fast` leg on Node 26 for PRs) → legs `verify-node22|24|26`: install,
+ *   playwright chrome, build (publint runs inside it), typecheck, lint,
+ *   test:unit, test:route-unit, test:projection, test:integration — the
+ *   hosted legs' union, serially in one worktree.
  * - examples-check + release-gates + rsc-runtime-micro-eval (all Node 22.19)
  *   → leg `gates-node22`: examples:check, check:release, eval:spot run
  *   sequentially in one worktree. Each of those scripts starts from
@@ -353,15 +357,21 @@ const main = async () => {
 
   const verifyStepList = (unitCapArguments) => [
     { id: 'install', hostedJob: 'verify', command: ['pnpm', 'install', '--frozen-lockfile'] },
-    // Hosted runs `playwright install --with-deps chrome`; --with-deps is
-    // apt/root-only and the OS packages are a one-time machine setup, so the
-    // local step installs/validates the browser only.
+    // Hosted browser-driving jobs install Playwright's bundled Chromium
+    // (`playwright install chromium`, selected by
+    // AGENT_BUNDLE_PLAYWRIGHT_CHANNEL=chromium); the local gate keeps the
+    // developer default, branded Chrome, and only installs/validates that
+    // browser — the OS packages `--with-deps` would add are apt/root-only,
+    // one-time machine setup. docs/local-ci.md ("Environment skew") explains
+    // how to run the hosted browser locally.
     { id: 'browsers', hostedJob: 'verify', command: ['pnpm', 'exec', 'playwright', 'install', 'chrome'] },
     // publint runs inside each package's `rslib build` (rsbuild-plugin-publint).
     { id: 'build', hostedJob: 'verify', command: ['pnpm', 'build'] },
     { id: 'typecheck', hostedJob: 'verify', command: ['pnpm', 'typecheck'] },
     { id: 'lint', hostedJob: 'verify', command: ['pnpm', 'lint'] },
     { id: 'test:unit', hostedJob: 'verify', command: ['pnpm', 'test:unit', ...unitCapArguments] },
+    { id: 'test:route-unit', hostedJob: 'verify', command: ['pnpm', 'test:route-unit', ...unitCapArguments] },
+    { id: 'test:projection', hostedJob: 'verify', command: ['pnpm', 'test:projection', ...unitCapArguments] },
     { id: 'test:integration', hostedJob: 'verify', command: ['pnpm', 'test:integration'] },
   ];
 

@@ -11,7 +11,7 @@ import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/tests/helpers/project-fixture.ts';
 import { startRuntimePlaygroundFixture } from './helpers/runtime-playground-fixture.ts';
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
-import { buildWorkbench, workbenchUrl } from './support/workbench-e2e.ts';
+import { browserLaunchOptions, browserTrace, buildWorkbench, workbenchUrl } from './support/workbench-e2e.ts';
 
 const workspaceRoot = process.cwd();
 const workbenchAssets = join(workspaceRoot, 'packages', 'workbench', 'dist');
@@ -19,8 +19,9 @@ const browserTimeout = 8_000 * timeScale;
 
 const e2e = test.extend({
   playwright: {
-    launchOptions: { channel: 'chrome' },
+    launchOptions: browserLaunchOptions,
     contextOptions: { viewport: { height: 900, width: 1440 } },
+    trace: browserTrace,
   } satisfies PlaywrightOptions,
 });
 
