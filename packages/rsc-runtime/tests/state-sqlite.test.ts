@@ -382,6 +382,54 @@ describe('sqlite driver storage behavior', () => {
       await store.close();
     }));
 
+  // A connection holding the rollback-mode write lock (RESERVED) on a fresh
+  // file stands in for a second process caught mid `PRAGMA journal_mode = WAL`.
+  // SQLite answers the driver's own switch SQLITE_BUSY at once, without
+  // consulting busy_timeout, so the driver must retry the switch itself.
+  it('waits for another process mid-WAL-switch instead of failing the first open', () =>
+    withRoot(async (root) => {
+      const file = join(root, 'state.sqlite');
+      const keeper = new DatabaseSync(file);
+      keeper.exec('BEGIN IMMEDIATE');
+      try {
+        const opening = createSqliteStateDriver({ file }).open(counterDefinition());
+        // Neither outcome is reachable while the lock is held: the switch cannot
+        // succeed, and the 5 s default budget cannot run out in 50 ms.
+        const outcome = await Promise.race([
+          opening.then(() => 'opened', () => 'failed'),
+          new Promise<'pending'>((resolve) => setTimeout(() => resolve('pending'), 50)),
+        ]);
+        expect(outcome).toBe('pending');
+        keeper.exec('ROLLBACK');
+        const store = await opening;
+        expect(keeper.prepare('PRAGMA journal_mode').get()).toEqual({ journal_mode: 'wal' });
+        await expect(store.dispatch('bumped', { by: 1 }, { idempotencyKey: 'k1' })).resolves.toMatchObject({ revision: 1 });
+        await store.close();
+      } finally {
+        keeper.close();
+      }
+    }));
+
+  it('fails the first open as unavailable once the WAL switch outlives busyTimeoutMs', () =>
+    withRoot(async (root) => {
+      const file = join(root, 'state.sqlite');
+      const keeper = new DatabaseSync(file);
+      keeper.exec('BEGIN IMMEDIATE');
+      try {
+        // Budgets both above and below the retry pause fail closed; the
+        // shorter one proves the pause is clamped rather than outliving it.
+        for (const busyTimeoutMs of [100, 1]) {
+          await expect(createSqliteStateDriver({ busyTimeoutMs, file }).open(counterDefinition())).rejects.toMatchObject({
+            code: 'unavailable',
+            message: expect.stringContaining('storage stayed locked beyond the busy timeout (configure storage)') as string,
+            name: 'AgentStateError',
+          });
+        }
+      } finally {
+        keeper.close();
+      }
+    }));
+
   it('rolls back failed transactions without collapsing unexpected defects', () =>
     withRoot(async (root) => {
       const defect = new Error('clock implementation defect');

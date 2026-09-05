@@ -334,6 +334,15 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
     if (initialAppFrame === undefined) throw new Error('Expected the sandbox proxy to create the App srcdoc frame.');
     const initialAppState = initialAppFrame.getByTestId('app-state');
     await expect(initialAppState).toContainText('real-sdk-v2', { timeout: browserTimeout });
+    // The sandbox proxy document owns no scrollbar of its own (#565): its App
+    // frame is a block filling the document, so only the App itself scrolls.
+    const proxyFrame = page.frames().find((frame) => frame.url().startsWith(sandboxOrigin));
+    if (proxyFrame === undefined) throw new Error('Expected the sandbox proxy frame on the sandbox origin.');
+    await expect.poll(() => proxyFrame.evaluate(() => ({
+      bodyOverflow: getComputedStyle(document.body).overflow,
+      frameDisplay: getComputedStyle(document.getElementById('app')!).display,
+      scrolls: document.documentElement.scrollHeight > document.documentElement.clientHeight,
+    })), { timeout: browserTimeout }).toEqual({ bodyOverflow: 'hidden', frameDisplay: 'block', scrolls: false });
     const consentDecisions = () => consentSnapshots.filter((snapshot) =>
       snapshot !== null && typeof snapshot === 'object' && Object.hasOwn(snapshot, 'approved'));
     const consentDecisionRequests = () => appRequests.filter((request) =>
