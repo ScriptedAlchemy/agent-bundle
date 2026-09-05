@@ -146,17 +146,15 @@ grader 会让该次试验保持 inconclusive，而不是变成插件证据——
 语义评分需要原生 Claude harness 与一个已登录的 Claude Code 会话。配置了它之后，确定性与 Codex 选择会
 被拒绝。
 
-## Eval 页面
+## Workbench Evals
 
-Workbench 的 Eval 页面会受理一次选定的运行、报告实时进度，并可通过运行生命周期取消它。每次试验都会在
-存在时暴露其持久化的原始证据，以及记录下来的 CLI、invocation、grader 与用量 provenance。
+打开 **Advanced → Evals → Runs** 即可受理一次选定的运行、跟随实时进度，或通过运行生命周期取消它。
+每次试验都会在存在时暴露其持久化的原始证据，以及记录下来的 CLI、invocation、grader 与用量
+provenance。
 
-对比单元格会展示记录下来的 provenance 与用量，并且只纳入已对齐的 case、fixture、harness、invocation、
-宿主与 model、CLI 以及 grader facet；未匹配的 facet 会被标注为 non-comparable 或未核实。试验时长会被
-持久化；供应商 token 用量只在原生流上报了它时才展示。
-
-Playground 可以把一条轨迹中选定的持久 outcome 与断言证据提升为一份草稿 eval case ——见
-[开发者 Workbench](./workbench.mdx)。
+**Advanced → Evals → Compare** 会展示记录下来的 provenance 与用量，并且只纳入已对齐的 case、fixture、
+harness、invocation、宿主与 model、CLI 以及 grader facet；未匹配的 facet 会被标注为 non-comparable 或
+未核实。试验时长会被持久化；供应商 token 用量只在原生流上报了它时才展示。
 
 ## 原生 harness
 

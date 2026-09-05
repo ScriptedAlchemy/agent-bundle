@@ -75,6 +75,19 @@ pnpm --filter @agent-bundle-example/audiobook-curator typecheck
 与 Codex 两个投影——各宿主的清单位于自己的点目录中，共用同一份 Skill、打包后的 CLI 脚本与被生命周期
 包装的 MCP 服务器——以及 `dist/` 下的 npm 包。
 
+从仓库根目录启动 `pnpm example:audiobook`，即可进入可视化开发循环：
+
+1. 展开 **Application → MCP → curator → Tools** 并选中 `search_audible`。
+2. 在生成的输入编辑器中输入诸如 `Dune` 这样的标题，然后选择 **Run**。
+3. 首先检视 **Rendered**：它展示该路由生产 RSC 执行得到的真实 Agent Document。结构化数据、原始文档、
+   MCP/CLI 投影与 Trace 仍作为次要标签可用。
+4. 编辑 `src/mcp/curator/tools/search_audible.tsx` 或它所渲染的某个组件。重建到达 **Idle** 之后，
+   重新运行已保存的输入，并检视更新后的渲染结果。
+
+该路由可直接寻址
+`/routes/mcp/curator/tool/search_audible`；追加 `?invocation=<id>` 即可重新打开本次会话中一条已记录的
+结果。
+
 想在不打包 tarball 的情况下试用构建好的 CLI，可以从任意已在 `PATH` 上的可写目录链接构建产物中的 bin：
 
 ```sh
