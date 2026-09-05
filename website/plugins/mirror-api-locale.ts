@@ -45,7 +45,6 @@ function headingText(raw: string): string {
 
 interface PageAnchors {
   readonly ids: Set<string>;
-  /** `### Member` heading id → member name (`build()` → `build`). */
   readonly members: Map<string, string>;
 }
 
