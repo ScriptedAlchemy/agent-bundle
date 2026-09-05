@@ -10,6 +10,7 @@ import type {
   CanonicalAgentEvent,
 } from '../routes/public.ts';
 import { projectEventPayload } from './payload.ts';
+import type { EventPreflightResult } from './preflight.ts';
 
 /**
  * The route result vocabulary. `continue` (or no value at all) is the
@@ -915,3 +916,26 @@ export const projectEventDocument = (
   }
   return undefined;
 };
+
+/**
+ * Projects an already-validated gate outcome through the same host-owned
+ * decision rules as a rendered Agent.Result, without loading the renderer.
+ */
+export const projectEventPreflightResult = (
+  result: Exclude<EventPreflightResult, 'execute'>,
+  event: CanonicalAgentEvent,
+  target: string,
+  nativeEvent: string,
+  nativeInput?: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> | undefined => projectEventDocument(
+  {
+    root: { children: [], kind: 'result' },
+    status: 'success',
+    value: result,
+    version: 1,
+  },
+  event,
+  target,
+  nativeEvent,
+  nativeInput,
+);

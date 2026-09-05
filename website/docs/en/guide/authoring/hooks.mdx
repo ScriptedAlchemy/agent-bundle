@@ -178,8 +178,10 @@ index.
 
 ## Event routes
 
-Config-declared hooks are the compact form. The second authoring shape is an **event route**: a
-file under `src/events/` whose path is the canonical event family it handles
+Config-declared hooks are the compact, native escape hatch. Use one when the handler genuinely
+needs the raw host envelope or host-specific behavior. For ordinary semantic events — including
+high-frequency events that should return before rendering — prefer an **event route**: a file
+under `src/events/` whose path is the canonical event family it handles
 (`src/events/tool/before.tsx`, `src/events/stop.tsx`). It is one async default Server Component,
 like an MCP tool route, plus a statically extracted `config` export:
 
@@ -212,6 +214,72 @@ hashed from the event, target, and native payload, `observedAt`, a `sequence`, t
 `provenance` naming the host and the native event that fired, and the family's canonical
 `payload`. `native` is a frozen snapshot of the validated host envelope. Nothing in
 `canonical` is fabricated: a host that does not report a field leaves it absent.
+
+### Preflight gates
+
+A named `preflight` export gives the same event route a cheap gate before the rendered route
+runtime loads. The physically cheap pattern is a statically followable relative re-export:
+
+```ts
+// src/events/tool/before.tsx
+export { default as preflight } from './before.preflight.js';
+
+export default async function BeforeTool({ canonical, signal }) {
+  // The full rendered event route runs only after preflight returns "execute".
+}
+```
+
+```ts
+// src/events/tool/before.preflight.ts
+export default ({ canonical }) =>
+  mentionsCargo(commandFrom(canonical.payload))
+    ? 'execute'
+    : { outcome: 'continue' };
+```
+
+Keep the preflight module plain Node/application code: do not import React, RSC helpers, the
+rendered route module, or application providers. A relative re-export lets the compiler build an
+independent preflight source graph and defer the route graph. A locally declared function in the
+rendered route module is logically early but not physically cheap, because evaluating that module
+also evaluates its static rendering and provider imports. Bare-package, cyclic, non-function, and
+otherwise non-followable preflight exports are build errors; the compiler does not silently use
+the expensive route path.
+
+Preflight may be synchronous or asynchronous and has exactly three results:
+
+| Result | Meaning |
+| --- | --- |
+| `'execute'` | Load the rendered route entry, resolve its declared providers, and render it. |
+| `{ outcome: 'continue' }` | Return pass-through output without expressing a host decision. |
+| `{ outcome: 'deny', reason: string }` | Project a denial through the event's existing canonical outcome rules. |
+
+`execute` is the only result that loads the rendered route runtime. `undefined`, unknown fields
+or outcomes, and an empty denial reason fail closed through framework validation. Observation-only
+events cannot deny.
+
+The preflight context is frozen and deliberately smaller than `AgentEventRouteProps`. It contains
+the exact `canonical` identity and payload the rendered route would receive, the request `signal`
+owned by the hook deadline, translated host/terminal capability metadata already available
+without application code, and only explicitly framework-owned cheap values. It does **not**
+contain `native`, state, notices, lineage stores, rendered layouts, application providers,
+React/RSC helpers, or the application request context. Envelope bounds and decoding, native host
+validation, canonicalization, capability translation, deadlines and aborts, outcome validation,
+and host projection remain framework-owned. If a gate must inspect an unmapped native field, use
+a config-declared handler instead.
+
+### Declaring route providers
+
+Provider laziness is declaration-driven. Preflight materializes no application providers. An
+executed event route can statically declare the provider keys it needs; the runtime then
+loads and resolves only that subset. Selected providers still materialize once per request,
+sequentially in deterministic key/source order, with `processLifetime` seeded first, and failures
+remain closed. Duplicate or unknown keys are build errors.
+
+For compatibility, an executed route with no provider declaration resolves all conventional
+providers. Declare the narrow subset for ubiquitous routes so unrelated daemon, state, or
+provider work stays outside both the preflight executable and the deferred rendered route. This
+does not change provider value types or the synchronous
+`(await agent()).providers.<key>` contract.
 
 ### The canonical payload
 

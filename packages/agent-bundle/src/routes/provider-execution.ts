@@ -11,6 +11,11 @@ import type { CompiledProvider } from './types.ts';
  * self-contained; `agent-bundle/test` runs it in-process through
  * {@link executeProviders}. Ordering and the fail-closed messages live here so
  * the two cannot drift: the harness must mount exactly what the artifact does.
+ *
+ * Which providers a route resolves is decided before the loop, by
+ * {@link selectRequiredProviders} over the route's static declaration (#595):
+ * every conventional provider when it declares none, otherwise the declared
+ * subset in the same order. The loop itself runs whatever it is handed.
  */
 
 /** Deterministic execution order: by mounted key, then by source path for a key collision. */
@@ -20,6 +25,119 @@ export const orderedProviders = <T extends Pick<CompiledProvider, 'name' | 'sour
   const byKey = providerKeyFromName(left.name).localeCompare(providerKeyFromName(right.name));
   return byKey === 0 ? left.source.localeCompare(right.source) : byKey;
 });
+
+/**
+ * The provider keys one route statically declares it requires (#595).
+ * `undefined` — no declaration — keeps the pre-#595 contract: every
+ * conventional provider resolves. An explicit list selects only those
+ * providers; `[]` mounts the framework-owned `processLifetime` alone.
+ */
+export type RequiredProviderKeys = readonly string[] | undefined;
+
+/**
+ * The key every request scope seeds itself before any provider runs. The
+ * graph refuses a provider module deriving it (AB4942), so no declaration can
+ * select it: it is mounted whatever the route declares.
+ */
+const reservedProviderKey = 'processLifetime';
+
+/**
+ * One defect in a required-provider declaration, as pure data: the graph maps
+ * each to a diagnostic (message from {@link requiredProviderKeyProblemMessage},
+ * code and recovery its own), so the wording never forks between the compiler
+ * and the harness.
+ */
+export type RequiredProviderKeyProblem =
+  | { readonly key: string; readonly kind: 'duplicate-provider-key' }
+  | { readonly key: string; readonly kind: 'reserved-provider-key' }
+  | {
+    readonly key: string;
+    /** Every selectable key, sorted as {@link orderedProviders} sorts, unique. */
+    readonly known: readonly string[];
+    readonly kind: 'unknown-provider-key';
+  };
+
+/**
+ * Validates an explicit declaration against the project's provider keys. One
+ * pass in declaration order; every occurrence reports at most one problem —
+ * a repeated key is `duplicate` from its second occurrence on, and the first
+ * occurrence still reports `reserved` or `unknown` when it is one — so a
+ * single build surfaces every defect. Pure: touches neither input, and the
+ * empty result means the declaration is accepted.
+ */
+export const validateRequiredProviderKeys = (
+  required: readonly string[],
+  knownKeys: Iterable<string>,
+): readonly RequiredProviderKeyProblem[] => {
+  const known = new Set(knownKeys);
+  const listed = Object.freeze([...known].sort((left, right) => left.localeCompare(right)));
+  const seen = new Set<string>();
+  const problems: RequiredProviderKeyProblem[] = [];
+  for (const key of required) {
+    if (seen.has(key)) {
+      problems.push(Object.freeze({ key, kind: 'duplicate-provider-key' }));
+      continue;
+    }
+    seen.add(key);
+    if (key === reservedProviderKey) {
+      problems.push(Object.freeze({ key, kind: 'reserved-provider-key' }));
+    } else if (!known.has(key)) {
+      problems.push(Object.freeze({ key, kind: 'unknown-provider-key', known: listed }));
+    }
+  }
+  return Object.freeze(problems);
+};
+
+export const requiredProviderKeyProblemMessage = (problem: RequiredProviderKeyProblem): string => {
+  switch (problem.kind) {
+    case 'duplicate-provider-key':
+      return `Required provider key ${JSON.stringify(problem.key)} is declared more than once.`;
+    case 'reserved-provider-key':
+      return `Required provider key ${JSON.stringify(problem.key)} is the framework-owned process identity every request mounts; do not declare it.`;
+    case 'unknown-provider-key':
+      return `Required provider key ${JSON.stringify(problem.key)} matches no conventional provider; ${
+        problem.known.length === 0 ? 'the project declares none' : `known keys: ${problem.known.join(', ')}`
+      }.`;
+    default: {
+      const exhaustive: never = problem;
+      throw new TypeError(`Unhandled required provider key problem: ${JSON.stringify(exhaustive)}`);
+    }
+  }
+};
+
+/**
+ * The outcome of {@link selectRequiredProviders}: the providers one route
+ * resolves, already in {@link orderedProviders} order, or the declaration
+ * defects that stop it from resolving any.
+ */
+export type RequiredProviderSelection<T> =
+  | { readonly ok: true; readonly providers: readonly T[] }
+  | { readonly ok: false; readonly problems: readonly RequiredProviderKeyProblem[] };
+
+/**
+ * Selects the providers one route resolves from its declaration (#595): all
+ * of them when it declares nothing, otherwise exactly the declared keys —
+ * matched against the derived camel-case key a route reads, never the file
+ * stem — in the existing key/source order, not declaration order. A
+ * declaration with a duplicate, reserved, or unknown key selects nothing and
+ * reports every defect instead. The result is frozen; the caller's provider
+ * records are not touched.
+ */
+export const selectRequiredProviders = <T extends Pick<CompiledProvider, 'name' | 'source'>>(
+  providers: readonly T[],
+  required: RequiredProviderKeys,
+): RequiredProviderSelection<T> => {
+  const ordered = orderedProviders(providers);
+  if (required === undefined) return Object.freeze({ ok: true, providers: Object.freeze(ordered) });
+  const keys = ordered.map((provider) => providerKeyFromName(provider.name));
+  const problems = validateRequiredProviderKeys(required, keys);
+  if (problems.length > 0) return Object.freeze({ ok: false, problems });
+  const selected = new Set(required);
+  return Object.freeze({
+    ok: true,
+    providers: Object.freeze(ordered.filter((_provider, index) => selected.has(keys[index]!))),
+  });
+};
 
 export const providerFactoryMissingMessage = (key: string, source: string): string =>
   `Context provider "${key}" (${source}) must default-export a factory.`;

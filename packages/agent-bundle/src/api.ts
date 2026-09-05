@@ -47,6 +47,8 @@ export {
   agentEventPayloadFields,
   agentEventPayloadNativeKeys,
   canonicalAgentEvents,
+  eventFamilyAllowsPreflightDeny,
+  validateEventPreflightResult,
 } from './routes/public.ts';
 export type {
   AgentEventCanonicalIdentity,
@@ -69,6 +71,9 @@ export type {
   AgentProviderFactory,
   AppRouteConfig,
   CanonicalAgentEvent,
+  EventPreflight,
+  EventPreflightContext,
+  EventPreflightResult,
   PromptConfig,
   ResourceConfig,
   RouteSchema,

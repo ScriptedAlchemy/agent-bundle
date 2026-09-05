@@ -163,9 +163,10 @@ export default defineConfig({
 
 ## 事件路由
 
-配置声明的钩子是紧凑形式。第二种编写形态是**事件路由**：`src/events/` 下的一个文件，其路径就是它处理的
-规范事件族（`src/events/tool/before.tsx`、`src/events/stop.tsx`）。它像 MCP 工具路由一样，是一个异步
-默认导出的 Server Component，再加一个可静态提取的 `config` 导出：
+配置声明的钩子是紧凑的、面向原生的逃生舱。只有当处理器确实需要原始宿主信封或宿主特定行为时才使用它。
+对普通语义事件——包括那些应当在渲染之前就返回的高频事件——请优先使用**事件路由**：`src/events/`
+下的一个文件，其路径就是它处理的规范事件族（`src/events/tool/before.tsx`、`src/events/stop.tsx`）。
+它像 MCP 工具路由一样，是一个异步默认导出的 Server Component，再加一个可静态提取的 `config` 导出：
 
 ```tsx
 // src/events/tool/after.tsx
@@ -194,6 +195,63 @@ export default async function AfterFileEdit({ canonical, native, signal }: Agent
 `canonical` 是框架推导出的跨宿主身份——`event`、由事件、target 与原生载荷哈希而来的 `idempotencyKey`、
 `observedAt`、一个 `sequence`、记录触发宿主与原生事件名的 `provenance`，以及该事件族的规范 `payload`。
 `native` 是经过校验的宿主信封的冻结快照。`canonical` 中没有任何伪造：宿主未报告的字段保持缺失。
+
+### 预检（preflight）
+
+命名的 `preflight` 导出会在加载渲染式路由运行时之前，给同一条事件路由一道便宜的门控。物理上便宜的写法是
+可被静态跟随的相对路径重新导出：
+
+```ts
+// src/events/tool/before.tsx
+export { default as preflight } from './before.preflight.js';
+
+export default async function BeforeTool({ canonical, signal }) {
+  // 完整渲染式事件路由只在 preflight 返回 "execute" 之后才会运行。
+}
+```
+
+```ts
+// src/events/tool/before.preflight.ts
+export default ({ canonical }) =>
+  mentionsCargo(commandFrom(canonical.payload))
+    ? 'execute'
+    : { outcome: 'continue' };
+```
+
+把 `preflight` 模块保持为普通的 Node/应用代码：不要导入 React、RSC 辅助函数、渲染式路由模块或应用
+provider。相对路径重新导出让编译器可以构建一份独立的 `preflight` 源图，并把路由图推迟到之后。在渲染式
+路由模块里就地声明的函数在逻辑上是提前的，但在物理上并不便宜，因为求值该模块也会求值它的静态渲染与
+provider 导入。裸包、循环、非函数以及其他无法跟随的 `preflight` 导出都是构建错误；编译器不会悄悄退回
+昂贵的路由路径。
+
+`preflight` 可以是同步或异步的，并且恰好只有三种结果：
+
+| 结果 | 含义 |
+| --- | --- |
+| `'execute'` | 加载渲染式路由入口，解析其声明的 provider，并渲染它。 |
+| `{ outcome: 'continue' }` | 返回放行输出，不表达任何宿主决定。 |
+| `{ outcome: 'deny', reason: string }` | 按该事件既有的规范结果规则投影一次拒绝。 |
+
+`execute` 是唯一会加载渲染式路由运行时的结果。`undefined`、未知字段或未知结果、以及空的拒绝原因，
+都会通过框架校验失败即关闭。仅可观察的事件不能拒绝。
+
+预检上下文是冻结的，并且刻意比 `AgentEventRouteProps` 更小。它包含渲染式路由会收到的那份精确
+`canonical` 身份与载荷、由钩子截止时间拥有的请求 `signal`、无需应用代码即可获得的已翻译宿主/终端
+能力元数据，以及仅限框架明确拥有的便宜取值。它**不**包含 `native`、state、notices、lineage 存储、
+渲染式布局、应用 provider、React/RSC 辅助函数，或应用请求上下文。信封边界与解码、原生宿主校验、
+规范化、能力翻译、截止时间与中止、结果校验，以及宿主投影，仍归框架所有。如果一道门控必须检查未映射
+的原生字段，请改用配置声明的处理器。
+
+### 声明路由的 provider
+
+Provider 的惰性是声明驱动的。`preflight` 不会解析任何应用 provider。被执行的事件路由可以静态声明它
+需要的 provider 键；运行时随后只加载并解析那个子集。被选中的 provider 仍按确定性的键/来源顺序逐个
+挂载，每个请求一次，先挂载 `processLifetime`，并且失败保持关闭。重复或未知的键是构建错误。
+
+为了兼容，没有声明任何 provider 的已执行路由会解析全部约定 provider。为随处触发的路由声明那个窄
+子集，这样无关的 daemon、state 或 provider 工作就不会进入 `preflight` 可执行文件，也不会进入被推迟的
+渲染式路由。这不会改变 provider 的值类型，也不会改变同步的
+`(await agent()).providers.<key>` 契约。
 
 ### 规范载荷
 
