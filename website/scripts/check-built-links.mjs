@@ -10,7 +10,11 @@
 // (plus `og:url`/`og:image` content, canonical/alternate links, and sitemap
 // `<loc>`s) to a file under doc_build honouring `cleanUrls`, and requires every
 // `#fragment` on an HTML target to name an `id` in that file. The llms.txt and
-// `.md` copies are build assets that resolve like any other file. No dependencies.
+// `.md` copies are build assets that resolve like any other file. An authored
+// link into `/api/<module>#<member>` whose label is a bare identifier must also
+// name the heading it lands on: TypeDoc member ids are github-slugger ids
+// suffixed in document order (`#build-2`), so a new same-named heading upstream
+// would leave the old id valid but pointing elsewhere. No dependencies.
 //
 // Usage: node scripts/check-built-links.mjs [--dir <doc_build>] [--help]
 
@@ -24,6 +28,10 @@ const TAG = /<(a|link|script|img|source|iframe|meta)\b([^>]*)>/gi;
 const ATTRIBUTE = /([a-zA-Z:-]+)\s*=\s*"([^"]*)"/g;
 const ID = /\s(?:id|name)="([^"]*)"/g;
 const SKIPPED_SCHEMES = /^(?:mailto:|javascript:|tel:|data:|https?:\/\/|\/\/)/i;
+const ANCHOR_ELEMENT = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
+const API_MEMBER_LINK = new RegExp(`^${BASE.replace(/[/]/g, '\\/')}(?:zh\\/)?api\\/[^#?]+#(.+)$`);
+const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
+const visibleText = html => unescapeHtml(html.replace(/<[^>]*>/g, '')).replace(/\(\)$/, '').trim();
 
 const usage = `Usage: node scripts/check-built-links.mjs [--dir <doc_build>]
   --dir <dir>  built site to walk (default: website/doc_build)
@@ -100,6 +108,7 @@ const main = () => {
   const broken = new Map();
   let links = 0;
   let anchors = 0;
+  let members = 0;
   for (const file of files) {
     const html = fs.readFileSync(file, 'utf8');
     const pagePath = `/${path.relative(options.dir, file).split(path.sep).join('/')}`;
@@ -128,6 +137,24 @@ const main = () => {
       anchors += 1;
       if (!idsOf(target).has(fragment)) report(`no id="${fragment}" in ${path.relative(options.dir, target)}`);
     }
+    if (file.endsWith('.html') && !/^\/(?:zh\/)?api\//.test(pagePath)) {
+      for (const [, rawAttributes, inner] of html.matchAll(ANCHOR_ELEMENT)) {
+        const href = unescapeHtml(/\shref="([^"]*)"/.exec(rawAttributes)?.[1] ?? '');
+        const member = API_MEMBER_LINK.exec(href.startsWith(ORIGIN) ? href.slice(ORIGIN.length) : href);
+        const label = member ? visibleText(inner) : '';
+        if (!member || !IDENTIFIER.test(label)) continue;
+        const target = resolveTarget(href.replace(/#.*$/, '').replace(ORIGIN, ''));
+        if (target === null) continue;
+        members += 1;
+        const fragment = decode(member[1]);
+        const heading = new RegExp(`<h[1-6]\\b[^>]*\\sid="${fragment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[^>]*>([\\s\\S]*?)</h[1-6]>`).exec(fs.readFileSync(target, 'utf8'));
+        if (heading === null) continue;
+        const headingLabel = visibleText(heading[1]).replace(/^#/, '').trim();
+        if (headingLabel.toLowerCase() !== label.toLowerCase()) {
+          if (!broken.has(href)) broken.set(href, `${href} — labelled "${label}" but #${fragment} is the heading "${headingLabel}" (e.g. in ${pagePath})`);
+        }
+      }
+    }
   }
   // Sitemap `lastmod` (plugins/sitemap-lastmod.ts) comes from git history, or is
   // omitted on a shallow clone. Whatever is present must parse, must not be in
@@ -141,7 +168,7 @@ const main = () => {
     else if (stamps.length > 10 && new Set(stamps).size < 2) broken.set('sitemap:lastmod', `sitemap.xml — every <lastmod> is ${stamps[0]}; dates are not coming from git history`);
   }
   for (const line of [...broken.values()].sort()) console.log(line);
-  console.log(`${broken.size} broken links / ${anchors} anchors checked (${links} internal links across ${files.length} files under ${options.dir})`);
+  console.log(`${broken.size} broken links / ${anchors} anchors checked, ${members} authored API member links matched against their headings (${links} internal links across ${files.length} files under ${options.dir})`);
   if (broken.size > 0) process.exitCode = 1;
 };
 
