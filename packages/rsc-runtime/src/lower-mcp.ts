@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult } from '@modelcontextprotocol/server';
 import { Children, isValidElement, type ReactElement, type ReactNode } from 'react';
 
 type McpElement = {
@@ -46,6 +46,26 @@ export interface JsonObject {
 }
 
 export type JsonValue = null | boolean | number | string | readonly JsonValue[] | JsonObject;
+
+/** One `CallToolResult.content` block, as the MCP SDK types it. */
+export type McpContentBlock = CallToolResult['content'][number];
+
+/**
+ * The MCP `CallToolResult` this package emits. The content blocks are the
+ * SDK's own; `_meta` and `structuredContent` are the finite JSON objects the
+ * lowerers copy through the wire boundary, stated as such rather than as the
+ * SDK's `unknown`. That keeps the value assignable to the `CallToolResult` of
+ * `@modelcontextprotocol/server` 2.x and of the SDK's 1.x line (which types
+ * `structuredContent` as a record) alike. A type alias, not an interface: only
+ * object literal types get the implicit index signature the SDK's loose
+ * result object requires.
+ */
+export type McpCallToolResult = {
+  readonly _meta?: JsonObject;
+  readonly content: McpContentBlock[];
+  readonly isError?: boolean;
+  readonly structuredContent?: JsonObject;
+};
 
 /** Incremental depth / node / byte checks while cloning JSON (Agent Document bounds). */
 export interface JsonSnapshotBudget {
@@ -192,7 +212,7 @@ export const frozenJsonRecord = (value: unknown, message: string): Readonly<Reco
   return clone;
 };
 
-const lowerContent = (node: ReactNode): CallToolResult['content'][number] => {
+const lowerContent = (node: ReactNode): McpContentBlock => {
   const element = asMcpElement(node);
   const { props } = element;
   switch (element.type) {
@@ -253,7 +273,7 @@ const lowerContent = (node: ReactNode): CallToolResult['content'][number] => {
   }
 };
 
-export const lowerMcpResult = (node: ReactNode): CallToolResult => {
+export const lowerMcpResult = (node: ReactNode): McpCallToolResult => {
   const root = asMcpElement(node);
   if (root.type !== 'mcp-result') throw new Error('Expected mcp-result as the root element');
   if (root.props.isError !== undefined && typeof root.props.isError !== 'boolean') {
