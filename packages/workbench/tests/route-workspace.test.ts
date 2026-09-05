@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from '@rstest/core';
 
 import { appResourceUriFor, catalogToolsFor, orderedToolsForApp } from '../src/application/app-route-workspace.tsx';
-import { resultTabFor } from '../src/application/executable-route-workspace.tsx';
+import { ExecutableRouteWorkspace, resultTabFor } from '../src/application/executable-route-workspace.tsx';
 import { idleInvocationState, reduceInvocationState, selectBackend } from '../src/application/invocation-model.ts';
 import { ResultTabs } from '../src/application/result-tabs.tsx';
 import { requestContextRows, RouteInspector } from '../src/application/route-inspector.tsx';
@@ -121,6 +121,28 @@ describe('RouteWorkspace dispatch', () => {
 
     expect(markup).toContain('No backend can run this route.');
     expect(markup).toContain('Argv the routed CLI receives');
+  });
+
+  it('presents an unavailable-build invocation as a diagnostic with a Problems link', () => {
+    const markup = renderToStaticMarkup(createElement(ExecutableRouteWorkspace, {
+      controller: controllerWith({
+        state: {
+          diagnostics: [],
+          failure: {
+            code: 'AB8232',
+            message: 'The source is newer than the published build. Rebuild before invoking routes.',
+          },
+          phase: 'failed',
+        },
+      }),
+      leaf: toolLeaf,
+      onNavigate: noop,
+    }));
+
+    expect(markup).toContain('<strong>AB8232</strong>');
+    expect(markup).toContain('The source is newer than the published build. Rebuild before invoking routes.');
+    expect(markup).toContain('Open in Problems');
+    expect(markup).not.toContain('Handler threw');
   });
 
   it('mounts the host selector for an event leaf', () => {

@@ -179,7 +179,10 @@ const InvocationDiagnostics = ({ diagnostics, failure, onNavigate }: {
   readonly failure?: { readonly code: string; readonly message: string };
   readonly onNavigate: (location: WorkbenchLocation) => void;
 }): React.ReactNode => <section aria-label="Invocation diagnostics" className="route-diagnostics">
-  {failure === undefined ? undefined : <p className="route-diagnostic"><strong>{failure.code}</strong> {failure.message}</p>}
+  {failure === undefined ? undefined : <p className="route-diagnostic">
+    <strong>{failure.code}</strong> {failure.message}
+    <button className="route-diagnostic-link" onClick={() => onNavigate({ area: 'problems' })} type="button">Open in Problems</button>
+  </p>}
   {diagnostics.map((diagnostic, index) => <p className={`route-diagnostic route-diagnostic--${diagnostic.severity}`} key={`${diagnostic.code}-${String(index)}`}>
     <strong>{diagnostic.code}</strong> {diagnostic.message}
     {diagnostic.recovery === undefined ? undefined : <span className="route-diagnostic-recovery">{diagnostic.recovery}</span>}

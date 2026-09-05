@@ -54,7 +54,11 @@ import { ProjectService, type PreparedProject } from './project-service.ts';
 import { emptyCompiledRouteGraph } from '../routes/graph.ts';
 import { testManifestFromRouteGraph } from '../test/manifest.ts';
 import type { RouteInvocationEventHost } from './routes/route-invocation.ts';
-import { RouteInvocationService } from './routes/route-invocation-service.ts';
+import {
+  ROUTE_INVOCATION_MANIFEST_UNAVAILABLE_CODE,
+  RouteInvocationRequestError,
+  RouteInvocationService,
+} from './routes/route-invocation-service.ts';
 import { routeManifestFor } from './routes/route-manifest.ts';
 import type { RouteManifestRouteService } from './routes/route-manifest-routes.ts';
 import { DevRuntimeController } from './runtime-controller.ts';
@@ -608,7 +612,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
   let latestValidPreparedProject = initialPreparedProject.source.state === 'ready' && initialPreparedProject.model !== undefined
     ? initialPreparedProject
     : undefined;
-  let latestPublishedPreparedProject: PreparedProject | undefined = latestValidPreparedProject;
+  let latestPublishedPreparedProject: PreparedProject | undefined;
   const topologyProviderSessionId = randomUUID();
   let runtimeTopologyChanged = false;
   let status: () => ProjectStatus = () => deepFreeze({
@@ -887,20 +891,29 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
       if (prepared === undefined || prepared.model === undefined) {
         throw new Error('No valid prepared project is available for route invocation.');
       }
+      const artifact = status().artifact;
+      if (
+        artifact.state !== 'active' ||
+        prepared.source.revision === undefined ||
+        artifact.activeEpoch.projectRevision !== prepared.source.revision
+      ) {
+        throw new RouteInvocationRequestError(
+          ROUTE_INVOCATION_MANIFEST_UNAVAILABLE_CODE,
+          'The source is newer than the published build. Rebuild before invoking routes.',
+          409,
+        );
+      }
       const targets = prepared.model.targets
         .map((target) => target.name)
         .filter((target): target is RouteInvocationEventHost =>
           target === 'claude' || target === 'codex' || target === 'cursor');
       // Emitted scripts live once at the composite root; any selected target
       // whose layout has a scripts directory reads the same file.
-      const artifact = status().artifact;
       const scriptTarget = prepared.model.targets
         .map((target) => target.name)
         .find((target) => registry.artifactLayout(target).scripts !== undefined);
       return Object.freeze({
-        ...((artifact.state === 'active' || artifact.state === 'stale') && scriptTarget !== undefined
-          ? { artifact: { epochId: artifact.activeEpoch.id, target: scriptTarget } }
-          : {}),
+        ...(scriptTarget === undefined ? {} : { artifact: { epochId: artifact.activeEpoch.id, target: scriptTarget } }),
         manifest: testManifestFromRouteGraph({
           apps: prepared.model.mcpApps,
           configPath: prepared.configPath,
@@ -987,6 +1000,15 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
       ? {}
       : { workbenchDevOrigins: options.workbenchDevOrigins }),
   });
+  if (latestPublishedPreparedProject === undefined) {
+    const artifact = status().artifact;
+    if (
+      (artifact.state === 'active' || artifact.state === 'stale') &&
+      initialPreparedProject.source.revision === artifact.activeEpoch.projectRevision
+    ) {
+      latestPublishedPreparedProject = initialPreparedProject;
+    }
+  }
   clientSurfaces.bindHostOrigin(foreground.url);
   // Linearize Workbench-owned runtime proxy acquisition before Foreground
   // begins its asynchronous App/SSE drain. The coordinator repeats this fence
