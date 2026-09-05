@@ -21,7 +21,7 @@ import { createMcpSessionController, type McpSessionController } from '../mcp/mc
 import type { McpBrowserSessionModel } from '../mcp/mcp-session-model.ts';
 import type { WorkbenchLocation } from '../shell/workbench-location.ts';
 import type { ApplicationLeaf } from './application-tree-model.ts';
-import { WorkspaceHeader } from './executable-route-workspace.tsx';
+import { newCorrelationId, WorkspaceHeader } from './executable-route-workspace.tsx';
 import { displayAgentDocumentValue } from './rendered-document.tsx';
 import { publishedEpochFor, type WorkspaceClients } from './workspace-contracts.ts';
 import './workspace.css';
@@ -67,6 +67,17 @@ export const orderedToolsForApp = (tools: readonly McpCatalogTool[], resourceUri
   ...tools.filter((tool) => resourceUri !== undefined && tool.resourceUri === resourceUri),
   ...tools.filter((tool) => resourceUri === undefined || tool.resourceUri !== resourceUri),
 ]);
+
+/** MCP tool params carrying the Workbench correlation key understood by the session service. */
+export const appToolCallRequest = (
+  name: string,
+  input: JsonObject,
+  correlationId: string,
+): Readonly<Record<string, unknown>> => Object.freeze({
+  _meta: Object.freeze({ 'agent-bundle/correlationId': correlationId }),
+  arguments: input,
+  name,
+});
 
 interface ToolCall {
   readonly input: JsonObject;
@@ -138,10 +149,11 @@ export const AppRouteWorkspace = ({ clients, leaf, onNavigate, status }: AppRout
     setCalling(true);
     setCallError(undefined);
     const sessionId = model.sessionId;
+    const correlationId = newCorrelationId();
     void controller.invoke({
       id: `app-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
       operation: 'callTool',
-      request: { arguments: input, name: tool.name },
+      request: appToolCallRequest(tool.name, input, correlationId),
     }).then(
       (result) => { setCall(Object.freeze({ input, result: result as McpAppJsonValue, sessionId, toolName: tool.name })); },
       (reason: unknown) => { setCallError(errorMessage(reason, 'The tool call failed.')); },

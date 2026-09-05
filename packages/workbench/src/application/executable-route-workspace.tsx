@@ -11,6 +11,7 @@ import type { Diagnostic } from '../../../agent-bundle/src/contracts/diagnostics
 import type { RouteInvocationRequest, RouteInvocationSummary } from '../../../agent-bundle/src/contracts/invocations.ts';
 import { errorMessage, isAbortError, isRecord } from '../client-helpers.ts';
 import type { WorkbenchLocation } from '../shell/workbench-location.ts';
+import type { TraceClient } from '../trace/trace-client.ts';
 import type { ApplicationLeaf } from './application-tree-model.ts';
 import type { InvocationBackend } from './invocation-backend.ts';
 import {
@@ -52,7 +53,7 @@ const failureOf = (reason: unknown): { readonly code: string; readonly message: 
   return Object.freeze({ code, message: errorMessage(reason, 'The invocation request failed.') });
 };
 
-const newCorrelationId = (): string => {
+export const newCorrelationId = (): string => {
   const random = globalThis.crypto;
   return random !== undefined && typeof random.randomUUID === 'function'
     ? random.randomUUID()
@@ -199,11 +200,14 @@ export interface ExecutableRouteWorkspaceProps {
   readonly inputLeaf?: ApplicationLeaf;
   /** Where the last input persists; defaults to the leaf key. */
   readonly inputKey?: string;
+  /** The snapshot requested by the current deep link. */
+  readonly invocationId?: string;
   readonly leaf: ApplicationLeaf;
   readonly onNavigate: (location: WorkbenchLocation) => void;
   /** Adds request options (an event host, a fixture id) to what the editor produced. */
   readonly requestFor?: (draft: RouteInvocationDraft) => RouteInvocationDraft;
   readonly tab?: string;
+  readonly trace?: TraceClient;
   /** Rendered between the header and the editor (the event host selector). */
   readonly toolbar?: React.ReactNode;
 }
@@ -251,11 +255,13 @@ export const ExecutableRouteWorkspace = ({
   fixtures,
   inputKey,
   inputLeaf,
+  invocationId,
   leaf,
   onNavigate,
   requestFor,
   tab,
   toolbar,
+  trace,
 }: ExecutableRouteWorkspaceProps): React.ReactNode => {
   const editorLeaf = inputLeaf ?? leaf;
   const storageKey = inputKey ?? leaf.key;
@@ -298,6 +304,7 @@ export const ExecutableRouteWorkspace = ({
   };
 
   const failed = controller.state.phase === 'failed' ? controller.state : undefined;
+  const missingDeepLink = invocationId !== undefined && failed?.failure?.code === 'AB8231';
 
   return <div className={inspectorOpen ? 'route-workspace route-workspace--inspecting' : 'route-workspace'} data-testid="route-workspace">
     <div className="route-workspace-main">
@@ -316,7 +323,12 @@ export const ExecutableRouteWorkspace = ({
       {failed === undefined || (failed.diagnostics.length === 0 && failed.failure === undefined)
         ? undefined
         : <InvocationDiagnostics diagnostics={failed.diagnostics} failure={failed.failure} onNavigate={onNavigate} />}
-      <ResultTabs controller={controller} extraTabs={extraTabs} leaf={leaf} onNavigate={onNavigate} onTabChange={changeTab} tab={resultTab} />
+      {missingDeepLink
+        ? <section className="result-missing-invocation" role="status">
+          <h2>Invocation not in this session</h2>
+          <p>Invocation {invocationId} is not in this session.</p>
+        </section>
+        : <ResultTabs controller={controller} extraTabs={extraTabs} leaf={leaf} onTabChange={changeTab} tab={resultTab} trace={trace} />}
     </div>
     <RouteInspector
       backendKind={controller.backendKind}
