@@ -35,11 +35,12 @@ disagree, the generated pages are correct.
 
 ## How the pages are organized
 
-[/api/](/api/) lists the modules. Each module page is named after the entry point's source file
-(`agent-bundle/routes` is compiled from `routes/public.ts`, so its page is `routes/public`; the
-root `agent-bundle` export is `index`, served at `/api/index-1` because `/api/` is the module
-index itself) and groups its members under `Classes`, `Interfaces`, `Type Aliases`, `Variables`,
-and `Functions`. A name an entry point re-exports from another entry point is listed under
+[/api/](/api/) lists the modules. Each module page is named after the entry point's source path
+with `.ts` and a trailing `/index` dropped (`agent-bundle/routes` is compiled from
+`routes/public.ts`, so its page is `routes/public`; `agent-bundle/app` from `app/index.ts` is
+`app`; the root `agent-bundle` export is `index`, served at `/api/index-1` because `/api/` is the
+module index itself) and groups its members under `Classes`, `Interfaces`, `Type Aliases`,
+`Variables`, and `Functions`. A name an entry point re-exports from another entry point is listed under
 `References` with a link to the page that documents it — `runEvals` on `index` points to
 [`runEvals`](/api/api#runevals) on `api`.
 
@@ -65,7 +66,8 @@ this Reference — are complete translations.
 ## Where to start
 
 - Compiling from a script: [`build`](/api/api#build-2) and [`validate`](/api/api#validate-1) in `agent-bundle/api`.
-- Calling typed tools from an MCP App: `createAppClient` in `agent-bundle/app`, explained in
+- Calling typed tools from an MCP App: [`createAppClient`](/api/app#createappclient) in
+  `agent-bundle/app`, explained in
   [The typed App client](../guide/authoring/mcp.mdx#the-typed-app-client).
 - Writing tests: [`renderRoute`](/api/test#renderroute), [`expectDocument`](/api/test#expectdocument), and the matrices in `agent-bundle/test`, explained in [Testing](../guide/development/testing.mdx).
 - Writing evals: [`defineEvalSuite`](/api/eval#defineevalsuite) and the assertions in `agent-bundle/eval`, explained in [Evaluations](../guide/development/evaluations.mdx).
