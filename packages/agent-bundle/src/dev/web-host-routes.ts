@@ -380,7 +380,7 @@ export class WebHostRoutes {
       }
       const launch = await selectWebLaunch({
         artifactRoot: reference.root,
-        declaredTargets: document.targets,
+        declaredTargets: document.hosts,
         registry: launchOptions.registry,
         ...(requested.target === undefined ? {} : { requestedTarget: requested.target }),
         serverName: app.server,

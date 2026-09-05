@@ -338,16 +338,33 @@ it('round-trips the optional package identity axes distinctly', () => {
   });
 });
 
-it('round-trips and deeply freezes the optional web section', () => {
-  const source: ArtifactManifest = {
-    ...validManifest(),
+const compiledServer = (): ArtifactManifest['executables']['mcpServers'][number] => ({
+  apps: [],
+  hosts: ['codex'],
+  id: 'mcp:catalog',
+  kind: 'compiled',
+  launch: {
+    args: [
+      { kind: 'literal', value: '--config' },
+      { kind: 'artifact', path: 'codex/scripts/review.mjs' },
+      { kind: 'literal', value: 'agent-bundle:path:plugin-data/cache' },
+    ],
+    entry: 'codex/scripts/review.mjs',
+    env: { TOKEN: 'agent-bundle:path:plugin-data/token' },
+  },
+  name: 'catalog',
+  transport: 'stdio',
+});
+
+const withWeb = (): ArtifactManifest => {
+  const base = validManifest();
+  return {
+    ...base,
+    executables: { ...base.executables, mcpServers: [compiledServer()] },
     web: {
       apps: [{
         allow: ['call-tool'],
         app: 'catalog/details',
-        args: [],
-        entry: 'codex/scripts/review.mjs',
-        env: { TOKEN: 'agent-bundle:path:plugin-data/token' },
         name: 'details',
         resourceUri: 'ui://catalog/details',
         server: 'catalog',
@@ -355,11 +372,50 @@ it('round-trips and deeply freezes the optional web section', () => {
       open: 'never',
     },
   };
+};
+
+it('round-trips and deeply freezes a compiled server launch record and the optional web section', () => {
+  const source = withWeb();
   const manifest = parseArtifactManifest(serializeArtifactManifest(source));
 
+  expect(manifest.executables.mcpServers[0]?.launch).toEqual(compiledServer().launch);
+  expect(Object.isFrozen(manifest.executables.mcpServers[0]?.launch)).toBe(true);
+  expect(Object.isFrozen(manifest.executables.mcpServers[0]?.launch?.args[1])).toBe(true);
   expect(manifest.web).toEqual(source.web);
   expect(Object.isFrozen(manifest.web)).toBe(true);
   expect(Object.isFrozen(manifest.web?.apps[0])).toBe(true);
+});
+
+it('binds the launch record to compiled servers and every exposed App to a launchable server', () => {
+  const commandWithLaunch = withWeb();
+  (commandWithLaunch.executables.mcpServers[0] as { kind: string }).kind = 'command';
+  expect(() => serializeArtifactManifest(commandWithLaunch))
+    .toThrow('executables.mcpServers[0].launch is present exactly for compiled servers.');
+
+  const compiledWithoutLaunch = withWeb();
+  delete (compiledWithoutLaunch.executables.mcpServers[0] as { launch?: unknown }).launch;
+  expect(() => serializeArtifactManifest(compiledWithoutLaunch))
+    .toThrow('executables.mcpServers[0].launch is present exactly for compiled servers.');
+
+  const unlistedEntry = withWeb();
+  (unlistedEntry.executables.mcpServers[0]!.launch as { entry: string }).entry = 'codex/scripts/missing.mjs';
+  expect(() => serializeArtifactManifest(unlistedEntry))
+    .toThrow('executables.mcpServers[mcp:catalog].launch.entry names "codex/scripts/missing.mjs", which is not a manifest file.');
+
+  const escapedArgument = withWeb();
+  (escapedArgument.executables.mcpServers[0]!.launch!.args as unknown[])[1] = { kind: 'artifact', path: 'codex/missing' };
+  expect(() => serializeArtifactManifest(escapedArgument))
+    .toThrow('executables.mcpServers[mcp:catalog].launch.args[1].path names "codex/missing", which is not inside the artifact.');
+
+  const directoryArgument = withWeb();
+  (directoryArgument.executables.mcpServers[0]!.launch!.args as unknown[])[1] = { kind: 'artifact', path: 'codex/scripts' };
+  expect(parseArtifactManifest(serializeArtifactManifest(directoryArgument)).executables.mcpServers[0]?.launch?.args[1])
+    .toEqual({ kind: 'artifact', path: 'codex/scripts' });
+
+  const unknownServer = withWeb();
+  (unknownServer.web!.apps[0] as { server: string }).server = 'other';
+  expect(() => serializeArtifactManifest(unknownServer))
+    .toThrow('web.apps[catalog/details].server names "other", which is not a compiled MCP server with a launch record.');
 });
 
 it('accepts a project without package identity and rejects invalid identity values', () => {

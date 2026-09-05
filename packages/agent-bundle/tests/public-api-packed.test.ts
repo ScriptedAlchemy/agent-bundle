@@ -95,10 +95,10 @@ const writePackedFixtureManifest = async (artifactRoot: string): Promise<Artifac
         hooks: [],
         mcpServers: [{
           apps: [],
-          entry: { path: 'mcp/server.mjs' },
           hosts: ['portable'],
           id: 'mcp:fixture',
           kind: 'compiled',
+          launch: { args: [], entry: 'mcp/server.mjs', env: {} },
           name: 'fixture',
           transport: 'stdio',
         }],

@@ -64,9 +64,6 @@ const writeFixture = async (root: string, options: FixtureOptions): Promise<void
       apps: [{
         allow: [],
         app: 'status/status',
-        args: [],
-        entry: 'mcp/mcp-status.mjs',
-        env: {},
         name: 'status',
         resourceUri,
         server: 'status',

@@ -7,6 +7,7 @@ import {
   assembleArtifactManifest,
   type ArtifactManifest,
   type ArtifactManifestCompilerAdapter,
+  type ArtifactManifestMcpServer,
   type ArtifactManifestProjection,
 } from '../../src/build/manifest.ts';
 import type { WebManifest } from '../../src/web-host/manifest.ts';
@@ -87,6 +88,19 @@ export const writeInstallFixtureManifest = async (
   }
   projectionRows.sort((left, right) => left.host.localeCompare(right.host));
   adapterRows.sort((left, right) => left.host.localeCompare(right.host));
+  // Every exposed App names a compiled server whose launch record the fixture
+  // roots at `mcp/<server>.mjs`; callers write that file beside the manifest.
+  const mcpServers: ArtifactManifestMcpServer[] = [...new Set((web?.apps ?? []).map((app) => app.server))]
+    .sort((left, right) => left.localeCompare(right))
+    .map((server) => ({
+      apps: [],
+      hosts: projectionRows.map(({ host }) => host),
+      id: `mcp:${server}`,
+      kind: 'compiled',
+      launch: { args: [], entry: `mcp/${server}.mjs`, env: {} },
+      name: server,
+      transport: 'stdio',
+    }));
   const files = await Promise.all((await fixtureFiles(bundleRoot)).map(async (path) => {
     const bytes = await readFile(join(bundleRoot, path));
     return {
@@ -129,7 +143,7 @@ export const writeInstallFixtureManifest = async (
       },
     },
     distribution: { channels: ['local'], payloads: [] },
-    executables: { bins: [], hooks: [], mcpServers: [], scripts: [] },
+    executables: { bins: [], hooks: [], mcpServers, scripts: [] },
     files,
     manifestVersion: 2,
     projections: projectionRows,

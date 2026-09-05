@@ -102,11 +102,14 @@ const artifactRelativePaths = (document: ArtifactManifest): readonly string[] =>
       ...(script.worker === undefined ? [] : [script.worker]),
     ]),
     ...document.executables.mcpServers.flatMap((server) => [
-      ...(server.entry === undefined ? [] : [server.entry.path, ...(server.entry.worker === undefined ? [] : [server.entry.worker])]),
+      ...(server.launch === undefined ? [] : [
+        server.launch.entry,
+        ...(server.launch.worker === undefined ? [] : [server.launch.worker]),
+        ...server.launch.args.flatMap((argument) => argument.kind === 'artifact' ? [argument.path] : []),
+      ]),
       ...server.apps.flatMap((app) => app.path === undefined ? [] : [app.path]),
     ]),
     ...document.projections.flatMap((projection) => Object.values(projection.documents)),
-    ...(document.web?.apps ?? []).map((app) => app.entry),
   ];
   const install = document.distribution.install;
   if (install?.instructions !== undefined) paths.push(install.instructions);
@@ -137,10 +140,13 @@ beforeAll(async () => {
       '    servers: {',
       '      echo: {',
       "        apps: { echo: { entry: './src/views/echo.ts', resourceUri: 'ui://relocatable/echo.html', template: './src/views/echo.html' } },",
+      "        args: ['--config', 'agent-bundle:path:plugin-root/config/echo.json', '--verbose'],",
       "        entry: './src/mcp/echo.ts',",
+      "        env: { ECHO_MODE: 'relocatable' },",
       '      },',
       '    },',
       '  },',
+      "  payload: { config: './payload-config' },",
       `  plugin: { description: 'Proves manifest paths stay relocatable.', name: ${JSON.stringify(fixtureName)} },`,
       "  scripts: { greet: './src/scripts/greet.ts' },",
       `  targets: ${JSON.stringify(hosts)},`,
@@ -158,6 +164,7 @@ beforeAll(async () => {
       'src/mcp/echo.ts',
       "process.stdin.on('data', (chunk) => process.stdout.write(chunk));\n",
     ),
+    writeProjectFile(projectRoot, 'payload-config/echo.json', '{ "echo": true }\n'),
     writeProjectFile(projectRoot, 'src/scripts/greet.ts', "console.log('hello');\n"),
     writeProjectFile(projectRoot, 'src/views/echo.ts', "document.body.dataset.ready = 'true';\n"),
     writeProjectFile(projectRoot, 'src/views/echo.html', '<!doctype html><main id="echo">Echo</main>\n'),
@@ -186,9 +193,17 @@ it('emits a relocatable manifest that survives moving the composite root', async
   expect(manifest.executables.hooks.length).toBeGreaterThan(0);
   expect(manifest.executables.scripts.length).toBeGreaterThan(0);
   expect(manifest.executables.bins.length).toBeGreaterThan(0);
-  const compiled = manifest.executables.mcpServers.find((server) => server.entry !== undefined);
-  expect(compiled?.entry?.path).toBeDefined();
-  expect(manifest.web?.apps.map((app) => app.entry)).toEqual([compiled?.entry?.path]);
+  const compiled = manifest.executables.mcpServers.find((server) => server.launch !== undefined);
+  expect(compiled?.kind).toBe('compiled');
+  expect(compiled?.launch?.entry).toBeDefined();
+  expect(compiled?.launch?.args).toEqual([
+    { kind: 'literal', value: '--config' },
+    { kind: 'artifact', path: 'config/echo.json' },
+    { kind: 'literal', value: '--verbose' },
+  ]);
+  expect(compiled?.launch?.env).toEqual({ ECHO_MODE: 'relocatable' });
+  expect(manifest.web?.apps.map((app) => Object.keys(app).sort())).toEqual([['allow', 'app', 'name', 'resourceUri', 'server']]);
+  expect(manifest.web?.apps[0]?.server).toBe(compiled?.name);
 
   const machineAbsolutes = [projectRoot, artifactRoot, tmpdir(), process.cwd()];
   for (const leaked of machineAbsolutes) {
@@ -255,25 +270,48 @@ it('emits a relocatable manifest that survives moving the composite root', async
     await access(resolve(moved, pointer.document));
   }
 
+  interface ForgedLaunch {
+    args: ({ kind: 'artifact'; path: string } | { kind: 'literal'; value: string })[];
+    entry: string;
+    worker?: string;
+  }
   const forge = (): {
-    executables: { mcpServers: { entry?: { path: string } }[] };
-    web: { apps: { entry: string }[] };
+    executables: { mcpServers: { launch?: ForgedLaunch }[] };
+    web: { apps: { server: string }[] };
   } => JSON.parse(manifestBytes);
-  const forged = forge();
-  const entry = forged.executables.mcpServers.find((server) => server.entry !== undefined)?.entry;
-  if (entry === undefined) throw new Error('expected a compiled MCP entry to forge');
-  entry.path = resolve(moved, entry.path);
-  expect(() => parseArtifactManifest(`${stableJson(forged)}\n`)).toThrow(
-    /executables\.mcpServers\[\d+\]\.entry\.path must be a safe relative POSIX path/u,
+  const forgedLaunch = (forged: ReturnType<typeof forge>): ForgedLaunch => {
+    const launch = forged.executables.mcpServers.find((server) => server.launch !== undefined)?.launch;
+    if (launch === undefined) throw new Error('expected a compiled MCP launch to forge');
+    return launch;
+  };
+
+  const absoluteEntry = forge();
+  forgedLaunch(absoluteEntry).entry = resolve(moved, forgedLaunch(absoluteEntry).entry);
+  expect(() => parseArtifactManifest(`${stableJson(absoluteEntry)}\n`)).toThrow(
+    /executables\.mcpServers\[\d+\]\.launch\.entry must be a safe relative POSIX path/u,
   );
 
-  const absoluteWebEntry = forge();
-  absoluteWebEntry.web.apps[0]!.entry = resolve(moved, absoluteWebEntry.web.apps[0]!.entry);
-  expect(() => parseArtifactManifest(`${stableJson(absoluteWebEntry)}\n`)).toThrow(
-    /web\.apps\[echo\/echo\]\.entry must be a safe relative POSIX path/u,
+  const absoluteArgument = forge();
+  forgedLaunch(absoluteArgument).args[1] = { kind: 'artifact', path: resolve(moved, 'config/echo.json') };
+  expect(() => parseArtifactManifest(`${stableJson(absoluteArgument)}\n`)).toThrow(
+    /executables\.mcpServers\[\d+\]\.launch\.args\[1\]\.path must be a safe relative POSIX path/u,
   );
 
-  const unlistedWebEntry = forge();
-  unlistedWebEntry.web.apps[0]!.entry = 'mcp/not-a-file.mjs';
-  expect(() => parseArtifactManifest(`${stableJson(unlistedWebEntry)}\n`)).toThrow(/web\.apps\[echo\/echo\]\.entry/u);
+  const unlistedArgument = forge();
+  forgedLaunch(unlistedArgument).args[1] = { kind: 'artifact', path: 'config/not-a-file.json' };
+  expect(() => parseArtifactManifest(`${stableJson(unlistedArgument)}\n`)).toThrow(
+    /executables\.mcpServers\[mcp:echo\]\.launch\.args\[1\]\.path names "config\/not-a-file\.json", which is not inside the artifact/u,
+  );
+
+  const unlistedWorker = forge();
+  forgedLaunch(unlistedWorker).worker = 'mcp/not-a-file.mjs';
+  expect(() => parseArtifactManifest(`${stableJson(unlistedWorker)}\n`)).toThrow(
+    /executables\.mcpServers\[mcp:echo\]\.launch\.worker names "mcp\/not-a-file\.mjs", which is not a manifest file/u,
+  );
+
+  const unlaunchableWebServer = forge();
+  unlaunchableWebServer.web.apps[0]!.server = 'nobody';
+  expect(() => parseArtifactManifest(`${stableJson(unlaunchableWebServer)}\n`)).toThrow(
+    /web\.apps\[echo\/echo\]\.server names "nobody", which is not a compiled MCP server with a launch record/u,
+  );
 }, 180_000);

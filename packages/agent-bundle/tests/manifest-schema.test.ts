@@ -131,11 +131,16 @@ const validManifest = (): ArtifactManifest => ({
         { id: 'dashboard', name: 'Dashboard', path: 'runtime/mcp/apps/dashboard.html', resourceUri: 'ui://review/dashboard' },
         { id: 'vendor', name: 'Vendor', prebuilt: true, resourceUri: 'ui://review/vendor' },
       ],
-      entry: { path: 'runtime/mcp/review.mjs', worker: 'runtime/mcp/review.worker.mjs' },
       hosts: ['codex'],
       id: 'review',
       kind: 'compiled',
-      name: 'Review',
+      launch: {
+        args: [{ kind: 'literal', value: '--stdio' }, { kind: 'artifact', path: 'runtime/mcp/apps' }],
+        entry: 'runtime/mcp/review.mjs',
+        env: { REVIEW_MODE: 'web' },
+        worker: 'runtime/mcp/review.worker.mjs',
+      },
+      name: 'review',
       transport: 'stdio',
     }],
     scripts: [{
@@ -254,9 +259,6 @@ const validManifest = (): ArtifactManifest => ({
     apps: [{
       allow: ['call-tool'],
       app: 'review/dashboard',
-      args: ['--stdio'],
-      entry: 'runtime/mcp/review.mjs',
-      env: { REVIEW_MODE: 'web' },
       input: { limit: 5 },
       name: 'dashboard',
       resourceUri: 'ui://review/dashboard',
@@ -451,7 +453,13 @@ const parserOnlyRules: readonly { readonly apply: (manifest: MutableManifest) =>
   { apply: (manifest) => { manifest.compiler.adapters[0]!.host = 'zed'; }, rule: 'compiler.adapters hosts match projections' },
   { apply: (manifest) => { manifest.executables.bins[0]!.path = 'runtime/bin/missing.mjs'; }, rule: 'bins[].path names a manifest file' },
   { apply: (manifest) => { manifest.executables.hooks[0]!.path = 'runtime/hooks/missing.mjs'; }, rule: 'hooks[].path names a manifest file' },
-  { apply: (manifest) => { manifest.executables.mcpServers[0]!.entry!.worker = 'runtime/mcp/missing.mjs'; }, rule: 'mcpServers[].entry.worker names a manifest file' },
+  { apply: (manifest) => { manifest.executables.mcpServers[0]!.launch!.entry = 'runtime/mcp/missing.mjs'; }, rule: 'mcpServers[].launch.entry names a manifest file' },
+  { apply: (manifest) => { manifest.executables.mcpServers[0]!.launch!.worker = 'runtime/mcp/missing.mjs'; }, rule: 'mcpServers[].launch.worker names a manifest file' },
+  {
+    apply: (manifest) => { manifest.executables.mcpServers[0]!.launch!.args[1] = { kind: 'artifact', path: 'runtime/missing' }; },
+    rule: 'mcpServers[].launch.args[] artifact paths are inside the root',
+  },
+  { apply: (manifest) => { manifest.web!.apps[0]!.server = 'lint'; }, rule: 'web.apps[].server names a compiled server with a launch record' },
   { apply: (manifest) => { manifest.executables.mcpServers[0]!.apps[0]!.path = 'runtime/mcp/apps/missing.html'; }, rule: 'mcpServers[].apps[].path names a manifest file' },
   { apply: (manifest) => { manifest.executables.scripts[0]!.worker = 'runtime/scripts/missing.mjs'; }, rule: 'scripts[].worker names a manifest file' },
   { apply: (manifest) => { manifest.projections[0]!.documents.plugin = 'claude/missing.json'; }, rule: 'projections[].documents.* name manifest files' },
@@ -533,7 +541,9 @@ const schemaEncodedRules: readonly { readonly apply: (manifest: MutableManifest)
   { apply: (manifest) => { manifest.routes.scripts[0]!.kind = 'event-route'; }, rule: 'script routes are script routes' },
   { apply: (manifest) => { manifest.routes.servers[0]!.routes[0]!.kind = 'cli'; }, rule: 'server routes are MCP route kinds' },
   { apply: (manifest) => { manifest.routes.layouts[0]!.serverId = 'review'; }, rule: 'root layouts carry no serverId' },
-  { apply: (manifest) => { manifest.executables.mcpServers[0]!.kind = 'remote'; }, rule: 'only compiled servers carry an entry' },
+  { apply: (manifest) => { manifest.executables.mcpServers[0]!.kind = 'remote'; }, rule: 'only compiled servers carry a launch record' },
+  { apply: (manifest) => { (manifest.executables.mcpServers[0]!.launch!.args[0] as Record_).kind = 'file'; }, rule: 'launch arguments are artifact or literal' },
+  { apply: (manifest) => { manifest.executables.mcpServers[0]!.launch!.args[1] = { kind: 'artifact', path: '../escape' }; }, rule: 'launch artifact arguments are relocatable paths' },
   { apply: (manifest) => { manifest.executables.mcpServers[0]!.apps[1]!.path = 'runtime/mcp/apps/vendor.html'; }, rule: 'prebuilt apps carry no path' },
   { apply: (manifest) => { (manifest.compiler.validation.artifact as Record_).status = 'failed'; }, rule: 'validation status is passed' },
   { apply: (manifest) => { (manifest.routes.servers[0]!.routes[1]!.inputSchema as Record_).additionalProperties = true; }, rule: 'inputSchema is closed' },
@@ -598,13 +608,13 @@ it('agrees with the parser on every delete, unknown-key, and retype mutation, ex
   const pointers = new Set(collectObjects(fixture).map((site) => site.pointer));
   expect(pointers).toContain('/routes/servers/0/routes/1/inputSchema/properties/tags/items');
   expect(pointers).toContain('/routes/cli/commands/0/mcp');
-  expect(pointers).toContain('/executables/mcpServers/0/entry');
+  expect(pointers).toContain('/executables/mcpServers/0/launch/args/1');
   expect(pointers.size).toBeGreaterThan(60);
   expect(accepted).toEqual(expect.arrayContaining([
     '/application: delete description',
     '/distribution: delete install',
     '/executables/hooks/1: delete timeout',
-    '/executables/mcpServers/0/entry: delete worker',
+    '/executables/mcpServers/0/launch: delete worker',
     '/executables/scripts/0: delete rendered',
     '/compiler/project: delete packageVersion',
     '/projections/1: delete marketplace',

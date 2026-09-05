@@ -275,10 +275,10 @@ const manifestFor = (
             prebuilt: true,
             resourceUri: 'ui://runner',
           }],
-          entry: { path: 'mcp/runner.mjs' },
           hosts: [fixtureTarget],
           id: 'mcp:runner',
           kind: 'compiled',
+          launch: { args: [], entry: 'mcp/runner.mjs', env: {} },
           name: 'runner',
           transport: 'stdio',
         }]

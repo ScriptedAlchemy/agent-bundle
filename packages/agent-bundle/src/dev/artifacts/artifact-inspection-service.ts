@@ -376,11 +376,11 @@ export class ArtifactInspectionService {
     const servers: ArtifactInspectionMcpServer[] = [];
     const projections = new Map(manifest.projections.map((projection) => [projection.host, projection]));
     for (const server of manifest.executables.mcpServers) {
-      const entryPaths = server.entry === undefined
+      const entryPaths = server.launch === undefined
         ? Object.freeze([])
         : Object.freeze([
-          server.entry.path,
-          ...(server.entry.worker === undefined ? [] : [server.entry.worker]),
+          server.launch.entry,
+          ...(server.launch.worker === undefined ? [] : [server.launch.worker]),
         ]);
       for (const target of server.hosts) {
         const manifestPath = projections.get(target)?.documents.mcp;

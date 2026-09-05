@@ -121,16 +121,17 @@ e2e('serves examples/mcp-app through `<plugin> web` from its composite root and 
     expect(built.diagnostics.filter((entry) => entry.severity === 'error')).toEqual([]);
     const bin = join(artifactRoot, 'bin', `${pluginName}.mjs`);
     await expect(stat(bin)).resolves.toMatchObject({});
-    const manifest = JSON.parse(await readFile(join(artifactRoot, 'agent-bundle.manifest.json'), 'utf8')) as { readonly web?: unknown };
+    const manifest = JSON.parse(await readFile(join(artifactRoot, 'agent-bundle.manifest.json'), 'utf8')) as {
+      readonly executables: { readonly mcpServers: readonly Readonly<Record<string, unknown>>[] };
+      readonly web?: unknown;
+    };
     const mcpEntries = (await readdir(join(artifactRoot, 'mcp'))).filter((name) => name.endsWith('.mjs')).sort();
     expect(mcpEntries).toHaveLength(1);
+    expect(manifest.executables.mcpServers.map((server) => server['launch'])).toEqual([{ args: [], entry: `mcp/${mcpEntries[0]!}`, env: {} }]);
     expect(manifest.web).toEqual({
       apps: [{
         allow: ['call-tool'],
         app,
-        args: [],
-        entry: `mcp/${mcpEntries[0]!}`,
-        env: {},
         name: 'status',
         resourceUri,
         server: 'status',

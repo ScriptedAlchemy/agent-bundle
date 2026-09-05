@@ -37,7 +37,7 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 | --- | --- |
 | `install <host> --from <root>`、`uninstall` | `<root>` 下的清单。身份——插件名与版本——来自 `application`；市场名来自 `projections[host].marketplace`；宿主被指向的文件来自 `projections[host].documents.plugin`。`install` 从 `files[]` 加清单自身和操作员 `.env` 覆盖层取得复制集合与产物内容哈希，并直接读取这些固定路径而不遍历产物目录。没有清单、清单不是规范字节、没有该宿主的投影、投影没有宿主插件清单，或某个 `files[]` 条目缺失或摘要不符的根目录，都以 `AB7001` 拒绝。 |
 | `doctor --from <root>` | 与 `install` 相同的身份、固定路径文件集合与内容哈希读取，按被检查的宿主逐一进行；它对树运行的静态校验（`AB7319`）继续按投影进行。 |
-| `serve-app`、`mcp list` / `invoke` / `run` | 从 `executables.mcpServers[]` 取服务器编译后的 `entry` 及其 `apps[]`；省略 `--target` 时从 `projections[]` 选出宿主。 |
+| `serve-app`、`mcp list` / `invoke` / `run` | 从 `executables.mcpServers[]` 取服务器编译后的 `launch` 记录及其 `apps[]`；省略 `--target` 时从 `projections[]` 选出宿主。 |
 | `hooks list` / `simulate` | `executables.hooks[]`——可被模拟的编译器 wrapper。 |
 | `inspect --json` | 当产物输出位置存在已构建的清单时，追加一份 `output.manifest` 摘要——投影与可执行文件——因此 JSON 消费者无需第二次探测。`inspect --artifact <root>` 通过该文件读取裸的复合根，并打印 Workbench 渲染的同一份 `application` 投影。 |
 | `eval --artifact`、`agent-bundle/test` 的已安装宿主证明 | 用 `projections[]` 与 `executables.hooks[]` 取代任何宿主文档。 |
@@ -161,7 +161,7 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 | --- | --- |
 | `bins[]` | 路由式 CLI 可执行文件，按 `name` 排序：`{ name, path, worker?, hosts[] }`。`path` 为 `bin/<name>.mjs`；`hosts[]` 是携带 CLI bin 的所选投影。 |
 | `hooks[]` | 每个宿主的每个编译器钩子 wrapper 一行，先按 `host` 再按 `id` 排序：`{ id, name, event, host, kind, path, routeId?, timeout? }`。`kind` 为 `event-route`（分派 `src/events/**` 路由的 wrapper）或 `config`（配置中声明的钩子）；`routeId` 指向 `event-route` wrapper 所分派的 `routes.events[]` 行，且仅在该 `kind` 下出现；`event` 是钩子事件（`afterTool`、`sessionStart`……）；`timeout` 是以秒计的原生钩子超时。作者直接写进宿主钩子文档的原生命令与预构建 payload 命令不是行。 |
-| `mcpServers[]` | 每个触达所选宿主的 MCP 服务器一行，按 `id` 排序：`{ id, name, transport, kind, hosts[], entry?, apps[] }`。`kind` 为 `compiled`（产物启动 `entry.path`，`entry.worker` 是其 Flight worker）、`command`（宿主运行配置的命令）或 `remote`（宿主连接一个 URL）；`entry` 恰对 `compiled` 服务器出现。`apps[]` 按 `id` 排序：编译后的 MCP App 视图为 `{ id, name, resourceUri, path? }`（`path` 是其自包含 HTML），由预构建 payload 提供的 App 为 `{ id, name, resourceUri, prebuilt: true }`。 |
+| `mcpServers[]` | 每个触达所选宿主的 MCP 服务器一行，按 `id` 排序：`{ id, name, transport, kind, hosts[], launch?, apps[] }`。`kind` 为 `compiled`（产物按其 `launch` 记录启动服务器）、`command`（宿主运行配置的命令）或 `remote`（宿主连接一个 URL）；`launch` 恰对 `compiled` 服务器出现，是每个宿主 MCP 文档所投影、也是 `<plugin> web` 所启动的唯一启动记录：`{ entry, worker?, args[], env }`。`entry` 是根相对的已编译可执行文件，`worker` 是其 Flight worker（二者都对应一行 `files[]`）；`args[]` 是作者在 entry 之后声明的参数，按顺序排列，每项为 `{ kind: 'artifact', path }`（根内的根相对路径——一行 `files[]` 或 payload 目录下的路径——由锚定在 `agent-bundle:path:plugin-root/` 上的参数写出）或 `{ kind: 'literal', value }`（其余所有参数，与声明完全一致；只是看起来像路径的参数仍是 literal）；`env` 是声明的静态环境。`args[]` literal 与 `env` 值中的 `agent-bundle:path:*` 令牌由启动器展开，清单本身从不展开。`apps[]` 按 `id` 排序：编译后的 MCP App 视图为 `{ id, name, resourceUri, path? }`（`path` 是其自包含 HTML），由预构建 payload 提供的 App 为 `{ id, name, resourceUri, prebuilt: true }`。 |
 | `scripts[]` | 每个输出脚本一行，按 `id` 排序：`{ id, name, path, worker?, mode, hosts[], rendered? }`。`mode` 为 `bundle` 或 `copy`；`rendered: { routeId }` 指向渲染式脚本所渲染的 `routes.scripts[]` 路由。 |
 
 ### `distribution`
@@ -181,7 +181,7 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 | 字段 | 必填 | 内容 |
 | --- | --- | --- |
 | `open` | 是 | `browser` 或 `never`：宿主开始监听后 `<plugin> web` 是否打开默认浏览器。 |
-| `apps[]` | 是 | 按 `app` 排序且唯一。每行包含 `app`（`<server>/<name>`）、`name`、`server`、`resourceUri`、`entry`（根相对的已编译 MCP 可执行文件，对应一行 `files[]`）、`args`（服务器在 entry 之后声明的参数）与 `env`（其声明的静态环境，二者的 `agent-bundle:path:*` 令牌均不展开）、`allow[]`（预先批准的 App 发起的同意能力），以及打开调用可选的 `tool` 与 `input`。 |
+| `apps[]` | 是 | 按 `app` 排序且唯一。每行包含 `app`（`<server>/<name>`）、`name`、`server`、`resourceUri`、`allow[]`（预先批准的 App 发起的同意能力），以及打开调用可选的 `tool` 与 `input`。该行不携带任何启动字段：`server` 指向一行 kind 为 `compiled` 的 `executables.mcpServers[]`，启动来自该行的 `launch` 记录。 |
 
 ## 编译器记录（`compiler`，`recordVersion`）
 
@@ -235,8 +235,11 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
   `compiler.project.sourceInputs` 路径。
 - `compiler.adapters` 的宿主等于 `projections[]` 的宿主。
 - 每个指针——`projections[].documents.*`、`executables.*[].path` 与 `worker`、
-  `executables.mcpServers[].entry.*`、`executables.mcpServers[].apps[].path`、
-  `distribution.install.*`、`web.apps[].entry`——都指向一行 `files[]`。
+  `executables.mcpServers[].launch.entry` 与 `.worker`、`executables.mcpServers[].apps[].path`、
+  `distribution.install.*`——都指向一行 `files[]`。
+- `executables.mcpServers[].launch` 恰在 `kind` 为 `compiled` 时出现；每个 kind 为 `artifact` 的
+  `launch.args[]` 项都指向一行 `files[]` 或根下的一个目录。
+- 每个 `web.apps[].server` 都指向一行 kind 为 `compiled` 的 `executables.mcpServers[]`。
 - 每个 `hosts[]` 项与每个 `hooks[].host` 都指向一行 `projections[]`。
 - 每个 `distribution.payloads[].name` 目录下至少有一行 kind 为 `prebuilt` 的 `files[]`。
 - `compiler.validation.projections[]` 的宿主等于 `projections[]` 的宿主。
@@ -294,9 +297,16 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
           { "id": "mcp-app:hauler:dashboard", "name": "dashboard",
             "path": "mcp-apps/dashboard.html", "resourceUri": "ui://hauler/dashboard" }
         ],
-        "entry": { "path": "mcp/mcp-hauler-….mjs", "worker": "mcp/mcp-hauler-…-flight.mjs" },
-        "hosts": ["claude"], "id": "mcp:hauler", "kind": "compiled", "name": "hauler",
-        "transport": "stdio" }
+        "hosts": ["claude"], "id": "mcp:hauler", "kind": "compiled",
+        "launch": {
+          "args": [
+            { "kind": "literal", "value": "--config" },
+            { "kind": "artifact", "path": "config/hauler.json" }
+          ],
+          "entry": "mcp/mcp-hauler-….mjs",
+          "env": { "HAULER_CACHE": "agent-bundle:path:plugin-data/cache" },
+          "worker": "mcp/mcp-hauler-…-flight.mjs" },
+        "name": "hauler", "transport": "stdio" }
     ],
     "scripts": []
   },
