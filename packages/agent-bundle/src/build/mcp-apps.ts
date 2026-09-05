@@ -16,15 +16,14 @@ import { DiagnosticError, freezeDiagnostics, type Diagnostic } from '../core/dia
 import type { AgentBundleToolsConfig, NormalizedMcpApp } from '../core/types.ts';
 import { stableJson } from '../core/digest.ts';
 import { MAX_APP_HTML_BYTES } from '../core/mcp-app-limits.ts';
-import { posixRelativeWhenInside } from '../core/paths.ts';
 import { escapeRegExp } from '../core/strings.ts';
 import type { AgentBundleMeta } from '../meta.ts';
 import { appRuntimePath, appRuntimeSpecifier } from './app-runtime.ts';
-import type { CompilationEvidence, CompileResult, ExternalIR, ModuleIR } from './compile-result.ts';
+import type { CompilationEvidence, CompileResult } from './compile-result.ts';
 import { composeToolsLayers, frameworkInvariantLayer } from './compose-layers.ts';
 import { ArtifactDependencyAuditPlugin } from './dependency-audit-plugin.ts';
 import { listArtifactFiles, resolveArtifactDestination } from './emit.ts';
-import { classifyExternal, viewSelfContainmentDiagnostics } from './external-policy.ts';
+import { viewSelfContainmentDiagnostics } from './external-policy.ts';
 import {
   mcpAppBundlerFailureDiagnostic,
   mcpAppCompileErrorDiagnostics,
@@ -44,7 +43,7 @@ import {
   virtualModulesPluginConstructor,
 } from './meta.ts';
 import { collectBundledOutputEvidence } from './provenance.ts';
-import { moduleKindOf, packageNameOfResource } from './rslib.ts';
+import { compileResultOf } from './rslib.ts';
 import { runtimeIgnoredRoot } from './runtime-path.ts';
 
 export type { McpAppCompileMode, McpAppOutputSize } from './mcp-app-diagnostics.ts';
@@ -572,32 +571,12 @@ export const compileMcpApps = async (
     sourceInputs: evidenceByPath.get(`mcp-apps/${app.name}.html`) ?? (() => { throw new Error(`Missing bundled MCP App evidence for ${JSON.stringify(app.name)}.`); })(),
   })));
   const emittedAssets = new Set(compiledApps.map((app) => `mcp-apps/${app.name}.html`));
-  const compileResults = Object.freeze(compiledApps.map((app, index): CompileResult => {
-    const asset = `mcp-apps/${app.name}.html`;
-    const evidence = viewEvidence[index]!;
-    return Object.freeze({
-      assets: Object.freeze([{ path: asset, sourceInputs: app.sourceInputs }]),
-      diagnostics: Object.freeze([]),
-      externals: Object.freeze(evidence.externals.map((external): ExternalIR => ({
-        asset,
-        externalType: external.externalType,
-        issuers: external.issuers.map((issuer) => posixRelativeWhenInside(options.cwd, issuer)),
-        kind: classifyExternal(external, { asset, emittedAssets }),
-        request: external.request,
-        userRequest: external.userRequest,
-      }))),
-      modules: Object.freeze(evidence.modules.map((module): ModuleIR => {
-        const packageName = module.resource === undefined ? undefined : packageNameOfResource(module.resource);
-        return {
-          asset,
-          identifier: module.identifier,
-          kind: moduleKindOf(module.resource, options.cwd, []),
-          ...(packageName === undefined ? {} : { package: packageName }),
-          ...(module.resource === undefined ? {} : { resource: module.resource }),
-        };
-      })),
-    });
-  }));
+  const compileResults = Object.freeze(compiledApps.map((app, index) => compileResultOf(viewEvidence[index]!, {
+    asset: { path: `mcp-apps/${app.name}.html`, sourceInputs: app.sourceInputs },
+    cwd: options.cwd,
+    dependencyRoots: [],
+    emittedAssets,
+  })));
   /**
    * One App's advisories: its Rspack warnings, then the size advisory for
    * the document that was emitted for it — by default this compile's, or the

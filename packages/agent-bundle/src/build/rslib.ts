@@ -14,6 +14,7 @@ import { isRecord } from '../core/strict-json.ts';
 import type { AgentBundleToolsConfig } from '../core/types.ts';
 import type { AgentBundleMeta } from '../meta.ts';
 import type {
+  AssetIR,
   CompilationEvidence,
   CompileResult,
   ExternalIR,
@@ -763,7 +764,7 @@ const assertDistinctLibIds = (entries: readonly RslibEntry[]): void => {
   }
 };
 
-export const packageNameOfResource = (resource: string): string | undefined => {
+const packageNameOfResource = (resource: string): string | undefined => {
   const segments = resource.replaceAll('\\', '/').split('/');
   const nodeModules = segments.lastIndexOf('node_modules');
   if (nodeModules === -1) return undefined;
@@ -774,7 +775,42 @@ export const packageNameOfResource = (resource: string): string | undefined => {
     : name;
 };
 
-export const moduleKindOf = (
+/** Lowers one compiler's evidence to the IR of the single asset it emitted. */
+export const compileResultOf = (
+  record: CompilationEvidence,
+  options: {
+    readonly asset: AssetIR;
+    readonly cwd: string;
+    readonly dependencyRoots: readonly string[];
+    readonly emittedAssets: ReadonlySet<string>;
+  },
+): CompileResult => {
+  const asset = options.asset.path;
+  return Object.freeze({
+    assets: Object.freeze([options.asset]),
+    diagnostics: Object.freeze([]),
+    externals: Object.freeze(record.externals.map((external): ExternalIR => ({
+      asset,
+      externalType: external.externalType,
+      issuers: external.issuers.map((issuer) => posixRelativeWhenInside(options.cwd, issuer)),
+      kind: classifyExternal(external, { asset, emittedAssets: options.emittedAssets }),
+      request: external.request,
+      userRequest: external.userRequest,
+    }))),
+    modules: Object.freeze(record.modules.map((module): ModuleIR => {
+      const packageName = module.resource === undefined ? undefined : packageNameOfResource(module.resource);
+      return {
+        asset,
+        identifier: module.identifier,
+        kind: moduleKindOf(module.resource, options.cwd, options.dependencyRoots),
+        ...(packageName === undefined ? {} : { package: packageName }),
+        ...(module.resource === undefined ? {} : { resource: module.resource }),
+      };
+    })),
+  });
+};
+
+const moduleKindOf = (
   resource: string | undefined,
   cwd: string,
   dependencyRoots: readonly string[],
@@ -869,29 +905,11 @@ export const buildRslibSurfaces = async (
           `Rslib did not record exactly one compilation evidence result for ${JSON.stringify(entry.outputRelativePath)}.`,
         );
       }
-      const externals = record.externals.map((external): ExternalIR => ({
-        asset: entry.outputRelativePath,
-        externalType: external.externalType,
-        issuers: external.issuers.map((issuer) => posixRelativeWhenInside(options.cwd, issuer)),
-        kind: classifyExternal(external, { asset: entry.outputRelativePath, emittedAssets }),
-        request: external.request,
-        userRequest: external.userRequest,
-      }));
-      const modules = record.modules.map((module): ModuleIR => {
-        const packageName = module.resource === undefined ? undefined : packageNameOfResource(module.resource);
-        return {
-          asset: entry.outputRelativePath,
-          identifier: module.identifier,
-          kind: moduleKindOf(module.resource, options.cwd, dependencyRoots),
-          ...(packageName === undefined ? {} : { package: packageName }),
-          ...(module.resource === undefined ? {} : { resource: module.resource }),
-        };
-      });
-      return [entry, Object.freeze({
-        assets: Object.freeze([evidenceByPath.get(entry.outputRelativePath)!]),
-        diagnostics: Object.freeze([]),
-        externals: Object.freeze(externals),
-        modules: Object.freeze(modules),
+      return [entry, compileResultOf(record, {
+        asset: evidenceByPath.get(entry.outputRelativePath)!,
+        cwd: options.cwd,
+        dependencyRoots,
+        emittedAssets,
       })] as const;
     }));
     return Object.freeze(surfaces.map((surface) => {
