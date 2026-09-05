@@ -218,8 +218,11 @@ jobs:
       # regression into a failure: rstest prints "Running shard i of N (...)"
       # only when the flag took effect. `pipefail` is set explicitly because
       # the default `run:` shell is `bash -e` without it, which would let a
-      # failed rstest hide behind tee's exit status; the banner is coloured
-      # under GITHUB_ACTIONS, so the ANSI codes are stripped before matching.
+      # failed rstest hide behind tee's exit status. The banner check is one
+      # grep, not `sed | grep -q`: under pipefail, grep -q exiting on the
+      # match sends the producer SIGPIPE (status 141) and the pipeline reads
+      # as failed; the pattern instead allows the colour codes rstest emits
+      # under GITHUB_ACTIONS before the text.
       - if: startsWith(matrix.leg, 'integration-')
         name: Integration pool shard (${{ matrix.leg }})
         env:
@@ -229,7 +232,7 @@ jobs:
           index="${LEG#integration-}"
           log="$RUNNER_TEMP/integration-shard.log"
           pnpm test:integration:run --shard "${index}/${INTEGRATION_SHARD_COUNT}" 2>&1 | tee "$log"
-          if ! sed -E 's/\x1b\[[0-9;]*m//g' "$log" | grep -q "^Running shard ${index} of ${INTEGRATION_SHARD_COUNT} "; then
+          if ! grep -qP "^(?:\x1b\[[0-9;]*m)*Running shard ${index} of ${INTEGRATION_SHARD_COUNT} \(" "$log"; then
             echo "::error::rstest did not run as shard ${index}/${INTEGRATION_SHARD_COUNT} (no 'Running shard' banner) — the --shard flag was dropped and the whole pool ran."
             exit 1
           fi
