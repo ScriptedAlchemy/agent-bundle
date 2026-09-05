@@ -8,6 +8,7 @@ import type {
 import type { CompiledAgentRoute, CompiledCliCommand, CompiledLayout, CompiledProvider } from '../routes/types.ts';
 import type { SkillHostDocument, SkillIr, SkillTreeLayoutDecision } from '../skills/ir.ts';
 import type { CapabilityState } from './capabilities.ts';
+import type { ServeAppAllowCapability } from './mcp-app-allow.ts';
 
 export interface AgentBundlePluginConfig {
   description?: string;
@@ -138,6 +139,26 @@ export interface AgentBundleMcpServer {
 
 export interface AgentBundleMcpConfig {
   servers: Readonly<Record<string, AgentBundleMcpServer>>;
+}
+
+/** One MCP App exposed by the generated artifact's browser surface. */
+export interface AgentBundleWebAppConfig {
+  /** App selector in `<server>/<app>` form. */
+  app: string;
+  /** App-initiated consent capabilities approved before launch. */
+  allow?: readonly ServeAppAllowCapability[];
+  /** Opening tool input. */
+  input?: Readonly<Record<string, unknown>>;
+  /** Tool used to open the App. */
+  tool?: string;
+}
+
+/** Browser-host surface emitted into a generated artifact. */
+export interface AgentBundleWebConfig {
+  /** MCP Apps exposed by the artifact. */
+  apps: ReadonlyArray<string | AgentBundleWebAppConfig>;
+  /** Whether the generated command opens the system browser. Defaults to `never`. */
+  open?: 'browser' | 'never';
 }
 
 /** Optional artifact output location config, inspired by Rsbuild's `output.distPath`. */
@@ -326,6 +347,7 @@ export interface AgentBundleConfig extends AgentBundleConfigExtensions {
   state?: AgentBundleStateConfig;
   targets?: string[];
   tools?: AgentBundleToolsConfig;
+  web?: AgentBundleWebConfig;
   [key: string]: unknown;
 }
 
@@ -474,6 +496,36 @@ export interface NormalizedMcpApp {
   readonly template?: string;
 }
 
+/** One resolved MCP App exposed by the artifact browser host. */
+export interface NormalizedWebApp {
+  /** Pre-approved App-initiated consent capabilities. */
+  readonly allow: readonly ServeAppAllowCapability[];
+  /** Authored `<server>/<app>` selector. */
+  readonly app: string;
+  /** App name within its server. */
+  readonly appName: string;
+  /** Optional opening tool input. */
+  readonly input?: Readonly<Record<string, unknown>>;
+  /** App resource URI. */
+  readonly resourceUri: string;
+  /** Normalized owning MCP server id. */
+  readonly serverId: string;
+  /** Owning MCP server name used by runtime commands. */
+  readonly serverName: string;
+  /** Optional opening tool. */
+  readonly tool?: string;
+}
+
+/** Normalized generated browser-host surface. */
+export interface NormalizedWeb {
+  /** Exposed Apps in authored order. */
+  readonly apps: readonly NormalizedWebApp[];
+  /** Browser-opening policy. */
+  readonly open: 'browser' | 'never';
+  /** Configuration source that declared the surface. */
+  readonly provenance: { readonly sourcePath: string };
+}
+
 export interface NormalizedScript {
   readonly id: string;
   readonly mode: 'bundle' | 'copy';
@@ -496,6 +548,8 @@ export interface NormalizedBinEntry {
   readonly name: string;
   readonly provenance: SourceProvenance;
   readonly source: string;
+  /** This framework-generated bin also dispatches the artifact `web` command. */
+  readonly web?: true;
 }
 
 /** The normalized single-entry ESM+dts library output of the package build. */
@@ -735,6 +789,8 @@ export interface NormalizedPlugin {
   readonly skills: readonly NormalizedSkill[];
   readonly state?: NormalizedStateDefinition;
   readonly targets: readonly NormalizedTarget[];
+  /** Generated browser-host surface exposed by the artifact. */
+  readonly web?: NormalizedWeb;
 }
 
 export interface NormalizationConfigExtension {

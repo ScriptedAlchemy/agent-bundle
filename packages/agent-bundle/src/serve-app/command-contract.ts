@@ -5,24 +5,13 @@
  * and the ready line printed once the App's host listens. One module writes
  * and reads them so the two never drift — a parser that lagged the CLI's own
  * output would leave a routed command waiting on a server that is already
- * up. Plain Node, no imports: it is bundled into generated executables.
+ * up. Plain Node: it is bundled into generated executables.
  */
-import type { McpAppConsentCapability } from '../dev/mcp-apps/mcp-app-consent.ts';
-
-/**
- * The consent capabilities `--allow` may approve on the operator's behalf:
- * the App-initiated actions. Browser hardware and clipboard permissions
- * (`camera`, `microphone`, `geolocation`, `clipboard-write`) always wait for
- * an Allow/Deny decision in the host page, as in the Workbench.
- */
-export const serveAppAllowCapabilities = [
-  'call-tool', 'download-file', 'open-external-link', 'request-display-mode',
-] as const satisfies readonly McpAppConsentCapability[];
-
-export type ServeAppAllowCapability = (typeof serveAppAllowCapabilities)[number];
-
-export const isServeAppAllowCapability = (value: string): value is ServeAppAllowCapability =>
-  (serveAppAllowCapabilities as readonly string[]).includes(value);
+export {
+  isServeAppAllowCapability,
+  serveAppAllowCapabilities,
+  type ServeAppAllowCapability,
+} from '../core/mcp-app-allow.ts';
 
 export interface ServeAppReadyLine {
   /** The App selector as the operator gave it: `<server>/<app>` or `<server>/ui://...`. */

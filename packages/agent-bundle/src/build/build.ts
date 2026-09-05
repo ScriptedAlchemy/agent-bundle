@@ -52,6 +52,7 @@ import {
 } from './provenance.ts';
 import { validateArtifact, validateArtifactFiles } from './validate-artifact.ts';
 import { deepFreeze } from '../core/freeze.ts';
+import { parseWebManifest, type WebManifest } from '../web-host/manifest.ts';
 
 
 export interface BuildResult {
@@ -308,7 +309,46 @@ const manifestTargets = (
   })
   .sort((left, right) => left.name.localeCompare(right.name)));
 
+const webManifestFor = (options: {
+  readonly artifactRoot: string;
+  readonly compiledMcpEntries: readonly CompiledMcpEntry[];
+  readonly model: NormalizedPlugin;
+}): WebManifest | undefined => {
+  if (options.model.web === undefined) return undefined;
+  const entries = new Map(options.compiledMcpEntries.map((entry) => [
+    entry.id,
+    relative(options.artifactRoot, entry.output).replaceAll('\\', '/'),
+  ]));
+  const servers = new Map(options.model.mcpServers.map((server) => [server.id, server]));
+  const apps = options.model.web.apps.map((app) => {
+    const server = servers.get(app.serverId);
+    const declaredEntry = server?.args?.[0];
+    const pluginRootPrefix = `${pathTokens.pluginRoot}/`;
+    const entry = entries.get(app.serverId) ??
+      (declaredEntry?.startsWith(pluginRootPrefix) === true
+        ? declaredEntry.slice(pluginRootPrefix.length)
+        : undefined);
+    if (server === undefined || entry === undefined) {
+      throw new Error(`Web App ${JSON.stringify(app.app)} has no compiled MCP server entry.`);
+    }
+    return {
+      allow: [...app.allow],
+      app: app.app,
+      entry,
+      env: { ...(server.env ?? {}) },
+      ...(app.input === undefined ? {} : { input: structuredClone(app.input) }),
+      name: app.appName,
+      resourceUri: app.resourceUri,
+      server: app.serverName,
+      ...(app.tool === undefined ? {} : { tool: app.tool }),
+    };
+  }).sort((left, right) => left.app.localeCompare(right.app));
+  return parseWebManifest({ apps, open: options.model.web.open });
+};
+
 const manifestFor = (options: {
+  readonly artifactRoot: string;
+  readonly compiledMcpEntries: readonly CompiledMcpEntry[];
   readonly files: ArtifactManifest['files'];
   readonly model: NormalizedPlugin;
   readonly projectContext: ProjectContext;
@@ -316,6 +356,7 @@ const manifestFor = (options: {
   readonly selected: readonly string[];
 }): ArtifactManifest => {
   const targets = manifestTargets(options.registry, options.selected);
+  const web = webManifestFor(options);
   return {
     agentSkills: agentSkillsSchemaRevision,
     files: options.files,
@@ -328,6 +369,7 @@ const manifestFor = (options: {
       source: { status: 'passed' },
       targets: targets.map(({ name }) => ({ name, status: 'passed' })),
     },
+    ...(web === undefined ? {} : { web }),
   };
 };
 
@@ -515,6 +557,8 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
     const manifest = await writeManifest({
       artifactRoot: stageRoot,
       manifest: manifestFor({
+        artifactRoot: stageRoot,
+        compiledMcpEntries,
         files,
         model: options.model,
         projectContext: options.projectContext,
