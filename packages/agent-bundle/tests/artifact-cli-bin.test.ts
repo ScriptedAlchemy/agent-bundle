@@ -347,7 +347,7 @@ it('lets a skill reach the artifact bin through the plugin-root token, and the b
   const probe = async (env: Readonly<Record<string, string>>): Promise<unknown> =>
     parseJsonLine((await execFile(process.execPath, [binPath, 'env-probe', '--json'], { env: { ...hostEnv, ...env } })).stdout);
   expect(await probe({})).toEqual({ atImport: 'unset', atRun: 'unset', providerAtImport: 'unset' });
-  await writeFile(join(claudeRoot, '.env'), 'CLI_OPERATOR_TOKEN=from-file\n');
+  await writeFile(join(artifactRoot, '.env'), 'CLI_OPERATOR_TOKEN=from-file\n');
   expect(await probe({})).toEqual({ atImport: 'from-file', atRun: 'from-file', providerAtImport: 'from-file' });
   expect(await probe({ CLI_OPERATOR_TOKEN: 'from-host' })).toEqual({ atImport: 'from-host', atRun: 'from-host', providerAtImport: 'from-host' });
   expect(await probe({ AGENT_BUNDLE_ENV_FILE: 'none' })).toEqual({ atImport: 'unset', atRun: 'unset', providerAtImport: 'unset' });
