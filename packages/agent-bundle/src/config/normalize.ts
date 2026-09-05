@@ -288,7 +288,7 @@ const normalizeBinEntries = (
   const conventional = conventionalCliEntrySource(root);
   // A hand-written `src/cli.ts` keeps its executable: `web` alone never
   // replaces authored code, and AB4341 names the collision instead.
-  if (generated !== undefined && (generated.generatedCli.commands.length > 0 || conventional === undefined)) return [generated];
+  if (generated !== undefined && ((generated.generatedCli?.commands.length ?? 0) > 0 || conventional === undefined)) return [generated];
   if (conventional === undefined || !safePackageOutputName(config.plugin.name)) return [];
   return [{
     id: `bin:${config.plugin.name}`,
