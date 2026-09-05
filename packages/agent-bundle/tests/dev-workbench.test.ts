@@ -1712,6 +1712,40 @@ it('gives the foreground Eval route and lifecycle lanes the same project-owned s
   }
 }, 60_000);
 
+it('forwards only a non-empty workbenchDevOrigins list to the foreground server', async () => {
+  // Contributor HMR allowlist (#572): the public API forwards exactly the
+  // listed origins and leaves the foreground option absent — not an empty
+  // list — when the caller omits it or passes [], so the same-origin guard is
+  // unchanged unless a caller opts in explicitly.
+  const project = await createProjectFixture();
+  const sandboxFailure = new Error('stop after foreground composition');
+  const captureForeground = async (workbenchDevOrigins: readonly string[] | undefined): Promise<ForegroundServerOptions> => {
+    let foreground: ForegroundServerOptions | undefined;
+    await expect(startDevServer({
+      open: false,
+      port: 0,
+      root: project.root,
+      testing: {
+        createSandboxProxy: async () => { throw sandboxFailure; },
+        startForegroundServer: async (options) => {
+          foreground = options;
+          return { close: () => options.coordinator.close(), url: 'http://127.0.0.1:49128' };
+        },
+      },
+      ...(workbenchDevOrigins === undefined ? {} : { workbenchDevOrigins }),
+    })).rejects.toBe(sandboxFailure);
+    if (foreground === undefined) throw new Error('Foreground server options were not captured.');
+    return foreground;
+  };
+  try {
+    expect((await captureForeground(['http://localhost:3000'])).workbenchDevOrigins).toEqual(['http://localhost:3000']);
+    expect(await captureForeground([])).not.toHaveProperty('workbenchDevOrigins');
+    expect(await captureForeground(undefined)).not.toHaveProperty('workbenchDevOrigins');
+  } finally {
+    await removeProjectFixture(project.root);
+  }
+}, 60_000);
+
 it('keeps MCP and coordinator cleanup failures structural while releasing both resources', async () => {
   const mcpFailure = new Error('MCP cleanup failed.');
   const coordinatorFailure = new Error('Coordinator cleanup failed.');

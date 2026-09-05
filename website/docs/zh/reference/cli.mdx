@@ -54,6 +54,7 @@ npx agent-bundle --version
 | `--agent-api` / `--no-agent-api` | 配置中的 `dev.agentApi` | 启用或禁用 `/mcp` 上经过认证的 Agent API。 |
 | `--install-host <host>` | 无 | 安装并重新同步一个开发期宿主。可重复；取值为 `claude`、`codex` 或 `cursor`。 |
 | `--open` / `--no-open` | `--no-open` | 前台服务器启动后是否打开 workbench。 |
+| `--workbench-dev-origin <origin>` | 无 | 接受来自这个 loopback 贡献者 HMR origin（即 Rsbuild 开发服务器，例如 `http://localhost:3000`）的 Workbench 界面请求。可重复；非 loopback 或不是 origin 的取值会让 `agent-bundle dev` 在开始服务之前退出。见[贡献者 UI 的 HMR](../guide/development/workbench.mdx#贡献者-ui-的-hmr)。 |
 
 `dev` 在前台运行，并在收到终止信号时关闭会话。见
 [开发者 Workbench](../guide/development/workbench.mdx)。

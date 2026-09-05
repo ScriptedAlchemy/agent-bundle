@@ -99,6 +99,24 @@ Dependency review, package previews, and the release publish workflow are hosted
 structural reasons — the first reads GitHub's advisory database against the pull-request diff,
 and the other two are publish-side effects rather than checks.
 
+## Working on the Workbench UI
+
+The Workbench UI in `packages/workbench` has its own hot-reload loop: a foreground server that
+allowlists the Rsbuild dev-server origin, plus the Rsbuild dev server proxying `/api` to it. Run
+Terminal A from a plugin project root, such as one of the `examples/*`.
+
+```sh
+# Terminal A
+npx agent-bundle dev --root . --port 3100 --no-open \
+  --workbench-dev-origin http://localhost:3000
+# Terminal B
+AGENT_BUNDLE_WORKBENCH_API_PROXY=http://127.0.0.1:3100 \
+  pnpm --filter agent-bundle-workbench dev
+```
+
+Open `http://localhost:3000`. Ports, the proxy scope, and why the flag is required are in
+[Contributor UI HMR](../guide/development/workbench.mdx#contributor-ui-hmr).
+
 ## The documentation site
 
 This site is a private workspace package. Run it from the repository root:
