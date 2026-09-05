@@ -119,12 +119,34 @@ export const parseWebManifest = (value: unknown): WebManifest => {
   return { apps, open: manifest.open };
 };
 
-export const readWebManifest = async (manifestPath: string): Promise<WebManifest | undefined> => {
+/** The web-relevant read of one artifact manifest: the exposed Apps and the declared projections. */
+export interface WebManifestDocument {
+  /** The projection names the artifact manifest declares for this composite root. */
+  readonly targets: readonly string[];
+  readonly web?: WebManifest;
+}
+
+const targetNames = (value: unknown): readonly string[] => {
+  if (!Array.isArray(value)) return Object.freeze([]);
+  return Object.freeze(value.flatMap((target: unknown) => {
+    if (!isPlainRecord(target)) return [];
+    const name = target['name'];
+    return typeof name === 'string' && name.length > 0 ? [name] : [];
+  }));
+};
+
+export const readWebManifestDocument = async (manifestPath: string): Promise<WebManifestDocument> => {
   try {
     const document = parseJsonWithoutDuplicateKeys(await readFile(manifestPath, 'utf8'));
     const manifest = record(document, 'manifest');
-    return manifest['web'] === undefined ? undefined : parseWebManifest(manifest['web']);
+    return {
+      targets: targetNames(manifest['targets']),
+      ...(manifest['web'] === undefined ? {} : { web: parseWebManifest(manifest['web']) }),
+    };
   } catch (error) {
     throw new Error(`Unable to read web section from ${manifestPath}: ${errorMessage(error)}`, { cause: error });
   }
 };
+
+export const readWebManifest = async (manifestPath: string): Promise<WebManifest | undefined> =>
+  (await readWebManifestDocument(manifestPath)).web;

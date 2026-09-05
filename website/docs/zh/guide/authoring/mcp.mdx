@@ -896,7 +896,8 @@ node <root>/bin/<plugin>.mjs web [<server>/<app>] [--port N] [--open|--no-open] 
 默认 App 是唯一被暴露的那个；暴露了多个却未选择时是用法错误（退出码 `2`）并列出它们。`bin/` 旁边
 缺少 `agent-bundle.manifest.json` 则以 `1` 退出。该命令启动插件自己的 MCP 服务器
 （`node <root>/mcp/<entry>.mjs`，`AGENT_BUNDLE_PLUGIN_ROOT=<root>`，已声明的静态 env 并展开路径
-令牌），先调用一次开场工具，然后在 `http://127.0.0.1:<port>/` 上用 loopback origin 提供 App，并为
+令牌——plugin-data 令牌解析到产物之外的 `~/.agent-bundle/web-data/<plugin>-<digest>/<server>`，
+因此只读安装也能启动），先调用一次开场工具，然后在 `http://127.0.0.1:<port>/` 上用 loopback origin 提供 App，并为
 App 文档再开一个 loopback 沙箱 origin（与 `agent-bundle serve-app` 以及 Workbench 同一套宿主栈与
 同意行为），打印 `MCP App <server>/<app> at <url> (tool <tool>; Ctrl-C stops the server)`（或带
 `--json` 时打印一行 `{ app, server, tool, url, port, resourceUri, sandboxOrigin }`），并一直运行
@@ -904,7 +905,15 @@ App 文档再开一个 loopback 沙箱 origin（与 `agent-bundle serve-app` 以
 会被 `AB4341` 拒绝。全部标志见[命令行参考](../../reference/cli.mdx#plugin-web)。
 
 `agent-bundle dev` 在前台服务器的 `GET /web/<server>/<app>` 上提供同一页面、中继、路由、沙箱代理
-与同意行为，绑定到当前 epoch 的服务器会话。未列入 `web.apps` 的 App 返回 404。
+与同意行为，绑定到当前 epoch 的服务器会话。未列入 `web.apps` 的 App 返回 404。服务器的启动方式来自
+产物清单声明的 projection，而绝不来自浏览器展示 profile：显式的 `?target=<projection>` 会对照声明
+了该服务器启动方式的 projection 校验（无效即报错，绝不回退）；共享同一个规范化启动描述符（command、
+args、cwd、声明的 env、运行时绑定）的 projection 无需询问即可打开；实质不同的启动方式则以 409 应答
+并列出可选项——只有 Claude 或 Codex projection 的构建不需要 portable projection 或 `mcp.json` 就能
+打开它的 App。Web 会话按 epoch、服务器与解析后的启动身份缓存；一次成功的重建会退役旧 epoch 中未被
+使用的会话（仍被页面租用的保持有效，直到最后一个租约释放时关闭），失败的重建则不退役任何会话。标注了 `readOnlyHint: true` 的
+开场工具在每次页面加载时运行；其他开场工具在每个会话、工具、App 与输入组合下只运行一次，刷新会重新
+绑定保留的结果。
 
 `agent-bundle serve-app` 保持不变：它是 checkout 时的形态，会构建或指向一份产物，并需要已安装的
 框架。全部选项见[命令行参考](../../reference/cli.mdx#serve-app)。
