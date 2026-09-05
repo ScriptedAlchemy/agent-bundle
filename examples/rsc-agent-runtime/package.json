@@ -25,9 +25,9 @@
     "zod": "4.5.4"
   },
   "devDependencies": {
-    "@rsbuild/core": "2.2.1",
+    "@rsbuild/core": "2.2.3",
     "@rsbuild/plugin-react": "2.1.0",
-    "@rstest/core": "0.11.10",
+    "@rstest/core": "0.11.12",
     "@types/express": "5.0.6",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.5",

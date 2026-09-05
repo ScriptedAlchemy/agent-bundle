@@ -39,14 +39,10 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: pnpm/setup@v2
+      - uses: ./.github/actions/setup-workspace
         if: github.event_name != 'merge_group'
         with:
-          cache: true
-          install: false
-          runtime: node@22.19.0
-      - run: pnpm install --frozen-lockfile
-        if: github.event_name != 'merge_group'
+          node-version: 22.19.0
       - name: Require a changeset for publishable package changes
         if: github.event_name != 'merge_group'
         env:

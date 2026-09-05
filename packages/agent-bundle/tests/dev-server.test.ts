@@ -719,6 +719,212 @@ it('requires the same origin and session token before a browser can request a re
   }
 });
 
+const workbenchDevOrigin = 'http://localhost:3000';
+const workbenchDevOriginMessage =
+  'Foreground server Workbench dev origins must be loopback http(s) origins such as http://localhost:3000.';
+const foreignOriginDiagnostic = Object.freeze({
+  diagnostic: { code: 'AB8003', message: 'Request origin is not this foreground server.' },
+});
+const sessionCookieNamePattern = /^agent-bundle-foreground-session-[a-f0-9]{32}$/u;
+
+interface BrowserRouteProbe {
+  readonly body: unknown;
+  readonly contentType: string | null;
+  readonly status: number;
+}
+
+const bootstrapAs = (server: ForegroundServer, origin: string): Promise<Response> =>
+  fetch(`${server.url}/api/project/session`, { headers: { origin } });
+
+const rebuildAs = (server: ForegroundServer, origin: string, token = server.sessionToken): Promise<Response> =>
+  fetch(`${server.url}/api/project/rebuild`, {
+    body: '{"paths":["src/skills/review/SKILL.md"]}',
+    headers: { 'content-type': 'application/json', origin, 'x-agent-bundle-session': token },
+    method: 'POST',
+  });
+
+/** Opens the event stream as a page on `origin` and, once admitted, leaves like a page navigating away. */
+const openEventsAs = async (server: ForegroundServer, origin: string, cookieName: string): Promise<BrowserRouteProbe> => {
+  const controller = new AbortController();
+  const response = await fetch(`${server.url}/api/project/events`, {
+    headers: { cookie: `${cookieName}=${server.sessionToken}`, origin },
+    signal: controller.signal,
+  });
+  const contentType = response.headers.get('content-type');
+  if (response.status !== 200) return { body: await response.json(), contentType, status: response.status };
+  controller.abort();
+  await response.text().catch(() => undefined);
+  return { body: undefined, contentType, status: 200 };
+};
+
+const expectForeignOrigin = async (server: ForegroundServer, origin: string, cookieName: string): Promise<void> => {
+  const bootstrap = await bootstrapAs(server, origin);
+  expect(bootstrap.status).toBe(403);
+  await expect(bootstrap.json()).resolves.toEqual(foreignOriginDiagnostic);
+
+  const rebuild = await rebuildAs(server, origin);
+  expect(rebuild.status).toBe(403);
+  await expect(rebuild.json()).resolves.toEqual(foreignOriginDiagnostic);
+
+  expect(await openEventsAs(server, origin, cookieName)).toEqual({
+    body: foreignOriginDiagnostic,
+    contentType: 'application/json; charset=utf-8',
+    status: 403,
+  });
+};
+
+it('keeps refusing a Workbench dev-server origin on every browser route until an operator lists it', async () => {
+  const coordinator = new RecordingCoordinator();
+  const server = await startForegroundServer({
+    coordinator,
+    eventHub: new ProjectEventHub(),
+    instanceId: 'test-instance-id',
+    port: 0,
+    sessionToken: 'test-session-token',
+  });
+
+  try {
+    const bootstrap = await bootstrapAs(server, server.url);
+    expect(bootstrap.status).toBe(200);
+    const body: unknown = await bootstrap.json();
+    expect(body).toEqual({
+      cookieName: expect.stringMatching(sessionCookieNamePattern),
+      instanceId: 'test-instance-id',
+      origin: server.url,
+      token: 'test-session-token',
+    });
+    expect(body).not.toHaveProperty('devOrigins');
+    const { cookieName } = body as { readonly cookieName: string };
+
+    await expectForeignOrigin(server, workbenchDevOrigin, cookieName);
+    expect(coordinator.invalidations).toEqual([]);
+  } finally {
+    await server.close();
+  }
+});
+
+it('admits pages served by a listed Workbench dev-server origin and advertises that allowlist at bootstrap', async () => {
+  const coordinator = new RecordingCoordinator();
+  const server = await startForegroundServer({
+    coordinator,
+    eventHub: new ProjectEventHub(),
+    instanceId: 'test-instance-id',
+    port: 0,
+    sessionToken: 'test-session-token',
+    workbenchDevOrigins: [workbenchDevOrigin],
+  });
+
+  try {
+    const bootstrap = await bootstrapAs(server, workbenchDevOrigin);
+    expect(bootstrap.status).toBe(200);
+    const body: unknown = await bootstrap.json();
+    expect(body).toEqual({
+      cookieName: expect.stringMatching(sessionCookieNamePattern),
+      devOrigins: [workbenchDevOrigin],
+      instanceId: 'test-instance-id',
+      origin: server.url,
+      token: 'test-session-token',
+    });
+    const { cookieName } = body as { readonly cookieName: string };
+    expect(bootstrap.headers.get('set-cookie')).toBe(`${cookieName}=test-session-token; HttpOnly; SameSite=Strict; Path=/api`);
+
+    const advertised = {
+      cookieName,
+      devOrigins: [workbenchDevOrigin],
+      instanceId: 'test-instance-id',
+      origin: server.url,
+      token: 'test-session-token',
+    };
+    const ownOrigin = await bootstrapAs(server, server.url);
+    expect(ownOrigin.status).toBe(200);
+    await expect(ownOrigin.json()).resolves.toEqual(advertised);
+    const headerless = await fetch(`${server.url}/api/project/session`, { headers: { 'sec-fetch-site': 'same-origin' } });
+    expect(headerless.status).toBe(200);
+    await expect(headerless.json()).resolves.toEqual(advertised);
+
+    const rebuild = await rebuildAs(server, workbenchDevOrigin);
+    expect(rebuild.status).toBe(200);
+    expect(coordinator.invalidations).toEqual([expect.objectContaining({
+      paths: ['src/skills/review/SKILL.md'],
+      reason: 'manual',
+    })]);
+
+    const missingToken = await fetch(`${server.url}/api/project/rebuild`, {
+      body: '{"paths":["src/skills/review/SKILL.md"]}',
+      headers: { 'content-type': 'application/json', origin: workbenchDevOrigin },
+      method: 'POST',
+    });
+    expect(missingToken.status).toBe(403);
+    await expect(missingToken.json()).resolves.toEqual({
+      diagnostic: { code: 'AB8004', message: 'A valid same-session token is required.' },
+    });
+
+    const events = await openEventsAs(server, workbenchDevOrigin, cookieName);
+    expect(events.status).toBe(200);
+    expect(events.contentType).toMatch(/^text\/event-stream/u);
+
+    for (const origin of ['http://localhost:3001', 'http://127.0.0.1:3000', 'http://invalid.example']) {
+      await expectForeignOrigin(server, origin, cookieName);
+    }
+    expect(coordinator.invalidations).toHaveLength(1);
+  } finally {
+    await server.close();
+  }
+});
+
+for (const value of [
+  'http://evil.example:3000', 'http://localhost:3000/', 'http://localhost:3000/path', 'http://localhost:3000?x=1',
+  'localhost:3000', 'http://user:pw@localhost:3000', 'ws://localhost:3000', 'http://10.0.0.1:3000', '',
+]) {
+  it(`refuses the Workbench dev origin ${JSON.stringify(value)} before starting a coordinator`, async () => {
+    const coordinator = new RecordingCoordinator();
+    await expect(startForegroundServer({ coordinator, eventHub: new ProjectEventHub(), workbenchDevOrigins: [value] }))
+      .rejects.toMatchObject({ code: 'AB8000', message: workbenchDevOriginMessage });
+    expect(coordinator.startCalls).toBe(0);
+  });
+}
+
+it('accepts each loopback http(s) spelling as a Workbench dev origin and advertises them deduplicated and sorted', async () => {
+  const accepted = ['https://localhost:3000', 'http://127.0.0.1:3000', 'http://[::1]:3000', workbenchDevOrigin];
+  const server = await startForegroundServer({
+    coordinator: new RecordingCoordinator(),
+    eventHub: new ProjectEventHub(),
+    port: 0,
+    workbenchDevOrigins: [...accepted, workbenchDevOrigin],
+  });
+
+  try {
+    const devOrigins = [...accepted].sort((left, right) => left.localeCompare(right));
+    for (const origin of accepted) {
+      const bootstrap = await bootstrapAs(server, origin);
+      expect(bootstrap.status).toBe(200);
+      await expect(bootstrap.json()).resolves.toMatchObject({ devOrigins, origin: server.url });
+    }
+  } finally {
+    await server.close();
+  }
+});
+
+it('treats an empty Workbench dev origin list as the default guard', async () => {
+  const server = await startForegroundServer({
+    coordinator: new RecordingCoordinator(),
+    eventHub: new ProjectEventHub(),
+    port: 0,
+    workbenchDevOrigins: [],
+  });
+
+  try {
+    const bootstrap = await bootstrapAs(server, server.url);
+    expect(bootstrap.status).toBe(200);
+    const body: unknown = await bootstrap.json();
+    expect(body).not.toHaveProperty('devOrigins');
+    const { cookieName } = body as { readonly cookieName: string };
+    await expectForeignOrigin(server, workbenchDevOrigin, cookieName);
+  } finally {
+    await server.close();
+  }
+});
+
 it('applies the established foreground origin and token guard to MCP session creation', async () => {
   const opens: unknown[] = [];
   const mcpSessions = {

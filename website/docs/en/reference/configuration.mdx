@@ -185,12 +185,13 @@ hatch value that breaks an artifact contract is a hard diagnostic rather than a 
 (`@rsbuild/plugin-react`, `rsbuild:react`), because `plugins` arrays concatenate and Rsbuild
 never dedupes plugins by name — the framework registers it for you.
 
-The hatch executes under two bundler engine copies: artifact scripts, MCP entries, hooks, and the
-package build compile through Rslib's nested Rsbuild/Rspack, while MCP App views compile through
-the workspace-pinned `@rsbuild/core`. Never construct plugins or perform `instanceof` checks
-against an imported `@rspack/core` — use the `utils` argument passed to `tools.rspack` mutator
-functions (`(config, { rspack }) => ...`), which always hands you the executing engine's own
-`rspack` object.
+The hatch executes on one bundler engine — the `@rspack/core` behind agent-bundle's pinned
+`@rsbuild/core`, shared by the Rslib-compiled outputs (artifact scripts, MCP entries, hooks, the
+package build) and the MCP App views — but that engine is agent-bundle's dependency, not your
+project's. Never construct plugins or perform `instanceof` checks against an imported
+`@rspack/core` — use the `utils` argument passed to `tools.rspack` mutator functions
+(`(config, { rspack }) => ...`), which always hands you the executing engine's own `rspack`
+object.
 
 MCP App builds keep Rsbuild's default `resolve.aliasStrategy` (`prefer-tsconfig`), so the
 project's `tsconfig.json` `paths` resolve inside a compiled view as they do anywhere else. The

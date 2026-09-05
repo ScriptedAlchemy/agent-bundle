@@ -6,7 +6,6 @@ import { join, relative } from 'node:path';
 
 import { expect } from '@rstest/playwright';
 import { createRsbuild } from '@rsbuild/core';
-import { pluginReact } from '@rsbuild/plugin-react';
 
 import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench-assets.ts';
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
@@ -14,7 +13,7 @@ import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/t
 import { seedEvalProject, writeEvalSuite } from '../../agent-bundle/tests/support/eval-project.ts';
 import { closeServer } from './support/http.ts';
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
-import { workbenchBrowserAliases } from './support/workbench-browser-modules.ts';
+import { createWorkbenchFixtureConfig } from './support/workbench-fixture-config.ts';
 import { buildWorkbench, e2e, workbenchAssets, workspaceRoot, workbenchUrl } from './support/workbench-e2e.ts';
 
 const evalsPage = join(workspaceRoot, 'packages', 'workbench', 'src', 'evals', 'evals-page.tsx');
@@ -89,22 +88,7 @@ const mountedEvalClientScopeFixture = async (): Promise<{ readonly close: () => 
     '',
   ].join('\n'));
   const rsbuild = await createRsbuild({
-    config: {
-      output: {
-        cleanDistPath: false,
-        distPath: { css: 'assets', js: 'assets', root: dist },
-        filename: { css: '[name].css', js: '[name].js' },
-        filenameHash: false,
-      },
-      plugins: [pluginReact()],
-      resolve: {
-        alias: workbenchBrowserAliases,
-      },
-      source: {
-        define: { 'process.env.NODE_ENV': JSON.stringify('production') },
-        entry: { page: entry },
-      },
-    },
+    config: createWorkbenchFixtureConfig({ distRoot: dist, entry: { page: entry } }),
     cwd: workspaceRoot,
   });
   const build = await rsbuild.build();

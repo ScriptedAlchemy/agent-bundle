@@ -7,9 +7,9 @@ import { join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { createRsbuild } from '@rsbuild/core';
-import { pluginReact } from '@rsbuild/plugin-react';
 
-import { workbenchBrowserAliases } from './support/workbench-browser-modules.ts';
+import { createWorkbenchFixtureConfig } from './support/workbench-fixture-config.ts';
+import { browserLaunchOptions } from './support/workbench-e2e.ts';
 import { chromium } from 'playwright';
 import { describe, expect, it } from '@rstest/core';
 import type { JsonValue } from '../../agent-bundle/src/dev/types.ts';
@@ -45,22 +45,7 @@ const mountedInputFixture = async (source: readonly string[]) => {
   const dist = join(root, 'dist');
   await writeFile(entry, source.join('\n'));
   const rsbuild = await createRsbuild({
-    config: {
-      output: {
-        cleanDistPath: false,
-        distPath: { css: 'assets', js: 'assets', root: dist },
-        filename: { css: '[name].css', js: '[name].js' },
-        filenameHash: false,
-      },
-      plugins: [pluginReact()],
-      resolve: {
-        alias: { ...workbenchBrowserAliases },
-      },
-      source: {
-        define: { 'process.env.NODE_ENV': JSON.stringify('production') },
-        entry: { input: entry },
-      },
-    },
+    config: createWorkbenchFixtureConfig({ distRoot: dist, entry: { input: entry } }),
     cwd: workspaceRoot,
   });
   const build = await rsbuild.build();
@@ -234,7 +219,7 @@ describe('MCP JSON input', () => {
 
   it('reports each controlled raw edit while canonical replacements leave the repair draft untouched', async () => {
     const fixture = await mountedControlledInputFixture();
-    const browser = await chromium.launch({ channel: 'chrome' });
+    const browser = await chromium.launch(browserLaunchOptions);
     try {
       const page = await browser.newPage();
       await page.goto(fixture.url);
@@ -270,7 +255,7 @@ describe('MCP JSON input', () => {
       '};',
       "createRoot(document.getElementById('root')).render(<App />);",
     ]);
-    const browser = await chromium.launch({ channel: 'chrome' });
+    const browser = await chromium.launch(browserLaunchOptions);
     const page = await browser.newPage({ viewport: { height: 844, width: 390 } });
     try {
       await page.goto(fixture.url);
@@ -378,7 +363,7 @@ describe('MCP JSON input', () => {
   });
 
   it('uses custom required presence validation and disables every mutation control in a browser', async () => {
-    const browser = await chromium.launch({ channel: 'chrome' });
+    const browser = await chromium.launch(browserLaunchOptions);
     const page = await browser.newPage();
     try {
       await page.setContent(renderToStaticMarkup(createElement(McpJsonInput, {

@@ -6,11 +6,11 @@ import { tmpdir } from 'node:os';
 
 import { describe, expect, it } from '@rstest/core';
 import { createRsbuild } from '@rsbuild/core';
-import { pluginReact } from '@rsbuild/plugin-react';
 import { chromium, type Page } from 'playwright';
 
 import { closeServer } from './support/http.ts';
-import { workbenchBrowserAliases } from './support/workbench-browser-modules.ts';
+import { createWorkbenchFixtureConfig } from './support/workbench-fixture-config.ts';
+import { browserLaunchOptions } from './support/workbench-e2e.ts';
 
 const workspaceRoot = join(import.meta.dirname, '..', '..', '..');
 const pageComponent = join(workspaceRoot, 'packages', 'workbench', 'src', 'mcp', 'mcp-page.tsx');
@@ -147,22 +147,7 @@ const mountedPageFixture = async (mode: 'artifact' | 'runtime' | 'runtime-direct
     ]),
   ].join('\n'));
   const rsbuild = await createRsbuild({
-    config: {
-      output: {
-        cleanDistPath: false,
-        distPath: { css: 'assets', js: 'assets', root: dist },
-        filename: { css: '[name].css', js: '[name].js' },
-        filenameHash: false,
-      },
-      plugins: [pluginReact()],
-      resolve: {
-        alias: workbenchBrowserAliases,
-      },
-      source: {
-        define: { 'process.env.NODE_ENV': JSON.stringify('production') },
-        entry: { page: entry },
-      },
-    },
+    config: createWorkbenchFixtureConfig({ distRoot: dist, entry: { page: entry } }),
     cwd: workspaceRoot,
   });
   const build = await rsbuild.build();
@@ -230,7 +215,7 @@ const lifecycleWaits = (page: Page) => ({
 describe('MCP App page browser integration', () => {
   it('keeps the committed runtime evidence and preview request unchanged after caller mutation', async () => {
     const fixture = await mountedPageFixture('runtime');
-    const browser = await chromium.launch({ channel: 'chrome' });
+    const browser = await chromium.launch(browserLaunchOptions);
     const page = await browser.newPage({ viewport: { height: 800, width: 390 } });
     const pageErrors: string[] = [];
     page.on('pageerror', (error) => { pageErrors.push(error.message); });
@@ -270,7 +255,7 @@ describe('MCP App page browser integration', () => {
 
   it('retains a failed runtime lifecycle behind the registered Page close facade until its exact retry succeeds', async () => {
     const fixture = await mountedPageFixture('runtime');
-    const browser = await chromium.launch({ channel: 'chrome' });
+    const browser = await chromium.launch(browserLaunchOptions);
     const page = await browser.newPage({ viewport: { height: 800, width: 390 } });
     const pageErrors: string[] = [];
     page.on('pageerror', (error) => { pageErrors.push(error.message); });
@@ -338,7 +323,7 @@ describe('MCP App page browser integration', () => {
 
   it('holds the selected runtime preview behind the registered Page close facade until child cleanup settles', async () => {
     const fixture = await mountedPageFixture('runtime');
-    const browser = await chromium.launch({ channel: 'chrome' });
+    const browser = await chromium.launch(browserLaunchOptions);
     const page = await browser.newPage({ viewport: { height: 800, width: 390 } });
     const pageErrors: string[] = [];
     page.on('pageerror', (error) => { pageErrors.push(error.message); });
@@ -390,7 +375,7 @@ describe('MCP App page browser integration', () => {
 
   it('mounts the initial runtime selection through the Page without artifact session admission', async () => {
     const fixture = await mountedPageFixture('runtime');
-    const browser = await chromium.launch({ channel: 'chrome' });
+    const browser = await chromium.launch(browserLaunchOptions);
     const page = await browser.newPage({ viewport: { height: 800, width: 390 } });
     const pageErrors: string[] = [];
     page.on('pageerror', (error) => { pageErrors.push(error.message); });
@@ -455,7 +440,7 @@ describe('MCP App page browser integration', () => {
 
   it('keeps a directly navigated Runtime session without recreating its consumed preview', async () => {
     const fixture = await mountedPageFixture('runtime-direct');
-    const browser = await chromium.launch({ channel: 'chrome' });
+    const browser = await chromium.launch(browserLaunchOptions);
     const page = await browser.newPage({ viewport: { height: 800, width: 390 } });
     const pageErrors: string[] = [];
     page.on('pageerror', (error) => { pageErrors.push(error.message); });
@@ -483,7 +468,7 @@ describe('MCP App page browser integration', () => {
 
   it('runs the modern Apps-v2 preview lifecycle through the page without leaking credentials or sessions', async () => {
     const fixture = await mountedPageFixture();
-    const browser = await chromium.launch({ channel: 'chrome' });
+    const browser = await chromium.launch(browserLaunchOptions);
     const page = await browser.newPage({ viewport: { height: 800, width: 390 } });
     const pageErrors: string[] = [];
     page.on('pageerror', (error) => { pageErrors.push(error.message); });

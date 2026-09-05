@@ -9,7 +9,7 @@ import type {
 } from '../../../agent-bundle/src/contracts/runtime.ts';
 import type { JsonObject } from '../../../agent-bundle/src/contracts/runtime.ts';
 import { isMcpSessionTarget, type McpSessionTarget } from '../../../agent-bundle/src/contracts/mcp-session.ts';
-import { exactKeys, isRecord } from '../client-helpers.ts';
+import { exactKeys, isLoopbackHttpUrl, isRecord } from '../client-helpers.ts';
 import { hasOnlyOwnKeys } from '../strict-json.ts';
 
 export type McpRouteTarget = McpSessionTarget;
@@ -62,6 +62,14 @@ export const sameRuntimeBinding = (left: McpRuntimeBindingIdentity, right: McpRu
 export interface McpRouteRuntimeRestart {
   readonly reconcile: DevRuntimeMcpRegistryReconcileResult;
   readonly session: McpRouteRuntimeSession;
+}
+
+export type McpInspectorRouteState = 'exited' | 'idle' | 'running' | 'starting';
+
+/** The dev server's view of the standalone MCP Inspector process; `url` is present only while running. */
+export interface McpInspectorRouteStatus {
+  readonly state: McpInspectorRouteState;
+  readonly url?: string;
 }
 
 export interface McpRouteCatalog {
@@ -406,6 +414,31 @@ const runtimeOperationRequest = (request: DevRuntimeMcpOperationRequest): DevRun
   throw new McpRouteClientError('AB8015', 'Runtime MCP operation request is not valid.');
 };
 
+const inspectorRouteStates: readonly McpInspectorRouteState[] = Object.freeze(['exited', 'idle', 'running', 'starting']);
+
+const isInspectorRouteState = (value: unknown): value is McpInspectorRouteState =>
+  (inspectorRouteStates as readonly unknown[]).includes(value);
+
+const inspectorRouteStatus = (value: unknown): McpInspectorRouteStatus => {
+  const invalid = (): McpRouteClientError => new McpRouteClientError('AB8019', 'Inspector status route returned an invalid response.');
+  const response = isRecord(value) ? asRecord(value) : undefined;
+  if (response === undefined || !hasExactKeys(response, ['status']) || !isRecord(response.status)) throw invalid();
+  const status = response.status;
+  if (
+    !hasOnlyKeys(status, ['state', 'url']) || !isInspectorRouteState(status.state) ||
+    (status.url !== undefined && !isLoopbackHttpUrl(status.url))
+  ) throw invalid();
+  return Object.freeze({ state: status.state, ...(status.url === undefined ? {} : { url: status.url }) });
+};
+
+const inspectorRouteLaunch = (value: unknown): Readonly<{ readonly url: string }> => {
+  const response = isRecord(value) ? asRecord(value) : undefined;
+  if (response === undefined || !hasExactKeys(response, ['url']) || !isLoopbackHttpUrl(response.url)) {
+    throw new McpRouteClientError('AB8019', 'Inspector launch route returned an invalid response.');
+  }
+  return Object.freeze({ url: response.url });
+};
+
 const encode = (value: string): string => encodeURIComponent(value);
 
 const foregroundRoute = (path: string): string => {
@@ -422,6 +455,24 @@ const foregroundRoute = (path: string): string => {
   }
   return path;
 };
+
+/** A serialized origin: `new URL(value).origin === value`, so no path, trailing slash, credentials, or bare host. */
+const isSerializedOrigin = (value: unknown): value is string => {
+  if (typeof value !== 'string') return false;
+  try {
+    return new URL(value).origin === value;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Contributor dev-server origins the foreground server allowlisted for the Workbench HMR loop (#572).
+ * The bootstrap body carries the key only while that loopback-only allowlist is non-empty, so an empty
+ * list is as invalid as a non-list.
+ */
+const isDevOriginList = (value: unknown): value is readonly string[] =>
+  Array.isArray(value) && value.length > 0 && value.every(isSerializedOrigin);
 
 /** Memory-only authentication shared by foreground browser route clients. */
 export class ForegroundRouteClient implements ForegroundRequestAuthority {
@@ -574,12 +625,18 @@ export class ForegroundRouteClient implements ForegroundRequestAuthority {
       if (this.#bootstrapSuperseded(request, authenticationGeneration)) return this.#supersededSnapshot();
       if (!response.ok) throw ForegroundRouteClientError.fromResponse(body, response.status);
       if (
-        !isRecord(body) || !hasExactKeys(body, ['cookieName', 'instanceId', 'origin', 'token']) ||
+        !isRecord(body) ||
+        (!hasExactKeys(body, ['cookieName', 'instanceId', 'origin', 'token']) &&
+          !hasExactKeys(body, ['cookieName', 'devOrigins', 'instanceId', 'origin', 'token'])) ||
         typeof body.cookieName !== 'string' || !/^agent-bundle-foreground-session-[a-f0-9]{32}$/u.test(body.cookieName) ||
         typeof body.instanceId !== 'string' || body.instanceId.length === 0 || body.instanceId.length > 128 ||
         body.instanceId.trim() !== body.instanceId || typeof body.origin !== 'string' ||
         typeof body.token !== 'string' || body.token.length === 0
       ) {
+        throw new ForegroundRouteClientError('AB8019', 'Foreground session bootstrap returned an invalid response.', response.status);
+      }
+      const devOrigins = Object.hasOwn(body, 'devOrigins') ? body.devOrigins : undefined;
+      if (devOrigins !== undefined && !isDevOriginList(devOrigins)) {
         throw new ForegroundRouteClientError('AB8019', 'Foreground session bootstrap returned an invalid response.', response.status);
       }
       let origin: URL;
@@ -590,7 +647,10 @@ export class ForegroundRouteClient implements ForegroundRequestAuthority {
       }
       if (origin.origin !== body.origin) throw new ForegroundRouteClientError('AB8019', 'Foreground session bootstrap returned an invalid origin.', response.status);
       const browserOrigin = globalThis.location?.origin;
-      if (browserOrigin !== undefined && browserOrigin !== 'null' && browserOrigin !== body.origin) {
+      if (
+        browserOrigin !== undefined && browserOrigin !== 'null' && browserOrigin !== body.origin &&
+        devOrigins?.includes(browserOrigin) !== true
+      ) {
         throw new ForegroundRouteClientError('AB8003', 'Foreground session bootstrap origin does not match this browser.', response.status);
       }
       const previous = this.#snapshot;
@@ -785,6 +845,19 @@ export class McpRouteClient {
       throw new McpRouteClientError('AB8204', 'Runtime MCP operation response does not match the requested session revision.');
     }
     return result;
+  }
+
+  async inspectorStatus(): Promise<McpInspectorRouteStatus> {
+    return inspectorRouteStatus(await this.#json('/api/inspector/status'));
+  }
+
+  /** Idempotent while the Inspector is starting or running; the server owns the command it spawns. */
+  async inspectorLaunch(): Promise<Readonly<{ readonly url: string }>> {
+    return inspectorRouteLaunch(await this.#json('/api/inspector/launch', {
+      body: '{}',
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    }));
   }
 
   forgetAuthentication(): void {

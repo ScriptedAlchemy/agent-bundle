@@ -43,6 +43,7 @@ even when no error diagnostic was reported.
 | `AB8215`–`AB8218` | Workbench read-only host discovery route. |
 | `AB8219`–`AB8223` | Workbench live MCP probe route (user-initiated, read-only initialize + tools/list): `AB8219` invalid path, `AB8220` invalid request/method, `AB8221` probe target not found, `AB8222` response over the 16 MiB budget, `AB8223` probe unavailable. |
 | `AB8233`–`AB8235` | Workbench browser-side strict decoders rejecting a dev-server response: `AB8233` lifecycle replay, `AB8234` host discovery, `AB8235` MCP probe report. |
+| `AB8110`–`AB8113` | Workbench standalone MCP Inspector routes (`/api/inspector/status`, `/api/inspector/launch`): `AB8110` invalid path, `AB8111` invalid request shape or query, `AB8112` the Inspector could not be launched (spawn failure, exit before publishing a URL, or the 30 s startup budget elapsed; 502), `AB8113` routes not available (404 when the launcher is not composed, 503 after shutdown). |
 | `AB8024`–`AB8025` | Live host MCP proxy: epoch drift behind a host connection and dev-server unavailability (see below). |
 | `AB8xxx` | Development server configuration. |
 | `AB9xxx` | Eval selection, harnesses, and persisted runs. |

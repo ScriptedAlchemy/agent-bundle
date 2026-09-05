@@ -111,6 +111,9 @@ it('surfaces every synthesized bundler config with the tools hatch merged over t
     },
     syntax: 'es2022',
     tools: {
+      // Rslib's `new URL()` rule is switched off so filesystem URLs in
+      // generated and plugin code survive verbatim.
+      bundlerChain: '[function preserveResourceReferences]',
       // The consumer rspack hatch is merged before the framework invariant
       // hook, which always runs last.
       rspack: [
