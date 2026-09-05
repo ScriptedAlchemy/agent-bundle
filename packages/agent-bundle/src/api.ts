@@ -13,7 +13,6 @@ import { build as buildArtifact, type BuildResult } from './build/build.ts';
 import { routedCliBins } from './build/cli-bins.ts';
 import { planComposite } from './build/compose.ts';
 import { buildPackageOutputs, type PackageBuildResult } from './build/package-build.ts';
-import { rewritesWorkspaceProtocols } from './build/pack-dependencies.ts';
 import {
   packInventoryDiagnostics,
   packOutputFromJson,
@@ -1403,7 +1402,7 @@ export const prepack = async (options: BuildOptions): Promise<PrepackResult> => 
     model: result.model,
     packageBuild: result.packageBuild,
     packOutput: pack,
-    packerRewritesWorkspaceProtocols: rewritesWorkspaceProtocols(process.env.npm_config_user_agent),
+    packerRewritesWorkspaceProtocols: false,
     projectRoot: options.root,
   });
   if (hasErrors(diagnostics)) throw new DiagnosticError(diagnostics);

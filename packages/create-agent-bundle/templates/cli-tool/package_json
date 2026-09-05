@@ -6,15 +6,6 @@
   "engines": {
     "node": ">=22.19.0"
   },
-  "files": [
-    "dist",
-    "artifact",
-    "README.md"
-  ],
-  "bin": {
-    "my-agent-plugin": "./dist/bin/my-agent-plugin.js",
-    "my-agent-plugin-install": "./dist/bin/my-agent-plugin-install.js"
-  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -25,7 +16,7 @@
     "build": "agent-bundle build --json --output artifact",
     "check": "npm run validate && npm run build && npm run typecheck && npm run test && npm run test:projection",
     "dev": "agent-bundle dev",
-    "prepack": "agent-bundle prepack --json --output artifact",
+    "pack:check": "agent-bundle prepack --json --output artifact",
     "test": "rstest tests --exclude \"tests/projection/**\"",
     "test:projection": "rstest --config rstest.projection.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",

@@ -4,7 +4,7 @@ A routed command-line tool and library built with
 [agent-bundle](https://github.com/ScriptedAlchemy/agent-bundle). There is no
 second bundler config, no hand-written bin shim, and no argv parser: the
 `src/cli/**` convention compiles each command module into one generated
-executable, `dist/bin/my-agent-plugin.js`, with help, argv grammar, input
+executable, `dist/bin/my-agent-plugin.mjs`, with help, argv grammar, input
 validation, and exit codes derived from the module's own `config` and zod
 schemas. `src/index.ts` is the library export with declarations, and
 `src/scripts/hello.ts` ships as a plain script inside every host artifact. One
@@ -20,17 +20,19 @@ npm run test             # plain module tests
 npm run test:projection  # cli-dispatch + script-dispatch pool
 
 # after a build
-node dist/bin/my-agent-plugin.js greet World
-node dist/bin/my-agent-plugin.js greet World --shout
-node dist/bin/my-agent-plugin.js greet --help
+node dist/bin/my-agent-plugin.mjs greet World
+node dist/bin/my-agent-plugin.mjs greet World --shout
+node dist/bin/my-agent-plugin.mjs greet --help
 node artifact/scripts/hello.mjs World
 
 # after publishing/installing the package
-npx my-agent-plugin-install install claude
+npx agent-bundle install claude --from node_modules/my-agent-plugin
 ```
 
-Installing the npm package does not mutate any host; run the generated
-`my-agent-plugin-install install <host>` command explicitly.
+Installing the npm package does not mutate any host; run
+`npx agent-bundle install <host> --from node_modules/<package>` explicitly.
+Validate and publish the generated npm root with
+`npm run pack:check && npm publish ./dist --ignore-scripts`.
 
 ## Layout
 

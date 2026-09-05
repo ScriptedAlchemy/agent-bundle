@@ -396,13 +396,20 @@ import meta, { name, packageName, packageVersion, version } from 'agent-bundle/m
 `bin/<plugin-name>.mjs`。因此 tarball 只有一个插件根和一个路由式 CLI，没有嵌套的 `artifact/` 目录或
 相对包的安装器包装器。没有任何 npm 生命周期会执行宿主安装。
 
+生成的根目录拥有自己的文件清单。源项目的 `files` 与 `bin` 字段会被替换；包入口路径
+（`exports`、`imports`、`main`、`module`、`types` 与 `typesVersions`）会从 `dist/` 重定位到
+生成根目录。pack 与 publish 钩子会被移除，其他脚本保持原样，因此必须已经使用相对该根目录的路径。
+只有清单拥有的产物文件、编译后的包入口以及标准 README、license 与 notice 文件会被携带；任意的
+源项目额外文件不会被复制。
+
 ```sh
 npx agent-bundle prepack --root . --output artifact --json
 ```
 
 `prepack` 运行发布构建与 `npm pack --dry-run --json --ignore-scripts`，随后对精确的包与产物清单、
 清单哈希、包 bin 目标以及发布版本一致性设卡。生成的包元数据会移除 pack 与 publish 生命周期钩子，
-避免源项目的 `prepack` 从 `dist/` 递归；消费者安装脚本保持不变。先运行门禁，再发布它已经校验的 npm 根目录：
+避免源项目的 `prepack` 从 `dist/` 递归；消费者安装脚本保持不变。请直接运行门禁，不要依赖源包的
+生命周期钩子，然后发布它已经校验的 npm 根目录：
 
 ```sh
 npm publish ./dist --ignore-scripts

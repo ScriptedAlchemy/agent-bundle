@@ -30,7 +30,7 @@ const renderTargets = (targets: readonly TargetName[]): string =>
 
 /** Derived from the shared default list so a change there cannot silently break the drift check. */
 const defaultTargetsLiteral = `targets: [${renderTargets(defaultTargets)}]`;
-const installerTargetNames: readonly TargetName[] = ['claude', 'codex', 'cursor'];
+const installableHostNames: readonly TargetName[] = ['claude', 'codex', 'cursor'];
 
 export interface ScaffoldRequest {
   readonly frameworkSpec: string;
@@ -61,7 +61,6 @@ export const assertScaffoldTarget = Effect.fnUntraced(function* (
 });
 
 interface TemplateManifest {
-  bin?: Record<string, string>;
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
   name?: string;
@@ -84,17 +83,6 @@ const rewriteManifest = (contents: string, request: ScaffoldRequest, runtimeSpec
       }
     }
   }
-  if (
-    manifest.bin !== undefined &&
-    !request.targets.some((target) => installerTargetNames.includes(target))
-  ) {
-    const suffixedInstallerName = `${request.pluginName}-install`;
-    const installerName = Object.hasOwn(manifest.bin, suffixedInstallerName)
-      ? suffixedInstallerName
-      : request.pluginName;
-    delete manifest.bin[installerName];
-    if (Object.keys(manifest.bin).length === 0) delete manifest.bin;
-  }
   return `${JSON.stringify(manifest, null, 2)}\n`;
 };
 
@@ -105,28 +93,33 @@ const rewriteConfigTargets = (contents: string, targets: readonly TargetName[]):
   return contents.replace(defaultTargetsLiteral, `targets: [${renderTargets(targets)}]`);
 };
 
-/** The hosts the generated installer bin accepts, in the package build's order. */
+/** Installable hosts in the package build's order. */
 const installableHosts = (targets: readonly TargetName[]): readonly TargetName[] =>
-  (['claude', 'codex', 'cursor'] as const)
-    .filter((host) => targets.includes(host));
+  installableHostNames.filter((host) => targets.includes(host));
 
 /**
  * Template READMEs are written against the default targets, so their install
  * example names `claude`. The checked-in shape is one shell comment followed
- * by `npx <installer-bin> install claude`, plus the prose sentence naming the
- * `<installer-bin> install <host>` command; both markers are drift-checked.
+ * by the public install command for Claude, plus the prose sentence naming the
+ * generic public install command; both markers are drift-checked.
  */
-const readmeInstallExample = /^(# after publishing[^\n]*)\n(npx \S+) install claude\n/mu;
-const readmeInstallProse = /^Installing the npm package does not mutate any host; run the generated\n`(\S+) install <host>` command explicitly\.\n/mu;
+const readmeInstallExample =
+  /^(# after publishing[^\n]*)\nnpx agent-bundle install claude --from node_modules\/\S+\n/mu;
+const readmeInstallProse =
+  /^Installing the npm package does not mutate any host; run\n`npx agent-bundle install <host> --from node_modules\/<package>` explicitly\.\n/mu;
 
 /**
  * Rewrite a template README's install instructions for the selected targets:
  * one example line per installable host, or — when no `claude`, `codex`, or
- * `cursor` target is selected and therefore no installer bin is generated —
- * an explanation of how to get one. Templates without an install
+ * `cursor` target is selected — an explanation of how to enable one.
+ * Templates without an install
  * section (the skills-only template) pass through unchanged.
  */
-const rewriteReadmeInstall = (contents: string, targets: readonly TargetName[]): string => {
+const rewriteReadmeInstall = (
+  contents: string,
+  packageName: string,
+  targets: readonly TargetName[],
+): string => {
   const example = readmeInstallExample.exec(contents);
   const prose = readmeInstallProse.exec(contents);
   if (example === null && prose === null) return contents;
@@ -136,40 +129,31 @@ const rewriteReadmeInstall = (contents: string, targets: readonly TargetName[]):
   const hosts = installableHosts(targets);
   // Every group is unconditional in the patterns above.
   const comment = example[1] ?? '';
-  const exampleBin = example[2] ?? '';
-  const proseBin = prose[1] ?? '';
   if (hosts.length === 0) {
-    // The scaffold also dropped this bin mapping from package.json, and the
-    // build never restores manifest entries, so re-enabling installers needs
-    // both edits: the config target and the bin entry the npx command resolves.
-    const binEntry = `"${proseBin}": "./dist/bin/${proseBin}.js"`;
     return contents
       .replace(readmeInstallExample, [
-        '# no installer bin is generated for these targets; add claude, codex, or cursor',
-        '# to `targets` in agent-bundle.config.ts and restore the package.json bin entry',
-        `# ${binEntry} to get one`,
+        '# no installable host is selected; add claude, codex, or cursor',
+        '# to `targets` in agent-bundle.config.ts before installing',
         '',
       ].join('\n'))
       .replace(readmeInstallProse, [
         'Installing the npm package does not mutate any host. This project selects',
-        `no installable host target (${renderTargets(targets)}), so no \`${proseBin} install\``,
-        'command is generated and its `bin` entry was dropped from `package.json`. To',
-        'generate one, add `claude`, `codex`, or `cursor` to `targets` in',
-        `\`agent-bundle.config.ts\` and restore \`${binEntry}\` under \`bin\` in`,
-        '`package.json`; the build emits the installer file but never edits the manifest.',
+        `no installable host target (${renderTargets(targets)}). Add \`claude\`, \`codex\`,`,
+        'or `cursor` to `targets` in `agent-bundle.config.ts` before using',
+        '`agent-bundle install`.',
         '',
       ].join('\n'));
   }
   return contents
     .replace(readmeInstallExample, [
       comment,
-      ...hosts.map((host) => `${exampleBin} install ${host}`),
+      ...hosts.map((host) => `npx agent-bundle install ${host} --from node_modules/${packageName}`),
       '',
     ].join('\n'))
     .replace(readmeInstallProse, [
-      'Installing the npm package does not mutate any host; run the generated',
-      `\`${proseBin} install <host>\` command explicitly. The installer accepts the`,
-      `selected host targets only: ${hosts.map((host) => `\`${host}\``).join(', ')}.`,
+      'Installing the npm package does not mutate any host; run',
+      `\`npx agent-bundle install <host> --from node_modules/${packageName}\` explicitly.`,
+      `The package contains these selected host targets: ${hosts.map((host) => `\`${host}\``).join(', ')}.`,
       '',
     ].join('\n'));
 };
@@ -177,9 +161,8 @@ const rewriteReadmeInstall = (contents: string, targets: readonly TargetName[]):
 /**
  * Copy one template directory into the target, substituting the placeholder
  * project name in every file, rewriting `package.json` (real package name,
- * `workspace:*` framework placeholder pinned to the resolved spec, installer
- * bins omitted when no installable host is selected), the config's target
- * list, and the README's install instructions. Returns the emitted
+ * `workspace:*` framework placeholder pinned to the resolved spec), the
+ * config's target list, and the README's install instructions. Returns the emitted
  * project-relative paths, sorted.
  */
 export const scaffold = Effect.fnUntraced(function* (
@@ -219,7 +202,9 @@ export const scaffold = Effect.fnUntraced(function* (
       // the defect crosses the boundary as the same Error it always was.
       if (relativePath === 'package.json') contents = rewriteManifest(contents, request, runtimeSpec);
       if (relativePath === 'agent-bundle.config.ts') contents = rewriteConfigTargets(contents, request.targets);
-      if (relativePath === 'README.md') contents = rewriteReadmeInstall(contents, request.targets);
+      if (relativePath === 'README.md') {
+        contents = rewriteReadmeInstall(contents, request.packageName, request.targets);
+      }
       yield* fs.writeFileString(destination, contents);
       emitted.push(relativePath);
     }

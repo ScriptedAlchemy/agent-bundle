@@ -6,7 +6,7 @@ import { cliJson, invokeCli, testManifest } from 'agent-bundle/test';
  * CLI's own shell — command resolution, the compiled argv grammar, generated
  * help, input validation, and exit-code mapping are the product's — in this
  * process. Nothing is bundled or spawned; the generated
- * `dist/bin/my-agent-plugin.js` executable is proven by `npm run build`.
+ * `dist/bin/my-agent-plugin.mjs` executable is proven by `npm run build`.
  */
 it('compiles the greet command without a build', () => {
   const manifest = testManifest();

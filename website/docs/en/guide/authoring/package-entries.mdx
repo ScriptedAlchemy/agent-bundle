@@ -443,6 +443,13 @@ from the artifact. The tarball therefore has one plugin root and one routed CLI,
 `artifact/` directory or package-relative installer wrapper. No npm lifecycle performs a host
 installation.
 
+The generated root owns its inventory. Source `files` and `bin` fields are replaced; package entry
+paths (`exports`, `imports`, `main`, `module`, `types`, and `typesVersions`) are rebased from
+`dist/` to the generated root. Pack and publish hooks are removed, while other scripts are copied
+unchanged and must already name paths relative to that root. Only manifest-owned artifact files,
+compiled package entries, and standard README, license, and notice files are carried; arbitrary
+source-project extras are not.
+
 ```sh
 npx agent-bundle prepack --root . --output artifact --json
 ```
@@ -451,7 +458,8 @@ npx agent-bundle prepack --root . --output artifact --json
 exact package and artifact inventory, manifest hashes, package bin targets, and release-version
 agreement. It removes pack and publish lifecycle hooks from the generated package metadata, so a
 source-project `prepack` cannot recurse from `dist/`; consumer install scripts remain intact. Run
-the gate first, then publish the npm root it validated:
+the gate directly rather than relying on a source-package lifecycle hook, then publish the npm root
+it validated:
 
 ```sh
 npm publish ./dist --ignore-scripts

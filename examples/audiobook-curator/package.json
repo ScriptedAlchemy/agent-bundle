@@ -8,13 +8,6 @@
   "engines": {
     "node": ">=22.19.0"
   },
-  "files": [
-    "dist",
-    "README.md"
-  ],
-  "bin": {
-    "audiobook-curator": "./dist/bin/audiobook-curator.js"
-  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

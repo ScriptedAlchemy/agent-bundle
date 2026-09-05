@@ -23,7 +23,7 @@ export interface ModuleImport {
  *   bundler's to guarantee. Re-parsing megabytes of bundler output to prove
  *   it is JavaScript was the dominant cost of every build.
  * - `parsed`: a full `acorn` parse runs first, so a module the framework did
- *   not compile — a copied consumer script, a generated installer — keeps
+ *   not compile — a copied consumer script or standalone installer — keeps
  *   the complete syntax check.
  */
 export type ModuleSyntaxCheck = 'lexed' | 'parsed';

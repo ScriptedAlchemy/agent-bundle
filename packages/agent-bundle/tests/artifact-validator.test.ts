@@ -1865,8 +1865,8 @@ it('does not repeat JavaScript diagnostics after a validation-side mutation', as
  * only the ESM lexer runs over it, so re-parsing megabytes of bundler output
  * no longer dominates every build, and a bare `export const broken = ;` —
  * which no bundler emits — passes while unterminated input still fails. A
- * module the framework did not compile (a copied consumer script, a
- * generated installer) is parsed in full and keeps the complete check.
+ * module the framework did not compile (a copied consumer script or
+ * standalone installer) is parsed in full and keeps the complete check.
  */
 it('parses copied and generated modules in full and trusts compiler bundles to the ESM lexer', async () => {
   const brokenStatement = 'export const broken = ;\n';

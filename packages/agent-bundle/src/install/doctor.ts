@@ -53,7 +53,6 @@ import {
   isRuntimeStateRemnant,
   readInstallReceipt,
   readInstallReceiptFile,
-  treeInventory,
   type InstalledTreeComparison,
   type InstalledTreeOwnership,
   type InstallReceipt,
@@ -74,7 +73,7 @@ import {
   inspectCursorPluginHooks,
 } from './cursor-hooks-registration.ts';
 import { cursorMarketplacePluginPath, cursorMarketplaceRoot } from './cursor-marketplace.ts';
-import { bundleInventory, readBundleIdentity, type PluginIdentity } from './identity.ts';
+import { bundleInventory, installedBundleInventory, readBundleIdentity, type PluginIdentity } from './identity.ts';
 
 export type DoctorHost = InstallHost;
 export type DoctorHostProbeStatus = 'available' | 'failed' | 'unavailable';
@@ -1638,7 +1637,7 @@ const publicHostInstallComparison = async (
     }
     let installed: TreeInventory;
     try {
-      installed = await treeInventory(entry.installPath);
+      installed = await installedBundleInventory(entry.installPath, host);
     } catch (error) {
       comparisons.push(Object.freeze({
         artifactContentHash: artifact.hash,
