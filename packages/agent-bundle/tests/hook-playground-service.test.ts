@@ -11,6 +11,7 @@ import type { TargetAdapter } from '../src/adapters/types.ts';
 import { build } from './support/build.ts';
 import { loadedProject } from './support/loaded-project.ts';
 import { runNodeScript } from './support/run-node-script.ts';
+import { emptyCompiledRouteGraph } from '../src/routes/graph.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
 import { sha256Hex } from '../src/core/digest.ts';
 
@@ -168,7 +169,13 @@ const publishHookEpoch = async (
     { skills: [] },
     registry,
   );
-  await build({ model, outputRoot: artifact, projectRoot: root, registry: createDefaultRegistry() });
+  await build({
+    model,
+    outputRoot: artifact,
+    projectRoot: root,
+    registry: createDefaultRegistry(),
+    routeGraph: emptyCompiledRouteGraph,
+  });
 
   const targetDigests = await projectionDigests(artifact, ['claude', 'codex']);
   const store = epochStore;
@@ -232,10 +239,11 @@ it('uses the injected adapter hook contract for custom manifests, mappings, matc
   const manifestPath = 'registrations/hook-events.json';
   const hook = Object.freeze({
     event: 'beforeTool',
+    host: 'synthetic',
     id: 'hook:synthetic',
+    kind: 'config' as const,
     name: 'synthetic',
     path: 'runtime/synthetic.mjs',
-    target: 'synthetic',
   });
   const contract = Object.freeze({
     commandRoot: '${SYNTHETIC_PLUGIN_ROOT}',
@@ -681,10 +689,11 @@ it('distinguishes an unsupported canonical event from an unsupported target', as
       hookService: {
         list: async () => [{
           event: 'futureEvent',
+          host: 'codex',
           id: 'hook:future',
+          kind: 'config' as const,
           name: 'future',
           path: 'hooks/future.codex.mjs',
-          target: 'codex',
         }],
         simulate: async () => {
           throw new Error('Unsupported event must not execute a wrapper.');
