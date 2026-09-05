@@ -471,17 +471,12 @@ const validateBundleFiles = async (
  * the host's manifest directly. Nested `<root>/<host>` and `<root>/plugin`
  * directories are read only as the layout of artifacts built before #555.
  */
+/** The plugin root is the supplied directory itself (#555): it holds the host's manifest directly. */
 export const resolveBundleRoot = async (from: string, host: DoctorHost): Promise<string> => {
   const root = resolve(from);
   const manifest = manifestPath(host);
   if (await exists(join(root, manifest))) return root;
-  for (const legacy of [join(root, host), join(root, 'plugin')]) {
-    if (await exists(join(legacy, manifest))) return legacy;
-  }
-  throw new Error(
-    `No ${host} bundle manifest was found in ${JSON.stringify(root)} (nor, for an artifact built before one composite root, in its ` +
-    `${JSON.stringify(host)} or "plugin" directory).`,
-  );
+  throw new Error(`No ${host} bundle manifest ${JSON.stringify(manifest)} was found in ${JSON.stringify(root)}; --from names the built plugin root.`);
 };
 
 /** The cwd for `plugin list --json`: the resolved host bundle root under `--from`, else the given directory, else home. */

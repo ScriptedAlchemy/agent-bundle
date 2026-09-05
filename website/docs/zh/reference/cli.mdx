@@ -129,7 +129,7 @@ agent-bundle install <host> [--from <root>] [--scope <scope>] [--mode <mode>] [-
 | 选项 | 默认值 | 含义 |
 | --- | --- | --- |
 | `<host>` | **必填** | `claude`、`codex` 或 `cursor`。 |
-| `--from <root>` | `process.cwd()` | 已构建的插件根目录——包含该宿主清单的那个目录（`agent-bundle install claude --from artifact`）。`<root>/portable` 同样能解析出可移植视图；在组合根目录之前构建的产物中的 `<root>/<host>` 与 `<root>/plugin` 目录仍会被探测，但仅限于那些旧产物。 |
+| `--from <root>` | `process.cwd()` | 已构建的插件根目录——包含该宿主清单的那个目录（`agent-bundle install claude --from artifact`）。对于与其他宿主并列的可移植包，把 `<root>/portable` 传给 `install cursor`。不会探测根目录之下的任何嵌套目录。 |
 | `--scope <scope>` | `user` | `user`、`project` 或 `local`。Claude 接受全部三种；Codex 与 Cursor 是 user 作用域。 |
 | `--mode <mode>` | `local` | 仅限 Cursor。`local` 把捆绑包复制到 `~/.cursor/plugins/local/<name>`；`marketplace` 在 `~/.cursor/agent-bundle/marketplaces/<name>` 下暂存一个已提交的本地市场仓库，并打印 Customize → Plugins →“Add Plugins from Local Repository”这一步，让 Cursor 把该插件当作市场安装来管理。 |
 | `--replace`（别名 `--force`） | 关闭 | 即使版本不同，也替换该插件已有的 agent-bundle 安装。不带它时，内容完全相同的副本是 `already-installed` 空操作，版本相同但内容哈希不同的副本会被自动替换，版本不同则为 `AB7005`。外来目录总是被拒绝（`AB7005`）。 |

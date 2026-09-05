@@ -567,20 +567,25 @@ it('honours --replace for Codex through remove + add and fails closed without a 
   }
 });
 
-it('accepts an artifact root containing the requested host target', async () => {
+it('refuses --from that names a directory above the plugin root instead of probing into it (#555)', async () => {
+  // The bundle sits under `<from>/claude`: every host reads the one root it is
+  // given, so nothing nested is probed and the refusal names the manifest.
   const fixture = await createHostBundle('claude', { artifactRoot: true });
   const { calls, runner } = recordingRunner();
   try {
-    const result = await installBundle({
+    await expect(installBundle({
       ...isolated(fixture),
       commandRunner: runner,
       from: fixture.from,
       host: 'claude',
       scope: 'user',
+    })).rejects.toMatchObject({
+      diagnostics: [expect.objectContaining({
+        code: 'AB7001',
+        message: expect.stringContaining('No claude bundle manifest ".claude-plugin/plugin.json" was found'),
+      })],
     });
-
-    expect(result.bundleRoot).toBe(fixture.bundleRoot);
-    expect(calls[0]).toMatchObject({ cwd: fixture.bundleRoot });
+    expect(calls).toEqual([]);
   } finally {
     await rm(fixture.cleanupRoot, { force: true, recursive: true });
   }

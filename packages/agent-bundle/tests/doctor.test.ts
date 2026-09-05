@@ -975,16 +975,18 @@ it('validates --from Claude documents from pinned bytes without a new CLI proof'
   }
 });
 
-it('lists Claude plugins from the resolved host bundle root when --from names a multi-target artifact root', async () => {
+it('lists Claude plugins from the plugin root --from names, never from a directory nested under it (#555)', async () => {
   const fixture = await temporaryDoctor();
   const calls: { readonly args: readonly string[]; readonly cwd?: string }[] = [];
   try {
-    // `<from>/claude` holds the manifest; Claude `project`/`local` rows are keyed by the cwd the host verbs ran
-    // in, and install runs them from that resolved root — so must the listing, or such scopes read as absent.
+    // The root itself holds the manifest; Claude `project`/`local` rows are keyed by the cwd the host verbs ran
+    // in, and install runs them from that root — so must the listing, or such scopes read as absent. A
+    // `claude/` directory nested under it is never probed.
     const artifactRoot = join(fixture.root, 'artifact');
     await mkdir(artifactRoot, { recursive: true });
-    const bundle = join(artifactRoot, 'claude');
-    await mkdir(bundle, { recursive: true });
+    const bundle = artifactRoot;
+    await mkdir(join(artifactRoot, 'claude'), { recursive: true });
+    await writeJson(join(artifactRoot, 'claude', '.claude-plugin/plugin.json'), { name: 'nested-decoy', version: '0.0.0' });
     await writeFile(join(bundle, 'payload.txt'), 'payload\n');
     await writeJson(join(bundle, '.claude-plugin/plugin.json'), {
       author: { name: 'Doctor Fixture' },
@@ -1015,7 +1017,7 @@ it('lists Claude plugins from the resolved host bundle root when --from names a 
       expect.objectContaining({ args: ['plugin', 'list', '--json'], cwd: bundle }),
     ]));
     expect(calls).not.toEqual(expect.arrayContaining([
-      expect.objectContaining({ args: ['plugin', 'list', '--json'], cwd: artifactRoot }),
+      expect.objectContaining({ args: ['plugin', 'list', '--json'], cwd: join(artifactRoot, 'claude') }),
     ]));
   } finally {
     await fixture.cleanup();

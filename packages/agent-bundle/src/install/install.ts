@@ -179,20 +179,17 @@ const readString = (
 };
 
 /**
- * The composite plugin root is canonical (#555): the supplied directory holds
- * the host's manifest directly. Nested `<root>/<host>` and `<root>/plugin`
- * directories are read only as the layout of artifacts built before #555.
+ * The plugin root is the supplied directory itself (#555): it holds the host's
+ * manifest directly. Every host reads the one root, so nothing nested under
+ * it is probed.
  */
 const resolveBundleRoot = async (from: string, host: InstallHost): Promise<string> => {
   const root = resolve(from);
   const manifest = hostManifestPath(host);
   if (await exists(join(root, manifest))) return root;
-  for (const legacy of [join(root, host), join(root, 'plugin')]) {
-    if (await exists(join(legacy, manifest))) return legacy;
-  }
   throw failure(
     'AB7001',
-    `No ${host} bundle manifest was found in ${JSON.stringify(root)} (nor, for an artifact built before one composite root, in its ${JSON.stringify(host)} or "plugin" directory).`,
+    `No ${host} bundle manifest ${JSON.stringify(manifest)} was found in ${JSON.stringify(root)}; --from names the built plugin root.`,
     host,
   );
 };

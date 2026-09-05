@@ -135,7 +135,7 @@ agent-bundle install <host> [--from <root>] [--scope <scope>] [--mode <mode>] [-
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `<host>` | **required** | `claude`, `codex`, or `cursor`. |
-| `--from <root>` | `process.cwd()` | The built plugin root — the directory holding the host's manifest (`agent-bundle install claude --from artifact`). `<root>/portable` also resolves the portable view; the `<root>/<host>` and `<root>/plugin` directories of artifacts built before the composite root are still probed for those older artifacts only. |
+| `--from <root>` | `process.cwd()` | The built plugin root — the directory holding the host's manifest (`agent-bundle install claude --from artifact`). For the portable pack beside other hosts, pass `<root>/portable` to `install cursor`. Nothing nested under the root is probed. |
 | `--scope <scope>` | `user` | `user`, `project`, or `local`. Claude accepts all three; Codex and Cursor are user-scoped. |
 | `--mode <mode>` | `local` | Cursor only. `local` copies the bundle into `~/.cursor/plugins/local/<name>`; `marketplace` stages a committed local marketplace repository under `~/.cursor/agent-bundle/marketplaces/<name>` and prints the Customize → Plugins → "Add Plugins from Local Repository" step that makes Cursor manage the plugin as a marketplace install. |
 | `--replace` (alias `--force`) | off | Replace an existing agent-bundle install of this plugin even when its version differs. Without it, an identical copy is an `already-installed` no-op, a same-version copy whose content hash differs is replaced automatically, and a different version is `AB7005`. Foreign directories are always refused (`AB7005`). |
