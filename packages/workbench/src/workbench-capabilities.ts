@@ -1,20 +1,42 @@
 import type { ArtifactInspection } from '../../agent-bundle/src/contracts/artifacts.ts';
+import type { RouteManifest } from '../../agent-bundle/src/contracts/routes.ts';
 import type { SkillDocumentTree } from '../../agent-bundle/src/contracts/skills.ts';
 
-import { errorMessage as messageFrom } from './client-helpers.ts';
-
+import type { ApplicationTreeSources } from './application/application-tree-model.ts';
 import type { ArtifactClient } from './artifacts/artifact-client.ts';
+import { errorMessage as messageFrom } from './client-helpers.ts';
 import type { EvalClient } from './evals/eval-client.ts';
 import type { RouteManifestClient } from './routes/route-manifest-client.ts';
-import {
-  routeCatalogFor,
-  routeCatalogHasKind,
-  routeCatalogServerCount,
-  unavailableRouteCatalog,
-  type RouteCatalog,
-} from './routes/routes-model.ts';
+import type { RouteCatalogState } from './routes/routes-model.ts';
 import type { SkillClient } from './skill-client.ts';
-import type { WorkbenchPage } from './workbench-screen.tsx';
+
+/**
+ * The compiled route manifest as the shell needs it: the manifest itself (the
+ * application tree derives from it) plus its freshness against the published
+ * build. `stale` is normal mid-rebuild drift — the dev server compiled newer
+ * source than the epoch hosts see; `unavailable` carries the refusal.
+ */
+export interface WorkbenchRouteCatalog {
+  readonly manifest?: RouteManifest;
+  readonly message?: string;
+  readonly state: RouteCatalogState;
+}
+
+/**
+ * Which optional surfaces this build declares. Navigation no longer derives
+ * from these — the application tree does — but the shell still gates what it
+ * wires: the runtime backend exists only for a project with a `devRuntime`
+ * provider, and Advanced sections read the flags for their empty states.
+ */
+export interface WorkbenchFeatures {
+  readonly evals: boolean;
+  readonly hooks: boolean;
+  readonly mcp: boolean;
+  /** The foreground owns a development Runtime controller (`ProjectStatus.runtime`). */
+  readonly runtime: boolean;
+  readonly scripts: boolean;
+  readonly skills: boolean;
+}
 
 export interface WorkbenchCapabilities {
   readonly buildId: string;
@@ -26,10 +48,9 @@ export interface WorkbenchCapabilities {
     readonly skills: number;
     readonly targets: number;
   }>;
+  readonly features: WorkbenchFeatures;
   readonly inspection: ArtifactInspection;
-  readonly pages: ReadonlySet<WorkbenchPage>;
-  /** The compiled route graph this build was produced from, projected for the browser. */
-  readonly routes: RouteCatalog;
+  readonly routes: WorkbenchRouteCatalog;
   readonly skillTree: SkillDocumentTree;
 }
 
@@ -40,60 +61,56 @@ export interface WorkbenchCapabilityClients {
   readonly epochSourceRevision?: string;
   readonly evalClient: Pick<EvalClient, 'suites'>;
   readonly routeManifestClient: Pick<RouteManifestClient, 'manifest'>;
+  /** Whether the foreground reports a configured development Runtime (`ProjectStatus.runtime`). */
+  readonly runtime?: boolean;
   readonly signal?: AbortSignal;
   readonly skillClient: Pick<SkillClient, 'sourceTree'>;
 }
-
-export const generalWorkbenchPages: ReadonlySet<WorkbenchPage> = Object.freeze(new Set<WorkbenchPage>([
-  'overview',
-  'artifacts',
-  'logs',
-]));
-
-/**
- * Navigation derives from the compiled route graph wherever the graph declares
- * the surface, and from the artifact catalog for everything configuration can
- * declare without a route module. The union is deliberate: a project may reach
- * a page through either source, and neither may hide the other.
- */
-const pagesFor = (
-  counts: WorkbenchCapabilities['counts'],
-  routes: RouteCatalog,
-): ReadonlySet<WorkbenchPage> => {
-  const compiledEvents = routeCatalogHasKind(routes, 'event-route');
-  const compiledScripts = routeCatalogHasKind(routes, 'script');
-  const pages: WorkbenchPage[] = ['overview', 'routes'];
-  if (counts.skills > 0) pages.push('skills');
-  if (counts.hooks > 0 || compiledEvents) pages.push('hooks');
-  if (compiledEvents) pages.push('lifecycles');
-  if (counts.mcpServers > 0 || routeCatalogServerCount(routes) > 0) pages.push('mcp');
-  pages.push('artifacts');
-  if (counts.hooks + counts.scripts > 0 || compiledEvents || compiledScripts) pages.push('playground');
-  pages.push('logs');
-  if (counts.evalSuites > 0) pages.push('evals', 'comparisons');
-  return Object.freeze(new Set(pages));
-};
 
 const errorMessage = (reason: unknown): string =>
   messageFrom(reason, 'The compiled route manifest could not be read.');
 
 /**
  * An absent or refused manifest route degrades this one section rather than the
- * whole catalog: every page that predates the manifest keeps its artifact-derived
- * evidence, so the Workbench stays usable against a dev server without the route.
+ * whole catalog: the artifact-derived evidence keeps the Workbench usable
+ * against a dev server without the route, and the tree reports why it is empty.
  */
 const routeCatalog = async (
   client: Pick<RouteManifestClient, 'manifest'>,
   epochSourceRevision: string | undefined,
   signal: AbortSignal | undefined,
-): Promise<RouteCatalog> => {
+): Promise<WorkbenchRouteCatalog> => {
   try {
-    return routeCatalogFor(await client.manifest(signal), epochSourceRevision);
+    const manifest = await client.manifest(signal);
+    return Object.freeze({
+      manifest,
+      state: epochSourceRevision === undefined || epochSourceRevision === manifest.sourceRevision ? 'current' : 'stale',
+    });
   } catch (reason) {
     if (reason instanceof Error && reason.name === 'AbortError') throw reason;
-    return unavailableRouteCatalog(errorMessage(reason));
+    return Object.freeze({ message: errorMessage(reason), state: 'unavailable' });
   }
 };
+
+const manifestHas = (manifest: RouteManifest | undefined, select: (manifest: RouteManifest) => number): boolean =>
+  manifest !== undefined && select(manifest) > 0;
+
+/**
+ * Feature detection unions the compiled route graph with the artifact catalog:
+ * a project may declare a surface through either, and neither may hide the other.
+ */
+const featuresFor = (
+  counts: WorkbenchCapabilities['counts'],
+  routes: WorkbenchRouteCatalog,
+  runtime: boolean,
+): WorkbenchFeatures => Object.freeze({
+  evals: counts.evalSuites > 0,
+  hooks: counts.hooks > 0 || manifestHas(routes.manifest, (manifest) => manifest.events.length),
+  mcp: counts.mcpServers > 0 || manifestHas(routes.manifest, (manifest) => manifest.servers.length),
+  runtime,
+  scripts: counts.scripts > 0 || manifestHas(routes.manifest, (manifest) => manifest.scripts.length),
+  skills: counts.skills > 0,
+});
 
 /** Composes existing strict route catalogs into one build-scoped Workbench view. */
 export const loadWorkbenchCapabilities = async ({
@@ -102,6 +119,7 @@ export const loadWorkbenchCapabilities = async ({
   epochSourceRevision,
   evalClient,
   routeManifestClient,
+  runtime = false,
   signal,
   skillClient,
 }: WorkbenchCapabilityClients): Promise<WorkbenchCapabilities> => {
@@ -125,9 +143,18 @@ export const loadWorkbenchCapabilities = async ({
   return Object.freeze({
     buildId,
     counts,
+    features: featuresFor(counts, routes, runtime),
     inspection,
-    pages: pagesFor(counts, routes),
     routes,
     skillTree,
   });
 };
+
+/** The application tree's inputs, read off one loaded capability catalog. */
+export const applicationTreeSourcesFor = (capabilities: WorkbenchCapabilities): ApplicationTreeSources => Object.freeze({
+  inspection: capabilities.inspection,
+  ...(capabilities.routes.manifest === undefined ? {} : { manifest: capabilities.routes.manifest }),
+  ...(capabilities.routes.message === undefined ? {} : { message: capabilities.routes.message }),
+  skillTree: capabilities.skillTree,
+  state: capabilities.routes.state,
+});
