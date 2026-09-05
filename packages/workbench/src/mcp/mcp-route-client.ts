@@ -9,7 +9,7 @@ import type {
 } from '../../../agent-bundle/src/contracts/runtime.ts';
 import type { JsonObject } from '../../../agent-bundle/src/contracts/runtime.ts';
 import { isMcpSessionTarget, type McpSessionTarget } from '../../../agent-bundle/src/contracts/mcp-session.ts';
-import { exactKeys, isRecord } from '../client-helpers.ts';
+import { exactKeys, isLoopbackHttpUrl, isRecord } from '../client-helpers.ts';
 import { hasOnlyOwnKeys } from '../strict-json.ts';
 
 export type McpRouteTarget = McpSessionTarget;
@@ -62,6 +62,14 @@ export const sameRuntimeBinding = (left: McpRuntimeBindingIdentity, right: McpRu
 export interface McpRouteRuntimeRestart {
   readonly reconcile: DevRuntimeMcpRegistryReconcileResult;
   readonly session: McpRouteRuntimeSession;
+}
+
+export type McpInspectorRouteState = 'exited' | 'idle' | 'running' | 'starting';
+
+/** The dev server's view of the standalone MCP Inspector process; `url` is present only while running. */
+export interface McpInspectorRouteStatus {
+  readonly state: McpInspectorRouteState;
+  readonly url?: string;
 }
 
 export interface McpRouteCatalog {
@@ -404,6 +412,31 @@ const runtimeOperationRequest = (request: DevRuntimeMcpOperationRequest): DevRun
     });
   }
   throw new McpRouteClientError('AB8015', 'Runtime MCP operation request is not valid.');
+};
+
+const inspectorRouteStates: readonly McpInspectorRouteState[] = Object.freeze(['exited', 'idle', 'running', 'starting']);
+
+const isInspectorRouteState = (value: unknown): value is McpInspectorRouteState =>
+  (inspectorRouteStates as readonly unknown[]).includes(value);
+
+const inspectorRouteStatus = (value: unknown): McpInspectorRouteStatus => {
+  const invalid = (): McpRouteClientError => new McpRouteClientError('AB8019', 'Inspector status route returned an invalid response.');
+  const response = isRecord(value) ? asRecord(value) : undefined;
+  if (response === undefined || !hasExactKeys(response, ['status']) || !isRecord(response.status)) throw invalid();
+  const status = response.status;
+  if (
+    !hasOnlyKeys(status, ['state', 'url']) || !isInspectorRouteState(status.state) ||
+    (status.url !== undefined && !isLoopbackHttpUrl(status.url))
+  ) throw invalid();
+  return Object.freeze({ state: status.state, ...(status.url === undefined ? {} : { url: status.url }) });
+};
+
+const inspectorRouteLaunch = (value: unknown): Readonly<{ readonly url: string }> => {
+  const response = isRecord(value) ? asRecord(value) : undefined;
+  if (response === undefined || !hasExactKeys(response, ['url']) || !isLoopbackHttpUrl(response.url)) {
+    throw new McpRouteClientError('AB8019', 'Inspector launch route returned an invalid response.');
+  }
+  return Object.freeze({ url: response.url });
 };
 
 const encode = (value: string): string => encodeURIComponent(value);
@@ -785,6 +818,19 @@ export class McpRouteClient {
       throw new McpRouteClientError('AB8204', 'Runtime MCP operation response does not match the requested session revision.');
     }
     return result;
+  }
+
+  async inspectorStatus(): Promise<McpInspectorRouteStatus> {
+    return inspectorRouteStatus(await this.#json('/api/inspector/status'));
+  }
+
+  /** Idempotent while the Inspector is starting or running; the server owns the command it spawns. */
+  async inspectorLaunch(): Promise<Readonly<{ readonly url: string }>> {
+    return inspectorRouteLaunch(await this.#json('/api/inspector/launch', {
+      body: '{}',
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+    }));
   }
 
   forgetAuthentication(): void {
