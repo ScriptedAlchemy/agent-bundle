@@ -40,6 +40,7 @@ import {
   type ResolvedMcpSessionServer,
 } from './mcp-session-launch.ts';
 import { McpSessionTraceLog, type McpSessionTraceSink } from './mcp-session-trace.ts';
+import { liftMcpFrame } from './mcp-session-trace-publisher.ts';
 import { RecordingTransport } from './mcp-recording-transport.ts';
 import {
   McpSessionError,
@@ -682,6 +683,7 @@ export class McpSession {
     this.#retain(this.#frames, Object.freeze({ direction, message: snapshot, sequence }), maxRetainedFrames);
     this.#recordTrace(Object.freeze({
       direction,
+      ...liftMcpFrame(snapshot),
       kind: 'frame',
       message: snapshot,
       occurredAt: Date.now(),

@@ -11,6 +11,28 @@ import type {
 
 export type McpSessionTraceSink = (binding: McpSessionBinding, entry: McpSessionTraceEntry) => void;
 
+/**
+ * Fans one entry out to every sink, isolating each: a throwing or slow
+ * observer (a trace publisher, the dev-log sink) never starves the others
+ * and never reaches the session.
+ */
+export const composeMcpSessionTraceSinks = (
+  ...sinks: readonly (McpSessionTraceSink | undefined)[]
+): McpSessionTraceSink | undefined => {
+  const active = sinks.filter((sink): sink is McpSessionTraceSink => sink !== undefined);
+  if (active.length === 0) return undefined;
+  if (active.length === 1) return active[0];
+  return (binding, entry) => {
+    for (const sink of active) {
+      try {
+        sink(binding, entry);
+      } catch {
+        // One observer's failure is not another's, and none is the session's.
+      }
+    }
+  };
+};
+
 interface TraceSubscription {
   closed: boolean;
   lastDeliveredSequence: number;

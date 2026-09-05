@@ -8,6 +8,7 @@ export type {
   McpSessionInspectorConfig,
   McpSessionOperation,
   McpSessionTraceEntry,
+  McpSessionTraceMeta,
   McpSessionTraceReplayGap,
 } from '../dev/mcp-session/mcp-session-protocol.ts';
 
