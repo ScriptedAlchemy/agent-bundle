@@ -166,6 +166,8 @@ export type {
   ArtifactManifestProvider,
   ArtifactManifestReadResult,
   ArtifactManifestRoute,
+  ArtifactManifestRouteContract,
+  ArtifactManifestRouteContractOrigin,
   ArtifactManifestRouteKind,
   ArtifactManifestRouteProvenance,
   ArtifactManifestRoutes,

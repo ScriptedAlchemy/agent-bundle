@@ -6,8 +6,8 @@ description: 'agent-bundle 如何把 src/ 约定逐层编译为路由图、宿�
 
 agent-bundle 把一个项目编译为宿主原生的插件。本页描述的是编译器**在今天的代码中的实际工作
 方式**：后续阶段读取的三层数据、生产与消费每一层的模块，以及这些阶段留下的产物清单。它是
-[#592](https://github.com/ScriptedAlchemy/agent-bundle/issues/592) 的文档切片（第 2 步）。
-这里没有任何内容会改变公开行为。
+[#592](https://github.com/ScriptedAlchemy/agent-bundle/issues/592) 的文档切片：第 2 步的三层，以及第 3 步落地的
+v2 权威清单（[PR #604](https://github.com/ScriptedAlchemy/agent-bundle/pull/604)）。
 
 除非明确写出包名，下文的路径都相对于 `packages/agent-bundle/src/`。类型名就是编译器导出的
 那些——目前还不存在 `ApplicationIR`、`ProjectionIR` 或 `ArtifactIR` 类型。
@@ -240,7 +240,6 @@ Skill、命令、规则、配置中声明的钩子、手写的 MCP 入口以及�
 | 计划条目 | `build/emit.ts` 的 `emitPlanEntries` | 宿主文档、Skill、命令、规则、资源、`INSTALL.md` / `install.mjs` |
 | 脚本、钩子、MCP 入口、CLI bin | `build/rslib.ts` 的 `compileRslibSurfaces`，经由 `build/entries.ts`、`build/cli-bins.ts` | `scripts/*.mjs`、`hooks/*.mjs`、`mcp/mcp-<server>-<hash>.mjs`、`bin/<plugin>.mjs`（外加 `-flight.mjs` worker） |
 | MCP App | `build/mcp-apps.ts` 的 `compileMcpApps` | `mcp-apps/<name>.html`（同时内联进生成的服务器） |
-| 钩子索引 | `build/emit.ts` 的 `writeHookIndex` | 覆盖所选宿主的 `agent-bundle.hooks.json` |
 | 清单 | `build/build.ts` 的 `manifestFor` + `build/emit.ts` 的 `writeManifest` | `agent-bundle.manifest.json` |
 | 发布 | `build/emit.ts` 的 `publishArtifact` | 把暂存目录原子重命名到 `outputRoot` |
 
@@ -252,8 +251,9 @@ node 表面。
 | 检查 | 模块 | 代码 |
 | --- | --- | --- |
 | 规范清单解析 + 文件摘要匹配 | `build/validate-artifact.ts` | `AB60xx` 系列；解析错误由 `parseArtifactManifest` 抛出 |
+| 清单各段对照目录树 / 适配器布局 / 宿主文档身份 | `build/validate-artifact-manifest.ts` | `AB6039`、`AB6040` |
 | 宿主包与包构建 `dist` 模块只导入相对/`file:` 说明符或 Node 内建模块 | `build/validate-artifact-modules.ts` | `AB6005` |
-| Skill / 钩子 / MCP 文档与所选宿主匹配 | `build/validate-artifact-skills.ts`、`build/validate-artifact-hooks.ts`、`build/validate-artifact-mcp.ts` | 按表面划分的 `AB60xx` |
+| Skill / 钩子 / MCP 文档与所选宿主匹配 | `build/validate-artifact-skills.ts`、`build/validate-artifact-hooks.ts`（`executables.hooks[]`，`AB6018`）、`build/validate-artifact-mcp.ts` | 按表面划分的 `AB60xx` |
 | 产物对输出根目录的所有权 | `build/validate-artifact.ts` | `AB6014` |
 | 打包的 tarball 包含清单中的每个文件，且没有未使用的安装依赖 | `build/pack-inventory.ts` | `AB7010`、`AB7014`、`AB7015` |
 
@@ -288,8 +288,7 @@ artifact/
 ├── bin/<plugin>.mjs, bin/<plugin>-flight.mjs
 ├── skills/, scripts/, commands/, rules/, assets/, mcp-apps/
 ├── INSTALL.md, install.mjs
-├── agent-bundle.manifest.json
-└── agent-bundle.hooks.json
+└── agent-bundle.manifest.json
 ```
 
 [Target 与产物](../../reference/targets-artifacts.mdx)是输出契约：哪个宿主读取哪份文档、
@@ -340,88 +339,102 @@ prompt 路由则返回经校验的协议结果（来自 `document.value`）。CL
 
 写入器是 `build/build.ts` 的 `manifestFor`。它组装出一个 `ArtifactManifest`
 （`build/manifest.ts`；TypeDoc：
-[`ArtifactManifest`](../../api/interfaces/index.ArtifactManifest.md)），`writeManifest`
-再用 `assembleArtifactManifest` 将其序列化：规范的
-`stableJson` 加一个末尾换行。`parseArtifactManifest` 拒绝任何其他字节序列、重复键、未知键、
-缺失键、未排序的数组，以及指向清单自身的文件条目。
+[`ArtifactManifest`](../../api/interfaces/index.ArtifactManifest.md)），
+来源是 `manifestProjections`、`manifestBins` / `manifestHooks` /
+`manifestMcpServers` / `manifestScripts`、`manifestDistribution`，以及
+`build/manifest-routes.ts` 的 `artifactRoutesFor`。`writeManifest` 再用
+`assembleArtifactManifest` 将其序列化：规范的 `stableJson` 加一个末尾换行。
+`parseArtifactManifest` 拒绝任何其他字节序列、重复键、未知键、缺失键、未排序
+的数组，以及指向清单自身的文件条目。`manifestVersion` 为 `2`。公开读取方是
+`build/manifest-file.ts` 的 `readArtifactManifest`：`ok`、`missing`（仅
+ENOENT）或 `invalid`。
 
-该 schema **在 TypeScript 中封闭**，并不作为 JSON Schema 发布。`build/manifest.ts` 中的
-`requireExactKeys` 是权威。`adapters/schemas/**` 下的宿主 `plugin.json` / `hooks.json` /
-`mcp.json` schema 与 `schemas/**` 下的 Agent Skills frontmatter 是另一份契约；网站的
-[宿主参考](../../reference/hosts.md) / [事件参考](../../reference/events.md)页面由
-`adapters/capabilities/*.json` 与 `docs/diagnostics.md` 生成，而不是由这份清单生成。#592
-的第 3 步（权威清单）是后续工作，它会给这个文件一个更丰富、机器可读的 schema。
+该 schema **在 TypeScript 中封闭**（`build/manifest.ts` 中的
+`requireExactKeys`）**并且**作为 JSON Schema 随包发布
+（`packages/agent-bundle/schemas/agent-bundle.manifest.schema.json`），
+由 `build/manifest-schema.ts` 经 `api.ts` / `index.ts` 导出为
+`artifactManifestSchema` 与 `validateArtifactManifestSchema`。解析器仍是
+更严格的权威：它还检查交叉引用、规范字节与排序。`adapters/schemas/**`
+下的宿主 `plugin.json` / `hooks.json` / `mcp.json` schema 与
+`schemas/**` 下的 Agent Skills frontmatter 是另一份契约；网站的
+[宿主参考](../../reference/hosts.md) /
+[事件参考](../../reference/events.md)页面由
+`adapters/capabilities/*.json` 与 `docs/diagnostics.md` 生成，而不是由
+这份清单生成。
 
-### 写入器发出的字段
+每个分节与字段见
+[产物清单](../../reference/artifact-manifest.mdx)。本页只保留大纲。
 
-| 字段 | 形状 | 来源 |
-| --- | --- | --- |
-| `producer` | `{ name: 'agent-bundle', version }` | `packages/agent-bundle/package.json` 的 `version` |
-| `project` | `configPath`、`configDigest`、`modelDigest`、`revision`、`sourceInputs[]`，可选的 `packageName` / `packageVersion` | 来自构建的 `ProjectContext`（`configDigest` 必须等于 `sourceInputs` 中 `configPath` 的哈希；`revision` 是 `digest({ inputs: sourceInputs })`） |
-| `files[]` | `path`、`bytes`、`sha256`、`kind`（`bundle` \| `copy` \| `generated` \| `prebuilt`）、可选的 `mode`、`sourceInputs[]` | `createArtifactManifestFiles` 遍历暂存树 + 输出来源。清单路径自身被省略。按 `path` 排序。 |
-| `runtime` | `{ node }` | `NormalizedPlugin.runtime`（规范的 `major.minor.patch`，必须满足生成式运行时的下限） |
-| `targets[]` | `name`、`adapterRevision`、`observedVersion`、`schemas[]`（`name`、`revision`、`sha256`） | 对每个所选投影调用 `registry.metadata(name)`，按 `name` 排序 |
-| `agentSkills` | `specification`、`sourceRevision`、`schemaSha256` | `schemas/agent-skills/contract.ts` 的 `agentSkillsSchemaRevision` |
-| `validation` | `{ artifact, source, targets[] }`，每一项都是 `{ status: 'passed' }`（target 行还带 `name`） | 只在构建成功后写入；`validation.targets` 的名称必须与 `targets` 一致 |
+### 写入器发出的分节
 
-`project.sourceInputs[]` 的行是 `{ path, sha256, executable? }`。`files[].sourceInputs` 是
-路径字符串，必须已经出现在 `project.sourceInputs` 上。
-
-不存在 `routes`、`servers`、`apps`、`hooks`、`bins` 或 `web` 段。一个作为编译后 MCP 入口或
-CLI bin 的文件，只以 `files[]` 中一行的形式出现。
+| 分节 | 记录什么 |
+| --- | --- |
+| `producer` | `{ name: 'agent-bundle', version }`，来自框架包 |
+| `manifestVersion` | `2` |
+| `application` | 与宿主无关的身份：`id`、`name`、`version`，可选的 `description` |
+| `project` | `configPath`、`configDigest`、`modelDigest`、`revision`、`sourceInputs[]`，可选的 `packageName` / `packageVersion` |
+| `files[]` | 除清单自身外的每个发出文件（`path`、`bytes`、`sha256`、`kind`，可选的 `mode`、`sourceInputs[]`） |
+| `runtime` | 来自 `NormalizedPlugin.runtime` 的 `{ node }` |
+| `projections[]` | 每个所选宿主一行。`host` 是所选名称；`builtInHost` 是随包适配器身份（高级注册表适配器则缺省）。还有 `adapterRevision`、`observedVersion`、`schemas[]`、`documents`（`plugin?`、`marketplace?`、`mcp?`、`hooks?`），以及可选的 `marketplace.name`。由 `targets[]` 更名而来。 |
+| `routes` | 编译后的路由图：`servers[]`、`events[]`、`scripts[]`、`cli?`、`providers[]`、`layouts[]`、`contracts[]`、`digest` |
+| `executables` | 根目录能启动的进程：`bins[]`、`hooks[]`（`kind` 为 `config` \| `event-route`）、`mcpServers[]`（`entry`、`apps[]`）、`scripts[]` |
+| `distribution` | `channels`（始终有 `local`；已打包时有 `npm`）以及可选的 `install` 指针 |
+| `agentSkills` | `specification`、`sourceRevision`、`schemaSha256` |
+| `validation` | `{ source, artifact, projections[] }` —— 每个 `status` 都是 `'passed'` |
 
 ### 谁读取各个字段
 
-生产环境的读取方调用 `parseArtifactManifest`，或接收一个已解析的 `ArtifactManifest`。测试
-不在此列。
+生产环境的读取方调用 `readArtifactManifest` 或 `parseArtifactManifest`。
+测试不在此列，已安装宿主的证明套件除外。
 
 | 读取方 | 使用的字段 | 用途 |
 | --- | --- | --- |
-| `build/validate-artifact.ts` | 全部 | 重新解析磁盘上的字节，匹配 `files[]` 的摘要与 mode，对照注册表检查 `targets[]`，固定 `agentSkills` 与 `runtime.node` |
-| `build/validate-artifact-modules.ts` | `files[]`（`.mjs` 行）以及包构建的 `dist` | `AB6005` 导入图 |
-| `build/validate-artifact-skills.ts` | `targets[]`（`manifestTargets`）加目录树 | Skill 文档对照所选宿主 |
-| `build/validate-artifact-hooks.ts` | `targets[]`、钩子文件 | 钩子文档对照所选宿主 |
-| `build/validate-artifact-mcp.ts` | `targets[]`、MCP 文件 | MCP 文档对照所选宿主 |
-| `build/pack-inventory.ts` | `files[]`、`targets[]`、`project.packageVersion` | 打包的 tarball 必须包含清单中的每个文件；由所选名称推导的安装表面要求（`AB7010`）；摘要漂移；发布版本对齐；`AB7014` / `AB7015` |
-| `eval/artifact.ts` | `files[]`、`targets[]`、`runtime` | `evalTargetDigests`：对**整张**文件表为每个所选宿主计算一个摘要（相同字节，不同身份） |
-| `dev/artifacts/artifact-inspection-service.ts` | `files[]`、`project`、`targets[]` | Workbench 产物检视器：从 `files[]` 重建一棵树，并为每个所选宿主各标注一次 |
-| `dev/artifacts/artifact-script-catalog.ts` | `files[]`、`targets[]` | 可在浏览器中选择的脚本。每个布局了 `scripts/` 的所选宿主都得到一行目录条目，指向**同一个**根文件 |
-| `index.ts` | 重新导出这些类型与 `parse` / `serialize` / `assemble` | 公开 API |
+| `build/validate-artifact.ts` | 全部 | 重新解析磁盘上的字节，匹配 `files[]` 的摘要与 mode，对照注册表检查 `projections[]`，固定 `agentSkills` 与 `runtime.node` |
+| `build/validate-artifact-manifest.ts` | `executables`、`routes`、`distribution`、`projections[]`、`application` | `AB6039`（某段与目录树、适配器布局、适配器身份或文档指针不一致）；`AB6040`（宿主文档身份与 `application` 不一致） |
+| `build/validate-artifact-modules.ts` | `files[]`（bundle / `.mjs` 行）以及包构建的 `dist` | `AB6005` 导入图 |
+| `build/validate-artifact-skills.ts` | `projections[]`（`manifestTargets`）加目录树 | Skill 文档对照所选宿主 |
+| `build/validate-artifact-hooks.ts` | `executables.hooks[]`、`projections[]` | `AB6018`：钩子行对照宿主钩子文档 |
+| `build/validate-artifact-mcp.ts` | `projections[]`、MCP 文件 | MCP 文档对照所选宿主 |
+| `build/pack-inventory.ts` | `files[]`、`projections[]`、`application.version`、`project.packageVersion` | 打包的 tarball 必须包含清单中的每个文件（`AB7010`）；摘要漂移；发布版本对齐；`AB7014` / `AB7015` |
+| `eval/artifact.ts` | `files[]`、`projections[]`、`runtime` | `evalTargetDigests`：对**整张**文件表为每个 `projections[].host` 计算一个摘要（相同字节，不同身份） |
+| `dev/artifacts/artifact-inspection-service.ts` | `files[]`、`project`、`application`、`distribution`、`projections[]`、`executables` | Workbench 产物检视器：从 `files[]` 重建一棵树，按投影各标注一次；bin / MCP 服务器 / 脚本来自 `executables` |
+| `dev/artifacts/artifact-executables.ts` | `executables.scripts[]` | 按宿主划分的脚本行（取代 `artifact-script-catalog.ts`） |
+| `services/hook-service.ts` | `executables.hooks[]` | `hooks list` / `simulate` |
+| `dev/playground/hook-playground-service.ts` | `executables.hooks[]`（经由 `hook-service`） | Workbench 钩子演练场 |
+| `install/identity.ts` 的 `readBundleIdentity` | `application`、`projections[]` | `install`、`uninstall` 与 `doctor`：身份来自 `application`；投影按 `builtInHost === host` 选取（不是所选的 `host` 名）；插件文档来自必须存在的 `documents.plugin`；市场名称来自 `marketplace.name`（claude / codex）。缺任一则是 `AB7001`。从不探测 `<from>/<host>`。 |
+| `serve-app`、`mcp list` / `invoke` / `run` | `executables.mcpServers[]`、`projections[]` | `build/manifest-projection.ts` 解析服务器；当只有一个具备 MCP 能力的投影托管该服务器时，`--target` 可省略 |
+| `inspect --json` | `output.manifest` | `inspectManifestOutput`：已构建清单存在时给出投影与可执行文件摘要 |
+| `test/installed.ts` | `projections[]`、`executables.hooks[]` | 已安装宿主的证明按 `builtInHost` 选取随包适配器 |
+| `index.ts` | 重新导出这些类型、`parse` / `serialize` / `assemble` / `read` 以及 schema | 公开 API |
 
-`install/install.ts` 与 `install/doctor.ts` **不**读取 `agent-bundle.manifest.json`。
-`resolveBundleRoot` 直接在 `--from` 之下查找 Claude、Codex 或 Cursor 的插件清单
-（`.claude-plugin/plugin.json`、`.codex-plugin/plugin.json`、
-`.cursor-plugin/plugin.json`）。身份来自该宿主文档；Claude 与 Codex 还会从
-`.claude-plugin/marketplace.json` 或 `.agents/plugins/marketplace.json` 读取市场名称。
-不存在 portable 的 `install` / `doctor` 宿主。缺少投影是 `AB7001`。
+不存在 portable 的 `install` / `doctor` 宿主
+（`BundleIdentityHost` 是 `claude` \| `codex` \| `cursor`）。
 
-### 第 3 步的差距列表
+### 第 3 步落地了什么
 
-[#592](https://github.com/ScriptedAlchemy/agent-bundle/issues/592) 的第 3 步会让这个文件
-成为编译后的应用数据库。今天，下列内容都是通过重新读取源码、重新探测目录树或查询内存中的
-`NormalizedPlugin` 推断出来的——没有一项在清单里：
+[#592](https://github.com/ScriptedAlchemy/agent-bundle/issues/592) 的第 3 步
+让这个文件成为编译后的应用索引（`manifestVersion` 2）。原先差距列表中的
+这些编号项现在都在清单里，只有 (5) 除外：
 
-1. **路由图。** 服务器、工具、资源、提示、App、CLI 命令、事件路由、provider 与布局存在于
-   `CompiledRouteGraph`（`PreparedProject.routeGraph`）以及 `NormalizedPlugin` 上复制过来
-   的集合中。Workbench 的路由页面与 `inspect` 是从项目而不是从产物重建或保留这张图的。
-2. **MCP / CLI / App 清点。** `files[]` 把 `mcp/*.mjs` 与 `bin/*.mjs` 列为不透明路径。
-   不存在带有 id、`resourceUri`、打开工具或 env 的 `servers[]`。`serve-app` 仍然从活跃
-   服务器与项目/epoch 解析 App，而不是从清单解析。`dev/epoch-store.ts` 与 `serve-app`
-   都不解析 `agent-bundle.manifest.json`
-   （[#564](https://github.com/ScriptedAlchemy/agent-bundle/issues/564) 提议增加一个
-   `web` 段）。
-3. **钩子语义。** `agent-bundle.hooks.json` 索引了包装器；产物清单没有。配置声明、事件路由
-   还是原生这三种来源没有被记录。
-4. **Install / doctor。** Claude、Codex 与 Cursor 的身份从该宿主的 `plugin.json`
-   读取。Claude/Codex 的市场名称来自对应的市场文档。所选投影的成员关系是“这个宿主的
-   清单路径是否存在”，而不是 `manifest.targets`。portable 不是 `install` / `doctor`
-   宿主。
-5. **能力视图。** `targets[].schemas` 固定了宿主文档 schema。所需能力、通知投递交集与被
-   省略的特性都不在清单中（`inspect` 的 `omittedFeatures` 来自模型）。
-6. **作为一等行的可执行文件。** `files[]` 上的 mode 位标记了可执行文件。不存在带有复合
-   身份、允许的事件 target 或启动 env 的 `bins[]` / `mcpEntries[]`。
-7. **分发元数据。** Git / npm / 本地来源条目在适配器输出它们时位于宿主的市场文档中，而不在
-   这个文件里。
+1. **路由图。** `routes` 记录服务器、工具、资源、提示、App、CLI 命令、
+   事件路由、provider、布局、契约与 `digest`。
+2. **MCP / CLI / App 清点。** `executables.mcpServers[]` 记录每台服务器
+   （`entry`、`apps[]`）；`executables.bins[]` 记录路由式 CLI。
+3. **钩子语义。** `executables.hooks[].kind` 为 `config` 或
+   `event-route`。作者写进宿主钩子文档的原生命令不是行。
+   `agent-bundle.hooks.json` 已删除。
+4. **Install / doctor 身份。** `readBundleIdentity` 读取 `application`
+   以及 `builtInHost` 匹配该宿主的投影。
+5. **能力视图。** 有意不记录。通知投递交集在构建时由
+   `build/compose.ts` 的 `compositeNoticeDelivery` 推导；`inspect` 的
+   `omittedFeatures` 仍来自模型。把该交集写进清单是后续的 #592 工作。
+6. **作为一等行的可执行文件。** `executables.bins[]`、`hooks[]`、
+   `mcpServers[]` 与 `scripts[]`。
+7. **分发元数据。** `distribution.channels` 以及可选的
+   `distribution.install`。
+
+字段契约见
+[产物清单](../../reference/artifact-manifest.mdx)。
 
 ## 代码今天在哪里分叉
 
@@ -456,16 +469,22 @@ CLI bin 的文件，只以 `files[]` 中一行的形式出现。
 （[#594](https://github.com/ScriptedAlchemy/agent-bundle/issues/594)、
 [#564](https://github.com/ScriptedAlchemy/agent-bundle/issues/564)）。
 
-**与清单并存的文件系统探测。** `install` / `doctor` 的 `resolveBundleRoot` 探测
-Claude、Codex 或 Cursor 的 `plugin.json`。Eval 与 Workbench 检视器为完整性解析产物清单，随后仍从路径前缀与
-`registry.artifactLayout` 推导脚本与宿主目录树。`evalTargetDigests` 为每个所选宿主把整个
-根目录各哈希一遍，而不是记录一份按投影划分的视图。
+**与清单并存的文件系统探测。** `install`、`uninstall` 与 `doctor` 通过
+`install/identity.ts` 的 `readBundleIdentity` 读取身份（`application`、
+`projections[].builtInHost`、`documents.plugin`、市场名称）。它们不会探测
+`<from>/<host>` 或宿主的 `plugin.json` 来寻找根目录。Eval 仍对整张文件表按
+每个 `projections[].host` 各哈希一遍（`evalTargetDigests`），而不是记录一份
+按投影划分的文件视图。Workbench 检视器从 `files[]` 重建一棵树，按
+`projections[]` 各标注一次，并从 `executables` 读取可执行文件，而不是从路径
+前缀推导。
 
 **共享表面中残留的按 target 逻辑。** 共享的 MCP / CLI / App 编译使用
-`composite.identity`，但钩子包装器仍然固化一个 `target`。`artifact-script-catalog.ts` 为
-同一个文件按每个所选宿主各输出一行目录条目。`artifact-inspection-service.ts` 为每个
-`manifest.targets[]` 名称把同一棵树各标注一次。通知投递是所有所选宿主的交集，应用到每一个
-共享的 MCP 入口上。
+`composite.identity`，但钩子包装器仍然固化一个 `target`。
+`dev/artifacts/artifact-executables.ts` 把 `executables.scripts[]` 展开为
+每个列出该脚本的宿主一行。`artifact-inspection-service.ts` 为每个
+`projections[]` 宿主把同一棵树各标注一次。通知投递是所有所选宿主的交集
+（`compose.ts` 的 `compositeNoticeDelivery`），应用到每一个共享的 MCP
+入口上，并且不写进清单。
 
 **能力选择仍然是宿主名。** 作者写的是 `targets: ['claude', 'codex']`（或按组件的
 `targets`），而不是 `requires: ['hooks.preTool']`。能力表是存在的；编译器还没有通过它们来
@@ -473,8 +492,8 @@ Claude、Codex 或 Cursor 的 `plugin.json`。Eval 与 Workbench 检视器为完
 
 ## 路线图
 
-[#592](https://github.com/ScriptedAlchemy/agent-bundle/issues/592) 是总纲。本页是第 2 步
-（记录边界）。它之下的实现切片各有自己的 issue：
+[#592](https://github.com/ScriptedAlchemy/agent-bundle/issues/592) 是总纲。本页记录三层
+（第 2 步）与 v2 清单（第 3 步）。它之下的实现切片各有自己的 issue：
 
 | Issue | 切片 |
 | --- | --- |
@@ -485,8 +504,9 @@ Claude、Codex 或 Cursor 的 `plugin.json`。Eval 与 Workbench 检视器为完
 | [#594](https://github.com/ScriptedAlchemy/agent-bundle/issues/594) | 生成的类型化 App 客户端 + 共享桥接 |
 | [#564](https://github.com/ScriptedAlchemy/agent-bundle/issues/564) | 基于同一桥接的生产 `web` 表面 |
 
-第 3 步是一份权威的 `agent-bundle.manifest.json`。上面的差距列表就是那项工作的输入。#592
-会一直保持打开，直到该 issue 上的验收标准落地。
+第 3 步落地了一份权威的 `agent-bundle.manifest.json`（`manifestVersion` 2）。
+字段契约见 [产物清单](../../reference/artifact-manifest.mdx)。#592
+会一直保持打开，直到该 issue 上剩余的验收标准落地。
 
 ## 下一步
 
@@ -494,7 +514,8 @@ Claude、Codex 或 Cursor 的 `plugin.json`。Eval 与 Workbench 检视器为完
 - [配置模型](../authoring/index.mdx) —— 这些根目录所填充的配置。
 - [MCP 服务器与 MCP App](../authoring/mcp.mdx) 与[钩子](../authoring/hooks.mdx) —— 大多数
   作者最先遇到的两个可执行表面。
-- [Target 与产物](../../reference/targets-artifacts.mdx) —— 复合根目录与更简短的清单
-  字段表。
+- [产物清单](../../reference/artifact-manifest.mdx) —— `agent-bundle.manifest.json`
+  的每一个分节与字段。
+- [Target 与产物](../../reference/targets-artifacts.mdx) —— 复合根目录。
 - [交付捆绑包](../distribution/index.mdx) —— 根目录如何编译，以及其中装了什么。
 - [产物校验](../distribution/validation.mdx) —— 重新读取这份清单的那些检查。

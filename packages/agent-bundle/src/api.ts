@@ -131,6 +131,8 @@ export type {
   ArtifactManifestProjectionValidation,
   ArtifactManifestProvider,
   ArtifactManifestRoute,
+  ArtifactManifestRouteContract,
+  ArtifactManifestRouteContractOrigin,
   ArtifactManifestRouteKind,
   ArtifactManifestRouteProvenance,
   ArtifactManifestRoutes,

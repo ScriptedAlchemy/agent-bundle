@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
 
+import { build } from '../src/api.ts';
 import { runCli as runSourceCli, type CliDependencies } from '../src/cli.ts';
 import { captureCliTerminal } from './support/cli-terminal.ts';
 import { cachedNpmInstallArguments, packOutputFromJson } from './support/shared-pack.ts';
@@ -611,7 +612,6 @@ it('includes a built-manifest summary on inspect --json after a build, and omits
     expect(before).toMatchObject({ code: 0, stderr: '' });
     expect(JSON.parse(before.stdout).output.manifest).toBeUndefined();
 
-    const { build } = await import('../src/api.ts');
     await build({ output: join(project.root, 'dist'), root: project.root });
 
     const after = await runSourceCliWithOutput(['inspect', '--root', project.root, '--json']);
