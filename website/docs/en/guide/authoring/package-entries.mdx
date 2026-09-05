@@ -323,7 +323,7 @@ async chunks, output roots, self-containment — fails the build with a hard dia
 silently overriding the contract. Reserved module specifiers are protected the same way: a hatch
 that externalizes `agent-bundle/mcp-entry`, `agent-bundle/meta`, or `agent-bundle/mcp-apps` fails
 the build. Externalization in general is bounded too: `AB4725` rejects statically visible
-non-built-in `externals`, while function-form and mutator externals are judged from the
+package `externals`, while relative, function-form, and mutator externals are judged from the
 compilation's own evidence (`AB6005`). Run-time path references are kept the same way: a
 `new URL(…, import.meta.url)` or `new Worker(new URL(…))` in your code or a generated entry names
 a file beside the artifact, so the invariant layer turns the bundler's URL and worker asset

@@ -4,6 +4,27 @@ import type { CompilationEvidence, CompilationExternal, CompilationModule } from
 
 const pluginName = 'agent-bundle:dependency-audit';
 
+const externalIdentifierPrefix = /^external (\S+) (?=["[])/u;
+
+/** Length of the JSON string or array of strings that opens `text`, or -1 when it never closes. */
+const jsonPrefixLength = (text: string): number => {
+  let inString = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (!inString) {
+      if (char === '"') inString = true;
+      else if (char === ']') return index + 1;
+      continue;
+    }
+    if (char === '\\') index += 1;
+    else if (char === '"') {
+      inString = false;
+      if (text[0] === '"') return index + 1;
+    }
+  }
+  return -1;
+};
+
 /**
  * `external <type> <request as JSON>`, optionally followed by `|<layer>|<issuer>`
  * segments. The JSON request is what the emitted code loads at run time; an
@@ -11,17 +32,19 @@ const pluginName = 'agent-bundle:dependency-audit';
  * `left-pad` in `userRequest`. An array request (`["lp", "default"]`) loads its
  * first element and reads the rest as property paths.
  */
-const externalIdentifier = /^external (\S+) (".*?"|\[.*?\])(?:\||$)/u;
-
 const runtimeRequest = (module: Rspack.ExternalModule): { readonly externalType: string; readonly request: string } => {
   const identifier = module.identifier();
-  const match = externalIdentifier.exec(identifier);
-  const parsed: unknown = match === null ? undefined : JSON.parse(match[2]!);
+  const unexpected = (): Error => new Error(`Rspack ExternalModule has an unexpected identifier: ${JSON.stringify(identifier)}.`);
+  const prefix = externalIdentifierPrefix.exec(identifier);
+  if (prefix === null) throw unexpected();
+  const json = identifier.slice(prefix[0].length);
+  const length = jsonPrefixLength(json);
+  const rest = json.slice(length);
+  if (length === -1 || (rest !== '' && !rest.startsWith('|'))) throw unexpected();
+  const parsed: unknown = JSON.parse(json.slice(0, length));
   const request = Array.isArray(parsed) ? parsed[0] : parsed;
-  if (match === null || typeof request !== 'string') {
-    throw new Error(`Rspack ExternalModule has an unexpected identifier: ${JSON.stringify(identifier)}.`);
-  }
-  return { externalType: match[1]!, request };
+  if (typeof request !== 'string') throw unexpected();
+  return { externalType: prefix[1]!, request };
 };
 
 const moduleResource = (module: Rspack.Module | null | undefined): string | undefined =>
@@ -37,7 +60,7 @@ const collectExternals = (compilation: Rspack.Compilation): readonly Compilation
   for (const module of compilation.modules) {
     if (!(module instanceof rspack.ExternalModule)) continue;
     const { externalType, request } = runtimeRequest(module);
-    const key = `${request}\u0000${module.userRequest}`;
+    const key = [externalType, request, module.userRequest].join('\u0000');
     const record = byRequest.get(key) ?? {
       externalType,
       issuers: new Set<string>(),
@@ -57,7 +80,10 @@ const collectExternals = (compilation: Rspack.Compilation): readonly Compilation
       request,
       userRequest,
     }))
-    .sort((left, right) => left.request.localeCompare(right.request) || left.userRequest.localeCompare(right.userRequest)));
+    .sort((left, right) =>
+      left.request.localeCompare(right.request)
+      || left.userRequest.localeCompare(right.userRequest)
+      || left.externalType.localeCompare(right.externalType)));
 };
 
 const collectModules = (compilation: Rspack.Compilation): readonly CompilationModule[] => {

@@ -167,6 +167,18 @@ describe('ArtifactDependencyAuditPlugin', () => {
     }
   }, 20_000);
 
+  it('reads a run-time target containing a quote and a pipe from the identifier', async () => {
+    const { entry, root, source } = await probeProject(["import lp from 'left-pad';", 'console.log(lp);']);
+    try {
+      const [record] = await buildRecording(root, [entry], withExternals({ 'left-pad': ['lp|"x', 'default'] }));
+      expect(record?.externals).toEqual([
+        { externalType: 'module', issuers: [source], request: 'lp|"x', userRequest: 'left-pad' },
+      ]);
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  }, 20_000);
+
   it('records an artifact-relative external kept by an object map', async () => {
     const { entry, root, source } = await probeProject(["import './sibling.js';", "console.log('probe');"]);
     try {

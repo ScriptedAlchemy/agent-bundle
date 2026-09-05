@@ -1216,9 +1216,10 @@ A hatch value that breaks an artifact contract (async chunks, output roots,
 self-containment) fails the build with a hard diagnostic instead of silently
 overriding the contract. At config validation, `AB4725` rejects
 `tools.rsbuild.output.autoExternal` unless it is `false` and rejects statically
-visible string or object `externals` entries that are not Node built-ins.
-RegExp and function-form externals, including those installed by a mutator,
-are judged from the compilation's externals evidence (`AB6005`). The invariant
+visible string or object `externals` entries that name a package. Relative
+entries, RegExp and function-form externals, and anything a mutator installs
+are judged from the compilation's externals evidence (`AB6005`), where the
+emitted siblings are known. The invariant
 layer re-pins `output.autoExternal: false` after the hatch merge. Reserved
 module specifiers are protected the same way: a hatch that externalizes
 `agent-bundle/mcp-entry` or a generated module specifier (`agent-bundle/meta`,
