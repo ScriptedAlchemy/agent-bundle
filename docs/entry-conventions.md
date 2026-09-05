@@ -1311,8 +1311,12 @@ lowers every host-pack surface and package-build entry. The framework-owned
 Rspack kept external, and the service reads that evidence before trusting an
 asset. `AB6005` rejects anything Rspack kept external except a Node built-in,
 `pnpapi`, or an emitted sibling of the same artifact, whatever spelling the
-bundle uses. The emitted-module walk remains behind that check as defense in
-depth. A `require`,
+bundle uses. `agent-bundle build` writes that evidence as
+`agent-bundle.compile-evidence.json` at the artifact root (listed in
+`agent-bundle.manifest.json` as a `generated` file); `agent-bundle validate
+--artifact` re-checks a listed record against the file table without reading
+JavaScript (`AB6039`). The emitted-module walk remains behind that check as
+defense in depth. A `require`,
 `createRequire(…)(…)`, or `import.meta.resolve(…)` call the compiler does not
 resolve is not a module dependency; content the compiler did not compile is
 opaque and must declare what it needs. Run-time path references are kept the

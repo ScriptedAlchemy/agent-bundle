@@ -248,7 +248,7 @@ export const planScriptsSurface = async (
       })];
     })),
     ...(ignoredRuntime === undefined ? {} : { ignoredSourcePaths: [runtimeIgnoredRoot(ignoredRuntime)] }),
-    finish: async (evidence) => {
+    finish: async (result) => {
       await emitPlanEntries({
         entries: await Promise.all(compiled
           .filter((entry) => entry.mode === 'copy')
@@ -262,7 +262,7 @@ export const planScriptsSurface = async (
         root: options.outDir,
       });
 
-      const evidenceByPath = new Map(evidence.map((entry) => [entry.path, entry.sourceInputs]));
+      const evidenceByPath = new Map(result.assets.map((entry) => [entry.path, entry.sourceInputs]));
       return Object.freeze(compiled.map((entry) => Object.freeze({
         ...entry,
         sourceInputs: entry.mode === 'bundle'
@@ -542,8 +542,8 @@ export const planMcpEntriesSurface = async (
       ...(eventIpcRuntime === undefined ? [] : [runtimeIgnoredRoot(eventIpcRuntime)]),
       ...(serverRuntime === undefined ? [] : [runtimeIgnoredRoot(serverRuntime)]),
     ],
-    finish: async (evidence) => {
-      const evidenceByPath = new Map(evidence.map((entry) => [entry.path, entry.sourceInputs]));
+    finish: async (result) => {
+      const evidenceByPath = new Map(result.assets.map((entry) => [entry.path, entry.sourceInputs]));
       return Object.freeze(compiled.map((entry) => Object.freeze({
         ...entry,
         sourceInputs: evidenceByPath.get(`mcp/${entry.name}.mjs`) ?? (() => { throw new Error(`Missing bundled MCP evidence for ${JSON.stringify(entry.name)}.`); })(),
@@ -717,8 +717,8 @@ export const planHooksSurface = (
       runtimeIgnoredRoot(launchEnvRuntime),
       ...(eventIpcRuntime === undefined ? [] : [runtimeIgnoredRoot(eventIpcRuntime)]),
     ],
-    finish: async (evidence) => {
-      const evidenceByPath = new Map(evidence.map((entry) => [entry.path, entry.sourceInputs]));
+    finish: async (result) => {
+      const evidenceByPath = new Map(result.assets.map((entry) => [entry.path, entry.sourceInputs]));
       return Object.freeze(compiled.map((entry, index) => Object.freeze({
         ...entry,
         sourceInputs: evidenceByPath.get(entries[index]!.relativePath) ?? (() => { throw new Error(`Missing bundled hook evidence for ${JSON.stringify(entry.name)}.`); })(),

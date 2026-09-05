@@ -20,7 +20,8 @@ npx agent-bundle validate --artifact artifact --strict    # 已构建字节，�
 
 `agent-bundle.manifest.json` 为每个输出文件记录一份 SHA-256 摘要，包括被复制的脚本与资源。产物校验
 把真实字节与这些摘要比对，因此被手工改过的生成文件会失败，而不会因为路径还在就通过。被引用的文件同样
-会被检查——清单声明的 `logo` 若在产物中缺失或逃逸出部署树，会报告 `AB6025`。
+会被检查——清单声明的 `logo` 若在产物中缺失或逃逸出部署树，会报告 `AB6025`。已列入清单的编译证据记录若
+与清单文件表不一致，会报告 `AB6039`。
 
 自包含性首先由编译过程的 externals 证据证明（在编译期报告 `AB6005`）。编译器服务会降低每个宿主包表面
 以及每个包构建入口（`dist/bin/*.js`、渲染式路由的 Flight worker `.mjs` 与 `lib` 入口）。框架自有的
@@ -45,6 +46,37 @@ npx agent-bundle validate --artifact artifact --strict    # 已构建字节，�
 `agent-bundle/app` 不在这份列表中，值导入不会触发 `AB4837`。`import type` 以及仅作为类型使用的导入
 也不会被报告。已安装产物通过 [`<plugin> web`](../../reference/cli.mdx#plugin-web) 提供 App；见
 [在浏览器中暴露 App](../authoring/mcp.mdx#在浏览器中暴露-app)。
+
+## 编译证据记录
+
+`agent-bundle build` 在产物根目录写出 `agent-bundle.compile-evidence.json`，并在
+`agent-bundle.manifest.json` 中把它列为 `generated` 文件。这份记录就是编译器服务对它输出的每个文件
+所报告的内容，并与那些字节绑定。`assets[]` 中的每一项对应一个已编译文件（`bundle` kind：
+`bin/*.mjs`、`scripts/*.mjs`、`hooks/*.mjs`、`mcp/*.mjs`、Flight worker、`mcp-apps/*.html`），
+并保存 `path`、`sha256`、被保留的 `externals`（`kind` 为 `artifact-relative` 或 `builtin`，以及
+`externalType`、`issuers`、`request`、`userRequest`，同级文件还有 `target`）和被内联的
+`packages`。记录级字段是策略 `closed-world-externals@1`、producer
+`{ name: 'agent-bundle', rspack, version }`、`coverage.rewritable`（当 `tools.rspack` 或
+`tools.rsbuild` 逃生口参与了这次构建时为 true，此时输出字节可能与模块图不一致），以及
+`coverage.unobserved`。
+
+`agent-bundle validate --artifact` 把已列入清单的记录对照清单文件表复核，且不读取 JavaScript
+（`AB6039`）。包构建把同一份记录留在内存里供 `prepack` 使用（路径为 `dist/bin/…`），不写到磁盘。
+`coverage.unobserved` 列出 Rslib 在捆绑中原样保留的加载形式，因此编译器既不会打包它们，也不会记录
+它们：`import(<expression>)`、`require(<expression>)`、`require.resolve(…)`、
+`createRequire(…)(…)`、`import.meta.resolve(…)`。因此「没有记录任何 externals」并不能证明不存在
+这类加载。
+
+`AB6039` 是 **error**。恢复方式：重新构建产物，使其编译证据记录描述已输出的文件。消息形式：
+
+- `Compile evidence record <reason>.`（严格解析器自身的消息，例如 `is not valid JSON`）
+- `Compile evidence record cannot be read.`
+- `Compile evidence was judged under policy <name>@<revision>; this validator applies closed-world-externals@1.`
+- `Compile evidence does not cover compiled file "<path>".`
+- `Compile evidence for "<path>" describes different bytes.`
+- `Compile evidence names "<path>", which the manifest does not list as a compiled file.`
+- `Compile evidence for "<path>" records "<request>" as a built-in; it is not one.`
+- `Compile evidence for "<path>" records sibling "<request>", which the artifact does not contain.`
 
 每条诊断都是一份结构化记录：稳定的 `AB` 代码、一个严重级别、一条消息，通常还有 `sourcePath` 与一条
 `recovery` 提示。由诊断把关的命令——`build`、`prepack`、`validate`、`doctor`、`install` 与 `dev`——只有

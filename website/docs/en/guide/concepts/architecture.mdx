@@ -57,9 +57,10 @@ build/build.ts + build/emit.ts + build/compile-stages.ts
         ▼
 composite plugin root
   + agent-bundle.manifest.json
+  + agent-bundle.compile-evidence.json
         │
         ▼
-build/validate-artifact*.ts / AB6005
+build/validate-artifact*.ts / AB6005 / AB6039
   / prepack AB7014, AB7015                   ← Artifact layer
 ```
 
@@ -275,6 +276,7 @@ and writes one tree at `artifactRoot` (CLI default `artifact/`;
 | Scripts, hooks, MCP entries, CLI bins | `build/rslib.ts` `compileRslibSurfaces` via `build/entries.ts`, `build/cli-bins.ts` | `scripts/*.mjs`, `hooks/*.mjs`, `mcp/mcp-<server>-<hash>.mjs`, `bin/<plugin>.mjs` (+ `-flight.mjs` workers) |
 | MCP Apps | `build/mcp-apps.ts` `compileMcpApps` | `mcp-apps/<name>.html` (inlined into the generated server as well) |
 | Hook index | `build/emit.ts` `writeHookIndex` | `agent-bundle.hooks.json` over the selected hosts |
+| Compile evidence | `build/compile-evidence.ts` `createCompileEvidenceRecord` | `agent-bundle.compile-evidence.json` (one `assets[]` entry per compiled file) |
 | Manifest | `build/build.ts` `manifestFor` + `build/emit.ts` `writeManifest` | `agent-bundle.manifest.json` |
 | Publish | `build/emit.ts` `publishArtifact` | Atomic rename of the stage directory onto `outputRoot` |
 
@@ -286,6 +288,7 @@ embed their HTML), then the node surfaces.
 | Check | Module | Code |
 | --- | --- | --- |
 | Canonical manifest parse + file digest match | `build/validate-artifact.ts` | `AB60xx` family; parse errors throw from `parseArtifactManifest` |
+| Compile evidence record vs manifest `bundle` files | `build/compile-evidence.ts` `compileEvidenceDiagnostics` | `AB6039` |
 | Host-pack and package-build `dist` modules import only relative/`file:` specifiers or Node built-ins | `build/validate-artifact-modules.ts` | `AB6005` |
 | Skills / hooks / MCP documents match the selected hosts | `build/validate-artifact-skills.ts`, `build/validate-artifact-hooks.ts`, `build/validate-artifact-mcp.ts` | per-surface `AB60xx` |
 | Artifact ownership of the output root | `build/validate-artifact.ts` | `AB6014` |
@@ -328,6 +331,7 @@ artifact/
 ├── skills/, scripts/, commands/, rules/, assets/, mcp-apps/
 ├── INSTALL.md, install.mjs
 ├── agent-bundle.manifest.json
+├── agent-bundle.compile-evidence.json
 └── agent-bundle.hooks.json
 ```
 
@@ -431,6 +435,7 @@ Production readers call `parseArtifactManifest` or take an already-parsed
 | Reader | Fields used | Purpose |
 | --- | --- | --- |
 | `build/validate-artifact.ts` | all of them | Re-parse the on-disk bytes, match `files[]` digests and modes, check `targets[]` against the registry, pin `agentSkills` and `runtime.node` |
+| `build/compile-evidence.ts` | `files[]` (`bundle` rows) | `AB6039`: re-check the persisted compile evidence record against the file table without parsing JavaScript |
 | `build/validate-artifact-modules.ts` | `files[]` (`.mjs` rows) plus package-build `dist` | `AB6005` import graph |
 | `build/validate-artifact-skills.ts` | `targets[]` (`manifestTargets`) plus the tree | Skill documents vs selected hosts |
 | `build/validate-artifact-hooks.ts` | `targets[]`, hook files | Hook documents vs selected hosts |

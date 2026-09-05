@@ -50,6 +50,8 @@ const conventionFixture = (): Readonly<Record<string, string>> => ({
     '',
   ].join('\n'),
   'package.json': '{"name":"package-build-fixture","type":"module","private":true}\n',
+  'node_modules/evidence-package/index.js': 'globalThis.__evidencePackageLoaded = true;\n',
+  'node_modules/evidence-package/package.json': '{"name":"evidence-package","type":"module","version":"1.0.0"}\n',
   'tsconfig.json': JSON.stringify({
     compilerOptions: {
       module: 'esnext',
@@ -60,6 +62,8 @@ const conventionFixture = (): Readonly<Record<string, string>> => ({
     },
   }),
   'src/cli.ts': [
+    "import 'evidence-package';",
+    '',
     'export const main = async (argv: readonly string[]): Promise<number> => {',
     "  process.stdout.write(`ran:${argv.join(',')}\\n`);",
     "  return argv.includes('--fail') ? 3 : 0;",
@@ -137,6 +141,14 @@ describe('framework-owned package build', () => {
     expect(paths).toContain('bin/package-build-fixture.js');
     expect(paths).toContain('index.js');
     expect(paths).toContain('index.d.ts');
+    expect(packageBuild!.evidence.assets.map((asset) => asset.path)).toEqual(
+      expect.arrayContaining(['dist/bin/package-build-fixture.js', 'dist/index.js']),
+    );
+    expect(packageBuild!.evidence.assets.flatMap((asset) => asset.externals)
+      .every((external) => external.kind === 'builtin')).toBe(true);
+    expect(packageBuild!.evidence.assets
+      .find((asset) => asset.path === 'dist/bin/package-build-fixture.js')?.packages)
+      .toContain('evidence-package');
     for (const file of packageBuild!.files) {
       expect(file.sourceInputs).toEqual([...file.sourceInputs].sort((left, right) => left.localeCompare(right)));
     }

@@ -763,7 +763,7 @@ const assertDistinctLibIds = (entries: readonly RslibEntry[]): void => {
   }
 };
 
-const packageNameOfResource = (resource: string): string | undefined => {
+export const packageNameOfResource = (resource: string): string | undefined => {
   const segments = resource.replaceAll('\\', '/').split('/');
   const nodeModules = segments.lastIndexOf('node_modules');
   if (nodeModules === -1) return undefined;
@@ -774,7 +774,7 @@ const packageNameOfResource = (resource: string): string | undefined => {
     : name;
 };
 
-const moduleKindOf = (
+export const moduleKindOf = (
   resource: string | undefined,
   cwd: string,
   dependencyRoots: readonly string[],

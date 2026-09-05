@@ -16,14 +16,15 @@ import { DiagnosticError, freezeDiagnostics, type Diagnostic } from '../core/dia
 import type { AgentBundleToolsConfig, NormalizedMcpApp } from '../core/types.ts';
 import { stableJson } from '../core/digest.ts';
 import { MAX_APP_HTML_BYTES } from '../core/mcp-app-limits.ts';
+import { posixRelativeWhenInside } from '../core/paths.ts';
 import { escapeRegExp } from '../core/strings.ts';
 import type { AgentBundleMeta } from '../meta.ts';
 import { appRuntimePath, appRuntimeSpecifier } from './app-runtime.ts';
-import type { CompilationEvidence } from './compile-result.ts';
+import type { CompilationEvidence, CompileResult, ExternalIR, ModuleIR } from './compile-result.ts';
 import { composeToolsLayers, frameworkInvariantLayer } from './compose-layers.ts';
 import { ArtifactDependencyAuditPlugin } from './dependency-audit-plugin.ts';
 import { listArtifactFiles, resolveArtifactDestination } from './emit.ts';
-import { viewSelfContainmentDiagnostics } from './external-policy.ts';
+import { classifyExternal, viewSelfContainmentDiagnostics } from './external-policy.ts';
 import {
   mcpAppBundlerFailureDiagnostic,
   mcpAppCompileErrorDiagnostics,
@@ -43,6 +44,7 @@ import {
   virtualModulesPluginConstructor,
 } from './meta.ts';
 import { collectBundledOutputEvidence } from './provenance.ts';
+import { moduleKindOf, packageNameOfResource } from './rslib.ts';
 import { runtimeIgnoredRoot } from './runtime-path.ts';
 
 export type { McpAppCompileMode, McpAppOutputSize } from './mcp-app-diagnostics.ts';
@@ -83,6 +85,7 @@ export interface CompiledMcpApp extends PlannedMcpApp {
 
 export interface CompiledMcpAppsResult {
   readonly apps: readonly CompiledMcpApp[];
+  readonly compileResults: readonly CompileResult[];
   /** Compile warnings (`AB4771`) and size advisories (`AB4772`) that did not fail the build; errors throw a `DiagnosticError` of `AB4770`s instead. */
   readonly diagnostics: readonly Diagnostic[];
 }
@@ -444,16 +447,19 @@ const assertViewsSelfContained = (
   compiled: readonly PlannedMcpApp[],
   evidence: readonly CompilationEvidence[],
   projectRoot: string,
-): void => {
-  const diagnostics = compiled.flatMap((app) => {
+): readonly CompilationEvidence[] => {
+  const records = compiled.map((app) => {
     const records = evidence.filter((record) => record.compiler === app.name);
     const [record] = records;
     if (record === undefined || records.length !== 1) {
       throw new Error(`Expected one compilation evidence record for MCP App ${JSON.stringify(app.name)}, found ${String(records.length)}.`);
     }
-    return viewSelfContainmentDiagnostics(record, `mcp-apps/${app.name}.html`, projectRoot);
+    return record;
   });
+  const diagnostics = records.flatMap((record, index) =>
+    viewSelfContainmentDiagnostics(record, `mcp-apps/${compiled[index]!.name}.html`, projectRoot));
   if (diagnostics.length > 0) throw new DiagnosticError(diagnostics);
+  return Object.freeze(records);
 };
 
 export const compileMcpApps = async (
@@ -470,7 +476,11 @@ export const compileMcpApps = async (
 ): Promise<CompiledMcpAppsResult> => {
   const compiled = planCompiledMcpApps(apps, { outDir: options.outDir, selected: options.selected, target: options.target });
   if (compiled.length === 0) {
-    return Object.freeze({ apps: Object.freeze([]), diagnostics: Object.freeze([]) });
+    return Object.freeze({
+      apps: Object.freeze([]),
+      compileResults: Object.freeze([]),
+      diagnostics: Object.freeze([]),
+    });
   }
   await assertGeneratedModulesRootAbsent(options.cwd);
 
@@ -553,7 +563,7 @@ export const compileMcpApps = async (
   } finally {
     await result?.close();
   }
-  assertViewsSelfContained(compiled, compilationEvidence, options.cwd);
+  const viewEvidence = assertViewsSelfContained(compiled, compilationEvidence, options.cwd);
 
   const sizes = await assertSelfContainedViews(compiled, options.outDir);
   const compiledApps = Object.freeze(compiled.map((app): CompiledMcpApp => Object.freeze({
@@ -561,6 +571,33 @@ export const compileMcpApps = async (
     size: sizes.get(app.name) ?? (() => { throw new Error(`Missing emitted size for MCP App ${JSON.stringify(app.name)}.`); })(),
     sourceInputs: evidenceByPath.get(`mcp-apps/${app.name}.html`) ?? (() => { throw new Error(`Missing bundled MCP App evidence for ${JSON.stringify(app.name)}.`); })(),
   })));
+  const emittedAssets = new Set(compiledApps.map((app) => `mcp-apps/${app.name}.html`));
+  const compileResults = Object.freeze(compiledApps.map((app, index): CompileResult => {
+    const asset = `mcp-apps/${app.name}.html`;
+    const evidence = viewEvidence[index]!;
+    return Object.freeze({
+      assets: Object.freeze([{ path: asset, sourceInputs: app.sourceInputs }]),
+      diagnostics: Object.freeze([]),
+      externals: Object.freeze(evidence.externals.map((external): ExternalIR => ({
+        asset,
+        externalType: external.externalType,
+        issuers: external.issuers.map((issuer) => posixRelativeWhenInside(options.cwd, issuer)),
+        kind: classifyExternal(external, { asset, emittedAssets }),
+        request: external.request,
+        userRequest: external.userRequest,
+      }))),
+      modules: Object.freeze(evidence.modules.map((module): ModuleIR => {
+        const packageName = module.resource === undefined ? undefined : packageNameOfResource(module.resource);
+        return {
+          asset,
+          identifier: module.identifier,
+          kind: moduleKindOf(module.resource, options.cwd, []),
+          ...(packageName === undefined ? {} : { package: packageName }),
+          ...(module.resource === undefined ? {} : { resource: module.resource }),
+        };
+      })),
+    });
+  }));
   /**
    * One App's advisories: its Rspack warnings, then the size advisory for
    * the document that was emitted for it — by default this compile's, or the
@@ -582,6 +619,7 @@ export const compileMcpApps = async (
   if (oversized.length === 0) {
     return Object.freeze({
       apps: compiledApps,
+      compileResults,
       diagnostics: freezeDiagnostics(contexts.flatMap((context, index) => appDiagnostics(context, index))),
     });
   }
@@ -609,11 +647,17 @@ export const compileMcpApps = async (
     await rm(fallbackRoot, { force: true, recursive: true });
   }
   const replaced = new Map(production.apps.map((app) => [app.name, app]));
+  const replacementResults = new Map(production.compileResults.map((result) => [
+    result.assets[0]!.path,
+    result,
+  ]));
   return Object.freeze({
     apps: Object.freeze(compiledApps.map((app) => {
       const replacement = replaced.get(app.name);
       return replacement === undefined ? app : Object.freeze({ ...app, size: replacement.size, sourceInputs: replacement.sourceInputs });
     })),
+    compileResults: Object.freeze(compiledApps.map((app, index) =>
+      replacementResults.get(`mcp-apps/${app.name}.html`) ?? compileResults[index]!)),
     // The production compile's own diagnostics are not merged: its warnings
     // are this compile's (same module graph), and each replaced App gets
     // exactly one `AB4772` here — the substitution notice when the
