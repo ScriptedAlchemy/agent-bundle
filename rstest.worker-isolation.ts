@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { rstestWorkerRootOwnerFile } from './scripts/rstest-worker-roots.mjs';
@@ -79,10 +79,35 @@ export const rstestWorkerCacheDirectory = (name: string): string => {
   return directory;
 };
 
+/**
+ * Where Playwright keeps its bundled browsers while `PLAYWRIGHT_BROWSERS_PATH`
+ * is unset — the same resolution as playwright-core's registry directory:
+ * `$XDG_CACHE_HOME/ms-playwright` on Linux (`~/.cache` when the variable is
+ * unset or empty), `~/Library/Caches/ms-playwright` on macOS, and
+ * `%LOCALAPPDATA%\ms-playwright` on Windows.
+ */
+export const playwrightBrowsersPath = (
+  env: Readonly<Record<string, string | undefined>>,
+  platform: NodeJS.Platform = process.platform,
+  home: string = homedir(),
+): string => {
+  if (platform === 'win32') return join(env['LOCALAPPDATA'] ?? join(home, 'AppData', 'Local'), 'ms-playwright');
+  if (platform === 'darwin') return join(home, 'Library', 'Caches', 'ms-playwright');
+  const xdgCacheHome = env['XDG_CACHE_HOME'];
+  return join(xdgCacheHome !== undefined && xdgCacheHome.length > 0 ? xdgCacheHome : join(home, '.cache'), 'ms-playwright');
+};
+
 export const isolateWorkerEnvironment = (): void => {
   const root = rstestWorkerRoot();
   const cache = rstestWorkerCacheDirectory('xdg');
   const env = process.env;
+  // Playwright's bundled-browser registry is a machine-level cache that the
+  // per-worker XDG_CACHE_HOME below would otherwise hide: with
+  // AGENT_BUNDLE_PLAYWRIGHT_CHANNEL=chromium (CI) every launch would look for
+  // the build `playwright install chromium` downloaded in an empty per-worker
+  // directory. Pin the registry to where Playwright resolved it before the
+  // override; an explicit PLAYWRIGHT_BROWSERS_PATH (including `0`) wins.
+  env['PLAYWRIGHT_BROWSERS_PATH'] ??= playwrightBrowsersPath(env);
   env['TMPDIR'] = root;
   env['TMP'] = root;
   env['TEMP'] = root;

@@ -6,14 +6,15 @@ import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import { startRuntimePlaygroundFixture } from './helpers/runtime-playground-fixture.ts';
 import { replaceWatchedSource } from './support/watched-files.ts';
-import { workbenchUrl } from './support/workbench-e2e.ts';
+import { browserLaunchOptions, browserTrace, workbenchUrl } from './support/workbench-e2e.ts';
 
 const browserTimeout = 30_000 * timeScale;
 
 const e2e = test.extend({
   playwright: {
-    launchOptions: { channel: 'chrome' },
+    launchOptions: browserLaunchOptions,
     contextOptions: { viewport: { height: 900, width: 1440 } },
+    trace: browserTrace,
   } satisfies PlaywrightOptions,
 });
 
