@@ -2,6 +2,7 @@ import * as AgentRuntime from '@agent-bundle/runtime';
 import { createJiti } from 'jiti';
 import * as React from 'react';
 
+import type { JsonObject } from '../../core/strict-json.ts';
 import {
   AGENT_TEST_REGISTRY_VERSION,
   registerTestRoutes,
@@ -87,6 +88,13 @@ const render = async (request: RouteInvocationChildRequest): Promise<RouteInvoca
     document: rendered.document,
     events: rendered.events,
     input,
+    ...(request.manifest.routes[request.routeId]?.kind === 'tool'
+      ? {
+          mcp: AgentRuntime.documentToCallToolResult(rendered.document, {
+            structuredContent: rendered.result,
+          }) as JsonObject,
+        }
+      : {}),
     renderDurationMs: performance.now() - startedAt,
     ...(rendered.result === undefined ? {} : { result: rendered.result as never }),
   });

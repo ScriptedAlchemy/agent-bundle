@@ -5,8 +5,6 @@ import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { documentToCallToolResult } from '@agent-bundle/runtime';
-
 import { createDefaultRegistry, type TargetRegistry } from '../../adapters/registry.ts';
 import type { TargetHookContract } from '../../adapters/hook-contract.ts';
 import { projectCliDocumentToMarkdown } from '../../cli-entry.ts';
@@ -97,6 +95,8 @@ export interface RouteInvocationChildResult {
   readonly events: RouteInvocation['events'];
   /** The input handed to the route after hosted-event canonicalization. */
   readonly input: JsonValue;
+  /** Runtime-owned MCP projection, computed inside the runtime-bound child. */
+  readonly mcp?: JsonObject;
   readonly renderDurationMs: number;
   readonly result?: JsonValue;
 }
@@ -438,13 +438,15 @@ const invocationProjection = (
   request: RouteInvocationRequest,
   input: JsonValue,
   result: JsonValue | undefined,
+  mcp: JsonObject | undefined,
   document: NonNullable<RouteInvocation['document']>,
   manifest: RouteManifest,
   prepared: RouteInvocationPreparedProject,
   registry: TargetRegistry,
 ): RouteInvocation['projection'] => {
   if (route.kind === 'tool') {
-    return deepFreeze({ mcp: documentToCallToolResult(document, { structuredContent: result }) as JsonObject });
+    if (mcp === undefined) throw new Error('Route invocation child omitted the tool MCP projection.');
+    return deepFreeze({ mcp });
   }
   if (route.kind === 'resource' || route.kind === 'prompt') {
     return deepFreeze({ ...(jsonObject(result) === undefined ? {} : { mcp: jsonObject(result) }) });
@@ -662,6 +664,7 @@ export class RouteInvocationService {
         request,
         rawInput,
         child.result,
+        child.mcp,
         child.document,
         manifest,
         prepared,
