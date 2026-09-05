@@ -85,6 +85,17 @@ const servingCli = async (directory: string): Promise<{ readonly argvFile: strin
   return { argvFile, cli };
 };
 
+/**
+ * A fake `agent-bundle` that prints one noise line and never the ready line,
+ * exiting 3 on SIGTERM — the handler is installed before the line, so a
+ * SIGTERM that follows the line is never racing it.
+ */
+const neverReadyCli = (directory: string): Promise<string> => writeFakeCli(directory, 'never-ready', [
+  "process.on('SIGTERM', () => { process.exit(3); });",
+  "process.stdout.write('Building…\\n');",
+  'setInterval(() => undefined, 60_000);',
+]);
+
 const rejection = async (pending: Promise<unknown>): Promise<ServeAppCommandError> => {
   try {
     await pending;
@@ -274,15 +285,57 @@ it('keeps closed pending through a post-spawn error until the child really exits
   await untilGone(served.pid);
 });
 
+it('rejects stop-failed from close() and from a pre-ready abort when the running child refuses the signal', async () => {
+  // Node's `kill()` reports EPERM on a running child as a synchronous `error`
+  // event and returns false; the fake reproduces exactly that, then lets the
+  // real `kill` through so the test can tear the child down.
+  const root = await temporaryDirectory();
+  const { cli } = await servingCli(root);
+  const refuse = (child: ChildProcess): (() => void) => {
+    const realKill = child.kill.bind(child);
+    child.kill = () => {
+      child.emit('error', Object.assign(new Error('kill EPERM'), { code: 'EPERM', syscall: 'kill' }));
+      return false;
+    };
+    return () => { child.kill = realKill; };
+  };
+  let restore: (() => void) | undefined;
+  const refusing = asSpawn((...args) => {
+    const child = trackingSpawn(...args);
+    restore = refuse(child);
+    return child;
+  });
+
+  const served = await spawnServeApp({ app, cli, relay: relayInto([]), root, spawn: refusing });
+  const failure = await rejection(served.close());
+  expect(failure.code).toBe('stop-failed');
+  expect(failure.message).toContain(`pid ${String(served.pid)}`);
+  expect(failure.cause).toMatchObject({ code: 'EPERM', syscall: 'kill' });
+  expect(isAlive(served.pid)).toBe(true);
+  restore!();
+  await expect(served.close()).resolves.toEqual({ code: 0, signal: null });
+  await untilGone(served.pid);
+
+  const controller = new AbortController();
+  const lines: string[] = [];
+  const pending = spawnServeApp({
+    app, cli: await neverReadyCli(root), relay: relayInto(lines), root, signal: controller.signal, spawn: refusing,
+  });
+  await eventuallyPasses(() => { expect(lines).toEqual(['Building…']); }, polling);
+  controller.abort();
+  const aborted = await rejection(pending);
+  expect(aborted.code).toBe('stop-failed');
+  expect(aborted.cause).toMatchObject({ code: 'EPERM' });
+  const [pid] = spawnedPids.slice(-1);
+  expect(isAlive(pid!)).toBe(true);
+  restore!();
+  process.kill(pid!, 'SIGTERM');
+  await untilGone(pid!);
+});
+
 it('carries a post-spawn error as the cause when the child then exits before its ready line', async () => {
   const root = await temporaryDirectory();
-  // The handler is installed before the noise line, so a SIGTERM that
-  // follows the line is never racing it.
-  const cli = await writeFakeCli(root, 'never-ready', [
-    "process.on('SIGTERM', () => { process.exit(3); });",
-    "process.stdout.write('Building…\\n');",
-    'setInterval(() => undefined, 60_000);',
-  ]);
+  const cli = await neverReadyCli(root);
   let child: ChildProcess | undefined;
   const capturing = asSpawn((...args) => {
     child = trackingSpawn(...args);

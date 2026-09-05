@@ -720,7 +720,8 @@ stdout 的每一行转发到本进程的 stderr——或转发给一个 `relay` 
 的效果相同，因此抵达路由式命令的 Ctrl-C 会抵达服务器。失败以 `ServeAppCommandError` 拒绝，其 `code` 为
 `framework-not-installed`（从 `root` 解析不到任何 `node_modules/agent-bundle`）、`artifact-missing`（给定的
 `artifact` 路径不存在）、`spawn-failed`、`exited-before-ready`（子进程在打印就绪行之前就退出了；`error.exit`
-保存着它的 `{ code, signal }`），或 `aborted`（`signal` 在 App 被提供之前就已中止）。按下 Ctrl-C 时，
+保存着它的 `{ code, signal }`）、`aborted`（`signal` 在 App 被提供之前就已中止），或 `stop-failed`（正在运行的
+子进程拒绝了 `close()` 或中止所发送的 `SIGTERM`——`close()` 也以此拒绝——因此它仍在运行）。按下 Ctrl-C 时，
 路由式 CLI 外壳会在路由返回之前报告 `Aborted.` 并以 `130` 退出，因此上面的结果文档只在服务器自行退出或
 路由调用 `close()` 时才会打印。
 

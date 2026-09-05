@@ -806,7 +806,9 @@ reaches the server. Failures reject with `ServeAppCommandError`, whose `code` is
 `framework-not-installed` (no `node_modules/agent-bundle` resolves from `root`),
 `artifact-missing` (the given `artifact` path does not exist), `spawn-failed`,
 `exited-before-ready` (the child exited without printing the ready line; `error.exit` holds its
-`{ code, signal }`), or `aborted` (the `signal` aborted before the App was served). On Ctrl-C the
+`{ code, signal }`), `aborted` (the `signal` aborted before the App was served), or `stop-failed`
+(the running child refused the `SIGTERM` that `close()` or the abort sent — also what `close()`
+rejects with — so it is still running). On Ctrl-C the
 routed CLI shell reports `Aborted.` and exits `130` before the route returns, so the result
 document above is printed only when the server exits on its own or the route calls `close()`.
 

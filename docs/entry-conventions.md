@@ -1499,7 +1499,9 @@ module, `src/serve-app/command-contract.ts` — and turns the route `signal`
 into the child's `SIGTERM`. The result is `{ app, url, tool, server, port,
 pid, closed, close() }`; failures are `ServeAppCommandError` with `code`
 `framework-not-installed`, `artifact-missing`, `spawn-failed`,
-`exited-before-ready` (carrying the child's `exit`), or `aborted`. It is a
+`exited-before-ready` (carrying the child's `exit`), `aborted`, or
+`stop-failed` (the running child refused the signal `close()` or the abort
+sent; it is still running). It is a
 checkout command: an installed host pack has neither `node_modules/agent-bundle`
 nor the artifact, and the first two codes say so before anything is spawned.
 The worked example is in the MCP Apps guide, "Serving an App standalone".

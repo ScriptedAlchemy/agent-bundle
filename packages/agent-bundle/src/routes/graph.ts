@@ -5,6 +5,7 @@ import fastGlob from 'fast-glob';
 
 import { conventionalEntryAt } from '../config/conventional-entry.ts';
 import { isProjectPathIgnored, readProjectIgnoreRules, toPosixPath } from '../config/ignore.ts';
+import { isRenderedScriptRoute } from '../config/script-routes.ts';
 import { resolveAppRouteTemplate } from './app-template.ts';
 import {
   compileCliCommands,
@@ -1026,20 +1027,27 @@ export const compileRouteGraph = async (
   }
 
   // AB4837 (#558) for layouts and providers, judged once the generated
-  // surfaces are known. A worker imports only the layouts some route it
-  // renders composes through (`workerLayouts` in build/entry-shell.ts), so a
-  // layout no generated rendered route reaches — a root layout in a project
-  // of Apps and event routes, a server layout of a custom server — is never
+  // surfaces are known, against what the build inlines (build/entry-shell.ts,
+  // build/cli-bins.ts, build/entries.ts). A worker imports only the layouts
+  // some route it renders composes through (`workerLayouts`): the non-App
+  // routes of a generated server, the rendered commands of a generated CLI
+  // (plain `.ts` commands run without a render session), and rendered
+  // scripts. A layout none of them reaches — a root layout in a project of
+  // Apps and event routes, a server layout of a custom server — is never
   // bundled and is not judged. Providers mount in every generated request
-  // scope, so they are judged as soon as one generated executable exists.
-  const renderedRoutes = [
-    ...servers.filter((server) => server.mode === 'generated').flatMap((server) => server.routes),
-    ...(cli?.mode === 'generated' ? cli.routes : []),
-    ...scripts,
-  ];
+  // scope — a generated server, the routed CLI executable (plain commands
+  // too), a rendered script's worker, a hook wrapper — but a plain script is
+  // bundled from its own source and mounts none.
+  const generatedServers = servers.filter((server) => server.mode === 'generated');
+  const renderedCommandRouteIds = new Set(
+    (cli?.mode === 'generated' ? cli.commands ?? [] : []).filter((command) => command.rendered).map((command) => command.routeId),
+  );
+  const renderedCliRoutes = cli?.mode === 'generated' ? cli.routes.filter((route) => renderedCommandRouteIds.has(route.id)) : [];
+  const renderedScripts = scripts.filter(isRenderedScriptRoute);
+  const layoutRoutes = [...generatedServers.flatMap((server) => server.routes), ...renderedCliRoutes, ...renderedScripts];
   for (const layout of layouts) {
     const layoutText = moduleTextBySource.get(layout.source);
-    if (layoutText === undefined || !renderedRoutes.some((route) => layoutChainFor(route, [layout]).length > 0)) continue;
+    if (layoutText === undefined || !layoutRoutes.some((route) => layoutChainFor(route, [layout]).length > 0)) continue;
     diagnostics.push(...validateRouteFrameworkImports(
       layoutText,
       layout.provenance.relativePath,
@@ -1048,7 +1056,7 @@ export const compileRouteGraph = async (
       'Layout module',
     ));
   }
-  if (renderedRoutes.length > 0 || events.length > 0) {
+  if (generatedServers.length > 0 || cli?.mode === 'generated' || renderedScripts.length > 0 || events.length > 0) {
     for (const provider of providers) {
       const providerText = moduleTextBySource.get(provider.source);
       if (providerText === undefined) continue;

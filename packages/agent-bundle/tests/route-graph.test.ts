@@ -1817,6 +1817,55 @@ it('judges a layout or provider for AB4837 only when a generated executable bund
   const unwrappedGraph = await compileRouteGraph(unwrapped, fixtureConfig());
   expect(codesBySource(unwrappedGraph.diagnostics, unwrapped)).toEqual(['src/providers/git-worktree.ts']);
 
+  // A plain `.ts` command runs without a render session, so the routed CLI
+  // executable inlines no layout — but it mounts the providers.
+  const plainCli = await createRoot();
+  await writeTree(plainCli, {
+    'src/cli/doctor.ts': [
+      'export const inputSchema = z.object({}).strict();',
+      'export const resultSchema = {};',
+      'export default async () => undefined;',
+      '',
+    ].join('\n'),
+    'src/layout.tsx': layout,
+    'src/providers/git-worktree.ts': provider,
+  });
+  expect(codesBySource((await compileRouteGraph(plainCli, fixtureConfig())).diagnostics, plainCli))
+    .toEqual(['src/providers/git-worktree.ts']);
+
+  // A rendered `.tsx` command renders through the worker, which imports both.
+  const renderedCli = await createRoot();
+  await writeTree(renderedCli, {
+    'src/cli/doctor.tsx': [
+      'export const inputSchema = z.object({}).strict();',
+      'export const resultSchema = {};',
+      'export default async () => undefined;',
+      '',
+    ].join('\n'),
+    'src/layout.tsx': layout,
+    'src/providers/git-worktree.ts': provider,
+  });
+  expect(codesBySource((await compileRouteGraph(renderedCli, fixtureConfig())).diagnostics, renderedCli))
+    .toEqual(['src/layout.tsx', 'src/providers/git-worktree.ts']);
+
+  // A plain script is bundled from its own source: neither layouts nor
+  // providers are inlined. A rendered script's worker inlines both.
+  const plainScript = await createRoot();
+  await writeTree(plainScript, {
+    'src/layout.tsx': layout,
+    'src/providers/git-worktree.ts': provider,
+    'src/scripts/rebuild-index.ts': moduleSource,
+  });
+  expect(codesBySource((await compileRouteGraph(plainScript, fixtureConfig())).diagnostics, plainScript)).toEqual([]);
+  const renderedScript = await createRoot();
+  await writeTree(renderedScript, {
+    'src/layout.tsx': layout,
+    'src/providers/git-worktree.ts': provider,
+    'src/scripts/rebuild-index.tsx': moduleSource,
+  });
+  expect(codesBySource((await compileRouteGraph(renderedScript, fixtureConfig())).diagnostics, renderedScript))
+    .toEqual(['src/layout.tsx', 'src/providers/git-worktree.ts']);
+
   // A server layout of a server that is not generated wraps nothing that is
   // bundled either, and with no generated executable at all the provider is
   // never inlined.

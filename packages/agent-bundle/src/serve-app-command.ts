@@ -111,20 +111,24 @@ export const serveAppArgv = (options: ServeAppArgvOptions): readonly string[] =>
 };
 
 /**
- * Why `spawnServeApp` failed, as the error's `code`:
+ * Why `spawnServeApp` (or a served App's `close()`) failed, as the error's `code`:
  * - `framework-not-installed`: no `agent-bundle` package resolves from `root`;
  * - `artifact-missing`: the given `artifact` path does not exist;
  * - `spawn-failed`: the framework CLI process could not be started;
  * - `exited-before-ready`: `agent-bundle serve-app` exited without printing
  *   its ready line (its diagnostics went to stderr);
- * - `aborted`: the `signal` aborted before the App was served.
+ * - `aborted`: the `signal` aborted before the App was served;
+ * - `stop-failed`: the running `agent-bundle serve-app` process could not be
+ *   signalled when the `signal` aborted or `close()` was called (Node's
+ *   `kill` error is the `cause`), so it is still running.
  */
 export type ServeAppCommandErrorCode =
   | 'framework-not-installed'
   | 'artifact-missing'
   | 'spawn-failed'
   | 'exited-before-ready'
-  | 'aborted';
+  | 'aborted'
+  | 'stop-failed';
 
 /** The exit of the `agent-bundle serve-app` process, as Node reports it. */
 export interface ServeAppExit {
@@ -203,7 +207,11 @@ export interface SpawnedServeApp extends ServeAppReadyLine {
   readonly pid: number;
   /** Settles once the CLI process has exited — by `close()`, the `signal`, Ctrl-C, or on its own when the bound server ended. */
   readonly closed: Promise<ServeAppExit>;
-  /** Stops the server (SIGTERM to the CLI, which closes the host and its MCP server) and waits for the exit. */
+  /**
+   * Stops the server (SIGTERM to the CLI, which closes the host and its MCP
+   * server) and waits for the exit. Rejects with `stop-failed` when the
+   * running process cannot be signalled; it is then still running.
+   */
   close(): Promise<ServeAppExit>;
 }
 
@@ -263,18 +271,37 @@ export const spawnServeApp = async (options: SpawnServeAppOptions): Promise<Spaw
     let buffered = '';
     let spawned = false;
     let lateError: Error | undefined;
+    let stopping = false;
+    let stopFailure: Error | undefined;
     let settledExit: ServeAppExit | undefined;
     let resolveExit: (exit: ServeAppExit) => void = () => undefined;
     const closed = new Promise<ServeAppExit>((resolveClosed) => {
       resolveExit = resolveClosed;
     });
-    const stop = (): void => {
-      if (settledExit === undefined) child.kill('SIGTERM');
+    /**
+     * Sends SIGTERM. Node reports a signal the running process refuses (EPERM)
+     * as a synchronous `error` event rather than a throw; that is the returned
+     * failure. A process that already exited but has not closed yet is not a
+     * failure: its `close` is on the way.
+     */
+    const stop = (): ServeAppCommandError | undefined => {
+      if (settledExit !== undefined) return undefined;
+      stopFailure = undefined;
+      stopping = true;
+      child.kill('SIGTERM');
+      stopping = false;
+      if (stopFailure === undefined) return undefined;
+      return new ServeAppCommandError(
+        'stop-failed',
+        `agent-bundle serve-app (pid ${String(child.pid ?? 'unknown')}) could not be signalled to stop and is still running.`,
+        { cause: stopFailure },
+      );
     };
     const served = (line: ServeAppReadyLine): SpawnedServeApp => ({
       ...line,
       close: async () => {
-        stop();
+        const failure = stop();
+        if (failure !== undefined) throw failure;
         return closed;
       },
       closed,
@@ -289,12 +316,16 @@ export const spawnServeApp = async (options: SpawnServeAppOptions): Promise<Spaw
       if (ready !== undefined) settle(served(ready));
     };
     const onAbort = (): void => {
-      stop();
+      const failure = stop();
+      // Before the ready line the caller is still awaiting this promise, so
+      // an abort that could not stop the child is its answer; after it, the
+      // App is the caller's and `close()` reports the same failure.
+      if (failure !== undefined && ready === undefined) reject(failure);
     };
     options.signal?.addEventListener('abort', onAbort, { once: true });
     // An abort that landed while the CLI was being resolved has already
     // dispatched its event; the listener above would wait forever.
-    if (options.signal?.aborted === true) stop();
+    if (options.signal?.aborted === true) onAbort();
     const finish = (exit: ServeAppExit, failure?: ServeAppCommandError): void => {
       if (settledExit !== undefined) return;
       settledExit = exit;
@@ -329,10 +360,12 @@ export const spawnServeApp = async (options: SpawnServeAppOptions): Promise<Spaw
       // Before the process exists, `error` is the one notice Node gives and
       // `close` may never follow: the spawn failed. Once the process runs,
       // `error` reports a failed `kill()` and the process is still alive, so
-      // only its real `close` may settle `closed`; the error is kept as the
-      // cause should the child then exit before its ready line.
+      // only its real `close` may settle `closed`: `stop()` surfaces the
+      // failure to whoever asked, and it is kept as the cause should the
+      // child then exit before its ready line.
       if (spawned) {
         lateError = error;
+        if (stopping) stopFailure = error;
         return;
       }
       finish(
