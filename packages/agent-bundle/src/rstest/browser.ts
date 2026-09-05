@@ -21,8 +21,12 @@ export interface AgentBundleBrowserRstestOptions {
   /** Extra setup files, appended after the generated browser registry. */
   readonly setupFiles?: readonly string[];
   /**
-   * Compiles every app for this target. By default each app uses its first
-   * declared target that is also selected by the project.
+   * Mounts every app as this host: the preview profile and the binding's
+   * `target` the page sees. By default each app mounts as its first declared
+   * target that the project also selects. The apps themselves are compiled
+   * once for the project's whole selection, as the build stages them (#555) —
+   * the host is projection context for the harness, never part of the
+   * compiled bytes (#592).
    */
   readonly target?: string;
 }
@@ -51,19 +55,20 @@ export interface AgentBundleBrowserRstestConfig {
 }
 
 /**
- * Every declared app must reach the compiled selection — the project's
- * selected hosts, or the one host an override names.
+ * The host one app mounts as in the browser pool — the override, or the
+ * app's first declared target the project also selects — which every declared
+ * app must have: an app reaching none of the selection cannot be mounted.
  */
-const assertAppReachesSelection = (
+const appHost = (
   app: TestableAppDescriptor,
   projectTargets: readonly string[],
   override: string | undefined,
   configPath: string,
-): void => {
+): string => {
   const target = override ?? app.targets.find((candidate) => projectTargets.includes(candidate));
   if (target === undefined || !projectTargets.includes(target) || !app.targets.includes(target)) {
     throw new Error([
-      `MCP App ${JSON.stringify(app.name)} has no browser compilation target selected by the project.`,
+      `MCP App ${JSON.stringify(app.name)} has no browser mount host selected by the project.`,
       `  proof level: ${proofLevelLabel('browser-app')}`,
       `  app:         ${app.name} (${app.resourceUri})`,
       `  config:      ${configPath}`,
@@ -72,6 +77,7 @@ const assertAppReachesSelection = (
       ...(override === undefined ? [] : [`  override:    ${override}`]),
     ].join('\n'));
   }
+  return target;
 };
 
 const normalizedApp = (app: TestableAppDescriptor, configPath: string): NormalizedMcpApp => {
@@ -117,9 +123,10 @@ export const agentBundleBrowserRstest = async (
   }
 
   const normalized = apps.map((app) => normalizedApp(app, configPath));
-  for (const app of apps) assertAppReachesSelection(app, manifest.targets, options.target, configPath);
-  // The pool compiles the same composite selection the build stages (#555).
-  const selected = sortedProjections(options.target === undefined ? manifest.targets : [options.target]);
+  const hosts = Object.fromEntries(apps.map((app) => [app.name, appHost(app, manifest.targets, options.target, configPath)]));
+  // The pool compiles the same composite selection the build stages (#555);
+  // the host each app mounts as is carried beside the compiled bytes.
+  const selected = sortedProjections(manifest.targets);
   const outputRoot = resolve(root, '.agent-bundle', 'test', 'browser-app-build');
   await rm(outputRoot, { force: true, recursive: true });
   await mkdir(outputRoot, { recursive: true });
@@ -140,7 +147,7 @@ export const agentBundleBrowserRstest = async (
       `Browser-App compiler emitted ${String(compiled.length)} of ${String(apps.length)} declared apps for ${JSON.stringify(configPath)}.`,
     );
   }
-  const setup = await writeBrowserTestSetup(root, compiled);
+  const setup = await writeBrowserTestSetup(root, compiled, hosts);
   // The compiled app bundles already carry the stamped identity; the alias
   // covers test files and view helpers the browser pool bundles itself.
   const metaModule = await writeTestMetaModule(root, manifest);
