@@ -684,7 +684,8 @@ export class RouteInvocationService {
     try {
       manifest = this.#manifest.manifest();
       prepared = this.#prepared();
-    } catch {
+    } catch (error) {
+      if (error instanceof RouteInvocationRequestError) throw error;
       throw new RouteInvocationRequestError(
         ROUTE_INVOCATION_MANIFEST_UNAVAILABLE_CODE,
         'No published build and route manifest are available.',

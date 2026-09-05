@@ -114,7 +114,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
       headers: { 'sec-fetch-site': 'same-origin' },
     });
     const session = await bootstrap.json() as { readonly token: string };
-    let headers = {
+    const headers = {
       'content-type': 'application/json',
       origin: server.url,
       'x-agent-bundle-session': session.token,
@@ -231,26 +231,27 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     expect(shell.status).toBe(200);
     expect(await shell.text()).toContain('<title>Route invocation</title>');
 
-    const newRoutePath = join(project.root, 'src/mcp/status/tools/new.tsx');
-    await writeFile(newRoutePath, [
-      "import { Agent } from '@agent-bundle/runtime';",
-      "import { createElement } from 'react';",
-      "import { z } from 'zod';",
-      '',
-      'export const inputSchema = z.object({}).strict();',
-      'export const resultSchema = z.object({ version: z.string() }).strict();',
-      '',
-      'export default async function NewRoute() {',
-      "  return createElement(Agent.Result, { value: { version: 'repaired' } }, createElement(Agent.Text, null, 'New route.'));",
-      '}',
-      '',
-    ].join('\n'));
-    const failurePath = join(project.root, 'src/build-failure.ts');
+    const reportRoutePath = join(project.root, 'src/mcp/status/tools/report.tsx');
     const failedAttempt = await replaceWatchedSourceAndAwaitRebuild(
       server,
       project.root,
-      failurePath,
-      'export const invalid: string = 1;\n',
+      reportRoutePath,
+      [
+        "import { Agent } from '@agent-bundle/runtime';",
+        "import { createElement } from 'react';",
+        "import { z } from 'zod';",
+        '',
+        "export const config = { annotations: { readOnlyHint: true }, description: 'Reports one service.' };",
+        "export const inputSchema = z.object({ service: z.string().min(1) }).strict();",
+        'export const resultSchema = z.object({ service: z.string() }).strict();',
+        'const invalid: string = 1;',
+        '',
+        'export default async function Report({ input }) {',
+        '  const service = `rebuilt-${input.service}`;',
+        '  return createElement(Agent.Result, { value: { service } }, createElement(Agent.Text, null, `Service ${service}`));',
+        '}',
+        '',
+      ].join('\n'),
       { timeoutMs: 10_000 },
     );
     expect(failedAttempt.outcome).toBe('failed');
@@ -261,51 +262,51 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     const staleRouteIds = staleManifest.manifest.servers.flatMap((manifestServer) =>
       manifestServer.routes.map((route) => route.id));
     expect(staleRouteIds).toContain('tool:status/report');
-    expect(staleRouteIds).not.toContain('tool:status/new');
 
-    const publishedInvocationResponse = await fetch(`${server.url}/api/routes/invocations`, {
+    const staleInvocationResponse = await fetch(`${server.url}/api/routes/invocations`, {
       body: JSON.stringify({ input: { service: 'published' }, routeId: 'tool:status/report' }),
       headers,
       method: 'POST',
     });
-    expect(publishedInvocationResponse.status).toBe(200);
-    const publishedInvocation = await publishedInvocationResponse.json() as RouteInvocationResponse;
-    expect(publishedInvocation.invocation).toMatchObject({
-      result: { service: 'published' },
-      status: 'succeeded',
+    expect(staleInvocationResponse.status).toBe(409);
+    await expect(staleInvocationResponse.json()).resolves.toEqual({
+      diagnostic: {
+        code: 'AB8232',
+        message: 'The source is newer than the published build. Rebuild before invoking routes.',
+      },
     });
 
-    await writeFile(failurePath, "export const valid: string = 'repaired';\n");
-    await server.close();
-    server = await startDevServer({
-      assets: createWorkbenchAssetSource({ root: assetsRoot }),
-      open: false,
-      port: 0,
-      root: project.root,
-    });
-    const repairedBootstrap = await fetch(`${server.url}/api/project/session`, {
-      headers: { 'sec-fetch-site': 'same-origin' },
-    });
-    const repairedSession = await repairedBootstrap.json() as { readonly token: string };
-    headers = {
-      'content-type': 'application/json',
-      origin: server.url,
-      'x-agent-bundle-session': repairedSession.token,
-    };
-
-    const repairedManifestResponse = await fetch(`${server.url}/api/routes/manifest`, { headers });
-    const repairedManifest = await repairedManifestResponse.json() as RouteManifestResponse;
-    expect(repairedManifest.manifest.servers.flatMap((manifestServer) =>
-      manifestServer.routes.map((route) => route.id))).toContain('tool:status/new');
+    const repairedAttempt = await replaceWatchedSourceAndAwaitRebuild(
+      server,
+      project.root,
+      reportRoutePath,
+      [
+        "import { Agent } from '@agent-bundle/runtime';",
+        "import { createElement } from 'react';",
+        "import { z } from 'zod';",
+        '',
+        "export const config = { annotations: { readOnlyHint: true }, description: 'Reports one service.' };",
+        "export const inputSchema = z.object({ service: z.string().min(1) }).strict();",
+        'export const resultSchema = z.object({ service: z.string() }).strict();',
+        '',
+        'export default async function Report({ input }) {',
+        '  const service = `rebuilt-${input.service}`;',
+        '  return createElement(Agent.Result, { value: { service } }, createElement(Agent.Text, null, `Service ${service}`));',
+        '}',
+        '',
+      ].join('\n'),
+      { timeoutMs: 10_000 },
+    );
+    expect(repairedAttempt.outcome).toBe('succeeded');
     const repairedInvocationResponse = await fetch(`${server.url}/api/routes/invocations`, {
-      body: JSON.stringify({ routeId: 'tool:status/new' }),
+      body: JSON.stringify({ input: { service: 'published' }, routeId: 'tool:status/report' }),
       headers,
       method: 'POST',
     });
     expect(repairedInvocationResponse.status).toBe(200);
     const repairedInvocation = await repairedInvocationResponse.json() as RouteInvocationResponse;
     expect(repairedInvocation.invocation).toMatchObject({
-      result: { version: 'repaired' },
+      result: { service: 'rebuilt-published' },
       status: 'succeeded',
     });
 
@@ -313,6 +314,152 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     expect(missingApi.status).toBe(404);
     await expect(missingApi.json()).resolves.toEqual({
       diagnostic: { code: 'AB8007', message: 'Route was not found.' },
+    });
+  } finally {
+    await server?.close().catch(() => undefined);
+    await rm(project.root, { force: true, maxRetries: 5, recursive: true, retryDelay: 50 });
+  }
+});
+
+it('publishes invocation routes only after a successful initial or recovered build', { timeout: 90_000 }, async () => {
+  const project = await createProjectFixture({
+    config: [
+      'export default {',
+      "  plugin: { name: 'route-invocation-publication-gate', version: '1.0.0' },",
+      "  targets: ['claude'],",
+      '};',
+      '',
+    ].join('\n'),
+    files: {
+      'package.json': '{"type":"module"}\n',
+      'src/build-failure.ts': 'export const invalid: string = 1;\n',
+      'src/mcp/status/tools/report.tsx': [
+        "import { Agent } from '@agent-bundle/runtime';",
+        "import { createElement } from 'react';",
+        "import { z } from 'zod';",
+        '',
+        "export const inputSchema = z.object({}).strict();",
+        'export const resultSchema = z.object({ version: z.string() }).strict();',
+        '',
+        'export default async function Report() {',
+        "  return createElement(Agent.Result, { value: { version: 'published' } }, createElement(Agent.Text, null, 'Published route.'));",
+        '}',
+        '',
+      ].join('\n'),
+    },
+    prefix: 'agent-bundle-route-invocation-publication-gate-',
+  });
+  const assetsRoot = join(project.root, 'workbench');
+  const failurePath = join(project.root, 'src/build-failure.ts');
+  const reportRoutePath = join(project.root, 'src/mcp/status/tools/report.tsx');
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  await mkdir(assetsRoot, { recursive: true });
+  await Promise.all([
+    symlink(agentBundleNodeModules, join(project.root, 'node_modules'), 'dir'),
+    writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Route publication gate</title>'),
+  ]);
+  try {
+    server = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: assetsRoot }),
+      open: false,
+      port: 0,
+      root: project.root,
+    });
+    let bootstrap = await fetch(`${server.url}/api/project/session`, {
+      headers: { 'sec-fetch-site': 'same-origin' },
+    });
+    let session = await bootstrap.json() as { readonly token: string };
+    let headers = {
+      'content-type': 'application/json',
+      origin: server.url,
+      'x-agent-bundle-session': session.token,
+    };
+
+    expect(server.status().build.state).toBe('failed');
+    const unavailableManifest = await fetch(`${server.url}/api/routes/manifest`, { headers });
+    expect(unavailableManifest.status).toBe(409);
+    const unavailableInvocation = await fetch(`${server.url}/api/routes/invocations`, {
+      body: JSON.stringify({ routeId: 'tool:status/report' }),
+      headers,
+      method: 'POST',
+    });
+    expect(unavailableInvocation.status).toBe(409);
+    await expect(unavailableInvocation.json()).resolves.toEqual({
+      diagnostic: {
+        code: 'AB8232',
+        message: 'No published build and route manifest are available.',
+      },
+    });
+
+    const repairedAttempt = await replaceWatchedSourceAndAwaitRebuild(
+      server,
+      project.root,
+      failurePath,
+      "export const valid: string = 'repaired';\n",
+      { timeoutMs: 10_000 },
+    );
+    expect(repairedAttempt.outcome, JSON.stringify(repairedAttempt.diagnostics)).toBe('succeeded');
+    const publishedInvocationResponse = await fetch(`${server.url}/api/routes/invocations`, {
+      body: JSON.stringify({ routeId: 'tool:status/report' }),
+      headers,
+      method: 'POST',
+    });
+    expect(publishedInvocationResponse.status).toBe(200);
+    const publishedInvocation = await publishedInvocationResponse.json() as RouteInvocationResponse;
+    expect(publishedInvocation.invocation).toMatchObject({
+      result: { version: 'published' },
+      status: 'succeeded',
+    });
+
+    await server.close();
+    server = undefined;
+    await writeFile(reportRoutePath, [
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement } from 'react';",
+      "import { z } from 'zod';",
+      '',
+      'export const inputSchema = z.object({}).strict();',
+      'export const resultSchema = z.object({ version: z.string() }).strict();',
+      'const invalid: string = 1;',
+      '',
+      'export default async function Report() {',
+      "  return createElement(Agent.Result, { value: { version: 'unpublished' } }, createElement(Agent.Text, null, 'Unpublished route.'));",
+      '}',
+      '',
+    ].join('\n'));
+    server = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: assetsRoot }),
+      open: false,
+      port: 0,
+      root: project.root,
+    });
+    bootstrap = await fetch(`${server.url}/api/project/session`, {
+      headers: { 'sec-fetch-site': 'same-origin' },
+    });
+    session = await bootstrap.json() as { readonly token: string };
+    headers = {
+      'content-type': 'application/json',
+      origin: server.url,
+      'x-agent-bundle-session': session.token,
+    };
+
+    expect(server.status().artifact.state).toBe('stale');
+    const recoveredManifestResponse = await fetch(`${server.url}/api/routes/manifest`, { headers });
+    expect(recoveredManifestResponse.status).toBe(200);
+    const recoveredManifest = await recoveredManifestResponse.json() as RouteManifestResponse;
+    expect(recoveredManifest.manifest.servers.flatMap((manifestServer) =>
+      manifestServer.routes.map((route) => route.id))).toContain('tool:status/report');
+    const recoveredInvocation = await fetch(`${server.url}/api/routes/invocations`, {
+      body: JSON.stringify({ routeId: 'tool:status/report' }),
+      headers,
+      method: 'POST',
+    });
+    expect(recoveredInvocation.status).toBe(409);
+    await expect(recoveredInvocation.json()).resolves.toEqual({
+      diagnostic: {
+        code: 'AB8232',
+        message: 'The source is newer than the published build. Rebuild before invoking routes.',
+      },
     });
   } finally {
     await server?.close().catch(() => undefined);
