@@ -1141,8 +1141,54 @@ it('rejects serve-app argv that cannot be served before anything launches', asyn
   const badCapability = await runSourceCliWithOutput(['serve-app', 'status/status', '--root', '/project', '--allow', 'camera'], dependencies);
   expect(badCapability.code).toBe(2);
   expect(badCapability.stderr).toContain('Consent capability must be call-tool, download-file, open-external-link, or request-display-mode.');
-  const badPort = await runSourceCliWithOutput(['serve-app', 'status/status', '--root', '/project', '--port', '70000'], dependencies);
-  expect(badPort.code).toBe(1);
-  expect(JSON.parse(badPort.stderr)).toEqual([{ code: 'AB5000', message: 'Port must be a TCP port number.', severity: 'error' }]);
   expect(launched).toEqual([]);
+});
+
+it('reports invalid CLI arguments as Commander usage errors', async () => {
+  const cases = [
+    {
+      args: ['dev', '--port', '70000'],
+      option: '--port <port>',
+      reason: 'Port must be a TCP port number.',
+      value: '70000',
+    },
+    {
+      args: ['eval', '--trials', '0'],
+      option: '--trials <count>',
+      reason: 'Trials must be a positive integer.',
+      value: '0',
+    },
+    {
+      args: ['dev', '--install-host', 'windsurf'],
+      option: '--install-host <host>',
+      reason: 'Install host must be claude, codex, or cursor.',
+      value: 'windsurf',
+    },
+    {
+      args: ['install', 'cursor', '--mode', 'remote'],
+      option: '--mode <mode>',
+      reason: 'Install mode must be local or marketplace.',
+      value: 'remote',
+    },
+    {
+      args: ['install', 'claude', '--scope', 'global'],
+      option: '--scope <scope>',
+      reason: 'Install scope must be user, project, or local.',
+      value: 'global',
+    },
+  ];
+
+  for (const { args, option, reason, value } of cases) {
+    const result = await runSourceCliWithOutput(args);
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain(`error: option '${option}' argument '${value}' is invalid. ${reason}`);
+    expect(result.stderr).not.toContain('AB5000');
+  }
+
+  const invalidInstallHost = await runSourceCliWithOutput(['install', 'windsurf']);
+  expect(invalidInstallHost.code).toBe(2);
+  expect(invalidInstallHost.stderr).toContain(
+    "error: command-argument value 'windsurf' is invalid for argument 'host'. Install host must be claude, codex, or cursor.",
+  );
+  expect(invalidInstallHost.stderr).not.toContain('AB5000');
 });
