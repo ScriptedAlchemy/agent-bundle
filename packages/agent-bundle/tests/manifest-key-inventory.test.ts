@@ -60,14 +60,24 @@ const resolveRef = (schema: JsonObject, ref: string): SchemaNode => {
   return resolved;
 };
 
+/**
+ * Resolves a `$ref` and lays the node's own keywords over the target. A row
+ * that narrows one property of a shared `$def` (`routes.events[]` pins
+ * `kind`) merges its `properties` into the target's rather than replacing
+ * them, so the inventory still walks every key the row can carry.
+ */
 const deref = (schema: JsonObject, node: SchemaNode): SchemaNode => {
   const ref = node.$ref;
   if (typeof ref !== 'string') return node;
+  const target = resolveRef(schema, ref);
   const rest: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(node)) {
     if (key !== '$ref') rest[key] = value;
   }
-  return { ...resolveRef(schema, ref), ...rest };
+  if (isRecord(target.properties) && isRecord(rest.properties)) {
+    rest.properties = { ...target.properties, ...rest.properties };
+  }
+  return { ...target, ...rest };
 };
 
 const childPath = (path: string, segment: string): string =>
