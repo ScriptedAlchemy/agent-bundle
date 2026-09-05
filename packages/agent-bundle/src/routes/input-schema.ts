@@ -5,6 +5,7 @@ import ts from 'typescript-5';
 import { deepFreeze } from '../core/freeze.ts';
 import {
   createModuleScopeResolver,
+  describeExpression,
   rootReferencePath,
   type ModuleScope,
   type ModuleScopeResolver,
@@ -170,13 +171,14 @@ const dereference = (located: Located, parser: Parser): Dereferenced => {
   switch (resolution.kind) {
     case 'resolved': {
       const { binding, chain, scope, visited } = resolution;
-      return {
-        kind: 'expression',
-        located: {
-          node: unwrapExpression(compilerExpression(resolution.initializer)),
-          path: { binding, chain, scope, visited },
-        },
-      };
+      const initializer = unwrapExpression(compilerExpression(resolution.initializer));
+      if (!isStaticInitializer(initializer)) {
+        return {
+          failure: { chain, kind: 'unresolved', reason: `whose initializer is ${describeExpression(initializer)}` },
+          kind: 'failure',
+        };
+      }
+      return { kind: 'expression', located: { node: initializer, path: { binding, chain, scope, visited } } };
     }
     case 'unresolved':
       return { failure: { chain: resolution.chain, kind: 'unresolved', reason: resolution.reason }, kind: 'failure' };
@@ -257,6 +259,35 @@ const staticLiteral = (expression: ts.Expression): StaticLiteral => {
   }
   return { kind: 'dynamic', node };
 };
+
+/**
+ * Whether a method chain (`a.b(...).c(...)`) hangs off an identifier — `z`,
+ * or a reference the caller dereferences — with only property accesses and
+ * calls between. A bare call (`build()`) does not qualify.
+ */
+const isMethodChain = (node: ts.Node): boolean => {
+  let current = node;
+  while (ts.isCallExpression(current)) {
+    const callee = unwrapExpression(current.expression);
+    if (!ts.isPropertyAccessExpression(callee)) return false;
+    current = unwrapExpression(callee.expression);
+  }
+  return ts.isIdentifier(current) || ts.isPropertyAccessExpression(current);
+};
+
+/**
+ * Whether a resolved initializer is one the grammar can read at all: a
+ * method chain (a zod schema, or one rooted at a further reference), an
+ * object or array literal, or a static literal. Anything else — a call to a
+ * builder, a spread, a template with substitutions, a function — is dynamic:
+ * the reference resolved, but to a value only execution could produce, so the
+ * resolver reports it with the chain rather than the grammar with a position.
+ */
+const isStaticInitializer = (node: ts.Expression): boolean =>
+  isMethodChain(node) ||
+  ts.isObjectLiteralExpression(node) ||
+  ts.isArrayLiteralExpression(node) ||
+  staticLiteral(node).kind === 'value';
 
 export const validationOnlyMethods: Readonly<Record<ScalarBaseKind | 'array', ReadonlySet<string>>> = Object.freeze({
   array: new Set(['length', 'max', 'min', 'nonempty']),

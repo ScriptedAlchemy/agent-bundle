@@ -198,13 +198,13 @@ grammar as an inline schema:
   cycle is detected rather than walked twice.
 - Bare package specifiers, modules outside the project or missing, a target module with no
   `export const` of that name, `let`/`var`, destructured, function, class, default-import, and
-  namespace-import bindings, and dynamic initializers (a call, a spread, a template with
+  namespace-import bindings, and dynamic initializers (a bare call, a function, a template with
   substitutions) are boundaries the resolver does not cross.
 - A grammar violation inside the resolved schema is still `AB4814`, its position qualified by the
   declaring module. A reference that cannot be followed is `AB4838`, whose message prints the
   reference chain (`inputSchema -> statusInputSchema (src/lib/protocol-schemas.ts) ->
-  requestStatuses`) and the boundary that stopped the resolver; a cyclic chain is `AB4839`, whose
-  message prints the cycle.
+  requestStatusSchema -> requestStatuses`) and the boundary that stopped the resolver; a cyclic
+  chain is `AB4839`, whose message prints the cycle.
 - Only CLI routes raise `AB4838`/`AB4839`, because only there the static grammar is load-bearing.
   An MCP route whose schema the resolver cannot follow keeps working exactly as an out-of-grammar
   inline schema does: the generated server derives its JSON Schema from the real zod object.

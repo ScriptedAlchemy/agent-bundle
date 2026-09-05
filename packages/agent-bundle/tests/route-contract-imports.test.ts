@@ -83,16 +83,22 @@ const cliRoute = (variant: FixtureVariant): string => variant === 'inline'
       "export const config = { description: 'Show the queue.' };",
       `export const inputSchema = ${inlineInputSchema};`,
       "export const resultSchema = z.object({ filters: inputSchema, operation: z.literal('status') });",
-      "export default async function status({ input }) { return { filters: input, operation: 'status' }; }",
+      "export default async function status({ input }: { input: z.infer<typeof inputSchema> }) {",
+      "  return { filters: input, operation: 'status' };",
+      '}',
       '',
     ].join('\n')
   : [
+      "import type { z } from 'zod';",
+      '',
       "import { statusInputSchema, statusResultSchema } from '../lib/protocol-schemas.js';",
       '',
       "export const config = { description: 'Show the queue.' };",
       'export const inputSchema = statusInputSchema;',
       'export const resultSchema = statusResultSchema;',
-      "export default async function status({ input }) { return { filters: input, operation: 'status' }; }",
+      "export default async function status({ input }: { input: z.infer<typeof inputSchema> }) {",
+      "  return { filters: input, operation: 'status' };",
+      '}',
       '',
     ].join('\n');
 
@@ -104,7 +110,7 @@ const toolRoute = (variant: FixtureVariant): string => variant === 'inline'
       "export const config = { description: 'Show the queue.' };",
       `export const inputSchema = ${inlineInputSchema};`,
       "export const resultSchema = z.object({ filters: inputSchema, operation: z.literal('status') });",
-      'export default async function HaulerStatus({ input }) {',
+      'export default async function HaulerStatus({ input }: { input: z.infer<typeof inputSchema> }) {',
       "  const result = { filters: input, operation: 'status' };",
       '  return <Agent.Result value={result}><Agent.Text>Queue status.</Agent.Text></Agent.Result>;',
       '}',
@@ -112,12 +118,14 @@ const toolRoute = (variant: FixtureVariant): string => variant === 'inline'
     ].join('\n')
   : [
       "import { Agent } from '@agent-bundle/runtime';",
+      "import type { z } from 'zod';",
+      '',
       "import { statusInputSchema, statusResultSchema } from '../../../lib/protocol-schemas.js';",
       '',
       "export const config = { description: 'Show the queue.' };",
       'export const inputSchema = statusInputSchema;',
       'export const resultSchema = statusResultSchema;',
-      'export default async function HaulerStatus({ input }) {',
+      'export default async function HaulerStatus({ input }: { input: z.infer<typeof inputSchema> }) {',
       "  const result = { filters: input, operation: 'status' };",
       '  return <Agent.Result value={result}><Agent.Text>Queue status.</Agent.Text></Agent.Result>;',
       '}',
@@ -304,7 +312,7 @@ it('shares imported route contracts across graph, argv, runtime, and generated t
     expect.objectContaining({
       code: 'AB4838',
       message: expect.stringContaining(
-        'inputSchema -> statusInputSchema (src/lib/protocol-schemas.ts) -> requestStatuses',
+        'inputSchema -> statusInputSchema (src/lib/protocol-schemas.ts) -> requestStatusSchema -> requestStatuses',
       ),
       sourcePath: join(bareRoot, 'src', 'cli', 'status.ts'),
     }),

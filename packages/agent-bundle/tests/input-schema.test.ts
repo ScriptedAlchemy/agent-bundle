@@ -310,8 +310,8 @@ it.each([
     'a sibling without that export const',
     "import { statusInputSchema } from '../../lib/protocol-schemas.js';\nexport const inputSchema = statusInputSchema;\n",
     { '/project/src/lib/protocol-schemas.ts': 'export const other = 1;\n' },
-    ['inputSchema', 'statusInputSchema (src/lib/protocol-schemas.ts)'],
-    'which does not declare a top-level `export const statusInputSchema`',
+    ['inputSchema', 'statusInputSchema'],
+    'imported from "../../lib/protocol-schemas.js", which does not declare a top-level `export const statusInputSchema`',
   ],
   [
     'a let binding',
@@ -356,11 +356,11 @@ it.each([
     'whose initializer is a call expression',
   ],
   [
-    'a spread inside the shape',
-    'export const inputSchema = z.object({ ...shared, name: z.string() });\n',
+    'a template initializer with substitutions',
+    'const prefix = "x";\nexport const s = `${prefix}-schema`;\nexport const inputSchema = s;\n',
     {},
-    ['inputSchema'],
-    'a spread',
+    ['inputSchema', 's'],
+    'whose initializer is a template literal with substitutions',
   ],
 ])('leaves %s unresolved with the named chain and reason fragment', (_name, text, files, chain, fragment) => {
   const parsed = parse(text, files);
@@ -369,6 +369,17 @@ it.each([
   expect(parsed.resolution && 'reason' in parsed.resolution ? parsed.resolution.reason : '').toContain(fragment);
   expect(parsed.properties).toBeUndefined();
   expect(extractResolved(text, files)).toBeUndefined();
+});
+
+it('keeps a spread inside an inline shape a grammar issue, not a resolution failure', () => {
+  const text = 'export const inputSchema = z.object({ ...shared, name: z.string() });\n';
+  const parsed = parse(text, {});
+  expect(parsed.resolution).toBeUndefined();
+  expect(parsed.issues).toEqual([
+    expect.stringContaining('use plain `key: z...` property assignments'),
+  ]);
+  expect(parsed.properties).toEqual([expect.objectContaining({ key: 'name' })]);
+  expect(extractResolved(text, {})).toBeUndefined();
 });
 
 it('qualifies a grammar violation inside an imported schema with the sibling position and AB4814 wording', () => {

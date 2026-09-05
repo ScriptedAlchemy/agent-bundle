@@ -180,11 +180,11 @@ schema 的模块中解析 zod 表达式，所用的有界语法与内联 schema 
   别名链（`export const a = b`）会被跟随到任意深度，并记录每个访问过的 binding，因此循环会被检测出来，
   而不会重复遍历。
 - 裸包 specifier、项目外部或缺失的模块、没有对应名称 `export const` 的目标模块、`let`/`var`、
-  解构、函数、类、默认导入与命名空间导入 binding，以及动态 initializer（调用、spread、带替换项的
+  解构、函数、类、默认导入与命名空间导入 binding，以及动态 initializer（裸调用、函数、带替换项的
   template），都是解析器不会越过的边界。
 - 已解析 schema 内部的语法违规仍是 `AB4814`，其位置会带上声明模块。无法跟随的引用是 `AB4838`，
   消息会打印引用链（`inputSchema -> statusInputSchema (src/lib/protocol-schemas.ts) ->
-  requestStatuses`）以及阻止解析器继续的边界；循环链是 `AB4839`，消息会打印该循环。
+  requestStatusSchema -> requestStatuses`）以及阻止解析器继续的边界；循环链是 `AB4839`，消息会打印该循环。
 - 只有 CLI 路由会触发 `AB4838`/`AB4839`，因为只有这里静态语法不可或缺。解析器无法跟随 schema 的
   MCP 路由仍会像 schema 不符合内联语法时一样正常工作：生成的服务器会从真实的 zod 对象派生其
   JSON Schema。
