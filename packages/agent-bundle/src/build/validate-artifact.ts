@@ -6,6 +6,7 @@ import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry
 import type {
   TargetArtifactDocumentIssue,
   TargetArtifactDocumentValidator,
+  TargetArtifactValidationContract,
 } from '../adapters/types.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { readFileString, runWithPlatform } from '../effect/platform.ts';
@@ -318,13 +319,20 @@ const matchesArtifactDocumentPath = (contractPath: string, relativePath: string)
  * root (#555): the install surface is written once for the whole selection,
  * and each host's documents live at their contract paths inside the root.
  */
+interface TargetContractValidation {
+  /** The validation contract of every projection whose metadata matched, fetched once and shared with the coherence lane. */
+  readonly contracts: ReadonlyMap<string, TargetArtifactValidationContract>;
+  readonly diagnostics: readonly Diagnostic[];
+}
+
 const validateTargetContracts = async (options: {
   readonly artifactRoot: string;
   readonly files: readonly ArtifactFile[];
   readonly manifest: ArtifactManifest;
   readonly registry: TargetRegistry;
-}): Promise<readonly Diagnostic[]> => {
+}): Promise<TargetContractValidation> => {
   const diagnostics: Diagnostic[] = [];
+  const contracts = new Map<string, TargetArtifactValidationContract>();
   const files = new Set(options.files.map((file) => file.path));
   const selected = manifestTargets(options.manifest);
 
@@ -358,6 +366,7 @@ const validateTargetContracts = async (options: {
     }
 
     const validation = options.registry.artifactValidation(target.host);
+    contracts.set(target.host, validation);
     const validators = new Map(validation.schemas.map((schema) => [schema.name, schema.validate]));
     for (const document of validation.documents) {
       const generatedPaths = document.path.includes('*')
@@ -410,7 +419,7 @@ const validateTargetContracts = async (options: {
       }
     }
   }
-  return Object.freeze(diagnostics);
+  return { contracts, diagnostics: Object.freeze(diagnostics) };
 };
 
 /**
@@ -736,7 +745,7 @@ export const validateArtifactWithSnapshot = async (
   // Read-only validators over the same immutable inspection run concurrently;
   // collecting in this fixed order keeps the diagnostics sequence deterministic.
   const [
-    targetContractDiagnostics,
+    targetContracts,
     portableTargetDiagnostics,
     mcpCoherenceDiagnostics,
     hookCoherenceDiagnostics,
@@ -787,6 +796,7 @@ export const validateArtifactWithSnapshot = async (
   const manifestCoherenceDiagnostics = fileTableVerified
     ? await validateManifestCoherence({
       artifactRoot,
+      contracts: targetContracts.contracts,
       manifest,
       mcpEvidence: runtimeEvidence.mcpServers,
       mcpUnprovenHosts: new Set(mcpCoherenceDiagnostics.flatMap((entry) => entry.target === undefined ? [] : [entry.target])),
@@ -794,7 +804,7 @@ export const validateArtifactWithSnapshot = async (
     })
     : Object.freeze([]);
   diagnostics.push(
-    ...targetContractDiagnostics,
+    ...targetContracts.diagnostics,
     ...portableTargetDiagnostics,
     ...mcpCoherenceDiagnostics,
     ...hookCoherenceDiagnostics,

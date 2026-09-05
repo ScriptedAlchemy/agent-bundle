@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 
 import type { TargetRegistry } from '../adapters/registry.ts';
-import type { TargetArtifactLayout, TargetArtifactOutputLayout } from '../adapters/types.ts';
+import type { TargetArtifactLayout, TargetArtifactOutputLayout, TargetArtifactValidationContract } from '../adapters/types.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { isPlainRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { readFileString, runWithPlatform } from '../effect/platform.ts';
@@ -32,6 +32,8 @@ import {
 
 interface CoherenceOptions {
   readonly artifactRoot: string;
+  /** Each matched projection's validation contract, fetched once by the contract lane — this lane never re-enters the registry for it. */
+  readonly contracts: ReadonlyMap<string, TargetArtifactValidationContract>;
   readonly manifest: ArtifactManifest;
   /** The servers the MCP lane read from each host document — one read per document, shared with this lane. */
   readonly mcpEvidence: readonly ValidatedArtifactMcpServerEvidence[];
@@ -253,8 +255,9 @@ const projectionDiagnostics = async (options: CoherenceOptions): Promise<readonl
   const diagnostics: Diagnostic[] = [];
   for (const projection of options.manifest.projections) {
     const host = projection.host;
-    // Unknown hosts are AB6009; without their contract there is nothing to compare against.
-    if (!options.registry.has(host)) continue;
+    // Unknown hosts are AB6009 and mismatched metadata AB6010; without a contract there is nothing to compare against.
+    const contract = options.contracts.get(host);
+    if (contract === undefined) continue;
     // The recorded adapter identity is what a consumer holding only the manifest
     // keys on (`install`, `doctor`, the installed harness); it must be the
     // identity the registry assigns the adapter under this name.
@@ -270,7 +273,7 @@ const projectionDiagnostics = async (options: CoherenceOptions): Promise<readonl
       ));
       continue;
     }
-    const contractDocuments = options.registry.artifactValidation(host).documents;
+    const contractDocuments = contract.documents;
     const contractPath = (schema: string): string | undefined =>
       contractDocuments.find((document) => document.schema === schema)?.path;
     // `documents.mcp` is judged by `mcpDocumentDiagnostics` against the MCP runtime contract.
