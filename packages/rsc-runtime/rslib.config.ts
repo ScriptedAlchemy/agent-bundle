@@ -1,100 +1,36 @@
 import { defineConfig } from '@rslib/core';
 import { pluginPublint } from 'rsbuild-plugin-publint';
 
-const sharedLib = {
-  bundle: true,
-  dts: true,
-  format: 'esm',
-  syntax: 'es2022',
-} as const;
-
 export default defineConfig({
   lib: [
     {
-      ...sharedLib,
+      bundle: true,
+      dts: true,
+      format: 'esm',
+      syntax: 'es2022',
+      // One lib, one module graph: every public entry is compiled together,
+      // so a module two entries share is emitted once, in a shared chunk both
+      // import (`dist/<id>.js`), and class identity holds across subpaths —
+      // `instanceof AgentStateError` is true whether the error came through
+      // `./state`, `./state/sqlite`, `./mount`, or `./lineage`. Entry graphs
+      // still stay lean: a module only one entry reaches is emitted in that
+      // entry's own chunk, so `node:sqlite` loads only through `./state/sqlite`,
+      // the package root carries no kernel or ledger code, and `./plugin`
+      // stays Effect-free. tests/state-packaging.test.ts holds those
+      // boundaries against the workspace dist; tests/packed-entry-identity.test.ts
+      // holds them against the installed release tarball.
       source: {
         entry: {
           'flight/server': './src/flight/server.ts',
           index: './src/index.ts',
+          lineage: './src/lineage/index.ts',
+          mount: './src/mount/index.ts',
+          notices: './src/notices/index.ts',
+          'notices/inbox-route': './src/notices/inbox-route.ts',
           plugin: './src/plugin.ts',
           state: './src/state/index.ts',
+          'state/sqlite': './src/state/sqlite.ts',
         },
-      },
-    },
-    {
-      ...sharedLib,
-      // Notices are optional and reuse the state entry's kernel runtime.
-      // Keeping this entry separate means stateless package-root consumers
-      // receive no ledger code and the notice entry never loads node:sqlite.
-      output: {
-        cleanDistPath: false,
-        externals: { '../state/index.js': './state.js' },
-      },
-      source: {
-        entry: { notices: './src/notices/index.ts' },
-      },
-    },
-    {
-      ...sharedLib,
-      // Generated mounting composes the optional state and notice entries but
-      // never imports the sqlite driver; durable callers inject that driver.
-      output: {
-        cleanDistPath: false,
-        externals: {
-          '../notices/index.js': './notices.js',
-          '../state/index.js': './state.js',
-        },
-      },
-      source: {
-        entry: { mount: './src/mount/index.ts' },
-      },
-    },
-    {
-      ...sharedLib,
-      // The generated MCP inbox resource is React-bearing and therefore stays
-      // separate from the lean notice ledger entry.
-      output: {
-        cleanDistPath: false,
-        externals: {
-          '../index.js': '../index.js',
-          './index.js': '../notices.js',
-        },
-      },
-      source: {
-        entry: { 'notices/inbox-route': './src/notices/inbox-route.ts' },
-      },
-    },
-    {
-      ...sharedLib,
-      // The lineage registry reuses the state entry's kernel (its durable
-      // journal is an ordinary state definition) and the package root's
-      // request-context helpers; stateless consumers never load it.
-      output: {
-        cleanDistPath: false,
-        externals: {
-          '../agent-request.js': './index.js',
-          '../lineage-native.js': './index.js',
-          '../state/contract.js': './state.js',
-          '../state/index.js': './state.js',
-        },
-      },
-      source: {
-        entry: { lineage: './src/lineage/index.ts' },
-      },
-    },
-    {
-      ...sharedLib,
-      // The sqlite driver is its own entry so `node:sqlite` (and its
-      // ExperimentalWarning) never loads for volatile-state or stateless
-      // consumers. It imports the state entry's runtime instead of
-      // re-bundling the kernel: a duplicated module graph would fork class
-      // identity and break `instanceof AgentStateError` across entries.
-      output: {
-        cleanDistPath: false,
-        externals: { './index.js': '../state.js' },
-      },
-      source: {
-        entry: { 'state/sqlite': './src/state/sqlite.ts' },
       },
     },
   ],

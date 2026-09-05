@@ -94,7 +94,7 @@ export type {
 export { lowerHookResult } from './lower-hook.js';
 export type { NativePostToolUseOutput } from './lower-hook.js';
 export { lowerMcpResult } from './lower-mcp.js';
-export type { JsonObject, JsonValue } from './lower-mcp.js';
+export type { JsonObject, JsonValue, McpCallToolResult, McpContentBlock } from './lower-mcp.js';
 export { createRscRequestContext } from './request-context.js';
 export type { AgentRenderInvocation } from './agent-request.js';
 // Registry-free lineage helpers: what a payload proves on its own. The

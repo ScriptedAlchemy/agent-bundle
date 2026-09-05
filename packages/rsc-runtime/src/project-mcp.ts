@@ -1,4 +1,3 @@
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { Effect, Stream } from 'effect';
 
 import {
@@ -9,7 +8,13 @@ import {
   type AgentRenderEvent,
 } from './agent-document.js';
 import { interruptWhenAborted, runPromise, toRuntimeError } from './effect/boundary.js';
-import { snapshotJsonValue, type JsonObject, type JsonValue } from './lower-mcp.js';
+import {
+  snapshotJsonValue,
+  type JsonObject,
+  type JsonValue,
+  type McpCallToolResult,
+  type McpContentBlock,
+} from './lower-mcp.js';
 
 export const MCP_PROGRESS_MESSAGE_MAX = 200;
 
@@ -67,7 +72,7 @@ export interface ProjectMcpRenderOptions {
 
 export interface McpProjectedToolResult {
   readonly document: AgentDocument;
-  readonly result: CallToolResult;
+  readonly result: McpCallToolResult;
 }
 
 const resolveCapabilities = (
@@ -87,7 +92,7 @@ const gatedBlock = (
   kind: McpRichContentKind,
   summary: string,
   fallback: McpRichContentFallback,
-): CallToolResult['content'][number] => {
+): McpContentBlock => {
   switch (fallback) {
     case 'text':
       return { text: summary, type: 'text' };
@@ -103,8 +108,6 @@ const gatedBlock = (
     }
   }
 };
-
-type McpContentBlock = CallToolResult['content'][number];
 
 const appendNode = (
   node: AgentDocumentNode,
@@ -191,7 +194,7 @@ const resultMetadata = (document: AgentDocument): JsonObject | undefined => {
 export const documentToCallToolResult = (
   document: AgentDocument,
   options: Pick<ProjectMcpRenderOptions, 'capabilities' | 'richContentFallback' | 'structuredContent'> = {},
-): CallToolResult => {
+): McpCallToolResult => {
   const content: McpContentBlock[] = [];
   appendNode(
     document.root,
@@ -210,9 +213,9 @@ export const documentToCallToolResult = (
 };
 
 export const attachMcpStructuredContent = (
-  result: CallToolResult,
+  result: McpCallToolResult,
   value: unknown,
-): CallToolResult => {
+): McpCallToolResult => {
   const structured = objectStructuredContent(value);
   if (structured === undefined) return result;
   return { ...result, structuredContent: structured };
