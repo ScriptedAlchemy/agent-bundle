@@ -82,6 +82,14 @@ same way under both, `$defs` is reached through JSON-pointer `$ref`s under eithe
 2020-12-only keyword such as `unevaluatedProperties` or `dependentRequired` is ignored by a lax
 draft-07 validator rather than misapplied.
 
+Neither schema has to be written in the route module: `inputSchema` and `resultSchema` may both be
+bound to schemas imported from a relative module inside the project
+(`export const inputSchema = statusInputSchema`), and every route that binds the same declared
+`inputSchema` — a tool here, a `src/cli/**` command elsewhere — shares one
+[route contract](./index.mdx#route-contracts-application-ir) in the compiled graph; the
+resolution rules and the `AB4838`/`AB4839` diagnostics are under
+[Share one schema between MCP and CLI](./package-entries.mdx#share-one-schema-between-mcp-and-cli).
+
 A route may re-export its component and schemas from another module. This is how one tool is
 placed on two generated servers when only `config` differs between the placements — an MCP App
 `tools/call`, for example, reaches the server that served the widget:
