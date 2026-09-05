@@ -1983,12 +1983,16 @@ it('does not repeat JavaScript diagnostics after a validation-side mutation', as
   }
 });
 
-/** A compile evidence record covering every `bundle` fixture file with its exact bytes. */
-const compileEvidenceFor = (files: readonly ArtifactFixtureFile[], rewritable = false): ArtifactFixtureFile => ({
+/** A compile evidence record covering every `bundle` fixture file with its exact bytes and the externals given per path. */
+const compileEvidenceFor = (
+  files: readonly ArtifactFixtureFile[],
+  rewritable = false,
+  externals: Readonly<Record<string, readonly CompileEvidenceExternal[]>> = {},
+): ArtifactFixtureFile => ({
   contents: serializeCompileEvidenceRecord({
     assets: files
       .filter((file) => file.kind === 'bundle')
-      .map((file) => ({ externals: [], packages: [], path: file.path, sha256: hash(file.contents) }))
+      .map((file) => ({ externals: externals[file.path] ?? [], packages: [], path: file.path, sha256: hash(file.contents) }))
       .sort((left, right) => left.path.localeCompare(right.path)),
     coverage: { rewritable, unobserved: unobservedLoadForms },
     policy: externalPolicy,
@@ -2001,13 +2005,14 @@ const compileEvidenceFor = (files: readonly ArtifactFixtureFile[], rewritable = 
 /**
  * The check a module gets follows what the compiler proved. A manifest
  * `bundle` file the compile evidence record covers — same bytes, from a build
- * without a `tools` hatch — had every literal import resolved by the compiler:
- * only the ESM lexer runs over it, so a bare `export const broken = ;` (which
- * no bundler emits) passes while unterminated input still fails, and its
- * literal specifiers are not resolved again. Every other module — a copied
- * consumer script, a generated installer, a bundle without a record or from a
- * build whose hatch may have rewritten it — is parsed in full and its imports
- * resolved against the file table.
+ * without a `tools` hatch — is the compiler's output: only the ESM lexer runs
+ * over it, so a bare `export const broken = ;` (which no bundler emits) passes
+ * while unterminated input still fails, and each literal import it carries is
+ * held to the record rather than resolved — a Node built-in or a recorded
+ * external passes, anything else is an import the build ignored. Every other
+ * module — a copied consumer script, a generated installer, a bundle without
+ * a record or from a build whose hatch may have rewritten it — is parsed in
+ * full and its imports resolved against the file table.
  */
 it('lexes compiled modules the evidence record proves and walks every other module in full', async () => {
   const brokenStatement = 'export const broken = ;\n';
@@ -2020,7 +2025,19 @@ it('lexes compiled modules the evidence record proves and walks every other modu
     { contents: "export { missing } from './missing.mjs';\n", kind: 'bundle', path: 'scripts/dangling.mjs' },
     { contents: "import 'unbundled-package';\n", kind: 'bundle', path: 'scripts/bare.mjs' },
     { contents: "import 'unbundled-package';\n", kind: 'generated', path: 'scripts/uncompiled.mjs' },
+    { contents: "import 'node:fs';\nimport './sibling.mjs';\n", kind: 'bundle', path: 'scripts/accounted.mjs' },
+    { contents: 'export const sibling = true;\n', kind: 'bundle', path: 'scripts/sibling.mjs' },
   ];
+  const accountedExternals = {
+    'scripts/accounted.mjs': [{
+      externalType: 'module',
+      issuers: ['src/accounted.ts'],
+      kind: 'artifact-relative' as const,
+      request: './sibling.mjs',
+      target: 'scripts/sibling.mjs',
+      userRequest: './sibling.mjs',
+    }],
+  };
   const reported = async (files: readonly ArtifactFixtureFile[]): Promise<readonly (readonly (string | undefined)[])[]> => {
     const root = await writeArtifact(files, true, [customManifestTarget]);
     try {
@@ -2043,18 +2060,30 @@ it('lexes compiled modules the evidence record proves and walks every other modu
 
   // Without a record nothing is proven: every module is parsed and resolved.
   expect(await reported(modules)).toEqual(walkedInFull);
-  // A record covering the bundles proves them: the lexer still rejects
-  // unterminated input, but a bare specifier or a dangling sibling in a
-  // covered bundle is the compiler's resolved import, not the walk's.
-  expect(await reported([...modules, compileEvidenceFor(modules)])).toEqual([
+  // A record covering the bundles proves their bytes, not their imports: the
+  // lexer still rejects unterminated input, a built-in and a recorded sibling
+  // pass, and a bare specifier or a dangling sibling the record does not
+  // account for — what an `rspackIgnore` import leaves behind — is reported
+  // without being resolved.
+  const unaccounted = (importer: string, request: string): readonly string[] => [
+    'AB6005',
+    importer,
+    `Generated JavaScript import from ${JSON.stringify(importer)} loads ${JSON.stringify(request)}, which the compiler `
+      + 'neither bundled nor recorded as an external; an import the build ignored is a run-time load outside the artifact.',
+  ];
+  expect(await reported([...modules, compileEvidenceFor(modules, false, accountedExternals)])).toEqual([
+    unaccounted('scripts/bare.mjs', 'unbundled-package'),
     ['AB6005', 'scripts/copied.mjs', 'Generated JavaScript import from "scripts/copied.mjs" has invalid syntax.'],
+    unaccounted('scripts/dangling.mjs', './missing.mjs'),
     ['AB6005', 'scripts/generated.mjs', 'Generated JavaScript import from "scripts/generated.mjs" has invalid syntax.'],
     ['AB6005', 'scripts/uncompiled.mjs', 'Generated JavaScript import from "scripts/uncompiled.mjs" uses unsupported specifier "unbundled-package".'],
     ['AB6005', 'scripts/unterminated.mjs', 'Generated JavaScript import from "scripts/unterminated.mjs" has invalid syntax.'],
   ]);
+  // Without the sibling external in the record, the same import is unaccounted for.
+  expect(await reported([...modules, compileEvidenceFor(modules)])).toContainEqual(unaccounted('scripts/accounted.mjs', './sibling.mjs'));
   // A hatch may have rewritten the emitted bytes after the compiler judged
   // them: the record says so and proves nothing.
-  expect(await reported([...modules, compileEvidenceFor(modules, true)])).toEqual(walkedInFull);
+  expect(await reported([...modules, compileEvidenceFor(modules, true, accountedExternals)])).toEqual(walkedInFull);
   // A record that does not parse is reported once and proves nothing.
   expect(await reported([...modules, { contents: '{', kind: 'generated', path: compileEvidenceFileName }])).toEqual([
     ['AB6039', compileEvidenceFileName, 'Compile evidence record is not valid JSON.'],
