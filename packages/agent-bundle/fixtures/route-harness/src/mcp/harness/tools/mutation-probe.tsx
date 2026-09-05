@@ -14,7 +14,7 @@ export const inputSchema = z.object({
 
 export const resultSchema = z.object({
   executions: z.number().int().positive(),
-  invocation: z.literal('tool'),
+  invocation: z.enum(['cli', 'tool']),
   marker: z.string().nullable(),
   operationId: z.string(),
 }).strict();
@@ -28,7 +28,7 @@ export default async function MutationProbe({
   const context = await agent();
   const result = {
     executions,
-    invocation: context.invocation.kind as 'tool',
+    invocation: context.invocation.kind as 'cli' | 'tool',
     marker: input.marker ?? null,
     operationId: context.invocation.operationId!,
   };

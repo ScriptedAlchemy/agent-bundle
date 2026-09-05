@@ -17,6 +17,46 @@ import { cliJson, invokeCli } from '../../src/test/cli.ts';
  * session contract that the generated executable wires around the shell.
  */
 describe('the CLI dispatch level', () => {
+  it('requires confirmation for a projected mutation before dispatch and strips --yes from canonical input', async () => {
+    const command: CompiledCliCommand = {
+      aliases: [],
+      exitCode: 'zero',
+      mcp: { confirm: true, server: 'harness', tool: 'submit' },
+      options: [{
+        key: 'yes',
+        kind: 'boolean',
+        option: 'yes',
+        repeated: false,
+        required: false,
+      }],
+      path: ['submit'],
+      projection: {
+        mapInput: false,
+        module: 'src/mcp/harness/tools/submit.cli.tsx',
+      },
+      rendered: false,
+      routeId: 'tool:harness/submit',
+    };
+    const inputs: Readonly<Record<string, unknown>>[] = [];
+    const run = (argv: readonly string[]) => runGeneratedCliEntry({
+      argv,
+      commands: [command],
+      execute: async (_compiled, input) => {
+        inputs.push(input);
+        return input;
+      },
+      name: 'route-harness',
+      version: '1.0.0',
+      writeErr: () => undefined,
+      writeOut: () => undefined,
+    });
+
+    expect(await run(['submit'])).toBe(2);
+    expect(inputs).toEqual([]);
+    expect(await run(['submit', '--yes'])).toBe(0);
+    expect(inputs).toEqual([{}]);
+  });
+
   it('accepts projected option aliases, prints projection help, and spells schema failures as projected flags', async () => {
     const command: CompiledCliCommand = {
       aliases: [],

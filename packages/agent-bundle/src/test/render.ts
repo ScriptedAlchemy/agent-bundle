@@ -28,9 +28,7 @@ import type * as React from 'react';
 
 import {
   CliInputError,
-  CliUsageError,
   cliInputError,
-  confirmationRequiredMessage,
 } from '../cli-entry.ts';
 import type {
   CliRenderedEvent,
@@ -1096,14 +1094,6 @@ export const parseCliCommandInput = (
   input: Readonly<Record<string, unknown>>,
 ): unknown => {
   let mapped: Readonly<Record<string, unknown>> = { ...input };
-  if (command.projection !== undefined && command.mcp?.confirm === true) {
-    if (mapped['yes'] !== true) {
-      throw new CliUsageError(confirmationRequiredMessage(command.mcp.server, command.mcp.tool));
-    }
-    const withoutConfirmation = { ...mapped };
-    delete withoutConfirmation['yes'];
-    mapped = withoutConfirmation;
-  }
   if (command.projection?.defaults !== undefined) {
     const withDefaults: Record<string, unknown> = { ...mapped };
     for (const [key, value] of Object.entries(command.projection.defaults)) {
@@ -1190,15 +1180,10 @@ export const prepareCliRenderHost = async (
         input,
       );
       const commandName = command.path.join(' ');
-      const invocation: AgentRenderInvocation = command.mcp === undefined || command.projection !== undefined
-        ? {
-            kind: 'cli',
-            props: { args: execution.args, command: commandName },
-          }
-        : {
-            kind: 'tool',
-            props: { input: parsed as never, operationId: command.routeId },
-          };
+      const invocation: AgentRenderInvocation = {
+        kind: 'cli',
+        props: { args: execution.args, command: commandName },
+      };
       const collected: AgentProgressUpdate[] = [];
       const descriptor = options.manifest.routes[command.routeId];
       const dispatcher = createFlightDispatcher({
@@ -1236,20 +1221,12 @@ export const prepareCliRenderHost = async (
             ...context,
             ...mounted.context,
             providers,
-            invocation: command.mcp === undefined || command.projection !== undefined
-              ? {
-                  kind: 'cli',
-                  operationId: command.routeId,
-                  surface: commandName,
-                  ...context.invocation,
-                }
-              : {
-                  artifactEpoch: `${options.manifest.plugin.name}@${options.manifest.plugin.version}`,
-                  kind: 'tool',
-                  operationId: command.routeId,
-                  surface: command.mcp.tool,
-                  ...context.invocation,
-                },
+            invocation: {
+              kind: 'cli',
+              operationId: command.routeId,
+              surface: commandName,
+              ...context.invocation,
+            },
             signal: request.signal,
           };
         },

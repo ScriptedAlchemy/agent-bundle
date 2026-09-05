@@ -22,6 +22,23 @@ const providerLine = (kind: 'cli' | 'tool', surface: string): string =>
   `provider: ${JSON.stringify({ kind, surface, tool: 'ffprobe 6.1' })}`;
 
 describe('the CLI surface projection of tool:harness/submit', () => {
+  it('uses cli invocation kind for bulk and explicit CLI projections while MCP remains tool', async () => {
+    const bulk = await invokeCli([
+      'harness',
+      'mutation-probe',
+      '--input',
+      '{"marker":"kind"}',
+      '--yes',
+      '--json',
+    ]);
+    const explicit = await invokeCli(['submit', '--', 'cargo', 'check']);
+    const mcp = await invokeMcpTool('mutation-probe', { input: { marker: 'kind' } });
+
+    expect((cliJson(bulk) as { readonly invocation: string }).invocation).toBe('cli');
+    expect(explicit.stdout).toContain('invocation: cli tool:harness/submit submit');
+    expect((mcp.structuredContent as { readonly invocation: string }).invocation).toBe('tool');
+  });
+
   it('compiles the projection module into one command whose route is the tool', () => {
     const manifest = testManifest();
     const command = manifest.cliCommands.find((candidate) => candidate.routeId === 'tool:harness/submit');

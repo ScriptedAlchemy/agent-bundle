@@ -388,7 +388,7 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     // module-level `process.env` read sees the composed environment. The
     // npm package bin runs from the operator's own shell and reads none.
     ...(stateFallback === 'artifact' ? [operatorEnvLayerImport] : []),
-    `import { CliInputError, CliUsageError, cliInputError, confirmationRequiredMessage, runGeneratedCliProcess } from ${JSON.stringify(cliEntryRuntimeSpecifier)};`,
+    `import { CliInputError, cliInputError, runGeneratedCliProcess } from ${JSON.stringify(cliEntryRuntimeSpecifier)};`,
     rendered
       ? "import { available, createAgentRenderDispatcher, resolvePluginRoot, runAgentRequest, unavailable } from '@agent-bundle/runtime';"
       : "import { available, resolvePluginRoot, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
@@ -415,10 +415,6 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     '',
     'const parseInput = (command, route, input) => {',
     '  let mapped = { ...input };',
-    '  if (command.projection !== undefined && command.mcp?.confirm === true) {',
-    '    if (mapped.yes !== true) throw new CliUsageError(confirmationRequiredMessage(command.mcp.server, command.mcp.tool));',
-    '    delete mapped.yes;',
-    '  }',
     '  if (command.projection?.defaults !== undefined) {',
     '    for (const [key, value] of Object.entries(command.projection.defaults)) {',
     '      if (!Object.hasOwn(mapped, key)) mapped[key] = value;',
@@ -499,10 +495,10 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
         '  }',
         '  if (command.mcp !== undefined) {',
         '    return openRenderedSession({',
-        "      invocation: { kind: 'tool', props: { input: parsed, operationId: command.routeId } },",
+        "      invocation: { kind: 'cli', props: { args: context.args, command: command.path.join(' ') } },",
         '      limits: command.render,',
         '      props: { input: parsed },',
-        `      request: { artifactEpoch: ${JSON.stringify(generatedRouteArtifactEpoch(options.plugin))}, kind: 'tool', operationId: command.routeId, surface: command.mcp.tool },`,
+        "      request: { kind: 'cli', operationId: command.routeId, surface: command.path.join(' ') },",
         '      routeId: command.routeId,',
         '      signal: context.signal,',
         '      terminal: context.terminal,',
