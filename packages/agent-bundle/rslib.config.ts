@@ -126,6 +126,13 @@ export default defineConfig({
       'mcp-apps': './src/mcp-apps.ts',
       'mcp-entry': './src/mcp-entry.ts',
       meta: './src/meta.ts',
+      // Same reason as `mcp-tasks` below: the runtime's only other private
+      // sibling. Concatenated into the runtime's chunk it makes that chunk
+      // host two modules, so rslib synthesizes the runtime's namespace
+      // object (for `agent-bundle/test`'s dynamic import) through its own
+      // `__webpack_require__`, and the generated stdio entry fails to start
+      // with `__webpack_modules__[moduleId] is not a function`.
+      'mcp-schema-projection': './src/mcp-schema-projection.ts',
       'mcp-server-runtime': './src/mcp-server-runtime.ts',
       // Its own entry so it is emitted as a chunk beside the runtime rather
       // than concatenated into it: a generated artifact bundles
