@@ -61,7 +61,7 @@ import {
   type InstallRegistration,
   type StoredInstallReceipt,
 } from './receipt.ts';
-import { installedWebDataRoot, type InstalledStateRoot, resolveInstalledStateRoot } from './state-root.ts';
+import { inspectInstalledStateOwnership, installedWebDataRoot, resolveInstalledStateRoot } from './state-root.ts';
 
 /**
  * `agent-bundle uninstall <host>` (#101): the receipt-owned reverse of
@@ -99,6 +99,8 @@ export interface UninstallDataReport {
   /** The durable-state paths the decision applied to (absolute). */
   readonly paths: readonly string[];
   readonly policy: UninstallDataPolicy;
+  /** Recorded state roots retained because this installation lacks valid deletion authority. */
+  readonly retained?: readonly { readonly path: string; readonly reason: string }[];
 }
 
 /**
@@ -442,7 +444,6 @@ interface CursorLocalData {
   /** Whether any durable state root exists. */
   readonly present: boolean;
   readonly report: UninstallDataReport;
-  readonly stateRoot: InstalledStateRoot;
   readonly webDataRoot: string;
 }
 
@@ -456,18 +457,27 @@ const cursorLocalData = async (
   home: string,
 ): Promise<CursorLocalData> => {
   const stateDirectory = join(destination, 'state');
-  const effectiveState = receipt?.stateRoot ??
-    await resolveInstalledStateRoot(destination, 'cursor', environment, home);
   const webData = receipt?.webDataRoot ?? installedWebDataRoot(destination, home);
   const paths: string[] = [];
+  const retainedState: { path: string; reason: string }[] = [];
   const kinds: string[] = [];
   let emptyState: string | undefined;
-  if (
-    effectiveState.root !== stateDirectory &&
-    await realDirectory(effectiveState.root, 'cursor') !== undefined
-  ) {
-    paths.push(effectiveState.root);
-    kinds.push(`${effectiveState.source} framework state root ${effectiveState.root}`);
+  if (receipt?.state !== undefined) {
+    for (const root of receipt.state.roots) {
+      if (root.root === stateDirectory) continue;
+      const decision = await inspectInstalledStateOwnership(receipt.state, root);
+      if (decision.action === 'purge') {
+        paths.push(root.root);
+        kinds.push(`${root.source} framework state root ${root.root}`);
+      } else if (decision.action === 'retain') {
+        retainedState.push({ path: root.root, reason: decision.reason ?? 'unproven' });
+      }
+    }
+  } else {
+    const observed = receipt?.stateRoot ?? await resolveInstalledStateRoot(destination, 'cursor', environment, home);
+    if (observed.root !== stateDirectory && await realDirectory(observed.root, 'cursor') !== undefined) {
+      retainedState.push({ path: observed.root, reason: 'unproven' });
+    }
   }
   if (await realDirectory(stateDirectory, 'cursor') !== undefined) {
     if ((await readdir(stateDirectory)).length === 0) {
@@ -502,7 +512,7 @@ const cursorLocalData = async (
   const foreignNote = foreignPluginData === undefined
     ? ''
     : ` The receipt records PLUGIN_DATA at ${foreignPluginData}, outside this home's agent-bundle/plugin-data; it is not touched.`;
-  if (paths.length === 0) {
+  if (paths.length === 0 && retainedState.length === 0) {
     return {
       ...(emptyPluginData === undefined ? {} : { emptyPluginData }),
       ...(emptyState === undefined ? {} : { emptyState }),
@@ -517,23 +527,27 @@ const cursorLocalData = async (
         paths: Object.freeze([]),
         policy,
       }),
-      stateRoot: effectiveState,
       webDataRoot: webData,
     };
   }
+  const retainedNote = retainedState.length === 0
+    ? ''
+    : ` Retained ${retainedState.map((entry) => `${entry.path} (${entry.reason})`).join(', ')} because the receipt does not prove exclusive ownership.`;
   return {
     ...(emptyPluginData === undefined ? {} : { emptyPluginData }),
     ...(emptyState === undefined ? {} : { emptyState }),
     present: true,
     report: Object.freeze({
       detail: policy === 'purge'
-        ? `Durable runtime state — ${kinds.join(' and ')} — is removed (--purge-data --confirm-purge).${foreignNote}`
-        : `Durable runtime state — ${kinds.join(' and ')} — is kept; pass --purge-data --confirm-purge to remove it.${foreignNote}`,
-      outcome: policy === 'purge' ? 'purged' : 'kept',
+        ? `${paths.length === 0 ? 'No owned durable runtime state is removed.' : `Durable runtime state — ${kinds.join(' and ')} — is removed (--purge-data --confirm-purge).`}${retainedNote}${foreignNote}`
+        : `Durable runtime state${kinds.length === 0 ? '' : ` — ${kinds.join(' and ')}`} — is kept; pass --purge-data --confirm-purge to remove owned roots.${retainedNote}${foreignNote}`,
+      outcome: policy === 'purge' && paths.length > 0 ? 'purged' : 'kept',
       paths: Object.freeze(paths),
       policy,
+      ...(retainedState.length === 0
+        ? {}
+        : { retained: Object.freeze(retainedState.map((entry) => Object.freeze(entry))) }),
     }),
-    stateRoot: effectiveState,
     webDataRoot: webData,
   };
 };
@@ -695,7 +709,8 @@ const uninstallCursorLocal = async (
       plugin: identity.plugin,
       registrations: [],
       scope: 'user',
-      ...(keepRoot ? { stateRoot: data.stateRoot, webDataRoot: data.webDataRoot } : {}),
+      ...(ownership.receipt?.state === undefined ? {} : { state: ownership.receipt.state }),
+      ...(keepRoot ? { webDataRoot: data.webDataRoot } : {}),
       updatedAt: new Date().toISOString(),
       version: ownership.receipt?.version ?? identity.version,
     }));
@@ -1103,25 +1118,43 @@ const publicHostData = async (
   sharedWith: readonly string[] | 'unknown',
   environment: Readonly<NodeJS.ProcessEnv>,
   home: string,
+  receipt: InstallReceipt | undefined,
 ): Promise<UninstallDataReport> => {
   const paths: string[] = [];
+  const retainedState: { path: string; reason: string }[] = [];
+  if (receipt?.state !== undefined) {
+    for (const root of receipt.state.roots) {
+      const decision = await inspectInstalledStateOwnership(receipt.state, root);
+      if (decision.action === 'purge') paths.push(decision.path);
+      if (decision.action === 'retain') {
+        retainedState.push({ path: decision.path, reason: decision.reason ?? 'unproven' });
+      }
+    }
+  }
   if (entry !== undefined) {
     const legacyStateRoot = join(entry.installPath, 'state');
-    const effectiveState = await resolveInstalledStateRoot(entry.installPath, host, environment, home);
     const candidates = [
-      effectiveState.root,
       ...(host === 'codex' && policy === 'keep' ? [] : [legacyStateRoot]),
       installedWebDataRoot(entry.installPath, home),
     ];
     for (const path of candidates) {
       if (!paths.includes(path) && await realDirectory(path, host) !== undefined) paths.push(path);
     }
+    if (receipt?.state === undefined) {
+      const observed = await resolveInstalledStateRoot(entry.installPath, host, environment, home);
+      if (
+        !paths.includes(observed.root) &&
+        await realDirectory(observed.root, host) !== undefined
+      ) {
+        retainedState.push({ path: observed.root, reason: 'unproven' });
+      }
+    }
   }
   if (host === 'claude') {
     const dataDirectory = join(hostRoot, 'plugins', 'data', id);
     if (await realDirectory(dataDirectory, host) !== undefined) paths.push(dataDirectory);
   }
-  if (paths.length === 0) {
+  if (paths.length === 0 && retainedState.length === 0) {
     if (host === 'codex' && entry !== undefined) {
       return Object.freeze({
         detail: policy === 'purge'
@@ -1139,7 +1172,7 @@ const publicHostData = async (
       policy,
     });
   }
-  if (policy === 'purge' && (sharedWith === 'unknown' || sharedWith.length > 0)) {
+  if (policy === 'purge' && paths.length > 0 && (sharedWith === 'unknown' || sharedWith.length > 0)) {
     // The cache copy and plugins/data/<id> are scope-less: another scope's install still uses them.
     throw failure(
       'AB7008',
@@ -1153,13 +1186,24 @@ const publicHostData = async (
   }
   return Object.freeze({
     detail: policy === 'purge'
-      ? `Durable runtime state is removed after the ${host} uninstall returns (--purge-data --confirm-purge).`
+      ? `${paths.length === 0
+        ? 'No owned durable runtime state is removed.'
+        : `Owned durable runtime state is removed after the ${host} uninstall returns (--purge-data --confirm-purge).`}${
+        retainedState.length === 0
+          ? ''
+          : ` Retained ${retainedState.map((entry) => `${entry.path} (${entry.reason})`).join(', ')} because the receipt does not prove exclusive ownership.`
+      }`
       : host === 'claude'
         ? '`claude plugin uninstall --keep-data` orphans the cached copy for Claude\'s ~14-day grace period; Agent Bundle preserves the effective framework state root, legacy state/, web-data, and plugins/data.'
         : '`codex plugin remove` deletes the cached plugin tree, but Agent Bundle preserves the external framework state root and web-data.',
-    outcome: policy === 'purge' ? 'purged' : host === 'claude' ? 'retained-by-host' : 'kept',
+    outcome: policy === 'purge'
+      ? paths.length > 0 ? 'purged' : 'kept'
+      : host === 'claude' ? 'retained-by-host' : 'kept',
     paths: Object.freeze(paths),
     policy,
+    ...(retainedState.length === 0
+      ? {}
+      : { retained: Object.freeze(retainedState.map((entry) => Object.freeze(entry))) }),
   });
 };
 
@@ -1310,6 +1354,7 @@ const uninstallPublicCli = async (
     dependents === 'unknown' ? 'unknown' : dependents.sameOtherScopes,
     environment,
     home,
+    receipt,
   );
   const registrations: UninstallRegistrationReport[] = [];
   if (pluginRegistration !== undefined) {
@@ -1346,11 +1391,14 @@ const uninstallPublicCli = async (
     }));
   }
   const purgedDirectories = policy === 'purge' && data.outcome === 'purged' ? data.paths : [];
+  const keepReceipt = policy === 'keep' &&
+    receipt !== undefined &&
+    (data.paths.length > 0 || (data.retained?.length ?? 0) > 0);
   const result = {
     ...base,
     data,
     ...(entry === undefined ? {} : { destination: entry.installPath }),
-    receipt: receiptReport(receiptPath, receipt, status),
+    receipt: receiptReport(receiptPath, receipt, keepReceipt ? 'remnant' : status),
     registrations: Object.freeze(registrations),
     retained: Object.freeze([]),
   } as const;
@@ -1385,7 +1433,20 @@ const uninstallPublicCli = async (
       });
     }
   }
-  const removedReceipt = await removeStoredInstallReceipt(receiptPath, hostRoot);
+  let removedReceipt: readonly string[];
+  if (keepReceipt && receipt !== undefined) {
+    await writeStoredInstallReceipt(receiptPath, {
+      ...receipt,
+      directories: Object.freeze([]),
+      files: Object.freeze([]),
+      hostDirectories: Object.freeze([]),
+      registrations: Object.freeze([]),
+      updatedAt: new Date().toISOString(),
+    });
+    removedReceipt = Object.freeze([]);
+  } else {
+    removedReceipt = await removeStoredInstallReceipt(receiptPath, hostRoot);
+  }
   return Object.freeze({
     ...result,
     removed: Object.freeze({

@@ -21,6 +21,7 @@ import {
   installReceiptStorePath,
   isRemnantReceipt,
   isRuntimeStateRemnant,
+  readInstallReceipt,
   readInstallReceiptFile,
   replaceInstalledTree,
   stageArtifact,
@@ -29,10 +30,12 @@ import {
   writeStoredInstallReceipt,
   type InstalledManifestIdentity,
   type InstalledTreeComparison,
+  type InstallReceipt,
   type InstallReceiptIdentity,
   type InstallRegistration,
   type TreeInventory,
 } from './receipt.ts';
+import { recordInstalledState } from './state-root.ts';
 
 export type InstallHost = 'claude' | 'codex' | 'cursor';
 export type InstallScope = 'local' | 'project' | 'user';
@@ -576,7 +579,12 @@ const installPublicCli = async (
   let previousContentHash: string | undefined;
   // Both hosts cache at `<root>/<marketplace>/<plugin>/<version>` (pinned by the real-host proofs), so a
   // reported copy locates where the reinstalled version lands.
-  let destination: string | undefined;
+  let destination = join(
+    publicHostCacheRoot(host, environment, home),
+    marketplace,
+    identity.plugin,
+    identity.version,
+  );
   const entry = inventory.status === 'available' ? inventory.entries[0] : undefined;
   // The store receipt is the lifecycle record for this host-owned copy: written on every install and
   // replacement, and refreshed when an identical copy is found without one (pre-#101 installs). It owns
@@ -623,8 +631,33 @@ const installPublicCli = async (
     if (installed !== undefined && sameVersion && installed.hash === artifact.hash) {
       // Byte-identical, so reinstalling cannot help: the host's refusal is the artifact's own defect.
       if (entry.errors !== undefined && entry.errors.length > 0) throw refusedInstallFailure(host, id, entry, 'existing');
-      if (previousReceipt === undefined || previousReceipt.contentHash !== artifact.hash) {
-        await writeStoredInstallReceipt(receiptPath, createInstallReceipt({ ...(await receiptIdentity()), inventory: storeInventory }));
+      if (
+        previousReceipt === undefined ||
+        previousReceipt.contentHash !== artifact.hash ||
+        previousReceipt.state === undefined
+      ) {
+        const receiptIdentityValue = await receiptIdentity();
+        const state = await recordInstalledState({
+          environment,
+          home,
+          host,
+          mode: 'host-cli',
+          plugin: identity.plugin,
+          pluginRoot: entry.installPath,
+          previous: previousReceipt?.state,
+          ...(projectRoot === undefined ? {} : { projectRoot }),
+          scope,
+        });
+        try {
+          await writeStoredInstallReceipt(receiptPath, createInstallReceipt({
+            ...receiptIdentityValue,
+            inventory: storeInventory,
+            state: state.state,
+          }));
+        } catch (error) {
+          await state.rollback();
+          throw error;
+        }
       }
       return { ...base, destination: entry.installPath, state: 'already-installed' };
     }
@@ -670,17 +703,32 @@ const installPublicCli = async (
   const createdMarketplace = previousReceipt === undefined &&
     recorded.registrations.some((registration) => registration.kind === `${host}-marketplace`);
   let pluginInstalled = false;
+  let stateRollback: (() => Promise<void>) | undefined;
   try {
     await runHostCommand(runner, identity, host, host === 'claude'
       ? ['plugin', 'install', id, '--scope', scope]
       : ['plugin', 'add', id]);
     pluginInstalled = true;
+    const state = await recordInstalledState({
+      environment,
+      home,
+      host,
+      mode: 'host-cli',
+      plugin: identity.plugin,
+      pluginRoot: destination,
+      previous: previousReceipt?.state,
+      ...(projectRoot === undefined ? {} : { projectRoot }),
+      scope,
+    });
+    stateRollback = state.rollback;
     await writeStoredInstallReceipt(receiptPath, createInstallReceipt({
       ...recorded,
       inventory: storeInventory,
+      state: state.state,
       updatedAt: new Date().toISOString(),
     }));
   } catch (error) {
+    if (stateRollback !== undefined) await stateRollback();
     const rollbacks: (readonly string[])[] = [
       ...(pluginInstalled ? [publicHostUninstallArguments(host, id, scope)] : []),
       ...(createdMarketplace ? [publicHostMarketplaceRemoveArguments(marketplace)] : []),
@@ -874,6 +922,47 @@ const withStagedArtifact = <A>(
     return yield* applied;
   });
 
+const attachCursorStateOwnership = async (
+  destination: string,
+  environment: Readonly<NodeJS.ProcessEnv>,
+  home: string,
+  previousState?: InstallReceipt['state'],
+): Promise<void> => {
+  const receipt = await readInstallReceipt(destination);
+  if (receipt === undefined) throw new Error(`Installed receipt is missing at ${destination}.`);
+  const recorded = await recordInstalledState({
+    environment,
+    home,
+    host: 'cursor',
+    mode: receipt.mode,
+    plugin: receipt.plugin,
+    pluginRoot: destination,
+    previous: receipt.state ?? previousState,
+    scope: receipt.scope,
+  });
+  try {
+    await writeInstallReceipt(destination, createInstallReceipt({
+      ...(receipt.cursorExpansion === undefined ? {} : { cursorExpansion: receipt.cursorExpansion }),
+      directories: receipt.directories,
+      host: receipt.host,
+      hostDirectories: receipt.hostDirectories,
+      installedAt: receipt.installedAt,
+      inventory: { files: receipt.files, hash: receipt.contentHash },
+      mode: receipt.mode,
+      plugin: receipt.plugin,
+      registrations: receipt.registrations,
+      scope: receipt.scope,
+      state: recorded.state,
+      updatedAt: new Date().toISOString(),
+      version: receipt.version,
+      ...(receipt.webDataRoot === undefined ? {} : { webDataRoot: receipt.webDataRoot }),
+    }));
+  } catch (error) {
+    await recorded.rollback();
+    throw error;
+  }
+};
+
 /**
  * The local Cursor install as an Effect program: only the leaf I/O is lifted
  * (root resolution, inventories, `exists`, `mkdir`, staging, receipts), the
@@ -900,6 +989,8 @@ const installCursor = Effect.fnUntraced(function*(
   );
   const installRoot = join(cursorRoot, 'plugins', 'local');
   const destination = join(installRoot, identity.plugin);
+  const environment = options.environment ?? process.env;
+  const home = options.home ?? homedir();
   const base = {
     bundleRoot: identity.bundleRoot,
     destination,
@@ -932,6 +1023,7 @@ const installCursor = Effect.fnUntraced(function*(
         () => stageArtifact({ artifactRoot: identity.bundleRoot, destination, receipt, stageRoot: installRoot }),
         (staged) => rename(staged.root, destination),
       );
+      yield* liftPromise(() => attachCursorStateOwnership(destination, environment, home));
       return { ...base, contentHash: artifact.hash, state: 'installed' } as const;
     }
     if (resolve(identity.bundleRoot) === destination) {
@@ -963,6 +1055,7 @@ const installCursor = Effect.fnUntraced(function*(
           hostDirectories: [],
           inventory: artifact,
         })));
+        yield* liftPromise(() => attachCursorStateOwnership(destination, environment, home));
         return { ...base, contentHash: artifact.hash, state: 'adopted' } as const;
       }
       // A receipt-managed identical copy whose receipt predates format/2 is upgraded in place: the
@@ -978,6 +1071,9 @@ const installCursor = Effect.fnUntraced(function*(
           updatedAt: new Date().toISOString(),
         })));
       }
+      if (comparison.receipt?.state === undefined) {
+        yield* liftPromise(() => attachCursorStateOwnership(destination, environment, home));
+      }
       return { ...base, contentHash: artifact.hash, state: 'already-installed' } as const;
     }
     const replaceable = (comparison.status === 'stale' && comparison.ownership === 'receipt') || remnant
@@ -992,6 +1088,7 @@ const installCursor = Effect.fnUntraced(function*(
       () => stageArtifact({ artifactRoot: identity.bundleRoot, destination, receipt: replacement, stageRoot: installRoot }),
       (staged) => replaceInstalledTree({ comparison, destination, receipt: replacement, staged }),
     );
+    yield* liftPromise(() => attachCursorStateOwnership(destination, environment, home, comparison.receipt?.state));
     // Filling a state-only shell is a fresh install of plugin content, not a replacement of any.
     if (remnant) return { ...base, contentHash: artifact.hash, state: 'installed' } as const;
     return {

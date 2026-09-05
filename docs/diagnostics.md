@@ -1351,9 +1351,12 @@ diagnostic.
 
 ## Read-only Doctor legacy state (`AB7332`)
 
-Doctor resolves each installed copy's effective framework state root from its
-canonical code root and declared environment. It reports that root's source,
-existence, and writability separately from the pre-#640 in-tree location.
+Doctor resolves every installed MCP server's framework state root from its
+canonical code root, declared environment, and execution directory. It reports
+the servers, source, receipt ownership, current purgeability, existence, and
+writability separately from the pre-#640 in-tree location. A runtime location
+without matching receipt ownership remains visible but is never deletion
+authority.
 
 | Code | Severity | Trigger |
 | --- | --- | --- |
