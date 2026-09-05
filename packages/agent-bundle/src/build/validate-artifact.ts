@@ -21,15 +21,13 @@ import {
   matchesManifestFile,
 } from './artifact-layout.ts';
 import {
-  artifactHookIndexName,
   artifactManifestName,
   inspectArtifactFilesystem,
   type ArtifactFile,
   type ArtifactFilesystemSnapshot,
-  type ArtifactHook,
   type ManifestFile,
 } from './emit.ts';
-import { parseArtifactManifest, type ArtifactManifest } from './manifest.ts';
+import { parseArtifactManifest, type ArtifactManifest, type ArtifactManifestHook } from './manifest.ts';
 import type { ModuleSyntaxCheck } from './module-imports.ts';
 import type {
   ValidateArtifactOptions,
@@ -49,7 +47,6 @@ export { artifactDiagnosticRecoveries, type ArtifactDiagnosticCode } from './art
 export type * from './artifact-validation-types.ts';
 
 const epochStagingMarkerName = '.agent-bundle-epoch-stage.json';
-const artifactRootMetadata = new Set([artifactHookIndexName]);
 
 const matchesManifestFileTable = (
   files: readonly ArtifactFile[],
@@ -103,21 +100,16 @@ interface ArtifactInspection {
 }
 
 interface RuntimeEvidenceBuilder {
-  readonly hooks: ArtifactHook[];
+  readonly hooks: readonly ArtifactManifestHook[];
   readonly mcpServers: ValidatedArtifactMcpServerEvidence[];
 }
 
-const runtimeEvidenceBuilder = (): RuntimeEvidenceBuilder => ({ hooks: [], mcpServers: [] });
+/** The hook rows are the manifest's own (#592 step 3); the MCP evidence is still derived from the host documents. */
+const runtimeEvidenceBuilder = (manifest: ArtifactManifest): RuntimeEvidenceBuilder =>
+  ({ hooks: manifest.executables.hooks, mcpServers: [] });
 
 const snapshotRuntimeEvidence = (evidence: RuntimeEvidenceBuilder): ValidatedArtifactRuntimeEvidence => Object.freeze({
-  hooks: Object.freeze(evidence.hooks.map((hook) => Object.freeze({
-    event: hook.event,
-    id: hook.id,
-    name: hook.name,
-    path: hook.path,
-    target: hook.target,
-    ...(hook.timeout === undefined ? {} : { timeout: hook.timeout }),
-  }))),
+  hooks: Object.freeze(evidence.hooks.map((hook) => Object.freeze({ ...hook }))),
   mcpServers: Object.freeze(evidence.mcpServers.map((server) => Object.freeze({
     entryPaths: Object.freeze([...server.entryPaths]),
     kind: server.kind,
@@ -245,7 +237,7 @@ const finalEvidenceDiagnostics = (options: {
 };
 
 const sameSchemas = (
-  manifest: ArtifactManifest['targets'][number]['schemas'],
+  manifest: ArtifactManifest['compiler']['adapters'][number]['schemas'],
   registered: ReturnType<TargetRegistry['metadata']>['schemas'],
 ): boolean => {
   const expected = [...registered].sort((left, right) => left.name.localeCompare(right.name));
@@ -259,11 +251,14 @@ const sameSchemas = (
 };
 
 const matchesTargetMetadata = (
-  target: ArtifactManifest['targets'][number],
+  adapter: ArtifactManifest['compiler']['adapters'][number],
   metadata: ReturnType<TargetRegistry['metadata']>,
-): boolean => target.adapterRevision === metadata.adapterRevision &&
-  target.observedVersion === metadata.observedVersion &&
-  sameSchemas(target.schemas, metadata.schemas);
+  builtInHost: ReturnType<TargetRegistry['builtInHost']>,
+  projectionBuiltInHost: ReturnType<TargetRegistry['builtInHost']>,
+): boolean => adapter.adapterRevision === metadata.adapterRevision &&
+  projectionBuiltInHost === builtInHost &&
+  adapter.observedVersion === metadata.observedVersion &&
+  sameSchemas(adapter.schemas, metadata.schemas);
 
 const schemaValidationFailure = (): readonly TargetArtifactDocumentIssue[] => Object.freeze([
   Object.freeze({ instancePath: '/', message: 'schema validation failed' }),
@@ -344,27 +339,37 @@ const validateTargetContracts = async (options: {
     ));
   }
 
-  for (const target of options.manifest.targets) {
-    if (!options.registry.has(target.name)) {
+  const adapters = new Map(options.manifest.compiler.adapters.map((adapter) => [adapter.host, adapter]));
+  for (const target of options.manifest.projections) {
+    if (!options.registry.has(target.host)) {
       diagnostics.push(diagnostic(
         'AB6009',
-        `Artifact declares unknown target ${JSON.stringify(target.name)}.`,
+        `Artifact declares unknown target ${JSON.stringify(target.host)}.`,
         artifactManifestName,
-        target.name,
+        target.host,
       ));
       continue;
     }
-    if (!matchesTargetMetadata(target, options.registry.metadata(target.name))) {
+    const adapter = adapters.get(target.host);
+    if (
+      adapter === undefined ||
+      !matchesTargetMetadata(
+        adapter,
+        options.registry.metadata(target.host),
+        options.registry.builtInHost(target.host),
+        target.builtInHost,
+      )
+    ) {
       diagnostics.push(diagnostic(
         'AB6010',
-        `Artifact metadata for target ${JSON.stringify(target.name)} does not match its registered contract.`,
+        `Artifact metadata and adapter identity for target ${JSON.stringify(target.host)} do not match its registered contract.`,
         artifactManifestName,
-        target.name,
+        target.host,
       ));
       continue;
     }
 
-    const validation = options.registry.artifactValidation(target.name);
+    const validation = options.registry.artifactValidation(target.host);
     const validators = new Map(validation.schemas.map((schema) => [schema.name, schema.validate]));
     for (const document of validation.documents) {
       const generatedPaths = document.path.includes('*')
@@ -376,9 +381,9 @@ const validateTargetContracts = async (options: {
         if (document.required) {
           diagnostics.push(diagnostic(
             'AB6011',
-            `Target ${JSON.stringify(target.name)} is missing required document ${JSON.stringify(document.path)}.`,
+            `Target ${JSON.stringify(target.host)} is missing required document ${JSON.stringify(document.path)}.`,
             document.path,
-            target.name,
+            target.host,
           ));
         }
         continue;
@@ -397,9 +402,9 @@ const validateTargetContracts = async (options: {
         if (issue !== undefined) {
           diagnostics.push(diagnostic(
             'AB6012',
-            `Target ${JSON.stringify(target.name)} document ${JSON.stringify(generatedPath)} is invalid for schema ${JSON.stringify(document.schema)} at ${issue.instancePath || '/'}: ${issue.message}.`,
+            `Target ${JSON.stringify(target.host)} document ${JSON.stringify(generatedPath)} is invalid for schema ${JSON.stringify(document.schema)} at ${issue.instancePath || '/'}: ${issue.message}.`,
             generatedPath,
-            target.name,
+            target.host,
           ));
         }
         if (
@@ -411,7 +416,7 @@ const validateTargetContracts = async (options: {
             files,
             generatedPath,
             logo: parsed.logo,
-            target: target.name,
+            target: target.host,
           }));
         }
       }
@@ -439,17 +444,17 @@ const validatePortableProjection = async (options: {
   readonly manifest: ArtifactManifest;
   readonly registry: TargetRegistry;
 }): Promise<readonly Diagnostic[]> => {
-  const portable = options.manifest.targets.find((target) =>
-    options.registry.has(target.name) && options.registry.get(target.name) === portableAdapter);
+  const portable = options.manifest.projections.find((target) =>
+    options.registry.has(target.host) && options.registry.get(target.host) === portableAdapter);
   if (portable === undefined) return Object.freeze([]);
   const unsupported = options.filesystem.entries.some((entry) => entry.kind !== 'directory' && entry.kind !== 'file');
   if (unsupported) return Object.freeze([]);
   const diagnostics: Diagnostic[] = [];
   for (const entry of await validatePortablePluginFiles({
     pluginDirectory: options.artifactRoot,
-    target: portable.name,
+    target: portable.host,
   })) {
-    diagnostics.push(Object.freeze({ ...entry, message: `Target ${JSON.stringify(portable.name)}: ${entry.message}` }));
+    diagnostics.push(Object.freeze({ ...entry, message: `Target ${JSON.stringify(portable.host)}: ${entry.message}` }));
   }
   return Object.freeze(diagnostics);
 };
@@ -523,7 +528,7 @@ const validateArtifactOwnership = (options: {
   const manifestKinds = new Map(options.manifest.files.map((file) => [file.path, file.kind]));
 
   for (const file of options.files) {
-    if (artifactRootMetadata.has(file.path) || admitsEverything) continue;
+    if (admitsEverything) continue;
     if (known.some((target) => isProjectionArtifactPath(file.path, target, options.registry))) continue;
     // Prebuilt payload files live in config-named directories under the
     // root, so no emitted layout describes them.
@@ -720,13 +725,13 @@ export const validateArtifactWithSnapshot = async (
     return invalidArtifactSnapshot([diagnostic('AB6001', 'Artifact manifest is not a strict canonical manifest.', artifactManifestName)]);
   }
 
-  const runtimeEvidence = runtimeEvidenceBuilder();
+  const runtimeEvidence = runtimeEvidenceBuilder(manifest);
   const initialStructuralDiagnostics = validateArtifactStructure({ inspection, manifest, registry });
   const diagnostics: Diagnostic[] = [...initialStructuralDiagnostics];
   if (
-    manifest.agentSkills.schemaSha256 !== agentSkillsSchemaRevision.schemaSha256 ||
-    manifest.agentSkills.sourceRevision !== agentSkillsSchemaRevision.sourceRevision ||
-    manifest.agentSkills.specification !== agentSkillsSchemaRevision.specification
+    manifest.compiler.agentSkills.schemaSha256 !== agentSkillsSchemaRevision.schemaSha256 ||
+    manifest.compiler.agentSkills.sourceRevision !== agentSkillsSchemaRevision.sourceRevision ||
+    manifest.compiler.agentSkills.specification !== agentSkillsSchemaRevision.specification
   ) {
     diagnostics.push(diagnostic(
       'AB6008',
@@ -770,7 +775,6 @@ export const validateArtifactWithSnapshot = async (
       files: inspection.files,
       manifest,
       registry,
-      hooks: runtimeEvidence.hooks,
     }),
     validateEmittedSkills({
       artifactRoot,

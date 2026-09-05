@@ -59,7 +59,7 @@ interface FixtureOptions {
 
 const writeFixture = async (root: string, options: FixtureOptions): Promise<void> => {
   await writeFile(join(root, 'agent-bundle.manifest.json'), JSON.stringify({
-    targets: options.targets.map((name) => ({ name })),
+    projections: options.targets.map((host) => ({ host })),
     web: {
       apps: [{
         allow: [],

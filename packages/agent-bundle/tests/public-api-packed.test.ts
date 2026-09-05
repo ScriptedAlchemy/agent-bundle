@@ -8,8 +8,18 @@ import { promisify } from 'node:util';
 import { beforeAll, expect, it } from '@rstest/core';
 
 import { isolatedCommandEnvironment } from '../../../rstest.worker-isolation.ts';
+import { createDefaultRegistry } from '../src/adapters/registry.ts';
+import { listArtifactFiles, writeManifest } from '../src/build/emit.ts';
+import {
+  artifactCompilerRecordVersion,
+  artifactManifestName,
+  artifactManifestVersion,
+  type ArtifactManifest,
+} from '../src/build/manifest.ts';
+import { digest } from '../src/core/digest.ts';
 import { isErrno } from '../src/core/errors.ts';
-import { writeFixtureManifest } from './support/manifest.ts';
+import { emptyCompiledRouteGraph } from '../src/routes/graph.ts';
+import { agentSkillsSchemaRevision } from '../src/schemas/agent-skills/contract.ts';
 import { cachedNpmInstallArguments, linkWorkspaceTypes, sharedPackedTarball } from './support/shared-pack.ts';
 
 interface PackageManifest {
@@ -22,6 +32,100 @@ interface PackageManifest {
 const execFile = promisify(executeFile);
 const workspaceRoot = process.cwd();
 const packageRoot = join(workspaceRoot, 'packages/agent-bundle');
+
+const writePackedFixtureManifest = async (artifactRoot: string): Promise<ArtifactManifest> => {
+  const metadata = createDefaultRegistry().metadata('portable');
+  const listed = await listArtifactFiles(artifactRoot);
+  const configDigest = 'a'.repeat(64);
+  const sourceInputs = [{ path: 'agent-bundle.config.ts', sha256: configDigest }];
+  const files = listed
+    .filter((file) => file.path !== artifactManifestName)
+    .map((file) => ({
+      bytes: file.bytes,
+      kind: 'generated' as const,
+      ...((file.mode & 0o111) === 0 ? {} : { mode: file.mode }),
+      path: file.path,
+      sha256: file.sha256,
+    }))
+    .sort((left, right) => left.path.localeCompare(right.path));
+  const filePaths = new Set(files.map((file) => file.path));
+  return writeManifest({
+    artifactRoot,
+    manifest: {
+      application: { id: 'plugin:packed-fixture', name: 'packed-fixture', version: '1.0.0' },
+      compiler: {
+        adapters: [{
+          adapterRevision: metadata.adapterRevision,
+          host: 'portable',
+          observedVersion: metadata.observedVersion,
+          schemas: metadata.schemas
+            .map((schema) => ({ name: schema.name, revision: schema.revision, sha256: schema.sha256 }))
+            .sort((left, right) => left.name.localeCompare(right.name)),
+        }],
+        agentSkills: agentSkillsSchemaRevision,
+        producer: { name: 'agent-bundle', version: '0.1.0' },
+        project: {
+          configDigest,
+          configPath: 'agent-bundle.config.ts',
+          modelDigest: 'b'.repeat(64),
+          revision: digest({ inputs: sourceInputs }),
+          sourceInputs,
+        },
+        provenance: files.map((file) => ({
+          path: file.path,
+          sourceInputs: ['agent-bundle.config.ts'],
+        })),
+        recordVersion: artifactCompilerRecordVersion,
+        validation: {
+          artifact: { status: 'passed' },
+          projections: [{ host: 'portable', status: 'passed' }],
+          source: { status: 'passed' },
+        },
+      },
+      distribution: {
+        channels: ['local'],
+        install: {
+          ...(filePaths.has('INSTALL.md') ? { instructions: 'INSTALL.md' } : {}),
+          ...(filePaths.has('install.mjs') ? { script: 'install.mjs' } : {}),
+        },
+        payloads: [],
+      },
+      executables: {
+        bins: [],
+        hooks: [],
+        mcpServers: [{
+          apps: [],
+          entry: { path: 'mcp/server.mjs' },
+          hosts: ['portable'],
+          id: 'mcp:fixture',
+          kind: 'compiled',
+          name: 'fixture',
+          transport: 'stdio',
+        }],
+        scripts: [],
+      },
+      files,
+      manifestVersion: artifactManifestVersion,
+      projections: [{
+        builtInHost: 'portable',
+        documents: {
+          ...(filePaths.has('mcp.json') ? { mcp: 'mcp.json' } : {}),
+          ...(filePaths.has('plugin.json') ? { plugin: 'plugin.json' } : {}),
+        },
+        host: 'portable',
+      }],
+      routes: {
+        digest: emptyCompiledRouteGraph.digest,
+        events: [],
+        layouts: [],
+        providers: [],
+        scripts: [],
+        servers: [],
+      },
+      runtime: { node: '22.12.0' },
+    },
+  });
+};
 
 const readPackageManifest = async (): Promise<PackageManifest> =>
   JSON.parse(
@@ -96,8 +200,8 @@ const installedCopies = async (nodeModules: string, selected: (name: string) => 
 const producerFrom = async (output: string): Promise<{ readonly name: string; readonly version: string }> => {
   const manifest = JSON.parse(
     await readFile(join(output, 'agent-bundle.manifest.json'), 'utf8'),
-  ) as { readonly producer: { readonly name: string; readonly version: string } };
-  return manifest.producer;
+  ) as { readonly compiler: { readonly producer: { readonly name: string; readonly version: string } } };
+  return manifest.compiler.producer;
 };
 
 /**
@@ -328,10 +432,8 @@ it('invokes a prebuilt MCP server from a clean packed consumer', async () => {
       writeFile(join(artifact, 'INSTALL.md'), '# Install packed-fixture\n'),
       writeFile(join(artifact, 'install.mjs'), '#!/usr/bin/env node\n'),
     ]);
-    await writeFixtureManifest({ artifactRoot: artifact, targets: ['portable'] });
-    await expect(readFile(join(artifact, 'agent-bundle.hooks.json'), 'utf8')).resolves.toBe(
-      '{"hooks":[]}\n',
-    );
+    const manifest = await writePackedFixtureManifest(artifact);
+    expect(manifest.executables.hooks).toEqual([]);
 
     await writeFile(join(consumerRoot, 'package.json'), '{"type":"module"}\n');
     await execFile(

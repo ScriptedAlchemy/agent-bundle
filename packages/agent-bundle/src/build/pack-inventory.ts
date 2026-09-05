@@ -101,21 +101,6 @@ const jsonRecord = async (path: string): Promise<Readonly<Record<string, unknown
   return value;
 };
 
-const hostManifestPaths = (target: string): readonly string[] => {
-  switch (target) {
-    case 'claude':
-      return Object.freeze(['.claude-plugin/plugin.json']);
-    case 'codex':
-      return Object.freeze(['.codex-plugin/plugin.json']);
-    case 'cursor':
-      return Object.freeze(['.cursor-plugin/plugin.json']);
-    case 'portable':
-      return Object.freeze(['plugin.json']);
-    default:
-      return Object.freeze([]);
-  }
-};
-
 const binEntries = (value: unknown): readonly [string, string][] => {
   if (typeof value === 'string') return Object.freeze([['bin', value] as const]);
   if (!isRecord(value)) return Object.freeze([]);
@@ -315,14 +300,17 @@ export const packInventoryDiagnostics = async (options: {
   const versions: Array<readonly [string, unknown]> = [
     ['package.json', packageDocument.version],
     ['normalized plugin', options.model.metadata.version],
-    ['artifact provenance', manifest.project.packageVersion],
+    ['artifact manifest', manifest.application.version],
+    ['artifact provenance', manifest.compiler.project.packageVersion],
   ];
-  for (const target of manifest.targets) {
-    for (const path of hostManifestPaths(target.name)) {
-      const absolute = join(artifactRoot, path);
-      if (await exists(absolute)) {
-        versions.push([path, (await jsonRecord(absolute)).version]);
-      }
+  // The host plugin manifests are wherever the artifact manifest points (#592
+  // step 3), never a per-host path convention.
+  for (const projection of manifest.projections) {
+    const path = projection.documents.plugin;
+    if (path === undefined) continue;
+    const absolute = join(artifactRoot, path);
+    if (await exists(absolute)) {
+      versions.push([path, (await jsonRecord(absolute)).version]);
     }
   }
   const expectedVersion = options.model.metadata.version;

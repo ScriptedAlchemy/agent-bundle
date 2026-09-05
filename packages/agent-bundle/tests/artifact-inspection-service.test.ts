@@ -7,7 +7,12 @@ import { expect, it } from '@rstest/core';
 
 import { TargetRegistry } from '../src/adapters/registry.ts';
 import type { TargetAdapter, TargetAdapterMetadata } from '../src/adapters/types.ts';
-import { assembleArtifactManifest, type ArtifactManifestFileKind, type ArtifactManifest } from '../src/build/manifest.ts';
+import {
+  artifactCompilerRecordVersion,
+  assembleArtifactManifest,
+  type ArtifactManifestFileKind,
+  type ArtifactManifest,
+} from '../src/build/manifest.ts';
 import { validateArtifact, validateArtifactWithSnapshot } from '../src/build/validate-artifact.ts';
 import { digest } from '../src/core/digest.ts';
 import { ArtifactInspectionService } from '../src/dev/index.ts';
@@ -55,6 +60,7 @@ const runtimeRegistry = (
   }),
 ): TargetRegistry => new TargetRegistry().register({
   artifactLayout: {
+    cliBin: { allowedSuffixes: ['.mjs'], directory: 'bin' },
     hookWrappers: { allowedSuffixes: ['.mjs'], directory: 'hooks' },
     mcpEntries: { allowedSuffixes: ['.mjs'], directory: 'mcp' },
     scripts: { allowedSuffixes: ['.mjs'], directory: 'scripts' },
@@ -141,55 +147,170 @@ const statefulResolverRuntimeRegistry = (calls: string[]): TargetRegistry => run
   },
 } satisfies TargetMcpRuntimeContract));
 
-const targetRecord = (registry: TargetRegistry): ArtifactManifest['targets'][number] => {
+const projectionRecord = (
+  registry: TargetRegistry,
+  files: readonly FixtureFile[],
+  omitMcpDocument = false,
+): {
+  readonly adapter: ArtifactManifest['compiler']['adapters'][number];
+  readonly projection: ArtifactManifest['projections'][number];
+} => {
   const metadata = registry.metadata(fixtureTarget);
   return {
-    ...metadata,
-    name: fixtureTarget,
-    schemas: [...metadata.schemas].sort((left, right) => left.name.localeCompare(right.name)),
+    adapter: {
+      adapterRevision: metadata.adapterRevision,
+      host: fixtureTarget,
+      observedVersion: metadata.observedVersion,
+      schemas: [...metadata.schemas].sort((left, right) => left.name.localeCompare(right.name)),
+    },
+    projection: {
+      documents: {
+        ...(files.some((file) => file.path === 'hooks/hooks.json') ? { hooks: 'hooks/hooks.json' } : {}),
+        ...(!omitMcpDocument && files.some((file) => file.path === 'mcp.json') ? { mcp: 'mcp.json' } : {}),
+      },
+      host: fixtureTarget,
+    },
   };
 };
-
-const hookIndex = (hooks: readonly Record<string, unknown>[] = []): FixtureFile => ({
-  contents: `${JSON.stringify({ hooks })}\n`,
-  kind: 'generated',
-  path: 'agent-bundle.hooks.json',
-  sourceInputs: [],
-});
 
 const manifestFor = (
   registry: TargetRegistry,
   files: readonly FixtureFile[],
   sourceInputs = fixtureInputs,
+  omitMcpDocument = false,
 ): ArtifactManifest => {
-  const target = targetRecord(registry);
+  const { adapter, projection } = projectionRecord(registry, files, omitMcpDocument);
+  const hookRows = [
+    ...(files.some((file) => file.path === 'hooks/run.mjs')
+      ? [{
+        event: 'beforeTool',
+        host: fixtureTarget,
+        id: 'hook-1',
+        kind: 'config' as const,
+        name: 'Check command',
+        path: 'hooks/run.mjs',
+      }]
+      : []),
+    ...(files.some((file) => file.path === 'hooks/replacement.mjs')
+      ? [{
+        event: 'beforeTool',
+        host: fixtureTarget,
+        id: 'replacement-hook',
+        kind: 'config' as const,
+        name: 'Replacement hook',
+        path: 'hooks/replacement.mjs',
+      }]
+      : []),
+  ];
+  const scripts = [
+    ...(files.some((file) => file.path === 'scripts/alpha.mjs')
+      ? [{
+        hosts: [fixtureTarget],
+        id: 'script:alpha',
+        mode: 'bundle' as const,
+        name: 'alpha',
+        path: 'scripts/alpha.mjs',
+        rendered: { routeId: 'script:render-alpha' },
+        worker: 'scripts/alpha.worker.mjs',
+      }]
+      : []),
+    ...(files.some((file) => file.path === 'scripts/zeta.mjs')
+      ? [{
+        hosts: [fixtureTarget],
+        id: 'script:zeta',
+        mode: 'copy' as const,
+        name: 'zeta',
+        path: 'scripts/zeta.mjs',
+      }]
+      : []),
+  ];
+  const manifestFiles = files
+    .map((file) => ({
+      bytes: Buffer.byteLength(file.contents),
+      kind: file.kind,
+      ...(file.mode === undefined ? {} : { mode: file.mode }),
+      path: file.path,
+      sha256: sha256Hex(file.contents),
+    }))
+    .sort((left, right) => left.path.localeCompare(right.path));
   return {
-    agentSkills: agentSkillsSchemaRevision,
-    files: files
-      .map((file) => ({
-        bytes: Buffer.byteLength(file.contents),
-        kind: file.kind,
-        ...(file.mode === undefined ? {} : { mode: file.mode }),
+    application: {
+      id: 'application:fixture',
+      name: 'fixture-application',
+      version: '1.2.3',
+    },
+    compiler: {
+      adapters: [adapter],
+      agentSkills: agentSkillsSchemaRevision,
+      producer: { name: 'agent-bundle', version: '0.1.0' },
+      project: {
+        configDigest: sourceInputs[0]!.sha256,
+        configPath,
+        modelDigest: 'd'.repeat(64),
+        revision: digest({ inputs: sourceInputs }),
+        sourceInputs,
+      },
+      provenance: manifestFiles.map((file) => ({
         path: file.path,
-        sha256: sha256Hex(file.contents),
-        sourceInputs: [...(file.sourceInputs ?? [configPath])],
-      }))
-      .sort((left, right) => left.path.localeCompare(right.path)),
-    producer: { name: 'agent-bundle', version: '0.1.0' },
-    project: {
-      configDigest: sourceInputs[0]!.sha256,
-      configPath,
-      modelDigest: 'd'.repeat(64),
-      revision: digest({ inputs: sourceInputs }),
-      sourceInputs,
+        sourceInputs: [...(files.find((entry) => entry.path === file.path)?.sourceInputs ?? [configPath])],
+      })),
+      recordVersion: artifactCompilerRecordVersion,
+      validation: {
+        artifact: { status: 'passed' },
+        projections: [{ host: projection.host, status: 'passed' }],
+        source: { status: 'passed' },
+      },
+    },
+    distribution: { channels: ['local'], payloads: [] },
+    executables: {
+      bins: files.some((file) => file.path === 'bin/fixture.mjs')
+        ? [{ hosts: [fixtureTarget], name: 'fixture', path: 'bin/fixture.mjs', worker: 'bin/fixture.worker.mjs' }]
+        : [],
+      hooks: hookRows,
+      mcpServers: files.some((file) => file.path === 'mcp/runner.mjs')
+        ? [{
+          apps: [{
+            id: 'app:runner',
+            name: 'Runner',
+            prebuilt: true,
+            resourceUri: 'ui://runner',
+          }],
+          entry: { path: 'mcp/runner.mjs' },
+          hosts: [fixtureTarget],
+          id: 'mcp:runner',
+          kind: 'compiled',
+          name: 'runner',
+          transport: 'stdio',
+        }]
+        : [],
+      scripts,
+    },
+    files: manifestFiles,
+    manifestVersion: 2,
+    projections: [projection],
+    routes: {
+      digest: 'e'.repeat(64),
+      events: [],
+      layouts: [],
+      providers: [],
+      scripts: scripts.some((script) => script.rendered !== undefined)
+        ? [{
+          id: 'script:render-alpha',
+          kind: 'script',
+          provenance: { kind: 'conventional' },
+          source: 'src/runner.ts',
+        }]
+        : [],
+      servers: files.some((file) => file.path === 'mcp/runner.mjs')
+        ? [{
+          id: 'mcp:runner',
+          mode: 'generated',
+          name: 'runner',
+          routes: [],
+        }]
+        : [],
     },
     runtime: { node: '22.12.0' },
-    targets: [target],
-    validation: {
-      artifact: { status: 'passed' },
-      source: { status: 'passed' },
-      targets: [{ name: target.name, status: 'passed' }],
-    },
   };
 };
 
@@ -207,6 +328,7 @@ const epochFor = (root: string, id: string): ArtifactEpoch => Object.freeze({
 const publish = async (options: {
   readonly files: readonly FixtureFile[];
   readonly id: string;
+  readonly omitMcpDocument?: boolean;
   readonly registry: TargetRegistry;
   readonly root: string;
   readonly sourceInputs?: typeof fixtureInputs;
@@ -214,9 +336,7 @@ const publish = async (options: {
 }): Promise<void> => {
   const epoch = epochFor(options.root, options.id);
   const staging = await options.store.createStagingEpoch({ epoch, targets: [fixtureTarget] });
-  const files = options.files.some((file) => file.path === 'agent-bundle.hooks.json')
-    ? options.files
-    : [hookIndex(), ...options.files];
+  const files = options.files;
 
   try {
     for (const file of files) {
@@ -227,7 +347,12 @@ const publish = async (options: {
     }
     await writeFile(
       join(staging.root, 'agent-bundle.manifest.json'),
-      assembleArtifactManifest(manifestFor(options.registry, files, options.sourceInputs)).bytes,
+      assembleArtifactManifest(manifestFor(
+        options.registry,
+        files,
+        options.sourceInputs,
+        options.omitMcpDocument,
+      )).bytes,
     );
     await staging.publish(async (artifactRoot) => {
       const diagnostics = await validateArtifact({
@@ -244,22 +369,19 @@ const publish = async (options: {
 };
 
 const runtimeFiles = (): readonly FixtureFile[] => [
-  hookIndex([{
-    event: 'beforeTool',
-    id: 'hook-1',
-    name: 'Check command',
-    path: 'hooks/run.mjs',
-    target: fixtureTarget,
-  }]),
   {
     contents: '{"mcpServers":{"runner":{"args":["./mcp/runner.mjs"],"command":"node","env":{"SECRET":"do-not-expose"},"type":"stdio"}}}\n',
     kind: 'generated',
     path: 'mcp.json',
   },
   { contents: 'export const runner = true;\n', kind: 'bundle', mode: 0o755, path: 'mcp/runner.mjs', sourceInputs: [runnerSourcePath] },
+  { contents: 'export const fixture = true;\n', kind: 'bundle', mode: 0o755, path: 'bin/fixture.mjs', sourceInputs: [runnerSourcePath] },
+  { contents: 'export const fixtureWorker = true;\n', kind: 'bundle', path: 'bin/fixture.worker.mjs', sourceInputs: [runnerSourcePath] },
+  { contents: 'export const alphaWorker = true;\n', kind: 'bundle', path: 'scripts/alpha.worker.mjs' },
   { contents: '{}\n', kind: 'generated', path: 'hooks/hooks.json' },
   { contents: 'export const check = true;\n', kind: 'bundle', mode: 0o755, path: 'hooks/run.mjs', sourceInputs: [runnerSourcePath] },
   { contents: 'export const alpha = true;\n', kind: 'bundle', path: 'scripts/alpha.mjs' },
+  { contents: 'export const omitted = true;\n', kind: 'bundle', path: 'scripts/not-manifested-as-script.mjs' },
   { contents: 'export const zeta = true;\n', kind: 'copy', path: 'scripts/zeta.mjs' },
 ];
 
@@ -333,6 +455,19 @@ it('inspects one validated epoch as sorted, source-free artifact facts', async (
 
     const inspection = await new ArtifactInspectionService(store, registry).inspect('epoch-runtime');
 
+    expect(inspection.application.identity).toEqual({
+      id: 'application:fixture',
+      name: 'fixture-application',
+      version: '1.2.3',
+    });
+    expect(inspection.application.servers).toEqual([
+      expect.objectContaining({
+        entry: 'mcp/runner.mjs',
+        hosts: [fixtureTarget],
+        id: 'mcp:runner',
+        name: 'runner',
+      }),
+    ]);
     expect(inspection.epochId).toBe('epoch-runtime');
     expect(inspection.project).toEqual({
       configDigest: fixtureInputs[0]!.sha256,
@@ -342,18 +477,22 @@ it('inspects one validated epoch as sorted, source-free artifact facts', async (
       sourceInputs: fixtureInputs,
     });
     expect(inspection.files.map((file) => file.path)).toEqual([
-      'agent-bundle.hooks.json',
+      'bin/fixture.mjs',
+      'bin/fixture.worker.mjs',
       'hooks/hooks.json',
       'hooks/run.mjs',
       'mcp.json',
       'mcp/runner.mjs',
       'scripts/alpha.mjs',
+      'scripts/alpha.worker.mjs',
+      'scripts/not-manifested-as-script.mjs',
       'scripts/zeta.mjs',
     ]);
     // The projection's tree is the composite root itself, named after the host (#555).
-    expect(inspection.targets).toEqual([
+    expect(inspection.projections).toEqual([
       expect.objectContaining({
-        name: fixtureTarget,
+        documents: { hooks: 'hooks/hooks.json', mcp: 'mcp.json' },
+        host: fixtureTarget,
         tree: expect.objectContaining({
           children: expect.arrayContaining([
             expect.objectContaining({ kind: 'directory', name: 'hooks', path: 'hooks' }),
@@ -369,24 +508,74 @@ it('inspects one validated epoch as sorted, source-free artifact facts', async (
       sourceInputs: [{ path: runnerSourcePath, sha256: fixtureInputs[1]!.sha256 }],
     });
     expect(inspection.runtime.executables.map((file) => file.path)).toEqual([
+      'bin/fixture.mjs',
       'hooks/run.mjs',
       'mcp/runner.mjs',
     ]);
+    expect(inspection.runtime.bins).toEqual([
+      expect.objectContaining({
+        file: expect.objectContaining({ path: 'bin/fixture.mjs' }),
+        hosts: [fixtureTarget],
+        name: 'fixture',
+        worker: expect.objectContaining({ path: 'bin/fixture.worker.mjs' }),
+      }),
+    ]);
     expect(inspection.runtime.hooks).toEqual([
-      expect.objectContaining({ path: 'hooks/run.mjs', target: fixtureTarget }),
+      expect.objectContaining({ kind: 'config', path: 'hooks/run.mjs', target: fixtureTarget }),
     ]);
     expect(inspection.runtime.mcpServers).toEqual([{
+      apps: [{ id: 'app:runner', name: 'Runner', resourceUri: 'ui://runner' }],
       entryPaths: ['mcp/runner.mjs'],
-      kind: 'stdio',
+      kind: 'compiled',
       manifestPath: 'mcp.json',
       name: 'runner',
       target: fixtureTarget,
+      transport: 'stdio',
     }]);
     expect(inspection.runtime.scripts).toEqual([
-      expect.objectContaining({ id: 'script:alpha', name: 'alpha', target: fixtureTarget, file: expect.objectContaining({ path: 'scripts/alpha.mjs' }) }),
-      expect.objectContaining({ id: 'script:zeta', name: 'zeta', target: fixtureTarget, file: expect.objectContaining({ path: 'scripts/zeta.mjs' }) }),
+      expect.objectContaining({
+        file: expect.objectContaining({ path: 'scripts/alpha.mjs' }),
+        id: 'script:alpha',
+        mode: 'bundle',
+        name: 'alpha',
+        rendered: 'script:render-alpha',
+        target: fixtureTarget,
+        worker: expect.objectContaining({ path: 'scripts/alpha.worker.mjs' }),
+      }),
+      expect.objectContaining({
+        file: expect.objectContaining({ path: 'scripts/zeta.mjs' }),
+        id: 'script:zeta',
+        mode: 'copy',
+        name: 'zeta',
+        target: fixtureTarget,
+      }),
     ]);
     expect(JSON.stringify(inspection)).not.toContain('do-not-expose');
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('rejects a manifested MCP host without its projection MCP document', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-artifact-inspection-mcp-document-'));
+  const registry = runtimeRegistry();
+  const store = new EpochStore({ projectRoot: root });
+
+  try {
+    await publish({
+      files: runtimeFiles(),
+      id: 'epoch-missing-mcp-document',
+      omitMcpDocument: true,
+      registry,
+      root,
+      store,
+    });
+
+    await expect(new ArtifactInspectionService(store, registry).inspect('epoch-missing-mcp-document'))
+      .rejects.toMatchObject({
+        code: 'ARTIFACT_INSPECTION_RUNTIME_INVALID',
+        diagnostics: [expect.objectContaining({ code: 'AB6202' })],
+      });
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -433,6 +622,8 @@ it('returns deeply frozen detached inspection records', async () => {
     expect(Object.isFrozen(inspection.project.sourceInputs[0]!)).toBe(true);
     expect(Object.isFrozen(inspection.files)).toBe(true);
     expect(Object.isFrozen(inspection.files[0]!)).toBe(true);
+    expect(Object.isFrozen(inspection.application)).toBe(true);
+    expect(Object.isFrozen(inspection.projections[0]!.documents)).toBe(true);
     expect(Object.isFrozen(inspection.runtime.mcpServers[0]!.entryPaths)).toBe(true);
     expect(() => {
       (inspection.files as unknown as { push(value: unknown): void }).push({});
@@ -461,11 +652,13 @@ it('uses callback facts captured during validation and excludes unmanifested mut
     expect(calls.reads).toBe(1);
     expect(calls.resolutions).toBe(1);
     expect(inspection.runtime.mcpServers).toEqual([{
+      apps: [{ id: 'app:runner', name: 'Runner', resourceUri: 'ui://runner' }],
       entryPaths: ['mcp/runner.mjs'],
-      kind: 'stdio',
+      kind: 'compiled',
       manifestPath: 'mcp.json',
       name: 'runner',
       target: fixtureTarget,
+      transport: 'stdio',
     }]);
     expect(JSON.stringify(inspection.runtime)).not.toContain('not-manifested.mjs');
   } finally {
@@ -541,17 +734,9 @@ it('retains immutable inspection evidence when manifest and hook bytes are repla
     expect(result.snapshot).toBeDefined();
 
     const replacementFiles = [
-      hookIndex([{
-        event: 'beforeTool',
-        id: 'replacement-hook',
-        name: 'Replacement hook',
-        path: 'hooks/replacement.mjs',
-        target: fixtureTarget,
-      }]),
-      ...runtimeFiles().filter((file) => file.path !== 'agent-bundle.hooks.json'),
+      ...runtimeFiles(),
       { contents: 'export const replacement = true;\n', kind: 'bundle' as const, mode: 0o755, path: 'hooks/replacement.mjs' },
     ];
-    await writeFile(join(artifactRoot, 'agent-bundle.hooks.json'), replacementFiles[0]!.contents);
     await writeFile(join(artifactRoot, 'hooks', 'replacement.mjs'), replacementFiles.at(-1)!.contents);
     await writeFile(
       join(artifactRoot, 'agent-bundle.manifest.json'),
@@ -667,7 +852,6 @@ it('diffs exact epochs by artifact facts with stable lexical records', async () 
       'scripts/source.mjs',
     ]);
     expect(diff.unchanged.map((record) => record.path)).toEqual([
-      'agent-bundle.hooks.json',
       'scripts/unchanged.mjs',
     ]);
     expect(diff.changed.find((record) => record.path.endsWith('/source.mjs'))).toMatchObject({
@@ -685,7 +869,6 @@ it('diffs exact epochs by artifact facts with stable lexical records', async () 
     const same = await service.diff('epoch-base', 'epoch-base');
     expect(same).toMatchObject({ added: [], changed: [], removed: [] });
     expect(same.unchanged.map((record) => record.path)).toEqual([
-      'agent-bundle.hooks.json',
       'scripts/bytes.mjs',
       'scripts/digest.mjs',
       'scripts/kind.mjs',
@@ -763,7 +946,6 @@ it('compares canonical file source-input paths rather than project input hashes'
 
     expect(diff.changed).toEqual([]);
     expect(diff.unchanged.map((record) => record.path)).toEqual([
-      'agent-bundle.hooks.json',
       'scripts/source.mjs',
     ]);
   } finally {

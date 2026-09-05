@@ -5,13 +5,12 @@ import type {
   ArtifactEpochDiff,
   ArtifactInspection,
   ArtifactInspectionFile,
-  ArtifactInspectionTarget,
+  ArtifactInspectionProjection,
 } from '../../agent-bundle/src/dev/types.ts';
 import {
   artifactDiffViewFor,
   artifactEpochIdentityRowsFor,
   artifactProvenanceRowsFor,
-  artifactRuntimeViewFor,
   artifactTreeRowsFor,
   artifactViewFor,
 } from '../src/artifacts/artifacts-model.ts';
@@ -34,8 +33,13 @@ const agents: ArtifactInspectionFile = {
 };
 
 /** The service emits directories before files; the model must order regardless of arrival order. */
-const target: ArtifactInspectionTarget = {
-  name: 'claude',
+const projection: ArtifactInspectionProjection = {
+  documents: {
+    marketplace: '.claude-plugin/marketplace.json',
+    plugin: '.claude-plugin/plugin.json',
+  },
+  host: 'claude',
+  marketplace: 'fixture-marketplace',
   tree: {
     children: [
       { file: agents, kind: 'file', name: 'AGENTS.md', path: 'AGENTS.md' },
@@ -53,6 +57,35 @@ const target: ArtifactInspectionTarget = {
 };
 
 const inspection: ArtifactInspection = {
+  application: {
+    distribution: { channels: ['local'] },
+    events: [{
+      event: 'sessionStart',
+      hooks: [{ host: 'claude', kind: 'event-route', path: 'hooks/session-start.mjs', timeout: 30 }],
+      id: 'event:session-start',
+    }],
+    hooks: [],
+    hosts: [{
+      builtIn: true,
+      documents: [{ kind: 'plugin', path: '.claude-plugin/plugin.json' }],
+      host: 'claude',
+      marketplace: 'fixture-marketplace',
+    }],
+    identity: { id: 'application:fixture', name: 'fixture', version: '1.2.3' },
+    scripts: [],
+    servers: [{
+      apps: [],
+      entry: 'mcp/review/server.mjs',
+      hosts: ['claude'],
+      id: 'mcp:review',
+      kind: 'compiled',
+      name: 'review',
+      prompts: [],
+      resources: [],
+      tools: [{ id: 'tool:review/run', name: 'tool:review/run' }],
+      transport: 'stdio',
+    }],
+  },
   epochId: 'epoch-2',
   files: [agents, wrapper],
   project: {
@@ -66,27 +99,31 @@ const inspection: ArtifactInspection = {
     { outputPath: 'hooks/session-start.mjs', sourceInputs: [{ path: 'hooks/session-start.ts', sha256: 'b'.repeat(64) }] },
     { outputPath: 'AGENTS.md', sourceInputs: [] },
   ],
+  projections: [projection],
   runtime: {
+    bins: [{ file: wrapper, hosts: ['claude'], name: 'fixture' }],
     executables: [wrapper],
     hooks: [{
       event: 'sessionStart',
       file: wrapper,
       id: 'hook:session-start',
+      kind: 'event-route',
       name: 'session-start',
       path: 'hooks/session-start.mjs',
       target: 'claude',
       timeout: 30,
     }],
     mcpServers: [{
+      apps: [],
       entryPaths: ['mcp/review/server.mjs'],
-      kind: 'stdio',
+      kind: 'compiled',
       manifestPath: '.mcp.json',
       name: 'review',
       target: 'claude',
+      transport: 'stdio',
     }],
     scripts: [],
   },
-  targets: [target],
 };
 
 const diff: ArtifactEpochDiff = {
@@ -106,8 +143,8 @@ const diagnostics: readonly Diagnostic[] = [{
   target: 'claude',
 }];
 
-it('flattens one target tree into ordered directory and file rows', () => {
-  const rows = artifactTreeRowsFor(target);
+it('flattens one projection tree into ordered directory and file rows', () => {
+  const rows = artifactTreeRowsFor(projection);
 
   expect(rows.map((row) => row.path)).toEqual([
     '.',
@@ -139,38 +176,6 @@ it('derives epoch identity rows from the inspection and its project context', ()
     { label: 'Config path', value: '/workspace/agent-bundle.config.ts' },
     { label: 'Emitted files', value: '2' },
   ]);
-});
-
-it('derives runtime rows for hooks, MCP servers, and executables', () => {
-  const runtime = artifactRuntimeViewFor(inspection.runtime);
-
-  expect(runtime.hooks).toEqual([{
-    bytes: 512,
-    event: 'sessionStart',
-    key: 'claude/hook:session-start',
-    label: 'session-start · sessionStart · claude',
-    path: 'hooks/session-start.mjs',
-    sha256: 'a'.repeat(64),
-    target: 'claude',
-    timeout: 30,
-  }]);
-  expect(runtime.mcpServers).toEqual([{
-    entryPaths: ['mcp/review/server.mjs'],
-    key: 'claude/review',
-    kind: 'stdio',
-    label: 'review · stdio · claude',
-    manifestPath: '.mcp.json',
-    target: 'claude',
-  }]);
-  expect(runtime.executables).toEqual([{
-    bytes: 512,
-    key: 'hooks/session-start.mjs',
-    kind: 'generated',
-    mode: '0755',
-    path: 'hooks/session-start.mjs',
-    sha256: 'a'.repeat(64),
-  }]);
-  expect(Object.isFrozen(runtime)).toBe(true);
 });
 
 it('orders provenance rows by output path and keeps their declared source inputs', () => {
@@ -206,39 +211,39 @@ it('groups an epoch diff into counted added, removed, changed, and unchanged row
   expect(Object.isFrozen(view)).toBe(true);
 });
 
-it('derives a ready view bound to the selected target', () => {
+it('derives a ready view bound to the selected projection', () => {
   const view = artifactViewFor({
     diagnostics: [],
     diff: undefined,
     epochId: 'epoch-2',
     inspection,
-    selectedTarget: 'claude',
+    selectedProjection: 'claude',
   });
 
   expect(view.state).toBe('ready');
-  expect(view.targets.map((option) => option.name)).toEqual(['claude']);
-  expect(view.selected?.name).toBe('claude');
+  expect(view.projections.map((option) => option.host)).toEqual(['claude']);
+  expect(view.selected?.host).toBe('claude');
   expect(view.tree.map((row) => row.path)).toContain('hooks/session-start.mjs');
-  expect(view.hooks).toHaveLength(1);
-  expect(view.mcpServers).toHaveLength(1);
-  expect(view.executables).toHaveLength(1);
+  expect(view.application?.servers).toHaveLength(1);
+  expect(view.application?.events).toHaveLength(1);
+  expect(view.application?.hosts).toHaveLength(1);
   expect(view.provenance).toHaveLength(2);
   expect(view.identity[0]).toEqual({ label: 'Build ID', value: 'epoch-2' });
-  expect(view.summary).toContain('epoch-2');
+  expect(view.summary).toContain('fixture@1.2.3 build epoch-2');
   expect(view.diagnostics).toEqual([]);
   expect(Object.isFrozen(view)).toBe(true);
 });
 
-it('falls back to the first declared target when the selection names none', () => {
+it('falls back to the first declared projection when the selection names none', () => {
   const view = artifactViewFor({
     diagnostics: [],
     diff: undefined,
     epochId: 'epoch-2',
     inspection,
-    selectedTarget: 'codex',
+    selectedProjection: 'codex',
   });
 
-  expect(view.selected?.name).toBe('claude');
+  expect(view.selected?.host).toBe('claude');
 });
 
 it('surfaces validation diagnostics instead of an inspection', () => {
@@ -247,7 +252,7 @@ it('surfaces validation diagnostics instead of an inspection', () => {
     diff: undefined,
     epochId: 'epoch-2',
     inspection: undefined,
-    selectedTarget: undefined,
+    selectedProjection: undefined,
   });
 
   expect(view.state).toBe('diagnostics');
@@ -262,14 +267,14 @@ it('reports the empty and no-active-epoch states', () => {
     diff: undefined,
     epochId: 'epoch-2',
     inspection: undefined,
-    selectedTarget: undefined,
+    selectedProjection: undefined,
   });
   const missing = artifactViewFor({
     diagnostics: [],
     diff: undefined,
     epochId: undefined,
     inspection: undefined,
-    selectedTarget: undefined,
+    selectedProjection: undefined,
   });
 
   expect(empty.state).toBe('empty');
@@ -285,7 +290,7 @@ it('keeps a loaded diff on the view alongside the inspection', () => {
     diff,
     epochId: 'epoch-2',
     inspection,
-    selectedTarget: undefined,
+    selectedProjection: undefined,
   });
 
   expect(view.diff?.baseEpochId).toBe('epoch-1');

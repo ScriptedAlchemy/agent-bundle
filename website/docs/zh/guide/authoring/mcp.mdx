@@ -958,9 +958,10 @@ npx agent-bundle mcp invoke --artifact artifact --target claude --server curator
 npx agent-bundle mcp run --artifact artifact --target claude --server curator
 ```
 
-`mcp run` 在前台执行一个已构建的 stdio 服务器：它从该 target 的 MCP 清单中解析出生成入口（其文件名带有
-服务器名称的摘要），通过 target 适配器展开路径 token，加载项目根目录的 `.env` 集合，并转发子进程的退出码。不带
-`--artifact` 时会先构建一个临时产物。
+`mcp run` 在前台执行一个已构建的 stdio 服务器：它从产物清单的 `executables.mcpServers[]` 行中解析出编译后
+的入口（其文件名带有服务器名称的摘要），通过宿主适配器展开路径 token，加载项目根目录的 `.env` 集合，并转发
+子进程的退出码。`--target` 是可选的——省略时，清单的 `projections[]` 必须恰好指出一个具备 MCP 能力的宿主；
+有多个时是一条点名候选宿主的错误。不带 `--artifact` 时会先构建一个临时产物。
 
 ## 实时宿主 MCP 代理
 

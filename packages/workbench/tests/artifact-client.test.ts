@@ -5,6 +5,19 @@ import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
 import { recordingFetch, response, type RecordedRequest } from './support/recording-fetch.ts';
 
 const inspection = {
+  application: {
+    distribution: { channels: ['local'] },
+    events: [],
+    hooks: [],
+    hosts: [{
+      builtIn: true,
+      documents: [{ kind: 'plugin', path: '.claude-plugin/plugin.json' }],
+      host: 'claude',
+    }],
+    identity: { id: 'application:fixture', name: 'fixture', version: '1.2.3' },
+    scripts: [],
+    servers: [],
+  },
   epochId: 'epoch-1',
   files: [{
     bytes: 512,
@@ -25,11 +38,12 @@ const inspection = {
     outputPath: 'hooks/session-start.mjs',
     sourceInputs: [{ path: 'hooks/session-start.ts', sha256: 'b'.repeat(64) }],
   }],
-  runtime: { executables: [], hooks: [], mcpServers: [], scripts: [] },
-  targets: [{
-    name: 'claude',
+  projections: [{
+    documents: { plugin: '.claude-plugin/plugin.json' },
+    host: 'claude',
     tree: { children: [], kind: 'directory', name: 'claude', path: 'claude' },
   }],
+  runtime: { bins: [], executables: [], hooks: [], mcpServers: [], scripts: [] },
 };
 
 const diff = {

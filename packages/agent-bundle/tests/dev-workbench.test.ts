@@ -1639,11 +1639,11 @@ it('inspects and diffs published epochs through the packaged foreground server',
         readonly runtime: {
           readonly hooks: readonly { readonly event: string; readonly file: { readonly sha256: string }; readonly path: string }[];
         };
-        readonly targets: readonly { readonly name: string }[];
+        readonly projections: readonly { readonly host: string }[];
       };
     };
     expect(inspection.epochId).toBe(epochId);
-    expect(inspection.targets.map((target) => target.name)).toEqual(['claude']);
+    expect(inspection.projections.map((projection) => projection.host)).toEqual(['claude']);
     expect(inspection.runtime.hooks.map((hook) => hook.event)).toEqual(['sessionStart']);
     const hookPath = inspection.runtime.hooks[0]!.path;
     expect(inspection.runtime.hooks[0]!.file.sha256).toMatch(/^[0-9a-f]{64}$/u);

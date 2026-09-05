@@ -23,6 +23,7 @@ import {
   type DoctorHost,
   type DoctorReport,
 } from '../src/install/doctor.ts';
+import { writeInstallFixtureManifest } from './support/install-fixture.ts';
 
 const writeJson = async (path: string, value: unknown): Promise<void> => {
   await mkdir(dirname(path), { recursive: true });
@@ -126,6 +127,14 @@ const createBundle = async (
       writeFile(join(bundle, 'install.mjs'), '// installer\n'),
     ]);
   }
+  await writeInstallFixtureManifest(
+    bundle,
+    { name: 'doctor-fixture', version },
+    [{
+      host,
+      ...(host === 'cursor' ? {} : { marketplace: 'doctor-fixture-marketplace' }),
+    }],
+  );
   return bundle;
 };
 
@@ -629,9 +638,24 @@ it('prints a web surface line when the bundle manifest exposes Apps', async () =
   const fixture = await temporaryDoctor();
   try {
     const bundle = await createBundle(fixture.root, 'cursor');
-    await writeJson(join(bundle, 'agent-bundle.manifest.json'), {
-      web: { apps: [{ app: 'status/status' }, { app: 'status/other' }] },
+    await mkdir(join(bundle, 'mcp'), { recursive: true });
+    await writeFile(join(bundle, 'mcp/status.mjs'), '// server\n');
+    const app = (name: string) => ({
+      allow: [],
+      app: `status/${name}`,
+      args: [],
+      entry: 'mcp/status.mjs',
+      env: {},
+      name,
+      resourceUri: `ui://status/${name}`,
+      server: 'status',
     });
+    await writeInstallFixtureManifest(
+      bundle,
+      { name: 'doctor-fixture', version: '1.2.3' },
+      [{ host: 'cursor' }],
+      { apps: [app('other'), app('status')], open: 'never' },
+    );
     const report = await runDoctor({
       endpointDirectory: fixture.endpointDirectory,
       from: bundle,
@@ -916,6 +940,11 @@ it('validates --from Codex bytes without running the live schema generator', asy
       name: 'Invalid Codex Name',
       version: '1.2.3',
     });
+    await writeInstallFixtureManifest(
+      bundle,
+      { name: 'doctor-fixture', version: '1.2.3' },
+      [{ host: 'codex', marketplace: 'doctor-fixture-marketplace' }],
+    );
 
     const report = await runDoctor({
       commandRunner: async (request) => {
@@ -956,6 +985,11 @@ it('validates --from Claude documents from pinned bytes without a new CLI proof'
       name: 'doctor-fixture',
       version: '1.2.3',
     });
+    await writeInstallFixtureManifest(
+      bundle,
+      { name: 'doctor-fixture', version: '1.2.3' },
+      [{ host: 'claude', marketplace: 'doctor-fixture-marketplace' }],
+    );
 
     const report = await runDoctor({
       commandRunner: async (request) => {
@@ -1215,7 +1249,38 @@ it('reports a Claude listing with a malformed scope as unknown inventory (AB7303
   }
 });
 
-it('reports a malformed host bundle as a Doctor error', async () => {
+it('reports AB7306 when the bundle identity fails for a reason that is not a manifest diagnostic', async () => {
+  const fixture = await temporaryDoctor();
+  try {
+    const bundle = await createBundle(fixture.root, 'cursor');
+    // The manifest points at `.cursor-plugin/plugin.json`; making `.cursor-plugin` a regular
+    // file turns the pointer check into an ENOTDIR read failure rather than a missing file.
+    await rm(join(bundle, '.cursor-plugin'), { recursive: true });
+    await writeFile(join(bundle, '.cursor-plugin'), 'not a directory\n');
+    const report = await runDoctor({
+      commandRunner: versionRunner,
+      endpointDirectory: fixture.endpointDirectory,
+      from: bundle,
+      home: fixture.home,
+      hosts: ['cursor'],
+    });
+    expect(hostReport(report, 'cursor').bundle?.state).toBe('failed');
+    expect(report.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'AB7306',
+        message: expect.stringContaining('ENOTDIR'),
+        recovery: expect.stringContaining('rerun Doctor'),
+        severity: 'error',
+        target: 'cursor',
+      }),
+    ]));
+    expect(report.diagnostics.filter((entry) => entry.code === 'AB7001')).toEqual([]);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('reports an unresolvable --from root under the same AB7001 install refuses it with', async () => {
   const fixture = await temporaryDoctor();
   try {
     const report = await runDoctor({
@@ -1227,7 +1292,13 @@ it('reports a malformed host bundle as a Doctor error', async () => {
     });
     expect(hostReport(report, 'claude').bundle?.state).toBe('failed');
     expect(report.diagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB7306', severity: 'error' }),
+      expect.objectContaining({
+        code: 'AB7001',
+        message: expect.stringContaining('No agent-bundle.manifest.json in'),
+        recovery: expect.stringContaining('rerun Doctor'),
+        severity: 'error',
+        target: 'claude',
+      }),
     ]));
   } finally {
     await fixture.cleanup();
@@ -1316,6 +1387,11 @@ it('compares the installed Cursor copy against the artifact: current, stale, for
     expect(current.diagnostics.filter((entry) => entry.severity !== 'info')).toEqual([]);
 
     await writeFile(join(bundle, 'payload.txt'), 'rebuilt\n');
+    await writeInstallFixtureManifest(
+      bundle,
+      { name: 'doctor-fixture', version: '1.2.3' },
+      [{ host: 'cursor' }],
+    );
     const rebuiltHash = (await treeInventory(bundle)).hash;
     const stale = hostReport(await doctor(), 'cursor');
     expect(stale.bundle).toMatchObject({
@@ -1390,7 +1466,7 @@ it('treats a versionless Cursor destination as drifted rather than conflicted', 
   }
 });
 
-it('turns a symlink inside a Cursor bundle into a corrupt finding', async () => {
+it('ignores an unlisted symlink in the authoritative artifact inventory', async () => {
   const fixture = await temporaryDoctor();
   try {
     const bundle = await createBundle(fixture.root, 'cursor');
@@ -1402,10 +1478,8 @@ it('turns a symlink inside a Cursor bundle into a corrupt finding', async () => 
       home: fixture.home,
       hosts: ['cursor'],
     });
-    expect(hostReport(report, 'cursor').bundle?.state).toBe('corrupt');
-    expect(report.diagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB7310', severity: 'error' }),
-    ]));
+    expect(hostReport(report, 'cursor').bundle?.state).toBe('missing');
+    expect(report.diagnostics.some((entry) => entry.code === 'AB7310' || entry.code === 'AB7319')).toBe(false);
   } finally {
     await fixture.cleanup();
   }
@@ -3075,6 +3149,11 @@ it('accepts --from unified bundle Cursor bytes whose manifest names hooks/hooks-
   const bundle = join(fixture.root, 'bundle-plugin');
   try {
     await writeUnifiedBundleCursorView(bundle);
+    await writeInstallFixtureManifest(
+      bundle,
+      { name: 'unified-fixture', version: '0.3.5' },
+      [{ host: 'cursor' }],
+    );
 
     const report = await runDoctor({
       endpointDirectory: fixture.endpointDirectory,

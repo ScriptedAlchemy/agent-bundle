@@ -15,6 +15,7 @@ import type {
 } from '../../contracts/discovery.ts';
 import { parseJsonWithoutDuplicateKeys } from '../../core/strict-json.ts';
 import { readFileString, type PlatformRun } from '../../effect/platform.ts';
+import { readBundleIdentity } from '../../install/identity.ts';
 import { platformRunOf } from '../platform-run.ts';
 import type { DevPlatformRuntime } from '../platform-runtime.ts';
 import {
@@ -126,8 +127,11 @@ const enumerateMcpServers = async (
   try {
     const runtime = registry.mcpRuntime(value.host);
     if (runtime === undefined) return undefined;
+    const identity = await readBundleIdentity(bundleRoot, value.host);
+    const documentPath = identity.documents.mcp;
+    if (documentPath === undefined) return undefined;
     const document = parseJsonWithoutDuplicateKeys(
-      await run(readFileString(join(bundleRoot, runtime.manifestPath))),
+      await run(readFileString(join(bundleRoot, documentPath))),
     );
     const result = readTargetMcpServers(runtime, document);
     if (result.status === 'invalid') return undefined;

@@ -8,24 +8,26 @@ import {
 import type { Diagnostic } from '../../core/diagnostics.ts';
 import type { ProjectContext } from '../../core/project-context.ts';
 import { EpochReference, EpochStore } from '../epoch-store.ts';
-import { artifactScriptCatalog } from './artifact-script-catalog.ts';
+import { applicationExplorerFor } from './application-explorer.ts';
+import { artifactManifestScriptExecutions } from './artifact-executables.ts';
 import type {
   ArtifactEpochAddedFile,
   ArtifactEpochChangedFile,
   ArtifactEpochDiff,
   ArtifactEpochRemovedFile,
   ArtifactEpochUnchangedFile,
+  ArtifactInspectionBin,
   ArtifactInspection,
   ArtifactInspectionDirectoryNode,
   ArtifactInspectionFile,
   ArtifactInspectionFileNode,
   ArtifactInspectionHook,
   ArtifactInspectionMcpServer,
+  ArtifactInspectionProjection,
   ArtifactInspectionScript,
   ArtifactInspectionProvenance,
   ArtifactInspectionRuntime,
   ArtifactInspectionSourceInput,
-  ArtifactInspectionTarget,
   ArtifactInspectionTreeNode,
 } from '../types.ts';
 import { YieldableCodedError } from '../../effect/errors.ts';
@@ -166,27 +168,31 @@ export class ArtifactInspectionService {
     const validated = await this.#validatedManifest(reference.root);
     const { manifest } = validated;
     const sourceInputs = new Map<string, ArtifactInspectionSourceInput>();
-    for (const input of manifest.project.sourceInputs) {
+    for (const input of manifest.compiler.project.sourceInputs) {
       sourceInputs.set(input.path, Object.freeze({ path: input.path, sha256: input.sha256 }));
     }
+    const provenanceByPath = new Map(
+      manifest.compiler.provenance.map((entry) => [entry.path, entry.sourceInputs]),
+    );
 
     const files = Object.freeze(manifest.files
-      .map((file) => this.#file(file, sourceInputs))
+      .map((file) => this.#file(file, sourceInputs, provenanceByPath.get(file.path) ?? []))
       .sort(comparePaths));
     const filesByPath = new Map(files.map((file) => [file.path, file]));
-    const project = this.#project(manifest.project, sourceInputs);
+    const project = this.#project(manifest.compiler.project, sourceInputs);
     const runtime = this.#runtime(filesByPath, manifest, validated.runtime);
 
     return Object.freeze({
+      application: applicationExplorerFor(manifest),
       epochId,
       files,
       project,
+      projections: this.#projections(manifest, files),
       provenance: Object.freeze(files.map((file): ArtifactInspectionProvenance => Object.freeze({
         outputPath: file.path,
         sourceInputs: file.sourceInputs,
       }))),
       runtime,
-      targets: this.#targets(manifest, files),
     });
   }
 
@@ -218,8 +224,9 @@ export class ArtifactInspectionService {
   #file(
     file: ArtifactManifest['files'][number],
     sourceInputs: ReadonlyMap<string, ArtifactInspectionSourceInput>,
+    provenanceInputs: readonly string[],
   ): ArtifactInspectionFile {
-    const inputs = file.sourceInputs.map((path) => sourceInputs.get(path));
+    const inputs = provenanceInputs.map((path) => sourceInputs.get(path));
     if (inputs.some((input) => input === undefined)) {
       throw inspectionError(
         'ARTIFACT_INSPECTION_INVALID',
@@ -238,7 +245,7 @@ export class ArtifactInspectionService {
   }
 
   #project(
-    project: ArtifactManifest['project'],
+    project: ArtifactManifest['compiler']['project'],
     sourceInputs: ReadonlyMap<string, ArtifactInspectionSourceInput>,
   ): ProjectContext {
     const inputs = project.sourceInputs.map((input) => sourceInputs.get(input.path));
@@ -260,10 +267,10 @@ export class ArtifactInspectionService {
     });
   }
 
-  #targets(
+  #projections(
     manifest: ArtifactManifest,
     files: readonly ArtifactInspectionFile[],
-  ): readonly ArtifactInspectionTarget[] {
+  ): readonly ArtifactInspectionProjection[] {
     // One composite root (#555): every selected projection reads the same tree.
     const root = emptyTreeBuildDirectory();
     for (const file of files) {
@@ -281,9 +288,11 @@ export class ArtifactInspectionService {
       }
       directory.files.set(fileName, file);
     }
-    return Object.freeze(manifest.targets.map((target): ArtifactInspectionTarget => Object.freeze({
-      name: target.name,
-      tree: treeNode(target.name, '.', root),
+    return Object.freeze(manifest.projections.map((projection): ArtifactInspectionProjection => Object.freeze({
+      documents: projection.documents,
+      host: projection.host,
+      ...(projection.marketplace === undefined ? {} : { marketplace: projection.marketplace.name }),
+      tree: treeNode(projection.host, '.', root),
     })));
   }
 
@@ -293,28 +302,44 @@ export class ArtifactInspectionService {
     runtime: ValidatedArtifactSnapshot['runtime'],
   ): ArtifactInspectionRuntime {
     const hooks = this.#hooks(filesByPath, runtime);
-    const mcpServers = this.#mcpServers(filesByPath, runtime);
+    const mcpServers = this.#mcpServers(filesByPath, manifest);
+    const bins = this.#bins(filesByPath, manifest);
     const executables = Object.freeze([...filesByPath.values()]
       .filter((file) => file.mode !== undefined && (file.mode & 0o111) !== 0)
       .sort(comparePaths));
     const scripts = this.#scripts(filesByPath, manifest);
-    return Object.freeze({ executables, hooks, mcpServers, scripts });
+    return Object.freeze({ bins, executables, hooks, mcpServers, scripts });
+  }
+
+  #bins(
+    filesByPath: ReadonlyMap<string, ArtifactInspectionFile>,
+    manifest: ArtifactManifest,
+  ): readonly ArtifactInspectionBin[] {
+    return Object.freeze(manifest.executables.bins.map((bin): ArtifactInspectionBin => Object.freeze({
+      file: this.#runtimeFile(filesByPath, bin.path, 'Manifest bin references an unmanifested file.'),
+      hosts: Object.freeze([...bin.hosts]),
+      name: bin.name,
+      ...(bin.worker === undefined
+        ? {}
+        : { worker: this.#runtimeFile(filesByPath, bin.worker, 'Manifest bin references an unmanifested worker.') }),
+    })));
   }
 
   #scripts(
     filesByPath: ReadonlyMap<string, ArtifactInspectionFile>,
     manifest: ArtifactManifest,
   ): readonly ArtifactInspectionScript[] {
-    try {
-      return Object.freeze(artifactScriptCatalog(manifest, this.#registry).map((script) => {
-        const file = filesByPath.get(script.file);
-        if (file === undefined) throw this.#runtimeError('Validated script catalog references an unmanifested file.', script.file, script.target);
-        return Object.freeze({ file, id: script.id, name: script.name, target: script.target });
-      }));
-    } catch (error) {
-      if (error instanceof ArtifactInspectionServiceError) throw error;
-      throw this.#runtimeError('Artifact inspection could not derive the validated script catalog.', artifactManifestName);
-    }
+    return Object.freeze(artifactManifestScriptExecutions(manifest).map((script): ArtifactInspectionScript => Object.freeze({
+      file: this.#runtimeFile(filesByPath, script.path, 'Manifest script references an unmanifested file.', script.target),
+      id: script.id,
+      mode: script.mode,
+      name: script.name,
+      ...(script.rendered === undefined ? {} : { rendered: script.rendered }),
+      target: script.target,
+      ...(script.worker === undefined
+        ? {}
+        : { worker: this.#runtimeFile(filesByPath, script.worker, 'Manifest script references an unmanifested worker.', script.target) }),
+    })));
   }
 
   #hooks(
@@ -325,15 +350,16 @@ export class ArtifactInspectionService {
     for (const hook of runtime.hooks) {
       const file = filesByPath.get(hook.path);
       if (file === undefined) {
-        throw this.#runtimeError('Validated hook evidence references an unmanifested wrapper.', hook.path, hook.target);
+        throw this.#runtimeError('Validated hook evidence references an unmanifested wrapper.', hook.path, hook.host);
       }
       hooks.push(Object.freeze({
         event: hook.event,
         file,
         id: hook.id,
+        kind: hook.kind,
         name: hook.name,
         path: hook.path,
-        target: hook.target,
+        target: hook.host,
         ...(hook.timeout === undefined ? {} : { timeout: hook.timeout }),
       }));
     }
@@ -345,30 +371,61 @@ export class ArtifactInspectionService {
 
   #mcpServers(
     filesByPath: ReadonlyMap<string, ArtifactInspectionFile>,
-    runtime: ValidatedArtifactSnapshot['runtime'],
+    manifest: ArtifactManifest,
   ): readonly ArtifactInspectionMcpServer[] {
     const servers: ArtifactInspectionMcpServer[] = [];
-    for (const server of runtime.mcpServers) {
-      if (!filesByPath.has(server.manifestPath)) {
-        throw this.#runtimeError('Validated MCP evidence references an unmanifested target manifest.', server.manifestPath, server.target);
-      }
-      for (const path of server.entryPaths) {
-        if (!filesByPath.has(path)) {
-          throw this.#runtimeError('Validated MCP evidence references an unmanifested target file.', path, server.target);
+    const projections = new Map(manifest.projections.map((projection) => [projection.host, projection]));
+    for (const server of manifest.executables.mcpServers) {
+      const entryPaths = server.entry === undefined
+        ? Object.freeze([])
+        : Object.freeze([
+          server.entry.path,
+          ...(server.entry.worker === undefined ? [] : [server.entry.worker]),
+        ]);
+      for (const target of server.hosts) {
+        const manifestPath = projections.get(target)?.documents.mcp;
+        if (manifestPath === undefined) {
+          throw this.#runtimeError(
+            'Manifest MCP server host has no projection MCP document.',
+            artifactManifestName,
+            target,
+          );
         }
+        this.#runtimeFile(filesByPath, manifestPath, 'Manifest MCP server references an unmanifested target document.', target);
+        for (const path of entryPaths) {
+          this.#runtimeFile(filesByPath, path, 'Manifest MCP server references an unmanifested entry file.', target);
+        }
+        servers.push(Object.freeze({
+          apps: Object.freeze(server.apps.map((app) => Object.freeze({
+            id: app.id,
+            name: app.name,
+            ...(app.path === undefined ? {} : { path: app.path }),
+            resourceUri: app.resourceUri,
+          }))),
+          entryPaths,
+          kind: server.kind,
+          manifestPath,
+          name: server.name,
+          target,
+          transport: server.transport,
+        }));
       }
-      servers.push(Object.freeze({
-        entryPaths: Object.freeze([...server.entryPaths]),
-        kind: server.kind,
-        manifestPath: server.manifestPath,
-        name: server.name,
-        target: server.target,
-      }));
     }
     servers.sort((left, right) => left.target === right.target
       ? left.name.localeCompare(right.name)
       : left.target.localeCompare(right.target));
     return Object.freeze(servers);
+  }
+
+  #runtimeFile(
+    filesByPath: ReadonlyMap<string, ArtifactInspectionFile>,
+    path: string,
+    message: string,
+    target?: string,
+  ): ArtifactInspectionFile {
+    const file = filesByPath.get(path);
+    if (file === undefined) throw this.#runtimeError(message, path, target);
+    return file;
   }
 
   #runtimeError(message: string, generatedPath: string, target?: string): ArtifactInspectionServiceError {

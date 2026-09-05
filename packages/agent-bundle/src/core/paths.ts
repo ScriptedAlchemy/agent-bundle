@@ -61,6 +61,19 @@ export const isContainedRelativePath = (value: string): boolean =>
   !/^[a-z]:/iu.test(value) &&
   !value.split(/[/\\]/u).includes('..');
 
+/**
+ * The manifest's path rule: a non-empty POSIX path that is relative on every platform
+ * (no leading `/`, no drive letter, no backslash, no NUL) and whose segments are
+ * non-empty and never `.` or `..`, so the path means the same file wherever the root lands.
+ */
+export const isRelocatablePosixPath = (path: string): boolean =>
+  path.length > 0 &&
+  !path.includes('\\') &&
+  !path.includes('\0') &&
+  !path.startsWith('/') &&
+  !/^[a-z]:/iu.test(path) &&
+  path.split('/').every((segment) => segment.length > 0 && segment !== '.' && segment !== '..');
+
 /** A normalized relative path that cannot traverse out of an artifact root. */
 export const safeArtifactPath = (path: string): boolean =>
   path.length > 0 &&

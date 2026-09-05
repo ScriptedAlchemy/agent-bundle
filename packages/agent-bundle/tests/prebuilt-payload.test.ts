@@ -91,6 +91,10 @@ it('validates declared payload runtime dependencies and normalizes them sorted a
     expect(built.model.payloads).toMatchObject([
       { name: 'runtime', runtimeDependencies: ['sharp', 'zod'] },
     ]);
+    const manifest = parseArtifactManifest(await readFile(join(root, 'out', 'agent-bundle.manifest.json'), 'utf8'));
+    expect(manifest.distribution.payloads).toEqual([
+      { hosts: ['claude', 'codex', 'portable'], name: 'runtime', runtimeDependencies: ['sharp', 'zod'] },
+    ]);
   } finally {
     await removeProjectFixture(root);
   }
@@ -158,6 +162,24 @@ it.each([
       code: 'AB4740',
       message: 'Payload "runtime" runtimeDependencies must be an array of package names.',
     }));
+  } finally {
+    await removeProjectFixture(root);
+  }
+});
+
+it('records a payload only for the selected hosts it targets and omits payloads no selected host packages', async () => {
+  const root = await createProject({
+    payload: "  payload: { app: { source: './built/app', targets: ['codex'] }, runtime: { source: './built/runtime', targets: ['claude'] } },",
+  });
+  try {
+    await build({ output: join(root, 'out'), root, targets: ['claude', 'portable'] });
+    const manifest = parseArtifactManifest(await readFile(join(root, 'out', 'agent-bundle.manifest.json'), 'utf8'));
+    expect(manifest.projections.map((projection) => projection.host)).toEqual(['claude', 'portable']);
+    expect(manifest.distribution.payloads).toEqual([{ hosts: ['claude'], name: 'runtime', runtimeDependencies: [] }]);
+    expect(manifest.files.filter((file) => file.path.startsWith('app/'))).toEqual([]);
+    expect(manifest.files.filter((file) => file.path.startsWith('runtime/')).map((file) => file.kind)).toEqual(
+      expect.arrayContaining(['prebuilt']),
+    );
   } finally {
     await removeProjectFixture(root);
   }
@@ -241,14 +263,21 @@ it('packages prebuilt payloads at stable paths and lowers prebuilt entries throu
       command: 'node "${PLUGIN_ROOT}/runtime/hook.js" --host codex',
     });
     expect(result.build.compiledHooks).toEqual([]);
-    expect(await readJson<{ hooks: unknown[] }>(join(root, 'out', 'agent-bundle.hooks.json'))).toEqual({ hooks: [] });
 
     // Manifest provenance: payload files carry the prebuilt kind and their
     // own bytes as source inputs; the revision hashes the payload files.
+    // Prebuilt hooks are Projection IR, not compiler wrappers, so they are
+    // absent from executables.hooks.
     const manifest = parseArtifactManifest(await readFile(join(root, 'out', 'agent-bundle.manifest.json'), 'utf8'));
+    expect(manifest.executables.hooks).toEqual([]);
     const chunk = manifest.files.find((file) => file.path === 'runtime/chunks/417.js');
-    expect(chunk).toMatchObject({ kind: 'prebuilt', sourceInputs: ['agent-bundle.config.ts', 'built/runtime/chunks/417.js'] });
-    expect(manifest.project.sourceInputs.some((input) => input.path === 'built/runtime/mcp/server.js')).toBe(true);
+    expect(chunk).toMatchObject({ kind: 'prebuilt' });
+    expect(manifest.compiler.provenance).toContainEqual({
+      path: 'runtime/chunks/417.js',
+      sourceInputs: ['agent-bundle.config.ts', 'built/runtime/chunks/417.js'],
+    });
+    expect(manifest.compiler.project.sourceInputs.some((input) => input.path === 'built/runtime/mcp/server.js')).toBe(true);
+    expect(manifest.distribution.payloads.map((payload) => payload.name)).toEqual(['app', 'runtime']);
 
     // The published artifact revalidates cleanly from disk alone.
     const revalidated = await validate({ artifact: join(root, 'out'), root });

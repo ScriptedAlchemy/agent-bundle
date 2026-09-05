@@ -16,6 +16,11 @@ import { Effect, type FileSystem } from 'effect';
 import type { PlatformError } from 'effect/PlatformError';
 
 import { createDefaultRegistry, TargetRegistry } from '../adapters/registry.ts';
+import { readArtifactManifest } from '../build/manifest-file.ts';
+import {
+  requireArtifactManifest,
+  resolveManifestMcpDocument,
+} from '../build/manifest-projection.ts';
 import { validateArtifact } from '../build/validate-artifact.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { joinArtifact, resolveContained } from '../core/paths.ts';
@@ -220,6 +225,16 @@ export class McpService {
     ) => Promise<Result>,
   ): Promise<{ readonly connection: McpConnectionState; readonly value: Result }> {
     const artifact = resolve(options.artifact);
+    if (options.server.trim().length === 0) {
+      throw new Error('MCP server name must be nonempty.');
+    }
+    const manifest = requireArtifactManifest(await readArtifactManifest(artifact));
+    const documentPath = resolveManifestMcpDocument(
+      manifest,
+      options.target,
+      options.server,
+      this.#registry,
+    );
     const runtime = this.#runtime(options.target);
     const diagnostics = await validateArtifact({ artifactRoot: artifact, registry: this.#registry });
     const errors = diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
@@ -232,7 +247,13 @@ export class McpService {
     // (cleanup failure wins, as the throwing `finally` did). The client and
     // stderr capture are closed inside the bracket, before the removal.
     return runWithPlatform(Effect.gen({ self: this }, function* (this: McpService) {
-      const server = yield* this.#server(targetRoot, options.target, runtime, options.server);
+      const server = yield* this.#server(
+        targetRoot,
+        options.target,
+        runtime,
+        options.server,
+        documentPath,
+      );
       return yield* withTempDirectory(
         { directory: tmpdir(), prefix: 'agent-bundle-mcp-' },
         (pluginData) => liftPromise(() => this.#connect(options, operation, { pluginData, runtime, server, targetRoot })),
@@ -302,11 +323,9 @@ export class McpService {
     target: string,
     runtime: TargetMcpRuntimeContract,
     name: string,
+    documentPath: string,
   ): Effect.Effect<ModernMcpServer, Error | PlatformError, FileSystem.FileSystem> {
-    if (name.trim().length === 0) {
-      return Effect.fail(new Error('MCP server name must be nonempty.'));
-    }
-    const path = joinArtifact(targetRoot, runtime.manifestPath);
+    const path = joinArtifact(targetRoot, documentPath);
     return Effect.flatMap(readFileString(path), (contents) => Effect.suspend(() => {
       let document: unknown;
       try {

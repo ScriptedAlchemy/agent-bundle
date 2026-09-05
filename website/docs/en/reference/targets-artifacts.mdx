@@ -51,8 +51,7 @@ artifact/
 ├── scripts/, skills/, commands/, rules/, assets/, mcp-apps/   # emitted once
 ├── INSTALL.md                            # when any built-in host is selected
 ├── install.mjs                           # when cursor or portable is selected
-├── agent-bundle.manifest.json            # selected projections + provenance
-└── agent-bundle.hooks.json               # hook index over selected hosts
+└── agent-bundle.manifest.json            # the artifact index (manifestVersion 2)
 ```
 
 Host manifests live in their dotfolders at the root. `skills/`, `hooks/`, `mcp/`, `scripts/`,
@@ -92,8 +91,9 @@ revision), so one wrapper cannot serve two hosts:
 Which hosts a hook reaches is its `targets` (every target, by default) intersected with the
 selection, so the same source hook is `hooks/audit.mjs` in a `claude`-only root and
 `hooks/audit.claude.mjs` plus `hooks/audit.cursor.mjs` in a `claude` + `cursor` root. Native hooks
-are preserved for every selected host. `agent-bundle.hooks.json` indexes the wrappers over the
-selected hosts.
+are preserved for every selected host. The manifest's `executables.hooks[]` carries one row per
+wrapper per host — there is no separate hook index file — and `hooks list`, `hooks simulate`, and
+artifact validation (`AB6018`) read those rows.
 
 ### Compiled surfaces
 
@@ -137,37 +137,39 @@ inventory checks the same paths (`AB7010`).
 
 ## agent-bundle.manifest.json
 
-One manifest is emitted per root and is the input to later integrity checks —
-`validate --artifact`, `prepack`, and the packed and installed-host proof
-levels. `doctor --from` and `install --from` identify the root from the
-host `plugin.json` under `--from`; they do not parse this file.
+One manifest is emitted per root (`manifestVersion: 2`). It is the root's **index** — the one
+document every consumer reads to learn what the root contains — and the input to every later
+integrity check: `validate --artifact`, `prepack`, `install`, `doctor --from`, `serve-app`, `mcp`,
+`hooks`, and the packed and installed-host proof levels. The full field reference is the
+[Artifact manifest](./artifact-manifest.mdx) page; in outline:
 
-| Field | Contents |
+| Section | Contents |
 | --- | --- |
-| `producer` | `{ name: 'agent-bundle', version }`. |
-| `project` | `configPath`, `configDigest`, `modelDigest`, `revision`, the validated `packageName` and `packageVersion` (absent for unpackaged development projects), and `sourceInputs`. |
-| `files` | Every emitted file: `path`, `bytes`, `sha256`, `kind`, optional `mode`, and the `sourceInputs` it derives from. |
-| `runtime` | `{ node }` — the selected generated-executable floor. |
-| `targets` | One row per selected projection, sorted by name: `name`, `adapterRevision`, `observedVersion`, and the pinned `schemas` it was validated against. |
-| `agentSkills` | The Agent Skills specification pin: `specification`, `sourceRevision`, `schemaSha256`. |
-| `validation` | Recorded status for `source`, `artifact`, and each selected projection. |
-| `web` | **Absent unless [`web`](./configuration.mdx#web) is configured.** `{ open, apps[] }` where each app is `{ allow, app, args, entry, env, name, resourceUri, server, tool?, input? }`. `entry` is the artifact-relative MCP executable (`mcp/<name>.mjs`); `args` are the server's declared `mcp.servers.<id>.args` after the entry and `env` its declared static env, both with `agent-bundle:path:*` tokens left unexpanded. Apps are sorted by `app`; an exposed App whose `targets` fall outside the root's selection is omitted (and the section with it when none remain), since the shipped server cannot serve it. The `<plugin> web` command, `agent-bundle dev` `/web/<server>/<app>`, and `doctor` read this section and never rediscover Apps from `src/**`. |
+| `manifestVersion`, `runtime` | `2`, and `{ node }`, the consumer-facing generated-executable floor. |
+| `application` | The identity, once and host-independent: `id`, `name`, `version`, optional `description`. What `install`, `doctor`, and `uninstall` act on. |
+| `files[]` | Every emitted file: `path`, `bytes`, `sha256`, `kind` (`bundle`, `copy`, `generated`, `prebuilt`), optional `mode`. |
+| `projections[]` | One row per selected host, sorted by `host`: `host`, optional `builtInHost`, the `documents` pointers to the host plugin, marketplace, MCP, and hooks documents the projection emitted, and its `marketplace` name. |
+| `routes` | The compiled route graph: `servers[]`, `events[]`, `scripts[]`, `cli`, `providers[]`, `layouts[]`, `contracts[]` (when a route binds one), and its `digest`. A bound route names its contract with `route.contract`. |
+| `executables` | Every process the root can start: `bins[]`, `hooks[]` (one row per wrapper per host), `mcpServers[]` with their `entry` and `apps[]`, and `scripts[]`. |
+| `distribution` | `channels` (`local`, plus `npm` when `compiler.project.packageName` is present), the `install` pointers to `INSTALL.md` / `install.mjs`, and `payloads[]` — each prebuilt payload directory with the hosts it was packaged for and its declared `runtimeDependencies`. |
+| `compiler` | Operational record, versioned by `recordVersion` independently of `manifestVersion`: `producer`, `project` (`configPath`, `configDigest`, `modelDigest`, `revision`, `sourceInputs`, optional `packageName` / `packageVersion`), `provenance[]` (one `{ path, sourceInputs[] }` per `files[]` row), `adapters[]` (`adapterRevision`, `observedVersion`, pinned `schemas` per projection), `agentSkills`, and `validation`. |
+| `web` | **Absent unless [`web`](./configuration.mdx#web) is configured.** `{ open, apps[] }` where each app is `{ allow, app, args, entry, env, name, resourceUri, server, tool?, input? }`. `entry` is the root-relative compiled MCP executable and must name a `files[]` row; `args` are the server's declared `mcp.servers.<id>.args` after the entry and `env` its declared static env, both with `agent-bundle:path:*` tokens left unexpanded. Apps are sorted by `app`; an exposed App whose `targets` fall outside the root's selection is omitted (and the section with it when none remain). The `<plugin> web` command, `agent-bundle dev` `/web/<server>/<app>`, and `doctor` read this section and never rediscover Apps from `src/**`. |
 
-`kind` is one of `bundle`, `copy`, `generated`, or `prebuilt` — a bundled entry, a byte-for-byte
-copy, a compiler-generated document, or a prebuilt payload file. `sourceInputs` records each
-input path with its own SHA-256 and, where relevant, whether it was executable.
-
-Because every file carries a digest, validation compares **real bytes** rather than checking that
-a path exists, and a hand-edited generated file fails. That contract is what makes
-`validate --artifact`, `mcp`, and `hooks` work against an artifact whose project sources have been
-deleted.
+Only `build` writes it; everything in it is derived from the configuration, the conventional
+filesystem, and the compiled model, and its bytes are canonical — every reader rejects a
+hand-edited copy. Because every file carries a digest, validation compares **real bytes** rather
+than checking that a path exists, and a hand-edited generated file fails. That contract is what
+makes `validate --artifact`, `mcp`, and `hooks` work against an artifact whose project sources
+have been deleted. The host documents and manifest are serialized from the same compiled model
+in one build, and every host document is a digest-pinned `files[]` row, so a hand edit fails the
+digest check.
 
 ## Versions and revisions
 
 Four version axes are tracked separately and are expected to agree:
 
 - **Source** — the project's `package.json` release version.
-- **Built artifact** — `project.packageVersion` in the manifest.
+- **Built artifact** — `compiler.project.packageVersion` in the manifest.
 - **Installed artifact** — the manifest found under a host's installed root.
 - **Running process** — the version a live MCP `initialize` reports.
 
@@ -179,7 +181,7 @@ packed JavaScript imports, requires, or resolves them, no packed declaration ref
 fetch from a registry (`AB7015`): a published plugin installs only what its packed files need. The
 [validation guide](../guide/distribution/validation.mdx) lists every source of evidence.
 
-Target rows also record an `adapterRevision` (monotonic, repository-owned) and an
+`compiler.adapters[]` records an `adapterRevision` (monotonic, repository-owned) and an
 `observedVersion` (the host version the capability evidence was recorded against). Neither is
 hashed: Git already versions repository-owned content, and hashing it again inside the repository
 causes churn on every table edit. Hash pins are reserved for vendored external content — host
@@ -188,6 +190,7 @@ schema pin, and emitted files and source inputs.
 
 ## Next
 
+- [Artifact manifest](./artifact-manifest.mdx) — every field of `agent-bundle.manifest.json`, who writes it, who reads it.
 - [Compiler architecture](../guide/concepts/architecture.mdx) — the three
   compiler layers and which production readers consume each manifest field.
 - [Artifact validation](../guide/distribution/validation.mdx) — the checks that read this manifest.

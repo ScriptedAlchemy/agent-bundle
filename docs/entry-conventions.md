@@ -1254,7 +1254,8 @@ export default defineConfig({
   remain hash-locked to the manifest. Declaration provenance is recorded as
   `kind: 'prebuilt'`. Hooks with prebuilt handlers are packaged like native
   hook documents: they do not compile wrappers and do not appear in the
-  simulatable hook index. MCP Apps declared on a prebuilt server stay a
+  manifest's `executables.hooks[]` rows, so `hooks list` and `hooks simulate`
+  do not see them. MCP Apps declared on a prebuilt server stay a
   development surface (the Workbench compiles them live); the build assumes
   the payload already serves the resource.
 - **Declare what the payload loads.** Because payload trees are opaque,
