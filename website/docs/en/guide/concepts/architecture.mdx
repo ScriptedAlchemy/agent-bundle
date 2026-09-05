@@ -1,0 +1,584 @@
+---
+description: 'How agent-bundle lowers src/ conventions into a route graph, host projections, and one composite artifact, and what agent-bundle.manifest.json records today.'
+---
+
+# Compiler architecture
+
+agent-bundle compiles one project into native host plugins. This page describes
+the compiler **as the code works today**: three layers of data that later
+stages read, the modules that produce and consume each layer, and the
+artifact manifest those stages leave behind. It is the documentation slice of
+[#592](https://github.com/ScriptedAlchemy/agent-bundle/issues/592) (step 2).
+Nothing here changes public behavior.
+
+Paths below are relative to `packages/agent-bundle/src/` unless a package
+name is spelled out. Type names are the ones the compiler exports — there is
+no `ApplicationIR`, `ProjectionIR`, or `ArtifactIR` type yet.
+
+The output layout this page describes is the **composite plugin root**: one
+directory at the artifact output, with `targets` selecting which host
+projections appear inside it
+([#555](https://github.com/ScriptedAlchemy/agent-bundle/issues/555) Wave 1,
+[PR #578](https://github.com/ScriptedAlchemy/agent-bundle/pull/578)). There
+is no `artifact/<host>/` partition and no `plugin` target.
+
+## The three layers
+
+```text
+src/ conventions + agent-bundle.config.ts
+        │
+        ▼
+config/discover.ts
+  + routes/graph.ts  (compileRouteGraph)
+        │
+        ▼
+DiscoveredProject
+  (skills, commands, rules, state, routeGraph, …)
+        │
+        ▼
+config/normalize.ts  →  NormalizedPlugin     ← Application layer
+        │
+        ▼
+adapters/*.ts  plan()
+  + adapters/capabilities/*.json
+        │
+        ▼
+TargetArtifactPlan  (one per selected host)
+        │
+        ▼
+build/compose.ts  (composeProjections)       ← Projection layer
+        │
+        ▼
+CompositePlan  (entries, hookEntries, identity)
+        │
+        ▼
+build/build.ts + build/emit.ts + build/compile-stages.ts
+        │
+        ▼
+composite plugin root
+  + agent-bundle.manifest.json
+        │
+        ▼
+build/validate-artifact*.ts / AB6005
+  / prepack AB7014, AB7015                   ← Artifact layer
+```
+
+A reader who wants the filesystem conventions those arrows start from should
+read [Project structure](../start/project-structure.mdx). A reader who wants
+the bytes those arrows end in should read
+[Targets and artifacts](../../reference/targets-artifacts.mdx).
+
+## Application layer
+
+Discovery runs once per build, then normalization freezes a host-independent
+model. Two structures share that job today; they are not yet one IR.
+
+### What discovery produces
+
+`config/discover.ts` walks the project and returns a `DiscoveredProject`:
+
+| Collection | Source | Parser |
+| --- | --- | --- |
+| `skills` | `src/skills/<name>/SKILL.md` or a rendered-skill module, or explicit `skills` globs | `config/skill.ts` |
+| `commands` | `src/commands/*.md` | `config/command.ts` |
+| `rules` | `src/rules/*.mdc` | `config/rule.ts` |
+| `state` | `src/state.ts` (opt out with `state: false`) | `config/state-extract.ts` |
+| `assets` / `payloads` | `assets/` or configured `assets` / `payload` | `config/discover.ts` |
+| `routeGraph` | conventional executable modules | `routes/graph.ts` |
+
+`compileRouteGraph` in `routes/graph.ts` is the executable-route compiler. It
+globs these roots (and no others):
+
+```text
+src/layout.{ts,tsx}
+src/mcp/*/layout.{ts,tsx}
+src/mcp/*/{tools,resources,prompts,apps}/*.{ts,tsx}
+src/events/*/*.{ts,tsx}
+src/events/stop.{ts,tsx}
+src/providers/*.{ts,tsx}
+src/cli/**/*.{ts,tsx}
+src/scripts/**/*.{ts,tsx,jsx}
+```
+
+The frozen result is a `CompiledRouteGraph` (`routes/types.ts`):
+
+- `servers[]` — `CompiledServerSurface` (`generated` / `custom` / `command` /
+  `remote` / `conflict`), each holding `CompiledAgentRoute` rows of kind
+  `tool`, `resource`, `prompt`, or `app`.
+- `cli?` — `CompiledCliSurface` (`generated` / `conventional` / `conflict`)
+  with `CompiledCliCommand` rows whose argv grammar comes from a bounded
+  `inputSchema`.
+- `events[]` — `CompiledAgentRoute` rows of kind `event-route`.
+- `scripts[]` — kind `script`.
+- `providers[]` — `CompiledProvider` (not a route kind; they wrap execution).
+- `layouts?` — `CompiledLayout` (`root` or `server` scope). Event routes and
+  browser Apps are never wrapped.
+- `contracts?` — `RouteContract` rows (`id` =
+  `contract:<module>#<binding>`), one per statically resolved `inputSchema`
+  declaration. Routes that import the same binding share one contract
+  ([#593](https://github.com/ScriptedAlchemy/agent-bundle/issues/593)).
+- `digest` — sha256 over project-relative identity.
+- `diagnostics` — route-graph errors (`AB48xx` and `AB494x`; `AB4838` /
+  `AB4839` when a schema import cannot be followed).
+
+Each `CompiledAgentRoute` carries `id`, `kind`, `source`, conventional
+`provenance`, a statically extracted `config` (or `emptyRouteConfig`), an
+optional bounded `inputSchema`, optional `contract` (the shared
+`RouteContract` id), and, for MCP routes, `serverId`. Event routes also
+carry `event` (`CanonicalAgentEvent` from `routes/public.ts`).
+
+Skills, commands, rules, hooks declared in config, handwritten MCP entries,
+and native host hook documents are **not** in this graph. They stay on
+`DiscoveredProject` / `NormalizedPlugin` beside it.
+
+### What normalization hands forward
+
+`config/normalize.ts` consumes `DiscoveredProject` plus the loaded config and
+emits a `NormalizedPlugin` (`core/types.ts`). That is the object every later
+planner reads. It does **not** retain the `CompiledRouteGraph`;
+`PreparedProject` (`dev/project-service.ts`) carries `model` and
+`routeGraph` as sibling fields. The plugin holds:
+
+- identity (`metadata`) and the selected `targets` (`NormalizedTarget[]`,
+  sorted unique names);
+- `skills`, `commands`, `rules`, `hooks`, `nativeHooks`, `mcpServers`,
+  `mcpApps`, `scripts`, `assets`, `payloads`;
+- `providers` and `layouts` copied off the route graph;
+- `runtime.node` (the generated-executable floor);
+- optional `state`, `notices`, `packageBuild`, `marketplace`, host
+  extensions.
+
+Config-declared hooks and `src/events/**` routes both land in
+`NormalizedPlugin.hooks`. The event-route branch sets `eventRoute` and an
+id such as `hook:event-route:tool-before` (`/` in the canonical event
+replaced by `-`); the config branch does not.
+Native host hook documents (Claude `hooks/hooks.json` sources, and so on)
+are a third collection, `nativeHooks`.
+
+`config/validate.ts` runs against the same discovered project. It does not
+rediscover files; it judges what discovery already found.
+
+### What the next layer receives
+
+Adapters and `build/compose.ts` receive the whole `NormalizedPlugin`. They
+do not call `compileRouteGraph` again. Shared compile stages
+(`build/entries.ts`, `build/cli-bins.ts`, `build/mcp-apps.ts`) also read
+that model: generated MCP entries, routed CLI bins, scripts, and Apps are
+planned from it once, then attributed to the composite identity.
+
+## Projection layer
+
+A **projection** is one host's representation of the same
+`NormalizedPlugin`. The config key is still `targets`. After the composite
+root landed, that key selects which projections are planned into the one
+output directory — it does not name the artifact, the runtime, the
+distribution form, or the application.
+
+### Where targets enter
+
+1. `agent-bundle.config.ts` `targets`, or CLI `--target`. Omit both and
+   `adapters/registry.ts` admits only the default host, `portable`.
+2. `config/normalize.ts` stores the selected names on
+   `NormalizedPlugin.targets`.
+3. `build/compose.ts` `planComposite` calls
+   `sortedProjections(model.targets.map((t) => t.name))` and runs
+   `registry.get(name).plan(model)` **only** for those names.
+4. `plugin` is not a target. `targets: ['plugin']` and `--target plugin`
+   are `AB4100`.
+5. `inspect --target` is a **display filter** on `api.ts` `inspect()`: it
+   keeps only that name in the printed `plans` (unknown name is `AB7004`).
+   It does not change `selectedTargets` or the composite identity.
+   `inspect --bundler` still composes the full selection.
+
+`adapters/composite-layout.ts` owns the selection helpers:
+`sortedProjections`, `projectionIdentity` (sorted names joined by `+`, for
+example `claude+codex`), `hookWrapperPath`, and
+`folderDiscoveryShadowed`.
+
+Declaration-level `targets` on a command, rule, hook, or script still
+mean "this component reaches these hosts." A component is included when that
+set intersects the selection. A command or rule scoped to a subset of the
+selected hosts but sitting in a directory another selected host discovers
+conventionally is `AB4105`. Skills always ship to every selected host
+(`skill.targets` is the selection); a per-host Skill frontmatter extension
+that changes bytes is `AB4103`.
+
+### Who plans a projection
+
+Each built-in adapter implements `TargetAdapter.plan(model)` and returns a
+`TargetArtifactPlan` (`adapters/types.ts`): `entries` (`write` or `copy`),
+optional `hookEntries`, and `diagnostics`.
+
+| Host | Planner | Capability table |
+| --- | --- | --- |
+| `claude` | `planClaudeArtifacts` in `adapters/claude.ts` | `adapters/capabilities/claude-2.1.260.json` |
+| `codex` | `planCodexArtifacts` in `adapters/codex.ts` | `adapters/capabilities/codex-0.147.0.json` |
+| `cursor` | `planCursorArtifacts` in `adapters/cursor.ts` | `adapters/capabilities/cursor-2026-08-28.json` |
+| `portable` | `portableAdapter.plan` in `adapters/portable.ts` | `adapters/capabilities/portable-1.0.0.json` |
+
+The capability JSON files are the host evidence the registry and the
+generated [Hosts](../../reference/hosts.md) page read: observed versions,
+manifest paths, install surfaces, path tokens, MCP transports, and
+component support. Adapters consult them for what a host can express;
+`compose.ts` consults `registry.hostsComponent` and
+`registry.artifactLayout` when judging `AB4105`, and
+`registry.noticeDelivery` when intersecting notice-delivery advertisements
+across the selection. The shared MCP entries and every host's hook wrappers
+are wired from that intersection so they advertise the same routes.
+
+`TargetRegistry` (`adapters/registry.ts`) is the only place adapters are
+registered. `createDefaultRegistry` registers `portable` as the default,
+then `codex`, `claude`, and `cursor`. There is no `plugin` adapter.
+
+### What compose hands to artifact assembly
+
+`composeProjections` (`build/compose.ts`) merges the selected plans:
+
+- Byte-identical entries at one path are kept once. Different bytes at one
+  path are `AB4103` (projections compared in host-name order, paths in path
+  order).
+- `install/surface.ts` `installSurfaceEntries` is merged as a synthetic
+  owner (`INSTALL.md` for any built-in host; `install.mjs` when `cursor` or
+  `portable` is selected).
+- Hook entries are concatenated; they are not merged by path. A hook that
+  reaches more than one selected host compiles one wrapper per host
+  (`hooks/<name>.<host>.mjs`); a single-host hook keeps `hooks/<name>.mjs`
+  (`hookWrapperPath`).
+- Codex and Cursor hook/MCP documents live beside their manifests
+  (`.codex-plugin/hooks.json`, `.cursor-plugin/mcp.json`, …). When another
+  selected host claims the conventional `hooks/hooks.json` / `.mcp.json` /
+  `mcp.json` path, those projections emit an empty shield document so folder
+  discovery cannot load the other host's file.
+
+The `CompositePlan` the build stages carries `entries`, `hookEntries`,
+`selected`, `identity`, `projections` (one planned host each), `cliBin`
+(true when any selected host admits the routed CLI), and
+`noticeDelivery`. `AB4106` is judged earlier, on the model, in
+`config/validate.ts`: a selection that mixes an advanced-registry adapter
+with any other target cannot share one root.
+
+Compiled MCP entries, scripts, routed CLI bins, and MCP Apps are **not**
+re-planned per host. `build/build.ts` compiles them once with
+`target: composite.identity` and writes them at the root.
+
+## Artifact layer
+
+Artifact assembly consumes the `CompositePlan` plus the compiled surfaces
+and writes one tree at `artifactRoot` (CLI default `artifact/`;
+`output.distPath` or `--output` moves it).
+
+### Writers
+
+| Writer | Module | What it writes |
+| --- | --- | --- |
+| Plan entries | `build/emit.ts` `emitPlanEntries` | Host documents, skills, commands, rules, assets, `INSTALL.md` / `install.mjs` |
+| Scripts, hooks, MCP entries, CLI bins | `build/rslib.ts` `compileRslibSurfaces` via `build/entries.ts`, `build/cli-bins.ts` | `scripts/*.mjs`, `hooks/*.mjs`, `mcp/mcp-<server>-<hash>.mjs`, `bin/<plugin>.mjs` (+ `-flight.mjs` workers) |
+| MCP Apps | `build/mcp-apps.ts` `compileMcpApps` | `mcp-apps/<name>.html` (inlined into the generated server as well) |
+| Hook index | `build/emit.ts` `writeHookIndex` | `agent-bundle.hooks.json` over the selected hosts |
+| Manifest | `build/build.ts` `manifestFor` + `build/emit.ts` `writeManifest` | `agent-bundle.manifest.json` |
+| Publish | `build/emit.ts` `publishArtifact` | Atomic rename of the stage directory onto `outputRoot` |
+
+`build/compile-stages.ts` orders the work: MCP Apps first (the MCP entries
+embed their HTML), then the node surfaces.
+
+### Validators
+
+| Check | Module | Code |
+| --- | --- | --- |
+| Canonical manifest parse + file digest match | `build/validate-artifact.ts` | `AB60xx` family; parse errors throw from `parseArtifactManifest` |
+| Host-pack and package-build `dist` modules import only relative/`file:` specifiers or Node built-ins | `build/validate-artifact-modules.ts` | `AB6005` |
+| Skills / hooks / MCP documents match the selected hosts | `build/validate-artifact-skills.ts`, `build/validate-artifact-hooks.ts`, `build/validate-artifact-mcp.ts` | per-surface `AB60xx` |
+| Artifact ownership of the output root | `build/validate-artifact.ts` | `AB6014` |
+| Packed tarball contains every manifest file and no unused install deps | `build/pack-inventory.ts` | `AB7010`, `AB7014`, `AB7015` |
+
+`AB6005` walks every emitted JavaScript module: host-pack `.mjs` rows in
+`manifest.files`, and the package build's `dist` bundles (`dist/bin/*.js`,
+Flight workers, the `lib` entry) before `dist` is published. A bare package
+specifier fails; only Node built-ins (`node:module.isBuiltin`) may stay
+external.
+Prebuilt payloads (`kind: 'prebuilt'`) are hash-locked only and are not
+walked. That is the same self-containment rule the generated-plugin
+compiler profile enforces (`build/rslib.ts` `composeEntryLibConfig`:
+`autoExternal: false`, `bundle: true`, no author-facing `externals`).
+
+`AB7014` / `AB7015` are the prepack gate: a `package.json` install-time
+dependency must appear in packed JavaScript, declarations, `imports`, or a
+consumer install script (`AB7014`), and a consumer's npm must be able to
+fetch it (`AB7015`).
+
+### Composite root
+
+Built with `targets: ['claude', 'codex', 'cursor', 'portable']`, the
+host-test example's root is:
+
+```text
+artifact/
+├── .agents/plugins/marketplace.json
+├── .claude-plugin/{plugin.json,marketplace.json}
+├── .codex-plugin/{plugin.json,hooks.json,mcp.json}
+├── .cursor-plugin/{plugin.json,marketplace.json,hooks.json,mcp.json}
+├── .mcp.json
+├── plugin.json, mcp.json
+├── hooks/hooks.json
+├── hooks/<hook>.mjs
+├── hooks/<hook>.{claude,codex,cursor}.mjs
+├── hooks/hooks-flight.mjs
+├── mcp/mcp-<server>-<hash>.mjs (+ -flight)
+├── bin/<plugin>.mjs, bin/<plugin>-flight.mjs
+├── skills/, scripts/, commands/, rules/, assets/, mcp-apps/
+├── INSTALL.md, install.mjs
+├── agent-bundle.manifest.json
+└── agent-bundle.hooks.json
+```
+
+[Targets and artifacts](../../reference/targets-artifacts.mdx) is the
+output contract: which host reads which document, the hook-wrapper naming
+rule, and `AB4103` / `AB4105` / `AB4106`. This page does not repeat that
+table.
+
+## Execution kernel and the Agent Document
+
+The compiler pipeline above stops at files on disk. Request time is a
+separate stack. The request kernel that **does** exist is
+`runAgentRequest` (`packages/rsc-runtime/src/agent-request.ts`, imported as
+`@agent-bundle/runtime`). Generated MCP routes, event routes, and rendered
+CLI commands call it. Config-declared hooks **bypass** it: generated
+wrappers decode the host envelope and invoke the author's function
+directly, with no providers, layout, or Agent Document. Native hook
+documents are host JSON that adapters validate and merge; they are not
+compiled wrappers and do not enter the kernel.
+
+| Surface | Entry | Request path |
+| --- | --- | --- |
+| Generated MCP stdio | `mcp-entry.ts` (lifecycle only: stdout guard, signals, shutdown) then the generated entry from `build/entry-shell.ts` | `mcp-server-runtime.ts` registers routes, runs `runAgentRequest`, renders through a warm Flight worker, and lowers tool results with `attachMcpStructuredContent` |
+| Event routes | the same generated MCP server (`createEventRuntimeServer` in `events/ipc.ts`) | `events/project.ts` canonicalizes the host envelope and projects the document (`projectEventDocument`) through `runAgentRequest` |
+| Config-declared hooks | generated `hooks/<name>.mjs` from `adapters/hook-contract.ts` | host-native codec in the wrapper; **does not** call `runAgentRequest` |
+| Native hook documents | adapter-declared host JSON (`nativeHooks`) | validated and merged into the host hook document; no wrapper, no kernel |
+| Routed CLI | `cli-entry.ts` `runGeneratedCliEntry` | command tree from the route graph; rendered `.tsx` commands use `runAgentRequest`. CLI document types live in `cli-entry.ts` and do not import `@agent-bundle/runtime` |
+| Browser Apps | host `ui/*` bridge (Workbench `McpAppFrameRelay`, `serve-app` `HOST_SCRIPT`) | the App is a view over a tool result, not a second route graph |
+
+`mcp-entry.ts` is the stdio process shell. It does not construct request
+context. `mcp-server-runtime.ts` does: identity, lineage, providers,
+`runAgentRequest`, layout (for document routes), and the MCP projection.
+
+The **Agent Document** is the canonical rendered-route response. The type
+lives in `packages/rsc-runtime/src/agent-document.ts` and is imported as
+`@agent-bundle/runtime`:
+
+- `version` (currently `1`)
+- `status`: `success` \| `represented-error` \| `failed`
+- `root`: a tree of `Agent.*` nodes (`result`, `text`, `markdown`,
+  `context`, `json`, `progress`, `image`, `audio`, `resource`, `error`)
+- optional `value` (JSON-serializable structured result)
+
+MCP tool routes lower that document to `CallToolResult` content plus
+`structuredContent`. Resource and prompt routes return their validated
+protocol result from `document.value`. CLI human/JSON modes render the same
+document through the CLI output contract. The Workbench inspects it via
+`packages/workbench/src/runtime/agent-document-client.ts`. Raw
+`CallToolResult` is an interop boundary, not the authoring model.
+
+Context values are `Observed<T>` (`@agent-bundle/runtime`): `state` is
+`available` (with `source` `native` | `receipt` | `derived`) or
+`unavailable` (with a `reason`). The kernel does not invent a host or
+session identity the host did not supply.
+
+## `agent-bundle.manifest.json` today
+
+The writer is `build/build.ts` `manifestFor`. It assembles an
+`ArtifactManifest` (`build/manifest.ts`; TypeDoc:
+[`ArtifactManifest`](../../api/interfaces/index.ArtifactManifest.md)) and
+`writeManifest` serializes it with `assembleArtifactManifest`: canonical
+`stableJson` plus a trailing newline. `parseArtifactManifest` rejects any other byte sequence, duplicate
+keys, unknown keys, missing keys, unsorted arrays, and a file entry that
+names the manifest itself.
+
+The schema is **closed in TypeScript**, not shipped as JSON Schema.
+`requireExactKeys` in `build/manifest.ts` is the authority. Host
+`plugin.json` / `hooks.json` / `mcp.json` schemas under
+`adapters/schemas/**` and Agent Skills frontmatter under `schemas/**` are a
+different contract; the website [Hosts](../../reference/hosts.md) /
+[Events](../../reference/events.md) pages are generated from
+`adapters/capabilities/*.json` and `docs/diagnostics.md`, not from this
+manifest. Step 3 of #592 (authoritative manifest) is the follow-up that
+would give this file a richer, machine-readable schema.
+
+### Fields the writer emits
+
+| Field | Shape | Source |
+| --- | --- | --- |
+| `producer` | `{ name: 'agent-bundle', version }` | `packages/agent-bundle/package.json` `version` |
+| `project` | `configPath`, `configDigest`, `modelDigest`, `revision`, `sourceInputs[]`, optional `packageName` / `packageVersion` | `ProjectContext` from the build (`configDigest` must equal the `sourceInputs` hash of `configPath`; `revision` is `digest({ inputs: sourceInputs })`) |
+| `files[]` | `path`, `bytes`, `sha256`, `kind` (`bundle` \| `copy` \| `generated` \| `prebuilt`), optional `mode`, `sourceInputs[]` | `createArtifactManifestFiles` over the staged tree + output provenance. The manifest path itself is omitted. Sorted by `path`. |
+| `runtime` | `{ node }` | `NormalizedPlugin.runtime` (canonical `major.minor.patch`, must satisfy the generated-runtime floor) |
+| `targets[]` | `name`, `adapterRevision`, `observedVersion`, `schemas[]` (`name`, `revision`, `sha256`) | `registry.metadata(name)` for each selected projection, sorted by `name` |
+| `agentSkills` | `specification`, `sourceRevision`, `schemaSha256` | `schemas/agent-skills/contract.ts` `agentSkillsSchemaRevision` |
+| `validation` | `{ artifact, source, targets[] }` each `{ status: 'passed' }` (target rows also have `name`) | written only after a successful build; `validation.targets` names must equal `targets` |
+
+`project.sourceInputs[]` rows are `{ path, sha256, executable? }`.
+`files[].sourceInputs` are path strings that must already appear on
+`project.sourceInputs`.
+
+There is no `routes`, `servers`, `apps`, `hooks`, `bins`, or `web` section.
+A file that is a compiled MCP entry or a CLI bin appears only as a row in
+`files[]`.
+
+### Who reads each field
+
+Production readers call `parseArtifactManifest` or take an already-parsed
+`ArtifactManifest`. Tests are omitted.
+
+| Reader | Fields used | Purpose |
+| --- | --- | --- |
+| `build/validate-artifact.ts` | all of them | Re-parse the on-disk bytes, match `files[]` digests and modes, check `targets[]` against the registry, pin `agentSkills` and `runtime.node` |
+| `build/validate-artifact-modules.ts` | `files[]` (`.mjs` rows) plus package-build `dist` | `AB6005` import graph |
+| `build/validate-artifact-skills.ts` | `targets[]` (`manifestTargets`) plus the tree | Skill documents vs selected hosts |
+| `build/validate-artifact-hooks.ts` | `targets[]`, hook files | Hook documents vs selected hosts |
+| `build/validate-artifact-mcp.ts` | `targets[]`, MCP files | MCP documents vs selected hosts |
+| `build/pack-inventory.ts` | `files[]`, `targets[]`, `project.packageVersion` | Packed tarball must contain every manifest file; install-surface requirements derived from selected names (`AB7010`); digest drift; release-version agreement; `AB7014` / `AB7015` |
+| `eval/artifact.ts` | `files[]`, `targets[]`, `runtime` | `evalTargetDigests`: one digest per selected host over the **whole** file table (same bytes, distinct identity) |
+| `dev/artifacts/artifact-inspection-service.ts` | `files[]`, `project`, `targets[]` | Workbench artifact inspector: rebuilds one tree from `files[]` and labels it once per selected host |
+| `dev/artifacts/artifact-script-catalog.ts` | `files[]`, `targets[]` | Browser-selectable scripts. Each selected host that lays out `scripts/` gets a catalog row pointing at the **same** root file |
+| `index.ts` | re-exports the types and `parse` / `serialize` / `assemble` | Public API |
+
+`install/install.ts` and `install/doctor.ts` **do not** read
+`agent-bundle.manifest.json`. `resolveBundleRoot` looks for the Claude,
+Codex, or Cursor plugin manifest (`.claude-plugin/plugin.json`,
+`.codex-plugin/plugin.json`, `.cursor-plugin/plugin.json`) directly under
+`--from`. Identity comes from that host document; Claude and Codex also
+read the marketplace name from `.claude-plugin/marketplace.json` or
+`.agents/plugins/marketplace.json`. There is no portable `install` /
+`doctor` host. Missing projection is `AB7001`.
+
+### Step 3 gap list
+
+[#592](https://github.com/ScriptedAlchemy/agent-bundle/issues/592) step 3
+makes this file the compiled application database. Today the following is
+inferred by re-reading source, re-probing the tree, or consulting the
+in-memory `NormalizedPlugin` — none of it is in the manifest:
+
+1. **Route graph.** Servers, tools, resources, prompts, Apps, CLI commands,
+   event routes, providers, and layouts exist on `CompiledRouteGraph`
+   (`PreparedProject.routeGraph`) and as copied collections on
+   `NormalizedPlugin`. Workbench route pages and `inspect` rebuild or
+   retain that graph from the project, not from the artifact.
+2. **MCP / CLI / App inventory.** `files[]` lists `mcp/*.mjs` and
+   `bin/*.mjs` as opaque paths. There is no `servers[]` with ids,
+   `resourceUri`, opening tools, or env. `serve-app` still resolves Apps
+   from the live server and the project/epoch, not from the manifest.
+   `dev/epoch-store.ts` and `serve-app` do not parse
+   `agent-bundle.manifest.json`
+   ([#564](https://github.com/ScriptedAlchemy/agent-bundle/issues/564)
+   proposes a `web` section).
+3. **Hook semantics.** `agent-bundle.hooks.json` indexes wrappers; the
+   artifact manifest does not. Config-declared vs event-route vs native
+   origin is not recorded.
+4. **Install / doctor.** Claude, Codex, and Cursor identity is read from
+   that host's `plugin.json`. Claude/Codex marketplace names come from the
+   corresponding marketplace document. Selected-projection membership is
+   "does this host's manifest path exist," not `manifest.targets`. Portable
+   is not an `install` / `doctor` host.
+5. **Capability view.** `targets[].schemas` pins host document schemas.
+   Required capabilities, notice-delivery intersection, and omitted
+   features are not in the manifest (`inspect` `omittedFeatures` comes from
+   the model).
+6. **Executables as first-class rows.** Mode bits on `files[]` mark
+   executables. There is no `bins[]` / `mcpEntries[]` with the composite
+   identity, allowed event targets, or launch env.
+7. **Distribution metadata.** Git / npm / local source entries live in host
+   marketplace documents when adapters emit them, not in this file.
+
+## Where the code diverges today
+
+#592 names the splits this page must not paper over. Paths only; no fixes.
+
+**Discovery is not one graph.** `compileRouteGraph` covers executable
+routes. Skills, commands, rules, config hooks, native hooks, and
+handwritten MCP entries are parallel collections on `DiscoveredProject` /
+`NormalizedPlugin`. A later consumer that needs "every surface" still walks
+several fields.
+
+**Four planners, one merge.** `planClaudeArtifacts`, `planCodexArtifacts`,
+`planCursorArtifacts`, and `portableAdapter.plan` each walk the whole
+model and emit host documents. `compose.ts` merges bytes; it does not
+replace those planners with a single `project(application, capabilities)`
+function.
+
+**Three hook systems.** Config-declared `hooks.<event>.handler`
+(`config/normalize.ts` `normalizeHooks`), conventional `src/events/**`
+event routes (same function, `eventRoute` set), and `nativeHooks` from
+adapter-declared documents. Generated wrappers (`adapters/hook-contract.ts`)
+are per-host source templates. High-frequency shell hooks that cannot pay
+the rendered event-route startup cost stay on the config handler path
+([#595](https://github.com/ScriptedAlchemy/agent-bundle/issues/595)).
+
+**Duplicate MCP / CLI route modules.** Automatic MCP-to-CLI projection
+exists (`routes/cli-commands.ts` `compileMcpCliCommands`), but a mature CLI
+still authors a second module under `src/cli/**` when it needs its own
+command path, positionals, or flag names
+([#596](https://github.com/ScriptedAlchemy/agent-bundle/issues/596)).
+Local `inputSchema` imports now resolve into one `RouteContract`
+([#593](https://github.com/ScriptedAlchemy/agent-bundle/issues/593)
+landed): an unresolvable chain is `AB4838`, a cycle is `AB4839`, and a
+grammar error inside a resolved schema stays `AB4814`.
+
+**Browser bridge is forked.** Workbench
+`packages/workbench/src/mcp/mcp-app-frame.tsx` `McpAppFrameRelay` and
+`serve-app/serve-app-page.ts` `HOST_SCRIPT` implement the same relay.
+Apps that need a typed client still hand-write `postMessage`
+([#594](https://github.com/ScriptedAlchemy/agent-bundle/issues/594),
+[#564](https://github.com/ScriptedAlchemy/agent-bundle/issues/564)).
+
+**Filesystem probing next to the manifest.** `install` / `doctor`
+`resolveBundleRoot` probes the Claude, Codex, or Cursor `plugin.json`. Eval and the Workbench
+inspector parse the artifact manifest for integrity, then still derive
+scripts and host trees from path prefixes and
+`registry.artifactLayout`. `evalTargetDigests` hashes the whole root once
+per selected host rather than recording a per-projection view.
+
+**Per-target leftovers in shared surfaces.** Shared MCP / CLI / App
+compile uses `composite.identity`, but hook wrappers still bake one
+`target`. `artifact-script-catalog.ts` emits one catalog row per selected
+host for the same file. `artifact-inspection-service.ts` labels the same
+tree once per `manifest.targets[]` name. Notice delivery is the
+intersection of every selected host, applied to every shared MCP entry.
+
+**Capability selection is still host names.** Authors write
+`targets: ['claude', 'codex']` (or per-component `targets`) rather than
+`requires: ['hooks.preTool']`. The capability tables exist; the compiler
+does not yet resolve application requirements through them.
+
+## Roadmap
+
+[#592](https://github.com/ScriptedAlchemy/agent-bundle/issues/592) is the
+umbrella. This page is step 2 (document the boundaries). The
+implementation slices under it, each with its own issue:
+
+| Issue | Slice |
+| --- | --- |
+| [#555](https://github.com/ScriptedAlchemy/agent-bundle/issues/555) | Composite plugin root; `targets` as projection selection (Wave 1 landed as PR #578) |
+| [#593](https://github.com/ScriptedAlchemy/agent-bundle/issues/593) | Resolve local schema imports into one route contract (**landed**) |
+| [#596](https://github.com/ScriptedAlchemy/agent-bundle/issues/596) | One operation, idiomatic MCP + CLI projections |
+| [#595](https://github.com/ScriptedAlchemy/agent-bundle/issues/595) | Preflight / lazy providers on the event-route kernel |
+| [#594](https://github.com/ScriptedAlchemy/agent-bundle/issues/594) | Generated typed App client + shared bridge |
+| [#564](https://github.com/ScriptedAlchemy/agent-bundle/issues/564) | Production `web` surface on that same bridge |
+
+Step 3 is an authoritative `agent-bundle.manifest.json`. The gap list
+above is the input to that work. #592 stays open until the acceptance
+criteria on that issue land.
+
+## Next
+
+- [Project structure](../start/project-structure.mdx) — the `src/` roots
+  discovery walks.
+- [Configuration model](../authoring/index.mdx) — the config those roots
+  fill in.
+- [MCP servers and Apps](../authoring/mcp.mdx) and
+  [Hooks](../authoring/hooks.mdx) — the two executable surfaces most
+  authors meet first.
+- [Targets and artifacts](../../reference/targets-artifacts.mdx) — the
+  composite root and the shorter manifest field table.
+- [Shipping a bundle](../distribution/index.mdx) — how the root compiles
+  and what ships inside it.
+- [Artifact validation](../distribution/validation.mdx) — the checks that
+  re-read this manifest.

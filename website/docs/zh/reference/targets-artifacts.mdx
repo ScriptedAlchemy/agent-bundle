@@ -121,8 +121,9 @@ MCP 入口、脚本、路由式 CLI bin 与 MCP App 只编译**一次**，归属
 
 ## agent-bundle.manifest.json
 
-每个根目录输出一份清单，它是之后每一项完整性检查的输入 —— `validate --artifact`、`prepack`、
-`doctor --from`，以及 packed 与 installed-host 证明级别。
+每个根目录输出一份清单，它是之后完整性检查的输入 —— `validate --artifact`、`prepack`，
+以及 packed 与 installed-host 证明级别。`doctor --from` 与 `install --from` 通过 `--from`
+下的宿主 `plugin.json` 识别根目录；它们不解析这个文件。
 
 | 字段 | 内容 |
 | --- | --- |
@@ -162,6 +163,8 @@ target 行还记录 `adapterRevision`（单调递增，仓库自有）与 `obser
 
 ## 下一步
 
+- [编译器架构](../guide/concepts/architecture.mdx) —— 编译器的三层，以及哪些
+  生产读者消费清单的每个字段。
 - [产物校验](../guide/distribution/validation.mdx) —— 读取这份清单的那些检查。
 - [宿主安装](../guide/distribution/installation.mdx) —— 把根目录安装进各个宿主。
 - [运行时环境](./runtime-environment.mdx) —— 输出的可执行文件在运行时假定了什么。
