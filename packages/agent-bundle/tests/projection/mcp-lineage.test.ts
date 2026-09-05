@@ -1,6 +1,6 @@
 import { describe, expect, it } from '@rstest/core';
 import { createAgentLineageRegistry } from '@agent-bundle/runtime/lineage';
-import { openInMemoryMcpServer } from 'agent-bundle/test';
+import { openInMemoryMcpServer } from '../../src/test/mcp.ts';
 
 const root = 'session-root';
 const child = 'agent-child';
