@@ -788,7 +788,6 @@ it('shows projected MCP command provenance and safety in the routes inspect focu
 });
 
 it('dumps the graph through the CLI --routes focus and rejects ambiguous focuses', async () => {
-  Object.defineProperty(globalThis, '__AGENT_BUNDLE_VERSION__', { configurable: true, value: 'test' });
   const root = await createInspectProject({
     'src/mcp/curator/tools/inspect.ts': moduleSource,
   });

@@ -28,7 +28,7 @@ npx agent-bundle dev --root . --port 3100 --no-open
 | Overview | 项目标识、规范化模型与诊断。 |
 | Skills | 每个 Skill 文档，包括各宿主降级后的输出。 |
 | Artifacts | 复合插件根目录——无论聚焦哪个选中宿主，都是同一棵树——以及 provenance 与 epoch 对比。 |
-| MCP | 绑定到产物的 playground，带原始协议轨迹。 |
+| MCP | 绑定到产物的 playground，带原始协议轨迹、MCP App 预览，以及独立 MCP Inspector 的启动器。 |
 | Hooks | 运行输出的钩子包装层的 playground。 |
 | Playground | 可重放、可导出的持久有序轨迹。 |
 | Evals | eval 运行与运行对比。 |
@@ -43,6 +43,27 @@ epoch。这正是协议轨迹有意义的原因：其中每一帧都来自同一
 - 要使用新发布的 epoch，请打开一个**新**会话。
 - 兼容的 MCP App 通过同一个已绑定会话预览。同一套宿主栈也能通过 `agent-bundle serve-app` 在一个普通
   浏览器标签页里独立提供某个 App；见[独立提供 App](../authoring/mcp.mdx#独立提供-app)。
+
+## 独立的 MCP Inspector
+
+[MCP Inspector](https://github.com/modelcontextprotocol/inspector) 是一个独立的 localhost 应用，拥有自己
+的 token URL。Workbench 绝不会把它内嵌进来；MCP 页面的 **MCP Inspector** 区块按需启动它，然后交给你一个
+链接。
+
+- **Open MCP Inspector** 会请求开发服务器在项目根目录运行 `npx --yes @modelcontextprotocol/inspector`，
+  并设置 `MCP_AUTO_OPEN_ENABLED=false`，使 Inspector 不会自行打开窗口。首次启动会下载该包，最多可能需要
+  30 秒。浏览器绝不选择命令、参数、工作目录或环境。
+- 一旦 Inspector 打印出带 token 的 localhost URL，开发服务器就把它返回给页面，页面随即渲染
+  **Open MCP Inspector in a new tab**。该链接以 `rel="noopener noreferrer"` 在新标签页中打开。如果页面
+  加载时 Inspector 已经在运行，链接会立即出现。
+- 对于 `streamable-http` 会话，该链接是一条 Inspector 2.x 深度链接：`serverUrl` 是该会话的服务器 URL
+  （凭据与查询参数已被剥离），`transport=http`，而 `autoConnect` 携带 Inspector 自己的 token，因此
+  Inspector 会在加载时连接到该服务器。
+- Inspector 2.x 不再接受 URL 中的命令——上游移除了 `serverCommand` 与 `serverArgs`——因此 `stdio` 会话
+  无法被深度链接。请改为在 Inspector 内部添加命令；**Download Inspector config** 会导出所选会话解析后的
+  命令、参数与非机密环境，正是为此而设。
+- 失败会内联显示在页面上：Inspector 无法启动、在发布 URL 之前退出，或未在 30 秒启动预算内发布 URL 时为
+  `AB8112`；Inspector 路由不可用时为 `AB8113`。
 
 ## Playground 拥有自己的轨迹
 

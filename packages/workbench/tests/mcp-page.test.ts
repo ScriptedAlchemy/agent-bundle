@@ -10,6 +10,7 @@ import {
   type McpBrowserSessionModel,
 } from '../src/mcp/mcp-session-model.ts';
 import type { McpAppPreviewClient, McpAppRuntimePreviewProps } from '../src/mcp/mcp-app-preview.tsx';
+import type { McpInspectorLaunchModel } from '../src/mcp/mcp-inspector-launch-model.ts';
 import {
   createMcpSessionController,
   type McpSessionControllerClient,
@@ -33,6 +34,7 @@ import {
   supportedMcpAppPreviewProfiles,
   type McpPageArtifactProps,
   type McpPageController,
+  type McpPageInspectorLaunch,
   type McpPageRuntimeProps,
 } from '../src/mcp/mcp-page.tsx';
 import * as mcpPage from '../src/mcp/mcp-page.tsx';
@@ -1103,5 +1105,132 @@ describe('MCP page', () => {
     expect(actions.pending).toEqual(['open']);
     expect(actions.isCurrent(replacementOpen)).toBe(true);
     expect(mcpPageSessionControls('idle', actions.pending, false)).toMatchObject({ close: true, open: false });
+  });
+});
+
+describe('MCP page inspector launch', () => {
+  const inspectorUrl = 'http://127.0.0.1:6274/?MCP_INSPECTOR_API_TOKEN=tok-123';
+  const launchButton = '>Open MCP Inspector</button>';
+  const linkText = 'Open MCP Inspector in a new tab</a>';
+
+  const inspectorLaunchFor = (inspectorModel: McpInspectorLaunchModel): McpPageInspectorLaunch => ({
+    launch: async () => undefined,
+    model: inspectorModel,
+    refresh: async () => undefined,
+    subscribe: (listener) => {
+      listener(inspectorModel);
+      return () => undefined;
+    },
+  });
+
+  const inspectorMarkup = (inspectorModel: McpInspectorLaunchModel, session: McpBrowserSessionModel = model): string => renderToStaticMarkup(createElement(McpPage, {
+    controller: { ...controller(), model: session },
+    epochOptions: ['epoch-1'],
+    inspectorLaunch: inspectorLaunchFor(inspectorModel),
+    onDownloadConfig: () => undefined,
+    targetOptions: ['codex'],
+  }));
+
+  const inspectorLink = (markup: string): string => {
+    const anchor = /<a [^>]*class="mcp-page-inspector-link"[^>]*>/u.exec(markup);
+    if (anchor === null) throw new Error('Expected an Inspector link.');
+    return anchor[0];
+  };
+
+  // Static markup escapes `&` inside attributes; undo it to parse the href as a URL.
+  const inspectorHref = (anchor: string): string => {
+    const href = /href="([^"]*)"/u.exec(anchor);
+    if (href === null) throw new Error('Expected an Inspector link href.');
+    return href[1]!.replaceAll('&amp;', '&');
+  };
+
+  it('offers a launch button while idle without a link, status line, or inspector error', () => {
+    const markup = inspectorMarkup({ phase: 'idle' });
+
+    expect(markup).toContain('<h2 id="mcp-config-heading">MCP Inspector</h2>');
+    expect(markup).toContain('aria-label="Inspector actions"');
+    expect(markup).toContain('never embedded here');
+    expect(markup).toContain(launchButton);
+    expect(markup).toContain('Download Inspector config');
+    expect(markup).not.toContain(linkText);
+    expect(markup).not.toContain('mcp-page-inspector-link');
+    expect(markup).not.toContain('mcp-page-inspector-status');
+    expect(markup).not.toContain('mcp-page-inspector-error');
+  });
+
+  it('disables the control and explains the startup budget while starting', () => {
+    const markup = inspectorMarkup({ phase: 'starting' });
+
+    expect(markup).toContain('<button disabled="" type="button">Starting MCP Inspector…</button>');
+    expect(markup).toContain('<p class="mcp-page-inspector-status" role="status">Starting the MCP Inspector.');
+    expect(markup).toContain('can take up to 30 seconds');
+    expect(markup).not.toContain(launchButton);
+    expect(markup).not.toContain(linkText);
+    expect(markup).not.toContain('mcp-page-inspector-error');
+  });
+
+  it('renders a new-tab link to the tokenized Inspector URL without leaking the stdio launch', () => {
+    const markup = inspectorMarkup({ phase: 'ready', url: inspectorUrl });
+    const anchor = inspectorLink(markup);
+
+    expect(anchor).toContain(`href="${inspectorUrl}"`);
+    expect(anchor).toContain('target="_blank"');
+    expect(anchor).toContain('rel="noopener noreferrer"');
+    expect(inspectorHref(anchor)).toBe(inspectorUrl);
+    expect(markup).toContain(linkText);
+    expect(markup).toContain('does not start a stdio server from a link');
+    expect(markup).not.toContain('serverUrl');
+    expect(markup).not.toContain('autoConnect');
+    expect(markup).not.toContain(launchButton);
+    expect(markup).not.toContain('mcp-page-inspector-error');
+    expect(markup).toContain('Download Inspector config');
+  });
+
+  it('deep-links a streamable HTTP session into the Inspector', () => {
+    const serverUrl = 'http://127.0.0.1:3100/mcp/host/weather';
+    const session = reducedModelForConfig({ launch: { kind: 'streamable-http', url: serverUrl }, origin: 'artifact' });
+    const markup = inspectorMarkup({ phase: 'ready', url: inspectorUrl }, session);
+    const anchor = inspectorLink(markup);
+    const href = new URL(inspectorHref(anchor));
+
+    expect(anchor).toContain('&amp;serverUrl=');
+    expect(anchor).toContain('&amp;transport=http');
+    expect(anchor).toContain('&amp;autoConnect=tok-123');
+    expect(anchor).toContain('target="_blank"');
+    expect(anchor).toContain('rel="noopener noreferrer"');
+    expect(href.origin).toBe('http://127.0.0.1:6274');
+    expect([...href.searchParams.keys()].sort()).toEqual(['MCP_INSPECTOR_API_TOKEN', 'autoConnect', 'serverUrl', 'transport']);
+    expect(href.searchParams.get('MCP_INSPECTOR_API_TOKEN')).toBe('tok-123');
+    expect(href.searchParams.get('serverUrl')).toBe(serverUrl);
+    expect(href.searchParams.get('transport')).toBe('http');
+    expect(href.searchParams.get('autoConnect')).toBe('tok-123');
+    expect(markup).toContain(`The link pre-connects the Inspector to <code>${serverUrl}</code>.`);
+    expect(markup).not.toContain('does not start a stdio server from a link');
+  });
+
+  it('surfaces a launch failure inline and keeps the launch button available', () => {
+    const markup = inspectorMarkup({ diagnostic: { code: 'AB8112', message: 'MCP Inspector could not be launched.' }, phase: 'error' });
+
+    expect(markup).toContain('<p class="mcp-page-inspector-error" role="alert"><strong>AB8112</strong> MCP Inspector could not be launched.</p>');
+    expect(markup).toContain(launchButton);
+    expect(markup).not.toContain(linkText);
+    expect(markup).not.toContain('mcp-page-inspector-link');
+    expect(markup).not.toContain('mcp-page-inspector-status');
+  });
+
+  it('renders only the config export when no launcher is provided', () => {
+    const markup = renderToStaticMarkup(createElement(McpPage, {
+      controller: controller(),
+      epochOptions: ['epoch-1'],
+      onDownloadConfig: () => undefined,
+      targetOptions: ['codex'],
+    }));
+
+    expect(markup).toContain('<h2 id="mcp-config-heading">MCP Inspector</h2>');
+    expect(markup).toContain('Download Inspector config');
+    expect(markup).not.toContain('Open MCP Inspector');
+    expect(markup).not.toContain('mcp-page-inspector-link');
+    expect(markup).not.toContain('mcp-page-inspector-status');
+    expect(markup).not.toContain('mcp-page-inspector-error');
   });
 });

@@ -87,7 +87,12 @@ because they change no publishable package.
 
 - `agent-bundle` and `@agent-bundle/runtime` version **independently**
   (`fixed` and `linked` are empty). `agent-bundle` declares
-  `@agent-bundle/runtime` as an *optional* peer with range `*`, and
+  `@agent-bundle/runtime` as an *optional* peer with range `>=0.0.0 <1`: the
+  lower bound is the first runtime version that ships every subpath the
+  generated code imports (`mount`, `notices`, `notices/inbox-route`, `state`,
+  `state/sqlite`, `flight/server`, `lineage`), so a changeset that adds a
+  runtime subpath the compiler emits must also raise that bound; the upper
+  bound keeps a future `1.x` runtime from satisfying a `0.x` compiler.
   `@agent-bundle/runtime` does not depend on `agent-bundle`, so neither
   package needs to move when the other does. Preview tarballs pin the peer to
   the same commit (`docs/preview-packages.md`), which is a preview concern,

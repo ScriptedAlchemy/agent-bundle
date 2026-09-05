@@ -1433,8 +1433,6 @@ it('rejects a Cursor plugin name that could escape the local install root', asyn
 it('dispatches the public CLI install command to the native installer', async () => {
   const terminal = captureCliTerminal();
   const calls: unknown[] = [];
-  Object.defineProperty(globalThis, '__AGENT_BUNDLE_VERSION__', { configurable: true, value: 'test' });
-
   const code = await runCli(
     ['install', 'claude', '--from', '/tmp/example bundle', '--scope', 'project', '--force', '--json'],
     terminal.output,
@@ -1754,7 +1752,6 @@ it('rejects an install mode for hosts other than Cursor', async () => {
 
 it('passes --mode through the public CLI and prints the staged next steps', async () => {
   const calls: unknown[] = [];
-  Object.defineProperty(globalThis, '__AGENT_BUNDLE_VERSION__', { configurable: true, value: 'test' });
   const dependencies = {
     installBundle: async (options: unknown) => {
       calls.push(options);
