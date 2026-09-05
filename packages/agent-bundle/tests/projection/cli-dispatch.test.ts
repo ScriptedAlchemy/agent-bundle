@@ -95,6 +95,90 @@ describe('the CLI dispatch level', () => {
     expect(inputs).toEqual([{ yes: 'affirmative' }]);
   });
 
+  it('passes a non-confirming projection boolean --yes through as tool input', async () => {
+    const command: CompiledCliCommand = {
+      aliases: [],
+      exitCode: 'zero',
+      mcp: { confirm: false, server: 'harness', tool: 'submit' },
+      options: [{
+        key: 'yes',
+        kind: 'boolean',
+        option: 'yes',
+        repeated: false,
+        required: false,
+      }],
+      path: ['submit'],
+      projection: {
+        mapInput: false,
+        module: 'src/mcp/harness/tools/submit.cli.tsx',
+      },
+      rendered: false,
+      routeId: 'tool:harness/submit',
+    };
+    const inputs: Readonly<Record<string, unknown>>[] = [];
+    const run = (argv: readonly string[]) => runGeneratedCliEntry({
+      argv,
+      commands: [command],
+      execute: async (_compiled, input) => {
+        inputs.push(input);
+        return input;
+      },
+      name: 'route-harness',
+      version: '1.0.0',
+      writeErr: () => undefined,
+      writeOut: () => undefined,
+    });
+
+    // The application owns `yes` here: nothing confirms, so nothing strips.
+    expect(await run(['submit', '--yes'])).toBe(0);
+    expect(await run(['submit'])).toBe(0);
+    expect(inputs).toEqual([{ yes: true }, {}]);
+  });
+
+  it('keeps the canonical yes key when a non-confirming projection renames its flag', async () => {
+    const command: CompiledCliCommand = {
+      aliases: [],
+      exitCode: 'zero',
+      mcp: { confirm: false, server: 'harness', tool: 'submit' },
+      options: [{
+        key: 'yes',
+        kind: 'boolean',
+        option: 'assume',
+        repeated: false,
+        required: false,
+      }],
+      path: ['submit'],
+      projection: {
+        mapInput: false,
+        module: 'src/mcp/harness/tools/submit.cli.tsx',
+      },
+      rendered: false,
+      routeId: 'tool:harness/submit',
+    };
+    const inputs: Readonly<Record<string, unknown>>[] = [];
+    const errors: string[] = [];
+    const run = (argv: readonly string[]) => runGeneratedCliEntry({
+      argv,
+      commands: [command],
+      execute: async (_compiled, input) => {
+        inputs.push(input);
+        return input;
+      },
+      name: 'route-harness',
+      version: '1.0.0',
+      writeErr: (text) => void errors.push(text),
+      writeOut: () => undefined,
+    });
+
+    expect(await run(['submit', '--assume'])).toBe(0);
+    expect(inputs).toEqual([{ yes: true }]);
+    // The rename is the only spelling; the shell reserves --yes for
+    // confirming commands and this command does not confirm.
+    expect(await run(['submit', '--yes'])).toBe(2);
+    expect(errors[0]).toBe('Unknown option: --yes.\n');
+    expect(inputs).toEqual([{ yes: true }]);
+  });
+
   it('accepts projected option aliases, prints projection help, and spells schema failures as projected flags', async () => {
     const command: CompiledCliCommand = {
       aliases: [],
