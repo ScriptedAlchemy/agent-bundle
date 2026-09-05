@@ -115,6 +115,8 @@ export type {
   ArtifactManifestCliCommand,
   ArtifactManifestCliCommandMcp,
   ArtifactManifestCliOption,
+  ArtifactManifestCompiler,
+  ArtifactManifestCompilerAdapter,
   ArtifactManifestDistribution,
   ArtifactManifestDistributionChannel,
   ArtifactManifestDistributionInstall,
@@ -129,6 +131,7 @@ export type {
   ArtifactManifestProjectionMarketplace,
   ArtifactManifestProjectionSchema,
   ArtifactManifestProjectionValidation,
+  ArtifactManifestProvenance,
   ArtifactManifestProvider,
   ArtifactManifestRoute,
   ArtifactManifestRouteKind,
@@ -144,6 +147,7 @@ export type {
   AssembledArtifactManifest,
 } from './build/manifest.ts';
 export {
+  artifactCompilerRecordVersion,
   artifactManifestName,
   artifactManifestVersion,
   assembleArtifactManifest,

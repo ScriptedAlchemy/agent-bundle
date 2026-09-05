@@ -43,16 +43,19 @@ import {
   writeManifest,
 } from './emit.ts';
 import {
+  artifactCompilerRecordVersion,
   artifactManifestVersion,
   compareArtifactManifestHooks,
   type ArtifactManifest,
   type ArtifactManifestBin,
+  type ArtifactManifestCompilerAdapter,
   type ArtifactManifestDistribution,
   type ArtifactManifestExecutables,
   type ArtifactManifestHook,
   type ArtifactManifestMcpApp,
   type ArtifactManifestMcpServer,
   type ArtifactManifestProjection,
+  type ArtifactManifestProvenance,
   type ArtifactManifestScript,
 } from './manifest.ts';
 import { artifactRoutesFor } from './manifest-routes.ts';
@@ -293,7 +296,7 @@ const sortedHosts = (hosts: Iterable<string>): readonly string[] =>
 const artifactPath = (artifactRoot: string, absolute: string): string =>
   relative(artifactRoot, absolute).replaceAll('\\', '/');
 
-/** The selected host projections the composite root holds, with their adapter provenance and derived-document pointers. */
+/** The selected host projections the composite root holds, with their derived-document pointers. */
 const manifestProjections = (options: {
   readonly composite: CompositePlan;
   readonly filePaths: ReadonlySet<string>;
@@ -301,7 +304,6 @@ const manifestProjections = (options: {
 }): readonly ArtifactManifestProjection[] => Object.freeze(options.composite.projections
   .map((projection): ArtifactManifestProjection => {
     const host = projection.name;
-    const metadata = options.registry.metadata(host);
     const documents = projection.plan.documents;
     const emitted = (path: string | undefined): string | undefined =>
       path !== undefined && options.filePaths.has(path) ? path : undefined;
@@ -311,7 +313,6 @@ const manifestProjections = (options: {
     const hooks = emitted(options.registry.hookContract(host)?.manifestPath);
     const builtInHost = options.registry.builtInHost(host);
     return Object.freeze({
-      adapterRevision: metadata.adapterRevision,
       ...(builtInHost === undefined ? {} : { builtInHost }),
       documents: Object.freeze({
         ...(hooks === undefined ? {} : { hooks }),
@@ -323,6 +324,20 @@ const manifestProjections = (options: {
       ...(marketplace === undefined || documents?.marketplace === undefined
         ? {}
         : { marketplace: Object.freeze({ name: documents.marketplace.name }) }),
+    });
+  })
+  .sort((left, right) => left.host.localeCompare(right.host)));
+
+const manifestCompilerAdapters = (options: {
+  readonly composite: CompositePlan;
+  readonly registry: TargetRegistry;
+}): readonly ArtifactManifestCompilerAdapter[] => Object.freeze(options.composite.projections
+  .map((projection): ArtifactManifestCompilerAdapter => {
+    const host = projection.name;
+    const metadata = options.registry.metadata(host);
+    return Object.freeze({
+      adapterRevision: metadata.adapterRevision,
+      host,
       observedVersion: metadata.observedVersion,
       schemas: Object.freeze(metadata.schemas
         .map((schema) => Object.freeze({ ...schema }))
@@ -475,6 +490,7 @@ const manifestFor = (options: {
   readonly compiledMcpEntries: readonly CompiledMcpEntry[];
   readonly composite: CompositePlan;
   readonly files: ArtifactManifest['files'];
+  readonly provenance: readonly ArtifactManifestProvenance[];
   readonly model: NormalizedPlugin;
   readonly projectContext: ProjectContext;
   readonly registry: TargetRegistry;
@@ -501,27 +517,32 @@ const manifestFor = (options: {
     }),
   });
   return {
-    agentSkills: agentSkillsSchemaRevision,
     application: {
       ...(options.model.metadata.description === undefined ? {} : { description: options.model.metadata.description }),
       id: options.model.metadata.id,
       name: options.model.metadata.name,
       version: options.model.metadata.version,
     },
+    compiler: {
+      adapters: manifestCompilerAdapters({ composite: options.composite, registry: options.registry }),
+      agentSkills: agentSkillsSchemaRevision,
+      producer: { name: 'agent-bundle', version: packageManifest.version },
+      project: options.projectContext,
+      provenance: options.provenance,
+      recordVersion: artifactCompilerRecordVersion,
+      validation: {
+        artifact: { status: 'passed' },
+        projections: projections.map(({ host }) => ({ host, status: 'passed' })),
+        source: { status: 'passed' },
+      },
+    },
     distribution: manifestDistribution({ filePaths, projectContext: options.projectContext }),
     executables,
     files: options.files,
     manifestVersion: artifactManifestVersion,
-    producer: { name: 'agent-bundle', version: packageManifest.version },
-    project: options.projectContext,
     projections,
     routes: artifactRoutesFor(options.routeGraph),
     runtime: { ...options.model.runtime },
-    validation: {
-      artifact: { status: 'passed' },
-      projections: projections.map(({ host }) => ({ host, status: 'passed' })),
-      source: { status: 'passed' },
-    },
   };
 };
 
@@ -675,7 +696,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
       projectRoot: options.projectRoot,
     });
     assertOutputProvenanceSources({ outputProvenance, projectContext: options.projectContext });
-    const files = createArtifactManifestFiles({
+    const { files, provenance } = createArtifactManifestFiles({
       files: await listArtifactFiles(stageRoot),
       outputProvenance,
     });
@@ -702,6 +723,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
         compiledMcpEntries,
         composite,
         files,
+        provenance,
         model: options.model,
         projectContext: options.projectContext,
         registry: options.registry,

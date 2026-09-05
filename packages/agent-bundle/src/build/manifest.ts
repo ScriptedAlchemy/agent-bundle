@@ -28,12 +28,15 @@ import type {
  *
  * Keys are closed at every level, arrays carry an explicit sort key, and the
  * bytes are canonical `stableJson`: any reader rejects a document that is not
- * byte-identical to its own serialization. `manifestVersion` bumps on a
- * rename or removal; an added optional key does not.
+ * byte-identical to its own serialization. `manifestVersion` versions the
+ * public contract consumers read; `compiler.recordVersion` versions the
+ * operational compiler record independently. `manifestVersion` bumps on a
+ * public-contract rename or removal; an added optional key does not.
  */
 
 export const artifactManifestName = 'agent-bundle.manifest.json';
 export const artifactManifestVersion = 2;
+export const artifactCompilerRecordVersion = 1;
 
 export type ArtifactManifestFileKind = 'bundle' | 'copy' | 'generated' | 'prebuilt';
 export type ArtifactManifestValidationStatus = 'passed';
@@ -56,6 +59,11 @@ export interface ArtifactManifestFile {
   readonly mode?: number;
   readonly path: string;
   readonly sha256: string;
+}
+
+/** One `files[]` row's source-input provenance; lives on `compiler.provenance`. */
+export interface ArtifactManifestProvenance {
+  readonly path: string;
   readonly sourceInputs: readonly string[];
 }
 
@@ -130,7 +138,6 @@ export interface ArtifactManifestProjectionMarketplace {
 export type ArtifactManifestBuiltInHost = 'claude' | 'codex' | 'cursor' | 'portable';
 
 export interface ArtifactManifestProjection {
-  readonly adapterRevision: string;
   /** The shipped adapter that planned this projection; absent for an advanced-registry adapter. */
   readonly builtInHost?: ArtifactManifestBuiltInHost;
   readonly documents: ArtifactManifestProjectionDocuments;
@@ -138,6 +145,12 @@ export interface ArtifactManifestProjection {
   readonly host: string;
   /** The marketplace the projection's marketplace document registers; absent when none was emitted. */
   readonly marketplace?: ArtifactManifestProjectionMarketplace;
+}
+
+/** Operational adapter facts for one projection; lives on `compiler.adapters`. */
+export interface ArtifactManifestCompilerAdapter {
+  readonly adapterRevision: string;
+  readonly host: string;
   readonly observedVersion: string;
   readonly schemas: readonly ArtifactManifestProjectionSchema[];
 }
@@ -376,19 +389,31 @@ export interface ArtifactManifestValidation {
   readonly source: ArtifactManifestValidationRecord;
 }
 
-export interface ArtifactManifest {
+/**
+ * Operational record of the compiler run. Versioned by `recordVersion`
+ * independently of `manifestVersion`: a change here is not a change to the
+ * artifact contract consumers read.
+ */
+export interface ArtifactManifestCompiler {
+  readonly adapters: readonly ArtifactManifestCompilerAdapter[];
   readonly agentSkills: ArtifactManifestAgentSkills;
+  readonly producer: ArtifactManifestProducer;
+  readonly project: ArtifactManifestProject;
+  readonly provenance: readonly ArtifactManifestProvenance[];
+  readonly recordVersion: typeof artifactCompilerRecordVersion;
+  readonly validation: ArtifactManifestValidation;
+}
+
+export interface ArtifactManifest {
   readonly application: ArtifactManifestApplication;
+  readonly compiler: ArtifactManifestCompiler;
   readonly distribution: ArtifactManifestDistribution;
   readonly executables: ArtifactManifestExecutables;
   readonly files: readonly ArtifactManifestFile[];
   readonly manifestVersion: typeof artifactManifestVersion;
-  readonly producer: ArtifactManifestProducer;
-  readonly project: ArtifactManifestProject;
   readonly projections: readonly ArtifactManifestProjection[];
   readonly routes: ArtifactManifestRoutes;
   readonly runtime: ArtifactManifestRuntime;
-  readonly validation: ArtifactManifestValidation;
 }
 
 export interface AssembledArtifactManifest {
@@ -522,7 +547,7 @@ const parseSourceInputs = (value: unknown, location: string): readonly ArtifactM
   return inputs;
 };
 
-const parseFileSourceInputs = (value: unknown, location: string): readonly string[] => {
+const parseProvenanceSourceInputs = (value: unknown, location: string): readonly string[] => {
   const sourceInputs = requireArray(value, location).map((input, index) =>
     requirePath(input, `${location}[${index}]`));
   requireSortedUnique(sourceInputs, location, (input) => input);
@@ -532,7 +557,7 @@ const parseFileSourceInputs = (value: unknown, location: string): readonly strin
 const parseFiles = (value: unknown): readonly ArtifactManifestFile[] => {
   const files = requireArray(value, 'files').map((candidate, index) => {
     const file = requireRecord(candidate, `files[${index}]`);
-    requireExactKeys(file, `files[${index}]`, ['bytes', 'kind', 'path', 'sha256', 'sourceInputs'], ['mode']);
+    requireExactKeys(file, `files[${index}]`, ['bytes', 'kind', 'path', 'sha256'], ['mode']);
     if (!Number.isSafeInteger(file.bytes) || (file.bytes as number) < 0) {
       fail(`files[${index}].bytes must be a non-negative safe integer.`);
     }
@@ -550,11 +575,28 @@ const parseFiles = (value: unknown): readonly ArtifactManifestFile[] => {
       ...(file.mode === undefined ? {} : { mode: file.mode as number }),
       path,
       sha256: requireHash(file.sha256, `files[${index}].sha256`),
-      sourceInputs: parseFileSourceInputs(file.sourceInputs, `files[${index}].sourceInputs`),
     } satisfies ArtifactManifestFile;
   });
   requireSortedUnique(files, 'files', (file) => file.path);
   return files;
+};
+
+const parseProvenance = (value: unknown): readonly ArtifactManifestProvenance[] => {
+  const provenance = requireArray(value, 'compiler.provenance').map((candidate, index) => {
+    const record = requireRecord(candidate, `compiler.provenance[${index}]`);
+    requireExactKeys(record, `compiler.provenance[${index}]`, ['path', 'sourceInputs']);
+    const path = requirePath(record.path, `compiler.provenance[${index}].path`);
+    if (path === artifactManifestName) fail(`compiler.provenance[${index}].path must not name the manifest itself.`);
+    return {
+      path,
+      sourceInputs: parseProvenanceSourceInputs(
+        record.sourceInputs,
+        `compiler.provenance[${index}].sourceInputs`,
+      ),
+    } satisfies ArtifactManifestProvenance;
+  });
+  requireSortedUnique(provenance, 'compiler.provenance', (entry) => entry.path);
+  return provenance;
 };
 
 const parseApplication = (value: unknown): ArtifactManifestApplication => {
@@ -604,7 +646,7 @@ const parseProjections = (value: unknown): readonly ArtifactManifestProjection[]
     requireExactKeys(
       projection,
       location,
-      ['adapterRevision', 'documents', 'host', 'observedVersion', 'schemas'],
+      ['documents', 'host'],
       ['builtInHost', 'marketplace'],
     );
     const documents = parseProjectionDocuments(projection.documents, `${location}.documents`);
@@ -618,19 +660,32 @@ const parseProjections = (value: unknown): readonly ArtifactManifestProjection[]
       }
     }
     return {
-      adapterRevision: requireString(projection.adapterRevision, `${location}.adapterRevision`),
       ...(projection.builtInHost === undefined ? {} : {
         builtInHost: requireOneOf(projection.builtInHost, `${location}.builtInHost`, ['claude', 'codex', 'cursor', 'portable'] as const),
       }),
       documents,
       host: requireString(projection.host, `${location}.host`),
       ...(marketplace === undefined ? {} : { marketplace }),
-      observedVersion: requireString(projection.observedVersion, `${location}.observedVersion`),
-      schemas: parseProjectionSchemas(projection.schemas, `${location}.schemas`),
     } satisfies ArtifactManifestProjection;
   });
   requireSortedUnique(projections, 'projections', (projection) => projection.host);
   return projections;
+};
+
+const parseCompilerAdapters = (value: unknown): readonly ArtifactManifestCompilerAdapter[] => {
+  const adapters = requireArray(value, 'compiler.adapters').map((candidate, index) => {
+    const location = `compiler.adapters[${index}]`;
+    const adapter = requireRecord(candidate, location);
+    requireExactKeys(adapter, location, ['adapterRevision', 'host', 'observedVersion', 'schemas']);
+    return {
+      adapterRevision: requireString(adapter.adapterRevision, `${location}.adapterRevision`),
+      host: requireString(adapter.host, `${location}.host`),
+      observedVersion: requireString(adapter.observedVersion, `${location}.observedVersion`),
+      schemas: parseProjectionSchemas(adapter.schemas, `${location}.schemas`),
+    } satisfies ArtifactManifestCompilerAdapter;
+  });
+  requireSortedUnique(adapters, 'compiler.adapters', (adapter) => adapter.host);
+  return adapters;
 };
 
 const parseSchemaLiteral = (value: unknown, location: string): RouteInputSchemaLiteral => {
@@ -1164,22 +1219,22 @@ const parseDistribution = (value: unknown): ArtifactManifestDistribution => {
 };
 
 const parseValidation = (value: unknown): ArtifactManifestValidation => {
-  const validation = requireRecord(value, 'validation');
-  requireExactKeys(validation, 'validation', ['artifact', 'projections', 'source']);
-  const projections = requireArray(validation.projections, 'validation.projections').map((candidate, index) => {
-    const projection = requireRecord(candidate, `validation.projections[${index}]`);
-    requireExactKeys(projection, `validation.projections[${index}]`, ['host', 'status']);
-    const status = requireStatus({ status: projection.status }, `validation.projections[${index}]`);
+  const validation = requireRecord(value, 'compiler.validation');
+  requireExactKeys(validation, 'compiler.validation', ['artifact', 'projections', 'source']);
+  const projections = requireArray(validation.projections, 'compiler.validation.projections').map((candidate, index) => {
+    const projection = requireRecord(candidate, `compiler.validation.projections[${index}]`);
+    requireExactKeys(projection, `compiler.validation.projections[${index}]`, ['host', 'status']);
+    const status = requireStatus({ status: projection.status }, `compiler.validation.projections[${index}]`);
     return {
-      host: requireString(projection.host, `validation.projections[${index}].host`),
+      host: requireString(projection.host, `compiler.validation.projections[${index}].host`),
       status: status.status,
     } satisfies ArtifactManifestProjectionValidation;
   });
-  requireSortedUnique(projections, 'validation.projections', (projection) => projection.host);
+  requireSortedUnique(projections, 'compiler.validation.projections', (projection) => projection.host);
   return {
-    artifact: requireStatus(validation.artifact, 'validation.artifact'),
+    artifact: requireStatus(validation.artifact, 'compiler.validation.artifact'),
     projections,
-    source: requireStatus(validation.source, 'validation.source'),
+    source: requireStatus(validation.source, 'compiler.validation.source'),
   };
 };
 
@@ -1240,86 +1295,146 @@ const referencedPaths = (manifest: {
   return references;
 };
 
-const validateManifest = (value: unknown): ArtifactManifest => {
-  const manifest = requireRecord(value, 'root');
-  requireExactKeys(manifest, 'root', [
+const requireExactSortedKeys = (
+  actual: readonly string[],
+  expected: readonly string[],
+  message: string,
+): void => {
+  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
+    fail(message);
+  }
+};
+
+const parseCompiler = (value: unknown, files: readonly ArtifactManifestFile[]): ArtifactManifestCompiler => {
+  const compiler = requireRecord(value, 'compiler');
+  requireExactKeys(compiler, 'compiler', [
+    'adapters',
     'agentSkills',
-    'application',
-    'distribution',
-    'executables',
-    'files',
-    'manifestVersion',
     'producer',
     'project',
-    'projections',
-    'routes',
-    'runtime',
+    'provenance',
+    'recordVersion',
     'validation',
   ]);
-  if (manifest.manifestVersion !== artifactManifestVersion) {
-    fail(`manifestVersion must be ${artifactManifestVersion}.`);
+  if (compiler.recordVersion !== artifactCompilerRecordVersion) {
+    fail(`compiler.recordVersion must be ${artifactCompilerRecordVersion}.`);
   }
 
-  const agentSkills = requireRecord(manifest.agentSkills, 'agentSkills');
-  requireExactKeys(agentSkills, 'agentSkills', ['schemaSha256', 'sourceRevision', 'specification']);
+  const agentSkills = requireRecord(compiler.agentSkills, 'compiler.agentSkills');
+  requireExactKeys(agentSkills, 'compiler.agentSkills', ['schemaSha256', 'sourceRevision', 'specification']);
 
-  const producer = requireRecord(manifest.producer, 'producer');
-  requireExactKeys(producer, 'producer', ['name', 'version']);
-  if (producer.name !== 'agent-bundle') fail('producer.name must be "agent-bundle".');
+  const producer = requireRecord(compiler.producer, 'compiler.producer');
+  requireExactKeys(producer, 'compiler.producer', ['name', 'version']);
+  if (producer.name !== 'agent-bundle') fail('compiler.producer.name must be "agent-bundle".');
 
-  const project = requireRecord(manifest.project, 'project');
+  const project = requireRecord(compiler.project, 'compiler.project');
   requireExactKeys(
     project,
-    'project',
+    'compiler.project',
     ['configDigest', 'configPath', 'modelDigest', 'revision', 'sourceInputs'],
     ['packageName', 'packageVersion'],
   );
   const packageName = project.packageName === undefined
     ? undefined
-    : requireString(project.packageName, 'project.packageName');
+    : requireString(project.packageName, 'compiler.project.packageName');
   if (packageName !== undefined && !isValidPackageName(packageName)) {
-    fail('project.packageName must be a valid npm package name.');
+    fail('compiler.project.packageName must be a valid npm package name.');
   }
   const packageVersion = project.packageVersion === undefined
     ? undefined
-    : requireString(project.packageVersion, 'project.packageVersion');
+    : requireString(project.packageVersion, 'compiler.project.packageVersion');
   if (packageVersion !== undefined && !isValidPackageVersion(packageVersion)) {
-    fail('project.packageVersion must be a valid semantic version.');
+    fail('compiler.project.packageVersion must be a valid semantic version.');
   }
-  const sourceInputs = parseSourceInputs(project.sourceInputs, 'project.sourceInputs');
-  const configPath = requirePath(project.configPath, 'project.configPath');
-  const configDigest = requireHash(project.configDigest, 'project.configDigest');
+  const sourceInputs = parseSourceInputs(project.sourceInputs, 'compiler.project.sourceInputs');
+  const configPath = requirePath(project.configPath, 'compiler.project.configPath');
+  const configDigest = requireHash(project.configDigest, 'compiler.project.configDigest');
   const configInput = sourceInputs.find((input) => input.path === configPath);
   if (configInput === undefined || configInput.sha256 !== configDigest) {
-    fail('project.configDigest must equal the declared configPath source input hash.');
+    fail('compiler.project.configDigest must equal the declared configPath source input hash.');
   }
-  const revision = requireHash(project.revision, 'project.revision');
-  if (revision !== digest({ inputs: sourceInputs })) fail('project.revision does not match project.sourceInputs.');
+  const revision = requireHash(project.revision, 'compiler.project.revision');
+  if (revision !== digest({ inputs: sourceInputs })) {
+    fail('compiler.project.revision does not match compiler.project.sourceInputs.');
+  }
 
-  const files = parseFiles(manifest.files);
+  const provenance = parseProvenance(compiler.provenance);
+  requireExactSortedKeys(
+    provenance.map((entry) => entry.path),
+    files.map((file) => file.path),
+    'compiler.provenance paths must exactly match files.',
+  );
   const projectInputPaths = new Set(sourceInputs.map((input) => input.path));
-  for (const file of files) {
-    for (const sourceInput of file.sourceInputs) {
+  for (const entry of provenance) {
+    for (const sourceInput of entry.sourceInputs) {
       if (!projectInputPaths.has(sourceInput)) {
-        fail(`files[${file.path}].sourceInputs contains an undeclared project source input.`);
+        fail(`compiler.provenance[${entry.path}].sourceInputs contains an undeclared project source input.`);
       }
     }
   }
 
+  return {
+    adapters: parseCompilerAdapters(compiler.adapters),
+    agentSkills: {
+      schemaSha256: requireHash(agentSkills.schemaSha256, 'compiler.agentSkills.schemaSha256'),
+      sourceRevision: requireString(agentSkills.sourceRevision, 'compiler.agentSkills.sourceRevision'),
+      specification: requireString(agentSkills.specification, 'compiler.agentSkills.specification'),
+    },
+    producer: {
+      name: 'agent-bundle',
+      version: requireString(producer.version, 'compiler.producer.version'),
+    },
+    project: {
+      configDigest,
+      configPath,
+      modelDigest: requireHash(project.modelDigest, 'compiler.project.modelDigest'),
+      ...(packageName === undefined ? {} : { packageName }),
+      ...(packageVersion === undefined ? {} : { packageVersion }),
+      revision,
+      sourceInputs,
+    },
+    provenance,
+    recordVersion: artifactCompilerRecordVersion,
+    validation: parseValidation(compiler.validation),
+  };
+};
+
+const validateManifest = (value: unknown): ArtifactManifest => {
+  const manifest = requireRecord(value, 'root');
+  requireExactKeys(manifest, 'root', [
+    'application',
+    'compiler',
+    'distribution',
+    'executables',
+    'files',
+    'manifestVersion',
+    'projections',
+    'routes',
+    'runtime',
+  ]);
+  if (manifest.manifestVersion !== artifactManifestVersion) {
+    fail(`manifestVersion must be ${artifactManifestVersion}.`);
+  }
+
+  const files = parseFiles(manifest.files);
+  const compiler = parseCompiler(manifest.compiler, files);
   const application = parseApplication(manifest.application);
   const projections = parseProjections(manifest.projections);
-  const hosts = new Set(projections.map((projection) => projection.host));
+  const hostList = projections.map((projection) => projection.host);
+  const hosts = new Set(hostList);
+  requireExactSortedKeys(
+    compiler.adapters.map((adapter) => adapter.host),
+    hostList,
+    'compiler.adapters hosts must exactly match projections.',
+  );
+  requireExactSortedKeys(
+    compiler.validation.projections.map((projection) => projection.host),
+    hostList,
+    'compiler.validation.projections hosts must exactly match projections.',
+  );
   const routes = parseRoutes(manifest.routes);
   const executables = parseExecutables(manifest.executables, hosts);
   const distribution = parseDistribution(manifest.distribution);
-  const validation = parseValidation(manifest.validation);
-  const validationHosts = validation.projections.map((projection) => projection.host);
-  if (
-    validationHosts.length !== hosts.size ||
-    [...hosts].some((host, index) => host !== validationHosts[index])
-  ) {
-    fail('validation.projections hosts must exactly match projections.');
-  }
   const scriptRouteIds = new Set(routes.scripts.map((route) => route.id));
   for (const script of executables.scripts) {
     if (script.rendered !== undefined && !scriptRouteIds.has(script.rendered.routeId)) {
@@ -1338,8 +1453,8 @@ const validateManifest = (value: unknown): ArtifactManifest => {
       fail(`routes.cli.commands[${command.path.join(' ')}].routeId names an undeclared CLI route.`);
     }
   }
-  if (distribution.channels.includes('npm') !== (packageName !== undefined)) {
-    fail('distribution.channels lists "npm" exactly when project.packageName is present.');
+  if (distribution.channels.includes('npm') !== (compiler.project.packageName !== undefined)) {
+    fail('distribution.channels lists "npm" exactly when compiler.project.packageName is present.');
   }
   const filePaths = new Set(files.map((file) => file.path));
   for (const [location, path] of referencedPaths({ distribution, executables, projections })) {
@@ -1347,33 +1462,15 @@ const validateManifest = (value: unknown): ArtifactManifest => {
   }
 
   return {
-    agentSkills: {
-      schemaSha256: requireHash(agentSkills.schemaSha256, 'agentSkills.schemaSha256'),
-      sourceRevision: requireString(agentSkills.sourceRevision, 'agentSkills.sourceRevision'),
-      specification: requireString(agentSkills.specification, 'agentSkills.specification'),
-    },
     application,
+    compiler,
     distribution,
     executables,
     files,
     manifestVersion: artifactManifestVersion,
-    producer: {
-      name: 'agent-bundle',
-      version: requireString(producer.version, 'producer.version'),
-    },
-    project: {
-      configDigest,
-      configPath,
-      modelDigest: requireHash(project.modelDigest, 'project.modelDigest'),
-      ...(packageName === undefined ? {} : { packageName }),
-      ...(packageVersion === undefined ? {} : { packageVersion }),
-      revision,
-      sourceInputs,
-    },
     projections,
     routes,
     runtime: parseRuntime(manifest.runtime),
-    validation,
   };
 };
 
