@@ -1,3 +1,4 @@
+import { settleBeforeAbort } from '../core/abort.ts';
 import type { CanonicalAgentEvent } from '../routes/events.ts';
 import type { AgentEventCanonicalIdentity } from '../routes/public.ts';
 import type { AgentTerminal } from '../terminal-capability.ts';
@@ -144,7 +145,7 @@ export const executeEventPreflight = async <E extends CanonicalAgentEvent>(
     signal: context.signal,
     terminal: context.terminal,
   });
-  const value = await preflight(frozenContext);
+  const value = await settleBeforeAbort(Promise.resolve().then(() => preflight(frozenContext)), context.signal);
   context.signal.throwIfAborted();
   return validateEventPreflightResult(value, context.canonical.event);
 };

@@ -143,10 +143,12 @@ it('honors the framework-owned abort signal before and after an asynchronous gat
     signal: controller.signal,
     terminal: { interactive: false },
   } as unknown as EventPreflightContext<'tool/before'>;
-  await expect(executeEventPreflight(async () => {
-    controller.abort(new Error('deadline elapsed'));
-    return 'execute' as const;
-  }, context)).rejects.toThrow(/deadline elapsed/u);
+  const execution = executeEventPreflight(
+    () => new Promise(() => undefined),
+    context,
+  );
+  queueMicrotask(() => { controller.abort(new Error('deadline elapsed')); });
+  await expect(execution).rejects.toThrow(/deadline elapsed/u);
 });
 
 it('projects a gate decision through the rendered event outcome rules', () => {
