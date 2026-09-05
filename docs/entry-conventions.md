@@ -1211,7 +1211,9 @@ hatch customizes *how code compiles*, never *what the artifact promises*. The
 framework's own profile keeps the same promise: `autoExternal` is off,
 `bundle: true`, `splitChunks: false`, and no `externals` are added, so Rslib's
 `node` target leaves only Node built-ins (and `pnpapi`) external, and `AB6005`
-fails any bare specifier that is not a Node built-in in a host-pack module.
+fails any bare specifier that is not a Node built-in in every compiled module
+— host-pack modules and the package build's `dist` bundles alike — so the
+hatch cannot externalize a dependency on the author's behalf.
 
 The hatch merges *beside* the framework profile, not over it: `plugins`
 arrays concatenate, and Rsbuild's plugin manager appends every plugin it is

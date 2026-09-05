@@ -22,17 +22,19 @@ import {
   terminalCapabilityRuntimeSpecifier,
 } from './entry-shell.ts';
 import { projectMeta } from './meta.ts';
+import { bundleSyntaxCheckFor } from './module-imports.ts';
 import type { BundledOutputEvidence } from './provenance.ts';
 import { buildWithRslib, isDeclarationGenerationFailure, type RslibEntry } from './rslib.ts';
+import { validateJavaScriptModules } from './validate-artifact-modules.ts';
 
 /**
  * The framework-owned npm package build: `bin` entries become self-executing
  * `dist/bin/<name>.js` bundles (shebang + executable bit) and the `lib` entry
  * becomes `dist/<name>.js` (+ a bundleless `.d.ts` declaration graph), all
- * through the same Rslib synthesis, invariant assertions, and staged atomic
- * publication as artifact executables. This is the build audiobook-curator
- * previously needed a second bundler config, a tsconfig, and a hand-written
- * bin shim to produce.
+ * through the same Rslib synthesis, invariant assertions, staged atomic
+ * publication, and self-containment rule (`AB6005`) as artifact executables.
+ * This is the build audiobook-curator previously needed a second bundler
+ * config, a tsconfig, and a hand-written bin shim to produce.
  */
 
 const binShebang = '#!/usr/bin/env node';
@@ -337,7 +339,8 @@ export const buildPackageOutputs = async (options: {
       .map((entry) => chmod(resolveArtifactDestination(stageRoot, entry.outputRelativePath), executableMode)));
 
     const lib = packageBuild.lib;
-    const files = (await listArtifactFiles(stageRoot)).map((file): PackageOutputFile => {
+    const staged = await listArtifactFiles(stageRoot);
+    const files = staged.map((file): PackageOutputFile => {
       const bundled = evidenceByPath.get(file.path);
       const declared = lib?.dts === true && libSourceDir !== undefined && file.path.endsWith('.d.ts')
         ? declarationSource(libSourceDir, file.path) ?? lib.source
@@ -365,6 +368,23 @@ export const buildPackageOutputs = async (options: {
     if (lib?.dts === true && !files.some((file) => file.path === `${lib.name}.d.ts`)) {
       throw new Error(`Package build did not emit expected declarations ${JSON.stringify(`${lib.name}.d.ts`)}.`);
     }
+
+    // The npm form of the plugin is held to the same line as its host packs:
+    // every emitted `dist` module is walked as an ES module, and a bare
+    // specifier that is not a Node built-in — an import the `tools` hatch
+    // kept external — fails the build (`AB6005`) before `dist` is published,
+    // so a `dist/bin` executable loads nothing from a consumer's
+    // `node_modules`. Declarations are not modules and are not walked; they
+    // may still reference declared dependencies.
+    const selfContainment = await validateJavaScriptModules({
+      artifactRoot: stageRoot,
+      bundledPaths: new Set(files.filter((file) => file.kind === 'bundle').map((file) => file.path)),
+      bundleSyntaxCheck: bundleSyntaxCheckFor(options.tools),
+      files: staged,
+      reportedRoot: toPosixRelative(projectRoot, outputRoot),
+      validJson: new Set(),
+    });
+    if (selfContainment.length > 0) throw new DiagnosticError(selfContainment);
 
     await publishArtifact({ outputRoot, stageRoot });
     return Object.freeze({ files: Object.freeze(files), outputRoot });

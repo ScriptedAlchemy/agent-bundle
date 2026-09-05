@@ -14,7 +14,15 @@ import { readModuleImports, type ModuleImport } from './module-imports.ts';
  * Evidence for the npm prepack dependency gate (`AB7014`/`AB7015`, emitted by
  * `pack-inventory.ts`): what `package.json` asks npm to install alongside the
  * package, and which packages the packed JavaScript and declaration files
- * actually reference.
+ * actually reference. JavaScript the framework compiled — the `dist` bundles
+ * and the host-pack modules — never carries a bare package import, since
+ * `AB6005` fails the build first and `prepack` builds before it packs; the
+ * import, `require`, and resolve evidence read here is therefore that of
+ * prebuilt payload modules and other packed scripts the framework copied
+ * rather than compiled. The `bin`-command, declaration, `imports`-map, and
+ * install-script evidence is read from every packed file alike — a compiled
+ * bundle may still run a dependency's command (`spawnSync("tsc")`), which is
+ * not an import.
  */
 
 /**

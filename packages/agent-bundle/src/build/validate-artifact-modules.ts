@@ -33,65 +33,69 @@ const graphDiagnostic = (importer: string, message: string): Diagnostic => diagn
 const resolveJavaScriptImport = async (options: {
   readonly artifactRoot: string;
   readonly files: ReadonlyMap<string, ArtifactFile>;
+  /** The importing module, relative to `artifactRoot`. */
   readonly importer: string;
+  /** How diagnostics name the importer (see `reportedRoot`). */
+  readonly reportedImporter: string;
   readonly specifier: string;
   readonly validJson: ReadonlySet<string>;
 }): Promise<{ readonly diagnostic?: Diagnostic; readonly module?: string }> => {
+  const importer = options.reportedImporter;
   if (isBuiltin(options.specifier)) return {};
   if (!options.specifier.startsWith('.') && !options.specifier.startsWith('file:')) {
-    return { diagnostic: graphDiagnostic(options.importer, `uses unsupported specifier ${JSON.stringify(options.specifier)}.`) };
+    return { diagnostic: graphDiagnostic(importer, `uses unsupported specifier ${JSON.stringify(options.specifier)}.`) };
   }
 
   let url: URL;
   try {
     url = new URL(options.specifier, pathToFileURL(resolve(options.artifactRoot, options.importer)));
   } catch {
-    return { diagnostic: graphDiagnostic(options.importer, `uses invalid specifier ${JSON.stringify(options.specifier)}.`) };
+    return { diagnostic: graphDiagnostic(importer, `uses invalid specifier ${JSON.stringify(options.specifier)}.`) };
   }
   if (url.protocol !== 'file:' || url.search.length > 0 || url.hash.length > 0) {
-    return { diagnostic: graphDiagnostic(options.importer, `uses unsupported specifier ${JSON.stringify(options.specifier)}.`) };
+    return { diagnostic: graphDiagnostic(importer, `uses unsupported specifier ${JSON.stringify(options.specifier)}.`) };
   }
 
   let path: string;
   try {
     path = fileURLToPath(url);
   } catch {
-    return { diagnostic: graphDiagnostic(options.importer, `uses invalid file URL ${JSON.stringify(options.specifier)}.`) };
+    return { diagnostic: graphDiagnostic(importer, `uses invalid file URL ${JSON.stringify(options.specifier)}.`) };
   }
   if (artifactPathFor(options.artifactRoot, path) === undefined) {
-    return { diagnostic: graphDiagnostic(options.importer, `resolves outside the artifact root: ${JSON.stringify(options.specifier)}.`) };
+    return { diagnostic: graphDiagnostic(importer, `resolves outside the artifact root: ${JSON.stringify(options.specifier)}.`) };
   }
 
   let metadata: Awaited<ReturnType<typeof lstat>>;
   try {
     metadata = await lstat(path);
   } catch {
-    return { diagnostic: graphDiagnostic(options.importer, `is missing ${JSON.stringify(options.specifier)}.`) };
+    return { diagnostic: graphDiagnostic(importer, `is missing ${JSON.stringify(options.specifier)}.`) };
   }
   if (!metadata.isFile()) {
-    return { diagnostic: graphDiagnostic(options.importer, `does not resolve to a regular file: ${JSON.stringify(options.specifier)}.`) };
+    return { diagnostic: graphDiagnostic(importer, `does not resolve to a regular file: ${JSON.stringify(options.specifier)}.`) };
   }
 
   let canonicalPath: string;
   try {
     canonicalPath = await realpath(path);
   } catch {
-    return { diagnostic: graphDiagnostic(options.importer, `is missing ${JSON.stringify(options.specifier)}.`) };
+    return { diagnostic: graphDiagnostic(importer, `is missing ${JSON.stringify(options.specifier)}.`) };
   }
   const artifactPath = artifactPathFor(options.artifactRoot, canonicalPath);
   if (artifactPath === undefined) {
-    return { diagnostic: graphDiagnostic(options.importer, `resolves outside the artifact root: ${JSON.stringify(options.specifier)}.`) };
+    return { diagnostic: graphDiagnostic(importer, `resolves outside the artifact root: ${JSON.stringify(options.specifier)}.`) };
   }
   if (!options.files.has(artifactPath)) {
-    return { diagnostic: graphDiagnostic(options.importer, `is not listed in the artifact manifest: ${JSON.stringify(options.specifier)}.`) };
+    return { diagnostic: graphDiagnostic(importer, `is not listed in the artifact manifest: ${JSON.stringify(options.specifier)}.`) };
   }
   if (jsonModuleSuffix.test(artifactPath)) {
     return options.validJson.has(artifactPath)
       ? {}
-      : { diagnostic: graphDiagnostic(options.importer, `references invalid JSON ${JSON.stringify(options.specifier)}.`) };
+      : { diagnostic: graphDiagnostic(importer, `references invalid JSON ${JSON.stringify(options.specifier)}.`) };
   }
   if (!javaScriptModuleSuffix.test(artifactPath)) {
-    return { diagnostic: graphDiagnostic(options.importer, `uses unsupported target ${JSON.stringify(options.specifier)}.`) };
+    return { diagnostic: graphDiagnostic(importer, `uses unsupported target ${JSON.stringify(options.specifier)}.`) };
   }
   return { module: artifactPath };
 };
@@ -109,12 +113,21 @@ export const validateJavaScriptModules = async (options: {
   readonly manifestFiles?: ReadonlySet<string>;
   /** Prebuilt payload files: opaque consumer outputs excluded from graph validation. */
   readonly prebuiltPaths?: ReadonlySet<string>;
+  /**
+   * POSIX directory under which diagnostics name the validated modules, for
+   * a tree validated before it is published under another path: the package
+   * build walks its staged output and reports `dist/bin/<name>.js`, the path
+   * a consumer sees, rather than the stage-relative `bin/<name>.js`. Absent
+   * for the artifact, whose diagnostics name artifact-relative paths.
+   */
+  readonly reportedRoot?: string;
   readonly validJson: ReadonlySet<string>;
 }): Promise<readonly Diagnostic[]> => {
   const artifactRoot = await realpath(options.artifactRoot);
   const files = new Map(options.files
     .filter((file) => options.manifestFiles === undefined || options.manifestFiles.has(file.path))
     .map((file) => [file.path, file]));
+  const reported = (path: string): string => (options.reportedRoot === undefined ? path : `${options.reportedRoot}/${path}`);
   const diagnostics: Diagnostic[] = [];
   const visited = new Set<string>();
   const visiting = new Set<string>();
@@ -131,7 +144,7 @@ export const validateJavaScriptModules = async (options: {
     try {
       bytes = await runWithPlatform(readFileBytes(resolve(artifactRoot, path)));
     } catch {
-      diagnostics.push(graphDiagnostic(path, 'cannot be read.'));
+      diagnostics.push(graphDiagnostic(reported(path), 'cannot be read.'));
       visiting.delete(path);
       visited.add(path);
       return;
@@ -143,7 +156,7 @@ export const validateJavaScriptModules = async (options: {
     try {
       imports = await readModuleImports(bytes.toString('utf8'), { check, sha256: sha256Hex(bytes) });
     } catch {
-      diagnostics.push(graphDiagnostic(path, 'has invalid syntax.'));
+      diagnostics.push(graphDiagnostic(reported(path), 'has invalid syntax.'));
       visiting.delete(path);
       visited.add(path);
       return;
@@ -151,13 +164,14 @@ export const validateJavaScriptModules = async (options: {
     for (const imported of imports) {
       if (imported.kind === 'meta') continue;
       if (imported.specifier === undefined) {
-        diagnostics.push(graphDiagnostic(path, 'has a non-literal dynamic import.'));
+        diagnostics.push(graphDiagnostic(reported(path), 'has a non-literal dynamic import.'));
         continue;
       }
       const resolved = await resolveJavaScriptImport({
         artifactRoot,
         files,
         importer: path,
+        reportedImporter: reported(path),
         specifier: imported.specifier,
         validJson: options.validJson,
       });

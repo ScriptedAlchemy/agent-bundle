@@ -69,28 +69,34 @@
   every dependency of a generated executable — `autoExternal: false`,
   `bundle: true`, `splitChunks: false`, no `externals`. Rslib's `node` target
   leaves only Node built-ins (and `pnpapi`) external, and the only bare
-  specifiers `AB6005` accepts in a host-pack module are Node built-ins, so a
-  generated executable in a host pack loads nothing else from outside the
-  artifact. MCP App views
-  (`src/build/mcp-apps.ts`) inline every script and style into one HTML file.
-  The framework never adds `externals` to a plugin build; the `externals`
-  handling in `rslib.ts` (`reservedExternalsViolation`,
+  specifiers `AB6005` accepts in a host-pack module are Node built-ins. The
+  package build's `dist` bundles are walked by the same `AB6005` rule
+  (`src/build/package-build.ts` reuses `validateJavaScriptModules` from
+  `src/build/validate-artifact-modules.ts`), so a generated executable in a
+  host pack or in `dist` loads nothing but Node built-ins from outside its
+  tree. MCP App views (`src/build/mcp-apps.ts`) inline every script and style
+  into one HTML file. The framework never adds `externals` to a plugin build;
+  the `externals` handling in `rslib.ts` (`reservedExternalsViolation`,
   `guardReservedExternals`) only rejects reserved specifiers in the resolved
   externals, which come from the author's `tools` hatch and Rslib's built-in
   list, never from the profile.
 - No refactor, toolchain upgrade, or "leaner install" change may enable
   `autoExternal` or externalize a dependency on the author's behalf. A package
-  a consumer must install is the author's explicit decision — an import kept
-  external through the `tools` hatch, a packed declaration reference, an
-  install script — and the prepack gate judges it: `AB7014` demands
-  packed-file evidence of use, `AB7015` a specifier a consumer's npm can
-  install.
+  a consumer must install is the author's explicit decision, and an import
+  kept external through the `tools` hatch is not a way to make it anywhere:
+  `AB6005` fails such an import in a host pack and in `dist` alike. What
+  legitimately puts a package under `dependencies` is a packed declaration
+  reference, a prebuilt payload module that imports it, an install script,
+  or a `bin` command packed JavaScript runs — and the prepack gate judges
+  those: `AB7014` demands that evidence, `AB7015` a specifier a consumer's
+  npm can install.
 - Proof is bytes and processes, not config: every artifact build walks the
-  compiled host-pack modules (`AB6005` fails a bare package specifier there;
-  the package build's `dist` is judged by the prepack gate instead), and the
-  packed pool (`pnpm test:packed`) installs the packed tarball into a clean
-  consumer, builds, removes the project source, and spawns the generated
-  entry as a real process (`packed-deleted-source`).
+  compiled host-pack modules and every package build walks its emitted `dist`
+  bundles (`AB6005` fails a bare package specifier in either), the prepack
+  gate then judges what remains declared, and the packed pool
+  (`pnpm test:packed`) installs the packed tarball into a clean consumer,
+  builds, removes the project source, and spawns the generated entry as a
+  real process (`packed-deleted-source`).
 
 ## Documentation site
 
