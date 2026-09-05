@@ -2,7 +2,9 @@ import { createRsbuild, mergeRsbuildConfig, rspack, type RsbuildConfig, type Rsp
 import { pluginReact } from '@rsbuild/plugin-react';
 import { readFile } from 'node:fs/promises';
 import { extname, resolve } from 'node:path';
+import { gzipSync } from 'node:zlib';
 
+import type { Diagnostic } from '../core/diagnostics.ts';
 import type { AgentBundleToolsConfig, NormalizedMcpApp } from '../core/types.ts';
 import { stableJson } from '../core/digest.ts';
 import type { AgentBundleMeta } from '../meta.ts';
@@ -32,7 +34,8 @@ const rsbuildVirtualModulesPlugin = (): typeof rspack.experiments.VirtualModules
     'serve the generated agent-bundle/meta module to browser MCP App bundles',
   );
 
-export interface CompiledMcpApp {
+/** One MCP App view the build will compile: the planning shape, known before the bundler runs. */
+export interface PlannedMcpApp {
   readonly _meta?: Readonly<Record<string, unknown>>;
   readonly id: string;
   readonly mimeType: typeof mcpAppMimeType;
@@ -44,6 +47,33 @@ export interface CompiledMcpApp {
   readonly source: string;
   readonly sourceInputs: readonly string[];
   readonly target: string;
+}
+
+/** The emitted size of one self-contained MCP App HTML document. */
+export interface McpAppOutputSize {
+  /** UTF-8 bytes of the emitted HTML as written to the artifact. */
+  readonly bytes: number;
+  /** Bytes of the same document after gzip, the size a compressing transport would carry. */
+  readonly gzipBytes: number;
+}
+
+/** A planned MCP App after its self-contained HTML was emitted and measured. */
+export interface CompiledMcpApp extends PlannedMcpApp {
+  readonly size: McpAppOutputSize;
+}
+
+/**
+ * Which profile the view compiler emits. `production` is the artifact
+ * profile every `agent-bundle build` ships; `development` is the Workbench
+ * dev-loop profile (readable output with inline source maps), still
+ * self-contained.
+ */
+export type McpAppCompileMode = 'development' | 'production';
+
+export interface CompiledMcpAppsResult {
+  readonly apps: readonly CompiledMcpApp[];
+  /** Compile warnings and advisories that did not fail the build; errors throw a `DiagnosticError` instead. */
+  readonly diagnostics: readonly Diagnostic[];
 }
 
 const usesReactSyntax = (source: string): boolean => /\.[jt]sx$/iu.test(extname(source));
@@ -82,22 +112,30 @@ const assertResolvedViewConfig = (
   }
 };
 
+/**
+ * Proves every planned view landed as exactly one self-contained HTML file
+ * and measures it: the emitted bytes and their gzip size are what the build
+ * summary reports and what the size advisory judges.
+ */
 const assertSelfContainedViews = async (
-  compiled: readonly CompiledMcpApp[],
+  compiled: readonly PlannedMcpApp[],
   outputRoot: string,
-): Promise<void> => {
+): Promise<ReadonlyMap<string, McpAppOutputSize>> => {
   const expected = new Set(compiled.map((entry) => entry.output));
   const files = await listArtifactFiles(outputRoot);
   if (files.length !== expected.size || files.some((entry) => !expected.has(resolve(outputRoot, entry.path)))) {
     throw new Error('Rsbuild emitted files beyond the stable self-contained MCP App HTML output.');
   }
 
+  const sizes = new Map<string, McpAppOutputSize>();
   for (const app of compiled) {
-    const html = await readFile(app.output, 'utf8');
-    if (/<(?:script|link)\b[^>]+(?:src|href)=/iu.test(html)) {
+    const html = await readFile(app.output);
+    if (/<(?:script|link)\b[^>]+(?:src|href)=/iu.test(html.toString('utf8'))) {
       throw new Error(`MCP App ${JSON.stringify(app.name)} HTML is not self-contained.`);
     }
+    sizes.set(app.name, Object.freeze({ bytes: html.byteLength, gzipBytes: gzipSync(html).byteLength }));
   }
+  return sizes;
 };
 
 /**
@@ -127,7 +165,7 @@ const selectedAppTarget = (
 export const planCompiledMcpApps = (
   apps: readonly NormalizedMcpApp[],
   options: Readonly<{ readonly outDir: string } & McpAppTargetSelection>,
-): readonly CompiledMcpApp[] => {
+): readonly PlannedMcpApp[] => {
   const planned = new Map<string, { identity: string; serverIds: string[]; app: NormalizedMcpApp; target: string }>();
   for (const app of apps) {
     const target = selectedAppTarget(app, options);
@@ -244,16 +282,18 @@ export const compileMcpApps = async (
     readonly cwd: string;
     /** The project identity served to widget source as `agent-bundle/meta`. */
     readonly meta: AgentBundleMeta;
+    /** Defaults to `production`; see {@link McpAppCompileMode}. */
+    readonly mode?: McpAppCompileMode;
     readonly outDir: string;
     readonly tools?: AgentBundleToolsConfig;
   } & McpAppTargetSelection>,
-): Promise<readonly CompiledMcpApp[]> => {
+): Promise<CompiledMcpAppsResult> => {
   const compiled = planCompiledMcpApps(apps, {
     outDir: options.outDir,
     ...(options.target === undefined ? { targets: options.targets } : { target: options.target }),
   });
   if (compiled.length === 0) {
-    return compiled;
+    return Object.freeze({ apps: Object.freeze([]), diagnostics: Object.freeze([]) });
   }
   await assertGeneratedModulesRootAbsent(options.cwd);
 
@@ -297,9 +337,11 @@ export const compileMcpApps = async (
     await result?.close();
   }
 
-  await assertSelfContainedViews(compiled, options.outDir);
-  return Object.freeze(compiled.map((app) => Object.freeze({
+  const sizes = await assertSelfContainedViews(compiled, options.outDir);
+  const compiledApps = Object.freeze(compiled.map((app): CompiledMcpApp => Object.freeze({
     ...app,
+    size: sizes.get(app.name) ?? (() => { throw new Error(`Missing emitted size for MCP App ${JSON.stringify(app.name)}.`); })(),
     sourceInputs: evidenceByPath.get(`mcp-apps/${app.name}.html`) ?? (() => { throw new Error(`Missing bundled MCP App evidence for ${JSON.stringify(app.name)}.`); })(),
   })));
+  return Object.freeze({ apps: compiledApps, diagnostics: Object.freeze([]) });
 };
