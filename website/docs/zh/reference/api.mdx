@@ -14,6 +14,7 @@ description: '生成的 agent-bundle 类型 API：它覆盖哪些入口点、如
 | --- | --- |
 | `agent-bundle` | 编写与编排表面：`defineSkill`、`canonicalAgentEvents`、`startDevServer`、`runEvals`、`compareEvals`、eval harness 工厂，以及产物清单辅助函数。 |
 | `agent-bundle/api` | 程序化编译器：`build`、`validate`、`inspect`、`prepack`，及其选项与结果类型，`AgentComponentKind` / `componentKindCapability` 组件类型辅助，以及产物操作 `listMcp`、`invokeMcp`、`runMcp`、`serveApp`（在浏览器里独立提供一个已构建的 MCP App——面向脚本与测试的宿主进程 API；产物内部的路由式 CLI 命令则改用 `agent-bundle/serve-app-command` 中的 `spawnServeApp`，见[独立提供 App](../guide/authoring/mcp.mdx#独立提供-app)）、`listHooks` 与 `simulateHook`；另有 Rspack stats 格式化工具 `rspackStatsErrors`、`describeRspackStatsError` 与 `formatRspackStatsError`，把一条编译错误渲染成与编译器 `AB4770` 相同的 `<file>:<line>:<column>: <message>` 行，供自行驱动 Rsbuild 编译的工具使用。 |
+| `agent-bundle/app` | 浏览器安全且不携带编译器的 MCP App 客户端：`createAppClient`、`AppRegister`、`AppClientError`，以及 `connect`、`call`、`request`、`onToolInput`、`onToolResult`、`onToolCancelled`、`rebind` 与 `dispose` 生命周期。编译器通过 `.agent-bundle/routes.d.ts` augmentation 提供 `tool:<server>/<name>` 路由的输入与结构化输出类型。 |
 | `agent-bundle/config` | `defineConfig` 与配置类型。 |
 | `agent-bundle/test` | 路由测试 harness、匹配器与契约矩阵。 |
 | `agent-bundle/test/browser` | 面向浏览器渲染视图的 MCP App bridge harness。 |
@@ -41,5 +42,7 @@ description: '生成的 agent-bundle 类型 API：它覆盖哪些入口点、如
 ## 从哪里开始
 
 - 从脚本中编译：`agent-bundle/api` 中的 `build` 与 `validate`。
+- 在 MCP App 中调用带类型的工具：`agent-bundle/app` 中的 `createAppClient`，详见
+  [带类型的 App 客户端](../guide/authoring/mcp.mdx#带类型的-app-客户端)。
 - 编写测试：`agent-bundle/test` 中的 `renderRoute`、`expectDocument` 与那些矩阵，在[测试](../guide/development/testing.mdx)中介绍。
 - 编写 eval：`agent-bundle/eval` 中的 `defineEvalSuite` 与那些断言，在[评测](../guide/development/evaluations.mdx)中介绍。

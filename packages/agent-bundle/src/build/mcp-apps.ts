@@ -18,6 +18,7 @@ import { stableJson } from '../core/digest.ts';
 import { MAX_APP_HTML_BYTES } from '../core/mcp-app-limits.ts';
 import { escapeRegExp } from '../core/strings.ts';
 import type { AgentBundleMeta } from '../meta.ts';
+import { appRuntimePath, appRuntimeSpecifier } from './app-runtime.ts';
 import { composeToolsLayers, frameworkInvariantLayer } from './compose-layers.ts';
 import { listArtifactFiles, resolveArtifactDestination } from './emit.ts';
 import {
@@ -39,6 +40,7 @@ import {
   virtualModulesPluginConstructor,
 } from './meta.ts';
 import { collectBundledOutputEvidence } from './provenance.ts';
+import { runtimeIgnoredRoot } from './runtime-path.ts';
 
 export type { McpAppCompileMode, McpAppOutputSize } from './mcp-app-diagnostics.ts';
 
@@ -178,11 +180,20 @@ const isMetaModuleReplacement = (plugin: unknown, metaModulePath: string): boole
   && plugin._args[0].test(metaModuleSpecifier)
   && plugin._args[1] === metaModulePath;
 
+const appRuntimeReplacement = (runtimePath: string): InstanceType<typeof rspack.NormalModuleReplacementPlugin> =>
+  new rspack.NormalModuleReplacementPlugin(new RegExp(`^${escapeRegExp(appRuntimeSpecifier)}$`, 'u'), runtimePath);
+
+const isAppRuntimeReplacement = (plugin: unknown, runtimePath: string): boolean =>
+  plugin instanceof rspack.NormalModuleReplacementPlugin
+  && plugin._args[0].test(appRuntimeSpecifier)
+  && plugin._args[1] === runtimePath;
+
 const assertResolvedViewConfig = (
   inspection: Awaited<ReturnType<Awaited<ReturnType<typeof createRsbuild>>['inspectConfig']>>,
   appNames: readonly string[],
   outputRoot: string,
   metaModulePath: string,
+  runtimePath: string,
 ): void => {
   const environments = inspection.origin.environmentConfigs;
   const bundlers = inspection.origin.bundlerConfigs;
@@ -212,7 +223,8 @@ const assertResolvedViewConfig = (
       bundler.output.path !== outputRoot ||
       // The reserved `agent-bundle/meta` specifier must beat a consumer
       // tsconfig `paths` entry that shadows it (see `metaModuleReplacement`).
-      !(bundler.plugins ?? []).some((plugin) => isMetaModuleReplacement(plugin, metaModulePath))
+      !(bundler.plugins ?? []).some((plugin) => isMetaModuleReplacement(plugin, metaModulePath)) ||
+      !(bundler.plugins ?? []).some((plugin) => isAppRuntimeReplacement(plugin, runtimePath))
     ) {
       throw new Error('Rsbuild resolved an invalid self-contained MCP App configuration.');
     }
@@ -340,6 +352,7 @@ export const composeMcpAppsRsbuildConfig = (
   },
 ): RsbuildConfig => {
   const metaModulePath = generatedMetaModulePath(options.cwd);
+  const runtimePath = appRuntimePath();
   const profile: RsbuildConfig = {
     environments: Object.fromEntries(sources.map((source) => [source.name, {
       // Every view carries the React plugin, whatever its entry extension: a
@@ -389,13 +402,18 @@ export const composeMcpAppsRsbuildConfig = (
     // imports exactly this specifier, never subpaths beneath it.
     config.resolve = {
       ...config.resolve,
-      alias: { ...config.resolve?.alias, [`${metaModuleSpecifier}$`]: metaModulePath },
+      alias: {
+        ...config.resolve?.alias,
+        [`${appRuntimeSpecifier}$`]: runtimePath,
+        [`${metaModuleSpecifier}$`]: metaModulePath,
+      },
     };
     // Added after the hatch mutator (this hook is merged last), so a consumer
     // cannot strip the generated identity module out of the compiler.
     const VirtualModulesPlugin = rsbuildVirtualModulesPlugin();
     config.plugins = [
       ...(config.plugins ?? []),
+      appRuntimeReplacement(runtimePath),
       metaModuleReplacement(metaModulePath),
       new VirtualModulesPlugin({ [metaModulePath]: generatedMetaModuleSource(options.meta) }),
     ];
@@ -456,7 +474,14 @@ export const compileMcpApps = async (
   const collectedStats = new Map<string, Rspack.StatsCompilation>();
   rsbuild.addPlugins([mcpAppStatsCollectorPlugin(collectedStats), mcpAppHtmlDefaultsPlugin()]);
   const inspection = await rsbuild.inspectConfig({ mode: 'production' });
-  assertResolvedViewConfig(inspection, compiled.map((app) => app.name), options.outDir, generatedMetaModulePath(options.cwd));
+  const runtimePath = appRuntimePath();
+  assertResolvedViewConfig(
+    inspection,
+    compiled.map((app) => app.name),
+    options.outDir,
+    generatedMetaModulePath(options.cwd),
+    runtimePath,
+  );
   const contexts: readonly McpAppDiagnosticContext[] = compiled.map((app) => ({
     appName: app.name,
     entrySource: app.source,
@@ -493,7 +518,10 @@ export const compileMcpApps = async (
       })),
       // The generated identity module is virtual, but it still surfaces in
       // stats as a module under this reserved namespace.
-      ignoredSourcePaths: [resolve(generatedModulesRoot(options.cwd))],
+      ignoredSourcePaths: [
+        resolve(generatedModulesRoot(options.cwd)),
+        runtimeIgnoredRoot(runtimePath),
+      ],
       projectRoot: options.cwd,
       stats: result.stats,
     });

@@ -664,13 +664,45 @@ refresh）的 `@rsbuild/plugin-react` 注册在每个 App 环境上，因此 `St
 有 `React` 导入的 `React.createElement` 调用。JSX 语法本身仍然只能写在 `.tsx`/`.jsx` 文件里，因为
 打包器按扩展名识别模块的语法。
 
+### 带类型的 App 客户端
+
+App 视图通过浏览器安全的 `agent-bundle/app` 入口调用自己的路由，不需要自行实现 JSON-RPC id、pending
+request、超时、结果 envelope 或 `window.parent.postMessage('*')`：
+
+```ts
+import { createAppClient } from 'agent-bundle/app';
+
+const client = createAppClient();
+await client.connect();
+
+const status = await client.call('tool:status/show-status', {
+  service: 'payments-api',
+});
+```
+
+编译器会在 `.agent-bundle/routes.d.ts` 中生成对 `AppRegister` 的 module augmentation。它从同一份
+Application IR 推导每个工具的输入与结构化输出，因此 App 只导入浏览器安全的声明与运行时，不会把服务器
+路由模块、Zod 或 Node 代码带进视图 bundle。工具路由 id 的规范形式是
+`tool:<server>/<name>`；上例中的 `status` 变量直接是该路由 `resultSchema` 所描述的对象，而不是要求
+App 再从 `structuredContent` 中解包的 MCP 结果 envelope。
+
+同一个客户端拥有宿主桥接的完整生命周期：`connect` 建立连接，`call` 调用已注册工具，`request` 发送
+受支持的桥接请求；`onToolInput`、`onToolResult` 与 `onToolCancelled` 监听包括开场调用在内的宿主
+notification，并各自返回移除 listener 的函数。`rebind` 在宿主换代后绑定新的 parent/origin，`dispose`
+则取消 pending 工作、移除 listener 并关闭客户端。
+
+连接、调用与能力失败会抛出 `AppClientError`，调用方可直接判断其稳定 `code`：`timeout`、`aborted`、
+`disposed`、`connection-rebound`、`invalid-message`、`rpc`、`capability-unavailable` 或
+`consent-required`，不需要解析错误文案。`agent-bundle/app` 不携带编译器，因此 App 中的值导入不会触发
+保护自包含可执行文件的 `AB4837`。
+
 ### 保留标识符优先
 
 你的 `tsconfig.json` `paths` 在视图内照常生效（`@lib/*`、`@/components/*` 等）：Rsbuild 会像往常
-一样把它们交给打包器，并在所有别名之前解析。唯一不受它们影响的标识符是 `agent-bundle/meta`：编译器
-会在解析开始之前就把这个精确的导入改写为生成的身份模块，因此针对 `agent-bundle/meta` 的 `paths`
-映射在编译出的视图内不起作用——无论哪次构建、无论哪份 tsconfig，App 导入的都是框架的身份模块。
-若某个 `tools` 逃生舱移除了这一改写，已解析配置断言会拒绝该构建。
+一样把它们交给打包器，并在所有别名之前解析。不受它们影响的标识符是 `agent-bundle/meta` 与
+`agent-bundle/app`：编译器会在解析开始之前改写这两个精确导入，因此 `paths` 映射既不能替换生成的
+身份模块，也不能替换框架的浏览器运行时。若某个 `tools` 逃生舱移除了任一改写，已解析配置断言会拒绝
+该构建。
 
 ### 编译错误与体积
 
@@ -689,14 +721,10 @@ MCP App "status" failed to compile: views/status.ts:1:10: Module build failed
 包括 `tsconfig.json` 问题那种不带位置的形式。
 
 成功的构建会在 `Built …` 之后为每个 App 打印一行，按 target 与 App 名称排序，给出输出体积及其
-gzip 体积（`--json` 中为 `build.compiledMcpApps[].size.bytes` 与 `.gzipBytes`）：
+gzip 体积（`--json` 中为 `build.compiledMcpApps[].size.bytes` 与 `.gzipBytes`）。数字来自当次实际
+输出；不要把某次示例构建的体积当作固定契约。
 
-```text
-Built mcp-app-example to …/mcp-app-example/artifact
-MCP App status (portable): mcp-apps/status.html 427.1 KiB (102.1 KiB gzip)
-```
-
-这个例子已接近下限。任何导入 `@modelcontextprotocol/ext-apps` 的视图都会带上 `zod`（v3 与 v4）、
+任何导入 `@modelcontextprotocol/ext-apps` 的视图都会带上 `zod`（v3 与 v4）、
 `@modelcontextprotocol/sdk`、`zod-to-json-schema` 以及 `ext-apps` 本身——在你写下第一行自己的代码
 之前就约有 437 kB（gzip 后 104 kB）——因此一个健康的视图远在 1 MiB 以下。生产构建的输出达到或超过
 1 MiB 时会报告 `AB4772` 建议性诊断并点名最大的五个模块；任何超过 2 MiB 的构建也会报告它，因为

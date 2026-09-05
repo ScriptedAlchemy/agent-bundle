@@ -22,6 +22,7 @@ const packageSource = path.join(repoRoot, 'packages', 'agent-bundle', 'src');
 const publicApiEntryPoints = [
   'index.ts',
   'api.ts',
+  'app/index.ts',
   'cli-entry.ts',
   'config/index.ts',
   'eval/index.ts',

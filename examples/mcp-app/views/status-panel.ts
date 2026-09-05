@@ -1,7 +1,6 @@
-import { App, PostMessageTransport } from '@modelcontextprotocol/ext-apps';
+import { createAppClient } from 'agent-bundle/app';
 import { name, version } from 'agent-bundle/meta';
 
-const app = new App({ name, version }, {});
 const serviceHeading = document.querySelector<HTMLHeadingElement>('#service')!;
 const statusIndicator = document.querySelector<HTMLElement>('#status-indicator')!;
 const status = document.querySelector<HTMLElement>('#status')!;
@@ -22,6 +21,44 @@ interface ServiceStatus {
   readonly status?: string;
   readonly summary?: string;
 }
+
+interface StatusToolInput {
+  readonly service: string;
+}
+
+/**
+ * Config-declared Apps have no generated `AgentBundleRoutes`. This structural
+ * map types `createAppClient` through the public `AppRegister` seam.
+ */
+type StatusPanelRouteContracts = {
+  readonly 'tool:status/show-status': {
+    readonly input: StatusToolInput;
+    readonly result: ServiceStatus;
+  };
+  readonly 'tool:status/refresh-status': {
+    readonly input: StatusToolInput;
+    readonly result: ServiceStatus;
+  };
+};
+
+declare module 'agent-bundle/app' {
+  interface AppRegister {
+    readonly routes: StatusPanelRouteContracts;
+  }
+}
+
+const showStatusRoute = 'tool:status/show-status';
+const refreshStatusRoute = 'tool:status/refresh-status';
+const readinessPolicyUri = 'ui://mcp-app-example/readiness-policy';
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const resourceText = (value: unknown): string | undefined => {
+  if (!isRecord(value) || !Array.isArray(value.contents)) return undefined;
+  const content = value.contents[0];
+  return isRecord(content) && typeof content.text === 'string' ? content.text : undefined;
+};
 
 const statusState = (value: string | undefined): StatusState => {
   if (value === 'checking' || value === 'healthy' || value === 'degraded') return value;
@@ -53,20 +90,23 @@ const renderChecks = (items: readonly ServiceCheck[]) => {
   }));
 };
 
-app.addEventListener('toolinput', ({ arguments: toolArguments }) => {
-  const service = typeof toolArguments?.service === 'string' ? toolArguments.service : 'service';
+const client = createAppClient({
+  appInfo: { name, version },
+});
+
+client.onToolInput(showStatusRoute, (input) => {
+  const service = typeof input.service === 'string' ? input.service : 'service';
   serviceHeading.textContent = service;
   setStatus('checking');
   summary.textContent = `Checking readiness for ${service}.`;
   renderChecks([]);
 });
 
-app.addEventListener('toolresult', (result) => {
-  const content = result.structuredContent as ServiceStatus | undefined;
-  serviceHeading.textContent = content?.service ?? 'No service selected';
-  setStatus(content?.status);
-  summary.textContent = content?.summary ?? 'No readiness summary was returned.';
-  renderChecks(content?.checks ?? []);
+client.onToolResult(showStatusRoute, (result) => {
+  serviceHeading.textContent = result.service ?? 'No service selected';
+  setStatus(result.status);
+  summary.textContent = result.summary ?? 'No readiness summary was returned.';
+  renderChecks(result.checks ?? []);
 });
 
 document.querySelector('#toggle-details')!.addEventListener('click', () => {
@@ -75,11 +115,8 @@ document.querySelector('#toggle-details')!.addEventListener('click', () => {
 
 document.querySelector('#read-policy')!.addEventListener('click', async () => {
   try {
-    const result = await app.readServerResource({ uri: 'ui://mcp-app-example/readiness-policy' });
-    const content = result.contents[0];
-    bridgeOutcome.textContent = content !== undefined && 'text' in content
-      ? content.text
-      : 'Readiness policy unavailable.';
+    const text = resourceText(await client.request('resources/read', { uri: readinessPolicyUri }));
+    bridgeOutcome.textContent = text ?? 'Readiness policy unavailable.';
   } catch {
     bridgeOutcome.textContent = 'Readiness policy unavailable.';
   }
@@ -87,14 +124,13 @@ document.querySelector('#read-policy')!.addEventListener('click', async () => {
 
 document.querySelector('#refresh-status')!.addEventListener('click', async () => {
   try {
-    const result = await app.callServerTool({
-      arguments: { service: serviceHeading.textContent ?? 'service' },
-      name: 'refresh-status',
+    await client.call(refreshStatusRoute, {
+      service: serviceHeading.textContent ?? 'service',
     });
-    bridgeOutcome.textContent = result.isError === true ? 'Refresh unavailable.' : 'Status refreshed.';
+    bridgeOutcome.textContent = 'Status refreshed.';
   } catch {
     bridgeOutcome.textContent = 'Refresh unavailable.';
   }
 });
 
-await app.connect(new PostMessageTransport(window.parent, window.parent));
+await client.connect();

@@ -55,6 +55,47 @@ describe('writeRouteTypes', () => {
     expect(await readdir(join(root, '.agent-bundle'))).toEqual(['routes.d.ts']);
   });
 
+  it('publishes declarations only, registering the App tool subset exactly when a tool route exists', async () => {
+    const root = await scratchRoot();
+    await writeRouteTypes(root, oneRouteGraph(root));
+    const withTool = await readFile(join(root, routeTypesRelativePath), 'utf8');
+    // Every import is type-only, so the published file can never load a route module, Zod, or Node.
+    expect(withTool.split('\n').filter((line) => line.startsWith('import'))).toEqual([
+      'import type * as route0 from "../src/mcp/curator/tools/inspect.js";',
+    ]);
+    expect(withTool).toContain("declare module '@agent-bundle/runtime' {\n  interface Register {\n    readonly routes: AgentBundleRouteContracts;\n  }\n}");
+    expect(withTool).toContain("declare module 'agent-bundle/app' {\n  interface AppRegister {\n    readonly routes: AgentBundleAppRouteContracts;\n  }\n}");
+    expect(withTool.match(/declare module 'agent-bundle\/app'/gu)).toHaveLength(1);
+    expect(withTool.match(/"tool:curator\/inspect"/gu)).toHaveLength(1);
+
+    // A prompt is executable, so the file stays published, but it is not a `tools/call` target: the App
+    // registration is gone while the runtime registration remains.
+    const promptOnly: CompiledRouteGraph = {
+      ...emptyCompiledRouteGraph,
+      servers: [{
+        id: 'mcp:curator',
+        mode: 'generated',
+        name: 'curator',
+        routes: [{
+          config: {},
+          id: 'prompt:curator/brief',
+          kind: 'prompt',
+          provenance: { kind: 'conventional', relativePath: 'src/mcp/curator/prompts/brief.ts' },
+          serverId: 'mcp:curator',
+          source: join(root, 'src/mcp/curator/prompts/brief.ts'),
+        }],
+      }],
+    };
+    await expect(writeRouteTypes(root, promptOnly)).resolves.toBe(routeTypesRelativePath);
+    const withoutTool = await readFile(join(root, routeTypesRelativePath), 'utf8');
+    expect(withoutTool).toBe(generateRouteTypes(promptOnly));
+    expect(withoutTool).toContain('"prompt:curator/brief": RouteContract<typeof route0.inputSchema, typeof route0.resultSchema>;');
+    expect(withoutTool).toContain("declare module '@agent-bundle/runtime'");
+    expect(withoutTool).not.toContain('agent-bundle/app');
+    expect(withoutTool).not.toContain('AgentBundleAppRouteContracts');
+    expect(await readdir(join(root, '.agent-bundle'))).toEqual(['routes.d.ts']);
+  });
+
   it('removes a stale declaration file when the graph has nothing to type', async () => {
     const root = await scratchRoot();
     await writeRouteTypes(root, oneRouteGraph(root));

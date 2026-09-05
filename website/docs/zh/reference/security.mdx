@@ -49,6 +49,15 @@ Skill Markdown 中的原始 HTML、JSX/MDX 与 Mermaid 在 Workbench 渲染器�
 检查；App 文档运行在框架沙箱内的第二个 loopback origin 上，并且每一个 App 动作仍与 Workbench 一样经过同一
 个同意授权（`--allow` 代操作者预先批准指定能力）。它是本地预览宿主，不是部署目标。
 
+`agent-bundle/app` 的浏览器传输也不会信任任意 `postMessage` 发送者。沙箱先以 opaque-origin `srcdoc`
+引导，因此框架只用通配目标发送第一次 `ui/initialize`；客户端仅接受预期 parent `Window` 以匹配请求 id
+返回的有效初始化响应，并从该响应固定明确的 `origin`。此后每条消息都必须同时匹配该 `source` 与
+`origin`。关闭或由 App 显式 `rebind` 会撤销旧 pin 并取消仍在等待的请求。
+
+这条桥接以宿主 relay 为安全边界：App 客户端只与预期 parent 通信；Workbench、`serve-app` 或嵌入式 MCP
+宿主负责把允许的请求转发到所绑定的那一个服务器，并继续执行各自的认证、能力与同意策略。App 不会绕过
+relay 直接访问前台路由或 MCP 后端，relay 也不会把另一个 App、服务器或浏览器 origin 的权限合并进来。
+
 ## Agent API
 
 Agent API 默认关闭。启用时，它是挂载在同一个 loopback 前台服务器 `/mcp` 路径上、经过认证的 Streamable

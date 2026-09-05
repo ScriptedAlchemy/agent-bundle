@@ -31,6 +31,7 @@ import type {
   GeneratedCliRenderContext,
   GeneratedCliRenderSession,
 } from '../cli-entry.ts';
+import { parseMcpRouteProtocolId } from '../routes/protocol-name.ts';
 import { createProviderProcessLifetime, type ProviderProcessLifetime } from '../routes/provider-execution.ts';
 import { routeRenderLimits, type RouteRenderBudget } from '../routes/render-budget.ts';
 import type { CompiledCliCommand } from '../routes/types.ts';
@@ -357,8 +358,12 @@ interface ResolvedTarget {
   readonly render?: RouteRenderBudget;
 }
 
-/** The protocol name a generated server registers, and the request surface it records. */
-const protocolName = (routeId: string): string => routeId.slice(routeId.lastIndexOf('/') + 1);
+/**
+ * The protocol name a generated server registers, and the request surface it
+ * records. Module-direct renders may omit a canonical id (`(module passed to
+ * renderRoute)`); those keep the id itself as the surface name.
+ */
+const protocolName = (routeId: string): string => parseMcpRouteProtocolId(routeId)?.name ?? routeId;
 
 /**
  * Props the route component receives. MCP route kinds get exactly the public

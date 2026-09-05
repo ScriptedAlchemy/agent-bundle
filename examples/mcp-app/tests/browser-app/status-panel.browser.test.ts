@@ -68,6 +68,18 @@ const mountStatus = async (overrides: Partial<Parameters<typeof mountBrowserApp>
   return app;
 };
 
+const appToHostMethods = (app: MountedBrowserApp): readonly string[] =>
+  app.traffic
+    .filter((entry) => entry.direction === 'app-to-host')
+    .map((entry) => entry.message.method)
+    .filter((method): method is string => typeof method === 'string');
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const messageParam = (message: { readonly params?: unknown }, key: string): unknown =>
+  isRecord(message.params) ? message.params[key] : undefined;
+
 it('mounts the compiled panel, initializes the bridge, and renders the published result accessibly', async () => {
   const app = await mountStatus();
   await waitFor(() => app.document.querySelector('#status')?.textContent === 'degraded');
@@ -75,10 +87,31 @@ it('mounts the compiled panel, initializes the bridge, and renders the published
   expect(app.bridge.lifecycle).toBe('initialized');
   expect(app.document.querySelector('main')).not.toBeNull();
   expect(app.document.querySelector('h1')?.textContent).toBe('payments-api');
+  expect(app.document.querySelector('#summary')?.textContent).toBe(
+    'Payment latency is above the release threshold.',
+  );
   expect(app.document.querySelector('[aria-label="Service checks"]')).not.toBeNull();
-  expect(app.document.querySelectorAll('#checks li')).toHaveLength(2);
+  expect([...app.document.querySelectorAll('#checks li')].map((item) => item.textContent)).toEqual([
+    'Availabilitypassing',
+    'P95 latencyfailing',
+  ]);
   expect(app.provenance).toMatchObject({ proofLevel: 'browser-app', target: 'portable' });
+  expect(app.traffic.some(({ message }) => message.method === 'ui/notifications/tool-input')).toBe(true);
   expect(app.traffic.some(({ message }) => message.method === 'ui/notifications/tool-result')).toBe(true);
+});
+
+it('uses the public App client without author wildcard or ext-apps plumbing', async () => {
+  const app = await mountStatus();
+  await waitFor(() => app.document.querySelector('#status')?.textContent === 'degraded');
+
+  const html = app.iframe.srcdoc ?? '';
+  expect(html).not.toContain('@modelcontextprotocol/ext-apps');
+  expect(html).not.toContain('PostMessageTransport');
+  expect(html).not.toContain('window.parent.postMessage');
+  expect(appToHostMethods(app)).toEqual([
+    'ui/initialize',
+    'ui/notifications/initialized',
+  ]);
 });
 
 it('round-trips a resource read from the real App through binding operations', async () => {
@@ -89,7 +122,11 @@ it('round-trips a resource read from the real App through binding operations', a
   await waitFor(() => app.document.querySelector('#bridge-outcome')?.textContent?.includes('passing checks') === true);
 
   expect(reads).toEqual(['ui://mcp-app-example/readiness-policy']);
-  expect(app.traffic.some(({ message }) => message.method === 'resources/read')).toBe(true);
+  expect(appToHostMethods(app)).toContain('resources/read');
+  expect(app.traffic.some(({ message }) => (
+    message.method === 'resources/read'
+    && messageParam(message, 'uri') === 'ui://mcp-app-example/readiness-policy'
+  ))).toBe(true);
 });
 
 it('holds a tool call for consent, resumes approval once, and denies without calling the binding', async () => {
@@ -104,6 +141,11 @@ it('holds a tool call for consent, resumes approval once, and denies without cal
   await expect(approved.decideConsent(challenge.id, true)).resolves.toBe(true);
   await waitFor(() => approved.document.querySelector('#bridge-outcome')?.textContent === 'Status refreshed.');
   expect(approvedCalls).toEqual(['refresh-status']);
+  expect(appToHostMethods(approved)).toContain('tools/call');
+  expect(approved.traffic.some(({ message }) => (
+    message.method === 'tools/call'
+    && messageParam(message, 'name') === 'refresh-status'
+  ))).toBe(true);
 
   const deniedCalls: string[] = [];
   const denied = await mountStatus({ operations: operations({ calls: deniedCalls }) });

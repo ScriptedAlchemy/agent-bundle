@@ -36,6 +36,7 @@ import type { ReactNode } from 'react';
 import type { NoticeDeliveryAdvertisement } from '../adapters/notice-delivery.ts';
 import type { NormalizedNoticeRetentionPolicy } from '../core/types.ts';
 import type { GeneratedNoticeDeliveryBinding, GeneratedNoticePrincipal } from '../mcp-server-runtime.ts';
+import { mcpRouteProtocolName } from '../routes/protocol-name.ts';
 import { createProviderProcessLifetime } from '../routes/provider-execution.ts';
 import { AgentTestError, captured } from './errors.ts';
 import { composeLayouts, loadLayoutChain, type LoadedLayout } from './layouts.ts';
@@ -425,7 +426,7 @@ export const openInMemoryMcpServer = async <
       id: descriptor.id,
       kind: descriptor.kind,
       module: { ...module, resultSchema: module.resultSchema },
-      name: descriptor.id.slice(descriptor.id.lastIndexOf('/') + 1),
+      name: mcpRouteProtocolName(descriptor.id),
     };
     layoutsByRoute.set(
       descriptor.id,

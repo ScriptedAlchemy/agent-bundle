@@ -10,9 +10,8 @@ description: 'MCP App 示例：把一条服务就绪度工作流表达为生成�
 
 - **在仓库根目录运行：** `pnpm example:mcp-app`
 - **包名：** `@agent-bundle-example/mcp-app`
-- **公开依赖：** `agent-bundle`（`workspace:*`）、`@modelcontextprotocol/server`、
-  `@modelcontextprotocol/ext-apps`、`zod`；浏览器端 App 测试还用到 `@rstest/browser`、`@rstest/core`、
-  `@rstest/playwright` 与 `playwright`
+- **公开依赖：** `agent-bundle`（`workspace:*`）、`@modelcontextprotocol/server`、`zod`；浏览器端 App
+  测试还用到 `@rstest/browser`、`@rstest/core`、`@rstest/playwright` 与 `playwright`
 - **Target：** `portable`、`codex`、`claude`——MCP App 资源仅保留在 portable
 - **凭据：** 不需要——eval 与夹具检查只读取签入的数据
 - **源码：** [`examples/mcp-app`](https://github.com/ScriptedAlchemy/agent-bundle/tree/main/examples/mcp-app)
@@ -32,6 +31,9 @@ description: 'MCP App 示例：把一条服务就绪度工作流表达为生成�
 - **浏览器表面自成一个证明级别。** `tests/browser-app/status-panel.browser.test.ts` 通过
   `agent-bundle/test/browser` 把生产编译出的 App HTML 挂载到产品桥接之上——也就是
   [测试](../guide/development/testing.mdx)中的 `browser-app` 级别。
+- **App 使用生成的路由契约。** 状态面板从 `agent-bundle/app` 创建客户端，以
+  `tool:status/show-status` 调用同一条工具路由，并直接接收其带类型的结构化对象；它不再自行维护
+  `postMessage` transport 或解包 MCP 结果 envelope。
 
 ## 编写了什么
 

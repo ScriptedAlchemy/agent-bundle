@@ -744,15 +744,125 @@ a `.ts` entry as behind a `.tsx` one — never to a `React.createElement` call t
 `React` import in scope. JSX syntax itself still belongs in `.tsx`/`.jsx` files, because the
 bundler detects a module's syntax from its extension.
 
+### The typed App client
+
+A view talks to its host through `agent-bundle/app`, a browser-safe leaf of the package that
+imports no Zod, Node built-in, Effect, or compiler code. `createAppClient()` owns the MCP Apps
+handshake, request ids, pending requests, timeouts and cancellation, JSON-RPC and result-envelope
+decoding, and the parent-window transport, so a view never hand-writes a `postMessage` frame or a
+`structuredContent` reader:
+
+```ts
+// src/mcp/hauler/apps/dashboard.ts
+import { createAppClient } from 'agent-bundle/app';
+
+const client = createAppClient({
+  appInfo: { name: 'hauler-dashboard', version: '1' },
+  timeoutMs: 15_000,
+});
+
+await client.connect();
+// The route's structured result object, typed from its `resultSchema`.
+const status = await client.call('tool:hauler/hauler_status', { limit: 40 });
+
+const stop = client.onToolResult('tool:hauler/hauler_status', (opening) => { /* typed */ });
+client.onToolInput('tool:hauler/hauler_status', (input) => { /* typed */ });
+client.onToolCancelled(({ reason }) => { /* the opening call ended without a result */ });
+
+stop();
+client.dispose();
+```
+
+**Route ids and types.** A tool is addressed by its route id, `tool:<server>/<name>`. The client
+derives the wire tool name from the final segment, exactly as the generated server does, and any
+other shape is a `TypeError`. The types come from the compiler: when the route graph has at least
+one tool route, the generated `.agent-bundle/routes.d.ts` adds exactly one augmentation on
+`agent-bundle/app`,
+
+```ts
+declare module 'agent-bundle/app' {
+  interface AppRegister {
+    readonly routes: AgentBundleAppRouteContracts;
+  }
+}
+```
+
+whose members are the project's generated MCP **tool** routes (`AppToolRouteId` in the same
+file) — `input` inferred from each route's `inputSchema`, `result` from its `resultSchema`. Once
+that file is in the project's TypeScript program (the templates list `".agent-bundle/routes.d.ts"`
+in `tsconfig.json` `include`; `AB4834` when a routed project leaves it out), a literal route id is
+checked against the compiled tools, `input` is typed from that route, and the result is that
+route's structured object. The declaration imports the route modules type-only, so no route
+module, schema, or server code enters the App document. Without the augmentation — a handwritten
+server, or a program that omits the file — `call()` still works with `unknown` input and result,
+and a view may declare its own contract map through the same `AppRegister` seam, as the
+[MCP App example](../../examples/mcp-app.mdx) does for its handwritten `status` server.
+`AppRouteId`, `AppRouteInput<Id>`, and `AppRouteResult<Id>` name the same surface for wrappers.
+
+**Calls and results.** `call()` returns the structured result **directly**; the MCP `content`,
+`_meta`, and `isError` envelope is transport data. It rejects with an `AppClientError` when the
+tool result carries `isError: true` (`code: 'rpc'`, the whole result on `error.data`), has no
+object `structuredContent`, or is not a well-formed result (`invalid-message`). This matches the
+generated MCP projection: only an object-rooted `resultSchema` produces `structuredContent`, so a
+scalar or array result is not a typed App call. `request(method, params?)` is the lower-level
+escape hatch for `resources/read` and the `ui/*` methods the host supports, resolving to the
+JSON-RPC result as is. Both connect first when `connect()` has not been awaited. Every request
+takes `{ signal, timeoutMs }`; the client default is 15 seconds (`timeoutMs` on
+`createAppClient`), and a request that times out or is aborted rejects with `timeout` or
+`aborted` and sends `notifications/cancelled` to the host.
+
+**Opening notifications.** `onToolInput` and `onToolResult` observe the tool call that opened the
+App (`ui/notifications/tool-input` and `ui/notifications/tool-result`); `onToolResult` delivers
+the decoded `structuredContent`, not the envelope. Those notifications name no tool — they are
+always the opening call — so the route id you register with supplies the payload type, not a
+filter. `onToolCancelled` reports the terminal `ui/notifications/tool-cancelled` with its optional
+`reason`. Each registration returns its unsubscribe function.
+
+**Errors.** One class, `AppClientError`, with a discriminated `code`: `timeout`, `aborted`,
+`disposed`, `connection-rebound`, `invalid-message`, `rpc`, `capability-unavailable`, or
+`consent-required`. A JSON-RPC error from the host maps by its code — `-32601` to
+`capability-unavailable`, `-32001` to `consent-required`, anything else to `rpc` — with `rpcCode`
+and `data` preserved. None of this is an `AB` diagnostic: App-side failures are browser errors,
+not build output.
+
+**Lifecycle and origin pinning.** The Workbench and `serve-app` render the App as an opaque,
+no-referrer `srcdoc` sandbox, so the document cannot know its host's origin up front. `connect()`
+therefore sends exactly one frame to `'*'` — the framework-owned `ui/initialize` — and accepts a
+response only from the configured parent window (`event.source`), with that request's id and a
+valid initialize result (protocol version `2026-01-26`, `hostInfo`, `hostCapabilities`,
+`hostContext`). It pins the responding `event.origin` (an opaque `null` origin is refused), sends
+`ui/notifications/initialized` and every later request to that exact origin, and ignores every
+message from any other source or origin. A host that can supply a trusted origin passes
+`targetOrigin` — an exact `http:`/`https:` origin; `'*'` is rejected — and no wildcard frame is
+sent at all. `connect()` is idempotent. `rebind({ parent?, targetOrigin?, window? })` rejects the
+previous generation's pending requests with `connection-rebound`, clears the pin, and performs the
+handshake again against the new parent. `dispose()`, also idempotent, removes the listener,
+rejects pending requests with `disposed`, and drops every registration; a host's
+`ui/resource-teardown` request is acknowledged and disposes the client. The transport is
+DOM-shaped rather than bound to the global `window`: `window` and `parent` are injectable, which
+is how tests and non-DOM hosts drive the same client.
+
+**The host-side boundary.** The client is the App-inside-the-iframe half of the bridge. The other
+half — the frame relay, sandbox proxy, host page, `/api/mcp/...` routes, and consent authority —
+belongs to the host: the Workbench MCP page, `agent-bundle serve-app`, an MCP host embedding the
+App, and the standalone production host of
+[#564](https://github.com/ScriptedAlchemy/agent-bundle/issues/564) all serve this one client over
+the same wire contract (`McpAppBridge`), and the host, never the App, decides which server a call
+reaches and which capabilities need consent. An App reaches no foreground server or MCP backend
+except through its relay.
+
+`agent-bundle/app` is bundle-safe: it is not one of the compiler-carrying entries `AB4837`
+rejects, and the compiler inlines it into the App document from the installed package like any
+other dependency.
+
 ### Reserved specifiers win
 
 Your `tsconfig.json` `paths` work inside a view (`@lib/*`, `@/components/*`, and so on):
-Rsbuild hands them to the bundler as usual, where they resolve ahead of every alias. The one
-specifier that escapes them is `agent-bundle/meta`: the compiler rewrites that exact import to
-the generated identity module before resolution starts, so a `paths` mapping for
-`agent-bundle/meta` has no effect inside a compiled view — the framework's identity is what the
-App imports, in every build, with every tsconfig. The resolved-config assertion refuses a build
-where a `tools` hatch removed that rewrite.
+Rsbuild hands them to the bundler as usual, where they resolve ahead of every alias. The
+specifiers that escape them are `agent-bundle/meta` and `agent-bundle/app`: the compiler rewrites
+those exact imports before resolution starts, so a `paths` mapping cannot replace the generated
+identity or the framework's browser runtime. The resolved-config assertion refuses a build where
+a `tools` hatch removed either rewrite.
 
 ### Compile errors and size
 
@@ -777,14 +887,16 @@ the emitted size and its gzip size (`build.compiledMcpApps[].size.bytes` and `.g
 `--json`):
 
 ```text
-Built mcp-app-example to …/mcp-app-example/artifact
-MCP App status (portable): mcp-apps/status.html 427.1 KiB (102.1 KiB gzip)
+Built <plugin> to …/<plugin>/artifact
+MCP App <name> (<target>): mcp-apps/<name>.html <size> (<gzip size> gzip)
 ```
 
-That example is close to the floor. Any view that imports `@modelcontextprotocol/ext-apps`
-carries `zod` (v3 and v4), `@modelcontextprotocol/sdk`, `zod-to-json-schema`, and `ext-apps`
-itself — about 437 kB (104 kB gzip) before the first line of your own code — so a healthy view
-sits well under 1 MiB. A production build that emits 1 MiB or more reports the `AB4772`
+The figures are that build's own measurement, not a contract. A view that reaches its host
+through `agent-bundle/app` carries the framework's client and nothing else from the protocol
+stack; one that imports `@modelcontextprotocol/ext-apps` instead carries `zod` (v3 and v4),
+`@modelcontextprotocol/sdk`, `zod-to-json-schema`, and `ext-apps` itself — about 437 kB (104 kB
+gzip) before the first line of your own code — and even that view sits well under 1 MiB. A
+production build that emits 1 MiB or more reports the `AB4772`
 advisory naming the five largest modules; any build over 2 MiB reports it too, because 2 MiB is
 the bound above which the Workbench and `serve-app` hosts refuse the resource and the view stops
 rendering there. The thresholds are fixed; no config key moves them.

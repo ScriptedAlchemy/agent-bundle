@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
-import { basename, dirname, extname, join, relative, resolve } from 'node:path';
+import { dirname, extname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import type { NoticeDeliveryAdvertisement } from '../adapters/notice-delivery.ts';
@@ -48,6 +48,9 @@ import { emptyRouteConfig, type CompiledLayout, type CompiledProvider } from '..
 import type { CompiledMcpApp } from './mcp-apps.ts';
 import type { ArtifactOutputKind } from './provenance.ts';
 import type { RslibEntry, RslibSurfacePlan } from './rslib.ts';
+import { runtimeIgnoredRoot } from './runtime-path.ts';
+
+export { runtimeIgnoredRoot } from './runtime-path.ts';
 
 /**
  * Spelled as paths, not `new URL(…, import.meta.url)`: the package's own
@@ -64,27 +67,6 @@ const eventRuntimeModulePath = (module: 'ipc' | 'project'): string => {
     if (existsSync(path)) return path;
   }
   throw new Error(`Unable to locate the compiler-owned event ${module} runtime module.`);
-};
-
-/**
- * The package root owning one compiler-provided runtime module. Provenance
- * collects consumer sources, and a runtime module reaches its own siblings
- * (`routes/public.ts`, `core/*`) as it is inlined, so the whole owning package
- * is what has to be ignored rather than the single aliased file.
- */
-export const runtimeIgnoredRoot = (path: string): string => {
-  const normalized = path.replaceAll('\\', '/');
-  let directory = dirname(normalized);
-  while (true) {
-    if (basename(directory) === 'dist' || basename(directory) === 'src') {
-      return resolve(dirname(directory));
-    }
-    const parent = dirname(directory);
-    if (parent === directory) {
-      throw new Error(`Runtime module is not under an owning package src or dist directory: ${JSON.stringify(path)}.`);
-    }
-    directory = parent;
-  }
 };
 
 export interface CompiledEntry {
