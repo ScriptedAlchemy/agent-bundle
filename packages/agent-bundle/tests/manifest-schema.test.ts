@@ -527,6 +527,8 @@ const schemaEncodedRules: readonly { readonly apply: (manifest: MutableManifest)
   { apply: (manifest) => { manifest.files[0]!.path = 'agent-bundle.manifest.json'; }, rule: 'files never name the manifest' },
   { apply: (manifest) => { manifest.files[0]!.path = 'state/index.json'; }, rule: 'files are never under the runtime-owned state root' },
   { apply: (manifest) => { manifest.files[0]!.path = 'State/index.json'; }, rule: 'files are never under the runtime-owned state root in any letter case' },
+  { apply: (manifest) => { manifest.files[0]!.path = '.agent-bundle-install.json'; }, rule: 'files never name the installer receipt' },
+  { apply: (manifest) => { manifest.files[0]!.path = '.Agent-Bundle-Install.JSON/nested.txt'; }, rule: 'files are never under the installer receipt entry in any letter case' },
   { apply: (manifest) => { manifest.files[0]!.path = '../escape'; }, rule: 'paths have no .. segment' },
   { apply: (manifest) => { manifest.files[0]!.path = './claude/hooks.json'; }, rule: 'paths have no . segment' },
   { apply: (manifest) => { manifest.files[0]!.path = '/claude/hooks.json'; }, rule: 'paths are relative' },

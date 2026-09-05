@@ -66,6 +66,11 @@ export const preservedRuntimeEntries: readonly string[] = Object.freeze(['state'
 export const isPreservedRuntimeRoot = (name: string): boolean =>
   preservedRuntimeEntries.includes(name.toLowerCase());
 
+/** The installer's receipt beside an installed root; reserved as a top-level entry in every spelling, file or directory. */
+export const installReceiptFile = '.agent-bundle-install.json';
+
+export const isInstallReceiptEntry = (name: string): boolean => name.toLowerCase() === installReceiptFile.toLowerCase();
+
 /** A non-empty relative path (POSIX or Windows form) whose segments never traverse upward. */
 export const isContainedRelativePath = (value: string): boolean =>
   value.length > 0 &&

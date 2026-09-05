@@ -297,7 +297,7 @@
         },
         "path": {
           "$ref": "#/$defs/relativePath",
-          "description": "Root-relative POSIX path of the file; never the manifest itself and never under the runtime-owned `state/` root (any letter case).",
+          "description": "Root-relative POSIX path of the file; never the manifest itself and never at or under a root entry the artifact does not own — the runtime's `state/` and the installer's `.agent-bundle-install.json`, in any letter case.",
           "not": {
             "anyOf": [
               {
@@ -306,6 +306,10 @@
               {
                 "type": "string",
                 "pattern": "^[Ss][Tt][Aa][Tt][Ee](/|$)"
+              },
+              {
+                "type": "string",
+                "pattern": "^\\.[Aa][Gg][Ee][Nn][Tt]-[Bb][Uu][Nn][Dd][Ll][Ee]-[Ii][Nn][Ss][Tt][Aa][Ll][Ll]\\.[Jj][Ss][Oo][Nn](/|$)"
               }
             ]
           }

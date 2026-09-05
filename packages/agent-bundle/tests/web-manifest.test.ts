@@ -187,6 +187,9 @@ it('refuses a launch record naming bytes the manifest does not index', () => wit
     [fileRows(validLaunch().entry, 'payload/config.json'), 'executables.mcpServers[catalog].launch.worker names "mcp/mcp-catalog-01234567-flight.mjs", which is not a manifest file.'],
     [fileRows(validLaunch().entry, validLaunch().worker!), 'executables.mcpServers[catalog].launch.args[1].path names "payload/config.json", which is not inside the artifact.'],
     [[{ path: '../escaped.mjs' }], 'files[0].path must be a safe relative POSIX path.'],
+    [[{ path: 'State/server.mjs' }], 'files[0].path must not be under the runtime-owned root "state/".'],
+    [[{ path: '.agent-bundle-install.json' }], 'files[0].path must not be at or under the installer\'s receipt ".agent-bundle-install.json".'],
+    [[{ path: 'agent-bundle.manifest.json' }], 'files[0].path must not name the manifest itself.'],
     [['mcp/mcp-catalog-01234567.mjs'], 'files[0] must be a plain object.'],
     [undefined, 'files must be an array.'],
   ];

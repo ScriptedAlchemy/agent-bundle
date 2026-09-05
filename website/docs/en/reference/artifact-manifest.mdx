@@ -88,7 +88,7 @@ each row lives on `compiler.provenance`, not here.
 
 | Field | Required | Contents |
 | --- | --- | --- |
-| `path` | yes | Root-relative path. Never `agent-bundle.manifest.json`, and never under the runtime-owned `state/` root in any letter case: that root is the generated runtime's, so a payload may not be named `state` (`AB4741`) and installers neither copy nor own it. |
+| `path` | yes | Root-relative path. Never `agent-bundle.manifest.json`, and never at or under a root entry the artifact does not own, in any letter case: the runtime's `state/` (so a payload may not be named `state`, `AB4741`) and the installer's `.agent-bundle-install.json` receipt. Installers neither copy nor own those entries, so a copy of the indexed rows always re-measures to the manifest's inventory. |
 | `bytes` | yes | Size in bytes. |
 | `sha256` | yes | Content digest. Validation compares real bytes, so a hand-edited generated file fails. |
 | `kind` | yes | `bundle` (a compiled entry), `copy` (a byte-for-byte copy), `generated` (a compiler-written document), or `prebuilt` (a prebuilt payload file). |

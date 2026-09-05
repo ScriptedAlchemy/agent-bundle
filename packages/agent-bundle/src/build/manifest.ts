@@ -4,7 +4,7 @@ import {
   parseRuntimeVersion,
   satisfiesGeneratedRuntimeFloor,
 } from '../core/runtime.ts';
-import { isPreservedRuntimeRoot, isRelocatablePosixPath, preservedRuntimeEntries } from '../core/paths.ts';
+import { isRelocatablePosixPath } from '../core/paths.ts';
 import { isValidPackageName, isValidPackageVersion } from '../core/project-context.ts';
 import { isPlainRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { providerKeyFromName } from '../routes/providers.ts';
@@ -20,8 +20,10 @@ import type {
   RouteInputSchemaLiteral,
 } from '../routes/types.ts';
 import {
+  artifactManifestName,
   artifactManifestVersion,
   mcpServerKinds,
+  parseArtifactFilePath,
   parseProjectionHosts,
   parseServerLaunches,
   parseWebManifest,
@@ -58,8 +60,7 @@ export type { ArtifactManifestLaunch, ArtifactManifestLaunchArgument };
  * backward compatible. Readers refuse any other version.
  */
 
-export const artifactManifestName = 'agent-bundle.manifest.json';
-export { artifactManifestVersion };
+export { artifactManifestName, artifactManifestVersion };
 export const artifactCompilerRecordVersion = 1;
 
 export type ArtifactManifestFileKind = 'bundle' | 'copy' | 'generated' | 'prebuilt';
@@ -627,11 +628,7 @@ const parseFiles = (value: unknown): readonly ArtifactManifestFile[] => {
     if (file.mode !== undefined && (!Number.isSafeInteger(file.mode) || (file.mode as number) < 0 || (file.mode as number) > 0o777)) {
       fail(`files[${index}].mode must be an integer from 0 through 0777.`);
     }
-    const path = requirePath(file.path, `files[${index}].path`);
-    if (path === artifactManifestName) fail(`files[${index}].path must not name the manifest itself.`);
-    if (isPreservedRuntimeRoot(path.split('/')[0]!)) {
-      fail(`files[${index}].path must not be under the runtime-owned root ${JSON.stringify(`${preservedRuntimeEntries[0]}/`)}.`);
-    }
+    const path = parseArtifactFilePath(file.path, `files[${index}].path`);
     return {
       bytes: file.bytes as number,
       kind: file.kind as ArtifactManifestFileKind,

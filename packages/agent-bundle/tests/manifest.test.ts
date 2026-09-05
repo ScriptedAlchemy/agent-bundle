@@ -413,12 +413,18 @@ it('round-trips and deeply freezes a compiled server launch record and the optio
   expect(Object.isFrozen(manifest.web?.apps[0])).toBe(true);
 });
 
-it('rejects a files[] row under the runtime-owned state root in any letter case', () => {
-  for (const path of ['state/index.json', 'State/index.json', 'state']) {
+it('rejects a files[] row at or under a root entry the artifact does not own, in any letter case', () => {
+  const cases: readonly [string, string][] = [
+    ['state/index.json', 'files[0].path must not be under the runtime-owned root "state/".'],
+    ['State/index.json', 'files[0].path must not be under the runtime-owned root "state/".'],
+    ['state', 'files[0].path must not be under the runtime-owned root "state/".'],
+    ['.agent-bundle-install.json', 'files[0].path must not be at or under the installer\'s receipt ".agent-bundle-install.json".'],
+    ['.Agent-Bundle-Install.JSON/nested.txt', 'files[0].path must not be at or under the installer\'s receipt ".agent-bundle-install.json".'],
+  ];
+  for (const [path, message] of cases) {
     const manifest = clone() as unknown as { files: { path: string }[] };
     manifest.files[0]!.path = path;
-    expect(() => parseArtifactManifest(canonicalBytes(manifest)))
-      .toThrow('files[0].path must not be under the runtime-owned root "state/".');
+    expect(() => parseArtifactManifest(canonicalBytes(manifest))).toThrow(message);
   }
 });
 

@@ -18,7 +18,7 @@ import { basename, dirname, join, resolve, sep } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
-import { exists, isPreservedRuntimeRoot } from '../core/paths.ts';
+import { exists, installReceiptFile, isInstallReceiptEntry, isPreservedRuntimeRoot } from '../core/paths.ts';
 import { artifactManifestName, type ArtifactManifest } from '../build/manifest.ts';
 import { OPERATOR_ENV_FILE_NAMES } from '../launch-env.ts';
 
@@ -32,7 +32,7 @@ import { OPERATOR_ENV_FILE_NAMES } from '../launch-env.ts';
  */
 
 /** Sidecar written at an installed plugin root by every agent-bundle installer. */
-export const installReceiptFile = '.agent-bundle-install.json';
+export { installReceiptFile };
 
 /**
  * Current receipt format. Format 2 (#101) adds the lifecycle fields —
@@ -453,7 +453,7 @@ export const isReceiptPath = (value: unknown): value is string =>
   // The receipt's own name is reserved as a top-level entry in every spelling, file or directory:
   // on a case-insensitive filesystem an alias resolves to the receipt itself, so nothing at or
   // beneath it can be owned content or be installed.
-  (value.split('/')[0] ?? '').toLowerCase() !== installReceiptFile.toLowerCase() &&
+  !isInstallReceiptEntry(value.split('/')[0] ?? '') &&
   !value.includes('\\') &&
   !value.startsWith('/') &&
   // Runtime roots are never installer-owned, whatever a receipt claims and however it spells them.

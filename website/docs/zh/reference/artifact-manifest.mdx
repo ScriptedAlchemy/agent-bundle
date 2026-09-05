@@ -79,7 +79,7 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 
 | 字段 | 必填 | 内容 |
 | --- | --- | --- |
-| `path` | 是 | 相对根目录的路径。绝不会是 `agent-bundle.manifest.json`，也绝不会位于运行时拥有的 `state/` 根之下（任何大小写）：该根属于生成的运行时，因此 payload 不能命名为 `state`（`AB4741`），安装器也既不复制也不拥有它。 |
+| `path` | 是 | 相对根目录的路径。绝不会是 `agent-bundle.manifest.json`，也绝不会位于工件不拥有的根条目之上或之下（任何大小写）：运行时的 `state/`（因此 payload 不能命名为 `state`，`AB4741`）与安装器的 `.agent-bundle-install.json` 回执。安装器既不复制也不拥有这些条目，因此对已索引行的复制总能重新测量出与清单一致的清点。 |
 | `bytes` | 是 | 字节大小。 |
 | `sha256` | 是 | 内容摘要。校验比对的是真实字节，因此被手工改过的生成文件会失败。 |
 | `kind` | 是 | `bundle`（编译后的入口）、`copy`（逐字节复制）、`generated`（编译器写出的文档）或 `prebuilt`（预构建 payload 文件）。 |

@@ -5,7 +5,7 @@ import {
   type ServeAppAllowCapability,
 } from '../core/mcp-app-allow.ts';
 import { errorMessage } from '../core/errors.ts';
-import { isRelocatablePosixPath } from '../core/paths.ts';
+import { installReceiptFile, isInstallReceiptEntry, isPreservedRuntimeRoot, isRelocatablePosixPath } from '../core/paths.ts';
 import { hasDataKeys, isPlainRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { pathTokens } from '../core/types.ts';
 
@@ -15,6 +15,8 @@ import { pathTokens } from '../core/types.ts';
  * full parser in `build/manifest.ts` refuse the same set of documents.
  */
 export const artifactManifestVersion = 2;
+
+export const artifactManifestName = 'agent-bundle.manifest.json';
 
 /** The roots the `agent-bundle:path:*` tokens of a launch record expand to. */
 export interface LaunchRoots {
@@ -244,11 +246,27 @@ export const parseServerLaunches = (value: unknown): ReadonlyMap<string, Artifac
   return launches;
 };
 
+/**
+ * A `files[]` path: root-relative, never the manifest itself, and never at or
+ * under a root entry the artifact does not own — the runtime's `state/` and
+ * the installer's receipt, in any letter case.
+ */
+export const parseArtifactFilePath = (value: unknown, location: string): string => {
+  const path = relativePath(value, location);
+  if (path === artifactManifestName) fail(`${location} must not name the manifest itself.`);
+  const root = path.split('/')[0]!;
+  if (isPreservedRuntimeRoot(root)) fail(`${location} must not be under the runtime-owned root "state/".`);
+  if (isInstallReceiptEntry(root)) {
+    fail(`${location} must not be at or under the installer's receipt ${JSON.stringify(installReceiptFile)}.`);
+  }
+  return path;
+};
+
 /** The root-relative paths of the `files[]` rows: the only bytes a launch record may name. */
 export const parseFilePaths = (value: unknown): ReadonlySet<string> => {
   if (!Array.isArray(value)) throw invalid('files must be an array.');
   return new Set(value.map((candidate: unknown, index: number) =>
-    relativePath(record(candidate, `files[${index}]`)['path'], `files[${index}].path`)));
+    parseArtifactFilePath(record(candidate, `files[${index}]`)['path'], `files[${index}].path`)));
 };
 
 /**
