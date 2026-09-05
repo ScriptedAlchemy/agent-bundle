@@ -103,6 +103,26 @@ export const resolveManifestHost = (
   );
 };
 
+export const resolveManifestMcpDocument = (
+  manifest: ArtifactManifest,
+  target: string,
+  server: string,
+  registry: TargetRegistry,
+): string => {
+  resolveManifestHost(manifest, { capability: 'mcp', requested: target }, registry);
+  const projection = manifest.projections.find((candidate) => candidate.host === target)!;
+  const document = projection.documents.mcp;
+  if (document === undefined) {
+    throw new Error(`The ${target} projection has no MCP document.`);
+  }
+  const matching = manifest.executables.mcpServers.filter((candidate) =>
+    candidate.name === server && candidate.hosts.includes(target));
+  if (matching.length !== 1) {
+    throw new Error(`Expected exactly one ${target} MCP server matching ${JSON.stringify(server)}.`);
+  }
+  return document;
+};
+
 export const requireArtifactManifest = (read: ArtifactManifestReadResult): ArtifactManifest => {
   switch (read.status) {
     case 'ok':
