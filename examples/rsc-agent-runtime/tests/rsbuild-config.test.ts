@@ -14,10 +14,7 @@ import {
 const webOutput = (
   config: ReturnType<typeof createRscRuntimeRsbuildConfig>,
   name: 'app' | 'rsc' | 'widget',
-): { readonly overrideBrowserslist?: unknown } | undefined => {
-  const environment = config.environments?.[name];
-  return environment === undefined ? undefined : environment.output;
-};
+) => config.environments?.[name]?.output;
 
 test('uses development mode for the provider session and production for rsbuild build', () => {
   expect(createRscRuntimeRsbuildConfig({ compilerRoot: '/tmp/rsc-compiler', mode: 'development' }).mode)

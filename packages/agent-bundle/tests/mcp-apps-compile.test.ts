@@ -553,7 +553,6 @@ describe('composeMcpAppsRsbuildConfig', () => {
       title: 'status',
     });
     const templateParameters = production.environments?.status?.html?.templateParameters;
-    expect(typeof templateParameters).toBe('function');
     if (typeof templateParameters !== 'function') throw new Error('Expected MCP App template parameters to be a function.');
     expect(await templateParameters({ compilation: 'private', mountId: 'root' }, { entryName: 'status' })).toEqual({});
 

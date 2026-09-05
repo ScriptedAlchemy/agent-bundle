@@ -11,7 +11,6 @@ export interface PnpmPackOutput {
 }
 
 export interface PnpmPackOptions {
-  /** The package directory to pack. */
   readonly cwd: string;
   /** Absolute directory the tarball is written to (`--pack-destination`). */
   readonly destination: string;

@@ -534,7 +534,6 @@ export const composeEntryLibConfig = (
     /** Receives reserved specifiers that a function-form external resolved at build time. */
     readonly onReservedExternal?: (specifier: string) => void;
     readonly outputRoot: string;
-    /** Public `output.sourceMap` opt-in; defaults off. */
     readonly sourceMap?: boolean;
     readonly tools?: AgentBundleToolsConfig;
   },
@@ -745,7 +744,6 @@ export interface RslibRunOptions {
   /** The project identity served to plugin source as `agent-bundle/meta`. */
   readonly meta: AgentBundleMeta;
   readonly outputRoot: string;
-  /** Public `output.sourceMap` opt-in; defaults off. */
   readonly sourceMap?: boolean;
   /** The consumer escape hatch, merged last-but-bounded into every synthesized entry. */
   readonly tools?: AgentBundleToolsConfig;

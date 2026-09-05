@@ -24,7 +24,6 @@ export const generatedExecutableSyntaxFor = (floor: string): 'es2022' => {
   return 'es2022';
 };
 
-/** {@link generatedExecutableSyntaxFor} applied to {@link generatedExecutableNodeFloor}. */
 export const generatedExecutableSyntax = generatedExecutableSyntaxFor(generatedExecutableNodeFloor);
 
 /**

@@ -12,8 +12,10 @@ type Version = readonly [major: number, minor: number, patch: number];
 
 const versionOf = (pattern: RegExp, text: string): Version => {
   const match = pattern.exec(text);
-  expect(match, text).not.toBeNull();
-  const [, major, minor, patch] = match as RegExpExecArray;
+  if (match === null) {
+    throw new Error(`Expected ${JSON.stringify(text)} to match ${pattern}.`);
+  }
+  const [, major, minor, patch] = match;
   return [Number(major), Number(minor), Number(patch)];
 };
 

@@ -115,10 +115,6 @@ it('derives generated-executable syntax from the Node floor matching engines.nod
 });
 
 it('inlines legal comments because a linked license asset is not an artifact file', () => {
-  // createArtifactManifestFiles requires an exact match between files on disk
-  // and output provenance; package-build rejects any sibling it did not plan.
-  // `linked` would emit `<name>.LICENSE.txt` outside that set, so the profile
-  // keeps license text inside the executable (`inline`) and stays one file.
   expect(generatedExecutableLegalComments).toBe('inline');
   const root = join(tmpdir(), 'agent-bundle-legal-comments-profile');
   const lib = composeEntryLibConfig(probeEntry(root), { cwd: root, meta: testMeta, outputRoot: join(root, 'dist') });
@@ -133,8 +129,6 @@ it('opts generated-executable source maps in through output.sourceMap', () => {
   const off = composeEntryLibConfig(entry, { cwd: root, meta: testMeta, outputRoot });
   expect(off.output?.sourceMap).toBe(false);
   const on = composeEntryLibConfig(entry, { cwd: root, meta: testMeta, outputRoot, sourceMap: true });
-  // Sibling `.map` files are the same unplanned-asset problem as linked
-  // LICENSE files, so the public opt-in inlines the map into the executable.
   expect(on.output?.sourceMap).toEqual({ js: 'inline-source-map' });
   expect(on.output?.autoExternal).toBe(false);
   expect(on.bundle).toBe(true);
