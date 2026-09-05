@@ -23,6 +23,7 @@ import {
   type DoctorHost,
   type DoctorReport,
 } from '../src/install/doctor.ts';
+import { writeInstallFixtureManifest } from './support/install-fixture.ts';
 
 const writeJson = async (path: string, value: unknown): Promise<void> => {
   await mkdir(dirname(path), { recursive: true });
@@ -126,6 +127,14 @@ const createBundle = async (
       writeFile(join(bundle, 'install.mjs'), '// installer\n'),
     ]);
   }
+  await writeInstallFixtureManifest(
+    bundle,
+    { name: 'doctor-fixture', version },
+    [{
+      host,
+      ...(host === 'cursor' ? {} : { marketplace: 'doctor-fixture-marketplace' }),
+    }],
+  );
   return bundle;
 };
 
@@ -3048,6 +3057,11 @@ it('accepts --from unified bundle Cursor bytes whose manifest names hooks/hooks-
   const bundle = join(fixture.root, 'bundle-plugin');
   try {
     await writeUnifiedBundleCursorView(bundle);
+    await writeInstallFixtureManifest(
+      bundle,
+      { name: 'unified-fixture', version: '0.3.5' },
+      [{ host: 'cursor' }],
+    );
 
     const report = await runDoctor({
       endpointDirectory: fixture.endpointDirectory,

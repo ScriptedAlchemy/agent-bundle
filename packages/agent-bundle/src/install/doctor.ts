@@ -71,6 +71,7 @@ import {
   inspectCursorPluginHooks,
 } from './cursor-hooks-registration.ts';
 import { cursorMarketplacePluginPath, cursorMarketplaceRoot } from './cursor-marketplace.ts';
+import { readBundleIdentity, type PluginIdentity } from './identity.ts';
 
 export type DoctorHost = InstallHost;
 export type DoctorHostProbeStatus = 'available' | 'failed' | 'unavailable';
@@ -346,13 +347,6 @@ export const doctorEndpointDirectory = (): string => {
   return join('/tmp', `agent-bundle-${user}`);
 };
 
-interface PluginIdentity {
-  readonly bundleRoot: string;
-  readonly marketplace?: string;
-  readonly name: string;
-  readonly version: string;
-}
-
 const maximumOutputBytes = 1024 * 1024;
 
 const defaultCommandRunner: DoctorCommandRunner = (request) =>
@@ -379,51 +373,6 @@ const diagnostic = (
 
 const versionFrom = (output: string): string | undefined =>
   /(?:^|\s)(\d+\.\d+\.\d+)(?:\s|$)/u.exec(output)?.[1];
-
-const manifestPath = (host: DoctorHost): string => {
-  switch (host) {
-    case 'claude':
-      return '.claude-plugin/plugin.json';
-    case 'codex':
-      return '.codex-plugin/plugin.json';
-    case 'cursor':
-      return '.cursor-plugin/plugin.json';
-    default: {
-      const exhaustive: never = host;
-      throw new TypeError(`Unknown Doctor host ${String(exhaustive)}.`);
-    }
-  }
-};
-
-const marketplacePath = (host: Exclude<DoctorHost, 'cursor'>): string =>
-  host === 'claude'
-    ? '.claude-plugin/marketplace.json'
-    : '.agents/plugins/marketplace.json';
-
-const readRecord = async (path: string, kind: string): Promise<Record<string, unknown>> => {
-  let value: unknown;
-  try {
-    value = JSON.parse(await readFile(path, 'utf8')) as unknown;
-  } catch {
-    throw new Error(`Cannot read a valid ${kind} at ${JSON.stringify(path)}.`);
-  }
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error(`${kind} at ${JSON.stringify(path)} must be a JSON object.`);
-  }
-  return value as Record<string, unknown>;
-};
-
-const readString = (
-  record: Readonly<Record<string, unknown>>,
-  key: string,
-  kind: string,
-): string => {
-  const value = record[key];
-  if (typeof value !== 'string' || value.trim().length === 0) {
-    throw new Error(`${kind} must declare a nonempty ${key}.`);
-  }
-  return value;
-};
 
 interface DoctorStaticValidationIssue {
   readonly code: string;
@@ -466,44 +415,21 @@ const validateBundleFiles = async (
   }
 };
 
-/** The composite root is every selected host's bundle root (#555): its manifest sits directly inside `from`. */
-export const resolveBundleRoot = async (from: string, host: DoctorHost): Promise<string> => {
-  const root = resolve(from);
-  if (await exists(join(root, manifestPath(host)))) return root;
-  throw new Error(`No ${host} bundle manifest was found in ${JSON.stringify(root)}.`);
-};
+/**
+ * Compatibility surface for the development probe lane. Artifact discovery is
+ * manifest-backed; this no longer probes host plugin paths.
+ */
+export const resolveBundleRoot = async (from: string, host: DoctorHost): Promise<string> =>
+  (await readBundleIdentity(from, host)).bundleRoot;
 
 /** The cwd for `plugin list --json`: the resolved host bundle root under `--from`, else the given directory, else home. */
 const listingDirectory = async (from: string | undefined, host: DoctorHost, home: string): Promise<string> => {
   if (from === undefined) return home;
   try {
-    return await resolveBundleRoot(from, host);
+    return (await readBundleIdentity(from, host)).bundleRoot;
   } catch {
     return resolve(from);
   }
-};
-
-const readIdentity = async (from: string, host: DoctorHost): Promise<PluginIdentity> => {
-  const bundleRoot = await resolveBundleRoot(from, host);
-  const kind = `${host} plugin manifest`;
-  const pluginDocument = await readRecord(join(bundleRoot, manifestPath(host)), kind);
-  const name = readString(pluginDocument, 'name', kind);
-  const version = readString(pluginDocument, 'version', kind);
-  if (
-    host === 'cursor' &&
-    (!/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u.test(name) || name.length > 64)
-  ) {
-    throw new Error(`Cursor plugin name ${JSON.stringify(name)} is not a safe local plugin name.`);
-  }
-  if (host === 'cursor') return Object.freeze({ bundleRoot, name, version });
-  const marketplaceKind = `${host} marketplace`;
-  const marketplace = await readRecord(join(bundleRoot, marketplacePath(host)), marketplaceKind);
-  return Object.freeze({
-    bundleRoot,
-    marketplace: readString(marketplace, 'name', marketplaceKind),
-    name,
-    version,
-  });
 };
 
 const freezeFinding = (finding: DoctorFinding): DoctorFinding =>
@@ -1587,7 +1513,7 @@ const readPublicHostInventory = (
   : parsePublicHostInventory(host, listing.stdout, {
     cacheRoot: publicHostCacheRoot(host, environment, home),
     marketplace: identity.marketplace ?? '',
-    plugin: identity.name,
+    plugin: identity.plugin,
   });
 
 const publicHostReplaceRecipe = (host: Exclude<DoctorHost, 'cursor'>, scopeArguments = ''): string => host === 'claude'
@@ -1630,9 +1556,9 @@ const disabledInstallDiagnostic = (
   scope: string | undefined,
 ): Diagnostic => diagnostic(
   'AB7327',
-  `claude lists ${identity.name}@${version} at ${installPath}${scope === undefined ? '' : ` (scope ${scope})`} ` +
+  `claude lists ${identity.plugin}@${version} at ${installPath}${scope === undefined ? '' : ` (scope ${scope})`} ` +
     'as disabled (`enabled: false`): the copy is installed but none of it loads in a session.',
-  `Run \`claude plugin enable ${identity.name}${identity.marketplace === undefined ? '' : `@${identity.marketplace}`}` +
+  `Run \`claude plugin enable ${identity.plugin}${identity.marketplace === undefined ? '' : `@${identity.marketplace}`}` +
     `${scope === undefined ? '' : ` --scope ${scope}`}\` (or \`/plugin\` in a session), then rerun Doctor; ` +
     'reinstalling does not enable a disabled plugin.',
   'warning',
@@ -1661,7 +1587,7 @@ const publicHostInstallComparison = async (
       comparison: Object.freeze({ artifactContentHash: artifact.hash, status: 'not-installed' }),
       diagnostics: freezeDiagnostics([diagnostic(
         'AB7307',
-        `${identity.name}@${identity.version} is not installed for ${host}.`,
+        `${identity.plugin}@${identity.version} is not installed for ${host}.`,
         `Run \`agent-bundle install ${host} --from <bundle-dir>\`.`,
         'info',
         host,
@@ -1693,7 +1619,7 @@ const publicHostInstallComparison = async (
         ownership: 'host',
         status: 'load-failed',
       }));
-      diagnostics.push(hostLoadFailureDiagnostic(host, `${identity.name}@${entry.version} at ${entry.installPath}${scoped}`, entry.errors, replaceHint));
+      diagnostics.push(hostLoadFailureDiagnostic(host, `${identity.plugin}@${entry.version} at ${entry.installPath}${scoped}`, entry.errors, replaceHint));
       continue;
     }
     let installed: TreeInventory;
@@ -1733,10 +1659,10 @@ const publicHostInstallComparison = async (
       ownership: 'host',
       status,
     }));
-    const detail = describeContentComparison(identity.name, identity.version, {
+    const detail = describeContentComparison(identity.plugin, identity.version, {
       artifactContentHash: artifact.hash,
       installedContentHash: installed.hash,
-      installedName: identity.name,
+      installedName: identity.plugin,
       installedVersion: entry.version,
       status,
     });
@@ -1746,7 +1672,7 @@ const publicHostInstallComparison = async (
       case 'stale':
         diagnostics.push(diagnostic(
           'AB7308',
-          `${host} plugin ${identity.name}@${identity.version} at ${entry.installPath}${scoped} is stale ` +
+          `${host} plugin ${identity.plugin}@${identity.version} at ${entry.installPath}${scoped} is stale ` +
             `(same version, different content): ${detail}.`,
           publicHostReplaceRecipe(host, replaceHint),
           'warning',
@@ -1793,14 +1719,14 @@ const cursorStagedBundle = async (
   base: { readonly bundleRoot: string; readonly name: string; readonly path: string; readonly version: string },
   git: CursorStagingGit,
 ): Promise<{ readonly diagnostics: readonly Diagnostic[]; readonly finding: DoctorHostReport['bundle'] } | undefined> => {
-  const repoRoot = join(cursorMarketplaceRoot(join(home, '.cursor')), identity.name);
-  const pluginDirectory = cursorMarketplacePluginPath(repoRoot, identity.name);
+  const repoRoot = join(cursorMarketplaceRoot(join(home, '.cursor')), identity.plugin);
+  const pluginDirectory = cursorMarketplacePluginPath(repoRoot, identity.plugin);
   if (!await exists(repoRoot)) return undefined;
   if (!await exists(pluginDirectory)) {
     // The staged repository is present but its plugin copy is gone: surface the staging inventory's
     // corrupt finding (and its repair step) instead of AB7307 "not installed".
     const staging = await inspectCursorMarketplaceStaging(home, git);
-    const entry = staging.findings.find((candidate) => candidate.name === identity.name);
+    const entry = staging.findings.find((candidate) => candidate.name === identity.plugin);
     return {
       diagnostics: freezeDiagnostics(staging.diagnostics.filter((candidate) => candidate.message.includes(repoRoot))),
       finding: Object.freeze({
@@ -1817,13 +1743,13 @@ const cursorStagedBundle = async (
   // uncommitted tree cannot be reported as imported. It is read for a drifted staging too: a bundle rebuilt
   // after Cursor imported the staged commit is still imported, and the lifecycle must say so.
   const staging = await inspectCursorMarketplaceStaging(home, git);
-  const entry = staging.findings.find((candidate) => candidate.name === identity.name);
+  const entry = staging.findings.find((candidate) => candidate.name === identity.plugin);
   if (sourceHash !== stagedHash) {
     const imported = entry?.state === 'registered';
     return {
       diagnostics: freezeDiagnostics([diagnostic(
         'AB7308',
-        `Staged Cursor marketplace copy of ${identity.name}@${identity.version} at ${repoRoot} differs from the current bundle` +
+        `Staged Cursor marketplace copy of ${identity.plugin}@${identity.version} at ${repoRoot} differs from the current bundle` +
           `${imported ? '; Cursor has imported the staged copy, so the imported plugin is the older content' : ''}.`,
         imported
           ? 'Run `agent-bundle uninstall cursor --mode marketplace` (the imported copy is Cursor-owned; it lists the Customize step), ' +
@@ -1843,7 +1769,7 @@ const cursorStagedBundle = async (
     };
   }
   return {
-    diagnostics: freezeDiagnostics(staging.diagnostics.filter((candidate) => candidate.message.includes(repoRoot) || candidate.message.includes(`${identity.name}@`))),
+    diagnostics: freezeDiagnostics(staging.diagnostics.filter((candidate) => candidate.message.includes(repoRoot) || candidate.message.includes(`${identity.plugin}@`))),
     finding: Object.freeze({
       ...base,
       ...(entry?.commit === undefined ? {} : { commit: entry.commit }),
@@ -1860,10 +1786,10 @@ const cursorBundle = async (
   home: string,
   git: CursorStagingGit,
 ): Promise<{ readonly diagnostics: readonly Diagnostic[]; readonly finding: DoctorHostReport['bundle'] }> => {
-  const destination = join(home, '.cursor', 'plugins', 'local', identity.name);
+  const destination = join(home, '.cursor', 'plugins', 'local', identity.plugin);
   const base = {
     bundleRoot: identity.bundleRoot,
-    name: identity.name,
+    name: identity.plugin,
     path: destination,
     version: identity.version,
   } as const;
@@ -1875,7 +1801,7 @@ const cursorBundle = async (
       return {
         diagnostics: freezeDiagnostics([diagnostic(
           'AB7307',
-          `${identity.name}@${identity.version} is not installed for Cursor.`,
+          `${identity.plugin}@${identity.version} is not installed for Cursor.`,
           'Run `agent-bundle install cursor --from <bundle-dir>` or the bundle\'s `install.mjs`.',
           'info',
           'cursor',
@@ -1902,10 +1828,10 @@ const cursorBundle = async (
             ...(installed.version === undefined ? {} : { version: installed.version }),
           },
         }),
-      plugin: identity.name,
+      plugin: identity.plugin,
       version: identity.version,
     });
-    const detail = describeContentComparison(identity.name, identity.version, comparison);
+    const detail = describeContentComparison(identity.plugin, identity.version, comparison);
     const withComparison = (state: DoctorFindingState): DoctorHostReport['bundle'] => Object.freeze({
       ...base,
       comparison: installComparison(comparison, destination),
@@ -1922,7 +1848,7 @@ const cursorBundle = async (
     if (remnant) {
       return {
         diagnostics: freezeDiagnostics([await remnantDiagnostic(
-          `Cursor destination ${destination} (${identity.name}@${identity.version})`,
+          `Cursor destination ${destination} (${identity.plugin}@${identity.version})`,
           destination,
           comparison.receipt,
         )]),
@@ -1955,7 +1881,7 @@ const cursorBundle = async (
           diagnostics: freezeDiagnostics([diagnostic(
             'AB7321',
             `Cursor destination ${destination} is a foreign install: ${detail}; ` +
-              `it is not an agent-bundle install of ${identity.name}.`,
+              `it is not an agent-bundle install of ${identity.plugin}.`,
             'Remove the foreign directory manually before installing; `--replace` refuses foreign installs.',
             'warning',
             'cursor',
@@ -1966,7 +1892,7 @@ const cursorBundle = async (
         return {
           diagnostics: freezeDiagnostics([diagnostic(
             'AB7308',
-            `Cursor plugin ${identity.name}@${identity.version} at ${destination} is stale ` +
+            `Cursor plugin ${identity.plugin}@${identity.version} at ${destination} is stale ` +
               `(same version, different content): ${detail}.`,
             comparison.ownership === 'receipt'
               ? 'Rerun `agent-bundle install cursor --from <bundle-dir>` or `install.mjs`; ' +
@@ -2005,7 +1931,7 @@ const claudeRegistration = async (
   const base = {
     bundleRoot: identity.bundleRoot,
     marketplace: identity.marketplace,
-    name: identity.name,
+    name: identity.plugin,
     version: identity.version,
   } as const;
   if (probe.status !== 'available') {
@@ -2075,12 +2001,12 @@ const claudeRegistration = async (
     entry !== null &&
     typeof entry === 'object' &&
     !Array.isArray(entry) &&
-    (entry as { id?: unknown }).id === `${identity.name}@inline`);
+    (entry as { id?: unknown }).id === `${identity.plugin}@inline`);
   if (row === undefined) {
     return {
       diagnostics: freezeDiagnostics([diagnostic(
         'AB7311',
-        `Claude registration proof did not contain plugin ${JSON.stringify(identity.name)}.`,
+        `Claude registration proof did not contain plugin ${JSON.stringify(identity.plugin)}.`,
         `Inspect \`claude --plugin-dir ${identity.bundleRoot} plugin list --json\` and register the intended bundle.`,
         'error',
         'claude',
@@ -2093,7 +2019,7 @@ const claudeRegistration = async (
   const errors = claudePluginRowErrors(row);
   if (errors.length > 0) {
     return {
-      diagnostics: freezeDiagnostics([hostLoadFailureDiagnostic('claude', `${identity.name}@${identity.version} from ${identity.bundleRoot}`, errors)]),
+      diagnostics: freezeDiagnostics([hostLoadFailureDiagnostic('claude', `${identity.plugin}@${identity.version} from ${identity.bundleRoot}`, errors)]),
       finding: Object.freeze({ ...base, errors, state: 'failed' }),
     };
   }
@@ -2193,7 +2119,7 @@ const codexBundle = async (
   const base = {
     bundleRoot: identity.bundleRoot,
     marketplace: identity.marketplace,
-    name: identity.name,
+    name: identity.plugin,
     version: identity.version,
   } as const;
   if (probe.status !== 'available') {
@@ -2635,7 +2561,7 @@ const doctorHost = async (
   let bundle: DoctorHostReport['bundle'];
   if (options.from !== undefined) {
     try {
-      const identity = await readIdentity(options.from, host);
+      const identity = await readBundleIdentity(options.from, host);
       const staticDiagnostics = staticValidationDiagnostics(
         'AB7319',
         host,
@@ -2654,7 +2580,7 @@ const doctorHost = async (
         throw new TypeError(`The ${host} bundle check returned no finding.`);
       }
       if (checked.finding.lifecycle !== undefined) {
-        diagnostics.push(lifecycleDiagnostic(host, identity.name, identity.version, checked.finding.lifecycle));
+        diagnostics.push(lifecycleDiagnostic(host, identity.plugin, identity.version, checked.finding.lifecycle));
       }
       const durableState = await inspectDurableState(identity.bundleRoot, host);
       if (durableState !== undefined) diagnostics.push(...durableState.diagnostics);
