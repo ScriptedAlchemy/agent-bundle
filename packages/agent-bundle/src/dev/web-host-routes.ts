@@ -49,7 +49,17 @@ import {
 
 const manifestFileName = 'agent-bundle.manifest.json';
 const maxRetainedOpeningCalls = 64;
+const maxRetainedOpeningExecutions = 256;
 const maxRetainedOpeningResults = 64;
+
+interface WebOpeningCall extends McpAppOpeningCall {
+  readonly notice?: string;
+}
+
+type OpeningExecution =
+  | Readonly<{ readonly call: Promise<WebOpeningCall>; readonly outcome: 'in-flight' }>
+  | Readonly<{ readonly outcome: 'succeeded' }>
+  | Readonly<{ readonly outcome: 'failed-unknown' }>;
 
 interface WebHostEpochReference {
   close(): Promise<void>;
@@ -175,7 +185,8 @@ export class WebHostRoutes {
   readonly #sandboxOrigin: () => string | undefined;
   readonly #sessionToken: string;
   readonly #openingCalls = new Map<string, McpAppOpeningCall>();
-  readonly #openingResults = new Map<string, Promise<McpAppOpeningCall>>();
+  readonly #openingExecutions = new Map<string, OpeningExecution>();
+  readonly #openingResults = new Map<string, WebOpeningCall>();
   readonly #sessions = new Map<string, Promise<RegisteredSession>>();
   #closed = false;
 
@@ -193,6 +204,7 @@ export class WebHostRoutes {
     if (this.#closed) return;
     this.#closed = true;
     this.#openingCalls.clear();
+    this.#openingExecutions.clear();
     this.#openingResults.clear();
     const sessions = [...this.#sessions.values()];
     this.#sessions.clear();
@@ -298,6 +310,7 @@ export class WebHostRoutes {
           autoApprove: app.allow,
           input: call.input,
           opening,
+          ...(call.notice === undefined ? {} : { openingNotice: call.notice }),
           previewProfile: 'portable',
           result: call.result,
           sessionId: registered.session.id,
@@ -323,32 +336,50 @@ export class WebHostRoutes {
    * The call that opens the page. A tool annotated `readOnlyHint: true` runs
    * once per page load — a refresh re-reads live state. Any other opening
    * tool may mutate, so a page open is not an unbounded mutation: its first
-   * call per session, tool, App, and input is retained while still in
-   * flight (concurrent first loads share it) and every later load of the
-   * same page rebinds its result instead of re-running the tool; a failed
-   * call is dropped so the next load retries, and a new session (a new
-   * epoch after rebuild) runs the tool once again.
+   * call per session, tool, App, and input owns a bounded execution record.
+   * Concurrent first loads share an in-flight call; later loads rebind a
+   * retained result, or receive a fail-closed result when that result was
+   * evicted or the call failed. A new session (a new epoch after rebuild)
+   * may run the tool once again.
    */
   async #openingCallFor(
     source: AppSelectionSource,
     sessionId: string,
     resolved: ResolvedAppOpening,
-  ): Promise<McpAppOpeningCall> {
-    const call = async (): Promise<McpAppOpeningCall> => Object.freeze({
+  ): Promise<WebOpeningCall> {
+    const call = async (): Promise<WebOpeningCall> => Object.freeze({
       input: resolved.input,
       result: await source.callTool(resolved.tool.name, resolved.input),
     });
     const readOnly = isRecord(resolved.tool['annotations']) && resolved.tool['annotations']['readOnlyHint'] === true;
     if (readOnly) return call();
     const key = `${sessionId}\0${resolved.tool.name}\0${resolved.resourceUri}\0${digest(resolved.input)}`;
-    const retained = this.#openingResults.get(key);
-    if (retained !== undefined) return retained;
+    const execution = this.#openingExecutions.get(key);
+    if (execution?.outcome === 'in-flight') return execution.call;
+    if (execution?.outcome === 'succeeded') {
+      return this.#openingResults.get(key) ??
+        this.#unavailableOpeningCall(resolved.input, 'Opening tool result no longer retained; re-run explicitly from the App.');
+    }
+    if (execution?.outcome === 'failed-unknown') {
+      return this.#unavailableOpeningCall(resolved.input, 'Opening tool outcome is unknown; re-run explicitly from the App.');
+    }
+    if (this.#openingExecutions.size >= maxRetainedOpeningExecutions) {
+      return this.#unavailableOpeningCall(resolved.input, 'Automatic opening limit reached; run the tool explicitly from the App.');
+    }
     const pending = call();
-    this.#retainOpeningResult(key, pending);
+    const inFlight = Object.freeze({ call: pending, outcome: 'in-flight' }) satisfies OpeningExecution;
+    this.#openingExecutions.set(key, inFlight);
     try {
-      return await pending;
+      const result = await pending;
+      if (this.#openingExecutions.get(key) === inFlight) {
+        this.#openingExecutions.set(key, Object.freeze({ outcome: 'succeeded' }));
+        this.#retainOpeningResult(key, result);
+      }
+      return result;
     } catch (error) {
-      if (this.#openingResults.get(key) === pending) this.#openingResults.delete(key);
+      if (this.#openingExecutions.get(key) === inFlight) {
+        this.#openingExecutions.set(key, Object.freeze({ outcome: 'failed-unknown' }));
+      }
       throw error;
     }
   }
@@ -425,17 +456,14 @@ export class WebHostRoutes {
     const session = await service.open({ epochId, serverName, target });
     const lease: McpAppSessionLease = await service.acquireAppLease(session.id);
     let disposed = false;
-    let unsubscribe = (): void => undefined;
     const dispose = async (): Promise<void> => {
       if (disposed) return;
       disposed = true;
-      unsubscribe();
       await lease.release();
     };
     const watched = lease.watchSessionClosed(() => {
       this.#forgetSession(key, session.id);
     });
-    unsubscribe = watched.unsubscribe;
     if (watched.closed) {
       await dispose();
       throw new Error('MCP App session closed while it was being registered.');
@@ -452,14 +480,20 @@ export class WebHostRoutes {
     this.#dropSessionState(sessionId);
     const current = this.#sessions.get(key);
     if (current === undefined) return;
-    this.#sessions.delete(key);
-    void current.then((registered) => registered.dispose()).catch(() => undefined);
+    void current.then(async (registered) => {
+      if (registered.session.id !== sessionId || this.#sessions.get(key) !== current) return;
+      this.#sessions.delete(key);
+      await registered.dispose();
+    }).catch(() => undefined);
   }
 
   #dropSessionState(sessionId: string): void {
     const prefix = `${sessionId}\0`;
     for (const openingKey of this.#openingCalls.keys()) {
       if (openingKey.startsWith(prefix)) this.#openingCalls.delete(openingKey);
+    }
+    for (const executionKey of this.#openingExecutions.keys()) {
+      if (executionKey.startsWith(prefix)) this.#openingExecutions.delete(executionKey);
     }
     for (const resultKey of this.#openingResults.keys()) {
       if (resultKey.startsWith(prefix)) this.#openingResults.delete(resultKey);
@@ -474,12 +508,26 @@ export class WebHostRoutes {
     }
   }
 
-  #retainOpeningResult(key: string, call: Promise<McpAppOpeningCall>): void {
+  #retainOpeningResult(key: string, call: WebOpeningCall): void {
     this.#openingResults.set(key, call);
     for (const oldest of this.#openingResults.keys()) {
       if (this.#openingResults.size <= maxRetainedOpeningResults) break;
       this.#openingResults.delete(oldest);
     }
+  }
+
+  #unavailableOpeningCall(
+    input: Readonly<Record<string, McpAppJsonValue>>,
+    message: string,
+  ): WebOpeningCall {
+    return Object.freeze({
+      input,
+      notice: message,
+      result: Object.freeze({
+        content: Object.freeze([Object.freeze({ text: message, type: 'text' })]),
+        isError: true,
+      }),
+    });
   }
 
   #openingCallKey(sessionId: string, toolName: string, opening: string): string {
