@@ -1049,12 +1049,13 @@ const installCursor = Effect.fnUntraced(function*(
     if (comparison.status === 'current') {
       if (comparison.ownership === 'legacy' && options.replace === true) {
         // Adoption created nothing: the legacy copy's directories are not the installer's to prune.
-        yield* liftPromise(() => writeInstallReceipt(destination, createInstallReceipt({
+        const adoptedReceipt = createInstallReceipt({
           ...receipt,
           directories: [],
           hostDirectories: [],
           inventory: artifact,
-        })));
+        });
+        yield* liftPromise(() => writeInstallReceipt(destination, adoptedReceipt));
         yield* liftPromise(() => attachCursorStateOwnership(destination, environment, home));
         return { ...base, contentHash: artifact.hash, state: 'adopted' } as const;
       }
@@ -1071,7 +1072,7 @@ const installCursor = Effect.fnUntraced(function*(
           updatedAt: new Date().toISOString(),
         })));
       }
-      if (comparison.receipt?.state === undefined) {
+      if (comparison.ownership === 'receipt' && comparison.receipt?.state === undefined) {
         yield* liftPromise(() => attachCursorStateOwnership(destination, environment, home));
       }
       return { ...base, contentHash: artifact.hash, state: 'already-installed' } as const;
@@ -1088,7 +1089,12 @@ const installCursor = Effect.fnUntraced(function*(
       () => stageArtifact({ artifactRoot: identity.bundleRoot, destination, receipt: replacement, stageRoot: installRoot }),
       (staged) => replaceInstalledTree({ comparison, destination, receipt: replacement, staged }),
     );
-    yield* liftPromise(() => attachCursorStateOwnership(destination, environment, home, comparison.receipt?.state));
+    yield* liftPromise(() => attachCursorStateOwnership(
+      destination,
+      environment,
+      home,
+      comparison.receipt?.state,
+    ));
     // Filling a state-only shell is a fresh install of plugin content, not a replacement of any.
     if (remnant) return { ...base, contentHash: artifact.hash, state: 'installed' } as const;
     return {
