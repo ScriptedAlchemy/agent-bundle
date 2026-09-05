@@ -39,6 +39,7 @@ import type {
 import { validateJavaScriptModules } from './validate-artifact-modules.ts';
 import { validateHookCoherence } from './validate-artifact-hooks.ts';
 import { manifestLogoPathDiagnostics } from './validate-artifact-logo.ts';
+import { validateManifestCoherence } from './validate-artifact-manifest.ts';
 import { validateMcpCoherence } from './validate-artifact-mcp.ts';
 import { manifestTargets, validateEmittedSkills } from './validate-artifact-skills.ts';
 import { installSurfaceRequirements } from '../install/surface.ts';
@@ -714,6 +715,10 @@ export const validateArtifactWithSnapshot = async (
 
   const runtimeEvidence = runtimeEvidenceBuilder(manifest);
   const initialStructuralDiagnostics = validateArtifactStructure({ inspection, manifest, registry });
+  // The manifest coherence lane (AB6039/AB6040) reads host documents as the
+  // bytes the manifest hashed; over a tree that already disagrees with the
+  // file table (AB6004) its findings would only restate that drift.
+  const fileTableVerified = !initialStructuralDiagnostics.some((entry) => entry.code === 'AB6004');
   const diagnostics: Diagnostic[] = [...initialStructuralDiagnostics];
   if (
     manifest.agentSkills.schemaSha256 !== agentSkillsSchemaRevision.schemaSha256 ||
@@ -735,6 +740,7 @@ export const validateArtifactWithSnapshot = async (
     portableTargetDiagnostics,
     mcpCoherenceDiagnostics,
     hookCoherenceDiagnostics,
+    manifestCoherenceDiagnostics,
     emittedSkillDiagnostics,
     generatedFileDiagnostics,
   ] = await Promise.all([
@@ -763,6 +769,9 @@ export const validateArtifactWithSnapshot = async (
       manifest,
       registry,
     }),
+    fileTableVerified
+      ? validateManifestCoherence({ artifactRoot, manifest, registry })
+      : Promise.resolve(Object.freeze([])),
     validateEmittedSkills({
       artifactRoot,
       files: inspection.files,
@@ -781,6 +790,7 @@ export const validateArtifactWithSnapshot = async (
     ...portableTargetDiagnostics,
     ...mcpCoherenceDiagnostics,
     ...hookCoherenceDiagnostics,
+    ...manifestCoherenceDiagnostics,
     ...emittedSkillDiagnostics,
     ...generatedFileDiagnostics,
   );
