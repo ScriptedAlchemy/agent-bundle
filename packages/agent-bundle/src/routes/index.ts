@@ -1,8 +1,33 @@
 export { compileRouteGraph, emptyCompiledRouteGraph, isEmptyRouteGraph } from './graph.ts';
-export { cliArgvGrammar, extractCliArgv, reservedCliOptionNames } from './cli-argv.ts';
-export type { ExtractedCliArgv } from './cli-argv.ts';
-export { cliCommandPath, compileCliCommands, isRenderedCliRoute } from './cli-commands.ts';
-export type { CompileCliCommandsOptions, CompiledCliCommandSurface } from './cli-commands.ts';
+export { cliArgvGrammar, extractCliArgv, projectInputSchemaOptions, reservedCliOptionNames } from './cli-argv.ts';
+export type { CliOptionOverride, CliOptionPolicy, ExtractedCliArgv, ProjectedCliOptions } from './cli-argv.ts';
+export {
+  cliCommandPath,
+  compileCliCommands,
+  compileMcpCliCommands,
+  compileProjectedCliCommands,
+  isRenderedCliRoute,
+} from './cli-commands.ts';
+export type {
+  CliProjectionPair,
+  CompileCliCommandsOptions,
+  CompiledCliCommandSurface,
+  CompiledMcpCliCommandSurface,
+  CompiledProjectedCliCommandSurface,
+  McpCommandSelection,
+} from './cli-commands.ts';
+export {
+  classifyCliProjectionModule,
+  cliProjectionSuffixes,
+  extractCliProjection,
+  isMisplacedCliProjectionModule,
+} from './cli-projection.ts';
+export type {
+  CliProjectionConfigRecord,
+  CliProjectionExtractionOptions,
+  CliProjectionModule,
+  ExtractedCliProjection,
+} from './cli-projection.ts';
 export {
   appResourceUriHelperName,
   extractRouteConfig,
@@ -30,6 +55,7 @@ export type {
   CompiledCliCommand,
   CompiledCliMode,
   CompiledCliOption,
+  CompiledCliProjection,
   CompiledCliSurface,
   CompiledLayout,
   CompiledLayoutScope,
@@ -116,6 +142,9 @@ export type {
   AgentProviderWorkspaceIdentity,
   AppRouteConfig,
   CanonicalAgentEvent,
+  CliProjectionConfig,
+  CliProjectionFlagConfig,
+  CliProjectionFlagDefault,
   CliRouteConfig,
   CliRouteProps,
   PromptConfig,
@@ -123,6 +152,7 @@ export type {
   RouteMeta,
   RouteRenderConfig,
   RouteSchema,
+  RouteSchemaInputKey,
   RouteSchemaOutput,
   RouteUiMeta,
   ToolConfig,

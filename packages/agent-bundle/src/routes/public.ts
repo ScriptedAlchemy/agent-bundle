@@ -514,6 +514,79 @@ export interface CliRouteConfig {
   readonly render?: RouteRenderConfig;
 }
 
+/** A literal a CLI projection may declare as `flags.<key>.default`: what the argv grammar itself can spell. */
+export type CliProjectionFlagDefault =
+  | boolean
+  | number
+  | string
+  | readonly (boolean | number | string)[];
+
+/**
+ * How a CLI projection spells one canonical input key on argv. Every field
+ * is optional; an absent flag entry keeps the default policy (the kebab-cased
+ * key as `--option`, the schema's `.describe()` and `.default()`).
+ */
+export interface CliProjectionFlagConfig {
+  /** Extra long-form spellings (kebab-case, no leading dashes) accepted beside `name`. */
+  readonly aliases?: readonly string[];
+  /**
+   * A CLI-only default the shell fills in before the canonical `inputSchema`
+   * reads the input; on a canonical-required key it is legal only when the
+   * module exports `mapInput`, and the key is listed as relaxed.
+   */
+  readonly default?: CliProjectionFlagDefault;
+  /** Help text; overrides the schema's `.describe()`. */
+  readonly description?: string;
+  /** The CLI spelling (kebab-case, no leading dashes); default: the kebab-cased key. */
+  readonly name?: string;
+  /**
+   * Relax a canonical-required key so the option may be omitted on argv;
+   * legal only when the module exports `mapInput`, which must then supply
+   * the key before the canonical schema validates.
+   */
+  readonly required?: false;
+}
+
+/**
+ * The keys of a schema's input object, as `keyof z.input<Schema>` reads them:
+ * a zod schema declares `_input`; a schema declaring only `_output` (the
+ * structural {@link RouteSchema}) falls back to its output keys.
+ */
+export type RouteSchemaInputKey<Schema> = Schema extends { readonly _input: infer Input }
+  ? keyof Input & string
+  : Schema extends RouteSchema<infer Output>
+    ? keyof Output & string
+    : string;
+
+/**
+ * The `config` export of a tool's CLI surface projection module,
+ * `src/mcp/<server>/tools/<tool>.cli.{ts,tsx}` (#596). The module is never a
+ * route: it projects the sibling tool route onto one idiomatic command whose
+ * identity stays the tool's. Every field must stay inside the static
+ * route-config grammar; `flags` and `positionals` name canonical keys of the
+ * tool's `inputSchema`, so declare it as
+ * `satisfies CliProjectionConfig<typeof inputSchema>` with
+ * `import type { inputSchema } from './<tool>.js'`. The module may also export
+ * a synchronous `mapInput(input)` the shell applies to the parsed argv before
+ * the canonical schema validates.
+ */
+export interface CliProjectionConfig<Schema = RouteSchema<Readonly<Record<string, unknown>>>> {
+  /** Alternative command names at the same nesting level (the `src/cli` alias rules apply). */
+  readonly aliases?: readonly string[];
+  /** Command path segments; default `[<tool>]`. Each must be a safe identity segment. */
+  readonly command?: readonly string[];
+  /** Require `--yes` before running; default: `!(annotations.readOnlyHint === true)` of the tool. */
+  readonly confirm?: boolean;
+  /** Help text; default: the tool's `config.description`. */
+  readonly description?: string;
+  /** Exit-code policy; default: the tool's `config.exitCode`, else `'zero'`. */
+  readonly exitCode?: 'result' | 'zero';
+  /** Per canonical key: the CLI spelling, aliases, description, default, and relaxed requirement. */
+  readonly flags?: Partial<Readonly<Record<RouteSchemaInputKey<Schema>, CliProjectionFlagConfig>>>;
+  /** Canonical keys consumed as bare arguments, in order (the `src/cli` positional rules apply). */
+  readonly positionals?: readonly RouteSchemaInputKey<Schema>[];
+}
+
 /**
  * Props received by every routed CLI command's async default function.
  *

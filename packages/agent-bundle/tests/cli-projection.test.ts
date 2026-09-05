@@ -466,7 +466,8 @@ describe('MCP tool CLI surface projections', () => {
       [
         `Tool route ${toolPath} (CLI projection ${projectionPath})`,
         'inputSchema -> external',
-        'bare',
+        // The reason is input-schema.ts's existing AB4838 wording, relabelled.
+        'imported from "schema-package", which is not a relative module path',
       ],
       toolPath,
     );

@@ -10,8 +10,18 @@ import { resolveAppRouteTemplate } from './app-template.ts';
 import {
   compileCliCommands,
   compileMcpCliCommands,
+  compileProjectedCliCommands,
+  type CliProjectionPair,
   type McpCommandSelection,
 } from './cli-commands.ts';
+import {
+  classifyCliProjectionModule,
+  duplicateCliProjectionError,
+  isMisplacedCliProjectionModule,
+  misplacedCliProjectionError,
+  orphanCliProjectionError,
+  type CliProjectionModule,
+} from './cli-projection.ts';
 import {
   type AppReferenceTarget,
   type ExtractedRouteConfig,
@@ -38,6 +48,7 @@ import { validateRouteRenderConfig } from './render-budget.ts';
 import { validateRouteExecutionConfig } from './task-support.ts';
 import {
   emptyRouteConfig,
+  safeIdentitySegment,
   type CompiledAgentRoute,
   type CompiledCliMode,
   type CompiledCliSurface,
@@ -78,9 +89,6 @@ const mcpRouteKinds: Readonly<Record<string, CompiledRouteKind>> = {
   resources: 'resource',
   tools: 'tool',
 };
-
-/** Every identity segment a route path contributes must be a safe name. */
-const safeIdentitySegment = /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/u;
 
 const serverModeOverrides = new Set(['generated', 'custom', 'command', 'remote']);
 
@@ -155,6 +163,18 @@ interface DiscoveredRouteModule {
 }
 
 type DiscoveredModule = DiscoveredLayoutModule | DiscoveredProviderModule | DiscoveredRouteModule;
+
+/**
+ * One `src/mcp/<server>/tools/<tool>.cli.{ts,tsx}` module (#596): the CLI
+ * surface projection of the sibling tool route, never a route of its own. It
+ * is recorded before route classification so it is not id-checked,
+ * contract-validated, registered, or typed as a tool.
+ */
+interface DiscoveredProjectionModule {
+  readonly module: CliProjectionModule;
+  readonly relativePath: string;
+  readonly source: string;
+}
 
 const stemOf = (fileName: string): string => fileName.slice(0, -extname(fileName).length);
 
@@ -667,11 +687,26 @@ export const compileRouteGraph = async (
   const modules: DiscoveredModule[] = [];
   const modulesById = new Map<string, DiscoveredModule>();
   const providerModulesByKey = new Map<string, DiscoveredProviderModule>();
+  const projectionModules: DiscoveredProjectionModule[] = [];
   for (const source of sources) {
     if (claimed.artifact.has(source)) continue;
     const relativePath = toPosixPath(relative(projectRoot, source));
     if (claimed.bin.has(source) && !isConventionalScriptPath(relativePath)) continue;
     if (isPrivateRoutePath(relativePath) || isProjectPathIgnored(rules, projectRoot, source)) continue;
+    // A tool's CLI projection module (#596) is paired with its sibling once
+    // every route id is known; it never derives an id of its own. The same
+    // suffix under resources, prompts, or apps names nothing that has an
+    // argv surface, so it is a mistake to report rather than a route to
+    // classify (`resource:<x>.cli`).
+    const projection = classifyCliProjectionModule(relativePath);
+    if (projection !== undefined) {
+      projectionModules.push({ module: projection, relativePath, source });
+      continue;
+    }
+    if (isMisplacedCliProjectionModule(relativePath)) {
+      diagnostics.push(misplacedCliProjectionError(relativePath, source));
+      continue;
+    }
     const module = classifyModule(source, relativePath);
     // The documented opt-out: a server pinned to custom, command, or remote
     // keeps its own entry, so its layout never enters the graph — it is not
@@ -751,6 +786,34 @@ export const compileRouteGraph = async (
     }
     modulesById.set(module.id, module);
     modules.push(module);
+  }
+
+  // Pairing needs the complete id table: a projection whose sibling tool
+  // route does not exist is an orphan (AB4840). Whether the pair compiles is
+  // decided once its server's mode is known (below): a projection of a tool
+  // whose server is custom, command, remote, or in conflict is skipped
+  // silently, because the server's own diagnostic or override is the
+  // actionable fact.
+  const pairedProjections: DiscoveredProjectionModule[] = [];
+  const projectionBySibling = new Map<string, DiscoveredProjectionModule>();
+  for (const projection of projectionModules) {
+    const sibling = modulesById.get(projection.module.siblingId);
+    if (sibling === undefined || sibling.surface !== 'route' || sibling.kind !== 'tool') {
+      diagnostics.push(orphanCliProjectionError(projection.relativePath, projection.module, projection.source));
+      continue;
+    }
+    const existing = projectionBySibling.get(projection.module.siblingId);
+    if (existing !== undefined) {
+      diagnostics.push(duplicateCliProjectionError(
+        projection.relativePath,
+        existing.relativePath,
+        projection.module,
+        projection.source,
+      ));
+      continue;
+    }
+    projectionBySibling.set(projection.module.siblingId, projection);
+    pairedProjections.push(projection);
   }
 
   const serverRoutes = new Map<string, CompiledAgentRoute[]>();
@@ -1011,11 +1074,40 @@ export const compileRouteGraph = async (
     }
   }
 
+  // A projection pairs with a tool route of a generated server only; its text
+  // is read once here, like every other module the graph judges. The tool's
+  // own text is what the projected command re-parses when the tool has no
+  // static contract (AB4814/AB4838/AB4839 under the tool's label).
+  const pairs: CliProjectionPair[] = [];
+  for (const projection of pairedProjections) {
+    const server = servers.find((candidate) => candidate.name === projection.module.server && candidate.mode === 'generated');
+    const tool = server?.routes.find((route) => route.id === projection.module.siblingId);
+    if (tool === undefined) continue;
+    const moduleText = await readRouteModuleText(projection.source);
+    if (moduleText === undefined) continue;
+    moduleTextBySource.set(projection.source, moduleText);
+    const toolText = moduleTextBySource.get(tool.source);
+    pairs.push({
+      module: projection.module,
+      moduleText,
+      relativePath: projection.relativePath,
+      source: projection.source,
+      tool,
+      ...(toolText === undefined ? {} : { toolText }),
+    });
+  }
+  // One command per operation: a tool with a projection module leaves the
+  // bulk projection's eligible set; an include pattern that matches only such
+  // tools is AB4822 naming the module.
   const projected = overrides.mcpCommands === undefined
     ? undefined
-    : compileMcpCliCommands(servers, overrides.mcpCommands);
+    : compileMcpCliCommands(
+      servers,
+      overrides.mcpCommands,
+      new Map(pairs.map((pair) => [pair.tool.id, pair.relativePath])),
+    );
   let cli: CompiledCliSurface | undefined;
-  if (cliRoutes.length > 0 || projected !== undefined) {
+  if (cliRoutes.length > 0 || projected !== undefined || pairs.length > 0) {
     const conventionalCli = conventionalEntryAt(projectRoot, 'src', 'cli');
     let mode: CompiledCliMode;
     if (overrides.cli !== undefined) {
@@ -1024,11 +1116,11 @@ export const compileRouteGraph = async (
       mode = 'generated';
     } else {
       mode = 'conflict';
-      const generatedClaim = cliRoutes.length === 0
-        ? 'the routes.mcpCommands projection'
-        : projected === undefined
-          ? 'src/cli/ command route modules'
-          : 'src/cli/ command route modules plus the routes.mcpCommands projection';
+      const generatedClaim = [
+        ...(cliRoutes.length === 0 ? [] : ['src/cli/ command route modules']),
+        ...(projected === undefined ? [] : ['the routes.mcpCommands projection']),
+        ...(pairs.length === 0 ? [] : ['tool CLI projection modules (src/mcp/<server>/tools/<tool>.cli.ts)']),
+      ].join(' plus ');
       diagnostics.push(routeError(
         'AB4801',
         `The conventional src/cli entry module and ${generatedClaim} both exist; the compiler never chooses silently.`,
@@ -1036,27 +1128,52 @@ export const compileRouteGraph = async (
         conventionalCli,
       ));
     }
+    // A projection module is judged in every mode, as the bulk projection's
+    // selection is: its contract and binding errors name the module to fix
+    // whether or not the CLI compiles this time.
+    const projections = compileProjectedCliCommands(pairs, { projectRoot });
     if (mode === 'generated') {
       const compiled = await compileCliCommands(cliRoutes, async (route) =>
-        moduleTextBySource.get(route.source), projected, { projectRoot });
+        moduleTextBySource.get(route.source), projected, { projectRoot }, projections);
       diagnostics.push(...compiled.diagnostics);
-      // The routed CLI executable inlines every command route (AB4837, #558).
+      // The routed CLI executable inlines every command route and every
+      // projection module (AB4837, #558).
       for (const route of cliRoutes) {
         diagnostics.push(...routeFrameworkImportDiagnostics(route, moduleTextBySource.get(route.source)));
       }
+      for (const pair of pairs) {
+        diagnostics.push(...validateRouteFrameworkImports(
+          pair.moduleText,
+          pair.relativePath,
+          pair.source,
+          'routed CLI executable',
+          'CLI projection module',
+        ));
+      }
+      const backingRoutes = new Map(
+        [...cliRoutes, ...(projected?.routes ?? []), ...projections.routes].map((route) => [route.id, route] as const),
+      );
       cli = {
         commands: compiled.commands,
         mode,
-        routes: [...cliRoutes, ...(projected?.routes ?? [])]
-          .sort((left, right) => left.id.localeCompare(right.id)),
+        ...(Object.keys(projections.projectionSources).length === 0 ? {} : { projectionSources: projections.projectionSources }),
+        routes: [...backingRoutes.values()].sort((left, right) => left.id.localeCompare(right.id)),
       };
     } else {
-      diagnostics.push(...(projected?.diagnostics ?? []));
+      diagnostics.push(...(projected?.diagnostics ?? []), ...projections.diagnostics);
       if (mode === 'conventional' && projected !== undefined) {
         diagnostics.push(routeError(
           'AB4804',
           'routes.mcpCommands requires a generated CLI surface, but routes.cli is conventional.',
           'Set routes.cli to generated, or remove routes.mcpCommands to keep the conventional src/cli entry.',
+          conventionalCli,
+        ));
+      }
+      if (mode === 'conventional' && pairs.length > 0) {
+        diagnostics.push(routeError(
+          'AB4804',
+          `CLI projection modules (${pairs.map((pair) => pair.relativePath).join(', ')}) require a generated CLI surface, but routes.cli is conventional.`,
+          'Set routes.cli to generated, or remove the projection modules (or prefix them with _) to keep the conventional src/cli entry.',
           conventionalCli,
         ));
       }

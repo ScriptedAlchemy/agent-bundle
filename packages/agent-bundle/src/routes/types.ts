@@ -36,6 +36,13 @@ export type { CapabilityEvidence, CapabilityState } from '../core/capabilities.t
  */
 export const emptyRouteConfig: Readonly<Record<string, unknown>> = Object.freeze({});
 
+/**
+ * Every identity segment a route path contributes — a server or tool name,
+ * a CLI command segment, a projected `command` segment — must be a safe
+ * name: letters and digits, with inner `.`, `_`, and `-` only.
+ */
+export const safeIdentitySegment = /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/u;
+
 export type RouteInputSchemaLiteral =
   | boolean
   | number
@@ -201,9 +208,15 @@ export type CompiledCliMode = 'generated' | 'conventional' | 'conflict';
  * positional entry consumes bare arguments in `positional` order instead.
  */
 export interface CompiledCliOption {
+  /** Extra long-form `--spellings` accepted for this option (a CLI projection's `flags.<key>.aliases`). */
+  readonly aliases?: readonly string[];
   /** Accepted values of a `z.enum([...])` base. */
   readonly choices?: readonly string[];
-  /** The static `.default(<literal>)` value, surfaced in generated help. */
+  /**
+   * The static `.default(<literal>)` value, surfaced in generated help — or a
+   * CLI projection's `flags.<key>.default`, which the shell applies to an
+   * absent option before the canonical `inputSchema` reads the input.
+   */
   readonly defaultValue?: unknown;
   /** The static `.describe('<text>')` string, surfaced in generated help. */
   readonly description?: string;
@@ -214,8 +227,28 @@ export interface CompiledCliOption {
   readonly positional?: number;
   /** True for a `z.array(...)` schema: a repeatable option or the trailing variadic positional. */
   readonly repeated: boolean;
-  /** True when the schema has neither `.optional()` nor `.default(...)`. */
+  /**
+   * True when the schema has neither `.optional()` nor `.default(...)` and no
+   * CLI projection relaxed the key (`flags.<key>.required: false`, or a
+   * projection `default`).
+   */
   readonly required: boolean;
+}
+
+/**
+ * The explicit CLI surface projection of one tool route: the
+ * `<tool>.cli.{ts,tsx}` module beside it (#596). The command it compiles
+ * keeps the tool's identity (`CompiledCliCommand.routeId`); this records what
+ * the module contributes beyond the argv grammar already spelled by
+ * `options`.
+ */
+export interface CompiledCliProjection {
+  /** True when the module exports a `mapInput` function the shell applies before `inputSchema`. */
+  readonly mapInput: boolean;
+  /** Project-relative POSIX path of the projection module. */
+  readonly module: string;
+  /** Canonical-required keys made optional on the CLI (`flags.<key>.required: false` or a CLI `default`); sorted. */
+  readonly relaxed?: readonly string[];
 }
 
 /**
@@ -244,6 +277,12 @@ export interface CompiledCliCommand {
   /** Command path segments below the CLI root (`['library', 'audit']`). */
   readonly path: readonly string[];
   /**
+   * Present for a command compiled from a tool's `<tool>.cli.{ts,tsx}`
+   * projection module (#596); absent for `src/cli/**` routes and for the
+   * bulk `routes.mcpCommands` projection.
+   */
+  readonly projection?: CompiledCliProjection;
+  /**
    * The render budget the route declared in `config.render` (#454); a
    * projected MCP command inherits its tool's. Absent means the runtime
    * default, so pre-#454 graphs digest unchanged.
@@ -263,6 +302,14 @@ export interface CompiledCliSurface {
    */
   readonly commands?: readonly CompiledCliCommand[];
   readonly mode: CompiledCliMode;
+  /**
+   * Command `routeId` → absolute path of its `<tool>.cli.{ts,tsx}` projection
+   * module, for the generated executable to bundle beside the route module.
+   * Build-side only: absolute paths never enter the graph digest, which
+   * covers the relative `CompiledCliProjection.module` instead. Present only
+   * when some command carries a projection.
+   */
+  readonly projectionSources?: Readonly<Record<string, string>>;
   /** Backing routes for every compiled command; empty when `conventional` mode omits them. */
   readonly routes: readonly CompiledAgentRoute[];
 }
