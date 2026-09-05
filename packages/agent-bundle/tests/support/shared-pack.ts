@@ -21,6 +21,7 @@ export interface SharedPack {
   /** The package's own `npm pack --json` entry recorded when the tarball was produced. */
   readonly packOutput: SharedPackOutput;
   readonly tarball: string;
+  readonly variant?: 'runtime-rebundle';
 }
 
 export type SharedPackPackage =
@@ -105,6 +106,9 @@ const packOnce = async (packageName: SharedPackPackage): Promise<SharedPack> => 
   const sharedDirectory = process.env['AGENT_BUNDLE_SHARED_PACK_DIR'];
   if (sharedDirectory !== undefined && sharedDirectory.length > 0) {
     return JSON.parse(await readFile(join(sharedDirectory, `${packageName}.json`), 'utf8')) as SharedPack;
+  }
+  if (packageName === 'agent-bundle-runtime-rebundle') {
+    throw new Error('The runtime re-bundle fixture is prepared by `pnpm test:packed`; run the packed pool through that script.');
   }
   // Ad-hoc single-file runs have no run-level tarball, so build once (unless
   // the caller marked the workspace dist prebuilt) and pack into a

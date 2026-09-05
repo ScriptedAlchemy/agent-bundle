@@ -9,7 +9,7 @@
  * to rstest.
  */
 import { execFile as executeFile, spawn } from 'node:child_process';
-import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -78,14 +78,10 @@ try {
   });
   const fixturePackage = join(packDirectory, 'runtime-rebundle-package');
   await mkdir(fixturePackage);
-  await Promise.all([
-    'LICENSE',
-    'NOTICE',
-    'README.md',
-    'bin',
-    'package.json',
-  ].map((name) => cp(
-    join(repositoryRoot, 'packages', 'agent-bundle', name),
+  const agentBundlePackageRoot = join(repositoryRoot, 'packages', 'agent-bundle');
+  const agentBundleManifest = JSON.parse(await readFile(join(agentBundlePackageRoot, 'package.json'), 'utf8'));
+  await Promise.all(['package.json', ...agentBundleManifest.files.filter((name) => name !== 'dist')].map((name) => cp(
+    join(agentBundlePackageRoot, name),
     join(fixturePackage, name),
     { recursive: true },
   )));
@@ -104,12 +100,15 @@ try {
   const fixturePackOutput = packOutputFromJson(fixturePacked, 'agent-bundle');
   await writeFile(
     join(packDirectory, 'agent-bundle-runtime-rebundle.json'),
-    `${JSON.stringify({ packOutput: fixturePackOutput, tarball: join(fixturePackDirectory, fixturePackOutput.filename) })}\n`,
+    `${JSON.stringify({
+      packOutput: fixturePackOutput,
+      tarball: join(fixturePackDirectory, fixturePackOutput.filename),
+      variant: 'runtime-rebundle',
+    })}\n`,
   );
   process.exitCode = await run('pnpm', ['exec', 'rstest', '--config', 'rstest.packed.config.ts', ...rstestArguments], {
     AGENT_BUNDLE_PACKAGE_PREBUILT: '1',
     ...(releasePool ? { AGENT_BUNDLE_PACKED_RELEASE: '1' } : {}),
-    AGENT_BUNDLE_RUNTIME_REBUNDLE_FIXTURE: '1',
     AGENT_BUNDLE_SHARED_PACK_DIR: packDirectory,
     AGENT_BUNDLE_WORKBENCH_PREBUILT: '1',
   });
