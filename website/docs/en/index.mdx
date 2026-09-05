@@ -119,23 +119,23 @@ declaration, because a handler has to be bound to an event.
 ```text title="artifact/"
 artifact/
 ├── .claude-plugin/
-│   ├── plugin.json                  # Claude Code manifest
+│   ├── plugin.json
 │   └── marketplace.json
 ├── .codex-plugin/
-│   ├── plugin.json                  # Codex manifest
-│   ├── hooks.json                   # Codex hook document
-│   └── mcp.json                     # Codex MCP document
-├── .agents/plugins/marketplace.json # Codex marketplace
-├── .mcp.json                        # Claude Code MCP document
-├── plugin.json                      # portable (Agent Plugins) manifest
-├── mcp.json                         # portable MCP document
+│   ├── plugin.json
+│   ├── hooks.json
+│   └── mcp.json
+├── .agents/plugins/marketplace.json
+├── .mcp.json
+├── plugin.json
+├── mcp.json
 ├── hooks/
-│   ├── hooks.json                   # Claude Code hook document
-│   ├── session-start-….claude.mjs   # one wrapper per host the hook reaches
+│   ├── hooks.json
+│   ├── session-start-….claude.mjs
 │   ├── session-start-….codex.mjs
 │   └── hooks-flight.mjs
 ├── mcp/
-│   ├── mcp-status-….mjs             # compiled once, shared by every host
+│   ├── mcp-status-….mjs
 │   └── mcp-status-…-flight.mjs
 ├── scripts/check-service.mjs
 ├── skills/release-review/

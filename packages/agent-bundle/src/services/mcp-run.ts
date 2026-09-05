@@ -9,7 +9,6 @@ import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry
 import { resolveManifestHostFromRoot } from '../build/manifest-projection.ts';
 import { validateArtifact } from '../build/validate-artifact.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
-import { sha256Hex } from '../core/digest.ts';
 import { joinArtifact, resolveContained } from '../core/paths.ts';
 import { parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { runPromise } from '../effect/boundary.ts';
@@ -23,6 +22,8 @@ import {
   type ModernMcpStdioServer,
   type TargetMcpRuntimeContract,
 } from './mcp-runtime.ts';
+
+export { mcpServerStateDirectory } from '../core/mcp-state-directory.ts';
 
 /**
  * The foreground MCP server runner behind `agent-bundle mcp run`: it resolves
@@ -56,17 +57,6 @@ export interface ResolveMcpStdioLaunchOptions {
   readonly target?: string;
   readonly workspaceRoot: string;
 }
-
-const safeStateSegment = /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/u;
-
-/**
- * MCP server names are consumer input with no path-shape guarantee: a name
- * containing separators or leading dots (for example `../shared`) must never
- * traverse out of the per-server state root. Plain single-segment names pass
- * through untouched; anything else becomes a content-addressed segment.
- */
-export const mcpServerStateDirectory = (server: string): string =>
-  safeStateSegment.test(server) ? server : `server-${sha256Hex(server).slice(0, 16)}`;
 
 const hostMcpDocument = async (
   artifact: string,

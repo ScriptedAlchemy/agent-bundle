@@ -19,12 +19,14 @@ import {
   type McpAppTrustedDocumentPolicy,
 } from './mcp-app-client.ts';
 import {
-  createMcpAppFrameRelay,
   SecureAppRenderer,
+} from './mcp-app-frame.tsx';
+import {
+  createMcpAppFrameRelay,
   type McpAppFrameIframe,
   type McpAppFrameRelayOptions,
   type McpAppFrameWindow,
-} from './mcp-app-frame.tsx';
+} from '../../../agent-bundle/src/web-host/browser/frame-relay.ts';
 import type {
   McpAppPreviewAppsSnapshot,
   McpAppPreviewSnapshot,

@@ -701,6 +701,10 @@
       ],
       "secretValuesEmitted": false,
       "state": "supported"
+    },
+    "web": {
+      "reason": "browser host inside the composite artifact; <plugin> web runs from the installed root on any host",
+      "state": "supported"
     }
   },
   "tokens": {

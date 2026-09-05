@@ -1,5 +1,5 @@
 ---
-description: 'The composite plugin root agent-bundle build emits: where each host projection places its manifest, hook, and MCP documents, the hook wrapper naming rule, the AB4103/AB4105/AB4106 composition rules, and the artifact manifest contract.'
+description: 'The composite plugin root agent-bundle build emits: where each host projection places its manifest, hook, and MCP documents, the hook wrapper naming rule, the AB4103/AB4105/AB4106 composition rules, the optional manifest web section, and the artifact manifest contract.'
 ---
 
 # Targets and artifacts
@@ -47,7 +47,7 @@ artifact/
 ├── hooks/<hook>.<host>.mjs               # wrappers, hook shared by >1 selected host
 ├── hooks/hooks-flight.mjs
 ├── mcp/mcp-<server>-<hash>.mjs           # compiled MCP entries (+ -flight.mjs)
-├── bin/<plugin>.mjs, bin/<plugin>-flight.mjs   # routed CLI (when src/cli exists)
+├── bin/<plugin>.mjs, bin/<plugin>-flight.mjs   # routed CLI and/or <plugin> web
 ├── scripts/, skills/, commands/, rules/, assets/, mcp-apps/   # emitted once
 ├── INSTALL.md                            # when any built-in host is selected
 ├── install.mjs                           # when cursor or portable is selected
@@ -56,7 +56,10 @@ artifact/
 
 Host manifests live in their dotfolders at the root. `skills/`, `hooks/`, `mcp/`, `scripts/`,
 `bin/`, and `assets/` are shared and emitted **once** — no per-host copies. Nothing else appears
-at the root: no generated `AGENTS.md`, no `hooks/hooks-cursor.json`.
+at the root: no generated `AGENTS.md`, no `hooks/hooks-cursor.json`, no `web/` directory. The
+browser host for configured MCP Apps ships inside `bin/<plugin>.mjs` as the framework-owned
+`web` command. That bin is emitted when `src/cli/**` compiled at least one command, when
+[`web`](./configuration.mdx#web) is configured (even with no authored CLI commands), or both.
 
 ### Where each host reads its documents
 
@@ -150,6 +153,7 @@ integrity check: `validate --artifact`, `prepack`, `install`, `doctor --from`, `
 | `executables` | Every process the root can start: `bins[]`, `hooks[]` (one row per wrapper per host), `mcpServers[]` with their `entry` and `apps[]`, and `scripts[]`. |
 | `distribution` | `channels` (`local`, plus `npm` when `compiler.project.packageName` is present) and the `install` pointers to `INSTALL.md` / `install.mjs`. |
 | `compiler` | Operational record, versioned by `recordVersion` independently of `manifestVersion`: `producer`, `project` (`configPath`, `configDigest`, `modelDigest`, `revision`, `sourceInputs`, optional `packageName` / `packageVersion`), `provenance[]` (one `{ path, sourceInputs[] }` per `files[]` row), `adapters[]` (`adapterRevision`, `observedVersion`, pinned `schemas` per projection), `agentSkills`, and `validation`. |
+| `web` | **Absent unless [`web`](./configuration.mdx#web) is configured.** `{ open, apps[] }` where each app is `{ allow, app, args, entry, env, name, resourceUri, server, tool?, input? }`. `entry` is the root-relative compiled MCP executable and must name a `files[]` row; `args` are the server's declared `mcp.servers.<id>.args` after the entry and `env` its declared static env, both with `agent-bundle:path:*` tokens left unexpanded. Apps are sorted by `app`; an exposed App whose `targets` fall outside the root's selection is omitted (and the section with it when none remain). The `<plugin> web` command, `agent-bundle dev` `/web/<server>/<app>`, and `doctor` read this section and never rediscover Apps from `src/**`. |
 
 Only `build` writes it; everything in it is derived from the configuration, the conventional
 filesystem, and the compiled model, and its bytes are canonical — every reader rejects a

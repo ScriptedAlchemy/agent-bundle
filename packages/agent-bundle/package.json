@@ -25,7 +25,8 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "build": "node ../../scripts/sync-license-files.mjs && pnpm build:workbench && rslib build",
+    "build": "node ../../scripts/sync-license-files.mjs && pnpm build:workbench && pnpm build:web-host && rslib build",
+    "build:web-host": "rsbuild build -c rsbuild.web-host.config.ts",
     "build:workbench": "pnpm --filter agent-bundle-workbench build"
   },
   "files": [
@@ -88,10 +89,6 @@
       "types": "./dist/rstest/index.d.ts",
       "import": "./dist/rstest.js"
     },
-    "./serve-app-command": {
-      "types": "./dist/serve-app-command.d.ts",
-      "import": "./dist/serve-app-command.js"
-    },
     "./test": {
       "types": "./dist/test/index.d.ts",
       "import": "./dist/test.js"
@@ -101,6 +98,10 @@
       "import": "./dist/test/browser.js"
     },
     "./schemas/agent-bundle.manifest.schema.json": "./schemas/agent-bundle.manifest.schema.json",
+    "./web-host": {
+      "types": "./dist/web-host.d.ts",
+      "import": "./dist/web-host.js"
+    },
     "./package.json": "./package.json"
   },
   "dependencies": {

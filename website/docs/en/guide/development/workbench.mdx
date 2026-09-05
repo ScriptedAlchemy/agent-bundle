@@ -1,5 +1,5 @@
 ---
-description: 'The agent-bundle developer Workbench: loopback boundaries, epoch-pinned MCP sessions, Playground traces, development host installs, and the optional Agent API.'
+description: 'The agent-bundle developer Workbench: loopback boundaries, epoch-pinned MCP sessions, the /web/<server>/<app> App host, Playground traces, development host installs, and the optional Agent API.'
 ---
 
 # Developer Workbench
@@ -62,8 +62,11 @@ came from one generated server built from one set of inputs.
   minified (see
   [Development vs production builds](../authoring/mcp.mdx#development-vs-production-builds)).
   The same host stack serves one App standalone in a plain browser tab through
-  `agent-bundle serve-app`; see
-  [Serving an App standalone](../authoring/mcp.mdx#serving-an-app-standalone).
+  `agent-bundle serve-app`. When the project configures [`web`](../../reference/configuration.mdx#web),
+  `agent-bundle dev` also serves `GET /web/<server>/<app>` on the foreground server — the same
+  page, relay, routes, sandbox proxy, and consent behavior, bound to the current epoch's server
+  session. Apps not listed in `web.apps` are 404. See
+  [Exposing an App in the browser](../authoring/mcp.mdx#exposing-an-app-in-the-browser).
 
 ## Standalone MCP Inspector
 

@@ -16,6 +16,8 @@ import {
   type CliRenderedDocument,
   type CliRenderedEvent,
   type GeneratedCliRenderSession,
+  type GeneratedCliWebCommand,
+  type GeneratedCliWebContext,
 } from '../src/cli-entry.ts';
 import { normalizePackageBuild } from '../src/config/normalize.ts';
 import type { AgentBundleConfig } from '../src/core/types.ts';
@@ -814,9 +816,11 @@ describe('generated CLI shell', () => {
   const run = async (
     argv: readonly string[],
     options: {
+      readonly commands?: readonly CompiledCliCommand[];
       readonly result?: unknown;
       readonly signal?: AbortSignal;
       readonly throws?: Error;
+      readonly web?: GeneratedCliWebCommand;
     } = {},
   ): Promise<RunResult> => {
     const calls: RunResult['calls'] = [];
@@ -824,7 +828,7 @@ describe('generated CLI shell', () => {
     const stderr: string[] = [];
     const code = await runGeneratedCliEntry({
       argv,
-      commands,
+      commands: options.commands ?? commands,
       description: 'Curate audiobooks.',
       execute: async (command, input, context) => {
         calls.push({ command, input, json: context.json });
@@ -834,6 +838,7 @@ describe('generated CLI shell', () => {
       name: 'curator',
       ...(options.signal === undefined ? {} : { signal: options.signal }),
       version: '1.2.3',
+      ...(options.web === undefined ? {} : { web: options.web }),
       writeErr: (text) => void stderr.push(text),
       writeOut: (text) => void stdout.push(text),
     });
@@ -919,6 +924,64 @@ describe('generated CLI shell', () => {
 
     const version = await run(['--version']);
     expect(version).toMatchObject({ code: 0, stdout: 'curator 1.2.3\n' });
+  });
+
+  describe('the framework-owned web command (#564)', () => {
+    const webRow = "  web                Open one of the plugin's MCP Apps in a browser.";
+    const recording = () => {
+      const invocations: { argv: readonly string[]; context: GeneratedCliWebContext }[] = [];
+      const web: GeneratedCliWebCommand = {
+        run: async (argv, context) => {
+          invocations.push({ argv, context });
+          context.writeOut('MCP App status/status at http://127.0.0.1:4321/ (tool show_status; Ctrl-C stops the server)\n');
+          return 7;
+        },
+      };
+      return { invocations, web };
+    };
+
+    it('dispatches web with the arguments after it before consulting the authored tree', async () => {
+      const { invocations, web } = recording();
+      const controller = new AbortController();
+      const result = await run(['web', 'status/status', '--json'], { signal: controller.signal, web });
+      expect(result.code).toBe(7);
+      expect(result.calls).toEqual([]);
+      expect(result.stdout).toBe('MCP App status/status at http://127.0.0.1:4321/ (tool show_status; Ctrl-C stops the server)\n');
+      expect(result.stderr).toBe('');
+      expect(invocations).toHaveLength(1);
+      expect(invocations[0]!.argv).toEqual(['status/status', '--json']);
+      expect(invocations[0]!.context.name).toBe('curator');
+      expect(invocations[0]!.context.signal).toBe(controller.signal);
+    });
+
+    it('lists web among the root commands only when the executable carries it, and only at the root', async () => {
+      const { web } = recording();
+      const withWeb = await run(['--help'], { web });
+      expect(withWeb.code).toBe(0);
+      expect(withWeb.stdout).toContain('\nCommands:\n  doctor             Inspect the runtime.\n  library <command>\n  offset             Apply a signed offset.\n' + `${webRow}\n`);
+      expect((await run([], { web })).stdout).toBe(withWeb.stdout);
+      expect((await run(['--help'])).stdout).not.toContain('MCP Apps');
+      expect((await run(['library', '--help'], { web })).stdout).not.toContain('MCP Apps');
+    });
+
+    it('prints the help listing web for an executable with no authored command', async () => {
+      const { web } = recording();
+      const help = await run(['--help'], { commands: [], web });
+      expect(help.code).toBe(0);
+      expect(help.stdout).toContain('Usage: curator <command> [options]');
+      expect(help.stdout).toContain(`\nCommands:\n  web  Open one of the plugin's MCP Apps in a browser.\n`);
+      expect(help.stderr).toBe('');
+      expect((await run([], { commands: [], web })).stdout).toBe(help.stdout);
+    });
+
+    it('keeps --version ahead of web and web unknown without the hook', async () => {
+      const { invocations, web } = recording();
+      expect(await run(['--version'], { web })).toMatchObject({ code: 0, stdout: 'curator 1.2.3\n' });
+      expect(invocations).toEqual([]);
+      const unknown = await run(['web', 'status/status']);
+      expect(unknown.code).toBe(2);
+      expect(unknown.stderr).toContain('Unknown command: web.');
+    });
   });
 
   it('prints command help with usage, aliases, arguments, defaults, and choices', async () => {

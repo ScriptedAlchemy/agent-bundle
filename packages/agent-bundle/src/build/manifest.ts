@@ -17,6 +17,7 @@ import type {
   RouteInputSchema,
   RouteInputSchemaLiteral,
 } from '../routes/types.ts';
+import { parseWebManifest, type WebManifest } from '../web-host/manifest.ts';
 
 /**
  * The authoritative artifact manifest (`agent-bundle.manifest.json`, issue
@@ -414,6 +415,7 @@ export interface ArtifactManifest {
   readonly projections: readonly ArtifactManifestProjection[];
   readonly routes: ArtifactManifestRoutes;
   readonly runtime: ArtifactManifestRuntime;
+  readonly web?: WebManifest;
 }
 
 export interface AssembledArtifactManifest {
@@ -1251,6 +1253,7 @@ const referencedPaths = (manifest: {
   readonly distribution: ArtifactManifestDistribution;
   readonly executables: ArtifactManifestExecutables;
   readonly projections: readonly ArtifactManifestProjection[];
+  readonly web: WebManifest | undefined;
 }): readonly (readonly [string, string])[] => {
   const references: (readonly [string, string])[] = [];
   const reference = (location: string, path: string | undefined): void => {
@@ -1283,7 +1286,17 @@ const referencedPaths = (manifest: {
   }
   reference('distribution.install.instructions', manifest.distribution.install?.instructions);
   reference('distribution.install.script', manifest.distribution.install?.script);
+  for (const app of manifest.web?.apps ?? []) {
+    reference(`web.apps[${app.app}].entry`, app.entry);
+  }
   return references;
+};
+
+const parseWeb = (value: unknown): WebManifest | undefined => {
+  if (value === undefined) return undefined;
+  const web = parseWebManifest(value);
+  for (const app of web.apps) requirePath(app.entry, `web.apps[${app.app}].entry`);
+  return web;
 };
 
 const requireExactSortedKeys = (
@@ -1402,7 +1415,7 @@ const validateManifest = (value: unknown): ArtifactManifest => {
     'projections',
     'routes',
     'runtime',
-  ]);
+  ], ['web']);
   if (manifest.manifestVersion !== artifactManifestVersion) {
     fail(`manifestVersion must be ${artifactManifestVersion}.`);
   }
@@ -1447,8 +1460,9 @@ const validateManifest = (value: unknown): ArtifactManifest => {
   if (distribution.channels.includes('npm') !== (compiler.project.packageName !== undefined)) {
     fail('distribution.channels lists "npm" exactly when compiler.project.packageName is present.');
   }
+  const web = parseWeb(manifest.web);
   const filePaths = new Set(files.map((file) => file.path));
-  for (const [location, path] of referencedPaths({ distribution, executables, projections })) {
+  for (const [location, path] of referencedPaths({ distribution, executables, projections, web })) {
     if (!filePaths.has(path)) fail(`${location} names ${JSON.stringify(path)}, which is not a manifest file.`);
   }
 
@@ -1462,6 +1476,7 @@ const validateManifest = (value: unknown): ArtifactManifest => {
     projections,
     routes,
     runtime: parseRuntime(manifest.runtime),
+    ...(web === undefined ? {} : { web }),
   };
 };
 

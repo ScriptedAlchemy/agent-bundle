@@ -240,6 +240,21 @@ const validManifest = (): ArtifactManifest => ({
     }],
   },
   runtime: { node: '22.12.0' },
+  web: {
+    apps: [{
+      allow: ['call-tool'],
+      app: 'review/dashboard',
+      args: ['--stdio'],
+      entry: 'runtime/mcp/review.mjs',
+      env: { REVIEW_MODE: 'web' },
+      input: { limit: 5 },
+      name: 'dashboard',
+      resourceUri: 'ui://review/dashboard',
+      server: 'review',
+      tool: 'review',
+    }],
+    open: 'browser',
+  },
 });
 
 /** The smallest manifest both validators accept: no optional key, every list empty. */

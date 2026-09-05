@@ -28,4 +28,5 @@ export default defineConfig({
     'check-service-fixture': './src/scripts/check-service-fixture.ts',
   },
   targets: ['portable', 'codex', 'claude'],
+  web: { apps: [{ app: 'status/status', tool: 'show-status', allow: ['call-tool'] }] },
 });

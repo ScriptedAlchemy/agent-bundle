@@ -60,6 +60,7 @@ const createFixture = async (options: {
   /** Ship a Claude skill referencing the bin through the plugin-root token (Claude-only Skill Markdown syntax). */
   readonly skill?: boolean;
   readonly targets: readonly string[];
+  readonly web?: boolean;
 }): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-cli-bin-artifact-'));
   roots.push(root);
@@ -80,6 +81,7 @@ const createFixture = async (options: {
       'export default defineConfig({',
       `  plugin: { description: 'Artifact routed CLI fixture.', name: ${JSON.stringify(pluginName)}, version: '3.8.7' },`,
       `  targets: ${JSON.stringify(options.targets)},`,
+      ...(options.web === true ? ["  web: { apps: ['curator/dashboard'] },"] : []),
       '});',
       '',
     ].join('\n')),
@@ -144,6 +146,20 @@ const createFixture = async (options: {
       '}',
       '',
     ].join('\n')),
+    ...(options.web === true
+      ? [
+        writeProjectFile(root, 'src/mcp/curator/apps/dashboard.ts', [
+          "export const config = { resourceUri: 'ui://curator/dashboard.html', template: './dashboard.html' };",
+          'export default async () => ({});',
+          '',
+        ].join('\n')),
+        writeProjectFile(
+          root,
+          'src/mcp/curator/apps/dashboard.html',
+          '<!doctype html><html><body>dashboard</body></html>\n',
+        ),
+      ]
+      : []),
     // A plain script route forwarding to the routed CLI through the
     // documented sibling convention: `../bin/<plugin-name>.mjs` relative to
     // the script's own `import.meta.url` inside the artifact.
@@ -174,6 +190,40 @@ const createFixture = async (options: {
         '',
       ].join('\n'))]
       : []),
+  ]);
+  return root;
+};
+
+const webOnlyPluginName = 'web-only-artifact';
+const agentBundleImport = /(?:\bfrom\s*|\bimport\s*\(\s*)['"]agent-bundle(?:\/[^'"]*)?['"]/u;
+
+const createWebOnlyFixture = async (): Promise<string> => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-web-only-artifact-'));
+  roots.push(root);
+  await symlink(join(process.cwd(), 'examples', 'audiobook-curator', 'node_modules'), join(root, 'node_modules'), 'dir');
+  await Promise.all([
+    writeProjectFile(root, 'package.json', JSON.stringify({ name: webOnlyPluginName, type: 'module', version: '1.0.0' })),
+    writeProjectFile(root, 'agent-bundle.config.ts', [
+      "import { defineConfig } from 'agent-bundle/config';",
+      'export default defineConfig({',
+      '  mcp: { servers: { status: {',
+      '    apps: {',
+      "      status: { entry: './views/status.ts', resourceUri: 'ui://web-only-artifact/status.html', template: './views/status.html' },",
+      "      'claude-only': { entry: './views/status.ts', resourceUri: 'ui://web-only-artifact/claude-only.html', targets: ['claude'], template: './views/status.html' },",
+      '    },',
+      "    args: ['--verbose'],",
+      "    entry: './src/mcp/status.ts',",
+      "    targets: ['claude', 'portable'],",
+      '  } } },',
+      `  plugin: { description: 'Web-only artifact fixture.', name: ${JSON.stringify(webOnlyPluginName)}, version: '1.0.0' },`,
+      "  targets: ['claude', 'portable'],",
+      "  web: { apps: ['status/claude-only', 'status/status'] },",
+      '});',
+      '',
+    ].join('\n')),
+    writeProjectFile(root, 'src/mcp/status.ts', "process.stderr.write('status server\\n');\n"),
+    writeProjectFile(root, 'views/status.html', '<!doctype html><html><body><main id="view"></main></body></html>\n'),
+    writeProjectFile(root, 'views/status.ts', "document.querySelector('#view')!.textContent = 'web-only status';\n"),
   ]);
   return root;
 };
@@ -338,6 +388,72 @@ it('lets a skill reach the artifact bin through the plugin-root token, and the b
   expect(await probe({})).toEqual({ atImport: 'from-file', atRun: 'from-file', providerAtImport: 'from-file' });
   expect(await probe({ CLI_OPERATOR_TOKEN: 'from-host' })).toEqual({ atImport: 'from-host', atRun: 'from-host', providerAtImport: 'from-host' });
   expect(await probe({ AGENT_BUNDLE_ENV_FILE: 'none' })).toEqual({ atImport: 'unset', atRun: 'unset', providerAtImport: 'unset' });
+});
+
+it('emits a self-contained routed bin for a web-only plugin', { retry: 1, timeout: 240_000 }, async () => {
+  const root = await createFixture({ targets: ['portable'], web: true });
+  await rm(join(root, 'src', 'cli'), { force: true, recursive: true });
+
+  const result = await build({ output: 'artifact', root });
+  const binPath = join(root, 'artifact', 'bin', `${pluginName}.mjs`);
+  const source = await readFile(binPath, 'utf8');
+
+  await expect(stat(binPath)).resolves.toMatchObject({});
+  expect(result.build.manifest.files.find((file) => file.path === `bin/${pluginName}.mjs`))
+    .toMatchObject({ kind: 'bundle' });
+  expect(source).toContain('agent-bundle-web-host-seed');
+  expect(source).not.toMatch(/from\s*['"]agent-bundle\//u);
+  expect((await validateArtifact({ artifactRoot: join(root, 'artifact') }))
+    .filter((entry) => entry.code === 'AB6005')).toEqual([]);
+});
+
+it('lists authored commands and web in one generated artifact bin', { retry: 1, timeout: 240_000 }, async () => {
+  const root = await createFixture({ targets: ['portable'], web: true });
+  await build({ output: 'artifact', root });
+
+  const binPath = join(root, 'artifact', 'bin', `${pluginName}.mjs`);
+  const help = await execFile(process.execPath, [binPath, '--help']);
+  expect(help.stdout).toContain('status');
+  expect(help.stdout).toContain('web');
+  expect(await readFile(binPath, 'utf8')).toContain('agent-bundle-web-host-seed');
+});
+
+it('emits bin/<plugin>.mjs for a project with web.apps and no src/cli, and its --help lists web (#564)', { retry: 1, timeout: 240_000 }, async () => {
+  const root = await createWebOnlyFixture();
+  // The `claude`-only App is exposed but out of this root's selection: it
+  // is neither compiled nor advertised, so `<plugin> web` cannot pick an App
+  // the shipped server does not serve.
+  const result = await build({ output: 'artifact', root, targets: ['portable'] });
+  const artifactRoot = join(root, 'artifact');
+
+  const binPath = join(artifactRoot, 'bin', `${webOnlyPluginName}.mjs`);
+  await expect(stat(binPath)).resolves.toMatchObject({});
+  expect(result.build.manifest.files.find((file) => file.path === `bin/${webOnlyPluginName}.mjs`)).toMatchObject({ kind: 'bundle' });
+  expect(result.diagnostics.filter((entry) => entry.severity === 'error')).toEqual([]);
+  expect(await readFile(binPath, 'utf8')).not.toMatch(agentBundleImport);
+
+  const help = await execFile(process.execPath, [binPath, '--help']);
+  expect(help.stdout).toContain(`${webOnlyPluginName} 1.0.0`);
+  expect(help.stdout).toMatch(/^Commands:$/mu);
+  expect(help.stdout).toMatch(/^\s+web\b/mu);
+
+  const manifest = JSON.parse(await readFile(join(artifactRoot, 'agent-bundle.manifest.json'), 'utf8')) as { readonly web?: unknown };
+  const mcpEntries = result.build.manifest.files.filter((file) => file.path.startsWith('mcp/')).map((file) => file.path);
+  expect(mcpEntries).toHaveLength(1);
+  expect(result.build.manifest.files.filter((file) => file.path.startsWith('mcp-apps/')).map((file) => file.path)).toEqual(['mcp-apps/status.html']);
+  expect(manifest.web).toEqual({
+    apps: [{
+      allow: [],
+      app: 'status/status',
+      args: ['--verbose'],
+      entry: mcpEntries[0]!,
+      env: {},
+      name: 'status',
+      resourceUri: 'ui://web-only-artifact/status.html',
+      server: 'status',
+    }],
+    open: 'never',
+  });
 });
 
 it('refuses a host-emitted file that collides with the routed CLI bin (AB4766)', { timeout: 120_000 }, async () => {

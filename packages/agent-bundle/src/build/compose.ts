@@ -12,7 +12,7 @@ import {
   type TargetHookEntry,
 } from '../adapters/types.ts';
 import { installSurfaceEntries } from '../install/surface.ts';
-import { cliBinCollisionDiagnostics, targetHostsCliBin } from './cli-bins.ts';
+import { cliBinCollisionDiagnostics, targetHostsGeneratedBin } from './cli-bins.ts';
 
 /**
  * One selected host's projection into the composite root (#555): the plan its
@@ -246,7 +246,7 @@ export const planComposite = (model: NormalizedPlugin, registry: TargetRegistry)
         });
       }
     }
-    const cliBin = targetHostsCliBin(registry, name);
+    const cliBin = targetHostsGeneratedBin(registry, model, name);
     if (cliBin) diagnostics.push(...cliBinCollisionDiagnostics(model, name, plan.entries));
     return Object.freeze({ cliBin, name, plan });
   });

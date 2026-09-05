@@ -67,6 +67,7 @@ import {
 } from './provenance.ts';
 import { validateArtifact, validateArtifactFiles } from './validate-artifact.ts';
 import { deepFreeze } from '../core/freeze.ts';
+import { parseWebManifest, type WebManifest } from '../web-host/manifest.ts';
 
 
 export interface BuildResult {
@@ -212,7 +213,11 @@ const plannedDestinations = (composite: CompositePlan, staged: StagedRoot): read
   ...composite.entries.map((entry) => resolveArtifactDestination(staged.root, entry.relativePath)),
   ...staged.compiledCliBins.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
   ...staged.compiledEntries.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
-  ...staged.compiledHooks.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
+  ...staged.compiledHooks.flatMap((entry) => [
+    entry.output,
+    ...(entry.executorOutput === undefined ? [] : [entry.executorOutput]),
+    ...(entry.workerOutput === undefined ? [] : [entry.workerOutput]),
+  ]),
   ...staged.compiledMcpApps.map((entry) => entry.output),
   ...staged.compiledMcpEntries.flatMap((entry) => [entry.output, ...(entry.workerOutput === undefined ? [] : [entry.workerOutput])]),
 ];
@@ -255,7 +260,11 @@ const outputCandidatesFor = (options: {
     kind: 'bundle' as const,
     path: entry.output,
     sourceInputs: entry.sourceInputs,
-  }, ...(entry.workerOutput === undefined ? [] : [{
+  }, ...(entry.executorOutput === undefined ? [] : [{
+    kind: 'bundle' as const,
+    path: entry.executorOutput,
+    sourceInputs: entry.executorSourceInputs ?? entry.sourceInputs,
+  }]), ...(entry.workerOutput === undefined ? [] : [{
     kind: 'bundle' as const,
     path: entry.workerOutput,
     sourceInputs: entry.workerSourceInputs ?? entry.sourceInputs,
@@ -491,6 +500,57 @@ const manifestDistribution = (options: {
   });
 };
 
+/**
+ * The manifest `web` section for this composite root: the exposed Apps whose
+ * declaration targets intersect the selection, exactly the Apps
+ * `planCompiledMcpApps` compiles into it. An App scoped to a host outside the
+ * selection is not advertised, since the server the root ships cannot serve
+ * it; a selection that exposes none leaves the section out.
+ */
+const webManifestFor = (options: {
+  readonly artifactRoot: string;
+  readonly compiledMcpEntries: readonly CompiledMcpEntry[];
+  readonly model: NormalizedPlugin;
+  readonly selected: readonly string[];
+}): WebManifest | undefined => {
+  if (options.model.web === undefined) return undefined;
+  const entries = new Map(options.compiledMcpEntries.map((entry) => [
+    entry.id,
+    relative(options.artifactRoot, entry.output).replaceAll('\\', '/'),
+  ]));
+  const servers = new Map(options.model.mcpServers.map((server) => [server.id, server]));
+  const selectedApps = (options.model.mcpApps ?? []).filter((app) =>
+    app.targets.some((target) => options.selected.includes(target)));
+  const exposed = options.model.web.apps.filter((app) =>
+    selectedApps.some((candidate) => candidate.serverId === app.serverId && candidate.name === app.appName));
+  if (exposed.length === 0) return undefined;
+  const apps = exposed.map((app) => {
+    const server = servers.get(app.serverId);
+    const declaredEntry = server?.args?.[0];
+    const pluginRootPrefix = `${pathTokens.pluginRoot}/`;
+    const entry = entries.get(app.serverId) ??
+      (declaredEntry?.startsWith(pluginRootPrefix) === true
+        ? declaredEntry.slice(pluginRootPrefix.length)
+        : undefined);
+    if (server === undefined || entry === undefined) {
+      throw new Error(`Web App ${JSON.stringify(app.app)} has no compiled MCP server entry.`);
+    }
+    return {
+      allow: [...app.allow],
+      app: app.app,
+      args: server.args?.slice(1) ?? [],
+      entry,
+      env: { ...(server.env ?? {}) },
+      ...(app.input === undefined ? {} : { input: structuredClone(app.input) }),
+      name: app.appName,
+      resourceUri: app.resourceUri,
+      server: app.serverName,
+      ...(app.tool === undefined ? {} : { tool: app.tool }),
+    };
+  }).sort((left, right) => left.app.localeCompare(right.app));
+  return parseWebManifest({ apps, open: options.model.web.open });
+};
+
 const manifestFor = (options: {
   readonly artifactRoot: string;
   readonly compiledCliBins: readonly CompiledCliBin[];
@@ -526,6 +586,12 @@ const manifestFor = (options: {
       selected,
     }),
   });
+  const web = webManifestFor({
+    artifactRoot: options.artifactRoot,
+    compiledMcpEntries: options.compiledMcpEntries,
+    model: options.model,
+    selected,
+  });
   return {
     application: {
       ...(options.model.metadata.description === undefined ? {} : { description: options.model.metadata.description }),
@@ -553,6 +619,7 @@ const manifestFor = (options: {
     projections,
     routes: artifactRoutesFor(options.routeGraph),
     runtime: { ...options.model.runtime },
+    ...(web === undefined ? {} : { web }),
   };
 };
 
@@ -755,6 +822,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
       compiledHooks: Object.freeze(compiledHooks.map((entry) => Object.freeze({
         ...entry,
         output: publishedOutput(entry),
+        ...(entry.executorOutput === undefined ? {} : { executorOutput: publishedOutput({ output: entry.executorOutput }) }),
         ...(entry.workerOutput === undefined ? {} : { workerOutput: publishedOutput({ output: entry.workerOutput }) }),
       }))),
       compiledMcpApps: Object.freeze(compiledMcpApps.map((entry) => Object.freeze({

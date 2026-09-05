@@ -42,6 +42,9 @@
     },
     "runtime": {
       "$ref": "#/$defs/runtime"
+    },
+    "web": {
+      "$ref": "#/$defs/web"
     }
   },
   "required": [
@@ -1601,6 +1604,92 @@
         "input",
         "origin",
         "routes"
+      ]
+    },
+    "webApp": {
+      "type": "object",
+      "description": "One MCP App exposed to `<plugin> web`: the App, the compiled server entry that serves it, and the launch arguments and environment of that server.",
+      "additionalProperties": false,
+      "properties": {
+        "allow": {
+          "type": "array",
+          "description": "App-initiated consent capabilities approved in advance.",
+          "items": {
+            "enum": [
+              "call-tool",
+              "download-file",
+              "open-external-link",
+              "request-display-mode"
+            ]
+          }
+        },
+        "app": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "args": {
+          "type": "array",
+          "description": "The server's declared arguments after its entry, path tokens unexpanded.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "entry": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "input": {
+          "type": "object"
+        },
+        "name": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "resourceUri": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "server": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "tool": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      },
+      "required": [
+        "allow",
+        "app",
+        "args",
+        "entry",
+        "env",
+        "name",
+        "resourceUri",
+        "server"
+      ]
+    },
+    "web": {
+      "type": "object",
+      "description": "The Apps `<plugin> web` can open from this root; present only when the selection exposes at least one App. Sorted by `app` with no duplicates (parser-enforced).",
+      "additionalProperties": false,
+      "properties": {
+        "apps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/webApp"
+          }
+        },
+        "open": {
+          "enum": [
+            "browser",
+            "never"
+          ]
+        }
+      },
+      "required": [
+        "apps",
+        "open"
       ]
     }
   }

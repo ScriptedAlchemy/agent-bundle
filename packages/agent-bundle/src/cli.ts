@@ -497,6 +497,9 @@ const humanDoctor = (result: DoctorReport): string => {
         `${file.path} (${file.state === 'present' ? `${String(file.variables ?? 0)} variable${file.variables === 1 ? '' : 's'}` : file.state})`).join(', ')}\n`);
     }
   }
+  if (result.web !== undefined) {
+    out.push(`${result.web.line}\n`);
+  }
   out.push(
     `runtime endpoints: ${result.endpoints.status}; ${result.endpoints.summary.live} live, ` +
     `${result.endpoints.summary.staleSockets} stale socket(s), ` +

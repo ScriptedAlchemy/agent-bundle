@@ -338,6 +338,30 @@ it('round-trips the optional package identity axes distinctly', () => {
   });
 });
 
+it('round-trips and deeply freezes the optional web section', () => {
+  const source: ArtifactManifest = {
+    ...validManifest(),
+    web: {
+      apps: [{
+        allow: ['call-tool'],
+        app: 'catalog/details',
+        args: [],
+        entry: 'mcp/mcp-catalog-01234567.mjs',
+        env: { TOKEN: 'agent-bundle:path:plugin-data/token' },
+        name: 'details',
+        resourceUri: 'ui://catalog/details',
+        server: 'catalog',
+      }],
+      open: 'never',
+    },
+  };
+  const manifest = parseArtifactManifest(serializeArtifactManifest(source));
+
+  expect(manifest.web).toEqual(source.web);
+  expect(Object.isFrozen(manifest.web)).toBe(true);
+  expect(Object.isFrozen(manifest.web?.apps[0])).toBe(true);
+});
+
 it('accepts a project without package identity and rejects invalid identity values', () => {
   const withoutIdentity = assembleArtifactManifest(validManifest());
   expect(withoutIdentity.manifest.compiler.project.packageName).toBeUndefined();

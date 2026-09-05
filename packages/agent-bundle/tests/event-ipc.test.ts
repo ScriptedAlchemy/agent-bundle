@@ -178,6 +178,8 @@ it.live('round-trips a bounded event envelope through the epoch-bound runtime so
       handle: async (request) => ({
         echoed: request.native,
         event: request.event,
+        observedAt: request.observedAt,
+        sequence: request.sequence,
       }),
     })),
     (server) => Effect.promise(() => server.close()),
@@ -193,6 +195,8 @@ it.live('round-trips a bounded event envelope through the epoch-bound runtime so
     event: 'tool/after',
     hostContractRevision: '2.1.250',
     native: { hook_event_name: 'PostToolUse', tool_name: 'Write' },
+    observedAt: '2026-09-05T09:00:00.000Z',
+    sequence: 42,
     signal: new AbortController().signal,
     target: 'claude',
     timeoutMs: 1_000,
@@ -200,6 +204,8 @@ it.live('round-trips a bounded event envelope through the epoch-bound runtime so
   expect(response).toEqual({
     echoed: { hook_event_name: 'PostToolUse', tool_name: 'Write' },
     event: 'tool/after',
+    observedAt: '2026-09-05T09:00:00.000Z',
+    sequence: 42,
   });
 }));
 

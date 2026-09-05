@@ -892,7 +892,10 @@ skills, and script routes ship with the **plugin root**, so the build also
 emits the same compiled command graph into that root whenever a selected host's
 adapter publishes the `cli` capability — all built-in hosts do (`claude`,
 `codex`, `cursor`, `portable`) — because the artifact root is
-already a plain directory Node executes `mcp/` and `scripts/` files from:
+already a plain directory Node executes `mcp/` and `scripts/` files from.
+The same `bin/<plugin-name>.mjs` is also emitted when `web` is configured,
+even if `src/cli/**` compiled no commands (the bin then carries only the
+framework-owned `web` command, or both surfaces when routed commands exist):
 
 ```text
 artifact/
@@ -1503,33 +1506,48 @@ resolve '../events'`). The route graph reports such an import first, as
 (`src/routes/framework-imports.ts`; the compiler-carrying entries are
 `agent-bundle`, `agent-bundle/api`, `agent-bundle/config`,
 `agent-bundle/eval`, `agent-bundle/rstest`, `agent-bundle/test`, and
-`agent-bundle/test/browser`, matched exactly, so the bundle-safe entries —
-`agent-bundle/app` among them — are never reported; `import type` and
-type-only usage are not reported either), while an external bare import
-(`AB6005 uses unsupported specifier`) or a non-literal `import(spec)` (`AB6005 has a
-non-literal dynamic import`) still fails artifact validation. The sanctioned
-shape is `spawnServeApp` from `agent-bundle/serve-app-command`
-(`src/serve-app-command.ts`, #558) — plain Node with no dependencies, so the
-bundler inlines it into the self-contained executable the way it inlines
-`agent-bundle/launch-env`. It lowers the `serveApp` options to `serve-app`
-argv (`serveAppArgv`; every `ServeAppOptions` key except the host-process-only
-`logger`, `registry`, `openBrowser`, `targets`, and `timeoutMs`), resolves the
-framework CLI from the `agent-bundle` package installed at or above `root`
-(`locateFrameworkCli`, through `src/core/dependency-manifest.ts`), spawns it
-with the child's stdout piped and its stderr inherited, relays every stdout
-line to stderr so the routed CLI keeps stdout for its result, resolves once
-the child prints the ready line `MCP App <app> at <url> (tool <tool>; Ctrl-C
-stops the server)` — the CLI writes it and the helper parses it through one
-module, `src/serve-app/command-contract.ts` — and turns the route `signal`
-into the child's `SIGTERM`. The result is `{ app, url, tool, server, port,
-pid, closed, close() }`; failures are `ServeAppCommandError` with `code`
-`framework-not-installed`, `artifact-missing`, `spawn-failed`,
-`exited-before-ready` (carrying the child's `exit`), `aborted`, or
-`stop-failed` (the running child refused the signal `close()` or the abort
-sent; it is still running). It is a
-checkout command: an installed host pack has neither `node_modules/agent-bundle`
-nor the artifact, and the first two codes say so before anything is spawned.
-The worked example is in the MCP Apps guide, "Serving an App standalone".
+`agent-bundle/test/browser`, matched exactly; `import type` and type-only
+usage are not reported), while an external bare import (`AB6005 uses
+unsupported specifier`) or a non-literal `import(spec)` (`AB6005 has a
+non-literal dynamic import`) still fails artifact validation. From an
+installed artifact the supported command is `<plugin> web` on
+`bin/<plugin>.mjs` (emitted when `web` is configured, even with no
+`src/cli/**` commands). It reads the manifest `web` section beside `bin/`,
+launches the plugin's own packed MCP server, and prints the same ready line
+`MCP App <server>/<app> at <url> (tool <tool>; Ctrl-C stops the server)` —
+`src/serve-app/command-contract.ts` is the shared contract for that line
+and for `--json` `{ app, server, tool, url, port, resourceUri, sandboxOrigin }`.
+`agent-bundle/serve-app-command` (`spawnServeApp`) is removed. The worked
+example is in the MCP Apps guide, "Exposing an App in the browser".
+
+## `<plugin> web`
+
+```sh
+node <root>/bin/<plugin>.mjs web [<server>/<app>] [--port N]
+  [--open|--no-open] [--tool T] [--input JSON] [--allow <cap>]...
+  [--profile portable|claude|chatgpt] [--json]
+```
+
+The framework-owned `web` command. Config is exposure/policy only:
+
+```ts
+web?: {
+  apps: ReadonlyArray<string | {
+    app: string;
+    tool?: string;
+    input?: Record<string, unknown>;
+    allow?: McpAppConsentCapability[];
+  }>;
+  open?: 'browser' | 'never'; // default 'never'
+}
+```
+
+`apps[]` selects among Apps already declared under `mcp.servers.<id>.apps`.
+Invalid `web` is `AB4341`. When configured, `agent-bundle.manifest.json`
+gains a `web` section and the bin exists even without authored CLI commands.
+`agent-bundle dev` serves the same host at `GET /web/<server>/<app>` (404
+for Apps not listed in `web.apps`). There is no `web/` directory in the
+artifact.
 
 ## `agent-bundle/app` — the App-side bridge client
 
@@ -1550,10 +1568,10 @@ mapping cannot replace the framework runtime. It is not one of the
 compiler-carrying entries `AB4837` rejects.
 
 The other half stays where it is: the host page, sandbox proxy, frame relay
-(`McpAppFrameRelay` in the Workbench, the inline relay in `serve-app`),
+(`McpAppFrameRelay` in `src/web-host/browser/frame-relay.ts`, shared by the Workbench, `serve-app`, dev `/web`, and `<plugin> web`),
 `/api/mcp/...` routes, consent authority, and `createMcpAppBridge`
 (`src/dev/mcp-apps/mcp-app-bridge.ts`) are host-side and owned by the
-Workbench, `serve-app`, and #564's production host; #594 adds no host bridge
+Workbench, `serve-app`, and the `<plugin> web` host (#564); #594 adds no host bridge
 and moves none of those modules. The one host-side behavior it adds is
 cancellation: `createMcpAppBridge` now honors the client's
 `notifications/cancelled` and threads the abort through the binding service

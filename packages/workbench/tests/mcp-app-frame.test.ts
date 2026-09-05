@@ -14,15 +14,17 @@ import { browserLaunchOptions } from './support/workbench-e2e.ts';
 import { chromium } from 'playwright';
 
 import {
-  createMcpAppFrameRelay,
   applyMcpAppFramePolicy,
   McpAppFrame,
   SecureAppRenderer,
+} from '../src/mcp/mcp-app-frame.tsx';
+import {
+  createMcpAppFrameRelay,
   type McpAppFrameIframe,
   type McpAppFrameMessageListener,
   type McpAppFrameRelayRoutes,
   type McpAppFrameWindow,
-} from '../src/mcp/mcp-app-frame.tsx';
+} from '../../agent-bundle/src/web-host/browser/frame-relay.ts';
 import type { McpAppJsonValue, McpAppRelayFrame, McpAppRouteClose, McpAppRouteMessages } from '../src/mcp/mcp-app-client.ts';
 import { deferred, eventually } from './support/async.ts';
 

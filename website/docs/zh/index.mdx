@@ -116,23 +116,23 @@ Skill、MCP 服务器与脚本都按约定被发现。只有钩子需要声明�
 ```text title="artifact/"
 artifact/
 ├── .claude-plugin/
-│   ├── plugin.json                  # Claude Code 清单
+│   ├── plugin.json
 │   └── marketplace.json
 ├── .codex-plugin/
-│   ├── plugin.json                  # Codex 清单
-│   ├── hooks.json                   # Codex 钩子文档
-│   └── mcp.json                     # Codex MCP 文档
-├── .agents/plugins/marketplace.json # Codex marketplace
-├── .mcp.json                        # Claude Code MCP 文档
-├── plugin.json                      # portable（Agent Plugins）清单
-├── mcp.json                         # portable MCP 文档
+│   ├── plugin.json
+│   ├── hooks.json
+│   └── mcp.json
+├── .agents/plugins/marketplace.json
+├── .mcp.json
+├── plugin.json
+├── mcp.json
 ├── hooks/
-│   ├── hooks.json                   # Claude Code 钩子文档
-│   ├── session-start-….claude.mjs   # 钩子到达的每个宿主各一个包装脚本
+│   ├── hooks.json
+│   ├── session-start-….claude.mjs
 │   ├── session-start-….codex.mjs
 │   └── hooks-flight.mjs
 ├── mcp/
-│   ├── mcp-status-….mjs             # 只编译一次，所有宿主共用
+│   ├── mcp-status-….mjs
 │   └── mcp-status-…-flight.mjs
 ├── scripts/check-service.mjs
 ├── skills/release-review/

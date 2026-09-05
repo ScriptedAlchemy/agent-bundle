@@ -31,6 +31,7 @@ import type {
   GeneratedCliRenderContext,
   GeneratedCliRenderSession,
 } from '../cli-entry.ts';
+import { settleBeforeAbort } from '../core/abort.ts';
 import { parseMcpRouteProtocolId } from '../routes/protocol-name.ts';
 import { createProviderProcessLifetime, type ProviderProcessLifetime } from '../routes/provider-execution.ts';
 import { routeRenderLimits, type RouteRenderBudget } from '../routes/render-budget.ts';
@@ -1230,22 +1231,6 @@ export interface PreparedScriptRenderHost {
 }
 
 /**
- * Settles with `pending`, or rejects with the signal's reason as soon as it
- * aborts: the pending work is abandoned, the way the generated executable
- * abandons its render worker.
- */
-const settledBeforeAbort = <T>(pending: Promise<T>, signal: AbortSignal): Promise<T> =>
-  new Promise<T>((resolve, reject) => {
-    const onAbort = (): void => { reject(signal.reason); };
-    if (signal.aborted) {
-      onAbort();
-      return;
-    }
-    signal.addEventListener('abort', onAbort, { once: true });
-    pending.then(resolve, reject).finally(() => { signal.removeEventListener('abort', onAbort); });
-  });
-
-/**
  * The render host behind the script-dispatch level for rendered scripts. It
  * mirrors the generated `scripts/<name>.mjs` executable exactly: the
  * component receives `{ argv, signal }`, the request scope opens with the
@@ -1381,7 +1366,7 @@ export const prepareScriptRenderHost = async (
               // aborts and terminates the worker, however far along the
               // module or state load is; the stream here fails the same way
               // rather than waiting for a load that may never settle.
-              const dispatcher = await settledBeforeAbort(pending, signal);
+              const dispatcher = await settleBeforeAbort(pending, signal);
               inner = dispatcher.stream({ invocation, signal }).getReader();
               for (;;) {
                 const next = await inner.read();

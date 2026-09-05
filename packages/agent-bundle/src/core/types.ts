@@ -5,9 +5,16 @@ import type {
   AgentEventRuntimeMode,
   CanonicalAgentEvent,
 } from '../routes/public.ts';
-import type { CompiledAgentRoute, CompiledCliCommand, CompiledLayout, CompiledProvider } from '../routes/types.ts';
+import type {
+  CompiledAgentRoute,
+  CompiledCliCommand,
+  CompiledEventPreflight,
+  CompiledLayout,
+  CompiledProvider,
+} from '../routes/types.ts';
 import type { SkillHostDocument, SkillIr, SkillTreeLayoutDecision } from '../skills/ir.ts';
 import type { CapabilityState } from './capabilities.ts';
+import type { ServeAppAllowCapability } from './mcp-app-allow.ts';
 
 export interface AgentBundlePluginConfig {
   description?: string;
@@ -138,6 +145,20 @@ export interface AgentBundleMcpServer {
 
 export interface AgentBundleMcpConfig {
   servers: Readonly<Record<string, AgentBundleMcpServer>>;
+}
+
+export interface AgentBundleWebAppConfig {
+  /** `<server>/<app>` */
+  app: string;
+  allow?: readonly ServeAppAllowCapability[];
+  input?: Readonly<Record<string, unknown>>;
+  tool?: string;
+}
+
+export interface AgentBundleWebConfig {
+  apps: ReadonlyArray<string | AgentBundleWebAppConfig>;
+  /** Whether the generated command opens the system browser. Defaults to `never`. */
+  open?: 'browser' | 'never';
 }
 
 /** Optional artifact output location config, inspired by Rsbuild's `output.distPath`. */
@@ -326,6 +347,7 @@ export interface AgentBundleConfig extends AgentBundleConfigExtensions {
   state?: AgentBundleStateConfig;
   targets?: string[];
   tools?: AgentBundleToolsConfig;
+  web?: AgentBundleWebConfig;
   [key: string]: unknown;
 }
 
@@ -474,6 +496,23 @@ export interface NormalizedMcpApp {
   readonly template?: string;
 }
 
+export interface NormalizedWebApp {
+  readonly allow: readonly ServeAppAllowCapability[];
+  readonly app: string;
+  readonly appName: string;
+  readonly input?: Readonly<Record<string, unknown>>;
+  readonly resourceUri: string;
+  readonly serverId: string;
+  readonly serverName: string;
+  readonly tool?: string;
+}
+
+export interface NormalizedWeb {
+  readonly apps: readonly NormalizedWebApp[];
+  readonly open: 'browser' | 'never';
+  readonly provenance: { readonly sourcePath: string };
+}
+
 export interface NormalizedScript {
   readonly id: string;
   readonly mode: 'bundle' | 'copy';
@@ -496,6 +535,7 @@ export interface NormalizedBinEntry {
   readonly name: string;
   readonly provenance: SourceProvenance;
   readonly source: string;
+  readonly web?: true;
 }
 
 /** The normalized single-entry ESM+dts library output of the package build. */
@@ -524,6 +564,8 @@ export interface NormalizedHook {
   readonly eventRoute?: Readonly<{
     readonly event: CanonicalAgentEvent;
     readonly fallback: AgentEventFallbackMode;
+    readonly preflight?: CompiledEventPreflight;
+    readonly providers?: readonly string[];
     readonly runtime: AgentEventRuntimeMode;
   }>;
   readonly id: string;
@@ -735,6 +777,7 @@ export interface NormalizedPlugin {
   readonly skills: readonly NormalizedSkill[];
   readonly state?: NormalizedStateDefinition;
   readonly targets: readonly NormalizedTarget[];
+  readonly web?: NormalizedWeb;
 }
 
 export interface NormalizationConfigExtension {
