@@ -152,6 +152,14 @@
 
 ## Pull requests
 
+- Every PR gets a deslop pass before review: read the full diff against
+  `origin/main` and remove what a human author would not have written —
+  comments that restate the code or break the file's style, defensive checks
+  and `try`/`catch` on trusted paths, `as any` / `as unknown as` casts that
+  only silence the type checker, nesting that early returns would flatten,
+  helpers that `dev/http.ts` or `core/*` already own, placeholder prose in
+  the PR body. Behavior stays unchanged unless the pass finds a clear bug.
+  Record it in the PR body ("Deslop: model, N edits").
 - Every PR gets a self-review before merge: spawn a local reviewer subagent
   (`change-risk-reviewer` if available, else `generalPurpose`; a different
   model from the author's, e.g. `gpt-5.6-sol-high` or a Claude model — never
@@ -167,9 +175,10 @@
   after each push until none remain. Only then merge.
 - PRs are squash-merged. Review threads left on an already-merged PR must
   still be answered, in a follow-up PR.
-- `main` is protected: PRs land only with every required check green and
-  the branch up to date with `main` (`gh pr update-branch`, then
-  `gh pr merge --squash --auto`); never bypass with `--admin`.
+- `main` is protected: PRs land only with every required check green
+  (`gh pr merge --squash --auto`; `gh pr update-branch` only when GitHub
+  reports the branch as conflicting — up-to-date-ness is not enforced, and
+  CI runs again on `main` after the merge); never bypass with `--admin`.
 
 ## Vendored repos
 

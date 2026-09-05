@@ -57,15 +57,15 @@ export default defineConfig({
 
 | 字段 | 类型定义 |
 | --- | --- |
-| 整个配置 | [`AgentBundleConfig`](../api/types/index.AgentBundleConfig.md) · [`defineConfig`](../api/functions/index.defineConfig.md) · [`ConfigFactory`](../api/types/index.ConfigFactory.md) · [`ConfigFactoryContext`](../api/interfaces/index.ConfigFactoryContext.md) |
-| `mcp` | [`AgentBundleMcpConfig`](../api/interfaces/index.AgentBundleMcpConfig.md) · [`AgentBundleMcpServer`](../api/interfaces/index.AgentBundleMcpServer.md) · [`AgentBundleMcpApp`](../api/interfaces/index.AgentBundleMcpApp.md) · [`McpTransport`](../api/types/index.McpTransport.md) |
-| `payload` | [`AgentBundlePayloadConfig`](../api/types/index.AgentBundlePayloadConfig.md) · [`AgentBundlePayloadEntry`](../api/interfaces/index.AgentBundlePayloadEntry.md) · [`AgentBundlePrebuiltEntry`](../api/interfaces/index.AgentBundlePrebuiltEntry.md) |
-| `output` | [`AgentBundleOutputConfig`](../api/interfaces/config.AgentBundleOutputConfig.md) |
-| `runtime` | [`AgentBundleRuntimeConfig`](../api/interfaces/index.AgentBundleRuntimeConfig.md) |
-| `notices` | [`AgentBundleNoticesConfig`](../api/interfaces/index.AgentBundleNoticesConfig.md) · [`AgentBundleNoticeRetentionConfig`](../api/interfaces/index.AgentBundleNoticeRetentionConfig.md) |
-| `dev` | [`AgentBundleDevConfig`](../api/interfaces/index.AgentBundleDevConfig.md) · [`AgentBundleDevContractsConfig`](../api/interfaces/index.AgentBundleDevContractsConfig.md) · [`AgentBundleDevRuntimeConfig`](../api/interfaces/api.AgentBundleDevRuntimeConfig.md) |
-| 宿主扩展 | [`AgentBundleConfigExtensions`](../api/interfaces/index.AgentBundleConfigExtensions.md) · [`AgentBundlePortableConfig`](../api/interfaces/config.AgentBundlePortableConfig.md) |
-| 校验 | [`validateSource`](../api/functions/config.validateSource.md) · [`validateModel`](../api/functions/config.validateModel.md) · [`loadConfig`](../api/functions/config.loadConfig.md) |
+| 整个配置 | [`AgentBundleConfig`](../api/index-1.md#agentbundleconfig) · [`defineConfig`](../api/index-1.md#defineconfig) · [`ConfigFactory`](../api/index-1.md#configfactory) · [`ConfigFactoryContext`](../api/index-1.md#configfactorycontext) |
+| `mcp` | [`AgentBundleMcpConfig`](../api/index-1.md#agentbundlemcpconfig) · [`AgentBundleMcpServer`](../api/index-1.md#agentbundlemcpserver) · [`AgentBundleMcpApp`](../api/index-1.md#agentbundlemcpapp) · [`McpTransport`](../api/index-1.md#mcptransport) |
+| `payload` | [`AgentBundlePayloadConfig`](../api/index-1.md#agentbundlepayloadconfig) · [`AgentBundlePayloadEntry`](../api/index-1.md#agentbundlepayloadentry) · [`AgentBundlePrebuiltEntry`](../api/index-1.md#agentbundleprebuiltentry) |
+| `output` | [`AgentBundleOutputConfig`](../api/config.md#agentbundleoutputconfig) |
+| `runtime` | [`AgentBundleRuntimeConfig`](../api/index-1.md#agentbundleruntimeconfig) |
+| `notices` | [`AgentBundleNoticesConfig`](../api/index-1.md#agentbundlenoticesconfig) · [`AgentBundleNoticeRetentionConfig`](../api/index-1.md#agentbundlenoticeretentionconfig) |
+| `dev` | [`AgentBundleDevConfig`](../api/index-1.md#agentbundledevconfig) · [`AgentBundleDevContractsConfig`](../api/index-1.md#agentbundledevcontractsconfig) · [`AgentBundleDevRuntimeConfig`](../api/api.md#agentbundledevruntimeconfig) |
+| 宿主扩展 | [`AgentBundleConfigExtensions`](../api/index-1.md#agentbundleconfigextensions) · [`AgentBundlePortableConfig`](../api/config.md#agentbundleportableconfig) |
+| 校验 | [`validateSource`](../api/config.md#validatesource) · [`validateModel`](../api/config.md#validatemodel) · [`loadConfig`](../api/config.md#loadconfig) |
 
 ## plugin
 
@@ -171,7 +171,7 @@ export default defineConfig({
 | `dev.agentApi` | 从 `agent-bundle dev` 暴露那个经过认证、仅 loopback 的 Agent API。`--agent-api` / `--no-agent-api` 标志会覆盖它。 |
 | `dev.contracts.fixtures` | **设置了 `dev.contracts` 时必填。** 项目相对路径的模块，其默认导出把路由 id 映射到契约夹具。声明 `dev.contracts` 会让 `agent-bundle dev` 从直接采用每个 epoch，改为以开发契约矩阵门控面向宿主的采用：检查失败的 epoch 仍会发布到 Workbench playground，但活跃的宿主连接与开发安装会保留最后一个通过的 epoch（`AB7211`）。块本身格式错误、夹具模块逃出项目根、无法加载或导出了错误的形状，则是 `AB7210`。 |
 | `dev.contracts.server` | 矩阵要检查的 MCP 服务器。仅当项目恰好编译一个服务器时可省略。 |
-| `dev.runtime.provider` | 开发期运行时 provider 模块：它导出 `createDevRuntimeProvider`（[`CreateDevRuntimeProvider`](../api/types/api.CreateDevRuntimeProvider.md)），返回一个 [`DevRuntimeProvider`](../api/interfaces/api.DevRuntimeProvider.md)，其 `start` 接收 [`DevRuntimeStartContext`](../api/interfaces/api.DevRuntimeStartContext.md) 并返回 [`DevRuntimeSession`](../api/interfaces/api.DevRuntimeSession.md)。provider 需要实现的整个协议都从 `agent-bundle/api` 发布——检视信封（[`DevRuntimeInspectionEnvelope`](../api/interfaces/api.DevRuntimeInspectionEnvelope.md)）、MCP 服务器描述符（[`DevRuntimeMcpServerDescriptor`](../api/interfaces/api.DevRuntimeMcpServerDescriptor.md)）、它要抛出的错误（[`DevRuntimeUnavailableError`](../api/classes/api.DevRuntimeUnavailableError.md)、[`DevRuntimeGenerationConflictError`](../api/classes/api.DevRuntimeGenerationConflictError.md)），以及会话所驱动的 generation store 与 MCP registry——以契约（[`DevRuntimeGenerationStore`](../api/interfaces/api.DevRuntimeGenerationStore.md)、[`DevRuntimeProviderMcpRegistry`](../api/interfaces/api.DevRuntimeProviderMcpRegistry.md)）及其构造函数（[`createRuntimeGenerationStore`](../api/functions/api.createRuntimeGenerationStore.md)、[`createRuntimeMcpRegistry`](../api/functions/api.createRuntimeMcpRegistry.md)）的形式提供。 |
+| `dev.runtime.provider` | 开发期运行时 provider 模块：它导出 `createDevRuntimeProvider`（[`CreateDevRuntimeProvider`](../api/api.md#createdevruntimeprovider)），返回一个 [`DevRuntimeProvider`](../api/api.md#devruntimeprovider)，其 `start` 接收 [`DevRuntimeStartContext`](../api/api.md#devruntimestartcontext) 并返回 [`DevRuntimeSession`](../api/api.md#devruntimesession)。provider 需要实现的整个协议都从 `agent-bundle/api` 发布——检视信封（[`DevRuntimeInspectionEnvelope`](../api/api.md#devruntimeinspectionenvelope)）、MCP 服务器描述符（[`DevRuntimeMcpServerDescriptor`](../api/api.md#devruntimemcpserverdescriptor)）、它要抛出的错误（[`DevRuntimeUnavailableError`](../api/api.md#devruntimeunavailableerror)、[`DevRuntimeGenerationConflictError`](../api/api.md#devruntimegenerationconflicterror)），以及会话所驱动的 generation store 与 MCP registry——以契约（[`DevRuntimeGenerationStore`](../api/api.md#devruntimegenerationstore)、[`DevRuntimeProviderMcpRegistry`](../api/api.md#devruntimeprovidermcpregistry)）及其构造函数（[`createRuntimeGenerationStore`](../api/api.md#createruntimegenerationstore)、[`createRuntimeMcpRegistry`](../api/api.md#createruntimemcpregistry)）的形式提供。 |
 
 ## web
 

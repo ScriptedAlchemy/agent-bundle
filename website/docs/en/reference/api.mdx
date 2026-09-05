@@ -1,5 +1,5 @@
 ---
-description: 'The generated agent-bundle type API: which entry points it covers, how it is produced, and why generated symbol documentation is language-neutral.'
+description: 'The generated agent-bundle type API: one page per public entry point, how members are addressed, and why generated symbol documentation is language-neutral.'
 ---
 
 # Type API
@@ -9,36 +9,54 @@ The symbol-level reference is **generated from the source**, not written by hand
 
 ## What it covers
 
-Every public entry point is documented from its declarations:
+Every public entry point is documented from its declarations, one page per entry point:
 
-| Entry point | Contents |
-| --- | --- |
-| `agent-bundle` | The authoring and orchestration surface: `defineSkill`, `canonicalAgentEvents`, `startDevServer`, `runEvals`, `compareEvals`, the eval harness factories, and the artifact-manifest helpers. |
-| `agent-bundle/api` | The programmatic compiler: `build`, `validate`, `inspect`, `prepack`, their option and result types, the `AgentComponentKind` / `componentKindCapability` component-kind helpers, and the artifact operations `listMcp`, `invokeMcp`, `runMcp`, `serveApp` (a built MCP App served standalone in a browser — a host-process API for scripts and tests; from an installed artifact use [`<plugin> web`](./cli.mdx#plugin-web) instead, see [Exposing an App in the browser](../guide/authoring/mcp.mdx#exposing-an-app-in-the-browser)), `listHooks`, and `simulateHook`; plus the Rspack stats formatters `rspackStatsErrors`, `describeRspackStatsError`, and `formatRspackStatsError`, which render a compile error as the same `<file>:<line>:<column>: <message>` line the compiler's `AB4770` carries, for tools that drive their own Rsbuild compile. |
-| `agent-bundle/app` | The browser-safe MCP App client: `createAppClient`, the `AppClient` lifecycle (`connect`, `call`, `request`, `onToolInput`, `onToolResult`, `onToolError`, `onToolCancelled`, `rebind`, `dispose`), `AppClientError` and its `code` union for every wire and lifecycle failure (option misuse is a plain `TypeError` or `RangeError`), the `AppRegister` interface the generated `.agent-bundle/routes.d.ts` augments with the project's `tool:<server>/<name>` contracts, `AppRouteId` / `AppRouteInput` / `AppRouteResult`, the injectable `AppWindow` / `AppMessageTarget` ports, and `APP_PROTOCOL_VERSION`. Imports nothing from Zod, Node, or the compiler; for App views only. |
-| `agent-bundle/config` | `defineConfig` and the configuration types. |
-| `agent-bundle/test` | The route-testing harness, matchers, and contract matrices. |
-| `agent-bundle/test/browser` | The MCP App bridge harness for browser-rendered views. |
-| `agent-bundle/eval` | Eval suite definitions, assertions, and run comparison. |
-| `agent-bundle/rstest` | The Rstest configuration helper. |
-| `agent-bundle/meta` | The build-time project identity constant, replaced by the compiler in every compiled surface. |
-| `agent-bundle/mcp-apps` | The MCP App resource registry contract, replaced by the compiler in local MCP servers. |
-| `agent-bundle/cli-entry` | The routed-CLI shell every generated CLI executable is built on. |
-| `agent-bundle/mcp-entry` | The stdio MCP entry shell every generated MCP server is wrapped in. |
-| `agent-bundle/launch-env` | The operator `.env` layer every emitted shell applies at launch (`applyOperatorEnv`, `parseOperatorEnv`, `AGENT_BUNDLE_ENV_FILE`), for hand-rolled entries that want the same behavior. |
-| `agent-bundle/web-host` | The artifact-resident browser host: `runWebCommand`, `WEB_HOST_TOKEN_HEADER`, `readWebManifest`, and their types. The generated `bin/<plugin>.mjs` imports this entry when [`web`](./configuration.mdx#web) is configured; authors run `<plugin> web` rather than importing it. |
-| `agent-bundle/routes` | The route-module authoring types (`AgentEventRouteProps`, `ToolRouteProps`, `CliRouteProps`, the `config` shapes) and `appResourceUri`, the static reference to a sibling MCP App the compiler resolves to its `resourceUri`. |
+| Entry point | Module page | Contents |
+| --- | --- | --- |
+| `agent-bundle` | [index](/api/index-1) | The authoring and orchestration surface: `defineSkill`, `canonicalAgentEvents`, `startDevServer`, `runEvals`, `compareEvals`, the eval harness factories, and the artifact-manifest helpers. |
+| `agent-bundle/api` | [api](/api/api) | The programmatic compiler: `build`, `validate`, `inspect`, `prepack`, their option and result types, the `AgentComponentKind` / `componentKindCapability` component-kind helpers, and the artifact operations `listMcp`, `invokeMcp`, `runMcp`, `serveApp` (a built MCP App served standalone in a browser — a host-process API for scripts and tests; from an installed artifact use [`<plugin> web`](./cli.mdx#plugin-web) instead, see [Exposing an App in the browser](../guide/authoring/mcp.mdx#exposing-an-app-in-the-browser)), `listHooks`, and `simulateHook`; plus the Rspack stats formatters `rspackStatsErrors`, `describeRspackStatsError`, and `formatRspackStatsError`, which render a compile error as the same `<file>:<line>:<column>: <message>` line the compiler's `AB4770` carries, for tools that drive their own Rsbuild compile. |
+| `agent-bundle/app` | [app](/api/app) | The browser-safe MCP App client: `createAppClient`, the `AppClient` lifecycle (`connect`, `call`, `request`, `onToolInput`, `onToolResult`, `onToolError`, `onToolCancelled`, `rebind`, `dispose`), `AppClientError` and its `code` union for every wire and lifecycle failure (option misuse is a plain `TypeError` or `RangeError`), the `AppRegister` interface the generated `.agent-bundle/routes.d.ts` augments with the project's `tool:<server>/<name>` contracts, `AppRouteId` / `AppRouteInput` / `AppRouteResult`, the injectable `AppWindow` / `AppMessageTarget` ports, and `APP_PROTOCOL_VERSION`. Imports nothing from Zod, Node, or the compiler; for App views only. |
+| `agent-bundle/config` | [config](/api/config) | `defineConfig` and the configuration types. |
+| `agent-bundle/test` | [test](/api/test) | The route-testing harness, matchers, and contract matrices. |
+| `agent-bundle/test/browser` | [test/browser](/api/test/browser) | The MCP App bridge harness for browser-rendered views. |
+| `agent-bundle/eval` | [eval](/api/eval) | Eval suite definitions, assertions, and run comparison. |
+| `agent-bundle/rstest` | [rstest](/api/rstest) | The Rstest configuration helpers `agentBundleRstest` and `agentBundleBrowserRstest`. |
+| `agent-bundle/meta` | [meta](/api/meta) | The build-time project identity constant, replaced by the compiler in every compiled surface. |
+| `agent-bundle/mcp-apps` | [mcp-apps](/api/mcp-apps) | The MCP App resource registry contract, replaced by the compiler in local MCP servers. |
+| `agent-bundle/cli-entry` | [cli-entry](/api/cli-entry) | The routed-CLI shell every generated CLI executable is built on. |
+| `agent-bundle/mcp-entry` | [mcp-entry](/api/mcp-entry) | The stdio MCP entry shell every generated MCP server is wrapped in. |
+| `agent-bundle/launch-env` | [launch-env](/api/launch-env) | The operator `.env` layer every emitted shell applies at launch — `applyOperatorEnv`, `parseOperatorEnv`, and the `OPERATOR_ENV_FILE_*` constants behind the `AGENT_BUNDLE_ENV_FILE` variable — for hand-rolled entries that want the same behavior. |
+| `agent-bundle/web-host` | [web-host](/api/web-host) | The artifact-resident browser host: `runWebCommand`, `WEB_HOST_TOKEN_HEADER`, `readWebManifest`, and their types. The generated `bin/<plugin>.mjs` imports this entry when [`web`](./configuration.mdx#web) is configured; authors run `<plugin> web` rather than importing it. |
+| `agent-bundle/routes` | [routes/public](/api/routes/public) | The route-module authoring types (`AgentEventRouteProps`, `ToolRouteProps`, `CliRouteProps`, the `config` shapes) and `appResourceUri`, the static reference to a sibling MCP App the compiler resolves to its `resourceUri`. |
 
 Because it is generated, it always matches the shipped types: signatures, unions, defaults, and
 the error classes each surface can throw. When this Reference section and the generated pages
 disagree, the generated pages are correct.
 
+## How the pages are organized
+
+[/api/](/api/) lists the modules. Each module page is named after the entry point's source path
+with `.ts` and a trailing `/index` dropped (`agent-bundle/routes` is compiled from
+`routes/public.ts`, so its page is `routes/public`; `agent-bundle/app` from `app/index.ts` is
+`app`; the root `agent-bundle` export is `index`, served at `/api/index-1` because `/api/` is the
+module index itself) and groups its members under `Classes`, `Interfaces`, `Type Aliases`,
+`Variables`, and `Functions`. A name an entry point re-exports from another entry point is listed under
+`References` with a link to the page that documents it — `runEvals` on `index` points to
+[`runEvals`](/api/api#runevals) on `api`.
+
+Every member is a heading, so it has a URL: `/api/<module>#<member>`, the fragment being the name
+lowercased with `()` dropped — [`/api/eval#defineevalsuite`](/api/eval#defineevalsuite) documents
+`defineEvalSuite`. Ids are unique per page: when the same text already appears higher up — a
+property named `build`, or `AgentEventPayloadFields` beside `agentEventPayloadFields` — the later
+heading is suffixed, so `build` in `agent-bundle/api` is [`#build-2`](/api/api#build-2). The `#`
+link beside each heading carries its exact id.
+
 ## Generated pages are language-neutral
 
 The site mirrors the generated reference under both locales, so [/api/](/api/) and
 [/zh/api/](/zh/api/) resolve for readers of either language. The **content** is not translated:
-the symbol documentation is extracted from source comments and stays in the language it was
-authored in.
+the Chinese copy is the English Markdown with a notice under each page title saying so, and the
+symbol documentation stays in the language it was authored in.
 
 That is deliberate. A translated copy of generated output would drift from the source on the first
 refactor, and a symbol reference whose types are current but whose prose is stale is worse than
@@ -47,8 +65,9 @@ this Reference — are complete translations.
 
 ## Where to start
 
-- Compiling from a script: `build` and `validate` in `agent-bundle/api`.
-- Calling typed tools from an MCP App: `createAppClient` in `agent-bundle/app`, explained in
+- Compiling from a script: [`build`](/api/api#build-2) and [`validate`](/api/api#validate-1) in `agent-bundle/api`.
+- Calling typed tools from an MCP App: [`createAppClient`](/api/app#createappclient) in
+  `agent-bundle/app`, explained in
   [The typed App client](../guide/authoring/mcp.mdx#the-typed-app-client).
-- Writing tests: `renderRoute`, `expectDocument`, and the matrices in `agent-bundle/test`, explained in [Testing](../guide/development/testing.mdx).
-- Writing evals: `defineEvalSuite` and the assertions in `agent-bundle/eval`, explained in [Evaluations](../guide/development/evaluations.mdx).
+- Writing tests: [`renderRoute`](/api/test#renderroute), [`expectDocument`](/api/test#expectdocument), and the matrices in `agent-bundle/test`, explained in [Testing](../guide/development/testing.mdx).
+- Writing evals: [`defineEvalSuite`](/api/eval#defineevalsuite) and the assertions in `agent-bundle/eval`, explained in [Evaluations](../guide/development/evaluations.mdx).

@@ -867,6 +867,167 @@ it('generates deterministic per-request provider execution in the shared Flight 
   expect(source).toContain('return providerValues;');
 });
 
+it('imports only the deterministic union selected by event routes and emits per-route provider lists', () => {
+  const providers = [
+    {
+      id: 'provider:zeta',
+      name: 'zeta',
+      provenance: { kind: 'conventional' as const, relativePath: 'src/providers/zeta.ts' },
+      source: '/project/src/providers/zeta.ts',
+    },
+    {
+      id: 'provider:beta',
+      name: 'beta',
+      provenance: { kind: 'conventional' as const, relativePath: 'src/providers/beta.ts' },
+      source: '/project/src/providers/beta.ts',
+    },
+    {
+      id: 'provider:alpha-value',
+      name: 'alpha-value',
+      provenance: { kind: 'conventional' as const, relativePath: 'src/providers/alpha-value.ts' },
+      source: '/project/src/providers/alpha-value.ts',
+    },
+  ];
+  const source = entryShellModule.generatedRouteFlightWorkerSource({
+    artifactEpoch: 'route-fixture@1.2.3',
+    eventRoutes: [
+      {
+        event: 'afterTool',
+        eventRoute: {
+          event: 'tool/after',
+          fallback: 'none',
+          providers: ['alphaValue'],
+          runtime: 'shared',
+        },
+        id: 'hook:event-route:tool-after',
+        name: 'event-route-tool-after',
+        provenance: { kind: 'conventional', sourcePath: '/project/src/events/tool/after.tsx' },
+        source: '/project/src/events/tool/after.tsx',
+        targets: ['claude'],
+        tools: [],
+      },
+      {
+        event: 'sessionStart',
+        eventRoute: {
+          event: 'session/start',
+          fallback: 'none',
+          providers: [],
+          runtime: 'shared',
+        },
+        id: 'hook:event-route:session-start',
+        name: 'event-route-session-start',
+        provenance: { kind: 'conventional', sourcePath: '/project/src/events/session/start.tsx' },
+        source: '/project/src/events/session/start.tsx',
+        targets: ['claude'],
+        tools: [],
+      },
+    ],
+    providers,
+    routes: [],
+    serverName: 'curator',
+  });
+
+  expect(source).toContain('import * as provider0 from "/project/src/providers/alpha-value.ts"');
+  expect(source).not.toContain('/project/src/providers/beta.ts');
+  expect(source).not.toContain('/project/src/providers/zeta.ts');
+  expect(source).toContain(
+    '"hook:event-route:tool-after": Object.freeze({ event: "tool/after", id: "event:tool/after", kind: \'event-route\', module: route0, name: "tool/after", providers: Object.freeze([providers[0]]) })',
+  );
+  expect(source).toContain(
+    '"hook:event-route:session-start": Object.freeze({ event: "session/start", id: "event:session/start", kind: \'event-route\', module: route1, name: "session/start", providers: Object.freeze([]) })',
+  );
+  expect(source).toContain('for (const provider of route.providers ?? providers)');
+});
+
+it('keeps all-provider compatibility for MCP and undeclared event routes beside selected events', () => {
+  const providers = [
+    {
+      id: 'provider:zeta',
+      name: 'zeta',
+      provenance: { kind: 'conventional' as const, relativePath: 'src/providers/zeta.ts' },
+      source: '/project/src/providers/zeta.ts',
+    },
+    {
+      id: 'provider:alpha-value',
+      name: 'alpha-value',
+      provenance: { kind: 'conventional' as const, relativePath: 'src/providers/alpha-value.ts' },
+      source: '/project/src/providers/alpha-value.ts',
+    },
+  ];
+  const eventRoute = {
+    event: 'afterTool' as const,
+    eventRoute: {
+      event: 'tool/after' as const,
+      fallback: 'none' as const,
+      providers: ['zeta'],
+      runtime: 'shared' as const,
+    },
+    id: 'hook:event-route:tool-after',
+    name: 'event-route-tool-after',
+    provenance: { kind: 'conventional' as const, sourcePath: '/project/src/events/tool/after.tsx' },
+    source: '/project/src/events/tool/after.tsx',
+    targets: ['claude'],
+    tools: [],
+  };
+  const source = entryShellModule.generatedRouteFlightWorkerSource({
+    artifactEpoch: 'route-fixture@1.2.3',
+    eventRoutes: [
+      eventRoute,
+      {
+        ...eventRoute,
+        event: 'sessionStart',
+        eventRoute: { event: 'session/start', fallback: 'none', runtime: 'shared' },
+        id: 'hook:event-route:session-start',
+        name: 'event-route-session-start',
+        source: '/project/src/events/session/start.tsx',
+      },
+    ],
+    providers,
+    routes: [{
+      config: {},
+      id: 'tool:curator/inspect',
+      kind: 'tool',
+      provenance: { kind: 'conventional', relativePath: 'src/mcp/curator/tools/inspect.tsx' },
+      source: '/project/src/mcp/curator/tools/inspect.tsx',
+    }],
+    serverName: 'curator',
+  });
+
+  expect(source).toContain('import * as provider0 from "/project/src/providers/alpha-value.ts"');
+  expect(source).toContain('import * as provider1 from "/project/src/providers/zeta.ts"');
+  expect(source).toContain('name: "tool/after", providers: Object.freeze([providers[1]])');
+  expect(source).not.toContain('name: "session/start", providers:');
+  expect(source).toContain('for (const provider of route.providers ?? providers)');
+
+  const inboxSource = entryShellModule.generatedRouteFlightWorkerSource({
+    artifactEpoch: 'route-fixture@1.2.3',
+    eventRoutes: [eventRoute],
+    noticeDelivery: claudeAdapter.noticeDelivery!,
+    providers,
+    routes: [],
+    serverName: 'curator',
+    state: {
+      id: 'project/tasks',
+      lifetime: 'process',
+      provenance: { kind: 'conventional', sourcePath: '/project/src/state.ts' },
+      source: '/project/src/state.ts',
+    },
+  });
+  expect(inboxSource).toContain('import * as provider0 from "/project/src/providers/alpha-value.ts"');
+  expect(inboxSource).toContain('import * as provider1 from "/project/src/providers/zeta.ts"');
+
+  expect(() => entryShellModule.generatedRouteFlightWorkerSource({
+    artifactEpoch: 'route-fixture@1.2.3',
+    eventRoutes: [{
+      ...eventRoute,
+      eventRoute: { ...eventRoute.eventRoute, providers: ['missing'] },
+    }],
+    providers,
+    routes: [],
+    serverName: 'curator',
+  })).toThrow('invalid provider selection');
+});
+
 it('mounts deterministic per-request providers for plain routed CLI commands (#313)', () => {
   const route = {
     config: {},

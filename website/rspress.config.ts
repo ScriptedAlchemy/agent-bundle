@@ -141,7 +141,7 @@ export default defineConfig({
     cleanUrls: true,
     localeRedirect: 'never',
   },
-  // Renders the ~900 routes across a tinypool of worker threads instead of one
+  // Renders the routes across a tinypool of worker threads instead of one
   // process; output is identical.
   ssg: {
     experimentalWorker: true,
@@ -202,18 +202,17 @@ export default defineConfig({
       outDir: generatedApiDir,
       setup: async app => {
         await cleanGeneratedApiMarkdown(path.join(docsDir, generatedApiDir));
-        // Rspress derives sidebar and prev/next labels from the raw `# ` line,
-        // so typedoc-plugin-markdown's escaped underscores (`FOO\_BAR`) would
-        // surface verbatim. Intraword underscores are not emphasis in
-        // CommonMark, so the member title is safe to emit unescaped.
         // `includeVersion` is unset, so `{version}` would only leave a
         // trailing space in the title.
         app.options.setValue('pageTitleTemplates', {
           index: '{projectName}',
           module: '{kind}: {name}',
-          member: ({ kind, name }: { kind: string; name: string }) =>
-            `${kind}: ${name.replace(/\\_/g, '_')}`,
         });
+        // One page per entry point instead of one per exported symbol (#590):
+        // the plugin's default `kind` router emitted 916 pages per locale whose
+        // SSR'd sidebar was 93 % of the HTML. Members become headings on their
+        // module page; authored links use `/api/<module>#<member>`.
+        app.options.setValue('router', 'module');
         return app;
       },
     }),

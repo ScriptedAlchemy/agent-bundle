@@ -1306,6 +1306,63 @@ const routeGraphWithGeneratedServer = (root: string): CompiledRouteGraph => {
   };
 };
 
+it('carries event-route preflight provenance and provider selection into normalized hooks', async () => {
+  const root = '/workspace/project';
+  const selected: CompiledAgentRoute = {
+    config: { providers: ['zeta', 'alphaValue'] },
+    event: 'tool/after',
+    id: 'event:tool/after',
+    kind: 'event-route',
+    preflight: {
+      provenance: { kind: 'conventional', relativePath: 'src/events/tool/after.preflight.ts' },
+      source: `${root}/src/events/tool/after.preflight.ts`,
+    },
+    provenance: { kind: 'conventional', relativePath: 'src/events/tool/after.tsx' },
+    source: `${root}/src/events/tool/after.tsx`,
+  };
+  const inherited: CompiledAgentRoute = {
+    config: emptyRouteConfig,
+    event: 'session/start',
+    id: 'event:session/start',
+    kind: 'event-route',
+    provenance: { kind: 'conventional', relativePath: 'src/events/session/start.tsx' },
+    source: `${root}/src/events/session/start.tsx`,
+  };
+  const routeGraph: CompiledRouteGraph = {
+    diagnostics: [],
+    digest: 'event-route-metadata',
+    events: [selected, inherited],
+    providers: [],
+    scripts: [],
+    servers: [],
+  };
+
+  const model = await normalizeProject(
+    loadedProject({
+      plugin: { name: 'review-tools', version: '1.0.0' },
+      targets: ['claude'],
+    }),
+    { routeGraph, skills: [] },
+    registry,
+  );
+
+  expect(model.hooks.find(({ id }) => id === 'hook:event-route:tool-after')?.eventRoute).toEqual({
+    event: 'tool/after',
+    fallback: 'none',
+    preflight: selected.preflight,
+    providers: ['zeta', 'alphaValue'],
+    runtime: 'shared',
+  });
+  expect(model.hooks.find(({ id }) => id === 'hook:event-route:session-start')?.eventRoute).toEqual({
+    event: 'session/start',
+    fallback: 'none',
+    runtime: 'shared',
+  });
+  expect(Object.isFrozen(
+    model.hooks.find(({ id }) => id === 'hook:event-route:tool-after')?.eventRoute?.providers,
+  )).toBe(true);
+});
+
 it('normalizes generated MCP route servers without a handwritten server declaration', async () => {
   const root = '/workspace/project';
   const graph = routeGraphWithGeneratedServer(root);

@@ -23,6 +23,7 @@
     "@rspress/plugin-sitemap": "2.0.21",
     "@rspress/plugin-twoslash": "2.0.21",
     "@rspress/plugin-typedoc": "2.0.21",
+    "@rspress/shared": "2.0.21",
     "@shikijs/transformers": "4.4.3",
     "@types/hast": "3.0.5",
     "@types/node": "26.4.1",
