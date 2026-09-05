@@ -243,16 +243,17 @@ export type AgentBundleLibConfig = false | string | AgentBundleLibEntry;
  * breaks an artifact contract is a hard diagnostic, never a silent override.
  * Consumers never need a second bundler config file.
  *
- * Dual-engine reality: the hatch executes under two bundler engine copies.
- * Artifact scripts, MCP entries, hooks, and the package build compile
- * through Rslib and run under the Rsbuild/Rspack versions nested in
- * `@rslib/core` (currently the 2.1.x line); MCP App views compile through
- * the workspace-pinned `@rsbuild/core` (2.2.x). These types come from the
- * latter. Hatch authors must therefore never construct plugins or perform
- * `instanceof` checks against an imported `@rspack/core` — use the utils
- * argument Rslib/Rsbuild pass to `tools.rspack` mutator functions
- * (`(config, { rspack }) => ...`), which always hands the executing
- * engine's own `rspack` object.
+ * Engine identity: the hatch executes on one bundler engine — the
+ * `@rspack/core` behind agent-bundle's pinned `@rsbuild/core`, shared by the
+ * Rslib-compiled outputs (artifact scripts, MCP entries, hooks, the package
+ * build) and the MCP App views — and these types come from that
+ * `@rsbuild/core`. That engine is agent-bundle's dependency, not the
+ * consumer's: a class imported from a separately installed `@rspack/core`
+ * can have a different identity, so hatch authors must never construct
+ * plugins or perform `instanceof` checks against an imported `@rspack/core`
+ * — use the utils argument Rslib/Rsbuild pass to `tools.rspack` mutator
+ * functions (`(config, { rspack }) => ...`), which always hands the
+ * executing engine's own `rspack` object.
  */
 export interface AgentBundleToolsConfig {
   /** Rsbuild environment-config fragment merged after the synthesized profile. */

@@ -1210,10 +1210,15 @@ module specifier (`agent-bundle/meta`, or a registry specifier such as
 and through a post-build scan of the emitted bundle for function-form
 `externals` — because generated executables must stay self-contained. The
 hatch customizes *how code compiles*, never *what the artifact promises*. The
-framework's own profile keeps the same promise: `autoExternal` is off,
-`bundle: true`, `splitChunks: false`, and no `externals` are added, so Rslib's
-`node` target leaves only Node built-ins (and `pnpapi`) external, and `AB6005`
-fails any bare specifier that is not a Node built-in in a host-pack module.
+framework's own profile keeps the same promise: `output.autoExternal` is
+`false`, `bundle: true`, `splitChunks: false`, and no `externals` are added, so
+Rslib's `node` target leaves only Node built-ins (and `pnpapi`) external, and
+`AB6005` fails any bare specifier that is not a Node built-in in a host-pack
+module. Run-time path references are kept the same way: a
+`new URL(…, import.meta.url)` or `new Worker(new URL(…))` in consumer or
+generated code names a file beside the artifact, so the invariant layer turns
+the bundler's URL and worker asset processing off after the hatch and the
+expression reaches the artifact verbatim.
 
 The hatch merges *beside* the framework profile, not over it: `plugins`
 arrays concatenate, and Rsbuild's plugin manager appends every plugin it is
@@ -1225,16 +1230,17 @@ reports that as `AB4724` (an error, like the other `tools` shape checks) with
 the plugin and package name; remove the entry, the framework already
 registers it.
 
-The hatch executes under two different bundler engine copies. Artifact
-scripts, MCP entries, hook wrappers, and the package build compile through
-Rslib, which runs the Rsbuild/Rspack versions nested inside `@rslib/core`
-(currently the 2.1.x line); MCP App views compile through the
-workspace-pinned `@rsbuild/core` (currently 2.2.x), until Rslib catches up to
-the Rsbuild 2.2 line. So a hatch must never construct plugins or run
-`instanceof` checks against an imported `@rspack/core`: a class imported from
-a separately installed `@rspack/core` has a different identity than whichever
-engine executes the config. Use instead the utils argument Rslib/Rsbuild pass
-to `tools.rspack` mutator functions —
+The hatch executes on one bundler engine. Artifact scripts, MCP entries,
+hook wrappers, and the package build compile through Rslib; MCP App views
+compile through `@rsbuild/core`; and agent-bundle pins `@rsbuild/core` inside
+the range its `@rslib/core` accepts, so a consumer installs a single
+`@rsbuild/core`, a single `@rspack/core`, and a single native Rspack binding
+(a packed-consumer test holds that line). That engine is agent-bundle's
+dependency, not the consumer's: a class imported from a separately installed
+`@rspack/core` can have a different identity than the engine executing the
+config. So a hatch must never construct plugins or run `instanceof` checks
+against an imported `@rspack/core`. Use instead the utils argument
+Rslib/Rsbuild pass to `tools.rspack` mutator functions —
 `tools: { rspack: (config, { rspack }) => { ... } }` — which always hands the
 engine's own `rspack` object.
 
@@ -1287,9 +1293,9 @@ agent-bundle inspect --bundler [--target <t>] [--json]
 Dumps the synthesized bundler configuration for every output the build
 composes — artifact scripts, MCP entries, hook wrappers, the composite root's
 MCP Apps Rsbuild config, and the `dist/` package build — exactly as the build
-lowers it: the framework profile with the consumer `tools` hatch merged over
-it and the invariant hook appended last (functions render as
-`[function <name>]`). Entries the framework wraps also carry the generated
+lowers it: in production mode whatever `NODE_ENV` says, the framework profile
+with the consumer `tools` hatch merged over it and the invariant hook appended
+last (functions render as `[function <name>]`). Entries the framework wraps also carry the generated
 wrapper module source (`generatedEntry`). The composition comes from the same
 functions the build uses, so the dump cannot drift from what compiles.
 
@@ -1473,17 +1479,37 @@ closed }`). It is a host-process API: it belongs to processes the framework
 does not compile — the first-party CLI, the Workbench, tests, a plugin's own
 `package.json` scripts or a hand-written `.mjs` run from the checkout — and
 never to the MCP server shell. A routed CLI command inside the artifact
-cannot import it today: routed CLI bins are self-contained (#387), so the
-bundler inlines `agent-bundle/dist/api.js` into the bin and fails on the
+cannot import it: routed CLI bins are self-contained (#387), so the bundler
+would inline `agent-bundle/dist/api.js` into the bin and fail on the
 framework's runtime-relative module references (`Module not found: Can't
-resolve '../events'`), while an external bare import (`AB6005 uses
+resolve '../events'`). The route graph reports such an import first, as
+`AB4837` naming the module and the specifier
+(`src/routes/framework-imports.ts`; the compiler-carrying entries are
+`agent-bundle`, `agent-bundle/api`, `agent-bundle/config`,
+`agent-bundle/eval`, `agent-bundle/rstest`, `agent-bundle/test`, and
+`agent-bundle/test/browser`, matched exactly; `import type` and type-only
+usage are not reported), while an external bare import (`AB6005 uses
 unsupported specifier`) or a non-literal `import(spec)` (`AB6005 has a
-non-literal dynamic import`) fails artifact validation. The pattern that
-builds is a plain routed command that spawns `agent-bundle serve-app` as a
-child process — resolving the framework CLI from `node_modules/agent-bundle`
-by path, relaying the child's `MCP App <app> at <url>` line to stderr so the
-routed CLI keeps stdout for its result, and turning the route `signal` into
-the child's `SIGTERM` — which makes it a checkout-only command (an installed
-host pack has neither `node_modules` nor the artifact). A framework helper
-for that plumbing is tracked in #558; the worked example is in the MCP Apps
-guide, "Serving an App standalone".
+non-literal dynamic import`) still fails artifact validation. The sanctioned
+shape is `spawnServeApp` from `agent-bundle/serve-app-command`
+(`src/serve-app-command.ts`, #558) — plain Node with no dependencies, so the
+bundler inlines it into the self-contained executable the way it inlines
+`agent-bundle/launch-env`. It lowers the `serveApp` options to `serve-app`
+argv (`serveAppArgv`; every `ServeAppOptions` key except the host-process-only
+`logger`, `registry`, `openBrowser`, `targets`, and `timeoutMs`), resolves the
+framework CLI from the `agent-bundle` package installed at or above `root`
+(`locateFrameworkCli`, through `src/core/dependency-manifest.ts`), spawns it
+with the child's stdout piped and its stderr inherited, relays every stdout
+line to stderr so the routed CLI keeps stdout for its result, resolves once
+the child prints the ready line `MCP App <app> at <url> (tool <tool>; Ctrl-C
+stops the server)` — the CLI writes it and the helper parses it through one
+module, `src/serve-app/command-contract.ts` — and turns the route `signal`
+into the child's `SIGTERM`. The result is `{ app, url, tool, server, port,
+pid, closed, close() }`; failures are `ServeAppCommandError` with `code`
+`framework-not-installed`, `artifact-missing`, `spawn-failed`,
+`exited-before-ready` (carrying the child's `exit`), `aborted`, or
+`stop-failed` (the running child refused the signal `close()` or the abort
+sent; it is still running). It is a
+checkout command: an installed host pack has neither `node_modules/agent-bundle`
+nor the artifact, and the first two codes say so before anything is spawned.
+The worked example is in the MCP Apps guide, "Serving an App standalone".

@@ -44,6 +44,24 @@ const instanceIdLengthLimit = 128;
 const loopbackHosts = new Set(['127.0.0.1', '::1']);
 const sseQueueByteLimit = 256 * 1024;
 
+/**
+ * A serialized loopback http(s) origin such as `http://localhost:3000`: no
+ * path, query, hash, or credentials, and one of the hostnames a browser page
+ * on this machine can carry in `Origin`. `URL.hostname` brackets IPv6, so the
+ * bind host `::1` is read back as `[::1]`.
+ */
+const isLoopbackBrowserOrigin = (value: string): boolean => {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (url.origin !== value || (url.protocol !== 'http:' && url.protocol !== 'https:')) return false;
+  const hostname = url.hostname.startsWith('[') ? url.hostname.slice(1, -1) : url.hostname;
+  return hostname === 'localhost' || loopbackHosts.has(hostname);
+};
+
 interface QueuedSseFrame {
   readonly bytes: number;
   readonly frame: string;
@@ -175,6 +193,12 @@ export interface ForegroundServerOptions {
   readonly sessionToken?: string;
   /** Test-only foreground stream observation; production callers never supply this. */
   readonly testing?: ForegroundServerTesting;
+  /**
+   * Contributor HMR only: browser origins of a separately started Workbench
+   * Rsbuild dev server that proxies /api here. Loopback http(s) origins only;
+   * never set by default.
+   */
+  readonly workbenchDevOrigins?: readonly string[];
 }
 
 type SkillRoute =
@@ -392,6 +416,7 @@ export class ForegroundServer {
   readonly #sockets = new Set<Socket>();
   readonly #streamSubscriptions = new Set<ProjectEventSubscription>();
   readonly #testing: ForegroundServerTesting | undefined;
+  readonly #workbenchDevOrigins: ReadonlySet<string>;
   #closePromise: Promise<void> | undefined;
   #closing = false;
   #listenStarted = false;
@@ -412,6 +437,13 @@ export class ForegroundServer {
     if (instanceId.length === 0 || instanceId.length > instanceIdLengthLimit || instanceId.trim() !== instanceId) {
       throw new ForegroundServerError('AB8000', 'Foreground server instance ID must be a trimmed string between 1 and 128 characters.');
     }
+    const workbenchDevOrigins = options.workbenchDevOrigins ?? [];
+    if (!workbenchDevOrigins.every(isLoopbackBrowserOrigin)) {
+      throw new ForegroundServerError(
+        'AB8000',
+        'Foreground server Workbench dev origins must be loopback http(s) origins such as http://localhost:3000.',
+      );
+    }
 
     this.#agentApi = options.agentApi;
     this.#assets = options.assets;
@@ -427,6 +459,7 @@ export class ForegroundServer {
     this.#skillDocuments = options.skillDocuments;
     this.#testing = options.testing;
     this.sessionToken = options.sessionToken ?? randomUUID();
+    this.#workbenchDevOrigins = Object.freeze(new Set(workbenchDevOrigins));
     this.#mcpAppRoutes = new McpAppRoutes({
       authorize: (request) => this.#assertMutationSession(request),
       ...(options.mcpAppPreviews === undefined ? {} : { service: options.mcpAppPreviews }),
@@ -735,15 +768,22 @@ export class ForegroundServer {
     }
     if (pathname === '/api/project/session') {
       if (method !== 'GET') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
-      this.#assertSessionBootstrapOrigin(request);
+      this.#assertBrowserOrigin(request);
       const cookieName = this.#sessionCookieName();
+      const devOrigins = [...this.#workbenchDevOrigins].sort((left, right) => left.localeCompare(right));
       response.writeHead(200, {
         'cache-control': 'no-store',
         'content-type': 'application/json; charset=utf-8',
         'set-cookie': `${cookieName}=${this.sessionToken}; HttpOnly; SameSite=Strict; Path=/api`,
         'x-content-type-options': 'nosniff',
       });
-      response.end(JSON.stringify({ cookieName, instanceId: this.instanceId, origin: this.url, token: this.sessionToken }));
+      response.end(JSON.stringify({
+        cookieName,
+        ...(devOrigins.length === 0 ? {} : { devOrigins }),
+        instanceId: this.instanceId,
+        origin: this.url,
+        token: this.sessionToken,
+      }));
       return;
     }
     if (pathname === '/api/project/rebuild') {
@@ -801,10 +841,17 @@ export class ForegroundServer {
     }
   }
 
-  #assertSessionBootstrapOrigin(request: IncomingMessage): void {
+  /** This foreground origin, or an operator-listed Workbench dev-server origin whose pages reach /api through its proxy. */
+  #isBrowserOrigin(origin: string): boolean {
+    return origin === this.url || this.#workbenchDevOrigins.has(origin);
+  }
+
+  /** Browser routes require an accepted `Origin`; a missing one passes only with same-origin fetch provenance. */
+  #assertBrowserOrigin(request: IncomingMessage): void {
     const origin = singleHeader(request.headers.origin);
-    if (origin === this.url) return;
-    if (origin === undefined && singleHeader(request.headers['sec-fetch-site']) === 'same-origin') return;
+    if (origin === undefined ? singleHeader(request.headers['sec-fetch-site']) === 'same-origin' : this.#isBrowserOrigin(origin)) {
+      return;
+    }
     throw requestError(diagnostic('AB8003', 'Request origin is not this foreground server.', 403));
   }
 
@@ -819,20 +866,14 @@ export class ForegroundServer {
   }
 
   #assertMutationSession(request: IncomingMessage): void {
-    const origin = singleHeader(request.headers.origin);
-    if (origin !== this.url && (origin !== undefined || singleHeader(request.headers['sec-fetch-site']) !== 'same-origin')) {
-      throw requestError(diagnostic('AB8003', 'Request origin is not this foreground server.', 403));
-    }
+    this.#assertBrowserOrigin(request);
     if (singleHeader(request.headers['x-agent-bundle-session']) !== this.sessionToken) {
       throw requestError(diagnostic('AB8004', 'A valid same-session token is required.', 403));
     }
   }
 
   #assertEventSession(request: IncomingMessage): void {
-    const origin = singleHeader(request.headers.origin);
-    if (origin !== this.url && (origin !== undefined || singleHeader(request.headers['sec-fetch-site']) !== 'same-origin')) {
-      throw requestError(diagnostic('AB8003', 'Request origin is not this foreground server.', 403));
-    }
+    this.#assertBrowserOrigin(request);
     if (cookieValue(request, this.#sessionCookieName()) !== this.sessionToken) {
       throw requestError(diagnostic('AB8004', 'A valid foreground session cookie is required.', 403));
     }

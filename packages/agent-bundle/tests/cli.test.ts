@@ -182,6 +182,60 @@ it('requires a server name for the nested development proxy command', async () =
   expect(result.stderr).toContain("required option '--server <server>' not specified");
 });
 
+it('passes repeatable --workbench-dev-origin values to the public dev API and omits the option without the flag', async () => {
+  // The contributor HMR allowlist (#572) is explicit and never on by default:
+  // the CLI forwards exactly the listed origins, in order, and leaves the
+  // option absent (not an empty list) when the flag is not given. Validation
+  // belongs to the foreground server (AB8000), so cli.ts stays import-light.
+  const received: Parameters<NonNullable<CliDependencies['startDevServer']>>[0][] = [];
+  const handlers = new Map<NodeJS.Signals, () => void>();
+  let closeCalls = 0;
+  const dependencies: CliDependencies = {
+    signals: {
+      once: (signal, listener) => { handlers.set(signal, listener); },
+      removeListener: (signal) => { handlers.delete(signal); },
+    },
+    startDevServer: async (options) => {
+      received.push(options);
+      return {
+        close: async () => { closeCalls += 1; },
+        openRuntimeClientSurface: async () => undefined,
+        status: () => ({}) as never,
+        url: 'http://127.0.0.1:4100',
+      };
+    },
+  };
+  const stopForeground = async (): Promise<void> => {
+    handlers.get('SIGINT')?.();
+    await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  };
+
+  const listed = await runSourceCliWithOutput([
+    'dev', '--root', '/tmp/plugin', '--no-open',
+    '--workbench-dev-origin', 'http://localhost:3000',
+    '--workbench-dev-origin', 'http://127.0.0.1:3000',
+  ], dependencies);
+  await stopForeground();
+  expect(listed).toEqual({ code: 0, stderr: '', stdout: 'Development workbench at http://127.0.0.1:4100\n' });
+  expect(received).toEqual([expect.objectContaining({
+    open: false,
+    root: '/tmp/plugin',
+    workbenchDevOrigins: ['http://localhost:3000', 'http://127.0.0.1:3000'],
+  })]);
+
+  const unlisted = await runSourceCliWithOutput(['dev', '--root', '/tmp/plugin', '--no-open'], dependencies);
+  await stopForeground();
+  expect(unlisted).toMatchObject({ code: 0, stderr: '' });
+  expect(received).toHaveLength(2);
+  expect(received[1]).toMatchObject({ open: false, root: '/tmp/plugin' });
+  expect(received[1]).not.toHaveProperty('workbenchDevOrigins');
+  expect(closeCalls).toBe(2);
+
+  const help = await runSourceCliWithOutput(['dev', '--help']);
+  expect(help.code).toBe(0);
+  expect(help.stdout).toContain('--workbench-dev-origin <origin>');
+});
+
 it('builds a selected target through the built executable from a path containing spaces', async () => {
   await buildCliPackage();
   const project = await createCliProject();

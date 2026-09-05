@@ -83,6 +83,10 @@
       "types": "./dist/rstest/index.d.ts",
       "import": "./dist/rstest.js"
     },
+    "./serve-app-command": {
+      "types": "./dist/serve-app-command.d.ts",
+      "import": "./dist/serve-app-command.js"
+    },
     "./test": {
       "types": "./dist/test/index.d.ts",
       "import": "./dist/test.js"
@@ -98,9 +102,9 @@
     "@modelcontextprotocol/client": "2.0.0",
     "@modelcontextprotocol/node": "2.0.0",
     "@modelcontextprotocol/server": "2.0.0",
-    "@rsbuild/core": "2.2.1",
+    "@rsbuild/core": "2.2.3",
     "@rsbuild/plugin-react": "2.1.0",
-    "@rslib/core": "0.23.2",
+    "@rslib/core": "1.0.0",
     "@rslint/core": "0.8.2",
     "@rstackjs/load-config": "0.1.2",
     "acorn": "8.18.0",

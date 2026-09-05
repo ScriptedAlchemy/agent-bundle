@@ -11,12 +11,14 @@ import {
   stat,
   writeFile,
 } from 'node:fs/promises';
+import { isBuiltin } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join, relative } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
+import { init, parse } from 'es-module-lexer';
 
 import { sha256Hex } from '../src/core/digest.ts';
 import { cachedNpmInstallArguments, installedEnvironment, linkWorkspaceTypes, packOutputFromJson } from './support/shared-pack.ts';
@@ -54,6 +56,66 @@ const artifactDigest = async (root: string): Promise<readonly FileDigest[]> => {
     return collected.flat();
   };
   return (await collect(root)).sort((left, right) => left.path.localeCompare(right.path));
+};
+
+interface EmittedModule {
+  /** Path relative to the walked root. */
+  readonly path: string;
+  /** Literal specifiers of the module's live imports; `import.meta` is not an import. */
+  readonly specifiers: readonly string[];
+}
+
+interface EmittedModuleReport {
+  readonly modules: readonly EmittedModule[];
+  /** One entry per import that breaks the constraint, naming the importing module and the specifier. */
+  readonly violations: readonly string[];
+}
+
+/**
+ * Walks every `.js`/`.mjs` module under `root` — a plugin artifact or a
+ * package build's `dist/` — and checks the self-containment constraint on
+ * the emitted JavaScript itself. A plugin build bundles every dependency of
+ * each generated executable, so Node builtins are the only external modules
+ * an emitted module may import; every other specifier must be a relative
+ * path (`./` or `../`) to a file inside the same output tree. The author's
+ * own `tools` hatch is the only way a non-builtin may remain external, and
+ * this fixture declares none. `AB6005` (src/build/validate-artifact-modules.ts)
+ * enforces the same rule inside every build; this walk proves it on the
+ * outputs a real consumer builds from the installed tarball.
+ */
+const emittedModuleReport = async (root: string): Promise<EmittedModuleReport> => {
+  await init;
+  const entries = await readdir(root, { recursive: true, withFileTypes: true });
+  const files = entries
+    .filter((entry) => entry.isFile() && /\.m?js$/u.test(entry.name))
+    .map((entry) => join(entry.parentPath, entry.name))
+    .sort();
+  const violations: string[] = [];
+  const modules = await Promise.all(files.map(async (file): Promise<EmittedModule> => {
+    const path = relative(root, file);
+    const [imports] = parse(await readFile(file, 'utf8'), path);
+    const specifiers: string[] = [];
+    // `import.meta` is reported as a pseudo-import (`d === -2`) without a specifier.
+    for (const record of imports.filter((candidate) => candidate.d !== -2)) {
+      if (record.n === undefined) {
+        violations.push(`${path} has a non-literal dynamic import`);
+        continue;
+      }
+      specifiers.push(record.n);
+      if (isBuiltin(record.n)) continue;
+      if (!record.n.startsWith('./') && !record.n.startsWith('../')) {
+        violations.push(`${path} imports ${JSON.stringify(record.n)}`);
+        continue;
+      }
+      const target = resolve(dirname(file), record.n);
+      const location = relative(root, target);
+      const inside = location !== '' && location !== '..' && !location.startsWith('../');
+      const exists = inside && await stat(target).then((metadata) => metadata.isFile(), () => false);
+      if (!exists) violations.push(`${path} imports ${JSON.stringify(record.n)}, which is not a file inside the output tree`);
+    }
+    return { path, specifiers };
+  }));
+  return { modules, violations: violations.sort() };
 };
 
 const runInstalled = async (
@@ -366,6 +428,23 @@ it('uses only an installed tarball after source deletion', async () => {
     const frameworkArtifact = join(frameworkRoot, 'artifact');
     await runInstalled(frameworkCli, frameworkRoot, ['build', '--root', frameworkRoot, '--output', frameworkArtifact]);
 
+    // Self-containment on the outputs a consumer builds from the installed
+    // tarball: every host tree of the artifact and the package build's dist/
+    // import nothing but Node builtins. A violation names the importer and
+    // the specifier that survived bundling.
+    const [artifactModules, packageModules] = await Promise.all([
+      emittedModuleReport(frameworkArtifact),
+      emittedModuleReport(join(frameworkRoot, 'dist')),
+    ]);
+    expect(artifactModules.violations).toEqual([]);
+    expect(packageModules.violations).toEqual([]);
+    expect(artifactModules.modules.filter((module) => /^(?:claude|codex|portable)\/mcp\/[^/]+\.mjs$/u.test(module.path))).toHaveLength(3);
+    expect(packageModules.modules.map((module) => module.path)).toEqual(expect.arrayContaining([
+      'bin/framework-build-fixture-install.js',
+      'bin/framework-build-fixture.js',
+      'index.js',
+    ]));
+
     const packedBin = join(frameworkRoot, 'dist', 'bin', 'framework-build-fixture.js');
     const packedInstallerBin = join(frameworkRoot, 'dist', 'bin', 'framework-build-fixture-install.js');
     expect((await stat(packedBin)).mode & 0o111).not.toBe(0);
@@ -386,6 +465,14 @@ it('uses only an installed tarball after source deletion', async () => {
     const greeterBundle = await readFile(greeterEntry, 'utf8');
     expect(greeterBundle).not.toMatch(agentBundleImport);
     expect(greeterBundle).toContain('stdio heartbeat');
+    // `@modelcontextprotocol/server` is inlined: its tool registry is in the
+    // bundle and no live import names it. The inlined SDK's own doc comments
+    // still spell `from '@modelcontextprotocol/server'`, so the lexed
+    // specifiers are the evidence, not a text search.
+    expect(greeterBundle).toContain('registerTool');
+    const greeterModule = artifactModules.modules.find((module) => module.path === relative(frameworkArtifact, greeterEntry));
+    expect(greeterModule).toBeDefined();
+    expect(greeterModule?.specifiers.filter((specifier) => !isBuiltin(specifier))).toEqual([]);
     // The packaged lifecycle shell exits 0 on stdin EOF so clients can
     // respawn. execFile never closes the child's stdin pipe, so deliver the
     // EOF explicitly — the real server's transport holds the process alive

@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { eventIpcRuntimeSpecifier, eventProjectRuntimeSpecifier } from '../adapters/hook-contract.ts';
@@ -36,14 +37,13 @@ const noticeInboxRuntimeSpecifier = '@agent-bundle/runtime/notices/inbox-route';
  * the emitted artifact (artifacts must stay self-contained). From the bundled
  * package this module's URL is `dist/<bundle>.js` with `<name>.js` as a
  * sibling; from checked-out sources it is `src/build/entry-shell.ts` with
- * `../<name>.ts`.
+ * `../<name>.ts`. Spelled as paths, not `new URL(…, import.meta.url)`: the
+ * package's own Rslib build would otherwise read the template as a directory
+ * context and replace it with a lookup that throws at run time.
  */
 const runtimeModulePath = (name: string): string => {
-  for (const candidate of [
-    new URL(`./${name}.js`, import.meta.url),
-    new URL(`../${name}.ts`, import.meta.url),
-  ]) {
-    const path = fileURLToPath(candidate);
+  const here = dirname(fileURLToPath(import.meta.url));
+  for (const path of [join(here, `${name}.js`), join(here, '..', `${name}.ts`)]) {
     if (existsSync(path)) return path;
   }
   throw new Error(`Unable to locate the agent-bundle/${name} runtime module for generated entries.`);
@@ -158,16 +158,7 @@ export const cliEntryRuntimeSpecifier = 'agent-bundle/cli-entry';
  * aliased into generated CLI executables exactly like the mcp-entry
  * lifecycle so emitted bins stay self-contained.
  */
-export const cliEntryRuntimePath = (): string => {
-  for (const candidate of [
-    new URL('./cli-entry.js', import.meta.url),
-    new URL('../cli-entry.ts', import.meta.url),
-  ]) {
-    const path = fileURLToPath(candidate);
-    if (existsSync(path)) return path;
-  }
-  throw new Error('Unable to locate the agent-bundle/cli-entry runtime module for generated CLI executables.');
-};
+export const cliEntryRuntimePath = (): string => runtimeModulePath('cli-entry');
 
 export const installEntryRuntimeSpecifier = 'agent-bundle/install-entry';
 

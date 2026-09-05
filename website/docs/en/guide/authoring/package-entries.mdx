@@ -252,8 +252,11 @@ async chunks, output roots, self-containment — fails the build with a hard dia
 silently overriding the contract. Reserved module specifiers are protected the same way: a hatch
 that externalizes `agent-bundle/mcp-entry`, `agent-bundle/meta`, or `agent-bundle/mcp-apps` fails
 the build, at config inspection for statically visible `externals` and through a post-build scan
-for function-form ones. The hatch customizes *how code compiles*, never *what the artifact
-promises*.
+for function-form ones. Run-time path references are kept the same way: a
+`new URL(…, import.meta.url)` or `new Worker(new URL(…))` in your code or a generated entry names
+a file beside the artifact, so the invariant layer turns the bundler's URL and worker asset
+processing off after the hatch and the expression reaches the artifact verbatim. The hatch
+customizes *how code compiles*, never *what the artifact promises*.
 
 The hatch merges *beside* the framework profile: `plugins` arrays concatenate, and Rsbuild never
 dedupes plugins by name. Re-adding a plugin the framework already registers — `@rsbuild/plugin-react`
@@ -261,12 +264,13 @@ dedupes plugins by name. Re-adding a plugin the framework already registers — 
 through `tools.rsbuild.plugins` would run it twice, so `agent-bundle validate` reports it as
 `AB4724` naming the plugin and its package. Remove the entry; the framework registers it for you.
 
-One dual-engine caveat: artifact scripts, MCP entries, hook wrappers, and the package build
-compile through Rslib and run under the bundler versions nested inside `@rslib/core`, while MCP
-App views compile through the workspace-pinned `@rsbuild/core`. A class imported from a
-separately installed `@rspack/core` therefore has a different identity than whichever engine
-executes the config. Never construct plugins or run `instanceof` checks against an imported
-`@rspack/core` — use the utils argument passed to mutator functions instead:
+One engine-identity caveat: artifact scripts, MCP entries, hook wrappers, and the package build
+compile through Rslib, and MCP App views through `@rsbuild/core`; agent-bundle pins both so a
+project installs a single `@rsbuild/core` and a single `@rspack/core`, but that engine is
+agent-bundle's dependency, not yours. A class imported from a separately installed `@rspack/core`
+can therefore have a different identity than the engine executing the config. Never construct
+plugins or run `instanceof` checks against an imported `@rspack/core` — use the utils argument
+passed to mutator functions instead:
 
 ```ts
 tools: {

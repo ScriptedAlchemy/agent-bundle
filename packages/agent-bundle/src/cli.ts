@@ -26,7 +26,6 @@ import type {
   validate,
   InspectionComponentCapability,
   InspectionSkippedComponent,
-  McpAppConsentCapability,
   McpAppProfileId,
   ProjectOptions,
 } from './api.ts';
@@ -52,6 +51,7 @@ import { errorMessage } from './core/errors.ts';
 import { formatInstallResult, formatUninstallResult } from './install/format.ts';
 import { projectVersionLabel } from './core/project-context.ts';
 import { stableJson } from './core/digest.ts';
+import { formatServeAppReadyLine, isServeAppAllowCapability, type ServeAppAllowCapability } from './serve-app/command-contract.ts';
 import type { EvalComparisonDelta, EvalConditionMetrics } from './eval/compare.ts';
 import type { CliTerminal } from './effect/cli-runtime.ts';
 import type { CliServices } from './effect/terminal.ts';
@@ -188,6 +188,7 @@ interface DevCommandOptions {
   readonly open?: boolean;
   readonly port?: number;
   readonly root: string;
+  readonly workbenchDevOrigin: readonly string[];
 }
 
 interface DevProxyCommandOptions {
@@ -197,7 +198,7 @@ interface DevProxyCommandOptions {
 }
 
 interface ServeAppCommandOptions extends JsonInputOptions {
-  readonly allow: readonly McpAppConsentCapability[];
+  readonly allow: readonly ServeAppAllowCapability[];
   readonly artifact?: string;
   readonly config?: string;
   readonly env: boolean;
@@ -251,16 +252,12 @@ const mcpAppProfile = (value: string): McpAppProfileId => {
   throw new InvalidArgumentError('MCP App profile must be portable, claude, or chatgpt.');
 };
 
-const consentCapabilities: ReadonlySet<McpAppConsentCapability> = new Set<McpAppConsentCapability>([
-  'call-tool', 'download-file', 'open-external-link', 'request-display-mode',
-]);
-
-const consentCapability = (value: string): McpAppConsentCapability => {
-  if (consentCapabilities.has(value as McpAppConsentCapability)) return value as McpAppConsentCapability;
+const consentCapability = (value: string): ServeAppAllowCapability => {
+  if (isServeAppAllowCapability(value)) return value;
   throw new InvalidArgumentError('Consent capability must be call-tool, download-file, open-external-link, or request-display-mode.');
 };
 
-const collectConsentCapability = (value: string, previous: readonly McpAppConsentCapability[]): readonly McpAppConsentCapability[] =>
+const collectConsentCapability = (value: string, previous: readonly ServeAppAllowCapability[]): readonly ServeAppAllowCapability[] =>
   [...previous, consentCapability(value)];
 
 const doctorHost = (value: string): DoctorHost => {
@@ -738,7 +735,8 @@ export const runCli = async (
     .option('--no-agent-api', 'Disable the authenticated Agent API on /mcp')
     .option('--install-host <host>', 'Install and re-sync a development host (repeatable)', collectInstallHost, [])
     .option('--open', 'Open the workbench after the foreground server starts')
-    .option('--no-open', 'Do not open the workbench after the foreground server starts');
+    .option('--no-open', 'Do not open the workbench after the foreground server starts')
+    .option('--workbench-dev-origin <origin>', 'Accept Workbench UI requests from this loopback contributor HMR origin (repeatable)', collect, []);
   devCommand.action(async (options: DevCommandOptions) => {
     const { startDevServer: start } = await import('./api.ts');
     const session = await (dependencies.startDevServer ?? start)({
@@ -747,6 +745,7 @@ export const runCli = async (
       open: options.open === true,
       ...(options.port === undefined ? {} : { port: options.port }),
       root: options.root,
+      ...(options.workbenchDevOrigin.length === 0 ? {} : { workbenchDevOrigins: options.workbenchDevOrigin }),
     });
     await show(`Development workbench at ${session.url}\n`);
     foreground = closeForegroundOnSignal(session, dependencies.signals ?? process, diagnostics);
@@ -819,7 +818,7 @@ export const runCli = async (
       target: options.target,
       ...(options.tool === undefined ? {} : { tool: options.tool }),
     });
-    await show(`MCP App ${app} at ${served.url} (tool ${served.tool}; Ctrl-C stops the server)\n`);
+    await show(`${formatServeAppReadyLine({ app, tool: served.tool, url: served.url })}\n`);
     // The host outlives this call like `dev` does; it ends on a termination
     // signal, or when the bound server exits on its own, which is reported
     // as a diagnostic and, in the real process, as exit code 1.

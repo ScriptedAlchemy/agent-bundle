@@ -182,17 +182,23 @@ const lazyRenderRouteEvents: typeof renderRouteEvents = async (target, options) 
   return renderer.renderRouteEvents(target, options);
 };
 
-/** Synchronous probe from a sync resolver; stays on `node:fs` (no `FileSystem` sync API). */
+/**
+ * Synchronous probe from a sync resolver; stays on `node:fs` (no `FileSystem`
+ * sync API). Spelled as paths, not `new URL(…, import.meta.url)`: the
+ * package's own Rslib build would otherwise copy the child into the bundle's
+ * static assets and point the URL there.
+ */
 const lifecycleRenderChildPath = (): string => {
   const current = fileURLToPath(import.meta.url);
+  const here = dirname(current);
   const candidates = current.endsWith('.ts')
     ? [
-        fileURLToPath(new URL('./lifecycle-render-child.ts', import.meta.url)),
-        fileURLToPath(new URL('../../../dist/lifecycle-render-child.js', import.meta.url)),
+        join(here, 'lifecycle-render-child.ts'),
+        join(here, '..', '..', '..', 'dist', 'lifecycle-render-child.js'),
       ]
     : [
-        fileURLToPath(new URL('./lifecycle-render-child.js', import.meta.url)),
-        fileURLToPath(new URL('./lifecycle-render-child.ts', import.meta.url)),
+        join(here, 'lifecycle-render-child.js'),
+        join(here, 'lifecycle-render-child.ts'),
         resolve(process.cwd(), 'packages/agent-bundle/src/dev/playground/lifecycle-render-child.ts'),
       ];
   for (const candidate of candidates) {

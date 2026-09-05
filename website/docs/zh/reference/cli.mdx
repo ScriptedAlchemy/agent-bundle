@@ -54,6 +54,7 @@ npx agent-bundle --version
 | `--agent-api` / `--no-agent-api` | 配置中的 `dev.agentApi` | 启用或禁用 `/mcp` 上经过认证的 Agent API。 |
 | `--install-host <host>` | 无 | 安装并重新同步一个开发期宿主。可重复；取值为 `claude`、`codex` 或 `cursor`。 |
 | `--open` / `--no-open` | `--no-open` | 前台服务器启动后是否打开 workbench。 |
+| `--workbench-dev-origin <origin>` | 无 | 接受来自这个 loopback 贡献者 HMR origin（即 Rsbuild 开发服务器，例如 `http://localhost:3000`）的 Workbench 界面请求。可重复；非 loopback 或不是 origin 的取值会让 `agent-bundle dev` 在开始服务之前退出。见[贡献者 UI 的 HMR](../guide/development/workbench.mdx#贡献者-ui-的-hmr)。 |
 
 `dev` 在前台运行，并在收到终止信号时关闭会话。见
 [开发者 Workbench](../guide/development/workbench.mdx)。
@@ -77,7 +78,12 @@ agent-bundle serve-app <server>/<app> [--artifact <path>] [--tool <tool>] [--inp
 在一个普通浏览器标签页里独立提供一个已构建的 MCP App——不在任何 MCP 宿主之内，也不需要
 Workbench：该命令以与 `mcp run` 完全相同的方式启动插件打包好的 MCP 服务器，通过 Workbench MCP 页面
 所用的同一套宿主栈（沙箱代理、同意授权、桥接）把 App 绑定到它上面，先调用一次 App 的工具让它带着数据
-打开，然后打印 loopback URL。它在前台运行，直到收到终止信号，或服务器自行退出。
+打开，然后打印 loopback URL。它的输出是一份契约：宿主开始监听后，stdout 恰好携带一行
+`MCP App <app> at <url> (tool <tool>; Ctrl-C stops the server)`——`<app>` 为命令行上给出的原样，`<tool>` 为
+打开该 App 的工具——而每条诊断都写到 stderr。随后命令在前台运行：`SIGINT` 或 `SIGTERM` 会关闭宿主及其
+服务器并以 `0` 退出；当被绑定的 MCP 服务器自行退出时，一条 `AB5000` 诊断会写到 stderr，命令以 `1` 退出。
+`agent-bundle/serve-app-command` 中的 `spawnServeApp` 等待的正是同一行（`parseServeAppReadyLine`），因此
+路由式命令可以依赖它。
 
 | 选项 | 默认值 | 含义 |
 | --- | --- | --- |
@@ -96,8 +102,9 @@ Workbench：该命令以与 `mcp run` 完全相同的方式启动插件打包好
 宿主只绑定 `127.0.0.1`，只提供一份文档与经过认证的 `/api/mcp/...` 路由（每次启动一个令牌，加同源检查；
 拒绝时为 `AB8003` / `AB8004`），并且只通过桥接暴露所选的那个服务器。App 文档本身运行在框架沙箱内的第二个
 loopback origin 上。它是本地预览宿主，不是部署目标。面向脚本与测试的编程形式是 `agent-bundle/api` 中的
-`serveApp`；插件自己的路由式 CLI 命令则改为启动这条命令，因为自包含的 bin 无法导入 `agent-bundle/api`——见
-[独立提供 App](../guide/authoring/mcp.mdx#独立提供-app)。
+`serveApp`；插件自己的路由式 CLI 命令则使用 `agent-bundle/serve-app-command` 中的 `spawnServeApp`，它把同样
+的选项转换为 argv，并把这条命令作为子进程运行，因为自包含的 bin 无法导入 `agent-bundle/api`（路由图会把这种
+尝试报告为 `AB4837`）——见[独立提供 App](../guide/authoring/mcp.mdx#独立提供-app)。
 
 ## build 与 prepack
 
@@ -223,7 +230,7 @@ keep-data 选项）。相对包的安装器 bin 接受带同样标志的 `uninst
 
 | 标志 | 聚焦于 |
 | --- | --- |
-| `--bundler` | 合成出来的打包器配置。它的 `distPath.root` 就是产物输出 `<output>`，因为每个所选投影都编译进同一个组合根目录。 |
+| `--bundler` | 合成出来的打包器配置，无论 `NODE_ENV` 为何，都按生产构建的方式降级。它的 `distPath.root` 就是产物输出 `<output>`，因为每个所选投影都编译进同一个组合根目录。 |
 | `--hooks` | 钩子。 |
 | `--routes` | 编译后的路由图。 |
 | `--skills` | Skill。 |

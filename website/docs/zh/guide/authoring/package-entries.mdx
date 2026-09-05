@@ -221,18 +221,21 @@ npx agent-bundle prepack --root . --output artifact --json
 合并之后运行。破坏产物契约的取值——异步 chunk、输出根目录、自包含性——会以硬诊断让构建失败，而不是
 悄悄覆盖契约。保留的模块 specifier 也以同样方式受到保护：把 `agent-bundle/mcp-entry`、
 `agent-bundle/meta` 或 `agent-bundle/mcp-apps` 外部化的逃生舱会让构建失败——对静态可见的 `externals`
-在配置检查阶段失败，对函数形式的则通过构建后扫描失败。逃生舱定制的是*代码如何编译*，绝不是*产物承诺
-了什么*。
+在配置检查阶段失败，对函数形式的则通过构建后扫描失败。运行时路径引用也以同样方式得到保留：你的代码或
+生成入口中的 `new URL(…, import.meta.url)` 或 `new Worker(new URL(…))` 指向的是产物旁的一个文件，因此
+不变量层会在逃生舱之后关闭打包器对 URL 与 worker 的静态资源处理，让该表达式原样进入产物。逃生舱定制的是
+*代码如何编译*，绝不是*产物承诺了什么*。
 
 逃生舱是*并列*合并到框架配置旁边的：`plugins` 数组会拼接，而 Rsbuild 从不按名称去重插件。通过
 `tools.rsbuild.plugins` 再次添加框架已经注册的插件——`@rsbuild/plugin-react`（`rsbuild:react`），
 每个合成入口与每个使用 React 语法的 MCP App 视图都带着它——会让它运行两次，因此 `agent-bundle validate`
 会以 `AB4724` 报告，并点名该插件及其包名。删除这一项即可；框架会替你注册它。
 
-有一个双引擎注意事项：产物脚本、MCP 入口、钩子包装层与包构建通过 Rslib 编译，运行在 `@rslib/core`
-内嵌的打包器版本之下；而 MCP App 视图通过工作区固定的 `@rsbuild/core` 编译。因此，从单独安装的
-`@rspack/core` 导入的类，与实际执行配置的那个引擎的类身份并不相同。切勿针对导入的 `@rspack/core`
-构造插件或执行 `instanceof` 检查——请改用传给 mutator 函数的 utils 参数：
+有一个引擎身份注意事项：产物脚本、MCP 入口、钩子包装层与包构建通过 Rslib 编译，MCP App 视图通过
+`@rsbuild/core` 编译；agent-bundle 固定了两者的版本，使项目只安装一个 `@rsbuild/core` 与一个
+`@rspack/core`，但这个引擎是 agent-bundle 的依赖，而不是你的依赖。因此，从单独安装的 `@rspack/core`
+导入的类，与实际执行配置的那个引擎的类身份可能并不相同。切勿针对导入的 `@rspack/core` 构造插件或执行
+`instanceof` 检查——请改用传给 mutator 函数的 utils 参数：
 
 ```ts
 tools: {

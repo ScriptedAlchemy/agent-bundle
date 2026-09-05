@@ -1,12 +1,14 @@
 import { execFile as executeFile } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
+import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { promisify } from 'node:util';
 
 import { beforeAll, expect, it } from '@rstest/core';
 
 import { isolatedCommandEnvironment } from '../../../rstest.worker-isolation.ts';
+import { isErrno } from '../src/core/errors.ts';
 import { writeFixtureManifest } from './support/manifest.ts';
 import { cachedNpmInstallArguments, linkWorkspaceTypes, sharedPackedTarball } from './support/shared-pack.ts';
 
@@ -42,6 +44,53 @@ const createBuildProject = async (root: string): Promise<{ readonly output: stri
     ),
   ]);
   return { output, project };
+};
+
+/** One installed copy of a package: where npm placed it and which version it is. */
+interface InstalledCopy {
+  readonly name: string;
+  /** Directory relative to the consumer's `node_modules`, so a nested duplicate names its host. */
+  readonly path: string;
+  readonly version: string;
+}
+
+/**
+ * Every copy of the packages `selected` names anywhere under a consumer's
+ * `node_modules`, nested duplicates included: npm hoists one version of a
+ * package and nests the others beneath whichever dependency pinned them, so
+ * a second engine version shows up as
+ * `@rslib/core/node_modules/@rsbuild/core`, never at the top level.
+ */
+const installedCopies = async (nodeModules: string, selected: (name: string) => boolean): Promise<readonly InstalledCopy[]> => {
+  const copies: InstalledCopy[] = [];
+  const visitPackage = async (name: string, directory: string): Promise<void> => {
+    if (selected(name)) {
+      const manifest = JSON.parse(await readFile(join(directory, 'package.json'), 'utf8')) as { readonly version: string };
+      copies.push({ name, path: relative(nodeModules, directory), version: manifest.version });
+    }
+    await visitNodeModules(join(directory, 'node_modules'));
+  };
+  const visitNodeModules = async (directory: string): Promise<void> => {
+    let entries: Dirent[];
+    try {
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch (error) {
+      if (isErrno(error, 'ENOENT')) return;
+      throw error;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+      if (!entry.name.startsWith('@')) {
+        await visitPackage(entry.name, join(directory, entry.name));
+        continue;
+      }
+      for (const scoped of await readdir(join(directory, entry.name), { withFileTypes: true })) {
+        if (scoped.isDirectory()) await visitPackage(`${entry.name}/${scoped.name}`, join(directory, entry.name, scoped.name));
+      }
+    }
+  };
+  await visitNodeModules(nodeModules);
+  return copies.sort((left, right) => left.path.localeCompare(right.path));
 };
 
 const producerFrom = async (output: string): Promise<{ readonly name: string; readonly version: string }> => {
@@ -103,6 +152,43 @@ it('writes the package version as the producer of a packed CLI manifest', async 
       name: 'agent-bundle',
       version: manifest.version,
     });
+  } finally {
+    await rm(consumerRoot, { force: true, recursive: true });
+  }
+}, 30_000);
+
+/**
+ * The compiler (`@rslib/core`) and MCP Apps (`@rsbuild/core`) must run one
+ * Rspack: a consumer that installs the tarball gets exactly one
+ * `@rspack/core`, one native `@rspack/binding-<platform>` of the same
+ * version, one `@rsbuild/core`, and one `@rslib/core`. Two engines is what
+ * a mismatched `@rslib/core` / `@rsbuild/core` pair produces (#566), and it
+ * costs every consumer a second native binding download.
+ */
+it('installs one Rspack engine into a packed consumer', async () => {
+  const { tarball } = await sharedPackedTarball('agent-bundle');
+
+  const consumerRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-engine-'));
+  try {
+    await writeFile(join(consumerRoot, 'package.json'), '{"type":"module"}\n');
+    await execFile(
+      'npm', ['install', ...cachedNpmInstallArguments, tarball],
+      { cwd: consumerRoot, env: isolatedCommandEnvironment() },
+    );
+
+    const engine = await installedCopies(
+      join(consumerRoot, 'node_modules'),
+      (name) => name === '@rspack/core' || name.startsWith('@rspack/binding-') || name === '@rsbuild/core' || name === '@rslib/core',
+    );
+    const installed = (name: string): readonly InstalledCopy[] => engine.filter((copy) => copy.name === name);
+    const bindings = engine.filter((copy) => copy.name.startsWith('@rspack/binding-'));
+    const report = engine.map((copy) => `${copy.path}@${copy.version}`).join('\n');
+
+    expect(installed('@rspack/core'), report).toHaveLength(1);
+    expect(installed('@rsbuild/core'), report).toHaveLength(1);
+    expect(installed('@rslib/core'), report).toHaveLength(1);
+    expect(bindings, report).toHaveLength(1);
+    expect(bindings[0]!.version, report).toBe(installed('@rspack/core')[0]!.version);
   } finally {
     await rm(consumerRoot, { force: true, recursive: true });
   }

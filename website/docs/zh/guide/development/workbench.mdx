@@ -83,8 +83,8 @@ MCP 页面的操作也保持独立——轨迹记录的是一段刻意为之的�
 ## 以编程方式使用同一个会话
 
 公开的 `startDevServer` 导出接受 CLI 标志所映射的那些选项（`root`、`port`、`open`、`agentApi`、
-`installHosts`），并解析为一个 `DevServerSession`，它暴露 loopback 的 `url`、一个 `status()` 快照
-以及 `close()`：
+`installHosts`、`workbenchDevOrigins`），并解析为一个 `DevServerSession`，它暴露 loopback 的 `url`、
+一个 `status()` 快照以及 `close()`：
 
 ```ts twoslash
 import { startDevServer } from 'agent-bundle';
@@ -172,14 +172,60 @@ cwd、environment、harness、evidence 与 outcome 字段。以产物为后端�
 
 ## 贡献者 UI 的 HMR
 
-开发 Workbench 界面本身，与消费一个已发布的 Workbench 是两个不同的循环。只在前台服务器运行时启动它：
+开发 Workbench 界面本身，与消费一个已发布的 Workbench 是两个不同的循环：由一个 Rsbuild 开发服务器带着
+热模块替换提供界面，并把 `/api` 代理到另外启动的前台服务器。已发布的 `agent-bundle dev` 提供的是预构建
+资源与项目事件；它不会运行 Rsbuild 开发服务器。这个循环需要两个终端。
+
+终端 A 启动前台服务器，并指明它应当接受的那个 Rsbuild origin：
 
 ```sh
-AGENT_BUNDLE_WORKBENCH_API_PROXY=http://127.0.0.1:3100 pnpm --filter agent-bundle-workbench dev
+npx agent-bundle dev --root . --port 3100 --no-open \
+  --workbench-dev-origin http://localhost:3000
 ```
 
-`packages/workbench/scripts/dev.mjs` 要求提供该代理 URL。已发布的 `agent-bundle dev` 提供的是预构建
-资源与项目事件；它不会运行 Rsbuild 开发服务器。
+终端 B 针对该前台 URL 启动 Rsbuild 开发服务器：
+
+```sh
+AGENT_BUNDLE_WORKBENCH_API_PROXY=http://127.0.0.1:3100 \
+  pnpm --filter agent-bundle-workbench dev
+```
+
+打开 `http://localhost:3000`。`packages/workbench/scripts/dev.mjs` 要求提供该代理 URL，并把其余参数原样
+传给 `rsbuild dev`。Rsbuild 的默认值是主机 `localhost`、端口 `3000`；
+`pnpm --filter agent-bundle-workbench dev --port 3001` 会把界面挪到别的端口，此时请在终端 A 中改为放行
+`http://localhost:3001`。只要设置了 `AGENT_BUNDLE_WORKBENCH_API_PROXY`，
+`packages/workbench/rsbuild.config.ts` 还会设置 `server.strictPort: true`，因此端口 `3000` 被占用时会明确
+失败，而不是由 Rsbuild 悄悄把界面挪到一个未被放行的端口。
+
+**哪些内容会被代理。** 只有 `/api`——每一条类型化的 Workbench 客户端路由，加上 `/api/project/events`
+SSE 流——会被转发到前台服务器。HTML 文档、JavaScript 与 CSS，以及 HMR websocket 都来自 Rsbuild 服务器。
+MCP App 预览与运行时客户端表面的 iframe 绑定在前台 origin 上：App 沙箱只与前台 URL 交换 `postMessage`
+帧，运行时客户端表面则把自己的 `frame-ancestors` CSP 设为前台 URL。它们不在这个循环的覆盖范围内——要开发
+那些页面，请直接打开前台 URL 本身（上例中为 `http://127.0.0.1:3100`）。
+
+**origin 规则。** 代理绝不会改写 `Origin`（Rsbuild 的 `changeOrigin` 只改写 `Host`），因此只要浏览器
+发送了 `Origin`——每一次变更请求都会——前台服务器看到的就是 `Origin: http://localhost:3000`，而不是它
+自己的 origin。`--workbench-dev-origin <origin>`（可重复；以编程方式则为
+`startDevServer({ workbenchDevOrigins })`）让它除自身 origin 之外，还接受 `Origin` 为所列 origin 之一的
+会话引导（`GET /api/project/session`）、变更（带 `x-agent-bundle-session` token 的 `POST`/`DELETE`）与
+项目事件流（`GET /api/project/events`，会话 cookie）请求。其他任何 origin 仍是 `AB8003`，`/mcp` 上
+Agent API 的 origin 规则也保持不变。每个取值都必须是裸的 loopback `http:` 或 `https:` origin——
+`localhost`、`127.0.0.1` 或 `[::1]`，例如 `http://localhost:3000`，不带路径——否则前台服务器拒绝启动
+（`agent-bundle dev` 会在开始服务之前退出；`startDevServer` 以代码 `AB8000` 拒绝）。当列表非空时，
+`GET /api/project/session` 还会额外返回
+`devOrigins: [...]`（该响应体中的 `origin` 仍是前台 URL），而 Workbench 界面会在页面 origin 等于前台
+origin、或出现在 `devOrigins` 中时接受该会话。不带该标志时，这道守卫逐字节保持不变：这份放行列表绝不会
+默认开启。
+
+`Origin` 守卫保护 loopback 前台服务器不受来自任何其他 origin 的请求伪造，包括其他 loopback origin——
+MCP App 沙箱 iframe 在独立的 loopback 端口上运行第三方插件代码，而 Rsbuild 开发服务器的默认 CORS 策略
+放行所有 loopback origin——因此这份放行列表只点名你自己的那个 Rsbuild origin，并且前台看到的仍然是浏览器
+真实的 `Origin`。
+
+不带 `--workbench-dev-origin` 时，位于 `http://localhost:3000` 的界面会以 `AB8003` 拒绝自己的引导
+（会话响应体中写的是前台 origin，而不是页面的 origin），并停留在"Foreground connection unavailable"
+门控页上，显示"Workbench request failed with HTTP 200."；前台也同样会以 `AB8003` 拒绝携带该 `Origin`
+的变更请求。前台 URL 本身无论如何都照常工作。
 
 ## 下一步
 

@@ -53,8 +53,8 @@ export default defineConfig({
       // emits ~30% more bytes by inlining shared types into every entry, and
       // renames colliding public names (`AgentBundleConfig_2`). What keeps
       // the shipped declarations honest instead is the release gate
-      // (scripts/check-declaration-imports.mjs via `pnpm lint:release`): no
-      // declaration a consumer can reach may import a devDependency.
+      // (scripts/check-declaration-imports.mjs --strict via `pnpm lint:release`):
+      // no packed declaration, reachable or not, may import a devDependency.
       dts: true,
       format: 'esm',
       syntax: 'es2022',
@@ -93,6 +93,17 @@ export default defineConfig({
       // extractor never reaches it.
       config.ignoreWarnings = [...(config.ignoreWarnings ?? []), /Can't resolve 'source-map-support'/u];
       config.node = { ...(typeof config.node === 'object' ? config.node : {}), __dirname: false, __filename: false };
+      // `externalsType` stays Rslib 1.x's ESM default, `modern-module`, on
+      // purpose. The only externals this bundle loads through CommonJS
+      // `require()` are the Node builtins the bundled TypeScript parser
+      // reads (`fs`, `path`, `os`, `crypto`, `inspector`, `perf_hooks`), and
+      // Rslib 0.x already emitted those through a `createRequire()` shim
+      // chunk; `modern-module` reproduces that chunk byte for byte, while
+      // pinning `module-import` would turn them into hoisted
+      // `import * as` namespaces — a change, not a preservation. The shim
+      // chunk is reachable only from the parser chunk, never from the
+      // runtime entries the compiler re-bundles into consumer artifacts, so
+      // the artifact bundler never has to see through a `createRequire()`.
     },
   },
   source: {
@@ -127,6 +138,10 @@ export default defineConfig({
       // into its generated bundle.
       routes: './src/routes/public.ts',
       rstest: './src/rstest/index.ts',
+      // Plain Node (#558): a routed command serves an MCP App by spawning
+      // `agent-bundle serve-app` through this entry instead of importing the
+      // compiler, so it must bundle into a self-contained executable.
+      'serve-app-command': './src/serve-app-command.ts',
       'terminal-capability': './src/terminal-capability.ts',
       test: './src/test/index.ts',
       'test/browser': './src/test/browser.ts',

@@ -7,9 +7,8 @@ import { join, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { createRsbuild } from '@rsbuild/core';
-import { pluginReact } from '@rsbuild/plugin-react';
 
-import { workbenchBrowserAliases } from './support/workbench-browser-modules.ts';
+import { createWorkbenchFixtureConfig } from './support/workbench-fixture-config.ts';
 import { browserLaunchOptions } from './support/workbench-e2e.ts';
 import { chromium } from 'playwright';
 import { describe, expect, it } from '@rstest/core';
@@ -46,22 +45,7 @@ const mountedInputFixture = async (source: readonly string[]) => {
   const dist = join(root, 'dist');
   await writeFile(entry, source.join('\n'));
   const rsbuild = await createRsbuild({
-    config: {
-      output: {
-        cleanDistPath: false,
-        distPath: { css: 'assets', js: 'assets', root: dist },
-        filename: { css: '[name].css', js: '[name].js' },
-        filenameHash: false,
-      },
-      plugins: [pluginReact()],
-      resolve: {
-        alias: { ...workbenchBrowserAliases },
-      },
-      source: {
-        define: { 'process.env.NODE_ENV': JSON.stringify('production') },
-        entry: { input: entry },
-      },
-    },
+    config: createWorkbenchFixtureConfig({ distRoot: dist, entry: { input: entry } }),
     cwd: workspaceRoot,
   });
   const build = await rsbuild.build();

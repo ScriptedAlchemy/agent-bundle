@@ -8,9 +8,8 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from '@rstest/core';
 import { createRsbuild } from '@rsbuild/core';
-import { pluginReact } from '@rsbuild/plugin-react';
 
-import { workbenchBrowserAliases } from './support/workbench-browser-modules.ts';
+import { createWorkbenchFixtureConfig } from './support/workbench-fixture-config.ts';
 import { browserLaunchOptions } from './support/workbench-e2e.ts';
 import { chromium } from 'playwright';
 
@@ -129,27 +128,7 @@ const mountedSecureRendererFixture = async () => {
     '',
   ].join('\n'));
   const rsbuild = await createRsbuild({
-    config: {
-      output: {
-        cleanDistPath: false,
-        distPath: { css: 'assets', js: 'assets', root: dist },
-        filename: { css: '[name].css', js: '[name].js' },
-        filenameHash: false,
-      },
-      plugins: [pluginReact()],
-      resolve: {
-        alias: { ...workbenchBrowserAliases },
-      },
-      source: {
-        define: { 'process.env.NODE_ENV': JSON.stringify('production') },
-        entry: { renderer: entry },
-      },
-      tools: {
-        rspack: {
-          resolve: { extensionAlias: { '.js': ['.js', '.ts', '.tsx'], '.jsx': ['.jsx', '.tsx'] } },
-        },
-      },
-    },
+    config: createWorkbenchFixtureConfig({ distRoot: dist, entry: { renderer: entry } }),
     cwd: workspaceRoot,
   });
   const build = await rsbuild.build();

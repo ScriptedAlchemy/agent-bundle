@@ -177,10 +177,11 @@ export default defineConfig({
 `tools.rsbuild.plugins` 中再次添加框架自有插件（`@rsbuild/plugin-react`，`rsbuild:react`）的条目，
 因为 `plugins` 数组会拼接、而 Rsbuild 从不按名称去重插件——框架会替你注册它。
 
-逃生舱在两份打包器引擎副本下执行：产物脚本、MCP 入口、钩子与包构建通过 Rslib 内嵌的 Rsbuild/Rspack 编译，
-而 MCP App 视图通过工作区固定的 `@rsbuild/core` 编译。绝不要基于导入的 `@rspack/core` 构造插件或执行
-`instanceof` 检查——请使用传给 `tools.rspack` 变更函数的 `utils` 参数
-（`(config, { rspack }) => ...`），它总会交给你当前执行引擎自己的 `rspack` 对象。
+逃生舱在同一个打包器引擎上执行——即 agent-bundle 所固定的 `@rsbuild/core` 背后的那个 `@rspack/core`，
+由 Rslib 编译的输出（产物脚本、MCP 入口、钩子、包构建）与 MCP App 视图共用——但这个引擎是 agent-bundle
+的依赖，而不是你项目的依赖。绝不要基于导入的 `@rspack/core` 构造插件或执行 `instanceof` 检查——请使用
+传给 `tools.rspack` 变更函数的 `utils` 参数（`(config, { rspack }) => ...`），它总会交给你当前执行引擎
+自己的 `rspack` 对象。
 
 ### 插件
 

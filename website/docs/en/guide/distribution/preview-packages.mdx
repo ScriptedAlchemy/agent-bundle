@@ -43,6 +43,12 @@ Previews published before the peer rewrite landed (PR #46) still carry the origi
 `agent-bundle@^0.1.0` peer range, so pair-installing those older SHAs with npm still requires
 `--legacy-peer-deps`. Anything newer installs with stock npm.
 
+Stock pnpm 11 is the exception. The preview of `@agent-bundle/runtime` points its `rsc-markdown-stream`
+dependency at the renderer's same-sha preview tarball, and pnpm 11's `blockExoticSubdeps` (default
+`true`) rejects a transitive dependency resolved from a tarball URL with `ERR_PNPM_EXOTIC_SUBDEP`.
+Set `blockExoticSubdeps: false` in the consuming project's `pnpm-workspace.yaml`, or install previews
+with npm.
+
 The scaffolder ships on the same channel and is meant to be run rather than installed:
 
 ```sh
@@ -71,9 +77,10 @@ inventories: every `.d.ts` a consumer can
 reach from `exports` may only import packed files, the package's own exported subpaths, `#` imports
 its `imports` map resolves, Node built-ins, and packages declared in `dependencies`,
 `peerDependencies`, or `optionalDependencies` —
-absolute paths and URLs never resolve in a consumer install, and a devDependency such as `zod` in a
-reachable declaration fails the gate, while one in an internal declaration no entry point reaches is
-reported as a warning (`--strict` fails those too; `lint:release` does not pass it). Reachability
+absolute paths and URLs never resolve in a consumer install, and a devDependency such as `zod` in
+any packed declaration fails the gate — `lint:release` runs the check with `--strict`, so an
+internal declaration no entry point reaches fails like a reachable one (without the flag it is only
+reported as a warning). Reachability
 starts from every `types` target under `exports` plus the legacy `types` field, `/// <reference
 types>` is checked like a bare import, and a relative import, `/// <reference path>`, or `exports`
 target that names a file missing from the tarball fails too. publint is not a separate gate: every
