@@ -46,7 +46,6 @@ const runSourceCliWithOutput = async (
   dependencies: CliDependencies = {},
 ): Promise<{ readonly code: number; readonly stderr: string; readonly stdout: string }> => {
   const terminal = captureCliTerminal();
-  Object.defineProperty(globalThis, '__AGENT_BUNDLE_VERSION__', { configurable: true, value: 'test' });
   const code = await runSourceCli(args, terminal.output, dependencies);
   return { code, stderr: terminal.stderr(), stdout: terminal.stdout() };
 };
@@ -800,8 +799,6 @@ it('reports a generated Flight worker collision before compiling scripts', async
 it('dispatches the install command through the native installer surface', async () => {
   const terminal = captureCliTerminal();
   const calls: unknown[] = [];
-  Object.defineProperty(globalThis, '__AGENT_BUNDLE_VERSION__', { configurable: true, value: 'test' });
-
   const code = await runSourceCli(
     ['install', 'claude', '--from', '/tmp/example bundle', '--scope', 'project', '--json'],
     terminal.output,
@@ -901,7 +898,6 @@ it('reports the bound server exiting on its own as one diagnostic and releases t
   let closeCalls = 0;
   const serverExit = Promise.withResolvers<void>();
   const terminal = captureCliTerminal();
-  Object.defineProperty(globalThis, '__AGENT_BUNDLE_VERSION__', { configurable: true, value: 'test' });
   const code = await runSourceCli(['serve-app', 'status/status', '--root', '/project', '--no-open'], terminal.output, {
     serveApp: async () => ({
       close: async () => { closeCalls += 1; },

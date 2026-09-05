@@ -131,7 +131,6 @@ it('prepack validates the complete dry-run inventory', async () => {
 it('exposes --root, --output, and --json through the prepack command', async () => {
   const calls: unknown[] = [];
   const terminal = captureCliTerminal();
-  Object.defineProperty(globalThis, '__AGENT_BUNDLE_VERSION__', { configurable: true, value: 'test' });
   const code = await runCli(
     ['prepack', '--root', projectRoot, '--output', 'host-packs', '--json'],
     terminal.output,

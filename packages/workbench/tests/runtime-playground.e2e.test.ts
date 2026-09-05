@@ -165,6 +165,32 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
     await expect(page.getByRole('tabpanel'))
       .toContainText('Stored Flight could not be decoded as an Agent Document.', { timeout: browserTimeout });
 
+    // The hook run's stored Flight is downloadable from the Flight tab. The
+    // client rejects any response that is not `application/octet-stream`
+    // and surfaces the rejection as an alert; the real route then clears the
+    // alert and hands the viewer a `runtime-run-<id>.flight.bin` download.
+    await history.nth(1).getByRole('button').first().click();
+    await page.getByRole('tab', { name: 'Flight', exact: true }).click();
+    const download = page.getByRole('button', { name: 'Download Flight payload' });
+    await expect(download).toBeVisible({ timeout: browserTimeout });
+    const flightAlert = page.locator('.runtime-request-error[role="alert"]');
+    const flightRoute = '**/api/runtime/runs/*/flight';
+    await page.route(flightRoute, (route) => route.fulfill({ body: 'nope', contentType: 'text/plain', status: 200 }));
+    await download.click();
+    await expect(flightAlert).toHaveText('Runtime Flight response is not valid.', { timeout: browserTimeout });
+    await page.unroute(flightRoute);
+    const downloadEvent = page.waitForEvent('download');
+    await download.click();
+    const downloaded = await downloadEvent;
+    expect(downloaded.suggestedFilename()).toMatch(/^runtime-run-.+\.flight\.bin$/u);
+    await expect(flightAlert).toHaveCount(0, { timeout: browserTimeout });
+
+    // Real trace spans carry no `details`, so the Diagnostics tab renders the
+    // render phases without a span-details disclosure.
+    await page.getByRole('tab', { name: 'Diagnostics', exact: true }).click();
+    await expect(page.getByLabel('Runtime render trace')).toContainText('normalize', { timeout: browserTimeout });
+    await expect(page.getByRole('button', { name: /span details/u })).toHaveCount(0);
+
     const reset = page.getByRole('button', { name: 'Reset fixture state' });
     const stateVersionBeforeReset = await identity.getAttribute('data-runtime-state-version');
     await reset.click();
@@ -185,14 +211,41 @@ e2e('renders the capability-gated Runtime sibling in the real RSC workbench', { 
     await expect(confirmation).toBeHidden();
     await expect(reset).toBeFocused({ timeout: browserTimeout });
     expect(resetRequests).toEqual([]);
+    const expectedResetRequest = {
+      expectedGenerationId: runtimeIdentity.activeVector.runtimeGenerationId,
+      stateStoreId: runtimeIdentity.activeVector.stateStoreId,
+    };
+
+    // A rejected reset surfaces as a focused alert, hands the controls back,
+    // and leaves the state untouched; the next attempt goes through. The
+    // rejection is the client's own: an invalid state wrapper is refused
+    // before any provider identity is trusted.
+    const resetRoute = '**/api/runtime/state/reset';
+    await page.route(resetRoute, (route) => route.fulfill({ body: '{}', contentType: 'application/json', status: 200 }));
     await reset.click();
     await expect(confirmation).toContainText('State store');
     await confirmation.getByRole('button', { name: 'Confirm' }).click();
-    await expect.poll(() => resetRequests).toHaveLength(1);
-    expect(resetRequests).toEqual([{
-      expectedGenerationId: runtimeIdentity.activeVector.runtimeGenerationId,
-      stateStoreId: runtimeIdentity.activeVector.stateStoreId,
-    }]);
+    const resetFailure = page.locator('.runtime-request-error[role="alert"]');
+    await expect(resetFailure).toHaveText('Runtime route returned an invalid state wrapper.', { timeout: browserTimeout });
+    await expect(resetFailure).toBeFocused({ timeout: browserTimeout });
+    await expect(page.locator('.runtime-status')).not.toBeFocused();
+    await expect(confirmation).toBeHidden();
+    await expect(run).toBeEnabled();
+    await expect(reset).toBeEnabled();
+    await expect(page.getByLabel('Runtime surface')).toBeEnabled();
+    await page.getByRole('tab', { name: 'Tree', exact: true }).click();
+    await expect(resetFailure).toBeVisible();
+    await expect(page.locator('.runtime-status')).not.toBeFocused();
+    await expect(identity).toHaveAttribute('data-runtime-state-version', String(stateVersionBeforeReset));
+    await page.unroute(resetRoute);
+    await expect.poll(() => resetRequests).toEqual([expectedResetRequest]);
+
+    await reset.click();
+    await expect(confirmation).toContainText('State store');
+    await confirmation.getByRole('button', { name: 'Confirm' }).click();
+    await expect.poll(() => resetRequests).toHaveLength(2);
+    expect(resetRequests).toEqual([expectedResetRequest, expectedResetRequest]);
+    await expect(resetFailure).toHaveCount(0, { timeout: browserTimeout });
     await expect.poll(async () => identity.getAttribute('data-runtime-state-version'), { timeout: browserTimeout }).not.toBe(stateVersionBeforeReset);
     await expect(page.locator('.runtime-status')).toBeFocused({ timeout: browserTimeout });
 
