@@ -21,6 +21,7 @@ import {
   matchesManifestFile,
 } from './artifact-layout.ts';
 import {
+  accountedRequestsOf,
   compileEvidenceDiagnostics,
   compileEvidenceFileName,
   parseCompileEvidenceRecord,
@@ -587,17 +588,17 @@ const validateArtifactStructure = (options: {
 /**
  * Reads the compile evidence record the manifest lists and re-checks it
  * against the file table (`AB6039`). A clean record from a build without a
- * `tools` hatch proves every manifest `bundle` file: the compiler resolved
- * their literal imports, so the module walk only lexes them. A missing,
+ * `tools` hatch proves every manifest `bundle` file: the module walk lexes
+ * them and holds their imports to the recorded externals. A missing,
  * failing, or rewritable record proves nothing and every module is walked
  * in full.
  */
 const validateCompileEvidence = async (options: {
   readonly artifactRoot: string;
   readonly manifestFiles: readonly ManifestFile[];
-}): Promise<{ readonly diagnostics: readonly Diagnostic[]; readonly provenPaths: ReadonlySet<string> }> => {
+}): Promise<{ readonly diagnostics: readonly Diagnostic[]; readonly provenModules: ReadonlyMap<string, ReadonlySet<string>> }> => {
   const unproven = (diagnostics: readonly Diagnostic[]) =>
-    Object.freeze({ diagnostics: Object.freeze(diagnostics), provenPaths: new Set<string>() });
+    Object.freeze({ diagnostics: Object.freeze(diagnostics), provenModules: new Map<string, ReadonlySet<string>>() });
   if (!options.manifestFiles.some((file) => file.path === compileEvidenceFileName)) return unproven([]);
   const bytes = await runWithPlatform(readFileString(resolve(options.artifactRoot, compileEvidenceFileName)))
     .catch(() => undefined);
@@ -616,10 +617,7 @@ const validateCompileEvidence = async (options: {
     new Map(options.manifestFiles.map((file) => [file.path, { kind: file.kind, sha256: file.sha256 }])),
   );
   if (diagnostics.length > 0 || record.coverage.rewritable) return unproven(diagnostics);
-  return Object.freeze({
-    diagnostics,
-    provenPaths: new Set(options.manifestFiles.filter((file) => file.kind === 'bundle').map((file) => file.path)),
-  });
+  return Object.freeze({ diagnostics, provenModules: accountedRequestsOf(record) });
 };
 
 const validateGeneratedFiles = async (options: {
@@ -652,7 +650,7 @@ const validateGeneratedFiles = async (options: {
   }
 
   const evidence = options.manifestFiles === undefined
-    ? { diagnostics: [], provenPaths: new Set<string>() }
+    ? { diagnostics: [], provenModules: new Map<string, ReadonlySet<string>>() }
     : await validateCompileEvidence({ artifactRoot: options.artifactRoot, manifestFiles: options.manifestFiles });
   diagnostics.push(...evidence.diagnostics);
   diagnostics.push(...await validateJavaScriptModules({
@@ -660,7 +658,7 @@ const validateGeneratedFiles = async (options: {
     files: options.files,
     ...(options.manifestFiles === undefined ? {} : { manifestFiles: new Set(options.manifestFiles.map((file) => file.path)) }),
     prebuiltPaths,
-    provenPaths: evidence.provenPaths,
+    provenModules: evidence.provenModules,
     validJson,
   }));
 

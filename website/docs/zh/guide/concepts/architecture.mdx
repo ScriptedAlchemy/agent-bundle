@@ -257,7 +257,7 @@ node 表面。
 | 规范清单解析 + 文件摘要匹配 | `build/validate-artifact.ts` | `AB60xx` 系列；解析错误由 `parseArtifactManifest` 抛出 |
 | 宿主包、包构建 `dist` 与 MCP App 视图的编译只保留获准的 external | `build/compiler.ts`、`build/external-policy.ts` | `AB6005` |
 | 编译证据记录对照清单 `bundle` 文件 | `build/compile-evidence.ts` 的 `compileEvidenceDiagnostics` | `AB6039` |
-| 编译器看不见的已输出模块：任何位置的表达式 `import()`，以及框架未编译或 `tools` 逃生舱可能改写的 JavaScript 的导入与语法 | `build/validate-artifact-modules.ts` | `AB6005`（残余形态） |
+| 编译器看不见的已输出模块：任何位置的表达式 `import()`、编译产物中构建被要求忽略的字面量导入（`rspackIgnore`/`webpackIgnore`），以及框架未编译或 `tools` 逃生舱可能改写的 JavaScript 的导入与语法 | `build/validate-artifact-modules.ts` | `AB6005`（残余形态） |
 | Skill / 钩子 / MCP 文档与所选宿主匹配 | `build/validate-artifact-skills.ts`、`build/validate-artifact-hooks.ts`、`build/validate-artifact-mcp.ts` | 按表面划分的 `AB60xx` |
 | 产物对输出根目录的所有权 | `build/validate-artifact.ts` | `AB6014` |
 | 打包的 tarball 包含清单中的每个文件，且没有未使用的安装依赖 | `build/pack-inventory.ts` | `AB7010`、`AB7014`、`AB7015` |
@@ -386,7 +386,7 @@ CLI bin 的文件，只以 `files[]` 中一行的形式出现。
 | `build/validate-artifact.ts` | 全部 | 重新解析磁盘上的字节，匹配 `files[]` 的摘要与 mode，对照注册表检查 `targets[]`，固定 `agentSkills` 与 `runtime.node` |
 | `build/compiler.ts`、`build/external-policy.ts` | 宿主包、包构建 `dist` 与 MCP App 视图的 `CompileResult.externals` | `AB6005` 编译证据自包含检查 |
 | `build/compile-evidence.ts` | `files[]`（`bundle` 行） | `AB6039`：把持久化的编译证据记录对照文件表复核，且不解析 JavaScript |
-| `build/validate-artifact-modules.ts` | `files[]`（`.js`/`.mjs` 行）加包构建 `dist`；编译证据记录证明的 `bundle` 行只做词法检查 | `AB6005` 残余遍历：表达式 `import()`、未编译或被逃生舱改写的模块 |
+| `build/validate-artifact-modules.ts` | `files[]`（`.js`/`.mjs` 行）加包构建 `dist`；编译证据记录证明的 `bundle` 行只做词法分析，其字面量导入对照记录在案的外部依赖核对 | `AB6005` 残余遍历：表达式 `import()`、被忽略（`rspackIgnore`）的字面量导入、未编译或被逃生舱改写的模块 |
 | `build/validate-artifact-skills.ts` | `targets[]`（`manifestTargets`）加目录树 | Skill 文档对照所选宿主 |
 | `build/validate-artifact-hooks.ts` | `targets[]`、钩子文件 | 钩子文档对照所选宿主 |
 | `build/validate-artifact-mcp.ts` | `targets[]`、MCP 文件 | MCP 文档对照所选宿主 |

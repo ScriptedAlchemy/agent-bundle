@@ -42,9 +42,13 @@ The emitted-module walk remains behind that compiler evidence for exactly what t
 see. It reads every emitted `.js`/`.mjs` module as an ES module and, in any of them, compiled ones
 included, fails an expression `import()` (`AB6005 has a non-literal dynamic import`). A module the
 compile evidence record proves — a manifest `bundle` file the record covers with the same bytes,
-from a build without a [`tools` hatch](../../reference/configuration.mdx#tools) — is lexed for
-syntax only: the compiler already resolved its literal imports as bundled, built-in, or an emitted
-sibling, so the walk does not resolve them again. Every other module is parsed in full and its
+from a build without a [`tools` hatch](../../reference/configuration.mdx#tools) — is lexed, not
+parsed, and each literal import it still carries is held to the record: a Node built-in or one of
+the file's recorded externals passes; any other request is one the build was told to ignore
+(`rspackIgnore`/`webpackIgnore` — Rspack leaves it verbatim with no module, external, or warning)
+and fails `AB6005 loads "<request>", which the compiler neither bundled nor recorded as an
+external`. A matching digest proves the bytes are the compiler's, not that every import in them was
+resolved. Every other module is parsed in full and its
 imports resolved against the manifest — a generated `install.mjs`, a copied consumer script, every
 module of an artifact without a record, and every module of a build whose hatch could have rewritten
 the emitted assets (the record's `coverage.rewritable`). Those findings are the residual `AB6005`

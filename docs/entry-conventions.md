@@ -1337,9 +1337,15 @@ compiler cannot see: it fails an expression `import()` in any emitted module
 imports of JavaScript the framework did not compile (`install.mjs`, copied
 scripts), and does the same for every module of a build whose `tools` hatch
 may have rewritten the emitted bytes (`coverage.rewritable`). A compiled
-module the record covers is lexed for syntax only; the compiler already
-resolved its literal imports. Content the compiler did not compile is opaque
-and must declare what it needs. Run-time
+module the record covers is lexed, not parsed, and each literal import it
+still carries is held to the record: a Node built-in or one of the file's
+recorded externals passes; any other request is one the build was told to
+ignore (`rspackIgnore`/`webpackIgnore` — Rspack leaves it verbatim with no
+module, external, or warning) and fails `AB6005 loads "<request>", which the
+compiler neither bundled nor recorded as an external`. A matching digest
+proves the bytes are the compiler's, not that every import in them was
+resolved. Content the compiler did not compile is opaque and must declare
+what it needs. Run-time
 path references are kept the same way: a `new URL(…, import.meta.url)` or
 `new Worker(new URL(…))` in consumer or generated code names a file beside the
 artifact, so the invariant layer turns the bundler's URL and worker asset

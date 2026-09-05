@@ -114,9 +114,14 @@
   `import.meta.resolve(…)` verbatim — no module, no external, no warning),
   JavaScript the framework did not compile (`install.mjs`, copied scripts),
   and every module of a build with a `tools` hatch (`coverage.rewritable`).
-  A compiled module the record proves is lexed for syntax and not
-  import-resolved; the walk is not a second self-containment check and must
-  not grow one.
+  A compiled module the record proves is lexed, not parsed, and each literal
+  import it still carries is held to the record: a Node built-in or a
+  recorded external passes, anything else is an import the build was told
+  to ignore (`rspackIgnore`/`webpackIgnore` — Rspack leaves it verbatim with
+  no module, external, or warning) and fails `AB6005`. A matching digest
+  proves the bytes are the compiler's, never that every import in them was
+  resolved. The walk is not a second self-containment check and must not
+  grow one: it resolves nothing the record already judged.
 
 ## Documentation site
 

@@ -36,8 +36,11 @@ npx agent-bundle validate --artifact artifact --strict    # 已构建字节，�
 模块按 ES 模块读取，并在其中任何一个——包括编译产物——里出现表达式 `import()` 时失败
 （`AB6005 has a non-literal dynamic import`）。被编译证据记录证明的模块——记录以相同字节覆盖的清单
 `bundle` 文件，且构建未使用 [`tools` 逃生舱](../../reference/configuration.mdx#tools)——只做词法
-语法检查：编译器已把它的字面量导入解析为已打包、内建或已输出的同级文件，遍历不会再次解析它们。
-其他所有模块都会被完整解析，导入也会对照清单解析——生成的 `install.mjs`、被复制的消费者脚本、
+分析而不完整解析，但它仍带有的每个字面量导入都要对照记录核对：Node 内建模块或该文件记录在案的
+外部依赖通过；其他任何请求都是构建被要求忽略的导入（`rspackIgnore`/`webpackIgnore`——Rspack
+原样保留它，没有模块、外部依赖或警告），并以 `AB6005 loads "<request>", which the compiler neither
+bundled nor recorded as an external` 失败。摘要匹配只证明字节是编译器输出的，不证明其中每个导入都
+已被解析。其他所有模块都会被完整解析，导入也会对照清单解析——生成的 `install.mjs`、被复制的消费者脚本、
 没有记录的产物中的每个模块，以及逃生舱可能改写了输出资源的构建（记录中的 `coverage.rewritable`）
 里的每个模块。这些发现就是 `AB6005` 的残余形态：不受支持或无效的说明符、缺失于或逃逸出输出树的目标、
 无效语法；`dist` 的发现以 `dist/<path>` 命名文件。预构建负载（`kind: 'prebuilt'`）保持不透明、仅做哈希

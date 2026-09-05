@@ -497,6 +497,91 @@ describe('framework-owned package build', () => {
     expect(binSource).toContain('./shipped.cjs');
   }, 120_000);
 
+  it('fails the package build with AB6005 on a literal import the compiler was told to ignore in a dist bundle', async () => {
+    // `rspackIgnore`/`webpackIgnore` leave the call verbatim with no module, external, or warning;
+    // the walk over the record-proven bundle holds each lexed import to the recorded externals.
+    const root = await fixtureRoot({
+      ...conventionFixture(),
+      'agent-bundle.config.ts': [
+        'export default {',
+        "  lib: { entry: './src/index.ts', dts: false },",
+        "  mcp: { servers: { echoer: {} } },",
+        "  plugin: { name: 'package-build-fixture', version: '1.0.0' },",
+        "  targets: ['portable'],",
+        '};',
+        '',
+      ].join('\n'),
+      'src/cli.ts': [
+        "export const pad = () => import('left-pad' /* rspackIgnore: true */);",
+        "export const missing = () => import(/* webpackIgnore: true */ './missing.js');",
+        "export const outside = () => import(/* rspackIgnore: true */ '../../outside.js');",
+        '',
+        'export const main = async (): Promise<number> => {',
+        '  process.stdout.write(`${typeof pad}${typeof missing}${typeof outside}\\n`);',
+        '  return 0;',
+        '};',
+        '',
+      ].join('\n'),
+      'src/index.ts': [
+        "export const sibling = () => import(/* rspackIgnore: true */ './bin/package-build-fixture.js');",
+        '',
+      ].join('\n'),
+    });
+
+    const failure = await packageBuildFailure(root);
+    expect(failure).toBeInstanceOf(DiagnosticError);
+    const ignored = (asset: string, request: string): Diagnostic => ({
+      code: 'AB6005',
+      generatedPath: asset,
+      message: `Generated JavaScript import from ${JSON.stringify(asset)} loads ${JSON.stringify(request)}, which the compiler `
+        + 'neither bundled nor recorded as an external; an import the build ignored is a run-time load outside the artifact.',
+      recovery: 'Bundle every JavaScript dependency into the artifact, then rebuild it.',
+      severity: 'error',
+    });
+    expect([...withCode((failure as DiagnosticError).diagnostics, 'AB6005')].sort(byMessage)).toEqual([
+      ignored('dist/bin/package-build-fixture.js', '../../outside.js'),
+      ignored('dist/bin/package-build-fixture.js', './missing.js'),
+      ignored('dist/bin/package-build-fixture.js', 'left-pad'),
+      ignored('dist/index.js', './bin/package-build-fixture.js'),
+    ].sort(byMessage));
+    await unpublishedPackageOutput(root);
+  }, 120_000);
+
+  it('fails the package build with AB6005 on an expression import the compiler left verbatim in a dist bundle', async () => {
+    const root = await fixtureRoot({
+      ...conventionFixture(),
+      'agent-bundle.config.ts': [
+        'export default {',
+        '  lib: false,',
+        "  mcp: { servers: { echoer: {} } },",
+        "  plugin: { name: 'package-build-fixture', version: '1.0.0' },",
+        "  targets: ['portable'],",
+        '};',
+        '',
+      ].join('\n'),
+      'src/cli.ts': [
+        'export const load = (name: string) => import(name);',
+        '',
+        'export const main = async (argv: readonly string[]): Promise<number> => {',
+        "  process.stdout.write(`${Object.keys(await load(argv[0] ?? 'node:os')).length}\\n`);",
+        '  return 0;',
+        '};',
+        '',
+      ].join('\n'),
+    });
+
+    const failure = await packageBuildFailure(root);
+    expect(failure).toBeInstanceOf(DiagnosticError);
+    expect(withCode((failure as DiagnosticError).diagnostics, 'AB6005')).toEqual([{
+      code: 'AB6005',
+      generatedPath: 'dist/bin/package-build-fixture.js',
+      message: 'Generated JavaScript import from "dist/bin/package-build-fixture.js" has a non-literal dynamic import.',
+      recovery: 'Bundle every JavaScript dependency into the artifact, then rebuild it.',
+      severity: 'error',
+    }]);
+    await unpublishedPackageOutput(root);
+  }, 120_000);
+
   it('accepts a sibling authored module that the package build bundles into the executable', async () => {
     const root = await fixtureRoot({
       ...conventionFixture(),

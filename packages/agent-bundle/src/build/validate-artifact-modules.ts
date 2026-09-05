@@ -102,13 +102,19 @@ const resolveJavaScriptImport = async (options: {
 
 /**
  * Walks every JavaScript module of the artifact for what the compiler could
- * not see. A module in `provenPaths` is one the compiler emitted and whose
- * evidence covers these exact bytes: the compiler resolved every literal
- * import (bundled, built-in, or an emitted sibling), so the module is lexed
- * for syntax and only an expression load — the one form Rslib's profile
- * leaves verbatim — is reported. Every other module (a generated installer,
- * a copied script, a bundle a `tools` hatch may have rewritten) is parsed in
- * full and its imports are resolved against the file table.
+ * not see. A module in `provenModules` is one the compiler emitted and whose
+ * evidence record covers these exact bytes, mapped to the literal requests
+ * the compiler accounted for (its recorded externals; `AB6039` has already
+ * judged each). Such a module is lexed, not parsed, and each import it still
+ * carries is held to the record: a Node built-in or an accounted request
+ * passes, an expression load is reported (the form Rslib's profile leaves
+ * verbatim), and any other literal request is reported too — the compiler
+ * neither bundled nor recorded it, which is what an import marked
+ * `webpackIgnore`/`rspackIgnore` looks like. A matching digest proves the
+ * bytes are the compiler's, never that every import in them was resolved.
+ * Every other module (a generated installer, a copied script, a bundle a
+ * `tools` hatch may have rewritten) is parsed in full and its imports are
+ * resolved against the file table.
  */
 export const validateJavaScriptModules = async (options: {
   readonly artifactRoot: string;
@@ -116,8 +122,8 @@ export const validateJavaScriptModules = async (options: {
   readonly manifestFiles?: ReadonlySet<string>;
   /** Prebuilt payload files: opaque consumer outputs excluded from graph validation. */
   readonly prebuiltPaths?: ReadonlySet<string>;
-  /** Compiled modules whose evidence record covers their bytes; lexed, not import-resolved. */
-  readonly provenPaths: ReadonlySet<string>;
+  /** Compiled modules whose evidence record covers their bytes, each with the literal requests the compiler accounted for. */
+  readonly provenModules: ReadonlyMap<string, ReadonlySet<string>>;
   /**
    * POSIX directory under which diagnostics name the validated modules, for
    * a tree validated before it is published under another path: the package
@@ -144,8 +150,8 @@ export const validateJavaScriptModules = async (options: {
       return;
     }
     visiting.add(path);
-    const proven = options.provenPaths.has(path);
-    const check: ModuleSyntaxCheck = proven ? 'lexed' : 'parsed';
+    const accounted = options.provenModules.get(path);
+    const check: ModuleSyntaxCheck = accounted === undefined ? 'parsed' : 'lexed';
     let bytes: Buffer;
     try {
       bytes = await runWithPlatform(readFileBytes(resolve(artifactRoot, path)));
@@ -173,7 +179,16 @@ export const validateJavaScriptModules = async (options: {
         diagnostics.push(graphDiagnostic(reported(path), 'has a non-literal dynamic import.'));
         continue;
       }
-      if (proven) continue;
+      if (accounted !== undefined) {
+        if (!isAllowedExternalRequest(imported.specifier) && !accounted.has(imported.specifier)) {
+          diagnostics.push(graphDiagnostic(
+            reported(path),
+            `loads ${JSON.stringify(imported.specifier)}, which the compiler neither bundled nor recorded as an external; `
+            + 'an import the build ignored is a run-time load outside the artifact.',
+          ));
+        }
+        continue;
+      }
       const resolved = await resolveJavaScriptImport({
         artifactRoot,
         files,

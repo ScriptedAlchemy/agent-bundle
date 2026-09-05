@@ -9,6 +9,7 @@ import { DiagnosticError } from '../core/diagnostics.ts';
 import { assertInside, toPosixRelative } from '../core/paths.ts';
 import { cliBinSourceInputs } from './cli-bins.ts';
 import {
+  accountedRequestsOf,
   createCompileEvidenceRecord,
   type CompileEvidenceRecord,
 } from './compile-evidence.ts';
@@ -379,23 +380,6 @@ export const buildPackageOutputs = async (options: {
     }
 
     const rewritable = options.tools?.rspack !== undefined || options.tools?.rsbuild !== undefined;
-    // The npm form of the plugin is held to the same line as its host packs.
-    // The compiler resolved every literal import of the bundles it emitted
-    // (`AB6005` failed the build on anything but a Node built-in), so the
-    // walk lexes them for the one form the compiler leaves verbatim — an
-    // expression `import()` — unless a `tools` hatch may have rewritten the
-    // emitted bytes, in which case every module is parsed in full and its
-    // imports resolved. Declarations are not modules and are not walked;
-    // they may still reference declared dependencies.
-    const selfContainment = await validateJavaScriptModules({
-      artifactRoot: stageRoot,
-      files: staged,
-      provenPaths: new Set(rewritable ? [] : files.filter((file) => file.kind === 'bundle').map((file) => file.path)),
-      reportedRoot: publishedPrefix,
-      validJson: new Set(),
-    });
-    if (selfContainment.length > 0) throw new DiagnosticError(selfContainment);
-
     const evidence = await createCompileEvidenceRecord({
       pathPrefix: publishedPrefix,
       results: [compileResult],
@@ -403,6 +387,22 @@ export const buildPackageOutputs = async (options: {
       root: stageRoot,
       rspackVersion: rspack.rspackVersion,
     });
+    // The npm form of the plugin is held to the same line as its host packs.
+    // The bundles the compiler emitted are lexed and their imports held to
+    // the record — a Node built-in or a recorded external passes, an
+    // expression `import()` or an import the build ignored is reported —
+    // unless a `tools` hatch may have rewritten the emitted bytes, in which
+    // case every module is parsed in full and its imports resolved.
+    // Declarations are not modules and are not walked; they may still
+    // reference declared dependencies.
+    const selfContainment = await validateJavaScriptModules({
+      artifactRoot: stageRoot,
+      files: staged,
+      provenModules: rewritable ? new Map() : accountedRequestsOf(evidence, publishedPrefix),
+      reportedRoot: publishedPrefix,
+      validJson: new Set(),
+    });
+    if (selfContainment.length > 0) throw new DiagnosticError(selfContainment);
     await publishArtifact({ outputRoot, stageRoot });
     return Object.freeze({ evidence, files: Object.freeze(files), outputRoot });
   } finally {

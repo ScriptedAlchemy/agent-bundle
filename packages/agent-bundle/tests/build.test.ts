@@ -1477,6 +1477,108 @@ it('fails the build on an expression import the compiler left verbatim in a comp
   }
 }, 20_000);
 
+const ignoredImportSource = [
+  // Rspack honours `rspackIgnore`/`webpackIgnore`: the call survives verbatim with no module, no
+  // external, and no warning, so the compile evidence record cannot mention it.
+  "export const pad = () => import('left-pad' /* rspackIgnore: true */);",
+  "export const missing = () => import(/* webpackIgnore: true */ './missing.mjs');",
+  "export const outside = () => import(/* rspackIgnore: true */ '../../outside.mjs');",
+  "export const sibling = () => import(/* rspackIgnore: true */ './sibling.mjs');",
+  "console.log(typeof pad, typeof missing, typeof outside, typeof sibling);",
+  '',
+].join('\n');
+
+const ignoredImportDiagnostics = (importer: string): unknown[] => [
+  'left-pad',
+  './missing.mjs',
+  '../../outside.mjs',
+  './sibling.mjs',
+].map((request) => expect.objectContaining({
+  code: 'AB6005',
+  generatedPath: importer,
+  message: `Generated JavaScript import from ${JSON.stringify(importer)} loads ${JSON.stringify(request)}, which the compiler `
+    + 'neither bundled nor recorded as an external; an import the build ignored is a run-time load outside the artifact.',
+}));
+
+it('fails the build on a literal import the compiler was told to ignore, package or relative', async () => {
+  // The record proves the emitted bytes are the compiler's, not that every
+  // import in them was resolved: an ignored `import()` is neither bundled nor
+  // an external, so a proven bundle's lexed imports are held to the record.
+  const project = await createProject();
+  try {
+    await writeFile(project.scriptPath, ignoredImportSource);
+    const model = modelFor(project);
+    await expect(build({
+      model: {
+        ...model,
+        skills: model.skills.map((skill) => ({
+          ...skill,
+          resources: skill.resources.map((resource) =>
+            resource.source === project.scriptPath
+              ? { ...resource, bytes: Buffer.byteLength(ignoredImportSource) }
+              : resource,
+          ),
+        })),
+      },
+      outputRoot: project.outputRoot,
+      projectRoot: project.root,
+      registry: new TargetRegistry().register((await import('../src/adapters/portable.ts')).portableAdapter, { default: true }),
+    })).rejects.toMatchObject({
+      diagnostics: expect.arrayContaining(ignoredImportDiagnostics('scripts/greeting.mjs')),
+    });
+  } finally {
+    await cleanupProject(project);
+  }
+}, 20_000);
+
+it('validates a relocated artifact from its record alone and still reports an ignored import in a proven bundle', async () => {
+  // A copied artifact carries no compilation: the record travels with it and
+  // is what `validate --artifact` reads. Re-signed bytes are proven (lexed, not
+  // parsed), and the residual literal-import check still applies to them.
+  const project = await createProject();
+  const relocated = await mkdtemp(join(tmpdir(), 'agent-bundle-relocated-'));
+  try {
+    await build({
+      model: modelFor(project),
+      outputRoot: project.outputRoot,
+      projectRoot: project.root,
+      registry: new TargetRegistry().register((await import('../src/adapters/portable.ts')).portableAdapter, { default: true }),
+    });
+    const artifactRoot = join(relocated, 'artifact');
+    await rename(project.outputRoot, artifactRoot);
+    await rm(project.root, { force: true, recursive: true });
+    expect(await validateArtifact({ artifactRoot })).toEqual([]);
+
+    const manifestPath = join(artifactRoot, 'agent-bundle.manifest.json');
+    const recordPath = join(artifactRoot, compileEvidenceFileName);
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as {
+      readonly files: Array<{ bytes: number; path: string; sha256: string }>;
+    };
+    const record = JSON.parse(await readFile(recordPath, 'utf8')) as {
+      readonly assets: Array<{ path: string; sha256: string }>;
+    };
+    const entry = (path: string) => manifest.files.find((file) => file.path === path)
+      ?? (() => { throw new Error(`Expected manifest entry for ${path}.`); })();
+    const rewrite = async (path: string, contents: string): Promise<void> => {
+      await writeFile(join(artifactRoot, path), contents);
+      Object.assign(entry(path), { bytes: Buffer.byteLength(contents), sha256: sha256Hex(contents) });
+    };
+    // The lexer accepts this; acorn would not. A proven bundle is lexed, so
+    // the only findings are the ignored imports themselves.
+    const rewritten = `${ignoredImportSource}export const broken = ;\n`;
+    await rewrite('scripts/greeting.mjs', rewritten);
+    record.assets.find((asset) => asset.path === 'scripts/greeting.mjs')!.sha256 = sha256Hex(rewritten);
+    await rewrite(compileEvidenceFileName, `${JSON.stringify(record)}\n`);
+    await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
+    const diagnostics = await validateArtifact({ artifactRoot });
+    expect(diagnostics.filter((diagnostic) => diagnostic.code === 'AB6039')).toEqual([]);
+    expect(diagnostics.filter((diagnostic) => diagnostic.code === 'AB6005')).toEqual(ignoredImportDiagnostics('scripts/greeting.mjs'));
+  } finally {
+    await rm(relocated, { force: true, recursive: true });
+    await cleanupProject(project);
+  }
+}, 20_000);
+
 it('parses emitted bundles in full when a tools hatch could have rewritten them', async () => {
   // A compiler bundle is trusted to the ESM lexer only while the evidence
   // record covers its bytes from a build without a hatch. A hatch runs after
