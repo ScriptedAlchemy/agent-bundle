@@ -57,6 +57,44 @@ describe('the CLI dispatch level', () => {
     expect(inputs).toEqual([{}]);
   });
 
+  it('hands a non-confirming projection its own canonical yes key untouched', async () => {
+    const command: CompiledCliCommand = {
+      aliases: [],
+      exitCode: 'zero',
+      mcp: { confirm: false, server: 'harness', tool: 'submit' },
+      options: [{
+        key: 'yes',
+        kind: 'string',
+        option: 'yes',
+        repeated: false,
+        required: true,
+      }],
+      path: ['submit'],
+      projection: {
+        mapInput: false,
+        module: 'src/mcp/harness/tools/submit.cli.tsx',
+      },
+      rendered: false,
+      routeId: 'tool:harness/submit',
+    };
+    const inputs: Readonly<Record<string, unknown>>[] = [];
+    const code = await runGeneratedCliEntry({
+      argv: ['submit', '--yes', 'affirmative'],
+      commands: [command],
+      execute: async (_compiled, input) => {
+        inputs.push(input);
+        return input;
+      },
+      name: 'route-harness',
+      version: '1.0.0',
+      writeErr: () => undefined,
+      writeOut: () => undefined,
+    });
+
+    expect(code).toBe(0);
+    expect(inputs).toEqual([{ yes: 'affirmative' }]);
+  });
+
   it('accepts projected option aliases, prints projection help, and spells schema failures as projected flags', async () => {
     const command: CompiledCliCommand = {
       aliases: [],

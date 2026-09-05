@@ -660,6 +660,7 @@ const parseMcpCommandInput = (
     throw new CliUsageError(confirmationRequiredMessage(command.mcp.server, command.mcp.tool));
   }
   if (command.projection !== undefined) {
+    if (!command.mcp.confirm) return parsed;
     const input = { ...parsed.input };
     delete input['yes'];
     return { ...parsed, input };

@@ -487,6 +487,13 @@ describe('MCP tool CLI surface projections', () => {
       );
     });
 
+    it('rejects an overload signature with no implementation, which emits no runtime binding', async () => {
+      await expectRejectedMapInput(
+        'export function mapInput(input: { laneKey?: string }): { laneKey: string };',
+        ['is exported but is not statically a function'],
+      );
+    });
+
     it('rejects a re-export the scan cannot follow, and follows one it can', async () => {
       await expectRejectedMapInput(
         "export { mapInput } from 'mapper-package';",
@@ -748,6 +755,19 @@ describe('MCP tool CLI surface projections', () => {
       expect.objectContaining({ key: 'laneKey', option: 'lane' }),
     );
     expect(renamed.graph.digest).not.toBe(first.graph.digest);
+  });
+
+  it('reports AB4804 when routes.cli keeps a conventional src/cli entry beside a projection module', async () => {
+    const { graph } = await compileProjection(cliModule('{}'), {
+      config: fixtureConfig({ routes: { cli: 'conventional' } }),
+      extraFiles: { 'src/cli.ts': 'export const main = async () => 0;\n' },
+    });
+
+    expect(codesOf(graph.diagnostics)).toEqual(['AB4804']);
+    expect(graph.diagnostics[0]!.message).toBe(
+      `CLI projection modules (${projectionPath}) require a generated CLI surface, but routes.cli is conventional.`,
+    );
+    expect(graph.cli).toEqual({ mode: 'conventional', routes: [] });
   });
 
   it('silently skips a projection whose sibling belongs to a custom server override', async () => {

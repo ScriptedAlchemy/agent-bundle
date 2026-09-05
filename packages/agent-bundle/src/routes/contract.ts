@@ -190,7 +190,7 @@ const scanModuleExports = (
     if (ts.isFunctionDeclaration(statement)) {
       if (statement.name !== undefined && ambient(statement)) {
         ambientBindings.add(statement.name.text);
-      } else if (statement.name !== undefined) {
+      } else if (statement.name !== undefined && statement.body !== undefined) {
         functionBindings.add(statement.name.text);
         if (asynchronous(statement)) asyncFunctionBindings.add(statement.name.text);
         if (generator(statement)) generatorBindings.add(statement.name.text);
