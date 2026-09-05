@@ -12,9 +12,11 @@ import {
 } from '../http.ts';
 import type {
   RouteInvocation,
+  RouteInvocationResponse,
+} from './route-invocation-result.ts';
+import type {
   RouteInvocationListResponse,
   RouteInvocationRequest,
-  RouteInvocationResponse,
 } from './route-invocation.ts';
 import {
   invocationSummary,

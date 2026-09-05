@@ -3,10 +3,8 @@ import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
 
-import type {
-  RouteInvocationListResponse,
-  RouteInvocationResponse,
-} from '../src/dev/routes/route-invocation.ts';
+import type { RouteInvocationResponse } from '../src/dev/routes/route-invocation-result.ts';
+import type { RouteInvocationListResponse } from '../src/dev/routes/route-invocation.ts';
 import { createWorkbenchAssetSource } from '../src/dev/workbench-assets.ts';
 import { startDevServer } from '../src/dev/workbench-server.ts';
 import { createProjectFixture } from './helpers/project-fixture.ts';

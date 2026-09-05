@@ -8,15 +8,12 @@
  * stream and final Agent Document, the route's structured result, and the
  * host projections of that document (MCP, CLI, native hook results).
  *
- * Type-only. The service (`route-invocation-service.ts`) executes the route
- * through the same runtime the generated executables use; the browser only
- * renders the envelope.
+ * Runtime-free. The peer-typed result fields live in
+ * `route-invocation-result.ts`, so project-event declarations can expose
+ * invocation summaries without requiring the optional runtime peer.
  */
-import type { AgentDocument, AgentRenderEvent } from '@agent-bundle/runtime';
-
 import type { Diagnostic } from '../../core/diagnostics.ts';
 import type { JsonObject, JsonValue } from '../../core/strict-json.ts';
-import type { RequestContextProvenance } from '../../contracts/request-provenance.ts';
 
 /** The route kinds the invocation service renders; `app` routes are browser surfaces previewed through the MCP App preview instead. */
 export type RouteInvocationKind = 'cli' | 'event-route' | 'prompt' | 'resource' | 'script' | 'tool';
@@ -99,27 +96,19 @@ export interface RouteInvocationEvent {
   readonly native?: JsonObject;
 }
 
-export interface RouteInvocation {
+/** The runtime-free fields shared by complete invocations and trace/list rows. */
+export interface RouteInvocationSummary {
   readonly completedAt: string;
-  readonly context: RequestContextProvenance;
   readonly correlationId?: string;
   /** Failure diagnostics; empty when the route rendered. A `represented-error` document is a success with an error node, not a failure. */
   readonly diagnostics: readonly Diagnostic[];
-  /** The final Agent Document; absent when rendering failed before a document existed. */
-  readonly document?: AgentDocument;
   readonly event?: RouteInvocationEvent;
-  /** The production `shell | progress | replace | error | complete` stream, in order. */
-  readonly events: readonly AgentRenderEvent[];
   readonly id: string;
   /** The input the route rendered, after fixture seeding and (for hosted events) canonicalization. */
   readonly input: JsonValue;
   readonly kind: RouteInvocationKind;
   /** The route manifest digest the invocation resolved the route through. */
   readonly manifestDigest: string;
-  readonly projection: RouteInvocationProjection;
-  readonly providers: readonly RouteInvocationProvider[];
-  /** The document value parsed by the route's own `resultSchema`; absent when the module exports none or rendering failed. */
-  readonly result?: JsonValue;
   readonly routeId: string;
   readonly source: string;
   readonly sourceRevision: string;
@@ -128,14 +117,7 @@ export interface RouteInvocation {
   readonly timings: readonly RouteInvocationTiming[];
 }
 
-/** `GET /api/routes/invocations/<id>` and `POST /api/routes/invocations`. */
-export interface RouteInvocationResponse {
-  readonly invocation: RouteInvocation;
-}
-
 /** One row of `GET /api/routes/invocations`: the envelope without its streams, for lists and the trace. */
-export type RouteInvocationSummary = Omit<RouteInvocation, 'context' | 'document' | 'events' | 'projection' | 'providers' | 'result'>;
-
 export interface RouteInvocationListResponse {
   readonly invocations: readonly RouteInvocationSummary[];
 }

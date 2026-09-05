@@ -4,7 +4,6 @@
  * render on the server through the production runtime.
  */
 export type {
-  RouteInvocation,
   RouteInvocationCliProjection,
   RouteInvocationEvent,
   RouteInvocationEventHost,
@@ -17,8 +16,11 @@ export type {
   RouteInvocationProvider,
   RouteInvocationProviderStatus,
   RouteInvocationRequest,
-  RouteInvocationResponse,
   RouteInvocationStatus,
   RouteInvocationSummary,
   RouteInvocationTiming,
 } from '../dev/routes/route-invocation.ts';
+export type {
+  RouteInvocation,
+  RouteInvocationResponse,
+} from '../dev/routes/route-invocation-result.ts';
