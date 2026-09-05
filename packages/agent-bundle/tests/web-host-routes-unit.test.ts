@@ -53,6 +53,7 @@ const codexServer = (): Readonly<Record<string, unknown>> => ({
 });
 
 interface FixtureOptions {
+  readonly openingInput?: Readonly<Record<string, unknown>>;
   readonly projections: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
   readonly targets: readonly string[];
 }
@@ -67,6 +68,7 @@ const writeFixture = async (root: string, options: FixtureOptions): Promise<void
         args: [],
         entry: 'mcp/mcp-status.mjs',
         env: {},
+        ...(options.openingInput === undefined ? {} : { input: options.openingInput }),
         name: 'status',
         resourceUri,
         server: 'status',
@@ -415,13 +417,69 @@ describe('WebHostRoutes opening-tool policy', () => {
     expect(harness.service.toolCalls).toBe(1);
   });
 
-  it('drops a failed mutating opening call so the next load retries', async () => {
+  it('does not repeat a mutation after its retained result is evicted', async () => {
+    const root = await artifactRoot();
+    const options = {
+      projections: { '.mcp.json': claudeServer() },
+      targets: ['claude'],
+    } as const;
+    await writeFixture(root, { ...options, openingInput: { index: 0 } });
+    const harness = await startHarness(root);
+    expect((await fetch(`${harness.url}/web/status/status`)).status).toBe(200);
+    for (let index = 1; index <= 64; index += 1) {
+      await writeFixture(root, { ...options, openingInput: { index } });
+      expect((await fetch(`${harness.url}/web/status/status`)).status).toBe(200);
+    }
+    await writeFixture(root, { ...options, openingInput: { index: 0 } });
+    const revisited = await fetch(`${harness.url}/web/status/status`);
+    expect(revisited.status).toBe(200);
+    expect(await revisited.text()).toContain(
+      '"openingNotice":"Opening tool result no longer retained; re-run explicitly from the App."',
+    );
+    expect(harness.service.toolCalls).toBe(65);
+  });
+
+  it('keeps an in-flight mutation authoritative while completed results are evicted', async () => {
+    const root = await artifactRoot();
+    const options = {
+      projections: { '.mcp.json': claudeServer() },
+      targets: ['claude'],
+    } as const;
+    await writeFixture(root, { ...options, openingInput: { index: 0 } });
+    const harness = await startHarness(root);
+    harness.service.gateToolCalls = true;
+    const first = fetch(`${harness.url}/web/status/status`);
+    for (let turn = 0; turn < 200 && harness.service.toolCallReleases.length === 0; turn += 1) {
+      await new Promise((done) => setTimeout(done, 5));
+    }
+    harness.service.gateToolCalls = false;
+    for (let index = 1; index <= 64; index += 1) {
+      await writeFixture(root, { ...options, openingInput: { index } });
+      expect((await fetch(`${harness.url}/web/status/status`)).status).toBe(200);
+    }
+    await writeFixture(root, { ...options, openingInput: { index: 0 } });
+    const revisited = fetch(`${harness.url}/web/status/status`);
+    const revisitState = await Promise.race([
+      revisited.then(() => 'settled' as const),
+      new Promise<'waiting'>((resolve) => setTimeout(() => resolve('waiting'), 50)),
+    ]);
+    expect(revisitState).toBe('waiting');
+    expect(harness.service.toolCalls).toBe(65);
+    harness.service.toolCallReleases.splice(0).forEach((release) => release());
+    expect((await Promise.all([first, revisited])).map((response) => response.status)).toEqual([200, 200]);
+  });
+
+  it('does not retry a mutating opening call after its outcome becomes unknown', async () => {
     const root = await artifactRoot();
     await writeFixture(root, { projections: { '.mcp.json': claudeServer() }, targets: ['claude'] });
     const harness = await startHarness(root);
     harness.service.failNextToolCall = true;
     expect((await fetch(`${harness.url}/web/status/status`)).status).toBe(502);
-    expect((await fetch(`${harness.url}/web/status/status`)).status).toBe(200);
-    expect(harness.service.toolCalls).toBe(2);
+    const revisited = await fetch(`${harness.url}/web/status/status`);
+    expect(revisited.status).toBe(200);
+    expect(await revisited.text()).toContain(
+      '"openingNotice":"Opening tool outcome is unknown; re-run explicitly from the App."',
+    );
+    expect(harness.service.toolCalls).toBe(1);
   });
 });

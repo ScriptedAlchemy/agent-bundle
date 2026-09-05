@@ -11,6 +11,8 @@ export interface WebHostPageSeed {
   readonly input: McpAppJsonValue;
   /** Opaque per-page id of the opening call, set by hosts that serve many pages over one session (dev `/web`). */
   readonly opening?: string;
+  /** Fail-closed reason an automatic mutating opening was not repeated. */
+  readonly openingNotice?: string;
   readonly previewProfile: McpAppProfileId;
   readonly result: McpAppJsonValue;
   readonly sessionId: string;
