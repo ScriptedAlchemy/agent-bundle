@@ -91,7 +91,6 @@ const artifactOutputToken = '<output>';
 
 const isPlainObject: (value: object) => boolean = isPlainRecord;
 
-/** Absolute build-time paths and the stable tokens that stand for them in the rendered configs. */
 type PathTokens = readonly (readonly [absolute: string, token: string])[];
 
 const tokenizePath = (value: string, tokens: PathTokens): string => {
@@ -330,7 +329,6 @@ const packageBuildEntries = async (model: NormalizedPlugin): Promise<readonly Pl
   });
 };
 
-/** Lowers one Rslib run's entries and pairs each with its rendered config. */
 const loweredRslibEntries = async (
   planned: readonly PlannedRslibInspection[],
   run: {

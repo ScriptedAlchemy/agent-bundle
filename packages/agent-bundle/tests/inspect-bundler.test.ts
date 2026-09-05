@@ -120,7 +120,6 @@ it('renders the lowered Rspack configuration of every compiled output with the t
     'portable:mcp-entry:curator',
     'portable:script:tool',
   ]);
-  // One lowered compiler per entry, named as Rslib and Rsbuild name it.
   expect(entries.map((entry) => loweredConfig(entry).name)).toEqual([
     'agent-bundle-bin-bundler-fixture',
     'agent-bundle-index',
@@ -206,7 +205,6 @@ it('renders the lowered Rspack configuration of every compiled output with the t
 
   const lib = entryOf(entries, 'lib', 'index');
   expect(lib.outputPath).toBe('dist/index.js');
-  // The declaration tsconfig the package build synthesizes appears as its token.
   expect(loweredConfig(lib).resolve?.tsConfig).toEqual({ configFile: '<generated-dts-tsconfig>', references: 'auto' });
 
   const app = entryOf(entries, 'mcp-app', 'dashboard');
@@ -361,7 +359,6 @@ it('inspects the per-host preflight wrapper under the composite identity', async
     expect(entry.generatedEntry).toContain('agent-bundle/event-project');
     expect(entry.generatedEntry).toContain('.execute.mjs');
     expect(entry.generatedEntry).not.toContain('AGENT_BUNDLE_HOOK_HOST');
-    // Every wrapper lowers to its own compiler writing its own file into the one root.
     expect(loweredConfig(entry)).toMatchObject({
       name: `agent-bundle-${entry.outputPath.replace(/\.mjs$/u, '').replaceAll('/', '-')}`,
       output: { filename: '[function jsFilename]', path: '<output>' },

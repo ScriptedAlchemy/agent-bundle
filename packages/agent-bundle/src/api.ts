@@ -26,6 +26,7 @@ import {
   featureCapabilityName,
   type AgentComponentKind,
 } from './core/components.ts';
+import { errorMessage } from './core/errors.ts';
 import { isInsideOrEqual } from './core/paths.ts';
 import {
   stateDefinitionProjection,
@@ -1153,13 +1154,11 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
         ...(prepared.tools === undefined ? {} : { tools: prepared.tools }),
       });
     } catch (error) {
-      // The lowering runs the build's own invariant assertions, so the
-      // refusal names the hatch value the build would refuse.
       return invalidInspection(freezeDiagnostics([
         ...prepared.diagnostics,
         projectDiagnostic(
           'AB7001',
-          `Unable to compose the bundler inspection: ${error instanceof Error ? error.message : String(error)}`,
+          `Unable to compose the bundler inspection: ${errorMessage(error)}`,
           { sourcePath: prepared.configPath },
         ),
       ]));
