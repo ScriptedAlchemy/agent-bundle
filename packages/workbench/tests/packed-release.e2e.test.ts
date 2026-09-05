@@ -398,9 +398,16 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       await expect(appFrame.locator('#view')).toHaveText('packed release dashboard', { timeout: browserTimeout });
 
       phase = 'Logs, Evals, and Comparisons pages';
+      // The heading renders before the page's mount replay is answered; leaving
+      // on the heading alone cancels that replay mid-flight on a loaded server.
+      // The visit is complete once the replay has responded.
+      const logsReplayListing = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/logs/replay');
       await page.goto(workbenchUrl(origin, 'logs'));
       phase = 'Logs page heading';
       await expect(page.getByRole('heading', { name: 'Logs' })).toBeVisible({ timeout: browserTimeout });
+      phase = 'Logs page replay';
+      const logsReplayListingResponse = await logsReplayListing;
+      if (!logsReplayListingResponse.ok()) throw new Error(`The Logs page replay route failed with ${logsReplayListingResponse.status()}: ${await logsReplayListingResponse.text()}`);
       const initialEvalsRequestIndex = browserRequests.length;
       await page.goto(workbenchUrl(origin, 'evals'));
       phase = 'Evals page heading';
@@ -960,18 +967,37 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
         response.request().method() === 'POST' && response.ok(),
       );
       await page.getByRole('button', { name: 'Call show-dashboard' }).click();
-      await browserMcpSessionBOperation;
+      const browserMcpSessionBOperationResponse = await browserMcpSessionBOperation;
       await expect(page.getByRole('region', { name: 'Invocation history' })).toContainText('packed dashboard ready', { timeout: browserTimeout });
       const closedBrowserMcpSessionB = page.waitForResponse((response) =>
         response.url() === `${origin}/api/mcp/sessions/${encodeURIComponent(browserMcpSessionBId)}` &&
         response.request().method() === 'DELETE' && response.ok(),
       );
-      const browserMcpSessionBCloseStartedAt = Date.now();
       await page.getByRole('button', { name: 'Close MCP session' }).click();
       const closedBrowserMcpSessionBResponse = await closedBrowserMcpSessionB;
       expect(closedBrowserMcpSessionBResponse.request().headers()['x-agent-bundle-session']).toBe(browserGenerationBToken);
       await expect(page.locator('.mcp-page-phase')).toContainText('Session closed', { timeout: browserTimeout });
-      const browserMcpSessionBCloseCompletedAt = Date.now();
+      // The ledger's close window is bounded by the session's own wire entries,
+      // not by clock stamps around the click: it opens when the last operation
+      // the session served completed and closes when its DELETE completed. The
+      // page aborts both session streams before it issues that DELETE, so the
+      // close-induced aborts are delivered inside the window however late
+      // Playwright hands them over. Completion events trail their responses,
+      // so the two entries are awaited rather than read at once.
+      const browserMcpSessionBOperationRequest = browserRequestByPlaywrightRequest.get(browserMcpSessionBOperationResponse.request());
+      const browserMcpSessionBCloseRequest = browserRequestByPlaywrightRequest.get(closedBrowserMcpSessionBResponse.request());
+      if (browserMcpSessionBOperationRequest === undefined || browserMcpSessionBCloseRequest === undefined) {
+        throw new Error('The fresh B browser MCP operation or session close was not recorded in the network ledger.');
+      }
+      const browserMcpSessionBCloseWindowRequests = [browserMcpSessionBOperationRequest, browserMcpSessionBCloseRequest];
+      await expect.poll(() => browserMcpSessionBCloseWindowRequests.filter((request) => request.completedAt === undefined)
+        .map((request) => `${request.method} ${request.url}`), { timeout: browserTimeout }).toEqual([]);
+      const browserMcpSessionBCloseStartedAt = browserMcpSessionBOperationRequest.completedAt;
+      const browserMcpSessionBCloseCompletedAt = browserMcpSessionBCloseRequest.completedAt;
+      // Narrowing only: the poll above settled both entries.
+      if (browserMcpSessionBCloseStartedAt === undefined || browserMcpSessionBCloseCompletedAt === undefined) {
+        throw new Error('The fresh B browser MCP close window is missing a completed wire entry.');
+      }
 
       phase = 'desktop navigation floor';
       const navigationFloorRequestIndex = browserRequests.length;
@@ -1006,6 +1032,12 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
         }));
         activeNavigationRoute = undefined;
       };
+      // A departure is a test action with no wire event of its own — the next
+      // route's first request is not ordered against the aborts it provokes —
+      // so the arrival and departure instants are clock stamps taken before
+      // each click. The ledger treats both as inclusive bounds: a request the
+      // page issued before the click can still be handed over in the same
+      // millisecond as the stamp when Playwright delivers a batch of events.
       for (const route of navigationRoutes) {
         const openedAt = Date.now();
         leaveActiveNavigationRoute(openedAt);

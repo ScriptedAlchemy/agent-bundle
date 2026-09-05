@@ -22,8 +22,24 @@ export interface OutageLedger {
   readonly origin: string;
   readonly outageStartedAt: number;
   readonly postRecovery?: Readonly<{
+    /**
+     * The B-generation browser MCP session, located by its own wire entries:
+     * `openedAt` is the `POST /api/mcp/sessions` request instant, and the
+     * close window `[closeStartedAt, closeCompletedAt]` spans from the
+     * completion of the session's last operation to the completion of its
+     * `DELETE`. The page aborts both of its session streams before it issues
+     * that `DELETE`, so every close-induced stream abort lands inside the
+     * window while a mid-session or post-close abort does not.
+     */
     readonly freshMcpSession: Readonly<{ readonly closeCompletedAt: number; readonly closeStartedAt: number; readonly id: string; readonly openedAt: number }>;
-    /** Exact page-owned requests cancelled when the test deliberately navigated away. */
+    /**
+     * Exact page-owned requests cancelled when the test deliberately navigated
+     * away. A request belongs to the visit when it was observed no earlier
+     * than `openedAt` and no later than `leftAt`; both bounds are inclusive
+     * because Playwright hands the ledger batches of network events, so a
+     * request, its response, and the test's departure stamp can all share one
+     * millisecond.
+     */
     readonly navigation: readonly Readonly<{
       readonly leftAt: number;
       readonly openedAt: number;
@@ -131,15 +147,29 @@ const isPlaygroundSessionReplayPath = (path: string): boolean => {
     segments[2] === 'sessions' && segments[3]!.length > 0 && segments[4] === 'replay';
 };
 
+const isSuccessStatus = (status: number | undefined): status is number => status !== undefined && status >= 200 && status < 300;
+
+/** The abort landed before any response headers: Chromium reports neither a status nor a response instant. */
+const responseIsAbsent = (request: NetworkLedgerEntry): boolean => request.respondedAt === undefined && request.status === undefined;
+
 const isPlaygroundSessionReadCancellation = (request: NetworkLedgerEntry): boolean => {
   const segments = request.path.split('/').filter((segment) => segment.length > 0);
-  const responseIsAbsent = request.respondedAt === undefined && request.status === undefined;
-  const responseIsSuccessful = request.respondedAt !== undefined && request.status !== undefined &&
-    request.status >= 200 && request.status < 300;
+  const responseIsSuccessful = request.respondedAt !== undefined && isSuccessStatus(request.status);
   return segments.length === 4 && segments[0] === 'api' && segments[1] === 'playground' &&
     segments[2] === 'sessions' && segments[3]!.length > 0 && request.url === `${request.origin}${request.path}` &&
-    request.completedAt !== undefined && request.at <= request.completedAt && (responseIsAbsent || responseIsSuccessful);
+    request.completedAt !== undefined && request.at <= request.completedAt && (responseIsAbsent(request) || responseIsSuccessful);
 };
+
+/**
+ * The Logs page issues `/api/logs/replay` from its mount effect and aborts it
+ * from the effect's cleanup, so leaving the page cancels the replay in
+ * whichever state it is in: after a 2xx arrived (the body read is cut short)
+ * or before any headers arrived (a loaded server has not answered yet, and
+ * Chromium reports the abort with no status at all). Both are the same
+ * deliberate navigation; an abort after a non-2xx answer is still rejected.
+ */
+const isLogsReplayCancellation = (request: NetworkLedgerEntry): boolean =>
+  request.path === '/api/logs/replay' && (responseIsAbsent(request) || isSuccessStatus(request.status));
 
 /**
  * The playground screen retires a superseded in-flight catalog request when
@@ -152,7 +182,7 @@ const isKnownPreOutageClientCancellation = (request: NetworkLedgerEntry): boolea
     request.path === '/api/playground/catalog' ||
     isPlaygroundSessionReadCancellation(request) ||
     isPlaygroundSessionReplayPath(request.path) ||
-    (request.path === '/api/logs/replay' && request.status !== undefined && request.status >= 200 && request.status < 300)
+    isLogsReplayCancellation(request)
   );
 
 export const hasCanonicalAfterCursor = (url: URL): boolean => {
@@ -206,6 +236,14 @@ export const validateOutageLedger = (ledger: OutageLedger): void => {
     const postRecovery = ledger.postRecovery;
     const freshMcpSession = postRecovery.freshMcpSession;
     const freshMcpStreamPath = `/api/mcp/sessions/${encodeURIComponent(freshMcpSession.id)}/stream`;
+    // The MCP page keeps two readers on one session: the transport opens
+    // `stream?after=0` as soon as the POST returns (AgentBundleRemoteTransport
+    // #start) and the session controller subscribes to `stream?after=N` once
+    // the trace refresh has settled (McpSessionController #subscribeTrace).
+    // Closing the session aborts both — the controller's subscription, then
+    // the transport's stream — before the DELETE goes out, so a close leaves
+    // one or two same-path aborts, each carrying the 2xx headers it had
+    // already received, inside the close window.
     const freshMcpStreamFailures = postRecoveryFailures.filter((request) => request.path === freshMcpStreamPath);
     assertOutageLedger(freshMcpStreamFailures.length >= 1 && freshMcpStreamFailures.length <= 2,
       `fresh B MCP stream did not terminate exactly once or twice: ${JSON.stringify(freshMcpStreamFailures)}`);
@@ -216,26 +254,26 @@ export const validateOutageLedger = (ledger: OutageLedger): void => {
       assertOutageLedger(
         failure.origin === ledger.origin && url.origin === ledger.origin && url.pathname === freshMcpStreamPath && hasCanonicalAfterCursor(url) &&
         failure.method === 'GET' && failure.error === 'net::ERR_ABORTED' && failure.at >= freshMcpSession.openedAt &&
-        failure.respondedAt !== undefined && failure.respondedAt <= ledgerFailureAt(failure) &&
-        failure.status !== undefined && failure.status >= 200 && failure.status < 300 &&
+        failure.respondedAt !== undefined && failure.respondedAt <= ledgerFailureAt(failure) && isSuccessStatus(failure.status) &&
         ledgerFailureAt(failure) >= freshMcpSession.closeStartedAt && ledgerFailureAt(failure) <= freshMcpSession.closeCompletedAt,
         `fresh B MCP stream cancellation is not action-induced: ${JSON.stringify(failure)}`,
       );
     }
-    const navigationFailures: NetworkLedgerEntry[] = [];
+    const navigationFailures = new Set<NetworkLedgerEntry>();
     for (const navigation of postRecovery.navigation) {
+      // Inclusive on both ends (see OutageLedger.postRecovery.navigation): a
+      // request delivered in the same millisecond the test stamped its
+      // departure still belongs to the visit it was issued from.
       const failures = postRecoveryFailures.filter((request) =>
-        request.url === navigation.url && request.at >= navigation.openedAt && request.at < navigation.leftAt &&
+        request.url === navigation.url && request.at >= navigation.openedAt && request.at <= navigation.leftAt &&
         ledgerFailureAt(request) >= navigation.leftAt,
       );
       assertOutageLedger(failures.length <= 1,
         `multiple action-induced navigation cancellations: ${JSON.stringify({ failures, navigation })}`);
       for (const failure of failures) {
-        const responseIsAbsent = failure.respondedAt === undefined && failure.status === undefined;
         const responseIsSuccessful = failure.respondedAt !== undefined && failure.respondedAt >= failure.at &&
-          failure.respondedAt <= ledgerFailureAt(failure) && failure.status !== undefined &&
-          failure.status >= 200 && failure.status < 300;
-        let validResponse = responseIsAbsent || responseIsSuccessful;
+          failure.respondedAt <= ledgerFailureAt(failure) && isSuccessStatus(failure.status);
+        let validResponse = responseIsAbsent(failure) || responseIsSuccessful;
         if (navigation.respondedStream === true) {
           let url: URL;
           try { url = new URL(failure.url); }
@@ -249,11 +287,18 @@ export const validateOutageLedger = (ledger: OutageLedger): void => {
           `navigation cancellation did not match its exact pending-or-stream response contract: ${JSON.stringify({ failure, navigation })}`,
         );
       }
-      navigationFailures.push(...failures);
+      for (const failure of failures) navigationFailures.add(failure);
     }
-    const recognizedPostRecoveryFailures = [...freshMcpStreamFailures, ...navigationFailures];
-    assertOutageLedger(recognizedPostRecoveryFailures.length === postRecoveryFailures.length,
-      `unknown post-recovery failure: ${JSON.stringify(postRecoveryFailures)}`);
+    // Two adjacent routes may list the same URL, and the departure stamp of one
+    // is the arrival stamp of the next, so one abort can satisfy two records;
+    // what must hold is that every post-recovery failure is claimed by some
+    // contract. Report only the unclaimed ones — a dump of every failure reads
+    // as if the recognized ones were at fault.
+    const unrecognizedPostRecoveryFailures = postRecoveryFailures.filter((request) =>
+      !freshMcpStreamFailures.includes(request) && !navigationFailures.has(request),
+    );
+    assertOutageLedger(unrecognizedPostRecoveryFailures.length === 0,
+      `unknown post-recovery failure: ${JSON.stringify(unrecognizedPostRecoveryFailures)}`);
     const postRecoveryConsoleErrors = ledger.consoleErrors.filter((consoleError) => consoleError.at >= ledger.recoveredAt);
     assertOutageLedger(postRecoveryConsoleErrors.length === 0, `post-recovery console errors: ${JSON.stringify(postRecoveryConsoleErrors)}`);
   }
@@ -297,7 +342,7 @@ export const validateOutageLedger = (ledger: OutageLedger): void => {
   const oldSessionDeletes = sameOriginRequests.filter((request) => request.method === 'DELETE' && request.path === oldSessionPath);
   assertOutageLedger(oldSessionDeletes.length === 1, `expected exactly one old-session DELETE attempt: ${JSON.stringify(oldSessionDeletes)}`);
   const oldSessionDelete = oldSessionDeletes[0]!;
-  const deleteSucceeded = oldSessionDelete.status !== undefined && oldSessionDelete.status >= 200 && oldSessionDelete.status < 300;
+  const deleteSucceeded = isSuccessStatus(oldSessionDelete.status);
   const deleteRefused = oldSessionDelete.error === 'net::ERR_CONNECTION_REFUSED';
   assertOutageLedger((deleteSucceeded ? 1 : 0) + (deleteRefused ? 1 : 0) === 1 && oldSessionDelete.completedAt !== undefined,
     `old-session DELETE must succeed or fail exactly with ERR_CONNECTION_REFUSED: ${JSON.stringify(oldSessionDelete)}`);
@@ -305,9 +350,7 @@ export const validateOutageLedger = (ledger: OutageLedger): void => {
   const projectSessionAttempts = sameOriginRequests.filter((request) =>
     request.method === 'GET' && request.path === '/api/project/session' && request.at >= ledger.outageStartedAt,
   ).sort((left, right) => left.at - right.at);
-  const successfulSessions = projectSessionAttempts.filter((request) =>
-    request.status !== undefined && request.status >= 200 && request.status < 300,
-  );
+  const successfulSessions = projectSessionAttempts.filter((request) => isSuccessStatus(request.status));
   assertOutageLedger(successfulSessions.length >= 1, `the browser did not complete a B-generation project session: ${JSON.stringify(projectSessionAttempts)}`);
   const firstSuccessfulBSession = successfulSessions[0]!;
   assertOutageLedger(firstSuccessfulBSession.completedAt === ledger.recoveredAt,
