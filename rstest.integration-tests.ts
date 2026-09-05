@@ -53,6 +53,7 @@ export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/examples-contract.test.ts',
   'packages/agent-bundle/tests/generated-route-server.test.ts',
   'packages/agent-bundle/tests/hook-playground-service.test.ts',
+  'packages/agent-bundle/tests/hook-receipt-pipe.test.ts',
   'packages/agent-bundle/tests/hooks.test.ts',
   'packages/agent-bundle/tests/host-adapters.test.ts',
   'packages/agent-bundle/tests/host-discovery-dev-server.test.ts',
