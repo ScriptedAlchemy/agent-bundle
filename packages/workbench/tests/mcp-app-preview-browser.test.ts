@@ -206,6 +206,15 @@ describe('MCP App preview browser', () => {
     }
   }, 30_000);
 
+  // The page logs `create:*` inside the mocked fetch and `factory` in the
+  // passive effect of the commit that arms the iframe `src`; the bootstrap GET
+  // reaches the Node handler behind `bootstrapRequests` on its own network
+  // round-trip, so wait for the count before pinning the exact log.
+  const expectBootstrapRequests = async (requests: readonly string[], expected: readonly string[]) => {
+    await expect.poll(() => requests.length, { timeout: 5_000 }).toBe(expected.length);
+    expect(requests).toEqual(expected);
+  };
+
   it('keeps one runtime owner across same-authority StrictMode renders and drains the old owner before replacement', async () => {
     const fixture = await mountedPreviewFixture();
     const browser = await chromium.launch({ channel: 'chrome' });
@@ -244,7 +253,7 @@ describe('MCP App preview browser', () => {
       expect(policyTrace.map((entry) => entry.name)).toEqual(['src', 'allow', 'referrerpolicy', 'sandbox', 'src']);
       expect(policyTrace[0]?.value).toBe('about:blank');
       expect(policyTrace.at(-1)?.value).toBeDefined();
-      expect(fixture.bootstrapRequests).toEqual(['/runtime-bootstrap']);
+      await expectBootstrapRequests(fixture.bootstrapRequests, ['/runtime-bootstrap']);
 
       const simulatedProfile = page.getByLabel('Simulated MCP App profile');
       expect(await simulatedProfile.isVisible()).toBe(true);
@@ -329,7 +338,7 @@ describe('MCP App preview browser', () => {
       expect(newCreate).toBeGreaterThan(oldUnregister);
       expect(replaced.events.filter((entry) => entry === 'register:first')).toHaveLength(1);
       expect(replaced.events.filter((entry) => entry === 'register:second')).toHaveLength(1);
-      expect(fixture.bootstrapRequests).toEqual(['/runtime-bootstrap', '/runtime-bootstrap']);
+      await expectBootstrapRequests(fixture.bootstrapRequests, ['/runtime-bootstrap', '/runtime-bootstrap']);
       expect(await implementationEvidence.count()).toBe(0);
       await runtime('publishOperationTraceWithUnexpectedEpoch');
       expect(await implementationEvidence.count()).toBe(0);
@@ -443,7 +452,7 @@ describe('MCP App preview browser', () => {
       const abandoned = await stats();
       expect(lifecycleEvents(abandoned.events)).toEqual(lifecycleEvents(stable.events));
       expect(abandoned.iframeNodes).toBe(stable.iframeNodes);
-      expect(fixture.bootstrapRequests).toEqual(['/runtime-bootstrap']);
+      await expectBootstrapRequests(fixture.bootstrapRequests, ['/runtime-bootstrap']);
 
       await runtime('failClose');
       await runtime('throwUnregister');
@@ -473,7 +482,7 @@ describe('MCP App preview browser', () => {
       expect(await page.getByLabel('Runtime App result').textContent()).toContain('22');
       expect(await page.getByLabel('Runtime App result').textContent()).not.toContain('Mutated');
       expect(await page.getByLabel('Runtime App result').textContent()).not.toContain('999');
-      expect(fixture.bootstrapRequests).toEqual(['/runtime-bootstrap', '/runtime-bootstrap']);
+      await expectBootstrapRequests(fixture.bootstrapRequests, ['/runtime-bootstrap', '/runtime-bootstrap']);
 
       await runtime('failClose');
       await runtime('unmountRuntime');
