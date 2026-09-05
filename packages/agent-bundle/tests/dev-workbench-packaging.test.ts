@@ -27,7 +27,7 @@ it('copies stable prebuilt workbench assets and the exact app-renderer license i
   await buildPackage();
 
   await expect(access(join(packageRoot, 'dist', 'workbench', 'index.html'))).resolves.toBeUndefined();
-  await expect(readFile(join(packageRoot, 'dist', 'workbench', 'static', 'js', 'index.js'), 'utf8')).resolves.toContain('Bundle dashboard');
+  await expect(readFile(join(packageRoot, 'dist', 'workbench', 'static', 'js', 'index.js'), 'utf8')).resolves.toContain('Workbench navigation');
   await expect(readFile(join(packageRoot, 'dist', 'workbench', 'THIRD_PARTY_NOTICES'), 'utf8')).resolves.toContain('MCP Inspector');
   await expect(readFile(join(packageRoot, 'dist', 'workbench', appRendererLicense), 'utf8')).resolves.toBe(
     await readFile(join(workbenchRoot, appRendererLicense), 'utf8'),

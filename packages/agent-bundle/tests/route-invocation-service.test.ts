@@ -1,6 +1,6 @@
 import { expect, it } from '@rstest/core';
 
-import type { RouteInvocation } from '../src/dev/routes/route-invocation.ts';
+import type { RouteInvocation } from '../src/dev/routes/route-invocation-result.ts';
 import {
   InvocationRingBuffer,
   RouteInvocationService,

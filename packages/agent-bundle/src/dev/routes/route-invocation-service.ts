@@ -29,8 +29,8 @@ import { createCanonicalEventProps, projectEventDocument } from '../../events/pr
 import type { CanonicalAgentEvent } from '../../routes/public.ts';
 import type { AgentBundleTestManifest, TestableScriptDescriptor } from '../../test/manifest.ts';
 import type { ScriptPlaygroundResult, ScriptPlaygroundRunRequest } from '../playground/script-playground-service.ts';
+import type { RouteInvocation } from './route-invocation-result.ts';
 import type {
-  RouteInvocation,
   RouteInvocationEventHost,
   RouteInvocationKind,
   RouteInvocationProvider,
