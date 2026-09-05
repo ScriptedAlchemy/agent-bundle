@@ -147,16 +147,19 @@ const parseRawArgs = (raw: string): readonly string[] | undefined => {
   }
 };
 
+const cliSurfaceDraft = (command: NonNullable<ApplicationLeaf['command']>, args: readonly string[]): RouteInputSubmission =>
+  Object.freeze({
+    draft: Object.freeze({
+      surface: Object.freeze({ args, command: command.path.join(' '), kind: 'cli' }),
+    }),
+  });
+
 const cliDraft = (leaf: ApplicationLeaf, argumentsValue: RouteInputArguments): RouteInputSubmission => {
   if (leaf.command === undefined) return Object.freeze({ error: 'This CLI route has no compiled command grammar to build argv from.' });
   const args = cliCommandArgv(leaf.command, argumentsValue);
   return args === undefined
     ? Object.freeze({ error: 'A required CLI option is missing.' })
-    : Object.freeze({
-        draft: Object.freeze({
-          surface: Object.freeze({ args, command: leaf.command.path.join(' '), kind: 'cli' }),
-        }),
-      });
+    : cliSurfaceDraft(leaf.command, args);
 };
 
 /** The validated input the current editor value submits, or why it cannot run. */
@@ -168,13 +171,7 @@ export const routeInputSubmission = (
   if (value.mode === 'raw' || leaf.inputSchema === undefined) {
     if (cliSurface) {
       const args = parseRawArgs(value.raw);
-      if (args !== undefined && leaf.command !== undefined) {
-        return Object.freeze({
-          draft: Object.freeze({
-            surface: Object.freeze({ args, command: leaf.command.path.join(' '), kind: 'cli' }),
-          }),
-        });
-      }
+      if (args !== undefined && leaf.command !== undefined) return cliSurfaceDraft(leaf.command, args);
     }
     const validated = validateRawRouteInput(value.raw);
     if (validated.error !== undefined || validated.arguments === undefined) {

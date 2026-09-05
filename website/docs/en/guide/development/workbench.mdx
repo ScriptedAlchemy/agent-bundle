@@ -79,9 +79,9 @@ Results open on **Rendered**, the browser rendering of the production Agent Docu
 streamed progress or Suspense replacements. Secondary result tabs are **Structured result**,
 **Raw AgentDocument**, **MCP projection**, **CLI projection** when available, and **Trace**.
 The inspector opens only when requested and contains **Source**, **Schema**, **Context**,
-**Providers**, **Execution timings**, **Projection**, and **Raw protocol**. Providers and
-timings show **unobserved** (and omit duration) when a phase was not measured; `0 ms` is a
-measured zero, not a placeholder.
+**Providers**, **Execution timings**, **Projection**, and **Raw protocol**. A provider the run
+did not measure shows **unobserved** with no duration, and timings list only measured phases;
+`0 ms` is a measured zero, not a placeholder.
 
 The browser does not import or execute arbitrary route modules. The server runs the same RSC
 route path used by generated executables and sends its semantic render-event stream and final
@@ -225,17 +225,16 @@ survives a successful republish; `unit-render` still uses a fresh temporary stat
 
 The envelope records the resolved `surface` beside `routeId` and carries canonical input, request
 context, providers, ordered render events, the final Agent Document, structured result,
-projections, diagnostics, and execution timings.
-When the worker reports observations, `providers` contains only providers it selected and reports
-each as `mounted` or `failed`; unselected catalog providers are absent. A `durationMs` appears only
-when measured. When the child reports no observations — a plain script, a preflight short-circuit,
-or a failure before observations began — every catalog provider is `unobserved` and
-`durationMs` is omitted; `0` is a measured zero, not "unknown". `timings` lists only measured
-phases: `render` (the child's render or script-run
-duration), `projection` (host-projection time in the service), and, when observed, `handler`,
-`providers`, and `provider:<name>`. A failed invocation records an `elapsed` timing for the
-wall time until failure and does not invent `failed` provider rows. A represented
-`Agent.Error` remains a rendered result; unknown routes or invocation ids (`AB8231`),
+projections, diagnostics, and execution timings. When the worker reports observations,
+`providers` contains only providers it selected and reports each as `mounted` or `failed`;
+unselected catalog providers are absent. A `durationMs` appears only when measured. When the
+child reports no observations — a plain script, a preflight short-circuit, or a failure before
+observations began — every catalog provider is `unobserved` and `durationMs` is omitted; `0` is
+a measured zero, not "unknown". `timings` lists only measured phases: `render` (the child's
+render or script-run duration), `projection` (host-projection time in the service), and, when
+observed, `handler`, `providers`, and `provider:<name>`. A failed invocation records an
+`elapsed` timing for the wall time until failure and does not invent `failed` provider rows.
+A represented `Agent.Error` remains a rendered result; unknown routes or invocation ids (`AB8231`),
 unavailable epochs (`AB8232`), render timeouts or crashes (`AB8236`), malformed requests
 (`AB8237`), unknown fixture ids (`AB8238`), a queued invocation whose published revision
 moved before it acquired a slot (`AB8239`), unavailable compiled artifacts (`AB8250`), missing

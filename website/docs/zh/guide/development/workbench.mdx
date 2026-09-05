@@ -67,8 +67,8 @@ schema 生成，并提供适用的夹具以及为该叶子保留的上次输入�
 结果首先打开 **Rendered**，即生产 Agent Document 及其流式进度或 Suspense 替换的浏览器渲染。次要结果
 标签是 **Structured result**、**Raw AgentDocument**、**MCP projection**、可用时的 **CLI projection**，
 以及 **Trace**。检查器仅在请求时打开，其中包含 **Source**、**Schema**、**Context**、**Providers**、
-**Execution timings**、**Projection** 与 **Raw protocol**。未测到的阶段显示 **unobserved**（并省略
-时长）；`0 ms` 是测得的零，不是占位。
+**Execution timings**、**Projection** 与 **Raw protocol**。本次运行未测量的 provider 显示
+**unobserved** 且不带时长，计时只列出已测量的阶段；`0 ms` 是测得的零，不是占位。
 
 浏览器不会导入或执行任意路由模块。服务器运行生成式可执行文件所用的同一条 RSC 路由路径，并把其语义
 渲染事件流与最终的 Agent Document 发送给 Workbench。
@@ -195,9 +195,9 @@ providers、持久状态、CLI `mapInput` 与确认、事件 preflight 以及渲
 它实际选择的 provider，并将状态报告为 `mounted` 或 `failed`；未选择的目录 provider 不会出现。只有
 实际测到时长时才带 `durationMs`。子进程未报告观测值时（普通脚本、preflight 短路，或在观测开始之前
 失败），每个目录 provider 为 `unobserved` 且省略 `durationMs`；`0` 是测得的零，不是「未知」。
-`timings` 只列出已测量
-阶段：`render`（子进程的渲染或普通脚本运行时长）、`projection`（服务端的宿主投影时间），以及观测到
-时的 `handler`、`providers` 与 `provider:<name>`。失败的调用记录 `elapsed`（失败前的墙钟时间），
+`timings` 只列出已测量的阶段：`render`（子进程的渲染或普通脚本运行时长）、`projection`（服务端的
+宿主投影时间），以及观测到时的 `handler`、`providers` 与 `provider:<name>`。失败的调用记录
+`elapsed`（失败前的墙钟时间），
 不会伪造 `failed` 的 provider 行。被表示的 `Agent.Error` 仍是一份已渲染结果；未知路由或
 invocation id（`AB8231`）、不可用的 epoch（`AB8232`）、渲染超时或崩溃（`AB8236`）、格式错误的请求
 （`AB8237`）、未知 fixture id（`AB8238`）、在获得并发槽位前发布修订已变更的排队调用（`AB8239`）、不可用的编译制品

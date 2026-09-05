@@ -82,16 +82,14 @@ export const eventRequestFor = (
   host: EventHostSelection,
   draft: RouteInvocationDraft,
   fixtureId?: string,
-): RouteInvocationDraft => {
-  return Object.freeze({
-    ...draft,
-    surface: Object.freeze({
-      ...(fixtureId === undefined ? {} : { fixtureId }),
-      ...(host === 'canonical' ? {} : { host }),
-      kind: 'event',
-    }),
-  });
-};
+): RouteInvocationDraft => Object.freeze({
+  ...draft,
+  surface: Object.freeze({
+    ...(fixtureId === undefined ? {} : { fixtureId }),
+    ...(host === 'canonical' ? {} : { host }),
+    kind: 'event',
+  }),
+});
 
 const Rows = ({ rows }: { readonly rows: readonly { readonly label: string; readonly value: string }[] }): React.ReactNode => <dl className="inspector-rows">
   {rows.map((entry) => <div key={entry.label}><dt>{entry.label}</dt><dd>{entry.value}</dd></div>)}

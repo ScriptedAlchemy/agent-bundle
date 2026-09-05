@@ -145,15 +145,9 @@ const prepareInput = async (
   const route = request.manifest.routes[request.routeId];
   if (request.surface.kind === 'cli') {
     const binRoot = join(request.artifactRoot, 'bin');
-    if (!existsSync(binRoot)) {
-      throw new ProductionRouteInvocationError(
-        ROUTE_INVOCATION_COMPILED_ROUTE_UNAVAILABLE_CODE,
-        `Compiled CLI route ${JSON.stringify(request.routeId)} has no invocation entry.`,
-      );
-    }
-    const bins = (await readdir(binRoot))
-      .filter((name) => name.endsWith('.mjs') && !name.endsWith('-flight.mjs'))
-      .sort();
+    const bins = existsSync(binRoot)
+      ? (await readdir(binRoot)).filter((name) => name.endsWith('.mjs') && !name.endsWith('-flight.mjs')).sort()
+      : [];
     for (const name of bins) {
       const module = await importedModule<Partial<CompiledCliInvocationModule>>(join(binRoot, name));
       if (!isCliInvocationModule(module)) continue;

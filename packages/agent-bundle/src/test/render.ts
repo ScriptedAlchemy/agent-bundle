@@ -26,9 +26,7 @@ import type {
 } from '@agent-bundle/runtime';
 import type * as React from 'react';
 
-import {
-  mapGeneratedCliInput,
-} from '../cli-entry.ts';
+import { mapGeneratedCliInput } from '../cli-entry.ts';
 import type {
   CliRenderedEvent,
   GeneratedCliRenderContext,
@@ -1087,17 +1085,6 @@ export const loadCliProjectionModule = async (
 };
 
 /**
- * Mirrors the generated bin's explicit defaults, mapping, and canonical
- * validation boundary; confirmation is the shell's (`parseMcpCommandInput`).
- */
-export const parseCliCommandInput = (
-  command: CompiledCliCommand,
-  inputSchema: AgentRouteSchema,
-  projectionModule: Readonly<Record<string, unknown>> | undefined,
-  input: Readonly<Record<string, unknown>>,
-): unknown => mapGeneratedCliInput(command, inputSchema, projectionModule, input);
-
-/**
  * Accepts preloaded route modules and prepares the renderer and manifest
  * state before the synchronous generated-shell render factory is installed.
  */
@@ -1151,12 +1138,7 @@ export const prepareCliRenderHost = async (
           },
         );
       }
-      const parsed = parseCliCommandInput(
-        command,
-        module.inputSchema,
-        projectionModule,
-        input,
-      );
+      const parsed = mapGeneratedCliInput(command, module.inputSchema, projectionModule, input);
       const commandName = command.path.join(' ');
       const invocation: AgentRenderInvocation = {
         kind: 'cli',

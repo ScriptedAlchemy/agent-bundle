@@ -430,7 +430,8 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         'preflight.outcome',
       ]);
       expect(existsSync(join(
-        join(project.root, '.agent-bundle'),
+        project.root,
+        '.agent-bundle',
         routeId === 'event:tool/before' ? 'deny-handler.marker' : 'continue-handler.marker',
       ))).toBe(false);
       if (routeId === 'event:tool/before') {

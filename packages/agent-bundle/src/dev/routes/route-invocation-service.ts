@@ -91,10 +91,7 @@ export interface RouteInvocationPreparedProject {
   readonly artifact?: Readonly<{ epochId: string; target: string }>;
   readonly fixtures?: Readonly<Record<string, readonly RouteInvocationFixture[]>>;
   readonly manifest: AgentBundleTestManifest;
-  /**
-   * Writable framework state beside the epoch, shared with that epoch's dev
-   * MCP sessions, never the code root.
-   */
+  /** Writable framework state (`devStateRoot`), shared with dev MCP sessions and never the code root. */
   readonly stateRoot: string;
   readonly targets: readonly RouteInvocationEventHost[];
 }
@@ -617,8 +614,7 @@ const renderInChild = async (
       if (message.type === 'error') {
         const error = isProductionRouteInvocationCode(message.error.code)
           ? new ProductionRouteInvocationError(message.error.code, message.error.message)
-          : new Error(message.error.message);
-        if (!(error instanceof ProductionRouteInvocationError)) error.name = message.error.name;
+          : Object.assign(new Error(message.error.message), { name: message.error.name });
         return settle(() => rejectPromise(error));
       }
       settle(() => resolvePromise(message.result));
@@ -1025,7 +1021,6 @@ export class RouteInvocationService {
         const abort = (): void => controller.abort(admissionSignal.reason);
         this.#controllers.add(controller);
         admissionSignal.addEventListener('abort', abort, { once: true });
-        if (admissionSignal.aborted) abort();
         const timeout = setTimeout(() => controller.abort(new DOMException('Route invocation timed out.', 'TimeoutError')), this.#timeoutMs);
         let child: RouteInvocationChildResult;
         const plainScript = plainScriptFor(prepared, route);

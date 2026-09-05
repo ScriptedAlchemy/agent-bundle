@@ -192,7 +192,7 @@ it('aborts and drains a running render when the service closes', async () => {
     prepared: async () => ({
       project: {
         manifest: { projectRoot: '/project' } as never,
-        stateRoot: '/project/.agent-bundle/epochs/epoch-1/state',
+        stateRoot: '/project/.agent-bundle/state',
         targets: ['claude'],
       },
       release: () => {
@@ -224,7 +224,7 @@ it('rejects a queued invocation when the published revision moves before the slo
   const executed: RouteInvocationChildRequest[] = [];
   let releases = 0;
   const projectRoot = '/project';
-  const epochRoot = join(projectRoot, '.agent-bundle', 'epochs', 'epoch-1');
+  const stateRoot = join(projectRoot, '.agent-bundle', 'state');
   const service = new RouteInvocationService({
     concurrency: 1,
     manifest: {
@@ -233,7 +233,7 @@ it('rejects a queued invocation when the published revision moves before the slo
     prepared: async () => ({
       project: {
         manifest: { projectRoot } as never,
-        stateRoot: join(epochRoot, 'state'),
+        stateRoot,
         targets: ['claude'],
       },
       release: () => {
@@ -264,7 +264,7 @@ it('rejects a queued invocation when the published revision moves before the slo
     status: 'succeeded',
   });
   expect(executed).toHaveLength(1);
-  expect(executed[0]?.stateRoot).toBe(join(epochRoot, 'state'));
+  expect(executed[0]?.stateRoot).toBe(stateRoot);
   expect(executed[0]?.stateRoot).not.toBe(projectRoot);
   await expect(second).rejects.toMatchObject({
     code: ROUTE_INVOCATION_STALE_REVISION_CODE,

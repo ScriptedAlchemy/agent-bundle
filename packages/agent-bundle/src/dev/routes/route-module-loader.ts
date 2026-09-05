@@ -78,10 +78,11 @@ const rewriteTsxSpecifiers = ({ filename, source }: TransformOptions): string =>
   let rewritten = source;
   for (const literal of moduleSpecifierLiterals(sourceFile).toReversed()) {
     if (!isRelativeSpecifier(literal.text) || !literal.text.endsWith('.js')) continue;
-    const stem = resolve(directory, literal.text.slice(0, -'.js'.length));
+    const specifier = literal.text.slice(0, -'.js'.length);
+    const stem = resolve(directory, specifier);
     if (existsSync(`${stem}.js`) || existsSync(`${stem}.ts`) || !existsSync(`${stem}.tsx`)) continue;
     const quote = source[literal.start]!;
-    rewritten = `${rewritten.slice(0, literal.start)}${quote}${literal.text}x${quote}${rewritten.slice(literal.end)}`;
+    rewritten = `${rewritten.slice(0, literal.start)}${quote}${specifier}.tsx${quote}${rewritten.slice(literal.end)}`;
   }
   return rewritten;
 };
