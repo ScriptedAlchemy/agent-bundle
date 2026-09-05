@@ -97,7 +97,7 @@ it('surfaces artifact validation diagnostics instead of one opaque failure', asy
   const service = new RecordingService();
   const diagnostics = deepFreeze([{
     code: 'AB4300',
-    generatedPath: 'claude/hooks/guard.mjs',
+    generatedPath: 'hooks/guard.mjs',
     message: 'Emitted hook wrapper is not executable.',
     severity: 'error' as const,
   }]);

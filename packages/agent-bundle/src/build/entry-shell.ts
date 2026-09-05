@@ -732,7 +732,22 @@ export interface GeneratedRouteMcpEntryOptions {
   /** The project's resolved `notices.retention`; the runtime defaults apply when absent. */
   readonly noticeRetention?: NormalizedNoticeRetentionPolicy;
   readonly state?: NormalizedStateDefinition;
-  readonly target?: string;
+  /**
+   * The hosts whose hook wrappers may deliver events to this entry: the
+   * selected hosts of the composite root that the server targets (#555).
+   * The entry's event endpoint is identified by the artifact alone — epoch
+   * and root directory — and the invoking host arrives with each request and
+   * is checked against this set; `targets` select projections, they are not
+   * runtime identity (#592). Absent means no host may deliver events.
+   */
+  readonly allowedTargets?: readonly string[];
+  /**
+   * The selected hosts whose MCP documents list this server — the hosts that
+   * can launch it. When exactly one can, the runtime assumes that host for
+   * tool-call lineage when the MCP client does not name itself; otherwise the
+   * client's own name alone decides (#592). Absent means none.
+   */
+  readonly hosts?: readonly string[];
   readonly workerFile: string;
 }
 
@@ -1091,10 +1106,8 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
   assertRegistrableMcpRoutes(routes, options.state !== undefined);
   const artifactEpoch = generatedRouteArtifactEpoch(options.plugin);
   const hasEvents = (options.eventRoutes?.length ?? 0) > 0;
-  const eventTarget = options.target ?? 'unknown';
-  const allowedEventTargets = eventTarget === 'plugin'
-    ? ['claude', 'codex', 'cursor']
-    : [eventTarget];
+  const allowedEventTargets = [...(options.allowedTargets ?? [])].sort((left, right) => left.localeCompare(right));
+  const eventHosts = [...(options.hosts ?? [])].sort((left, right) => left.localeCompare(right));
   const wiresInbox = wiresInboxRoute(options);
   const wiresResourceUpdated = wiresResourceUpdatedRoute(options);
   // The lineage registry journals durably only where the project already
@@ -1155,18 +1168,20 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
     ...(hasEvents
       ? [
           // The endpoint identity is artifact-location dependent, so it stays
-          // in the artifact rather than the shared runtime.
+          // in the artifact rather than the shared runtime: the artifact epoch
+          // and the root directory (the entry lives in `mcp/`), never the
+          // projection selection — the hook wrapper derives the same id (#592).
           `const EVENT_ARTIFACT_EPOCH = ${JSON.stringify(options.artifactEpoch ?? 'unknown')};`,
-          `const EVENT_TARGET = ${JSON.stringify(eventTarget)};`,
           `const EVENT_ALLOWED_TARGETS = Object.freeze(${JSON.stringify(allowedEventTargets)});`,
+          `const EVENT_HOSTS = Object.freeze(${JSON.stringify(eventHosts)});`,
           'const events = Object.freeze({',
           '  allowedTargets: EVENT_ALLOWED_TARGETS,',
           '  artifactEpoch: EVENT_ARTIFACT_EPOCH,',
           '  createCanonicalEventProps,',
           '  createEventRuntimeServer,',
-          '  endpointId: `${EVENT_ARTIFACT_EPOCH}:${EVENT_TARGET}:${dirname(dirname(resolve(process.argv[1])))}`,',
+          '  endpointId: `${EVENT_ARTIFACT_EPOCH}:${dirname(dirname(resolve(process.argv[1])))}`,',
+          '  hosts: EVENT_HOSTS,',
           '  projectEventDocument,',
-          '  target: EVENT_TARGET,',
           '});',
           '',
         ]

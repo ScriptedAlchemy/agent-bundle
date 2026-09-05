@@ -25,7 +25,7 @@ it('builds the Skills Starter through public Agent Bundle APIs', async () => {
       model: {
         metadata: { name: 'skills-starter' },
         scripts: [],
-        targets: [{ name: 'portable' }, { name: 'codex' }, { name: 'claude' }],
+        targets: [{ name: 'claude' }, { name: 'codex' }, { name: 'portable' }],
       },
       state: 'ready',
     });
@@ -37,13 +37,12 @@ it('builds the Skills Starter through public Agent Bundle APIs', async () => {
     expect(projectVersionLabel(inspection.projectContext)).toContain('development fallback');
     await build({ output, root });
     await expect(validate({ artifact: output, root })).resolves.toEqual({ diagnostics: [] });
-    await expect(readFile(join(output, 'portable', 'skills', 'release-review', 'SKILL.md'), 'utf8'))
+    await expect(readFile(join(output, 'skills', 'release-review', 'SKILL.md'), 'utf8'))
       .resolves.toContain('# Release review');
-    await expect(readFile(join(output, 'portable', 'skills', 'release-review', 'SKILL.md'), 'utf8'))
+    await expect(readFile(join(output, 'skills', 'release-review', 'SKILL.md'), 'utf8'))
       .resolves.toContain('## When to use');
     await expect(readFile(join(
       output,
-      'portable',
       'skills',
       'release-review',
       'references',
@@ -51,7 +50,6 @@ it('builds the Skills Starter through public Agent Bundle APIs', async () => {
     ), 'utf8')).resolves.toContain('Confirm the release artifact');
     await expect(readFile(join(
       output,
-      'portable',
       'skills',
       'release-review',
       'references',
@@ -59,7 +57,6 @@ it('builds the Skills Starter through public Agent Bundle APIs', async () => {
     ), 'utf8')).resolves.toContain('# Release readiness policy');
     await expect(readFile(join(
       output,
-      'portable',
       'skills',
       'release-review',
       'assets',
@@ -132,28 +129,28 @@ it('publishes the MCP App example service readiness across targets and returns d
         mcpApps: [{ name: 'status', targets: ['portable'] }],
         mcpServers: [{ name: 'status', targets: ['claude', 'codex', 'portable'] }],
         scripts: [{ name: 'check-service-fixture', targets: ['claude', 'codex', 'portable'] }],
-        skills: [{ name: 'service-readiness', targets: ['portable', 'codex', 'claude'] }],
-        targets: [{ name: 'portable' }, { name: 'codex' }, { name: 'claude' }],
+        skills: [{ name: 'service-readiness', targets: ['claude', 'codex', 'portable'] }],
+        targets: [{ name: 'claude' }, { name: 'codex' }, { name: 'portable' }],
       },
       state: 'ready',
     });
-    for (const target of ['portable', 'codex', 'claude'] as const) {
-      await expect(readFile(join(output, target, 'skills', 'service-readiness', 'SKILL.md'), 'utf8'))
-        .resolves.toContain('# Service readiness');
-      await expect(readFile(join(output, target, 'skills', 'service-readiness', 'references', 'status-policy.md'), 'utf8'))
-        .resolves.toContain('# Service status policy');
-      await expect(readFile(join(output, target, 'skills', 'service-readiness', 'assets', 'readiness-report.md'), 'utf8'))
-        .resolves.toContain('# Service readiness report');
-      await expect(readFile(join(output, target, 'scripts', 'check-service-fixture.mjs'), 'utf8'))
-        .resolves.toContain('Compiler fixture is healthy.');
-      await expect(readFile(join(output, target, 'assets', 'evals', 'fixtures', 'status', 'result.json'), 'utf8'))
-        .resolves.toContain('"Compiler service is ready for release."');
-    }
+    // The shared skill, script, and asset are emitted once into the composite
+    // root that all three selected hosts read (#555).
+    await expect(readFile(join(output, 'skills', 'service-readiness', 'SKILL.md'), 'utf8'))
+      .resolves.toContain('# Service readiness');
+    await expect(readFile(join(output, 'skills', 'service-readiness', 'references', 'status-policy.md'), 'utf8'))
+      .resolves.toContain('# Service status policy');
+    await expect(readFile(join(output, 'skills', 'service-readiness', 'assets', 'readiness-report.md'), 'utf8'))
+      .resolves.toContain('# Service readiness report');
+    await expect(readFile(join(output, 'scripts', 'check-service-fixture.mjs'), 'utf8'))
+      .resolves.toContain('Compiler fixture is healthy.');
+    await expect(readFile(join(output, 'assets', 'evals', 'fixtures', 'status', 'result.json'), 'utf8'))
+      .resolves.toContain('"Compiler service is ready for release."');
     const fixtureCheck = await execFile(process.execPath, [
-      join(output, 'portable', 'scripts', 'check-service-fixture.mjs'),
+      join(output, 'scripts', 'check-service-fixture.mjs'),
     ], { cwd: unrelatedCwd });
     expect(fixtureCheck.stdout).toBe('Compiler fixture is healthy.\n');
-    const fixturePath = join(output, 'portable', 'assets', 'evals', 'fixtures', 'status', 'result.json');
+    const fixturePath = join(output, 'assets', 'evals', 'fixtures', 'status', 'result.json');
     const healthyFixture = await readFile(fixturePath, 'utf8');
     await writeFile(fixturePath, JSON.stringify({
       checks: [],
@@ -163,7 +160,7 @@ it('publishes the MCP App example service readiness across targets and returns d
     }));
     try {
       const invalidFixtureCheck = await execFile(process.execPath, [
-        join(output, 'portable', 'scripts', 'check-service-fixture.mjs'),
+        join(output, 'scripts', 'check-service-fixture.mjs'),
       ], { cwd: unrelatedCwd }).then(
         () => {
           throw new Error('Expected an incomplete compiler fixture to fail.');
@@ -175,14 +172,15 @@ it('publishes the MCP App example service readiness across targets and returns d
     } finally {
       await writeFile(fixturePath, healthyFixture);
     }
-    const appHtml = await readFile(join(output, 'portable', 'mcp-apps', 'status.html'), 'utf8');
+    const appHtml = await readFile(join(output, 'mcp-apps', 'status.html'), 'utf8');
     expect(appHtml).toContain('aria-label="Service checks"');
     expect(appHtml).toContain('mcp-app-example');
     expect(appHtml).toContain('1.0.0');
     expect(appHtml).not.toContain('mcp-app-status-panel');
     expect(appHtml).not.toContain('agent-bundle/meta');
-    expect(built.build.compiledMcpApps).toMatchObject([{ name: 'status', target: 'portable' }]);
-    expect(built.build.compiledMcpEntries.map(({ target }) => target).sort()).toEqual(['claude', 'codex', 'portable']);
+    // Compiled surfaces are attributed to the composite root's identity (#555).
+    expect(built.build.compiledMcpApps).toMatchObject([{ name: 'status', target: 'claude+codex+portable' }]);
+    expect(built.build.compiledMcpEntries.map(({ target }) => target)).toEqual(['claude+codex+portable']);
     await Promise.all(built.build.compiledMcpEntries.map(({ output: mcpOutput }) =>
       expect(readFile(mcpOutput, 'utf8')).resolves.toContain('payments-api'),
     ));
@@ -226,9 +224,9 @@ it('simulates the Hooks example and executes release checks', async () => {
     await expect(validate({ artifact: output, root })).resolves.toEqual({ diagnostics: [] });
     const artifactCatalog = built.build.compiledEntries.map(({ name }) => name);
     expect(artifactCatalog).toEqual(expect.arrayContaining(['verify-release', 'detect-risk']));
-    await expect(readFile(join(output, 'portable', 'assets', 'release', 'release-manifest.json'), 'utf8'))
+    await expect(readFile(join(output, 'assets', 'release', 'release-manifest.json'), 'utf8'))
       .resolves.toContain('"version": "2.4.0"');
-    await expect(readFile(join(output, 'portable', 'assets', 'release', 'risk-register.json'), 'utf8'))
+    await expect(readFile(join(output, 'assets', 'release', 'risk-register.json'), 'utf8'))
       .resolves.toContain('"id": "REL-204"');
     const hooks = await listHooks({ artifact: output, root });
     expect(hooks).toHaveLength(2);
@@ -248,11 +246,11 @@ it('simulates the Hooks example and executes release checks', async () => {
     });
     expect(result).toMatchObject({ additionalContext: expect.stringContaining('release preparation') });
     const verify = await execFile(process.execPath, [
-      join(output, 'portable', 'scripts', 'verify-release.mjs'),
+      join(output, 'scripts', 'verify-release.mjs'),
     ], { cwd: unrelatedCwd });
     expect(verify.stdout).toContain('Release 2.4.0 is ready for packaging.');
     const blocker = await execFile(process.execPath, [
-      join(output, 'portable', 'scripts', 'detect-risk.mjs'),
+      join(output, 'scripts', 'detect-risk.mjs'),
     ], { cwd: unrelatedCwd }).then(
       () => {
         throw new Error('Expected detect-risk to block release packaging.');
@@ -306,7 +304,7 @@ it('serves the routed Audiobook Curator artifact through a real MCP client', { r
     await rm(join(root, 'src'), { force: true, recursive: true });
     const server = compiled.model.mcpServers.find((candidate) => candidate.name === 'curator');
     expect(server?.generatedRoutes).toHaveLength(18);
-    const entry = join(output, 'claude', server!.args![0]!);
+    const entry = join(output, server!.args![0]!);
     client = new Client({ name: 'audiobook-route-contract', version: '1.0.0' });
     await client.connect(new StdioClientTransport({ args: [entry], command: process.execPath, stderr: 'pipe' }));
 

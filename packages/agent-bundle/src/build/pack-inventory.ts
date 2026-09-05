@@ -8,7 +8,6 @@ import { isErrno } from '../core/errors.ts';
 import { deepFreeze } from '../core/freeze.ts';
 import { isRecord } from '../core/strict-json.ts';
 import { readFileBytes, readFileString, runWithPlatform } from '../effect/platform.ts';
-import { installSurfaceRequirements } from '../install/surface.ts';
 import { artifactManifestName } from './emit.ts';
 import { parseArtifactManifest } from './manifest.ts';
 import {
@@ -112,12 +111,6 @@ const hostManifestPaths = (target: string): readonly string[] => {
       return Object.freeze(['.codex-plugin/plugin.json']);
     case 'cursor':
       return Object.freeze(['.cursor-plugin/plugin.json']);
-    case 'plugin':
-      return Object.freeze([
-        '.claude-plugin/plugin.json',
-        '.codex-plugin/plugin.json',
-        '.cursor-plugin/plugin.json',
-      ]);
     case 'portable':
       return Object.freeze(['plugin.json']);
     default:
@@ -272,9 +265,10 @@ export const packInventoryDiagnostics = async (options: {
   const expected = new Set<string>([
     ...options.packageBuild.files.map((file) => `${packagePrefix}/${file.path}`),
     `${artifactPrefix}/${artifactManifestName}`,
+    // Every emitted file is manifested, the install surface included: the
+    // artifact validator (`AB6023`/`AB6024`) already judged its presence by
+    // adapter identity, so the pack expects exactly what the manifest lists.
     ...manifest.files.map((file) => `${artifactPrefix}/${file.path}`),
-    ...manifest.targets.flatMap((target) =>
-      installSurfaceRequirements(target.name).map((path) => `${artifactPrefix}/${target.name}/${path}`)),
     'README.md',
   ]);
 
@@ -322,9 +316,9 @@ export const packInventoryDiagnostics = async (options: {
   ];
   for (const target of manifest.targets) {
     for (const path of hostManifestPaths(target.name)) {
-      const absolute = join(artifactRoot, target.name, path);
+      const absolute = join(artifactRoot, path);
       if (await exists(absolute)) {
-        versions.push([`${target.name}/${path}`, (await jsonRecord(absolute)).version]);
+        versions.push([path, (await jsonRecord(absolute)).version]);
       }
     }
   }

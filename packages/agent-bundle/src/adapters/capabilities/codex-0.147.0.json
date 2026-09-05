@@ -75,7 +75,7 @@
         "retrieved 2026-09-02: https://developers.openai.com/plugins/build/plugins lists a legacy-compatible marketplace at $REPO_ROOT/.claude-plugin/marketplace.json alongside the repo and personal marketplace locations."
       ],
       "path": ".claude-plugin/marketplace.json",
-      "reason": "The Codex adapter emits the Codex-native .agents/plugins/marketplace.json and never a .claude-plugin/marketplace.json; the legacy path is a host-side reading convenience for Claude-authored repositories, and the unified plugin target's Claude marketplace is emitted by the Claude adapter, not as a Codex compatibility artifact.",
+      "reason": "The Codex adapter emits the Codex-native .agents/plugins/marketplace.json and never a .claude-plugin/marketplace.json; the legacy path is a host-side reading convenience for Claude-authored repositories, and a composite root's Claude marketplace is emitted by the Claude adapter, not as a Codex compatibility artifact.",
       "state": "unavailable"
     },
     "marketplaceSources": {

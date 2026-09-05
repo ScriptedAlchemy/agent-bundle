@@ -108,7 +108,7 @@ it('publishes one validated prepared project as an immutable epoch and removes i
       join(root, '.agent-bundle', 'epochs', 'epoch-one', 'agent-bundle.manifest.json'),
     );
     expect(await store.readActiveEpoch()).toEqual(result.epoch);
-    await expect(readFile(join(root, '.agent-bundle', 'epochs', 'epoch-one', 'portable', 'plugin.json'), 'utf8'))
+    await expect(readFile(join(root, '.agent-bundle', 'epochs', 'epoch-one', 'plugin.json'), 'utf8'))
       .resolves.toContain('artifact-service-fixture');
     await expect(readFile(join(root, '.agent-bundle', 'epochs', '.metadata', 'native-playground', 'epoch-one.json'), 'utf8'))
       .resolves.toBe('{"epochId":"epoch-one","selections":[]}\n');
@@ -212,14 +212,13 @@ it('allows only an exact epoch store marker as an extra staged artifact file', a
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-staged-artifact-validation-'));
   const marker = '.agent-bundle-epoch-stage.json';
   try {
-    await mkdir(join(root, 'portable'), { recursive: true });
     await writeFile(
-      join(root, 'portable', 'plugin.json'),
+      join(root, 'plugin.json'),
       '{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","description":"Valid staged plugin.","name":"valid","version":"1.0.0"}\n',
     );
     await Promise.all([
-      writeFile(join(root, 'portable', 'INSTALL.md'), '# Install valid\n'),
-      writeFile(join(root, 'portable', 'install.mjs'), 'export {};\n'),
+      writeFile(join(root, 'INSTALL.md'), '# Install valid\n'),
+      writeFile(join(root, 'install.mjs'), 'export {};\n'),
     ]);
     await writeFixtureManifest({ artifactRoot: root, targets: ['portable'] });
     await writeFile(join(root, marker), '{"token":"8f2aa8b7-bdd2-4065-8cd3-5184c6bd9f74"}\n');
@@ -544,7 +543,7 @@ it('rejects a tampered staging transfer, retains the last good epoch, and cleans
       expect(await store.readActiveEpoch()).toEqual(first.epoch);
     }
     expect(removedAttempts).toEqual(attempts);
-    await expect(readFile(join(root, '.agent-bundle', 'epochs', 'epoch-tampered', 'portable', 'plugin.json'), 'utf8'))
+    await expect(readFile(join(root, '.agent-bundle', 'epochs', 'epoch-tampered', 'plugin.json'), 'utf8'))
       .rejects.toMatchObject({ code: 'ENOENT' });
   } finally {
     await rm(root, { force: true, recursive: true });

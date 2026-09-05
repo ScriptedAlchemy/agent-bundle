@@ -21,9 +21,10 @@ recorded evidence rather than a claim.
   and nothing else. Every `src/skills/*/SKILL.md` directory is found by convention, so the config
   never lists a Skill. That is the authoring model described in
   [Skills](../guide/authoring/skills.mdx).
-- **One source, three host layouts.** The same authored documents are lowered into the portable,
-  Codex, and Claude trees. The Workbench's Source and Generated views show whether a target
-  copied a document or adapted it.
+- **One source, three host projections.** The same authored documents are lowered for the
+  portable, Codex, and Claude projections of one composite plugin root — `skills/` is emitted once
+  and every selected host reads it. The Workbench's Source and Generated views show whether a
+  host copied a document or adapted it.
 - **Deterministic eval evidence.** The eval suites run through the deterministic harness against
   checked-in fixtures, so a Skill's coverage is a recorded run rather than an assertion. Coverage
   is labeled *indirect* because a deterministic harness cannot observe host Skill activation.
@@ -48,8 +49,9 @@ it is needed.
    health, and the next useful actions.
 2. **Skills** lists `dependency-upgrade`, `incident-triage`, and `release-review`. Browse their
    linked checklists and report templates, and switch between Source and Generated per target.
-3. **Artifacts** defaults to the Claude target. Change the target to compare the portable, Codex,
-   and Claude output trees and their provenance.
+3. **Artifacts** shows the composite plugin root. Switching the target between portable, Codex,
+   and Claude changes which projection is in focus, but every choice shows the same tree — the
+   one directory all three hosts read — and each file's provenance.
 4. **Evals** defaults to the `release-readiness` suite. Run `release-artifact-is-ready` and
    inspect the passing trial; it consumes only the checked-in evidence fixture.
 5. To practice repair, make a reversible edit to the release policy, press **Rebuild**, and wait

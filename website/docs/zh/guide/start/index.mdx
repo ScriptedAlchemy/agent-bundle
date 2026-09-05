@@ -1,12 +1,12 @@
 ---
-description: 'agent-bundle 将一份带类型的配置编译为可安装到 Claude Code、Codex、Cursor 的插件产物以及可移植布局。'
+description: 'agent-bundle 将一份带类型的配置编译为 Claude Code、Codex、Cursor 与可移植 Agent Plugins 格式都能安装的同一个插件根目录。'
 ---
 
 # 介绍
 
 agent-bundle 把一个智能体插件——由一份带类型的配置描述的 Skills、钩子、MCP 服务器与脚本——编译为
-可安装到 Claude Code、Codex 与 Cursor 的产物，外加一份可移植布局。插件只写一次，编译器负责生成
-每个宿主各自的清单与包装层。
+一个可安装到 Claude Code、Codex 与 Cursor 的插件根目录，外加可移植的 Agent Plugins 格式。插件只写
+一次，编译器负责把每个宿主各自的清单与包装层生成到这同一个根目录中。
 
 需要 Node.js 22.19 或更高版本。
 
@@ -22,10 +22,10 @@ agent-bundle 把这件事反转过来。宿主专属布局是编译器的职责�
 npx agent-bundle build --root .
 ```
 
-当 `targets: ['plugin']` 时，这一条命令会在 `artifact/plugin/` 生成一份多宿主捆绑包：`.claude-plugin/`、
-`.codex-plugin/` 与 `.cursor-plugin/` 三份清单，共享同一套 `skills/`、`hooks/`、`mcp/` 与 `scripts/`
-目录。捆绑包中生成的 `AGENTS.md` 会说明如何把它安装到各个宿主。单宿主布局则由 `claude`、`codex`、
-`cursor` 与 `portable` 这几个 target 提供。
+这一条命令会在 `artifact/` 生成一个复合插件根目录：每个所选宿主的清单（`.claude-plugin/`、
+`.codex-plugin/`、`.cursor-plugin/`，以及可移植格式的 `plugin.json`）覆盖在共享的 `skills/`、`hooks/`、
+`mcp/`、`bin/` 与 `scripts/` 目录之上，外加一份 `INSTALL.md`。`targets` 选择根目录承载哪些宿主投影
+——`claude`、`codex`、`cursor`、`portable`；省略时只选择 `portable`——而所有宿主安装的都是同一个目录。
 
 ## 配置负责什么
 
@@ -36,7 +36,7 @@ import { defineConfig } from 'agent-bundle/config';
 
 export default defineConfig({
   plugin: { name: 'my-plugin', description: 'What it does.' }, // [!code highlight]
-  targets: ['plugin'],
+  targets: ['claude', 'codex', 'cursor'],
   skills: ['src/skills/*'],
   hooks: { sessionStart: { handler: './src/session-start.ts' } },
   mcp: { servers: { tools: { entry: './src/mcp.ts' } } },
@@ -44,8 +44,8 @@ export default defineConfig({
 ```
 
 同一份配置还负责 npm 包构建——不需要第二份打包器配置、不需要 bin 垫片、也不需要手写 stdio 生命周期。
-`bin` 与 `lib` 条目（或 `src/cli.ts`、`src/index.ts`、`src/mcp/<server-id>.ts` 这几个约定）会在宿主
-产物之外一并生成可执行的 `dist/bin/<name>.js` 包与库输出。默认导出服务器工厂函数的 MCP 入口会运行在
+`bin` 与 `lib` 条目（或 `src/cli.ts`、`src/index.ts`、`src/mcp/<server-id>.ts` 这几个约定）会在插件
+根目录之外一并生成可执行的 `dist/bin/<name>.js` 包与库输出。默认导出服务器工厂函数的 MCP 入口会运行在
 框架自有的 stdio 生命周期之下。`tools.rsbuild` / `tools.rspack` 是唯一的打包器逃生舱。
 
 ## 编写模型

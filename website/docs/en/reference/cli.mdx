@@ -37,12 +37,12 @@ npx agent-bundle --version
 | `--root <root>` | `process.cwd()` | Project root. |
 | `--config <path>` | — | Configuration file relative to `--root`. |
 | `--mode <mode>` | `production` | Configuration mode. |
-| `--target <target>` | all configured | Target to select. Repeatable. |
+| `--target <target>` | config `targets`, else `portable` | Host projection to select: `claude`, `codex`, `cursor`, or `portable`. Repeatable; the selection replaces the configured `targets` for this run, and every selected host lands in the one composite root whatever the order. Any other name, `plugin` included, is `AB4100`. |
 | `--json` | off | Write one machine-readable JSON document. |
 
 **Artifact commands** — `mcp list`, `mcp invoke`, `mcp run`, `serve-app`, `hooks list`, `hooks simulate`:
 the same `--root`, `--config`, `--mode`, and `--json`, plus `--artifact <path>` to use exactly
-one built artifact and `--target <target>` to select the artifact target. `--target` is
+one built artifact and `--target <target>` to select the host projection. `--target` is
 **required** for `mcp list`, `mcp invoke`, `mcp run`, and `hooks simulate`; `serve-app` defaults it
 to `portable` and takes no `--json`.
 
@@ -119,32 +119,33 @@ Both take the source option group plus:
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--output <path>` | config `output.distPath`, else `artifact` | Artifact output path relative to `--root`. `dist` belongs to the package build. |
+| `--output <path>` | config `output.distPath`, else `artifact` | The composite plugin root, relative to `--root`: one directory every selected host reads, with no per-host subdirectory beneath it. `dist` belongs to the package build. |
 
-Both build package outputs when the project declares `bin` or `lib`.
+Both build package outputs when the project declares `bin` or `lib`. The layout of the root is
+in [Targets and artifacts](./targets-artifacts.mdx).
 
 `build` alone also takes:
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--host-validation` / `--no-host-validation` | on | After the artifact is written, run the installed Claude Code developer validator and load check over every built `claude` and `plugin` target — the same pair `validate --artifact` runs (`AB6019`–`AB6022`, `AB7311`, `AB7325`). Without `claude` on `PATH` the build spawns once and reports one informational `AB6019` skip. |
+| `--host-validation` / `--no-host-validation` | on | After the root is written, run the installed Claude Code developer validator and load check over it when `claude` is among the selected projections — the same pair `validate --artifact` runs (`AB6019`–`AB6022`, `AB7311`, `AB7325`). Without `claude` on `PATH` the build spawns once and reports one informational `AB6019` skip. |
 | `--strict` | off | Promote host-tool warnings to errors. |
 
-The JSON document carries the reports under `hostValidation`, one per validated target, each
+The JSON document carries the reports under `hostValidation`, one per validated projection, each
 with a `load` verdict (`loaded`, `refused`, `unregistered`, or `failed`) when the load check ran.
 Programmatic `build()` calls never run host validation unless `hostValidation: true` is passed.
 
 ## install
 
 ```sh
-agent-bundle install <host> [--from <bundle-dir>] [--scope <scope>] [--mode <mode>] \
+agent-bundle install <host> [--from <root>] [--scope <scope>] [--mode <mode>] \
   [--replace] [--json]
 ```
 
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `<host>` | **required** | `claude`, `codex`, or `cursor`. |
-| `--from <bundle-dir>` | `process.cwd()` | Target bundle directory or artifact root. |
+| `--from <root>` | `process.cwd()` | The artifact root. The host's manifest must sit directly under it (`.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, or `.cursor-plugin/plugin.json`); there is no `<from>/<host>` lookup, and every host installs from the same directory (`AB7001` when the manifest is absent). |
 | `--scope <scope>` | `user` | `user`, `project`, or `local`. Claude accepts all three; Codex and Cursor are user-scoped. |
 | `--mode <mode>` | `local` | Cursor only. `local` copies the bundle into `~/.cursor/plugins/local/<name>`; `marketplace` stages a committed local marketplace repository under `~/.cursor/agent-bundle/marketplaces/<name>` and prints the Customize → Plugins → "Add Plugins from Local Repository" step that makes Cursor manage the plugin as a marketplace install. |
 | `--replace` (alias `--force`) | off | Replace an existing agent-bundle install of this plugin even when its version differs. Without it, an identical copy is an `already-installed` no-op, a same-version copy whose content hash differs is replaced automatically, and a different version is `AB7005`. Foreign directories are always refused (`AB7005`). |
@@ -161,14 +162,14 @@ marketplace mode — that `uninstall` and `doctor` consume.
 ## uninstall
 
 ```sh
-agent-bundle uninstall <host> [--from <bundle-dir>] [--scope <scope>] [--mode <mode>] \
+agent-bundle uninstall <host> [--from <root>] [--scope <scope>] [--mode <mode>] \
   [--keep-data | --purge-data --confirm-purge] [--force] [--plan] [--json]
 ```
 
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `<host>` | **required** | `claude`, `codex`, or `cursor`. |
-| `--from <bundle-dir>` | `process.cwd()` | Bundle directory or artifact root that identifies the plugin (name, version, marketplace). |
+| `--from <root>` | `process.cwd()` | The artifact root that identifies the plugin (name, version, marketplace), with the host's manifest directly under it, as for `install`. |
 | `--scope <scope>` | `user` | The scope the plugin was installed at (Claude). |
 | `--mode <mode>` | `local` | Cursor only: uninstall the `local` copy or the staged `marketplace` repository. |
 | `--keep-data` | on | Keep durable runtime state (`state/`: state kernel, notices journal; for a Cursor copy of an Agent Plugins pack, also the recorded `PLUGIN_DATA` directory). This is the default; the flag makes it explicit. |
@@ -197,7 +198,7 @@ cached tree and has no keep-data option). The package-relative installer bin acc
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `--host <host>` | all supported | Host to inspect. Repeatable; `claude`, `codex`, or `cursor`. |
-| `--from <bundle-dir>` | — | Target bundle directory or artifact root to compare against. |
+| `--from <root>` | — | The artifact root to compare against; each inspected host's manifest must sit directly under it. |
 | `--json` | off | Write one machine-readable JSON document. |
 
 Doctor exits `1` when it reports any error diagnostic, and never modifies anything. With `--from`,
@@ -228,7 +229,7 @@ from `uninstall --keep-data` is reported `missing` with an `AB7307` info, not co
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `--artifact <path>` | — | Validate exactly this built artifact instead of project source. |
-| `--host-validation` / `--no-host-validation` | on | Run installed host developer tools for compatible built targets. For `claude` and `plugin` targets this is the two `claude plugin validate --strict` runs followed by the `claude --plugin-dir <dir> plugin list --json` load check (`AB7325` when the row carries `errors`, `AB7311` when there is no row). |
+| `--host-validation` / `--no-host-validation` | on | Run installed host developer tools over the root for the selected projections that have one. When `claude` is selected this is the two `claude plugin validate --strict` runs followed by the `claude --plugin-dir <root> plugin list --json` load check (`AB7325` when the row carries `errors`, `AB7311` when there is no row). |
 | `--strict` | off | Promote host-tool warnings to errors. |
 
 ## eval
@@ -251,7 +252,7 @@ from `eval`.
 
 | Flag | Focus |
 | --- | --- |
-| `--bundler` | The synthesized bundler configuration, lowered as the production build lowers it regardless of `NODE_ENV`. |
+| `--bundler` | The synthesized bundler configuration, lowered as the production build lowers it regardless of `NODE_ENV`. Its `distPath.root` is the artifact output, `<output>`, because every selected projection compiles into the one composite root. |
 | `--hooks` | Hooks. |
 | `--routes` | The compiled route graph. |
 | `--skills` | Skills. |
