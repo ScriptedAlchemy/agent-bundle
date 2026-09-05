@@ -57,7 +57,7 @@ import { defineConfig } from 'agent-bundle/config';
 
 export default defineConfig({
   plugin: { name: 'my-plugin', description: 'What it does.' },
-  targets: ['plugin'],
+  targets: ['claude', 'codex', 'cursor'],
   skills: ['src/skills/*'],
   hooks: { sessionStart: { handler: './src/session-start.ts' } },
   mcp: { servers: { tools: { entry: './src/mcp.ts' } } },
@@ -76,19 +76,20 @@ export default defineConfig({
 });
 ```
 
-The release version comes from `package.json`. A `plugin.version` field still works as a
-deprecated compatibility axis, but a value that disagrees with `package.json` reports the
-`AB4008` warning.
+`targets` selects the host projections the one artifact root carries — `claude`, `codex`,
+`cursor`, `portable`; omit it and the root carries `portable` alone. The release version comes
+from `package.json`. A `plugin.version` field still works as a deprecated compatibility axis, but
+a value that disagrees with `package.json` reports the `AB4008` warning.
 
 ## Build, or work interactively
 
 ```sh
-npx agent-bundle build --root .                 # write installable artifacts to artifact/
-npx agent-bundle dev --root .                   # local workbench with live rebuilds
+npx agent-bundle build --root .   # write the composite plugin root to artifact/
+npx agent-bundle dev --root .     # local workbench with live rebuilds
 ```
 
-`build` validates the project and writes the artifact, plus the `bin`/`lib` package build when
-declared. `dev` serves the loopback developer Workbench and rebuilds as inputs change: project
+`build` validates the project and writes the artifact root, plus the `bin`/`lib` package build
+when declared. `dev` serves the loopback developer Workbench and rebuilds as inputs change: project
 overview and diagnostics, Skill documents, the artifact tree with provenance and epoch
 comparison, an artifact-bound MCP playground with the raw protocol trace, a hook playground that
 runs the emitted wrapper, and eval runs.
@@ -96,7 +97,7 @@ runs the emitted wrapper, and eval runs.
 ## Inspect what the compiler decided
 
 ```sh
-npx agent-bundle inspect --root .            # normalized config and per-target plans
+npx agent-bundle inspect --root .            # normalized config and host projection plans
 npx agent-bundle inspect --root . --skills   # add the skill focus
 npx agent-bundle validate --root .           # check project source
 ```
@@ -106,22 +107,24 @@ that a convention was actually picked up.
 
 ## Install the result
 
-Every built target directory contains a generated `INSTALL.md` with commands that use the
-bundle's real plugin and marketplace names. With the `portable`, `codex`, and `claude` targets
-built above, the host installs are:
+The artifact root carries one generated `INSTALL.md`, a section per selected host, with commands
+that use the bundle's real plugin and marketplace names. Every host installs the same directory,
+so `--from` always names the root. With the `portable`, `codex`, and `claude` targets built
+above, the host installs are:
 
 ```sh
-npx agent-bundle install claude --from artifact/claude --scope user
-npx agent-bundle install codex --from artifact/codex
+npx agent-bundle install claude --from artifact --scope user
+npx agent-bundle install codex --from artifact
+node artifact/install.mjs   # the portable pack, via its generated installer
 ```
 
-Add `cursor` to `targets` to build `artifact/cursor`, and `npx agent-bundle install cursor --from
-artifact/cursor` installs it the same way. A `plugin` build has one `INSTALL.md` covering every host.
+Add `cursor` to `targets` and the same root gains `.cursor-plugin/`; `npx agent-bundle install
+cursor --from artifact` installs it the same way.
 
 For an install-free development loop against Claude Code:
 
 ```sh
-claude --plugin-dir artifact/claude plugin list --json
+claude --plugin-dir artifact plugin list --json
 ```
 
 ## Next steps

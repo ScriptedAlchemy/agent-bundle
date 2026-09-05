@@ -16,11 +16,11 @@ import {
 const hooks: readonly HookPlaygroundHook[] = [
   {
     binding: { epochId: 'epoch-1', hook: 'hook:stop', target: 'claude' },
-    hook: { event: 'stop', id: 'hook:stop', name: 'stop', path: 'claude/hooks/stop.mjs', target: 'claude' },
+    hook: { event: 'stop', id: 'hook:stop', name: 'stop', path: 'hooks/stop.mjs', target: 'claude' },
   },
   {
     binding: { epochId: 'epoch-1', hook: 'hook:session-start', target: 'claude' },
-    hook: { event: 'sessionStart', id: 'hook:session-start', name: 'session-start', path: 'claude/hooks/session-start.mjs', target: 'claude', timeout: 30 },
+    hook: { event: 'sessionStart', id: 'hook:session-start', name: 'session-start', path: 'hooks/session-start.mjs', target: 'claude', timeout: 30 },
   },
 ];
 
@@ -39,7 +39,7 @@ const simulation: HookPlaygroundSimulation = {
     nativeProjection: 'deterministic',
     nativeSelector: 'SessionStart',
     target: 'claude',
-    wrapperPath: 'claude/hooks/session-start.mjs',
+    wrapperPath: 'hooks/session-start.mjs',
   },
   nativeInput: { cwd: '/workspace', hook_event_name: 'SessionStart', session_id: 'session-1' },
   nativeOutput: { hookSpecificOutput: { additionalContext: 'Ready', hookEventName: 'SessionStart' } },
@@ -64,7 +64,7 @@ it('orders hook options deterministically and keys them by target and hook', () 
 
   expect(options.map((option) => option.key)).toEqual(['claude/hook:session-start', 'claude/hook:stop']);
   expect(options.map((option) => option.label)).toEqual(['Session start · Claude', 'Stop · Claude']);
-  expect(options[0]).toMatchObject({ event: 'sessionStart', path: 'claude/hooks/session-start.mjs', timeout: 30 });
+  expect(options[0]).toMatchObject({ event: 'sessionStart', path: 'hooks/session-start.mjs', timeout: 30 });
   expect(options[1]?.timeout).toBeUndefined();
   expect(Object.isFrozen(options)).toBe(true);
   expect(hookOptionKeyFor({ epochId: 'epoch-2', hook: 'hook:stop', target: 'codex' })).toBe('codex/hook:stop');
@@ -81,7 +81,7 @@ it('derives canonical intent and host mapping rows from a simulation', () => {
     { label: 'Native event', value: 'SessionStart' },
     { label: 'Native selector', value: 'SessionStart' },
     { label: 'Matcher', value: 'startup' },
-    { label: 'Wrapper path', value: 'claude/hooks/session-start.mjs' },
+    { label: 'Wrapper path', value: 'hooks/session-start.mjs' },
     { label: 'Native projection', value: 'deterministic' },
   ]);
 });
@@ -93,7 +93,7 @@ it('omits the matcher row when the emitted manifest declares none', () => {
     nativeProjection: 'deterministic',
     nativeSelector: 'SessionStart',
     target: 'claude',
-    wrapperPath: 'claude/hooks/session-start.mjs',
+    wrapperPath: 'hooks/session-start.mjs',
   });
 
   expect(rows.map((row) => row.label)).not.toContain('Matcher');

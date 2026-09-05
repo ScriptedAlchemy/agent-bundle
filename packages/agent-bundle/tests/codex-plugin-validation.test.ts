@@ -37,18 +37,18 @@ const validDocuments = Object.freeze({
       longDescription: 'A fixture plugin.',
       shortDescription: 'A fixture plugin.',
     },
-    hooks: './hooks/hooks.json',
-    mcpServers: './.mcp.json',
+    hooks: './.codex-plugin/hooks.json',
+    mcpServers: './.codex-plugin/mcp.json',
     name: 'fixture',
     skills: './skills/',
     version: '1.0.0',
   },
-  '.mcp.json': {
+  '.codex-plugin/mcp.json': {
     mcpServers: {
       fixture: { command: 'node', type: 'stdio' },
     },
   },
-  'hooks/hooks.json': {
+  '.codex-plugin/hooks.json': {
     hooks: {
       Stop: [{
         hooks: [{ command: 'node ./hooks/stop.mjs', type: 'command' }],
@@ -292,6 +292,24 @@ it('reports app-server-only schema output as unassessable information even in st
   }
 });
 
+it('judges only the Codex documents under .codex-plugin/ in a root shared with Claude (#555)', async () => {
+  // The composite root is every selected host's plugin root: Claude's
+  // `.mcp.json` and `hooks/hooks.json` sit beside Codex's `.codex-plugin/*`.
+  // Claude's documents carry shapes Codex's schemas reject (an `http` server,
+  // an empty command), and the Codex validator must not read them.
+  const pluginDirectory = await writeBundle({
+    '.mcp.json': { mcpServers: { remote: { type: 'http', url: 'https://example.test/mcp' } } },
+    'hooks/hooks.json': { hooks: { Stop: [{ hooks: [{ command: '', type: 'command' }] }] } },
+  });
+  try {
+    const report = await validateCodexPlugin({ pluginDirectory, run: runWith('match').run, target: 'codex' });
+    expect(report.diagnostics.filter((entry) => entry.code === 'AB6032')).toEqual([]);
+    expect(report.status).toBe('passed');
+  } finally {
+    await rm(pluginDirectory, { force: true, recursive: true });
+  }
+});
+
 it('rejects malformed fixtures for every locally validated Codex schema', async () => {
   const malformed = [
     ['.codex-plugin/plugin.json', { ...validDocuments['.codex-plugin/plugin.json'], name: 'Invalid Name' }],
@@ -309,8 +327,8 @@ it('rejects malformed fixtures for every locally validated Codex schema', async 
       ...validDocuments['.codex-plugin/plugin.json'],
       interface: { ...validDocuments['.codex-plugin/plugin.json'].interface, screenshots: ['./assets/../outside.png'] },
     }],
-    ['hooks/hooks.json', { hooks: { Stop: [{ hooks: [{ command: '', type: 'command' }] }] } }],
-    ['.mcp.json', { mcpServers: { fixture: { type: 'streamable-http', url: 'not a uri' } } }],
+    ['.codex-plugin/hooks.json', { hooks: { Stop: [{ hooks: [{ command: '', type: 'command' }] }] } }],
+    ['.codex-plugin/mcp.json', { mcpServers: { fixture: { type: 'streamable-http', url: 'not a uri' } } }],
     ['.agents/plugins/marketplace.json', {
       ...validDocuments['.agents/plugins/marketplace.json'],
       plugins: [],

@@ -33,7 +33,9 @@ export const artifactScriptCatalog = (
   for (const target of manifest.targets) {
     const layout = registry.artifactLayout(target.name).scripts;
     if (layout === undefined) continue;
-    const prefix = `${target.name}/${layout.directory}/`;
+    // Scripts live once at the composite root; every selected host that lays
+    // out that directory reads the same emitted file.
+    const prefix = `${layout.directory}/`;
     for (const manifestFile of manifest.files) {
       if (!manifestFile.path.startsWith(prefix)) continue;
       const file = manifestFile.path.slice(prefix.length);

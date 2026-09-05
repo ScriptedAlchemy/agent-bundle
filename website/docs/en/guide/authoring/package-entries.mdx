@@ -224,12 +224,13 @@ the static MCP `inputSchema`, the generated route types, the Workbench, and
 ### The routed CLI inside host artifacts
 
 The package bin only reaches users who install the npm package, while hooks, Skills, and scripts
-ship with the host artifact. So the build also emits the same compiled command graph into every
-selected target as `<target>/bin/<plugin-name>.mjs` (plus `bin/<plugin-name>-flight.mjs` when any
-command renders). Every built-in target publishes the `cli` capability that admits it. The
-artifact bin is a self-contained ESM module with no shebang or executable bit — run it as
-`node <plugin-root>/bin/<plugin-name>.mjs <command>`, exactly like `scripts/*.mjs`. Help, argv
-parsing, output modes, exit codes, and signals match the package bin; the one difference is that
+ship with the host artifact. So the build also emits the same compiled command graph once into
+the artifact root as `bin/<plugin-name>.mjs` (plus `bin/<plugin-name>-flight.mjs` when any
+command renders), shared by every selected host. Every built-in target publishes the `cli`
+capability that admits it. The artifact bin is a self-contained ESM module with no shebang or
+executable bit — run it as `node <plugin-root>/bin/<plugin-name>.mjs <command>`, exactly like
+`scripts/*.mjs`. Help, argv parsing, output modes, exit codes, and signals match the package bin;
+the one difference is that
 workspace-durable state without a host-supplied `AGENT_BUNDLE_PLUGIN_ROOT` anchors on the artifact
 root (the parent of `bin/`, the same fallback the generated MCP worker uses) instead of
 `$PWD/.agent-bundle/state`, so a co-installed CLI and server share one store.
@@ -278,7 +279,7 @@ fabricated identity, and a release build refuses a project with no release versi
 
 ## Packaging and installers
 
-When package outputs and at least one Claude, Codex, or Cursor host pack are built inside the
+When package outputs and at least one Claude, Codex, or Cursor projection are built inside the
 project, the framework also emits one self-contained package-relative installer at
 `dist/bin/<plugin-name>.js` — or `<plugin-name>-install.js` when that name is taken, with a
 numeric suffix if both are. Declare the matching `package.json` `bin` value. Its grammar is

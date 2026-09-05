@@ -69,24 +69,26 @@ const writeEpoch = async (
   id: string,
   values: { readonly hook: string; readonly skill: string },
 ): Promise<string> => {
+  // The epoch root is the composite plugin root: Cursor's documents live in
+  // `.cursor-plugin/`, the shared component folders at the top level.
   const root = join(projectRoot, '.agent-bundle', 'epochs', id);
-  const target = join(root, 'cursor');
   await Promise.all([
-    mkdir(join(target, '.cursor-plugin'), { recursive: true }),
-    mkdir(join(target, 'hooks'), { recursive: true }),
-    mkdir(join(target, 'mcp'), { recursive: true }),
-    mkdir(join(target, 'skills', 'probe'), { recursive: true }),
+    mkdir(join(root, '.cursor-plugin'), { recursive: true }),
+    mkdir(join(root, 'hooks'), { recursive: true }),
+    mkdir(join(root, 'mcp'), { recursive: true }),
+    mkdir(join(root, 'skills', 'probe'), { recursive: true }),
   ]);
   await Promise.all([
     writeFile(join(root, 'manifest.json'), '{}\n'),
-    writeFile(join(target, '.cursor-plugin', 'plugin.json'), '{"name":"dev-proof","version":"1.0.0"}\n'),
-    writeFile(join(target, 'hooks', 'hooks.json'), values.hook),
-    writeFile(join(target, 'mcp', 'probe-old.mjs'), 'export const old = true;\n'),
+    writeFile(join(root, '.cursor-plugin', 'plugin.json'), '{"name":"dev-proof","version":"1.0.0"}\n'),
+    writeFile(join(root, '.cursor-plugin', 'hooks.json'), values.hook),
+    writeFile(join(root, 'hooks', 'session-start.cursor.mjs'), values.hook),
+    writeFile(join(root, 'mcp', 'probe-old.mjs'), 'export const old = true;\n'),
     writeFile(
-      join(target, 'mcp.json'),
+      join(root, '.cursor-plugin', 'mcp.json'),
       '{"mcpServers":{"probe":{"args":["${CURSOR_PLUGIN_ROOT}/mcp/probe-old.mjs"],"command":"node","type":"stdio"}}}\n',
     ),
-    writeFile(join(target, 'skills', 'probe', 'SKILL.md'), values.skill),
+    writeFile(join(root, 'skills', 'probe', 'SKILL.md'), values.skill),
   ]);
   return root;
 };
@@ -187,7 +189,7 @@ it('installs a marked Cursor dev variant and atomically re-points top-level dire
     projectRoot,
     schemaVersion: 1,
   });
-  const mcpBefore = await readFile(join(destination, 'mcp.json'), 'utf8');
+  const mcpBefore = await readFile(join(destination, '.cursor-plugin', 'mcp.json'), 'utf8');
   expect(JSON.parse(mcpBefore)).toEqual({
     mcpServers: {
       probe: await devProxyServerCommand(projectRoot, 'probe', 'cursor'),
@@ -205,8 +207,8 @@ it('installs a marked Cursor dev variant and atomically re-points top-level dire
   expect(syncEvents.at(-1)).toMatchObject({ epochId: 'epoch-2', state: 'succeeded' });
 
   expect(await readFile(join(destination, 'skills', 'probe', 'SKILL.md'), 'utf8')).toBe('second skill\n');
-  expect(await readFile(join(destination, 'hooks', 'hooks.json'), 'utf8')).toBe('second hook\n');
-  expect(await readFile(join(destination, 'mcp.json'), 'utf8')).toBe(mcpBefore);
+  expect(await readFile(join(destination, 'hooks', 'session-start.cursor.mjs'), 'utf8')).toBe('second hook\n');
+  expect(await readFile(join(destination, '.cursor-plugin', 'mcp.json'), 'utf8')).toBe(mcpBefore);
   expect((await lstat(join(destination, 'skills'))).isSymbolicLink()).toBe(true);
   expect((await lstat(join(destination, 'hooks'))).isSymbolicLink()).toBe(true);
 
@@ -331,7 +333,7 @@ it('re-syncs the isolated Cursor install from coordinator epochs and ignores a f
   try {
     await coordinator.start();
     await manager.settled();
-    const mcpBefore = await readFile(join(destination, 'mcp.json'), 'utf8');
+    const mcpBefore = await readFile(join(destination, '.cursor-plugin', 'mcp.json'), 'utf8');
     expect(mcpBefore).toContain(`"command":${JSON.stringify(process.execPath)}`);
     expect(await readFile(join(destination, 'skills', 'probe', 'SKILL.md'), 'utf8')).toContain(
       'host-install proof fixture',
@@ -359,7 +361,7 @@ it('re-syncs the isolated Cursor install from coordinator epochs and ignores a f
     const hookModule = hookFiles.find((name) => name.endsWith('.mjs'));
     if (hookModule === undefined) throw new Error('Updated installed hooks contained no executable module.');
     expect(await readFile(join(destination, 'hooks', hookModule), 'utf8')).toContain('updated hook');
-    expect(await readFile(join(destination, 'mcp.json'), 'utf8')).toBe(mcpBefore);
+    expect(await readFile(join(destination, '.cursor-plugin', 'mcp.json'), 'utf8')).toBe(mcpBefore);
     const markerBeforeFailure = await readFile(join(destination, DEV_INSTALL_MARKER), 'utf8');
 
     await writeFile(join(projectRoot, 'src', 'hooks', 'session-start.ts'), 'export default () => ({;\n');

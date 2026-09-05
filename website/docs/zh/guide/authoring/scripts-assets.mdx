@@ -32,7 +32,7 @@ export default defineConfig({
 
 | 入口 | 输出 |
 | --- | --- |
-| JavaScript / TypeScript | 在每个所选 target 产物中打包为 `scripts/<name>.mjs`。 |
+| JavaScript / TypeScript | 只打包一次，位于产物根目录的 `scripts/<name>.mjs`，由该条目所抵达的所有选中宿主共享。 |
 | `.sh`、`.bash`、`.py` | 按字节复制，并保留源文件权限位。 |
 
 ### 约定
@@ -84,7 +84,7 @@ react-server worker。
 
 ## 资源
 
-根 `assets/` 目录下的文件按字节复制到每个 target 产物的 `assets/` 目录。这个约定不需要任何配置。
+根 `assets/` 目录下的文件按字节复制到产物根目录的 `assets/` 目录，只复制一份，由所有选中宿主共享。这个约定不需要任何配置。
 
 顶层 `assets` 列表会**取代**该约定，改为显式条目——字面文件路径、整个目录，或 glob，全部相对项目
 根目录解析：

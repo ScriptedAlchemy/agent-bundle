@@ -4,7 +4,6 @@ import { expect, it } from '@rstest/core';
 
 import claudeCapabilityTable from '../src/adapters/capabilities/claude-2.1.260.json' with { type: 'json' };
 import { claudeAdapter } from '../src/adapters/claude.ts';
-import { pluginAdapter } from '../src/adapters/plugin.ts';
 import type { NormalizedHook, NormalizedHookEvent, NormalizedPlugin } from '../src/core/types.ts';
 import { validateNativeEventEnvelope } from '../src/events/projection.ts';
 import type { CanonicalAgentEvent } from '../src/routes/public.ts';
@@ -174,8 +173,7 @@ it('bakes the pinned Claude hook_event_name into every Claude event-route wrappe
     expect(Object.keys(document.hooks), entry.route).toContain(expectedNativeEvent);
     expect(wrapper!.nativeEvent, entry.route).toBe(expectedNativeEvent);
     expect(wrapper!.virtualSource, entry.route).toContain(`const nativeEvent = ${JSON.stringify(expectedNativeEvent)};`);
-    expect(wrapper!.virtualSource, entry.route).toContain('const artifactTarget = "claude";');
-    expect(wrapper!.virtualSource, entry.route).toContain('const target = artifactTarget;');
+    expect(wrapper!.virtualSource, entry.route).toContain('const target = "claude";');
     expect(wrapper!.virtualSource, entry.route).toContain('validateNativeEventEnvelope(parsed, { canonicalEvent, nativeEvent, target })');
 
     const native = await nativeEnvelope(entry.native);
@@ -209,45 +207,14 @@ it('accepts the live PostToolUse:Bash envelope under the Claude wrapper and name
   )).toThrow('Agent Bundle event route error: native hook_event_name must equal preToolUse');
 });
 
-it('keeps the shared and Cursor wrappers of the unified plugin bundle on their own host spellings', () => {
-  const plan = pluginAdapter.plan(model('plugin', [
-    routeHook('tool/after', 'afterTool', ['plugin']),
-    routeHook('session/start', 'sessionStart', ['plugin']),
-  ]));
-  expect(plan.diagnostics).toEqual([]);
-
-  const shared = (plan.hookEntries ?? []).find((entry) =>
-    entry.event === 'afterTool' && !entry.relativePath.endsWith('.cursor.mjs'));
-  const cursor = (plan.hookEntries ?? []).find((entry) =>
-    entry.event === 'afterTool' && entry.relativePath.endsWith('.cursor.mjs'));
-  expect(shared?.nativeEvent).toBe('PostToolUse');
-  expect(cursor?.nativeEvent).toBe('postToolUse');
-  expect(shared?.virtualSource).toContain('const nativeEvent = "PostToolUse"');
-  expect(cursor?.virtualSource).toContain('const nativeEvent = "postToolUse"');
-
-  const documents = writes(plan);
-  expect(Object.keys((JSON.parse(documents['hooks/hooks.json']!) as { hooks: object }).hooks).sort()).toEqual(['PostToolUse', 'SessionStart']);
-  expect(Object.keys((JSON.parse(documents['hooks/hooks-cursor.json']!) as { hooks: object }).hooks).sort()).toEqual(['postToolUse', 'sessionStart']);
-});
-
 it('emits no manifest hooks pointer for Claude Code, which auto-loads hooks/hooks.json and flags a pointer at it as a duplicate', () => {
   // Claude Code 2.1.259 (observed): `hooks/hooks.json` is loaded on its own
   // and `manifest.hooks` is for additional documents only. Naming the
   // conventional file records a `hook-load-failed` plugin error, "Duplicate
   // hooks file detected ... The standard hooks/hooks.json is loaded
   // automatically, so manifest.hooks should only reference additional hook
-  // files." Claude Code never scans `hooks/` for other documents, so the
-  // unified bundle's `hooks/hooks-cursor.json` needs no pointer to hide it.
+  // files." Claude Code never scans `hooks/` for other documents.
   const claude = writes(claudeAdapter.plan(model('claude', [routeHook('tool/after', 'afterTool', ['claude'])])));
   expect(claude['hooks/hooks.json']).toBeDefined();
   expect(JSON.parse(claude['.claude-plugin/plugin.json']!)).not.toHaveProperty('hooks');
-
-  const bundle = writes(pluginAdapter.plan(model('plugin', [routeHook('tool/after', 'afterTool', ['plugin'])])));
-  expect(bundle['hooks/hooks.json']).toBeDefined();
-  expect(bundle['hooks/hooks-cursor.json']).toBeDefined();
-  expect(JSON.parse(bundle['.claude-plugin/plugin.json']!)).not.toHaveProperty('hooks');
-  // Codex discovers the same conventional file; Cursor's own contract needs
-  // the explicit pointer because its document does not live at the default.
-  expect(JSON.parse(bundle['.codex-plugin/plugin.json']!)).not.toHaveProperty('hooks');
-  expect(JSON.parse(bundle['.cursor-plugin/plugin.json']!)).toMatchObject({ hooks: './hooks/hooks-cursor.json' });
 });

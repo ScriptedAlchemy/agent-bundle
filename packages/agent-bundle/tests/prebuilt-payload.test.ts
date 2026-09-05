@@ -81,31 +81,29 @@ it('packages prebuilt payloads at stable paths and lowers prebuilt entries throu
     expect(result.model.hooks.map((hook) => hook.provenance.kind)).toEqual(['prebuilt', 'prebuilt']);
     expect(result.model.payloads?.map((payload) => payload.name)).toEqual(['app', 'runtime']);
 
-    // Payload bytes land verbatim at their stable relative paths per target.
-    for (const target of ['claude', 'codex', 'portable']) {
-      expect(await readFile(join(root, 'out', target, 'runtime', 'chunks', '417.js'), 'utf8'))
-        .toBe('module.exports = require("./418.js");\n');
-      expect(await readFile(join(root, 'out', target, 'app', 'index.html'), 'utf8'))
-        .toBe('<html><body>widget</body></html>\n');
-    }
+    // Payload bytes land verbatim, once, at their stable paths in the composite root.
+    expect(await readFile(join(root, 'out', 'runtime', 'chunks', '417.js'), 'utf8'))
+      .toBe('module.exports = require("./418.js");\n');
+    expect(await readFile(join(root, 'out', 'app', 'index.html'), 'utf8'))
+      .toBe('<html><body>widget</body></html>\n');
 
     // Adapter lowering: the same token expansion as compiled entries.
     const claudeMcp = await readJson<{ mcpServers: Record<string, { args: string[]; env: Record<string, string> }> }>(
-      join(root, 'out', 'claude', '.mcp.json'),
+      join(root, 'out', '.mcp.json'),
     );
     expect(claudeMcp.mcpServers['timeline']).toMatchObject({
       args: ['${CLAUDE_PLUGIN_ROOT}/runtime/mcp/server.js'],
       command: 'node',
       env: { AGENT_BUNDLE_PLUGIN_ROOT: '${CLAUDE_PLUGIN_ROOT}' },
     });
-    const codexMcp = await readJson<{ mcpServers: Record<string, unknown> }>(join(root, 'out', 'codex', '.mcp.json'));
+    const codexMcp = await readJson<{ mcpServers: Record<string, unknown> }>(join(root, 'out', '.codex-plugin', 'mcp.json'));
     expect(codexMcp.mcpServers['timeline']).toMatchObject({
       args: ['./runtime/mcp/server.js'],
       command: 'node',
       cwd: './',
       env: { AGENT_BUNDLE_PLUGIN_ROOT: './' },
     });
-    const portableMcp = await readJson<{ mcpServers: Record<string, unknown> }>(join(root, 'out', 'portable', 'mcp.json'));
+    const portableMcp = await readJson<{ mcpServers: Record<string, unknown> }>(join(root, 'out', 'mcp.json'));
     expect(portableMcp.mcpServers['timeline']).toMatchObject({
       args: ['${PLUGIN_ROOT}/runtime/mcp/server.js'],
       command: 'node',
@@ -115,7 +113,7 @@ it('packages prebuilt payloads at stable paths and lowers prebuilt entries throu
     // Prebuilt hooks emit native commands at the payload path with their
     // declared arguments; nothing is compiled or indexed for them.
     const claudeHooks = await readJson<{ hooks: { PostToolUse: { hooks: { command: string; timeout: number }[]; matcher: string }[] } }>(
-      join(root, 'out', 'claude', 'hooks', 'hooks.json'),
+      join(root, 'out', 'hooks', 'hooks.json'),
     );
     expect(claudeHooks.hooks.PostToolUse[0]).toMatchObject({ matcher: '^(?:Write|Edit)$' });
     expect(claudeHooks.hooks.PostToolUse[0]?.hooks[0]).toMatchObject({
@@ -123,7 +121,7 @@ it('packages prebuilt payloads at stable paths and lowers prebuilt entries throu
       timeout: 30,
     });
     const codexHooks = await readJson<{ hooks: { PostToolUse: { hooks: { command: string }[]; matcher: string }[] } }>(
-      join(root, 'out', 'codex', 'hooks', 'hooks.json'),
+      join(root, 'out', '.codex-plugin', 'hooks.json'),
     );
     expect(codexHooks.hooks.PostToolUse[0]).toMatchObject({ matcher: '^(?:apply_patch|Edit|Write)$' });
     expect(codexHooks.hooks.PostToolUse[0]?.hooks[0]).toMatchObject({
@@ -135,7 +133,7 @@ it('packages prebuilt payloads at stable paths and lowers prebuilt entries throu
     // Manifest provenance: payload files carry the prebuilt kind and their
     // own bytes as source inputs; the revision hashes the payload files.
     const manifest = parseArtifactManifest(await readFile(join(root, 'out', 'agent-bundle.manifest.json'), 'utf8'));
-    const chunk = manifest.files.find((file) => file.path === 'claude/runtime/chunks/417.js');
+    const chunk = manifest.files.find((file) => file.path === 'runtime/chunks/417.js');
     expect(chunk).toMatchObject({ kind: 'prebuilt', sourceInputs: ['agent-bundle.config.ts', 'built/runtime/chunks/417.js'] });
     expect(manifest.project.sourceInputs.some((input) => input.path === 'built/runtime/mcp/server.js')).toBe(true);
 
@@ -163,7 +161,7 @@ it('validates an argument-less prebuilt hook without demanding a wrapper index e
     const result = await build({ output: join(root, 'out'), root });
     expect(result.diagnostics.filter((diagnostic) => diagnostic.severity === 'error')).toEqual([]);
     const claudeHooks = await readJson<{ hooks: { PostToolUse: { hooks: { command: string }[] }[] } }>(
-      join(root, 'out', 'claude', 'hooks', 'hooks.json'),
+      join(root, 'out', 'hooks', 'hooks.json'),
     );
     expect(claudeHooks.hooks.PostToolUse[0]?.hooks[0]).toMatchObject({
       command: 'node "${CLAUDE_PLUGIN_ROOT}/runtime/hook.js"',

@@ -291,7 +291,9 @@ it('builds a selected target through the built executable from a path containing
       build: { outputRoot: resolve(project.output) },
       model: {
         metadata: { name: 'cli-fixture' },
-        targets: [{ name: 'portable' }, { name: 'codex' }],
+        // Selected projections are recorded in composite order (#555), so the
+        // model and the manifest agree whatever the CLI order was.
+        targets: [{ name: 'codex' }, { name: 'portable' }],
       },
     });
     expect(JSON.parse(await readFile(join(project.output, 'agent-bundle.manifest.json'), 'utf8'))).toMatchObject({
@@ -301,6 +303,27 @@ it('builds a selected target through the built executable from a path containing
     await rm(resolve(project.root, '..'), { force: true, recursive: true });
   }
 }, 30_000 * timeScale);
+
+it('rejects --target plugin as an unknown target (#555 acceptance 3)', async () => {
+  // `plugin` is not a public target: the composite root is the only output
+  // shape, and `claude|codex|cursor|portable` select the projections inside it.
+  const project = await createCliProject();
+  try {
+    const result = await runSourceCliWithOutput([
+      'build', '--root', project.root, '--output', project.output, '--target', 'plugin', '--json',
+    ]);
+
+    expect(result).toMatchObject({ code: 1, stdout: '' });
+    expect(JSON.parse(result.stderr)).toEqual([expect.objectContaining({
+      code: 'AB4100',
+      message: 'Unknown target "plugin".',
+      severity: 'error',
+      target: 'plugin',
+    })]);
+  } finally {
+    await rm(resolve(project.root, '..'), { force: true, recursive: true });
+  }
+});
 
 /**
  * Runs the built CLI under the module-load recorder and returns the process
@@ -511,9 +534,9 @@ it('keeps inspect JSON stable and validates only the supplied artifact', async (
     expect(firstInspectionDocument).toMatchObject({
       model: {
         metadata: { name: 'cli-fixture' },
-        targets: [{ name: 'portable' }, { name: 'codex' }],
+        targets: [{ name: 'codex' }, { name: 'portable' }],
       },
-      plans: [{ target: 'portable' }, { target: 'codex' }],
+      plans: [{ target: 'codex' }, { target: 'portable' }],
       state: 'ready',
     });
     expect(firstInspectionDocument.plans).toHaveLength(2);
@@ -523,7 +546,7 @@ it('keeps inspect JSON stable and validates only the supplied artifact', async (
     ]);
     expect(filteredInspection).toMatchObject({ code: 0, stderr: '' });
     expect(JSON.parse(filteredInspection.stdout)).toMatchObject({
-      model: { targets: [{ name: 'portable' }, { name: 'codex' }] },
+      model: { targets: [{ name: 'codex' }, { name: 'portable' }] },
       plans: [{ target: 'portable' }],
     });
     expect((JSON.parse(filteredInspection.stdout) as { readonly plans: readonly unknown[] }).plans).toHaveLength(1);
@@ -645,7 +668,9 @@ it('build compiles a declared MCP App view and reports its document and measured
       };
       readonly diagnostics: readonly unknown[];
     };
-    expect(document.build.compiledMcpApps).toMatchObject([{ name: 'dashboard', target: 'portable' }]);
+    // The view is compiled once for the composite root and attributed to the
+    // selection's identity (#555), even though only portable declares it.
+    expect(document.build.compiledMcpApps).toMatchObject([{ name: 'dashboard', target: 'codex+portable' }]);
     const size = document.build.compiledMcpApps[0]!.size;
     expect(size.bytes).toBeGreaterThan(0);
     expect(size.gzipBytes).toBeGreaterThan(0);
@@ -659,7 +684,7 @@ it('build compiles a declared MCP App view and reports its document and measured
     expect(human).toMatchObject({ code: 0, stderr: '' });
     expect(human.stdout).toContain(`Built cli-fixture to ${project.output}\n`);
     expect(human.stdout).toMatch(
-      /^MCP App dashboard \(portable\): mcp-apps\/dashboard\.html \d+(?:\.\d)? [KM]iB \(\d+(?:\.\d)? [KM]iB gzip\)$/mu,
+      /^MCP App dashboard \(codex\+portable\): mcp-apps\/dashboard\.html \d+(?:\.\d)? [KM]iB \(\d+(?:\.\d)? [KM]iB gzip\)$/mu,
     );
   } finally {
     await rm(resolve(project.root, '..'), { force: true, recursive: true });
@@ -739,7 +764,7 @@ it('explains selected and omitted components per target on human inspect output'
 
     const human = await runSourceCliWithOutput(['inspect', '--root', project.root]);
     expect(human).toMatchObject({ code: 0, stderr: '' });
-    expect(human.stdout).toContain('Inspected cli-fixture: portable, codex\n');
+    expect(human.stdout).toContain('Inspected cli-fixture: codex, portable\n');
     expect(human.stdout).toContain('portable: 1 component(s) selected, 1 omitted\n');
     expect(human.stdout).toContain('codex: 1 component(s) selected, 1 omitted\n');
     expect(human.stdout).toMatch(/^ {2}omitted rule shared: rules unavailable — .+$/mu);
@@ -865,7 +890,7 @@ it('dumps the synthesized bundler configuration with inspect --bundler', async (
     const script = document.selected.bundler.entries.find((entry) => entry.kind === 'script');
     expect(script).toMatchObject({
       config: {
-        output: { distPath: { root: '<output>/portable' } },
+        output: { distPath: { root: '<output>' } },
         tools: {
           rspack: [
             { resolve: { extensionAlias: { '.js': ['.js', '.ts'] } } },

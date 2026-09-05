@@ -19,8 +19,8 @@ import { cachedNpmInstallArguments, installedEnvironment, sharedPackedTarball } 
  * One tarball set (the run-level shared pack), one scratch consumer copied
  * from `fixtures/serve-app-command`, one `agent-bundle build` with the
  * installed CLI, then the generated bins run as separate operating-system
- * processes: the package build's `dist/bin/<plugin>.js` and the portable
- * pack's `bin/<plugin>.mjs`. The proof covers the ready-line relay to stderr
+ * processes: the package build's `dist/bin/<plugin>.js` and the composite
+ * root's `bin/<plugin>.mjs`. The proof covers the ready-line relay to stderr
  * (stdout stays the JSON result), the served page, teardown of the
  * `serve-app` child and its packed MCP server, the request `signal` reaching
  * the child on Ctrl-C, and every `ServeAppCommandError` code a checkout can
@@ -160,7 +160,7 @@ beforeAll(async () => {
     'react-dom@19.2.8',
     'zod@4.4.3',
   ], { cwd: project, env: installedEnvironment() });
-  // The installed CLI builds both surfaces at once: the portable artifact the
+  // The installed CLI builds both surfaces at once: the composite root the
   // route serves from (`artifact/`) and the package build whose generated bin
   // carries the route (`dist/bin/`).
   const cli = join(project, 'node_modules', '.bin', 'agent-bundle');
@@ -169,7 +169,7 @@ beforeAll(async () => {
     env: installedEnvironment(),
   });
   packageBin = join(project, 'dist', 'bin', `${pluginName}.js`);
-  artifactBin = join(project, 'artifact', 'portable', 'bin', `${pluginName}.mjs`);
+  artifactBin = join(project, 'artifact', 'bin', `${pluginName}.mjs`);
 }, 300_000);
 
 afterAll(async () => {

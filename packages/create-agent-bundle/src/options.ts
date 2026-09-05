@@ -4,7 +4,7 @@ import { parseArgs } from 'node:util';
 export const templateNames = ['minimal', 'mcp-server', 'cli-tool'] as const;
 export type TemplateName = (typeof templateNames)[number];
 
-export const targetNames = ['portable', 'claude', 'codex', 'cursor', 'plugin'] as const;
+export const targetNames = ['portable', 'claude', 'codex', 'cursor'] as const;
 export type TargetName = (typeof targetNames)[number];
 
 /** The target set every in-repo example ships with. */
@@ -141,9 +141,9 @@ export interface ProjectName {
  * and names the package `bar`; `@scope/foo` keeps the full scoped name as
  * the package name. The plugin name additionally drops the scope and is
  * sanitized to the strictest host contract — Cursor's lowercase kebab-case
- * (`/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/`, at most 64 characters), which the
- * unified `plugin` target enforces too and which is also a valid safe
- * package-output name — so every selectable target validates and the
+ * (`/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/`, at most 64 characters), which is
+ * also a valid safe package-output name — so every selectable target
+ * validates and the
  * `plugin.name`-derived package executable convention always applies.
  */
 export const formatProjectName = (input: string): ProjectName => {

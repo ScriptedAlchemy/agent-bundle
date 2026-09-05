@@ -113,7 +113,8 @@ const promptFor = (host, { editPath, finalMarker }) => {
 const evaluateHost = async (host, capturedAt) => {
   const nativeEnvironment = sanitizedHostEnvironment(process.env);
   const version = await cliVersion(host, nativeEnvironment);
-  const pluginRoot = join(exampleRoot, 'dist', 'plugins', host);
+  // One composite root carries every host's projection.
+  const pluginRoot = join(exampleRoot, 'dist', 'plugins');
   await stat(pluginRoot);
   const fixture = await mkdtemp(join(tmpdir(), `rsc-agent-runtime-${host}-fixture-`));
   const marker = `rsc-eval-${randomBytes(16).toString('hex')}`;

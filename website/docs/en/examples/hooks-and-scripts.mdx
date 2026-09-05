@@ -18,8 +18,9 @@ an authored script.
 ## What it proves
 
 - **A hook is authored as a handler, not a host document.** `src/hooks/session-start.ts` is one
-  module. The build lowers it into each host's own hook document shape and emits the wrapper that
-  runs it. See [Hooks](../guide/authoring/hooks.mdx).
+  module. The build lowers it into each host's own hook document shape and emits the wrapper each
+  host's document runs from the shared `hooks/` directory. See
+  [Hooks](../guide/authoring/hooks.mdx).
 - **Both script declaration modes.** `verify-release` ships by convention — any unclaimed plain
   script under `src/scripts/` is discovered — while `detect-risk` stays explicitly configured
   because it restricts its targets to `portable`. The example keeps both modes covered on
@@ -29,8 +30,9 @@ an authored script.
   nonzero return becomes a real blocking exit rather than a swallowed value. See
   [Scripts and assets](../guide/authoring/scripts-assets.mdx).
 - **Emitted scripts resolve their own assets.** `assets: ['release/*.json']` copies the release
-  manifest and risk register into every target, and each emitted script reads them relative to
-  its own module — never relative to the shell's working directory.
+  manifest and risk register once into the artifact root's `assets/`, shared by every target, and
+  each emitted script reads them relative to its own module — never relative to the shell's
+  working directory.
 - **A failed rebuild keeps the last-good artifact.** That is the reversible walkthrough below.
 
 ## What is authored

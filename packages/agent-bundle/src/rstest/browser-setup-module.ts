@@ -12,7 +12,7 @@ import {
 } from '../test/browser-registry.ts';
 import { BROWSER_APP_PROOF_LEVEL, proofLevelLabel } from '../test/manifest.ts';
 
-const compiledEntry = async (app: CompiledMcpApp): Promise<CompiledBrowserTestApp> => {
+const compiledEntry = async (app: CompiledMcpApp, host: string): Promise<CompiledBrowserTestApp> => {
   const html = await readFile(app.output, 'utf8');
   const bytes = Buffer.byteLength(html, 'utf8');
   if (bytes > MAX_APP_HTML_BYTES) {
@@ -31,7 +31,7 @@ const compiledEntry = async (app: CompiledMcpApp): Promise<CompiledBrowserTestAp
     proofLevel: BROWSER_APP_PROOF_LEVEL,
     resourceUri: app.resourceUri,
     serverIds: [...app.serverIds],
-    target: app.target,
+    target: host,
   });
 };
 
@@ -42,12 +42,24 @@ export const browserTestSetupSource = (registry: AgentBrowserTestRegistry): stri
   '',
 ].join('\n');
 
+/**
+ * `hosts` names the host each compiled app mounts as, by app name. The
+ * compiled HTML is the same for every host of the selection; the host is the
+ * projection context the harness mounts under (#592).
+ */
 export const writeBrowserTestSetup = async (
   projectRoot: string,
   compiled: readonly CompiledMcpApp[],
+  hosts: Readonly<Record<string, string>>,
 ): Promise<string> => {
   const apps = Object.fromEntries(
-    await Promise.all(compiled.map(async (app) => [app.name, await compiledEntry(app)] as const)),
+    await Promise.all(compiled.map(async (app) => {
+      const host = hosts[app.name];
+      if (host === undefined) {
+        throw new Error(`Compiled MCP App ${JSON.stringify(app.name)} has no browser mount host.`);
+      }
+      return [app.name, await compiledEntry(app, host)] as const;
+    })),
   );
   const registry: AgentBrowserTestRegistry = Object.freeze({
     apps,

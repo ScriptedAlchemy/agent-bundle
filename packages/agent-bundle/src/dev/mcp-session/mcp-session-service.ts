@@ -328,7 +328,8 @@ export class McpSessionService {
         }));
         const errors = diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
         if (errors.length > 0) return yield* Effect.fail(new DiagnosticError(errors));
-        const targetRoot = yield* liftTry(() => joinArtifact(epochRoot, target));
+        // Every selected host reads the composite epoch root as its plugin root (#555).
+        const targetRoot = epochRoot;
         const server = yield* liftPromise(() => this.#server(targetRoot, target, runtime, options.serverName));
         const fs = yield* FileSystem.FileSystem;
         const pluginDataScope = yield* Scope.make();

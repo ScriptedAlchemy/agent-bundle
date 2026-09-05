@@ -21,7 +21,7 @@ afterEach(async () => {
 const fixture = async (options: {
   readonly author?: string;
   readonly bin?: false | readonly string[];
-  readonly target: 'cursor' | 'plugin' | 'portable';
+  readonly target: 'cursor' | 'portable' | readonly ('claude' | 'codex' | 'cursor')[];
 }): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-installer-entry-'));
   roots.push(root);
@@ -43,7 +43,7 @@ const fixture = async (options: {
       ...(options.author === undefined ? [] : [`  cursor: { author: { name: ${JSON.stringify(options.author)} } },`]),
       "  lib: './src/index.ts',",
       "  plugin: { name: 'installer-fixture' },",
-      `  targets: [${JSON.stringify(options.target)}],`,
+      `  targets: ${JSON.stringify(typeof options.target === 'string' ? [options.target] : options.target)},`,
       '};',
       '',
     ].join('\n')),
@@ -239,7 +239,7 @@ it('uses the plugin name when free and skips portable-only artifacts', async () 
   await mkdir(join(portableHome, '.cursor'), { recursive: true });
   const portableMarketplace = await run(
     process.execPath,
-    [join(portableRoot, 'host-packs', 'portable', 'install.mjs'), '--mode', 'marketplace'],
+    [join(portableRoot, 'host-packs', 'install.mjs'), '--mode', 'marketplace'],
     { cwd: tmpdir(), env: { ...process.env, HOME: portableHome } },
   );
   expect(portableMarketplace.code).toBe(1);
@@ -249,22 +249,22 @@ it('uses the plugin name when free and skips portable-only artifacts', async () 
   // A bundle carrying nested Git metadata would be committed as an empty gitlink; the emitted installer refuses it.
   const cursorHome = join(cursorRoot, 'home');
   await mkdir(join(cursorHome, '.cursor'), { recursive: true });
-  await mkdir(join(cursorRoot, 'host-packs', 'cursor', 'vendor', '.git'), { recursive: true });
+  await mkdir(join(cursorRoot, 'host-packs', 'vendor', '.git'), { recursive: true });
   const nestedGit = await run(
     process.execPath,
-    [join(cursorRoot, 'host-packs', 'cursor', 'install.mjs'), '--mode', 'marketplace'],
+    [join(cursorRoot, 'host-packs', 'install.mjs'), '--mode', 'marketplace'],
     { cwd: tmpdir(), env: { ...process.env, HOME: cursorHome } },
   );
   expect(nestedGit.code).toBe(1);
   expect(nestedGit.stderr).toContain('refuses bundle-internal Git metadata at "vendor/.git"');
   await expect(stat(join(cursorHome, '.cursor', 'agent-bundle'))).rejects.toMatchObject({ code: 'ENOENT' });
-  await rm(join(cursorRoot, 'host-packs', 'cursor', 'vendor'), { recursive: true });
+  await rm(join(cursorRoot, 'host-packs', 'vendor'), { recursive: true });
 
   // The emitted install.mjs and `agent-bundle install cursor --mode marketplace` derive owner/description from the
   // same emitted manifest (authored cursor.author here), so staging with one and rerunning the other is idempotent.
   const stagedByScript = await run(
     process.execPath,
-    [join(cursorRoot, 'host-packs', 'cursor', 'install.mjs'), '--mode', 'marketplace'],
+    [join(cursorRoot, 'host-packs', 'install.mjs'), '--mode', 'marketplace'],
     { cwd: tmpdir(), env: { ...process.env, HOME: cursorHome } },
   );
   expect(stagedByScript).toMatchObject({ code: 0, stderr: '' });
@@ -274,14 +274,14 @@ it('uses the plugin name when free and skips portable-only artifacts', async () 
   ));
   expect(stagedManifest.owner).toEqual({ name: 'Fixture Owner' });
   const rerunByCli = await installBundle({
-    from: join(cursorRoot, 'host-packs', 'cursor'),
+    from: join(cursorRoot, 'host-packs'),
     home: cursorHome,
     host: 'cursor',
     mode: 'marketplace',
   });
   expect(rerunByCli).toMatchObject({ mode: 'marketplace', state: 'already-installed' });
 
-  const pluginRoot = await fixture({ bin: false, target: 'plugin' });
+  const pluginRoot = await fixture({ bin: false, target: ['claude', 'codex', 'cursor'] });
   const plugin = await build({ output: 'host-packs', packageOutputs: true, root: pluginRoot });
   const pluginInstaller = join(pluginRoot, 'dist', 'bin', 'installer-fixture.js');
   expect(plugin.packageBuild?.files.map((file) => file.path)).toContain('bin/installer-fixture.js');

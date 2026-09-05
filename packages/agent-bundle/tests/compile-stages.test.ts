@@ -6,7 +6,7 @@ import { join } from 'node:path';
 
 import { generatedMetaModulePath, metaModuleSpecifier } from '../src/build/meta.ts';
 import { buildRslibSurfaces, compileRslibSurfaces, entryLibId, settledRslibSurface, type RslibEntry } from '../src/build/rslib.ts';
-import { planTargetStages } from '../src/build/target-stages.ts';
+import { planCompileStages } from '../src/build/compile-stages.ts';
 import type { AgentBundleMeta } from '../src/meta.ts';
 
 const meta: AgentBundleMeta = Object.freeze({
@@ -16,9 +16,9 @@ const meta: AgentBundleMeta = Object.freeze({
   version: '1.0.0',
 });
 
-const root = '/staged/claude';
+const root = '/staged/artifact';
 
-describe('planTargetStages', () => {
+describe('planCompileStages', () => {
   const nodeOutputs = {
     compiledCliBins: [{ output: `${root}/bin/tool.mjs`, workerOutput: `${root}/bin/tool-flight.mjs` }],
     compiledEntries: [
@@ -32,8 +32,8 @@ describe('planTargetStages', () => {
     compiledMcpEntries: [{ output: `${root}/mcp/server.mjs`, workerOutput: `${root}/mcp/server-flight.mjs` }],
   };
 
-  it('skips the browser stage entirely for a target without MCP Apps and lowers every host surface in one node stage', () => {
-    const stages = planTargetStages({ ...nodeOutputs, compiledMcpApps: [] });
+  it('skips the browser stage entirely for a root without MCP Apps and lowers every host surface in one node stage', () => {
+    const stages = planCompileStages({ ...nodeOutputs, compiledMcpApps: [] });
     expect(stages.map((stage) => stage.kind)).toEqual(['node-surfaces']);
     expect(stages[0]!.outputs).toEqual([
       `${root}/bin/tool.mjs`,
@@ -48,8 +48,8 @@ describe('planTargetStages', () => {
     ]);
   });
 
-  it('runs the browser stage before the node stage only when the target declares MCP Apps', () => {
-    const stages = planTargetStages({
+  it('runs the browser stage before the node stage only when the selection reaches an MCP App', () => {
+    const stages = planCompileStages({
       ...nodeOutputs,
       compiledMcpApps: [{ output: `${root}/mcp-apps/dashboard.html` }],
     });
@@ -60,7 +60,7 @@ describe('planTargetStages', () => {
   });
 
   it('keeps each react-server Flight worker in the same stage as the host surface that spawns it', () => {
-    const [stage] = planTargetStages({ ...nodeOutputs, compiledMcpApps: [] });
+    const [stage] = planCompileStages({ ...nodeOutputs, compiledMcpApps: [] });
     for (const [host, worker] of [
       [`${root}/bin/tool.mjs`, `${root}/bin/tool-flight.mjs`],
       [`${root}/scripts/report.mjs`, `${root}/scripts/report-flight.mjs`],
@@ -72,8 +72,8 @@ describe('planTargetStages', () => {
     }
   });
 
-  it('plans an empty node stage for a target with nothing to compile', () => {
-    expect(planTargetStages({
+  it('plans an empty node stage for a root with nothing to compile', () => {
+    expect(planCompileStages({
       compiledCliBins: [],
       compiledEntries: [],
       compiledHooks: [],
@@ -107,8 +107,8 @@ const surfaceEntry = (name: string, outputRelativePath: string, source: string):
 });
 
 describe('buildRslibSurfaces', () => {
-  it('lowers every surface of a target through one Rslib instance and hands each surface its own evidence', async () => {
-    const outputRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-target-stages-'));
+  it('lowers every surface of the root through one Rslib instance and hands each surface its own evidence', async () => {
+    const outputRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-compile-stages-'));
     const project = '/project';
     const surfaces = [
       { entries: [surfaceEntry('bin-tool', 'bin/tool.mjs', `${project}/src/cli/index.ts`)], ignoredSourcePaths: [`${project}/runtime/cli`] },

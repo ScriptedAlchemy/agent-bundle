@@ -1,6 +1,6 @@
 # agent-bundle
 
-agent-bundle compiles an agent plugin — skills, hooks, MCP servers, and scripts, described by one typed config — into installable artifacts for Claude Code, Codex, and Cursor, plus a portable layout. You write the plugin once; the compiler emits each host's manifests and wrappers.
+agent-bundle compiles an agent plugin — skills, hooks, MCP servers, and scripts, described by one typed config — into one installable plugin root that Claude Code, Codex, Cursor, and portable Agent Plugins clients load. You write the plugin once; the compiler emits each selected host's manifests and wrappers into that root.
 
 Documentation: [scriptedalchemy.github.io/agent-bundle](https://scriptedalchemy.github.io/agent-bundle/) (English and 简体中文; guide, reference, generated type API, host capability matrices).
 
@@ -37,7 +37,7 @@ import { defineConfig } from 'agent-bundle/config';
 
 export default defineConfig({
   plugin: { name: 'my-plugin', description: 'What it does.' }, // version comes from package.json
-  targets: ['plugin'],
+  targets: ['claude', 'codex', 'cursor'],
   skills: ['src/skills/*'],
   hooks: { sessionStart: { handler: './src/session-start.ts' } },
   mcp: { servers: { tools: { entry: './src/mcp.ts' } } },
@@ -47,38 +47,38 @@ export default defineConfig({
 Then build, or work interactively:
 
 ```sh
-npx agent-bundle build --root . --output dist   # write installable artifacts
+npx agent-bundle build --root .                 # write the plugin root to artifact/
 npx agent-bundle dev --root .                   # local workbench with live rebuilds
 ```
 
-`targets: ['plugin']` emits one multi-host bundle at `dist/plugin/`: `.claude-plugin/`, `.codex-plugin/`, and `.cursor-plugin/` manifests over shared `skills/`, `hooks/`, `mcp/`, and `scripts/` directories. The bundle's generated `AGENTS.md` explains how to install it into each host. Per-host layouts are available as the `claude`, `codex`, `cursor`, and `portable` targets.
+`agent-bundle build` writes one composite plugin root (`artifact/` by default; `--output` or `output.distPath` relocates it), and `targets` selects which host projections it carries: the `.claude-plugin/`, `.codex-plugin/`, and `.cursor-plugin/` manifests and the portable `plugin.json` sit at the root over shared `skills/`, `hooks/`, `mcp/`, and `scripts/` directories, emitted once. Every selected host installs from that same directory, and the generated `INSTALL.md` explains how. Omitting `targets` emits only the `portable` projection.
 
-The `portable` target is the [Agent Plugins open standard](https://agent-plugins.org/specification) (specification 1.0.0) adapter — the default target, and the layout Cursor, Codex, VS Code, GitHub Copilot, Kiro, and ChatGPT load natively (Claude Code consumes it only through CLI translation). It emits the closed root `plugin.json` (canonical `$schema`, `name`, `version`, `description`, plus `author`, `homepage`, `repository`, `license`, `keywords`, and reverse-domain `extensions` authored under the `portable` config key), `skills/<name>/SKILL.md`, and `mcp.json` with stdio and Streamable HTTP servers whose `args`, `env` values, and `cwd` use the standard's `${PLUGIN_ROOT}`/`${PLUGIN_DATA}` placeholders. Rules, commands, hooks, marketplaces, and client extension directories are honestly unavailable there because the v1 standard packages only skills and MCP servers. Both documents are validated against the vendored, hash-pinned 1.0.0 schemas and the normative text at plan time (`portable.mcp.*.standard`), after every ordinary build and `validate --artifact` (`AB6011`/`AB6012` plus the Agent Plugins byte lane `AB6035`–`AB6037`), under `validate --artifact --host-validation` (same lane with the `AB6038` provenance note), and by `agent-bundle doctor` for installed Cursor local plugins that declare the standard's `$schema` (`AB7320`); see [Diagnostics](docs/diagnostics.md#agent-plugins-portable-validation-ab6035ab6038). Pins live in `packages/agent-bundle/src/adapters/schemas/portable/PROVENANCE.json`; the capability table `packages/agent-bundle/src/adapters/capabilities/portable-1.0.0.json` carries a dated row for every standard feature.
+The `portable` target is the [Agent Plugins open standard](https://agent-plugins.org/specification) (specification 1.0.0) adapter — the default projection, and the layout Cursor, Codex, VS Code, GitHub Copilot, Kiro, and ChatGPT load natively (Claude Code consumes it only through CLI translation). It emits the closed root `plugin.json` (canonical `$schema`, `name`, `version`, `description`, plus `author`, `homepage`, `repository`, `license`, `keywords`, and reverse-domain `extensions` authored under the `portable` config key), `skills/<name>/SKILL.md`, and `mcp.json` with stdio and Streamable HTTP servers whose `args`, `env` values, and `cwd` use the standard's `${PLUGIN_ROOT}`/`${PLUGIN_DATA}` placeholders. Rules, commands, hooks, marketplaces, and client extension directories are honestly unavailable there because the v1 standard packages only skills and MCP servers. Both documents are validated against the vendored, hash-pinned 1.0.0 schemas and the normative text at plan time (`portable.mcp.*.standard`), after every ordinary build and `validate --artifact` (`AB6011`/`AB6012` plus the Agent Plugins byte lane `AB6035`–`AB6037`), under `validate --artifact --host-validation` (same lane with the `AB6038` provenance note), and by `agent-bundle doctor` for installed Cursor local plugins that declare the standard's `$schema` (`AB7320`); see [Diagnostics](docs/diagnostics.md#agent-plugins-portable-validation-ab6035ab6038). Pins live in `packages/agent-bundle/src/adapters/schemas/portable/PROVENANCE.json`; the capability table `packages/agent-bundle/src/adapters/capabilities/portable-1.0.0.json` carries a dated row for every standard feature.
 
-Claude Code language servers are declared under `claude.lspServers`; the `claude` target and the Claude half of `plugin` emit the record as plugin-root `.lsp.json`. Agent Bundle expands path tokens only in `command`, `args`, `env`, and `workspaceFolder`, and it does not include the language-server binary — install that separately so the declared command is available on `PATH`. Codex, Cursor, and the portable format do not currently receive this host-scoped configuration.
+Claude Code language servers are declared under `claude.lspServers`; the `claude` projection emits the record as plugin-root `.lsp.json`. Agent Bundle expands path tokens only in `command`, `args`, `env`, and `workspaceFolder`, and it does not include the language-server binary — install that separately so the declared command is available on `PATH`. Codex, Cursor, and the portable format do not currently receive this host-scoped configuration.
 
 Claude Code plugin defaults are declared under `claude.settings` and emitted as plugin-root `settings.json`, which Claude Code applies when the plugin is enabled. The pinned contract supports only `agent` and `subagentStatusLine`; Agent Bundle rejects any other key rather than shipping a default Claude Code would silently ignore, and it expands no path tokens here because `settings.json` is absent from the host's placeholder-substitution table. Because the plugin `agents/` component is still deferred, declaring `agent` also raises a warning: the referenced agent has to reach the plugin root some other way, such as a prebuilt payload.
 
-Cursor Plugin manifest metadata is declared under `cursor.*` and emitted verbatim into `.cursor-plugin/plugin.json` by the `cursor` target and the Cursor half of `plugin`: `author` (`name`, optional `email`), `homepage`, `repository`, `license`, `keywords`, plus the schema-admitted `publisher`, `category`, `tags`, and `minClientVersions` (for example `{ cursor: '3.13.0' }`). Every field is validated against the pinned `cursor/plugins` manifest schema before emission — `author.url`, non-HTTP URLs, empty strings, and loose semver are rejected with `cursor.manifest.*` errors, and an invalid block emits no partial metadata. The Cursor artifact never mixes Agent Plugin (`plugin.json`, `${PLUGIN_ROOT}`) paths or tokens into the Cursor Plugin format; the portable target owns that format. The full documented-surface contract matrix (every Cursor hook event, cloud availability, hook options, marketplace and team-distribution surfaces, canvases, agents) lives as dated `supported` / `unavailable` rows in `packages/agent-bundle/src/adapters/capabilities/cursor-2026-08-28.json`.
+Cursor Plugin manifest metadata is declared under `cursor.*` and emitted verbatim into `.cursor-plugin/plugin.json` by the `cursor` projection: `author` (`name`, optional `email`), `homepage`, `repository`, `license`, `keywords`, plus the schema-admitted `publisher`, `category`, `tags`, and `minClientVersions` (for example `{ cursor: '3.13.0' }`). Every field is validated against the pinned `cursor/plugins` manifest schema before emission — `author.url`, non-HTTP URLs, empty strings, and loose semver are rejected with `cursor.manifest.*` errors, and an invalid block emits no partial metadata. The Cursor Plugin documents never mix Agent Plugin (`plugin.json`, `${PLUGIN_ROOT}`) paths or tokens into the Cursor Plugin format; the portable projection owns that format, even when both share one root. The full documented-surface contract matrix (every Cursor hook event, cloud availability, hook options, marketplace and team-distribution surfaces, canvases, agents) lives as dated `supported` / `unavailable` rows in `packages/agent-bundle/src/adapters/capabilities/cursor-2026-08-28.json`.
 
-The same config also owns the npm package build — no second bundler config, bin shims, or hand-rolled stdio lifecycles. `bin` and `lib` entries (or the conventions `src/cli.ts`, `src/index.ts`, and `src/mcp/<server-id>.ts`) emit executable `dist/bin/<name>.js` bundles and a library output alongside the host artifacts; an MCP entry that default-exports a server factory runs under a framework-owned stdio lifecycle; `tools.rsbuild` / `tools.rspack` is the one bundler escape hatch. [Entry conventions](docs/entry-conventions.md) is the full contract, and [Framework mode](docs/framework-mode.md) is the whole authoring model on one screen: structure in config and conventions (`src/skills/<name>/SKILL.md` ships with no declaration at all), JSX only where something is rendered.
+The same config also owns the npm package build — no second bundler config, bin shims, or hand-rolled stdio lifecycles. `bin` and `lib` entries (or the conventions `src/cli.ts`, `src/index.ts`, and `src/mcp/<server-id>.ts`) emit executable `dist/bin/<name>.js` bundles and a library output alongside the plugin root; an MCP entry that default-exports a server factory runs under a framework-owned stdio lifecycle; `tools.rsbuild` / `tools.rspack` is the one bundler escape hatch. [Entry conventions](docs/entry-conventions.md) is the full contract, and [Framework mode](docs/framework-mode.md) is the whole authoring model on one screen: structure in config and conventions (`src/skills/<name>/SKILL.md` ships with no declaration at all), JSX only where something is rendered.
 
 ## Commands
 
-- `build` — validate the project and write an artifact (plus the `bin`/`lib` package build when declared)
+- `build` — validate the project and write the plugin root (plus the `bin`/`lib` package build when declared)
 - `validate` — check project source, or a built artifact with `--artifact <dir>`
-- `inspect` — show the normalized configuration and per-target plans; `--bundler` dumps the synthesized bundler configs (post-`tools`-hatch merge)
+- `inspect` — show the normalized configuration and each selected host's projection plan; `--bundler` dumps the synthesized bundler configs (post-`tools`-hatch merge)
 - `dev` — serve the local development workbench and rebuild the `dist/` package build when its inputs change; `--install-host <claude|codex|cursor>` installs a development variant whose stable `dev proxy` MCP command hot-swaps epochs behind the host's open connection and re-syncs hooks and Skills on every adopted rebuild (see [Framework mode › Live development into hosts](docs/framework-mode.md#live-development-into-hosts))
 - `mcp list` / `mcp invoke` / `mcp run` — list, invoke, or run an artifact's MCP servers locally
 - `hooks list` / `hooks simulate` — inspect and simulate generated hooks
 - `eval` — run eval suites against a built artifact
 
-When validating a built `claude` or unified `plugin` target, Agent Bundle uses the installed
-Claude Code developer toolchain in addition to its pinned schemas. Use
-`agent-bundle validate --artifact dist --strict` in CI; Claude's `--strict` findings remain
+When the `claude` projection is selected, validating the built root also runs the installed
+Claude Code developer toolchain in addition to the pinned schemas. Use
+`agent-bundle validate --artifact artifact --strict` in CI; Claude's `--strict` findings remain
 warnings locally unless Agent Bundle strict mode is requested. If `claude` is absent, validation
 reports an explicit informational skip. For the install-free development loop, run
-`claude --plugin-dir dist/claude plugin list --json` after building.
+`claude --plugin-dir artifact plugin list --json` after building.
 
 The [package README](packages/agent-bundle/README.md) is the full reference: configuration semantics, the workbench, the optional Agent API, evals, and limitations.
 

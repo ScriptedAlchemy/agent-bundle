@@ -62,8 +62,8 @@ const compile = async (
   apps: readonly NormalizedMcpApp[],
   options: { readonly mode?: McpAppCompileMode; readonly tools?: AgentBundleToolsConfig } = {},
 ) => {
-  const outDir = join(root, 'dist', 'portable');
-  const result = await compileMcpApps(apps, { cwd: root, meta, outDir, target: 'portable', ...options });
+  const outDir = join(root, 'dist');
+  const result = await compileMcpApps(apps, { cwd: root, meta, outDir, selected: ['portable'], target: 'portable', ...options });
   return { outDir, result };
 };
 
