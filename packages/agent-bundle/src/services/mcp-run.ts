@@ -121,9 +121,9 @@ export const resolveMcpStdioLaunch = async (
       throw new TypeError(`Unhandled MCP server kind ${String(exhaustive)}.`);
     }
   }
-  if (row.entry?.path === undefined) {
+  if (row.launch === undefined) {
     throw new Error(
-      `MCP server ${options.server} is a compiled server without an entry path; only compiled servers can be run from the artifact.`,
+      `MCP server ${options.server} is a compiled server without a launch record; only compiled servers can be run from the artifact.`,
     );
   }
   const runtime = registry.mcpRuntime(host);
@@ -168,9 +168,9 @@ export const resolveMcpStdioLaunch = async (
     pluginRoot: targetRoot,
     workspaceRoot: resolve(options.workspaceRoot),
   };
-  const entry = joinArtifact(targetRoot, row.entry.path);
-  if (row.entry.worker !== undefined) {
-    joinArtifact(targetRoot, row.entry.worker);
+  const entry = joinArtifact(targetRoot, row.launch.entry);
+  if (row.launch.worker !== undefined) {
+    joinArtifact(targetRoot, row.launch.worker);
   }
   const hostLaunch = hostStdio === undefined
     ? undefined

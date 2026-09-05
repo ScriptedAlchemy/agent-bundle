@@ -1036,9 +1036,10 @@ node <root>/bin/<plugin>.mjs web [<server>/<app>] [--port N] [--open|--no-open] 
 
 The default App is the only exposed one; several without a selector is a usage error (exit `2`)
 that lists them. Missing `agent-bundle.manifest.json` beside `bin/` exits `1`. The command
-launches the plugin's own MCP server (`node <root>/mcp/<entry>.mjs`,
-`AGENT_BUNDLE_PLUGIN_ROOT=<root>`, declared static env with path tokens expanded — the
-plugin-data token resolves outside the artifact, under
+launches the plugin's own MCP server from its `executables.mcpServers[]` `launch` record
+(`node <root>/<launch.entry> <args>` — `artifact` arguments resolve under `<root>`, literals have
+their path tokens expanded — with `AGENT_BUNDLE_PLUGIN_ROOT=<root>` and the declared static env,
+path tokens expanded; the plugin-data token resolves outside the artifact, under
 `~/.agent-bundle/web-data/<plugin>-<digest>/<server>`, so a read-only install still launches),
 calls the opening tool once, serves the App at `http://127.0.0.1:<port>/` on a loopback origin with a
 second loopback sandbox origin for the App document (the same host stack and consent behavior as

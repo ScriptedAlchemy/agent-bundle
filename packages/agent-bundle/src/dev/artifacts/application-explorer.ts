@@ -206,7 +206,7 @@ const serversFor = (manifest: ArtifactManifest): ApplicationExplorerServer[] => 
             resourceUri: app.resourceUri,
           }))
           .sort(byId),
-        ...(executable.entry === undefined ? {} : { entry: executable.entry.path }),
+        ...(executable.launch === undefined ? {} : { entry: executable.launch.entry }),
         hosts: [...executable.hosts].sort((left, right) => left.localeCompare(right)),
         id: executable.id,
         kind: executable.kind,

@@ -643,9 +643,6 @@ it('prints a web surface line when the bundle manifest exposes Apps', async () =
     const app = (name: string) => ({
       allow: [],
       app: `status/${name}`,
-      args: [],
-      entry: 'mcp/status.mjs',
-      env: {},
       name,
       resourceUri: `ui://status/${name}`,
       server: 'status',

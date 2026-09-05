@@ -100,8 +100,8 @@ beforeAll(async () => {
   // `packed-deleted-source`: the bin serves out of the artifact alone, so the
   // config, the routes, the server, and the App view are removed and verified
   // absent before any process runs.
-  const receipt = await removeProjectSource({ extraPaths: ['views'], projectRoot: project });
-  expect(receipt.removed).toEqual(['agent-bundle.config.ts', 'src', 'views']);
+  const receipt = await removeProjectSource({ extraPaths: ['payload', 'views'], projectRoot: project });
+  expect(receipt.removed).toEqual(['agent-bundle.config.ts', 'payload', 'src', 'views']);
 }, 300_000);
 
 afterAll(async () => {
@@ -110,21 +110,37 @@ afterAll(async () => {
   if (consumer.length > 0) await rm(consumer, { force: true, recursive: true });
 });
 
-it('builds the exposed App into the composite root: a manifest web section and one self-contained bin carrying the host', { timeout: 60_000 }, async () => {
-  const manifest = JSON.parse(await readFile(join(artifact, 'agent-bundle.manifest.json'), 'utf8')) as { readonly web?: unknown };
+it('builds the exposed App into the composite root: a manifest web section, one launch record on the server row, and one self-contained bin carrying the host', { timeout: 60_000 }, async () => {
+  const manifest = JSON.parse(await readFile(join(artifact, 'agent-bundle.manifest.json'), 'utf8')) as {
+    readonly executables: { readonly mcpServers: readonly Readonly<Record<string, unknown>>[] };
+    readonly web?: unknown;
+  };
   const mcpEntries = (await readdir(join(artifact, 'mcp'))).filter((name) => name.endsWith('.mjs')).sort();
   expect(mcpEntries).toHaveLength(1);
+  // `ArtifactManifestLaunch` (web-host/manifest.ts): the compiled server row
+  // carries the one launch record. The plugin-root-anchored argument is an
+  // `artifact` path (the packaged payload file), the flag a `literal`, and
+  // the env keeps its plugin-data token for the launcher to expand.
+  expect(manifest.executables.mcpServers).toEqual([{
+    apps: [expect.objectContaining({ resourceUri })],
+    hosts: ['portable'],
+    id: 'mcp:status',
+    kind: 'compiled',
+    launch: {
+      args: [{ kind: 'literal', value: '--config' }, { kind: 'artifact', path: 'config/status.json' }],
+      entry: `mcp/${mcpEntries[0]!}`,
+      env: { STATUS_CACHE: 'agent-bundle:path:plugin-data/cache', STATUS_MODE: 'packed' },
+    },
+    name: 'status',
+    transport: 'stdio',
+  }]);
   // `WebManifest` (web-host/manifest.ts): `open` defaults to `never`; the
   // fixture configures no `tool` and no `input`, so neither key is written;
-  // `env` is the server's static env (none) and `entry` the artifact-relative
-  // compiled MCP executable the host launches.
+  // the App names its server and carries no copy of the launch.
   expect(manifest.web).toEqual({
     apps: [{
       allow: ['call-tool'],
       app,
-      args: [],
-      entry: `mcp/${mcpEntries[0]!}`,
-      env: {},
       name: 'status',
       resourceUri,
       server: 'status',
@@ -177,6 +193,18 @@ it('serves the App from `web --json --no-open` as a real process out of the dele
     result: { structuredContent: { status: 'healthy' } },
     tokenHeader: WEB_HOST_TOKEN_HEADER,
     toolName: tool,
+  });
+  // The server echoes what it was started with: the launch record's artifact
+  // argument resolved under the installed root, the literal as declared, and
+  // the plugin-data token expanded outside the artifact.
+  expect(seed.result).toMatchObject({
+    structuredContent: {
+      launch: {
+        args: ['--config', join(artifact, 'config', 'status.json')],
+        cache: expect.stringMatching(/^(?!.*\/artifact\/).*\/\.agent-bundle\/web-data\/[^/]+\/status\/cache$/u),
+        mode: 'packed',
+      },
+    },
   });
   expect(seed.token.length).toBeGreaterThan(0);
   expect(seed.sessionId.length).toBeGreaterThan(0);
