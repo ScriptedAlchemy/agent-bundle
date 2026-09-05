@@ -2,4 +2,4 @@
 "agent-bundle": patch
 ---
 
-Make the `agent-bundle` CLI treat invalid `--port`, `--trials`, `dev --install-host`, and install or uninstall `<host>`, `--mode`, and `--scope` values as usage errors that exit with code 2. (#615)
+Move invalid `--port`, `--trials`, `dev --install-host`, and install or uninstall `<host>`, `--mode`, and `--scope` values in the `agent-bundle` CLI away from `AB5000` diagnostics and exit code 1 to Commander usage errors and exit code 2. (#615)
