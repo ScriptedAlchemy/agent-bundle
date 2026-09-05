@@ -90,7 +90,13 @@ const catalogRow = (kind: 'compiled' | 'prebuilt' = 'compiled') => ({
   apps: [], hosts: ['claude'], id: 'mcp:catalog', kind, launch: validLaunch(), name: 'catalog', transport: 'stdio',
 });
 
-const fileRows = (...paths: readonly string[]) => paths.map((path) => ({ bytes: 1, kind: 'generated', path, sha256: 'x' }));
+// Compiled entries and workers are `bundle` rows, a prebuilt entry a `prebuilt` row; everything else is generated.
+const fileRows = (...paths: readonly string[]) => paths.map((path) => ({
+  bytes: 1,
+  kind: path.startsWith('mcp/') ? 'bundle' : path.startsWith('runtime/') ? 'prebuilt' : 'generated',
+  path,
+  sha256: 'x',
+}));
 
 const document = (overrides: Readonly<Record<string, unknown>> = {}): Readonly<Record<string, unknown>> => ({
   application: { id: 'application:fixture', name: 'fixture', version: '1.0.0' },
@@ -185,10 +191,21 @@ it('refuses a launch record naming bytes the manifest does not index', () => wit
     [fileRows(validLaunch().worker!, 'payload/config.json'), 'executables.mcpServers[catalog].launch.entry names "mcp/mcp-catalog-01234567.mjs", which is not a manifest file.'],
     [fileRows(validLaunch().entry, 'payload/config.json'), 'executables.mcpServers[catalog].launch.worker names "mcp/mcp-catalog-01234567-flight.mjs", which is not a manifest file.'],
     [fileRows(validLaunch().entry, validLaunch().worker!), 'executables.mcpServers[catalog].launch.args[1].path names "payload/config.json", which is not inside the artifact.'],
+    [
+      [{ ...fileRows(validLaunch().entry)[0], kind: 'generated' }, ...fileRows(validLaunch().worker!, 'payload/config.json')],
+      'executables.mcpServers[catalog].launch.entry names "mcp/mcp-catalog-01234567.mjs", a generated file, not a bundle file.',
+    ],
+    [
+      [...fileRows(validLaunch().entry, 'payload/config.json'), { ...fileRows(validLaunch().worker!)[0], kind: 'copy' }],
+      'executables.mcpServers[catalog].launch.worker names "mcp/mcp-catalog-01234567-flight.mjs", a copy file, not a bundle file.',
+    ],
+    [[...fileRows(validLaunch().entry), ...fileRows(validLaunch().entry)], 'files declares "mcp/mcp-catalog-01234567.mjs" twice.'],
+    [[{ ...fileRows(validLaunch().entry)[0], kind: 'symlink' }], 'files[0].kind is unknown.'],
     [[{ path: '../escaped.mjs' }], 'files[0].path must be a safe relative POSIX path.'],
     [[{ path: 'State/server.mjs' }], 'files[0].path must not be under the runtime-owned root "state/".'],
     [[{ path: '.agent-bundle-install.json' }], 'files[0].path must not be at or under the installer\'s receipt ".agent-bundle-install.json".'],
     [[{ path: 'agent-bundle.manifest.json' }], 'files[0].path must not name the manifest itself.'],
+    [[{ path: 'mcp/CON.mjs' }], 'files[0].path must be a safe relative POSIX path.'],
     [['mcp/mcp-catalog-01234567.mjs'], 'files[0] must be a plain object.'],
     [undefined, 'files must be an array.'],
   ];

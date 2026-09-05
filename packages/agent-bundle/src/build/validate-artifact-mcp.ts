@@ -11,7 +11,7 @@ import { readFileString, runWithPlatform } from '../effect/platform.ts';
 import { isDirectOutputLayoutPath, matchesManifestFile } from './artifact-layout.ts';
 import type { ValidatedArtifactMcpServerEvidence } from './artifact-validation-types.ts';
 import type { ArtifactFile, ManifestFile } from './emit.ts';
-import type { ArtifactManifest } from './manifest.ts';
+import type { ArtifactManifest, ArtifactManifestMcpServer } from './manifest.ts';
 
 const mcpArtifactPathApi = process.platform === 'win32'
   ? Object.freeze({
@@ -111,6 +111,36 @@ const validateMcpArtifactReference = (options: {
   }
 
   return Object.freeze(diagnostics);
+};
+
+/**
+ * A host document's stdio server and the manifest's launch record for the same
+ * name start the same artifact bytes: the document's artifact-local command
+ * and argument paths are exactly the record's entry plus its `artifact`
+ * arguments. Otherwise `mcp run` (host document) and `<plugin> web` (manifest
+ * record) would launch different files under one server name.
+ */
+const validateLaunchAgreement = (options: {
+  readonly declared: ArtifactManifestMcpServer | undefined;
+  readonly entryPaths: readonly string[];
+  readonly manifestPath: string;
+  readonly server: string;
+  readonly target: string;
+}): readonly Diagnostic[] => {
+  const launch = options.declared?.launch;
+  if (launch === undefined) return Object.freeze([]);
+  const recorded = [launch.entry, ...launch.args.flatMap((argument) => argument.kind === 'artifact' ? [argument.path] : [])]
+    .sort((left, right) => left.localeCompare(right));
+  if (recorded.length === options.entryPaths.length && recorded.every((path, index) => path === options.entryPaths[index])) {
+    return Object.freeze([]);
+  }
+  return Object.freeze([diagnostic(
+    'AB6017',
+    `MCP server ${JSON.stringify(options.server)} in target ${JSON.stringify(options.target)} starts ${JSON.stringify(options.entryPaths)}, ` +
+      `but its manifest launch record names ${JSON.stringify(recorded)}.`,
+    options.manifestPath,
+    options.target,
+  )]);
 };
 
 /**
@@ -276,8 +306,16 @@ export const validateMcpCoherence = async (options: {
                 entryPaths.add(argumentReference.path);
               }
             }
+            const sortedEntryPaths = Object.freeze([...entryPaths].sort((left, right) => left.localeCompare(right)));
+            diagnostics.push(...validateLaunchAgreement({
+              declared: options.manifest.executables.mcpServers.find((row) => row.name === entry.name),
+              entryPaths: sortedEntryPaths,
+              manifestPath,
+              server: entry.name,
+              target: target.name,
+            }));
             options.mcpServers.push(Object.freeze({
-              entryPaths: Object.freeze([...entryPaths].sort((left, right) => left.localeCompare(right))),
+              entryPaths: sortedEntryPaths,
               kind: server.kind,
               manifestPath,
               name: entry.name,

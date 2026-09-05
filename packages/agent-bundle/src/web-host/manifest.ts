@@ -218,15 +218,27 @@ export const mcpServerKinds = Object.freeze(['command', 'compiled', 'prebuilt', 
 const isMcpServerKind = (value: unknown): value is (typeof mcpServerKinds)[number] =>
   typeof value === 'string' && (mcpServerKinds as readonly string[]).includes(value);
 
+export const artifactManifestFileKinds = Object.freeze(['bundle', 'copy', 'generated', 'prebuilt'] as const);
+export type ArtifactManifestFileKind = (typeof artifactManifestFileKinds)[number];
+
+const isArtifactManifestFileKind = (value: unknown): value is ArtifactManifestFileKind =>
+  typeof value === 'string' && (artifactManifestFileKinds as readonly string[]).includes(value);
+
+/** A launchable server's kind and its one launch record. */
+export interface ArtifactManifestServerLaunch {
+  readonly kind: 'compiled' | 'prebuilt';
+  readonly launch: ArtifactManifestLaunch;
+}
+
 /**
  * The launch record of every compiled or prebuilt server, keyed by configured
  * server name. Two rows of one name are refused rather than the later one
  * winning: a reader launching by name must never choose between two records.
  */
-export const parseServerLaunches = (value: unknown): ReadonlyMap<string, ArtifactManifestLaunch> => {
+export const parseServerLaunches = (value: unknown): ReadonlyMap<string, ArtifactManifestServerLaunch> => {
   const servers = record(value, 'executables')['mcpServers'];
   if (!Array.isArray(servers)) throw invalid('executables.mcpServers must be an array.');
-  const launches = new Map<string, ArtifactManifestLaunch>();
+  const launches = new Map<string, ArtifactManifestServerLaunch>();
   const names = new Set<string>();
   servers.forEach((candidate: unknown, index: number) => {
     const location = `executables.mcpServers[${index}]`;
@@ -234,14 +246,17 @@ export const parseServerLaunches = (value: unknown): ReadonlyMap<string, Artifac
     const name = string(server['name'], `${location}.name`);
     if (names.has(name)) throw invalid(`executables.mcpServers declares server ${JSON.stringify(name)} twice.`);
     names.add(name);
-    if (!isMcpServerKind(server['kind'])) {
+    const kind = server['kind'];
+    if (!isMcpServerKind(kind)) {
       throw invalid(`${location}.kind must be one of ${mcpServerKinds.join(', ')}.`);
     }
-    const launchable = server['kind'] === 'compiled' || server['kind'] === 'prebuilt';
+    const launchable = kind === 'compiled' || kind === 'prebuilt';
     if (launchable !== (server['launch'] !== undefined)) {
       throw invalid(`${location}.launch is present exactly for compiled and prebuilt servers.`);
     }
-    if (launchable) launches.set(name, parseLaunch(server['launch'], `${location}.launch`));
+    if (kind === 'compiled' || kind === 'prebuilt') {
+      launches.set(name, { kind, launch: parseLaunch(server['launch'], `${location}.launch`) });
+    }
   });
   return launches;
 };
@@ -262,33 +277,50 @@ export const parseArtifactFilePath = (value: unknown, location: string): string 
   return path;
 };
 
-/** The root-relative paths of the `files[]` rows: the only bytes a launch record may name. */
-export const parseFilePaths = (value: unknown): ReadonlySet<string> => {
+/** The `files[]` rows by root-relative path, each with its kind: the only bytes a launch record may name. */
+export const parseFileKinds = (value: unknown): ReadonlyMap<string, ArtifactManifestFileKind> => {
   if (!Array.isArray(value)) throw invalid('files must be an array.');
-  return new Set(value.map((candidate: unknown, index: number) =>
-    parseArtifactFilePath(record(candidate, `files[${index}]`)['path'], `files[${index}].path`)));
+  const kinds = new Map<string, ArtifactManifestFileKind>();
+  value.forEach((candidate: unknown, index: number) => {
+    const file = record(candidate, `files[${index}]`);
+    const path = parseArtifactFilePath(file['path'], `files[${index}].path`);
+    const kind = file['kind'];
+    if (!isArtifactManifestFileKind(kind)) throw invalid(`files[${index}].kind is unknown.`);
+    if (kinds.has(path)) throw invalid(`files declares ${JSON.stringify(path)} twice.`);
+    kinds.set(path, kind);
+  });
+  return kinds;
 };
 
+// The row kind a launch entry must have: compiled servers start a compiled
+// bundle (the bytes compile evidence describes), prebuilt servers a payload file.
+const launchEntryKind: Readonly<Record<ArtifactManifestServerLaunch['kind'], ArtifactManifestFileKind>> = Object.freeze({
+  compiled: 'bundle',
+  prebuilt: 'prebuilt',
+});
+
 /**
- * A launch record names indexed bytes only: its entry and worker are `files[]`
- * rows, and an `artifact` argument is a row or a directory under the root that
- * holds rows (a payload tree indexed file by file), never a path the root does
- * not contain.
+ * A launch record names indexed bytes only: its entry is a `files[]` row of
+ * the kind its server kind compiles to, its worker a `bundle` row, and an
+ * `artifact` argument is a row or a directory under the root that holds rows
+ * (a payload tree indexed file by file), never a path the root does not
+ * contain.
  */
 export const requireLaunchFiles = (
-  launches: ReadonlyMap<string, ArtifactManifestLaunch>,
-  filePaths: ReadonlySet<string>,
+  launches: ReadonlyMap<string, ArtifactManifestServerLaunch>,
+  files: ReadonlyMap<string, ArtifactManifestFileKind>,
 ): void => {
-  const paths = [...filePaths];
-  const inRoot = (path: string): boolean => filePaths.has(path) || paths.some((file) => file.startsWith(`${path}/`));
-  for (const [name, launch] of launches) {
+  const paths = [...files.keys()];
+  const inRoot = (path: string): boolean => files.has(path) || paths.some((file) => file.startsWith(`${path}/`));
+  const requireRow = (location: string, path: string, kind: ArtifactManifestFileKind): void => {
+    const actual = files.get(path);
+    if (actual === undefined) fail(`${location} names ${JSON.stringify(path)}, which is not a manifest file.`);
+    if (actual !== kind) fail(`${location} names ${JSON.stringify(path)}, a ${actual} file, not a ${kind} file.`);
+  };
+  for (const [name, { kind, launch }] of launches) {
     const location = `executables.mcpServers[${name}].launch`;
-    if (!filePaths.has(launch.entry)) {
-      fail(`${location}.entry names ${JSON.stringify(launch.entry)}, which is not a manifest file.`);
-    }
-    if (launch.worker !== undefined && !filePaths.has(launch.worker)) {
-      fail(`${location}.worker names ${JSON.stringify(launch.worker)}, which is not a manifest file.`);
-    }
+    requireRow(`${location}.entry`, launch.entry, launchEntryKind[kind]);
+    if (launch.worker !== undefined) requireRow(`${location}.worker`, launch.worker, 'bundle');
     launch.args.forEach((argument, index) => {
       if (argument.kind === 'artifact' && !inRoot(argument.path)) {
         fail(`${location}.args[${index}].path names ${JSON.stringify(argument.path)}, which is not inside the artifact.`);
@@ -300,7 +332,7 @@ export const requireLaunchFiles = (
 /** Every exposed App's `server` is a row with the launch record `<plugin> web` starts. */
 export const requireLaunchReferences = (
   web: WebManifest,
-  launches: ReadonlyMap<string, ArtifactManifestLaunch>,
+  launches: ReadonlyMap<string, ArtifactManifestServerLaunch>,
 ): void => {
   for (const app of web.apps) {
     if (!launches.has(app.server)) {
@@ -328,13 +360,13 @@ export const readWebManifestDocument = async (manifestPath: string): Promise<Web
     const document = parseJsonWithoutDuplicateKeys(await readFile(manifestPath, 'utf8'));
     const manifest = record(document, 'manifest');
     requireManifestVersion(manifest);
-    const launches = parseServerLaunches(manifest['executables']);
-    requireLaunchFiles(launches, parseFilePaths(manifest['files']));
+    const servers = parseServerLaunches(manifest['executables']);
+    requireLaunchFiles(servers, parseFileKinds(manifest['files']));
     const web = manifest['web'] === undefined ? undefined : parseWebManifest(manifest['web']);
-    if (web !== undefined) requireLaunchReferences(web, launches);
+    if (web !== undefined) requireLaunchReferences(web, servers);
     return {
       hosts: parseProjectionHosts(manifest['projections']),
-      launches,
+      launches: new Map([...servers].map(([name, { launch }]) => [name, launch])),
       ...(web === undefined ? {} : { web }),
     };
   } catch (error) {

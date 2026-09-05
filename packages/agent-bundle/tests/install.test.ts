@@ -906,6 +906,29 @@ it('reports manifest-indexed byte drift as AB7001 with the path', async () => {
   }
 });
 
+it('reports manifest-indexed mode drift as AB7001: an executable bit is content the digest cannot see', async () => {
+  const fixture = await createHostBundle('cursor');
+  const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
+  await mkdir(join(home, '.cursor'));
+  try {
+    await chmod(join(fixture.bundleRoot, 'payload.txt'), 0o755);
+    const error = await installBundle({ from: fixture.from, home, host: 'cursor' })
+      .catch((failure: unknown) => failure);
+
+    expect(error).toBeInstanceOf(DiagnosticError);
+    expect((error as DiagnosticError).diagnostics).toMatchObject([{
+      code: 'AB7001',
+      message: expect.stringContaining('--from root does not match its manifest: payload.txt differs from its files[] row in bytes, mode, or digest.'),
+      target: 'cursor',
+    }]);
+  } finally {
+    await Promise.all([
+      rm(fixture.cleanupRoot, { force: true, recursive: true }),
+      rm(home, { force: true, recursive: true }),
+    ]);
+  }
+});
+
 it('copies and hashes an operator .env beside the artifact', async () => {
   const fixture = await createHostBundle('cursor');
   const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));

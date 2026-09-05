@@ -20,7 +20,7 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 | 规范字节 | 文件就是该文档的规范 JSON 序列化——对象键已排序、没有无意义的空白、末尾恰有一个换行。每个读取方都会把解析结果重新序列化，字节不完全一致就拒绝该文件。手工编辑、重新格式化或重复键都会让读取失败。 |
 | 封闭键 | 每个对象只接受文档化的那些键。任何层级上的未知键都是解析错误。 |
 | 有序数组 | 每个数组都有显式的排序键（各分节下方注明），且没有重复项。 |
-| 精简读取方 | 上面各行描述的是完整解析器（`parseArtifactManifest`），下表中的消费者除一个之外都使用它：打包进生成 bin 的 `<plugin> web` 支持不经解析器读取清单。它只校验自己启动所需的切片并忽略其余所有键，但对这些切片是拒绝而非过滤，所用检查与完整解析器相同（由 `web-host/manifest.ts` 持有，两者都从它导入）：`2` 以外的 `manifestVersion` 或重复的 JSON 键；不是对象、未命名 host 或重复 host 的 `projections[]` 行；不是对象、`kind` 未知、按 kind 不应携带却带有 `launch` 记录（或应携带却缺失）、或重复 server `name` 的 `executables.mcpServers[]` 行——同名两行绝不会解析为后者；格式错误的 `launch` 记录，或其 entry、worker 或 `artifact` 参数不是 `files[]` 行的记录（参数可以指向根目录下含有行的目录）；以及 `server` 并非带 launch 记录之行的 `web.apps[]` 行。 |
+| 精简读取方 | 上面各行描述的是完整解析器（`parseArtifactManifest`），下表中的消费者除一个之外都使用它：打包进生成 bin 的 `<plugin> web` 支持不经解析器读取清单。它只校验自己启动所需的切片并忽略其余所有键，但对这些切片是拒绝而非过滤，所用检查与完整解析器相同（由 `web-host/manifest.ts` 持有，两者都从它导入）：`2` 以外的 `manifestVersion` 或重复的 JSON 键；不是对象、未命名 host 或重复 host 的 `projections[]` 行；不是对象、`kind` 未知、按 kind 不应携带却带有 `launch` 记录（或应携带却缺失）、或重复 server `name` 的 `executables.mcpServers[]` 行——同名两行绝不会解析为后者；格式错误的 `launch` 记录，或其 entry 不是其服务器 kind 所启动的那种 `files[]` 行（`compiled` 对应 `bundle`，`prebuilt` 对应 `prebuilt`）、worker 不是 `bundle` 行、或 `artifact` 参数不在根目录之内的记录（参数可以指向根目录下含有行的目录）；以及 `server` 并非带 launch 记录之行的 `web.apps[]` 行。 |
 | 路径 | 每个路径都是 POSIX 形式、相对根目录且安全：没有前导 `/`、没有反斜杠、没有 `.` 或 `..` 段，也绝不会是构建机上的绝对路径。把整个组合根目录搬到另一个绝对路径后，每个读取方仍然可用：所有路径都保持相对根目录，并在搬迁后的树内解析。任何分节指向的路径——宿主文档、可执行文件、App 视图、安装文件——同时也是一行 `files[]`。 |
 
 ## 由谁写入
@@ -79,7 +79,7 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 
 | 字段 | 必填 | 内容 |
 | --- | --- | --- |
-| `path` | 是 | 相对根目录的路径。绝不会是 `agent-bundle.manifest.json`，也绝不会位于工件不拥有的根条目之上或之下（任何大小写）：运行时的 `state/`（因此 payload 不能命名为 `state`，`AB4741`）与安装器的 `.agent-bundle-install.json` 回执。安装器既不复制也不拥有这些条目，因此对已索引行的复制总能重新测量出与清单一致的清点。 |
+| `path` | 是 | 相对根目录的路径，且每个路径段都可移植：没有控制字符，也没有 Windows 保留的字符（尖括号、冒号、双引号、竖线、问号、星号），不是 Windows 设备名（`CON`、`NUL`、`COM1`……），结尾没有点或空格——安装器回执中的路径遵守同一规则，因此解析器接受的清单，每个安装器都能复制并拥有。绝不会是 `agent-bundle.manifest.json`，也绝不会位于工件不拥有的根条目之上或之下（任何大小写）：运行时的 `state/`（因此 payload 不能命名为 `state`，`AB4741`）与安装器的 `.agent-bundle-install.json` 回执。安装器既不复制也不拥有这些条目，因此对已索引行的复制总能重新测量出与清单一致的清点。 |
 | `bytes` | 是 | 字节大小。 |
 | `sha256` | 是 | 内容摘要。校验比对的是真实字节，因此被手工改过的生成文件会失败。 |
 | `kind` | 是 | `bundle`（编译后的入口）、`copy`（逐字节复制）、`generated`（编译器写出的文档）或 `prebuilt`（预构建 payload 文件）。 |
@@ -418,7 +418,7 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 | `AB6001` | 清单不是严格的规范清单，或在校验运行期间发生了变化。 |
 | `AB6004` | 某行 `files[]` 与树不一致。 |
 | `AB6018` | `executables.hooks[]` 与某份宿主钩子文档就编译器 wrapper 不一致。 |
-| `AB7001` | `install`、`uninstall` 或 `doctor` 无法从 `--from` 下的清单解析出该宿主，或某个列出的文件缺失或与其 `files[]` 摘要不符。 |
+| `AB7001` | `install`、`uninstall` 或 `doctor` 无法从 `--from` 下的清单解析出该宿主，或某个列出的文件缺失，或在大小、可执行位或摘要上与其 `files[]` 行不符。 |
 
 全部说明见[诊断参考](./diagnostics.md)。
 

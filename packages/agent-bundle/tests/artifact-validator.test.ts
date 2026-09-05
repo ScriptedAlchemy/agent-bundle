@@ -31,6 +31,7 @@ import {
   artifactManifestVersion,
   assembleArtifactManifest,
   type ArtifactManifest,
+  type ArtifactManifestMcpServer,
 } from '../src/build/manifest.ts';
 import { artifactDiagnosticRecoveries, validateArtifact, validateArtifactWithSnapshot } from '../src/build/validate-artifact.ts';
 import { digest, sha256Hex } from '../src/core/digest.ts';
@@ -65,6 +66,7 @@ const manifestFor = (
   files: readonly ArtifactFixtureFile[],
   includeModes = true,
   projections: readonly FixtureProjection[] = [],
+  mcpServers: readonly ArtifactManifestMcpServer[] = [],
 ): ArtifactManifest => {
   const configHash = hash('export default {};\n');
   const sourceInputs = [{ path: 'agent-bundle.config.ts', sha256: configHash }];
@@ -114,7 +116,7 @@ const manifestFor = (
       },
     },
     distribution: { channels: ['local'], payloads: [] },
-    executables: { bins: [], hooks: [], mcpServers: [], scripts: [] },
+    executables: { bins: [], hooks: [], mcpServers, scripts: [] },
     files: manifestFiles,
     manifestVersion: artifactManifestVersion,
     projections: publicProjections,
@@ -134,6 +136,7 @@ const writeArtifact = async (
   files: readonly ArtifactFixtureFile[],
   includeModes = true,
   projections: readonly FixtureProjection[] = [],
+  mcpServers: readonly ArtifactManifestMcpServer[] = [],
 ): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-artifact-validator-'));
   for (const file of files) {
@@ -144,7 +147,7 @@ const writeArtifact = async (
   }
   await writeFile(
     join(root, 'agent-bundle.manifest.json'),
-    assembleArtifactManifest(manifestFor(files, includeModes, projections)).bytes,
+    assembleArtifactManifest(manifestFor(files, includeModes, projections, mcpServers)).bytes,
   );
   return root;
 };
@@ -1517,6 +1520,48 @@ it.each([
     ]));
   } finally {
     await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('holds a host document\'s server to the manifest launch record of the same name', async () => {
+  const entry = 'mcp/mcp-server-deadbeef.mjs';
+  const other = 'mcp/mcp-other-deadbeef.mjs';
+  const serverRow = (launchEntry: string): ArtifactManifestMcpServer => ({
+    apps: [],
+    hosts: [coherenceTarget],
+    id: 'mcp:server',
+    kind: 'compiled',
+    launch: { args: [{ kind: 'literal', value: '--verbose' }], entry: launchEntry, env: {} },
+    name: 'server',
+    transport: 'stdio',
+  });
+  const files = (documentEntry: string): ArtifactFixtureFile[] => [
+    {
+      contents: `${JSON.stringify({ mcpServers: { server: { args: [documentEntry, '--verbose'], command: 'node', type: 'stdio' } } })}\n`,
+      kind: 'generated',
+      path: 'native/servers.json',
+    },
+    { contents: 'export const server = true;\n', kind: 'bundle', path: entry },
+    { contents: 'export const other = true;\n', kind: 'bundle', path: other },
+  ];
+  const launchMismatch = expect.objectContaining({
+    code: 'AB6017',
+    generatedPath: 'native/servers.json',
+    message: `MCP server "server" in target "coherent" starts ["${other}"], but its manifest launch record names ["${entry}"].`,
+    target: coherenceTarget,
+  });
+
+  // The document starts `other`; the record names `entry`. Both are bundles the
+  // artifact ships, so only the agreement check tells them apart.
+  const swapped = await writeArtifact(files(other), true, [coherenceManifestTarget], [serverRow(entry)]);
+  const agreeing = await writeArtifact(files(entry), true, [coherenceManifestTarget], [serverRow(entry)]);
+  try {
+    expect(await validateArtifact({ artifactRoot: swapped, registry: coherenceRegistry() }))
+      .toEqual(expect.arrayContaining([launchMismatch]));
+    expect(await validateArtifact({ artifactRoot: agreeing, registry: coherenceRegistry() }))
+      .not.toEqual(expect.arrayContaining([expect.objectContaining({ message: expect.stringContaining('manifest launch record') })]));
+  } finally {
+    await Promise.all([rm(swapped, { force: true, recursive: true }), rm(agreeing, { force: true, recursive: true })]);
   }
 });
 
