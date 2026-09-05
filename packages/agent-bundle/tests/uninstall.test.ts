@@ -18,6 +18,7 @@ import {
 } from '../src/install/receipt.ts';
 import { uninstallBundle, type UninstallResult } from '../src/install/uninstall.ts';
 import { captureCliTerminal } from './support/cli-terminal.ts';
+import { writeInstallFixtureManifest } from './support/install-fixture.ts';
 import { diffTreeSnapshots, snapshotTree, treesIdentical } from './support/tree-snapshot.ts';
 
 interface CommandCall {
@@ -67,6 +68,14 @@ const createFixture = async (host: 'claude' | 'codex' | 'cursor'): Promise<Fixtu
   } else {
     await writeJson(join(bundleRoot, '.cursor-plugin/plugin.json'), { name: 'uninstall-fixture', version: '1.2.3' });
   }
+  await writeInstallFixtureManifest(
+    bundleRoot,
+    { name: 'uninstall-fixture', version: '1.2.3' },
+    [{
+      host,
+      ...(host === 'cursor' ? {} : { marketplace: 'uninstall-fixture-marketplace' }),
+    }],
+  );
   return { bundleRoot, cleanupRoot, home };
 };
 

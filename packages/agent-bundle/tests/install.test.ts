@@ -12,6 +12,7 @@ import addFormats from 'ajv-formats';
 import cursorMarketplaceSchema from '../src/adapters/schemas/cursor/marketplace.schema.json' with { type: 'json' };
 import { stageCursorMarketplace } from '../src/install/cursor-marketplace.ts';
 import { formatInstallResult } from '../src/install/format.ts';
+import { readBundleIdentity } from '../src/install/identity.ts';
 import { installBundle, type InstallCommandRunner } from '../src/install/install.ts';
 import {
   installReceiptFile,
@@ -23,6 +24,7 @@ import {
 import { DiagnosticError } from '../src/core/diagnostics.ts';
 import { runCli } from '../src/cli.ts';
 import { captureCliTerminal } from './support/cli-terminal.ts';
+import { writeInstallFixtureManifest } from './support/install-fixture.ts';
 
 interface CommandCall {
   readonly args: readonly string[];
@@ -147,6 +149,14 @@ const createHostBundle = async (
       version: '1.2.3',
     });
   }
+  await writeInstallFixtureManifest(
+    bundleRoot,
+    { name: 'install-fixture', version: '1.2.3' },
+    [{
+      host,
+      ...(host === 'cursor' ? {} : { marketplace: 'install-fixture-marketplace' }),
+    }],
+  );
   return { bundleRoot, cleanupRoot, from };
 };
 
@@ -586,7 +596,8 @@ it.each(['claude', 'codex', 'cursor'] as const)(
       })).rejects.toMatchObject({
         diagnostics: [expect.objectContaining({
           code: 'AB7001',
-          message: `No ${host} bundle manifest was found in ${JSON.stringify(fixture.from)}.`,
+          message: `No agent-bundle.manifest.json in ${fixture.from}: build the composite root first (agent-bundle build), ` +
+            'then point --from at its root.',
           target: host,
         })],
       });
@@ -596,6 +607,63 @@ it.each(['claude', 'codex', 'cursor'] as const)(
     }
   },
 );
+
+it('reads application identity from the manifest instead of the host plugin document', async () => {
+  const fixture = await createHostBundle('claude');
+  try {
+    await writeJson(join(fixture.bundleRoot, '.claude-plugin/plugin.json'), {
+      name: 'tampered',
+      version: '9.9.9',
+    });
+    await expect(readBundleIdentity(fixture.bundleRoot, 'claude')).resolves.toMatchObject({
+      marketplace: 'install-fixture-marketplace',
+      plugin: 'install-fixture',
+      version: '1.2.3',
+    });
+  } finally {
+    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+  }
+});
+
+it('reports a non-canonical artifact manifest as AB7001', async () => {
+  const fixture = await createHostBundle('cursor');
+  try {
+    const path = join(fixture.bundleRoot, 'agent-bundle.manifest.json');
+    await writeFile(path, `${await readFile(path, 'utf8')} `);
+    const error = await readBundleIdentity(fixture.bundleRoot, 'cursor').catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(DiagnosticError);
+    expect((error as DiagnosticError).diagnostics).toMatchObject([{
+      code: 'AB7001',
+      message: expect.stringContaining(
+        `agent-bundle.manifest.json in ${fixture.bundleRoot} is not a valid canonical artifact manifest:`,
+      ),
+      target: 'cursor',
+    }]);
+  } finally {
+    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+  }
+});
+
+it('reports a host absent from manifest projections as AB7001', async () => {
+  const fixture = await createHostBundle('cursor');
+  try {
+    await writeInstallFixtureManifest(
+      fixture.bundleRoot,
+      { name: 'install-fixture', version: '1.2.3' },
+      [],
+    );
+    await expect(readBundleIdentity(fixture.bundleRoot, 'cursor')).rejects.toMatchObject({
+      diagnostics: [expect.objectContaining({
+        code: 'AB7001',
+        message: `The artifact at ${fixture.bundleRoot} was built for projections []; cursor is not among them. ` +
+          'Rebuild with --target cursor (or add it to targets in agent-bundle.config.ts).',
+        target: 'cursor',
+      })],
+    });
+  } finally {
+    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+  }
+});
 
 it('fails with a typed diagnostic when the public host CLI is missing', async () => {
   const fixture = await createHostBundle('codex');
@@ -660,12 +728,17 @@ it('copies a Cursor bundle into a fake home and is idempotent', async () => {
     expect(first).toMatchObject({ contentHash: artifact.hash, destination, host: 'cursor', state: 'installed' });
     expect(second).toMatchObject({ contentHash: artifact.hash, destination, host: 'cursor', state: 'already-installed' });
     expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('payload\n');
-    expect((await readdir(destination)).sort()).toEqual([installReceiptFile, '.cursor-plugin', 'payload.txt']);
+    expect((await readdir(destination)).sort()).toEqual([
+      installReceiptFile,
+      '.cursor-plugin',
+      'agent-bundle.manifest.json',
+      'payload.txt',
+    ]);
     expect(await readInstallReceipt(destination)).toMatchObject({
       contentHash: artifact.hash,
       // A fresh install created every directory, so it owns them all.
       directories: ['.cursor-plugin'],
-      files: ['.cursor-plugin/plugin.json', 'payload.txt'],
+      files: ['.cursor-plugin/plugin.json', 'agent-bundle.manifest.json', 'payload.txt'],
       format: installReceiptFormat,
       host: 'cursor',
       // A fresh install into a home without plugins/local created both host directories (#101).
@@ -676,7 +749,12 @@ it('copies a Cursor bundle into a fake home and is idempotent', async () => {
       scope: 'user',
       version: '1.2.3',
     });
-    expect(await listFiles(destination)).toEqual([installReceiptFile, '.cursor-plugin/plugin.json', 'payload.txt']);
+    expect(await listFiles(destination)).toEqual([
+      installReceiptFile,
+      '.cursor-plugin/plugin.json',
+      'agent-bundle.manifest.json',
+      'payload.txt',
+    ]);
   } finally {
     await Promise.all([
       rm(fixture.cleanupRoot, { force: true, recursive: true }),
@@ -716,6 +794,7 @@ it('replaces a stale same-version receipt-managed Cursor install in place, touch
     expect(await listFiles(destination)).toEqual([
       installReceiptFile,
       '.cursor-plugin/plugin.json',
+      'agent-bundle.manifest.json',
       'operator-note.txt',
       'payload.txt',
       'skills/new/SKILL.md',
@@ -726,7 +805,7 @@ it('replaces a stale same-version receipt-managed Cursor install in place, touch
     expect(await readInstallReceipt(destination)).toMatchObject({
       contentHash: artifact.hash,
       directories: ['.cursor-plugin', 'skills', 'skills/new'],
-      files: ['.cursor-plugin/plugin.json', 'payload.txt', 'skills/new/SKILL.md'],
+      files: ['.cursor-plugin/plugin.json', 'agent-bundle.manifest.json', 'payload.txt', 'skills/new/SKILL.md'],
     });
 
     const again = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
@@ -937,7 +1016,11 @@ it('refreshes a receipt whose inventory drifted even when the owned bytes hash e
     await rm(join(fixture.bundleRoot, 'removed-later.txt'));
     const refreshed = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
     expect(refreshed).toMatchObject({ state: 'replaced' });
-    expect((await readInstallReceipt(destination))?.files).toEqual(['.cursor-plugin/plugin.json', 'payload.txt']);
+    expect((await readInstallReceipt(destination))?.files).toEqual([
+      '.cursor-plugin/plugin.json',
+      'agent-bundle.manifest.json',
+      'payload.txt',
+    ]);
     // A later unowned file at that path is never mistaken for stale owned content.
     await writeFile(join(destination, 'removed-later.txt'), 'operator\n');
     await writeFile(join(fixture.bundleRoot, 'payload.txt'), 'rebuilt\n');
@@ -951,12 +1034,22 @@ it('refreshes a receipt whose inventory drifted even when the owned bytes hash e
     await writeFile(join(fixture.bundleRoot, 'payload.txt', 'nested.md'), '# nested\n');
     const toDirectory = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
     expect(toDirectory).toMatchObject({ state: 'replaced' });
-    expect(await listFiles(destination)).toEqual([installReceiptFile, '.cursor-plugin/plugin.json', 'payload.txt/nested.md']);
+    expect(await listFiles(destination)).toEqual([
+      installReceiptFile,
+      '.cursor-plugin/plugin.json',
+      'agent-bundle.manifest.json',
+      'payload.txt/nested.md',
+    ]);
     await rm(join(fixture.bundleRoot, 'payload.txt'), { recursive: true });
     await writeFile(join(fixture.bundleRoot, 'payload.txt'), 'flat again\n');
     const toFile = await installBundle({ from: fixture.from, home, host: 'cursor', scope: 'user' });
     expect(toFile).toMatchObject({ state: 'replaced' });
-    expect(await listFiles(destination)).toEqual([installReceiptFile, '.cursor-plugin/plugin.json', 'payload.txt']);
+    expect(await listFiles(destination)).toEqual([
+      installReceiptFile,
+      '.cursor-plugin/plugin.json',
+      'agent-bundle.manifest.json',
+      'payload.txt',
+    ]);
     expect(await readFile(join(destination, 'payload.txt'), 'utf8')).toBe('flat again\n');
 
     // An artifact that was run in place may carry state/: it is never installed, hashed, or owned.
@@ -1438,10 +1531,11 @@ it('refuses a symlinked Cursor install destination even when its content matches
 it('rejects a Cursor plugin name that could escape the local install root', async () => {
   const fixture = await createHostBundle('cursor');
   const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
-  await writeJson(join(fixture.bundleRoot, '.cursor-plugin/plugin.json'), {
-    name: '../escape',
-    version: '1.2.3',
-  });
+  await writeInstallFixtureManifest(
+    fixture.bundleRoot,
+    { name: '../escape', version: '1.2.3' },
+    [{ host: 'cursor' }],
+  );
   try {
     const error = await installBundle({
       from: fixture.from,
@@ -1672,7 +1766,7 @@ it('fails closed without git in marketplace mode and leaves no staged repository
   }
 });
 
-it('refuses marketplace mode for an Agent Plugins bundle without .cursor-plugin/plugin.json', async () => {
+it('refuses marketplace mode when the manifest points at a missing Cursor plugin document', async () => {
   const fixture = await createHostBundle('cursor');
   const home = await mkdtemp(join(tmpdir(), 'agent-bundle-home-'));
   await mkdir(join(home, '.cursor'));
@@ -1688,10 +1782,12 @@ it('refuses marketplace mode for an Agent Plugins bundle without .cursor-plugin/
       mode: 'marketplace',
     }).catch((failure: unknown) => failure);
 
-    // The public install path already fails closed on the missing Cursor manifest (AB7001);
+    // The public install path already fails closed on the missing pointed document (AB7001);
     // stageCursorMarketplace repeats the check (AB7003) for direct callers.
     expect((error as DiagnosticError).diagnostics).toMatchObject([{ code: 'AB7001', target: 'cursor' }]);
-    expect((error as DiagnosticError).diagnostics[0]?.message).toContain('No cursor bundle manifest');
+    expect((error as DiagnosticError).diagnostics[0]?.message).toContain(
+      'agent-bundle.manifest.json points cursor at .cursor-plugin/plugin.json',
+    );
     expect(calls).toEqual([]);
     await expect(access(join(home, '.cursor', 'agent-bundle'))).rejects.toMatchObject({ code: 'ENOENT' });
 

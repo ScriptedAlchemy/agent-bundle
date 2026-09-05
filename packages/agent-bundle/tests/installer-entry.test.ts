@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { afterEach, expect, it } from '@rstest/core';
 
 import { build } from '../src/api.ts';
+import { runDoctor } from '../src/install/doctor.ts';
 import { installReceiptFile } from '../src/install/receipt.ts';
 import { installBundle } from '../src/install/install.ts';
 
@@ -289,6 +290,16 @@ it('uses the plugin name when free and skips portable-only artifacts', async () 
   expect(help.stdout).toContain('claude, codex, cursor');
   const home = join(pluginRoot, 'home');
   await mkdir(join(home, '.cursor'), { recursive: true });
+  const doctor = await runDoctor({
+    from: join(pluginRoot, 'host-packs'),
+    home,
+    hosts: ['cursor'],
+  });
+  expect(doctor.hosts[0]?.bundle).toMatchObject({
+    bundleRoot: join(pluginRoot, 'host-packs'),
+    name: 'installer-fixture',
+    version: '1.2.3',
+  });
   const installed = await run(pluginInstaller, ['install', 'cursor', '--json'], {
     cwd: tmpdir(),
     env: { ...process.env, HOME: home },

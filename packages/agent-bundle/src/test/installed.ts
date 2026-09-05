@@ -4,14 +4,11 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
-import { codexArtifactPaths } from '../adapters/codex.ts';
-import { cursorArtifactPaths } from '../adapters/cursor.ts';
-import { artifactManifestName } from '../build/emit.ts';
-import { parseArtifactManifest } from '../build/manifest.ts';
+import { readArtifactManifest } from '../build/manifest-file.ts';
+import type { ArtifactManifest } from '../build/manifest.ts';
 import { digest, sha256Hex } from '../core/digest.ts';
 import { eventRuntimeEndpoint } from '../events/ipc.ts';
-import { cursorDefaultHooksPath, resolveCursorHooksSource } from '../host-contracts/cursor-plugin-validation.ts';
-import { resolveBundleRoot } from '../install/doctor.ts';
+import { readBundleIdentity } from '../install/identity.ts';
 import type { InstallHost } from '../install/install.ts';
 import { AgentTestError } from './errors.ts';
 import {
@@ -109,64 +106,6 @@ interface Failure {
 }
 
 const maxStderrCharacters = 16_000;
-
-const hostManifestPath = (host: InstallHost): string => {
-  switch (host) {
-    case 'claude':
-      return '.claude-plugin/plugin.json';
-    case 'codex':
-      return '.codex-plugin/plugin.json';
-    case 'cursor':
-      return '.cursor-plugin/plugin.json';
-    default: {
-      const exhaustive: never = host;
-      throw new TypeError(`Unknown installed host ${String(exhaustive)}.`);
-    }
-  }
-};
-
-/**
- * The MCP document the installed host loads: Claude's conventional `.mcp.json`,
- * or the document the Codex and Cursor manifests point at beside themselves.
- */
-const hostMcpPath = (host: InstallHost): string => {
-  switch (host) {
-    case 'claude':
-      return '.mcp.json';
-    case 'codex':
-      return codexArtifactPaths.mcp;
-    case 'cursor':
-      return cursorArtifactPaths.mcp;
-    default: {
-      const exhaustive: never = host;
-      throw new TypeError(`Unknown installed host ${String(exhaustive)}.`);
-    }
-  }
-};
-
-/**
- * The hook document the installed host loads. Claude reads the conventional
- * `hooks/hooks.json`; Codex reads the document its manifest points at beside
- * itself; Cursor reads whatever the installed `.cursor-plugin/plugin.json`
- * `hooks` field names (#438), falling back to `hooks/hooks.json` folder
- * discovery when the field is absent.
- */
-const hostHookPath = (host: InstallHost, installedManifest: Readonly<Record<string, unknown>>): string => {
-  switch (host) {
-    case 'claude':
-      return 'hooks/hooks.json';
-    case 'codex':
-      return codexArtifactPaths.hooksManifest;
-    case 'cursor': {
-      const source = resolveCursorHooksSource(installedManifest);
-      return source.kind === 'file' ? source.path : cursorDefaultHooksPath;
-    }
-    default: {
-      const exhaustive: never = host;
-      throw new TypeError(`Unknown installed host ${String(exhaustive)}.`);
-    }
-  }
-};
 
 const record = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -315,24 +254,39 @@ export const openInstalledHostMcpServer = async (
     ? SIMULATED_PROOF_LEVEL
     : HOST_INSTALL_PROOF_LEVEL;
   const failures: Failure[] = [];
+  const manifestResult = await readArtifactManifest(artifactRoot);
+  let artifactManifest: ArtifactManifest | undefined;
   let artifactBytes = '';
-  let artifactManifest: ReturnType<typeof parseArtifactManifest> | undefined;
-  try {
-    artifactBytes = await readFile(join(artifactRoot, artifactManifestName), 'utf8');
-    artifactManifest = parseArtifactManifest(artifactBytes);
-  } catch {
+  if (manifestResult.status === 'ok') {
+    artifactManifest = manifestResult.manifest;
+    artifactBytes = await readFile(manifestResult.path, 'utf8');
+  } else {
     failures.push({ check: 'manifest-schema', reason: 'built artifact manifest was unavailable or invalid' });
   }
   const target = artifactManifest?.projections.find((candidate) => candidate.host === options.host);
   if (target === undefined) {
     failures.push({ check: 'manifest-schema', reason: `artifact manifest did not declare projection ${options.host}` });
   }
-  // The composite root is the bundle root for every selected host; a missing
-  // host manifest is recorded and the checks below still read the root.
-  const builtRoot = await resolveBundleRoot(artifactRoot, options.host).catch(() => {
-    failures.push({ check: 'manifest-schema', reason: `Doctor could not discover the built ${options.host} bundle root` });
-    return artifactRoot;
+  const identity = await readBundleIdentity(artifactRoot, options.host).catch(() => {
+    failures.push({ check: 'manifest-schema', reason: `artifact identity could not be read for ${options.host}` });
+    return undefined;
   });
+  const builtRoot = identity?.bundleRoot ?? artifactRoot;
+  const pluginDocument = identity?.documents.plugin;
+  if (pluginDocument === undefined) {
+    failures.push({ check: 'manifest-schema', reason: `artifact manifest did not point at the ${options.host} plugin document` });
+  }
+  const mcpDocumentPath = identity?.documents.mcp;
+  if (mcpDocumentPath === undefined) {
+    failures.push({ check: 'manifest-schema', reason: `artifact manifest did not point at the ${options.host} MCP document` });
+  }
+  const hooksDocumentPath = identity?.documents.hooks;
+  if (
+    artifactManifest?.executables.hooks.some((hook) => hook.host === options.host) === true &&
+    hooksDocumentPath === undefined
+  ) {
+    failures.push({ check: 'manifest-schema', reason: `artifact manifest did not point at the ${options.host} hooks document` });
+  }
 
   // The composite root is installed whole: every manifest file is part of the
   // selected host's bundle, keyed by its root-relative path.
@@ -366,13 +320,13 @@ export const openInstalledHostMcpServer = async (
   }
 
   const installedManifest = await readJsonRecord(
-    join(installedRoot, hostManifestPath(options.host)),
+    join(installedRoot, pluginDocument ?? ''),
     'manifest-schema',
     'installed host manifest',
     failures,
   );
   const builtManifest = await readJsonRecord(
-    join(builtRoot, hostManifestPath(options.host)),
+    join(builtRoot, pluginDocument ?? ''),
     'manifest-schema',
     'built host manifest',
     failures,
@@ -403,7 +357,7 @@ export const openInstalledHostMcpServer = async (
     : artifactManifest.executables.hooks.filter((hook) => hook.host === options.host);
   if (installedHooks !== undefined && installedHooks.length > 0) {
     const hookDocument = await readJsonRecord(
-      join(installedRoot, hostHookPath(options.host, installedManifest)),
+      join(installedRoot, hooksDocumentPath ?? ''),
       'hook-commands',
       'installed hook document',
       failures,
@@ -420,7 +374,7 @@ export const openInstalledHostMcpServer = async (
   }
 
   const mcpDocument = await readJsonRecord(
-    join(installedRoot, hostMcpPath(options.host)),
+    join(installedRoot, mcpDocumentPath ?? ''),
     'mcp-command',
     'installed MCP document',
     failures,

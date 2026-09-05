@@ -21,7 +21,6 @@ import {
   publicHostRegistrations,
   publicHostRoot,
   publicHostUninstallArguments,
-  readIdentity,
   readInstalledManifest,
   readPublicHostInventory,
   readPublicHostMarketplaceState,
@@ -31,9 +30,9 @@ import {
   type InstallHost,
   type InstallMode,
   type InstallScope,
-  type PluginIdentity,
   type PublicHostInstalledEntry,
 } from './install.ts';
+import { readBundleIdentity, type PluginIdentity } from './identity.ts';
 import {
   assertRealAncestors,
   createInstallReceipt,
@@ -1352,7 +1351,7 @@ const uninstallProgram = Effect.fnUntraced(function*(
     ));
   }
   const policy = resolveDataPolicy(options);
-  const identity = yield* liftPromise(() => readIdentity(options.from, options.host));
+  const identity = yield* liftPromise(() => readBundleIdentity(options.from, options.host));
   switch (options.host) {
     case 'claude':
       return yield* liftPromise(() => uninstallPublicCli(options, identity, 'claude', scope, policy));
