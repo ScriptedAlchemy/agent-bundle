@@ -222,6 +222,34 @@ const typesPackageOf = (name) => (name.startsWith('@')
 
 const hasScheme = (specifier) => /^[a-z][a-z0-9+.-]*:/iu.test(specifier);
 
+/** An absolute path or a URL (anything but `node:`): never resolvable from a consumer's `node_modules`. */
+const isAbsoluteOrUrl = (specifier) => specifier.startsWith('/') || (hasScheme(specifier) && !specifier.startsWith('node:'));
+
+const isRelative = (specifier) => specifier.startsWith('./') || specifier.startsWith('../');
+
+/**
+ * Whether the package's own `exports` serves `subpath` (`.` or `./x`): a
+ * string or conditions-object `exports` serves only `.`; a subpath map serves
+ * its exact keys and `*` patterns; a manifest without `exports` serves any
+ * file by path.
+ */
+const exportsSubpath = (manifest, subpath) => {
+  const { exports } = manifest;
+  if (exports === undefined || exports === null) return true;
+  if (typeof exports === 'string' || Array.isArray(exports)) return subpath === '.';
+  if (!isRecord(exports)) return false;
+  const keys = Object.keys(exports);
+  if (!keys.some((key) => key.startsWith('.'))) return subpath === '.';
+  return keys.some((key) => {
+    if (key === subpath) return true;
+    const star = key.indexOf('*');
+    if (!key.startsWith('.') || star === -1) return false;
+    const prefix = key.slice(0, star);
+    const suffix = key.slice(star + 1);
+    return subpath.length >= prefix.length + suffix.length && subpath.startsWith(prefix) && subpath.endsWith(suffix);
+  });
+};
+
 /**
  * Classifies one specifier against the manifest and the tarball. Returns
  * `undefined` when a consumer resolves it, otherwise the violation reason and
@@ -229,7 +257,13 @@ const hasScheme = (specifier) => /^[a-z][a-z0-9+.-]*:/iu.test(specifier);
  */
 const classifySpecifier = ({ declared, manifest, packed, path, specifier }) => {
   const { kind, specifier: target } = specifier;
-  if (kind === 'path-reference' || target.startsWith('./') || target.startsWith('../')) {
+  if (isAbsoluteOrUrl(target)) {
+    return {
+      message: `${kind === 'import' ? 'imports' : 'references'} "${target}" — an absolute path or URL cannot resolve in a consumer install`,
+      reason: 'unresolvable',
+    };
+  }
+  if (kind === 'path-reference' || isRelative(target)) {
     const candidates = kind === 'path-reference'
       ? [posix.normalize(posix.join(posix.dirname(path), target))]
       : relativeTargets(path, target);
@@ -256,12 +290,15 @@ const classifySpecifier = ({ declared, manifest, packed, path, specifier }) => {
       ? undefined
       : { message: `imports "${target}" — the manifest has no "imports" map to resolve it`, reason: 'subpath-import' };
   }
-  if (target.startsWith('/') || (hasScheme(target) && !target.startsWith('node:'))) {
-    return { message: `imports "${target}" — an absolute path or URL cannot resolve in a consumer install`, reason: 'unresolvable' };
-  }
   if (isBuiltin(target)) return undefined;
   const name = packageNameOf(target);
-  if (name === manifest.name || declared.runtime.has(name)) return undefined;
+  if (name === manifest.name) {
+    const subpath = `.${target.slice(name.length)}`;
+    return exportsSubpath(manifest, subpath)
+      ? undefined
+      : { message: `imports "${target}" — the package's own "exports" has no entry for "${subpath}"`, reason: 'unexported' };
+  }
+  if (declared.runtime.has(name)) return undefined;
   return declared.dev.has(name)
     ? { message: `imports "${target}" — "${name}" is a devDependency, so consumers do not install it`, reason: 'dev-dependency' }
     : {
@@ -306,10 +343,8 @@ export const declarationImportViolations = ({ declarations, manifest, packedPath
     const path = pending.pop();
     const entry = reachable.get(path);
     for (const specifier of specifiersByPath.get(path) ?? []) {
-      const relative = specifier.kind === 'path-reference'
-        || specifier.specifier.startsWith('./')
-        || specifier.specifier.startsWith('../');
-      if (!relative) continue;
+      const relative = specifier.kind === 'path-reference' || isRelative(specifier.specifier);
+      if (!relative || isAbsoluteOrUrl(specifier.specifier)) continue;
       const candidates = specifier.kind === 'path-reference'
         ? [posix.normalize(posix.join(posix.dirname(path), specifier.specifier))]
         : relativeTargets(path, specifier.specifier);

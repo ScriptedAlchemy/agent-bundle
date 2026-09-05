@@ -67,8 +67,9 @@ not currently overridden with `publishConfig.access`.
 `pnpm test:packed:release` — before publishing. `lint:release` runs `attw` with the `esm-only`
 profile on the packed `agent-bundle`, `rsc-markdown-stream`, and `create-agent-bundle` tarballs,
 then `scripts/check-declaration-imports.mjs` over the same inventories: every `.d.ts` a consumer can
-reach from `exports` may only import packed files, Node built-ins, and packages declared in
-`dependencies`, `peerDependencies`, or `optionalDependencies` — a devDependency such as `zod` in a
+reach from `exports` may only import packed files, the package's own exported subpaths, Node
+built-ins, and packages declared in `dependencies`, `peerDependencies`, or `optionalDependencies` —
+absolute paths and URLs never resolve in a consumer install, and a devDependency such as `zod` in a
 reachable declaration fails the gate, while one in an internal declaration no entry point reaches is
 reported as a warning (`--strict` fails those too). publint is not a separate gate: every
 publishable package's `rslib build` runs it through `rsbuild-plugin-publint` and fails the build on

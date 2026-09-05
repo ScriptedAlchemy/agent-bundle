@@ -176,10 +176,14 @@ describe('declarationImportViolations', () => {
           path: 'dist/index.d.ts',
           text: [
             '/// <reference types="node" />',
+            // An absolute reference resolves from the filesystem root, not the
+            // package, even when a same-named file happens to be packed.
+            '/// <reference path="/globals.d.ts" />',
             "import type { Ajv } from 'ajv';",
             "import type { Missing } from './missing.js';",
             "import type { Internal } from '#internal/thing';",
             "import type { Remote } from 'https://example.invalid/types.d.ts';",
+            "import type { Own } from 'fixture-package/internal';",
           ].join('\n'),
         },
         { path: 'dist/routes/public.d.ts', text: 'export type Route = string;' },
@@ -189,17 +193,48 @@ describe('declarationImportViolations', () => {
     expect(report.errors.map(({ reason, specifier }) => `${reason} ${specifier}`)).toEqual([
       'export-target-missing dist/gone.d.ts',
       'dev-dependency node',
+      'unresolvable /globals.d.ts',
       'undeclared ajv',
       'missing-target ./missing.js',
       'subpath-import #internal/thing',
       'unresolvable https://example.invalid/types.d.ts',
+      'unexported fixture-package/internal',
     ]);
     expect(report.errors[1]?.message).toBe(
       'references types "node" — "@types/node" is a devDependency, so consumers do not install it',
     );
-    expect(report.errors[3]?.message).toBe(
+    expect(report.errors[2]?.message).toBe(
+      'references "/globals.d.ts" — an absolute path or URL cannot resolve in a consumer install',
+    );
+    expect(report.errors[4]?.message).toBe(
       'no packed declaration for "./missing.js" (tried dist/missing.d.ts)',
     );
+    expect(report.errors[7]?.message).toBe(
+      'imports "fixture-package/internal" — the package\'s own "exports" has no entry for "./internal"',
+    );
+  });
+
+  it('resolves self-imports through the package\'s own exports map', () => {
+    // Severity is covered above; these fixtures export `.js` targets only, so
+    // the declaration is unreachable and every violation is a warning.
+    const check = (exports: unknown, specifiers: readonly string[]): readonly string[] => {
+      const report = declarationImportViolations({
+        manifest: { name: 'self', exports },
+        packedPaths: ['dist/index.d.ts'],
+        declarations: [{ path: 'dist/index.d.ts', text: specifiers.map((specifier) => `import '${specifier}';`).join('\n') }],
+      });
+      return [...report.errors, ...report.warnings].map(({ specifier }) => specifier);
+    };
+
+    // Subpath map: exact keys and `*` patterns resolve, anything else does not.
+    const subpaths = { '.': './dist/index.js', './routes': './dist/routes.js', './features/*': './dist/features/*.js' };
+    expect(check(subpaths, ['self', 'self/routes', 'self/features/a', 'self/features/nested/b'])).toEqual([]);
+    expect(check(subpaths, ['self/internal', 'self/features'])).toEqual(['self/internal', 'self/features']);
+    // A string or conditions-only `exports` serves the root alone.
+    expect(check('./dist/index.js', ['self', 'self/routes'])).toEqual(['self/routes']);
+    expect(check({ types: './dist/index.d.ts', import: './dist/index.js' }, ['self', 'self/routes'])).toEqual(['self/routes']);
+    // No `exports` at all: every file resolves by path.
+    expect(check(undefined, ['self', 'self/dist/anything.js'])).toEqual([]);
   });
 
   it('resolves the source extensions tsgo keeps and extensionless directory imports', () => {

@@ -12,6 +12,7 @@ export type DeclarationViolationReason =
   | 'missing-target'
   | 'subpath-import'
   | 'undeclared'
+  | 'unexported'
   | 'unresolvable';
 
 export interface DeclarationViolation {
