@@ -286,7 +286,6 @@ embed their HTML), then the node surfaces.
 | Check | Module | Code |
 | --- | --- | --- |
 | Canonical manifest parse + file digest match | `build/validate-artifact.ts` | `AB60xx` family; parse errors throw from `parseArtifactManifest` |
-| Manifest sections vs tree / adapter layout / host-document identity | `build/validate-artifact-manifest.ts` | `AB6039`, `AB6040` |
 | Host-pack and package-build `dist` modules import only relative/`file:` specifiers or Node built-ins | `build/validate-artifact-modules.ts` | `AB6005` |
 | Skills / hooks / MCP documents match the selected hosts | `build/validate-artifact-skills.ts`, `build/validate-artifact-hooks.ts` (`executables.hooks[]`, `AB6018`), `build/validate-artifact-mcp.ts` | per-surface `AB60xx` |
 | Artifact ownership of the output root | `build/validate-artifact.ts` | `AB6014` |
@@ -442,8 +441,7 @@ harness.
 
 | Reader | Fields used | Purpose |
 | --- | --- | --- |
-| `build/validate-artifact.ts` | all of them | Re-parse the on-disk bytes, match `files[]` digests and modes, check `projections[]` against the registry, pin `agentSkills` and `runtime.node` |
-| `build/validate-artifact-manifest.ts` | `executables`, `routes`, `distribution`, `projections[]`, `application` | `AB6039` (a section disagrees with the tree, adapter layout, adapter identity, or document pointers); `AB6040` (a host document identity disagrees with `application`) |
+| `build/validate-artifact.ts` | all of them | Re-parse the on-disk bytes, match `files[]` digests and modes, check `projections[]` (adapter revision, observed version, and `builtInHost` identity, `AB6010`) against the registry, pin `agentSkills` and `runtime.node`. There is no separate coherence pass: the host documents and the manifest are written from the same compiled plans in one build, and every document is a digest-pinned `files[]` row |
 | `build/validate-artifact-modules.ts` | `files[]` (bundle / `.mjs` rows) plus package-build `dist` | `AB6005` import graph |
 | `build/validate-artifact-skills.ts` | `projections[]` (`manifestTargets`) plus the tree | Skill documents vs selected hosts |
 | `build/validate-artifact-hooks.ts` | `executables.hooks[]`, `projections[]` | `AB6018`: hook rows vs host hook documents |
