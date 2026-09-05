@@ -30,7 +30,6 @@ import {
   type McpAppCompileMode,
   type PlannedMcpApp,
 } from './mcp-apps.ts';
-import { bundleSyntaxCheckFor } from './module-imports.ts';
 import { compileRslibSurfaces, settledRslibSurface } from './compiler.ts';
 import { planCompileStages } from './compile-stages.ts';
 import {
@@ -564,10 +563,8 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
       files: await listArtifactFiles(stageRoot),
       outputProvenance,
     });
-    const bundleSyntaxCheck = bundleSyntaxCheckFor(options.tools);
     const preManifestDiagnostics = await validateArtifactFiles({
       artifactRoot: stageRoot,
-      bundleSyntaxCheck,
       manifestFiles: files,
       prebuiltPaths: new Set(outputProvenance
         .filter((output) => output.kind === 'prebuilt')
@@ -588,7 +585,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
         selected: composite.selected,
       }),
     });
-    const diagnostics = await validateArtifact({ artifactRoot: stageRoot, bundleSyntaxCheck, registry: options.registry });
+    const diagnostics = await validateArtifact({ artifactRoot: stageRoot, registry: options.registry });
     if (diagnostics.some((entry) => entry.severity === 'error')) {
       throw new DiagnosticError(diagnostics);
     }

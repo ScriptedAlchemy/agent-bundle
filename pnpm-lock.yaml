@@ -271,9 +271,6 @@ importers:
       '@rstest/core':
         specifier: ^0.11.10
         version: 0.11.11
-      acorn:
-        specifier: 8.18.0
-        version: 8.18.0
       ajv:
         specifier: 8.20.0
         version: 8.20.0
@@ -289,9 +286,6 @@ importers:
       effect:
         specifier: 4.0.0-rc.112
         version: 4.0.0-rc.112
-      es-module-lexer:
-        specifier: 2.3.2
-        version: 2.3.2
       fast-glob:
         specifier: 3.3.3
         version: 3.3.3
@@ -326,6 +320,9 @@ importers:
       effect-rstest:
         specifier: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f
         version: https://pkg.pr.new/ScriptedAlchemy/effect-rstest@e5f8d5f(@rstest/core@0.11.11)(effect@4.0.0-rc.112)
+      es-module-lexer:
+        specifier: 2.3.2
+        version: 2.3.2
       react:
         specifier: 19.2.8
         version: 19.2.8

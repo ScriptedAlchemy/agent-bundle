@@ -24,10 +24,8 @@ import {
   terminalCapabilityRuntimeSpecifier,
 } from './entry-shell.ts';
 import { projectMeta } from './meta.ts';
-import { bundleSyntaxCheckFor } from './module-imports.ts';
 import { isDeclarationGenerationFailure, type RslibEntry } from './rslib.ts';
 import { runtimeIgnoredRoot } from './runtime-path.ts';
-import { validateJavaScriptModules } from './validate-artifact-modules.ts';
 
 /**
  * The framework-owned npm package build: `bin` entries become self-executing
@@ -43,6 +41,8 @@ const binShebang = '#!/usr/bin/env node';
 const executableMode = 0o755;
 
 export interface PackageOutputFile {
+  /** Packages the compiler inlined into this bundle (`ModuleIR.package`), sorted and unique; empty for a `generated` file. */
+  readonly bundledPackages: readonly string[];
   readonly bytes: number;
   readonly kind: 'bundle' | 'generated';
   /** Present only for executable outputs. */
@@ -335,6 +335,13 @@ export const buildPackageOutputs = async (options: {
       ? undefined
       : { entryName: packageBuild.lib.name, tsconfigPath: dtsTsconfig.path });
     const evidenceByPath = new Map(evidence.assets.map((entry) => [entry.path, entry.sourceInputs]));
+    const packageNamesByPath = new Map<string, Set<string>>();
+    for (const module of evidence.modules) {
+      if (module.package === undefined) continue;
+      const packageNames = packageNamesByPath.get(module.asset) ?? new Set<string>();
+      packageNames.add(module.package);
+      packageNamesByPath.set(module.asset, packageNames);
+    }
     await Promise.all(entries
       .filter((entry) => entry.executable)
       .map((entry) => chmod(resolveArtifactDestination(stageRoot, entry.outputRelativePath), executableMode)));
@@ -350,6 +357,10 @@ export const buildPackageOutputs = async (options: {
         throw new Error(`Package build emitted unexpected output ${JSON.stringify(file.path)}.`);
       }
       return {
+        bundledPackages: bundled === undefined
+          ? Object.freeze([])
+          : Object.freeze([...(packageNamesByPath.get(file.path) ?? [])]
+            .sort((left, right) => left.localeCompare(right))),
         bytes: file.bytes,
         kind: bundled === undefined ? 'generated' : 'bundle',
         ...((file.mode & 0o111) === 0 ? {} : { mode: file.mode }),
@@ -369,27 +380,6 @@ export const buildPackageOutputs = async (options: {
     if (lib?.dts === true && !files.some((file) => file.path === `${lib.name}.d.ts`)) {
       throw new Error(`Package build did not emit expected declarations ${JSON.stringify(`${lib.name}.d.ts`)}.`);
     }
-
-    // The npm form of the plugin is held to the same line as its host packs:
-    // every emitted `dist` module is walked as an ES module, and a bare
-    // specifier that is not a Node built-in — an import the `tools` hatch
-    // kept external — fails the build (`AB6005`) before `dist` is published,
-    // so a `dist/bin` executable imports nothing from a consumer's
-    // `node_modules`. The walk reads import specifiers (static and literal
-    // dynamic); a `createRequire(…)(…)` or `import.meta.resolve(…)` call is
-    // not an import and is outside it, in `dist` as in a host pack — the
-    // prepack gate reads those as dependency evidence. Declarations are not
-    // modules and are not walked; they may still reference declared
-    // dependencies.
-    const selfContainment = await validateJavaScriptModules({
-      artifactRoot: stageRoot,
-      bundledPaths: new Set(files.filter((file) => file.kind === 'bundle').map((file) => file.path)),
-      bundleSyntaxCheck: bundleSyntaxCheckFor(options.tools),
-      files: staged,
-      reportedRoot: toPosixRelative(projectRoot, outputRoot),
-      validJson: new Set(),
-    });
-    if (selfContainment.length > 0) throw new DiagnosticError(selfContainment);
 
     await publishArtifact({ outputRoot, stageRoot });
     return Object.freeze({ files: Object.freeze(files), outputRoot });

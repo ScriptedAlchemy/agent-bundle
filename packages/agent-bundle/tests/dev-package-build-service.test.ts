@@ -58,6 +58,7 @@ const invalidation = (
 
 const buildResult = (sourceInputs: readonly string[]): PackageBuildResult => ({
   files: [{
+    bundledPackages: [],
     bytes: 1,
     kind: 'bundle',
     path: 'bin/tool.js',
@@ -246,9 +247,9 @@ it('removes the outputs it published when the package build disappears', async (
   const service = new DevPackageBuildService({
     buildOutputs: (async () => ({
       files: [
-        { bytes: 1, kind: 'bundle' as const, path: 'bin/tool.js', sha256: '0'.repeat(64), sourceInputs: ['src/cli.ts'] },
-        { bytes: 1, kind: 'bundle' as const, path: 'index.js', sha256: '0'.repeat(64), sourceInputs: ['src/index.ts'] },
-        { bytes: 1, kind: 'generated' as const, path: 'index.d.ts', sha256: '0'.repeat(64), sourceInputs: ['src/index.ts'] },
+        { bundledPackages: [], bytes: 1, kind: 'bundle' as const, path: 'bin/tool.js', sha256: '0'.repeat(64), sourceInputs: ['src/cli.ts'] },
+        { bundledPackages: [], bytes: 1, kind: 'bundle' as const, path: 'index.js', sha256: '0'.repeat(64), sourceInputs: ['src/index.ts'] },
+        { bundledPackages: [], bytes: 1, kind: 'generated' as const, path: 'index.d.ts', sha256: '0'.repeat(64), sourceInputs: ['src/index.ts'] },
       ],
       outputRoot,
     })) as BuildOutputs,
@@ -278,7 +279,7 @@ it('prunes the output root entirely when it only held published outputs', async 
   const service = new DevPackageBuildService({
     buildOutputs: (async () => ({
       files: [
-        { bytes: 1, kind: 'bundle' as const, path: 'bin/tool.js', sha256: '0'.repeat(64), sourceInputs: ['src/cli.ts'] },
+        { bundledPackages: [], bytes: 1, kind: 'bundle' as const, path: 'bin/tool.js', sha256: '0'.repeat(64), sourceInputs: ['src/cli.ts'] },
       ],
       outputRoot,
     })) as BuildOutputs,

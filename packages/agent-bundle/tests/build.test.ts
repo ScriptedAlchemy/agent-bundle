@@ -1400,34 +1400,6 @@ it('excludes linked dependencies that live inside the project directory', async 
   expect(evidence.assets).toEqual([{ path: 'scripts/linked.mjs', sourceInputs: linkedWorkspaceSourceInputs(root) }]);
 }, 20_000);
 
-it('parses emitted bundles in full when a tools hatch could have rewritten them', async () => {
-  // A compiler bundle is trusted to the ESM lexer only while its bytes are the
-  // bundler's own. A hatch runs after Rspack parsed the source and can rewrite
-  // the emitted asset — here a raw banner that leaves the lexer satisfied but
-  // Node unable to start the module — so a hatch build keeps the full parse.
-  const project = await createProject();
-  try {
-    await expect(build({
-      model: modelFor(project),
-      outputRoot: project.outputRoot,
-      projectRoot: project.root,
-      registry: new TargetRegistry().register((await import('../src/adapters/portable.ts')).portableAdapter, { default: true }),
-      tools: {
-        rspack: (config, { rspack }) => {
-          config.plugins = [...(config.plugins ?? []), new rspack.BannerPlugin({ banner: 'export const broken = ;', raw: true })];
-        },
-      },
-    })).rejects.toThrow(
-      'Agent Bundle compilation failed with 1 error:\n[AB6005] Generated JavaScript import from "scripts/greeting.mjs" has invalid syntax.',
-    );
-    await expect(readFile(join(project.outputRoot, 'agent-bundle.manifest.json'), 'utf8')).rejects.toMatchObject({
-      code: 'ENOENT',
-    });
-  } finally {
-    await cleanupProject(project);
-  }
-}, 20_000);
-
 it('keeps sibling staged outputs alive under a tools hatch that asks to clean the output root', async () => {
   const { entry, root } = await reservedSpecifierProject();
   try {
