@@ -90,7 +90,6 @@ const catalogRow = (kind: 'compiled' | 'prebuilt' = 'compiled') => ({
   apps: [], hosts: ['claude'], id: 'mcp:catalog', kind, launch: validLaunch(), name: 'catalog', transport: 'stdio',
 });
 
-/** A document with every slice the lean reader validates; `web` exposes `catalog`. */
 const document = (overrides: Readonly<Record<string, unknown>> = {}): Readonly<Record<string, unknown>> => ({
   application: { id: 'application:fixture', name: 'fixture', version: '1.0.0' },
   executables: { mcpServers: [catalogRow()] },

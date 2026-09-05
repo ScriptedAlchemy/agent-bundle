@@ -16,12 +16,7 @@ import {
 const byPath = (left: { readonly path: string }, right: { readonly path: string }): number =>
   left.path.localeCompare(right.path);
 
-/**
- * A compiled file is described by the compile evidence record beside it, byte
- * for byte; the record is the compiler's and only a rebuild produces another.
- * Reindexing may neither touch those files nor the record, or the evidence
- * would describe bytes the artifact no longer ships (`AB6039`).
- */
+// Reindexing a bundle or the evidence record would leave AB6039 evidence that no longer matches shipped bytes.
 const requireReindexable = (file: ArtifactManifestFile): void => {
   if (file.kind === 'bundle' || file.path === compileEvidenceFileName) {
     throw new Error(`Cannot reindex compiled artifact path ${JSON.stringify(file.path)}: rebuild instead.`);

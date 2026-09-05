@@ -379,10 +379,7 @@ describe('the authoritative manifest combined proof', () => {
     expect(await readFile(join(destination, manifestName), 'utf8')).toBe(replacementManifestBytes);
     await access(join(destination, replacementMarker));
 
-    // Re-indexing the marker kept the compiler's evidence: the sidecar is a
-    // copied row, the validator's only objection to the relocated copy is the
-    // marker outside every layout (never `AB6039`), and a compiled server's
-    // launch entry is a bundle whose evidence hash is the manifest's hash of it.
+    // Reindex must not rewrite compile evidence (`AB6039`).
     const evidenceBytes = await readFile(join(relocatedArtifact, compileEvidenceFileName), 'utf8');
     expect(await readFile(join(destination, compileEvidenceFileName), 'utf8')).toBe(evidenceBytes);
     expect((await validateArtifact({ artifactRoot: relocatedArtifact }))

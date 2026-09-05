@@ -32,9 +32,9 @@ import {
   type WebManifest,
 } from '../web-host/manifest.ts';
 
-// The launch record, and the version, server-identity, launch, and App-reference
-// checks both readers make, are declared beside the lean reader bundled into
-// generated executables (`agent-bundle/web-host`), which must not import this module.
+// The launch record and the checks both readers make are declared beside the
+// lean reader bundled into generated executables (`agent-bundle/web-host`),
+// which must not import this module.
 export type { ArtifactManifestLaunch, ArtifactManifestLaunchArgument };
 
 /**

@@ -191,15 +191,7 @@ export const parseWebManifest = (value: unknown): WebManifest => {
   return { apps, open: manifest.open };
 };
 
-/**
- * The checks every reader of `agent-bundle.manifest.json` makes before it
- * trusts a launch record — the full parser in `build/manifest.ts` and the lean
- * reader below share them, so no document launches under one reader that the
- * other refuses: the version, the identity of the `executables.mcpServers[]`
- * rows, the shape of their launch records, and the row every exposed App
- * names. The same checks with the same messages, in one place.
- */
-
+// Shared with the full parser in `build/manifest.ts` so both readers refuse the same documents.
 export const requireManifestVersion = (manifest: JsonRecord): void => {
   if (manifest['manifestVersion'] !== artifactManifestVersion) {
     fail(`manifestVersion must be ${artifactManifestVersion}.`);
