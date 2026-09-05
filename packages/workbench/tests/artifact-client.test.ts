@@ -7,7 +7,13 @@ import { recordingFetch, response, type RecordedRequest } from './support/record
 const inspection = {
   application: {
     distribution: { channels: ['local'] },
-    events: [],
+    events: [{
+      event: 'tool/after',
+      hooks: [],
+      id: 'event:tool/after',
+      preflight: 'src/events/tool/after.preflight.ts',
+      providers: ['library'],
+    }],
     hooks: [],
     hosts: [{
       builtIn: true,
@@ -64,7 +70,15 @@ it('reads one epoch inspection over the same foreground session', async () => {
   const calls: RecordedRequest[] = [];
   const client = new ArtifactClient({ foreground: foreground(recordingFetch(calls, () => response({ inspection }))) });
 
-  await expect(client.inspect('epoch-1')).resolves.toMatchObject({ epochId: 'epoch-1' });
+  await expect(client.inspect('epoch-1')).resolves.toMatchObject({
+    application: {
+      events: [{
+        preflight: 'src/events/tool/after.preflight.ts',
+        providers: ['library'],
+      }],
+    },
+    epochId: 'epoch-1',
+  });
   expect(calls).toEqual([{ method: 'GET', token: 'foreground-token', url: '/api/artifacts/epochs/epoch-1' }]);
 });
 

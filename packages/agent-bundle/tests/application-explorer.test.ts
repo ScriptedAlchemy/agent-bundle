@@ -141,13 +141,19 @@ const manifest = (): ArtifactManifest => ({
     digest: hash,
     events: [{
       event: 'tool/after',
+      execution: {
+        fallback: 'none',
+        preflight: 'src/events/tool/after.preflight.ts',
+        providers: ['daemonProbe'],
+        runtime: 'shared',
+      },
       id: 'event:tool/after',
       kind: 'event-route',
       provenance: { kind: 'conventional' },
       source: 'src/events/tool/after.ts',
     }],
     layouts: [],
-    providers: [],
+    providers: [{ id: 'provider:daemon-probe', name: 'daemon-probe', source: 'src/providers/daemon-probe.ts' }],
     scripts: [],
     servers: [{
       id: 'mcp:review',
@@ -242,6 +248,8 @@ it('projects one stable application tree by joining routes and executable rows',
       { host: 'codex', kind: 'event-route', path: 'hooks/after-codex.mjs' },
     ],
     id: 'event:tool/after',
+    preflight: 'src/events/tool/after.preflight.ts',
+    providers: ['daemonProbe'],
   }]);
   expect(explorer.hooks).toEqual([
     {

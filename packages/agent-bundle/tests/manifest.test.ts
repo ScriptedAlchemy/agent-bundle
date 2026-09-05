@@ -109,9 +109,25 @@ const validManifest = (): ArtifactManifest => ({
   ],
   routes: {
     digest: hash('f'),
-    events: [],
+    events: [{
+      event: 'tool/before',
+      execution: {
+        fallback: 'standalone',
+        preflight: 'src/events/tool/before.preflight.ts',
+        providers: ['daemonProbe'],
+        runtime: 'standalone',
+      },
+      id: 'event:tool/before',
+      kind: 'event-route',
+      provenance: { kind: 'conventional' },
+      source: 'src/events/tool/before.tsx',
+    }],
     layouts: [],
-    providers: [],
+    providers: [{
+      id: 'provider:daemon-probe',
+      name: 'daemon-probe',
+      source: 'src/providers/daemon-probe.ts',
+    }],
     scripts: [],
     servers: [],
   },
@@ -146,6 +162,17 @@ it('serializes the exact canonical fixture and accepts its Agent Skills and adap
     bytes: expected,
     manifest: parseArtifactManifest(expected),
   }));
+});
+
+it('round-trips event route execution metadata', () => {
+  const manifest = parseArtifactManifest(serializeArtifactManifest(validManifest()));
+
+  expect(manifest.routes.events[0]?.execution).toEqual({
+    fallback: 'standalone',
+    preflight: 'src/events/tool/before.preflight.ts',
+    providers: ['daemonProbe'],
+    runtime: 'standalone',
+  });
 });
 
 it('returns a deeply frozen manifest and exports the public manifest type', () => {

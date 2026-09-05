@@ -281,6 +281,21 @@ describe('preflight artifact graph (#595)', () => {
     expect(diagnostics.filter((diagnostic) => diagnostic.code === 'AB6005' || diagnostic.severity === 'error')).toEqual([]);
   });
 
+  it('records event execution metadata in the authoritative artifact manifest', async () => {
+    const manifest = parseArtifactManifest(await readFile(join(output, 'agent-bundle.manifest.json'), 'utf8'));
+
+    expect(manifest.routes.events).toContainEqual(expect.objectContaining({
+      event: 'tool/before',
+      execution: {
+        fallback: 'none',
+        preflight: 'src/events/tool/before.preflight.ts',
+        providers: ['daemonProbe'],
+        runtime: 'standalone',
+      },
+      id: 'event:tool/before',
+    }));
+  });
+
   it('runs continue, deny, and deferred execute outcomes through the published hook process', async () => {
     const invoke = (command: string) => runNodeScript({
       args: [join(artifactRoot, entryPath)],

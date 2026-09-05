@@ -7,6 +7,7 @@ import {
 import { isRelocatablePosixPath } from '../core/paths.ts';
 import { isValidPackageName, isValidPackageVersion } from '../core/project-context.ts';
 import { isPlainRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import { providerKeyFromName } from '../routes/providers.ts';
 import type { CliProjectionFlagDefault } from '../routes/public.ts';
 import type {
   CompiledCliMode,
@@ -168,6 +169,15 @@ export interface ArtifactManifestRouteProvenance {
   readonly kind: 'conventional';
 }
 
+export interface ArtifactManifestEventExecution {
+  readonly fallback: 'none' | 'standalone';
+  /** Project-relative POSIX path of the event route's preflight module. */
+  readonly preflight?: string;
+  /** Sorted, unique conventional provider keys required by the event route. */
+  readonly providers?: readonly string[];
+  readonly runtime: 'shared' | 'standalone';
+}
+
 /** One compiled route of the Application IR, host-independent. */
 export interface ArtifactManifestRoute {
   /** Id of the `routes.contracts[]` row this route binds (#593); absent when no static contract was extracted. */
@@ -176,6 +186,8 @@ export interface ArtifactManifestRoute {
   readonly description?: string;
   /** Canonical event identity; `event-route` routes only. */
   readonly event?: string;
+  /** Event execution metadata; present exactly for `event-route` routes. */
+  readonly execution?: ArtifactManifestEventExecution;
   readonly id: string;
   /** Bounded JSON Schema projection; absent when the route schema is richer than the static grammar. */
   readonly inputSchema?: RouteInputSchema;
@@ -799,13 +811,24 @@ const parseInputSchema = (value: unknown, location: string): RouteInputSchema =>
   };
 };
 
+const parseEventExecution = (value: unknown, location: string): ArtifactManifestEventExecution => {
+  const execution = requireRecord(value, location);
+  requireExactKeys(execution, location, ['fallback', 'runtime'], ['preflight', 'providers']);
+  return {
+    fallback: requireOneOf(execution.fallback, `${location}.fallback`, ['none', 'standalone'] as const),
+    ...(execution.preflight === undefined ? {} : { preflight: requirePath(execution.preflight, `${location}.preflight`) }),
+    ...(execution.providers === undefined ? {} : { providers: parseStringList(execution.providers, `${location}.providers`) }),
+    runtime: requireOneOf(execution.runtime, `${location}.runtime`, ['shared', 'standalone'] as const),
+  };
+};
+
 const parseRoute = (value: unknown, location: string): ArtifactManifestRoute => {
   const route = requireRecord(value, location);
   requireExactKeys(
     route,
     location,
     ['id', 'kind', 'provenance', 'source'],
-    ['contract', 'description', 'event', 'inputSchema', 'serverId'],
+    ['contract', 'description', 'event', 'execution', 'inputSchema', 'serverId'],
   );
   const provenance = requireRecord(route.provenance, `${location}.provenance`);
   requireExactKeys(provenance, `${location}.provenance`, ['kind']);
@@ -814,6 +837,12 @@ const parseRoute = (value: unknown, location: string): ArtifactManifestRoute => 
   const event = route.event === undefined ? undefined : requireString(route.event, `${location}.event`);
   if ((kind === 'event-route') !== (event !== undefined)) {
     fail(`${location}.event is present exactly for event-route routes.`);
+  }
+  const execution = route.execution === undefined
+    ? undefined
+    : parseEventExecution(route.execution, `${location}.execution`);
+  if ((kind === 'event-route') !== (execution !== undefined)) {
+    fail(`${location}.execution is present exactly for event-route routes.`);
   }
   const serverId = route.serverId === undefined ? undefined : requireString(route.serverId, `${location}.serverId`);
   const isMcpKind = kind === 'app' || kind === 'prompt' || kind === 'resource' || kind === 'tool';
@@ -824,6 +853,7 @@ const parseRoute = (value: unknown, location: string): ArtifactManifestRoute => 
     ...(route.contract === undefined ? {} : { contract: requireString(route.contract, `${location}.contract`) }),
     ...(route.description === undefined ? {} : { description: requireString(route.description, `${location}.description`) }),
     ...(event === undefined ? {} : { event }),
+    ...(execution === undefined ? {} : { execution }),
     id: requireString(route.id, `${location}.id`),
     ...(route.inputSchema === undefined ? {} : { inputSchema: parseInputSchema(route.inputSchema, `${location}.inputSchema`) }),
     kind,
@@ -1039,6 +1069,15 @@ const parseRoutes = (value: unknown): ArtifactManifestRoutes => {
   if (scripts.some((route) => route.kind !== 'script')) fail('routes.scripts must hold script routes only.');
   const servers = parseServers(routes.servers);
   const layouts = parseLayouts(routes.layouts);
+  const providers = parseProviders(routes.providers);
+  const providerKeys = new Set(providers.map((provider) => providerKeyFromName(provider.name)));
+  for (const route of events) {
+    for (const provider of route.execution?.providers ?? []) {
+      if (!providerKeys.has(provider)) {
+        fail(`routes.events[${route.id}].execution.providers names undeclared provider key ${JSON.stringify(provider)}.`);
+      }
+    }
+  }
   const serverIds = new Set(servers.map((server) => server.id));
   if (layouts.some((layout) => layout.serverId !== undefined && !serverIds.has(layout.serverId))) {
     fail('routes.layouts names an undeclared server.');
@@ -1082,7 +1121,7 @@ const parseRoutes = (value: unknown): ArtifactManifestRoutes => {
     digest: requireHash(routes.digest, 'routes.digest'),
     events,
     layouts,
-    providers: parseProviders(routes.providers),
+    providers,
     scripts,
     servers,
   };

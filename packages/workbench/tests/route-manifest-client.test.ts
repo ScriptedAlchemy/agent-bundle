@@ -48,6 +48,12 @@ const manifest = {
   events: [{
     config: [],
     event: 'afterTool',
+    execution: {
+      fallback: 'none',
+      preflight: 'src/events/tool/after.preflight.ts',
+      providers: ['library'],
+      runtime: 'shared',
+    },
     id: 'event:tool/after',
     kind: 'event-route',
     provenance: { kind: 'conventional' },
@@ -136,6 +142,12 @@ it('reads the compiled manifest over the shared foreground session', async () =>
   expect(decoded.servers[0]?.routes[0]?.contract).toBe(
     'contract:src/lib/protocol-schemas.ts#statusInputSchema',
   );
+  expect(decoded.events[0]?.execution).toEqual({
+    fallback: 'none',
+    preflight: 'src/events/tool/after.preflight.ts',
+    providers: ['library'],
+    runtime: 'shared',
+  });
   expect(decoded.state).toEqual(manifest.state);
   expect(calls).toEqual([{ method: 'GET', token: 'foreground-token', url: '/api/routes/manifest' }]);
 });

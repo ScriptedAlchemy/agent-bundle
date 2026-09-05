@@ -10,6 +10,7 @@ import type {
   CompiledServerSurface,
   RouteContract,
 } from '../routes/types.ts';
+import { eventRouteExecutionFor } from '../routes/event-execution.ts';
 import type {
   ArtifactManifestCli,
   ArtifactManifestCliCommand,
@@ -34,6 +35,8 @@ import type {
 const byId = <Row extends { readonly id: string }>(rows: readonly Row[]): readonly Row[] =>
   [...rows].sort((left, right) => left.id.localeCompare(right.id));
 
+const byText = (left: string, right: string): number => left.localeCompare(right);
+
 export const routeDescription = (config: Readonly<Record<string, unknown>>): string | undefined => {
   const value = config['description'];
   return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
@@ -41,10 +44,21 @@ export const routeDescription = (config: Readonly<Record<string, unknown>>): str
 
 export const artifactRouteFor = (route: CompiledAgentRoute): ArtifactManifestRoute => {
   const summary = routeDescription(route.config);
+  const execution = route.kind === 'event-route' ? eventRouteExecutionFor(route) : undefined;
   return {
     ...(route.contract === undefined ? {} : { contract: route.contract }),
     ...(summary === undefined ? {} : { description: summary }),
     ...(route.event === undefined ? {} : { event: route.event }),
+    ...(execution === undefined
+      ? {}
+      : {
+        execution: {
+          fallback: execution.fallback,
+          ...(execution.preflight === undefined ? {} : { preflight: execution.preflight }),
+          ...(execution.providers === undefined ? {} : { providers: [...execution.providers].sort(byText) }),
+          runtime: execution.runtime,
+        },
+      }),
     id: route.id,
     ...(route.inputSchema === undefined ? {} : { inputSchema: route.inputSchema }),
     kind: route.kind,
@@ -89,8 +103,6 @@ export const artifactCliCommandFor = (command: CompiledCliCommand): ArtifactMani
   ...(command.projection === undefined ? {} : { projection: artifactCliProjectionFor(command.projection) }),
   routeId: command.routeId,
 });
-
-const byText = (left: string, right: string): number => left.localeCompare(right);
 
 const sortedCliOption = (option: ArtifactManifestCliOption): ArtifactManifestCliOption => ({
   ...option,

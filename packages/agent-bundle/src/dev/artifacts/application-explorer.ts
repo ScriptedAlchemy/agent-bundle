@@ -78,6 +78,8 @@ export interface ApplicationExplorerEvent {
   readonly event: string;
   readonly hooks: readonly ApplicationExplorerEventHook[];
   readonly id: string;
+  readonly preflight?: string;
+  readonly providers?: readonly string[];
 }
 
 export interface ApplicationExplorerConfigHook {
@@ -227,6 +229,8 @@ const eventsFor = (manifest: ArtifactManifest): ApplicationExplorerEvent[] =>
           ? left.path.localeCompare(right.path)
           : left.host.localeCompare(right.host)),
       id: event.id,
+      ...(event.execution?.preflight === undefined ? {} : { preflight: event.execution.preflight }),
+      ...(event.execution?.providers === undefined ? {} : { providers: [...event.execution.providers] }),
     }))
     .sort(byId);
 

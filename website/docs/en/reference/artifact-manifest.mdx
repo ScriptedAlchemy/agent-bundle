@@ -145,6 +145,7 @@ Every route row has the same shape:
 | `source` | yes | The route module, as a project-relative POSIX path — the route's portable identity. |
 | `provenance` | yes | `{ kind: 'conventional' }`. Filesystem discovery is the only provenance today; the discriminant is where a projected route attaches later. |
 | `event` | exactly for `event-route` | The canonical event, such as `tool/after`. |
+| `execution` | exactly for `event-route` | `{ fallback, preflight?, providers?, runtime }`, the artifact-inspectable event execution contract. `fallback` is `none` or `standalone`. `preflight` is the project-relative POSIX path of the cheap preflight module when one exists. `providers` is the sorted, unique list of required conventional provider keys; omission resolves every provider and `[]` resolves none. `runtime` is `shared` or `standalone`. |
 | `serverId` | exactly for MCP kinds | The owning server, `mcp:<name>`, on `app`, `prompt`, `resource`, and `tool` routes. |
 | `description` | no | `config.description`, when it is a non-blank string. |
 | `inputSchema` | no | The bounded JSON Schema projection of the route's input: an object with `additionalProperties: false`, properties typed `boolean`, `number`, `string` (with optional `enum`), or `array` of those, each with optional `default` and `description`, and an optional `required` list. Absent when the route schema is richer than this grammar. |
@@ -343,6 +344,7 @@ event route, and a routed CLI. Digests are elided; keys appear in canonical (sor
     "digest": "…",
     "events": [
       { "event": "tool/after", "id": "event:tool/after", "kind": "event-route",
+        "execution": { "fallback": "none", "runtime": "shared" },
         "provenance": { "kind": "conventional" }, "source": "src/events/tool/after.tsx" }
     ],
     "layouts": [], "providers": [], "scripts": [],

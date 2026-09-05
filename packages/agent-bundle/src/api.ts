@@ -158,6 +158,7 @@ export type {
   ArtifactManifestDistribution,
   ArtifactManifestDistributionChannel,
   ArtifactManifestDistributionInstall,
+  ArtifactManifestEventExecution,
   ArtifactManifestExecutables,
   ArtifactManifestHook,
   ArtifactManifestLayout,

@@ -607,6 +607,40 @@
         "type"
       ]
     },
+    "eventExecution": {
+      "type": "object",
+      "description": "Execution metadata for an event route.",
+      "additionalProperties": false,
+      "properties": {
+        "fallback": {
+          "enum": [
+            "none",
+            "standalone"
+          ]
+        },
+        "preflight": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "providers": {
+          "type": "array",
+          "description": "Sorted, unique conventional provider keys. Every entry names a routes.providers[] row (parser-enforced).",
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          },
+          "uniqueItems": true
+        },
+        "runtime": {
+          "enum": [
+            "shared",
+            "standalone"
+          ]
+        }
+      },
+      "required": [
+        "fallback",
+        "runtime"
+      ]
+    },
     "route": {
       "type": "object",
       "description": "One compiled route. `event` is present exactly for event-route routes; `serverId` is present exactly for MCP route kinds (app, prompt, resource, tool). `contract` names a declared `routes.contracts[]` row.",
@@ -621,6 +655,9 @@
         },
         "event": {
           "$ref": "#/$defs/nonEmptyString"
+        },
+        "execution": {
+          "$ref": "#/$defs/eventExecution"
         },
         "id": {
           "$ref": "#/$defs/nonEmptyString"
@@ -666,15 +703,27 @@
           },
           "then": {
             "required": [
-              "event"
+              "event",
+              "execution"
             ]
           },
           "else": {
-            "not": {
-              "required": [
-                "event"
-              ]
-            }
+            "allOf": [
+              {
+                "not": {
+                  "required": [
+                    "event"
+                  ]
+                }
+              },
+              {
+                "not": {
+                  "required": [
+                    "execution"
+                  ]
+                }
+              }
+            ]
           }
         },
         {
