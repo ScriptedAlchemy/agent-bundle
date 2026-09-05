@@ -1,4 +1,4 @@
-import type { NormalizedPlugin } from '../core/types.ts';
+import { stateOwnershipMarkerFile, type NormalizedPlugin } from '../core/types.ts';
 import { preservedRuntimeEntries } from '../core/paths.ts';
 import { type BuiltInHost, builtInHostNames } from '../adapters/composite-layout.ts';
 import { sourceInputs, type TargetArtifactWrite } from '../adapters/types.ts';
@@ -1118,7 +1118,7 @@ const cursorInstallerSource = (model: NormalizedPlugin): string => {
     "  }, null, 2) + '\\n';",
     '};',
     '',
-    "const stateMarkerFile = '.agent-bundle-state-owner.json';",
+    `const stateMarkerFile = ${JSON.stringify(stateOwnershipMarkerFile)};`,
     "const expandStatePath = (value, root) => value.replaceAll('${CURSOR_PLUGIN_ROOT}', root).replaceAll('${PLUGIN_ROOT}', root);",
     'const canonicalPath = async (path) => {',
     '  try { return await realpath(path); }',

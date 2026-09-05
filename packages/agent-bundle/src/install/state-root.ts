@@ -5,7 +5,7 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { readArtifactManifest } from '../build/manifest-file.ts';
 import { isErrno } from '../core/errors.ts';
 import { isRecord } from '../core/strict-json.ts';
-import { pluginStateRootEnvAnchor } from '../core/types.ts';
+import { pluginStateRootEnvAnchor, stateOwnershipMarkerFile } from '../core/types.ts';
 import { webPluginDataRoot } from '../web-host/launch.ts';
 import type { InstallHost } from './install.ts';
 import type {
@@ -27,8 +27,6 @@ export interface InstalledStateLocation {
   readonly source: 'declared' | 'derived';
   readonly status: 'resolved' | 'unproven';
 }
-
-export const stateOwnershipMarkerFile = '.agent-bundle-state-owner.json';
 
 const safePluginSegment = /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/u;
 

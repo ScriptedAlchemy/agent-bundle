@@ -19,6 +19,7 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { stableJson } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
 import { exists, installReceiptFile, isInstallReceiptEntry, isPreservedRuntimeRoot } from '../core/paths.ts';
+import { stateOwnershipMarkerFile } from '../core/types.ts';
 import { artifactManifestName, type ArtifactManifest } from '../build/manifest.ts';
 import { OPERATOR_ENV_FILE_NAMES } from '../launch-env.ts';
 
@@ -574,7 +575,7 @@ const readReceiptState = (value: unknown): InstallReceiptState | undefined => {
       ? Object.freeze({ kind: 'derived' as const })
       : ownershipRecord['kind'] === 'marker' &&
           typeof ownershipRecord['marker'] === 'string' &&
-          ownershipRecord['marker'] === join(root['root'], '.agent-bundle-state-owner.json')
+          ownershipRecord['marker'] === join(root['root'], stateOwnershipMarkerFile)
         ? Object.freeze({ kind: 'marker' as const, marker: ownershipRecord['marker'] })
         : ownershipRecord['kind'] === 'unowned' &&
             (ownershipRecord['reason'] === 'foreign-marker' ||
