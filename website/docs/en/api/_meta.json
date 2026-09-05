@@ -21,6 +21,11 @@
   },
   {
     "type": "file",
+    "name": "app",
+    "label": "app"
+  },
+  {
+    "type": "file",
     "name": "routes/public",
     "label": "routes/public"
   },
