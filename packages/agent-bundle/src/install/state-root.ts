@@ -1,12 +1,9 @@
+import { createHash } from 'node:crypto';
 import { readFile, realpath } from 'node:fs/promises';
-import { isAbsolute, join, resolve } from 'node:path';
-
-import {
-  PLUGIN_STATE_ROOT_ENV_ANCHOR,
-  userDataStateRoot,
-} from '@agent-bundle/runtime';
+import { basename, isAbsolute, join, resolve } from 'node:path';
 
 import { isErrno } from '../core/errors.ts';
+import { pluginStateRootEnvAnchor } from '../core/types.ts';
 import { webPluginDataRoot } from '../web-host/launch.ts';
 import type { InstallHost } from './install.ts';
 
@@ -33,6 +30,24 @@ const manifestCandidates = (host: InstallHost): readonly string[] => {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 
+const safePluginSegment = /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$/u;
+
+// The CLI cannot load the optional React runtime. Uninstall tests pin this spelling against
+// `userDataStateRoot` from @agent-bundle/runtime for real installed roots.
+const installedUserDataStateRoot = (
+  canonicalRoot: string,
+  environment: Readonly<NodeJS.ProcessEnv>,
+  home: string,
+): string => {
+  const xdgStateHome = environment.XDG_STATE_HOME ?? '';
+  const stateHome = isAbsolute(xdgStateHome)
+    ? join(xdgStateHome, 'agent-bundle')
+    : join(home, '.agent-bundle', 'state');
+  const digest = createHash('sha256').update(canonicalRoot).digest('hex').slice(0, 16);
+  const name = basename(canonicalRoot);
+  return join(stateHome, safePluginSegment.test(name) ? `${name}-${digest}` : `plugin-${digest}`);
+};
+
 const declaredStateRoot = async (pluginRoot: string, host: InstallHost): Promise<string | undefined> => {
   for (const relativePath of manifestCandidates(host)) {
     let document: unknown;
@@ -45,7 +60,7 @@ const declaredStateRoot = async (pluginRoot: string, host: InstallHost): Promise
     if (!isRecord(document) || !isRecord(document['mcpServers'])) continue;
     for (const server of Object.values(document['mcpServers'])) {
       if (!isRecord(server) || !isRecord(server['env'])) continue;
-      const declared = server['env'][PLUGIN_STATE_ROOT_ENV_ANCHOR];
+      const declared = server['env'][pluginStateRootEnvAnchor];
       if (typeof declared !== 'string' || declared.trim() === '') continue;
       const expanded = declared
         .replaceAll('${CLAUDE_PLUGIN_ROOT}', pluginRoot)
@@ -69,13 +84,13 @@ export const resolveInstalledStateRoot = async (
     throw error;
   });
   const fromManifest = await declaredStateRoot(canonicalRoot, host);
-  const inherited = environment[PLUGIN_STATE_ROOT_ENV_ANCHOR] ?? '';
+  const inherited = environment[pluginStateRootEnvAnchor] ?? '';
   const expandedInherited = inherited.trim() === '' || /\$\{[^}]*\}/u.test(inherited)
     ? undefined
     : isAbsolute(inherited) ? resolve(inherited) : resolve(canonicalRoot, inherited);
   const declared = fromManifest ?? expandedInherited;
   return Object.freeze(declared === undefined
-    ? { root: userDataStateRoot(canonicalRoot, environment, home), source: 'derived' as const }
+    ? { root: installedUserDataStateRoot(canonicalRoot, environment, home), source: 'derived' as const }
     : { root: declared, source: 'native' as const });
 };
 
