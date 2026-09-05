@@ -13,7 +13,7 @@ import { safeIdentitySegment, type CompiledAgentRoute, type RouteInputSchema } f
  * sibling tool route — and its `config` is read by the unchanged static
  * route-config grammar. This leaf owns the module's shape: how a path is
  * recognized, what the validated `config` may hold, whether the module
- * exports `mapInput`, and the `AB4840`–`AB4842` diagnostics.
+ * exports `mapInput`, and the `AB4843`–`AB4845` diagnostics.
  */
 
 /** The file suffixes reserved for a tool's CLI projection module under `src/mcp/**`. */
@@ -41,7 +41,7 @@ export const classifyCliProjectionModule = (relativePath: string): CliProjection
   return { server, siblingId: `tool:${server}/${stem}`, stem };
 };
 
-/** True for a `.cli.{ts,tsx}` module under `resources/`, `prompts/`, or `apps/`: only tool routes take a CLI projection (AB4840). */
+/** True for a `.cli.{ts,tsx}` module under `resources/`, `prompts/`, or `apps/`: only tool routes take a CLI projection (AB4843). */
 export const isMisplacedCliProjectionModule = (relativePath: string): boolean => misplacedModulePath.test(relativePath);
 
 /**
@@ -59,10 +59,10 @@ export interface CliProjectionConfigRecord {
   readonly positionals?: readonly string[];
 }
 
-/** What one projection module contributes, judged statically; `config` is empty whenever AB4841 fired on it. */
+/** What one projection module contributes, judged statically; `config` is empty whenever AB4844 fired on it. */
 export interface ExtractedCliProjection {
   readonly config: CliProjectionConfigRecord;
-  /** AB4841 (module contract) and AB4842 (grammar binding) in that order. */
+  /** AB4844 (module contract) and AB4845 (grammar binding) in that order. */
   readonly diagnostics: readonly Diagnostic[];
   /** True when the module exports `mapInput` as a synchronous, non-generator function with a runtime binding. */
   readonly mapInput: boolean;
@@ -86,7 +86,7 @@ const grammarRecovery = `Export the projection config as a single top-level \`ex
 const mapInputRecovery = 'Export mapInput as one synchronous, non-generator function with a runtime binding — a function declaration (`export function mapInput(input) { ... }`), an arrow (`export const mapInput = (input) => ({ ... })`), or a function expression — or remove the export; then inspect again.';
 const spellingRecovery = 'Use kebab-case option spellings without leading dashes that are neither reserved (help, json, ndjson, version, and yes when the command confirms) nor claimed by another option or alias; then inspect again.';
 
-/** AB4841: the projection module's own contract — `config` shape and `mapInput` — is not met. */
+/** AB4844: the projection module's own contract — `config` shape and `mapInput` — is not met. */
 export const cliProjectionContractError = (
   module: string,
   toolId: string,
@@ -94,14 +94,14 @@ export const cliProjectionContractError = (
   sourcePath: string,
   recovery = contractRecovery,
 ): Diagnostic => ({
-  code: 'AB4841',
+  code: 'AB4844',
   message: `${projectionSubject(module, toolId)}: ${detail}.`,
   recovery,
   severity: 'error',
   sourcePath,
 });
 
-/** AB4842: the projection does not bind to the tool's argv grammar (unknown key, spelling, command segment). */
+/** AB4845: the projection does not bind to the tool's argv grammar (unknown key, spelling, command segment). */
 export const cliProjectionBindingError = (
   module: string,
   toolId: string,
@@ -109,34 +109,34 @@ export const cliProjectionBindingError = (
   sourcePath: string,
   recovery = spellingRecovery,
 ): Diagnostic => ({
-  code: 'AB4842',
+  code: 'AB4845',
   message: `${projectionSubject(module, toolId)}: ${detail}.`,
   recovery,
   severity: 'error',
   sourcePath,
 });
 
-/** AB4840: a `<stem>.cli.{ts,tsx}` module under `tools/` without the sibling tool route `<stem>.{ts,tsx}`. */
+/** AB4843: a `<stem>.cli.{ts,tsx}` module under `tools/` without the sibling tool route `<stem>.{ts,tsx}`. */
 export const orphanCliProjectionError = (
   relativePath: string,
   module: CliProjectionModule,
   sourcePath: string,
 ): Diagnostic => ({
-  code: 'AB4840',
+  code: 'AB4843',
   message: `${projectionSubject(relativePath, module.siblingId)}: has no sibling tool route src/mcp/${module.server}/tools/${module.stem}.{ts,tsx} to project; a projection is never a route of its own.`,
   recovery: 'Rename the module so its stem matches the tool route beside it, or prefix the file name with _ to park it; then inspect again.',
   severity: 'error',
   sourcePath,
 });
 
-/** AB4840 for the second of `<tool>.cli.ts` and `<tool>.cli.tsx`: a tool takes one projection module. */
+/** AB4843 for the second of `<tool>.cli.ts` and `<tool>.cli.tsx`: a tool takes one projection module. */
 export const duplicateCliProjectionError = (
   relativePath: string,
   existingRelativePath: string,
   module: CliProjectionModule,
   sourcePath: string,
 ): Diagnostic => ({
-  code: 'AB4840',
+  code: 'AB4843',
   message: `${projectionSubject(relativePath, module.siblingId)}: ${existingRelativePath} already projects this tool, and a tool takes one projection module.`,
   recovery: 'Keep exactly one of the .cli.ts and .cli.tsx modules, or prefix one file name with _ to park it; then inspect again.',
   severity: 'error',
@@ -144,12 +144,12 @@ export const duplicateCliProjectionError = (
 });
 
 /**
- * AB4840: a `.cli.{ts,tsx}` module under `resources/`, `prompts/`, or
+ * AB4843: a `.cli.{ts,tsx}` module under `resources/`, `prompts/`, or
  * `apps/`, where no route takes a CLI projection. There is no tool to name,
  * so the subject is the module alone.
  */
 export const misplacedCliProjectionError = (relativePath: string, sourcePath: string): Diagnostic => ({
-  code: 'AB4840',
+  code: 'AB4843',
   message: `CLI projection ${relativePath}: sits under resources/, prompts/, or apps/, where no route takes the .cli suffix; only src/mcp/<server>/tools/<tool>.cli.{ts,tsx} projects a tool, and resources, prompts, and Apps have no argv surface to project.`,
   recovery: 'Move the module beside the tool route it projects, rename it so it does not end in .cli.ts or .cli.tsx, or prefix the file name with _ to park it; then inspect again.',
   severity: 'error',
@@ -268,8 +268,8 @@ const positionalSpellingRecovery = (key: string): string =>
 /**
  * Binds a validated config to the tool's canonical contract: `flags` and
  * `positionals` must name contract keys, a positional key takes no option
- * spelling, and `command` segments must be safe identity segments (AB4842);
- * relaxing a canonical-required key needs `mapInput` to supply it (AB4841).
+ * spelling, and `command` segments must be safe identity segments (AB4845);
+ * relaxing a canonical-required key needs `mapInput` to supply it (AB4844).
  * Spelling rules run later, inside the one argv policy, on the final
  * `--options`.
  */
@@ -331,7 +331,7 @@ const bindProjectionConfig = (
   return diagnostics;
 };
 
-/** AB4842 detail: `config.flags.<key>` or `config.positionals` names a key the tool's inputSchema lacks. */
+/** AB4845 detail: `config.flags.<key>` or `config.positionals` names a key the tool's inputSchema lacks. */
 export const unknownInputKeyDetail = (site: 'flags' | 'positionals', key: string): string =>
   site === 'flags'
     ? `config.flags.${key} names a key that is not in the tool's inputSchema`
@@ -342,7 +342,7 @@ export const inputKeysRecovery = (keys: readonly string[]): string =>
   `Name only keys of the tool's inputSchema (${keys.length === 0 ? 'it declares none' : keys.join(', ')}), then inspect again.`;
 
 /**
- * AB4841 detail: `flags.<key>.required: false` or `flags.<key>.default`
+ * AB4844 detail: `flags.<key>.required: false` or `flags.<key>.default`
  * relaxes a key the tool's inputSchema requires, and no `mapInput` exists to
  * supply it before the canonical schema validates.
  */
@@ -353,7 +353,7 @@ export const relaxationRecovery = (key: string): string =>
   `Export a mapInput function that fills ${JSON.stringify(key)} before the canonical inputSchema validates, or keep the key required on the CLI; then inspect again.`;
 
 /**
- * The AB4841 detail when an exported `mapInput` is not what the shell can
+ * The AB4844 detail when an exported `mapInput` is not what the shell can
  * call: it must carry a runtime binding (no ambient `declare`), return the
  * mapped input directly (no generator), and return it synchronously (no
  * `async`), because the shell applies it inline before `inputSchema.parse`
@@ -392,10 +392,10 @@ const judgeMapInput = (exports: RouteModuleExports): string | undefined => {
  * the closed `CliProjectionConfig` key set and bound to the tool's contract,
  * and whether it exports a `mapInput` the shell can call (`judgeMapInput`
  * over `scanRouteModuleExports`). The module is parsed, never executed. Every
- * failure is `AB4841` (the module's own contract) or `AB4842` (binding to
+ * failure is `AB4844` (the module's own contract) or `AB4845` (binding to
  * the tool's argv grammar), addressed as
  * `CLI projection <module> for tool:<server>/<tool>: <detail>.` on the
- * module's own path; a module with any AB4841 extracts the empty config.
+ * module's own path; a module with any AB4844 extracts the empty config.
  */
 export const extractCliProjection = (
   moduleText: string,

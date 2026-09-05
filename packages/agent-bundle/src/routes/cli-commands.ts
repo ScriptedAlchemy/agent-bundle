@@ -190,7 +190,7 @@ const routeCliConfig = (route: CompiledAgentRoute): RouteCliConfig => {
 /**
  * Applies `config.positionals` onto the extracted option surface, in declared
  * order. `report` words one rule violation for the declaring module: a CLI
- * route's own AB4814, or a projection module's AB4842 (#596); the detail it
+ * route's own AB4814, or a projection module's AB4845 (#596); the detail it
  * receives continues `config.positionals ...` without a final period.
  */
 const applyPositionals = (
@@ -457,7 +457,7 @@ export interface CompiledProjectedCliCommandSurface extends CompiledMcpCliComman
 const positionalsRecovery = 'Name existing scalar inputSchema keys in argument order; only the last positional may be an array. Then inspect again.';
 
 /**
- * AB4842 on a confirming projection whose tool contract has a key `yes`: the
+ * AB4845 on a confirming projection whose tool contract has a key `yes`: the
  * shell keys parsed values by canonical key and reads and strips `yes` as
  * the confirmation, so the tool could never receive it — under any `name`.
  */

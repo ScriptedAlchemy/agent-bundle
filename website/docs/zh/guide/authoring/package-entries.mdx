@@ -314,13 +314,13 @@ export const mapInput = (
 
 `flags` 以工具的 `RouteContract.input` 的规范键为键。发现阶段会在派生身份之前排除 `.cli.{ts,tsx}`，
 并将该文件与同级的 `.{ts,tsx}` 配对。这个后缀在 `src/mcp/**` 下保留；加 `_` 前缀可以停用它。
-孤立文件，或位于 `resources/`、`prompts/` 或 `apps/` 下的 `.cli.*`，会触发 `AB4840`。缺失或动态的
+孤立文件，或位于 `resources/`、`prompts/` 或 `apps/` 下的 `.cli.*`，会触发 `AB4843`。缺失或动态的
 `config`、封闭集合之外的键、形状错误的字段、静态上不是函数的 `mapInput`，或在没有 `mapInput` 时对
-规范必填键使用 `required: false` / CLI `default`，会触发 `AB4841`。契约中不存在的
+规范必填键使用 `required: false` / CLI `default`，会触发 `AB4844`。契约中不存在的
 `flags`/`positionals` 键、不符合 kebab-case、为保留名（`help`、`json`、`ndjson`、`version`，以及
 启用确认时的 `yes`）或相互冲突的 `name`/别名、位置参数键上的 `name` 或 `aliases`（裸参数没有
 `--spelling`）、启用确认的命令所投影的契约含有键 `yes`（无论如何拼写，shell 都会把 `yes` 当作确认
-剥离），以及不是安全身份段的 `command` 段，会触发 `AB4842`。
+剥离），以及不是安全身份段的 `command` 段，会触发 `AB4845`。
 每条消息都是 `CLI projection <module> for tool:<server>/<tool>: <detail>.`（位置错误的模块没有可指名的
 工具：`CLI projection <module>: <detail>.`）。工具一旦有了投影，原本没有
 静态契约的 schema 就成为不可或缺的语法：`AB4814`/`AB4838`/`AB4839` 会在工具模块上触发，前缀为

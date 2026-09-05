@@ -55,7 +55,7 @@ import { runtimeIgnoredRoot } from './runtime-path.ts';
  * Rslib build would otherwise read the template as a directory context and
  * replace it with a lookup that throws at run time.
  */
-const eventRuntimeModulePath = (module: 'ipc' | 'project'): string => {
+export const eventRuntimeModulePath = (module: 'ipc' | 'project'): string => {
   const here = dirname(fileURLToPath(import.meta.url));
   for (const path of [
     join(here, `event-${module}.js`),
@@ -89,6 +89,9 @@ interface PlannedScriptEntry extends CompiledEntry {
 
 export interface CompiledHookEntry extends CompiledEntry {
   readonly event: TargetHookEntry['event'];
+  /** Heavy sibling process started only after a preflight gate returns execute. */
+  readonly executorOutput?: string;
+  readonly executorSourceInputs?: readonly string[];
   readonly id: string;
   /** False when this wrapper is a host-document variant excluded from the canonical hook index. */
   readonly indexed?: false;
@@ -552,6 +555,15 @@ export const planMcpEntriesSurface = async (
   };
 };
 
+const hookEntrySourceInputs = (entry: TargetHookEntry): readonly string[] => {
+  const preflight = entry.hook.eventRoute?.preflight;
+  return Object.freeze([
+    entry.hook.provenance.sourcePath,
+    entry.hook.source,
+    ...(preflight === undefined ? [] : [preflight.source]),
+  ]);
+};
+
 export const planCompiledHooks = (
   entries: readonly TargetHookEntry[],
   options: { readonly outDir: string },
@@ -570,8 +582,17 @@ export const planCompiledHooks = (
     output: resolveArtifactDestination(options.outDir, entry.relativePath),
     outputKind: 'bundle',
     source: entry.hook.source,
-    sourceInputs: Object.freeze([entry.hook.provenance.sourcePath, entry.hook.source]),
+    sourceInputs: hookEntrySourceInputs(entry),
     target: entry.target,
+    ...(entry.executeVirtualSource === undefined
+      ? {}
+      : {
+        executorOutput: resolveArtifactDestination(
+          options.outDir,
+          entry.relativePath.replace(/\.mjs$/u, '.execute.mjs'),
+        ),
+        executorSourceInputs: Object.freeze([entry.hook.provenance.sourcePath, entry.hook.source]),
+      }),
     ...(entry.timeout === undefined ? {} : { timeout: entry.timeout }),
     ...(index === workerOwner
       ? {
@@ -637,35 +658,58 @@ export const planHooksSurface = (
     };
   return {
     entries: [
-      ...compiled.map((entry, index) => ({
-      // One hook can compile into several host wrappers (for example a shared
-      // Claude/Codex wrapper plus a Cursor-codec wrapper), so the bundler
-      // library id derives from the unique output path, not the hook name.
-      name: entries[index]!.relativePath.replaceAll('/', '-').replace(/\.mjs$/u, ''),
-      outputRelativePath: entries[index]!.relativePath,
-      ...(entries[index]!.hook.eventRoute?.runtime === 'standalone'
-        || entries[index]!.hook.eventRoute?.fallback === 'standalone'
-        ? { rscManifest: true as const }
-        : {}),
-      aliases: {
-        // Every wrapper that runs plugin code applies the operator `.env` layer (#469).
-        [launchEnvRuntimeSpecifier]: launchEnvRuntime,
-        ...(entries[index]!.hook.eventRoute === undefined || eventIpcRuntime === undefined
-          ? {}
-          : {
-            [eventIpcRuntimeSpecifier]: eventIpcRuntime,
-            ...(eventProjectRuntime === undefined ? {} : { [eventProjectRuntimeSpecifier]: eventProjectRuntime }),
-          }),
-      },
-      source: entry.source,
-      sourceInputs: entry.sourceInputs,
-      virtualSource: entries[index]!.virtualSource
-        .replaceAll(eventArtifactEpochToken, options.artifactEpoch)
-        .replaceAll(eventFlightArtifactEpochToken, workerArtifactEpoch),
-      // The layer module the wrapper imports first; a shared-runtime
-      // event-route wrapper runs no plugin code and imports none.
-      ...(hookWrapperAppliesOperatorEnv(entries[index]!) ? { virtualModules: [operatorEnvLayerVirtualModule()] } : {}),
-      })),
+      ...compiled.flatMap((entry, index) => {
+        const hook = entries[index]!;
+        const aliases = {
+          [launchEnvRuntimeSpecifier]: launchEnvRuntime,
+          ...(hook.hook.eventRoute === undefined || eventIpcRuntime === undefined
+            ? {}
+            : {
+              [eventIpcRuntimeSpecifier]: eventIpcRuntime,
+              ...(eventProjectRuntime === undefined ? {} : { [eventProjectRuntimeSpecifier]: eventProjectRuntime }),
+            }),
+        };
+        const wrapperEntry = {
+          // One hook can compile into several host wrappers (for example a shared
+          // Claude/Codex wrapper plus a Cursor-codec wrapper), so the bundler
+          // library id derives from the unique output path, not the hook name.
+          name: hook.relativePath.replaceAll('/', '-').replace(/\.mjs$/u, ''),
+          outputRelativePath: hook.relativePath,
+          ...(hook.executeVirtualSource === undefined && (hook.hook.eventRoute?.runtime === 'standalone'
+            || hook.hook.eventRoute?.fallback === 'standalone')
+            ? { rscManifest: true as const }
+            : {}),
+          aliases,
+          source: entry.source,
+          sourceInputs: entry.sourceInputs,
+          virtualSource: hook.virtualSource
+            .replaceAll(eventArtifactEpochToken, options.artifactEpoch)
+            .replaceAll(eventFlightArtifactEpochToken, workerArtifactEpoch),
+          // The layer module the wrapper imports first; a shared-runtime
+          // event-route wrapper runs no plugin code and imports none.
+          ...(hookWrapperAppliesOperatorEnv(hook) ? { virtualModules: [operatorEnvLayerVirtualModule()] } : {}),
+        };
+        if (hook.executeVirtualSource === undefined) return [wrapperEntry];
+        const executorRelativePath = hook.relativePath.replace(/\.mjs$/u, '.execute.mjs');
+        return [
+          wrapperEntry,
+          {
+            aliases,
+            name: executorRelativePath.replaceAll('/', '-').replace(/\.mjs$/u, ''),
+            outputRelativePath: executorRelativePath,
+            ...(hook.hook.eventRoute?.runtime === 'standalone'
+              || hook.hook.eventRoute?.fallback === 'standalone'
+              ? { rscManifest: true as const }
+              : {}),
+            source: entry.source,
+            sourceInputs: Object.freeze([hook.hook.provenance.sourcePath, hook.hook.source]),
+            virtualSource: hook.executeVirtualSource
+              .replaceAll(eventArtifactEpochToken, options.artifactEpoch)
+              .replaceAll(eventFlightArtifactEpochToken, workerArtifactEpoch),
+            ...(hookWrapperAppliesOperatorEnv(hook) ? { virtualModules: [operatorEnvLayerVirtualModule()] } : {}),
+          },
+        ];
+      }),
       ...(workerEntry === undefined ? [] : [workerEntry]),
     ],
     ignoredSourcePaths: [
@@ -677,6 +721,10 @@ export const planHooksSurface = (
       return Object.freeze(compiled.map((entry, index) => Object.freeze({
         ...entry,
         sourceInputs: evidenceByPath.get(entries[index]!.relativePath) ?? (() => { throw new Error(`Missing bundled hook evidence for ${JSON.stringify(entry.name)}.`); })(),
+        ...(entry.executorOutput === undefined ? {} : {
+          executorSourceInputs: evidenceByPath.get(entries[index]!.relativePath.replace(/\.mjs$/u, '.execute.mjs'))
+            ?? (() => { throw new Error(`Missing bundled deferred hook executor evidence for ${JSON.stringify(entry.name)}.`); })(),
+        }),
         ...(entry.workerOutput === undefined ? {} : {
           workerSourceInputs: evidenceByPath.get('hooks/hooks-flight.mjs') ?? (() => { throw new Error('Missing bundled hook Flight worker evidence.'); })(),
         }),

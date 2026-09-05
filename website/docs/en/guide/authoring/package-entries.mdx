@@ -341,14 +341,14 @@ recreates command logic is the duplication the projection exists to remove.
 `flags` is keyed by the canonical key of the tool's `RouteContract.input`. Discovery excludes
 `.cli.{ts,tsx}` before identity derivation and pairs the file with the sibling `.{ts,tsx}`. The
 suffix is reserved under `src/mcp/**`; prefix `_` parks it. An orphan, or a `.cli.*` under
-`resources/`, `prompts/`, or `apps/`, is `AB4840`. A missing or dynamic `config`, a key outside
+`resources/`, `prompts/`, or `apps/`, is `AB4843`. A missing or dynamic `config`, a key outside
 the closed set, a field of the wrong shape, a `mapInput` that is not statically a function, or
-`required: false` / a CLI `default` on a canonical-required key without `mapInput`, is `AB4841`.
+`required: false` / a CLI `default` on a canonical-required key without `mapInput`, is `AB4844`.
 A `flags`/`positionals` key absent from the contract, a `name`/alias that is not kebab-case, is
 reserved (`help`, `json`, `ndjson`, `version`, and `yes` when confirm), or collides, `name` or
 `aliases` on a positional key (a bare argument has no `--spelling`), a contract key `yes` on a
 confirming command (the shell strips `yes` as the confirmation, whatever it is spelled), or a
-`command` segment that is not a safe identity segment, is `AB4842`. Every message is
+`command` segment that is not a safe identity segment, is `AB4845`. Every message is
 `CLI projection <module> for tool:<server>/<tool>: <detail>.` (a misplaced module has no tool to
 name: `CLI projection <module>: <detail>.`). A tool whose schema has no static
 contract becomes load-bearing once it has a projection: `AB4814`/`AB4838`/`AB4839` fire on the

@@ -1013,7 +1013,7 @@ route: discovery excludes `.cli.{ts,tsx}` before identity derivation, pairs
 the file with the sibling tool, and does not list it on
 `RouteContract.routes`. The suffix is reserved under `src/mcp/**`; prefix
 `_` parks a file the same way as any other conventional module. An orphan
-or a `.cli.*` under `resources/`, `prompts/`, or `apps/` is `AB4840`.
+or a `.cli.*` under `resources/`, `prompts/`, or `apps/` is `AB4843`.
 
 The module exports a static `config` that satisfies `CliProjectionConfig`
 from `agent-bundle/routes` (the same extract grammar as a route `config`)
@@ -1045,8 +1045,8 @@ canonical input (renames, splitting lists, deriving a working directory).
 Domain validation and behaviour stay in the operation — its
 `inputSchema` refinements and its component. A mapper that recreates
 command logic is the duplication the projection exists to remove. A
-contract problem is `AB4841`; a grammar that does not bind to the tool's
-contract is `AB4842`. Message shape:
+contract problem is `AB4844`; a grammar that does not bind to the tool's
+contract is `AB4845`. Message shape:
 `CLI projection <module> for tool:<server>/<tool>: <detail>.`
 
 The explicit projection takes precedence over the bulk `mcpCommands`

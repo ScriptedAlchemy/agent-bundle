@@ -963,6 +963,9 @@ const startEventRuntime = async (
       nativeEvent,
       request.hostContractRevision,
       signal,
+      request.observedAt === undefined || request.sequence === undefined
+        ? undefined
+        : { observedAt: request.observedAt, sequence: request.sequence },
     );
     const sessionId = nativeString(request.native, 'session_id')
       ?? nativeString(request.native, 'conversation_id');

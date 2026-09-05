@@ -27,6 +27,13 @@ export interface RouteProvenance {
   readonly relativePath: string;
 }
 
+/** The separately bundleable static preflight attached to one event route. */
+export interface CompiledEventPreflight {
+  readonly provenance: RouteProvenance;
+  /** Absolute preflight module path. */
+  readonly source: string;
+}
+
 export type { CapabilityEvidence, CapabilityState } from '../core/capabilities.ts';
 
 /**
@@ -138,6 +145,8 @@ export interface CompiledAgentRoute {
   /** Statically projected bounded JSON Schema subset — the bound contract's `input` object; absent for missing or richer input schemas. */
   readonly inputSchema?: RouteInputSchema;
   readonly kind: CompiledRouteKind;
+  /** Static cheap gate; present only on event routes that declare a valid relative default re-export. */
+  readonly preflight?: CompiledEventPreflight;
   readonly provenance: RouteProvenance;
   /** The owning MCP server id (`mcp:<name>`); MCP route kinds only. */
   readonly serverId?: string;

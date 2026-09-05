@@ -538,10 +538,28 @@ const normalizeHooks = (
       : undefined;
     const fallback = route.config['fallback'] === 'standalone' ? 'standalone' as const : 'none' as const;
     const runtime = route.config['runtime'] === 'standalone' ? 'standalone' as const : 'shared' as const;
+    const configuredProviders = route.config['providers'];
+    const providers = Array.isArray(configuredProviders)
+      && configuredProviders.every((provider): provider is string => typeof provider === 'string')
+      ? [...configuredProviders]
+      : undefined;
     const eventName = event.replace('/', '-');
     hooks.push({
       event: hookEventForRoute[event],
-      eventRoute: Object.freeze({ event, fallback, runtime }),
+      eventRoute: Object.freeze({
+        event,
+        fallback,
+        ...(route.preflight === undefined
+          ? {}
+          : {
+            preflight: {
+              provenance: { ...route.preflight.provenance },
+              source: route.preflight.source,
+            },
+          }),
+        ...(providers === undefined ? {} : { providers }),
+        runtime,
+      }),
       id: `hook:event-route:${eventName}`,
       name: `event-route-${eventName}`,
       provenance: { kind: 'conventional', sourcePath: route.source },

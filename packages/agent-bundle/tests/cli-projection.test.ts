@@ -318,7 +318,7 @@ describe('MCP tool CLI surface projections', () => {
     expect(commands['tool:demo/override']!.options.map((option) => option.option)).not.toContain('yes');
   });
 
-  it('reports AB4840 for orphan, duplicate, and misplaced projections while private projections stay parked', async () => {
+  it('reports AB4843 for orphan, duplicate, and misplaced projections while private projections stay parked', async () => {
     const orphanRoot = await createRoot();
     await writeTree(orphanRoot, {
       'src/mcp/demo/tools/ghost.cli.ts': cliModule('{}'),
@@ -326,7 +326,7 @@ describe('MCP tool CLI surface projections', () => {
     const orphan = await compileRouteGraph(orphanRoot, fixtureConfig());
     expectOnlyDiagnostic(
       orphan,
-      'AB4840',
+      'AB4843',
       orphanRoot,
       ['CLI projection src/mcp/demo/tools/ghost.cli.ts for tool:demo/ghost: has no sibling tool route'],
       'src/mcp/demo/tools/ghost.cli.ts',
@@ -337,7 +337,7 @@ describe('MCP tool CLI surface projections', () => {
     });
     expectOnlyDiagnostic(
       duplicate.graph,
-      'AB4840',
+      'AB4843',
       duplicate.root,
       [
         'CLI projection src/mcp/demo/tools/submit.cli.tsx for tool:demo/submit: src/mcp/demo/tools/submit.cli.ts already projects this tool',
@@ -353,7 +353,7 @@ describe('MCP tool CLI surface projections', () => {
     const misplaced = await compileRouteGraph(misplacedRoot, fixtureConfig());
     expectOnlyDiagnostic(
       misplaced,
-      'AB4840',
+      'AB4843',
       misplacedRoot,
       ['CLI projection src/mcp/demo/resources/submit.cli.ts: sits under resources/', 'tool'],
       'src/mcp/demo/resources/submit.cli.ts',
@@ -370,7 +370,7 @@ describe('MCP tool CLI surface projections', () => {
     expect(parked.servers).toEqual([]);
   });
 
-  it('reports AB4841 for non-static config, closed-shape, mapper, and required-relaxation violations', async () => {
+  it('reports AB4844 for non-static config, closed-shape, mapper, and required-relaxation violations', async () => {
     const source = '/project/src/mcp/demo/tools/submit.cli.ts';
     const tool: CompiledAgentRoute = {
       config: {},
@@ -388,7 +388,7 @@ describe('MCP tool CLI surface projections', () => {
       tool,
       { projectRoot: '/project' },
     );
-    expect(codesOf(extracted.diagnostics)).toEqual(['AB4841']);
+    expect(codesOf(extracted.diagnostics)).toEqual(['AB4844']);
     expect(extracted.diagnostics[0]).toMatchObject({ severity: 'error', sourcePath: source });
     expect(extracted.diagnostics[0]!.message).toContain(`CLI projection ${projectionPath}`);
     expect(extracted.diagnostics[0]!.message).toContain('config');
@@ -409,7 +409,7 @@ describe('MCP tool CLI surface projections', () => {
     ];
     for (const [projection, toolSource, fragments] of cases) {
       const result = await compileProjection(projection, { tool: toolSource });
-      expectOnlyDiagnostic(result.graph, 'AB4841', result.root, fragments);
+      expectOnlyDiagnostic(result.graph, 'AB4844', result.root, fragments);
     }
   });
 
@@ -418,7 +418,7 @@ describe('MCP tool CLI surface projections', () => {
 
     const expectRejectedMapInput = async (mapInput: string, fragments: readonly string[]): Promise<void> => {
       const { graph, root } = await compileProjection(cliModule('{}', mapInput));
-      expectOnlyDiagnostic(graph, 'AB4841', root, [subject, ...fragments]);
+      expectOnlyDiagnostic(graph, 'AB4844', root, [subject, ...fragments]);
       expect(graph.diagnostics[0]!.recovery).toContain('synchronous, non-generator function');
       expect(graph.cli?.commands).toEqual([]);
       expect(graph.cli?.projectionSources).toBeUndefined();
@@ -509,7 +509,7 @@ describe('MCP tool CLI surface projections', () => {
       const declaredAmbient = await compileProjection(cliModule('{}', reExport), {
         extraFiles: { 'src/shared/mapper.ts': 'export declare function mapInput(input: unknown): unknown;\n' },
       });
-      expectOnlyDiagnostic(declaredAmbient.graph, 'AB4841', declaredAmbient.root, [subject, 'ambient declaration']);
+      expectOnlyDiagnostic(declaredAmbient.graph, 'AB4844', declaredAmbient.root, [subject, 'ambient declaration']);
       expect(declaredAmbient.graph.cli?.commands).toEqual([]);
 
       const followed = await compileProjection(cliModule('{}', reExport), {
@@ -544,7 +544,7 @@ describe('MCP tool CLI surface projections', () => {
     });
   });
 
-  it('reports AB4842 for unknown keys, invalid spellings, collisions, unsafe paths, and reserved yes', async () => {
+  it('reports AB4845 for unknown keys, invalid spellings, collisions, unsafe paths, and reserved yes', async () => {
     const twoKeys = toolModule({
       schema: 'z.object({ first: z.string().optional(), second: z.string().optional() }).strict()',
     });
@@ -568,18 +568,18 @@ describe('MCP tool CLI surface projections', () => {
     ];
     for (const [projection, toolSource, fragments] of cases) {
       const result = await compileProjection(projection, { tool: toolSource });
-      expectOnlyDiagnostic(result.graph, 'AB4842', result.root, fragments);
+      expectOnlyDiagnostic(result.graph, 'AB4845', result.root, fragments);
     }
   });
 
-  it('reports AB4842 when a confirming command projects a tool whose contract has a key yes, whatever its spelling', async () => {
+  it('reports AB4845 when a confirming command projects a tool whose contract has a key yes, whatever its spelling', async () => {
     const confirming = toolModule({
       config: "{ annotations: { readOnlyHint: false }, description: 'Submit work.' }",
       schema: 'z.object({ laneKey: z.string(), yes: z.string() }).strict()',
     });
     for (const projection of [cliModule('{}'), cliModule("{ flags: { yes: { name: 'assent' } } }")]) {
       const result = await compileProjection(projection, { tool: confirming });
-      expectOnlyDiagnostic(result.graph, 'AB4842', result.root, [
+      expectOnlyDiagnostic(result.graph, 'AB4845', result.root, [
         `CLI projection ${projectionPath} for tool:demo/submit:`,
         'key "yes"',
         'confirming command reserves',
@@ -596,7 +596,7 @@ describe('MCP tool CLI surface projections', () => {
       .toMatchObject({ kind: 'string', required: true });
   });
 
-  it('rejects name and aliases on a positional key with AB4842 while description, default, and required stay legal', async () => {
+  it('rejects name and aliases on a positional key with AB4845 while description, default, and required stay legal', async () => {
     const schema = 'z.object({ argv: z.array(z.string()).min(1), cwd: z.string().optional() }).strict()';
     const rejected: readonly [projection: string, fragments: readonly string[]][] = [
       [cliModule("{ positionals: ['argv'], flags: { argv: { name: 'command' } } }"), ['config.flags.argv is positional; name does not apply']],
@@ -608,7 +608,7 @@ describe('MCP tool CLI surface projections', () => {
     ];
     for (const [projection, fragments] of rejected) {
       const result = await compileProjection(projection, { tool: toolModule({ schema }) });
-      expectOnlyDiagnostic(result.graph, 'AB4842', result.root, fragments);
+      expectOnlyDiagnostic(result.graph, 'AB4845', result.root, fragments);
       expect(result.graph.diagnostics[0]!.recovery).toContain('config.positionals');
     }
 

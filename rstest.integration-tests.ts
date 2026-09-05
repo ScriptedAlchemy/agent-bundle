@@ -66,6 +66,7 @@ export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/mcp.test.ts',
   'packages/agent-bundle/tests/package-build.test.ts',
   'packages/agent-bundle/tests/path-token-resolver.test.ts',
+  'packages/agent-bundle/tests/preflight-artifact-graph.test.ts',
   'packages/agent-bundle/tests/prebuilt-payload.test.ts',
   'packages/agent-bundle/tests/prepack.test.ts',
   'packages/agent-bundle/tests/provider-typegen.test.ts',

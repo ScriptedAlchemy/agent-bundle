@@ -49,6 +49,8 @@ export {
   agentEventPayloadFields,
   agentEventPayloadNativeKeys,
   canonicalAgentEvents,
+  eventFamilyAllowsPreflightDeny,
+  validateEventPreflightResult,
 } from './routes/public.ts';
 export type {
   AgentEventCanonicalIdentity,
@@ -72,6 +74,9 @@ export type {
   AppRouteConfig,
   CanonicalAgentEvent,
   CliProjectionConfig,
+  EventPreflight,
+  EventPreflightContext,
+  EventPreflightResult,
   PromptConfig,
   ResourceConfig,
   RouteSchema,
@@ -79,6 +84,35 @@ export type {
   ToolConfig,
   ToolRouteProps,
 } from './routes/public.ts';
+export {
+  createEventTracer,
+  eventTraceEventKinds,
+  eventTraceExecution,
+  eventTraceObserver,
+  eventTracePhases,
+  installEventTraceObserver,
+  summarizeEventTraceError,
+} from './events/trace.ts';
+export type {
+  CreateEventTracerOptions,
+  EventTraceErrorSummary,
+  EventTraceEvent,
+  EventTraceEventKind,
+  EventTraceExecuteStart,
+  EventTraceExecution,
+  EventTraceFailure,
+  EventTraceObserver,
+  EventTracePhase,
+  EventTracePreflightOutcome,
+  EventTracePreflightOutcomeEvent,
+  EventTracePreflightStart,
+  EventTraceProvidersFinish,
+  EventTraceProvidersStart,
+  EventTracer,
+  EventTraceRenderFinish,
+  EventTraceRenderStart,
+  EventTraceRuntime,
+} from './events/trace.ts';
 export { inspectRouteGraph } from './routes/inspect.ts';
 export type { RouteGraphInspection } from './routes/inspect.ts';
 export { emptyRouteConfig } from './routes/types.ts';
