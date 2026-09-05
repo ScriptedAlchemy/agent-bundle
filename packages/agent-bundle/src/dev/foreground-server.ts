@@ -14,6 +14,7 @@ import type { ProjectEventHub, ProjectEventSubscription } from './events.ts';
 import { InspectorRoutes, type InspectorRouteService } from './inspector-routes.ts';
 import { HookPlaygroundRoutes, type HookPlaygroundRouteService } from './playground/hook-playground-routes.ts';
 import { HostDiscoveryRoutes, type HostDiscoveryRouteService } from './playground/host-discovery-routes.ts';
+import type { HookReceiptRoutes } from './hooks/hook-receipt-endpoint.ts';
 import type { HostMcpRoutes } from './host-mcp-routes.ts';
 import { LifecycleReplayRoutes, type LifecycleReplayRouteService } from './playground/lifecycle-replay-routes.ts';
 import { McpProbeRoutes, type McpProbeRouteService } from './playground/mcp-probe-routes.ts';
@@ -173,6 +174,7 @@ export interface ForegroundServerOptions {
   readonly mcpAppSandboxOrigin?: () => string | undefined;
   /** Epoch-bound hook playground service; the browser never selects a wrapper or artifact path. */
   readonly hookPlayground?: HookPlaygroundRouteService;
+  readonly hookReceipts?: HookReceiptRoutes;
   /** Read-only host probes, install inventory, bundle drift, and runtime endpoint health. */
   readonly hostDiscovery?: HostDiscoveryRouteService;
   /** Stateful MCP surface used only by stable development host proxies. */
@@ -411,6 +413,7 @@ export class ForegroundServer {
   readonly #evalRoutes: EvalRoutes;
   readonly #eventHub: ProjectEventHub;
   readonly #hookPlaygroundRoutes: HookPlaygroundRoutes;
+  readonly #hookReceiptRoutes: HookReceiptRoutes | undefined;
   readonly #hostDiscoveryRoutes: HostDiscoveryRoutes;
   readonly #hostMcpRoutes: HostMcpRoutes | undefined;
   readonly #host: string;
@@ -471,6 +474,7 @@ export class ForegroundServer {
     this.#eventHub = options.eventHub;
     this.#host = host;
     this.#hostMcpRoutes = options.hostMcp;
+    this.#hookReceiptRoutes = options.hookReceipts;
     this.instanceId = instanceId;
     this.#mcpAppPreviews = options.mcpAppPreviews;
     this.#now = options.now ?? (() => new Date());
@@ -804,6 +808,7 @@ export class ForegroundServer {
     const pathname = new URL(request.url ?? '/', this.url).pathname;
     const method = request.method ?? 'GET';
     if (await this.#hostMcpRoutes?.handle(request, response)) return;
+    if (await this.#hookReceiptRoutes?.handle(request, response)) return;
     if (pathname === '/mcp') {
       if (this.#agentApi === undefined) return responseDiagnostic(response, diagnostic('AB8007', 'Route was not found.', 404));
       this.#assertAgentApiOrigin(request);

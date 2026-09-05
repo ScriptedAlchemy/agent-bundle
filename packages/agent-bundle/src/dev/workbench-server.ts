@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path';
 
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import type { InstallHost } from '../install/install.ts';
+import { HookService } from '../services/hook-service.ts';
 import { AgentApi } from './agent-api.ts';
 import { ArtifactInspectionService } from './artifacts/artifact-inspection-service.ts';
 import { DevCoordinator } from './coordinator.ts';
@@ -14,6 +15,7 @@ import { attachProjectEventLogs, createMcpDevLogTraceSink, createProjectDevLogge
 import { EpochStore } from './epoch-store.ts';
 import { EvalService } from './eval/eval-service.ts';
 import { ProjectEventHub } from './events.ts';
+import { attachHookReceipts } from './hooks/hook-receipt-endpoint.ts';
 import { createInspectorLauncher } from './inspector-launcher.ts';
 import { HookPlaygroundService } from './playground/hook-playground-service.ts';
 import { DevHostInstallManager } from './host-install-manager.ts';
@@ -529,6 +531,8 @@ const withMcpSessionLifecycle = (
   detachProjectTrace: () => void,
   inspector: Closeable,
   epochAdoption: EpochAdoptionPolicy,
+  hookReceipts: ReturnType<typeof attachHookReceipts>,
+  publishHookReceiptUrl: (url: string) => void,
   hostInstalls?: DevHostInstallManager,
 ): ForegroundCoordinator => Object.freeze({
   close: () => {
@@ -548,7 +552,11 @@ const withMcpSessionLifecycle = (
       trace,
     });
   },
-  publishServerUrl: (url: string) => coordinator.publishServerUrl(url),
+  publishServerUrl: async (url: string) => {
+    await coordinator.publishServerUrl(url);
+    publishHookReceiptUrl(url);
+    await hookReceipts.publishEndpoint(url);
+  },
   rebuild: (invalidation: Invalidation) => coordinator.rebuild(invalidation),
   start: async () => {
     hostInstalls?.start();
@@ -610,6 +618,8 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
   const eventHub = new ProjectEventHub();
   const epochStore = new EpochStore({ projectRoot: root });
   const traceHub = new TraceHub({ projectRoot: root });
+  const hookReceipts = attachHookReceipts({ projectRoot: root, trace: traceHub });
+  let hookReceiptUrl: string | undefined;
   const logs = new DevLogService({ projectRoot: root, trace: traceHub });
   const detachProjectLogs = attachProjectEventLogs(logs, eventHub);
   const detachProjectTrace = attachProjectEventTrace(traceHub, eventHub);
@@ -820,7 +830,16 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
         platformRuntime,
       });
   const hostMcp = new HostMcpRoutes({ adoption: epochAdoption, epochStore, eventHub, mcpSessions });
-  const hookPlayground = new HookPlaygroundService({ epochStore, logger: logs, registry, platformRuntime });
+  const hookPlayground = new HookPlaygroundService({
+    epochStore,
+    hookService: new HookService({
+      environment: () => hookReceiptUrl === undefined ? {} : hookReceipts.environment(hookReceiptUrl),
+      registry,
+    }),
+    logger: logs,
+    registry,
+    platformRuntime,
+  });
   const preparedBundle = () => {
     const prepared = latestValidPreparedProject;
     if (prepared?.model === undefined) return undefined;
@@ -994,6 +1013,8 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
       detachProjectTrace,
       inspector,
       epochAdoption,
+      hookReceipts,
+      (url) => { hookReceiptUrl = url; },
       hostInstalls,
     ),
     evals,
@@ -1001,6 +1022,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
     epochs: epochStore,
     eventHub,
     hookPlayground,
+    hookReceipts: hookReceipts.routes,
     hostDiscovery,
     hostMcp,
     inspector,
@@ -1044,7 +1066,11 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
     void mcpApps?.prepareClose().catch(() => undefined);
     clientSurfaces.beginClose();
     try {
-      await foreground.close();
+      try {
+        await hookReceipts.close();
+      } finally {
+        await foreground.close();
+      }
     } finally {
       // Probe transports whose teardown outlived their response boundary own
       // their plugin-data removal; joining them here (bounded by the probe's

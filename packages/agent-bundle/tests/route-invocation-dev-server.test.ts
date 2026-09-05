@@ -6,6 +6,7 @@ import { expect, it } from '@rstest/core';
 import type { RouteInvocationResponse } from '../src/dev/routes/route-invocation-result.ts';
 import type { RouteInvocationListResponse } from '../src/dev/routes/route-invocation.ts';
 import type { RouteManifestResponse } from '../src/dev/routes/route-manifest.ts';
+import type { TraceReplay } from '../src/dev/trace/trace-entry.ts';
 import { createWorkbenchAssetSource } from '../src/dev/workbench-assets.ts';
 import { startDevServer } from '../src/dev/workbench-server.ts';
 import { createProjectFixture } from './helpers/project-fixture.ts';
@@ -151,6 +152,31 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     expect(tool.invocation.providers).toEqual([
       expect.objectContaining({ name: 'clock', status: 'mounted' }),
     ]);
+    const toolTraceResponse = await fetch(`${server.url}/api/trace?after=0`, { headers });
+    expect(toolTraceResponse.status).toBe(200);
+    const toolTrace = await toolTraceResponse.json() as TraceReplay;
+    const toolEntries = toolTrace.entries.filter((entry) =>
+      entry.correlation.invocationId === tool.invocation.id && entry.source === 'invocation');
+    expect(toolEntries.map((entry) => entry.kind)).toEqual([
+      'invocation.started',
+      'invocation.completed',
+    ]);
+    expect(toolEntries).toEqual([
+      expect.objectContaining({
+        correlation: expect.objectContaining({
+          invocationId: tool.invocation.id,
+          routeId: 'tool:status/report',
+        }),
+        href: expect.stringMatching(new RegExp(`\\?invocation=${tool.invocation.id}$`, 'u')),
+      }),
+      expect.objectContaining({
+        correlation: expect.objectContaining({
+          invocationId: tool.invocation.id,
+          routeId: 'tool:status/report',
+        }),
+        href: expect.stringMatching(new RegExp(`\\?invocation=${tool.invocation.id}$`, 'u')),
+      }),
+    ]);
 
     const eventResponse = await fetch(`${server.url}/api/routes/invocations`, {
       body: JSON.stringify({
@@ -189,6 +215,36 @@ it('invokes compiled tool and event routes through the foreground server', { tim
       value: { conversation: 'session-1', root: 'session-1' },
     });
     expect(event.invocation.requestId).toBe('request-event-1');
+    const eventTraceResponse = await fetch(`${server.url}/api/trace?after=0`, { headers });
+    expect(eventTraceResponse.status).toBe(200);
+    const eventTrace = await eventTraceResponse.json() as TraceReplay;
+    const eventEntries = eventTrace.entries.filter((entry) =>
+      entry.correlation.invocationId === event.invocation.id);
+    expect(eventEntries.filter((entry) => entry.source === 'invocation').map((entry) => entry.kind)).toEqual([
+      'invocation.started',
+      'invocation.completed',
+    ]);
+    expect(eventEntries.filter((entry) => entry.source === 'invocation')).toEqual([
+      expect.objectContaining({
+        correlation: expect.objectContaining({
+          invocationId: event.invocation.id,
+          routeId: 'event:tool/after',
+        }),
+        href: expect.stringMatching(new RegExp(`\\?invocation=${event.invocation.id}$`, 'u')),
+      }),
+      expect.objectContaining({
+        correlation: expect.objectContaining({
+          invocationId: event.invocation.id,
+          routeId: 'event:tool/after',
+        }),
+        href: expect.stringMatching(new RegExp(`\\?invocation=${event.invocation.id}$`, 'u')),
+      }),
+    ]);
+    const kernelEntries = eventEntries.filter((entry) => entry.source === 'kernel');
+    expect(kernelEntries.length).toBeGreaterThan(0);
+    expect(kernelEntries.every((entry) => entry.kind.startsWith('kernel.'))).toBe(true);
+    expect(new Set(kernelEntries.map((entry) => entry.correlation.executionId)).size).toBe(1);
+    expect(kernelEntries[0]?.correlation.executionId).toBeDefined();
 
     const cliResponse = await fetch(`${server.url}/api/routes/invocations`, {
       body: JSON.stringify({ input: { name: 'Ada' }, routeId: 'cli:greet' }),
