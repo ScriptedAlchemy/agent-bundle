@@ -2287,7 +2287,7 @@ it('rejects a conventional event route reused as another route preflight', async
   expect(graph.events.map((route) => route.id)).toEqual(['event:session/start', 'event:tool/before']);
   expect(graph.events.find((route) => route.id === 'event:tool/before')?.preflight).toBeUndefined();
   expect(graph.diagnostics).toEqual(expect.arrayContaining([
-    expect.objectContaining({ code: 'AB4840', sourcePath: join(root, 'src/events/tool/before.ts') }),
+    expect.objectContaining({ code: 'AB4850', sourcePath: join(root, 'src/events/tool/before.ts') }),
   ]));
 });
 
@@ -2316,11 +2316,11 @@ it('rejects event preflights that are inline, non-relative, unresolvable, cyclic
     code,
     source: sourcePath?.slice(root.length + 1).replaceAll('\\', '/'),
   }))).toEqual([
-    { code: 'AB4840', source: 'src/events/agent/start.ts' },
-    { code: 'AB4840', source: 'src/events/agent/stop.ts' },
-    { code: 'AB4840', source: 'src/events/compact/after.ts' },
-    { code: 'AB4840', source: 'src/events/compact/before.ts' },
-    { code: 'AB4840', source: 'src/events/session/end.ts' },
+    { code: 'AB4850', source: 'src/events/agent/start.ts' },
+    { code: 'AB4850', source: 'src/events/agent/stop.ts' },
+    { code: 'AB4850', source: 'src/events/compact/after.ts' },
+    { code: 'AB4850', source: 'src/events/compact/before.ts' },
+    { code: 'AB4850', source: 'src/events/session/end.ts' },
   ]);
 });
 
@@ -2351,7 +2351,7 @@ it('validates event route provider declarations against conventional provider ke
   expect(graph.events.find((route) => route.id === 'event:tool/before')?.config).toMatchObject({
     providers: ['projectAuth'],
   });
-  expect(graph.diagnostics.filter(({ code }) => code === 'AB4841').map(({ sourcePath }) =>
+  expect(graph.diagnostics.filter(({ code }) => code === 'AB4851').map(({ sourcePath }) =>
     sourcePath?.slice(root.length + 1).replaceAll('\\', '/'))).toEqual([
     'src/events/session/start.ts',
     'src/events/tool/after.ts',

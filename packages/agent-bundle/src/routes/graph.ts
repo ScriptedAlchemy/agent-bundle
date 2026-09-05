@@ -127,7 +127,7 @@ const eventProviderDeclarationDiagnostics = (
     'Declare config.providers as a distinct array of conventional provider keys, omit it to resolve every provider, or use [] to resolve none.';
   if (!Array.isArray(declared) || declared.some((key) => typeof key !== 'string')) {
     return [routeError(
-      'AB4841',
+      'AB4851',
       `Event route ${route.provenance.relativePath} config.providers must be an array of provider-key strings.`,
       recovery,
       route.source,
@@ -136,7 +136,7 @@ const eventProviderDeclarationDiagnostics = (
   const problems = validateRequiredProviderKeys(declared, providerKeys);
   if (problems.length === 0) return [];
   return [routeError(
-    'AB4841',
+    'AB4851',
     `Event route ${route.provenance.relativePath} has invalid config.providers: ${problems
       .map(requiredProviderKeyProblemMessage)
       .join(' ')}`,
@@ -755,7 +755,7 @@ export const compileRouteGraph = async (
       diagnostics: Object.freeze([
         ...discovery.diagnostics,
         routeError(
-          'AB4840',
+          'AB4850',
           `Event route ${toPosixPath(relative(projectRoot, source))} re-exports preflight from another conventional event route.`,
           'Move preflight to a separate support module that is not itself an event route.',
           source,

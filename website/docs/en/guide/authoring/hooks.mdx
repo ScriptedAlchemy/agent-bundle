@@ -268,7 +268,7 @@ specifier resolves to the `.ts`/`.tsx` source, as route imports do. A gate decla
 route module (`export const preflight = …`, `export function preflight`) is rejected: evaluating
 that module evaluates its rendering and provider imports, the very cost the gate exists to avoid.
 
-Every rejected form is `AB4840`, reported once per route on the route module by `inspect`,
+Every rejected form is `AB4850`, reported once per route on the route module by `inspect`,
 `validate`, `build`, and `dev`: `preflight` declared inline or exported more than once;
 re-exported under a binding other than `default` (`export { gate as preflight } from './gate.js'`);
 re-exported from a bare package specifier; a relative target that is missing, unreadable, or part
@@ -354,7 +354,7 @@ Keys are the camel-cased stems of the `src/providers/<name>.*` modules the route
 (`retry-policy.ts` is `retryPolicy`), the same keys `AgentBundleProviders` in the generated
 `.agent-bundle/routes.d.ts` lists. `processLifetime` is not one of them — it is seeded whatever
 the route declares — and must not be declared. The declaration is judged when the route graph
-compiles, so `inspect`, `validate`, `build`, and `dev` all report `AB4841`, once per route with
+compiles, so `inspect`, `validate`, `build`, and `dev` all report `AB4851`, once per route with
 every defect in one message: a `providers` that is not an array of string literals, a key listed
 twice, the reserved `processLifetime`, or a key that matches no discovered provider — a
 misspelling, a stem camel-cased differently, or a module discovery skips (an `_`- or `.`-prefixed

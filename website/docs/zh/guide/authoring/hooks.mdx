@@ -239,7 +239,7 @@ provider。通过相对路径重新导出，编译器可以构建独立的 `pref
 再加载。直接在渲染式路由模块中声明函数，只是逻辑上先执行；由于求值该模块也会求值其静态渲染代码并加载
 provider，实际开销并不会降低。通过裸包名导入、形成循环、导出非函数，或采用其他无法静态追踪的方式提供
 `preflight`，都会导致构建错误；编译器不会悄悄退回高开销的路由路径。
-这些无效形式由 `inspect`、`validate`、`build` 和 `dev` 以 `AB4840` 报告。
+这些无效形式由 `inspect`、`validate`、`build` 和 `dev` 以 `AB4850` 报告。
 
 `preflight` 可以是同步或异步的，并且恰好只有三种结果：
 
@@ -285,7 +285,7 @@ notices、lineage 存储、渲染式布局、应用 provider、React/RSC 辅助�
 provider 是否按需加载由声明决定。`preflight` 不会实例化任何应用 provider。事件路由执行后，运行时只会
 加载并解析它静态声明的 provider 子集。选中的 provider 在每次请求中仍只实例化一次，并按确定的键名/来源
 顺序依次执行；`processLifetime` 会先注入，任何失败都会终止该请求。键名重复或未知都会导致构建错误。
-无效的 `config.providers` 声明由 `AB4841` 报告。
+无效的 `config.providers` 声明由 `AB4851` 报告。
 
 声明方式是 `export const config = { providers: ['projectPolicy'] }`。provider 键由 `src/providers/`
 下的文件名转换为 camelCase；空数组表示不选择任何应用 provider。
