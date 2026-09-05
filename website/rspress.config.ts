@@ -96,8 +96,8 @@ const siteDescription =
   'Compile skills, hooks, MCP servers, and scripts from one typed config into installable Claude Code, Codex, and Cursor artifacts.';
 const siteDescriptionZh =
   '用一份带类型的配置描述 Skill、钩子、MCP 服务器与脚本，编译为可直接安装到 Claude Code、Codex 与 Cursor 的产物。';
-/** `--rp-c-brand` in `styles/index.css`. */
-const brandColor = '#0d8f80';
+/** `--rp-c-brand` in `styles/index.css` (light theme; 4.83:1 on white). */
+const brandColor = '#0b8072';
 
 /**
  * `llms.txt` and `llms-full.txt` are emitted as build assets rather than
