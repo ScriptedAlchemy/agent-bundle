@@ -23,29 +23,22 @@ npx agent-bundle validate --artifact artifact --strict    # 已构建字节，�
 会被检查——清单声明的 `logo` 若在产物中缺失或逃逸出部署树，会报告 `AB6025`。已列入清单的编译证据记录若
 与清单文件表不一致，会报告 `AB6039`。
 
-自包含性由编译过程的 externals 证据证明（在编译期报告 `AB6005`）。编译器服务会降低每个宿主包表面、
-每个包构建入口（`dist/bin/*.js`、渲染式路由的 Flight worker `.mjs` 与 `lib` 入口），以及每个 MCP App
-视图。框架自有的
+自包含性首先由编译过程的 externals 证据证明（在编译期报告 `AB6005`）。编译器服务会降低每个宿主包表面
+以及包专用入口（手写 bin 或 `lib` 入口）。npm 根目录复用已校验产物中由清单声明的路由式 CLI 及其渲染式
+路由 Flight worker。框架自有的
 `ArtifactDependencyAuditPlugin` 会接入 `thisCompilation`，记录 Rspack 保持外部化的每个模块，服务则在
 信任任何产物之前读取这份证据。只有 Node 内建模块（`node:fs`、`fs`）、`pnpapi` 以及同一产物已输出的同级
 文件可以保持外部化；其他请求无论被 Rspack 输出成 `import`、`require` 还是其 `createRequire` shim，都会
 失败。表达式请求（`import(expr)`、`require(expr)`）不在编译器视野之内：Rslib 的配置不解析它，而是原样保留，
 因此它既不会被打包，也不算外部模块。
 
-已输出模块的遍历仍留在这份编译器证据之后，只负责编译器看不见的部分。它把每个已输出的 `.js`/`.mjs`
-模块按 ES 模块读取，并在其中任何一个——包括编译产物——里出现表达式 `import()` 时失败
-（`AB6005 has a non-literal dynamic import`）。被编译证据记录证明的模块——记录以相同字节覆盖的清单
-`bundle` 文件，且构建未使用 [`tools` 逃生舱](../../reference/configuration.mdx#tools)——只做词法
-分析而不完整解析，但它仍带有的每个字面量导入都要对照记录核对：Node 内建模块或该文件记录在案的
-外部依赖通过；其他任何请求都是构建被要求忽略的导入（`rspackIgnore`/`webpackIgnore`——Rspack
-原样保留它，没有模块、外部依赖或警告），并以 `AB6005 loads "<request>", which the compiler neither
-bundled nor recorded as an external` 失败。摘要匹配只证明字节是编译器输出的，不证明其中每个导入都
-已被解析。其他所有模块都会被完整解析，导入也会对照清单解析——生成的 `install.mjs`、被复制的消费者脚本、
-没有记录的产物中的每个模块，以及逃生舱可能改写了输出资源的构建（记录中的 `coverage.rewritable`）
-里的每个模块。这些发现就是 `AB6005` 的残余形态：不受支持或无效的说明符、缺失于或逃逸出输出树的目标、
-无效语法；`dist` 的发现以 `dist/<path>` 命名文件。预构建负载（`kind: 'prebuilt'`）保持不透明、仅做哈希
-锁定，声明文件（`.d.ts`）不会被遍历。
-
+输出模块遍历仍作为纵深防线留在编译证据之后。它把每个输出的 JavaScript 模块当作 ES 模块遍历，拒绝残留的
+不受支持导入、非字面量动态 import，以及输出树中缺失或逃逸到树外的目标；`dist` 中的发现以
+`dist/<path>` 点名其文件。模块语法检查的深度取决于它的字节由谁产出。框架编译的模块（清单 kind 为
+`bundle`）是打包器自己的输出，因此只由 ESM 词法分析器扫描，拒绝未终止的字符串、模板、注释与正则以及
+不配对的花括号。框架没有编译的模块——被复制的消费者脚本或独立安装器——会被完整解析；若一次构建的
+[`tools` 逃生口](../../reference/configuration.mdx#tools)可能改写了输出资源，该构建的每个 bundle 也会
+被完整解析。预构建载荷（`kind: 'prebuilt'`）保持不透明，只做哈希锁定；声明文件（`.d.ts`）不会被遍历。
 路由图会在打包器运行之前守住同一份自包含性：
 路由模块、布局或 provider——或它们之一通过相对导入触达的模块——若值导入了携带编译器的框架入口
 （`agent-bundle`、`agent-bundle/api`、`agent-bundle/config`、`agent-bundle/eval`、`agent-bundle/rstest`、
@@ -218,12 +211,23 @@ npx agent-bundle prepack --root . --output artifact --json
 `dist/bin` 与各宿主包，因此已发布的插件不应安装任何东西：请把框架、`@agent-bundle/runtime`、`react`、
 `zod` 以及其余技术栈都声明在 `devDependencies` 下。已编译的 bundle——无论是宿主包模块还是 `dist`
 bundle——都不能把裸包保持外部化：编译器会在 `prepack` 触及清单之前报告 `AB6005`。因此
-仅仅把包内联进 bundle 并不能证明消费者需要安装它。`--output` 是相对
-`--root` 的产物路径，会覆盖配置中的 `output.distPath`，默认值为 `artifact`。把它用作 npm 的 `prepack`
-脚本；`--ignore-scripts` 可防止递归，而且任何 npm 生命周期都绝不会执行宿主安装。
+`dependencies` 只留给打包后的文件以其他方式有据可证地需要的内容——预构建 payload 模块的导入、打包后
+文件中未被编译器解析为模块依赖的 `require`、`createRequire` 或 `import.meta.resolve` 调用、打包后声明文件
+的引用、消费者侧安装脚本，或打包后的文件运行的 `bin` 命令——因为只有框架没有编译的 JavaScript 才仍然
+可能导入它。`--output` 是相对
+`--root` 的产物路径，会覆盖配置中的 `output.distPath`，默认值为 `artifact`。生成的 npm 根目录会移除
+pack 与 publish 生命周期钩子以防止源项目递归，同时保留消费者安装脚本。
+对于 `preinstall`、`install` 与 `postinstall`，单条 `node <path>` 命令会从作者声明的 `dist/` bin
+或库路径重定位到生成根目录，且必须指向已暂存的输出。`AB4768` 会拒绝不受支持的 Node 命令形式以及
+生成根目录中不存在的源码文件；任意项目源码绝不会被复制。由已声明运行时依赖提供的命令保持不变。
+门禁成功后，用 `npm publish ./dist --ignore-scripts` 发布它校验过的准确根目录；任何 npm 生命周期都绝不会执行宿主安装。
+
+npm 根目录原样保留产物的 `agent-bundle.compile-evidence.json` 与生成插件字节。包专用的作者 bin
+与库另有持久化的 `agent-bundle.package-compile-evidence.json`，其中路径相对于 npm 根目录。
+`prepack` 会以 `AB6039` 对照包专用 `bundle` 清单检查该记录。
 
 这种内联是编译器的契约，而不是一次工具链升级就可能翻转的打包器默认值。生成的可执行文件——产物脚本、路由式
-CLI、MCP 入口、钩子包装层以及包构建的 JavaScript bundle——都以禁用 Rslib 的 `autoExternal`、`bundle: true` 与
+CLI、MCP 入口、钩子包装层以及包专用 JavaScript bundle——都以禁用 Rslib 的 `autoExternal`、`bundle: true` 与
 `splitChunks: false` 的配置编译，框架自身也不添加任何 `externals`；Rslib 的 `node` target 只把 Node
 内建模块（`node:fs`、`path`，以及 Yarn PnP 的 `pnpapi`）保持外部化。MCP App 视图则把每个脚本与样式都
 内联进同一个 HTML 文件，同一个审计插件也位于它们的 Rsbuild 编译器中：浏览器文档不允许任何 external，
@@ -232,36 +236,34 @@ CLI、MCP 入口、钩子包装层以及包构建的 JavaScript bundle——都�
 的 `tools.rsbuild.output.autoExternal`，以及静态可见、
 点名某个包的字符串或对象 `externals` 条目。RegExp、函数形式、相对路径与 mutator 添加的 externals 则由编译过程
 自身的证据判断：若 Rspack 在宿主包或 `dist` 的生成可执行文件中保持了内建模块、`pnpapi` 或已输出同级文件
-之外的任何 external，`AB6005` 就会失败。通过
+之外的任何 external，`AB6005` 就会失败。输出模块遍历仍留在这项编译期检查之后。通过
 [`tools` 逃生舱](../../reference/configuration.mdx#tools)保持外部化并不能绕过契约，也永远到不了 prepack
-的清单检查。
-
-`AB7014` 只接受三类消费者运行时证据：
-
-1. 通过 `definePrebuilt` 声明的预构建 payload 上的 `runtimeDependencies`；
-2. TypeScript 的 `preProcessFile` 从打包后声明文件读出的引用：import、export、import-equals
-   `require`、`import("…")` 类型、外部模块文件中的模块扩充，以及
-   `/// <reference types>`（连同其 `@types` 对应包）；没有 import 的文件中的环境式
-   `declare module` 不算证据，而 `#子路径` 会经由包的 `imports` 映射解析；
-3. 消费者侧 `preinstall`、`install` 或 `postinstall` 脚本（包括其委托的脚本）点名该依赖，或运行其
-   `bin` 命令。
-
-框架自身的运行时模块在运行时不加载任何包，因此不存在可作为第四类证据读取的框架进程依赖记录。
-
-仅仅内联进已编译 bundle 的包不算已使用。当这是唯一证据时，`AB7014` 会点名内联它的 `dist` bundle，
-例如：`The build inlined "a" into dist/bin/x.js; every consumer installs them for nothing.`
-请把仅构建期使用的包移到 `devDependencies`；编译后的 bundle 会内联其 import（`AB6005`）。仅当打包后的
-声明文件引用、消费者安装脚本点名或运行，或预构建 payload 在 `runtimeDependencies`
-（`definePrebuilt`）中声明某个包时，才把它保留为运行时依赖。
+的清单检查。因此，`dependencies` 条目只留给打包后的文件
+有据可证地需要从已编译 bundle 之外获取的内容——预构建的 `.js`/`.mjs`/`.cjs` payload 模块导入的包（预构建
+文件对 `AB6005` 不透明，而 `AB7014` 只扫描这些扩展名，因此无扩展名的预构建模块不算任何证据），打包后的
+文件通过未被编译器解析为模块依赖的 `require`、`createRequire` 或 `import.meta.resolve` 调用加载的包，
+消费者侧安装脚本运行的包，打包后的文件执行其 `bin` 的包，打包后的声明文件引用的包
+（`.d.ts` 输出不会被 `AB6005` 遍历），或预构建 payload 在 `runtimeDependencies` 中声明的包——`AB7014` 会报告不具备上述任何一种证据的已声明依赖，而 `AB7015` 会报告
+消费者的 npm 无法安装的依赖。
 
 | 代码 | 含义 |
 | --- | --- |
-| `AB7010` | dry-run 的 npm 清单遗漏了某个包输出、产物清单或文件、安装表面，或 README。请把 `dist` 与产物目录加入包的 `files` 允许列表。 |
+| `AB7010` | dry-run 的 npm 清单遗漏了某个包输出、产物清单或文件、安装表面，或 README。请打包生成的 `dist/` npm 根目录，且不要排除其中的文件。 |
 | `AB7011` | 磁盘上的某个产物文件与其清单 SHA-256 不再匹配。请重新构建，且不要修改生成的宿主包。 |
-| `AB7012` | 某个 `package.json` bin 指向了打包后的 `dist` 输出之外（包括 `src/`），或指名了一个被 npm 忽略的文件。请把它指向生成的 `dist/bin` 文件。 |
+| `AB7012` | 某个 `package.json` bin 指向了打包后的 npm 根目录之外（包括 `src/`），或指名了一个被 npm 忽略的文件。路由式 CLI 应指向清单声明的 `bin/<name>.mjs`；手写 bin 应指向生成的 `bin/*.js`。 |
 | `AB7013` | `package.json`、规范化后的插件元数据、某份宿主清单或产物 provenance 报告了不同的发布版本。请让每处发布标识一致。 |
-| `AB7014` | `dependencies`、`optionalDependencies` 或 `peerDependencies` 字段点名了消费者无需安装的包。必须有上列三类证据之一才算使用；已编译 bundle 内联该包不算。诊断会点名内联了这个未使用包的所有 `dist` bundle。对 `dependencies` 与 `optionalDependencies` 是 error，对 `peerDependencies` 是 warning；可选 peer 会跳过，`optionalDependencies` 中的同名项优先于 `dependencies`。 |
-| `AB7015` | `dependencies`、`optionalDependencies` 或 `peerDependencies` 中的某一项无法被消费者的 npm 经由注册表解析。包名与说明符一并交给 npm 自己的解析器 `npm-package-arg` 读取，结果分为三类：注册表类（版本、范围、dist-tag，或指向它们的 `npm:` 别名）、抓取类（git、GitHub 简写、远程 tarball 或路径来源——npm 12 默认拒绝 git 与远程抓取（`allow-git`、`allow-remote`），而路径在消费者磁盘上并不存在），以及不可解析类（npm 不接受的包名、它不支持的协议如 `link:`、`portal:` 或拼写错误、既非范围也非 URL 安全 dist-tag 的选择器、指向非注册表目标的别名，或非法 URL——清单本身就读不下去，因此即使出现在可选 peer 上也会被报告）。抓取类的 `optionalDependencies` 项只发出警告，因为 npm 可以在没有它时继续；但消费者安装脚本需要该包时会升级为错误：其 `bin` 命令位于命令位置、运行了 `node_modules/<name>/` 文件，或通过 `-r`/`--require`/`--import`/`--loader`（包括 `NODE_OPTIONS`）预加载了裸包。若 `dependencies` 或 `optionalDependencies` 也声明了同名 peer，则只按该具体条目判断。`workspace:`/`catalog:` 仅在打包生命周期会重写它们时允许；已打包的 `bundleDependencies` 与包内可安装的 `file:` 来源不会被报告。请依赖已发布的版本，或把该包打包进产物并声明在 `devDependencies` 下。 |
+| `AB7014` | `dependencies`、`optionalDependencies` 或 `peerDependencies` 字段里列出的包在整个包里无人使用——没有打包后的 JavaScript 导入、require 或解析它（已编译的 bundle 会内联自己的导入，被保持外部化的导入会被 `AB6005` 判为失败，因此 `import` 证据只来自预构建 payload 模块以及其他框架没有编译的脚本，而 `require`、`createRequire` 与 `import.meta.resolve` 调用则可来自任何打包后的文件），没有打包后的声明文件引用它，也没有 `imports` 映射或消费者侧安装脚本触及它，也没有任何预构建 payload 在 `runtimeDependencies` 中声明它（每个字段一条诊断；可选 peer 在此被跳过，但其说明符仍由 `AB7015` 检查，`optionalDependencies` 中的同名项优先于 `dependencies`）。每位消费者都会白白安装它们。请把仅构建期需要的包移到 `devDependencies`。对 `peerDependencies` 而言这是警告：无人导入的必需 peer 可能是有意的宿主兼容性约束；若希望 npm 不再安装它，请在 `peerDependenciesMeta` 中标记为可选。 |
+| `AB7015` | `dependencies`、`optionalDependencies` 或 `peerDependencies` 中的某一项无法被消费者的 npm 经由注册表解析。包名与说明符一并交给 npm 自己的解析器 `npm-package-arg` 读取，结果分为三类：注册表类（版本、范围、dist-tag，或指向它们的 `npm:` 别名）、抓取类（git、GitHub 简写、远程 tarball 或路径来源——npm 12 默认拒绝 git 与远程抓取（`allow-git`、`allow-remote`），而路径在消费者磁盘上并不存在），以及不可解析类（npm 不接受的包名、它不支持的协议如 `link:`、`portal:` 或拼写错误、既非范围也非 URL 安全 dist-tag 的选择器、指向非注册表目标的别名，或非法 URL——清单本身就读不下去，因此即使出现在可选 peer 上也会被报告）。`optionalDependencies` 中的抓取类项只发出警告而不会失败，因为 npm 会继续安装；不可解析的项，或消费者安装脚本需要的项（运行其命令——而非仅仅提及它——在内联的 `node -e` 程序中加载它——该程序像已打包文件一样被扫描 `require`、`createRequire` 与 `import()`——用 `node -r`/`--require`/`--import`/`--loader` 预加载它，或运行某个导入它的已打包文件，包括通过根 `main` 运行的 `node .`；`&&`、`;` 或换行之后的每条命令单独判读，shell 引号与反斜杠转义均已解析，`node` 的选项只属于 `node` 且到程序为止——`node install.js --require x` 不会预加载任何东西，而同一条 `node` 命令上的 `NODE_OPTIONS=--require=x` 赋值会；脚本中每个点名已打包 JavaScript 文件的词都视为被运行，这是有意为之，使本闸门未建模的运行器——`tsx`、`zx`、`bun`、`deno run`——所运行文件的依赖仍被追踪，代价是像 `echo install.js` 这样的词偶有误升级，诊断会点名该文件使之可见），仍是错误。若 `dependencies` 或 `optionalDependencies` 也声明了同名 peer，则只按该具体条目判断；npm 从不读取重复 peer 的选择器。`workspace:`/`catalog:` 同样会被报告，除非 `prepack` 生命周期运行在 pnpm、Yarn 或 Bun 之下——它们会在打包时重写这些协议；`npm publish` 不会重写，因此在 npm 下 `AB7015` 会触发；tarball 自身携带的项——`bundleDependencies` 中 npm 实际打包进去的项（peer 除外），以及已打包来源可供安装的包内 `file:` 路径（带有可解析 `package.json` 的目录，或格式正确且其 `package.json` 可解析的 tarball）——不会被报告。请依赖已发布的版本，或把该包打包进产物并声明在 `devDependencies` 下。 |
+
+对于规范的 `dist/` npm 根目录，`prepack` 校验的是
+`npm publish ./dist` 的准确输入；因此无论哪个包管理器启动该命令，运行时依赖中的
+`workspace:` 与 `catalog:` 说明符都会被报告。
+
+预构建 payload 的 `runtimeDependencies` 声明视为已使用，因为编译器从不打开 payload 文件。其余依赖证据直接读取自打包后的字节：npm 将发布的每个 `.js`/`.mjs`/`.cjs` 文件都会被词法分析出 `import`
+说明符，并扫描字面量 `require("…")`、`require.resolve("…")` 与 `import.meta.resolve("…")` 调用（`createRequire(…)` 的绑定视同 `require`，即使导入时重命名了该工厂，直接调用的 `Module.createRequire(…)("…")` 与 `require("node:module").createRequire(…)("…")` 亦然；`path.resolve("…")` 不计入）；每个打包后的 `.d.ts` 会被扫描其类型所引用的模块（`/// <reference types>` 指令同时计入该包及其
+`@types/*` 对应包）。说明符先解码字符串转义再归约为包名，忽略 Node 内建模块。打包代码作为可执行文件运行的依赖——字符串字面量正是其已安装清单所声明的某个 `bin` 命令，如 `spawnSync("tsc", ["--version"])`——视为已使用；`#子路径` 导入计入 `imports` 映射所指向的每个包；消费者侧 `preinstall`/`install`/`postinstall` 脚本（不含 `prepare`——npm 从不为已发布的 tarball 运行它）或其通过 `npm run`（取 `run` 之后的第一个位置参数；`run` 前后的选项，带值与否均被跳过，其后的词如 `npm run setup -- dormant` 中的 `dormant` 是该脚本的参数）或直接的 `npm test`/`start`/`stop`/`restart`（没有 `restart` 脚本时，`npm restart` 依次运行 `stop` 与 `start`）委托的任何脚本点名（或运行其 `bin` 命令；字符串形式的 `bin` 以已安装清单的名字命名——清单按 npm 的方式读取，重复键以最后一个为准——依赖未在本地安装或其清单不是 JSON 时以去掉作用域的包名代替）的依赖
+同样视为已使用。打包代码中的计算型 `import(表达式)` 或 `require(表达式)`（同样包括 `require.resolve`、`import.meta.resolve`、直接的 `createRequire(…)(…)` 或 `createRequire` 绑定）可能加载任何已声明的包，因此会整体撤回 `AB7014`；被 ESM 词法分析器拒绝的打包源码亦然，因为其中的 `import()` 调用无法被报告；把 `require` 当作值传递而非调用（`const load = require`、`fn(require)`）亦然，因为此后包可能以扫描看不到的名字被加载。注释中的提及只会保留某个依赖，绝不会报告它；`devDependencies` 永不检查，
+`npm:` 别名在其目标是注册表说明符时才视为注册表说明符。
 
 发布构建同样会拒绝**完全没有**发布版本的项目（`AB4013`），因此已发布的产物绝不会携带
 `0.0.0-dev.<short-revision>` 这个开发期回退值。声明的 `plugin.version` 与 `package.json` 不一致时会

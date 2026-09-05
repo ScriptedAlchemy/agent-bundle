@@ -835,12 +835,13 @@ exactly where `build` would refuse.
 
 ## Artifact-hosted routed CLI (`AB4765`–`AB4766`)
 
-A generated-mode `src/cli/**` surface compiles into the npm package bin
-(`dist/bin/<name>.js`) **and** into every host artifact whose adapter
+A generated-mode `src/cli/**` surface compiles once into every host artifact whose adapter
 publishes a supported `cli` capability, as `bin/<plugin-name>.mjs` (plus
 `bin/<plugin-name>-flight.mjs` when any command renders). Every built-in
 target hosts it; the two codes cover a target that does not and a host file
-that claims the same path. See “The routed CLI shell” in
+that claims the same path. The npm root copies the manifest-declared bin
+unchanged and points `package.json` at it rather than recompiling the graph.
+See “The routed CLI shell” in
 `docs/entry-conventions.md` for the layout and the sibling-path convention.
 
 | Code | Severity | Trigger |
@@ -1081,8 +1082,8 @@ Conventional `src/cli/**` routes compile into one collision-checked command
 graph (#102 stages 2-3): the file path below the CLI root is the command
 nesting (`src/cli/library/audit.ts` runs as `<bin> library audit`), the
 static `config` export supplies `description`, `aliases`, `positionals`, and
-the `exitCode` policy, and the graph feeds one framework-generated package
-executable named after the plugin (`dist/bin/<plugin-name>.js`), replacing
+the `exitCode` policy, and the graph feeds one framework-generated artifact
+executable named after the plugin (`bin/<plugin-name>.mjs`), replacing
 the `src/cli.ts` convention for that project. Every command route exports
 `inputSchema` and `resultSchema` zod schemas plus one async default function
 receiving `{ input, signal }`, and runs inside the typed Agent request
@@ -1511,8 +1512,7 @@ consumes it as the recovery.
 
 `agent-bundle uninstall <host> [--from <bundle-dir>] [--scope <scope>]
 [--mode local|marketplace] [--keep-data | --purge-data --confirm-purge]
-[--force] [--plan] [--json]`, the package-relative installer bin's
-`uninstall <host>`, and the emitted `install.mjs --uninstall` are the
+[--force] [--plan] [--json]` and the emitted `install.mjs --uninstall` are the
 receipt-owned reverse of `install` (#101; the maintainer's 2026-09-01 G4
 deferral of mutation was reversed on 2026-09-03 with the request to fix every
 open issue). Every mutation is opt-in and bounded by the receipt:
@@ -1891,7 +1891,7 @@ The `AB7000`–`AB7004` codes are shared by two families of emitters with
 distinct meanings. `agent-bundle install` and `agent-bundle uninstall`
 (`install/install.ts`, `install/uninstall.ts`, `install/cursor-marketplace.ts`)
 throw them as `DiagnosticError`s with `target` set to the host; the
-`install-entry` CLI wraps any non-diagnostic failure as `AB7004`. The
+installation command boundary wraps any non-diagnostic failure as `AB7004`. The
 development project service (`dev/project-service.ts`) and `inspectProject`
 emit them as **error** diagnostics on a failed preparation with `sourcePath`
 set to the config file and a fixed `recovery` ending in "then inspect again".
@@ -1904,7 +1904,7 @@ the uninstall refusals `AB7007`–`AB7009`, have their own sections above.
 | `AB7001` | error | Install/uninstall/doctor: the bundle identity or authoritative file inventory is unreadable from `agent-bundle.manifest.json` — no manifest directly under the `--from` directory (the composite root is every selected host's bundle root, so `<from>/<host>` is never probed and host documents are never read for identity); a manifest that is not the canonical `manifestVersion: 2` document (the message carries the parser's reason); a manifest with no projection whose `builtInHost` is the requested host (identity is the shipped adapter, never the selected name), whose projection has no `documents.plugin`, or whose `documents.plugin` / `documents.marketplace` pointer names a file the root does not contain; a `files[]` row whose path is missing or whose size, executable bit, or bytes differ from its `bytes`, `mode`, and `sha256`; a Cursor `application.name` that is not a safe local plugin name; a Claude or Codex projection with no `marketplace.name`. Project preparation: `Unable to validate project source.`, `Unable to normalize project source.`, `Unable to validate normalized project.`, or `Unable to create project context.` — the source validator, normalizer, adapter planner, or project-context factory threw; `inspectProject` adds `Unable to prepare inspection plans.` and, for `inspect --bundler`, `Unable to compose the bundler inspection: <reason>` — loading entries, generating the declaration tsconfig, or lowering and asserting the build's own Rslib/Rsbuild configuration failed. The reason carries the underlying source, project-tsconfig, toolchain, or invariant error, including a `tools` value the build would refuse. | Install: point `--from` at the unchanged composite root `agent-bundle build` wrote, rebuilt with the host among `targets`; if a listed file is missing or changed, rebuild or restore that file from the matching artifact. Preparation: fix normalized project configuration and source references, then inspect again. Bundler inspection: fix the source, project tsconfig, toolchain, or refused `tools` value named by the reason. |
 | `AB7002` | error | Install/uninstall: `<host> is not installed or is not available on PATH.`, `Cursor is not installed in "<root>".` / `Cursor home "<root>" is not a directory.`, or `git` is missing for `--mode marketplace`. Project preparation: `Unable to prepare project paths.` — the project root or a configured output root could not be resolved inside the project. | Install: install the host CLI the message names; for the `git` refusal, install git or use `--mode local`. Preparation: ensure the project root and configured output roots are readable and remain inside the project root, then inspect again. |
 | `AB7003` | error | Install/uninstall scope and mode refusals: `--mode` on a host other than `cursor`; `--scope` other than `user` for Codex or Cursor; `--mode marketplace` without `.cursor-plugin/plugin.json` or with bundle-internal Git metadata. Project preparation: `Unable to snapshot project source.` — the source snapshot could not be taken. | Install: use `--scope user`, drop `--mode` for non-Cursor hosts, or — as the message says — stage a Cursor Plugin bundle without `.git`, or use `--mode local`. Preparation: ensure project source files and ignore rules are readable and remain inside the project root, then inspect again. |
-| `AB7004` | error | Install/uninstall command and safety failures: `<host> plugin <operation> failed: <detail>` (a host CLI verb exited nonzero); `<host> plugin list --json` was unusable when `--replace` or an uninstall needed it; an installed copy could not be compared and `--replace` was not given; a rollback after a failed install also failed (the message lists the host verbs to run by hand); a Cursor marketplace `git` step failed or the committed tree differs from the staged bytes; any non-diagnostic error thrown by a Cursor installer or reaching the `install-entry` CLI. `inspectProject`: `Requested inspection target "<name>" is not selected for this project.` | Install: read the host's detail in the message, then rerun (with `--replace` where the message says so). Inspection: choose a target selected by the project configuration, then inspect again. |
+| `AB7004` | error | Install/uninstall command and safety failures: `<host> plugin <operation> failed: <detail>` (a host CLI verb exited nonzero); `<host> plugin list --json` was unusable when `--replace` or an uninstall needed it; an installed copy could not be compared and `--replace` was not given; a rollback after a failed install also failed (the message lists the host verbs to run by hand); a Cursor marketplace `git` step failed or the committed tree differs from the staged bytes; any non-diagnostic error thrown by a Cursor installer or reaching the installation command boundary. `inspectProject`: `Requested inspection target "<name>" is not selected for this project.` | Install: read the host's detail in the message, then rerun (with `--replace` where the message says so). Inspection: choose a target selected by the project configuration, then inspect again. |
 
 ## Development server (`AB80xx`)
 

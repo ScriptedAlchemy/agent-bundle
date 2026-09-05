@@ -1,23 +1,27 @@
 import { lstat } from 'node:fs/promises';
-import { join, relative, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import type { NormalizedPlugin } from '../core/types.ts';
 import type { Diagnostic, DiagnosticSeverity } from '../core/diagnostics.ts';
 import { sha256Hex } from '../core/digest.ts';
-import { isErrno } from '../core/errors.ts';
+import { errorMessage, isErrno } from '../core/errors.ts';
 import { deepFreeze } from '../core/freeze.ts';
 import { isRecord } from '../core/strict-json.ts';
 import { readFileBytes, readFileString, runWithPlatform } from '../effect/platform.ts';
+import {
+  compileEvidenceDiagnostics,
+  packageCompileEvidenceFileName,
+  parseCompileEvidenceRecord,
+} from './compile-evidence.ts';
 import { artifactManifestName } from './emit.ts';
 import { parseArtifactManifest } from './manifest.ts';
 import { declaredDependencies, type DeclaredDependency, type InstalledDependencyField } from '../core/package-dependencies.ts';
 import {
   classifyDependency,
-  installScriptDependencies,
+  importedPackageNames,
   isWorkspaceProtocol,
   packagedSourceInstallable,
   packagedSourcePath,
-  packedDeclarationReferences,
   type DependencyKind,
 } from './pack-dependencies.ts';
 import type { PackageBuildResult } from './package-build.ts';
@@ -82,9 +86,6 @@ export const packOutputFromJson = (stdout: string, packageName?: string): PackOu
   return Object.freeze({ filename: entry.filename, files: Object.freeze(files) });
 };
 
-const toPosixRelative = (root: string, path: string): string =>
-  relative(resolve(root), resolve(path)).replaceAll('\\', '/');
-
 /** Stays on `lstat`: a dangling symlink at a host manifest path still counts as present. */
 const exists = async (path: string): Promise<boolean> => {
   try {
@@ -123,14 +124,22 @@ const perField = (
   .map(([field, own]) => emit(field, own.toSorted((left, right) => left.name.localeCompare(right.name))));
 
 /**
- * `AB7014`/`AB7015`: an installed-dependency entry counts as used only when a
- * consumer must have it installed — a prebuilt payload declares it in
- * `runtimeDependencies`, a packed declaration file references it, or a
- * consumer-side install script names or runs it. The build inlines every
- * other import (`AB6005`), so a bundled package is still unused: every
- * consumer's `npm install` fetches it for nothing — and fails outright when
- * the specifier is one a consumer's npm cannot resolve (git, remote tarball,
- * path, or an unrewritten workspace protocol).
+ * `AB7014`/`AB7015`: the build inlines every dependency into `dist` and the
+ * host packs, so an installed-dependency entry no packed file references
+ * only makes every consumer's `npm install` fetch a build-time package — and
+ * fail outright when the specifier is one a consumer's npm cannot resolve
+ * (git, remote tarball, path, or an unrewritten workspace protocol). A
+ * compiled bundle cannot `import` a bare package at all: `AB6005` fails the
+ * build on any import specifier that is not a Node built-in, and `prepack`
+ * runs that build before this inventory, so the import evidence `AB7014`
+ * accepts comes only from modules the framework copied rather than compiled
+ * — prebuilt payload modules and other scripts the `files` allowlist packs —
+ * never from a `dist` bundle or a host-pack module. A `require`,
+ * `createRequire(…)(…)`, or `import.meta.resolve(…)` call is not an import
+ * and `AB6005` does not walk it, so that evidence is read from every packed
+ * file, compiled bundles included. A prebuilt payload's `runtimeDependencies`
+ * declaration is evidence of the same standing: the compiler never opens a
+ * payload file, so the author states what it loads.
  */
 const unresolvableMessage = (field: InstalledDependencyField, own: readonly DeclaredDependency[]): string =>
   `package.json ${field} names packages a consumer's npm cannot resolve through a registry (an invalid name or a non-registry specifier): ${own.map((dependency) =>
@@ -141,9 +150,8 @@ const unresolvableRecovery = 'Depend on a published registry version, or bundle 
   + 'which only pnpm, Yarn, or Bun rewrite while packing.';
 
 const dependencyDiagnostics = async (options: {
-  /** Package → the packed bundles the compiler inlined it into, each sorted. */
-  readonly bundledInto: ReadonlyMap<string, readonly string[]>;
   readonly declaredRuntimeDependencies: ReadonlySet<string>;
+  readonly dependencyRoot: string;
   readonly packageDocument: Readonly<Record<string, unknown>>;
   readonly packedPaths: readonly string[];
   readonly packerRewritesWorkspaceProtocols: boolean;
@@ -151,17 +159,16 @@ const dependencyDiagnostics = async (options: {
 }): Promise<readonly Diagnostic[]> => {
   const declared = declaredDependencies(options.packageDocument);
   if (declared.length === 0) return [];
-  const declarationReferences = await packedDeclarationReferences({
+  // `prepack` runs the build before this inventory, and `AB6005` there refuses every bare import in a compiled
+  // bundle, so any `import` evidence found here belongs to a packed module the framework did not compile; the
+  // `require`/`createRequire`/`import.meta.resolve` evidence is not an import and may come from any packed file.
+  const imported = await importedPackageNames({
+    declared: declared.filter((dependency) => dependency.installed).map((dependency) => dependency.name),
+    dependencyRoot: options.dependencyRoot,
     packageDocument: options.packageDocument,
     paths: options.packedPaths,
     projectRoot: options.projectRoot,
   });
-  const installScripts = await installScriptDependencies({
-    declared: declared.filter((dependency) => dependency.installed).map((dependency) => dependency.name),
-    packageDocument: options.packageDocument,
-    projectRoot: options.projectRoot,
-  });
-  const used = new Set([...options.declaredRuntimeDependencies, ...declarationReferences, ...installScripts.names]);
   // The tarball itself may carry the dependency: `bundleDependencies` exempts an entry only when npm actually
   // packed it (a name absent from node_modules at pack time is silently dropped, and the consumer neither
   // fetches nor finds it), and a `file:` path inside the package is installed from the consumer's own copy
@@ -188,31 +195,29 @@ const dependencyDiagnostics = async (options: {
   const unresolvable = declared.filter((dependency) => !embedded(dependency)
     && (dependency.installed ? kinds.get(dependency) !== 'registry' : kinds.get(dependency) === 'unparseable'));
   // An optional dependency npm parses but cannot fetch: the install continues without it — unless a consumer
-  // install script then runs it and fails on the missing package.
+  // install script then runs it, or loads it from a packed file it runs, and fails on the missing package.
   const survivable = (dependency: DeclaredDependency): boolean =>
     dependency.field === 'optionalDependencies'
     && kinds.get(dependency) === 'fetched'
-    && !installScripts.needed.has(dependency.name);
-  const unused = declared.filter((dependency) => dependency.installed && !used.has(dependency.name));
-  const inlinedSentence = (own: readonly DeclaredDependency[]): string | undefined => {
-    const inlined = own.flatMap((dependency) => {
-      const bundles = options.bundledInto.get(dependency.name);
-      return bundles === undefined ? [] : [`${JSON.stringify(dependency.name)} into ${bundles.join(' and ')}`];
-    });
-    return inlined.length === 0 ? undefined : `The build inlined ${inlined.join(', and ')}; every consumer installs them for nothing.`;
-  };
+    && !imported.installScripts.has(dependency.name);
+  // A computed import() may load any declared package; nothing can then be called unused.
+  const unused = imported.complete
+    ? declared.filter((dependency) => dependency.installed
+      && !imported.names.has(dependency.name)
+      && !options.declaredRuntimeDependencies.has(dependency.name))
+    : [];
   return [
     // A peer nothing imports may be a deliberate compatibility contract with the host that loads the package;
     // npm 7+ still installs it for every consumer, so it is worth a look, not a refusal.
     ...perField(unused, (field, own) => diagnostic(
       'AB7014',
-      `package.json ${field} names packages a consumer never needs installed: no packed declaration file references them, no consumer-side install script names or runs them, and no prebuilt payload declares them in runtimeDependencies: ${quoteAll(own.map((dependency) => dependency.name))}. `
-        + (inlinedSentence(own) ?? (field === 'peerDependencies'
+      `package.json ${field} names packages no packed JavaScript or declaration file references, runs, or install script needs, and no prebuilt payload declares: ${quoteAll(own.map((dependency) => dependency.name))}. `
+        + (field === 'peerDependencies'
           ? 'If they only constrain the host version, that is a compatibility contract; npm 7+ still installs them for every consumer.'
-          : 'Nothing packed reaches them at runtime; every consumer installs them for nothing.')),
+          : 'Every consumer installs them for nothing; the emitted outputs already inline what they use.'),
       field === 'peerDependencies'
         ? 'Keep a deliberate compatibility peer, mark it optional in peerDependenciesMeta so npm stops installing it, or move a build-only package to devDependencies.'
-        : 'Move build-only packages to devDependencies; compiled bundles inline their imports (AB6005). Keep a runtime dependency only for what a packed declaration file references, a consumer install script names or runs, or a prebuilt payload declares in runtimeDependencies (definePrebuilt).',
+        : 'Move build-only packages to devDependencies; compiled bundles inline their imports (AB6005), so keep a runtime dependency only for what a prebuilt payload or other uncompiled packed module imports, a packed file requires or resolves (createRequire, import.meta.resolve), a packed declaration file references, a #subpath import reaches through the imports map, an install script or packed JavaScript runs, or a prebuilt payload names in runtimeDependencies (definePrebuilt); a computed import() or require() in packed code withholds this check.',
       field === 'peerDependencies' ? 'warning' : 'error',
     )),
     // npm skips an optional dependency it cannot fetch, so the install survives — but only once the specifier parsed
@@ -233,7 +238,6 @@ const dependencyDiagnostics = async (options: {
 };
 
 export const packInventoryDiagnostics = async (options: {
-  readonly artifactRoot: string;
   readonly model: NormalizedPlugin;
   readonly packageBuild: PackageBuildResult;
   readonly packOutput: PackOutput;
@@ -241,21 +245,13 @@ export const packInventoryDiagnostics = async (options: {
   readonly packerRewritesWorkspaceProtocols: boolean;
   readonly projectRoot: string;
 }): Promise<readonly Diagnostic[]> => {
-  const projectRoot = resolve(options.projectRoot);
-  const artifactRoot = resolve(options.artifactRoot);
-  const artifactPrefix = toPosixRelative(projectRoot, artifactRoot);
-  const packagePrefix = toPosixRelative(projectRoot, options.packageBuild.outputRoot);
-  const manifestPath = join(artifactRoot, artifactManifestName);
+  const packageRoot = resolve(options.packageBuild.outputRoot);
+  const manifestPath = join(packageRoot, artifactManifestName);
   const manifest = parseArtifactManifest(await runWithPlatform(readFileString(manifestPath)));
-  const packageDocument = await jsonRecord(join(projectRoot, 'package.json'));
+  const packageDocument = await jsonRecord(join(packageRoot, 'package.json'));
   const packed = new Set(options.packOutput.files.map((file) => file.path.replace(/^\.\//u, '')));
   const expected = new Set<string>([
-    ...options.packageBuild.files.map((file) => `${packagePrefix}/${file.path}`),
-    `${artifactPrefix}/${artifactManifestName}`,
-    // Every emitted file is manifested, the install surface included: the
-    // artifact validator (`AB6023`/`AB6024`) already judged its presence by
-    // adapter identity, so the pack expects exactly what the manifest lists.
-    ...manifest.files.map((file) => `${artifactPrefix}/${file.path}`),
+    ...options.packageBuild.files.map((file) => file.path),
     'README.md',
   ]);
 
@@ -265,34 +261,53 @@ export const packInventoryDiagnostics = async (options: {
     diagnostics.push(diagnostic(
       'AB7010',
       `npm pack omits expected files: ${quoteAll(missing)}.`,
-      'Add the exact paths (including dist and the artifact directory) to the package.json "files" allowlist.',
+      'Pack the generated npm root without excluding its files.',
     ));
   }
 
   const stale: string[] = [];
   for (const file of manifest.files) {
-    const bytes = await runWithPlatform(readFileBytes(join(artifactRoot, file.path)));
-    if (sha256Hex(bytes) !== file.sha256) stale.push(`${artifactPrefix}/${file.path}`);
+    const bytes = await runWithPlatform(readFileBytes(join(packageRoot, file.path)));
+    if (sha256Hex(bytes) !== file.sha256) stale.push(file.path);
   }
   if (stale.length > 0) {
     diagnostics.push(diagnostic(
       'AB7011',
-      `Artifact files no longer match their manifest hashes: ${quoteAll(stale.sort())}.`,
-      'Run agent-bundle prepack again without modifying generated artifacts.',
+      `Packed npm-root files no longer match their manifest hashes: ${quoteAll(stale.sort())}.`,
+      'Run agent-bundle prepack again without modifying the generated npm root.',
+    ));
+  }
+
+  try {
+    const evidence = parseCompileEvidenceRecord(
+      await runWithPlatform(readFileString(join(packageRoot, packageCompileEvidenceFileName))),
+    );
+    const artifactPaths = new Set(manifest.files.map((file) => file.path));
+    diagnostics.push(...compileEvidenceDiagnostics(
+      evidence,
+      new Map(options.packageBuild.files
+        .filter((file) => file.kind === 'bundle' && !artifactPaths.has(file.path))
+        .map((file) => [file.path, { kind: file.kind, sha256: file.sha256 }])),
+    ));
+  } catch (error) {
+    diagnostics.push(diagnostic(
+      'AB6039',
+      `Package compile evidence cannot be read: ${errorMessage(error)}.`,
+      'Rebuild the generated npm root and do not modify its compile evidence sidecar.',
     ));
   }
 
   const invalidBins = binEntries(packageDocument.bin)
     .filter(([, target]) => {
       const normalized = target.replace(/^\.\//u, '');
-      return !normalized.startsWith(`${packagePrefix}/`) || normalized.startsWith('src/') || !packed.has(normalized);
+      return normalized.startsWith('src/') || !packed.has(normalized);
     });
   if (invalidBins.length > 0) {
     diagnostics.push(diagnostic(
       'AB7012',
-      `package.json bins must name packed dist outputs: ${invalidBins.map(([name, target]) =>
+      `package.json bins must name files in the packed npm root: ${invalidBins.map(([name, target]) =>
         `${JSON.stringify(name)} -> ${JSON.stringify(target)}`).join(', ')}.`,
-      'Point every package.json bin value at its generated file under dist/bin and include that file in "files".',
+      'Point routed CLIs at their manifest-declared bin/<name>.mjs and authored bins at generated bin/*.js files.',
     ));
   }
 
@@ -307,7 +322,7 @@ export const packInventoryDiagnostics = async (options: {
   for (const projection of manifest.projections) {
     const path = projection.documents.plugin;
     if (path === undefined) continue;
-    const absolute = join(artifactRoot, path);
+    const absolute = join(packageRoot, path);
     if (await exists(absolute)) {
       versions.push([path, (await jsonRecord(absolute)).version]);
     }
@@ -325,17 +340,13 @@ export const packInventoryDiagnostics = async (options: {
     ));
   }
 
-  const bundledInto = new Map([...Map.groupBy(
-    options.packageBuild.evidence.assets.flatMap((asset) => asset.packages.map((name) => ({ name, path: asset.path }))),
-    (entry) => entry.name,
-  )].map(([name, entries]) => [name, entries.map((entry) => entry.path).sort((left, right) => left.localeCompare(right))]));
   diagnostics.push(...await dependencyDiagnostics({
-    bundledInto,
     declaredRuntimeDependencies: new Set((options.model.payloads ?? []).flatMap((payload) => payload.runtimeDependencies)),
+    dependencyRoot: resolve(options.projectRoot),
     packageDocument,
     packedPaths: [...packed],
     packerRewritesWorkspaceProtocols: options.packerRewritesWorkspaceProtocols,
-    projectRoot,
+    projectRoot: packageRoot,
   }));
 
   return deepFreeze(diagnostics.sort((left, right) => left.code.localeCompare(right.code)));

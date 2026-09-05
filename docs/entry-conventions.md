@@ -13,25 +13,20 @@ rendering.
 
 `agent-bundle build` always emits the composite plugin root. When the project
 declares `bin`/`lib` (or provides them by convention), the CLI build also
-produces the node-consumable package build under `dist/` — the outputs
-`package.json` `bin` and `exports` point at:
+produces the node-consumable npm root under `dist/`. It copies the validated
+composite artifact there and adds `package.json`, standard package docs, and
+package-only entries:
 
 | Config | Output | Notes |
 | --- | --- | --- |
-| `bin: { '<name>': './src/cli.ts' }` | `dist/bin/<name>.js` | Self-executing ESM bundle, `#!/usr/bin/env node` shebang, executable bit. |
+| `bin: { '<name>': './src/cli.ts' }` | `dist/bin/<name>.js` | Authored self-executing ESM bundle, `#!/usr/bin/env node` shebang, executable bit. |
+| generated `src/cli/**` routes | `dist/bin/<plugin-name>.mjs` | The manifest-declared artifact executable, copied byte-for-byte; `package.json` `bin` points directly at it. |
 | `lib: { entry: './src/index.ts', dts: true }` | `dist/<stem>.js` + `dist/**/*.d.ts` | Single-entry ESM profile, node target, es2022 syntax. |
 
-- When package outputs are built inside the project and the plugin root
-  carries at least one of the `claude`, `codex`, or `cursor` projections, the
-  framework also emits one self-contained
-  package-relative installer. It is `dist/bin/<plugin-name>.js` when that name
-  is free, otherwise `dist/bin/<plugin-name>-install.js`; if both are occupied,
-  a numeric suffix (`-install-2`, `-install-3`, …) guarantees a free name.
-  Declare the matching `package.json` `bin` value. Its grammar is
-  `install <host> [--scope <scope>] [--json]`; help lists only built hosts.
-  The baked URL resolves the shipped plugin root from `import.meta.url`,
-  never the caller's working directory, and delegates to the same
-  `installBundle` implementation as `agent-bundle install`.
+- The npm root is not a parallel plugin compilation and contains no nested
+  `artifact/` directory. Generated routed CLI commands, including `web`, run
+  from the one artifact executable; no package-relative installer wrapper is
+  generated.
 - `agent-bundle prepack [--root <root>] [--output <artifact>] [--json]` runs
   the release build and `npm pack --dry-run --json --ignore-scripts`, then
   gates the exact package/artifact inventory, manifest hashes, package bin
@@ -728,7 +723,7 @@ Per surface, the value the generated request scope mounts:
 
 | Surface | `hostSurface` | `stdout` / `stderr` | Source |
 | --- | --- | --- | --- |
-| Routed CLI executable (`dist/bin/<name>.js`, plugin-root `bin/<name>.mjs`), plain or rendered command, projected MCP command | `cli` | Probed from the executable's own process; a rendered command's worker thread receives the executable's probe, never its own pipes. Machine output owns fd 1, so `stdout` describes where the rendered document lands and `stderr` the channel a route may write to itself. | `native` |
+| Routed CLI executable (npm-root and plugin-root `bin/<name>.mjs`), plain or rendered command, projected MCP command | `cli` | Probed from the executable's own process; a rendered command's worker thread receives the executable's probe, never its own pipes. Machine output owns fd 1, so `stdout` describes where the rendered document lands and `stderr` the channel a route may write to itself. | `native` |
 | Rendered script (`scripts/<name>.mjs` from `src/scripts/<name>.tsx`) | `script` | Probed, as above. | `native` |
 | Generated MCP server (any transport) | `mcp` | `none` on both, `color: 'none'`, `sharesTarget: false` — stdout is the protocol wire and stderr the host's log. Never probed, whatever the descriptors are. | `derived` |
 | Event route (shared runtime or standalone hook process) | `hook` | `none` on both — stdout is the host's hook envelope. Never probed. | `derived` |
@@ -797,7 +792,8 @@ through Node's top-level failure path (stack to stderr, exit code 1).
 (#511), probed once before `main` runs by the dependency-free
 `agent-bundle/terminal-capability` module the envelope aliases in — plain
 scripts and bins load no Effect runtime and no `@agent-bundle/runtime` for it.
-Its `hostSurface` is `cli` for a package bin (`dist/bin/<name>.js`) and
+Its `hostSurface` is `cli` for a package bin (`dist/bin/<name>.js` for an authored bin,
+`dist/bin/<name>.mjs` for the manifest-selected routed CLI) and
 `script` for an artifact script (`scripts/<name>.mjs`); a module shipped on
 both surfaces sees the surface it was launched from. A `main` declared with
 one parameter keeps working — the second argument is simply unread.
@@ -835,8 +831,8 @@ The compiler statically projects `inputSchema` onto argv (the bounded grammar
 and every policy rule are documented in
 [Diagnostics](diagnostics.md#route-graph-state-layout-and-provider-conventions-ab4800ab4842-ab4940ab4942)), generates nested
 help (`--help` at every level, `--version` at the root), and emits
-`dist/bin/<plugin-name>.js` with the shebang and executable bit through the
-same Rslib synthesis as every other bin. At run time the shell resolves the
+`bin/<plugin-name>.mjs` in the composite artifact with the shebang and
+executable bit. At run time the shell resolves the
 command path, parses and coerces argv, validates through the module's own
 zod schemas, executes the default function inside the typed Agent request
 context (`invocation.kind: 'cli'`), writes one canonical JSON line to
@@ -884,7 +880,7 @@ is 2 in every mode.
 A `.tsx` command route swaps the default function for an async default
 Server Component with the same `{ input, signal }` props and renders through
 the runtime dispatcher's public `stream()` against a sibling
-`dist/bin/<plugin-name>-flight.mjs` react-server worker (one warm worker per
+`bin/<plugin-name>-flight.mjs` react-server worker (one warm worker per
 invocation; raw Flight bytes never reach the terminal). The four output
 modes: an interactive TTY updates progress in place and prints the final
 document as Markdown; piped output emits exactly one final Markdown document
@@ -896,11 +892,10 @@ machine output owns stdout. Rendered scripts
 (`src/scripts/<name>.tsx`) share the same shell and output contract with
 `{ argv, signal }` component props and status-derived exit codes.
 
-#### The routed CLI inside the plugin root
+#### The routed CLI inside every distribution
 
-The package bin only reaches users who install the npm package. Hooks,
-skills, and script routes ship with the **plugin root**, so the build also
-emits the same compiled command graph into that root whenever a selected host's
+Hooks, skills, script routes, and npm consumers all use the **plugin root**,
+so the build emits one compiled command graph there whenever a selected host's
 adapter publishes the `cli` capability — all built-in hosts do (`claude`,
 `codex`, `cursor`, `portable`) — because the artifact root is
 already a plain directory Node executes `mcp/` and `scripts/` files from.
@@ -916,17 +911,16 @@ artifact/
   mcp/…
 ```
 
-The artifact bin is a self-contained ESM module with no shebang or
-executable bit — invoke it as `node <plugin-root>/bin/<plugin-name>.mjs
-<args>`, exactly like `scripts/*.mjs`. Help, argv parsing, output modes,
-exit codes, and signals are identical to the package bin. One deliberate
-difference: workspace-durable state without a host-supplied
+The artifact bin is a self-contained executable ESM module with a Node
+shebang. The npm root copies it unchanged and points `package.json` `bin`
+directly at it, so help, argv parsing, output modes, exit codes, signals, and
+the full command set are byte-for-byte the same. Both forms resolve plugin
+code from the root above `bin/`. Workspace-durable state without a host-supplied
 `AGENT_BUNDLE_STATE_ROOT` uses `stateAnchor: 'user-data'`, deriving
 `~/.agent-bundle/state/<plugin>-<digest>` (or the `XDG_STATE_HOME` equivalent)
 from the artifact code root. The generated MCP worker beside it makes the
 same derivation, so a co-installed CLI and server observe one store without
-writing beneath a read-only artifact. The npm package bin keeps
-`stateAnchor: 'root'` and its `cwd` fallback, `$PWD/.agent-bundle/state`.
+writing beneath a read-only artifact.
 
 Reaching the bin from the other surfaces:
 
@@ -957,7 +951,8 @@ capability without that layout, or with a `cliBin` layout naming another
 directory or omitting `.mjs`, is rejected at registration. A target without the
 capability omits the bin and reports `AB4765`; a host-emitted file at the
 same path (a Claude `claude.bin` directory shipping `<plugin-name>.mjs`) is
-`AB4766`. The package build's `dist/bin/<plugin-name>.js` is unchanged.
+`AB4766`. The npm root copies this manifest-declared executable; it does not
+compile another routed CLI.
 
 #### Project generated MCP tools into the CLI (power tier)
 
@@ -1261,8 +1256,8 @@ export default defineConfig({
   native command as `node "<root>/<payload path>" <args…>` — one config
   declaration replaces a hand-rolled `hooks/hooks.json` per host. Prebuilt
   hook `args` (for example `--host claude`) accept shell-safe strings only.
-- **Prebuilt means opaque.** Payload files are exempt from compiler dependency
-  evidence, the emitted-module walk, and strict generated-JSON validation but
+- **Prebuilt means opaque.** Payload files are exempt from generated-output
+  content validation (bundled-ESM import graphs, strict generated JSON) but
   remain hash-locked to the manifest. Declaration provenance is recorded as
   `kind: 'prebuilt'`. Hooks with prebuilt handlers are packaged like native
   hook documents: they do not compile wrappers and do not appear in the
@@ -1315,41 +1310,25 @@ module specifiers are protected the same way: a hatch that externalizes
 `agent-bundle/mcp-entry` or a generated module specifier (`agent-bundle/meta`,
 or a registry specifier such as `agent-bundle/mcp-apps`) fails the build with
 a hard diagnostic — at config inspection for statically visible `externals`,
-from the build-time guard that wraps function-form `externals`, and from the
-compilation's externals evidence (`AB6005`) for anything that still reaches
-the module graph; the emitted bytes are no longer scanned for reserved text.
-The hatch customizes *how code compiles*, never *what the artifact promises*.
-The framework's own profile keeps the same promise: `output.autoExternal` is
-`false`, `bundle: true`, `splitChunks: false`, and no `externals` are added.
-The compiler service lowers every host-pack surface and package-build entry.
-The framework-owned `ArtifactDependencyAuditPlugin` taps `thisCompilation`
-and records every module Rspack kept external, and the service reads that
-evidence before trusting an asset. `AB6005` rejects anything Rspack kept
-external except a Node built-in, `pnpapi`, or an emitted sibling of the same
-artifact, whatever spelling the bundle uses. `agent-bundle build` writes that
-evidence as `agent-bundle.compile-evidence.json` at the artifact root (listed
-in `agent-bundle.manifest.json` as a `generated` file); `agent-bundle validate
+and from the emitted bundle's residual imports for function-form `externals`.
+The hatch customizes *how code compiles*, never *what the artifact promises*. The framework's own
+profile keeps the same promise: `output.autoExternal` is `false`, `bundle:
+true`, `splitChunks: false`, and no `externals` are added. The compiler service
+lowers every host-pack surface and package-build entry. The framework-owned
+`ArtifactDependencyAuditPlugin` taps `thisCompilation` and records every module
+Rspack kept external, and the service reads that evidence before trusting an
+asset. `AB6005` rejects anything Rspack kept external except a Node built-in,
+`pnpapi`, or an emitted sibling of the same artifact, whatever spelling the
+bundle uses. `agent-bundle build` writes that evidence as
+`agent-bundle.compile-evidence.json` at the artifact root (listed in
+`agent-bundle.manifest.json` as a `generated` file); `agent-bundle validate
 --artifact` re-checks a listed record against the file table without reading
-JavaScript (`AB6039`). An expression request
-(`import(expr)`, `require(expr)`) is outside the compiler's view: Rslib's
-profile leaves it verbatim, and the compile evidence record lists those forms
-as unobserved. The emitted-module walk
-(`src/build/validate-artifact-modules.ts`) remains for exactly what the
-compiler cannot see: it fails an expression `import()` in any emitted module
-(`AB6005 has a non-literal dynamic import`), parses in full and resolves the
-imports of JavaScript the framework did not compile (`install.mjs`, copied
-scripts), and does the same for every module of a build whose `tools` hatch
-may have rewritten the emitted bytes (`coverage.rewritable`). A compiled
-module the record covers is lexed, not parsed, and each literal import it
-still carries is held to the record: a Node built-in or one of the file's
-recorded externals passes; any other request is one the build was told to
-ignore (`rspackIgnore`/`webpackIgnore` — Rspack leaves it verbatim with no
-module, external, or warning) and fails `AB6005 loads "<request>", which the
-compiler neither bundled nor recorded as an external`. A matching digest
-proves the bytes are the compiler's, not that every import in them was
-resolved. Content the compiler did not compile is opaque and must declare
-what it needs. Run-time
-path references are kept the same way: a `new URL(…, import.meta.url)` or
+JavaScript (`AB6039`). The emitted-module walk remains behind that check as
+defense in depth. A `require`,
+`createRequire(…)(…)`, or `import.meta.resolve(…)` call the compiler does not
+resolve is not a module dependency; content the compiler did not compile is
+opaque and must declare what it needs. Run-time path references are kept the
+same way: a `new URL(…, import.meta.url)` or
 `new Worker(new URL(…))` in consumer or generated code names a file beside the
 artifact, so the invariant layer turns the bundler's URL and worker asset
 processing off after the hatch and the expression reaches the artifact
@@ -1534,8 +1513,9 @@ treats a missing file as the normal case and an unreadable one as skipped.
 The dotenv grammar has no `${VAR}` interpolation. Under `mcp run` the plugin
 root is the project root, so the shell's pass is a no-op; `--env-file` and
 `--no-env` are handed down as `AGENT_BUNDLE_ENV_FILE` so the shell follows the
-operator's choice. The npm package bin reads no pack file. Doctor reports the
-presence and variable count of each file (`AB7331`).
+operator's choice. Because the npm bin is this same artifact executable, it
+reads the same pack files. Doctor reports the presence and variable count of
+each file (`AB7331`).
 
 Two details keep the installed order equal to the `mcp run` table above:
 
@@ -1641,12 +1621,11 @@ resolve '../events'`). The route graph reports such an import first, as
 `agent-bundle`, `agent-bundle/api`, `agent-bundle/config`,
 `agent-bundle/eval`, `agent-bundle/rstest`, `agent-bundle/test`, and
 `agent-bundle/test/browser`, matched exactly; `import type` and type-only
-usage are not reported), while an external bare import fails `AB6005` from
-the compiler's externals evidence and a non-literal `import(spec)`, which the
-compiler leaves verbatim, still fails artifact validation from the
-emitted-module walk (`AB6005 has a non-literal dynamic import`). From an
-installed artifact the supported command is `<plugin> web`
-on `bin/<plugin>.mjs` (emitted when `web` is configured, even with no
+usage are not reported), while an external bare import (`AB6005 uses
+unsupported specifier`) or a non-literal `import(spec)` (`AB6005 has a
+non-literal dynamic import`) still fails artifact validation. From an
+installed artifact the supported command is `<plugin> web` on
+`bin/<plugin>.mjs` (emitted when `web` is configured, even with no
 `src/cli/**` commands). It reads the manifest `web` section beside `bin/`,
 launches the plugin's own packed MCP server, and prints the same ready line
 `MCP App <server>/<app> at <url> (tool <tool>; Ctrl-C stops the server)` —

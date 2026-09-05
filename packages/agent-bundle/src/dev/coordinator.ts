@@ -1,5 +1,5 @@
 import { Cause, Deferred, Effect, Exit, Result, Semaphore } from 'effect';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 
 import { freezeDiagnostics, hasErrors } from '../core/diagnostics.ts';
 import { runPromise, runSync } from '../effect/boundary.ts';
@@ -552,7 +552,8 @@ export class DevCoordinator {
     // after the artifact epoch committed: its failure never invalidates the
     // epoch and surfaces as warning diagnostics on the succeeded attempt.
     const packageDiagnostics = result.outcome === 'succeeded'
-      ? (yield* liftPromise(() => this.#packageBuildService.build(prepared, invalidation))).diagnostics
+      ? (yield* liftPromise(() =>
+        this.#packageBuildService.build(prepared, invalidation, dirname(result.epoch.manifestPath)))).diagnostics
       : Object.freeze([]);
     const diagnostics = freezeDiagnostics([...lintDiagnostics, ...result.diagnostics, ...packageDiagnostics]);
     if (result.outcome === 'succeeded') {
