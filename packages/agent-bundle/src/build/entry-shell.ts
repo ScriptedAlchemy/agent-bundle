@@ -365,15 +365,16 @@ const renderedSessionSource = (workerFile: string): readonly string[] => [
 export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions): string => {
   const commandRoutes = options.routes.filter((route) =>
     options.commands.some((command) => command.routeId === route.id));
-  const projectedCommands = options.commands.filter((command) => command.projection !== undefined);
-  const projectionSources = projectedCommands.map((command) => {
+  const projectedCommands = options.commands.flatMap((command) =>
+    command.projection === undefined ? [] : [{ command, projection: command.projection }]);
+  const projectionSources = projectedCommands.map(({ command, projection }) => {
     const source = options.projectionSources?.[command.routeId];
     if (source === undefined) {
-      throw new Error(`Generated CLI projection ${JSON.stringify(command.projection!.module)} for ${command.routeId} requires an absolute source path.`);
+      throw new Error(`Generated CLI projection ${JSON.stringify(projection.module)} for ${command.routeId} requires an absolute source path.`);
     }
     return source;
   });
-  const projectionIndexByRoute = new Map(projectedCommands.map((command, index) => [command.routeId, index]));
+  const projectionIndexByRoute = new Map(projectedCommands.map(({ command }, index) => [command.routeId, index]));
   const rendered = options.commands.some((command) => command.rendered);
   if (rendered && options.workerFile === undefined) {
     throw new Error('A generated CLI with rendered commands requires a worker file.');

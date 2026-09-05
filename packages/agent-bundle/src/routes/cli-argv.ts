@@ -145,12 +145,13 @@ const optionNameOf = (key: string): string => key
 
 const kebabCase = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
 
-interface CliPropertyProjection {
-  readonly diagnostic?: Diagnostic;
-  readonly option?: CompiledCliOption;
-  /** True when a projection override made a canonical-required key optional on argv. */
-  readonly relaxed?: boolean;
-}
+type CliPropertyProjection =
+  | { readonly diagnostic: Diagnostic }
+  | {
+    readonly option: CompiledCliOption;
+    /** True when a projection override made a canonical-required key optional on argv. */
+    readonly relaxed?: true;
+  };
 
 /** The resolved policy one projection runs under: the label, the reserved set, and the override reporter. */
 interface ResolvedCliOptionPolicy {
@@ -177,7 +178,6 @@ const resolvePolicy = (policy: CliOptionPolicy, relativePath: string, sourcePath
 const describeKind = (base: ScalarBase): string =>
   base.kind === 'enum' ? `one of ${(base.choices ?? []).map((choice) => JSON.stringify(choice)).join(', ')}` : base.kind;
 
-/** True when `value` is one value of the property's scalar base. */
 const matchesKind = (base: ScalarBase, value: unknown): boolean => {
   switch (base.kind) {
     case 'boolean':
@@ -305,13 +305,11 @@ export interface ProjectedCliOptions {
   readonly relaxed?: readonly string[];
 }
 
-/** Who claimed one `--spelling`: the key, and whether the projection's override spelled it. */
 interface SpellingClaim {
   readonly key: string;
   readonly overridden: boolean;
 }
 
-/** The one argv projection policy: per-property rules, then option-name collisions, then deterministic order. */
 const projectOptions = (
   entries: readonly ParsedInputSchemaEntry[],
   policy: ResolvedCliOptionPolicy,
@@ -327,44 +325,48 @@ const projectOptions = (
       continue;
     }
     const projected = cliOptionFor(entry.property, policy);
-    if (projected.diagnostic !== undefined) {
+    if ('diagnostic' in projected) {
       diagnostics.push(projected.diagnostic);
       continue;
     }
     if (projected.relaxed === true) relaxed.push(entry.property.key);
-    const option = projected.option!;
+    const option = projected.option;
     const override = policy.overrides[option.key] ?? {};
     if (override.default !== undefined) defaults[option.key] = override.default;
-    const spellings: readonly SpellingClaim[] = [
-      { key: option.key, overridden: override.name !== undefined },
-      ...(option.aliases ?? []).map(() => ({ key: option.key, overridden: true })),
-    ];
-    const collision = [option.option, ...(option.aliases ?? [])]
-      .map((spelling, index) => ({ claimed: seenSpellings.get(spelling), claim: spellings[index]!, spelling }))
-      .find((candidate) => candidate.claimed !== undefined);
+    const spellings = [option.option, ...(option.aliases ?? [])];
+    const collision = spellings.flatMap((spelling, index) => {
+      const claimed = seenSpellings.get(spelling);
+      return claimed === undefined
+        ? []
+        : [{
+          claim: { key: option.key, overridden: index > 0 || override.name !== undefined },
+          claimed,
+          spelling,
+        }];
+    })[0];
     if (collision !== undefined) {
       const { claim, claimed, spelling } = collision;
-      diagnostics.push(claim.overridden || claimed!.overridden
+      diagnostics.push(claim.overridden || claimed.overridden
         ? policy.overrideError(
-          `flags spell --${spelling} for both ${JSON.stringify(claimed!.key)} and ${JSON.stringify(claim.key)}; two options collide on one spelling`,
+          `flags spell --${spelling} for both ${JSON.stringify(claimed.key)} and ${JSON.stringify(claim.key)}; two options collide on one spelling`,
         )
         : argvError(
-          `${policy.label} properties ${JSON.stringify(claimed!.key)} and ${JSON.stringify(claim.key)} both project onto --${spelling}.`,
+          `${policy.label} properties ${JSON.stringify(claimed.key)} and ${JSON.stringify(claim.key)} both project onto --${spelling}.`,
           policy.sourcePath,
         ));
       continue;
     }
-    for (const [index, spelling] of [option.option, ...(option.aliases ?? [])].entries()) {
-      seenSpellings.set(spelling, spellings[index]!);
+    for (const [index, spelling] of spellings.entries()) {
+      seenSpellings.set(spelling, { key: option.key, overridden: index > 0 || override.name !== undefined });
     }
     options.push(option);
   }
   if (diagnostics.length > 0) return { diagnostics };
-  const defaultKeys = Object.keys(defaults).sort((left, right) => left.localeCompare(right));
+  const sortedDefaults = Object.fromEntries(
+    Object.entries(defaults).sort(([left], [right]) => left.localeCompare(right)),
+  );
   return {
-    ...(defaultKeys.length === 0
-      ? {}
-      : { defaults: Object.fromEntries(defaultKeys.map((key) => [key, defaults[key]!])) }),
+    ...(Object.keys(sortedDefaults).length === 0 ? {} : { defaults: sortedDefaults }),
     diagnostics: [],
     options: [...options].sort((left, right) => left.option.localeCompare(right.option)),
     ...(relaxed.length === 0 ? {} : { relaxed: [...relaxed].sort((left, right) => left.localeCompare(right)) }),
@@ -376,7 +378,6 @@ const scalarBaseOfSchema = (schema: RouteInputArrayItemSchema): ScalarBase =>
     ? { choices: schema.enum, kind: 'enum' }
     : { kind: schema.type };
 
-/** One canonical contract property in the shape the module parse produces, so both take the same policy. */
 const staticPropertyOf = (
   key: string,
   schema: RouteInputPropertySchema,

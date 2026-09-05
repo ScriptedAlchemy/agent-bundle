@@ -252,7 +252,7 @@ export const invokeCli = async (
         }
         const parsed = parseCliCommandInput(
           command,
-          module,
+          module.inputSchema,
           await loadCliProjectionModule(manifest, command),
           input,
         );

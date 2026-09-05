@@ -273,7 +273,7 @@ export const cliInputIssueLine = (issue: CliInputIssue): string =>
  */
 export const cliInputError = (
   command: CompiledCliCommand,
-  input: Readonly<Record<string, unknown>>,
+  input: unknown,
   error: unknown,
 ): CliInputError => {
   const schemaIssues = schemaIssuesOf(error);

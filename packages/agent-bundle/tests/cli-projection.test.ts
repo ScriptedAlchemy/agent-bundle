@@ -233,8 +233,6 @@ describe('MCP tool CLI surface projections', () => {
       ],
       path: ['req'],
       projection: {
-        // Only the projection's own default is the shell's to apply; the
-        // schema-defaulted `verbose` shows its default in help and is absent.
         defaults: { limit: 20 },
         mapInput: true,
         module: projectionPath,
@@ -265,7 +263,6 @@ describe('MCP tool CLI surface projections', () => {
       module: projectionPath,
     });
     expect(Object.keys(command.projection!.defaults!)).toEqual(['mode', 'tags']);
-    // Help shows the projection's default over the schema's.
     expect(command.options.find((option) => option.key === 'mode')).toMatchObject({ defaultValue: 'full', required: false });
     expect(command.options.find((option) => option.key === 'retries')).not.toHaveProperty('defaultValue');
 
@@ -419,7 +416,6 @@ describe('MCP tool CLI surface projections', () => {
   describe('mapInput must be a synchronous, non-generator function with a runtime binding', () => {
     const subject = `CLI projection ${projectionPath} for tool:demo/submit: mapInput`;
 
-    /** One rejected form: exactly one AB4841 naming the form, and no command compiled. */
     const expectRejectedMapInput = async (mapInput: string, fragments: readonly string[]): Promise<void> => {
       const { graph, root } = await compileProjection(cliModule('{}', mapInput));
       expectOnlyDiagnostic(graph, 'AB4841', root, [subject, ...fragments]);
@@ -586,7 +582,6 @@ describe('MCP tool CLI surface projections', () => {
       expect(result.graph.cli?.commands).toEqual([]);
     }
 
-    // Without confirmation the key is an ordinary option.
     const unconfirmed = await compileProjection(cliModule('{ confirm: false }'), { tool: confirming });
     expect(unconfirmed.graph.diagnostics).toEqual([]);
     expect(unconfirmed.graph.cli?.commands?.[0]?.options.map((option) => option.option)).toEqual(['lane-key', 'yes']);
