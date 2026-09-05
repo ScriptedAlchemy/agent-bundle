@@ -1061,9 +1061,12 @@ export const createGeneratedRouteMcpServer = async (
     ? undefined
     : await startEventRuntime(options.events, dispatcher, options.host, afterRender, options.lineage, options.pluginRoot);
   // The tool-call lineage fallback is a host projection, never the artifact's
-  // identity (#592): an artifact serving exactly one host may assume that host
-  // when the MCP client does not name itself; one serving several has no
-  // single host to assume and relies on the client's own name alone.
+  // identity (#592). `allowedTargets` is the selected hosts whose MCP documents
+  // list this server (`server.targets ∩ selected`), so it is also the set of
+  // hosts that can have spawned this process: when exactly one host can, an
+  // MCP client that does not name itself is assumed to be that host; when
+  // several can — however many the root serves overall — there is no single
+  // host to assume and the client's own name alone decides.
   const [onlyHost, ...otherHosts] = options.events?.allowedTargets ?? [];
   const lineageHost = onlyHost !== undefined && otherHosts.length === 0 ? lineageHostFor(onlyHost) : undefined;
   registerGeneratedRoutes(server, options.routes, dispatcher, options.artifactEpoch, {

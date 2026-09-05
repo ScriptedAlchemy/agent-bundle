@@ -160,10 +160,13 @@ describe('generated server lineage correlation', () => {
     }
   });
 
-  // The fallback host for a client that does not name itself is a projection
-  // the artifact serves, never the artifact's own identity (#592): a root built
-  // for exactly one host may assume it; a composite root serving several hosts
-  // has no single host to assume and leaves the axis to the client's name.
+  // The fallback host for a client that does not name itself is a projection,
+  // never the artifact's own identity (#592). The binding's `allowedTargets`
+  // is the selected hosts whose MCP documents list this server — the hosts
+  // that can have spawned it — so a server one host lists (a Claude-only
+  // server in a Claude+Codex root included) assumes that host, and a server
+  // several hosts list has no single host to assume and leaves the axis to
+  // the client's name.
   const lineageFallbackFor = async (allowedTargets: readonly string[]): Promise<readonly (string | undefined)[]> => {
     const queries: LineageToolCallQuery[] = [];
     const lineage: AgentLineageRegistry = {
@@ -223,11 +226,11 @@ describe('generated server lineage correlation', () => {
     }
   };
 
-  it('assumes the one host a single-projection artifact serves when the client does not name itself', async () => {
+  it('assumes the one host whose MCP document lists the server when the client does not name itself', async () => {
     await expect(lineageFallbackFor(['claude'])).resolves.toEqual(['claude']);
   });
 
-  it('assumes no host for a composite root serving several projections', async () => {
+  it('assumes no host when several selected hosts list the server', async () => {
     await expect(lineageFallbackFor(['claude', 'codex'])).resolves.toEqual([undefined]);
   });
 });
