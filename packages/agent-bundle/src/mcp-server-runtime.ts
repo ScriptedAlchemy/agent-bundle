@@ -641,9 +641,9 @@ export type GeneratedRouteExecutionHost = WarmFlightHost;
  */
 export interface GeneratedEventRuntimeBinding {
   /**
-   * The hosts whose hook wrappers may deliver events here — the selected
-   * projections the server targets. The invoking host arrives with each
-   * request; the artifact itself has no host identity (#592).
+   * The hosts whose hook wrappers may deliver events here — every selected
+   * host the composite root's shared runtime serves (#555). The invoking host
+   * arrives with each request; the artifact itself has no host identity (#592).
    */
   readonly allowedTargets: readonly string[];
   readonly artifactEpoch: string;
@@ -651,6 +651,8 @@ export interface GeneratedEventRuntimeBinding {
   readonly createEventRuntimeServer: typeof createEventRuntimeServer;
   /** Identifies this artifact's socket (epoch and root), so two installs never share a runtime. */
   readonly endpointId: string;
+  /** The selected hosts whose MCP documents list this server — the hosts that can have launched it. */
+  readonly hosts: readonly string[];
   readonly projectEventDocument: typeof projectEventDocument;
 }
 
@@ -1061,13 +1063,13 @@ export const createGeneratedRouteMcpServer = async (
     ? undefined
     : await startEventRuntime(options.events, dispatcher, options.host, afterRender, options.lineage, options.pluginRoot);
   // The tool-call lineage fallback is a host projection, never the artifact's
-  // identity (#592). `allowedTargets` is the selected hosts whose MCP documents
-  // list this server (`server.targets ∩ selected`), so it is also the set of
-  // hosts that can have spawned this process: when exactly one host can, an
-  // MCP client that does not name itself is assumed to be that host; when
-  // several can — however many the root serves overall — there is no single
-  // host to assume and the client's own name alone decides.
-  const [onlyHost, ...otherHosts] = options.events?.allowedTargets ?? [];
+  // identity (#592). `hosts` is the selected hosts whose MCP documents list
+  // this server (`server.targets ∩ selected`) — the hosts that can have
+  // spawned this process, distinct from `allowedTargets`, the hosts whose hook
+  // wrappers the runtime it hosts accepts. When exactly one host can, an MCP
+  // client that does not name itself is assumed to be that host; when several
+  // can there is no single host to assume and the client's own name decides.
+  const [onlyHost, ...otherHosts] = options.events?.hosts ?? [];
   const lineageHost = onlyHost !== undefined && otherHosts.length === 0 ? lineageHostFor(onlyHost) : undefined;
   registerGeneratedRoutes(server, options.routes, dispatcher, options.artifactEpoch, {
     ...(afterRender === undefined ? {} : { afterRender }),

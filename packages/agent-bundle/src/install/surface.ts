@@ -1395,7 +1395,10 @@ const needsCursorInstaller = (selected: readonly string[]): boolean =>
 /**
  * The install-surface files a composite root with these selected projections
  * must contain: `INSTALL.md` whenever a built-in host is selected, plus
- * `install.mjs` when Cursor or the portable format is among them.
+ * `install.mjs` when Cursor or the portable format is among them. Callers with
+ * a registry pass `TargetRegistry.builtInHosts(selected)` so an advanced
+ * registry's own adapter named like a built-in host earns no surface (#592);
+ * the pack inventory, which has only the manifest's names, judges by name.
  */
 export const installSurfaceRequirements = (
   selected: readonly string[],
@@ -1408,23 +1411,25 @@ export const installSurfaceRequirements = (
 
 /**
  * The install surface of one composite root, emitted once over every selected
- * projection rather than by each host planner (#555). The distribution-form
- * aware rewrite of these documents is a later step; this composes the existing
- * per-host sections.
+ * built-in host rather than by each host planner (#555); `hosts` is the
+ * selection resolved by adapter identity (`TargetRegistry.builtInHosts`), so a
+ * custom adapter sharing a built-in host's name ships no instructions it never
+ * asked for (#592). The distribution-form aware rewrite of these documents is a
+ * later step; this composes the existing per-host sections.
  */
 export const installSurfaceEntries = (
   model: NormalizedPlugin,
-  selected: readonly string[],
+  hosts: readonly BuiltInHost[],
 ): readonly TargetArtifactWrite[] => {
-  if (selected.filter(isBuiltInHost).length === 0) return Object.freeze([]);
+  if (hosts.length === 0) return Object.freeze([]);
   return Object.freeze([
     Object.freeze({
-      content: installMarkdown(model, selected),
+      content: installMarkdown(model, hosts),
       kind: 'write' as const,
       relativePath: 'INSTALL.md',
       sourceInputs: sourceInputs(model.metadata.provenance.sourcePath),
     }),
-    ...(needsCursorInstaller(selected)
+    ...(needsCursorInstaller(hosts)
       ? [Object.freeze({
           content: cursorInstallerSource(model),
           kind: 'write' as const,

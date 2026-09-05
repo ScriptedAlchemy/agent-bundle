@@ -557,6 +557,7 @@ export const openInMemoryMcpServer = async <
               role: () => 'owner',
             })) as never,
             endpointId: `${artifactEpoch}:in-memory`,
+            hosts: [options.lineageHost],
             projectEventDocument: (() => undefined) as never,
           },
         }),

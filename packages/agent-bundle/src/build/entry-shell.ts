@@ -741,6 +741,13 @@ export interface GeneratedRouteMcpEntryOptions {
    * runtime identity (#592). Absent means no host may deliver events.
    */
   readonly allowedTargets?: readonly string[];
+  /**
+   * The selected hosts whose MCP documents list this server — the hosts that
+   * can launch it. When exactly one can, the runtime assumes that host for
+   * tool-call lineage when the MCP client does not name itself; otherwise the
+   * client's own name alone decides (#592). Absent means none.
+   */
+  readonly hosts?: readonly string[];
   readonly workerFile: string;
 }
 
@@ -1100,6 +1107,7 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
   const artifactEpoch = generatedRouteArtifactEpoch(options.plugin);
   const hasEvents = (options.eventRoutes?.length ?? 0) > 0;
   const allowedEventTargets = [...(options.allowedTargets ?? [])].sort((left, right) => left.localeCompare(right));
+  const eventHosts = [...(options.hosts ?? [])].sort((left, right) => left.localeCompare(right));
   const wiresInbox = wiresInboxRoute(options);
   const wiresResourceUpdated = wiresResourceUpdatedRoute(options);
   // The lineage registry journals durably only where the project already
@@ -1165,12 +1173,14 @@ export const generatedRouteMcpEntrySource = (options: GeneratedRouteMcpEntryOpti
           // projection selection — the hook wrapper derives the same id (#592).
           `const EVENT_ARTIFACT_EPOCH = ${JSON.stringify(options.artifactEpoch ?? 'unknown')};`,
           `const EVENT_ALLOWED_TARGETS = Object.freeze(${JSON.stringify(allowedEventTargets)});`,
+          `const EVENT_HOSTS = Object.freeze(${JSON.stringify(eventHosts)});`,
           'const events = Object.freeze({',
           '  allowedTargets: EVENT_ALLOWED_TARGETS,',
           '  artifactEpoch: EVENT_ARTIFACT_EPOCH,',
           '  createCanonicalEventProps,',
           '  createEventRuntimeServer,',
           '  endpointId: `${EVENT_ARTIFACT_EPOCH}:${dirname(dirname(resolve(process.argv[1])))}`,',
+          '  hosts: EVENT_HOSTS,',
           '  projectEventDocument,',
           '});',
           '',
