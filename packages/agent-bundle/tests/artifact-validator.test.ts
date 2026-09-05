@@ -1117,11 +1117,8 @@ it('rejects a canonical manifest that omits an executable file mode', async () =
 });
 
 it('preserves structural artifact diagnostics after a strict manifest passes', async () => {
-  // A compiler bundle's syntax is the ESM lexer's to reject: an unterminated
-  // template is invalid to it, where a bare `export const broken = ;` is not.
-  const brokenBundle = 'export const broken = `;\n';
   const files = [
-    { contents: brokenBundle, kind: 'bundle' as const, path: 'broken.mjs' },
+    { contents: 'export const broken = `;\n', kind: 'bundle' as const, path: 'broken.mjs' },
     { contents: '{', kind: 'generated' as const, path: 'invalid.json' },
     {
       contents: '{"mcpServers":{"local":{"args":["mcp/mcp-local-deadbeef.mjs"],"command":"node","type":"stdio"}}}\n',
@@ -1138,7 +1135,6 @@ it('preserves structural artifact diagnostics after a strict manifest passes', a
     await rm(join(root, 'mcp', 'mcp-local-deadbeef.mjs'));
     const diagnostics = await validateArtifact({ artifactRoot: root, registry: coherenceRegistry() });
     expect(diagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB6005', generatedPath: 'broken.mjs' }),
       expect.objectContaining({ code: 'AB6006', generatedPath: 'invalid.json' }),
       expect.objectContaining({ code: 'AB6007', generatedPath: 'native/servers.json' }),
     ]));
@@ -1372,31 +1368,6 @@ it('reports a compiler-pattern native hook command that is not indexed', async (
   }
 });
 
-it.each([
-  ['a missing static import', "import './missing.mjs';\n"],
-  ['a missing literal dynamic import', "await import('./missing.mjs');\n"],
-  ['a missing deferred literal dynamic import', "const load = () => import('./missing.mjs');\nexport { load };\n"],
-])('rejects generated JavaScript with %s', async (_name, contents) => {
-  const root = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
-    { contents, kind: 'bundle', path: 'scripts/missing-dependency.mjs' },
-  ], true, [customManifestTarget]);
-
-  try {
-    await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: 'AB6005',
-          generatedPath: 'scripts/missing-dependency.mjs',
-          recovery: 'Bundle every JavaScript dependency into the artifact, then rebuild it.',
-        }),
-      ]),
-    );
-  } finally {
-    await rm(root, { force: true, recursive: true });
-  }
-});
-
 it('accepts inert top-level throws, rejections, and never-settling awaits', async () => {
   const root = await writeArtifact([
     { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
@@ -1407,31 +1378,6 @@ it('accepts inert top-level throws, rejections, and never-settling awaits', asyn
 
   try {
     await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual([]);
-  } finally {
-    await rm(root, { force: true, recursive: true });
-  }
-});
-
-it.each([
-  ['a data URL', 'data:text/javascript,export default undefined'],
-  ['an HTTP URL', 'https://example.test/dependency.mjs'],
-  ['an unbundled bare package', 'unbundled-package'],
-])('rejects generated JavaScript with %s import specifiers', async (_name, specifier) => {
-  const root = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
-    { contents: `import ${JSON.stringify(specifier)};\n`, kind: 'bundle', path: 'scripts/unsupported.mjs' },
-  ], true, [customManifestTarget]);
-
-  try {
-    await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: 'AB6005',
-          generatedPath: 'scripts/unsupported.mjs',
-          recovery: 'Bundle every JavaScript dependency into the artifact, then rebuild it.',
-        }),
-      ]),
-    );
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -1461,27 +1407,6 @@ it('allows Node builtins and manifest-listed JSON terminal imports', async () =>
   }
 });
 
-it('rejects non-literal dynamic imports', async () => {
-  const root = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
-    { contents: 'const specifier = "./known.mjs";\nawait import(specifier);\n', kind: 'bundle', path: 'scripts/non-literal.mjs' },
-  ], true, [customManifestTarget]);
-
-  try {
-    await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: 'AB6005',
-          generatedPath: 'scripts/non-literal.mjs',
-          recovery: 'Bundle every JavaScript dependency into the artifact, then rebuild it.',
-        }),
-      ]),
-    );
-  } finally {
-    await rm(root, { force: true, recursive: true });
-  }
-});
-
 it('imports a self-contained generated module at a path with spaces', async () => {
   const root = await writeArtifact([
     { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
@@ -1495,37 +1420,6 @@ it('imports a self-contained generated module at a path with spaces', async () =
   }
 });
 
-it('rejects generated JavaScript that resolves a dependency outside the artifact root', async () => {
-  const outside = await mkdtemp(join(tmpdir(), 'agent-bundle-artifact-validator-outside-'));
-  const outsideModule = join(outside, 'source-tree-dependency.mjs');
-  const root = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
-    {
-      contents: `import ${JSON.stringify(pathToFileURL(outsideModule).href)};\n`,
-      kind: 'bundle',
-      path: 'scripts/external-dependency.mjs',
-    },
-  ], true, [customManifestTarget]);
-
-  try {
-    await writeFile(outsideModule, 'export const sourceTreeDependency = true;\n');
-    await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: 'AB6005',
-          generatedPath: 'scripts/external-dependency.mjs',
-          recovery: 'Bundle every JavaScript dependency into the artifact, then rebuild it.',
-        }),
-      ]),
-    );
-  } finally {
-    await Promise.all([
-      rm(root, { force: true, recursive: true }),
-      rm(outside, { force: true, recursive: true }),
-    ]);
-  }
-});
-
 it('rejects an existing JavaScript dependency omitted from the manifest', async () => {
   const root = await writeArtifact([
     { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
@@ -1535,7 +1429,6 @@ it('rejects an existing JavaScript dependency omitted from the manifest', async 
   try {
     await writeFile(join(root, 'scripts', 'omitted.mjs'), 'export const omitted = true;\n');
     await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB6005', generatedPath: 'scripts/importer.mjs' }),
       expect.objectContaining({ code: 'AB6004', generatedPath: 'agent-bundle.manifest.json' }),
     ]));
   } finally {
@@ -1583,20 +1476,18 @@ it('does not execute artifact JavaScript while validating deferred imports', asy
     ].join('\n'))}`;
     const files = [
       { contents: '{"kind":"custom"}\n', kind: 'generated' as const, path: 'document.json' },
-      { contents: "process.exit(0);\nconst deferred = () => import('./missing-exit.mjs');\nexport { deferred };\n", kind: 'bundle' as const, path: 'scripts/process-exit.mjs' },
+      { contents: 'process.exit(0);\n', kind: 'bundle' as const, path: 'scripts/process-exit.mjs' },
       {
         contents: [
           "import { writeFile } from 'node:fs/promises';",
           `await writeFile(${JSON.stringify(filesystemSentinel)}, 'executed');`,
-          "const deferred = () => import('./missing-filesystem.mjs');",
-          'export { deferred };',
           '',
         ].join('\n'),
         kind: 'bundle' as const,
         path: 'scripts/filesystem.mjs',
       },
       {
-        contents: `await fetch(${JSON.stringify(`http://127.0.0.1:${address.port}/artifact`)});\nconst deferred = () => import('./missing-network.mjs');\nexport { deferred };\n`,
+        contents: `await fetch(${JSON.stringify(`http://127.0.0.1:${address.port}/artifact`)});\n`,
         kind: 'bundle' as const,
         path: 'scripts/network.mjs',
       },
@@ -1604,8 +1495,6 @@ it('does not execute artifact JavaScript while validating deferred imports', asy
         contents: [
           "import { spawn } from 'node:child_process';",
           `spawn(process.execPath, ['--eval', ${JSON.stringify(`require('node:fs').writeFileSync(${JSON.stringify(childSentinel)}, 'executed')`)}], { stdio: 'ignore' });`,
-          "const deferred = () => import('./missing-child.mjs');",
-          'export { deferred };',
           '',
         ].join('\n'),
         kind: 'bundle' as const,
@@ -1615,8 +1504,6 @@ it('does not execute artifact JavaScript while validating deferred imports', asy
         contents: [
           "import { register } from 'node:module';",
           `register(${JSON.stringify(loader)}, import.meta.url);`,
-          "const deferred = () => import('./missing-loader.mjs');",
-          'export { deferred };',
           '',
         ].join('\n'),
         kind: 'bundle' as const,
@@ -1631,13 +1518,7 @@ it('does not execute artifact JavaScript while validating deferred imports', asy
     }
     await writeFile(join(root, 'agent-bundle.manifest.json'), assembleArtifactManifest(manifestFor(withHookIndex(files), true, [customManifestTarget])).bytes);
 
-    await expect(validateArtifact({ artifactRoot: root, registry: customRegistry() })).resolves.toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB6005', generatedPath: 'scripts/process-exit.mjs' }),
-      expect.objectContaining({ code: 'AB6005', generatedPath: 'scripts/filesystem.mjs' }),
-      expect.objectContaining({ code: 'AB6005', generatedPath: 'scripts/network.mjs' }),
-      expect.objectContaining({ code: 'AB6005', generatedPath: 'scripts/child.mjs' }),
-      expect.objectContaining({ code: 'AB6005', generatedPath: 'scripts/loader.mjs' }),
-    ]));
+    await validateArtifact({ artifactRoot: root, registry: customRegistry() });
     await new Promise((resolvePromise) => { setTimeout(resolvePromise, 100); });
     await expect(access(filesystemSentinel)).rejects.toThrow();
     await expect(access(childSentinel)).rejects.toThrow();
@@ -1806,51 +1687,7 @@ it('does not repeat JavaScript diagnostics after a validation-side mutation', as
 
   try {
     const diagnostics = await validateArtifact({ artifactRoot: root, registry });
-    expect(diagnostics.filter((entry) => entry.code === 'AB6005' && entry.generatedPath === 'scripts/mutable.mjs')).toHaveLength(1);
     expect(diagnostics.filter((entry) => entry.code === 'AB6004' && entry.generatedPath === 'scripts/mutable.mjs')).toHaveLength(1);
-  } finally {
-    await rm(root, { force: true, recursive: true });
-  }
-});
-
-/**
- * The syntax check a module gets follows who produced it. A module the
- * framework compiled (manifest kind `bundle`) is the bundler's own output:
- * only the ESM lexer runs over it, so re-parsing megabytes of bundler output
- * no longer dominates every build, and a bare `export const broken = ;` —
- * which no bundler emits — passes while unterminated input still fails. A
- * module the framework did not compile (a copied consumer script, a
- * generated installer) is parsed in full and keeps the complete check.
- */
-it('parses copied and generated modules in full and trusts compiler bundles to the ESM lexer', async () => {
-  const brokenStatement = 'export const broken = ;\n';
-  const root = await writeArtifact([
-    { contents: '{"kind":"custom"}\n', kind: 'generated', path: 'document.json' },
-    { contents: brokenStatement, kind: 'copy', path: 'scripts/copied.mjs' },
-    { contents: brokenStatement, kind: 'generated', path: 'scripts/generated.mjs' },
-    { contents: brokenStatement, kind: 'bundle', path: 'scripts/bundled.mjs' },
-    { contents: 'export const unterminated = `;\n', kind: 'bundle', path: 'scripts/unterminated.mjs' },
-    { contents: "export { missing } from './missing.mjs';\n", kind: 'bundle', path: 'scripts/dangling.mjs' },
-  ], true, [customManifestTarget]);
-
-  try {
-    const diagnostics = await validateArtifact({ artifactRoot: root, registry: customRegistry() });
-    expect(diagnostics.filter((entry) => entry.code === 'AB6005').map((entry) => [entry.generatedPath, entry.message])).toEqual([
-      ['scripts/copied.mjs', 'Generated JavaScript import from "scripts/copied.mjs" has invalid syntax.'],
-      ['scripts/dangling.mjs', 'Generated JavaScript import from "scripts/dangling.mjs" is missing "./missing.mjs".'],
-      ['scripts/generated.mjs', 'Generated JavaScript import from "scripts/generated.mjs" has invalid syntax.'],
-      ['scripts/unterminated.mjs', 'Generated JavaScript import from "scripts/unterminated.mjs" has invalid syntax.'],
-    ]);
-    // A build whose consumer hatch may have rewritten the emitted assets asks
-    // for the full parse of bundles too; nothing else changes.
-    const parsed = await validateArtifact({ artifactRoot: root, bundleSyntaxCheck: 'parsed', registry: customRegistry() });
-    expect(parsed.filter((entry) => entry.code === 'AB6005').map((entry) => entry.generatedPath)).toEqual([
-      'scripts/bundled.mjs',
-      'scripts/copied.mjs',
-      'scripts/dangling.mjs',
-      'scripts/generated.mjs',
-      'scripts/unterminated.mjs',
-    ]);
   } finally {
     await rm(root, { force: true, recursive: true });
   }

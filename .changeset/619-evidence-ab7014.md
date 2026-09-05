@@ -1,0 +1,5 @@
+---
+"agent-bundle": minor
+---
+
+Judge `AB7014` from consumer-runtime evidence only: a packed declaration file reference (read with TypeScript's `preProcessFile`), a consumer-side install script that names or runs the package, or a prebuilt payload's `runtimeDependencies` (`definePrebuilt`). A package the build inlined is not used; the diagnostic names the `dist` bundles that inlined it. `prepack` no longer reads packed JavaScript — `require`/`createRequire`/`import.meta.resolve` literals, `bin`-command strings, `#subpath` imports, inline `node -e` programs, and the files install scripts run are no longer evidence, and a computed load no longer withholds the check. `AB7015` escalates a fetched optional dependency only for a command-position `bin` command, a `node_modules/<name>/` file, or a bare preload. `AB6005` is judged from compile evidence alone: `build`, `validate --artifact`, and the package build drop the emitted-JavaScript walk and its `Generated JavaScript import from …` findings, and `ValidateArtifactOptions.bundleSyntaxCheck` is removed. (#634)

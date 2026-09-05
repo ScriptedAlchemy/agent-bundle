@@ -2,8 +2,8 @@ import { expect, it } from '@rstest/core';
 
 import {
   classifyDependency,
+  declarationPackageReferences,
   isWorkspaceProtocol,
-  declarationSpecifiers,
   packageNameOf,
   rewritesWorkspaceProtocols,
   shellWords,
@@ -155,23 +155,40 @@ it.each([
   expect(packageNameOf(specifier)).toBe(name);
 });
 
+const importsMap = { imports: { '#driver': { default: 'driver-package', node: 'driver-package/node' }, '#own': './own.js' } };
+
 it.each([
   ['import { a } from "effect";', ['effect']],
   ["import type { ZodType } from 'zod';", ['zod']],
-  ['export * from "@scope/name/deep";', ['@scope/name/deep']],
+  ['export * from "@scope/name/deep";', ['@scope/name']],
+  ['export type { B } from "types-only";', ['types-only']],
   ['import "side-effect";', ['side-effect']],
   ['type T = import("types-only").T;', ['types-only']],
   ['import x = require("legacy");', ['legacy']],
   ["declare const y: typeof import ( 'spaced' );", ['spaced']],
   // A type directive resolves through the package itself or its DefinitelyTyped package.
   ['/// <reference types="node" />', ['node', '@types/node']],
-  ['declare module "driver-package" { interface Options { verbose?: boolean } }', ['driver-package']],
-  ["declare module 'augmented' {}", ['augmented']],
   ["/// <reference types = '@scope/name' />", ['@scope/name', '@types/scope__name']],
+  // In an external-module file, `declare module` augments a package the consumer must have.
+  ['import "x";\ndeclare module "augmented" { interface Options { verbose?: boolean } }', ['x', 'augmented']],
+  ['export declare const x: number;\ndeclare module "augmented" {}', ['augmented']],
+  // With no import or export, `declare module` is an ambient declaration: the file itself provides the module.
+  ['declare module "ambient-only" { interface Options { verbose?: boolean } }', []],
+  ['declare module "outer" { import y from "inner"; }', ['inner']],
+  // A `#` specifier reaches whatever the manifest's imports map gives it; a relative target is the package's own file.
+  ['import { driver } from "#driver";', ['driver-package', 'driver-package']],
+  ['import { own } from "#own";', []],
+  ['import { unmapped } from "#unmapped";', []],
+  // Relative, built-in, path, and lib references name no package; a `require()` call is JavaScript, not a declaration import.
+  ['import "./relative.js"; import "../up.js"; import "node:fs"; import "fs"; import "/abs.js";', []],
+  ['/// <reference path="./other.d.ts" />\n/// <reference lib="es2020" />', []],
+  ['declare const x: typeof require("js-only");', []],
+  // String escapes are decoded before the name is read.
+  ['import x from "\\x68ex-pkg";', ['hex-pkg']],
   ['import a from "one"; export { b } from "two"; import c = require("three");', ['one', 'two', 'three']],
   ['declare const n: string;', []],
-])('declarationSpecifiers(%j) is %j', (source, specifiers) => {
-  expect(declarationSpecifiers(source)).toEqual(specifiers);
+])('declarationPackageReferences(%j) is %j', (source, names) => {
+  expect(declarationPackageReferences(source, importsMap)).toEqual(names);
 });
 
 it.each([

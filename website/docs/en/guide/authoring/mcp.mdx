@@ -1024,8 +1024,9 @@ Invalid `web` is `AB4341` (error); the message shapes are in the
 
 When `web` is configured, the composite artifact's `agent-bundle.manifest.json` gains a `web`
 section and the build emits `bin/<plugin>.mjs` even without `src/cli/**` commands. The host page
-lives inside that bin — there is no `web/` directory in the artifact. `AB6005` walks the bin
-like every other executable.
+lives inside that bin — there is no `web/` directory in the artifact. Its compilation contributes
+the same external-module evidence as every other executable, so `AB6005` rejects any external
+other than a Node built-in, `pnpapi`, or an emitted sibling.
 
 From the built artifact or the installed plugin root:
 

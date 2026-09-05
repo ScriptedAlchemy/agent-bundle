@@ -30,7 +30,6 @@ import {
   type ManifestFile,
 } from './emit.ts';
 import { parseArtifactManifest, type ArtifactManifest } from './manifest.ts';
-import type { ModuleSyntaxCheck } from './module-imports.ts';
 import type {
   ValidateArtifactOptions,
   ValidatedArtifactMcpServerEvidence,
@@ -38,7 +37,6 @@ import type {
   ValidatedArtifactSnapshot,
   ValidateArtifactSnapshotResult,
 } from './artifact-validation-types.ts';
-import { validateJavaScriptModules } from './validate-artifact-modules.ts';
 import { validateHookCoherence } from './validate-artifact-hooks.ts';
 import { manifestLogoPathDiagnostics } from './validate-artifact-logo.ts';
 import { validateMcpCoherence } from './validate-artifact-mcp.ts';
@@ -582,7 +580,6 @@ const validateArtifactStructure = (options: {
 
 const validateGeneratedFiles = async (options: {
   readonly artifactRoot: string;
-  readonly bundleSyntaxCheck?: ModuleSyntaxCheck;
   readonly files: readonly ArtifactFile[];
   readonly manifestFiles?: readonly ManifestFile[];
   readonly prebuiltPaths?: ReadonlySet<string>;
@@ -590,18 +587,16 @@ const validateGeneratedFiles = async (options: {
   const diagnostics: Diagnostic[] = [];
   // Prebuilt payload files are opaque consumer build outputs: they stay
   // hash-locked to the manifest, but their contents are never held to the
-  // generated-output contracts (strict JSON, bundled ESM import graphs).
+  // generated-output strict JSON contract.
   const prebuiltPaths = options.prebuiltPaths ?? new Set(
     (options.manifestFiles ?? []).filter((file) => file.kind === 'prebuilt').map((file) => file.path),
   );
-  const validJson = new Set<string>();
 
   for (const file of options.files.filter((entry) => entry.path.endsWith('.json'))) {
     try {
       // Strict parseability only: host MCP documents are read against the
       // compiled entries by validateMcpCoherence.
       JSON.parse(await runWithPlatform(readFileString(resolve(options.artifactRoot, file.path))));
-      validJson.add(file.path);
     } catch {
       if (!prebuiltPaths.has(file.path)) {
         diagnostics.push(diagnostic('AB6006', 'Generated JSON cannot be parsed.', file.path));
@@ -609,29 +604,10 @@ const validateGeneratedFiles = async (options: {
     }
   }
 
-  diagnostics.push(...await validateJavaScriptModules({
-    artifactRoot: options.artifactRoot,
-    ...(options.bundleSyntaxCheck === undefined ? {} : { bundleSyntaxCheck: options.bundleSyntaxCheck }),
-    files: options.files,
-    ...(options.manifestFiles === undefined
-      ? {}
-      : {
-        bundledPaths: new Set(options.manifestFiles.filter((file) => file.kind === 'bundle').map((file) => file.path)),
-        manifestFiles: new Set(options.manifestFiles.map((file) => file.path)),
-      }),
-    prebuiltPaths,
-    validJson,
-  }));
-
   return Object.freeze(diagnostics);
 };
 
-/**
- * The pre-manifest content pass `build` runs over a staged tree before it
- * writes the manifest. The planned manifest file table, when given, tells
- * the JavaScript validator which modules the compiler emitted; without it
- * every module is parsed in full.
- */
+/** The pre-manifest generated-JSON pass `build` runs over a staged tree. */
 export const validateArtifactFiles = async (
   context: ValidateArtifactOptions & { readonly manifestFiles?: readonly ManifestFile[] },
 ): Promise<readonly Diagnostic[]> => {
@@ -640,7 +616,6 @@ export const validateArtifactFiles = async (
     ...filesystemDiagnostics(inspection.filesystem),
     ...await validateGeneratedFiles({
       artifactRoot: context.artifactRoot,
-      ...(context.bundleSyntaxCheck === undefined ? {} : { bundleSyntaxCheck: context.bundleSyntaxCheck }),
       files: inspection.files,
       ...(context.manifestFiles === undefined ? {} : { manifestFiles: context.manifestFiles }),
       ...(context.prebuiltPaths === undefined ? {} : { prebuiltPaths: context.prebuiltPaths }),
@@ -780,7 +755,6 @@ export const validateArtifactWithSnapshot = async (
     }),
     validateGeneratedFiles({
       artifactRoot,
-      ...(context.bundleSyntaxCheck === undefined ? {} : { bundleSyntaxCheck: context.bundleSyntaxCheck }),
       files: inspection.files,
       manifestFiles: manifest.files,
     }),

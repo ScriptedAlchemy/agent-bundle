@@ -5,10 +5,10 @@ import { dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { afterAll, beforeAll, describe, expect, it } from '@rstest/core';
+import { init, parse } from 'es-module-lexer';
 
 import { build, type BuildProjectResult } from '../src/api.ts';
 import { parseArtifactManifest } from '../src/build/manifest.ts';
-import { readModuleImports } from '../src/build/module-imports.ts';
 import { validateArtifact } from '../src/build/validate-artifact.ts';
 import { compileRouteGraph } from '../src/routes/graph.ts';
 import { isRelativeSpecifier, moduleCandidates, readModuleFromDisk } from '../src/routes/module-candidates.ts';
@@ -117,9 +117,15 @@ interface EmittedModule {
 
 const siblingUrlReference = /new URL\(\s*(?:\/\*[^*]*\*\/\s*)?["'](\.\.?\/[^"']+\.mjs)["']\s*,\s*import\.meta\.url\s*\)/gu;
 
+const importKind = (d: number): 'dynamic' | 'meta' | 'static' => {
+  if (d === -2) return 'meta';
+  if (d === -1) return 'static';
+  return 'dynamic';
+};
+
 const readEmittedModule = async (artifactRoot: string, path: string): Promise<EmittedModule> => {
   const bytes = await readFile(join(artifactRoot, path), 'utf8');
-  const imports = await readModuleImports(bytes, { check: 'lexed' });
+  const imports = parse(bytes)[0].map((record) => ({ kind: importKind(record.d), specifier: record.n }));
   const statics: string[] = [];
   const deferred: string[] = [];
   const bare: string[] = [];
@@ -212,6 +218,7 @@ describe('preflight artifact graph (#595)', () => {
   const cache = new Map<string, EmittedModule>();
 
   beforeAll(async () => {
+    await init;
     root = await realpath(await mkdtemp(join(tmpdir(), 'agent-bundle-preflight-graph-')));
     // The audiobook example's installed tree supplies @agent-bundle/runtime, react, and zod.
     await symlink(join(process.cwd(), 'examples', 'audiobook-curator', 'node_modules'), join(root, 'node_modules'), 'dir');
