@@ -23,7 +23,7 @@ even when no error diagnostic was reported.
 | `AB46xx` | Assets and the generated-runtime floor (`AB4600`–`AB4602`; see below). |
 | `AB470x` | Package build `bin` configuration (`AB4700`–`AB4705`; `AB4706`: artifact output overlaps `dist`; `AB4707`–`AB4709`: `output.distPath` shape, root escape, reserved namespace); see below. |
 | `AB471x` | Package build `lib` configuration (`AB4710`–`AB4715`) and declaration generation (`AB4716`); see below. |
-| `AB472x` | The `tools.rsbuild` / `tools.rspack` escape hatch (`AB4720`–`AB4723`: shape; `AB4724`: a framework-owned Rsbuild plugin re-added through `tools.rsbuild.plugins`; `AB4725`: `tools` externalizes a non-built-in; see below). |
+| `AB472x` | The `tools.rsbuild` / `tools.rspack` escape hatch (`AB4720`–`AB4723`: shape; `AB4724`: a framework-owned Rsbuild plugin re-added through `tools.rsbuild.plugins`; `AB4725`: `tools` externalizes a non-built-in; `AB4726`: a deprecated Rsbuild v2 configuration key; see below). |
 | `AB473x` | Migration nudges (informational; see below). |
 | `AB4740`–`AB4751` | Prebuilt payloads and prebuilt entries (see below). |
 | `AB4760` | The published `agent-bundle/meta` identity module evaluated outside every compiled surface and outside the Rstest presets (see below). |
@@ -941,7 +941,7 @@ above, never per feature. Skills keep their own closed per-host schemas
 | `AB4927` | error | A command explicitly targets a host that supports commands but whose `commands.<field>` row for a frontmatter field the command uses is `degraded`, `unavailable`, or `prohibited` (the message carries the host's reason). Cursor's pinned commands surface is frontmatter-free Markdown, so every field row is unavailable there. | Remove the field or drop that host from the command's `targets`. |
 | `AB4928` | warning | An implicitly selected host supports commands but cannot express a frontmatter field the command uses; the command ships there without it (Cursor receives the prompt body only). | Accept the omission, restrict the command's `targets` to hosts that support the field, or remove the field. |
 
-## The bundler escape hatch (`AB4720`–`AB4725`)
+## The bundler escape hatch (`AB4720`–`AB4726`)
 
 `tools.rsbuild` and `tools.rspack` are validated with the rest of the config
 source, so a malformed or colliding hatch is an **error** before any bundler
@@ -972,6 +972,7 @@ framework-owned plugin twice by accident.
 | `AB4723` | error | `tools.rspack` is not an Rspack config object, a mutator function, or an array of both. | Use one of the three Rslib `tools.rspack` forms. |
 | `AB4724` | error | `tools.rsbuild.plugins` supplies a plugin whose `name` matches a framework-owned registration (`rsbuild:react` from `@rsbuild/plugin-react`). The message names the plugin and its package. | Remove the plugin from `tools.rsbuild.plugins`; agent-bundle registers it in every config it synthesizes. |
 | `AB4725` | error | `tools` externalizes a non-built-in (`tools.rsbuild.output.autoExternal` not `false`, or a string/object `externals` entry that names a package — neither a Node built-in, `pnpapi`, nor a relative path — in `tools.rsbuild.output` or an object-form `tools.rspack`). | Remove the externalization; RegExp, function, and relative externals are judged by the compilation's evidence instead (AB6005), where the emitted siblings are known. |
+| `AB4726` | error | `tools.rsbuild` contains a deprecated or removed Rsbuild v2 configuration key: `source.alias`, `source.aliasStrategy`, `performance.bundleAnalyze`, `performance.removeMomentLocale`, `performance.profile`, `performance.chunkSplit`, `output.sourceMap.extract.js`, `provider`, `tools.webpack`, `tools.webpackChain`, `dev.setupMiddlewares`, `html.templateParameters.webpackConfig`, `html.templateParameters.htmlWebpackPlugin`, or the proxy keys `context`, `onOpen`, `onClose`, `onError`, `onProxyReq`, and `onProxyRes`. | Apply the replacement named by the diagnostic. The check is limited to these Rsbuild paths and does not reject similarly named or otherwise valid `tools.rspack` keys. |
 
 ## Route graph, state, layout, and provider conventions (`AB4800`–`AB4845`, `AB4940`–`AB4942`)
 

@@ -265,6 +265,80 @@ describe('bin, lib, and tools validation', () => {
     expect(diagnostics.map((diagnostic) => diagnostic.code)).toContain(code);
   });
 
+  it.each([
+    { config: { source: { alias: {} } }, path: 'source.alias', replacement: 'resolve.alias' },
+    { config: { source: { aliasStrategy: 'prefer-alias' } }, path: 'source.aliasStrategy', replacement: 'resolve.aliasStrategy' },
+    { config: { performance: { bundleAnalyze: {} } }, path: 'performance.bundleAnalyze', replacement: 'Rsdoctor' },
+    { config: { performance: { removeMomentLocale: true } }, path: 'performance.removeMomentLocale', replacement: 'Remove' },
+    { config: { performance: { profile: true } }, path: 'performance.profile', replacement: 'custom Rsbuild plugin' },
+    { config: { performance: { chunkSplit: { strategy: 'all-in-one' } } }, path: 'performance.chunkSplit', replacement: 'splitChunks' },
+    { config: { output: { sourceMap: { extract: { js: true } } } }, path: 'output.sourceMap.extract.js', replacement: 'output.sourceMap.extract' },
+    { config: { provider: 'rspack' }, path: 'provider', replacement: 'Remove' },
+    { config: { tools: { webpack: {} } }, path: 'tools.webpack', replacement: 'tools.rspack' },
+    { config: { tools: { webpackChain: () => {} } }, path: 'tools.webpackChain', replacement: 'tools.bundlerChain' },
+    { config: { dev: { setupMiddlewares: () => {} } }, path: 'dev.setupMiddlewares', replacement: 'server.setup' },
+    {
+      config: { html: { templateParameters: { webpackConfig: {} } } },
+      path: 'html.templateParameters.webpackConfig',
+      replacement: 'rspackConfig',
+    },
+    {
+      config: { html: { templateParameters: { htmlWebpackPlugin: {} } } },
+      path: 'html.templateParameters.htmlWebpackPlugin',
+      replacement: 'htmlPlugin',
+    },
+    {
+      config: { server: { proxy: [{ context: '/api', target: 'https://example.com' }] } },
+      path: 'server.proxy[].context',
+      replacement: 'pathFilter',
+    },
+    {
+      config: { server: { proxy: { '/api': { onOpen: () => {} } } } },
+      path: 'server.proxy.*.onOpen',
+      replacement: 'on.open',
+    },
+    {
+      config: { server: { proxy: { '/api': { onClose: () => {} } } } },
+      path: 'server.proxy.*.onClose',
+      replacement: 'on.close',
+    },
+    {
+      config: { server: { proxy: { '/api': { onError: () => {} } } } },
+      path: 'server.proxy.*.onError',
+      replacement: 'on.error',
+    },
+    {
+      config: { server: { proxy: { '/api': { onProxyReq: () => {} } } } },
+      path: 'server.proxy.*.onProxyReq',
+      replacement: 'on.proxyReq',
+    },
+    {
+      config: { server: { proxy: { '/api': { onProxyRes: () => {} } } } },
+      path: 'server.proxy.*.onProxyRes',
+      replacement: 'on.proxyRes',
+    },
+  ])('rejects deprecated Rsbuild v2 hatch key $path with AB4726', async ({ config, path, replacement }) => {
+    const diagnostics = await validated({ tools: { rsbuild: config as never } });
+    expect(diagnostics).toEqual([expect.objectContaining({
+      code: 'AB4726',
+      message: `Tools rsbuild ${path} is a deprecated Rsbuild v2 configuration key.`,
+      recovery: expect.stringContaining(replacement),
+      severity: 'error',
+    })]);
+  });
+
+  it('does not apply Rsbuild v2 key rejection to tools.rspack configuration', async () => {
+    const diagnostics = await validated({
+      tools: {
+        rspack: {
+          performance: { chunkSplit: true },
+          output: { sourceMap: { extract: { js: true } } },
+        },
+      },
+    });
+    expect(diagnostics).toEqual([]);
+  });
+
   // AB4724: Rsbuild appends every plugin it is handed without deduping by
   // name, and the hatch merges beside the framework profile, so a consumer
   // re-adding a framework-owned plugin would register it twice.

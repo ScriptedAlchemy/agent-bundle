@@ -1308,7 +1308,10 @@ overriding the contract. At config validation, `AB4725` rejects
 visible string or object `externals` entries that name a package. Relative
 entries, RegExp and function-form externals, and anything a mutator installs
 are judged from the compilation's externals evidence (`AB6005`), where the
-emitted siblings are known. The invariant
+emitted siblings are known. `AB4726` rejects only the deprecated or removed
+Rsbuild v2 paths enumerated in the diagnostics reference when they occur under
+`tools.rsbuild`; it does not treat unknown or similarly named `tools.rspack`
+keys as Rsbuild configuration. The invariant
 layer re-pins `output.autoExternal: false` after the hatch merge. Reserved
 module specifiers are protected the same way: a hatch that externalizes
 `agent-bundle/mcp-entry` or a generated module specifier (`agent-bundle/meta`,

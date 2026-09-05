@@ -233,6 +233,12 @@ web: {
 因为 `plugins` 数组会拼接、而 Rsbuild 从不按名称去重插件——框架会替你注册它。`AB4725` 会拒绝
 并非 `false` 的 `tools.rsbuild.output.autoExternal`，以及在 `tools.rsbuild.output` 或对象形式的
 `tools.rspack` 中、点名某个包（既不是 Node 内置模块、`pnpapi`，也不是相对路径）的字符串或对象 `externals` 条目。
+`AB4726` 会拒绝 `tools.rsbuild` 中已废弃或移除的 Rsbuild v2 路径：`source.alias`、
+`source.aliasStrategy`、`performance.bundleAnalyze`、`performance.removeMomentLocale`、
+`performance.profile`、`performance.chunkSplit`、`output.sourceMap.extract.js`、`provider`、
+`tools.webpack`、`tools.webpackChain`、`dev.setupMiddlewares`、已移除的 `webpackConfig` 与
+`htmlWebpackPlugin` 模板参数，以及旧版代理的 `context` / `on*` 事件键。每条诊断都会给出当前替代项。
+此检查只针对 `tools.rsbuild` 中的这些特定路径，不会套用到 `tools.rspack` 下的合法 Rspack 配置。
 
 逃生舱在同一个打包器引擎上执行——即 agent-bundle 所固定的 `@rsbuild/core` 背后的那个 `@rspack/core`，
 由 Rslib 编译的输出（产物脚本、MCP 入口、钩子、包构建）与 MCP App 视图共用——但这个引擎是 agent-bundle
