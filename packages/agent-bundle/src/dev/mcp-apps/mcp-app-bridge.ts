@@ -82,9 +82,9 @@ export interface McpAppBridgeResourceRead {
  * access, restart, or close a shared MCP session directly.
  */
 export interface McpAppBridgeBindingOperations {
-  callTool(bindingId: string, request: McpAppBridgeToolCall): Promise<McpAppJsonValue>;
+  callTool(bindingId: string, request: McpAppBridgeToolCall, signal?: AbortSignal): Promise<McpAppJsonValue>;
   closeBinding(bindingId: string): Promise<boolean>;
-  readResource(bindingId: string, request: McpAppBridgeResourceRead): Promise<McpAppJsonValue>;
+  readResource(bindingId: string, request: McpAppBridgeResourceRead, signal?: AbortSignal): Promise<McpAppJsonValue>;
 }
 
 export interface McpAppBridgeHostInfo {
@@ -222,6 +222,11 @@ interface PendingConsentAction {
   readonly capability: McpAppConsentCapability;
   deny(): boolean;
   run(): Promise<boolean>;
+}
+
+interface InFlightRequest {
+  challengeId?: string;
+  readonly controller: AbortController;
 }
 
 const defaultTeardownTimeoutMs = 1_000;
@@ -639,6 +644,19 @@ const validResourceRead = (params: McpAppJsonValue | undefined): McpAppBridgeRes
   return record === undefined || !nonempty(record.uri) ? undefined : Object.freeze({ uri: record.uri });
 };
 
+const validCancelled = (params: McpAppJsonValue | undefined): Readonly<{
+  readonly reason?: string;
+  readonly requestId: McpAppBridgeRequestId;
+}> | undefined => {
+  const record = jsonRecord(params);
+  if (record === undefined || !hasOwn(record, 'requestId') || !isRequestId(record.requestId)) return undefined;
+  if (record.reason !== undefined && !nonempty(record.reason)) return undefined;
+  return Object.freeze({
+    requestId: record.requestId,
+    ...(record.reason === undefined ? {} : { reason: record.reason }),
+  });
+};
+
 const validOpenLink = (params: McpAppJsonValue | undefined): string | undefined => validateMcpAppExternalLink(params)?.url;
 
 const validMessage = (params: McpAppJsonValue | undefined): McpAppBridgeMessageEvent | undefined => {
@@ -880,7 +898,52 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
   let appDisplayModes: ReadonlySet<McpAppBridgeDisplayMode> | undefined;
   let hostDisplayModes = validDisplayModeList(host.context?.availableDisplayModes);
   const pendingConsentActions = new Map<string, PendingConsentAction>();
+  const inFlight = new Map<McpAppBridgeRequestId, InFlightRequest>();
   const isClosed = (): boolean => lifecycle === 'closing' || lifecycle === 'closed';
+
+  const beginInFlight = (id: McpAppBridgeRequestId): AbortController | undefined => {
+    if (inFlight.has(id)) return undefined;
+    const controller = new AbortController();
+    inFlight.set(id, { controller });
+    return controller;
+  };
+
+  const stillCurrent = (id: McpAppBridgeRequestId): boolean => {
+    const entry = inFlight.get(id);
+    return entry !== undefined && !entry.controller.signal.aborted && lifecycle === 'initialized';
+  };
+
+  const completeInFlight = (id: McpAppBridgeRequestId, finish: () => boolean): boolean => {
+    if (!stillCurrent(id)) {
+      inFlight.delete(id);
+      return false;
+    }
+    inFlight.delete(id);
+    return finish();
+  };
+
+  const cancelInFlight = (requestId: McpAppBridgeRequestId, reason?: string): boolean => {
+    const entry = inFlight.get(requestId);
+    if (entry === undefined) return true;
+    inFlight.delete(requestId);
+    if (entry.challengeId !== undefined) {
+      pendingConsentActions.delete(entry.challengeId);
+      options.consentAuthority?.resolve(entry.challengeId, false);
+    }
+    if (!entry.controller.signal.aborted) {
+      entry.controller.abort(reason === undefined ? new Error('MCP App request was cancelled.') : new Error(reason));
+    }
+    return true;
+  };
+
+  const abortAllInFlight = (reason?: string): void => {
+    for (const requestId of [...inFlight.keys()]) cancelInFlight(requestId, reason);
+  };
+
+  const rejectDuplicateInFlight = (id: McpAppBridgeRequestId): boolean => {
+    cancelInFlight(id, 'MCP App request id is already in flight.');
+    return fail(id, -32602, 'MCP App request id is already in flight.');
+  };
 
   const hostMessageByteLength = (message: McpAppBridgeMessage): number => utf8ByteLength(JSON.stringify(message));
 
@@ -978,6 +1041,7 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
       (released) => {
         if (!released) throw new McpAppBridgeCloseError('binding-close-rejected');
         lifecycle = 'closed';
+        abortAllInFlight();
         pendingConsentActions.clear();
         queuedHostMessages.length = 0;
         queuedHostMessageBytes = 0;
@@ -1006,6 +1070,7 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
 
   const failClosedHostTraffic = (): void => {
     lifecycle = 'closing';
+    abortAllInFlight();
     pendingConsentActions.clear();
     queuedHostMessages.length = 0;
     queuedHostMessageBytes = 0;
@@ -1022,17 +1087,52 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
     return lifecycle === 'initialized' ? emitHost(response) : send(response);
   };
 
+  const acceptInitialize = (message: McpAppBridgeMessage, resetOpeningFrames: boolean): boolean => {
+    if (!validInitialize(message.params)) {
+      return fail(message.id!, -32602, `ui/initialize requires protocol version ${MCP_APP_PROTOCOL_VERSION}.`);
+    }
+    const sent = respond(message.id!, {
+      hostCapabilities: host.capabilities!,
+      hostContext: host.context!,
+      hostInfo: { name: host.info.name, version: host.info.version },
+      protocolVersion: MCP_APP_PROTOCOL_VERSION,
+    });
+    if (!sent) return false;
+    const initializedParams = jsonRecord(message.params)!;
+    const capabilities = jsonRecord(initializedParams.appCapabilities)!;
+    appDisplayModes = Array.isArray(capabilities.availableDisplayModes)
+      ? new Set(capabilities.availableDisplayModes as readonly McpAppBridgeDisplayMode[])
+      : undefined;
+    if (resetOpeningFrames) {
+      abortAllInFlight();
+      queuedHostMessages.length = 0;
+      queuedHostMessageBytes = 0;
+      hostTrafficBlocked = false;
+      inputQueued = false;
+      terminalQueued = false;
+    }
+    lifecycle = 'initializing';
+    return true;
+  };
+
   const requestActionConsent = (
     capability: McpAppConsentCapability,
     details: McpAppJsonValue,
     pending: Omit<PendingConsentAction, 'actionDigest' | 'capability'>,
+    requestId: McpAppBridgeRequestId,
   ): Promise<boolean> | boolean => {
     if (options.consentAuthority === undefined) return pending.run();
     if (options.profile === undefined) return pending.deny();
     const actionDigest = createMcpAppConsentActionDigest(capability, details);
     const challenge = options.consentAuthority.challenge({ actionDigest, bindingId: binding.id, capability, details, profile: options.profile });
     if (challenge === undefined) return pending.deny();
+    const entry = inFlight.get(requestId);
+    if (entry === undefined || entry.controller.signal.aborted) {
+      options.consentAuthority.resolve(challenge.id, false);
+      return false;
+    }
     pendingConsentActions.set(challenge.id, Object.freeze({ ...pending, actionDigest, capability }));
+    entry.challengeId = challenge.id;
     return true;
   };
 
@@ -1045,29 +1145,36 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
       case 'tools/call': {
         const request = validToolCall(message.params);
         if (request === undefined) return fail(id, -32602, 'tools/call requires a name and finite JSON arguments.');
+        const controller = beginInFlight(id);
+        if (controller === undefined) return rejectDuplicateInFlight(id);
         const details = Object.freeze({ ...(request.arguments === undefined ? {} : { arguments: request.arguments }), name: request.name });
         return requestActionConsent('call-tool', details, {
-          deny: () => lifecycle === 'initialized' ? fail(id, -32001, 'tools/call requires an approved consent grant.') : false,
+          deny: () => completeInFlight(id, () => fail(id, -32001, 'tools/call requires an approved consent grant.')),
           run: async () => {
+            if (controller.signal.aborted) return completeInFlight(id, () => false);
             try {
-              const result = validToolResult(await options.operations.callTool(binding.id, request));
-              if (result === undefined) return lifecycle === 'initialized' ? fail(id, -32000, 'MCP App tool call returned an invalid result.') : false;
-              return lifecycle === 'initialized' ? respond(id, result) : false;
+              const result = validToolResult(await options.operations.callTool(binding.id, request, controller.signal));
+              if (result === undefined) return completeInFlight(id, () => fail(id, -32000, 'MCP App tool call returned an invalid result.'));
+              return completeInFlight(id, () => respond(id, result));
             } catch {
-              return lifecycle === 'initialized' ? fail(id, -32000, 'MCP App tool call failed.') : false;
+              if (controller.signal.aborted) return completeInFlight(id, () => false);
+              return completeInFlight(id, () => fail(id, -32000, 'MCP App tool call failed.'));
             }
           },
-        });
+        }, id);
       }
       case 'resources/read': {
         const request = validResourceRead(message.params);
         if (request === undefined) return fail(id, -32602, 'resources/read requires a nonempty URI.');
+        const controller = beginInFlight(id);
+        if (controller === undefined) return rejectDuplicateInFlight(id);
         try {
-          const result = validResourceReadResult(await options.operations.readResource(binding.id, request));
-          if (result === undefined) return lifecycle === 'initialized' ? fail(id, -32000, 'MCP App resource read returned an invalid result.') : false;
-          return lifecycle === 'initialized' ? respond(id, result) : false;
+          const result = validResourceReadResult(await options.operations.readResource(binding.id, request, controller.signal));
+          if (result === undefined) return completeInFlight(id, () => fail(id, -32000, 'MCP App resource read returned an invalid result.'));
+          return completeInFlight(id, () => respond(id, result));
         } catch {
-          return lifecycle === 'initialized' ? fail(id, -32000, 'MCP App resource read failed.') : false;
+          if (controller.signal.aborted) return completeInFlight(id, () => false);
+          return completeInFlight(id, () => fail(id, -32000, 'MCP App resource read failed.'));
         }
       }
       case 'ui/open-link': {
@@ -1075,46 +1182,57 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
         if (url === undefined) return fail(id, -32602, 'ui/open-link requires an http: or https: URL.');
         const onOpenLink = host.onOpenLink;
         if (onOpenLink === undefined) return fail(id, -32601, 'ui/open-link is not supported by this host.');
+        const controller = beginInFlight(id);
+        if (controller === undefined) return rejectDuplicateInFlight(id);
         return requestActionConsent('open-external-link', Object.freeze({ url }), {
-          deny: () => lifecycle === 'initialized' ? fail(id, -32001, 'ui/open-link requires an approved consent grant.') : false,
+          deny: () => completeInFlight(id, () => fail(id, -32001, 'ui/open-link requires an approved consent grant.')),
           run: async () => {
+            if (controller.signal.aborted) return completeInFlight(id, () => false);
             try {
               await onOpenLink(url);
-              return lifecycle === 'initialized' ? respond(id, {}) : false;
+              return completeInFlight(id, () => respond(id, {}));
             } catch {
-              return lifecycle === 'initialized' ? fail(id, -32000, 'ui/open-link was denied by this host.') : false;
+              if (controller.signal.aborted) return completeInFlight(id, () => false);
+              return completeInFlight(id, () => fail(id, -32000, 'ui/open-link was denied by this host.'));
             }
           },
-        });
+        }, id);
       }
       case 'ui/download-file': {
         const download = validateMcpAppDownloadRequest(message.params);
         if (download === undefined) return fail(id, -32602, 'ui/download-file requires bounded valid MCP content blocks.');
         const onDownload = host.onDownload;
         if (onDownload === undefined) return fail(id, -32601, 'ui/download-file is not supported by this host.');
+        const controller = beginInFlight(id);
+        if (controller === undefined) return rejectDuplicateInFlight(id);
         return requestActionConsent('download-file', Object.freeze({ contents: download.contents }), {
-          deny: () => lifecycle === 'initialized' ? fail(id, -32001, 'ui/download-file requires an approved consent grant.') : false,
+          deny: () => completeInFlight(id, () => fail(id, -32001, 'ui/download-file requires an approved consent grant.')),
           run: async () => {
+            if (controller.signal.aborted) return completeInFlight(id, () => false);
             try {
               await onDownload(download);
-              return lifecycle === 'initialized' ? respond(id, {}) : false;
+              return completeInFlight(id, () => respond(id, {}));
             } catch {
-              return lifecycle === 'initialized' ? fail(id, -32000, 'ui/download-file was denied by this host.') : false;
+              if (controller.signal.aborted) return completeInFlight(id, () => false);
+              return completeInFlight(id, () => fail(id, -32000, 'ui/download-file was denied by this host.'));
             }
           },
-        });
+        }, id);
       }
       case 'ui/message': {
         const event = validMessage(message.params);
         if (event === undefined) return fail(id, -32602, 'ui/message requires a user role and valid MCP content blocks.');
         if (host.onMessage === undefined) return fail(id, -32601, 'ui/message is not supported by this host.');
+        const controller = beginInFlight(id);
+        if (controller === undefined) return rejectDuplicateInFlight(id);
         try {
           const result = await host.onMessage(event);
           const messageResult = result === undefined ? {} : validMessageResult(result);
-          if (messageResult === undefined) return lifecycle === 'initialized' ? fail(id, -32000, 'Host returned an invalid ui/message result.') : false;
-          return lifecycle === 'initialized' ? respond(id, messageResult) : false;
+          if (messageResult === undefined) return completeInFlight(id, () => fail(id, -32000, 'Host returned an invalid ui/message result.'));
+          return completeInFlight(id, () => respond(id, messageResult));
         } catch {
-          return lifecycle === 'initialized' ? fail(id, -32000, 'ui/message was denied by this host.') : false;
+          if (controller.signal.aborted) return completeInFlight(id, () => false);
+          return completeInFlight(id, () => fail(id, -32000, 'ui/message was denied by this host.'));
         }
       }
       case 'ui/request-display-mode': {
@@ -1126,31 +1244,37 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
         if (supportedByApp === undefined || !supportedByApp.has(mode)) return fail(id, -32602, 'ui/request-display-mode must be declared by the App.');
         if (supportedByHost === undefined || !supportedByHost.includes(mode)) return fail(id, -32602, 'ui/request-display-mode is not available from this host.');
         if (onDisplayMode === undefined) return fail(id, -32601, 'ui/request-display-mode is not supported by this host.');
+        const controller = beginInFlight(id);
+        if (controller === undefined) return rejectDuplicateInFlight(id);
         return requestActionConsent('request-display-mode', Object.freeze({ mode }), {
-          deny: () => lifecycle === 'initialized' ? fail(id, -32001, 'ui/request-display-mode requires an approved consent grant.') : false,
+          deny: () => completeInFlight(id, () => fail(id, -32001, 'ui/request-display-mode requires an approved consent grant.')),
           run: async () => {
+            if (controller.signal.aborted) return completeInFlight(id, () => false);
             try {
               const actual = await onDisplayMode(mode);
-              if (lifecycle !== 'initialized') return false;
               if (!supportedByApp.has(actual) || !supportedByHost.includes(actual)) {
-                return fail(id, -32000, 'Host returned a display mode outside the negotiated declarations.');
+                return completeInFlight(id, () => fail(id, -32000, 'Host returned a display mode outside the negotiated declarations.'));
               }
-              return respond(id, { mode: actual });
+              return completeInFlight(id, () => respond(id, { mode: actual }));
             } catch {
-              return lifecycle === 'initialized' ? fail(id, -32000, 'ui/request-display-mode was denied by this host.') : false;
+              if (controller.signal.aborted) return completeInFlight(id, () => false);
+              return completeInFlight(id, () => fail(id, -32000, 'ui/request-display-mode was denied by this host.'));
             }
           },
-        });
+        }, id);
       }
       case 'ui/update-model-context': {
         const context = validModelContext(message.params);
         if (context === undefined) return fail(id, -32602, 'ui/update-model-context requires finite JSON content.');
         if (host.onModelContext === undefined) return fail(id, -32601, 'ui/update-model-context is not supported by this host.');
+        const controller = beginInFlight(id);
+        if (controller === undefined) return rejectDuplicateInFlight(id);
         try {
           await host.onModelContext(context);
-          return lifecycle === 'initialized' ? respond(id, {}) : false;
+          return completeInFlight(id, () => respond(id, {}));
         } catch {
-          return lifecycle === 'initialized' ? fail(id, -32000, 'ui/update-model-context was denied by this host.') : false;
+          if (controller.signal.aborted) return completeInFlight(id, () => false);
+          return completeInFlight(id, () => fail(id, -32000, 'ui/update-model-context was denied by this host.'));
         }
       }
       default:
@@ -1189,10 +1313,12 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
       }
       if (lifecycle !== 'initialized') {
         lifecycle = 'closing';
+        abortAllInFlight();
         pendingConsentActions.clear();
         return rememberClose(releaseBinding());
       }
       lifecycle = 'closing';
+      abortAllInFlight();
       pendingConsentActions.clear();
       hasTeardownId = true;
       teardownId = closeOptions.id;
@@ -1216,6 +1342,7 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
         return closePromise;
       }
       lifecycle = 'closing';
+      abortAllInFlight();
       pendingConsentActions.clear();
       return rememberClose(releaseBinding());
     },
@@ -1295,26 +1422,11 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
       }
       if (lifecycle === 'closed') return false;
       if (lifecycle === 'created') {
-        if (!isInitialize(message) || !validInitialize(message.params)) {
-          return isInitialize(message) ? fail(message.id!, -32602, `ui/initialize requires protocol version ${MCP_APP_PROTOCOL_VERSION}.`) : false;
-        }
-        const sent = respond(message.id!, {
-          hostCapabilities: host.capabilities!,
-          hostContext: host.context!,
-          hostInfo: { name: host.info.name, version: host.info.version },
-          protocolVersion: MCP_APP_PROTOCOL_VERSION,
-        });
-        if (sent) {
-          const initializedParams = jsonRecord(message.params)!;
-          const capabilities = jsonRecord(initializedParams.appCapabilities)!;
-          appDisplayModes = Array.isArray(capabilities.availableDisplayModes)
-            ? new Set(capabilities.availableDisplayModes as readonly McpAppBridgeDisplayMode[])
-            : undefined;
-          lifecycle = 'initializing';
-        }
-        return sent;
+        if (!isInitialize(message)) return false;
+        return acceptInitialize(message, false);
       }
       if (lifecycle === 'initializing') {
+        if (isInitialize(message)) return acceptInitialize(message, true);
         if (!initializedNotification(message)) return false;
         lifecycle = 'initialized';
         const originalInput = jsonRecord(binding.input);
@@ -1352,28 +1464,14 @@ export const createMcpAppBridge = (options: CreateMcpAppBridgeOptions): McpAppBr
         return true;
       }
       if (isInitialize(message)) {
-        if (!validInitialize(message.params)) return fail(message.id!, -32602, `ui/initialize requires protocol version ${MCP_APP_PROTOCOL_VERSION}.`);
-        const sent = respond(message.id!, {
-          hostCapabilities: host.capabilities!,
-          hostContext: host.context!,
-          hostInfo: { name: host.info.name, version: host.info.version },
-          protocolVersion: MCP_APP_PROTOCOL_VERSION,
-        });
-        if (!sent) return false;
-        const initializedParams = jsonRecord(message.params)!;
-        const capabilities = jsonRecord(initializedParams.appCapabilities)!;
-        appDisplayModes = Array.isArray(capabilities.availableDisplayModes)
-          ? new Set(capabilities.availableDisplayModes as readonly McpAppBridgeDisplayMode[])
-          : undefined;
         // A document-policy revision replaces the sandbox document.  Its
         // first data frames must belong solely to that newly initialized App.
-        queuedHostMessages.length = 0;
-        queuedHostMessageBytes = 0;
-        hostTrafficBlocked = false;
-        inputQueued = false;
-        terminalQueued = false;
-        lifecycle = 'initializing';
-        return true;
+        return acceptInitialize(message, true);
+      }
+      if (message.method === 'notifications/cancelled') {
+        if (hasOwn(message, 'id')) return false;
+        const cancelled = validCancelled(message.params);
+        return cancelled === undefined ? false : cancelInFlight(cancelled.requestId, cancelled.reason);
       }
       if (message.method === 'notifications/message') {
         if (hasOwn(message, 'id')) return false;

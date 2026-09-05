@@ -360,10 +360,14 @@ interface ResolvedTarget {
 
 /**
  * The protocol name a generated server registers, and the request surface it
- * records. Module-direct renders may omit a canonical id (`(module passed to
- * renderRoute)`); those keep the id itself as the surface name.
+ * records: the shared derivation for a canonical MCP route id
+ * (`tool:harness/echo` -> `echo`). A module rendered directly may carry any
+ * `routeId` — `custom/group/name`, or the `(module passed to renderRoute)`
+ * placeholder — and keeps the harness's own fallback for it: the id's final
+ * slash segment, the whole id when it has none.
  */
-const protocolName = (routeId: string): string => parseMcpRouteProtocolId(routeId)?.name ?? routeId;
+const protocolName = (routeId: string): string =>
+  parseMcpRouteProtocolId(routeId)?.name ?? routeId.slice(routeId.lastIndexOf('/') + 1);
 
 /**
  * Props the route component receives. MCP route kinds get exactly the public

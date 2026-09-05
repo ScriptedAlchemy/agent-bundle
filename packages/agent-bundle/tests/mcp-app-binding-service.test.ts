@@ -10,7 +10,9 @@ import {
 } from '../src/dev/mcp-apps/mcp-app-binding-service.ts';
 
 interface SessionFixture {
+  readonly callSignals: Array<AbortSignal | undefined>;
   readonly calls: Array<{ readonly arguments: McpAppJsonValue | undefined; readonly name: string }>;
+  readonly readSignals: Array<AbortSignal | undefined>;
   readonly reads: string[];
   readonly releases: number[];
   readonly sessionCloseCalls: number[];
@@ -36,7 +38,9 @@ const createSessionFixture = (
   options: { readonly closeBeforeObservation?: boolean; readonly releaseFailures?: number } = {},
 ): SessionFixture => {
   const closeListeners = new Set<(reason?: unknown) => Promise<void> | void>();
+  const callSignals: Array<AbortSignal | undefined> = [];
   const calls: Array<{ readonly arguments: McpAppJsonValue | undefined; readonly name: string }> = [];
+  const readSignals: Array<AbortSignal | undefined> = [];
   const reads: string[] = [];
   const releases: number[] = [];
   const sessionCloseCalls: number[] = [];
@@ -45,7 +49,9 @@ const createSessionFixture = (
   let sessionClosed = false;
 
   return {
+    callSignals,
     calls,
+    readSignals,
     reads,
     releases,
     sessionCloseCalls,
@@ -63,8 +69,12 @@ const createSessionFixture = (
           }
         },
         session: {
-          callTool: async ({ arguments: toolArguments, name }) => {
+          callTool: async ({ arguments: toolArguments, name, signal }) => {
+            callSignals.push(signal);
             calls.push({ arguments: toolArguments, name });
+            if (signal?.aborted) {
+              throw signal.reason instanceof Error ? signal.reason : new Error('fixture tool call was aborted');
+            }
             if (name === 'round-trip') return toolArguments ?? null;
             return { content: [{ text: `called ${name}`, type: 'text' }] };
           },
@@ -84,8 +94,12 @@ const createSessionFixture = (
             { appVisible: true, definition: { name: 'round-trip' }, name: 'round-trip' },
             { appVisible: false, definition: { name: 'delete-weather' }, name: 'delete-weather' },
           ],
-          readResource: async ({ uri }) => {
+          readResource: async ({ uri, signal }) => {
+            readSignals.push(signal);
             reads.push(uri);
+            if (signal?.aborted) {
+              throw signal.reason instanceof Error ? signal.reason : new Error('fixture resource read was aborted');
+            }
             return { contents: [{ text: uri, type: 'text' }] };
           },
         },
@@ -311,4 +325,114 @@ it('keeps a failed session-close release retryable while bridge calls stay inval
   expect(service.get(binding.id)).toBeUndefined();
   expect(teardownEvents).toEqual([{ bindingPresent: false, reason: 'session-closed' }]);
   expect(fixture.watcherOrder).toEqual(['watch', 'unsubscribe', 'release', 'release']);
+});
+
+it('threads an AbortSignal through app-visible session tool and resource calls', async () => {
+  const fixture = createSessionFixture();
+  const service = new McpAppBindingService({ sessionAuthority: authorityFor(fixture) });
+  const binding = await service.createBinding({
+    input: {},
+    previewProfile: 'portable',
+    result: {},
+    sessionId: 'session-weather',
+    tool: appTool,
+  });
+  const controller = new AbortController();
+
+  await expect(service.callTool(binding.id, { arguments: { force: true }, name: 'refresh-weather' }, controller.signal))
+    .resolves.toEqual({ content: [{ text: 'called refresh-weather', type: 'text' }] });
+  await expect(service.readResource(binding.id, { uri: 'resource://weather/forecast' }, controller.signal))
+    .resolves.toEqual({ contents: [{ text: 'resource://weather/forecast', type: 'text' }] });
+  expect(fixture.callSignals).toEqual([controller.signal]);
+  expect(fixture.readSignals).toEqual([controller.signal]);
+  expect(fixture.calls).toEqual([{ arguments: { force: true }, name: 'refresh-weather' }]);
+  expect(fixture.reads).toEqual(['resource://weather/forecast']);
+});
+
+it('rejects an already-aborted signal before listing or invoking the session', async () => {
+  const fixture = createSessionFixture();
+  const service = new McpAppBindingService({ sessionAuthority: authorityFor(fixture) });
+  const binding = await service.createBinding({
+    input: {},
+    previewProfile: 'portable',
+    result: {},
+    sessionId: 'session-weather',
+    tool: appTool,
+  });
+  const controller = new AbortController();
+  controller.abort(new Error('already cancelled'));
+
+  await expect(service.callTool(binding.id, { arguments: {}, name: 'refresh-weather' }, controller.signal))
+    .rejects.toThrow('already cancelled');
+  await expect(service.readResource(binding.id, { uri: 'resource://weather/forecast' }, controller.signal))
+    .rejects.toThrow('already cancelled');
+  expect(fixture.calls).toEqual([]);
+  expect(fixture.reads).toEqual([]);
+  expect(fixture.callSignals).toEqual([]);
+  expect(fixture.readSignals).toEqual([]);
+});
+
+it('does not invoke the session tool when the signal aborts during capability listing', async () => {
+  const fixture = createSessionFixture();
+  const toolController = new AbortController();
+  const readController = new AbortController();
+  let abortOnList = false;
+  const listingAuthority: McpAppSessionAuthority = {
+    acquireAppLease: async (sessionId) => {
+      if (sessionId !== 'session-weather') throw new Error(`Unknown session ${sessionId}.`);
+      const lease = fixture.createLease();
+      return {
+        ...lease,
+        session: {
+          ...lease.session,
+          listBridgeTools: async () => {
+            if (abortOnList) toolController.abort(new Error('cancelled during list'));
+            return lease.session.listBridgeTools();
+          },
+          listBridgeResources: async () => {
+            if (abortOnList) readController.abort(new Error('cancelled during list'));
+            return lease.session.listBridgeResources();
+          },
+        },
+      };
+    },
+  };
+  const service = new McpAppBindingService({ sessionAuthority: listingAuthority });
+  const binding = await service.createBinding({
+    input: {},
+    previewProfile: 'portable',
+    result: {},
+    sessionId: 'session-weather',
+    tool: appTool,
+  });
+  abortOnList = true;
+
+  await expect(service.callTool(binding.id, { name: 'refresh-weather' }, toolController.signal))
+    .rejects.toThrow('cancelled during list');
+  await expect(service.readResource(binding.id, { uri: 'resource://weather/forecast' }, readController.signal))
+    .rejects.toThrow('cancelled during list');
+  expect(fixture.calls).toEqual([]);
+  expect(fixture.reads).toEqual([]);
+});
+
+it('still refuses hidden tools and resources when a live AbortSignal is supplied', async () => {
+  const fixture = createSessionFixture();
+  const service = new McpAppBindingService({ sessionAuthority: authorityFor(fixture) });
+  const binding = await service.createBinding({
+    input: {},
+    previewProfile: 'portable',
+    result: {},
+    sessionId: 'session-weather',
+    tool: appTool,
+  });
+  const controller = new AbortController();
+
+  await expect(service.callTool(binding.id, { arguments: {}, name: 'delete-weather' }, controller.signal))
+    .rejects.toThrow('not app-visible');
+  await expect(service.readResource(binding.id, { uri: 'resource://weather/private' }, controller.signal))
+    .rejects.toThrow('not app-visible');
+  expect(fixture.calls).toEqual([]);
+  expect(fixture.reads).toEqual([]);
+  expect(fixture.callSignals).toEqual([]);
+  expect(fixture.readSignals).toEqual([]);
 });

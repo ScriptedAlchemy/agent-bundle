@@ -39,12 +39,14 @@ to see how the surfaces fit together instead of studying one of them alone.
   [Testing](../guide/development/testing.mdx).
 - **The App is a client of the bridge, not a transport of its own.** `views/status-panel.ts`
   creates its client with `createAppClient` from `agent-bundle/app`, receives the opening
-  `show-status` input and structured result through `onToolInput` / `onToolResult`, refreshes
-  through `call('tool:status/refresh-status', …)`, and reads the readiness policy through
-  `request('resources/read', …)`. The `status` server is handwritten, so no generated route
-  contracts exist; the view types its two tools itself with a structural `AppRegister`
-  augmentation. No JSON-RPC ids, pending maps, `postMessage('*')`, or `structuredContent`
-  unwrapping remain in the view. See
+  `show-status` call's input and structured result through `onToolInput` / `onToolResult`, and
+  surfaces failed or unstructured opening results through `onToolError`
+  registered on `tool:status/show-status` (delivered when the host's initialize result names
+  `show-status` as the opening tool), refreshes through `call('tool:status/refresh-status', …)`,
+  and reads the readiness policy through `request('resources/read', …)`. The `status` server is
+  handwritten, so no generated route contracts exist; the view types its two tools itself with a
+  structural `AppRegister` augmentation. No JSON-RPC ids, pending maps, `postMessage('*')`, or
+  `structuredContent` unwrapping remain in the view. See
   [The typed App client](../guide/authoring/mcp.mdx#the-typed-app-client).
 
 ## What is authored

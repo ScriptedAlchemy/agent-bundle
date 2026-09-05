@@ -1,6 +1,6 @@
 import { describe, expect, it } from '@rstest/core';
 
-import { runtimeIgnoredRoot } from '../src/build/entries.ts';
+import { runtimeIgnoredRoot } from '../src/build/runtime-path.ts';
 
 describe('runtime ignored root', () => {
   it('anchors a source runtime to its package when the checkout is under dist', () => {

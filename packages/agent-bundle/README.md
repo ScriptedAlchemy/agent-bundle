@@ -108,13 +108,18 @@ HTML resource each and talk to their host through `createAppClient()` from the b
 `agent-bundle/app` — the MCP Apps handshake, request ids, timeouts and cancellation, JSON-RPC and
 result decoding, and exact parent source/origin pinning are framework-owned, so a view never
 hand-writes `postMessage` frames. `call('tool:<server>/<name>', input)` resolves the tool's
-structured result object directly, `onToolInput` / `onToolResult` / `onToolCancelled` observe the
-opening call, `request()` covers `resources/read` and supported `ui/*` methods, and every failure
-is an `AppClientError` with a discriminated `code`. The generated `.agent-bundle/routes.d.ts`
-augments `AppRegister` with the project's tool contracts, so route ids, inputs, and results are
-typed from the routes' own schemas without a route module, Zod, or Node entering the App bundle.
-The entry is bundle-safe (never `AB4837`); the host-side relay, sandbox, and consent authority stay
-with the Workbench, `agent-bundle serve-app`, and embedding hosts.
+structured result object directly (an object-rooted `resultSchema` is what makes a tool callable
+from an App), `onToolInput` / `onToolResult` / `onToolError` observe the opening call — dispatched
+to the listeners registered for the tool the host's initialize result names, with a failed or
+malformed opening result arriving on `onToolError` — `onToolCancelled` reports its cancellation,
+`request()` covers `resources/read` and supported `ui/*` methods, and every wire or lifecycle
+failure is an `AppClientError` with a discriminated `code` (option misuse is a plain `TypeError` or
+`RangeError`). A request that times out or is aborted sends `notifications/cancelled`, which the
+framework's host bridge honors by aborting that one in-flight operation. The generated
+`.agent-bundle/routes.d.ts` augments `AppRegister` with the project's tool contracts, so route ids,
+inputs, and results are typed from the routes' own schemas without a route module, Zod, or Node
+entering the App bundle. The entry is bundle-safe (never `AB4837`); the host-side relay, sandbox,
+and consent authority stay with the Workbench, `agent-bundle serve-app`, and embedding hosts.
 
 Projects that own their compilation entirely declare prebuilt payloads instead: the top-level
 `payload` block names already-built directory trees the build packages byte-for-byte at stable

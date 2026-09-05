@@ -50,8 +50,6 @@ import type { ArtifactOutputKind } from './provenance.ts';
 import type { RslibEntry, RslibSurfacePlan } from './rslib.ts';
 import { runtimeIgnoredRoot } from './runtime-path.ts';
 
-export { runtimeIgnoredRoot } from './runtime-path.ts';
-
 /**
  * Spelled as paths, not `new URL(…, import.meta.url)`: the package's own
  * Rslib build would otherwise read the template as a directory context and

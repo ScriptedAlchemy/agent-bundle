@@ -1,3 +1,4 @@
+import { MCP_APP_PROTOCOL_VERSION } from '../contracts/mcp-app-protocol.ts';
 import {
   type JsonObject,
   type JsonValue,
@@ -7,7 +8,7 @@ import {
 } from '../core/strict-json.ts';
 import { parseMcpRouteProtocolId } from '../routes/protocol-name.ts';
 
-export const APP_PROTOCOL_VERSION = '2026-01-26';
+export const APP_PROTOCOL_VERSION = MCP_APP_PROTOCOL_VERSION;
 
 export type AppClientErrorCode =
   | 'timeout'
@@ -47,8 +48,12 @@ export interface AppRouteContract {
 export interface AppRegister {}
 
 export type AppRoutes = AppRegister extends {
-  readonly routes: infer Routes extends Record<string, AppRouteContract>;
-} ? Routes : unknown;
+  readonly routes: infer Routes;
+}
+  ? Routes extends { readonly [Id in keyof Routes]: AppRouteContract }
+    ? Routes
+    : never
+  : unknown;
 
 export type AppRouteId = unknown extends AppRoutes
   ? `tool:${string}/${string}`
@@ -95,8 +100,18 @@ export interface CreateAppClientOptions extends AppConnectOptions {
   readonly timeoutMs?: number;
 }
 
+export interface AppAbortSignal {
+  readonly aborted: boolean;
+  addEventListener(
+    type: 'abort',
+    listener: () => void,
+    options?: Readonly<{ once?: boolean }>,
+  ): void;
+  removeEventListener(type: 'abort', listener: () => void): void;
+}
+
 export interface AppRequestOptions {
-  readonly signal?: AbortSignal;
+  readonly signal?: AppAbortSignal;
   readonly timeoutMs?: number;
 }
 
@@ -113,6 +128,10 @@ export type AppToolInputListener<Id extends string> = (
 
 export type AppToolResultListener<Id extends string> = (
   result: AppRouteResult<Id>,
+) => Promise<void> | void;
+
+export type AppToolErrorListener = (
+  error: AppClientError,
 ) => Promise<void> | void;
 
 export type AppToolCancelledListener = (
@@ -141,6 +160,10 @@ export interface AppClient {
     routeId: Id,
     listener: AppToolResultListener<Id>,
   ): () => void;
+  onToolError<Id extends AppRouteId>(
+    routeId: Id,
+    listener: AppToolErrorListener,
+  ): () => void;
   onToolCancelled(listener: AppToolCancelledListener): () => void;
   rebind(options?: AppConnectOptions): Promise<AppInitializeResult>;
   dispose(): void;
@@ -165,7 +188,7 @@ interface PendingRequest {
   readonly initialize: boolean;
   readonly reject: (error: AppClientError) => void;
   readonly resolve: (value: JsonValue) => void;
-  readonly signal?: AbortSignal;
+  readonly signal?: AppAbortSignal;
   readonly timeout: ReturnType<typeof setTimeout>;
   readonly abort?: () => void;
 }
@@ -278,13 +301,17 @@ const initializeResult = (value: JsonValue): AppInitializeResult | undefined => 
   return value as AppInitializeResult;
 };
 
-const toolResult = (value: JsonValue): JsonObject | undefined => {
+const toolResultEnvelope = (value: JsonValue): JsonObject | undefined => {
   if (!isPlainDataRecord(value) || !Array.isArray(value.content)) return undefined;
   if (!value.content.every((block) => isPlainDataRecord(block) && nonempty(block.type))) return undefined;
   if (value.isError !== undefined && typeof value.isError !== 'boolean') return undefined;
   if (value._meta !== undefined && !isPlainDataRecord(value._meta)) return undefined;
-  if (!isPlainDataRecord(value.structuredContent)) return undefined;
   return value;
+};
+
+const toolResult = (value: JsonValue): JsonObject | undefined => {
+  const result = toolResultEnvelope(value);
+  return result !== undefined && isPlainDataRecord(result.structuredContent) ? result : undefined;
 };
 
 const errorFromRpc = (error: RpcError): AppClientError => {
@@ -315,8 +342,10 @@ export const createAppClient = (options: CreateAppClientOptions = {}): AppClient
   let configuredOrigin = trustedOrigin(options.targetOrigin);
   let pinnedOrigin = configuredOrigin;
   let nextId = 0;
+  let connectionGeneration = 0;
   let connection: Promise<AppInitializeResult> | undefined;
   let connectedResult: AppInitializeResult | undefined;
+  let openingToolName: string | undefined;
   let isDisposed = false;
   const timeoutMs = timeoutValue(options.timeoutMs, defaultTimeoutMs);
   const appInfo = snapshotStrictJsonValue(options.appInfo ?? { name: 'agent-bundle-app', version: '1.0.0' });
@@ -333,6 +362,7 @@ export const createAppClient = (options: CreateAppClientOptions = {}): AppClient
   const pending = new Map<null | number | string, PendingRequest>();
   const inputListeners = new Map<string, Set<AnyListener>>();
   const resultListeners = new Map<string, Set<AnyListener>>();
+  const errorListeners = new Map<string, Set<AnyListener>>();
   const cancelledListeners = new Set<AnyListener>();
 
   const post = (message: JsonObject, targetOrigin: string): void => {
@@ -355,7 +385,7 @@ export const createAppClient = (options: CreateAppClientOptions = {}): AppClient
   };
 
   const notifyCancelled = (id: null | number | string, reason: string): void => {
-    if (connectedResult === undefined || pinnedOrigin === undefined || isDisposed) return;
+    if (connectedResult === undefined || pinnedOrigin === undefined) return;
     try {
       post({
         jsonrpc: '2.0',
@@ -367,8 +397,13 @@ export const createAppClient = (options: CreateAppClientOptions = {}): AppClient
     }
   };
 
-  const rejectPending = (code: AppClientErrorCode, message: string): void => {
+  const rejectPending = (
+    code: AppClientErrorCode,
+    message: string,
+    cancellationReason?: string,
+  ): void => {
     for (const id of [...pending.keys()]) {
+      if (cancellationReason !== undefined) notifyCancelled(id, cancellationReason);
       clearPending(id)?.reject(new AppClientError(code, message));
     }
   };
@@ -378,8 +413,10 @@ export const createAppClient = (options: CreateAppClientOptions = {}): AppClient
     post({ id, jsonrpc: '2.0', result }, pinnedOrigin);
   };
 
-  const publish = (listeners: Map<string, Set<AnyListener>>, value: unknown): void => {
-    for (const registered of listeners.values()) {
+  const publishOpening = (listeners: Map<string, Set<AnyListener>>, value: unknown): void => {
+    if (openingToolName === undefined) return;
+    for (const [routeId, registered] of listeners) {
+      if (routeToolName(routeId) !== openingToolName) continue;
       for (const listener of [...registered]) invokeListener(listener, value);
     }
   };
@@ -387,13 +424,16 @@ export const createAppClient = (options: CreateAppClientOptions = {}): AppClient
   const dispose = (): void => {
     if (isDisposed) return;
     isDisposed = true;
+    connectionGeneration += 1;
     boundWindow.removeEventListener('message', receive);
-    rejectPending('disposed', 'The App client was disposed.');
+    rejectPending('disposed', 'The App client was disposed.', 'disposed');
     connection = undefined;
     connectedResult = undefined;
+    openingToolName = undefined;
     pinnedOrigin = undefined;
     inputListeners.clear();
     resultListeners.clear();
+    errorListeners.clear();
     cancelledListeners.clear();
   };
 
@@ -414,11 +454,12 @@ export const createAppClient = (options: CreateAppClientOptions = {}): AppClient
       if (request === undefined) return;
       let responseOrigin: string | undefined;
       if (request.initialize && configuredOrigin === undefined) {
-        if (!nonempty(event.origin) || event.origin === 'null') {
+        try {
+          responseOrigin = trustedOrigin(event.origin);
+        } catch {
           request.reject(new AppClientError('invalid-message', 'The App host returned an unpinnable origin.'));
           return;
         }
-        responseOrigin = event.origin;
       }
       if (message.error !== undefined) {
         request.reject(errorFromRpc(message.error));
@@ -456,12 +497,31 @@ export const createAppClient = (options: CreateAppClientOptions = {}): AppClient
     }
     if (message.method === 'ui/notifications/tool-input') {
       const params = isPlainDataRecord(message.params) ? message.params : undefined;
-      if (params !== undefined && isPlainDataRecord(params.arguments)) publish(inputListeners, params.arguments);
+      if (params !== undefined && isPlainDataRecord(params.arguments)) {
+        publishOpening(inputListeners, params.arguments);
+      }
       return;
     }
     if (message.method === 'ui/notifications/tool-result') {
-      const result = message.params === undefined ? undefined : toolResult(message.params);
-      if (result !== undefined) publish(resultListeners, result.structuredContent);
+      const result = message.params === undefined ? undefined : toolResultEnvelope(message.params);
+      if (result === undefined) {
+        publishOpening(
+          errorListeners,
+          new AppClientError('invalid-message', 'The opening tool returned an invalid result.'),
+        );
+      } else if (result.isError === true) {
+        publishOpening(
+          errorListeners,
+          new AppClientError('rpc', 'The opening tool returned an error.', { data: result }),
+        );
+      } else if (!isPlainDataRecord(result.structuredContent)) {
+        publishOpening(
+          errorListeners,
+          new AppClientError('invalid-message', 'The opening tool did not return structured content.'),
+        );
+      } else {
+        publishOpening(resultListeners, result.structuredContent);
+      }
       return;
     }
     if (message.method === 'ui/notifications/tool-cancelled') {
@@ -536,23 +596,35 @@ export const createAppClient = (options: CreateAppClientOptions = {}): AppClient
     if (isDisposed) return Promise.reject(new AppClientError('disposed', 'The App client was disposed.'));
     if (connectedResult !== undefined) return Promise.resolve(connectedResult);
     if (connection !== undefined) return connection;
-    connection = sendRequest('ui/initialize', {
+    const generation = connectionGeneration;
+    const connecting = sendRequest('ui/initialize', {
       appCapabilities,
       appInfo,
       protocolVersion: APP_PROTOCOL_VERSION,
     }, requestOptions, true).then((result) => {
+      if (generation !== connectionGeneration || connection !== connecting) {
+        throw new AppClientError('connection-rebound', 'The App client connection was rebound.');
+      }
       const initialized = initializeResult(result);
       if (initialized === undefined || pinnedOrigin === undefined) {
         throw new AppClientError('invalid-message', 'The App host returned an invalid initialize result.');
       }
       post({ jsonrpc: '2.0', method: 'ui/notifications/initialized' }, pinnedOrigin);
       connectedResult = initialized;
+      const toolInfo = isPlainDataRecord(initialized.hostContext.toolInfo)
+        ? initialized.hostContext.toolInfo
+        : undefined;
+      const tool = toolInfo !== undefined && isPlainDataRecord(toolInfo.tool)
+        ? toolInfo.tool
+        : undefined;
+      openingToolName = tool !== undefined && nonempty(tool.name) ? tool.name : undefined;
       return initialized;
     }).catch((error: unknown) => {
-      connection = undefined;
+      if (connection === connecting) connection = undefined;
       throw error;
     });
-    return connection;
+    connection = connecting;
+    return connecting;
   };
 
   const request = <Result extends JsonValue = JsonValue>(
@@ -617,6 +689,7 @@ export const createAppClient = (options: CreateAppClientOptions = {}): AppClient
     call,
     onToolInput: (routeId, listener) => register(inputListeners, routeId, listener as AnyListener),
     onToolResult: (routeId, listener) => register(resultListeners, routeId, listener as AnyListener),
+    onToolError: (routeId, listener) => register(errorListeners, routeId, listener as AnyListener),
     onToolCancelled: (listener) => {
       if (typeof listener !== 'function') throw new TypeError('App client listener must be a function.');
       cancelledListeners.add(listener as AnyListener);
@@ -624,9 +697,15 @@ export const createAppClient = (options: CreateAppClientOptions = {}): AppClient
     },
     async rebind(rebindOptions: AppConnectOptions = {}): Promise<AppInitializeResult> {
       if (isDisposed) throw new AppClientError('disposed', 'The App client was disposed.');
-      rejectPending('connection-rebound', 'The App client connection was rebound.');
+      connectionGeneration += 1;
+      rejectPending(
+        'connection-rebound',
+        'The App client connection was rebound.',
+        'connection-rebound',
+      );
       connection = undefined;
       connectedResult = undefined;
+      openingToolName = undefined;
       pinnedOrigin = undefined;
       const replacementWindow = rebindOptions.window ?? boundWindow;
       if (replacementWindow !== boundWindow) {
@@ -635,7 +714,9 @@ export const createAppClient = (options: CreateAppClientOptions = {}): AppClient
         boundWindow.addEventListener('message', receive);
       }
       parent = rebindOptions.parent ?? boundWindow.parent;
-      configuredOrigin = trustedOrigin(rebindOptions.targetOrigin);
+      if (hasOwn(rebindOptions, 'targetOrigin')) {
+        configuredOrigin = trustedOrigin(rebindOptions.targetOrigin);
+      }
       pinnedOrigin = configuredOrigin;
       return await connect();
     },

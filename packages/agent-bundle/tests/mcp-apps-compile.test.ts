@@ -133,8 +133,12 @@ describe('compileMcpApps', () => {
     const graph = await runtimeImportGraph(join(agentBundlePackageRoot, 'dist', 'app.js'));
     expect(graph.externalSpecifiers).toEqual([]);
     expect([...graph.files.keys()]).toContain(join(agentBundlePackageRoot, 'dist', 'app.js'));
+    expect(graph.files.size).toBeGreaterThan(1);
+    expect([...graph.files.keys()].every((file) =>
+      file.startsWith(join(agentBundlePackageRoot, 'dist')),
+    )).toBe(true);
     const runtimeBytes = [...graph.files.values()].join('\n');
-    const forbiddenRuntimeBytes = [
+    const forbiddenSharedBytes = [
       /\bnode:/u,
       /["']effect(?:\/|["'])/u,
       /["']zod(?:\/|["'])/u,
@@ -142,7 +146,16 @@ describe('compileMcpApps', () => {
       /mcp-server-runtime|mcp-schema-projection|mcp-tasks/u,
       /routes\/framework-imports|routes\/public|build\/mcp-apps/u,
     ];
+    const forbiddenRuntimeBytes = [
+      ...forbiddenSharedBytes,
+      /\bprocess\b/u,
+      /\brequire\b/u,
+      /__webpack_require__/u,
+      /\bBuffer\b/u,
+      /\bimport\.meta\b/u,
+    ];
     expect(forbiddenRuntimeBytes.filter((pattern) => pattern.test(runtimeBytes))).toEqual([]);
+    expect(runtimeBytes).toContain('APP_PROTOCOL_VERSION');
 
     const installedPackage = join(root, 'node_modules', 'agent-bundle');
     await mkdir(installedPackage, { recursive: true });
@@ -156,14 +169,15 @@ describe('compileMcpApps', () => {
     const { outDir, result } = await compile(root, [app(root)]);
     const html = await emittedHtml(outDir);
     expect(html).toContain('2026-01-26');
-    expect(result.apps[0]!.sourceInputs.filter((source) =>
-      /(?:^|\/)node_modules\/(?:effect|zod|typescript-5)(?:\/|$)|\/agent-bundle\/src\/(?:build|routes)\//u.test(source),
-    )).toEqual([]);
+    expect(result.apps[0]!.sourceInputs).toEqual([
+      join(root, 'agent-bundle.config.ts'),
+      join(root, 'views', 'status.ts'),
+    ]);
     expect(await readdir(outDir)).toEqual(['mcp-apps']);
     expect(await readdir(join(outDir, 'mcp-apps'))).toEqual(['status.html']);
     expect(html).toMatch(/<script\b(?![^>]*\bsrc=)[^>]*>/u);
     expect(html).not.toMatch(/<(?:script\b[^>]*\bsrc|link\b[^>]*\bhref)=?/u);
-    expect(forbiddenRuntimeBytes.filter((pattern) => pattern.test(html))).toEqual([]);
+    expect(forbiddenSharedBytes.filter((pattern) => pattern.test(html))).toEqual([]);
   }, 60_000);
 
   it('compiles a .ts entry that imports a .tsx component to the automatic JSX runtime and measures the view', async () => {
@@ -250,6 +264,28 @@ describe('compileMcpApps', () => {
     const html = await emittedHtml(outDir);
     expect(html).toContain(meta.name);
     expect(html).not.toContain('SHADOWED');
+  }, 60_000);
+
+  it('resolves the reserved agent-bundle/app specifier ahead of a consumer tsconfig paths entry that shadows it', async () => {
+    const root = await createProject({
+      'stub-app.ts': "export const createAppClient = (): string => 'SHADOWED_APP_RUNTIME';\n",
+      'tsconfig.json': `${JSON.stringify({
+        compilerOptions: { baseUrl: '.', paths: { 'agent-bundle/app': ['./stub-app.ts'] } },
+      })}\n`,
+      'views/status.ts': [
+        "import { createAppClient } from 'agent-bundle/app';",
+        'document.body.dataset.client = String(createAppClient);',
+        '',
+      ].join('\n'),
+    });
+    const { outDir, result } = await compile(root, [app(root)]);
+    const html = await emittedHtml(outDir);
+    expect(html).toContain('2026-01-26');
+    expect(html).not.toContain('SHADOWED_APP_RUNTIME');
+    expect(result.apps[0]!.sourceInputs).toEqual([
+      join(root, 'agent-bundle.config.ts'),
+      join(root, 'views', 'status.ts'),
+    ]);
   }, 60_000);
 
   it('still resolves the author’s own tsconfig paths inside a view', async () => {

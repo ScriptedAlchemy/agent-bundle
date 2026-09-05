@@ -1,4 +1,4 @@
-import { createAppClient } from 'agent-bundle/app';
+import { type AppClientError, createAppClient } from 'agent-bundle/app';
 import { name, version } from 'agent-bundle/meta';
 
 const serviceHeading = document.querySelector<HTMLHeadingElement>('#service')!;
@@ -8,7 +8,11 @@ const summary = document.querySelector<HTMLParagraphElement>('#summary')!;
 const checks = document.querySelector<HTMLUListElement>('#checks')!;
 const bridgeOutcome = document.querySelector<HTMLParagraphElement>('#bridge-outcome')!;
 
-type StatusState = 'checking' | 'healthy' | 'degraded' | 'unknown';
+/**
+ * `checking`, `healthy`, and `degraded` come from the tool; `unavailable` is
+ * the panel's own verdict when the opening call fails to produce a status.
+ */
+type StatusState = 'checking' | 'healthy' | 'degraded' | 'unavailable' | 'unknown';
 
 interface ServiceCheck {
   readonly label?: string;
@@ -71,10 +75,21 @@ const checkState = (value: string | undefined): StatusState => {
   return 'unknown';
 };
 
-const setStatus = (value: string | undefined) => {
-  const state = statusState(value);
+const setStatus = (state: StatusState) => {
   statusIndicator.dataset.state = state;
   status.textContent = state;
+};
+
+/**
+ * The detail behind a failed opening call. An `isError` result carries the
+ * whole tool result on `error.data`, so its text block explains the failure
+ * in the tool's words; a malformed result or one without structured content
+ * has no data, and the client's own message is the detail.
+ */
+const toolErrorDetail = (error: AppClientError): string => {
+  const content = isRecord(error.data) && Array.isArray(error.data.content) ? error.data.content : [];
+  const block: unknown = content.find((entry: unknown) => isRecord(entry) && entry.type === 'text');
+  return isRecord(block) && typeof block.text === 'string' ? block.text : error.message;
 };
 
 const renderChecks = (items: readonly ServiceCheck[]) => {
@@ -104,9 +119,18 @@ client.onToolInput(showStatusRoute, (input) => {
 
 client.onToolResult(showStatusRoute, (result) => {
   serviceHeading.textContent = result.service ?? 'No service selected';
-  setStatus(result.status);
+  setStatus(statusState(result.status));
   summary.textContent = result.summary ?? 'No readiness summary was returned.';
   renderChecks(result.checks ?? []);
+});
+
+// A failed opening call — `isError: true`, a malformed result, or one without
+// structured content — never reaches `onToolResult`. Leave the requested
+// service in the heading, exit `checking`, and say why there is no status.
+client.onToolError(showStatusRoute, (error) => {
+  setStatus('unavailable');
+  summary.textContent = `Readiness is unavailable: ${toolErrorDetail(error)}`;
+  renderChecks([]);
 });
 
 document.querySelector('#toggle-details')!.addEventListener('click', () => {

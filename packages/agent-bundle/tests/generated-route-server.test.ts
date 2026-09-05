@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
 import { afterEach, expect, it } from '@rstest/core';
+import ts from 'typescript-5';
 
 import { build } from '../src/api.ts';
 import {
@@ -220,6 +221,7 @@ const writeGeneratedProject = async (
     writeProjectFile(root, 'package.json', JSON.stringify({
       dependencies: {
         '@agent-bundle/runtime': 'workspace:*',
+        'agent-bundle': 'workspace:*',
         '@modelcontextprotocol/server': '2.0.0',
         react: '19.2.8',
         zod: '4.4.3',
@@ -308,6 +310,65 @@ const expectFailClosed = (outcome: unknown, message: RegExp): void => {
   expect(outcome).toMatchObject({ isError: true });
   expect(JSON.stringify(outcome)).toMatch(message);
 };
+
+/**
+ * Type-checks one generated-route App entry against the project's own
+ * `.agent-bundle/routes.d.ts` — the `AppRegister` augmentation
+ * `createAppClient().call` consumes. No manual `declare module`.
+ */
+const typecheckGeneratedApp = (root: string, entry: string): readonly string[] => {
+  const program = ts.createProgram(
+    [join(root, entry), join(root, '.agent-bundle', 'routes.d.ts')],
+    {
+      exactOptionalPropertyTypes: true,
+      module: ts.ModuleKind.NodeNext,
+      moduleResolution: ts.ModuleResolutionKind.NodeNext,
+      noEmit: true,
+      skipLibCheck: true,
+      strict: true,
+      target: ts.ScriptTarget.ES2022,
+    },
+  );
+  return ts.getPreEmitDiagnostics(program)
+    .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'));
+};
+
+const appRegisterEquality = [
+  'type Equal<Left, Right> =',
+  '  (<Value>() => Value extends Left ? 1 : 2) extends',
+  '  (<Value>() => Value extends Right ? 1 : 2) ? true : false;',
+  'type Assert<Value extends true> = Value;',
+];
+
+const generatedAppClientSource = [
+  "import { createAppClient } from 'agent-bundle/app';",
+  "export const config = { resourceUri: 'ui://generated-routes-fixture/dashboard.html', template: './dashboard.html' };",
+  "const state = document.querySelector('#state')!;",
+  "const client = createAppClient({ appInfo: { name: 'generated-app-client', version: '1.0.0' } });",
+  "client.onToolResult('tool:curator/ping', (result) => {",
+  "  state.dataset.opened = result.note;",
+  '});',
+  'await client.connect();',
+  "const called = await client.call('tool:curator/ping', { note: 'from-app' });",
+  'state.textContent = JSON.stringify(called);',
+  '',
+].join('\n');
+
+const generatedAppClientHtml = '<!doctype html><html><body><pre id="state">waiting</pre></body></html>\n';
+
+const generatedPingTool = [
+  "import { Agent } from '@agent-bundle/runtime';",
+  "import { appResourceUri } from 'agent-bundle/routes';",
+  "import { createElement } from 'react';",
+  "import { z } from 'zod';",
+  "export const config = { _meta: { ui: { resourceUri: appResourceUri('dashboard') } }, description: 'Ping from the App.' };",
+  'export const inputSchema = z.object({ note: z.string() }).strict();',
+  'export const resultSchema = z.object({ note: z.string() }).strict();',
+  'export default async function Ping({ input }: { input: z.infer<typeof inputSchema> }) {',
+  "  return createElement(Agent.Result, { value: { note: input.note } }, createElement(Agent.Text, null, input.note));",
+  '}',
+  '',
+].join('\n');
 
 it('augments a generated server from config and projects result _meta and text-only tools to the wire', { retry: 2, timeout: 60_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-generated-augment-'));
@@ -513,6 +574,89 @@ it('compiles appResourceUri() and imported-const references to the App route res
     });
     await expect(client.readResource({ uri: 'ui://generated-routes-fixture/dashboard.html' })).resolves.toMatchObject({
       contents: [{ text: expect.stringContaining('route-relative-shell'), uri: 'ui://generated-routes-fixture/dashboard.html' }],
+    });
+  } finally {
+    await client.close();
+  }
+});
+
+it('compiles createAppClient().call against generated AppRegister contracts without a manual augmentation', { retry: 2, timeout: 60_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-generated-app-client-'));
+  roots.push(root);
+  await writeGeneratedProject(root, {
+    'src/mcp/curator/apps/dashboard.html': generatedAppClientHtml,
+    'src/mcp/curator/apps/dashboard.ts': generatedAppClientSource,
+    'src/mcp/curator/tools/ping.ts': generatedPingTool,
+    'src/app-client-call.ts': [
+      "import { createAppClient, type AppRegister } from 'agent-bundle/app';",
+      ...appRegisterEquality,
+      "export type AppIds = Assert<Equal<keyof AppRegister['routes'], 'tool:curator/ping'>>;",
+      "export type AppPing = Assert<Equal<AppRegister['routes']['tool:curator/ping'], Readonly<{ input: { note: string }; result: { note: string } }>>>;",
+      'const client = createAppClient();',
+      "export const called = client.call('tool:curator/ping', { note: 'from-app' });",
+      '',
+    ].join('\n'),
+    'src/wrong-app-id.ts': [
+      "import { createAppClient } from 'agent-bundle/app';",
+      'const client = createAppClient();',
+      "void client.call('tool:curator/missing', { note: 'from-app' });",
+      '',
+    ].join('\n'),
+    'src/wrong-app-input.ts': [
+      "import { createAppClient } from 'agent-bundle/app';",
+      'const client = createAppClient();',
+      "void client.call('tool:curator/ping', { note: 1 });",
+      '',
+    ].join('\n'),
+  });
+
+  const output = join(root, 'artifact');
+  const compiled = await build({ output, root, targets: ['portable'] });
+  const generatedTypes = await readFile(join(root, '.agent-bundle', 'routes.d.ts'), 'utf8');
+  expect(generatedTypes).toContain('tool:curator/ping');
+  expect(generatedTypes).toContain("declare module 'agent-bundle/app' {\n  interface AppRegister {\n    readonly routes: AgentBundleAppRouteContracts;\n  }\n}");
+  expect(generatedAppClientSource).not.toContain('declare module');
+  expect(generatedAppClientSource).not.toMatch(/\bzod\b/u);
+  expect(generatedAppClientSource).not.toMatch(/@modelcontextprotocol\/server/u);
+  expect(generatedTypes.split('\n').filter((line) => line.startsWith('import')).every((line) => line.startsWith('import type * as '))).toBe(true);
+
+  expect(typecheckGeneratedApp(root, 'src/app-client-call.ts')).toEqual([]);
+  const wrongId = typecheckGeneratedApp(root, 'src/wrong-app-id.ts');
+  expect(wrongId).toHaveLength(1);
+  expect(wrongId[0]).toMatch(/tool:curator\/missing/u);
+  const wrongInput = typecheckGeneratedApp(root, 'src/wrong-app-input.ts');
+  expect(wrongInput).toHaveLength(1);
+  expect(wrongInput[0]).toMatch(/Type 'number' is not assignable to type 'string'/u);
+
+  const html = await readFile(join(output, 'portable', 'mcp-apps', 'dashboard.html'), 'utf8');
+  expect(html).toContain('2026-01-26');
+  expect(html).toContain('from-app');
+  expect([
+    /\bnode:/u,
+    /["']effect(?:\/|["'])/u,
+    /["']zod(?:\/|["'])/u,
+    /mcp-server-runtime|mcp-schema-projection/u,
+  ].filter((pattern) => pattern.test(html))).toEqual([]);
+
+  const server = compiled.model.mcpServers[0]!;
+  const client = new Client({ name: 'generated-app-client-test', version: '0.0.0' });
+  const transport = new StdioClientTransport({
+    args: [join(output, 'portable', server.args![0]!)],
+    command: process.execPath,
+    stderr: 'pipe',
+  });
+  let diagnostics = '';
+  transport.stderr?.on('data', (chunk) => { diagnostics += String(chunk); });
+  try {
+    try {
+      await client.connect(transport);
+    } catch (error) {
+      throw new Error(`Generated App client fixture failed to connect: ${diagnostics}`, { cause: error });
+    }
+    await expect(client.callTool({ arguments: { note: 'from-stdio' }, name: 'ping' }, { signal: AbortSignal.timeout(10_000) }))
+      .resolves.toMatchObject({ structuredContent: { note: 'from-stdio' } });
+    await expect(client.readResource({ uri: 'ui://generated-routes-fixture/dashboard.html' })).resolves.toMatchObject({
+      contents: [{ text: expect.stringContaining('from-app'), uri: 'ui://generated-routes-fixture/dashboard.html' }],
     });
   } finally {
     await client.close();

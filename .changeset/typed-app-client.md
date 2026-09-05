@@ -2,4 +2,4 @@
 "agent-bundle": patch
 ---
 
-Call typed MCP App routes through `agent-bundle/app` without triggering `AB4837` (#594)
+Export `createAppClient` from `agent-bundle/app` so MCP App views call typed host routes without importing the compiler, and reword `AB4837` to name Apps as the exception. (#601)

@@ -31,9 +31,14 @@ description: 'MCP App 示例：把一条服务就绪度工作流表达为生成�
 - **浏览器表面自成一个证明级别。** `tests/browser-app/status-panel.browser.test.ts` 通过
   `agent-bundle/test/browser` 把生产编译出的 App HTML 挂载到产品桥接之上——也就是
   [测试](../guide/development/testing.mdx)中的 `browser-app` 级别。
-- **App 使用生成的路由契约。** 状态面板从 `agent-bundle/app` 创建客户端，以
-  `tool:status/show-status` 调用同一条工具路由，并直接接收其带类型的结构化对象；它不再自行维护
-  `postMessage` transport 或解包 MCP 结果 envelope。
+- **App 是桥接的客户端，而不是自带 transport。** `views/status-panel.ts` 从 `agent-bundle/app`
+  创建客户端，通过 `onToolInput` / `onToolResult` 接收打开 App 的 `show-status` 输入与结构化结果，并用
+  `onToolError` 展示失败或缺少结构化数据的打开结果，
+  通过 `call('tool:status/refresh-status', …)` 刷新状态，并通过
+  `request('resources/read', …)` 读取就绪度策略。`status` 服务器是手写的，因此不存在生成的路由
+  契约；视图通过结构化的 `AppRegister` augmentation 自行为两条工具声明类型。视图中不再保留
+  JSON-RPC id、pending map、`postMessage('*')` 或 `structuredContent` 解包逻辑。详见
+  [带类型的 App 客户端](../guide/authoring/mcp.mdx#带类型的-app-客户端)。
 
 ## 编写了什么
 

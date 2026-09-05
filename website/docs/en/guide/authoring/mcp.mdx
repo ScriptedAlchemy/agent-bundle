@@ -767,6 +767,7 @@ const status = await client.call('tool:hauler/hauler_status', { limit: 40 });
 
 const stop = client.onToolResult('tool:hauler/hauler_status', (opening) => { /* typed */ });
 client.onToolInput('tool:hauler/hauler_status', (input) => { /* typed */ });
+client.onToolError('tool:hauler/hauler_status', (error) => { /* the opening call failed */ });
 client.onToolCancelled(({ reason }) => { /* the opening call ended without a result */ });
 
 stop();
@@ -775,9 +776,11 @@ client.dispose();
 
 **Route ids and types.** A tool is addressed by its route id, `tool:<server>/<name>`. The client
 derives the wire tool name from the final segment, exactly as the generated server does, and any
-other shape is a `TypeError`. The types come from the compiler: when the route graph has at least
-one tool route, the generated `.agent-bundle/routes.d.ts` adds exactly one augmentation on
-`agent-bundle/app`,
+other shape is a `TypeError`. The server segment never reaches the wire: `tools/call` carries the
+tool name alone, and the host dispatches it to the one server the App is bound to, so address the
+tools of the server that registered the App. The types come from the compiler: when the route
+graph has at least one tool route, the generated `.agent-bundle/routes.d.ts` adds exactly one
+augmentation on `agent-bundle/app`,
 
 ```ts
 declare module 'agent-bundle/app' {
@@ -802,54 +805,87 @@ and a view may declare its own contract map through the same `AppRegister` seam,
 **Calls and results.** `call()` returns the structured result **directly**; the MCP `content`,
 `_meta`, and `isError` envelope is transport data. It rejects with an `AppClientError` when the
 tool result carries `isError: true` (`code: 'rpc'`, the whole result on `error.data`), has no
-object `structuredContent`, or is not a well-formed result (`invalid-message`). This matches the
-generated MCP projection: only an object-rooted `resultSchema` produces `structuredContent`, so a
-scalar or array result is not a typed App call. `request(method, params?)` is the lower-level
-escape hatch for `resources/read` and the `ui/*` methods the host supports, resolving to the
-JSON-RPC result as is. Both connect first when `connect()` has not been awaited. Every request
-takes `{ signal, timeoutMs }`; the client default is 15 seconds (`timeoutMs` on
-`createAppClient`), and a request that times out or is aborted rejects with `timeout` or
-`aborted` and sends `notifications/cancelled` to the host.
+object `structuredContent`, or is not a well-formed result (`invalid-message`). Give a tool an App
+calls an object-rooted `resultSchema`: the generated MCP projection emits `structuredContent` for
+object-valued results only, while the contract map types every tool route whatever its root, so a
+tool whose `resultSchema` is a scalar or an array is typed but never resolves — `call()` on it
+rejects with `invalid-message` every time. `request(method, params?)` is the lower-level escape
+hatch for `resources/read` and the `ui/*` methods the host supports, resolving to the JSON-RPC
+result as is. Both connect first when `connect()` has not been awaited.
 
-**Opening notifications.** `onToolInput` and `onToolResult` observe the tool call that opened the
-App (`ui/notifications/tool-input` and `ui/notifications/tool-result`); `onToolResult` delivers
-the decoded `structuredContent`, not the envelope. Those notifications name no tool — they are
-always the opening call — so the route id you register with supplies the payload type, not a
-filter. `onToolCancelled` reports the terminal `ui/notifications/tool-cancelled` with its optional
-`reason`. Each registration returns its unsubscribe function.
+**Timeouts and cancellation.** Every request takes `{ signal, timeoutMs }`. `signal` is an
+`AbortSignal` — the client reads `aborted` and listens for `abort`, nothing more — and the
+deadline defaults to the client's `timeoutMs` (15 seconds). A request that times out or is
+aborted rejects at once with `timeout` or `aborted` and, once the client is connected, sends
+`notifications/cancelled` naming the request id and the reason. The client does not wait to learn
+whether the tool stopped; that is the host's decision. The framework's host bridge
+(`createMcpAppBridge`, which the Workbench, `agent-bundle serve-app`, and the `browser-app` test
+harness run) honors it for a request that App started and that is still in flight: it aborts the
+`tools/call` or `resources/read` so the abort reaches the bound MCP session's request, denies a
+consent challenge still pending for that request so a later approval cannot run it, and sends no
+late response. A cancellation for an unknown or finished id is a no-op, and one sent before the
+handshake completes is ignored. Other hosts apply their own policy.
 
-**Errors.** One class, `AppClientError`, with a discriminated `code`: `timeout`, `aborted`,
-`disposed`, `connection-rebound`, `invalid-message`, `rpc`, `capability-unavailable`, or
-`consent-required`. A JSON-RPC error from the host maps by its code — `-32601` to
-`capability-unavailable`, `-32001` to `consent-required`, anything else to `rpc` — with `rpcCode`
-and `data` preserved. None of this is an `AB` diagnostic: App-side failures are browser errors,
-not build output.
+**Opening notifications.** `onToolInput`, `onToolResult`, and `onToolError` observe the tool call
+that opened the App (`ui/notifications/tool-input` and `ui/notifications/tool-result`). Those
+notifications name no tool, so the client learns which tool opened it from the handshake:
+`hostContext.toolInfo.tool.name` in the initialize result. A listener fires only when the tool
+name of the route id it registered with — the final segment — is that opening tool's; listeners
+registered for other tools stay silent, and when the initialize result names no tool, `tool-input`
+and `tool-result` reach no listener at all. `onToolInput` receives the notification's `arguments`,
+`onToolResult` the decoded `structuredContent` of a successful result, not the envelope.
+`onToolError` receives the same notification's failures as an `AppClientError`: a result with
+`isError: true` is `rpc` with the whole result on `data`; a malformed envelope, or one without an
+object `structuredContent`, is `invalid-message`. A failed opening result never reaches
+`onToolResult`. `onToolCancelled` reports the terminal `ui/notifications/tool-cancelled` with its
+optional `reason`. Each registration returns its unsubscribe function; listeners run
+asynchronously, and an exception a listener throws is dropped.
+
+**Errors.** Two kinds. Everything that happens on the wire or in the lifecycle rejects with one
+class, `AppClientError`, with a discriminated `code`: `timeout`, `aborted`, `disposed`,
+`connection-rebound`, `invalid-message`, `rpc`, `capability-unavailable`, or `consent-required`.
+A JSON-RPC error from the host maps by its code — `-32601` to `capability-unavailable`, `-32001`
+to `consent-required`, anything else to `rpc` — with `rpcCode` and `data` preserved. Misusing the
+API is not an `AppClientError`: `createAppClient()` throws a `TypeError` synchronously for a
+`targetOrigin` that is not an exact `http:`/`https:` origin, for `appInfo` or `appCapabilities`
+that are not finite JSON objects, and when there is no `window` and none is injected, and a
+`RangeError` for a `timeoutMs` that is not an integer from 1 to 2³¹ − 1 milliseconds; the `on*`
+registrations throw a `TypeError` for a route id that is not `tool:<server>/<name>` or a listener
+that is not a function; `call()` rejects with that `TypeError` for a malformed route id,
+`request()` for an empty method, and any request with a `RangeError` for an out-of-range
+per-request `timeoutMs`. None of this is an `AB` diagnostic: App-side failures are browser
+errors, not build output.
 
 **Lifecycle and origin pinning.** The Workbench and `serve-app` render the App as an opaque,
 no-referrer `srcdoc` sandbox, so the document cannot know its host's origin up front. `connect()`
 therefore sends exactly one frame to `'*'` — the framework-owned `ui/initialize` — and accepts a
 response only from the configured parent window (`event.source`), with that request's id and a
 valid initialize result (protocol version `2026-01-26`, `hostInfo`, `hostCapabilities`,
-`hostContext`). It pins the responding `event.origin` (an opaque `null` origin is refused), sends
-`ui/notifications/initialized` and every later request to that exact origin, and ignores every
-message from any other source or origin. A host that can supply a trusted origin passes
-`targetOrigin` — an exact `http:`/`https:` origin; `'*'` is rejected — and no wildcard frame is
-sent at all. `connect()` is idempotent. `rebind({ parent?, targetOrigin?, window? })` rejects the
-previous generation's pending requests with `connection-rebound`, clears the pin, and performs the
-handshake again against the new parent. `dispose()`, also idempotent, removes the listener,
-rejects pending requests with `disposed`, and drops every registration; a host's
+`hostContext`). It pins the responding `event.origin`, which must itself be an exact
+`http:`/`https:` origin — an opaque `null`, empty, or other-scheme origin fails the handshake with
+`invalid-message` — then sends `ui/notifications/initialized` and every later request to that
+exact origin, and ignores every message from any other source or origin. A host that can supply a
+trusted origin passes `targetOrigin` — an exact `http:`/`https:` origin; `'*'` is rejected — and
+no wildcard frame is sent at all. `connect()` is idempotent: a connected client resolves the
+cached result, a connecting one returns the in-flight handshake.
+`rebind({ parent?, targetOrigin?, window? })` rejects the previous generation's pending requests
+with `connection-rebound` — a `connect()` still in flight included, which never becomes the live
+connection — clears the pin, keeps the configured `targetOrigin` unless the call names one, and
+performs the handshake again against the new parent. `dispose()`, also idempotent, removes the
+listener, rejects pending requests with `disposed`, and drops every registration; a host's
 `ui/resource-teardown` request is acknowledged and disposes the client. The transport is
 DOM-shaped rather than bound to the global `window`: `window` and `parent` are injectable, which
 is how tests and non-DOM hosts drive the same client.
 
 **The host-side boundary.** The client is the App-inside-the-iframe half of the bridge. The other
 half — the frame relay, sandbox proxy, host page, `/api/mcp/...` routes, and consent authority —
-belongs to the host: the Workbench MCP page, `agent-bundle serve-app`, an MCP host embedding the
-App, and the standalone production host of
-[#564](https://github.com/ScriptedAlchemy/agent-bundle/issues/564) all serve this one client over
-the same wire contract (`McpAppBridge`), and the host, never the App, decides which server a call
-reaches and which capabilities need consent. An App reaches no foreground server or MCP backend
-except through its relay.
+belongs to the host. The Workbench MCP page and `agent-bundle serve-app` run the framework's host
+bridge (`createMcpAppBridge`); an MCP host embedding the App runs its own. All of them speak the
+standard MCP Apps wire the client implements, and the standalone production host
+[#564](https://github.com/ScriptedAlchemy/agent-bundle/issues/564) proposes is specified against
+that same wire; the host, never the App, decides which server a call reaches and which
+capabilities need consent. An App reaches no foreground server or MCP backend except through its
+relay.
 
 `agent-bundle/app` is bundle-safe: it is not one of the compiler-carrying entries `AB4837`
 rejects, and the compiler inlines it into the App document from the installed package like any

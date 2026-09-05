@@ -37,10 +37,14 @@ export interface McpAppBridgeResource {
 
 export interface McpAppBridgeSession {
   readonly identity: McpAppSessionIdentity;
-  callTool(options: { readonly arguments: McpAppJsonValue | undefined; readonly name: string }): Promise<McpAppJsonValue>;
+  callTool(options: {
+    readonly arguments: McpAppJsonValue | undefined;
+    readonly name: string;
+    readonly signal?: AbortSignal;
+  }): Promise<McpAppJsonValue>;
   listBridgeResources(): Promise<readonly McpAppBridgeResource[]>;
   listBridgeTools(): Promise<readonly McpAppBridgeTool[]>;
-  readResource(options: { readonly uri: string }): Promise<McpAppJsonValue>;
+  readResource(options: { readonly signal?: AbortSignal; readonly uri: string }): Promise<McpAppJsonValue>;
 }
 
 export interface McpAppSessionLease {
@@ -154,6 +158,11 @@ const requireTeardownTimeout = (value: number | undefined): number => {
   return timeout;
 };
 
+const throwIfAborted = (signal: AbortSignal | undefined, label: string): void => {
+  if (signal === undefined || !signal.aborted) return;
+  throw signal.reason instanceof Error ? signal.reason : new Error(label);
+};
+
 export const selectMcpAppResourceUri = (tool: McpAppToolDefinition): string | undefined => {
   const metadata = tool._meta;
   if (!isRecord(metadata) || !isRecord(metadata.ui) || typeof metadata.ui.resourceUri !== 'string') return undefined;
@@ -255,27 +264,46 @@ export class McpAppBindingService {
     }
   }
 
-  async callTool(bindingId: string, request: McpAppToolCall): Promise<McpAppJsonValue> {
+  async callTool(bindingId: string, request: McpAppToolCall, signal?: AbortSignal): Promise<McpAppJsonValue> {
+    throwIfAborted(signal, 'MCP App bridge tool call was aborted.');
     const entry = this.#entry(bindingId);
     const name = requireNonempty(request.name, 'MCP App bridge tool name');
     const tools = await entry.lease.session.listBridgeTools();
+    throwIfAborted(signal, 'MCP App bridge tool call was aborted.');
     this.#assertActive(entry);
     if (!tools.some((tool) => tool.name === name && tool.appVisible)) {
       throw new Error(`MCP App bridge tool ${JSON.stringify(name)} is not app-visible for this binding.`);
     }
     const argumentsValue = request.arguments === undefined ? undefined : requireJson(request.arguments, 'MCP App bridge tool arguments');
-    return requireJson(await entry.lease.session.callTool({ arguments: argumentsValue, name }), 'MCP App bridge tool result');
+    throwIfAborted(signal, 'MCP App bridge tool call was aborted.');
+    return requireJson(
+      await entry.lease.session.callTool({
+        arguments: argumentsValue,
+        name,
+        ...(signal === undefined ? {} : { signal }),
+      }),
+      'MCP App bridge tool result',
+    );
   }
 
-  async readResource(bindingId: string, request: McpAppResourceRead): Promise<McpAppJsonValue> {
+  async readResource(bindingId: string, request: McpAppResourceRead, signal?: AbortSignal): Promise<McpAppJsonValue> {
+    throwIfAborted(signal, 'MCP App bridge resource read was aborted.');
     const entry = this.#entry(bindingId);
     const uri = requireNonempty(request.uri, 'MCP App bridge resource URI');
     const resources = await entry.lease.session.listBridgeResources();
+    throwIfAborted(signal, 'MCP App bridge resource read was aborted.');
     this.#assertActive(entry);
     if (!resources.some((resource) => resource.uri === uri && resource.appVisible)) {
       throw new Error(`MCP App bridge resource ${JSON.stringify(uri)} is not app-visible for this binding.`);
     }
-    return requireJson(await entry.lease.session.readResource({ uri }), 'MCP App bridge resource result');
+    throwIfAborted(signal, 'MCP App bridge resource read was aborted.');
+    return requireJson(
+      await entry.lease.session.readResource({
+        uri,
+        ...(signal === undefined ? {} : { signal }),
+      }),
+      'MCP App bridge resource result',
+    );
   }
 
   async closeBinding(bindingId: string): Promise<boolean> {

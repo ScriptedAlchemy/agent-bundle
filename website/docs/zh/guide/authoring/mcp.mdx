@@ -666,35 +666,111 @@ refresh）的 `@rsbuild/plugin-react` 注册在每个 App 环境上，因此 `St
 
 ### 带类型的 App 客户端
 
-App 视图通过浏览器安全的 `agent-bundle/app` 入口调用自己的路由，不需要自行实现 JSON-RPC id、pending
-request、超时、结果 envelope 或 `window.parent.postMessage('*')`：
+`agent-bundle/app` 是只面向浏览器的入口，不导入 Zod、Node built-in、Effect 或编译器代码。
+`createAppClient()` 负责 MCP Apps 握手、request id、pending request、超时与取消、JSON-RPC 与结果
+envelope 解码，以及 parent-window transport，因此视图不需要手写 `postMessage` frame 或
+`structuredContent` reader：
 
 ```ts
+// src/mcp/hauler/apps/dashboard.ts
 import { createAppClient } from 'agent-bundle/app';
 
-const client = createAppClient();
+const client = createAppClient({
+  appInfo: { name: 'hauler-dashboard', version: '1' },
+  timeoutMs: 15_000,
+});
+
 await client.connect();
 
-const status = await client.call('tool:status/show-status', {
-  service: 'payments-api',
-});
+// 直接得到由 resultSchema 定型的结构化结果对象。
+const status = await client.call('tool:hauler/hauler_status', { limit: 40 });
+
+const stop = client.onToolResult('tool:hauler/hauler_status', (opening) => { /* 已定型 */ });
+client.onToolInput('tool:hauler/hauler_status', (input) => { /* 已定型 */ });
+client.onToolError('tool:hauler/hauler_status', (error) => { /* opening tool 失败 */ });
+client.onToolCancelled(({ reason }) => { /* opening call 未产生结果便结束 */ });
+
+stop();
+client.dispose();
 ```
 
-编译器会在 `.agent-bundle/routes.d.ts` 中生成对 `AppRegister` 的 module augmentation。它从同一份
-Application IR 推导每个工具的输入与结构化输出，因此 App 只导入浏览器安全的声明与运行时，不会把服务器
-路由模块、Zod 或 Node 代码带进视图 bundle。工具路由 id 的规范形式是
-`tool:<server>/<name>`；上例中的 `status` 变量直接是该路由 `resultSchema` 所描述的对象，而不是要求
-App 再从 `structuredContent` 中解包的 MCP 结果 envelope。
+**路由 id 与类型。** 工具以 `tool:<server>/<name>` 路由 id 寻址。客户端与生成的服务器一样从最后一段
+推导 wire tool name；其他形状属于调用方误用，会抛出 `TypeError`。当路由图至少包含一条工具路由时，
+生成的 `.agent-bundle/routes.d.ts` 会为 `agent-bundle/app` 恰好添加一次 augmentation：
 
-同一个客户端拥有宿主桥接的完整生命周期：`connect` 建立连接，`call` 调用已注册工具，`request` 发送
-受支持的桥接请求；`onToolInput`、`onToolResult` 与 `onToolCancelled` 监听包括开场调用在内的宿主
-notification，并各自返回移除 listener 的函数。`rebind` 在宿主换代后绑定新的 parent/origin，`dispose`
-则取消 pending 工作、移除 listener 并关闭客户端。
+```ts
+declare module 'agent-bundle/app' {
+  interface AppRegister {
+    readonly routes: AgentBundleAppRouteContracts;
+  }
+}
+```
 
-连接、调用与能力失败会抛出 `AppClientError`，调用方可直接判断其稳定 `code`：`timeout`、`aborted`、
-`disposed`、`connection-rebound`、`invalid-message`、`rpc`、`capability-unavailable` 或
-`consent-required`，不需要解析错误文案。`agent-bundle/app` 不携带编译器，因此 App 中的值导入不会触发
-保护自包含可执行文件的 `AB4837`。
+成员就是项目生成的 MCP **工具**路由：`input` 来自各路由的 `inputSchema`，`result` 来自
+`resultSchema`。该声明以 type-only 方式导入路由模块，所以不会把路由模块、schema 或服务器代码带入 App
+文档。没有 augmentation 时——例如手写服务器——`call()` 仍能以 `unknown` 输入与结果工作，视图也可以
+通过同一个结构化 `AppRegister` seam 声明自己的本地契约 map；[MCP App 示例](../../examples/mcp-app.mdx)
+就为手写的 `status` 服务器这样声明 `show-status` 与 `refresh-status`。`AppRouteId`、
+`AppRouteInput<Id>` 与 `AppRouteResult<Id>` 为 wrapper 命名同一套类型表面。
+
+**调用与结果。** `call()` 直接返回结构化结果对象；MCP 的 `content`、`_meta` 与 `isError` envelope
+只是 transport 数据。工具结果带有 `isError: true` 时，它会以 `code: 'rpc'` 拒绝，并把完整结果保存在
+`error.data`；没有 object `structuredContent` 或结果格式不合法时则以 `invalid-message` 拒绝。只有根为
+对象的 `resultSchema` 才会产生 `structuredContent`，因此 scalar 或 array 结果不是带类型的 App call。
+`request(method, params?)` 是读取 `resources/read` 及宿主支持的 `ui/*` method 的底层逃生舱，按原样返回
+JSON-RPC result。两者都会在尚未 `connect()` 时先连接；每个请求都接受
+`{ signal?: AbortSignal, timeoutMs?: number }`。客户端默认超时为 15 秒，也可在
+`createAppClient({ timeoutMs })` 或单次请求上覆盖。超时或中止分别以 `timeout`、`aborted` 拒绝，并向
+宿主发送带 request id 与原因的 `notifications/cancelled`。
+
+**打开时的 notification。** `onToolInput(routeId, listener)` 与
+`onToolResult(routeId, listener)` 观察打开 App 的工具调用；宿主所带的工具名会按注册路由 id 的最后一段
+筛选，因此其他工具的 opening notification 不会送到该 listener。`onToolResult` 交付解码后的
+`structuredContent`，而不是 envelope。`onToolCancelled(listener)` 接收终止性的
+`ui/notifications/tool-cancelled` 及可选 `reason`。`onToolError(routeId, listener)` 以同样的路由名
+筛选 opening tool failure：`isError: true` 交付 `code: 'rpc'` 的 `AppClientError`，无效 envelope 或
+缺少 object `structuredContent` 则交付 `invalid-message`；错误不会同时送到 `onToolResult`。每次注册
+都返回 unsubscribe 函数。
+
+**完整公开表面。** 该入口导出 `createAppClient`、`AppClient`、`AppRegister`、
+`AppRouteContract`、`AppRoutes`、`AppRouteId`、`AppRouteInput`、`AppRouteResult`、
+`AppClientError`、`AppClientErrorCode`、`AppConnectOptions`、`CreateAppClientOptions`、
+`AppRequestOptions`、`AppImplementation`、`AppInitializeResult`、`AppMessageEvent`、
+`AppToolInputListener`、`AppToolResultListener`、`AppToolErrorListener`、
+`AppToolCancelledListener`、可注入的 `AppWindow` / `AppMessageTarget` port，以及
+`APP_PROTOCOL_VERSION`。`AppClient` 提供只读 `connected` / `disposed` 状态与 `connect`、
+`request`、`call`、`onToolInput`、`onToolResult`、`onToolError`、`onToolCancelled`、`rebind`、
+`dispose`。
+
+**错误与调用方误用。** 运行时、连接与能力失败统一使用 `AppClientError`，其 `code` 恰好是八种：
+`timeout`、`aborted`、`disposed`、`connection-rebound`、`invalid-message`、`rpc`、
+`capability-unavailable`、`consent-required`。宿主 JSON-RPC 的 `-32601` 映射为
+`capability-unavailable`，`-32001` 映射为 `consent-required`，其他 code 映射为 `rpc`，同时保留
+`rpcCode` 与 `data`。参数种类或契约形状的同步误用——例如错误的 route id、非函数 listener、非精确
+`targetOrigin`、缺少浏览器 window，或非法的 `appInfo` / `appCapabilities`——抛出 `TypeError`；
+超时不是 1 到 2,147,483,647 毫秒之间的安全整数则抛出 `RangeError`。这些都不是 `AB` 诊断。
+
+**生命周期与 origin pin。** Workbench 与 `serve-app` 把 App 渲染为 opaque、no-referrer 的 `srcdoc`
+sandbox，所以文档事先不知道宿主 origin。`connect()` 只向 `'*'` 发送一帧——框架拥有的
+`ui/initialize`——并且只接受 configured parent window（`event.source`）以同一 request id 返回的有效
+initialize result（协议版本 `2026-01-26`，以及 `hostInfo`、`hostCapabilities`、`hostContext`）。
+客户端拒绝 opaque `null` origin，固定响应的 `event.origin`，发送
+`ui/notifications/initialized`，之后只向该精确 origin 发送并只接受同时匹配 source 与 origin 的消息。
+能预先给出可信 origin 的宿主可传入精确的 `http:` / `https:` `targetOrigin`；`'*'` 会被拒绝，且不会有
+任何 wildcard frame。`connect()` 幂等。`rebind({ parent?, targetOrigin?, window? })` 以
+`connection-rebound` 拒绝旧 generation 的 pending request、撤销 pin，再对新 parent 握手。
+`dispose()` 同样幂等：移除 listener，以 `disposed` 拒绝 pending request，并丢弃所有注册；宿主发来的
+`ui/resource-teardown` request 会先得到确认，再 dispose 客户端。可注入的 `window` 与 `parent` 让测试
+及非 DOM 宿主能驱动同一个客户端。
+
+**宿主侧边界。** 客户端只是 iframe 内的半座桥。frame relay、sandbox proxy、宿主页面、
+`/api/mcp/...` 路由与 consent authority 都属于宿主；Workbench MCP 页面、`agent-bundle serve-app`、
+嵌入 App 的 MCP 宿主，以及 [#564](https://github.com/ScriptedAlchemy/agent-bundle/issues/564)
+计划的独立生产宿主，都会通过同一份 wire contract（`McpAppBridge`）服务这个客户端。由宿主而不是 App
+决定 call 到达哪台服务器、哪些能力需要同意；App 不能绕过 relay 访问前台服务器或 MCP backend。
+
+`agent-bundle/app` 不携带编译器，编译器会像其他依赖一样从已安装的包把它内联进 App 文档，因此 App 中的
+值导入不会触发保护自包含可执行文件的 `AB4837`。
 
 ### 保留标识符优先
 
