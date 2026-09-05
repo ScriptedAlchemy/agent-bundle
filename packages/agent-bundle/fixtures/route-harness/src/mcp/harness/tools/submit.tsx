@@ -1,15 +1,6 @@
 import { Agent, agent } from '@agent-bundle/runtime';
 import { z } from 'zod';
 
-/**
- * The operation behind the harness's explicit CLI surface projection (#596):
- * `submit.cli.ts` beside this module projects it onto `<bin> submit`. The
- * structured result echoes the canonical input so the projection levels can
- * prove the CLI grammar and the MCP surface reach the same operation with the
- * same value; the rendered text carries the surface the route observed
- * (`invocation.kind`, `operationId`, `surface`) and the `library-tooling`
- * provider's view of it, which differ per surface by design.
- */
 export const config = {
   annotations: { readOnlyHint: false },
   description: 'Submits one command line as lane work and echoes the accepted request.',

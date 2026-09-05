@@ -1089,13 +1089,13 @@ export const loadCliProjectionModule = async (
 /** Mirrors the generated bin's confirmation, explicit defaults, mapping, and canonical validation boundary. */
 export const parseCliCommandInput = (
   command: CompiledCliCommand,
-  module: AgentRouteModule,
+  inputSchema: AgentRouteSchema,
   projectionModule: Readonly<Record<string, unknown>> | undefined,
   input: Readonly<Record<string, unknown>>,
 ): unknown => {
-  let mapped: Readonly<Record<string, unknown>> = { ...input };
+  let mapped: unknown = { ...input };
   if (command.projection?.defaults !== undefined) {
-    const withDefaults: Record<string, unknown> = { ...mapped };
+    const withDefaults: Record<string, unknown> = { ...input };
     for (const [key, value] of Object.entries(command.projection.defaults)) {
       if (!Object.hasOwn(withDefaults, key)) withDefaults[key] = value;
     }
@@ -1107,13 +1107,13 @@ export const parseCliCommandInput = (
       throw new TypeError(`CLI projection ${command.projection.module} for ${command.routeId} must export a mapInput function.`);
     }
     try {
-      mapped = mapInput(mapped) as Readonly<Record<string, unknown>>;
+      mapped = mapInput(mapped);
     } catch (error) {
       throw new CliInputError(error instanceof Error ? error.message : String(error));
     }
   }
   try {
-    return module.inputSchema!.parse(mapped);
+    return inputSchema.parse(mapped);
   } catch (error) {
     throw cliInputError(command, mapped, error);
   }
@@ -1175,7 +1175,7 @@ export const prepareCliRenderHost = async (
       }
       const parsed = parseCliCommandInput(
         command,
-        module,
+        module.inputSchema,
         projectionModule,
         input,
       );

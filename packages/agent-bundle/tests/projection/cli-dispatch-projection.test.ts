@@ -17,7 +17,6 @@ import { testManifest } from '../../src/test/registry.ts';
 const cwd = process.cwd();
 const usage = 'Usage: route-harness submit [options] <argv...>';
 const helpHint = "Run 'route-harness submit --help' for usage.";
-/** The `library-tooling` fixture provider's report, keyed by the surface it observed. */
 const providerLine = (kind: 'cli' | 'tool', surface: string): string =>
   `provider: ${JSON.stringify({ kind, surface, tool: 'ffprobe 6.1' })}`;
 
@@ -45,11 +44,9 @@ describe('the CLI surface projection of tool:harness/submit', () => {
 
     expect(command).toEqual({
       aliases: [],
-      // No `description` in the projection: the tool's config.description serves.
       description: 'Submits one command line as lane work and echoes the accepted request.',
       exitCode: 'zero',
       mcp: { confirm: false, server: 'harness', tool: 'submit' },
-      // `options` is the mapping: canonical `key` ↔ CLI `option`, sorted by spelling.
       options: [
         expect.objectContaining({ description: 'The command line to run.', key: 'argv', kind: 'string', option: 'argv', positional: 0, repeated: true, required: true }),
         expect.objectContaining({ description: 'Working directory of the command (default: the current directory).', key: 'cwd', kind: 'string', option: 'cwd', repeated: false, required: false }),
@@ -61,10 +58,7 @@ describe('the CLI surface projection of tool:harness/submit', () => {
       rendered: true,
       routeId: 'tool:harness/submit',
     });
-    // One command per operation: the bulk `mcpCommands: true` projection
-    // skips a tool that carries its own projection module.
     expect(manifest.cliCommands.map((candidate) => candidate.path.join(' '))).not.toContain('harness submit');
-    // The projection module is never a route.
     expect(Object.keys(manifest.routes).filter((id) => id.includes('submit'))).toEqual(['tool:harness/submit']);
   });
 
@@ -81,8 +75,6 @@ describe('the CLI surface projection of tool:harness/submit', () => {
     expect(cliJson(cli)).toEqual({ argv: ['cargo', 'check'], cwd, laneKey: 'x', operation: 'submit', tags: ['a'] });
     expect(cliJson(cli)).toEqual(mcp.structuredContent);
     expect(cli.value).toEqual(mcp.structuredContent);
-    // The MCP surface ran the same route as a tool; only the rendered surface
-    // wording differs, never the value.
     expect(mcp.content).toEqual([
       { text: 'submit: cargo check', type: 'text' },
       { text: 'invocation: tool tool:harness/submit submit', type: 'text' },
@@ -184,8 +176,6 @@ describe('the CLI surface projection of tool:harness/submit', () => {
   });
 
   it('runs without --yes because the projection sets confirm: false, and knows no --yes option', async () => {
-    // The tool's `readOnlyHint: false` would make the bulk projection fail
-    // closed; the projection's explicit `confirm: false` wins.
     const run = await invokeCli(['submit', '--', 'cargo', 'check']);
     expect(run.exitCode).toBe(0);
     expect(run.stderr).toBe('');

@@ -540,21 +540,21 @@ export const compileProjectedCliCommands = (
       const keys = new Set(options.map((option) => option.key));
       const keyRecovery = inputKeysRecovery([...keys]);
       let bound = true;
-      for (const key of Object.keys(config.flags ?? {})) {
-        if (keys.has(key)) continue;
-        diagnostics.push(binding(unknownInputKeyDetail('flags', key), keyRecovery));
-        bound = false;
-      }
-      for (const key of argv.relaxed ?? []) {
-        if (extracted.mapInput) continue;
-        diagnostics.push(cliProjectionContractError(
-          relativePath,
-          tool.id,
-          relaxationWithoutMapInputDetail(key, config.flags![key]!),
-          source,
-          relaxationRecovery(key),
-        ));
-        bound = false;
+      for (const [key, flag] of Object.entries(config.flags ?? {})) {
+        if (!keys.has(key)) {
+          diagnostics.push(binding(unknownInputKeyDetail('flags', key), keyRecovery));
+          bound = false;
+        }
+        if (!extracted.mapInput && argv.relaxed?.includes(key) === true) {
+          diagnostics.push(cliProjectionContractError(
+            relativePath,
+            tool.id,
+            relaxationWithoutMapInputDetail(key, flag),
+            source,
+            relaxationRecovery(key),
+          ));
+          bound = false;
+        }
       }
       if (!bound) continue;
     }
@@ -574,8 +574,6 @@ export const compileProjectedCliCommands = (
     // reported once, there); the projected command inherits the value.
     const render = routeRenderLimits(tool.config);
     routes.push(tool);
-    // Every key here has a compiled command whose `projection.module` is the
-    // relative twin of this absolute path; a pair that failed lists nothing.
     projectionSources[tool.id] = source;
     commands.push({
       aliases,
@@ -672,11 +670,6 @@ export const compileCliCommands = async (
     });
   }
 
-  /**
-   * One claimed command path and the module that claims it: a custom route
-   * (no `provenance`), a bulk-projected tool (its tool route), or a
-   * projection module (the module itself, whose `command` chose the path).
-   */
   interface PathClaim {
     readonly path: readonly string[];
     readonly provenance?: McpPathProvenance;
@@ -717,7 +710,6 @@ export const compileCliCommands = async (
     });
   }
   const claims = [...claimByRouteId.values()];
-  /** The projected side of a collision (the later claim when both are), and the file the fix belongs in. */
   const sides = (claim: PathClaim, existing: PathClaim): {
     readonly mcp: PathClaim;
     readonly other: PathClaim;

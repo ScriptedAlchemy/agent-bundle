@@ -514,8 +514,6 @@ describe('the CLI surface projection in the generated routed-CLI executable', ()
         type: 'module',
         version: '1.0.0',
       })),
-      // `mcpCommands: true` alongside the projection: the bulk projection must
-      // skip the projected tool and still cover its neighbour.
       writeProjectFile(root, 'agent-bundle.config.ts', [
         "import { defineConfig } from 'agent-bundle/config';",
         'export default defineConfig({',
@@ -556,8 +554,6 @@ describe('the CLI surface projection in the generated routed-CLI executable', ()
         '};',
         '',
       ].join('\n')),
-      // The operation: canonical input echoed as the structured result, the
-      // observed surface in the rendered text only.
       writeProjectFile(root, 'src/mcp/demo/tools/submit.tsx', [
         "import { Agent, agent } from '@agent-bundle/runtime';",
         "import { z } from 'zod';",
@@ -587,10 +583,6 @@ describe('the CLI surface projection in the generated routed-CLI executable', ()
         '}',
         '',
       ].join('\n')),
-      // The projection: never a route. `laneKey` as `--lane`, `tags` as a
-      // repeatable `--tag`, `argv` trailing (so `-- cargo check -p foo` passes
-      // through), `cwd` relaxed because `mapInput` derives it, and no `--yes`
-      // although the tool is not read-only.
       writeProjectFile(root, projectionModule, [
         'export const config = {',
         "  command: ['submit'],",
@@ -623,7 +615,6 @@ describe('the CLI surface projection in the generated routed-CLI executable', ()
       { name: 'cli-projection-fixture', provenance: { kind: 'conventional' } },
     ]);
     await expect(stat(binPath)).resolves.toMatchObject({});
-    // The bin's provenance names the projection module beside the route modules it projects.
     const evidence = built.packageBuild!.files.find((file) => file.path === 'bin/cli-projection-fixture.js');
     expect(evidence?.sourceInputs).toEqual(expect.arrayContaining([
       'src/mcp/demo/tools/ping.tsx',
@@ -632,9 +623,6 @@ describe('the CLI surface projection in the generated routed-CLI executable', ()
       projectionModule,
       'src/mcp/demo/tools/submit.tsx',
     ]));
-    // The executable's compiled surface: the projected command at the root
-    // beside the bulk-projected neighbour, and the tool as a route exactly
-    // once — the projection module is not a route.
     const generatedCli = built.model.packageBuild?.bins[0]?.generatedCli;
     expect(generatedCli?.commands.map((command) => command.path.join(' ')).sort()).toEqual(['demo ping', 'purge', 'submit']);
     expect(generatedCli?.routes.map((route) => route.id).sort()).toEqual(['tool:demo/ping', 'tool:demo/purge', 'tool:demo/submit']);
@@ -654,7 +642,6 @@ describe('the CLI surface projection in the generated routed-CLI executable', ()
     expect(help.stdout).not.toContain('requires --yes');
     expect(help.stdout).not.toContain('--input');
     expect(help.stdout).not.toContain('(required)');
-    // The tree lists the projected command at the root, beside the bulk-projected group.
     const tree = await execFile(binPath, ['--help'], { cwd: root });
     expect(tree.stdout).toMatch(/^ +submit +Submits one command line as lane work\.$/mu);
     expect(tree.stdout).toMatch(/^ +demo <command>/mu);
@@ -664,15 +651,12 @@ describe('the CLI surface projection in the generated routed-CLI executable', ()
     const submitted = await execFile(binPath, ['submit', '--lane', 'x', '--tag', 'a', '--tag', 'a', '--json', '--', 'cargo', 'check'], { cwd: root });
     expect(JSON.parse(submitted.stdout)).toEqual({ argv: ['cargo', 'check'], cwd: root, laneKey: 'x', operation: 'submit', tags: ['a'] });
 
-    // Flags after `--` are the command line's, not the shell's; no `--yes` despite readOnlyHint: false.
     const passthrough = await execFile(binPath, ['submit', '--cwd', '/tmp/elsewhere', '--json', '--', 'cargo', 'check', '-p', 'core', '--lane', 'literal'], { cwd: root });
     expect(JSON.parse(passthrough.stdout)).toEqual({ argv: ['cargo', 'check', '-p', 'core', '--lane', 'literal'], cwd: '/tmp/elsewhere', operation: 'submit' });
 
-    // Piped text output carries the surface the tool observed: the CLI, with the tool as the operation.
     const piped = await execFile(binPath, ['submit', '--', 'cargo', 'check'], { cwd: root });
     expect(piped.stdout).toBe('submit: cargo check\n\ninvocation: cli tool:demo/submit submit\n');
 
-    // The bulk projection still serves the neighbouring tool under the server path.
     const ping = await execFile(binPath, ['demo', 'ping', '--json'], { cwd: root });
     expect(JSON.parse(ping.stdout)).toEqual({ pong: true });
   });
@@ -699,8 +683,6 @@ describe('the CLI surface projection in the generated routed-CLI executable', ()
       ].join('\n'),
       stdout: '',
     });
-    // The canonical schema judges the MAPPED input, and the issue is spelled
-    // with the CLI option the operator typed.
     await expect(execFile(binPath, ['submit', '--cwd', '', '--', 'cargo', 'check'], { cwd: root })).rejects.toMatchObject({
       code: 2,
       stderr: [
@@ -745,7 +727,6 @@ describe('the CLI surface projection in the generated routed-CLI executable', ()
       routeId: 'tool:demo/submit',
     });
     expect(commands.find((command) => command.routeId === 'tool:demo/ping')).not.toHaveProperty('projection');
-    // The projection module is not a route.
     expect(document.selected?.routes?.servers.flatMap((server) => server.routes.map((route) => route.id))).toEqual([
       'tool:demo/ping',
       'tool:demo/purge',

@@ -35,8 +35,9 @@ const misplacedModulePath = /^src\/mcp\/[^/]+\/(?:resources|prompts|apps)\/[^/]+
 export const classifyCliProjectionModule = (relativePath: string): CliProjectionModule | undefined => {
   const match = projectionModulePath.exec(relativePath);
   if (match?.groups === undefined) return undefined;
-  const server = match.groups['server']!;
-  const stem = match.groups['stem']!;
+  const server = match.groups['server'];
+  const stem = match.groups['stem'];
+  if (server === undefined || stem === undefined) return undefined;
   return { server, siblingId: `tool:${server}/${stem}`, stem };
 };
 
@@ -72,15 +73,12 @@ export interface CliProjectionExtractionOptions {
   readonly projectRoot?: string;
 }
 
-/** Every key a projection `config` may declare. */
 const projectionConfigKeys: readonly string[] = ['aliases', 'command', 'confirm', 'description', 'exitCode', 'flags', 'positionals'];
 
-/** Every key one `flags.<key>` entry may declare. */
 const flagConfigKeys: readonly string[] = ['aliases', 'default', 'description', 'name', 'required'];
 
 const emptyProjectionConfig: CliProjectionConfigRecord = deepFreeze({});
 
-/** How the diagnostics address one projection module. */
 const projectionSubject = (module: string, toolId: string): string => `CLI projection ${module} for ${toolId}`;
 
 const contractRecovery = 'Declare only command, aliases, confirm, description, exitCode, flags, and positionals, each in the shape CliProjectionConfig documents; then inspect again.';
@@ -165,46 +163,46 @@ export const stringArray = (value: unknown): readonly string[] | undefined =>
     : undefined;
 
 const isFlagDefault = (value: unknown): value is CliProjectionFlagDefault => {
-  const scalar = (entry: unknown): boolean =>
+  const scalar = (entry: unknown): entry is boolean | number | string =>
     typeof entry === 'boolean' || typeof entry === 'string' || (typeof entry === 'number' && Number.isFinite(entry));
   return scalar(value) || (Array.isArray(value) && value.every(scalar));
 };
 
-/** The reason an `extractRouteConfig` diagnostic gives, without the `Route module <path>` subject the projection replaces. */
 const configReason = (diagnostic: Diagnostic, relativePath: string): string => {
   const prefix = `Route module ${relativePath} `;
   const message = diagnostic.message.endsWith('.') ? diagnostic.message.slice(0, -1) : diagnostic.message;
   return message.startsWith(prefix) ? `the module ${message.slice(prefix.length)}` : message;
 };
 
-interface FlagValidation {
-  readonly detail?: string;
-  readonly flag?: CliProjectionFlagConfig;
-}
+type FlagValidation =
+  | { readonly detail: string }
+  | { readonly flag: CliProjectionFlagConfig };
 
-/** Validates one `flags.<key>` entry's shape; the detail names the offending field. */
 const validateFlag = (key: string, value: unknown): FlagValidation => {
   if (!isRecord(value)) return { detail: `config.flags.${key} must be an object` };
   const unknown = Object.keys(value).find((field) => !flagConfigKeys.includes(field));
   if (unknown !== undefined) return { detail: `config.flags.${key}.${unknown} is an unknown field` };
   const aliases = value.aliases === undefined ? undefined : stringArray(value.aliases);
   if (value.aliases !== undefined && aliases === undefined) return { detail: `config.flags.${key}.aliases must be an array of strings` };
-  if (value.default !== undefined && !isFlagDefault(value.default)) {
+  const defaultValue = value.default;
+  if (defaultValue !== undefined && !isFlagDefault(defaultValue)) {
     return { detail: `config.flags.${key}.default must be a boolean, number, string, or an array of those` };
   }
-  if (value.description !== undefined && typeof value.description !== 'string') {
+  const description = value.description;
+  if (description !== undefined && typeof description !== 'string') {
     return { detail: `config.flags.${key}.description must be a string` };
   }
-  if (value.name !== undefined && typeof value.name !== 'string') return { detail: `config.flags.${key}.name must be a string` };
+  const name = value.name;
+  if (name !== undefined && typeof name !== 'string') return { detail: `config.flags.${key}.name must be a string` };
   if (value.required !== undefined && value.required !== false) {
     return { detail: `config.flags.${key}.required may only be false (the canonical schema decides what is required)` };
   }
   return {
     flag: {
       ...(aliases === undefined ? {} : { aliases }),
-      ...(value.default === undefined ? {} : { default: value.default as CliProjectionFlagDefault }),
-      ...(value.description === undefined ? {} : { description: value.description as string }),
-      ...(value.name === undefined ? {} : { name: value.name as string }),
+      ...(defaultValue === undefined ? {} : { default: defaultValue }),
+      ...(description === undefined ? {} : { description }),
+      ...(name === undefined ? {} : { name }),
       ...(value.required === undefined ? {} : { required: false as const }),
     },
   };
@@ -215,7 +213,6 @@ interface ConfigValidation {
   readonly details: readonly string[];
 }
 
-/** Validates the extracted `config` against the closed key set and field shapes; every detail is one AB4841. */
 const validateProjectionConfig = (raw: Readonly<Record<string, unknown>>): ConfigValidation => {
   const details: string[] = [];
   for (const key of Object.keys(raw)) {
@@ -242,8 +239,8 @@ const validateProjectionConfig = (raw: Readonly<Record<string, unknown>>): Confi
   } else if (declaredFlags !== undefined) {
     for (const [key, value] of Object.entries(declaredFlags)) {
       const validated = validateFlag(key, value);
-      if (validated.detail !== undefined) details.push(validated.detail);
-      else flags[key] = validated.flag!;
+      if ('detail' in validated) details.push(validated.detail);
+      else flags[key] = validated.flag;
     }
   }
   const positionals = raw['positionals'] === undefined ? undefined : stringArray(raw['positionals']);
