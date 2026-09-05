@@ -300,8 +300,8 @@ const RouteInputEditor = ({ digest, entry, group, onOpenMcp }: {
   </section>;
 };
 
-const projectionCell = (option: RouteManifestCliCommand['options'][number], empty: string): string =>
-  option.aliases === undefined || option.aliases.length === 0 ? empty : option.aliases.join(', ');
+const projectionCell = (option: RouteManifestCliCommand['options'][number]): string =>
+  option.aliases === undefined || option.aliases.length === 0 ? '—' : option.aliases.join(', ');
 
 const CliCommandSurface = ({ command }: { readonly command: RouteManifestCliCommand }) => {
   const projection = command.projection;
@@ -323,7 +323,7 @@ const CliCommandSurface = ({ command }: { readonly command: RouteManifestCliComm
         <tbody>{command.options.map((option) => <tr key={option.key}>
           <th scope="row">{option.key}</th>
           <td>{option.option}</td>
-          <td>{projectionCell(option, '—')}</td>
+          <td>{projectionCell(option)}</td>
           <td>{option.positional === undefined ? '—' : String(option.positional)}</td>
         </tr>)}</tbody>
       </table>

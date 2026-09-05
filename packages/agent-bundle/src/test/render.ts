@@ -1095,21 +1095,17 @@ export const parseCliCommandInput = (
   projectionModule: Readonly<Record<string, unknown>> | undefined,
   input: Readonly<Record<string, unknown>>,
 ): unknown => {
-  let mapped: Readonly<Record<string, unknown>> = { ...input };
+  let mapped: Record<string, unknown> = { ...input };
   if (command.projection !== undefined && command.mcp?.confirm === true) {
     if (mapped['yes'] !== true) {
       throw new CliUsageError(confirmationRequiredMessage(command.mcp.server, command.mcp.tool));
     }
-    const withoutConfirmation = { ...mapped };
-    delete withoutConfirmation['yes'];
-    mapped = withoutConfirmation;
+    delete mapped['yes'];
   }
   if (command.projection?.defaults !== undefined) {
-    const withDefaults: Record<string, unknown> = { ...mapped };
     for (const [key, value] of Object.entries(command.projection.defaults)) {
-      if (!Object.hasOwn(withDefaults, key)) withDefaults[key] = value;
+      if (!Object.hasOwn(mapped, key)) mapped[key] = value;
     }
-    mapped = withDefaults;
   }
   if (command.projection?.mapInput === true) {
     const mapInput = projectionModule?.['mapInput'];
@@ -1117,7 +1113,7 @@ export const parseCliCommandInput = (
       throw new TypeError(`CLI projection ${command.projection.module} for ${command.routeId} must export a mapInput function.`);
     }
     try {
-      mapped = mapInput(mapped) as Readonly<Record<string, unknown>>;
+      mapped = mapInput(mapped) as Record<string, unknown>;
     } catch (error) {
       throw new CliInputError(error instanceof Error ? error.message : String(error));
     }
