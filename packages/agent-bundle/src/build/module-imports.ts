@@ -1,6 +1,8 @@
 import { parse as parseJavaScript } from 'acorn';
 import { init, parse } from 'es-module-lexer';
 
+import type { AgentBundleToolsConfig } from '../core/types.ts';
+
 /**
  * One import of an ES module as the lexer reports it: `specifier` is the
  * literal module specifier (absent for a non-literal dynamic import), and
@@ -25,6 +27,16 @@ export interface ModuleImport {
  *   the complete syntax check.
  */
 export type ModuleSyntaxCheck = 'lexed' | 'parsed';
+
+/**
+ * How a build checks the syntax of the modules its own bundler emitted. The
+ * bundler's output is trusted to the ESM lexer; once a consumer `tools` hatch
+ * can rewrite emitted assets (a banner, a `processAssets` pass), the final
+ * bytes are no longer the bundler's proof and are parsed in full. The
+ * artifact build and the package build decide this the same way.
+ */
+export const bundleSyntaxCheckFor = (tools: AgentBundleToolsConfig | undefined): ModuleSyntaxCheck =>
+  tools?.rspack === undefined && tools?.rsbuild === undefined ? 'lexed' : 'parsed';
 
 const importKind = (dynamic: number): ModuleImport['kind'] =>
   dynamic === -2 ? 'meta' : dynamic === -1 ? 'static' : 'dynamic';

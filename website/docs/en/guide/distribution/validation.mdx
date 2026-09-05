@@ -26,23 +26,27 @@ hand-edited generated file fails rather than passing because the path still exis
 files are checked too — a manifest-declared `logo` that is missing from the artifact or escapes
 the deploy tree reports `AB6025`.
 
-Every emitted JavaScript module is walked as an ES module (`AB6005`): each import must be a
-literal specifier that either names a Node built-in (`node:fs`, `fs`) or resolves — as a relative
-or `file:` specifier — to a regular file listed in the manifest inside the artifact. No non-literal
-dynamic imports, no bare package names, nothing outside the tree. How thoroughly a module's syntax
-is checked follows who produced its bytes. A module the framework compiled (manifest kind `bundle`)
-is the bundler's own output, so only the ESM lexer runs over it, which rejects unterminated
-strings, templates, comments, and regexps and unbalanced braces. A module the framework did not
-compile — a copied consumer script, a generated installer — is parsed in full, and so is every
-bundle of a build whose [`tools` hatch](../../reference/configuration.mdx#tools) could have rewritten the
-emitted assets. Prebuilt payloads (`kind: 'prebuilt'`) stay opaque and hash-locked only. The
-route graph guards the same self-containment before the bundler runs: a route module, layout, or
-provider — or a module one of them reaches through relative imports — that value-imports a
-compiler-carrying framework entry (`agent-bundle`, `agent-bundle/api`, `agent-bundle/config`,
-`agent-bundle/eval`, `agent-bundle/rstest`, `agent-bundle/test`, `agent-bundle/test/browser`) is
-reported as `AB4837` from `inspect`, `validate`, `build`, and `dev`, naming the file and the
-specifier, instead of failing inside the bundler; `import type` and imports used only as types are
-not reported, and a routed command that needs the framework serves an App through
+Every emitted JavaScript module is walked as an ES module (`AB6005`) — the host-pack modules of
+every artifact build, and the package build's `dist` bundles (`dist/bin/*.js`, a rendered route's
+Flight worker `.mjs`, the `lib` entry) before `dist` is published: each import must be a literal
+specifier that either names a Node built-in (`node:fs`, `fs`) or resolves — as a relative or
+`file:` specifier — to a regular file inside the emitted tree (for a host pack, one the manifest
+lists). No non-literal dynamic imports, no bare package names, nothing outside the tree; a `dist`
+finding names its file as `dist/<path>`. How thoroughly a module's syntax is checked follows who
+produced its bytes. A module the framework compiled (manifest kind `bundle`) is the bundler's own
+output, so only the ESM lexer runs over it, which rejects unterminated strings, templates,
+comments, and regexps and unbalanced braces. A module the framework did not compile — a copied
+consumer script, a generated installer — is parsed in full, and so is every bundle of a build
+whose [`tools` hatch](../../reference/configuration.mdx#tools) could have rewritten the emitted
+assets, in `dist` as in a host pack. Prebuilt payloads (`kind: 'prebuilt'`) stay opaque and
+hash-locked only, and declaration files (`.d.ts`) are not walked. The route graph guards the same
+self-containment before the bundler runs: a route module, layout, or provider — or a module one of
+them reaches through relative imports — that value-imports a compiler-carrying framework entry
+(`agent-bundle`, `agent-bundle/api`, `agent-bundle/config`, `agent-bundle/eval`,
+`agent-bundle/rstest`, `agent-bundle/test`, `agent-bundle/test/browser`) is reported as `AB4837`
+from `inspect`, `validate`, `build`, and `dev`, naming the file and the specifier, instead of
+failing inside the bundler; `import type` and imports used only as types are not reported, and a
+routed command that needs the framework serves an App through
 [`spawnServeApp`](../authoring/mcp.mdx#serving-an-app-standalone) instead.
 
 Every diagnostic is one structured record: a stable `AB` code, a severity, a message, and usually
@@ -190,8 +194,13 @@ exact package and artifact inventory, manifest hashes, package bin targets, rele
 agreement, and the installed-dependency fields of `package.json`. The build inlines every
 dependency into `dist/bin` and the host packs, so a published plugin should install nothing:
 declare the framework, `@agent-bundle/runtime`, `react`, `zod`, and the rest of the stack under
-`devDependencies`. The exception is a package a packed module still imports — one kept external
-through the `tools` escape hatch — which belongs under `dependencies`, and `AB7014` permits it there. `--output` is an artifact path relative to `--root` that overrides the configured
+`devDependencies`. A compiled bundle — a host-pack module or a `dist` bundle alike — cannot import
+a bare package at all: `AB6005` fails the build before `prepack` reaches the inventory. So
+`dependencies` is only for what the packed files demonstrably need by other means — a prebuilt
+payload module's import, a `require`, `createRequire`, or `import.meta.resolve` call in a packed
+file (a call is not an import, so `AB6005` does not walk it), a packed declaration's reference, a
+consumer install script, or a `bin` command a packed file runs — since only JavaScript the
+framework did not compile can still import one. `--output` is an artifact path relative to `--root` that overrides the configured
 `output.distPath`, defaulting to `artifact`. Use it as an npm `prepack` script; `--ignore-scripts`
 prevents recursion, and no npm lifecycle ever performs a host install.
 
@@ -201,17 +210,20 @@ package build's JavaScript bundles — compile with Rslib's `autoExternal` disab
 and `splitChunks: false`, and the framework adds no `externals` of its own; Rslib's `node` target
 leaves only Node built-ins (`node:fs`, `path`, plus Yarn PnP's `pnpapi`) external. MCP App views
 inline every script and style into one HTML file. Artifact validation holds the compiled host-pack
-bytes to the same line: a bare specifier that is not a Node built-in is `AB6005`, so a generated
-executable in a host pack loads nothing but built-ins from outside the artifact. A `dependencies`
-entry is therefore only for what the packed files demonstrably need from outside a compiled bundle
-— a package a packed module still imports because the author kept it external through the
-[`tools` hatch](../../reference/configuration.mdx#tools) (possible in the package build's `dist`
-output, which `AB6005` does not walk; a host-pack module with that import fails the build), one a
-prebuilt `.js`/`.mjs`/`.cjs` payload module imports (prebuilt files are opaque to `AB6005`, and
-`AB7014` scans only those extensions, so an extensionless prebuilt module counts for nothing), one
-a consumer-side install script runs, one whose `bin` a packed file executes, or one a packed
-declaration file references — and `AB7014` reports a declared dependency with none of that
-evidence, while `AB7015` reports one a consumer's npm cannot install.
+bytes to the same line, and the package build holds its `dist` bundles to it before publishing
+them: a bare import specifier that is not a Node built-in is `AB6005`, so a generated executable — in a
+host pack or in `dist` — imports nothing but built-ins from outside its tree. An import kept
+external through the [`tools` hatch](../../reference/configuration.mdx#tools) is not a way around
+that: it fails the build in either output and never reaches the prepack inventory. A
+`dependencies` entry is therefore only for what the packed files demonstrably need from outside a
+compiled bundle — a package a prebuilt `.js`/`.mjs`/`.cjs` payload module imports (prebuilt files
+are opaque to `AB6005`, and `AB7014` scans only those extensions, so an extensionless prebuilt
+module counts for nothing), one a packed file loads through a `require`, `createRequire`, or
+`import.meta.resolve` call (a call is not an import, so `AB6005` does not walk it in either
+output), one a consumer-side install script runs, one whose `bin` a packed file executes, or one a
+packed declaration file references (`.d.ts` outputs are not walked by `AB6005`) — and `AB7014`
+reports a declared dependency with none of that evidence, while `AB7015` reports one a consumer's
+npm cannot install.
 
 | Code | Meaning |
 | --- | --- |
@@ -219,7 +231,7 @@ evidence, while `AB7015` reports one a consumer's npm cannot install.
 | `AB7011` | An on-disk artifact file no longer matches its manifest SHA-256. Rebuild, and do not modify generated host packs. |
 | `AB7012` | A `package.json` bin points outside the packed `dist` output (including `src/`) or names a file npm omitted. Point it at the generated `dist/bin` file. |
 | `AB7013` | `package.json`, normalized plugin metadata, a host manifest, or artifact provenance reports a different release version. Make every release identity agree. |
-| `AB7014` | A `dependencies`, `optionalDependencies`, or `peerDependencies` field names packages nothing in the pack uses — no packed JavaScript imports, requires, or resolves them, no packed declaration references them, no `imports` mapping or consumer install script reaches them (one diagnostic per field; optional peers are skipped here but their specifier is still checked by `AB7015`, and an `optionalDependencies` entry supersedes the same name under `dependencies`). Every consumer would install them for nothing. Move build-only packages to `devDependencies`. For `peerDependencies` this is a warning, since a required peer nothing imports may be a deliberate host-compatibility contract; mark it optional in `peerDependenciesMeta` if npm should stop installing it. |
+| `AB7014` | A `dependencies`, `optionalDependencies`, or `peerDependencies` field names packages nothing in the pack uses — no packed JavaScript imports, requires, or resolves them (compiled bundles inline their imports and `AB6005` fails one they kept external, so `import` evidence comes from prebuilt payload modules and other scripts the framework did not compile, while `require`, `createRequire`, and `import.meta.resolve` calls count from any packed file), no packed declaration references them, no `imports` mapping or consumer install script reaches them (one diagnostic per field; optional peers are skipped here but their specifier is still checked by `AB7015`, and an `optionalDependencies` entry supersedes the same name under `dependencies`). Every consumer would install them for nothing. Move build-only packages to `devDependencies`. For `peerDependencies` this is a warning, since a required peer nothing imports may be a deliberate host-compatibility contract; mark it optional in `peerDependenciesMeta` if npm should stop installing it. |
 | `AB7015` | A `dependencies`, `optionalDependencies`, or `peerDependencies` entry a consumer's npm cannot resolve through a registry. Name and specifier are read with `npm-package-arg`, npm's own parser, and come out as one of three kinds: registry (a version, range, dist-tag, or `npm:` alias of one), fetched (a git, GitHub-shorthand, remote-tarball, or path source — npm 12 refuses git and remote fetches by default (`allow-git`, `allow-remote`), and a path never exists on the consumer's disk), or unparseable (a name npm rejects, a scheme it lacks such as `link:`, `portal:`, or a typo, a selector that is neither a range nor a URL-safe dist-tag, an alias of a non-registry target, or an invalid URL — the manifest read itself fails, so this is reported even on an optional peer). A fetched `optionalDependencies` entry warns instead of failing, since npm continues without it; it stays an error when unparseable, or when a consumer install script needs the skipped package (runs its command — not merely mentions it — loads it from an inline `node -e` program — scanned for `require`, `createRequire`, and `import()` like a packed file — preloads it with `node -r`/`--require`/`--import`/`--loader`, or runs a packed file that imports it, `node .` running the root `main` included; each command after `&&`, `;`, or a newline is read on its own, shell quotes and backslash escapes resolved, and `node`'s options belong to `node` alone and end at the program — `node install.js --require x` preloads nothing, while a `NODE_OPTIONS=--require=x` assignment on the same `node` command does; every script word naming a packed JavaScript file counts as run, deliberately, so that runners the gate does not model — `tsx`, `zx`, `bun`, `deno run` — still have their file's dependencies traced, at the cost of a rare escalation for a word such as `echo install.js`, which the diagnostic makes visible by naming the file). A peer that `dependencies` or `optionalDependencies` also names is judged by that concrete entry; npm never reads the duplicate peer's selector. `workspace:`/`catalog:` are reported too unless the `prepack` lifecycle runs under pnpm, Yarn, or Bun, which rewrite them at pack time — `npm publish` does not, so under npm `AB7015` fires; entries the tarball itself carries — `bundleDependencies` npm actually packed (never peers), and a `file:` path inside the package whose packed source is installable (a directory with a parseable `package.json`, or a well-formed tarball whose `package.json` parses) — are not reported. Depend on a published version, or bundle the package and declare it under `devDependencies`. |
 
 The dependency evidence is read from the packed bytes: every `.js`/`.mjs`/`.cjs` file npm would
