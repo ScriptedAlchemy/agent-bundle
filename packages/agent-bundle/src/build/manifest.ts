@@ -456,6 +456,7 @@ const requirePath = (value: unknown, location: string): string => {
     path.includes('\\') ||
     path.includes('\0') ||
     path.startsWith('/') ||
+    /^[a-z]:/iu.test(path) ||
     segments.some((segment) => segment.length === 0 || segment === '.' || segment === '..')
   ) {
     fail(`${location} must be a safe relative POSIX path.`);

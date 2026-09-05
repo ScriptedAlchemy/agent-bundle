@@ -290,8 +290,22 @@ const assertOutputProvenanceSources = (options: {
 const sortedHosts = (hosts: Iterable<string>): readonly string[] =>
   Object.freeze([...new Set(hosts)].sort((left, right) => left.localeCompare(right)));
 
-const artifactPath = (artifactRoot: string, absolute: string): string =>
-  relative(artifactRoot, absolute).replaceAll('\\', '/');
+/** Artifact-root-relative POSIX path; refuses anything the parser would reject. */
+const artifactPath = (artifactRoot: string, absolute: string): string => {
+  const path = relative(artifactRoot, absolute).replaceAll('\\', '/');
+  const segments = path.split('/');
+  if (
+    path.length === 0 ||
+    path.includes('\\') ||
+    path.includes('\0') ||
+    path.startsWith('/') ||
+    /^[a-z]:/iu.test(path) ||
+    segments.some((segment) => segment.length === 0 || segment === '.' || segment === '..')
+  ) {
+    throw new Error(`Artifact path ${JSON.stringify(absolute)} is not relocatable relative to ${JSON.stringify(artifactRoot)}.`);
+  }
+  return path;
+};
 
 /** The selected host projections the composite root holds, with their adapter provenance and derived-document pointers. */
 const manifestProjections = (options: {
