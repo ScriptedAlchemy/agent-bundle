@@ -7,10 +7,6 @@ import { createWorkbenchAssetSource } from '../../agent-bundle/src/dev/workbench
 import { startDevServer } from '../../agent-bundle/src/dev/workbench-server.ts';
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import {
-  replaceWatchedSourceAndAwaitRebuild,
-  type WatchedBuildSession,
-} from '../../agent-bundle/tests/support/watched-files.ts';
-import {
   captureExampleState,
   copyExample,
   createExampleErrorLedger,
@@ -18,37 +14,29 @@ import {
   writeExampleReport,
 } from './support/example-acceptance.ts';
 import {
+  editWatchedSource,
   expectApplicationTree,
   expectPrimaryNav,
   expectRenderedDocument,
   expectUnknownRouteMessage,
+  fillRouteInput,
   openWorkbench,
   readBuildEpoch,
+  readInvocationId,
+  rebuildTimeout,
+  runSelectedRoute,
   selectApplicationLeaf,
   waitForBuildEpochAdvance,
   workbenchTestId,
-  workbenchTestIds,
 } from './support/workbench-acceptance.ts';
 import { buildWorkbench, e2e, waitForWorkbenchIdle, workbenchAssets, workbenchUrl } from './support/workbench-e2e.ts';
 import { inspectWorkbenchSurface, workbenchLeafPath } from '../../agent-bundle/src/test/index.ts';
 import { applicationLeafForRouteId, applicationLeaves } from '../src/application/application-tree-model.ts';
 
 const browserTimeout = 15_000 * timeScale;
-const rebuildTimeout = 60_000 * timeScale;
 const runTimeout = 60_000 * timeScale;
 const searchTitle = 'Dune';
 const hmrMarker = 'WB600-HMR-MARKER';
-
-const editWatchedSource = async (
-  server: WatchedBuildSession,
-  projectRoot: string,
-  path: string,
-  content: string,
-  expectedOutcome: 'failed' | 'succeeded',
-): Promise<void> => {
-  const attempt = await replaceWatchedSourceAndAwaitRebuild(server, projectRoot, path, content, { timeoutMs: rebuildTimeout });
-  expect(attempt.outcome).toBe(expectedOutcome);
-};
 
 e2e('accepts the audiobook-curator Application workspace at 1440×900', { timeout: 240_000 * timeScale }, async ({ page }) => {
   await buildWorkbench();
@@ -87,16 +75,15 @@ e2e('accepts the audiobook-curator Application workspace at 1440×900', { timeou
     await captureExampleState(page, 'audiobook-curator', 'application-populated');
 
     await selectApplicationLeaf(page, server.url, searchLeaf);
-    await page.getByLabel(/^title/iu).fill(searchTitle);
-    await workbenchTestId(page, 'routeRun').or(page.getByRole('button', { name: 'Run' })).click();
+    await fillRouteInput(page, { title: searchTitle });
+    await runSelectedRoute(page, runTimeout);
     const rendered = await expectRenderedDocument(page, runTimeout);
-    await expect(page.getByTestId(workbenchTestIds.resultTabStructured).or(page.getByRole('tab', { name: /Structured/u }))).toBeVisible();
-    await expect(page.getByTestId(workbenchTestIds.resultTabRaw).or(page.getByRole('tab', { name: /Raw/u }))).toBeVisible();
-    await expect(page.getByTestId(workbenchTestIds.resultTabMcp).or(page.getByRole('tab', { name: /^MCP/u }))).toBeVisible();
-
-    const invocationUrl = new URL(page.url());
-    const invocationId = invocationUrl.searchParams.get('invocation');
-    expect(invocationId).toMatch(/\S/u);
+    await expect(workbenchTestId(page, 'resultTabStructured')).toBeVisible();
+    await expect(workbenchTestId(page, 'resultTabRaw')).toBeVisible();
+    await expect(workbenchTestId(page, 'resultTabMcp')).toBeVisible();
+    await expect(workbenchTestId(page, 'resultTabTrace')).toBeVisible();
+    await captureExampleState(page, 'audiobook-curator', 'tool-rendered');
+    const invocationId = await readInvocationId(page);
 
     const epochBeforeEdit = await readBuildEpoch(page);
     const markedSearch = healthySearch.replace(
@@ -109,33 +96,45 @@ e2e('accepts the audiobook-curator Application workspace at 1440×900', { timeou
     await editWatchedSource(server, project.root, searchSource, markedSearch, 'succeeded');
     await waitForBuildEpochAdvance(page, epochBeforeEdit, rebuildTimeout);
     await waitForWorkbenchIdle(page);
-    await workbenchTestId(page, 'routeRun').or(page.getByRole('button', { name: 'Run' })).click();
+    await runSelectedRoute(page, runTimeout);
     await expect(rendered).toContainText(hmrMarker, { timeout: runTimeout });
     await editWatchedSource(server, project.root, searchSource, healthySearch, 'succeeded');
 
-    await page.goto(workbenchUrl(server.url, `${searchPath}?invocation=${encodeURIComponent(invocationId!)}`));
+    await page.goto(workbenchUrl(server.url, `${searchPath}?invocation=${encodeURIComponent(invocationId)}`));
     await waitForWorkbenchIdle(page);
     expect(new URL(page.url()).searchParams.get('invocation')).toBe(invocationId);
     await expect(workbenchTestId(page, 'routeWorkspace')).toBeVisible({ timeout: browserTimeout });
     await expectRenderedDocument(page, runTimeout);
+    expect(await readInvocationId(page)).toBe(invocationId);
+
+    await openWorkbench(page, server.url, '/trace');
+    await expect(page.getByRole('heading', { name: 'Trace', exact: true })).toBeVisible({ timeout: browserTimeout });
+    const traceRow = page.locator(`.trace-table tr[data-invocation-id=${JSON.stringify(invocationId)}]`);
+    await expect(traceRow).toBeVisible({ timeout: browserTimeout });
+    await expect(traceRow).toContainText(searchLeaf.routeId ?? 'tool:curator/search_audible');
+    await captureExampleState(page, 'audiobook-curator', 'trace-populated');
+    await traceRow.getByRole('link').first().click();
+    await waitForWorkbenchIdle(page);
+    expect(new URL(page.url()).pathname).toBe(`/trace/${encodeURIComponent(invocationId)}`);
+    await expect(page.getByTestId('trace-entry')).toBeVisible({ timeout: browserTimeout });
 
     await editWatchedSource(server, project.root, conversionSource, `${healthyConversion}\nconst = ;\n`, 'failed');
     await page.reload();
     await waitForWorkbenchIdle(page);
-    const problemsBadge = workbenchTestId(page, 'problemsBadge').or(page.getByRole('link', { name: /Problems/u }));
+    const problemsBadge = workbenchTestId(page, 'problemsBadge');
     await expect(problemsBadge).toBeVisible({ timeout: browserTimeout });
-    await expect(problemsBadge).toContainText(/[1-9]/u);
+    await expect(problemsBadge).toContainText(/[1-9]/u, { timeout: browserTimeout });
     await openWorkbench(page, server.url, '/problems');
-    const staleBanner = workbenchTestId(page, 'problemsBanner').or(page.getByRole('status').filter({
-      hasText: /stale|newer source|rebuild/iu,
-    }));
+    const staleBanner = workbenchTestId(page, 'problemsBanner');
     await expect(staleBanner).toBeVisible({ timeout: browserTimeout });
+    await expect(staleBanner).toContainText(/stale|newer source|rebuild|last good build/iu);
     await captureExampleState(page, 'audiobook-curator', 'problems-stale');
     await editWatchedSource(server, project.root, conversionSource, healthyConversion, 'succeeded');
-    await workbenchTestId(page, 'problemsRepair').or(page.getByRole('button', { name: /Repair|Rebuild/u })).click();
+    await workbenchTestId(page, 'problemsRepair').click();
     await waitForWorkbenchIdle(page);
     await expect(staleBanner).toHaveCount(0, { timeout: browserTimeout });
     await expect(problemsBadge).not.toContainText(/[1-9]/u, { timeout: browserTimeout });
+    await captureExampleState(page, 'audiobook-curator', 'problems-repaired');
 
     await page.goto(workbenchUrl(server.url, searchPath));
     await waitForWorkbenchIdle(page);
@@ -153,28 +152,37 @@ e2e('accepts the audiobook-curator Application workspace at 1440×900', { timeou
     await waitForWorkbenchIdle(page);
     expect(new URL(page.url()).pathname).toBe('/trace');
 
-    await page.goto(workbenchUrl(server.url, '/routes/mcp/no-such-server/tool/missing'));
+    // A well-formed deep link to a route the catalog does not contain keeps its
+    // URL and reports the unknown route; its escape hatch returns to the tree.
+    const missingPath = '/routes/mcp/no-such-server/tool/missing';
+    await page.goto(workbenchUrl(server.url, missingPath));
     await waitForWorkbenchIdle(page);
-    expect(new URL(page.url()).pathname).toBe('/');
+    expect(new URL(page.url()).pathname).toBe(missingPath);
     await expectUnknownRouteMessage(page);
+    await workbenchTestId(page, 'unknownRoute').getByRole('link', { name: /application tree/iu }).click();
+    await expect(workbenchTestId(page, 'workspaceEmpty')).toBeVisible({ timeout: browserTimeout });
+    expect(new URL(page.url()).pathname).toBe('/');
 
     await openWorkbench(page, server.url, '/advanced/evals');
     await expect(page.getByRole('tab', { name: 'Runs' })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByRole('tab', { name: 'Compare' })).toBeVisible({ timeout: browserTimeout });
+    await captureExampleState(page, 'audiobook-curator', 'advanced-evals');
 
     await openWorkbench(page, server.url, '/advanced/hosts');
-    await expect(page.getByRole('heading', { name: /Host diagnostics/u })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByRole('heading', { name: 'Host diagnostics', exact: true })).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByText(/installed|version|path/iu).first()).toBeVisible({ timeout: browserTimeout });
     await expect(page.getByRole('table', { name: /finding|bundle|store|probe/iu })).toHaveCount(0);
 
     await openWorkbench(page, server.url, '/advanced/artifact');
-    await expect(page.getByRole('tree').or(page.getByRole('treeitem')).first()).toBeVisible({ timeout: browserTimeout });
-    const detailsToggle = page.getByTestId(workbenchTestIds.inspectorToggle)
-      .or(page.getByRole('button', { name: /details/iu }))
-      .first();
+    await expect(page.getByRole('heading', { name: 'Emitted files' })).toBeVisible({ timeout: browserTimeout });
+    const detailsToggle = page.locator('.artifact-table').getByRole('button', { name: 'Details' }).first();
     await expect(detailsToggle).toBeVisible({ timeout: browserTimeout });
     await detailsToggle.click();
-    await expect(page.getByText(/hash|mode|provenance/iu).first()).toBeVisible({ timeout: browserTimeout });
+    const fileDetails = page.locator('.artifact-file-details').first();
+    await expect(fileDetails).toBeVisible({ timeout: browserTimeout });
+    await expect(fileDetails).toContainText(/SHA-256/u);
+    await expect(fileDetails).toContainText(/Mode/u);
+    await expect(fileDetails).toContainText(/Provenance/u);
 
     await expectHealthyExamplePage(ledger);
     await writeExampleReport();

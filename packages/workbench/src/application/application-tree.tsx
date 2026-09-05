@@ -61,7 +61,7 @@ const Leaf = ({ leaf, onKeyDown, onSelect, selected }: {
   <button
     aria-selected={selected}
     className="application-tree-leaf"
-    data-application-leaf=""
+    data-application-leaf={leaf.key}
     onClick={() => onSelect(leaf.ref)}
     onKeyDown={(event) => onKeyDown(event, leaf)}
     role="treeitem"
@@ -108,8 +108,8 @@ export const ApplicationTreeView = ({
     leaves[Math.max(0, Math.min(leaves.length - 1, current + offset))]?.focus();
   };
 
-  const renderLeaves = (leaves: readonly ApplicationLeaf[]) => (
-    <div role="group">
+  const renderLeaves = (label: string, leaves: readonly ApplicationLeaf[]) => (
+    <div aria-label={label} role="group">
       {leaves.map((leaf) => (
         <Leaf
           key={leaf.key}
@@ -131,7 +131,7 @@ export const ApplicationTreeView = ({
         label={subgroup.label}
         onToggle={() => toggle(subgroup.key)}
       />
-      {expanded ? renderLeaves(subgroup.leaves) : undefined}
+      {expanded ? renderLeaves(subgroup.label, subgroup.leaves) : undefined}
     </div>;
   };
 
@@ -145,7 +145,7 @@ export const ApplicationTreeView = ({
         onToggle={() => toggle(server.key)}
       />
       {expanded
-        ? <div role="group">{server.subgroups.map(renderSubgroup)}</div>
+        ? <div aria-label={server.label} role="group">{server.subgroups.map(renderSubgroup)}</div>
         : undefined}
     </div>;
   };
@@ -161,8 +161,8 @@ export const ApplicationTreeView = ({
       />
       {expanded
         ? group.kind === 'mcp'
-          ? <div role="group">{group.servers.map(renderServer)}</div>
-          : renderLeaves(group.leaves)
+          ? <div aria-label={group.label} role="group">{group.servers.map(renderServer)}</div>
+          : renderLeaves(group.label, group.leaves)
         : undefined}
     </div>;
   };

@@ -843,13 +843,14 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
     projectRoot: root,
     storageRoot: join(root, '.agent-bundle', 'playground'),
   });
+  const scriptPlayground = new ScriptPlaygroundService({ epochStore, registry, platformRuntime });
   const playground = new PlaygroundOrchestrationService({
     coordinator,
     epochStore,
     hookPlayground,
     mcpSessions,
     native: new NativePlaygroundService({ projectRoot: root, platformRuntime }),
-    scripts: new ScriptPlaygroundService({ epochStore, registry, platformRuntime }),
+    scripts: scriptPlayground,
     skillDocuments,
     trace,
   });
@@ -885,7 +886,16 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
         .map((target) => target.name)
         .filter((target): target is RouteInvocationEventHost =>
           target === 'claude' || target === 'codex' || target === 'cursor');
+      // Emitted scripts live once at the composite root; any selected target
+      // whose layout has a scripts directory reads the same file.
+      const artifact = status().artifact;
+      const scriptTarget = prepared.model.targets
+        .map((target) => target.name)
+        .find((target) => registry.artifactLayout(target).scripts !== undefined);
       return Object.freeze({
+        ...((artifact.state === 'active' || artifact.state === 'stale') && scriptTarget !== undefined
+          ? { artifact: { epochId: artifact.activeEpoch.id, target: scriptTarget } }
+          : {}),
         manifest: testManifestFromRouteGraph({
           apps: prepared.model.mcpApps,
           configPath: prepared.configPath,
@@ -910,6 +920,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
       });
     },
     registry,
+    scripts: scriptPlayground,
   });
   const agentApi = agentApiEnabled
     ? new AgentApi({

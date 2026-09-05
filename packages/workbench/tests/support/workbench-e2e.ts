@@ -73,16 +73,19 @@ export const workbenchUrl = (origin: string, pageOrPath = '/'): string =>
   new URL(workbenchPathname(pageOrPath), origin.endsWith('/') ? origin : `${origin}/`).href;
 
 const idleTimeout = 15_000 * timeScale;
+const buildSettleTimeout = 60_000 * timeScale;
 
 /**
- * Wait until the Workbench is past its loading state. AGENTS.md: never assert
- * or screenshot a route while loading is still visible.
+ * Wait until the Workbench is past its loading state, including a header
+ * that still reads "Building…". AGENTS.md: never assert or screenshot a
+ * route while loading is still visible.
  */
 export const waitForWorkbenchIdle = async (page: Page, timeout = idleTimeout): Promise<void> => {
   await expect(page.getByText('Foreground server connected', { exact: true })).toBeVisible({ timeout });
   await expect(page.getByTestId('workbench-loading')).toHaveCount(0, { timeout });
   await expect(page.locator('.loading-state')).toHaveCount(0, { timeout });
   await expect(page.getByText(/^Loading(?:\s|…|$)/u)).toHaveCount(0, { timeout });
+  await expect(page.locator('.shell-build--building')).toHaveCount(0, { timeout: Math.max(timeout, buildSettleTimeout) });
 };
 
 let workbenchBuild: Promise<void> | undefined;
