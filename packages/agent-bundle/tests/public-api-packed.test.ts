@@ -42,7 +42,7 @@ const writePackedFixtureManifest = async (artifactRoot: string): Promise<Artifac
     .filter((file) => file.path !== artifactManifestName)
     .map((file) => ({
       bytes: file.bytes,
-      kind: 'generated' as const,
+      kind: file.path === 'mcp/server.mjs' ? 'bundle' as const : 'generated' as const,
       ...((file.mode & 0o111) === 0 ? {} : { mode: file.mode }),
       path: file.path,
       sha256: file.sha256,

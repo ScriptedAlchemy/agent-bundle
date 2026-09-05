@@ -556,26 +556,23 @@ it('inspects one validated epoch as sorted, source-free artifact facts', async (
   }
 });
 
-it('rejects a manifested MCP host without its projection MCP document', async () => {
+it('never publishes a manifested MCP host without its projection MCP document', async () => {
+  // `validateArtifact` refuses the manifest before the epoch publishes, so the
+  // inspection service never derives runtime metadata from a pointerless host.
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-artifact-inspection-mcp-document-'));
   const registry = runtimeRegistry();
   const store = new EpochStore({ projectRoot: root });
 
   try {
-    await publish({
+    await expect(publish({
       files: runtimeFiles(),
       id: 'epoch-missing-mcp-document',
       omitMcpDocument: true,
       registry,
       root,
       store,
-    });
-
-    await expect(new ArtifactInspectionService(store, registry).inspect('epoch-missing-mcp-document'))
-      .rejects.toMatchObject({
-        code: 'ARTIFACT_INSPECTION_RUNTIME_INVALID',
-        diagnostics: [expect.objectContaining({ code: 'AB6202' })],
-      });
+    })).rejects.toThrow(`projections["${fixtureTarget}"].documents.mcp is absent, but the target's MCP manifest is "mcp.json".`);
+    await expect(store.listEpochs()).resolves.toEqual([]);
   } finally {
     await rm(root, { force: true, recursive: true });
   }

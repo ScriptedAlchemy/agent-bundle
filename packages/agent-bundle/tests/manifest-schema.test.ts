@@ -536,6 +536,14 @@ const schemaEncodedRules: readonly { readonly apply: (manifest: MutableManifest)
   { apply: (manifest) => { manifest.files[0]!.path = 'claude//hooks.json'; }, rule: 'paths have no empty segment' },
   { apply: (manifest) => { manifest.files[0]!.path = 'claude\\hooks.json'; }, rule: 'paths have no backslash' },
   { apply: (manifest) => { manifest.files[0]!.path = 'claude/hooks.json/'; }, rule: 'paths have no trailing slash' },
+  { apply: (manifest) => { manifest.files[0]!.path = 'claude/notes.md:stream'; }, rule: 'path segments have no Windows-reserved character' },
+  { apply: (manifest) => { manifest.files[0]!.path = 'claude/CON.txt'; }, rule: 'path segments are not Windows device names' },
+  { apply: (manifest) => { manifest.files[0]!.path = 'claude/con.txt'; }, rule: 'path segments are not Windows device names in any letter case' },
+  { apply: (manifest) => { manifest.files[0]!.path = 'claude/COM\u00b9.log'; }, rule: 'path segments are not superscript-digit Windows device names' },
+  { apply: (manifest) => { manifest.files[0]!.path = 'claude/lpt\u00b3'; }, rule: 'path segments are not bare Windows device names' },
+  { apply: (manifest) => { manifest.files[0]!.path = 'claude/hooks.json.'; }, rule: 'path segments have no trailing dot' },
+  { apply: (manifest) => { manifest.files[0]!.path = 'claude /hooks.json'; }, rule: 'path segments have no trailing space' },
+  { apply: (manifest) => { manifest.files[0]!.path = 'claude/hooks\u0001.json'; }, rule: 'path segments have no control character' },
   { apply: (manifest) => { manifest.files[0]!.bytes = -1; }, rule: 'files[].bytes is non-negative' },
   { apply: (manifest) => { manifest.files[0]!.bytes = 1.5; }, rule: 'files[].bytes is an integer' },
   { apply: (manifest) => { manifest.files[6]!.mode = 0o1000; }, rule: 'files[].mode is at most 0o777' },
@@ -682,6 +690,17 @@ it('encodes the parser rules a schema can state, so both reject the same values'
     return { parser: verdict(parserAccepts(manifest)), rule, schema: verdict(schemaAccepts(manifest)) };
   });
   expect(outcomes).toEqual(schemaEncodedRules.map(({ rule }) => ({ parser: 'rejects', rule, schema: 'rejects' })));
+});
+
+it('accepts path segments that only resemble Windows device names in both the parser and the schema', () => {
+  for (const path of ['claude/COM10.log', 'claude/console.txt', 'claude/nulled/index.json', 'claude/lpt.txt']) {
+    const manifest: ArtifactManifest = {
+      ...minimalManifest(),
+      compiler: { ...minimalManifest().compiler, provenance: [provenance(path)] },
+      files: [file(path, 'generated')],
+    };
+    expect([path, verdict(parserAccepts(manifest)), verdict(schemaAccepts(manifest))]).toEqual([path, 'accepts', 'accepts']);
+  }
 });
 
 it('reports closed-key, required-key, and type failures as formatted lines in deterministic order', () => {

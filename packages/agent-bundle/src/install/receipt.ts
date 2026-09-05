@@ -18,7 +18,8 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
-import { exists, installReceiptFile, isInstallReceiptEntry, isPreservedRuntimeRoot } from '../core/paths.ts';
+import { matchesManifestFile } from '../build/artifact-layout.ts';
+import { exists, installReceiptFile, isInstallReceiptEntry, isPortablePathSegment, isPreservedRuntimeRoot } from '../core/paths.ts';
 import { stateOwnershipMarkerFile } from '../core/types.ts';
 import { artifactManifestName, type ArtifactManifest } from '../build/manifest.ts';
 import { OPERATOR_ENV_FILE_NAMES } from '../launch-env.ts';
@@ -366,11 +367,13 @@ export const manifestInventory = async (
       throw error;
     }
     const row = rows.get(relativePath);
-    if (
-      row !== undefined &&
-      createHash('sha256').update(bytes).digest('hex') !== row.sha256
-    ) {
-      throw new Error(`--from root does not match its manifest: ${relativePath} bytes differ from its files[] digest.`);
+    if (row !== undefined && !matchesManifestFile({
+      bytes: metadata.size,
+      mode: metadata.mode & 0o777,
+      path: relativePath,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+    }, row)) {
+      throw new Error(`--from root does not match its manifest: ${relativePath} differs from its files[] row in bytes, mode, or digest.`);
     }
     hashEntry(hash, relativePath, metadata, bytes);
   }
@@ -475,8 +478,6 @@ export const hashOwnedFiles = async (root: string, files: readonly string[]): Pr
  * characters, alternate-stream colons, trailing dots or spaces) or resolve as
  * a DOS device (`NUL`, `CON.txt`, `COM1`, `LPT1.json`, ...).
  */
-const windowsDeviceName = /^(?:con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(?:\.|$)/iu;
-
 export const isReceiptPath = (value: unknown): value is string =>
   typeof value === 'string' &&
   value.length > 0 &&
@@ -488,15 +489,7 @@ export const isReceiptPath = (value: unknown): value is string =>
   !value.startsWith('/') &&
   // Runtime roots are never installer-owned, whatever a receipt claims and however it spells them.
   !isPreservedRuntimeRoot(value.split('/')[0] ?? '') &&
-  value.split('/').every((segment) =>
-    segment !== '' &&
-    segment !== '.' &&
-    segment !== '..' &&
-    !/[<>:"|?*]/u.test(segment) &&
-    !windowsDeviceName.test(segment) &&
-    [...segment].every((character) => character.charCodeAt(0) >= 0x20) &&
-    !segment.endsWith('.') &&
-    !segment.endsWith(' '));
+  value.split('/').every(isPortablePathSegment);
 
 const isReceiptFileList = (value: unknown): value is readonly string[] =>
   Array.isArray(value) && value.every(isReceiptPath);
