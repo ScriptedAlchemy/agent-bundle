@@ -1,0 +1,55 @@
+import type { LaunchOptions } from 'playwright';
+
+/**
+ * Environment variable that selects the browser binary every Workbench browser
+ * suite launches — the shared `e2e` fixture in workbench-e2e.ts and its
+ * per-file forks, the raw `chromium.launch()` suites, and the nightly
+ * capture-runtime-playground.mjs driver all read {@link browserLaunchOptions}:
+ *
+ * - unset (or empty) or `chrome` — branded Google Chrome (`channel: 'chrome'`),
+ *   the local developer default: whichever Chrome stable the machine has.
+ * - `chromium` — Playwright's bundled Chromium for the installed Playwright
+ *   version (`pnpm exec playwright install chromium`). CI sets this so a run
+ *   tests one build, cached by Playwright version, instead of the Chrome the
+ *   runner image happens to ship that week. Launched as `channel: 'chromium'`,
+ *   which is the full Chromium build in the same new headless mode branded
+ *   Chrome runs in — not the `chromium_headless_shell` build a bare headless
+ *   `chromium.launch()` picks. The shell's legacy headless mode reports the
+ *   MCP App sandbox's `srcdoc` frames differently and mcp-app-real.e2e's two
+ *   frame-URL polls never settle under it (reproduced with Playwright 1.62.1,
+ *   Chromium 151); `playwright install chromium` installs both builds, so the
+ *   choice costs nothing.
+ *
+ * Any other value fails at module load rather than silently launching the
+ * wrong browser.
+ *
+ * Playwright locates bundled browsers from `PLAYWRIGHT_BROWSERS_PATH`, else
+ * (on Linux) from `XDG_CACHE_HOME`/`~/.cache` + `ms-playwright`, resolved once
+ * when `playwright` is first imported. Rstest workers run under
+ * rstest.worker-isolation.ts, which points `XDG_CACHE_HOME` at an empty
+ * per-worker directory — and, first, pins `PLAYWRIGHT_BROWSERS_PATH` to the
+ * registry Playwright would have resolved without that override, so
+ * `chromium` finds the same install inside a worker as outside. Branded
+ * Chrome is a system install and never consults that directory.
+ *
+ * This module is a leaf on purpose: the `.mjs` capture script cannot load
+ * workbench-e2e.ts (its `test.extend` needs a running Rstest worker), so both
+ * import the selection from here instead of carrying their own copy.
+ */
+export const playwrightChannelVariable = 'AGENT_BUNDLE_PLAYWRIGHT_CHANNEL';
+
+const selectLaunchOptions = (channel: string | undefined): LaunchOptions => {
+  switch (channel) {
+    case undefined:
+    case '':
+    case 'chrome':
+      return { channel: 'chrome' };
+    case 'chromium':
+      return { channel: 'chromium' };
+    default:
+      throw new Error(`${playwrightChannelVariable} must be "chrome" or "chromium", got ${JSON.stringify(channel)}.`);
+  }
+};
+
+/** Shared `browserType.launch()` options for every Workbench browser suite; see {@link playwrightChannelVariable}. */
+export const browserLaunchOptions: LaunchOptions = Object.freeze(selectLaunchOptions(process.env[playwrightChannelVariable]));

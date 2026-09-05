@@ -27,31 +27,59 @@ jobs:
     runs-on: self-hosted
     strategy:
       fail-fast: false
+      # Signed-in source smokes, listed per Rstest pool. rstest.integration-tests.ts
+      # decides the pool: a file in integrationTestFiles runs through
+      # rstest.integration.config.ts, every other packages/**/tests file through
+      # rstest.unit.config.ts. A file belongs in exactly one field;
+      # `pnpm exec rstest list --config <pool config> --filesOnly <file>` prints it
+      # under the pool that owns it. An empty integration_tests skips that step.
       matrix:
         include:
           - host: claude
-            source_tests: packages/agent-bundle/tests/native-claude-contract.test.ts packages/agent-bundle/tests/eval-claude-harness.test.ts
+            unit_tests: packages/agent-bundle/tests/native-claude-contract.test.ts
+            integration_tests: packages/agent-bundle/tests/eval-claude-harness.test.ts
             packed_command: pnpm test:packed:native:claude
           - host: codex
-            source_tests: packages/agent-bundle/tests/native-codex-contract.test.ts packages/agent-bundle/tests/eval-codex-home.test.ts
+            unit_tests: packages/agent-bundle/tests/native-codex-contract.test.ts packages/agent-bundle/tests/eval-codex-home.test.ts
+            integration_tests: ''
             packed_command: pnpm test:packed:native:codex
     steps:
       - uses: actions/checkout@v7
         if: inputs.host == 'both' || inputs.host == matrix.host
-      - uses: pnpm/setup@v2
+      - uses: ./.github/actions/setup-workspace
         if: inputs.host == 'both' || inputs.host == matrix.host
         with:
-          cache: true
-          install: false
-          runtime: node@22.19.0
-      - run: pnpm install --frozen-lockfile
-        if: inputs.host == 'both' || inputs.host == matrix.host
-      - name: ${{ matrix.host }} source signed-in smoke
+          node-version: 22.19.0
+      # The source smokes run each pool's script with that pool's files. A single
+      # `pnpm test -- <files>` cannot target them: pnpm appends the arguments to
+      # the end of the `test` chain (`test:unit && test:route-unit &&
+      # test:projection && test:integration`), so only the last command receives
+      # them and unit, route-unit and projection run unfiltered (~3.5 min of
+      # unrelated tests); and rstest's CLI parser (cac) keeps everything after
+      # `--` out of the positional filters, so the integration pool ran
+      # unfiltered as well — every dispatch ran the whole suite, and a leg whose
+      # files are all unit-pool (codex) never ran a filtered pool at all. The
+      # file lists are passed without `--` for the same reason: pnpm forwards
+      # a `--` to rstest verbatim.
+      - name: ${{ matrix.host }} source signed-in smoke (unit pool)
         if: inputs.host == 'both' || inputs.host == matrix.host
         env:
           AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE: ${{ matrix.host == 'claude' && '1' || '' }}
           AGENT_BUNDLE_NATIVE_CODEX_SMOKE: ${{ matrix.host == 'codex' && '1' || '' }}
-        run: pnpm test -- ${{ matrix.source_tests }}
+        run: pnpm test:unit ${{ matrix.unit_tests }}
+      # One build for every dist consumer below, on a runner that starts from a
+      # fresh checkout: `test:integration:run` reads the prebuilt dist
+      # (AGENT_BUNDLE_*_PREBUILT=1), and the host install proofs spawn
+      # packages/agent-bundle/dist/cli.js (tests/support/host-install.ts). The
+      # unit pool above is build-free, so it runs first and fails fast.
+      - run: pnpm build
+        if: inputs.host == 'both' || inputs.host == matrix.host
+      - name: ${{ matrix.host }} source signed-in smoke (integration pool)
+        if: matrix.integration_tests != '' && (inputs.host == 'both' || inputs.host == matrix.host)
+        env:
+          AGENT_BUNDLE_NATIVE_CLAUDE_SMOKE: ${{ matrix.host == 'claude' && '1' || '' }}
+          AGENT_BUNDLE_NATIVE_CODEX_SMOKE: ${{ matrix.host == 'codex' && '1' || '' }}
+        run: pnpm test:integration:run ${{ matrix.integration_tests }}
       - name: ${{ matrix.host }} installed-tarball native smoke
         if: inputs.host == 'both' || inputs.host == matrix.host
         run: ${{ matrix.packed_command }}
