@@ -898,6 +898,11 @@ it('validates --from Codex bytes without running the live schema generator', asy
       name: 'Invalid Codex Name',
       version: '1.2.3',
     });
+    await writeInstallFixtureManifest(
+      bundle,
+      { name: 'doctor-fixture', version: '1.2.3' },
+      [{ host: 'codex', marketplace: 'doctor-fixture-marketplace' }],
+    );
 
     const report = await runDoctor({
       commandRunner: async (request) => {
@@ -938,6 +943,11 @@ it('validates --from Claude documents from pinned bytes without a new CLI proof'
       name: 'doctor-fixture',
       version: '1.2.3',
     });
+    await writeInstallFixtureManifest(
+      bundle,
+      { name: 'doctor-fixture', version: '1.2.3' },
+      [{ host: 'claude', marketplace: 'doctor-fixture-marketplace' }],
+    );
 
     const report = await runDoctor({
       commandRunner: async (request) => {
@@ -1298,6 +1308,11 @@ it('compares the installed Cursor copy against the artifact: current, stale, for
     expect(current.diagnostics.filter((entry) => entry.severity !== 'info')).toEqual([]);
 
     await writeFile(join(bundle, 'payload.txt'), 'rebuilt\n');
+    await writeInstallFixtureManifest(
+      bundle,
+      { name: 'doctor-fixture', version: '1.2.3' },
+      [{ host: 'cursor' }],
+    );
     const rebuiltHash = (await treeInventory(bundle)).hash;
     const stale = hostReport(await doctor(), 'cursor');
     expect(stale.bundle).toMatchObject({
@@ -1372,7 +1387,7 @@ it('treats a versionless Cursor destination as drifted rather than conflicted', 
   }
 });
 
-it('turns a symlink inside a Cursor bundle into a corrupt finding', async () => {
+it('ignores an unlisted symlink in the authoritative artifact inventory', async () => {
   const fixture = await temporaryDoctor();
   try {
     const bundle = await createBundle(fixture.root, 'cursor');
@@ -1384,10 +1399,8 @@ it('turns a symlink inside a Cursor bundle into a corrupt finding', async () => 
       home: fixture.home,
       hosts: ['cursor'],
     });
-    expect(hostReport(report, 'cursor').bundle?.state).toBe('corrupt');
-    expect(report.diagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB7310', severity: 'error' }),
-    ]));
+    expect(hostReport(report, 'cursor').bundle?.state).toBe('missing');
+    expect(report.diagnostics.some((entry) => entry.code === 'AB7310' || entry.code === 'AB7319')).toBe(false);
   } finally {
     await fixture.cleanup();
   }

@@ -2,9 +2,13 @@ import { lstat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { readArtifactManifest } from '../build/manifest-file.ts';
-import type { ArtifactManifestProjectionDocuments } from '../build/manifest.ts';
+import type {
+  ArtifactManifest,
+  ArtifactManifestProjectionDocuments,
+} from '../build/manifest.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
-import { isErrno } from '../core/errors.ts';
+import { errorMessage, isErrno } from '../core/errors.ts';
+import { manifestInventory, type TreeInventory } from './receipt.ts';
 
 export type BundleIdentityHost = 'claude' | 'codex' | 'cursor';
 
@@ -12,6 +16,7 @@ export interface PluginIdentity {
   readonly bundleRoot: string;
   readonly documents: ArtifactManifestProjectionDocuments;
   readonly host: BundleIdentityHost;
+  readonly manifest: ArtifactManifest;
   readonly marketplace?: string;
   readonly plugin: string;
   readonly version: string;
@@ -106,6 +111,7 @@ export const readBundleIdentity = async (
         bundleRoot: result.root,
         documents: projection.documents,
         host,
+        manifest: result.manifest,
         ...(marketplace === undefined ? {} : { marketplace }),
         plugin,
         version: result.manifest.application.version,
@@ -115,5 +121,15 @@ export const readBundleIdentity = async (
       const exhaustive: never = result;
       throw new TypeError(`Unknown artifact manifest read result ${String(exhaustive)}.`);
     }
+  }
+};
+
+/** Reads and verifies the artifact-side inventory, preserving AB7001 as the bundle contract. */
+export const bundleInventory = async (identity: PluginIdentity): Promise<TreeInventory> => {
+  try {
+    return await manifestInventory(identity.bundleRoot, identity.manifest);
+  } catch (error) {
+    if (error instanceof DiagnosticError) throw error;
+    throw failure('AB7001', errorMessage(error), identity.host);
   }
 };

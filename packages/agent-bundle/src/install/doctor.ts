@@ -71,7 +71,7 @@ import {
   inspectCursorPluginHooks,
 } from './cursor-hooks-registration.ts';
 import { cursorMarketplacePluginPath, cursorMarketplaceRoot } from './cursor-marketplace.ts';
-import { readBundleIdentity, type PluginIdentity } from './identity.ts';
+import { bundleInventory, readBundleIdentity, type PluginIdentity } from './identity.ts';
 
 export type DoctorHost = InstallHost;
 export type DoctorHostProbeStatus = 'available' | 'failed' | 'unavailable';
@@ -400,14 +400,15 @@ const staticValidationDiagnostics = (
 const validateBundleFiles = async (
   root: string,
   host: DoctorHost,
+  files: readonly string[],
 ): Promise<readonly DoctorStaticValidationIssue[]> => {
   switch (host) {
     case 'claude':
-      return validateClaudePluginFiles({ pluginDirectory: root, target: host });
+      return validateClaudePluginFiles({ files, pluginDirectory: root, target: host });
     case 'codex':
       return validateCodexPluginFiles({ pluginDirectory: root, target: host });
     case 'cursor':
-      return validateCursorPluginFiles({ pluginDirectory: root, target: host });
+      return validateCursorPluginFiles({ files, pluginDirectory: root, target: host });
     default: {
       const exhaustive: never = host;
       throw new TypeError(`Unknown Doctor host ${String(exhaustive)}.`);
@@ -1731,13 +1732,13 @@ const cursorStagedBundle = async (
       }),
     };
   }
-  const [sourceHash, stagedHash] = await Promise.all([treeHash(identity.bundleRoot), treeHash(pluginDirectory)]);
+  const [source, stagedHash] = await Promise.all([bundleInventory(identity), treeHash(pluginDirectory)]);
   // The staging inspection also proves the working tree equals committed HEAD, so a source-matching but
   // uncommitted tree cannot be reported as imported. It is read for a drifted staging too: a bundle rebuilt
   // after Cursor imported the staged commit is still imported, and the lifecycle must say so.
   const staging = await inspectCursorMarketplaceStaging(home, git);
   const entry = staging.findings.find((candidate) => candidate.name === identity.plugin);
-  if (sourceHash !== stagedHash) {
+  if (source.hash !== stagedHash) {
     const imported = entry?.state === 'registered';
     return {
       diagnostics: freezeDiagnostics([diagnostic(
@@ -1787,7 +1788,7 @@ const cursorBundle = async (
     version: identity.version,
   } as const;
   try {
-    const artifact = await treeInventory(identity.bundleRoot);
+    const artifact = await bundleInventory(identity);
     if (!await exists(destination)) {
       const staged = await cursorStagedBundle(identity, home, base, git);
       if (staged !== undefined) return staged;
@@ -2075,7 +2076,7 @@ const claudeBundle = async (
 ): Promise<{ readonly diagnostics: readonly Diagnostic[]; readonly finding: DoctorHostReport['bundle'] }> => {
   const registration = await claudeRegistration(identity, probe, context.run);
   if (probe.status !== 'available' || registration.finding === undefined) return registration;
-  const artifact = await treeInventory(identity.bundleRoot);
+  const artifact = await bundleInventory(identity);
   const inventory = readPublicHostInventory('claude', identity, context.listing, context.environment, context.home);
   const compared = await publicHostInstallComparison('claude', identity, artifact, inventory);
   const validated = [await claudeHostValidation('bundle', identity.bundleRoot, undefined, probe, context.run)];
@@ -2118,7 +2119,7 @@ const codexBundle = async (
   if (probe.status !== 'available') {
     return { diagnostics: Object.freeze([]), finding: Object.freeze({ ...base, state: 'skipped' }) };
   }
-  const artifact = await treeInventory(identity.bundleRoot);
+  const artifact = await bundleInventory(identity);
   const inventory = readPublicHostInventory('codex', identity, context.listing, context.environment, context.home);
   if (inventory.status === 'unavailable') {
     return {
@@ -2559,7 +2560,11 @@ const doctorHost = async (
         'AB7319',
         host,
         identity.bundleRoot,
-        await validateBundleFiles(identity.bundleRoot, host),
+        await validateBundleFiles(
+          identity.bundleRoot,
+          host,
+          identity.manifest.files.map((file) => file.path),
+        ),
       );
       const context: PublicHostContext = { environment, home, listing, run };
       const checked = host === 'cursor'
