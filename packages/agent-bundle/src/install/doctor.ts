@@ -4,12 +4,13 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import {
+  DiagnosticError,
   freezeDiagnostics,
   type Diagnostic,
   type DiagnosticSeverity,
 } from '../core/diagnostics.ts';
 import { mapConcurrent } from '../core/async.ts';
-import { isErrno } from '../core/errors.ts';
+import { errorMessage, isErrno } from '../core/errors.ts';
 import { readArtifactManifest } from '../build/manifest-file.ts';
 import { exists } from '../core/paths.ts';
 import { isRecord } from '../core/strict-json.ts';
@@ -1095,7 +1096,6 @@ const readPublicHostListing = async (
   return { status: 'available', stdout: result.stdout };
 };
 
-/** The `web.apps` count of the authoritative manifest at `--from`; absent when the manifest is not readable or exposes no App. */
 const readWebSurface = async (from: string | undefined): Promise<DoctorWebSurface | undefined> => {
   if (from === undefined) return undefined;
   const read = await readArtifactManifest(from);
@@ -1198,17 +1198,12 @@ const malformedBundle = (
   readonly diagnostics: readonly Diagnostic[];
   readonly finding: DoctorHostReport['bundle'];
 } => {
-  const message = error instanceof Error ? error.message : String(error);
-  return {
-    diagnostics: freezeDiagnostics([diagnostic(
-      'AB7306',
-      message,
-      `Rebuild the composite root (agent-bundle build) so agent-bundle.manifest.json declares a valid ${host} projection, then rerun Doctor.`,
-      'error',
-      host,
-    )]),
-    finding: Object.freeze({ state: 'failed' }),
-  };
+  const recovery =
+    `Rebuild the composite root (agent-bundle build) so agent-bundle.manifest.json declares a valid ${host} projection, then rerun Doctor.`;
+  const diagnostics = error instanceof DiagnosticError
+    ? error.diagnostics.map((entry) => Object.freeze({ ...entry, recovery }))
+    : [diagnostic('AB7306', errorMessage(error), recovery, 'error', host)];
+  return { diagnostics: freezeDiagnostics(diagnostics), finding: Object.freeze({ state: 'failed' }) };
 };
 
 const installComparison = (

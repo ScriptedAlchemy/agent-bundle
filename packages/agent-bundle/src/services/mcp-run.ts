@@ -168,15 +168,7 @@ export const resolveMcpStdioLaunch = async (
     pluginRoot: targetRoot,
     workspaceRoot: resolve(options.workspaceRoot),
   };
-  const entryLaunch = resolveMcpPathTokens({
-    roots,
-    runtime: launchRuntime,
-    server: Object.freeze({ args: Object.freeze([row.entry.path]), command: 'node', kind: 'stdio' }),
-    target: host,
-  });
-  if (entryLaunch.kind !== 'stdio') {
-    throw new Error(`MCP server ${JSON.stringify(options.server)} is not a stdio server; only stdio servers can run in the foreground.`);
-  }
+  const entry = joinArtifact(targetRoot, row.entry.path);
   if (row.entry.worker !== undefined) {
     joinArtifact(targetRoot, row.entry.worker);
   }
@@ -191,13 +183,24 @@ export const resolveMcpStdioLaunch = async (
   if (hostLaunch !== undefined && hostLaunch.kind !== 'stdio') {
     throw new Error(`MCP server ${JSON.stringify(options.server)} is not a stdio server; only stdio servers can run in the foreground.`);
   }
-  const extraArgs = hostLaunch === undefined ? [] : hostLaunch.args.slice(1);
-  const cwd = hostLaunch?.cwd;
+  if (hostLaunch === undefined) {
+    return Object.freeze({ args: Object.freeze([entry]), command: 'node', cwd: targetRoot, env: Object.freeze({}) });
+  }
+  // The host document is the adapter's own launch line for the entry the
+  // manifest records; it keeps its argument order, and it must launch that entry.
+  const cwd = hostLaunch.cwd === undefined ? targetRoot : resolveContained(targetRoot, hostLaunch.cwd);
+  const launchesEntry = (value: string): boolean => resolve(cwd, value) === entry;
+  if (!launchesEntry(hostLaunch.command) && !hostLaunch.args.some(launchesEntry)) {
+    throw new Error(
+      `The ${host} MCP document launches ${JSON.stringify(options.server)} without the compiled entry ` +
+        `${JSON.stringify(row.entry.path)} recorded in agent-bundle.manifest.json.`,
+    );
+  }
   return Object.freeze({
-    args: Object.freeze([entryLaunch.args[0]!, ...extraArgs]),
-    command: hostLaunch?.command ?? 'node',
-    cwd: cwd === undefined ? targetRoot : resolveContained(targetRoot, cwd),
-    env: Object.freeze({ ...hostLaunch?.env }),
+    args: Object.freeze([...hostLaunch.args]),
+    command: hostLaunch.command,
+    cwd,
+    env: Object.freeze({ ...hostLaunch.env }),
   });
 };
 

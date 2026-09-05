@@ -1249,7 +1249,7 @@ it('reports a Claude listing with a malformed scope as unknown inventory (AB7303
   }
 });
 
-it('reports a malformed host bundle as a Doctor error', async () => {
+it('reports an unresolvable --from root under the same AB7001 install refuses it with', async () => {
   const fixture = await temporaryDoctor();
   try {
     const report = await runDoctor({
@@ -1261,7 +1261,13 @@ it('reports a malformed host bundle as a Doctor error', async () => {
     });
     expect(hostReport(report, 'claude').bundle?.state).toBe('failed');
     expect(report.diagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'AB7306', severity: 'error' }),
+      expect.objectContaining({
+        code: 'AB7001',
+        message: expect.stringContaining('No agent-bundle.manifest.json in'),
+        recovery: expect.stringContaining('rerun Doctor'),
+        severity: 'error',
+        target: 'claude',
+      }),
     ]));
   } finally {
     await fixture.cleanup();

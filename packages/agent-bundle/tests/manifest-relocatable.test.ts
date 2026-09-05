@@ -32,6 +32,7 @@ const hosts = ['claude', 'codex', 'cursor', 'portable'] as const;
 const identityHosts = ['claude', 'codex', 'cursor'] as const satisfies readonly BundleIdentityHost[];
 const pathValueKeys = new Set([
   'configPath',
+  'entry',
   'hooks',
   'instructions',
   'marketplace',
@@ -105,6 +106,7 @@ const artifactRelativePaths = (document: ArtifactManifest): readonly string[] =>
       ...server.apps.flatMap((app) => app.path === undefined ? [] : [app.path]),
     ]),
     ...document.projections.flatMap((projection) => Object.values(projection.documents)),
+    ...(document.web?.apps ?? []).map((app) => app.entry),
   ];
   const install = document.distribution.install;
   if (install?.instructions !== undefined) paths.push(install.instructions);
@@ -133,12 +135,16 @@ beforeAll(async () => {
       "  hooks: { sessionStart: './src/hooks/session-start.ts' },",
       '  mcp: {',
       '    servers: {',
-      "      echo: { entry: './src/mcp/echo.ts' },",
+      '      echo: {',
+      "        apps: { echo: { entry: './src/views/echo.ts', resourceUri: 'ui://relocatable/echo.html', template: './src/views/echo.html' } },",
+      "        entry: './src/mcp/echo.ts',",
+      '      },',
       '    },',
       '  },',
       `  plugin: { description: 'Proves manifest paths stay relocatable.', name: ${JSON.stringify(fixtureName)} },`,
       "  scripts: { greet: './src/scripts/greet.ts' },",
       `  targets: ${JSON.stringify(hosts)},`,
+      "  web: { apps: ['echo/echo'] },",
       '};',
       '',
     ].join('\n')),
@@ -153,6 +159,8 @@ beforeAll(async () => {
       "process.stdin.on('data', (chunk) => process.stdout.write(chunk));\n",
     ),
     writeProjectFile(projectRoot, 'src/scripts/greet.ts', "console.log('hello');\n"),
+    writeProjectFile(projectRoot, 'src/views/echo.ts', "document.body.dataset.ready = 'true';\n"),
+    writeProjectFile(projectRoot, 'src/views/echo.html', '<!doctype html><main id="echo">Echo</main>\n'),
     writeProjectFile(projectRoot, 'src/cli/ping.ts', [
       "import { z } from 'zod';",
       '',
@@ -180,6 +188,7 @@ it('emits a relocatable manifest that survives moving the composite root', async
   expect(manifest.executables.bins.length).toBeGreaterThan(0);
   const compiled = manifest.executables.mcpServers.find((server) => server.entry !== undefined);
   expect(compiled?.entry?.path).toBeDefined();
+  expect(manifest.web?.apps.map((app) => app.entry)).toEqual([compiled?.entry?.path]);
 
   const machineAbsolutes = [projectRoot, artifactRoot, tmpdir(), process.cwd()];
   for (const leaked of machineAbsolutes) {
@@ -246,13 +255,25 @@ it('emits a relocatable manifest that survives moving the composite root', async
     await access(resolve(moved, pointer.document));
   }
 
-  const forged = JSON.parse(manifestBytes) as {
+  const forge = (): {
     executables: { mcpServers: { entry?: { path: string } }[] };
-  };
+    web: { apps: { entry: string }[] };
+  } => JSON.parse(manifestBytes);
+  const forged = forge();
   const entry = forged.executables.mcpServers.find((server) => server.entry !== undefined)?.entry;
   if (entry === undefined) throw new Error('expected a compiled MCP entry to forge');
   entry.path = resolve(moved, entry.path);
   expect(() => parseArtifactManifest(`${stableJson(forged)}\n`)).toThrow(
     /executables\.mcpServers\[\d+\]\.entry\.path must be a safe relative POSIX path/u,
   );
+
+  const absoluteWebEntry = forge();
+  absoluteWebEntry.web.apps[0]!.entry = resolve(moved, absoluteWebEntry.web.apps[0]!.entry);
+  expect(() => parseArtifactManifest(`${stableJson(absoluteWebEntry)}\n`)).toThrow(
+    /web\.apps\[echo\/echo\]\.entry must be a safe relative POSIX path/u,
+  );
+
+  const unlistedWebEntry = forge();
+  unlistedWebEntry.web.apps[0]!.entry = 'mcp/not-a-file.mjs';
+  expect(() => parseArtifactManifest(`${stableJson(unlistedWebEntry)}\n`)).toThrow(/web\.apps\[echo\/echo\]\.entry/u);
 }, 180_000);
