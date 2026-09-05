@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { afterAll, beforeAll, describe, expect, it } from '@rstest/core';
 
 import { build, parseArtifactManifest, validate } from '../src/api.ts';
+import { compileEvidenceFileName, parseCompileEvidenceRecord } from '../src/build/compile-evidence.ts';
 import { reindexArtifactManifest } from '../src/build/manifest-reindex.ts';
 import type { ArtifactManifest } from '../src/build/manifest.ts';
 import { validateArtifact } from '../src/build/validate-artifact.ts';
@@ -377,6 +378,24 @@ describe('the authoritative manifest combined proof', () => {
     expect(replaced.stdout).not.toMatch(/collision|daemon version mismatch|Already installed/iu);
     expect(await readFile(join(destination, manifestName), 'utf8')).toBe(replacementManifestBytes);
     await access(join(destination, replacementMarker));
+
+    // Re-indexing the marker kept the compiler's evidence: the sidecar is a
+    // copied row, the relocated copy still validates, and a compiled server's
+    // launch entry is a bundle whose evidence hash is the manifest's hash of it.
+    const evidenceBytes = await readFile(join(relocatedArtifact, compileEvidenceFileName), 'utf8');
+    expect(await readFile(join(destination, compileEvidenceFileName), 'utf8')).toBe(evidenceBytes);
+    expect((await validateArtifact({ artifactRoot: relocatedArtifact }))
+      .filter((diagnostic) => diagnostic.severity === 'error')).toEqual([]);
+    const evidence = parseCompileEvidenceRecord(evidenceBytes);
+    const replacementManifest = parseArtifactManifest(replacementManifestBytes);
+    const compiledLaunches = replacementManifest.executables.mcpServers
+      .flatMap((server) => server.kind === 'compiled' && server.launch !== undefined ? [server.launch] : []);
+    expect(compiledLaunches.length).toBeGreaterThan(0);
+    for (const launch of compiledLaunches) {
+      const row = replacementManifest.files.find((file) => file.path === launch.entry);
+      expect(row?.kind).toBe('bundle');
+      expect(evidence.assets.find((asset) => asset.path === launch.entry)?.sha256).toBe(row?.sha256);
+    }
 
     const doctor = await runDoctor({
       commandRunner: unavailableHostCommand,

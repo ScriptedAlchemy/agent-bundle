@@ -417,7 +417,7 @@ it('rejects any manifestVersion other than the closed current version', () => {
   const manifest = clone() as unknown as Record<string, unknown>;
   manifest.manifestVersion = 3;
   expect(() => parseArtifactManifest(canonicalBytes(manifest)))
-    .toThrow(`Artifact manifest manifestVersion must be ${artifactManifestVersion}.`);
+    .toThrow(`manifestVersion must be ${artifactManifestVersion}.`);
 });
 
 it('rejects any compiler.recordVersion other than the closed current version', () => {
@@ -437,6 +437,19 @@ it('binds the launch record to compiled servers and every exposed App to a launc
   delete (compiledWithoutLaunch.executables.mcpServers[0] as { launch?: unknown }).launch;
   expect(() => serializeArtifactManifest(compiledWithoutLaunch))
     .toThrow('executables.mcpServers[0].launch is present exactly for compiled and prebuilt servers.');
+
+  // Distinct ids do not make two rows of one configured name two servers: the
+  // lean reader and this parser refuse the document under the same rule.
+  const base = withWeb();
+  const twiceNamed: ArtifactManifest = {
+    ...base,
+    executables: {
+      ...base.executables,
+      mcpServers: [compiledServer(), { ...compiledServer(), id: 'mcp:catalog-shadow', kind: 'prebuilt' }],
+    },
+  };
+  expect(() => serializeArtifactManifest(twiceNamed))
+    .toThrow('executables.mcpServers declares server "catalog" twice.');
 
   const unlistedEntry = withWeb();
   (unlistedEntry.executables.mcpServers[0]!.launch as { entry: string }).entry = 'codex/scripts/missing.mjs';

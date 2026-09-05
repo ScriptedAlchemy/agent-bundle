@@ -192,51 +192,104 @@ export const parseWebManifest = (value: unknown): WebManifest => {
 };
 
 /**
+ * The checks every reader of `agent-bundle.manifest.json` makes before it
+ * trusts a launch record — the full parser in `build/manifest.ts` and the lean
+ * reader below share them, so no document launches under one reader that the
+ * other refuses: the version, the identity of the `executables.mcpServers[]`
+ * rows, the shape of their launch records, and the row every exposed App
+ * names. The same checks with the same messages, in one place.
+ */
+
+export const requireManifestVersion = (manifest: JsonRecord): void => {
+  if (manifest['manifestVersion'] !== artifactManifestVersion) {
+    fail(`manifestVersion must be ${artifactManifestVersion}.`);
+  }
+};
+
+/** The declared projection hosts, in document order; each row names one non-empty host once. */
+export const parseProjectionHosts = (value: unknown): readonly string[] => {
+  if (!Array.isArray(value)) throw invalid('projections must be an array.');
+  const hosts = value.map((candidate: unknown, index: number) =>
+    string(record(candidate, `projections[${index}]`)['host'], `projections[${index}].host`));
+  const seen = new Set<string>();
+  for (const host of hosts) {
+    if (seen.has(host)) throw invalid(`projections declares host ${JSON.stringify(host)} twice.`);
+    seen.add(host);
+  }
+  return Object.freeze(hosts);
+};
+
+export const mcpServerKinds = Object.freeze(['command', 'compiled', 'prebuilt', 'remote'] as const);
+
+const isMcpServerKind = (value: unknown): value is (typeof mcpServerKinds)[number] =>
+  typeof value === 'string' && (mcpServerKinds as readonly string[]).includes(value);
+
+/**
+ * The launch record of every compiled or prebuilt server, keyed by configured
+ * server name. Two rows of one name are refused rather than the later one
+ * winning: a reader launching by name must never choose between two records.
+ */
+export const parseServerLaunches = (value: unknown): ReadonlyMap<string, ArtifactManifestLaunch> => {
+  const servers = record(value, 'executables')['mcpServers'];
+  if (!Array.isArray(servers)) throw invalid('executables.mcpServers must be an array.');
+  const launches = new Map<string, ArtifactManifestLaunch>();
+  const names = new Set<string>();
+  servers.forEach((candidate: unknown, index: number) => {
+    const location = `executables.mcpServers[${index}]`;
+    const server = record(candidate, location);
+    const name = string(server['name'], `${location}.name`);
+    if (names.has(name)) throw invalid(`executables.mcpServers declares server ${JSON.stringify(name)} twice.`);
+    names.add(name);
+    if (!isMcpServerKind(server['kind'])) {
+      throw invalid(`${location}.kind must be one of ${mcpServerKinds.join(', ')}.`);
+    }
+    const launchable = server['kind'] === 'compiled' || server['kind'] === 'prebuilt';
+    if (launchable !== (server['launch'] !== undefined)) {
+      throw invalid(`${location}.launch is present exactly for compiled and prebuilt servers.`);
+    }
+    if (launchable) launches.set(name, parseLaunch(server['launch'], `${location}.launch`));
+  });
+  return launches;
+};
+
+/** Every exposed App's `server` is a row with the launch record `<plugin> web` starts. */
+export const requireLaunchReferences = (
+  web: WebManifest,
+  launches: ReadonlyMap<string, ArtifactManifestLaunch>,
+): void => {
+  for (const app of web.apps) {
+    if (!launches.has(app.server)) {
+      fail(`web.apps[${app.app}].server names ${JSON.stringify(app.server)}, which is not an MCP server with a launch record.`);
+    }
+  }
+};
+
+/**
  * The web-relevant read of one artifact manifest: the exposed Apps, the
  * declared projections, and the launch record of every compiled or prebuilt
- * server. Only these slices are read; the rest of the document is not
- * validated here.
+ * server. Only these slices are read — and refused when malformed; the rest
+ * of the document is not validated here.
  */
 export interface WebManifestDocument {
   /** The projection names the artifact manifest declares for this composite root. */
   readonly hosts: readonly string[];
-  /** Compiled MCP servers' launch records, keyed by configured server name. */
+  /** Compiled and prebuilt MCP servers' launch records, keyed by configured server name. */
   readonly launches: ReadonlyMap<string, ArtifactManifestLaunch>;
   readonly web?: WebManifest;
 }
-
-const projectionHosts = (value: unknown): readonly string[] => {
-  if (!Array.isArray(value)) return Object.freeze([]);
-  return Object.freeze(value.flatMap((projection: unknown) => {
-    if (!isPlainRecord(projection)) return [];
-    const host = projection['host'];
-    return typeof host === 'string' && host.length > 0 ? [host] : [];
-  }));
-};
-
-const compiledLaunches = (value: unknown): ReadonlyMap<string, ArtifactManifestLaunch> => {
-  const launches = new Map<string, ArtifactManifestLaunch>();
-  const servers = isPlainRecord(value) ? value['mcpServers'] : undefined;
-  if (!Array.isArray(servers)) return launches;
-  servers.forEach((server: unknown, index: number) => {
-    if (!isPlainRecord(server) || (server['kind'] !== 'compiled' && server['kind'] !== 'prebuilt')) return;
-    const location = `executables.mcpServers[${index}]`;
-    launches.set(string(server['name'], `${location}.name`), parseLaunch(server['launch'], `${location}.launch`));
-  });
-  return launches;
-};
 
 export const readWebManifestDocument = async (manifestPath: string): Promise<WebManifestDocument> => {
   try {
     const document = parseJsonWithoutDuplicateKeys(await readFile(manifestPath, 'utf8'));
     const manifest = record(document, 'manifest');
-    if (manifest['manifestVersion'] !== artifactManifestVersion) {
-      throw new Error(`manifestVersion must be ${artifactManifestVersion}.`);
-    }
+    requireManifestVersion(manifest);
+    const launches = parseServerLaunches(manifest['executables']);
+    const web = manifest['web'] === undefined ? undefined : parseWebManifest(manifest['web']);
+    if (web !== undefined) requireLaunchReferences(web, launches);
     return {
-      hosts: projectionHosts(manifest['projections']),
-      launches: compiledLaunches(manifest['executables']),
-      ...(manifest['web'] === undefined ? {} : { web: parseWebManifest(manifest['web']) }),
+      hosts: parseProjectionHosts(manifest['projections']),
+      launches,
+      ...(web === undefined ? {} : { web }),
     };
   } catch (error) {
     throw new Error(`Unable to read web section from ${manifestPath}: ${errorMessage(error)}`, { cause: error });

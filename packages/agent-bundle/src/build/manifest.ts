@@ -21,15 +21,20 @@ import type {
 } from '../routes/types.ts';
 import {
   artifactManifestVersion,
-  parseLaunch,
+  mcpServerKinds,
+  parseProjectionHosts,
+  parseServerLaunches,
   parseWebManifest,
+  requireLaunchReferences,
+  requireManifestVersion,
   type ArtifactManifestLaunch,
   type ArtifactManifestLaunchArgument,
   type WebManifest,
 } from '../web-host/manifest.ts';
 
-// The launch record is declared beside the reader bundled into generated
-// executables (`agent-bundle/web-host`), which must not import this module.
+// The launch record, and the version, server-identity, launch, and App-reference
+// checks both readers make, are declared beside the lean reader bundled into
+// generated executables (`agent-bundle/web-host`), which must not import this module.
 export type { ArtifactManifestLaunch, ArtifactManifestLaunchArgument };
 
 /**
@@ -1228,22 +1233,24 @@ const parseMcpApps = (value: unknown, location: string): readonly ArtifactManife
   return apps;
 };
 
-const parseMcpServers = (value: unknown, hosts: ReadonlySet<string>): readonly ArtifactManifestMcpServer[] => {
+const parseMcpServers = (
+  value: unknown,
+  hosts: ReadonlySet<string>,
+  launches: ReadonlyMap<string, ArtifactManifestLaunch>,
+): readonly ArtifactManifestMcpServer[] => {
   const servers = requireArray(value, 'executables.mcpServers').map((candidate, index) => {
     const location = `executables.mcpServers[${index}]`;
     const server = requireRecord(candidate, location);
     requireExactKeys(server, location, ['apps', 'hosts', 'id', 'kind', 'name', 'transport'], ['launch']);
-    const kind = requireOneOf(server.kind, `${location}.kind`, ['command', 'compiled', 'prebuilt', 'remote'] as const);
-    if ((kind === 'compiled' || kind === 'prebuilt') !== (server.launch !== undefined)) {
-      fail(`${location}.launch is present exactly for compiled and prebuilt servers.`);
-    }
+    const name = requireString(server.name, `${location}.name`);
+    const launch = launches.get(name);
     return {
       apps: parseMcpApps(server.apps, `${location}.apps`),
       hosts: parseHosts(server.hosts, `${location}.hosts`, hosts),
       id: requireString(server.id, `${location}.id`),
-      kind,
-      ...(server.launch === undefined ? {} : { launch: parseLaunch(server.launch, `${location}.launch`) }),
-      name: requireString(server.name, `${location}.name`),
+      kind: requireOneOf(server.kind, `${location}.kind`, mcpServerKinds),
+      ...(launch === undefined ? {} : { launch }),
+      name,
       transport: requireString(server.transport, `${location}.transport`),
     } satisfies ArtifactManifestMcpServer;
   });
@@ -1282,7 +1289,7 @@ const parseExecutables = (value: unknown, hosts: ReadonlySet<string>): ArtifactM
   return {
     bins: parseBins(executables.bins, hosts),
     hooks: parseHooks(executables.hooks, hosts),
-    mcpServers: parseMcpServers(executables.mcpServers, hosts),
+    mcpServers: parseMcpServers(executables.mcpServers, hosts, parseServerLaunches(executables)),
     scripts: parseScripts(executables.scripts, hosts),
   };
 };
@@ -1430,16 +1437,11 @@ const requireArtifactArguments = (
   }
 };
 
-/** Every exposed App's `server` is a server with the launch record `<plugin> web` starts. */
 const parseWeb = (value: unknown, servers: readonly ArtifactManifestMcpServer[]): WebManifest | undefined => {
   if (value === undefined) return undefined;
   const web = parseWebManifest(value);
-  const launchable = new Set(servers.filter((server) => server.launch !== undefined).map((server) => server.name));
-  for (const app of web.apps) {
-    if (!launchable.has(app.server)) {
-      fail(`web.apps[${app.app}].server names ${JSON.stringify(app.server)}, which is not an MCP server with a launch record.`);
-    }
-  }
+  requireLaunchReferences(web, new Map(servers.flatMap((server) =>
+    server.launch === undefined ? [] : [[server.name, server.launch] as const])));
   return web;
 };
 
@@ -1560,15 +1562,13 @@ const validateManifest = (value: unknown): ArtifactManifest => {
     'routes',
     'runtime',
   ], ['web']);
-  if (manifest.manifestVersion !== artifactManifestVersion) {
-    fail(`manifestVersion must be ${artifactManifestVersion}.`);
-  }
+  requireManifestVersion(manifest);
 
   const files = parseFiles(manifest.files);
   const compiler = parseCompiler(manifest.compiler, files);
   const application = parseApplication(manifest.application);
   const projections = parseProjections(manifest.projections);
-  const hostList = projections.map((projection) => projection.host);
+  const hostList = parseProjectionHosts(manifest.projections);
   const hosts = new Set(hostList);
   requireExactSortedKeys(
     compiler.adapters.map((adapter) => adapter.host),

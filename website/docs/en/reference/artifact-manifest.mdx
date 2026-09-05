@@ -23,7 +23,7 @@ directory layout to find out.
 | Canonical bytes | The file is the canonical JSON serialization of the document — object keys sorted, no insignificant whitespace, one trailing newline. Every reader re-serializes what it parsed and rejects the file unless the bytes are identical. A hand edit, a reformat, or a duplicate key fails the read. |
 | Closed keys | Every object admits exactly its documented keys. An unknown key at any level is a parse error. |
 | Sorted arrays | Every array has an explicit sort key (named per section below) and no duplicates. |
-| Lean reader | The rows above describe the full parser (`parseArtifactManifest`), which every consumer in the table below uses except one: the `<plugin> web` support bundled into a generated bin reads the manifest without the parser. It refuses a `manifestVersion` other than `2` and a duplicate key, then validates only the slices it launches from — `projections[].host`, the `executables.mcpServers[]` launch records, and `web` — and ignores every other key. |
+| Lean reader | The rows above describe the full parser (`parseArtifactManifest`), which every consumer in the table below uses except one: the `<plugin> web` support bundled into a generated bin reads the manifest without the parser. It validates only the slices it launches from and ignores every other key, but those slices it refuses rather than filters, under the same checks the full parser runs (`web-host/manifest.ts` owns them; both import it): a `manifestVersion` other than `2` or a duplicate JSON key; a `projections[]` row that is not an object, names no host, or repeats one; an `executables.mcpServers[]` row that is not an object, has an unknown `kind`, carries a `launch` record when its kind must not (or lacks one when it must), or repeats a server `name` — two rows of one name never resolve to the later one; a malformed `launch` record; and a `web.apps[]` row whose `server` is not a row with a launch record. |
 | Paths | Every path is POSIX, relative to the root, and safe: no leading `/`, no backslash, no `.` or `..` segment, and never a build-machine absolute path. Moving the entire composite root to a different absolute directory keeps every reader working: every path stays root-relative and resolves inside the moved tree. Every path a section points at — a host document, an executable, an App view, an install file — is also a `files[]` row. |
 
 ## Who writes it
@@ -100,6 +100,10 @@ hash without enumerating the root. The manifest file itself and an operator-prov
 `.env.local` beside it are also copied and hashed; unlisted files are ignored.
 A tool that derives a variant of a built root, such as a Workbench development install, re-indexes
 the variant's manifest because that manifest remains the inventory the installer copies and hashes.
+Re-indexing re-measures, adds, or removes only non-compiled rows (a rewritten host MCP document, an
+install marker). A `bundle` row and `agent-bundle.compile-evidence.json` are refused: the evidence
+record describes the compiled bytes the compiler emitted, only a rebuild produces another, and the
+validator fails an artifact whose evidence describes other bytes (`AB6039`).
 
 ### `projections[]`
 

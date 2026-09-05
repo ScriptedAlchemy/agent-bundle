@@ -86,70 +86,117 @@ it('rejects a launch record with unknown keys, an unsafe path, or an unknown arg
     .toThrow(`${location}.env.TOKEN must be a string.`);
 });
 
-it('reads the optional section and returns undefined when absent', async () => {
+const catalogRow = (kind: 'compiled' | 'prebuilt' = 'compiled') => ({
+  apps: [], hosts: ['claude'], id: 'mcp:catalog', kind, launch: validLaunch(), name: 'catalog', transport: 'stdio',
+});
+
+/** A document with every slice the lean reader validates; `web` exposes `catalog`. */
+const document = (overrides: Readonly<Record<string, unknown>> = {}): Readonly<Record<string, unknown>> => ({
+  application: { id: 'application:fixture', name: 'fixture', version: '1.0.0' },
+  executables: { mcpServers: [catalogRow()] },
+  manifestVersion: 2,
+  projections: [{ host: 'claude' }],
+  web: validWeb(),
+  ...overrides,
+});
+
+const withDocument = async (
+  run: (path: string, write: (value: unknown) => Promise<void>) => Promise<void>,
+): Promise<void> => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-web-manifest-'));
   const path = join(root, 'agent-bundle.manifest.json');
   try {
-    await writeFile(path, JSON.stringify({ manifestVersion: 2, producer: {}, web: validWeb() }));
-    await expect(readWebManifest(path)).resolves.toEqual(validWeb());
-    await writeFile(path, JSON.stringify({ manifestVersion: 2, producer: {} }));
-    await expect(readWebManifest(path)).resolves.toBeUndefined();
-    await writeFile(path, JSON.stringify({ manifestVersion: 2, web: { apps: [], open: 'sometimes' } }));
-    await expect(readWebManifest(path)).rejects.toThrow(
-      new RegExp(`Unable to read web section from ${path.replaceAll(/[.*+?^${}()|[\]\\]/gu, '\\$&')}: .*open must`, 'u'),
-    );
+    await run(path, (value) => writeFile(path, JSON.stringify(value)));
   } finally {
     await rm(root, { force: true, recursive: true });
   }
-});
+};
 
-it('refuses every manifestVersion but the one it was built for, before reading any section', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-web-manifest-'));
-  const path = join(root, 'agent-bundle.manifest.json');
-  try {
-    for (const manifestVersion of [undefined, 1, 3, '2']) {
-      await writeFile(path, JSON.stringify({ manifestVersion, web: validWeb() }));
-      await expect(readWebManifestDocument(path)).rejects.toThrow(/manifestVersion must be 2\./u);
-    }
-  } finally {
-    await rm(root, { force: true, recursive: true });
+it('reads the optional section and returns undefined when absent', () => withDocument(async (path, write) => {
+  await write(document());
+  await expect(readWebManifest(path)).resolves.toEqual(validWeb());
+  await write(document({ web: undefined }));
+  await expect(readWebManifest(path)).resolves.toBeUndefined();
+  await write(document({ web: { apps: [], open: 'sometimes' } }));
+  await expect(readWebManifest(path)).rejects.toThrow(
+    new RegExp(`Unable to read web section from ${path.replaceAll(/[.*+?^${}()|[\]\\]/gu, '\\$&')}: .*open must`, 'u'),
+  );
+}));
+
+it('refuses every manifestVersion but the one it was built for, before reading any section', () => withDocument(async (path, write) => {
+  // Every other slice is well-formed and familiar: the version alone decides.
+  for (const manifestVersion of [undefined, 1, 3, '2']) {
+    await write(document({ manifestVersion }));
+    await expect(readWebManifestDocument(path)).rejects.toThrow(/manifestVersion must be 2\./u);
   }
-});
+}));
 
-it('reads the projection hosts and the compiled and prebuilt servers\' launch records beside the web section', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-web-manifest-'));
-  const path = join(root, 'agent-bundle.manifest.json');
+it('reads the projection hosts and the compiled and prebuilt servers\' launch records beside the web section', () => withDocument(async (path, write) => {
   const prebuiltLaunch: ArtifactManifestLaunch = { args: [], entry: 'runtime/mcp/server.js', env: {} };
-  try {
-    await writeFile(path, JSON.stringify({
-      manifestVersion: 2,
-      executables: {
-        mcpServers: [
-          { apps: [], hosts: ['claude'], id: 'mcp:catalog', kind: 'compiled', launch: validLaunch(), name: 'catalog', transport: 'stdio' },
-          { apps: [], hosts: ['claude'], id: 'mcp:timeline', kind: 'prebuilt', launch: prebuiltLaunch, name: 'timeline', transport: 'stdio' },
-          { apps: [], hosts: ['claude'], id: 'mcp:remote', kind: 'remote', name: 'remote', transport: 'streamable-http' },
-        ],
-      },
-      projections: [{ host: 'claude' }, { host: 'codex' }],
-      web: validWeb(),
-    }));
-    const document = await readWebManifestDocument(path);
-    expect(document.hosts).toEqual(['claude', 'codex']);
-    expect([...document.launches]).toEqual([['catalog', validLaunch()], ['timeline', prebuiltLaunch]]);
-    expect(document.web).toEqual(validWeb());
+  await write(document({
+    executables: {
+      mcpServers: [
+        catalogRow(),
+        { apps: [], hosts: ['claude'], id: 'mcp:timeline', kind: 'prebuilt', launch: prebuiltLaunch, name: 'timeline', transport: 'stdio' },
+        { apps: [], hosts: ['claude'], id: 'mcp:remote', kind: 'remote', name: 'remote', transport: 'streamable-http' },
+      ],
+    },
+    projections: [{ host: 'claude' }, { host: 'codex' }],
+  }));
+  const read = await readWebManifestDocument(path);
+  expect(read.hosts).toEqual(['claude', 'codex']);
+  expect([...read.launches]).toEqual([['catalog', validLaunch()], ['timeline', prebuiltLaunch]]);
+  expect(read.web).toEqual(validWeb());
 
-    await writeFile(path, JSON.stringify({ manifestVersion: 2, producer: {} }));
-    const empty = await readWebManifestDocument(path);
-    expect(empty.hosts).toEqual([]);
-    expect(empty.launches.size).toBe(0);
-    expect(empty.web).toBeUndefined();
+  await write(document({ executables: { mcpServers: [] }, projections: [], web: undefined }));
+  const empty = await readWebManifestDocument(path);
+  expect(empty.hosts).toEqual([]);
+  expect(empty.launches.size).toBe(0);
+  expect(empty.web).toBeUndefined();
+}));
 
-    await writeFile(path, JSON.stringify({
-      manifestVersion: 2,
-      executables: { mcpServers: [{ id: 'mcp:catalog', kind: 'compiled', launch: { ...validLaunch(), entry: '../x.mjs' }, name: 'catalog' }] },
-    }));
-    await expect(readWebManifestDocument(path)).rejects.toThrow('executables.mcpServers[0].launch.entry must be a safe relative POSIX path.');
-  } finally {
-    await rm(root, { force: true, recursive: true });
+it('refuses two executable rows of one server name instead of letting the later one win', () => withDocument(async (path, write) => {
+  const shadow = { ...catalogRow('prebuilt'), id: 'mcp:catalog-2', launch: { args: [], entry: 'other/server.js', env: {} } };
+  await write(document({ executables: { mcpServers: [catalogRow(), shadow] } }));
+  await expect(readWebManifestDocument(path)).rejects.toThrow('executables.mcpServers declares server "catalog" twice.');
+}));
+
+it('refuses malformed launch references instead of skipping the row', () => withDocument(async (path, write) => {
+  const cases: readonly [unknown, string][] = [
+    [{ mcpServers: [{ ...catalogRow(), launch: { ...validLaunch(), entry: '../x.mjs' } }] }, 'executables.mcpServers[0].launch.entry must be a safe relative POSIX path.'],
+    [{ mcpServers: [{ ...catalogRow(), launch: undefined }] }, 'executables.mcpServers[0].launch is present exactly for compiled and prebuilt servers.'],
+    [{ mcpServers: [{ ...catalogRow(), kind: 'command' }] }, 'executables.mcpServers[0].launch is present exactly for compiled and prebuilt servers.'],
+    [{ mcpServers: [{ ...catalogRow(), kind: 'native' }] }, 'executables.mcpServers[0].kind must be one of command, compiled, prebuilt, remote.'],
+    [{ mcpServers: [{ ...catalogRow(), name: '' }] }, 'executables.mcpServers[0].name must be a non-empty string.'],
+    [{ mcpServers: ['catalog'] }, 'executables.mcpServers[0] must be a plain object.'],
+    [{ mcpServers: {} }, 'executables.mcpServers must be an array.'],
+    [undefined, 'executables must be a plain object.'],
+  ];
+  for (const [executables, message] of cases) {
+    await write(document({ executables }));
+    await expect(readWebManifestDocument(path)).rejects.toThrow(message);
   }
-});
+}));
+
+it('refuses an exposed App whose server has no launch record', () => withDocument(async (path, write) => {
+  const missing = 'web.apps[catalog/details].server names "catalog", which is not an MCP server with a launch record.';
+  await write(document({ executables: { mcpServers: [] } }));
+  await expect(readWebManifestDocument(path)).rejects.toThrow(missing);
+  await write(document({ executables: { mcpServers: [{ ...catalogRow(), kind: 'command', launch: undefined }] } }));
+  await expect(readWebManifestDocument(path)).rejects.toThrow(missing);
+}));
+
+it('refuses malformed projection rows instead of dropping them', () => withDocument(async (path, write) => {
+  const cases: readonly [unknown, string][] = [
+    [[{ host: 'claude' }, { host: 'claude' }], 'projections declares host "claude" twice.'],
+    [[{ host: '' }], 'projections[0].host must be a non-empty string.'],
+    [[{ documents: {} }], 'projections[0].host must be a non-empty string.'],
+    [['claude'], 'projections[0] must be a plain object.'],
+    [{ claude: {} }, 'projections must be an array.'],
+    [undefined, 'projections must be an array.'],
+  ];
+  for (const [projections, message] of cases) {
+    await write(document({ projections }));
+    await expect(readWebManifestDocument(path)).rejects.toThrow(message);
+  }
+}));
