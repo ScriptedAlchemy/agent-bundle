@@ -919,3 +919,5 @@ export const pluginRootEnvAnchor = 'AGENT_BUNDLE_PLUGIN_ROOT';
 
 /** Explicit override of the framework state root; the runtime exports the same name as `PLUGIN_STATE_ROOT_ENV_ANCHOR`. */
 export const pluginStateRootEnvAnchor = 'AGENT_BUNDLE_STATE_ROOT';
+
+export const stateOwnershipMarkerFile = '.agent-bundle-state-owner.json';

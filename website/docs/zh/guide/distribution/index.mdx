@@ -39,7 +39,7 @@ npx agent-bundle build --root . --output artifact
 编译产出面只构建一次，归属于**组合身份**——所选宿主按名称排序并以 `+` 连接，例如 `claude+codex`——
 绝不会逐宿主各编译一次。两个阶段与 `dist/` 包构建以同样的方式合成打包器配置——profile、`tools.rsbuild`、
 `tools.rspack`，最后是框架不变量——见 [`tools`](../../reference/configuration.mdx#tools)。
-`agent-bundle inspect --bundler` 会打印合成结果；它的 `distPath.root` 就是产物输出本身。
+`agent-bundle inspect --bundler` 会打印每个编译输出降级后的 Rspack 配置；它的 `output.path` 就是产物输出本身。
 
 ## 根目录里发布了什么
 

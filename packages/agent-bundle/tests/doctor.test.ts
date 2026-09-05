@@ -555,6 +555,9 @@ it('inventories durable SQLite stores and sidecars without opening them', async 
       }],
       status: 'known',
       summary: { bytes: 15, stores: 1 },
+      ownership: 'unrecorded',
+      purgeable: false,
+      servers: ['default'],
       writable: true,
     });
     expect(report.diagnostics).toEqual(expect.arrayContaining([
@@ -569,6 +572,7 @@ it('inventories durable SQLite stores and sidecars without opening them', async 
     expect(humanCode).toBe(0);
     expect(human.stdout()).toContain('durable state: 1 store, 15 B');
     expect(human.stdout()).toContain(`state root: ${stateRoot} (exists, writable, derived)`);
+    expect(human.stdout()).toContain('ownership: unrecorded, retained, servers: default');
 
     const json = captureCliTerminal();
     await runCli(['doctor', '--json'], json.output, { runDoctor: async () => report });
@@ -614,9 +618,52 @@ it('reports a missing derived state root and a declared state-root override', as
       directory: declaredStateRoot,
       exists: false,
       findings: [],
+      ownership: 'unrecorded',
+      purgeable: false,
+      servers: ['configured'],
       summary: { bytes: 0, stores: 0 },
       writable: false,
     });
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+it('reports an unresolved relative state override without treating the plugin root as state', async () => {
+  const fixture = await temporaryDoctor();
+  const pluginRoot = join(fixture.home, '.cursor', 'plugins', 'local', 'relative-state');
+  try {
+    await Promise.all([
+      writeJson(join(pluginRoot, '.cursor-plugin/plugin.json'), { name: 'relative-state', version: '1.0.0' }),
+      writeJson(join(pluginRoot, '.cursor-plugin/mcp.json'), {
+        mcpServers: {
+          configured: {
+            command: 'node',
+            env: { AGENT_BUNDLE_STATE_ROOT: '../state' },
+          },
+        },
+      }),
+    ]);
+    await writeInstallFixtureManifest(
+      pluginRoot,
+      { name: 'relative-state', version: '1.0.0' },
+      [{ host: 'cursor', mcp: '.cursor-plugin/mcp.json' }],
+    );
+    const report = await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      home: fixture.home,
+      hosts: ['cursor'],
+    });
+    const finding = hostReport(report, 'cursor').inventory.findings.find((entry) => entry.entry === 'relative-state');
+    expect(finding?.durableState).toMatchObject({
+      directory: '<unresolved state root: configured>',
+      exists: false,
+      ownership: 'unrecorded',
+      ownershipReason: 'relative override has no provable execution directory',
+      purgeable: false,
+      servers: ['configured'],
+    });
+    expect(finding?.durableState?.directory).not.toBe(pluginRoot);
   } finally {
     await fixture.cleanup();
   }
@@ -2157,6 +2204,11 @@ it('surfaces the placed → registered → enabled → active lifecycle per host
     });
     expect(cursorPlaced.bundle?.receipt).toMatchObject({ mode: 'local', scope: 'user' });
     expect(cursorPlaced.inventory.findings[0]?.receipt).toMatchObject({ mode: 'local' });
+    expect(cursorPlaced.inventory.findings[0]?.durableState).toMatchObject({
+      ownership: 'derived',
+      purgeable: false,
+      servers: ['default'],
+    });
   } finally {
     await fixture.cleanup();
   }

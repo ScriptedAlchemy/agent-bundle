@@ -89,8 +89,9 @@ node ./install.mjs
 ——不是本插件安装器放置的——无论如何都会被拒绝。Cursor 副本携带安装回执（`.agent-bundle-install.json`：
 插件、版本、宿主、内容哈希、归属文件）；替换就地进行，只触碰归属文件，绝不动旧版或就地的 `state/` 之类的非归属条目，
 `--replace` 会接管回执出现之前的副本。本发行版构建的产物把框架状态放在
-`~/.agent-bundle/state/<plugin>-<digest>`（`AGENT_BUNDLE_STATE_ROOT` 覆盖该位置），`uninstall`
-配合 `--purge-data --confirm-purge` 会按已安装代码根删除它。Claude 的替换先运行 `claude plugin uninstall --keep-data` 再重新安装，
+`~/.agent-bundle/state/<plugin>-<digest>`（`AGENT_BUNDLE_STATE_ROOT` 覆盖该位置）。`uninstall`
+配合 `--purge-data --confirm-purge` 只会删除回执证明归该安装独占的根；预先存在、共享、无标记或其他
+无法证明归属的覆盖根都会保留。Claude 的替换先运行 `claude plugin uninstall --keep-data` 再重新安装，
 因为 `plugin update` 受版本门控；Codex 先 `codex plugin remove` 再 `add`。输出的 `INSTALL.md` 按宿主记录了
 同样的步骤。
 

@@ -15,16 +15,14 @@ const docsDir = path.join(websiteDir, 'docs');
 const repoRoot = path.join(websiteDir, '..');
 
 const packageSource = path.join(repoRoot, 'packages', 'agent-bundle', 'src');
-const typedocTsconfigPath = path.join(websiteDir, 'tsconfig.typedoc.json');
+const packageDeclarations = path.join(repoRoot, 'packages', 'agent-bundle', 'dist');
+const twoslashTsconfigPath = path.join(websiteDir, 'tsconfig.twoslash.json');
 
 /**
- * The `paths` that resolve the workspace packages `packages/agent-bundle/src`
+ * The `paths` that resolve the workspace packages which documentation samples
  * imports (`@agent-bundle/runtime`, `rsc-markdown-stream`) to their sources.
- * Their published declarations only exist after `pnpm build`, which the docs
- * build never runs, so a compiler that resolves them through `package.json`
- * types every one of those imports as `any`. TypeDoc reads the tsconfig
- * itself; twoslash takes its compiler options programmatically, so the same
- * map is read here rather than copied.
+ * Twoslash takes its compiler options programmatically, so the map is read
+ * from its dedicated tsconfig rather than copied.
  *
  * The file is JSONC and the values are relative to the tsconfig, which is how
  * TypeScript resolves them; twoslash gets no `baseUrl` or config directory,
@@ -61,27 +59,27 @@ const twoslashPaths: Record<string, string[]> = {
   'agent-bundle/config': [path.join(packageSource, 'config/index.ts')],
   'agent-bundle/test': [path.join(packageSource, 'test/index.ts')],
   'agent-bundle/eval': [path.join(packageSource, 'eval/index.ts')],
-  ...readSourceMappedPaths(typedocTsconfigPath),
+  ...readSourceMappedPaths(twoslashTsconfigPath),
 };
 
 const publicApiEntryPoints = [
-  'index.ts',
-  'api.ts',
-  'app/index.ts',
-  'cli-entry.ts',
-  'config/index.ts',
-  'contracts/runtime.ts',
-  'eval/index.ts',
-  'launch-env.ts',
-  'mcp-apps.ts',
-  'meta.ts',
-  'mcp-entry.ts',
-  'routes/public.ts',
-  'rstest/index.ts',
-  'test/index.ts',
-  'test/browser.ts',
-  'web-host.ts',
-].map(entry => path.join(packageSource, entry));
+  'index.d.ts',
+  'api.d.ts',
+  'app.d.ts',
+  'cli-entry.d.ts',
+  'config/index.d.ts',
+  'contracts/runtime.d.ts',
+  'eval/index.d.ts',
+  'launch-env.d.ts',
+  'mcp-apps.d.ts',
+  'meta.d.ts',
+  'mcp-entry.d.ts',
+  'routes/public.d.ts',
+  'rstest/index.d.ts',
+  'test/index.d.ts',
+  'test/browser.d.ts',
+  'web-host.d.ts',
+].map(entry => path.join(packageDeclarations, entry));
 
 const generatedApiDir = 'en/api';
 const mirroredApiTargets = [
@@ -193,11 +191,10 @@ export default defineConfig({
     },
   },
   plugins: [
-    // TypeDoc and twoslash compile packages/agent-bundle/src with the
-    // `typescript` pinned in website/package.json. That pin is TypeScript 6
-    // because typedoc 0.28 peers on `<= 6.0.x` while the repo root is on
-    // TypeScript 7, so TS7-only syntax in the package fails here first, with
-    // an error that names the docsite rather than the cause.
+    // TypeDoc reads packages/agent-bundle/dist declarations produced by the
+    // package build. Twoslash still compiles documentation samples against
+    // package sources. Both use the TypeScript 6 pin in website/package.json
+    // because typedoc 0.28 peers on `<= 6.0.x`.
     pluginTypeDoc({
       entryPoints: publicApiEntryPoints,
       outDir: generatedApiDir,

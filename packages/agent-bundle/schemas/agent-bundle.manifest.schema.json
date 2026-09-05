@@ -118,8 +118,8 @@
     },
     "relativePath": {
       "type": "string",
-      "description": "Safe relative POSIX path from the artifact root: non-empty, no leading slash or drive prefix, no backslash or NUL, and no empty, `.`, or `..` segment.",
-      "pattern": "^(?![A-Za-z]:)(?:(?!\\.{1,2}(?:/|$))[^/\\\\\\u0000]+/)*(?!\\.{1,2}(?:/|$))[^/\\\\\\u0000]+$"
+      "description": "Safe relative POSIX path from the artifact root: non-empty, no leading slash or drive prefix, no backslash, and every segment portable — never empty, `.`, or `..`, no control or Windows-reserved character (`<>:\"|?*`), not a Windows device name (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`), and no trailing dot or space.",
+      "pattern": "^(?![A-Za-z]:)(?:(?!(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][0-9¹²³]|[Ll][Pp][Tt][0-9¹²³])(?:\\.|/|$))[^/\\\\\\u0000-\\u001f<>:\"|?*]*[^/\\\\\\u0000-\\u001f<>:\"|?*. ]/)*(?!(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][0-9¹²³]|[Ll][Pp][Tt][0-9¹²³])(?:\\.|/|$))[^/\\\\\\u0000-\\u001f<>:\"|?*]*[^/\\\\\\u0000-\\u001f<>:\"|?*. ]$"
     },
     "nonNegativeSafeInteger": {
       "type": "integer",

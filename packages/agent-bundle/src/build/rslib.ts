@@ -84,22 +84,22 @@ const preserveResourceReferences: RslibBundlerChain = (chain) => {
 };
 
 /**
- * Lowers the composed lib configs to bundler configs, always as the
- * production build `rslib.build()` runs. Rslib 1.x otherwise infers the mode
- * from `NODE_ENV`, and under `development` inspects only `mf` libs — none
- * here — so `assertExecutableConfig` and `inspect --bundler` would fail. Rslib
- * writes the inspected mode back to `NODE_ENV`; the process gets its own value
- * back — set or unset — whether the inspection succeeded or threw, so a
- * development server or test runner that inspects a config is not left
- * running as `production`. (`rslib.build()` sets `production` itself when it
- * finds `NODE_ENV` unset; that is the build's business, not the inspection's.)
+ * Lowers composed configs to bundler configs, always as the production build
+ * runs. Rslib 1.x otherwise infers the mode from `NODE_ENV`, and under
+ * `development` inspects only `mf` libs — none here — so
+ * `assertExecutableConfig` and `inspect --bundler` would fail. Rslib and
+ * Rsbuild write the inspected mode back to `NODE_ENV`; the process gets its
+ * own value back — set or unset — whether the inspection succeeded or threw,
+ * so a development server or test runner that inspects a config is not left
+ * running as `production`. (`build()` sets `production` itself when it finds
+ * `NODE_ENV` unset; that is the build's business, not the inspection's.)
  */
-const inspectProductionConfig = async (
-  rslib: Pick<RslibInstance, 'inspectConfig'>,
-): Promise<Awaited<ReturnType<RslibInstance['inspectConfig']>>> => {
+export const inspectProductionConfig = async <Inspection>(
+  instance: { readonly inspectConfig: (options: { readonly mode: 'production' }) => Promise<Inspection> },
+): Promise<Inspection> => {
   const nodeEnv = process.env.NODE_ENV;
   try {
-    return await rslib.inspectConfig({ mode: 'production' });
+    return await instance.inspectConfig({ mode: 'production' });
   } finally {
     if (nodeEnv === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = nodeEnv;
@@ -489,8 +489,9 @@ const assertExecutableConfig = (
  * shared `composeToolsLayers` order — the framework profile, the consumer
  * `tools` escape hatch over it, the invariant enforcer hook last — with
  * Rslib's own `mergeRslibConfig` keyed by the synthesized lib id.
- * `buildWithRslib` lowers exactly this composition and `inspect --bundler`
- * surfaces it, so the two can never drift.
+ * `buildRslibSurfaces` and `inspectRslibEntries` lower exactly this
+ * composition through one shared step, so the build and `inspect --bundler`
+ * can never drift.
  */
 export const composeEntryLibConfig = (
   entry: RslibEntry,
@@ -803,6 +804,68 @@ const moduleKindOf = (
 };
 
 /**
+ * Creates the Rslib instance for one run — every entry composed through
+ * {@link composeEntryLibConfig} — and lowers it to the resolved Rsbuild
+ * environments and Rspack configurations, judged by
+ * {@link assertExecutableConfig} before anything compiles. The build and
+ * `inspect --bundler` share this step, so what the inspection renders is
+ * exactly what the build compiles.
+ */
+const lowerEntries = async (
+  options: RslibRunOptions,
+  entries: readonly RslibEntry[],
+  lowering: {
+    readonly createRslib: NonNullable<RslibDependencies['createRslib']>;
+    readonly logLevel: 'error' | 'silent';
+    readonly onCompilationEvidence?: (evidence: CompilationEvidence) => void;
+    readonly onReservedExternal?: (specifier: string) => void;
+  },
+): Promise<{
+  readonly inspection: Awaited<ReturnType<RslibInstance['inspectConfig']>>;
+  readonly rslib: Awaited<ReturnType<NonNullable<RslibDependencies['createRslib']>>>;
+}> => {
+  const rslib = await lowering.createRslib({
+    cwd: options.cwd,
+    config: {
+      logLevel: lowering.logLevel,
+      lib: entries.map((entry) => composeEntryLibConfig(entry, {
+        cwd: options.cwd,
+        meta: options.meta,
+        ...(lowering.onCompilationEvidence === undefined ? {} : { onCompilationEvidence: lowering.onCompilationEvidence }),
+        ...(lowering.onReservedExternal === undefined ? {} : { onReservedExternal: lowering.onReservedExternal }),
+        outputRoot: options.outputRoot,
+        ...(options.sourceMap === true ? { sourceMap: true } : {}),
+        ...(options.tools === undefined ? {} : { tools: options.tools }),
+      })),
+    },
+  });
+  const inspection = await inspectProductionConfig(rslib);
+  assertExecutableConfig(entries, inspection.origin, options);
+  return { inspection, rslib };
+};
+
+/**
+ * The lowered Rspack configuration of every entry, in entry order, from one
+ * Rslib instance that never builds: the same composition, mode, and
+ * invariant assertions as {@link buildRslibSurfaces}, stopping where the
+ * build would start compiling. Rslib reads every authored entry from disk
+ * while resolving, exactly as the build does.
+ */
+export const inspectRslibEntries = async (
+  options: RslibRunOptions,
+  entries: readonly RslibEntry[],
+): Promise<readonly Rspack.Configuration[]> => {
+  if (entries.length === 0) return Object.freeze([]);
+  assertDistinctLibIds(entries);
+  const { inspection } = await lowerEntries(options, entries, { createRslib, logLevel: 'silent' });
+  // `assertExecutableConfig` has matched exactly one lowered config per entry by lib id.
+  return Object.freeze(entries.map((entry) => {
+    const id = entryLibId(entry);
+    return inspection.origin.bundlerConfigs.find((config) => config.name === id)!;
+  }));
+};
+
+/**
  * Lowers every surface's entries through one Rslib instance and returns the
  * compiler result per surface, in surface order. A surface without entries
  * contributes an empty result; with no entries at all no instance is created.
@@ -827,25 +890,13 @@ export const buildRslibSurfaces = async (
 
   const reservedExternalViolations: string[] = [];
   const compilationEvidence: CompilationEvidence[] = [...(dependencies.compilationEvidence ?? [])];
-  const rslib = await (dependencies.createRslib ?? createRslib)({
-    cwd: options.cwd,
-    config: {
-      // The run reports at the most verbose level any surface asks for.
-      logLevel: surfaces.some((surface) => surface.logLevel === 'error') ? 'error' : 'silent',
-      lib: entries.map((entry) => composeEntryLibConfig(entry, {
-        cwd: options.cwd,
-        meta: options.meta,
-        onCompilationEvidence: (evidence) => compilationEvidence.push(evidence),
-        onReservedExternal: (specifier) => reservedExternalViolations.push(specifier),
-        outputRoot: options.outputRoot,
-        ...(options.sourceMap === true ? { sourceMap: true } : {}),
-        ...(options.tools === undefined ? {} : { tools: options.tools }),
-      })),
-    },
+  const { rslib } = await lowerEntries(options, entries, {
+    createRslib: dependencies.createRslib ?? createRslib,
+    // The run reports at the most verbose level any surface asks for.
+    logLevel: surfaces.some((surface) => surface.logLevel === 'error') ? 'error' : 'silent',
+    onCompilationEvidence: (evidence) => compilationEvidence.push(evidence),
+    onReservedExternal: (specifier) => reservedExternalViolations.push(specifier),
   });
-
-  const inspection = await inspectProductionConfig(rslib);
-  assertExecutableConfig(entries, inspection.origin, options);
   let result: Awaited<ReturnType<RslibInstance['build']>> | undefined;
   try {
     try {

@@ -14,11 +14,13 @@ import {
   rmdir,
   writeFile,
 } from 'node:fs/promises';
-import { basename, dirname, join, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
-import { exists, installReceiptFile, isInstallReceiptEntry, isPreservedRuntimeRoot } from '../core/paths.ts';
+import { matchesManifestFile } from '../build/artifact-layout.ts';
+import { exists, installReceiptFile, isInstallReceiptEntry, isPortablePathSegment, isPreservedRuntimeRoot } from '../core/paths.ts';
+import { stateOwnershipMarkerFile } from '../core/types.ts';
 import { artifactManifestName, type ArtifactManifest } from '../build/manifest.ts';
 import { OPERATOR_ENV_FILE_NAMES } from '../launch-env.ts';
 
@@ -111,6 +113,33 @@ export interface InstallReceiptCursorExpansion {
   readonly pluginRoot: string;
 }
 
+export type InstallReceiptStateUnownedReason = 'foreign-marker' | 'pre-existing' | 'unproven';
+
+export interface InstallReceiptStateOwner {
+  readonly host: string;
+  readonly id: string;
+  readonly mode: InstallReceiptMode;
+  readonly plugin: string;
+  readonly projectRoot?: string;
+  readonly scope: InstallReceiptScope;
+}
+
+export interface InstallReceiptStateRoot {
+  readonly canonicalRoot: string;
+  readonly ownership:
+    | { readonly kind: 'derived' }
+    | { readonly kind: 'marker'; readonly marker: string }
+    | { readonly kind: 'unowned'; readonly reason: InstallReceiptStateUnownedReason };
+  readonly root: string;
+  readonly servers: readonly string[];
+  readonly source: 'declared' | 'derived';
+}
+
+export interface InstallReceiptState {
+  readonly owner: InstallReceiptStateOwner;
+  readonly roots: readonly InstallReceiptStateRoot[];
+}
+
 export interface InstallReceipt {
   readonly contentHash: string;
   readonly cursorExpansion?: InstallReceiptCursorExpansion;
@@ -149,6 +178,8 @@ export interface InstallReceipt {
   /** Host registrations the installer performed, in the order it performed them. */
   readonly registrations: readonly InstallRegistration[];
   readonly scope: InstallReceiptScope;
+  /** Per-server runtime locations and the independent evidence authorizing deletion. */
+  readonly state?: InstallReceiptState;
   /** Effective framework state root retained by a Cursor `--keep-data` uninstall. */
   readonly stateRoot?: {
     readonly root: string;
@@ -336,11 +367,13 @@ export const manifestInventory = async (
       throw error;
     }
     const row = rows.get(relativePath);
-    if (
-      row !== undefined &&
-      createHash('sha256').update(bytes).digest('hex') !== row.sha256
-    ) {
-      throw new Error(`--from root does not match its manifest: ${relativePath} bytes differ from its files[] digest.`);
+    if (row !== undefined && !matchesManifestFile({
+      bytes: metadata.size,
+      mode: metadata.mode & 0o777,
+      path: relativePath,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+    }, row)) {
+      throw new Error(`--from root does not match its manifest: ${relativePath} differs from its files[] row in bytes, mode, or digest.`);
     }
     hashEntry(hash, relativePath, metadata, bytes);
   }
@@ -445,8 +478,6 @@ export const hashOwnedFiles = async (root: string, files: readonly string[]): Pr
  * characters, alternate-stream colons, trailing dots or spaces) or resolve as
  * a DOS device (`NUL`, `CON.txt`, `COM1`, `LPT1.json`, ...).
  */
-const windowsDeviceName = /^(?:con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(?:\.|$)/iu;
-
 export const isReceiptPath = (value: unknown): value is string =>
   typeof value === 'string' &&
   value.length > 0 &&
@@ -458,15 +489,7 @@ export const isReceiptPath = (value: unknown): value is string =>
   !value.startsWith('/') &&
   // Runtime roots are never installer-owned, whatever a receipt claims and however it spells them.
   !isPreservedRuntimeRoot(value.split('/')[0] ?? '') &&
-  value.split('/').every((segment) =>
-    segment !== '' &&
-    segment !== '.' &&
-    segment !== '..' &&
-    !/[<>:"|?*]/u.test(segment) &&
-    !windowsDeviceName.test(segment) &&
-    [...segment].every((character) => character.charCodeAt(0) >= 0x20) &&
-    !segment.endsWith('.') &&
-    !segment.endsWith(' '));
+  value.split('/').every(isPortablePathSegment);
 
 const isReceiptFileList = (value: unknown): value is readonly string[] =>
   Array.isArray(value) && value.every(isReceiptPath);
@@ -502,6 +525,78 @@ const isRegistrationKind = (value: unknown): value is InstallRegistrationKind =>
 
 const optionalString = (value: unknown): value is string | undefined =>
   value === undefined || typeof value === 'string';
+
+const readReceiptState = (value: unknown): InstallReceiptState | undefined => {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const ownerValue = record['owner'];
+  if (ownerValue === null || typeof ownerValue !== 'object' || Array.isArray(ownerValue)) return undefined;
+  const owner = ownerValue as Record<string, unknown>;
+  if (
+    typeof owner['host'] !== 'string' ||
+    typeof owner['id'] !== 'string' ||
+    owner['id'].length === 0 ||
+    !isReceiptMode(owner['mode']) ||
+    typeof owner['plugin'] !== 'string' ||
+    !optionalString(owner['projectRoot']) ||
+    !isReceiptScope(owner['scope']) ||
+    !Array.isArray(record['roots'])
+  ) {
+    return undefined;
+  }
+  const roots: InstallReceiptStateRoot[] = [];
+  for (const valueRoot of record['roots']) {
+    if (valueRoot === null || typeof valueRoot !== 'object' || Array.isArray(valueRoot)) return undefined;
+    const root = valueRoot as Record<string, unknown>;
+    const ownershipValue = root['ownership'];
+    if (
+      typeof root['canonicalRoot'] !== 'string' ||
+      !isAbsolute(root['canonicalRoot']) ||
+      typeof root['root'] !== 'string' ||
+      !isAbsolute(root['root']) ||
+      !Array.isArray(root['servers']) ||
+      !root['servers'].every((server) => typeof server === 'string') ||
+      (root['source'] !== 'declared' && root['source'] !== 'derived') ||
+      ownershipValue === null ||
+      typeof ownershipValue !== 'object' ||
+      Array.isArray(ownershipValue)
+    ) {
+      return undefined;
+    }
+    const ownershipRecord = ownershipValue as Record<string, unknown>;
+    const ownership = ownershipRecord['kind'] === 'derived'
+      ? Object.freeze({ kind: 'derived' as const })
+      : ownershipRecord['kind'] === 'marker' &&
+          typeof ownershipRecord['marker'] === 'string' &&
+          ownershipRecord['marker'] === join(root['root'], stateOwnershipMarkerFile)
+        ? Object.freeze({ kind: 'marker' as const, marker: ownershipRecord['marker'] })
+        : ownershipRecord['kind'] === 'unowned' &&
+            (ownershipRecord['reason'] === 'foreign-marker' ||
+              ownershipRecord['reason'] === 'pre-existing' ||
+              ownershipRecord['reason'] === 'unproven')
+          ? Object.freeze({ kind: 'unowned' as const, reason: ownershipRecord['reason'] })
+          : undefined;
+    if (ownership === undefined) return undefined;
+    roots.push(Object.freeze({
+      canonicalRoot: root['canonicalRoot'],
+      ownership,
+      root: root['root'],
+      servers: Object.freeze([...root['servers']]),
+      source: root['source'],
+    }));
+  }
+  return Object.freeze({
+    owner: Object.freeze({
+      host: owner['host'],
+      id: owner['id'],
+      mode: owner['mode'],
+      plugin: owner['plugin'],
+      ...(owner['projectRoot'] === undefined ? {} : { projectRoot: owner['projectRoot'] }),
+      scope: owner['scope'],
+    }),
+    roots: Object.freeze(roots),
+  });
+};
 
 const readRegistration = (value: unknown): InstallRegistration | undefined => {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
@@ -549,6 +644,8 @@ const receiptFromDocument = (value: unknown): InstallReceipt | undefined => {
     return undefined;
   }
   const cursorExpansion = readCursorExpansion(record['cursorExpansion']);
+  const state = readReceiptState(record['state']);
+  if (record['state'] !== undefined && state === undefined) return undefined;
   const stateRootRecord = record['stateRoot'];
   const stateRoot = stateRootRecord !== undefined &&
     stateRootRecord !== null &&
@@ -601,6 +698,14 @@ const receiptFromDocument = (value: unknown): InstallReceipt | undefined => {
     if (registration === undefined) return undefined;
     registrations.push(registration);
   }
+  const ownedState = state !== undefined &&
+    state.owner.host === record['host'] &&
+    state.owner.mode === record['mode'] &&
+    state.owner.plugin === record['plugin'] &&
+    state.owner.scope === record['scope'] &&
+    state.owner.projectRoot === record['projectRoot']
+    ? state
+    : undefined;
   return Object.freeze({
     ...base,
     hostDirectories: Object.freeze([...record['hostDirectories']]),
@@ -608,6 +713,7 @@ const receiptFromDocument = (value: unknown): InstallReceipt | undefined => {
     ...(typeof record['projectRoot'] === 'string' ? { projectRoot: record['projectRoot'] } : {}),
     registrations: Object.freeze(registrations),
     scope: record['scope'],
+    ...(ownedState === undefined ? {} : { state: ownedState }),
     updatedAt: record['updatedAt'],
   });
 };
@@ -644,6 +750,7 @@ export const createInstallReceipt = (options: InstallReceiptIdentity & {
   readonly cursorExpansion?: InstallReceiptCursorExpansion;
   readonly directories?: readonly string[];
   readonly inventory: TreeInventory;
+  readonly state?: InstallReceiptState;
   readonly stateRoot?: InstallReceipt['stateRoot'];
   readonly webDataRoot?: string;
 }): InstallReceipt => {
@@ -662,6 +769,18 @@ export const createInstallReceipt = (options: InstallReceiptIdentity & {
     ...(options.projectRoot === undefined ? {} : { projectRoot: options.projectRoot }),
     registrations: Object.freeze(options.registrations.map((registration) => Object.freeze({ ...registration }))),
     scope: options.scope,
+    ...(options.state === undefined
+      ? {}
+      : {
+          state: Object.freeze({
+            owner: Object.freeze({ ...options.state.owner }),
+            roots: Object.freeze(options.state.roots.map((root) => Object.freeze({
+              ...root,
+              ownership: Object.freeze({ ...root.ownership }),
+              servers: Object.freeze([...root.servers]),
+            }))),
+          }),
+        }),
     ...(options.stateRoot === undefined ? {} : { stateRoot: Object.freeze({ ...options.stateRoot }) }),
     updatedAt: options.updatedAt ?? installedAt,
     version: options.version,

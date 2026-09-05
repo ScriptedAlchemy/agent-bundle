@@ -101,11 +101,16 @@ export const writeInstallFixtureManifest = async (
       name: server,
       transport: 'stdio',
     }));
+  // Rows are measured the way the compiler measures them: a launch entry is a
+  // `bundle` row, an executable bit is recorded as `mode`, everything else is generated.
+  const launchEntries = new Set(mcpServers.map((server) => server.launch!.entry));
   const files = await Promise.all((await fixtureFiles(bundleRoot)).map(async (path) => {
-    const bytes = await readFile(join(bundleRoot, path));
+    const [bytes, metadata] = await Promise.all([readFile(join(bundleRoot, path)), lstat(join(bundleRoot, path))]);
+    const mode = metadata.mode & 0o777;
     return {
       bytes: bytes.length,
-      kind: 'generated' as const,
+      kind: launchEntries.has(path) ? 'bundle' as const : 'generated' as const,
+      ...((mode & 0o111) === 0 ? {} : { mode }),
       path,
       sha256: sha256Hex(bytes),
     };

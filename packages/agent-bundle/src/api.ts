@@ -26,6 +26,7 @@ import {
   featureCapabilityName,
   type AgentComponentKind,
 } from './core/components.ts';
+import { errorMessage } from './core/errors.ts';
 import { isInsideOrEqual } from './core/paths.ts';
 import {
   stateDefinitionProjection,
@@ -1221,12 +1222,12 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
         projectRoot: prepared.root,
         ...(prepared.tools === undefined ? {} : { tools: prepared.tools }),
       });
-    } catch {
+    } catch (error) {
       return invalidInspection(freezeDiagnostics([
         ...prepared.diagnostics,
         projectDiagnostic(
           'AB7001',
-          'Unable to compose the bundler inspection.',
+          `Unable to compose the bundler inspection: ${errorMessage(error)}`,
           { sourcePath: prepared.configPath },
         ),
       ]));
