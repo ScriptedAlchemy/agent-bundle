@@ -323,6 +323,14 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
       request.path.startsWith('/api/mcp/sessions/fresh-browser-mcp-session/') ? ledgerRequest({ ...request, completedAt: 1_319 }) : request,
     )),
   });
+  // The other edge: the page aborts both streams before it issues the DELETE,
+  // so an abort that completes after the DELETE completed was not the close's.
+  const postCloseFreshStreamCancellation = Object.freeze({
+    ...validPostRecovery,
+    requests: Object.freeze(validPostRecovery.requests.map((request) =>
+      request.path.startsWith('/api/mcp/sessions/fresh-browser-mcp-session/') ? ledgerRequest({ ...request, completedAt: 1_322 }) : request,
+    )),
+  });
   const hooksNavigation = validPostRecovery.postRecovery!.navigation[0]!;
   const hooksRequest = validPostRecovery.requests.at(-1)!;
   // The CI shape: the Hooks request and its response arrived in one batch and
@@ -413,6 +421,7 @@ test('outage ledger rejects the legacy duplicate, cross-origin, and missing-clea
   expect(() => validateOutageLedger(logsReplayCancellationWithoutTerminal)).toThrow(/unexpected pre-outage failures/u);
   expect(() => validateOutageLedger(logsReplayCancellationAfterFailure)).toThrow(/unexpected pre-outage failures/u);
   expect(() => validateOutageLedger(preCloseFreshStreamCancellation)).toThrow(/fresh B MCP stream cancellation is not action-induced/u);
+  expect(() => validateOutageLedger(postCloseFreshStreamCancellation)).toThrow(/fresh B MCP stream cancellation is not action-induced/u);
   expect(() => validateOutageLedger(validPostRecovery)).not.toThrow();
   expect(() => validateOutageLedger(navigationLiveStreamCancellation)).not.toThrow();
   expect(() => validateOutageLedger(navigationRespondedCatalogCancellation)).not.toThrow();
