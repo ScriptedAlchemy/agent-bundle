@@ -35,8 +35,8 @@ const hostTargets = ['claude', 'codex', 'cursor', 'portable'] as const;
  */
 const legacyHostAdapter: TargetAdapter = Object.freeze({
   artifactLayout: Object.freeze({
-    // Its manifest carries its own name so it shares the composite root with
-    // the portable `plugin.json` instead of colliding (AB4103).
+    // Its one root document is its manifest; a third-party adapter always
+    // gets a root of its own (AB4106).
     rootDocuments: Object.freeze(['legacy-host.json']),
     scripts: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'scripts' }),
   }),
@@ -188,18 +188,27 @@ const parseJsonLine = (stdout: string): unknown => JSON.parse(stdout) as unknown
  * script route reaches it as a sibling, a skill reaches it through the
  * plugin-root token, validation accepts the `bin/` layout, and a selected
  * host without the capability is reported with an inspect entry and an
- * AB4765 warning.
+ * AB4765 warning. That host is a third-party adapter, so it cannot join the
+ * built-in hosts' root (`AB4106`, `build-compose.test.ts`): the same sources
+ * are built into a root of its own.
  */
 it('emits the routed CLI bin into every capable host artifact and omits it elsewhere', { retry: 1, timeout: 300_000 }, async () => {
-  const root = await createFixture({ targets: [...hostTargets, 'legacy-host'] });
   const registry = registryWithLegacyHost();
+  const [root, legacyRoot] = await Promise.all([
+    createFixture({ targets: [...hostTargets] }),
+    createFixture({ targets: ['legacy-host'] }),
+  ]);
 
-  const result = await build({ output: 'artifact', registry, root });
+  const [result, legacyResult] = await Promise.all([
+    build({ output: 'artifact', registry, root }),
+    build({ output: 'artifact', registry, root: legacyRoot }),
+  ]);
   const artifactRoot = join(root, 'artifact');
+  const legacyArtifactRoot = join(legacyRoot, 'artifact');
 
   // The composite root hosts one executable and its rendered-command worker,
   // attributed to the whole selection.
-  const identity = [...hostTargets, 'legacy-host'].sort().join('+');
+  const identity = [...hostTargets].sort().join('+');
   expect(result.build.compiledCliBins.map((bin) => bin.target)).toEqual([identity]);
   const binPath = join(artifactRoot, 'bin', `${pluginName}.mjs`);
   await expect(stat(binPath)).resolves.toMatchObject({});
@@ -207,6 +216,7 @@ it('emits the routed CLI bin into every capable host artifact and omits it elsew
   const binSource = await readFile(binPath, 'utf8');
   expect(binSource).not.toMatch(/from\s*['"]agent-bundle\/cli-entry['"]/u);
   expect(binSource).not.toMatch(/from\s*['"]agent-bundle\/meta['"]/u);
+  expect(result.diagnostics.filter((entry) => entry.code === 'AB4765')).toEqual([]);
 
   // `node <artifact>/bin/<name>.mjs <route args>` prints the routed CLI output.
   const status = await execFile(process.execPath, [binPath, 'status', 'ticket-7', '--json']);
@@ -216,15 +226,18 @@ it('emits the routed CLI bin into every capable host artifact and omits it elsew
     surface: 'status',
     ticket: 'ticket-7',
   });
-  // The selected host without the capability is reported; its other compiled
-  // surfaces share the root untouched.
-  await expect(stat(join(artifactRoot, 'scripts', 'hauler.mjs'))).resolves.toMatchObject({});
-  expect(result.diagnostics).toContainEqual(expect.objectContaining({
+  // The host without the capability gets no bin in its own root — reported,
+  // never silent — while its other compiled surfaces are emitted as usual.
+  expect(legacyResult.build.compiledCliBins).toEqual([]);
+  await expect(stat(join(legacyArtifactRoot, 'bin'))).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(legacyResult.build.manifest.files.filter((file) => file.path.startsWith('bin/'))).toEqual([]);
+  await expect(stat(join(legacyArtifactRoot, 'scripts', 'hauler.mjs'))).resolves.toMatchObject({});
+  expect(legacyResult.diagnostics).toContainEqual(expect.objectContaining({
     code: 'AB4765',
     severity: 'warning',
     target: 'legacy-host',
   }));
-  expect(result.diagnostics.filter((entry) => entry.code === 'AB4765')).toHaveLength(1);
+  expect(legacyResult.diagnostics.filter((entry) => entry.code === 'AB4765')).toHaveLength(1);
 
   // Help, version, and the rendered .tsx command ride the same executable.
   const claudeBin = binPath;
@@ -251,9 +264,14 @@ it('emits the routed CLI bin into every capable host artifact and omits it elsew
   expect(result.build.manifest.files.find((file) => file.path === `bin/${pluginName}-flight.mjs`)).toMatchObject({ kind: 'bundle' });
   expect(result.build.manifest.files.filter((file) => file.path.startsWith('bin/'))).toHaveLength(2);
 
-  // Artifact validation accepts the framework-owned `bin/` layout on every target.
-  const validation = await validateArtifact({ artifactRoot, registry });
+  // Artifact validation accepts the framework-owned `bin/` layout on every
+  // target, and a root without the bin as well.
+  const [validation, legacyValidation] = await Promise.all([
+    validateArtifact({ artifactRoot, registry }),
+    validateArtifact({ artifactRoot: legacyArtifactRoot, registry }),
+  ]);
   expect(validation.filter((entry) => entry.severity === 'error')).toEqual([]);
+  expect(legacyValidation.filter((entry) => entry.severity === 'error')).toEqual([]);
 
   // `inspect` accounts for the bin as a `cli` component per target.
   const inspected = await inspect({ registry, root });
@@ -266,7 +284,10 @@ it('emits the routed CLI bin into every capable host artifact and omits it elsew
     kind: 'cli',
     name: pluginName,
   });
-  const legacyPlan = inspected.plans.find((plan) => plan.target === 'legacy-host');
+  const legacyInspected = await inspect({ registry, root: legacyRoot });
+  expect(legacyInspected.state).toBe('ready');
+  if (legacyInspected.state !== 'ready') throw new Error('unreachable');
+  const legacyPlan = legacyInspected.plans.find((plan) => plan.target === 'legacy-host');
   expect(legacyPlan?.skipped).toContainEqual({
     capability: { name: 'cli', reason: expect.stringContaining('publishes no cli capability row'), state: 'unavailable' },
     id: `bin:${pluginName}`,

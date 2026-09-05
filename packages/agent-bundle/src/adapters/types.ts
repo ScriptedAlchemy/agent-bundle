@@ -428,7 +428,7 @@ export interface TargetArtifactLayout {
   readonly mcpApps?: TargetArtifactOutputLayout;
   readonly mcpEntries?: TargetArtifactOutputLayout;
   readonly outputStyles?: TargetArtifactOutputLayout;
-  /** Adapter-owned plain documents at the artifact root (for example a generated AGENTS.md). */
+  /** Adapter-owned plain documents at the artifact root (for example a host manifest under its dotfolder). */
   readonly rootDocuments?: readonly string[];
   readonly rules?: TargetArtifactOutputLayout;
   readonly scripts?: TargetArtifactOutputLayout;

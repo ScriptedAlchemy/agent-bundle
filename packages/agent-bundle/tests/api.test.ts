@@ -843,12 +843,15 @@ it('reports skipped target/component pairs against each target emission surface'
       mkdir(join(root, 'src', 'rules'), { recursive: true }),
     ]);
     await Promise.all([
-      writeFile(join(root, 'src', 'commands', 'shared.md'), '---\ndescription: Shared command\n---\nShared command prompt.\n'),
+      // Claude Code and Cursor both discover `commands/` in the one composite
+      // root (#555): a command shared by both must lower to identical bytes
+      // (so no frontmatter, which only Claude would emit), and a command scoped
+      // to one of them cannot be isolated there (AB4105), so the host-scoped
+      // command selects both and is excluded only from Codex and portable.
+      writeFile(join(root, 'src', 'commands', 'shared.md'), 'Shared command prompt.\n'),
       writeFile(
-        // Cursor's commands surface is frontmatter-free, so a Cursor-required
-        // command carries only the authoring-only `targets` key (#100 feature sets).
-        join(root, 'src', 'commands', 'cursor-only.md'),
-        '---\ntargets:\n  - cursor\n---\nCursor command prompt.\n',
+        join(root, 'src', 'commands', 'cursor-claude.md'),
+        '---\ntargets:\n  - cursor\n  - claude\n---\nCursor and Claude command prompt.\n',
       ),
       writeFile(join(root, 'src', 'report.ts'), 'export const report = true;\n'),
       writeFile(join(root, 'src', 'rules', 'shared.mdc'), '---\ndescription: Shared rule\n---\nShared guidance.\n'),
@@ -871,7 +874,7 @@ it('reports skipped target/component pairs against each target emission surface'
     const planFor = (target: string) => result.plans.find((plan) => plan.target === target);
 
     expect(planFor('portable')?.skipped).toEqual([
-      expect.objectContaining({ kind: 'command', name: 'cursor-only', reason: 'excluded-by-targets' }),
+      expect.objectContaining({ kind: 'command', name: 'cursor-claude', reason: 'excluded-by-targets' }),
       expect.objectContaining({ kind: 'command', name: 'shared', reason: 'unsupported-capability' }),
       expect.objectContaining({ kind: 'hook', name: 'sessionStart', reason: 'excluded-by-targets' }),
       expect.objectContaining({ kind: 'rule', name: 'cursor-only', reason: 'excluded-by-targets' }),
@@ -916,13 +919,12 @@ it('reports skipped target/component pairs against each target emission surface'
       );
     }
     expect(planFor('codex')?.skipped).toEqual([
-      expect.objectContaining({ kind: 'command', name: 'cursor-only', reason: 'excluded-by-targets' }),
+      expect.objectContaining({ kind: 'command', name: 'cursor-claude', reason: 'excluded-by-targets' }),
       expect.objectContaining({ kind: 'command', name: 'shared', reason: 'unsupported-capability' }),
       expect.objectContaining({ kind: 'rule', name: 'cursor-only', reason: 'excluded-by-targets' }),
       expect.objectContaining({ kind: 'rule', name: 'shared', reason: 'unsupported-capability' }),
     ]);
     expect(planFor('claude')?.skipped).toEqual([
-      expect.objectContaining({ kind: 'command', name: 'cursor-only', reason: 'excluded-by-targets' }),
       expect.objectContaining({ kind: 'rule', name: 'cursor-only', reason: 'excluded-by-targets' }),
       expect.objectContaining({ kind: 'rule', name: 'shared', reason: 'unsupported-capability' }),
       expect.objectContaining({ kind: 'script', name: 'report', reason: 'excluded-by-targets' }),
@@ -1231,9 +1233,16 @@ it('reports omitted component features per target from the host feature rows (#1
       ].join('\n')),
     ]);
 
-    const result = await readyInspection({ root });
+    // A command with frontmatter lowers to different bytes on Claude Code and
+    // Cursor, so the two hosts cannot share one composite root (AB4103); each
+    // host's feature accounting is read from its own root.
+    const [claudeResult, cursorResult] = await Promise.all([
+      readyInspection({ root, targets: ['claude'] }),
+      readyInspection({ root, targets: ['cursor'] }),
+    ]);
     const selectedOn = (target: string, kind: string) =>
-      result.plans.find((plan) => plan.target === target)!.selected.find((component) => component.kind === kind)!;
+      (target === 'claude' ? claudeResult : cursorResult).plans
+        .find((plan) => plan.target === target)!.selected.find((component) => component.kind === kind)!;
 
     // Cursor ships the command body only: both authored fields are reported as
     // omitted with the host's own `commands.<field>` judgment, in feature order.
@@ -1255,17 +1264,23 @@ it('reports omitted component features per target from the host feature rows (#1
       join(root, 'src', 'skills', 'review', 'SKILL.md'),
       '---\nname: review\ndescription: Reviews changes\ntargets:\n  claude:\n    model: sonnet\n---\n# Review\n',
     );
-    const withExtension = await readyInspection({ root });
+    const withExtension = await readyInspection({ root, targets: ['claude'] });
     const skillOn = (target: string) =>
       withExtension.plans.find((plan) => plan.target === target)!.selected.find((component) => component.kind === 'skill')!;
     expect(skillOn('claude')).not.toHaveProperty('omittedFeatures');
     expect(withExtension.model.skills[0]!.hostDocuments?.claude?.frontmatter).toHaveProperty('model', 'sonnet');
-    // `validate` surfaces the matching omit-with-reason warnings for the
-    // implicit Cursor target; inspect stays a ready plan.
+    // `validate` of the configured claude+cursor selection surfaces the
+    // omit-with-reason warnings for Cursor beside the composite-root refusal
+    // of the command the two hosts would lower differently.
     const validated = await validate({ root });
     expect(validated.diagnostics.filter((diagnostic) => diagnostic.code === 'AB4928')).toEqual([
       expect.objectContaining({ message: expect.stringContaining('Command "deploy" uses argumentHint, which cursor omits'), severity: 'warning', target: 'cursor' }),
       expect.objectContaining({ message: expect.stringContaining('Command "deploy" uses description, which cursor omits'), severity: 'warning', target: 'cursor' }),
+    ]);
+    expect(validated.diagnostics.filter((diagnostic) => diagnostic.code === 'AB4103')).toEqual([
+      expect.objectContaining({ generatedPath: 'commands/deploy.md', severity: 'error' }),
+      // The Claude host extension lowers into Claude's SKILL.md alone.
+      expect.objectContaining({ generatedPath: 'skills/review/SKILL.md', severity: 'error' }),
     ]);
     expect(validated.diagnostics.some((diagnostic) => diagnostic.code === 'AB4927' || diagnostic.code === 'AB4907' || diagnostic.code === 'AB4908')).toBe(false);
   } finally {
@@ -1280,28 +1295,37 @@ it('never counts an opaque third-party lspServers declaration as emitted by a ho
     capabilities: supportedCapabilities('hooks', 'lsp', 'mcp'),
   });
   try {
-    await writeFile(join(root, 'agent-bundle.config.ts'), [
+    // A third-party adapter cannot share Claude Code's root (AB4106), so its
+    // declaration is judged from Claude's own root: normalized as the
+    // synthetic extension's, reaching no selected projection.
+    const configFor = (target: string): string => [
       'export default {',
       "  synthetic: { lspServers: { rust: { command: 'rust-analyzer' } } },",
       "  hooks: { sessionStart: { handler: './src/hook.ts' } },",
       "  plugin: { name: 'api-fixture', version: '1.0.0' },",
-      "  targets: ['claude', 'synthetic'],",
+      `  targets: [${JSON.stringify(target)}],`,
       '};',
       '',
-    ].join('\n'));
+    ].join('\n');
+    await writeFile(join(root, 'agent-bundle.config.ts'), configFor('claude'));
 
     const result = await readyInspection({ registry, root });
     const planFor = (target: string) => result.plans.find((plan) => plan.target === target)!;
     // Claude publishes `lsp: supported`, but its planner reads only
     // `claude.lspServers`; the synthetic declaration is excluded for Claude
-    // and writes no `.lsp.json` there, while the declaring adapter selects it.
-    expect(result.model.lspServers).toEqual([expect.objectContaining({ declaredBy: 'synthetic', name: 'rust', targets: ['synthetic'] })]);
+    // and writes no `.lsp.json` there.
+    expect(result.model.lspServers).toEqual([expect.objectContaining({ declaredBy: 'synthetic', name: 'rust', targets: [] })]);
     expect(planFor('claude').skipped).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'lsp', name: 'rust', reason: 'excluded-by-targets' }),
     ]));
     expect(planFor('claude').selected.some((component) => component.kind === 'lsp')).toBe(false);
     expect(planFor('claude').entries.some((entry) => entry.relativePath === '.lsp.json')).toBe(false);
-    expect(planFor('synthetic').selected).toEqual(expect.arrayContaining([
+
+    // In its own root the declaring adapter selects the same declaration.
+    await writeFile(join(root, 'agent-bundle.config.ts'), configFor('synthetic'));
+    const syntheticSelected = await readyInspection({ registry, root });
+    expect(syntheticSelected.model.lspServers).toEqual([expect.objectContaining({ declaredBy: 'synthetic', name: 'rust', targets: ['synthetic'] })]);
+    expect(syntheticSelected.plans.find((plan) => plan.target === 'synthetic')!.selected).toEqual(expect.arrayContaining([
       expect.objectContaining({ capability: expect.objectContaining({ name: 'lsp', state: 'supported' }), kind: 'lsp', name: 'rust' }),
     ]));
 
@@ -1548,7 +1572,7 @@ it('keeps rule and command model digests root-independent and sensitive to conte
   const config = [
     'export default {',
     "  plugin: { name: 'rule-digest-fixture', version: '1.0.0' },",
-    "  targets: ['cursor', 'claude'],",
+    "  targets: ['cursor'],",
     '};',
     '',
   ].join('\n');

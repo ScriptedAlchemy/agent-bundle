@@ -98,12 +98,6 @@ declare module '../core/types.ts' {
 }
 
 /**
- * Cursor's local-plugin document paths. A known-loading physical install
- * uses `.cursor-plugin/plugin.json`
- * with root `mcp.json` and `hooks/hooks.json`; the manifest keeps explicit
- * pointers so every declared component resolves from one plugin root.
- */
-/**
  * Cursor's artifact documents. The hook and MCP documents live beside the
  * manifest rather than at the conventional `hooks/hooks.json` and `mcp.json`:
  * the manifest's `hooks` and `mcp` pointers name them, so a composite root

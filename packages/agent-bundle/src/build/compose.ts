@@ -221,15 +221,22 @@ const compositeNoticeDelivery = (
   return first === undefined ? undefined : rest.reduce(intersectNoticeDeliveryAdvertisements, first);
 };
 
+/** A composite plan beside every diagnostic its planning raised, fatal or not. */
+export interface CompositePlanning {
+  readonly diagnostics: readonly Diagnostic[];
+  readonly plan: CompositePlan;
+}
+
 /**
- * Plans the selected host projections into one composite root (#555). Only
- * the planners of the selected hosts run, each over the whole model; a
- * declaration reaches the root when its target set intersects the selection
- * while every emitted host document keeps its own per-host scoping. Throws a
- * `DiagnosticError` when any projection, collision (`AB4103`), or scope leak
- * (`AB4105`) is fatal.
+ * Plans the selected host projections into one composite root (#555) without
+ * judging the outcome. Only the planners of the selected hosts run, each over
+ * the whole model; a declaration reaches the root when its target set
+ * intersects the selection while every emitted host document keeps its own
+ * per-host scoping. Projection, collision (`AB4103`), and scope-leak
+ * (`AB4105`) diagnostics are returned beside the plan so `validate` and
+ * `inspect` report exactly what `build` would refuse.
  */
-export const composeProjections = (model: NormalizedPlugin, registry: TargetRegistry): CompositePlan => {
+export const planComposite = (model: NormalizedPlugin, registry: TargetRegistry): CompositePlanning => {
   const selected = sortedProjections(model.targets.map((target) => target.name));
   const diagnostics: Diagnostic[] = [];
   const projections = selected.map((name): ComposedProjection => {
@@ -254,14 +261,27 @@ export const composeProjections = (model: NormalizedPlugin, registry: TargetRegi
     { entries: installSurfaceEntries(model, selected), owner: 'install surface' },
   ]);
   diagnostics.push(...merged.diagnostics, ...scopeLeakDiagnostics(model, registry, selected));
-  new DiagnosticBag(deduplicateDiagnostics(diagnostics)).throwIfErrors();
   return Object.freeze({
-    cliBin: projections.some((projection) => projection.cliBin),
-    entries: merged.entries,
-    hookEntries: Object.freeze(projections.flatMap((projection) => projection.plan.hookEntries ?? [])),
-    identity: projectionIdentity(selected),
-    noticeDelivery: compositeNoticeDelivery(registry, selected),
-    projections: Object.freeze(projections),
-    selected,
+    diagnostics: Object.freeze(deduplicateDiagnostics(diagnostics)),
+    plan: Object.freeze({
+      cliBin: projections.some((projection) => projection.cliBin),
+      entries: merged.entries,
+      hookEntries: Object.freeze(projections.flatMap((projection) => projection.plan.hookEntries ?? [])),
+      identity: projectionIdentity(selected),
+      noticeDelivery: compositeNoticeDelivery(registry, selected),
+      projections: Object.freeze(projections),
+      selected,
+    }),
   });
+};
+
+/**
+ * The composite plan a build stages: `planComposite` judged, throwing a
+ * `DiagnosticError` when any projection, collision (`AB4103`), or scope leak
+ * (`AB4105`) is fatal.
+ */
+export const composeProjections = (model: NormalizedPlugin, registry: TargetRegistry): CompositePlan => {
+  const planning = planComposite(model, registry);
+  new DiagnosticBag(planning.diagnostics).throwIfErrors();
+  return planning.plan;
 };

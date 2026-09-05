@@ -1248,8 +1248,8 @@ it('records dated Cursor contract rows (#189)', () => {
   });
   expect(cursorCapabilityTable.plugin.componentDiscovery.emitted).toEqual({
     commands: './commands/',
-    hooks: './hooks/hooks.json',
-    mcpServers: './mcp.json',
+    hooks: './.cursor-plugin/hooks.json',
+    mcpServers: './.cursor-plugin/mcp.json',
     rules: './rules/',
     skills: './skills/',
   });

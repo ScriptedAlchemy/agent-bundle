@@ -10,7 +10,7 @@ import { createDefaultRegistry, TargetRegistry } from './adapters/registry.ts';
 import type { TargetArtifactEntry, TargetHookEntry } from './adapters/types.ts';
 import { build as buildArtifact, type BuildResult } from './build/build.ts';
 import { routedCliBins } from './build/cli-bins.ts';
-import { composeProjections } from './build/compose.ts';
+import { planComposite } from './build/compose.ts';
 import { buildPackageOutputs, type PackageBuildResult } from './build/package-build.ts';
 import { rewritesWorkspaceProtocols } from './build/pack-dependencies.ts';
 import {
@@ -1104,25 +1104,23 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
   if (options.focus === 'bundler') {
     try {
       // The bundler surfaces are those of the one composite root, so the
-      // inspection composes the same selection the build stages (#555).
+      // inspection composes the same selection the build stages (#555). The
+      // preparation above already judged that composition (AB4103, AB4105),
+      // so an invalid root never reaches this point.
       bundler = await composeBundlerInspection({
-        composite: composeProjections(model, prepared.registry),
+        composite: planComposite(model, prepared.registry).plan,
         model,
         projectRoot: prepared.root,
         ...(prepared.tools === undefined ? {} : { tools: prepared.tools }),
       });
-    } catch (error) {
-      // A root that cannot be composed (AB4103 collision, AB4105 scope leak)
-      // reports the composition diagnostics themselves, not a generic failure.
+    } catch {
       return invalidInspection(freezeDiagnostics([
         ...prepared.diagnostics,
-        ...(error instanceof DiagnosticError
-          ? error.diagnostics
-          : [projectDiagnostic(
-            'AB7001',
-            'Unable to compose the bundler inspection.',
-            { sourcePath: prepared.configPath },
-          )]),
+        projectDiagnostic(
+          'AB7001',
+          'Unable to compose the bundler inspection.',
+          { sourcePath: prepared.configPath },
+        ),
       ]));
     }
   }

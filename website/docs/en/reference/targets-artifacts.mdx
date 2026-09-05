@@ -1,5 +1,5 @@
 ---
-description: 'The composite plugin root agent-bundle build emits: where each host projection places its manifest, hook, and MCP documents, the hook wrapper naming rule, the AB4103/AB4105 collision rules, and the artifact manifest contract.'
+description: 'The composite plugin root agent-bundle build emits: where each host projection places its manifest, hook, and MCP documents, the hook wrapper naming rule, the AB4103/AB4105/AB4106 composition rules, and the artifact manifest contract.'
 ---
 
 # Targets and artifacts
@@ -100,15 +100,17 @@ thing: its `distPath.root` is the artifact output, `<output>`, with no host segm
 
 ### One root, one set of bytes
 
-Merging projections by path only works when the hosts agree on the bytes. Two rules keep the
-root honest, and both are fatal build errors:
+Merging projections by path only works when the hosts agree on the bytes. Three rules keep the
+root honest; all are errors, and `validate` and `inspect` report them exactly where `build`
+refuses:
 
 | Code | Rule |
 | --- | --- |
 | `AB4103` | Two selected projections plan the same path with different bytes. Projections are compared in host-name order and paths in path order, so a given selection reports the same collision however `targets` is written. The usual cause is a Skill whose frontmatter carries a host extension (`targets: { claude: … }`), which lowers to different `skills/<name>/SKILL.md` bytes for Claude Code than for the other hosts. Make the component identical for every selected host, or build the conflicting hosts into separate artifacts. |
 | `AB4105` | A component scoped to a subset of the selected hosts — a command, rule, or skill with frontmatter `targets` — sits in a conventional directory another selected host scans (`commands/` for Claude Code and Cursor, `rules/` for Cursor, `skills/` for every host). Inside one root the file cannot be hidden from that host, so the build refuses rather than leaking it. Extend `targets` to every selected host that discovers the directory, or build those hosts separately. |
+| `AB4106` | The selection mixes an adapter registered on an advanced `TargetRegistry` — any target that is not one of `claude`, `codex`, `cursor`, `portable` — with another target. Only the built-in hosts agree on where their unshared documents live, which directories each discovers, and one install surface, so a third-party adapter is built alone: `targets: ['<name>']` into its own `--output`. A single-target selection never triggers it. |
 
-Both are listed with `AB4100` in the [Diagnostics reference](./diagnostics.md).
+All three are listed with `AB4100` in the [Diagnostics reference](./diagnostics.md).
 
 ## The root is distributable
 

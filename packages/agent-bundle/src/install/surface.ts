@@ -1,4 +1,5 @@
 import type { NormalizedPlugin } from '../core/types.ts';
+import { type BuiltInHost, builtInHostNames, isBuiltInHost } from '../adapters/composite-layout.ts';
 import { sourceInputs, type TargetArtifactWrite } from '../adapters/types.ts';
 import {
   installReceiptFile,
@@ -8,8 +9,6 @@ import {
   legacyInstallReceiptFormat,
   preservedRuntimeEntries,
 } from './receipt.ts';
-
-type BuiltInTarget = 'claude' | 'codex' | 'cursor' | 'portable';
 
 const marketplaceName = (model: NormalizedPlugin): string => `${model.metadata.name}-marketplace`;
 
@@ -275,21 +274,16 @@ const portableInstructions = (): string[] => [
   '',
 ];
 
-const builtInTargetOrder: readonly BuiltInTarget[] = Object.freeze(['claude', 'codex', 'cursor', 'portable']);
-
-const isBuiltInTarget = (target: string): target is BuiltInTarget =>
-  (builtInTargetOrder as readonly string[]).includes(target);
-
 /**
  * The built-in hosts among the selected projections, in the fixed order the
  * install surface documents them, so the surface never depends on the order
  * `targets` was written in (#555 acceptance 5). Advanced registries that
  * select a custom target get no section for it.
  */
-const selectedBuiltInTargets = (selected: readonly string[]): readonly BuiltInTarget[] =>
-  builtInTargetOrder.filter((target) => selected.includes(target));
+const selectedBuiltInTargets = (selected: readonly string[]): readonly BuiltInHost[] =>
+  builtInHostNames.filter((target) => selected.includes(target));
 
-const instructionsFor = (model: NormalizedPlugin, target: BuiltInTarget): string[] => {
+const instructionsFor = (model: NormalizedPlugin, target: BuiltInHost): string[] => {
   switch (target) {
     case 'claude':
       return claudeInstructions(model);
@@ -1406,7 +1400,7 @@ const needsCursorInstaller = (selected: readonly string[]): boolean =>
 export const installSurfaceRequirements = (
   selected: readonly string[],
 ): readonly string[] => {
-  if (selected.filter(isBuiltInTarget).length === 0) return Object.freeze([]);
+  if (selected.filter(isBuiltInHost).length === 0) return Object.freeze([]);
   return needsCursorInstaller(selected)
     ? Object.freeze(['INSTALL.md', 'install.mjs'])
     : Object.freeze(['INSTALL.md']);
@@ -1422,7 +1416,7 @@ export const installSurfaceEntries = (
   model: NormalizedPlugin,
   selected: readonly string[],
 ): readonly TargetArtifactWrite[] => {
-  if (selected.filter(isBuiltInTarget).length === 0) return Object.freeze([]);
+  if (selected.filter(isBuiltInHost).length === 0) return Object.freeze([]);
   return Object.freeze([
     Object.freeze({
       content: installMarkdown(model, selected),

@@ -6,11 +6,16 @@ import { afterEach, describe, expect, it } from '@rstest/core';
 
 import { codexArtifactPaths } from '../src/adapters/codex.ts';
 import { cursorArtifactPaths } from '../src/adapters/cursor.ts';
-import { build, type BuildProjectResult } from '../src/api.ts';
+import type { TargetAdapter } from '../src/adapters/types.ts';
+import { build, type BuildProjectResult, createDefaultRegistry, type TargetRegistry, validate } from '../src/api.ts';
 import { parseArtifactHookIndex } from '../src/build/hook-index.ts';
 import { parseArtifactManifest } from '../src/build/manifest.ts';
 import { sha256Hex } from '../src/core/digest.ts';
 import { DiagnosticError } from '../src/core/diagnostics.ts';
+import type { NormalizedPlugin } from '../src/core/types.ts';
+import { createMcpPathTokenResolver, standardMcpPathTokens } from '../src/services/mcp-path-tokens.ts';
+import { createTargetMcpRuntime, resolveTargetRelativeStdioArgument } from '../src/services/mcp-runtime.ts';
+import { supportedCapabilities } from './support/adapter-capabilities.ts';
 
 /**
  * Acceptance tests for the composite plugin root (#555, Wave 1): every
@@ -95,16 +100,63 @@ const digestTree = async (root: string): Promise<ReadonlyMap<string, string>> =>
 
 const buildFixture = async (
   targets: readonly string[] | undefined,
-  options: Omit<FixtureOptions, 'targets'> = {},
+  { registry, ...options }: Omit<FixtureOptions, 'targets'> & { readonly registry?: TargetRegistry } = {},
 ): Promise<{ readonly output: string; readonly result: BuildProjectResult }> => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-composite-'));
   roots.push(root);
   await writeProject(root, { ...options, ...(targets === undefined ? {} : { targets }) });
   const output = join(root, 'artifact');
-  const result = await build({ output, root });
+  const result = await build({ output, ...(registry === undefined ? {} : { registry }), root });
   expect(result.diagnostics.filter((entry) => entry.severity === 'error')).toEqual([]);
   return { output, result };
 };
+
+const syntheticTarget = 'synthetic';
+const syntheticMcpRuntime = createTargetMcpRuntime({
+  manifestPath: 'synthetic-mcp.json',
+  remoteTypes: [],
+  resolveStdioArgument: resolveTargetRelativeStdioArgument,
+  resolveValue: createMcpPathTokenResolver({
+    knownTokens: standardMcpPathTokens,
+    target: syntheticTarget,
+    tokens: { cwd: { '${PLUGIN_ROOT}': 'pluginRoot' } },
+  }),
+});
+
+/**
+ * An adapter an advanced registry adds beside the built-in hosts. It lowers
+ * the fixture's MCP server into a document of its own and admits the shared
+ * compiled surfaces (MCP entries, scripts), so alone it builds a clean root;
+ * beside another target only `AB4106` can be at issue.
+ */
+const syntheticAdapter: TargetAdapter = Object.freeze({
+  artifactLayout: Object.freeze({
+    mcpEntries: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'mcp' }),
+    scripts: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'scripts' }),
+  }),
+  capabilities: supportedCapabilities('mcp'),
+  mcpRuntime: syntheticMcpRuntime,
+  metadata: Object.freeze({ adapterRevision: 'test', observedVersion: 'test', schemas: Object.freeze([]) }),
+  name: syntheticTarget,
+  plan: (model: NormalizedPlugin) => {
+    const servers = Object.fromEntries(model.mcpServers
+      .filter((server) => server.targets.includes(syntheticTarget))
+      .map((server) => [server.name, {
+        ...(server.args === undefined ? {} : { args: server.args }),
+        command: server.command,
+        type: 'stdio',
+      }]));
+    return Object.freeze({
+      diagnostics: Object.freeze([]),
+      entries: Object.freeze([{
+        content: `${JSON.stringify({ mcpServers: servers })}\n`,
+        kind: 'write' as const,
+        relativePath: syntheticMcpRuntime.manifestPath,
+        sourceInputs: Object.freeze([model.metadata.provenance.sourcePath]),
+      }]),
+    });
+  },
+});
 
 const readJson = async (path: string): Promise<unknown> => JSON.parse(await readFile(path, 'utf8'));
 
@@ -324,5 +376,40 @@ describe('composite plugin root (#555)', () => {
     // simply Claude's: it is emitted once and only Claude's manifest sees it.
     const { output } = await buildFixture(['claude', 'codex'], { commandTargets: ['claude'] });
     expect(await topLevel(join(output, 'commands'))).toEqual(['summarize.md']);
+  });
+
+  it('refuses an advanced-registry adapter selected beside any other target, and builds it alone (AB4106)', { timeout: 180_000 }, async () => {
+    // The built-in hosts agree on how one root is shared; an adapter a
+    // registry adds has made no such agreement, so beside Claude Code it is
+    // refused on the model — by `validate` and by `build` alike — and named
+    // with the config that selected it.
+    const registry = createDefaultRegistry().register(syntheticAdapter);
+    const root = await mkdtemp(join(tmpdir(), 'agent-bundle-composite-registry-'));
+    roots.push(root);
+    await writeProject(root, { targets: ['claude', 'synthetic'] });
+    const refused = {
+      code: 'AB4106',
+      message: 'Target "synthetic" cannot share one composite root with the other selected targets (claude): only the built-in hosts (claude, codex, cursor, portable) project into a shared root.',
+      recovery: 'Build "synthetic" alone — targets: ["synthetic"] — into its own --output, and the other targets into another.',
+      severity: 'error',
+      sourcePath: join(root, 'agent-bundle.config.ts'),
+      target: 'synthetic',
+    };
+    const validated = await validate({ registry, root });
+    expect(validated.diagnostics.filter((entry) => entry.code === 'AB4106')).toEqual([refused]);
+    const failure = await build({ output: join(root, 'artifact'), registry, root }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(DiagnosticError);
+    expect((failure as DiagnosticError).diagnostics.filter((entry) => entry.code === 'AB4106')).toEqual([refused]);
+
+    // Alone, the same adapter gets a root of its own; the built-in hosts still
+    // share one, with the adapter registered but unselected.
+    const [alone, builtIn] = await Promise.all([
+      buildFixture(['synthetic'], { registry }),
+      buildFixture(['claude', 'codex'], { registry }),
+    ]);
+    expect(alone.result.build.manifest.targets.map((target) => target.name)).toEqual(['synthetic']);
+    expect(await topLevel(alone.output)).toContain(syntheticMcpRuntime.manifestPath);
+    expect(builtIn.result.build.manifest.targets.map((target) => target.name)).toEqual(['claude', 'codex']);
+    expect(await topLevel(builtIn.output)).not.toContain(syntheticMcpRuntime.manifestPath);
   });
 });

@@ -32,6 +32,7 @@ export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/claude-plugin-validate-acceptance.test.ts',
   'packages/agent-bundle/tests/cli-routes-build.test.ts',
   'packages/agent-bundle/tests/cli.test.ts',
+  'packages/agent-bundle/tests/composite-rules.test.ts',
   'packages/agent-bundle/tests/dev-contract-adoption.test.ts',
   'packages/agent-bundle/tests/dev-artifact-service.test.ts',
   'packages/agent-bundle/tests/dev-host-install.test.ts',

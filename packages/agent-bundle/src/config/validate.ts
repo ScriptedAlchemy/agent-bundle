@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'n
 import { basename, extname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 
 import { capabilityIsSupported, cliBinCapability } from '../adapters/capability-state.ts';
+import { builtInHostNames, isBuiltInHost } from '../adapters/composite-layout.ts';
 import { type EntryExportScan, scanEntryExportsSource } from '../build/entry-exports.ts';
 import { frameworkOwnedPluginCollisions, frameworkOwnedRsbuildPlugins } from '../build/framework-plugins.ts';
 import type { CapabilityState } from '../core/capabilities.ts';
@@ -2314,6 +2315,35 @@ const routedCliBinTargetDiagnostics = (
   return diagnostics;
 };
 
+/**
+ * One composite root is shared by the built-in hosts only (#555): their
+ * projections agree on where the files they cannot share live, which
+ * conventional directories each discovers, and one install surface. An
+ * adapter registered on an advanced `TargetRegistry` has made none of those
+ * agreements, so a selection that puts it beside any other known target is
+ * refused on the model — `validate`, `inspect`, and `build` all report it —
+ * and named on the non-built-in target. Selected alone, any target gets a
+ * root of its own; unknown names are `AB4100`'s and project nothing to share.
+ */
+const compositeRootTargetDiagnostics = (
+  model: NormalizedPlugin,
+  registry: NormalizationTargetRegistry,
+): Diagnostic[] => {
+  const known = model.targets.filter((target) => registry.has(target.name));
+  const selected = [...new Set(known.map((target) => target.name))];
+  if (selected.length < 2) return [];
+  return known
+    .filter((target) => !isBuiltInHost(target.name))
+    .map((target) => ({
+      code: 'AB4106',
+      message: `Target ${JSON.stringify(target.name)} cannot share one composite root with the other selected targets (${selected.filter((name) => name !== target.name).join(', ')}): only the built-in hosts (${builtInHostNames.join(', ')}) project into a shared root.`,
+      recovery: `Build ${JSON.stringify(target.name)} alone — targets: [${JSON.stringify(target.name)}] — into its own --output, and the other targets into another.`,
+      severity: 'error',
+      sourcePath: target.provenance.sourcePath,
+      target: target.name,
+    }));
+};
+
 export const validateModel = (
   model: NormalizedPlugin,
   registry: NormalizationTargetRegistry,
@@ -2331,6 +2361,8 @@ export const validateModel = (
       });
     }
   }
+
+  diagnostics.push(...compositeRootTargetDiagnostics(model, registry));
 
   diagnostics.push(...routedCliBinTargetDiagnostics(model, registry));
 

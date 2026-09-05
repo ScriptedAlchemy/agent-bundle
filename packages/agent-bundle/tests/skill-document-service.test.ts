@@ -167,7 +167,7 @@ it('reads generated documents from the acquired epoch reference root, never a si
     const built = await new ArtifactService({ epochStore }).build(await protectedProject.prepare('build'));
     expect(built.outcome).toBe('succeeded');
     if (built.outcome !== 'succeeded') throw new Error('Fixture artifact did not build.');
-    const alternateSkill = join(alternateRoot, '.agent-bundle', 'epochs', built.epoch.id, 'portable', 'skills', 'review');
+    const alternateSkill = join(alternateRoot, '.agent-bundle', 'epochs', built.epoch.id, 'skills', 'review');
     await mkdir(join(alternateSkill, 'assets'), { recursive: true });
     await Promise.all([
       writeFile(join(alternateSkill, 'SKILL.md'), '---\nname: review\n---\n# Alternate\n'),

@@ -23,7 +23,22 @@
  *   `target`, its host contract revision), so a hook that reaches several
  *   selected hosts compiles one wrapper per host, `hooks/<name>.<host>.mjs`;
  *   a hook only one selected host receives keeps `hooks/<name>.mjs`.
+ *
+ * Those agreements hold between the built-in hosts only. An adapter
+ * registered on an advanced `TargetRegistry` has made none of them, so it
+ * gets a root of its own: `validateModel` refuses a selection that mixes it
+ * with any other target (`AB4106`), and the install surface documents only
+ * the built-in hosts it finds in a selection.
  */
+
+/** The hosts Agent Bundle ships adapters for: the only targets that may share one composite root. */
+export type BuiltInHost = 'claude' | 'codex' | 'cursor' | 'portable';
+
+/** The built-in hosts, in the fixed order the install surface documents them. */
+export const builtInHostNames: readonly BuiltInHost[] = Object.freeze(['claude', 'codex', 'cursor', 'portable']);
+
+export const isBuiltInHost = (target: string): target is BuiltInHost =>
+  (builtInHostNames as readonly string[]).includes(target);
 
 /** The composite identity of a selection: its host names, sorted, joined by `+`. */
 export const projectionIdentity = (selected: Iterable<string>): string =>
