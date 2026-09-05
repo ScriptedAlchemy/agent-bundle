@@ -1,3 +1,5 @@
+import { resolve } from 'node:path';
+
 import {
   eventIpcRuntimeSpecifier,
   eventProjectRuntimeSpecifier,
@@ -26,46 +28,55 @@ import { launchEnvRuntimeSpecifier, operatorEnvLayerVirtualModule } from './laun
 import { cliBinRslibEntries, planCompiledCliBins } from './cli-bins.ts';
 import type { CompositePlan } from './compose.ts';
 import { eventRuntimeHosting, eventRuntimeModulePath, planCompiledMcpEntries, selectedServerHosts } from './entries.ts';
-import { composeMcpAppsRsbuildConfig, planCompiledMcpApps } from './mcp-apps.ts';
+import { inspectMcpAppsConfig, planCompiledMcpApps } from './mcp-apps.ts';
 import { projectMeta } from './meta.ts';
 import { planPackageEntries } from './package-build.ts';
-import { composeEntryLibConfig, type RslibEntry } from './rslib.ts';
+import { inspectRslibEntries, type RslibEntry } from './rslib.ts';
 import { deepFreeze } from '../core/freeze.ts';
 import type { AgentBundleMeta } from '../meta.ts';
 
 
 /**
- * `agent-bundle inspect --bundler` (RFC #50 §3.4): surfaces the internal
- * Rslib/Rsbuild configurations the build composes — the framework profile
- * with the consumer `tools` escape hatch merged over it and the invariant
- * hook appended last — for every synthesized output. The composition comes
- * from the same functions the build lowers (`composeEntryLibConfig`,
- * `composeMcpAppsRsbuildConfig`), so the inspection can never drift from
- * what actually compiles.
+ * `agent-bundle inspect --bundler` (RFC #50 §3.4): surfaces the lowered
+ * Rspack configuration of every output the build compiles — the framework
+ * profile with the consumer `tools` escape hatch merged over it and the
+ * invariant hook applied last, resolved by Rslib (executables) or Rsbuild
+ * (MCP App views) into what the compiler receives. The lowering is the
+ * build's own step (`inspectRslibEntries`, `inspectMcpAppsConfig`), run in
+ * production mode whatever `NODE_ENV` says and stopped where the build would
+ * start compiling, so the inspection can never drift from what actually
+ * compiles; a hatch value the invariants refuse fails the inspection the
+ * way it would fail the build.
  *
  * Two build-time-only values are replaced with stable tokens so the output
  * is deterministic for one project: the composite artifact root (chosen by
  * `build --output` and staged per build) appears as `<output>`, and the
- * synthesized declaration tsconfig (a temporary file the package
- * build generates under `node_modules`) appears as
- * `<generated-dts-tsconfig>`. Nothing else is redacted; this is a local
- * debugging surface. The generated-module namespace
+ * synthesized declaration tsconfig (a temporary file the package build
+ * generates under `node_modules`) appears as `<generated-dts-tsconfig>`.
+ * Nothing else is redacted; this is a local debugging surface, and the
+ * lowered configs carry absolute paths of the project and of agent-bundle's
+ * installed toolchain. The generated-module namespace
  * (`<project root>/.agent-bundle-virtual/...`) appears exactly as the build
  * composes it: it derives from the project root, not from the output root.
  */
 
 export interface BundlerInspectionEntry {
+  /** The engine that lowered this entry: Rslib for executables, Rsbuild for MCP App views. */
   readonly bundler: 'rsbuild' | 'rslib';
-  /** The composed config, JSON-rendered: functions appear as `[function <name>]`. */
+  /**
+   * The lowered Rspack configuration, JSON-rendered: functions appear as
+   * `[function <name>]`, class instances (plugins) as `[object <constructor>]`,
+   * regular expressions as `[regexp <source>]`.
+   */
   readonly config: unknown;
   /** The generated wrapper entry module, when the framework provides one. */
   readonly generatedEntry?: string;
-  readonly kind: 'bin' | 'hook' | 'lib' | 'mcp-apps' | 'mcp-entry' | 'script';
+  readonly kind: 'bin' | 'hook' | 'lib' | 'mcp-app' | 'mcp-entry' | 'script';
   readonly name: string;
   /** POSIX output path relative to the artifact root (artifact surfaces) or project root (package build). */
   readonly outputPath: string;
-  /** The authored entry module (absent for the MCP Apps config). */
-  readonly source?: string;
+  /** The authored entry module. */
+  readonly source: string;
   /** The composite identity of the selected projections; absent for package-build entries. */
   readonly target?: string;
 }
@@ -80,14 +91,27 @@ const artifactOutputToken = '<output>';
 
 const isPlainObject: (value: object) => boolean = isPlainRecord;
 
+/** Absolute build-time paths and the stable tokens that stand for them in the rendered configs. */
+type PathTokens = readonly (readonly [absolute: string, token: string])[];
+
+const tokenizePath = (value: string, tokens: PathTokens): string => {
+  for (const [absolute, token] of tokens) {
+    if (value === absolute) return token;
+    if (value.startsWith(`${absolute}/`)) return `${token}${value.slice(absolute.length)}`;
+  }
+  return value;
+};
+
 /**
- * Renders a composed bundler config as JSON-safe data without dropping the
- * shape: functions (consumer `tools.rspack` mutators, the framework
- * invariant hook) become `[function <name>]`, class instances become
- * `[object <constructor>]`.
+ * Renders a lowered Rspack config as JSON-safe data without dropping the
+ * shape: functions (function-form externals, hatch callbacks) become
+ * `[function <name>]`, class instances (plugins, loaders' option objects)
+ * become `[object <constructor>]`, regular expressions (module rules,
+ * externals) become `[regexp <source>]`.
  */
-const renderConfigValue = (value: unknown, ancestors = new Set<object>()): unknown => {
-  if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;
+const renderConfigValue = (value: unknown, tokens: PathTokens, ancestors = new Set<object>()): unknown => {
+  if (value === null || typeof value === 'boolean') return value;
+  if (typeof value === 'string') return tokenizePath(value, tokens);
   if (typeof value === 'number') return Number.isFinite(value) ? value : String(value);
   if (typeof value === 'function') return `[function ${value.name.length === 0 ? 'anonymous' : value.name}]`;
   if (typeof value !== 'object') return String(value);
@@ -95,61 +119,41 @@ const renderConfigValue = (value: unknown, ancestors = new Set<object>()): unkno
 
   ancestors.add(value);
   try {
+    if (value instanceof RegExp) return `[regexp ${String(value)}]`;
     if (Array.isArray(value)) {
-      return value.map((item) => renderConfigValue(item, ancestors));
+      return value.map((item) => renderConfigValue(item, tokens, ancestors));
     }
     if (!isPlainObject(value)) {
-      return `[object ${value.constructor?.name ?? 'unknown'}]`;
+      const constructor = value.constructor?.name;
+      return `[object ${constructor === undefined || constructor.length === 0 ? 'anonymous' : constructor}]`;
     }
     return Object.fromEntries(Object.entries(value)
       .filter(([, item]) => item !== undefined)
-      .map(([key, item]) => [key, renderConfigValue(item, ancestors)]));
+      .map(([key, item]) => [key, renderConfigValue(item, tokens, ancestors)]));
   } finally {
     ancestors.delete(value);
   }
 };
 
-const rslibInspectionEntry = (options: {
+/** One Rslib-compiled output the inspection lowers, before its config is known. */
+interface PlannedRslibInspection {
   readonly entry: RslibEntry;
-  readonly kind: BundlerInspectionEntry['kind'];
-  readonly meta: AgentBundleMeta;
+  readonly kind: Exclude<BundlerInspectionEntry['kind'], 'mcp-app'>;
   readonly name: string;
   readonly outputPath: string;
-  readonly outputRoot: string;
-  readonly projectRoot: string;
-  readonly source: string;
   readonly target?: string;
-  readonly tools?: AgentBundleToolsConfig;
-}): BundlerInspectionEntry => Object.freeze({
-  bundler: 'rslib',
-  config: renderConfigValue(composeEntryLibConfig(options.entry, {
-    cwd: options.projectRoot,
-    meta: options.meta,
-    outputRoot: options.outputRoot,
-    ...(options.tools === undefined ? {} : { tools: options.tools }),
-  })),
-  ...(options.entry.virtualSource === undefined ? {} : { generatedEntry: options.entry.virtualSource }),
-  kind: options.kind,
-  name: options.name,
-  outputPath: options.outputPath,
-  source: options.source,
-  ...(options.target === undefined ? {} : { target: options.target }),
-});
+}
 
 const scriptEntries = async (
   model: NormalizedPlugin,
-  projectRoot: string,
   composite: CompositeSelection,
-  tools: AgentBundleToolsConfig | undefined,
-): Promise<readonly BundlerInspectionEntry[]> => {
-  const meta = projectMeta(model.metadata);
-  const outputRoot = artifactOutputToken;
+): Promise<readonly PlannedRslibInspection[]> => {
   const target = composite.identity;
   const scripts = model.scripts.filter((script) =>
     script.mode === 'bundle' && script.targets.some((candidate) => composite.selected.includes(candidate)));
   return Promise.all(scripts.map(async (script) => {
     const exports = await scanEntryExports(script.source);
-    return rslibInspectionEntry({
+    return {
       entry: {
         name: script.name,
         outputRelativePath: `scripts/${script.name}.mjs`,
@@ -166,56 +170,36 @@ const scriptEntries = async (
           }
           : {}),
       },
-      kind: 'script',
-      meta,
+      kind: 'script' as const,
       name: script.name,
       outputPath: `scripts/${script.name}.mjs`,
-      outputRoot,
-      projectRoot,
-      source: script.source,
       target,
-      ...(tools === undefined ? {} : { tools }),
-    });
+    };
   }));
 };
 
 /** The artifact-hosted routed CLI bins of the composite root (#387), composed by the build's own planner. */
-const cliBinEntries = (
-  model: NormalizedPlugin,
-  projectRoot: string,
-  target: string,
-  tools: AgentBundleToolsConfig | undefined,
-): readonly BundlerInspectionEntry[] => {
-  const meta = projectMeta(model.metadata);
-  const outputRoot = artifactOutputToken;
-  const planned = planCompiledCliBins(model, { outDir: outputRoot, target });
-  return cliBinRslibEntries(planned, model).map((entry) => rslibInspectionEntry({
+const cliBinEntries = (model: NormalizedPlugin, outDir: string, target: string): readonly PlannedRslibInspection[] => {
+  const planned = planCompiledCliBins(model, { outDir, target });
+  return cliBinRslibEntries(planned, model).map((entry) => ({
     entry,
-    kind: 'bin',
-    meta,
+    kind: 'bin' as const,
     name: entry.name.replace(/^bin-/u, ''),
     outputPath: entry.outputRelativePath,
-    outputRoot,
-    projectRoot,
-    source: entry.source,
     target,
-    ...(tools === undefined ? {} : { tools }),
   }));
 };
 
 const mcpEntryEntries = async (
   model: NormalizedPlugin,
-  projectRoot: string,
   composite: CompositeSelection,
-  tools: AgentBundleToolsConfig | undefined,
-): Promise<readonly BundlerInspectionEntry[]> => {
-  const meta = projectMeta(model.metadata);
-  const outputRoot = artifactOutputToken;
+  outDir: string,
+): Promise<readonly PlannedRslibInspection[]> => {
   const target = composite.identity;
   const noticeDelivery = composite.noticeDelivery;
-  const planned = planCompiledMcpEntries(model.mcpServers, { outDir: outputRoot, target, targets: composite.selected });
+  const planned = planCompiledMcpEntries(model.mcpServers, { outDir, target, targets: composite.selected });
   const hosting = eventRuntimeHosting(model.mcpServers, composite.selected);
-  const entries: BundlerInspectionEntry[] = [];
+  const entries: PlannedRslibInspection[] = [];
   for (const entry of planned) {
     const server = model.mcpServers.find((candidate) => candidate.id === entry.id);
     const serverName = entry.id.startsWith('mcp:') ? entry.id.slice('mcp:'.length) : entry.name;
@@ -235,7 +219,7 @@ const mcpEntryEntries = async (
         ...(model.state === undefined ? {} : { state: model.state }),
         workerFile,
       });
-    entries.push(rslibInspectionEntry({
+    entries.push({
       entry: {
         aliases: {
           // Every stdio entry can import the operator `.env` layer (#469); the
@@ -271,17 +255,12 @@ const mcpEntryEntries = async (
         ],
       },
       kind: 'mcp-entry',
-      meta,
       name: serverName,
       outputPath: `mcp/${entry.name}.mjs`,
-      outputRoot,
-      projectRoot,
-      source: entry.source,
       target,
-      ...(tools === undefined ? {} : { tools }),
-    }));
+    });
     if (generatedRoutes !== undefined) {
-      entries.push(rslibInspectionEntry({
+      entries.push({
         entry: {
           name: `${entry.name}-flight`,
           outputRelativePath: `mcp/${workerFile}`,
@@ -301,29 +280,17 @@ const mcpEntryEntries = async (
           }),
         },
         kind: 'mcp-entry',
-        meta,
         name: `${serverName}:flight`,
         outputPath: `mcp/${workerFile}`,
-        outputRoot,
-        projectRoot,
-        source: entry.source,
         target,
-        ...(tools === undefined ? {} : { tools }),
-      }));
+      });
     }
   }
-  return Object.freeze(entries);
+  return entries;
 };
 
-const hookEntries = (
-  entries: readonly TargetHookEntry[],
-  meta: AgentBundleMeta,
-  projectRoot: string,
-  target: string,
-  tools: AgentBundleToolsConfig | undefined,
-): readonly BundlerInspectionEntry[] => {
-  const outputRoot = artifactOutputToken;
-  return entries.map((entry) => rslibInspectionEntry({
+const hookEntries = (entries: readonly TargetHookEntry[], target: string): readonly PlannedRslibInspection[] =>
+  entries.map((entry) => ({
     entry: {
       aliases: {
         [launchEnvRuntimeSpecifier]: launchEnvRuntimePath(),
@@ -341,25 +308,65 @@ const hookEntries = (
       virtualSource: entry.virtualSource,
       ...(hookWrapperAppliesOperatorEnv(entry) ? { virtualModules: [operatorEnvLayerVirtualModule()] } : {}),
     },
-    kind: 'hook',
-    meta,
+    kind: 'hook' as const,
     name: entry.hook.name,
     outputPath: entry.relativePath,
-    outputRoot,
-    projectRoot,
-    source: entry.hook.source,
     target,
-    ...(tools === undefined ? {} : { tools }),
+  }));
+
+const packageBuildEntries = async (model: NormalizedPlugin): Promise<readonly PlannedRslibInspection[]> => {
+  const packageBuild = model.packageBuild;
+  if (packageBuild === undefined) return [];
+  const dtsTsconfig = packageBuild.lib?.dts === true ? generatedDtsTsconfigToken : undefined;
+  const planned = await planPackageEntries(model, dtsTsconfig);
+  return planned.map((entry) => {
+    const bin = entry.executable;
+    return {
+      entry,
+      kind: bin ? 'bin' as const : 'lib' as const,
+      name: bin ? entry.name.replace(/^bin-/u, '') : entry.name,
+      outputPath: `${packageBuild.outputDir}/${entry.outputRelativePath}`,
+    };
+  });
+};
+
+/** Lowers one Rslib run's entries and pairs each with its rendered config. */
+const loweredRslibEntries = async (
+  planned: readonly PlannedRslibInspection[],
+  run: {
+    readonly meta: AgentBundleMeta;
+    readonly outputRoot: string;
+    readonly projectRoot: string;
+    readonly tokens: PathTokens;
+    readonly tools?: AgentBundleToolsConfig;
+  },
+): Promise<readonly BundlerInspectionEntry[]> => {
+  const configs = await inspectRslibEntries({
+    cwd: run.projectRoot,
+    meta: run.meta,
+    outputRoot: run.outputRoot,
+    ...(run.tools === undefined ? {} : { tools: run.tools }),
+  }, planned.map((item) => item.entry));
+  return planned.map((item, index) => Object.freeze({
+    bundler: 'rslib' as const,
+    config: renderConfigValue(configs[index], run.tokens),
+    ...(item.entry.virtualSource === undefined ? {} : { generatedEntry: item.entry.virtualSource }),
+    kind: item.kind,
+    name: item.name,
+    outputPath: item.outputPath,
+    source: item.entry.source,
+    ...(item.target === undefined ? {} : { target: item.target }),
   }));
 };
 
-const mcpAppsEntry = (
+const mcpAppEntries = async (
   model: NormalizedPlugin,
   projectRoot: string,
   composite: CompositeSelection,
+  outputRoot: string,
+  tokens: PathTokens,
   tools: AgentBundleToolsConfig | undefined,
-): readonly BundlerInspectionEntry[] => {
-  const outputRoot = artifactOutputToken;
+): Promise<readonly BundlerInspectionEntry[]> => {
   const target = composite.identity;
   const apps = model.mcpApps ?? [];
   const planned = planCompiledMcpApps(apps, { outDir: outputRoot, selected: composite.selected, target });
@@ -371,45 +378,21 @@ const mcpAppsEntry = (
     }
     return source;
   });
-  return [Object.freeze({
-    bundler: 'rsbuild' as const,
-    config: renderConfigValue(composeMcpAppsRsbuildConfig(sources, {
-      cwd: projectRoot,
-      meta: projectMeta(model.metadata),
-      outDir: outputRoot,
-      ...(tools === undefined ? {} : { tools }),
-    })),
-    kind: 'mcp-apps' as const,
-    name: 'mcp-apps',
-    outputPath: 'mcp-apps',
-    target,
-  })];
-};
-
-const packageBuildEntries = async (
-  model: NormalizedPlugin,
-  projectRoot: string,
-  tools: AgentBundleToolsConfig | undefined,
-): Promise<readonly BundlerInspectionEntry[]> => {
-  const packageBuild = model.packageBuild;
-  if (packageBuild === undefined) return [];
-  const dtsTsconfig = packageBuild.lib?.dts === true ? generatedDtsTsconfigToken : undefined;
-  const planned = await planPackageEntries(model, dtsTsconfig);
-  const meta = projectMeta(model.metadata);
-  return planned.map((entry) => {
-    const bin = entry.executable;
-    return rslibInspectionEntry({
-      entry,
-      kind: bin ? 'bin' : 'lib',
-      meta,
-      name: bin ? entry.name.replace(/^bin-/u, '') : entry.name,
-      outputPath: `${packageBuild.outputDir}/${entry.outputRelativePath}`,
-      outputRoot: packageBuild.outputDir,
-      projectRoot,
-      source: entry.source,
-      ...(tools === undefined ? {} : { tools }),
-    });
+  const configs = await inspectMcpAppsConfig(planned, sources, {
+    cwd: projectRoot,
+    meta: projectMeta(model.metadata),
+    outDir: outputRoot,
+    ...(tools === undefined ? {} : { tools }),
   });
+  return planned.map((app, index) => Object.freeze({
+    bundler: 'rsbuild' as const,
+    config: renderConfigValue(configs[index], tokens),
+    kind: 'mcp-app' as const,
+    name: app.name,
+    outputPath: `mcp-apps/${app.name}.html`,
+    source: app.source,
+    target,
+  }));
 };
 
 const entryOrder = (left: BundlerInspectionEntry, right: BundlerInspectionEntry): number =>
@@ -429,13 +412,40 @@ export const composeBundlerInspection = async (options: {
 }): Promise<BundlerInspection> => {
   const { composite, model, projectRoot, tools } = options;
   const meta = projectMeta(model.metadata);
+  // The output roots are absolute, as the build passes them and as the
+  // resolved-config assertions expect them; the rendering folds the token
+  // root back to its token.
+  const artifactOutputRoot = resolve(projectRoot, artifactOutputToken);
+  const tokens: PathTokens = [
+    [artifactOutputRoot, artifactOutputToken],
+    [resolve(projectRoot, generatedDtsTsconfigToken), generatedDtsTsconfigToken],
+  ];
+  // The artifact surfaces ride one Rslib run, as the build stages them; the
+  // package build is its own run with its own output root.
+  const artifactSurfaces: readonly PlannedRslibInspection[] = [
+    ...(composite.cliBin ? cliBinEntries(model, artifactOutputRoot, composite.identity) : []),
+    ...(await scriptEntries(model, composite)),
+    ...(await mcpEntryEntries(model, composite, artifactOutputRoot)),
+    ...hookEntries(composite.hookEntries, composite.identity),
+  ];
   const entries: BundlerInspectionEntry[] = [
-    ...(composite.cliBin ? cliBinEntries(model, projectRoot, composite.identity, tools) : []),
-    ...(await scriptEntries(model, projectRoot, composite, tools)),
-    ...(await mcpEntryEntries(model, projectRoot, composite, tools)),
-    ...hookEntries(composite.hookEntries, meta, projectRoot, composite.identity, tools),
-    ...mcpAppsEntry(model, projectRoot, composite, tools),
-    ...(await packageBuildEntries(model, projectRoot, tools)),
+    ...(await loweredRslibEntries(artifactSurfaces, {
+      meta,
+      outputRoot: artifactOutputRoot,
+      projectRoot,
+      tokens,
+      ...(tools === undefined ? {} : { tools }),
+    })),
+    ...(await mcpAppEntries(model, projectRoot, composite, artifactOutputRoot, tokens, tools)),
+    ...(model.packageBuild === undefined
+      ? []
+      : await loweredRslibEntries(await packageBuildEntries(model), {
+        meta,
+        outputRoot: resolve(projectRoot, model.packageBuild.outputDir),
+        projectRoot,
+        tokens,
+        ...(tools === undefined ? {} : { tools }),
+      })),
   ];
   return deepFreeze({
     entries: entries.sort(entryOrder),

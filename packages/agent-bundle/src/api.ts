@@ -1152,12 +1152,14 @@ export const inspect = async (options: InspectOptions): Promise<InspectResult> =
         projectRoot: prepared.root,
         ...(prepared.tools === undefined ? {} : { tools: prepared.tools }),
       });
-    } catch {
+    } catch (error) {
+      // The lowering runs the build's own invariant assertions, so the
+      // refusal names the hatch value the build would refuse.
       return invalidInspection(freezeDiagnostics([
         ...prepared.diagnostics,
         projectDiagnostic(
           'AB7001',
-          'Unable to compose the bundler inspection.',
+          `Unable to compose the bundler inspection: ${error instanceof Error ? error.message : String(error)}`,
           { sourcePath: prepared.configPath },
         ),
       ]));

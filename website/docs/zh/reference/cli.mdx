@@ -266,7 +266,7 @@ keep-data 选项）。相对包的安装器 bin 接受带同样标志的 `uninst
 
 | 标志 | 聚焦于 |
 | --- | --- |
-| `--bundler` | 合成出来的打包器配置，无论 `NODE_ENV` 为何，都按生产构建的方式降级。它的 `distPath.root` 就是产物输出 `<output>`，因为每个所选投影都编译进同一个组合根目录。 |
+| `--bundler` | 每个编译输出降级后的 Rspack 配置——即 `tools` 逃生舱与框架不变量应用之后，Rslib（可执行文件）或 Rsbuild（MCP App 视图）真正交给编译器的内容，无论 `NODE_ENV` 为何都按生产模式降级。解析后的别名、externals、插件（`[object <ClassName>]`）和函数（`[function <name>]`）就地渲染；`output.path` 就是产物输出 `<output>`，因为每个所选投影都编译进同一个组合根目录。构建会拒绝的 `tools` 值会让检查变为无效并报告 `AB7001`。 |
 | `--hooks` | 钩子。 |
 | `--routes` | 编译后的路由图。 |
 | `--skills` | Skill。 |

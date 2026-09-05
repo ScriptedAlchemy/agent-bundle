@@ -67,7 +67,7 @@ The same config also owns the npm package build — no second bundler config, bi
 
 - `build` — validate the project and write the plugin root (plus the `bin`/`lib` package build when declared)
 - `validate` — check project source, or a built artifact with `--artifact <dir>`
-- `inspect` — show the normalized configuration and each selected host's projection plan; `--bundler` dumps the synthesized bundler configs (post-`tools`-hatch merge)
+- `inspect` — show the normalized configuration and each selected host's projection plan; `--bundler` dumps the lowered Rspack config of every compiled output (post-`tools`-hatch merge, as Rslib/Rsbuild hand it to the compiler)
 - `dev` — serve the local development workbench and rebuild the `dist/` package build when its inputs change; `--install-host <claude|codex|cursor>` installs a development variant whose stable `dev proxy` MCP command hot-swaps epochs behind the host's open connection and re-syncs hooks and Skills on every adopted rebuild (see [Framework mode › Live development into hosts](docs/framework-mode.md#live-development-into-hosts))
 - `mcp list` / `mcp invoke` / `mcp run` — list, invoke, or run an artifact's MCP servers locally
 - `hooks list` / `hooks simulate` — inspect and simulate generated hooks

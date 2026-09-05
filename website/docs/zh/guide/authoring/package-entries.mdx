@@ -480,8 +480,13 @@ npx agent-bundle inspect --bundler --root .
 npx agent-bundle inspect --bundler --root . --target claude --json
 ```
 
-它会把构建所组合的每个输出的合成配置，按构建实际降级的样子原样导出；由于用的就是构建所用的同一批
-函数，这份导出不可能与真实编译结果发生漂移。被框架包装的入口还会附带生成的包装模块源码。
+它会导出构建所编译的每个输出降级后的 Rspack 配置——每个编译器一条记录，由构建自己的 Rslib（可执行
+文件）或 Rsbuild（MCP App 视图）降级流程产出，并在构建即将开始编译的位置停下——因此这份导出不可能与
+真实编译结果发生漂移。你能看到解析后的 `resolve.alias` 映射（框架运行时模块与你自己的别名并列）、
+`externals` 列表、以 `[object <ClassName>]` 渲染的插件、以 `[function <name>]` 渲染的函数，以及
+`output.path`：产物根目录显示为 `<output>`，包构建显示为 `<项目根>/dist`。被构建不变量拒绝的逃生舱值
+——例如给保留的 `agent-bundle/*` 说明符设置别名——会让检查变为无效，并以 `AB7001` 指出被拒绝的原因。
+被框架包装的入口还会附带生成的包装模块源码。
 
 本页所有内容的完整契约见
 [Entry conventions](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/entry-conventions.md)。

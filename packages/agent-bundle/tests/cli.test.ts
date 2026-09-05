@@ -856,7 +856,7 @@ it('reports an unselected inspect target on JSON and human output', async () => 
   }
 }, 30_000 * timeScale);
 
-it('dumps the synthesized bundler configuration with inspect --bundler', async () => {
+it('dumps the lowered Rspack configuration of every output with inspect --bundler', async () => {
   const project = await createCliProject();
   try {
     await mkdir(join(project.root, 'src'), { recursive: true });
@@ -867,7 +867,7 @@ it('dumps the synthesized bundler configuration with inspect --bundler', async (
         "  plugin: { name: 'cli-fixture', version: '1.0.0' },",
         "  targets: ['portable'],",
         "  scripts: { tool: './src/tool.ts' },",
-        "  tools: { rspack: { resolve: { extensionAlias: { '.js': ['.js', '.ts'] } } } },",
+        "  tools: { rspack: { resolve: { alias: { '@fixture': './src' } } } },",
         '};',
         '',
       ].join('\n'),
@@ -880,7 +880,12 @@ it('dumps the synthesized bundler configuration with inspect --bundler', async (
       readonly selected: {
         readonly bundler: {
           readonly entries: readonly {
-            readonly config: { readonly tools: { readonly rspack: readonly unknown[] } };
+            readonly config: {
+              readonly name: string;
+              readonly output: { readonly path: string };
+              readonly plugins: readonly string[];
+              readonly resolve: { readonly alias: Readonly<Record<string, string>> };
+            };
             readonly kind: string;
             readonly name: string;
           }[];
@@ -888,18 +893,24 @@ it('dumps the synthesized bundler configuration with inspect --bundler', async (
       };
     };
     const script = document.selected.bundler.entries.find((entry) => entry.kind === 'script');
+    // The dump is what Rslib resolved for the compiler, not the authored
+    // config: the hatch alias sits beside the framework's reserved ones, and
+    // the per-build artifact root appears as its stable token.
     expect(script).toMatchObject({
       config: {
-        output: { distPath: { root: '<output>' } },
-        tools: {
-          rspack: [
-            { resolve: { extensionAlias: { '.js': ['.js', '.ts'] } } },
-            '[function enforceInvariants]',
-          ],
+        name: 'agent-bundle-scripts-tool',
+        output: { filename: 'scripts/tool.mjs', path: '<output>' },
+        resolve: {
+          alias: {
+            '@fixture': './src',
+            'agent-bundle/meta$': `${project.root}/.agent-bundle-virtual/meta.mjs`,
+          },
         },
       },
       name: 'tool',
     });
+    expect(script?.config.plugins).toContain('[object VirtualModulesPlugin]');
+    expect(json.stdout).not.toContain(`${project.root}/<output>`);
 
     const repeated = await runSourceCliWithOutput(['inspect', '--root', project.root, '--bundler', '--json']);
     expect(repeated.stdout).toBe(json.stdout);
@@ -907,7 +918,8 @@ it('dumps the synthesized bundler configuration with inspect --bundler', async (
     const human = await runSourceCliWithOutput(['inspect', '--root', project.root, '--bundler']);
     expect(human).toMatchObject({ code: 0, stderr: '' });
     expect(human.stdout).toContain('"kind": "script"');
-    expect(human.stdout).toContain('[function enforceInvariants]');
+    expect(human.stdout).toContain('"name": "agent-bundle-scripts-tool"');
+    expect(human.stdout).toContain('[object ArtifactDependencyAuditPlugin]');
 
     const ambiguous = await runSourceCliWithOutput(['inspect', '--root', project.root, '--bundler', '--skills']);
     expect(ambiguous.code).toBe(1);

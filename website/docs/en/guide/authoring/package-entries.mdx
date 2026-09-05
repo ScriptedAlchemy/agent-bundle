@@ -537,9 +537,15 @@ npx agent-bundle inspect --bundler --root .
 npx agent-bundle inspect --bundler --root . --target claude --json
 ```
 
-That dumps the synthesized configuration for every output the build composes, exactly as the
-build lowers it, using the same functions the build uses — so the dump cannot drift from what
-compiles. Entries the framework wraps also carry the generated wrapper module source.
+That dumps the lowered Rspack configuration of every output the build compiles — one entry per
+compiler, produced by the build's own Rslib (executables) or Rsbuild (MCP App views) lowering and
+stopped where the build would start compiling — so the dump cannot drift from what compiles. You
+see the resolved `resolve.alias` map (framework runtime modules beside your own aliases), the
+`externals` list, the plugins as `[object <ClassName>]`, functions as `[function <name>]`, and
+`output.path` as `<output>` (the artifact root) or `<project root>/dist` (the package build). A
+hatch value the build's invariants refuse — aliasing a reserved `agent-bundle/*` specifier, for
+instance — makes the inspection invalid with `AB7001` naming the refusal. Entries the framework
+wraps also carry the generated wrapper module source.
 
 The full contract for everything on this page is in
 [Entry conventions](https://github.com/ScriptedAlchemy/agent-bundle/blob/main/docs/entry-conventions.md).
