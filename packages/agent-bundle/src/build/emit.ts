@@ -57,6 +57,38 @@ const executableFileMode = (file: ArtifactFile): number | undefined =>
 export const resolveArtifactDestination = (root: string, relativePath: string): string =>
   assertInside(root, resolve(root, relativePath));
 
+export const inspectArtifactFile = async (
+  root: string,
+  relativePath: string,
+): Promise<ArtifactFile> => {
+  const destination = resolveArtifactDestination(root, relativePath);
+  const metadata = await lstat(destination);
+  if (!metadata.isFile()) {
+    throw new Error(`Artifact path ${JSON.stringify(relativePath)} is not a file.`);
+  }
+  const contents = await readFile(destination);
+  return Object.freeze({
+    bytes: contents.byteLength,
+    mode: metadata.mode & 0o777,
+    path: normalizeRelativePath(relativePath),
+    sha256: sha256Hex(contents),
+  });
+};
+
+export const createArtifactManifestFile = (
+  file: ArtifactFile,
+  kind: ArtifactManifestFile['kind'],
+): ArtifactManifestFile => {
+  const mode = executableFileMode(file);
+  return Object.freeze({
+    bytes: file.bytes,
+    kind,
+    ...(mode === undefined ? {} : { mode }),
+    path: file.path,
+    sha256: file.sha256,
+  });
+};
+
 export const assertUniqueArtifactDestinations = (
   destinations: readonly string[],
 ): void => {
@@ -209,14 +241,7 @@ export const createArtifactManifestFiles = (options: {
     if (provenance === undefined) {
       throw new Error('Output provenance must contain exactly one record for every pre-manifest artifact file.');
     }
-    const mode = executableFileMode(file);
-    manifestFiles.push({
-      bytes: file.bytes,
-      kind: provenance.kind,
-      ...(mode === undefined ? {} : { mode }),
-      path,
-      sha256: file.sha256,
-    });
+    manifestFiles.push(createArtifactManifestFile(file, provenance.kind));
     manifestProvenance.push({
       path,
       sourceInputs: provenance.sourceInputs,

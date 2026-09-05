@@ -19,6 +19,7 @@ import {
   cursorPluginValidator,
 } from '../../src/adapters/cursor.ts';
 import { createAdapterValidator } from '../../src/adapters/types.ts';
+import { reindexArtifactManifest } from '../../src/build/manifest-reindex.ts';
 import { isInsideOrEqual } from '../../src/core/paths.ts';
 import { validatePortablePluginFiles } from '../../src/host-contracts/portable-plugin-validation.ts';
 import { validateCodexOpenaiYaml } from '../../src/schemas/skill-hosts/contract.ts';
@@ -562,7 +563,12 @@ const proveSameVersionRebuild = async (options: {
 }): Promise<SameVersionRebuildProof> => {
   const marker = join(options.bundle, sameVersionRebuildMarker);
   await writeFile(marker, '# same-version rebuild\n');
+  let indexed = false;
   try {
+    await reindexArtifactManifest(options.bundle, {
+      added: [{ kind: 'generated', path: sameVersionRebuildMarker }],
+    });
+    indexed = true;
     const replaced = await options.install();
     assertInstallResult(replaced, options.host, 'replaced');
     assertProof(
@@ -576,6 +582,11 @@ const proveSameVersionRebuild = async (options: {
     return 'replaced';
   } finally {
     await rm(marker, { force: true });
+    if (indexed) {
+      await reindexArtifactManifest(options.bundle, {
+        removed: [sameVersionRebuildMarker],
+      });
+    }
   }
 };
 
