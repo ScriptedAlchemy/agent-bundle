@@ -100,12 +100,14 @@ class FakeSessionService {
   readonly toolCallReleases: (() => void)[] = [];
   gateToolCalls = false;
   readonly #leases = new Map<string, number>();
+  readonly #closeWatchers = new Map<string, Set<() => void>>();
   readonly #retire = new Set<string>();
 
   async open(options: { readonly epochId: string; readonly serverName: string; readonly target: string }): Promise<McpSession> {
     const id = `session-${String(this.opened.length + 1)}`;
     this.opened.push({ epochId: options.epochId, id, serverName: options.serverName, target: options.target });
     this.#leases.set(id, 0);
+    this.#closeWatchers.set(id, new Set());
     const session = {
       callTool: async () => {
         this.toolCalls += 1;
@@ -141,7 +143,15 @@ class FakeSessionService {
         if (remaining === 0 && this.#retire.delete(sessionId)) void this.closeSession(sessionId);
       },
       session: {},
-      watchSessionClosed: () => ({ closed: false, unsubscribe: () => undefined }),
+      watchSessionClosed: (listener: () => void) => {
+        const watchers = this.#closeWatchers.get(sessionId);
+        if (watchers === undefined) return { closed: true, unsubscribe: () => undefined };
+        watchers.add(listener);
+        return {
+          closed: false,
+          unsubscribe: () => { watchers.delete(listener); },
+        };
+      },
     };
   }
 
@@ -163,6 +173,9 @@ class FakeSessionService {
     this.closed.push(sessionId);
     this.#leases.delete(sessionId);
     this.#retire.delete(sessionId);
+    const watchers = this.#closeWatchers.get(sessionId) ?? [];
+    this.#closeWatchers.delete(sessionId);
+    for (const watcher of watchers) watcher();
     return true;
   }
 
@@ -481,5 +494,43 @@ describe('WebHostRoutes opening-tool policy', () => {
       '"openingNotice":"Opening tool outcome is unknown; re-run explicitly from the App."',
     );
     expect(harness.service.toolCalls).toBe(1);
+  });
+
+  it('releases mutation records after a leased retired session actually closes', async () => {
+    const root = await artifactRoot();
+    await writeFixture(root, { projections: { '.mcp.json': claudeServer() }, targets: ['claude'] });
+    const harness = await startHarness(root, 'epoch-1');
+    for (let index = 1; index <= 257; index += 1) {
+      expect((await fetch(`${harness.url}/web/status/status`)).status).toBe(200);
+      const sessionId = harness.service.opened.at(-1)!.id;
+      const pageLease = await harness.service.leaseAsPage(sessionId);
+      harness.setEpoch(`epoch-${String(index + 1)}`);
+      harness.routes.adoptActiveEpoch(`epoch-${String(index + 1)}`);
+      await settle();
+      await pageLease.release();
+      await settle();
+    }
+    const final = await (await fetch(`${harness.url}/web/status/status`)).text();
+    expect(final).not.toContain('"openingNotice":');
+    expect(harness.service.toolCalls).toBe(258);
+  });
+
+  it('fails closed when the bounded mutation execution ledger is full', async () => {
+    const root = await artifactRoot();
+    const options = {
+      projections: { '.mcp.json': claudeServer() },
+      targets: ['claude'],
+    } as const;
+    const harness = await startHarness(root);
+    for (let index = 0; index < 256; index += 1) {
+      await writeFixture(root, { ...options, openingInput: { index } });
+      expect((await fetch(`${harness.url}/web/status/status`)).status).toBe(200);
+    }
+    await writeFixture(root, { ...options, openingInput: { index: 256 } });
+    const saturated = await (await fetch(`${harness.url}/web/status/status`)).text();
+    expect(saturated).toContain(
+      '"openingNotice":"Automatic opening limit reached; run the tool explicitly from the App."',
+    );
+    expect(harness.service.toolCalls).toBe(256);
   });
 });

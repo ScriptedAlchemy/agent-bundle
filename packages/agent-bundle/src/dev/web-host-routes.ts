@@ -456,17 +456,14 @@ export class WebHostRoutes {
     const session = await service.open({ epochId, serverName, target });
     const lease: McpAppSessionLease = await service.acquireAppLease(session.id);
     let disposed = false;
-    let unsubscribe = (): void => undefined;
     const dispose = async (): Promise<void> => {
       if (disposed) return;
       disposed = true;
-      unsubscribe();
       await lease.release();
     };
     const watched = lease.watchSessionClosed(() => {
       this.#forgetSession(key, session.id);
     });
-    unsubscribe = watched.unsubscribe;
     if (watched.closed) {
       await dispose();
       throw new Error('MCP App session closed while it was being registered.');
@@ -519,7 +516,7 @@ export class WebHostRoutes {
   #unavailableOpeningCall(
     input: Readonly<Record<string, McpAppJsonValue>>,
     message: string,
-  ): McpAppOpeningCall {
+  ): WebOpeningCall {
     return Object.freeze({
       input,
       notice: message,
