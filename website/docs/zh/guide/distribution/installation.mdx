@@ -135,9 +135,12 @@ RTORRENT_SSH_HOST=nas.local
 ## 按回执卸载
 
 ```sh
-npx agent-bundle uninstall cursor --from artifact/cursor --plan   # 确切路径，不做改动
-npx agent-bundle uninstall cursor --from artifact/cursor          # 回执归属的文件；保留 state/
-npx agent-bundle uninstall claude --from artifact/claude          # claude plugin uninstall --keep-data + marketplace remove
+# 确切路径，不做改动
+npx agent-bundle uninstall cursor --from artifact/cursor --plan
+# 回执归属的文件；保留 state/
+npx agent-bundle uninstall cursor --from artifact/cursor
+# claude plugin uninstall --keep-data + marketplace remove
+npx agent-bundle uninstall claude --from artifact/claude
 npx agent-bundle uninstall codex --from artifact/codex --purge-data --confirm-purge
 node artifact/cursor/install.mjs --uninstall [--mode marketplace]
 ```

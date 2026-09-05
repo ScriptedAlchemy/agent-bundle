@@ -60,7 +60,9 @@ export const summarizes = async (): Promise<void> => {
 备选项——而 `input` 与 `result` 来自该路由自己的 `inputSchema` 与 `resultSchema`：
 
 ```ts
-const { result } = await renderRoute('tool:library/summarize', { input: { title: 'Dune' } });
+const { result } = await renderRoute('tool:library/summarize', {
+  input: { title: 'Dune' },
+});
 const chapters: number | undefined = result?.chapters; // 无需强制类型转换
 ```
 
@@ -107,7 +109,8 @@ import { loadRouteModule, testManifest } from 'agent-bundle/test';
 
 // schema 是 MCP 路由的契约；事件路由与脚本不导出 schema。
 const mcpRoutes = Object.values(testManifest().routes)
-  .filter((route) => route.kind === 'tool' || route.kind === 'prompt' || route.kind === 'resource');
+  .filter((route) =>
+    route.kind === 'tool' || route.kind === 'prompt' || route.kind === 'resource');
 
 for (const route of mcpRoutes) {
   const module = await loadRouteModule(route.id);
@@ -139,8 +142,14 @@ import type { TopologyEvents, TopologyState } from '../../src/state.js';
 
 const topology = await mountTestState<TopologyState, TopologyEvents>();
 try {
-  await renderRoute('event:session/start', { context: { ...topology.context(), host, workspace }, input: start });
-  await renderRoute('event:tool/before', { context: { ...topology.context(), host, workspace }, input: intent });
+  await renderRoute('event:session/start', {
+    context: { ...topology.context(), host, workspace },
+    input: start,
+  });
+  await renderRoute('event:tool/before', {
+    context: { ...topology.context(), host, workspace },
+    input: intent,
+  });
 
   const snapshot = await topology.read(); // AgentStateSnapshot<TopologyState>
   expect(snapshot.state.activities).toHaveLength(1);

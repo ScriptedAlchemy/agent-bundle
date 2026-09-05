@@ -1,5 +1,5 @@
 ---
-description: 'Install a built agent-bundle into Claude Code, Codex, or Cursor: the install command, host scopes, the standalone install.mjs, the package-relative installer bin, and Doctor.'
+description: 'Install a built agent-bundle into Claude Code, Codex, or Cursor: the install command, host scopes, the standalone install.mjs, the installer bin, and Doctor.'
 ---
 
 # Host installation
@@ -163,9 +163,12 @@ variables each declares (`AB7331`, informational) — never a name or a value.
 ## Uninstalling by receipt
 
 ```sh
-npx agent-bundle uninstall cursor --from artifact/cursor --plan   # exact paths, nothing changes
-npx agent-bundle uninstall cursor --from artifact/cursor          # receipt-owned files; state/ kept
-npx agent-bundle uninstall claude --from artifact/claude          # claude plugin uninstall --keep-data + marketplace remove
+# exact paths, nothing changes
+npx agent-bundle uninstall cursor --from artifact/cursor --plan
+# receipt-owned files; state/ kept
+npx agent-bundle uninstall cursor --from artifact/cursor
+# claude plugin uninstall --keep-data + marketplace remove
+npx agent-bundle uninstall claude --from artifact/claude
 npx agent-bundle uninstall codex --from artifact/codex --purge-data --confirm-purge
 node artifact/cursor/install.mjs --uninstall [--mode marketplace]
 ```

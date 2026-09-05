@@ -38,7 +38,9 @@ export const config = {
 export const inputSchema = z.object({ verbose: z.boolean().optional() }).strict();
 export const resultSchema = z.object({ status: z.literal('ready') }).strict();
 
-export default async function Status({ input, signal }: ToolRouteProps<typeof inputSchema>) {
+export default async function Status(
+  { input, signal }: ToolRouteProps<typeof inputSchema>,
+) {
   if (signal.aborted) throw new DOMException('aborted', 'AbortError');
   if (input.verbose) await agent();
   const result = { status: 'ready' as const };
@@ -152,8 +154,18 @@ stderr 上色或给表格定宽的路由，再也不必自行探测 `process.std
 ```ts
 interface AgentTerminal {
   hostSurface: 'cli' | 'mcp' | 'hook' | 'script' | 'workbench';
-  stdout: { kind: 'tty' | 'pipe' | 'none'; color: 'none' | 'basic' | '256' | 'truecolor'; columns?: number; rows?: number };
-  stderr: { kind: 'tty' | 'pipe' | 'none'; color: 'none' | 'basic' | '256' | 'truecolor'; columns?: number; rows?: number };
+  stdout: {
+    kind: 'tty' | 'pipe' | 'none';
+    color: 'none' | 'basic' | '256' | 'truecolor';
+    columns?: number;
+    rows?: number;
+  };
+  stderr: {
+    kind: 'tty' | 'pipe' | 'none';
+    color: 'none' | 'basic' | '256' | 'truecolor';
+    columns?: number;
+    rows?: number;
+  };
   sharesTarget: boolean; // fd 1 与 fd 2 指向同一个打开的文件（`2>&1`，或同一个终端）
 }
 ```
@@ -265,9 +277,15 @@ boundary 替换掉对应的回退。回退内容应使用 `Agent.Progress`——
 import React, { Suspense } from 'react';
 import { Agent } from '@agent-bundle/runtime';
 
-export default async function Search({ input, signal }: ToolRouteProps<typeof inputSchema>) {
+export default async function Search(
+  { input, signal }: ToolRouteProps<typeof inputSchema>,
+) {
   return (
-    <Suspense fallback={<Agent.Progress completed={0} message={`Searching for ${input.query}`} />}>
+    <Suspense
+      fallback={
+        <Agent.Progress completed={0} message={`Searching for ${input.query}`} />
+      }
+    >
       <Results input={input} signal={signal} />
     </Suspense>
   );
@@ -727,7 +745,8 @@ App：
 
 ```sh
 npx agent-bundle build
-npx agent-bundle serve-app status/status --artifact artifact --input '{"service":"compiler"}' --open
+npx agent-bundle serve-app status/status --artifact artifact \
+  --input '{"service":"compiler"}' --open
 ```
 
 该命令以与 `mcp run` 完全相同的方式启动插件打包好的 MCP 服务器（同样的产物解析、同样的 `.env` 分层、
@@ -781,7 +800,9 @@ export const resultSchema = z.object({
   url: z.string().nullable(),
 }).strict();
 
-export default async function dashboard({ input, signal }: CliRouteProps<typeof inputSchema>) {
+export default async function dashboard(
+  { input, signal }: CliRouteProps<typeof inputSchema>,
+) {
   let served;
   try {
     served = await spawnServeApp({
