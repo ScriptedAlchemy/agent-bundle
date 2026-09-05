@@ -33,6 +33,7 @@ import type { McpAppConsentChallenge as RuntimeMcpAppConsentChallenge } from '..
 import { RuntimeConsentDialog } from './mcp/runtime-consent-dialog.tsx';
 import { createRuntimeConsentQueue, type RuntimeConsentQueue, type RuntimeConsentQueueCurrent } from './mcp/runtime-consent-queue.ts';
 import { McpAppPreview } from './mcp/mcp-app-preview.tsx';
+import { createMcpInspectorLaunchController, type McpInspectorLaunchController } from './mcp/mcp-inspector-launch-controller.ts';
 import { McpPage, mcpPageEmptyServerCatalogFor, mcpPageServerCatalogFor, type McpConfigDownload, type McpPagePreviewSelection, type McpPageRuntimePreviewDependencies, type McpPageServerCatalog } from './mcp/mcp-page.tsx';
 import { ForegroundRouteClient, McpRouteClient } from './mcp/mcp-route-client.ts';
 import { createMcpSessionController } from './mcp/mcp-session-controller.ts';
@@ -679,12 +680,13 @@ const HostsScreen = ({ connectionError, discoveryClient, manifestDigest, onNavig
   <DiscoveryPage client={discoveryClient} manifestDigest={manifestDigest} />
 </WorkbenchScreen>;
 
-const McpScreen = ({ appPreviewClient, artifactClient, connectionError, controller, initialToolPrefill, mcpDepartureDiagnostic, model, onNavigate, onResetSession, onRuntimeInitialPreviewConsumed, pages, registerPreviewClose, runtimeDiagnostic, runtimeHandoff, runtimePreviewDependencies, status }: {
+const McpScreen = ({ appPreviewClient, artifactClient, connectionError, controller, initialToolPrefill, inspectorLaunch, mcpDepartureDiagnostic, model, onNavigate, onResetSession, onRuntimeInitialPreviewConsumed, pages, registerPreviewClose, runtimeDiagnostic, runtimeHandoff, runtimePreviewDependencies, status }: {
   readonly appPreviewClient: McpAppClient;
   readonly artifactClient: ArtifactClient;
   readonly connectionError?: string;
   readonly controller: ReturnType<typeof createMcpController>;
   readonly initialToolPrefill?: McpToolPrefill;
+  readonly inspectorLaunch: McpInspectorLaunchController;
   readonly mcpDepartureDiagnostic?: string;
   readonly model: ReturnType<typeof createMcpController>['model'];
   readonly onNavigate: (page: WorkbenchPage) => void;
@@ -742,6 +744,7 @@ const McpScreen = ({ appPreviewClient, artifactClient, connectionError, controll
               ...(initialToolPrefill === undefined ? {} : { serverName: initialToolPrefill.serverName }),
             }}
             initialToolPrefill={initialToolPrefill}
+            inspectorLaunch={inspectorLaunch}
             onDownloadConfig={downloadMcpFile}
             onDownloadTrace={downloadMcpFile}
             onResetSession={onResetSession}
@@ -754,6 +757,7 @@ const McpScreen = ({ appPreviewClient, artifactClient, connectionError, controll
         : <McpPage
             controller={controller}
             initialPreview={runtimeInitialPreview}
+            inspectorLaunch={inspectorLaunch}
             onResetSession={onResetSession}
             registerPreviewClose={registerPreviewClose}
             runtimePreviewDependencies={runtimePreviewDependencies}
@@ -798,6 +802,7 @@ const Workbench = () => {
   const client = useRef<ProjectClient | undefined>(undefined);
   const foreground = useRef<ForegroundRouteClient | undefined>(undefined);
   const mcpRoutes = useRef<WorkbenchMcpRouteClient | undefined>(undefined);
+  const inspectorLaunch = useRef<McpInspectorLaunchController | undefined>(undefined);
   const mcpControllerRef = useRef<WorkbenchMcpController | undefined>(undefined);
   const mcpAppClient = useRef<McpAppClient | undefined>(undefined);
   const runtimeClient = useRef<RuntimeClient | undefined>(undefined);
@@ -824,6 +829,8 @@ const Workbench = () => {
   if (foreground.current === undefined) foreground.current = new ForegroundRouteClient();
   const foregroundClient = foreground.current;
   if (mcpRoutes.current === undefined) mcpRoutes.current = new WorkbenchMcpRouteClient({ foreground: foregroundClient });
+  if (inspectorLaunch.current === undefined) inspectorLaunch.current = createMcpInspectorLaunchController({ routes: mcpRoutes.current });
+  const inspectorLaunchController = inspectorLaunch.current;
 
   const [mcpController, setMcpController] = useState(() => createMcpController(mcpRoutes.current!));
   const [mcpModel, setMcpModel] = useState(() => mcpController.model);
@@ -1366,6 +1373,7 @@ const Workbench = () => {
         connectionError={connectionError}
         controller={mcpController}
         initialToolPrefill={mcpToolPrefillFromNavigationState(window.history.state)}
+        inspectorLaunch={inspectorLaunchController}
         mcpDepartureDiagnostic={mcpDepartureError}
         model={mcpModel}
         onNavigate={navigate}

@@ -21,6 +21,7 @@ import type {
   McpAppPreviewProfile,
 } from './mcp-app-client.ts';
 import { createMcpAppFrameRelay } from './mcp-app-frame.tsx';
+import { mcpInspectorDeepLink, type McpInspectorLaunchModel } from './mcp-inspector-launch-model.ts';
 import type {
   McpBrowserSessionInvocation,
   McpBrowserSessionModel,
@@ -51,11 +52,21 @@ export interface McpPageController {
   subscribe(listener: (model: McpBrowserSessionModel) => void): () => void;
 }
 
+/** Launches the standalone MCP Inspector through the dev server and tracks its tokenized URL. */
+export interface McpPageInspectorLaunch {
+  readonly model: McpInspectorLaunchModel;
+  launch(): Promise<void>;
+  refresh(): Promise<void>;
+  subscribe(listener: (model: McpInspectorLaunchModel) => void): () => void;
+}
+
 interface McpPageCommonProps {
   readonly controller: McpPageController;
   readonly initialBinding?: Partial<McpSessionBinding>;
   /** A validated Routes-page handoff; it selects form state but never executes a call. */
   readonly initialToolPrefill?: McpToolPrefill;
+  /** Absent when the host has no Inspector launcher; the section then offers only the config download. */
+  readonly inspectorLaunch?: McpPageInspectorLaunch;
   readonly onDownloadConfig?: (download: McpConfigDownload) => void;
   readonly onDownloadTrace?: (download: McpDownload) => void;
   /** Replaces the terminal controller with a fresh idle controller in the parent. */
@@ -1199,8 +1210,63 @@ const McpPageAppPreview = ({ artifactClient, host, onLifecycleChange, previewPro
   />;
 };
 
+const mcpPageInspectorControl = (
+  inspectorLaunch: McpPageInspectorLaunch,
+  inspectorModel: McpInspectorLaunchModel,
+  config: McpSessionInspectorConfig | undefined,
+): React.ReactElement => {
+  const launchButton = <button onClick={() => { void inspectorLaunch.launch(); }} type="button">Open MCP Inspector</button>;
+  switch (inspectorModel.phase) {
+    case 'ready':
+      // The click still navigates; the refresh only re-syncs a link the server has since invalidated.
+      return inspectorModel.url === undefined
+        ? launchButton
+        : <a
+            className="mcp-page-inspector-link"
+            href={mcpInspectorDeepLink(inspectorModel.url, config)}
+            onClick={() => { void inspectorLaunch.refresh(); }}
+            rel="noopener noreferrer"
+            target="_blank"
+          >Open MCP Inspector in a new tab</a>;
+    case 'starting':
+      return <button disabled type="button">Starting MCP Inspector…</button>;
+    case 'idle':
+    case 'error':
+      return launchButton;
+    default: {
+      const exhaustive: never = inspectorModel.phase;
+      throw new TypeError(`Unknown MCP Inspector launch phase: ${String(exhaustive)}`);
+    }
+  }
+};
+
+const mcpPageInspectorStatusLine = (
+  inspectorModel: McpInspectorLaunchModel,
+  config: McpSessionInspectorConfig | undefined,
+): React.ReactElement | undefined => {
+  switch (inspectorModel.phase) {
+    case 'starting':
+      return <p className="mcp-page-inspector-status" role="status">Starting the MCP Inspector. The first launch downloads @modelcontextprotocol/inspector and can take up to 30 seconds.</p>;
+    case 'error':
+      return inspectorModel.diagnostic === undefined
+        ? undefined
+        : <p className="mcp-page-inspector-error" role="alert"><strong>{inspectorModel.diagnostic.code}</strong> {inspectorModel.diagnostic.message}</p>;
+    case 'ready':
+      if (config === undefined) return undefined;
+      return config.launch.kind === 'streamable-http'
+        ? <p className="mcp-page-inspector-status">The link pre-connects the Inspector to <code>{config.launch.url}</code>.</p>
+        : <p className="mcp-page-inspector-status">Inspector 2.x does not start a stdio server from a link; add this session’s command and arguments inside the Inspector. The downloaded config carries the same values.</p>;
+    case 'idle':
+      return undefined;
+    default: {
+      const exhaustive: never = inspectorModel.phase;
+      throw new TypeError(`Unknown MCP Inspector launch phase: ${String(exhaustive)}`);
+    }
+  }
+};
+
 export const McpPage = (props: McpPageProps) => {
-  const { controller, initialBinding, initialPreview, initialToolPrefill, onDownloadConfig, onDownloadTrace, onResetSession, registerPreviewClose } = props;
+  const { controller, initialBinding, initialPreview, initialToolPrefill, inspectorLaunch, onDownloadConfig, onDownloadTrace, onResetSession, registerPreviewClose } = props;
   const runtimeProps: McpPageRuntimeProps | undefined = 'runtimePreviewDependencies' in props ? props : undefined;
   const artifactProps: McpPageArtifactProps | undefined = 'runtimePreviewDependencies' in props ? undefined : props;
   const [runtimeAdmission] = useState<RuntimePageAdmission | undefined>(() => runtimeProps === undefined
@@ -1252,6 +1318,8 @@ export const McpPage = (props: McpPageProps) => {
   const [appPreviewBusy, setAppPreviewBusy] = useState(false);
   const [appPreviewProfile, setAppPreviewProfile] = useState<McpAppPreviewProfile>('portable');
   const [appHost] = useState(browserMcpAppHost);
+  // Seeded from the controller so a static render (no effects) already shows the current launch state.
+  const [inspectorModel, setInspectorModel] = useState<McpInspectorLaunchModel | undefined>(() => inspectorLaunch?.model);
   const actionSession = useRef(createMcpPageActionSession());
   const appPreviewClosePromise = useRef<Promise<void> | undefined>(undefined);
   const appPreviewController = useRef<McpPagePreviewLifecycle | undefined>(undefined);
@@ -1291,6 +1359,12 @@ export const McpPage = (props: McpPageProps) => {
     });
   }, [initialBinding?.epochId, model.phase, serverCatalogState, serverOptions, targetOptions]);
   useEffect(() => () => { void appPreviewController.current?.close(); }, []);
+  useEffect(() => {
+    if (inspectorLaunch === undefined) return undefined;
+    const unsubscribe = inspectorLaunch.subscribe(setInspectorModel);
+    void inspectorLaunch.refresh();
+    return unsubscribe;
+  }, [inspectorLaunch]);
 
   const setActiveAppPreviewController = useCallback((next: McpPagePreviewLifecycle | undefined, current?: McpPagePreviewLifecycle): void => {
     if (current !== undefined && appPreviewController.current !== current) return;
@@ -1801,11 +1875,15 @@ export const McpPage = (props: McpPageProps) => {
     </section>
 
     <section className="mcp-page-section mcp-page-config" aria-labelledby="mcp-config-heading">
-      <h2 id="mcp-config-heading">Inspector config</h2>
-      <p>Export the selected session’s resolved command and non-secret environment for the standalone Inspector.</p>
-      <button disabled={config === undefined || onDownloadConfig === undefined} onClick={() => {
-        if (config !== undefined && onDownloadConfig !== undefined) onDownloadConfig(mcpConfigDownload(config, model.sessionId));
-      }} type="button">Download Inspector config</button>
+      <h2 id="mcp-config-heading">MCP Inspector</h2>
+      <p>The standalone MCP Inspector is a separate localhost app with its own token URL. It opens in a new tab and is never embedded here; export the selected session’s resolved command and non-secret environment to configure it.</p>
+      <div aria-label="Inspector actions" className="mcp-page-actions">
+        {inspectorLaunch === undefined || inspectorModel === undefined ? undefined : mcpPageInspectorControl(inspectorLaunch, inspectorModel, config)}
+        <button disabled={config === undefined || onDownloadConfig === undefined} onClick={() => {
+          if (config !== undefined && onDownloadConfig !== undefined) onDownloadConfig(mcpConfigDownload(config, model.sessionId));
+        }} type="button">Download Inspector config</button>
+      </div>
+      {inspectorLaunch === undefined || inspectorModel === undefined ? undefined : mcpPageInspectorStatusLine(inspectorModel, config)}
     </section>
 
     {actionError === undefined && model.diagnostics.length === 0 ? undefined : <section aria-label="MCP diagnostics" className="mcp-page-diagnostics" role="alert">

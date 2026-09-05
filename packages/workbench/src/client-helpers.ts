@@ -35,6 +35,29 @@ export const jsonEquivalent = (left: unknown, right: unknown): boolean => {
 export const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
+/** An absolute `http:` or `https:` URL string; unparseable input is not one. */
+export const isHttpUrl = (value: unknown): value is string => {
+  if (typeof value !== 'string') return false;
+  try {
+    const { protocol } = new URL(value);
+    return protocol === 'http:' || protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
+const loopbackHosts: ReadonlySet<string> = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/**
+ * An `isHttpUrl` on a loopback host without embedded credentials. Token-bearing URLs the
+ * Workbench turns into links (the standalone Inspector's) must never point off this machine.
+ */
+export const isLoopbackHttpUrl = (value: unknown): value is string => {
+  if (!isHttpUrl(value)) return false;
+  const { hostname, password, username } = new URL(value);
+  return loopbackHosts.has(hostname.toLowerCase()) && username === '' && password === '';
+};
+
 /**
  * Hands the viewer a browser download. The object URL is revoked on a queued
  * task: a synchronous revoke can abort the scheduled download of larger blobs.

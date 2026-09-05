@@ -111,25 +111,33 @@ const inspectableUrl = (raw: string): URL | undefined => {
 const hasTokenQuery = (url: URL): boolean =>
   [...url.searchParams.keys()].some((key) => key.toLowerCase().includes('token'));
 
+/** `URL.hostname` keeps the brackets of an IPv6 literal, so `[::1]` is the spelling that arrives. */
 const isLocalhost = (url: URL): boolean => {
   const host = url.hostname.toLowerCase();
-  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+  return host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1';
 };
 
-/** First stdout http(s) URL with a token query param, else the first delimited localhost URL. */
+/**
+ * First delimited loopback http(s) URL with a token query param, else the first delimited
+ * loopback URL. Only loopback hosts qualify: the Workbench hands this URL, token included, to
+ * the browser as a link, so a non-loopback host (an inherited `HOST=0.0.0.0`, say) is never
+ * published. A URL that ends the buffer is never chosen either: stdout arrives in chunks, and
+ * a boundary inside the token value would otherwise publish a truncated token.
+ *
+ * Inspector 2.x prints `http://127.0.0.1:6274?MCP_INSPECTOR_API_TOKEN=…` (no slash before
+ * `?`; `new URL()` adds it) followed by a token-less
+ * `Sandbox (MCP Apps): http://127.0.0.1:6275/sandbox` line, which must not be selected.
+ */
 export const parseInspectorStdoutUrl = (stdout: string): string | undefined => {
   const text = stripAnsi(stdout);
-  const found: { readonly delimited: boolean; readonly url: URL }[] = [];
+  const found: URL[] = [];
   for (const match of text.matchAll(httpUrl)) {
     const url = inspectableUrl(match[0]!);
-    if (url === undefined || match.index === undefined) continue;
+    if (url === undefined || match.index === undefined || !isLocalhost(url)) continue;
     const next = text[match.index + match[0].length];
-    found.push(Object.freeze({
-      delimited: next !== undefined && urlDelimiter.test(next),
-      url,
-    }));
+    if (next !== undefined && urlDelimiter.test(next)) found.push(url);
   }
-  return (found.find((entry) => hasTokenQuery(entry.url)) ?? found.find((entry) => entry.delimited && isLocalhost(entry.url)))?.url.href;
+  return (found.find(hasTokenQuery) ?? found[0])?.href;
 };
 
 const alreadyClosed = (child: ChildProcess): boolean =>
