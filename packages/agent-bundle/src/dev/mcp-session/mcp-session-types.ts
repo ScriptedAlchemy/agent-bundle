@@ -21,6 +21,7 @@ import type {
   McpSessionReplayOverflow,
 } from './mcp-session-protocol.ts';
 import type { McpSessionTraceSink } from './mcp-session-trace.ts';
+import type { TracePublisher } from '../trace/trace-hub.ts';
 import { CodedError } from '../../core/errors.ts';
 import { deepFreeze } from '../../core/freeze.ts';
 
@@ -175,6 +176,12 @@ export interface McpSessionServiceOptions {
   readonly registry?: TargetRegistry;
   /** The dev server's session runtime; absent, each program runs on its own `platformLayer`. */
   readonly platformRuntime?: DevPlatformRuntime;
+  /**
+   * The Workbench's unified trace (#600). Every session lowers its frames,
+   * notifications, stderr, and lifecycle onto it through
+   * `createMcpSessionTraceSink`; absent, nothing is published.
+   */
+  readonly trace?: TracePublisher;
   /** Optional observability sink. It receives safe trace categories, never changes session behavior. */
   readonly traceSink?: McpSessionTraceSink;
 }
