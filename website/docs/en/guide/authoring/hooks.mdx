@@ -326,8 +326,11 @@ envelope verbatim as `context.nativeInput` and runs in-process in the wrapper. `
 ### Execution trace events
 
 The exported `EventTraceEvent` discriminated union gives developer tooling one stable,
-payload-free view of the event kernel: `preflight.start`, `preflight.outcome`, `execute.start`,
-`providers.start` / `providers.finish`, `render.start` / `render.finish`, and terminal `failure`.
+payload-free vocabulary for the event kernel: `preflight.start`, `preflight.outcome`,
+`execute.start`, `providers.start` / `providers.finish`, `render.start` / `render.finish`, and
+terminal `failure`. Generated preflight shells currently emit the preflight and execute
+boundaries, including failures in either phase; provider and render boundaries are reserved for
+the unified trace consumer to connect inside the deferred worker.
 Each frozen event carries one `EventTraceExecution` identity, a monotonic timestamp and sequence,
 and only phase-specific metadata; failures use a bounded, stack-free `EventTraceErrorSummary`.
 `createEventTracer` is a no-op without an observer and isolates observer errors from execution.
