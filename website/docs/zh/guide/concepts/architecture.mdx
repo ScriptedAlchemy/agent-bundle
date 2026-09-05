@@ -110,7 +110,7 @@ src/scripts/**/*.{ts,tsx,jsx}
   解析到的 `inputSchema` 声明一份。导入同一绑定的路由共享一份契约
   （[#593](https://github.com/ScriptedAlchemy/agent-bundle/issues/593)）。
 - `digest` —— 对相对项目的身份计算的 sha256。
-- `diagnostics` —— 路由图错误（`AB4800`–`AB4806`，以及无法跟随 schema 导入时的
+- `diagnostics` —— 路由图错误（`AB48xx` 与 `AB494x`；无法跟随 schema 导入时还有
   `AB4838` / `AB4839`）。
 
 每个 `CompiledAgentRoute` 携带 `id`、`kind`、`source`、约定式的 `provenance`、一份静态
@@ -173,9 +173,11 @@ Skill、命令、规则、配置中声明的钩子、手写的 MCP 入口以及�
 `projectionIdentity`（排序后的名称以 `+` 连接，例如 `claude+codex`）、`hookWrapperPath`
 与 `folderDiscoveryShadowed`。
 
-Skill、命令、规则、钩子或脚本上声明级的 `targets` 仍然表示“这个组件到达这些宿主”。当该集合
-与所选集合有交集时，组件就会被包含。一个组件若只限定在所选宿主的子集上，却位于另一个所选
-宿主会按约定发现的目录中，则是 `AB4105`。
+命令、规则、钩子或脚本上声明级的 `targets` 仍然表示“这个组件到达这些宿主”。当该集合
+与所选集合有交集时，组件就会被包含。命令或规则若只限定在所选宿主的子集上，却位于另一个所选
+宿主会按约定发现的目录中，则是 `AB4105`。Skill 总是发往每一个所选宿主
+（`skill.targets` 就是所选集合）；会改变字节的按宿主 Skill frontmatter 扩展是
+`AB4103`。
 
 ### 谁来规划投影
 
@@ -257,7 +259,7 @@ node 表面。
 
 `AB6005` 遍历每个发出的 JavaScript 模块：`manifest.files` 中的宿主包 `.mjs` 行，以及
 包构建的 `dist` 捆绑（`dist/bin/*.js`、Flight worker、`lib` 入口）——在 `dist` 发布之前。
-裸包说明符会失败；只有 Node 内建模块（以及 `pnpapi`）可以保持外部。预构建 payload
+裸包说明符会失败；只有 Node 内建模块（`node:module.isBuiltin`）可以保持外部。预构建 payload
 （`kind: 'prebuilt'`）只做哈希锁定，不参与遍历。这与生成式插件编译器配置所强制的
 自包含规则相同（`build/rslib.ts` 的 `composeEntryLibConfig`：`autoExternal: false`、
 `bundle: true`、没有面向作者的 `externals`）。
@@ -298,14 +300,16 @@ artifact/
 上面的编译器流水线止于磁盘上的文件。请求时是另一套独立的栈。**已经存在**的请求内核是
 `runAgentRequest`（`packages/rsc-runtime/src/agent-request.ts`，以
 `@agent-bundle/runtime` 导入）。生成式 MCP 路由、事件路由与渲染式 CLI 命令会调用它。
-配置声明的钩子与原生钩子**绕过**它：包装器解码宿主信封并直接调用作者的函数，没有
-provider、布局或 Agent Document。
+配置声明的钩子**绕过**它：生成的包装器解码宿主信封并直接调用作者的函数，没有
+provider、布局或 Agent Document。原生钩子文档是适配器校验并合并的宿主 JSON；它们不是
+编译出来的包装器，也不进入内核。
 
 | 表面 | 入口 | 请求路径 |
 | --- | --- | --- |
 | 生成式 MCP stdio | `mcp-entry.ts`（仅生命周期：stdout 守卫、信号、关闭），然后是来自 `build/entry-shell.ts` 的生成入口 | `mcp-server-runtime.ts` 注册路由、运行 `runAgentRequest`、通过预热的 Flight worker 渲染，并用 `attachMcpStructuredContent` 对 tool 结果做降级 |
 | 事件路由 | 同一个生成的 MCP 服务器（`events/ipc.ts` 中的 `createEventRuntimeServer`） | `events/project.ts` 把宿主信封规范化，并经 `runAgentRequest` 投影文档（`projectEventDocument`） |
-| 配置 / 原生钩子 | 由 `adapters/hook-contract.ts` 生成的 `hooks/<name>.mjs` | 包装器中的宿主原生编解码器；**不**调用 `runAgentRequest` |
+| 配置声明的钩子 | 由 `adapters/hook-contract.ts` 生成的 `hooks/<name>.mjs` | 包装器中的宿主原生编解码器；**不**调用 `runAgentRequest` |
+| 原生钩子文档 | 适配器声明的宿主 JSON（`nativeHooks`） | 校验后合并进宿主钩子文档；没有包装器，也不进内核 |
 | 路由式 CLI | `cli-entry.ts` 的 `runGeneratedCliEntry` | 来自路由图的命令树；渲染式 `.tsx` 命令使用 `runAgentRequest`。CLI 文档类型位于 `cli-entry.ts`，并不导入 `@agent-bundle/runtime` |
 | 浏览器 App | 宿主 `ui/*` 桥接（Workbench 的 `McpAppFrameRelay`、`serve-app` 的 `HOST_SCRIPT`） | App 是工具结果之上的一个视图，而不是第二张路由图 |
 

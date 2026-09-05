@@ -118,7 +118,7 @@ The frozen result is a `CompiledRouteGraph` (`routes/types.ts`):
   declaration. Routes that import the same binding share one contract
   ([#593](https://github.com/ScriptedAlchemy/agent-bundle/issues/593)).
 - `digest` — sha256 over project-relative identity.
-- `diagnostics` — route-graph errors (`AB4800`–`AB4806`, plus `AB4838` /
+- `diagnostics` — route-graph errors (`AB48xx` and `AB494x`; `AB4838` /
   `AB4839` when a schema import cannot be followed).
 
 Each `CompiledAgentRoute` carries `id`, `kind`, `source`, conventional
@@ -195,11 +195,13 @@ distribution form, or the application.
 example `claude+codex`), `hookWrapperPath`, and
 `folderDiscoveryShadowed`.
 
-Declaration-level `targets` on a skill, command, rule, hook, or script still
+Declaration-level `targets` on a command, rule, hook, or script still
 mean "this component reaches these hosts." A component is included when that
-set intersects the selection. A component scoped to a subset of the selected
-hosts but sitting in a directory another selected host discovers
-conventionally is `AB4105`.
+set intersects the selection. A command or rule scoped to a subset of the
+selected hosts but sitting in a directory another selected host discovers
+conventionally is `AB4105`. Skills always ship to every selected host
+(`skill.targets` is the selection); a per-host Skill frontmatter extension
+that changes bytes is `AB4103`.
 
 ### Who plans a projection
 
@@ -292,7 +294,8 @@ embed their HTML), then the node surfaces.
 `AB6005` walks every emitted JavaScript module: host-pack `.mjs` rows in
 `manifest.files`, and the package build's `dist` bundles (`dist/bin/*.js`,
 Flight workers, the `lib` entry) before `dist` is published. A bare package
-specifier fails; only Node built-ins (and `pnpapi`) may stay external.
+specifier fails; only Node built-ins (`node:module.isBuiltin`) may stay
+external.
 Prebuilt payloads (`kind: 'prebuilt'`) are hash-locked only and are not
 walked. That is the same self-containment rule the generated-plugin
 compiler profile enforces (`build/rslib.ts` `composeEntryLibConfig`:
@@ -339,15 +342,18 @@ The compiler pipeline above stops at files on disk. Request time is a
 separate stack. The request kernel that **does** exist is
 `runAgentRequest` (`packages/rsc-runtime/src/agent-request.ts`, imported as
 `@agent-bundle/runtime`). Generated MCP routes, event routes, and rendered
-CLI commands call it. Config-declared and native hooks **bypass** it: their
+CLI commands call it. Config-declared hooks **bypass** it: generated
 wrappers decode the host envelope and invoke the author's function
-directly, with no providers, layout, or Agent Document.
+directly, with no providers, layout, or Agent Document. Native hook
+documents are host JSON that adapters validate and merge; they are not
+compiled wrappers and do not enter the kernel.
 
 | Surface | Entry | Request path |
 | --- | --- | --- |
 | Generated MCP stdio | `mcp-entry.ts` (lifecycle only: stdout guard, signals, shutdown) then the generated entry from `build/entry-shell.ts` | `mcp-server-runtime.ts` registers routes, runs `runAgentRequest`, renders through a warm Flight worker, and lowers tool results with `attachMcpStructuredContent` |
 | Event routes | the same generated MCP server (`createEventRuntimeServer` in `events/ipc.ts`) | `events/project.ts` canonicalizes the host envelope and projects the document (`projectEventDocument`) through `runAgentRequest` |
-| Config / native hooks | generated `hooks/<name>.mjs` from `adapters/hook-contract.ts` | host-native codec in the wrapper; **does not** call `runAgentRequest` |
+| Config-declared hooks | generated `hooks/<name>.mjs` from `adapters/hook-contract.ts` | host-native codec in the wrapper; **does not** call `runAgentRequest` |
+| Native hook documents | adapter-declared host JSON (`nativeHooks`) | validated and merged into the host hook document; no wrapper, no kernel |
 | Routed CLI | `cli-entry.ts` `runGeneratedCliEntry` | command tree from the route graph; rendered `.tsx` commands use `runAgentRequest`. CLI document types live in `cli-entry.ts` and do not import `@agent-bundle/runtime` |
 | Browser Apps | host `ui/*` bridge (Workbench `McpAppFrameRelay`, `serve-app` `HOST_SCRIPT`) | the App is a view over a tool result, not a second route graph |
 

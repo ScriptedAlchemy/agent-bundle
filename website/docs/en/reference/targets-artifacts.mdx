@@ -134,8 +134,10 @@ inventory checks the same paths (`AB7010`).
 
 ## agent-bundle.manifest.json
 
-One manifest is emitted per root and is the input to every later integrity check —
-`validate --artifact`, `prepack`, `doctor --from`, and the packed and installed-host proof levels.
+One manifest is emitted per root and is the input to later integrity checks —
+`validate --artifact`, `prepack`, and the packed and installed-host proof
+levels. `doctor --from` and `install --from` identify the root from the
+host `plugin.json` under `--from`; they do not parse this file.
 
 | Field | Contents |
 | --- | --- |

@@ -121,8 +121,9 @@ MCP 入口、脚本、路由式 CLI bin 与 MCP App 只编译**一次**，归属
 
 ## agent-bundle.manifest.json
 
-每个根目录输出一份清单，它是之后每一项完整性检查的输入 —— `validate --artifact`、`prepack`、
-`doctor --from`，以及 packed 与 installed-host 证明级别。
+每个根目录输出一份清单，它是之后完整性检查的输入 —— `validate --artifact`、`prepack`，
+以及 packed 与 installed-host 证明级别。`doctor --from` 与 `install --from` 通过 `--from`
+下的宿主 `plugin.json` 识别根目录；它们不解析这个文件。
 
 | 字段 | 内容 |
 | --- | --- |
