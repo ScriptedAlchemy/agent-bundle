@@ -7,6 +7,7 @@ import { expect, it } from '@rstest/core';
 import { createRsbuild } from '@rsbuild/core';
 
 import { createWorkbenchFixtureConfig } from './support/workbench-fixture-config.ts';
+import { browserLaunchOptions } from './support/workbench-e2e.ts';
 import { chromium, type Locator } from 'playwright';
 
 const workspaceRoot = join(import.meta.dirname, '..', '..', '..');
@@ -93,7 +94,7 @@ const waitForDenyFocus = async (page: import('playwright').Page): Promise<void> 
 
 it('keeps each indistinguishable Runtime App consent gesture bound to its displayed FIFO entry', async () => {
   const fixture = await mountedConsentFixture();
-  const browser = await chromium.launch({ channel: 'chrome' });
+  const browser = await chromium.launch(browserLaunchOptions);
   const page = await browser.newPage({ viewport: { height: 844, width: 390 } });
   try {
     await page.goto(fixture.url);

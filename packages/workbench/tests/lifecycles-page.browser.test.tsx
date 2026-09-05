@@ -11,6 +11,7 @@ import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import { closeServer } from './support/http.ts';
 import { createWorkbenchFixtureConfig } from './support/workbench-fixture-config.ts';
+import { browserLaunchOptions, browserTrace } from './support/workbench-e2e.ts';
 
 const workspaceRoot = process.cwd();
 const browserTimeout = 8_000 * timeScale;
@@ -25,8 +26,9 @@ const fixtureEntry = join(
 
 const e2e = test.extend({
   playwright: {
-    launchOptions: { channel: 'chrome' },
+    launchOptions: browserLaunchOptions,
     contextOptions: { viewport: { height: 900, width: 1440 } },
+    trace: browserTrace,
   } satisfies PlaywrightOptions,
 });
 

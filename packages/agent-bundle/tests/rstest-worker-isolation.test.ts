@@ -10,7 +10,12 @@ import {
   rstestWorkerRootPrefix,
   rstestWorkerRootsParent,
 } from '../../../scripts/rstest-worker-roots.mjs';
-import { rstestWorkerRoot, rstestWorkerRootOwner, rstestWorkerRootPath } from '../../../rstest.worker-isolation.ts';
+import {
+  playwrightBrowsersPath,
+  rstestWorkerRoot,
+  rstestWorkerRootOwner,
+  rstestWorkerRootPath,
+} from '../../../rstest.worker-isolation.ts';
 
 it('keeps Doctor socket fixtures below the Linux AF_UNIX pathname cap', () => {
   const longLocalCiRoot = join(
@@ -51,6 +56,22 @@ it('stamps every worker root with the owner marker the local-CI runner cleans up
   // Absolute in the platform's own shape (`/tmp`, `C:\Temp`, a UNC root).
   expect(isAbsolute(owner?.temporaryRoot ?? '')).toBe(true);
   expect(owner?.temporaryRoot).not.toBe(root);
+});
+
+it('pins the Playwright browser registry before the per-worker cache override hides it', () => {
+  // Mirrors playwright-core's registry resolution per platform.
+  expect(playwrightBrowsersPath({ XDG_CACHE_HOME: '/srv/cache' }, 'linux', '/home/dev')).toBe(join('/srv/cache', 'ms-playwright'));
+  expect(playwrightBrowsersPath({}, 'linux', '/home/dev')).toBe(join('/home/dev', '.cache', 'ms-playwright'));
+  expect(playwrightBrowsersPath({ XDG_CACHE_HOME: '' }, 'linux', '/home/dev')).toBe(join('/home/dev', '.cache', 'ms-playwright'));
+  expect(playwrightBrowsersPath({}, 'darwin', '/Users/dev')).toBe(join('/Users/dev', 'Library', 'Caches', 'ms-playwright'));
+  expect(playwrightBrowsersPath({ LOCALAPPDATA: 'C:\\Users\\dev\\AppData\\Local' }, 'win32', 'C:\\Users\\dev'))
+    .toBe(join('C:\\Users\\dev\\AppData\\Local', 'ms-playwright'));
+
+  // The setup file already isolated this worker: XDG_CACHE_HOME now names the
+  // worker's own cache, and the registry pin must point outside it.
+  const pinned = process.env['PLAYWRIGHT_BROWSERS_PATH'];
+  expect(pinned).toBeDefined();
+  expect(pinned?.startsWith(rstestWorkerRoot())).toBe(false);
 });
 
 it('removes only the finished roots owned by one host temporary root', async () => {

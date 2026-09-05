@@ -7,6 +7,7 @@ import { chromium } from 'playwright';
 import { describe, expect, it } from '@rstest/core';
 
 import { createWorkbenchFixtureConfig } from './support/workbench-fixture-config.ts';
+import { browserLaunchOptions } from './support/workbench-e2e.ts';
 
 const contentType = (path: string): string => path.endsWith('.css')
   ? 'text/css'
@@ -89,7 +90,7 @@ describe('Runtime inspector', () => {
     const buildResult = await rsbuild.build();
     await buildResult.close();
     const { server, url } = await startStaticServer(output);
-    const browser = await chromium.launch({ channel: 'chrome' });
+    const browser = await chromium.launch(browserLaunchOptions);
     try {
       const page = await browser.newPage();
       const errors: string[] = [];

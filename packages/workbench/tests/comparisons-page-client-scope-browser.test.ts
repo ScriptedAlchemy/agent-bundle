@@ -9,6 +9,7 @@ import { createRsbuild } from '@rsbuild/core';
 
 import { closeServer } from './support/http.ts';
 import { createWorkbenchFixtureConfig } from './support/workbench-fixture-config.ts';
+import { browserLaunchOptions, browserTrace } from './support/workbench-e2e.ts';
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 
 const workspaceRoot = process.cwd();
@@ -17,8 +18,9 @@ const browserTimeout = 8_000 * timeScale;
 
 const e2e = test.extend({
   playwright: {
-    launchOptions: { channel: 'chrome' },
+    launchOptions: browserLaunchOptions,
     contextOptions: { viewport: { height: 900, width: 1024 } },
+    trace: browserTrace,
   } satisfies PlaywrightOptions,
 });
 
