@@ -92,20 +92,34 @@ it('serves an exposed App and registers its opening call for page binding', asyn
 
     const sessionId = seedString(html, 'sessionId');
     const toolName = seedString(html, 'toolName');
-    const previewResponse = await fetch(`${server.url}/api/mcp/sessions/${encodeURIComponent(sessionId)}/apps`, {
-      body: JSON.stringify({ host: hostContext, previewProfile: 'portable', toolName }),
-      headers: {
-        'content-type': 'application/json',
-        origin: server.url,
-        'x-agent-bundle-session': session.token,
-      },
+    const opening = seedString(html, 'opening');
+    const headers = {
+      'content-type': 'application/json',
+      origin: server.url,
+      'x-agent-bundle-session': session.token,
+    };
+    const bind = (body: Readonly<Record<string, unknown>>) => fetch(`${server.url}/api/mcp/sessions/${encodeURIComponent(sessionId)}/apps`, {
+      body: JSON.stringify({ host: hostContext, previewProfile: 'portable', toolName, ...body }),
+      headers,
       method: 'POST',
     });
+    const previewResponse = await bind({ opening });
     const preview = await previewResponse.json() as {
       readonly preview?: Readonly<{ readonly resource?: Readonly<{ readonly kind?: string }> }>;
     };
     expect(previewResponse.status).toBe(200);
     expect(preview.preview?.resource?.kind).toBe('resource');
+
+    // A second page load of the same App shares the session but gets its own
+    // opening id; a bind that names no opening, or another page's, is refused
+    // rather than handed a call the page never saw.
+    const secondHtml = await (await fetch(`${server.url}/web/status/status`)).text();
+    const secondOpening = seedString(secondHtml, 'opening');
+    expect(seedString(secondHtml, 'sessionId')).toBe(sessionId);
+    expect(secondOpening).not.toBe(opening);
+    expect((await bind({})).status).toBe(400);
+    expect((await bind({ opening: 'not-a-page' })).status).toBe(400);
+    expect((await bind({ opening: secondOpening })).status).toBe(200);
 
     const missingResponse = await fetch(`${server.url}/web/status/nope`);
     const missing = await missingResponse.json() as {

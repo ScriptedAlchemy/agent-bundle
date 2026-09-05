@@ -613,8 +613,13 @@ it('binds the host\'s own opening call when a create request omits input and res
   const large = { structuredContent: { rows: Array.from({ length: 4000 }, (_, index) => ({ index, text: 'x'.repeat(24) })) } };
   expect(Buffer.byteLength(JSON.stringify(large))).toBeGreaterThan(64 * 1024);
   const service = new RecordingPreviewService();
-  const started = await startRoutes(service, undefined, (sessionId, toolName) =>
-    sessionId === 'session-a' && toolName === 'show-weather' ? { input: { city: 'Oslo' }, result: large } : undefined);
+  const openings: (string | undefined)[] = [];
+  const started = await startRoutes(service, undefined, (sessionId, toolName, opening) => {
+    openings.push(opening);
+    return sessionId === 'session-a' && toolName === 'show-weather' && opening !== 'stale-page'
+      ? { input: { city: 'Oslo' }, result: large }
+      : undefined;
+  });
   try {
     const bound = await fetch(`${started.url}/api/mcp/sessions/session-a/apps`, {
       body: JSON.stringify({ host, previewProfile: 'portable', toolName: 'show-weather' }),
@@ -626,11 +631,25 @@ it('binds the host\'s own opening call when a create request omits input and res
       kind: 'create',
       options: { host, input: { city: 'Oslo' }, previewProfile: 'portable', result: large, sessionId: 'session-a', toolName: 'show-weather' },
     }]);
+    // A page's opaque opening id reaches the host verbatim, so a many-page
+    // host can hand each page its own call.
+    const named = await fetch(`${started.url}/api/mcp/sessions/session-a/apps`, {
+      body: JSON.stringify({ host, opening: 'page-7', previewProfile: 'portable', toolName: 'show-weather' }),
+      headers: { ...headers(), 'content-type': 'application/json' },
+      method: 'POST',
+    });
+    expect(named.status).toBe(200);
+    expect(openings).toEqual([undefined, 'page-7']);
 
-    // Another tool, or a session the host did not open, has no call to bind.
+    // Another tool, a session the host did not open, an opening the host no
+    // longer holds, a blank opening, or an opening sent alongside the
+    // Workbench's own call: none has a call to bind.
     for (const body of [
       { host, previewProfile: 'portable', toolName: 'other-tool' },
       { host, input: { city: 'Oslo' }, previewProfile: 'portable', toolName: 'show-weather' },
+      { host, opening: 'stale-page', previewProfile: 'portable', toolName: 'show-weather' },
+      { host, opening: '', previewProfile: 'portable', toolName: 'show-weather' },
+      { host, input: { city: 'Oslo' }, opening: 'page-7', previewProfile: 'portable', result: large, toolName: 'show-weather' },
     ]) {
       const response = await fetch(`${started.url}/api/mcp/sessions/session-a/apps`, {
         body: JSON.stringify(body),
@@ -646,7 +665,7 @@ it('binds the host\'s own opening call when a create request omits input and res
       method: 'POST',
     });
     expect(otherSession.status).toBe(400);
-    expect(service.calls).toHaveLength(1);
+    expect(service.calls).toHaveLength(2);
   } finally {
     await started.close();
   }

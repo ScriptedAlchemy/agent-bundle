@@ -118,6 +118,7 @@ const start = async (): Promise<void> => {
     `/api/mcp/sessions/${encodeURIComponent(seed.sessionId)}/apps`,
     {
       host: browserHostContext(),
+      ...(seed.opening === undefined ? {} : { opening: seed.opening }),
       previewProfile: seed.previewProfile,
       toolName: seed.toolName,
     },

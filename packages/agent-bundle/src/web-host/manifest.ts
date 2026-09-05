@@ -4,7 +4,7 @@ import {
   isServeAppAllowCapability,
   type ServeAppAllowCapability,
 } from '../core/mcp-app-allow.ts';
-import { isPlainRecord } from '../core/strict-json.ts';
+import { hasDataKeys, isPlainRecord } from '../core/strict-json.ts';
 
 export interface WebManifestApp {
   readonly allow: readonly ServeAppAllowCapability[];
@@ -34,17 +34,17 @@ const fail = (message: string): never => {
 const record = (value: unknown, location: string): JsonRecord =>
   isPlainRecord(value) ? value as JsonRecord : fail(`${location} must be a plain object.`);
 
-const exactKeys = (
-  value: JsonRecord,
+/** Exact required/optional key contract (`hasDataKeys`), naming the location and expected keys on failure. */
+const keyedRecord = (
+  value: unknown,
   location: string,
   required: readonly string[],
   optional: readonly string[] = [],
-): void => {
-  const allowed = new Set([...required, ...optional]);
-  const unexpected = Object.keys(value).filter((key) => !allowed.has(key));
-  const missing = required.filter((key) => !Object.hasOwn(value, key));
-  if (unexpected.length > 0) fail(`${location} has unexpected keys: ${unexpected.join(', ')}.`);
-  if (missing.length > 0) fail(`${location} is missing keys: ${missing.join(', ')}.`);
+): JsonRecord => {
+  const candidate = record(value, location);
+  if (hasDataKeys(candidate, required, optional)) return candidate;
+  const expected = [...required, ...optional.map((key) => `${key}?`)].join(', ');
+  return fail(`${location} must have exactly the keys ${expected}; found ${Object.keys(candidate).join(', ') || 'none'}.`);
 };
 
 const string = (value: unknown, location: string): string =>
@@ -67,9 +67,8 @@ const inputRecord = (value: unknown, location: string): Readonly<Record<string, 
 
 const parseApp = (value: unknown, index: number): WebManifestApp => {
   const location = `apps[${index}]`;
-  const app = record(value, location);
-  exactKeys(
-    app,
+  const app = keyedRecord(
+    value,
     location,
     ['allow', 'app', 'entry', 'env', 'name', 'resourceUri', 'server'],
     ['input', 'tool'],
@@ -96,8 +95,7 @@ const parseApp = (value: unknown, index: number): WebManifestApp => {
 };
 
 export const parseWebManifest = (value: unknown): WebManifest => {
-  const manifest = record(value, 'root');
-  exactKeys(manifest, 'root', ['apps', 'open']);
+  const manifest = keyedRecord(value, 'root', ['apps', 'open']);
   if (!Array.isArray(manifest.apps)) fail('apps must be an array.');
   if (manifest.open !== 'browser' && manifest.open !== 'never') {
     fail('open must be "browser" or "never".');

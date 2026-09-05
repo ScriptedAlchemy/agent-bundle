@@ -1,3 +1,7 @@
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { expect, it } from '@rstest/core';
 
 import { normalizeProject } from '../src/config/normalize.ts';
@@ -210,4 +214,64 @@ it('skips static tool validation for hand-written MCP server factories', async (
   };
   const { diagnostics } = await webDiagnostics(config, discovered({ generated: false }));
   expect(diagnostics).toEqual([]);
+});
+
+it('never lets web alone displace an authored executable, and reports the surface that has nowhere to live', async () => {
+  const web = { apps: ['catalog/details'] };
+  const project = discovered();
+
+  // bin: false disables the web bin too, and AB4341 says so.
+  const disabled = await webDiagnostics({ ...baseConfig(web), bin: false }, project);
+  expect(disabled.model.packageBuild?.bins ?? []).toEqual([]);
+  expect(disabled.diagnostics.map(({ message }) => message)).toEqual([
+    'web.apps is configured, but no framework-generated executable carries the web command (bin is false, or the plugin name is not a safe executable name).',
+  ]);
+
+  // An explicit bin claiming the plugin name keeps the executable; web is not
+  // silently dropped.
+  const explicit = await webDiagnostics({ ...baseConfig(web), bin: { 'catalog-tools': './src/tool.ts' } }, project);
+  expect(explicit.model.packageBuild?.bins.map(({ name, source, web: isWeb }) => ({ name, source, web: isWeb }))).toEqual([
+    { name: 'catalog-tools', source: `${root}/src/tool.ts`, web: undefined },
+  ]);
+  expect(explicit.diagnostics.map(({ message }) => message)).toEqual([
+    'web.apps is configured, but the bin config owns the "catalog-tools" executable, so the framework-generated web command has nowhere to live.',
+  ]);
+
+  // An explicit bin under another name coexists with the generated web bin.
+  const sibling = await webDiagnostics({ ...baseConfig(web), bin: { helper: './src/helper.ts' } }, project);
+  expect(sibling.model.packageBuild?.bins.map(({ name, web: isWeb }) => ({ name, web: isWeb }))).toEqual([
+    { name: 'catalog-tools', web: true },
+    { name: 'helper', web: undefined },
+  ]);
+  expect(sibling.diagnostics).toEqual([]);
+});
+
+it('keeps a conventional src/cli.ts executable when only web is configured', async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-web-config-'));
+  try {
+    await mkdir(join(fixtureRoot, 'src'), { recursive: true });
+    await writeFile(join(fixtureRoot, 'src', 'cli.ts'), 'export {};\n');
+    const config = baseConfig({ apps: ['catalog/details'] });
+    const fixtureConfigPath = join(fixtureRoot, 'agent-bundle.config.ts');
+    const loadedFixture: LoadedConfig = {
+      config,
+      configPath: fixtureConfigPath,
+      context: { command: 'build', mode: 'production', projectRoot: fixtureRoot, selectedTargets: [] },
+    };
+    const model = await normalizeProject(loadedFixture, discovered(), registry);
+    expect(model.packageBuild?.bins.map(({ name, provenance, source, web }) => ({ name, provenance, source, web }))).toEqual([
+      {
+        name: 'catalog-tools',
+        provenance: { kind: 'conventional', sourcePath: join(fixtureRoot, 'src', 'cli.ts') },
+        source: join(fixtureRoot, 'src', 'cli.ts'),
+        web: undefined,
+      },
+    ]);
+    expect(validateModel(model, registry).filter(({ code }) => code === 'AB4341').map(({ message, recovery }) => ({ message, recovery }))).toEqual([{
+      message: 'web.apps is configured, but src/cli.ts owns the "catalog-tools" executable, so the framework-generated web command has nowhere to live.',
+      recovery: 'Move that executable\'s commands under src/cli/** so the framework generates the bin, or remove web.apps.',
+    }]);
+  } finally {
+    await rm(fixtureRoot, { force: true, recursive: true });
+  }
 });

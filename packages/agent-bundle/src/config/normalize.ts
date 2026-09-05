@@ -226,7 +226,9 @@ export const configuredArtifactDistPath = (
  * executable named after the plugin, exactly where the `src/cli.ts`
  * convention would have placed it. Rendered routes that compiled no command
  * are hard source-validation errors (AB4816), so omitting them here is
- * deterministic hygiene, never a silent choice.
+ * deterministic hygiene, never a silent choice. A configured `web` surface
+ * (#564) rides the same executable as the framework-owned `web` command,
+ * and creates it when no command route exists.
  */
 const generatedCliBinEntry = (
   config: Readonly<AgentBundleConfig>,
@@ -260,7 +262,9 @@ const normalizeBinEntries = (
   routeCli: CompiledCliSurface | undefined,
 ): readonly NormalizedBinEntry[] => {
   const generated = generatedCliBinEntry(config, configPath, routeCli);
-  if (config.bin === false) return generated?.web === true ? [generated] : [];
+  // `bin: false` disables every executable, the web one included; model
+  // validation reports the surface that then has nowhere to live (AB4341).
+  if (config.bin === false) return [];
   if (config.bin !== undefined) {
     const explicit = Object.entries(config.bin)
       .sort(([left], [right]) => left.localeCompare(right))
@@ -275,13 +279,16 @@ const normalizeBinEntries = (
         };
       });
     // Config always wins one name: an explicit bin claiming the plugin name
-    // shadows the generated CLI, and source validation reports the collision.
+    // shadows the generated CLI, and validation reports the collision
+    // (source validation for command routes, AB4341 for the web surface).
     return generated === undefined || explicit.some((entry) => entry.name === generated.name)
       ? explicit
       : [...explicit, generated].sort((left, right) => left.name.localeCompare(right.name));
   }
-  if (generated !== undefined) return [generated];
   const conventional = conventionalCliEntrySource(root);
+  // A hand-written `src/cli.ts` keeps its executable: `web` alone never
+  // replaces authored code, and AB4341 names the collision instead.
+  if (generated !== undefined && (generated.generatedCli.commands.length > 0 || conventional === undefined)) return [generated];
   if (conventional === undefined || !safePackageOutputName(config.plugin.name)) return [];
   return [{
     id: `bin:${config.plugin.name}`,

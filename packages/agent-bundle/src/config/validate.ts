@@ -2428,13 +2428,27 @@ const webDiagnostics = (model: NormalizedPlugin): Diagnostic[] => {
       }
     }
   }
-  for (const bin of model.packageBuild?.bins ?? []) {
+  const bins = model.packageBuild?.bins ?? [];
+  for (const bin of bins) {
     if (bin.generatedCli?.commands.some((command) => command.path[0] === 'web') !== true) continue;
     diagnostics.push(sourceDiagnostic(
       'AB4341',
       'CLI command "web" is reserved by the web surface (web.apps is configured).',
       bin.provenance.sourcePath,
       'Rename the command or remove web.apps.',
+    ));
+  }
+  if (model.web.apps.length > 0 && !bins.some((bin) => bin.web === true)) {
+    const owner = bins.find((bin) => bin.name === model.metadata.name);
+    diagnostics.push(sourceDiagnostic(
+      'AB4341',
+      owner === undefined
+        ? 'web.apps is configured, but no framework-generated executable carries the web command (bin is false, or the plugin name is not a safe executable name).'
+        : `web.apps is configured, but ${owner.provenance.kind === 'config' ? 'the bin config' : 'src/cli.ts'} owns the ${JSON.stringify(owner.name)} executable, so the framework-generated web command has nowhere to live.`,
+      model.web.provenance.sourcePath,
+      owner === undefined
+        ? 'Remove bin: false (or choose a safe plugin name), or remove web.apps.'
+        : 'Move that executable\'s commands under src/cli/** so the framework generates the bin, or remove web.apps.',
     ));
   }
   return diagnostics;

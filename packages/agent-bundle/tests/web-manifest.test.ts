@@ -30,7 +30,7 @@ it('parses and round-trips a strict web manifest section', () => {
 
 it('rejects exact-key, consent-vocabulary, and ordering violations', () => {
   expect(() => parseWebManifest({ ...validWeb(), extra: true }))
-    .toThrow('agent-bundle.manifest.json web section is invalid: root has unexpected keys: extra.');
+    .toThrow('agent-bundle.manifest.json web section is invalid: root must have exactly the keys apps, open; found apps, open, extra.');
   expect(() => parseWebManifest({
     ...validWeb(),
     apps: [{ ...validWeb().apps[0], allow: ['camera'] }],

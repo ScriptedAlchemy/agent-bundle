@@ -1,4 +1,5 @@
 import type { Resource, Tool } from '@modelcontextprotocol/client';
+import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { join } from 'node:path';
 
@@ -40,6 +41,8 @@ import {
 
 const devWebHostTarget = 'portable';
 const manifestFileName = 'agent-bundle.manifest.json';
+/** Opening calls retained for page binding; each `/web` page load adds one, so the oldest are evicted past this bound. */
+const maxRetainedOpeningCalls = 64;
 
 interface WebHostEpochReference {
   close(): Promise<void>;
@@ -159,8 +162,13 @@ export class WebHostRoutes {
     }
   }
 
-  openingCall(sessionId: string, toolName: string): McpAppOpeningCall | undefined {
-    return this.#openingCalls.get(this.#openingCallKey(sessionId, toolName));
+  /**
+   * Every `/web` page shares its server's session with every other page of
+   * that server, so a page binds only the call stamped into its own seed:
+   * without `opening`, two tabs on one tool would read each other's result.
+   */
+  openingCall(sessionId: string, toolName: string, opening: string | undefined): McpAppOpeningCall | undefined {
+    return opening === undefined ? undefined : this.#openingCalls.get(this.#openingCallKey(sessionId, toolName, opening));
   }
 
   async handle(request: IncomingMessage, response: ServerResponse): Promise<boolean> {
@@ -212,8 +220,9 @@ export class WebHostRoutes {
         server: app.server,
         ...(app.tool === undefined ? {} : { tool: app.tool }),
       });
-      this.#openingCalls.set(
-        this.#openingCallKey(registered.session.id, selection.tool.name),
+      const opening = randomUUID();
+      this.#retainOpeningCall(
+        this.#openingCallKey(registered.session.id, selection.tool.name, opening),
         Object.freeze({ input: selection.input, result: selection.result }),
       );
       const body = renderWebHostPage({
@@ -221,6 +230,7 @@ export class WebHostRoutes {
         seed: {
           autoApprove: app.allow,
           input: selection.input,
+          opening,
           previewProfile: 'portable',
           result: selection.result,
           sessionId: registered.session.id,
@@ -324,7 +334,15 @@ export class WebHostRoutes {
     void current.then((registered) => registered.dispose()).catch(() => undefined);
   }
 
-  #openingCallKey(sessionId: string, toolName: string): string {
-    return `${sessionId}\0${toolName}`;
+  #retainOpeningCall(key: string, call: McpAppOpeningCall): void {
+    this.#openingCalls.set(key, call);
+    for (const oldest of this.#openingCalls.keys()) {
+      if (this.#openingCalls.size <= maxRetainedOpeningCalls) break;
+      this.#openingCalls.delete(oldest);
+    }
+  }
+
+  #openingCallKey(sessionId: string, toolName: string, opening: string): string {
+    return `${sessionId}\0${toolName}\0${opening}`;
   }
 }

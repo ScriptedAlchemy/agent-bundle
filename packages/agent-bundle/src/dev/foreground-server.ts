@@ -476,7 +476,7 @@ export class ForegroundServer {
     });
     this.#mcpAppRoutes = new McpAppRoutes({
       authorize: (request) => this.#assertMutationSession(request),
-      openingCall: (sessionId, toolName) => this.#webHostRoutes.openingCall(sessionId, toolName),
+      openingCall: (sessionId, toolName, opening) => this.#webHostRoutes.openingCall(sessionId, toolName, opening),
       ...(options.mcpAppPreviews === undefined ? {} : { service: options.mcpAppPreviews }),
     });
     this.#mcpSessionRoutes = new McpSessionRoutes({
