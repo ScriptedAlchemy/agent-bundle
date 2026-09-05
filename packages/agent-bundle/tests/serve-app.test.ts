@@ -14,7 +14,7 @@ import {
   createAppClient,
 } from '../src/app/index.ts';
 import { MCP_APP_PROTOCOL_VERSION } from '../src/dev/mcp-apps/mcp-app-bridge.ts';
-import { SERVE_APP_TOKEN_HEADER } from '../src/serve-app/serve-app-page.ts';
+import { WEB_HOST_TOKEN_HEADER } from '../src/web-host/page.ts';
 import { timeScale } from './support/time-scale.ts';
 
 /**
@@ -44,11 +44,12 @@ interface Seed {
   readonly sessionId: string;
   readonly title: string;
   readonly token: string;
+  readonly tokenHeader: string;
   readonly toolName: string;
 }
 
 const seedOf = (html: string): Seed => {
-  const match = /<script type="application\/json" id="agent-bundle-serve-app-seed">([^<]*)<\/script>/u.exec(html);
+  const match = /<script type="application\/json" id="agent-bundle-web-host-seed">([^<]*)<\/script>/u.exec(html);
   if (match?.[1] === undefined) throw new Error('The host document carries no seed.');
   return JSON.parse(match[1]) as Seed;
 };
@@ -164,6 +165,7 @@ it('serves the MCP App example standalone over its packed server and relays the 
       previewProfile: 'portable',
       result: { structuredContent: { service: 'compiler', status: 'healthy' } },
       title: 'status/status',
+      tokenHeader: WEB_HOST_TOKEN_HEADER,
       toolName: 'show-status',
     });
     expect(seed.token.length).toBeGreaterThanOrEqual(32);
@@ -179,13 +181,13 @@ it('serves the MCP App example standalone over its packed server and relays the 
     expect(await withoutToken.json()).toMatchObject({ diagnostic: { code: 'AB8004' } });
     const crossOrigin = await fetch(createPath, {
       body: createBody,
-      headers: { 'content-type': 'application/json', origin: 'http://evil.example', [SERVE_APP_TOKEN_HEADER]: seed.token },
+      headers: { 'content-type': 'application/json', origin: 'http://evil.example', [WEB_HOST_TOKEN_HEADER]: seed.token },
       method: 'POST',
     });
     expect(crossOrigin.status).toBe(403);
     expect(await crossOrigin.json()).toMatchObject({ diagnostic: { code: 'AB8003' } });
     // DNS rebinding: a request that reached the loopback socket under another name is refused before any route runs.
-    expect(await statusWithHost(createPath, 'dashboard.example:80', { 'content-type': 'application/json', origin, [SERVE_APP_TOKEN_HEADER]: seed.token }, createBody)).toBe(403);
+    expect(await statusWithHost(createPath, 'dashboard.example:80', { 'content-type': 'application/json', origin, [WEB_HOST_TOKEN_HEADER]: seed.token }, createBody)).toBe(403);
     expect(await statusWithHost(served.url, 'dashboard.example:80', {})).toBe(403);
 
     const api = async (method: string, path: string, body?: unknown): Promise<Record<string, unknown>> => {
@@ -194,7 +196,7 @@ it('serves the MCP App example standalone over its packed server and relays the 
         headers: {
           ...(body === undefined ? {} : { 'content-type': 'application/json' }),
           origin,
-          [SERVE_APP_TOKEN_HEADER]: seed.token,
+          [WEB_HOST_TOKEN_HEADER]: seed.token,
         },
         method,
       });
