@@ -228,8 +228,9 @@ http://127.0.0.1:3100. Open http://127.0.0.1:3100 instead, or start agent-bundle
 --workbench-dev-origin http://localhost:3000 to allow this origin.`。门控页只在前台响应本身失败时才会
 追加 `(HTTP <status>)`——例如前台回以 403 的 `AB8003` 会显示为
 `AB8003 — Request origin is not this foreground server. (HTTP 403)`——因此不带标志时这一行没有状态码：
-前台回应的是 200，是界面拒绝了该响应体。前台仍会以 `AB8003` 拒绝携带该 `Origin` 的变更请求。前台 URL
-本身无论如何都照常工作。
+前台回应的是 200，是界面拒绝了该响应体。页面保持打开时不带标志重启前台，也会显示同一行：门控页先报告
+`Foreground project event stream disconnected.`，待重连尝试被拒绝后再显示这条 `AB8003` 拒绝信息。前台仍会以
+`AB8003` 拒绝携带该 `Origin` 的变更请求。前台 URL 本身无论如何都照常工作。
 
 ## 下一步
 

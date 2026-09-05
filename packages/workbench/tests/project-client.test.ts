@@ -1290,6 +1290,72 @@ it('reports a refused session bootstrap during recovered-source refresh as a Pro
   }
 });
 
+it('carries no HTTP status for a session the client itself invalidated mid-bootstrap', async () => {
+  const session = deferred<Response>();
+  const foreground = new ForegroundRouteClient({
+    fetch: async (input) => String(input) === '/api/project/session' ? session.promise : Response.json({ status: status() }),
+  });
+  const client = new ProjectClient({ events: () => new RecordingEventSource(), foreground, retryDelay: async () => undefined });
+  try {
+    const connecting = client.connect(() => undefined);
+    await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
+    client.close();
+    foreground.forgetAuthentication();
+    session.resolve(Response.json(foregroundSession));
+    const rejection: unknown = await connecting.then(() => undefined, (reason: unknown) => reason);
+
+    expect(rejection).toBeInstanceOf(ProjectClientError);
+    if (!(rejection instanceof ProjectClientError)) return;
+    expect(rejection.code).toBe('AB8019');
+    expect(rejection.status).toBeUndefined();
+    expect(projectFailureText(rejection, 'fallback')).toBe(`AB8019 — ${rejection.message}`);
+  } finally {
+    client.close();
+  }
+});
+
+it('reports a recovery attempt the foreground keeps refusing once, then the line that replaces it', async () => {
+  const firstStream = new RecordingEventSource();
+  const secondStream = new RecordingEventSource();
+  const streams = [firstStream, secondStream];
+  const errors: unknown[] = [];
+  const fourthSession = deferred<void>();
+  let sessionRequests = 0;
+  const client = new ProjectClient({
+    events: () => streams.shift()!,
+    fetch: async (input) => {
+      if (String(input) !== '/api/project/session') return Response.json({ status: status() });
+      sessionRequests += 1;
+      if (sessionRequests === 4) fourthSession.resolve();
+      return sessionRequests === 2 || sessionRequests === 3
+        ? Response.json({ diagnostic: { code: 'AB8003', message: 'Request origin is not this foreground server.' } }, { status: 403 })
+        : Response.json(foregroundSession);
+    },
+    retryDelay: () => new Promise<void>((resolvePromise) => setImmediate(resolvePromise)),
+  });
+  try {
+    await client.connect(() => undefined, (reason) => errors.push(reason));
+    firstStream.emit('error', { data: '', lastEventId: '' });
+    await fourthSession.promise;
+    await flushEvents();
+
+    // Two identical refusals produce one report after the disconnect line; the
+    // successful fourth bootstrap ends recovery without a further report.
+    expect(errors).toHaveLength(2);
+    expect(errors[0]).toMatchObject({ message: 'Foreground project event stream disconnected.' });
+    expect(errors[1]).toBeInstanceOf(ProjectClientError);
+    expect(errors[1]).toMatchObject({ code: 'AB8003', message: 'Request origin is not this foreground server.', status: 403 });
+    expect(client.connection.state).toBe('connecting');
+
+    secondStream.emit('open', { data: '', lastEventId: '' });
+    await flushEvents();
+    expect(client.connection.state).toBe('connected');
+    expect(errors).toHaveLength(2);
+  } finally {
+    client.close();
+  }
+});
+
 it('formats a project client failure as its code, message, and HTTP status, omitting the parts it lacks', () => {
   expect(projectFailureText(new ProjectClientError('Request origin is not this foreground server.', 'AB8003', 403), 'fallback'))
     .toBe('AB8003 — Request origin is not this foreground server. (HTTP 403)');

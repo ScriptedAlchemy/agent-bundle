@@ -69,8 +69,9 @@ interface QueuedProjectEvent {
 export class ProjectClientError extends Error {
   readonly code: string | undefined;
   /**
-   * Status of the failed foreground response (4xx/5xx); absent when the failure
-   * was not an HTTP failure (e.g. the client refused an HTTP 200 bootstrap body).
+   * Status of the failed foreground response (4xx/5xx); absent when the client
+   * constructed the failure itself — it refused an HTTP 200 bootstrap body, or
+   * the session was superseded or invalidated while a request was in flight.
    */
   readonly status: number | undefined;
 
@@ -261,7 +262,7 @@ const projectStatusResponse = (value: unknown): ProjectStatusResponse => {
 
 const projectError = (error: unknown): ProjectClientError | unknown =>
   error instanceof ForegroundRouteClientError
-    ? new ProjectClientError(error.message, error.code, error.status >= 400 ? error.status : undefined)
+    ? new ProjectClientError(error.message, error.code, error.responseStatus)
     : error;
 
 const isSequence = (value: unknown): value is number =>
@@ -364,6 +365,7 @@ export class ProjectClient {
   #eventRefreshQueued = false;
   #highestQueuedEventId = -1;
   #lastEventId = 0;
+  #lastReportedFailure: string | undefined;
   #lastSourceChangeSequence = -1;
   #errorListener: ProjectClientErrorListener | undefined;
   #listener: ((status: ProjectStatus) => void) | undefined;
@@ -553,8 +555,9 @@ export class ProjectClient {
         source.addEventListener('open', () => { void this.#refreshRecoveredSource(version); });
         this.#setConnection({ generation: snapshot.generation, instanceId: snapshot.instanceId, state: 'connecting' });
         return;
-      } catch {
+      } catch (error) {
         if (this.#closed || recoveryVersion !== this.#recoveryVersion) return;
+        this.#reportRecoveryFailure(projectError(error));
         await this.#retryDelay(retryDelayMilliseconds);
       }
     }
@@ -738,11 +741,23 @@ export class ProjectClient {
 
   #reportError(reason: unknown): void {
     if (this.#closed) return;
+    this.#lastReportedFailure = projectFailureText(reason, '');
     try {
       this.#errorListener?.(reason);
     } catch {
       // Consumer callbacks must not reintroduce an unhandled background rejection.
     }
+  }
+
+  /**
+   * Recovery retries every {@link retryDelayMilliseconds}; a failed attempt is
+   * reported only when its line differs from the last report, so the gate moves
+   * from `Foreground project event stream disconnected.` to the refusal that
+   * keeps recovery from completing (e.g. `AB8003`) without flooding the listener.
+   */
+  #reportRecoveryFailure(reason: unknown): void {
+    if (projectFailureText(reason, '') === this.#lastReportedFailure) return;
+    this.#reportError(reason);
   }
 
   #publishEvent(event: ProjectEventMessage): void {

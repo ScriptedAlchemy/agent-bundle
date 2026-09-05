@@ -260,8 +260,10 @@ start agent-bundle dev with --workbench-dev-origin http://localhost:3000 to allo
 The gate appends `(HTTP <status>)` only when the foreground response itself failed — a 403
 `AB8003` from the foreground renders as `AB8003 — Request origin is not this foreground server.
 (HTTP 403)` — so the no-flag line carries no status: the foreground answered 200 and the UI
-refused the body. The foreground still refuses mutations carrying that `Origin` with `AB8003`. The
-foreground URL keeps working regardless.
+refused the body. Restarting the foreground without the flag while the page is open shows the same
+line: the gate first reports `Foreground project event stream disconnected.`, then the `AB8003`
+refusal once the reconnect attempt is turned away. The foreground still refuses mutations carrying
+that `Origin` with `AB8003`. The foreground URL keeps working regardless.
 
 ## Next
 

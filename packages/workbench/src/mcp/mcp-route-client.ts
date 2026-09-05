@@ -703,20 +703,36 @@ export class ForegroundRouteClientError extends Error {
   readonly code: string;
   readonly details: unknown | undefined;
   readonly phase: string | undefined;
+  /**
+   * HTTP status of the failed foreground response (`fromResponse`); `undefined`
+   * when the client constructed the failure itself — a refused 200 body, a
+   * superseded or invalidated session — and `status` is only nominal.
+   */
+  readonly responseStatus: number | undefined;
   readonly status: number;
 
-  constructor(code: string, message: string, status: number, options: Readonly<{ readonly details?: unknown; readonly phase?: string }> = {}) {
+  constructor(
+    code: string,
+    message: string,
+    status: number,
+    options: Readonly<{ readonly details?: unknown; readonly phase?: string; readonly responseStatus?: number }> = {},
+  ) {
     super(message);
     this.name = 'ForegroundRouteClientError';
     this.code = code;
     this.details = options.details;
     this.phase = options.phase;
+    this.responseStatus = options.responseStatus;
     this.status = status;
   }
 
   static fromResponse(body: unknown, status: number): ForegroundRouteClientError {
     const detail = diagnostic(body, status);
-    return new ForegroundRouteClientError(detail.code, detail.message, status, detail);
+    return new ForegroundRouteClientError(detail.code, detail.message, status, {
+      details: detail.details,
+      phase: detail.phase,
+      responseStatus: status,
+    });
   }
 }
 
