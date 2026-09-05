@@ -710,12 +710,14 @@ const inspectInstalledDurableState = async (
   host: DoctorHost,
   environment: Readonly<NodeJS.ProcessEnv>,
   home: string,
+  receipt?: InstallReceipt,
 ): Promise<{
   readonly diagnostics: readonly Diagnostic[];
   readonly effective: DoctorDurableStateReport;
   readonly legacy?: DoctorDurableStateReport;
 }> => {
-  const resolved = await resolveInstalledStateRoot(pluginRoot, host, environment, home);
+  const resolved = receipt?.stateRoot ??
+    await resolveInstalledStateRoot(pluginRoot, host, environment, home);
   const effective = await inspectDurableState(resolved.root, resolved.source, host);
   const legacyRoot = join(pluginRoot, 'state');
   if (legacyRoot === resolved.root) {
@@ -1093,7 +1095,7 @@ const cursorInventory = async (
       const stateOnly = await isRuntimeStateRemnant(path);
       const remnant = stateOnly || (remnantReceipt !== undefined && isRemnantReceipt(remnantReceipt));
       if (remnant) {
-        const durableState = await inspectInstalledDurableState(path, 'cursor', environment, home);
+        const durableState = await inspectInstalledDurableState(path, 'cursor', environment, home, remnantReceipt);
         diagnostics.push(...durableState.diagnostics);
         diagnostics.push(await remnantDiagnostic(`Cursor plugin entry ${JSON.stringify(path)}`, path, remnantReceipt));
         findings.push({

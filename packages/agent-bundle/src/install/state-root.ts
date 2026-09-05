@@ -79,10 +79,5 @@ export const resolveInstalledStateRoot = async (
     : { root: declared, source: 'native' as const });
 };
 
-export const installedWebDataRoot = async (pluginRoot: string, home: string): Promise<string> => {
-  const canonicalRoot = await realpath(pluginRoot).catch((error: unknown) => {
-    if (isErrno(error, 'ENOENT')) return resolve(pluginRoot);
-    throw error;
-  });
-  return join(home, '.agent-bundle', 'web-data', pluginStateSegment(canonicalRoot));
-};
+export const installedWebDataRoot = (pluginRoot: string, home: string): string =>
+  join(home, '.agent-bundle', 'web-data', pluginStateSegment(resolve(pluginRoot)));

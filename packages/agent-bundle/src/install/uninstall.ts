@@ -61,7 +61,7 @@ import {
   type InstallRegistration,
   type StoredInstallReceipt,
 } from './receipt.ts';
-import { installedWebDataRoot, resolveInstalledStateRoot } from './state-root.ts';
+import { installedWebDataRoot, type InstalledStateRoot, resolveInstalledStateRoot } from './state-root.ts';
 
 /**
  * `agent-bundle uninstall <host>` (#101): the receipt-owned reverse of
@@ -442,6 +442,8 @@ interface CursorLocalData {
   /** Whether any durable state root exists. */
   readonly present: boolean;
   readonly report: UninstallDataReport;
+  readonly stateRoot: InstalledStateRoot;
+  readonly webDataRoot: string;
 }
 
 const cursorLocalData = async (
@@ -454,8 +456,9 @@ const cursorLocalData = async (
   home: string,
 ): Promise<CursorLocalData> => {
   const stateDirectory = join(destination, 'state');
-  const effectiveState = await resolveInstalledStateRoot(destination, 'cursor', environment, home);
-  const webData = await installedWebDataRoot(destination, home);
+  const effectiveState = receipt?.stateRoot ??
+    await resolveInstalledStateRoot(destination, 'cursor', environment, home);
+  const webData = receipt?.webDataRoot ?? installedWebDataRoot(destination, home);
   const paths: string[] = [];
   const kinds: string[] = [];
   let emptyState: string | undefined;
@@ -514,6 +517,8 @@ const cursorLocalData = async (
         paths: Object.freeze([]),
         policy,
       }),
+      stateRoot: effectiveState,
+      webDataRoot: webData,
     };
   }
   return {
@@ -528,6 +533,8 @@ const cursorLocalData = async (
       paths: Object.freeze(paths),
       policy,
     }),
+    stateRoot: effectiveState,
+    webDataRoot: webData,
   };
 };
 
@@ -688,6 +695,7 @@ const uninstallCursorLocal = async (
       plugin: identity.plugin,
       registrations: [],
       scope: 'user',
+      ...(keepRoot ? { stateRoot: data.stateRoot, webDataRoot: data.webDataRoot } : {}),
       updatedAt: new Date().toISOString(),
       version: ownership.receipt?.version ?? identity.version,
     }));
@@ -1100,7 +1108,12 @@ const publicHostData = async (
   if (entry !== undefined) {
     const legacyStateRoot = join(entry.installPath, 'state');
     const effectiveState = await resolveInstalledStateRoot(entry.installPath, host, environment, home);
-    for (const path of [effectiveState.root, legacyStateRoot, await installedWebDataRoot(entry.installPath, home)]) {
+    const candidates = [
+      effectiveState.root,
+      ...(host === 'codex' && policy === 'keep' ? [] : [legacyStateRoot]),
+      installedWebDataRoot(entry.installPath, home),
+    ];
+    for (const path of candidates) {
       if (!paths.includes(path) && await realDirectory(path, host) !== undefined) paths.push(path);
     }
   }

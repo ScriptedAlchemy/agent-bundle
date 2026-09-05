@@ -236,7 +236,7 @@ registration proof and the rows' `errors` already hold that verdict.
 | `AB7330` | info | The bundle's lifecycle stage on this host and its four observations; unobservable stages (a live session's loaded plugins on every host, Cursor's server-assigned enabled state) are typed `unavailable`, never guessed. |
 | `AB7328` | warning | A store receipt records a registration the host no longer holds (orphaned), or the receipt store cannot be read; `agent-bundle uninstall` consumes an orphaned receipt. |
 | `AB7329` | info | A receipt predates lifecycle receipts and was read with synthesized fields; rerun `install` once to rewrite it as format 2. |
-| `AB7316` | warning | An installed bundle's `state/` directory or one of its `*.sqlite`, `-wal`, or `-shm` files cannot be read with filesystem metadata operations. Doctor inventories state by directory entry and metadata only; it never opens a database. |
+| `AB7316` | warning | An installed bundle's effective or legacy state directory is not writable, or the directory or one of its `*.sqlite`, `-wal`, or `-shm` files cannot be read with filesystem metadata operations. Doctor inventories state by directory entry and metadata only; it never opens a database. |
 | `AB7317` | info | A live event runtime implements the older strict protocol and does not expose runtime identity. |
 | `AB7318` | error | A live event runtime became unavailable, timed out, or returned an invalid status response during the bounded read-only identity probe. |
 | `AB7319` | error | A host tree resolved from `doctor --from` violates its pinned document schemas or process-free loader rules; the message retains the originating build-validator code. |

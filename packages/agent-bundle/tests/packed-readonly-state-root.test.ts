@@ -213,7 +213,6 @@ it('serves a state-writing tool from a read-only installed artifact without writ
     expect(kept.stdout).toContain(`Data (keep): kept`);
     expect(kept.stdout).toContain(stateRoot);
     expect(await exists(stateRoot)).toBe(true);
-    await execFile(process.execPath, [installer], { cwd: artifact, env });
     const purged = await execFile(
       process.execPath,
       [installer, '--uninstall', '--purge-data', '--confirm-purge'],

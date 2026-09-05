@@ -423,6 +423,14 @@ it('purges AGENT_BUNDLE_STATE_ROOT from the installed host manifest', async () =
     const plan = await uninstallBundle({ ...options, confirmPurge: true, plan: true, purgeData: true });
     expect(plan.data.paths).toEqual([declaredStateRoot]);
     expect(plan.removed.directories).toContain(declaredStateRoot);
+    const kept = await uninstallBundle({ ...options, keepData: true });
+    expect(kept).toMatchObject({
+      data: { outcome: 'kept', paths: [declaredStateRoot] },
+      remnantReceipt: join(cursorRoot, 'plugins', 'local', 'uninstall-fixture', installReceiptFile),
+    });
+    expect(await readInstallReceipt(join(cursorRoot, 'plugins', 'local', 'uninstall-fixture')))
+      .toMatchObject({ stateRoot: { root: declaredStateRoot, source: 'native' } });
+    expect(await readFile(join(declaredStateRoot, 'plugin.sqlite'), 'utf8')).toBe('declared\n');
     const purged = await uninstallBundle({ ...options, confirmPurge: true, purgeData: true });
     expect(purged.data).toMatchObject({ outcome: 'purged', paths: [declaredStateRoot] });
     await expect(readdir(declaredStateRoot)).rejects.toMatchObject({ code: 'ENOENT' });
@@ -1227,7 +1235,7 @@ it('purges Claude durable state only when confirmed and reports the host-retaine
   }
 });
 
-it('types the Codex data outcome as unavailable for keep and removed-by-host for purge', async () => {
+it('keeps external Codex state while reporting in-tree state only for purge', async () => {
   const fixture = await createFixture('codex');
   const hostRoot = join(fixture.cleanupRoot, 'codex-root');
   let installed = false;
@@ -1254,9 +1262,19 @@ it('types the Codex data outcome as unavailable for keep and removed-by-host for
     await installBundle(options);
     const installPath = join(hostRoot, 'plugins', 'cache', 'uninstall-fixture-marketplace', 'uninstall-fixture', '1.2.3');
     await cp(fixture.bundleRoot, installPath, { recursive: true });
-    expect((await uninstallBundle({ ...options, plan: true })).data).toMatchObject({ outcome: 'unavailable', policy: 'keep' });
+    const stateRoot = userDataStateRoot(installPath, options.environment, fixture.home);
+    await Promise.all([
+      mkdir(join(installPath, 'state'), { recursive: true }),
+      mkdir(stateRoot, { recursive: true }),
+    ]);
+    expect((await uninstallBundle({ ...options, plan: true })).data).toMatchObject({
+      outcome: 'kept',
+      paths: [stateRoot],
+      policy: 'keep',
+    });
     expect((await uninstallBundle({ ...options, confirmPurge: true, plan: true, purgeData: true })).data).toMatchObject({
-      outcome: 'removed-by-host',
+      outcome: 'purged',
+      paths: [stateRoot, join(installPath, 'state')],
       policy: 'purge',
     });
     const scoped = await failureOf(uninstallBundle({ ...options, scope: 'project' }));

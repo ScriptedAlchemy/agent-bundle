@@ -1334,7 +1334,7 @@ SQLite lock or shared-memory files.
 
 | Code | Severity | Trigger |
 | --- | --- | --- |
-| `AB7316` | warning | An installed bundle's `state/` directory or one of its `*.sqlite`, `-wal`, or `-shm` files cannot be read with filesystem metadata operations. Repair permissions and rerun Doctor; Doctor never repairs state. |
+| `AB7316` | warning | An installed bundle's effective or legacy state directory is not writable, or the directory or one of its `*.sqlite`, `-wal`, or `-shm` files cannot be read with filesystem metadata operations. Repair permissions and rerun Doctor; Doctor never repairs state. |
 
 ## Read-only Doctor operator env inventory (`AB7331`)
 
