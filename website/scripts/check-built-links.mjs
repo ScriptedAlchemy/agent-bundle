@@ -147,12 +147,14 @@ const main = () => {
         if (target === null) continue;
         members += 1;
         const fragment = decode(member[1]);
-        const heading = new RegExp(`<h[1-6]\\b[^>]*\\sid="${fragment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[^>]*>([\\s\\S]*?)</h[1-6]>`).exec(fs.readFileSync(target, 'utf8'));
+        // Colliding ids differ only in case or level (`build()` member vs `build`
+        // property, `FooCode` vs `fooCode`), so the label must equal the member
+        // heading's text exactly, and the heading must be a module member (h3).
+        const heading = new RegExp(`<h([1-6])\\b[^>]*\\sid="${fragment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[^>]*>([\\s\\S]*?)</h[1-6]>`).exec(fs.readFileSync(target, 'utf8'));
         if (heading === null) continue;
-        const headingLabel = visibleText(heading[1]).replace(/^#/, '').trim();
-        if (headingLabel.toLowerCase() !== label.toLowerCase()) {
-          if (!broken.has(href)) broken.set(href, `${href} — labelled "${label}" but #${fragment} is the heading "${headingLabel}" (e.g. in ${pagePath})`);
-        }
+        const headingLabel = visibleText(heading[2]).replace(/^#/, '').replace(/\?$/, '').trim();
+        const reason = heading[1] !== '3' ? `an <h${heading[1]}>, not a module member` : headingLabel !== label ? `the heading "${headingLabel}"` : null;
+        if (reason !== null && !broken.has(href)) broken.set(href, `${href} — labelled "${label}" but #${fragment} is ${reason} (e.g. in ${pagePath})`);
       }
     }
   }
