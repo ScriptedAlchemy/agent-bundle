@@ -2,4 +2,4 @@
 "agent-bundle": patch
 ---
 
-Treat invalid `--port`, `--trials`, `dev --install-host`, and install or uninstall `--mode` and `--scope` values as CLI usage errors that exit with code 2. (#615)
+Make the `agent-bundle` CLI treat invalid `--port`, `--trials`, `dev --install-host`, and install or uninstall `--mode` and `--scope` values as usage errors that exit with code 2. (#615)

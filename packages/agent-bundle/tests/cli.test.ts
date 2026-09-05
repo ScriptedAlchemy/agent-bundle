@@ -1144,7 +1144,7 @@ it('rejects serve-app argv that cannot be served before anything launches', asyn
   expect(launched).toEqual([]);
 });
 
-it('reports invalid option arguments as Commander usage errors', async () => {
+it('reports invalid CLI arguments as Commander usage errors', async () => {
   const cases = [
     {
       args: ['dev', '--port', '70000'],
@@ -1184,4 +1184,11 @@ it('reports invalid option arguments as Commander usage errors', async () => {
     expect(result.stderr).toContain(`error: option '${option}' argument '${value}' is invalid. ${reason}`);
     expect(result.stderr).not.toContain('AB5000');
   }
+
+  const invalidInstallHost = await runSourceCliWithOutput(['install', 'windsurf']);
+  expect(invalidInstallHost.code).toBe(2);
+  expect(invalidInstallHost.stderr).toContain(
+    "error: command-argument value 'windsurf' is invalid for argument 'host'. Install host must be claude, codex, or cursor.",
+  );
+  expect(invalidInstallHost.stderr).not.toContain('AB5000');
 });
