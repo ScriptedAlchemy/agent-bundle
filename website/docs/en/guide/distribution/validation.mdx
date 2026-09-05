@@ -198,9 +198,10 @@ entry is therefore only for what the packed files demonstrably need from outside
 — a package a packed module still imports because the author kept it external through the
 [`tools` hatch](../../reference/configuration.mdx#tools) (possible in the package build's `dist`
 output, which `AB6005` does not walk; a host-pack module with that import fails the build), one a
-prebuilt payload module imports (prebuilt files are opaque to `AB6005` but are scanned for
-`AB7014`), one a consumer-side install script runs, one whose `bin` a packed file executes, or one
-a packed declaration file references — and `AB7014` reports a declared dependency with none of that
+prebuilt `.js`/`.mjs`/`.cjs` payload module imports (prebuilt files are opaque to `AB6005`, and
+`AB7014` scans only those extensions, so an extensionless prebuilt module counts for nothing), one
+a consumer-side install script runs, one whose `bin` a packed file executes, or one a packed
+declaration file references — and `AB7014` reports a declared dependency with none of that
 evidence, while `AB7015` reports one a consumer's npm cannot install.
 
 | Code | Meaning |
