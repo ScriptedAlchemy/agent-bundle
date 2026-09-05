@@ -416,11 +416,15 @@ describe('sqlite driver storage behavior', () => {
       const keeper = new DatabaseSync(file);
       keeper.exec('BEGIN IMMEDIATE');
       try {
-        await expect(createSqliteStateDriver({ busyTimeoutMs: 100, file }).open(counterDefinition())).rejects.toMatchObject({
-          code: 'unavailable',
-          message: expect.stringContaining('storage stayed locked beyond the busy timeout (configure storage)') as string,
-          name: 'AgentStateError',
-        });
+        // Budgets both above and below the retry pause fail closed; the
+        // shorter one proves the pause is clamped rather than outliving it.
+        for (const busyTimeoutMs of [100, 1]) {
+          await expect(createSqliteStateDriver({ busyTimeoutMs, file }).open(counterDefinition())).rejects.toMatchObject({
+            code: 'unavailable',
+            message: expect.stringContaining('storage stayed locked beyond the busy timeout (configure storage)') as string,
+            name: 'AgentStateError',
+          });
+        }
       } finally {
         keeper.close();
       }

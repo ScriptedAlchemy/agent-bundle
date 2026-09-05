@@ -149,10 +149,20 @@ const primaryResultCode = (error: unknown): number | undefined => {
 const isSqliteBusy = (error: unknown): boolean => primaryResultCode(error) === SQLITE_BUSY;
 
 /**
- * Pause between attempts to switch a rollback-mode database into WAL while
- * another process holds its write lock (see `SqliteStore#initialize`).
+ * Longest pause between attempts to switch a rollback-mode database into WAL
+ * while another process holds its write lock (see `SqliteStore#initialize`).
  */
-const WAL_SWITCH_RETRY_DELAY = Duration.millis(5);
+const WAL_SWITCH_RETRY_DELAY_MS = 5;
+
+/**
+ * Retries the WAL switch every {@link WAL_SWITCH_RETRY_DELAY_MS} (or the whole
+ * budget when that is shorter), and only while the next attempt still starts
+ * inside `busyTimeoutMs`: an open never outlives its budget by a pause.
+ */
+const walSwitchRetries = (busyTimeoutMs: number): Schedule.Schedule<number> =>
+  Schedule.spaced(Duration.millis(Math.min(WAL_SWITCH_RETRY_DELAY_MS, busyTimeoutMs))).pipe(
+    Schedule.while(({ duration, elapsed }) => elapsed + Duration.toMillis(duration) <= busyTimeoutMs),
+  );
 
 const mapSqliteError = (
   definitionId: string,
@@ -962,9 +972,7 @@ class SqliteStore<TState, TEvents extends AgentStateEventSchemas> implements Age
           db.exec('PRAGMA journal_mode = WAL');
         }).pipe(
           Effect.retry({
-            schedule: Schedule.spaced(WAL_SWITCH_RETRY_DELAY).pipe(
-              Schedule.upTo({ duration: Duration.millis(busyTimeoutMs) }),
-            ),
+            schedule: walSwitchRetries(busyTimeoutMs),
             while: (error) => isSqliteBusy(error.cause),
           }),
         );
