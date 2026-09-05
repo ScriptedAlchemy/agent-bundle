@@ -59,6 +59,13 @@ call renders through a warm internal Flight dispatcher and lowers the final Agen
 legal MCP output. Flight is an implementation transport inside the generated runtime — never a
 public host wire protocol, and raw Flight bytes never cross the MCP wire.
 
+The lowered value is an `McpCallToolResult` (exported from `@agent-bundle/runtime`, with
+`McpContentBlock` for its content blocks): the MCP SDK's content blocks, with `_meta` and
+`structuredContent` as finite JSON objects. It is assignable to the `CallToolResult` of both
+`@modelcontextprotocol/server` 2.x and `@modelcontextprotocol/sdk` 1.x, so a handler typed
+against either SDK accepts it as is; `attachMcpStructuredContent` returns whatever result type
+it was given.
+
 A route may re-export its component and schemas from another module. This is how one tool is
 placed on two generated servers when only `config` differs between the placements — an MCP App
 `tools/call`, for example, reaches the server that served the widget:

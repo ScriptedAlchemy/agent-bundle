@@ -1,4 +1,4 @@
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult } from '@modelcontextprotocol/server';
 import { Effect, Stream } from 'effect';
 
 import {
@@ -9,7 +9,13 @@ import {
   type AgentRenderEvent,
 } from './agent-document.js';
 import { interruptWhenAborted, runPromise, toRuntimeError } from './effect/boundary.js';
-import { snapshotJsonValue, type JsonObject, type JsonValue } from './lower-mcp.js';
+import {
+  snapshotJsonValue,
+  type JsonObject,
+  type JsonValue,
+  type McpCallToolResult,
+  type McpContentBlock,
+} from './lower-mcp.js';
 
 export const MCP_PROGRESS_MESSAGE_MAX = 200;
 
@@ -67,7 +73,7 @@ export interface ProjectMcpRenderOptions {
 
 export interface McpProjectedToolResult {
   readonly document: AgentDocument;
-  readonly result: CallToolResult;
+  readonly result: McpCallToolResult;
 }
 
 const resolveCapabilities = (
@@ -87,7 +93,7 @@ const gatedBlock = (
   kind: McpRichContentKind,
   summary: string,
   fallback: McpRichContentFallback,
-): CallToolResult['content'][number] => {
+): McpContentBlock => {
   switch (fallback) {
     case 'text':
       return { text: summary, type: 'text' };
@@ -103,8 +109,6 @@ const gatedBlock = (
     }
   }
 };
-
-type McpContentBlock = CallToolResult['content'][number];
 
 const appendNode = (
   node: AgentDocumentNode,
@@ -191,7 +195,7 @@ const resultMetadata = (document: AgentDocument): JsonObject | undefined => {
 export const documentToCallToolResult = (
   document: AgentDocument,
   options: Pick<ProjectMcpRenderOptions, 'capabilities' | 'richContentFallback' | 'structuredContent'> = {},
-): CallToolResult => {
+): McpCallToolResult => {
   const content: McpContentBlock[] = [];
   appendNode(
     document.root,
@@ -209,10 +213,15 @@ export const documentToCallToolResult = (
   };
 };
 
-export const attachMcpStructuredContent = (
-  result: CallToolResult,
+/**
+ * Generic over the result so a caller's own `CallToolResult` — this package's
+ * `McpCallToolResult`, or one typed by either SDK line, every one of which is
+ * assignable to the 2.x `CallToolResult` — comes back as the type it went in.
+ */
+export const attachMcpStructuredContent = <TResult extends CallToolResult>(
+  result: TResult,
   value: unknown,
-): CallToolResult => {
+): TResult => {
   const structured = objectStructuredContent(value);
   if (structured === undefined) return result;
   return { ...result, structuredContent: structured };
