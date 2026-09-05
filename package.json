@@ -16,7 +16,6 @@
     "test:projection": "rstest --config rstest.projection.config.ts",
     "test:integration": "pnpm build && pnpm test:integration:run",
     "test:integration:run": "AGENT_BUNDLE_WORKBENCH_PREBUILT=1 AGENT_BUNDLE_PACKAGE_PREBUILT=1 rstest --config rstest.integration.config.ts",
-    "test:evidence": "pnpm build && AGENT_BUNDLE_WORKBENCH_PREBUILT=1 AGENT_BUNDLE_PACKAGE_PREBUILT=1 rstest --config rstest.evidence.config.ts",
     "test:mcp-conformance": "pnpm build && AGENT_BUNDLE_MCP_CONFORMANCE=1 rstest --config rstest.mcp-conformance.config.ts",
     "test:native-host": "pnpm build && AGENT_BUNDLE_NATIVE_HOST_CONTRACTS=1 rstest --config rstest.native-host.config.ts",
     "test:watch": "rstest --config rstest.config.ts --watch",

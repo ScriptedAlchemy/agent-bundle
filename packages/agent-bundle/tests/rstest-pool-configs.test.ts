@@ -41,7 +41,6 @@ const poolConfigs = [
   'rstest.projection.config.ts',
   'rstest.integration.config.ts',
   'rstest.packed.config.ts',
-  'rstest.evidence.config.ts',
   'rstest.mcp-conformance.config.ts',
   'rstest.native-host.config.ts',
 ] as const;
@@ -87,7 +86,6 @@ interface PoolExpectation {
 
 const expectations: Readonly<Record<PoolConfigName, PoolExpectation>> = {
   'rstest.config.ts': { extraSetupFiles: 0, globalSetup: examplePayloadGlobalSetup, testTimeout: 30_000 },
-  'rstest.evidence.config.ts': { extraSetupFiles: 0, globalSetup: examplePayloadGlobalSetup, testTimeout: 30_000 },
   'rstest.integration.config.ts': { extraSetupFiles: 0, globalSetup: examplePayloadGlobalSetup, testTimeout: 30_000 },
   'rstest.mcp-conformance.config.ts': { extraSetupFiles: 0, globalSetup: workspaceGlobalSetup, testTimeout: 180_000 },
   'rstest.native-host.config.ts': { extraSetupFiles: 0, globalSetup: workspaceGlobalSetup, testTimeout: 60_000 },
@@ -169,8 +167,7 @@ describe('process pools', () => {
     expect(resolved[name].env?.['AGENT_BUNDLE_TEST_TIME_SCALE']).toBe(String(processPoolTimeScale(workers)));
   });
 
-  it('runs the evidence, conformance and native-host journeys on one worker', () => {
-    expect(resolved['rstest.evidence.config.ts'].maxWorkers).toBe(1);
+  it('runs the conformance and native-host journeys on one worker', () => {
     expect(resolved['rstest.mcp-conformance.config.ts'].maxWorkers).toBe(1);
     expect(resolved['rstest.native-host.config.ts'].maxWorkers).toBe(1);
   });

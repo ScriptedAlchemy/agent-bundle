@@ -5,7 +5,6 @@ import {
   integrationTestFiles,
   mcpConformanceTestFiles,
   nativeHostTestFiles,
-  nightlyEvidenceTestFiles,
   packedReleaseOnlyTestFiles,
   packedTestFiles,
   projectionTestFiles,
@@ -32,7 +31,6 @@ export default defineConfig({
     ...integrationTestFiles,
     ...mcpConformanceTestFiles,
     ...nativeHostTestFiles,
-    ...nightlyEvidenceTestFiles,
     // Packs and installs like packedTestFiles, and is release-boundary-only:
     // `test:packed:release` owns it, not the build-free per-PR pool.
     ...packedReleaseOnlyTestFiles,

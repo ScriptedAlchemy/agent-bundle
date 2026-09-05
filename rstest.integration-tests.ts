@@ -116,17 +116,6 @@ export const integrationTestFiles: readonly string[] = [
 ];
 
 /**
- * Evidence-capture harnesses: browser journeys whose product is a
- * documentation artifact (screenshots + evidence.json), not a per-PR
- * behavioral proof. They run through the root `test:evidence` script in CI's
- * nightly schedule — evidence regenerates when the flow changes, not on every
- * PR (#128). The list is empty since the Runtime Playground destination was
- * removed (#600); the redesigned route workspace's evidence journey lands with
- * the unified trace.
- */
-export const nightlyEvidenceTestFiles: readonly string[] = [];
-
-/**
  * Installed-host contract proofs: every test spawns the real `claude` /
  * `codex` CLI and the whole file skips unless
  * AGENT_BUNDLE_NATIVE_HOST_CONTRACTS=1, so no per-PR pool collects it. It
