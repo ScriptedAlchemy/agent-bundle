@@ -159,8 +159,9 @@ Workbench 外壳，因此路由、trace、Problems 与 Advanced 的深度链接�
 - `/api/project/events` 以 `route.invocation` 事件发布已完成的摘要。
 
 该信封在可用时携带规范输入、请求上下文、providers、有序渲染事件、最终的 Agent Document、结构化结果、
-投影、诊断与执行计时。被表示的 `Agent.Error` 仍是一份已渲染结果；格式错误的请求、未知路由、不可用的
-epoch、执行超时与无效响应使用 `AB8231`–`AB8235`。
+投影、诊断与执行计时。被表示的 `Agent.Error` 仍是一份已渲染结果；未知路由或 invocation id（`AB8231`）、
+不可用的 epoch（`AB8232`）、渲染超时或崩溃（`AB8236`）、格式错误的请求（`AB8237`）与未知 fixture id
+（`AB8238`）会作为诊断报告。
 各条触发条件与恢复指引见[诊断参考](../../reference/diagnostics.md)。
 
 ## 以编程方式使用同一个会话
