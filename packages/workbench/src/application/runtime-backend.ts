@@ -173,15 +173,16 @@ const invocationKind = (kind: RouteInvocationKind) => {
 
 /**
  * The runtime backend has no process surface and no MCP projection, so the
- * document's own status is the whole verdict. A summary built without events
- * has no document to judge and carries no outcome rather than an invented one.
+ * document's own status is the whole verdict when present. A succeeded
+ * runtime run without document events is still a completed successful
+ * boundary, so it carries the success outcome required by the wire invariant.
  */
 const outcomeForRun = (
   run: Exclude<DevRuntimeRun, { readonly status: 'running' }>,
   document: RouteInvocation['document'],
 ): RouteInvocationOutcome | undefined => {
-  if (run.status !== 'succeeded' || document === undefined) return undefined;
-  return document.status === 'success'
+  if (run.status !== 'succeeded') return undefined;
+  return document === undefined || document.status === 'success'
     ? Object.freeze({ kind: 'success' })
     : Object.freeze({ kind: 'represented-error', summary: `The document reports status ${document.status}.` });
 };

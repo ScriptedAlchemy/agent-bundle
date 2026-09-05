@@ -9,6 +9,7 @@ import type { AgentDocument, AgentDocumentNode } from '@agent-bundle/runtime';
 
 import { createDefaultRegistry, type TargetRegistry } from '../../adapters/registry.ts';
 import type { TargetHookContract } from '../../adapters/hook-contract.ts';
+import { generatedRouteArtifactEpoch } from '../../build/entry-shell.ts';
 import { projectCliDocumentToMarkdown } from '../../cli-entry.ts';
 import { sleep } from '../../core/async.ts';
 import type { Diagnostic } from '../../core/diagnostics.ts';
@@ -58,6 +59,7 @@ export const ROUTE_INVOCATION_UNKNOWN_FIXTURE_CODE = 'AB8238';
 export const ROUTE_INVOCATION_STALE_REVISION_CODE = 'AB8239';
 export const ROUTE_INVOCATION_CLI_COMMAND_MISMATCH_CODE = 'AB8253';
 export const ROUTE_INVOCATION_PROJECTED_CLI_ID_CODE = 'AB8254';
+export const ROUTE_INVOCATION_EVENT_HOST_REQUIRED_CODE = 'AB8255';
 export const ROUTE_INVOCATION_STALE_REVISION_MESSAGE =
   'The published route manifest changed while this invocation waited to run. Retry against the current revision.';
 
@@ -153,7 +155,7 @@ export interface RouteInvocationChildResult {
     readonly providers: readonly RouteInvocationProvider[];
     readonly timings: readonly RouteInvocationTiming[];
   };
-  readonly renderDurationMs: number;
+  readonly renderDurationMs?: number;
   readonly result?: JsonValue;
   readonly trace?: readonly EventTraceEvent[];
 }
@@ -169,6 +171,7 @@ export class RouteInvocationRequestError extends Error {
   readonly code:
     | typeof ROUTE_INVOCATION_MALFORMED_REQUEST_CODE
     | typeof ROUTE_INVOCATION_CLI_COMMAND_MISMATCH_CODE
+    | typeof ROUTE_INVOCATION_EVENT_HOST_REQUIRED_CODE
     | typeof ROUTE_INVOCATION_PROJECTED_CLI_ID_CODE
     | typeof ROUTE_INVOCATION_UNKNOWN_FIXTURE_CODE
     | typeof ROUTE_INVOCATION_UNKNOWN_ROUTE_CODE
@@ -385,6 +388,13 @@ const resolvedSurface = (
       return surface;
     case 'event':
       if (route.kind !== 'event-route') return malformed();
+      if (route.preflight !== undefined && surface.host === undefined) {
+        throw new RouteInvocationRequestError(
+          ROUTE_INVOCATION_EVENT_HOST_REQUIRED_CODE,
+          `Event route ${JSON.stringify(route.id)} has compiled preflight; select an event host surface with a concrete host.`,
+          400,
+        );
+      }
       return surface;
     case 'script':
       if (route.kind !== 'script') return malformed();
@@ -432,9 +442,13 @@ const contextFor = (
     ? unavailable('host-omitted')
     : { source: 'derived', state: 'available', value: { name: surface.host } },
   invocation: {
-    kind: surface.kind === 'event'
+    kind: route.kind === 'event-route'
       ? 'event'
-      : surface.kind === 'cli' ? 'cli' : surface.kind === 'script' ? 'script' : 'tool',
+      : route.kind === 'cli'
+        ? 'cli'
+        : route.kind === 'script'
+          ? 'script'
+          : 'tool',
     operationId: route.id,
     surface: surface.kind === 'cli'
       ? surface.command
@@ -673,7 +687,7 @@ const invocationTimings = (
   completedAt: Date,
 ): readonly RouteInvocationTiming[] => Object.freeze([
   ...(child.observed?.timings.filter((entry) => isChildObservedTiming(entry.phase)) ?? []),
-  timing('render', startedAt, child.renderDurationMs),
+  ...(child.renderDurationMs === undefined ? [] : [timing('render', startedAt, child.renderDurationMs)]),
   timing('projection', projectionStartedAt, completedAt.getTime() - projectionStartedAt.getTime()),
 ]);
 
@@ -911,7 +925,7 @@ export class RouteInvocationService {
     await Promise.allSettled([...this.#pending]);
   }
 
-  async invoke(request: RouteInvocationRequest): Promise<RouteInvocation> {
+  async invoke(request: RouteInvocationRequest, signal?: AbortSignal): Promise<RouteInvocation> {
     let queued: RouteManifest;
     try {
       queued = this.#manifest.manifest();
@@ -944,6 +958,7 @@ export class RouteInvocationService {
     const id = `inv_${this.#now().getTime().toString(36)}${randomBytes(8).toString('hex')}`;
     const startedAt = this.#now();
     const running = this.#semaphore.run<RouteInvocation>(async () => {
+      signal?.throwIfAborted();
       let release: RouteInvocationPreparedLease['release'] | undefined;
       try {
         let manifest: RouteManifest;
@@ -984,7 +999,10 @@ export class RouteInvocationService {
           ? eventInput(route, rawInput, surface.kind === 'event' ? surface.host : undefined, this.#registry)
           : rawInput;
         const context = contextFor(route, prepared.manifest.projectRoot, surface);
+        signal?.throwIfAborted();
         const controller = new AbortController();
+        const cancel = (): void => controller.abort(signal?.reason);
+        signal?.addEventListener('abort', cancel, { once: true });
         this.#controllers.add(controller);
         if (this.#closed) {
           controller.abort(new DOMException('Route invocation service closed.', 'AbortError'));
@@ -998,7 +1016,7 @@ export class RouteInvocationService {
               ...(prepared.artifact === undefined
                 ? {}
                 : {
-                    artifactEpoch: `${prepared.manifest.plugin.name}@${prepared.manifest.plugin.version}`,
+                    artifactEpoch: generatedRouteArtifactEpoch(prepared.manifest.plugin),
                     artifactRoot: join(prepared.manifest.projectRoot, '.agent-bundle', 'epochs', prepared.artifact.epochId),
                   }),
               context,
@@ -1022,6 +1040,8 @@ export class RouteInvocationService {
             manifest,
             message: controller.signal.reason instanceof DOMException && controller.signal.reason.name === 'TimeoutError'
               ? 'Route invocation child timed out.'
+              : signal?.aborted === true
+                ? 'Route invocation child stopped because the request was cancelled.'
               : controller.signal.aborted
                 ? 'Route invocation child stopped because the service closed.'
               : `${plainScript === undefined ? 'Route invocation child' : 'Script run'} failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -1032,6 +1052,7 @@ export class RouteInvocationService {
           });
         } finally {
           clearTimeout(timeout);
+          signal?.removeEventListener('abort', cancel);
           this.#controllers.delete(controller);
         }
         const projectionStartedAt = this.#now();

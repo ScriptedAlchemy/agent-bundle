@@ -57,6 +57,15 @@ export const lifecycleForLeaf = (lifecycles: readonly Lifecycle[], leaf: Applica
 export const eventHostTarget = (lifecycle: Lifecycle | undefined, host: RouteInvocationEventHost): LifecycleTarget | undefined =>
   lifecycle?.targets.find((target) => target.target === host);
 
+export const defaultEventHostSelection = (
+  leaf: ApplicationLeaf,
+  lifecycle: Lifecycle | undefined,
+): EventHostSelection => {
+  if (leaf.preflight === undefined) return 'canonical';
+  const first = lifecycle?.targets.find((target) => isEventHost(target.target))?.target;
+  return first !== undefined && isEventHost(first) ? first : eventHosts[0]!;
+};
+
 /** One native payload fixture per host the lifecycle catalog serves for this route. */
 export const eventFixturesFor = (lifecycle: Lifecycle | undefined): readonly RouteInputFixture[] => Object.freeze(
   (lifecycle?.targets ?? [])
@@ -236,13 +245,13 @@ export const EventRouteWorkspace = ({ clients, controller, leaf, onNavigate, tab
   const lifecycle = lifecycleState.state === 'ready' ? lifecycleState.lifecycle : undefined;
   const fixtures = useMemo(() => eventFixturesFor(lifecycle), [lifecycle]);
   const invocation = invocationOf(controller.state);
-  const [host, setHost] = useState<EventHostSelection>('canonical');
+  const [host, setHost] = useState<EventHostSelection>(() => defaultEventHostSelection(leaf, lifecycle));
 
   // A loaded host invocation switches the selector to its host so the editor
   // shows the native payload it was actually run with.
   useEffect(() => {
-    if (invocation?.event?.host !== undefined) setHost(invocation.event.host);
-  }, [invocation]);
+    setHost(invocation?.event?.host ?? defaultEventHostSelection(leaf, lifecycle));
+  }, [invocation, leaf, lifecycle]);
 
   const nativeLeaf = useMemo<ApplicationLeaf>(() => {
     const { inputSchema: _schema, ...rest } = leaf;
@@ -257,7 +266,11 @@ export const EventRouteWorkspace = ({ clients, controller, leaf, onNavigate, tab
       return <button
         aria-pressed={host === candidate}
         data-testid={`event-host-${candidate}`}
-        disabled={missing || (candidate !== 'canonical' && lifecycleState.state === 'loading')}
+        disabled={
+          (candidate === 'canonical' && leaf.preflight !== undefined)
+          || missing
+          || (candidate !== 'canonical' && lifecycleState.state === 'loading')
+        }
         key={candidate}
         onClick={() => setHost(candidate)}
         title={missing ? `No ${hostLabels[candidate]} wrapper is generated for this event.` : target === undefined ? undefined : `${target.nativeEvent} · ${target.hostContractRevision}`}

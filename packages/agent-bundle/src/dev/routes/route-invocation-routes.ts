@@ -28,7 +28,7 @@ import {
 
 export interface RouteInvocationRouteService {
   close?(): Promise<void> | void;
-  invoke(request: RouteInvocationRequest): Promise<RouteInvocation>;
+  invoke(request: RouteInvocationRequest, signal?: AbortSignal): Promise<RouteInvocation>;
   list(limit?: number): RouteInvocationListResponse['invocations'];
   read(id: string): RouteInvocation | undefined;
 }
@@ -144,14 +144,33 @@ export class RouteInvocationRoutes {
         },
       });
       let invocation: RouteInvocation;
+      const controller = new AbortController();
+      const abort = (): void => {
+        if (!controller.signal.aborted) {
+          controller.abort(new DOMException('Route invocation request closed.', 'AbortError'));
+        }
+      };
+      const requestClosed = (): void => {
+        if (!request.complete) abort();
+      };
+      const responseClosed = (): void => {
+        if (!response.writableEnded) abort();
+      };
+      request.once('aborted', abort);
+      request.once('close', requestClosed);
+      response.once('close', responseClosed);
       try {
-        invocation = await service.invoke(parseRouteInvocationRequest(body));
+        invocation = await service.invoke(parseRouteInvocationRequest(body), controller.signal);
       } catch (error) {
         const failure = error as Partial<RouteInvocationRequestError>;
         if (typeof failure.code === 'string' && typeof failure.message === 'string' && typeof failure.status === 'number') {
           throw requestError(diagnostic(failure.code, failure.message, failure.status));
         }
         throw error;
+      } finally {
+        request.removeListener('aborted', abort);
+        request.removeListener('close', requestClosed);
+        response.removeListener('close', responseClosed);
       }
       this.#eventHub.publish({
         payload: { invocation: invocationSummary(invocation) },

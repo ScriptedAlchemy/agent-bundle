@@ -27,6 +27,7 @@ export interface ApplicationLeaf {
   readonly inputSchema?: RouteInputSchema;
   readonly key: string;
   readonly label: string;
+  readonly preflight?: string;
   readonly ref: ApplicationNodeRef;
   readonly routeId?: string;
   readonly source?: string;
@@ -171,6 +172,7 @@ const leafForRoute = (
     ...(route.inputSchema === undefined ? {} : { inputSchema: route.inputSchema }),
     key: applicationNodeKey(ref),
     label: routeLabel(ref),
+    ...(route.preflight === undefined ? {} : { preflight: route.preflight }),
     ref,
     routeId: route.id,
     source: route.source,

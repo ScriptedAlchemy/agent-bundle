@@ -98,6 +98,8 @@ An event leaf has fixture choices **Canonical**, **Claude**, **Codex**, and **Cu
 host fixture decodes the native envelope exactly as that host wrapper would, then shows canonical
 input, request context, providers, the returned decision or document, and projected host results.
 Canonical-to-host mapping and native input/output are secondary projection details.
+When the route has compiled preflight, Canonical is disabled and the selector defaults to the
+project's first generated host target; submitting that route without a concrete host is `AB8255`.
 
 Observed event receipts appear in the leaf's **Replay** tab and in Trace. Select a receipt there
 to rerun its epoch-bound input; there is no separate lifecycle destination.
@@ -221,11 +223,12 @@ survives a successful republish; `unit-render` still uses a fresh temporary stat
 The envelope records the resolved `surface` beside `routeId` and carries canonical input, request
 context, providers, ordered render events, the final Agent Document, structured result,
 projections, diagnostics, and execution timings.
-`providers` lists each catalog provider with the outcome the child measured (`mounted`,
-`failed`, or `skipped`) and a `durationMs` only when that duration was measured. When the
-child reports no observations — a plain script, or a failure before any provider ran — every
-catalog provider is `unobserved` and `durationMs` is omitted; `0` is a measured zero, not
-"unknown". `timings` lists only measured phases: `render` (the child's render or script-run
+When the worker reports observations, `providers` contains only providers it selected and reports
+each as `mounted` or `failed`; unselected catalog providers are absent. A `durationMs` appears only
+when measured. When the child reports no observations — a plain script, a preflight short-circuit,
+or a failure before observations began — every catalog provider is `unobserved` and
+`durationMs` is omitted; `0` is a measured zero, not "unknown". `timings` lists only measured
+phases: `render` (the child's render or script-run
 duration), `projection` (host-projection time in the service), and, when observed, `handler`,
 `providers`, and `provider:<name>`. A failed invocation records an `elapsed` timing for the
 wall time until failure and does not invent `failed` provider rows. A represented
@@ -234,8 +237,8 @@ unavailable epochs (`AB8232`), render timeouts or crashes (`AB8236`), malformed 
 (`AB8237`), unknown fixture ids (`AB8238`), a queued invocation whose published revision
 moved before it acquired a slot (`AB8239`), unavailable compiled artifacts (`AB8250`), missing
 compiled route executables (`AB8251`), compiled projection or preflight failures (`AB8252`),
-CLI command/operation mismatches (`AB8253`), and projected duplicate CLI ids (`AB8254`) are
-reported as diagnostics.
+CLI command/operation mismatches (`AB8253`), projected duplicate CLI ids (`AB8254`), and
+preflight routes submitted without a concrete host (`AB8255`) are reported as diagnostics.
 See the [diagnostics reference](../../reference/diagnostics.md) for the individual triggers and
 recovery guidance.
 

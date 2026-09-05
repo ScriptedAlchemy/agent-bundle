@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from '@rstest/core';
 
 import { appResourceUriFor, catalogToolsFor, orderedToolsForApp } from '../src/application/app-route-workspace.tsx';
+import { defaultEventHostSelection } from '../src/application/event-route-workspace.tsx';
 import { ExecutableRouteWorkspace, resultTabFor } from '../src/application/executable-route-workspace.tsx';
 import { idleInvocationState, reduceInvocationState, selectBackend } from '../src/application/invocation-model.ts';
 import { ResultTabs } from '../src/application/result-tabs.tsx';
@@ -210,6 +211,37 @@ describe('RouteWorkspace dispatch', () => {
     expect(markup).toContain('data-testid="result-tab-native"');
     expect(markup).toContain('data-testid="result-tab-canonical"');
     expect(markup).toContain('data-testid="result-tab-replay"');
+  });
+
+  it('disables canonical submission and defaults preflight routes to the first project target', () => {
+    const preflightLeaf = Object.freeze({
+      ...eventLeaf,
+      preflight: 'src/events/tool/before.preflight.ts',
+    });
+    expect(defaultEventHostSelection(preflightLeaf, {
+      diagnostics: [],
+      event: 'tool/before',
+      routeId: preflightLeaf.routeId!,
+      routePath: preflightLeaf.source!,
+      targets: [{
+        hostContractRevision: 'codex-hooks-v1',
+        nativeEvent: 'PreToolUse',
+        target: 'codex',
+      }],
+    })).toBe('codex');
+
+    const markup = renderToStaticMarkup(createElement(RouteWorkspace, {
+      backends: [fakeBackend()],
+      clients: clients(),
+      leaf: preflightLeaf,
+      onNavigate: noop,
+      status,
+      tree,
+    }));
+
+    expect(markup).toContain('data-testid="event-host-canonical" disabled=""');
+    expect(markup).toContain('data-testid="event-host-claude"');
+    expect(markup).toContain('aria-pressed="true" data-testid="event-host-claude" disabled=""');
   });
 
   it('mounts the App preview workspace for an app leaf', () => {

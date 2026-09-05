@@ -428,6 +428,10 @@ export const generatedCliBinEntrySource = (input: GeneratedCliBinEntryOptions): 
     // module-level `process.env` read sees the composed environment. The
     // npm package bin runs from the operator's own shell and reads none.
     ...(stateFallback === 'artifact' ? [operatorEnvLayerImport] : []),
+    "import { realpathSync } from 'node:fs';",
+    ...(stateFallback === 'artifact' || options.web?.pluginRootRelativeUrl !== undefined
+      ? []
+      : ["import { fileURLToPath } from 'node:url';"]),
     `import { mapGeneratedCliInput, parseGeneratedCliArgv, renderedDocumentExitCode, runGeneratedCliProcess } from ${JSON.stringify(cliEntryRuntimeSpecifier)};`,
     ...(options.web === undefined
       ? []
@@ -554,7 +558,7 @@ export const generatedCliBinEntrySource = (input: GeneratedCliBinEntryOptions): 
         '',
       ]
       : []),
-    'if (import.meta.main) {',
+    'if (import.meta.main ?? (realpathSync(process.argv[1]) === fileURLToPath(import.meta.url))) {',
     ...(options.state === undefined ? [] : ['try {']),
     `${options.state === undefined ? '' : '  '}await runGeneratedCliProcess({`,
     '  commands,',
@@ -1110,7 +1114,7 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     "import { parentPort } from 'node:worker_threads';",
     "import { createElement } from 'react';",
     "import { renderAgentFlight } from '@agent-bundle/runtime/flight/server';",
-    "import { resolvePluginRoot, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
+    "import { Agent, resolvePluginRoot, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
     ...pluginRootImports('artifact'),
     ...generatedStateImports(options.state),
     ...noticeInboxImport(wiresInbox),
@@ -1181,12 +1185,17 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     "      terminal: message.terminal ?? unavailable('not-provided'),",
     '      ...(message.workspace === undefined ? {} : { workspace: message.workspace }),',
     '    }, async () => {',
+    '      let validationError;',
     "      const props = message.invocation.kind === 'event'",
     '        ? Object.freeze({ canonical: Object.freeze(message.invocation.props.payload.canonical), native: Object.freeze(message.invocation.props.payload.native), signal: controller.signal })',
-    '        : { input: message.invocation.props.input, signal: controller.signal };',
+    '        : (() => {',
+    '            try { return { input: route.module.inputSchema.parse(message.invocation.props.input), signal: controller.signal }; }',
+    "            catch (error) { validationError = error; return { input: message.invocation.props.input, signal: controller.signal }; }",
+    '          })();',
     "      if (message.observe === true) parentPort.postMessage({ id: message.id, type: 'observed-render-start' });",
     '      const renderStartedAt = performance.now();',
-    '      const flight = renderAgentFlight(composeLayouts(observedRoute, props, controller.signal), { signal: controller.signal });',
+    "      const element = validationError === undefined ? composeLayouts(observedRoute, props, controller.signal) : createElement(Agent.Result, null, createElement(Agent.Error, { code: 'invalid-input' }, `Input validation error: ${validationError instanceof Error ? validationError.message : String(validationError)}`));",
+    '      const flight = renderAgentFlight(element, { signal: controller.signal });',
     '      const renderedBytes = new Uint8Array(await new Response(flight).arrayBuffer());',
     "      if (message.observe === true) parentPort.postMessage({ durationMs: performance.now() - renderStartedAt, id: message.id, type: 'observed-render-finish' });",
     '      return renderedBytes;',

@@ -48,7 +48,10 @@ const manifest: RouteManifest = {
   diagnostics: [{ code: 'AB4801', message: 'Fixture diagnostic.', severity: 'warning' }],
   digest: 'd'.repeat(64),
   events: [
-    route('event:tool/before', 'event-route', 'src/events/tool/before.ts', { event: 'tool/before' }),
+    route('event:tool/before', 'event-route', 'src/events/tool/before.ts', {
+      event: 'tool/before',
+      preflight: 'src/events/tool/before.preflight.ts',
+    }),
   ],
   providers: [],
   scripts: [
@@ -111,6 +114,12 @@ const tree = () => applicationTreeForManifest({
 });
 
 describe('application tree derivation', () => {
+  it('carries compiled event preflight metadata to the workspace leaf', () => {
+    expect(applicationLeafForRouteId(tree(), 'event:tool/before')).toMatchObject({
+      preflight: 'src/events/tool/before.preflight.ts',
+    });
+  });
+
   it('covers every route kind in fixed group and subgroup order', () => {
     const result = tree();
 

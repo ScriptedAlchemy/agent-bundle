@@ -916,19 +916,6 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
         .map((target) => target.name)
         .find((target) => registry.artifactLayout(target).scripts !== undefined);
       const epochId = artifact.activeEpoch.id;
-      let reference;
-      try {
-        reference = await epochStore.acquireEpochReference(epochId);
-      } catch (error) {
-        if (error instanceof EpochStoreError && error.code === 'EPOCH_NOT_FOUND') {
-          throw new RouteInvocationRequestError(
-            ROUTE_INVOCATION_STALE_REVISION_CODE,
-            ROUTE_INVOCATION_STALE_REVISION_MESSAGE,
-            409,
-          );
-        }
-        throw error;
-      }
       const project = Object.freeze({
         ...(scriptTarget === undefined ? {} : { artifact: { epochId, target: scriptTarget } }),
         manifest: testManifestFromRouteGraph({
@@ -954,6 +941,19 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
         stateRoot: devStateRoot(root),
         targets,
       });
+      let reference;
+      try {
+        reference = await epochStore.acquireEpochReference(epochId);
+      } catch (error) {
+        if (error instanceof EpochStoreError && error.code === 'EPOCH_NOT_FOUND') {
+          throw new RouteInvocationRequestError(
+            ROUTE_INVOCATION_STALE_REVISION_CODE,
+            ROUTE_INVOCATION_STALE_REVISION_MESSAGE,
+            409,
+          );
+        }
+        throw error;
+      }
       return {
         project,
         release: () => reference.close(),

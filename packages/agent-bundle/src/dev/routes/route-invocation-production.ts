@@ -18,6 +18,7 @@ import { renderedDocumentExitCode } from '../../cli-entry.ts';
 import type { EventTraceEvent, EventTraceObserver, EventTracer } from '../../events/trace.ts';
 import type { JsonObject, JsonValue } from '../../core/strict-json.ts';
 import { pluginRootEnvAnchor, pluginStateRootEnvAnchor } from '../../core/types.ts';
+import { applyOperatorEnv } from '../../launch-env.ts';
 import type {
   RouteInvocationChildRequest,
   RouteInvocationChildResult,
@@ -261,6 +262,7 @@ const streamFromWorker = (
   invocation: AgentRenderInvocation,
   input: JsonValue,
   signal: AbortSignal,
+  env: NodeJS.ProcessEnv,
   trace?: EventTracer,
 ): Readonly<{
   readonly close: () => Promise<void>;
@@ -271,11 +273,7 @@ const streamFromWorker = (
   };
 }> => {
   const worker = new Worker(pathToFileURL(workerPath), {
-    env: {
-      ...process.env,
-      [pluginRootEnvAnchor]: request.artifactRoot,
-      [pluginStateRootEnvAnchor]: request.stateRoot,
-    },
+    env,
     stderr: true,
     stdout: true,
   });
@@ -437,6 +435,7 @@ const renderCompiled = async (
   request: ProductionRequest,
   input: JsonValue,
   signal: AbortSignal,
+  env: NodeJS.ProcessEnv,
   trace?: EventTracer,
 ): Promise<Readonly<{
   readonly document: AgentDocument;
@@ -451,7 +450,7 @@ const renderCompiled = async (
   const candidates = await candidatesFor(request);
   for (const workerPath of candidates) {
     const startedAt = performance.now();
-    const session = streamFromWorker(workerPath, request, invocation, input, signal, trace);
+    const session = streamFromWorker(workerPath, request, invocation, input, signal, env, trace);
     const events: AgentRenderEvent[] = [];
     try {
       const reader = session.events.getReader();
@@ -493,6 +492,12 @@ export const renderProductionRoute = async (
     );
   }
   const productionRequest = request as ProductionRequest;
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    [pluginRootEnvAnchor]: productionRequest.artifactRoot,
+    [pluginStateRootEnvAnchor]: productionRequest.stateRoot,
+  };
+  applyOperatorEnv({ env, pluginRoot: productionRequest.artifactRoot });
   const traceEvents: EventTraceEvent[] = [];
   const controller = new AbortController();
   let prepared: PreparedInput;
@@ -507,8 +512,6 @@ export const renderProductionRoute = async (
       document: completeDocument(value),
       events: Object.freeze([]),
       input: prepared.input,
-      observed: { providers: Object.freeze([]), timings: Object.freeze([]) },
-      renderDurationMs: 0,
       result: value,
       trace: Object.freeze(traceEvents),
     });
@@ -521,6 +524,7 @@ export const renderProductionRoute = async (
       productionRequest,
       prepared.input,
       controller.signal,
+      env,
       prepared.preflight?.trace,
     );
     const result = rendered.document.value;

@@ -93,9 +93,10 @@ token 会在构建时报告 `AB6028`，并由 Doctor 报告 `AB7320`。
 一个临时构建产物，把持久状态锚定其上会让状态在每次重建时被割裂。若要按字节忠实地演练一次「复制产物后
 启动」，请传入指向产物根目录本身——组合插件根目录，而不是某个宿主子目录——的 `--plugin-root <path>`。
 除非 `AGENT_BUNDLE_STATE_ROOT` 指定了位置，状态根目录随后从展开后的代码根目录推导
-（`~/.agent-bundle/state/<project>-<digest>`）。`agent-bundle dev`、Workbench 的 MCP 会话与 Workbench 路由调用则把
-`AGENT_BUNDLE_STATE_ROOT` 固定为 `<project>/.agent-bundle/state`——每个项目一个状态根，位于构建
-epoch 旁边而非其内部，因此能跨重新发布与 epoch retirement 保留，也不会在每次重建时多出一个用户数据目录。
+（`~/.agent-bundle/state/<project>-<digest>`）。由 `agent-bundle dev` 启动的 Workbench MCP 会话与
+Workbench 路由调用会把 `AGENT_BUNDLE_STATE_ROOT` 固定为 `<project>/.agent-bundle/state`——每个项目
+一个状态根，位于构建 epoch 旁边而非其内部，因此能跨重新发布与 epoch retirement 保留，也不会在每次重建
+时多出一个用户数据目录。warm dev runtime 本身不会设置该变量。
 
 当服务器名是单个安全路径段时，逐服务器状态目录直接使用该名字；其他任何名字都会变成内容寻址的
 `server-<digest>` 段，因此像 `../shared` 这样的名字绝不可能穿出状态根目录。

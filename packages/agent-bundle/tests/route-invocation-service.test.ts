@@ -273,6 +273,86 @@ it('rejects a queued invocation when the published revision moves before the slo
   expect(releases).toBe(2);
 });
 
+it('does not lease or execute an invocation aborted while queued', async () => {
+  const hold = deferred();
+  const firstStarted = deferred();
+  const executed: RouteInvocationChildRequest[] = [];
+  let leases = 0;
+  const service = new RouteInvocationService({
+    concurrency: 1,
+    manifest: { manifest: () => catalog('digest', 'revision') },
+    prepared: async () => {
+      leases += 1;
+      return {
+        project: {
+          manifest: { plugin: { name: 'fixture', version: '1.0.0' }, projectRoot: '/project' } as never,
+          stateRoot: '/project/.agent-bundle/state',
+          targets: ['claude'],
+        },
+        release: () => undefined,
+      };
+    },
+    renderChild: async (request) => {
+      executed.push(request);
+      firstStarted.resolve();
+      await hold.promise;
+      return childResult(request);
+    },
+  });
+
+  const first = service.invoke({ input: { n: 1 }, routeId: echoRoute.id });
+  await firstStarted.promise;
+  const controller = new AbortController();
+  const queued = service.invoke({ input: { n: 2 }, routeId: echoRoute.id }, controller.signal);
+  controller.abort(new DOMException('Request closed.', 'AbortError'));
+  hold.resolve();
+
+  await expect(first).resolves.toMatchObject({ status: 'succeeded' });
+  await expect(queued).rejects.toMatchObject({ name: 'AbortError' });
+  expect(executed).toHaveLength(1);
+  expect(leases).toBe(1);
+});
+
+it('rejects a canonical event surface when the compiled route has preflight', async () => {
+  const route = {
+    config: [],
+    event: 'tool/before',
+    id: 'event:tool/before',
+    kind: 'event-route',
+    preflight: 'src/events/tool/before.preflight.ts',
+    provenance: { kind: 'conventional' },
+    source: 'src/events/tool/before.tsx',
+  } as const;
+  let leases = 0;
+  const service = new RouteInvocationService({
+    manifest: {
+      manifest: () => ({
+        diagnostics: [],
+        digest: 'digest',
+        events: [route],
+        providers: [],
+        scripts: [],
+        servers: [],
+        sourceRevision: 'revision',
+      }),
+    },
+    prepared: async () => {
+      leases += 1;
+      throw new Error('canonical preflight submission must fail before leasing');
+    },
+  });
+
+  await expect(service.invoke({
+    input: {},
+    routeId: route.id,
+    surface: { kind: 'event' },
+  })).rejects.toMatchObject({
+    code: 'AB8255',
+    status: 400,
+  });
+  expect(leases).toBe(0);
+});
+
 interface RouteProject {
   readonly root: string;
   readonly service: (options?: Readonly<{ timeoutMs?: number }>) => RouteInvocationService;
@@ -550,6 +630,61 @@ it('marks catalog providers unobserved when the child reports no observations', 
   expect(result.providers[0]).not.toHaveProperty('durationMs');
   expect(result.timings.map((entry) => entry.phase)).toEqual(['render', 'projection']);
   expect(result.timings[0]).toMatchObject({ durationMs: 12, phase: 'render' });
+});
+
+it('omits render timing when the child did not render', async () => {
+  const result = await telemetryService(async () => {
+    const { renderDurationMs: _renderDurationMs, ...withoutRender } = succeededChild();
+    return withoutRender;
+  }).invoke({
+    input: {},
+    routeId: echoRoute.id,
+  });
+
+  expect(result.providers).toEqual([{ id: 'provider:clock', name: 'clock', status: 'unobserved' }]);
+  expect(result.timings.map((entry) => entry.phase)).toEqual(['projection']);
+});
+
+it('reports an event route kind for unit-render provenance', async () => {
+  const route = {
+    config: [],
+    event: 'tool/after',
+    id: 'event:tool/after',
+    kind: 'event-route',
+    provenance: { kind: 'conventional' },
+    source: 'src/events/tool/after.tsx',
+  } as const;
+  const service = new RouteInvocationService({
+    manifest: {
+      manifest: () => ({
+        diagnostics: [],
+        digest: 'digest',
+        events: [route],
+        providers: [],
+        scripts: [],
+        servers: [],
+        sourceRevision: 'revision',
+      }),
+    },
+    prepared: () => preparedLease({
+      manifest: { plugin: { name: 'fixture', version: '1.0.0' }, projectRoot: '/project' } as never,
+      stateRoot: '/project/.agent-bundle/state',
+      targets: ['claude'],
+    }),
+    renderChild: async (request) => childResult(request),
+  });
+
+  const result = await service.invoke({
+    input: {},
+    routeId: route.id,
+    surface: { kind: 'unit-render' },
+  });
+
+  expect(result.context.invocation).toMatchObject({
+    kind: 'event',
+    operationId: route.id,
+    surface: 'unit-render',
+  });
 });
 
 it('forwards observed providers and timings without fabricating the rest', async () => {

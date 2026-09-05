@@ -655,6 +655,140 @@ it('invokes compiled tool and event routes through the foreground server', { tim
   }
 });
 
+it('enforces compiled preflight, MCP schemas, and operator env across production surfaces', { timeout: 60_000 }, async () => {
+  const project = await createProjectFixture({
+    config: "export default { plugin: { name: 'route-parity', version: '1.0.0' }, targets: ['claude'] };\n",
+    files: {
+      'package.json': '{"dependencies":{"@agent-bundle/runtime":"workspace:*","react":"19.2.8","zod":"4.5.4"},"type":"module"}\n',
+      'src/events/tool/before.preflight.ts': "export default () => ({ outcome: 'deny', reason: 'blocked' });\n",
+      'src/events/tool/before.tsx': [
+        "export { default as preflight } from './before.preflight.js';",
+        "export const config = { runtime: 'standalone' };",
+        "export default async function BeforeTool() { throw new Error('preflight handler ran'); }",
+        '',
+      ].join('\n'),
+      'src/mcp/status/tools/report.cli.ts': [
+        "export const config = { command: ['report'], confirm: false, flags: { service: { name: 'service' } } };",
+        '',
+      ].join('\n'),
+      'src/mcp/status/tools/report.tsx': [
+        "import { writeFileSync } from 'node:fs';",
+        "import { Agent } from '@agent-bundle/runtime';",
+        "import { createElement } from 'react';",
+        "import { z } from 'zod';",
+        '',
+        "export const inputSchema = z.object({ service: z.string().min(1) }).strict();",
+        "export const resultSchema = z.object({ operator: z.string(), service: z.string() }).strict();",
+        '',
+        'export default async function Report({ input }) {',
+        "  writeFileSync('handler-ran', 'yes');",
+        "  return createElement(Agent.Result, { value: { operator: process.env.OPERATOR_VALUE ?? 'missing', service: input.service } });",
+        '}',
+        '',
+      ].join('\n'),
+    },
+    prefix: 'agent-bundle-route-parity-',
+  });
+  const assetsRoot = join(project.root, 'workbench');
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  await mkdir(assetsRoot, { recursive: true });
+  await Promise.all([
+    symlink(agentBundleNodeModules, join(project.root, 'node_modules'), 'dir'),
+    writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Route parity</title>'),
+  ]);
+  try {
+    server = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: assetsRoot }),
+      open: false,
+      port: 0,
+      root: project.root,
+    });
+    const bootstrap = await fetch(`${server.url}/api/project/session`, {
+      headers: { 'sec-fetch-site': 'same-origin' },
+    });
+    const session = await bootstrap.json() as { readonly token: string };
+    const headers = {
+      'content-type': 'application/json',
+      origin: server.url,
+      'x-agent-bundle-session': session.token,
+    };
+    await expect.poll(
+      async () => fetch(`${server!.url}/api/routes/manifest`, { headers }).then((response) => response.status),
+      { timeout: 10_000 },
+    ).toBe(200);
+    const artifact = server.status().artifact;
+    if (artifact.state !== 'active') throw new Error('Expected an active compiled epoch.');
+    await writeFile(join(project.root, '.agent-bundle', 'epochs', artifact.activeEpoch.id, '.env'), 'OPERATOR_VALUE=layered\n');
+
+    const invalidResponse = await fetch(`${server.url}/api/routes/invocations`, {
+      body: JSON.stringify({ input: { service: 1 }, routeId: 'tool:status/report' }),
+      headers,
+      method: 'POST',
+    });
+    expect(invalidResponse.status).toBe(200);
+    const invalid = await invalidResponse.json() as RouteInvocationResponse;
+    expect(invalid.invocation.status, JSON.stringify(invalid.invocation.diagnostics)).toBe('succeeded');
+    expect(invalid.invocation).toMatchObject({
+      document: { status: 'represented-error' },
+      outcome: { kind: 'represented-error', summary: expect.stringContaining('Input validation error') },
+      projection: { mcp: { isError: true } },
+      status: 'succeeded',
+    });
+    expect(await readdir(project.root)).not.toContain('handler-ran');
+
+    const invoke = async (surface: { readonly args: readonly string[]; readonly command: string; readonly kind: 'cli' } | { readonly kind: 'mcp' }) => {
+      const response = await fetch(`${server!.url}/api/routes/invocations`, {
+        body: JSON.stringify({
+          ...(surface.kind === 'mcp' ? { input: { service: 'mcp' } } : {}),
+          routeId: 'tool:status/report',
+          surface,
+        }),
+        headers,
+        method: 'POST',
+      });
+      expect(response.status).toBe(200);
+      return (await response.json() as RouteInvocationResponse).invocation;
+    };
+    const mcp = await invoke({ kind: 'mcp' });
+    const cli = await invoke({ args: ['--service', 'cli'], command: 'report', kind: 'cli' });
+    expect(mcp.result).toEqual({ operator: 'layered', service: 'mcp' });
+    expect(cli.result).toEqual({ operator: 'layered', service: 'cli' });
+
+    const canonical = await fetch(`${server.url}/api/routes/invocations`, {
+      body: JSON.stringify({ input: {}, routeId: 'event:tool/before', surface: { kind: 'event' } }),
+      headers,
+      method: 'POST',
+    });
+    expect(canonical.status).toBe(400);
+    await expect(canonical.json()).resolves.toMatchObject({ diagnostic: { code: 'AB8255' } });
+
+    const deniedResponse = await fetch(`${server.url}/api/routes/invocations`, {
+      body: JSON.stringify({
+        input: {
+          cwd: project.root,
+          hook_event_name: 'PreToolUse',
+          permission_mode: 'default',
+          session_id: 'session-deny',
+          tool_input: {},
+          tool_name: 'Write',
+          tool_use_id: 'use-deny',
+          transcript_path: join(project.root, 'transcript.json'),
+        },
+        routeId: 'event:tool/before',
+        surface: { host: 'claude', kind: 'event' },
+      }),
+      headers,
+      method: 'POST',
+    });
+    const denied = await deniedResponse.json() as RouteInvocationResponse;
+    expect(denied.invocation.timings.map((entry) => entry.phase)).toEqual(['projection']);
+    expect(denied.invocation.providers).toEqual([]);
+  } finally {
+    await server?.close().catch(() => undefined);
+    await rm(project.root, { force: true, maxRetries: 5, recursive: true, retryDelay: 50 });
+  }
+});
+
 it('publishes invocation routes only after a successful initial or recovered build', { timeout: 90_000 }, async () => {
   const project = await createProjectFixture({
     config: [

@@ -75,6 +75,8 @@ export interface RouteManifestRoute {
   /** Bounded JSON Schema projection; absent when the route schema is richer than the static grammar. */
   readonly inputSchema?: RouteInputSchema;
   readonly kind: RouteManifestKind;
+  /** Project-relative compiled preflight module; event routes only. */
+  readonly preflight?: string;
   readonly provenance: RouteManifestProvenance;
   /** The owning MCP server id (`mcp:<name>`); MCP route kinds only. */
   readonly serverId?: string;
@@ -220,6 +222,7 @@ const manifestRoute = (route: CompiledAgentRoute): RouteManifestRoute => {
     id: route.id,
     ...(route.inputSchema === undefined ? {} : { inputSchema: route.inputSchema }),
     kind: route.kind,
+    ...(route.preflight === undefined ? {} : { preflight: route.preflight.provenance.relativePath }),
     provenance: { kind: route.provenance.kind },
     ...(route.serverId === undefined ? {} : { serverId: route.serverId }),
     source: route.provenance.relativePath,
