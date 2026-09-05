@@ -1,15 +1,18 @@
 import { expect, it } from '@rstest/core';
 
 import {
+  canonicalRowsFor,
   lifecycleOptionKeyFor,
   lifecycleOptionsFor,
   lifecycleReplaySourceFor,
-  lifecyclesViewFor,
+  lineageChainFor,
+  payloadRowsFor,
+  requestRowsFor,
+  resultDiagnosticsFor,
 } from '../src/lifecycles/lifecycles-model.ts';
 import type {
   LifecycleListResponse,
   LifecycleReplay,
-  LifecycleReplayResult,
 } from '../src/lifecycles/lifecycle-client.ts';
 
 const document = {
@@ -117,18 +120,8 @@ it('downgrades edited fixture input to observed provenance', () => {
   expect(lifecycleReplaySourceFor('observed', true)).toBe('observed');
 });
 
-it('derives one correlated replay view with identity, context, and diagnostics', () => {
-  const view = lifecyclesViewFor({
-    list: listing,
-    listState: 'ready',
-    result: { replay },
-    selectedKey: 'claude/event:tool/after',
-  });
-
-  expect(view.state).toBe('replayed');
-  expect(view.selected?.nativeEvent).toBe('PostToolUse');
-  expect(view.replay).toEqual(replay);
-  expect(view.canonicalRows).toEqual([
+it('derives correlated replay identity, payload, context, lineage, and diagnostics', () => {
+  expect(canonicalRowsFor(replay)).toEqual([
     { label: 'Canonical event', value: 'tool/after' },
     { label: 'Idempotency key', value: 'receipt-a' },
     { label: 'Observed at', value: '2026-09-01T12:00:00.000Z' },
@@ -137,11 +130,10 @@ it('derives one correlated replay view with identity, context, and diagnostics',
     { label: 'Native event', value: 'PostToolUse' },
     { label: 'Host contract revision', value: 'claude-hooks@1' },
   ]);
-  // The canonical payload shows each mapped field beside the host key it came from (#466).
-  expect(view.payloadRows).toEqual([
+  expect(payloadRowsFor(replay)).toEqual([
     { label: 'toolName', value: 'Write · tool_name' },
   ]);
-  expect(view.requestRows).toEqual([
+  expect(requestRowsFor(replay)).toEqual([
     { label: 'Invocation kind', value: 'event' },
     { label: 'Operation ID', value: 'event:tool/after' },
     { label: 'Surface', value: 'tool/after' },
@@ -152,74 +144,11 @@ it('derives one correlated replay view with identity, context, and diagnostics',
     { label: 'Workspace', value: '/workspace · receipt' },
     { label: 'Lineage', value: 'session-1 · depth 0 · native · receipt' },
   ]);
-  expect(view.resultDiagnostics).toEqual([
+  expect(resultDiagnosticsFor(replay)).toEqual([
     { code: 'projection.partial', message: 'Optional host field was omitted.', source: 'projection' },
     { code: 'render.partial', message: 'One boundary failed.', source: 'render stream' },
   ]);
-  expect(view.listDiagnostics).toEqual(listing.lifecycles[0]!.diagnostics);
-  expect(Object.isFrozen(view)).toBe(true);
-});
-
-it('keeps an unsupported replay result distinct from list diagnostics', () => {
-  const result: LifecycleReplayResult = {
-    diagnostics: [{
-      code: 'lifecycle.target.unsupported',
-      event: 'tool/after',
-      message: 'Portable cannot project tool/after.',
-      severity: 'error',
-      target: 'portable',
-    }],
-  };
-  const view = lifecyclesViewFor({ list: listing, listState: 'ready', result, selectedKey: undefined });
-
-  expect(view.state).toBe('diagnostics');
-  expect(view.replay).toBeUndefined();
-  expect(view.replayDiagnostics).toEqual(result.diagnostics);
-});
-
-it('does not silently rebind an explicit selection missing from a refreshed manifest', () => {
-  const view = lifecyclesViewFor({
-    list: listing,
-    listState: 'ready',
-    result: undefined,
-    selectedKey: 'claude/event:removed',
-  });
-
-  expect(view.selected).toBeUndefined();
-  expect(view.state).toBe('ready');
-});
-
-it('distinguishes loading, list failure, empty, ready, and replayed states', () => {
-  expect(lifecyclesViewFor({ list: undefined, listState: 'loading', result: undefined, selectedKey: undefined }).state).toBe('loading');
-  expect(lifecyclesViewFor({ list: undefined, listState: 'error', result: undefined, selectedKey: undefined }).state).toBe('list-error');
-  expect(lifecyclesViewFor({
-    list: { lifecycles: [], manifestDigest: 'manifest-a' },
-    listState: 'ready',
-    result: undefined,
-    selectedKey: undefined,
-  }).state).toBe('empty');
-  expect(lifecyclesViewFor({ list: listing, listState: 'ready', result: undefined, selectedKey: undefined }).state).toBe('ready');
-  expect(lifecyclesViewFor({ list: listing, listState: 'ready', result: { replay }, selectedKey: undefined }).state).toBe('replayed');
-});
-
-it('returns detached frozen data and rejects response accessors without invoking them', () => {
-  const mutable = structuredClone(listing) as LifecycleListResponse;
-  const view = lifecyclesViewFor({ list: mutable, listState: 'ready', result: { replay }, selectedKey: undefined });
-  (mutable.lifecycles[0]!.targets[0]!.fixture!.native as Record<string, unknown>).cwd = '/changed';
-
-  expect(view.selected?.fixture?.native).toEqual({ cwd: '/workspace', hook_event_name: 'PostToolUse' });
-  expect(Object.isFrozen(view.selected?.fixture?.native)).toBe(true);
-  expect(view.replay).not.toBe(replay);
-
-  let reads = 0;
-  const hostile = { ...listing } as LifecycleListResponse;
-  Object.defineProperty(hostile, 'manifestDigest', {
-    enumerable: true,
-    get: () => {
-      reads += 1;
-      return 'manifest-a';
-    },
-  });
-  expect(() => lifecyclesViewFor({ list: hostile, listState: 'ready', result: undefined, selectedKey: undefined })).toThrow('accessors');
-  expect(reads).toBe(0);
+  expect(lineageChainFor(replay)).toEqual([
+    { id: 'session-1', role: 'current' },
+  ]);
 });

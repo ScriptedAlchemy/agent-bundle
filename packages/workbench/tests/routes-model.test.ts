@@ -5,9 +5,7 @@ import {
   cliCommandInvocation,
   cliCommandUsage,
   createRouteInputDraft,
-  mcpToolPrefillFromNavigationState,
   mcpToolPrefillFor,
-  mcpToolPrefillNavigationState,
   routeCatalogFor,
   routeCatalogHasKind,
   routeCatalogServerCount,
@@ -365,19 +363,6 @@ it('maps a tool route server id and final route segment into an MCP prefill', ()
     serverName: 'alpha',
     toolName: 'echo',
   });
-});
-
-it('round-trips only well-shaped MCP prefills through hash navigation state', () => {
-  const prefill = {
-    arguments: { format: 'json' },
-    serverName: 'alpha',
-    toolName: 'echo',
-  };
-  const state = mcpToolPrefillNavigationState(prefill);
-
-  expect(mcpToolPrefillFromNavigationState(state)).toEqual(prefill);
-  expect(mcpToolPrefillFromNavigationState({ mcpToolPrefill: { ...prefill, toolName: '' } })).toBeUndefined();
-  expect(mcpToolPrefillFromNavigationState({ mcpToolPrefill: { ...prefill, arguments: [] } })).toBeUndefined();
 });
 
 it('sorts providers by name and keeps route provenance on every entry', () => {

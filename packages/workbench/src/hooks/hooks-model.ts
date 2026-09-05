@@ -1,22 +1,19 @@
 import type {
   HookPlaygroundBinding,
   HookPlaygroundCanonicalIntent,
-  HookPlaygroundDiagnostic,
   HookPlaygroundDiagnosticResult,
   HookPlaygroundHook,
   HookPlaygroundHostMapping,
-  HookPlaygroundReplay,
   HookPlaygroundSimulation,
 } from '../../../agent-bundle/src/contracts/hooks.ts';
-import { deeplyFrozenHookValue } from './hook-client.ts';
+import type { JsonObject } from '../../../agent-bundle/src/contracts/runtime.ts';
 import { deepFreeze } from '../freeze.ts';
-
 
 export type HookPlaygroundResult = HookPlaygroundDiagnosticResult | HookPlaygroundSimulation | undefined;
 
-export type HookListState = 'error' | 'loading' | 'ready';
+export type CanonicalHookEvent = HookPlaygroundHook['hook']['event'];
 
-export type HookPlaygroundState = 'diagnostics' | 'empty' | 'list-error' | 'loading' | 'no-epoch' | 'ready' | 'simulated';
+export type CanonicalHookInput = JsonObject;
 
 export interface HookDetailRow {
   readonly label: string;
@@ -32,39 +29,52 @@ export interface HookOption {
   readonly timeout?: number;
 }
 
-export interface HookPlaygroundViewOptions {
-  readonly epochId: string | undefined;
-  readonly hooks: readonly HookPlaygroundHook[];
-  readonly listState?: HookListState;
-  readonly result: HookPlaygroundResult;
-  readonly selectedKey: string | undefined;
-}
-
-export interface HookPlaygroundView {
-  readonly canonicalInput: Readonly<Record<string, unknown>> | undefined;
-  readonly canonicalResult: Readonly<Record<string, unknown>> | undefined;
-  readonly diagnostics: readonly HookPlaygroundDiagnostic[];
-  readonly hooks: readonly HookOption[];
-  readonly intent: readonly HookDetailRow[];
-  readonly mapping: readonly HookDetailRow[];
-  readonly nativeInput: Readonly<Record<string, unknown>> | undefined;
-  readonly nativeOutput: Readonly<Record<string, unknown>> | undefined;
-  readonly replay: HookPlaygroundReplay | undefined;
-  readonly selected: HookOption | undefined;
-  readonly state: HookPlaygroundState;
-  readonly summary: string;
-}
-
-const noRows: readonly HookDetailRow[] = Object.freeze([]);
-
-const noDiagnostics: readonly HookPlaygroundDiagnostic[] = Object.freeze([]);
-
 const row = (label: string, value: string): HookDetailRow => Object.freeze({ label, value });
 
 const readableHookLabel = (value: string): string => {
   const words = value.replace(/([a-z\d])([A-Z])/gu, '$1 $2').replace(/[-_]+/gu, ' ').trim();
   return `${words.charAt(0).toUpperCase()}${words.slice(1).toLowerCase()}`;
 };
+
+const canonicalHookInputs: Readonly<Record<CanonicalHookEvent, CanonicalHookInput>> = deepFreeze({
+  afterTool: {
+    cwd: '/workspace',
+    sessionId: 'workbench-preview',
+    toolInput: Object.freeze({}),
+    toolName: 'shell',
+    toolResponse: Object.freeze({}),
+    toolUseId: 'workbench-preview-tool',
+    transcriptPath: '/workspace/transcript.json',
+  },
+  beforeTool: {
+    cwd: '/workspace',
+    sessionId: 'workbench-preview',
+    toolInput: Object.freeze({}),
+    toolName: 'shell',
+    toolUseId: 'workbench-preview-tool',
+    transcriptPath: '/workspace/transcript.json',
+  },
+  sessionStart: {
+    cwd: '/workspace',
+    sessionId: 'workbench-preview',
+    source: 'workbench',
+    transcriptPath: '/workspace/transcript.json',
+  },
+  stop: {
+    cwd: '/workspace',
+    lastAssistantMessage: 'Workbench preview completed.',
+    sessionId: 'workbench-preview',
+    stopHookActive: false,
+    transcriptPath: '/workspace/transcript.json',
+  },
+});
+
+/** Provides one event-shaped document that can run a generated Hook without host-contract guesswork. */
+export const canonicalHookInput = (event: CanonicalHookEvent): CanonicalHookInput => canonicalHookInputs[event];
+
+/** Returns a runnable example only for the canonical Hook events understood by the Workbench. */
+export const canonicalHookInputFor = (event: string): CanonicalHookInput | undefined =>
+  Object.hasOwn(canonicalHookInputs, event) ? canonicalHookInputs[event as CanonicalHookEvent] : undefined;
 
 export const hookOptionKeyFor = (binding: HookPlaygroundBinding): string => `${binding.target}/${binding.hook}`;
 
@@ -95,46 +105,3 @@ export const hostMappingRowsFor = (mapping: HookPlaygroundHostMapping): readonly
   row('Wrapper path', mapping.wrapperPath),
   row('Native projection', mapping.nativeProjection),
 ]);
-
-const summaryFor = (state: HookPlaygroundState, simulation: HookPlaygroundSimulation | undefined): string => {
-  if (state === 'no-epoch') return 'No successful build is available, so no generated Hook can be simulated.';
-  if (state === 'loading') return 'Loading generated Hooks from the current build.';
-  if (state === 'list-error') return 'Generated Hooks could not be loaded from the current build.';
-  if (state === 'empty') return 'The current build has no generated Hooks.';
-  if (state === 'diagnostics') return 'The hook playground returned diagnostics instead of a simulation.';
-  if (state === 'simulated' && simulation !== undefined) {
-    return `Simulated ${simulation.canonicalIntent.hook} on ${simulation.binding.target} from the selected build.`;
-  }
-  return 'Select a generated hook and run a simulation to see its canonical and native trace.';
-};
-
-/** Derives every Hook page section from the listed hooks and the latest simulation or diagnostics. */
-export const hookPlaygroundViewFor = (options: HookPlaygroundViewOptions): HookPlaygroundView => {
-  const detached = deeplyFrozenHookValue(options) as HookPlaygroundViewOptions;
-  const hooks = hookOptionsFor(detached.hooks);
-  const result = detached.result;
-  const simulation = result === undefined || 'diagnostics' in result ? undefined : result;
-  const diagnostics = result !== undefined && 'diagnostics' in result ? result.diagnostics : noDiagnostics;
-  const listState = detached.listState ?? 'ready';
-  const state: HookPlaygroundState = detached.epochId === undefined ? 'no-epoch'
-    : listState === 'loading' ? 'loading'
-      : listState === 'error' ? 'list-error'
-        : hooks.length === 0 ? 'empty'
-          : simulation !== undefined ? 'simulated'
-            : diagnostics.length > 0 ? 'diagnostics'
-              : 'ready';
-  return Object.freeze({
-    canonicalInput: simulation?.canonicalIntent.input,
-    canonicalResult: simulation?.canonicalResult,
-    diagnostics,
-    hooks,
-    intent: simulation === undefined ? noRows : canonicalIntentRowsFor(simulation.canonicalIntent),
-    mapping: simulation === undefined ? noRows : hostMappingRowsFor(simulation.hostMapping),
-    nativeInput: simulation?.nativeInput,
-    nativeOutput: simulation?.nativeOutput,
-    replay: simulation?.replay,
-    selected: hooks.find((option) => option.key === detached.selectedKey) ?? hooks[0],
-    state,
-    summary: summaryFor(state, simulation),
-  });
-};

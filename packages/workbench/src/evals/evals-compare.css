@@ -1,5 +1,4 @@
-.comparisons-content { box-sizing: border-box; margin: 0 auto; max-width: 1180px; min-width: 0; padding: 35px 34px 64px; width: 100%; }
-.comparisons-page-heading p { color: #596372; font-size: 15px; margin: 8px 0 0; }
+.comparisons-content { box-sizing: border-box; min-width: 0; width: 100%; }
 .comparison-controls { border-top: 1px solid #d9dee7; display: grid; gap: 8px; justify-items: start; padding-top: 24px; }
 .comparison-controls label { color: #596372; font-size: 12px; font-weight: 750; letter-spacing: .03em; margin-top: 12px; text-transform: uppercase; }
 .comparison-controls select { background: #fff; border: 1px solid #bfc8d5; border-radius: 4px; color: #1e2938; font-size: 14px; font-weight: 600; max-width: 100%; min-height: 37px; padding: 0 32px 0 10px; }
@@ -36,7 +35,3 @@
 .comparison-evidence--smoke { color: #96660a; }
 .comparison-not-comparable { color: #4f5866; font-size: 12px; font-weight: 750; letter-spacing: .03em; margin: 0 0 8px; text-transform: uppercase; }
 
-@media (max-width: 820px) {
-  .comparisons-content { padding: 27px 20px 45px; }
-  .comparison-controls select { width: 100%; }
-}

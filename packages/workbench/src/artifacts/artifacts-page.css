@@ -26,6 +26,8 @@
 .artifact-table th, .artifact-table td { border-bottom: 1px solid #e4e8ef; padding: 8px 14px 8px 12px; text-align: left; vertical-align: top; white-space: nowrap; }
 .artifact-table thead th { color: #596372; font-size: 12px; font-weight: 750; letter-spacing: .03em; text-transform: uppercase; }
 .artifact-table tbody th { font-weight: 600; }
+.artifact-table button { background: #fff; border: 1px solid #8794a6; border-radius: 4px; color: #23466f; cursor: pointer; font-size: 12px; font-weight: 750; min-height: 28px; padding: 0 10px; }
+.artifact-file-details { background: #f7f9fc; }
 .artifact-digest { color: #5c6676; font: 12px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", monospace; overflow-wrap: anywhere; }
 .artifact-source-inputs { list-style: none; margin: 0; padding: 0; }
 .artifact-source-inputs li { margin: 0 0 4px; }

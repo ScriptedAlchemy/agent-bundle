@@ -1,15 +1,10 @@
-import { deeplyFrozenHookValue } from '../hooks/hook-client.ts';
 import type { RequestProvenanceAxis } from '../../../agent-bundle/src/contracts/request-provenance.ts';
 import type {
-  LifecycleDiagnostic,
   LifecycleListResponse,
   LifecycleReplay,
-  LifecycleReplayResult,
   LifecycleReplaySource,
 } from './lifecycle-client.ts';
 
-export type LifecycleListState = 'error' | 'loading' | 'ready';
-export type LifecyclesViewState = 'diagnostics' | 'empty' | 'list-error' | 'loading' | 'ready' | 'replayed';
 export type LifecycleSourceMode = 'fixture' | 'observed';
 
 export interface LifecycleDetailRow {
@@ -40,31 +35,6 @@ export interface LifecycleOption {
   readonly nativeEvent: string;
   readonly routePath: string;
 }
-
-export interface LifecyclesViewOptions {
-  readonly list: LifecycleListResponse | undefined;
-  readonly listState: LifecycleListState;
-  readonly result: LifecycleReplayResult | undefined;
-  readonly selectedKey: string | undefined;
-}
-
-export interface LifecyclesView {
-  readonly canonicalRows: readonly LifecycleDetailRow[];
-  readonly listDiagnostics: readonly LifecycleDiagnostic[];
-  readonly options: readonly LifecycleOption[];
-  readonly payloadRows: readonly LifecycleDetailRow[];
-  readonly replay: LifecycleReplay | undefined;
-  readonly replayDiagnostics: readonly LifecycleDiagnostic[];
-  readonly requestRows: readonly LifecycleDetailRow[];
-  readonly resultDiagnostics: readonly LifecycleResultDiagnostic[];
-  readonly selected: LifecycleOption | undefined;
-  readonly state: LifecyclesViewState;
-  readonly summary: string;
-}
-
-const noRows: readonly LifecycleDetailRow[] = Object.freeze([]);
-const noDiagnostics: readonly LifecycleDiagnostic[] = Object.freeze([]);
-const noResultDiagnostics: readonly LifecycleResultDiagnostic[] = Object.freeze([]);
 
 const row = (label: string, value: string): LifecycleDetailRow => Object.freeze({ label, value });
 
@@ -189,66 +159,3 @@ export const resultDiagnosticsFor = (replay: LifecycleReplay): readonly Lifecycl
       })]
     : []),
 ]);
-
-const summaryFor = (state: LifecyclesViewState, replay: LifecycleReplay | undefined): string => {
-  switch (state) {
-    case 'loading':
-      return 'Loading semantic lifecycles from the current compiled manifest.';
-    case 'list-error':
-      return 'Semantic lifecycles could not be loaded from the current compiled manifest.';
-    case 'empty':
-      return 'The current compiled manifest exposes no semantic event lifecycles.';
-    case 'diagnostics':
-      return 'The lifecycle replay returned diagnostics instead of executing a route.';
-    case 'replayed':
-      return replay === undefined
-        ? 'The deterministic lifecycle replay completed.'
-        : `Replayed ${replay.canonical.event} for ${replay.binding.target} from ${replay.source} input.`;
-    case 'ready':
-      return 'Choose a compiled event route and host target, then run a deterministic replay.';
-    default: {
-      const exhaustive: never = state;
-      return exhaustive;
-    }
-  }
-};
-
-/** Pure projection for lifecycle selection, diagnostics, and correlated replay evidence. */
-export const lifecyclesViewFor = (options: LifecyclesViewOptions): LifecyclesView => {
-  const detached = deeplyFrozenHookValue(options) as LifecyclesViewOptions;
-  const list = detached.list;
-  const lifecycleOptions = list === undefined ? Object.freeze([]) : lifecycleOptionsFor(list);
-  const selected = detached.selectedKey === undefined
-    ? lifecycleOptions[0]
-    : lifecycleOptions.find((option) => option.key === detached.selectedKey);
-  const result = detached.result;
-  const replay = result !== undefined && 'replay' in result ? result.replay : undefined;
-  const replayDiagnostics = result !== undefined && 'diagnostics' in result ? result.diagnostics : noDiagnostics;
-  const listDiagnostics = list === undefined
-    ? noDiagnostics
-    : Object.freeze(list.lifecycles.flatMap((lifecycle) => lifecycle.diagnostics));
-  const state: LifecyclesViewState = detached.listState === 'loading'
-    ? 'loading'
-    : detached.listState === 'error'
-      ? 'list-error'
-      : lifecycleOptions.length === 0
-        ? 'empty'
-        : replay !== undefined
-          ? 'replayed'
-          : replayDiagnostics.length > 0
-            ? 'diagnostics'
-            : 'ready';
-  return Object.freeze({
-    canonicalRows: replay === undefined ? noRows : canonicalRowsFor(replay),
-    listDiagnostics,
-    options: lifecycleOptions,
-    payloadRows: replay === undefined ? noRows : payloadRowsFor(replay),
-    replay,
-    replayDiagnostics,
-    requestRows: replay === undefined ? noRows : requestRowsFor(replay),
-    resultDiagnostics: replay === undefined ? noResultDiagnostics : resultDiagnosticsFor(replay),
-    selected,
-    state,
-    summary: summaryFor(state, replay),
-  });
-};

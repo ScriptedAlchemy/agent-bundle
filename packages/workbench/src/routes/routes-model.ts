@@ -122,6 +122,7 @@ export interface McpToolPrefill {
   readonly toolName: string;
 }
 
+/** Hash-navigation envelope used by the current main.tsx until L5 rewrites the shell. */
 export interface McpToolPrefillNavigationState {
   readonly mcpToolPrefill: McpToolPrefill;
 }
