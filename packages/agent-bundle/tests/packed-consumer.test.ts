@@ -429,16 +429,17 @@ it('uses only an installed tarball after source deletion', async () => {
     await runInstalled(frameworkCli, frameworkRoot, ['build', '--root', frameworkRoot, '--output', frameworkArtifact]);
 
     // Self-containment on the outputs a consumer builds from the installed
-    // tarball: every host tree of the artifact and the package build's dist/
-    // import nothing but Node builtins. A violation names the importer and
-    // the specifier that survived bundling.
+    // tarball: the composite root and the package build's dist/ import
+    // nothing but Node builtins. A violation names the importer and the
+    // specifier that survived bundling. The MCP entry is compiled once for
+    // the three selected hosts (#555), not once per host.
     const [artifactModules, packageModules] = await Promise.all([
       emittedModuleReport(frameworkArtifact),
       emittedModuleReport(join(frameworkRoot, 'dist')),
     ]);
     expect(artifactModules.violations).toEqual([]);
     expect(packageModules.violations).toEqual([]);
-    expect(artifactModules.modules.filter((module) => /^(?:claude|codex|portable)\/mcp\/[^/]+\.mjs$/u.test(module.path))).toHaveLength(3);
+    expect(artifactModules.modules.filter((module) => /^mcp\/[^/]+\.mjs$/u.test(module.path))).toHaveLength(1);
     expect(packageModules.modules.map((module) => module.path)).toEqual(expect.arrayContaining([
       'bin/framework-build-fixture-install.js',
       'bin/framework-build-fixture.js',
