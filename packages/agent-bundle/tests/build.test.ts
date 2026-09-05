@@ -9,6 +9,11 @@ import { createRslib } from '@rslib/core';
 import { createJiti } from 'jiti';
 
 import { build as buildArtifact, type BuildOptions as LowLevelBuildOptions, type BuildResult } from '../src/build/build.ts';
+import {
+  compileEvidenceFileName,
+  parseCompileEvidenceRecord,
+  unobservedLoadForms,
+} from '../src/build/compile-evidence.ts';
 import { buildWithRslib } from '../src/build/compiler.ts';
 import type { RslibEntry } from '../src/build/rslib.ts';
 import type { AgentBundleMeta } from '../src/meta.ts';
@@ -344,11 +349,26 @@ it('low-level build writes and returns the exact canonical manifest for a config
 
     const manifestBytes = await readFile(join(project.outputRoot, 'agent-bundle.manifest.json'), 'utf8');
     const manifest = parseArtifactManifest(manifestBytes);
+    const compileEvidence = parseCompileEvidenceRecord(
+      await readFile(join(project.outputRoot, compileEvidenceFileName), 'utf8'),
+    );
     const files = (await treeDigest(project.outputRoot)).filter(
       (entry) => entry.path !== 'agent-bundle.manifest.json',
     );
     expect(files.some((entry) => entry.path.includes('/rules/'))).toBe(false);
     expect(result.manifest).toEqual(manifest);
+    expect(result.compileEvidence).toEqual(compileEvidence);
+    expect(manifest.files).toContainEqual(expect.objectContaining({
+      kind: 'generated',
+      path: compileEvidenceFileName,
+    }));
+    expect(compileEvidence.assets).toEqual(manifest.files
+      .filter((file) => file.kind === 'bundle')
+      .map((file) => expect.objectContaining({ path: file.path, sha256: file.sha256 })));
+    expect(compileEvidence.coverage).toEqual({
+      rewritable: false,
+      unobserved: unobservedLoadForms,
+    });
     expect(manifestBytes).toBe(serializeArtifactManifest(result.manifest));
     expect(manifest).toMatchObject({
       files: files.map(({ bytes, path, sha256 }) => ({ bytes, path, sha256 })),
@@ -419,6 +439,25 @@ it('low-level build writes and returns the exact canonical manifest for a config
         ]),
       }));
     }
+  } finally {
+    await cleanupProject(project);
+  }
+});
+
+it('marks compile evidence rewritable when a tools hatch participates', async () => {
+  const project = await createProject();
+  try {
+    const result = await build({
+      model: modelFor(project),
+      outputRoot: project.outputRoot,
+      projectRoot: project.root,
+      registry: new TargetRegistry().register(
+        (await import('../src/adapters/portable.ts')).portableAdapter,
+        { default: true },
+      ),
+      tools: { rspack: () => undefined },
+    });
+    expect(result.compileEvidence.coverage.rewritable).toBe(true);
   } finally {
     await cleanupProject(project);
   }

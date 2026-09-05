@@ -15,6 +15,11 @@ import { sha256Hex, stableJson } from '../core/digest.ts';
 import { assertInside, exists, toPosixPath } from '../core/paths.ts';
 import type { TargetArtifactEntry } from '../adapters/types.ts';
 import {
+  compileEvidenceFileName,
+  serializeCompileEvidenceRecord,
+  type CompileEvidenceRecord,
+} from './compile-evidence.ts';
+import {
   artifactHookIndexName,
   compareArtifactHooks,
   type ArtifactHook,
@@ -28,7 +33,6 @@ import {
 } from './manifest.ts';
 import type { ArtifactOutputProvenance } from './provenance.ts';
 import { deepFreeze } from '../core/freeze.ts';
-
 
 export type ManifestFile = ArtifactManifestFile;
 
@@ -238,6 +242,17 @@ export const writeManifest = async (options: {
   const manifestPath = join(options.artifactRoot, artifactManifestName);
   await writeFile(manifestPath, assembled.bytes, 'utf8');
   return parseArtifactManifest(await readFile(manifestPath, 'utf8'));
+};
+
+export const writeCompileEvidence = async (options: {
+  readonly artifactRoot: string;
+  readonly evidence: CompileEvidenceRecord;
+}): Promise<void> => {
+  await writeFile(
+    join(options.artifactRoot, compileEvidenceFileName),
+    serializeCompileEvidenceRecord(options.evidence),
+    'utf8',
+  );
 };
 
 export const writeHookIndex = async (options: {

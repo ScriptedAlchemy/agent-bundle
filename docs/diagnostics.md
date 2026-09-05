@@ -32,7 +32,7 @@ even when no error diagnostic was reported.
 | `AB490x`/`AB492x` | Conventional host components (#100 stage 2): rules `src/rules/*.mdc` (`AB4900`–`AB4908`) and commands `src/commands/*.md` (`AB4920`–`AB4928`), including per-host feature-set enforcement (`AB4907`/`AB4908`, `AB4927`/`AB4928`); see below. |
 | `AB48xx`/`AB494x` | Route graph, state, layout (`AB4830`–`AB4832`), generated route declarations outside the TypeScript program (`AB4834`), route render budgets (`AB4835`), tool task support (`AB4836`), a route module that value-imports a compiler-carrying framework entry (`AB4837`), a CLI route `inputSchema` reference the static resolver cannot follow (`AB4838`) or that cycles (`AB4839`), an event route's `preflight` gate export (`AB4840`), an event route's declared provider keys (`AB4841`), a CLI surface projection of an MCP tool (`AB4843`–`AB4845`), and provider conventions (see below). |
 | `AB5000` | General CLI and adapter failures (see below). |
-| `AB60xx` | Built-artifact validation, including schema documents and referenced files (`AB6005`: the compiler finds a host-pack surface or package-build entry (`dist/bin/*.js`, the Flight workers, or the `lib` entry) that keeps something other than a Node built-in, `pnpapi`, or an emitted sibling external, or an MCP App view that keeps anything external; the emitted-module walk remains behind that compile-time check and reports residual import, syntax, and relative-target findings; a `dist` finding names `dist/<path>`; `AB6011`/`AB6012`: a target's required pinned-schema document is missing or invalid; `AB6025`: a manifest-declared `logo` path is missing from the artifact or escapes the deploy tree; `AB6034`: emitted Skill Markdown has no instruction body; `AB6035`–`AB6038`: Agent Plugins portable validation, see below). |
+| `AB60xx` | Built-artifact validation, including schema documents and referenced files (`AB6005`: the compiler finds a host-pack surface or package-build entry (`dist/bin/*.js`, the Flight workers, or the `lib` entry) that keeps something other than a Node built-in, `pnpapi`, or an emitted sibling external, or an MCP App view that keeps anything external; the emitted-module walk remains behind that compile-time check and reports residual import, syntax, and relative-target findings; a `dist` finding names `dist/<path>`; `AB6011`/`AB6012`: a target's required pinned-schema document is missing or invalid; `AB6025`: a manifest-declared `logo` path is missing from the artifact or escapes the deploy tree; `AB6039`: the compile evidence record does not match the manifest file table; `AB6034`: emitted Skill Markdown has no instruction body; `AB6035`–`AB6038`: Agent Plugins portable validation, see below). |
 | `AB6200`–`AB6202` | Workbench artifact inspection over published epochs: `AB6200` the epoch does not validate or its provenance is inconsistent, `AB6201` an epoch reference could not be released, `AB6202` unsafe runtime metadata (see below). |
 | `AB700x` | Host installation and uninstallation: bundle identity, host availability, scope, command failure, and collision checks (`AB7000`–`AB7004`: unsupported host, unreadable bundle identity, missing host, scope or mode refusal, host command failure — the same five codes are also the development project service's preparation failures; `AB7005`: version collision, pre-receipt content collision, or foreign install; `AB7006`: the host lists the installed copy with load errors; see below), plus the `uninstall` refusals `AB7007`–`AB7009` (ownership or content mismatch, unconfirmed data purge, missing receipt; see below). |
 | `AB7010`–`AB7015` | npm prepack inventory, artifact freshness, package bin targets, release-version agreement, and installed-dependency hygiene (`AB7014`: a dependency no packed file references; `AB7015`: a git, remote-tarball, path, or unrewritten workspace-protocol dependency specifier). |
@@ -1801,7 +1801,7 @@ placeholders itself.
 | --- | --- | --- | --- |
 | `AB7326` | info / warning / error | Info (`launch.state = expanded`): the receipt's expansion still describes the installed copy — same plugin root, existing data directory, no placeholder left, absolute `cwd` and plugin-root `command`/`args` paths that exist, `PLUGIN_ROOT` / `PLUGIN_DATA` equal to the recorded values. Warning (`unexpanded`): an Agent Plugins install without a recorded expansion whose stdio servers still rely on the spec forms Cursor does not resolve (the message lists the forms per server); Cursor reports `spawn … ENOENT` / `MODULE_NOT_FOUND` for them. Error (`drifted`, entry `corrupt`): the installed `mcp.json` is not byte-identical to the expansion Doctor recomputes from the recorded document (edited, replaced, or removed after install), the recorded expansion names another plugin root (the copy was moved or duplicated), the data directory or an expanded path no longer exists, or the environment no longer carries the recorded values. Only a byte-identical copy has its recorded document validated by `AB7320`; a drifted copy is validated as the bytes on disk. Packages without stdio servers, and copies already carrying absolute paths with the §9.1 variables, produce no finding. | Reinstall with the bundle's emitted `install.mjs` at the copy's current location; the Cursor-target (`.cursor-plugin/plugin.json`) bundle is never rewritten and is not subject to this check. |
 
-## Built-artifact validation (`AB6000`–`AB6018`, `AB6023`–`AB6025`)
+## Built-artifact validation (`AB6000`–`AB6018`, `AB6023`–`AB6025`, `AB6039`)
 
 `agent-bundle build` validates the staged tree before it writes the manifest
 (`validateArtifactFiles`: filesystem entries, generated JSON documents, and
@@ -1815,6 +1815,27 @@ whose `recovery` is fixed per code in the artifact diagnostic registry
 (`artifactDiagnosticRecoveries`); `generatedPath` names the offending artifact
 file (`agent-bundle.manifest.json` for manifest-level findings) and `target`
 names the host target namespace when the check is per target.
+
+`agent-bundle build` writes `agent-bundle.compile-evidence.json` at the
+artifact root and lists it in `agent-bundle.manifest.json` as a `generated`
+file. The record is what the compiler service reported about each file it
+emitted, bound to those bytes: one `assets[]` entry per compiled file
+(`bundle` kind — `bin/*.mjs`, `scripts/*.mjs`, `hooks/*.mjs`, `mcp/*.mjs`,
+Flight workers, `mcp-apps/*.html`) holds `path`, `sha256`, the kept
+`externals` (`kind` `artifact-relative` or `builtin`, `externalType`,
+`issuers`, `request`, `userRequest`, and `target` for a sibling), and the
+inlined `packages`. Record-level fields are policy `closed-world-externals@1`,
+producer `{ name: 'agent-bundle', rspack, version }`, `coverage.rewritable`
+(true when a `tools.rspack` or `tools.rsbuild` hatch took part, so emitted
+bytes may differ from the module graph), and `coverage.unobserved`.
+`agent-bundle validate --artifact` re-checks a listed record against the
+manifest file table without reading JavaScript (`AB6039`). The package build
+returns the same record in process (`PackageBuildResult.evidence`, paths
+`dist/bin/…`) and writes nothing to disk. `coverage.unobserved` lists the load forms Rslib leaves verbatim in
+the bundle, so the compiler neither bundles nor records them:
+`import(<expression>)`, `require(<expression>)`, `require.resolve(…)`,
+`createRequire(…)(…)`, `import.meta.resolve(…)`. No externals recorded
+therefore does not prove the absence of such a load.
 
 | Code | Severity | Trigger | Recovery |
 | --- | --- | --- | --- |
@@ -1839,6 +1860,7 @@ names the host target namespace when the check is per target.
 | `AB6023` | error | `Artifact is missing required install surface "INSTALL.md".` — the selection includes a built-in host (`claude`, `codex`, `cursor`, `portable`, judged by adapter identity, so an advanced registry's own adapter named like one requires nothing) but the composite root has no `INSTALL.md`; the surface is emitted once at the root, never per target. | Rebuild the artifact so the root carries its generated `INSTALL.md`. |
 | `AB6024` | error | `Artifact is missing required install surface "install.mjs".` — the selection includes the shipped `cursor` or `portable` adapter (judged by adapter identity, like `AB6023`) but the composite root has no `install.mjs` (a root selecting only `claude` and/or `codex` requires none). | Rebuild the artifact so the root carries its generated `install.mjs`. |
 | `AB6025` | error | `Plugin logo "<logo>" escapes the artifact for target "<name>".` or `Plugin logo "<logo>" references missing artifact file "<path>".` — a `plugin.json` `logo` string resolves outside the target directory or to a file the artifact does not contain. | Rebuild the artifact so every manifest-declared logo path copies into the deploy tree. |
+| `AB6039` | error | `Compile evidence record <reason>.` — the listed `agent-bundle.compile-evidence.json` failed the strict parser (`is not valid JSON`, `<location> has unexpected keys: …`, `assets must be sorted by path with no duplicates`, …); `Compile evidence record cannot be read.` — it is listed but unreadable. `Compile evidence was judged under policy <name>@<revision>; this validator applies closed-world-externals@1.` — the record's `policy` is not this validator's. `Compile evidence does not cover compiled file "<path>".` — a manifest `bundle` file has no matching asset. `Compile evidence for "<path>" describes different bytes.` — the recorded `sha256` does not match the file table. `Compile evidence names "<path>", which the manifest does not list as a compiled file.` — a recorded path is absent or not `bundle`. `Compile evidence for "<path>" records "<request>" as a built-in; it is not one.` — re-judged with the build's policy, the external is not a Node built-in loaded through a module-loading external type. `Compile evidence for "<path>" records sibling "<request>", which the artifact does not contain.` — the request is not relative, does not resolve from the asset to the recorded `target`, or the target is not another compiled node bundle in the file table. `Compile evidence for "<path>" records "<request>" as an external; a view inlines every module it loads.` — an MCP App view (`mcp-apps/<name>.html`) recorded any external at all. | Rebuild the artifact so its compile evidence record describes the emitted files. |
 
 ## Workbench artifact inspection (`AB6200`–`AB6202`)
 
