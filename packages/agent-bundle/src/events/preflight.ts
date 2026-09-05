@@ -32,8 +32,7 @@ export type EventPreflight<E extends CanonicalAgentEvent = CanonicalAgentEvent> 
   context: EventPreflightContext<E>,
 ) => EventPreflightResult | Promise<EventPreflightResult>;
 
-const preflightObjectOutcomes = ['continue', 'deny'] as const;
-type PreflightObjectOutcome = (typeof preflightObjectOutcomes)[number];
+type PreflightObjectOutcome = 'continue' | 'deny';
 
 const isPreflightObjectOutcome = (value: unknown): value is PreflightObjectOutcome =>
   value === 'continue' || value === 'deny';

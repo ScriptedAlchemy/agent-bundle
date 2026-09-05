@@ -6,7 +6,6 @@ import {
   validateEventPreflightResult,
   type EventPreflight,
   type EventPreflightContext,
-  type EventPreflightResult,
 } from '../src/events/preflight.ts';
 import { projectEventPreflightResult } from '../src/events/projection.ts';
 import {
