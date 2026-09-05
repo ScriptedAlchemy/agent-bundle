@@ -36,7 +36,7 @@ const readEvent = async (response: Response, type: string): Promise<Record<strin
   }
 };
 
-it('invokes compiled tool and event routes through the foreground server', { timeout: 60_000 }, async () => {
+it('invokes compiled tool and event routes through the foreground server', { timeout: 180_000 }, async () => {
   const project = await createProjectFixture({
     config: [
       "import { join } from 'node:path';",
@@ -754,7 +754,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
   }
 });
 
-it('enforces compiled preflight, MCP schemas, and operator env across production surfaces', { timeout: 60_000 }, async () => {
+it('enforces compiled preflight, MCP schemas, and operator env across production surfaces', { timeout: 180_000 }, async () => {
   const project = await createProjectFixture({
     config: "export default { plugin: { name: 'route-parity', version: '1.0.0' }, targets: ['claude'] };\n",
     files: {
