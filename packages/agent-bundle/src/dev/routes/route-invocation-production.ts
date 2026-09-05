@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
 
@@ -16,13 +16,17 @@ import {
 
 import type { EventTraceEvent, EventTraceObserver, EventTracer } from '../../events/trace.ts';
 import type { JsonObject, JsonValue } from '../../core/strict-json.ts';
+import { pluginRootEnvAnchor, pluginStateRootEnvAnchor } from '../../core/types.ts';
+import type {
+  RouteInvocationChildRequest,
+  RouteInvocationChildResult,
+} from './route-invocation-service.ts';
 import {
+  ProductionRouteInvocationError,
   ROUTE_INVOCATION_ARTIFACT_UNAVAILABLE_CODE,
   ROUTE_INVOCATION_COMPILED_ROUTE_UNAVAILABLE_CODE,
   ROUTE_INVOCATION_PREPARATION_FAILURE_CODE,
-  type RouteInvocationChildRequest,
-  type RouteInvocationChildResult,
-} from './route-invocation-service.ts';
+} from './route-invocation-production-error.ts';
 import type { RouteInvocationProvider, RouteInvocationTiming } from './route-invocation.ts';
 
 interface CompiledCliInvocationModule {
@@ -74,21 +78,6 @@ type ProductionRequest = RouteInvocationChildRequest & Readonly<{
   readonly artifactEpoch: string;
   readonly artifactRoot: string;
 }>;
-
-type ProductionRouteInvocationCode =
-  | typeof ROUTE_INVOCATION_ARTIFACT_UNAVAILABLE_CODE
-  | typeof ROUTE_INVOCATION_COMPILED_ROUTE_UNAVAILABLE_CODE
-  | typeof ROUTE_INVOCATION_PREPARATION_FAILURE_CODE;
-
-class ProductionRouteInvocationError extends Error {
-  readonly code: ProductionRouteInvocationCode;
-
-  constructor(code: ProductionRouteInvocationCode, message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = 'ProductionRouteInvocationError';
-    this.code = code;
-  }
-}
 
 const preparationFailure = (error: unknown): ProductionRouteInvocationError =>
   error instanceof ProductionRouteInvocationError
@@ -276,7 +265,8 @@ const streamFromWorker = (
   const worker = new Worker(pathToFileURL(workerPath), {
     env: {
       ...process.env,
-      AGENT_BUNDLE_PLUGIN_ROOT: dirname(request.stateRoot),
+      [pluginRootEnvAnchor]: request.artifactRoot,
+      [pluginStateRootEnvAnchor]: request.stateRoot,
     },
     stderr: true,
     stdout: true,

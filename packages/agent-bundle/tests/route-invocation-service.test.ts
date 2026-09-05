@@ -13,9 +13,9 @@ import {
   RouteInvocationRequestError,
   invocationSummary,
   parseRouteInvocationRequest,
-  routeInvocationStateRoot,
   type RouteInvocationChildRequest,
   type RouteInvocationChildResult,
+  type RouteInvocationPreparedProject,
   type RouteInvocationServiceOptions,
 } from '../src/dev/routes/route-invocation-service.ts';
 import type { RouteManifest } from '../src/dev/routes/route-manifest.ts';
@@ -169,6 +169,11 @@ const childResult = (request: RouteInvocationChildRequest): RouteInvocationChild
   renderDurationMs: 1,
 });
 
+const preparedLease = async (project: RouteInvocationPreparedProject) => ({
+  project,
+  release: () => undefined,
+});
+
 it('aborts and drains a running render when the service closes', async () => {
   let releases = 0;
   const started = deferred();
@@ -176,10 +181,10 @@ it('aborts and drains a running render when the service closes', async () => {
     manifest: {
       manifest: () => catalog('digest', 'revision'),
     },
-    prepared: () => ({
+    prepared: async () => ({
       project: {
         manifest: { projectRoot: '/project' } as never,
-        stateRoot: routeInvocationStateRoot('/project'),
+        stateRoot: '/project/.agent-bundle/epochs/epoch-1/state',
         targets: ['claude'],
       },
       release: () => {
@@ -211,15 +216,16 @@ it('rejects a queued invocation when the published revision moves before the slo
   const executed: RouteInvocationChildRequest[] = [];
   let releases = 0;
   const projectRoot = '/project';
+  const epochRoot = join(projectRoot, '.agent-bundle', 'epochs', 'epoch-1');
   const service = new RouteInvocationService({
     concurrency: 1,
     manifest: {
       manifest: () => catalog(digest, sourceRevision),
     },
-    prepared: () => ({
+    prepared: async () => ({
       project: {
         manifest: { projectRoot } as never,
-        stateRoot: routeInvocationStateRoot(projectRoot),
+        stateRoot: join(epochRoot, 'state'),
         targets: ['claude'],
       },
       release: () => {
@@ -249,7 +255,7 @@ it('rejects a queued invocation when the published revision moves before the slo
     status: 'succeeded',
   });
   expect(executed).toHaveLength(1);
-  expect(executed[0]?.stateRoot).toBe(routeInvocationStateRoot(projectRoot));
+  expect(executed[0]?.stateRoot).toBe(join(epochRoot, 'state'));
   expect(executed[0]?.stateRoot).not.toBe(projectRoot);
   await expect(second).rejects.toMatchObject({
     code: ROUTE_INVOCATION_STALE_REVISION_CODE,
@@ -313,14 +319,14 @@ const routeProject = async (
   };
   const prepared = Object.freeze({
     manifest: testManifestFromRouteGraph({ graph, projectRoot: root }),
-    stateRoot: routeInvocationStateRoot(root),
+    stateRoot: join(root, 'state'),
     targets: ['claude' as const],
   });
   return {
     root,
     service: (options = {}) => new RouteInvocationService({
       manifest: { manifest: () => manifest },
-      prepared: () => prepared,
+      prepared: () => preparedLease(prepared),
       timeoutMs: options.timeoutMs,
     }),
   };
@@ -360,11 +366,6 @@ const leakingRouteProject = async (behaviour: 'hang' | 'reply'): Promise<Leaking
   };
 };
 
-/**
- * `report.tsx` imports `panel.tsx` by its emitted name and also renders the
- * string `'./panel.js'`: the child must resolve the component and print the
- * text exactly as the compiled program does (#600).
- */
 const tsxSiblingProject = async (): Promise<RouteProject> => routeProject(
   await mkdtemp(join(tmpdir(), 'agent-bundle-route-invocation-tsx-sibling-')),
   'report',
@@ -520,9 +521,9 @@ const telemetryService = (
   renderChild: NonNullable<RouteInvocationServiceOptions['renderChild']>,
 ): RouteInvocationService => new RouteInvocationService({
   manifest: { manifest: telemetryManifest },
-  prepared: () => ({
+  prepared: () => preparedLease({
     manifest: { projectRoot: '/project' } as never,
-    stateRoot: routeInvocationStateRoot('/project'),
+    stateRoot: '/project/state',
     targets: ['claude'],
   }),
   renderChild,

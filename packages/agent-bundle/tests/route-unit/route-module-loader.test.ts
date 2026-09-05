@@ -9,13 +9,6 @@ import { expectDocument } from '../../src/test/matchers.ts';
 import { renderRouteEvents } from '../../src/test/render.ts';
 import type { AgentRouteModule } from '../../src/test/types.ts';
 
-/**
- * Project code names its TypeScript siblings by their emitted `.js` name. The
- * loader points a `.js` specifier whose source is a `.tsx` file at that file
- * (jiti retries `.ts` on its own, and a real `.js` sibling is loaded as is),
- * and touches nothing but module specifiers: `'./panel.js'` rendered as text
- * stays `./panel.js`, as the compiled program prints it (#600).
- */
 const files: Readonly<Record<string, string>> = {
   'count.ts': "export const count = 'from count.ts';\n",
   'label.tsx': "export const label = 'from label.tsx';\n",

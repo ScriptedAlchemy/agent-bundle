@@ -6,6 +6,7 @@ import { expect, it } from '@rstest/core';
 import type { RouteInvocationResponse } from '../src/dev/routes/route-invocation-result.ts';
 import type { RouteInvocationListResponse } from '../src/dev/routes/route-invocation.ts';
 import type { RouteManifestResponse } from '../src/dev/routes/route-manifest.ts';
+import { pluginRootEnvAnchor, pluginStateRootEnvAnchor } from '../src/core/types.ts';
 import { createWorkbenchAssetSource } from '../src/dev/workbench-assets.ts';
 import { startDevServer } from '../src/dev/workbench-server.ts';
 import { createProjectFixture } from './helpers/project-fixture.ts';
@@ -106,7 +107,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         '',
       ].join('\n'),
       'src/mcp/status/tools/report.tsx': [
-        "import { Agent } from '@agent-bundle/runtime';",
+        "import { Agent, agent } from '@agent-bundle/runtime';",
         "import { ALIAS_VALUE } from '@fixture/value';",
         "import { createElement } from 'react';",
         "import { z } from 'zod';",
@@ -114,10 +115,12 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         '',
         "export const config = { annotations: { readOnlyHint: true }, description: 'Reports one service.' };",
         "export const inputSchema = z.object({ service: z.string().min(1), source: z.string() }).strict();",
-        'export const resultSchema = z.object({ alias: z.string(), define: z.string(), service: z.string(), source: z.string() }).strict();',
+        'export const resultSchema = z.object({ alias: z.string(), define: z.string(), pluginRoot: z.string(), service: z.string(), source: z.string(), stateRoot: z.string() }).strict();',
         '',
         'export default async function Report({ input }) {',
-        '  const value = { alias: ALIAS_VALUE, define: __ROUTE_INVOCATION_DEFINE__, service: input.service, source: input.source };',
+        '  const context = await agent();',
+        "  if (context.plugin.state !== 'available') throw new Error('plugin unavailable');",
+        '  const value = { alias: ALIAS_VALUE, define: __ROUTE_INVOCATION_DEFINE__, pluginRoot: context.plugin.value.root, service: input.service, source: input.source, stateRoot: context.plugin.value.stateRoot };',
         "  return createElement(Agent.Result, { value }, createElement(Agent.Text, null, `Service ${input.service}`));",
         '}',
         '',
@@ -192,6 +195,10 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     const stream = await fetch(`${server.url}/api/project/events`, {
       headers: { cookie, origin: server.url },
     });
+    const activeEpoch = server.status().artifact;
+    if (activeEpoch.state !== 'active') throw new Error('Expected an active compiled epoch.');
+    const artifactRoot = join(project.root, '.agent-bundle', 'epochs', activeEpoch.activeEpoch.id);
+    const stateRoot = join(artifactRoot, 'state');
     const toolResponse = await fetch(`${server.url}/api/routes/invocations`, {
       body: JSON.stringify({ input: { service: 'catalog', source: 'api' }, routeId: 'tool:status/report' }),
       headers,
@@ -206,8 +213,10 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     expect(tool.invocation.result).toEqual({
       alias: 'aliased',
       define: 'defined',
+      pluginRoot: artifactRoot,
       service: 'catalog',
       source: 'api',
+      stateRoot,
     });
     expect(tool.invocation.providers).toEqual([
       expect.objectContaining({ durationMs: expect.any(Number), id: 'provider:clock', name: 'clock', status: 'mounted' }),
@@ -340,19 +349,21 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     expect(projectedCli.invocation.result).toMatchObject({
       alias: 'aliased',
       define: 'defined',
+      pluginRoot: artifactRoot,
       service: 'projection',
       source: 'cli-projection',
+      stateRoot,
     });
-    const activeEpoch = server.status().artifact;
-    if (activeEpoch.state !== 'active') throw new Error('Expected an active compiled epoch.');
-    const artifactRoot = join(project.root, '.agent-bundle', 'epochs', activeEpoch.activeEpoch.id);
     const binName = (await readdir(join(artifactRoot, 'bin')))
       .find((name) => name.endsWith('.mjs') && !name.endsWith('-flight.mjs'));
     if (binName === undefined) throw new Error('Expected a generated routed CLI bin.');
     const generatedBin = await runNodeScript({
       args: [join(artifactRoot, 'bin', binName), 'report', '--name', 'projection', '--json'],
       cwd: project.root,
-      env: { AGENT_BUNDLE_PLUGIN_ROOT: join(project.root, '.agent-bundle') },
+      env: {
+        [pluginRootEnvAnchor]: artifactRoot,
+        [pluginStateRootEnvAnchor]: stateRoot,
+      },
     });
     expect(generatedBin.code, generatedBin.stderr).toBe(0);
     expect(projectedCli.invocation.result).toEqual(JSON.parse(generatedBin.stdout));

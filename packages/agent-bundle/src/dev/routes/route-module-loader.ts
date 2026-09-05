@@ -9,11 +9,6 @@ import ts from 'typescript-5';
 import { isRelativeSpecifier } from '../../routes/module-candidates.ts';
 import { parseModule } from '../../routes/module-scope.ts';
 
-/**
- * Evaluates one project module from live source: a route, layout, provider,
- * or state module by absolute path, as the Workbench's unit-render mode and
- * the route-unit harness see it.
- */
 export interface RouteModuleLoader {
   readonly load: <Module>(source: string) => () => Promise<Module>;
 }
@@ -51,12 +46,6 @@ const specifierLiteral = (sourceFile: ts.SourceFile, expression: ts.Expression |
     ? { end: expression.end, start: expression.getStart(sourceFile), text: expression.text }
     : undefined;
 
-/**
- * The string literals that name modules — `import … from`, `export … from`,
- * and a literal dynamic `import()` — in source order. A string literal
- * anywhere else (JSX text, a prop, an expression) names no module and is
- * never one of them.
- */
 const moduleSpecifierLiterals = (sourceFile: ts.SourceFile): readonly SpecifierLiteral[] => {
   const literals: SpecifierLiteral[] = [];
   const visit = (node: ts.Node): void => {
@@ -97,12 +86,6 @@ const rewriteTsxSpecifiers = ({ filename, source }: TransformOptions): string =>
   return rewritten;
 };
 
-/**
- * Jiti over live project source with the framework's own `react` and
- * `@agent-bundle/runtime` instances, no module cache, and the `.js`-to-`.tsx`
- * module specifier rewrite. `load(source)` returns a lazy loader in the shape
- * the harness registry's `*Loaders` maps take.
- */
 export const createRouteModuleLoader = (): RouteModuleLoader => {
   const baseJiti = createJiti(import.meta.url, jitiOptions);
   const jiti = createJiti(import.meta.url, {

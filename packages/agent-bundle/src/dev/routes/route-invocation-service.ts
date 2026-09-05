@@ -32,6 +32,10 @@ import type { EventTraceEvent } from '../../events/trace.ts';
 import { taskkill, terminateProcessTree, waitForProcessTreeExit } from '../../services/process-tree.ts';
 import type { AgentBundleTestManifest, TestableScriptDescriptor } from '../../test/manifest.ts';
 import type { ScriptPlaygroundResult, ScriptPlaygroundRunRequest } from '../playground/script-playground-service.ts';
+import {
+  isProductionRouteInvocationCode,
+  ProductionRouteInvocationError,
+} from './route-invocation-production-error.ts';
 import type { RouteInvocation } from './route-invocation-result.ts';
 import type {
   RouteInvocationEventHost,
@@ -52,13 +56,6 @@ export const ROUTE_INVOCATION_UNKNOWN_FIXTURE_CODE = 'AB8238';
 export const ROUTE_INVOCATION_STALE_REVISION_CODE = 'AB8239';
 export const ROUTE_INVOCATION_STALE_REVISION_MESSAGE =
   'The published route manifest changed while this invocation waited to run. Retry against the current revision.';
-
-/** Writable state root generated entries mount for the npm-bin cwd fallback. */
-export const routeInvocationStateRoot = (projectRoot: string): string =>
-  join(projectRoot, '.agent-bundle', 'state');
-export const ROUTE_INVOCATION_ARTIFACT_UNAVAILABLE_CODE = 'AB8250';
-export const ROUTE_INVOCATION_COMPILED_ROUTE_UNAVAILABLE_CODE = 'AB8251';
-export const ROUTE_INVOCATION_PREPARATION_FAILURE_CODE = 'AB8252';
 
 const defaultHistoryLimit = 200;
 const defaultTimeoutMs = 60_000;
@@ -89,8 +86,8 @@ export interface RouteInvocationPreparedProject {
   readonly fixtures?: Readonly<Record<string, readonly RouteInvocationFixture[]>>;
   readonly manifest: AgentBundleTestManifest;
   /**
-   * Writable state directory generated entries mount for this project
-   * (`<pluginRoot>/state`, never the code root).
+   * Writable framework state beside the epoch, shared with that epoch's dev
+   * MCP sessions, never the code root.
    */
   readonly stateRoot: string;
   readonly targets: readonly RouteInvocationEventHost[];
@@ -110,10 +107,7 @@ export interface RouteInvocationServiceOptions {
   readonly historyLimit?: number;
   readonly manifest: RouteManifestRouteService;
   readonly now?: () => Date;
-  readonly prepared: () =>
-    | RouteInvocationPreparedLease
-    | RouteInvocationPreparedProject
-    | Promise<RouteInvocationPreparedLease | RouteInvocationPreparedProject>;
+  readonly prepared: () => Promise<RouteInvocationPreparedLease>;
   readonly registry?: TargetRegistry;
   readonly renderChild?: (
     request: RouteInvocationChildRequest,
@@ -190,18 +184,6 @@ const malformed = (): never => {
     'Route invocation request has an invalid shape.',
     400,
   );
-};
-
-const isPreparedLease = (
-  value: RouteInvocationPreparedLease | RouteInvocationPreparedProject,
-): value is RouteInvocationPreparedLease =>
-  isRecord(value) && typeof value.release === 'function' && isRecord(value.project);
-
-const bindPrepared = async (
-  supplier: RouteInvocationServiceOptions['prepared'],
-): Promise<RouteInvocationPreparedLease> => {
-  const value = await supplier();
-  return isPreparedLease(value) ? value : { project: value, release: () => undefined };
 };
 
 const boundedString = (value: unknown, maxLength = 4_096): value is string =>
@@ -492,9 +474,10 @@ const renderInChild = async (
     const receive = (message: unknown): void => {
       if (!isChildResponse(message)) return settle(() => rejectPromise(new Error('Route invocation child returned an invalid response.')));
       if (message.type === 'error') {
-        const error = new Error(message.error.message);
-        error.name = message.error.name;
-        if (message.error.code !== undefined) Object.assign(error, { code: message.error.code });
+        const error = isProductionRouteInvocationCode(message.error.code)
+          ? new ProductionRouteInvocationError(message.error.code, message.error.message)
+          : new Error(message.error.message);
+        if (!(error instanceof ProductionRouteInvocationError)) error.name = message.error.name;
         return settle(() => rejectPromise(error));
       }
       settle(() => resolvePromise(message.result));
@@ -773,7 +756,7 @@ export class RouteInvocationService {
         let manifest: RouteManifest;
         let prepared: RouteInvocationPreparedProject;
         try {
-          const leased = await bindPrepared(this.#prepared);
+          const leased = await this.#prepared();
           release = leased.release;
           prepared = leased.project;
           manifest = this.#manifest.manifest();
@@ -844,12 +827,7 @@ export class RouteInvocationService {
             : await runPlainScript(this.#scripts, prepared, plainScript, input, controller.signal);
         } catch (error) {
           const completedAt = this.#now();
-          const childCode = typeof error === 'object' && error !== null && 'code' in error
-            && (
-              error.code === ROUTE_INVOCATION_ARTIFACT_UNAVAILABLE_CODE
-              || error.code === ROUTE_INVOCATION_COMPILED_ROUTE_UNAVAILABLE_CODE
-              || error.code === ROUTE_INVOCATION_PREPARATION_FAILURE_CODE
-            )
+          const childCode = error instanceof ProductionRouteInvocationError
             ? error.code
             : ROUTE_INVOCATION_CHILD_FAILURE_CODE;
           return failedInvocation({
@@ -871,55 +849,55 @@ export class RouteInvocationService {
           clearTimeout(timeout);
           this.#controllers.delete(controller);
         }
-      const projectionStartedAt = this.#now();
-      const projection = invocationProjection(
-        route,
-        request,
-        rawInput,
-        child.result,
-        child.mcp,
-        child.document,
-        manifest,
-        prepared,
-        this.#registry,
-      );
-      const completedAt = this.#now();
-      const canonical = route.kind === 'event-route'
-        ? (child.input as JsonObject).canonical
-        : undefined;
-      return deepFreeze<RouteInvocation>({
-        completedAt: completedAt.toISOString(),
-        context,
-        ...(request.correlationId === undefined ? {} : { correlationId: request.correlationId }),
-        diagnostics: [],
-        document: child.document,
-        ...(canonical !== undefined && isJsonRecord(canonical)
-          ? {
-              event: {
-                // Project events reject repeated object references. Keep the
-                // event detail detached from the identical public `input`.
-                canonical: jsonObject(canonical)!,
-                event: route.event!,
-                ...(request.event?.host === undefined ? {} : { host: request.event.host, native: rawInput as JsonObject }),
-              },
-            }
-          : {}),
-        events: child.events,
-        id,
-        input: canonical ?? child.input,
-        kind: route.kind as RouteInvocationKind,
-        manifestDigest: manifest.digest,
-        projection,
-        providers: child.observed?.providers ?? unobservedProviders(manifest),
-        ...(child.result === undefined ? {} : { result: child.result }),
-        routeId: route.id,
-        source: route.source,
-        sourceRevision: manifest.sourceRevision,
-        startedAt: startedAt.toISOString(),
-        status: 'succeeded',
-        ...(child.trace === undefined ? {} : { trace: child.trace }),
-        timings: invocationTimings(child, startedAt, projectionStartedAt, completedAt),
-      });
+        const projectionStartedAt = this.#now();
+        const projection = invocationProjection(
+          route,
+          request,
+          rawInput,
+          child.result,
+          child.mcp,
+          child.document,
+          manifest,
+          prepared,
+          this.#registry,
+        );
+        const completedAt = this.#now();
+        const canonical = route.kind === 'event-route'
+          ? (child.input as JsonObject).canonical
+          : undefined;
+        return deepFreeze<RouteInvocation>({
+          completedAt: completedAt.toISOString(),
+          context,
+          ...(request.correlationId === undefined ? {} : { correlationId: request.correlationId }),
+          diagnostics: [],
+          document: child.document,
+          ...(canonical !== undefined && isJsonRecord(canonical)
+            ? {
+                event: {
+                  // Project events reject repeated object references. Keep the
+                  // event detail detached from the identical public `input`.
+                  canonical: jsonObject(canonical)!,
+                  event: route.event!,
+                  ...(request.event?.host === undefined ? {} : { host: request.event.host, native: rawInput as JsonObject }),
+                },
+              }
+            : {}),
+          events: child.events,
+          id,
+          input: canonical ?? child.input,
+          kind: route.kind as RouteInvocationKind,
+          manifestDigest: manifest.digest,
+          projection,
+          providers: child.observed?.providers ?? unobservedProviders(manifest),
+          ...(child.result === undefined ? {} : { result: child.result }),
+          routeId: route.id,
+          source: route.source,
+          sourceRevision: manifest.sourceRevision,
+          startedAt: startedAt.toISOString(),
+          status: 'succeeded',
+          ...(child.trace === undefined ? {} : { trace: child.trace }),
+          timings: invocationTimings(child, startedAt, projectionStartedAt, completedAt),
+        });
       } finally {
         await release?.();
       }

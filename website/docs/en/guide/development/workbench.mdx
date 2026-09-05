@@ -201,6 +201,8 @@ providers, persistent state, CLI `mapInput` and confirmation, event preflight, a
 semantics match the installed artifact. `mode: "unit-render"` is an explicit component-preview
 fallback: it loads live source with the route-unit harness and mounts disposable state. It is not
 an artifact-parity receipt.
+Production state lives beside the published epoch at `<epoch>/state`, shared with that epoch's dev
+MCP sessions through `AGENT_BUNDLE_STATE_ROOT`.
 
 The envelope carries canonical input, request context, providers, ordered render events, the
 final Agent Document, structured result, projections, diagnostics, and execution timings.
