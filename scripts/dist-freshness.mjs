@@ -34,7 +34,7 @@
  * guard never guesses that unchanged-looking bytes are unchanged. There is
  * no bypass variable: every flow in this repository that runs a pool or
  * `pnpm typecheck` builds first (ci.yml `verify`: build, typecheck, lint,
- * test; the `test:integration`, `test:evidence`, `test:mcp-conformance` and
+ * test; the `test:integration`, `test:mcp-conformance` and
  * `check` scripts; scripts/run-packed-tests.mjs; scripts/local-ci.mjs legs;
  * docs.yml runs the website's own typecheck), so a skip switch would only
  * serve to reopen the hole this closes. Add one when a flow that must run

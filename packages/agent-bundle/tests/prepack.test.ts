@@ -10,6 +10,7 @@ import { afterAll, beforeAll, expect, it } from '@rstest/core';
 import { prepack } from '../src/api.ts';
 import { runCli } from '../src/cli.ts';
 import { type Diagnostic, DiagnosticError } from '../src/core/diagnostics.ts';
+import type { NormalizedPayload } from '../src/core/types.ts';
 import { captureCliTerminal } from './support/cli-terminal.ts';
 import {
   packInventoryDiagnostics,
@@ -241,6 +242,37 @@ it('reports installed dependencies no packed JavaScript imports as AB7014, per f
     expect(reported[0]?.recovery).toContain('devDependencies');
     expect(reported[1]?.message).toContain('compatibility contract');
     expect(reported[1]?.recovery).toContain('peerDependenciesMeta');
+  },
+));
+
+it('accepts a dependency declared by a prebuilt payload runtimeDependencies list', () => withPackageDocument(
+  (document) => {
+    document.dependencies = { sharp: '^0.33.0', 'never-loaded': '^1.0.0' };
+  },
+  async () => {
+    const payload: NormalizedPayload = {
+      files: [],
+      id: 'payload:tools',
+      name: 'tools',
+      provenance: { kind: 'prebuilt', sourcePath: join(projectRoot, 'agent-bundle.config.ts') },
+      runtimeDependencies: ['sharp'],
+      source: join(projectRoot, 'built', 'tools'),
+      targets: ['claude'],
+    };
+    const reported = withCode(await packInventoryDiagnostics({
+      artifactRoot: result.build.build.outputRoot,
+      model: { ...result.build.model, payloads: [payload] },
+      packageBuild: result.build.packageBuild!,
+      packOutput: result.pack,
+      packerRewritesWorkspaceProtocols: false,
+      projectRoot,
+    }), 'AB7014');
+
+    expect(reported).toHaveLength(1);
+    expect(reported[0]?.message).toContain('"never-loaded"');
+    expect(reported[0]?.message).not.toContain('"sharp"');
+    expect(reported[0]?.message).toContain('no prebuilt payload declares');
+    expect(reported[0]?.recovery).toContain('runtimeDependencies');
   },
 ));
 

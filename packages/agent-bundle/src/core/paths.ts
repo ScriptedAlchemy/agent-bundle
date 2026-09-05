@@ -17,6 +17,10 @@ export const toPosixPath = (path: string): string => path.split(sep).join('/');
 /** POSIX-form path of `path` relative to `root`; asserts nothing about containment. */
 export const toPosixRelative = (root: string, path: string): string => toPosixPath(relative(root, path));
 
+/** `path` in POSIX form relative to `root` when it lies inside or at `root`; otherwise `path` unchanged. */
+export const posixRelativeWhenInside = (root: string, path: string): string =>
+  (isInsideOrEqual(root, path) ? toPosixRelative(root, path) : path);
+
 /** True when candidate resolves strictly inside root. */
 export const isInside = (root: string, candidate: string): boolean => {
   const path = relative(root, candidate);

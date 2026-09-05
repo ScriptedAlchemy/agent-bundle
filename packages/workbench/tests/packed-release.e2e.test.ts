@@ -10,7 +10,6 @@ import { expect, test, type PlaywrightOptions } from '@rstest/playwright';
 
 import {
   assertOutageLedger,
-  hasCanonicalAfterCursor,
   validateOutageLedger,
   type ConsoleErrorRecord,
 } from './support/packed-outage-ledger.ts';
@@ -31,9 +30,8 @@ import {
   writeFakeClaude,
 } from './support/packed-release-harness.ts';
 import { replaceWatchedSource } from './support/watched-files.ts';
-import { browserLaunchOptions, browserTrace, workbenchUrl } from './support/workbench-e2e.ts';
+import { browserLaunchOptions, browserTrace, waitForWorkbenchIdle, workbenchUrl } from './support/workbench-e2e.ts';
 import { deepFreeze } from '../src/freeze.ts';
-
 
 const fixtureRoot = join(workspaceRoot, 'fixtures', 'integration', 'packed-release');
 const browserTimeout = 12_000 * timeScale;
@@ -70,7 +68,6 @@ const e2e = test.extend({
 const isAppRoute = (url: URL): boolean =>
   url.pathname.startsWith('/api/mcp/apps/') || /^\/api\/mcp\/sessions\/[^/]+\/apps$/u.test(url.pathname);
 
-
 e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 * timeScale }, async ({ page }) => {
   const { tarball } = await sharedPackedTarball('agent-bundle');
   const consumer = await mkdtemp(join(tmpdir(), 'agent-bundle-packed-release-'));
@@ -80,7 +77,6 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
   let child: ChildProcess | undefined;
   let phase = 'package setup';
   const trackedProcessIds = new Set<number>();
-  const observedOperationDescendantProcessIds = new Set<number>();
   const productTemporaryRootsBefore = new Set<string>();
   let cleanupFailure: AggregateError | undefined;
   let primaryFailure: Error | undefined;
@@ -167,7 +163,6 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       url: string;
     }> = [];
     const browserRequestByPlaywrightRequest = new WeakMap<object, typeof browserRequests[number]>();
-    const nativeRequests: Array<Record<string, unknown>> = [];
     page.on('console', (message) => {
       if (message.type() === 'error') {
         consoleErrorRecords.push(Object.freeze({ at: Date.now(), text: message.text(), url: message.location().url }));
@@ -224,30 +219,27 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       };
       browserRequests.push(tracked);
       browserRequestByPlaywrightRequest.set(request, tracked);
-      if (request.method() !== 'POST' || url.pathname !== '/api/playground/runs') return;
-      try {
-        const body: unknown = JSON.parse(request.postData() ?? 'null');
-        if (
-          typeof body === 'object' && body !== null && !Array.isArray(body) &&
-          (body as { readonly operation?: unknown }).operation === 'native.prompt'
-        ) {
-          nativeRequests.push(body as Record<string, unknown>);
-        }
-      } catch {
-        // The test only records well-formed native Playground requests.
-      }
     });
     const waitForBrowserRequestsAfter = async (startIndex: number): Promise<void> => {
       await expect.poll(() => browserRequests.slice(startIndex).filter((request) =>
         request.completedAt === undefined,
       ).map((request) => `${request.method} ${request.url}`), { timeout: browserTimeout }).toEqual([]);
     };
+    const openPrimaryArea = async (area: 'advanced' | 'application' | 'problems' | 'trace'): Promise<void> => {
+      await page.getByTestId('workbench-nav').locator(`[data-area="${area}"]`).click();
+    };
+    const openAdvancedSection = async (label: 'Artifact' | 'Evals' | 'Protocol' | 'Raw logs'): Promise<void> => {
+      await openPrimaryArea('advanced');
+      await page.getByTestId('advanced-nav').getByRole('link', { name: label, exact: true }).click();
+    };
     phase = 'browser startup navigation';
-    await page.goto(workbenchUrl(origin, 'overview'));
-    phase = 'browser startup dashboard';
-    await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
+    await page.goto(workbenchUrl(origin));
+    phase = 'browser startup shell';
+    await waitForWorkbenchIdle(page, browserTimeout);
+    await expect(page.getByTestId('workbench-nav')).toBeVisible({ timeout: browserTimeout });
+    await expect(page.getByTestId('application-tree')).toBeVisible({ timeout: browserTimeout });
     phase = 'browser startup build health';
-    await expect(page.locator('.build-health')).toContainText('Current build', { timeout: browserTimeout });
+    await expect(page.getByTestId('shell-build-status')).toContainText('Current build', { timeout: browserTimeout });
 
     const client = new Client({ name: 'packed-release-test-client', version: '1.0.0' });
     const transport = new StreamableHTTPClientTransport(new URL(`${origin}/mcp`), {
@@ -336,42 +328,16 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       expect(record(record(simulated.structuredContent, 'hook simulation').simulation, 'hook simulation result').canonicalResult)
         .toEqual(expect.objectContaining({ outcome: 'continue' }));
 
-      phase = 'Skills and Artifacts pages';
-      await page.goto(workbenchUrl(origin, 'skills'));
-      await expect(page.getByRole('heading', { name: 'Skills' })).toBeVisible({ timeout: browserTimeout });
-      await expect(page.getByRole('heading', { name: 'review', exact: true })).toBeVisible({ timeout: browserTimeout });
-      await page.goto(workbenchUrl(origin, 'artifacts'));
-      await expect(page.getByRole('heading', { name: 'Artifacts' })).toBeVisible({ timeout: browserTimeout });
-      await expect(page.getByRole('heading', { name: 'Artifact tree' })).toBeVisible({ timeout: browserTimeout });
+      phase = 'Application and Artifact pages';
+      await page.goto(workbenchUrl(origin));
+      await waitForWorkbenchIdle(page, browserTimeout);
+      await expect(page.getByTestId('application-tree')).toContainText('review', { timeout: browserTimeout });
+      await page.goto(workbenchUrl(origin, '/advanced/artifact'));
+      await expect(page.getByRole('heading', { name: 'Artifact' })).toBeVisible({ timeout: browserTimeout });
+      await expect(page.getByRole('heading', { name: 'Emitted files' })).toBeVisible({ timeout: browserTimeout });
 
-      phase = 'Hooks page simulation';
-      const hookListing = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/hooks');
-      await page.goto(workbenchUrl(origin, 'hooks'));
-      phase = 'Hooks page heading';
-      await expect(page.getByRole('heading', { name: 'Hooks' })).toBeVisible({ timeout: browserTimeout });
-      phase = 'Hooks catalog';
-      const hookListingResponse = await hookListing;
-      if (!hookListingResponse.ok()) throw new Error(`The Hooks page list route failed with ${hookListingResponse.status()}: ${await hookListingResponse.text()}`);
-      await expect.poll(async () => page.locator('#hook-binding option').count(), { timeout: browserTimeout }).toBeGreaterThan(0);
-      await page.locator('#hook-binding').selectOption({ index: 0 });
-      phase = 'Hooks input';
-      await page.getByText('Advanced input', { exact: true }).click();
-      await page.locator('#hook-canonical-input').fill(JSON.stringify({
-        cwd: '/workspace', sessionId: 'packed-browser', source: 'packed-browser', transcriptPath: '/workspace/transcript.json',
-      }));
-      phase = 'Hooks submit';
-      const hookSimulation = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/hooks/simulations');
-      await page.getByRole('button', { name: 'Run simulation' }).click();
-      phase = 'Hooks result';
-      const hookSimulationResponse = await hookSimulation;
-      if (!hookSimulationResponse.ok()) throw new Error(`The Hooks page simulation failed with ${hookSimulationResponse.status()}: ${await hookSimulationResponse.text()}`);
-      expect(await hookSimulationResponse.json()).toMatchObject({
-        simulation: { canonicalResult: { additionalContext: 'packed:packed-browser', outcome: 'continue' } },
-      });
-      await expect(page.getByRole('heading', { name: 'Canonical result' })).toBeVisible({ timeout: browserTimeout });
-
-      phase = 'MCP and App pages';
-      await page.goto(workbenchUrl(origin, 'mcp'));
+      phase = 'MCP and App page';
+      await page.goto(workbenchUrl(origin, '/advanced/protocol'));
       await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
       await page.locator('#mcp-target').selectOption('portable');
       await page.locator('#mcp-server-name').fill('fixture');
@@ -403,97 +369,21 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       // on the heading alone cancels that replay mid-flight on a loaded server.
       // The visit is complete once the replay has responded.
       const logsReplayListing = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/logs/replay');
-      await page.goto(workbenchUrl(origin, 'logs'));
+      await openAdvancedSection('Raw logs');
       phase = 'Logs page heading';
       await expect(page.getByRole('heading', { name: 'Logs' })).toBeVisible({ timeout: browserTimeout });
       phase = 'Logs page replay';
       const logsReplayListingResponse = await logsReplayListing;
       if (!logsReplayListingResponse.ok()) throw new Error(`The Logs page replay route failed with ${logsReplayListingResponse.status()}: ${await logsReplayListingResponse.text()}`);
-      const initialEvalsRequestIndex = browserRequests.length;
-      await page.goto(workbenchUrl(origin, 'evals'));
+      await openAdvancedSection('Evals');
       phase = 'Evals page heading';
       await expect(page.getByRole('heading', { name: 'Evals' })).toBeVisible({ timeout: browserTimeout });
       phase = 'Evals suite catalog';
       await expect(page.getByLabel('Suite')).toContainText('packed-deterministic', { timeout: browserTimeout });
-      await waitForBrowserRequestsAfter(initialEvalsRequestIndex);
-      const initialComparisonsRequestIndex = browserRequests.length;
-      await page.goto(workbenchUrl(origin, 'comparisons'));
+      const compareTab = page.getByRole('tab', { name: 'Compare' });
+      await compareTab.click();
       phase = 'Comparisons page heading';
-      await expect(page.getByRole('heading', { name: 'Comparisons' })).toBeVisible({ timeout: browserTimeout });
-      await waitForBrowserRequestsAfter(initialComparisonsRequestIndex);
-
-      phase = 'Playground direct skill';
-      await page.goto(workbenchUrl(origin, 'playground'));
-      await expect(page.getByRole('heading', { name: 'Playground' })).toBeVisible({ timeout: browserTimeout });
-      await page.locator('#playground-operation').selectOption('skill.inspect');
-      await page.locator('#playground-target').selectOption('portable');
-      await page.locator('#playground-skill-id').selectOption(skillId);
-      await page.getByRole('button', { name: 'Start run' }).click();
-      await expect(page.getByText('skill.inspected')).toBeVisible({ timeout: browserTimeout });
-      await expect(page.locator('#playground-operation')).toBeEnabled({ timeout: browserTimeout });
-
-      phase = 'Playground direct hook';
-      await page.locator('#playground-operation').selectOption('hook.simulate');
-      await page.locator('#playground-target').selectOption('claude');
-      await page.locator('#playground-hook').selectOption(hookId);
-      await expect(page.locator('#playground-hook-input')).toHaveValue(/workbench-preview/u);
-      await page.getByRole('button', { name: 'Start run' }).click();
-      await expect(page.getByText('hook.simulated')).toBeVisible({ timeout: browserTimeout });
-      await expect(page.locator('#playground-operation')).toBeEnabled({ timeout: browserTimeout });
-
-      phase = 'Playground direct script';
-      await page.locator('#playground-operation').selectOption('script.run');
-      await page.locator('#playground-target').selectOption('portable');
-      await expect(page.locator('#playground-script-id option[value="script:review"]')).toBeAttached({ timeout: browserTimeout });
-      await page.locator('#playground-script-id').selectOption('script:review');
-      const scriptAdmitted = page.waitForResponse((response) =>
-        response.url() === `${origin}/api/playground/runs` && response.request().method() === 'POST' && response.ok(),
-      );
-      await page.getByRole('button', { name: 'Run script' }).click();
-      const scriptRun = record(record(await (await scriptAdmitted).json(), 'direct script admission').run, 'direct script run');
-      const scriptSession = record(scriptRun.session, 'direct script session');
-      const scriptSessionId = string(scriptSession.id, 'direct script session id');
-      await expect(page.getByText('script.completed')).toBeVisible({ timeout: browserTimeout });
-      await expect(page.locator('.playground-trace')).toContainText('packed release script stdout', { timeout: browserTimeout });
-      const scriptCompletedCard = page.locator('details.playground-event-card').filter({
-        has: page.getByText('script.completed', { exact: true }),
-      }).last();
-      await expect(scriptCompletedCard).toBeVisible({ timeout: browserTimeout });
-      const scriptCompletedCheckbox = scriptCompletedCard.getByRole('checkbox');
-      const scriptCompletedLabel = await scriptCompletedCheckbox.getAttribute('aria-label');
-      const scriptCompletedReference = /^Select (events\.jsonl#\d+) for the draft eval case$/u.exec(scriptCompletedLabel ?? '')?.[1];
-      if (scriptCompletedReference === undefined) throw new Error('The completed direct script trace did not expose a persisted raw event reference.');
-      const exportedScriptResponse = page.waitForResponse((response) =>
-        response.url() === `${origin}/api/playground/sessions/${encodeURIComponent(scriptSessionId)}/export` &&
-        response.request().method() === 'GET' && response.ok(),
-      );
-      await page.getByRole('button', { name: 'Export trace' }).click();
-      const exportedScriptTrace = record(record(await (await exportedScriptResponse).json(), 'direct script export response').export, 'direct script export');
-      expect(string(record(exportedScriptTrace.session, 'direct script exported session').id, 'direct script exported session id')).toBe(scriptSessionId);
-      expect(exportedScriptTrace.events).toEqual(expect.arrayContaining([
-        expect.objectContaining({ kind: 'script.completed', rawEventRef: scriptCompletedReference }),
-      ]));
-      await expect(page.getByRole('heading', { name: 'Exported trace' })).toBeVisible({ timeout: browserTimeout });
-      const exportedScriptSection = page.getByRole('heading', { name: 'Exported trace' }).locator('..');
-      await expect(exportedScriptSection).toContainText(scriptSessionId);
-      await expect(exportedScriptSection).toContainText(scriptCompletedReference);
-      await scriptCompletedCheckbox.check();
-      await expect(page.getByRole('button', { name: 'Promote to draft eval case' })).toBeEnabled({ timeout: browserTimeout });
-      const promotedScriptResponse = page.waitForResponse((response) =>
-        response.url() === `${origin}/api/playground/sessions/${encodeURIComponent(scriptSessionId)}/draft-eval` &&
-        response.request().method() === 'POST' && response.ok(),
-      );
-      await page.getByRole('button', { name: 'Promote to draft eval case' }).click();
-      const promotedScriptResult = await promotedScriptResponse;
-      expect(promotedScriptResult.request().postDataJSON()).toEqual({ rawEventRefs: [scriptCompletedReference] });
-      const promotedScriptDraft = record(record(await promotedScriptResult.json(), 'direct script draft response').draftEvalCase, 'direct script draft');
-      const promotedScriptAssertion = firstRecord(promotedScriptDraft.assertions, 'direct script draft assertions');
-      expect(record(promotedScriptAssertion.evidence, 'direct script draft evidence').rawEventRef).toBe(scriptCompletedReference);
-      expect(record(promotedScriptAssertion.expectation, 'direct script draft expectation').kind).toBe('script.completed');
-      await expect(page.getByRole('heading', { name: 'Draft eval case' })).toBeVisible({ timeout: browserTimeout });
-      const promotedScriptSection = page.getByRole('heading', { name: 'Draft eval case' }).locator('..');
-      await expect(promotedScriptSection).toContainText(scriptCompletedReference);
-      await expect(promotedScriptSection).toContainText('script.completed');
+      await expect(compareTab).toHaveAttribute('aria-selected', 'true', { timeout: browserTimeout });
 
       const activeEpochFrom = (toolResult: Awaited<ReturnType<typeof client.callTool>>, label: string) => {
         const resultStatus = record(record(toolResult.structuredContent, `${label} result`).status, `${label} status`);
@@ -505,11 +395,11 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
           modelDigest: string(activeEpoch.modelDigest, `${label} model digest`),
         };
       };
-      const rebuildFromOverview = async (label: string): Promise<void> => {
+      const rebuildFromProblems = async (label: string): Promise<void> => {
         const rebuilt = page.waitForResponse((response) =>
           response.url() === `${origin}/api/project/rebuild` && response.request().method() === 'POST',
         );
-        await page.getByRole('button', { name: 'Rebuild' }).click();
+        await page.getByTestId('problems-repair').click();
         const response = await rebuilt;
         if (!response.ok()) throw new Error(`${label} rebuild returned HTTP ${response.status()}: ${await response.text()}`);
       };
@@ -543,57 +433,12 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
           return build.state !== 'building' && [...build.attemptIds].some((id) => !known.has(id));
         }, { timeout: browserTimeout }).toBe(true);
       };
-      const settleNativeSelection = (): Promise<void> => page.evaluate(async () => {
-        await new Promise<void>((resolvePromise) => requestAnimationFrame(() => requestAnimationFrame(() => resolvePromise())));
-      });
-      const selectNativePrompt = async (prompt: string): Promise<void> => {
-        await page.locator('#playground-operation').selectOption('native.prompt');
-        await expect(page.locator('#playground-native-host')).toBeEnabled({ timeout: browserTimeout });
-        await page.locator('#playground-native-target').selectOption('claude');
-        await settleNativeSelection();
-        await expect(page.locator('#playground-native-case option').nth(1)).toBeAttached({ timeout: browserTimeout });
-        await page.locator('#playground-native-case').selectOption({ index: 1 });
-        await settleNativeSelection();
-        await page.locator('#playground-native-host').selectOption('claude');
-        await settleNativeSelection();
-        await expect(page.locator('#playground-native-fixture')).toBeEnabled({ timeout: browserTimeout });
-        await page.locator('#playground-native-fixture').selectOption({ index: 1 });
-        await settleNativeSelection();
-        await expect(page.locator('#playground-native-model-pin')).toBeEnabled({ timeout: browserTimeout });
-        await page.locator('#playground-native-model-pin').selectOption({ index: 1 });
-        await page.locator('#playground-native-prompt').fill(prompt);
-        await expect(page.getByRole('button', { name: 'Start native prompt' })).toBeEnabled({ timeout: browserTimeout });
-      };
-
-      phase = 'Playground native epoch A admission';
-      await selectNativePrompt('Wait for packed native cancellation.');
-      const nativeAAdmitted = page.waitForResponse((response) =>
-        response.url() === `${origin}/api/playground/runs` && response.request().method() === 'POST' && response.ok(),
-      );
-      await page.getByRole('button', { name: 'Start native prompt' }).click();
-      const nativeAAdmission = record(await (await nativeAAdmitted).json(), 'native epoch A admission');
-      const nativeARunId = string(record(nativeAAdmission.run, 'native epoch A run').id, 'native epoch A run id');
-      await expect(page.getByText('native.host.started')).toBeVisible({ timeout: browserTimeout });
-      if (child?.pid === undefined) throw new Error('The packed dev server process did not expose a PID.');
-      const nativeOperationDescendants = await descendantProcessIds(child.pid);
-      expect(nativeOperationDescendants).not.toHaveLength(0);
-      for (const processId of nativeOperationDescendants) {
-        expect(processId).not.toBe(child.pid);
-        observedOperationDescendantProcessIds.add(processId);
-        trackedProcessIds.add(processId);
-      }
-      const nativeRequestA = nativeRequests.at(-1);
-      if (nativeRequestA === undefined) throw new Error('The packed epoch-A native operation did not issue a request.');
-      const nativeEpochA = string(nativeRequestA.epochId, 'epoch-A native request epoch id');
-      const nativePinA = string(nativeRequestA.modelPinId, 'epoch-A native request model pin id');
-      expect(nativeEpochA).toBe(epochId);
-
       phase = 'good edit rebuild B';
       const epochBMarker = 'Epoch B changed the packed review guidance.';
       await replaceSourceAndAwaitWatcherRebuild('epoch B', skillSource, `${originalSkill}\n\n${epochBMarker}\n`);
-      await page.getByRole('link', { name: 'Overview', exact: true }).click();
-      await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
-      await rebuildFromOverview('epoch B');
+      await openPrimaryArea('problems');
+      await expect(page.getByRole('heading', { name: /^Problems/u })).toBeVisible({ timeout: browserTimeout });
+      await rebuildFromProblems('epoch B');
       const epochBStatus = activeEpochFrom(await call('project_status'), 'epoch B');
       expect(epochBStatus.artifactStatus.state).toBe('active');
       const epochB = epochBStatus.epochId;
@@ -603,8 +448,8 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       await expectGeneratedSkill('same client epoch B', epochB, epochBMarker);
 
       phase = 'artifact epoch diff';
-      await page.getByRole('link', { name: 'Artifacts', exact: true }).click();
-      await expect(page.getByRole('heading', { name: 'Artifacts' })).toBeVisible({ timeout: browserTimeout });
+      await openAdvancedSection('Artifact');
+      await expect(page.getByRole('heading', { name: 'Artifact' })).toBeVisible({ timeout: browserTimeout });
       await page.locator('#artifact-diff-base').fill(epochId);
       await page.getByRole('button', { name: 'Compare builds' }).click();
       await expect(page.getByRole('heading', { name: 'Build comparison' })).toBeVisible({ timeout: browserTimeout });
@@ -613,28 +458,9 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       }).locator('tbody tr');
       await expect(changedRows).not.toHaveCount(0, { timeout: browserTimeout });
       const changedCells = await changedRows.first().locator('th, td').allTextContents();
-      expect(changedCells).toHaveLength(5);
+      expect(changedCells).toHaveLength(3);
       expect(changedCells[0]).toContain('SKILL.md');
-      expect(changedCells[1]).not.toBe(changedCells[3]);
-      expect(changedCells[2]).not.toBe(changedCells[4]);
-
-      phase = 'pinned epoch-A native cancellation';
-      await page.getByRole('link', { name: 'Playground', exact: true }).click();
-      await expect(page.getByText(nativeEpochA, { exact: true })).toBeVisible({ timeout: browserTimeout });
-      await expect(page.getByText(nativePinA, { exact: true })).toBeVisible({ timeout: browserTimeout });
-      const nativeACancelled = page.waitForResponse((response) => {
-        const url = new URL(response.url());
-        return url.origin === origin && url.pathname === `/api/playground/runs/${encodeURIComponent(nativeARunId)}/cancel` &&
-          url.search.length === 0 && response.request().method() === 'POST' && response.status() === 200;
-      });
-      const cancelRun = page.getByRole('button', { name: 'Cancel run', exact: true });
-      await cancelRun.click();
-      await expect(page.getByRole('button', { name: 'Cancelling…', exact: true })).toBeVisible({ timeout: browserTimeout });
-      expect(await (await nativeACancelled).json()).toEqual({ cancelled: true });
-      await expect(page.getByRole('button', { name: 'Cancelling…', exact: true })).toBeHidden({ timeout: browserTimeout });
-      await expect(cancelRun).toBeDisabled({ timeout: browserTimeout });
-      await expect(page.getByText('operation.cancelled')).toBeVisible({ timeout: browserTimeout });
-      await expect(page.getByText('epoch.bound')).toBeVisible({ timeout: browserTimeout });
+      expect(changedCells[1]).not.toBe(changedCells[2]);
 
       phase = 'invalid edit retains stale epoch B';
       const lastGoodEpochBStatus = activeEpochFrom(await call('project_status'), 'last-good epoch B');
@@ -644,9 +470,9 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       const invalidConfig = originalConfig.replace('ui://packed-release/dashboard.html', 'https://packed-release.example/dashboard.html');
       if (invalidConfig === originalConfig) throw new Error('The packed fixture did not contain the resource URI used for the invalid rebuild.');
       await replaceSourceAndAwaitWatcherRebuild('invalid epoch B', configSource, invalidConfig);
-      await page.getByRole('link', { name: 'Overview', exact: true }).click();
-      await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
-      await rebuildFromOverview('invalid epoch B');
+      await openPrimaryArea('problems');
+      await expect(page.getByRole('heading', { name: /^Problems/u })).toBeVisible({ timeout: browserTimeout });
+      await rebuildFromProblems('invalid epoch B');
       const staleStatus = activeEpochFrom(await call('project_status'), 'stale epoch B');
       expect(staleStatus.artifactStatus.state).toBe('stale');
       expect(staleStatus.modelDigest).toBe(lastGoodEpochBStatus.modelDigest);
@@ -664,7 +490,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       // epoch C after later phases pinned it.
       await replaceSourceAndAwaitWatcherRebuild('epoch C config', configSource, originalConfig);
       await replaceSourceAndAwaitWatcherRebuild('epoch C skill', skillSource, `${originalSkill}\n\n${epochCMarker}\n`);
-      await rebuildFromOverview('epoch C');
+      await rebuildFromProblems('epoch C');
       const epochCStatus = activeEpochFrom(await call('project_status'), 'epoch C');
       expect(epochCStatus.artifactStatus.state).toBe('active');
       const epochC = epochCStatus.epochId;
@@ -672,20 +498,6 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       const retainedEpochA = await call('skills_list', { epoch: epochId, target: 'portable' });
       expect(record(retainedEpochA.structuredContent, 'retained epoch-A skills').skills).toEqual(expect.any(Object));
       await expectGeneratedSkill('same client epoch C', epochC, epochCMarker);
-
-      phase = 'Playground native fake-host epoch C';
-      await page.getByRole('link', { name: 'Playground', exact: true }).click();
-      await selectNativePrompt('Complete the packed native fixture.');
-      const nativeCAdmitted = page.waitForResponse((response) =>
-        response.url() === `${origin}/api/playground/runs` && response.request().method() === 'POST' && response.ok(),
-      );
-      await page.getByRole('button', { name: 'Start native prompt' }).click();
-      expect(record(await (await nativeCAdmitted).json(), 'native epoch C admission').run).toEqual(expect.any(Object));
-      await expect(page.getByText('native.response')).toBeVisible({ timeout: browserTimeout });
-      await expect(page.getByText('Packed native fixture completed.', { exact: true })).toBeVisible({ timeout: browserTimeout });
-      const nativeRequestC = nativeRequests.at(-1);
-      if (nativeRequestC === undefined) throw new Error('The packed epoch-C native operation did not issue a request.');
-      expect(string(nativeRequestC.epochId, 'epoch-C native request epoch id')).toBe(epochC);
 
       phase = 'Logs after rebuilds';
       type ReplayResponse = Awaited<ReturnType<typeof page.waitForResponse>>;
@@ -707,7 +519,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
         return logsReplayWaiter.promise;
       };
       page.on('response', collectLogsReplay);
-      await page.getByRole('link', { name: 'Logs', exact: true }).click();
+      await openAdvancedSection('Raw logs');
       await expect(page.getByRole('heading', { name: 'Logs' })).toBeVisible({ timeout: browserTimeout });
       let logsReplayDocument: unknown;
       while (logsReplayDocument === undefined) {
@@ -850,8 +662,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       called.add('eval_get');
 
       phase = 'Evals live evidence and comparisons';
-      const evalsBrowserRequestIndex = browserRequests.length;
-      await page.getByRole('link', { name: 'Evals', exact: true }).click();
+      await openAdvancedSection('Evals');
       await expect(page.getByRole('heading', { name: 'Evals' })).toBeVisible({ timeout: browserTimeout });
       await page.getByLabel('Suite').selectOption('packed-deterministic');
       await page.getByLabel('Harness').selectOption('deterministic');
@@ -884,11 +695,10 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       await expect(page.locator('.eval-trial-provenance').first()).toContainText('automatic');
       await page.getByRole('button', { name: 'Preview safe text' }).first().click();
       await expect(page.locator('.eval-raw-result')).toContainText('The deterministic packed fixture passed.', { timeout: browserTimeout });
-      await waitForBrowserRequestsAfter(evalsBrowserRequestIndex);
       phase = 'Evals comparison run availability';
       const comparisonsOpenedIndex = browserRequests.length;
-      await page.getByRole('link', { name: 'Comparisons', exact: true }).click();
-      await expect(page.getByRole('heading', { name: 'Comparisons' })).toBeVisible({ timeout: browserTimeout });
+      await page.getByRole('tab', { name: 'Compare' }).click();
+      await expect(page.getByRole('tab', { name: 'Compare' })).toHaveAttribute('aria-selected', 'true');
       await expect.poll(async () => page.locator('#comparison-base option').count(), { timeout: browserTimeout }).toBeGreaterThanOrEqual(2);
       phase = 'Evals comparison matrix';
       await page.locator('#comparison-base').selectOption(runId);
@@ -900,8 +710,8 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       );
 
       phase = 'foreground restart/reconnect';
-      const comparisonsHashBeforeRestart = new URL(page.url()).hash;
-      expect(comparisonsHashBeforeRestart).toBe('#comparisons');
+      const comparisonsPathBeforeRestart = new URL(page.url()).pathname;
+      expect(comparisonsPathBeforeRestart).toBe('/advanced/evals');
       if (child === undefined) throw new Error('The packed dev server child was not created.');
       const stoppedChild = child;
       if (stoppedChild.pid !== undefined) {
@@ -919,20 +729,20 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       phase = 'foreground restart/reconnect browser recovery';
       child = startInstalledServer(port);
       await awaitReady(origin, child, () => commandOutput);
-      await expect(page.locator('.connection')).toContainText('Foreground server connected', { timeout: browserTimeout });
+      await expect(page.getByTestId('shell-connection')).toContainText('Foreground server connected', { timeout: browserTimeout });
       const recoveredBrowserSessionResponse = await recoveredBrowserSession;
       const recoveredBrowserSessionPayload = record(await recoveredBrowserSessionResponse.json(), 'recovered browser session');
       const browserGenerationBToken = string(recoveredBrowserSessionPayload.token, 'recovered browser session token');
       const recoveredBrowserSessionRequest = browserRequestByPlaywrightRequest.get(recoveredBrowserSessionResponse.request());
       if (recoveredBrowserSessionRequest?.completedAt === undefined) throw new Error('The recovered browser session was not recorded as a completed request.');
       const recoveredAt = recoveredBrowserSessionRequest.completedAt;
-      expect(new URL(page.url()).hash).toBe(comparisonsHashBeforeRestart);
-      await expect(page.getByRole('heading', { name: 'Comparisons' })).toBeVisible({ timeout: browserTimeout });
+      expect(new URL(page.url()).pathname).toBe(comparisonsPathBeforeRestart);
+      await expect(page.getByRole('tab', { name: 'Compare' })).toBeVisible({ timeout: browserTimeout });
       const rebuiltWithRecoveredSession = page.waitForResponse((response) =>
         response.url() === `${origin}/api/project/rebuild` && response.request().method() === 'POST' && response.ok(),
       );
       // The recovered session hands the Comparisons page new clients, and its
-      // effect re-lists /api/evals/runs; leaving for Overview before a loaded
+      // effect re-lists /api/evals/runs; leaving for Problems before a loaded
       // server answers aborts that listing, which the ledger must be able to
       // attribute to this departure like every later one. A visit owns the
       // requests recorded between its arrival and departure stamps — delivery
@@ -944,8 +754,8 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
         respondedStream?: true;
         url: string;
       }>> = [Object.freeze({ leftAt: Date.now(), leftIndex: browserRequests.length, openedIndex: comparisonsOpenedIndex, url: `${origin}/api/evals/runs` })];
-      await page.getByRole('link', { name: 'Overview', exact: true }).click();
-      await page.getByRole('button', { name: 'Rebuild' }).click();
+      await page.goto(workbenchUrl(origin, '/problems'));
+      await page.getByTestId('problems-repair').click();
       const rebuiltWithRecoveredSessionResponse = await rebuiltWithRecoveredSession;
       expect(rebuiltWithRecoveredSessionResponse.request().headers()['x-agent-bundle-session']).toBe(browserGenerationBToken);
       phase = 'foreground restart/reconnect Agent API recovery';
@@ -955,7 +765,7 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       const recoveredEpochId = recoveredEpochStatus.epochId;
 
       phase = 'foreground restart/reconnect fresh B browser MCP session';
-      await page.getByRole('link', { name: 'MCP playground', exact: true }).click();
+      await page.goto(workbenchUrl(origin, '/advanced/protocol'));
       await expect(page.getByRole('heading', { name: 'MCP playground' })).toBeVisible({ timeout: browserTimeout });
       await expect(page.getByRole('button', { name: 'Open MCP session' })).toBeEnabled({ timeout: browserTimeout });
       await expect(page.locator('#mcp-epoch')).toHaveValue(recoveredEpochId, { timeout: browserTimeout });
@@ -1009,25 +819,18 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
 
       phase = 'desktop navigation floor';
       const navigationFloorRequestIndex = browserRequests.length;
-      const navigationRoutes: readonly Readonly<{ heading: string; label: string }>[] = [
-        { heading: 'Bundle dashboard', label: 'Overview' }, { heading: 'Skills', label: 'Skills' }, { heading: 'Hooks', label: 'Hooks' },
-        { heading: 'MCP playground', label: 'MCP playground' }, { heading: 'Artifacts', label: 'Artifacts' }, { heading: 'Playground', label: 'Playground' },
-        { heading: 'Logs', label: 'Logs' }, { heading: 'Evals', label: 'Evals' }, { heading: 'Comparisons', label: 'Comparisons' },
+      const navigationRoutes: readonly Readonly<{ heading?: string; label: string; testId?: string }>[] = [
+        { label: 'Application', testId: 'application-tree' },
+        { heading: 'Trace', label: 'Trace' },
+        { heading: 'Problems', label: 'Problems' },
+        { heading: 'Evals', label: 'Advanced' },
       ];
       // Every abortable request a route issues on mount, so leaving the route
       // before a loaded server answers is claimed by the route's record rather
       // than reported as an unknown post-recovery failure.
       const postRecoveryNavigationUrls = new Map<string, readonly string[]>([
-        // Skills lists the authored suites for its eval-coverage column.
-        ['Skills', [`${origin}/api/evals/suites`]],
-        ['Hooks', [`${origin}/api/hooks?epochId=${encodeURIComponent(recoveredEpochId)}`]],
-        ['MCP playground', [`${origin}/api/artifacts/epochs/${encodeURIComponent(recoveredEpochId)}`]],
-        ['Playground', [`${origin}/api/playground/catalog?epochId=${encodeURIComponent(recoveredEpochId)}`]],
-        ['Logs', [`${origin}/api/logs/replay?after=0`]],
-        ['Evals', [`${origin}/api/evals/suites`, `${origin}/api/evals/runs`]],
-        ['Comparisons', [`${origin}/api/evals/runs`]],
+        ['Advanced', [`${origin}/api/evals/suites`, `${origin}/api/evals/runs`]],
       ]);
-      const respondedNavigationStreams = new Set<string>();
       let activeNavigationRoute: Readonly<{ openedIndex: number; urls?: readonly string[] }> | undefined;
       // A departure is a test action with no wire event of its own, so it is
       // stamped twice before the click: the instant, which the abort it
@@ -1042,7 +845,6 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
           leftAt,
           leftIndex,
           openedIndex: activeNavigationRoute.openedIndex,
-          ...(respondedNavigationStreams.has(url) ? { respondedStream: true as const } : {}),
           url,
         }));
         activeNavigationRoute = undefined;
@@ -1050,37 +852,21 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       for (const route of navigationRoutes) {
         leaveActiveNavigationRoute();
         const openedIndex = browserRequests.length;
-        const logsStreamResponse = route.label === 'Logs'
-          ? page.waitForResponse((response) => {
-            const url = new URL(response.url());
-            return response.request().method() === 'GET' && url.origin === origin &&
-              url.pathname === '/api/logs/stream' && hasCanonicalAfterCursor(url);
-          // Wider than the interaction budget for a loaded runner, but finite:
-          // a stream that never responds must fail the test, not hang the job.
-          }, { timeout: browserTimeout * 5 })
-          : undefined;
-        await page.getByRole('link', { name: route.label, exact: true }).click();
-        await expect(page.getByRole('heading', { name: route.heading })).toBeVisible({ timeout: browserTimeout });
+        await page.getByTestId('workbench-nav').locator(`[data-area="${route.label.toLowerCase()}"]`).click();
+        if (route.heading !== undefined) {
+          await expect(page.getByRole('heading', { name: new RegExp(`^${route.heading}`, 'u') })).toBeVisible({ timeout: browserTimeout });
+        }
+        if (route.testId !== undefined) {
+          await expect(page.getByTestId(route.testId)).toBeVisible({ timeout: browserTimeout });
+        }
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
         const routeUrls = [...(postRecoveryNavigationUrls.get(route.label) ?? [])];
-        if (route.label === 'Logs') {
-          const response = await logsStreamResponse;
-          if (response === undefined || !response.ok()) throw new Error('The Logs navigation stream did not return a successful response.');
-          const streamUrl = response.url();
-          const stream = browserRequestByPlaywrightRequest.get(response.request());
-          if (
-            stream === undefined || browserRequests.indexOf(stream) < openedIndex || stream.respondedAt === undefined ||
-            stream.status !== response.status()
-          ) throw new Error('The Logs navigation stream response was not recorded in the network ledger.');
-          respondedNavigationStreams.add(streamUrl);
-          routeUrls.push(streamUrl);
-        }
         activeNavigationRoute = Object.freeze({ openedIndex, urls: Object.freeze(routeUrls) });
       }
       leaveActiveNavigationRoute();
-      await page.getByRole('link', { name: 'Overview', exact: true }).focus();
+      await page.getByTestId('workbench-nav').locator('[data-area="application"]').focus();
       await page.keyboard.press('Enter');
-      await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
+      await expect(page.getByTestId('application-tree')).toBeVisible({ timeout: browserTimeout });
       await waitForBrowserRequestsAfter(navigationFloorRequestIndex);
 
       phase = 'foreground outage ledger quiet fence';
@@ -1152,7 +938,6 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
         trackedProcessIds.add(child.pid);
         for (const processId of await descendantProcessIds(child.pid)) trackedProcessIds.add(processId);
       }
-      expect(observedOperationDescendantProcessIds.size).toBeGreaterThan(0);
       await closeChild(child);
       expect(child.exitCode).not.toBeNull();
       for (const shutdownOrigin of new Set([origin, appProxyOrigin].filter((value): value is string => value !== undefined))) {

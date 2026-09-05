@@ -4,7 +4,7 @@ import type { CursorConfigExtension } from './adapters/cursor.ts';
 import type { PortableConfigExtension } from './adapters/portable.ts';
 import type { AgentBundleConfig as CoreAgentBundleConfig } from './core/types.ts';
 
-export { defineConfig, pathTokens, pluginRootEnvAnchor } from './core/types.ts';
+export { defineConfig, definePrebuilt, pathTokens, pluginRootEnvAnchor } from './core/types.ts';
 export { defineSkill, Skill } from './skills/define.ts';
 export {
   classifySkillToken,

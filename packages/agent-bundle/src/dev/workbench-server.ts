@@ -50,8 +50,15 @@ import { PlaygroundOrchestrationService } from './playground/playground-orchestr
 import { PlaygroundStore as PlaygroundService } from './playground/playground-store.ts';
 import { createDevPlatformRuntime } from './platform-run.ts';
 import type { DevPlatformRuntime } from './platform-runtime.ts';
-import { ProjectService } from './project-service.ts';
+import { ProjectService, type PreparedProject } from './project-service.ts';
 import { emptyCompiledRouteGraph } from '../routes/graph.ts';
+import { testManifestFromRouteGraph } from '../test/manifest.ts';
+import type { RouteInvocationEventHost } from './routes/route-invocation.ts';
+import {
+  ROUTE_INVOCATION_MANIFEST_UNAVAILABLE_CODE,
+  RouteInvocationRequestError,
+  RouteInvocationService,
+} from './routes/route-invocation-service.ts';
 import { routeManifestFor } from './routes/route-manifest.ts';
 import type { RouteManifestRouteService } from './routes/route-manifest-routes.ts';
 import { DevRuntimeController } from './runtime-controller.ts';
@@ -605,6 +612,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
   let latestValidPreparedProject = initialPreparedProject.source.state === 'ready' && initialPreparedProject.model !== undefined
     ? initialPreparedProject
     : undefined;
+  let latestPublishedPreparedProject: PreparedProject | undefined;
   const topologyProviderSessionId = randomUUID();
   let runtimeTopologyChanged = false;
   let status: () => ProjectStatus = () => deepFreeze({
@@ -746,6 +754,9 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
         });
       }
     },
+    onPublishedProject: (prepared) => {
+      latestPublishedPreparedProject = prepared;
+    },
     outputPaths: [
       'dist',
       initialPreparedProject.artifactDistPath,
@@ -841,13 +852,14 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
     projectRoot: root,
     storageRoot: join(root, '.agent-bundle', 'playground'),
   });
+  const scriptPlayground = new ScriptPlaygroundService({ epochStore, registry, platformRuntime });
   const playground = new PlaygroundOrchestrationService({
     coordinator,
     epochStore,
     hookPlayground,
     mcpSessions,
     native: new NativePlaygroundService({ projectRoot: root, platformRuntime }),
-    scripts: new ScriptPlaygroundService({ epochStore, registry, platformRuntime }),
+    scripts: scriptPlayground,
     skillDocuments,
     trace,
   });
@@ -856,7 +868,7 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
   // route discovery never runs a second time for the browser.
   const routeManifest: RouteManifestRouteService = {
     manifest: () => {
-      const prepared = latestValidPreparedProject;
+      const prepared = latestPublishedPreparedProject;
       if (
         prepared === undefined ||
         prepared.model === undefined ||
@@ -866,12 +878,68 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
       }
       return routeManifestFor(
         prepared.routeGraph ?? emptyCompiledRouteGraph,
-        prepared.source.revision,
+        status().source.revision ?? prepared.source.revision,
         prepared.model.state,
         prepared.model.notices,
       );
     },
   };
+  const routeInvocations = new RouteInvocationService({
+    manifest: routeManifest,
+    prepared: () => {
+      const prepared = latestPublishedPreparedProject;
+      if (prepared === undefined || prepared.model === undefined) {
+        throw new Error('No valid prepared project is available for route invocation.');
+      }
+      const artifact = status().artifact;
+      if (
+        artifact.state !== 'active' ||
+        prepared.source.revision === undefined ||
+        artifact.activeEpoch.projectRevision !== prepared.source.revision
+      ) {
+        throw new RouteInvocationRequestError(
+          ROUTE_INVOCATION_MANIFEST_UNAVAILABLE_CODE,
+          'The source is newer than the published build. Rebuild before invoking routes.',
+          409,
+        );
+      }
+      const targets = prepared.model.targets
+        .map((target) => target.name)
+        .filter((target): target is RouteInvocationEventHost =>
+          target === 'claude' || target === 'codex' || target === 'cursor');
+      // Emitted scripts live once at the composite root; any selected target
+      // whose layout has a scripts directory reads the same file.
+      const scriptTarget = prepared.model.targets
+        .map((target) => target.name)
+        .find((target) => registry.artifactLayout(target).scripts !== undefined);
+      return Object.freeze({
+        ...(scriptTarget === undefined ? {} : { artifact: { epochId: artifact.activeEpoch.id, target: scriptTarget } }),
+        manifest: testManifestFromRouteGraph({
+          apps: prepared.model.mcpApps,
+          configPath: prepared.configPath,
+          diagnostics: prepared.diagnostics,
+          graph: prepared.routeGraph ?? emptyCompiledRouteGraph,
+          plugin: {
+            name: prepared.model.metadata.name,
+            ...(prepared.model.metadata.packageName === undefined
+              ? {}
+              : { packageName: prepared.model.metadata.packageName }),
+            ...(prepared.model.metadata.packageVersion === undefined
+              ? {}
+              : { packageVersion: prepared.model.metadata.packageVersion }),
+            version: prepared.model.metadata.version,
+          },
+          projectRoot: prepared.root,
+          scripts: prepared.model.scripts,
+          ...(prepared.model.state === undefined ? {} : { state: prepared.model.state }),
+          targets,
+        }),
+        targets,
+      });
+    },
+    registry,
+    scripts: scriptPlayground,
+  });
   const agentApi = agentApiEnabled
     ? new AgentApi({
       artifacts,
@@ -925,12 +993,22 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
     playground,
     port: options.port,
     routeManifest,
+    routeInvocations,
     ...(runtime === undefined ? {} : { runtime }),
     skillDocuments,
     ...(options.workbenchDevOrigins === undefined || options.workbenchDevOrigins.length === 0
       ? {}
       : { workbenchDevOrigins: options.workbenchDevOrigins }),
   });
+  if (latestPublishedPreparedProject === undefined) {
+    const artifact = status().artifact;
+    if (
+      (artifact.state === 'active' || artifact.state === 'stale') &&
+      initialPreparedProject.source.revision === artifact.activeEpoch.projectRevision
+    ) {
+      latestPublishedPreparedProject = initialPreparedProject;
+    }
+  }
   clientSurfaces.bindHostOrigin(foreground.url);
   // Linearize Workbench-owned runtime proxy acquisition before Foreground
   // begins its asynchronous App/SSE drain. The coordinator repeats this fence

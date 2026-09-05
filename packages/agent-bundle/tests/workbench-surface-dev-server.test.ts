@@ -7,7 +7,7 @@ import type { LifecycleListResponse } from '../src/contracts/lifecycles.ts';
 import type { RouteManifestResponse } from '../src/dev/routes/route-manifest.ts';
 import { createWorkbenchAssetSource } from '../src/dev/workbench-assets.ts';
 import { startDevServer } from '../src/dev/workbench-server.ts';
-import { inspectWorkbenchSurface } from '../src/test/index.ts';
+import { inspectWorkbenchSurface, workbenchLeafPath } from '../src/test/index.ts';
 import { createProjectFixture } from './helpers/project-fixture.ts';
 import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
 
@@ -27,7 +27,7 @@ it('matches the route manifest and lifecycle inventory a real dev server serves'
       '',
     ].join('\n'),
     files: {
-      'package.json': '{"type":"module"}\n',
+      'package.json': '{"dependencies":{"@agent-bundle/runtime":"workspace:*","react":"19.2.8","zod":"4.5.4"},"type":"module"}\n',
       'src/cli/greet.ts': [
         "import { z } from 'zod';",
         '',
@@ -127,7 +127,23 @@ it('matches the route manifest and lifecycle inventory a real dev server serves'
       routeId: 'event:tool/after',
       targets: [{ nativeEvent: 'PostToolUse', target: 'claude' }],
     }]);
-    expect(surface.pages).toEqual(['overview', 'routes', 'hooks', 'lifecycles', 'hosts', 'mcp', 'artifacts', 'playground', 'logs']);
+    expect(surface.application.groups.map((group) => group.kind)).toEqual(['mcp', 'events', 'cli']);
+    const leaves = surface.application.groups.flatMap((group) => group.kind === 'mcp'
+      ? group.servers.flatMap((applicationServer) =>
+        applicationServer.subgroups.flatMap((subgroup) => subgroup.leaves))
+      : group.leaves);
+    expect(leaves.map((leaf) => leaf.routeId).sort()).toEqual([
+      'cli:greet',
+      'event:tool/after',
+      'tool:status/report',
+    ]);
+    expect(leaves.map(workbenchLeafPath).sort()).toEqual([
+      '/routes/cli/greet',
+      '/routes/events/tool/after',
+      '/routes/mcp/status/tool/report',
+    ]);
+    expect(surface.application.leafCount).toBe(3);
+    expect(surface.advanced).toEqual(['artifact', 'protocol', 'hosts', 'logs']);
   } finally {
     await server?.close().catch(() => undefined);
     await rm(project.root, { force: true, maxRetries: 5, recursive: true, retryDelay: 50 });

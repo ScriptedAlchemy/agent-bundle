@@ -1,5 +1,5 @@
 ---
-description: 'The Hooks and Scripts example: a session-start hook, two scripts (one blocking exit code), durable Playground traces, and a reversible diagnostic walkthrough.'
+description: 'The Hooks and Scripts example: a session-start hook, two scripts, invocation traces, and a reversible diagnostic walkthrough.'
 ---
 
 # Hooks and Scripts
@@ -47,29 +47,29 @@ an authored script.
 
 ## Working in the Workbench
 
-1. **Overview** relates the authored hook to its emitted artifact, its exercise trace, and its
-   evaluation pages. Its status is the authoritative current-or-stale epoch state.
-2. **Hooks** defaults to the Claude `sessionStart` binding with populated inline canonical JSON,
-   including `"source": "workbench"`. Run the simulation, then use **Replay saved simulation** to
-   rerun exactly that epoch-bound input.
-3. **Playground** defaults to Script execution, the Claude target, and `verify-release`. Run it
-   and wait for the session to be finalized: the emitted script reads the packaged
+1. The header is the authoritative current-or-stale epoch state. Under
+   **Application → Events / Hooks**, select `sessionStart`, choose the Claude fixture, and run it.
+   The event route workspace shows canonical input, including `"source": "workbench"`, and the
+   projected result. Use its **Replay** tab to rerun the epoch-bound input.
+2. Under **Application → Scripts**, select `verify-release` for the Claude target and run it. The
+   emitted script reads the packaged
    `release/release-manifest.json` beside its own module and reports release 2.4.0 ready for
    packaging.
-4. Switch the target to portable and select `detect-risk`. It reads `release/risk-register.json`,
+3. Switch the target to portable and select `detect-risk`. It reads `release/risk-register.json`,
    reports high-severity `REL-204`, exits with code 2, and finalizes a durable blocking trace.
-5. **Logs** filters those producer records by producer, level, kind, or context; open a record to
-   inspect raw details. **Artifacts** is the emitted file and provenance view, while
-   **Comparisons** aligns outcomes only after two recorded eval runs.
+4. Follow the runs in **Trace**. Use **Advanced → Raw logs** for uncorrelated producer details,
+   **Advanced → Artifact** for emitted files and provenance, and
+   **Advanced → Evals → Compare** after two eval runs exist.
 
 ## The reversible diagnostic walkthrough
 
 The checked-in project is healthy, so seeing last-good behavior means breaking it on purpose.
 Temporarily replace the body of `src/hooks/session-start.ts` with a syntactically incomplete
-handler, press **Rebuild**, and wait for the completed **Failed** state. The Workbench reports
-the new diagnostic while continuing to serve the last-good artifact. Restore the checked-in
-handler, press **Rebuild** again, and wait for **Idle**: a new active epoch replaces the stale
-state and clears the diagnostic.
+handler, press **Rebuild**, and wait for the completed **Failed** state. Open **Problems** from
+the header failure count: the Workbench reports the new diagnostic while Application continues
+to expose the last-good tree and artifact. Restore the checked-in handler, press **Rebuild**
+again, and wait for **Idle**: a new active epoch replaces the stale catalog and clears the
+diagnostic.
 
 Do not read a Building state as a completed repair — the new active epoch is the evidence.
 

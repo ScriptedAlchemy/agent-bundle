@@ -1,0 +1,7 @@
+/* Keep the checkbox inside its 40px interaction target. */
+.mcp-json-input-boolean {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.5rem;
+  min-height: 40px;
+}

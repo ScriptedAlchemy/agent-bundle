@@ -40,17 +40,18 @@ description: 'Skills 起步项目示例：三个按约定发现的工程运维 S
 
 ## 在 Workbench 中操作
 
-1. **Overview** 打开时是 Bundle 仪表盘：三个 Skill、生成的 target、构建健康状况，以及下一步值得做的
-   操作。
-2. **Skills** 列出 `dependency-upgrade`、`incident-triage` 与 `release-review`。浏览它们链接的清单与
-   报告模板，并按 target 在 Source 与 Generated 之间切换。
-3. **Artifacts** 显示复合插件根目录。在 portable、Codex 与 Claude 之间切换 target 只是改变聚焦的
-   投影，每种选择看到的都是同一棵树——三个宿主共同读取的那一个目录——以及每个文件的来源信息。
-4. **Evals** 默认选中 `release-readiness` 套件。运行 `release-artifact-is-ready` 并查看通过的试次；
+1. **Application → Skills** 列出 `dependency-upgrade`、`incident-triage` 与 `release-review`。
+   选中其中一个以渲染其文档，然后用检查器浏览链接的清单与报告模板，或对比 Source 与 Generated 输出。
+2. **Advanced → Artifact** 显示复合插件根目录。在 portable、Codex 与 Claude 之间切换 target 只是改变
+   聚焦的投影，每种选择看到的都是同一棵树——三个宿主共同读取的那一个目录；为每个文件启用详情以查看
+   provenance。
+3. **Advanced → Evals → Runs** 默认选中 `release-readiness` 套件。运行
+   `release-artifact-is-ready` 并查看通过的试次；
    它只消费签入的证据夹具。
-5. 想演练修复，就对发布策略做一处可逆修改，按 **Rebuild**，并等待 Failed 或 Idle 结果，而不是 Building
-   状态。恢复签入的策略并重建。此时先前那次 eval 对改动后的构建已经过期——重新运行
-   `release-readiness`，记录当前已修复状态下的证据。
+4. 想演练修复，就对发布策略做一处可逆修改，按 **Rebuild**，并等待 Failed 或 Idle 结果，而不是 Building
+   状态。失败时从页眉计数打开 **Problems**，同时 Application 保留上一个可用的树。恢复签入的策略
+   并重建。此时先前那次 eval 对改动后的构建已经过期——重新运行 `release-readiness`，记录当前已修复
+   状态下的证据。
 
 ## 非交互检查
 

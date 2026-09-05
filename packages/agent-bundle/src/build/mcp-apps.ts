@@ -19,8 +19,11 @@ import { MAX_APP_HTML_BYTES } from '../core/mcp-app-limits.ts';
 import { escapeRegExp } from '../core/strings.ts';
 import type { AgentBundleMeta } from '../meta.ts';
 import { appRuntimePath, appRuntimeSpecifier } from './app-runtime.ts';
+import type { CompilationEvidence } from './compile-result.ts';
 import { composeToolsLayers, frameworkInvariantLayer } from './compose-layers.ts';
+import { ArtifactDependencyAuditPlugin } from './dependency-audit-plugin.ts';
 import { listArtifactFiles, resolveArtifactDestination } from './emit.ts';
+import { viewSelfContainmentDiagnostics } from './external-policy.ts';
 import {
   mcpAppBundlerFailureDiagnostic,
   mcpAppCompileErrorDiagnostics,
@@ -217,6 +220,10 @@ const assertResolvedViewConfig = (
       throw new Error('Rsbuild resolved an invalid self-contained MCP App configuration.');
     }
   }
+  // The compiler name is how each view's compile evidence finds its App.
+  if (bundlers.map((bundler) => bundler.name).toSorted().join('\0') !== appNames.toSorted().join('\0')) {
+    throw new Error('Rsbuild resolved an invalid self-contained MCP App configuration.');
+  }
   for (const bundler of bundlers) {
     if (
       bundler.output?.asyncChunks !== false ||
@@ -344,6 +351,8 @@ export const composeMcpAppsRsbuildConfig = (
     readonly meta: AgentBundleMeta;
     /** Defaults to `production`; see {@link McpAppCompileMode}. */
     readonly mode?: McpAppCompileMode;
+    /** Called with each view compilation's evidence once its module graph is final. */
+    readonly onCompilationEvidence?: (evidence: CompilationEvidence) => void;
     readonly outDir: string;
     readonly tools?: AgentBundleToolsConfig;
   },
@@ -406,13 +415,15 @@ export const composeMcpAppsRsbuildConfig = (
       },
     };
     // Added after the hatch mutator (this hook is merged last), so a consumer
-    // cannot strip the generated identity module out of the compiler.
+    // cannot strip the generated identity module or the dependency audit out
+    // of the compiler.
     const VirtualModulesPlugin = rsbuildVirtualModulesPlugin();
     config.plugins = [
       ...(config.plugins ?? []),
       appRuntimeReplacement(runtimePath),
       metaModuleReplacement(metaModulePath),
       new VirtualModulesPlugin({ [metaModulePath]: generatedMetaModuleSource(options.meta) }),
+      new ArtifactDependencyAuditPlugin(options.onCompilationEvidence ?? (() => undefined)),
     ];
     return config;
   };
@@ -426,6 +437,23 @@ export const composeMcpAppsRsbuildConfig = (
     profile,
     ...(options.tools === undefined ? {} : { tools: options.tools }),
   }));
+};
+
+/** Missing or duplicate evidence is a framework fault: Rsbuild names each environment's compiler after its App, and `assertResolvedViewConfig` pins that name. */
+const assertViewsSelfContained = (
+  compiled: readonly PlannedMcpApp[],
+  evidence: readonly CompilationEvidence[],
+  projectRoot: string,
+): void => {
+  const diagnostics = compiled.flatMap((app) => {
+    const records = evidence.filter((record) => record.compiler === app.name);
+    const [record] = records;
+    if (record === undefined || records.length !== 1) {
+      throw new Error(`Expected one compilation evidence record for MCP App ${JSON.stringify(app.name)}, found ${String(records.length)}.`);
+    }
+    return viewSelfContainmentDiagnostics(record, `mcp-apps/${app.name}.html`, projectRoot);
+  });
+  if (diagnostics.length > 0) throw new DiagnosticError(diagnostics);
 };
 
 export const compileMcpApps = async (
@@ -455,12 +483,14 @@ export const compileMcpApps = async (
   });
 
   const mode: McpAppCompileMode = options.mode ?? 'production';
+  const compilationEvidence: CompilationEvidence[] = [];
   const rsbuild = await createRsbuild({
     cwd: options.cwd,
     config: composeMcpAppsRsbuildConfig(sources, {
       cwd: options.cwd,
       meta: options.meta,
       mode,
+      onCompilationEvidence: (evidence) => compilationEvidence.push(evidence),
       outDir: options.outDir,
       ...(options.tools === undefined ? {} : { tools: options.tools }),
     }),
@@ -523,6 +553,7 @@ export const compileMcpApps = async (
   } finally {
     await result?.close();
   }
+  assertViewsSelfContained(compiled, compilationEvidence, options.cwd);
 
   const sizes = await assertSelfContainedViews(compiled, options.outDir);
   const compiledApps = Object.freeze(compiled.map((app): CompiledMcpApp => Object.freeze({

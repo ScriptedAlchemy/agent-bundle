@@ -13,7 +13,7 @@
  * | `dev-epoch` | `runDevEpochContractMatrix` | an epoch-pinned generated stdio process opened through the Workbench session service; MCP App routes are covered (surface + `ui://` sweep) and auto-covered without a fixture |
  * | `cli-dispatch` | `invokeCli`, `cliJson`, `cliNdjson` | a compiled plain or rendered CLI command dispatched through the routed CLI's own shell, including rendered output modes, in this process |
  * | `script-dispatch` | `runScript`, `scriptJson`, `scriptNdjson` | a conventional `src/scripts/*` module run through its generated executable's contract — the rendered-script shell with its four output modes in this process, or the plain `main` envelope as a Node process of its own over the source — without bundling |
- * | `workbench-surface` | `inspectWorkbenchSurface` | the compiled route graph projected exactly as the dev server serves it to the Workbench: route catalog, state, lifecycle fixtures, page availability, without a browser or dev server |
+ * | `workbench-surface` | `inspectWorkbenchSurface` | the compiled route graph projected exactly as the dev server serves it to the Workbench: application tree, route catalog, state, lifecycle fixtures, and Advanced availability, without a browser or dev server |
  * | `packed-stdio` | `openPackedMcpServer`, `runPackedContractMatrix` | a built artifact's generated entry running as a real process over stdio; MCP App routes are covered (surface + `ui://` sweep) and auto-covered without a fixture |
  * | `packed-deleted-source` | `removeProjectSource`, `openPackedMcpServer({ deletedSource })`, `runPackedContractMatrix` | the packed stdio process still runs after project source and configuration are removed and verified absent; MCP App routes are covered as at `packed-stdio` |
  * | `browser-app` | `mountBrowserApp` (`agent-bundle/test/browser`) | production-compiled MCP App HTML mounted over the product bridge in a real browser page |
@@ -177,15 +177,21 @@ export type {
 export {
   inspectWorkbenchSurface,
   workbenchCommandUsage,
-  workbenchPageLabel,
-  workbenchPagesFor,
+  workbenchLeafPath,
   workbenchRouteCatalog,
   workbenchSurfaceFromRouteGraph,
 } from './workbench.ts';
 export type {
+  AdvancedSection,
+  ApplicationGroup,
+  ApplicationGroupKind,
+  ApplicationLeaf,
+  ApplicationLeafExecution,
+  ApplicationServerGroup,
+  ApplicationSubgroup,
+  ApplicationTree,
   InspectWorkbenchSurfaceOptions,
   WorkbenchCapabilityCounts,
-  WorkbenchPageName,
   WorkbenchRouteCatalog,
   WorkbenchRouteCatalogEntry,
   WorkbenchRouteCatalogGroup,

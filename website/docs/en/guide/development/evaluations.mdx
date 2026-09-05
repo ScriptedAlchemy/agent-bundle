@@ -160,19 +160,16 @@ evidence — a grader that broke is not a plugin that misbehaved.
 Semantic grading requires a native Claude harness and a signed-in Claude Code session.
 Deterministic and Codex selections are refused when it is configured.
 
-## The Eval page
+## Workbench Evals
 
-The Workbench Eval page admits a selected run, reports live progress, and can cancel it through
-the run lifecycle. Each trial exposes its persisted raw evidence when present, plus recorded CLI,
-invocation, grader, and usage provenance.
+Open **Advanced → Evals → Runs** to admit a selected run, follow live progress, or cancel it
+through the run lifecycle. Each trial exposes its persisted raw evidence when present, plus
+recorded CLI, invocation, grader, and usage provenance.
 
-Comparison cells show recorded provenance and usage and only include aligned case, fixture,
+**Advanced → Evals → Compare** shows recorded provenance and usage and only includes aligned case, fixture,
 harness, invocation, host and model, CLI, and grader facets; unmatched facets are labeled
 non-comparable or unverified. Trial duration is persisted; provider token usage is shown only
 when the native stream reported it.
-
-Playground can promote selected durable outcome and assertion evidence from a trace into a draft
-eval case — see [Developer Workbench](./workbench.mdx).
 
 ## Native harnesses
 

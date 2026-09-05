@@ -403,8 +403,9 @@ export const config = {
 `io.modelcontextprotocol/tasks` 扩展，形态也不同（`resultType: "task"`、`tasks/update`、没有
 `tasks/result`）；生成服务器所用的 SDK 版本不提供该扩展，因此该修订上的客户端保持普通契约，也不会被宣告
 任务能力。固定版本的宿主是否会发出任务增强调用，按宿主记录在[宿主能力矩阵](../../reference/hosts.md)中；
-撰写本文时没有任何宿主这样做，因此这一生命周期由 SDK 客户端与 Workbench MCP 页面证明：宣告了任务支持的
-工具会提供**Run as task**，Tasks 面板会轮询 `tasks/get`、获取 `tasks/result` 并取消任务。
+撰写本文时没有任何宿主这样做，因此这一生命周期由 SDK 客户端与 Workbench 的 **Advanced → Protocol**
+证明：宣告了任务支持的工具会提供**Run as task**，Tasks 面板会轮询 `tasks/get`、获取 `tasks/result`
+并取消任务。
 
 `mcp-in-memory` 层用真实的 SDK 客户端证明整套契约：
 
@@ -866,7 +867,8 @@ MCP App <name> (<target>): mcp-apps/<name>.html <size> (<gzip size> gzip)
 
 ### 在浏览器中暴露 App
 
-已经声明在 `mcp.servers.<id>.apps` 下的 App，可以通过 [`web`](../../reference/configuration.mdx#web)
+在 MCP 宿主之外，App 通常通过在 Workbench 中选中 **Application → MCP → &lt;server&gt; → Apps** 下的
+叶子来访问。已经声明在 `mcp.servers.<id>.apps` 下的 App，也可以通过 [`web`](../../reference/configuration.mdx#web)
 配置键在普通浏览器标签页里从已安装插件打开——机器上不需要框架：
 
 ```ts

@@ -1,5 +1,11 @@
 .evals-content { box-sizing: border-box; margin: 0 auto; max-width: 1180px; min-width: 0; padding: 35px 34px 64px; width: 100%; }
 .evals-page-heading p { color: #596372; font-size: 15px; margin: 8px 0 0; }
+.evals-tabs { display: flex; gap: 8px; margin: 18px 0 0; }
+.evals-tab { background: #fff; border: 1px solid #bfc8d5; border-radius: 4px; color: #23466f; cursor: pointer; font-size: 13px; font-weight: 750; min-height: 36px; padding: 0 16px; }
+.evals-tab:hover { background: #edf2f7; }
+.evals-tab--active { background: #0b5bd3; border-color: #06459e; color: #fff; }
+.evals-tab--active:hover { background: #084eb9; }
+.evals-runs { margin-top: 8px; }
 .eval-controls { border-top: 1px solid #d9dee7; display: grid; gap: 8px; justify-items: start; padding-top: 24px; width: 100%; }
 .eval-controls label { color: #596372; font-size: 12px; font-weight: 750; letter-spacing: .03em; margin-top: 12px; text-transform: uppercase; }
 .eval-controls select { background: #fff; border: 1px solid #bfc8d5; border-radius: 4px; color: #1e2938; font-size: 14px; font-weight: 600; max-width: 100%; min-height: 37px; padding: 0 32px 0 10px; width: min(100%, 560px); }
@@ -70,13 +76,3 @@
 .eval-outcome-pass { background: #e4f4e8; border: 1px solid #2f7d43; color: #1d5c2f; }
 .eval-outcome-fail { background: #fdeaea; border: 1px solid #c01d26; color: #8f1720; }
 .eval-outcome-inconclusive { background: #fdf3e0; border: 1px dashed #a86a06; color: #6d4602; }
-
-@media (max-width: 820px) {
-  .evals-content { padding: 27px 20px 45px; }
-  .eval-cases { min-width: 660px; }
-  .eval-trial-rows { grid-template-columns: 1fr; }
-  .eval-trial-rows div { border-bottom: 1px solid #d9dee7; border-right: 0; }
-  .eval-trial-rows div:last-child { border-bottom: 0; }
-  .eval-evidence-channels dl div { grid-template-columns: 1fr; gap: 3px; }
-  .eval-host-models { overflow-x: auto; }
-}

@@ -458,8 +458,9 @@ generated server's SDK release does not serve that extension, so a client on tha
 the ordinary contract and no task capability is advertised to it. Whether a pinned host issues
 task-augmented calls at all is recorded per host in the [host capability
 matrix](../../reference/hosts.md); at the time of writing none does, so the lifecycle is proven with
-the SDK client and the Workbench MCP page, where a tool that advertises task support offers
-**Run as task** and the Tasks panel polls `tasks/get`, fetches `tasks/result`, and cancels.
+the SDK client and **Advanced → Protocol** in the Workbench, where a tool that advertises task
+support offers **Run as task** and the Tasks panel polls `tasks/get`, fetches `tasks/result`, and
+cancels.
 
 The `mcp-in-memory` level proves the whole contract with the real SDK client:
 
@@ -998,8 +999,9 @@ resolved App configuration when a hatch value does not land where you expected.
 
 ### Exposing an App in the browser
 
-An App already declared under `mcp.servers.<id>.apps` can be opened in a plain browser tab from
-the installed plugin — no framework on the machine — by listing it on the
+Outside an MCP host, an App is normally reached by selecting its leaf under
+**Application → MCP → &lt;server&gt; → Apps** in the Workbench. An App already declared under
+`mcp.servers.<id>.apps` can also be opened in a plain browser tab from the installed plugin — no framework on the machine — by listing it on the
 [`web`](../../reference/configuration.mdx#web) config key:
 
 ```ts

@@ -132,22 +132,17 @@ const readyView = artifactViewFor({
   selectedTarget: 'claude',
 });
 
-it('renders the epoch identity, artifact tree, runtime metadata, and provenance', () => {
+it('renders the emitted file tree without runtime hook or MCP tables', () => {
   const markup = renderToStaticMarkup(createElement(ArtifactInspectionView, { view: readyView }));
 
-  expect(markup).toContain('Build identity');
-  expect(markup).toContain('Artifact tree');
-  expect(markup).toContain('Runtime');
-  expect(markup).toContain('Provenance');
-  expect(markup).toContain('revision-9');
-  expect(markup).toContain('config-digest');
+  expect(markup).toContain('Emitted files');
   expect(markup).toContain('hooks/session-start.mjs');
-  expect(markup).toContain('0755');
-  expect(markup).toContain('session-start · sessionStart · claude');
-  expect(markup).toContain('review · stdio · claude');
-  expect(markup).toContain('.mcp.json');
-  expect(markup).toContain('hooks/session-start.ts');
-  expect(markup).toContain('a'.repeat(64));
+  expect(markup).toContain('Details');
+  expect(markup).not.toContain('Runtime');
+  expect(markup).not.toContain('session-start · sessionStart · claude');
+  expect(markup).not.toContain('review · stdio · claude');
+  expect(markup).not.toContain('.mcp.json');
+  expect(markup).not.toContain('a'.repeat(64));
 });
 
 it('renders artifact validation diagnostics as a visible alert', () => {
@@ -178,7 +173,7 @@ it('renders each diff group with its count and both epoch digests', () => {
   expect(markup).toContain('Unchanged');
   expect(markup).toContain('epoch-1');
   expect(markup).toContain('AGENTS.md');
-  expect(markup).toContain('d'.repeat(64));
+  expect(markup).not.toContain('d'.repeat(64));
 });
 
 it('states that no build comparison has been requested yet', () => {

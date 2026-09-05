@@ -5,9 +5,6 @@ import {
   cliCommandInvocation,
   cliCommandUsage,
   createRouteInputDraft,
-  mcpToolPrefillFromNavigationState,
-  mcpToolPrefillFor,
-  mcpToolPrefillNavigationState,
   routeCatalogFor,
   routeCatalogHasKind,
   routeCatalogServerCount,
@@ -434,31 +431,6 @@ it('marks required and optional repeated named flags in CLI usage', () => {
     path: ['library', 'import'],
     routeId: 'cli:library/import',
   })).toBe('library import --source <string> ... [--tag <string> ...]');
-});
-
-it('maps a tool route server id and final route segment into an MCP prefill', () => {
-  const catalog = routeCatalogFor(manifest);
-  const group = catalog.groups[0]!;
-  const entry = group.entries.find((candidate) => candidate.id === 'tool:alpha/echo')!;
-
-  expect(mcpToolPrefillFor(group, entry, { format: 'json' })).toEqual({
-    arguments: { format: 'json' },
-    serverName: 'alpha',
-    toolName: 'echo',
-  });
-});
-
-it('round-trips only well-shaped MCP prefills through hash navigation state', () => {
-  const prefill = {
-    arguments: { format: 'json' },
-    serverName: 'alpha',
-    toolName: 'echo',
-  };
-  const state = mcpToolPrefillNavigationState(prefill);
-
-  expect(mcpToolPrefillFromNavigationState(state)).toEqual(prefill);
-  expect(mcpToolPrefillFromNavigationState({ mcpToolPrefill: { ...prefill, toolName: '' } })).toBeUndefined();
-  expect(mcpToolPrefillFromNavigationState({ mcpToolPrefill: { ...prefill, arguments: [] } })).toBeUndefined();
 });
 
 it('sorts providers by name and keeps route provenance on every entry', () => {

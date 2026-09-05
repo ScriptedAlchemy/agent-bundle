@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 
 import { afterAll, expect, it } from '@rstest/core';
 
-import { inspectWorkbenchSurface } from '../../src/test/index.ts';
+import { inspectWorkbenchSurface, workbenchLeafPath } from '../../src/test/index.ts';
 import { createProjectFixture } from '../helpers/project-fixture.ts';
 
 /**
@@ -75,4 +75,10 @@ it('inspects the Workbench surface of a project with a rendered skill under the 
   expect(surface.manifest.diagnostics).toEqual([]);
   expect(surface.counts).toMatchObject({ mcpServers: 1, skills: 1 });
   expect(surface.provenance).toMatchObject({ proofLevel: 'workbench-surface', targets: ['claude'] });
+  const skills = surface.application.groups.find((group) => group.kind === 'skills');
+  expect(skills).toMatchObject({
+    leaves: [expect.objectContaining({ execution: 'document', label: 'demo' })],
+  });
+  if (skills?.kind !== 'skills') throw new Error('Expected a Skills application group.');
+  expect(workbenchLeafPath(skills.leaves[0]!)).toBe('/routes/skills/skill%3Ademo');
 });

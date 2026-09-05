@@ -32,10 +32,12 @@ import type {
   McpAppPreviewSnapshot,
   McpAppRuntimeInvalidationDetails,
 } from '../../../agent-bundle/src/contracts/mcp-apps.ts';
+import type {
+  RuntimeAppPreviewLifecycle,
+  RuntimeAppPreviewProps,
+} from '../runtime-view-contracts.ts';
 import type { AppRendererHandle, McpAppRendererTool } from './app-renderer.tsx';
 import type { RuntimeAppBridgeFactory, RuntimeAppBridgeOperationTrace } from './runtime-app-bridge.ts';
-import type { RuntimeAppPreviewProps } from '../runtime-stage.tsx';
-import type { RuntimeAppPreviewLifecycle } from '../runtime-playground.tsx';
 
 import './mcp-app-preview.css';
 

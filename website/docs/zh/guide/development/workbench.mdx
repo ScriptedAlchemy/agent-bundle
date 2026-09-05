@@ -1,5 +1,5 @@
 ---
-description: 'agent-bundle 开发者 Workbench：loopback 边界、按 epoch 固定的 MCP 会话、/web/<server>/<app> App 宿主、Playground 轨迹、开发期宿主安装，以及可选的 Agent API。'
+description: '在 loopback 开发者 Workbench 中浏览、调用、渲染、追踪并诊断一份 agent-bundle 应用。'
 ---
 
 # 开发者 Workbench
@@ -21,80 +21,151 @@ npx agent-bundle dev --root . --port 3100 --no-open
 - **按 epoch 固定的读取。** 没有任何东西会隐式跟随一次新构建；读取产物的表面会指明自己读取的 epoch。
 - **只做可信本地操作。** 浏览器绝不提供命令、工作目录、原生模型或凭据。见[安全](../../reference/security.mdx)。
 
-## 它展示什么
+## Workbench 导航
 
-| 页面 | 内容 |
-| --- | --- |
-| Overview | 项目标识、规范化模型与诊断。 |
-| Routes | 来自与 `inspect --routes` 相同编译器 pass 的已编译路由目录：每条路由的源码模块、配置摘要与生成的输入编辑器；带静态契约的路由还会指明契约的声明模块及共享该契约的其他路由。路由清单携带 `cli.commands[].projection`（`inspect --routes` 会显示它）；Workbench 会在选中操作的 inspector 中展示。 |
-| Skills | 每个 Skill 文档，包括各宿主降级后的输出。 |
-| Artifacts | 复合插件根目录——无论聚焦哪个选中宿主，都是同一棵树——以及 provenance 与 epoch 对比。 |
-| MCP | 绑定到产物的 playground，带原始协议轨迹、MCP App 预览，以及独立 MCP Inspector 的启动器。 |
-| Hooks | 运行输出的钩子包装层的 playground。 |
-| Playground | 可重放、可导出的持久有序轨迹。 |
-| Evals | eval 运行与运行对比。 |
-| Logs | 按生产者分组的精简事件与原始 stdout、stderr、协议流：规范化、构建、诊断、MCP、钩子、宿主试验与 grader。 |
+本版本的主导航有四个目的地：
 
-MCP App 视图编译失败与其他任何构建失败一样处理。Overview 的 **Diagnostics** 表格为每个 Rspack
-错误显示一行 `AB4770`：Message 列携带
-`MCP App "<name>" failed to compile: <file>:<line>:<column>: <message>`，Source 列则是出错文件，
-取代了过去那条只能以配置文件为来源的
-`AB7100 "Unable to compile the build: Rspack build failed."`。Logs 在 `build.failed` 条目下记录
-同样的诊断（代码与来源路径）。之后不会有 `artifact.available`，因此最后一个可用的 epoch 保持活跃，每个已绑定的 MCP
-会话继续提供它；保存修复后，下一次重建即会发布。编译警告（`AB4771`）与体积建议（`AB4772`）以同样的
-方式随成功 epoch 的诊断一起出现。
+- **Application** — 已编译的应用树，以及所选叶子的工作区。
+- **Trace** — 本次前台开发会话中观察到的调用。
+- **Problems** — 当前的编译器、运行时与契约诊断。
+- **Advanced** — Evals、Artifact、Protocol、Host diagnostics 与 Raw logs。
 
-## MCP 会话绑定到一个 epoch
+页眉在这些目的地之间始终可见。它显示项目名、构建状态与 epoch、契约门控与诊断失败计数（链接到
+Problems），以及前台连接状态。宿主 **Sessions** 会在后续版本中到来，不属于本版 Workbench。
 
-Workbench 的 MCP 会话在打开时绑定 `{ epochId, target, serverName }`，并且绝不会自动迁移到新的
-epoch。这正是协议轨迹有意义的原因：其中每一帧都来自同一个由同一批输入构建出的生成式服务器。
+## Application 树
 
-- **Restart MCP session** 会在它*所选*的那个 epoch 上重新启动该生成式服务器。
-- 要使用新发布的 epoch，请打开一个**新**会话。
-- 兼容的 MCP App 通过同一个已绑定会话预览。开发循环以未压缩的方式编译视图，因此浏览器开发者工具能
-  显示可读的 App 源码；`agent-bundle build` 交付的则是压缩后的版本（见
-  [开发构建与生产构建](../authoring/mcp.mdx#开发构建与生产构建)）。同一套宿主栈也能通过
-  `agent-bundle serve-app` 在一个普通浏览器标签页里独立提供某个 App。当项目配置了
-  [`web`](../../reference/configuration.mdx#web) 时，`agent-bundle dev` 还会在前台服务器上提供
-  `GET /web/<server>/<app>`——同一页面、中继、路由、沙箱代理与同意行为，绑定到当前 epoch 的服务器
-  会话。未列入 `web.apps` 的 App 返回 404。见
-  [在浏览器中暴露 App](../authoring/mcp.mdx#在浏览器中暴露-app)。
+Application 是从已编译应用图派生出的一棵树：
 
-## 独立的 MCP Inspector
+```text
+MCP
+  <server>
+    Tools
+    Resources
+    Prompts
+    Apps
+Events / Hooks
+CLI
+Scripts
+Skills
+Rules / Commands
+```
 
-[MCP Inspector](https://github.com/modelcontextprotocol/inspector) 是一个独立的 localhost 应用，拥有自己
-的 token URL。Workbench 绝不会把它内嵌进来；MCP 页面的 **MCP Inspector** 区块按需启动它，然后交给你一个
-链接。
+每个叶子都是一个编写好的或配置好的插件表面。生成的 MCP 服务器把 tools、resources、prompts 与 Apps
+归到各自的服务器之下。事件路由与已配置的钩子出现在 Events / Hooks 下。路由式命令构成 CLI 分支。
+约定式与显式配置的脚本共用 Scripts。Skills、宿主规则与宿主命令即使没有可执行的路由 id 也仍然可见。
 
-- **Open MCP Inspector** 会请求开发服务器在项目根目录运行 `npx --yes @modelcontextprotocol/inspector`，
-  并设置 `MCP_AUTO_OPEN_ENABLED=false`，使 Inspector 不会自行打开窗口。首次启动会下载该包，最多可能需要
-  30 秒。浏览器绝不选择命令、参数、工作目录或环境。
-- 一旦 Inspector 打印出带 token 的 localhost URL，开发服务器就把它返回给页面，页面随即渲染
-  **Open MCP Inspector in a new tab**。该链接以 `rel="noopener noreferrer"` 在新标签页中打开。如果页面
-  加载时 Inspector 已经在运行，链接会立即出现。
-- 对于 `streamable-http` 会话，该链接是一条 Inspector 2.x 深度链接：`serverUrl` 是该会话的服务器 URL
-  （凭据与查询参数已被剥离），`transport=http`，而 `autoConnect` 携带 Inspector 自己的 token，因此
-  Inspector 会在加载时连接到该服务器。
-- Inspector 2.x 不再接受 URL 中的命令——上游移除了 `serverCommand` 与 `serverArgs`——因此 `stdio` 会话
-  无法被深度链接。请改为在 Inspector 内部添加命令；**Download Inspector config** 会导出所选会话解析后的
-  命令、参数与非机密环境，正是为此而设。
-- 失败会内联显示在页面上：Inspector 无法启动、在发布 URL 之前退出，或未在 30 秒启动预算内发布 URL 时为
-  `AB8112`；Inspector 路由不可用时为 `AB8113`。
+仅存在于配置中的钩子与脚本，不会仅仅因为没有匹配的文件约定路由就被隐藏。这棵树把路由清单与拥有这些
+声明的编译器检视结果合并在一起。过期或不可用的编译器目录会在树中被标出，而不是被呈现为一份空应用。
 
-## Playground 拥有自己的轨迹
+## 路由工作区
 
-只有在 Playground 中发起的操作才会加入它的持久有序轨迹。即使 Playground 会话处于打开状态，Hooks 与
-MCP 页面的操作也保持独立——轨迹记录的是一段刻意为之的序列，而不是所有被点过的东西。
+选中一个叶子会打开同一个工作区，而不是把你送到某个表面专用的页面。对于可执行路由，输入编辑器由其
+schema 生成，并提供适用的夹具以及为该叶子保留的上次输入。**Run** 在前台服务器上执行生产路由路径。
 
-从一条 Playground 轨迹出发，你可以重放或导出原始证据，或者把选定的持久 outcome 与断言证据提升为一份
-草稿 eval case。
+结果首先打开 **Rendered**，即生产 Agent Document 及其流式进度或 Suspense 替换的浏览器渲染。次要结果
+标签是 **Structured result**、**Raw AgentDocument**、**MCP projection**、可用时的 **CLI projection**，
+以及 **Trace**。检查器仅在请求时打开，其中包含 **Source**、**Schema**、**Context**、**Providers**、
+**Execution timings**、**Projection** 与 **Raw protocol**。
 
-`script.run` 是生产环境挂载、可信本地的 Playground 操作：它只在受管工作区中、为所选 target 运行选定的、
-由清单拥有的输出脚本，并保留有界的 stdout 与 stderr、退出码、取消状态与原始事件引用。见
-[脚本与资源](../authoring/scripts-assets.mdx)。
+浏览器不会导入或执行任意路由模块。服务器运行生成式可执行文件所用的同一条 RSC 路由路径，并把其语义
+渲染事件流与最终的 Agent Document 发送给 Workbench。
 
-原生提示词为所选 epoch 选择一份服务器目录选择——case、fixture、宿主与固定模型——而不是接受浏览器提供的
-命令或模型。
+### 事件路由
+
+事件叶子的夹具选项是 **Canonical**、**Claude**、**Codex** 与 **Cursor**。运行一份宿主夹具会像该宿主
+包装层一样解码原生信封，然后展示规范输入、请求上下文、providers、返回的决策或文档，以及投影后的宿主
+结果。规范到宿主的映射与原生输入/输出是次要的投影细节。
+
+观察到的事件收据出现在该叶子的 **Replay** 标签与 Trace 中。在那里选中一份收据即可重跑其绑定到该
+epoch 的输入；没有单独的生命周期目的地。
+
+### App 与 Skill 叶子
+
+App 叶子把沙箱化的 MCP App 预览放在工作区中央，并绑定到它的服务器。也可以从其工具的投影细节到达一个
+已绑定的 App。同一套宿主栈通过 `agent-bundle serve-app` 在普通浏览器标签页里独立托管一个 App；当项目配置了
+[`web`](../../reference/configuration.mdx#web)，`agent-bundle dev` 也会在前台服务器上提供
+`GET /web/<server>/<app>`——同样的页面、中继、路由、沙箱代理与同意行为，绑定到当前 epoch 的服务器会话。
+未列在 `web.apps` 中的 App 返回 404。见[在浏览器中暴露 App](../authoring/mcp.mdx#在浏览器中暴露-app)。
+
+Skill 叶子默认渲染输出的 Skill 文档。源码/生成差异、frontmatter、资源与 eval 覆盖位于检查器中。Skill
+Markdown 中的原始 HTML、JSX/MDX 与 Mermaid 保持惰性。
+
+## Trace
+
+Trace 列出本次前台开发会话的路由调用，并在收到 `route.invocation` 项目事件时更新。选中一条记录即可
+检视它，或跟随其路由链接，在路由工作区中加载该调用快照。本版本不声称提供跨会话的持久轨迹，也不嵌入
+宿主会话。
+
+## Problems 与过期目录修复
+
+Problems 收集当前诊断。失败的构建不会发布新的 epoch，因此页眉显示失败状态，而 Application 继续暴露
+上一个可用的目录与产物。例如，MCP App 编译失败会为每个 Rspack 错误贡献一行 `AB4770`，包括出错源码
+与位置；`AB4771` 警告与 `AB4772` 体积建议属于成功的 epoch。
+
+按此顺序修复过期目录：
+
+1. 从页眉失败计数打开 **Problems**，并修复所报告的源码。
+2. 重建，然后等待已完成的 **Idle** 状态；**Building** 不是修复证据。
+3. 回到 **Application**。新发布的 epoch 会替换过期的树，并清除已修复的诊断。
+
+## Advanced
+
+- **Evals** 具有 **Runs** 与 **Compare** 视图，用于受理、取消、检视与对比 eval 运行。
+- **Artifact** 默认是一棵简单的输出文件树。选中一个文件并启用其详情，即可看到哈希、模式与
+  provenance。
+- **Protocol** 是底层的 MCP 会话检查器。它保留协议轨迹、任务控件、同意、重启/取消操作，以及独立的
+  [MCP Inspector](https://github.com/modelcontextprotocol/inspector) 启动器。
+- **Host diagnostics** 仅限于已安装状态、版本、路径、当前插件是否已附加、可操作的错误，以及一个
+  MCP 握手指示。
+- **Raw logs** 包含用于框架级诊断的生产者流。Trace 才是常规的路由执行视图。
+
+MCP 协议会话仍然固定到 `{ epochId, target, serverName }`。重启它会在所选 epoch 上重新拉起该生成式
+服务器；要使用新发布的 epoch，请打开一个新会话。兼容的 App 通过同一个已绑定会话预览。见
+[开发构建与生产构建](../authoring/mcp.mdx#开发构建与生产构建)。
+
+独立的 MCP Inspector 仍然作为单独的 localhost 应用启动。Streamable HTTP 会话可以深度链接进
+Inspector 2.x；stdio 会话使用可下载的、已解析的命令、参数与非机密环境。`AB8112` 报告启动失败或
+超时，`AB8113` 报告启动器路由不可用。
+
+## URL 模型
+
+Workbench 使用路径与浏览器历史，而不是 `#page` 哈希：
+
+```text
+/routes/mcp/<server>/tool/<name>
+/routes/mcp/<server>/resource/<name>
+/routes/mcp/<server>/prompt/<name>
+/routes/mcp/<server>/app/<name>
+/routes/events/<event...>
+/routes/cli/<command...>
+/routes/scripts/<name>
+/routes/skills/<id>
+/routes/commands/<id>
+/routes/rules/<id>
+/trace/<invocation-id>
+/problems
+/advanced/<section>
+```
+
+Advanced 的分区名是 `evals`、`artifact`、`protocol`、`hosts` 与 `logs`。
+在一条 Application 路由后追加 `?invocation=<id>` 即可加载一条已记录的调用。开发服务器为这些路径提供
+Workbench 外壳，因此路由、trace、Problems 与 Advanced 的深度链接在刷新后仍然有效。
+
+## 路由调用 API
+
+路由工作区使用一套经过认证、受 origin 守卫的前台 API：
+
+- `POST /api/routes/invocations` 接受一条路由调用请求，并返回其已完成的调用信封。
+- `GET /api/routes/invocations?limit=50` 为 Trace 返回按最新优先的摘要。
+- `GET /api/routes/invocations/<id>` 返回一次调用。
+- `/api/project/events` 以 `route.invocation` 事件发布已完成的摘要。
+
+该信封在可用时携带规范输入、请求上下文、providers、有序渲染事件、最终的 Agent Document、结构化结果、
+投影、诊断与执行计时。被表示的 `Agent.Error` 仍是一份已渲染结果；未知路由或 invocation id（`AB8231`）、
+不可用的 epoch（`AB8232`）、渲染超时或崩溃（`AB8236`）、格式错误的请求（`AB8237`）与未知 fixture id
+（`AB8238`）会作为诊断报告。
+各条触发条件与恢复指引见[诊断参考](../../reference/diagnostics.md)。
 
 ## 以编程方式使用同一个会话
 
@@ -250,7 +321,15 @@ http://127.0.0.1:3100. Open http://127.0.0.1:3100 instead, or start agent-bundle
 拒绝后再显示这条拒绝信息。前台仍会以
 `AB8003` 拒绝携带该 `Origin` 的变更请求。前台 URL 本身无论如何都照常工作。
 
+## 什么变了
+
+- Overview 状态移入了持久页眉与 Problems。
+- Routes、Hooks、Skills 与 MCP 预览移入了 Application 叶子。
+- 事件重放移入了事件路由与 Trace；脚本执行移入了 Script 叶子。
+- Evals 与对比变成了 Advanced → Evals → Runs / Compare；artifact、protocol、host
+  diagnostics 与 raw logs 也移到了 Advanced 下。
+
 ## 下一步
 
 - [测试](./testing.mdx) —— Workbench 所演练表面背后的证明级别。
-- [评测](./evaluations.mdx) —— eval 运行、对比与 Eval 页面。
+- [评测](./evaluations.mdx) —— Advanced 下的 eval 运行与对比。

@@ -9,7 +9,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { dependencyManifestPath } from '../core/dependency-manifest.ts';
 import { sha256Hex } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
-import { isInsideOrEqual, toPosixRelative } from '../core/paths.ts';
+import { isInsideOrEqual, posixRelativeWhenInside } from '../core/paths.ts';
 import { isRecord } from '../core/strict-json.ts';
 import type { AgentBundleToolsConfig } from '../core/types.ts';
 import type { AgentBundleMeta } from '../meta.ts';
@@ -789,9 +789,6 @@ const moduleKindOf = (
   return 'authored';
 };
 
-const projectIssuer = (cwd: string, issuer: string): string =>
-  isInsideOrEqual(cwd, issuer) ? toPosixRelative(cwd, issuer) : issuer;
-
 /**
  * Lowers every surface's entries through one Rslib instance and returns the
  * compiler result per surface, in surface order. A surface without entries
@@ -875,7 +872,7 @@ export const buildRslibSurfaces = async (
       const externals = record.externals.map((external): ExternalIR => ({
         asset: entry.outputRelativePath,
         externalType: external.externalType,
-        issuers: external.issuers.map((issuer) => projectIssuer(options.cwd, issuer)),
+        issuers: external.issuers.map((issuer) => posixRelativeWhenInside(options.cwd, issuer)),
         kind: classifyExternal(external, { asset: entry.outputRelativePath, emittedAssets }),
         request: external.request,
         userRequest: external.userRequest,

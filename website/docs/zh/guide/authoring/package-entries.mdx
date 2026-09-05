@@ -418,6 +418,25 @@ npx agent-bundle prepack --root . --output artifact --json
 并参与项目 revision 的哈希。请先运行你自己的构建——缺失或为空的 payload 在 `dev` 下只是警告，以便
 干净检出也能工作，但 `agent-bundle build` 会拒绝它。
 
+编译器不会打开 payload 文件，因此请用 `definePrebuilt` 和 `runtimeDependencies` 列出它们加载的裸包名。
+npm 不会将其读作裸包名的条目，或 `package.json` 未为消费者安装的包名（`dependencies`、
+`optionalDependencies`，或未标记为可选的 peer），会报 `AB4751`；`package.json` 缺失（静默）、
+无法解析或位于项目根之外（`AB4011`）时跳过声明检查。已声明的包名在 `AB7014` 中视为已使用。
+
+```ts
+import { defineConfig, definePrebuilt } from 'agent-bundle';
+
+export default defineConfig({
+  payload: {
+    tools: definePrebuilt({
+      source: './built/tools',
+      targets: ['claude'],
+      runtimeDependencies: ['sharp'],
+    }),
+  },
+});
+```
+
 ## 打包器逃生舱
 
 `tools.rsbuild`（一个 Rsbuild 环境配置片段）与 `tools.rspack`（一个 Rspack 配置对象、mutator 函数或

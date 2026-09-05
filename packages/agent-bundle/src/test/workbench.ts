@@ -4,15 +4,15 @@
  * The developer Workbench never discovers a project itself: the dev server
  * runs one compiler pass and serves projections of it — the route manifest
  * (`GET /api/routes/manifest`), the state declaration inside it, the
- * lifecycle-replay inventory (`GET /api/lifecycles`), and the capability
- * counts navigation derives its pages from. `inspectWorkbenchSurface` runs
+ * lifecycle-replay inventory (`GET /api/lifecycles`), and the application
+ * tree derived from those compiler facts. `inspectWorkbenchSurface` runs
  * that same compiler pass and the same projection functions in this process,
  * so a consumer can assert what the Workbench would be given for their
  * project without a browser or a dev server.
  *
  * It does **not** start the dev server, build an artifact, or render the
- * Workbench: page-availability and catalog grouping are re-derived here by the
- * Workbench's own rules over the same wire shapes, and the repository proves
+ * Workbench: the application tree and catalog grouping are re-derived here by
+ * the Workbench's own rules over the same wire shapes, and the repository proves
  * that derivation against the real-Chrome Workbench acceptance. Artifact-only
  * facts — per-target executables, published epochs, host discovery, live MCP
  * probes — stay with the dev-server and browser levels.
@@ -23,6 +23,13 @@ import type { Lifecycle, LifecycleListResponse } from '../contracts/lifecycles.t
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { deepFreeze } from '../core/freeze.ts';
 import type { NormalizedNotices, NormalizedStateDefinition } from '../core/types.ts';
+import {
+  applicationTreeForManifest,
+  type ApplicationLeaf,
+  type ApplicationTreeManifestSources,
+  type ApplicationTree,
+} from '../dev/routes/application-tree.ts';
+import { applicationNodePath } from '../dev/routes/application-node.ts';
 import { routeManifestFor } from '../dev/routes/route-manifest.ts';
 import type {
   RouteManifest,
@@ -36,74 +43,18 @@ import type { CompiledRouteGraph } from '../routes/types.ts';
 import { AgentTestError } from './errors.ts';
 import { WORKBENCH_SURFACE_PROOF_LEVEL } from './manifest.ts';
 
-/** Every Workbench page the navigation can show, in the Workbench's own order. */
-export type WorkbenchPageName =
-  | 'overview'
-  | 'routes'
-  | 'skills'
-  | 'hooks'
-  | 'lifecycles'
-  | 'hosts'
-  | 'mcp'
-  | 'artifacts'
-  | 'playground'
-  | 'logs'
-  | 'evals'
-  | 'comparisons';
+export type {
+  ApplicationGroup,
+  ApplicationGroupKind,
+  ApplicationLeaf,
+  ApplicationLeafExecution,
+  ApplicationServerGroup,
+  ApplicationSubgroup,
+  ApplicationTree,
+} from '../dev/routes/application-tree.ts';
 
-/**
- * The rail order `packages/workbench/src/main.tsx` renders its navigation
- * items in, minus Runtime (a dev-server runtime capability, not a compile-time
- * fact). The Workbench e2e pins this list against the real rail.
- */
-const workbenchPageOrder: readonly WorkbenchPageName[] = Object.freeze([
-  'overview',
-  'routes',
-  'skills',
-  'hooks',
-  'lifecycles',
-  'hosts',
-  'mcp',
-  'artifacts',
-  'playground',
-  'logs',
-  'evals',
-  'comparisons',
-]);
-
-/** The Workbench's navigation labels, so an assertion can name the link a browser would show. */
-export const workbenchPageLabel = (page: WorkbenchPageName): string => {
-  switch (page) {
-    case 'overview':
-      return 'Overview';
-    case 'routes':
-      return 'Routes';
-    case 'skills':
-      return 'Skills';
-    case 'hooks':
-      return 'Hooks';
-    case 'lifecycles':
-      return 'Lifecycles';
-    case 'hosts':
-      return 'Hosts';
-    case 'playground':
-      return 'Playground';
-    case 'mcp':
-      return 'MCP playground';
-    case 'evals':
-      return 'Evals';
-    case 'comparisons':
-      return 'Comparisons';
-    case 'artifacts':
-      return 'Artifacts';
-    case 'logs':
-      return 'Logs';
-    default: {
-      const exhaustive: never = page;
-      throw new TypeError(`Unknown Workbench page ${String(exhaustive)}.`);
-    }
-  }
-};
+/** A content-bearing destination within the Workbench's Advanced area. */
+export type AdvancedSection = 'artifact' | 'evals' | 'hosts' | 'logs' | 'protocol';
 
 /**
  * The capability counts the Workbench derives its navigation from, as the
@@ -125,20 +76,20 @@ export interface WorkbenchCapabilityCounts {
 /** One route as the Workbench catalog lists it: the manifest route plus, for CLI routes, its compiled command. */
 export interface WorkbenchRouteCatalogEntry {
   readonly command?: RouteManifestCliCommand;
-  /** The `<bin> <command> …` usage line the Routes page renders for a CLI command. */
+  /** The `<bin> <command> …` usage line the route workspace renders for a CLI command. */
   readonly commandUsage?: string;
   readonly route: RouteManifestRoute;
 }
 
 /**
- * One catalog section, exactly as the Routes page groups them: per server and
+ * One catalog section, exactly as the application tree groups them: per server and
  * kind for MCP routes (`curator · Tools`), project-level for event routes,
  * CLI commands, and scripts.
  */
 export interface WorkbenchRouteCatalogGroup {
   readonly entries: readonly WorkbenchRouteCatalogEntry[];
   readonly kind: RouteManifestKind;
-  /** The heading text the Routes page renders for this group. */
+  /** The heading text the application tree renders for this group. */
   readonly label: string;
   readonly mode?: string;
   readonly server?: string;
@@ -157,10 +108,10 @@ export interface WorkbenchRouteCatalog {
   readonly digest: string;
   readonly groups: readonly WorkbenchRouteCatalogGroup[];
   readonly providers: readonly RouteManifest['providers'][number][];
-  /** The number the Routes page shows under "Route graph identity". */
+  /** The number of compiled routes in the catalog. */
   readonly routeCount: number;
   readonly servers: readonly WorkbenchRouteCatalogServer[];
-  /** The state declaration the Routes page's State region renders; absent when the project declares none. */
+  /** The effective state declaration; absent when the project declares none. */
   readonly stateDefinition?: RouteManifestState;
 }
 
@@ -175,17 +126,15 @@ export interface WorkbenchSurfaceProvenance {
 }
 
 export interface WorkbenchSurface {
+  readonly advanced: readonly AdvancedSection[];
+  readonly application: ApplicationTree;
   readonly catalog: WorkbenchRouteCatalog;
   readonly counts: WorkbenchCapabilityCounts;
-  /** Every event route with the concrete hosts and starter fixtures the Lifecycles page offers for replay. */
+  /** Every event route with the concrete hosts and starter fixtures available for replay. */
   readonly lifecycles: readonly Lifecycle[];
   /** Exactly the wire body of `GET /api/routes/manifest`. */
   readonly manifest: RouteManifest;
-  /** The navigation pages the Workbench would show, in navigation order. */
-  readonly pages: readonly WorkbenchPageName[];
   readonly provenance: WorkbenchSurfaceProvenance;
-  /** The navigation pages the Workbench would hide for this project. */
-  readonly unavailablePages: readonly WorkbenchPageName[];
 }
 
 const kindLabels: Readonly<Record<RouteManifestKind, string>> = Object.freeze({
@@ -198,7 +147,7 @@ const kindLabels: Readonly<Record<RouteManifestKind, string>> = Object.freeze({
   tool: 'Tools',
 });
 
-/** The Routes page's group order for one server: MCP kinds first, then project surfaces. */
+/** The application tree's group order for one server: MCP kinds first, then project surfaces. */
 const catalogKinds: readonly RouteManifestKind[] = Object.freeze([
   'tool',
   'resource',
@@ -217,7 +166,7 @@ const cliOperand = (option: RouteManifestCliCommand['options'][number]): string 
   return `<${kind}>`;
 };
 
-/** The usage line the Routes page renders: positionals in order, then flags, required ones unbracketed. */
+/** The usage line the route workspace renders: positionals in order, then flags, required ones unbracketed. */
 export const workbenchCommandUsage = (command: RouteManifestCliCommand): string => {
   const positionals = command.options.filter((option) => option.positional !== undefined)
     .toSorted((left, right) => left.positional! - right.positional!)
@@ -276,7 +225,7 @@ const projectGroups = (manifest: RouteManifest): readonly WorkbenchRouteCatalogG
   ...(manifest.scripts.length === 0 ? [] : [groupFor('script', manifest.scripts.map((route) => entryFor(route)))]),
 ];
 
-/** The Routes page catalog derived from one route manifest, by the Workbench's grouping rules. */
+/** The route catalog derived from one route manifest, by the Workbench's grouping rules. */
 export const workbenchRouteCatalog = (manifest: RouteManifest): WorkbenchRouteCatalog => {
   const groups = [...serverGroups(manifest), ...projectGroups(manifest)];
   return {
@@ -292,61 +241,48 @@ export const workbenchRouteCatalog = (manifest: RouteManifest): WorkbenchRouteCa
   };
 };
 
-const catalogHasKind = (catalog: WorkbenchRouteCatalog, kind: RouteManifestKind): boolean =>
-  catalog.groups.some((group) => group.kind === kind && group.entries.length > 0);
-
-/**
- * The Workbench navigation rule: a page appears when either the compiled
- * graph declares its surface or configuration declares it without a route
- * module. `hosts` is unconditional; the RSC runtime page depends on a live
- * runtime provider and is not projected here.
- */
-export const workbenchPagesFor = (
-  counts: WorkbenchCapabilityCounts,
-  catalog: WorkbenchRouteCatalog,
-): readonly WorkbenchPageName[] => {
-  const compiledEvents = catalogHasKind(catalog, 'event-route');
-  const compiledScripts = catalogHasKind(catalog, 'script');
-  const pages = new Set<WorkbenchPageName>(['overview', 'routes', 'hosts', 'artifacts', 'logs']);
-  if (counts.skills > 0) pages.add('skills');
-  if (counts.hooks > 0 || compiledEvents) pages.add('hooks');
-  if (compiledEvents) pages.add('lifecycles');
-  if (counts.mcpServers > 0 || catalog.servers.length > 0) pages.add('mcp');
-  if (counts.hooks + counts.scripts > 0 || compiledEvents || compiledScripts) pages.add('playground');
-  if (counts.evalSuites > 0) {
-    pages.add('evals');
-    pages.add('comparisons');
-  }
-  return workbenchPageOrder.filter((page) => pages.has(page));
-};
-
 export interface WorkbenchSurfaceFromGraphInput {
   readonly configPath?: string;
   readonly counts: WorkbenchCapabilityCounts;
   readonly graph: CompiledRouteGraph;
+  readonly inspection?: NonNullable<ApplicationTreeManifestSources['inspection']>;
   readonly lifecycles: LifecycleListResponse;
   readonly projectRoot: string;
   readonly sourceRevision: string;
   readonly notices?: NormalizedNotices;
+  readonly skills?: readonly { readonly id: string; readonly label: string; readonly source?: string }[];
   readonly state?: NormalizedStateDefinition;
   readonly targets: readonly string[];
 }
 
 /**
  * The pure projection behind {@link inspectWorkbenchSurface}: the same
- * `routeManifestFor` the dev server serves, grouped by the Routes page's
- * rules, with the navigation rule applied over the declared counts.
+ * `routeManifestFor` the dev server serves, grouped by the application tree's
+ * rules, with Advanced availability applied over the declared counts.
  */
 export const workbenchSurfaceFromRouteGraph = (input: WorkbenchSurfaceFromGraphInput): WorkbenchSurface => {
   const manifest = routeManifestFor(input.graph, input.sourceRevision, input.state, input.notices);
   const catalog = workbenchRouteCatalog(manifest);
-  const pages = workbenchPagesFor(input.counts, catalog);
+  const application = applicationTreeForManifest({
+    inspection: input.inspection,
+    manifest,
+    skills: input.skills,
+    state: 'fresh',
+  });
+  const advanced: AdvancedSection[] = [
+    ...(input.counts.evalSuites > 0 ? ['evals' as const] : []),
+    'artifact',
+    ...(input.counts.mcpServers > 0 || manifest.servers.length > 0 ? ['protocol' as const] : []),
+    'hosts',
+    'logs',
+  ];
   return deepFreeze({
+    advanced,
+    application,
     catalog,
     counts: input.counts,
     lifecycles: input.lifecycles.lifecycles,
     manifest,
-    pages,
     provenance: {
       ...(input.configPath === undefined ? {} : { configPath: input.configPath }),
       manifestDigest: manifest.digest,
@@ -355,9 +291,11 @@ export const workbenchSurfaceFromRouteGraph = (input: WorkbenchSurfaceFromGraphI
       sourceRevision: input.sourceRevision,
       targets: input.targets,
     },
-    unavailablePages: workbenchPageOrder.filter((page) => !pages.includes(page)),
   });
 };
+
+/** The Workbench route for one application leaf. */
+export const workbenchLeafPath = (leaf: ApplicationLeaf): string => applicationNodePath(leaf.ref);
 
 /**
  * The artifact instances a set of declarations produces: one per declaration
@@ -459,9 +397,40 @@ export const inspectWorkbenchSurface = async (
       targets: targets.length,
     }),
     graph,
+    inspection: {
+      hooks: model.hooks.flatMap((hook) => hook.targets
+        .filter((target) => targets.includes(target))
+        .map((target) => ({
+          event: hook.eventRoute?.event ?? hook.event,
+          id: hook.id,
+          name: hook.name,
+          path: hook.provenance.sourcePath,
+          target,
+        }))),
+      mcpServers: model.mcpServers.flatMap((server) => server.targets
+        .filter((target) => targets.includes(target))
+        .map((target) => ({
+          kind: server.transport,
+          name: server.name,
+          target,
+        }))),
+      scripts: model.scripts.flatMap((script) => script.targets
+        .filter((target) => targets.includes(target))
+        .map((target) => ({
+          file: { path: script.provenance.sourcePath },
+          id: script.id,
+          name: script.name,
+          target,
+        }))),
+    },
     lifecycles,
     projectRoot: prepared.root,
     sourceRevision,
+    skills: model.skills.map((skill) => ({
+      id: skill.id,
+      label: skill.name,
+      source: skill.provenance.sourcePath,
+    })),
     ...(model.state === undefined ? {} : { state: model.state }),
     targets,
   });

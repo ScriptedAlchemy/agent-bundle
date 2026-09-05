@@ -382,13 +382,15 @@ const normalizePayloads = (
   for (const [name, declaration] of Object.entries(configured).sort(([left], [right]) => left.localeCompare(right))) {
     const source = payloadDeclarationSource(loaded.context.projectRoot, declaration);
     if (source === undefined) continue;
+    const entry = typeof declaration === 'string' ? undefined : declaration;
     payloads.push({
       files: (discoveredByName.get(name)?.files ?? []).map((file) => ({ ...file })),
       id: `payload:${name}`,
       name,
       provenance: { kind: 'prebuilt', sourcePath: loaded.configPath },
+      runtimeDependencies: sortedUnique(entry?.runtimeDependencies ?? []),
       source,
-      targets: sortedUnique(typeof declaration === 'string' ? targetNames : (declaration.targets ?? targetNames)),
+      targets: sortedUnique(entry?.targets ?? targetNames),
     });
   }
   return payloads;

@@ -1,0 +1,147 @@
+.application-tree-view {
+  background: #f7f9fc;
+  border-right: 1px solid #d9dee7;
+  color: #1e2938;
+  display: grid;
+  gap: 14px;
+  min-height: 100%;
+  padding: 20px 14px;
+}
+
+.application-tree-filter {
+  color: #596372;
+  display: grid;
+  font-size: 11px;
+  font-weight: 800;
+  gap: 7px;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+}
+
+.application-tree-filter input {
+  background: #fff;
+  border: 1px solid #bfc8d5;
+  border-radius: 5px;
+  color: #1e2938;
+  min-height: 38px;
+  padding: 7px 9px;
+  text-transform: none;
+  width: 100%;
+}
+
+.application-tree-banner,
+.application-tree-empty {
+  color: #596372;
+  font-size: 13px;
+  line-height: 1.45;
+  margin: 0;
+  padding: 10px 11px;
+}
+
+.application-tree-banner {
+  background: #fff8e8;
+  border-left: 3px solid #b06c00;
+  color: #704600;
+}
+
+.application-tree-banner--unavailable {
+  background: #fff7f7;
+  border-left-color: #c01d26;
+  color: #78242a;
+}
+
+.application-tree {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.application-tree [role='group'] {
+  display: grid;
+  gap: 2px;
+  margin-left: 13px;
+  min-width: 0;
+}
+
+.application-tree-node {
+  display: grid;
+  min-width: 0;
+}
+
+.application-tree-branch,
+.application-tree-leaf {
+  background: transparent;
+  border: 0;
+  border-left: 3px solid transparent;
+  color: inherit;
+  cursor: pointer;
+  min-width: 0;
+  text-align: left;
+}
+
+.application-tree-branch {
+  align-items: center;
+  display: grid;
+  font-size: 13px;
+  font-weight: 750;
+  gap: 6px;
+  grid-template-columns: 12px minmax(0, 1fr) auto;
+  min-height: 34px;
+  padding: 6px 7px;
+}
+
+.application-tree-branch:hover,
+.application-tree-leaf:hover {
+  background: #e8effb;
+}
+
+.application-tree-disclosure {
+  color: #667386;
+  font-size: 11px;
+}
+
+.application-tree-count {
+  background: #e4eaf2;
+  border-radius: 999px;
+  color: #536174;
+  font: 700 11px "SFMono-Regular", Consolas, monospace;
+  min-width: 23px;
+  padding: 2px 6px;
+  text-align: center;
+}
+
+.application-tree-leaf {
+  display: grid;
+  gap: 3px;
+  min-height: 36px;
+  padding: 7px 9px 7px 12px;
+}
+
+.application-tree-leaf > span {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.application-tree-leaf > small {
+  color: #657080;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.application-tree-leaf[aria-selected='true'] {
+  background: #e6effd;
+  border-left-color: #0b5bd3;
+  color: #073d8d;
+}
+
+.application-tree-branch:focus-visible,
+.application-tree-leaf:focus-visible,
+.application-tree-filter input:focus-visible {
+  outline: 3px solid #72a6ff;
+  outline-offset: 1px;
+}

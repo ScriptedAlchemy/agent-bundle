@@ -11,7 +11,7 @@ import { ArtifactClient } from '../src/artifacts/artifact-client.ts';
 import { HookClient } from '../src/hooks/hook-client.ts';
 import { LogClient } from '../src/logs/log-client.ts';
 import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
-import { PlaygroundClient } from '../src/playground/playground-client.ts';
+import { EvalClient } from '../src/evals/eval-client.ts';
 import { withBrowserOrigin } from './support/browser-origin.ts';
 
 interface Listener {
@@ -1091,7 +1091,7 @@ it('advances its replay cursor, unsubscribes snapshot listeners, and blocks late
   expect(stream.closed).toBe(true);
 });
 
-it('shares one foreground bootstrap and EventSource across project, artifact, hook, playground, and log requests', async () => {
+it('shares one foreground bootstrap and EventSource across project, artifact, hook, eval, and log requests', async () => {
   const stream = new RecordingEventSource();
   let eventSources = 0;
   let sessionBootstraps = 0;
@@ -1111,21 +1111,7 @@ it('shares one foreground bootstrap and EventSource across project, artifact, ho
     if (path === '/api/logs/replay?after=0') {
       return Response.json({ replay: { cursor: { afterSequence: 0 }, records: [] } });
     }
-    if (path === '/api/playground/sessions/session-1') return Response.json({
-      session: {
-        cleanupFailures: [],
-        createdAt: '2026-08-14T12:00:00.000Z',
-        id: 'session-1',
-        identity: {
-          epoch: { digest: 'sha256-epoch', id: 'epoch-1' },
-          fixture: { digest: 'sha256-fixture', id: 'fixture-1' },
-          invocation: { intent: {}, kind: 'skill.inspect' },
-          target: { name: 'portable' },
-          task: { id: 'task-1', text: 'Inspect an emitted Skill.' },
-        },
-        state: 'closed',
-      },
-    });
+    if (path === '/api/evals/runs') return Response.json({ runs: [] });
     throw new Error(`Unexpected foreground route ${path}`);
   };
   const foreground = new ForegroundRouteClient({ fetch });
@@ -1136,14 +1122,14 @@ it('shares one foreground bootstrap and EventSource across project, artifact, ho
   const artifact = new ArtifactClient({ foreground });
   const hooks = new HookClient({ foreground });
   const logs = new LogClient({ foreground });
-  const playground = new PlaygroundClient({ foreground });
+  const evals = new EvalClient({ foreground });
 
   await Promise.all([
     project.connect(() => undefined),
     artifact.diff('epoch-1', 'epoch-2'),
     hooks.list({ epochId: 'epoch-1' }),
     logs.replay(),
-    playground.session('session-1'),
+    evals.runs(),
   ]);
 
   expect(sessionBootstraps).toBe(1);
@@ -1170,14 +1156,14 @@ it('invalidates every shared foreground admission when ProjectClient closes duri
   const artifact = new ArtifactClient({ foreground });
   const hooks = new HookClient({ foreground });
   const logs = new LogClient({ foreground });
-  const playground = new PlaygroundClient({ foreground });
+  const evals = new EvalClient({ foreground });
 
   const operations = [
     project.connect(() => undefined),
     artifact.diff('epoch-1', 'epoch-2'),
     hooks.list({ epochId: 'epoch-1' }),
     logs.replay(),
-    playground.session('session-1'),
+    evals.runs(),
   ];
   await new Promise<void>((resolve) => setImmediate(resolve));
   project.close();

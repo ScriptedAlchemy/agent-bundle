@@ -30,7 +30,7 @@ import {
  * origin differ. This proves that loop completes a Workbench session through
  * the DOCUMENTED proxy config (`createWorkbenchConfig`, no header rewriting):
  *
- * 1. Bootstrap: the Overview renders on the dev origin — the client accepts
+ * 1. Bootstrap: the Application area renders on the dev origin — the client accepts
  *    the `devOrigins` disclosed by `GET /api/project/session`, and the
  *    cookie-authenticated event stream connects through the proxy (the
  *    connection gate would otherwise replace the page).
@@ -166,22 +166,24 @@ e2e('completes a Workbench session through the documented contributor HMR proxy 
     page.on('pageerror', (error) => pageErrors.push(error));
 
     // 1. Bootstrap through the proxy: the client-side origin check accepts the dev origin.
-    await page.goto(workbenchUrl(devOrigin, 'overview'));
+    await page.goto(workbenchUrl(devOrigin, '/'));
     try {
-      await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toBeVisible({ timeout: browserTimeout });
+      await expect(page.getByTestId('workbench-nav')).toBeVisible({ timeout: browserTimeout });
+      await expect(page.getByTestId('workbench-area-application')).toBeVisible({ timeout: browserTimeout });
     } catch (reason) {
       throw new Error(
-        `Overview did not render on the dev origin ${page.url()}.\n${await page.locator('body').innerText()}`,
+        `Application did not render on the dev origin ${page.url()}.\n${await page.locator('body').innerText()}`,
         { cause: reason },
       );
     }
     expect(new URL(page.url()).origin).toBe(devOrigin);
     await expect(page.getByRole('heading', { name: /^Foreground connection/u })).toHaveCount(0);
     await expect(page.getByRole('status').filter({ hasText: 'Foreground server connected' })).toBeVisible();
-    await expect(page.locator('.build-health')).toContainText('Current build', { timeout: browserTimeout });
+    await expect(page.getByTestId('shell-build-status')).toContainText('Current build', { timeout: browserTimeout });
 
     // 2. A mutation carrying the browser's real Origin header, admitted through the allowlist.
-    const rebuild = page.getByRole('button', { name: 'Rebuild' });
+    await page.getByTestId('workbench-nav').getByRole('link', { name: 'Problems' }).click();
+    const rebuild = page.getByTestId('problems-repair');
     const rebuildResponse = page.waitForResponse((candidate) =>
       candidate.request().method() === 'POST' && candidate.url() === `${devOrigin}/api/project/rebuild`);
     await rebuild.click();
@@ -190,7 +192,7 @@ e2e('completes a Workbench session through the documented contributor HMR proxy 
     expect((await response.request().allHeaders())['origin']).toBe(devOrigin);
     await expect(rebuild).toBeEnabled({ timeout: browserTimeout });
     await expect(page.getByRole('alert')).toHaveCount(0);
-    await expect(page.locator('.build-health')).toContainText('Current build', { timeout: browserTimeout });
+    await expect(page.getByTestId('shell-build-status')).toContainText('Current build', { timeout: browserTimeout });
     await expect(page.getByRole('status').filter({ hasText: 'Foreground server connected' })).toBeVisible();
     expect(foreground.status().artifact.state).toBe('active');
     expect(pageErrors).toEqual([]);
@@ -230,7 +232,7 @@ e2e('completes a Workbench session through the documented contributor HMR proxy 
     await page.goto('about:blank');
     const bootstrap = page.waitForResponse((candidate) =>
       candidate.request().method() === 'GET' && candidate.url() === `${devOrigin}/api/project/session`);
-    await page.goto(workbenchUrl(devOrigin, 'overview'));
+    await page.goto(workbenchUrl(devOrigin, '/'));
     // The bootstrap itself succeeds — the browser's same-origin GET carries no
     // `Origin` — but its body names only the foreground origin and no `devOrigins`,
     // so the refusal below is the client's own, not an HTTP failure.
@@ -257,7 +259,7 @@ e2e('completes a Workbench session through the documented contributor HMR proxy 
     await expect(alert).toHaveText(noFlagLine);
     await expect(alert).not.toContainText('HTTP 200');
     await expect(alert).not.toContainText('Workbench request failed');
-    await expect(page.getByRole('heading', { name: 'Bundle dashboard' })).toHaveCount(0);
+    await expect(page.getByTestId('workbench-nav')).toHaveCount(0);
     expect(pageErrors).toEqual([]);
 
     // The server-side half of the same sentence: the Origin admitted in step 3 is
