@@ -81,7 +81,8 @@ pnpm --filter @agent-bundle-example/audiobook-curator typecheck
 2. 在生成的输入编辑器中输入诸如 `Dune` 这样的标题，然后选择 **Run**。
 3. 首先检视 **Rendered**：它展示该路由生产 RSC 执行得到的真实 Agent Document。结构化数据、原始文档、
    MCP/CLI 投影与 Trace 仍作为次要标签可用。
-4. 编辑 `src/mcp/curator/tools/search_audible.tsx` 或它所渲染的某个组件。重建到达 **Idle** 之后，
+4. 打开 **Trace**，查看归入此次运行的调用开始与完成条目，然后使用 **Open route** 返回这份已记录结果。
+5. 编辑 `src/mcp/curator/tools/search_audible.tsx` 或它所渲染的某个组件。重建到达 **Idle** 之后，
    重新运行已保存的输入，并检视更新后的渲染结果。
 
 该路由可直接寻址

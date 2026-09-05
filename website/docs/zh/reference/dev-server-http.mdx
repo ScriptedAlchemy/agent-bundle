@@ -1,0 +1,131 @@
+---
+description: 'Workbench 调用、统一 Trace、Raw logs 与宿主钩子收据所使用的浏览器侧 HTTP 路由。'
+---
+
+# 开发服务器 HTTP
+
+`agent-bundle dev` 在其 loopback 前台服务器上为 Workbench 挂载这些路由。它们是开发协议，不是公开部署
+端点。浏览器路由要求前台会话守卫，并强制执行[安全](./security.mdx)中描述的 Workbench origin 策略。
+除非另有说明，游标都是非负安全整数，响应均为 JSON。
+
+## 路由调用
+
+| 方法 | 路径 | 响应 |
+| --- | --- | --- |
+| `POST` | `/api/routes/invocations` | `{ invocation: RouteInvocation }` |
+| `GET` | `/api/routes/invocations?limit=<1..200>` | `{ invocations: RouteInvocationSummary[] }`，最新优先 |
+| `GET` | `/api/routes/invocations/<id>` | `{ invocation: RouteInvocation }` |
+
+POST 正文是一份 `RouteInvocationRequest`：包含 `routeId`，以及可选的 `input`、`args`、
+`correlationId`、调用方 `requestId` 与事件夹具选项。前台会把这两个标识回显到调用上，使路由工作区与
+Trace 可以关联此次运行。完成后的信封包含输入、provenance 上下文、providers、渲染事件、Agent
+Document、结果、投影、诊断与计时。Trace 条目链接到这份完整快照，而不会复制它。
+
+## 开发运行时运行
+
+`POST /api/runtime/runs` 接受一份 `DevRuntimeInvocationRequest`，其中包含 `surfaceId`、`target`、
+`input`，以及可选的 `fixtureId`、`expectedGenerationId` 与 `correlationId`。前台会把
+`correlationId` 传给运行时 provider，并复制到此次运行的 Trace 条目；运行时事件也可以直接携带它。
+`GET /api/runtime/runs` 列出最近的运行，`GET /api/runtime/runs/<id>` 读取一次运行。
+
+## MCP 操作与关联
+
+`POST /api/mcp/sessions/<session-id>/operations` 保留现有操作联合类型。`tools/call` 操作额外接受一个
+最多 256 个字符的可选顶层 `correlationId`。浏览器不能直接提供 `_meta`；前台在发送请求前会把该值
+复制到 `params._meta["agent-bundle/correlationId"]`。
+
+MCP Trace 会提取 JSON-RPC id 与方法，以及有界的宿主元数据。请求/响应对共享 `mcpRequestId` 与耗时；
+工具调用和 prompt 读取会通过 `?session=<session-id>` 链接到其 Application 路由。无法解析到路由的
+操作会链接到 `/advanced/protocol?session=<session-id>`。
+
+## 统一 Trace
+
+| 方法 | 路径 | 传输 |
+| --- | --- | --- |
+| `GET` | `/api/trace?after=<sequence>` | `TraceReplay` JSON |
+| `GET` | `/api/trace/stream?after=<sequence>` | `TraceMessage` 的 `application/x-ndjson` 帧 |
+
+省略 `after` 等同于 `after=0`。重放形状如下：
+
+```ts
+interface TraceReplay {
+  readonly entries: readonly TraceEntry[];
+  readonly gap?: TraceReplayGap;
+  readonly latestSequence: number;
+}
+```
+
+每个 `TraceEntry` 包含：
+
+```ts
+interface TraceEntry {
+  readonly id: string;
+  readonly sequence: number;
+  readonly occurredAt: string;
+  readonly source:
+    | 'invocation'
+    | 'kernel'
+    | 'mcp'
+    | 'runtime'
+    | 'hook'
+    | 'log'
+    | 'diagnostic';
+  readonly kind: string;
+  readonly summary: string;
+  readonly correlation: TraceCorrelation;
+  readonly status?: 'ok' | 'error' | 'running';
+  readonly durationMs?: number;
+  readonly details?: JsonValue;
+  readonly href?: string;
+}
+```
+
+`TraceCorrelation` 可以携带 `correlationId`、`conversationId`、`epochId`、`executionId`、`host`、
+`invocationId`、`mcpRequestId`、`mcpSessionId`、`requestId`、`routeId`、`runId` 与 `sessionId`。
+生产者只填充自己已知的键。`details` 是有界且已确保安全的 JSON 投影，不是载荷正文。
+
+当请求的游标早于保留的历史时，重放会返回一个 gap，流也会把同一份 `TraceReplayGap` 作为一个 NDJSON
+帧发出：
+
+```ts
+interface TraceReplayGap {
+  readonly droppedCount: number;
+  readonly firstAvailableSequence: number;
+  readonly requestedAfterSequence: number;
+  readonly type: 'trace.gap';
+}
+```
+
+格式错误的游标返回 `400`，超前于当前历史的游标返回 `409`，已关闭或不可用的 Trace hub 返回 `503`。
+这些响应使用生成式[诊断参考](./diagnostics.md)中登记的 Trace 诊断。
+
+## Raw logs
+
+| 方法 | 路径 | 传输 |
+| --- | --- | --- |
+| `GET` | `/api/logs/replay?after=<sequence>` | `{ replay: DevLogReplay }` JSON |
+| `GET` | `/api/logs/stream?after=<sequence>` | `DevLogMessage` 的 `application/x-ndjson` 帧 |
+
+Raw logs 仍是框架诊断流。记录只暴露白名单中的上下文值与浏览器安全文本。带有 `correlationId`、
+`invocationId` 或 `mcpSessionId` 的记录可以链接到 `/trace?correlation=<value>`；未关联的记录仍留在
+Advanced → Raw logs。
+
+## 宿主钩子收据
+
+| 方法 | 路径 | 传输 |
+| --- | --- | --- |
+| `POST` | `/api/trace/receipts` | 一份最多 16 KiB 的 `EventTraceReceipt` JSON 正文；成功返回 `204` |
+
+生成式钩子进程会向这个仅限前台的路由提交一份有界收据。它不是浏览器 API：会拒绝 `Origin` 标头与非
+loopback 对端，要求收据端点在每次开发服务器运行时随机生成的 bearer token，并且不暴露读取或命令操作。
+Workbench cookie 与会话标头不能授权它。收据包含版本 `1`、一份 `EventTraceExecution`、不含载荷的
+内核事件及其挂钟开始时间、宿主/会话/请求标识和解析后的 lineage 轴。原生事件正文、工具输入或输出、
+渲染文档、环境值、凭据、文件系统路径与错误堆栈均不存在。
+
+对于宿主调用，包装器会在已安装捆绑包旁查找 `.agent-bundle-dev.json`，再从其中所指项目的
+`.agent-bundle/hook-receipts.json` 读取当前端点。由开发服务器生成的模拟调用通过两个内部收据环境变量
+取得相同的 loopback URL 与 token。端点文件会以仅所有者可读模式替换，并在服务器关闭时移除。只接受
+精确的 `http://127.0.0.1:<port>` 或 `http://[::1]:<port>` origin。包装器为提交保留 750 ms，并忽略
+传输失败，因此 Workbench 观察绝不会改变钩子结果。
+
+收据与内核条目在时间线中的呈现方式见 [Trace](../guide/development/workbench.mdx#trace)。

@@ -81,6 +81,7 @@ description: 'MCP App 示例：把一条服务就绪度工作流表达为生成�
    P95 latency 的检查，其中后者失败。打开 App 预览：渲染出的面板通过 MCP Apps 桥接展示同一条记录，
    并带一个以文字标注的琥珀色 `degraded` 指示。检视协议轨迹、使用 **Restart MCP session**，然后关闭、
    重置并重新打开会话，以演练整个生命周期。
+   随后打开 **Trace**，查看通过会话 id 与 JSON-RPC 请求 id 关联起来的 MCP 请求、响应、通知与会话活动。
 7. 在 **Advanced → Evals → Runs** 中选中 `mcp-app-status`，运行 `status-is-healthy`，查看归属于
    `service-readiness` 的那次已完成且通过的试次。
 
