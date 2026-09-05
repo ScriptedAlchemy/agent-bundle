@@ -128,11 +128,13 @@ it('packages prebuilt payloads at stable paths and lowers prebuilt entries throu
       command: 'node "${PLUGIN_ROOT}/runtime/hook.js" --host codex',
     });
     expect(result.build.compiledHooks).toEqual([]);
-    expect(await readJson<{ hooks: unknown[] }>(join(root, 'out', 'agent-bundle.hooks.json'))).toEqual({ hooks: [] });
 
     // Manifest provenance: payload files carry the prebuilt kind and their
     // own bytes as source inputs; the revision hashes the payload files.
+    // Prebuilt hooks are Projection IR, not compiler wrappers, so they are
+    // absent from executables.hooks.
     const manifest = parseArtifactManifest(await readFile(join(root, 'out', 'agent-bundle.manifest.json'), 'utf8'));
+    expect(manifest.executables.hooks).toEqual([]);
     const chunk = manifest.files.find((file) => file.path === 'runtime/chunks/417.js');
     expect(chunk).toMatchObject({ kind: 'prebuilt', sourceInputs: ['agent-bundle.config.ts', 'built/runtime/chunks/417.js'] });
     expect(manifest.project.sourceInputs.some((input) => input.path === 'built/runtime/mcp/server.js')).toBe(true);

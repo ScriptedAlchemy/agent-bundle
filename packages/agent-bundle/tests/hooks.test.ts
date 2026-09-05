@@ -14,13 +14,21 @@ import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import { nativeHookWrapperSource, type TargetHookWrapper } from '../src/adapters/hook-contract.ts';
 import { build } from './support/build.ts';
 import { runNodeScript } from './support/run-node-script.ts';
-import { writeHookIndex } from '../src/build/emit.ts';
 import { planHooksSurface } from '../src/build/entries.ts';
+import {
+  assembleArtifactManifest,
+  compareArtifactManifestHooks,
+  parseArtifactManifest,
+  type ArtifactManifest,
+  type ArtifactManifestHook,
+} from '../src/build/manifest.ts';
 import { generatedMetaModulePath, metaModuleSpecifier, projectMeta } from '../src/build/meta.ts';
 import { buildWithRslib, compileRslibSurfaces } from '../src/build/rslib.ts';
+import { digest } from '../src/core/digest.ts';
 import type { AgentBundleMeta } from '../src/meta.ts';
+import { emptyCompiledRouteGraph } from '../src/routes/graph.ts';
+import { agentSkillsSchemaRevision } from '../src/schemas/agent-skills/contract.ts';
 import { HookService, isHookSimulationCancellation } from '../src/services/hook-service.ts';
-import { parseArtifactHookIndex } from '../src/build/hook-index.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
 import type { LoadedConfig } from '../src/config/load.ts';
 import type { NormalizationTargetRegistry, NormalizedPlugin } from '../src/core/types.ts';
@@ -49,6 +57,65 @@ const registry: NormalizationTargetRegistry = {
   defaultTargetNames: () => ['codex', 'claude'],
   has: (name) => name === 'portable' || name === 'codex' || name === 'claude',
   supports: (name, capability) => capability === 'hooks' && name !== 'portable',
+};
+
+const fixtureConfigDigest = 'a'.repeat(64);
+const fixtureSourceInputs = Object.freeze([{
+  path: 'agent-bundle.config.ts',
+  sha256: fixtureConfigDigest,
+}]);
+
+const fixtureHookManifest = (
+  hooks: readonly ArtifactManifestHook[],
+  hosts: readonly string[],
+): ArtifactManifest => {
+  const projections = [...hosts]
+    .sort((left, right) => left.localeCompare(right))
+    .map((host) => ({
+      adapterRevision: 'test',
+      documents: {},
+      host,
+      observedVersion: 'test',
+      schemas: [],
+    }));
+  const files = [...new Map(hooks.map((hook) => [hook.path, {
+    bytes: 1,
+    kind: 'generated' as const,
+    path: hook.path,
+    sha256: digest(hook.path),
+    sourceInputs: ['agent-bundle.config.ts'],
+  }])).values()].sort((left, right) => left.path.localeCompare(right.path));
+  return {
+    agentSkills: agentSkillsSchemaRevision,
+    application: { id: 'plugin:hook-fixture', name: 'hook-fixture', version: '1.0.0' },
+    distribution: { channels: ['local'] },
+    executables: { bins: [], hooks, mcpServers: [], scripts: [] },
+    files,
+    manifestVersion: 2,
+    producer: { name: 'agent-bundle', version: '0.1.0' },
+    project: {
+      configDigest: fixtureConfigDigest,
+      configPath: 'agent-bundle.config.ts',
+      modelDigest: 'b'.repeat(64),
+      revision: digest({ inputs: fixtureSourceInputs }),
+      sourceInputs: fixtureSourceInputs,
+    },
+    projections,
+    routes: {
+      digest: emptyCompiledRouteGraph.digest,
+      events: [],
+      layouts: [],
+      providers: [],
+      scripts: [],
+      servers: [],
+    },
+    runtime: { node: '22.12.0' },
+    validation: {
+      artifact: { status: 'passed' },
+      projections: projections.map(({ host }) => ({ host, status: 'passed' as const })),
+      source: { status: 'passed' },
+    },
+  };
 };
 
 it('maps promoted families only through event-route contracts', () => {
@@ -85,42 +152,62 @@ it('keeps the hook simulation cancellation constructor private to the executor',
   expect(Object.hasOwn(hookServiceExports, 'HookSimulationAbortError')).toBe(false);
 });
 
-it('accepts only canonical frozen hook index metadata', () => {
-  const bytes = '{"hooks":[{"event":"sessionStart","id":"hook:start","name":"start","path":"hooks/start.codex.mjs","target":"codex"}]}\n';
-  const index = parseArtifactHookIndex(bytes);
+it('accepts only canonical frozen manifest hook rows', () => {
+  const hook: ArtifactManifestHook = {
+    event: 'sessionStart',
+    host: 'codex',
+    id: 'hook:start',
+    kind: 'config',
+    name: 'start',
+    path: 'hooks/start.codex.mjs',
+  };
+  const assembled = assembleArtifactManifest(fixtureHookManifest([hook], ['codex']));
+  const parsed = parseArtifactManifest(assembled.bytes);
 
-  expect(index).toEqual({
-    hooks: [{ event: 'sessionStart', id: 'hook:start', name: 'start', path: 'hooks/start.codex.mjs', target: 'codex' }],
-  });
-  expect(index === undefined ? false : Object.isFrozen(index)).toBe(true);
-  expect(index === undefined ? false : Object.isFrozen(index.hooks)).toBe(true);
-  expect(parseArtifactHookIndex('{"version":1,"hooks":[]}\n')).toBeUndefined();
-  expect(parseArtifactHookIndex('{"hooks":[],"hooks":[]}\n')).toBeUndefined();
-  expect(parseArtifactHookIndex('{"hooks":[{"event":"sessionStart","id":"hook:start","name":"start","path":"../start.mjs","target":"codex"}]}\n')).toBeUndefined();
-  const crossTargetOrder = '{"hooks":[{"event":"sessionStart","id":"z","name":"first","path":"a/hooks/first.mjs","target":"a"},{"event":"sessionStart","id":"a","name":"second","path":"aa/hooks/second.mjs","target":"aa"}]}\n';
-  expect(parseArtifactHookIndex(crossTargetOrder)).toEqual({
-    hooks: [
-      { event: 'sessionStart', id: 'z', name: 'first', path: 'a/hooks/first.mjs', target: 'a' },
-      { event: 'sessionStart', id: 'a', name: 'second', path: 'aa/hooks/second.mjs', target: 'aa' },
-    ],
-  });
+  expect(parsed.executables.hooks).toEqual([hook]);
+  expect(Object.isFrozen(parsed)).toBe(true);
+  expect(Object.isFrozen(parsed.executables.hooks)).toBe(true);
+  expect(() => parseArtifactManifest(assembled.bytes.replace('"event":', '"version":1,"event":'))).toThrow(
+    /unexpected keys/,
+  );
+  expect(() => parseArtifactManifest(assembled.bytes.replace('"hooks":', '"hooks":[],"hooks":'))).toThrow(
+    /duplicate JSON key/,
+  );
+  expect(() => assembleArtifactManifest(fixtureHookManifest([{
+    ...hook,
+    path: '../start.mjs',
+  }], ['codex']))).toThrow(/safe relative POSIX path/);
+  const ordered = [
+    { event: 'sessionStart', host: 'a', id: 'z', kind: 'config' as const, name: 'first', path: 'a/hooks/first.mjs' },
+    { event: 'sessionStart', host: 'aa', id: 'a', kind: 'config' as const, name: 'second', path: 'aa/hooks/second.mjs' },
+  ];
+  expect(parseArtifactManifest(assembleArtifactManifest(fixtureHookManifest(ordered, ['a', 'aa'])).bytes).executables.hooks)
+    .toEqual(ordered);
 });
 
-it('serializes hook index targets by tuple order without sentinel concatenation', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-hook-index-order-'));
-  const hooks = [
-    { event: 'sessionStart', id: 'a', name: 'second', path: 'aa/hooks/second.mjs', target: 'aa' },
-    { event: 'sessionStart', id: 'z', name: 'first', path: 'a/hooks/first.mjs', target: 'a' },
-  ] as const;
-
-  try {
-    await writeHookIndex({ artifactRoot: root, hooks });
-    expect(await readFile(join(root, 'agent-bundle.hooks.json'), 'utf8')).toBe(
-      '{"hooks":[{"event":"sessionStart","id":"z","name":"first","path":"a/hooks/first.mjs","target":"a"},{"event":"sessionStart","id":"a","name":"second","path":"aa/hooks/second.mjs","target":"aa"}]}\n',
-    );
-  } finally {
-    await rm(root, { force: true, recursive: true });
-  }
+it('orders manifest hook hosts by tuple without sentinel concatenation', () => {
+  const laterHostFirst: ArtifactManifestHook = {
+    event: 'sessionStart',
+    host: 'aa',
+    id: 'a',
+    kind: 'config',
+    name: 'second',
+    path: 'aa/hooks/second.mjs',
+  };
+  const earlierHostLast: ArtifactManifestHook = {
+    event: 'sessionStart',
+    host: 'a',
+    id: 'z',
+    kind: 'config',
+    name: 'first',
+    path: 'a/hooks/first.mjs',
+  };
+  // Concatenating host+id would sort "aaa" before "az"; the tuple keeps host "a" first.
+  expect(`${laterHostFirst.host}${laterHostFirst.id}` < `${earlierHostLast.host}${earlierHostLast.id}`).toBe(true);
+  expect(compareArtifactManifestHooks(earlierHostLast, laterHostFirst)).toBeLessThan(0);
+  const ordered = [earlierHostLast, laterHostFirst].sort(compareArtifactManifestHooks);
+  expect(parseArtifactManifest(assembleArtifactManifest(fixtureHookManifest(ordered, ['a', 'aa'])).bytes)
+    .executables.hooks).toEqual([earlierHostLast, laterHostFirst]);
 });
 
 it('keeps the Claude and Codex native wrapper codecs byte-identical apart from identifiers and the target constant', () => {
@@ -696,7 +783,7 @@ it('lists and simulates only validated wrappers from a clean copied artifact', a
       writeFile(join(sourceRoot, 'record.ts'), "export default () => ({ outcome: 'continue' as const, additionalContext: 'recorded' });\n"),
       writeFile(join(sourceRoot, 'stop.ts'), "export default () => ({ outcome: 'continue' as const });\n"),
     ]);
-    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph });
     await cp(outputRoot, artifact, { recursive: true });
     await rm(root, { force: true, recursive: true });
 
@@ -708,16 +795,16 @@ it('lists and simulates only validated wrappers from a clean copied artifact', a
 
     const listed = await service.list({ artifact });
     expect(listed).toEqual([
-      expect.objectContaining({ event: 'afterTool', target: 'claude' }),
-      expect.objectContaining({ event: 'beforeTool', target: 'claude' }),
-      expect.objectContaining({ event: 'sessionStart', target: 'claude' }),
-      expect.objectContaining({ event: 'stop', target: 'claude' }),
-      expect.objectContaining({ event: 'afterTool', target: 'codex' }),
-      expect.objectContaining({ event: 'beforeTool', target: 'codex' }),
-      expect.objectContaining({ event: 'sessionStart', target: 'codex' }),
-      expect.objectContaining({ event: 'stop', target: 'codex' }),
+      expect.objectContaining({ event: 'afterTool', host: 'claude' }),
+      expect.objectContaining({ event: 'beforeTool', host: 'claude' }),
+      expect.objectContaining({ event: 'sessionStart', host: 'claude' }),
+      expect.objectContaining({ event: 'stop', host: 'claude' }),
+      expect.objectContaining({ event: 'afterTool', host: 'codex' }),
+      expect.objectContaining({ event: 'beforeTool', host: 'codex' }),
+      expect.objectContaining({ event: 'sessionStart', host: 'codex' }),
+      expect.objectContaining({ event: 'stop', host: 'codex' }),
     ]);
-    expect(listed.find((hook) => hook.id === 'hook:session-start:session-start:7ab7e8a5' && hook.target === 'codex')).toMatchObject({
+    expect(listed.find((hook) => hook.id === 'hook:session-start:session-start:7ab7e8a5' && hook.host === 'codex')).toMatchObject({
       path: 'hooks/session-start-session-start-7ab7e8a5.codex.mjs',
     });
     const epochMarker = join(artifact, '.agent-bundle-epoch-stage.json');
@@ -818,7 +905,7 @@ it('escalates timed-out and aborted wrapper process trees from TERM to KILL befo
         '',
       ].join('\n')),
     ]);
-    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph });
     await cp(outputRoot, artifact, { recursive: true });
     process.env.AGENT_BUNDLE_HOOK_TREE_TEST_PID = descendantPidPath;
 
@@ -943,7 +1030,7 @@ it('waits for an admitted Windows taskkill cleanup after its wrapper leader clos
         '',
       ].join('\n')),
     ]);
-    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph });
     await cp(outputRoot, artifact, { recursive: true });
     process.env.AGENT_BUNDLE_HOOK_SIMULATION_STARTED_PATH = startedPath;
 
@@ -1012,11 +1099,15 @@ it('compiles each native hook through a virtual Rslib entry without sibling chun
       )),
     ]);
 
-    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
-    await build({ model, outputRoot: repeatedOutputRoot, projectRoot: root, registry: createDefaultRegistry() });
+    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph });
+    await build({ model, outputRoot: repeatedOutputRoot, projectRoot: root, registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph });
 
-    const hookIndex = await readFile(join(outputRoot, 'agent-bundle.hooks.json'), 'utf8');
-    expect(await readFile(join(repeatedOutputRoot, 'agent-bundle.hooks.json'), 'utf8')).toBe(hookIndex);
+    const hookRows = parseArtifactManifest(
+      await readFile(join(outputRoot, 'agent-bundle.manifest.json'), 'utf8'),
+    ).executables.hooks;
+    expect(parseArtifactManifest(
+      await readFile(join(repeatedOutputRoot, 'agent-bundle.manifest.json'), 'utf8'),
+    ).executables.hooks).toEqual(hookRows);
 
     // One `hooks/` directory in the composite root: every shared hook compiles
     // one wrapper per selected host, host-suffixed (#555).
@@ -1070,7 +1161,7 @@ it('applies the operator .env layer of the installed pack before a hook handler 
       writeFile(join(sourceRoot, 'record.ts'), "export default () => ({ outcome: 'continue' as const });\n"),
       writeFile(join(sourceRoot, 'stop.ts'), "export default () => ({ outcome: 'continue' as const });\n"),
     ]);
-    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph });
 
     const event = {
       cwd: '/workspace', hook_event_name: 'SessionStart', session_id: 'session-1', source: 'startup', transcript_path: '/workspace/transcript.json',
@@ -1135,7 +1226,7 @@ it('runs the embedded Codex and Claude native codecs through their published wra
       writeFile(join(sourceRoot, 'record.ts'), "export default (event: { toolResponse?: unknown }) => ({ outcome: 'continue' as const, additionalContext: String(event.toolResponse) });\n"),
       writeFile(join(sourceRoot, 'stop.ts'), "export default () => ({ outcome: 'continue' as const });\n"),
     ]);
-    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph });
 
     for (const target of ['codex', 'claude']) {
       const hooksRoot = join(outputRoot, 'hooks');
@@ -1302,7 +1393,7 @@ it('round-trips Claude and Codex subagent fields through published wrappers', as
         "export default (event: Record<string, unknown>) => ({ outcome: 'deny' as const, reason: `${String(event.agentTranscriptPath)}:${String(event.stopHookActive)}:${String(event.lastAssistantMessage)}` });\n",
       ),
     ]);
-    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph });
 
     for (const target of ['codex', 'claude'] as const) {
       const documentPath = target === 'codex' ? codexArtifactPaths.hooksManifest : 'hooks/hooks.json';
@@ -1395,7 +1486,7 @@ it('round-trips the documented Cursor subagent envelopes through published Curso
         ].join('\n'),
       ),
     ]);
-    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph });
 
     const document = JSON.parse(await readFile(join(outputRoot, cursorArtifactPaths.hooks), 'utf8')) as {
       readonly hooks: Readonly<Record<string, readonly unknown[]>>;
@@ -1529,7 +1620,7 @@ it('rejects malformed event-specific native input before calling generated Codex
       writeFile(join(root, 'package.json'), '{"type":"module"}\n'),
       ...model.hooks.map((hook) => writeFile(hook.source, 'export default () => undefined;\n')),
     ]);
-    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph });
 
     for (const target of ['codex', 'claude']) {
       const hooksRoot = join(outputRoot, 'hooks');
@@ -1607,7 +1698,7 @@ it('rejects canonical reason combinations whose selected native hook cannot repr
       writeFile(join(sourceRoot, 'stop-continue.ts'), "export default () => ({ outcome: 'continue' as const, reason: 'ignored' });\n"),
       writeFile(join(sourceRoot, 'stop-deny.ts'), "export default () => ({ outcome: 'deny' as const, reason: '' });\n"),
     ]);
-    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph });
     const hooksRoot = join(outputRoot, 'hooks');
     const assertions: readonly [string, Record<string, unknown>, string][] = [
       ['session-reason-00000001.mjs', { ...common, hook_event_name: 'SessionStart', source: 'startup' }, 'reason is only valid for a denied beforeTool, stop, or agentStop hook'],
@@ -1655,7 +1746,7 @@ it('rejects malformed native hook input, exports, and handler results concisely'
       writeFile(join(sourceRoot, 'bad-result.ts'), "export default () => 'not a result';\n"),
       writeFile(join(sourceRoot, 'throws.ts'), "export default () => { throw new Error('handler exploded'); };\n"),
     ]);
-    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph });
 
     await expect(runPublishedHook(join(outputRoot, 'hooks', 'valid-00000001.mjs'), '{not json')).resolves.toEqual({
       code: 1,

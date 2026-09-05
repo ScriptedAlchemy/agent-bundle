@@ -38,10 +38,11 @@ const hookFixture: HookPlaygroundHook = deepFreeze({
   binding: { epochId: 'epoch-a', hook: 'hook-a', target: 'claude' },
   hook: {
     event: 'sessionStart',
+    host: 'claude',
     id: 'hook-a',
+    kind: 'config',
     name: 'guard',
     path: 'hooks/guard.mjs',
-    target: 'claude',
   },
 });
 

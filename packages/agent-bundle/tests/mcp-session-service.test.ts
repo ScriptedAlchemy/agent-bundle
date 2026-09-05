@@ -9,6 +9,7 @@ import type { Transport } from '@modelcontextprotocol/client';
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import { build } from './support/build.ts';
 import { validateArtifact } from '../src/build/validate-artifact.ts';
+import { emptyCompiledRouteGraph } from '../src/routes/graph.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
 
 import { EpochStore } from '../src/dev/epoch-store.ts';
@@ -156,7 +157,7 @@ const publishFixtureEpoch = async (
     registry,
   );
   const artifact = join(root, 'compiled');
-  await build({ model, outputRoot: artifact, projectRoot: root, registry: createDefaultRegistry() });
+  await build({ model, outputRoot: artifact, projectRoot: root, registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph });
 
   const store = new EpochStore({ projectRoot: root });
   const staging = await store.createStagingEpoch({
@@ -195,7 +196,7 @@ const publishRemoteEpoch = async (root: string, id: string): Promise<EpochStore>
     registry,
   );
   const artifact = join(root, 'compiled');
-  await build({ model, outputRoot: artifact, projectRoot: root, registry: createDefaultRegistry() });
+  await build({ model, outputRoot: artifact, projectRoot: root, registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph });
 
   const store = new EpochStore({ projectRoot: root });
   const staging = await store.createStagingEpoch({ epoch: epochFor(root, id), targets: ['portable'] });

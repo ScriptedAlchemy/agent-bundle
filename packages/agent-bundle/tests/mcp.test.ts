@@ -14,6 +14,7 @@ import { codexArtifactPaths } from '../src/adapters/codex.ts';
 import { createDefaultRegistry, TargetRegistry } from '../src/adapters/registry.ts';
 import { build } from './support/build.ts';
 import { validateArtifact } from '../src/build/validate-artifact.ts';
+import { emptyCompiledRouteGraph } from '../src/routes/graph.ts';
 import { normalizeProject } from '../src/config/normalize.ts';
 import { validateModel, validateSource } from '../src/config/validate.ts';
 import { McpService } from '../src/services/mcp-service.ts';
@@ -533,7 +534,7 @@ it('bundles each local MCP entry once and maps every target manifest to that art
       model,
       outputRoot,
       projectRoot: root,
-      registry: createDefaultRegistry(),
+      registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph,
     });
     expect(await validateArtifact({ artifactRoot: outputRoot })).toEqual([]);
     // One composite root compiles the entry once; the compiled surface is
@@ -607,7 +608,7 @@ it('bundles each local MCP entry once and maps every target manifest to that art
       model,
       outputRoot: secondOutput,
       projectRoot: root,
-      registry: createDefaultRegistry(),
+      registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph,
     });
     expect(await readFile(join(secondOutput, 'mcp', outputName), 'utf8')).toBe(bundle);
 
@@ -631,6 +632,7 @@ it('bundles each local MCP entry once and maps every target manifest to that art
       outputRoot: join(root, 'collision'),
       projectRoot: root,
       registry: collisionRegistry,
+      routeGraph: emptyCompiledRouteGraph,
     })).rejects.toThrow('Duplicate planned artifact destination');
 
     await rm(join(secondOutput, 'mcp', outputName));
@@ -648,7 +650,7 @@ it('bundles each local MCP entry once and maps every target manifest to that art
       model,
       outputRoot,
       projectRoot: root,
-      registry: createDefaultRegistry(),
+      registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph,
     })).rejects.toThrow();
     expect(await readFile(join(outputRoot, 'mcp', outputName), 'utf8')).toBe(previousBundle);
   } finally {
@@ -681,7 +683,7 @@ it('inlines agent-bundle/launch-env into a self-connecting entry so it can apply
       registry,
     );
     const outputRoot = join(root, 'artifact');
-    const result = await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+    const result = await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph });
     expect(await validateArtifact({ artifactRoot: outputRoot })).toEqual([]);
     const [entry] = result.compiledMcpEntries;
     // The inlined loader is framework runtime, never authored-source evidence.
@@ -760,7 +762,7 @@ it('lets the operator .env beat a manifest env default the host passed through, 
       registry,
     );
     const outputRoot = join(root, 'artifact');
-    const result = await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+    const result = await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph });
     const [entry] = result.compiledMcpEntries;
     const pluginRoot = outputRoot;
 
@@ -867,7 +869,7 @@ it('redirects stdout written at module scope by the server module to stderr befo
       { skills: [] },
       registry,
     );
-    const result = await build({ model, outputRoot: join(root, 'artifact'), projectRoot: root, registry: createDefaultRegistry() });
+    const result = await build({ model, outputRoot: join(root, 'artifact'), projectRoot: root, registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph });
     const [entry] = result.compiledMcpEntries;
 
     const stderrChunks: string[] = [];
@@ -944,7 +946,7 @@ it('builds one deterministic self-contained MCP App view and injects it through 
       model,
       outputRoot,
       projectRoot: root,
-      registry: createDefaultRegistry(),
+      registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph,
     });
     const compiled = (result as unknown as {
       readonly compiledMcpApps: readonly {
@@ -1074,7 +1076,7 @@ it('injects one release identity into both the Node bundle and the browser MCP A
     });
 
     const outputRoot = join(root, 'dist');
-    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph });
 
     const serverBundle = await readFile(join(outputRoot, 'mcp', 'mcp-fixture-f16d05ec.mjs'), 'utf8');
     for (const injected of ['meta-fixture', '4.5.6', '@scope/meta-fixture']) {
@@ -1133,7 +1135,7 @@ it('compiles one shared MCP App once and serves it from every identically declar
 
     const model = await normalizeProject(loadedProject(root, config), { skills: [] }, registry);
     const outputRoot = join(root, 'dist');
-    const result = await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+    const result = await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph });
 
     const compiled = (result as unknown as {
       readonly compiledMcpApps: readonly { readonly name: string; readonly serverIds: readonly string[] }[];
@@ -1199,7 +1201,7 @@ it('rejects conflicting same-name MCP App declarations at compilation planning',
       model,
       outputRoot: join(root, 'dist'),
       projectRoot: root,
-      registry: createDefaultRegistry(),
+      registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph,
     })).rejects.toThrow(
       'Duplicate compiled MCP App destination "mcp-apps/widget.html"; servers may share an app name only with an identical declaration.',
     );
@@ -1301,7 +1303,7 @@ it('uses the selected streamable HTTP manifest with propagated cancellation and 
       registry,
     );
     const artifact = join(root, 'dist');
-    await build({ model, outputRoot: artifact, projectRoot: root, registry: createDefaultRegistry() });
+    await build({ model, outputRoot: artifact, projectRoot: root, registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph });
 
     const connected: Array<{ readonly options: { readonly signal?: AbortSignal; readonly timeout: number }; readonly transport: unknown }> = [];
     const requested: Array<{ readonly signal?: AbortSignal; readonly timeout: number }> = [];
@@ -1389,7 +1391,7 @@ it('creates session state only after setup succeeds and always inherits the stdi
       registry,
     );
     const artifact = join(root, 'dist');
-    await build({ model, outputRoot: artifact, projectRoot: root, registry: createDefaultRegistry() });
+    await build({ model, outputRoot: artifact, projectRoot: root, registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph });
 
     process.env['TMPDIR'] = sessionTmp;
     const beforeInvalidTimeout = await sessionDirectories();
@@ -1522,7 +1524,7 @@ it('serves compiler-bundled MCP App resources from a copied artifact without pro
     );
     const outputRoot = join(root, 'dist');
     const artifact = join(consumer, 'installed-plugin');
-    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph });
     const expectedHtml = await readFile(join(outputRoot, 'mcp-apps', 'dashboard.html'), 'utf8');
     await cp(outputRoot, artifact, { recursive: true });
     await rm(join(root, 'src'), { force: true, recursive: true });
@@ -1653,7 +1655,7 @@ it('lists tools from a validated copied artifact without reading project source'
     );
     const outputRoot = join(root, 'dist');
     const artifact = join(consumer, 'installed-plugin');
-    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry(), routeGraph: emptyCompiledRouteGraph });
     await cp(outputRoot, artifact, { recursive: true });
     await rm(join(root, 'src'), { force: true, recursive: true });
 

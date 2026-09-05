@@ -18,6 +18,7 @@ import type { TargetAdapter } from '../src/adapters/types.ts';
 import { normalizeProject, type NormalizationTargetRegistry } from '../src/config/index.ts';
 import type { AgentBundleConfig, NormalizedHook, NormalizedPlugin } from '../src/core/types.ts';
 import { build } from './support/build.ts';
+import { emptyCompiledRouteGraph } from '../src/routes/graph.ts';
 
 const metadata = Object.freeze({
   adapterRevision: 'test',
@@ -250,6 +251,7 @@ it('builds adapter-owned native hook event, layout, and wrapper source', async (
       outputRoot,
       projectRoot: root,
       registry: new TargetRegistry().register(adapter, { default: true }),
+      routeGraph: emptyCompiledRouteGraph,
     });
 
     expect(result.compiledHooks[0]).toMatchObject({ target: 'synthetic' });
