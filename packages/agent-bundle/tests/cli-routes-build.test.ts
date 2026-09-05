@@ -558,11 +558,15 @@ describe('the CLI surface projection in the generated routed-CLI executable', ()
         "import { Agent, agent } from '@agent-bundle/runtime';",
         "import { z } from 'zod';",
         "export const config = { annotations: { readOnlyHint: false }, description: 'Submits one command line as lane work.' };",
+        // The application-owned optional `yes` key (#616): the projection
+        // declares confirm: false, so the shell strips nothing and the value
+        // must reach the tool through the canonical schema.
         'export const inputSchema = z.object({',
         '  argv: z.array(z.string()).min(1),',
         "  cwd: z.string().min(1).default('.'),",
         '  laneKey: z.string().optional(),',
         '  tags: z.array(z.string()).optional(),',
+        '  yes: z.boolean().optional(),',
         '});',
         'export const resultSchema = z.object({',
         '  argv: z.array(z.string()).min(1),',
@@ -570,6 +574,7 @@ describe('the CLI surface projection in the generated routed-CLI executable', ()
         '  laneKey: z.string().optional(),',
         "  operation: z.literal('submit'),",
         '  tags: z.array(z.string()).optional(),',
+        '  yes: z.boolean().optional(),',
         '});',
         'export default async function Submit({ input }) {',
         '  const { invocation } = await agent();',
@@ -673,6 +678,17 @@ describe('the CLI surface projection in the generated routed-CLI executable', ()
     expect(purged.stdout).not.toContain('yes');
   });
 
+  it('hands a non-confirming projection its application-owned --yes as tool input (#616)', async () => {
+    // The tool contract declares an optional `yes: z.boolean()` and the
+    // projection sets confirm: false, so `yes` belongs to the application:
+    // the shell strips nothing and the value crosses the canonical schema.
+    const affirmed = await execFile(binPath, ['submit', '--yes', '--json', '--', 'cargo', 'check'], { cwd: root });
+    expect(JSON.parse(affirmed.stdout)).toEqual({ argv: ['cargo', 'check'], cwd: root, operation: 'submit', yes: true });
+
+    const absent = await execFile(binPath, ['submit', '--json', '--', 'cargo', 'check'], { cwd: root });
+    expect(JSON.parse(absent.stdout)).toEqual({ argv: ['cargo', 'check'], cwd: root, operation: 'submit' });
+  });
+
   it('exits 2 from the packed shell when mapInput throws or the mapped input fails the canonical schema', async () => {
     await expect(execFile(binPath, ['submit', '--tag', '!boom', '--', 'cargo', 'check'], { cwd: root })).rejects.toMatchObject({
       code: 2,
@@ -698,11 +714,6 @@ describe('the CLI surface projection in the generated routed-CLI executable', ()
       stderr: expect.stringContaining('Missing required argument: <argv...>.'),
       stdout: '',
     });
-    await expect(execFile(binPath, ['submit', '--yes', '--', 'cargo', 'check'], { cwd: root })).rejects.toMatchObject({
-      code: 2,
-      stderr: expect.stringContaining('Unknown option: --yes.'),
-      stdout: '',
-    });
   });
 
   it('shows the projection on the compiled command through inspect --routes', async () => {
@@ -720,6 +731,7 @@ describe('the CLI surface projection in the generated routed-CLI executable', ()
         expect.objectContaining({ key: 'cwd', option: 'cwd', repeated: false, required: false }),
         expect.objectContaining({ key: 'laneKey', option: 'lane', repeated: false, required: false }),
         expect.objectContaining({ key: 'tags', option: 'tag', repeated: true, required: false }),
+        expect.objectContaining({ key: 'yes', kind: 'boolean', option: 'yes', repeated: false, required: false }),
       ],
       path: ['submit'],
       projection: { mapInput: true, module: projectionModule },

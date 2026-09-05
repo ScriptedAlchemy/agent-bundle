@@ -594,6 +594,16 @@ describe('MCP tool CLI surface projections', () => {
     expect(unconfirmed.graph.cli?.commands?.[0]?.options.map((option) => option.option)).toEqual(['lane-key', 'yes']);
     expect(unconfirmed.graph.cli?.commands?.[0]?.options.find((option) => option.key === 'yes'))
       .toMatchObject({ kind: 'string', required: true });
+
+    // With no confirmation the key is the application's, so the projection
+    // may respell it like any other; the canonical key stays `yes`.
+    const renamed = await compileProjection(
+      cliModule("{ confirm: false, flags: { yes: { name: 'assume' } } }"),
+      { tool: confirming },
+    );
+    expect(renamed.graph.diagnostics).toEqual([]);
+    expect(renamed.graph.cli?.commands?.[0]?.options.find((option) => option.key === 'yes'))
+      .toMatchObject({ key: 'yes', kind: 'string', option: 'assume' });
   });
 
   it('rejects name and aliases on a positional key with AB4842 while description, default, and required stay legal', async () => {
