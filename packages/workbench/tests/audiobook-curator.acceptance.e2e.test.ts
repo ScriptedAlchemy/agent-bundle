@@ -18,14 +18,18 @@ import {
   expectApplicationTree,
   expectPrimaryNav,
   expectRenderedDocument,
+  expectToolInvocationTraceGroup,
   expectUnknownRouteMessage,
   fillRouteInput,
+  invokeRouteFromWorkbench,
   openWorkbench,
   readBuildEpoch,
+  readCorrelationId,
   readInvocationId,
   rebuildTimeout,
   runSelectedRoute,
   selectApplicationLeaf,
+  traceEntryRow,
   waitForBuildEpochAdvance,
   workbenchTestId,
 } from './support/workbench-acceptance.ts';
@@ -84,6 +88,7 @@ e2e('accepts the audiobook-curator Application workspace at 1440×900', { timeou
     await expect(workbenchTestId(page, 'resultTabTrace')).toBeVisible();
     await captureExampleState(page, 'audiobook-curator', 'tool-rendered');
     const invocationId = await readInvocationId(page);
+    const correlationId = await readCorrelationId(page);
 
     const epochBeforeEdit = await readBuildEpoch(page);
     const markedSearch = healthySearch.replace(
@@ -107,16 +112,54 @@ e2e('accepts the audiobook-curator Application workspace at 1440×900', { timeou
     await expectRenderedDocument(page, runTimeout);
     expect(await readInvocationId(page)).toBe(invocationId);
 
+    const routeId = searchLeaf.routeId ?? 'tool:curator/search_audible';
     await openWorkbench(page, server.url, '/trace');
     await expect(page.getByRole('heading', { name: 'Trace', exact: true })).toBeVisible({ timeout: browserTimeout });
-    const traceRow = page.locator(`.trace-table tr[data-invocation-id=${JSON.stringify(invocationId)}]`);
-    await expect(traceRow).toBeVisible({ timeout: browserTimeout });
-    await expect(traceRow).toContainText(searchLeaf.routeId ?? 'tool:curator/search_audible');
+    await expectToolInvocationTraceGroup(page, { invocationId, routeId });
     await captureExampleState(page, 'audiobook-curator', 'trace-populated');
-    await traceRow.getByRole('link').first().click();
+
+    await openWorkbench(page, server.url, `/trace?correlation=${encodeURIComponent(correlationId)}`);
+    await expect(page.getByRole('heading', { name: 'Trace', exact: true })).toBeVisible({ timeout: browserTimeout });
+    await expect(page.locator('.trace-scope')).toContainText(correlationId, { timeout: browserTimeout });
+    const scopedGroup = await expectToolInvocationTraceGroup(page, { invocationId, routeId });
+    await expect(workbenchTestId(page, 'traceGroup')).toHaveCount(1);
+    const scopedCompleted = scopedGroup.locator(`[data-testid="trace-entry"][data-kind="invocation.completed"]`);
+    await expect(scopedCompleted).toHaveCount(1);
+
+    await scopedCompleted.click();
     await waitForWorkbenchIdle(page);
-    expect(new URL(page.url()).pathname).toBe(`/trace/${encodeURIComponent(invocationId)}`);
-    await expect(page.getByTestId('trace-entry')).toBeVisible({ timeout: browserTimeout });
+    const detailPath = new URL(page.url()).pathname;
+    expect(detailPath).toMatch(/^\/trace\/trc_\d+$/u);
+    await expect(workbenchTestId(page, 'traceDetail')).toBeVisible({ timeout: browserTimeout });
+    await expect(workbenchTestId(page, 'traceDetail')).toContainText(routeId, { timeout: browserTimeout });
+    const entryId = detailPath.slice('/trace/'.length);
+
+    await page.goto(workbenchUrl(server.url, `/trace/${encodeURIComponent(entryId)}`));
+    await waitForWorkbenchIdle(page);
+    expect(new URL(page.url()).pathname).toBe(`/trace/${entryId}`);
+    await expect(workbenchTestId(page, 'traceDetail')).toBeVisible({ timeout: browserTimeout });
+    await expect(workbenchTestId(page, 'traceDetail')).toHaveAttribute('data-entry-id', entryId);
+
+    await workbenchTestId(page, 'traceDetail').getByRole('link', { name: 'Open route', exact: true }).click();
+    await waitForWorkbenchIdle(page);
+    expect(new URL(page.url()).pathname).toBe(searchPath);
+    expect(new URL(page.url()).searchParams.get('invocation')).toBe(invocationId);
+    await expect(workbenchTestId(page, 'routeWorkspace')).toBeVisible({ timeout: browserTimeout });
+    await expect(workbenchTestId(page, 'routeStatus')).toHaveClass(/route-status--succeeded/u, { timeout: browserTimeout });
+    expect(await readInvocationId(page)).toBe(invocationId);
+    await expectRenderedDocument(page, runTimeout);
+
+    await openWorkbench(page, server.url, '/trace');
+    const completedBeforeLive = await traceEntryRow(page, 'invocation.completed').count();
+    const liveUrl = page.url();
+    const liveInvocationId = await invokeRouteFromWorkbench(page, { input: { title: searchTitle }, routeId });
+    expect(liveInvocationId).not.toBe(invocationId);
+    await expect.poll(
+      async () => traceEntryRow(page, 'invocation.completed').count(),
+      { timeout: browserTimeout },
+    ).toBeGreaterThan(completedBeforeLive);
+    await expectToolInvocationTraceGroup(page, { invocationId: liveInvocationId, routeId });
+    expect(page.url()).toBe(liveUrl);
 
     await editWatchedSource(server, project.root, conversionSource, `${healthyConversion}\nconst = ;\n`, 'failed');
     await page.reload();
