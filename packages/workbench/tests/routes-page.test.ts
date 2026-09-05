@@ -158,7 +158,7 @@ it('renders honest state absence without an alert', () => {
   expect(markup.match(/This project declares no state module\.<\/p>/u)?.[0]).not.toContain('role="alert"');
 });
 
-it('renders a CLI surface projection beside usage and keeps the canonical editor', () => {
+it('keeps usage and the canonical editor for a projected command without projection UI', () => {
   const projected: RouteManifest = {
     ...manifest,
     cli: {
@@ -204,17 +204,14 @@ it('renders a CLI surface projection beside usage and keeps the canonical editor
   const markup = render(routeCatalogFor(projected));
 
   expect(markup).toContain('request &lt;argv...&gt; [--cwd &lt;string&gt;] [--lane &lt;string&gt;]');
-  expect(markup).toContain('Projection src/mcp/hauler/tools/hauler_request.cli.ts · mapInput yes');
-  expect(markup).toContain('aria-label="CLI option mapping"');
-  expect(markup).toContain('>laneKey<');
-  expect(markup).toContain('>lane<');
-  expect(markup).toContain('>lane-key<');
-  expect(markup).toContain('>0<');
-  expect(markup).toContain('Relaxed on the CLI: cwd');
   expect(markup).toContain('Generated input editor');
   expect(markup).toContain('Argv (required)');
   expect(markup).toContain('Cwd (required)');
   expect(markup).toContain('Lane Key');
+  expect(markup).not.toContain('Projection ');
+  expect(markup).not.toContain('mapInput');
+  expect(markup).not.toContain('CLI option mapping');
+  expect(markup).not.toContain('Relaxed on the CLI');
 });
 
 it('shows the argv projection of a compiled CLI command', () => {
@@ -222,28 +219,6 @@ it('shows the argv projection of a compiled CLI command', () => {
 
   expect(markup).toContain('library audit &lt;input&gt; [--verbose]');
   expect(markup).toContain('Schema not statically projectable');
-  expect(markup).not.toContain('Projection ');
-  expect(markup).not.toContain('Relaxed on the CLI');
-});
-
-it('renders mapInput no and omits the relaxed line when the projection has none', () => {
-  const projected: RouteManifest = {
-    ...manifest,
-    cli: {
-      ...manifest.cli!,
-      commands: [{
-        ...manifest.cli!.commands![0]!,
-        projection: {
-          mapInput: false,
-          module: 'src/mcp/hauler/tools/hauler_status.cli.ts',
-        },
-      }],
-    },
-  };
-  const markup = render(routeCatalogFor(projected));
-
-  expect(markup).toContain('Projection src/mcp/hauler/tools/hauler_status.cli.ts · mapInput no');
-  expect(markup).not.toContain('Relaxed on the CLI');
 });
 
 it('leads the usage line with positionals in argv order regardless of option order', () => {

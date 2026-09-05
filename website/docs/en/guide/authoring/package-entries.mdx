@@ -231,9 +231,9 @@ automatic kebab projection of the schema. cargo-hauler keeps `src/cli/status.tsx
 `src/mcp/hauler/tools/hauler_status.tsx` so `--lane` can mean `laneKey`, and
 `src/cli/request.tsx` beside `hauler_request.tsx` so `hauler request -- cargo check` can feed
 `argv` and `mapInput` can derive `cwd`. That second module is a second operation (`cli:status`)
-with its own `operationId` and typegen entry. A colocated `<tool>.cli.ts` is the CLI *surface*
-projection of the same operation — identity stays `tool:<server>/<tool>` — and is not a route.
-Host projection (`targets`) is unchanged and orthogonal.
+with its own `operationId` and typegen entry. A colocated `<tool>.cli.ts` projection module is
+the CLI *surface* projection of the same operation — identity stays `tool:<server>/<tool>` —
+and is never a route. Host projection (`targets`) is unchanged and orthogonal.
 
 The module sits beside the tool, never under `src/cli/**`. Status needs only renames; the
 parser already emits canonical keys, so there is no `mapInput`:
@@ -319,6 +319,10 @@ export const mapInput = (
 keys are constrained to `keyof z.input<Schema>`. `config` uses the same static extract grammar
 as a route module (`satisfies` unwraps). `mapInput` is an ordinary named export whose presence
 is recorded statically and loaded only by the CLI bin; the MCP worker never sees the module.
+`mapInput` is a surface adapter, not domain logic: it only reshapes or defaults argv into the
+canonical input (renames, splitting lists, deriving a working directory). Domain validation and
+behaviour stay in the operation — its `inputSchema` refinements and its component. A mapper that
+recreates command logic is the duplication the projection exists to remove.
 
 | Key | Meaning |
 | --- | --- |
@@ -352,9 +356,11 @@ tool module with the prefix `Tool route <path> (CLI projection <module>)`.
 
 `agent-bundle inspect --routes` dumps the compiled graph, so
 `cli.commands[].projection` (`module`, `mapInput`, `defaults?`, `relaxed?`) and
-`options[].{key,option,aliases}` appear with no extra renderer. The Workbench CLI row shows the
-same facts beside the canonical input editor. The compiled command's `routeId` is the tool id;
-at run time `invocation.kind` is `'cli'` and `operationId` is that tool id.
+`options[].{key,option,aliases}` appear with no extra renderer. The Workbench will surface those
+facts in the selected-operation inspector. The compiled command's `routeId` is the tool id; at
+run time `invocation.kind` is `'cli'` and `operationId` is that tool id. A route observes
+`kind: 'cli'` whenever it runs from the generated CLI executable, whichever projection
+mechanism produced the command. The generated MCP server still passes `kind: 'tool'`.
 
 No projection module means no command from this path — the bulk
 [`routes.mcpCommands`](#projecting-mcp-tools-into-the-cli) opt-in keeps working for every other
@@ -393,11 +399,15 @@ is unchanged.
 executable, including in projects with no `src/cli/**` routes at all. `true` selects every
 eligible tool; the object form takes `include` and `exclude` patterns matching the
 `<server>:<tool>` identity, with `*` as the only wildcard. A tool that already has a colocated
-`<tool>.cli.ts` is excluded from this bulk projection: one operation compiles to one command. An
-`include` pattern that matches only such tools is `AB4822` and names the projection module.
+`<tool>.cli.ts` projection module is excluded from this bulk projection: one operation compiles
+to one command. An `include` pattern that matches only such tools is `AB4822` and names the
+projection module.
 
 Each bulk-projected tool runs as `<plugin-bin> <server> <tool>` with the protocol tool name
-preserved verbatim. Its only input option is `--input` taking one JSON object. A tool is
+preserved verbatim. Its only input option is `--input` taking one JSON object. Both the bulk
+`routes.mcpCommands` projection and an explicit `<tool>.cli.ts` are CLI surfaces, so a route
+observes `kind: 'cli'` whenever it runs from the generated CLI executable; the generated MCP
+server still passes `kind: 'tool'`. A tool is
 read-only only when its static MCP annotations explicitly set `readOnlyHint: true`; every other
 tool is mutation-capable and fails closed unless `--yes` is present. Every declared pattern must
 match at least one eligible tool, and a misspelling fails with `AB4822` listing the available

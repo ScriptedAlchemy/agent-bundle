@@ -92,8 +92,10 @@ bound to schemas imported from a relative module inside the project
 resolution rules and the `AB4838`/`AB4839` diagnostics are under
 [Share one schema between MCP and CLI](./package-entries.mdx#share-one-schema-between-mcp-and-cli).
 A generated tool can also expose an idiomatic CLI command without a second route: a colocated
-`<tool>.cli.ts` is a CLI surface projection of the same operation (`tool:<server>/<tool>`), not a
-`cli:` route. See
+`<tool>.cli.ts` projection module is a CLI surface projection of the same operation
+(`tool:<server>/<tool>`), never a route. A route observes `kind: 'cli'` whenever it runs from
+the generated CLI executable, whichever projection mechanism produced the command; the
+generated MCP server still passes `kind: 'tool'`. See
 [Project one tool as an idiomatic command](./package-entries.mdx#project-one-tool-as-an-idiomatic-command).
 
 A route may re-export its component and schemas from another module. This is how one tool is

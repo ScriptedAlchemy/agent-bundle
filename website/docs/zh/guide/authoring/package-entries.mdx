@@ -207,9 +207,9 @@ Workbench 与 `agent-bundle inspect --routes` 读取的正是它。
 cargo-hauler 把 `src/cli/status.tsx` 放在 `src/mcp/hauler/tools/hauler_status.tsx` 旁边，让
 `--lane` 可以表示 `laneKey`；又把 `src/cli/request.tsx` 放在 `hauler_request.tsx` 旁边，让
 `hauler request -- cargo check` 可以传入 `argv`，并让 `mapInput` 派生 `cwd`。第二个模块是第二个
-操作（`cli:status`），拥有自己的 `operationId` 与 typegen 条目。同位置的 `<tool>.cli.ts` 则是同一
-操作的 CLI *表面*投影——身份仍为 `tool:<server>/<tool>`——而不是一条路由。宿主投影（`targets`）
-保持不变，并且与此正交。
+操作（`cli:status`），拥有自己的 `operationId` 与 typegen 条目。同位置的 `<tool>.cli.ts` 投影模块
+则是同一操作的 CLI *表面*投影——身份仍为 `tool:<server>/<tool>`——绝不是一条路由。宿主投影
+（`targets`）保持不变，并且与此正交。
 
 该模块位于工具旁边，绝不放在 `src/cli/**` 下。Status 只需重命名；解析器已经发出规范键，因此不需要
 `mapInput`：
@@ -294,7 +294,9 @@ export const mapInput = (
 `CliProjectionConfig<Schema>` 从 `agent-bundle/routes` 导出。`flags` 与 `positionals` 的键受限于
 `keyof z.input<Schema>`。`config` 使用与路由模块相同的静态提取语法（会解包 `satisfies`）。
 `mapInput` 是普通的命名导出，其存在性会被静态记录，并且只由 CLI bin 加载；MCP worker 永远不会看到
-该模块。
+该模块。`mapInput` 是表面适配器，不是领域逻辑：它只把 argv 重塑或补默认值成规范输入（重命名、拆分
+列表、派生工作目录）。领域校验与行为留在操作里——它的 `inputSchema` 精化以及它的组件。在 mapper
+里重写一遍命令逻辑，正是投影要去掉的重复。
 
 | 键 | 含义 |
 | --- | --- |
@@ -326,8 +328,10 @@ export const mapInput = (
 
 `agent-bundle inspect --routes` 会转储编译后的路由图，因此无需额外的 renderer 即可看到
 `cli.commands[].projection`（`module`、`mapInput`、`defaults?`、`relaxed?`）与
-`options[].{key,option,aliases}`。Workbench 的 CLI 行会在规范输入编辑器旁显示同样的信息。
-编译后命令的 `routeId` 是工具 id；运行时的 `invocation.kind` 为 `'cli'`，`operationId` 则为该工具 id。
+`options[].{key,option,aliases}`。Workbench 会在选中操作的 inspector 中展示这些事实。
+编译后命令的 `routeId` 是工具 id；运行时的 `invocation.kind` 为 `'cli'`，`operationId` 则为该工具
+id。只要路由从生成的 CLI 可执行文件运行，无论命令由哪种投影机制产生，它观察到的都是
+`kind: 'cli'`。生成的 MCP 服务器仍传入 `kind: 'tool'`。
 
 没有投影模块，就不会通过这条路径生成命令；批量选择加入的
 [`routes.mcpCommands`](#把-mcp-工具投影进-cli) 对其他所有工具仍照常工作。任何投影字段都不会改变 MCP
@@ -358,12 +362,14 @@ export const mapInput = (
 
 `routes.mcpCommands` 把生成式 MCP 服务器的工具加入同一张命令图与同一个可执行文件，即使项目完全没有
 `src/cli/**` 路由也可以。`true` 选中每个符合条件的工具；对象形式接受匹配 `<server>:<tool>` 身份的
-`include` 与 `exclude` 模式，其中 `*` 是唯一的通配符。已经有同位置 `<tool>.cli.ts` 的工具会从这次
+`include` 与 `exclude` 模式，其中 `*` 是唯一的通配符。已经有同位置 `<tool>.cli.ts` 投影模块的工具会从这次
 批量投影中排除：一个操作只编译成一个命令。仅匹配这类工具的 `include` 模式会触发 `AB4822`，并点名
 投影模块。
 
 每个被批量投影的工具以 `<plugin-bin> <server> <tool>` 运行，协议工具名逐字保留。它唯一的输入选项是
-`--input`，接受一个 JSON 对象。只有当工具的静态 MCP annotations 明确设置了 `readOnlyHint: true` 时
+`--input`，接受一个 JSON 对象。批量 `routes.mcpCommands` 投影与显式的 `<tool>.cli.ts` 都是 CLI
+表面，因此只要路由从生成的 CLI 可执行文件运行，它观察到的都是 `kind: 'cli'`；生成的 MCP 服务器仍
+传入 `kind: 'tool'`。只有当工具的静态 MCP annotations 明确设置了 `readOnlyHint: true` 时
 它才是只读的；其余工具都被视为可变更，并在没有 `--yes` 时失败关闭。每个声明的模式都必须至少匹配一个
 符合条件的工具，拼写错误会以 `AB4822` 失败，并列出可用的身份。
 

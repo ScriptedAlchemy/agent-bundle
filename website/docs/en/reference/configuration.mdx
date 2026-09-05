@@ -58,7 +58,7 @@ route compiler still parses `routes` during discovery, so `agent-bundle validate
 malformed override through the route graph's diagnostics; `validateSource` never reads `evals` —
 the [`evals` rules below](#evals) fire when `agent-bundle eval` or the Workbench loads the config,
 as `EVAL_CONFIG_INVALID`, `EVAL_INCLUDE_INVALID`, or `EVAL_RUNS_DIR_INVALID` errors rather than
-`AB` diagnostics. A tool that already has a colocated `<tool>.cli.ts` CLI surface projection is
+`AB` diagnostics. A tool that already has a colocated `<tool>.cli.ts` projection module is
 excluded from `routes.mcpCommands` so the bulk `<bin> <server> <tool> --input` command is not
 also compiled for that operation. See
 [Project one tool as an idiomatic command](../guide/authoring/package-entries.mdx#project-one-tool-as-an-idiomatic-command).

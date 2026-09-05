@@ -22,7 +22,7 @@ my-plugin/
     ├── mcp/<server-id>.ts     # 手写的 stdio MCP 服务器入口
     ├── mcp/<server>/          # 或生成式服务器，每个路由一个模块
     │   ├── tools/*.tsx
-    │   ├── tools/<tool>.cli.ts # 选择加入的 CLI 表面投影；不是路由
+    │   ├── tools/<tool>.cli.ts # 同位置的投影模块；绝不是路由
     │   ├── resources/*.tsx
     │   ├── prompts/*.tsx
     │   ├── apps/*.tsx         # 编译为自包含 HTML 的浏览器 MCP App
@@ -45,7 +45,7 @@ my-plugin/
 | `src/rules/*.mdc` | 扁平的宿主规则文档，由 Cursor 发射，保留 `description`、`globs` 与 `alwaysApply`。同样的按宿主判定适用：显式 target 为 `AB4907`，隐式 target 为警告 `AB4908`。 | 删除该文件。 |
 | `src/mcp/<server-id>.ts` | 某个已声明、但未指定 `entry`、`command` 或 `url` 的 MCP 服务器的 stdio 入口。 | 显式声明 `entry`。 |
 | `src/mcp/<server>/{tools,resources,prompts}/*` | 生成式 MCP 服务器路由。路径提供身份；每个模块提供静态 `config`、schema，以及一个 async 默认 Server Component。 | 把 `routes.servers.<server>` 设为 `custom`、`command` 或 `remote`。 |
-| `src/mcp/<server>/tools/<tool>.cli.ts` | 同级工具路由的 CLI 表面投影。不是路由；会从 `routes.mcpCommands` 中排除。参见[将一个工具投影为惯用命令](../authoring/package-entries.mdx#将一个工具投影为惯用命令)。 | 加 `_` 前缀以停用它。 |
+| `src/mcp/<server>/tools/<tool>.cli.ts` | 同级工具的同位置投影模块。绝不是路由；会从 `routes.mcpCommands` 中排除。参见[将一个工具投影为惯用命令](../authoring/package-entries.mdx#将一个工具投影为惯用命令)。 | 加 `_` 前缀以停用它。 |
 | `src/mcp/<server>/apps/*` | 浏览器 MCP App 入口，编译为自包含 HTML 并注册到生成的服务器上。必须提供静态 `config.resourceUri`。 | 使用自定义服务器，或给文件名加 `_` 前缀。 |
 | `src/scripts/<name>.ts` | 一个普通脚本，只编译一次，输出为产物根目录下的 `scripts/<name>.mjs`，所有所选宿主共用。嵌套模块是硬错误（`AB4808`）。 | 给某一段路径加 `_` 前缀，或用显式 `scripts` 条目认领该文件。 |
 | `src/scripts/<name>.tsx` | 渲染式脚本：async 默认组件接收 `argv` 与 `signal`，并按 CLI 输出契约通过 Agent 渲染器渲染。 | 改名为 `.ts`、给某一段路径加 `_` 前缀，或认领该文件。 |

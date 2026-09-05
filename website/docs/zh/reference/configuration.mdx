@@ -52,7 +52,7 @@ export default defineConfig({
 `AgentBundleConfig` 的成员——它们经由 `[key: string]: unknown` 索引签名传入——因此 `tsc` 不会检查它们的
 形状；`evals` 的规则要到 eval 运行时才生效（`EVAL_CONFIG_INVALID`），`agent-bundle validate` 不会报告它们，
 而 `routes` 覆盖块由路由图在发现阶段校验，其诊断随 `validateSource` 一并报告。同位置已有
-`<tool>.cli.ts` CLI 表面投影的工具会从 `routes.mcpCommands` 中排除，避免为同一个操作再编译一条批量
+`<tool>.cli.ts` 投影模块的工具会从 `routes.mcpCommands` 中排除，避免为同一个操作再编译一条批量
 `<bin> <server> <tool> --input` 命令。参见
 [将一个工具投影为惯用命令](../guide/authoring/package-entries.mdx#将一个工具投影为惯用命令)。
 下面这些精确形态在每次文档构建时由 TypeDoc 从包源码生成，因此不会与已发布的类型产生偏差。
