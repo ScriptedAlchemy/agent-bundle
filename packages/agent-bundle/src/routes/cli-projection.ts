@@ -1,5 +1,5 @@
 import { extractRouteConfig, routeConfigGrammar } from './config-extract.ts';
-import { scanRouteModuleExports } from './contract.ts';
+import { scanRouteModuleExports, type RouteModuleExports } from './contract.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { deepFreeze } from '../core/freeze.ts';
 import { isRecord } from '../core/strict-json.ts';
@@ -63,7 +63,7 @@ export interface ExtractedCliProjection {
   readonly config: CliProjectionConfigRecord;
   /** AB4841 (module contract) and AB4842 (grammar binding) in that order. */
   readonly diagnostics: readonly Diagnostic[];
-  /** True when the module exports `mapInput` as a synchronous function. */
+  /** True when the module exports `mapInput` as a synchronous, non-generator function with a runtime binding. */
   readonly mapInput: boolean;
 }
 
@@ -85,7 +85,7 @@ const projectionSubject = (module: string, toolId: string): string => `CLI proje
 
 const contractRecovery = 'Declare only command, aliases, confirm, description, exitCode, flags, and positionals, each in the shape CliProjectionConfig documents; then inspect again.';
 const grammarRecovery = `Export the projection config as a single top-level \`export const config = { ... }\` object literal inside the static route-config grammar (${routeConfigGrammar}), then inspect again.`;
-const mapInputRecovery = 'Export mapInput as one synchronous arrow or function expression (`export const mapInput = (input) => ({ ... })`), or remove the export; then inspect again.';
+const mapInputRecovery = 'Export mapInput as one synchronous, non-generator function with a runtime binding — a function declaration (`export function mapInput(input) { ... }`), an arrow (`export const mapInput = (input) => ({ ... })`), or a function expression — or remove the export; then inspect again.';
 const spellingRecovery = 'Use kebab-case option spellings without leading dashes that are neither reserved (help, json, ndjson, version, and yes when the command confirms) nor claimed by another option or alias; then inspect again.';
 
 /** AB4841: the projection module's own contract — `config` shape and `mapInput` — is not met. */
@@ -356,11 +356,45 @@ export const relaxationRecovery = (key: string): string =>
   `Export a mapInput function that fills ${JSON.stringify(key)} before the canonical inputSchema validates, or keep the key required on the CLI; then inspect again.`;
 
 /**
+ * The AB4841 detail when an exported `mapInput` is not what the shell can
+ * call: it must carry a runtime binding (no ambient `declare`), return the
+ * mapped input directly (no generator), and return it synchronously (no
+ * `async`), because the shell applies it inline before `inputSchema.parse`
+ * and a Promise or iterator would reach the schema instead of the input.
+ * A `mapInput` re-exported from another module is judged where it is
+ * declared (`export { mapInput } from './shared.ts'` is followed like a
+ * default re-export); one the scan cannot follow — a bare specifier, an
+ * unreadable file, or a re-export cycle — is rejected rather than trusted,
+ * since a projection has no run-time fallback judgment. Undefined when the
+ * module exports no `mapInput` or exports an accepted one.
+ */
+const judgeMapInput = (exports: RouteModuleExports): string | undefined => {
+  if (!exports.named.has('mapInput')) return undefined;
+  if (exports.namedAmbient.has('mapInput')) {
+    return 'mapInput is an ambient declaration (declare function or declare const), which emits no runtime binding for the shell to call';
+  }
+  const unresolved = exports.namedUnresolved.get('mapInput');
+  if (unresolved !== undefined) {
+    return `mapInput is re-exported from ${JSON.stringify(unresolved)}, which cannot be followed statically to a function`;
+  }
+  if (exports.namedGeneratorFunctions.has('mapInput')) {
+    return exports.namedAsyncFunctions.has('mapInput')
+      ? 'mapInput is an async generator function, which yields an async iterator instead of returning the mapped input'
+      : 'mapInput is a generator function, which yields an iterator instead of returning the mapped input';
+  }
+  if (exports.namedAsyncFunctions.has('mapInput')) {
+    return 'mapInput is an async function, which returns a Promise, but the shell applies mapInput synchronously before the canonical inputSchema validates';
+  }
+  if (!exports.namedFunctions.has('mapInput')) return 'mapInput is exported but is not statically a function';
+  return undefined;
+};
+
+/**
  * Statically extracts one projection module: its `config` through the
  * unchanged route-config grammar (`extractRouteConfig`), validated against
  * the closed `CliProjectionConfig` key set and bound to the tool's contract,
- * and whether it exports a synchronous `mapInput` function
- * (`scanRouteModuleExports`). The module is parsed, never executed. Every
+ * and whether it exports a `mapInput` the shell can call (`judgeMapInput`
+ * over `scanRouteModuleExports`). The module is parsed, never executed. Every
  * failure is `AB4841` (the module's own contract) or `AB4842` (binding to
  * the tool's argv grammar), addressed as
  * `CLI projection <module> for tool:<server>/<tool>: <detail>.` on the
@@ -382,19 +416,9 @@ export const extractCliProjection = (
   };
   const diagnostics: Diagnostic[] = [];
   const exports = scanRouteModuleExports(moduleText, relativePath, { source: sourcePath });
-  let mapInput = false;
-  if (exports.named.has('mapInput')) {
-    if (exports.namedAsyncFunctions.has('mapInput')) {
-      diagnostics.push(report.contract(
-        'exports an async mapInput, but the shell applies mapInput synchronously before the canonical inputSchema validates',
-        mapInputRecovery,
-      ));
-    } else if (!exports.namedFunctions.has('mapInput')) {
-      diagnostics.push(report.contract('exports mapInput, which is not statically a function', mapInputRecovery));
-    } else {
-      mapInput = true;
-    }
-  }
+  const mapInputDetail = judgeMapInput(exports);
+  if (mapInputDetail !== undefined) diagnostics.push(report.contract(mapInputDetail, mapInputRecovery));
+  const mapInput = exports.named.has('mapInput') && mapInputDetail === undefined;
 
   if (!exports.named.has('config')) {
     diagnostics.push(report.contract('the module exports no config', grammarRecovery));

@@ -399,7 +399,6 @@ describe('MCP tool CLI surface projections', () => {
     const cases: readonly [projection: string, tool: string, fragments: readonly string[]][] = [
       [cliModule("{ render: { maxElapsedMs: 1000 } }"), toolModule(), ['config.render', 'unknown']],
       [cliModule("{ command: 'submit' }"), toolModule(), ['config.command', 'array']],
-      [cliModule('{}', 'export const mapInput = pipe(identity);'), toolModule(), ['mapInput', 'function']],
       [
         cliModule("{ flags: { laneKey: { required: false } } }"),
         toolModule(),
@@ -415,6 +414,131 @@ describe('MCP tool CLI surface projections', () => {
       const result = await compileProjection(projection, { tool: toolSource });
       expectOnlyDiagnostic(result.graph, 'AB4841', result.root, fragments);
     }
+  });
+
+  describe('mapInput must be a synchronous, non-generator function with a runtime binding', () => {
+    const subject = `CLI projection ${projectionPath} for tool:demo/submit: mapInput`;
+
+    /** One rejected form: exactly one AB4841 naming the form, and no command compiled. */
+    const expectRejectedMapInput = async (mapInput: string, fragments: readonly string[]): Promise<void> => {
+      const { graph, root } = await compileProjection(cliModule('{}', mapInput));
+      expectOnlyDiagnostic(graph, 'AB4841', root, [subject, ...fragments]);
+      expect(graph.diagnostics[0]!.recovery).toContain('synchronous, non-generator function');
+      expect(graph.cli?.commands).toEqual([]);
+      expect(graph.cli?.projectionSources).toBeUndefined();
+    };
+
+    it('rejects an ambient function declaration, which emits no runtime binding', async () => {
+      await expectRejectedMapInput(
+        'export declare function mapInput(input: { laneKey?: string }): { laneKey: string };',
+        ['ambient declaration', 'declare function', 'no runtime binding'],
+      );
+    });
+
+    it('rejects an ambient const declaration', async () => {
+      await expectRejectedMapInput(
+        'export declare const mapInput: (input: { laneKey?: string }) => { laneKey: string };',
+        ['ambient declaration', 'declare const', 'no runtime binding'],
+      );
+    });
+
+    it('rejects a locally declared ambient function exported by name', async () => {
+      await expectRejectedMapInput(
+        'declare function mapInput(input: { laneKey?: string }): { laneKey: string };\nexport { mapInput };',
+        ['ambient declaration'],
+      );
+    });
+
+    it('rejects a generator function', async () => {
+      await expectRejectedMapInput(
+        'export function* mapInput(input) { yield input; }',
+        ['is a generator function', 'iterator instead of returning the mapped input'],
+      );
+    });
+
+    it('rejects an async generator function', async () => {
+      await expectRejectedMapInput(
+        'export async function* mapInput(input) { yield input; }',
+        ['is an async generator function', 'async iterator'],
+      );
+    });
+
+    it('rejects a generator function expression', async () => {
+      await expectRejectedMapInput(
+        'export const mapInput = function* (input) { yield input; };',
+        ['is a generator function'],
+      );
+    });
+
+    it('rejects an async arrow function', async () => {
+      await expectRejectedMapInput(
+        'export const mapInput = async (input) => input;',
+        ['is an async function', 'Promise', 'synchronously'],
+      );
+    });
+
+    it('rejects an async function declaration', async () => {
+      await expectRejectedMapInput(
+        'export async function mapInput(input) { return input; }',
+        ['is an async function', 'synchronously'],
+      );
+    });
+
+    it('rejects a const that is not statically a function', async () => {
+      await expectRejectedMapInput(
+        'export const mapInput = pipe(identity);',
+        ['is exported but is not statically a function'],
+      );
+    });
+
+    it('rejects a re-export the scan cannot follow, and follows one it can', async () => {
+      await expectRejectedMapInput(
+        "export { mapInput } from 'mapper-package';",
+        ['is re-exported from "mapper-package"', 'cannot be followed statically'],
+      );
+      await expectRejectedMapInput(
+        "export { mapInput } from './missing-mapper.ts';",
+        ['is re-exported from "./missing-mapper.ts"'],
+      );
+
+      // The shared module sits outside src/mcp so discovery never reads it as a route.
+      const reExport = "export { mapInput } from '../../../shared/mapper.ts';";
+      const declaredAmbient = await compileProjection(cliModule('{}', reExport), {
+        extraFiles: { 'src/shared/mapper.ts': 'export declare function mapInput(input: unknown): unknown;\n' },
+      });
+      expectOnlyDiagnostic(declaredAmbient.graph, 'AB4841', declaredAmbient.root, [subject, 'ambient declaration']);
+      expect(declaredAmbient.graph.cli?.commands).toEqual([]);
+
+      const followed = await compileProjection(cliModule('{}', reExport), {
+        extraFiles: { 'src/shared/mapper.ts': 'export const mapInput = (input) => input;\n' },
+      });
+      expect(followed.graph.diagnostics).toEqual([]);
+      expect(followed.graph.cli?.commands?.[0]?.projection).toEqual({ mapInput: true, module: projectionPath });
+    });
+
+    it('accepts a function declaration, an arrow, a function expression, an exported alias, and an overloaded declaration', async () => {
+      const accepted: readonly [form: string, mapInput: string][] = [
+        ['function declaration', 'export function mapInput(input) { return input; }'],
+        ['arrow', 'export const mapInput = (input) => input;'],
+        ['function expression', 'export const mapInput = function (input) { return input; };'],
+        ['parenthesized arrow with a satisfies clause', 'export const mapInput = ((input) => input) satisfies (input: unknown) => unknown;'],
+        ['local function exported by name', 'function mapInput(input) { return input; }\nexport { mapInput };'],
+        ['local arrow exported under the name', 'const toInput = (input) => input;\nexport { toInput as mapInput };'],
+        [
+          'overloaded function declaration',
+          [
+            'export function mapInput(input: string): { laneKey: string };',
+            'export function mapInput(input: { laneKey?: string }): { laneKey: string };',
+            'export function mapInput(input: unknown) { return input; }',
+          ].join('\n'),
+        ],
+      ];
+      for (const [form, mapInput] of accepted) {
+        const { graph } = await compileProjection(cliModule('{}', mapInput));
+        expect(graph.diagnostics, form).toEqual([]);
+        expect(graph.cli?.commands?.[0]?.projection, form).toEqual({ mapInput: true, module: projectionPath });
+      }
+    });
   });
 
   it('reports AB4842 for unknown keys, invalid spellings, collisions, unsafe paths, and reserved yes', async () => {

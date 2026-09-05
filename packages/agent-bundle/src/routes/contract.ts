@@ -10,6 +10,9 @@ const modifier = (node: ts.Node, kind: ts.SyntaxKind): boolean =>
 
 const exported = (node: ts.Node): boolean => modifier(node, ts.SyntaxKind.ExportKeyword);
 const asynchronous = (node: ts.Node): boolean => modifier(node, ts.SyntaxKind.AsyncKeyword);
+/** `declare function` / `declare const`: a type-level declaration that emits no runtime binding. */
+const ambient = (node: ts.Node): boolean => modifier(node, ts.SyntaxKind.DeclareKeyword);
+const generator = (node: ts.FunctionDeclaration | ts.FunctionExpression): boolean => node.asteriskToken !== undefined;
 
 const unwrappedExpression = (expression: ts.Expression): ts.Expression => {
   let current = expression;
@@ -58,10 +61,25 @@ export interface RouteModuleExports {
   /** Set when the default export is re-exported from another module. */
   readonly defaultReExport?: RouteDefaultReExport;
   readonly named: ReadonlySet<string>;
-  /** Exported names bound to an async function or arrow function. */
+  /**
+   * Exported names whose declaration is ambient (`declare function`,
+   * `declare const`): TypeScript emits no runtime binding for them, so they
+   * are in `named` but in none of the function sets.
+   */
+  readonly namedAmbient: ReadonlySet<string>;
+  /** Exported names bound to an async function or arrow function (async generators included). */
   readonly namedAsyncFunctions: ReadonlySet<string>;
-  /** Exported names bound to a function or arrow function. */
+  /** Exported names bound to a function or arrow function that emits a runtime binding (generators included, ambient declarations excluded). */
   readonly namedFunctions: ReadonlySet<string>;
+  /** Exported names bound to a generator function (`function*`, `async function*`). */
+  readonly namedGeneratorFunctions: ReadonlySet<string>;
+  /**
+   * Exported names re-exported from a module the scan could not follow (a
+   * bare specifier, an unreadable file, or a re-export cycle), keyed to the
+   * specifier named, so their shape is unknown statically rather than "not a
+   * function".
+   */
+  readonly namedUnresolved: ReadonlyMap<string, string>;
   /** True when the module exports `execute` or `render` (the retired split contract). */
   readonly splitExport: boolean;
 }
@@ -87,34 +105,35 @@ export const scanRouteModuleExports = (
   moduleText: string,
   relativePath: string,
   options: ScanRouteModuleOptions = {},
-): RouteModuleExports => {
-  const { unresolvedNamed: _unresolvedNamed, ...exports } = scanModuleExports(moduleText, relativePath, options, new Set());
-  return Object.freeze(exports);
-};
-
-/** The scan plus the named re-exports whose shape stayed unknown, so a chain propagates "unknown" rather than "not a function". */
-interface ScannedModuleExports extends RouteModuleExports {
-  readonly unresolvedNamed: ReadonlySet<string>;
-}
+): RouteModuleExports => Object.freeze(scanModuleExports(moduleText, relativePath, options, new Set()));
 
 /** What one binding of a scanned module is known to be. */
 interface BindingShape {
+  /** True when the binding is an ambient declaration with no runtime emit. */
+  readonly ambient: boolean;
   readonly asyncFunction: boolean;
   readonly function: boolean;
+  readonly generator: boolean;
   /** True when the binding is a re-export the scan could not follow. */
   readonly unresolved: boolean;
 }
 
-const bindingShape = (exports: ScannedModuleExports, name: string): BindingShape => name === 'default'
+const unknownShape: BindingShape = { ambient: false, asyncFunction: false, function: false, generator: false, unresolved: true };
+
+const bindingShape = (exports: RouteModuleExports, name: string): BindingShape => name === 'default'
   ? {
+    ambient: false,
     asyncFunction: exports.asyncDefault,
     function: exports.defaultFunction,
+    generator: false,
     unresolved: exports.defaultReExport?.resolution === 'unresolved',
   }
   : {
+    ambient: exports.namedAmbient.has(name),
     asyncFunction: exports.namedAsyncFunctions.has(name),
     function: exports.namedFunctions.has(name),
-    unresolved: exports.unresolvedNamed.has(name),
+    generator: exports.namedGeneratorFunctions.has(name),
+    unresolved: exports.namedUnresolved.has(name),
   };
 
 const scanModuleExports = (
@@ -122,13 +141,19 @@ const scanModuleExports = (
   relativePath: string,
   options: ScanRouteModuleOptions,
   visited: ReadonlySet<string>,
-): ScannedModuleExports => {
+): RouteModuleExports => {
   const sourceFile = ts.createSourceFile(relativePath, moduleText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  // Local bindings by shape; an ambient declaration emits nothing, so it
+  // joins `ambientBindings` and no function set.
+  const ambientBindings = new Set<string>();
   const asyncFunctionBindings = new Set<string>();
   const functionBindings = new Set<string>();
+  const generatorBindings = new Set<string>();
   const named = new Set<string>();
+  const namedAmbient = new Set<string>();
   const namedAsyncFunctions = new Set<string>();
   const namedFunctions = new Set<string>();
+  const namedGeneratorFunctions = new Set<string>();
   // Exported names aliasing a local binding (`export { Foo as bar }`), judged
   // once every declaration is seen, and names re-exported from other modules.
   const namedAliases = new Map<string, string>();
@@ -148,10 +173,12 @@ const scanModuleExports = (
     if (ts.isVariableStatement(statement)) {
       for (const declaration of statement.declarationList.declarations) {
         if (!ts.isIdentifier(declaration.name)) continue;
+        if (ambient(statement)) ambientBindings.add(declaration.name.text);
         const initializer = declaration.initializer === undefined ? undefined : unwrappedExpression(declaration.initializer);
         if (initializer !== undefined && (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer))) {
           functionBindings.add(declaration.name.text);
           if (asynchronous(initializer)) asyncFunctionBindings.add(declaration.name.text);
+          if (ts.isFunctionExpression(initializer) && generator(initializer)) generatorBindings.add(declaration.name.text);
         }
         if (exported(statement)) {
           addNamed(declaration.name.text);
@@ -161,9 +188,12 @@ const scanModuleExports = (
       continue;
     }
     if (ts.isFunctionDeclaration(statement)) {
-      if (statement.name !== undefined) {
+      if (statement.name !== undefined && ambient(statement)) {
+        ambientBindings.add(statement.name.text);
+      } else if (statement.name !== undefined) {
         functionBindings.add(statement.name.text);
         if (asynchronous(statement)) asyncFunctionBindings.add(statement.name.text);
+        if (generator(statement)) generatorBindings.add(statement.name.text);
       }
       if (exported(statement) && modifier(statement, ts.SyntaxKind.DefaultKeyword)) {
         defaultFunction = true;
@@ -219,20 +249,20 @@ const scanModuleExports = (
     asyncDefault = asyncFunctionBindings.has(defaultIdentifier);
   }
   for (const [name, local] of namedAliases) {
+    if (ambientBindings.has(local)) namedAmbient.add(name);
     if (functionBindings.has(local)) namedFunctions.add(name);
     if (asyncFunctionBindings.has(local)) namedAsyncFunctions.add(name);
+    if (generatorBindings.has(local)) namedGeneratorFunctions.add(name);
   }
 
   // Re-exports are followed lazily and once per target module: a placement
   // that re-exports its component and schemas from one shared route reads
   // that route a single time.
-  const targets = new Map<string, ScannedModuleExports | undefined>();
+  const targets = new Map<string, RouteModuleExports | undefined>();
   const shapeOf = ({ name, specifier }: PendingReExport): BindingShape => {
     if (!targets.has(specifier)) targets.set(specifier, followReExport(specifier, options, visited));
     const exports = targets.get(specifier);
-    return exports === undefined
-      ? { asyncFunction: false, function: false, unresolved: true }
-      : bindingShape(exports, name);
+    return exports === undefined ? unknownShape : bindingShape(exports, name);
   };
   let resolvedDefaultReExport: RouteDefaultReExport | undefined;
   if (defaultReExport !== undefined) {
@@ -241,12 +271,14 @@ const scanModuleExports = (
     defaultFunction = shape.function;
     asyncDefault = shape.asyncFunction;
   }
-  const unresolvedNamed = new Set<string>();
+  const namedUnresolved = new Map<string, string>();
   for (const [name, reExport] of namedReExports) {
     const shape = shapeOf(reExport);
+    if (shape.ambient) namedAmbient.add(name);
     if (shape.function) namedFunctions.add(name);
     if (shape.asyncFunction) namedAsyncFunctions.add(name);
-    if (shape.unresolved) unresolvedNamed.add(name);
+    if (shape.generator) namedGeneratorFunctions.add(name);
+    if (shape.unresolved) namedUnresolved.set(name, reExport.specifier);
   }
 
   return {
@@ -254,10 +286,12 @@ const scanModuleExports = (
     defaultFunction,
     ...(resolvedDefaultReExport === undefined ? {} : { defaultReExport: Object.freeze(resolvedDefaultReExport) }),
     named,
+    namedAmbient,
     namedAsyncFunctions,
     namedFunctions,
+    namedGeneratorFunctions,
+    namedUnresolved,
     splitExport,
-    unresolvedNamed,
   };
 };
 
@@ -270,7 +304,7 @@ const followReExport = (
   specifier: string,
   options: ScanRouteModuleOptions,
   visited: ReadonlySet<string>,
-): ScannedModuleExports | undefined => {
+): RouteModuleExports | undefined => {
   if (options.source === undefined || !isRelativeSpecifier(specifier)) return undefined;
   const read = options.readModule ?? readModuleFromDisk;
   const seen = new Set([...visited, options.source]);
