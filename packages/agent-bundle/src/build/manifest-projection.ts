@@ -119,7 +119,10 @@ export const resolveManifestMcpDocument = (
   }
   const matching = manifest.executables.mcpServers.filter((candidate) =>
     candidate.name === server && candidate.hosts.includes(target));
-  if (matching.length !== 1) {
+  // A shipped host's document is derived from the model, so every server it names
+  // has a row; an advanced-registry adapter writes its own document and may name
+  // servers the manifest never rowed — the document is then the only authority.
+  if (matching.length > 1 || (matching.length === 0 && projection.builtInHost !== undefined)) {
     throw new Error(`Expected exactly one ${target} MCP server matching ${JSON.stringify(server)}.`);
   }
   return document;

@@ -241,8 +241,10 @@ const wildcardRegistry = (): TargetRegistry => new TargetRegistry().register({
 
 const targetFromRegistry = (registry: TargetRegistry, host: string): ArtifactManifest['projections'][number] => {
   const metadata = registry.metadata(host);
+  const builtInHost = registry.builtInHost(host);
   return {
     ...metadata,
+    ...(builtInHost === undefined ? {} : { builtInHost }),
     documents: {},
     host,
     schemas: [...metadata.schemas].sort((left, right) => left.name.localeCompare(right.name)),
