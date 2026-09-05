@@ -534,14 +534,17 @@ const failedInvocation = (input: {
 };
 
 export class RouteInvocationService {
+  readonly #controllers = new Set<AbortController>();
   readonly #history: InvocationRingBuffer;
   readonly #manifest: RouteManifestRouteService;
   readonly #now: () => Date;
+  readonly #pending = new Set<Promise<RouteInvocation>>();
   readonly #prepared: () => RouteInvocationPreparedProject;
   readonly #registry: TargetRegistry;
   readonly #renderChild: NonNullable<RouteInvocationServiceOptions['renderChild']>;
   readonly #semaphore: InvocationSemaphore;
   readonly #timeoutMs: number;
+  #closed = false;
 
   constructor(options: RouteInvocationServiceOptions) {
     this.#history = new InvocationRingBuffer(options.historyLimit);
@@ -561,6 +564,14 @@ export class RouteInvocationService {
 
   read(id: string): RouteInvocation | undefined {
     return this.#history.read(id);
+  }
+
+  async close(): Promise<void> {
+    this.#closed = true;
+    for (const controller of this.#controllers) {
+      controller.abort(new DOMException('Route invocation service closed.', 'AbortError'));
+    }
+    await Promise.allSettled([...this.#pending]);
   }
 
   async invoke(request: RouteInvocationRequest): Promise<RouteInvocation> {
@@ -608,8 +619,12 @@ export class RouteInvocationService {
     const id = `inv_${this.#now().getTime().toString(36)}${randomBytes(8).toString('hex')}`;
     const startedAt = this.#now();
     const context = contextFor(route, prepared.manifest.projectRoot, request.event?.host);
-    const invocation = await this.#semaphore.run<RouteInvocation>(async () => {
+    const running = this.#semaphore.run<RouteInvocation>(async () => {
       const controller = new AbortController();
+      this.#controllers.add(controller);
+      if (this.#closed) {
+        controller.abort(new DOMException('Route invocation service closed.', 'AbortError'));
+      }
       const timeout = setTimeout(() => controller.abort(new DOMException('Route invocation timed out.', 'TimeoutError')), this.#timeoutMs);
       let child: RouteInvocationChildResult;
       try {
@@ -628,8 +643,10 @@ export class RouteInvocationService {
           context,
           id,
           manifest,
-          message: controller.signal.aborted
+          message: controller.signal.reason instanceof DOMException && controller.signal.reason.name === 'TimeoutError'
             ? 'Route invocation child timed out.'
+            : controller.signal.aborted
+              ? 'Route invocation child stopped because the service closed.'
             : `Route invocation child failed: ${error instanceof Error ? error.message : String(error)}`,
           request: { ...request, input },
           route,
@@ -637,6 +654,7 @@ export class RouteInvocationService {
         });
       } finally {
         clearTimeout(timeout);
+        this.#controllers.delete(controller);
       }
       const projectionStartedAt = this.#now();
       const projection = invocationProjection(
@@ -692,6 +710,13 @@ export class RouteInvocationService {
         ],
       });
     });
+    this.#pending.add(running);
+    let invocation: RouteInvocation;
+    try {
+      invocation = await running;
+    } finally {
+      this.#pending.delete(running);
+    }
     this.#history.push(invocation);
     return invocation;
   }

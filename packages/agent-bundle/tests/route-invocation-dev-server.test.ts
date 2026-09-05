@@ -7,9 +7,6 @@ import type {
   RouteInvocationListResponse,
   RouteInvocationResponse,
 } from '../src/dev/routes/route-invocation.ts';
-import { RouteInvocationService } from '../src/dev/routes/route-invocation-service.ts';
-import { startForegroundServer } from '../src/dev/foreground-server.ts';
-import { compileTestManifest } from '../src/test/manifest.ts';
 import { createWorkbenchAssetSource } from '../src/dev/workbench-assets.ts';
 import { startDevServer } from '../src/dev/workbench-server.ts';
 import { createProjectFixture } from './helpers/project-fixture.ts';
@@ -43,6 +40,21 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     ].join('\n'),
     files: {
       'package.json': '{"type":"module"}\n',
+      'src/cli/greet.tsx': [
+        "import { Agent } from '@agent-bundle/runtime';",
+        "import { createElement } from 'react';",
+        "import { z } from 'zod';",
+        '',
+        "export const config = { description: 'Greets one name.', positionals: ['name'] };",
+        "export const inputSchema = z.object({ name: z.string().min(1) }).strict();",
+        "export const resultSchema = z.object({ message: z.string() }).strict();",
+        '',
+        'export default async function Greet({ input }) {',
+        '  const message = `Hello, ${input.name}.`;',
+        '  return createElement(Agent.Result, { value: { message } }, createElement(Agent.Text, null, message));',
+        '}',
+        '',
+      ].join('\n'),
       'src/events/tool/after.tsx': [
         "import { Agent } from '@agent-bundle/runtime';",
         "import { createElement } from 'react';",
@@ -72,6 +84,15 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         'export default () => ({ now: 0 });',
         '',
       ].join('\n'),
+      'src/scripts/summary.tsx': [
+        "import { Agent } from '@agent-bundle/runtime';",
+        "import { createElement } from 'react';",
+        '',
+        'export default async function Summary({ argv }) {',
+        "  return createElement(Agent.Result, { value: { arguments: argv } }, createElement(Agent.Text, null, 'Summary ready.'));",
+        '}',
+        '',
+      ].join('\n'),
     },
     prefix: 'agent-bundle-route-invocation-dev-server-',
   });
@@ -83,21 +104,11 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Route invocation</title>'),
   ]);
   try {
-    const testManifest = await compileTestManifest({ root: project.root });
     server = await startDevServer({
       assets: createWorkbenchAssetSource({ root: assetsRoot }),
       open: false,
       port: 0,
       root: project.root,
-      testing: {
-        startForegroundServer: async (options) => startForegroundServer({
-          ...options,
-          routeInvocations: new RouteInvocationService({
-            manifest: options.routeManifest!,
-            prepared: () => ({ manifest: testManifest, targets: ['claude'] }),
-          }),
-        }),
-      },
     });
     const bootstrap = await fetch(`${server.url}/api/project/session`, {
       headers: { 'sec-fetch-site': 'same-origin' },
@@ -158,9 +169,48 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     expect(event.invocation.document).toBeDefined();
     expect(event.invocation.projection.hosts?.[0]).toMatchObject({ host: 'claude' });
 
-    const listedResponse = await fetch(`${server.url}/api/routes/invocations?limit=2`, { headers });
+    const cliResponse = await fetch(`${server.url}/api/routes/invocations`, {
+      body: JSON.stringify({ input: { name: 'Ada' }, routeId: 'cli:greet' }),
+      headers,
+      method: 'POST',
+    });
+    expect(cliResponse.status).toBe(200);
+    const cli = await cliResponse.json() as RouteInvocationResponse;
+    expect(cli.invocation).toMatchObject({
+      kind: 'cli',
+      projection: {
+        cli: {
+          exitCode: 0,
+          text: expect.stringContaining('Hello, Ada.'),
+        },
+      },
+      result: { message: 'Hello, Ada.' },
+      status: 'succeeded',
+    });
+
+    const scriptResponse = await fetch(`${server.url}/api/routes/invocations`, {
+      body: JSON.stringify({ routeId: 'script:summary' }),
+      headers,
+      method: 'POST',
+    });
+    expect(scriptResponse.status).toBe(200);
+    const script = await scriptResponse.json() as RouteInvocationResponse;
+    expect(script.invocation).toMatchObject({
+      kind: 'script',
+      projection: {
+        cli: {
+          exitCode: 0,
+          text: expect.stringContaining('Summary ready.'),
+        },
+      },
+      status: 'succeeded',
+    });
+
+    const listedResponse = await fetch(`${server.url}/api/routes/invocations?limit=4`, { headers });
     const listed = await listedResponse.json() as RouteInvocationListResponse;
     expect(listed.invocations.map((invocation) => invocation.id)).toEqual([
+      script.invocation.id,
+      cli.invocation.id,
       event.invocation.id,
       tool.invocation.id,
     ]);

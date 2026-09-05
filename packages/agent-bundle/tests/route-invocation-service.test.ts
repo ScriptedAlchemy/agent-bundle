@@ -3,6 +3,7 @@ import { expect, it } from '@rstest/core';
 import type { RouteInvocation } from '../src/dev/routes/route-invocation.ts';
 import {
   InvocationRingBuffer,
+  RouteInvocationService,
   RouteInvocationRequestError,
   invocationSummary,
   parseRouteInvocationRequest,
@@ -98,4 +99,44 @@ it('retains a bounded newest-first invocation history', () => {
   expect(history.list(1)).toEqual([expect.objectContaining({ id: 'inv_three' })]);
   expect(history.read('inv_one')).toBeUndefined();
   expect(history.read('inv_two')?.id).toBe('inv_two');
+});
+
+it('aborts and drains a running render when the service closes', async () => {
+  const route = {
+    config: [],
+    id: 'tool:fixture/echo',
+    kind: 'tool',
+    provenance: { kind: 'conventional' },
+    serverId: 'mcp:fixture',
+    source: 'src/mcp/fixture/tools/echo.tsx',
+  } as const;
+  const service = new RouteInvocationService({
+    manifest: {
+      manifest: () => ({
+        diagnostics: [],
+        digest: 'digest',
+        events: [],
+        providers: [],
+        scripts: [],
+        servers: [{ id: 'mcp:fixture', mode: 'generated', name: 'fixture', routes: [route] }],
+        sourceRevision: 'revision',
+      }),
+    },
+    prepared: () => ({
+      manifest: { projectRoot: '/project' } as never,
+      targets: ['claude'],
+    }),
+    renderChild: (_request, signal) => new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }),
+  });
+
+  const pending = service.invoke({ input: {}, routeId: route.id });
+  await Promise.resolve();
+  await service.close();
+
+  await expect(pending).resolves.toMatchObject({
+    diagnostics: [expect.objectContaining({ code: 'AB8236' })],
+    status: 'failed',
+  });
 });
