@@ -740,23 +740,47 @@ const invocationOutcome = (
   return { kind: 'success' };
 };
 
+const unitRenderProjectionKind = (route: RouteManifestRoute): RouteInvocationSurface['kind'] => {
+  switch (route.kind) {
+    case 'tool':
+    case 'resource':
+    case 'prompt':
+      return 'mcp';
+    case 'event-route':
+      return 'event';
+    case 'cli':
+      return 'cli';
+    case 'script':
+      return 'script';
+    case 'app':
+      return 'unit-render';
+    default: {
+      const exhaustive: never = route.kind;
+      return exhaustive;
+    }
+  }
+};
+
 const invocationProjection = (
   route: RouteManifestRoute,
-  surface: RouteInvocationSurface,
+  requested: RouteInvocationSurface,
   input: JsonValue,
   child: RouteInvocationChildResult,
   prepared: RouteInvocationPreparedProject,
   registry: TargetRegistry,
 ): RouteInvocation['projection'] => {
   const { document, mcp, result } = child;
-  if (surface.kind === 'mcp' || (surface.kind === 'unit-render' && route.kind === 'tool')) {
+  // An isolated render is projected the way the route's default surface would be.
+  const kind = requested.kind === 'unit-render' ? unitRenderProjectionKind(route) : requested.kind;
+  const host = requested.kind === 'event' ? requested.host : undefined;
+  if (kind === 'mcp') {
     if (route.kind === 'tool') {
       if (mcp === undefined) throw new Error('Route invocation child omitted the tool MCP projection.');
       return deepFreeze({ mcp });
     }
     return deepFreeze({ ...(jsonObject(result) === undefined ? {} : { mcp: jsonObject(result) }) });
   }
-  if (surface.kind === 'cli' || surface.kind === 'script') {
+  if (kind === 'cli' || kind === 'script') {
     // The exit code is the executable's own: a plain script's process status,
     // the generated bin's decision, or the rendered-script rule the child applied.
     if (child.exitCode === undefined) throw new Error('Route invocation child omitted the process exit code.');
@@ -768,43 +792,42 @@ const invocationProjection = (
       },
     });
   }
-  if (surface.kind === 'event') {
-    const selected = surface.host === undefined ? prepared.targets : [surface.host];
-    const hosts = selected.map((host) => {
-      const mapped = eventContract(registry, host, route.event as CanonicalAgentEvent);
+  if (kind === 'event') {
+    const selected = host === undefined ? prepared.targets : [host];
+    const hosts = selected.map((target) => {
+      const mapped = eventContract(registry, target, route.event as CanonicalAgentEvent);
       if (mapped === undefined) {
         return {
           diagnostics: [diagnostic(
             'route.invocation.projection.unsupported',
-            `Event ${JSON.stringify(route.event)} cannot be projected to ${host}.`,
+            `Event ${JSON.stringify(route.event)} cannot be projected to ${target}.`,
           )],
-          host,
+          host: target,
         };
       }
       try {
         const native = projectEventDocument(
           document,
           route.event as CanonicalAgentEvent,
-          host,
+          target,
           mapped.nativeEvent,
-          surface.host === host && isJsonRecord(input) ? input : undefined,
+          host === target && isJsonRecord(input) ? input : undefined,
         );
-        return { diagnostics: [], host, ...(native === undefined ? {} : { native: jsonObject(native) }) };
+        return { diagnostics: [], host: target, ...(native === undefined ? {} : { native: jsonObject(native) }) };
       } catch (error) {
         return {
           diagnostics: [diagnostic(
             'route.invocation.projection.failed',
             error instanceof Error ? error.message : String(error),
           )],
-          host,
+          host: target,
         };
       }
     });
     return deepFreeze({ hosts });
   }
-  if (surface.kind === 'unit-render') return {};
-  const exhaustive: never = surface;
-  return exhaustive;
+  // An `app` route rendered in isolation has no host projection.
+  return {};
 };
 
 const failedInvocation = (input: {

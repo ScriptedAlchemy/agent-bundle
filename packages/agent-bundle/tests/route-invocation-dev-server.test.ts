@@ -398,10 +398,12 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     // and the generated bin agrees when run as a real process. `unit-render`
     // has no bin and no argv parser, so it takes the parsed input and applies
     // the same `cli-entry.ts` exit-code rule to the route's policy.
-    const exitInvocation = async (mode?: 'unit-render'): Promise<RouteInvocationResponse> => {
+    const exitInvocation = async (unitRender = false): Promise<RouteInvocationResponse> => {
       const response = await fetch(`${server!.url}/api/routes/invocations`, {
         body: JSON.stringify({
-          ...(mode === undefined ? { args: ['3'] } : { input: { code: 3 }, mode }),
+          ...(unitRender
+            ? { input: { code: 3 }, surface: { kind: 'unit-render' } }
+            : { surface: { args: ['3'], command: 'exit', kind: 'cli' } }),
           routeId: 'cli:exit',
         }),
         headers,
@@ -410,7 +412,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
       expect(response.status).toBe(200);
       return response.json() as Promise<RouteInvocationResponse>;
     };
-    for (const exit of [await exitInvocation(), await exitInvocation('unit-render')]) {
+    for (const exit of [await exitInvocation(), await exitInvocation(true)]) {
       expect(exit.invocation, JSON.stringify(exit.invocation.diagnostics)).toMatchObject({
         kind: 'cli',
         outcome: { exitCode: 3, kind: 'process-exit' },
