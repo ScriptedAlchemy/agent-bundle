@@ -49,8 +49,9 @@ description: '钩子与脚本示例：一个 session-start 钩子、两个脚本
    读取自己模块旁边打包好的 `release/release-manifest.json`，并报告 2.4.0 版本已可打包。
 3. 把 target 换成 portable 并选择 `detect-risk`。它读取 `release/risk-register.json`，报告高严重级别的
    `REL-204`，以退出码 2 结束，并定稿一条持久的阻断性轨迹。
-4. 在 **Trace** 中跟随这些运行。用 **Advanced → Raw logs** 查看未关联的生产者细节，用
-   **Advanced → Artifact** 查看输出文件与 provenance，并在已有两次 eval 运行之后使用
+4. 在 **Trace** 中跟随这些运行，查看每次调用及其内核阶段；已附加宿主实际投递钩子时，其关联收据也会
+   出现在这里。使用 **Open route** 恢复已记录的快照。用 **Advanced → Raw logs** 查看未关联的
+   生产者细节，用 **Advanced → Artifact** 查看输出文件与 provenance，并在已有两次 eval 运行之后使用
    **Advanced → Evals → Compare**。
 
 ## 可逆的诊断演练
