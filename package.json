@@ -73,7 +73,7 @@
     "@rstest/adapter-rslib": "0.11.12",
     "@rstest/core": "0.11.12",
     "@rstest/playwright": "0.11.12",
-    "@types/node": "26.4.0",
+    "@types/node": "26.4.1",
     "agent-bundle": "workspace:*",
     "commander": "15.0.0",
     "pkg-pr-new": "0.0.88",
