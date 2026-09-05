@@ -94,7 +94,18 @@ The published Agent Bundle library is built with Rslib. This example's separate
 production RSC/runtime artifacts are built by its explicit Rsbuild production
 command (`pnpm --filter @agent-bundle/rsc-agent-runtime-demo build`); its provider
 uses a separate long-lived Rsbuild development/HMR session only when an
-`agent-bundle dev` project opts into `dev.runtime.provider`. The stdio MCP
+`agent-bundle dev` project opts into `dev.runtime.provider`. That session
+compiles with Rsbuild `mode: 'development'` (development React and
+react-server-dom, readable identifiers). `rsbuild build --mode production`
+stays production so Flight payloads and the packaged App HTML stay the
+compact surface hosts load. `@rsbuild/plugin-react` is configured as
+`pluginReact({ fastRefresh: false })`: the compiler App is an opaque srcdoc
+child with `hmr: false`, and the runtime-surface outer document owns the one
+HMR socket. The `widget` and `app` web environments set
+`overrideBrowserslist: ['chrome >= 144']` for the Chromium MCP App hosts
+(Cursor 3.18.25 still ships Chromium 144; Claude Desktop Electron 42 and
+Cursor 3.19.7 ship Chromium 148; ChatGPT/Codex Desktop reports Chromium 151).
+The Node `rsc` environment does not inherit that browserslist. The stdio MCP
 entry stays self-built inside those Rsbuild artifacts but consumes the
 framework's stdio lifecycle (console-to-stderr guard, SIGINT/SIGTERM exit
 codes, stdin-EOF shutdown) through the public `agent-bundle/mcp-entry` API.
