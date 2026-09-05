@@ -53,7 +53,6 @@ const HomeBody = () => (
   </section>
 );
 
-/** Focus target of the skip link; placed as the first child of `<main>`. */
 const contentId = 'ab-content';
 
 /**
@@ -150,20 +149,18 @@ const Layout = () => (
  * The default `SwitchAppearance` is a click-only `<div>`: no role, no name,
  * not in the tab order. `Nav`, `NavScreen` and `NavHamburger` import it from
  * `@rspress/core/theme`, so this named export replaces it site-wide. It stays
- * a `<div>` — given `role="button"`, a translated name, a tab stop and
- * Enter/Space handling — instead of becoming a `<button>`, because
- * `NavHamburger` (rendered on every page, shown at widths ≤ 1280 px) mounts
- * the switch inside its own `<button>`, and a `<button>` inside a `<button>`
- * is invalid HTML that React reports on every render. That nested copy is
- * the hamburger's own control, so once mounted the switch checks whether it
- * sits inside a `<button>` and, if so, renders as the plain click target the
- * default theme used — a focusable `role="button"` inside a button would be
- * nested interactive content with undefined keyboard behaviour. The original
- * class names are kept so the theme's CSS still applies. `aria-pressed` and
- * the nesting check only apply after mount: the SSG HTML is rendered with the
- * default theme while the client's first render already knows the stored
- * preference, so a state attribute in the initial markup would mismatch on
- * hydration. The original's view-transition animation
+ * a `<div>` instead of becoming a `<button>` because `NavHamburger` (shown at
+ * widths ≤ 1280 px) mounts the switch inside its own `<button>`, and a
+ * `<button>` inside a `<button>` is invalid HTML that React reports on every
+ * render. That nested copy is the hamburger's own control, so once mounted the
+ * switch checks whether it sits inside a `<button>` and, if so, renders as the
+ * plain click target the default theme used — a focusable `role="button"`
+ * inside a button would be nested interactive content with undefined keyboard
+ * behaviour. The theme's own class names are kept so its CSS still applies.
+ * `aria-pressed` and the nesting check only apply after mount: the SSG HTML is
+ * rendered with the default theme while the client's first render already
+ * knows the stored preference, so a state attribute in the initial markup
+ * would mismatch on hydration. The original's view-transition animation
  * (`themeConfig.enableAppearanceAnimation`, off for this site) is not
  * reproduced.
  */
@@ -212,7 +209,6 @@ const SwitchAppearance = ({ onClick }: { onClick?: () => void }) => {
   );
 };
 
-/** Accessible name for a social link, from its host: `github.com`. */
 const socialLinkName = (href: string): string => {
   try {
     return new URL(href).hostname.replace(/^www\./, '');
@@ -227,8 +223,8 @@ const socialLinkName = (href: string): string => {
  * `NavScreen` import `SocialLinks` from `@rspress/core/theme`, so this named
  * export replaces it. The anchor is created inside the default component and
  * its icon comes from a build-time virtual module, so rather than restating
- * the component the name is set on the rendered anchors after each render;
- * assistive technology reads the live DOM. `github-stars` links already carry
+ * the component the name is set on the rendered anchors after each render,
+ * which is what assistive technology reads. `github-stars` links already carry
  * their own label and are left alone.
  */
 const SocialLinks = (props: { socialLinks?: SocialLink[] }) => {
