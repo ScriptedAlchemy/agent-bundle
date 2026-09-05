@@ -10,6 +10,7 @@ import { codexArtifactPaths } from '../src/adapters/codex.ts';
 import { cursorArtifactPaths, cursorMarketplaceValidator } from '../src/adapters/cursor.ts';
 import { isValidClaudeDependencyRange } from '../src/adapters/claude.ts';
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
+import { emptyCompiledRouteGraph } from '../src/routes/graph.ts';
 import type { TargetArtifactEntry } from '../src/adapters/types.ts';
 import { emitPlanEntries } from '../src/build/emit.ts';
 import { build } from './support/build.ts';
@@ -3096,16 +3097,22 @@ it('filters host components and builds portable, Codex, and Claude target roots'
   };
 
   try {
-    await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
+    await build({
+      model,
+      outputRoot,
+      projectRoot: root,
+      registry: createDefaultRegistry(),
+      routeGraph: emptyCompiledRouteGraph,
+    });
     // One composite root: every selected host's manifest sits at the root in its own place (#555).
     await expect(readFile(join(outputRoot, 'plugin.json'), 'utf8')).resolves.toContain('review-tools');
     await expect(readFile(join(outputRoot, codexArtifactPaths.plugin), 'utf8')).resolves.toContain('review-tools');
     await expect(readFile(join(outputRoot, '.claude-plugin', 'plugin.json'), 'utf8')).resolves.toContain('review-tools');
     const manifest = JSON.parse(await readFile(join(outputRoot, 'agent-bundle.manifest.json'), 'utf8')) as {
       readonly files: readonly { readonly path: string }[];
-      readonly targets: readonly { readonly name: string }[];
+      readonly projections: readonly { readonly host: string }[];
     };
-    expect(manifest.targets.map(({ name }) => name)).toEqual(['claude', 'codex', 'portable']);
+    expect(manifest.projections.map(({ host }) => host)).toEqual(['claude', 'codex', 'portable']);
     expect(manifest.files.map((file) => file.path)).toEqual(expect.arrayContaining([
       'plugin.json',
       codexArtifactPaths.plugin,

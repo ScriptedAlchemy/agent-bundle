@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { expect, it } from '@rstest/core';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
+import { emptyCompiledRouteGraph } from '../src/routes/graph.ts';
 import { build } from './support/build.ts';
 import { loadedProject } from './support/loaded-project.ts';
 
@@ -261,7 +262,13 @@ it('resolves Claude path tokens outside command when launching a generated artif
       createDefaultRegistry(),
     );
     const artifact = join(root, 'dist');
-    await build({ model, outputRoot: artifact, projectRoot: root, registry: createDefaultRegistry() });
+    await build({
+      model,
+      outputRoot: artifact,
+      projectRoot: root,
+      registry: createDefaultRegistry(),
+      routeGraph: emptyCompiledRouteGraph,
+    });
 
     const stdio: Array<{
       readonly args: readonly string[];

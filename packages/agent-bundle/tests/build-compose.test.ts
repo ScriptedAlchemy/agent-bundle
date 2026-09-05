@@ -8,8 +8,7 @@ import { claudeAdapter } from '../src/adapters/claude.ts';
 import { codexAdapter, codexArtifactPaths } from '../src/adapters/codex.ts';
 import { cursorAdapter, cursorArtifactPaths } from '../src/adapters/cursor.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
-import { build, type BuildProjectResult, createDefaultRegistry, TargetRegistry, validate } from '../src/api.ts';
-import { parseArtifactHookIndex } from '../src/build/hook-index.ts';
+import { build, type BuildProjectResult, createDefaultRegistry, type TargetRegistry, validate } from '../src/api.ts';
 import { parseArtifactManifest } from '../src/build/manifest.ts';
 import { sha256Hex } from '../src/core/digest.ts';
 import { DiagnosticError } from '../src/core/diagnostics.ts';
@@ -177,7 +176,6 @@ describe('composite plugin root (#555)', () => {
       '.codex-plugin', // Codex manifest, hooks document, MCP document
       '.mcp.json', // Claude Code MCP document (conventional root path)
       'INSTALL.md',
-      'agent-bundle.hooks.json',
       'agent-bundle.manifest.json',
       'commands',
       'hooks', // Claude Code hooks document + every compiled hook wrapper
@@ -208,7 +206,6 @@ describe('composite plugin root (#555)', () => {
       '.agents',
       '.codex-plugin',
       'INSTALL.md',
-      'agent-bundle.hooks.json',
       'agent-bundle.manifest.json',
       'hooks',
       'mcp',
@@ -231,10 +228,20 @@ describe('composite plugin root (#555)', () => {
   it('defaults to the portable projection when targets are omitted (acceptance 4)', { timeout: 120_000 }, async () => {
     const { output, result } = await buildFixture(undefined);
 
-    expect(result.build.manifest.targets.map((target) => target.name)).toEqual(['portable']);
+    expect(result.build.manifest.manifestVersion).toBe(2);
+    expect(result.build.manifest.projections.map((projection) => projection.host)).toEqual(['portable']);
+    expect(result.build.manifest.projections[0]!.documents.plugin).toBe('plugin.json');
+    expect(result.build.manifest.files.some(({ path }) =>
+      path === result.build.manifest.projections[0]!.documents.plugin)).toBe(true);
+    expect(result.build.manifest.routes).toMatchObject({
+      events: [],
+      layouts: [],
+      providers: [],
+      scripts: [],
+      servers: [],
+    });
     expect(await topLevel(output)).toEqual([
       'INSTALL.md',
-      'agent-bundle.hooks.json', // always written; empty here since portable hosts no hooks
       'agent-bundle.manifest.json',
       'install.mjs', // the self-contained local installer (S5 narrows it to Cursor)
       'mcp',
@@ -313,7 +320,6 @@ describe('composite plugin root (#555)', () => {
     expect(await topLevel(cursorOnly.output)).toEqual([
       '.cursor-plugin',
       'INSTALL.md',
-      'agent-bundle.hooks.json',
       'agent-bundle.manifest.json',
       'commands',
       'hooks',
@@ -331,10 +337,8 @@ describe('composite plugin root (#555)', () => {
   it('records only the selected projections in the artifact manifest and hook index (acceptance 8)', { timeout: 120_000 }, async () => {
     const { output } = await buildFixture(['codex', 'claude']);
     const manifest = parseArtifactManifest(await readFile(join(output, 'agent-bundle.manifest.json'), 'utf8'));
-    const index = parseArtifactHookIndex(await readFile(join(output, 'agent-bundle.hooks.json'), 'utf8'));
-
-    expect(manifest.targets.map((target) => target.name)).toEqual(['claude', 'codex']);
-    expect(index?.hooks.map((hook) => [hook.target, hook.path])).toEqual([
+    expect(manifest.projections.map((projection) => projection.host)).toEqual(['claude', 'codex']);
+    expect(manifest.executables.hooks.map((hook) => [hook.host, hook.path])).toEqual([
       ['claude', 'hooks/session-start-session-start-7ab7e8a5.claude.mjs'],
       ['codex', 'hooks/session-start-session-start-7ab7e8a5.codex.mjs'],
     ]);
@@ -410,9 +414,9 @@ describe('composite plugin root (#555)', () => {
       buildFixture(['synthetic'], { registry }),
       buildFixture(['claude', 'codex'], { registry }),
     ]);
-    expect(alone.result.build.manifest.targets.map((target) => target.name)).toEqual(['synthetic']);
+    expect(alone.result.build.manifest.projections.map((projection) => projection.host)).toEqual(['synthetic']);
     expect(await topLevel(alone.output)).toContain(syntheticMcpRuntime.manifestPath);
-    expect(builtIn.result.build.manifest.targets.map((target) => target.name)).toEqual(['claude', 'codex']);
+    expect(builtIn.result.build.manifest.projections.map((projection) => projection.host)).toEqual(['claude', 'codex']);
     expect(await topLevel(builtIn.output)).not.toContain(syntheticMcpRuntime.manifestPath);
   });
 
