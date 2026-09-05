@@ -92,6 +92,7 @@ export default defineConfig({
     cleanDistPath: true,
     copy: [
       { from: resolve(import.meta.dirname, '../workbench/dist'), to: 'workbench', info: { minimized: true } },
+      { from: resolve(import.meta.dirname, 'web-host-dist'), to: 'web-host', info: { minimized: true } },
     ],
     filenameHash: false,
     legalComments: 'linked',
@@ -182,6 +183,7 @@ export default defineConfig({
       'terminal-capability': './src/terminal-capability.ts',
       test: './src/test/index.ts',
       'test/browser': './src/test/browser.ts',
+      'web-host': './src/web-host.ts',
     },
   },
 });

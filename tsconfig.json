@@ -6,7 +6,8 @@
     ]
   },
   "exclude": [
-    "repos"
+    "repos",
+    "packages/agent-bundle/src/web-host/browser/main.ts"
   ],
   "include": [
     "*.ts",
