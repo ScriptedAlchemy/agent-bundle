@@ -22,7 +22,6 @@ export interface CompilationExternal {
   readonly request: string;
 }
 
-/** One bundled `NormalModule` of a compilation. */
 export interface CompilationModule {
   readonly identifier: string;
   /** The resolved on-disk (or virtual) path, when the module has one. */
@@ -50,7 +49,6 @@ export interface ExternalIR {
 
 export type ModuleKind = 'authored' | 'dependency' | 'generated';
 
-/** One module the compiler inlined into an emitted asset. */
 export interface ModuleIR {
   readonly asset: string;
   readonly identifier: string;
@@ -60,7 +58,6 @@ export interface ModuleIR {
   readonly resource?: string;
 }
 
-/** One emitted asset and the authored inputs that produced it (the manifest's `sourceInputs`). */
 export interface AssetIR {
   readonly path: string;
   /** Absolute authored inputs. Build-boundary canonicalization happens separately. */

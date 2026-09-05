@@ -4,7 +4,6 @@ import type { CompilationEvidence, CompilationExternal, CompilationModule } from
 
 export const artifactDependencyAuditPluginName = 'agent-bundle:dependency-audit';
 
-/** `external <type> "<request>"`, optionally followed by `|<layer>|<issuer>` segments. */
 const externalIdentifierType = /^external (\S+) /u;
 
 const moduleResource = (module: Rspack.Module | null | undefined): string | undefined =>
@@ -20,8 +19,12 @@ const collectExternals = (compilation: Rspack.Compilation): readonly Compilation
   for (const module of compilation.modules) {
     if (!(module instanceof rspack.ExternalModule)) continue;
     const request = module.userRequest;
+    const externalType = externalIdentifierType.exec(module.identifier())?.[1];
+    if (externalType === undefined) {
+      throw new Error(`Rspack ExternalModule has an unexpected identifier: ${JSON.stringify(module.identifier())}.`);
+    }
     const record = issuersByRequest.get(request) ?? {
-      externalType: externalIdentifierType.exec(module.identifier())?.[1] ?? '',
+      externalType,
       issuers: new Set<string>(),
     };
     for (const connection of compilation.moduleGraph.getIncomingConnections(module)) {
@@ -64,8 +67,12 @@ export class ArtifactDependencyAuditPlugin {
   apply(compiler: Rspack.Compiler): void {
     compiler.hooks.thisCompilation.tap(artifactDependencyAuditPluginName, (compilation) => {
       compilation.hooks.afterOptimizeModules.tap(artifactDependencyAuditPluginName, () => {
+        const compilerName = compilation.compiler.name;
+        if (compilerName === undefined) {
+          throw new Error('Rspack compilation has no compiler name; Rslib must name each lib with its entry id.');
+        }
         this.#record(Object.freeze({
-          compiler: compilation.compiler.name ?? '',
+          compiler: compilerName,
           externals: collectExternals(compilation),
           modules: collectModules(compilation),
         }));

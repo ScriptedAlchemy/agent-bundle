@@ -141,6 +141,6 @@ describe('compiler evidence on host-pack builds', () => {
     const reported = withCode((await validate({ root })).diagnostics, 'AB4725');
     expect(reported).toHaveLength(1);
     expect(reported[0]).toMatchObject({ code: 'AB4725', severity: 'error' });
-    expect(reported[0]!.message).toContain('left-pad');
+    expect(reported[0]?.message).toContain('left-pad');
   }, 30_000);
 });

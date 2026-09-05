@@ -525,7 +525,6 @@ export const composeEntryLibConfig = (
     readonly cwd: string;
     /** The project identity served to plugin source as `agent-bundle/meta`. */
     readonly meta: AgentBundleMeta;
-    /** Receives the compiler graph evidence recorded for this entry. */
     readonly onCompilationEvidence?: (evidence: CompilationEvidence) => void;
     /** Receives reserved specifiers that a function-form external resolved at build time. */
     readonly onReservedExternal?: (specifier: string) => void;
@@ -867,12 +866,12 @@ export const buildRslibSurfaces = async (
     const evidenceByPath = new Map(evidence.map((asset) => [asset.path, asset]));
     const resultByEntry = new Map(entries.map((entry) => {
       const records = compilationEvidence.filter((record) => record.compiler === entryLibId(entry));
-      if (records.length !== 1) {
+      const [record] = records;
+      if (record === undefined || records.length !== 1) {
         throw new Error(
           `Rslib did not record exactly one compilation evidence result for ${JSON.stringify(entry.outputRelativePath)}.`,
         );
       }
-      const record = records[0]!;
       const asset = evidenceByPath.get(entry.outputRelativePath);
       if (asset === undefined) {
         throw new Error(`Rslib did not produce output evidence for ${JSON.stringify(entry.outputRelativePath)}.`);

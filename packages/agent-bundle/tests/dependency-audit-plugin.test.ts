@@ -24,7 +24,6 @@ const externalDeclarations = (externals: Rspack.Configuration['externals']): rea
   return Array.isArray(externals) ? externals : [externals];
 };
 
-/** A project whose `src/entry.ts` is the program and whose `node_modules` holds hand-written stub packages. */
 const probeProject = async (
   entrySource: readonly string[],
   packages: Readonly<Record<string, string>> = {},
@@ -82,9 +81,9 @@ const withExternals = (...externals: readonly Rspack.ExternalItem[]): RspackMuta
 const leftPadStub = { 'left-pad': 'export default (value, width) => String(value).padStart(width);\n' };
 const leftPadEntry = ["import leftPad from 'left-pad';", "console.log(leftPad('7', 3));"];
 
-const expectLeftPadExternal = (record: CompilationEvidence, source: string, externalType: string): void => {
-  expect(record.externals).toEqual([{ externalType, issuers: [source], request: 'left-pad' }]);
-  expect(record.modules.map((module) => module.resource)).toEqual([source]);
+const expectLeftPadExternal = (record: CompilationEvidence | undefined, source: string, externalType: string): void => {
+  expect(record?.externals).toEqual([{ externalType, issuers: [source], request: 'left-pad' }]);
+  expect(record?.modules.map((module) => module.resource)).toEqual([source]);
 };
 
 describe('ArtifactDependencyAuditPlugin', () => {
@@ -107,7 +106,8 @@ describe('ArtifactDependencyAuditPlugin', () => {
         join(root, 'node_modules', 'probe-dep', 'index.js'),
         source,
       ]);
-      expect(record?.modules.map((module) => module.identifier.endsWith(module.resource ?? ''))).toEqual([true, true]);
+      expect(record?.modules.every((module) =>
+        module.resource !== undefined && module.identifier.endsWith(module.resource))).toBe(true);
       expect(Object.isFrozen(record?.externals)).toBe(true);
       expect(Object.isFrozen(record?.modules)).toBe(true);
     } finally {
@@ -119,7 +119,7 @@ describe('ArtifactDependencyAuditPlugin', () => {
     const { entry, root, source } = await probeProject(leftPadEntry, leftPadStub);
     try {
       const [record] = await buildRecording(root, [entry], withExternals('left-pad'));
-      expectLeftPadExternal(record!, source, 'module');
+      expectLeftPadExternal(record, source, 'module');
     } finally {
       await rm(root, { force: true, recursive: true });
     }
@@ -132,7 +132,7 @@ describe('ArtifactDependencyAuditPlugin', () => {
         withExternals('left-pad')(config);
         config.externalsType = 'node-commonjs';
       });
-      expectLeftPadExternal(record!, source, 'node-commonjs');
+      expectLeftPadExternal(record, source, 'node-commonjs');
     } finally {
       await rm(root, { force: true, recursive: true });
     }
@@ -145,7 +145,7 @@ describe('ArtifactDependencyAuditPlugin', () => {
         if (data.request === 'left-pad') callback(undefined, 'module left-pad');
         else callback();
       }));
-      expectLeftPadExternal(record!, source, 'module');
+      expectLeftPadExternal(record, source, 'module');
     } finally {
       await rm(root, { force: true, recursive: true });
     }
