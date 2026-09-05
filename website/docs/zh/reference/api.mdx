@@ -13,7 +13,7 @@ description: '生成的 agent-bundle 类型 API：每个公开入口点一页、
 | 入口点 | 模块页 | 内容 |
 | --- | --- | --- |
 | `agent-bundle` | [index](/zh/api/index-1) | 编写与编排表面：`defineSkill`、`canonicalAgentEvents`、`startDevServer`、`runEvals`、`compareEvals`、eval harness 工厂，以及产物清单辅助函数。 |
-| `agent-bundle/api` | [api](/zh/api/api) | 程序化编译器：`build`、`validate`、`inspect`、`prepack`，及其选项与结果类型，`AgentComponentKind` / `componentKindCapability` 组件类型辅助，以及产物操作 `listMcp`、`invokeMcp`、`runMcp`、`serveApp`（在浏览器里独立提供一个已构建的 MCP App——面向脚本与测试的宿主进程 API；产物内部的路由式 CLI 命令则改用 `agent-bundle/serve-app-command` 中的 `spawnServeApp`，见[独立提供 App](../guide/authoring/mcp.mdx#独立提供-app)）、`listHooks` 与 `simulateHook`；另有 Rspack stats 格式化工具 `rspackStatsErrors`、`describeRspackStatsError` 与 `formatRspackStatsError`，把一条编译错误渲染成与编译器 `AB4770` 相同的 `<file>:<line>:<column>: <message>` 行，供自行驱动 Rsbuild 编译的工具使用。 |
+| `agent-bundle/api` | [api](/zh/api/api) | 程序化编译器：`build`、`validate`、`inspect`、`prepack`，及其选项与结果类型，`AgentComponentKind` / `componentKindCapability` 组件类型辅助，以及产物操作 `listMcp`、`invokeMcp`、`runMcp`、`serveApp`（在浏览器里独立提供一个已构建的 MCP App——面向脚本与测试的宿主进程 API；从已安装产物请改用 [`<plugin> web`](./cli.mdx#plugin-web)，见[在浏览器中暴露 App](../guide/authoring/mcp.mdx#在浏览器中暴露-app)）、`listHooks` 与 `simulateHook`；另有 Rspack stats 格式化工具 `rspackStatsErrors`、`describeRspackStatsError` 与 `formatRspackStatsError`，把一条编译错误渲染成与编译器 `AB4770` 相同的 `<file>:<line>:<column>: <message>` 行，供自行驱动 Rsbuild 编译的工具使用。 |
 | `agent-bundle/app` | [app](/zh/api/app) | 浏览器安全的 MCP App 客户端：`createAppClient`；`AppClient` 的 `connect`、`call`、`request`、`onToolInput`、`onToolResult`、`onToolError`、`onToolCancelled`、`rebind` 与 `dispose` 生命周期；`AppClientError` 及其覆盖所有 wire 与生命周期故障的 `code` 联合（选项误用则是普通的 `TypeError` 或 `RangeError`）；由 `.agent-bundle/routes.d.ts` 使用项目 `tool:<server>/<name>` 契约扩充的 `AppRegister`；`AppRouteId` / `AppRouteInput` / `AppRouteResult`；可注入的 `AppWindow` / `AppMessageTarget` port；以及 `APP_PROTOCOL_VERSION`。该入口不导入 Zod、Node 或编译器，只用于 App 视图。 |
 | `agent-bundle/config` | [config](/zh/api/config) | `defineConfig` 与配置类型。 |
 | `agent-bundle/test` | [test](/zh/api/test) | 路由测试 harness、匹配器与契约矩阵。 |
@@ -25,7 +25,7 @@ description: '生成的 agent-bundle 类型 API：每个公开入口点一页、
 | `agent-bundle/cli-entry` | [cli-entry](/zh/api/cli-entry) | 每个生成的 CLI 可执行文件所基于的路由式 CLI 外壳。 |
 | `agent-bundle/mcp-entry` | [mcp-entry](/zh/api/mcp-entry) | 每个生成的 MCP 服务器所包裹的 stdio MCP 入口外壳。 |
 | `agent-bundle/launch-env` | [launch-env](/zh/api/launch-env) | 每个输出外壳在启动时应用的操作者 `.env` 层——`applyOperatorEnv`、`parseOperatorEnv`，以及 `AGENT_BUNDLE_ENV_FILE` 变量背后的 `OPERATOR_ENV_FILE_*` 常量——供希望获得同样行为的手写入口使用。 |
-| `agent-bundle/serve-app-command` | [serve-app-command](/zh/api/serve-app-command) | 纯 Node、无依赖：`spawnServeApp`、`serveAppArgv`、`locateFrameworkCli`、`parseServeAppReadyLine`、`serveAppAllowCapabilities`、`ServeAppCommandError` 及其类型——路由式 CLI 命令（或任何其他生成的可执行文件）通过启动 `agent-bundle serve-app` 来提供一个已构建的 MCP App，而不是导入 `serveApp`。 |
+| `agent-bundle/web-host` | [web-host](/zh/api/web-host) | 产物内浏览器宿主：`runWebCommand`、`WEB_HOST_TOKEN_HEADER`、`readWebManifest` 及其类型。配置了 [`web`](./configuration.mdx#web) 时，生成的 `bin/<plugin>.mjs` 会导入该入口；作者运行 `<plugin> web`，而不是自己导入它。 |
 | `agent-bundle/routes` | [routes/public](/zh/api/routes/public) | 路由模块的编写类型（`AgentEventRouteProps`、`ToolRouteProps`、`CliRouteProps` 与各类 `config` 形状），以及 `appResourceUri`——对同级 MCP App 的静态引用，编译器会把它解析为该 App 的 `resourceUri`。 |
 
 因为它是生成的，所以它始终与已交付的类型一致：签名、联合类型、默认值，以及各表面可能抛出的错误类。

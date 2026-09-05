@@ -12,8 +12,8 @@ import { exists } from './paths.ts';
  * throw, so the same ancestor walk is then performed by hand.
  *
  * Plain Node, no framework imports: the build's dependency-root discovery and
- * `agent-bundle/serve-app-command`, which is bundled into generated
- * executables, locate packages the same way.
+ * `agent-bundle/web-host`, which is bundled into generated executables, locate
+ * packages the same way.
  */
 export const dependencyManifestPath = async (packageRoot: string, name: string): Promise<string | undefined> => {
   try {

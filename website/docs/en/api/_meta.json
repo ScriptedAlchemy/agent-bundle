@@ -66,8 +66,8 @@
   },
   {
     "type": "file",
-    "name": "serve-app-command",
-    "label": "serve-app-command"
+    "name": "web-host",
+    "label": "web-host"
   },
   {
     "type": "file",

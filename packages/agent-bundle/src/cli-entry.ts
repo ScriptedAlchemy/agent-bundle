@@ -358,9 +358,24 @@ export interface RunGeneratedCliOptions {
    */
   readonly terminal?: AgentTerminal;
   readonly version: string;
+  /** Framework-owned command dispatched before authored routes (#564). */
+  readonly web?: GeneratedCliWebCommand;
   readonly writeErr?: (text: string) => void;
   readonly writeOut?: (text: string) => void;
 }
+
+export interface GeneratedCliWebContext {
+  readonly name: string;
+  readonly signal: AbortSignal;
+  readonly writeErr: (text: string) => void;
+  readonly writeOut: (text: string) => void;
+}
+
+export interface GeneratedCliWebCommand {
+  readonly run: (argv: readonly string[], context: GeneratedCliWebContext) => Promise<number>;
+}
+
+const webCommandRow: readonly [string, string] = ['web', "Open one of the plugin's MCP Apps in a browser."];
 
 interface CommandTreeNode {
   readonly children: Map<string, CommandTreeNode>;
@@ -472,6 +487,7 @@ const treeHelp = (
   version: string,
   description: string | undefined,
   node: CommandTreeNode,
+  web: boolean,
 ): string => {
   const lines: string[] = [];
   if (node.path.length === 0) {
@@ -488,6 +504,10 @@ const treeHelp = (
     seen.add(child);
     const label = child.command === undefined ? `${segment} <command>` : segment;
     rows.push([label, child.command?.description ?? '']);
+  }
+  if (web && node.path.length === 0) {
+    const at = rows.findIndex(([label]) => label.localeCompare(webCommandRow[0]) > 0);
+    rows.splice(at === -1 ? rows.length : at, 0, webCommandRow);
   }
   lines.push('', 'Commands:', helpColumns(rows));
   lines.push('', 'Options:', helpColumns(globalOptionRows));
@@ -894,16 +914,20 @@ export const runGeneratedCliEntry = async (options: RunGeneratedCliOptions): Pro
   let node = tree;
   let index = 0;
   let parsed: ParsedArgv | undefined;
+  const web = options.web !== undefined;
   try {
     if (options.argv[0] === '--version') {
       writeOut(`${options.name} ${options.version}\n`);
       return 0;
     }
+    if (options.web !== undefined && options.argv[0] === 'web') {
+      return await options.web.run(options.argv.slice(1), { name: options.name, signal, writeErr, writeOut });
+    }
     while (index < options.argv.length) {
       const token = options.argv[index]!;
       if (token === '--help' || token === '-h') {
         writeOut(node.command === undefined
-          ? treeHelp(options.name, options.version, options.description, node)
+          ? treeHelp(options.name, options.version, options.description, node, web)
           : commandHelp(options.name, node.command));
         return 0;
       }
@@ -919,7 +943,7 @@ export const runGeneratedCliEntry = async (options: RunGeneratedCliOptions): Pro
     }
     if (node.command === undefined) {
       if (node.path.length === 0 && index >= options.argv.length) {
-        writeOut(treeHelp(options.name, options.version, options.description, node));
+        writeOut(treeHelp(options.name, options.version, options.description, node, web));
         return 0;
       }
       const token = options.argv[index];

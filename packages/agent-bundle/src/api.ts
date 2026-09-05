@@ -36,8 +36,9 @@ import {
 import { emptyCompiledRouteGraph } from './routes/graph.ts';
 import { inspectRouteGraph, type RouteGraphInspection } from './routes/inspect.ts';
 import { mcpServerStateDirectory, runMcpForeground } from './services/mcp-run.ts';
-import { parseServeAppSelector, serveMcpApp } from './serve-app/serve-mcp-app.ts';
+import { serveMcpApp } from './serve-app/serve-mcp-app.ts';
 import type { ServedMcpApp, ServeMcpAppPublicOptions } from './serve-app/types.ts';
+import { parseAppSelector } from './web-host/select-app.ts';
 export type { McpAppConsentCapability, ServedMcpApp as ServedApp } from './serve-app/types.ts';
 export type { OpenBrowser } from './dev/mcp-apps/mcp-app-preview-host.ts';
 export type { McpAppProfileId } from './dev/mcp-app-profile-descriptors.ts';
@@ -1544,7 +1545,7 @@ export const serveApp = async (options: ServeAppOptions): Promise<ServedMcpApp> 
   const registry = registryFor(options);
   const workspaceRoot = resolve(options.root);
   const target = options.target ?? 'portable';
-  const { server } = parseServeAppSelector(options.app);
+  const { server } = parseAppSelector(options.app);
   return serveMcpApp({
     app: options.app,
     artifact: options.artifact === undefined ? scopedThrowawayArtifact({ ...options, registry }) : resolve(options.artifact),

@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": [
+      "DOM",
+      "DOM.Iterable",
+      "ES2024"
+    ]
+  },
+  "include": [
+    "src/web-host/browser/**/*.ts"
+  ]
+}

@@ -39,6 +39,17 @@ description: 'MCP App 示例：把一条服务就绪度工作流表达为生成�
   契约；视图通过结构化的 `AppRegister` augmentation 自行为两条工具声明类型。视图中不再保留
   JSON-RPC id、pending map、`postMessage('*')` 或 `structuredContent` 解包逻辑。详见
   [带类型的 App 客户端](../guide/authoring/mcp.mdx#带类型的-app-客户端)。
+- **`web` 表面装在产物里。** 该示例配置了
+  `web: { apps: [{ app: 'status/status', tool: 'show-status', allow: ['call-tool'] }] }`，
+  因此即使没有 `src/cli/**`，组合根目录的 `agent-bundle.manifest.json` 也会带上 `web` 节，并输出
+  `bin/mcp-app-example.mjs`。从已构建产物运行：
+
+  ```sh
+  node artifact/bin/mcp-app-example.mjs web --no-open
+  ```
+
+  它会打印就绪行，并在 loopback 上提供 status App。`agent-bundle dev` 在 `/web/status/status`
+  提供同一页面。见[在浏览器中暴露 App](../guide/authoring/mcp.mdx#在浏览器中暴露-app)。
 
 ## 编写了什么
 

@@ -1,5 +1,5 @@
 ---
-description: 'Field reference for agent-bundle.config.ts: every top-level key, its accepted shapes, defaults, and validation rules, including the deprecated plugin.version.'
+description: 'Field reference for agent-bundle.config.ts: every top-level key, its accepted shapes, defaults, and validation rules, including the web exposure key (AB4341) and the deprecated plugin.version.'
 ---
 
 # Configuration
@@ -39,6 +39,7 @@ export default defineConfig({
 | `dev` | `{ agentApi?, contracts?, runtime? }` | None. |
 | `evals` | `{ include?, runsDir?, semanticGrader? }` | See below. |
 | `tools` | `{ rsbuild?, rspack? }` | None. |
+| `web` | `{ apps, open? }` | None — omit it and nothing is emitted. |
 
 Host-scoped extension keys (`claude`, `codex`, `cursor`, `portable`) are contributed by target
 adapters through declaration merging on `AgentBundleConfigExtensions`. Extension values must be
@@ -194,6 +195,54 @@ Development-only settings that never become part of a built artifact.
 | `dev.contracts.fixtures` | **Required when `dev.contracts` is set.** Project-relative module whose default export maps route ids to contract fixtures. Declaring `dev.contracts` switches `agent-bundle dev` from adopting every epoch directly to gating host-facing adoption on the development contract matrix: an epoch whose checks fail still publishes to the Workbench playground, but live host connections and development installs keep the last passing epoch (`AB7211`). A malformed block, a fixtures module that escapes the project root, cannot load, or exports the wrong shape is `AB7210`. |
 | `dev.contracts.server` | The MCP server the matrix checks. Optional only when the project compiles exactly one server. |
 | `dev.runtime.provider` | The development runtime provider module: it exports `createDevRuntimeProvider` ([`CreateDevRuntimeProvider`](../api/api.md#createdevruntimeprovider)), returning a [`DevRuntimeProvider`](../api/api.md#devruntimeprovider) whose `start` takes a [`DevRuntimeStartContext`](../api/api.md#devruntimestartcontext) and returns a [`DevRuntimeSession`](../api/api.md#devruntimesession). The whole protocol a provider implements ships from `agent-bundle/api` — the inspection envelope ([`DevRuntimeInspectionEnvelope`](../api/api.md#devruntimeinspectionenvelope)), the MCP server descriptor ([`DevRuntimeMcpServerDescriptor`](../api/api.md#devruntimemcpserverdescriptor)), the errors it throws ([`DevRuntimeUnavailableError`](../api/api.md#devruntimeunavailableerror), [`DevRuntimeGenerationConflictError`](../api/api.md#devruntimegenerationconflicterror)), and the generation store and MCP registry a session drives, as contracts ([`DevRuntimeGenerationStore`](../api/api.md#devruntimegenerationstore), [`DevRuntimeProviderMcpRegistry`](../api/api.md#devruntimeprovidermcpregistry)) with their constructors ([`createRuntimeGenerationStore`](../api/api.md#createruntimegenerationstore), [`createRuntimeMcpRegistry`](../api/api.md#createruntimemcpregistry)). |
+
+## web
+
+Exposure and policy for the artifact-resident browser host. `web.apps` selects among MCP Apps
+already declared under `mcp.servers.<id>.apps`; it is not a second route graph and does not
+discover Apps from `src/web/**`. Omit the key and the build writes no `web` section, no
+framework-owned `web` command, and no extra bin.
+
+```ts
+web: {
+  apps: [
+    'status/status',
+    {
+      app: 'status/status',
+      tool: 'show-status',
+      input: {},
+      allow: ['call-tool'],
+    },
+  ],
+  open: 'never',
+}
+```
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `apps` | `(string \| { app, tool?, input?, allow? })[]` | **Required** when `web` is set. | Each entry is `<server>/<app>`, or an object with that `app` plus optional opening `tool`, opening `input` (default `{}`), and `allow`. A string is shorthand for `{ app }`. |
+| `apps[].tool` | `string` | the App's only tool | The opening tool: one whose `_meta.ui.resourceUri` is the App. Required when several tools advertise it. |
+| `apps[].input` | `Record<string, unknown>` | `{}` | Arguments for that opening `tools/call`. |
+| `apps[].allow` | `('call-tool' \| 'download-file' \| 'open-external-link' \| 'request-display-mode')[]` | none | Pre-approve App-initiated consent capabilities. Browser hardware and clipboard permissions always ask in the host page. |
+| `open` | `'browser' \| 'never'` | `'never'` | Whether `<plugin> web` opens the default browser. `--open` / `--no-open` override. |
+
+Invalid `web` is `AB4341` (error): an `app` no `mcp.servers.<id>.apps` declares; an unknown
+`allow` capability; `open` outside `browser` \| `never`; a duplicate `<server>/<app>`; a `tool`
+the route graph does not declare for that generated server; a generated-mode `src/cli/**`
+command (or top-level alias) spelled `web` while `web` is configured; or a `web` surface with no
+executable to carry it. A selected target whose adapter publishes no supported `web` capability
+row is an `AB4341` warning: its artifact does not host the surface. Message shapes and recoveries
+are in the [diagnostics reference](./diagnostics.md).
+
+The `web` command lives only in the framework-generated `bin/<plugin>.mjs`. `web` never
+displaces authored code: a hand-written `src/cli.ts`, a `bin` entry that claims the plugin name,
+or `bin: false` keeps the executable it describes, and `AB4341` reports that the web surface has
+nowhere to live — move the commands under `src/cli/**` (generated mode) or drop `web`.
+
+When `web` is valid, the composite artifact's `agent-bundle.manifest.json` gains a `web` section
+and `bin/<plugin>.mjs` exists even without `src/cli/**` — see
+[Targets and artifacts](./targets-artifacts.mdx) and
+[Exposing an App in the browser](../guide/authoring/mcp.mdx#exposing-an-app-in-the-browser).
 
 ## tools
 

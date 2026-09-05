@@ -1,5 +1,5 @@
 ---
-description: 'agent-bundle 开发者 Workbench：loopback 边界、按 epoch 固定的 MCP 会话、Playground 轨迹、开发期宿主安装，以及可选的 Agent API。'
+description: 'agent-bundle 开发者 Workbench：loopback 边界、按 epoch 固定的 MCP 会话、/web/<server>/<app> App 宿主、Playground 轨迹、开发期宿主安装，以及可选的 Agent API。'
 ---
 
 # 开发者 Workbench
@@ -54,8 +54,11 @@ epoch。这正是协议轨迹有意义的原因：其中每一帧都来自同一
 - 兼容的 MCP App 通过同一个已绑定会话预览。开发循环以未压缩的方式编译视图，因此浏览器开发者工具能
   显示可读的 App 源码；`agent-bundle build` 交付的则是压缩后的版本（见
   [开发构建与生产构建](../authoring/mcp.mdx#开发构建与生产构建)）。同一套宿主栈也能通过
-  `agent-bundle serve-app` 在一个普通浏览器标签页里独立提供某个 App；见
-  [独立提供 App](../authoring/mcp.mdx#独立提供-app)。
+  `agent-bundle serve-app` 在一个普通浏览器标签页里独立提供某个 App。当项目配置了
+  [`web`](../../reference/configuration.mdx#web) 时，`agent-bundle dev` 还会在前台服务器上提供
+  `GET /web/<server>/<app>`——同一页面、中继、路由、沙箱代理与同意行为，绑定到当前 epoch 的服务器
+  会话。未列入 `web.apps` 的 App 返回 404。见
+  [在浏览器中暴露 App](../authoring/mcp.mdx#在浏览器中暴露-app)。
 
 ## 独立的 MCP Inspector
 

@@ -8,8 +8,7 @@ const defaultMaximumDepth = 32;
 const defaultMaximumNodes = 4_096;
 
 /**
- * Admits only finite, data-only JSON without recursively traversing untrusted
- * browser messages. The original value is never cloned or mutated.
+ * Admits finite, data-only JSON while bounding traversal of untrusted browser messages.
  */
 export const finiteOrdinaryJsonByteLength = (
   value: unknown,

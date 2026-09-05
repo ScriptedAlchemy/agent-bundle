@@ -38,6 +38,9 @@ export const supportedCapability = (evidence: CapabilityEvidence): CapabilitySta
  */
 export const cliBinCapability = 'cli';
 
+/** Capability for the framework-owned `<plugin> web` command (#564). */
+export const webSurfaceCapability = 'web';
+
 export const unavailableCapability = (reason: string): CapabilityState => Object.freeze({
   reason,
   state: 'unavailable',

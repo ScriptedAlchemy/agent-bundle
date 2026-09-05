@@ -6,6 +6,7 @@ import {
 } from '../core/runtime.ts';
 import { isValidPackageName, isValidPackageVersion } from '../core/project-context.ts';
 import { isPlainRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import { parseWebManifest, type WebManifest } from '../web-host/manifest.ts';
 
 export type ArtifactManifestFileKind = 'bundle' | 'copy' | 'generated' | 'prebuilt';
 export type ArtifactManifestValidationStatus = 'passed';
@@ -88,6 +89,7 @@ export interface ArtifactManifest {
   readonly runtime: ArtifactManifestRuntime;
   readonly targets: readonly ArtifactManifestTarget[];
   readonly validation: ArtifactManifestValidation;
+  readonly web?: WebManifest;
 }
 
 export interface AssembledArtifactManifest {
@@ -300,7 +302,12 @@ const parseRuntime = (value: unknown): ArtifactManifestRuntime => {
 
 const validateManifest = (value: unknown): ArtifactManifest => {
   const manifest = requireRecord(value, 'root');
-  requireExactKeys(manifest, 'root', ['agentSkills', 'files', 'producer', 'project', 'runtime', 'targets', 'validation']);
+  requireExactKeys(
+    manifest,
+    'root',
+    ['agentSkills', 'files', 'producer', 'project', 'runtime', 'targets', 'validation'],
+    ['web'],
+  );
 
   const agentSkills = requireRecord(manifest.agentSkills, 'agentSkills');
   requireExactKeys(agentSkills, 'agentSkills', ['schemaSha256', 'sourceRevision', 'specification']);
@@ -382,6 +389,7 @@ const validateManifest = (value: unknown): ArtifactManifest => {
     runtime: parseRuntime(manifest.runtime),
     targets,
     validation,
+    ...(manifest.web === undefined ? {} : { web: parseWebManifest(manifest.web) }),
   };
 };
 

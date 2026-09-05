@@ -19,6 +19,7 @@ import {
   capabilityFromTableRow,
   capabilityStateFromSupport,
   cliBinCapability,
+  webSurfaceCapability,
   eventRouteCapabilitiesFrom,
   noticeDeliveryAdvertisementFrom,
   supportedCapability,
@@ -626,6 +627,7 @@ export const portableAdapter: TargetAdapter = Object.freeze({
     // it rides the plugin-root directory the standard's stdio MCP servers
     // already execute from (#387).
     [cliBinCapability]: supportedCapability(evidence),
+    [webSurfaceCapability]: capabilityFromTableRow(capabilityTable.plugin.web, evidence),
     // Component feature sets (#100): the portable Skill document carries only
     // the Agent Skills fields and no interpolation placeholders.
     ...featureCapabilitiesFrom('skills', capabilityTable.plugin.skillFeatures, evidence),

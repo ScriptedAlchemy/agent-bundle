@@ -19,6 +19,7 @@ import {
   capabilityStateFromSupport,
   eventRouteCapabilitiesFrom,
   cliBinCapability,
+  webSurfaceCapability,
   featureCapabilitiesFrom,
   frontmatterFeatureCapabilitiesFrom,
   noticeDeliveryAdvertisementFrom,
@@ -703,6 +704,7 @@ export const cursorAdapter: TargetAdapter = Object.freeze({
     // The routed CLI bin rides the same plugin-root directory the pinned
     // contract already executes `mcp/` and `scripts/` files from (#387).
     [cliBinCapability]: supportedCapability(evidence),
+    [webSurfaceCapability]: capabilityFromTableRow(capabilityTable.plugin.web, evidence),
     // Component feature sets (#100): commands are frontmatter-free on Cursor
     // (every field row unavailable), rules carry the documented .mdc fields.
     ...frontmatterFeatureCapabilitiesFrom('commands', capabilityTable.plugin.commandFrontmatter, evidence),

@@ -1200,6 +1200,10 @@
       "fileContents": "opaque",
       "manifestField": "workflows",
       "replacesDefault": true
+    },
+    "web": {
+      "reason": "browser host inside the composite artifact; <plugin> web runs from the installed root on any host",
+      "state": "supported"
     }
   },
   "tokens": {

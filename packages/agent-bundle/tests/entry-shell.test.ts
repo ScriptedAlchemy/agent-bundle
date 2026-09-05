@@ -240,6 +240,107 @@ describe('generated entry templates', () => {
     expect(npmBin).not.toContain('applyOperatorEnv');
   });
 
+  it('conditionally wires the generated web command without changing non-web entry bytes', () => {
+    const route = {
+      config: {},
+      id: 'cli:status',
+      kind: 'cli' as const,
+      provenance: { kind: 'conventional' as const, relativePath: 'src/cli/status.ts' },
+      source: '/project/src/cli/status.ts',
+    };
+    const command = {
+      aliases: [],
+      exitCode: 'zero' as const,
+      options: [],
+      path: ['status'],
+      rendered: false,
+      routeId: route.id,
+    };
+    const web = {
+      manifestRelativeUrl: '../agent-bundle.manifest.json',
+      pluginRootRelativeUrl: '../',
+    };
+    const routed = entryShellModule.generatedCliBinEntrySource({
+      commands: [command],
+      plugin: { name: 'fixture', version: '1.0.0' },
+      routes: [route],
+      stateFallback: 'artifact',
+      web,
+    });
+    expect(routed).toContain('import { runWebCommand } from "agent-bundle/web-host";');
+    expect(routed).toContain("import webHostPage from 'agent-bundle/web-host-page';");
+    expect(routed).toContain(
+      "const pluginRoot = resolvePluginRoot({ fallback: fileURLToPath(new URL(\"../\", import.meta.url)) });",
+    );
+    expect(routed).toContain('const artifactRoot = fileURLToPath(new URL("../", import.meta.url));');
+    expect(routed).toContain([
+      '  web: Object.freeze({',
+      '    run: (argv, context) => runWebCommand({',
+      '      argv,',
+      '      manifestPath: fileURLToPath(new URL("../agent-bundle.manifest.json", import.meta.url)),',
+      '      pageScript: webHostPage,',
+      '      pluginRoot: artifactRoot,',
+      '      ...context,',
+      '    }),',
+      '  }),',
+    ].join('\n'));
+
+    const webOnly = entryShellModule.generatedCliBinEntrySource({
+      commands: [],
+      plugin: { name: 'fixture', version: '1.0.0' },
+      routes: [],
+      stateFallback: 'artifact',
+      web,
+    });
+    expect(webOnly).toContain('const commands = Object.freeze([]);');
+    expect(webOnly).toContain('web: Object.freeze({');
+    expect(webOnly).not.toContain('import * as route0');
+    // A web-only plugin owes no `@agent-bundle/runtime`: nothing opens a request scope.
+    expect(webOnly).not.toContain('@agent-bundle/runtime');
+    expect(webOnly).not.toContain('resolvePluginRoot');
+    expect(webOnly).toContain('const artifactRoot = fileURLToPath(new URL("../", import.meta.url));');
+    expect(routed).toContain('@agent-bundle/runtime');
+
+    // A project's state and providers belong to its request scope; a bin with
+    // no command opens none, so the web-only bin mounts neither and their
+    // modules cannot keep `<plugin> web` from starting.
+    const webOnlyWithState = entryShellModule.generatedCliBinEntrySource({
+      commands: [],
+      plugin: { name: 'fixture', version: '1.0.0' },
+      providers: [{
+        id: 'provider:project-auth',
+        name: 'project-auth',
+        provenance: { kind: 'conventional', relativePath: 'src/providers/project-auth.ts' },
+        source: '/project/src/providers/project-auth.ts',
+      }],
+      routes: [],
+      state: {
+        id: 'project/tasks',
+        lifetime: 'workspace-durable',
+        provenance: { kind: 'conventional', sourcePath: '/project/src/state.ts' },
+        source: '/project/src/state.ts',
+      },
+      stateFallback: 'artifact',
+      web,
+    });
+    expect(webOnlyWithState).toBe(webOnly);
+
+    // A routed bin without `web` carries no web wiring: its bytes are those of
+    // the generator without #564 (hash of the same input on this commit's
+    // `entry-shell.ts`; #596's projection steps and `kind: 'cli'` request
+    // moved the pin from the pre-#564 value).
+    const withoutWeb = entryShellModule.generatedCliBinEntrySource({
+      commands: [command],
+      plugin: { name: 'fixture', version: '1.0.0' },
+      routes: [route],
+      stateFallback: 'artifact',
+    });
+    expect(createHash('sha256').update(withoutWeb).digest('hex'))
+      .toBe('b177c34fc9ef98e972b5f5db1296c01219634572a455796fcae30bfaf070ba72');
+    expect(withoutWeb).not.toContain('agent-bundle/web-host');
+    expect(withoutWeb).not.toContain('web: Object.freeze({');
+  });
+
   it('generates a process envelope that adopts numeric exit codes and hands main the terminal capability (#511)', () => {
     const source = generatedExecutableEntrySource({ entrySource: '/proj/src/cli.ts', exportName: 'main', hostSurface: 'cli' });
     expect(source).toContain('import * as entry from "/proj/src/cli.ts"');

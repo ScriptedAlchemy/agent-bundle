@@ -23,7 +23,6 @@ my-plugin/
     ├── mcp/<server-id>.ts     # a handwritten stdio MCP server entry
     ├── mcp/<server>/          # or a generated server, one module per route
     │   ├── tools/*.tsx
-    │   ├── tools/<tool>.cli.ts # colocated projection module; never a route
     │   ├── resources/*.tsx
     │   ├── prompts/*.tsx
     │   ├── apps/*.tsx         # browser MCP Apps compiled to self-contained HTML
@@ -46,7 +45,6 @@ my-plugin/
 | `src/rules/*.mdc` | Flat host rule documents, emitted by Cursor, which keeps `description`, `globs`, and `alwaysApply`. The same per-host judgment applies: `AB4907` for an explicit target, `AB4908` as a warning for an implicit one. | Remove the file. |
 | `src/mcp/<server-id>.ts` | Stdio entry for a declared MCP server that names no `entry`, `command`, or `url`. | Declare `entry` explicitly. |
 | `src/mcp/<server>/{tools,resources,prompts}/*` | Generated MCP server routes. The path supplies identity; each module supplies static `config`, schemas, and one async default Server Component. | Set `routes.servers.<server>` to `custom`, `command`, or `remote`. |
-| `src/mcp/<server>/tools/<tool>.cli.ts` | Colocated projection module for the sibling tool. Never a route; excluded from `routes.mcpCommands`. See [Project one tool as an idiomatic command](../authoring/package-entries.mdx#project-one-tool-as-an-idiomatic-command). | Prefix `_` to park it. |
 | `src/mcp/<server>/apps/*` | Browser MCP App entries compiled to self-contained HTML and registered on the generated server. Static `config.resourceUri` is required. | Use a custom server, or prefix the file with `_`. |
 | `src/scripts/<name>.ts` | A plain script compiled once to `scripts/<name>.mjs` at the artifact root, shared by every selected host. Nested modules are a hard error (`AB4808`). | Prefix a path segment with `_`, or claim the file with an explicit `scripts` entry. |
 | `src/scripts/<name>.tsx` | A rendered script: the async default component receives `argv` and `signal` and renders through the Agent renderer with the CLI output contract. | Rename to `.ts`, prefix a path segment with `_`, or claim the file. |
@@ -66,7 +64,9 @@ or claimed by config.
 
 ## Config versus conventions
 
-The config holds what no single file can own — project identity, target selection, and policy:
+The config holds what no single file can own — project identity, target selection, policy, and
+which declared MCP Apps the artifact-resident [`web`](../../reference/configuration.mdx#web)
+host exposes:
 
 ```ts twoslash
 import { defineConfig } from 'agent-bundle/config';
@@ -126,7 +126,7 @@ artifact/
 │   ├── <hook>.<host>.mjs             # one wrapper per host for a hook several reach
 │   └── hooks-flight.mjs
 ├── mcp/mcp-<server>-<hash>.mjs       # compiled MCP entries, emitted once
-├── bin/<plugin-name>.mjs             # the routed CLI, when the project has one
+├── bin/<plugin-name>.mjs             # routed CLI and/or <plugin> web
 ├── scripts/, skills/, commands/, rules/, assets/, mcp-apps/   # components, emitted once
 ├── INSTALL.md                        # one section per selected host
 ├── install.mjs                       # when cursor or portable is selected
@@ -138,7 +138,8 @@ Host manifests live in their dotfolders; `skills/`, `hooks/`, `mcp/`, `scripts/`
 `assets/` are emitted once and shared. Hook and MCP documents appear when the project declares
 hooks or MCP servers — plus one empty Codex or Cursor document whenever another selected host
 claims the conventional `hooks/hooks.json`, `.mcp.json`, or `mcp.json` path, so that host's folder discovery
-never loads the other host's file — and `bin/` only when it has a routed CLI (`src/cli/**` routes, bulk `routes.mcpCommands`, or a projection module). Two selected hosts that
+never loads the other host's file — and `bin/` when it has a routed CLI, when
+[`web`](../../reference/configuration.mdx#web) is configured, or both. Two selected hosts that
 would write the same path with different bytes cannot share the root, and the build fails with
 `AB4103`; a command or rule scoped to some of the selected hosts but sitting in a
 directory another selected host scans is `AB4105`. Both recover by making the component
