@@ -175,7 +175,7 @@ describe('resolvePluginRoot (#468)', () => {
     });
   });
 
-  it('uses a non-blank XDG_STATE_HOME and ignores a blank one', () => {
+  it('uses an absolute XDG_STATE_HOME and ignores a blank or relative one', () => {
     const root = '/installs/curator';
     const home = '/users/tester';
     const segment = `curator-${digest16(resolve(root))}`;
@@ -185,6 +185,11 @@ describe('resolvePluginRoot (#468)', () => {
       join('/xdg/state', 'agent-bundle', segment),
     );
     expect(userStateHome({ XDG_STATE_HOME: '   ' }, home)).toBe(join(home, '.agent-bundle', 'state'));
+    // The base-directory spec ignores a relative value; honoring it would
+    // anchor state on the shell's cwd, which for an artifact shell is the
+    // read-only install itself.
+    expect(userStateHome({ XDG_STATE_HOME: 'state' }, home)).toBe(join(home, '.agent-bundle', 'state'));
+    expect(userStateHome({ XDG_STATE_HOME: './xdg' }, home)).toBe(join(home, '.agent-bundle', 'state'));
   });
 
   it('uses plugin as the segment name when the root basename is unsafe', () => {

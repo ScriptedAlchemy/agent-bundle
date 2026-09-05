@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, isAbsolute, join, resolve } from 'node:path';
 
 import { available, type AgentPluginIdentity, type Observed } from './agent-request.js';
 
@@ -63,15 +63,20 @@ export const pluginStateSegment = (root: string): string => {
   return safePluginSegment.test(name) ? `${name}-${digest}` : `plugin-${digest}`;
 };
 
-/** The user-level directory that holds framework state for installed plugins. */
+/**
+ * The user-level directory that holds framework state for installed plugins.
+ * A relative `XDG_STATE_HOME` is ignored, as the base-directory spec
+ * requires: a shell runs with the artifact as its cwd, and a relative anchor
+ * would put state back beneath the install.
+ */
 export const userStateHome = (
   env: Readonly<Record<string, string | undefined>> = process.env,
   home = homedir(),
 ): string => {
   const xdgStateHome = env.XDG_STATE_HOME ?? '';
-  return xdgStateHome.trim() === ''
-    ? join(home, '.agent-bundle', PLUGIN_STATE_DIRECTORY)
-    : join(xdgStateHome, 'agent-bundle');
+  return isAbsolute(xdgStateHome)
+    ? join(xdgStateHome, 'agent-bundle')
+    : join(home, '.agent-bundle', PLUGIN_STATE_DIRECTORY);
 };
 
 /** The framework state root for one installed plugin. */

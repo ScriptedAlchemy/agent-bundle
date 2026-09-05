@@ -37,7 +37,7 @@ token 会在构建时报告 `AB6028`，并由 Doctor 报告 `AB7320`。
 | --- | --- | --- |
 | `AGENT_BUNDLE_PLUGIN_ROOT` | 生成式可执行文件 | 插件代码根目录——即组合插件根目录，存放宿主清单、`mcp/`、`hooks/` 与 `bin/` 的那个目录。覆盖内置的回退值；以 `(await agent()).plugin.root`（`source: 'native'`）暴露给路由与 provider。未展开的 `${…}` token 视为未设置。 |
 | `AGENT_BUNDLE_STATE_ROOT` | 生成式可执行文件 | 框架状态根目录：SQLite 状态内核、通知账本与 lineage 日志所在的确切目录。覆盖推导出的位置。未展开的 `${…}` token 视为未设置。 |
-| `XDG_STATE_HOME` | 生成式可执行文件 | 设置后，推导出的状态根目录为 `$XDG_STATE_HOME/agent-bundle/<plugin>-<digest>`，而不是 `~/.agent-bundle/state/<plugin>-<digest>`。 |
+| `XDG_STATE_HOME` | 生成式可执行文件 | 设置为绝对路径时（相对值按 base-directory 规范忽略），推导出的状态根目录为 `$XDG_STATE_HOME/agent-bundle/<plugin>-<digest>`，而不是 `~/.agent-bundle/state/<plugin>-<digest>`。 |
 | `AGENT_BUNDLE_ENV_FILE` | 生成式可执行文件 | 已安装包在启动时改为读取的操作者 env 文件：一个路径，或以平台路径分隔符连接的多个路径（后者胜出），代替 `<插件根目录>/.env` 与 `.env.local`；`none` 关闭这一层。`mcp run` 会根据 `--env-file` / `--no-env` 为其子进程设置它。 |
 | `AGENT_BUNDLE_AGENT_API_TOKEN` | `agent-bundle dev` | Agent API 在启用之前所必需的 bearer token。 |
 | `AGENT_BUNDLE_HOOK_SIMULATION` | 生成的钩子 wrapper | `1` 标记一次模拟调用；Workbench 的事件路由工作区会设置它。 |
@@ -92,6 +92,10 @@ token 会在构建时报告 `AB6028`，并由 Doctor 报告 `AB7320`。
 在 `mcp run` 之下，**env 取值**中的 plugin-root 锚点默认展开到项目根目录，而不是产物：在那里产物只是
 一个临时构建产物，把持久状态锚定其上会让状态在每次重建时被割裂。若要按字节忠实地演练一次「复制产物后
 启动」，请传入指向产物根目录本身——组合插件根目录，而不是某个宿主子目录——的 `--plugin-root <path>`。
+除非 `AGENT_BUNDLE_STATE_ROOT` 指定了位置，状态根目录随后从展开后的代码根目录推导
+（`~/.agent-bundle/state/<project>-<digest>`）。`agent-bundle dev` 与 Workbench 的 MCP 会话则把
+`AGENT_BUNDLE_STATE_ROOT` 固定为 `<epoch>/state`，因此构建 epoch 的状态随 epoch 一起存在与消失，
+而不会在每次重建时多出一个用户数据目录。
 
 当服务器名是单个安全路径段时，逐服务器状态目录直接使用该名字；其他任何名字都会变成内容寻址的
 `server-<digest>` 段，因此像 `../shared` 这样的名字绝不可能穿出状态根目录。

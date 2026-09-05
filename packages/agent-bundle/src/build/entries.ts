@@ -225,7 +225,11 @@ export const planScriptsSurface = async (
                 source,
               }],
               ...(options.noticeRetention === undefined ? {} : { noticeRetention: options.noticeRetention }),
-        ...(options.state === undefined ? {} : { state: options.state }),
+              ...(options.state === undefined ? {} : { state: options.state }),
+              // The worker lives in `scripts/`, one directory below the
+              // artifact root, like `bin/` and `mcp/`: same code root, same
+              // derived state root as the MCP worker of the install.
+              stateFallback: 'artifact',
             }),
           }),
         ];

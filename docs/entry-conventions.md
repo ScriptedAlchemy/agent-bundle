@@ -151,14 +151,15 @@ fresh project and notice stores per invocation; process lifetime shares them
 for the generated worker or executable process.
 
 Workspace-durable artifact shells — generated MCP workers, artifact CLI bins
-and render workers, and standalone hook wrappers — call `resolvePluginRoot`
+and their render workers, rendered script workers, and standalone hook
+wrappers — call `resolvePluginRoot`
 with `stateAnchor: 'user-data'`. `AGENT_BUNDLE_PLUGIN_ROOT` still names the
 code root and otherwise falls back to the artifact root derived from the
 shell's own location. An expanded, non-blank `AGENT_BUNDLE_STATE_ROOT`
 independently overrides the framework state root and is made absolute with
 `resolve()`; otherwise the state root is
 `~/.agent-bundle/state/<plugin>-<digest>`, or
-`$XDG_STATE_HOME/agent-bundle/<plugin>-<digest>` when `XDG_STATE_HOME` is set.
+`$XDG_STATE_HOME/agent-bundle/<plugin>-<digest>` when `XDG_STATE_HOME` is an absolute path (a relative value is ignored).
 `<plugin>` is the code root's safe basename (or `plugin`) and `<digest>`
 is the first 16 hexadecimal characters of SHA-256 over that code root's
 realpath, so symlinked spellings share one state root while distinct installs

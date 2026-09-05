@@ -41,7 +41,7 @@ Cursor's pinned loader has its own substituted-field table, and a token outside 
 | --- | --- | --- |
 | `AGENT_BUNDLE_PLUGIN_ROOT` | Generated executables | The plugin code root — the composite plugin root, the directory holding the host manifests, `mcp/`, `hooks/`, and `bin/`. Overrides the built-in fallback; surfaced to routes and providers as `(await agent()).plugin.value.root` (`source: 'native'`). An unexpanded `${…}` token is treated as unset. |
 | `AGENT_BUNDLE_STATE_ROOT` | Generated executables | The framework state root: the exact directory where the SQLite state kernel, notice ledger, and lineage journal live. Overrides the derived location. An unexpanded `${…}` token is treated as unset. |
-| `XDG_STATE_HOME` | Generated executables | When set, the derived state root is `$XDG_STATE_HOME/agent-bundle/<plugin>-<digest>` instead of `~/.agent-bundle/state/<plugin>-<digest>`. |
+| `XDG_STATE_HOME` | Generated executables | When set to an absolute path (a relative value is ignored, per the base-directory spec), the derived state root is `$XDG_STATE_HOME/agent-bundle/<plugin>-<digest>` instead of `~/.agent-bundle/state/<plugin>-<digest>`. |
 | `AGENT_BUNDLE_ENV_FILE` | Generated executables | The operator env file(s) an installed pack reads at launch instead of `<plugin root>/.env` and `.env.local`: one path, or several joined by the platform path delimiter, later files winning; `none` disables the layer. `mcp run` sets it for its child from `--env-file` / `--no-env`. |
 | `AGENT_BUNDLE_AGENT_API_TOKEN` | `agent-bundle dev` | The bearer token the Agent API requires before it can be enabled. |
 | `AGENT_BUNDLE_HOOK_SIMULATION` | Generated hook wrappers | `1` marks a simulated invocation; the Workbench event route workspace sets it. |
@@ -104,7 +104,11 @@ Under `mcp run`, plugin-root anchors in **env values** expand to the project roo
 not the artifact: the artifact is an ephemeral build product there, and anchoring durable state on
 it would fragment that state on every rebuild. Pass `--plugin-root <path>` pointing at the
 artifact root itself — the composite plugin root, not a host subdirectory — for a byte-faithful
-rehearsal of a copied-artifact launch.
+rehearsal of a copied-artifact launch. The state root then derives from that expanded code root
+(`~/.agent-bundle/state/<project>-<digest>`) unless `AGENT_BUNDLE_STATE_ROOT` names one.
+`agent-bundle dev` and Workbench MCP sessions pin `AGENT_BUNDLE_STATE_ROOT` to `<epoch>/state`
+instead, so a build epoch's state goes with the epoch rather than accumulating one user-data
+directory per rebuild.
 
 A per-server state directory uses the server name when it is a single safe segment; any other
 name becomes a content-addressed `server-<digest>` segment, so a name like `../shared` can never
