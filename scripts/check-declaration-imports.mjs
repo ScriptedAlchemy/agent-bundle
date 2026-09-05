@@ -267,17 +267,31 @@ const resolveSubpathMap = (map, subpath) => {
 const activeConditions = new Set(['types', 'import', 'node', 'default']);
 
 /**
- * The string a target resolves to under the active conditions; `null` when
- * the selected branch blocks it, `undefined` when nothing is selected. As in
- * Node, a conditions object stops at the first active condition even when its
- * value is `null`, while an array skips `null` entries and keeps looking.
+ * Node's package-target validity: a `./` target may not climb out of the
+ * package or into `node_modules`; anything else is valid only as a bare
+ * specifier in `imports` (`internal`), never in `exports`.
  */
-const targetString = (target) => {
-  if (target === null || typeof target === 'string') return target;
+const isValidTarget = (target, internal) => {
+  if (target.startsWith('./')) {
+    return !target.split('/').slice(1).some((segment) => segment === '..' || segment === 'node_modules');
+  }
+  return internal && !target.startsWith('../') && !target.startsWith('/') && !hasScheme(target);
+};
+
+/**
+ * The string a target resolves to under the active conditions; `null` when
+ * the selected branch blocks it or is invalid, `undefined` when nothing is
+ * selected. As in Node, a conditions object stops at the first active
+ * condition even when its value is `null` or invalid, while an array skips
+ * `null` and invalid entries and keeps looking.
+ */
+const targetString = (target, internal) => {
+  if (target === null) return null;
+  if (typeof target === 'string') return isValidTarget(target, internal) ? target : null;
   if (Array.isArray(target)) {
     let blocked = false;
     for (const entry of target) {
-      const resolved = targetString(entry);
+      const resolved = targetString(entry, internal);
       if (typeof resolved === 'string') return resolved;
       if (resolved === null) blocked = true;
     }
@@ -286,14 +300,14 @@ const targetString = (target) => {
   if (!isRecord(target)) return undefined;
   for (const [condition, value] of Object.entries(target)) {
     if (!activeConditions.has(condition)) continue;
-    const resolved = targetString(value);
+    const resolved = targetString(value, internal);
     if (resolved !== undefined) return resolved;
   }
   return undefined;
 };
 
-/** Whether a resolved `exports`/`imports` target names a file under the active conditions. */
-const resolvesToFile = (target) => typeof targetString(target) === 'string';
+/** Whether a resolved `exports` target names a file under the active conditions. */
+const resolvesToFile = (target) => typeof targetString(target, false) === 'string';
 
 /**
  * Whether the package's own `exports` serves `subpath` (`.` or `./x`): a
@@ -320,8 +334,26 @@ const exportsSubpath = (manifest, subpath) => {
 const importsTarget = (manifest, specifier) => {
   if (!isRecord(manifest.imports)) return undefined;
   const resolved = resolveSubpathMap(manifest.imports, specifier);
-  const mapped = resolved === undefined ? undefined : targetString(resolved.target);
+  const mapped = resolved === undefined ? undefined : targetString(resolved.target, true);
   return typeof mapped === 'string' ? mapped : undefined;
+};
+
+/**
+ * Where inside the tarball a specifier may land: a relative import or
+ * `/// <reference path>` resolves from the declaration's directory, a `#`
+ * import mapped to a relative file resolves from the package root.
+ * `undefined` for anything that leaves the package.
+ */
+const packedCandidates = ({ manifest, path, specifier }) => {
+  const { kind, specifier: target } = specifier;
+  if (isAbsoluteOrUrl(target)) return undefined;
+  if (kind === 'path-reference') return [posix.normalize(posix.join(posix.dirname(path), target))];
+  if (isRelative(target)) return relativeTargets(path, target);
+  if (kind === 'import' && target.startsWith('#')) {
+    const mapped = importsTarget(manifest, target);
+    return mapped !== undefined && isRelative(mapped) ? relativeTargets('package.json', mapped) : undefined;
+  }
+  return undefined;
 };
 
 /**
@@ -338,9 +370,7 @@ const classifySpecifier = ({ declared, manifest, packed, path, specifier }) => {
     };
   }
   if (kind === 'path-reference' || isRelative(target)) {
-    const candidates = kind === 'path-reference'
-      ? [posix.normalize(posix.join(posix.dirname(path), target))]
-      : relativeTargets(path, target);
+    const candidates = packedCandidates({ manifest, path, specifier });
     if (candidates.some((candidate) => packed.has(candidate))) return undefined;
     return {
       message: `no packed declaration for "${target}" (tried ${candidates.join(', ')})`,
@@ -431,12 +461,8 @@ export const declarationImportViolations = ({ declarations, manifest, packedPath
     const path = pending.pop();
     const entry = reachable.get(path);
     for (const specifier of specifiersByPath.get(path) ?? []) {
-      const relative = specifier.kind === 'path-reference' || isRelative(specifier.specifier);
-      if (!relative || isAbsoluteOrUrl(specifier.specifier)) continue;
-      const candidates = specifier.kind === 'path-reference'
-        ? [posix.normalize(posix.join(posix.dirname(path), specifier.specifier))]
-        : relativeTargets(path, specifier.specifier);
-      const target = candidates.find((candidate) => specifiersByPath.has(candidate));
+      const candidates = packedCandidates({ manifest, path, specifier });
+      const target = candidates?.find((candidate) => specifiersByPath.has(candidate));
       if (target !== undefined && !reachable.has(target)) {
         reachable.set(target, entry);
         pending.push(target);

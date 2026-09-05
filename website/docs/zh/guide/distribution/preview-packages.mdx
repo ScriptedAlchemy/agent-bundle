@@ -60,7 +60,9 @@ npx https://pkg.pr.new/ScriptedAlchemy/agent-bundle/create-agent-bundle@<sha-or-
 只能导入包内文件、包自身通过 `exports` 公开的子路径、能被 `imports` 映射解析的 `#` 导入、Node 内建模块，以及在 `dependencies`、
 `peerDependencies` 或 `optionalDependencies` 中声明的包——绝对路径和 URL 在消费者的安装中永远无法解析，
 可触达声明里出现 `zod` 这类 devDependency 会让门禁失败，而没有任何
-入口触达的内部声明只报告为 warning（`--strict` 会让它们也失败）。publint 不是单独的门禁：每个可发布包的
+入口触达的内部声明只报告为 warning（`--strict` 会让它们也失败；`lint:release` 默认不传该参数）。可触达性从
+`exports` 下的每个 `types` 目标以及旧式 `types` 字段出发；`/// <reference types>` 按裸导入同样检查；相对导入、
+`/// <reference path>` 或 `exports` 目标指向压缩包中不存在的文件时也会失败。publint 不是单独的门禁：每个可发布包的
 `rslib build` 都会通过 `rsbuild-plugin-publint` 运行它，并在出现 warning 时让构建失败。该门禁仅用于
 发布，并不替代日常的 `pnpm check` 交付门禁。
 

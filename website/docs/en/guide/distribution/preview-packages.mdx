@@ -72,7 +72,10 @@ its `imports` map resolves, Node built-ins, and packages declared in `dependenci
 `peerDependencies`, or `optionalDependencies` —
 absolute paths and URLs never resolve in a consumer install, and a devDependency such as `zod` in a
 reachable declaration fails the gate, while one in an internal declaration no entry point reaches is
-reported as a warning (`--strict` fails those too). publint is not a separate gate: every
+reported as a warning (`--strict` fails those too; `lint:release` does not pass it). Reachability
+starts from every `types` target under `exports` plus the legacy `types` field, `/// <reference
+types>` is checked like a bare import, and a relative import, `/// <reference path>`, or `exports`
+target that names a file missing from the tarball fails too. publint is not a separate gate: every
 publishable package's `rslib build` runs it through `rsbuild-plugin-publint` and fails the build on
 a warning. That gate is release-only and does not replace the ordinary `pnpm check` delivery gate.
 

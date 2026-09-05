@@ -167,6 +167,23 @@ describe('declarationImportViolations', () => {
     }]);
   });
 
+  it('follows `#` imports mapped to packed files when computing reachability', () => {
+    const report = declarationImportViolations({
+      manifest: { ...manifest, imports: { '#events/*': './dist/events/*.js' } },
+      packedPaths,
+      declarations: [
+        { path: 'dist/index.d.ts', text: "export type { Schema } from '#events/ipc';" },
+        { path: 'dist/routes/public.d.ts', text: 'export type Route = string;' },
+        { path: 'dist/events/ipc.d.ts', text: "import { z } from 'zod';\nexport type Schema = z.ZodType;" },
+      ],
+    });
+
+    expect(report.warnings).toEqual([]);
+    expect(report.errors.map(({ path, reachableFrom, specifier }) => ({ path, reachableFrom, specifier }))).toEqual([
+      { path: 'dist/events/ipc.d.ts', reachableFrom: '.', specifier: 'zod' },
+    ]);
+  });
+
   it('reports undeclared packages, unpacked relative targets, type references, and missing export targets', () => {
     const report = declarationImportViolations({
       manifest: { ...manifest, exports: { ...(manifest.exports as object), './gone': { types: './dist/gone.d.ts' } } },
@@ -247,6 +264,11 @@ describe('declarationImportViolations', () => {
     expect(check({ '.': { types: { node: null }, default: './dist/index.js' } }, ['self'])).toEqual(['self']);
     expect(check({ '.': [null, './dist/index.js'] }, ['self'])).toEqual([]);
     expect(check({ browser: './dist/browser.js' }, ['self'])).toEqual(['self']);
+    // Invalid targets: `exports` never serves a bare specifier or a path that
+    // leaves the package; an array skips them, a selected condition does not.
+    expect(check({ '.': ['../outside.js', './dist/../escape.js', 'zod', './dist/index.js'] }, ['self'])).toEqual([]);
+    expect(check({ '.': ['../outside.js', 'zod'] }, ['self'])).toEqual(['self']);
+    expect(check({ '.': { import: '../outside.js', default: './dist/index.js' } }, ['self'])).toEqual(['self']);
     // No `exports` at all: every file resolves by path.
     expect(check(undefined, ['self', 'self/dist/anything.js'])).toEqual([]);
   });
@@ -262,7 +284,8 @@ describe('declarationImportViolations', () => {
           '#dev': 'zod',
           '#blocked': null,
           '#blocked-condition': { import: null, default: './dist/pkg.js' },
-          '#array-fallback': [null, './dist/pkg.js'],
+          '#array-fallback': [null, '../outside.js', '/abs.js', './dist/pkg.js'],
+          '#escapes': './dist/../../outside.js',
         },
       },
       packedPaths: [...packedPaths, 'dist/internal/thing.d.ts', 'dist/pkg.d.ts'],
@@ -278,6 +301,7 @@ describe('declarationImportViolations', () => {
             "import type { Dev } from '#dev';",
             "import type { Blocked } from '#blocked';",
             "import type { BlockedCondition } from '#blocked-condition';",
+            "import type { Escapes } from '#escapes';",
             "import type { Unmapped } from '#nope';",
           ].join('\n'),
         },
@@ -290,6 +314,7 @@ describe('declarationImportViolations', () => {
       'dev-dependency #dev',
       'subpath-import #blocked',
       'subpath-import #blocked-condition',
+      'subpath-import #escapes',
       'subpath-import #nope',
     ]);
     expect(report.errors[0]?.message).toBe(
