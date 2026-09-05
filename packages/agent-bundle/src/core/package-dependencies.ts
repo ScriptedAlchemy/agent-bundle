@@ -14,7 +14,7 @@ import { isRecord } from './strict-json.ts';
  * `peerDependencies` counts because npm 7+ installs peers automatically;
  * `devDependencies` never reach a consumer and are not inspected.
  */
-export const installedDependencyFields = Object.freeze([
+const installedDependencyFields = Object.freeze([
   'dependencies',
   'optionalDependencies',
   'peerDependencies',
