@@ -1,8 +1,9 @@
-// Aliased for the same reason as cli-argv.ts: this is a parser-only use of the
-// TypeScript 5.x compiler API and route modules are never executed.
+// Aliased for the same reason as config-extract.ts: this is a parser-only use
+// of the TypeScript 5.x compiler API and route modules are never executed.
 import ts from 'typescript-5';
 
 import { deepFreeze } from '../core/freeze.ts';
+import { hasExportModifier, positionOf, unwrapExpression } from './syntax.ts';
 import type {
   RouteInputArrayItemSchema,
   RouteInputPropertySchema,
@@ -10,13 +11,16 @@ import type {
   RouteInputSchemaLiteral,
 } from './types.ts';
 
-export interface ChainCall {
+// The zod-chain grammar below is this module's own; nothing else imports it.
+// Keeping it module-private also keeps `ts.*` out of the shipped declaration
+// (see syntax.ts), where `typescript-5` would be unresolvable for consumers.
+interface ChainCall {
   readonly args: readonly ts.Expression[];
   readonly method: string;
   readonly node: ts.Node;
 }
 
-export interface ZodChain {
+interface ZodChain {
   readonly base: ChainCall;
   readonly calls: readonly ChainCall[];
 }
@@ -49,28 +53,8 @@ export type ParsedInputSchemaEntry =
   | Readonly<{ readonly issue: string }>
   | Readonly<{ readonly property: StaticInputSchemaProperty }>;
 
-/** Casts, assertions, and parentheses carry no runtime value; unwrap them. */
-export const unwrapExpression = (expression: ts.Expression): ts.Expression => {
-  let current = expression;
-  while (
-    ts.isParenthesizedExpression(current) ||
-    ts.isAsExpression(current) ||
-    ts.isSatisfiesExpression(current) ||
-    ts.isNonNullExpression(current) ||
-    ts.isTypeAssertionExpression(current)
-  ) {
-    current = current.expression;
-  }
-  return current;
-};
-
-export const positionOf = (sourceFile: ts.SourceFile, node: ts.Node): string => {
-  const { character, line } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
-  return `${line + 1}:${character + 1}`;
-};
-
 /** Flattens `z.base(...).m1(...).m2(...)` into base + ordered calls. */
-export const flattenZodChain = (expression: ts.Expression): ZodChain | undefined => {
+const flattenZodChain = (expression: ts.Expression): ZodChain | undefined => {
   const calls: ChainCall[] = [];
   let current = unwrapExpression(expression);
   while (ts.isCallExpression(current) && ts.isPropertyAccessExpression(current.expression)) {
@@ -90,7 +74,7 @@ type StaticLiteral =
   | { readonly kind: 'dynamic'; readonly node: ts.Node };
 
 /** Static literal grammar used by `.default(...)`; callers decide which values they can expose. */
-export const staticLiteral = (expression: ts.Expression): StaticLiteral => {
+const staticLiteral = (expression: ts.Expression): StaticLiteral => {
   const node = unwrapExpression(expression);
   if (node.kind === ts.SyntaxKind.TrueKeyword) return { kind: 'value', value: true };
   if (node.kind === ts.SyntaxKind.FalseKeyword) return { kind: 'value', value: false };
@@ -151,7 +135,7 @@ type ScalarBaseResult =
   | { readonly message: string; readonly ok: false };
 
 /** Interprets one `z.<base>(...)` call as a bounded scalar projection base. */
-export const scalarBaseOf = (
+const scalarBaseOf = (
   chain: ZodChain,
   sourceFile: ts.SourceFile,
   relativePath: string,
@@ -299,10 +283,6 @@ const bindsInputSchemaName = (name: ts.BindingName): boolean => {
   return name.elements.some((element) =>
     !ts.isOmittedExpression(element) && bindsInputSchemaName(element.name));
 };
-
-export const hasExportModifier = (statement: ts.Statement): boolean =>
-  ts.canHaveModifiers(statement) &&
-  (ts.getModifiers(statement) ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword);
 
 const findInputSchemaExport = (sourceFile: ts.SourceFile): InputSchemaExportSite | undefined => {
   for (const statement of sourceFile.statements) {
