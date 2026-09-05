@@ -395,15 +395,6 @@ it('reaps the render child and its descendants when the service closes mid-rende
   }
 });
 
-const echoRoute = {
-  config: [],
-  id: 'tool:fixture/echo',
-  kind: 'tool',
-  provenance: { kind: 'conventional' },
-  serverId: 'mcp:fixture',
-  source: 'src/mcp/fixture/tools/echo.tsx',
-} as const;
-
 const clockProvider = {
   id: 'provider:clock',
   name: 'clock',
@@ -447,6 +438,7 @@ const telemetryService = (
   manifest: { manifest: telemetryManifest },
   prepared: () => ({
     manifest: { projectRoot: '/project' } as never,
+    stateRoot: routeInvocationStateRoot('/project'),
     targets: ['claude'],
   }),
   renderChild,
