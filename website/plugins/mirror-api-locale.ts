@@ -33,56 +33,94 @@ async function collectMarkdownFiles(directory: string, prefix = ''): Promise<str
   return collected;
 }
 
-function rspressMemberAnchor(title: string): string {
-  return title
-    .replace(/\\([\\_*[\]()])/g, '$1')
-    .replace(/<[^>]*>/g, '')
-    .toLowerCase()
-    .trim()
-    .replace(/[^\p{L}\p{N}\s_-]/gu, '')
-    .replace(/\s/g, '-');
+/**
+ * github-slugger 2.x, the algorithm `@rspress/core` bundles for heading ids
+ * (`node/mdx/remarkPlugins/toc.js`): lowercase, strip this punctuation set,
+ * spaces to hyphens, then `-1`, `-2`, … for a repeated slug, counted per page
+ * in document order. Rspress ships it bundled, not as an importable package.
+ */
+const SLUG_PUNCTUATION = /[\u2000-\u206F\u2E00-\u2E7F\\'!"#$%&()*+,./:;<=>?@[\]^`{|}~]/g;
+
+class HeadingSlugger {
+  readonly #occurrences = new Map<string, number>();
+
+  slug(text: string): string {
+    const base = text.toLowerCase().trim().replace(SLUG_PUNCTUATION, '').replace(/ /g, '-');
+    let slug = base;
+    while (this.#occurrences.has(slug)) {
+      const next = (this.#occurrences.get(base) ?? 0) + 1;
+      this.#occurrences.set(base, next);
+      slug = `${base}-${next}`;
+    }
+    this.#occurrences.set(slug, 0);
+    return slug;
+  }
+}
+
+/** Heading text as Rspress's TOC plugin sees it: escapes resolved, code spans unwrapped. */
+function headingText(raw: string): string {
+  return raw
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/\\([\\`*_{}[\]()#+\-.!<>|~])/g, '$1')
+    .trim();
+}
+
+interface PageAnchors {
+  /** Every id Rspress will assign on the page, in document order. */
+  readonly ids: Set<string>;
+  /** Ids of `### Member` headings only — the targets TypeDoc mislinks. */
+  readonly memberIds: Set<string>;
+}
+
+function collectPageAnchors(markdown: string): PageAnchors {
+  const slugger = new HeadingSlugger();
+  const ids = new Set<string>();
+  const memberIds = new Set<string>();
+  const outsideFences = markdown.replace(/^```[\s\S]*?^```[ \t]*$/gm, '');
+
+  for (const match of outsideFences.matchAll(/^(#{1,6}) (.+)$/gm)) {
+    const id = slugger.slug(headingText(match[2]));
+    ids.add(id);
+    if (match[1].length === 3) {
+      memberIds.add(id);
+    }
+  }
+  return { ids, memberIds };
 }
 
 /**
  * TypeDoc reserves some exported names while building its reflection URLs, so
  * links to those `### Member` headings receive a spurious `-1`. Rspress runs
  * github-slugger over the rendered headings instead, where the member's first
- * occurrence has the unsuffixed anchor. Rewrite only such generated links, and
- * only when exactly one heading on the target page — at any depth — produces
- * that anchor: a same-named `##### property` earlier on the page would make
- * the unsuffixed id point at the property, so an ambiguous link is left as
- * TypeDoc wrote it for the build's anchor check to judge.
+ * occurrence has the unsuffixed anchor, so those links are dead. Rewrite a
+ * `#name-N` link to `#name` only when the fragment does not exist on the
+ * target page (the link is actually dead — a legitimate `#protocol-v1` whose
+ * heading exists is never touched) and `name` is the id of a `###` member
+ * heading there. Anything else is left as TypeDoc wrote it for the build's
+ * anchor check to judge.
  */
 async function alignTypeDocMemberLinks(directory: string, files: string[]): Promise<void> {
-  const memberAnchorCounts = new Map<string, Map<string, number>>();
+  const anchorsByPage = new Map<string, PageAnchors>();
 
   for (const relativePath of files) {
-    const filePath = path.join(directory, relativePath);
-    const markdown = await readFile(filePath, 'utf8');
-    const counts = new Map<string, number>();
-    const outsideFences = markdown.replace(/^```[\s\S]*?^```[ \t]*$/gm, '');
-
-    for (const match of outsideFences.matchAll(/^#{1,6} (.+)$/gm)) {
-      const anchor = rspressMemberAnchor(match[1]);
-      counts.set(anchor, (counts.get(anchor) ?? 0) + 1);
-    }
-    memberAnchorCounts.set(path.resolve(filePath), counts);
+    const filePath = path.resolve(directory, relativePath);
+    anchorsByPage.set(filePath, collectPageAnchors(await readFile(filePath, 'utf8')));
   }
 
   for (const relativePath of files) {
-    const filePath = path.join(directory, relativePath);
+    const filePath = path.resolve(directory, relativePath);
     const markdown = await readFile(filePath, 'utf8');
     const aligned = markdown.replace(
-      /(\]\()([^)\s#]*#)([\p{L}\p{N}_-]+)-\d+(\))/gu,
-      (link, opening: string, target: string, anchor: string, closing: string) => {
+      /(\]\()([^)\s#]*#)([^)\s#]+?)-\d+(\))/g,
+      (link, opening: string, target: string, base: string, closing: string) => {
         const linkedPath = target.slice(0, -1);
-        const targetPath = linkedPath
-          ? path.resolve(path.dirname(filePath), linkedPath)
-          : path.resolve(filePath);
-        if (memberAnchorCounts.get(targetPath)?.get(anchor) !== 1) {
+        const targetPath = linkedPath ? path.resolve(path.dirname(filePath), linkedPath) : filePath;
+        const anchors = anchorsByPage.get(targetPath);
+        const fragment = link.slice(opening.length + target.length, -closing.length);
+        if (!anchors || anchors.ids.has(fragment) || !anchors.memberIds.has(base)) {
           return link;
         }
-        return `${opening}${target}${anchor}${closing}`;
+        return `${opening}${target}${base}${closing}`;
       },
     );
 
