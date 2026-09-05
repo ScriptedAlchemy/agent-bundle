@@ -186,6 +186,24 @@ through the `tools` escape hatch — which belongs under `dependencies`, and `AB
 `output.distPath`, defaulting to `artifact`. Use it as an npm `prepack` script; `--ignore-scripts`
 prevents recursion, and no npm lifecycle ever performs a host install.
 
+That inlining is the compiler's contract, not a bundler default a toolchain upgrade may flip.
+Generated executables — artifact scripts, the routed CLI, MCP entries, hook wrappers, and the
+package build's JavaScript bundles — compile with Rslib's `autoExternal` disabled, `bundle: true`,
+and `splitChunks: false`, and the framework adds no `externals` of its own; Rslib's `node` target
+leaves only Node built-ins (`node:fs`, `path`, plus Yarn PnP's `pnpapi`) external. MCP App views
+inline every script and style into one HTML file. Artifact validation holds the compiled host-pack
+bytes to the same line: a bare specifier that is not a Node built-in is `AB6005`, so a generated
+executable in a host pack loads nothing but built-ins from outside the artifact. A `dependencies`
+entry is therefore only for what the packed files demonstrably need from outside a compiled bundle
+— a package a packed module still imports because the author kept it external through the
+[`tools` hatch](../../reference/configuration.mdx#tools) (possible in the package build's `dist`
+output, which `AB6005` does not walk; a host-pack module with that import fails the build), one a
+prebuilt `.js`/`.mjs`/`.cjs` payload module imports (prebuilt files are opaque to `AB6005`, and
+`AB7014` scans only those extensions, so an extensionless prebuilt module counts for nothing), one
+a consumer-side install script runs, one whose `bin` a packed file executes, or one a packed
+declaration file references — and `AB7014` reports a declared dependency with none of that
+evidence, while `AB7015` reports one a consumer's npm cannot install.
+
 | Code | Meaning |
 | --- | --- |
 | `AB7010` | The dry-run npm inventory omits a package output, artifact manifest or file, install surface, or README. Include `dist` and the artifact directory in the package `files` allowlist. |

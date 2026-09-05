@@ -7,7 +7,9 @@ export default defineConfig({
       bundle: true,
       // The public types are the hand-written `src/index.d.ts`, copied into
       // dist below; the renderer itself is plain ESM, so there is nothing
-      // for a declaration emit to derive.
+      // for a declaration emit to derive. tests/types.ts compiles real calls
+      // against those declarations and tests/declarations.test.ts holds their
+      // value exports equal to the renderer's, so the copy cannot drift.
       dts: false,
       format: 'esm',
       syntax: 'es2022',

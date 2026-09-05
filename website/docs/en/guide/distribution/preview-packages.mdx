@@ -63,11 +63,21 @@ Before that path is enabled, the release owner has to resolve two things: the fi
 and license, and the repository-wide `"access": "restricted"` policy for `agent-bundle`, which is
 not currently overridden with `publishConfig.access`.
 
-`pnpm release` runs the release gate — `pnpm pack:dry-run`, `pnpm lint:release` (`attw` on the
-packed `agent-bundle` tarball with the `esm-only` profile), and `pnpm test:packed:release` — before
-publishing. publint is not a separate gate: every publishable package's `rslib build` runs it
-through `rsbuild-plugin-publint` and fails the build on a warning. That gate is release-only and
-does not replace the ordinary `pnpm check` delivery gate.
+`pnpm release` runs the release gate — `pnpm pack:dry-run`, `pnpm lint:release`, and
+`pnpm test:packed:release` — before publishing. `lint:release` runs `attw` with the `esm-only`
+profile on the packed `agent-bundle`, `rsc-markdown-stream`, and `create-agent-bundle` tarballs,
+then `scripts/check-declaration-imports.mjs` over the same inventories: every `.d.ts` a consumer can
+reach from `exports` may only import packed files, the package's own exported subpaths, `#` imports
+its `imports` map resolves, Node built-ins, and packages declared in `dependencies`,
+`peerDependencies`, or `optionalDependencies` —
+absolute paths and URLs never resolve in a consumer install, and a devDependency such as `zod` in a
+reachable declaration fails the gate, while one in an internal declaration no entry point reaches is
+reported as a warning (`--strict` fails those too; `lint:release` does not pass it). Reachability
+starts from every `types` target under `exports` plus the legacy `types` field, `/// <reference
+types>` is checked like a bare import, and a relative import, `/// <reference path>`, or `exports`
+target that names a file missing from the tarball fails too. publint is not a separate gate: every
+publishable package's `rslib build` runs it through `rsbuild-plugin-publint` and fails the build on
+a warning. That gate is release-only and does not replace the ordinary `pnpm check` delivery gate.
 
 ## Next
 
