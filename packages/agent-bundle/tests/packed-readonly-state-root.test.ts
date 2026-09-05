@@ -8,10 +8,11 @@ import { userDataStateRoot } from '@agent-bundle/runtime';
 import { expect, it } from '@rstest/core';
 
 import { rstestWorkerRoot } from '../../../rstest.worker-isolation.ts';
+import { parseArtifactManifest } from '../src/api.ts';
 import { exists } from '../src/core/paths.ts';
 import { openPackedMcpServer, removeProjectSource } from '../src/test/packed.ts';
 import { resolveWebLaunch } from '../src/web-host/launch.ts';
-import { readWebManifestDocument } from '../src/web-host/manifest.ts';
+import { readWebManifest } from '../src/web-host/manifest.ts';
 import { cachedNpmInstallArguments, installedEnvironment, sharedPackedTarball } from './support/shared-pack.ts';
 
 const execFile = promisify(executeFile);
@@ -130,15 +131,15 @@ it('serves a state-writing tool from a read-only installed artifact without writ
     }
 
     // Resolve the launch the way `<plugin> web` does: the manifest's web
-    // section names the App and its server, whose `executables.mcpServers[]`
-    // launch record holds the artifact-relative entry, and resolveWebLaunch
-    // anchors the code root without naming a state root.
-    const document = await readWebManifestDocument(join(installedRoot, 'agent-bundle.manifest.json'));
-    const declaredApp = document.web?.apps.find((candidate) => candidate.app === app);
-    if (declaredApp === undefined) throw new Error(`The artifact manifest exposes no ${app} App: ${JSON.stringify(document.web)}`);
-    const serverLaunch = document.launches.get(declaredApp.server);
-    if (serverLaunch === undefined) throw new Error(`The artifact manifest has no launch record for ${declaredApp.server}.`);
-    const launch = await resolveWebLaunch({ app: declaredApp, env, launch: serverLaunch, pluginRoot: installedRoot });
+    // section names the App and its artifact-relative entry, and
+    // resolveWebLaunch anchors the code root without naming a state root.
+    const webManifest = await readWebManifest(join(installedRoot, 'agent-bundle.manifest.json'));
+    const declaredApp = webManifest?.apps.find((candidate) => candidate.app === app);
+    if (declaredApp === undefined) throw new Error(`The artifact manifest exposes no ${app} App: ${JSON.stringify(webManifest)}`);
+    const manifest = parseArtifactManifest(await readFile(join(installedRoot, 'agent-bundle.manifest.json'), 'utf8'));
+    const server = manifest.executables.mcpServers.find((candidate) => candidate.name === declaredApp.server);
+    if (server?.launch === undefined) throw new Error(`The artifact manifest declares no launch for ${declaredApp.server}.`);
+    const launch = await resolveWebLaunch({ app: declaredApp, env, launch: server.launch, pluginRoot: installedRoot });
     expect(launch.command).toBe(process.execPath);
     expect(launch.cwd).toBe(installedRoot);
     expect(launch.env['AGENT_BUNDLE_PLUGIN_ROOT']).toBe(installedRoot);
