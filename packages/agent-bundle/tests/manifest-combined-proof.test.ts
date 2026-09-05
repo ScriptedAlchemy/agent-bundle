@@ -380,12 +380,14 @@ describe('the authoritative manifest combined proof', () => {
     await access(join(destination, replacementMarker));
 
     // Re-indexing the marker kept the compiler's evidence: the sidecar is a
-    // copied row, the relocated copy still validates, and a compiled server's
+    // copied row, the validator's only objection to the relocated copy is the
+    // marker outside every layout (never `AB6039`), and a compiled server's
     // launch entry is a bundle whose evidence hash is the manifest's hash of it.
     const evidenceBytes = await readFile(join(relocatedArtifact, compileEvidenceFileName), 'utf8');
     expect(await readFile(join(destination, compileEvidenceFileName), 'utf8')).toBe(evidenceBytes);
     expect((await validateArtifact({ artifactRoot: relocatedArtifact }))
-      .filter((diagnostic) => diagnostic.severity === 'error')).toEqual([]);
+      .filter((diagnostic) => diagnostic.severity === 'error'))
+      .toEqual([expect.objectContaining({ code: 'AB6014', generatedPath: replacementMarker })]);
     const evidence = parseCompileEvidenceRecord(evidenceBytes);
     const replacementManifest = parseArtifactManifest(replacementManifestBytes);
     const compiledLaunches = replacementManifest.executables.mcpServers
