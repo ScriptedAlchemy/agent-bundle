@@ -6,6 +6,7 @@ import { chromium } from 'playwright';
 
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import { startRuntimePlaygroundFixture } from '../tests/helpers/runtime-playground-fixture.ts';
+import { browserLaunchOptions } from '../tests/support/browser-launch-options.ts';
 
 const browserTimeout = 30_000 * timeScale;
 /**
@@ -404,7 +405,7 @@ const capture = async (outputs) => {
       readFile(fixture.appStyles, 'utf8'),
     ]);
     phase('launch-browser');
-    browser = await chromium.launch({ channel: 'chrome', headless: true });
+    browser = await chromium.launch({ ...browserLaunchOptions, headless: true });
     const context = await browser.newContext({ viewport: desktopViewport });
     const page = await context.newPage();
     const pageErrors = [];

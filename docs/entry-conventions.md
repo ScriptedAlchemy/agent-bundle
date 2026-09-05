@@ -1208,12 +1208,17 @@ module specifier (`agent-bundle/meta`, or a registry specifier such as
 and through a post-build scan of the emitted bundle for function-form
 `externals` — because generated executables must stay self-contained. The
 hatch customizes *how code compiles*, never *what the artifact promises*. The
-framework's own profile keeps the same promise: `autoExternal` is off,
-`bundle: true`, `splitChunks: false`, and no `externals` are added, so Rslib's
-`node` target leaves only Node built-ins (and `pnpapi`) external, and `AB6005`
-fails any bare specifier that is not a Node built-in in every compiled module
-— host-pack modules and the package build's `dist` bundles alike — so the
-hatch cannot externalize a dependency on the author's behalf.
+framework's own profile keeps the same promise: `output.autoExternal` is
+`false`, `bundle: true`, `splitChunks: false`, and no `externals` are added, so
+Rslib's `node` target leaves only Node built-ins (and `pnpapi`) external, and
+`AB6005` fails any bare specifier that is not a Node built-in in every compiled
+module — host-pack modules and the package build's `dist` bundles alike — so
+the hatch cannot externalize a dependency on the author's behalf. Run-time
+path references are kept the same way: a `new URL(…, import.meta.url)` or
+`new Worker(new URL(…))` in consumer or generated code names a file beside the
+artifact, so the invariant layer turns the bundler's URL and worker asset
+processing off after the hatch and the expression reaches the artifact
+verbatim.
 
 The hatch merges *beside* the framework profile, not over it: `plugins`
 arrays concatenate, and Rsbuild's plugin manager appends every plugin it is
@@ -1225,16 +1230,17 @@ reports that as `AB4724` (an error, like the other `tools` shape checks) with
 the plugin and package name; remove the entry, the framework already
 registers it.
 
-The hatch executes under two different bundler engine copies. Artifact
-scripts, MCP entries, hook wrappers, and the package build compile through
-Rslib, which runs the Rsbuild/Rspack versions nested inside `@rslib/core`
-(currently the 2.1.x line); MCP App views compile through the
-workspace-pinned `@rsbuild/core` (currently 2.2.x), until Rslib catches up to
-the Rsbuild 2.2 line. So a hatch must never construct plugins or run
-`instanceof` checks against an imported `@rspack/core`: a class imported from
-a separately installed `@rspack/core` has a different identity than whichever
-engine executes the config. Use instead the utils argument Rslib/Rsbuild pass
-to `tools.rspack` mutator functions —
+The hatch executes on one bundler engine. Artifact scripts, MCP entries,
+hook wrappers, and the package build compile through Rslib; MCP App views
+compile through `@rsbuild/core`; and agent-bundle pins `@rsbuild/core` inside
+the range its `@rslib/core` accepts, so a consumer installs a single
+`@rsbuild/core`, a single `@rspack/core`, and a single native Rspack binding
+(a packed-consumer test holds that line). That engine is agent-bundle's
+dependency, not the consumer's: a class imported from a separately installed
+`@rspack/core` can have a different identity than the engine executing the
+config. So a hatch must never construct plugins or run `instanceof` checks
+against an imported `@rspack/core`. Use instead the utils argument
+Rslib/Rsbuild pass to `tools.rspack` mutator functions —
 `tools: { rspack: (config, { rspack }) => { ... } }` — which always hands the
 engine's own `rspack` object.
 
@@ -1287,9 +1293,9 @@ agent-bundle inspect --bundler [--target <t>] [--json]
 Dumps the synthesized bundler configuration for every output the build
 composes — artifact scripts, MCP entries, hook wrappers, the per-target MCP
 Apps Rsbuild config, and the `dist/` package build — exactly as the build
-lowers it: the framework profile with the consumer `tools` hatch merged over
-it and the invariant hook appended last (functions render as
-`[function <name>]`). Entries the framework wraps also carry the generated
+lowers it: in production mode whatever `NODE_ENV` says, the framework profile
+with the consumer `tools` hatch merged over it and the invariant hook appended
+last (functions render as `[function <name>]`). Entries the framework wraps also carry the generated
 wrapper module source (`generatedEntry`). The composition comes from the same
 functions the build uses, so the dump cannot drift from what compiles.
 
