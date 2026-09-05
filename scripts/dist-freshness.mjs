@@ -17,8 +17,9 @@
  * rebuilds the example payload instead of short-circuiting on a stale one.
  *
  * Comparison. A package is `missing` when its output directory is absent or
- * holds no file, `stale` when the newest input mtime is later than the
- * newest output mtime, `fresh` otherwise. Inputs count files and
+ * holds no file, `contaminated` when an output contains the packed runtime
+ * fixture marker, `stale` when the newest input mtime is later than the
+ * newest output mtime, and `fresh` otherwise. Inputs count files and
  * directories: a directory's mtime moves when an entry is created, renamed
  * or deleted, which is how a removed source file is noticed. Outputs count
  * files only — the bytes a test loads. While walking, `node_modules`,
@@ -86,7 +87,7 @@
  * descriptor per payload tree (`dist/app`, `dist/runtime`) keeps
  * "missing" per tree, matching the presence probes it replaces.
  */
-import { readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 
 /**
@@ -107,9 +108,10 @@ import { relative, resolve } from 'node:path';
  * @typedef {object} DistFreshness
  * @property {string} name
  * @property {string} output Absolute path of the output directory.
- * @property {'fresh' | 'stale' | 'missing'} status
+ * @property {'fresh' | 'stale' | 'missing' | 'contaminated'} status
  * @property {NewestEntry} newestInput
  * @property {NewestEntry | undefined} newestOutput Undefined when `status` is `missing`.
+ * @property {string | undefined} fixtureMarkerPath File containing the packed-test fixture marker.
  */
 
 const skippedInputDirectoryNames = new Set(['node_modules', 'dist', '.rstest-temp']);
@@ -163,6 +165,25 @@ export const newestEntry = (path, options = {}) => {
   return newest;
 };
 
+export const runtimeRebundleFixtureMarker = 'AGENT_BUNDLE_RUNTIME_REBUNDLE_FIXTURE_EXECUTED';
+
+/** Returns the first built file containing the packed-only runtime marker. */
+const fixtureMarkerPath = (root) => {
+  const marker = Buffer.from(runtimeRebundleFixtureMarker);
+  const pending = [root];
+  while (pending.length > 0) {
+    const directory = pending.pop();
+    const entries = readdirSync(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      if (isSkippedOutputDirectory(entry.name)) continue;
+      const path = resolve(directory, entry.name);
+      if (entry.isDirectory()) pending.push(path);
+      else if (entry.isFile() && readFileSync(path).includes(marker)) return path;
+    }
+  }
+  return undefined;
+};
+
 /**
  * Freshness of one built output. Declared inputs that do not exist are
  * ignored (a package may lack an optional config file); a descriptor none of
@@ -182,8 +203,15 @@ export const distFreshness = (descriptor) => {
   }
   const output = resolve(root, descriptor.output);
   const newestOutput = newestEntry(output, { skip: isSkippedOutputDirectory });
-  const status = newestOutput === undefined ? 'missing' : newestInput.mtimeMs > newestOutput.mtimeMs ? 'stale' : 'fresh';
-  return { name, output, status, newestInput, newestOutput };
+  const markerPath = newestOutput === undefined ? undefined : fixtureMarkerPath(output);
+  const status = newestOutput === undefined
+    ? 'missing'
+    : markerPath !== undefined
+      ? 'contaminated'
+      : newestInput.mtimeMs > newestOutput.mtimeMs
+        ? 'stale'
+        : 'fresh';
+  return { name, output, status, newestInput, newestOutput, fixtureMarkerPath: markerPath };
 };
 
 /**
@@ -195,10 +223,10 @@ export const checkDistFreshness = (descriptors) => descriptors.map(distFreshness
 const timestamp = (mtimeMs) => new Date(mtimeMs).toISOString();
 
 /**
- * One actionable message naming every stale or missing output and ending
- * with the fix, or the empty string when every result is fresh. Paths print
- * relative to `relativeTo` (default: the working directory) when they lie
- * under it.
+ * One actionable message naming every stale, missing, or contaminated output
+ * and ending with the fix, or the empty string when every result is fresh.
+ * Paths print relative to `relativeTo` (default: the working directory) when
+ * they lie under it.
  *
  * @param {readonly DistFreshness[]} results
  * @param {{ readonly relativeTo?: string }} [options]
@@ -213,6 +241,10 @@ export const formatDistFreshnessFailure = (results, options = {}) => {
   const lines = [];
   for (const result of results) {
     if (result.status === 'fresh') continue;
+    if (result.status === 'contaminated') {
+      lines.push(`  ${result.name}: contaminated — ${display(result.fixtureMarkerPath ?? result.output)} contains the packed runtime fixture marker`);
+      continue;
+    }
     if (result.status === 'missing' || result.newestOutput === undefined) {
       lines.push(`  ${result.name}: missing — ${display(result.output)} has no built files`);
       continue;
@@ -224,7 +256,7 @@ export const formatDistFreshnessFailure = (results, options = {}) => {
   }
   if (lines.length === 0) return '';
   return [
-    'Built output is stale or missing; tests and `pnpm typecheck` load it from dist:',
+    'Built output is stale, missing, or contaminated; tests and `pnpm typecheck` load it from dist:',
     ...lines,
     'A green run over that dist tests old code; run `pnpm build`.',
   ].join('\n');
@@ -232,7 +264,7 @@ export const formatDistFreshnessFailure = (results, options = {}) => {
 
 /**
  * Throws an Error carrying `formatDistFreshnessFailure`'s message when any
- * descriptor's output is stale or missing.
+ * descriptor's output is stale, missing, or contaminated.
  *
  * @param {readonly DistDescriptor[]} descriptors
  * @param {{ readonly relativeTo?: string }} [options]

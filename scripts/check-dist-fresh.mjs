@@ -1,9 +1,10 @@
 /**
  * `node scripts/check-dist-fresh.mjs` — exits 1 with the rebuild instruction
- * when any dist `pnpm build` produces is older than its inputs or absent;
- * silent and 0 otherwise. The root `typecheck` script runs it first, because
- * `tsc` types the tests against `dist/*.d.ts` (scripts/dist-freshness.mjs
- * explains the descriptors and the mtime rule).
+ * when any dist `pnpm build` produces is older than its inputs, absent, or
+ * contains the packed runtime fixture marker; silent and 0 otherwise. The
+ * root `typecheck` script runs it first, because `tsc` types the tests against
+ * `dist/*.d.ts` (scripts/dist-freshness.mjs explains the descriptors and the
+ * mtime rule).
  */
 import { resolve } from 'node:path';
 
