@@ -53,13 +53,13 @@ describe('compilerCarryingSpecifiers', () => {
       "import 'agent-bundle/routes';",
       "import { appResourceUri } from 'agent-bundle/routes';",
       "import { launchEnv } from 'agent-bundle/launch-env';",
-      "import { spawnServeApp } from 'agent-bundle/serve-app-command';",
+      "import { runWebCommand } from 'agent-bundle/web-host';",
       "import { deeper } from 'agent-bundle/api/deeper';",
       "import { z } from 'zod';",
       "import { local } from './local';",
       "export * from 'agent-bundle/meta';",
       "const later = await import('agent-bundle/mcp-entry');",
-      'export default async () => [createAppClient, appResourceUri, launchEnv, spawnServeApp, deeper, z, local, later];',
+      'export default async () => [createAppClient, appResourceUri, launchEnv, runWebCommand, deeper, z, local, later];',
     ));
     expect(clean).toEqual([]);
     expect(Object.isFrozen(clean)).toBe(true);
@@ -343,7 +343,7 @@ describe('relative import graph', () => {
 
 describe('validateRouteFrameworkImports', () => {
   const recovery =
-    'Keep framework calls in a host process: serve an MCP App from a routed command with spawnServeApp from agent-bundle/serve-app-command, which spawns agent-bundle serve-app; use import type for framework types; otherwise move the call into a package.json script or a hand-written .mjs run from the checkout.';
+    'Keep framework calls in a host process: expose the App with web.apps and open it with <plugin> web; use import type for framework types; otherwise move the call into a package.json script or a hand-written .mjs run from the checkout.';
 
   it('reports one AB4837 naming the route, the specifier, and the executable', () => {
     const diagnostics = validateRouteFrameworkImports(

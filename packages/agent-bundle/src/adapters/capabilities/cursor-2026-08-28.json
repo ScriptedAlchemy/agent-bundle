@@ -701,6 +701,10 @@
       ],
       "secretValuesEmitted": false,
       "state": "supported"
+    },
+    "web": {
+      "reason": "browser host inside the composite artifact; <plugin> web runs from the installed root on any host",
+      "state": "supported"
     }
   },
   "tokens": {
@@ -741,5 +745,9 @@
       "2026-09-03 (#407): hooks registration is plugin-scoped via .cursor-plugin/plugin.json `hooks` -> the hooks document (hooks/hooks.json at the time; .cursor-plugin/hooks.json since #555); no ~/.cursor/hooks.json entry is emitted or required. Observed on Cursor 3.18.25 (isolated HOME, Agents window, shell tool call): the emitted pack's preToolUse (matcher ^Shell$), postToolUse, and stop hooks fired with CURSOR_PLUGIN_ROOT substituted and cwd = plugin root, identical to the known-loading ~/.cursor/plugins/local/tracedecay and to official marketplace plugins (cursor-public/continual-learning uses `bun run ${CURSOR_PLUGIN_ROOT}/hooks/...`). https://cursor.com/docs/hooks: 'All matching hooks from every source run', so a user-level duplicate would double-fire; Doctor reports it (AB7323). See docs/audits/2026-09-03-cursor-plugin-hooks-registration.md.",
       "2026-09-03 (#407): the #407 report (Cursor 3.16.21, ~/.cursor-server) is not reproducible on 3.18.25; https://cursor.com/docs/cli/changelog (August 11, 2026 release) records 'Plugin hooks run from installed plugins ... now execute and refresh when plugins reload', a vendor-side fix in that window. Installation: `install cursor --mode local` copies to ~/.cursor/plugins/local/<name> (https://cursor.com/docs/plugins#test-plugins-locally); `--mode marketplace` stages a committed .cursor-plugin/marketplace.json repository (https://cursor.com/docs/reference/plugins#cursor-multi-plugin-repositories) for Customize -> 'Add Plugins from Local Repository', because no plugin install deeplink exists and `cursor-agent plugin marketplace add` accepts hosted git URLs only."
     ]
+  },
+  "web": {
+    "reason": "browser host inside the composite artifact; <plugin> web runs from the installed root on any host",
+    "state": "supported"
   }
 }

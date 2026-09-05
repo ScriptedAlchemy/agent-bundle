@@ -10,10 +10,12 @@ import {
   noticeDeliveryAdvertisementFrom,
   supportedCapability,
   unavailableCapability,
+  webSurfaceCapability,
 } from '../src/adapters/capability-state.ts';
 import claudeCapabilityTable from '../src/adapters/capabilities/claude-2.1.260.json' with { type: 'json' };
 import codexCapabilityTable from '../src/adapters/capabilities/codex-0.147.0.json' with { type: 'json' };
 import cursorCapabilityTable from '../src/adapters/capabilities/cursor-2026-08-28.json' with { type: 'json' };
+import portableCapabilityTable from '../src/adapters/capabilities/portable-1.0.0.json' with { type: 'json' };
 import cursorHooksSchema from '../src/adapters/schemas/cursor/hooks.schema.json' with { type: 'json' };
 import { cursorContractCapabilityRows } from '../src/adapters/cursor.ts';
 import { NOTICE_DELIVERY_ROUTES } from '../src/adapters/notice-delivery.ts';
@@ -909,6 +911,18 @@ it('publishes the routed CLI bin capability with its bin layout on every built-i
   })).toThrow(/supported cli capability without a routed CLI bin layout/u);
   expect(registry.hostsComponent('cursor', 'cli')).toBe(true);
   expect(registry.hostsComponent('unknown-target', 'cli')).toBe(false);
+});
+
+it('pins a supported web surface row on every host capability table (#564)', () => {
+  const row = {
+    reason: 'browser host inside the composite artifact; <plugin> web runs from the installed root on any host',
+    state: 'supported',
+  };
+  expect(webSurfaceCapability).toBe('web');
+  for (const table of [claudeCapabilityTable, codexCapabilityTable, cursorCapabilityTable, portableCapabilityTable]) {
+    expect(table.web).toEqual(row);
+    expect(table.plugin.web).toEqual(row);
+  }
 });
 
 it('rejects a malformed inspection component capability when the adapter registers', () => {

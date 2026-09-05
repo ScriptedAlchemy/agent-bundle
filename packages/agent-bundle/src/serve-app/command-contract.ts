@@ -1,11 +1,12 @@
 /**
- * The `agent-bundle serve-app` command's wire contract, shared by the CLI
- * that implements it and `agent-bundle/serve-app-command` (#558), which
- * spawns it from a routed command: the consent vocabulary `--allow` accepts
- * and the ready line printed once the App's host listens. One module writes
- * and reads them so the two never drift — a parser that lagged the CLI's own
- * output would leave a routed command waiting on a server that is already
- * up. Plain Node: it is bundled into generated executables.
+ * The ready-line and consent-vocabulary contract shared by
+ * `agent-bundle serve-app` and the generated `<plugin> web` command: the
+ * consent vocabulary `--allow` accepts and the ready line printed once the
+ * App's host listens. One module writes and reads them so the two never
+ * drift — a parser that lagged the CLI's own output would leave a command
+ * waiting on a server that is already up. Plain Node (the consent vocabulary
+ * comes from `core/mcp-app-allow.ts`): it is bundled into generated
+ * executables. There is no spawner.
  */
 export {
   isServeAppAllowCapability,
