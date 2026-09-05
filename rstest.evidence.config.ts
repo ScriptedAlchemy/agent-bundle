@@ -9,9 +9,8 @@ import { withAgentBundleRslibConfig } from './rstest.rslib.ts';
  * documentation-artifact journeys listed in nightlyEvidenceTestFiles. One
  * worker — each journey drives its own Chrome + dev-server + rsbuild trio
  * end to end, so there is nothing to parallelize — and the same shared
- * example-payload globalSetup the integration pool uses, because the
- * capture harness copies `examples/rsc-agent-runtime/dist` through
- * runtime-playground-fixture.ts.
+ * example-payload globalSetup the integration pool uses. The pool passes
+ * with an empty list so the nightly stays green while no journey is listed.
  */
 export default defineConfig({
   extends: withAgentBundleRslibConfig(),
@@ -20,5 +19,6 @@ export default defineConfig({
   pool: { maxWorkers: 1 },
   setupFiles: [...workspaceSetupFiles],
   isolate: true,
+  passWithNoTests: true,
   ...poolTimeouts(30_000),
 });

@@ -118,17 +118,13 @@ export const integrationTestFiles: readonly string[] = [
 /**
  * Evidence-capture harnesses: browser journeys whose product is a
  * documentation artifact (screenshots + evidence.json), not a per-PR
- * behavioral proof. The behavioral contracts they exercise (HMR activation,
- * last-good retention, recovery) are already covered per PR by
- * runtime-playground.e2e.test.ts and runtime-playground-hmr.e2e.test.ts in
- * the integration pool. Fast capture cleanup contracts stay per PR in
- * runtime-playground-capture-cleanup.test.ts. The evidence journey runs
- * through the root `test:evidence` script in CI's nightly schedule instead —
- * evidence regenerates when the flow changes, not on every PR (#128).
+ * behavioral proof. They run through the root `test:evidence` script in CI's
+ * nightly schedule — evidence regenerates when the flow changes, not on every
+ * PR (#128). The list is empty since the Runtime Playground destination was
+ * removed (#600); the redesigned route workspace's evidence journey lands with
+ * the unified trace.
  */
-export const nightlyEvidenceTestFiles: readonly string[] = [
-  'packages/workbench/tests/runtime-playground-capture.test.ts',
-];
+export const nightlyEvidenceTestFiles: readonly string[] = [];
 
 /**
  * Installed-host contract proofs: every test spawns the real `claude` /
