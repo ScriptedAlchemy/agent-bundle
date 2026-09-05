@@ -30,8 +30,9 @@ import { scanModuleLoads, type ComputedModuleLoad, type LiteralModuleLoad } from
  * as a terminal and is not walked; a bare name that is not a built-in, a
  * non-literal specifier, or a loader name used as a value (argument, array
  * element, object-literal value, ternary branch, return/arrow value,
- * assignment right-hand side, export — not a binding position: parameter,
- * `catch`, destructuring pattern, import specifier) is a finding.
+ * assignment right-hand side, default initializer, export — not a binding
+ * position: parameter, `catch`, destructuring pattern, import specifier) is
+ * a finding.
  */
 
 const javaScriptModuleSuffix = /\.(?:m?js)$/u;

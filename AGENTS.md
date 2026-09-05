@@ -93,7 +93,8 @@
   as a terminal and not walked). A bare package name fails, a non-literal
   argument fails, and a loader used as a value rather than called fails —
   a binding position (parameter, `catch`, destructuring pattern, import
-  specifier) is not a use as a value. One scanner,
+  specifier) is not a use as a value; a default initializer (`x = require`)
+  is. One scanner,
   `src/build/module-loads.ts`, reads those loads for `AB6005` and for the
   prepack gate alike; its header states the approximations it makes (a `/`
   after `)` or an identifier is division, and the hand-authored forms it

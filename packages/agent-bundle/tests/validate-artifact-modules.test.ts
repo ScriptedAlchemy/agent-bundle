@@ -160,6 +160,8 @@ describe('validateJavaScriptModules', () => {
     ['x ? load : y', `${boundLoader('const')}export const pick = (x, y) => x ? load : y;\n`, boundReference],
     ['return load', `${boundLoader('const')}export function loader() {\n  return load;\n}\n`, boundReference],
     ['=> load', `${boundLoader('const')}export const loader = () => load;\n`, boundReference],
+    ['a default initializer, function f(x = require) {', 'export function f(x = require) { return x; }\n', requireReference],
+    ['a default initializer in a pattern, const { x = load } = host', `${boundLoader('const')}const { x = load } = host;\nexport { x };\n`, boundReference],
   ])('rejects a compiled module that passes %s on as a value', async (_form, source, detail) => {
     await expect(validateProbe(source)).resolves.toEqual([finding(probe, detail)]);
   });

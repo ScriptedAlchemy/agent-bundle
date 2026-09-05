@@ -42,7 +42,7 @@ JavaScript target is walked in turn. In a host pack only, a relative target to l
 is accepted as a terminal and is not walked. No non-literal dynamic imports or load arguments, no
 bare package names, nothing outside the tree, and no `require` or loader used as a value instead
 of called; parameters, `catch` bindings, destructuring patterns, and import specifiers are binding
-positions rather than references. Comments, strings, and template text are stepped over, as are
+positions rather than references, while a default initializer (`x = require`) is a reference. Comments, strings, and template text are stepped over, as are
 regular-expression literals after an operator, `(`, `,`, `;`, `{`, `}`, `[`, `:`, `?`, `!`, or
 a keyword such as `return`, `typeof`, or `case`; `${…}` template substitutions are code and are
 scanned. Binding and alias names are read from code only, never from comments or strings. After

@@ -79,6 +79,8 @@ describe('scanModuleLoads reports a literal load', () => {
       literal('require', 'require', '4'),
     ]],
     ['a bound loader called in a template substitution', 'const load = createRequire(import.meta.url);\nconst v = `${load("driver-package")}`;\n', [literal('bound-loader', 'load', 'driver-package')]],
+    ['a loader bound and called inside a template substitution', 'const v = `${(() => { const load = createRequire(import.meta.url); return load("driver-package"); })()}`;\n', [literal('bound-loader', 'load', 'driver-package')]],
+    ['a factory aliased and called inside a template substitution', 'const v = `${(() => { const { createRequire: mk } = host; return mk(import.meta.url)("driver-package"); })()}`;\n', [literal('createRequire', 'mk', 'driver-package')]],
     [
       'a module bound from a factory call, then called: the load is the factory call, the binding is not a loader',
       'const pad = createRequire(import.meta.url)("driver-package");\nconst where = createRequire(import.meta.url).resolve("asset-pkg");\nexport const v = `${pad("", 2)}${where.length}`;\npad(name, 2);\n',
@@ -197,8 +199,29 @@ describe('scanModuleLoads reports a loader passed on as a value', () => {
     ['export { require }', 'const require = createRequire(import.meta.url);\nexport { require };\n', [reference('require', 'require')]],
     ['fn(require) in a template substitution', 'const text = `${describe(require)}`;\n', [reference('require', 'require')]],
     ['x ? require : y in a template substitution', 'const text = `${flag ? require : fallback}`;\n', [reference('require', 'require')]],
+    // A default initializer is a value the binding beside it receives, not a binding position.
+    ['function f(x = require) {', 'function f(x = require) { return x; }\n', [reference('require', 'require')]],
+    ['(x = load) => x for a bound loader', 'const load = createRequire(import.meta.url);\nconst g = (x = load) => x;\n', [reference('bound-loader', 'load')]],
+    ['const { x = require } = host', 'const { x = require } = host;\n', [reference('require', 'require')]],
   ])('for %s', (_form, source, loads) => {
     expect(scanModuleLoads(source)).toEqual(loads);
+  });
+
+  // The list walks that exclude a binding position read about a thousand characters past each loader name, so a list
+  // that names a loader thousands of times is scanned in time linear in its length, and past the bound every name is
+  // reported as a value: a 50 KB argument list, pattern, and declarator list each finish well inside a second.
+  it.each([
+    ['an argument list', (names: string) => `fn(${names});\n`, 6000],
+    ['a destructuring pattern past the bound', (names: string) => `const { ${names} } = host;\n`, undefined],
+    ['a declarator list past the bound', (names: string) => `let a, ${names};\n`, undefined],
+  ])('scans %s naming require 6000 times in linear time', (_form, wrap, exact) => {
+    const source = wrap(Array.from({ length: 6000 }, () => 'require').join(', '));
+    const started = performance.now();
+    const loads = scanModuleLoads(source);
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(loads.every((load) => load.kind === 'reference')).toBe(true);
+    if (exact !== undefined) expect(loads).toHaveLength(exact);
+    else expect(loads.length).toBeGreaterThan(0);
   });
 });
 

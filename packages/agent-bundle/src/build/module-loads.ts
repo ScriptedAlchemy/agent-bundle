@@ -55,8 +55,11 @@ import { DigestCache } from '../core/digest.ts';
  * (`const { require } = host`, `let [a, require] = xs`, `({ require } = host)`,
  * `const { a: { require } } = host`), a later declarator (`let a, require;`),
  * and an import or re-export specifier list (`import { require } from "./x"`,
- * `export { require } from "./x"`). The list walk reads a parameter list
- * nested two calls deep and a pattern nested one level deep; deeper, the
+ * `export { require } from "./x"`). A default initializer is a value, not a
+ * binding: `function f(x = require) {`, `(x = load) => x`, and
+ * `const { x = require } = host` are references. The list walk reads a
+ * parameter list nested two calls deep and a pattern nested one level deep,
+ * each to about a thousand characters past the name; deeper or longer, the
  * name is reported as a value. `export { require as r }` and
  * `export default require` are not read.
  *
@@ -73,8 +76,9 @@ import { DigestCache } from '../core/digest.ts';
  * (`${JSON.stringify({ a: { b } })}`); a template nesting deeper is not
  * recognised, and its text is scanned as code, quasis included. The
  * `createRequire` aliases and bound loaders tracked by name are read from
- * the code between those tokens, so a binding written in a comment or a
- * string binds nothing.
+ * the code between those tokens and from substitution bodies, so a binding
+ * written in a comment or a string binds nothing and one written inside
+ * `${…}` binds like any other.
  *
  * Two approximations remain. A `/` is read as a regular-expression literal
  * where an operand is expected — after an operator other than `++` and `--`,
@@ -277,17 +281,36 @@ interface BindingNames {
   readonly loaders: readonly string[];
 }
 
+const backtick = '\x60';
+/** Whether a template literal token has substitutions to scan: one with none is text throughout. */
+const hasSubstitution = (template: string): boolean => template.startsWith(backtick) && template.includes('${');
+
 /**
- * The factory and loader names of a source, read from its code alone: every
- * token the scan steps over becomes one space first, so a `const load =
- * createRequire(…)` in a comment or a string binds nothing, while
- * `require("node:module").createRequire(…)` still reads as the qualified
- * factory it is. Without the text `createRequire` anywhere there is no alias
- * and no bound loader, and the token pass is spared.
+ * The code of a source with every token the scan steps over — comment, string,
+ * template text, regular expression — replaced by one space, and the `${…}`
+ * substitution bodies of a template kept as the code they are, projected the
+ * same way in turn.
+ */
+const codeProjection = (source: string): string => source.replace(skippedTokens, (token) =>
+  (hasSubstitution(token) ? codeProjection(substitutionBodies(token)) : ' '));
+
+/** The substitution bodies of one template literal token, in order, one per line. */
+const substitutionBodies = (template: string): string => Array.from(
+  template.matchAll(templateSubstitution),
+  (match) => match.groups?.substitution ?? '',
+).join('\n');
+
+/**
+ * The factory and loader names of a source, read from its code alone
+ * (`codeProjection`), so a `const load = createRequire(…)` in a comment or a
+ * string binds nothing, one inside a template substitution binds like any
+ * other, and `require("node:module").createRequire(…)` still reads as the
+ * qualified factory it is. Without the text `createRequire` anywhere there is
+ * no alias and no bound loader, and the token pass is spared.
  */
 const bindingNames = (source: string): BindingNames => {
   if (!source.includes('createRequire')) return { factories: ['createRequire'], loaders: ['require'] };
-  const code = source.replace(skippedTokens, ' ');
+  const code = codeProjection(source);
   const factories = factoryNames(code);
   return { factories, loaders: loaderNames(code, factories) };
 };
@@ -305,11 +328,19 @@ const bindingNames = (source: string): BindingNames => {
  * the `,` of a declaration whose earlier declarators sit on the same
  * statement (`let a, require;`).
  */
-const parameterList = String.raw`(?:[^();]|${nestedArguments})*[)]\s*(?:=>|\{)`;
-const patternContent = String.raw`(?:[^{}[\]();]|\{[^{}[\]();]*\}|\[[^{}[\]();]*\])*`;
+/**
+ * How far a list walk reads from a loader name: a parameter list, pattern, or
+ * declarator list in emitted code is a few hundred characters at most, and a
+ * walk to the end of every list from every loader name in it is quadratic in
+ * a list that names a loader thousands of times. Past the bound the name is
+ * reported as a value.
+ */
+const listReach = 1024;
+const parameterList = String.raw`(?:[^();]|${nestedArguments}){0,${listReach}}[)]\s*(?:=>|\{)`;
+const patternContent = String.raw`(?:[^{}[\]();]|\{[^{}[\]();]{0,${listReach}}\}|\[[^{}[\]();]{0,${listReach}}\]){0,${listReach}}`;
 const patternTail = String.raw`${patternContent}(?:[}\]]${patternContent})?[}\]]\s*(?:=(?![=>])|from\b)`;
 const declaredPattern = String.raw`\b(?:const|let|var)\s*[{[]${patternContent}(?:[{[]${patternContent})?`;
-const declaratorList = String.raw`\b(?:const|let|var)\s+[^;{}()[\]]*,\s*`;
+const declaratorList = String.raw`\b(?:const|let|var)\s+[^;{}()[\]]{0,${listReach}},\s*`;
 
 /**
  * One pass over a source: the tokens the scan steps over, then the calls and
@@ -341,7 +372,9 @@ const loadScanner = (loaders: readonly string[], factories: readonly string[]): 
   // character, and the list walks run only where a loader name stands after an operator — a walk at every position
   // after an operator is quadratic in a stretch of source without brackets.
   const names = loaders.join('|');
-  const value = String.raw`(?<![\w$.#])(?<reference>${names})(?![\w$])(?<=(?:=>|\breturn|[=(,[{:?|&])\s*(?:${names}))(?=\s*(?:[;,)\]}]|\n|$))(?<!(?:${declaredPattern}|${declaratorList})(?:${names}))(?!${parameterList})(?!${patternTail})`;
+  // After `=` the name is an initializer or an assignment's right-hand side — `const l = require`, `x = load`,
+  // and a default, `function f(x = require) {`, `const { x = require } = host` — a value wherever the list is.
+  const value = String.raw`(?<![\w$.#])(?<reference>${names})(?![\w$])(?=\s*(?:[;,)\]}]|\n|$))(?:(?<=(?<![=!<>])=\s*(?:${names}))|(?<=(?:=>|\breturn|[(,[{:?|&])\s*(?:${names}))(?<!(?:${declaredPattern}|${declaratorList})(?:${names}))(?!${parameterList})(?!${patternTail}))`;
   const consequent = String.raw`(?<![\w$.#])(?<ternary>${names})(?![\w$])(?=\s*:)(?<=\?\s*(?:${names}))`;
   return new RegExp(`${skippedToken}|${call}(?:${literal}|${notDefinition}${computed})|${value}|${consequent}`, 'gu');
 };
@@ -367,10 +400,6 @@ const loadForm = (groups: ScanGroups): ModuleLoadForm => {
   if (groups.loader === 'require') return groups.loaderResolve === undefined ? 'require' : 'require.resolve';
   return groups.loaderResolve === undefined ? 'bound-loader' : 'bound-loader.resolve';
 };
-
-const backtick = '\x60';
-/** Whether a template literal token has substitutions to scan: one with none is text throughout. */
-const hasSubstitution = (template: string): boolean => template.startsWith(backtick) && template.includes('${');
 
 /**
  * The loads and loader references of one stretch of code, appended in source
