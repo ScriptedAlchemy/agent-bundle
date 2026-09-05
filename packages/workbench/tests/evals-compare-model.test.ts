@@ -12,7 +12,7 @@ import {
   comparisonMatrixRowFor,
   comparisonRunOptionsFor,
   comparisonsViewFor,
-} from '../src/comparisons/comparisons-model.ts';
+} from '../src/evals/evals-compare-model.ts';
 
 const run = (id: string, createdAt: string): EvalRunRecord => ({
   agentBundleVersion: '0.1.0',

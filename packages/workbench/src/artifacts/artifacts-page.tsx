@@ -7,7 +7,6 @@ import type { ArtifactEpochDiff, ArtifactInspection } from '../../../agent-bundl
 import { ArtifactClient, ArtifactClientError } from './artifact-client.ts';
 import {
   artifactViewFor,
-  type ArtifactDetailRow,
   type ArtifactTreeRow,
   type ArtifactView,
 } from './artifacts-model.ts';
@@ -65,28 +64,94 @@ export const compareArtifactEpochs = async (
   return client.diff(base, epochId);
 };
 
-const DetailRows = ({ label, rows }: {
-  readonly label: string;
-  readonly rows: readonly ArtifactDetailRow[];
-}) => <section className="artifact-detail">
-  <h2>{label}</h2>
-  <dl className="artifact-detail-rows">
-    {rows.map((detail) => <div key={detail.label}><dt>{detail.label}</dt><dd>{detail.value}</dd></div>)}
-  </dl>
-</section>;
+const provenanceFor = (view: ArtifactView, path: string): readonly string[] =>
+  view.provenance.find((entry) => entry.outputPath === path)?.sourceInputs.map((input) => input.path) ?? [];
 
-const TreeRow = ({ row }: { readonly row: ArtifactTreeRow }) => <tr>
-  <th scope="row" style={{ paddingLeft: `${12 + row.depth * 18}px` }}>
-    <span aria-hidden="true">{row.entry === 'directory' ? '▸' : '·'}</span> {row.name}
-  </th>
-  <td>{row.path}</td>
-  <td>{row.kind ?? 'directory'}</td>
-  <td>{row.bytes === undefined ? '—' : `${row.bytes}`}</td>
-  <td>{row.mode ?? '—'}</td>
-  <td className="artifact-digest">{row.sha256 ?? '—'}</td>
-</tr>;
+const TreeRow = ({
+  detailsOpen,
+  onToggle,
+  provenance,
+  row,
+}: {
+  readonly detailsOpen: boolean;
+  readonly onToggle: () => void;
+  readonly provenance: readonly string[];
+  readonly row: ArtifactTreeRow;
+}) => {
+  if (row.entry === 'directory') {
+    return <tr>
+      <th scope="row" style={{ paddingLeft: `${12 + row.depth * 18}px` }}>
+        <span aria-hidden="true">▸</span> {row.name}
+      </th>
+      <td>{row.path}</td>
+      <td>—</td>
+      <td />
+    </tr>;
+  }
+  return <>
+    <tr>
+      <th scope="row" style={{ paddingLeft: `${12 + row.depth * 18}px` }}>
+        <span aria-hidden="true">·</span> {row.name}
+      </th>
+      <td>{row.path}</td>
+      <td>{row.bytes === undefined ? '—' : `${row.bytes}`}</td>
+      <td>
+        <button
+          aria-expanded={detailsOpen}
+          onClick={onToggle}
+          type="button"
+        >
+          {detailsOpen ? 'Hide details' : 'Details'}
+        </button>
+      </td>
+    </tr>
+    {detailsOpen
+      ? <tr className="artifact-file-details">
+          <td colSpan={4} style={{ paddingLeft: `${30 + row.depth * 18}px` }}>
+            <dl className="artifact-detail-rows">
+              <div><dt>SHA-256</dt><dd className="artifact-digest">{row.sha256 ?? '—'}</dd></div>
+              <div><dt>Mode</dt><dd>{row.mode ?? '—'}</dd></div>
+              <div>
+                <dt>Provenance</dt>
+                <dd>{provenance.length === 0 ? '—' : provenance.join(', ')}</dd>
+              </div>
+            </dl>
+          </td>
+        </tr>
+      : undefined}
+  </>;
+};
 
-/** Epoch identity, the emitted file tree, runtime metadata, and declared provenance of one epoch. */
+const ArtifactTree = ({ view }: { readonly view: ArtifactView }) => {
+  const [openPaths, setOpenPaths] = useState<ReadonlySet<string>>(new Set());
+  const toggle = (path: string): void => {
+    setOpenPaths((current) => {
+      const next = new Set(current);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+  return <section className="artifact-detail">
+    <h2>Emitted files</h2>
+    {view.tree.length === 0
+      ? <p className="empty-row">This target emitted no files.</p>
+      : <table className="artifact-table">
+        <thead>
+          <tr><th scope="col">Name</th><th scope="col">Path</th><th scope="col">Size</th><th scope="col">Details</th></tr>
+        </thead>
+        <tbody>{view.tree.map((row) => <TreeRow
+          detailsOpen={openPaths.has(row.path)}
+          key={row.key}
+          onToggle={() => toggle(row.path)}
+          provenance={provenanceFor(view, row.path)}
+          row={row}
+        />)}</tbody>
+      </table>}
+  </section>;
+};
+
+/** Epoch summary, emitted file tree, and optional per-file details. */
 export const ArtifactInspectionView = ({ view }: ArtifactInspectionViewProps) => <div className="artifact-inspection">
   <p className="artifact-summary" role="status">{view.summary}</p>
   {view.diagnostics.length === 0 ? undefined : <div className="artifact-diagnostics" role="alert">
@@ -97,84 +162,7 @@ export const ArtifactInspectionView = ({ view }: ArtifactInspectionViewProps) =>
       {diagnostic.recovery === undefined ? undefined : <span className="artifact-recovery">{diagnostic.recovery}</span>}
     </p>)}
   </div>}
-  {view.state !== 'ready' ? undefined : <>
-    <DetailRows label="Build identity" rows={view.identity} />
-    <section className="artifact-detail">
-      <h2>Artifact tree</h2>
-      {view.tree.length === 0
-        ? <p className="empty-row">This target emitted no files.</p>
-        : <table className="artifact-table">
-          <thead>
-            <tr><th scope="col">Name</th><th scope="col">Path</th><th scope="col">Kind</th><th scope="col">Bytes</th><th scope="col">Mode</th><th scope="col">SHA-256</th></tr>
-          </thead>
-          <tbody>{view.tree.map((row) => <TreeRow key={row.key} row={row} />)}</tbody>
-        </table>}
-    </section>
-    <section className="artifact-detail">
-      <h2>Runtime</h2>
-      <h3>Hooks</h3>
-      {view.hooks.length === 0
-        ? <p className="empty-row">This build contains no Hooks.</p>
-        : <table className="artifact-table">
-          <thead>
-            <tr><th scope="col">Hook</th><th scope="col">Wrapper path</th><th scope="col">Timeout</th><th scope="col">Bytes</th><th scope="col">SHA-256</th></tr>
-          </thead>
-          <tbody>{view.hooks.map((hook) => <tr key={hook.key}>
-            <th scope="row">{hook.label}</th>
-            <td>{hook.path}</td>
-            <td>{hook.timeout === undefined ? '—' : `${hook.timeout}s`}</td>
-            <td>{hook.bytes}</td>
-            <td className="artifact-digest">{hook.sha256}</td>
-          </tr>)}</tbody>
-        </table>}
-      <h3>MCP servers</h3>
-      {view.mcpServers.length === 0
-        ? <p className="empty-row">This build contains no MCP servers.</p>
-        : <table className="artifact-table">
-          <thead>
-            <tr><th scope="col">Server</th><th scope="col">Manifest path</th><th scope="col">Entry paths</th></tr>
-          </thead>
-          <tbody>{view.mcpServers.map((server) => <tr key={server.key}>
-            <th scope="row">{server.label}</th>
-            <td>{server.manifestPath}</td>
-            <td>{server.entryPaths.length === 0 ? '—' : server.entryPaths.join(', ')}</td>
-          </tr>)}</tbody>
-        </table>}
-      <h3>Executables</h3>
-      {view.executables.length === 0
-        ? <p className="empty-row">This build contains no executable files.</p>
-        : <table className="artifact-table">
-          <thead>
-            <tr><th scope="col">Path</th><th scope="col">Kind</th><th scope="col">Mode</th><th scope="col">Bytes</th><th scope="col">SHA-256</th></tr>
-          </thead>
-          <tbody>{view.executables.map((executable) => <tr key={executable.key}>
-            <th scope="row">{executable.path}</th>
-            <td>{executable.kind}</td>
-            <td>{executable.mode ?? '—'}</td>
-            <td>{executable.bytes}</td>
-            <td className="artifact-digest">{executable.sha256}</td>
-          </tr>)}</tbody>
-        </table>}
-    </section>
-    <section className="artifact-detail">
-      <h2>Provenance</h2>
-      {view.provenance.length === 0
-        ? <p className="empty-row">This build contains no direct source provenance.</p>
-        : <table className="artifact-table">
-          <thead><tr><th scope="col">Output path</th><th scope="col">Source inputs</th></tr></thead>
-          <tbody>{view.provenance.map((entry) => <tr key={entry.key}>
-            <th scope="row">{entry.outputPath}</th>
-            <td>
-              {entry.sourceInputs.length === 0 ? '—' : <ul className="artifact-source-inputs">
-                {entry.sourceInputs.map((input) => <li key={input.path}>
-                  {input.path} <span className="artifact-digest">{input.sha256}</span>
-                </li>)}
-              </ul>}
-            </td>
-          </tr>)}</tbody>
-        </table>}
-    </section>
-  </>}
+  {view.state !== 'ready' ? undefined : <ArtifactTree view={view} />}
 </div>;
 
 /** The counted added, removed, changed, and unchanged files between a base epoch and the active one. */
@@ -190,21 +178,19 @@ export const ArtifactEpochDiffView = ({ view }: ArtifactEpochDiffViewProps) => <
           ? <p className="empty-row">No files were {group.change}.</p>
           : <table className="artifact-table">
             <thead>
-              <tr><th scope="col">Path</th><th scope="col">Base bytes</th><th scope="col">Base SHA-256</th><th scope="col">Candidate bytes</th><th scope="col">Candidate SHA-256</th></tr>
+              <tr><th scope="col">Path</th><th scope="col">Base bytes</th><th scope="col">Candidate bytes</th></tr>
             </thead>
             <tbody>{group.rows.map((row) => <tr key={row.key}>
               <th scope="row">{row.path}</th>
               <td>{row.beforeBytes === undefined ? '—' : `${row.beforeBytes}`}</td>
-              <td className="artifact-digest">{row.beforeSha256 ?? '—'}</td>
               <td>{row.afterBytes === undefined ? '—' : `${row.afterBytes}`}</td>
-              <td className="artifact-digest">{row.afterSha256 ?? '—'}</td>
             </tr>)}</tbody>
           </table>}
       </div>)}
     </>}
 </section>;
 
-/** Inspects one immutable published epoch and compares it against an authored base epoch. */
+/** Inspects one immutable published epoch as an emitted-file tree. */
 export const ArtifactsPage = ({ client, epochId }: ArtifactsPageProps) => {
   const [baseDraft, setBaseDraft] = useState('');
   const [busy, setBusy] = useState(false);
@@ -249,8 +235,8 @@ export const ArtifactsPage = ({ client, epochId }: ArtifactsPageProps) => {
   return <div className="artifacts-content">
     <div className="page-heading artifacts-page-heading">
       <div>
-        <h1>Artifacts</h1>
-        <p>Inspect generated files, runtime metadata, provenance, and changes between published builds.</p>
+        <h1>Artifact</h1>
+        <p>Emitted files for the published build. Hash, mode, and provenance sit behind each file&apos;s details toggle.</p>
       </div>
     </div>
     {error === undefined ? undefined : <p className="request-error" role="alert">{error}</p>}

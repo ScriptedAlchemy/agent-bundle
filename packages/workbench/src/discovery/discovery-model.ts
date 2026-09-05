@@ -1,69 +1,43 @@
 import type {
-  DiscoveryBundleFinding,
   DiscoveryDiagnostic,
-  DiscoveryEndpointReport,
-  DiscoveryFinding,
-  DiscoveryFindingState,
   DiscoveryHost,
   DiscoveryHostReport,
-  DiscoveryInventoryStatus,
   DiscoveryProbe,
   HostDiscoveryReport,
-  McpProbeReport,
   McpProbeStatus,
 } from './discovery-client.ts';
 
 export type DiscoveryPresentationTone = 'error' | 'info' | 'neutral' | 'positive' | 'warning';
+
+export type PluginAttachState = 'attached' | 'detached' | 'stale' | 'unknown';
 
 export interface DiscoveryPresentation {
   readonly label: string;
   readonly tone: DiscoveryPresentationTone;
 }
 
-export interface DiscoveryFindingView {
-  readonly finding: DiscoveryFinding;
-  readonly presentation: DiscoveryPresentation;
+export interface PluginAttachView {
+  readonly epochId?: string;
+  readonly label: string;
+  readonly state: PluginAttachState;
 }
 
-export interface DiscoveryInventoryView {
-  readonly findings: readonly DiscoveryFindingView[];
-  readonly presentation: DiscoveryPresentation;
-  readonly status: DiscoveryInventoryStatus;
-}
-
-export interface DiscoveryBundleView {
-  readonly finding: DiscoveryBundleFinding | undefined;
-  readonly presentation: DiscoveryPresentation;
-}
-
-export interface DiscoveryHostView {
-  readonly bundle: DiscoveryBundleView;
-  readonly diagnostics: readonly DiscoveryDiagnostic[];
+export interface HostDiagnosticsCard {
+  readonly attach: PluginAttachView;
+  readonly errors: readonly DiscoveryDiagnostic[];
+  readonly executablePath?: string;
+  readonly handshakeServer?: string;
   readonly host: DiscoveryHost;
-  readonly inventory: DiscoveryInventoryView;
+  readonly installed: boolean;
   readonly label: string;
   readonly probe: DiscoveryProbe;
   readonly probePresentation: DiscoveryPresentation;
+  readonly version?: string;
 }
 
-export interface DiscoveryEndpointView {
-  readonly report: DiscoveryEndpointReport;
-  readonly findings: readonly DiscoveryFindingView[];
-  readonly presentation: DiscoveryPresentation;
-}
-
-export interface HostDiscoveryView {
-  readonly build: DiscoveryPresentation;
-  readonly diagnostics: readonly DiscoveryDiagnostic[];
-  readonly endpoints: DiscoveryEndpointView;
-  readonly hosts: readonly DiscoveryHostView[];
+export interface HostDiagnosticsView {
+  readonly hosts: readonly HostDiagnosticsCard[];
   readonly report: HostDiscoveryReport;
-}
-
-export interface McpProbeView {
-  readonly capabilityNames: readonly string[];
-  readonly presentation: DiscoveryPresentation;
-  readonly report: McpProbeReport;
 }
 
 const presentation = (
@@ -74,9 +48,9 @@ const presentation = (
 export const probePresentationFor = (probe: DiscoveryProbe): DiscoveryPresentation => {
   switch (probe.status) {
     case 'available':
-      return presentation('Available', 'neutral');
+      return presentation('Installed', 'positive');
     case 'failed':
-      return presentation('Probe failed', 'neutral');
+      return presentation('Probe failed', 'warning');
     case 'unavailable':
       return presentation('Not installed', 'neutral');
     default: {
@@ -89,95 +63,13 @@ export const probePresentationFor = (probe: DiscoveryProbe): DiscoveryPresentati
 export const mcpProbePresentationFor = (status: McpProbeStatus): DiscoveryPresentation => {
   switch (status) {
     case 'ok':
-      return presentation('Connected', 'positive');
+      return presentation('Handshake ok', 'positive');
     case 'timed-out':
-      return presentation('Timed out', 'neutral');
+      return presentation('Handshake timed out', 'neutral');
     case 'unreachable':
-      return presentation('Unreachable', 'neutral');
+      return presentation('Handshake unreachable', 'neutral');
     default: {
       const exhaustive: never = status;
-      return exhaustive;
-    }
-  }
-};
-
-export const mcpProbeViewFor = (report: McpProbeReport): McpProbeView => Object.freeze({
-  capabilityNames: Object.freeze(
-    report.status === 'ok' ? Object.keys(report.snapshot?.capabilities ?? {}) : [],
-  ),
-  presentation: mcpProbePresentationFor(report.status),
-  report,
-});
-
-export const inventoryPresentationFor = (
-  host: DiscoveryHost,
-  status: DiscoveryInventoryStatus,
-): DiscoveryPresentation => {
-  switch (status) {
-    case 'known':
-      return presentation('Known inventory', 'neutral');
-    case 'skipped':
-      return presentation('Inventory scan skipped', 'neutral');
-    case 'unknown':
-      return presentation(`Unknown — ${host} owns its registry`, 'neutral');
-    default: {
-      const exhaustive: never = status;
-      return exhaustive;
-    }
-  }
-};
-
-export const findingPresentationFor = (state: DiscoveryFindingState): DiscoveryPresentation => {
-  switch (state) {
-    case 'conflicted':
-      return presentation('Conflicted', 'warning');
-    case 'corrupt':
-      return presentation('Corrupt', 'warning');
-    case 'disabled':
-      return presentation('Disabled', 'warning');
-    case 'drifted':
-      return presentation('Drifted', 'warning');
-    case 'failed':
-      return presentation('Failed', 'error');
-    case 'installed':
-      return presentation('Installed', 'neutral');
-    case 'interrupted-install':
-      return presentation('Interrupted install', 'warning');
-    case 'live':
-      return presentation('Live', 'neutral');
-    case 'missing':
-      return presentation('Missing', 'neutral');
-    case 'registered':
-      return presentation('Registered', 'neutral');
-    case 'skipped':
-      return presentation('Skipped', 'neutral');
-    case 'stale-lock':
-      return presentation('Stale lock', 'warning');
-    case 'stale-socket':
-      return presentation('Stale socket', 'warning');
-    case 'unknown':
-      return presentation('Unknown', 'neutral');
-    case 'unregistered':
-      return presentation('Unregistered', 'neutral');
-    default: {
-      const exhaustive: never = state;
-      return exhaustive;
-    }
-  }
-};
-
-const endpointPresentationFor = (report: DiscoveryEndpointReport): DiscoveryPresentation => {
-  switch (report.status) {
-    case 'failed':
-      return presentation('Endpoint scan failed', 'error');
-    case 'healthy':
-      return presentation('Healthy', 'neutral');
-    case 'skipped':
-      return presentation(`Endpoint scan skipped — ${report.directory}`, 'neutral');
-    case 'warnings':
-      return presentation('Warnings', 'warning');
-    default: {
-      const exhaustive: never = report.status;
       return exhaustive;
     }
   }
@@ -186,7 +78,7 @@ const endpointPresentationFor = (report: DiscoveryEndpointReport): DiscoveryPres
 export const hostLabelFor = (host: DiscoveryHost): string => {
   switch (host) {
     case 'claude':
-      return 'Claude';
+      return 'Claude Code';
     case 'codex':
       return 'Codex';
     case 'cursor':
@@ -198,60 +90,76 @@ export const hostLabelFor = (host: DiscoveryHost): string => {
   }
 };
 
-const findingViewFor = (finding: DiscoveryFinding): DiscoveryFindingView => Object.freeze({
-  finding,
-  presentation: findingPresentationFor(finding.state),
-});
+const attachPresentationFor = (state: PluginAttachState): string => {
+  switch (state) {
+    case 'attached':
+      return 'Current dev plugin attached';
+    case 'detached':
+      return 'Current dev plugin not attached';
+    case 'stale':
+      return 'Installed plugin is stale versus this build';
+    case 'unknown':
+      return 'Plugin attach state is unknown';
+    default: {
+      const exhaustive: never = state;
+      return exhaustive;
+    }
+  }
+};
 
-const hostViewFor = (
-  report: DiscoveryHostReport,
-  bundleSource: string | undefined,
-): DiscoveryHostView => {
-  const inventoryPresentation = inventoryPresentationFor(report.host, report.inventory.status);
-  const bundlePresentation = bundleSource === undefined
-    ? presentation('No built bundle is available for drift checks', 'info')
-    : report.bundle === undefined
-      ? presentation('No installed bundle reported', 'neutral')
-      : findingPresentationFor(report.bundle.state);
+const pluginAttachFor = (host: DiscoveryHostReport): PluginAttachView => {
+  const bundle = host.bundle;
+  if (bundle === undefined) {
+    return Object.freeze({
+      label: attachPresentationFor(host.probe.status === 'unavailable' ? 'detached' : 'unknown'),
+      state: host.probe.status === 'unavailable' ? 'detached' : 'unknown',
+    });
+  }
+  const epochId = bundle.version;
+  const state: PluginAttachState = bundle.state === 'drifted' || bundle.state === 'conflicted'
+    ? 'stale'
+    : bundle.state === 'installed' || bundle.state === 'registered' || bundle.state === 'live'
+      ? 'attached'
+      : bundle.state === 'missing' || bundle.state === 'unregistered' || bundle.state === 'disabled'
+        ? 'detached'
+        : 'unknown';
   return Object.freeze({
-    bundle: Object.freeze({
-      finding: report.bundle,
-      presentation: bundlePresentation,
-    }),
-    diagnostics: report.diagnostics,
-    host: report.host,
-    inventory: Object.freeze({
-      findings: Object.freeze(report.inventory.findings.map(findingViewFor)),
-      presentation: inventoryPresentation,
-      status: report.inventory.status,
-    }),
-    label: hostLabelFor(report.host),
-    probe: report.probe,
-    probePresentation: probePresentationFor(report.probe),
+    ...(epochId === undefined ? {} : { epochId }),
+    label: attachPresentationFor(state),
+    state,
   });
 };
 
-const allDiagnosticsFor = (report: HostDiscoveryReport): readonly DiscoveryDiagnostic[] => Object.freeze([
-  ...report.diagnostics,
-  ...report.hosts.flatMap((host) => [
-    ...host.diagnostics,
-    ...(host.bundle?.durableState?.diagnostics ?? []),
-  ]),
-  ...report.endpoints.diagnostics,
-]);
+const executablePathFor = (host: DiscoveryHostReport): string | undefined =>
+  host.inventory.findings.find((finding) => finding.path !== undefined)?.path
+  ?? host.bundle?.bundleRoot
+  ?? host.bundle?.path;
 
-/** Pure read-model projection for host, bundle, endpoint, and diagnostic sections. */
-export const hostDiscoveryViewFor = (report: HostDiscoveryReport): HostDiscoveryView => Object.freeze({
-  build: report.bundleSource === undefined
-    ? presentation('No built bundle is available for drift checks', 'info')
-    : presentation(report.bundleSource, 'neutral'),
-  diagnostics: allDiagnosticsFor(report),
-  endpoints: Object.freeze({
-    findings: Object.freeze(report.endpoints.findings.map(findingViewFor)),
-    presentation: endpointPresentationFor(report.endpoints),
-    report: report.endpoints,
-  }),
-  hosts: Object.freeze(report.hosts.map((host) => hostViewFor(host, report.bundleSource))),
+const versionFor = (host: DiscoveryHostReport): string | undefined =>
+  host.probe.version ?? host.bundle?.version ?? host.inventory.findings.find((finding) => finding.version !== undefined)?.version;
+
+const actionableErrorsFor = (host: DiscoveryHostReport): readonly DiscoveryDiagnostic[] =>
+  Object.freeze(host.diagnostics.filter((diagnostic) => diagnostic.severity === 'error' || diagnostic.severity === 'warning'));
+
+const handshakeServerFor = (host: DiscoveryHostReport): string | undefined =>
+  host.bundle?.mcpServers?.[0]?.name;
+
+const hostCardFor = (host: DiscoveryHostReport): HostDiagnosticsCard => Object.freeze({
+  attach: pluginAttachFor(host),
+  errors: actionableErrorsFor(host),
+  ...(executablePathFor(host) === undefined ? {} : { executablePath: executablePathFor(host) }),
+  ...(handshakeServerFor(host) === undefined ? {} : { handshakeServer: handshakeServerFor(host) }),
+  host: host.host,
+  installed: host.probe.status === 'available',
+  label: hostLabelFor(host.host),
+  probe: host.probe,
+  probePresentation: probePresentationFor(host.probe),
+  ...(versionFor(host) === undefined ? {} : { version: versionFor(host) }),
+});
+
+/** Per-host install, attach, and handshake facts for Advanced / Host diagnostics. */
+export const hostDiagnosticsViewFor = (report: HostDiscoveryReport): HostDiagnosticsView => Object.freeze({
+  hosts: Object.freeze(report.hosts.map(hostCardFor)),
   report,
 });
 

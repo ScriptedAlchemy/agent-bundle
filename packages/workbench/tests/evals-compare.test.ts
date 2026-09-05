@@ -5,17 +5,17 @@ import { expect, it } from '@rstest/core';
 
 import type { EvalComparison, EvalConditionMetrics } from '../../agent-bundle/src/eval/compare.ts';
 import type { EvalRunRecord } from '../../agent-bundle/src/eval/run-store.ts';
-import { ComparisonClient } from '../src/comparisons/comparison-client.ts';
+import { ComparisonClient } from '../src/evals/comparison-client.ts';
 import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
 import {
   ComparisonControls,
   ComparisonsRequestLifecycle,
   ComparisonMatrix,
-  ComparisonsPage,
+  EvalsCompare,
   loadComparisonRuns,
   runComparison,
-} from '../src/comparisons/comparisons-page.tsx';
-import { comparisonsViewFor } from '../src/comparisons/comparisons-model.ts';
+} from '../src/evals/evals-compare.tsx';
+import { comparisonsViewFor } from '../src/evals/evals-compare-model.ts';
 import { EvalClient } from '../src/evals/eval-client.ts';
 
 const run = (id: string, createdAt: string): EvalRunRecord => ({
@@ -186,7 +186,7 @@ it('renders no comparison controls until two runs are recorded', () => {
   });
   const comparisonClient = new ComparisonClient({ foreground });
   const evalClient = new EvalClient({ foreground });
-  const markup = renderToStaticMarkup(createElement(ComparisonsPage, { comparisonClient, evalClient }));
+  const markup = renderToStaticMarkup(createElement(EvalsCompare, { comparisonClient, evalClient }));
 
   expect(markup).toContain('At least two recorded runs');
   expect(markup).not.toContain('id="comparison-base"');

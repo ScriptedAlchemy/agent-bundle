@@ -641,6 +641,16 @@ it('states that no eval evidence exists before the suites have loaded', () => {
   expect(markup).not.toContain('id="eval-suite"');
 });
 
+it('exposes Runs and Compare tabs on the Evals page', () => {
+  const evalClient = client(async () => response(listing));
+  const markup = renderToStaticMarkup(createElement(EvalsPage, { client: evalClient }));
+
+  expect(markup).toContain('role="tablist"');
+  expect(markup).toContain('Runs');
+  expect(markup).toContain('Compare');
+  expect(markup).toContain('aria-selected="true"');
+});
+
 it('starts a durable run from the selected suite, trial count, and closed harness only', async () => {
   const bodies: unknown[] = [];
   const evalClient = client(async (input, init) => {

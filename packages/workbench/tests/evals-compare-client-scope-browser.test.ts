@@ -13,7 +13,7 @@ import { browserLaunchOptions, browserTrace } from './support/workbench-e2e.ts';
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 
 const workspaceRoot = process.cwd();
-const comparisonsPage = join(workspaceRoot, 'packages', 'workbench', 'src', 'comparisons', 'comparisons-page.tsx');
+const evalsCompare = join(workspaceRoot, 'packages', 'workbench', 'src', 'evals', 'evals-compare.tsx');
 const browserTimeout = 8_000 * timeScale;
 
 const e2e = test.extend({
@@ -40,7 +40,7 @@ const mountedComparisonsFixture = async (): Promise<{ readonly close: () => Prom
     "import React from 'react';",
     "import { flushSync } from 'react-dom';",
     "import { createRoot } from 'react-dom/client';",
-    `import { ComparisonsPage } from ${JSON.stringify(comparisonsPage)};`,
+    `import { EvalsCompare } from ${JSON.stringify(evalsCompare)};`,
     '',
     "const deferred = () => { let resolve; const promise = new Promise((nextResolve) => { resolve = nextResolve; }); return { promise, resolve }; };",
     "const digest = 'a'.repeat(64); const identifier = `a${'b'.repeat(127)}`;",
@@ -54,7 +54,7 @@ const mountedComparisonsFixture = async (): Promise<{ readonly close: () => Prom
     "const comparisonClientB = { compare: () => Promise.resolve(comparison('client-b')), forgetAuthentication: () => undefined };",
     "const evalClientB = { runs: () => lateRunsB.promise };",
     "const root = createRoot(document.getElementById('root'));",
-    "const mount = (comparisonClient, evalClient) => flushSync(() => root.render(React.createElement(ComparisonsPage, { comparisonClient, evalClient })));",
+    "const mount = (comparisonClient, evalClient) => flushSync(() => root.render(React.createElement(EvalsCompare, { comparisonClient, evalClient })));",
     'mount(comparisonClientA, evalClientA);',
     'globalThis.__comparisonsClientScopeFixture = {',
     '  replaceEvalClientOnly: () => mount(comparisonClientA, evalClientB),',

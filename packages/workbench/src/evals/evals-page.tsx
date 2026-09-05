@@ -1,6 +1,8 @@
 import { errorMessage as messageFrom } from '../client-helpers.ts';
 import React, { useEffect, useRef, useState } from 'react';
 
+import type { ComparisonClient } from './comparison-client.ts';
+import { EvalsCompare } from './evals-compare.tsx';
 import type { EvalArtifact, EvalClient, EvalHarness, EvalRunAdmission, EvalRunStart } from './eval-client.ts';
 import type { EvalRunEvent, EvalRunRecord, EvalRunResult, EvalSuiteListing } from '../../../agent-bundle/src/contracts/eval.ts';
 import {
@@ -45,8 +47,11 @@ export interface EvalRunReportProps {
   readonly view: EvalRunView;
 }
 
+export type EvalsPageTab = 'compare' | 'runs';
+
 export interface EvalsPageProps {
   readonly client: EvalClient;
+  readonly comparisonClient?: ComparisonClient;
 }
 
 const trialsError = 'Trials must be a whole number between 1 and 100.';
@@ -852,13 +857,7 @@ const EvalsClientPage = ({ client }: EvalsPageProps) => {
     }
   };
 
-  return <div className="evals-content">
-    <div className="page-heading evals-page-heading">
-      <div>
-        <h1>Evals</h1>
-        <p>Authored suites, their cases, and the evidence every trial recorded.</p>
-      </div>
-    </div>
+  return <div className="evals-runs">
     {error === undefined ? undefined : <p className="request-error" role="alert">{error}</p>}
     {cancellationNote === undefined ? undefined : <p className="eval-cancel-note" role="status">{cancellationNote}</p>}
     {view.state === 'empty' || view.state === 'loading'
@@ -886,6 +885,43 @@ const EvalsClientPage = ({ client }: EvalsPageProps) => {
   </div>;
 };
 
-/** Runs authored suites and shows the evidence every trial recorded. */
-export const EvalsPage = ({ client }: EvalsPageProps) =>
-  <EvalsClientPage client={client} key={evalClientScopeKeyFor(client)} />;
+const EvalsShell = ({ client, comparisonClient }: EvalsPageProps) => {
+  const [tab, setTab] = useState<EvalsPageTab>('runs');
+  return <div className="evals-content">
+    <div className="page-heading evals-page-heading">
+      <div>
+        <h1>Evals</h1>
+        <p>Authored suites, their cases, and aligned baseline versus candidate runs.</p>
+      </div>
+    </div>
+    <div aria-label="Evals sections" className="evals-tabs" role="tablist">
+      <button
+        aria-selected={tab === 'runs'}
+        className={tab === 'runs' ? 'evals-tab evals-tab--active' : 'evals-tab'}
+        onClick={() => setTab('runs')}
+        role="tab"
+        type="button"
+      >
+        Runs
+      </button>
+      <button
+        aria-selected={tab === 'compare'}
+        className={tab === 'compare' ? 'evals-tab evals-tab--active' : 'evals-tab'}
+        onClick={() => setTab('compare')}
+        role="tab"
+        type="button"
+      >
+        Compare
+      </button>
+    </div>
+    {tab === 'runs'
+      ? <EvalsClientPage client={client} />
+      : comparisonClient === undefined
+        ? <p className="empty-row" role="status">Comparison client is not available in this session.</p>
+        : <EvalsCompare comparisonClient={comparisonClient} evalClient={client} />}
+  </div>;
+};
+
+/** Runs authored suites and aligns two recorded runs under Compare. */
+export const EvalsPage = ({ client, comparisonClient }: EvalsPageProps) =>
+  <EvalsShell client={client} comparisonClient={comparisonClient} key={evalClientScopeKeyFor(client)} />;

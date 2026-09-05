@@ -8,9 +8,9 @@ import {
   type ComparisonMatrixRow,
   type ComparisonMetricCell,
   type ComparisonsView,
-} from './comparisons-model.ts';
-import type { EvalClient } from '../evals/eval-client.ts';
-import './comparisons-page.css';
+} from './evals-compare-model.ts';
+import type { EvalClient } from './eval-client.ts';
+import './evals-compare.css';
 
 export interface ComparisonControlsProps {
   readonly busy: boolean;
@@ -24,7 +24,7 @@ export interface ComparisonMatrixProps {
   readonly view: ComparisonsView;
 }
 
-export interface ComparisonsPageProps {
+export interface EvalsCompareProps {
   readonly comparisonClient: ComparisonClient;
   readonly evalClient: EvalClient;
 }
@@ -186,7 +186,7 @@ export const ComparisonMatrix = ({ view }: ComparisonMatrixProps) => <div classN
 </div>;
 
 /** Aligns two recorded eval runs and shows the reliability matrix of every shared condition. */
-export const ComparisonsPage = ({ comparisonClient, evalClient }: ComparisonsPageProps) => {
+export const EvalsCompare = ({ comparisonClient, evalClient }: EvalsCompareProps) => {
   const [baseRunId, setBaseRunId] = useState<string>();
   const [busy, setBusy] = useState<ComparisonsRequest>();
   const [candidateRunId, setCandidateRunId] = useState<string>();
@@ -261,12 +261,6 @@ export const ComparisonsPage = ({ comparisonClient, evalClient }: ComparisonsPag
   };
 
   return <div className="comparisons-content">
-    <div className="page-heading comparisons-page-heading">
-      <div>
-        <h1>Comparisons</h1>
-        <p>Aligned baseline and candidate runs, with the actual k/n beside pass@k and pass^k.</p>
-      </div>
-    </div>
     {currentError === undefined ? undefined : <p className="request-error" role="alert">{currentError}</p>}
     {view.state === 'insufficient-runs'
       ? <p className="empty-row" role="status">{view.summary}</p>
