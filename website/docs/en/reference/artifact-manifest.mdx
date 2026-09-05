@@ -33,9 +33,9 @@ and the conventional filesystem (`src/mcp/**`, `src/cli/**`, `src/hooks/**`, `sr
 `src/scripts/**`), and the build writes the manifest from the normalized model, the compiled route
 graph, the composite plan, and the files it emitted. The host documents in the root — the Claude,
 Codex, Cursor, and portable plugin manifests, the marketplace, MCP, and hooks documents — are
-written from the same model. The manifest never copies a value out of a host document, and
-artifact validation proves the two agree (`AB6039`, `AB6040`). Nothing in the file is
-hand-editable: change the config or the sources and rebuild.
+serialized with the manifest from the same compiled model in one build. Every host document is
+a digest-pinned `files[]` row, so a hand edit fails artifact digest validation. Nothing in the
+file is hand-editable: change the config or the sources and rebuild.
 
 ## Who reads it
 
@@ -48,7 +48,7 @@ hand-editable: change the config or the sources and rebuild.
 | `inspect --json` | Adds an `output.manifest` summary — projections and executables — when a built manifest exists at the artifact output, so a JSON consumer needs no second probe. |
 | `eval --artifact`, `agent-bundle/test` installed-host proofs | `projections[]` and `executables.hooks[]` in place of any host document. |
 | Workbench artifacts page | `executables.*` rows for bins, hooks, MCP servers and Apps, and scripts; `projections[]` for the selected hosts. No layout or file-name scan. |
-| `validate --artifact`, `build` | The whole document: presence and canonical bytes (`AB6000`, `AB6001`), `files[]` against the tree (`AB6004`), hook coherence over `executables.hooks[]` (`AB6018`), row coherence (`AB6039`), and host-document agreement (`AB6040`). |
+| `validate --artifact`, `build` | The whole document: presence and canonical bytes (`AB6000`, `AB6001`), `files[]` against the tree (`AB6004`), and hook coherence over `executables.hooks[]` (`AB6018`). |
 | `prepack` | `files[]`, `projections[]`, and `project.packageVersion` for the pack inventory (`AB7010`–`AB7013`). |
 
 ## Sections
@@ -68,8 +68,8 @@ The top level has exactly twelve keys, all required: `agentSkills`, `application
 ### `application`
 
 The application identity, recorded once and host-independent. It is what `install`, `doctor`,
-and `uninstall` act on; every host plugin manifest in the root repeats `name` and `version` for
-its host, and `AB6040` proves they agree.
+and `uninstall` act on; host plugin manifests and this row are serialized from the same compiled
+model in one build.
 
 | Field | Required | Contents |
 | --- | --- | --- |
@@ -352,8 +352,6 @@ does not know — read an artifact with the framework version that built it, or 
 | `AB6001` | The manifest is not a strict canonical manifest, or it changed while validation ran. |
 | `AB6004` | A `files[]` row and the tree disagree. |
 | `AB6018` | `executables.hooks[]` and a host hooks document disagree about the compiler wrappers. |
-| `AB6039` | An `executables`, `routes`, or `distribution` row disagrees with the tree or the adapter layout. |
-| `AB6040` | A host document disagrees with the manifest identity (`application`, `projections[].marketplace`). |
 | `AB7001` | `install`, `uninstall`, or `doctor` cannot resolve the host from the manifest at `--from`. |
 
 All are described in the [Diagnostics reference](./diagnostics.md).

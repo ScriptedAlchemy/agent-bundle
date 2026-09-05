@@ -27,9 +27,9 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 `agent-bundle build`，别无他者。文档中的一切都是**派生**的：作者声明 `agent-bundle.config.ts`（元数据、
 `targets`、钩子、MCP 服务器、脚本、市场）与约定文件系统（`src/mcp/**`、`src/cli/**`、`src/hooks/**`、
 `src/events/**`、`src/scripts/**`），构建则从规范化模型、编译后的路由图、组合计划以及它输出的文件写出清单。
-根目录中的宿主文档——Claude、Codex、Cursor 与 portable 的插件清单，市场、MCP 与钩子文档——由同一个模型写出。
-清单从不从宿主文档中复制任何值，产物校验会证明两者一致（`AB6039`、`AB6040`）。文件中没有任何可手工编辑的
-内容：修改配置或源码，然后重新构建。
+根目录中的宿主文档——Claude、Codex、Cursor 与 portable 的插件清单，市场、MCP 与钩子文档——和清单在同一次
+构建中由同一个编译模型序列化而成。每份宿主文档都是带摘要固定的 `files[]` 行，因此手工编辑会使产物摘要校验
+失败。文件中没有任何可手工编辑的内容：修改配置或源码，然后重新构建。
 
 ## 由谁读取
 
@@ -42,7 +42,7 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 | `inspect --json` | 当产物输出位置存在已构建的清单时，追加一份 `output.manifest` 摘要——投影与可执行文件——因此 JSON 消费者无需第二次探测。 |
 | `eval --artifact`、`agent-bundle/test` 的已安装宿主证明 | 用 `projections[]` 与 `executables.hooks[]` 取代任何宿主文档。 |
 | Workbench 产物页 | 从 `executables.*` 取 bin、钩子、MCP 服务器与 App、脚本的行；从 `projections[]` 取所选宿主。不再扫描布局或文件名。 |
-| `validate --artifact`、`build` | 整份文档：存在性与规范字节（`AB6000`、`AB6001`）、`files[]` 与树的比对（`AB6004`）、基于 `executables.hooks[]` 的钩子一致性（`AB6018`）、行一致性（`AB6039`）与宿主文档一致性（`AB6040`）。 |
+| `validate --artifact`、`build` | 整份文档：存在性与规范字节（`AB6000`、`AB6001`）、`files[]` 与树的比对（`AB6004`），以及基于 `executables.hooks[]` 的钩子一致性（`AB6018`）。 |
 | `prepack` | `files[]`、`projections[]` 与 `project.packageVersion`，用于打包清点（`AB7010`–`AB7013`）。 |
 
 ## 分节
@@ -60,8 +60,8 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 
 ### `application`
 
-应用身份，只记录一次且与宿主无关。它是 `install`、`doctor` 与 `uninstall` 作用的对象；根目录中每份宿主
-插件清单都为其宿主重复 `name` 与 `version`，`AB6040` 证明它们一致。
+应用身份，只记录一次且与宿主无关。它是 `install`、`doctor` 与 `uninstall` 作用的对象；宿主插件清单与
+这一行在同一次构建中由同一个编译模型序列化而成。
 
 | 字段 | 必填 | 内容 |
 | --- | --- | --- |
@@ -339,8 +339,6 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 | `AB6001` | 清单不是严格的规范清单，或在校验运行期间发生了变化。 |
 | `AB6004` | 某行 `files[]` 与树不一致。 |
 | `AB6018` | `executables.hooks[]` 与某份宿主钩子文档就编译器 wrapper 不一致。 |
-| `AB6039` | 某行 `executables`、`routes` 或 `distribution` 与树或适配器布局不一致。 |
-| `AB6040` | 某份宿主文档与清单身份（`application`、`projections[].marketplace`）不一致。 |
 | `AB7001` | `install`、`uninstall` 或 `doctor` 无法从 `--from` 下的清单解析出该宿主。 |
 
 全部说明见[诊断参考](./diagnostics.md)。
