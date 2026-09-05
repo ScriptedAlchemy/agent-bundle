@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 import { expect, it } from '@rstest/core';
 
-import { connectionFailureText, ProjectClientError } from '../src/project-client.ts';
+import { projectFailureText, ProjectClientError } from '../src/project-client.ts';
 import { ConnectionGate, Navigation, pageForHash, type WorkbenchPage } from '../src/workbench-screen.tsx';
 
 const pages = (...values: WorkbenchPage[]): ReadonlySet<WorkbenchPage> => new Set(values);
@@ -46,7 +46,7 @@ it('resolves unsupported and unknown hashes to Overview', () => {
 
 it('gates an unavailable connection with the failure code, message, and HTTP status', () => {
   const markup = renderToStaticMarkup(createElement(ConnectionGate, {
-    error: connectionFailureText(new ProjectClientError('Request origin is not this foreground server.', 'AB8003', 403), 'fallback'),
+    error: projectFailureText(new ProjectClientError('Request origin is not this foreground server.', 'AB8003', 403), 'fallback'),
     state: 'unavailable',
   }));
 
@@ -58,7 +58,7 @@ it('gates an unavailable connection with the failure code, message, and HTTP sta
 
 it('gates a client-side refusal of an HTTP 200 bootstrap without presenting the 200 as the failure', () => {
   const markup = renderToStaticMarkup(createElement(ConnectionGate, {
-    error: connectionFailureText(new ProjectClientError(noFlagRefusal, 'AB8003'), 'fallback'),
+    error: projectFailureText(new ProjectClientError(noFlagRefusal, 'AB8003'), 'fallback'),
     state: 'unavailable',
   }));
 

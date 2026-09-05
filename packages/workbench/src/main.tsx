@@ -65,7 +65,7 @@ import { RoutesPage } from './routes/routes-page.tsx';
 import { overviewFor } from './overview-model.ts';
 import { downloadBlob, errorMessage as messageFrom } from './client-helpers.ts';
 import { BundleWorkflow, HostAdoptionSection, StateMark } from './overview-page.tsx';
-import { connectionFailureText, ProjectClient, type ProjectConnectionState } from './project-client.ts';
+import { projectFailureText, ProjectClient, type ProjectConnectionState } from './project-client.ts';
 import { SkillClient } from './skill-client.ts';
 import { SkillsPage } from './skills-page.tsx';
 import {
@@ -102,7 +102,7 @@ const errorMessage = (reason: unknown): string =>
   messageFrom(reason, 'Foreground project state could not be refreshed.');
 
 const connectionFailure = (reason: unknown): string =>
-  connectionFailureText(reason, 'Foreground project state could not be refreshed.');
+  projectFailureText(reason, 'Foreground project state could not be refreshed.');
 
 const activeEpochFor = (status: ProjectStatus) =>
   status.artifact.state === 'missing' ? undefined : status.artifact.activeEpoch;
@@ -391,7 +391,7 @@ const Overview = ({ capabilities, changedFiles, client, connectionError, onNavig
     try {
       onStatus(await client.rebuild());
     } catch (reason) {
-      setError(messageFrom(reason, 'Rebuild request could not be completed.'));
+      setError(projectFailureText(reason, 'Rebuild request could not be completed.'));
     } finally {
       setRebuilding(false);
     }

@@ -70,7 +70,7 @@ export const Topbar = ({ connectionError }: { readonly connectionError?: string 
   </span>
 </header>;
 
-/** Overlays the Workbench while the foreground connection is not `connected`; `error` is the `connectionFailureText` line. */
+/** Overlays the Workbench while the foreground connection is not `connected`; `error` is the `projectFailureText` line. */
 export const ConnectionGate = ({ error, state }: {
   readonly error?: string;
   readonly state: Exclude<ProjectConnectionPhase, 'connected'>;

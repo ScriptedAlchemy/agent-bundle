@@ -1,7 +1,7 @@
 import { expect, it } from '@rstest/core';
 
 import {
-  connectionFailureText,
+  projectFailureText,
   ProjectClient,
   ProjectClientError,
   type EventSourceFactory,
@@ -1219,16 +1219,87 @@ it('surfaces the client-side refusal of an HTTP 200 bootstrap with its code and 
   });
 });
 
-it('formats a connection failure as its code, message, and HTTP status, omitting the parts it lacks', () => {
-  expect(connectionFailureText(new ProjectClientError('Request origin is not this foreground server.', 'AB8003', 403), 'fallback'))
+it('rejects a refused rebuild with the foreground diagnostic code, message, and HTTP status', async () => {
+  const client = new ProjectClient({
+    events: () => new RecordingEventSource(),
+    fetch: withForegroundSession(async (input) => String(input) === '/api/project/rebuild'
+      ? Response.json({ diagnostic: { code: 'AB8003', message: 'Request origin is not this foreground server.' } }, { status: 403 })
+      : Response.json({ status: status() })),
+  });
+  try {
+    await client.connect(() => undefined);
+    const rejection: unknown = await client.rebuild().then(() => undefined, (reason: unknown) => reason);
+
+    expect(rejection).toBeInstanceOf(ProjectClientError);
+    if (!(rejection instanceof ProjectClientError)) return;
+    expect(rejection.code).toBe('AB8003');
+    expect(rejection.status).toBe(403);
+    expect(rejection.message).toBe('Request origin is not this foreground server.');
+    expect(projectFailureText(rejection, 'Rebuild request could not be completed.'))
+      .toBe('AB8003 — Request origin is not this foreground server. (HTTP 403)');
+  } finally {
+    client.close();
+  }
+});
+
+it('reports a refused session bootstrap during recovered-source refresh as a ProjectClientError with code and status', async () => {
+  const firstStream = new RecordingEventSource();
+  const secondStream = new RecordingEventSource();
+  const thirdStream = new RecordingEventSource();
+  const streams = [firstStream, secondStream, thirdStream];
+  const errors: unknown[] = [];
+  let sessionRequests = 0;
+  const foreground = new ForegroundRouteClient({
+    fetch: async (input) => {
+      if (String(input) !== '/api/project/session') return Response.json({ status: status() });
+      sessionRequests += 1;
+      return sessionRequests === 3
+        ? Response.json({ diagnostic: { code: 'AB8003', message: 'Request origin is not this foreground server.' } }, { status: 403 })
+        : Response.json(foregroundSession);
+    },
+  });
+  const client = new ProjectClient({
+    events: () => streams.shift()!,
+    foreground,
+    retryDelay: () => new Promise<void>((resolvePromise) => setImmediate(resolvePromise)),
+  });
+  try {
+    await client.connect(() => undefined, (reason) => errors.push(reason));
+    firstStream.emit('error', { data: '', lastEventId: '' });
+    await flushEvents();
+    await flushEvents();
+    expect(errors).toHaveLength(1);
+    expect(sessionRequests).toBe(2);
+
+    // The recovered stream opens while the session is forgotten, so the status
+    // read succeeds and the snapshot re-bootstrap is what the foreground refuses.
+    foreground.forgetAuthentication();
+    secondStream.emit('open', { data: '', lastEventId: '' });
+    await flushEvents();
+    await flushEvents();
+
+    expect(sessionRequests).toBeGreaterThanOrEqual(3);
+    const refusal = errors[1];
+    expect(refusal).toBeInstanceOf(ProjectClientError);
+    if (!(refusal instanceof ProjectClientError)) return;
+    expect(refusal.code).toBe('AB8003');
+    expect(refusal.status).toBe(403);
+    expect(refusal.message).toBe('Request origin is not this foreground server.');
+  } finally {
+    client.close();
+  }
+});
+
+it('formats a project client failure as its code, message, and HTTP status, omitting the parts it lacks', () => {
+  expect(projectFailureText(new ProjectClientError('Request origin is not this foreground server.', 'AB8003', 403), 'fallback'))
     .toBe('AB8003 — Request origin is not this foreground server. (HTTP 403)');
-  expect(connectionFailureText(new ProjectClientError(noFlagRefusal, 'AB8003'), 'fallback')).toBe(`AB8003 — ${noFlagRefusal}`);
-  expect(connectionFailureText(new ProjectClientError('Foreground project event stream disconnected.'), 'fallback'))
+  expect(projectFailureText(new ProjectClientError(noFlagRefusal, 'AB8003'), 'fallback')).toBe(`AB8003 — ${noFlagRefusal}`);
+  expect(projectFailureText(new ProjectClientError('Foreground project event stream disconnected.'), 'fallback'))
     .toBe('Foreground project event stream disconnected.');
-  expect(connectionFailureText(new Error('x'), 'fallback')).toBe('x');
-  expect(connectionFailureText({ get message(): string { throw new Error('hostile'); } }, 'fallback')).toBe('fallback');
-  expect(connectionFailureText(Object.defineProperty(new Error('x'), 'message', { get(): string { throw new Error('hostile'); } }), 'fallback'))
+  expect(projectFailureText(new Error('x'), 'fallback')).toBe('x');
+  expect(projectFailureText({ get message(): string { throw new Error('hostile'); } }, 'fallback')).toBe('fallback');
+  expect(projectFailureText(Object.defineProperty(new Error('x'), 'message', { get(): string { throw new Error('hostile'); } }), 'fallback'))
     .toBe('fallback');
-  expect(connectionFailureText('not an error', 'fallback')).toBe('fallback');
-  expect(connectionFailureText(undefined, 'fallback')).toBe('fallback');
+  expect(projectFailureText('not an error', 'fallback')).toBe('fallback');
+  expect(projectFailureText(undefined, 'fallback')).toBe('fallback');
 });

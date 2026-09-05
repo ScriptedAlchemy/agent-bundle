@@ -83,11 +83,12 @@ export class ProjectClientError extends Error {
 }
 
 /**
- * The one-line account of a connection failure the gate and topbar show:
- * `<code> — <message> (HTTP <status>)`, omitting the parts a failure lacks.
- * Other errors keep their message; a hostile reason falls back.
+ * The one-line account of a project client failure the connection gate, the
+ * topbar, and the Overview rebuild alert show: `<code> — <message> (HTTP <status>)`,
+ * omitting the parts a failure lacks. Other errors keep their message; a
+ * hostile reason falls back.
  */
-export const connectionFailureText = (reason: unknown, fallback: string): string => {
+export const projectFailureText = (reason: unknown, fallback: string): string => {
   const message = errorMessage(reason, fallback);
   if (!(reason instanceof ProjectClientError)) return message;
   const code = reason.code === undefined ? '' : `${reason.code} — `;
