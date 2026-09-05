@@ -1,5 +1,0 @@
----
-'agent-bundle': minor
----
-
-Report every canonical host component kind in `agent-bundle inspect` (`--json` and human output). Each inspection plan now carries a `kinds` matrix — `agent`, `cli`, `command`, `event-route`, `hook`, `lsp`, `mcp-app`, `mcp-server`, `native-diagnostics`, `native-extension`, `rule`, `script`, `skill` — with the target's own four-state judgment and selected/omitted counts, plus a `kinds this host cannot emit:` line, so a host with no LSP, diagnostics-provider, extension, or (G5-deferred) agent surface says so in its own dated words instead of by silence. Filesystem `src/events` routes now report as the `event-route` kind judged by the host's `event:<canonical event>` row instead of folding into `hook` (a breaking change to the `kind` and `name` fields of `inspect --json` for event routes), and `claude.lspServers` entries report as `lsp` components emitted by Claude and the composite `plugin` bundle and excluded elsewhere. The `AgentComponentKind` type and `componentKindCapability` helpers are exported from `agent-bundle/api`. No diagnostic codes change (#425)
