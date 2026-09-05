@@ -665,6 +665,40 @@ it('reports a host absent from manifest projections as AB7001', async () => {
   }
 });
 
+it('reports a manifest marketplace pointer at a missing document as AB7001', async () => {
+  const fixture = await createHostBundle('claude');
+  try {
+    await rm(join(fixture.bundleRoot, '.claude-plugin/marketplace.json'), { force: true });
+    await expect(readBundleIdentity(fixture.bundleRoot, 'claude')).rejects.toMatchObject({
+      diagnostics: [expect.objectContaining({
+        code: 'AB7001',
+        message: `agent-bundle.manifest.json points claude at .claude-plugin/marketplace.json, which is missing from ${fixture.bundleRoot}.`,
+        target: 'claude',
+      })],
+    });
+  } finally {
+    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+  }
+});
+
+it('distinguishes an unreadable manifest from an absent one: a directory in its place is AB7001 invalid, not missing', async () => {
+  const fixture = await createHostBundle('cursor');
+  try {
+    const path = join(fixture.bundleRoot, 'agent-bundle.manifest.json');
+    await rm(path, { force: true });
+    await mkdir(path);
+    const error = await readBundleIdentity(fixture.bundleRoot, 'cursor').catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(DiagnosticError);
+    expect((error as DiagnosticError).diagnostics).toMatchObject([{
+      code: 'AB7001',
+      message: expect.stringMatching(/is not a valid canonical artifact manifest: .*EISDIR/u),
+      target: 'cursor',
+    }]);
+  } finally {
+    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+  }
+});
+
 it('fails with a typed diagnostic when the public host CLI is missing', async () => {
   const fixture = await createHostBundle('codex');
   const missingRunner: InstallCommandRunner = {

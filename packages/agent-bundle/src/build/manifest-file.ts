@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { isErrno } from '../core/errors.ts';
 
 import { artifactManifestName, parseArtifactManifest, type ArtifactManifest } from './manifest.ts';
 
@@ -24,8 +25,11 @@ export const readArtifactManifest = async (from: string): Promise<ArtifactManife
   let bytes: string;
   try {
     bytes = await readFile(path, 'utf8');
-  } catch {
-    return Object.freeze({ path, root, status: 'missing' });
+  } catch (error) {
+    // Only an absent file is "missing"; a directory, a permission refusal, or
+    // an I/O failure is a manifest that exists and cannot be read.
+    if (isErrno(error, 'ENOENT')) return Object.freeze({ path, root, status: 'missing' });
+    return Object.freeze({ detail: describe(error), path, root, status: 'invalid' });
   }
   try {
     return Object.freeze({ manifest: parseArtifactManifest(bytes), path, root, status: 'ok' });

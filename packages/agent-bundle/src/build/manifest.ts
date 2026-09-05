@@ -936,9 +936,22 @@ const parseRoutes = (value: unknown): ArtifactManifestRoutes => {
   for (const route of bound) {
     if (!contractIds.has(route.contract!)) fail(`routes route ${route.id} binds undeclared contract ${JSON.stringify(route.contract)}.`);
   }
+  // The binding is reciprocal: a contract's `routes` are exactly the routes
+  // whose `contract` names it (a projected CLI tool route repeats its server
+  // route's id, so the comparison is over id sets).
+  const boundByContract = new Map<string, Set<string>>();
+  for (const route of bound) {
+    const ids = boundByContract.get(route.contract!) ?? new Set<string>();
+    ids.add(route.id);
+    boundByContract.set(route.contract!, ids);
+  }
   for (const contract of contracts ?? []) {
     for (const id of contract.routes) {
       if (!routeIds.has(id)) fail(`routes.contracts[${contract.id}].routes names undeclared route ${JSON.stringify(id)}.`);
+    }
+    const binding = boundByContract.get(contract.id) ?? new Set<string>();
+    if (binding.size !== contract.routes.length || contract.routes.some((id) => !binding.has(id))) {
+      fail(`routes.contracts[${contract.id}].routes must be exactly the routes whose contract names it.`);
     }
   }
   return {

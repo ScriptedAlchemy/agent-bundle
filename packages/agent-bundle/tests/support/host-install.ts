@@ -1323,7 +1323,14 @@ const assertUnifiedBundleCursorInstall = async (
     );
     assertProof(cursorHooksValidator(cursorHooks), `Unified bundle Cursor hooks document failed its pinned schema: ${JSON.stringify(cursorHooksValidator.errors)}`);
 
-    const report = await runDoctor({ home, hosts: ['cursor'] });
+    // Doctor identifies the bundle from the composite root's manifest alone (#592 step 3): the
+    // application identity and the install comparison come from `--from <root>`, never `<root>/cursor`.
+    const report = await runDoctor({ from: fixture.artifactRoot, home, hosts: ['cursor'] });
+    const bundle = report.hosts.find((entry) => entry.host === 'cursor')?.bundle;
+    assertProof(
+      bundle?.bundleRoot === fixture.artifactRoot && bundle.version === version && bundle.comparison?.status === 'current',
+      `Doctor did not identify the composite root through its manifest: ${JSON.stringify(bundle)}`,
+    );
     const staticFindings = report.diagnostics.filter((entry) => entry.code === 'AB7320');
     const schemaFindings = report.diagnostics.filter((entry) => entry.message.includes('AB6027'));
     assertProof(

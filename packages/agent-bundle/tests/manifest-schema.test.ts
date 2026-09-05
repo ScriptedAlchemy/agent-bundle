@@ -147,6 +147,12 @@ const validManifest = (): ArtifactManifest => ({
       mode: 'generated',
       routes: [{ id: 'lint-cli', kind: 'cli', provenance: { kind: 'conventional' }, source: 'src/cli/lint.ts' }],
     },
+    contracts: [{
+      id: 'contract:src/tools/review-schema.ts#reviewInput',
+      input: { additionalProperties: false, properties: { path: { type: 'string' } }, required: ['path'], type: 'object' },
+      origin: { binding: 'reviewInput', module: 'src/tools/review-schema.ts' },
+      routes: ['review-tool'],
+    }],
     digest: hash('1'),
     events: [{ event: 'PreToolUse', id: 'pre-commit', kind: 'event-route', provenance: { kind: 'conventional' }, source: 'src/hooks/pre-commit.ts' }],
     layouts: [
@@ -162,6 +168,7 @@ const validManifest = (): ArtifactManifest => ({
       routes: [
         { id: 'dashboard', kind: 'app', provenance: { kind: 'conventional' }, serverId: 'review', source: 'src/apps/dashboard.tsx' },
         {
+          contract: 'contract:src/tools/review-schema.ts#reviewInput',
           id: 'review-tool',
           inputSchema: {
             additionalProperties: false,
@@ -323,6 +330,18 @@ const sweepDisagreements: ReadonlyMap<string, string> = new Map([
     '/routes/servers/0/routes/1/inputSchema/properties: delete path',
     'inputSchema.required must name declared properties (cross-reference)',
   ],
+  [
+    '/routes: delete contracts',
+    'routes.contracts is present exactly when a route binds a contract (cross-reference)',
+  ],
+  [
+    '/routes/servers/0/routes/1: delete contract',
+    'routes.contracts[].routes are exactly the routes whose contract names them (cross-reference)',
+  ],
+  [
+    '/routes/contracts/0/input/properties: delete path',
+    'contract input.required must name declared properties (cross-reference)',
+  ],
 ]);
 
 /**
@@ -364,6 +383,9 @@ const parserOnlyRules: readonly { readonly apply: (manifest: MutableManifest) =>
   { apply: (manifest) => { manifest.routes.cli!.commands![0]!.routeId = 'nope'; }, rule: 'routes.cli.commands[].routeId names a CLI route' },
   { apply: (manifest) => { manifest.routes.servers[0]!.routes[0]!.serverId = 'other'; }, rule: 'routes.servers[].routes[].serverId equals the server id' },
   { apply: (manifest) => { manifest.routes.layouts[1]!.serverId = 'other'; }, rule: 'routes.layouts[].serverId names a declared server' },
+  { apply: (manifest) => { manifest.routes.servers[0]!.routes[1]!.contract = 'contract:nope#x'; }, rule: 'route.contract names a declared contract' },
+  { apply: (manifest) => { manifest.routes.contracts![0]!.routes = ['review-tool', 'summary']; }, rule: 'contracts[].routes are exactly the routes binding the contract' },
+  { apply: (manifest) => { manifest.routes.contracts![0]!.routes = ['nope']; }, rule: 'contracts[].routes name declared routes' },
   { apply: (manifest) => { manifest.files[1]!.sourceInputs = ['src/other.ts']; }, rule: 'files[].sourceInputs name project source inputs' },
   {
     apply: (manifest) => { manifest.routes.servers[0]!.routes[1]!.inputSchema!.required = ['nope']; },

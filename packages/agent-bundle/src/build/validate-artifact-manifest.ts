@@ -13,6 +13,7 @@ import {
   type ArtifactManifest,
   type ArtifactManifestMcpServer,
   type ArtifactManifestProjection,
+  type ArtifactManifestProjectionDocuments,
 } from './manifest.ts';
 
 /**
@@ -248,14 +249,24 @@ const projectionDiagnostics = async (options: CoherenceOptions): Promise<readonl
     const host = projection.host;
     // Unknown hosts are AB6009; without their contract there is nothing to compare against.
     if (!options.registry.has(host)) continue;
-    const hooksPath = options.registry.hookContract(host)?.manifestPath;
-    if (projection.documents.hooks !== undefined && projection.documents.hooks !== hooksPath) {
+    const contractDocuments = options.registry.artifactValidation(host).documents;
+    const contractPath = (schema: string): string | undefined =>
+      contractDocuments.find((document) => document.schema === schema)?.path;
+    // `documents.mcp` is judged by `mcpDocumentDiagnostics` against the MCP runtime contract.
+    const pointers: readonly (readonly [Exclude<keyof ArtifactManifestProjectionDocuments, 'mcp'>, string | undefined, string])[] = [
+      ['hooks', options.registry.hookContract(host)?.manifestPath, 'hooks'],
+      ['marketplace', contractPath('marketplace'), 'marketplace'],
+      ['plugin', contractPath('plugin'), 'plugin'],
+    ];
+    for (const [key, expected, label] of pointers) {
+      const declared = projection.documents[key];
+      if (declared === undefined || declared === expected) continue;
       diagnostics.push(diagnostic(
         'AB6039',
-        `Manifest projections[${host}].documents.hooks names ${JSON.stringify(projection.documents.hooks)}, which host ${JSON.stringify(host)} never reads (${
-          hooksPath === undefined ? 'the host has no hooks document' : `its hooks document is ${JSON.stringify(hooksPath)}`
+        `Manifest projections[${host}].documents.${key} names ${JSON.stringify(declared)}, which host ${JSON.stringify(host)} never reads (${
+          expected === undefined ? `the host has no ${label} document` : `its ${label} document is ${JSON.stringify(expected)}`
         }).`,
-        projection.documents.hooks,
+        declared,
         host,
       ));
     }

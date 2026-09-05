@@ -367,6 +367,31 @@ it('AB6039 names a documents.mcp pointer the host never reads', async () => {
   })]);
 });
 
+it('AB6039 names documents.plugin and documents.marketplace pointers the host never reads', async () => {
+  const root = await copyArtifact();
+  const manifest = await readManifest(root);
+  const codex = projectionFor(manifest, 'codex').documents;
+  await rewriteManifest(root, (current) => withProjection(current, 'claude', (projection) => ({
+    ...projection,
+    documents: { ...projection.documents, marketplace: codex.marketplace!, plugin: codex.plugin! },
+  })));
+
+  const diagnostics = await validateArtifact({ artifactRoot: root });
+  expectOnly(diagnostics, 'AB6039');
+  expect(diagnostics).toEqual([
+    expect.objectContaining({
+      generatedPath: codex.marketplace,
+      message: `Manifest projections[claude].documents.marketplace names ${JSON.stringify(codex.marketplace)}, which host "claude" never reads (its marketplace document is ".claude-plugin/marketplace.json").`,
+      target: 'claude',
+    }),
+    expect.objectContaining({
+      generatedPath: codex.plugin,
+      message: `Manifest projections[claude].documents.plugin names ${JSON.stringify(codex.plugin)}, which host "claude" never reads (its plugin document is ".claude-plugin/plugin.json").`,
+      target: 'claude',
+    }),
+  ]);
+});
+
 it('AB6039 names a route-generated server whose row is not compiled', async () => {
   const root = await copyArtifact();
   await rewriteManifest(root, (manifest) => withMcpServers({

@@ -569,13 +569,13 @@ export default function AgentBundleWalkthrough() {
             <Text size="small" tone="secondary">
               agent-bundle.manifest.json records, per emitted file, its sha256 and the exact
               source inputs that produced it, plus the project revision (the artifact epoch),
-              each target's adapter revision, and the sha256 of every
-              pinned host schema it was validated against. agent-bundle.hooks.json is the
-              canonical hook index across targets.
+              each projection's adapter revision, and the sha256 of every
+              pinned host schema it was validated against. Its executables.hooks[] rows are the
+              canonical hook inventory across hosts (no separate hook index file).
             </Text>
             <Text size="small" tone="tertiary">
               Source: dist/agent-bundle.manifest.json fields files[].sha256, files[].sourceInputs,
-              project.revision, targets[].schemas[].
+              project.revision, projections[].schemas[], executables.hooks[].
             </Text>
           </Stack>
         </Grid>

@@ -28,7 +28,8 @@ export const failure = (
   target,
 }]);
 
-const missingPluginDocument = async (
+/** The manifest's pointer must land on a regular file; `install` copies and `doctor` compares what it names. */
+const requireDocument = async (
   bundleRoot: string,
   path: string,
   host: BundleIdentityHost,
@@ -91,7 +92,10 @@ export const readBundleIdentity = async (
       ) {
         throw failure('AB7001', `Cursor plugin name ${JSON.stringify(plugin)} is not a safe local plugin name.`, host);
       }
-      await missingPluginDocument(result.root, pluginDocument, host);
+      await requireDocument(result.root, pluginDocument, host);
+      if (projection.documents.marketplace !== undefined) {
+        await requireDocument(result.root, projection.documents.marketplace, host);
+      }
       return Object.freeze({
         bundleRoot: result.root,
         documents: projection.documents,
