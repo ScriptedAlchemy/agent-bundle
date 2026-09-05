@@ -1179,8 +1179,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const artifactManifestName = 'agent-bundle.manifest.json';
 
 /**
- * Defensive `web.apps` length from the bundle root manifest. Switch to
- * `readWebManifest` once `web-host/manifest.ts` lands (Lane 3).
+ * The `web.apps` count from the bundle root manifest, read leniently rather
+ * than through `readWebManifest`'s strict key contract: doctor reports what a
+ * bundle contains and never fails on a malformed manifest.
  */
 const readWebSurface = async (
   from: string | undefined,
