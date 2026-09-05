@@ -165,6 +165,10 @@ export const cliEntryRuntimeSpecifier = 'agent-bundle/cli-entry';
  */
 export const cliEntryRuntimePath = (): string => runtimeModulePath('cli-entry');
 
+export const webHostRuntimeSpecifier = 'agent-bundle/web-host';
+
+export const webHostRuntimePath = (): string => runtimeModulePath('web-host');
+
 export const installEntryRuntimeSpecifier = 'agent-bundle/install-entry';
 
 export const installEntryRuntimePath = (): string => runtimeModulePath('install-entry');
@@ -204,6 +208,10 @@ export interface GeneratedCliBinEntryOptions {
   readonly state?: NormalizedStateDefinition;
   /** Durable-state anchor fallback; defaults to `cwd` (the npm package bin). */
   readonly stateFallback?: GeneratedStateFallback;
+  readonly web?: {
+    readonly manifestRelativeUrl: string;
+    readonly pluginRootRelativeUrl: string;
+  };
   /** The sibling react-server worker bundle; required when any command is rendered. */
   readonly workerFile?: string;
 }
@@ -214,15 +222,23 @@ export interface GeneratedCliBinEntryOptions {
  * the npm bin anchors on the caller's `.agent-bundle`. Emitted once per
  * generated module, ahead of every other `node:path` / `node:url` import.
  */
-const pluginRootImports = (fallback: GeneratedStateFallback): readonly string[] =>
-  fallback === 'artifact'
+const pluginRootImports = (
+  fallback: GeneratedStateFallback,
+  relativeUrl?: string,
+): readonly string[] =>
+  fallback === 'artifact' || relativeUrl !== undefined
     ? ["import { fileURLToPath } from 'node:url';"]
     : ["import { join } from 'node:path';"];
 
-const pluginRootFallbackExpression = (fallback: GeneratedStateFallback): string =>
-  fallback === 'artifact'
-    ? "fileURLToPath(new URL('..', import.meta.url))"
-    : "join(process.cwd(), '.agent-bundle')";
+const pluginRootFallbackExpression = (
+  fallback: GeneratedStateFallback,
+  relativeUrl?: string,
+): string =>
+  relativeUrl !== undefined
+    ? `fileURLToPath(new URL(${JSON.stringify(relativeUrl)}, import.meta.url))`
+    : fallback === 'artifact'
+      ? "fileURLToPath(new URL('..', import.meta.url))"
+      : "join(process.cwd(), '.agent-bundle')";
 
 /**
  * The one plugin-root resolution of a generated module (#468): the SQLite
@@ -230,8 +246,11 @@ const pluginRootFallbackExpression = (fallback: GeneratedStateFallback): string 
  * module opens read `pluginRoot`, so `(await agent()).plugin.stateRoot` is the
  * directory they mount by construction.
  */
-const pluginRootDeclaration = (fallback: GeneratedStateFallback): string =>
-  `const pluginRoot = resolvePluginRoot({ fallback: ${pluginRootFallbackExpression(fallback)} });`;
+const pluginRootDeclaration = (
+  fallback: GeneratedStateFallback,
+  relativeUrl?: string,
+): string =>
+  `const pluginRoot = resolvePluginRoot({ fallback: ${pluginRootFallbackExpression(fallback, relativeUrl)} });`;
 
 const generatedStateImports = (
   state: NormalizedStateDefinition | undefined,
@@ -364,9 +383,16 @@ const renderedSessionSource = (workerFile: string): readonly string[] => [
  * exit 2); the route module's zod schemas stay the runtime validation
  * boundary.
  */
-export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions): string => {
-  const commandRoutes = options.routes.filter((route) =>
-    options.commands.some((command) => command.routeId === route.id));
+export const generatedCliBinEntrySource = (input: GeneratedCliBinEntryOptions): string => {
+  const commandRoutes = input.routes.filter((route) =>
+    input.commands.some((command) => command.routeId === route.id));
+  // A bin that compiles no command opens no request scope (a `web`-only
+  // plugin, #564): it mounts neither the project's state nor its providers
+  // and never imports the optional `@agent-bundle/runtime` they need, so a
+  // state or provider module's evaluation cannot keep `<plugin> web` from
+  // starting.
+  const runtimeBacked = commandRoutes.length > 0;
+  const options: GeneratedCliBinEntryOptions = runtimeBacked ? input : { ...input, providers: [], state: undefined };
   const rendered = options.commands.some((command) => command.rendered);
   if (rendered && options.workerFile === undefined) {
     throw new Error('A generated CLI with rendered commands requires a worker file.');
@@ -382,16 +408,28 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     // npm package bin runs from the operator's own shell and reads none.
     ...(stateFallback === 'artifact' ? [operatorEnvLayerImport] : []),
     `import { cliInputError, runGeneratedCliProcess } from ${JSON.stringify(cliEntryRuntimeSpecifier)};`,
-    rendered
-      ? "import { available, createAgentRenderDispatcher, resolvePluginRoot, runAgentRequest, unavailable } from '@agent-bundle/runtime';"
-      : "import { available, resolvePluginRoot, runAgentRequest, unavailable } from '@agent-bundle/runtime';",
-    ...pluginRootImports(stateFallback),
+    ...(options.web === undefined
+      ? []
+      : [
+        `import { runWebCommand } from ${JSON.stringify(webHostRuntimeSpecifier)};`,
+        "import webHostPage from 'agent-bundle/web-host-page';",
+      ]),
+    ...(runtimeBacked
+      ? [rendered
+        ? "import { available, createAgentRenderDispatcher, resolvePluginRoot, runAgentRequest, unavailable } from '@agent-bundle/runtime';"
+        : "import { available, resolvePluginRoot, runAgentRequest, unavailable } from '@agent-bundle/runtime';"]
+      : []),
+    ...pluginRootImports(stateFallback, options.web?.pluginRootRelativeUrl),
     ...(rendered ? ["import { Worker } from 'node:worker_threads';"] : []),
     ...generatedStateImports(options.state),
     ...routeImports(commandRoutes),
     ...providerImports(providers),
     '',
-    pluginRootDeclaration(stateFallback),
+    ...(runtimeBacked ? [pluginRootDeclaration(stateFallback, options.web?.pluginRootRelativeUrl)] : []),
+    // Launch from the artifact carrying the manifest, not an environment override.
+    ...(options.web === undefined
+      ? []
+      : [`const artifactRoot = ${pluginRootFallbackExpression(stateFallback, options.web.pluginRootRelativeUrl)};`]),
     ...generatedStateOwner(options.state, options),
     'const processLifetime = { hits: 0, instanceId: crypto.randomUUID(), pid: process.pid };',
     ...providerRegistrySource(providers),
@@ -415,6 +453,10 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     // Plain commands mount the same conventional providers as every other
     // generated request scope (#313, #459): once per request, in deterministic
     // key order, fail-closed, as the typed Agent request's own resolver.
+    ...(runtimeBacked ? [] : [
+      "const execute = async (command) => { throw new TypeError(`This plugin compiles no CLI command (${command.path.join(' ')}).`); };",
+    ]),
+    ...(runtimeBacked ? [
     'const execute = async (command, input, context) => {',
     '  const route = routes[command.routeId];',
     "  if (route === undefined || typeof route.module.default !== 'function') throw new TypeError('Generated CLI route must default-export an async function.');",
@@ -450,6 +492,7 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
       ? []
       : ['  } finally {', '    await bindings.close();', '  }']),
     '};',
+    ] : []),
     '',
     ...(rendered
       ? [
@@ -492,6 +535,19 @@ export const generatedCliBinEntrySource = (options: GeneratedCliBinEntryOptions)
     `  name: ${JSON.stringify(options.plugin.name)},`,
     ...(rendered ? ['  render,'] : []),
     `  version: ${JSON.stringify(options.plugin.version)},`,
+    ...(options.web === undefined
+      ? []
+      : [
+        '  web: Object.freeze({',
+        '    run: (argv, context) => runWebCommand({',
+        '      argv,',
+        `      manifestPath: fileURLToPath(new URL(${JSON.stringify(options.web.manifestRelativeUrl)}, import.meta.url)),`,
+        '      pageScript: webHostPage,',
+        '      pluginRoot: artifactRoot,',
+        '      ...context,',
+        '    }),',
+        '  }),',
+      ]),
     '});',
     ...(options.state === undefined
       ? []

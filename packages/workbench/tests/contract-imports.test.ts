@@ -10,6 +10,7 @@ const sourceFilePattern = /\.(?:ts|tsx)$/u;
 // bare side-effect imports (`import '...'`).
 const moduleSpecifierPattern = /(?:from\s+|import\s*\(\s*|import\s+)['"]([^'"]+)['"]/gu;
 const contractPath = 'agent-bundle/src/contracts/';
+const webHostBrowserPath = 'agent-bundle/src/web-host/browser/';
 
 const listSourceFiles = async (directory: string): Promise<readonly string[]> => {
   const files: string[] = [];
@@ -24,7 +25,7 @@ const listSourceFiles = async (directory: string): Promise<readonly string[]> =>
   return files;
 };
 
-it('workbench src imports agent-bundle only through its contracts/ surface', async () => {
+it('workbench src imports agent-bundle only through its contracts and browser host surfaces', async () => {
   const files = await listSourceFiles(srcRoot);
   // Guard the walker itself: an empty scan would vacuously pass.
   expect(files.length).toBeGreaterThan(30);
@@ -36,6 +37,7 @@ it('workbench src imports agent-bundle only through its contracts/ surface', asy
       const specifier = match[1]!;
       if (!specifier.includes('agent-bundle/src/')) continue;
       if (specifier.includes(contractPath)) continue;
+      if (specifier.includes(webHostBrowserPath)) continue;
       violations.push(`${relative(srcRoot, file)}: ${specifier}`);
     }
   }

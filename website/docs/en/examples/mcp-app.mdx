@@ -49,6 +49,18 @@ to see how the surfaces fit together instead of studying one of them alone.
   structural `AppRegister` augmentation. No JSON-RPC ids, pending maps, `postMessage('*')`, or
   `structuredContent` unwrapping remain in the view. See
   [The typed App client](../guide/authoring/mcp.mdx#the-typed-app-client).
+- **The `web` surface ships inside the artifact.** The example configures
+  `web: { apps: [{ app: 'status/status', tool: 'show-status', allow: ['call-tool'] }] }`,
+  so the composite root gains a `web` section in `agent-bundle.manifest.json` and
+  `bin/mcp-app-example.mjs` even without `src/cli/**`. From the built artifact:
+
+  ```sh
+  node artifact/bin/mcp-app-example.mjs web --no-open
+  ```
+
+  That prints the ready line and serves the status App on loopback. `agent-bundle dev` serves
+  the same page at `/web/status/status`. See
+  [Exposing an App in the browser](../guide/authoring/mcp.mdx#exposing-an-app-in-the-browser).
 
 ## What is authored
 

@@ -1,5 +1,5 @@
 {
-  "name": "serve-app-command-fixture",
+  "name": "web-surface-fixture",
   "private": true,
   "type": "module",
   "devDependencies": {

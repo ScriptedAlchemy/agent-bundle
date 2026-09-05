@@ -625,6 +625,33 @@ it('records both operator env files as absent for a pack that ships none, withou
   }
 });
 
+it('prints a web surface line when the bundle manifest exposes Apps', async () => {
+  const fixture = await temporaryDoctor();
+  try {
+    const bundle = await createBundle(fixture.root, 'cursor');
+    await writeJson(join(bundle, 'agent-bundle.manifest.json'), {
+      web: { apps: [{ app: 'status/status' }, { app: 'status/other' }] },
+    });
+    const report = await runDoctor({
+      endpointDirectory: fixture.endpointDirectory,
+      from: bundle,
+      home: fixture.home,
+      hosts: ['cursor'],
+    });
+    expect(report.web).toEqual({
+      apps: 2,
+      line: 'web: 2 App(s) exposed — run doctor-fixture web',
+      plugin: 'doctor-fixture',
+    });
+    const human = captureCliTerminal();
+    const humanCode = await runCli(['doctor'], human.output, { runDoctor: async () => report });
+    expect(humanCode).toBe(0);
+    expect(human.stdout()).toContain('web: 2 App(s) exposed — run doctor-fixture web');
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 it('inventories durable state under a checked --from bundle', async () => {
   const fixture = await temporaryDoctor();
   try {

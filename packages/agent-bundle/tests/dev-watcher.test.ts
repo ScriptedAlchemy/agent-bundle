@@ -67,11 +67,16 @@ it('debounces only relevant source paths into one ordered invalidation and close
   fake.emit('change', '/project with spaces/node_modules/dependency/index.js');
   fake.emit('change', '/project with spaces/.agent-bundle/active-epoch.json');
   fake.emit('change', '/project with spaces/dist/plugin.json');
+  // The package build stages `dist/` in a `.dist.stage-XXXXXX` sibling before
+  // renaming it into place; that staging tree is output, not source.
+  fake.emit('addDir', '/project with spaces/.dist.stage-W3rHAr');
+  fake.emit('add', '/project with spaces/.dist.stage-W3rHAr/bin/plugin.js');
+  fake.emit('add', '/project with spaces/.distinct-source.ts');
   await watcher.flush();
 
   expect(invalidations).toEqual([{
     occurredAt: '2026-08-14T12:00:00.000Z',
-    paths: ['src/first.ts', 'src/second.ts'],
+    paths: ['.distinct-source.ts', 'src/first.ts', 'src/second.ts'],
     reason: 'source-change',
   }]);
 

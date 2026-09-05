@@ -1,6 +1,6 @@
 import chokidar from 'chokidar';
 import { stat } from 'node:fs/promises';
-import { relative, resolve } from 'node:path';
+import { basename, dirname, relative, resolve } from 'node:path';
 
 import { freezeInvalidation, type Invalidation } from './types.ts';
 
@@ -31,6 +31,20 @@ const deletedPathSignature = 'deleted';
 const relativePath = (root: string, path: string): string | undefined => {
   const value = relative(root, resolve(root, path)).replaceAll('\\', '/');
   return value === '..' || value.startsWith('../') ? undefined : value;
+};
+
+/**
+ * Whether `source` is inside the staging directory an output root is
+ * assembled in: the package build (`package-build.ts`) and the artifact
+ * build (`build.ts`) `mkdtemp` a `.<output>.stage-XXXXXX` sibling of the
+ * output root and rename it into place, so those paths are build output
+ * too, not source. Without this, every `dist/` package build inside
+ * `agent-bundle dev` would invalidate the epoch it just produced.
+ */
+const isOutputStagingPath = (output: string, source: string): boolean => {
+  const parent = dirname(output);
+  const prefix = `${parent === '.' ? '' : `${parent}/`}.${basename(output)}.stage-`;
+  return source.startsWith(prefix);
 };
 
 const defaultPathSignature = async (path: string): Promise<string | undefined> => {
@@ -102,7 +116,7 @@ export class ProjectWatcher {
       if (source === undefined) return true;
       if (source.split('/').some((part) => excludedDirectoryNames.has(part))) return true;
       for (const ignored of this.#outputPaths) {
-        if (source === ignored || source.startsWith(`${ignored}/`)) return true;
+        if (source === ignored || source.startsWith(`${ignored}/`) || isOutputStagingPath(ignored, source)) return true;
       }
       return source.length > 0 && options.isIgnored?.(resolve(this.#root, path)) === true;
     };

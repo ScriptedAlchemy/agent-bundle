@@ -30,7 +30,7 @@ import { parseModule } from './module-scope.ts';
  * The leaf entries a route may value-import (`agent-bundle/routes`,
  * `agent-bundle/launch-env`, `agent-bundle/meta`, `agent-bundle/mcp-apps`,
  * `agent-bundle/mcp-entry`, `agent-bundle/cli-entry`,
- * `agent-bundle/terminal-capability`, `agent-bundle/serve-app-command`) are
+ * `agent-bundle/terminal-capability`, `agent-bundle/web-host`) are
  * deliberately absent.
  */
 export const compilerCarryingSpecifiers: readonly string[] = Object.freeze([
@@ -338,7 +338,7 @@ const describeImporter = (importer: string, relativePath: string, sourcePath: st
 };
 
 const recovery =
-  'Keep framework calls in a host process: serve an MCP App from a routed command with spawnServeApp from agent-bundle/serve-app-command, which spawns agent-bundle serve-app; use import type for framework types; otherwise move the call into a package.json script or a hand-written .mjs run from the checkout.';
+  'Keep framework calls in a host process: expose the App with web.apps and open it with <plugin> web; use import type for framework types; otherwise move the call into a package.json script or a hand-written .mjs run from the checkout.';
 
 /**
  * AB4837: the module a generated executable bundles value-imports a

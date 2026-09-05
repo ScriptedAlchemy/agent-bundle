@@ -3,6 +3,9 @@
   "compilerOptions": {
     "rootDir": "./src"
   },
+  "exclude": [
+    "src/web-host/browser/main.ts"
+  ],
   "include": [
     "src/**/*.ts"
   ]

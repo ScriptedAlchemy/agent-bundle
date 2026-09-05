@@ -474,7 +474,7 @@ it('refuses a routed command that imports agent-bundle/api with AB4837 before bu
   const { diagnostics } = failure as DiagnosticError;
   const reported = diagnostics.filter((diagnostic) => diagnostic.code === 'AB4837');
   expect(reported).toEqual([expect.objectContaining(expected)]);
-  expect(reported[0]?.recovery).toContain('spawnServeApp from agent-bundle/serve-app-command');
+  expect(reported[0]?.recovery).toContain('expose the App with web.apps and open it with <plugin> web');
   // Neither the bundler's resolution failure nor the artifact validator's
   // rejection of the inlined compiler reaches the author any more.
   expect(diagnostics.some((diagnostic) => diagnostic.message.includes("Can't resolve"))).toBe(false);
