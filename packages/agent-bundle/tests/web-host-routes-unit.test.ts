@@ -60,14 +60,24 @@ interface FixtureOptions {
 
 const writeFixture = async (root: string, options: FixtureOptions): Promise<void> => {
   await writeFile(join(root, 'agent-bundle.manifest.json'), JSON.stringify({
-    targets: options.targets.map((name) => ({ name })),
+    executables: {
+      mcpServers: [{
+        apps: [],
+        hosts: options.targets,
+        id: 'mcp:status',
+        kind: 'compiled',
+        launch: { args: [], entry: 'mcp/mcp-status.mjs', env: {} },
+        name: 'status',
+        transport: 'stdio',
+      }],
+    },
+    files: [{ path: 'mcp/mcp-status.mjs' }],
+    manifestVersion: 2,
+    projections: options.targets.map((host) => ({ host })),
     web: {
       apps: [{
         allow: [],
         app: 'status/status',
-        args: [],
-        entry: 'mcp/mcp-status.mjs',
-        env: {},
         ...(options.openingInput === undefined ? {} : { input: options.openingInput }),
         name: 'status',
         resourceUri,

@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 
 import { expect, it } from '@rstest/core';
 
+import { build } from '../src/api.ts';
 import { runCli as runSourceCli, type CliDependencies } from '../src/cli.ts';
 import { captureCliTerminal } from './support/cli-terminal.ts';
 import { cachedNpmInstallArguments, packOutputFromJson } from './support/shared-pack.ts';
@@ -297,7 +298,7 @@ it('builds a selected target through the built executable from a path containing
       },
     });
     expect(JSON.parse(await readFile(join(project.output, 'agent-bundle.manifest.json'), 'utf8'))).toMatchObject({
-      targets: [{ name: 'codex' }, { name: 'portable' }],
+      projections: [{ host: 'codex' }, { host: 'portable' }],
     });
   } finally {
     await rm(resolve(project.root, '..'), { force: true, recursive: true });
@@ -375,9 +376,9 @@ it('answers --version, --help, and an argv error without loading the Effect term
   expect(help.stdout).toContain('Usage: agent-bundle');
   expect(help.modules.filter((url) => effectModulePattern.test(url))).toEqual([]);
 
-  const argvError = await runCliRecordingModuleLoads(['mcp', 'list', '--server', 'fixture']);
+  const argvError = await runCliRecordingModuleLoads(['mcp', 'list']);
   expect(argvError).toMatchObject({ code: 2, stdout: '' });
-  expect(argvError.stderr).toContain("required option '--target <target>' not specified");
+  expect(argvError.stderr).toContain("required option '--server <server>' not specified");
   expect(argvError.modules.filter((url) => effectModulePattern.test(url))).toEqual([]);
 
   const command = await runCliRecordingModuleLoads(['hooks', 'list', '--artifact', join(workspaceRoot, 'missing artifact'), '--json']);
@@ -403,6 +404,17 @@ it('runs MCP and hook operations from a packed consumer with explicit and tempor
     expect(listedMcp).toMatchObject({ code: 0, stderr: '' });
     expect(JSON.parse(listedMcp.stdout)).toMatchObject({ tools: [{ name: 'inspect' }] });
 
+    const portableArtifact = join(source, 'portable-artifact');
+    const portableBuilt = await runExecutable(consumer.cli, consumer.root, [
+      'build', '--root', source, '--output', portableArtifact, '--target', 'portable', '--json',
+    ]);
+    expect(portableBuilt).toMatchObject({ code: 0, stderr: '' });
+    const listedDefaultHost = await runExecutable(consumer.cli, consumer.root, [
+      'mcp', 'list', '--artifact', portableArtifact, '--server', 'fixture', '--json',
+    ]);
+    expect(listedDefaultHost).toMatchObject({ code: 0, stderr: '' });
+    expect(JSON.parse(listedDefaultHost.stdout)).toMatchObject({ tools: [{ name: 'inspect' }] });
+
     const invokedMcp = await runExecutable(consumer.cli, consumer.root, [
       'mcp', 'invoke', '--artifact', artifact, '--server', 'fixture', '--target', 'codex',
       '--tool', 'inspect', '--input', '{"question":"ready"}', '--json',
@@ -426,10 +438,25 @@ it('runs MCP and hook operations from a packed consumer with explicit and tempor
     expect(unsupportedTarget.stdout).toBe('');
     expect(JSON.parse(unsupportedTarget.stderr)).toMatchObject([{ code: 'AB5000', severity: 'error' }]);
 
-    const missingTarget = await runExecutable(consumer.cli, consumer.root, [
+    const ambiguousTarget = await runExecutable(consumer.cli, consumer.root, [
       'mcp', 'list', '--artifact', artifact, '--server', 'fixture', '--json',
     ]);
-    expect(missingTarget).toMatchObject({ code: 2, stdout: '' });
+    expect(ambiguousTarget).toMatchObject({ code: 1, stdout: '' });
+    expect(JSON.parse(ambiguousTarget.stderr)).toMatchObject([{
+      code: 'AB5000',
+      message: 'Choose --target: the artifact projects MCP server fixture for [claude, codex].',
+      severity: 'error',
+    }]);
+
+    const unknownProjection = await runExecutable(consumer.cli, consumer.root, [
+      'mcp', 'list', '--artifact', artifact, '--server', 'fixture', '--target', 'cursor', '--json',
+    ]);
+    expect(unknownProjection).toMatchObject({ code: 1, stdout: '' });
+    expect(JSON.parse(unknownProjection.stderr)).toMatchObject([{
+      code: 'AB5000',
+      message: 'The artifact declares projections [claude, codex]; cursor is not among them.',
+      severity: 'error',
+    }]);
     const missingServer = await runExecutable(consumer.cli, consumer.root, [
       'mcp', 'list', '--artifact', artifact, '--target', 'codex', '--json',
     ]);
@@ -445,8 +472,8 @@ it('runs MCP and hook operations from a packed consumer with explicit and tempor
       'hooks', 'list', '--artifact', artifact, '--json',
     ]);
     expect(JSON.parse(listedAllHooks.stdout)).toMatchObject([
-      { target: 'claude' },
-      { target: 'codex' },
+      { host: 'claude' },
+      { host: 'codex' },
     ]);
     expect((JSON.parse(listedAllHooks.stdout) as readonly unknown[])).toHaveLength(2);
 
@@ -529,8 +556,10 @@ it('keeps inspect JSON stable and validates only the supplied artifact', async (
     expect(firstInspection).toEqual(secondInspection);
     expect(firstInspection).toMatchObject({ code: 0, stderr: '' });
     const firstInspectionDocument = JSON.parse(firstInspection.stdout) as {
+      readonly output?: { readonly manifest?: unknown };
       readonly plans: readonly unknown[];
     };
+    expect(firstInspectionDocument.output?.manifest).toBeUndefined();
     expect(firstInspectionDocument).toMatchObject({
       model: {
         metadata: { name: 'cli-fixture' },
@@ -570,6 +599,46 @@ it('keeps inspect JSON stable and validates only the supplied artifact', async (
       'validate', '--root', project.root, '--artifact', project.output, '--no-host-validation',
     ]);
     expect(humanValidation).toEqual({ code: 0, stderr: '', stdout: 'Validation succeeded\n' });
+  } finally {
+    await rm(resolve(project.root, '..'), { force: true, recursive: true });
+  }
+}, 30_000 * timeScale);
+
+it('includes a built-manifest summary on inspect --json after a build, and omits it before', async () => {
+  await buildCliPackage();
+  const project = await createCliProject();
+  try {
+    const before = await runSourceCliWithOutput(['inspect', '--root', project.root, '--json']);
+    expect(before).toMatchObject({ code: 0, stderr: '' });
+    expect(JSON.parse(before.stdout).output.manifest).toBeUndefined();
+
+    await build({ output: join(project.root, 'dist'), root: project.root });
+
+    const after = await runSourceCliWithOutput(['inspect', '--root', project.root, '--json']);
+    expect(after).toMatchObject({ code: 0, stderr: '' });
+    expect(JSON.parse(after.stdout).output.manifest).toMatchObject({
+      application: { id: 'plugin:cli-fixture', name: 'cli-fixture', version: '1.0.0' },
+      executables: { bins: [], hooks: 0, mcpServers: [], scripts: [] },
+      manifestVersion: 2,
+      projections: [{ host: 'codex' }, { host: 'portable' }],
+    });
+    expect(JSON.parse(after.stdout).output.manifest.path).toMatch(/agent-bundle\.manifest\.json$/u);
+    expect(JSON.parse(after.stdout).output.manifest.routes).toMatchObject({
+      events: 0,
+      scripts: 0,
+      servers: 0,
+    });
+
+    const human = await runSourceCliWithOutput(['inspect', '--root', project.root]);
+    expect(human).toMatchObject({ code: 0, stderr: '' });
+    expect(human.stdout).toContain('Built manifest: v2 cli-fixture (codex, portable)');
+
+    const artifact = await runSourceCliWithOutput([
+      'inspect', '--artifact', join(project.root, 'dist'), '--json',
+    ]);
+    expect(artifact).toMatchObject({ code: 0, stderr: '' });
+    expect(JSON.parse(artifact.stdout).manifest.application.id).toBe('plugin:cli-fixture');
+    expect(JSON.parse(artifact.stdout).application.identity.id).toBe('plugin:cli-fixture');
   } finally {
     await rm(resolve(project.root, '..'), { force: true, recursive: true });
   }

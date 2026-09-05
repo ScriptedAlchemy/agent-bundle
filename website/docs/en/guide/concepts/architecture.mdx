@@ -8,8 +8,9 @@ agent-bundle compiles one project into native host plugins. This page describes
 the compiler **as the code works today**: three layers of data that later
 stages read, the modules that produce and consume each layer, and the
 artifact manifest those stages leave behind. It is the documentation slice of
-[#592](https://github.com/ScriptedAlchemy/agent-bundle/issues/592) (step 2).
-Nothing here changes public behavior.
+[#592](https://github.com/ScriptedAlchemy/agent-bundle/issues/592): the
+three layers from step 2, and the v2 authoritative manifest from step 3
+([PR #604](https://github.com/ScriptedAlchemy/agent-bundle/pull/604)).
 
 Paths below are relative to `packages/agent-bundle/src/` unless a package
 name is spelled out. Type names are the ones the compiler exports — there is
@@ -276,7 +277,6 @@ and writes one tree at `artifactRoot` (CLI default `artifact/`;
 | Plan entries | `build/emit.ts` `emitPlanEntries` | Host documents, skills, commands, rules, assets, `INSTALL.md` / `install.mjs` |
 | Scripts, hooks, MCP entries, CLI bins | `build/rslib.ts` `compileRslibSurfaces` via `build/entries.ts`, `build/cli-bins.ts` | `scripts/*.mjs`, `hooks/*.mjs`, `mcp/mcp-<server>-<hash>.mjs`, `bin/<plugin>.mjs` (+ `-flight.mjs` workers) |
 | MCP Apps | `build/mcp-apps.ts` `compileMcpApps` | `mcp-apps/<name>.html` (inlined into the generated server as well) |
-| Hook index | `build/emit.ts` `writeHookIndex` | `agent-bundle.hooks.json` over the selected hosts |
 | Compile evidence | `build/compile-evidence.ts` `createCompileEvidenceRecord` | `agent-bundle.compile-evidence.json` (one `assets[]` entry per compiled file) |
 | Manifest | `build/build.ts` `manifestFor` + `build/emit.ts` `writeManifest` | `agent-bundle.manifest.json` |
 | Publish | `build/emit.ts` `publishArtifact` | Atomic rename of the stage directory onto `outputRoot` |
@@ -292,7 +292,7 @@ embed their HTML), then the node surfaces.
 | Host-pack, package-build `dist`, and MCP App view compilations keep only permitted externals | `build/compiler.ts`, `build/external-policy.ts` | `AB6005` |
 | Compile evidence record vs manifest `bundle` files | `build/compile-evidence.ts` `compileEvidenceDiagnostics` | `AB6039` |
 | Emitted modules the compiler could not see: an expression `import()` anywhere, a literal import the build was told to ignore (`rspackIgnore`/`webpackIgnore`) in a compiled module, and the imports and syntax of JavaScript the framework did not compile or a `tools` hatch may have rewritten | `build/validate-artifact-modules.ts` | `AB6005` (residual forms) |
-| Skills / hooks / MCP documents match the selected hosts | `build/validate-artifact-skills.ts`, `build/validate-artifact-hooks.ts`, `build/validate-artifact-mcp.ts` | per-surface `AB60xx` |
+| Skills / hooks / MCP documents match the selected hosts | `build/validate-artifact-skills.ts`, `build/validate-artifact-hooks.ts` (`executables.hooks[]`, `AB6018`), `build/validate-artifact-mcp.ts` | per-surface `AB60xx` |
 | Artifact ownership of the output root | `build/validate-artifact.ts` | `AB6014` |
 | Packed tarball contains every manifest file and no unused install deps | `build/pack-inventory.ts` | `AB7010`, `AB7014`, `AB7015` |
 
@@ -332,8 +332,7 @@ artifact/
 ├── skills/, scripts/, commands/, rules/, assets/, mcp-apps/
 ├── INSTALL.md, install.mjs
 ├── agent-bundle.manifest.json
-├── agent-bundle.compile-evidence.json
-└── agent-bundle.hooks.json
+└── agent-bundle.compile-evidence.json
 ```
 
 [Targets and artifacts](../../reference/targets-artifacts.mdx) is the
@@ -392,108 +391,117 @@ session identity the host did not supply.
 
 The writer is `build/build.ts` `manifestFor`. It assembles an
 `ArtifactManifest` (`build/manifest.ts`; TypeDoc:
-[`ArtifactManifest`](../../api/index-1.md#artifactmanifest)) and
-`writeManifest` serializes it with `assembleArtifactManifest`: canonical
-`stableJson` plus a trailing newline. `parseArtifactManifest` rejects any other byte sequence, duplicate
-keys, unknown keys, missing keys, unsorted arrays, and a file entry that
-names the manifest itself.
+[`ArtifactManifest`](../../api/index-1.md#artifactmanifest))
+from `manifestProjections`, `manifestBins` / `manifestHooks` /
+`manifestMcpServers` / `manifestScripts`, `manifestDistribution`, and
+`build/manifest-routes.ts` `artifactRoutesFor`. `writeManifest`
+serializes it with `assembleArtifactManifest`: canonical `stableJson`
+plus a trailing newline. `parseArtifactManifest` rejects any other byte
+sequence, duplicate keys, unknown keys, missing keys, unsorted arrays,
+and a file entry that names the manifest itself. `manifestVersion` is
+`2`. The public reader is `build/manifest-file.ts`
+`readArtifactManifest`: `ok`, `missing` (ENOENT only), or `invalid`.
 
-The schema is **closed in TypeScript**, not shipped as JSON Schema.
-`requireExactKeys` in `build/manifest.ts` is the authority. Host
+The schema is **closed in TypeScript** (`requireExactKeys` in
+`build/manifest.ts`) **and** shipped as JSON Schema
+(`packages/agent-bundle/schemas/agent-bundle.manifest.schema.json`),
+exported as `artifactManifestSchema` and
+`validateArtifactManifestSchema` from `build/manifest-schema.ts` via
+`api.ts` / `index.ts`. The parser remains the stricter authority: it
+also checks cross-references, canonical bytes, and sort order. Host
 `plugin.json` / `hooks.json` / `mcp.json` schemas under
-`adapters/schemas/**` and Agent Skills frontmatter under `schemas/**` are a
-different contract; the website [Hosts](../../reference/hosts.md) /
+`adapters/schemas/**` and Agent Skills frontmatter under `schemas/**`
+are a different contract; the website
+[Hosts](../../reference/hosts.md) /
 [Events](../../reference/events.md) pages are generated from
 `adapters/capabilities/*.json` and `docs/diagnostics.md`, not from this
-manifest. Step 3 of #592 (authoritative manifest) is the follow-up that
-would give this file a richer, machine-readable schema.
+manifest.
 
-### Fields the writer emits
+Every section and field is on
+[Artifact manifest](../../reference/artifact-manifest.mdx). This page
+keeps only the outline.
 
-| Field | Shape | Source |
-| --- | --- | --- |
-| `producer` | `{ name: 'agent-bundle', version }` | `packages/agent-bundle/package.json` `version` |
-| `project` | `configPath`, `configDigest`, `modelDigest`, `revision`, `sourceInputs[]`, optional `packageName` / `packageVersion` | `ProjectContext` from the build (`configDigest` must equal the `sourceInputs` hash of `configPath`; `revision` is `digest({ inputs: sourceInputs })`) |
-| `files[]` | `path`, `bytes`, `sha256`, `kind` (`bundle` \| `copy` \| `generated` \| `prebuilt`), optional `mode`, `sourceInputs[]` | `createArtifactManifestFiles` over the staged tree + output provenance. The manifest path itself is omitted. Sorted by `path`. |
-| `runtime` | `{ node }` | `NormalizedPlugin.runtime` (canonical `major.minor.patch`, must satisfy the generated-runtime floor) |
-| `targets[]` | `name`, `adapterRevision`, `observedVersion`, `schemas[]` (`name`, `revision`, `sha256`) | `registry.metadata(name)` for each selected projection, sorted by `name` |
-| `agentSkills` | `specification`, `sourceRevision`, `schemaSha256` | `schemas/agent-skills/contract.ts` `agentSkillsSchemaRevision` |
-| `validation` | `{ artifact, source, targets[] }` each `{ status: 'passed' }` (target rows also have `name`) | written only after a successful build; `validation.targets` names must equal `targets` |
+### Sections the writer emits
 
-`project.sourceInputs[]` rows are `{ path, sha256, executable? }`.
-`files[].sourceInputs` are path strings that must already appear on
-`project.sourceInputs`.
+The document has two parts with two version numbers. The **public
+contract** (`manifestVersion: 2`) is what consumers read. The
+**compiler record** (`compiler`, `recordVersion: 1`) is the operational
+account of the run — producer, project digests, provenance, adapter
+revisions, pinned schemas, validation — and changes without bumping
+`manifestVersion`; consumer readers never need it.
 
-There is no `routes`, `servers`, `apps`, `hooks`, `bins`, or `web` section.
-A file that is a compiled MCP entry or a CLI bin appears only as a row in
-`files[]`.
+| Section | What it records |
+| --- | --- |
+| `manifestVersion` | `2` |
+| `application` | Host-independent identity: `id`, `name`, `version`, optional `description` |
+| `files[]` | Every emitted file except the manifest (`path`, `bytes`, `sha256`, `kind`, optional `mode`) |
+| `runtime` | `{ node }` from `NormalizedPlugin.runtime` |
+| `projections[]` | One row per selected host. `host` is the selected name; `builtInHost` is the shipped adapter identity (absent for an advanced-registry adapter); `documents` (`plugin?`, `marketplace?`, `mcp?`, `hooks?`) point at the derived host documents; optional `marketplace.name`. Renamed from `targets[]`. |
+| `routes` | Compiled route graph: `servers[]`, `events[]`, `scripts[]`, `cli?`, `providers[]`, `layouts[]`, `contracts[]`, `digest` |
+| `executables` | Processes the root can start: `bins[]`, `hooks[]` (`kind` is `config` \| `event-route`), `mcpServers[]` (`entry`, `apps[]`), `scripts[]` |
+| `distribution` | `channels` (`local` always; `npm` when packaged) and optional `install` pointers |
+| `compiler` | `recordVersion: 1`; `producer` (`{ name: 'agent-bundle', version }`); `project` (`configPath`, `configDigest`, `modelDigest`, `revision`, `sourceInputs[]`, optional `packageName` / `packageVersion`); `provenance[]` (one `{ path, sourceInputs[] }` per `files[]` row); `adapters[]` (one `{ host, adapterRevision, observedVersion, schemas[] }` per projection); `agentSkills` (`specification`, `sourceRevision`, `schemaSha256`); `validation` (`{ source, artifact, projections[] }`, every `status` is `'passed'`) |
 
 ### Who reads each field
 
-Production readers call `parseArtifactManifest` or take an already-parsed
-`ArtifactManifest`. Tests are omitted.
+Production readers call `readArtifactManifest` or
+`parseArtifactManifest`. Tests are omitted except the installed-host
+harness.
 
 | Reader | Fields used | Purpose |
 | --- | --- | --- |
-| `build/validate-artifact.ts` | all of them | Re-parse the on-disk bytes, match `files[]` digests and modes, check `targets[]` against the registry, pin `agentSkills` and `runtime.node` |
+| `build/validate-artifact.ts` | all of them | Re-parse the on-disk bytes, match `files[]` digests and modes, check `projections[]` and `compiler.adapters[]` (adapter revision, observed version, and `builtInHost` identity, `AB6010`) against the registry, pin `compiler.agentSkills` and `runtime.node`. There is no separate coherence pass: the host documents and the manifest are written from the same compiled plans in one build, and every document is a digest-pinned `files[]` row |
 | `build/compiler.ts`, `build/external-policy.ts` | `CompileResult.externals` for host packs, package-build `dist`, and MCP App views | `AB6005` compile-evidence self-containment |
 | `build/compile-evidence.ts` | `files[]` (`bundle` rows) | `AB6039`: re-check the persisted compile evidence record against the file table without parsing JavaScript |
 | `build/validate-artifact-modules.ts` | `files[]` (`.js`/`.mjs` rows) plus package-build `dist`; `bundle` rows the compile evidence record proves are lexed and their literal imports held to the recorded externals | `AB6005` residual walk: expression `import()`, ignored (`rspackIgnore`) literal imports, uncompiled or hatch-rewritten modules |
-| `build/validate-artifact-skills.ts` | `targets[]` (`manifestTargets`) plus the tree | Skill documents vs selected hosts |
-| `build/validate-artifact-hooks.ts` | `targets[]`, hook files | Hook documents vs selected hosts |
-| `build/validate-artifact-mcp.ts` | `targets[]`, MCP files | MCP documents vs selected hosts |
-| `build/pack-inventory.ts` | `files[]`, `targets[]`, `project.packageVersion` | Packed tarball must contain every manifest file; install-surface requirements derived from selected names (`AB7010`); digest drift; release-version agreement; `AB7014` / `AB7015` |
-| `eval/artifact.ts` | `files[]`, `targets[]`, `runtime` | `evalTargetDigests`: one digest per selected host over the **whole** file table (same bytes, distinct identity) |
-| `dev/artifacts/artifact-inspection-service.ts` | `files[]`, `project`, `targets[]` | Workbench artifact inspector: rebuilds one tree from `files[]` and labels it once per selected host |
-| `dev/artifacts/artifact-script-catalog.ts` | `files[]`, `targets[]` | Browser-selectable scripts. Each selected host that lays out `scripts/` gets a catalog row pointing at the **same** root file |
-| `index.ts` | re-exports the types and `parse` / `serialize` / `assemble` | Public API |
+| `build/validate-artifact-skills.ts` | `projections[]` (`manifestTargets`) plus the tree | Skill documents vs selected hosts |
+| `build/validate-artifact-hooks.ts` | `executables.hooks[]`, `projections[]` | `AB6018`: hook rows vs host hook documents |
+| `build/validate-artifact-mcp.ts` | `projections[]`, MCP files | MCP documents vs selected hosts |
+| `build/pack-inventory.ts` | `files[]`, `projections[]`, `application.version`, `compiler.project.packageVersion` | Packed tarball must contain every manifest file (`AB7010`); digest drift; release-version agreement; `AB7014` / `AB7015` |
+| `eval/artifact.ts` | `files[]`, `projections[]`, `runtime` | `evalTargetDigests`: one digest per `projections[].host` over the **whole** file table (same bytes, distinct identity) |
+| `dev/artifacts/artifact-inspection-service.ts` | `files[]`, `compiler.project`, `compiler.provenance[]`, `application`, `distribution`, `projections[]`, `routes`, `executables` | Workbench artifact inspector: one tree from `files[]`, labeled once per projection; the application tree through `dev/artifacts/application-explorer.ts` (`ArtifactInspection.application`), a thin projection rather than the manifest's raw shape |
+| `dev/artifacts/artifact-executables.ts` | `executables.scripts[]` | Host-scoped script rows (replaces `artifact-script-catalog.ts`) |
+| `services/hook-service.ts` | `executables.hooks[]` | `hooks list` / `simulate` |
+| `dev/playground/hook-playground-service.ts` | `executables.hooks[]` (via `hook-service`) | Workbench hook playground |
+| `install/identity.ts` `readBundleIdentity` | `application`, `projections[]` | `install`, `uninstall`, and `doctor`: identity from `application`; projection by `builtInHost === host` (not the selected `host` name); plugin document from `documents.plugin` (must exist); marketplace name from `marketplace.name` (claude / codex). `AB7001` when any of that is missing or invalid. `<from>/<host>` is never probed. |
+| `serve-app`, `mcp list` / `invoke` / `run` | `executables.mcpServers[]`, `projections[]` | `build/manifest-projection.ts` resolves the server; `--target` is optional when one MCP-capable projection hosts it |
+| `inspect --json` | `output.manifest` | `inspectManifestOutput`: projections and executables summary when a built manifest exists |
+| `test/installed.ts` | `projections[]`, `executables.hooks[]` | Installed-host proofs pick the shipped adapter by `builtInHost` |
+| `index.ts` | re-exports the types, `parse` / `serialize` / `assemble` / `read`, and the schema | Public API |
 
-`install/install.ts` and `install/doctor.ts` **do not** read
-`agent-bundle.manifest.json`. `resolveBundleRoot` looks for the Claude,
-Codex, or Cursor plugin manifest (`.claude-plugin/plugin.json`,
-`.codex-plugin/plugin.json`, `.cursor-plugin/plugin.json`) directly under
-`--from`. Identity comes from that host document; Claude and Codex also
-read the marketplace name from `.claude-plugin/marketplace.json` or
-`.agents/plugins/marketplace.json`. There is no portable `install` /
-`doctor` host. Missing projection is `AB7001`.
+There is no portable `install` / `doctor` host
+(`BundleIdentityHost` is `claude` \| `codex` \| `cursor`).
 
-### Step 3 gap list
+### What step 3 landed
 
 [#592](https://github.com/ScriptedAlchemy/agent-bundle/issues/592) step 3
-makes this file the compiled application database. Today the following is
-inferred by re-reading source, re-probing the tree, or consulting the
-in-memory `NormalizedPlugin` — none of it is in the manifest:
+made this file the compiled application index (`manifestVersion` 2).
+These numbered items from the former gap list now live on the manifest,
+except (5):
 
-1. **Route graph.** Servers, tools, resources, prompts, Apps, CLI commands,
-   event routes, providers, and layouts exist on `CompiledRouteGraph`
-   (`PreparedProject.routeGraph`) and as copied collections on
-   `NormalizedPlugin`. Workbench route pages and `inspect` rebuild or
-   retain that graph from the project, not from the artifact.
-2. **MCP / CLI / App inventory.** `files[]` lists `mcp/*.mjs` and
-   `bin/*.mjs` as opaque paths. There is no `servers[]` with ids,
-   `resourceUri`, opening tools, or env. `serve-app` still resolves Apps
-   from the live server and the project/epoch, not from the manifest.
-   `dev/epoch-store.ts` and `serve-app` do not parse
-   `agent-bundle.manifest.json`
-   ([#564](https://github.com/ScriptedAlchemy/agent-bundle/issues/564)
-   proposes a `web` section).
-3. **Hook semantics.** `agent-bundle.hooks.json` indexes wrappers; the
-   artifact manifest does not. Config-declared vs event-route vs native
-   origin is not recorded.
-4. **Install / doctor.** Claude, Codex, and Cursor identity is read from
-   that host's `plugin.json`. Claude/Codex marketplace names come from the
-   corresponding marketplace document. Selected-projection membership is
-   "does this host's manifest path exist," not `manifest.targets`. Portable
-   is not an `install` / `doctor` host.
-5. **Capability view.** `targets[].schemas` pins host document schemas.
-   Required capabilities, notice-delivery intersection, and omitted
-   features are not in the manifest (`inspect` `omittedFeatures` comes from
-   the model).
-6. **Executables as first-class rows.** Mode bits on `files[]` mark
-   executables. There is no `bins[]` / `mcpEntries[]` with the composite
-   identity, allowed event targets, or launch env.
-7. **Distribution metadata.** Git / npm / local source entries live in host
-   marketplace documents when adapters emit them, not in this file.
+1. **Route graph.** `routes` records servers, tools, resources, prompts,
+   Apps, CLI commands, event routes, providers, layouts, contracts, and
+   `digest`.
+2. **MCP / CLI / App inventory.** `executables.mcpServers[]` records
+   each server (`entry`, `apps[]`); `executables.bins[]` records the
+   routed CLI.
+3. **Hook semantics.** `executables.hooks[].kind` is `config` or
+   `event-route`. Native commands an author writes into a host hooks
+   document are not rows. `agent-bundle.hooks.json` is gone.
+4. **Install / doctor identity.** `readBundleIdentity` reads
+   `application` and the projection whose `builtInHost` matches the
+   host.
+5. **Capability view.** Deliberately not recorded. Notice-delivery
+   intersection is derived at build time in `build/compose.ts`
+   `compositeNoticeDelivery`; `inspect` `omittedFeatures` still comes
+   from the model. Recording that intersection is later #592 work.
+6. **Executables as first-class rows.** `executables.bins[]`,
+   `hooks[]`, `mcpServers[]`, and `scripts[]`.
+7. **Distribution metadata.** `distribution.channels` and optional
+   `distribution.install`.
+
+The field contract is
+[Artifact manifest](../../reference/artifact-manifest.mdx).
 
 ## Where the code diverges today
 
@@ -537,19 +545,24 @@ Workbench, `serve-app`, dev `/web/<server>/<app>`, and the artifact's
 Apps use the typed client from `agent-bundle/app`
 ([#594](https://github.com/ScriptedAlchemy/agent-bundle/issues/594) landed).
 
-**Filesystem probing next to the manifest.** `install` / `doctor`
-`resolveBundleRoot` probes the Claude, Codex, or Cursor `plugin.json`. Eval and the Workbench
-inspector parse the artifact manifest for integrity, then still derive
-scripts and host trees from path prefixes and
-`registry.artifactLayout`. `evalTargetDigests` hashes the whole root once
-per selected host rather than recording a per-projection view.
+**Filesystem probing next to the manifest.** `install`, `uninstall`, and
+`doctor` read identity through `install/identity.ts` `readBundleIdentity`
+(`application`, `projections[].builtInHost`, `documents.plugin`,
+marketplace name). They do not probe `<from>/<host>` or a host
+`plugin.json` to find the root. Eval still hashes the whole file table
+once per `projections[].host` (`evalTargetDigests`) rather than recording
+a per-projection file view. The Workbench inspector rebuilds one tree
+from `files[]` and labels it once per `projections[]` row, reading
+executables from `executables` rather than path prefixes.
 
 **Per-target leftovers in shared surfaces.** Shared MCP / CLI / App
 compile uses `composite.identity`, but hook wrappers still bake one
-`target`. `artifact-script-catalog.ts` emits one catalog row per selected
-host for the same file. `artifact-inspection-service.ts` labels the same
-tree once per `manifest.targets[]` name. Notice delivery is the
-intersection of every selected host, applied to every shared MCP entry.
+`target`. `dev/artifacts/artifact-executables.ts` expands
+`executables.scripts[]` into one execution row per host that lists the
+script. `artifact-inspection-service.ts` labels the same tree once per
+`projections[]` host. Notice delivery is the intersection of every
+selected host (`compose.ts` `compositeNoticeDelivery`), applied to every
+shared MCP entry, and is not recorded on the manifest.
 
 **Capability selection is still host names.** Authors write
 `targets: ['claude', 'codex']` (or per-component `targets`) rather than
@@ -559,8 +572,9 @@ does not yet resolve application requirements through them.
 ## Roadmap
 
 [#592](https://github.com/ScriptedAlchemy/agent-bundle/issues/592) is the
-umbrella. This page is step 2 (document the boundaries). The
-implementation slices under it, each with its own issue:
+umbrella. This page documents the three layers (step 2) and the v2
+manifest (step 3). The implementation slices under it, each with its own
+issue:
 
 | Issue | Slice |
 | --- | --- |
@@ -571,9 +585,11 @@ implementation slices under it, each with its own issue:
 | [#594](https://github.com/ScriptedAlchemy/agent-bundle/issues/594) | Generated typed App client + shared bridge |
 | [#564](https://github.com/ScriptedAlchemy/agent-bundle/issues/564) | Production `web` surface on that same bridge |
 
-Step 3 is an authoritative `agent-bundle.manifest.json`. The gap list
-above is the input to that work. #592 stays open until the acceptance
-criteria on that issue land.
+Step 3 landed an authoritative `agent-bundle.manifest.json`
+(`manifestVersion` 2). The field contract is
+[Artifact manifest](../../reference/artifact-manifest.mdx).
+#592 stays open until the remaining acceptance criteria on that issue
+land.
 
 ## Next
 
@@ -584,8 +600,10 @@ criteria on that issue land.
 - [MCP servers and Apps](../authoring/mcp.mdx) and
   [Hooks](../authoring/hooks.mdx) — the two executable surfaces most
   authors meet first.
+- [Artifact manifest](../../reference/artifact-manifest.mdx) — every
+  section and field of `agent-bundle.manifest.json`.
 - [Targets and artifacts](../../reference/targets-artifacts.mdx) — the
-  composite root and the shorter manifest field table.
+  composite root.
 - [Shipping a bundle](../distribution/index.mdx) — how the root compiles
   and what ships inside it.
 - [Artifact validation](../distribution/validation.mdx) — the checks that

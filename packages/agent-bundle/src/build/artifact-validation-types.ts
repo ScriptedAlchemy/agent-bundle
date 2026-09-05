@@ -3,9 +3,8 @@ import type { Diagnostic } from '../core/diagnostics.ts';
 import type {
   ArtifactFile,
   ArtifactFilesystemSnapshot,
-  ArtifactHook,
 } from './emit.ts';
-import type { ArtifactManifest } from './manifest.ts';
+import type { ArtifactManifest, ArtifactManifestHook } from './manifest.ts';
 
 export interface ValidateArtifactOptions {
   /** Enables the one store-owned epoch staging marker after its exact schema validates. */
@@ -24,7 +23,8 @@ export interface ValidateArtifactOptions {
 
 /** Safe runtime facts derived during the same validation pass as the manifest. */
 export interface ValidatedArtifactRuntimeEvidence {
-  readonly hooks: readonly ArtifactHook[];
+  /** The manifest's own `executables.hooks[]` rows, re-proven against the host hooks documents. */
+  readonly hooks: readonly ArtifactManifestHook[];
   readonly mcpServers: readonly ValidatedArtifactMcpServerEvidence[];
 }
 

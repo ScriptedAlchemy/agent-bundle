@@ -230,7 +230,7 @@ it('simulates the Hooks example and executes release checks', async () => {
       .resolves.toContain('"id": "REL-204"');
     const hooks = await listHooks({ artifact: output, root });
     expect(hooks).toHaveLength(2);
-    const hook = hooks.find(({ target }) => target === 'codex');
+    const hook = hooks.find(({ host }) => host === 'codex');
     expect(hook).toBeDefined();
     const result = await simulateHook({
       artifact: output,
@@ -242,7 +242,7 @@ it('simulates the Hooks example and executes release checks', async () => {
         transcriptPath: join(root, 'transcript.json'),
       },
       root,
-      target: hook!.target,
+      target: hook!.host,
     });
     expect(result).toMatchObject({ additionalContext: expect.stringContaining('release preparation') });
     const verify = await execFile(process.execPath, [

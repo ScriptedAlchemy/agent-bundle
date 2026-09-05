@@ -269,8 +269,8 @@ describe('preflight artifact graph (#595)', () => {
 
   it('emits the entry the Claude hook document invokes, indexed once, in an AB6005-clean artifact', async () => {
     const compiled = result.build.compiledHooks.find((hook) => hook.id === 'hook:event-route:tool-before')!;
-    const index = JSON.parse(await readFile(join(output, 'agent-bundle.hooks.json'), 'utf8')) as { hooks: { id: string; path: string; target: string }[] };
-    const indexed = index.hooks.filter((hook) => hook.id === 'hook:event-route:tool-before');
+    const manifest = parseArtifactManifest(await readFile(join(output, 'agent-bundle.manifest.json'), 'utf8'));
+    const indexed = manifest.executables.hooks.filter((hook) => hook.id === 'hook:event-route:tool-before');
     expect(indexed).toHaveLength(1);
     expect(join(output, indexed[0]!.path)).toBe(compiled.output);
 
@@ -278,7 +278,6 @@ describe('preflight artifact graph (#595)', () => {
     const commands = Object.values(document.hooks).flat().flatMap((group) => group.hooks.map((hook) => hook.command));
     expect(commands).toEqual([`node "\${CLAUDE_PLUGIN_ROOT}/${entryPath}"`]);
 
-    const manifest = parseArtifactManifest(await readFile(join(output, 'agent-bundle.manifest.json'), 'utf8'));
     const bundled = manifest.files.filter((file) => file.kind === 'bundle').map((file) => join(output, file.path));
     expect(bundled).toContain(compiled.output);
     // Every module of both graphs is a compiler-emitted bundle the manifest lists.
@@ -287,6 +286,21 @@ describe('preflight artifact graph (#595)', () => {
     }
     const diagnostics = await validateArtifact({ artifactRoot: output });
     expect(diagnostics.filter((diagnostic) => diagnostic.code === 'AB6005' || diagnostic.severity === 'error')).toEqual([]);
+  });
+
+  it('records event execution metadata in the authoritative artifact manifest', async () => {
+    const manifest = parseArtifactManifest(await readFile(join(output, 'agent-bundle.manifest.json'), 'utf8'));
+
+    expect(manifest.routes.events).toContainEqual(expect.objectContaining({
+      event: 'tool/before',
+      execution: {
+        fallback: 'none',
+        preflight: 'src/events/tool/before.preflight.ts',
+        providers: ['daemonProbe'],
+        runtime: 'standalone',
+      },
+      id: 'event:tool/before',
+    }));
   });
 
   it('runs continue, deny, and deferred execute outcomes through the published hook process', async () => {

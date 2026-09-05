@@ -4,13 +4,9 @@ import { resolve } from 'node:path';
 import { createDefaultRegistry, type TargetRegistry } from '../adapters/registry.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { joinArtifact } from '../core/paths.ts';
-import { readFileString, runWithPlatform } from '../effect/platform.ts';
-import {
-  artifactHookIndexName,
-  type ArtifactHook,
-} from '../build/hook-index.ts';
 import { validateArtifact } from '../build/validate-artifact.ts';
-import { parseArtifactHookIndex } from '../build/hook-index.ts';
+import { readArtifactManifest } from '../build/manifest-file.ts';
+import type { ArtifactManifestHook } from '../build/manifest.ts';
 import { taskkill, terminateProcessTree, type ProcessTreeTaskkill } from './process-tree.ts';
 import { deepFreeze } from '../core/freeze.ts';
 import { YieldableFrameworkError } from '../effect/errors.ts';
@@ -249,7 +245,7 @@ export class HookService {
     this.#taskkill = options.taskkill ?? taskkill;
   }
 
-  async list(options: HookListOptions): Promise<readonly ArtifactHook[]> {
+  async list(options: HookListOptions): Promise<readonly ArtifactManifestHook[]> {
     const artifact = resolve(options.artifact);
     const diagnostics = await validateArtifact({
       ...(options.allowEpochStagingMarker === true ? { allowEpochStagingMarker: true } : {}),
@@ -259,12 +255,14 @@ export class HookService {
     const errors = diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
     if (errors.length > 0) throw new DiagnosticError(errors);
 
-    const index = parseArtifactHookIndex(await runWithPlatform(readFileString(joinArtifact(artifact, artifactHookIndexName))));
-    if (index === undefined) {
+    // The hook rows are the validated manifest's own (#592 step 3); the
+    // validation above already proved the bytes canonical.
+    const manifest = await readArtifactManifest(artifact);
+    if (manifest.status !== 'ok') {
       throw new Error('Artifact hook metadata is missing or invalid.');
     }
-    const hooks = index.hooks.filter((hook) => {
-      return options.target === undefined || hook.target === options.target;
+    const hooks = manifest.manifest.executables.hooks.filter((hook) => {
+      return options.target === undefined || hook.host === options.target;
     });
     return deepFreeze(hooks.map((hook) => ({ ...hook })));
   }

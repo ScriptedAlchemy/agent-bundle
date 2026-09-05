@@ -162,8 +162,8 @@ export default defineConfig({
 ```
 
 预构建钩子输出的原生命令形如 `node "<root>/<payload path>" <args…>`——一条配置声明取代了逐宿主手工
-维护的 `hooks/hooks.json`。预构建钩子按原生钩子文档的方式打包：它们不编译包装层，也不会出现在可模拟
-的钩子索引中。
+维护的 `hooks/hooks.json`。预构建钩子按原生钩子文档的方式打包：它们不编译包装层，也不会出现在清单的
+`executables.hooks[]` 行中，因此 `hooks list` 与 `hooks simulate` 看不到它们。
 
 ## 事件路由
 

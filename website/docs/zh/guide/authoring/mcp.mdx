@@ -903,9 +903,10 @@ node <root>/bin/<plugin>.mjs web [<server>/<app>] [--port N] [--open|--no-open] 
 ```
 
 默认 App 是唯一被暴露的那个；暴露了多个却未选择时是用法错误（退出码 `2`）并列出它们。`bin/` 旁边
-缺少 `agent-bundle.manifest.json` 则以 `1` 退出。该命令启动插件自己的 MCP 服务器
-（`node <root>/mcp/<entry>.mjs`，`AGENT_BUNDLE_PLUGIN_ROOT=<root>`，已声明的静态 env 并展开路径
-令牌——plugin-data 令牌解析到产物之外的 `~/.agent-bundle/web-data/<plugin>-<digest>/<server>`，
+缺少 `agent-bundle.manifest.json` 则以 `1` 退出。该命令按 `executables.mcpServers[]` 的 `launch` 记录启动插件自己的 MCP 服务器
+（`node <root>/<launch.entry> <args>`——`artifact` 参数解析到 `<root>` 之下，literal 参数展开路径
+令牌——并带上 `AGENT_BUNDLE_PLUGIN_ROOT=<root>` 与已声明的静态 env，路径令牌同样展开；plugin-data
+令牌解析到产物之外的 `~/.agent-bundle/web-data/<plugin>-<digest>/<server>`，
 因此只读安装也能启动）。被拉起的服务器自己的持久框架状态同样落在产物之外的
 `~/.agent-bundle/state/<plugin>-<digest>`（或 `AGENT_BUNDLE_STATE_ROOT`）。随后先调用一次开场工具，然后在 `http://127.0.0.1:<port>/` 上用 loopback origin 提供 App，并为
 App 文档再开一个 loopback 沙箱 origin（与 `agent-bundle serve-app` 以及 Workbench 同一套宿主栈与
@@ -965,9 +966,10 @@ npx agent-bundle mcp invoke --artifact artifact --target claude --server curator
 npx agent-bundle mcp run --artifact artifact --target claude --server curator
 ```
 
-`mcp run` 在前台执行一个已构建的 stdio 服务器：它从该 target 的 MCP 清单中解析出生成入口（其文件名带有
-服务器名称的摘要），通过 target 适配器展开路径 token，加载项目根目录的 `.env` 集合，并转发子进程的退出码。不带
-`--artifact` 时会先构建一个临时产物。
+`mcp run` 在前台执行一个已构建的 stdio 服务器：它从产物清单的 `executables.mcpServers[]` 行中解析出编译后
+的入口（其文件名带有服务器名称的摘要），通过宿主适配器展开路径 token，加载项目根目录的 `.env` 集合，并转发
+子进程的退出码。`--target` 是可选的——省略时，清单的 `projections[]` 必须恰好指出一个具备 MCP 能力的宿主；
+有多个时是一条点名候选宿主的错误。不带 `--artifact` 时会先构建一个临时产物。
 
 ## 实时宿主 MCP 代理
 

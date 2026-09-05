@@ -314,6 +314,8 @@ export const workspaceBuildOutputs = (workspaceRoot = process.cwd()) => Object.f
     root: resolve(workspaceRoot, 'packages/agent-bundle'),
     inputs: Object.freeze([
       ...rslibInputs('tsconfig.build.json'),
+      // The published manifest JSON Schema lives outside src and is inlined into dist.
+      'schemas',
       ...workbenchInputs.map((input) => `../workbench/${input}`),
     ]),
     output: 'dist',

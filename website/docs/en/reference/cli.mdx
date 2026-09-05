@@ -42,9 +42,12 @@ npx agent-bundle --version
 
 **Artifact commands** — `mcp list`, `mcp invoke`, `mcp run`, `serve-app`, `hooks list`, `hooks simulate`:
 the same `--root`, `--config`, `--mode`, and `--json`, plus `--artifact <path>` to use exactly
-one built artifact and `--target <target>` to select the host projection. `--target` is
-**required** for `mcp list`, `mcp invoke`, `mcp run`, and `hooks simulate`; `serve-app` defaults it
-to `portable` and takes no `--json`.
+one built artifact and `--target <target>` to select the host projection. For `mcp list`,
+`mcp invoke`, `mcp run`, and `serve-app`, `--target` is **optional**: when omitted, the artifact's
+`agent-bundle.manifest.json` `projections[]` supplies the one MCP-capable host that runs the
+server, and a root whose projections leave the choice ambiguous fails with an error that names the
+candidates. `hooks simulate` still requires it, because a hook wrapper is compiled per host.
+`serve-app` takes no `--json`.
 
 ## dev
 
@@ -93,7 +96,7 @@ command exits `1`. The same ready-line contract is printed by [`<plugin> web`](#
 | `<app>` | **required** | `<server>/<app>` — the generated MCP server name and the App name (the last segment of its `ui://` URI without `.html`, for example `status/status`) — or `<server>/ui://...` to select an exact resource URI. |
 | `--root`, `--config`, `--mode` | as for artifact commands | Project options. |
 | `--artifact <path>` | throwaway build | Use exactly this built artifact. Without it the project is built into a staging directory beside the root and removed when the host closes. |
-| `--target <target>` | `portable` | Artifact target containing the MCP server. |
+| `--target <target>` | the manifest's one MCP-capable host | The host projection whose MCP server runs the App. Optional: without it, the artifact manifest's `projections[]` must name exactly one MCP-capable host; when several qualify the command fails and names them. |
 | `--tool <tool>` | the App's only tool | The tool whose result opens the App: one that declares the App's `_meta.ui.resourceUri`. Required when several do. |
 | `--input <json>` / `--input-file <path>` | `{}` | JSON object input for that opening tool call; at most one of the two. |
 | `--port <port>` | ephemeral | Loopback TCP port for the host page. |
@@ -179,7 +182,7 @@ agent-bundle install <host> [--from <root>] [--scope <scope>] [--mode <mode>] \
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `<host>` | **required** | `claude`, `codex`, or `cursor`. |
-| `--from <root>` | `process.cwd()` | The artifact root. The host's manifest must sit directly under it (`.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, or `.cursor-plugin/plugin.json`); there is no `<from>/<host>` lookup, and every host installs from the same directory (`AB7001` when the manifest is absent). |
+| `--from <root>` | `process.cwd()` | The composite root: the directory holding `agent-bundle.manifest.json`. Identity (name, version, marketplace) comes from the manifest's `application` and `projections[host]`, and the host is pointed at `projections[host].documents.plugin`; there is no `<from>/<host>` lookup, and every host installs from the same directory. `AB7001` when the manifest is missing or not canonical, has no projection for the host, its projection has no host plugin manifest or the pointed file is missing, `claude`/`codex` have no marketplace identity, or the `cursor` plugin name is unsafe. See [Artifact manifest](./artifact-manifest.mdx). |
 | `--scope <scope>` | `user` | `user`, `project`, or `local`. Claude accepts all three; Codex and Cursor are user-scoped. |
 | `--mode <mode>` | `local` | Cursor only. `local` copies the bundle into `~/.cursor/plugins/local/<name>`; `marketplace` stages a committed local marketplace repository under `~/.cursor/agent-bundle/marketplaces/<name>` and prints the Customize → Plugins → "Add Plugins from Local Repository" step that makes Cursor manage the plugin as a marketplace install. |
 | `--replace` (alias `--force`) | off | Replace an existing agent-bundle install of this plugin even when its version differs. Without it, an identical copy is an `already-installed` no-op, a same-version copy whose content hash differs is replaced automatically, and a different version is `AB7005`. Foreign directories are always refused (`AB7005`). |
@@ -203,7 +206,7 @@ agent-bundle uninstall <host> [--from <root>] [--scope <scope>] [--mode <mode>] 
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `<host>` | **required** | `claude`, `codex`, or `cursor`. |
-| `--from <root>` | `process.cwd()` | The artifact root that identifies the plugin (name, version, marketplace), with the host's manifest directly under it, as for `install`. |
+| `--from <root>` | `process.cwd()` | The composite root whose `agent-bundle.manifest.json` identifies the plugin (name, version, marketplace), read exactly as `install` reads it (`AB7001` on the same conditions). |
 | `--scope <scope>` | `user` | The scope the plugin was installed at (Claude). |
 | `--mode <mode>` | `local` | Cursor only: uninstall the `local` copy or the staged `marketplace` repository. |
 | `--keep-data` | on | Keep the effective framework state root (`AGENT_BUNDLE_STATE_ROOT`, else `~/.agent-bundle/state/<plugin>-<digest>` or `$XDG_STATE_HOME/agent-bundle/<plugin>-<digest>`), derived web-data, legacy `state/`, and a recorded Cursor `PLUGIN_DATA` directory. This is the default; the flag makes it explicit. |
@@ -232,7 +235,7 @@ and removes it on a confirmed purge while `codex plugin remove` deletes the cach
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `--host <host>` | all supported | Host to inspect. Repeatable; `claude`, `codex`, or `cursor`. |
-| `--from <root>` | — | The artifact root to compare against; each inspected host's manifest must sit directly under it. |
+| `--from <root>` | — | The composite root to compare against, read through its `agent-bundle.manifest.json` as `install` reads it: identity from `application`, each inspected host from its `projections[]` row (`AB7001` when the manifest does not describe the host). |
 | `--json` | off | Write one machine-readable JSON document. |
 
 Doctor exits `1` when it reports any error diagnostic, and never modifies anything. With `--from`,
@@ -285,7 +288,10 @@ from `eval`.
 ## inspect
 
 `inspect` takes `--root`, `--config`, `--mode`, `--json`, and a single `--target <target>` filter
-(not repeatable), plus **at most one** focus flag:
+(not repeatable), plus **at most one** focus flag. `--artifact <path>` inspects a copied built
+composite root through its `agent-bundle.manifest.json` instead of a project source tree; it is
+mutually exclusive with `--root` and `--config` (a usage error). A missing or non-canonical
+manifest fails with `AB7001`.
 
 | Flag | Focus |
 | --- | --- |
@@ -296,6 +302,19 @@ from `eval`.
 | `--state` | State lifetimes. |
 
 Passing more than one focus is an error. `inspect` exits `1` when the normalized model is invalid.
+
+With `--json`, the document gains an `output.manifest` summary — the built `projections[]` and
+`executables` — whenever a built `agent-bundle.manifest.json` exists at the artifact output, so a
+JSON consumer sees what the last build emitted without probing the root itself. The source-side
+model and plan view is unchanged.
+
+`inspect --artifact <path>` does not load project config. `--json` prints `{ manifest, application }`:
+the same `InspectManifestSummary` as `output.manifest`, and the same `application` projection the
+Workbench renders (`applicationExplorerFor`), including `distribution.payloads[]` — each prebuilt
+payload's `name`, `hosts`, and `runtimeDependencies` (the row artifact-only consumers read for
+packages that must exist at consumer runtime; see [`definePrebuilt`](../guide/authoring/package-entries.mdx#prebuilt-payloads)).
+Without `--json`, the human output is the application id/name/version, projections with
+`builtInHost`, servers with tool counts, hooks by host, bins, scripts, and payload rows.
 
 Every inspection plan reports each component with its canonical kind — `agent`, `cli`, `command`,
 `event-route`, `hook`, `lsp`, `mcp-app`, `mcp-server`, `native-diagnostics`, `native-extension`,
@@ -311,6 +330,11 @@ report as `event-route`, judged by the host's `event:<canonical event>` row, not
 takes exactly one of `--input <json>` or `--input-file <path>`; the parsed value must be a JSON
 object, not an array or scalar.
 
+All three resolve the server from the artifact's `agent-bundle.manifest.json`: the compiled entry
+(and its Flight worker) from `executables.mcpServers[].entry`, the Apps from
+`executables.mcpServers[].apps[]`, and — when `--target` is omitted — the host from the one
+MCP-capable `projections[]` row; an ambiguous selection is an error that names the candidates.
+
 `mcp run` requires `--server` and runs one stdio server in the foreground with inherited stdio:
 
 | Option | Default | Meaning |
@@ -325,8 +349,9 @@ nothing of its own to stdout. See [Runtime environment](./runtime-environment.md
 
 ## hooks
 
-`hooks list` reports the hooks in an artifact. `hooks simulate` requires `--hook <hook>` (an id or
-a name) and the same `--input` / `--input-file` pair as `mcp invoke`.
+`hooks list` reports the hooks in an artifact — the `executables.hooks[]` rows of its
+`agent-bundle.manifest.json`. `hooks simulate` requires `--hook <hook>` (an id or a name) and the
+same `--input` / `--input-file` pair as `mcp invoke`.
 
 ## Exit codes
 

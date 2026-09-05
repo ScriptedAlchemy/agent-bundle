@@ -10,66 +10,45 @@ import type { Diagnostic } from '../core/diagnostics.ts';
 import { readFileString, runWithPlatform } from '../effect/platform.ts';
 import { artifactDiagnostic as diagnostic } from './artifact-diagnostics.ts';
 import { isDirectOutputLayoutPath, matchesManifestFile } from './artifact-layout.ts';
-import {
-  artifactHookIndexName,
-  type ArtifactFile,
-  type ArtifactHook,
-  type ArtifactHookIndex,
-} from './emit.ts';
-import { parseArtifactHookIndex } from './hook-index.ts';
-import type { ArtifactManifest } from './manifest.ts';
+import type { ArtifactFile } from './emit.ts';
+import { artifactManifestName, type ArtifactManifest, type ArtifactManifestHook } from './manifest.ts';
 
-const readArtifactHookIndex = async (artifactRoot: string): Promise<ArtifactHookIndex | undefined> => {
-  try {
-    return parseArtifactHookIndex(await runWithPlatform(readFileString(resolve(artifactRoot, artifactHookIndexName))));
-  } catch {
-    return undefined;
-  }
-};
-
+/**
+ * Proves the manifest's `executables.hooks[]` rows (#592 step 3) and the host
+ * hooks documents describe the same wrappers: every row names an emitted
+ * wrapper of a hook-capable selected projection, and every compiler wrapper a
+ * host document runs is exactly one row.
+ */
 export const validateHookCoherence = async (options: {
   readonly artifactRoot: string;
   readonly files: readonly ArtifactFile[];
   readonly manifest: ArtifactManifest;
   readonly registry: TargetRegistry;
-  readonly hooks: ArtifactHook[];
 }): Promise<readonly Diagnostic[]> => {
-  const indexFile = options.files.find((file) => file.path === artifactHookIndexName);
-  const index = indexFile === undefined ? undefined : await readArtifactHookIndex(options.artifactRoot);
-  if (index === undefined) {
-    return Object.freeze([diagnostic(
-      'AB6018',
-      'Artifact hook metadata is not strict canonical hook index data.',
-      artifactHookIndexName,
-      'artifact',
-    )]);
-  }
-
-  options.hooks.push(...index.hooks);
-
+  const rows = options.manifest.executables.hooks;
   const diagnostics: Diagnostic[] = [];
   const files = new Map(options.files.map((file) => [file.path, file]));
   const manifestFiles = new Map(options.manifest.files.map((file) => [file.path, file]));
-  const targets = new Set(options.manifest.targets.map((target) => target.name));
-  const indexedByTarget = new Map<string, typeof index.hooks>();
-  for (const hook of index.hooks) {
-    const entries = indexedByTarget.get(hook.target) ?? [];
-    indexedByTarget.set(hook.target, [...entries, hook]);
+  const targets = new Set(options.manifest.projections.map((projection) => projection.host));
+  const indexedByTarget = new Map<string, readonly ArtifactManifestHook[]>();
+  for (const hook of rows) {
+    const entries = indexedByTarget.get(hook.host) ?? [];
+    indexedByTarget.set(hook.host, [...entries, hook]);
   }
 
-  for (const hook of index.hooks) {
-    if (!targets.has(hook.target) || (options.registry.has(hook.target) && !options.registry.supports(hook.target, 'hooks'))) {
+  for (const hook of rows) {
+    if (!targets.has(hook.host) || (options.registry.has(hook.host) && !options.registry.supports(hook.host, 'hooks'))) {
       diagnostics.push(diagnostic(
         'AB6018',
-        `Hook index entry ${JSON.stringify(hook.id)} selects undeclared or hook-incompatible target ${JSON.stringify(hook.target)}.`,
-        artifactHookIndexName,
-        hook.target,
+        `Manifest hook row ${JSON.stringify(hook.id)} selects undeclared or hook-incompatible projection ${JSON.stringify(hook.host)}.`,
+        artifactManifestName,
+        hook.host,
       ));
       continue;
     }
-    if (!options.registry.has(hook.target)) continue;
-    const contract = options.registry.hookContract(hook.target);
-    const layout = options.registry.artifactLayout(hook.target).hookWrappers;
+    if (!options.registry.has(hook.host)) continue;
+    const contract = options.registry.hookContract(hook.host);
+    const layout = options.registry.artifactLayout(hook.host).hookWrappers;
     const file = files.get(hook.path);
     const manifestFile = manifestFiles.get(hook.path);
     if (
@@ -81,14 +60,14 @@ export const validateHookCoherence = async (options: {
     ) {
       diagnostics.push(diagnostic(
         'AB6018',
-        `Hook index entry ${JSON.stringify(hook.id)} references missing or invalid target wrapper ${JSON.stringify(hook.path)}.`,
+        `Manifest hook row ${JSON.stringify(hook.id)} references missing or invalid target wrapper ${JSON.stringify(hook.path)}.`,
         hook.path,
-        hook.target,
+        hook.host,
       ));
     }
   }
 
-  for (const { name: target } of options.manifest.targets) {
+  for (const { host: target } of options.manifest.projections) {
     if (!options.registry.has(target) || !options.registry.supports(target, 'hooks')) continue;
     const contract = options.registry.hookContract(target);
     if (contract === undefined) continue;
@@ -100,7 +79,7 @@ export const validateHookCoherence = async (options: {
       if (hooks.length === 0) continue;
       diagnostics.push(diagnostic(
         'AB6018',
-        `Hook index target ${JSON.stringify(target)} is missing native hook manifest ${JSON.stringify(contract.manifestPath)}.`,
+        `Manifest hook rows for ${JSON.stringify(target)} have no native hook manifest ${JSON.stringify(contract.manifestPath)}.`,
         manifestPath,
         target,
       ));
@@ -112,7 +91,7 @@ export const validateHookCoherence = async (options: {
     } catch {
       diagnostics.push(diagnostic(
         'AB6018',
-        `Hook index target ${JSON.stringify(target)} is missing native hook manifest ${JSON.stringify(contract.manifestPath)}.`,
+        `Manifest hook rows for ${JSON.stringify(target)} have no native hook manifest ${JSON.stringify(contract.manifestPath)}.`,
         manifestPath,
         target,
       ));
@@ -137,7 +116,7 @@ export const validateHookCoherence = async (options: {
       if (occurrences !== 1) {
         diagnostics.push(diagnostic(
           'AB6018',
-          `Hook index entry ${JSON.stringify(hook.id)} requires exactly one native command ${JSON.stringify(command)} but found ${occurrences}.`,
+          `Manifest hook row ${JSON.stringify(hook.id)} requires exactly one native command ${JSON.stringify(command)} but found ${occurrences}.`,
           manifestPath,
           target,
         ));
@@ -147,18 +126,18 @@ export const validateHookCoherence = async (options: {
     for (const command of commands.commands) {
       const relativePath = compilerHookWrapperPath(contract, command.command);
       if (relativePath === undefined) continue;
-      // Only compiler wrapper outputs must be indexed. A prebuilt hook
-      // command without arguments parses like a wrapper command but points
-      // into its payload directory, outside the wrapper layout, and is
-      // deliberately absent from the hook index (like native hooks).
+      // Only compiler wrapper outputs are rows. A prebuilt hook command
+      // without arguments parses like a wrapper command but points into its
+      // payload directory, outside the wrapper layout, and is deliberately
+      // absent from the manifest rows (like native hooks).
       if (!isDirectOutputLayoutPath(relativePath, wrapperLayout)) continue;
       const entries = relativePaths.get(relativePath) ?? 0;
       if (entries === 1) continue;
       diagnostics.push(diagnostic(
         'AB6018',
         entries === 0
-          ? `Native hook command ${JSON.stringify(command.command)} is not indexed.`
-          : `Native hook command ${JSON.stringify(command.command)} is indexed multiple times.`,
+          ? `Native hook command ${JSON.stringify(command.command)} has no manifest hook row.`
+          : `Native hook command ${JSON.stringify(command.command)} has several manifest hook rows.`,
         manifestPath,
         target,
       ));

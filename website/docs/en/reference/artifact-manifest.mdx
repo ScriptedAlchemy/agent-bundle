@@ -1,0 +1,452 @@
+---
+description: 'The agent-bundle.manifest.json contract (manifestVersion 2): the index of the composite plugin root that build writes once — every section and field, who writes it, who reads it, the shipped JSON Schema, the reserved keys, and the versioning rule.'
+---
+
+# Artifact manifest
+
+`agent-bundle.manifest.json` sits at the top of the composite plugin root that
+`agent-bundle build` emits (see [Targets and artifacts](./targets-artifacts.mdx) for the root's
+layout). It is the **index of the artifact**: one document that records the application identity
+that was compiled, the compiled route graph, the host projections that were selected together with
+the host documents each derived, every executable the root can start, and how the root is
+distributed. Every consumer — `install`, `uninstall`, `doctor`, `serve-app`, `mcp`, `hooks`,
+`eval --artifact`, `inspect`, the Workbench, and the npm prepack gate — reads this one file to
+learn what a root contains. None of them probes `.claude-plugin/plugin.json`, `.mcp.json`, or a
+directory layout to find out.
+
+## The contract
+
+| Property | Rule |
+| --- | --- |
+| Written once | Only `agent-bundle build` writes it, after the staged root is complete. Nothing else creates it; the one edit after the build is the re-index of a derived variant described under `files[]`, which re-measures non-compiled rows and never touches a compiled one. |
+| `manifestVersion` | `2`. A reader refuses any other value. |
+| Canonical bytes | The file is the canonical JSON serialization of the document — object keys sorted, no insignificant whitespace, one trailing newline. Every reader re-serializes what it parsed and rejects the file unless the bytes are identical. A hand edit, a reformat, or a duplicate key fails the read. |
+| Closed keys | Every object admits exactly its documented keys. An unknown key at any level is a parse error. |
+| Sorted arrays | Every array has an explicit sort key (named per section below) and no duplicates. |
+| Lean reader | The rows above describe the full parser (`parseArtifactManifest`), which every consumer in the table below uses except one: the `<plugin> web` support bundled into a generated bin reads the manifest without the parser. It validates only the slices it launches from and ignores every other key, but those slices it refuses rather than filters, under the same checks the full parser runs (`web-host/manifest.ts` owns them; both import it): a `manifestVersion` other than `2` or a duplicate JSON key; a `projections[]` row that is not an object, names no host, or repeats one; an `executables.mcpServers[]` row that is not an object, has an unknown `kind`, carries a `launch` record when its kind must not (or lacks one when it must), or repeats a server `name` — two rows of one name never resolve to the later one; a malformed `launch` record, or one whose entry, worker, or `artifact` argument is not a `files[]` row (an argument may name a directory under the root that holds rows); and a `web.apps[]` row whose `server` is not a row with a launch record. |
+| Paths | Every path is POSIX, relative to the root, and safe: no leading `/`, no backslash, no `.` or `..` segment, and never a build-machine absolute path. Moving the entire composite root to a different absolute directory keeps every reader working: every path stays root-relative and resolves inside the moved tree. Every path a section points at — a host document, an executable, an App view, an install file — is also a `files[]` row. |
+
+## Who writes it
+
+`agent-bundle build`, and nothing else. Everything in the document is **derived**: the author
+declares `agent-bundle.config.ts` (metadata, `targets`, hooks, MCP servers, scripts, marketplace)
+and the conventional filesystem (`src/mcp/**`, `src/cli/**`, `src/hooks/**`, `src/events/**`,
+`src/scripts/**`), and the build writes the manifest from the normalized model, the compiled route
+graph, the composite plan, and the files it emitted. The host documents in the root — the Claude,
+Codex, Cursor, and portable plugin manifests, the marketplace, MCP, and hooks documents — are
+serialized with the manifest from the same compiled model in one build. Every host document is
+a digest-pinned `files[]` row, so a hand edit fails artifact digest validation. Nothing in the
+file is hand-editable: change the config or the sources and rebuild.
+
+## Who reads it
+
+| Consumer | What it reads |
+| --- | --- |
+| `install <host> --from <root>`, `uninstall` | The manifest at `<root>`. Identity — plugin name and version — from `application`; the marketplace name from `projections[host].marketplace`; the file the host is pointed at from `projections[host].documents.plugin`. `install` takes its copy set and artifact content hash from `files[]` plus the manifest itself and any operator `.env` overlay, reading those fixed paths without walking the artifact directory. A root with no manifest, a non-canonical manifest, no projection for the host, a projection without a host plugin manifest, or a missing or digest-mismatched `files[]` entry is refused with `AB7001`. |
+| `doctor --from <root>` | The same identity, fixed-path file set, and content-hash read as `install`, per inspected host; the static validation it runs over the tree (`AB7319`) continues per projection. On an installed root, `doctor` and `uninstall` locate a declared `AGENT_BUNDLE_STATE_ROOT` override through the manifest the install copied — the host MCP document at `projections[host].documents.mcp` — never by probing host document paths; a root without a manifest declares no document override and falls back to an inherited `AGENT_BUNDLE_STATE_ROOT`, then to the derived state root. |
+| `serve-app`, `mcp list` / `invoke` / `run` | `executables.mcpServers[]` for the server's compiled `launch` record and its `apps[]`; `projections[]` to pick the host when `--target` is omitted. |
+| `hooks list` / `simulate` | `executables.hooks[]` — the compiler wrappers that can be simulated. |
+| `inspect --json` | Adds an `output.manifest` summary — projections and executables — when a built manifest exists at the artifact output, so a JSON consumer needs no second probe. `inspect --artifact <root>` reads a bare composite root through that one file and prints the same `application` projection the Workbench renders, including the `distribution.payloads[]` rows. |
+| `eval --artifact`, `agent-bundle/test` installed-host proofs | `projections[]` and `executables.hooks[]` in place of any host document. |
+| Workbench artifacts page | Reads the manifest through the application-explorer projection at `ArtifactInspection.application`: application identity, hosts and their documents, joined server routes and executables, events and hooks, CLI, scripts, and distribution. The emitted file tree remains separate inspection evidence; the browser does not use the manifest's raw shape as its application-tree model. |
+| `validate --artifact`, `build` | The whole document: presence and canonical bytes (`AB6000`, `AB6001`), `files[]` against the tree (`AB6004`), and hook coherence over `executables.hooks[]` (`AB6018`). |
+| `prepack` | `files[]`, `projections[]`, and `compiler.project.packageVersion` for the pack inventory (`AB7010`–`AB7013`). |
+
+## Public contract
+
+The top level has nine required keys — `application`, `compiler`, `distribution`,
+`executables`, `files`, `manifestVersion`, `projections`, `routes`, `runtime` — plus the optional
+[`web`](#web), present exactly when the configuration exposes an App to `<plugin> web`. Consumers that
+install, diagnose, serve, or list a root (`install`, `doctor`, `serve-app`, `mcp`, `hooks`,
+`inspect` summary) read only this contract. Operational compiler facts live under `compiler`
+and are versioned separately.
+
+### `runtime`, `manifestVersion`
+
+| Field | Contents |
+| --- | --- |
+| `manifestVersion` | `2`. Versions the public contract consumers read. |
+| `runtime` | `{ node }` — the consumer-facing generated-executable runtime floor the root was built for, as a canonical `major.minor.patch` string that satisfies the framework's floor. |
+
+### `application`
+
+The application identity, recorded once and host-independent. It is what `install`, `doctor`,
+and `uninstall` act on; host plugin manifests and this row are serialized from the same compiled
+model in one build.
+
+| Field | Required | Contents |
+| --- | --- | --- |
+| `id` | yes | `metadata.id` of the normalized plugin. |
+| `name` | yes | The plugin name. |
+| `version` | yes | The plugin version. |
+| `description` | no | `metadata.description`, when configured. |
+
+### `files[]`
+
+Every emitted file except the manifest itself, sorted by `path`. Source-input provenance for
+each row lives on `compiler.provenance`, not here.
+
+| Field | Required | Contents |
+| --- | --- | --- |
+| `path` | yes | Root-relative path. Never `agent-bundle.manifest.json`, and never at or under a root entry the artifact does not own, in any letter case: the runtime's `state/` (so a payload may not be named `state`, `AB4741`) and the installer's `.agent-bundle-install.json` receipt. Installers neither copy nor own those entries, so a copy of the indexed rows always re-measures to the manifest's inventory. |
+| `bytes` | yes | Size in bytes. |
+| `sha256` | yes | Content digest. Validation compares real bytes, so a hand-edited generated file fails. |
+| `kind` | yes | `bundle` (a compiled entry), `copy` (a byte-for-byte copy), `generated` (a compiler-written document), or `prebuilt` (a prebuilt payload file). |
+| `mode` | no | The file mode, `0` through `0o777`, when the build set one. |
+
+`install` and `doctor --from` use these rows as the authoritative artifact inventory. They read
+each listed path directly, verify its bytes against `sha256`, and include it in the receipt content
+hash without enumerating the root. The manifest file itself and an operator-provided `.env` or
+`.env.local` beside it are also copied and hashed; unlisted files are ignored.
+A tool that derives a variant of a built root, such as a Workbench development install, re-indexes
+the variant's manifest because that manifest remains the inventory the installer copies and hashes.
+Re-indexing re-measures, adds, or removes only non-compiled rows (a rewritten host MCP document, an
+install marker). A `bundle` row and `agent-bundle.compile-evidence.json` are refused: the evidence
+record describes the compiled bytes the compiler emitted, only a rebuild produces another, and the
+validator fails an artifact whose evidence describes other bytes (`AB6039`).
+
+### `projections[]`
+
+One row per selected host, sorted by `host`. Targets select projections; they are not identity.
+
+| Field | Required | Contents |
+| --- | --- | --- |
+| `host` | yes | The target name the project selected the projection under: `claude`, `codex`, `cursor`, `portable`, or a registered adapter's name. A name is selection, not identity. |
+| `builtInHost` | when a shipped adapter planned it | The shipped adapter that planned the projection, by identity: `claude`, `codex`, `cursor`, or `portable`. Absent for an advanced-registry adapter, even one registered under a built-in name. `install`, `doctor`, and the installed-host test harness pick a host's projection by this field, never by `host`. |
+| `documents` | yes | Root-relative pointers to the host documents this projection emitted; every present pointer is a `files[]` row. See below. |
+| `marketplace` | no | `{ name }` — the marketplace the projection's marketplace document registers. Present only together with `documents.marketplace`. |
+
+`documents` has four optional keys, each present only when the projection emitted the file:
+
+| Key | Contents |
+| --- | --- |
+| `plugin` | The host plugin manifest (`.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`, `.cursor-plugin/plugin.json`, or the portable `plugin.json`). When absent, `install` and `doctor` refuse the host with `AB7001`. |
+| `marketplace` | The marketplace document (`.claude-plugin/marketplace.json`, `.agents/plugins/marketplace.json`, `.cursor-plugin/marketplace.json`). |
+| `mcp` | The host MCP document (`.mcp.json`, `.codex-plugin/mcp.json`, `.cursor-plugin/mcp.json`, `mcp.json`). |
+| `hooks` | The host hooks document (`hooks/hooks.json`, `.codex-plugin/hooks.json`, `.cursor-plugin/hooks.json`). |
+
+### `routes`
+
+The compiled route graph the artifact was built from — the Application IR, host-independent. It
+is the same projection of the same compiler pass the Workbench route catalog shows; only the
+Workbench's display-only fields are absent.
+
+| Field | Required | Contents |
+| --- | --- | --- |
+| `digest` | yes | SHA-256 over the graph's project-relative identity. |
+| `servers[]` | yes | One row per MCP server, sorted by `id`: `{ id, name, mode, routes[] }`. `id` is `mcp:<name>`; `mode` is `generated`, `custom`, `command`, `remote`, or `conflict`; `routes[]` holds the server's routes, each with `serverId` equal to the server's `id`. |
+| `events[]` | yes | The `event-route` routes, sorted by `id`. |
+| `scripts[]` | yes | The `script` routes, sorted by `id`. |
+| `cli` | no | `{ mode, routes[], commands? }`: `mode` is `generated`, `conventional`, or `conflict`; `routes[]` holds the `cli` routes plus every MCP `tool` route `routes.mcpCommands` projects into the executable; `commands[]` is present exactly in `generated` mode, and each command's `routeId` names one of those routes. |
+| `providers[]` | yes | `{ id, name, source }`, sorted by `id`; `id` is `provider:<stem>`. |
+| `layouts[]` | yes | `{ id, scope, serverId?, source }`, sorted by `id`: `layout:root` with `scope: 'root'`, or `layout:mcp:<server>` with `scope: 'server'` and `serverId` naming a declared server. |
+| `contracts[]` | exactly when a route binds one | The canonical input contracts (#593), sorted by `id`: `{ id, input, origin: { module, binding }, routes[] }`. `id` is `contract:<module>#<binding>`; `input` is the bounded JSON Schema every bound route shares; `origin` is the declaring module (project-relative) and binding; `routes[]` are the sorted ids of the routes that bind it. |
+
+Every route row has the same shape:
+
+| Field | Required | Contents |
+| --- | --- | --- |
+| `id` | yes | The route id: `tool:<server>/<stem>`, `prompt:…`, `resource:…`, `app:<server>/<name>`, `event:<event>`, `cli:<path>`, `script:<path>`. |
+| `kind` | yes | `app`, `cli`, `event-route`, `prompt`, `resource`, `script`, or `tool`. |
+| `source` | yes | The route module, as a project-relative POSIX path — the route's portable identity. |
+| `provenance` | yes | `{ kind: 'conventional' }`. Filesystem discovery is the only provenance today; the discriminant is where a projected route attaches later. |
+| `event` | exactly for `event-route` | The canonical event, such as `tool/after`. |
+| `execution` | exactly for `event-route` | `{ fallback, preflight?, providers?, runtime }`, the artifact-inspectable event execution contract. `fallback` is `none` or `standalone`. `preflight` is the project-relative POSIX path of the cheap preflight module when one exists. `providers` is the sorted, unique list of required conventional provider keys; omission resolves every provider and `[]` resolves none. `runtime` is `shared` or `standalone`. |
+| `serverId` | exactly for MCP kinds | The owning server, `mcp:<name>`, on `app`, `prompt`, `resource`, and `tool` routes. |
+| `description` | no | `config.description`, when it is a non-blank string. |
+| `inputSchema` | no | The bounded JSON Schema projection of the route's input: an object with `additionalProperties: false`, properties typed `boolean`, `number`, `string` (with optional `enum`), or `array` of those, each with optional `default` and `description`, and an optional `required` list. Absent when the route schema is richer than this grammar. |
+| `contract` | no | The `routes.contracts[]` row whose `input` this route binds; absent when no static contract was extracted. |
+
+A `routes.cli.commands[]` row, sorted by the joined `path`:
+
+| Field | Required | Contents |
+| --- | --- | --- |
+| `routeId` | yes | The `cli:` route the command runs. |
+| `path[]` | yes | The command segments, at least one. |
+| `aliases[]` | yes | Sorted aliases. |
+| `options[]` | yes | The argv projection of the route's input schema, sorted by `key`: `{ key, option, kind, repeated, required, aliases?, choices?, description?, positional? }`, `kind` one of `boolean`, `enum`, `number`, `string`; `aliases` are the extra sorted `--spellings` a CLI projection declared. |
+| `exitCode` | yes | `result` or `zero`. |
+| `mcp` | no | `{ server, tool, confirm }` when the command is the CLI projection of an MCP tool. |
+| `projection` | no | `{ module, mapInput, defaults?, relaxed? }` when the command was compiled from a tool's `<tool>.cli.{ts,tsx}` module: `module` is the project-relative module path, `mapInput` whether it exports a mapper, `defaults` the CLI-only `flags.<key>.default` literals (keys sorted), and `relaxed` the canonical-required keys made optional on the CLI (sorted). |
+| `description` | no | The command description. |
+
+### `executables`
+
+Every process the artifact can start, with its Flight worker where it has one. Each `hosts[]`
+list and each `host` names a `projections[]` row.
+
+| Field | Contents |
+| --- | --- |
+| `bins[]` | The routed CLI executable, sorted by `name`: `{ name, path, worker?, hosts[] }`. `path` is `bin/<name>.mjs`; `hosts[]` are the selected projections that carry a CLI bin. |
+| `hooks[]` | One row per compiler hook wrapper per host, sorted by `host` then `id`: `{ id, name, event, host, kind, path, routeId?, timeout? }`. `kind` is `event-route` for a wrapper that dispatches a `src/events/**` route and `config` for a hook declared in the configuration; `routeId` names the `routes.events[]` row an `event-route` wrapper dispatches and is present exactly for that kind; `event` is the hook event (`afterTool`, `sessionStart`, …); `timeout` is the native hook timeout in seconds. Native commands an author writes into a host hooks document and prebuilt-payload commands are not rows. |
+| `mcpServers[]` | One row per MCP server reaching a selected host, sorted by `id`: `{ id, name, transport, kind, hosts[], launch?, apps[] }`. `kind` is `compiled` (the artifact starts the server from a compiled entry), `prebuilt` (the artifact starts it from a file inside a `definePrebuilt` payload), `command` (the host runs a configured command), or `remote` (the host connects to a URL); `launch` is present exactly for `compiled` and `prebuilt` servers and is the one launch record every host MCP document projects and `<plugin> web` starts: `{ entry, worker?, args[], env }`. `entry` is the root-relative executable (compiled, or the payload file) and `worker` a compiled entry's Flight worker (both `files[]` rows); `args[]` are the author's arguments after the entry, in order, each `{ kind: 'artifact', path }` (a root-relative path inside the root — a `files[]` row or a path under a payload directory — written from an argument anchored on `agent-bundle:path:plugin-root/`) or `{ kind: 'literal', value }` (every other argument, exactly as declared; an argument that merely looks like a path is a literal); `env` is the declared static environment. `agent-bundle:path:*` tokens in `args[]` literals and `env` values are expanded by the launcher, never by the manifest. `apps[]` is sorted by `id`: `{ id, name, resourceUri, path? }` for a compiled MCP App view (`path` is its self-contained HTML), or `{ id, name, resourceUri, prebuilt: true }` for an App a prebuilt payload already serves. |
+| `scripts[]` | One row per emitted script, sorted by `id`: `{ id, name, path, worker?, mode, hosts[], rendered? }`. `mode` is `bundle` or `copy`; `rendered: { routeId }` names the `routes.scripts[]` route a rendered script renders. |
+
+### `distribution`
+
+| Field | Required | Contents |
+| --- | --- | --- |
+| `channels[]` | yes | `local` always; `npm` exactly when `compiler.project.packageName` is present. Sorted. |
+| `install` | no | Root-relative pointers to the install surface: `{ instructions?: 'INSTALL.md', script?: 'install.mjs' }`, present when the root carries at least one of them. |
+| `payloads[]` | yes | One row per prebuilt payload directory ([`definePrebuilt`](../guide/authoring/package-entries.mdx#prebuilt-payloads)) packaged for a selected host: `{ hosts, name, runtimeDependencies }`. `name` is the artifact-root directory; `hosts` the projections it was packaged for; `runtimeDependencies` the author's sorted, unique list of bare package names the tree loads at run time — the compiler never opens a payload file, so this is the only record. **This is the row artifact-only consumers read** (`install`, `doctor`, the npm root of #555 S4) for packages that must exist at consumer runtime; the artifact never bundles them. Sorted by `name`. |
+
+### `web`
+
+The one optional root key. Present exactly when the configuration's
+[`web`](./configuration.mdx#web) exposes at least one App whose `targets` intersect the
+selection; `<plugin> web`, `agent-bundle dev` `/web/<server>/<app>`, and `doctor` read it and
+never rediscover Apps from `src/**`.
+
+| Field | Required | Contents |
+| --- | --- | --- |
+| `open` | yes | `browser` or `never`: whether `<plugin> web` opens the default browser once the host listens. |
+| `apps[]` | yes | Sorted by `app`, unique. Each row: `app` (`<server>/<name>`), `name`, `server`, `resourceUri`, `allow[]` (pre-approved App-initiated consent capabilities), and optional `tool` and `input` for the opening call. The row carries no launch fields: `server` names an `executables.mcpServers[]` row of kind `compiled` or `prebuilt`, and the launch comes from that row's `launch` record. |
+
+## Compiler record (`compiler`, `recordVersion`)
+
+Operational record of the compiler run. Versioned by `recordVersion` independently of
+`manifestVersion`: a change here is not a change to the artifact contract consumers read. The
+object has exactly seven keys, all required: `adapters`, `agentSkills`, `producer`, `project`,
+`provenance`, `recordVersion`, `validation`.
+
+| Field | Contents |
+| --- | --- |
+| `recordVersion` | `1`. Bumps when the compiler record's closed shape changes; does not bump `manifestVersion`. |
+| `producer` | `{ name: 'agent-bundle', version }` — the framework version that wrote the root. `name` is always `agent-bundle`. |
+| `project` | The project the artifact was compiled from. See below. |
+| `provenance[]` | One row per `files[]` row, sorted by `path`: `{ path, sourceInputs[] }`. The path set equals the `files[]` path set. |
+| `adapters[]` | One row per projection, sorted by `host`: `{ host, adapterRevision, observedVersion, schemas[] }`. The host set equals the `projections[].host` set. |
+| `agentSkills` | `{ specification, sourceRevision, schemaSha256 }` — the Agent Skills specification pin the Skill documents were validated against. |
+| `validation` | `{ artifact: { status }, source: { status }, projections: [{ host, status }] }`. Every `status` is `passed` — a root that failed validation is never written — and `projections[]` lists exactly the hosts of `projections[]`, in the same order. |
+
+### `compiler.project`
+
+| Field | Required | Contents |
+| --- | --- | --- |
+| `configPath` | yes | The configuration file, relative to the project root. It must appear in `sourceInputs` with a hash equal to `configDigest`. |
+| `configDigest` | yes | SHA-256 of the configuration file. |
+| `modelDigest` | yes | SHA-256 of the normalized model. |
+| `revision` | yes | The digest over `sourceInputs`; a reader recomputes it and rejects a mismatch. |
+| `sourceInputs[]` | yes | Every project input the build read: `{ path, sha256, executable? }`, sorted by `path`. |
+| `packageName` | no | The validated npm package name; absent for an unpackaged development project. |
+| `packageVersion` | no | The validated release version; absent for an unpackaged development project. |
+
+### `compiler.adapters[]`
+
+| Field | Required | Contents |
+| --- | --- | --- |
+| `host` | yes | Names the matching `projections[]` row. |
+| `adapterRevision` | yes | The adapter's repository-owned, monotonic revision. |
+| `observedVersion` | yes | The host version its capability evidence was recorded against. |
+| `schemas[]` | yes | The pinned host document schemas the projection was validated against: `{ name, revision, sha256 }`, sorted by `name`. |
+
+### `compiler.provenance[]`
+
+| Field | Required | Contents |
+| --- | --- | --- |
+| `path` | yes | The matching `files[]` path. Never `agent-bundle.manifest.json`. |
+| `sourceInputs[]` | yes | The `compiler.project.sourceInputs` paths this file derives from, sorted. |
+
+### Rules that span sections
+
+A reader enforces these before it accepts the document:
+
+- `compiler.project.configPath` is a `compiler.project.sourceInputs` entry whose hash is
+  `compiler.project.configDigest`, and `compiler.project.revision` is the digest of
+  `compiler.project.sourceInputs`.
+- `compiler.provenance` paths equal `files[]` paths, and every provenance `sourceInputs` path is
+  a `compiler.project.sourceInputs` path.
+- `compiler.adapters` hosts equal `projections[]` hosts.
+- Every pointer — `projections[].documents.*`, `executables.*[].path` and `worker`,
+  `executables.mcpServers[].launch.entry` and `.worker`, `executables.mcpServers[].apps[].path`,
+  `distribution.install.*` — names a `files[]` row.
+- `executables.mcpServers[].launch` is present exactly when `kind` is `compiled` or `prebuilt`; every
+  `launch.args[]` row of kind `artifact` names a `files[]` row or a directory under the root.
+- Every `web.apps[].server` names an `executables.mcpServers[]` row that carries `launch`.
+- Every `hosts[]` entry and every `hooks[].host` names a `projections[]` row.
+- Every `distribution.payloads[].name` directory holds at least one `files[]` row of kind
+  `prebuilt`.
+- `compiler.validation.projections[]` hosts equal `projections[]` hosts.
+- `executables.scripts[].rendered.routeId` names a `routes.scripts[]` route.
+- `distribution.channels` includes `npm` exactly when `compiler.project.packageName` is present.
+
+## An abbreviated example
+
+A root built for `claude` alone from a plugin with one generated MCP server, one MCP App, one
+event route, and a routed CLI. Digests are elided; keys appear in canonical (sorted) order.
+
+```json
+{
+  "application": { "id": "hauler", "name": "cargo-hauler", "version": "1.4.2" },
+  "compiler": {
+    "adapters": [
+      { "adapterRevision": "…", "host": "claude", "observedVersion": "2.1.260",
+        "schemas": [{ "name": "plugin", "revision": "…", "sha256": "…" }] }
+    ],
+    "agentSkills": { "schemaSha256": "…", "sourceRevision": "…", "specification": "…" },
+    "producer": { "name": "agent-bundle", "version": "0.9.0" },
+    "project": {
+      "configDigest": "…", "configPath": "agent-bundle.config.ts", "modelDigest": "…",
+      "packageName": "cargo-hauler", "packageVersion": "1.4.2", "revision": "…",
+      "sourceInputs": [{ "path": "agent-bundle.config.ts", "sha256": "…" }]
+    },
+    "provenance": [
+      { "path": ".claude-plugin/plugin.json", "sourceInputs": ["agent-bundle.config.ts"] }
+    ],
+    "recordVersion": 1,
+    "validation": {
+      "artifact": { "status": "passed" },
+      "projections": [{ "host": "claude", "status": "passed" }],
+      "source": { "status": "passed" }
+    }
+  },
+  "distribution": {
+    "channels": ["local", "npm"],
+    "install": { "instructions": "INSTALL.md" },
+    "payloads": []
+  },
+  "executables": {
+    "bins": [
+      { "hosts": ["claude"], "name": "cargo-hauler", "path": "bin/cargo-hauler.mjs",
+        "worker": "bin/cargo-hauler-flight.mjs" }
+    ],
+    "hooks": [
+      { "event": "afterTool", "host": "claude", "id": "hook:event-route:tool-after",
+        "kind": "event-route", "name": "event-route-tool-after",
+        "path": "hooks/event-route-tool-after-….mjs",
+        "routeId": "event:tool/after" }
+    ],
+    "mcpServers": [
+      { "apps": [
+          { "id": "mcp-app:hauler:dashboard", "name": "dashboard",
+            "path": "mcp-apps/dashboard.html", "resourceUri": "ui://hauler/dashboard" }
+        ],
+        "hosts": ["claude"], "id": "mcp:hauler", "kind": "compiled",
+        "launch": {
+          "args": [
+            { "kind": "literal", "value": "--config" },
+            { "kind": "artifact", "path": "config/hauler.json" }
+          ],
+          "entry": "mcp/mcp-hauler-….mjs",
+          "env": { "HAULER_CACHE": "agent-bundle:path:plugin-data/cache" },
+          "worker": "mcp/mcp-hauler-…-flight.mjs" },
+        "name": "hauler", "transport": "stdio" }
+    ],
+    "scripts": []
+  },
+  "files": [
+    { "bytes": 412, "kind": "generated", "path": ".claude-plugin/plugin.json",
+      "sha256": "…" }
+  ],
+  "manifestVersion": 2,
+  "projections": [
+    { "builtInHost": "claude",
+      "documents": { "hooks": "hooks/hooks.json", "marketplace": ".claude-plugin/marketplace.json",
+        "mcp": ".mcp.json", "plugin": ".claude-plugin/plugin.json" },
+      "host": "claude", "marketplace": { "name": "cargo-hauler-marketplace" } }
+  ],
+  "routes": {
+    "cli": {
+      "commands": [
+        { "aliases": [], "exitCode": "result", "options": [], "path": ["status"],
+          "routeId": "cli:status" }
+      ],
+      "mode": "generated",
+      "routes": [
+        { "id": "cli:status", "kind": "cli", "provenance": { "kind": "conventional" },
+          "source": "src/cli/status.tsx" }
+      ]
+    },
+    "digest": "…",
+    "events": [
+      { "event": "tool/after", "id": "event:tool/after", "kind": "event-route",
+        "execution": { "fallback": "none", "runtime": "shared" },
+        "provenance": { "kind": "conventional" }, "source": "src/events/tool/after.tsx" }
+    ],
+    "layouts": [], "providers": [], "scripts": [],
+    "servers": [
+      { "id": "mcp:hauler", "mode": "generated", "name": "hauler",
+        "routes": [
+          { "id": "tool:hauler/status", "kind": "tool", "provenance": { "kind": "conventional" },
+            "serverId": "mcp:hauler", "source": "src/mcp/hauler/status.tsx" }
+        ] }
+    ]
+  },
+  "runtime": { "node": "22.12.0" }
+}
+```
+
+## Schema and programmatic access
+
+The contract ships as a JSON Schema (draft 2020-12, `additionalProperties: false` at every
+level) at `agent-bundle/schemas/agent-bundle.manifest.schema.json`, and the `agent-bundle` entry
+point exports it as `artifactManifestSchema` beside `validateArtifactManifestSchema`. The
+TypeScript type, the strict parser, and the schema are tested against each other, so a document
+one accepts the others accept too.
+
+The same entry point exports the reader:
+
+| Export | Purpose |
+| --- | --- |
+| `readArtifactManifest(root)` | Opens `<root>/agent-bundle.manifest.json` and returns `{ status: 'ok', manifest, path, root }`, `{ status: 'missing', … }`, or `{ status: 'invalid', detail, … }`. This is the one way the framework's own consumers open a built root. |
+| `parseArtifactManifest(bytes)` | Parses and validates canonical bytes into a frozen `ArtifactManifest`; throws on any violation, including a duplicate key or non-canonical bytes. |
+| `artifactManifestName` | `'agent-bundle.manifest.json'`. |
+| `artifactManifestVersion` | `2`. |
+| `artifactCompilerRecordVersion` | `1`. |
+
+The types (`ArtifactManifest`, `ArtifactManifestCompiler`, `ArtifactManifestCompilerAdapter`,
+`ArtifactManifestProvenance`, `ArtifactManifestProjection`, `ArtifactManifestExecutables`, …)
+are in the generated [Type API](./api.mdx).
+
+## Reserved keys
+
+These keys are part of the design but **not emitted**, and a v2 reader rejects them like any
+other unknown key. They are listed so that a consumer does not invent its own spelling:
+
+| Reserved key | Intended contents |
+| --- | --- |
+| `projections[].components` | The per-host component accounting `inspect` prints (`selected` / `skipped` with reason). |
+| `executables.noticeDelivery` | The notice-delivery intersection baked into every compiled wrapper and MCP entry. |
+| `executables.hooks[].preflight` | Gate and preflight declarations on a hook row. |
+| `executables.mcpServers[].apps[].client` | The generated client and `web` environment of an App. |
+
+## Versioning
+
+Two version numbers travel with every root. Keys are closed, so **optional is not backward
+compatible**: a reader of version N rejects any key or enumerated value it does not know (the
+lean web reader rejects the version mismatch itself, before it reads a slice).
+
+- `manifestVersion` versions the **public contract** consumers read (`application`, `files[]`,
+  `runtime`, `projections[]`, `routes`, `executables`, `distribution`). It bumps on **any**
+  change an old closed reader would reject — adding, renaming, or removing a public-contract
+  key (optional or not), or changing an enumerated value set a reader closes. Within one
+  version the key inventory is frozen. Readers refuse any other `manifestVersion`. Version 2
+  renamed `targets[]` to `projections[]`, moved the hook rows that `agent-bundle.hooks.json`
+  used to carry into `executables.hooks[]` and deleted that file, and added `application`,
+  `routes`, `executables`, `distribution`, and `projections[].documents`.
+- `compiler.recordVersion` versions the **operational compiler record** (`producer`, `project`,
+  `provenance`, `adapters`, `agentSkills`, `validation`) by the same rule over that record's
+  keys. An internal compiler refactor that changes only those facts bumps `recordVersion` and
+  never forces a `manifestVersion` bump. Readers refuse any other `recordVersion`.
+
+Read an artifact with a framework version whose `manifestVersion` matches the document; a
+mismatch in either direction is a rebuild, not a fallback.
+
+## Diagnostics
+
+| Code | Meaning |
+| --- | --- |
+| `AB6000` | The manifest is missing or the root is not a readable directory. |
+| `AB6001` | The manifest is not a strict canonical manifest, or it changed while validation ran. |
+| `AB6004` | A `files[]` row and the tree disagree. |
+| `AB6018` | `executables.hooks[]` and a host hooks document disagree about the compiler wrappers. |
+| `AB7001` | `install`, `uninstall`, or `doctor` cannot resolve the host from the manifest at `--from`, or a listed file is missing or differs from its `files[]` digest. |
+
+All are described in the [Diagnostics reference](./diagnostics.md).
+
+## Next
+
+- [Compiler architecture](../guide/concepts/architecture.mdx) — the Application, Projection, and Artifact layers whose output this file records.
+- [Targets and artifacts](./targets-artifacts.mdx) — the root the manifest indexes.
+- [Artifact validation](../guide/distribution/validation.mdx) — the checks that read it.
+- [Host installation](../guide/distribution/installation.mdx) — how `install` and `doctor` use it.

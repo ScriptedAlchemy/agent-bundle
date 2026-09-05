@@ -7,7 +7,7 @@ import { Effect } from 'effect';
 
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { errorMessage, isErrno } from '../core/errors.ts';
-import { exists } from '../core/paths.ts';
+import { exists, isPreservedRuntimeRoot } from '../core/paths.ts';
 import { runPromise } from '../effect/boundary.ts';
 import { liftPromise } from '../effect/lift.ts';
 import { cacheHasPlugin, readHeadCommit } from './cursor-hooks-registration.ts';
@@ -21,7 +21,6 @@ import {
   publicHostRegistrations,
   publicHostRoot,
   publicHostUninstallArguments,
-  readIdentity,
   readInstalledManifest,
   readPublicHostInventory,
   readPublicHostMarketplaceState,
@@ -31,9 +30,9 @@ import {
   type InstallHost,
   type InstallMode,
   type InstallScope,
-  type PluginIdentity,
   type PublicHostInstalledEntry,
 } from './install.ts';
+import { readBundleIdentity, type PluginIdentity } from './identity.ts';
 import {
   assertRealAncestors,
   createInstallReceipt,
@@ -44,7 +43,6 @@ import {
   installReceiptFile,
   installReceiptFormat,
   installReceiptStoreDirectory,
-  isPreservedRuntimeRoot,
   isRemnantReceipt,
   listStoredInstallReceipts,
   pruneEmptyDirectory,
@@ -1408,7 +1406,7 @@ const uninstallProgram = Effect.fnUntraced(function*(
     ));
   }
   const policy = resolveDataPolicy(options);
-  const identity = yield* liftPromise(() => readIdentity(options.from, options.host));
+  const identity = yield* liftPromise(() => readBundleIdentity(options.from, options.host));
   switch (options.host) {
     case 'claude':
       return yield* liftPromise(() => uninstallPublicCli(options, identity, 'claude', scope, policy));

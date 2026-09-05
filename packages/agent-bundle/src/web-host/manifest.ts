@@ -5,18 +5,69 @@ import {
   type ServeAppAllowCapability,
 } from '../core/mcp-app-allow.ts';
 import { errorMessage } from '../core/errors.ts';
+import { installReceiptFile, isInstallReceiptEntry, isPreservedRuntimeRoot, isRelocatablePosixPath } from '../core/paths.ts';
 import { hasDataKeys, isPlainRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import { pathTokens } from '../core/types.ts';
+
+/**
+ * The `manifestVersion` every reader of `agent-bundle.manifest.json` requires,
+ * declared here so the lean web reader bundled into generated bins and the
+ * full parser in `build/manifest.ts` refuse the same set of documents.
+ */
+export const artifactManifestVersion = 2;
+
+export const artifactManifestName = 'agent-bundle.manifest.json';
+
+/** The roots the `agent-bundle:path:*` tokens of a launch record expand to. */
+export interface LaunchRoots {
+  readonly pluginData: string;
+  readonly pluginRoot: string;
+  readonly workspaceRoot: string;
+}
+
+export const expandLaunchTokens = (value: string, roots: LaunchRoots): string => value
+  .replaceAll(pathTokens.pluginRoot, roots.pluginRoot)
+  .replaceAll(pathTokens.pluginData, roots.pluginData)
+  .replaceAll(pathTokens.workspaceRoot, roots.workspaceRoot);
+
+/**
+ * One argument of a server launch record, after the entry. An author
+ * argument written as `agent-bundle:path:plugin-root/<path>` is an
+ * `artifact` reference — a root-relative POSIX path inside the composite root
+ * (a `files[]` row, or a path under a declared payload directory). Every other
+ * argument is a `literal` the launcher passes through with its remaining
+ * `agent-bundle:path:*` tokens expanded; a literal that merely looks like a
+ * path stays a literal, because the manifest records the author's declaration
+ * and cwd-relative normalization is a projection concern (#633).
+ */
+export type ArtifactManifestLaunchArgument =
+  | { readonly kind: 'artifact'; readonly path: string }
+  | { readonly kind: 'literal'; readonly value: string };
+
+/**
+ * The one launch record of a compiled or prebuilt MCP server
+ * (`executables.mcpServers[]` with `kind: 'compiled'` or `'prebuilt'`): what
+ * `<plugin> web` starts and what every host MCP document projects. Tokens in
+ * `args` and `env` are expanded by the launcher, never by the manifest.
+ */
+export interface ArtifactManifestLaunch {
+  /** Arguments after the entry, in order. */
+  readonly args: readonly ArtifactManifestLaunchArgument[];
+  /** Root-relative POSIX path of the entry (a `files[]` row). */
+  readonly entry: string;
+  /** Declared environment; values may carry `agent-bundle:path:*` tokens. */
+  readonly env: Readonly<Record<string, string>>;
+  /** Root-relative POSIX path of the Flight worker the entry spawns (a `files[]` row). */
+  readonly worker?: string;
+}
 
 export interface WebManifestApp {
   readonly allow: readonly ServeAppAllowCapability[];
   readonly app: string;
-  /** The server's declared arguments after its entry, path tokens unexpanded. */
-  readonly args: readonly string[];
-  readonly entry: string;
-  readonly env: Readonly<Record<string, string>>;
   readonly input?: Readonly<Record<string, unknown>>;
   readonly name: string;
   readonly resourceUri: string;
+  /** The configured server name; its launch is the `executables.mcpServers[]` row of that name. */
   readonly server: string;
   readonly tool?: string;
 }
@@ -28,7 +79,7 @@ export interface WebManifest {
 
 type JsonRecord = Readonly<Record<string, unknown>>;
 
-const prefix = 'agent-bundle.manifest.json web section is invalid:';
+const prefix = 'agent-bundle.manifest.json is invalid:';
 
 const invalid = (message: string): Error => new Error(`${prefix} ${message}`);
 
@@ -56,10 +107,9 @@ const string = (value: unknown, location: string): string =>
     ? value
     : fail(`${location} must be a non-empty string.`);
 
-const stringArray = (value: unknown, location: string): readonly string[] => {
-  if (!Array.isArray(value)) throw invalid(`${location} must be an array.`);
-  return value.map((entry: unknown, index: number) =>
-    typeof entry === 'string' ? entry : fail(`${location}[${index}] must be a string.`));
+const relativePath = (value: unknown, location: string): string => {
+  const path = string(value, location);
+  return isRelocatablePosixPath(path) ? path : fail(`${location} must be a safe relative POSIX path.`);
 };
 
 const stringRecord = (value: unknown, location: string): Readonly<Record<string, string>> => {
@@ -75,12 +125,39 @@ const stringRecord = (value: unknown, location: string): Readonly<Record<string,
 const inputRecord = (value: unknown, location: string): Readonly<Record<string, unknown>> =>
   record(value, location);
 
+const parseLaunchArgument = (value: unknown, location: string): ArtifactManifestLaunchArgument => {
+  const argument = record(value, location);
+  switch (argument.kind) {
+    case 'artifact':
+      keyedRecord(argument, location, ['kind', 'path']);
+      return { kind: 'artifact', path: relativePath(argument.path, `${location}.path`) };
+    case 'literal':
+      keyedRecord(argument, location, ['kind', 'value']);
+      if (typeof argument.value !== 'string') throw invalid(`${location}.value must be a string.`);
+      return { kind: 'literal', value: argument.value };
+    default:
+      return fail(`${location}.kind must be "artifact" or "literal".`);
+  }
+};
+
+/** Parses one launch record; `location` names the row for the failure message. */
+export const parseLaunch = (value: unknown, location: string): ArtifactManifestLaunch => {
+  const launch = keyedRecord(value, location, ['args', 'entry', 'env'], ['worker']);
+  if (!Array.isArray(launch.args)) throw invalid(`${location}.args must be an array.`);
+  return {
+    args: launch.args.map((argument: unknown, index: number) => parseLaunchArgument(argument, `${location}.args[${index}]`)),
+    entry: relativePath(launch.entry, `${location}.entry`),
+    env: stringRecord(launch.env, `${location}.env`),
+    ...(launch.worker === undefined ? {} : { worker: relativePath(launch.worker, `${location}.worker`) }),
+  };
+};
+
 const parseApp = (value: unknown, index: number): WebManifestApp => {
-  const location = `apps[${index}]`;
+  const location = `web.apps[${index}]`;
   const app = keyedRecord(
     value,
     location,
-    ['allow', 'app', 'args', 'entry', 'env', 'name', 'resourceUri', 'server'],
+    ['allow', 'app', 'name', 'resourceUri', 'server'],
     ['input', 'tool'],
   );
   if (!Array.isArray(app.allow)) throw invalid(`${location}.allow must be an array.`);
@@ -93,9 +170,6 @@ const parseApp = (value: unknown, index: number): WebManifestApp => {
   return {
     allow,
     app: string(app.app, `${location}.app`),
-    args: stringArray(app.args, `${location}.args`),
-    entry: string(app.entry, `${location}.entry`),
-    env: stringRecord(app.env, `${location}.env`),
     ...(app.input === undefined ? {} : { input: inputRecord(app.input, `${location}.input`) }),
     name: string(app.name, `${location}.name`),
     resourceUri: string(app.resourceUri, `${location}.resourceUri`),
@@ -105,43 +179,163 @@ const parseApp = (value: unknown, index: number): WebManifestApp => {
 };
 
 export const parseWebManifest = (value: unknown): WebManifest => {
-  const manifest = keyedRecord(value, 'root', ['apps', 'open']);
-  if (!Array.isArray(manifest.apps)) throw invalid('apps must be an array.');
+  const manifest = keyedRecord(value, 'web', ['apps', 'open']);
+  if (!Array.isArray(manifest.apps)) throw invalid('web.apps must be an array.');
   if (manifest.open !== 'browser' && manifest.open !== 'never') {
-    throw invalid('open must be "browser" or "never".');
+    throw invalid('web.open must be "browser" or "never".');
   }
   const apps = manifest.apps.map(parseApp);
   for (let index = 1; index < apps.length; index += 1) {
     if (apps[index - 1]!.app.localeCompare(apps[index]!.app) >= 0) {
-      fail('apps must be sorted by app with no duplicates.');
+      fail('web.apps must be sorted by app with no duplicates.');
     }
   }
   return { apps, open: manifest.open };
 };
 
-/** The web-relevant read of one artifact manifest: the exposed Apps and the declared projections. */
+// Shared with the full parser in `build/manifest.ts` so both readers refuse the same documents.
+export const requireManifestVersion = (manifest: JsonRecord): void => {
+  if (manifest['manifestVersion'] !== artifactManifestVersion) {
+    fail(`manifestVersion must be ${artifactManifestVersion}.`);
+  }
+};
+
+/** The declared projection hosts, in document order; each row names one non-empty host once. */
+export const parseProjectionHosts = (value: unknown): readonly string[] => {
+  if (!Array.isArray(value)) throw invalid('projections must be an array.');
+  const hosts = value.map((candidate: unknown, index: number) =>
+    string(record(candidate, `projections[${index}]`)['host'], `projections[${index}].host`));
+  const seen = new Set<string>();
+  for (const host of hosts) {
+    if (seen.has(host)) throw invalid(`projections declares host ${JSON.stringify(host)} twice.`);
+    seen.add(host);
+  }
+  return Object.freeze(hosts);
+};
+
+export const mcpServerKinds = Object.freeze(['command', 'compiled', 'prebuilt', 'remote'] as const);
+
+const isMcpServerKind = (value: unknown): value is (typeof mcpServerKinds)[number] =>
+  typeof value === 'string' && (mcpServerKinds as readonly string[]).includes(value);
+
+/**
+ * The launch record of every compiled or prebuilt server, keyed by configured
+ * server name. Two rows of one name are refused rather than the later one
+ * winning: a reader launching by name must never choose between two records.
+ */
+export const parseServerLaunches = (value: unknown): ReadonlyMap<string, ArtifactManifestLaunch> => {
+  const servers = record(value, 'executables')['mcpServers'];
+  if (!Array.isArray(servers)) throw invalid('executables.mcpServers must be an array.');
+  const launches = new Map<string, ArtifactManifestLaunch>();
+  const names = new Set<string>();
+  servers.forEach((candidate: unknown, index: number) => {
+    const location = `executables.mcpServers[${index}]`;
+    const server = record(candidate, location);
+    const name = string(server['name'], `${location}.name`);
+    if (names.has(name)) throw invalid(`executables.mcpServers declares server ${JSON.stringify(name)} twice.`);
+    names.add(name);
+    if (!isMcpServerKind(server['kind'])) {
+      throw invalid(`${location}.kind must be one of ${mcpServerKinds.join(', ')}.`);
+    }
+    const launchable = server['kind'] === 'compiled' || server['kind'] === 'prebuilt';
+    if (launchable !== (server['launch'] !== undefined)) {
+      throw invalid(`${location}.launch is present exactly for compiled and prebuilt servers.`);
+    }
+    if (launchable) launches.set(name, parseLaunch(server['launch'], `${location}.launch`));
+  });
+  return launches;
+};
+
+/**
+ * A `files[]` path: root-relative, never the manifest itself, and never at or
+ * under a root entry the artifact does not own — the runtime's `state/` and
+ * the installer's receipt, in any letter case.
+ */
+export const parseArtifactFilePath = (value: unknown, location: string): string => {
+  const path = relativePath(value, location);
+  if (path === artifactManifestName) fail(`${location} must not name the manifest itself.`);
+  const root = path.split('/')[0]!;
+  if (isPreservedRuntimeRoot(root)) fail(`${location} must not be under the runtime-owned root "state/".`);
+  if (isInstallReceiptEntry(root)) {
+    fail(`${location} must not be at or under the installer's receipt ${JSON.stringify(installReceiptFile)}.`);
+  }
+  return path;
+};
+
+/** The root-relative paths of the `files[]` rows: the only bytes a launch record may name. */
+export const parseFilePaths = (value: unknown): ReadonlySet<string> => {
+  if (!Array.isArray(value)) throw invalid('files must be an array.');
+  return new Set(value.map((candidate: unknown, index: number) =>
+    parseArtifactFilePath(record(candidate, `files[${index}]`)['path'], `files[${index}].path`)));
+};
+
+/**
+ * A launch record names indexed bytes only: its entry and worker are `files[]`
+ * rows, and an `artifact` argument is a row or a directory under the root that
+ * holds rows (a payload tree indexed file by file), never a path the root does
+ * not contain.
+ */
+export const requireLaunchFiles = (
+  launches: ReadonlyMap<string, ArtifactManifestLaunch>,
+  filePaths: ReadonlySet<string>,
+): void => {
+  const paths = [...filePaths];
+  const inRoot = (path: string): boolean => filePaths.has(path) || paths.some((file) => file.startsWith(`${path}/`));
+  for (const [name, launch] of launches) {
+    const location = `executables.mcpServers[${name}].launch`;
+    if (!filePaths.has(launch.entry)) {
+      fail(`${location}.entry names ${JSON.stringify(launch.entry)}, which is not a manifest file.`);
+    }
+    if (launch.worker !== undefined && !filePaths.has(launch.worker)) {
+      fail(`${location}.worker names ${JSON.stringify(launch.worker)}, which is not a manifest file.`);
+    }
+    launch.args.forEach((argument, index) => {
+      if (argument.kind === 'artifact' && !inRoot(argument.path)) {
+        fail(`${location}.args[${index}].path names ${JSON.stringify(argument.path)}, which is not inside the artifact.`);
+      }
+    });
+  }
+};
+
+/** Every exposed App's `server` is a row with the launch record `<plugin> web` starts. */
+export const requireLaunchReferences = (
+  web: WebManifest,
+  launches: ReadonlyMap<string, ArtifactManifestLaunch>,
+): void => {
+  for (const app of web.apps) {
+    if (!launches.has(app.server)) {
+      fail(`web.apps[${app.app}].server names ${JSON.stringify(app.server)}, which is not an MCP server with a launch record.`);
+    }
+  }
+};
+
+/**
+ * The web-relevant read of one artifact manifest: the exposed Apps, the
+ * declared projections, and the launch record of every compiled or prebuilt
+ * server. Only these slices are read — and refused when malformed; the rest
+ * of the document is not validated here.
+ */
 export interface WebManifestDocument {
   /** The projection names the artifact manifest declares for this composite root. */
-  readonly targets: readonly string[];
+  readonly hosts: readonly string[];
+  /** Compiled and prebuilt MCP servers' launch records, keyed by configured server name. */
+  readonly launches: ReadonlyMap<string, ArtifactManifestLaunch>;
   readonly web?: WebManifest;
 }
-
-const targetNames = (value: unknown): readonly string[] => {
-  if (!Array.isArray(value)) return Object.freeze([]);
-  return Object.freeze(value.flatMap((target: unknown) => {
-    if (!isPlainRecord(target)) return [];
-    const name = target['name'];
-    return typeof name === 'string' && name.length > 0 ? [name] : [];
-  }));
-};
 
 export const readWebManifestDocument = async (manifestPath: string): Promise<WebManifestDocument> => {
   try {
     const document = parseJsonWithoutDuplicateKeys(await readFile(manifestPath, 'utf8'));
     const manifest = record(document, 'manifest');
+    requireManifestVersion(manifest);
+    const launches = parseServerLaunches(manifest['executables']);
+    requireLaunchFiles(launches, parseFilePaths(manifest['files']));
+    const web = manifest['web'] === undefined ? undefined : parseWebManifest(manifest['web']);
+    if (web !== undefined) requireLaunchReferences(web, launches);
     return {
-      targets: targetNames(manifest['targets']),
-      ...(manifest['web'] === undefined ? {} : { web: parseWebManifest(manifest['web']) }),
+      hosts: parseProjectionHosts(manifest['projections']),
+      launches,
+      ...(web === undefined ? {} : { web }),
     };
   } catch (error) {
     throw new Error(`Unable to read web section from ${manifestPath}: ${errorMessage(error)}`, { cause: error });
