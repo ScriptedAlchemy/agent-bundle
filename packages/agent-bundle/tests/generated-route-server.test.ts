@@ -929,7 +929,7 @@ it('keeps a second generated server from the same install alive while the first 
   const compiled = await build({ output, root, targets: ['cursor'] });
   const server = compiled.model.mcpServers[0];
   if (server?.args?.[0] === undefined) throw new Error('expected a generated MCP entry');
-  const entry = join(output, 'cursor', server.args[0]);
+  const entry = join(output, server.args[0]);
   const endpointId = `${compiled.build.manifest.project.revision}:cursor:${dirname(dirname(resolve(entry)))}`;
   const endpoint = eventRuntimeEndpoint(endpointId);
   const status = (): Promise<unknown> => requestEventRuntimeStatus({ endpointId, timeoutMs: 1_000 });

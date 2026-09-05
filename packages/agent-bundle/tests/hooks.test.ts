@@ -1454,15 +1454,15 @@ it('round-trips the documented Cursor subagent envelopes through published Curso
       }),
     });
     // `<plugin root>/.env` is read before the handler module evaluates.
-    await writeFile(join(outputRoot, 'cursor', '.env'), 'CURSOR_OPERATOR=from-file\n');
-    await expect(runNativeHook(join(outputRoot, 'cursor', 'hooks', 'subagent-stop.mjs'), stopInput)).resolves.toEqual({
+    await writeFile(join(outputRoot, '.env'), 'CURSOR_OPERATOR=from-file\n');
+    await expect(runNativeHook(join(outputRoot, 'hooks', 'subagent-stop.mjs'), stopInput)).resolves.toEqual({
       code: 0,
       stderr: '',
       stdout: JSON.stringify({
         followup_message: `${String(stopInput.agent_transcript_path)}:false:${String(stopInput.summary)}:${String(stopInput.subagent_type)}:from-file`,
       }),
     });
-    await rm(join(outputRoot, 'cursor', '.env'));
+    await rm(join(outputRoot, '.env'));
     // The Claude/Codex agent_id/agent_type spelling is not the Cursor envelope.
     await expect(runNativeHook(join(outputRoot, 'hooks', 'subagent-start.mjs'), {
       agent_id: 'abc-123',

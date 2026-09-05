@@ -768,7 +768,8 @@ it('lets the operator .env beat a manifest env default the host passed through, 
     const outputRoot = join(root, 'artifact');
     const result = await build({ model, outputRoot, projectRoot: root, registry: createDefaultRegistry() });
     const [entry] = result.compiledMcpEntries;
-    const pluginRoot = join(outputRoot, 'claude');
+    // Every target reads the one plugin root (#555).
+    const pluginRoot = outputRoot;
 
     // The host reads the manifest, expands its plugin-root token, and merges
     // the `env` block into the child environment beneath its own exports —
