@@ -2,6 +2,7 @@ import { chmod, mkdir, mkdtemp, readdir, realpath, rm, stat, writeFile } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { pluginStateSegment } from '@agent-bundle/runtime';
 import { afterEach, describe, expect, it } from '@rstest/core';
 
 import { exists } from '../src/core/paths.ts';
@@ -138,6 +139,23 @@ describe('resolveWebLaunch', () => {
       const second = await artifactRoot();
       expect(webPluginDataDirectory(first, 'status', home)).not.toBe(webPluginDataDirectory(second, 'status', home));
       expect(webPluginDataDirectory(first, 'status', home)).toBe(webPluginDataDirectory(`${first}/mcp/..`, 'status', home));
+    });
+
+    it('keys the web data directory on the same segment the runtime keys the state root on', async () => {
+      // web-host/launch.ts never loads the optional `@agent-bundle/runtime`
+      // peer, so its segment is a separate implementation of the runtime's
+      // `pluginStateSegment`; this pins the two spellings together for a safe
+      // basename (`<name>-<digest16>`) and an unsafe one (`plugin-<digest16>`).
+      const home = await homeRoot();
+      const safe = await artifactRoot();
+      const unsafe = join(safe, '.un safe');
+      await mkdir(unsafe);
+      for (const root of [safe, unsafe]) {
+        expect(webPluginDataDirectory(root, 'status', home))
+          .toBe(join(home, '.agent-bundle', 'web-data', pluginStateSegment(root), 'status'));
+      }
+      expect(pluginStateSegment(safe)).toMatch(/^agent-bundle-web-launch-[^/]+-[0-9a-f]{16}$/u);
+      expect(pluginStateSegment(unsafe)).toMatch(/^plugin-[0-9a-f]{16}$/u);
     });
 
     it('creates no data directory when no declared value names plugin-data', async () => {

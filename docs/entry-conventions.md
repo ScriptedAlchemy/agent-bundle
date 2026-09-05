@@ -150,23 +150,33 @@ Volatile lifetimes use the memory driver. Request lifetime opens and releases
 fresh project and notice stores per invocation; process lifetime shares them
 for the generated worker or executable process.
 
-Workspace-durable generated MCP workers store under
-`$AGENT_BUNDLE_PLUGIN_ROOT/state`. If that host-provided anchor is absent,
-the worker derives the artifact root from the parent of its own `mcp/`
-directory. The npm package's routed CLI bin and rendered scripts use
-`$AGENT_BUNDLE_PLUGIN_ROOT/state` when present and otherwise
-`$PWD/.agent-bundle/state`; the artifact-hosted routed CLI bin
-(`bin/<name>.mjs` in the plugin root) derives the artifact root from the parent of its
-own `bin/` directory instead, like the MCP worker. Each generated process
-resolves that anchor exactly once (`resolvePluginRoot` from
-`@agent-bundle/runtime`, #468): the state kernel, the notice ledger, the
-lineage journal, and every request scope the process opens read the same
-value, published as `(await agent()).plugin` — `{ root, stateRoot }` with
-`source: 'native'` from `AGENT_BUNDLE_PLUGIN_ROOT` or `'derived'` from the
-fallback — and handed to conventional providers as `plugin` beside
-`invocation` and `signal`. An anchor still carrying an unexpanded `${…}`
-token is treated as unset (reported once on stderr), never joined into a
-path. Notice authorization is deliberately permissive
+Workspace-durable artifact shells — generated MCP workers, artifact CLI bins
+and their render workers, rendered script workers, and standalone hook
+wrappers — call `resolvePluginRoot`
+with `stateAnchor: 'user-data'`. `AGENT_BUNDLE_PLUGIN_ROOT` still names the
+code root and otherwise falls back to the artifact root derived from the
+shell's own location. An expanded, non-blank `AGENT_BUNDLE_STATE_ROOT`
+independently overrides the framework state root and is made absolute with
+`resolve()`; otherwise the state root is
+`~/.agent-bundle/state/<plugin>-<digest>`, or
+`$XDG_STATE_HOME/agent-bundle/<plugin>-<digest>` when `XDG_STATE_HOME` is an absolute path (a relative value is ignored).
+`<plugin>` is the code root's safe basename (or `plugin`) and `<digest>`
+is the first 16 hexadecimal characters of SHA-256 over that code root's
+realpath, so symlinked spellings share one state root while distinct installs
+do not. `resolvePluginRoot` uses `os.homedir()` unless its `home` test seam is
+supplied. The npm package's routed CLI bin and rendered scripts keep the default
+`stateAnchor: 'root'`: `$AGENT_BUNDLE_PLUGIN_ROOT/state` when supplied and
+otherwise `$PWD/.agent-bundle/state`.
+
+Each generated process resolves both roots exactly once
+(`resolvePluginRoot` from `@agent-bundle/runtime`, #468): the state kernel,
+notice ledger, lineage journal, and every request scope the process opens read
+the same `stateRoot`, published with the code `root` as
+`(await agent()).plugin` and handed to conventional providers as `plugin`
+beside `invocation` and `signal`. `source` records whether the code root was
+native or derived; `stateSource` does the same independently for the state
+root. An unexpanded `${…}` token in either root override is treated as unset
+(and reported once on stderr), never joined into a path. Notice authorization is deliberately permissive
 in generated mounting v1 (`authorized`); recipient/principal matching remains
 enforced by the ledger — every generated scope mounts the request's `lineage`
 on the notice principal, so `recipient.conversation` / `recipient.root` are
@@ -272,7 +282,7 @@ interface AgentProviderContext {
   host: Observed<{ name }>;             // exactly what the route reads on `await agent()`
   session: Observed<{ sessionId }>;
   workspace: Observed<{ root }>;
-  plugin: Observed<{ root; stateRoot }>; // the resolved plugin root (#468)
+  plugin: Observed<{ root; stateRoot }>; // resolved code and framework state roots (#468)
   lineage: Observed<AgentLineage>;      // own chain plus the live `tree` (#457)
   state?: { lifetime; read(options?) }; // the mounted state handle, `read` only
   notices?: { inbox(); published() };   // the request's notice handle, reads only
@@ -911,10 +921,12 @@ executable bit — invoke it as `node <plugin-root>/bin/<plugin-name>.mjs
 <args>`, exactly like `scripts/*.mjs`. Help, argv parsing, output modes,
 exit codes, and signals are identical to the package bin. One deliberate
 difference: workspace-durable state without a host-supplied
-`AGENT_BUNDLE_PLUGIN_ROOT` anchors on the **artifact root** (the parent of
-`bin/`, the same fallback the generated MCP worker beside it uses) rather
-than `$PWD/.agent-bundle/state`, so a co-installed CLI and server observe
-one store. The npm package bin keeps its `cwd` fallback.
+`AGENT_BUNDLE_STATE_ROOT` uses `stateAnchor: 'user-data'`, deriving
+`~/.agent-bundle/state/<plugin>-<digest>` (or the `XDG_STATE_HOME` equivalent)
+from the artifact code root. The generated MCP worker beside it makes the
+same derivation, so a co-installed CLI and server observe one store without
+writing beneath a read-only artifact. The npm package bin keeps
+`stateAnchor: 'root'` and its `cwd` fallback, `$PWD/.agent-bundle/state`.
 
 Reaching the bin from the other surfaces:
 
@@ -1652,7 +1664,11 @@ input, and a refresh rebinds that retained result. `<plugin> web` keeps the
 installed artifact immutable: framework-owned per-server web state
 (`${PLUGIN_DATA}` in declared env) lives under the user's home
 (`~/.agent-bundle/web-data/<plugin>-<digest>/<server>`), never inside the
-plugin root, so a read-only install still launches.
+plugin root. The spawned server's SQLite state kernel, notice ledger, and
+lineage journal likewise use `stateAnchor: 'user-data'` and live under
+`~/.agent-bundle/state/<plugin>-<digest>` (or the `XDG_STATE_HOME` equivalent)
+unless `AGENT_BUNDLE_STATE_ROOT` overrides it, so a read-only install still
+launches.
 
 ## `agent-bundle/app` — the App-side bridge client
 

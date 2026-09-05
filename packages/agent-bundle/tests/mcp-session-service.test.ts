@@ -118,7 +118,7 @@ const publishFixtureEpoch = async (
     '  return {',
     "    _meta: { ui: { resourceUri: 'ui://fixture/result.html' }, opaque: { nested: ['exact', 42] } },",
     '    content: [',
-    "      { type: 'text', text: JSON.stringify({ cwd: process.cwd(), data: process.env.FIXTURE_DATA, inherited: process.env.AGENT_BUNDLE_PERSISTENT_INHERITED, pid: process.pid, root: process.env.FIXTURE_ROOT, workspace: process.env.FIXTURE_WORKSPACE }) },",
+    "      { type: 'text', text: JSON.stringify({ cwd: process.cwd(), data: process.env.FIXTURE_DATA, inherited: process.env.AGENT_BUNDLE_PERSISTENT_INHERITED, pid: process.pid, root: process.env.FIXTURE_ROOT, stateRoot: process.env.AGENT_BUNDLE_STATE_ROOT, workspace: process.env.FIXTURE_WORKSPACE }) },",
     "      { type: 'resource_link', name: 'fixture', uri: 'ui://fixture/resource.txt' },",
     '    ],',
     "    structuredContent: { answer: 42, opaque: { exact: true } },",
@@ -252,8 +252,12 @@ it('keeps one generated server and plugin-data directory bound to the selected e
       readonly inherited: string;
       readonly pid: number;
       readonly root: string;
+      readonly stateRoot: string;
     };
     expect(firstState.root).toBe(join(root, '.agent-bundle', 'epochs', 'epoch-1'));
+    // Dev sessions pin the framework state root beside the epoch (#637), so a
+    // rebuild never accumulates another `~/.agent-bundle/state` directory.
+    expect(firstState.stateRoot).toBe(join(root, '.agent-bundle', 'epochs', 'epoch-1', 'state'));
     expect(firstState.inherited).toBe('resolved-on-open');
     await expect(access(firstState.data)).resolves.toBeUndefined();
     expect(session.events().some((event) => event.type === 'stderr' && event.text === 'fixture stderr\n')).toBe(true);

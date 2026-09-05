@@ -714,9 +714,11 @@ const eventRouteHookWrapperSource = (
     '};',
     ...(standalone
       ? [
-          // The wrapper lives in `hooks/`, so its artifact root is the parent
-          // directory — the same anchor the generated MCP entry resolves (#468).
-          "const pluginRoot = resolvePluginRoot({ fallback: fileURLToPath(new URL('..', import.meta.url)) });",
+          // The wrapper lives in `hooks/`, so its code root is the parent
+          // directory; the state root derives from it in the user state
+          // directory — the same two roots the generated MCP entry resolves
+          // (#468, #637), so the lineage journal it retires is the server's.
+          "const pluginRoot = resolvePluginRoot({ fallback: fileURLToPath(new URL('..', import.meta.url)), stateAnchor: 'user-data' });",
           'const renderStandalone = async (invocation, signal) => {',
           '  const worker = new Worker(new URL(/* webpackIgnore: true */ "./hooks-flight.mjs", import.meta.url), { stderr: true, stdout: true });',
           "  worker.stdout?.on('data', (chunk) => process.stderr.write(chunk));",
