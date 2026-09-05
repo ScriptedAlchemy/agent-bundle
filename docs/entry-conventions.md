@@ -1139,11 +1139,17 @@ declares already-built directory trees the build packages **as-is**, and the
 inside them:
 
 ```ts
+import { defineConfig, definePrebuilt } from 'agent-bundle';
+
 export default defineConfig({
   payload: {
     // key = artifact-root destination directory, value = the built tree
     app: './dist/app',
-    runtime: { source: './dist/runtime', targets: ['claude', 'codex'] },
+    runtime: definePrebuilt({
+      source: './dist/runtime',
+      targets: ['claude', 'codex'],
+      runtimeDependencies: ['sharp'],
+    }),
   },
   mcp: {
     servers: {
@@ -1191,6 +1197,17 @@ export default defineConfig({
   simulatable hook index. MCP Apps declared on a prebuilt server stay a
   development surface (the Workbench compiles them live); the build assumes
   the payload already serves the resource.
+- **Declare what the payload loads.** The compiler never opens a payload
+  file — payload trees are opaque by contract — so `runtimeDependencies`
+  on a `definePrebuilt` entry lists the bare package names those files
+  load at run time. A name that is not a bare package name (a subpath
+  such as `sharp/lib`, or a specifier) or that `package.json` does not
+  declare under `dependencies` or `optionalDependencies` is `AB4751`.
+  The declaration check is skipped when `package.json` is missing or
+  unparsable (`AB4009`–`AB4011`). The prepack unused-dependency gate
+  (`AB7014`) treats a name any payload's `runtimeDependencies` declares
+  as used. A `runtimeDependencies` value that is not an array of
+  nonempty strings is `AB4740`.
 - **Ordering.** Run your own build before `agent-bundle build`: a missing or
   empty payload is a validation warning (`AB4743`/`AB4745`) so `dev` works
   from a clean checkout, but `agent-bundle build` refuses it

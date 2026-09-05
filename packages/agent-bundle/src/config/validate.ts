@@ -6,6 +6,7 @@ import { builtInHostNames, isBuiltInHost } from '../adapters/composite-layout.ts
 import { type EntryExportScan, scanEntryExportsSource } from '../build/entry-exports.ts';
 import { externalizedSpecifiers } from '../build/external-policy.ts';
 import { frameworkOwnedPluginCollisions, frameworkOwnedRsbuildPlugins } from '../build/framework-plugins.ts';
+import { declaredDependencies } from '../build/pack-dependencies.ts';
 import type { CapabilityState } from '../core/capabilities.ts';
 import { toPosixRelative } from '../core/paths.ts';
 import { isPlainRecord, isRecord } from '../core/strict-json.ts';
@@ -14,6 +15,7 @@ import { stableJson } from '../core/digest.ts';
 import { unsupportedMcpTransportDiagnostic } from '../core/mcp-transport.ts';
 import {
   developmentFallbackVersion,
+  isValidPackageName,
   snapshotPackageIdentity,
   type PackageIdentityIssueKind,
 } from '../core/project-context.ts';
@@ -1658,11 +1660,70 @@ const payloadTargetDiagnostics = (
 };
 
 /**
- * AB4740-AB4743 and the AB4750 freshness nudge: shape, destination-name,
- * source-path, and existence checks for the prebuilt `payload` block.
- * Missing or empty payloads warn here (development flows never require the
- * consumer's own build to have run); `agent-bundle build` refuses them with
- * AB4747/AB4748.
+ * The names `package.json` installs for a consumer (`dependencies` and
+ * `optionalDependencies`), or undefined when there is no readable package
+ * document — a normal development state AB4009–AB4011 already describe.
+ */
+const installedDependencyNames = (projectRoot: string): ReadonlySet<string> | undefined => {
+  let document: unknown;
+  try {
+    document = JSON.parse(readFileSync(join(projectRoot, 'package.json'), 'utf8'));
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(document)) return undefined;
+  return new Set(declaredDependencies(document)
+    .filter((dependency) => dependency.field !== 'peerDependencies')
+    .map((dependency) => dependency.name));
+};
+
+/**
+ * AB4740/AB4751: one payload declaration's optional `runtimeDependencies`.
+ * The compiler never opens a payload file, so this list is the payload's
+ * only dependency evidence (`AB7014`); every name must be a bare package
+ * name the project installs for its consumers.
+ */
+const payloadRuntimeDependencyDiagnostics = (
+  name: string,
+  runtimeDependencies: unknown,
+  loaded: LoadedConfig,
+  installed: ReadonlySet<string> | undefined,
+): Diagnostic[] => {
+  if (runtimeDependencies === undefined) return [];
+  if (!Array.isArray(runtimeDependencies) || !runtimeDependencies.every(nonemptyString)) {
+    return [sourceDiagnostic(
+      'AB4740',
+      `Payload ${JSON.stringify(name)} runtimeDependencies must be an array of package names.`,
+      loaded.configPath,
+    )];
+  }
+  return runtimeDependencies.flatMap((dependency: string) => {
+    if (!isValidPackageName(dependency)) {
+      return [sourceDiagnostic(
+        'AB4751',
+        `Payload ${JSON.stringify(name)} runtimeDependencies entry ${JSON.stringify(dependency)} is not a bare package name.`,
+        loaded.configPath,
+        'Name the package (e.g. "sharp" or "@scope/name"), not a subpath or a specifier.',
+      )];
+    }
+    if (installed !== undefined && !installed.has(dependency)) {
+      return [sourceDiagnostic(
+        'AB4751',
+        `Payload ${JSON.stringify(name)} runtimeDependencies names ${JSON.stringify(dependency)}, which package.json does not declare under dependencies or optionalDependencies.`,
+        loaded.configPath,
+        'Declare the package under dependencies or optionalDependencies so a consumer installs it, or remove it from runtimeDependencies.',
+      )];
+    }
+    return [];
+  });
+};
+
+/**
+ * AB4740-AB4743, AB4751, and the AB4750 freshness nudge: shape,
+ * destination-name, source-path, runtime-dependency, and existence checks
+ * for the prebuilt `payload` block. Missing or empty payloads warn here
+ * (development flows never require the consumer's own build to have run);
+ * `agent-bundle build` refuses them with AB4747/AB4748.
  */
 const validatePayload = (
   loaded: LoadedConfig,
@@ -1676,6 +1737,7 @@ const validatePayload = (
   }
   const diagnostics: Diagnostic[] = [];
   const sources: { name: string; source: string }[] = [];
+  const installed = installedDependencyNames(loaded.context.projectRoot);
   for (const [name, declaration] of Object.entries(configured)) {
     if (!isSafeOutputName(name) || reservedPayloadDestinations.has(name)) {
       const diagnostic = sourceDiagnostic(
@@ -1700,7 +1762,10 @@ const validatePayload = (
       continue;
     }
     if (typeof declaration !== 'string') {
-      diagnostics.push(...payloadTargetDiagnostics(name, declaration.targets, loaded, registry));
+      diagnostics.push(
+        ...payloadTargetDiagnostics(name, declaration.targets, loaded, registry),
+        ...payloadRuntimeDependencyDiagnostics(name, declaration.runtimeDependencies, loaded, installed),
+      );
     }
     const source = payloadDeclarationSource(loaded.context.projectRoot, declaration);
     if (source === undefined) {

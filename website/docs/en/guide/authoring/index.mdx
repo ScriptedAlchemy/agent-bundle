@@ -72,7 +72,7 @@ standard only through CLI translation, which is why its dedicated target remains
 | `routes` | Power-tier route-graph policy: `routes.servers` per-server modes, `routes.cli`, and `routes.mcpCommands` projection. |
 | `output` | `distPath` — where the artifact root lives. |
 | `runtime` | `node` — the minimum Node.js version for generated executables. |
-| `payload` | Prebuilt directory trees packaged byte-for-byte. |
+| `payload` | Prebuilt directory trees packaged byte-for-byte (`definePrebuilt`). |
 | `state` | `false` to disable the `src/state.ts` convention. |
 | `marketplace` | `true` adds Cursor's optional `.cursor-plugin/marketplace.json`. Claude Code and Codex always emit their local marketplace manifests regardless. |
 | `evals` | Eval suite discovery (`include`), the run directory (`runsDir`), and the optional `semanticGrader`. See [Evaluations](../development/evaluations.mdx). |

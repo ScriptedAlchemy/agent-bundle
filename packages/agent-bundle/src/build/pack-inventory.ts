@@ -152,7 +152,9 @@ const perField = (
  * never from a `dist` bundle or a host-pack module. A `require`,
  * `createRequire(…)(…)`, or `import.meta.resolve(…)` call is not an import
  * and `AB6005` does not walk it, so that evidence is read from every packed
- * file, compiled bundles included.
+ * file, compiled bundles included. A prebuilt payload's `runtimeDependencies`
+ * declaration is evidence of the same standing: the compiler never opens a
+ * payload file, so the author states what it loads.
  */
 const unresolvableMessage = (field: InstalledDependencyField, own: readonly DeclaredDependency[]): string =>
   `package.json ${field} names packages a consumer's npm cannot resolve through a registry (an invalid name or a non-registry specifier): ${own.map((dependency) =>
@@ -163,6 +165,8 @@ const unresolvableRecovery = 'Depend on a published registry version, or bundle 
   + 'which only pnpm, Yarn, or Bun rewrite while packing.';
 
 const dependencyDiagnostics = async (options: {
+  /** Package names prebuilt payloads declare they load at run time (`definePrebuilt`). */
+  readonly declaredRuntimeDependencies: ReadonlySet<string>;
   readonly packageDocument: Readonly<Record<string, unknown>>;
   readonly packedPaths: readonly string[];
   readonly packerRewritesWorkspaceProtocols: boolean;
@@ -212,20 +216,22 @@ const dependencyDiagnostics = async (options: {
     && !imported.installScripts.has(dependency.name);
   // A computed import() may load any declared package; nothing can then be called unused.
   const unused = imported.complete
-    ? declared.filter((dependency) => dependency.installed && !imported.names.has(dependency.name))
+    ? declared.filter((dependency) => dependency.installed
+      && !imported.names.has(dependency.name)
+      && !options.declaredRuntimeDependencies.has(dependency.name))
     : [];
   return [
     // A peer nothing imports may be a deliberate compatibility contract with the host that loads the package;
     // npm 7+ still installs it for every consumer, so it is worth a look, not a refusal.
     ...perField(unused, (field, own) => diagnostic(
       'AB7014',
-      `package.json ${field} names packages no packed JavaScript or declaration file references, runs, or install script needs: ${quoteAll(own.map((dependency) => dependency.name))}. `
+      `package.json ${field} names packages no packed JavaScript or declaration file references, runs, or install script needs, and no prebuilt payload declares: ${quoteAll(own.map((dependency) => dependency.name))}. `
         + (field === 'peerDependencies'
           ? 'If they only constrain the host version, that is a compatibility contract; npm 7+ still installs them for every consumer.'
           : 'Every consumer installs them for nothing; the emitted outputs already inline what they use.'),
       field === 'peerDependencies'
         ? 'Keep a deliberate compatibility peer, mark it optional in peerDependenciesMeta so npm stops installing it, or move a build-only package to devDependencies.'
-        : 'Move build-only packages to devDependencies; compiled bundles inline their imports (AB6005), so keep a runtime dependency only for what a prebuilt payload or other uncompiled packed module imports, a packed file requires or resolves (createRequire, import.meta.resolve), a packed declaration file references, a #subpath import reaches through the imports map, or an install script or packed JavaScript runs; a computed import() or require() in packed code withholds this check.',
+        : 'Move build-only packages to devDependencies; compiled bundles inline their imports (AB6005), so keep a runtime dependency only for what a prebuilt payload or other uncompiled packed module imports, a packed file requires or resolves (createRequire, import.meta.resolve), a packed declaration file references, a #subpath import reaches through the imports map, an install script or packed JavaScript runs, or a prebuilt payload names in runtimeDependencies (definePrebuilt); a computed import() or require() in packed code withholds this check.',
       field === 'peerDependencies' ? 'warning' : 'error',
     )),
     // npm skips an optional dependency it cannot fetch, so the install survives — but only once the specifier parsed
@@ -336,6 +342,7 @@ export const packInventoryDiagnostics = async (options: {
   }
 
   diagnostics.push(...await dependencyDiagnostics({
+    declaredRuntimeDependencies: new Set((options.model.payloads ?? []).flatMap((payload) => payload.runtimeDependencies)),
     packageDocument,
     packedPaths: [...packed],
     packerRewritesWorkspaceProtocols: options.packerRewritesWorkspaceProtocols,

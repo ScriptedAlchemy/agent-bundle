@@ -4,7 +4,9 @@ import { join } from 'node:path';
 import { expect, it } from '@rstest/core';
 
 import { build, validate } from '../src/api.ts';
+import { definePrebuilt as definePrebuiltFromConfig } from '../src/config/index.ts';
 import { DiagnosticError } from '../src/core/diagnostics.ts';
+import { definePrebuilt as definePrebuiltFromIndex } from '../src/index.ts';
 import { parseArtifactManifest } from '../src/build/manifest.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
 
@@ -63,6 +65,128 @@ const createProject = async (options: {
 
 const readJson = async <Document>(path: string): Promise<Document> =>
   JSON.parse(await readFile(path, 'utf8')) as Document;
+
+it('exports definePrebuilt from the package and config entry points as an identity helper', () => {
+  const entry = { runtimeDependencies: ['sharp'], source: './built/runtime' } as const;
+  expect([definePrebuiltFromIndex(entry) === entry, definePrebuiltFromConfig(entry) === entry]).toEqual([true, true]);
+});
+
+it('validates declared payload runtime dependencies and normalizes them sorted and unique', async () => {
+  const root = await createProject({
+    files: {
+      'package.json': `${JSON.stringify({
+        dependencies: { sharp: '^0.33.0', zod: '^4.0.0' },
+        name: 'prebuilt-fixture',
+        version: '1.0.0',
+      }, null, 2)}\n`,
+    },
+    payload: "  payload: { runtime: { source: './built/runtime', runtimeDependencies: ['zod', 'sharp', 'sharp'] } },",
+  });
+  try {
+    const validated = await validate({ root });
+    expect(validated.diagnostics.filter((diagnostic) => diagnostic.code === 'AB4751')).toEqual([]);
+
+    const built = await build({ output: join(root, 'out'), root });
+    expect(built.model.payloads).toMatchObject([
+      { name: 'runtime', runtimeDependencies: ['sharp', 'zod'] },
+    ]);
+  } finally {
+    await removeProjectFixture(root);
+  }
+});
+
+it('reports a payload runtime dependency that is not a bare package name', async () => {
+  const root = await createProject({
+    payload: "  payload: { runtime: { source: './built/runtime', runtimeDependencies: ['sharp/lib'] } },",
+  });
+  try {
+    expect((await validate({ root })).diagnostics).toContainEqual(expect.objectContaining({
+      code: 'AB4751',
+      message: 'Payload "runtime" runtimeDependencies entry "sharp/lib" is not a bare package name.',
+    }));
+  } finally {
+    await removeProjectFixture(root);
+  }
+});
+
+it('reports a payload runtime dependency absent from package.json dependencies', async () => {
+  const root = await createProject({
+    files: {
+      'package.json': '{"name":"prebuilt-fixture","version":"1.0.0"}\n',
+    },
+    payload: "  payload: { runtime: { source: './built/runtime', runtimeDependencies: ['not-declared'] } },",
+  });
+  try {
+    expect((await validate({ root })).diagnostics).toContainEqual(expect.objectContaining({
+      code: 'AB4751',
+      message: 'Payload "runtime" runtimeDependencies names "not-declared", which package.json does not declare under dependencies or optionalDependencies.',
+    }));
+  } finally {
+    await removeProjectFixture(root);
+  }
+});
+
+it('does not treat peerDependencies as installed payload runtime dependencies', async () => {
+  const root = await createProject({
+    files: {
+      'package.json': '{"name":"prebuilt-fixture","version":"1.0.0","peerDependencies":{"sharp":"^0.33.0"}}\n',
+    },
+    payload: "  payload: { runtime: { source: './built/runtime', runtimeDependencies: ['sharp'] } },",
+  });
+  try {
+    expect((await validate({ root })).diagnostics).toContainEqual(expect.objectContaining({
+      code: 'AB4751',
+      message: expect.stringContaining('package.json does not declare under dependencies or optionalDependencies'),
+    }));
+  } finally {
+    await removeProjectFixture(root);
+  }
+});
+
+it('accepts optionalDependencies as installed payload runtime dependencies', async () => {
+  const root = await createProject({
+    files: {
+      'package.json': '{"name":"prebuilt-fixture","version":"1.0.0","optionalDependencies":{"sharp":"^0.33.0"}}\n',
+    },
+    payload: "  payload: { runtime: { source: './built/runtime', runtimeDependencies: ['sharp'] } },",
+  });
+  try {
+    expect((await validate({ root })).diagnostics.filter((diagnostic) => diagnostic.code === 'AB4751')).toEqual([]);
+  } finally {
+    await removeProjectFixture(root);
+  }
+});
+
+it.each([
+  ["'sharp'", 'a string'],
+  ["['']", 'an empty package name'],
+])('reports runtimeDependencies with %s as AB4740', async (runtimeDependencies, _description) => {
+  const root = await createProject({
+    payload: `  payload: { runtime: { source: './built/runtime', runtimeDependencies: ${runtimeDependencies} } },`,
+  });
+  try {
+    expect((await validate({ root })).diagnostics).toContainEqual(expect.objectContaining({
+      code: 'AB4740',
+      message: 'Payload "runtime" runtimeDependencies must be an array of package names.',
+    }));
+  } finally {
+    await removeProjectFixture(root);
+  }
+});
+
+it('normalizes string-form payload declarations with no runtime dependencies', async () => {
+  const root = await createProject({
+    payload: "  payload: { app: './built/app' },",
+  });
+  try {
+    const built = await build({ output: join(root, 'out'), root });
+    expect(built.model.payloads).toMatchObject([
+      { name: 'app', runtimeDependencies: [] },
+    ]);
+  } finally {
+    await removeProjectFixture(root);
+  }
+});
 
 it('packages prebuilt payloads at stable paths and lowers prebuilt entries through every adapter', async () => {
   const root = await createProject({

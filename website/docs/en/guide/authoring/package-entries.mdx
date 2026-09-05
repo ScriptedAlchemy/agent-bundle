@@ -310,6 +310,27 @@ each payload file lands in the artifact manifest with its SHA-256 and the `prebu
 and hashes into the project revision. Run your own build first — a missing or empty payload is a
 warning under `dev` so a clean checkout works, but `agent-bundle build` refuses it.
 
+The compiler never opens a payload file, so `definePrebuilt` is the typed declaration
+site for what those files load: `runtimeDependencies` lists bare package names. A name
+that is not a bare package name, or that `package.json` does not declare under
+`dependencies` or `optionalDependencies`, is `AB4751` (the declaration check is skipped
+when `package.json` is missing or unparsable). The prepack unused-dependency gate
+(`AB7014`) treats a name any payload's `runtimeDependencies` declares as used.
+
+```ts
+import { defineConfig, definePrebuilt } from 'agent-bundle';
+
+export default defineConfig({
+  payload: {
+    tools: definePrebuilt({
+      source: './built/tools',
+      targets: ['claude'],
+      runtimeDependencies: ['sharp'],
+    }),
+  },
+});
+```
+
 ## The bundler escape hatch
 
 `tools.rsbuild` (an Rsbuild environment-config fragment) and `tools.rspack` (an Rspack config
