@@ -415,13 +415,6 @@ const validateBundleFiles = async (
   }
 };
 
-/**
- * Compatibility surface for the development probe lane. Artifact discovery is
- * manifest-backed; this no longer probes host plugin paths.
- */
-export const resolveBundleRoot = async (from: string, host: DoctorHost): Promise<string> =>
-  (await readBundleIdentity(from, host)).bundleRoot;
-
 /** The cwd for `plugin list --json`: the resolved host bundle root under `--from`, else the given directory, else home. */
 const listingDirectory = async (from: string | undefined, host: DoctorHost, home: string): Promise<string> => {
   if (from === undefined) return home;

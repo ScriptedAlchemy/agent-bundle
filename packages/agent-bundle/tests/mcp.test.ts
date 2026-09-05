@@ -12,6 +12,11 @@ import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
 import { codexArtifactPaths } from '../src/adapters/codex.ts';
 import { createDefaultRegistry, TargetRegistry } from '../src/adapters/registry.ts';
+import {
+  artifactManifestName,
+  assembleArtifactManifest,
+  parseArtifactManifest,
+} from '../src/build/manifest.ts';
 import { build } from './support/build.ts';
 import { validateArtifact } from '../src/build/validate-artifact.ts';
 import { emptyCompiledRouteGraph } from '../src/routes/graph.ts';
@@ -1349,6 +1354,56 @@ it('uses the selected streamable HTTP manifest with propagated cancellation and 
     await writeFile(join(artifact, '.claude-plugin', 'plugin.json'), '{"name":"tampered"}\n');
     await expect(service.list({ artifact, server: 'http', target: 'claude' })).rejects.toThrow();
     expect(closes).toBe(1);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('rejects a selected projection without its manifest-declared MCP document', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-mcp-projection-document-'));
+  try {
+    await writeFile(join(root, 'agent-bundle.config.ts'), 'export default {};\n');
+    const model = await normalizeProject(
+      loadedProject(root, {
+        mcp: {
+          servers: {
+            shared: {
+              transport: 'streamable-http',
+              url: 'https://mcp.example.test/tools',
+            },
+          },
+        },
+        plugin: { name: 'mcp-projection-document', version: '1.0.0' },
+        targets: ['claude', 'codex'],
+      }),
+      { skills: [] },
+      registry,
+    );
+    const artifact = join(root, 'dist');
+    await build({
+      model,
+      outputRoot: artifact,
+      projectRoot: root,
+      registry: createDefaultRegistry(),
+      routeGraph: emptyCompiledRouteGraph,
+    });
+    const manifestPath = join(artifact, artifactManifestName);
+    const manifest = parseArtifactManifest(await readFile(manifestPath, 'utf8'));
+    const projections = manifest.projections.map((projection) => {
+      if (projection.host !== 'codex') return projection;
+      const { mcp: _mcp, ...documents } = projection.documents;
+      return { ...projection, documents };
+    });
+    await writeFile(
+      manifestPath,
+      assembleArtifactManifest({ ...manifest, projections }).bytes,
+    );
+
+    await expect(new McpService().list({
+      artifact,
+      server: 'shared',
+      target: 'codex',
+    })).rejects.toThrow('The codex projection has no MCP document.');
   } finally {
     await rm(root, { force: true, recursive: true });
   }

@@ -1,4 +1,4 @@
-import { access, cp, mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, cp, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -7,6 +7,11 @@ import { expect, it } from '@rstest/core';
 import type { Transport } from '@modelcontextprotocol/client';
 
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
+import {
+  artifactManifestName,
+  assembleArtifactManifest,
+  parseArtifactManifest,
+} from '../src/build/manifest.ts';
 import { build } from './support/build.ts';
 import { validateArtifact } from '../src/build/validate-artifact.ts';
 import { emptyCompiledRouteGraph } from '../src/routes/graph.ts';
@@ -145,7 +150,9 @@ const publishFixtureEpoch = async (
             env: {
               FIXTURE_DATA: targets.includes('claude') ? pathTokens.pluginData : '${PLUGIN_DATA}',
               FIXTURE_ROOT: targets.includes('claude') ? pathTokens.pluginRoot : '${PLUGIN_ROOT}',
-              ...(targets.includes('claude') ? { FIXTURE_WORKSPACE: pathTokens.workspaceRoot } : {}),
+              ...(targets.includes('claude') && !targets.includes('portable')
+                ? { FIXTURE_WORKSPACE: pathTokens.workspaceRoot }
+                : {}),
             },
           },
         },
@@ -301,6 +308,35 @@ it('keeps one generated server and plugin-data directory bound to the selected e
     await rm(root, { force: true, recursive: true });
   }
 }, 30_000);
+
+it('rejects an MCP server not declared for the selected projection', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-hosts-'));
+  try {
+    const epochStore = await publishFixtureEpoch(root, 'epoch-hosts', ['claude', 'portable']);
+    const epochRoot = join(root, '.agent-bundle', 'epochs', 'epoch-hosts');
+    const manifestPath = join(epochRoot, artifactManifestName);
+    const manifest = parseArtifactManifest(await readFile(manifestPath, 'utf8'));
+    const mcpServers = manifest.executables.mcpServers.map((server) =>
+      server.name === 'fixture' ? { ...server, hosts: ['claude'] } : server);
+    await writeFile(
+      manifestPath,
+      assembleArtifactManifest({
+        ...manifest,
+        executables: { ...manifest.executables, mcpServers },
+      }).bytes,
+    );
+    const service = new McpSessionService({ epochStore, projectRoot: root });
+
+    await expect(service.open({
+      epochId: 'epoch-hosts',
+      serverName: 'fixture',
+      target: 'portable',
+    })).rejects.toThrow('Expected exactly one portable MCP server matching "fixture".');
+    await service.close();
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
 
 it('uses the admitted session timeout for initialization, catalog, operations, and restart', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-persistent-mcp-timeout-'));
