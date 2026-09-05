@@ -146,7 +146,7 @@ const messages = {
       'The `tasks` column records whether the pinned host client issues task-augmented `tools/call` requests (the MCP `2025-11-25` Tasks utility: `params.task`, `CreateTaskResult`, `tasks/get`, `tasks/result`, `tasks/cancel`, `tasks/list`). Generated servers serve that lifecycle for any tool route that declares `config.execution.taskSupport`; the column is about the host, not the server. `unavailable` means the host is documented or observed to send ordinary calls only, with the reason and evidence below.',
     mcpTasksDetails: 'Task-augmented calls by host',
     mcpStructuredContentValidationIntro:
-      'The `structuredContentValidation` row records whether the pinned host client validates `tools/call` arguments against `inputSchema` and `structuredContent` against `outputSchema`, and with which JSON Schema dialect semantics. Generated servers advertise an interoperable 2020-12 projection — tuples as `prefixItems` plus `items` set to the union of the positional schemas, never `items: false` — so a valid result passes both a 2020-12 validator and a draft-07 one; `degraded` records a host whose validator reads a dialect other than the one declared, and `unavailable` a host with no client-side check on record, where the generated server\'s own validation against the route\'s zod schemas is the only one.',
+      'The `structuredContentValidation` row records whether the pinned host client validates `tools/call` arguments against `inputSchema` and `structuredContent` against `outputSchema`, and with which JSON Schema dialect semantics. Generated servers advertise an interoperable 2020-12 projection — tuples as `prefixItems` plus `items` set to the union of the positional schemas, never `items: false` — so a valid result passes both a 2020-12 validator and a non-strict draft-07 one; `degraded` records a host whose validator reads a dialect other than the one declared, and `unavailable` a host with no client-side check on record, where the generated server\'s own validation against the route\'s zod schemas is the only one.',
     mcpStructuredContentValidationDetails: 'Structured content validation by host',
     lineage: 'Conversation lineage',
     lineageIntro:
@@ -254,7 +254,7 @@ const messages = {
       '`tasks` 列记录固定版本的宿主客户端是否会发出任务增强的 `tools/call` 请求（MCP `2025-11-25` Tasks 工具：`params.task`、`CreateTaskResult`、`tasks/get`、`tasks/result`、`tasks/cancel`、`tasks/list`）。生成的服务器会为任何声明了 `config.execution.taskSupport` 的工具路由提供这一生命周期；本列描述的是宿主，而不是服务器。`unavailable` 表示文档或观测表明该宿主只发送普通调用，原因与证据见下表。',
     mcpTasksDetails: '各宿主的任务增强调用',
     mcpStructuredContentValidationIntro:
-      '`structuredContentValidation` 行记录固定版本的宿主客户端是否会把 `tools/call` 的参数对照 `inputSchema`、把 `structuredContent` 对照 `outputSchema` 进行校验，以及采用哪一种 JSON Schema 方言语义。生成的服务器公布的是可互操作的 2020-12 投影——元组表示为 `prefixItems` 加上取各位置 schema 并集的 `items`，绝不使用 `items: false`——因此合法结果既能通过 2020-12 校验器，也能通过 draft-07 校验器；`degraded` 表示宿主的校验器按不同于所声明方言的语义读取 schema，`unavailable` 表示没有记录到客户端侧校验，此时生成的服务器自身对照路由 zod schema 的校验是唯一一道检查。',
+      '`structuredContentValidation` 行记录固定版本的宿主客户端是否会把 `tools/call` 的参数对照 `inputSchema`、把 `structuredContent` 对照 `outputSchema` 进行校验，以及采用哪一种 JSON Schema 方言语义。生成的服务器公布的是可互操作的 2020-12 投影——元组表示为 `prefixItems` 加上取各位置 schema 并集的 `items`，绝不使用 `items: false`——因此合法结果既能通过 2020-12 校验器，也能通过非严格模式的 draft-07 校验器；`degraded` 表示宿主的校验器按不同于所声明方言的语义读取 schema，`unavailable` 表示没有记录到客户端侧校验，此时生成的服务器自身对照路由 zod schema 的校验是唯一一道检查。',
     mcpStructuredContentValidationDetails: '各宿主的结构化内容校验',
     lineage: '会话谱系',
     lineageIntro:
