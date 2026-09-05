@@ -59,6 +59,18 @@ call renders through a warm internal Flight dispatcher and lowers the final Agen
 legal MCP output. Flight is an implementation transport inside the generated runtime — never a
 public host wire protocol, and raw Flight bytes never cross the MCP wire.
 
+The schemas reach the host as JSON Schema: `tools/list` advertises `inputSchema` and, for a
+`resultSchema` that describes an object, `outputSchema` in the 2020-12 dialect, projected so that
+draft-07 and 2020-12 validators both accept every valid value. A zod tuple (`z.tuple([...])`) is
+emitted as `prefixItems` plus `items` set to the union of the positional schemas, with
+`minItems`/`maxItems` bounding the length — never `items: false` — so a host that checks
+arguments and `structuredContent` with draft-07 keyword semantics (Cursor, which otherwise
+rejects a valid tuple with `MCP error -32602 … boolean schema is false`) accepts everything a
+2020-12 validator accepts. A `.rest()` tuple is the one place 2020-12 precision is loosened: its
+rest positions may also match a prefix schema. Everything else zod emits — `$defs`/`$ref`,
+`propertyNames`, `const`, numeric `exclusiveMinimum`, and so on — already validates the same way
+under both dialects and passes through untouched.
+
 A route may re-export its component and schemas from another module. This is how one tool is
 placed on two generated servers when only `config` differs between the placements — an MCP App
 `tools/call`, for example, reaches the server that served the widget:

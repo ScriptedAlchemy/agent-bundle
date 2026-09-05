@@ -55,6 +55,16 @@ export default async function Status({ input, signal }: ToolRouteProps<typeof in
 合法的 MCP 输出。Flight 是生成运行时内部的实现传输层——绝不是面向宿主的公开线上协议，原始 Flight
 字节也永远不会跨越 MCP 线路。
 
+这些 schema 以 JSON Schema 的形式到达宿主：`tools/list` 以 2020-12 方言公布 `inputSchema`，以及（当
+`resultSchema` 描述一个对象时）`outputSchema`，并经过一次投影，使 draft-07 与 2020-12 校验器都接受
+每一个合法取值。zod 元组（`z.tuple([...])`）被发出为 `prefixItems`，加上取各位置 schema 并集的
+`items`，并以 `minItems`/`maxItems` 限定长度——绝不会是 `items: false`——因此用 draft-07 关键字语义
+校验参数与 `structuredContent` 的宿主（Cursor，否则它会以
+`MCP error -32602 … boolean schema is false` 拒绝一个合法的元组）能接受 2020-12 校验器接受的一切。
+`.rest()` 元组是唯一放宽 2020-12 精度的地方：其 rest 位置也可以匹配某个前缀 schema。zod 发出的
+其他一切——`$defs`/`$ref`、`propertyNames`、`const`、数值型 `exclusiveMinimum` 等——在两种方言下的
+校验方式本就相同，因此原样通过。
+
 路由可以从另一个模块重新导出自己的组件与 schema。当同一个工具需要放在两个生成的服务器上、而两处
 只有 `config` 不同时，就用这种写法——例如 MCP App 的 `tools/call` 会到达提供该 widget 的那台服务器：
 
