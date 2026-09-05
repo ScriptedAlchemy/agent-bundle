@@ -92,8 +92,23 @@ export interface McpAppRoutePreviewService {
   readonly runtime?: McpAppRuntimeRoutePreviewService;
 }
 
+/** The tool call a host already made for a session, which a page may bind without re-sending it. */
+export interface McpAppOpeningCall {
+  readonly input: McpAppJsonValue;
+  readonly result: McpAppJsonValue;
+}
+
 export interface McpAppRoutesOptions {
   readonly authorize: (request: IncomingMessage) => void;
+  /**
+   * The tool call the host performed itself when it opened a session (the
+   * standalone `serve-app` host calls the opening tool once and seeds its
+   * page with the result). A create request that omits `input` and `result`
+   * binds to this call, so a large result is never round-tripped through the
+   * browser and past the request-body bound (#562); without it, both fields
+   * are required, as the Workbench sends them.
+   */
+  readonly openingCall?: (sessionId: string, toolName: string) => McpAppOpeningCall | undefined;
   /**
    * Test-only override for the graceful-close receipt window. Production
    * callers must leave this unset so the window keeps dominating the frame
@@ -292,16 +307,30 @@ const hostContext = (value: unknown): McpAppPreviewHostContext => {
   });
 };
 
-const createRequest = (value: JsonObject, sessionId: string): Parameters<McpAppRoutePreviewService['create']>[0] => {
+const createRequest = (
+  value: JsonObject,
+  sessionId: string,
+  openingCall: McpAppRoutesOptions['openingCall'],
+): Parameters<McpAppRoutePreviewService['create']>[0] => {
   if (!hasOnly(value, ['host', 'input', 'previewProfile', 'result', 'toolName']) || !nonemptyString(value.toolName)
-    || !isJsonValue(value.input) || !isJsonValue(value.result) || (value.previewProfile !== 'portable' && value.previewProfile !== 'chatgpt' && value.previewProfile !== 'claude')) {
+    || (value.previewProfile !== 'portable' && value.previewProfile !== 'chatgpt' && value.previewProfile !== 'claude')) {
     return invalidShape();
   }
+  // A request carrying neither field binds the call the host already made;
+  // one carrying both is the Workbench's own tool run. Anything in between
+  // is malformed.
+  const carriesCall = Object.hasOwn(value, 'input') || Object.hasOwn(value, 'result');
+  const call = carriesCall
+    ? isJsonValue(value.input) && isJsonValue(value.result)
+      ? { input: cloneJson(value.input), result: cloneJson(value.result) }
+      : undefined
+    : openingCall?.(sessionId, value.toolName);
+  if (call === undefined) return invalidShape();
   return Object.freeze({
     host: hostContext(value.host),
-    input: cloneJson(value.input),
+    input: call.input,
     previewProfile: value.previewProfile,
-    result: cloneJson(value.result),
+    result: call.result,
     sessionId,
     toolName: value.toolName,
   });
@@ -385,6 +414,7 @@ const bridgeHostContext = (host: McpAppPreviewHostContext): McpAppBridgeJsonReco
 export class McpAppRoutes {
   readonly #authorize: (request: IncomingMessage) => void;
   readonly #gracefulCloseReceiptTimeoutMs: number;
+  readonly #openingCall: McpAppRoutesOptions['openingCall'];
   readonly #service: McpAppRoutePreviewService | undefined;
   readonly #tails = new Map<string, Promise<void>>();
   readonly #teardowns = new Map<string, ReturnType<typeof setTimeout>>();
@@ -393,6 +423,7 @@ export class McpAppRoutes {
   constructor(options: McpAppRoutesOptions) {
     this.#authorize = options.authorize;
     this.#gracefulCloseReceiptTimeoutMs = options.gracefulCloseReceiptTimeoutMs ?? gracefulCloseReceiptTimeoutMs;
+    this.#openingCall = options.openingCall;
     this.#service = options.service;
   }
 
@@ -432,7 +463,7 @@ export class McpAppRoutes {
     if (isRuntimeRoute(parsed)) return this.#dispatchRuntime(parsed, request, response, service.runtime);
     if (parsed.kind === 'create') {
       if (method !== 'POST') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
-      const preview = await service.create(createRequest(await jsonBody(request), parsed.sessionId));
+      const preview = await service.create(createRequest(await jsonBody(request), parsed.sessionId, this.#openingCall));
       return writeJsonResponse(response, { lifecycle: preview.bridge.lifecycle, preview: previewSnapshot(preview) });
     }
     if (parsed.kind === 'force-close') {
