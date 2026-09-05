@@ -77,6 +77,7 @@ npx agent-bundle validate --artifact artifact --strict    # 已构建字节，�
 - `Compile evidence names "<path>", which the manifest does not list as a compiled file.`
 - `Compile evidence for "<path>" records "<request>" as a built-in; it is not one.`
 - `Compile evidence for "<path>" records sibling "<request>", which the artifact does not contain.`
+- `Compile evidence for "<path>" records "<request>" as an external; a view inlines every module it loads.`
 
 每条诊断都是一份结构化记录：稳定的 `AB` 代码、一个严重级别、一条消息，通常还有 `sourcePath` 与一条
 `recovery` 提示。由诊断把关的命令——`build`、`prepack`、`validate`、`doctor`、`install` 与 `dev`——只有

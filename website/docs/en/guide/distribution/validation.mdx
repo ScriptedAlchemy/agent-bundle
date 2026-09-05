@@ -94,6 +94,7 @@ evidence record describes the emitted files. Message forms:
 - `Compile evidence names "<path>", which the manifest does not list as a compiled file.`
 - `Compile evidence for "<path>" records "<request>" as a built-in; it is not one.`
 - `Compile evidence for "<path>" records sibling "<request>", which the artifact does not contain.`
+- `Compile evidence for "<path>" records "<request>" as an external; a view inlines every module it loads.`
 
 Every diagnostic is one structured record: a stable `AB` code, a severity, a message, and usually
 a `sourcePath` and a `recovery` hint. The diagnostic-gated commands — `build`, `prepack`,

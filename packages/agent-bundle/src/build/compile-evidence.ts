@@ -288,6 +288,9 @@ export const parseCompileEvidenceRecord = (bytes: string): CompileEvidenceRecord
   });
 };
 
+/** MCP App views are the only compiled HTML documents (`mcp-apps/<name>.html`). */
+const isViewAsset = (path: string): boolean => path.endsWith('.html');
+
 const evidenceDiagnostic = (message: string): Diagnostic =>
   artifactDiagnostic('AB6039', `Compile evidence ${message}`, compileEvidenceFileName);
 
@@ -316,13 +319,21 @@ export const compileEvidenceDiagnostics = (
     if (asset === undefined) diagnostics.push(evidenceDiagnostic(`does not cover compiled file ${JSON.stringify(path)}.`));
     else if (asset.sha256 !== files.get(path)!.sha256) diagnostics.push(evidenceDiagnostic(`for ${JSON.stringify(path)} describes different bytes.`));
   }
+  // A view (an HTML document) inlines every module it loads; only node bundles may load a sibling, and only another node bundle.
+  const nodeBundles = new Set([...compiled].filter((path) => !isViewAsset(path)));
   for (const asset of record.assets) {
     if (!compiled.has(asset.path)) {
       diagnostics.push(evidenceDiagnostic(`names ${JSON.stringify(asset.path)}, which the manifest does not list as a compiled file.`));
     }
     for (const external of asset.externals) {
+      if (isViewAsset(asset.path)) {
+        diagnostics.push(evidenceDiagnostic(
+          `for ${JSON.stringify(asset.path)} records ${JSON.stringify(external.request)} as an external; a view inlines every module it loads.`,
+        ));
+        continue;
+      }
       // The same judgement the build made, over the file table instead of the module graph.
-      const judged = classifyExternal(external, { asset: asset.path, emittedAssets: compiled });
+      const judged = classifyExternal(external, { asset: asset.path, emittedAssets: nodeBundles });
       switch (external.kind) {
         case 'builtin':
           if (judged !== 'builtin') {

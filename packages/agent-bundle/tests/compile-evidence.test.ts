@@ -165,12 +165,14 @@ describe('compile evidence records', () => {
       ['a.js', { kind: 'bundle', sha256: hash }],
       ['lib/b.js', { kind: 'bundle', sha256: hash }],
       ['copied.mjs', { kind: 'copy', sha256: hash }],
+      ['mcp-apps/view.html', { kind: 'bundle', sha256: hash }],
     ]);
-    const judge = (externals: readonly CompileEvidenceExternal[]): readonly string[] =>
+    const judge = (externals: readonly CompileEvidenceExternal[], viewExternals: readonly CompileEvidenceExternal[] = []): readonly string[] =>
       compileEvidenceDiagnostics({
         assets: [
           { externals, packages: [], path: 'a.js', sha256: hash },
           { externals: [], packages: [], path: 'lib/b.js', sha256: hash },
+          { externals: viewExternals, packages: [], path: 'mcp-apps/view.html', sha256: hash },
         ],
         coverage: { rewritable: false, unobserved: [] },
         policy: { name: 'closed-world-externals', revision: 1 },
@@ -190,5 +192,11 @@ describe('compile evidence records', () => {
     // A built-in kept through a non-module-loading external type is not a load.
     expect(judge([{ externalType: 'var', issuers: [], kind: 'builtin', request: 'node:fs', userRequest: 'node:fs' }]))
       .toEqual([expect.stringContaining('"node:fs" as a built-in; it is not one')]);
+    // A node bundle cannot load an MCP App view as a sibling.
+    expect(judge([external({ request: './mcp-apps/view.html', target: 'mcp-apps/view.html', userRequest: './mcp-apps/view.html' })]))
+      .toEqual([expect.stringContaining('sibling "./mcp-apps/view.html", which the artifact does not contain')]);
+    // A view keeps no external at all, built-ins included.
+    expect(judge([], [{ externalType: 'module', issuers: [], kind: 'builtin', request: 'node:fs', userRequest: 'node:fs' }]))
+      .toEqual([expect.stringContaining('for "mcp-apps/view.html" records "node:fs" as an external; a view inlines every module it loads')]);
   });
 });
