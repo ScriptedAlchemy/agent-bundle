@@ -668,7 +668,9 @@ it('build compiles a declared MCP App view and reports its document and measured
       };
       readonly diagnostics: readonly unknown[];
     };
-    expect(document.build.compiledMcpApps).toMatchObject([{ name: 'dashboard', target: 'portable' }]);
+    // The view is compiled once for the composite root and attributed to the
+    // selection's identity (#555), even though only portable declares it.
+    expect(document.build.compiledMcpApps).toMatchObject([{ name: 'dashboard', target: 'codex+portable' }]);
     const size = document.build.compiledMcpApps[0]!.size;
     expect(size.bytes).toBeGreaterThan(0);
     expect(size.gzipBytes).toBeGreaterThan(0);
@@ -682,7 +684,7 @@ it('build compiles a declared MCP App view and reports its document and measured
     expect(human).toMatchObject({ code: 0, stderr: '' });
     expect(human.stdout).toContain(`Built cli-fixture to ${project.output}\n`);
     expect(human.stdout).toMatch(
-      /^MCP App dashboard \(portable\): mcp-apps\/dashboard\.html \d+(?:\.\d)? [KM]iB \(\d+(?:\.\d)? [KM]iB gzip\)$/mu,
+      /^MCP App dashboard \(codex\+portable\): mcp-apps\/dashboard\.html \d+(?:\.\d)? [KM]iB \(\d+(?:\.\d)? [KM]iB gzip\)$/mu,
     );
   } finally {
     await rm(resolve(project.root, '..'), { force: true, recursive: true });
