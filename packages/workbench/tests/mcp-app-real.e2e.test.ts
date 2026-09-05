@@ -451,7 +451,18 @@ e2e('runs a generated SDK-v2 App through the real foreground session and separat
     }), { message: 'The reopened App preview never sent ui/notifications/initialized.', timeout: browserTimeout }).toBe(true);
     const closedSession = page.waitForRequest((request) =>
       request.url() === `${foregroundOrigin}/api/mcp/sessions/${openedSession.session.id}` && request.method() === 'DELETE', { timeout: browserTimeout });
-    await page.getByRole('button', { name: 'Close MCP session' }).click();
+    // The session controls sit ~2000 px above the reopened App's cross-origin
+    // iframe. Letting click() scroll that far and dispatch in the same breath
+    // lets Chromium route the pointer to the frame that used to occupy the
+    // point (its hit-test regions update asynchronously), so the click is
+    // swallowed under load. Settle the scroll first, then confirm the click
+    // landed: run('close') disables the button synchronously and it stays
+    // disabled through the terminal phase.
+    const closeSession = page.getByRole('button', { name: 'Close MCP session' });
+    await closeSession.scrollIntoViewIfNeeded();
+    await expect(closeSession).toBeInViewport({ timeout: browserTimeout });
+    await closeSession.click();
+    await expect(closeSession, 'The Close MCP session click did not start the close action.').toBeDisabled({ timeout: browserTimeout });
     // The first route call the close makes for this binding decides its path.
     // Observing the DELETE too makes a force-close fail here, in milliseconds,
     // instead of waiting out a /close that will never be sent.
