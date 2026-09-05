@@ -39,7 +39,15 @@ comments, and regexps and unbalanced braces. A module the framework did not comp
 consumer script, a generated installer — is parsed in full, and so is every bundle of a build
 whose [`tools` hatch](../../reference/configuration.mdx#tools) could have rewritten the emitted
 assets, in `dist` as in a host pack. Prebuilt payloads (`kind: 'prebuilt'`) stay opaque and
-hash-locked only, and declaration files (`.d.ts`) are not walked.
+hash-locked only, and declaration files (`.d.ts`) are not walked. The route graph guards the same
+self-containment before the bundler runs: a route module, layout, or provider — or a module one of
+them reaches through relative imports — that value-imports a compiler-carrying framework entry
+(`agent-bundle`, `agent-bundle/api`, `agent-bundle/config`, `agent-bundle/eval`,
+`agent-bundle/rstest`, `agent-bundle/test`, `agent-bundle/test/browser`) is reported as `AB4837`
+from `inspect`, `validate`, `build`, and `dev`, naming the file and the specifier, instead of
+failing inside the bundler; `import type` and imports used only as types are not reported, and a
+routed command that needs the framework serves an App through
+[`spawnServeApp`](../authoring/mcp.mdx#serving-an-app-standalone) instead.
 
 Every diagnostic is one structured record: a stable `AB` code, a severity, a message, and usually
 a `sourcePath` and a `recovery` hint. The diagnostic-gated commands — `build`, `prepack`,
