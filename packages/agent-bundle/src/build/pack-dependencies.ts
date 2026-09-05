@@ -39,15 +39,6 @@ const workspaceProtocol = /^(?:workspace|catalog):/u;
 export const isWorkspaceProtocol = (specifier: string): boolean => workspaceProtocol.test(specifier);
 
 /**
- * Whether the package manager running this pack (its `npm_config_user_agent`,
- * e.g. `pnpm/10.0.0 npm/? node/v24.0.0 linux x64`) rewrites workspace
- * protocols. Unknown or absent — `agent-bundle prepack` run outside any
- * lifecycle — means no, so the gate stays strict.
- */
-export const rewritesWorkspaceProtocols = (packerUserAgent: string | undefined): boolean =>
-  /^(?:pnpm|yarn|bun)\//u.test(packerUserAgent ?? '');
-
-/**
  * How a consumer's npm reads one dependency entry, name and specifier
  * together:
  *
@@ -576,10 +567,11 @@ export interface InstallScriptDependencies {
 /** What the consumer-side install scripts (`installScriptText`) say about the installed dependencies `declared`. */
 export const installScriptDependencies = async (options: {
   readonly declared: readonly string[];
+  readonly dependencyRoot?: string;
   readonly packageDocument: Readonly<Record<string, unknown>>;
   readonly projectRoot: string;
 }): Promise<InstallScriptDependencies> => {
-  const executables = await executableCommands(options.declared, resolve(options.projectRoot));
+  const executables = await executableCommands(options.declared, resolve(options.dependencyRoot ?? options.projectRoot));
   const text = installScriptText(isRecord(options.packageDocument.scripts) ? options.packageDocument.scripts : {});
   const needed = new Set(installScriptNeeds(text, simpleCommands(text), executables, options.packageDocument));
   return { names: new Set([...installScriptMentions(text, executables), ...needed]), needed };

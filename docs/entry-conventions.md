@@ -1404,42 +1404,24 @@ kind whose row is not `supported`. The full matrix is in
 agent-bundle inspect --bundler [--target <t>] [--json]
 ```
 
-Dumps the **lowered Rspack configuration** of every output the build
-compiles — artifact scripts, MCP entries, hook wrappers, the routed CLI bin,
-each MCP App view, and the `dist/` package build's `bin` and `lib` entries —
-one entry per compiler. The framework profile, the consumer `tools` hatch,
-and the invariant layer are composed exactly as the build composes them, then
-handed to the build's own engine — Rslib for executables, Rsbuild for MCP App
-views — and stopped where the build would start compiling. What prints is
-what the compiler receives: resolved `resolve.alias` entries (the
-`agent-bundle/*` runtime modules and the project-rooted
-`.agent-bundle-virtual/` generated modules beside the consumer's own
-aliases), the `externals` list, the framework plugins
-(`[object VirtualModulesPlugin]`, `[object ArtifactDependencyAuditPlugin]`),
-`output.path`, module rules, and every default the engine fills in. The
-lowering runs in production mode whatever `NODE_ENV` says and restores it
-afterwards, and it runs the build's invariant assertions: a `tools` value the
-build would refuse (a reserved alias, an `externals` entry naming a framework
-runtime module) makes the inspection `invalid` with an `AB7001` diagnostic
-carrying the refusal, instead of a config that never compiles. Entries the
-framework wraps also carry the generated wrapper module source
-(`generatedEntry`).
+Dumps the synthesized bundler configuration for every output the build
+composes — artifact scripts, MCP entries, hook wrappers, the composite root's
+MCP Apps Rsbuild config, and the `dist/` package build — exactly as the build
+lowers it: in production mode whatever `NODE_ENV` says, the framework profile
+with the consumer `tools` hatch merged over it and the invariant hook appended
+last (functions render as `[function <name>]`). Entries the framework wraps also carry the generated
+wrapper module source (`generatedEntry`). The composition comes from the same
+functions the build uses, so the dump cannot drift from what compiles.
 
-The JSON rendering keeps the config's shape without dropping values JSON
-cannot carry: functions render as `[function <name>]` (Rslib lowers each
-entry's file name to `[function jsFilename]`), plugin instances as
-`[object <ClassName>]`, regular expressions as `[regexp /<source>/]`.
-
-Nothing is redacted (this is a local debugging surface; the lowered configs
-carry absolute paths of the project and of agent-bundle's installed
-toolchain), but two build-time values are replaced with stable tokens so the
-output is deterministic for one project: the composite artifact root (chosen
-per build) appears as `<output>` — as `output.path` and inside any path
-beneath it — and the synthesized declaration tsconfig (a temporary file
-generated per package build) appears as `<generated-dts-tsconfig>`. The
-package build's `output.path` is its published destination,
-`<project root>/dist`, although each real build stages outputs before
-publishing them atomically.
+Nothing is redacted (this is a local debugging surface), but two build-time
+values are replaced with stable tokens so output is deterministic for one
+project: the composite artifact root (chosen per build) appears as
+`<output>`, and the synthesized declaration tsconfig (a temporary
+file generated per package build) appears as `<generated-dts-tsconfig>`. The
+package build's output root appears as its published destination, `dist`,
+although each real build stages outputs before publishing them atomically.
+Resolved post-bundler internals stay Rslib's domain; this surfaces
+agent-bundle's own composition, which is where the `tools` hatch lands.
 
 ## Dev-watch of the package build
 

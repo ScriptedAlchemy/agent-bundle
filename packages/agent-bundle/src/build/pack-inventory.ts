@@ -146,6 +146,7 @@ const dependencyDiagnostics = async (options: {
   /** Package → the packed bundles the compiler inlined it into, each sorted. */
   readonly bundledInto: ReadonlyMap<string, readonly string[]>;
   readonly declaredRuntimeDependencies: ReadonlySet<string>;
+  readonly dependencyRoot: string;
   readonly packageDocument: Readonly<Record<string, unknown>>;
   readonly packedPaths: readonly string[];
   readonly packerRewritesWorkspaceProtocols: boolean;
@@ -160,6 +161,7 @@ const dependencyDiagnostics = async (options: {
   });
   const installScripts = await installScriptDependencies({
     declared: declared.filter((dependency) => dependency.installed).map((dependency) => dependency.name),
+    dependencyRoot: options.dependencyRoot,
     packageDocument: options.packageDocument,
     projectRoot: options.projectRoot,
   });
@@ -344,6 +346,7 @@ export const packInventoryDiagnostics = async (options: {
   diagnostics.push(...await dependencyDiagnostics({
     bundledInto,
     declaredRuntimeDependencies: new Set((options.model.payloads ?? []).flatMap((payload) => payload.runtimeDependencies)),
+    dependencyRoot: resolve(options.projectRoot),
     packageDocument,
     packedPaths: [...packed],
     packerRewritesWorkspaceProtocols: options.packerRewritesWorkspaceProtocols,
