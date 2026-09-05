@@ -1,16 +1,11 @@
 import { expect, it } from '@rstest/core';
 
-import type { ArtifactManifest } from '../src/build/manifest.ts';
+import { artifactCompilerRecordVersion, type ArtifactManifest } from '../src/build/manifest.ts';
 import { applicationExplorerFor } from '../src/dev/artifacts/application-explorer.ts';
 
 const hash = 'a'.repeat(64);
 
 const manifest = (): ArtifactManifest => ({
-  agentSkills: {
-    schemaSha256: hash,
-    sourceRevision: hash,
-    specification: 'https://example.com/agent-skills',
-  },
   application: {
     description: 'Reviews changes.',
     id: 'application:review',
@@ -89,26 +84,40 @@ const manifest = (): ArtifactManifest => ({
       path: 'scripts/lint.mjs',
     }],
   },
+  compiler: {
+    adapters: [
+      { adapterRevision: 'claude-v1', host: 'claude', observedVersion: '1.0.0', schemas: [] },
+      { adapterRevision: 'codex-v1', host: 'codex', observedVersion: '1.0.0', schemas: [] },
+    ],
+    agentSkills: {
+      schemaSha256: hash,
+      sourceRevision: hash,
+      specification: 'https://example.com/agent-skills',
+    },
+    producer: { name: 'agent-bundle', version: '0.1.0' },
+    project: {
+      configDigest: hash,
+      configPath: 'agent-bundle.config.ts',
+      modelDigest: hash,
+      revision: hash,
+      sourceInputs: [{ path: 'agent-bundle.config.ts', sha256: hash }],
+    },
+    provenance: [],
+    recordVersion: artifactCompilerRecordVersion,
+    validation: {
+      artifact: { status: 'passed' },
+      projections: [{ host: 'claude', status: 'passed' }, { host: 'codex', status: 'passed' }],
+      source: { status: 'passed' },
+    },
+  },
   files: [],
   manifestVersion: 2,
-  producer: { name: 'agent-bundle', version: '0.1.0' },
-  project: {
-    configDigest: hash,
-    configPath: 'agent-bundle.config.ts',
-    modelDigest: hash,
-    revision: hash,
-    sourceInputs: [{ path: 'agent-bundle.config.ts', sha256: hash }],
-  },
   projections: [
     {
-      adapterRevision: 'codex-v1',
       documents: { mcp: 'codex/mcp.json', plugin: 'codex/plugin.json' },
       host: 'codex',
-      observedVersion: '1.0.0',
-      schemas: [],
     },
     {
-      adapterRevision: 'claude-v1',
       builtInHost: 'claude',
       documents: {
         hooks: 'claude/hooks.json',
@@ -117,8 +126,6 @@ const manifest = (): ArtifactManifest => ({
       },
       host: 'claude',
       marketplace: { name: 'review-marketplace' },
-      observedVersion: '1.0.0',
-      schemas: [],
     },
   ],
   routes: {
@@ -179,11 +186,6 @@ const manifest = (): ArtifactManifest => ({
     }],
   },
   runtime: { node: '22.12.0' },
-  validation: {
-    artifact: { status: 'passed' },
-    projections: [{ host: 'claude', status: 'passed' }, { host: 'codex', status: 'passed' }],
-    source: { status: 'passed' },
-  },
 });
 
 it('projects one stable application tree by joining routes and executable rows', () => {
