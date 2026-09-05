@@ -5,7 +5,7 @@ import type { Diagnostic } from '../core/diagnostics.ts';
 import { posixRelativeWhenInside } from '../core/paths.ts';
 import { isRecord } from '../core/strict-json.ts';
 import { artifactDiagnostic } from './artifact-diagnostics.ts';
-import type { CompilationEvidence, CompileResult, ExternalIR, ExternalKind } from './compile-result.ts';
+import type { CompilationEvidence, CompilationExternal, CompileResult, ExternalIR, ExternalKind } from './compile-result.ts';
 
 /** A request a generated executable may load at run time: a Node built-in, or Yarn PnP's runtime API. */
 export const isAllowedExternalRequest = (request: string): boolean => isBuiltin(request) || request === 'pnpapi';
@@ -48,12 +48,16 @@ export const classifyExternal = (
   return 'package';
 };
 
+/** `keeps "<request>" external (<type>)[, imported as "<specifier>",][ from <issuers>]; ` */
+const keptExternalClause = (external: CompilationExternal, issuers: readonly string[]): string =>
+  `keeps ${JSON.stringify(external.request)} external (${external.externalType})`
+  + `${external.userRequest === external.request ? '' : `, imported as ${JSON.stringify(external.userRequest)},`}`
+  + `${issuers.length === 0 ? '' : ` from ${issuers.join(', ')}`}; `;
+
 const externalMessage = (external: ExternalIR): string => {
   switch (external.kind) {
     case 'package':
-      return `Compiled module ${JSON.stringify(external.asset)} keeps ${JSON.stringify(external.request)} external (${external.externalType})`
-        + `${external.userRequest === external.request ? '' : `, imported as ${JSON.stringify(external.userRequest)},`}`
-        + `${external.issuers.length === 0 ? '' : ` from ${external.issuers.join(', ')}`}; `
+      return `Compiled module ${JSON.stringify(external.asset)} ${keptExternalClause(external, external.issuers)}`
         + (!isModuleLoadingExternalType(external.externalType)
           ? `external type ${external.externalType} reads a variable instead of loading a module.`
           : isRelativeRequest(external.request)
@@ -80,9 +84,8 @@ export const viewSelfContainmentDiagnostics = (
 ): readonly Diagnostic[] =>
   evidence.externals.map((external) => artifactDiagnostic(
     'AB6005',
-    `Compiled MCP App view ${JSON.stringify(asset)} keeps ${JSON.stringify(external.request)} external (${external.externalType})`
-      + `${external.userRequest === external.request ? '' : `, imported as ${JSON.stringify(external.userRequest)},`}`
-      + `${external.issuers.length === 0 ? '' : ` from ${external.issuers.map((issuer) => posixRelativeWhenInside(projectRoot, issuer)).join(', ')}`}; `
+    `Compiled MCP App view ${JSON.stringify(asset)} `
+      + keptExternalClause(external, external.issuers.map((issuer) => posixRelativeWhenInside(projectRoot, issuer)))
       + 'a view inlines every module it loads.',
     asset,
   ));

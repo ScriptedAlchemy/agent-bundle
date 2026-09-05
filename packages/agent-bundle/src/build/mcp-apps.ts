@@ -220,6 +220,10 @@ const assertResolvedViewConfig = (
       throw new Error('Rsbuild resolved an invalid self-contained MCP App configuration.');
     }
   }
+  // The compiler name is how each view's compile evidence finds its App.
+  if (bundlers.map((bundler) => bundler.name).toSorted().join('\0') !== appNames.toSorted().join('\0')) {
+    throw new Error('Rsbuild resolved an invalid self-contained MCP App configuration.');
+  }
   for (const bundler of bundlers) {
     if (
       bundler.output?.asyncChunks !== false ||
@@ -435,7 +439,7 @@ export const composeMcpAppsRsbuildConfig = (
   }));
 };
 
-/** Missing or duplicate evidence is a framework fault: the invariant layer names each view's environment after the App. */
+/** Missing or duplicate evidence is a framework fault: Rsbuild names each environment's compiler after its App, and `assertResolvedViewConfig` pins that name. */
 const assertViewsSelfContained = (
   compiled: readonly PlannedMcpApp[],
   evidence: readonly CompilationEvidence[],
