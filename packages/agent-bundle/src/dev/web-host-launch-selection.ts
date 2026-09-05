@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { isAbsolute, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import type { TargetRegistry } from '../adapters/registry.ts';
 import { digest } from '../core/digest.ts';
@@ -64,18 +64,11 @@ interface LaunchCandidate {
   readonly target: string;
 }
 
-const normalizedStdioArgument = (
+const normalizedStdioEntry = (
   value: string,
   artifactRoot: string,
   cwd: string,
 ): string => {
-  if (
-    !isAbsolute(value) &&
-    !value.startsWith('./') &&
-    !value.startsWith('../') &&
-    !value.includes('/') &&
-    !value.includes('\\')
-  ) return value;
   const resolved = resolve(cwd, value);
   return isInsideOrEqual(artifactRoot, resolved) ? resolved : value;
 };
@@ -137,10 +130,12 @@ const launchIdentityOf = async (
       const cwd = resolved.cwd === undefined
         ? artifactRoot
         : assertInside(artifactRoot, resolve(artifactRoot, resolved.cwd));
+      const [entry, ...args] = resolved.args;
       return digest({
-        args: resolved.args.map((argument) => normalizedStdioArgument(argument, artifactRoot, cwd)),
+        args,
         command: resolved.command,
         cwd,
+        entry: entry === undefined ? null : normalizedStdioEntry(entry, artifactRoot, cwd),
         env: resolved.env ?? {},
         kind: 'stdio',
       });

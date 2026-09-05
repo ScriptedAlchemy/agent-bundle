@@ -115,6 +115,22 @@ describe('selectWebLaunch', () => {
     expect(selection.sharedTargets).toEqual(['claude', 'portable']);
   });
 
+  it('preserves path-looking literal arguments after the executable entry', async () => {
+    const root = await artifactRoot();
+    await writeManifest(root, '.mcp.json', {
+      status: claudeServer({
+        args: ['${CLAUDE_PLUGIN_ROOT}/mcp/mcp-status.mjs', '--label', './team/red'],
+      }),
+    });
+    await writeManifest(root, 'mcp.json', {
+      status: emittedPortableServer({
+        args: ['mcp/mcp-status.mjs', '--label', join(root, 'team', 'red')],
+      }),
+    });
+    const error = await failure(root, { declaredTargets: ['claude', 'portable'] });
+    expect(error.code).toBe('launch-ambiguous');
+  });
+
   it('keeps an emitted portable entry distinct when it resolves to another artifact path', async () => {
     const root = await artifactRoot();
     await writeManifest(root, '.mcp.json', { status: claudeServer() });
