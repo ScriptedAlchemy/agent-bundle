@@ -45,35 +45,43 @@ function headingText(raw: string): string {
 
 interface PageAnchors {
   readonly ids: Set<string>;
-  readonly memberIds: Set<string>;
+  readonly members: Map<string, string>;
+}
+
+function memberName(text: string): string {
+  return text.replace(/\(\)$/, '');
 }
 
 function collectPageAnchors(markdown: string): PageAnchors {
   const slugger = new GithubSlugger();
   const ids = new Set<string>();
-  const memberIds = new Set<string>();
-  const outsideFences = markdown.replace(/^```[\s\S]*?^```[ \t]*$/gm, '');
+  const members = new Map<string, string>();
+  const outsideFences = markdown.replace(/^`{3,}[\s\S]*?^`{3,}[ \t]*$/gm, '');
 
   for (const match of outsideFences.matchAll(/^(#{1,6}) (.+)$/gm)) {
-    const id = slugger.slug(headingText(match[2]));
+    const text = headingText(match[2]);
+    const id = slugger.slug(text);
     ids.add(id);
     if (match[1].length === 3) {
-      memberIds.add(id);
+      members.set(id, memberName(text));
     }
   }
-  return { ids, memberIds };
+  return { ids, members };
 }
 
 /**
- * TypeDoc reserves some exported names while building its reflection URLs, so
- * links to those `### Member` headings receive a spurious `-1`. Rspress runs
+ * TypeDoc's first anchor pass hands compound slugs to nested reflections
+ * (`EvalRunStoreError.code` → `evalrunstoreerrorcode`), so a later link to the
+ * `### EvalRunStoreErrorCode` heading receives a spurious `-1`. Rspress runs
  * github-slugger over the rendered headings instead, where the member's first
  * occurrence has the unsuffixed anchor, so those links are dead. Rewrite a
  * `#name-N` link to `#name` only when the fragment does not exist on the
  * target page (the link is actually dead — a legitimate `#protocol-v1` whose
- * heading exists is never touched) and `name` is the id of a `###` member
- * heading there. Anything else is left as TypeDoc wrote it for the build's
- * anchor check to judge.
+ * heading exists is never touched), `name` is the id of a `###` member
+ * heading there, and the link's label is that member's exact name: ids are
+ * case-folded, so `FooCode` and `fooCode` share a base and only the label
+ * tells which one the link meant. Anything else is left as TypeDoc wrote it
+ * for the build's anchor check to judge.
  */
 async function alignTypeDocMemberLinks(directory: string, files: string[]): Promise<void> {
   const anchorsByPage = new Map<string, PageAnchors>();
@@ -87,13 +95,16 @@ async function alignTypeDocMemberLinks(directory: string, files: string[]): Prom
     const filePath = path.resolve(directory, relativePath);
     const markdown = await readFile(filePath, 'utf8');
     const aligned = markdown.replace(
-      /(\]\()([^)\s#]*#)([^)\s#]+?)-\d+(\))/g,
-      (link, opening: string, target: string, base: string, closing: string) => {
+      /(\[([^\]]*)\]\()([^)\s#]*#)([^)\s#]+?)(-\d+)(\))/g,
+      (link, opening: string, label: string, target: string, base: string, suffix: string, closing: string) => {
         const linkedPath = target.slice(0, -1);
         const targetPath = linkedPath ? path.resolve(path.dirname(filePath), linkedPath) : filePath;
         const anchors = anchorsByPage.get(targetPath);
-        const fragment = link.slice(opening.length + target.length, -closing.length);
-        if (!anchors || anchors.ids.has(fragment) || !anchors.memberIds.has(base)) {
+        if (
+          !anchors ||
+          anchors.ids.has(base + suffix) ||
+          anchors.members.get(base) !== memberName(headingText(label))
+        ) {
           return link;
         }
         return `${opening}${target}${base}${closing}`;
