@@ -498,10 +498,10 @@ importers:
         version: 2.0.21(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0))
       '@rspress/plugin-twoslash':
         specifier: 2.0.21
-        version: 2.0.21(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0))(react@19.2.8)(supports-color@7.2.0)(typescript@6.0.3)
+        version: 2.0.21(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0))(react@19.2.8)(supports-color@7.2.0)(typescript@7.0.2)
       '@rspress/plugin-typedoc':
         specifier: 2.0.21
-        version: 2.0.21(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0))(typescript@6.0.3)
+        version: 2.0.21(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0))(typescript@7.0.2)
       '@shikijs/transformers':
         specifier: 4.4.3
         version: 4.4.3
@@ -521,8 +521,8 @@ importers:
         specifier: 19.2.8
         version: 19.2.8(react@19.2.8)
       typescript:
-        specifier: 6.0.3
-        version: 6.0.3
+        specifier: 7.0.2
+        version: 7.0.2
       zod:
         specifier: 4.5.4
         version: 4.5.4
@@ -3121,11 +3121,6 @@ packages:
     engines: {node: '>=14.17'}
     hasBin: true
 
-  typescript@6.0.3:
-    resolution: {integrity: sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==}
-    engines: {node: '>=14.17'}
-    hasBin: true
-
   typescript@7.0.2:
     resolution: {integrity: sha512-8FYau96o3NKOhbjKi/qNvG/W5jhzxkbdm5sj9AbZ/5T5sWqn3hJgLfGx27sRKZWTvyzCP8dLRBTf5tBTSRVUNA==}
     engines: {node: '>=16.20.0'}
@@ -4034,26 +4029,26 @@ snapshots:
     dependencies:
       '@rspress/core': 2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0)
 
-  '@rspress/plugin-twoslash@2.0.21(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0))(react@19.2.8)(supports-color@7.2.0)(typescript@6.0.3)':
+  '@rspress/plugin-twoslash@2.0.21(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0))(react@19.2.8)(supports-color@7.2.0)(typescript@7.0.2)':
     dependencies:
       '@floating-ui/dom': 1.8.0
       '@rspress/core': 2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0)
-      '@shikijs/twoslash': 4.4.3(supports-color@7.2.0)(typescript@6.0.3)
+      '@shikijs/twoslash': 4.4.3(supports-color@7.2.0)(typescript@7.0.2)
       mdast-util-from-markdown: 2.0.3(supports-color@7.2.0)
       mdast-util-gfm: 3.1.0(supports-color@7.2.0)
       mdast-util-to-hast: 13.2.1
       picocolors: 1.1.1
       react: 19.2.8
-      twoslash: 0.3.9(supports-color@7.2.0)(typescript@6.0.3)
-      typescript: 6.0.3
+      twoslash: 0.3.9(supports-color@7.2.0)(typescript@7.0.2)
+      typescript: 7.0.2
     transitivePeerDependencies:
       - supports-color
 
-  '@rspress/plugin-typedoc@2.0.21(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0))(typescript@6.0.3)':
+  '@rspress/plugin-typedoc@2.0.21(@rspress/core@2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0))(typescript@7.0.2)':
     dependencies:
       '@rspress/core': 2.0.21(patch_hash=555fe9cee718693c8c981e2ae0e282cb514a1808af1744dfab977ed7ca90fa2c)(@rspack/core@2.2.2(@swc/helpers@0.5.23))(micromark-util-types@2.0.2)(micromark@4.0.2(supports-color@7.2.0))(supports-color@7.2.0)
-      typedoc: 0.28.20(typescript@6.0.3)
-      typedoc-plugin-markdown: 4.12.0(typedoc@0.28.20(typescript@6.0.3))
+      typedoc: 0.28.20(typescript@7.0.2)
+      typedoc-plugin-markdown: 4.12.0(typedoc@0.28.20(typescript@7.0.2))
     transitivePeerDependencies:
       - typescript
 
@@ -4178,12 +4173,12 @@ snapshots:
       '@shikijs/core': 4.4.3
       '@shikijs/types': 4.4.3
 
-  '@shikijs/twoslash@4.4.3(supports-color@7.2.0)(typescript@6.0.3)':
+  '@shikijs/twoslash@4.4.3(supports-color@7.2.0)(typescript@7.0.2)':
     dependencies:
       '@shikijs/core': 4.4.3
       '@shikijs/types': 4.4.3
-      twoslash: 0.3.9(supports-color@7.2.0)(typescript@6.0.3)
-      typescript: 6.0.3
+      twoslash: 0.3.9(supports-color@7.2.0)(typescript@7.0.2)
+      typescript: 7.0.2
     transitivePeerDependencies:
       - supports-color
 
@@ -4362,10 +4357,10 @@ snapshots:
   '@typescript/typescript-win32-x64@7.0.2':
     optional: true
 
-  '@typescript/vfs@1.6.4(supports-color@7.2.0)(typescript@6.0.3)':
+  '@typescript/vfs@1.6.4(supports-color@7.2.0)(typescript@7.0.2)':
     dependencies:
       debug: 4.4.3(supports-color@7.2.0)
-      typescript: 6.0.3
+      typescript: 7.0.2
     transitivePeerDependencies:
       - supports-color
 
@@ -6255,11 +6250,11 @@ snapshots:
 
   twoslash-protocol@0.3.9: {}
 
-  twoslash@0.3.9(supports-color@7.2.0)(typescript@6.0.3):
+  twoslash@0.3.9(supports-color@7.2.0)(typescript@7.0.2):
     dependencies:
-      '@typescript/vfs': 1.6.4(supports-color@7.2.0)(typescript@6.0.3)
+      '@typescript/vfs': 1.6.4(supports-color@7.2.0)(typescript@7.0.2)
       twoslash-protocol: 0.3.9
-      typescript: 6.0.3
+      typescript: 7.0.2
     transitivePeerDependencies:
       - supports-color
 
@@ -6269,24 +6264,22 @@ snapshots:
       media-typer: 1.1.1
       mime-types: 3.0.2
 
-  typedoc-plugin-markdown@4.12.0(typedoc@0.28.20(typescript@6.0.3)):
+  typedoc-plugin-markdown@4.12.0(typedoc@0.28.20(typescript@7.0.2)):
     dependencies:
-      typedoc: 0.28.20(typescript@6.0.3)
+      typedoc: 0.28.20(typescript@7.0.2)
 
-  typedoc@0.28.20(typescript@6.0.3):
+  typedoc@0.28.20(typescript@7.0.2):
     dependencies:
       '@gerrit0/mini-shiki': 3.23.0
       lunr: 2.3.9
       markdown-it: 14.3.1
       minimatch: 10.2.6
-      typescript: 6.0.3
+      typescript: 7.0.2
       yaml: 2.9.0
 
   typescript@5.6.1-rc: {}
 
   typescript@5.9.3: {}
-
-  typescript@6.0.3: {}
 
   typescript@7.0.2:
     optionalDependencies:
