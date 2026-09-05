@@ -89,7 +89,7 @@ export const selectManifestProviderDescriptors = (
   }
   const selection = selectRequiredProviders(
     descriptors,
-    declaration === undefined ? undefined : declaration,
+    declaration,
   );
   if (!selection.ok) {
     throw new AgentTestError(

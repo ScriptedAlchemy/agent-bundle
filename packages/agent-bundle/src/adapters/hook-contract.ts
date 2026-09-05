@@ -674,8 +674,7 @@ const eventRouteHookWrapperSource = (
     // Only a wrapper that can render in-process needs the operator `.env`
     // layer (#469): a shared-runtime wrapper forwards the event to the warm
     // MCP process, which applied the layer itself when it started. First,
-    // so it evaluates before every other module of the bundle — including a
-    // preflight leaf that may read `process.env`.
+    // so it evaluates before every other module of the bundle.
     ...(standalone ? [operatorEnvLayerImport] : []),
     "import { dirname, resolve } from 'node:path';",
     ...(standalone ? ["import { Worker } from 'node:worker_threads';"] : []),
@@ -925,8 +924,18 @@ const eventRoutePreflightWrapperSource = (
     '    return;',
     '  }',
     '  trace.executeStart(runtimeMode);',
+    '  const terminationSignals = ["SIGHUP", "SIGINT", "SIGTERM"];',
+    '  const terminate = () => controller.abort();',
+    '  for (const terminationSignal of terminationSignals) process.once(terminationSignal, terminate);',
     '  let output;',
-    '  try { output = await runExecutor(input, controller.signal); } catch (error) { trace.failure("execute", error); throw error; }',
+    '  try {',
+    '    output = await runExecutor(input, controller.signal);',
+    '  } catch (error) {',
+    '    trace.failure("execute", error);',
+    '    throw error;',
+    '  } finally {',
+    '    for (const terminationSignal of terminationSignals) process.off(terminationSignal, terminate);',
+    '  }',
     '  if (output.length > 0) process.stdout.write(output);',
     '};',
     'if (import.meta.main) {',

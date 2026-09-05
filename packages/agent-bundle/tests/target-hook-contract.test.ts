@@ -413,9 +413,11 @@ it('runs event-route preflight in the per-host wrapper before shared IPC', () =>
   expect(source).toContain('createCanonicalEventProps');
   expect(source).toContain('executeEventPreflight');
   expect(source).toContain('projectEventPreflightResult');
-  expect(source).toContain('requestEventRuntime');
+  expect(entry.executeVirtualSource).toContain('requestEventRuntime');
   expect(source).toContain('const timeoutMs = 1250;');
-  expect(source).toMatch(/AbortSignal\.timeout|controller\.abort|signal\.throwIfAborted/u);
+  expect(source).toContain('AbortSignal.timeout(timeoutMs)');
+  expect(source).toContain('process.once(terminationSignal, terminate)');
+  expect(source).toContain('process.off(terminationSignal, terminate)');
   expect(source).not.toContain('AGENT_BUNDLE_HOOK_HOST');
   expect(source).not.toContain('createAgentRenderDispatcher');
   expect(source).not.toContain('import * as routeModule');
@@ -429,7 +431,7 @@ it('runs event-route preflight in the per-host wrapper before shared IPC', () =>
   expect(firstIndex(runBody, 'validateNativeEventEnvelope')).toBeLessThan(firstIndex(runBody, 'createCanonicalEventProps'));
   expect(firstIndex(runBody, 'createCanonicalEventProps')).toBeLessThan(firstIndex(runBody, 'executeEventPreflight'));
   expect(firstIndex(runBody, 'executeEventPreflight')).toBeLessThan(runBody.search(/['"]execute['"]/u));
-  expect(runBody.search(/['"]execute['"]/u)).toBeLessThan(firstIndex(runBody, 'requestEventRuntime'));
+  expect(runBody.search(/['"]execute['"]/u)).toBeLessThan(firstIndex(runBody, 'runExecutor'));
   expect(firstIndex(runBody, 'projectEventPreflightResult')).toBeGreaterThan(firstIndex(runBody, 'executeEventPreflight'));
 });
 
@@ -449,15 +451,17 @@ it('crosses the standalone Worker boundary only after preflight returns execute'
     wrapperPath: (candidate) => `hooks/${candidate.name}.synthetic.mjs`,
     wrapperSource: () => 'config-hook-only\n',
   };
-  const source = planHooks(planningModel([hook]), 'synthetic', contract).hookEntries[0]!.virtualSource;
+  const entry = planHooks(planningModel([hook]), 'synthetic', contract).hookEntries[0]!;
+  const source = entry.virtualSource;
 
   expect(source).toContain('executeEventPreflight');
   expect(source).toContain('projectEventPreflightResult');
-  expect(source).toContain('new URL(/* webpackIgnore: true */ "./hooks-flight.mjs", import.meta.url)');
+  expect(source).toContain('new URL(/* webpackIgnore: true */ "./beforeTool.synthetic.execute.mjs", import.meta.url)');
+  expect(entry.executeVirtualSource).toContain('new URL(/* webpackIgnore: true */ "./hooks-flight.mjs", import.meta.url)');
   expect(source).not.toContain('AGENT_BUNDLE_HOOK_HOST');
   const runBody = source.slice(firstIndex(source, 'const run = async () => {'));
   expect(firstIndex(runBody, 'executeEventPreflight')).toBeLessThan(runBody.search(/['"]execute['"]/u));
-  expect(runBody.search(/['"]execute['"]/u)).toBeLessThan(firstIndex(runBody, 'runStandalone'));
+  expect(runBody.search(/['"]execute['"]/u)).toBeLessThan(firstIndex(runBody, 'runExecutor'));
 });
 
 it('continues planning valid hooks after a prior hook mapping error', () => {
