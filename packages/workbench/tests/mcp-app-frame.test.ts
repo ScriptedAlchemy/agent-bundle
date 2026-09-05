@@ -18,6 +18,7 @@ import {
   applyMcpAppFramePolicy,
   McpAppFrame,
   SecureAppRenderer,
+  type McpAppFrameIframe,
   type McpAppFrameMessageListener,
   type McpAppFrameRelayRoutes,
   type McpAppFrameWindow,
@@ -363,6 +364,82 @@ describe('MCP App frame relay', () => {
     expect(forceClosed).toBe(false);
     browser.emit({ data: { id: 'late', jsonrpc: '2.0', method: 'ping' }, origin: frame.targetOrigin, source: browser.child });
     expect(messages).toHaveLength(1);
+  });
+
+  // The attribute is what mcp-app-real.e2e waits on before it closes a
+  // preview; each transition is published on the event that changes it.
+  const publishedRelayStates = (browser: ReturnType<typeof fakeBrowser>): Readonly<{ readonly iframe: McpAppFrameIframe; readonly states: readonly string[] }> => {
+    const states: string[] = [];
+    return Object.freeze({
+      iframe: Object.freeze({
+        contentWindow: browser.iframe.contentWindow,
+        setAttribute: (name: string, value: string) => {
+          expect(name).toBe('data-mcp-app-relay-state');
+          states.push(value);
+        },
+      }),
+      states,
+    });
+  };
+
+  it('publishes loading, ready, closing, and closed on the iframe as the relay moves through a graceful close', async () => {
+    const browser = fakeBrowser();
+    const published = publishedRelayStates(browser);
+    const closeCalls: { readonly id: string }[] = [];
+    const routes: McpAppFrameRelayRoutes = {
+      close: async (_bindingId, options) => {
+        closeCalls.push(options);
+        return closeResult({ id: options.id, jsonrpc: '2.0', method: 'ui/resource-teardown', params: {} });
+      },
+      forceClose: async () => true,
+      message: async () => messageResult([], 'closed'),
+    };
+    const relay = createMcpAppFrameRelay({ bindingId: 'binding-weather', closeTimeoutMs: 100, frame, iframe: published.iframe, resource, routes, window: browser.window });
+    expect(published.states).toEqual([]);
+    expect(relay.start()).toBe(true);
+    expect(published.states).toEqual(['loading']);
+    expect(relay.start()).toBe(false);
+    expect(published.states).toEqual(['loading']);
+    browser.emit({ data: proxyReady(), origin: frame.targetOrigin, source: browser.child });
+    expect(published.states).toEqual(['loading', 'ready']);
+    browser.emit({ data: proxyReady(), origin: frame.targetOrigin, source: browser.child });
+    expect(published.states).toEqual(['loading', 'ready']);
+
+    const closing = relay.close();
+    expect(published.states).toEqual(['loading', 'ready', 'closing']);
+    await eventually(() => closeCalls.length === 1);
+    expect(published.states).toEqual(['loading', 'ready', 'closing']);
+    browser.emit({ data: { id: closeCalls[0]!.id, jsonrpc: '2.0', result: {} }, origin: frame.targetOrigin, source: browser.child });
+    await closing;
+    expect(published.states).toEqual(['loading', 'ready', 'closing', 'closed']);
+    await relay.close();
+    expect(published.states).toEqual(['loading', 'ready', 'closing', 'closed']);
+  });
+
+  it('publishes closing and closed, never ready, around the forced DELETE of a proxy that never signaled readiness', async () => {
+    const browser = fakeBrowser();
+    const published = publishedRelayStates(browser);
+    let closeCalls = 0;
+    let forceCloseCalls = 0;
+    const routes: McpAppFrameRelayRoutes = {
+      close: async () => {
+        closeCalls += 1;
+        return closeResult();
+      },
+      forceClose: async () => {
+        forceCloseCalls += 1;
+        return true;
+      },
+      message: async () => messageResult(),
+    };
+    const relay = createMcpAppFrameRelay({ bindingId: 'binding-weather', closeTimeoutMs: 30_000, frame, iframe: published.iframe, resource, routes, window: browser.window });
+    relay.start();
+    const closing = relay.close();
+    expect(published.states).toEqual(['loading', 'closing']);
+    await closing;
+    expect(published.states).toEqual(['loading', 'closing', 'closed']);
+    expect(closeCalls).toBe(0);
+    expect(forceCloseCalls).toBe(1);
   });
 
   it('force-deletes a closing binding when the ready proxy never acknowledges the teardown frame', async () => {
