@@ -6,14 +6,13 @@ import {
   projectionTestFiles,
   routeUnitTestFiles,
   templateTestFiles,
+  workspaceTestFileGlob,
 } from './rstest.integration-tests.ts';
 import { withAgentBundleRslibConfig } from './rstest.rslib.ts';
 
 export default defineConfig({
   extends: withAgentBundleRslibConfig(),
-  include: [
-    'packages/**/tests/**/*.test.ts',
-  ],
+  include: [workspaceTestFileGlob],
   exclude: [
     ...fixtureProjectTestFiles,
     ...mcpConformanceTestFiles,

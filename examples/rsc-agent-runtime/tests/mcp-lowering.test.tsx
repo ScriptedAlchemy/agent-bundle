@@ -1,7 +1,8 @@
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { expect, test } from '@rstest/core';
 import React from 'react';
 
-import { Mcp, lowerMcpResult } from '@agent-bundle/runtime';
+import { Mcp, attachMcpStructuredContent, lowerMcpResult } from '@agent-bundle/runtime';
 
 test('lowers every supported MCP result block in authored order', () => {
   const result = lowerMcpResult(
@@ -183,4 +184,26 @@ test('preserves an own __proto__ key in valid structured content', () => {
   expect(Object.getOwnPropertyDescriptor(result.structuredContent as object, '__proto__')?.value).toEqual({
     value: 'preserved',
   });
+});
+
+// This example hands runtime results to handlers typed by the 1.x MCP SDK
+// (src/mcp/handlers.ts), while the runtime itself types against
+// @modelcontextprotocol/server 2.x. The annotations are the test: the file
+// stops typechecking if a lowered result ever stops being a 1.x
+// CallToolResult, or if attachMcpStructuredContent narrows a 1.x result on
+// the way back out.
+test('lowered results stay assignable to the 1.x SDK CallToolResult, through attachMcpStructuredContent', () => {
+  const lowered: CallToolResult = lowerMcpResult(
+    <Mcp.Result _meta={{ progressToken: 'p-1' }}>
+      <Mcp.Text>ready</Mcp.Text>
+    </Mcp.Result>,
+  );
+  const attached: CallToolResult = attachMcpStructuredContent(lowered, { stateVersion: 3 });
+
+  expect(attached).toEqual({
+    _meta: { progressToken: 'p-1' },
+    content: [{ text: 'ready', type: 'text' }],
+    structuredContent: { stateVersion: 3 },
+  });
+  expect(attachMcpStructuredContent(lowered, ['not', 'an', 'object'])).toBe(lowered);
 });
