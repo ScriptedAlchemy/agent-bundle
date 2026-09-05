@@ -9,7 +9,7 @@ import {
   type McpSessionControllerRoutes,
   type McpSessionControllerTransport,
 } from '../src/mcp/mcp-session-controller.ts';
-import { McpRouteClientError, type McpRouteCatalog } from '../src/mcp/mcp-route-client.ts';
+import { mcpCorrelationMetaKey, McpRouteClientError, type McpRouteCatalog } from '../src/mcp/mcp-route-client.ts';
 
 const binding = Object.freeze({ epochId: 'epoch-a', serverName: 'weather', target: 'portable' as const });
 const connection = Object.freeze({
@@ -2156,6 +2156,71 @@ it('keeps a built MCP App resource frame in the live trace', async () => {
     { direction: 'server', kind: 'frame', message: { result: { contents: [{ text }] } }, occurredAt: 1, sequence: 1 },
   ]);
   stream.close();
+  await controller.close();
+});
+
+it('carries the lifted frame id, method, and _meta correlation keys onto the browser frame', async () => {
+  const stream = traceStream();
+  const routes: McpSessionControllerRoutes = { ...emptyRoutes, stream: async () => stream.response };
+  const controller = createMcpSessionController({ clientFactory: fakeClient, routes, transportFactory: fakeTransport });
+  await controller.open(binding);
+
+  const message = { id: 7, jsonrpc: '2.0', method: 'tools/call', params: { arguments: {}, name: 'forecast' } };
+  stream.send({ direction: 'client', id: '7', kind: 'frame', message, meta: { correlationId: 'corr-1', requestId: 'req-1' }, method: 'tools/call', occurredAt: 1, sequence: 1 });
+  stream.send({ direction: 'server', kind: 'frame', message: { jsonrpc: '2.0', method: 'notifications/progress' }, method: 'notifications/progress', occurredAt: 2, sequence: 2 });
+  await eventually(() => controller.model.timeline.entries.length === 2);
+
+  expect(controller.model.timeline.entries).toEqual([
+    { direction: 'client', id: '7', kind: 'frame', message, meta: { correlationId: 'corr-1', requestId: 'req-1' }, method: 'tools/call', occurredAt: 1, sequence: 1 },
+    { direction: 'server', kind: 'frame', message: { jsonrpc: '2.0', method: 'notifications/progress' }, method: 'notifications/progress', occurredAt: 2, sequence: 2 },
+  ]);
+  stream.close();
+  await controller.close();
+});
+
+it('fails the trace stream on a frame whose lifted keys are unbounded or carry an unknown meta key', async () => {
+  const frame = { direction: 'client', kind: 'frame', message: {}, occurredAt: 1, sequence: 1 };
+  for (const corrupt of [
+    { ...frame, id: 'x'.repeat(257) },
+    { ...frame, method: '' },
+    { ...frame, meta: { correlationId: 7 } },
+    { ...frame, meta: { toolUseId: 'toolu_01' } },
+    { ...frame, meta: 'corr-1' },
+  ]) {
+    const stream = traceStream();
+    const controller = createMcpSessionController({
+      clientFactory: fakeClient,
+      routes: { ...emptyRoutes, stream: async () => stream.response },
+      transportFactory: fakeTransport,
+    });
+    await controller.open(binding);
+    stream.send(corrupt);
+    await eventually(() => controller.model.phase === 'error');
+    expect(controller.model.diagnostics).toContainEqual(expect.objectContaining({ code: 'mcp.trace.stream.error' }));
+    expect(controller.model.timeline.entries).toEqual([]);
+    stream.close();
+    await controller.close();
+  }
+});
+
+it('stamps an invoke correlationId into the SDK request _meta under the route\'s key', async () => {
+  const sent: unknown[] = [];
+  const client: McpSessionControllerClient = {
+    ...fakeClient(),
+    request: async (request) => { sent.push(request); return { content: [] }; },
+  };
+  const controller = createMcpSessionController({ clientFactory: () => client, routes: emptyRoutes, transportFactory: fakeTransport });
+  await controller.open(binding);
+
+  await controller.invoke({ correlationId: 'corr-app', id: 'call-1', operation: 'callTool', request: { arguments: { city: 'London' }, name: 'forecast' } });
+  await controller.invoke({ id: 'call-2', operation: 'callTool', request: { arguments: {}, name: 'forecast' } });
+  await controller.invoke({ correlationId: 'corr-task', id: 'call-3', operation: 'callToolTask', request: { arguments: {}, name: 'forecast', task: { ttl: 1_000 } } });
+
+  expect(sent).toEqual([
+    { method: 'tools/call', params: { _meta: { [mcpCorrelationMetaKey]: 'corr-app' }, arguments: { city: 'London' }, name: 'forecast' } },
+    { method: 'tools/call', params: { arguments: {}, name: 'forecast' } },
+    { method: 'tools/call', params: { _meta: { [mcpCorrelationMetaKey]: 'corr-task' }, arguments: {}, name: 'forecast', task: { ttl: 1_000 } } },
+  ]);
   await controller.close();
 });
 

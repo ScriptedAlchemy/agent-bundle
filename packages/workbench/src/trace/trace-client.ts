@@ -35,7 +35,7 @@ export interface TraceClientOptions {
   readonly foreground: ForegroundRequestAuthority;
 }
 
-/** `AB8249`: the route answered with bytes this client refuses to interpret. Other codes are the server's own refusals. */
+/** `AB8243`: the route answered with bytes this client refuses to interpret. Other codes are the server's own refusals. */
 export class TraceClientError extends Error {
   readonly code: string;
 
@@ -46,7 +46,7 @@ export class TraceClientError extends Error {
   }
 }
 
-export const TRACE_INVALID_RESPONSE_CODE = 'AB8249';
+export const TRACE_INVALID_RESPONSE_CODE = 'AB8243';
 
 const maximumFrameBytes = 64 * 1024;
 const maximumSummaryLength = 240;

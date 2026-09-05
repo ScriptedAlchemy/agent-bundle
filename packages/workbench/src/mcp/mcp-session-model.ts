@@ -3,9 +3,11 @@ import type {
   McpSessionInspectorConfig,
   McpSessionOperation,
   McpSessionTraceEntry,
+  McpSessionTraceMeta,
   McpSessionTraceReplayGap,
 } from '../../../agent-bundle/src/contracts/mcp-session.ts';
 import type { DevRuntimeMcpAppRunBinding, RuntimeVector } from '../../../agent-bundle/src/contracts/runtime.ts';
+import { isRecord } from '../client-helpers.ts';
 import { deepFreeze } from '../freeze.ts';
 
 
@@ -72,6 +74,17 @@ export interface McpBrowserSessionInvocationTimelineEntry {
   readonly invocation: McpBrowserSessionInvocation;
   readonly type: 'invocation';
 }
+
+/** A raw JSON-RPC frame with the keys the server lifts beside it: `id`, `method`, and the known `_meta` correlation keys. */
+export type McpBrowserSessionFrameEntry = Extract<McpSessionTraceEntry, { readonly kind: 'frame' }>;
+
+/** The `_meta` keys the server lifts onto a frame, in display order. */
+export const mcpFrameMetaKeys: readonly (keyof McpSessionTraceMeta)[] = Object.freeze(['correlationId', 'conversationId', 'requestId', 'sessionId']);
+
+/** Narrows a timeline value the Protocol page renders; the controller's strict decoder is the only producer of frames. */
+export const isMcpFrameEntry = (entry: unknown): entry is McpBrowserSessionFrameEntry =>
+  isRecord(entry) && entry.kind === 'frame' && (entry.direction === 'client' || entry.direction === 'server') &&
+  typeof entry.sequence === 'number';
 
 export type McpBrowserSessionTimelineEntry =
   | McpSessionTraceEntry

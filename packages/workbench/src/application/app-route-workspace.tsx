@@ -17,7 +17,7 @@ import { workbenchMcpAppHostContext, type McpAppJsonValue, type McpAppPreviewPro
 import { McpAppPreview } from '../mcp/mcp-app-preview.tsx';
 import { McpJsonInput } from '../mcp/mcp-json-input.tsx';
 import { supportedMcpAppPreviewProfiles } from '../mcp/mcp-page.tsx';
-import { createMcpSessionController, type McpSessionController } from '../mcp/mcp-session-controller.ts';
+import { createMcpSessionController, type McpSessionController, type McpSessionControllerRequest } from '../mcp/mcp-session-controller.ts';
 import type { McpBrowserSessionModel } from '../mcp/mcp-session-model.ts';
 import type { WorkbenchLocation } from '../shell/workbench-location.ts';
 import type { ApplicationLeaf } from './application-tree-model.ts';
@@ -68,15 +68,18 @@ export const orderedToolsForApp = (tools: readonly McpCatalogTool[], resourceUri
   ...tools.filter((tool) => resourceUri === undefined || tool.resourceUri !== resourceUri),
 ]);
 
-/** MCP tool params carrying the Workbench correlation key understood by the session service. */
+/**
+ * The tool call the App workspace hands the session controller: plain MCP params
+ * plus the Workbench correlation, which the route stamps into `_meta` itself
+ * (a browser-sent `_meta` is refused with `AB8016`).
+ */
 export const appToolCallRequest = (
   name: string,
   input: JsonObject,
   correlationId: string,
-): Readonly<Record<string, unknown>> => Object.freeze({
-  _meta: Object.freeze({ 'agent-bundle/correlationId': correlationId }),
-  arguments: input,
-  name,
+): Pick<McpSessionControllerRequest, 'correlationId' | 'request'> => Object.freeze({
+  correlationId,
+  request: Object.freeze({ arguments: input, name }),
 });
 
 interface ToolCall {
@@ -153,7 +156,7 @@ export const AppRouteWorkspace = ({ clients, leaf, onNavigate, status }: AppRout
     void controller.invoke({
       id: `app-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
       operation: 'callTool',
-      request: appToolCallRequest(tool.name, input, correlationId),
+      ...appToolCallRequest(tool.name, input, correlationId),
     }).then(
       (result) => { setCall(Object.freeze({ input, result: result as McpAppJsonValue, sessionId, toolName: tool.name })); },
       (reason: unknown) => { setCallError(errorMessage(reason, 'The tool call failed.')); },

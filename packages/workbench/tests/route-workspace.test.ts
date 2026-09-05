@@ -407,11 +407,10 @@ describe('App leaf tool binding', () => {
     expect(orderedToolsForApp(tools, undefined).map((tool) => tool.name)).toEqual(['inventory_sources', 'browse_library']);
   });
 
-  it('stamps App tool calls with the browser correlation id', () => {
+  it('carries the browser correlation id beside plain MCP params, never as a browser-sent _meta', () => {
     expect(appToolCallRequest('browse_library', { query: 'Dune' }, 'corr-app')).toEqual({
-      _meta: { 'agent-bundle/correlationId': 'corr-app' },
-      arguments: { query: 'Dune' },
-      name: 'browse_library',
+      correlationId: 'corr-app',
+      request: { arguments: { query: 'Dune' }, name: 'browse_library' },
     });
   });
 });

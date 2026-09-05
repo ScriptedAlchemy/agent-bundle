@@ -75,6 +75,8 @@ it('rejects replay envelopes that are malformed, non-contiguous, or inconsistent
 it('rejects an entry with an unknown source, a stray key, or unsafe text instead of crashing', () => {
   const accept = (value: unknown): void => { expect(decodeTraceEntry(value)).toEqual(value); };
   const reject = (value: unknown): void => { expect(() => decodeTraceEntry(value)).toThrow(expect.objectContaining(invalid)); };
+  // The browser decoder's own code, between the trace routes (AB8240–AB8242) and the hook receipt route (AB8247–AB8249).
+  expect(TRACE_INVALID_RESPONSE_CODE).toBe('AB8243');
   accept(second);
   accept({ ...first, status: 'running', durationMs: 0, details: null });
   accept({ ...first, correlation: { mcpRequestId: 'req/1:2', routeId: 'tool:curator/search_audible', host: 'codex' } });

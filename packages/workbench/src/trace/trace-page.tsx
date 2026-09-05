@@ -7,7 +7,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 import { type TraceEntry, type TraceSource, type TraceStatus, traceSources } from '../../../agent-bundle/src/contracts/trace.ts';
-import { formatWorkbenchLocation, parseWorkbenchLocation, type WorkbenchLocation } from '../shell/workbench-location.ts';
+import { ShellLink } from '../shell/shell-link.tsx';
+import { parseWorkbenchLocation, type WorkbenchLocation } from '../shell/workbench-location.ts';
 import { openTraceFeed, type TraceClient, type TraceFeedState } from './trace-client.ts';
 import {
   filterTraceGroups,
@@ -113,13 +114,6 @@ const useTraceFeed = (client: TraceClient, supplied: readonly TraceEntry[] | und
   return supplied === undefined ? state : initialFeedState(supplied);
 };
 
-/** A shell link: a real `href` for middle-click and copy, the router for a plain click. */
-const Link = ({ location, onNavigate, ...anchor }: {
-  readonly location: WorkbenchLocation;
-  readonly onNavigate: (location: WorkbenchLocation) => void;
-} & Omit<React.AnchorHTMLAttributes<HTMLAnchorElement>, 'href' | 'onClick'>) =>
-  <a {...anchor} href={formatWorkbenchLocation(location)} onClick={(event) => { event.preventDefault(); onNavigate(location); }} />;
-
 const StatusPill = ({ status }: { readonly status: TraceStatus }) =>
   <span className={`trace-status trace-status--${status}`}>{status}</span>;
 
@@ -203,7 +197,7 @@ const GroupView = ({ correlation, group, onNavigate, selected, selectedEntryId, 
       {group.rows.map(({ depth, entry }) => {
         const status = entry.status ?? 'ok';
         return <li className={`trace-row trace-row--depth-${String(depth)} trace-row--${status}`} key={entry.id}>
-          <Link
+          <ShellLink
             aria-current={entry.id === selectedEntryId ? 'true' : undefined}
             className="trace-line"
             data-entry-id={entry.id}
@@ -222,7 +216,7 @@ const GroupView = ({ correlation, group, onNavigate, selected, selectedEntryId, 
             <span className="trace-summary">{entry.summary}</span>
             {status === 'error' ? <span className="trace-row-flag" role="img" aria-label="error">!</span> : undefined}
             <span className="trace-duration">{entry.durationMs === undefined ? '' : formatTraceDuration(entry.durationMs)}</span>
-          </Link>
+          </ShellLink>
         </li>;
       })}
     </ol>
@@ -243,7 +237,7 @@ const DetailDrawer = ({ correlation, entry, onNavigate, timeZone }: {
         <p className="trace-detail-eyebrow"><span aria-hidden="true" className={`trace-glyph trace-glyph--${entry.source}`}>{traceSourceGlyph(entry.source)}</span> {entry.source} · <span className="identifier">{entry.kind}</span></p>
         <h2>{entry.summary}</h2>
       </div>
-      <Link aria-label="Close entry" className="trace-detail-close" location={{ area: 'trace', ...(correlation === undefined ? {} : { correlation }) }} onNavigate={onNavigate}>×</Link>
+      <ShellLink aria-label="Close entry" className="trace-detail-close" location={{ area: 'trace', ...(correlation === undefined ? {} : { correlation }) }} onNavigate={onNavigate}>×</ShellLink>
     </header>
     <div className="trace-detail-actions">
       {entry.href === undefined
@@ -265,7 +259,7 @@ const DetailDrawer = ({ correlation, entry, onNavigate, timeZone }: {
     {keys.length === 0 ? <p className="empty-row">This entry carries no correlation key.</p> : <dl className="trace-detail-keys">
       {keys.map(([key, value]) => <div key={key}>
         <dt>{key}</dt>
-        <dd><Link className="trace-link identifier" location={{ area: 'trace', correlation: value, invocationId: entry.id }} onNavigate={onNavigate} title={`Show entries correlated by ${key}`}>{value}</Link></dd>
+        <dd><ShellLink className="trace-link identifier" location={{ area: 'trace', correlation: value, invocationId: entry.id }} onNavigate={onNavigate} title={`Show entries correlated by ${key}`}>{value}</ShellLink></dd>
       </div>)}
     </dl>}
     <h3>Details</h3>
@@ -322,7 +316,7 @@ export const TracePage = ({ client, correlation, entries: suppliedEntries, entry
           <p>{heading}</p>
         </div>
         {correlation === undefined ? undefined : <p className="trace-scope" role="status">
-          Correlated by <span className="identifier">{correlation}</span> · <Link className="trace-link" location={{ area: 'trace', ...(entryId === undefined ? {} : { invocationId: entryId }) }} onNavigate={onNavigate}>Show all</Link>
+          Correlated by <span className="identifier">{correlation}</span> · <ShellLink className="trace-link" location={{ area: 'trace', ...(entryId === undefined ? {} : { invocationId: entryId }) }} onNavigate={onNavigate}>Show all</ShellLink>
         </p>}
       </div>
       {feed.error === undefined ? undefined : <p className="request-error" role="alert">{feed.error}</p>}
@@ -354,7 +348,7 @@ export const TracePage = ({ client, correlation, entries: suppliedEntries, entry
         : <aside aria-label="Trace entry" className="trace-detail" data-testid="trace-detail">
             <header className="trace-detail-head">
               <div><p className="trace-detail-eyebrow">entry</p><h2>Not in this trace</h2></div>
-              <Link aria-label="Close entry" className="trace-detail-close" location={{ area: 'trace', ...(correlation === undefined ? {} : { correlation }) }} onNavigate={onNavigate}>×</Link>
+              <ShellLink aria-label="Close entry" className="trace-detail-close" location={{ area: 'trace', ...(correlation === undefined ? {} : { correlation }) }} onNavigate={onNavigate}>×</ShellLink>
             </header>
             <p className="empty-row">{feed.loaded ? `No retained entry is ${entryId}. It may have been published before this dev server started, or evicted from the retained window.` : 'Connecting to the trace…'}</p>
           </aside>}

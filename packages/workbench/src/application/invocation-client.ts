@@ -80,6 +80,7 @@ const invocationSummaryFields = {
   input: z.json(),
   kind: z.enum(['cli', 'event-route', 'prompt', 'resource', 'script', 'tool']),
   manifestDigest: textSchema,
+  requestId: textSchema.optional(),
   routeId: textSchema,
   source: z.string(),
   sourceRevision: textSchema,

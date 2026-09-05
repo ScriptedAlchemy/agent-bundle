@@ -123,6 +123,7 @@ export const invocationSummaryOf = (
   input: invocation.input,
   kind: invocation.kind,
   manifestDigest: invocation.manifestDigest,
+  ...(invocation.requestId === undefined ? {} : { requestId: invocation.requestId }),
   routeId: invocation.routeId,
   source: invocation.source,
   sourceRevision: invocation.sourceRevision,
