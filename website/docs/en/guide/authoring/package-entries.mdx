@@ -380,9 +380,9 @@ capability that admits it. The artifact bin is a self-contained ESM module with 
 executable bit — run it as `node <plugin-root>/bin/<plugin-name>.mjs <command>`, exactly like
 `scripts/*.mjs`. Help, argv parsing, output modes, exit codes, and signals match the package bin;
 the one difference is that
-workspace-durable state without a host-supplied `AGENT_BUNDLE_PLUGIN_ROOT` anchors on the artifact
-root (the parent of `bin/`, the same fallback the generated MCP worker uses) instead of
-`$PWD/.agent-bundle/state`, so a co-installed CLI and server share one store.
+the artifact-hosted CLI and MCP server derive the same framework state root from the same code
+root — `~/.agent-bundle/state/<plugin>-<digest>`, or `AGENT_BUNDLE_STATE_ROOT` when set — so they
+share one store. The npm package bin keeps `$PWD/.agent-bundle/state`.
 
 Reach it from the other surfaces with the plugin-root token — `${CLAUDE_PLUGIN_ROOT}/bin/<plugin-name>.mjs`
 in Claude Skill Markdown and hook commands, `${PLUGIN_ROOT}/…` in Codex hooks, `${CURSOR_PLUGIN_ROOT}/…`

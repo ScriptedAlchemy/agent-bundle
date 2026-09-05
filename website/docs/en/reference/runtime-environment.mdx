@@ -39,7 +39,9 @@ Cursor's pinned loader has its own substituted-field table, and a token outside 
 
 | Variable | Read by | Meaning |
 | --- | --- | --- |
-| `AGENT_BUNDLE_PLUGIN_ROOT` | Generated executables | The plugin install root — the composite plugin root, the directory holding the host manifests, `mcp/`, `hooks/`, and `bin/` — and durable-state anchor. Overrides the built-in fallback; surfaced to routes and providers as `(await agent()).plugin` (`source: 'native'`). An unexpanded `${…}` token is treated as unset. |
+| `AGENT_BUNDLE_PLUGIN_ROOT` | Generated executables | The plugin code root — the composite plugin root, the directory holding the host manifests, `mcp/`, `hooks/`, and `bin/`. Overrides the built-in fallback; surfaced to routes and providers as `(await agent()).plugin.value.root` (`source: 'native'`). An unexpanded `${…}` token is treated as unset. |
+| `AGENT_BUNDLE_STATE_ROOT` | Generated executables | The framework state root: the exact directory where the SQLite state kernel, notice ledger, and lineage journal live. Overrides the derived location. An unexpanded `${…}` token is treated as unset. |
+| `XDG_STATE_HOME` | Generated executables | When set, the derived state root is `$XDG_STATE_HOME/agent-bundle/<plugin>-<digest>` instead of `~/.agent-bundle/state/<plugin>-<digest>`. |
 | `AGENT_BUNDLE_ENV_FILE` | Generated executables | The operator env file(s) an installed pack reads at launch instead of `<plugin root>/.env` and `.env.local`: one path, or several joined by the platform path delimiter, later files winning; `none` disables the layer. `mcp run` sets it for its child from `--env-file` / `--no-env`. |
 | `AGENT_BUNDLE_AGENT_API_TOKEN` | `agent-bundle dev` | The bearer token the Agent API requires before it can be enabled. |
 | `AGENT_BUNDLE_HOOK_SIMULATION` | Generated hook wrappers | `1` marks a simulated invocation; the Workbench event route workspace sets it. |
@@ -84,13 +86,19 @@ variable count of each file (`AB7331`). Details and the precedence table:
 
 ## Durable state
 
-Durable state resolves to `$AGENT_BUNDLE_PLUGIN_ROOT/state`, falling back to the artifact root, or
-to `./.agent-bundle/state` for CLI bins. Only a `workspace-durable` state definition uses the
-SQLite driver; other lifetimes use the in-memory driver and keep nothing on disk. Every generated
-process resolves that anchor exactly once (`resolvePluginRoot` from `@agent-bundle/runtime`) and
-publishes it as `(await agent()).plugin` — `{ root, stateRoot }` with `source: 'native'` from the
-variable or `'derived'` from the fallback — so a route or provider that keeps its own files beside
-the framework's reads `plugin.value.stateRoot` instead of re-deriving the path.
+Installed artifacts — the MCP entry, Flight worker, artifact CLI bin, render worker, and standalone
+hook wrappers — derive `~/.agent-bundle/state/<plugin>-<digest>` as their framework state root.
+`<plugin>` is the code root's basename, or `plugin` when that basename is not a safe path segment;
+`<digest>` is the first 16 hexadecimal characters of the SHA-256 digest of the code root's real
+path. Two installs therefore never share state, and a read-only install launches. `XDG_STATE_HOME`
+moves the derived root as described above, and `AGENT_BUNDLE_STATE_ROOT` overrides it. The npm
+package bin keeps `./.agent-bundle/state`.
+
+Only a `workspace-durable` state definition uses the SQLite driver; other lifetimes use the
+in-memory driver and keep nothing on disk. Every generated process resolves the code root and state
+root exactly once (`resolvePluginRoot` from `@agent-bundle/runtime`) and publishes them as
+`(await agent()).plugin` — `{ root, stateRoot }` — so a route or provider that keeps its own files
+beside the framework's reads `plugin.value.stateRoot` instead of re-deriving the path.
 
 Under `mcp run`, plugin-root anchors in **env values** expand to the project root by default,
 not the artifact: the artifact is an ephemeral build product there, and anchoring durable state on

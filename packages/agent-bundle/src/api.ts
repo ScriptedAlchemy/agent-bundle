@@ -672,11 +672,11 @@ export interface RunMcpOptions extends ArtifactOperationOptions {
   /** Set false to launch the server without any `.env` layer. */
   readonly loadEnvFiles?: boolean;
   /**
-   * Root the env-declared plugin-root anchors (for example
-   * `AGENT_BUNDLE_PLUGIN_ROOT`) expand to. Defaults to the project root so
-   * durable server state survives artifact rebuilds; point it at the
-   * artifact target root for a byte-faithful rehearsal of a copied-artifact
-   * launch.
+   * Root the env-declared `AGENT_BUNDLE_PLUGIN_ROOT` expands to. Defaults to
+   * the project root so the derived state root (keyed by that root) survives
+   * artifact rebuilds; `AGENT_BUNDLE_STATE_ROOT` in the operator environment
+   * overrides the state location. Point it at the artifact target root for a
+   * byte-faithful rehearsal of a copied-artifact launch.
    */
   readonly pluginRoot?: string;
   readonly server: string;
@@ -1478,12 +1478,13 @@ export const invokeMcp = async (options: InvokeMcpOptions): Promise<McpInvokeRes
 /**
  * Runs one built stdio MCP server in the foreground with inherited stdio,
  * resolving its content-hashed generated entry from the target manifest.
- * Both durable-state anchors point at the project root: plugin-data state
- * persists under `.agent-bundle/mcp-run/<target>/<server>`, and env-declared
- * plugin-root anchors expand to the project root itself (override with
- * `pluginRoot`). The launch environment layers, lowest to highest: manifest
- * env, the project-root `.env` set (or `envFiles`), the operator's real
- * `process.env`.
+ * Env-declared `AGENT_BUNDLE_PLUGIN_ROOT` expands to the project root by
+ * default so the derived state root (keyed by that root) survives artifact
+ * rebuilds; `AGENT_BUNDLE_STATE_ROOT` in the operator environment overrides
+ * the state location (override the plugin-root expansion with `pluginRoot`).
+ * Plugin-data state persists under `.agent-bundle/mcp-run/<target>/<server>`.
+ * The launch environment layers, lowest to highest: manifest env, the
+ * project-root `.env` set (or `envFiles`), the operator's real `process.env`.
  */
 export const runMcp = async (options: RunMcpOptions): Promise<number> => {
   const registry = registryFor(options);

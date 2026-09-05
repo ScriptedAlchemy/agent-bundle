@@ -131,8 +131,9 @@ node <root>/bin/<plugin>.mjs web [<server>/<app>] [--port N] [--open|--no-open] 
 
 该命令启动插件自己的 MCP 服务器（`node <root>/mcp/<entry>.mjs`，`AGENT_BUNDLE_PLUGIN_ROOT=<root>`，
 已声明的静态 env 并展开路径令牌——plugin-data 令牌解析到产物之外的
-`~/.agent-bundle/web-data/<plugin>-<digest>/<server>`，因此只读安装也能启动），先调用一次开场工具，
-然后在 `http://127.0.0.1:<port>/` 上用
+`~/.agent-bundle/web-data/<plugin>-<digest>/<server>`，因此只读安装也能启动）。被拉起的服务器自己的
+持久框架状态同样落在产物之外的 `~/.agent-bundle/state/<plugin>-<digest>`（或
+`AGENT_BUNDLE_STATE_ROOT`）。随后先调用一次开场工具，然后在 `http://127.0.0.1:<port>/` 上用
 loopback origin 提供 App，并为 App 文档再开一个 loopback 沙箱 origin——与 `agent-bundle serve-app`
 以及 Workbench 同一套宿主栈与同意行为。人类模式打印
 `MCP App <server>/<app> at <url> (tool <tool>; Ctrl-C stops the server)`，并一直运行到 Ctrl-C /
@@ -196,7 +197,7 @@ agent-bundle uninstall <host> [--from <root>] [--scope <scope>] [--mode <mode>] 
 | `--from <root>` | `process.cwd()` | 用于识别插件（名称、版本、市场）的产物根目录，宿主清单直接位于其下，与 `install` 相同。 |
 | `--scope <scope>` | `user` | 安装时使用的作用域（Claude）。 |
 | `--mode <mode>` | `local` | 仅限 Cursor：卸载 `local` 副本或已暂存的 `marketplace` 仓库。 |
-| `--keep-data` | 开启 | 保留持久运行时状态（`state/`：状态内核、通知日志；对 Agent Plugins 包的 Cursor 副本，还包括回执记录的 `PLUGIN_DATA` 目录）。这是默认行为；该标志只是显式声明。 |
+| `--keep-data` | 开启 | 保留旧版或就地的持久运行时状态（`state/`：状态内核、通知日志；对 Agent Plugins 包的 Cursor 副本，还包括回执记录的 `PLUGIN_DATA` 目录）。这是默认行为；该标志只是显式声明。（本发行版构建的产物把框架状态放在 `~/.agent-bundle/state/<plugin>-<digest>`，`uninstall` 不会删除它。） |
 | `--purge-data` | 关闭 | 同时删除持久运行时状态。没有 `--confirm-purge` 时被拒绝（`AB7008`）。 |
 | `--force` | 关闭 | 在没有回执（旧版 Cursor 副本、仅宿主侧的安装）或归属内容、版本、暂存 `HEAD` 与回执不再匹配时继续。回执或清单指向另一个插件时无论如何都会被拒绝。 |
 | `--plan` | 关闭 | 打印将被删除的确切路径与宿主注册，不做任何改动。 |
@@ -208,8 +209,8 @@ uninstall 只删除回执归属的内容：记录的文件与安装器创建的�
 包括仅记录在 Claude 的 `plugins/installed_plugins.json` 注册表中、位于另一作用域或另一项目的 Claude 安装）。
 非归属条目被保留并列出；缺少回执为 `AB7009`，不匹配为 `AB7007`，除非 `--force`；再次运行是 `not-installed`
 空操作。类型化的 `data.outcome` 按宿主如实说明持久状态的去向：Cursor 为 `kept` / `purged` / `absent`；
-Claude 为 `retained-by-host`（缓存副本在 Claude 约 14 天的宽限期内被标为 orphaned；purge 还会删除 `state/` 与
-`plugins/data/<id>/`）；Codex 为 `removed-by-host` / `unavailable`（`codex plugin remove` 删除缓存树且没有
+Claude 为 `retained-by-host`（缓存副本在 Claude 约 14 天的宽限期内被标为 orphaned；purge 还会删除旧版或就地的 `state/` 与
+`plugins/data/<id>/`，但不会删除当前的 `~/.agent-bundle/state/<plugin>-<digest>` 框架状态）；Codex 为 `removed-by-host` / `unavailable`（`codex plugin remove` 删除缓存树且没有
 keep-data 选项）。相对包的安装器 bin 接受带同样标志的 `uninstall <host>`；输出的 `install.mjs` 接受
 `--uninstall`，并支持 `--mode`、`--keep-data`、`--purge-data --confirm-purge`、`--force` 与 `--plan`。
 

@@ -35,7 +35,9 @@ token 会在构建时报告 `AB6028`，并由 Doctor 报告 `AB7320`。
 
 | 变量 | 由谁读取 | 含义 |
 | --- | --- | --- |
-| `AGENT_BUNDLE_PLUGIN_ROOT` | 生成式可执行文件 | 插件安装根目录——即组合插件根目录，存放宿主清单、`mcp/`、`hooks/` 与 `bin/` 的那个目录——同时也是持久状态锚点。覆盖内置的回退值；以 `(await agent()).plugin`（`source: 'native'`）暴露给路由与 provider。未展开的 `${…}` token 视为未设置。 |
+| `AGENT_BUNDLE_PLUGIN_ROOT` | 生成式可执行文件 | 插件代码根目录——即组合插件根目录，存放宿主清单、`mcp/`、`hooks/` 与 `bin/` 的那个目录。覆盖内置的回退值；以 `(await agent()).plugin.root`（`source: 'native'`）暴露给路由与 provider。未展开的 `${…}` token 视为未设置。 |
+| `AGENT_BUNDLE_STATE_ROOT` | 生成式可执行文件 | 框架状态根目录：SQLite 状态内核、通知账本与 lineage 日志所在的确切目录。覆盖推导出的位置。未展开的 `${…}` token 视为未设置。 |
+| `XDG_STATE_HOME` | 生成式可执行文件 | 设置后，推导出的状态根目录为 `$XDG_STATE_HOME/agent-bundle/<plugin>-<digest>`，而不是 `~/.agent-bundle/state/<plugin>-<digest>`。 |
 | `AGENT_BUNDLE_ENV_FILE` | 生成式可执行文件 | 已安装包在启动时改为读取的操作者 env 文件：一个路径，或以平台路径分隔符连接的多个路径（后者胜出），代替 `<插件根目录>/.env` 与 `.env.local`；`none` 关闭这一层。`mcp run` 会根据 `--env-file` / `--no-env` 为其子进程设置它。 |
 | `AGENT_BUNDLE_AGENT_API_TOKEN` | `agent-bundle dev` | Agent API 在启用之前所必需的 bearer token。 |
 | `AGENT_BUNDLE_HOOK_SIMULATION` | 生成的钩子 wrapper | `1` 标记一次模拟调用；Workbench 的事件路由工作区会设置它。 |
@@ -76,12 +78,16 @@ token 会在构建时报告 `AB6028`，并由 Doctor 报告 `AB7320`。
 
 ## 持久状态
 
-持久状态解析到 `$AGENT_BUNDLE_PLUGIN_ROOT/state`，回退到产物根目录，对 CLI bin 则回退到
-`./.agent-bundle/state`。只有 `workspace-durable` 状态定义使用 SQLite 驱动；其他生命期使用内存驱动，
-不在磁盘上留下任何东西。每个生成的进程只解析该锚点一次（`@agent-bundle/runtime` 的
-`resolvePluginRoot`），并以 `(await agent()).plugin` 发布——`{ root, stateRoot }`，来自变量时
-`source: 'native'`，来自回退时为 `'derived'`——因此把自己的文件放在框架状态旁边的路由或 provider
-读取 `plugin.value.stateRoot` 即可，不必再自行推导路径。
+已安装产物——MCP 入口、Flight worker、产物 CLI bin、渲染 worker 与独立 hook 包装器——把框架状态根目录
+推导为 `~/.agent-bundle/state/<plugin>-<digest>`。`<plugin>` 是代码根目录的 basename，当它不是安全
+路径段时则为 `plugin`；`<digest>` 是代码根目录真实路径的 SHA-256 摘要的前 16 位十六进制字符。因此两次
+安装绝不会共享状态，只读安装也能启动。`XDG_STATE_HOME` 按上表把推导位置挪走，`AGENT_BUNDLE_STATE_ROOT`
+则覆盖它。npm 包 bin 仍使用 `./.agent-bundle/state`。
+
+只有 `workspace-durable` 状态定义使用 SQLite 驱动；其他生命期使用内存驱动，
+不在磁盘上留下任何东西。每个生成的进程只解析代码根目录与状态根目录一次（`@agent-bundle/runtime` 的
+`resolvePluginRoot`），并以 `(await agent()).plugin` 发布——`{ root, stateRoot }`——因此把自己的文件
+放在框架状态旁边的路由或 provider 读取 `plugin.value.stateRoot` 即可，不必再自行推导路径。
 
 在 `mcp run` 之下，**env 取值**中的 plugin-root 锚点默认展开到项目根目录，而不是产物：在那里产物只是
 一个临时构建产物，把持久状态锚定其上会让状态在每次重建时被割裂。若要按字节忠实地演练一次「复制产物后

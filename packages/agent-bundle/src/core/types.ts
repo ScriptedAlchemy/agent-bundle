@@ -899,9 +899,12 @@ export const pathTokens = Object.freeze({
  * MCP server entries, holding the plugin install root in the target's native
  * representation (`${CLAUDE_PLUGIN_ROOT}`, `${PLUGIN_ROOT}`,
  * `${CURSOR_PLUGIN_ROOT}`, or Codex's `./` resolved against the entry's
- * plugin-root cwd). Server runtime code should resolve persistent state and
- * bundled assets against it instead of the process working directory, which
- * not every host anchors to the plugin root. A user-declared env entry with
- * this key always wins over the injected value.
+ * plugin-root cwd). Server runtime code should resolve bundled assets against
+ * it instead of the process working directory, which not every host anchors
+ * to the plugin root. A user-declared env entry with this key always wins
+ * over the injected value.
  */
 export const pluginRootEnvAnchor = 'AGENT_BUNDLE_PLUGIN_ROOT';
+
+/** Explicit override of the framework state root; the runtime exports the same name as `PLUGIN_STATE_ROOT_ENV_ANCHOR`. */
+export const pluginStateRootEnvAnchor = 'AGENT_BUNDLE_STATE_ROOT';
