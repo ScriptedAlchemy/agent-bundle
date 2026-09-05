@@ -743,7 +743,25 @@ export const compileRouteGraph = async (
     moduleTextBySource.set(source, moduleText);
     const discovery = discoverEventRoutePreflight(moduleText, relativePath, source);
     preflightDiscoveryBySource.set(source, discovery);
-    if (discovery.candidateSource !== undefined) preflightSupportSources.add(discovery.candidateSource);
+  }
+  for (const [source, discovery] of preflightDiscoveryBySource) {
+    if (discovery.candidateSource === undefined) continue;
+    if (!preflightDiscoveryBySource.has(discovery.candidateSource)) {
+      preflightSupportSources.add(discovery.candidateSource);
+      continue;
+    }
+    preflightDiscoveryBySource.set(source, Object.freeze({
+      candidateSource: discovery.candidateSource,
+      diagnostics: Object.freeze([
+        ...discovery.diagnostics,
+        routeError(
+          'AB4840',
+          `Event route ${toPosixPath(relative(projectRoot, source))} re-exports preflight from another conventional event route.`,
+          'Move preflight to a separate support module that is not itself an event route.',
+          source,
+        ),
+      ]),
+    }));
   }
   const modules: DiscoveredModule[] = [];
   const modulesById = new Map<string, DiscoveredModule>();

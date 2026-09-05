@@ -659,6 +659,7 @@ const eventRouteHookWrapperSource = (
   entry: TargetHookWrapper,
   hostContractRevision: string,
   durableLineage = false,
+  deferredExecution = false,
 ): string => {
   const route = entry.hook.eventRoute!;
   const standalone = standaloneEventRoute(route);
@@ -781,8 +782,8 @@ const eventRouteHookWrapperSource = (
                 '};',
               ]
             : []),
-          'const runStandalone = async (native, signal) => {',
-          '  const resolved = createCanonicalEventProps(canonicalEvent, native, target, nativeEvent, capabilityRevision, signal);',
+          'const runStandalone = async (native, signal, observation) => {',
+          '  const resolved = createCanonicalEventProps(canonicalEvent, native, target, nativeEvent, capabilityRevision, signal, observation);',
           ...(retiresLineage ? ['  await retireLineage(native, resolved.canonical.idempotencyKey, resolved.canonical.observedAt);'] : []),
           '  const sessionId = typeof native.session_id === "string" ? native.session_id : typeof native.conversation_id === "string" ? native.conversation_id : undefined;',
           '  const workspaceRoot = typeof native.cwd === "string" ? native.cwd : Array.isArray(native.workspace_roots) && typeof native.workspace_roots[0] === "string" ? native.workspace_roots[0] : undefined;',
@@ -809,26 +810,37 @@ const eventRouteHookWrapperSource = (
     '  let bytes = 0;',
     '  for await (const chunk of process.stdin) {',
     '    bytes += chunk.length;',
-    '    if (bytes > 1024 * 1024) fail("stdin exceeds the 1 MiB native-payload limit");',
+    `    if (bytes > ${deferredExecution ? '8 * ' : ''}1024 * 1024) fail("stdin exceeds the ${deferredExecution ? '8 MiB deferred-payload' : '1 MiB native-payload'} limit");`,
     '    chunks.push(chunk);',
     '  }',
     '  let parsed;',
     '  try { parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { fail("stdin must contain exactly one JSON value"); }',
-    '  const native = validateNativeEventEnvelope(parsed, { canonicalEvent, nativeEvent, target });',
+    ...(deferredExecution
+      ? [
+          '  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) fail("deferred input must be an object");',
+          '  const { native: nativeInput, observedAt, sequence } = parsed;',
+          '  if (typeof observedAt !== "string" || !Number.isInteger(sequence) || sequence < 1) fail("deferred input has an invalid canonical observation");',
+          '  const observation = { observedAt, sequence };',
+        ]
+      : [
+          '  const nativeInput = parsed;',
+          '  const observation = undefined;',
+        ]),
+    '  const native = validateNativeEventEnvelope(nativeInput, { canonicalEvent, nativeEvent, target });',
     '  const controller = new AbortController();',
     '  let output;',
     '  if (runtimeMode === "standalone") {',
     ...(standalone
-      ? ['    output = await runStandalone(native, controller.signal);']
+      ? ['    output = await runStandalone(native, controller.signal, observation);']
       : ['    fail("standalone runtime was not compiled");']),
     '  } else {',
     '    try {',
-    '      output = await requestEventRuntime({ artifactEpoch, endpointId, event: canonicalEvent, hostContractRevision: capabilityRevision, native, signal: controller.signal, target, timeoutMs });',
+    '      output = await requestEventRuntime({ artifactEpoch, endpointId, event: canonicalEvent, hostContractRevision: capabilityRevision, native, observedAt: observation?.observedAt, sequence: observation?.sequence, signal: controller.signal, target, timeoutMs });',
     '    } catch (error) {',
     ...(standalone
       ? [
           '      if (!(fallbackMode === "standalone" && error instanceof EventRuntimeTransportError && error.code === "runtime-unavailable")) throw error;',
-          '      output = await runStandalone(native, controller.signal);',
+          '      output = await runStandalone(native, controller.signal, observation);',
         ]
       : ['      throw error;']),
     '    }',
@@ -924,12 +936,13 @@ const eventRoutePreflightWrapperSource = (
     '    return;',
     '  }',
     '  trace.executeStart(runtimeMode);',
+    '  const executionInput = Buffer.from(JSON.stringify({ native, observedAt: props.canonical.observedAt, sequence: props.canonical.sequence }));',
     '  const terminationSignals = ["SIGHUP", "SIGINT", "SIGTERM"];',
     '  const terminate = () => controller.abort();',
     '  for (const terminationSignal of terminationSignals) process.once(terminationSignal, terminate);',
     '  let output;',
     '  try {',
-    '    output = await runExecutor(input, controller.signal);',
+    '    output = await runExecutor(executionInput, controller.signal);',
     '  } catch (error) {',
     '    trace.failure("execute", error);',
     '    throw error;',
@@ -1317,7 +1330,7 @@ export const planHooks = (
     const durableLineage = model.state?.lifetime === 'workspace-durable';
     const renderedSource = hook.eventRoute === undefined
       ? contract.wrapperSource(wrapper)
-      : eventRouteHookWrapperSource(wrapper, hostRevision, durableLineage);
+      : eventRouteHookWrapperSource(wrapper, hostRevision, durableLineage, preflight !== undefined);
     hookEntries.push({
       ...wrapper,
       ...(preflight === undefined ? {} : { executeVirtualSource: renderedSource }),

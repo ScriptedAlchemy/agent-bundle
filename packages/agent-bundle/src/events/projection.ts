@@ -435,6 +435,7 @@ export const createCanonicalEventProps = <E extends CanonicalAgentEvent>(
   nativeEvent: string,
   hostContractRevision: string,
   signal: AbortSignal,
+  observation?: Readonly<{ readonly observedAt: string; readonly sequence: number }>,
 ): AgentEventRouteProps<E> => {
   const native = snapshotNative(nativeInput);
   const canonical: AgentEventCanonicalIdentity<E> = Object.freeze({
@@ -444,7 +445,7 @@ export const createCanonicalEventProps = <E extends CanonicalAgentEvent>(
     idempotencyKey: createHash('sha256')
       .update(JSON.stringify({ event, native, target }), 'utf8')
       .digest('hex'),
-    observedAt: new Date().toISOString(),
+    observedAt: observation?.observedAt ?? new Date().toISOString(),
     payload: projectEventPayload(event, native, target),
     provenance: Object.freeze({
       host: target,
@@ -452,7 +453,7 @@ export const createCanonicalEventProps = <E extends CanonicalAgentEvent>(
       nativeEvent,
       source: 'native',
     }),
-    sequence: ++eventSequence,
+    sequence: observation?.sequence ?? ++eventSequence,
   });
   return Object.freeze({ canonical, native, signal });
 };

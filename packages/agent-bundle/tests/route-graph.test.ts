@@ -2271,6 +2271,26 @@ it('attaches a statically followable event preflight re-export to the event rout
   expect((await compileRouteGraph(otherRoot, fixtureConfig())).digest).toBe(graph.digest);
 });
 
+it('rejects a conventional event route reused as another route preflight', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    'src/events/session/start.ts': 'export default function SessionStart() { return { outcome: "continue" }; }\n',
+    'src/events/tool/before.ts': [
+      "export { default as preflight } from '../session/start.js';",
+      'export default async function BeforeTool() { return undefined; }',
+      '',
+    ].join('\n'),
+  });
+
+  const graph = await compileRouteGraph(root, fixtureConfig());
+
+  expect(graph.events.map((route) => route.id)).toEqual(['event:session/start', 'event:tool/before']);
+  expect(graph.events.find((route) => route.id === 'event:tool/before')?.preflight).toBeUndefined();
+  expect(graph.diagnostics).toEqual(expect.arrayContaining([
+    expect.objectContaining({ code: 'AB4840', sourcePath: join(root, 'src/events/tool/before.ts') }),
+  ]));
+});
+
 it('rejects event preflights that are inline, non-relative, unresolvable, cyclic, or non-functions', async () => {
   const root = await createRoot();
   const eventRoute = (preflight: string): string => [

@@ -304,7 +304,10 @@ export const createEventTracer = (options: CreateEventTracerOptions): EventTrace
     }
   };
 
-  const emit = (build: (at: number, sequence: number, traceStartedAt: number | undefined) => EventTraceEvent): void => {
+  const emit = (
+    build: (at: number, sequence: number, traceStartedAt: number | undefined) => EventTraceEvent,
+    terminal = false,
+  ): void => {
     if (closed) return;
     const at = readClock();
     if (at === undefined) return;
@@ -312,6 +315,7 @@ export const createEventTracer = (options: CreateEventTracerOptions): EventTrace
     firstAt ??= at;
     const event = build(at, sequence, traceStartedAt);
     sequence += 1;
+    if (terminal) closed = true;
     deliver(Object.freeze(event));
   };
 
@@ -335,8 +339,7 @@ export const createEventTracer = (options: CreateEventTracerOptions): EventTrace
         kind: 'failure',
         phase,
         sequence: next,
-      }));
-      closed = true;
+      }), true);
     },
     preflightOutcome: (result) => {
       const outcome = preflightOutcomeOf(result);

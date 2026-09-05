@@ -260,6 +260,22 @@ it('records a terminal failure with an error-safe summary and then goes quiet', 
   expect(events).toHaveLength(length);
 });
 
+it('closes before delivering a terminal failure to a reentrant observer', () => {
+  const events: EventTraceEvent[] = [];
+  let reenter = (): void => {};
+  const tracer = createEventTracer({
+    execution,
+    now: ticking(),
+    observer: (event) => {
+      events.push(event);
+      if (event.kind === 'failure') reenter();
+    },
+  });
+  reenter = () => tracer.renderStart();
+  tracer.failure('execute', new Error('failed'));
+  expect(events.map((event) => event.kind)).toEqual(['failure']);
+});
+
 it('measures a failure from the trace start when it has one and omits it otherwise', () => {
   const { events, observer } = collect();
   const tracer = createEventTracer({ execution, now: ticking(), observer });

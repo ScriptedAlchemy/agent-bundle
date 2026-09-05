@@ -64,7 +64,9 @@ const eventRequestSchema = z.object({
   event: z.string().min(1),
   hostContractRevision: z.string().min(1),
   native: z.record(z.string(), z.unknown()),
+  observedAt: z.string().min(1).optional(),
   protocolVersion: z.literal(EVENT_RUNTIME_PROTOCOL_VERSION),
+  sequence: z.number().int().positive().optional(),
   target: z.string().min(1),
 }).strict();
 
@@ -127,6 +129,8 @@ export interface EventRuntimeRequest {
   readonly event: string;
   readonly hostContractRevision: string;
   readonly native: Readonly<Record<string, unknown>>;
+  readonly observedAt?: string;
+  readonly sequence?: number;
   readonly target: string;
 }
 

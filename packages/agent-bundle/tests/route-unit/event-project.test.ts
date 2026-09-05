@@ -11,6 +11,29 @@ import {
 } from '../../src/events/project.ts';
 import { renderRoute } from '../../src/test/render.ts';
 
+it('preserves a canonical observation across deferred projection', () => {
+  const native = { hook_event_name: 'PreToolUse', tool_name: 'Write' };
+  const first = createCanonicalEventProps(
+    'tool/before',
+    native,
+    'claude',
+    'PreToolUse',
+    '2.1.250',
+    new AbortController().signal,
+  );
+  const deferred = createCanonicalEventProps(
+    'tool/before',
+    native,
+    'claude',
+    'PreToolUse',
+    '2.1.250',
+    new AbortController().signal,
+    { observedAt: first.canonical.observedAt, sequence: first.canonical.sequence },
+  );
+
+  expect(deferred.canonical).toEqual(first.canonical);
+});
+
 it('renders standalone event projection fixtures through real Flight', async () => {
   const NestedContext = async () => createElement(Agent.Context, null, 'standalone');
   const Route = async () => createElement(

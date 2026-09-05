@@ -418,6 +418,9 @@ it('runs event-route preflight in the per-host wrapper before shared IPC', () =>
   expect(source).toContain('AbortSignal.timeout(timeoutMs)');
   expect(source).toContain('process.once(terminationSignal, terminate)');
   expect(source).toContain('process.off(terminationSignal, terminate)');
+  expect(source).toContain('observedAt: props.canonical.observedAt, sequence: props.canonical.sequence');
+  expect(entry.executeVirtualSource).toContain('const observation = { observedAt, sequence };');
+  expect(entry.executeVirtualSource).toContain('observedAt: observation?.observedAt, sequence: observation?.sequence');
   expect(source).not.toContain('AGENT_BUNDLE_HOOK_HOST');
   expect(source).not.toContain('createAgentRenderDispatcher');
   expect(source).not.toContain('import * as routeModule');
@@ -458,6 +461,7 @@ it('crosses the standalone Worker boundary only after preflight returns execute'
   expect(source).toContain('projectEventPreflightResult');
   expect(source).toContain('new URL(/* webpackIgnore: true */ "./beforeTool.synthetic.execute.mjs", import.meta.url)');
   expect(entry.executeVirtualSource).toContain('new URL(/* webpackIgnore: true */ "./hooks-flight.mjs", import.meta.url)');
+  expect(entry.executeVirtualSource).toContain('createCanonicalEventProps(canonicalEvent, native, target, nativeEvent, capabilityRevision, signal, observation)');
   expect(source).not.toContain('AGENT_BUNDLE_HOOK_HOST');
   const runBody = source.slice(firstIndex(source, 'const run = async () => {'));
   expect(firstIndex(runBody, 'executeEventPreflight')).toBeLessThan(runBody.search(/['"]execute['"]/u));
