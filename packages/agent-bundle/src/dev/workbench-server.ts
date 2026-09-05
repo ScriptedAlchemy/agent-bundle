@@ -122,6 +122,8 @@ export interface StartDevServerOptions {
   readonly root: string;
   /** Test-only listener and sandbox factories; production always uses the built-in loopback services. */
   readonly testing?: DevServerTesting;
+  /** Contributor HMR only: loopback origins of a Workbench Rsbuild dev server that proxies `/api` to this foreground server; never set by default. */
+  readonly workbenchDevOrigins?: readonly string[];
 }
 
 interface DevServerForeground {
@@ -922,6 +924,9 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
     routeManifest,
     ...(runtime === undefined ? {} : { runtime }),
     skillDocuments,
+    ...(options.workbenchDevOrigins === undefined || options.workbenchDevOrigins.length === 0
+      ? {}
+      : { workbenchDevOrigins: options.workbenchDevOrigins }),
   });
   clientSurfaces.bindHostOrigin(foreground.url);
   // Linearize Workbench-owned runtime proxy acquisition before Foreground

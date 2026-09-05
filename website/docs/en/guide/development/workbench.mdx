@@ -96,8 +96,8 @@ the selected epoch, rather than accepting a browser-supplied command or model.
 ## The same session programmatically
 
 The public `startDevServer` export accepts the options the CLI flags map to (`root`, `port`,
-`open`, `agentApi`, `installHosts`) and resolves to a `DevServerSession` exposing the loopback
-`url`, a `status()` snapshot, and `close()`:
+`open`, `agentApi`, `installHosts`, `workbenchDevOrigins`) and resolves to a `DevServerSession`
+exposing the loopback `url`, a `status()` snapshot, and `close()`:
 
 ```ts twoslash
 import { startDevServer } from 'agent-bundle';
@@ -195,15 +195,68 @@ the same fixed URL once the foreground server returns.
 
 ## Contributor UI HMR
 
-Working on the Workbench UI itself is a different loop from consuming a published one. Start it
-only with a running foreground server:
+Working on the Workbench UI itself is a different loop from consuming a published one: an Rsbuild
+development server serves the UI with hot module replacement and proxies `/api` to a separately
+started foreground server. Published `agent-bundle dev` serves prebuilt assets and project events;
+it does not run an Rsbuild development server. The loop takes two terminals.
+
+Terminal A starts the foreground server and names the Rsbuild origin it should accept:
 
 ```sh
-AGENT_BUNDLE_WORKBENCH_API_PROXY=http://127.0.0.1:3100 pnpm --filter agent-bundle-workbench dev
+npx agent-bundle dev --root . --port 3100 --no-open \
+  --workbench-dev-origin http://localhost:3000
 ```
 
-`packages/workbench/scripts/dev.mjs` requires that proxy URL. Published `agent-bundle dev` serves
-prebuilt assets and project events; it does not run an Rsbuild development server.
+Terminal B starts the Rsbuild development server against that foreground URL:
+
+```sh
+AGENT_BUNDLE_WORKBENCH_API_PROXY=http://127.0.0.1:3100 \
+  pnpm --filter agent-bundle-workbench dev
+```
+
+Open `http://localhost:3000`. `packages/workbench/scripts/dev.mjs` requires that proxy URL and
+passes any further arguments through to `rsbuild dev`. Rsbuild's defaults are host `localhost` and
+port `3000`; `pnpm --filter agent-bundle-workbench dev --port 3001` moves the UI, in which case
+allowlist `http://localhost:3001` in Terminal A instead. Whenever `AGENT_BUNDLE_WORKBENCH_API_PROXY`
+is set, `packages/workbench/rsbuild.config.ts` also sets `server.strictPort: true`, so a busy port
+`3000` fails loudly instead of Rsbuild silently moving the UI to a port that is not allowlisted.
+
+**What is proxied.** Only `/api` — every typed Workbench client route plus the
+`/api/project/events` SSE stream — is forwarded to the foreground server. The HTML document, the
+JavaScript and CSS, and the HMR websocket come from the Rsbuild server. MCP App preview and runtime
+client-surface iframes are bound to the foreground origin: the App sandbox exchanges `postMessage`
+frames only with the foreground URL, and runtime client surfaces set their `frame-ancestors` CSP to
+it. They are not covered by this loop — open the foreground URL itself (`http://127.0.0.1:3100`
+above) to work on those pages.
+
+**The origin rule.** The proxy never rewrites `Origin` (Rsbuild's `changeOrigin` rewrites only
+`Host`), so whenever the browser sends `Origin` — on every mutation — the foreground server sees
+`Origin: http://localhost:3000`, not its own.
+`--workbench-dev-origin <origin>` (repeatable; `startDevServer({ workbenchDevOrigins })`
+programmatically) makes it accept session bootstrap (`GET /api/project/session`), mutation
+(`POST`/`DELETE` with the `x-agent-bundle-session` token), and project-event stream
+(`GET /api/project/events`, session cookie) requests whose `Origin` is one of the listed origins,
+in addition to its own origin. Every other origin is still `AB8003`, and the Agent API origin rule
+on `/mcp` is unchanged. Each value must be a bare loopback `http:` or `https:` origin —
+`localhost`, `127.0.0.1`, or `[::1]`, such as `http://localhost:3000`, with no path — otherwise
+the foreground server refuses to start (`agent-bundle dev` exits before serving anything;
+`startDevServer` rejects with code `AB8000`). `GET /api/project/session` additionally returns
+`devOrigins: [...]` when the list is non-empty (`origin` in that body remains the foreground
+URL), and the Workbench UI accepts the session when the page origin equals the foreground origin
+or is listed in `devOrigins`. Without the flag the guard is byte-for-byte unchanged: the
+allowlist is never on by default.
+
+The `Origin` guard defends the loopback foreground server against request forgery from any other
+origin, including other loopback origins — MCP App sandbox iframes run third-party plugin code on
+separate loopback ports, and Rsbuild's development server admits every loopback origin through its
+default CORS policy — so the allowlist names exactly your own Rsbuild origin, and the foreground
+still sees the browser's real `Origin`.
+
+Without `--workbench-dev-origin`, the UI at `http://localhost:3000` refuses its own bootstrap as
+`AB8003` (the session body names the foreground origin, not the page's) and stays on the
+"Foreground connection unavailable" gate, reporting "Workbench request failed with HTTP 200."; the
+foreground refuses mutations carrying that `Origin` with `AB8003` as well. The foreground URL keeps
+working regardless.
 
 ## Next
 

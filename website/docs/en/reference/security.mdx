@@ -38,6 +38,18 @@ hosted service. The browser is not a trusted input source: it never supplies a c
 directory, a native model, or a credential, and browser-supplied native models and credentials are
 refused. Operations are trusted-local only.
 
+The foreground server's browser routes — session bootstrap, mutations, and the project-event
+stream — carry an `Origin` guard: a request whose `Origin` is not the foreground URL is refused
+with `AB8003` (one without `Origin` passes only as `Sec-Fetch-Site: same-origin`), because any
+other origin, including another loopback origin such as an MCP App sandbox iframe running
+third-party plugin code on its own loopback port, could otherwise forge requests against it. The
+contributor HMR allowlist, `agent-bundle dev --workbench-dev-origin <origin>`, is the only
+exception: explicit, loopback-only (anything but a bare loopback `http`/`https` origin is refused
+at startup), and off by default, so without the flag the guard is unchanged. The Rsbuild
+proxy in that loop deliberately never rewrites `Origin`: the foreground keeps seeing the browser's
+real origin and admits exactly the listed one instead of trusting whatever a proxy forwards. See
+[Contributor UI HMR](../guide/development/workbench.mdx#contributor-ui-hmr).
+
 Raw HTML, JSX/MDX, and Mermaid in Skill Markdown are **inert** in the Workbench renderer. A Skill
 document is content to display, not markup to execute.
 

@@ -100,9 +100,11 @@ own packed server, launched as `mcp run` launches it. `serveApp` in
 `agent-bundle/api` is the programmatic form for host processes — the CLI,
 the Workbench, tests, a plugin's own scripts — never the MCP shell, and a
 local preview host, not a deployment target. A plugin's own "open the
-dashboard" CLI route cannot import it (the routed CLI bin is self-contained;
-`AB6005`) and spawns `agent-bundle serve-app` instead; see
-[Entry conventions](entry-conventions.md#agent-bundle-serve-app) and #558.
+dashboard" CLI route cannot import it — the routed CLI bin is self-contained,
+and the route graph reports the value import as `AB4837` — so it calls
+`spawnServeApp` from `agent-bundle/serve-app-command`, which spawns
+`agent-bundle serve-app` as a child process (#558); see
+[Entry conventions](entry-conventions.md#agent-bundle-serve-app).
 
 The compiler statically reads `config`, imports schemas and implementations
 only into generated entries, installs `runAgentRequest`, and derives the real

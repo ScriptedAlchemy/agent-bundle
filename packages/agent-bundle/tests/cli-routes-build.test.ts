@@ -6,7 +6,8 @@ import { promisify } from 'node:util';
 
 import { afterEach, expect, it } from '@rstest/core';
 
-import { build } from '../src/api.ts';
+import { build, validate } from '../src/api.ts';
+import { DiagnosticError } from '../src/core/diagnostics.ts';
 
 const execFile = promisify(executeFile);
 const roots: string[] = [];
@@ -411,4 +412,73 @@ it('builds and runs the generated routed-CLI executable', { retry: 2, timeout: 1
   await expect(stat(join(root, 'artifact', 'portable', 'scripts', 'checksum-flight.mjs'))).rejects.toMatchObject({
     code: 'ENOENT',
   });
+});
+
+/**
+ * AB4837 (#558): a routed command that value-imports a compiler-carrying
+ * framework entry is refused when the route graph compiles — by `validate`
+ * without building, and by `build` before the bundler inlines the compiler
+ * into the self-contained bin and fails with an opaque error that names the
+ * generated file instead of the route.
+ */
+it('refuses a routed command that imports agent-bundle/api with AB4837 before bundling', { timeout: 120_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-cli-bin-framework-import-'));
+  roots.push(root);
+  await symlink(join(process.cwd(), 'examples', 'audiobook-curator', 'node_modules'), join(root, 'node_modules'), 'dir');
+  await Promise.all([
+    writeProjectFile(root, 'package.json', JSON.stringify({
+      dependencies: {
+        '@agent-bundle/runtime': 'workspace:*',
+        zod: '4.4.3',
+      },
+      name: 'cli-bin-framework-import-fixture',
+      type: 'module',
+      version: '1.0.0',
+    })),
+    writeProjectFile(root, 'agent-bundle.config.ts', [
+      "import { defineConfig } from 'agent-bundle/config';",
+      'export default defineConfig({',
+      "  plugin: { description: 'Routed CLI fixture.', name: 'cli-bin-framework-import-fixture', version: '1.0.0' },",
+      "  targets: ['portable'],",
+      '});',
+      '',
+    ].join('\n')),
+    // The #558 shape: the command serves an MCP App by importing the compiler.
+    writeProjectFile(root, 'src/cli/dashboard.ts', [
+      "import { z } from 'zod';",
+      "export const config = { description: 'Open the dashboard in a browser.' };",
+      'export const inputSchema = z.object({}).strict();',
+      'export const resultSchema = z.object({ url: z.string() }).strict();',
+      'export default async function dashboard() {',
+      "  const { serveApp } = await import('agent-bundle/api');",
+      "  const served = await serveApp({ app: 'curator/dashboard', root: process.cwd() });",
+      '  return { url: served.url };',
+      '}',
+      '',
+    ].join('\n')),
+  ]);
+  const expected = {
+    code: 'AB4837',
+    message: 'Route module src/cli/dashboard.ts imports "agent-bundle/api" as a value; the routed CLI executable is self-contained and cannot bundle the compiler, so the build would fail deep inside the generated executable (an unresolvable compiler module or AB6005) instead of at this import.',
+    severity: 'error',
+    sourcePath: join(root, 'src', 'cli', 'dashboard.ts'),
+  };
+
+  // Reported statically, without a build.
+  const validation = await validate({ root });
+  expect(validation.diagnostics.filter((diagnostic) => diagnostic.code === 'AB4837')).toEqual([expect.objectContaining(expected)]);
+
+  // The build rejects on the same diagnostic before any executable is bundled.
+  const failure: unknown = await build({ output: 'artifact', packageOutputs: true, root }).then(() => undefined, (error: unknown) => error);
+  expect(failure).toBeInstanceOf(DiagnosticError);
+  const { diagnostics } = failure as DiagnosticError;
+  const reported = diagnostics.filter((diagnostic) => diagnostic.code === 'AB4837');
+  expect(reported).toEqual([expect.objectContaining(expected)]);
+  expect(reported[0]?.recovery).toContain('spawnServeApp from agent-bundle/serve-app-command');
+  // Neither the bundler's resolution failure nor the artifact validator's
+  // rejection of the inlined compiler reaches the author any more.
+  expect(diagnostics.some((diagnostic) => diagnostic.message.includes("Can't resolve"))).toBe(false);
+  expect(diagnostics.some((diagnostic) => diagnostic.code === 'AB6005')).toBe(false);
+  await expect(stat(join(root, 'dist'))).rejects.toMatchObject({ code: 'ENOENT' });
+  await expect(stat(join(root, 'artifact'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
