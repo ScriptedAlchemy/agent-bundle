@@ -990,26 +990,68 @@ file beside the HTML fails the build with an error naming the stray file, becaus
 must stay one self-contained document per App. `agent-bundle inspect --bundler` prints the
 resolved App configuration when a hatch value does not land where you expected.
 
-### Serving an App standalone
+### Exposing an App in the browser
 
-Outside an MCP host, an App is normally reached through the Workbench MCP page. When a plugin
-wants an "open the dashboard" command instead — a live view of its own server, in a plain browser
-tab, from a terminal — `agent-bundle serve-app` hosts one built App standalone:
+An App already declared under `mcp.servers.<id>.apps` can be opened in a plain browser tab from
+the installed plugin — no framework on the machine — by listing it on the
+[`web`](../../reference/configuration.mdx#web) config key:
+
+```ts
+web: {
+  apps: [
+    'status/status',
+    { app: 'status/status', tool: 'show-status', input: {}, allow: ['call-tool'] },
+  ],
+  open: 'never', // 'browser' | 'never' (default 'never')
+}
+```
+
+`apps[]` selects among those declared Apps (`<server>/<app>`). `tool` is the opening tool
+(default: the only tool whose `_meta.ui.resourceUri` is the App's; required when several).
+`input` is that opening call's arguments (default `{}`). `allow` pre-approves App-initiated
+consent capabilities: `call-tool`, `download-file`, `open-external-link`,
+`request-display-mode`. Browser hardware and clipboard permissions always ask in the host page.
+Invalid `web` is `AB4341` (error); the message shapes are in the
+[diagnostics reference](../../reference/diagnostics.md).
+
+When `web` is configured, the composite artifact's `agent-bundle.manifest.json` gains a `web`
+section and the build emits `bin/<plugin>.mjs` even without `src/cli/**` commands. The host page
+lives inside that bin — there is no `web/` directory in the artifact. `AB6005` walks the bin
+like every other executable.
+
+From the built artifact or the installed plugin root:
+
+```sh
+node <root>/bin/<plugin>.mjs web [<server>/<app>] [--port N] [--open|--no-open] \
+  [--tool T] [--input JSON] [--allow <cap>]... [--profile portable|claude|chatgpt] [--json]
+```
+
+The default App is the only exposed one; several without a selector is a usage error (exit `2`)
+that lists them. Missing `agent-bundle.manifest.json` beside `bin/` exits `1`. The command
+launches the plugin's own MCP server (`node <root>/mcp/<entry>.mjs`,
+`AGENT_BUNDLE_PLUGIN_ROOT=<root>`, declared static env with path tokens expanded), calls the
+opening tool once, serves the App at `http://127.0.0.1:<port>/` on a loopback origin with a
+second loopback sandbox origin for the App document (the same host stack and consent behavior as
+`agent-bundle serve-app` and the Workbench), prints
+`MCP App <server>/<app> at <url> (tool <tool>; Ctrl-C stops the server)` (or one JSON line with
+`--json`: `{ app, server, tool, url, port, resourceUri, sandboxOrigin }`), and runs until
+Ctrl-C / SIGTERM. `web` is listed in the bin's `--help`. An authored `src/cli/web.ts` is refused
+(`AB4341`) when `web` is configured. Every flag is in the
+[CLI reference](../../reference/cli.mdx#plugin-web).
+
+`agent-bundle dev` serves the same page, relay, routes, sandbox proxy, and consent behavior at
+`GET /web/<server>/<app>` on the foreground server, bound to the current epoch's server session.
+Apps not listed in `web.apps` are 404.
+
+`agent-bundle serve-app` is unchanged: it is the checkout-time form that builds or points at an
+artifact and needs the framework installed. Every option is in the
+[CLI reference](../../reference/cli.mdx#serve-app).
 
 ```sh
 npx agent-bundle build
 npx agent-bundle serve-app status/status --artifact artifact \
   --input '{"service":"compiler"}' --open
 ```
-
-The command launches the plugin's packed MCP server exactly as `mcp run` does (same artifact
-resolution, same `.env` layering, same plugin-data root), binds the App to it through the same
-host stack the Workbench MCP page uses — sandbox proxy, consent authority, `McpAppBridge` — calls
-the App's tool once so it opens populated, and prints the loopback URL. The host binds `127.0.0.1`
-only, serves one page plus the authenticated `/api/mcp/...` routes behind a per-launch token, and
-exposes only that server through the bridge; the App document runs on a second loopback origin in
-the framework's sandbox. It is a local preview host, not a deployment target. Every option is in
-the [CLI reference](../../reference/cli.mdx#serve-app).
 
 The same host is available programmatically as `serveApp` in `agent-bundle/api`. It returns
 `{ url, close, closed }`: `close()` tears down the host and the server, `closed` settles when the
@@ -1022,113 +1064,11 @@ in the host page, as in the Workbench.
 `serveApp` is a **host-process API**. It belongs to processes the framework does not compile —
 the first-party CLI, the Workbench, tests, a plugin's own `package.json` scripts or a hand-written
 `.mjs` run from the checkout — and it needs `agent-bundle` resolvable where that process runs.
-Never call it from the MCP server shell.
-
-A routed CLI command inside the plugin artifact cannot import it. Routed CLI bins are
-self-contained (`bin/<plugin>.mjs` in every host pack, `dist/bin/<plugin>.js` in the package
-build), so a value import of `agent-bundle/api` — or of any other entry that carries the compiler:
-`agent-bundle`, `agent-bundle/config`, `agent-bundle/eval`, `agent-bundle/rstest`,
-`agent-bundle/test`, `agent-bundle/test/browser` — would make the bundler inline the whole
-compiler into the bin, where it fails on the framework's runtime-relative module references. The
-route graph reports it first: `AB4837`, naming the file and the specifier, whether the route
-imports the entry itself or through a helper it reaches by relative import, from `inspect`,
-`validate`, `build`, and `dev`; `import type` and imports used only as types are not reported
-(see the [diagnostics reference](../../reference/diagnostics.md)). The sanctioned shape is
-`spawnServeApp` from `agent-bundle/serve-app-command`: a dependency-free entry that spawns
-`agent-bundle serve-app` as a child process, so the framework stays in its own process and the
-host packs stay self-contained. This is what cargo-hauler's `hauler dashboard` does, and the
-resolution of [#558](https://github.com/ScriptedAlchemy/agent-bundle/issues/558):
-
-```ts
-// src/cli/dashboard.ts — `hauler dashboard`: open the App against the plugin's server.
-import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
-import { ServeAppCommandError, spawnServeApp } from 'agent-bundle/serve-app-command';
-import { z } from 'zod';
-
-export const config = {
-  description: 'Open the cargo-hauler dashboard in a browser (from the plugin checkout).',
-  exitCode: 'result',
-} satisfies CliRouteConfig;
-
-export const inputSchema = z.object({
-  noOpen: z.boolean().optional(),
-  port: z.number().int().min(0).max(65_535).optional(),
-}).strict();
-
-export const resultSchema = z.object({
-  exitCode: z.number().int(),
-  message: z.string(),
-  url: z.string().nullable(),
-}).strict();
-
-export default async function dashboard(
-  { input, signal }: CliRouteProps<typeof inputSchema>,
-) {
-  let served;
-  try {
-    served = await spawnServeApp({
-      app: 'hauler/dashboard',
-      root: process.cwd(),
-      artifact: 'artifact',
-      tool: 'hauler_status',
-      autoApprove: ['call-tool'],
-      open: input.noOpen !== true,
-      ...(input.port === undefined ? {} : { port: input.port }),
-      // Ctrl-C reaching the routed CLI stops the server.
-      signal,
-    });
-  } catch (error) {
-    if (error instanceof ServeAppCommandError) {
-      // framework-not-installed, artifact-missing, exited-before-ready, ...
-      return {
-        exitCode: 1,
-        message: `${error.message} In an MCP host, call hauler_status instead.`,
-        url: null,
-      };
-    }
-    throw error;
-  }
-  const exit = await served.closed;
-  return {
-    exitCode: exit.code ?? 1,
-    message: exit.code === 0
-      ? 'dashboard closed'
-      : `agent-bundle serve-app exited with ${exit.signal ?? exit.code}`,
-    url: served.url,
-  };
-}
-```
-
-`spawnServeApp` lowers its options to `agent-bundle serve-app` argv (`serveAppArgv`), resolves
-the framework CLI from the `agent-bundle` package installed at or above `root`
-(`locateFrameworkCli`), spawns it under the current Node binary, relays every line of the child's
-stdout to this process's stderr — or to a `relay` callback — so the routed command keeps stdout
-for its own JSON result, and resolves once the child prints its ready line,
-`MCP App <app> at <url> (tool <tool>; Ctrl-C stops the server)`. The child's diagnostics stay on
-stderr. The result carries `app`, `url`, `port`, `tool`, `server`, `pid`, a `closed` promise
-that settles with the child's exit `{ code, signal }`, and `close()`, which sends `SIGTERM` and
-waits for that exit; aborting the `signal` does the same, so Ctrl-C reaching the routed command
-reaches the server. Failures reject with `ServeAppCommandError`, whose `code` is
-`framework-not-installed` (no `node_modules/agent-bundle` resolves from `root`),
-`artifact-missing` (the given `artifact` path does not exist), `spawn-failed`,
-`exited-before-ready` (the child exited without printing the ready line; `error.exit` holds its
-`{ code, signal }`), `aborted` (the `signal` aborted before the App was served), or `stop-failed`
-(the running child refused the `SIGTERM` that `close()` or the abort sent — also what `close()`
-rejects with — so it is still running). On Ctrl-C the
-routed CLI shell reports `Aborted.` and exits `130` before the route returns, so the result
-document above is printed only when the server exits on its own or the route calls `close()`.
-
-It is a **checkout command**: it needs `agent-bundle` installed at or above `root` and a built
-artifact. The published plugin package and an installed host pack have neither, and
-`framework-not-installed` and `artifact-missing` say so before anything is spawned. Every
-`serveApp` option with an argv form passes through — `app`, `root`, `artifact`, `autoApprove`
-(the `--allow` vocabulary: `call-tool`, `download-file`, `open-external-link`,
-`request-display-mode`), `configPath`, `envFiles`, `input`, `loadEnvFiles`, `mode`, `open`,
-`pluginRoot`, `port`, `profile`, `target`, `tool` — and an unset option takes the CLI default
-(`--target portable`, `--profile portable`, `--mode production`, the App's only tool, no browser).
-Relative paths resolve as the CLI resolves them: `configPath` against `root`, `artifact` and
-`envFiles` against the working directory. The `serveApp` options with no argv form — `logger`,
-`registry`, `openBrowser`, `targets`, `timeoutMs` — stay with `serveApp` in host processes.
+Never call it from the MCP server shell. A routed CLI command cannot import it either: that
+value import is `AB4837` (see the [diagnostics reference](../../reference/diagnostics.md)).
+Routed commands no longer spawn `agent-bundle serve-app`; the artifact's own
+[`<plugin> web`](../../reference/cli.mdx#plugin-web) command is the supported way from an
+installed root. `AB4837` recovery text names that command.
 
 ## Server modes
 

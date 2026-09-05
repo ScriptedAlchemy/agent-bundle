@@ -12,7 +12,7 @@ import { build, runMcp } from '../src/api.ts';
 import { runCli } from '../src/cli.ts';
 import { DiagnosticError, type Diagnostic } from '../src/core/diagnostics.ts';
 import { captureCliTerminal } from './support/cli-terminal.ts';
-import { mcpServerStateDirectory } from '../src/services/mcp-run.ts';
+import { mcpServerStateDirectory } from '../src/core/mcp-state-directory.ts';
 
 const execFile = promisify(executeFile);
 const workspaceNodeModules = join(process.cwd(), 'node_modules');

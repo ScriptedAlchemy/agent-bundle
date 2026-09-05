@@ -1,5 +1,5 @@
 ---
-description: 'agent-bundle.config.ts 字段参考：每个顶层键、可接受的形态、默认值与校验规则，包括已废弃的 plugin.version 字段。'
+description: 'agent-bundle.config.ts 字段参考：每个顶层键、可接受的形态、默认值与校验规则，包括 web 暴露键（AB4341）与已废弃的 plugin.version 字段。'
 ---
 
 # 配置
@@ -39,6 +39,7 @@ export default defineConfig({
 | `dev` | `{ agentApi?, contracts?, runtime? }` | 无。 |
 | `evals` | `{ include?, runsDir?, semanticGrader? }` | 见下文。 |
 | `tools` | `{ rsbuild?, rspack? }` | 无。 |
+| `web` | `{ apps, open? }` | 无——省略则什么都不输出。 |
 
 宿主作用域的扩展键（`claude`、`codex`、`cursor`、`portable`）由各 target 适配器通过对
 `AgentBundleConfigExtensions` 的声明合并贡献。扩展值必须是严格的有限 JSON（`AB4500`），且宿主特定的值
@@ -171,6 +172,49 @@ export default defineConfig({
 | `dev.contracts.fixtures` | **设置了 `dev.contracts` 时必填。** 项目相对路径的模块，其默认导出把路由 id 映射到契约夹具。声明 `dev.contracts` 会让 `agent-bundle dev` 从直接采用每个 epoch，改为以开发契约矩阵门控面向宿主的采用：检查失败的 epoch 仍会发布到 Workbench playground，但活跃的宿主连接与开发安装会保留最后一个通过的 epoch（`AB7211`）。块本身格式错误、夹具模块逃出项目根、无法加载或导出了错误的形状，则是 `AB7210`。 |
 | `dev.contracts.server` | 矩阵要检查的 MCP 服务器。仅当项目恰好编译一个服务器时可省略。 |
 | `dev.runtime.provider` | 开发期运行时 provider 模块：它导出 `createDevRuntimeProvider`（[`CreateDevRuntimeProvider`](../api/api.md#createdevruntimeprovider)），返回一个 [`DevRuntimeProvider`](../api/api.md#devruntimeprovider)，其 `start` 接收 [`DevRuntimeStartContext`](../api/api.md#devruntimestartcontext) 并返回 [`DevRuntimeSession`](../api/api.md#devruntimesession)。provider 需要实现的整个协议都从 `agent-bundle/api` 发布——检视信封（[`DevRuntimeInspectionEnvelope`](../api/api.md#devruntimeinspectionenvelope)）、MCP 服务器描述符（[`DevRuntimeMcpServerDescriptor`](../api/api.md#devruntimemcpserverdescriptor)）、它要抛出的错误（[`DevRuntimeUnavailableError`](../api/api.md#devruntimeunavailableerror)、[`DevRuntimeGenerationConflictError`](../api/api.md#devruntimegenerationconflicterror)），以及会话所驱动的 generation store 与 MCP registry——以契约（[`DevRuntimeGenerationStore`](../api/api.md#devruntimegenerationstore)、[`DevRuntimeProviderMcpRegistry`](../api/api.md#devruntimeprovidermcpregistry)）及其构造函数（[`createRuntimeGenerationStore`](../api/api.md#createruntimegenerationstore)、[`createRuntimeMcpRegistry`](../api/api.md#createruntimemcpregistry)）的形式提供。 |
+
+## web
+
+产物内浏览器宿主的暴露与策略。`web.apps` 从已经声明在 `mcp.servers.<id>.apps` 下的 MCP App 中选择；
+它不是第二套路由图，也不会从 `src/web/**` 发现 App。省略该键时，构建不写 `web` 节、不生成框架拥有的
+`web` 命令，也不额外输出 bin。
+
+```ts
+web: {
+  apps: [
+    'status/status',
+    {
+      app: 'status/status',
+      tool: 'show-status',
+      input: {},
+      allow: ['call-tool'],
+    },
+  ],
+  open: 'never',
+}
+```
+
+| 字段 | 类型 | 默认值 | 含义 |
+| --- | --- | --- | --- |
+| `apps` | `(string \| { app, tool?, input?, allow? })[]` | 设置了 `web` 时**必填**。 | 每项是 `<server>/<app>`，或带有该 `app` 以及可选开场 `tool`、开场 `input`（默认 `{}`）与 `allow` 的对象。字符串是 `{ app }` 的简写。 |
+| `apps[].tool` | `string` | 该 App 唯一的工具 | 开场工具：其 `_meta.ui.resourceUri` 指向该 App 的那一个。有多个时必填。 |
+| `apps[].input` | `Record<string, unknown>` | `{}` | 那次开场 `tools/call` 的参数。 |
+| `apps[].allow` | `('call-tool' \| 'download-file' \| 'open-external-link' \| 'request-display-mode')[]` | 无 | 预先批准由 App 发起的同意能力。浏览器硬件与剪贴板权限始终在宿主页面里询问。 |
+| `open` | `'browser' \| 'never'` | `'never'` | `<plugin> web` 是否打开默认浏览器。`--open` / `--no-open` 可覆盖。 |
+
+无效的 `web` 是 `AB4341`（error）：`app` 未被任何 `mcp.servers.<id>.apps` 声明；未知的 `allow`
+能力；`open` 不在 `browser` \| `never` 中；重复的 `<server>/<app>`；路由图未为该生成式服务器声明的
+`tool`；在已配置 `web` 时，生成模式下 `src/cli/**` 命令（或顶层别名）拼作 `web`；或 `web` 面没有任何
+可执行文件可以承载。所选目标的适配器若未发布受支持的 `web` 能力行，则是 `AB4341` 警告：其产物不承载
+该面。消息形状与恢复方式见[诊断参考](./diagnostics.md)。
+
+`web` 命令只存在于框架生成的 `bin/<plugin>.mjs` 中。`web` 从不取代作者代码：手写的 `src/cli.ts`、
+占用插件名的 `bin` 条目或 `bin: false` 都保留其所描述的可执行文件，并由 `AB4341` 报告 web 面无处
+安放——把命令移到 `src/cli/**`（生成模式）下，或去掉 `web`。
+
+`web` 合法时，组合产物的 `agent-bundle.manifest.json` 会增加 `web` 节，即使没有 `src/cli/**` 也会
+输出 `bin/<plugin>.mjs`——见[Target 与产物](./targets-artifacts.mdx)与
+[在浏览器中暴露 App](../guide/authoring/mcp.mdx#在浏览器中暴露-app)。
 
 ## tools
 

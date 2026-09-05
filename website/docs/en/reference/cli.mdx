@@ -1,5 +1,5 @@
 ---
-description: 'The agent-bundle CLI surface: dev, serve-app, build, prepack, install, doctor, validate, eval, inspect, mcp, and hooks, with every option and exit code.'
+description: 'The agent-bundle CLI surface: dev, serve-app, build, prepack, install, doctor, validate, eval, inspect, mcp, and hooks, plus the artifact-resident <plugin> web command, with every option and exit code.'
 ---
 
 # CLI
@@ -86,8 +86,7 @@ Its output is a contract: once the host is listening, stdout carries exactly one
 line, `<tool>` the tool that opened the App — and every diagnostic goes to stderr. The command
 then runs in the foreground: `SIGINT` or `SIGTERM` closes the host and its server and exits `0`;
 when the bound MCP server exits on its own, one `AB5000` diagnostic is written to stderr and the
-command exits `1`. `spawnServeApp` in `agent-bundle/serve-app-command` waits on the same line
-(`parseServeAppReadyLine`), so a routed command can rely on it.
+command exits `1`. The same ready-line contract is printed by [`<plugin> web`](#plugin-web).
 
 | Option | Default | Meaning |
 | --- | --- | --- |
@@ -107,11 +106,42 @@ The host binds to `127.0.0.1` only, serves one document and the authenticated `/
 routes (a per-launch token plus same-origin checks; `AB8003` / `AB8004` on refusal), and exposes
 only the selected server through the bridge. The App document itself runs on a second loopback
 origin inside the framework's sandbox. It is a local preview host, not a deployment target. The
-programmatic form for scripts and tests is `serveApp` in `agent-bundle/api`; a plugin's own routed
-CLI command uses `spawnServeApp` from `agent-bundle/serve-app-command`, which runs this command as
-a child process with the same options lowered to argv, because the self-contained bin cannot
-import `agent-bundle/api` (the route graph reports the attempt as `AB4837`) — see
-[Serving an App standalone](../guide/authoring/mcp.mdx#serving-an-app-standalone).
+programmatic form for scripts and tests is `serveApp` in `agent-bundle/api`. From an installed
+artifact the supported command is [`<plugin> web`](#plugin-web), which runs the same host stack
+from `bin/<plugin>.mjs` without the framework on the machine — see
+[Exposing an App in the browser](../guide/authoring/mcp.mdx#exposing-an-app-in-the-browser).
+
+## `<plugin> web`
+
+```sh
+node <root>/bin/<plugin>.mjs web [<server>/<app>] [--port N] [--open|--no-open] \
+  [--tool T] [--input JSON] [--allow <cap>]... [--profile portable|claude|chatgpt] [--json]
+```
+
+The framework-owned `web` command on the composite artifact's `bin/<plugin>.mjs`. It is emitted
+when the project configures [`web`](./configuration.mdx#web), even if `src/cli/**` compiled no
+commands, and is listed in that bin's `--help`. Run it from the built artifact or the installed
+plugin root — `agent-bundle.manifest.json` must sit beside `bin/` (exit `1` otherwise).
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `<server>/<app>` | the only exposed App | Selects among Apps listed in the manifest `web` section. Required when several are exposed; omitting it then is a usage error (exit `2`) that lists them. |
+| `--port <port>` | ephemeral | Loopback TCP port for the host page. |
+| `--open` / `--no-open` | config `web.open` | Open the default browser once the host is listening. Config default is `never`. |
+| `--tool <tool>` | the App's configured or only tool | The tool whose result opens the App. |
+| `--input <json>` | configured `input`, else `{}` | JSON object input for that opening tool call. |
+| `--allow <capability>` | configured `allow` | Approve one consent capability: `call-tool`, `download-file`, `open-external-link`, or `request-display-mode`. Repeatable. |
+| `--profile <profile>` | `portable` | Simulated MCP Apps host profile: `portable`, `claude`, or `chatgpt`. |
+| `--json` | off | Print one JSON line `{ app, server, tool, url, port, resourceUri, sandboxOrigin }` instead of the human ready line, then keep running. |
+
+The command launches the plugin's own MCP server (`node <root>/mcp/<entry>.mjs`,
+`AGENT_BUNDLE_PLUGIN_ROOT=<root>`, declared static env with path tokens expanded), calls the
+opening tool once, and serves the App at `http://127.0.0.1:<port>/` on a loopback origin with a
+second loopback sandbox origin for the App document — the same host stack and consent behavior as
+`agent-bundle serve-app` and the Workbench. Human mode prints
+`MCP App <server>/<app> at <url> (tool <tool>; Ctrl-C stops the server)` and runs until Ctrl-C /
+SIGTERM. An authored `src/cli/web.ts` (or any generated-mode command or top-level alias spelled
+`web`) is refused as `AB4341` when `web` is configured.
 
 ## build and prepack
 

@@ -54,8 +54,9 @@ them reaches through relative imports — that value-imports a compiler-carrying
 from `inspect`, `validate`, `build`, and `dev`, naming the file and the specifier, instead of
 failing inside the bundler. The browser-safe `agent-bundle/app` carries no compiler and is not on
 that list, so a value import of it is never `AB4837`; `import type` and imports used only as types
-are not reported either, and a routed command that needs the framework serves an App through
-[`spawnServeApp`](../authoring/mcp.mdx#serving-an-app-standalone) instead.
+are not reported either. An installed artifact serves an App through
+[`<plugin> web`](../../reference/cli.mdx#plugin-web); see
+[Exposing an App in the browser](../authoring/mcp.mdx#exposing-an-app-in-the-browser).
 
 Every diagnostic is one structured record: a stable `AB` code, a severity, a message, and usually
 a `sourcePath` and a `recovery` hint. The diagnostic-gated commands — `build`, `prepack`,

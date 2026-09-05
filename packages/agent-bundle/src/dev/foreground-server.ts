@@ -27,6 +27,7 @@ import { PlaygroundRoutes, type PlaygroundRouteService } from './playground/play
 import { RouteManifestRoutes, type RouteManifestRouteService } from './routes/route-manifest-routes.ts';
 import { SkillDocumentError, type SkillDocumentService } from './skill-document-service.ts';
 import type { Invalidation, ProjectEventMessage, ProjectStatus } from './types.ts';
+import { WebHostRoutes, type WebHostEpochSource } from './web-host-routes.ts';
 import {
   diagnostic,
   isJsonRequest,
@@ -157,11 +158,15 @@ export interface ForegroundServerOptions {
   /** The project-owned Eval service closes after foreground Eval routes and Agent API admissions drain. */
   readonly evalLifecycle?: Readonly<{ close(): Promise<void> }>;
   readonly eventHub: ProjectEventHub;
+  /** Active composite artifact epochs used by the development Web host. */
+  readonly epochs?: WebHostEpochSource;
   readonly host?: string;
   /** Injectable only to make restart-recovery contracts deterministic. */
   readonly instanceId?: string;
   /** Already-bound MCP App previews, never executable data supplied by a browser request. */
   readonly mcpAppPreviews?: McpAppRoutePreviewService;
+  /** Deferred until the foreground origin has its distinct loopback App sandbox. */
+  readonly mcpAppSandboxOrigin?: () => string | undefined;
   /** Epoch-bound hook playground service; the browser never selects a wrapper or artifact path. */
   readonly hookPlayground?: HookPlaygroundRouteService;
   /** Read-only host probes, install inventory, bundle drift, and runtime endpoint health. */
@@ -416,6 +421,7 @@ export class ForegroundServer {
   readonly #sockets = new Set<Socket>();
   readonly #streamSubscriptions = new Set<ProjectEventSubscription>();
   readonly #testing: ForegroundServerTesting | undefined;
+  readonly #webHostRoutes: WebHostRoutes;
   readonly #workbenchDevOrigins: ReadonlySet<string>;
   #closePromise: Promise<void> | undefined;
   #closing = false;
@@ -460,8 +466,17 @@ export class ForegroundServer {
     this.#testing = options.testing;
     this.sessionToken = options.sessionToken ?? randomUUID();
     this.#workbenchDevOrigins = Object.freeze(new Set(workbenchDevOrigins));
+    this.#webHostRoutes = new WebHostRoutes({
+      authorize: (request) => this.#assertWebHostNavigation(request),
+      ...(options.epochs === undefined ? {} : { epochs: options.epochs }),
+      ...(options.mcpSessions === undefined ? {} : { mcpSessions: options.mcpSessions }),
+      ...(options.mcpAppPreviews === undefined ? {} : { previews: options.mcpAppPreviews }),
+      sandboxOrigin: options.mcpAppSandboxOrigin ?? (() => undefined),
+      sessionToken: this.sessionToken,
+    });
     this.#mcpAppRoutes = new McpAppRoutes({
       authorize: (request) => this.#assertMutationSession(request),
+      openingCall: (sessionId, toolName, opening) => this.#webHostRoutes.openingCall(sessionId, toolName, opening),
       ...(options.mcpAppPreviews === undefined ? {} : { service: options.mcpAppPreviews }),
     });
     this.#mcpSessionRoutes = new McpSessionRoutes({
@@ -647,6 +662,7 @@ export class ForegroundServer {
   }
 
   async #release(): Promise<readonly ForegroundServerCloseFailure[]> {
+    this.#webHostRoutes.close();
     this.#mcpAppRoutes.close();
     this.#hostMcpRoutes?.close();
     this.#mcpSessionRoutes.close();
@@ -799,6 +815,7 @@ export class ForegroundServer {
       if (method !== 'GET') return responseDiagnostic(response, diagnostic('AB8007', 'Route does not accept this method.', 405));
       return this.#streamEvents(request, response);
     }
+    if (await this.#webHostRoutes.handle(request, response)) return;
     return this.#serveAsset(request, response, method);
   }
 
@@ -851,6 +868,18 @@ export class ForegroundServer {
     const origin = singleHeader(request.headers.origin);
     if (origin === undefined ? singleHeader(request.headers['sec-fetch-site']) === 'same-origin' : this.#isBrowserOrigin(origin)) {
       return;
+    }
+    throw requestError(diagnostic('AB8003', 'Request origin is not this foreground server.', 403));
+  }
+
+  /** Top-level same-origin navigations have no Origin and may report `none`. */
+  #assertWebHostNavigation(request: IncomingMessage): void {
+    const origin = singleHeader(request.headers.origin);
+    if (origin !== undefined) {
+      if (this.#isBrowserOrigin(origin)) return;
+    } else {
+      const site = singleHeader(request.headers['sec-fetch-site']);
+      if (site === undefined || site === 'none' || site === 'same-origin') return;
     }
     throw requestError(diagnostic('AB8003', 'Request origin is not this foreground server.', 403));
   }
