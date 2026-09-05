@@ -7,7 +7,7 @@ import { CodedError } from '../core/errors.ts';
 import { mcpServerStateDirectory } from '../core/mcp-state-directory.ts';
 import { exists, joinArtifact, safeArtifactPath } from '../core/paths.ts';
 import { pathTokens, pluginRootEnvAnchor } from '../core/types.ts';
-import type { ArtifactManifestLaunch, WebManifestApp } from './manifest.ts';
+import { expandLaunchTokens, type ArtifactManifestLaunch, type WebManifestApp } from './manifest.ts';
 import type { StdioLaunch } from './session.ts';
 
 /** Plain Node launch support bundled into generated executables (#564). */
@@ -84,11 +84,8 @@ export const resolveWebLaunch = async (options: ResolveWebLaunchOptions): Promis
   const entry = await artifactFile(pluginRoot, app.app, 'entry', launch.entry);
   if (launch.worker !== undefined) await artifactFile(pluginRoot, app.app, 'worker', launch.worker);
   const pluginData = webPluginDataDirectory(pluginRoot, app.server, options.home);
-  const workspaceRoot = process.cwd();
-  const expand = (value: string): string => value
-    .replaceAll(pathTokens.pluginRoot, pluginRoot)
-    .replaceAll(pathTokens.pluginData, pluginData)
-    .replaceAll(pathTokens.workspaceRoot, workspaceRoot);
+  const roots = { pluginData, pluginRoot, workspaceRoot: process.cwd() };
+  const expand = (value: string): string => expandLaunchTokens(value, roots);
   const args: string[] = [];
   for (const argument of launch.args) {
     switch (argument.kind) {

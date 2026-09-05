@@ -195,7 +195,7 @@ const invoke = async (
   const pluginRoot = await realpath(await mkdtemp(join(tmpdir(), 'agent-bundle-web-command-')));
   roots.push(pluginRoot);
   const manifestPath = join(pluginRoot, 'agent-bundle.manifest.json');
-  if (options.manifest !== 'absent') await writeFile(manifestPath, '{}\n');
+  if (options.manifest !== 'absent') await writeFile(manifestPath, '{"manifestVersion":2}\n');
   const stdout: string[] = [];
   const stderr: string[] = [];
   const commandOptions: WebCommandOptions = {

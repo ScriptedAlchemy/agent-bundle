@@ -10,6 +10,7 @@ import { build, parseArtifactManifest, validate } from '../src/api.ts';
 import { reindexArtifactManifest } from '../src/build/manifest-reindex.ts';
 import type { ArtifactManifest } from '../src/build/manifest.ts';
 import { validateArtifact } from '../src/build/validate-artifact.ts';
+import { escapeRegExp } from '../src/core/strings.ts';
 import { runDoctor } from '../src/install/doctor.ts';
 import { webPluginDataDirectory } from '../src/web-host/launch.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
@@ -346,8 +347,10 @@ describe('the authoritative manifest combined proof', () => {
 
     const first = await install();
     expect(first.stderr).toBe('');
-    expect(first.stdout).toMatch(new RegExp(`^Installed ${fixtureName}@${fixtureVersion} at `, 'u'));
-    expect(first.stdout).not.toMatch(/collision|daemon version mismatch/iu);
+    expect(first.stdout.split('\n')[0]).toMatch(
+      new RegExp(`^Installed ${fixtureName}@${fixtureVersion} at ${escapeRegExp(destination)} \\(content [0-9a-f]{12}\\)$`, 'u'),
+    );
+    expect(first.stdout).not.toMatch(/collision|daemon version mismatch|Already installed/iu);
     expect(await readFile(join(destination, manifestName), 'utf8')).toBe(
       await readFile(join(relocatedArtifact, manifestName), 'utf8'),
     );
@@ -365,8 +368,13 @@ describe('the authoritative manifest combined proof', () => {
     const replacementManifestBytes = await readFile(join(relocatedArtifact, manifestName), 'utf8');
     const replaced = await install();
     expect(replaced.stderr).toBe('');
-    expect(replaced.stdout).toMatch(new RegExp(`^Replaced ${fixtureName}@${fixtureVersion} at `, 'u'));
-    expect(replaced.stdout).not.toMatch(/collision|daemon version mismatch/iu);
+    expect(replaced.stdout.split('\n')[0]).toMatch(
+      new RegExp(
+        `^Replaced ${fixtureName}@${fixtureVersion} at ${escapeRegExp(destination)} \\(content [0-9a-f]{12} -> [0-9a-f]{12}\\)$`,
+        'u',
+      ),
+    );
+    expect(replaced.stdout).not.toMatch(/collision|daemon version mismatch|Already installed/iu);
     expect(await readFile(join(destination, manifestName), 'utf8')).toBe(replacementManifestBytes);
     await access(join(destination, replacementMarker));
 
@@ -385,7 +393,9 @@ describe('the authoritative manifest combined proof', () => {
 
     const uninstalled = await install(['--uninstall']);
     expect(uninstalled.stderr).toBe('');
-    expect(uninstalled.stdout).toMatch(new RegExp(`^Uninstalled ${fixtureName}@${fixtureVersion}`, 'u'));
+    expect(uninstalled.stdout.split('\n')[0]).toBe(
+      `Uninstalled ${fixtureName}@${fixtureVersion} for cursor (local mode) at ${destination}`,
+    );
     expect(uninstalled.stdout).not.toMatch(/collision|daemon version mismatch/iu);
     expect(await exists(destination)).toBe(false);
     expect(await exists(pluginData)).toBe(false);

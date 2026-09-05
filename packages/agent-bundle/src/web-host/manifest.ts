@@ -7,6 +7,26 @@ import {
 import { errorMessage } from '../core/errors.ts';
 import { isRelocatablePosixPath } from '../core/paths.ts';
 import { hasDataKeys, isPlainRecord, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
+import { pathTokens } from '../core/types.ts';
+
+/**
+ * The `manifestVersion` every reader of `agent-bundle.manifest.json` requires,
+ * declared here so the lean web reader bundled into generated bins and the
+ * full parser in `build/manifest.ts` refuse the same set of documents.
+ */
+export const artifactManifestVersion = 2;
+
+/** The roots the `agent-bundle:path:*` tokens of a launch record expand to. */
+export interface LaunchRoots {
+  readonly pluginData: string;
+  readonly pluginRoot: string;
+  readonly workspaceRoot: string;
+}
+
+export const expandLaunchTokens = (value: string, roots: LaunchRoots): string => value
+  .replaceAll(pathTokens.pluginRoot, roots.pluginRoot)
+  .replaceAll(pathTokens.pluginData, roots.pluginData)
+  .replaceAll(pathTokens.workspaceRoot, roots.workspaceRoot);
 
 /**
  * One argument of a server launch record, after the entry. An author
@@ -210,6 +230,9 @@ export const readWebManifestDocument = async (manifestPath: string): Promise<Web
   try {
     const document = parseJsonWithoutDuplicateKeys(await readFile(manifestPath, 'utf8'));
     const manifest = record(document, 'manifest');
+    if (manifest['manifestVersion'] !== artifactManifestVersion) {
+      throw new Error(`manifestVersion must be ${artifactManifestVersion}.`);
+    }
     return {
       hosts: projectionHosts(manifest['projections']),
       launches: compiledLaunches(manifest['executables']),

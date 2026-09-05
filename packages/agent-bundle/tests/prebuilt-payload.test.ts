@@ -1,4 +1,5 @@
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
@@ -8,6 +9,7 @@ import { definePrebuilt as definePrebuiltFromConfig } from '../src/config/index.
 import { DiagnosticError } from '../src/core/diagnostics.ts';
 import { definePrebuilt as definePrebuiltFromIndex } from '../src/index.ts';
 import { parseArtifactManifest } from '../src/build/manifest.ts';
+import { resolveWebLaunch, webPluginDataDirectory } from '../src/web-host/launch.ts';
 import { createProjectFixture, removeProjectFixture } from './helpers/project-fixture.ts';
 
 const configSource = (options: { readonly payload?: string; readonly hooks?: string; readonly mcp?: string }): string => [
@@ -288,6 +290,68 @@ it('packages prebuilt payloads at stable paths and lowers prebuilt entries throu
     // The published artifact revalidates cleanly from disk alone.
     const revalidated = await validate({ artifact: join(root, 'out'), root });
     expect(revalidated.diagnostics.filter((diagnostic) => diagnostic.severity === 'error')).toEqual([]);
+  } finally {
+    await removeProjectFixture(root);
+  }
+});
+
+it('carries prebuilt args and env through the launch record and the web launcher', async () => {
+  const root = await createProject({
+    files: { 'built/runtime/config.json': '{}\n' },
+    mcp: [
+      '  mcp: { servers: { timeline: {',
+      "    args: ['--config', 'agent-bundle:path:plugin-root/runtime/config.json', '--verbose'],",
+      "    entry: { prebuilt: './built/runtime/mcp/server.js' },",
+      "    env: { TIMELINE_MODE: 'prebuilt', TIMELINE_STATE: 'agent-bundle:path:plugin-data/state' },",
+      "    targets: ['claude', 'portable'],",
+      "    transport: 'stdio',",
+      '  } } },',
+    ].join('\n'),
+    payload: standardPayloadBlock,
+  });
+  const home = await mkdtemp(join(tmpdir(), 'agent-bundle-prebuilt-home-'));
+  try {
+    const artifact = join(root, 'out');
+    const result = await build({ output: artifact, root });
+    expect(result.diagnostics.filter((diagnostic) => diagnostic.severity === 'error')).toEqual([]);
+
+    const manifest = parseArtifactManifest(await readFile(join(artifact, 'agent-bundle.manifest.json'), 'utf8'));
+    const timeline = manifest.executables.mcpServers.find((server) => server.name === 'timeline');
+    expect(timeline).toMatchObject({
+      kind: 'prebuilt',
+      launch: {
+        args: [
+          { kind: 'literal', value: '--config' },
+          { kind: 'artifact', path: 'runtime/config.json' },
+          { kind: 'literal', value: '--verbose' },
+        ],
+        entry: 'runtime/mcp/server.js',
+        env: { TIMELINE_MODE: 'prebuilt', TIMELINE_STATE: 'agent-bundle:path:plugin-data/state' },
+      },
+    });
+    if (timeline?.launch === undefined) throw new Error('timeline launch record missing');
+
+    const launch = await resolveWebLaunch({
+      app: { allow: [], app: 'timeline/status', name: 'status', resourceUri: 'ui://timeline/status', server: 'timeline' },
+      env: {},
+      home,
+      launch: timeline.launch,
+      pluginRoot: artifact,
+    });
+    expect(launch.args).toEqual([
+      join(artifact, 'runtime', 'mcp', 'server.js'),
+      '--config',
+      join(artifact, 'runtime', 'config.json'),
+      '--verbose',
+    ]);
+    const pluginData = webPluginDataDirectory(artifact, 'timeline', home);
+    expect(launch.env).toMatchObject({
+      AGENT_BUNDLE_PLUGIN_ROOT: artifact,
+      TIMELINE_MODE: 'prebuilt',
+      TIMELINE_STATE: join(pluginData, 'state'),
+    });
+    expect(pluginData.startsWith(home)).toBe(true);
+    expect(pluginData.startsWith(artifact)).toBe(false);
   } finally {
     await removeProjectFixture(root);
   }

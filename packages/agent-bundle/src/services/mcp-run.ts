@@ -15,6 +15,7 @@ import { runPromise } from '../effect/boundary.ts';
 import { liftPromise } from '../effect/lift.ts';
 import { readFileString, runWithPlatform } from '../effect/platform.ts';
 import { OPERATOR_ENV_FILE_NONE, OPERATOR_ENV_FILE_VARIABLE } from '../launch-env.ts';
+import { expandLaunchTokens } from '../web-host/manifest.ts';
 import { resolveMcpPathTokens } from './mcp-path-tokens.ts';
 import { forwardingSignals } from './mcp-run-signals.ts';
 import {
@@ -184,8 +185,23 @@ export const resolveMcpStdioLaunch = async (
   if (hostLaunch !== undefined && hostLaunch.kind !== 'stdio') {
     throw new Error(`MCP server ${JSON.stringify(options.server)} is not a stdio server; only stdio servers can run in the foreground.`);
   }
+  // Without a host document the record itself is the launch line, under the
+  // same per-field root split the host projections get.
   if (hostLaunch === undefined) {
-    return Object.freeze({ args: Object.freeze([entry]), command: 'node', cwd: targetRoot, env: Object.freeze({}) });
+    const envRoots = { ...roots, pluginRoot: envPluginRoot };
+    return Object.freeze({
+      args: Object.freeze([
+        entry,
+        ...row.launch.args.map((argument) => argument.kind === 'artifact'
+          ? joinArtifact(targetRoot, argument.path)
+          : expandLaunchTokens(argument.value, roots)),
+      ]),
+      command: 'node',
+      cwd: targetRoot,
+      env: Object.freeze(Object.fromEntries(
+        Object.entries(row.launch.env).map(([key, value]) => [key, expandLaunchTokens(value, envRoots)]),
+      )),
+    });
   }
   // The host document is the adapter's own launch line for that entry — `AB6017`
   // refused any build whose document skips it, and the digest walk above proved the

@@ -1340,7 +1340,7 @@
     },
     "launch": {
       "type": "object",
-      "description": "The one launch record of a compiled MCP server: `entry` and `worker` name `files[]` rows (parser-enforced); tokens in `args` and `env` are expanded by the launcher, never by the manifest.",
+      "description": "The one launch record of a compiled or prebuilt MCP server: `entry` and `worker` name `files[]` rows (parser-enforced); tokens in `args` and `env` are expanded by the launcher, never by the manifest.",
       "additionalProperties": false,
       "properties": {
         "args": {
@@ -1770,7 +1770,7 @@
     },
     "webApp": {
       "type": "object",
-      "description": "One MCP App exposed to `<plugin> web`: the App, its opening call, and the configured `server` whose `executables.mcpServers[]` launch record starts it (a compiled server; parser-enforced).",
+      "description": "One MCP App exposed to `<plugin> web`: the App, its opening call, and the configured `server` whose `executables.mcpServers[]` launch record starts it (a compiled or prebuilt server; parser-enforced).",
       "additionalProperties": false,
       "properties": {
         "allow": {

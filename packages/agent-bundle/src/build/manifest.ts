@@ -20,6 +20,7 @@ import type {
   RouteInputSchemaLiteral,
 } from '../routes/types.ts';
 import {
+  artifactManifestVersion,
   parseLaunch,
   parseWebManifest,
   type ArtifactManifestLaunch,
@@ -52,7 +53,7 @@ export type { ArtifactManifestLaunch, ArtifactManifestLaunchArgument };
  */
 
 export const artifactManifestName = 'agent-bundle.manifest.json';
-export const artifactManifestVersion = 2;
+export { artifactManifestVersion };
 export const artifactCompilerRecordVersion = 1;
 
 export type ArtifactManifestFileKind = 'bundle' | 'copy' | 'generated' | 'prebuilt';

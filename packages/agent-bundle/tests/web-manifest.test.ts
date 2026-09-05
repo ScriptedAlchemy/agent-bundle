@@ -90,14 +90,27 @@ it('reads the optional section and returns undefined when absent', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-web-manifest-'));
   const path = join(root, 'agent-bundle.manifest.json');
   try {
-    await writeFile(path, JSON.stringify({ producer: {}, web: validWeb() }));
+    await writeFile(path, JSON.stringify({ manifestVersion: 2, producer: {}, web: validWeb() }));
     await expect(readWebManifest(path)).resolves.toEqual(validWeb());
-    await writeFile(path, JSON.stringify({ producer: {} }));
+    await writeFile(path, JSON.stringify({ manifestVersion: 2, producer: {} }));
     await expect(readWebManifest(path)).resolves.toBeUndefined();
-    await writeFile(path, JSON.stringify({ web: { apps: [], open: 'sometimes' } }));
+    await writeFile(path, JSON.stringify({ manifestVersion: 2, web: { apps: [], open: 'sometimes' } }));
     await expect(readWebManifest(path)).rejects.toThrow(
       new RegExp(`Unable to read web section from ${path.replaceAll(/[.*+?^${}()|[\]\\]/gu, '\\$&')}: .*open must`, 'u'),
     );
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+it('refuses every manifestVersion but the one it was built for, before reading any section', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-web-manifest-'));
+  const path = join(root, 'agent-bundle.manifest.json');
+  try {
+    for (const manifestVersion of [undefined, 1, 3, '2']) {
+      await writeFile(path, JSON.stringify({ manifestVersion, web: validWeb() }));
+      await expect(readWebManifestDocument(path)).rejects.toThrow(/manifestVersion must be 2\./u);
+    }
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -109,6 +122,7 @@ it('reads the projection hosts and the compiled and prebuilt servers\' launch re
   const prebuiltLaunch: ArtifactManifestLaunch = { args: [], entry: 'runtime/mcp/server.js', env: {} };
   try {
     await writeFile(path, JSON.stringify({
+      manifestVersion: 2,
       executables: {
         mcpServers: [
           { apps: [], hosts: ['claude'], id: 'mcp:catalog', kind: 'compiled', launch: validLaunch(), name: 'catalog', transport: 'stdio' },
@@ -124,13 +138,14 @@ it('reads the projection hosts and the compiled and prebuilt servers\' launch re
     expect([...document.launches]).toEqual([['catalog', validLaunch()], ['timeline', prebuiltLaunch]]);
     expect(document.web).toEqual(validWeb());
 
-    await writeFile(path, JSON.stringify({ producer: {} }));
+    await writeFile(path, JSON.stringify({ manifestVersion: 2, producer: {} }));
     const empty = await readWebManifestDocument(path);
     expect(empty.hosts).toEqual([]);
     expect(empty.launches.size).toBe(0);
     expect(empty.web).toBeUndefined();
 
     await writeFile(path, JSON.stringify({
+      manifestVersion: 2,
       executables: { mcpServers: [{ id: 'mcp:catalog', kind: 'compiled', launch: { ...validLaunch(), entry: '../x.mjs' }, name: 'catalog' }] },
     }));
     await expect(readWebManifestDocument(path)).rejects.toThrow('executables.mcpServers[0].launch.entry must be a safe relative POSIX path.');
