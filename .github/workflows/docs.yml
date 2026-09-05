@@ -46,12 +46,9 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
-      - uses: pnpm/setup@v2
+      - uses: ./.github/actions/setup-workspace
         with:
-          cache: true
-          install: false
-          runtime: node@22.19.0
-      - run: pnpm install --frozen-lockfile
+          node-version: 22.19.0
       # Website-only PRs skip every ci.yml job that lints, so lint here too.
       - run: pnpm lint
       # Typecheck the site config and build it. Rspress's own dead-link,

@@ -34,27 +34,21 @@ jobs:
       # updates the Version Packages PR, and merging that PR only runs the
       # release gates (`pnpm check:release`) so the tree stays publishable.
       PUBLISH_ENABLED: ${{ vars.AGENT_BUNDLE_NPM_PUBLISH == 'true' && secrets.NPM_TOKEN != '' }}
+      AGENT_BUNDLE_PLAYWRIGHT_CHANNEL: chromium
     steps:
       # The action pushes and opens the PR through the GitHub API with the
       # token passed below, so the checkout must not persist GITHUB_TOKEN.
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: pnpm/setup@v2
+      # The release gates run the packed pool, whose packed-release.e2e is a
+      # Workbench browser suite: same pinned Playwright Chromium as ci.yml and
+      # nightly.yml (AGENT_BUNDLE_PLAYWRIGHT_CHANNEL below), so the tree that
+      # ships is proven on the build the nightly packed matrix proved.
+      - uses: ./.github/actions/setup-workspace
         with:
-          cache: true
-          install: false
-          runtime: node@22.19.0
-      - run: pnpm install --frozen-lockfile
-      # Release gates run packed Playwright tests; reuse the runner image's
-      # Chrome (same rationale as the CI Verify job).
-      - name: Ensure branded Chrome for Playwright
-        run: |
-          if command -v google-chrome >/dev/null 2>&1; then
-            echo "Using preinstalled $(google-chrome --version)"
-          else
-            pnpm exec playwright install --with-deps chrome
-          fi
+          node-version: 22.19.0
+          playwright-browser: chromium
       # changesets/action v2 no longer writes .npmrc from an NPM_TOKEN env
       # variable; expose the token via npm config so `changeset publish`
       # (pnpm publish) can authenticate. The ${NPM_TOKEN} placeholder is kept
