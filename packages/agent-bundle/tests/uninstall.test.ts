@@ -1249,7 +1249,6 @@ it('rejects an uninstall mode for hosts other than Cursor before touching anythi
 it('exposes uninstall through the public CLI with every lifecycle flag', async () => {
   const terminal = captureCliTerminal();
   const calls: unknown[] = [];
-  Object.defineProperty(globalThis, '__AGENT_BUNDLE_VERSION__', { configurable: true, value: 'test' });
   const result: UninstallResult = {
     bundleRoot: '/tmp/example bundle',
     data: { detail: 'kept', outcome: 'kept', paths: ['/tmp/example bundle/state'], policy: 'keep' },
