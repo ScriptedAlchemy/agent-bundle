@@ -243,10 +243,15 @@ describe('the authoritative manifest combined proof', () => {
     const eventRow = manifest.routes.events.find((route) => route.id === 'event:tool/before');
     expect(eventRow).toMatchObject({
       event: 'tool/before',
+      execution: {
+        fallback: 'none',
+        preflight: 'src/events/tool/before.preflight.ts',
+        providers: ['stateProbe'],
+        runtime: 'standalone',
+      },
       id: 'event:tool/before',
       source: 'src/events/tool/before.tsx',
     });
-    // integrator: assert execution.preflight/providers once lane A lands.
 
     const eventHooks = manifest.executables.hooks.filter((hook) => hook.routeId === 'event:tool/before');
     expect(eventHooks.map((hook) => hook.host)).toEqual(['claude']);
