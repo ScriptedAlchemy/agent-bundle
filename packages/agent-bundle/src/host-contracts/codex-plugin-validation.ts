@@ -10,6 +10,7 @@ import { freezeDiagnostics } from '../core/diagnostics.ts';
 import { sha256Hex } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
 import capabilityTable from '../adapters/capabilities/codex-0.147.0.json' with { type: 'json' };
+import { codexArtifactPaths } from '../adapters/codex.ts';
 import hooksSchema from '../adapters/schemas/codex/hooks.schema.json' with { type: 'json' };
 import marketplaceSchema from '../adapters/schemas/codex/marketplace.schema.json' with { type: 'json' };
 import mcpSchema from '../adapters/schemas/codex/mcp.schema.json' with { type: 'json' };
@@ -83,22 +84,22 @@ interface PinnedDocumentContract {
 const schemaValidator = createAdapterValidator();
 const pinnedDocumentContracts = Object.freeze<PinnedDocumentContract[]>([
   Object.freeze({
-    path: '.codex-plugin/plugin.json',
+    path: codexArtifactPaths.plugin,
     required: true,
     validate: validateJsonSchemaDocument(schemaValidator.compile(pluginSchema)),
   }),
   Object.freeze({
-    path: 'hooks/hooks.json',
+    path: codexArtifactPaths.hooksManifest,
     required: false,
     validate: validateJsonSchemaDocument(schemaValidator.compile(hooksSchema)),
   }),
   Object.freeze({
-    path: '.mcp.json',
+    path: codexArtifactPaths.mcp,
     required: false,
     validate: validateJsonSchemaDocument(schemaValidator.compile(mcpSchema)),
   }),
   Object.freeze({
-    path: '.agents/plugins/marketplace.json',
+    path: codexArtifactPaths.marketplace,
     required: false,
     validate: validateJsonSchemaDocument(schemaValidator.compile(marketplaceSchema)),
   }),

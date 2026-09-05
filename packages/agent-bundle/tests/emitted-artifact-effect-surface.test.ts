@@ -38,8 +38,9 @@ type ArtifactClass =
   | 'mcp-framework-shell'
   | 'mcp-raw-stdio-server';
 
+// Compiled surfaces sit directly under the composite root: `<kind>/<file>` (#555).
 const classify = (relativePath: string): ArtifactClass | undefined => {
-  const [, kind, file] = relativePath.split('/');
+  const [kind, file] = relativePath.split('/');
   if (kind === 'install.mjs' && file === undefined) return 'install-script';
   if (file === undefined || !file.endsWith('.mjs')) return undefined;
   switch (kind) {

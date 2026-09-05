@@ -272,9 +272,9 @@ results and never renders JSX. Routed `src/cli/**` commands and
 Agent renderer (TTY progress, piped Markdown, `--json`, `--ndjson`); `.ts`
 is plain. The routed CLI ships twice from one build: as the npm package bin
 (`dist/bin/<name>.js`) for users who install the package, and as
-`bin/<name>.mjs` inside every host artifact so the plugin's own skills,
+`bin/<name>.mjs` inside the plugin root so the plugin's own skills,
 hooks, and scripts can run it with `node` from the installed plugin root
-(see [Entry conventions](entry-conventions.md#the-routed-cli-inside-host-artifacts)).
+(see [Entry conventions](entry-conventions.md#the-routed-cli-inside-the-plugin-root)).
 
 ## Release identity in source: `agent-bundle/meta`
 
@@ -343,8 +343,8 @@ plugin ships. A hand-authored `SKILL.md` in the same directory always wins
 
 ### `output`
 
-`output` controls where the host artifact root lives; it never changes the
-framework-owned layout inside each target:
+`output` controls where the composite plugin root lives; it never changes the
+framework-owned layout inside it:
 
 ```ts
 export default defineConfig({
@@ -369,7 +369,7 @@ A malformed `output` block or non-string/empty `distPath` reports `AB4707`;
 absolute paths, backslashes, `.`, empty segments, and `..` traversal report
 `AB4708`; reserved first segments (`.agent-bundle`,
 `.git`, `node_modules`, and `src`) report `AB4709`. Projects with package
-`bin` or `lib` entries must keep host artifacts separate from the npm package
+`bin` or `lib` entries must keep the plugin root separate from the npm package
 build at `dist/` (`AB4706`); `output: { distPath: 'artifact' }` provides that
 separation without a CLI flag.
 
@@ -377,8 +377,8 @@ The name follows Rsbuild/Rslib's `output.distPath`, but Agent Bundle accepts
 only the string shorthand, not Rsbuild 2.x's per-asset `DistPathConfig` for
 such paths as JavaScript, CSS, and SVG subdirectories.
 `output.filename` templates, `output.assetPrefix`, and `output.cleanDistPath`
-are also deliberately deferred: host packs have a framework-owned
-`<target>/skills|mcp|scripts|bin|assets/...` layout content-addressed by the
+are also deliberately deferred: the plugin root has a framework-owned
+`skills|mcp|hooks|scripts|bin|assets/...` layout content-addressed by the
 artifact manifest. Unlike machine-local Rsbuild config, the hashed, portable
 release-identity config rejects absolute paths. The per-invocation CLI
 `--output` flag can override the configured relative artifact root, but it is
@@ -466,7 +466,7 @@ exported from `agent-bundle/api`), and every kind that needs a host surface
 names the capability row a target adapter must publish for it. Adapters judge
 each row with the shared four-state contract — `supported` with pinned
 evidence, or `degraded` / `unavailable` / `prohibited` with a dated reason —
-and `agent-bundle inspect` reports the judgment per target (see
+and `agent-bundle inspect` reports the judgment per host (see
 [component accounting](entry-conventions.md#agent-bundle-inspect-component-accounting)).
 A host with no row for a kind reads as an honest `unavailable`, never a silent
 pass. The matrix below is the state of the pinned tables (Claude Code
@@ -474,30 +474,30 @@ pass. The matrix below is the state of the pinned tables (Claude Code
 tables under `packages/agent-bundle/src/adapters/capabilities/` carry the
 evidence strings themselves.
 
-| Kind | Source | Capability row | Claude | Codex | Cursor | portable | `plugin` (composite) |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `skill` | `src/skills/<name>/SKILL.{md,ts,tsx}` | `skills` | supported | supported | supported | supported | supported |
-| `command` | `src/commands/*.md` | `commands` | supported | unavailable | supported | unavailable | emitted (Claude format; Cursor pointer omitted) |
-| `rule` | `src/rules/*.mdc` | `rules` | unavailable | unavailable | supported | unavailable | emitted (Cursor half) |
-| `hook` | `hooks` config block | `hooks` | supported | supported | supported | unavailable | supported |
-| `event-route` | `src/events/<family>/<event>.tsx` | `event:<canonical event>` per route | per host `hooks.eventRoutes` table (#258) | per table | per table | unavailable (no hooks) | three-host intersection |
-| `mcp-server` | `src/mcp/<server>/**` or `mcp.servers` | `mcp` | supported | supported | supported | supported | supported |
-| `mcp-app` | `src/mcp/<server>/apps/*` or `mcp.servers.*.apps` | `mcp` | supported | supported | supported | supported | supported |
-| `lsp` | `claude.lspServers` (plugin-root `.lsp.json`) | `lsp` | supported | unavailable | unavailable | unavailable | emitted (Claude half); intersection unavailable |
-| `native-diagnostics` | none | `nativeDiagnostics` | unavailable (LSP `diagnostics` option only) | unavailable | unavailable | unavailable | unavailable |
-| `native-extension` | none | `nativeExtension` | unavailable | unavailable | unavailable | unavailable | unavailable |
-| `agent` | `src/agents` (deferred) | `agents` | unavailable — G5 deferral ([#220](https://github.com/ScriptedAlchemy/agent-bundle/pull/220)) | no row | unavailable (G5) | no row | unavailable (G5) |
-| `script` | `src/scripts/**`, `scripts` config | none | emitted | emitted | emitted | emitted | emitted |
-| `cli` | routed `src/cli/**` bin (#387) | `cli` | supported | supported | supported | supported | supported |
+| Kind | Source | Capability row | Claude | Codex | Cursor | portable |
+| --- | --- | --- | --- | --- | --- | --- |
+| `skill` | `src/skills/<name>/SKILL.{md,ts,tsx}` | `skills` | supported | supported | supported | supported |
+| `command` | `src/commands/*.md` | `commands` | supported | unavailable | supported | unavailable |
+| `rule` | `src/rules/*.mdc` | `rules` | unavailable | unavailable | supported | unavailable |
+| `hook` | `hooks` config block | `hooks` | supported | supported | supported | unavailable |
+| `event-route` | `src/events/<family>/<event>.tsx` | `event:<canonical event>` per route | per host `hooks.eventRoutes` table (#258) | per table | per table | unavailable (no hooks) |
+| `mcp-server` | `src/mcp/<server>/**` or `mcp.servers` | `mcp` | supported | supported | supported | supported |
+| `mcp-app` | `src/mcp/<server>/apps/*` or `mcp.servers.*.apps` | `mcp` | supported | supported | supported | supported |
+| `lsp` | `claude.lspServers` (plugin-root `.lsp.json`) | `lsp` | supported | unavailable | unavailable | unavailable |
+| `native-diagnostics` | none | `nativeDiagnostics` | unavailable (LSP `diagnostics` option only) | unavailable | unavailable | unavailable |
+| `native-extension` | none | `nativeExtension` | unavailable | unavailable | unavailable | unavailable |
+| `agent` | `src/agents` (deferred) | `agents` | unavailable — G5 deferral ([#220](https://github.com/ScriptedAlchemy/agent-bundle/pull/220)) | no row | unavailable (G5) | no row |
+| `script` | `src/scripts/**`, `scripts` config | none | emitted | emitted | emitted | emitted |
+| `cli` | routed `src/cli/**` bin (#387) | `cli` | supported | supported | supported | supported |
 
-"Emitted" in the composite column means the multi-host `plugin` bundle writes
-the surface for the hosts that support it while its own capability row stays
-the honest three-host intersection; inspection judges the composite by what it
-emits. `native-diagnostics` and `native-extension` have no authoring surface
-at all: the rows exist so the compiler's answer to "can this bundle ship a
-diagnostics provider or an editor extension?" is a dated *no* per host rather
-than silence. The `agent` kind has no producer until the G5 gate admits it;
-Claude's `agents` row and its per-field `agents.*` rows record the deferral.
+A build that selects several hosts writes each surface into the one composite
+root for exactly the selected hosts whose row supports it; there is no
+separate composite judgment. `native-diagnostics` and `native-extension` have
+no authoring surface at all: the rows exist so the compiler's answer to "can
+this bundle ship a diagnostics provider or an editor extension?" is a dated
+*no* per host rather than silence. The `agent` kind has no producer until the
+G5 gate admits it; Claude's `agents` row and its per-field `agents.*` rows
+record the deferral.
 
 ### Component feature sets
 
@@ -510,8 +510,7 @@ against every target that supports its kind: a target the author named in
 component minus the feature, reports the omission as a warning with the host's
 reason (`AB4908` / `AB4928`), and lists it under `omittedFeatures` on the
 selected component in `inspect` (human output: `<kind> <name> omits <feature>:
-…`). The composite `plugin` bundle is judged by the half that emits the kind
-(Claude for commands, Cursor for rules). Skills keep the closed per-host Skill
+…`). Skills keep the closed per-host Skill
 IR schemas from #108 as their feature mechanism (`AB3006`, `AB3008`, `AB3010`);
 their rows below mirror that contract rather than adding a second check.
 
@@ -523,11 +522,11 @@ their rows below mirror that contract rather than adding a second check.
 | `skill` | `skills.hostFrontmatter` (typed host extension / Codex `agents/openai.yaml` sidecar) | supported | supported | supported | unavailable (portable fields only) |
 | `skill` | `skills.markdownTokens` (`$ARGUMENTS`, `${CLAUDE_PLUGIN_ROOT}`, …) | supported | unavailable (`AB3008`) | unavailable (`AB3008`) | unavailable (`AB3008`) |
 
-The composite `plugin` bundle ships one shared `skills/` tree and lowers any
-skill that declares a host extension or token to the portable document, so
-both skill feature rows are `unavailable` there and `inspect` reports the
-dropped host frontmatter under `omittedFeatures`; per-host skill trees are
-install-time selection (#101).
+The composite root ships one shared `skills/` tree that every selected host
+discovers by convention, so a skill whose host extension changes its lowered
+bytes on one selected host collides with the other hosts' copy (`AB4103`);
+drop the extension or build that host into its own artifact until per-host
+views land (#555).
 
 Hook tool selectors a host cannot map still fail at plan time
 (`<target>.hook.tool.<tool>`), and the per-host matcher tables live under
@@ -535,24 +534,29 @@ Hook tool selectors a host cannot map still fail at plan time
 
 ## Distribution
 
-### How a target compiles
+### How the root compiles
 
-`agent-bundle build` plans every target before it compiles anything, then
-lowers each target's outputs in at most two stages into one staged root that
-is published atomically once the artifact validates
-(`src/build/target-stages.ts`):
+`agent-bundle build` plans every selected host projection before it compiles
+anything, merges the plans into one composite root, then lowers that root's
+compiled outputs in at most two stages into one staged directory that is
+published atomically once the artifact validates
+(`src/build/compile-stages.ts`):
 
 1. **MCP Apps** — the browser environment, compiled through the workspace
-   `@rsbuild/core`. This stage exists only for a target whose project
-   declares App routes and always runs first: the MCP entries embed its
-   emitted HTML.
+   `@rsbuild/core`. This stage exists only when the project declares App
+   routes and always runs first: the MCP entries embed its emitted HTML.
 2. **Agent-host surfaces** — the routed CLI bin, bundled scripts, hook
    wrappers, MCP stdio entries, and each surface's react-server Flight worker.
-   All of them lower together through **one Rslib instance per target**: one
+   All of them lower together through **one Rslib instance for the root**: one
    Rsbuild environment per output, compiled by one Rspack multi-compiler.
    A host surface reaches its Flight worker by file name at run time, never
    through a build-time manifest, so nothing orders the two within the stage;
    each surface keeps its own authored-source evidence for the manifest.
+
+Compiled surfaces are emitted once, not once per host: the manifest attributes
+them to the composite identity — the selected host names sorted and joined
+with `+`, such as `claude+codex`. Selection order never changes the output;
+`['codex', 'claude']` and `['claude', 'codex']` build byte-identical roots.
 
 Every synthesized bundler config — both stages plus the `dist/` package build
 — composes the same way: the framework profile, then the consumer's
@@ -575,21 +579,22 @@ bundler `context` — on purpose: Rspack writes module identifiers relative to
 concatenated modules), so a namespace under the staging root would stamp the
 per-build token into the artifact.
 
-`agent-bundle build` makes each target directory independently distributable.
-Every target includes `INSTALL.md` generated with its real plugin and
-marketplace names. Claude and Codex bundles include local marketplace manifests
-and install through their public plugin CLIs; Cursor bundles use the documented
+`agent-bundle build` writes one composite plugin root that every selected host
+installs from as-is. The root carries one `INSTALL.md` with a section per
+selected host, generated with the real plugin and marketplace names. Claude
+and Codex read their local marketplace manifests from the root and install
+through their public plugin CLIs; Cursor uses the documented
 `~/.cursor/plugins/local/<name>` location because Cursor exposes marketplace
 management but no non-interactive plugin install verb.
 
-The `portable` target emits the [Agent Plugins open standard](https://agent-plugins.org)
+The `portable` projection emits the [Agent Plugins open standard](https://agent-plugins.org)
 (specification 1.0.0), with schema hashes and the specification repository
 revision pinned in `src/adapters/schemas/portable/PROVENANCE.json`. Cursor loads
 this format natively alongside Cursor Plugins; Codex, VS Code, GitHub Copilot,
 Kiro, and ChatGPT are native clients too. Claude Code consumes the standard
-only through CLI translation, so its dedicated target remains necessary. The
+only through CLI translation, so its dedicated projection remains necessary. The
 standard packages only skills and MCP servers, leaving rules, commands, and
-hooks honestly unavailable on the portable target. The standard's manifest
+hooks honestly unavailable on the portable projection. The standard's manifest
 metadata (`author`, `homepage`, `repository`, `license`, `keywords`) and
 reverse-domain `extensions` are authored under the `portable` config key and
 land in the root `plugin.json`; omitting them leaves the manifest exactly as
@@ -606,7 +611,8 @@ gaps) is recorded in `docs/audits/2026-09-02-agent-plugins-cursor-ide-proof.md`
 and `docs/audits/2026-09-03-agent-plugins-cursor-ide-proof.md`. Because Cursor
 expands none of `${PLUGIN_ROOT}` / `${PLUGIN_DATA}`, provides no §9.1
 variables, defaults an omitted `cwd` to the home directory and resolves `./`
-commands against the workspace, the emitted portable `install.mjs` performs
+commands against the workspace, the emitted `install.mjs` of a root without a
+`.cursor-plugin/plugin.json` performs
 that expansion itself in the `~/.cursor/plugins/local/<name>` copy of
 `mcp.json` (absolute plugin root, `~/.cursor/agent-bundle/plugin-data/<name>`
 as `PLUGIN_DATA`, plugin-root `cwd`, resolved `./` command, `PLUGIN_ROOT` /
@@ -618,13 +624,14 @@ document. The bundle stays spec-conformant; the provenance is `derived`.
 The framework CLI performs those same operations:
 
 ```sh
-agent-bundle install claude --from artifact/claude --scope user
-agent-bundle install codex --from artifact/codex
-agent-bundle install cursor --from artifact/cursor
+agent-bundle install claude --from artifact --scope user
+agent-bundle install codex --from artifact
+agent-bundle install cursor --from artifact
 ```
 
-Cursor-compatible `cursor`, `portable`, and multi-host `plugin` targets also
-include a standalone `install.mjs`. Its staged copy is idempotent for identical
+`--from` names the plugin root itself, the directory that holds the host's
+manifest. A root whose selection includes `cursor` or `portable` also
+includes a standalone `install.mjs`. Its staged copy is idempotent for identical
 content, records an install receipt (`.agent-bundle-install.json`: plugin,
 version, content hash, owned files and directories), replaces a same-version stale copy of its
 own plugin in place (owned files only; `state/` survives), and accepts
@@ -635,7 +642,8 @@ comparison. It never invokes sudo or changes PATH. `agent-bundle install <host>
 --from` reports the installed copy versus the artifact as `current`, `stale`,
 `version-mismatch`, `foreign`, or `not-installed` (see the package README's
 "Reinstall after a same-version rebuild"). Artifact validation rejects a
-built-in target whose required install surface is missing.
+root whose required install surface is missing (`INSTALL.md` for any built-in
+host, `install.mjs` when `cursor` or `portable` is selected).
 
 ### Managed uninstall and lifecycle receipts (#101)
 
@@ -651,11 +659,11 @@ a receipt written before #101 is read with its lifecycle fields synthesized and
 diagnosed (`AB7329`), never rejected.
 
 ```sh
-agent-bundle uninstall claude --from artifact/claude --plan      # exact paths and host verbs, no writer
-agent-bundle uninstall claude --from artifact/claude             # claude plugin uninstall --keep-data, marketplace remove, receipt
-agent-bundle uninstall cursor --from artifact/cursor             # receipt-owned files, directories, remnant state kept
-agent-bundle uninstall cursor --from artifact/cursor --purge-data --confirm-purge
-node artifact/cursor/install.mjs --uninstall [--plan] [--mode marketplace]
+agent-bundle uninstall claude --from artifact --plan      # exact paths and host verbs, no writer
+agent-bundle uninstall claude --from artifact             # claude plugin uninstall --keep-data, marketplace remove, receipt
+agent-bundle uninstall cursor --from artifact             # receipt-owned files, directories, remnant state kept
+agent-bundle uninstall cursor --from artifact --purge-data --confirm-purge
+node artifact/install.mjs --uninstall [--plan] [--mode marketplace]
 ```
 
 Uninstall removes exactly what the receipt owns and reverses exactly the
@@ -682,8 +690,9 @@ receipts and activation states".
 `--mode local` (default) or `--mode marketplace`:
 
 - **local** safe-copies the bundle into `~/.cursor/plugins/local/<name>`.
-  Cursor loads the `.cursor-plugin/plugin.json` manifest, its `hooks/hooks.json`,
-  `mcp.json`, rules, and skills after a reload. Plugin hooks are registered by
+  Cursor loads the `.cursor-plugin/plugin.json` manifest, its
+  `.cursor-plugin/hooks.json` and `.cursor-plugin/mcp.json`, rules, and skills
+  after a reload. Plugin hooks are registered by
   the manifest alone: Cursor runs each command from the plugin root with
   `${CURSOR_PLUGIN_ROOT}` substituted, and no `~/.cursor/hooks.json` entry is
   written or required (observed 2026-09-03 on Cursor 3.18.25 for `preToolUse`,

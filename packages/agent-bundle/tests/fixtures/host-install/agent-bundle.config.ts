@@ -18,6 +18,6 @@ export default {
     mcpCommands: true,
   },
   skills: ['src/skills/probe'],
-  // `plugin` is the unified bundle whose Cursor manifest names `hooks/hooks-cursor.json` (#438).
-  targets: ['claude', 'codex', 'cursor', 'plugin'],
+  // One composite root; the Cursor manifest names `.cursor-plugin/hooks.json` beside Claude's `hooks/hooks.json` (#438).
+  targets: ['claude', 'codex', 'cursor'],
 };

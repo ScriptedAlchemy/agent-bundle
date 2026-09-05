@@ -52,10 +52,10 @@ it.concurrent('scaffolds the mcp-server template and serves the conventional ent
   ]);
 
   const artifact = join(projectRoot, 'artifact');
-  const manifest = JSON.parse(await readFile(join(artifact, 'portable', 'mcp.json'), 'utf8')) as {
+  const manifest = JSON.parse(await readFile(join(artifact, 'mcp.json'), 'utf8')) as {
     readonly mcpServers: { readonly status: { readonly args: readonly [string, ...string[]] } };
   };
-  const entry = join(artifact, 'portable', manifest.mcpServers.status.args[0]);
+  const entry = join(artifact, manifest.mcpServers.status.args[0]);
   // The factory export was wrapped in the framework stdio lifecycle shell.
   await expect(readFile(entry, 'utf8')).resolves.toContain('stdio heartbeat');
 
@@ -121,7 +121,7 @@ it.concurrent('scaffolds the cli-tool template with a routed bin, lib, and artif
 
   // The conventional plain script shipped inside the host artifact with the
   // framework process envelope around its `main` export.
-  const script = join(projectRoot, 'artifact', 'portable', 'scripts', 'hello.mjs');
+  const script = join(projectRoot, 'artifact', 'scripts', 'hello.mjs');
   await expect(execFile(process.execPath, [script, 'World'], { cwd: projectRoot, env: environment }))
     .resolves.toMatchObject({ stdout: 'Hello, World!\n' });
   await expect(execFile(process.execPath, [script], { cwd: projectRoot, env: environment }))
@@ -136,9 +136,9 @@ it.concurrent('scaffolds the cli-tool template with a routed bin, lib, and artif
     // package-keyed object), unlike a bare array destructure.
     const packedPaths = packOutputFromJson(stdout).files.map((file) => file.path);
     expect(packedPaths).toContain('artifact/agent-bundle.manifest.json');
-    expect(packedPaths).toContain('artifact/portable/plugin.json');
-    expect(packedPaths).toContain('artifact/codex/.codex-plugin/plugin.json');
-    expect(packedPaths).toContain('artifact/claude/.claude-plugin/plugin.json');
+    expect(packedPaths).toContain('artifact/plugin.json');
+    expect(packedPaths).toContain('artifact/.codex-plugin/plugin.json');
+    expect(packedPaths).toContain('artifact/.claude-plugin/plugin.json');
     expect(packedPaths).toContain('dist/bin/greeter-install.js');
   } finally {
     await rm(packDestination, { force: true, recursive: true });

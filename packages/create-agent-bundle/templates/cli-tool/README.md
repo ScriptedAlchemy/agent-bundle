@@ -23,7 +23,7 @@ npm run test:projection  # cli-dispatch + script-dispatch pool
 node dist/bin/my-agent-plugin.js greet World
 node dist/bin/my-agent-plugin.js greet World --shout
 node dist/bin/my-agent-plugin.js greet --help
-node artifact/portable/scripts/hello.mjs World
+node artifact/scripts/hello.mjs World
 
 # after publishing/installing the package
 npx my-agent-plugin-install install claude

@@ -271,7 +271,8 @@ export const runClaudeTrial = async (options: RunClaudeTrialOptions): Promise<Ev
   const environment = createNativeClaudeChildEnvironment(
     withoutEvalCredentialEnvironment(options.environment ?? process.env),
   );
-  const pluginDirectory = join(options.artifact.root, target);
+  // The composite root is the Claude plugin directory; `target` selects the projection inside it.
+  const pluginDirectory = options.artifact.root;
   const processOptions: ClaudeProcessOptions = Object.freeze({
     ...(options.gracePeriodMs === undefined ? {} : { gracePeriodMs: options.gracePeriodMs }),
     ...(options.maxOutputBytes === undefined ? {} : { maxOutputBytes: options.maxOutputBytes }),

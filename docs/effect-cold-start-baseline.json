@@ -1,6 +1,6 @@
 {
   "effect": "4.0.0-rc.112",
-  "hookPath": "claude/hooks/<generated-session-start>.mjs",
+  "hookPath": "hooks/<generated-session-start>.mjs",
   "kind": "generated-stdio-hook-cold-start",
   "maxMs": 43.06,
   "measuredAt": "2026-09-01T11:12:47.007Z",

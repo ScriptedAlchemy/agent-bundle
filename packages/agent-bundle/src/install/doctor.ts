@@ -466,16 +466,11 @@ const validateBundleFiles = async (
   }
 };
 
+/** The composite root is every selected host's bundle root (#555): its manifest sits directly inside `from`. */
 export const resolveBundleRoot = async (from: string, host: DoctorHost): Promise<string> => {
   const root = resolve(from);
-  const manifest = manifestPath(host);
-  if (await exists(join(root, manifest))) return root;
-  const targetRoot = join(root, host);
-  if (await exists(join(targetRoot, manifest))) return targetRoot;
-  throw new Error(
-    `No ${host} bundle manifest was found in ${JSON.stringify(root)} or its ` +
-    `${JSON.stringify(host)} target directory.`,
-  );
+  if (await exists(join(root, manifestPath(host)))) return root;
+  throw new Error(`No ${host} bundle manifest was found in ${JSON.stringify(root)}.`);
 };
 
 /** The cwd for `plugin list --json`: the resolved host bundle root under `--from`, else the given directory, else home. */
@@ -2589,9 +2584,9 @@ const doctorHost = async (
   const environment = options.environment ?? process.env;
   const git = stagingGit(run);
   // Claude `project` / `local` registrations are keyed by the cwd the host verbs ran in, and install runs them
-  // from the resolved host bundle root (`<from>/claude` for a multi-target artifact root), so the listing the
-  // bundle comparison and lifecycle use is taken from that same root; `--from` without a manifest for this host
-  // falls back to the given directory and the bundle step reports the missing manifest.
+  // from the composite `--from` root (the host manifest sits directly under it), so the listing the bundle
+  // comparison and lifecycle use is taken from that same root; `--from` without a manifest for this host falls
+  // back to the given directory and the bundle step reports the missing manifest.
   const listingCwd = await listingDirectory(options.from, host, home);
   const listing: PublicHostListing = host === 'cursor' || probed.probe.status !== 'available'
     ? { detail: `${host} is not available`, status: 'unavailable' }

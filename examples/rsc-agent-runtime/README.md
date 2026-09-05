@@ -107,7 +107,7 @@ Installing
 [the optional RSC Runtime topology](../../docs/architecture/rsc-runtime-workbench.md)
 for the full ownership boundary.
 
-The build emits `dist/runtime` (including `dist/runtime/agent-runtime.manifest.json`), self-contained `dist/app` MCP App documents, and self-contained native plugin artifacts under `dist/plugins`. `dist/app` holds exactly one HTML file per App entry (`edit-timeline-v1.html`, `standalone.html`) with every script, style, asset, and licence comment inlined — the same invariants the framework's MCP App compiler enforces (`splitChunks: false`, unbounded `dataUriLimit`, no async chunks, `legalComments: 'inline'`); the build fails if the resolved configuration drifts from them or any sibling file would be emitted. The packaging step can also be rerun directly against the current Rsbuild output:
+The build emits `dist/runtime` (including `dist/runtime/agent-runtime.manifest.json`), self-contained `dist/app` MCP App documents, and one self-contained composite plugin root at `dist/plugins` (the portable, Claude Code, and Codex projections over the shared payload). `dist/app` holds exactly one HTML file per App entry (`edit-timeline-v1.html`, `standalone.html`) with every script, style, asset, and licence comment inlined — the same invariants the framework's MCP App compiler enforces (`splitChunks: false`, unbounded `dataUriLimit`, no async chunks, `legalComments: 'inline'`); the build fails if the resolved configuration drifts from them or any sibling file would be emitted. The packaging step can also be rerun directly against the current Rsbuild output:
 
 ```bash
 pnpm --filter @agent-bundle/rsc-agent-runtime-demo exec agent-bundle build --json --output dist/plugins
@@ -117,7 +117,7 @@ To exercise one hook manually, give it an explicit state file and native Claude-
 
 ```bash
 AGENT_RUNTIME_STATE_FILE=/tmp/rsc-agent-state.sqlite \
-  node examples/rsc-agent-runtime/dist/plugins/claude/hooks/event-route-tool-after.mjs <<JSON
+  node examples/rsc-agent-runtime/dist/plugins/hooks/event-route-tool-after.claude.mjs <<JSON
 {"hook_event_name":"PostToolUse","session_id":"manual","cwd":"$PWD","transcript_path":"$PWD/transcript.jsonl","tool_name":"Write","tool_input":{"file_path":"README.md"},"tool_response":{"success":true},"tool_use_id":"manual-write-1"}
 JSON
 ```
@@ -182,7 +182,7 @@ authorized, use its native shell contract:
 
 ```bash
 claude -p "Create host-created.txt, then use recent_edits and render_edit_timeline." \
-  --plugin-dir examples/rsc-agent-runtime/dist/plugins/claude \
+  --plugin-dir examples/rsc-agent-runtime/dist/plugins \
   --output-format stream-json --verbose --include-hook-events \
   --no-session-persistence --dangerously-skip-permissions
 ```

@@ -71,8 +71,9 @@ pnpm --filter @agent-bundle-example/audiobook-curator typecheck
 ```
 
 包内的 `pnpm check` 会运行 validate、build、typecheck 与两个测试池。一次
-`agent-bundle build --output artifact` 产出全部内容：`artifact/` 下完整的 Claude 与 Codex 输出——各宿主
-的插件元数据、Skill、打包后的 CLI 脚本与被生命周期包装的 MCP 服务器——以及 `dist/` 下的 npm 包。
+`agent-bundle build --output artifact` 产出全部内容：位于 `artifact/` 的一个复合插件根目录，承载 Claude
+与 Codex 两个投影——各宿主的清单位于自己的点目录中，共用同一份 Skill、打包后的 CLI 脚本与被生命周期
+包装的 MCP 服务器——以及 `dist/` 下的 npm 包。
 
 想在不打包 tarball 的情况下试用构建好的 CLI，可以从任意已在 `PATH` 上的可写目录链接构建产物中的 bin：
 

@@ -3,7 +3,6 @@ import { mkdir, mkdtemp, readdir, rename, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import { build, type BuildOptions, type BuildResult } from '../../build/build.ts';
-import { listArtifactFiles } from '../../build/emit.ts';
 import {
   recheckValidatedArtifactSnapshot,
   validateArtifact,
@@ -12,7 +11,6 @@ import {
 } from '../../build/validate-artifact.ts';
 import { freezeDiagnostics, hasErrors, DiagnosticError, type Diagnostic } from '../../core/diagnostics.ts';
 import { errorMessage } from '../../core/errors.ts';
-import { digest } from '../../core/digest.ts';
 import type { ProjectSourceInput, ProjectSourceSnapshotInput } from '../../core/project-context.ts';
 import type { NormalizedPlugin } from '../../core/types.ts';
 import {
@@ -27,6 +25,7 @@ import {
   type NativePlaygroundCatalogPublicationReceipt,
 } from '../playground/native-playground-service.ts';
 import type { PreparedProject } from '../project-service.ts';
+import { projectionDigests } from './projection-digest.ts';
 import { freezeArtifactEpoch, type ArtifactEpoch, type DiagnosticSummary } from '../types.ts';
 import { deepFreeze } from '../../core/freeze.ts';
 
@@ -84,16 +83,6 @@ const failureDiagnostics = (
     sourcePath: configPath,
   }]);
 };
-
-const targetDigests = async (
-  artifactRoot: string,
-  model: NormalizedPlugin,
-): Promise<Readonly<Record<string, string>>> => Object.freeze(Object.fromEntries(
-  await Promise.all(model.targets.map(async (target) => [
-    target.name,
-    digest(await listArtifactFiles(join(artifactRoot, target.name))),
-  ])),
-));
 
 const createAttempt = async (projectRoot: string): Promise<string> => {
   const attemptsRoot = join(resolve(projectRoot), '.agent-bundle', 'attempts');
@@ -255,7 +244,7 @@ export class ArtifactService {
         ...(projectContext.packageName === undefined ? {} : { packageName: projectContext.packageName }),
         ...(projectContext.packageVersion === undefined ? {} : { packageVersion: projectContext.packageVersion }),
         projectRevision: projectContext.revision,
-        targetDigests: await targetDigests(artifactRoot, model),
+        targetDigests: await projectionDigests(artifactRoot, model.targets.map((target) => target.name)),
       });
       staging = await this.#epochStore.createStagingEpoch({
         epoch,

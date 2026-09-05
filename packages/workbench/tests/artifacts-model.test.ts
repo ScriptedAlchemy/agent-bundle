@@ -20,7 +20,7 @@ const wrapper: ArtifactInspectionFile = {
   bytes: 512,
   kind: 'generated',
   mode: 0o755,
-  path: 'claude/hooks/session-start.mjs',
+  path: 'hooks/session-start.mjs',
   sha256: 'a'.repeat(64),
   sourceInputs: [{ path: 'hooks/session-start.ts', sha256: 'b'.repeat(64) }],
 };
@@ -28,7 +28,7 @@ const wrapper: ArtifactInspectionFile = {
 const agents: ArtifactInspectionFile = {
   bytes: 128,
   kind: 'copy',
-  path: 'claude/AGENTS.md',
+  path: 'AGENTS.md',
   sha256: 'c'.repeat(64),
   sourceInputs: [],
 };
@@ -38,17 +38,17 @@ const target: ArtifactInspectionTarget = {
   name: 'claude',
   tree: {
     children: [
-      { file: agents, kind: 'file', name: 'AGENTS.md', path: 'claude/AGENTS.md' },
+      { file: agents, kind: 'file', name: 'AGENTS.md', path: 'AGENTS.md' },
       {
-        children: [{ file: wrapper, kind: 'file', name: 'session-start.mjs', path: 'claude/hooks/session-start.mjs' }],
+        children: [{ file: wrapper, kind: 'file', name: 'session-start.mjs', path: 'hooks/session-start.mjs' }],
         kind: 'directory',
         name: 'hooks',
-        path: 'claude/hooks',
+        path: 'hooks',
       },
     ],
     kind: 'directory',
     name: 'claude',
-    path: 'claude',
+    path: '.',
   },
 };
 
@@ -63,8 +63,8 @@ const inspection: ArtifactInspection = {
     sourceInputs: [{ path: 'hooks/session-start.ts', sha256: 'b'.repeat(64) }],
   },
   provenance: [
-    { outputPath: 'claude/hooks/session-start.mjs', sourceInputs: [{ path: 'hooks/session-start.ts', sha256: 'b'.repeat(64) }] },
-    { outputPath: 'claude/AGENTS.md', sourceInputs: [] },
+    { outputPath: 'hooks/session-start.mjs', sourceInputs: [{ path: 'hooks/session-start.ts', sha256: 'b'.repeat(64) }] },
+    { outputPath: 'AGENTS.md', sourceInputs: [] },
   ],
   runtime: {
     executables: [wrapper],
@@ -73,14 +73,14 @@ const inspection: ArtifactInspection = {
       file: wrapper,
       id: 'hook:session-start',
       name: 'session-start',
-      path: 'claude/hooks/session-start.mjs',
+      path: 'hooks/session-start.mjs',
       target: 'claude',
       timeout: 30,
     }],
     mcpServers: [{
-      entryPaths: ['claude/mcp/review/server.mjs'],
+      entryPaths: ['mcp/review/server.mjs'],
       kind: 'stdio',
-      manifestPath: 'claude/.mcp.json',
+      manifestPath: '.mcp.json',
       name: 'review',
       target: 'claude',
     }],
@@ -90,10 +90,10 @@ const inspection: ArtifactInspection = {
 };
 
 const diff: ArtifactEpochDiff = {
-  added: [{ after: agents, path: 'claude/AGENTS.md' }],
+  added: [{ after: agents, path: 'AGENTS.md' }],
   baseEpochId: 'epoch-1',
   candidateEpochId: 'epoch-2',
-  changed: [{ after: wrapper, before: { ...wrapper, bytes: 400, sha256: 'd'.repeat(64) }, path: 'claude/hooks/session-start.mjs' }],
+  changed: [{ after: wrapper, before: { ...wrapper, bytes: 400, sha256: 'd'.repeat(64) }, path: 'hooks/session-start.mjs' }],
   removed: [{ before: { ...agents, path: 'claude/LEGACY.md' }, path: 'claude/LEGACY.md' }],
   unchanged: [{ after: agents, before: agents, path: 'claude/README.md' }],
 };
@@ -110,10 +110,10 @@ it('flattens one target tree into ordered directory and file rows', () => {
   const rows = artifactTreeRowsFor(target);
 
   expect(rows.map((row) => row.path)).toEqual([
-    'claude',
-    'claude/hooks',
-    'claude/hooks/session-start.mjs',
-    'claude/AGENTS.md',
+    '.',
+    'hooks',
+    'hooks/session-start.mjs',
+    'AGENTS.md',
   ]);
   expect(rows.map((row) => row.depth)).toEqual([0, 1, 2, 1]);
   expect(rows[0]).toMatchObject({ entry: 'directory', name: 'claude' });
@@ -149,25 +149,25 @@ it('derives runtime rows for hooks, MCP servers, and executables', () => {
     event: 'sessionStart',
     key: 'claude/hook:session-start',
     label: 'session-start · sessionStart · claude',
-    path: 'claude/hooks/session-start.mjs',
+    path: 'hooks/session-start.mjs',
     sha256: 'a'.repeat(64),
     target: 'claude',
     timeout: 30,
   }]);
   expect(runtime.mcpServers).toEqual([{
-    entryPaths: ['claude/mcp/review/server.mjs'],
+    entryPaths: ['mcp/review/server.mjs'],
     key: 'claude/review',
     kind: 'stdio',
     label: 'review · stdio · claude',
-    manifestPath: 'claude/.mcp.json',
+    manifestPath: '.mcp.json',
     target: 'claude',
   }]);
   expect(runtime.executables).toEqual([{
     bytes: 512,
-    key: 'claude/hooks/session-start.mjs',
+    key: 'hooks/session-start.mjs',
     kind: 'generated',
     mode: '0755',
-    path: 'claude/hooks/session-start.mjs',
+    path: 'hooks/session-start.mjs',
     sha256: 'a'.repeat(64),
   }]);
   expect(Object.isFrozen(runtime)).toBe(true);
@@ -176,7 +176,7 @@ it('derives runtime rows for hooks, MCP servers, and executables', () => {
 it('orders provenance rows by output path and keeps their declared source inputs', () => {
   const rows = artifactProvenanceRowsFor(inspection.provenance);
 
-  expect(rows.map((row) => row.outputPath)).toEqual(['claude/AGENTS.md', 'claude/hooks/session-start.mjs']);
+  expect(rows.map((row) => row.outputPath)).toEqual(['AGENTS.md', 'hooks/session-start.mjs']);
   expect(rows[0]?.sourceInputs).toEqual([]);
   expect(rows[1]?.sourceInputs).toEqual([{ path: 'hooks/session-start.ts', sha256: 'b'.repeat(64) }]);
 });
@@ -190,7 +190,7 @@ it('groups an epoch diff into counted added, removed, changed, and unchanged row
     afterBytes: 128,
     afterSha256: 'c'.repeat(64),
     change: 'added',
-    path: 'claude/AGENTS.md',
+    path: 'AGENTS.md',
   });
   expect(view.groups[0]?.rows[0]?.beforeSha256).toBeUndefined();
   expect(view.groups[1]?.rows[0]).toMatchObject({ change: 'removed', path: 'claude/LEGACY.md' });
@@ -218,7 +218,7 @@ it('derives a ready view bound to the selected target', () => {
   expect(view.state).toBe('ready');
   expect(view.targets.map((option) => option.name)).toEqual(['claude']);
   expect(view.selected?.name).toBe('claude');
-  expect(view.tree.map((row) => row.path)).toContain('claude/hooks/session-start.mjs');
+  expect(view.tree.map((row) => row.path)).toContain('hooks/session-start.mjs');
   expect(view.hooks).toHaveLength(1);
   expect(view.mcpServers).toHaveLength(1);
   expect(view.executables).toHaveLength(1);

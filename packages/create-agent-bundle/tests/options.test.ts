@@ -68,8 +68,7 @@ describe('formatProjectName', () => {
   });
 
   it('sanitizes the plugin name to the strictest host contract (Cursor lowercase kebab-case)', () => {
-    // Mirrored from cursorNamePattern in packages/agent-bundle/src/adapters/cursor.ts,
-    // which the unified `plugin` target enforces as well.
+    // Mirrored from cursorNamePattern in packages/agent-bundle/src/adapters/cursor.ts.
     const cursorNamePattern = /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u;
     expect(formatProjectName('my plugin!').pluginName).toBe('my-plugin');
     expect(formatProjectName('--weird--').pluginName).toBe('weird');
@@ -152,13 +151,13 @@ describe('resolveOptions', () => {
 
   it('respects explicit flags over prompts and detection', async () => {
     const resolved = await resolveOptions(
-      parseFlags(['dir', '-t', 'cli-tool', '--targets', 'plugin', '--package-manager', 'bun', '--no-install']),
+      parseFlags(['dir', '-t', 'cli-tool', '--targets', 'cursor', '--package-manager', 'bun', '--no-install']),
       { interactive: true, prompter: unusedPrompter, userAgent: 'pnpm/11.23.0' },
     );
     expect(resolved).toMatchObject({
       install: false,
       packageManager: 'bun',
-      targets: ['plugin'],
+      targets: ['cursor'],
       template: 'cli-tool',
     });
   });

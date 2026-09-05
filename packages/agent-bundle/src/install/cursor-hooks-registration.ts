@@ -20,9 +20,8 @@ import {
  * Read-only Doctor proof for Cursor hook registration (#407).
  *
  * Cursor delivers plugin hooks from the plugin manifest (`.cursor-plugin/plugin.json`
- * `hooks` -> the named document, `hooks/hooks.json` for the `cursor` target and
- * `hooks/hooks-cursor.json` for the unified `plugin` target; `hooks/hooks.json` by
- * folder discovery when the field is absent), substituting `${CURSOR_PLUGIN_ROOT}` and running
+ * `hooks` -> the named document; `hooks/hooks.json` by folder discovery when
+ * the field is absent), substituting `${CURSOR_PLUGIN_ROOT}` and running
  * each command from the plugin root (observed 2026-09-03, Cursor 3.18.25, isolated
  * HOME: preToolUse/postToolUse/stop fired for the emitted pack exactly like the
  * known-working ~/.cursor/plugins/local/tracedecay). `~/.cursor/hooks.json` is a

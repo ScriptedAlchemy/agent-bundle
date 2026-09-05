@@ -30,27 +30,19 @@ export interface PreparedEvalArtifact {
 const manifestName = 'agent-bundle.manifest.json';
 const runOwnedArtifactSegments = Object.freeze(['artifacts', 'target']);
 
-/** One digest per generated target, derived from the manifest's own recorded file hashes. */
+/**
+ * One digest per selected host projection. Every host reads the same composite
+ * root, so each digest covers the manifest's whole file table; the host name
+ * keeps the identities distinct.
+ */
 export const evalTargetDigests = (manifest: ArtifactManifest): Readonly<Record<string, string>> => {
-  const buckets = new Map<string, { path: string; sha256: string }[]>(
-    manifest.targets.map((target) => [target.name, []]),
-  );
-  for (const file of manifest.files) {
-    const separator = file.path.indexOf('/');
-    if (separator <= 0) continue;
-    const bucket = buckets.get(file.path.slice(0, separator));
-    if (bucket !== undefined) bucket.push({ path: file.path.slice(separator + 1), sha256: file.sha256 });
-  }
-  return Object.freeze(Object.fromEntries([...buckets.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([target, files]) => [
-      target,
-      digest({
-        files: files.sort((left, right) => left.path.localeCompare(right.path)),
-        runtime: manifest.runtime,
-        target,
-      }),
-    ])));
+  const files = manifest.files
+    .map((file) => ({ path: file.path, sha256: file.sha256 }))
+    .sort((left, right) => left.path.localeCompare(right.path));
+  return Object.freeze(Object.fromEntries(manifest.targets
+    .map((target) => target.name)
+    .sort((left, right) => left.localeCompare(right))
+    .map((target) => [target, digest({ files, runtime: manifest.runtime, target })])));
 };
 
 const readValidatedArtifact = async (
