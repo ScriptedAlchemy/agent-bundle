@@ -29,7 +29,13 @@ import {
   type CompiledCliBin,
 } from './cli-bins.ts';
 import { projectMeta } from './meta.ts';
-import { compileMcpApps, planCompiledMcpApps, type CompiledMcpApp } from './mcp-apps.ts';
+import {
+  compileMcpApps,
+  planCompiledMcpApps,
+  type CompiledMcpApp,
+  type McpAppCompileMode,
+  type PlannedMcpApp,
+} from './mcp-apps.ts';
 import { compileRslibSurfaces, settledRslibSurface } from './rslib.ts';
 import { planTargetStages } from './target-stages.ts';
 import {
@@ -60,12 +66,24 @@ export interface BuildResult {
   readonly compiledHooks: readonly CompiledHookEntry[];
   readonly compiledMcpApps: readonly CompiledMcpApp[];
   readonly compiledMcpEntries: readonly CompiledMcpEntry[];
+  /**
+   * Non-fatal compiler findings the artifact survived — MCP App view compile
+   * warnings and size advisories. Errors never reach here: a failing compile
+   * throws a `DiagnosticError` carrying them.
+   */
+  readonly diagnostics: readonly Diagnostic[];
   readonly manifest: ArtifactManifest;
   readonly outputProvenance: readonly ArtifactOutputProvenance[];
   readonly outputRoot: string;
 }
 
 export interface BuildOptions {
+  /**
+   * The MCP App view compile profile; defaults to `production`. Only the
+   * Workbench dev loop passes `development` (readable output, inline source
+   * maps); artifact and Rslib surfaces are unaffected.
+   */
+  readonly mode?: McpAppCompileMode;
   readonly model: NormalizedPlugin;
   readonly outputRoot: string;
   readonly projectContext: ProjectContext;
@@ -87,7 +105,7 @@ interface StagedTarget extends PlannedTarget {
   readonly compiledCliBins: readonly CompiledCliBin[];
   readonly compiledEntries: readonly CompiledEntry[];
   readonly compiledHooks: readonly CompiledHookEntry[];
-  readonly compiledMcpApps: readonly CompiledMcpApp[];
+  readonly compiledMcpApps: readonly PlannedMcpApp[];
   readonly compiledMcpEntries: readonly CompiledMcpEntry[];
   readonly root: string;
 }
@@ -382,6 +400,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
     const compiledHooks: CompiledHookEntry[] = [];
     const compiledMcpApps: CompiledMcpApp[] = [];
     const compiledMcpEntries: CompiledMcpEntry[] = [];
+    const compileDiagnostics: Diagnostic[] = [];
     const tools = options.tools === undefined ? {} : { tools: options.tools };
     // The resolved `notices.retention`; generated ledgers fall back to the runtime defaults without it.
     const noticePolicy = options.model.notices === undefined
@@ -399,14 +418,19 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
             // The optional browser stage, always first: the MCP entries
             // embed its HTML, and its Rsbuild pass asserts the target root
             // holds nothing but that HTML.
-            targetMcpApps = await compileMcpApps(options.model.mcpApps ?? [], {
-              cwd: options.projectRoot,
-              meta,
-              outDir: target.root,
-              target: target.name,
-              ...tools,
-            });
-            compiledMcpApps.push(...targetMcpApps);
+            {
+              const views = await compileMcpApps(options.model.mcpApps ?? [], {
+                cwd: options.projectRoot,
+                meta,
+                ...(options.mode === undefined ? {} : { mode: options.mode }),
+                outDir: target.root,
+                target: target.name,
+                ...tools,
+              });
+              targetMcpApps = views.apps;
+              compiledMcpApps.push(...views.apps);
+              compileDiagnostics.push(...views.diagnostics);
+            }
             break;
           case 'node-surfaces': {
             await emitPlanEntries({ entries: target.entries, root: target.root });
@@ -561,6 +585,7 @@ export const build = async (options: BuildOptions): Promise<BuildResult> => {
         output: publishedOutput(entry),
         ...(entry.workerOutput === undefined ? {} : { workerOutput: publishedOutput({ output: entry.workerOutput }) }),
       }))),
+      diagnostics: deepFreeze(deduplicateDiagnostics(compileDiagnostics)),
       manifest,
       outputProvenance,
       outputRoot,

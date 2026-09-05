@@ -1,3 +1,4 @@
+import { MAX_APP_HTML_BYTES } from '../../core/mcp-app-limits.ts';
 import {
   validateMcpAppDownloadRequest,
   validateMcpAppExternalLink,
@@ -228,7 +229,6 @@ const maximumTeardownTimeoutMs = 30_000;
 const defaultMaximumQueuedHostMessageBytes = 1_048_576;
 const maximumQueuedHostMessageBytes = 16_777_216;
 const maximumQueuedHostMessageSendAttempts = 3;
-export const MAX_APP_HTML_BYTES = 2_097_152;
 const defaultSharedSenderQueuedMessages = 32;
 const defaultSharedSenderQueuedMessageBytes = 256 * 1024;
 const loggingLevels = new Set(['debug', 'info', 'notice', 'warning', 'error', 'critical', 'alert', 'emergency']);

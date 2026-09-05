@@ -8,11 +8,13 @@ import { createRsbuild, type StartDevServerResult } from '@rsbuild/core';
 
 import {
   createRscRuntimeRsbuildConfig,
+  RscRuntimeCompileError,
   type RscRuntimeCompileEnvironmentHashes,
   type RscRuntimeCompileFailureKind,
   type RscRuntimeCompileSnapshot,
 } from '../../rsbuild.config.js';
 import { projectName, projectVersion } from '../project-identity.js';
+import { describeRspackCompileErrors } from './compile-diagnostics.js';
 import {
   createRscEnvironmentCheckpointStore,
   type RscEnvironmentCheckpointStore,
@@ -560,9 +562,19 @@ const lifecycleDiagnostic = (error: unknown): DevRuntimeDiagnostic => Object.fre
   severity: 'error',
 });
 
-const sourceBuildDiagnostic = (): DevRuntimeDiagnostic => Object.freeze({
+/**
+ * The compile observer's `RscRuntimeCompileError` carries the rejected
+ * cohort's stats; they render here as `file:line:col: message` lines (see
+ * `src/dev/compile-diagnostics.ts`). The protocol diagnostic has no location
+ * field, so the lines ride in the message.
+ */
+const sourceBuildDiagnostic = (error: unknown, projectRoot: string): DevRuntimeDiagnostic => Object.freeze({
   code: 'AB8206',
-  message: 'RSC runtime source build failed.',
+  message: `RSC runtime source build failed: ${
+    error instanceof RscRuntimeCompileError
+      ? describeRspackCompileErrors(error.stats, projectRoot)
+      : error instanceof Error ? error.message : 'RSC runtime compile reported errors.'
+  }`,
   phase: 'source/build',
   severity: 'error',
 });
@@ -2294,7 +2306,14 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     }
     if (input.hasErrors) {
       this.#settleCompileObservation();
-      await this.#failAttempt(input.attemptId, new Error('RSC runtime compilation failed.'), 'source-build');
+      // The observer plugin fails erroring cohorts before capture with the
+      // Rspack error detail; a caller that still reports `hasErrors` here has
+      // no stats to quote.
+      await this.#failAttempt(
+        input.attemptId,
+        new Error('RSC runtime compile reported errors, but Rspack stats carried no error details.'),
+        'source-build',
+      );
       return undefined;
     }
     if (input.sourceRevision.length === 0) {
@@ -2389,7 +2408,7 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     }
     if (!this.#closed) this.#setStatus(
       this.#active === undefined ? 'degraded' : 'active',
-      [kind === 'source-build' ? sourceBuildDiagnostic() : lifecycleDiagnostic(error)],
+      [kind === 'source-build' ? sourceBuildDiagnostic(error, this.#context.projectRoot) : lifecycleDiagnostic(error)],
     );
     this.#emit(Object.freeze({ type: 'runtime.generation.failed' }));
   }
