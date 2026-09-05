@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import type { AgentDocument } from '@agent-bundle/runtime';
+import type { AgentDocument, AgentDocumentNode } from '@agent-bundle/runtime';
 
 import { createDefaultRegistry, type TargetRegistry } from '../../adapters/registry.ts';
 import type { TargetHookContract } from '../../adapters/hook-contract.ts';
@@ -40,6 +40,7 @@ import type { RouteInvocation } from './route-invocation-result.ts';
 import type {
   RouteInvocationEventHost,
   RouteInvocationKind,
+  RouteInvocationOutcome,
   RouteInvocationProvider,
   RouteInvocationRequest,
   RouteInvocationSummary,
@@ -133,6 +134,12 @@ export interface RouteInvocationChildRequest {
 export interface RouteInvocationChildResult {
   readonly document: NonNullable<RouteInvocation['document']>;
   readonly events: RouteInvocation['events'];
+  /**
+   * Process surfaces only: the exit code the generated executable sets for
+   * this completed run — a plain script's real exit status, the generated
+   * bin's own decision for CLI surfaces, the rendered-script rule otherwise.
+   */
+  readonly exitCode?: number;
   /** The input handed to the route after hosted-event canonicalization. */
   readonly input: JsonValue;
   /** Runtime-owned MCP projection, computed inside the runtime-bound child. */
@@ -387,6 +394,7 @@ const runPlainScript = async (
   return deepFreeze({
     document,
     events: [{ document, sequence: 1, type: 'complete' }],
+    exitCode: run.exitCode,
     input,
     renderDurationMs: performance.now() - startedAt,
     result: { exitCode: run.exitCode, stderr: run.stderr, stdout: run.stdout },
@@ -571,24 +579,72 @@ const jsonObject = (value: unknown): JsonObject | undefined => {
   return isJsonRecord(snapshot) ? snapshot : undefined;
 };
 
-const resultExitCode = (policy: 'result' | 'zero', result: JsonValue | undefined): number => {
-  if (policy === 'zero') return 0;
-  if (result === undefined || !isJsonRecord(result)) return 1;
-  const value = result.exitCode;
-  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 255 ? value : 1;
+const appendErrorSummaries = (node: AgentDocumentNode, summaries: string[]): void => {
+  switch (node.kind) {
+    case 'result':
+      for (const child of node.children) appendErrorSummaries(child, summaries);
+      break;
+    case 'error':
+      summaries.push(`[${node.code}] ${node.message}`);
+      break;
+    case 'audio':
+    case 'context':
+    case 'image':
+    case 'json':
+    case 'markdown':
+    case 'progress':
+    case 'resource':
+    case 'text':
+      break;
+    default: {
+      const exhaustive: never = node;
+      throw new Error(`Unsupported Agent Document node ${String((exhaustive as { kind?: unknown }).kind)}.`);
+    }
+  }
+};
+
+/** The `Agent.Error` nodes of a represented-error document, as the MCP projection prints them. */
+const documentErrorSummary = (document: AgentDocument): string => {
+  const summaries: string[] = [];
+  appendErrorSummaries(document.root, summaries);
+  return summaries.length === 0 ? `The document reports status ${document.status}.` : summaries.join('; ');
+};
+
+/**
+ * What the completed run meant, judged by the surface it ran through. A
+ * process surface reports the exit code its executable decided (`exitCode` is
+ * only ever set by one); an MCP surface reports a projected `isError`; an
+ * event surface reports an error document or a `deny` decision.
+ */
+const invocationOutcome = (
+  route: RouteManifestRoute,
+  child: RouteInvocationChildResult,
+): RouteInvocationOutcome => {
+  if (child.exitCode !== undefined) {
+    return child.exitCode === 0 ? { kind: 'success' } : { exitCode: child.exitCode, kind: 'process-exit' };
+  }
+  if (child.mcp?.isError === true || child.document.status !== 'success') {
+    return { kind: 'represented-error', summary: documentErrorSummary(child.document) };
+  }
+  const decision: unknown = child.result ?? child.document.value;
+  if (route.kind === 'event-route' && isRecord(decision) && decision.outcome === 'deny') {
+    return {
+      kind: 'represented-error',
+      summary: typeof decision.reason === 'string' ? `deny: ${decision.reason}` : 'deny',
+    };
+  }
+  return { kind: 'success' };
 };
 
 const invocationProjection = (
   route: RouteManifestRoute,
   request: RouteInvocationRequest,
   input: JsonValue,
-  result: JsonValue | undefined,
-  mcp: JsonObject | undefined,
-  document: NonNullable<RouteInvocation['document']>,
-  manifest: RouteManifest,
+  child: RouteInvocationChildResult,
   prepared: RouteInvocationPreparedProject,
   registry: TargetRegistry,
 ): RouteInvocation['projection'] => {
+  const { document, mcp, result } = child;
   if (route.kind === 'tool') {
     if (mcp === undefined) throw new Error('Route invocation child omitted the tool MCP projection.');
     return deepFreeze({ mcp });
@@ -597,15 +653,12 @@ const invocationProjection = (
     return deepFreeze({ ...(jsonObject(result) === undefined ? {} : { mcp: jsonObject(result) }) });
   }
   if (route.kind === 'cli' || route.kind === 'script') {
-    const command = manifest.cli?.commands?.find((candidate) => candidate.routeId === route.id);
-    // A plain script's exit code is its process status, carried in `result`;
-    // a rendered script exits zero like a rendered CLI command.
-    const policy = route.kind === 'script'
-      ? (plainScriptFor(prepared, route) === undefined ? 'zero' : 'result')
-      : command?.exitCode ?? 'zero';
+    // The exit code is the executable's own: a plain script's process status,
+    // the generated bin's decision, or the rendered-script rule the child applied.
+    if (child.exitCode === undefined) throw new Error('Route invocation child omitted the process exit code.');
     return deepFreeze({
       cli: {
-        exitCode: resultExitCode(policy, result),
+        exitCode: child.exitCode,
         ...(result === undefined ? {} : { json: result }),
         text: projectCliDocumentToMarkdown(document),
       },
@@ -850,17 +903,7 @@ export class RouteInvocationService {
           this.#controllers.delete(controller);
         }
         const projectionStartedAt = this.#now();
-        const projection = invocationProjection(
-          route,
-          request,
-          rawInput,
-          child.result,
-          child.mcp,
-          child.document,
-          manifest,
-          prepared,
-          this.#registry,
-        );
+        const projection = invocationProjection(route, request, rawInput, child, prepared, this.#registry);
         const completedAt = this.#now();
         const canonical = route.kind === 'event-route'
           ? (child.input as JsonObject).canonical
@@ -887,6 +930,7 @@ export class RouteInvocationService {
           input: canonical ?? child.input,
           kind: route.kind as RouteInvocationKind,
           manifestDigest: manifest.digest,
+          outcome: invocationOutcome(route, child),
           projection,
           providers: child.observed?.providers ?? unobservedProviders(manifest),
           ...(child.result === undefined ? {} : { result: child.result }),

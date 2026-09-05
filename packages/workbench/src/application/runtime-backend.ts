@@ -6,6 +6,7 @@ import type {
 import type {
   RouteInvocation,
   RouteInvocationKind,
+  RouteInvocationOutcome,
   RouteInvocationRequest,
   RouteInvocationSummary,
 } from '../../../agent-bundle/src/contracts/invocations.ts';
@@ -165,6 +166,21 @@ const invocationKind = (kind: RouteInvocationKind) => {
   }
 };
 
+/**
+ * The runtime backend has no process surface and no MCP projection, so the
+ * document's own status is the whole verdict. A summary built without events
+ * has no document to judge and carries no outcome rather than an invented one.
+ */
+const outcomeForRun = (
+  run: Exclude<DevRuntimeRun, { readonly status: 'running' }>,
+  document: RouteInvocation['document'],
+): RouteInvocationOutcome | undefined => {
+  if (run.status !== 'succeeded' || document === undefined) return undefined;
+  return document.status === 'success'
+    ? Object.freeze({ kind: 'success' })
+    : Object.freeze({ kind: 'represented-error', summary: `The document reports status ${document.status}.` });
+};
+
 const completedRun = (
   run: DevRuntimeRun,
 ): Exclude<DevRuntimeRun, { readonly status: 'running' }> => {
@@ -205,6 +221,7 @@ const invocationForRun = (
         })]))
     : Object.freeze([]);
   const result = run.status === 'succeeded' ? run.result.agentVisible : undefined;
+  const outcome = outcomeForRun(run, document);
   return Object.freeze({
     completedAt: run.completedAt,
     context: Object.freeze({
@@ -226,6 +243,7 @@ const invocationForRun = (
     input: run.input,
     kind,
     manifestDigest: run.vector.runtimeGenerationId,
+    ...(outcome === undefined ? {} : { outcome }),
     projection: Object.freeze({}),
     providers: Object.freeze([]),
     ...(result === undefined ? {} : { result }),

@@ -12,6 +12,7 @@ export type {
   RouteInvocationHostProjection,
   RouteInvocationKind,
   RouteInvocationListResponse,
+  RouteInvocationOutcome,
   RouteInvocationProjection,
   RouteInvocationProvider,
   RouteInvocationProviderStatus,

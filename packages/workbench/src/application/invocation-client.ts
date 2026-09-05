@@ -105,6 +105,11 @@ const eventTraceWireSchema = z.strictObject({
 const eventTraceSchema = z.custom<EventTraceEvent>(
   (value) => eventTraceWireSchema.safeParse(value).success,
 );
+const outcomeSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('success') }),
+  z.strictObject({ kind: z.literal('represented-error'), summary: z.string() }),
+  z.strictObject({ exitCode: z.number().int(), kind: z.literal('process-exit') }),
+]);
 const invocationSummaryFields = {
   completedAt: textSchema,
   correlationId: textSchema.optional(),
@@ -114,6 +119,7 @@ const invocationSummaryFields = {
   input: z.json(),
   kind: z.enum(['cli', 'event-route', 'prompt', 'resource', 'script', 'tool']),
   manifestDigest: textSchema,
+  outcome: outcomeSchema.optional(),
   routeId: textSchema,
   source: z.string(),
   sourceRevision: textSchema,
@@ -121,8 +127,12 @@ const invocationSummaryFields = {
   status: z.enum(['failed', 'succeeded']),
   timings: z.array(timingSchema),
 } as const;
+// A completed boundary always says what the run meant; a boundary that never
+// completed has nothing to judge. The wire never gets to imply success by omission.
+const outcomeMatchesStatus = (value: Pick<RouteInvocationSummary, 'outcome' | 'status'>): boolean =>
+  (value.status === 'succeeded') === (value.outcome !== undefined);
 const invocationSummarySchema: z.ZodType<RouteInvocationSummary> =
-  z.strictObject(invocationSummaryFields);
+  z.strictObject(invocationSummaryFields).refine(outcomeMatchesStatus);
 const invocationSchema: z.ZodType<RouteInvocation> = z.strictObject({
   ...invocationSummaryFields,
   context: requestContextProvenanceSchema,
@@ -132,7 +142,7 @@ const invocationSchema: z.ZodType<RouteInvocation> = z.strictObject({
   providers: z.array(providerSchema),
   result: z.json().optional(),
   trace: z.array(eventTraceSchema).optional(),
-});
+}).refine(outcomeMatchesStatus);
 const invocationResponseSchema = z.strictObject({ invocation: invocationSchema });
 const invocationListResponseSchema = z.strictObject({
   invocations: z.array(invocationSummarySchema),

@@ -46,7 +46,26 @@ export interface RouteInvocationRequest {
   readonly routeId: string;
 }
 
+/**
+ * Whether the execution boundary completed. `succeeded` means the route ran
+ * to a final document (or a plain script exited) and the envelope carries
+ * what it produced; what the run *meant* is `outcome`. `failed` means the
+ * boundary never completed — child crash, timeout, abort, `AB825x`.
+ */
 export type RouteInvocationStatus = 'failed' | 'succeeded';
+
+/**
+ * The application result of a completed run, judged by the surface the route
+ * was invoked through. `represented-error`: the MCP projection carries
+ * `isError: true` (a non-`success` Agent Document), or an event route's
+ * decision is `deny`. `process-exit`: the generated CLI bin (or script
+ * executable) sets a non-zero exit code for this run — the bin's own rule,
+ * captured on the production path, never re-derived here.
+ */
+export type RouteInvocationOutcome =
+  | Readonly<{ readonly kind: 'success' }>
+  | Readonly<{ readonly kind: 'represented-error'; readonly summary: string }>
+  | Readonly<{ readonly exitCode: number; readonly kind: 'process-exit' }>;
 
 export interface RouteInvocationTiming {
   readonly durationMs: number;
@@ -116,7 +135,7 @@ export interface RouteInvocationEvent {
 export interface RouteInvocationSummary {
   readonly completedAt: string;
   readonly correlationId?: string;
-  /** Failure diagnostics; empty when the route rendered. A `represented-error` document is a success with an error node, not a failure. */
+  /** Failure diagnostics; empty when the route rendered. A `represented-error` document completes the boundary and is reported through `outcome`, not here. */
   readonly diagnostics: readonly Diagnostic[];
   readonly event?: RouteInvocationEvent;
   readonly id: string;
@@ -125,6 +144,8 @@ export interface RouteInvocationSummary {
   readonly kind: RouteInvocationKind;
   /** The route manifest digest the invocation resolved the route through. */
   readonly manifestDigest: string;
+  /** Present on every `succeeded` invocation; absent when the boundary did not complete. */
+  readonly outcome?: RouteInvocationOutcome;
   readonly routeId: string;
   readonly source: string;
   readonly sourceRevision: string;

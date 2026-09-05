@@ -184,6 +184,20 @@ invocation id（`AB8231`）、不可用的 epoch（`AB8232`）、渲染超时或
 （`AB8250`）、缺失的已编译路由可执行项（`AB8251`），以及已编译投影或 preflight 失败（`AB8252`）会作为诊断报告。
 各条触发条件与恢复指引见[诊断参考](../../reference/diagnostics.md)。
 
+信封、`route.invocation` 事件载荷与路由工作区报告两个彼此独立的事实。`status` 表示执行边界是否完成；
+`outcome` 表示一次已完成的运行意味着什么，由该路由所经过的表面来判定。失败的边界不带 `outcome`，
+已完成的运行总是带有一个，因此被表示的错误或非零退出码永远不会被报告为普通成功。
+
+| 字段 | 值 | 含义 |
+| --- | --- | --- |
+| `status` | `succeeded` | 子进程完成了最终文档（或普通脚本已退出）。 |
+| `status` | `failed` | 边界从未完成：崩溃、超时、中止，或 `AB825x` 诊断。 |
+| `outcome` | `{ kind: "success" }` | 按该路由的表面判定，投影结果为成功。 |
+| `outcome` | `{ kind: "represented-error", summary }` | MCP 投影带有 `isError: true`（非 `success` 的 Agent Document，例如 `Agent.Error`），或事件路由的决策为 `deny`。`summary` 列出 `Agent.Error` 的代码与消息，或 deny 的原因。 |
+| `outcome` | `{ kind: "process-exit", exitCode }` | CLI 或脚本路由已完成，且其生成的可执行文件设置了非零退出码——即该 bin 自己的 `exitCode` 策略作用于已校验结果，或非 `success` 文档对应的 `1`。零退出码报告为 `success`。 |
+
+Workbench 状态行在执行状态（`Completed` / `Failed`）旁展示 outcome 徽章，Trace 为每个条目同时列出两者。
+
 ## 以编程方式使用同一个会话
 
 公开的 `startDevServer` 导出接受 CLI 标志所映射的那些选项（`root`、`port`、`open`、`agentApi`、

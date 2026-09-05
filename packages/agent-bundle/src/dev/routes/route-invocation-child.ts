@@ -1,5 +1,6 @@
 import * as AgentRuntime from '@agent-bundle/runtime';
 
+import { renderedDocumentExitCode } from '../../cli-entry.ts';
 import type { JsonObject } from '../../core/strict-json.ts';
 import {
   AGENT_TEST_REGISTRY_VERSION,
@@ -55,6 +56,31 @@ const respond = (response: RouteInvocationChildResponse): Promise<void> => new P
   });
 });
 
+/**
+ * The exit code a generated executable would set for this unit render. There
+ * is no compiled bin to ask in `unit-render`, so the same `cli-entry.ts`
+ * decision the bin runs is applied to the route's policy: a routed command's
+ * (or CLI projection's) `exitCode` policy, `zero` for rendered scripts.
+ */
+const unitRenderExitCode = (
+  request: RouteInvocationChildRequest,
+  document: RouteInvocationChildResult['document'],
+  result: unknown,
+): number | undefined => {
+  const kind = request.manifest.routes[request.routeId]?.kind;
+  const command = kind === 'cli' || request.args !== undefined
+    ? request.manifest.cliCommands.find((candidate) => candidate.routeId === request.routeId)
+    : undefined;
+  const policy = command?.exitCode ?? (kind === 'script' ? 'zero' : undefined);
+  if (policy === undefined) return undefined;
+  try {
+    return renderedDocumentExitCode(policy, document, result);
+  } catch {
+    // A `result` policy without a valid `exitCode` is a contract failure the bin exits 1 on.
+    return 1;
+  }
+};
+
 const renderUnitRoute = async (request: RouteInvocationChildRequest): Promise<RouteInvocationChildResult> => {
   installManifest(request);
   const startedAt = performance.now();
@@ -72,9 +98,11 @@ const renderUnitRoute = async (request: RouteInvocationChildRequest): Promise<Ro
     input,
     manifest: request.manifest,
   });
+  const exitCode = unitRenderExitCode(request, rendered.document, rendered.result ?? rendered.document.value);
   return Object.freeze({
     document: rendered.document,
     events: rendered.events,
+    ...(exitCode === undefined ? {} : { exitCode }),
     input,
     ...(request.manifest.routes[request.routeId]?.kind === 'tool'
       ? {

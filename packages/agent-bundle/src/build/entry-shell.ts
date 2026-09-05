@@ -428,7 +428,7 @@ export const generatedCliBinEntrySource = (input: GeneratedCliBinEntryOptions): 
     // module-level `process.env` read sees the composed environment. The
     // npm package bin runs from the operator's own shell and reads none.
     ...(stateFallback === 'artifact' ? [operatorEnvLayerImport] : []),
-    `import { mapGeneratedCliInput, parseGeneratedCliArgv, runGeneratedCliProcess } from ${JSON.stringify(cliEntryRuntimeSpecifier)};`,
+    `import { mapGeneratedCliInput, parseGeneratedCliArgv, renderedDocumentExitCode, runGeneratedCliProcess } from ${JSON.stringify(cliEntryRuntimeSpecifier)};`,
     ...(options.web === undefined
       ? []
       : [
@@ -466,12 +466,27 @@ export const generatedCliBinEntrySource = (input: GeneratedCliBinEntryOptions): 
     `const commands = Object.freeze(${stableJson(options.commands)});`,
     '',
     'const parseInput = (command, route, input) => mapGeneratedCliInput(command, route.module.inputSchema, route.projection, input);',
-    'export const prepareRouteInvocation = (routeId, argv) => {',
+    'const invocationRoute = (routeId) => {',
     '  const command = commands.find((candidate) => candidate.routeId === routeId);',
     "  if (command === undefined) throw new TypeError(`Generated CLI route ${JSON.stringify(routeId)} is not available.`);",
     '  const route = routes[routeId];',
     "  if (route === undefined) throw new TypeError(`Generated CLI route ${JSON.stringify(routeId)} has no compiled module.`);",
+    '  return { command, route };',
+    '};',
+    'export const prepareRouteInvocation = (routeId, argv) => {',
+    '  const { command, route } = invocationRoute(routeId);',
     '  return parseInput(command, route, parseGeneratedCliArgv(command, argv).input);',
+    '};',
+    // The exit code this bin sets for a completed rendered document: the
+    // same validate → status → policy decision `runRenderedInvocation` makes,
+    // with the failures that shell reports and exits 1 on folded to 1.
+    'export const routeInvocationExitCode = (routeId, document) => {',
+    '  const { command, route } = invocationRoute(routeId);',
+    '  try {',
+    '    return renderedDocumentExitCode(command.exitCode, document, route.module.resultSchema.parse(document.value));',
+    '  } catch {',
+    '    return 1;',
+    '  }',
     '};',
     '',
     // Plain commands mount the same conventional providers as every other
