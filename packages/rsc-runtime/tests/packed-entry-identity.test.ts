@@ -14,10 +14,15 @@ import {
 } from '../../agent-bundle/tests/support/shared-pack.ts';
 import {
   declaredErrorClasses,
+  entriesReaching,
   entryIdentityProbeScript,
   errorClassDefinitions,
+  filesContaining,
   parseEntryIdentityReport,
+  probeEnvironment,
   readDistSources,
+  runtimeEntryFiles,
+  unreachedFiles,
 } from './support/dist-graph.ts';
 
 const execFile = promisify(executeFile);
@@ -72,10 +77,19 @@ describe.sequential('packed @agent-bundle/runtime entry identity', () => {
         expect(await readFile(join(installed, 'dist', file), 'utf8'), file).not.toContain('@modelcontextprotocol/sdk');
       }
 
+      // The same static graph checks as state-packaging.test.ts, against the
+      // shipped files: the probe below only sees what runs at import time, so
+      // a deferred `import('node:sqlite')` in another entry needs this walk.
       const sources = await readDistSources(join(installed, 'dist'));
+      expect(unreachedFiles(sources)).toEqual([]);
       for (const name of await declaredErrorClasses(join(packageRoot, 'src'))) {
         const files = errorClassDefinitions(sources, name);
-        expect(files, `${name} is defined in ${files.length} installed dist files: ${files.join(', ')}`).toHaveLength(1);
+        expect(files, `${name} is defined ${files.length} times in the installed dist: ${files.join(', ')}`).toHaveLength(1);
+      }
+      const sqliteFiles = filesContaining(sources, ['node:sqlite', 'DatabaseSync']);
+      expect(sqliteFiles).toContain(runtimeEntryFiles['./state/sqlite']);
+      for (const file of sqliteFiles) {
+        expect(entriesReaching(sources, file), `${file} mentions node:sqlite`).toEqual(['./state/sqlite']);
       }
 
       const stateRoot = join(consumer, 'state');
@@ -93,7 +107,7 @@ describe.sequential('packed @agent-bundle/runtime entry identity', () => {
       const { stdout } = await execFile(
         process.execPath,
         ['--conditions=react-server', '--input-type=module', '--eval', script],
-        { cwd: consumer, env: installedEnvironment() },
+        { cwd: consumer, env: probeEnvironment(installedEnvironment()) },
       );
       const report = parseEntryIdentityReport(stdout);
       expect(report).toEqual({

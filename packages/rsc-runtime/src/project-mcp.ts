@@ -1,3 +1,4 @@
+import type { CallToolResult } from '@modelcontextprotocol/server';
 import { Effect, Stream } from 'effect';
 
 import {
@@ -212,10 +213,15 @@ export const documentToCallToolResult = (
   };
 };
 
-export const attachMcpStructuredContent = (
-  result: McpCallToolResult,
+/**
+ * Generic over the result so a caller's own `CallToolResult` — this package's
+ * `McpCallToolResult`, or one typed by either SDK line, every one of which is
+ * assignable to the 2.x `CallToolResult` — comes back as the type it went in.
+ */
+export const attachMcpStructuredContent = <TResult extends CallToolResult>(
+  result: TResult,
   value: unknown,
-): McpCallToolResult => {
+): TResult => {
   const structured = objectStructuredContent(value);
   if (structured === undefined) return result;
   return { ...result, structuredContent: structured };

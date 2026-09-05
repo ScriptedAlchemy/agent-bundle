@@ -23,7 +23,15 @@ export const runtimeEntryFiles = Object.freeze({
 
 export type RuntimeEntrySubpath = keyof typeof runtimeEntryFiles;
 
-const relativeImportPattern = /(?:\bfrom|\bimport\s*\(?)\s*["'](\.\.?\/[^"']+)["']/gu;
+/**
+ * The three forms Rspack's ESM output uses for a relative edge: a static
+ * `import … from`/`export … from` statement (matched from the statement start,
+ * so a string literal or comment mid-line does not count), a bare side-effect
+ * `import "./x.js"`, and a dynamic `import("./x.js")`. `unreachedFiles`
+ * catches any fourth form: Rslib emits no chunk nothing imports.
+ */
+const relativeImportPattern =
+  /^\s*(?:import|export)\b[^;'"]*?\bfrom\s*["'](\.\.?\/[^"']+)["']|^\s*import\s*["'](\.\.?\/[^"']+)["']|\bimport\(\s*["'](\.\.?\/[^"']+)["']\s*\)/gmu;
 const errorNamePattern = /this\.name = ['"]([A-Za-z]+Error)['"]/gu;
 
 const distPath = (file: string): string => normalize(file).split(sep).join('/');
@@ -56,11 +64,35 @@ export const importClosure = (sources: ReadonlyMap<string, string>, entry: strin
     if (source === undefined) throw new Error(`dist graph walk reached ${file}, which is not in dist`);
     closure.add(file);
     for (const match of source.matchAll(relativeImportPattern)) {
-      pending.push(distPath(join(dirname(file), match[1]!)));
+      pending.push(distPath(join(dirname(file), (match[1] ?? match[2] ?? match[3])!)));
     }
   }
   return [...closure].sort();
 };
+
+/** The public entries whose graph includes `file`. */
+export const entriesReaching = (sources: ReadonlyMap<string, string>, file: string): readonly RuntimeEntrySubpath[] =>
+  (Object.keys(runtimeEntryFiles) as RuntimeEntrySubpath[])
+    .filter((subpath) => importClosure(sources, runtimeEntryFiles[subpath]).includes(file));
+
+/**
+ * Dist files no public entry reaches. Rslib emits a chunk only because some
+ * entry imports it, so a non-empty answer means an import form the walker
+ * does not parse — and every closure-based assertion is then incomplete.
+ */
+export const unreachedFiles = (sources: ReadonlyMap<string, string>): readonly string[] => {
+  const reached = new Set(
+    (Object.values(runtimeEntryFiles) as string[]).flatMap((entry) => importClosure(sources, entry)),
+  );
+  return [...sources.keys()].filter((file) => !reached.has(file)).sort();
+};
+
+/** Dist files whose source contains any of `identifiers`. */
+export const filesContaining = (sources: ReadonlyMap<string, string>, identifiers: readonly string[]): readonly string[] =>
+  [...sources]
+    .filter(([, source]) => identifiers.some((identifier) => source.includes(identifier)))
+    .map(([file]) => file)
+    .sort();
 
 /** Names of the error classes a source tree declares through `this.name = '<Name>'`. */
 export const declaredErrorClasses = async (sourceRoot: string): Promise<readonly string[]> => {
@@ -75,15 +107,27 @@ export const declaredErrorClasses = async (sourceRoot: string): Promise<readonly
 };
 
 /**
- * Dist files that define the class named `name`. Rspack renames a class it
- * bundles twice, so the constructor's `this.name` assignment is the one
- * marker a duplicated definition cannot hide behind.
+ * One entry per definition of the class named `name`: the dist file it sits
+ * in, repeated when a file holds two copies. Rspack renames a class it bundles
+ * twice, so the constructor's `this.name` assignment (either quote style) is
+ * the one marker a duplicated definition cannot hide behind.
  */
-export const errorClassDefinitions = (sources: ReadonlyMap<string, string>, name: string): readonly string[] =>
-  [...sources]
-    .filter(([, source]) => source.includes(`this.name = '${name}'`) || source.includes(`this.name = "${name}"`))
-    .map(([file]) => file)
+export const errorClassDefinitions = (sources: ReadonlyMap<string, string>, name: string): readonly string[] => {
+  const marker = new RegExp(`this\\.name = ['"]${name}['"]`, 'gu');
+  return [...sources]
+    .flatMap(([file, source]) => Array.from(source.matchAll(marker), () => file))
     .sort();
+};
+
+/**
+ * Environment for a probe child: the caller's, without `NODE_OPTIONS`, so a
+ * preload or condition the host session set (one importing `node:sqlite`, say)
+ * cannot leak into what the probe measures.
+ */
+export const probeEnvironment = (base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv => {
+  const { NODE_OPTIONS: _ignored, ...environment } = base;
+  return environment;
+};
 
 /** Specifier for each entry the identity probe imports, in load order. */
 export interface EntryIdentityProbeSpecifiers {

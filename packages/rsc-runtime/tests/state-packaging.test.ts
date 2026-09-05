@@ -9,12 +9,16 @@ import { beforeAll, describe, expect, it } from '@rstest/core';
 
 import {
   declaredErrorClasses,
+  entriesReaching,
   entryIdentityProbeScript,
   errorClassDefinitions,
+  filesContaining,
   importClosure,
   parseEntryIdentityReport,
+  probeEnvironment,
   readDistSources,
   runtimeEntryFiles,
+  unreachedFiles,
   type RuntimeEntrySubpath,
 } from './support/dist-graph.ts';
 
@@ -33,17 +37,18 @@ const packageRoot = fileURLToPath(new URL('..', import.meta.url));
 const dist = join(packageRoot, 'dist');
 const distFile = async (...segments: string[]): Promise<string> => readFile(join(dist, ...segments), 'utf8');
 
-// The class marker rather than the bare name: the Effect boundary in the root
-// graph lists typed error *names* (`isTypedRuntimeError`) without the class.
+// Identifiers, not class names: the Effect boundary in the root graph lists
+// typed error *names* (`isTypedRuntimeError`) without the classes. The kernel
+// classes themselves are excluded by definition file, whatever the quoting.
 const kernelIdentifiers = [
   'node:sqlite',
   'defineState',
-  "this.name = 'AgentStateError'",
   'DatabaseSync',
   'agent_state_journal',
   'createAgentNoticeLedger',
   'agent-notice-ledger/v1',
 ] as const;
+const kernelErrorClasses = ['AgentStateError', 'AgentNoticeError'] as const;
 const sqliteIdentifiers = ['node:sqlite', 'DatabaseSync'] as const;
 
 let sources: ReadonlyMap<string, string>;
@@ -53,6 +58,10 @@ const closureSource = (subpath: RuntimeEntrySubpath): ReadonlyMap<string, string
 describe.sequential('state kernel packaging boundaries', () => {
   beforeAll(async () => {
     sources = await readDistSources(dist);
+  });
+
+  it('reaches every dist file from some public entry, so the graph walk sees every edge', () => {
+    expect(unreachedFiles(sources)).toEqual([]);
   });
 
   it('publishes the provider invocation type from the root declaration entry', async () => {
@@ -88,8 +97,11 @@ describe.sequential('state kernel packaging boundaries', () => {
   });
 
   it('keeps every kernel and storage identifier out of the root and plugin graphs', () => {
+    const kernelClassFiles = kernelErrorClasses.flatMap((name) => errorClassDefinitions(sources, name));
+    expect(kernelClassFiles.length).toBeGreaterThan(0);
     for (const subpath of ['.', './plugin'] as const) {
       for (const [file, source] of closureSource(subpath)) {
+        expect(kernelClassFiles, `${subpath} loads ${file}, which defines a kernel error class`).not.toContain(file);
         for (const identifier of kernelIdentifiers) {
           expect(source, `${subpath} loads ${file}, which must not contain ${identifier}`).not.toContain(identifier);
         }
@@ -104,15 +116,13 @@ describe.sequential('state kernel packaging boundaries', () => {
     }
   });
 
-  it('confines node:sqlite to the state/sqlite entry file', () => {
-    const sqliteFiles = [...sources]
-      .filter(([, source]) => sqliteIdentifiers.some((identifier) => source.includes(identifier)))
-      .map(([file]) => file);
-    expect(sqliteFiles).toEqual([runtimeEntryFiles['./state/sqlite']]);
-    for (const subpath of Object.keys(runtimeEntryFiles) as RuntimeEntrySubpath[]) {
-      if (subpath === './state/sqlite') continue;
-      expect(importClosure(sources, runtimeEntryFiles[subpath]), `${subpath} must not reach the sqlite entry`)
-        .not.toContain(runtimeEntryFiles['./state/sqlite']);
+  it('confines node:sqlite to files only the state/sqlite entry reaches', () => {
+    // By reachability, not file name: Rspack may legitimately move the sqlite
+    // code into a chunk of its own, as long as no other entry's graph has it.
+    const sqliteFiles = filesContaining(sources, sqliteIdentifiers);
+    expect(sqliteFiles).toContain(runtimeEntryFiles['./state/sqlite']);
+    for (const file of sqliteFiles) {
+      expect(entriesReaching(sources, file), `${file} mentions node:sqlite`).toEqual(['./state/sqlite']);
     }
     expect([...closureSource('./state').values()].join('\n')).toContain('defineState');
     expect([...closureSource('./notices').values()].join('\n')).toContain('createAgentNoticeLedger');
@@ -125,7 +135,7 @@ describe.sequential('state kernel packaging boundaries', () => {
     expect(declared).toContain('AgentRequestError');
     const definitions = Object.fromEntries(declared.map((name) => [name, errorClassDefinitions(sources, name)]));
     for (const [name, files] of Object.entries(definitions)) {
-      expect(files, `${name} is defined in ${files.length} dist files: ${files.join(', ')}`).toHaveLength(1);
+      expect(files, `${name} is defined ${files.length} times in dist: ${files.join(', ')}`).toHaveLength(1);
     }
     // The state kernel's error class must sit in the graph of every entry
     // that throws or catches it, not only in the entry that exports it.
@@ -156,7 +166,7 @@ describe.sequential('state kernel packaging boundaries', () => {
       const { stdout } = await execFile(
         process.execPath,
         ['--conditions=react-server', '--input-type=module', '--eval', script],
-        { cwd: packageRoot },
+        { cwd: packageRoot, env: probeEnvironment() },
       );
       const report = parseEntryIdentityReport(stdout);
       expect(report.sqliteLoadedBeforeSqliteEntry).toBe(false);

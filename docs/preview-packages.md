@@ -67,7 +67,7 @@ Previews carry the version string `0.0.0-preview-<sha>`, and the publish
 package to that exact preview version inside the preview tarballs. Today that
 is the optional `@agent-bundle/runtime` peer declared by `agent-bundle`
 (`@agent-bundle/runtime` itself no longer declares an `agent-bundle` peer;
-its peers are `react`, `react-dom`, and `@rspack/core`). A regular
+its peers are `react`, `react-dom`, and the optional `@rspack/core`). A regular
 `dependencies` entry that names a sibling workspace package is rewritten to
 that sibling's same-sha tarball URL: `@agent-bundle/runtime`'s
 `rsc-markdown-stream` dependency resolves to the renderer preview of the same
