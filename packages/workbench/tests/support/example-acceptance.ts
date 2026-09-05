@@ -2,10 +2,9 @@ import assert from 'node:assert/strict';
 import { cp, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 
-import { expect } from '@rstest/playwright';
 import type { Page, Request } from 'playwright-core';
 
-import { workspaceRoot } from './workbench-e2e.ts';
+import { waitForWorkbenchIdle, workspaceRoot } from './workbench-e2e.ts';
 import { timeScale } from '../../../agent-bundle/tests/support/time-scale.ts';
 
 export type ExampleName = 'audiobook-curator' | 'hooks-and-scripts' | 'host-test' | 'mcp-app' | 'skills-starter';
@@ -54,11 +53,7 @@ export const copyExample = async (name: ExampleName): Promise<{ readonly release
   return { release: () => rm(root, { force: true, recursive: true }), root };
 };
 
-export const waitForSettledWorkbench = async (page: Page): Promise<void> => {
-  await expect(page.getByText('Foreground server connected', { exact: true })).toBeVisible({ timeout: browserTimeout });
-  await expect(page.locator('.loading-state')).toHaveCount(0, { timeout: browserTimeout });
-  await expect(page.getByText(/^Loading(?:\s|…|$)/u)).toHaveCount(0, { timeout: browserTimeout });
-};
+export const waitForSettledWorkbench = (page: Page): Promise<void> => waitForWorkbenchIdle(page, browserTimeout);
 
 export const captureExampleState = async (page: Page, example: ExampleName, state: string): Promise<void> => {
   await waitForSettledWorkbench(page);
@@ -70,7 +65,13 @@ export const captureExampleState = async (page: Page, example: ExampleName, stat
   await mkdir(captureRoot, { recursive: true });
   const file = `${example}-${state}.png`;
   await page.screenshot({ animations: 'disabled', path: join(captureRoot, file) });
-  captures.push({ example, file, hash: new URL(page.url()).hash, state, viewport: { height: 900, width: 1440 } });
+  captures.push({
+    example,
+    file,
+    hash: new URL(page.url()).pathname + new URL(page.url()).search,
+    state,
+    viewport: { height: 900, width: 1440 },
+  });
 };
 
 export const writeExampleReport = async (): Promise<void> => {

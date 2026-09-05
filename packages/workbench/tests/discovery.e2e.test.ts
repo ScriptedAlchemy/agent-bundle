@@ -119,19 +119,17 @@ e2e(
           await cp(join(output, 'claude'), join(root, 'dist', 'claude'), { recursive: true });
         },
       });
-      await page.goto(workbenchUrl(fixture.url, 'hosts'));
+      await page.goto(workbenchUrl(fixture.url, '/advanced/hosts'));
       try {
-        await expect(page.getByText('Generated at', { exact: true })).toBeVisible({ timeout: browserTimeout });
+        await expect(page.getByRole('heading', { name: /Host diagnostics/u })).toBeVisible({ timeout: browserTimeout });
       } catch (reason) {
         throw new Error(
-          `Host discovery page did not become ready at ${page.url()}.\n${await page.locator('body').innerText()}`,
+          `Host diagnostics did not become ready at ${page.url()}.\n${await page.locator('body').innerText()}`,
           { cause: reason },
         );
       }
       await expect(page.getByText('Loading host discovery', { exact: true })).toHaveCount(0, { timeout: browserTimeout });
-
-      await expect(page.getByRole('heading', { name: 'Hosts' })).toBeVisible();
-      await expect(page.getByRole('link', { exact: true, name: 'Hosts' })).toHaveAttribute('aria-current', 'page');
+      await expect(page.getByTestId('workbench-nav').getByRole('link', { name: 'Advanced' })).toHaveAttribute('aria-current', 'page');
 
       const claude = page.getByRole('group', { name: 'Claude' });
       await expect(claude.locator('.discovery-badge').first()).toHaveText('Available');

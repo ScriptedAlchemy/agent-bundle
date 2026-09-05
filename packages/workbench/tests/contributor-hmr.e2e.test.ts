@@ -181,7 +181,7 @@ e2e('completes a Workbench session through the documented contributor HMR proxy 
     await expect(page.locator('.build-health')).toContainText('Current build', { timeout: browserTimeout });
 
     // 2. A mutation carrying the browser's real Origin header, admitted through the allowlist.
-    const rebuild = page.getByRole('button', { name: 'Rebuild' });
+    const rebuild = page.getByTestId('problems-repair').or(page.getByRole('button', { name: /Repair|Rebuild/u }));
     const rebuildResponse = page.waitForResponse((candidate) =>
       candidate.request().method() === 'POST' && candidate.url() === `${devOrigin}/api/project/rebuild`);
     await rebuild.click();

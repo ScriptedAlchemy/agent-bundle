@@ -887,8 +887,9 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       await waitForBrowserRequestsAfter(evalsBrowserRequestIndex);
       phase = 'Evals comparison run availability';
       const comparisonsOpenedIndex = browserRequests.length;
-      await page.getByRole('link', { name: 'Comparisons', exact: true }).click();
-      await expect(page.getByRole('heading', { name: 'Comparisons' })).toBeVisible({ timeout: browserTimeout });
+      await page.goto(workbenchUrl(origin, '/advanced/evals'));
+      await page.getByRole('tab', { name: 'Compare' }).click();
+      await expect(page.getByRole('tab', { name: 'Compare' })).toHaveAttribute('aria-selected', 'true');
       await expect.poll(async () => page.locator('#comparison-base option').count(), { timeout: browserTimeout }).toBeGreaterThanOrEqual(2);
       phase = 'Evals comparison matrix';
       await page.locator('#comparison-base').selectOption(runId);
@@ -900,8 +901,8 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       );
 
       phase = 'foreground restart/reconnect';
-      const comparisonsHashBeforeRestart = new URL(page.url()).hash;
-      expect(comparisonsHashBeforeRestart).toBe('#comparisons');
+      const comparisonsPathBeforeRestart = new URL(page.url()).pathname;
+      expect(comparisonsPathBeforeRestart).toBe('/advanced/evals');
       if (child === undefined) throw new Error('The packed dev server child was not created.');
       const stoppedChild = child;
       if (stoppedChild.pid !== undefined) {
@@ -926,8 +927,8 @@ e2e('runs every Agent API tool from the installed tarball', { timeout: 360_000 *
       const recoveredBrowserSessionRequest = browserRequestByPlaywrightRequest.get(recoveredBrowserSessionResponse.request());
       if (recoveredBrowserSessionRequest?.completedAt === undefined) throw new Error('The recovered browser session was not recorded as a completed request.');
       const recoveredAt = recoveredBrowserSessionRequest.completedAt;
-      expect(new URL(page.url()).hash).toBe(comparisonsHashBeforeRestart);
-      await expect(page.getByRole('heading', { name: 'Comparisons' })).toBeVisible({ timeout: browserTimeout });
+      expect(new URL(page.url()).pathname).toBe(comparisonsPathBeforeRestart);
+      await expect(page.getByRole('tab', { name: 'Compare' })).toBeVisible({ timeout: browserTimeout });
       const rebuiltWithRecoveredSession = page.waitForResponse((response) =>
         response.url() === `${origin}/api/project/rebuild` && response.request().method() === 'POST' && response.ok(),
       );
