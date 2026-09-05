@@ -20,7 +20,7 @@ import { createProjectFixture, removeProjectFixture } from '../../agent-bundle/t
 import { timeScale } from '../../agent-bundle/tests/support/time-scale.ts';
 import { startRuntimePlaygroundFixture } from './helpers/runtime-playground-fixture.ts';
 import { replaceWatchedSource } from './support/watched-files.ts';
-import { buildWorkbench } from './support/workbench-e2e.ts';
+import { browserLaunchOptions, browserTrace, buildWorkbench } from './support/workbench-e2e.ts';
 
 const workspaceRoot = process.cwd();
 const workbenchAssets = join(workspaceRoot, 'packages', 'workbench', 'dist');
@@ -49,8 +49,9 @@ const requestBody = (body: string | null): unknown => {
 
 const e2e = test.extend({
   playwright: {
-    launchOptions: { channel: 'chrome' },
+    launchOptions: browserLaunchOptions,
     contextOptions: { viewport: { height: 900, width: 1440 } },
+    trace: browserTrace,
   } satisfies PlaywrightOptions,
 });
 

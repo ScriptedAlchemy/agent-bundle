@@ -7,6 +7,7 @@ import { chromium } from 'playwright';
 import { describe, expect, it } from '@rstest/core';
 
 import { createWorkbenchConfig } from '../rsbuild.config.ts';
+import { browserLaunchOptions } from './support/workbench-e2e.ts';
 
 declare global {
   interface Window {
@@ -142,7 +143,7 @@ describe('Runtime Document atoms', () => {
     const buildResult = await rsbuild.build();
     await buildResult.close();
     const { server, url } = await startStaticServer(output);
-    const browser = await chromium.launch({ channel: 'chrome' });
+    const browser = await chromium.launch(browserLaunchOptions);
     try {
       const page = await browser.newPage();
       const errors: string[] = [];
