@@ -28,7 +28,10 @@ import {
 
 export interface RouteInvocationRouteService {
   close?(): Promise<void> | void;
-  invoke(request: RouteInvocationRequest, signal?: AbortSignal): Promise<RouteInvocation>;
+  invoke(
+    request: RouteInvocationRequest,
+    options?: Readonly<{ readonly signal?: AbortSignal }>,
+  ): Promise<RouteInvocation>;
   list(limit?: number): RouteInvocationListResponse['invocations'];
   read(id: string): RouteInvocation | undefined;
 }
@@ -145,22 +148,12 @@ export class RouteInvocationRoutes {
       });
       let invocation: RouteInvocation;
       const controller = new AbortController();
-      const abort = (): void => {
-        if (!controller.signal.aborted) {
-          controller.abort(new DOMException('Route invocation request closed.', 'AbortError'));
-        }
-      };
-      const requestClosed = (): void => {
-        if (!request.complete) abort();
-      };
-      const responseClosed = (): void => {
-        if (!response.writableEnded) abort();
-      };
-      request.once('aborted', abort);
-      request.once('close', requestClosed);
-      response.once('close', responseClosed);
+      const cancel = (): void => controller.abort(new DOMException('Route invocation request was cancelled.', 'AbortError'));
+      request.once('aborted', cancel);
+      response.once('close', cancel);
       try {
-        invocation = await service.invoke(parseRouteInvocationRequest(body), controller.signal);
+        if (response.destroyed) cancel();
+        invocation = await service.invoke(parseRouteInvocationRequest(body), { signal: controller.signal });
       } catch (error) {
         const failure = error as Partial<RouteInvocationRequestError>;
         if (typeof failure.code === 'string' && typeof failure.message === 'string' && typeof failure.status === 'number') {
@@ -168,9 +161,8 @@ export class RouteInvocationRoutes {
         }
         throw error;
       } finally {
-        request.removeListener('aborted', abort);
-        request.removeListener('close', requestClosed);
-        response.removeListener('close', responseClosed);
+        request.off('aborted', cancel);
+        response.off('close', cancel);
       }
       this.#eventHub.publish({
         payload: { invocation: invocationSummary(invocation) },

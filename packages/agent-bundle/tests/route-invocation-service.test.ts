@@ -165,9 +165,9 @@ const catalog = (digest: string, sourceRevision: string): RouteManifest => ({
   sourceRevision,
 });
 
-const childResult = (request: RouteInvocationChildRequest): RouteInvocationChildResult => ({
+const childResult = (request: RouteInvocationChildRequest, text = 'ok'): RouteInvocationChildResult => ({
   document: {
-    root: { kind: 'text', text: 'ok' },
+    root: { kind: 'text', text },
     status: 'success',
     version: 1,
   },
@@ -244,7 +244,7 @@ it('rejects a queued invocation when the published revision moves before the slo
       executed.push(request);
       firstStarted.resolve();
       await hold.promise;
-      return childResult(request);
+      return childResult(request, 'old output');
     },
   });
 
@@ -258,6 +258,7 @@ it('rejects a queued invocation when the published revision moves before the slo
 
   const firstResult = await first;
   expect(firstResult).toMatchObject({
+    document: { root: { kind: 'text', text: 'old output' } },
     manifestDigest: 'digest-1',
     sourceRevision: 'rev-1',
     status: 'succeeded',
@@ -271,6 +272,59 @@ it('rejects a queued invocation when the published revision moves before the slo
   });
   expect(executed).toHaveLength(1);
   expect(releases).toBe(2);
+});
+
+it('does not spawn a child for an invocation aborted while queued', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-route-invocation-queued-abort-'));
+  const marker = join(root, 'queued-child-started');
+  const hold = deferred();
+  const firstStarted = deferred();
+  let childStarts = 0;
+  const service = new RouteInvocationService({
+    concurrency: 1,
+    manifest: {
+      manifest: () => catalog('digest', 'revision'),
+    },
+    prepared: async () => ({
+      project: {
+        manifest: { projectRoot: root } as never,
+        stateRoot: join(root, '.agent-bundle', 'state'),
+        targets: ['claude'],
+      },
+      release: () => undefined,
+    }),
+    renderChild: async (request) => {
+      childStarts += 1;
+      if ((request.input as { readonly n?: number }).n === 2) await writeFile(marker, 'spawned');
+      firstStarted.resolve();
+      await hold.promise;
+      return childResult(request);
+    },
+  });
+
+  try {
+    const first = service.invoke({ input: { n: 1 }, routeId: echoRoute.id });
+    await firstStarted.promise;
+    const controller = new AbortController();
+    const second = service.invoke(
+      { input: { n: 2 }, routeId: echoRoute.id },
+      { signal: controller.signal },
+    );
+    const cancelled = expect(second).rejects.toMatchObject({ name: 'AbortError' });
+    controller.abort(new DOMException('Queued invocation cancelled.', 'AbortError'));
+    await cancelled;
+
+    expect(childStarts).toBe(1);
+    expect(existsSync(marker)).toBe(false);
+    hold.resolve();
+    await first;
+    expect(childStarts).toBe(1);
+    expect(existsSync(marker)).toBe(false);
+  } finally {
+    hold.resolve();
+    await service.close();
+    await rm(root, { force: true, recursive: true });
+  }
 });
 
 it('does not lease or execute an invocation aborted while queued', async () => {
@@ -303,7 +357,7 @@ it('does not lease or execute an invocation aborted while queued', async () => {
   const first = service.invoke({ input: { n: 1 }, routeId: echoRoute.id });
   await firstStarted.promise;
   const controller = new AbortController();
-  const queued = service.invoke({ input: { n: 2 }, routeId: echoRoute.id }, controller.signal);
+  const queued = service.invoke({ input: { n: 2 }, routeId: echoRoute.id }, { signal: controller.signal });
   controller.abort(new DOMException('Request closed.', 'AbortError'));
   hold.resolve();
 
