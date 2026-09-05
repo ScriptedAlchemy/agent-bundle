@@ -1177,7 +1177,7 @@ const malformedBundle = (
     diagnostics: freezeDiagnostics([diagnostic(
       'AB7306',
       message,
-      `Rebuild the ${host} artifact with valid host and marketplace manifests, then rerun Doctor.`,
+      `Rebuild the composite root (agent-bundle build) so agent-bundle.manifest.json declares a valid ${host} projection, then rerun Doctor.`,
       'error',
       host,
     )]),
