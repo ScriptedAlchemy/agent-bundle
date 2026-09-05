@@ -425,6 +425,12 @@ export class McpSessionService {
     return createMcpAppSessionLease(entry);
   }
 
+  /** Live App leases over one session; 0 for an unknown or closed session. */
+  appLeaseCount(sessionId: string): number {
+    const entry = this.#sessions.get(sessionId);
+    return entry === undefined || entry.closed ? 0 : entry.appLeaseCount;
+  }
+
   async closeSession(id: McpSessionId): Promise<boolean> {
     const entry = this.#invalidateSession(id, new Error('MCP session control closed.'));
     if (entry === undefined) return false;
