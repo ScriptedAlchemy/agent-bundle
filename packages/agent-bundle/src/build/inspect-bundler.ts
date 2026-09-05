@@ -1,4 +1,8 @@
-import { hookWrapperAppliesOperatorEnv } from '../adapters/hook-contract.ts';
+import {
+  eventIpcRuntimeSpecifier,
+  eventProjectRuntimeSpecifier,
+  hookWrapperAppliesOperatorEnv,
+} from '../adapters/hook-contract.ts';
 import type { TargetHookEntry } from '../adapters/types.ts';
 import { isPlainRecord } from '../core/strict-json.ts';
 import type { AgentBundleToolsConfig, NormalizedPlugin } from '../core/types.ts';
@@ -21,7 +25,7 @@ import {
 import { launchEnvRuntimeSpecifier, operatorEnvLayerVirtualModule } from './launch-env-shell.ts';
 import { cliBinRslibEntries, planCompiledCliBins } from './cli-bins.ts';
 import type { CompositePlan } from './compose.ts';
-import { eventRuntimeHosting, planCompiledMcpEntries, selectedServerHosts } from './entries.ts';
+import { eventRuntimeHosting, eventRuntimeModulePath, planCompiledMcpEntries, selectedServerHosts } from './entries.ts';
 import { composeMcpAppsRsbuildConfig, planCompiledMcpApps } from './mcp-apps.ts';
 import { projectMeta } from './meta.ts';
 import { planPackageEntries } from './package-build.ts';
@@ -319,9 +323,20 @@ const hookEntries = (
   tools: AgentBundleToolsConfig | undefined,
 ): readonly BundlerInspectionEntry[] => {
   const outputRoot = artifactOutputToken;
-  return entries.map((entry) => rslibInspectionEntry({
+  return entries.map((entry) => {
+    const eventIpcRuntime = entry.hook.eventRoute === undefined ? undefined : eventRuntimeModulePath('ipc');
+    const eventProjectRuntime = entry.hook.eventRoute === undefined ? undefined : eventRuntimeModulePath('project');
+    return rslibInspectionEntry({
     entry: {
-      aliases: { [launchEnvRuntimeSpecifier]: launchEnvRuntimePath() },
+      aliases: {
+        [launchEnvRuntimeSpecifier]: launchEnvRuntimePath(),
+        ...(eventIpcRuntime === undefined
+          ? {}
+          : {
+            [eventIpcRuntimeSpecifier]: eventIpcRuntime,
+            ...(eventProjectRuntime === undefined ? {} : { [eventProjectRuntimeSpecifier]: eventProjectRuntime }),
+          }),
+      },
       name: entry.relativePath.replaceAll('/', '-').replace(/\.mjs$/u, ''),
       outputRelativePath: entry.relativePath,
       source: entry.hook.source,
@@ -338,7 +353,8 @@ const hookEntries = (
     source: entry.hook.source,
     target,
     ...(tools === undefined ? {} : { tools }),
-  }));
+    });
+  });
 };
 
 const mcpAppsEntry = (

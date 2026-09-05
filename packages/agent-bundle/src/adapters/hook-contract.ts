@@ -28,6 +28,8 @@ export interface TargetHookWrapper {
 }
 
 export interface TargetHookEntry extends TargetHookWrapper {
+  /** Heavy event executor bundled beside a cheap preflight wrapper. */
+  readonly executeVirtualSource?: string;
   /** Timeout projected into the native host's seconds unit. */
   readonly timeout?: number;
   readonly virtualSource: string;
@@ -630,16 +632,24 @@ export const eventFlightArtifactEpochToken = '__AGENT_BUNDLE_EVENT_FLIGHT_ARTIFA
 const standaloneEventRoute = (route: NonNullable<NormalizedHook['eventRoute']>): boolean =>
   route.runtime === 'standalone' || route.fallback === 'standalone';
 
+/** The independently bundleable preflight leaf on an event route, when present. */
+export const eventRoutePreflight = (
+  route: NormalizedHook['eventRoute'],
+): NonNullable<NormalizedHook['eventRoute']>['preflight'] => route?.preflight;
+
 /**
  * True when a wrapper runs plugin code in its own process and therefore
  * imports the operator `.env` layer (#469): every handler-executing wrapper,
- * and an event-route wrapper that can render standalone. A shared-runtime
- * event-route wrapper forwards the event to the warm MCP process, which
- * applied the layer itself when it started. The build serves the layer module
- * to exactly these wrappers.
+ * an event-route wrapper that can render standalone, and a wrapper that
+ * evaluates a preflight gate in-process. A shared-runtime event-route
+ * wrapper without a gate forwards the event to the warm MCP process, which
+ * applied the layer itself when it started. The build serves the layer
+ * module to exactly these wrappers.
  */
 export const hookWrapperAppliesOperatorEnv = (entry: TargetHookWrapper): boolean =>
-  entry.hook.eventRoute === undefined || standaloneEventRoute(entry.hook.eventRoute);
+  entry.hook.eventRoute === undefined
+  || standaloneEventRoute(entry.hook.eventRoute)
+  || eventRoutePreflight(entry.hook.eventRoute) !== undefined;
 
 /**
  * The wrapper reaches the warm MCP runtime through an endpoint identified by
@@ -654,19 +664,30 @@ const eventRouteHookWrapperSource = (
   entry: TargetHookWrapper,
   hostContractRevision: string,
   durableLineage = false,
+  includePreflight = true,
 ): string => {
   const route = entry.hook.eventRoute!;
   const standalone = standaloneEventRoute(route);
+  const preflight = includePreflight ? eventRoutePreflight(route) : undefined;
   // A standalone `session/end` (the warm runtime has usually already exited by
   // then) retires the durable lineage journal itself, so roots never outlive
   // their session; only projects whose state is workspace-durable have one.
   const retiresLineage = standalone && durableLineage && route.event === 'session/end';
+  const projectBindings = [
+    ...new Set([
+      ...(standalone || preflight !== undefined ? ['createCanonicalEventProps'] : []),
+      ...(preflight !== undefined ? ['executeEventPreflight', 'projectEventPreflightResult'] : []),
+      ...(standalone ? ['projectEventDocument'] : []),
+      'validateNativeEventEnvelope',
+    ]),
+  ];
   return [
     // Only a wrapper that can render in-process needs the operator `.env`
     // layer (#469): a shared-runtime wrapper forwards the event to the warm
     // MCP process, which applied the layer itself when it started. First,
-    // so it evaluates before every other module of the bundle.
-    ...(standalone ? [operatorEnvLayerImport] : []),
+    // so it evaluates before every other module of the bundle — including a
+    // preflight leaf that may read `process.env`.
+    ...(standalone || preflight !== undefined ? [operatorEnvLayerImport] : []),
     "import { dirname, resolve } from 'node:path';",
     ...(standalone ? ["import { Worker } from 'node:worker_threads';"] : []),
     ...(standalone
@@ -682,7 +703,8 @@ const eventRouteHookWrapperSource = (
         ]
       : []),
     `import { EventRuntimeTransportError, requestEventRuntime } from ${JSON.stringify(eventIpcRuntimeSpecifier)};`,
-    `import { ${standalone ? 'createCanonicalEventProps, projectEventDocument, ' : ''}validateNativeEventEnvelope } from ${JSON.stringify(eventProjectRuntimeSpecifier)};`,
+    `import { ${projectBindings.join(', ')} } from ${JSON.stringify(eventProjectRuntimeSpecifier)};`,
+    ...(preflight === undefined ? [] : [`import preflight from ${JSON.stringify(preflight.source)};`]),
     '',
     `const artifactEpoch = ${JSON.stringify(eventArtifactEpochToken)};`,
     ...(standalone ? [`const flightArtifactEpoch = ${JSON.stringify(eventFlightArtifactEpochToken)};`] : []),
@@ -772,9 +794,9 @@ const eventRouteHookWrapperSource = (
                 '};',
               ]
             : []),
-          'const runStandalone = async (native, signal) => {',
-          '  const props = createCanonicalEventProps(canonicalEvent, native, target, nativeEvent, capabilityRevision, signal);',
-          ...(retiresLineage ? ['  await retireLineage(native, props.canonical.idempotencyKey, props.canonical.observedAt);'] : []),
+          'const runStandalone = async (native, signal, props) => {',
+          '  const resolved = props ?? createCanonicalEventProps(canonicalEvent, native, target, nativeEvent, capabilityRevision, signal);',
+          ...(retiresLineage ? ['  await retireLineage(native, resolved.canonical.idempotencyKey, resolved.canonical.observedAt);'] : []),
           '  const sessionId = typeof native.session_id === "string" ? native.session_id : typeof native.conversation_id === "string" ? native.conversation_id : undefined;',
           '  const workspaceRoot = typeof native.cwd === "string" ? native.cwd : Array.isArray(native.workspace_roots) && typeof native.workspace_roots[0] === "string" ? native.workspace_roots[0] : undefined;',
           // Standalone hooks hold no registry, so lineage is what the payload proves — plus, on Codex, what the
@@ -790,7 +812,7 @@ const eventRouteHookWrapperSource = (
           // A hook's stdout is its host envelope: no terminal, never probed (#511).
           '    terminal: available({ hostSurface: "hook", sharesTarget: false, stderr: { color: "none", kind: "none" }, stdout: { color: "none", kind: "none" } }, "derived"),',
           '    ...(workspaceRoot === undefined ? {} : { workspace: available({ root: workspaceRoot }, "native") }),',
-          '  }, async () => renderStandalone({ kind: "event", props: { event: canonicalEvent, payload: { canonical: props.canonical, native: props.native } } }, signal));',
+          '  }, async () => renderStandalone({ kind: "event", props: { event: canonicalEvent, payload: { canonical: resolved.canonical, native: resolved.native } } }, signal));',
           '  return projectEventDocument(document, canonicalEvent, target, nativeEvent, native);',
           '};',
         ]
@@ -807,22 +829,127 @@ const eventRouteHookWrapperSource = (
     '  try { parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { fail("stdin must contain exactly one JSON value"); }',
     '  const native = validateNativeEventEnvelope(parsed, { canonicalEvent, nativeEvent, target });',
     '  const controller = new AbortController();',
+    ...(preflight === undefined
+      ? []
+      : [
+          '  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(timeoutMs)]);',
+          '  const props = createCanonicalEventProps(canonicalEvent, native, target, nativeEvent, capabilityRevision, signal);',
+          '  const gate = await executeEventPreflight(preflight, {',
+          '    canonical: props.canonical,',
+          '    host: { name: target, nativeEvent },',
+          '    signal,',
+          '    terminal: { hostSurface: "hook", sharesTarget: false, stderr: { color: "none", kind: "none" }, stdout: { color: "none", kind: "none" } },',
+          '  });',
+          '  if (gate !== "execute") {',
+          '    const projected = projectEventPreflightResult(gate, canonicalEvent, target, nativeEvent, native);',
+          '    if (projected !== undefined) process.stdout.write(JSON.stringify(projected));',
+          '    return;',
+          '  }',
+        ]),
     '  let output;',
     '  if (runtimeMode === "standalone") {',
-    ...(standalone ? ['    output = await runStandalone(native, controller.signal);'] : ['    fail("standalone runtime was not compiled");']),
+    ...(standalone
+      ? [preflight === undefined
+        ? '    output = await runStandalone(native, controller.signal);'
+        : '    output = await runStandalone(native, signal, props);']
+      : ['    fail("standalone runtime was not compiled");']),
     '  } else {',
     '    try {',
-    '      output = await requestEventRuntime({ artifactEpoch, endpointId, event: canonicalEvent, hostContractRevision: capabilityRevision, native, signal: controller.signal, target, timeoutMs });',
+    ...(preflight === undefined
+      ? ['      output = await requestEventRuntime({ artifactEpoch, endpointId, event: canonicalEvent, hostContractRevision: capabilityRevision, native, signal: controller.signal, target, timeoutMs });']
+      : ['      output = await requestEventRuntime({ artifactEpoch, endpointId, event: canonicalEvent, hostContractRevision: capabilityRevision, native, signal, target, timeoutMs });']),
     '    } catch (error) {',
     ...(standalone
       ? [
           '      if (!(fallbackMode === "standalone" && error instanceof EventRuntimeTransportError && error.code === "runtime-unavailable")) throw error;',
-          '      output = await runStandalone(native, controller.signal);',
+          preflight === undefined
+            ? '      output = await runStandalone(native, controller.signal);'
+            : '      output = await runStandalone(native, signal, props);',
         ]
       : ['      throw error;']),
     '    }',
     '  }',
     '  if (output !== undefined) process.stdout.write(JSON.stringify(output));',
+    '};',
+    'if (import.meta.main) {',
+    '  await run().catch((error) => {',
+    '    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\\n`);',
+    '    process.exitCode = 1;',
+    '  });',
+    '}',
+    '',
+  ].join('\n');
+};
+
+/**
+ * Emits the physically cheap public entry for a gated event route. The
+ * rendered route kernel remains a separately bundled sibling process and is
+ * started only after the gate returns `execute`.
+ */
+const eventRoutePreflightWrapperSource = (
+  entry: TargetHookWrapper,
+  hostContractRevision: string,
+): string => {
+  const route = entry.hook.eventRoute!;
+  const preflight = eventRoutePreflight(route)!;
+  const executorFile = entry.relativePath.split('/').at(-1)!.replace(/\.mjs$/u, '.execute.mjs');
+  const projectBindings = ['createCanonicalEventProps', 'executeEventPreflight', 'projectEventPreflightResult', 'validateNativeEventEnvelope'];
+  return [
+    operatorEnvLayerImport,
+    "import { spawn } from 'node:child_process';",
+    "import { fileURLToPath } from 'node:url';",
+    `import { ${projectBindings.join(', ')} } from ${JSON.stringify(eventProjectRuntimeSpecifier)};`,
+    `import preflight from ${JSON.stringify(preflight.source)};`,
+    '',
+    `const canonicalEvent = ${JSON.stringify(route.event)};`,
+    `const capabilityRevision = ${JSON.stringify(hostContractRevision)};`,
+    `const nativeEvent = ${JSON.stringify(entry.nativeEvent)};`,
+    `const target = ${JSON.stringify(entry.target)};`,
+    `const timeoutMs = ${String(entry.hook.timeoutMs ?? 5_000)};`,
+    `const executor = fileURLToPath(new URL(/* webpackIgnore: true */ ${JSON.stringify(`./${executorFile}`)}, import.meta.url));`,
+    'const fail = (message) => { throw new Error(`Agent Bundle event route error: ${message}`); };',
+    'const runExecutor = (input, signal) => new Promise((resolve, reject) => {',
+    '  const child = spawn(process.execPath, [executor], { signal, stdio: ["pipe", "pipe", "pipe"] });',
+    '  const stdout = [];',
+    '  const stderr = [];',
+    '  child.stdout.on("data", (chunk) => stdout.push(chunk));',
+    '  child.stderr.on("data", (chunk) => stderr.push(chunk));',
+    '  child.once("error", reject);',
+    '  child.once("close", (code, childSignal) => {',
+    '    const errorText = Buffer.concat(stderr).toString("utf8");',
+    '    if (code !== 0 || childSignal !== null) { reject(new Error(errorText.trim() || `Deferred event executor failed (exit ${String(code)}, signal ${String(childSignal)}).`)); return; }',
+    '    if (errorText !== "") process.stderr.write(errorText);',
+    '    resolve(Buffer.concat(stdout));',
+    '  });',
+    '  child.stdin.end(input);',
+    '});',
+    'const run = async () => {',
+    '  const chunks = [];',
+    '  let bytes = 0;',
+    '  for await (const chunk of process.stdin) {',
+    '    bytes += chunk.length;',
+    '    if (bytes > 1024 * 1024) fail("stdin exceeds the 1 MiB native-payload limit");',
+    '    chunks.push(chunk);',
+    '  }',
+    '  const input = Buffer.concat(chunks);',
+    '  let parsed;',
+    '  try { parsed = JSON.parse(input.toString("utf8")); } catch { fail("stdin must contain exactly one JSON value"); }',
+    '  const native = validateNativeEventEnvelope(parsed, { canonicalEvent, nativeEvent, target });',
+    '  const signal = AbortSignal.timeout(timeoutMs);',
+    '  const props = createCanonicalEventProps(canonicalEvent, native, target, nativeEvent, capabilityRevision, signal);',
+    '  const gate = await executeEventPreflight(preflight, {',
+    '    canonical: props.canonical,',
+    '    host: { name: target, nativeEvent },',
+    '    signal,',
+    '    terminal: { hostSurface: "hook", sharesTarget: false, stderr: { color: "none", kind: "none" }, stdout: { color: "none", kind: "none" } },',
+    '  });',
+    '  if (gate !== "execute") {',
+    '    const projected = projectEventPreflightResult(gate, canonicalEvent, target, nativeEvent, native);',
+    '    if (projected !== undefined) process.stdout.write(JSON.stringify(projected));',
+    '    return;',
+    '  }',
+    '  const output = await runExecutor(input, signal);',
+    '  if (output.length > 0) process.stdout.write(output);',
     '};',
     'if (import.meta.main) {',
     '  await run().catch((error) => {',
@@ -1198,15 +1325,28 @@ export const planHooks = (
       target,
       ...(timeout === undefined ? {} : { timeout }),
     };
+    const preflight = eventRoutePreflight(hook.eventRoute);
     hookEntries.push({
       ...wrapper,
-      virtualSource: hook.eventRoute === undefined
-        ? contract.wrapperSource(wrapper)
-        : eventRouteHookWrapperSource(
+      ...(hook.eventRoute === undefined || preflight === undefined
+        ? {}
+        : {
+          executeVirtualSource: eventRouteHookWrapperSource(
             wrapper,
             contract.hostContractRevision ?? target,
             model.state?.lifetime === 'workspace-durable',
+            false,
           ),
+        }),
+      virtualSource: hook.eventRoute === undefined
+        ? contract.wrapperSource(wrapper)
+        : preflight === undefined
+          ? eventRouteHookWrapperSource(
+              wrapper,
+              contract.hostContractRevision ?? target,
+              model.state?.lifetime === 'workspace-durable',
+            )
+          : eventRoutePreflightWrapperSource(wrapper, contract.hostContractRevision ?? target),
     });
   }
 

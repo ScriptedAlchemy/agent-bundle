@@ -183,10 +183,12 @@ index.
 
 ## Event routes
 
-Config-declared hooks are the compact, native escape hatch. Use one when the handler genuinely
-needs the raw host envelope or host-specific behavior. For ordinary semantic events — including
-high-frequency events that should return before rendering — prefer an **event route**: a file
-under `src/events/` whose path is the canonical event family it handles
+Config-declared hooks are the compact, native escape hatch: the handler runs in-process inside
+the generated wrapper, and its second argument (`HookHandlerContext`) hands it the validated host
+envelope verbatim as `nativeInput`, beside the invoking `target` and `nativeEvent`. Use one when
+the handler genuinely needs the raw host envelope or host-specific behavior. For ordinary semantic
+events — including high-frequency events that should return before rendering — prefer an **event
+route**: a file under `src/events/` whose path is the canonical event family it handles
 (`src/events/tool/before.tsx`, `src/events/stop.tsx`). It is one async default Server Component,
 like an MCP tool route, plus a statically extracted `config` export:
 
@@ -226,73 +228,142 @@ hashed from the event, target, and native payload, `observedAt`, a `sequence`, t
 
 ### Preflight gates
 
-A named `preflight` export gives the same event route a cheap gate before the rendered route
-runtime loads. The physically cheap pattern is a statically followable relative re-export:
+A named `preflight` export gives an event route a cheap gate that runs on the canonical event
+after envelope decoding, host validation, and canonicalization, and before any of the rendered
+route runtime — React, the RSC renderer, layouts, providers, state, notices — is loaded. Exactly
+one authoring form is accepted: a single relative default re-export in the route module, naming a
+module whose default export is the gate function.
 
-```ts
+```tsx
 // src/events/tool/before.tsx
-export const config = { providers: ['projectPolicy'] };
+import type { AgentEventRouteConfig, AgentEventRouteProps } from 'agent-bundle';
+
+export const config = { providers: ['projectPolicy'] } satisfies AgentEventRouteConfig;
 export { default as preflight } from './before.preflight.js';
 
-export default async function BeforeTool({ canonical, signal }) {
-  // The full rendered event route runs only after preflight returns "execute".
+export default async function BeforeTool(
+  { canonical, native, signal }: AgentEventRouteProps<'tool/before'>,
+) {
+  // Runs only after preflight returned 'execute'.
 }
 ```
 
 ```ts
 // src/events/tool/before.preflight.ts
-export default ({ canonical }) =>
-  mentionsCargo(commandFrom(canonical.payload))
+import type { EventPreflight } from 'agent-bundle';
+
+export default (({ canonical }) =>
+  canonical.payload.toolName?.value === 'Write'
     ? 'execute'
-    : { outcome: 'continue' };
+    : { outcome: 'continue' }) satisfies EventPreflight<'tool/before'>;
 ```
 
-Keep the preflight module plain Node/application code: do not import React, RSC helpers, the
-rendered route module, or application providers. A relative re-export lets the compiler build an
-independent preflight source graph and defer the route graph. A locally declared function in the
-rendered route module is logically early but not physically cheap, because evaluating that module
-also evaluates its static rendering and provider imports. Bare-package, cyclic, non-function, and
-otherwise non-followable preflight exports are build errors; the compiler does not silently use
-the expensive route path.
+Keep the preflight module plain Node/application code: import nothing from React, the RSC
+helpers, the rendered route module, or `src/providers/` (type-only imports are erased and are
+fine). The relative re-export is what makes the gate cheap: the compiler records the target module
+on the route's own graph node — `preflight` on the compiled route, part of the graph digest — as
+an entry it can bundle on its own, and keeps it out of route discovery, so `before.preflight.ts`
+beside `before.tsx` is application code the route names, never a second event route. The `.js`
+specifier resolves to the `.ts`/`.tsx` source, as route imports do. A gate declared inline in the
+route module (`export const preflight = …`, `export function preflight`) is rejected: evaluating
+that module evaluates its rendering and provider imports, the very cost the gate exists to avoid.
 
-Preflight may be synchronous or asynchronous and has exactly three results:
+Every rejected form is `AB4840`, reported once per route on the route module by `inspect`,
+`validate`, `build`, and `dev`: `preflight` declared inline or exported more than once;
+re-exported under a binding other than `default` (`export { gate as preflight } from './gate.js'`);
+re-exported from a bare package specifier; a relative target that is missing, unreadable, or part
+of a re-export cycle; a default export that cannot be followed through an acyclic chain of
+relative default re-exports; or a default export that is not a function the static scan can see —
+an object literal, a string, a class, or an identifier the module imports rather than declares
+(`satisfies`, `as`, and parentheses are looked through, so the typed form above still reads as a
+function). The route compiles without a gate beside the error, and because the diagnostic is an
+error the build fails rather than silently taking the expensive rendered path.
+
+Preflight may be synchronous or asynchronous and has exactly three results
+(`EventPreflightResult`):
 
 | Result | Meaning |
 | --- | --- |
 | `'execute'` | Load the rendered route entry, resolve its declared providers, and render it. |
-| `{ outcome: 'continue' }` | Return pass-through output without expressing a host decision. |
-| `{ outcome: 'deny', reason: string }` | Project a denial through the event's existing canonical outcome rules. |
+| `{ outcome: 'continue' }` | Pass through: nothing is projected and no host decision is written, so the host's normal flow applies — on `tool/before`, its own permission prompt. |
+| `{ outcome: 'deny', reason }` | Deny with a non-empty reason, projected per host by the same rules as a rendered route's `deny` (`hookSpecificOutput.permissionDecision: 'deny'` with `permissionDecisionReason` on a Claude `tool/before`, for example). |
 
-`execute` is the only result that loads the rendered route runtime. `undefined`, unknown fields
-or outcomes, and an empty denial reason fail closed through framework validation. Observation-only
-events cannot deny.
+`execute` is the only result that loads the rendered route runtime. Validation
+(`validateEventPreflightResult`, exported from `agent-bundle`) fails closed on everything else:
+`undefined`, the bare string `'continue'`, an outcome other than `continue` or `deny` — a gate has
+no `allow`, `ask`, or `updatedInput`; return `'execute'` and let the rendered route make those
+decisions — any extra field (`reason` beside `continue`, `updatedInput` beside `deny`), an empty
+or whitespace-only reason, and `deny` on a family where no host projects a blocking denial.
+`eventFamilyAllowsPreflightDeny` (also exported) is that family list: a gate may deny on
+`tool/before`, `stop`, `agent/start`, `agent/stop`, `agent/idle`, `prompt/submit`,
+`compact/before`, `permission/request`, `model-switch/before`, `config/change`, and
+`task/create`; `session/start`, `session/end`, `tool/after`, `tool/failure`, `compact/after`,
+`permission/denied`, `stop/failure`, `file/change`, `task/complete`, `model-switch/after`, and
+`workspace/open` cannot deny from preflight. The per-host projection rules described under
+[The canonical payload](#the-canonical-payload) still apply to a gate's denial.
 
-The preflight context is frozen and deliberately smaller than `AgentEventRouteProps`. It contains
-the exact `canonical` identity and payload the rendered route would receive, the request `signal`
-owned by the hook deadline, translated host/terminal capability metadata already available
-without application code, and only explicitly framework-owned cheap values. It does **not**
-contain `native`, state, notices, lineage stores, rendered layouts, application providers,
-React/RSC helpers, or the application request context. Envelope bounds and decoding, native host
-validation, canonicalization, capability translation, deadlines and aborts, outcome validation,
-and host projection remain framework-owned. If a gate must inspect an unmapped native field, use
-a config-declared handler instead.
+The gate receives one frozen `EventPreflightContext<E>` — `{ canonical, host, signal, terminal }`
+— deliberately smaller than `AgentEventRouteProps`:
+
+| Field | What it is |
+| --- | --- |
+| `canonical` | The exact `AgentEventCanonicalIdentity` the rendered route would receive: `event`, `idempotencyKey`, `observedAt`, `sequence`, `provenance`, and the family's canonical `payload` (see [The canonical payload](#the-canonical-payload)). Type the gate to its family — `EventPreflight<'tool/before'>` — and `payload` narrows the same way it does for the route. |
+| `host` | `{ name, nativeEvent }`, frozen: the target the wrapper was compiled for (`'claude'`, `'codex'`, `'cursor'`) and the native event name it validated (`'PreToolUse'`, `'preToolUse'`), both known from the compiled hook before any envelope is read. |
+| `signal` | The request `AbortSignal` owned by the hook deadline. The kernel refuses to start a gate on an already-aborted signal, abandons a pending asynchronous gate the moment the signal aborts — rejecting with the signal's reason rather than waiting for the gate to notice — and checks the signal once more before validating the result, so a late answer is never projected. |
+| `terminal` | The `AgentTerminal` described in [The terminal capability](./mcp.mdx#the-terminal-capability): `hostSurface`, `stdout`, `stderr`, `sharesTarget`. Information only, never a writer; the `hook` surface reports `none` on both streams. |
+
+It does **not** contain `native`, state, notices, lineage, rendered layouts, application
+providers, React/RSC helpers, or the application request context. Envelope bounds and decoding,
+native host validation, canonicalization, capability translation, deadlines and aborts, outcome
+validation, and host projection remain framework-owned. A gate that must read an unmapped native
+field has two options: return `'execute'` and read `native` in the rendered route, or move the
+logic into a config-declared handler — the raw/native escape hatch, which receives the validated
+envelope verbatim as `context.nativeInput` and runs in-process in the wrapper. `EventPreflight`,
+`EventPreflightContext`, `EventPreflightResult`, `validateEventPreflightResult`, and
+`eventFamilyAllowsPreflightDeny` are exported from `agent-bundle`, `agent-bundle/api`, and
+`agent-bundle/routes`.
+
+### Execution trace events
+
+The exported `EventTraceEvent` discriminated union gives developer tooling one stable,
+payload-free view of the event kernel: `preflight.start`, `preflight.outcome`, `execute.start`,
+`providers.start` / `providers.finish`, `render.start` / `render.finish`, and terminal `failure`.
+Each frozen event carries one `EventTraceExecution` identity, a monotonic timestamp and sequence,
+and only phase-specific metadata; failures use a bounded, stack-free `EventTraceErrorSummary`.
+`createEventTracer` is a no-op without an observer and isolates observer errors from execution.
+The trace types and helpers are exported from `agent-bundle`, `agent-bundle/api`, and
+`agent-bundle/event-project`.
 
 ### Declaring route providers
 
-Provider laziness is declaration-driven. Preflight materializes no application providers. An
-executed event route can statically declare the provider keys it needs; the runtime then
-loads and resolves only that subset. Selected providers still materialize once per request,
-sequentially in deterministic key/source order, with `processLifetime` seeded first, and failures
-remain closed. Duplicate or unknown keys are build errors.
+Provider laziness is declaration-driven, and only event routes declare it:
+`AgentEventRouteConfig.providers` is an array of string literals inside the static config
+grammar, naming the conventional providers the rendered route reads through
+`(await agent()).providers.<key>`. Preflight materializes no application providers whatever the
+route declares. An executed route with a declaration loads and resolves only that subset — still
+once per request, sequentially in the deterministic key-then-source order (never declaration
+order), fail-closed, with the framework-owned `processLifetime` seeded first. `[]` mounts
+`processLifetime` alone. A route with no declaration keeps the compatibility behavior and
+resolves every conventional provider.
 
-Use `export const config = { providers: ['projectPolicy'] }`; provider keys are the camel-cased
-filenames under `src/providers/`. An empty array selects no application providers.
+Keys are the camel-cased stems of the `src/providers/<name>.*` modules the route graph discovers
+(`retry-policy.ts` is `retryPolicy`), the same keys `AgentBundleProviders` in the generated
+`.agent-bundle/routes.d.ts` lists. `processLifetime` is not one of them — it is seeded whatever
+the route declares — and must not be declared. The declaration is judged when the route graph
+compiles, so `inspect`, `validate`, `build`, and `dev` all report `AB4841`, once per route with
+every defect in one message: a `providers` that is not an array of string literals, a key listed
+twice, the reserved `processLifetime`, or a key that matches no discovered provider — a
+misspelling, a stem camel-cased differently, or a module discovery skips (an `_`- or `.`-prefixed
+path segment, a `.d.ts` file, or a path the project's ignore rules exclude) — with the project's
+provider keys listed for an unknown one. A declaration with any defect selects nothing, so the
+build fails rather than resolving a provider set the author did not write.
 
-For compatibility, an executed route with no provider declaration resolves all conventional
-providers. Declare the narrow subset for ubiquitous routes so unrelated daemon, state, or
-provider work stays outside both the preflight executable and the deferred rendered route. This
-does not change provider value types or the synchronous
-`(await agent()).providers.<key>` contract.
+Declare the narrow subset for ubiquitous routes so unrelated daemon, state, or provider work
+stays outside both the preflight executable and the deferred rendered route. This changes
+neither provider value types nor the synchronous `(await agent()).providers.<key>` contract.
+`renderRoute` from `agent-bundle/test` honors the same declaration: a route-unit render of
+`event:tool/before` mounts exactly the declared subset (every provider when the route declares
+none), so a test exercises the provider set the route will see.
 
 ### The canonical payload
 

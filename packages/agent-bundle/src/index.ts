@@ -96,6 +96,33 @@ export type {
   ToolRouteProps,
   ToolTaskSupport,
 } from './routes/public.ts';
+export {
+  createEventTracer,
+  eventTraceEventKinds,
+  eventTraceExecution,
+  eventTracePhases,
+  summarizeEventTraceError,
+} from './events/trace.ts';
+export type {
+  CreateEventTracerOptions,
+  EventTraceErrorSummary,
+  EventTraceEvent,
+  EventTraceEventKind,
+  EventTraceExecuteStart,
+  EventTraceExecution,
+  EventTraceFailure,
+  EventTraceObserver,
+  EventTracePhase,
+  EventTracePreflightOutcome,
+  EventTracePreflightOutcomeEvent,
+  EventTracePreflightStart,
+  EventTraceProvidersFinish,
+  EventTraceProvidersStart,
+  EventTracer,
+  EventTraceRenderFinish,
+  EventTraceRenderStart,
+  EventTraceRuntime,
+} from './events/trace.ts';
 export { compareEvals, runEvals, startDevServer } from './api.ts';
 export {
   createCodexEvalHarness,

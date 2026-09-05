@@ -7,7 +7,11 @@ import { operatorEnvLayerImport, operatorEnvLayerImports, operatorEnvLayerStatem
 import type { NoticeDeliveryAdvertisement } from '../adapters/notice-delivery.ts';
 import { stableJson } from '../core/digest.ts';
 import type { NormalizedHook, NormalizedNoticeRetentionPolicy, NormalizedStateDefinition } from '../core/types.ts';
-import { orderedProviders } from '../routes/provider-execution.ts';
+import {
+  orderedProviders,
+  requiredProviderKeyProblemMessage,
+  selectRequiredProviders,
+} from '../routes/provider-execution.ts';
 import { layoutChainFor, layoutRouteName } from '../routes/layouts.ts';
 import { providerKeyFromName } from '../routes/providers.ts';
 import type { CompiledAgentRoute, CompiledCliCommand, CompiledLayout, CompiledProvider } from '../routes/types.ts';
@@ -877,8 +881,16 @@ const eventRouteImports = (
 const eventRouteRecords = (
   routes: readonly NormalizedHook[],
   offset: number,
+  providers: readonly CompiledProvider[],
+  selections: ReadonlyMap<string, readonly CompiledProvider[]>,
 ): readonly string[] => routes.map((route, index) =>
-  `  ${JSON.stringify(route.id)}: Object.freeze({ event: ${JSON.stringify(route.eventRoute!.event)}, id: ${JSON.stringify(`event:${route.eventRoute!.event}`)}, kind: 'event-route', module: route${String(offset + index)}, name: ${JSON.stringify(route.eventRoute!.event)} }),`);
+  `  ${JSON.stringify(route.id)}: Object.freeze({ event: ${JSON.stringify(route.eventRoute!.event)}, id: ${JSON.stringify(`event:${route.eventRoute!.event}`)}, kind: 'event-route', module: route${String(offset + index)}, name: ${JSON.stringify(route.eventRoute!.event)}${
+    route.eventRoute!.providers === undefined
+      ? ''
+      : `, providers: Object.freeze([${
+        (selections.get(route.id) ?? []).map((provider) => `providers[${String(providers.indexOf(provider))}]`).join(', ')
+      }])`
+  } }),`);
 
 const providerImports = (providers: readonly CompiledProvider[]): readonly string[] =>
   providers.map((provider, index) =>
@@ -925,14 +937,18 @@ const processLifetimeValueSource = 'processHit';
  */
 const providersFieldSource = (
   providers: readonly CompiledProvider[],
-  expressions: { readonly indent: string; readonly invocation: string },
+  expressions: {
+    readonly indent: string;
+    readonly invocation: string;
+    readonly providers?: string;
+  },
 ): readonly string[] => {
-  const { indent, invocation } = expressions;
+  const { indent, invocation, providers: providerExpression = 'providers' } = expressions;
   if (providers.length === 0) return [`${indent}providers: { processLifetime: ${processLifetimeValueSource} },`];
   return [
     `${indent}providers: async (request) => {`,
     `${indent}  const providerValues = { processLifetime: ${processLifetimeValueSource} };`,
-    `${indent}  for (const provider of providers) {`,
+    `${indent}  for (const provider of ${providerExpression}) {`,
     `${indent}    if (typeof provider.module.default !== 'function') {`,
     `${indent}      throw new TypeError(\`Context provider "\${provider.key}" (\${provider.source}) must default-export a factory.\`);`,
     `${indent}    }`,
@@ -951,9 +967,28 @@ const providersFieldSource = (
 export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWorkerOptions): string => {
   const routes = executableMcpRoutes(options.routes);
   const eventRoutes = options.eventRoutes ?? [];
-  const providers = orderedProviders(options.providers ?? []);
-  const layouts = workerLayouts(options.layouts ?? [], routes);
   const wiresInbox = wiresInboxRoute(options);
+  const allProviders = orderedProviders(options.providers ?? []);
+  const providerSelections = new Map<string, readonly CompiledProvider[]>();
+  let importsAllProviders = routes.length > 0 || wiresInbox;
+  for (const route of eventRoutes) {
+    const required = route.eventRoute?.providers;
+    const selection = selectRequiredProviders(allProviders, required);
+    if (!selection.ok) {
+      throw new Error(
+        `Event route ${JSON.stringify(route.id)} has an invalid provider selection: ${
+          selection.problems.map(requiredProviderKeyProblemMessage).join(' ')
+        }`,
+      );
+    }
+    if (required === undefined) importsAllProviders = true;
+    else providerSelections.set(route.id, selection.providers);
+  }
+  const providers = importsAllProviders
+    ? allProviders
+    : orderedProviders([...new Set([...providerSelections.values()].flat())]);
+  const hasProviderSelections = providerSelections.size > 0;
+  const layouts = workerLayouts(options.layouts ?? [], routes);
   return [
     "import { parentPort } from 'node:worker_threads';",
     "import { createElement } from 'react';",
@@ -983,7 +1018,7 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     'const routes = Object.freeze({',
     ...routeRecords(routes, { layouts }),
     ...noticeInboxRecord(wiresInbox),
-    ...eventRouteRecords(eventRoutes, routes.length),
+    ...eventRouteRecords(eventRoutes, routes.length, providers, providerSelections),
     '});',
     'const requests = new Map();',
     '',
@@ -1011,7 +1046,11 @@ export const generatedRouteFlightWorkerSource = (options: GeneratedRouteFlightWo
     ...(options.state === undefined ? [] : ['      noticeLedger: bindings.noticeLedger,']),
     '      plugin,',
     '      progress: { report: async (update) => { parentPort.postMessage({ id: message.id, type: \'progress\', update }); } },',
-    ...providersFieldSource(providers, { indent: '      ', invocation: 'message.invocation' }),
+    ...providersFieldSource(providers, {
+      indent: '      ',
+      invocation: 'message.invocation',
+      ...(hasProviderSelections ? { providers: 'route.providers ?? providers' } : {}),
+    }),
     '      ...(message.session === undefined ? {} : { session: message.session }),',
     '      signal: controller.signal,',
     ...(options.state === undefined ? [] : ['      state: bindings.state,']),
