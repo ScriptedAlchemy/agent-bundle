@@ -537,15 +537,25 @@ describe('composeMcpAppsRsbuildConfig', () => {
   const source = Object.freeze({ name: 'status', source: '/project/views/status.ts', template: undefined });
   const options = { cwd: '/project', meta, outDir: '/staged/portable' };
 
-  it('keeps the production profile and only overlays readability in development', () => {
+  it('keeps the production profile and only overlays readability in development', async () => {
     const production = composeMcpAppsRsbuildConfig([source], options);
     expect(production.mode).toBe('production');
     expect(production.output?.sourceMap).toBe(false);
     expect(production.output?.minify).toBeUndefined();
+    expect(production.output?.overrideBrowserslist).toEqual(['Chrome >= 144']);
     // Rsbuild's default alias strategy stays so a view resolves through the
     // author's tsconfig `paths`; the reserved specifier wins by replacement.
-    expect(production.resolve).toBeUndefined();
-    expect(production.environments?.status?.html).toEqual({ inject: 'body', mountId: 'root', title: 'status' });
+    expect(production.resolve).toEqual({ dedupe: ['react', 'react-dom', 'scheduler'] });
+    expect(production.environments?.status?.html).toEqual({
+      inject: 'body',
+      mountId: 'root',
+      templateParameters: expect.any(Function),
+      title: 'status',
+    });
+    const templateParameters = production.environments?.status?.html?.templateParameters;
+    expect(typeof templateParameters).toBe('function');
+    if (typeof templateParameters !== 'function') throw new Error('Expected MCP App template parameters to be a function.');
+    expect(await templateParameters({ compilation: 'private', mountId: 'root' }, { entryName: 'status' })).toEqual({});
 
     const development = composeMcpAppsRsbuildConfig([source], { ...options, mode: 'development' });
     expect(development.mode).toBe('production');

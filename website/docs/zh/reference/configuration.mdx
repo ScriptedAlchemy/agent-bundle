@@ -246,6 +246,15 @@ MCP App 构建保留 Rsbuild 默认的 `resolve.aliasStrategy`（`prefer-tsconfi
 `resolve.alias`，因此没有任何 `paths` 映射能够遮蔽它。已解析配置断言会拒绝移除这一改写的逃生舱取值，
 就像它拒绝破坏自包含输出的取值一样。
 
+合成的视图配置以 `Chrome >= 144` 为目标；设置这条基线时，它是当前发布的桌面 MCP App 宿主中
+最旧的 Chromium 代际：Cursor 3.18 报告
+[Chromium 144](https://forum.cursor.com/t/cursor-updates-in-windows-dont-relaunch-cursor/170082)，
+Claude Desktop 官方 Linux 包报告
+[Chromium 148](https://github.com/anthropics/claude-code/issues/79995)，Codex Windows 包报告
+[Chromium 151](https://github.com/openai/codex/issues/38310)。配置仅对 `react`、`react-dom` 与
+`scheduler` 去重，使 App 只解析到一份 React 运行时。作者 HTML 模板不会隐式收到 Rsbuild
+模板参数；框架的脚本注入以及默认的 `root` 挂载点、语言和 App 标题保持不变。
+
 ### 插件
 
 框架在它合成的配置中只注册一个 Rsbuild 插件：`@rsbuild/plugin-react`（插件名 `rsbuild:react`），

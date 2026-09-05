@@ -369,6 +369,7 @@ export const composeMcpAppsRsbuildConfig = (
       html: {
         inject: 'body' as const,
         mountId: 'root',
+        templateParameters: () => ({}),
         title: source.name,
         ...(source.template === undefined ? {} : { template: source.template }),
       },
@@ -395,10 +396,17 @@ export const composeMcpAppsRsbuildConfig = (
       ...(options.mode === 'development' ? { minify: false } : {}),
       sourceMap: false,
       target: 'web' as const,
+      // Cursor 3.18 is the oldest currently shipped MCP App host runtime at
+      // Chromium 144; Claude Desktop and Codex ship newer Chromium builds.
+      // https://forum.cursor.com/t/cursor-updates-in-windows-dont-relaunch-cursor/170082
+      // https://github.com/anthropics/claude-code/issues/79995
+      // https://github.com/openai/codex/issues/38310
+      overrideBrowserslist: ['Chrome >= 144'],
     },
     // Rsbuild's default `resolve.aliasStrategy` (`prefer-tsconfig`) stays: it
     // is what hands the author's tsconfig `paths` to the view compiler. The
     // reserved specifier wins through `metaModuleReplacement` instead.
+    resolve: { dedupe: ['react', 'react-dom', 'scheduler'] },
     server: { publicDir: false },
     splitChunks: false,
   };

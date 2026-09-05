@@ -278,6 +278,16 @@ to the generated identity module before resolution starts, ahead of both `paths`
 `resolve.alias`, so no `paths` mapping can shadow it. The resolved-config assertion refuses a
 hatch value that removes that rewrite, as it refuses one that breaks the self-contained output.
 
+The synthesized view profile targets `Chrome >= 144`, the oldest Chromium generation in the
+currently shipped desktop MCP App hosts when this floor was set: Cursor 3.18 reports
+[Chromium 144](https://forum.cursor.com/t/cursor-updates-in-windows-dont-relaunch-cursor/170082),
+Claude Desktop's official Linux package reports
+[Chromium 148](https://github.com/anthropics/claude-code/issues/79995), and the Codex Windows
+package reports [Chromium 151](https://github.com/openai/codex/issues/38310). It deduplicates
+exactly `react`, `react-dom`, and `scheduler` so an App resolves one React runtime. Author HTML
+templates receive no implicit Rsbuild template parameters; framework script injection and the
+default `root` mount, language, and App title remain intact.
+
 ### Plugins
 
 The framework registers exactly one Rsbuild plugin in the configs it synthesizes:
