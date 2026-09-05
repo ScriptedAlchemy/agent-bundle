@@ -46,6 +46,15 @@ const portableServer = (overrides: Readonly<Record<string, unknown>> = {}): Read
   ...overrides,
 });
 
+const emittedPortableServer = (overrides: Readonly<Record<string, unknown>> = {}): Readonly<Record<string, unknown>> => ({
+  args: ['mcp/mcp-status.mjs'],
+  command: 'node',
+  cwd: '${PLUGIN_ROOT}',
+  env: { AGENT_BUNDLE_PLUGIN_ROOT: '${PLUGIN_ROOT}' },
+  type: 'stdio',
+  ...overrides,
+});
+
 const codexServer = (overrides: Readonly<Record<string, unknown>> = {}): Readonly<Record<string, unknown>> => ({
   args: ['./mcp/mcp-status.mjs'],
   command: 'node',
@@ -95,6 +104,25 @@ describe('selectWebLaunch', () => {
     const selection = await select(root, { declaredTargets: ['claude', 'portable'] });
     expect(selection.target).toBe('claude');
     expect(selection.sharedTargets).toEqual(['claude', 'portable']);
+  });
+
+  it('normalizes the emitted portable cwd-relative entry to the host artifact entry', async () => {
+    const root = await artifactRoot();
+    await writeManifest(root, '.mcp.json', { status: claudeServer() });
+    await writeManifest(root, 'mcp.json', { status: emittedPortableServer() });
+    const selection = await select(root, { declaredTargets: ['claude', 'portable'] });
+    expect(selection.target).toBe('claude');
+    expect(selection.sharedTargets).toEqual(['claude', 'portable']);
+  });
+
+  it('keeps an emitted portable entry distinct when it resolves to another artifact path', async () => {
+    const root = await artifactRoot();
+    await writeManifest(root, '.mcp.json', { status: claudeServer() });
+    await writeManifest(root, 'mcp.json', {
+      status: emittedPortableServer({ args: ['mcp/mcp-other.mjs'] }),
+    });
+    const error = await failure(root, { declaredTargets: ['claude', 'portable'] });
+    expect(error.code).toBe('launch-ambiguous');
   });
 
   it('selects identically when the hosts are declared in reversed order', async () => {
