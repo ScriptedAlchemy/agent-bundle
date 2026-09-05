@@ -59,7 +59,7 @@ export interface PackedMcpSessionOptions {
    * deleted-source proof.
    */
   readonly deletedSource?: DeletedSourceReceipt;
-  /** Absolute path of the generated stdio entry (`<artifact>/<target>/mcp/<server>.mjs`). */
+  /** Absolute path of the generated stdio entry (`<artifact>/mcp/<server>.mjs`, emitted once at the composite root). */
   readonly entry: string;
   /** Environment for the spawned process; defaults to the current one. */
   readonly env?: Readonly<Record<string, string>>;

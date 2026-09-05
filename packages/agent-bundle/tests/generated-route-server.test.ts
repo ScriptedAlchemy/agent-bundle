@@ -288,7 +288,7 @@ const connectGeneratedServer = async (
   return {
     client: connection.client,
     close: connection.close,
-    endpointId: `${compiled.build.manifest.project.revision}:${target}:${dirname(dirname(resolve(entry)))}`,
+    endpointId: `${compiled.build.manifest.project.revision}:${dirname(dirname(resolve(entry)))}`,
   };
 };
 
@@ -928,7 +928,7 @@ it('keeps a second generated server from the same install alive while the first 
   const server = compiled.model.mcpServers[0];
   if (server?.args?.[0] === undefined) throw new Error('expected a generated MCP entry');
   const entry = join(output, server.args[0]);
-  const endpointId = `${compiled.build.manifest.project.revision}:cursor:${dirname(dirname(resolve(entry)))}`;
+  const endpointId = `${compiled.build.manifest.project.revision}:${dirname(dirname(resolve(entry)))}`;
   const endpoint = eventRuntimeEndpoint(endpointId);
   const status = (): Promise<unknown> => requestEventRuntimeStatus({ endpointId, timeoutMs: 1_000 });
 
@@ -1087,7 +1087,9 @@ it('renders one tool/after event route through two native thin clients', { retry
     const exploded = await callGeneratedTool(client, 'explode');
     expectFailClosed(exploded, /throwing.*src[/\\]providers[/\\]throwing\.ts.*provider exploded/iu);
 
-    const endpointId = `${compiled.build.manifest.project.revision}:claude+cursor:${dirname(dirname(resolve(mcp.output)))}`;
+    // The endpoint is the artifact's alone — epoch and root — however many
+    // projections the root carries (#592); the invoking host rides each request.
+    const endpointId = `${compiled.build.manifest.project.revision}:${dirname(dirname(resolve(mcp.output)))}`;
     const expectedEndpoint = eventRuntimeEndpoint(endpointId);
     await expect(stat(expectedEndpoint)).resolves.toMatchObject({ mode: expect.any(Number) });
     const firstStatus = await requestEventRuntimeStatus({ endpointId, timeoutMs: 1_000 });
@@ -1223,7 +1225,7 @@ it('renders composite root events through each selected host in one warm runtime
   const transport = new StdioClientTransport({ args: [mcp.output], command: process.execPath, stderr: 'pipe' });
   await client.connect(transport);
   try {
-    const endpointId = `${compiled.build.manifest.project.revision}:claude+codex+cursor:${dirname(dirname(resolve(mcp.output)))}`;
+    const endpointId = `${compiled.build.manifest.project.revision}:${dirname(dirname(resolve(mcp.output)))}`;
     await expect(requestEventRuntime({
       artifactEpoch: compiled.build.manifest.project.revision,
       endpointId,
@@ -1244,7 +1246,7 @@ it('renders composite root events through each selected host in one warm runtime
       tool_response: { ok: true },
       tool_use_id: 'tool-claude',
       transcript_path: join(root, 'transcript.jsonl'),
-    }, { AGENT_BUNDLE_HOOK_HOST: undefined, PLUGIN_ROOT: undefined });
+    }, { PLUGIN_ROOT: undefined });
     const firstContext = (claude as { hookSpecificOutput: { additionalContext: string } })
       .hookSpecificOutput.additionalContext;
     // The worker mounts the compiled route id as `operationId` and the
@@ -1268,7 +1270,7 @@ it('renders composite root events through each selected host in one warm runtime
       tool_response: { ok: true },
       tool_use_id: 'tool-codex',
       transcript_path: null,
-    }, { AGENT_BUNDLE_HOOK_HOST: undefined, PLUGIN_ROOT: output })).resolves.toEqual({
+    }, { PLUGIN_ROOT: output })).resolves.toEqual({
       hookSpecificOutput: {
         additionalContext: `codex:event:tool/after|tool/after:2:${instanceId}`,
         hookEventName: 'PostToolUse',
@@ -1284,7 +1286,7 @@ it('renders composite root events through each selected host in one warm runtime
       tool_name: 'Write',
       tool_output: '{"ok":true}',
       tool_use_id: 'tool-cursor',
-    }, { AGENT_BUNDLE_HOOK_HOST: undefined, PLUGIN_ROOT: undefined })).resolves.toEqual({
+    }, { PLUGIN_ROOT: undefined })).resolves.toEqual({
       additional_context: `cursor:event:tool/after|tool/after:3:${instanceId}`,
     });
 
@@ -1294,7 +1296,7 @@ it('renders composite root events through each selected host in one warm runtime
       session_id: 'session-codex',
       source: 'startup',
       transcript_path: null,
-    }, { AGENT_BUNDLE_HOOK_HOST: undefined, PLUGIN_ROOT: output })).resolves.toEqual({
+    }, { PLUGIN_ROOT: output })).resolves.toEqual({
       hookSpecificOutput: {
         additionalContext: `codex:session/start:4:${instanceId}`,
         hookEventName: 'SessionStart',
@@ -1533,8 +1535,8 @@ it('dispatches shared event routes through the invoking host contract', { timeou
     )) as Record<string, unknown>;
     if (target === 'codex') input.transcript_path = null;
     const env = target === 'codex'
-      ? { AGENT_BUNDLE_HOOK_HOST: undefined, PLUGIN_ROOT: output }
-      : { AGENT_BUNDLE_HOOK_HOST: undefined, PLUGIN_ROOT: undefined };
+      ? { PLUGIN_ROOT: output }
+      : { PLUGIN_ROOT: undefined };
     await expect(runHook(hookFor('agentStart', target).output, input, env)).resolves.toEqual({
       hookSpecificOutput: {
         additionalContext: `${target}:${String(input.agent_id)}`,
@@ -1548,7 +1550,6 @@ it('dispatches shared event routes through the invoking host contract', { timeou
     'utf8',
   )) as Record<string, unknown>;
   await expect(runHook(hookFor('agentStop', 'claude').output, claudeStop, {
-    AGENT_BUNDLE_HOOK_HOST: undefined,
     PLUGIN_ROOT: undefined,
   })).resolves.toEqual({
     hookSpecificOutput: {
@@ -1563,7 +1564,6 @@ it('dispatches shared event routes through the invoking host contract', { timeou
   )) as Record<string, unknown>;
   codexStop.transcript_path = null;
   await expect(runHook(hookFor('agentStop', 'codex').output, codexStop, {
-    AGENT_BUNDLE_HOOK_HOST: undefined,
     PLUGIN_ROOT: output,
   })).rejects.toThrow(/not supported by the Codex SubagentStop output schema/u);
 });

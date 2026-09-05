@@ -558,7 +558,6 @@ export const openInMemoryMcpServer = async <
             })) as never,
             endpointId: `${artifactEpoch}:in-memory`,
             projectEventDocument: (() => undefined) as never,
-            target: options.lineageHost,
           },
         }),
     ...(options.limits === undefined ? {} : { limits: options.limits }),

@@ -129,7 +129,7 @@ it('serves compiled routes and durable state across packed process restarts', as
       await readFile(join(artifact, 'agent-bundle.manifest.json'), 'utf8'),
     ) as { readonly project: { readonly revision: string } };
     const eventRuntimeEndpointId =
-      `${artifactManifest.project.revision}:claude:${dirname(dirname(resolve(entry)))}`;
+      `${artifactManifest.project.revision}:${dirname(dirname(resolve(entry)))}`;
     const deletedSource = await removeProjectSource({ projectRoot: project });
 
     // The artifact-hosted routed CLI and the `main`-envelope script probe

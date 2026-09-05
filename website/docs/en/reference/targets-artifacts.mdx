@@ -24,7 +24,8 @@ reads the same directory as its plugin root; there is no per-host subdirectory t
 - `plugin` is not a target. `targets: ['plugin']` or `--target plugin` is an unknown target
   (`AB4100`): the composite root is already the output of every build.
 
-Built with all four projections, the host-test example's root looks like this:
+Built with all four projections, the host-test example's root looks like this (component
+directories appear only when the project authors them):
 
 ```text
 artifact/
@@ -47,7 +48,7 @@ artifact/
 ├── hooks/hooks-flight.mjs
 ├── mcp/mcp-<server>-<hash>.mjs           # compiled MCP entries (+ -flight.mjs)
 ├── bin/<plugin>.mjs, bin/<plugin>-flight.mjs   # routed CLI (when src/cli exists)
-├── scripts/, skills/, assets/, mcp-apps/ # shared, emitted once
+├── scripts/, skills/, commands/, rules/, assets/, mcp-apps/   # emitted once
 ├── INSTALL.md                            # when any built-in host is selected
 ├── install.mjs                           # when cursor or portable is selected
 ├── agent-bundle.manifest.json            # selected projections + provenance
@@ -107,7 +108,7 @@ refuses:
 | Code | Rule |
 | --- | --- |
 | `AB4103` | Two selected projections plan the same path with different bytes. Projections are compared in host-name order and paths in path order, so a given selection reports the same collision however `targets` is written. The usual cause is a Skill whose frontmatter carries a host extension (`targets: { claude: … }`), which lowers to different `skills/<name>/SKILL.md` bytes for Claude Code than for the other hosts. Make the component identical for every selected host, or build the conflicting hosts into separate artifacts. |
-| `AB4105` | A component scoped to a subset of the selected hosts — a command, rule, or skill with frontmatter `targets` — sits in a conventional directory another selected host scans (`commands/` for Claude Code and Cursor, `rules/` for Cursor, `skills/` for every host). Inside one root the file cannot be hidden from that host, so the build refuses rather than leaking it. Extend `targets` to every selected host that discovers the directory, or build those hosts separately. |
+| `AB4105` | A component scoped to a subset of the selected hosts — a command or rule with frontmatter `targets` — sits in a conventional directory another selected host scans (`commands/` for Claude Code and Cursor, `rules/` for Cursor). Inside one root the file cannot be hidden from that host, so the build refuses rather than leaking it. Extend `targets` to every selected host that discovers the directory, or build those hosts separately. Skills are never host-scoped: every skill ships to every selected host, and a per-host frontmatter extension that changes its bytes is an `AB4103` collision instead. |
 | `AB4106` | The selection mixes an adapter registered on an advanced `TargetRegistry` — any target that is not one of `claude`, `codex`, `cursor`, `portable` — with another target. Only the built-in hosts agree on where their unshared documents live, which directories each discovers, and one install surface, so a third-party adapter is built alone: `targets: ['<name>']` into its own `--output`. A single-target selection never triggers it. |
 
 All three are listed with `AB4100` in the [Diagnostics reference](./diagnostics.md).

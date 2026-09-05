@@ -125,7 +125,7 @@ artifact/
 │   └── hooks-flight.mjs
 ├── mcp/mcp-<server>-<hash>.mjs       # compiled MCP entries, emitted once
 ├── bin/<plugin-name>.mjs             # the routed CLI, when src/cli/** exists
-├── scripts/, skills/, assets/, mcp-apps/   # shared components, emitted once
+├── scripts/, skills/, commands/, rules/, assets/, mcp-apps/   # components, emitted once
 ├── INSTALL.md                        # one section per selected host
 ├── install.mjs                       # when cursor or portable is selected
 ├── agent-bundle.manifest.json        # every emitted file with its SHA-256
@@ -135,10 +135,10 @@ artifact/
 Host manifests live in their dotfolders; `skills/`, `hooks/`, `mcp/`, `scripts/`, `bin/`, and
 `assets/` are emitted once and shared. Hook and MCP documents appear when the project declares
 hooks or MCP servers — plus one empty Codex or Cursor document whenever another selected host
-claims the conventional `hooks/hooks.json` or `mcp.json` path, so that host's folder discovery
+claims the conventional `hooks/hooks.json`, `.mcp.json`, or `mcp.json` path, so that host's folder discovery
 never loads the other host's file — and `bin/` only when it has a routed CLI. Two selected hosts that
 would write the same path with different bytes cannot share the root, and the build fails with
-`AB4103`; a command, rule, or Skill scoped to some of the selected hosts but sitting in a
+`AB4103`; a command or rule scoped to some of the selected hosts but sitting in a
 directory another selected host scans is `AB4105`. Both recover by making the component
 identical for every selected host, or by building those hosts into separate artifacts.
 

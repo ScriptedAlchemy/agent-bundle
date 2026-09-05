@@ -467,10 +467,13 @@ export const openInstalledHostMcpServer = async (
     ...expandedDeclaredEnvironment,
   };
 
+  // The runtime's endpoint is identified by the artifact alone — its epoch and
+  // the installed root the entry lives under (`mcp/`) — however many host
+  // projections the root carries (#555, #592).
   const eventRuntimeEndpointPath = artifactManifest === undefined || resolvedEntry === undefined
     ? undefined
     : eventRuntimeEndpoint(
-      `${artifactManifest.project.revision}:${options.host}:${dirname(dirname(resolvedEntry))}`,
+      `${artifactManifest.project.revision}:${dirname(dirname(resolvedEntry))}`,
     );
   if (eventRuntimeEndpointPath === undefined && failures.length === 0) {
     failures.push({ check: 'mcp-command', reason: 'installed event runtime endpoint could not be derived' });

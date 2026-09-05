@@ -101,10 +101,7 @@ const mergeEntries = (
   const entries: TargetArtifactEntry[] = [];
   for (const [relativePath, merged] of [...byPath.entries()].sort(([left], [right]) => left.localeCompare(right))) {
     if (merged.conflicting.length > 0) {
-      diagnostics.push(collisionDiagnostic(
-        relativePath,
-        [...new Set([...merged.owners, ...merged.conflicting])].sort((left, right) => left.localeCompare(right)),
-      ));
+      diagnostics.push(collisionDiagnostic(relativePath, sortedProjections([...merged.owners, ...merged.conflicting])));
       continue;
     }
     entries.push(merged.entry);
@@ -113,22 +110,24 @@ const mergeEntries = (
 };
 
 /**
- * The component kinds a host discovers by scanning a conventional directory
- * of the plugin root rather than by following a manifest pointer. Every
- * built-in host that declares one of these directories in its artifact layout
- * reads it that way (`skills/` for all four hosts, `commands/` for Claude
- * Code and Cursor, `rules/` for Cursor), so inside one composite root a
- * component scoped to fewer hosts than share the directory is discovered by a
- * host it was not declared for.
+ * The host-scopable component kinds a host discovers by scanning a
+ * conventional directory of the plugin root rather than by following a
+ * manifest pointer. Every built-in host that declares one of these
+ * directories in its artifact layout reads it that way (`commands/` for
+ * Claude Code and Cursor, `rules/` for Cursor), so inside one composite root
+ * a component scoped to fewer hosts than share the directory is discovered by
+ * a host it was not declared for. Skills are discovered the same way
+ * (`skills/` for every host) but are never host-scoped: normalization gives
+ * every skill every selected target, and a per-host frontmatter extension
+ * changes the lowered bytes instead, which the merge reports as `AB4103`.
  */
-type ConventionalKind = Extract<AgentComponentKind, 'command' | 'rule' | 'skill'>;
+type ConventionalKind = Extract<AgentComponentKind, 'command' | 'rule'>;
 
-const conventionalKinds: readonly ConventionalKind[] = Object.freeze(['command', 'rule', 'skill']);
+const conventionalKinds: readonly ConventionalKind[] = Object.freeze(['command', 'rule']);
 
 const kindLabel: Readonly<Record<ConventionalKind, string>> = Object.freeze({
   command: 'Command',
   rule: 'Rule',
-  skill: 'Skill',
 });
 
 const conventionalDirectory = (registry: TargetRegistry, host: string, kind: ConventionalKind): string | undefined => {
@@ -138,8 +137,6 @@ const conventionalDirectory = (registry: TargetRegistry, host: string, kind: Con
       return layout.commands?.directory;
     case 'rule':
       return layout.rules?.directory;
-    case 'skill':
-      return layout.skills;
     default: {
       const exhaustive: never = kind;
       throw new TypeError(`Unknown conventional component kind ${String(exhaustive)}.`);
@@ -155,9 +152,6 @@ interface ScopedComponent {
 }
 
 const scopedComponents = (model: NormalizedPlugin): readonly ScopedComponent[] => [
-  ...model.skills.map((skill): ScopedComponent => ({
-    kind: 'skill', name: skill.name, sourcePath: skill.provenance.sourcePath, targets: skill.targets,
-  })),
   ...(model.commands ?? []).map((command): ScopedComponent => ({
     kind: 'command', name: command.name, sourcePath: command.provenance.sourcePath, targets: command.targets,
   })),

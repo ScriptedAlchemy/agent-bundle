@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { Effect, type Scope } from 'effect';
 
 import { capabilityIsSupported, unavailableCapability } from './adapters/capability-state.ts';
+import { type BuiltInHost, isBuiltInHost } from './adapters/composite-layout.ts';
 import { createDefaultRegistry, TargetRegistry } from './adapters/registry.ts';
 import type { TargetArtifactEntry, TargetHookEntry } from './adapters/types.ts';
 import { build as buildArtifact, type BuildResult } from './build/build.ts';
@@ -727,19 +728,8 @@ const temporaryArtifact = async <Result>(
   ));
 };
 
-type HostValidatedTarget = 'claude' | 'codex' | 'cursor' | 'portable';
-
-const hostValidatedTargets: ReadonlySet<string> = new Set<HostValidatedTarget>([
-  'claude',
-  'codex',
-  'cursor',
-  'portable',
-]);
-
-const isHostValidatedTarget = (name: string): name is HostValidatedTarget => hostValidatedTargets.has(name);
-
 const hostValidationReport = (
-  target: HostValidatedTarget,
+  target: BuiltInHost,
   pluginDirectory: string,
   strict: boolean | undefined,
 ): Promise<NonNullable<ValidateResult['hostValidation']>[number]> => {
@@ -773,7 +763,7 @@ export const validate = async (options: ValidateOptions): Promise<ValidateResult
       }
       const reports = await Promise.all(validated.snapshot.manifest.targets
         .map((target) => target.name)
-        .filter(isHostValidatedTarget)
+        .filter(isBuiltInHost)
         .map((target) => hostValidationReport(target, artifact, options.strict)));
       return Object.freeze({
         diagnostics: freezeDiagnostics([
@@ -1241,12 +1231,12 @@ export const build = async (options: BuildOptions): Promise<BuildProjectResult> 
   });
 };
 
-const claudeValidatedTargets: ReadonlySet<string> = new Set<HostValidatedTarget>(['claude']);
+const claudeValidatedTargets: ReadonlySet<string> = new Set<BuiltInHost>(['claude']);
 
 /**
  * `build --host-validation`: the Claude developer validator (`plugin validate`
  * over both manifests, then the `--plugin-dir … plugin list --json` load check)
- * every built `claude` target (#476). Targets run one after
+ * over every built `claude` target (#476). Targets run one after
  * another: once the CLI proves absent (`AB6019`), the remaining targets are
  * marked `unavailable` without another spawn, so a build without `claude` on
  * `PATH` costs one failed spawn and reports the skip once.

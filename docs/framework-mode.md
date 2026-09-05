@@ -525,8 +525,8 @@ their rows below mirror that contract rather than adding a second check.
 The composite root ships one shared `skills/` tree that every selected host
 discovers by convention, so a skill whose host extension changes its lowered
 bytes on one selected host collides with the other hosts' copy (`AB4103`);
-scope the skill to that host or drop the extension until per-host views land
-(#555).
+drop the extension or build that host into its own artifact until per-host
+views land (#555).
 
 Hook tool selectors a host cannot map still fail at plan time
 (`<target>.hook.tool.<tool>`), and the per-host matcher tables live under

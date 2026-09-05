@@ -169,8 +169,8 @@ variables each declares (`AB7331`, informational) — never a name or a value.
 
 ```sh
 npx agent-bundle uninstall cursor --from artifact --plan   # exact paths, nothing changes
-npx agent-bundle uninstall cursor --from artifact          # receipt-owned files; state/ kept
-npx agent-bundle uninstall claude --from artifact          # claude plugin uninstall --keep-data + marketplace remove
+npx agent-bundle uninstall cursor --from artifact   # receipt-owned files; state/ kept
+npx agent-bundle uninstall claude --from artifact   # host uninstall + marketplace remove
 npx agent-bundle uninstall codex --from artifact --purge-data --confirm-purge
 node artifact/install.mjs --uninstall [--mode marketplace]
 ```

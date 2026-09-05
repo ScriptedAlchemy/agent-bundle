@@ -82,8 +82,8 @@ a value that disagrees with `package.json` reports the `AB4008` warning.
 ## Build, or work interactively
 
 ```sh
-npx agent-bundle build --root .                 # write the composite plugin root to artifact/
-npx agent-bundle dev --root .                   # local workbench with live rebuilds
+npx agent-bundle build --root .   # write the composite plugin root to artifact/
+npx agent-bundle dev --root .     # local workbench with live rebuilds
 ```
 
 `build` validates the project and writes the artifact root, plus the `bin`/`lib` package build
@@ -113,7 +113,7 @@ above, the host installs are:
 ```sh
 npx agent-bundle install claude --from artifact --scope user
 npx agent-bundle install codex --from artifact
-node artifact/install.mjs                       # the portable pack, via its generated installer
+node artifact/install.mjs   # the portable pack, via its generated installer
 ```
 
 Add `cursor` to `targets` and the same root gains `.cursor-plugin/`; `npx agent-bundle install

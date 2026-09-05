@@ -254,7 +254,7 @@ interface ConfigClaimedSources {
   /**
    * Modules explicit `bin` entries compile. They leave route discovery too,
    * except a direct `src/scripts/<name>` child: `dist/bin/<name>.js` and
-   * `<target>/scripts/<name>.mjs` are disjoint outputs and both envelopes
+   * the artifact's `scripts/<name>.mjs` are disjoint outputs and both envelopes
    * run the same `main`, so one entry ships as both an npm bin and an
    * artifact script instead of silently losing the script (#389).
    */

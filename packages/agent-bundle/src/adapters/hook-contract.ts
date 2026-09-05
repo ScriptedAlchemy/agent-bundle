@@ -2,7 +2,6 @@ import type { Diagnostic } from '../core/diagnostics.ts';
 import { dataArrayValues, hasDataKeys, isPlainDataRecord, isRecord, ownDataValue } from '../core/strict-json.ts';
 import { escapeRegExp } from '../core/strings.ts';
 import { operatorEnvLayerImport } from '../build/launch-env-shell.ts';
-import { projectionIdentity } from './composite-layout.ts';
 import type { CanonicalAgentEvent } from '../routes/public.ts';
 import {
   canonicalHookEvents,
@@ -643,15 +642,17 @@ export const hookWrapperAppliesOperatorEnv = (entry: TargetHookWrapper): boolean
   entry.hook.eventRoute === undefined || standaloneEventRoute(entry.hook.eventRoute);
 
 /**
- * `artifactTarget` names the artifact the wrapper belongs to — the composite
- * identity of the selected projections (#555), which is also what the
- * generated MCP entry bakes as its event endpoint — while `target` is the
- * host that invoked the hook, used for lineage and host attribution.
+ * The wrapper reaches the warm MCP runtime through an endpoint identified by
+ * the artifact alone — its epoch and its root directory, the same two values
+ * the generated MCP entry bakes (#555) — never by the projection selection:
+ * `targets` choose host projections, not runtime identity (#592). `target` is
+ * the host this wrapper was compiled for; it travels with every request for
+ * lineage and host attribution and is checked against the entry's allowed
+ * hosts.
  */
 const eventRouteHookWrapperSource = (
   entry: TargetHookWrapper,
   hostContractRevision: string,
-  artifactTarget: string,
   durableLineage = false,
 ): string => {
   const route = entry.hook.eventRoute!;
@@ -688,12 +689,11 @@ const eventRouteHookWrapperSource = (
     `const canonicalEvent = ${JSON.stringify(route.event)};`,
     `const capabilityRevision = ${JSON.stringify(hostContractRevision)};`,
     `const nativeEvent = ${JSON.stringify(entry.nativeEvent)};`,
-    `const artifactTarget = ${JSON.stringify(artifactTarget)};`,
     `const target = ${JSON.stringify(entry.target)};`,
     `const runtimeMode = ${JSON.stringify(route.runtime)};`,
     `const fallbackMode = ${JSON.stringify(route.fallback)};`,
     `const timeoutMs = ${String(entry.hook.timeoutMs ?? 5_000)};`,
-    "const endpointId = `${artifactEpoch}:${artifactTarget}:${dirname(dirname(resolve(process.argv[1])))}`;",
+    "const endpointId = `${artifactEpoch}:${dirname(dirname(resolve(process.argv[1])))}`;",
     '',
     'const fail = (message) => { throw new Error(`Agent Bundle event route error: ${message}`); };',
     ...(standalone
@@ -1135,7 +1135,6 @@ export const planHooks = (
   contract: TargetHookContract,
 ): HookPlan => {
   const diagnostics: Diagnostic[] = [];
-  const artifactTarget = projectionIdentity(model.targets.map((selected) => selected.name));
   const selected = model.hooks
     .filter((hook) => hook.targets.includes(target))
     .slice()
@@ -1206,7 +1205,6 @@ export const planHooks = (
         : eventRouteHookWrapperSource(
             wrapper,
             contract.hostContractRevision ?? target,
-            artifactTarget,
             model.state?.lifetime === 'workspace-durable',
           ),
     });

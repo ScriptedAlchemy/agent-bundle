@@ -292,6 +292,24 @@ it('reports app-server-only schema output as unassessable information even in st
   }
 });
 
+it('judges only the Codex documents under .codex-plugin/ in a root shared with Claude (#555)', async () => {
+  // The composite root is every selected host's plugin root: Claude's
+  // `.mcp.json` and `hooks/hooks.json` sit beside Codex's `.codex-plugin/*`.
+  // Claude's documents carry shapes Codex's schemas reject (an `http` server,
+  // an empty command), and the Codex validator must not read them.
+  const pluginDirectory = await writeBundle({
+    '.mcp.json': { mcpServers: { remote: { type: 'http', url: 'https://example.test/mcp' } } },
+    'hooks/hooks.json': { hooks: { Stop: [{ hooks: [{ command: '', type: 'command' }] }] } },
+  });
+  try {
+    const report = await validateCodexPlugin({ pluginDirectory, run: runWith('match').run, target: 'codex' });
+    expect(report.diagnostics.filter((entry) => entry.code === 'AB6032')).toEqual([]);
+    expect(report.status).toBe('passed');
+  } finally {
+    await rm(pluginDirectory, { force: true, recursive: true });
+  }
+});
+
 it('rejects malformed fixtures for every locally validated Codex schema', async () => {
   const malformed = [
     ['.codex-plugin/plugin.json', { ...validDocuments['.codex-plugin/plugin.json'], name: 'Invalid Name' }],

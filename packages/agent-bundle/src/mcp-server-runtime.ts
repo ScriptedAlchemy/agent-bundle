@@ -640,14 +640,18 @@ export type GeneratedRouteExecutionHost = WarmFlightHost;
  * harness. An artifact with no event routes passes nothing.
  */
 export interface GeneratedEventRuntimeBinding {
+  /**
+   * The hosts whose hook wrappers may deliver events here — the selected
+   * projections the server targets. The invoking host arrives with each
+   * request; the artifact itself has no host identity (#592).
+   */
   readonly allowedTargets: readonly string[];
   readonly artifactEpoch: string;
   readonly createCanonicalEventProps: typeof createCanonicalEventProps;
   readonly createEventRuntimeServer: typeof createEventRuntimeServer;
-  /** Identifies this artifact's socket, so two installs never share a runtime. */
+  /** Identifies this artifact's socket (epoch and root), so two installs never share a runtime. */
   readonly endpointId: string;
   readonly projectEventDocument: typeof projectEventDocument;
-  readonly target: string;
 }
 
 /**
@@ -1056,13 +1060,17 @@ export const createGeneratedRouteMcpServer = async (
   const events = options.events === undefined
     ? undefined
     : await startEventRuntime(options.events, dispatcher, options.host, afterRender, options.lineage, options.pluginRoot);
+  // The tool-call lineage fallback is a host projection, never the artifact's
+  // identity (#592): an artifact serving exactly one host may assume that host
+  // when the MCP client does not name itself; one serving several has no
+  // single host to assume and relies on the client's own name alone.
+  const [onlyHost, ...otherHosts] = options.events?.allowedTargets ?? [];
+  const lineageHost = onlyHost !== undefined && otherHosts.length === 0 ? lineageHostFor(onlyHost) : undefined;
   registerGeneratedRoutes(server, options.routes, dispatcher, options.artifactEpoch, {
     ...(afterRender === undefined ? {} : { afterRender }),
     ...(options.pluginRoot === undefined ? {} : { pluginRoot: options.pluginRoot }),
     ...(options.lineage === undefined ? {} : { lineage: options.lineage, rawArguments: captureRawToolArguments(server) }),
-    ...(options.events === undefined || lineageHostFor(options.events.target) === undefined
-      ? {}
-      : { lineageHost: lineageHostFor(options.events.target) }),
+    ...(lineageHost === undefined ? {} : { lineageHost }),
     tasks,
   });
   registerGeneratedMcpApps(server, options.apps ?? []);

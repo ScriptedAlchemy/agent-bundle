@@ -976,6 +976,54 @@ it('validates --from Claude documents from pinned bytes without a new CLI proof'
   }
 });
 
+it('lists Claude plugins from the plugin root --from names, never from a directory nested under it (#555)', async () => {
+  const fixture = await temporaryDoctor();
+  const calls: { readonly args: readonly string[]; readonly cwd?: string }[] = [];
+  try {
+    // The root itself holds the manifest; Claude `project`/`local` rows are
+    // keyed by the cwd the host verbs ran in, and install runs them from that
+    // root — so must the listing, or such scopes read as absent. A `claude/`
+    // directory nested under it (the pre-composite partition) is never probed.
+    const artifactRoot = join(fixture.root, 'artifact');
+    await mkdir(join(artifactRoot, 'claude'), { recursive: true });
+    await writeJson(join(artifactRoot, 'claude', '.claude-plugin/plugin.json'), { name: 'nested-decoy', version: '0.0.0' });
+    await writeFile(join(artifactRoot, 'payload.txt'), 'payload\n');
+    await writeJson(join(artifactRoot, '.claude-plugin/plugin.json'), {
+      author: { name: 'Doctor Fixture' },
+      description: 'Doctor fixture plugin.',
+      name: 'doctor-fixture',
+      version: '1.2.3',
+    });
+    await writeJson(join(artifactRoot, '.claude-plugin/marketplace.json'), {
+      name: 'doctor-fixture-marketplace',
+      owner: { name: 'Doctor Fixture' },
+      plugins: [{ name: 'doctor-fixture', source: './' }],
+    });
+
+    await runDoctor({
+      commandRunner: async (request) => {
+        calls.push({ args: request.args, ...(request.cwd === undefined ? {} : { cwd: request.cwd }) });
+        return request.args[0] === '--version'
+          ? commandResult({ stdout: 'claude 2.1.250\n' })
+          : commandResult({ stdout: '[]' });
+      },
+      endpointDirectory: fixture.endpointDirectory,
+      from: artifactRoot,
+      home: fixture.home,
+      hosts: ['claude'],
+    });
+
+    expect(calls).toEqual(expect.arrayContaining([
+      expect.objectContaining({ args: ['plugin', 'list', '--json'], cwd: artifactRoot }),
+    ]));
+    expect(calls).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ args: ['plugin', 'list', '--json'], cwd: join(artifactRoot, 'claude') }),
+    ]));
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 it('skips static validation when Cursor home and --from are absent', async () => {
   const fixture = await temporaryDoctor();
   try {

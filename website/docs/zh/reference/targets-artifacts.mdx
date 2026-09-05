@@ -20,7 +20,7 @@ target 表格——各宿主投影携带什么，以及 portable 标准为何省
 - `plugin` 不是 target。`targets: ['plugin']` 或 `--target plugin` 是未知 target（`AB4100`）：组合根目录
   本来就是每次构建的输出。
 
-以全部四个投影构建时，host-test 示例的根目录如下：
+以全部四个投影构建时，host-test 示例的根目录如下（组件目录只在项目编写了对应组件时才会出现）：
 
 ```text
 artifact/
@@ -43,7 +43,7 @@ artifact/
 ├── hooks/hooks-flight.mjs
 ├── mcp/mcp-<server>-<hash>.mjs           # 编译后的 MCP 入口（+ -flight.mjs）
 ├── bin/<plugin>.mjs, bin/<plugin>-flight.mjs   # 路由式 CLI（存在 src/cli 时）
-├── scripts/, skills/, assets/, mcp-apps/ # 共享，只输出一次
+├── scripts/, skills/, commands/, rules/, assets/, mcp-apps/   # 只输出一次
 ├── INSTALL.md                            # 选中了任一内置宿主时
 ├── install.mjs                           # 选中了 cursor 或 portable 时
 ├── agent-bundle.manifest.json            # 所选投影 + 来源信息
@@ -97,7 +97,7 @@ MCP 入口、脚本、路由式 CLI bin 与 MCP App 只编译**一次**，归属
 | 代码 | 规则 |
 | --- | --- |
 | `AB4103` | 两个所选投影为同一路径规划了不同的字节。投影按宿主名顺序比较、路径按路径顺序比较，因此无论 `targets` 怎么写，同一选择报告的都是同一处冲突。常见原因是 frontmatter 带有宿主扩展（`targets: { claude: … }`）的 Skill：它为 Claude Code 降级出的 `skills/<name>/SKILL.md` 字节与其他宿主不同。请让该组件对每个所选宿主都一致，或把冲突的宿主构建进单独的产物。 |
-| `AB4105` | 一个只面向部分所选宿主的组件——frontmatter 带 `targets` 的命令、规则或 skill——位于另一个所选宿主会扫描的约定目录中（Claude Code 与 Cursor 的 `commands/`、Cursor 的 `rules/`、所有宿主的 `skills/`）。在同一个根目录里无法把该文件对那个宿主隐藏起来，因此构建宁可拒绝也不泄漏它。请把 `targets` 扩展到每个会发现该目录的所选宿主，或把这些宿主分开构建。 |
+| `AB4105` | 一个只面向部分所选宿主的组件——frontmatter 带 `targets` 的命令或规则——位于另一个所选宿主会扫描的约定目录中（Claude Code 与 Cursor 的 `commands/`、Cursor 的 `rules/`）。在同一个根目录里无法把该文件对那个宿主隐藏起来，因此构建宁可拒绝也不泄漏它。请把 `targets` 扩展到每个会发现该目录的所选宿主，或把这些宿主分开构建。Skill 从不按宿主限定：每个 skill 都会交付给所有所选宿主，会改变其字节的按宿主 frontmatter 扩展属于 `AB4103` 冲突。 |
 | `AB4106` | 所选目标把注册在高级 `TargetRegistry` 上的适配器——即任何不是 `claude`、`codex`、`cursor`、`portable` 的目标——与另一个目标混在一起。只有内建宿主就各自不共享的文档放在何处、各自扫描哪些目录以及同一套安装面达成了一致，因此第三方适配器要单独构建：`targets: ['<name>']` 输出到自己的 `--output`。只选一个目标时永不触发。 |
 
 三者与 `AB4100` 一起列在[诊断参考](./diagnostics.md)中。

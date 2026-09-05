@@ -368,7 +368,7 @@ it('generates one final-only Flight MCP factory from filesystem routes', () => {
       },
     ],
     serverName: 'curator',
-    target: 'claude',
+    allowedTargets: ['claude'],
     workerFile: 'mcp-curator-flight.mjs',
   });
 
@@ -403,7 +403,11 @@ it('generates one final-only Flight MCP factory from filesystem routes', () => {
   // not re-templated here.
   expect(source).toContain('createEventRuntimeServer,');
   expect(source).toContain('projectEventDocument,');
-  expect(source).toContain('endpointId: `${EVENT_ARTIFACT_EPOCH}:${EVENT_TARGET}:');
+  // The endpoint is the artifact's identity alone (epoch + root); the hosts
+  // that may deliver events ride separately as the allowed set (#592).
+  expect(source).toContain('endpointId: `${EVENT_ARTIFACT_EPOCH}:${dirname(dirname(resolve(process.argv[1])))}`');
+  expect(source).toContain('const EVENT_ALLOWED_TARGETS = Object.freeze(["claude"]);');
+  expect(source).not.toContain('EVENT_TARGET');
   expect(source).toContain('events,');
   // Nothing else the shared runtime owns may be re-templated here.
   expect(source).not.toContain('server.register');

@@ -75,8 +75,8 @@ export default defineConfig({
 ## 构建，或交互式开发
 
 ```sh
-npx agent-bundle build --root .                 # 把复合插件根目录写到 artifact/
-npx agent-bundle dev --root .                   # 带实时重建的本地 Workbench
+npx agent-bundle build --root .   # 把复合插件根目录写到 artifact/
+npx agent-bundle dev --root .     # 带实时重建的本地 Workbench
 ```
 
 `build` 会校验项目并写出产物根目录；声明了 `bin`/`lib` 时还会一并完成包构建。`dev` 在 loopback 上提供
@@ -103,7 +103,7 @@ npx agent-bundle validate --root .           # 检查项目源码
 ```sh
 npx agent-bundle install claude --from artifact --scope user
 npx agent-bundle install codex --from artifact
-node artifact/install.mjs                       # portable 包，通过生成的安装器
+node artifact/install.mjs   # portable 包，通过生成的安装器
 ```
 
 把 `cursor` 加入 `targets`，同一个根目录就会多出 `.cursor-plugin/`；然后用 `npx agent-bundle install

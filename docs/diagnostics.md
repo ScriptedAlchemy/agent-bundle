@@ -595,7 +595,7 @@ exactly where `build` would refuse.
 | --- | --- | --- | --- |
 | `AB4100` | error | A `targets` entry or `--target` flag names a target no adapter provides. `plugin` is one of them: it used to name a merged multi-host output and now selects nothing, because every build already emits the composite root. | Select host projections (`claude`, `codex`, `cursor`, `portable`); omit `targets` for the default `portable` projection. |
 | `AB4103` | error | Two selected projections plan the same artifact path with different bytes, so one root cannot hold both. The common case is a Skill whose frontmatter carries a host extension (`targets: { claude: … }`): it lowers to different `skills/<name>/SKILL.md` bytes for Claude Code than for the other hosts. Projections are compared in host-name order and paths in path order, so the same selection reports the same collision however `targets` is written. | Make the component identical for every selected host, or build the conflicting hosts into separate artifacts (one `targets` entry per build). |
-| `AB4105` | error | A component scoped to a subset of the selected hosts (a command, rule, or skill with frontmatter `targets`) would be discovered by another selected host that scans the same conventional directory (`commands/` for Claude Code and Cursor, `rules/` for Cursor, `skills/` for every host). Inside one root the file cannot be hidden from that host, so the build refuses rather than leaking it. | Extend the component's `targets` to every selected host that discovers its directory, or build those hosts into separate artifacts. |
+| `AB4105` | error | A component scoped to a subset of the selected hosts (a command or rule with frontmatter `targets`) would be discovered by another selected host that scans the same conventional directory (`commands/` for Claude Code and Cursor, `rules/` for Cursor). Inside one root the file cannot be hidden from that host, so the build refuses rather than leaking it. Skills are never host-scoped — every skill ships to every selected host, and a per-host frontmatter extension that changes its bytes is an `AB4103` collision instead. | Extend the component's `targets` to every selected host that discovers its directory, or build those hosts into separate artifacts. |
 | `AB4106` | error | The selection mixes an adapter registered on an advanced `TargetRegistry` — any target that is not one of the built-in hosts `claude`, `codex`, `cursor`, `portable` — with one or more other targets. The built-in hosts agree on where the files they cannot share live, which conventional directories each discovers, and one install surface; a third-party adapter has made none of those agreements, so it cannot share a root. Judged on the normalized model, so `validate`, `inspect`, and `build` all report it, on the non-built-in target with its config provenance. A selection of one target never triggers it, whatever the target; unknown names are `AB4100`'s and do not count. | Build that target alone — `targets: ['<name>']` — into its own `--output`, and the remaining targets into another. |
 
 ## Artifact-hosted routed CLI (`AB4765`–`AB4766`)
@@ -808,8 +808,8 @@ reports the parse failure itself.
 
 Conventional `src/scripts/` routes ship through the same pipeline as
 explicit `scripts` entries (#102 stage 1): a plain module directly under
-`src/scripts/` compiles to `scripts/<name>.mjs` in every selected target
-artifact with `provenance.kind: 'conventional'`. A rendered module
+`src/scripts/` compiles once to `scripts/<name>.mjs` in the plugin root, shared
+by every selected host, with `provenance.kind: 'conventional'`. A rendered module
 (`src/scripts/<name>.tsx`/`.jsx`, #102 stage 3) compiles to the same
 `scripts/<name>.mjs` plus a sibling `scripts/<name>-flight.mjs` react-server
 worker: its async default component receives `{ argv, signal }` and renders

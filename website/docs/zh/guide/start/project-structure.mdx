@@ -120,7 +120,7 @@ artifact/
 │   └── hooks-flight.mjs
 ├── mcp/mcp-<server>-<hash>.mjs       # 编译后的 MCP 入口，只输出一次
 ├── bin/<plugin-name>.mjs             # 路由式 CLI，存在 src/cli/** 时出现
-├── scripts/, skills/, assets/, mcp-apps/   # 共享组件，只输出一次
+├── scripts/, skills/, commands/, rules/, assets/, mcp-apps/   # 组件目录，只输出一次
 ├── INSTALL.md                        # 每个所选宿主一节
 ├── install.mjs                       # 选择了 cursor 或 portable 时出现
 ├── agent-bundle.manifest.json        # 每个产出文件及其 SHA-256
@@ -129,9 +129,9 @@ artifact/
 
 宿主清单位于各自的点目录中；`skills/`、`hooks/`、`mcp/`、`scripts/`、`bin/` 与 `assets/` 只输出一次、
 所有宿主共用。钩子与 MCP 文档在项目声明了钩子或 MCP 服务器时出现——此外，只要另一个所选宿主占用了
-约定路径 `hooks/hooks.json` 或 `mcp.json`，Codex 或 Cursor 就会额外输出一份空文档，使该宿主的目录
+约定路径 `hooks/hooks.json`、`.mcp.json` 或 `mcp.json`，Codex 或 Cursor 就会额外输出一份空文档，使该宿主的目录
 发现永远不会加载到其他宿主的文件——`bin/` 只在项目有路由式 CLI 时出现。两个所选宿主若要以不同字节写出同一路径，就无法共用根目录，构建会以 `AB4103` 失败；一个只面向
-部分所选宿主的命令、规则或 Skill，却位于另一个所选宿主会扫描的目录中，则是 `AB4105`。两者的恢复方式
+部分所选宿主的命令或规则，却位于另一个所选宿主会扫描的目录中，则是 `AB4105`。两者的恢复方式
 相同：让该组件对每个所选宿主都完全一致，或把这些宿主分别构建到不同的产物中。
 
 `agent-bundle.manifest.json` 记录了每个产出文件及其 SHA-256，因此产物校验是内容寻址的，而不是猜测。
