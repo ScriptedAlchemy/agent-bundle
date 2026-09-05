@@ -68,8 +68,8 @@ npm 包根目录本身就包含组合插件根。对于生成的路由式 CLI，
 `node_modules` 运行时与从复制的产物运行完全一致。**任何 npm 生命周期都不会执行宿主安装**——安装一个包
 绝不会改动宿主的插件状态。
 
-请用 `npx agent-bundle install <host> --from node_modules/<package>` 从该根目录显式安装 Claude 或
-Codex 集成。对于 Cursor，npm 根目录还包含产物的独立 `install.mjs`；请从已安装包的根目录运行它。
+请用 `npx agent-bundle install <host> --from node_modules/<package>` 从该根目录显式安装任一受支持宿主。
+这条清单感知路径会把 npm 专属元数据与手写包入口排除在宿主归属比较之外。
 打包宿主证明会从已安装包重建清单拥有的产物，并在删除源 checkout 后执行
 `agent-bundle install --from`。
 

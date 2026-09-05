@@ -238,10 +238,17 @@ it('emits a relocatable manifest that survives moving the composite root', async
   expect(read.manifest).toEqual(manifest);
   expect(await readFile(read.path, 'utf8')).toBe(manifestBytes);
 
+  const linked = join(destParent, 'node_modules', 'relocated-plugin');
+  await mkdir(dirname(linked), { recursive: true });
+  await symlink(moved, linked, 'dir');
+  const linkedRead = await readArtifactManifest(linked);
+  expect(linkedRead).toMatchObject({ root: moved, status: 'ok' });
+
   const registry = createDefaultRegistry();
   for (const host of identityHosts) {
     const identity = await readBundleIdentity(moved, host);
     expect(identity.bundleRoot).toBe(moved);
+    expect((await readBundleIdentity(linked, host)).bundleRoot).toBe(moved);
     for (const document of Object.values(identity.documents)) {
       expect(isSafeRelativePosix(document)).toBe(true);
       const resolved = resolve(moved, document);

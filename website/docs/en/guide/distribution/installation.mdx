@@ -83,10 +83,10 @@ without a second compilation or wrapper. Its complete command surface, including
 works from `node_modules` exactly as it does from a copied artifact. **No npm lifecycle performs a
 host installation** — installing a package never mutates a host's plugin state.
 
-Install Claude or Codex explicitly from that root with
-`npx agent-bundle install <host> --from node_modules/<package>`. For Cursor, the npm root also
-carries the artifact's standalone `install.mjs`; run it from the installed package root. The
-packed host proof reconstructs the manifest-owned artifact from the installed package and exercises
+Install any supported host explicitly from that root with
+`npx agent-bundle install <host> --from node_modules/<package>`. This manifest-aware path excludes
+npm-only metadata and authored package entries from host ownership comparisons. The packed host
+proof reconstructs the manifest-owned artifact from the installed package and exercises
 `agent-bundle install --from` after deleting the source checkout.
 
 ## Development installs are a different thing
