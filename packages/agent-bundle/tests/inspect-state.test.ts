@@ -41,7 +41,6 @@ const inspectCli = async (
   args: readonly string[],
 ): Promise<{ readonly code: number; readonly stderr: string; readonly stdout: string }> => {
   const terminal = captureCliTerminal();
-  Object.defineProperty(globalThis, '__AGENT_BUNDLE_VERSION__', { configurable: true, value: 'test' });
   const code = await runCli(['inspect', '--root', root, ...args], terminal.output);
   return { code, stderr: terminal.stderr(), stdout: terminal.stdout() };
 };
