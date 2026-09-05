@@ -1,10 +1,7 @@
 import type { Diagnostic } from '../core/diagnostics.ts';
 import type { ProjectContext } from '../core/project-context.ts';
-import type {
-  ArtifactManifestApplication,
-  ArtifactManifestDistribution,
-  ArtifactManifestProjectionDocuments,
-} from '../build/manifest.ts';
+import type { ArtifactManifestProjectionDocuments } from '../build/manifest.ts';
+import type { ApplicationExplorer } from './artifacts/application-explorer.ts';
 
 export type JsonPrimitive = boolean | null | number | string;
 export type JsonArray = readonly JsonValue[];
@@ -135,8 +132,7 @@ export interface ArtifactInspectionRuntime {
 
 /** Detached facts from one strictly validated, published Artifact Manifest epoch. */
 export interface ArtifactInspection {
-  readonly application: ArtifactManifestApplication;
-  readonly distribution: ArtifactManifestDistribution;
+  readonly application: ApplicationExplorer;
   readonly epochId: string;
   readonly files: readonly ArtifactInspectionFile[];
   readonly project: ProjectContext;

@@ -2,7 +2,12 @@ import { errorMessage as messageFrom } from '../client-helpers.ts';
 import React, { useEffect, useState } from 'react';
 
 import type { Diagnostic } from '../../../agent-bundle/src/contracts/diagnostics.ts';
-import type { ArtifactEpochDiff, ArtifactInspection } from '../../../agent-bundle/src/contracts/artifacts.ts';
+import type {
+  ApplicationExplorer,
+  ApplicationExplorerRoute,
+  ArtifactEpochDiff,
+  ArtifactInspection,
+} from '../../../agent-bundle/src/contracts/artifacts.ts';
 
 import { ArtifactClient, ArtifactClientError } from './artifact-client.ts';
 import {
@@ -86,7 +91,91 @@ const TreeRow = ({ row }: { readonly row: ArtifactTreeRow }) => <tr>
   <td className="artifact-digest">{row.sha256 ?? '—'}</td>
 </tr>;
 
-/** Epoch identity, the emitted file tree, runtime metadata, and declared provenance of one epoch. */
+const RouteList = ({ label, routes }: {
+  readonly label: string;
+  readonly routes: readonly ApplicationExplorerRoute[];
+}) => routes.length === 0 ? undefined : <div>
+  <h4>{label}</h4>
+  <ul>{routes.map((route) => <li key={route.id}>
+    <strong>{route.name}</strong>{route.description === undefined ? undefined : ` — ${route.description}`}
+  </li>)}</ul>
+</div>;
+
+const ApplicationTree = ({ application }: { readonly application: ApplicationExplorer }) => <section className="artifact-detail">
+  <h2>Application</h2>
+  <p>
+    <strong>{application.identity.name}</strong> {application.identity.version} · {application.identity.id}
+    {application.identity.description === undefined ? undefined : ` — ${application.identity.description}`}
+  </p>
+  <h3>Hosts</h3>
+  <ul>{application.hosts.map((host) => <li key={host.host}>
+    <strong>{host.host}</strong>{host.builtIn ? ' · built-in' : ''}
+    {host.marketplace === undefined ? undefined : ` · ${host.marketplace}`}
+    {host.documents.length === 0 ? undefined : <ul>{host.documents.map((document) =>
+      <li key={document.kind}>{document.kind}: {document.path}</li>)}</ul>}
+  </li>)}</ul>
+  <h3>Servers</h3>
+  {application.servers.length === 0
+    ? <p className="empty-row">This application contains no MCP servers.</p>
+    : application.servers.map((server) => <div key={server.id}>
+      <h4>{server.name}</h4>
+      <p>{server.kind} · {server.transport} · {server.hosts.join(', ')}</p>
+      {server.entry === undefined ? undefined : <p>Entry: {server.entry}</p>}
+      <RouteList label="Tools" routes={server.tools} />
+      <RouteList label="Resources" routes={server.resources} />
+      <RouteList label="Prompts" routes={server.prompts} />
+      {server.apps.length === 0 ? undefined : <div>
+        <h4>Apps</h4>
+        <ul>{server.apps.map((app) => <li key={app.id}>
+          <strong>{app.name}</strong> · {app.resourceUri}{app.path === undefined ? undefined : ` · ${app.path}`}
+        </li>)}</ul>
+      </div>}
+    </div>)}
+  <h3>Events</h3>
+  {application.events.length === 0
+    ? <p className="empty-row">This application contains no event routes.</p>
+    : <ul>{application.events.map((event) => <li key={event.id}>
+      <strong>{event.event}</strong>
+      {event.hooks.length === 0 ? undefined : <ul>{event.hooks.map((hook) =>
+        <li key={`${hook.host}/${hook.path}`}>
+          {hook.host} · {hook.path}{hook.timeout === undefined ? undefined : ` · ${String(hook.timeout)}s`}
+        </li>)}</ul>}
+    </li>)}</ul>}
+  {application.hooks.length === 0 ? undefined : <>
+    <h3>Configured hooks</h3>
+    {application.hooks.map((group) => <div key={group.host}>
+      <h4>{group.host}</h4>
+      <ul>{group.hooks.map((hook) => <li key={hook.id}>
+        {hook.name} · {hook.event} · {hook.path}{hook.timeout === undefined ? undefined : ` · ${String(hook.timeout)}s`}
+      </li>)}</ul>
+    </div>)}
+  </>}
+  {application.cli === undefined ? undefined : <>
+    <h3>CLI</h3>
+    <p>{application.cli.mode}</p>
+    {application.cli.commands.length === 0 ? undefined : <ul>{application.cli.commands.map((command) =>
+      <li key={command.routeId}>{command.path.join(' ')} · {command.routeId}</li>)}</ul>}
+    {application.cli.bins.length === 0 ? undefined : <ul>{application.cli.bins.map((bin) =>
+      <li key={bin.name}>{bin.name} · {bin.path} · {bin.hosts.join(', ')}</li>)}</ul>}
+  </>}
+  {application.scripts.length === 0 ? undefined : <>
+    <h3>Scripts</h3>
+    <ul>{application.scripts.map((script) =>
+      <li key={script.id}>{script.name} · {script.mode} · {script.path} · {script.hosts.join(', ')}</li>)}</ul>
+  </>}
+  <h3>Distribution</h3>
+  <p>{application.distribution.channels.join(', ')}</p>
+  {application.distribution.install === undefined ? undefined : <ul>
+    {application.distribution.install.instructions === undefined
+      ? undefined
+      : <li>Instructions: {application.distribution.install.instructions}</li>}
+    {application.distribution.install.script === undefined
+      ? undefined
+      : <li>Install script: {application.distribution.install.script}</li>}
+  </ul>}
+</section>;
+
+/** Epoch identity, application tree, emitted file tree, and declared provenance of one epoch. */
 export const ArtifactInspectionView = ({ view }: ArtifactInspectionViewProps) => <div className="artifact-inspection">
   <p className="artifact-summary" role="status">{view.summary}</p>
   {view.diagnostics.length === 0 ? undefined : <div className="artifact-diagnostics" role="alert">
@@ -99,7 +188,7 @@ export const ArtifactInspectionView = ({ view }: ArtifactInspectionViewProps) =>
   </div>}
   {view.state !== 'ready' ? undefined : <>
     <DetailRows label="Build identity" rows={view.identity} />
-    <DetailRows label="Selected projection" rows={view.projection} />
+    {view.application === undefined ? undefined : <ApplicationTree application={view.application} />}
     <section className="artifact-detail">
       <h2>Artifact tree</h2>
       {view.tree.length === 0
@@ -109,66 +198,6 @@ export const ArtifactInspectionView = ({ view }: ArtifactInspectionViewProps) =>
             <tr><th scope="col">Name</th><th scope="col">Path</th><th scope="col">Kind</th><th scope="col">Bytes</th><th scope="col">Mode</th><th scope="col">SHA-256</th></tr>
           </thead>
           <tbody>{view.tree.map((row) => <TreeRow key={row.key} row={row} />)}</tbody>
-        </table>}
-    </section>
-    <section className="artifact-detail">
-      <h2>Runtime</h2>
-      <h3>Hooks</h3>
-      {view.hooks.length === 0
-        ? <p className="empty-row">This build contains no Hooks.</p>
-        : <table className="artifact-table">
-          <thead>
-            <tr><th scope="col">Hook</th><th scope="col">Wrapper path</th><th scope="col">Timeout</th><th scope="col">Bytes</th><th scope="col">SHA-256</th></tr>
-          </thead>
-          <tbody>{view.hooks.map((hook) => <tr key={hook.key}>
-            <th scope="row">{hook.label}</th>
-            <td>{hook.path}</td>
-            <td>{hook.timeout === undefined ? '—' : `${hook.timeout}s`}</td>
-            <td>{hook.bytes}</td>
-            <td className="artifact-digest">{hook.sha256}</td>
-          </tr>)}</tbody>
-        </table>}
-      <h3>MCP servers</h3>
-      {view.mcpServers.length === 0
-        ? <p className="empty-row">This build contains no MCP servers.</p>
-        : <table className="artifact-table">
-          <thead>
-            <tr><th scope="col">Server</th><th scope="col">Manifest path</th><th scope="col">Entry paths</th></tr>
-          </thead>
-          <tbody>{view.mcpServers.map((server) => <tr key={server.key}>
-            <th scope="row">{server.label}</th>
-            <td>{server.manifestPath}</td>
-            <td>{server.entryPaths.length === 0 ? '—' : server.entryPaths.join(', ')}</td>
-          </tr>)}</tbody>
-        </table>}
-      <h3>Executables</h3>
-      {view.executables.length === 0
-        ? <p className="empty-row">This build contains no executable files.</p>
-        : <table className="artifact-table">
-          <thead>
-            <tr><th scope="col">Path</th><th scope="col">Kind</th><th scope="col">Mode</th><th scope="col">Bytes</th><th scope="col">SHA-256</th></tr>
-          </thead>
-          <tbody>{view.executables.map((executable) => <tr key={executable.key}>
-            <th scope="row">{executable.path}</th>
-            <td>{executable.kind}</td>
-            <td>{executable.mode ?? '—'}</td>
-            <td>{executable.bytes}</td>
-            <td className="artifact-digest">{executable.sha256}</td>
-          </tr>)}</tbody>
-        </table>}
-      <h3>Bins</h3>
-      {view.bins.length === 0
-        ? <p className="empty-row">This build contains no bins.</p>
-        : <table className="artifact-table">
-          <thead>
-            <tr><th scope="col">Name</th><th scope="col">Path</th><th scope="col">Worker</th><th scope="col">Hosts</th></tr>
-          </thead>
-          <tbody>{view.bins.map((bin) => <tr key={bin.key}>
-            <th scope="row">{bin.name}</th>
-            <td>{bin.path}</td>
-            <td>{bin.worker ?? '—'}</td>
-            <td>{bin.hosts.join(', ')}</td>
-          </tr>)}</tbody>
         </table>}
     </section>
     <section className="artifact-detail">
@@ -265,7 +294,7 @@ export const ArtifactsPage = ({ client, epochId }: ArtifactsPageProps) => {
     <div className="page-heading artifacts-page-heading">
       <div>
         <h1>Artifacts</h1>
-        <p>Inspect generated files, runtime metadata, provenance, and changes between published builds.</p>
+        <p>Explore the application, generated files, provenance, and changes between published builds.</p>
       </div>
     </div>
     {error === undefined ? undefined : <p className="request-error" role="alert">{error}</p>}
@@ -273,7 +302,7 @@ export const ArtifactsPage = ({ client, epochId }: ArtifactsPageProps) => {
       ? <p className="empty-row" role="status">{view.summary}</p>
       : <>
         <section aria-label="Artifact inspection" className="artifact-controls">
-          <label htmlFor="artifact-projection">Projection</label>
+          <label htmlFor="artifact-projection">Host</label>
           <select
             disabled={view.projections.length === 0}
             id="artifact-projection"

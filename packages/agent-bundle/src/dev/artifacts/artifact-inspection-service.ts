@@ -8,6 +8,7 @@ import {
 import type { Diagnostic } from '../../core/diagnostics.ts';
 import type { ProjectContext } from '../../core/project-context.ts';
 import { EpochReference, EpochStore } from '../epoch-store.ts';
+import { applicationExplorerFor } from './application-explorer.ts';
 import { artifactManifestScriptExecutions } from './artifact-executables.ts';
 import type {
   ArtifactEpochAddedFile,
@@ -179,8 +180,7 @@ export class ArtifactInspectionService {
     const runtime = this.#runtime(filesByPath, manifest, validated.runtime);
 
     return Object.freeze({
-      application: manifest.application,
-      distribution: manifest.distribution,
+      application: applicationExplorerFor(manifest),
       epochId,
       files,
       project,

@@ -11,7 +11,6 @@ import {
   artifactDiffViewFor,
   artifactEpochIdentityRowsFor,
   artifactProvenanceRowsFor,
-  artifactRuntimeViewFor,
   artifactTreeRowsFor,
   artifactViewFor,
 } from '../src/artifacts/artifacts-model.ts';
@@ -58,8 +57,35 @@ const projection: ArtifactInspectionProjection = {
 };
 
 const inspection: ArtifactInspection = {
-  application: { id: 'application:fixture', name: 'fixture', version: '1.2.3' },
-  distribution: { channels: ['local'] },
+  application: {
+    distribution: { channels: ['local'] },
+    events: [{
+      event: 'sessionStart',
+      hooks: [{ host: 'claude', kind: 'event-route', path: 'hooks/session-start.mjs', timeout: 30 }],
+      id: 'event:session-start',
+    }],
+    hooks: [],
+    hosts: [{
+      builtIn: true,
+      documents: [{ kind: 'plugin', path: '.claude-plugin/plugin.json' }],
+      host: 'claude',
+      marketplace: 'fixture-marketplace',
+    }],
+    identity: { id: 'application:fixture', name: 'fixture', version: '1.2.3' },
+    scripts: [],
+    servers: [{
+      apps: [],
+      entry: 'mcp/review/server.mjs',
+      hosts: ['claude'],
+      id: 'mcp:review',
+      kind: 'compiled',
+      name: 'review',
+      prompts: [],
+      resources: [],
+      tools: [{ id: 'tool:review/run', name: 'tool:review/run' }],
+      transport: 'stdio',
+    }],
+  },
   epochId: 'epoch-2',
   files: [agents, wrapper],
   project: {
@@ -151,45 +177,6 @@ it('derives epoch identity rows from the inspection and its project context', ()
   ]);
 });
 
-it('derives runtime rows for hooks, MCP servers, and executables', () => {
-  const runtime = artifactRuntimeViewFor(inspection.runtime);
-
-  expect(runtime.hooks).toEqual([{
-    bytes: 512,
-    event: 'sessionStart',
-    key: 'claude/hook:session-start',
-    kind: 'event-route',
-    label: 'session-start · sessionStart · claude',
-    path: 'hooks/session-start.mjs',
-    sha256: 'a'.repeat(64),
-    target: 'claude',
-    timeout: 30,
-  }]);
-  expect(runtime.mcpServers).toEqual([{
-    entryPaths: ['mcp/review/server.mjs'],
-    key: 'claude/review',
-    kind: 'compiled',
-    label: 'review · compiled · claude',
-    manifestPath: '.mcp.json',
-    target: 'claude',
-  }]);
-  expect(runtime.executables).toEqual([{
-    bytes: 512,
-    key: 'hooks/session-start.mjs',
-    kind: 'generated',
-    mode: '0755',
-    path: 'hooks/session-start.mjs',
-    sha256: 'a'.repeat(64),
-  }]);
-  expect(runtime.bins).toEqual([{
-    hosts: ['claude'],
-    key: 'fixture',
-    name: 'fixture',
-    path: 'hooks/session-start.mjs',
-  }]);
-  expect(Object.isFrozen(runtime)).toBe(true);
-});
-
 it('orders provenance rows by output path and keeps their declared source inputs', () => {
   const rows = artifactProvenanceRowsFor(inspection.provenance);
 
@@ -235,17 +222,10 @@ it('derives a ready view bound to the selected projection', () => {
   expect(view.state).toBe('ready');
   expect(view.projections.map((option) => option.host)).toEqual(['claude']);
   expect(view.selected?.host).toBe('claude');
-  expect(view.projection).toEqual([
-    { label: 'Host', value: 'claude' },
-    { label: 'Plugin document', value: '.claude-plugin/plugin.json' },
-    { label: 'Marketplace document', value: '.claude-plugin/marketplace.json' },
-    { label: 'Marketplace', value: 'fixture-marketplace' },
-  ]);
   expect(view.tree.map((row) => row.path)).toContain('hooks/session-start.mjs');
-  expect(view.hooks).toHaveLength(1);
-  expect(view.mcpServers).toHaveLength(1);
-  expect(view.executables).toHaveLength(1);
-  expect(view.bins).toHaveLength(1);
+  expect(view.application?.servers).toHaveLength(1);
+  expect(view.application?.events).toHaveLength(1);
+  expect(view.application?.hosts).toHaveLength(1);
   expect(view.provenance).toHaveLength(2);
   expect(view.identity[0]).toEqual({ label: 'Build ID', value: 'epoch-2' });
   expect(view.summary).toContain('fixture@1.2.3 build epoch-2');

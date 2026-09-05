@@ -5,8 +5,19 @@ import { ForegroundRouteClient } from '../src/mcp/mcp-route-client.ts';
 import { recordingFetch, response, type RecordedRequest } from './support/recording-fetch.ts';
 
 const inspection = {
-  application: { id: 'application:fixture', name: 'fixture', version: '1.2.3' },
-  distribution: { channels: ['local'] },
+  application: {
+    distribution: { channels: ['local'] },
+    events: [],
+    hooks: [],
+    hosts: [{
+      builtIn: true,
+      documents: [{ kind: 'plugin', path: '.claude-plugin/plugin.json' }],
+      host: 'claude',
+    }],
+    identity: { id: 'application:fixture', name: 'fixture', version: '1.2.3' },
+    scripts: [],
+    servers: [],
+  },
   epochId: 'epoch-1',
   files: [{
     bytes: 512,

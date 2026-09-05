@@ -14,8 +14,40 @@ const file = (path: string) => ({
 });
 
 const inspection = ({ hooks = 0, mcpServers = 0, scripts = 0, targets = 1 } = {}): ArtifactInspection => ({
-  application: { id: 'application:fixture', name: 'fixture', version: '1.2.3' },
-  distribution: { channels: ['local'] },
+  application: {
+    distribution: { channels: ['local'] },
+    events: Array.from({ length: hooks }, (_, index) => ({
+      event: 'sessionStart',
+      hooks: [{ host: 'claude', kind: 'event-route' as const, path: `hooks/hook-${String(index)}.mjs` }],
+      id: `event:${String(index)}`,
+    })),
+    hooks: [],
+    hosts: Array.from({ length: targets }, (_, index) => ({
+      builtIn: true,
+      documents: [],
+      host: `target-${String(index)}`,
+    })),
+    identity: { id: 'application:fixture', name: 'fixture', version: '1.2.3' },
+    scripts: Array.from({ length: scripts }, (_, index) => ({
+      hosts: ['portable'],
+      id: `script:${String(index)}`,
+      mode: 'bundle' as const,
+      name: `script-${String(index)}`,
+      path: `scripts/script-${String(index)}.mjs`,
+    })),
+    servers: Array.from({ length: mcpServers }, (_, index) => ({
+      apps: [],
+      entry: `mcp/server-${String(index)}.mjs`,
+      hosts: ['portable'],
+      id: `mcp:server-${String(index)}`,
+      kind: 'compiled' as const,
+      name: `server-${String(index)}`,
+      prompts: [],
+      resources: [],
+      tools: [],
+      transport: 'stdio',
+    })),
+  },
   epochId: 'build-a',
   files: [],
   project: {

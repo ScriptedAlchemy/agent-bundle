@@ -86,6 +86,78 @@ const isDistribution = (value: unknown): boolean => {
     (!Object.hasOwn(value.install, 'script') || typeof value.install.script === 'string');
 };
 
+const isExplorerDocument = (value: unknown): boolean =>
+  exactRecord(value, ['kind', 'path']) &&
+  (value.kind === 'hooks' || value.kind === 'marketplace' || value.kind === 'mcp' || value.kind === 'plugin') &&
+  typeof value.path === 'string';
+
+const isExplorerHost = (value: unknown): boolean =>
+  exactRecord(value, ['builtIn', 'documents', 'host'], ['marketplace']) &&
+  typeof value.builtIn === 'boolean' && arrayOf(value.documents, isExplorerDocument) &&
+  typeof value.host === 'string' &&
+  (!Object.hasOwn(value, 'marketplace') || typeof value.marketplace === 'string');
+
+const isExplorerRoute = (value: unknown): boolean =>
+  exactRecord(value, ['id', 'name'], ['description']) &&
+  typeof value.id === 'string' && typeof value.name === 'string' &&
+  (!Object.hasOwn(value, 'description') || typeof value.description === 'string');
+
+const isExplorerServer = (value: unknown): boolean =>
+  exactRecord(value, ['apps', 'hosts', 'id', 'kind', 'name', 'prompts', 'resources', 'tools', 'transport'], ['entry']) &&
+  arrayOf(value.apps, isMcpApp) && arrayOf(value.hosts, (host) => typeof host === 'string') &&
+  typeof value.id === 'string' && (value.kind === 'command' || value.kind === 'compiled' || value.kind === 'remote') &&
+  typeof value.name === 'string' && arrayOf(value.prompts, isExplorerRoute) &&
+  arrayOf(value.resources, isExplorerRoute) && arrayOf(value.tools, isExplorerRoute) &&
+  typeof value.transport === 'string' &&
+  (!Object.hasOwn(value, 'entry') || typeof value.entry === 'string');
+
+const isExplorerEventHook = (value: unknown): boolean =>
+  exactRecord(value, ['host', 'kind', 'path'], ['timeout']) &&
+  typeof value.host === 'string' && value.kind === 'event-route' && typeof value.path === 'string' &&
+  (!Object.hasOwn(value, 'timeout') || finiteNumber(value.timeout));
+
+const isExplorerEvent = (value: unknown): boolean =>
+  exactRecord(value, ['event', 'hooks', 'id']) &&
+  typeof value.event === 'string' && arrayOf(value.hooks, isExplorerEventHook) && typeof value.id === 'string';
+
+const isExplorerConfigHook = (value: unknown): boolean =>
+  exactRecord(value, ['event', 'id', 'kind', 'name', 'path'], ['timeout']) &&
+  typeof value.event === 'string' && typeof value.id === 'string' && value.kind === 'config' &&
+  typeof value.name === 'string' && typeof value.path === 'string' &&
+  (!Object.hasOwn(value, 'timeout') || finiteNumber(value.timeout));
+
+const isExplorerHookGroup = (value: unknown): boolean =>
+  exactRecord(value, ['hooks', 'host']) &&
+  arrayOf(value.hooks, isExplorerConfigHook) && typeof value.host === 'string';
+
+const isExplorerCommand = (value: unknown): boolean =>
+  exactRecord(value, ['path', 'routeId']) &&
+  arrayOf(value.path, (segment) => typeof segment === 'string') && typeof value.routeId === 'string';
+
+const isExplorerBin = (value: unknown): boolean =>
+  exactRecord(value, ['hosts', 'name', 'path']) &&
+  arrayOf(value.hosts, (host) => typeof host === 'string') &&
+  typeof value.name === 'string' && typeof value.path === 'string';
+
+const isExplorerCli = (value: unknown): boolean =>
+  exactRecord(value, ['bins', 'commands', 'mode']) &&
+  arrayOf(value.bins, isExplorerBin) && arrayOf(value.commands, isExplorerCommand) &&
+  (value.mode === 'conflict' || value.mode === 'conventional' || value.mode === 'generated');
+
+const isExplorerScript = (value: unknown): boolean =>
+  exactRecord(value, ['hosts', 'id', 'mode', 'name', 'path']) &&
+  arrayOf(value.hosts, (host) => typeof host === 'string') && typeof value.id === 'string' &&
+  (value.mode === 'bundle' || value.mode === 'copy') && typeof value.name === 'string' &&
+  typeof value.path === 'string';
+
+const isApplicationExplorer = (value: unknown): boolean =>
+  exactRecord(value, ['distribution', 'events', 'hooks', 'hosts', 'identity', 'scripts', 'servers'], ['cli']) &&
+  isDistribution(value.distribution) && arrayOf(value.events, isExplorerEvent) &&
+  arrayOf(value.hooks, isExplorerHookGroup) && arrayOf(value.hosts, isExplorerHost) &&
+  isApplication(value.identity) && arrayOf(value.scripts, isExplorerScript) &&
+  arrayOf(value.servers, isExplorerServer) &&
+  (!Object.hasOwn(value, 'cli') || isExplorerCli(value.cli));
+
 const isHook = (value: unknown): boolean =>
   exactRecord(value, ['event', 'file', 'id', 'kind', 'name', 'path', 'target'], ['timeout']) &&
   typeof value.event === 'string' && isArtifactFile(value.file) && typeof value.id === 'string' &&
@@ -136,8 +208,8 @@ const isProjection = (value: unknown): boolean =>
   typeof value.tree.name === 'string' && typeof value.tree.path === 'string' && arrayOf(value.tree.children, isTreeNode);
 
 const isInspection = (value: unknown): value is ArtifactInspection =>
-  exactRecord(value, ['application', 'distribution', 'epochId', 'files', 'project', 'projections', 'provenance', 'runtime']) &&
-  isApplication(value.application) && isDistribution(value.distribution) && typeof value.epochId === 'string' &&
+  exactRecord(value, ['application', 'epochId', 'files', 'project', 'projections', 'provenance', 'runtime']) &&
+  isApplicationExplorer(value.application) && typeof value.epochId === 'string' &&
   arrayOf(value.files, isArtifactFile) && isProject(value.project) && arrayOf(value.projections, isProjection) &&
   arrayOf(value.provenance, isProvenance) && isRuntime(value.runtime);
 
