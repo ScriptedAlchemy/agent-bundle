@@ -143,6 +143,7 @@
 .inspector-status--mounted { color: #14682f; }
 .inspector-status--failed { color: #b31b23; }
 .inspector-status--skipped { color: #8a5300; }
+.inspector-status--unobserved { color: #596372; }
 .inspector-diagnostics { color: #78242a; font-size: 12px; margin: 0; padding-left: 18px; }
 .inspector-timings { display: grid; gap: 6px; list-style: none; margin: 0; padding: 0; }
 .inspector-timings li { align-items: center; display: grid; gap: 10px; grid-template-columns: 120px minmax(0, 1fr) 64px; font-size: 12px; }

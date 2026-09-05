@@ -114,6 +114,14 @@ export interface RouteInvocationChildResult {
   readonly input: JsonValue;
   /** Runtime-owned MCP projection, computed inside the runtime-bound child. */
   readonly mcp?: JsonObject;
+  /**
+   * What the child actually measured. Absent for plain scripts and for
+   * failures before the child reported measurements.
+   */
+  readonly observed?: {
+    readonly providers: readonly RouteInvocationProvider[];
+    readonly timings: readonly RouteInvocationTiming[];
+  };
   readonly renderDurationMs: number;
   readonly result?: JsonValue;
 }
@@ -502,19 +510,29 @@ const eventInput = (
   });
 };
 
-const providerProjection = (
-  manifest: RouteManifest,
-  durationMs: number,
-  status: RouteInvocationProvider['status'],
-): readonly RouteInvocationProvider[] => Object.freeze(manifest.providers.map((provider) => Object.freeze({
-  durationMs,
-  id: provider.id,
-  name: provider.name,
-  status,
-})));
-
 const timing = (phase: string, startedAt: Date, durationMs: number): RouteInvocationTiming =>
   Object.freeze({ durationMs, phase, startedAt: startedAt.toISOString() });
+
+const isChildObservedTiming = (phase: string): boolean =>
+  phase === 'handler' || phase === 'providers' || phase.startsWith('provider:');
+
+const unobservedProviders = (manifest: RouteManifest): readonly RouteInvocationProvider[] =>
+  Object.freeze(manifest.providers.map((provider) => Object.freeze({
+    id: provider.id,
+    name: provider.name,
+    status: 'unobserved' as const,
+  })));
+
+const invocationTimings = (
+  child: RouteInvocationChildResult,
+  startedAt: Date,
+  projectionStartedAt: Date,
+  completedAt: Date,
+): readonly RouteInvocationTiming[] => Object.freeze([
+  ...(child.observed?.timings.filter((entry) => isChildObservedTiming(entry.phase)) ?? []),
+  timing('render', startedAt, child.renderDurationMs),
+  timing('projection', projectionStartedAt, completedAt.getTime() - projectionStartedAt.getTime()),
+]);
 
 const jsonObject = (value: unknown): JsonObject | undefined => {
   if (value === undefined) return undefined;
@@ -625,13 +643,13 @@ const failedInvocation = (input: {
     kind: input.route.kind as RouteInvocationKind,
     manifestDigest: input.manifest.digest,
     projection: {},
-    providers: providerProjection(input.manifest, 0, 'failed'),
+    providers: unobservedProviders(input.manifest),
     routeId: input.route.id,
     source: input.route.source,
     sourceRevision: input.manifest.sourceRevision,
     startedAt: input.startedAt.toISOString(),
     status: 'failed',
-    timings: [timing('render', input.startedAt, input.completedAt.getTime() - input.startedAt.getTime())],
+    timings: [timing('elapsed', input.startedAt, input.completedAt.getTime() - input.startedAt.getTime())],
   });
 };
 
@@ -803,20 +821,14 @@ export class RouteInvocationService {
         kind: route.kind as RouteInvocationKind,
         manifestDigest: manifest.digest,
         projection,
-        providers: providerProjection(manifest, 0, 'mounted'),
+        providers: child.observed?.providers ?? unobservedProviders(manifest),
         ...(child.result === undefined ? {} : { result: child.result }),
         routeId: route.id,
         source: route.source,
         sourceRevision: manifest.sourceRevision,
         startedAt: startedAt.toISOString(),
         status: 'succeeded',
-        timings: [
-          timing('providers', startedAt, 0),
-          ...manifest.providers.map((provider) => timing(`provider:${provider.name}`, startedAt, 0)),
-          timing('handler', startedAt, 0),
-          timing('render', startedAt, child.renderDurationMs),
-          timing('projection', projectionStartedAt, completedAt.getTime() - projectionStartedAt.getTime()),
-        ],
+        timings: invocationTimings(child, startedAt, projectionStartedAt, completedAt),
       });
     });
     this.#pending.add(running);

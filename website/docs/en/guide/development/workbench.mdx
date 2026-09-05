@@ -78,7 +78,9 @@ Results open on **Rendered**, the browser rendering of the production Agent Docu
 streamed progress or Suspense replacements. Secondary result tabs are **Structured result**,
 **Raw AgentDocument**, **MCP projection**, **CLI projection** when available, and **Trace**.
 The inspector opens only when requested and contains **Source**, **Schema**, **Context**,
-**Providers**, **Execution timings**, **Projection**, and **Raw protocol**.
+**Providers**, **Execution timings**, **Projection**, and **Raw protocol**. Providers and
+timings show **unobserved** (and omit duration) when a phase was not measured; `0 ms` is a
+measured zero, not a placeholder.
 
 The browser does not import or execute arbitrary route modules. The server runs the same RSC
 route path used by generated executables and sends its semantic render-event stream and final
@@ -194,10 +196,18 @@ The route workspace uses one authenticated, origin-guarded foreground API:
 - `/api/project/events` publishes completed summaries as `route.invocation` events.
 
 The envelope carries canonical input, request context, providers, ordered render events, the
-final Agent Document, structured result, projections, diagnostics, and execution timings when
-available. A represented `Agent.Error` remains a rendered result; unknown routes or invocation
-ids (`AB8231`), unavailable epochs (`AB8232`), render timeouts or crashes (`AB8236`), malformed
-requests (`AB8237`), and unknown fixture ids (`AB8238`) are reported as diagnostics.
+final Agent Document, structured result, projections, diagnostics, and execution timings.
+`providers` lists each catalog provider with the outcome the child measured (`mounted`,
+`failed`, or `skipped`) and a `durationMs` only when that duration was measured. When the
+child reports no observations — a plain script, or a failure before any provider ran — every
+catalog provider is `unobserved` and `durationMs` is omitted; `0` is a measured zero, not
+"unknown". `timings` lists only measured phases: `render` (the child's render or script-run
+duration), `projection` (host-projection time in the service), and, when observed, `handler`,
+`providers`, and `provider:<name>`. A failed invocation records an `elapsed` timing for the
+wall time until failure and does not invent `failed` provider rows. A represented
+`Agent.Error` remains a rendered result; unknown routes or invocation ids (`AB8231`),
+unavailable epochs (`AB8232`), render timeouts or crashes (`AB8236`), malformed requests
+(`AB8237`), and unknown fixture ids (`AB8238`) are reported as diagnostics.
 See the [diagnostics reference](../../reference/diagnostics.md) for the individual triggers and
 recovery guidance.
 

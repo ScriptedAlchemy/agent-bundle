@@ -48,7 +48,7 @@ const providerSchema = z.strictObject({
   id: textSchema,
   message: z.string().optional(),
   name: textSchema,
-  status: z.enum(['failed', 'mounted', 'skipped']),
+  status: z.enum(['failed', 'mounted', 'skipped', 'unobserved']),
 });
 const cliProjectionSchema = z.strictObject({
   exitCode: z.number().int(),
