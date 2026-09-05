@@ -1,3 +1,5 @@
+import type { ChildProcess } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
@@ -9,7 +11,7 @@ import { codexAdapter, codexArtifactPaths } from '../src/adapters/codex.ts';
 import { cursorAdapter, cursorArtifactPaths } from '../src/adapters/cursor.ts';
 import { portableAdapter } from '../src/adapters/portable.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
-import { build, type BuildProjectResult, createDefaultRegistry, TargetRegistry, validate } from '../src/api.ts';
+import { build, type BuildProjectResult, createDefaultRegistry, runMcp, TargetRegistry, validate } from '../src/api.ts';
 import { parseArtifactManifest } from '../src/build/manifest.ts';
 import { sha256Hex } from '../src/core/digest.ts';
 import { DiagnosticError } from '../src/core/diagnostics.ts';
@@ -130,7 +132,10 @@ const syntheticMcpRuntime = createTargetMcpRuntime({
  * compiled surfaces (MCP entries, scripts), so alone it builds a clean root;
  * beside another target only `AB4106` can be at issue.
  */
-const syntheticAdapterNamed = (name: string): TargetAdapter => Object.freeze({
+const syntheticAdapterNamed = (
+  name: string,
+  launchArgs: (args: readonly string[]) => readonly string[] = (args) => args,
+): TargetAdapter => Object.freeze({
   artifactLayout: Object.freeze({
     mcpEntries: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'mcp' }),
     scripts: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'scripts' }),
@@ -143,7 +148,7 @@ const syntheticAdapterNamed = (name: string): TargetAdapter => Object.freeze({
     const servers = Object.fromEntries(model.mcpServers
       .filter((server) => server.targets.includes(name))
       .map((server) => [server.name, {
-        ...(server.args === undefined ? {} : { args: server.args }),
+        ...(server.args === undefined ? {} : { args: launchArgs(server.args) }),
         command: server.command,
         type: 'stdio',
       }]));
@@ -427,6 +432,55 @@ describe('composite plugin root (#555)', () => {
     expect(await topLevel(alone.output)).toContain(syntheticMcpRuntime.manifestPath);
     expect(builtIn.result.build.manifest.projections.map((projection) => projection.host)).toEqual(['claude', 'codex']);
     expect(await topLevel(builtIn.output)).not.toContain(syntheticMcpRuntime.manifestPath);
+  });
+
+  it('mcp run launches a custom adapter\'s own line in its order (#604)', { timeout: 180_000 }, async () => {
+    const launch = async (registry: TargetRegistry): Promise<{
+      readonly entry: string;
+      readonly launches: readonly { readonly args: readonly string[]; readonly command: string; readonly cwd: string }[];
+      readonly output: string;
+      readonly run: Promise<number>;
+    }> => {
+      const { output, result } = await buildFixture(['synthetic'], { registry });
+      const entry = result.build.manifest.executables.mcpServers[0]?.entry?.path;
+      if (entry === undefined) throw new Error('expected a compiled MCP entry');
+      const launches: { args: readonly string[]; command: string; cwd: string }[] = [];
+      const child = new EventEmitter() as ChildProcess;
+      child.kill = () => true;
+      const run = runMcp({
+        artifact: output,
+        loadEnvFiles: false,
+        registry,
+        root: dirname(output),
+        server: 'fixture',
+        spawnProcess: (command, args, options) => {
+          launches.push({ args, command, cwd: options.cwd });
+          queueMicrotask(() => child.emit('exit', 0, null));
+          return child;
+        },
+        target: 'synthetic',
+      });
+      return { entry, launches, output, run };
+    };
+
+    // Flags ahead of the entry stay ahead: the host document's order is the launch order.
+    const flagFirst = await launch(new TargetRegistry().register(
+      syntheticAdapterNamed('synthetic', (args) => ['--enable-source-maps', ...args, '--stdio']),
+      { default: true },
+    ));
+    await expect(flagFirst.run).resolves.toBe(0);
+    expect(flagFirst.launches).toEqual([{
+      args: ['--enable-source-maps', flagFirst.entry, '--stdio'],
+      command: 'node',
+      cwd: flagFirst.output,
+    }]);
+
+    // A document that skips the compiled entry never becomes an artifact: the build refuses it.
+    await expect(buildFixture(['synthetic'], {
+      registry: new TargetRegistry().register(syntheticAdapterNamed('synthetic', () => ['--version']), { default: true }),
+    })).rejects.toMatchObject({
+      diagnostics: expect.arrayContaining([expect.objectContaining({ code: 'AB6017' })]),
+    });
   });
 
   it('judges the built-in hosts by adapter identity, so a custom adapter named like one earns no install surface (#592)', { timeout: 120_000 }, async () => {

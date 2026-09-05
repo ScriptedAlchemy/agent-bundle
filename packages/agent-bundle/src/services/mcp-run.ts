@@ -186,20 +186,13 @@ export const resolveMcpStdioLaunch = async (
   if (hostLaunch === undefined) {
     return Object.freeze({ args: Object.freeze([entry]), command: 'node', cwd: targetRoot, env: Object.freeze({}) });
   }
-  // The host document is the adapter's own launch line for the entry the
-  // manifest records; it keeps its argument order, and it must launch that entry.
-  const cwd = hostLaunch.cwd === undefined ? targetRoot : resolveContained(targetRoot, hostLaunch.cwd);
-  const launchesEntry = (value: string): boolean => resolve(cwd, value) === entry;
-  if (!launchesEntry(hostLaunch.command) && !hostLaunch.args.some(launchesEntry)) {
-    throw new Error(
-      `The ${host} MCP document launches ${JSON.stringify(options.server)} without the compiled entry ` +
-        `${JSON.stringify(row.entry.path)} recorded in agent-bundle.manifest.json.`,
-    );
-  }
+  // The host document is the adapter's own launch line for that entry — `AB6017`
+  // refused any build whose document skips it, and the digest walk above proved the
+  // document unchanged — so its argument order is the launch order.
   return Object.freeze({
     args: Object.freeze([...hostLaunch.args]),
     command: hostLaunch.command,
-    cwd,
+    cwd: hostLaunch.cwd === undefined ? targetRoot : resolveContained(targetRoot, hostLaunch.cwd),
     env: Object.freeze({ ...hostLaunch.env }),
   });
 };

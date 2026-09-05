@@ -1249,6 +1249,37 @@ it('reports a Claude listing with a malformed scope as unknown inventory (AB7303
   }
 });
 
+it('reports AB7306 when the bundle identity fails for a reason that is not a manifest diagnostic', async () => {
+  const fixture = await temporaryDoctor();
+  try {
+    const bundle = await createBundle(fixture.root, 'cursor');
+    // The manifest points at `.cursor-plugin/plugin.json`; making `.cursor-plugin` a regular
+    // file turns the pointer check into an ENOTDIR read failure rather than a missing file.
+    await rm(join(bundle, '.cursor-plugin'), { recursive: true });
+    await writeFile(join(bundle, '.cursor-plugin'), 'not a directory\n');
+    const report = await runDoctor({
+      commandRunner: versionRunner,
+      endpointDirectory: fixture.endpointDirectory,
+      from: bundle,
+      home: fixture.home,
+      hosts: ['cursor'],
+    });
+    expect(hostReport(report, 'cursor').bundle?.state).toBe('failed');
+    expect(report.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'AB7306',
+        message: expect.stringContaining('ENOTDIR'),
+        recovery: expect.stringContaining('rerun Doctor'),
+        severity: 'error',
+        target: 'cursor',
+      }),
+    ]));
+    expect(report.diagnostics.filter((entry) => entry.code === 'AB7001')).toEqual([]);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 it('reports an unresolvable --from root under the same AB7001 install refuses it with', async () => {
   const fixture = await temporaryDoctor();
   try {

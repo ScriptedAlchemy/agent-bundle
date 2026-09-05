@@ -118,8 +118,8 @@
     },
     "relativePath": {
       "type": "string",
-      "description": "Safe relative POSIX path from the artifact root: non-empty, no leading slash, no backslash or NUL, and no empty, `.`, or `..` segment.",
-      "pattern": "^(?:(?!\\.{1,2}(?:/|$))[^/\\\\\\u0000]+/)*(?!\\.{1,2}(?:/|$))[^/\\\\\\u0000]+$"
+      "description": "Safe relative POSIX path from the artifact root: non-empty, no leading slash or drive prefix, no backslash or NUL, and no empty, `.`, or `..` segment.",
+      "pattern": "^(?![A-Za-z]:)(?:(?!\\.{1,2}(?:/|$))[^/\\\\\\u0000]+/)*(?!\\.{1,2}(?:/|$))[^/\\\\\\u0000]+$"
     },
     "nonNegativeSafeInteger": {
       "type": "integer",

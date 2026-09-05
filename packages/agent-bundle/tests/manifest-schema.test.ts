@@ -484,6 +484,7 @@ const schemaEncodedRules: readonly { readonly apply: (manifest: MutableManifest)
   { apply: (manifest) => { manifest.files[0]!.path = '../escape'; }, rule: 'paths have no .. segment' },
   { apply: (manifest) => { manifest.files[0]!.path = './claude/hooks.json'; }, rule: 'paths have no . segment' },
   { apply: (manifest) => { manifest.files[0]!.path = '/claude/hooks.json'; }, rule: 'paths are relative' },
+  { apply: (manifest) => { manifest.files[0]!.path = 'C:escape'; }, rule: 'paths have no drive prefix' },
   { apply: (manifest) => { manifest.files[0]!.path = 'claude//hooks.json'; }, rule: 'paths have no empty segment' },
   { apply: (manifest) => { manifest.files[0]!.path = 'claude\\hooks.json'; }, rule: 'paths have no backslash' },
   { apply: (manifest) => { manifest.files[0]!.path = 'claude/hooks.json/'; }, rule: 'paths have no trailing slash' },

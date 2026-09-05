@@ -1334,6 +1334,19 @@ diagnostic.
 | `AB7317` | info | A live event runtime implements the older strict protocol and does not expose runtime identity. Restart it after upgrading Agent Bundle. |
 | `AB7318` | error | A live event runtime became unavailable, timed out, or returned an invalid status response during the bounded read-only identity probe. Inspect or restart the runtime, then rerun Doctor. |
 
+## Read-only Doctor bundle resolution (`AB7306`)
+
+`doctor --from <root>` resolves the bundle exactly as `install` does — through
+`agent-bundle.manifest.json` (`install/identity.ts` `readBundleIdentity`) — and
+reports the host's `bundle` finding as `failed` when that resolution throws.
+The identity reader's own refusals keep their code (`AB7001`, below) and the
+message `install` would print, with Doctor's recovery attached; `AB7306` is
+reserved for everything else.
+
+| Code | Severity | Trigger | Recovery |
+| --- | --- | --- | --- |
+| `AB7306` | error | Resolving the bundle failed for a reason that is not a manifest diagnostic — a filesystem error other than "missing" while checking a pointer (`ENOTDIR` because a pointer's parent is a regular file, `EACCES`), or any other thrown error; the message carries the underlying error text. | Repair the root or its permissions (or rebuild it), then rerun Doctor. |
+
 ## Read-only Doctor static validation (`AB7319`–`AB7320`)
 
 Doctor reuses the pinned, process-free host document and loader validators.
