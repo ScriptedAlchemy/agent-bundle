@@ -31,6 +31,7 @@ const publicApiEntryPoints = [
   'mcp-entry.ts',
   'routes/public.ts',
   'rstest/index.ts',
+  'serve-app-command.ts',
   'test/index.ts',
   'test/browser.ts',
 ].map(entry => path.join(packageSource, entry));
