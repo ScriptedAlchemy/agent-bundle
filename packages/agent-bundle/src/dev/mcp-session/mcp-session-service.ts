@@ -10,6 +10,11 @@ import { tmpdir } from 'node:os';
 import { isAbsolute, resolve } from 'node:path';
 
 import { createDefaultRegistry, TargetRegistry } from '../../adapters/registry.ts';
+import { readArtifactManifest } from '../../build/manifest-file.ts';
+import {
+  requireArtifactManifest,
+  resolveManifestMcpDocument,
+} from '../../build/manifest-projection.ts';
 import { validateArtifact } from '../../build/validate-artifact.ts';
 import { DiagnosticError } from '../../core/diagnostics.ts';
 import { joinArtifact } from '../../core/paths.ts';
@@ -333,7 +338,6 @@ export class McpSessionService {
         });
       const program = Effect.gen({ self: this }, function* (this: McpSessionService) {
         const target = options.target;
-        const runtime = yield* liftTry(() => this.#runtime(target));
         if (options.serverName.trim().length === 0) {
           return yield* Effect.fail(McpSessionError.invalidServerName());
         }
@@ -342,6 +346,15 @@ export class McpSessionService {
           (reference) => releaseUnlessTransferred(() => reference.close()),
         );
         const epochRoot = epochReference.root;
+        const manifestRead = yield* liftPromise(() => readArtifactManifest(epochRoot));
+        const manifest = yield* liftTry(() => requireArtifactManifest(manifestRead));
+        const documentPath = yield* liftTry(() => resolveManifestMcpDocument(
+          manifest,
+          target,
+          options.serverName,
+          this.#registry,
+        ));
+        const runtime = yield* liftTry(() => this.#runtime(target));
         const diagnostics = yield* liftPromise(() => validateArtifact({
           allowEpochStagingMarker: true,
           artifactRoot: epochRoot,
@@ -351,7 +364,8 @@ export class McpSessionService {
         if (errors.length > 0) return yield* Effect.fail(new DiagnosticError(errors));
         // Every selected host reads the composite epoch root as its plugin root (#555).
         const targetRoot = epochRoot;
-        const server = yield* liftPromise(() => this.#server(targetRoot, target, runtime, options.serverName));
+        const server = yield* liftPromise(() =>
+          this.#server(targetRoot, target, runtime, options.serverName, documentPath));
         const fs = yield* FileSystem.FileSystem;
         const pluginDataScope = yield* Scope.make();
         const releasePluginData = (): Promise<void> => runPromise(Scope.close(pluginDataScope, Exit.void));
@@ -547,8 +561,9 @@ export class McpSessionService {
     target: string,
     runtime: TargetMcpRuntimeContract,
     name: string,
+    documentPath: string,
   ): Promise<ModernMcpServer> {
-    const path = joinArtifact(targetRoot, runtime.manifestPath);
+    const path = joinArtifact(targetRoot, documentPath);
     let document: unknown;
     try {
       document = parseJsonWithoutDuplicateKeys(await this.#run(readFileString(path)));

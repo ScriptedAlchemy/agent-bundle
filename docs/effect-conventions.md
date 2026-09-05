@@ -457,12 +457,11 @@ the first-party CLI's user-facing text — see
   compares its `dev`/`ino`/`nlink` with the discovering `lstat`; `opendir`
   for `Dirent` kinds. `build/validate-artifact.ts` `snapshotManifest`
   (`lstat` / read / `lstat` `dev`/`ino` identity), the `lstat` rows in
-  `validate-artifact-modules.ts`, `pack-inventory.ts`, `eval/artifact.ts`,
-  `eval/fixtures.ts`, `eval/graders.ts`, and the `Dirent`-typed listings in
-  `eval/codex-plugins.ts` and `host-contracts/*` `symlinkDiagnostics`
-  (a symlinked directory is not a directory to them). `declaration-diagnostics.ts`'s
-  synchronous `existsSync` probe beside `createRequire`'s synchronous
-  resolution.
+  `pack-inventory.ts`, `eval/artifact.ts`, `eval/fixtures.ts`,
+  `eval/graders.ts`, and the `Dirent`-typed listings in `eval/codex-plugins.ts`
+  and `host-contracts/*` `symlinkDiagnostics` (a symlinked directory is not a
+  directory to them). `declaration-diagnostics.ts`'s synchronous `existsSync`
+  probe beside `createRequire`'s synchronous resolution.
 - Synchronous SQLite setup (`rsc-runtime/src/state/sqlite.ts`).
 - Dev-server durable protocols and identity checks: `dev/epoch-store.ts`,
   `dev/dev-lock.ts`, `dev/runtime-generation-store.ts`'s publish path

@@ -105,7 +105,10 @@ and consent behavior, bound to the current epoch's server session. Apps not list
 are 404. The launch resolves from the artifact's declared projections (`?target=` is validated,
 and materially different launches answer 409 naming the choices), web sessions are keyed by
 epoch, server, and launch identity and retire only when a rebuild publishes a new epoch, and a
-non-read-only opening tool runs once per session, tool, App, and input. See
+non-read-only opening tool runs once per session, tool, App, and input. Its bounded execution
+record remains authoritative if the retained result is evicted or the call fails, so refresh
+never silently repeats a possible mutation; the page instead directs the user to run the tool
+explicitly from the App. See
 [Exposing an App in the browser](../authoring/mcp.mdx#exposing-an-app-in-the-browser).
 
 A Skill leaf renders the emitted Skill document by default. Source/generated differences,

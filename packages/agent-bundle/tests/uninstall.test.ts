@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { expect, it } from '@rstest/core';
+import { userDataStateRoot } from '@agent-bundle/runtime';
 
 import { runCli } from '../src/cli.ts';
 import { DiagnosticError } from '../src/core/diagnostics.ts';
@@ -18,6 +19,7 @@ import {
 } from '../src/install/receipt.ts';
 import { uninstallBundle, type UninstallResult } from '../src/install/uninstall.ts';
 import { captureCliTerminal } from './support/cli-terminal.ts';
+import { writeInstallFixtureManifest } from './support/install-fixture.ts';
 import { diffTreeSnapshots, snapshotTree, treesIdentical } from './support/tree-snapshot.ts';
 
 interface CommandCall {
@@ -36,7 +38,16 @@ interface Fixture {
   readonly home: string;
 }
 
-const createFixture = async (host: 'claude' | 'codex' | 'cursor'): Promise<Fixture> => {
+const mcpDocuments = {
+  claude: '.mcp.json',
+  codex: '.codex-plugin/mcp.json',
+  cursor: '.cursor-plugin/mcp.json',
+} as const;
+
+const createFixture = async (
+  host: 'claude' | 'codex' | 'cursor',
+  options: { readonly mcpDocument?: unknown } = {},
+): Promise<Fixture> => {
   const cleanupRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-uninstall-'));
   const bundleRoot = join(cleanupRoot, 'bundle');
   const home = join(cleanupRoot, 'home');
@@ -67,6 +78,17 @@ const createFixture = async (host: 'claude' | 'codex' | 'cursor'): Promise<Fixtu
   } else {
     await writeJson(join(bundleRoot, '.cursor-plugin/plugin.json'), { name: 'uninstall-fixture', version: '1.2.3' });
   }
+  const mcp = options.mcpDocument === undefined ? undefined : mcpDocuments[host];
+  if (mcp !== undefined) await writeJson(join(bundleRoot, mcp), options.mcpDocument);
+  await writeInstallFixtureManifest(
+    bundleRoot,
+    { name: 'uninstall-fixture', version: '1.2.3' },
+    [{
+      host,
+      ...(host === 'cursor' ? {} : { marketplace: 'uninstall-fixture-marketplace' }),
+      ...(mcp === undefined ? {} : { mcp }),
+    }],
+  );
   return { bundleRoot, cleanupRoot, home };
 };
 
@@ -154,7 +176,9 @@ it('keeps Cursor runtime state and unowned entries by default and purges state o
   const cursorRoot = join(fixture.home, '.cursor');
   await mkdir(join(cursorRoot, 'plugins', 'local'), { recursive: true });
   const destination = join(cursorRoot, 'plugins', 'local', 'uninstall-fixture');
-  const options = { from: fixture.bundleRoot, home: fixture.home, host: 'cursor' as const };
+  const environment = { XDG_STATE_HOME: join(fixture.cleanupRoot, 'state-home') };
+  const options = { environment, from: fixture.bundleRoot, home: fixture.home, host: 'cursor' as const };
+  const derivedStateRoot = userDataStateRoot(destination, environment, fixture.home);
   try {
     const before = await snapshotTree(fixture.home);
     await installBundle(options);
@@ -162,6 +186,8 @@ it('keeps Cursor runtime state and unowned entries by default and purges state o
     expect((await readInstallReceipt(destination))?.hostDirectories).toEqual([]);
     await mkdir(join(destination, 'state'));
     await writeFile(join(destination, 'state', 'plugin.sqlite'), 'durable\n');
+    await mkdir(derivedStateRoot, { recursive: true });
+    await writeFile(join(derivedStateRoot, 'plugin.sqlite'), 'derived\n');
     await writeFile(join(destination, 'operator-notes.md'), 'mine\n');
     // Unowned directories that hold nothing retained survive too (the prune only touches owned directories):
     // one at the root and one nested inside an owned directory that would otherwise be pruned.
@@ -186,13 +212,14 @@ it('keeps Cursor runtime state and unowned entries by default and purges state o
     expect(keepPlan.retained).toEqual(['operator-notes.md', 'scratch/', 'skills/drafts/']);
     // Purging state/ still leaves the note, so the root survives that plan too; the purged directory is listed as one.
     const purgePlan = await uninstallBundle({ ...options, confirmPurge: true, plan: true, purgeData: true });
-    expect(purgePlan.removed.directories[0]).toBe(join(destination, 'state'));
+    expect(purgePlan.data.paths).toEqual([derivedStateRoot, join(destination, 'state')]);
+    expect(purgePlan.removed.directories.slice(0, 2)).toEqual([derivedStateRoot, join(destination, 'state')]);
     expect(purgePlan.removed.directories).not.toContain(destination);
     expect(purgePlan.removed.files).not.toContain(join(destination, 'state'));
 
     const kept = await uninstallBundle({ ...options, keepData: true });
     expect(kept).toMatchObject({
-      data: { outcome: 'kept', paths: [join(destination, 'state')], policy: 'keep' },
+      data: { outcome: 'kept', paths: [derivedStateRoot, join(destination, 'state')], policy: 'keep' },
       remnantReceipt: join(destination, installReceiptFile),
       retained: ['operator-notes.md', 'scratch/', 'skills/drafts/'],
       state: 'uninstalled',
@@ -204,6 +231,7 @@ it('keeps Cursor runtime state and unowned entries by default and purges state o
     expect(await readdir(join(destination, 'skills'))).toEqual(['drafts']);
     expect(await readInstallReceipt(destination)).toMatchObject({ files: [], hostDirectories: [], mode: 'local', registrations: [] });
     expect(await readFile(join(destination, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
+    expect(await readFile(join(derivedStateRoot, 'plugin.sqlite'), 'utf8')).toBe('derived\n');
     expect(formatUninstallResult(kept)).toContain('Retained 3 unowned entries');
     expect(formatUninstallResult(kept)).toContain('Remnant receipt:');
 
@@ -217,14 +245,15 @@ it('keeps Cursor runtime state and unowned entries by default and purges state o
     expect(await readFile(join(destination, 'state', 'plugin.sqlite'), 'utf8')).toBe('durable\n');
     const purged = await uninstallBundle({ ...options, confirmPurge: true, purgeData: true });
     expect(purged).toMatchObject({
-      data: { outcome: 'purged', paths: [join(destination, 'state')], policy: 'purge' },
+      data: { outcome: 'purged', paths: [derivedStateRoot, join(destination, 'state')], policy: 'purge' },
       retained: [],
       state: 'uninstalled',
     });
     expect(purged.remnantReceipt).toBeUndefined();
     // A purged state/ tree is a directory and is reported as one, ahead of the pruned owned directories.
-    expect(purged.removed.directories[0]).toBe(join(destination, 'state'));
+    expect(purged.removed.directories.slice(0, 2)).toEqual([derivedStateRoot, join(destination, 'state')]);
     expect(purged.removed.files).not.toContain(join(destination, 'state'));
+    await expect(readdir(derivedStateRoot)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(diffTreeSnapshots(before, await snapshotTree(fixture.home))).toEqual({ added: [], changed: [], removed: [] });
   } finally {
     await rm(fixture.cleanupRoot, { force: true, recursive: true });
@@ -389,6 +418,41 @@ it('keeps created host directories receipt-owned across a --keep-data cycle in a
     expect(diffTreeSnapshots(before, await snapshotTree(fixture.home))).toEqual({ added: [], changed: [], removed: [] });
   } finally {
     await rm(fixture.cleanupRoot, { force: true, recursive: true });
+  }
+});
+
+it('purges AGENT_BUNDLE_STATE_ROOT from the host MCP document the installed manifest points at', async () => {
+  const cleanupRoot = await mkdtemp(join(tmpdir(), 'agent-bundle-uninstall-state-'));
+  const declaredStateRoot = join(cleanupRoot, 'declared-state');
+  const fixture = await createFixture('cursor', {
+    mcpDocument: { mcpServers: { stateful: { command: 'node', env: { AGENT_BUNDLE_STATE_ROOT: declaredStateRoot } } } },
+  });
+  const cursorRoot = join(fixture.home, '.cursor');
+  const options = { from: fixture.bundleRoot, home: fixture.home, host: 'cursor' as const };
+  try {
+    await mkdir(cursorRoot, { recursive: true });
+    await installBundle(options);
+    await mkdir(declaredStateRoot, { recursive: true });
+    await writeFile(join(declaredStateRoot, 'plugin.sqlite'), 'declared\n');
+    const plan = await uninstallBundle({ ...options, confirmPurge: true, plan: true, purgeData: true });
+    expect(plan.data.paths).toEqual([declaredStateRoot]);
+    expect(plan.removed.directories).toContain(declaredStateRoot);
+    const kept = await uninstallBundle({ ...options, keepData: true });
+    expect(kept).toMatchObject({
+      data: { outcome: 'kept', paths: [declaredStateRoot] },
+      remnantReceipt: join(cursorRoot, 'plugins', 'local', 'uninstall-fixture', installReceiptFile),
+    });
+    expect(await readInstallReceipt(join(cursorRoot, 'plugins', 'local', 'uninstall-fixture')))
+      .toMatchObject({ stateRoot: { root: declaredStateRoot, source: 'native' } });
+    expect(await readFile(join(declaredStateRoot, 'plugin.sqlite'), 'utf8')).toBe('declared\n');
+    const purged = await uninstallBundle({ ...options, confirmPurge: true, purgeData: true });
+    expect(purged.data).toMatchObject({ outcome: 'purged', paths: [declaredStateRoot] });
+    await expect(readdir(declaredStateRoot)).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await Promise.all([
+      rm(fixture.cleanupRoot, { force: true, recursive: true }),
+      rm(cleanupRoot, { force: true, recursive: true }),
+    ]);
   }
 });
 
@@ -1188,7 +1252,7 @@ it('purges Claude durable state only when confirmed and reports the host-retaine
   }
 });
 
-it('types the Codex data outcome as unavailable for keep and removed-by-host for purge', async () => {
+it('keeps external Codex state while reporting in-tree state only for purge', async () => {
   const fixture = await createFixture('codex');
   const hostRoot = join(fixture.cleanupRoot, 'codex-root');
   let installed = false;
@@ -1215,9 +1279,19 @@ it('types the Codex data outcome as unavailable for keep and removed-by-host for
     await installBundle(options);
     const installPath = join(hostRoot, 'plugins', 'cache', 'uninstall-fixture-marketplace', 'uninstall-fixture', '1.2.3');
     await cp(fixture.bundleRoot, installPath, { recursive: true });
-    expect((await uninstallBundle({ ...options, plan: true })).data).toMatchObject({ outcome: 'unavailable', policy: 'keep' });
+    const stateRoot = userDataStateRoot(installPath, options.environment, fixture.home);
+    await Promise.all([
+      mkdir(join(installPath, 'state'), { recursive: true }),
+      mkdir(stateRoot, { recursive: true }),
+    ]);
+    expect((await uninstallBundle({ ...options, plan: true })).data).toMatchObject({
+      outcome: 'kept',
+      paths: [stateRoot],
+      policy: 'keep',
+    });
     expect((await uninstallBundle({ ...options, confirmPurge: true, plan: true, purgeData: true })).data).toMatchObject({
-      outcome: 'removed-by-host',
+      outcome: 'purged',
+      paths: [stateRoot, join(installPath, 'state')],
       policy: 'purge',
     });
     const scoped = await failureOf(uninstallBundle({ ...options, scope: 'project' }));

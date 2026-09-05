@@ -18,7 +18,7 @@ import type { ArtifactManifest } from './manifest.ts';
 
 /** The selected host projections the composite root records. */
 export const manifestTargets = (manifest: ArtifactManifest): readonly string[] =>
-  manifest.targets.map((target) => target.name);
+  manifest.projections.map((projection) => projection.host);
 
 /**
  * The skill directories the selected hosts read, each with the hosts that

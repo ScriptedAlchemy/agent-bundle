@@ -229,7 +229,10 @@ describe('buildRslibSurfaces', () => {
       }),
     ]);
     expect(created).toBe(0);
-    expect(bins).toEqual([['settled']]);
+    expect(bins).toEqual({
+      compileResults: [{ assets: [], diagnostics: [], externals: [], modules: [] }],
+      results: [['settled']],
+    });
     expect(evidence).toEqual([
       { assets: [], diagnostics: [], externals: [], modules: [] },
       { assets: [], diagnostics: [], externals: [], modules: [] },

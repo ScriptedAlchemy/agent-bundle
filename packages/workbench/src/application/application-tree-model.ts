@@ -47,7 +47,7 @@ export const applicationTreeFor = (sources: ApplicationTreeSources): Application
           target: hook.target,
         })),
         mcpServers: sources.inspection.runtime.mcpServers.map((server) => ({
-          kind: server.kind,
+          kind: server.transport,
           name: server.name,
           target: server.target,
         })),

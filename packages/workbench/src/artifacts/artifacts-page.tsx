@@ -198,8 +198,8 @@ export const ArtifactsPage = ({ client, epochId }: ArtifactsPageProps) => {
   const [diff, setDiff] = useState<ArtifactEpochDiff>();
   const [error, setError] = useState<string>();
   const [inspection, setInspection] = useState<ArtifactInspection>();
-  const [selectedTarget, setSelectedTarget] = useState<string>();
-  const view = artifactViewFor({ diagnostics, diff, epochId, inspection, selectedTarget });
+  const [selectedProjection, setSelectedProjection] = useState<string>();
+  const view = artifactViewFor({ diagnostics, diff, epochId, inspection, selectedProjection });
 
   useEffect(() => {
     let current = true;
@@ -244,14 +244,14 @@ export const ArtifactsPage = ({ client, epochId }: ArtifactsPageProps) => {
       ? <p className="empty-row" role="status">{view.summary}</p>
       : <>
         <section aria-label="Artifact inspection" className="artifact-controls">
-          <label htmlFor="artifact-target">Target</label>
+          <label htmlFor="artifact-projection">Host</label>
           <select
-            disabled={view.targets.length === 0}
-            id="artifact-target"
-            onChange={(event) => setSelectedTarget(event.currentTarget.value)}
-            value={view.selected?.name ?? ''}
+            disabled={view.projections.length === 0}
+            id="artifact-projection"
+            onChange={(event) => setSelectedProjection(event.currentTarget.value)}
+            value={view.selected?.host ?? ''}
           >
-            {view.targets.map((option) => <option key={option.key} value={option.name}>{option.label}</option>)}
+            {view.projections.map((option) => <option key={option.key} value={option.host}>{option.label}</option>)}
           </select>
           <label htmlFor="artifact-diff-base">Earlier build ID</label>
           <input

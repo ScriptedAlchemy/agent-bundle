@@ -120,6 +120,8 @@ export interface ValidateCursorPluginOptions {
 
 export interface ValidateCursorPluginFilesOptions {
   readonly containmentRoot?: string;
+  /** Authoritative fixed-path inventory; when present, the caller has already refused symlinks in these paths and their ancestors. */
+  readonly files?: readonly string[];
   readonly pluginDirectory: string;
   readonly target: string;
 }
@@ -595,6 +597,7 @@ const tokenDiagnostics = (
 export const validateCursorPluginSymlinks = async (
   options: ValidateCursorPluginFilesOptions,
 ): Promise<readonly Diagnostic[]> => {
+  if (options.files !== undefined) return Object.freeze([]);
   const pluginDirectory = resolve(options.pluginDirectory);
   return symlinkDiagnostics(
     pluginDirectory,
@@ -612,6 +615,7 @@ export const validateCursorPluginFiles = async (
     manifestPrecedenceDiagnostics(pluginDirectory, options.target),
     validateCursorPluginSymlinks({
       ...(options.containmentRoot === undefined ? {} : { containmentRoot: options.containmentRoot }),
+      ...(options.files === undefined ? {} : { files: options.files }),
       pluginDirectory,
       target: options.target,
     }),

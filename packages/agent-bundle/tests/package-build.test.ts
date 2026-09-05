@@ -37,6 +37,15 @@ const fixtureRoot = async (files: Readonly<Record<string, string>>): Promise<str
     await mkdir(join(destination, '..'), { recursive: true });
     await writeFile(destination, contents);
   }
+  if ('packages/linked-dep/package.json' in files) {
+    await mkdir(join(root, 'node_modules'), { recursive: true });
+    await symlink(join(root, 'packages', 'linked-dep'), join(root, 'node_modules', 'linked-dep'), 'dir');
+    await symlink(
+      join(root, 'packages', 'linked-dep', 'vendor', 'linked-nested'),
+      join(root, 'node_modules', 'linked-nested'),
+      'dir',
+    );
+  }
   return root;
 };
 
@@ -49,7 +58,16 @@ const conventionFixture = (): Readonly<Record<string, string>> => ({
     '};',
     '',
   ].join('\n'),
-  'package.json': '{"name":"package-build-fixture","type":"module","private":true}\n',
+  'package.json': '{"name":"package-build-fixture","type":"module","private":true,"dependencies":{"linked-dep":"1.0.0"}}\n',
+  'node_modules/evidence-package/index.js': 'globalThis.__evidencePackageLoaded = true;\n',
+  'node_modules/evidence-package/package.json': '{"name":"evidence-package","type":"module","version":"1.0.0"}\n',
+  // Linked into node_modules below, as a package manager links a workspace dependency.
+  'packages/linked-dep/index.js': "import 'linked-nested';\nglobalThis.__linkedDepLoaded = true;\n",
+  'packages/linked-dep/package.json':
+    '{"name":"linked-dep","type":"module","version":"1.0.0","dependencies":{"linked-nested":"1.0.0"}}\n',
+  // A linked dependency's own linked dependency, whose real root sits inside the parent's.
+  'packages/linked-dep/vendor/linked-nested/index.js': 'globalThis.__linkedNestedLoaded = true;\n',
+  'packages/linked-dep/vendor/linked-nested/package.json': '{"name":"linked-nested","type":"module","version":"1.0.0"}\n',
   'tsconfig.json': JSON.stringify({
     compilerOptions: {
       module: 'esnext',
@@ -60,6 +78,9 @@ const conventionFixture = (): Readonly<Record<string, string>> => ({
     },
   }),
   'src/cli.ts': [
+    "import 'evidence-package';",
+    "import 'linked-dep';",
+    '',
     'export const main = async (argv: readonly string[]): Promise<number> => {',
     "  process.stdout.write(`ran:${argv.join(',')}\\n`);",
     "  return argv.includes('--fail') ? 3 : 0;",
@@ -137,6 +158,16 @@ describe('framework-owned package build', () => {
     expect(paths).toContain('bin/package-build-fixture.js');
     expect(paths).toContain('index.js');
     expect(paths).toContain('index.d.ts');
+    expect(packageBuild!.evidence.assets.map((asset) => asset.path)).toEqual(
+      expect.arrayContaining(['dist/bin/package-build-fixture.js', 'dist/index.js']),
+    );
+    expect(packageBuild!.evidence.assets.flatMap((asset) => asset.externals)
+      .every((external) => external.kind === 'builtin')).toBe(true);
+    // A package under `node_modules` is named by its path; a workspace-linked one, which Rspack records at its
+    // real path, by the declaration that reached it — the deepest such root when one sits inside another.
+    expect(packageBuild!.evidence.assets
+      .find((asset) => asset.path === 'dist/bin/package-build-fixture.js')?.packages)
+      .toEqual(['evidence-package', 'linked-dep', 'linked-nested']);
     for (const file of packageBuild!.files) {
       expect(file.sourceInputs).toEqual([...file.sourceInputs].sort((left, right) => left.localeCompare(right)));
     }
@@ -464,6 +495,91 @@ describe('framework-owned package build', () => {
     expect(binSource).toMatch(/from\s*["'](?:node:)?os["']/u);
     expect(binSource).toContain('import.meta.url');
     expect(binSource).toContain('./shipped.cjs');
+  }, 120_000);
+
+  it('fails the package build with AB6005 on a literal import the compiler was told to ignore in a dist bundle', async () => {
+    // `rspackIgnore`/`webpackIgnore` leave the call verbatim with no module, external, or warning;
+    // the walk over the record-proven bundle holds each lexed import to the recorded externals.
+    const root = await fixtureRoot({
+      ...conventionFixture(),
+      'agent-bundle.config.ts': [
+        'export default {',
+        "  lib: { entry: './src/index.ts', dts: false },",
+        "  mcp: { servers: { echoer: {} } },",
+        "  plugin: { name: 'package-build-fixture', version: '1.0.0' },",
+        "  targets: ['portable'],",
+        '};',
+        '',
+      ].join('\n'),
+      'src/cli.ts': [
+        "export const pad = () => import('left-pad' /* rspackIgnore: true */);",
+        "export const missing = () => import(/* webpackIgnore: true */ './missing.js');",
+        "export const outside = () => import(/* rspackIgnore: true */ '../../outside.js');",
+        '',
+        'export const main = async (): Promise<number> => {',
+        '  process.stdout.write(`${typeof pad}${typeof missing}${typeof outside}\\n`);',
+        '  return 0;',
+        '};',
+        '',
+      ].join('\n'),
+      'src/index.ts': [
+        "export const sibling = () => import(/* rspackIgnore: true */ './bin/package-build-fixture.js');",
+        '',
+      ].join('\n'),
+    });
+
+    const failure = await packageBuildFailure(root);
+    expect(failure).toBeInstanceOf(DiagnosticError);
+    const ignored = (asset: string, request: string): Diagnostic => ({
+      code: 'AB6005',
+      generatedPath: asset,
+      message: `Generated JavaScript import from ${JSON.stringify(asset)} loads ${JSON.stringify(request)}, which the compiler `
+        + 'neither bundled nor recorded as an external; an import the build ignored is a run-time load outside the artifact.',
+      recovery: 'Bundle every JavaScript dependency into the artifact, then rebuild it.',
+      severity: 'error',
+    });
+    expect([...withCode((failure as DiagnosticError).diagnostics, 'AB6005')].sort(byMessage)).toEqual([
+      ignored('dist/bin/package-build-fixture.js', '../../outside.js'),
+      ignored('dist/bin/package-build-fixture.js', './missing.js'),
+      ignored('dist/bin/package-build-fixture.js', 'left-pad'),
+      ignored('dist/index.js', './bin/package-build-fixture.js'),
+    ].sort(byMessage));
+    await unpublishedPackageOutput(root);
+  }, 120_000);
+
+  it('fails the package build with AB6005 on an expression import the compiler left verbatim in a dist bundle', async () => {
+    const root = await fixtureRoot({
+      ...conventionFixture(),
+      'agent-bundle.config.ts': [
+        'export default {',
+        '  lib: false,',
+        "  mcp: { servers: { echoer: {} } },",
+        "  plugin: { name: 'package-build-fixture', version: '1.0.0' },",
+        "  targets: ['portable'],",
+        '};',
+        '',
+      ].join('\n'),
+      'src/cli.ts': [
+        'export const load = (name: string) => import(name);',
+        '',
+        'export const main = async (argv: readonly string[]): Promise<number> => {',
+        "  process.stdout.write(`${Object.keys(await load(argv[0] ?? 'node:os')).length}\\n`);",
+        '  return 0;',
+        '};',
+        '',
+      ].join('\n'),
+    });
+
+    const failure = await packageBuildFailure(root);
+    expect(failure).toBeInstanceOf(DiagnosticError);
+    expect(withCode((failure as DiagnosticError).diagnostics, 'AB6005')).toEqual([{
+      code: 'AB6005',
+      generatedPath: 'dist/bin/package-build-fixture.js',
+      message: 'Generated JavaScript import from "dist/bin/package-build-fixture.js" has a non-literal dynamic import.',
+      recovery: 'Bundle every JavaScript dependency into the artifact, then rebuild it.',
+      severity: 'error',
+    }]);
+    await unpublishedPackageOutput(root);
   }, 120_000);
 
   it('accepts a sibling authored module that the package build bundles into the executable', async () => {
@@ -812,6 +928,6 @@ describe('mcp run', () => {
       root,
       server: 'remote',
       target: 'portable',
-    })).rejects.toThrow(/not a stdio server/u);
+    })).rejects.toThrow(/is a remote server/u);
   }, 120_000);
 });

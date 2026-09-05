@@ -5,10 +5,10 @@ import { dirname, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { afterAll, beforeAll, describe, expect, it } from '@rstest/core';
+import { init, parse } from 'es-module-lexer';
 
 import { build, type BuildProjectResult } from '../src/api.ts';
 import { parseArtifactManifest } from '../src/build/manifest.ts';
-import { readModuleImports } from '../src/build/module-imports.ts';
 import { validateArtifact } from '../src/build/validate-artifact.ts';
 import { compileRouteGraph } from '../src/routes/graph.ts';
 import { isRelativeSpecifier, moduleCandidates, readModuleFromDisk } from '../src/routes/module-candidates.ts';
@@ -117,9 +117,15 @@ interface EmittedModule {
 
 const siblingUrlReference = /new URL\(\s*(?:\/\*[^*]*\*\/\s*)?["'](\.\.?\/[^"']+\.mjs)["']\s*,\s*import\.meta\.url\s*\)/gu;
 
+const importKind = (d: number): 'dynamic' | 'meta' | 'static' => {
+  if (d === -2) return 'meta';
+  if (d === -1) return 'static';
+  return 'dynamic';
+};
+
 const readEmittedModule = async (artifactRoot: string, path: string): Promise<EmittedModule> => {
   const bytes = await readFile(join(artifactRoot, path), 'utf8');
-  const imports = await readModuleImports(bytes, { check: 'lexed' });
+  const imports = parse(bytes)[0].map((record) => ({ kind: importKind(record.d), specifier: record.n }));
   const statics: string[] = [];
   const deferred: string[] = [];
   const bare: string[] = [];
@@ -212,6 +218,7 @@ describe('preflight artifact graph (#595)', () => {
   const cache = new Map<string, EmittedModule>();
 
   beforeAll(async () => {
+    await init;
     root = await realpath(await mkdtemp(join(tmpdir(), 'agent-bundle-preflight-graph-')));
     // The audiobook example's installed tree supplies @agent-bundle/runtime, react, and zod.
     await symlink(join(process.cwd(), 'examples', 'audiobook-curator', 'node_modules'), join(root, 'node_modules'), 'dir');
@@ -262,8 +269,8 @@ describe('preflight artifact graph (#595)', () => {
 
   it('emits the entry the Claude hook document invokes, indexed once, in an AB6005-clean artifact', async () => {
     const compiled = result.build.compiledHooks.find((hook) => hook.id === 'hook:event-route:tool-before')!;
-    const index = JSON.parse(await readFile(join(output, 'agent-bundle.hooks.json'), 'utf8')) as { hooks: { id: string; path: string; target: string }[] };
-    const indexed = index.hooks.filter((hook) => hook.id === 'hook:event-route:tool-before');
+    const manifest = parseArtifactManifest(await readFile(join(output, 'agent-bundle.manifest.json'), 'utf8'));
+    const indexed = manifest.executables.hooks.filter((hook) => hook.id === 'hook:event-route:tool-before');
     expect(indexed).toHaveLength(1);
     expect(join(output, indexed[0]!.path)).toBe(compiled.output);
 
@@ -271,7 +278,6 @@ describe('preflight artifact graph (#595)', () => {
     const commands = Object.values(document.hooks).flat().flatMap((group) => group.hooks.map((hook) => hook.command));
     expect(commands).toEqual([`node "\${CLAUDE_PLUGIN_ROOT}/${entryPath}"`]);
 
-    const manifest = parseArtifactManifest(await readFile(join(output, 'agent-bundle.manifest.json'), 'utf8'));
     const bundled = manifest.files.filter((file) => file.kind === 'bundle').map((file) => join(output, file.path));
     expect(bundled).toContain(compiled.output);
     // Every module of both graphs is a compiler-emitted bundle the manifest lists.
@@ -280,6 +286,21 @@ describe('preflight artifact graph (#595)', () => {
     }
     const diagnostics = await validateArtifact({ artifactRoot: output });
     expect(diagnostics.filter((diagnostic) => diagnostic.code === 'AB6005' || diagnostic.severity === 'error')).toEqual([]);
+  });
+
+  it('records event execution metadata in the authoritative artifact manifest', async () => {
+    const manifest = parseArtifactManifest(await readFile(join(output, 'agent-bundle.manifest.json'), 'utf8'));
+
+    expect(manifest.routes.events).toContainEqual(expect.objectContaining({
+      event: 'tool/before',
+      execution: {
+        fallback: 'none',
+        preflight: 'src/events/tool/before.preflight.ts',
+        providers: ['daemonProbe'],
+        runtime: 'standalone',
+      },
+      id: 'event:tool/before',
+    }));
   });
 
   it('runs continue, deny, and deferred execute outcomes through the published hook process', async () => {

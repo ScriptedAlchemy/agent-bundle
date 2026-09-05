@@ -1,3 +1,5 @@
+import type { ChildProcess } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
@@ -9,14 +11,17 @@ import { codexAdapter, codexArtifactPaths } from '../src/adapters/codex.ts';
 import { cursorAdapter, cursorArtifactPaths } from '../src/adapters/cursor.ts';
 import { portableAdapter } from '../src/adapters/portable.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
-import { build, type BuildProjectResult, createDefaultRegistry, TargetRegistry, validate } from '../src/api.ts';
-import { parseArtifactHookIndex } from '../src/build/hook-index.ts';
+import { build, type BuildProjectResult, createDefaultRegistry, runMcp, TargetRegistry, validate } from '../src/api.ts';
 import { parseArtifactManifest } from '../src/build/manifest.ts';
 import { sha256Hex } from '../src/core/digest.ts';
 import { DiagnosticError } from '../src/core/diagnostics.ts';
 import type { NormalizedPlugin } from '../src/core/types.ts';
 import { createMcpPathTokenResolver, standardMcpPathTokens } from '../src/services/mcp-path-tokens.ts';
-import { createTargetMcpRuntime, resolveTargetRelativeStdioArgument } from '../src/services/mcp-runtime.ts';
+import {
+  createTargetMcpRuntime,
+  resolveTargetRelativeStdioArgument,
+  type TargetMcpRuntimeContract,
+} from '../src/services/mcp-runtime.ts';
 import { supportedCapabilities } from './support/adapter-capabilities.ts';
 
 /**
@@ -131,7 +136,10 @@ const syntheticMcpRuntime = createTargetMcpRuntime({
  * compiled surfaces (MCP entries, scripts), so alone it builds a clean root;
  * beside another target only `AB4106` can be at issue.
  */
-const syntheticAdapterNamed = (name: string): TargetAdapter => Object.freeze({
+const syntheticAdapterNamed = (
+  name: string,
+  launchArgs: (args: readonly string[]) => readonly string[] = (args) => args,
+): TargetAdapter => Object.freeze({
   artifactLayout: Object.freeze({
     mcpEntries: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'mcp' }),
     scripts: Object.freeze({ allowedSuffixes: Object.freeze(['.mjs']), directory: 'scripts' }),
@@ -144,7 +152,7 @@ const syntheticAdapterNamed = (name: string): TargetAdapter => Object.freeze({
     const servers = Object.fromEntries(model.mcpServers
       .filter((server) => server.targets.includes(name))
       .map((server) => [server.name, {
-        ...(server.args === undefined ? {} : { args: server.args }),
+        ...(server.args === undefined ? {} : { args: launchArgs(server.args) }),
         command: server.command,
         type: 'stdio',
       }]));
@@ -168,7 +176,12 @@ const topLevel = async (root: string): Promise<readonly string[]> => (await read
 
 describe('composite plugin root (#555)', () => {
   it('emits one root whose top-level entries are exactly the selected projections and shared surfaces (acceptance 1)', { timeout: 120_000 }, async () => {
-    const { output } = await buildFixture(['claude', 'codex']);
+    const { output, result } = await buildFixture(['claude', 'codex']);
+    const registry = createDefaultRegistry();
+    for (const projection of result.build.manifest.projections) {
+      expect(projection.documents.hooks).toBe(registry.hookContract(projection.host)?.manifestPath);
+      expect(projection.documents.mcp).toBe(registry.mcpRuntime(projection.host)?.manifestPath);
+    }
 
     // The pinned layout of a Claude Code + Codex root. Every entry has one
     // obvious purpose; a future step that adds an entry here must justify it.
@@ -178,7 +191,7 @@ describe('composite plugin root (#555)', () => {
       '.codex-plugin', // Codex manifest, hooks document, MCP document
       '.mcp.json', // Claude Code MCP document (conventional root path)
       'INSTALL.md',
-      'agent-bundle.hooks.json',
+      'agent-bundle.compile-evidence.json', // compiler evidence per compiled file (AB6039)
       'agent-bundle.manifest.json',
       'commands',
       'hooks', // Claude Code hooks document + every compiled hook wrapper
@@ -209,7 +222,7 @@ describe('composite plugin root (#555)', () => {
       '.agents',
       '.codex-plugin',
       'INSTALL.md',
-      'agent-bundle.hooks.json',
+      'agent-bundle.compile-evidence.json',
       'agent-bundle.manifest.json',
       'hooks',
       'mcp',
@@ -232,10 +245,22 @@ describe('composite plugin root (#555)', () => {
   it('defaults to the portable projection when targets are omitted (acceptance 4)', { timeout: 120_000 }, async () => {
     const { output, result } = await buildFixture(undefined);
 
-    expect(result.build.manifest.targets.map((target) => target.name)).toEqual(['portable']);
+    expect(result.build.manifest.manifestVersion).toBe(2);
+    expect(result.build.manifest.projections.map((projection) => projection.host)).toEqual(['portable']);
+    expect(result.build.manifest.projections[0]!.documents.plugin).toBe('plugin.json');
+    expect(result.build.manifest.projections[0]!.documents.mcp).toBe('mcp.json');
+    expect(result.build.manifest.files.some(({ path }) =>
+      path === result.build.manifest.projections[0]!.documents.plugin)).toBe(true);
+    expect(result.build.manifest.routes).toMatchObject({
+      events: [],
+      layouts: [],
+      providers: [],
+      scripts: [],
+      servers: [],
+    });
     expect(await topLevel(output)).toEqual([
       'INSTALL.md',
-      'agent-bundle.hooks.json', // always written; empty here since portable hosts no hooks
+      'agent-bundle.compile-evidence.json',
       'agent-bundle.manifest.json',
       'install.mjs', // the self-contained local installer (S5 narrows it to Cursor)
       'mcp',
@@ -314,7 +339,7 @@ describe('composite plugin root (#555)', () => {
     expect(await topLevel(cursorOnly.output)).toEqual([
       '.cursor-plugin',
       'INSTALL.md',
-      'agent-bundle.hooks.json',
+      'agent-bundle.compile-evidence.json',
       'agent-bundle.manifest.json',
       'commands',
       'hooks',
@@ -332,10 +357,8 @@ describe('composite plugin root (#555)', () => {
   it('records only the selected projections in the artifact manifest and hook index (acceptance 8)', { timeout: 120_000 }, async () => {
     const { output } = await buildFixture(['codex', 'claude']);
     const manifest = parseArtifactManifest(await readFile(join(output, 'agent-bundle.manifest.json'), 'utf8'));
-    const index = parseArtifactHookIndex(await readFile(join(output, 'agent-bundle.hooks.json'), 'utf8'));
-
-    expect(manifest.targets.map((target) => target.name)).toEqual(['claude', 'codex']);
-    expect(index?.hooks.map((hook) => [hook.target, hook.path])).toEqual([
+    expect(manifest.projections.map((projection) => projection.host)).toEqual(['claude', 'codex']);
+    expect(manifest.executables.hooks.map((hook) => [hook.host, hook.path])).toEqual([
       ['claude', 'hooks/session-start-session-start-7ab7e8a5.claude.mjs'],
       ['codex', 'hooks/session-start-session-start-7ab7e8a5.codex.mjs'],
     ]);
@@ -411,10 +434,100 @@ describe('composite plugin root (#555)', () => {
       buildFixture(['synthetic'], { registry }),
       buildFixture(['claude', 'codex'], { registry }),
     ]);
-    expect(alone.result.build.manifest.targets.map((target) => target.name)).toEqual(['synthetic']);
+    expect(alone.result.build.manifest.projections.map((projection) => projection.host)).toEqual(['synthetic']);
+    expect(alone.result.build.manifest.projections[0]!.documents.mcp).toBe(syntheticMcpRuntime.manifestPath);
     expect(await topLevel(alone.output)).toContain(syntheticMcpRuntime.manifestPath);
-    expect(builtIn.result.build.manifest.targets.map((target) => target.name)).toEqual(['claude', 'codex']);
+    expect(builtIn.result.build.manifest.projections.map((projection) => projection.host)).toEqual(['claude', 'codex']);
     expect(await topLevel(builtIn.output)).not.toContain(syntheticMcpRuntime.manifestPath);
+  });
+
+  it('mcp run launches a custom adapter\'s own line in its order (#604)', { timeout: 180_000 }, async () => {
+    const launch = async (registry: TargetRegistry): Promise<{
+      readonly entry: string;
+      readonly launches: readonly { readonly args: readonly string[]; readonly command: string; readonly cwd: string }[];
+      readonly output: string;
+      readonly run: Promise<number>;
+    }> => {
+      const { output, result } = await buildFixture(['synthetic'], { registry });
+      const entry = result.build.manifest.executables.mcpServers[0]?.launch?.entry;
+      if (entry === undefined) throw new Error('expected a compiled MCP entry');
+      const launches: { args: readonly string[]; command: string; cwd: string }[] = [];
+      const child = new EventEmitter() as ChildProcess;
+      child.kill = () => true;
+      const run = runMcp({
+        artifact: output,
+        loadEnvFiles: false,
+        registry,
+        root: dirname(output),
+        server: 'fixture',
+        spawnProcess: (command, args, options) => {
+          launches.push({ args, command, cwd: options.cwd });
+          queueMicrotask(() => child.emit('exit', 0, null));
+          return child;
+        },
+        target: 'synthetic',
+      });
+      return { entry, launches, output, run };
+    };
+
+    const flagFirst = await launch(new TargetRegistry().register(
+      syntheticAdapterNamed('synthetic', (args) => ['--enable-source-maps', ...args, '--stdio']),
+      { default: true },
+    ));
+    await expect(flagFirst.run).resolves.toBe(0);
+    expect(flagFirst.launches).toEqual([{
+      args: ['--enable-source-maps', flagFirst.entry, '--stdio'],
+      command: 'node',
+      cwd: flagFirst.output,
+    }]);
+
+    await expect(buildFixture(['synthetic'], {
+      registry: new TargetRegistry().register(syntheticAdapterNamed('synthetic', () => ['--version']), { default: true }),
+    })).rejects.toMatchObject({
+      diagnostics: expect.arrayContaining([expect.objectContaining({ code: 'AB6017' })]),
+    });
+  });
+
+  it('mcp run launches from the manifest record alone when the host document names no such server (#604)', { timeout: 180_000 }, async () => {
+    // Built with the adapter as shipped; run through a registry whose reader
+    // reports the document's servers under other names — the compiled entry
+    // stays referenced (AB6017 holds), but no document row is `fixture`, so
+    // only `executables.mcpServers[].launch` can describe the launch.
+    const { output, result } = await buildFixture(['synthetic'], {
+      registry: new TargetRegistry().register(syntheticAdapter, { default: true }),
+    });
+    const record = result.build.manifest.executables.mcpServers[0]?.launch;
+    if (record === undefined) throw new Error('expected a compiled MCP entry');
+    const aliasingRuntime: TargetMcpRuntimeContract = {
+      ...syntheticMcpRuntime,
+      readModernServers: (document) => {
+        const read = syntheticMcpRuntime.readModernServers(document);
+        return read.status === 'found'
+          ? { servers: read.servers.map((entry) => ({ ...entry, name: `${entry.name}-alias` })), status: 'found' }
+          : read;
+      },
+    };
+    const blindRegistry = new TargetRegistry().register({ ...syntheticAdapter, mcpRuntime: aliasingRuntime }, { default: true });
+    const launches: { args: readonly string[]; command: string; cwd: string; env: Readonly<Record<string, string>> }[] = [];
+    const child = new EventEmitter() as ChildProcess;
+    child.kill = () => true;
+    const workspaceRoot = dirname(output);
+    await expect(runMcp({
+      artifact: output,
+      loadEnvFiles: false,
+      registry: blindRegistry,
+      root: workspaceRoot,
+      server: 'fixture',
+      spawnProcess: (command, args, options) => {
+        launches.push({ args, command, cwd: options.cwd, env: options.env });
+        queueMicrotask(() => child.emit('exit', 0, null));
+        return child;
+      },
+      target: 'synthetic',
+    })).resolves.toBe(0);
+    expect(launches).toHaveLength(1);
+    expect(launches[0]).toMatchObject({ args: [join(output, record.entry)], command: 'node', cwd: output });
+    expect(launches[0]?.env['AGENT_BUNDLE_PLUGIN_ROOT']).toBe(workspaceRoot);
   });
 
   it('judges the built-in hosts by adapter identity, so a custom adapter named like one earns no install surface (#592)', { timeout: 120_000 }, async () => {
@@ -436,7 +549,7 @@ describe('composite plugin root (#555)', () => {
       buildFixture(['portable'], { registry }),
       buildFixture(['portable'], {}),
     ]);
-    expect(custom.result.build.manifest.targets.map((target) => target.name)).toEqual(['portable']);
+    expect(custom.result.build.manifest.projections.map((projection) => projection.host)).toEqual(['portable']);
     const customTree = await topLevel(custom.output);
     expect(customTree).toContain(syntheticMcpRuntime.manifestPath);
     expect(customTree).not.toContain('INSTALL.md');

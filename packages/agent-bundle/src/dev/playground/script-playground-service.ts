@@ -17,7 +17,7 @@ import {
   waitForProcessTreeExit,
   type ProcessTreeTaskkill,
 } from '../../services/process-tree.ts';
-import { artifactScriptCatalog } from '../artifacts/artifact-script-catalog.ts';
+import { artifactManifestScriptExecutions } from '../artifacts/artifact-executables.ts';
 import { EpochStore, type EpochReference } from '../epoch-store.ts';
 import { YieldableCodedError, YieldableFrameworkError } from '../../effect/errors.ts';
 
@@ -474,10 +474,10 @@ export class ScriptPlaygroundService {
       if (validated.snapshot === undefined || validated.diagnostics.some((entry) => entry.severity === 'error')) {
         throw new Error('Script playground requires a strictly validated artifact.');
       }
-      const selected = artifactScriptCatalog(validated.snapshot.manifest, this.#registry)
+      const selected = artifactManifestScriptExecutions(validated.snapshot.manifest)
         .find((entry) => entry.target === request.target && entry.id === request.scriptId);
-      if (selected === undefined) throw new Error('Requested script is not in the validated artifact script catalog.');
-      const path = resolve(reference.root, selected.file);
+      if (selected === undefined) throw new Error('Requested script is not in the validated artifact manifest.');
+      const path = resolve(reference.root, selected.path);
       if (!isInside(reference.root, path)) throw new Error('Resolved script escapes the published artifact.');
       const interpreter = interpreterFor(extname(path));
       if (interpreter === undefined) throw new Error('Requested script suffix has no server allowlisted interpreter.');
