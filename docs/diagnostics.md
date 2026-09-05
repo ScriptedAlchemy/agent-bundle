@@ -30,7 +30,7 @@ even when no error diagnostic was reported.
 | `AB4765`–`AB4766` | Artifact-hosted routed CLI: a target without the `cli` capability omits `bin/<name>.mjs`; a host-emitted file collides with it (see below). |
 | `AB477x` | MCP App view compilation (`AB4770`: compile error with file, line, column and the bundler message; `AB4771`: compile warning; `AB4772`: emitted-size advisory; see below). |
 | `AB490x`/`AB492x` | Conventional host components (#100 stage 2): rules `src/rules/*.mdc` (`AB4900`–`AB4908`) and commands `src/commands/*.md` (`AB4920`–`AB4928`), including per-host feature-set enforcement (`AB4907`/`AB4908`, `AB4927`/`AB4928`); see below. |
-| `AB48xx`/`AB494x` | Route graph, state, layout (`AB4830`–`AB4832`), generated route declarations outside the TypeScript program (`AB4834`), route render budgets (`AB4835`), tool task support (`AB4836`), a route module that value-imports a compiler-carrying framework entry (`AB4837`), and provider conventions (see below). |
+| `AB48xx`/`AB494x` | Route graph, state, layout (`AB4830`–`AB4832`), generated route declarations outside the TypeScript program (`AB4834`), route render budgets (`AB4835`), tool task support (`AB4836`), a route module that value-imports a compiler-carrying framework entry (`AB4837`), a CLI route `inputSchema` reference the static resolver cannot follow (`AB4838`) or that cycles (`AB4839`), and provider conventions (see below). |
 | `AB5000` | General CLI and adapter failures (see below). |
 | `AB60xx` | Built-artifact validation, including schema documents and referenced files (`AB6005`: an emitted JavaScript module — a host-pack module or a package build `dist` bundle (`dist/bin/*.js`, the Flight workers, the `lib` entry), prebuilt payloads excepted — has an import that is neither a Node built-in nor a relative or `file:` specifier resolving to a listed regular file inside its tree, or a non-literal dynamic import; a `dist` finding names `dist/<path>`; `AB6011`/`AB6012`: a target's required pinned-schema document is missing or invalid; `AB6025`: a manifest-declared `logo` path is missing from the artifact or escapes the deploy tree; `AB6034`: emitted Skill Markdown has no instruction body; `AB6035`–`AB6038`: Agent Plugins portable validation, see below). |
 | `AB6200`–`AB6202` | Workbench artifact inspection over published epochs: `AB6200` the epoch does not validate or its provenance is inconsistent, `AB6201` an epoch reference could not be released, `AB6202` unsafe runtime metadata (see below). |
@@ -933,7 +933,7 @@ framework-owned plugin twice by accident.
 | `AB4723` | error | `tools.rspack` is not an Rspack config object, a mutator function, or an array of both. | Use one of the three Rslib `tools.rspack` forms. |
 | `AB4724` | error | `tools.rsbuild.plugins` supplies a plugin whose `name` matches a framework-owned registration (`rsbuild:react` from `@rsbuild/plugin-react`). The message names the plugin and its package. | Remove the plugin from `tools.rsbuild.plugins`; agent-bundle registers it in every config it synthesizes. |
 
-## Route graph, state, layout, and provider conventions (`AB4800`–`AB4837`, `AB4940`–`AB4942`)
+## Route graph, state, layout, and provider conventions (`AB4800`–`AB4839`, `AB4940`–`AB4942`)
 
 The route-graph compiler discovers conventional route modules
 (`src/mcp/<server>/{tools,resources,prompts,apps}/*`, `src/events/*/*`,
@@ -963,11 +963,14 @@ in every tool that opens it:
   `export const X = '<literal>'` of a module reached through a *relative*
   import (`import { X } from '../constants'`; `.ts`/`.tsx` resolution,
   `.js`-style specifiers map onto their TypeScript source, index modules
-  resolve) inside the project root. The sibling module is parsed, never
-  executed, and only that one hop is followed: the exported const's
-  initializer must itself be a string literal. Because the identifier is a
-  real import, the same value is available at run time (for example in
-  `Agent.Result metadata`).
+  resolve) inside the project root. The referenced modules are parsed, never
+  executed, by the same static resolver that follows `inputSchema`
+  references (below): an alias chain (`export const X = Y`, where `Y` is
+  itself a top-level `const` of that module or a named import from another
+  relative module inside the project) is followed across any number of
+  modules, and the binding at the end of it must be initialized with a
+  string literal. Because the identifier is a real import, the same value is
+  available at run time (for example in `Agent.Result metadata`).
 - **`appResourceUri('<app>')`** imported from `agent-bundle/routes`. The
   compiler resolves the reference to the target App route's static
   `config.resourceUri` while compiling the graph. The App must belong to the
@@ -991,10 +994,11 @@ in every tool that opens it:
   use the const form when the URI is also needed inside the component.
 
 Anything else — any other identifier, a call, a package import, a relative
-import that leaves the project or does not export a string-literal const —
-is dynamic: the route compiles with an empty config beside a named `AB4806`
-error whose recovery names both reference forms. A module without a `config`
-export compiles silently with an empty config.
+import that leaves the project or whose chain does not end in a
+string-literal `export const` — is dynamic: the route compiles with an empty
+config beside a named `AB4806` error whose recovery names both reference
+forms. A module without a `config` export compiles silently with an empty
+config.
 
 An MCP App route's `config.template` resolves **relative to the route
 module**, the way its imports do (`template: './dashboard.html'`). The older
@@ -1105,9 +1109,66 @@ project onto kebab-case options (`maxFiles` becomes `--max-files`); booleans
 are flags and must carry `.optional()` or `.default(...)`;
 `config.positionals` names the keys consumed as bare arguments in order,
 where only the trailing positional may be a `z.array(...)` (variadic).
-Anything outside that grammar — identifier references (including shared
-schema constants), unions, nested objects, transforms, coercions — raises
-`AB4814` naming the offending construct.
+Anything outside that grammar — unions, nested objects, transforms,
+coercions — raises `AB4814` naming the offending construct and its position,
+wherever the schema is declared.
+
+The schema does not have to be written inline. `inputSchema` may be bound to
+a reference (`export const inputSchema = statusInputSchema`), and a
+reference may also stand as a property initializer, at the root of a method
+chain (`requestStatusSchema.optional()` — the resolved chain's calls come
+first, then the local ones), or as the argument of `z.array(<ref>)`, of
+`z.enum(<ref>)` (an array literal of string literals; `as const` unwraps),
+of `z.object(<ref>)`/`z.strictObject(<ref>)` (an object literal), or of
+`.default(<ref>)` (a static literal). The static resolver follows a
+reference without executing anything: a same-module top-level `const`
+(exported or not) resolves to its initializer; a named import
+(`import { X as Y } from './rel'`, `.js`-style specifiers mapping onto their
+`.ts`/`.tsx` source) resolves to the target module's `export const X`,
+provided the specifier is relative and resolves inside the project root;
+alias hops (`export const a = b`) are followed to any depth; and every
+visited `<module>#<binding>` is recorded, so revisiting one is a cycle. The
+zod expression at the end of the chain is parsed in the *declaring* module's
+scope under the same grammar, and a grammar violation there is still
+`AB4814`, its position qualified by that module (`z.object at
+src/lib/protocol-schemas.ts:12:5 is outside the bounded argv grammar`). What
+the resolver will not cross: a bare (non-relative) specifier, a module
+outside the project or one that cannot be read, a target module without a
+top-level `export const <name>`, a `let`/`var`, destructured, function,
+class, default-import, or namespace-import binding, an unknown identifier,
+and a dynamic initializer (a bare call, a function, a template literal with
+substitutions). On a CLI route such a reference is `AB4838`, whose message
+prints the chain (`inputSchema -> statusInputSchema
+(src/lib/protocol-schemas.ts) -> requestStatusSchema -> requestStatuses`) and the boundary
+(`imported from "@shared/protocol", which is not a relative module path`); a
+cyclic chain is `AB4839`, whose message prints the cycle. Only CLI routes
+raise them, because there the argv grammar is load-bearing and the command
+cannot compile without it; an MCP tool, resource, prompt, script, or event
+route whose schema the resolver cannot follow compiles silently without a
+static contract, exactly as an out-of-grammar inline schema does, and the
+runtime derives its MCP JSON Schema from the real zod object. `resultSchema`
+may be imported the same way: the route contract check (`AB4810`/`AB4815`)
+requires only that the named export exists, TypeScript types the route
+through the import, and the runtime validates with the real zod object — no
+static result projection exists.
+
+Every statically extracted `inputSchema` is normalized once into a
+`RouteContract` in the compiled graph (`graph.contracts`, sorted by id, absent
+when no route has one): `id` is `contract:<module>#<binding>` — the
+declaration site at the end of the alias chain, so
+`contract:src/lib/protocol-schemas.ts#statusInputSchema` for an imported
+schema and `contract:src/cli/status.tsx#inputSchema` for an inline one;
+`input` is the deep-frozen JSON Schema projection, the same object as each
+bound route's `inputSchema`; `origin` is `{ module, binding }`; and `routes`
+lists the sorted ids of every route bound to it. Each route names its
+contract as `route.contract`. Identity is the declaration site, not the
+content: two routes importing one binding share one contract, while two
+textually equal schemas declared separately stay two contracts. A contract
+declared outside the route's own module joins the route's digest identity;
+graphs whose schemas are all inline keep their recorded digests.
+`agent-bundle inspect --routes` prints the contracts with the graph, and the
+Workbench route detail shows a route's contract origin and the other routes
+sharing it.
 
 | Code | Severity | Trigger |
 | --- | --- | --- |
@@ -1117,7 +1178,7 @@ schema constants), unions, nested objects, transforms, coercions — raises
 | `AB4803` | error | A route path derives an unsafe identity segment (each segment must match `^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?$`). |
 | `AB4804` | error | A `routes` mode override is not `generated`/`custom`/`command`/`remote` for a server, or `generated`/`conventional` for the CLI. |
 | `AB4805` | error | A route module exports `config` through a rejected declaration shape (`let`/`var`, destructuring, `export { config }`, a function or class, a missing initializer), or the extracted value is not an object. |
-| `AB4806` | error | A route module's `config` initializer is dynamic — the message names the offending construct and position, and the recovery names the two accepted reference forms (a top-level `const` string literal declared locally or `export const`-ed by a relative sibling module, and `appResourceUri('<app>')` from `agent-bundle/routes`). |
+| `AB4806` | error | A route module's `config` initializer is dynamic — the message names the offending construct and position (for a reference the static resolver could not follow, the boundary it stopped at: a non-relative specifier, a module outside the project, a missing `export const`, a non-`const` binding, a non-literal initializer), and the recovery names the two accepted reference forms (a top-level `const` string literal declared locally or reached through `export const` alias hops across any number of relative modules inside the project, and `appResourceUri('<app>')` from `agent-bundle/routes`). |
 | `AB4807` | retired | The stage-1 rendered-script gate. Rendered script routes ship through the Agent renderer pipeline since #102 stage 3; the code is never reused. |
 | `AB4808` | error | A conventional `src/scripts/` route nests below the scripts root; conventional scripts ship as direct children only. Move it up, prefix a path segment with `_`, or declare it under `scripts` in config with a flat name. |
 | `AB4809` | error | A conventional `src/scripts/` route and a configured `scripts` entry share one script identity through different files. Point the config entry at the module to claim it, or rename one of the two. |
@@ -1125,7 +1186,7 @@ schema constants), unions, nested objects, transforms, coercions — raises
 | `AB4811` | error | A generated MCP route exports `execute` or `render`; route mode accepts only the async default Server Component contract. |
 | `AB4812` | error | A generated MCP App route has no non-empty static `config.resourceUri`. |
 | `AB4813` | error | The command graph collides: a route is both a command module and a command group, an alias collides with a sibling command, group, or alias, an alias is unsafe or duplicated, or an explicit `bin` entry claims the generated CLI executable's name. |
-| `AB4814` | error | A CLI route's `inputSchema` leaves the bounded argv grammar (the message names the offending construct and position), a key projects onto a reserved or duplicate option name, a required boolean has no flag expression, or `config.positionals` violates the positional policy. |
+| `AB4814` | error | A CLI route's `inputSchema` leaves the bounded argv grammar wherever the schema is declared — inline, or in a relative module the route imports (the message names the offending construct and position, qualified by the declaring module for a resolved import: `z.object at src/lib/protocol-schemas.ts:12:5 is outside the bounded argv grammar`) — a key projects onto a reserved or duplicate option name, a required boolean has no flag expression, or `config.positionals` violates the positional policy. A reference the static resolver cannot follow is `AB4838`, and a cyclic one `AB4839`, not `AB4814`. |
 | `AB4815` | error | A CLI route does not satisfy the routed command contract: missing named `inputSchema`/`resultSchema` exports, a default export that is not an async function, or malformed `config.description`/`aliases`/`exitCode` fields. |
 | `AB4816` | retired | The stage-2 rendered-command gate. Rendered command routes render through the dispatcher since #102 stage 3; the code is never reused. |
 | `AB4817` | error | An event route requires the shared runtime for a target, but no generated MCP entry hosts that runtime and the route does not allow standalone fallback. |
@@ -1149,6 +1210,8 @@ schema constants), unions, nested objects, transforms, coercions — raises
 | `AB4835` | error | A route's static `config.render` (the render budget of one call, #454) is malformed: `render` is not an object, carries a key other than `maxElapsedMs`, `maxElapsedMs` is not a positive integer of milliseconds, or it exceeds the framework ceiling of `86400000` (24 hours) — or a plain `.ts` CLI command declares one, although it executes without a render session. Reported once per route: on an MCP tool, resource, or prompt route with its server (the tool's projected CLI command inherits the value), or on a `src/cli/**` command route; a route with a rejected budget compiles no command. Omit `render` to keep the runtime default (`60000`). Declare `config.render = { maxElapsedMs: <positive integer ≤ 86400000> }` on a rendered route, or remove it. The budget bounds the framework's render session only: Codex's `tool_timeout_sec` (60 s by default) and any per-server host timeout must be raised by the operator separately, while Claude Code's default per-call wall clock is about 28 hours and its idle timer is kept alive by the `notifications/progress` the projector forwards. |
 | `AB4836` | error | A route's static `config.execution` (MCP task support, #369) is malformed: `execution` is not an object, carries a key other than `taskSupport`, or `taskSupport` is not one of `forbidden`, `optional`, `required` — or a resource or prompt route declares it, although the `2025-11-25` Tasks utility augments `tools/call` only. Reported once per route with its server. Omit `execution` to keep the wire default (`forbidden`: every call is an ordinary request), or declare `config.execution = { taskSupport: 'optional' }` so a task-aware client may receive a `CreateTaskResult` and poll `tasks/get` / `tasks/result` while the render continues, or `'required'` to refuse ordinary calls with JSON-RPC `-32601`. The generated server advertises the value in `tools/list` and declares the `tasks` capability only when at least one tool opted in. |
 | `AB4837` | error | A route module of any kind except an App — a `src/cli/**` command, a `src/scripts/**` script, a tool, resource, or prompt route of a generated server, an event route — a layout, or a provider, or a module one of them reaches through relative value imports, imports `agent-bundle`, `agent-bundle/api`, `agent-bundle/config`, `agent-bundle/eval`, `agent-bundle/rstest`, `agent-bundle/test`, or `agent-bundle/test/browser` as a value (a static import whose binding is read at run time, `import 'agent-bundle/api'`, `import('agent-bundle/api')` with a literal specifier, or a non-type re-export). Those entries carry the compiler, and the generated executable is self-contained (#387): the bundler would inline the compiler and fail on the framework's runtime-relative module references (`Module not found: Can't resolve '../events'`), or the artifact validator would reject the inlined compiler's non-literal dynamic imports with `AB6005` — either way naming a generated file instead of the route (#558). Judged statically when the route graph compiles, so `inspect`, `validate`, `build`, and `dev` all report it, once per module, naming the route and the helper the import lives in. `import type`, `type`-qualified specifiers, and imports used only in type positions are elided by the bundler and never reported; routes of a server that is not generated (`custom`/`command`/`remote`, or an `AB4800` conflict) or of a CLI that is not generated (`conventional`, or an `AB4801` conflict) are never bundled, so they are not judged; likewise a layout that no bundled rendered route composes through (a worker imports only the layouts its routes reach: the tool, resource, and prompt routes of a generated server, the rendered `.tsx` commands of a generated CLI, and rendered `.tsx` scripts), and a provider in a project whose only executables are plain `.ts` scripts, which are bundled from their own source and mount none. Spawn the framework instead of importing it: serve an MCP App from a routed command with `spawnServeApp` from `agent-bundle/serve-app-command`, which runs `agent-bundle serve-app` as a child process; keep other framework calls in host processes (`package.json` scripts, a hand-written `.mjs` run from the checkout). The bundle-safe entries stay allowed: `agent-bundle/routes`, `agent-bundle/launch-env`, `agent-bundle/meta`, `agent-bundle/mcp-apps`, `agent-bundle/mcp-entry`, `agent-bundle/cli-entry`, `agent-bundle/terminal-capability`, and `agent-bundle/serve-app-command`. |
+| `AB4838` | error | A CLI route's `inputSchema` references a binding the static resolver cannot follow. The message is `CLI route <path> inputSchema: <chain> <reason>.` — the chain is the reference path from `inputSchema`, each step `<binding>`, or `<binding> (<module>)` when it crosses into another module (`inputSchema -> statusInputSchema (src/lib/protocol-schemas.ts) -> requestStatusSchema -> requestStatuses`), and the reason names the boundary: a specifier that `is not a relative module path`, one that `resolves outside the project` or `does not resolve to a module inside the project` (missing or unreadable), a target module that does not declare a top-level `export const <name>`, a binding that is not a top-level `const` (`let`/`var`, destructuring, a function, a class, a default or namespace import — the message says what it is), an identifier that `is neither a top-level const in this module nor a named import from a relative module`, or a dynamic initializer — one that is neither a method chain, an object or array literal, nor a static literal (`whose initializer is a call expression`, `a function expression`, `a template literal with substitutions`). Reported on the route module; the recovery names the supported forms — relative imports inside the project, `export const`, alias chains — then says to inspect again. Only CLI routes raise it, because only there the static contract is load-bearing: an MCP, script, or event route whose schema the resolver cannot follow compiles without a static contract, as an out-of-grammar inline schema does, and the runtime derives its MCP JSON Schema from the real zod object. A reference that resolves but whose schema leaves the grammar is `AB4814`. |
+| `AB4839` | error | A CLI route's `inputSchema` reference chain is cyclic — `a` → `b` → `a`, within one module or across several: every visited `<module>#<binding>` is recorded and revisiting one stops the walk. The message is `CLI route <path> inputSchema: <chain> is a reference cycle.` and prints the cycle; it is reported on the route module, with the same recovery and the same CLI-only rule as `AB4838`. |
 | `AB4940` | error | A conventional provider module has no default export or its default export is not a function. Default-export a factory receiving `{ invocation, plugin, signal }`. |
 | `AB4941` | error | Two provider filenames derive the same camel-cased provider key. Rename one file so every provider key is unique. |
 | `AB4942` | error | A provider filename derives the reserved `processLifetime` key. Rename the file so its camel-cased key does not collide with the framework-owned provider. |

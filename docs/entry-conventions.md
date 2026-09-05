@@ -821,7 +821,7 @@ export default async function inspect({ input, signal }: CliRouteProps<typeof in
 
 The compiler statically projects `inputSchema` onto argv (the bounded grammar
 and every policy rule are documented in
-[Diagnostics](diagnostics.md#route-graph-state-layout-and-provider-conventions-ab4800ab4832-ab4940ab4942)), generates nested
+[Diagnostics](diagnostics.md#route-graph-state-layout-and-provider-conventions-ab4800ab4839-ab4940ab4942)), generates nested
 help (`--help` at every level, `--version` at the root), and emits
 `dist/bin/<plugin-name>.js` with the shebang and executable bit through the
 same Rslib synthesis as every other bin. At run time the shell resolves the
@@ -835,6 +835,17 @@ or input failure; 130/143 on SIGINT/SIGTERM, which reach the route's
 already emit the canonical JSON document. Routed CLI projects need
 `@agent-bundle/runtime` as a dependency — the generated executable installs
 the request context through it.
+
+The schema need not be written inline: an `inputSchema` bound to a schema
+`export const`-ed by a relative module inside the project
+(`export const inputSchema = statusInputSchema`, through any number of alias
+hops, the `.js` specifier mapping onto its `.ts`/`.tsx` source) is resolved
+statically, parsed in the declaring module's scope under the same grammar,
+and normalized once into a `RouteContract` shared by every route — CLI
+command or MCP tool — that binds it; a reference the resolver cannot follow
+is `AB4838` and a cyclic one `AB4839`, both documented in the same
+[Diagnostics](diagnostics.md#route-graph-state-layout-and-provider-conventions-ab4800ab4839-ab4940ab4942)
+section.
 
 When the module's `inputSchema` rejects the parsed argv, the shell reports
 each issue in CLI terms rather than the raw schema issue JSON (#465): one
