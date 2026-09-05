@@ -49,21 +49,22 @@ file is hand-editable: change the config or the sources and rebuild.
 | `eval --artifact`, `agent-bundle/test` installed-host proofs | `projections[]` and `executables.hooks[]` in place of any host document. |
 | Workbench artifacts page | Reads the manifest through the application-explorer projection at `ArtifactInspection.application`: application identity, hosts and their documents, joined server routes and executables, events and hooks, CLI, scripts, and distribution. The emitted file tree remains separate inspection evidence; the browser does not use the manifest's raw shape as its application-tree model. |
 | `validate --artifact`, `build` | The whole document: presence and canonical bytes (`AB6000`, `AB6001`), `files[]` against the tree (`AB6004`), and hook coherence over `executables.hooks[]` (`AB6018`). |
-| `prepack` | `files[]`, `projections[]`, and `project.packageVersion` for the pack inventory (`AB7010`–`AB7013`). |
+| `prepack` | `files[]`, `projections[]`, and `compiler.project.packageVersion` for the pack inventory (`AB7010`–`AB7013`). |
 
-## Sections
+## Public contract
 
-The top level has exactly twelve keys, all required: `agentSkills`, `application`,
-`distribution`, `executables`, `files`, `manifestVersion`, `producer`, `project`,
-`projections`, `routes`, `runtime`, `validation`.
+The top level has exactly nine keys, all required: `application`, `compiler`, `distribution`,
+`executables`, `files`, `manifestVersion`, `projections`, `routes`, `runtime`. Consumers that
+install, diagnose, serve, or list a root (`install`, `doctor`, `serve-app`, `mcp`, `hooks`,
+`inspect` summary) read only this contract. Operational compiler facts live under `compiler`
+and are versioned separately.
 
-### `producer`, `runtime`, `manifestVersion`
+### `runtime`, `manifestVersion`
 
 | Field | Contents |
 | --- | --- |
-| `manifestVersion` | `2`. |
-| `producer` | `{ name: 'agent-bundle', version }` — the framework version that wrote the root. `name` is always `agent-bundle`. |
-| `runtime` | `{ node }` — the generated-executable runtime floor the root was built for, as a canonical `major.minor.patch` string that satisfies the framework's floor. |
+| `manifestVersion` | `2`. Versions the public contract consumers read. |
+| `runtime` | `{ node }` — the consumer-facing generated-executable runtime floor the root was built for, as a canonical `major.minor.patch` string that satisfies the framework's floor. |
 
 ### `application`
 
@@ -78,21 +79,10 @@ model in one build.
 | `version` | yes | The plugin version. |
 | `description` | no | `metadata.description`, when configured. |
 
-### `project`
-
-| Field | Required | Contents |
-| --- | --- | --- |
-| `configPath` | yes | The configuration file, relative to the project root. It must appear in `sourceInputs` with a hash equal to `configDigest`. |
-| `configDigest` | yes | SHA-256 of the configuration file. |
-| `modelDigest` | yes | SHA-256 of the normalized model. |
-| `revision` | yes | The digest over `sourceInputs`; a reader recomputes it and rejects a mismatch. |
-| `sourceInputs[]` | yes | Every project input the build read: `{ path, sha256, executable? }`, sorted by `path`. |
-| `packageName` | no | The validated npm package name; absent for an unpackaged development project. |
-| `packageVersion` | no | The validated release version; absent for an unpackaged development project. |
-
 ### `files[]`
 
-Every emitted file except the manifest itself, sorted by `path`.
+Every emitted file except the manifest itself, sorted by `path`. Source-input provenance for
+each row lives on `compiler.provenance`, not here.
 
 | Field | Required | Contents |
 | --- | --- | --- |
@@ -101,7 +91,6 @@ Every emitted file except the manifest itself, sorted by `path`.
 | `sha256` | yes | Content digest. Validation compares real bytes, so a hand-edited generated file fails. |
 | `kind` | yes | `bundle` (a compiled entry), `copy` (a byte-for-byte copy), `generated` (a compiler-written document), or `prebuilt` (a prebuilt payload file). |
 | `mode` | no | The file mode, `0` through `0o777`, when the build set one. |
-| `sourceInputs[]` | yes | The `project.sourceInputs` paths this file derives from, sorted. |
 
 ### `projections[]`
 
@@ -111,9 +100,6 @@ One row per selected host, sorted by `host`. Targets select projections; they ar
 | --- | --- | --- |
 | `host` | yes | The target name the project selected the projection under: `claude`, `codex`, `cursor`, `portable`, or a registered adapter's name. A name is selection, not identity. |
 | `builtInHost` | when a shipped adapter planned it | The shipped adapter that planned the projection, by identity: `claude`, `codex`, `cursor`, or `portable`. Absent for an advanced-registry adapter, even one registered under a built-in name. `install`, `doctor`, and the installed-host test harness pick a host's projection by this field, never by `host`. |
-| `adapterRevision` | yes | The adapter's repository-owned, monotonic revision. |
-| `observedVersion` | yes | The host version its capability evidence was recorded against. |
-| `schemas[]` | yes | The pinned host document schemas the projection was validated against: `{ name, revision, sha256 }`, sorted by `name`. |
 | `documents` | yes | Root-relative pointers to the host documents this projection emitted; every present pointer is a `files[]` row. See below. |
 | `marketplace` | no | `{ name }` — the marketplace the projection's marketplace document registers. Present only together with `documents.marketplace`. |
 
@@ -185,34 +171,71 @@ list and each `host` names a `projections[]` row.
 
 | Field | Required | Contents |
 | --- | --- | --- |
-| `channels[]` | yes | `local` always; `npm` exactly when `project.packageName` is present. Sorted. |
+| `channels[]` | yes | `local` always; `npm` exactly when `compiler.project.packageName` is present. Sorted. |
 | `install` | no | Root-relative pointers to the install surface: `{ instructions?: 'INSTALL.md', script?: 'install.mjs' }`, present when the root carries at least one of them. |
 
-### `agentSkills`
+## Compiler record (`compiler`, `recordVersion`)
 
-`{ specification, sourceRevision, schemaSha256 }` — the Agent Skills specification pin the Skill
-documents were validated against.
+Operational record of the compiler run. Versioned by `recordVersion` independently of
+`manifestVersion`: a change here is not a change to the artifact contract consumers read. The
+object has exactly seven keys, all required: `adapters`, `agentSkills`, `producer`, `project`,
+`provenance`, `recordVersion`, `validation`.
 
-### `validation`
+| Field | Contents |
+| --- | --- |
+| `recordVersion` | `1`. Bumps when the compiler record's closed shape changes; does not bump `manifestVersion`. |
+| `producer` | `{ name: 'agent-bundle', version }` — the framework version that wrote the root. `name` is always `agent-bundle`. |
+| `project` | The project the artifact was compiled from. See below. |
+| `provenance[]` | One row per `files[]` row, sorted by `path`: `{ path, sourceInputs[] }`. The path set equals the `files[]` path set. |
+| `adapters[]` | One row per projection, sorted by `host`: `{ host, adapterRevision, observedVersion, schemas[] }`. The host set equals the `projections[].host` set. |
+| `agentSkills` | `{ specification, sourceRevision, schemaSha256 }` — the Agent Skills specification pin the Skill documents were validated against. |
+| `validation` | `{ artifact: { status }, source: { status }, projections: [{ host, status }] }`. Every `status` is `passed` — a root that failed validation is never written — and `projections[]` lists exactly the hosts of `projections[]`, in the same order. |
 
-`{ artifact: { status }, source: { status }, projections: [{ host, status }] }`. Every `status`
-is `passed` — a root that failed validation is never written — and `projections[]` lists exactly
-the hosts of `projections[]`, in the same order.
+### `compiler.project`
+
+| Field | Required | Contents |
+| --- | --- | --- |
+| `configPath` | yes | The configuration file, relative to the project root. It must appear in `sourceInputs` with a hash equal to `configDigest`. |
+| `configDigest` | yes | SHA-256 of the configuration file. |
+| `modelDigest` | yes | SHA-256 of the normalized model. |
+| `revision` | yes | The digest over `sourceInputs`; a reader recomputes it and rejects a mismatch. |
+| `sourceInputs[]` | yes | Every project input the build read: `{ path, sha256, executable? }`, sorted by `path`. |
+| `packageName` | no | The validated npm package name; absent for an unpackaged development project. |
+| `packageVersion` | no | The validated release version; absent for an unpackaged development project. |
+
+### `compiler.adapters[]`
+
+| Field | Required | Contents |
+| --- | --- | --- |
+| `host` | yes | Names the matching `projections[]` row. |
+| `adapterRevision` | yes | The adapter's repository-owned, monotonic revision. |
+| `observedVersion` | yes | The host version its capability evidence was recorded against. |
+| `schemas[]` | yes | The pinned host document schemas the projection was validated against: `{ name, revision, sha256 }`, sorted by `name`. |
+
+### `compiler.provenance[]`
+
+| Field | Required | Contents |
+| --- | --- | --- |
+| `path` | yes | The matching `files[]` path. Never `agent-bundle.manifest.json`. |
+| `sourceInputs[]` | yes | The `compiler.project.sourceInputs` paths this file derives from, sorted. |
 
 ### Rules that span sections
 
 A reader enforces these before it accepts the document:
 
-- `project.configPath` is a `project.sourceInputs` entry whose hash is `project.configDigest`,
-  and `project.revision` is the digest of `project.sourceInputs`.
-- Every `files[].sourceInputs` path is a `project.sourceInputs` path.
+- `compiler.project.configPath` is a `compiler.project.sourceInputs` entry whose hash is
+  `compiler.project.configDigest`, and `compiler.project.revision` is the digest of
+  `compiler.project.sourceInputs`.
+- `compiler.provenance` paths equal `files[]` paths, and every provenance `sourceInputs` path is
+  a `compiler.project.sourceInputs` path.
+- `compiler.adapters` hosts equal `projections[]` hosts.
 - Every pointer — `projections[].documents.*`, `executables.*[].path` and `worker`,
   `executables.mcpServers[].entry.*`, `executables.mcpServers[].apps[].path`,
   `distribution.install.*` — names a `files[]` row.
 - Every `hosts[]` entry and every `hooks[].host` names a `projections[]` row.
-- `validation.projections[]` hosts equal `projections[]` hosts.
+- `compiler.validation.projections[]` hosts equal `projections[]` hosts.
 - `executables.scripts[].rendered.routeId` names a `routes.scripts[]` route.
-- `distribution.channels` includes `npm` exactly when `project.packageName` is present.
+- `distribution.channels` includes `npm` exactly when `compiler.project.packageName` is present.
 
 ## An abbreviated example
 
@@ -221,8 +244,29 @@ event route, and a routed CLI. Digests are elided; keys appear in canonical (sor
 
 ```json
 {
-  "agentSkills": { "schemaSha256": "…", "sourceRevision": "…", "specification": "…" },
   "application": { "id": "hauler", "name": "cargo-hauler", "version": "1.4.2" },
+  "compiler": {
+    "adapters": [
+      { "adapterRevision": "…", "host": "claude", "observedVersion": "2.1.260",
+        "schemas": [{ "name": "plugin", "revision": "…", "sha256": "…" }] }
+    ],
+    "agentSkills": { "schemaSha256": "…", "sourceRevision": "…", "specification": "…" },
+    "producer": { "name": "agent-bundle", "version": "0.9.0" },
+    "project": {
+      "configDigest": "…", "configPath": "agent-bundle.config.ts", "modelDigest": "…",
+      "packageName": "cargo-hauler", "packageVersion": "1.4.2", "revision": "…",
+      "sourceInputs": [{ "path": "agent-bundle.config.ts", "sha256": "…" }]
+    },
+    "provenance": [
+      { "path": ".claude-plugin/plugin.json", "sourceInputs": ["agent-bundle.config.ts"] }
+    ],
+    "recordVersion": 1,
+    "validation": {
+      "artifact": { "status": "passed" },
+      "projections": [{ "host": "claude", "status": "passed" }],
+      "source": { "status": "passed" }
+    }
+  },
   "distribution": {
     "channels": ["local", "npm"],
     "install": { "instructions": "INSTALL.md" }
@@ -235,7 +279,8 @@ event route, and a routed CLI. Digests are elided; keys appear in canonical (sor
     "hooks": [
       { "event": "afterTool", "host": "claude", "id": "hook:event-route:tool-after",
         "kind": "event-route", "name": "event-route-tool-after",
-        "path": "hooks/event-route-tool-after-….mjs" }
+        "path": "hooks/event-route-tool-after-….mjs",
+        "routeId": "event:tool/after" }
     ],
     "mcpServers": [
       { "apps": [
@@ -250,22 +295,14 @@ event route, and a routed CLI. Digests are elided; keys appear in canonical (sor
   },
   "files": [
     { "bytes": 412, "kind": "generated", "path": ".claude-plugin/plugin.json",
-      "sha256": "…", "sourceInputs": ["agent-bundle.config.ts"] }
+      "sha256": "…" }
   ],
   "manifestVersion": 2,
-  "producer": { "name": "agent-bundle", "version": "0.9.0" },
-  "project": {
-    "configDigest": "…", "configPath": "agent-bundle.config.ts", "modelDigest": "…",
-    "packageName": "cargo-hauler", "packageVersion": "1.4.2", "revision": "…",
-    "sourceInputs": [{ "path": "agent-bundle.config.ts", "sha256": "…" }]
-  },
   "projections": [
-    { "adapterRevision": "…",
+    { "builtInHost": "claude",
       "documents": { "hooks": "hooks/hooks.json", "marketplace": ".claude-plugin/marketplace.json",
         "mcp": ".mcp.json", "plugin": ".claude-plugin/plugin.json" },
-      "host": "claude", "marketplace": { "name": "cargo-hauler-marketplace" },
-      "observedVersion": "2.1.260",
-      "schemas": [{ "name": "plugin", "revision": "…", "sha256": "…" }] }
+      "host": "claude", "marketplace": { "name": "cargo-hauler-marketplace" } }
   ],
   "routes": {
     "cli": {
@@ -293,12 +330,7 @@ event route, and a routed CLI. Digests are elided; keys appear in canonical (sor
         ] }
     ]
   },
-  "runtime": { "node": "22.12.0" },
-  "validation": {
-    "artifact": { "status": "passed" },
-    "projections": [{ "host": "claude", "status": "passed" }],
-    "source": { "status": "passed" }
-  }
+  "runtime": { "node": "22.12.0" }
 }
 ```
 
@@ -318,8 +350,10 @@ The same entry point exports the reader:
 | `parseArtifactManifest(bytes)` | Parses and validates canonical bytes into a frozen `ArtifactManifest`; throws on any violation, including a duplicate key or non-canonical bytes. |
 | `artifactManifestName` | `'agent-bundle.manifest.json'`. |
 | `artifactManifestVersion` | `2`. |
+| `artifactCompilerRecordVersion` | `1`. |
 
-The types (`ArtifactManifest`, `ArtifactManifestProjection`, `ArtifactManifestExecutables`, …)
+The types (`ArtifactManifest`, `ArtifactManifestCompiler`, `ArtifactManifestCompilerAdapter`,
+`ArtifactManifestProvenance`, `ArtifactManifestProjection`, `ArtifactManifestExecutables`, …)
 are in the generated [Type API](./api.mdx).
 
 ## Reserved keys
@@ -337,10 +371,18 @@ other unknown key. They are listed so that a consumer does not invent its own sp
 
 ## Versioning
 
-`manifestVersion` changes when a key is **renamed or removed**; adding an **optional** key does
-not change it. Version 2 renamed `targets[]` to `projections[]`, moved the hook rows that
-`agent-bundle.hooks.json` used to carry into `executables.hooks[]` and deleted that file, and
-added `application`, `routes`, `executables`, `distribution`, and `projections[].documents`.
+Two version numbers travel with every root:
+
+- `manifestVersion` versions the **public contract** consumers read (`application`, `files[]`,
+  `runtime`, `projections[]`, `routes`, `executables`, `distribution`). It changes when a
+  public-contract key is **renamed or removed**; adding an **optional** public key does not
+  change it. Version 2 renamed `targets[]` to `projections[]`, moved the hook rows that
+  `agent-bundle.hooks.json` used to carry into `executables.hooks[]` and deleted that file, and
+  added `application`, `routes`, `executables`, `distribution`, and `projections[].documents`.
+- `compiler.recordVersion` versions the **operational compiler record** (`producer`, `project`,
+  `provenance`, `adapters`, `agentSkills`, `validation`). An internal compiler refactor that
+  changes only those facts bumps `recordVersion` and never forces a `manifestVersion` bump.
+
 Because keys are closed, a reader older than the writer refuses a document that carries a key it
 does not know — read an artifact with the framework version that built it, or a newer one.
 

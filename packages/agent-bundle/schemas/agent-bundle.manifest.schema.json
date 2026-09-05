@@ -2,15 +2,15 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://scriptedalchemy.github.io/agent-bundle/schemas/agent-bundle.manifest.schema.json",
   "title": "agent-bundle artifact manifest",
-  "description": "The authoritative `agent-bundle.manifest.json` written at the root of every compiled artifact (manifestVersion 2). Keys are closed at every level. This schema mirrors the structural rules of `parseArtifactManifest`; the parser additionally enforces what JSON Schema cannot express: canonical `stableJson` bytes, sorted arrays with unique sort keys, cross-references between sections (hosts name declared projections, referenced paths name manifest files, `project.revision` and `project.configDigest` match `project.sourceInputs`, `validation.projections` mirror `projections`, server routes carry their server's id, rendered scripts name a script route, `inputSchema.required` names declared properties), the generated runtime floor for `runtime.node`, and npm package-name and semantic-version validity for `project.packageName` and `project.packageVersion`.",
+  "description": "The authoritative `agent-bundle.manifest.json` written at the root of every compiled artifact (manifestVersion 2). The public contract and the operational `compiler` record are versioned independently (`compiler.recordVersion`). Keys are closed at every level. This schema mirrors the structural rules of `parseArtifactManifest`; the parser additionally enforces what JSON Schema cannot express: canonical `stableJson` bytes, sorted arrays with unique sort keys, cross-references between sections (hosts name declared projections, referenced paths name manifest files, `compiler.provenance` paths equal `files` paths, `compiler.adapters` hosts equal `projections` hosts, `compiler.project.revision` and `compiler.project.configDigest` match `compiler.project.sourceInputs`, each provenance `sourceInput` names a `compiler.project.sourceInputs` path, `compiler.validation.projections` mirror `projections`, server routes carry their server's id, rendered scripts name a script route, `inputSchema.required` names declared properties), the generated runtime floor for `runtime.node`, and npm package-name and semantic-version validity for `compiler.project.packageName` and `compiler.project.packageVersion`.",
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "agentSkills": {
-      "$ref": "#/$defs/agentSkills"
-    },
     "application": {
       "$ref": "#/$defs/application"
+    },
+    "compiler": {
+      "$ref": "#/$defs/compiler"
     },
     "distribution": {
       "$ref": "#/$defs/distribution"
@@ -29,12 +29,6 @@
     "manifestVersion": {
       "const": 2
     },
-    "producer": {
-      "$ref": "#/$defs/producer"
-    },
-    "project": {
-      "$ref": "#/$defs/project"
-    },
     "projections": {
       "type": "array",
       "description": "One entry per selected host, sorted by `host` with no duplicates.",
@@ -48,37 +42,36 @@
     },
     "runtime": {
       "$ref": "#/$defs/runtime"
-    },
-    "validation": {
-      "$ref": "#/$defs/validation"
     }
   },
   "required": [
-    "agentSkills",
     "application",
+    "compiler",
     "distribution",
     "executables",
     "files",
     "manifestVersion",
-    "producer",
-    "project",
     "projections",
     "routes",
-    "runtime",
-    "validation"
+    "runtime"
   ],
   "if": {
     "properties": {
-      "project": {
+      "compiler": {
         "type": "object",
-        "required": [
-          "packageName"
-        ]
+        "properties": {
+          "project": {
+            "type": "object",
+            "required": [
+              "packageName"
+            ]
+          }
+        }
       }
     }
   },
   "then": {
-    "description": "`distribution.channels` lists \"npm\" exactly when `project.packageName` is present.",
+    "description": "`distribution.channels` lists \"npm\" exactly when `compiler.project.packageName` is present.",
     "properties": {
       "distribution": {
         "type": "object",
@@ -240,7 +233,7 @@
     },
     "project": {
       "type": "object",
-      "description": "The project the artifact was compiled from. `configDigest` equals the hash of the `configPath` source input and `revision` is the digest of `sourceInputs` (parser-enforced).",
+      "description": "The project the artifact was compiled from. `configDigest` equals the hash of the `configPath` source input and `revision` is the digest of `sourceInputs` (parser-enforced). Lives on `compiler.project`.",
       "additionalProperties": false,
       "properties": {
         "configDigest": {
@@ -307,10 +300,29 @@
         },
         "sha256": {
           "$ref": "#/$defs/sha256"
+        }
+      },
+      "required": [
+        "bytes",
+        "kind",
+        "path",
+        "sha256"
+      ]
+    },
+    "provenance": {
+      "type": "object",
+      "description": "Source-input provenance for one `files[]` row. The `path` set equals the `files[]` path set and each `sourceInputs` entry names a `compiler.project.sourceInputs` path (parser-enforced).",
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath",
+          "not": {
+            "const": "agent-bundle.manifest.json"
+          }
         },
         "sourceInputs": {
           "type": "array",
-          "description": "Sorted, unique, and each entry names a `project.sourceInputs` path (parser-enforced).",
+          "description": "Sorted, unique, and each entry names a `compiler.project.sourceInputs` path (parser-enforced).",
           "items": {
             "$ref": "#/$defs/relativePath"
           },
@@ -318,10 +330,7 @@
         }
       },
       "required": [
-        "bytes",
-        "kind",
         "path",
-        "sha256",
         "sourceInputs"
       ]
     },
@@ -380,9 +389,6 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "adapterRevision": {
-          "$ref": "#/$defs/nonEmptyString"
-        },
         "builtInHost": {
           "type": "string",
           "enum": [
@@ -401,25 +407,11 @@
         },
         "marketplace": {
           "$ref": "#/$defs/projectionMarketplace"
-        },
-        "observedVersion": {
-          "$ref": "#/$defs/nonEmptyString"
-        },
-        "schemas": {
-          "type": "array",
-          "description": "Sorted by `name` with no duplicates.",
-          "items": {
-            "$ref": "#/$defs/projectionSchema"
-          },
-          "uniqueItems": true
         }
       },
       "required": [
-        "adapterRevision",
         "documents",
-        "host",
-        "observedVersion",
-        "schemas"
+        "host"
       ],
       "dependentSchemas": {
         "marketplace": {
@@ -1461,9 +1453,86 @@
         "status"
       ]
     },
+    "compilerAdapter": {
+      "type": "object",
+      "description": "Operational adapter facts for one projection. The `host` set equals the `projections[].host` set (parser-enforced).",
+      "additionalProperties": false,
+      "properties": {
+        "adapterRevision": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "host": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "observedVersion": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "schemas": {
+          "type": "array",
+          "description": "Sorted by `name` with no duplicates.",
+          "items": {
+            "$ref": "#/$defs/projectionSchema"
+          },
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "adapterRevision",
+        "host",
+        "observedVersion",
+        "schemas"
+      ]
+    },
+    "compiler": {
+      "type": "object",
+      "description": "Operational record of the compiler run. Versioned by `recordVersion` independently of `manifestVersion`: a change here is not a change to the artifact contract consumers read.",
+      "additionalProperties": false,
+      "properties": {
+        "adapters": {
+          "type": "array",
+          "description": "One row per projection, sorted by `host` with no duplicates. The host set equals `projections[].host` (parser-enforced).",
+          "items": {
+            "$ref": "#/$defs/compilerAdapter"
+          },
+          "uniqueItems": true
+        },
+        "agentSkills": {
+          "$ref": "#/$defs/agentSkills"
+        },
+        "producer": {
+          "$ref": "#/$defs/producer"
+        },
+        "project": {
+          "$ref": "#/$defs/project"
+        },
+        "provenance": {
+          "type": "array",
+          "description": "One row per `files[]` entry, sorted by `path` with no duplicates. The path set equals the `files[]` path set (parser-enforced).",
+          "items": {
+            "$ref": "#/$defs/provenance"
+          },
+          "uniqueItems": true
+        },
+        "recordVersion": {
+          "const": 1
+        },
+        "validation": {
+          "$ref": "#/$defs/validation"
+        }
+      },
+      "required": [
+        "adapters",
+        "agentSkills",
+        "producer",
+        "project",
+        "provenance",
+        "recordVersion",
+        "validation"
+      ]
+    },
     "validation": {
       "type": "object",
-      "description": "Validation outcomes recorded at build time. `projections` mirrors the `projections` hosts in order (parser-enforced).",
+      "description": "Validation outcomes recorded at build time. `projections` mirrors the `projections` hosts in order (parser-enforced). Lives on `compiler.validation`.",
       "additionalProperties": false,
       "properties": {
         "artifact": {

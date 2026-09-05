@@ -298,7 +298,7 @@ export const packInventoryDiagnostics = async (options: {
     ['package.json', packageDocument.version],
     ['normalized plugin', options.model.metadata.version],
     ['artifact manifest', manifest.application.version],
-    ['artifact provenance', manifest.project.packageVersion],
+    ['artifact provenance', manifest.compiler.project.packageVersion],
   ];
   // The host plugin manifests are wherever the artifact manifest points (#592
   // step 3), never a per-host path convention.

@@ -128,16 +128,14 @@ MCP 入口、脚本、路由式 CLI bin 与 MCP App 只编译**一次**，归属
 
 | 分节 | 内容 |
 | --- | --- |
-| `producer`、`runtime` | `{ name: 'agent-bundle', version }` 与 `{ node }`，即所选的生成式可执行文件下限。 |
+| `manifestVersion`、`runtime` | `2`，以及 `{ node }`，即面向消费者的生成式可执行文件下限。 |
 | `application` | 身份，只记录一次且与宿主无关：`id`、`name`、`version`，可选的 `description`。这是 `install`、`doctor` 与 `uninstall` 作用的对象。 |
-| `project` | `configPath`、`configDigest`、`modelDigest`、`revision`、经过校验的 `packageName` 与 `packageVersion`（未打包的开发项目中不存在），以及 `sourceInputs`。 |
-| `files[]` | 每个输出文件：`path`、`bytes`、`sha256`、`kind`（`bundle`、`copy`、`generated`、`prebuilt`）、可选的 `mode`，以及它所派生自的 `sourceInputs`。 |
-| `projections[]` | 每个所选宿主一行，按 `host` 排序：`adapterRevision`、`observedVersion`、固定的 `schemas`、指向该投影输出的宿主插件、市场、MCP 与钩子文档的 `documents` 指针，以及它的 `marketplace` 名。 |
-| `routes` | 编译后的路由图：`servers[]`、`events[]`、`scripts[]`、`cli`、`providers[]`、`layouts[]` 及其 `digest`。 |
+| `files[]` | 每个输出文件：`path`、`bytes`、`sha256`、`kind`（`bundle`、`copy`、`generated`、`prebuilt`）、可选的 `mode`。 |
+| `projections[]` | 每个所选宿主一行，按 `host` 排序：`host`、可选的 `builtInHost`、指向该投影输出的宿主插件、市场、MCP 与钩子文档的 `documents` 指针，以及它的 `marketplace` 名。 |
+| `routes` | 编译后的路由图：`servers[]`、`events[]`、`scripts[]`、`cli`、`providers[]`、`layouts[]`、`contracts[]`（当有路由绑定时）及其 `digest`。绑定了契约的路由用 `route.contract` 命名它。 |
 | `executables` | 根目录能启动的每个进程：`bins[]`、`hooks[]`（每个宿主的每个 wrapper 一行）、带 `entry` 与 `apps[]` 的 `mcpServers[]`，以及 `scripts[]`。 |
-| `distribution` | `channels`（`local`，项目有包身份时再加 `npm`）与指向 `INSTALL.md` / `install.mjs` 的 `install` 指针。 |
-| `agentSkills` | Agent Skills 规范固定值：`specification`、`sourceRevision`、`schemaSha256`。 |
-| `validation` | `source`、`artifact` 与各投影已记录的 `passed` 状态。 |
+| `distribution` | `channels`（`local`，当 `compiler.project.packageName` 存在时再加 `npm`）与指向 `INSTALL.md` / `install.mjs` 的 `install` 指针。 |
+| `compiler` | 运行记录，由 `recordVersion` 独立于 `manifestVersion` 版本化：`producer`、`project`（`configPath`、`configDigest`、`modelDigest`、`revision`、`sourceInputs`，可选的 `packageName` / `packageVersion`）、`provenance[]`（每个 `files[]` 行一条 `{ path, sourceInputs[] }`）、`adapters[]`（每个投影的 `adapterRevision`、`observedVersion`、固定的 `schemas`）、`agentSkills` 与 `validation`。 |
 
 只有 `build` 写它；其中的一切都派生自配置、约定文件系统与编译后的模型，字节是规范的——每个读取方都会拒绝
 被手工改过的副本。由于每个文件都携带摘要，校验比对的是**真实字节**，而不是检查路径是否存在，因此被手工
@@ -150,7 +148,7 @@ MCP 入口、脚本、路由式 CLI bin 与 MCP App 只编译**一次**，归属
 有四条版本轴被分别追踪，并且被期望彼此一致：
 
 - **源码** —— 项目 `package.json` 中的发布版本。
-- **已构建产物** —— 清单中的 `project.packageVersion`。
+- **已构建产物** —— 清单中的 `compiler.project.packageVersion`。
 - **已安装产物** —— 在宿主已安装根目录下找到的那份清单。
 - **运行中的进程** —— 活跃的 MCP `initialize` 所报告的版本。
 
@@ -159,7 +157,7 @@ MCP 入口、脚本、路由式 CLI bin 与 MCP App 只编译**一次**，归属
 没有打包后的声明文件引用它，也没有 `imports` 映射或消费者侧安装脚本触及它（`AB7014`）——或消费者的 npm 无法从注册表抓取它（`AB7015`）：
 已发布的插件只安装其打包文件所需的内容。[验证指南](../guide/distribution/validation.mdx)列出了每一种证据来源。
 
-投影行还记录 `adapterRevision`（单调递增，仓库自有）与 `observedVersion`（记录该能力证据时所观察到的
+`compiler.adapters[]` 记录 `adapterRevision`（单调递增，仓库自有）与 `observedVersion`（记录该能力证据时所观察到的
 宿主版本）。两者都不做哈希：Git 已经为仓库自有内容做了版本管理，在仓库内部再哈希一遍会让每次编辑表格
 都产生变动噪声。哈希固定只保留给 vendored 的外部内容 —— `src/adapters/schemas/*` 下带 `PROVENANCE.json`
 的宿主文档 schema、Agent Skills schema 固定值，以及输出文件与源输入。

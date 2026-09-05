@@ -43,20 +43,21 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 | `eval --artifact`、`agent-bundle/test` 的已安装宿主证明 | 用 `projections[]` 与 `executables.hooks[]` 取代任何宿主文档。 |
 | Workbench 产物页 | 通过 `ArtifactInspection.application` 上的 application-explorer 投影读取清单：应用身份、宿主及其文档、合并后的服务器路由与可执行信息、事件与钩子、CLI、脚本和分发信息。输出文件树仍是独立的检查证据；浏览器不会把清单原始形状用作应用树模型。 |
 | `validate --artifact`、`build` | 整份文档：存在性与规范字节（`AB6000`、`AB6001`）、`files[]` 与树的比对（`AB6004`），以及基于 `executables.hooks[]` 的钩子一致性（`AB6018`）。 |
-| `prepack` | `files[]`、`projections[]` 与 `project.packageVersion`，用于打包清点（`AB7010`–`AB7013`）。 |
+| `prepack` | `files[]`、`projections[]` 与 `compiler.project.packageVersion`，用于打包清点（`AB7010`–`AB7013`）。 |
 
-## 分节
+## 公开契约
 
-顶层恰有十二个键，全部必填：`agentSkills`、`application`、`distribution`、`executables`、`files`、
-`manifestVersion`、`producer`、`project`、`projections`、`routes`、`runtime`、`validation`。
+顶层恰有九个键，全部必填：`application`、`compiler`、`distribution`、`executables`、`files`、
+`manifestVersion`、`projections`、`routes`、`runtime`。安装、诊断、服务或列出根目录的消费者
+（`install`、`doctor`、`serve-app`、`mcp`、`hooks`、`inspect` 摘要）只读这份契约。编译器运行事实
+在 `compiler` 下，并单独版本化。
 
-### `producer`、`runtime`、`manifestVersion`
+### `runtime`、`manifestVersion`
 
 | 字段 | 内容 |
 | --- | --- |
-| `manifestVersion` | `2`。 |
-| `producer` | `{ name: 'agent-bundle', version }`——写出该根目录的框架版本。`name` 始终为 `agent-bundle`。 |
-| `runtime` | `{ node }`——该根目录据以构建的生成式可执行文件运行时下限，为满足框架下限的规范 `major.minor.patch` 字符串。 |
+| `manifestVersion` | `2`。为消费者读取的公开契约版本化。 |
+| `runtime` | `{ node }`——该根目录据以构建的面向消费者的生成式可执行文件运行时下限，为满足框架下限的规范 `major.minor.patch` 字符串。 |
 
 ### `application`
 
@@ -70,21 +71,9 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 | `version` | 是 | 插件版本。 |
 | `description` | 否 | 配置了的话，即 `metadata.description`。 |
 
-### `project`
-
-| 字段 | 必填 | 内容 |
-| --- | --- | --- |
-| `configPath` | 是 | 相对项目根目录的配置文件。它必须出现在 `sourceInputs` 中，且哈希等于 `configDigest`。 |
-| `configDigest` | 是 | 配置文件的 SHA-256。 |
-| `modelDigest` | 是 | 规范化模型的 SHA-256。 |
-| `revision` | 是 | 对 `sourceInputs` 的摘要；读取方会重新计算并拒绝不匹配。 |
-| `sourceInputs[]` | 是 | 构建读取的每个项目输入：`{ path, sha256, executable? }`，按 `path` 排序。 |
-| `packageName` | 否 | 经校验的 npm 包名；未打包的开发项目中不存在。 |
-| `packageVersion` | 否 | 经校验的发布版本；未打包的开发项目中不存在。 |
-
 ### `files[]`
 
-除清单自身外的每个输出文件，按 `path` 排序。
+除清单自身外的每个输出文件，按 `path` 排序。每行的源输入出处在 `compiler.provenance`，不在这里。
 
 | 字段 | 必填 | 内容 |
 | --- | --- | --- |
@@ -93,7 +82,6 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 | `sha256` | 是 | 内容摘要。校验比对的是真实字节，因此被手工改过的生成文件会失败。 |
 | `kind` | 是 | `bundle`（编译后的入口）、`copy`（逐字节复制）、`generated`（编译器写出的文档）或 `prebuilt`（预构建 payload 文件）。 |
 | `mode` | 否 | 构建设置了文件模式时的取值，`0` 至 `0o777`。 |
-| `sourceInputs[]` | 是 | 该文件派生自的 `project.sourceInputs` 路径，已排序。 |
 
 ### `projections[]`
 
@@ -103,9 +91,6 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 | --- | --- | --- |
 | `host` | 是 | 项目选择该投影时所用的目标名：`claude`、`codex`、`cursor`、`portable`，或已注册适配器的名字。名字是选择，不是身份。 |
 | `builtInHost` | 由内置适配器规划时 | 规划该投影的内置适配器身份：`claude`、`codex`、`cursor` 或 `portable`。高级注册表的适配器缺省此字段——即使它注册在内置名字下。`install`、`doctor` 与已安装宿主测试工具都按此字段选取宿主投影，而不是按 `host`。 |
-| `adapterRevision` | 是 | 适配器由仓库维护的单调递增修订。 |
-| `observedVersion` | 是 | 记录其能力证据时观察到的宿主版本。 |
-| `schemas[]` | 是 | 该投影据以校验的固定宿主文档 schema：`{ name, revision, sha256 }`，按 `name` 排序。 |
 | `documents` | 是 | 指向该投影输出的宿主文档的根相对指针；每个存在的指针都是一行 `files[]`。见下文。 |
 | `marketplace` | 否 | `{ name }`——该投影的市场文档所注册的市场。只与 `documents.marketplace` 同时出现。 |
 
@@ -176,32 +161,67 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 
 | 字段 | 必填 | 内容 |
 | --- | --- | --- |
-| `channels[]` | 是 | 始终有 `local`；恰当 `project.packageName` 存在时有 `npm`。已排序。 |
+| `channels[]` | 是 | 始终有 `local`；恰当 `compiler.project.packageName` 存在时有 `npm`。已排序。 |
 | `install` | 否 | 指向安装表面的根相对指针：`{ instructions?: 'INSTALL.md', script?: 'install.mjs' }`，根目录至少携带其一时出现。 |
 
-### `agentSkills`
+## 编译器记录（`compiler`，`recordVersion`）
 
-`{ specification, sourceRevision, schemaSha256 }`——Skill 文档据以校验的 Agent Skills 规范固定值。
+编译器运行的操作记录。由 `recordVersion` 独立于 `manifestVersion` 版本化：这里的变更不是消费者读取的产物契约变更。该对象恰有七个键，全部必填：`adapters`、`agentSkills`、`producer`、`project`、`provenance`、`recordVersion`、`validation`。
 
-### `validation`
+| 字段 | 内容 |
+| --- | --- |
+| `recordVersion` | `1`。编译器记录的封闭形状变更时递增；不递增 `manifestVersion`。 |
+| `producer` | `{ name: 'agent-bundle', version }`——写出该根目录的框架版本。`name` 始终为 `agent-bundle`。 |
+| `project` | 产物据以编译的项目。见下文。 |
+| `provenance[]` | 每个 `files[]` 行一条，按 `path` 排序：`{ path, sourceInputs[] }`。路径集合等于 `files[]` 的路径集合。 |
+| `adapters[]` | 每个投影一行，按 `host` 排序：`{ host, adapterRevision, observedVersion, schemas[] }`。宿主集合等于 `projections[].host` 集合。 |
+| `agentSkills` | `{ specification, sourceRevision, schemaSha256 }`——Skill 文档据以校验的 Agent Skills 规范固定值。 |
+| `validation` | `{ artifact: { status }, source: { status }, projections: [{ host, status }] }`。每个 `status` 都是 `passed`——校验失败的根目录永远不会被写出——且 `projections[]` 恰好按同一顺序列出 `projections[]` 中的宿主。 |
 
-`{ artifact: { status }, source: { status }, projections: [{ host, status }] }`。每个 `status` 都是
-`passed`——校验失败的根目录永远不会被写出——且 `projections[]` 恰好按同一顺序列出 `projections[]` 中的宿主。
+### `compiler.project`
+
+| 字段 | 必填 | 内容 |
+| --- | --- | --- |
+| `configPath` | 是 | 相对项目根目录的配置文件。它必须出现在 `sourceInputs` 中，且哈希等于 `configDigest`。 |
+| `configDigest` | 是 | 配置文件的 SHA-256。 |
+| `modelDigest` | 是 | 规范化模型的 SHA-256。 |
+| `revision` | 是 | 对 `sourceInputs` 的摘要；读取方会重新计算并拒绝不匹配。 |
+| `sourceInputs[]` | 是 | 构建读取的每个项目输入：`{ path, sha256, executable? }`，按 `path` 排序。 |
+| `packageName` | 否 | 经校验的 npm 包名；未打包的开发项目中不存在。 |
+| `packageVersion` | 否 | 经校验的发布版本；未打包的开发项目中不存在。 |
+
+### `compiler.adapters[]`
+
+| 字段 | 必填 | 内容 |
+| --- | --- | --- |
+| `host` | 是 | 指向匹配的 `projections[]` 行。 |
+| `adapterRevision` | 是 | 适配器由仓库维护的单调递增修订。 |
+| `observedVersion` | 是 | 记录其能力证据时观察到的宿主版本。 |
+| `schemas[]` | 是 | 该投影据以校验的固定宿主文档 schema：`{ name, revision, sha256 }`，按 `name` 排序。 |
+
+### `compiler.provenance[]`
+
+| 字段 | 必填 | 内容 |
+| --- | --- | --- |
+| `path` | 是 | 匹配的 `files[]` 路径。绝不会是 `agent-bundle.manifest.json`。 |
+| `sourceInputs[]` | 是 | 该文件派生自的 `compiler.project.sourceInputs` 路径，已排序。 |
 
 ### 跨分节规则
 
 读取方在接受文档之前会强制这些规则：
 
-- `project.configPath` 是一条 `project.sourceInputs` 记录，其哈希为 `project.configDigest`，
-  且 `project.revision` 是 `project.sourceInputs` 的摘要。
-- 每个 `files[].sourceInputs` 路径都是一个 `project.sourceInputs` 路径。
+- `compiler.project.configPath` 是一条 `compiler.project.sourceInputs` 记录，其哈希为
+  `compiler.project.configDigest`，且 `compiler.project.revision` 是 `compiler.project.sourceInputs` 的摘要。
+- `compiler.provenance` 的路径等于 `files[]` 的路径，且每条出处的 `sourceInputs` 路径都是
+  `compiler.project.sourceInputs` 路径。
+- `compiler.adapters` 的宿主等于 `projections[]` 的宿主。
 - 每个指针——`projections[].documents.*`、`executables.*[].path` 与 `worker`、
   `executables.mcpServers[].entry.*`、`executables.mcpServers[].apps[].path`、
   `distribution.install.*`——都指向一行 `files[]`。
 - 每个 `hosts[]` 项与每个 `hooks[].host` 都指向一行 `projections[]`。
-- `validation.projections[]` 的宿主等于 `projections[]` 的宿主。
+- `compiler.validation.projections[]` 的宿主等于 `projections[]` 的宿主。
 - `executables.scripts[].rendered.routeId` 指向一条 `routes.scripts[]` 路由。
-- `distribution.channels` 恰当 `project.packageName` 存在时包含 `npm`。
+- `distribution.channels` 恰当 `compiler.project.packageName` 存在时包含 `npm`。
 
 ## 一份精简示例
 
@@ -210,8 +230,29 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 
 ```json
 {
-  "agentSkills": { "schemaSha256": "…", "sourceRevision": "…", "specification": "…" },
   "application": { "id": "hauler", "name": "cargo-hauler", "version": "1.4.2" },
+  "compiler": {
+    "adapters": [
+      { "adapterRevision": "…", "host": "claude", "observedVersion": "2.1.260",
+        "schemas": [{ "name": "plugin", "revision": "…", "sha256": "…" }] }
+    ],
+    "agentSkills": { "schemaSha256": "…", "sourceRevision": "…", "specification": "…" },
+    "producer": { "name": "agent-bundle", "version": "0.9.0" },
+    "project": {
+      "configDigest": "…", "configPath": "agent-bundle.config.ts", "modelDigest": "…",
+      "packageName": "cargo-hauler", "packageVersion": "1.4.2", "revision": "…",
+      "sourceInputs": [{ "path": "agent-bundle.config.ts", "sha256": "…" }]
+    },
+    "provenance": [
+      { "path": ".claude-plugin/plugin.json", "sourceInputs": ["agent-bundle.config.ts"] }
+    ],
+    "recordVersion": 1,
+    "validation": {
+      "artifact": { "status": "passed" },
+      "projections": [{ "host": "claude", "status": "passed" }],
+      "source": { "status": "passed" }
+    }
+  },
   "distribution": {
     "channels": ["local", "npm"],
     "install": { "instructions": "INSTALL.md" }
@@ -224,7 +265,8 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
     "hooks": [
       { "event": "afterTool", "host": "claude", "id": "hook:event-route:tool-after",
         "kind": "event-route", "name": "event-route-tool-after",
-        "path": "hooks/event-route-tool-after-….mjs" }
+        "path": "hooks/event-route-tool-after-….mjs",
+        "routeId": "event:tool/after" }
     ],
     "mcpServers": [
       { "apps": [
@@ -239,22 +281,14 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
   },
   "files": [
     { "bytes": 412, "kind": "generated", "path": ".claude-plugin/plugin.json",
-      "sha256": "…", "sourceInputs": ["agent-bundle.config.ts"] }
+      "sha256": "…" }
   ],
   "manifestVersion": 2,
-  "producer": { "name": "agent-bundle", "version": "0.9.0" },
-  "project": {
-    "configDigest": "…", "configPath": "agent-bundle.config.ts", "modelDigest": "…",
-    "packageName": "cargo-hauler", "packageVersion": "1.4.2", "revision": "…",
-    "sourceInputs": [{ "path": "agent-bundle.config.ts", "sha256": "…" }]
-  },
   "projections": [
-    { "adapterRevision": "…",
+    { "builtInHost": "claude",
       "documents": { "hooks": "hooks/hooks.json", "marketplace": ".claude-plugin/marketplace.json",
         "mcp": ".mcp.json", "plugin": ".claude-plugin/plugin.json" },
-      "host": "claude", "marketplace": { "name": "cargo-hauler-marketplace" },
-      "observedVersion": "2.1.260",
-      "schemas": [{ "name": "plugin", "revision": "…", "sha256": "…" }] }
+      "host": "claude", "marketplace": { "name": "cargo-hauler-marketplace" } }
   ],
   "routes": {
     "cli": {
@@ -282,12 +316,7 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
         ] }
     ]
   },
-  "runtime": { "node": "22.12.0" },
-  "validation": {
-    "artifact": { "status": "passed" },
-    "projections": [{ "host": "claude", "status": "passed" }],
-    "source": { "status": "passed" }
-  }
+  "runtime": { "node": "22.12.0" }
 }
 ```
 
@@ -306,8 +335,10 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 | `parseArtifactManifest(bytes)` | 把规范字节解析并校验为冻结的 `ArtifactManifest`；任何违规——包括重复键或非规范字节——都会抛出。 |
 | `artifactManifestName` | `'agent-bundle.manifest.json'`。 |
 | `artifactManifestVersion` | `2`。 |
+| `artifactCompilerRecordVersion` | `1`。 |
 
-类型（`ArtifactManifest`、`ArtifactManifestProjection`、`ArtifactManifestExecutables`……）见生成的
+类型（`ArtifactManifest`、`ArtifactManifestCompiler`、`ArtifactManifestCompilerAdapter`、
+`ArtifactManifestProvenance`、`ArtifactManifestProjection`、`ArtifactManifestExecutables`……）见生成的
 [类型 API](./api.mdx)。
 
 ## 保留键
@@ -325,9 +356,17 @@ Workbench 与 npm prepack 门禁——都只读这一个文件来了解根目录
 
 ## 版本规则
 
-`manifestVersion` 在某个键被**重命名或删除**时改变；新增一个**可选**键不会改变它。版本 2 把 `targets[]`
-重命名为 `projections[]`，把过去由 `agent-bundle.hooks.json` 承载的钩子行移入 `executables.hooks[]` 并删除了
-该文件，并新增了 `application`、`routes`、`executables`、`distribution` 与 `projections[].documents`。
+每个根目录携带两个版本号：
+
+- `manifestVersion` 为消费者读取的**公开契约**版本化（`application`、`files[]`、`runtime`、
+  `projections[]`、`routes`、`executables`、`distribution`）。公开契约键被**重命名或删除**时改变；
+  新增一个**可选**公开键不会改变它。版本 2 把 `targets[]` 重命名为 `projections[]`，把过去由
+  `agent-bundle.hooks.json` 承载的钩子行移入 `executables.hooks[]` 并删除了该文件，并新增了
+  `application`、`routes`、`executables`、`distribution` 与 `projections[].documents`。
+- `compiler.recordVersion` 为**编译器记录**版本化（`producer`、`project`、`provenance[]`、
+  `adapters[]`、`agentSkills`、`validation`）。记录形状变更时递增；内部编译器重构不会迫使
+  `manifestVersion` 递增。当前值为 `1`。
+
 由于键是封闭的，比写入方更旧的读取方会拒绝携带它不认识的键的文档——请用构建该产物的框架版本或更新的版本
 读取它。
 

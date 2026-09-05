@@ -6,6 +6,7 @@ import { expect, it } from '@rstest/core';
 
 import type { TargetRegistry } from '../src/adapters/registry.ts';
 import {
+  artifactCompilerRecordVersion,
   artifactManifestName,
   assembleArtifactManifest,
   type ArtifactManifest,
@@ -114,16 +115,41 @@ const createBundle = async (
       kind: 'generated' as const,
       path,
       sha256: sha256Hex(bytes),
-      sourceInputs: ['agent-bundle.config.ts'],
     };
   }));
   const manifest: ArtifactManifest = {
-    agentSkills: {
-      schemaSha256: 'b9079c0c10b7930e8c6a20ff2bc10cda2a3343c55185120e3f1116a1a529b220',
-      sourceRevision: '69ef37e9424c0a7ea9dd2293b559e43ec8176379',
-      specification: 'https://raw.githubusercontent.com/agentskills/agentskills/69ef37e9424c0a7ea9dd2293b559e43ec8176379/docs/specification.mdx',
-    },
     application: { id: 'application:probe', name: 'probe', version: '1.0.0' },
+    compiler: {
+      adapters: [{
+        adapterRevision: 'claude-fixture-v1',
+        host: 'claude',
+        observedVersion: 'fixture',
+        schemas: [],
+      }],
+      agentSkills: {
+        schemaSha256: 'b9079c0c10b7930e8c6a20ff2bc10cda2a3343c55185120e3f1116a1a529b220',
+        sourceRevision: '69ef37e9424c0a7ea9dd2293b559e43ec8176379',
+        specification: 'https://raw.githubusercontent.com/agentskills/agentskills/69ef37e9424c0a7ea9dd2293b559e43ec8176379/docs/specification.mdx',
+      },
+      producer: { name: 'agent-bundle', version: '0.1.0' },
+      project: {
+        configDigest: sourceInputs[0]!.sha256,
+        configPath: sourceInputs[0]!.path,
+        modelDigest: sha256Hex('mcp probe fixture model\n'),
+        revision: digest({ inputs: sourceInputs }),
+        sourceInputs,
+      },
+      provenance: files.map((file) => ({
+        path: file.path,
+        sourceInputs: ['agent-bundle.config.ts'],
+      })),
+      recordVersion: artifactCompilerRecordVersion,
+      validation: {
+        artifact: { status: 'passed' },
+        projections: [{ host: 'claude', status: 'passed' }],
+        source: { status: 'passed' },
+      },
+    },
     distribution: { channels: ['local'] },
     executables: {
       bins: [],
@@ -140,16 +166,7 @@ const createBundle = async (
     },
     files,
     manifestVersion: 2,
-    producer: { name: 'agent-bundle', version: '0.1.0' },
-    project: {
-      configDigest: sourceInputs[0]!.sha256,
-      configPath: sourceInputs[0]!.path,
-      modelDigest: sha256Hex('mcp probe fixture model\n'),
-      revision: digest({ inputs: sourceInputs }),
-      sourceInputs,
-    },
     projections: [{
-      adapterRevision: 'claude-fixture-v1',
       builtInHost: 'claude',
       documents: {
         marketplace: '.claude-plugin/marketplace.json',
@@ -158,8 +175,6 @@ const createBundle = async (
       },
       host: 'claude',
       marketplace: { name: 'probe-marketplace' },
-      observedVersion: 'fixture',
-      schemas: [],
     }],
     routes: {
       digest: sha256Hex('mcp probe fixture routes\n'),
@@ -170,11 +185,6 @@ const createBundle = async (
       servers: [],
     },
     runtime: { node: '22.12.0' },
-    validation: {
-      artifact: { status: 'passed' },
-      projections: [{ host: 'claude', status: 'passed' }],
-      source: { status: 'passed' },
-    },
   };
   await writeFile(join(root, artifactManifestName), assembleArtifactManifest(manifest).bytes);
   return root;

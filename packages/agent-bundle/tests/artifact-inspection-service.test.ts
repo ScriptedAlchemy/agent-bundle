@@ -7,7 +7,12 @@ import { expect, it } from '@rstest/core';
 
 import { TargetRegistry } from '../src/adapters/registry.ts';
 import type { TargetAdapter, TargetAdapterMetadata } from '../src/adapters/types.ts';
-import { assembleArtifactManifest, type ArtifactManifestFileKind, type ArtifactManifest } from '../src/build/manifest.ts';
+import {
+  artifactCompilerRecordVersion,
+  assembleArtifactManifest,
+  type ArtifactManifestFileKind,
+  type ArtifactManifest,
+} from '../src/build/manifest.ts';
 import { validateArtifact, validateArtifactWithSnapshot } from '../src/build/validate-artifact.ts';
 import { digest } from '../src/core/digest.ts';
 import { ArtifactInspectionService } from '../src/dev/index.ts';
@@ -146,16 +151,25 @@ const projectionRecord = (
   registry: TargetRegistry,
   files: readonly FixtureFile[],
   omitMcpDocument = false,
-): ArtifactManifest['projections'][number] => {
+): {
+  readonly adapter: ArtifactManifest['compiler']['adapters'][number];
+  readonly projection: ArtifactManifest['projections'][number];
+} => {
   const metadata = registry.metadata(fixtureTarget);
   return {
-    ...metadata,
-    documents: {
-      ...(files.some((file) => file.path === 'hooks/hooks.json') ? { hooks: 'hooks/hooks.json' } : {}),
-      ...(!omitMcpDocument && files.some((file) => file.path === 'mcp.json') ? { mcp: 'mcp.json' } : {}),
+    adapter: {
+      adapterRevision: metadata.adapterRevision,
+      host: fixtureTarget,
+      observedVersion: metadata.observedVersion,
+      schemas: [...metadata.schemas].sort((left, right) => left.name.localeCompare(right.name)),
     },
-    host: fixtureTarget,
-    schemas: [...metadata.schemas].sort((left, right) => left.name.localeCompare(right.name)),
+    projection: {
+      documents: {
+        ...(files.some((file) => file.path === 'hooks/hooks.json') ? { hooks: 'hooks/hooks.json' } : {}),
+        ...(!omitMcpDocument && files.some((file) => file.path === 'mcp.json') ? { mcp: 'mcp.json' } : {}),
+      },
+      host: fixtureTarget,
+    },
   };
 };
 
@@ -165,7 +179,7 @@ const manifestFor = (
   sourceInputs = fixtureInputs,
   omitMcpDocument = false,
 ): ArtifactManifest => {
-  const projection = projectionRecord(registry, files, omitMcpDocument);
+  const { adapter, projection } = projectionRecord(registry, files, omitMcpDocument);
   const hookRows = [
     ...(files.some((file) => file.path === 'hooks/run.mjs')
       ? [{
@@ -210,12 +224,42 @@ const manifestFor = (
       }]
       : []),
   ];
+  const manifestFiles = files
+    .map((file) => ({
+      bytes: Buffer.byteLength(file.contents),
+      kind: file.kind,
+      ...(file.mode === undefined ? {} : { mode: file.mode }),
+      path: file.path,
+      sha256: sha256Hex(file.contents),
+    }))
+    .sort((left, right) => left.path.localeCompare(right.path));
   return {
-    agentSkills: agentSkillsSchemaRevision,
     application: {
       id: 'application:fixture',
       name: 'fixture-application',
       version: '1.2.3',
+    },
+    compiler: {
+      adapters: [adapter],
+      agentSkills: agentSkillsSchemaRevision,
+      producer: { name: 'agent-bundle', version: '0.1.0' },
+      project: {
+        configDigest: sourceInputs[0]!.sha256,
+        configPath,
+        modelDigest: 'd'.repeat(64),
+        revision: digest({ inputs: sourceInputs }),
+        sourceInputs,
+      },
+      provenance: manifestFiles.map((file) => ({
+        path: file.path,
+        sourceInputs: [...(files.find((entry) => entry.path === file.path)?.sourceInputs ?? [configPath])],
+      })),
+      recordVersion: artifactCompilerRecordVersion,
+      validation: {
+        artifact: { status: 'passed' },
+        projections: [{ host: projection.host, status: 'passed' }],
+        source: { status: 'passed' },
+      },
     },
     distribution: { channels: ['local'] },
     executables: {
@@ -241,25 +285,8 @@ const manifestFor = (
         : [],
       scripts,
     },
-    files: files
-      .map((file) => ({
-        bytes: Buffer.byteLength(file.contents),
-        kind: file.kind,
-        ...(file.mode === undefined ? {} : { mode: file.mode }),
-        path: file.path,
-        sha256: sha256Hex(file.contents),
-        sourceInputs: [...(file.sourceInputs ?? [configPath])],
-      }))
-      .sort((left, right) => left.path.localeCompare(right.path)),
+    files: manifestFiles,
     manifestVersion: 2,
-    producer: { name: 'agent-bundle', version: '0.1.0' },
-    project: {
-      configDigest: sourceInputs[0]!.sha256,
-      configPath,
-      modelDigest: 'd'.repeat(64),
-      revision: digest({ inputs: sourceInputs }),
-      sourceInputs,
-    },
     projections: [projection],
     routes: {
       digest: 'e'.repeat(64),
@@ -284,11 +311,6 @@ const manifestFor = (
         : [],
     },
     runtime: { node: '22.12.0' },
-    validation: {
-      artifact: { status: 'passed' },
-      projections: [{ host: projection.host, status: 'passed' }],
-      source: { status: 'passed' },
-    },
   };
 };
 

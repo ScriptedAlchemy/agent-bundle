@@ -237,7 +237,7 @@ const finalEvidenceDiagnostics = (options: {
 };
 
 const sameSchemas = (
-  manifest: ArtifactManifest['projections'][number]['schemas'],
+  manifest: ArtifactManifest['compiler']['adapters'][number]['schemas'],
   registered: ReturnType<TargetRegistry['metadata']>['schemas'],
 ): boolean => {
   const expected = [...registered].sort((left, right) => left.name.localeCompare(right.name));
@@ -251,13 +251,14 @@ const sameSchemas = (
 };
 
 const matchesTargetMetadata = (
-  target: ArtifactManifest['projections'][number],
+  adapter: ArtifactManifest['compiler']['adapters'][number],
   metadata: ReturnType<TargetRegistry['metadata']>,
   builtInHost: ReturnType<TargetRegistry['builtInHost']>,
-): boolean => target.adapterRevision === metadata.adapterRevision &&
-  target.builtInHost === builtInHost &&
-  target.observedVersion === metadata.observedVersion &&
-  sameSchemas(target.schemas, metadata.schemas);
+  projectionBuiltInHost: ReturnType<TargetRegistry['builtInHost']>,
+): boolean => adapter.adapterRevision === metadata.adapterRevision &&
+  projectionBuiltInHost === builtInHost &&
+  adapter.observedVersion === metadata.observedVersion &&
+  sameSchemas(adapter.schemas, metadata.schemas);
 
 const schemaValidationFailure = (): readonly TargetArtifactDocumentIssue[] => Object.freeze([
   Object.freeze({ instancePath: '/', message: 'schema validation failed' }),
@@ -338,6 +339,7 @@ const validateTargetContracts = async (options: {
     ));
   }
 
+  const adapters = new Map(options.manifest.compiler.adapters.map((adapter) => [adapter.host, adapter]));
   for (const target of options.manifest.projections) {
     if (!options.registry.has(target.host)) {
       diagnostics.push(diagnostic(
@@ -348,11 +350,16 @@ const validateTargetContracts = async (options: {
       ));
       continue;
     }
-    if (!matchesTargetMetadata(
-      target,
-      options.registry.metadata(target.host),
-      options.registry.builtInHost(target.host),
-    )) {
+    const adapter = adapters.get(target.host);
+    if (
+      adapter === undefined ||
+      !matchesTargetMetadata(
+        adapter,
+        options.registry.metadata(target.host),
+        options.registry.builtInHost(target.host),
+        target.builtInHost,
+      )
+    ) {
       diagnostics.push(diagnostic(
         'AB6010',
         `Artifact metadata and adapter identity for target ${JSON.stringify(target.host)} do not match its registered contract.`,
@@ -722,9 +729,9 @@ export const validateArtifactWithSnapshot = async (
   const initialStructuralDiagnostics = validateArtifactStructure({ inspection, manifest, registry });
   const diagnostics: Diagnostic[] = [...initialStructuralDiagnostics];
   if (
-    manifest.agentSkills.schemaSha256 !== agentSkillsSchemaRevision.schemaSha256 ||
-    manifest.agentSkills.sourceRevision !== agentSkillsSchemaRevision.sourceRevision ||
-    manifest.agentSkills.specification !== agentSkillsSchemaRevision.specification
+    manifest.compiler.agentSkills.schemaSha256 !== agentSkillsSchemaRevision.schemaSha256 ||
+    manifest.compiler.agentSkills.sourceRevision !== agentSkillsSchemaRevision.sourceRevision ||
+    manifest.compiler.agentSkills.specification !== agentSkillsSchemaRevision.specification
   ) {
     diagnostics.push(diagnostic(
       'AB6008',

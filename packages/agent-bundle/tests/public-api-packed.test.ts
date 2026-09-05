@@ -11,6 +11,7 @@ import { isolatedCommandEnvironment } from '../../../rstest.worker-isolation.ts'
 import { createDefaultRegistry } from '../src/adapters/registry.ts';
 import { listArtifactFiles, writeManifest } from '../src/build/emit.ts';
 import {
+  artifactCompilerRecordVersion,
   artifactManifestName,
   artifactManifestVersion,
   type ArtifactManifest,
@@ -45,15 +46,42 @@ const writePackedFixtureManifest = async (artifactRoot: string): Promise<Artifac
       ...((file.mode & 0o111) === 0 ? {} : { mode: file.mode }),
       path: file.path,
       sha256: file.sha256,
-      sourceInputs: ['agent-bundle.config.ts'],
     }))
     .sort((left, right) => left.path.localeCompare(right.path));
   const filePaths = new Set(files.map((file) => file.path));
   return writeManifest({
     artifactRoot,
     manifest: {
-      agentSkills: agentSkillsSchemaRevision,
       application: { id: 'plugin:packed-fixture', name: 'packed-fixture', version: '1.0.0' },
+      compiler: {
+        adapters: [{
+          adapterRevision: metadata.adapterRevision,
+          host: 'portable',
+          observedVersion: metadata.observedVersion,
+          schemas: metadata.schemas
+            .map((schema) => ({ name: schema.name, revision: schema.revision, sha256: schema.sha256 }))
+            .sort((left, right) => left.name.localeCompare(right.name)),
+        }],
+        agentSkills: agentSkillsSchemaRevision,
+        producer: { name: 'agent-bundle', version: '0.1.0' },
+        project: {
+          configDigest,
+          configPath: 'agent-bundle.config.ts',
+          modelDigest: 'b'.repeat(64),
+          revision: digest({ inputs: sourceInputs }),
+          sourceInputs,
+        },
+        provenance: files.map((file) => ({
+          path: file.path,
+          sourceInputs: ['agent-bundle.config.ts'],
+        })),
+        recordVersion: artifactCompilerRecordVersion,
+        validation: {
+          artifact: { status: 'passed' },
+          projections: [{ host: 'portable', status: 'passed' }],
+          source: { status: 'passed' },
+        },
+      },
       distribution: {
         channels: ['local'],
         install: {
@@ -64,25 +92,12 @@ const writePackedFixtureManifest = async (artifactRoot: string): Promise<Artifac
       executables: { bins: [], hooks: [], mcpServers: [], scripts: [] },
       files,
       manifestVersion: artifactManifestVersion,
-      producer: { name: 'agent-bundle', version: '0.1.0' },
-      project: {
-        configDigest,
-        configPath: 'agent-bundle.config.ts',
-        modelDigest: 'b'.repeat(64),
-        revision: digest({ inputs: sourceInputs }),
-        sourceInputs,
-      },
       projections: [{
-        adapterRevision: metadata.adapterRevision,
         documents: {
           ...(filePaths.has('mcp.json') ? { mcp: 'mcp.json' } : {}),
           ...(filePaths.has('plugin.json') ? { plugin: 'plugin.json' } : {}),
         },
         host: 'portable',
-        observedVersion: metadata.observedVersion,
-        schemas: metadata.schemas
-          .map((schema) => ({ name: schema.name, revision: schema.revision, sha256: schema.sha256 }))
-          .sort((left, right) => left.name.localeCompare(right.name)),
       }],
       routes: {
         digest: emptyCompiledRouteGraph.digest,
@@ -93,11 +108,6 @@ const writePackedFixtureManifest = async (artifactRoot: string): Promise<Artifac
         servers: [],
       },
       runtime: { node: '22.12.0' },
-      validation: {
-        artifact: { status: 'passed' },
-        projections: [{ host: 'portable', status: 'passed' }],
-        source: { status: 'passed' },
-      },
     },
   });
 };
@@ -175,8 +185,8 @@ const installedCopies = async (nodeModules: string, selected: (name: string) => 
 const producerFrom = async (output: string): Promise<{ readonly name: string; readonly version: string }> => {
   const manifest = JSON.parse(
     await readFile(join(output, 'agent-bundle.manifest.json'), 'utf8'),
-  ) as { readonly producer: { readonly name: string; readonly version: string } };
-  return manifest.producer;
+  ) as { readonly compiler: { readonly producer: { readonly name: string; readonly version: string } } };
+  return manifest.compiler.producer;
 };
 
 /**

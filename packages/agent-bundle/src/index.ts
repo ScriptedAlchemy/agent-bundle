@@ -111,6 +111,7 @@ export type {
   RunCodexEvalTrialOptions,
 } from './eval/index.ts';
 export {
+  artifactCompilerRecordVersion,
   artifactManifestName,
   artifactManifestSchema,
   artifactManifestVersion,
@@ -149,6 +150,8 @@ export type {
   ArtifactManifestCliCommand,
   ArtifactManifestCliCommandMcp,
   ArtifactManifestCliOption,
+  ArtifactManifestCompiler,
+  ArtifactManifestCompilerAdapter,
   ArtifactManifestDistribution,
   ArtifactManifestDistributionChannel,
   ArtifactManifestDistributionInstall,
@@ -163,6 +166,7 @@ export type {
   ArtifactManifestProjectionMarketplace,
   ArtifactManifestProjectionSchema,
   ArtifactManifestProjectionValidation,
+  ArtifactManifestProvenance,
   ArtifactManifestProvider,
   ArtifactManifestReadResult,
   ArtifactManifestRoute,

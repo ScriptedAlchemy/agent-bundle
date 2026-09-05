@@ -142,16 +142,14 @@ integrity check: `validate --artifact`, `prepack`, `install`, `doctor --from`, `
 
 | Section | Contents |
 | --- | --- |
-| `producer`, `runtime` | `{ name: 'agent-bundle', version }` and `{ node }`, the selected generated-executable floor. |
+| `manifestVersion`, `runtime` | `2`, and `{ node }`, the consumer-facing generated-executable floor. |
 | `application` | The identity, once and host-independent: `id`, `name`, `version`, optional `description`. What `install`, `doctor`, and `uninstall` act on. |
-| `project` | `configPath`, `configDigest`, `modelDigest`, `revision`, the validated `packageName` and `packageVersion` (absent for unpackaged development projects), and `sourceInputs`. |
-| `files[]` | Every emitted file: `path`, `bytes`, `sha256`, `kind` (`bundle`, `copy`, `generated`, `prebuilt`), optional `mode`, and the `sourceInputs` it derives from. |
-| `projections[]` | One row per selected host, sorted by `host`: `adapterRevision`, `observedVersion`, the pinned `schemas`, the `documents` pointers to the host plugin, marketplace, MCP, and hooks documents the projection emitted, and its `marketplace` name. |
-| `routes` | The compiled route graph: `servers[]`, `events[]`, `scripts[]`, `cli`, `providers[]`, `layouts[]`, and its `digest`. |
+| `files[]` | Every emitted file: `path`, `bytes`, `sha256`, `kind` (`bundle`, `copy`, `generated`, `prebuilt`), optional `mode`. |
+| `projections[]` | One row per selected host, sorted by `host`: `host`, optional `builtInHost`, the `documents` pointers to the host plugin, marketplace, MCP, and hooks documents the projection emitted, and its `marketplace` name. |
+| `routes` | The compiled route graph: `servers[]`, `events[]`, `scripts[]`, `cli`, `providers[]`, `layouts[]`, `contracts[]` (when a route binds one), and its `digest`. A bound route names its contract with `route.contract`. |
 | `executables` | Every process the root can start: `bins[]`, `hooks[]` (one row per wrapper per host), `mcpServers[]` with their `entry` and `apps[]`, and `scripts[]`. |
-| `distribution` | `channels` (`local`, plus `npm` when the project has a package identity) and the `install` pointers to `INSTALL.md` / `install.mjs`. |
-| `agentSkills` | The Agent Skills specification pin: `specification`, `sourceRevision`, `schemaSha256`. |
-| `validation` | Recorded `passed` status for `source`, `artifact`, and each projection. |
+| `distribution` | `channels` (`local`, plus `npm` when `compiler.project.packageName` is present) and the `install` pointers to `INSTALL.md` / `install.mjs`. |
+| `compiler` | Operational record, versioned by `recordVersion` independently of `manifestVersion`: `producer`, `project` (`configPath`, `configDigest`, `modelDigest`, `revision`, `sourceInputs`, optional `packageName` / `packageVersion`), `provenance[]` (one `{ path, sourceInputs[] }` per `files[]` row), `adapters[]` (`adapterRevision`, `observedVersion`, pinned `schemas` per projection), `agentSkills`, and `validation`. |
 
 Only `build` writes it; everything in it is derived from the configuration, the conventional
 filesystem, and the compiled model, and its bytes are canonical — every reader rejects a
@@ -167,7 +165,7 @@ digest check.
 Four version axes are tracked separately and are expected to agree:
 
 - **Source** — the project's `package.json` release version.
-- **Built artifact** — `project.packageVersion` in the manifest.
+- **Built artifact** — `compiler.project.packageVersion` in the manifest.
 - **Installed artifact** — the manifest found under a host's installed root.
 - **Running process** — the version a live MCP `initialize` reports.
 
@@ -179,7 +177,7 @@ packed JavaScript imports, requires, or resolves them, no packed declaration ref
 fetch from a registry (`AB7015`): a published plugin installs only what its packed files need. The
 [validation guide](../guide/distribution/validation.mdx) lists every source of evidence.
 
-Projection rows also record an `adapterRevision` (monotonic, repository-owned) and an
+`compiler.adapters[]` records an `adapterRevision` (monotonic, repository-owned) and an
 `observedVersion` (the host version the capability evidence was recorded against). Neither is
 hashed: Git already versions repository-owned content, and hashing it again inside the repository
 causes churn on every table edit. Hash pins are reserved for vendored external content — host

@@ -16,6 +16,7 @@ import { build } from './support/build.ts';
 import { runNodeScript } from './support/run-node-script.ts';
 import { planHooksSurface } from '../src/build/entries.ts';
 import {
+  artifactCompilerRecordVersion,
   assembleArtifactManifest,
   compareArtifactManifestHooks,
   parseArtifactManifest,
@@ -72,34 +73,48 @@ const fixtureHookManifest = (
   const projections = [...hosts]
     .sort((left, right) => left.localeCompare(right))
     .map((host) => ({
-      adapterRevision: 'test',
       documents: {},
       host,
-      observedVersion: 'test',
-      schemas: [],
     }));
   const files = [...new Map(hooks.map((hook) => [hook.path, {
     bytes: 1,
     kind: 'generated' as const,
     path: hook.path,
     sha256: digest(hook.path),
-    sourceInputs: ['agent-bundle.config.ts'],
   }])).values()].sort((left, right) => left.path.localeCompare(right.path));
   return {
-    agentSkills: agentSkillsSchemaRevision,
     application: { id: 'plugin:hook-fixture', name: 'hook-fixture', version: '1.0.0' },
+    compiler: {
+      adapters: projections.map((projection) => ({
+        adapterRevision: 'test',
+        host: projection.host,
+        observedVersion: 'test',
+        schemas: [],
+      })),
+      agentSkills: agentSkillsSchemaRevision,
+      producer: { name: 'agent-bundle', version: '0.1.0' },
+      project: {
+        configDigest: fixtureConfigDigest,
+        configPath: 'agent-bundle.config.ts',
+        modelDigest: 'b'.repeat(64),
+        revision: digest({ inputs: fixtureSourceInputs }),
+        sourceInputs: fixtureSourceInputs,
+      },
+      provenance: files.map((file) => ({
+        path: file.path,
+        sourceInputs: ['agent-bundle.config.ts'],
+      })),
+      recordVersion: artifactCompilerRecordVersion,
+      validation: {
+        artifact: { status: 'passed' },
+        projections: projections.map(({ host }) => ({ host, status: 'passed' as const })),
+        source: { status: 'passed' },
+      },
+    },
     distribution: { channels: ['local'] },
     executables: { bins: [], hooks, mcpServers: [], scripts: [] },
     files,
     manifestVersion: 2,
-    producer: { name: 'agent-bundle', version: '0.1.0' },
-    project: {
-      configDigest: fixtureConfigDigest,
-      configPath: 'agent-bundle.config.ts',
-      modelDigest: 'b'.repeat(64),
-      revision: digest({ inputs: fixtureSourceInputs }),
-      sourceInputs: fixtureSourceInputs,
-    },
     projections,
     routes: {
       digest: emptyCompiledRouteGraph.digest,
@@ -110,11 +125,6 @@ const fixtureHookManifest = (
       servers: [],
     },
     runtime: { node: '22.12.0' },
-    validation: {
-      artifact: { status: 'passed' },
-      projections: projections.map(({ host }) => ({ host, status: 'passed' as const })),
-      source: { status: 'passed' },
-    },
   };
 };
 

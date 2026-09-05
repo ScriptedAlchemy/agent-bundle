@@ -18,7 +18,12 @@ import {
   type TargetArtifactWrite,
 } from '../src/adapters/types.ts';
 import { composeProjections } from '../src/build/compose.ts';
-import { artifactManifestVersion, assembleArtifactManifest, type ArtifactManifest } from '../src/build/manifest.ts';
+import {
+  artifactCompilerRecordVersion,
+  artifactManifestVersion,
+  assembleArtifactManifest,
+  type ArtifactManifest,
+} from '../src/build/manifest.ts';
 import { artifactDiagnosticRecoveries, validateArtifact, validateArtifactWithSnapshot } from '../src/build/validate-artifact.ts';
 import { digest, sha256Hex } from '../src/core/digest.ts';
 import { agentSkillsSchemaRevision } from '../src/schemas/agent-skills/contract.ts';
@@ -42,38 +47,69 @@ interface ArtifactFixtureFile {
   readonly path: string;
 }
 
+type FixtureProjection = ArtifactManifest['projections'][number] & {
+  readonly adapterRevision: string;
+  readonly observedVersion: string;
+  readonly schemas: ArtifactManifest['compiler']['adapters'][number]['schemas'];
+};
+
 const manifestFor = (
   files: readonly ArtifactFixtureFile[],
   includeModes = true,
-  projections: readonly ArtifactManifest['projections'][number][] = [],
+  projections: readonly FixtureProjection[] = [],
 ): ArtifactManifest => {
   const configHash = hash('export default {};\n');
   const sourceInputs = [{ path: 'agent-bundle.config.ts', sha256: configHash }];
+  const manifestFiles = files
+    .map((file) => ({
+      bytes: Buffer.byteLength(file.contents),
+      kind: file.kind,
+      ...(includeModes && file.mode !== undefined ? { mode: file.mode } : {}),
+      path: file.path,
+      sha256: hash(file.contents),
+    }))
+    .sort((left, right) => left.path.localeCompare(right.path));
+  const publicProjections = [...projections]
+    .map(({ adapterRevision: _adapterRevision, observedVersion: _observedVersion, schemas: _schemas, ...projection }) =>
+      projection)
+    .sort((left, right) => left.host.localeCompare(right.host));
+  const adapters = [...projections]
+    .map((projection) => ({
+      adapterRevision: projection.adapterRevision,
+      host: projection.host,
+      observedVersion: projection.observedVersion,
+      schemas: projection.schemas,
+    }))
+    .sort((left, right) => left.host.localeCompare(right.host));
   return {
-    agentSkills: agentSkillsSchemaRevision,
     application: { id: 'plugin:fixture', name: 'fixture', version: '1.0.0' },
+    compiler: {
+      adapters,
+      agentSkills: agentSkillsSchemaRevision,
+      producer: { name: 'agent-bundle', version: '0.1.0' },
+      project: {
+        configDigest: configHash,
+        configPath: 'agent-bundle.config.ts',
+        modelDigest: 'b'.repeat(64),
+        revision: digest({ inputs: sourceInputs }),
+        sourceInputs,
+      },
+      provenance: manifestFiles.map((file) => ({
+        path: file.path,
+        sourceInputs: ['agent-bundle.config.ts'],
+      })),
+      recordVersion: artifactCompilerRecordVersion,
+      validation: {
+        artifact: { status: 'passed' },
+        projections: publicProjections.map(({ host }) => ({ host, status: 'passed' })),
+        source: { status: 'passed' },
+      },
+    },
     distribution: { channels: ['local'] },
     executables: { bins: [], hooks: [], mcpServers: [], scripts: [] },
-    files: files
-      .map((file) => ({
-        bytes: Buffer.byteLength(file.contents),
-        kind: file.kind,
-        ...(includeModes && file.mode !== undefined ? { mode: file.mode } : {}),
-        path: file.path,
-        sha256: hash(file.contents),
-        sourceInputs: ['agent-bundle.config.ts'],
-      }))
-      .sort((left, right) => left.path.localeCompare(right.path)),
+    files: manifestFiles,
     manifestVersion: artifactManifestVersion,
-    producer: { name: 'agent-bundle', version: '0.1.0' },
-    project: {
-      configDigest: configHash,
-      configPath: 'agent-bundle.config.ts',
-      modelDigest: 'b'.repeat(64),
-      revision: digest({ inputs: sourceInputs }),
-      sourceInputs,
-    },
-    projections,
+    projections: publicProjections,
     routes: {
       digest: 'c'.repeat(64),
       events: [],
@@ -83,18 +119,13 @@ const manifestFor = (
       servers: [],
     },
     runtime: { node: '22.12.0' },
-    validation: {
-      artifact: { status: 'passed' },
-      projections: projections.map(({ host }) => ({ host, status: 'passed' })),
-      source: { status: 'passed' },
-    },
   };
 };
 
 const writeArtifact = async (
   files: readonly ArtifactFixtureFile[],
   includeModes = true,
-  projections: readonly ArtifactManifest['projections'][number][] = [],
+  projections: readonly FixtureProjection[] = [],
 ): Promise<string> => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-artifact-validator-'));
   for (const file of files) {
@@ -239,14 +270,15 @@ const wildcardRegistry = (): TargetRegistry => new TargetRegistry().register({
   plan: () => ({ diagnostics: [], entries: [] }),
 } satisfies TargetAdapter);
 
-const targetFromRegistry = (registry: TargetRegistry, host: string): ArtifactManifest['projections'][number] => {
+const targetFromRegistry = (registry: TargetRegistry, host: string): FixtureProjection => {
   const metadata = registry.metadata(host);
   const builtInHost = registry.builtInHost(host);
   return {
-    ...metadata,
+    adapterRevision: metadata.adapterRevision,
     ...(builtInHost === undefined ? {} : { builtInHost }),
     documents: {},
     host,
+    observedVersion: metadata.observedVersion,
     schemas: [...metadata.schemas].sort((left, right) => left.name.localeCompare(right.name)),
   };
 };
@@ -567,23 +599,23 @@ it('returns frozen validated evidence without changing the diagnostics-only vali
     expect(result.snapshot!.runtime).toEqual({ hooks: [], mcpServers: [] });
     expect(Object.isFrozen(result.snapshot)).toBe(true);
     expect(Object.isFrozen(result.snapshot!.manifest)).toBe(true);
-    expect(Object.isFrozen(result.snapshot!.manifest.agentSkills)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.compiler.agentSkills)).toBe(true);
     expect(Object.isFrozen(result.snapshot!.manifest.files)).toBe(true);
     expect(Object.isFrozen(result.snapshot!.manifest.files[0]!)).toBe(true);
-    expect(Object.isFrozen(result.snapshot!.manifest.files[0]!.sourceInputs)).toBe(true);
-    expect(Object.isFrozen(result.snapshot!.manifest.producer)).toBe(true);
-    expect(Object.isFrozen(result.snapshot!.manifest.project)).toBe(true);
-    expect(Object.isFrozen(result.snapshot!.manifest.project.sourceInputs)).toBe(true);
-    expect(Object.isFrozen(result.snapshot!.manifest.project.sourceInputs[0]!)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.compiler.provenance[0]!.sourceInputs)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.compiler.producer)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.compiler.project)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.compiler.project.sourceInputs)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.compiler.project.sourceInputs[0]!)).toBe(true);
     expect(Object.isFrozen(result.snapshot!.manifest.projections)).toBe(true);
     expect(Object.isFrozen(result.snapshot!.manifest.projections[0]!)).toBe(true);
-    expect(Object.isFrozen(result.snapshot!.manifest.projections[0]!.schemas)).toBe(true);
-    expect(Object.isFrozen(result.snapshot!.manifest.projections[0]!.schemas[0]!)).toBe(true);
-    expect(Object.isFrozen(result.snapshot!.manifest.validation)).toBe(true);
-    expect(Object.isFrozen(result.snapshot!.manifest.validation.artifact)).toBe(true);
-    expect(Object.isFrozen(result.snapshot!.manifest.validation.source)).toBe(true);
-    expect(Object.isFrozen(result.snapshot!.manifest.validation.projections)).toBe(true);
-    expect(Object.isFrozen(result.snapshot!.manifest.validation.projections[0]!)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.compiler.adapters[0]!.schemas)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.compiler.adapters[0]!.schemas[0]!)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.compiler.validation)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.compiler.validation.artifact)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.compiler.validation.source)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.compiler.validation.projections)).toBe(true);
+    expect(Object.isFrozen(result.snapshot!.manifest.compiler.validation.projections[0]!)).toBe(true);
     expect(await validateArtifact({ artifactRoot: root, registry: customRegistry() })).toEqual([]);
   } finally {
     await rm(root, { force: true, recursive: true });
@@ -1889,13 +1921,13 @@ it('fails closed when Agent Skills provenance does not equal the pinned contract
   try {
     const manifest = manifestFor([]);
     for (const agentSkills of [
-      { ...manifest.agentSkills, schemaSha256: '0'.repeat(64) },
-      { ...manifest.agentSkills, sourceRevision: '0'.repeat(40) },
-      { ...manifest.agentSkills, specification: 'https://example.test/forged-specification.mdx' },
+      { ...manifest.compiler.agentSkills, schemaSha256: '0'.repeat(64) },
+      { ...manifest.compiler.agentSkills, sourceRevision: '0'.repeat(40) },
+      { ...manifest.compiler.agentSkills, specification: 'https://example.test/forged-specification.mdx' },
     ]) {
       await writeFile(join(root, 'agent-bundle.manifest.json'), assembleArtifactManifest({
         ...manifest,
-        agentSkills,
+        compiler: { ...manifest.compiler, agentSkills },
       }).bytes);
 
       await expect(validateArtifact({ artifactRoot: root })).resolves.toEqual(expect.arrayContaining([

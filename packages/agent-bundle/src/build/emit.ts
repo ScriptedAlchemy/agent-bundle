@@ -19,6 +19,7 @@ import {
   assembleArtifactManifest,
   parseArtifactManifest,
   type ArtifactManifestFile,
+  type ArtifactManifestProvenance,
   type ArtifactManifest,
 } from './manifest.ts';
 import type { ArtifactOutputProvenance } from './provenance.ts';
@@ -171,7 +172,10 @@ export const listArtifactFiles = async (
 export const createArtifactManifestFiles = (options: {
   readonly files: readonly ArtifactFile[];
   readonly outputProvenance: readonly ArtifactOutputProvenance[];
-}): readonly ArtifactManifestFile[] => {
+}): {
+  readonly files: readonly ArtifactManifestFile[];
+  readonly provenance: readonly ArtifactManifestProvenance[];
+} => {
   const filesByPath = new Map<string, ArtifactFile>();
   for (const file of options.files) {
     if (file.path === artifactManifestName) {
@@ -199,6 +203,7 @@ export const createArtifactManifestFiles = (options: {
   }
 
   const manifestFiles: ArtifactManifestFile[] = [];
+  const manifestProvenance: ArtifactManifestProvenance[] = [];
   for (const [path, file] of filesByPath) {
     const provenance = provenanceByPath.get(path);
     if (provenance === undefined) {
@@ -211,6 +216,9 @@ export const createArtifactManifestFiles = (options: {
       ...(mode === undefined ? {} : { mode }),
       path,
       sha256: file.sha256,
+    });
+    manifestProvenance.push({
+      path,
       sourceInputs: provenance.sourceInputs,
     });
   }
@@ -220,7 +228,12 @@ export const createArtifactManifestFiles = (options: {
     }
   }
 
-  return Object.freeze(manifestFiles.sort((left, right) => left.path.localeCompare(right.path)));
+  const byPath = (left: { readonly path: string }, right: { readonly path: string }): number =>
+    left.path.localeCompare(right.path);
+  return Object.freeze({
+    files: Object.freeze(manifestFiles.sort(byPath)),
+    provenance: Object.freeze(manifestProvenance.sort(byPath)),
+  });
 };
 
 export const writeManifest = async (options: {
