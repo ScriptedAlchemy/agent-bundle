@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import { packOutputFromJson } from './npm-pack-json.mjs';
+import { digestTree } from './tree-snapshot.mjs';
 
 const execFile = promisify(executeFile);
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -37,6 +38,8 @@ const run = (command, args, extraEnvironment = {}) => new Promise((resolvePromis
 
 const buildExitCode = await run('pnpm', ['build'], { NODE_ENV: 'production' });
 if (buildExitCode !== 0) process.exit(buildExitCode);
+const publishableDist = join(repositoryRoot, 'packages', 'agent-bundle', 'dist');
+const publishableDistBeforePackedTests = await digestTree(publishableDist);
 
 const packDirectory = await mkdtemp(join(tmpdir(), 'agent-bundle-shared-pack-'));
 try {
@@ -114,5 +117,15 @@ try {
     AGENT_BUNDLE_WORKBENCH_PREBUILT: '1',
   });
 } finally {
-  await rm(packDirectory, { force: true, recursive: true });
+  try {
+    const publishableDistAfterPackedTests = await digestTree(publishableDist);
+    if (publishableDistAfterPackedTests !== publishableDistBeforePackedTests) {
+      console.error(
+        'test:packed changed packages/agent-bundle/dist; packed fixtures must use isolated output and tarball directories.',
+      );
+      process.exitCode = 1;
+    }
+  } finally {
+    await rm(packDirectory, { force: true, recursive: true });
+  }
 }
