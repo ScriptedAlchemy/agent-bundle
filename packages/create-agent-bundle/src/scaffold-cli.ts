@@ -1,4 +1,6 @@
 import { spawn } from 'node:child_process';
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { cancel, intro, isCancel, log, multiselect, note, outro, select, text } from '@clack/prompts';
 import * as NodeServices from '@effect/platform-node/NodeServices';
@@ -53,6 +55,16 @@ const clackPrompter: Prompter = {
 };
 
 /**
+ * The directory of this module on disk (`dist/` once bundled). The manifest
+ * and template paths below are joined onto it rather than spelled as
+ * `new URL('../…', import.meta.url)`: Rslib would otherwise copy
+ * `package.json` into the bundle's static assets — freezing the version that
+ * pkg.pr.new rewrites after the build — and turn the template directory into
+ * a lookup that throws at run time.
+ */
+const ownDirectory = dirname(fileURLToPath(import.meta.url));
+
+/**
  * The version must be read from disk at run time, not inlined at build time:
  * pkg.pr.new rewrites the manifest version to `<version>-preview-<sha>` when
  * it packs the preview tarball, and that suffix is what pairs the scaffolded
@@ -61,10 +73,7 @@ const clackPrompter: Prompter = {
 const ownVersion = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const manifestPath = yield* path.fromFileUrl(new URL('../package.json', import.meta.url)).pipe(
-    // The URL is built from import.meta.url, so a `BadArgument` here is a bug.
-    Effect.orDie,
-  );
+  const manifestPath = path.join(ownDirectory, '..', 'package.json');
   const manifest = JSON.parse(yield* fs.readFileString(manifestPath)) as { readonly version: string };
   return manifest.version;
 });
@@ -110,9 +119,7 @@ const scaffoldProgram = Effect.fnUntraced(function* (
     const targetDirectory = path.resolve(process.cwd(), options.targetDir);
     yield* assertScaffoldTarget(targetDirectory, options.targetDir);
 
-    const templateRoot = yield* path.fromFileUrl(new URL(`../templates/${options.template}`, import.meta.url)).pipe(
-      Effect.orDie,
-    );
+    const templateRoot = path.join(ownDirectory, '..', 'templates', options.template);
     const files = yield* scaffold({
       frameworkSpec,
       packageName: options.packageName,
