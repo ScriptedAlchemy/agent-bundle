@@ -11,4 +11,4 @@ keep `new URL(…, import.meta.url)` and `new Worker(new URL(…))` expressions 
 `agent-bundle inspect --bundler` lowers in production mode regardless of `NODE_ENV` and shows the
 new `bundlerChain` invariant beside `tools.rspack`. Published `.d.ts` files now import their
 siblings with `.js` specifiers, and `@agent-bundle/runtime`'s shared chunks are named
-`<id>~0.js`; every `exports` entry resolves as before. (#PR)
+`<id>~0.js`; every `exports` entry resolves as before. (#575)
