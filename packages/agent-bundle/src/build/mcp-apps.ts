@@ -347,7 +347,7 @@ export const composeMcpAppsRsbuildConfig = (
     readonly meta: AgentBundleMeta;
     /** Defaults to `production`; see {@link McpAppCompileMode}. */
     readonly mode?: McpAppCompileMode;
-    /** Receives each view compilation's externals and modules once its module graph is final; the audit plugin is composed either way, so `inspect --bundler` shows what runs. */
+    /** Called with each view compilation's evidence once its module graph is final. */
     readonly onCompilationEvidence?: (evidence: CompilationEvidence) => void;
     readonly outDir: string;
     readonly tools?: AgentBundleToolsConfig;
@@ -435,12 +435,7 @@ export const composeMcpAppsRsbuildConfig = (
   }));
 };
 
-/**
- * Every view's compilation is judged from its own evidence: the Rsbuild
- * environment is named after the App, so each record names the view it
- * belongs to. A view without a record did not compile through the invariant
- * layer, which is a framework fault, not a consumer one.
- */
+/** Missing or duplicate evidence is a framework fault: the invariant layer names each view's environment after the App. */
 const assertViewsSelfContained = (
   compiled: readonly PlannedMcpApp[],
   evidence: readonly CompilationEvidence[],
@@ -448,10 +443,11 @@ const assertViewsSelfContained = (
 ): void => {
   const diagnostics = compiled.flatMap((app) => {
     const records = evidence.filter((record) => record.compiler === app.name);
-    if (records.length !== 1) {
+    const [record] = records;
+    if (record === undefined || records.length !== 1) {
       throw new Error(`Expected one compilation evidence record for MCP App ${JSON.stringify(app.name)}, found ${String(records.length)}.`);
     }
-    return viewSelfContainmentDiagnostics(records[0]!, `mcp-apps/${app.name}.html`, projectRoot);
+    return viewSelfContainmentDiagnostics(record, `mcp-apps/${app.name}.html`, projectRoot);
   });
   if (diagnostics.length > 0) throw new DiagnosticError(diagnostics);
 };

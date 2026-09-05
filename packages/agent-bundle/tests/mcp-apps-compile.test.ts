@@ -232,7 +232,9 @@ describe('compileMcpApps', () => {
     expect(evidence.map((record) => ({ compiler: record.compiler, externals: record.externals }))).toEqual([
       { compiler: 'status', externals: [] },
     ]);
-    expect(evidence[0]?.modules.some((module) => module.resource === join(root, 'views', 'StatusPanel.tsx'))).toBe(true);
+    expect(evidence.some((record) =>
+      record.modules.some((module) => module.resource === join(root, 'views', 'StatusPanel.tsx')),
+    )).toBe(true);
   }, 60_000);
 
   it('reports a syntax error as one AB4770 naming the file and position', async () => {

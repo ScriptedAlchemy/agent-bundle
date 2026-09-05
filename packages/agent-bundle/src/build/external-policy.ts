@@ -70,9 +70,8 @@ const externalMessage = (external: ExternalIR): string => {
 };
 
 /**
- * A browser view has no allowable external at all: no Node built-ins, and no
- * sibling module, since the document inlines every script. Every external the
- * view's compilation kept is an `AB6005` against the emitted document.
+ * A browser view has no allowable external: no Node built-ins, and no sibling
+ * module, since the document inlines every script.
  */
 export const viewSelfContainmentDiagnostics = (
   evidence: CompilationEvidence,
