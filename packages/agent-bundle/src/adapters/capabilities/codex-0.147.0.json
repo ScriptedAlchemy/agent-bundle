@@ -604,6 +604,13 @@
         "Codex CLI 0.147.0 release (2026-08-07): MCP 2026-07-28 support is opt-in through the `mcp_2026_07_28` feature flag or `codex --enable mcp_2026_07_28`, adding paginated discovery, multi-round (`input_required`) requests, and non-blocking server startup; task-augmented tool calls are not among the documented additions.",
         "2026-09-03: recorded tools/call requests carry `_meta.x-codex-turn-metadata` (thread_id, turn_id, session_id) and no `params.task`."
       ]
+    },
+    "structuredContentValidation": {
+      "state": "unavailable",
+      "reason": "Codex is not recorded as validating `structuredContent` against `outputSchema`, or arguments against `inputSchema`, client-side: the tuple-bearing result that Cursor's draft-07 validator rejects was accepted by Codex. The generated server's SDK-side validation of arguments and `structuredContent` against the route's zod schemas is the only check recorded, and the same interoperable 2020-12 projection is advertised to Codex unchanged.",
+      "evidence": [
+        "2026-09-04 (#563): the same tuple-bearing `hauler_status` result (`z.array(z.tuple([z.number().nullable(), z.number().int().nonnegative()]))`) that Cursor 3.18.25 rejected with `boolean schema is false` was accepted by Codex; the report records Codex and Claude Code as not validating `outputSchema` that way."
+      ]
     }
   },
   "noticeDelivery": {

@@ -496,6 +496,13 @@
         "retrieved 2026-09-04 from https://code.claude.com/docs/en/mcp: the v2 runtime (SDK 2.0, v2.1.232+) asks stdio servers for protocol revision 2026-07-28 only when `MCP_PROTOCOL_NEGOTIATION=auto`; otherwise stdio servers negotiate through the earlier `initialize` handshake, where the generated server serves the 2025-11-25 core Tasks utility to a client that sends `params.task`.",
         "live model 2026-09-03, Claude Code 2.1.257 (host-lineage audit): every recorded tools/call carried `_meta.claudecode/toolUseId` and a progressToken; none carried `params.task`."
       ]
+    },
+    "structuredContentValidation": {
+      "state": "unavailable",
+      "reason": "Claude Code is not recorded as validating `structuredContent` against `outputSchema`, or arguments against `inputSchema`, client-side: the tuple-bearing result that Cursor's draft-07 validator rejects was accepted by Claude Code. The generated server's SDK-side validation of arguments and `structuredContent` against the route's zod schemas is the only check recorded, and the same interoperable 2020-12 projection is advertised to Claude Code unchanged.",
+      "evidence": [
+        "2026-09-04 (#563): the same tuple-bearing `hauler_status` result (`z.array(z.tuple([z.number().nullable(), z.number().int().nonnegative()]))`) that Cursor 3.18.25 rejected with `boolean schema is false` was accepted by Claude Code; the report records Claude Code and Codex as not validating `outputSchema` that way."
+      ]
     }
   },
   "noticeDelivery": {
