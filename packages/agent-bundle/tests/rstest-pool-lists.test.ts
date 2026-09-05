@@ -111,8 +111,9 @@ it('assigns every test file to at most one pool', () => {
 it('leaves no test file without a pool', () => {
   // Every `.test.ts` the include glob matches has a pool by construction (the
   // unit pool, unless a list claims it); anything else — another extension,
-  // another suffix — runs only if a list names it.
-  const everyTestFile = matchingFiles('packages/**/tests/**/*.{test,spec}.{ts,tsx,mts,cts,js,mjs,cjs,jsx}');
+  // another suffix — runs only if a list names it. `isTestFileName` is the
+  // full set Rstest's default include (`*.{test,spec}.?(c|m)[jt]s?(x)`) accepts.
+  const everyTestFile = matchingFiles('packages/**/tests/**/*.{test,spec}.*').filter((file) => isTestFileName(file));
   const collected = new Set([
     ...matchingFiles(workspaceTestFileGlob),
     ...lists.flatMap(([, entries]) => entries.flatMap(collectedFiles)),
