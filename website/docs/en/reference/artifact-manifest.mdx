@@ -20,9 +20,10 @@ directory layout to find out.
 | --- | --- |
 | Written once | Only `agent-bundle build` writes it, after the staged root is complete. Nothing else creates or edits it. |
 | `manifestVersion` | `2`. A reader refuses any other value. |
-| Canonical bytes | The file is the canonical JSON serialization of the document — object keys sorted, no insignificant whitespace, one trailing newline. Every reader of the whole document re-serializes what it parsed and rejects the file unless the bytes are identical; a hand edit, a reformat, or a duplicate key fails the read. The one lean reader — the `<plugin> web` support bundled into a generated bin — checks `manifestVersion`, refuses duplicate keys, and validates only the `projections[].host`, `executables.mcpServers[]` launch, and `web` slices it launches from. |
+| Canonical bytes | The file is the canonical JSON serialization of the document — object keys sorted, no insignificant whitespace, one trailing newline. Every reader re-serializes what it parsed and rejects the file unless the bytes are identical. A hand edit, a reformat, or a duplicate key fails the read. |
 | Closed keys | Every object admits exactly its documented keys. An unknown key at any level is a parse error. |
 | Sorted arrays | Every array has an explicit sort key (named per section below) and no duplicates. |
+| Lean reader | The rows above describe the full parser (`parseArtifactManifest`), which every consumer in the table below uses except one: the `<plugin> web` support bundled into a generated bin reads the manifest without the parser. It refuses a `manifestVersion` other than `2` and a duplicate key, then validates only the slices it launches from — `projections[].host`, the `executables.mcpServers[]` launch records, and `web` — and ignores every other key. |
 | Paths | Every path is POSIX, relative to the root, and safe: no leading `/`, no backslash, no `.` or `..` segment, and never a build-machine absolute path. Moving the entire composite root to a different absolute directory keeps every reader working: every path stays root-relative and resolves inside the moved tree. Every path a section points at — a host document, an executable, an App view, an install file — is also a `files[]` row. |
 
 ## Who writes it
@@ -408,7 +409,8 @@ other unknown key. They are listed so that a consumer does not invent its own sp
 ## Versioning
 
 Two version numbers travel with every root. Keys are closed, so **optional is not backward
-compatible**: a reader of version N rejects any key or enumerated value it does not know.
+compatible**: a reader of version N rejects any key or enumerated value it does not know (the
+lean web reader rejects the version mismatch itself, before it reads a slice).
 
 - `manifestVersion` versions the **public contract** consumers read (`application`, `files[]`,
   `runtime`, `projections[]`, `routes`, `executables`, `distribution`). It bumps on **any**
