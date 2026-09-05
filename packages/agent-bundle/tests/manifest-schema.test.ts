@@ -58,7 +58,7 @@ const validManifest = (): ArtifactManifest => ({
     bins: [{ hosts: ['claude', 'codex'], name: 'review', path: 'runtime/bin/review.mjs', worker: 'runtime/bin/review.worker.mjs' }],
     hooks: [
       { event: 'PostToolUse', host: 'claude', id: 'post-commit', kind: 'config', name: 'Post-commit', path: 'runtime/hooks/post-commit.mjs' },
-      { event: 'PreToolUse', host: 'claude', id: 'pre-commit', kind: 'event-route', name: 'Pre-commit', path: 'runtime/hooks/pre-commit.mjs', timeout: 30 },
+      { event: 'PreToolUse', host: 'claude', id: 'pre-commit', kind: 'event-route', name: 'Pre-commit', path: 'runtime/hooks/pre-commit.mjs', routeId: 'pre-commit', timeout: 30 },
     ],
     mcpServers: [{
       apps: [
@@ -360,6 +360,8 @@ const parserOnlyRules: readonly { readonly apply: (manifest: MutableManifest) =>
   { apply: (manifest) => { manifest.projections[0]!.documents.plugin = 'claude/missing.json'; }, rule: 'projections[].documents.* name manifest files' },
   { apply: (manifest) => { manifest.distribution.install!.script = 'missing.sh'; }, rule: 'distribution.install.* name manifest files' },
   { apply: (manifest) => { manifest.executables.scripts[0]!.rendered!.routeId = 'nope'; }, rule: 'scripts[].rendered.routeId names a script route' },
+  { apply: (manifest) => { manifest.executables.hooks[1]!.routeId = 'nope'; }, rule: 'hooks[].routeId names an event route' },
+  { apply: (manifest) => { manifest.routes.cli!.commands![0]!.routeId = 'nope'; }, rule: 'routes.cli.commands[].routeId names a CLI route' },
   { apply: (manifest) => { manifest.routes.servers[0]!.routes[0]!.serverId = 'other'; }, rule: 'routes.servers[].routes[].serverId equals the server id' },
   { apply: (manifest) => { manifest.routes.layouts[1]!.serverId = 'other'; }, rule: 'routes.layouts[].serverId names a declared server' },
   { apply: (manifest) => { manifest.files[1]!.sourceInputs = ['src/other.ts']; }, rule: 'files[].sourceInputs name project source inputs' },
@@ -409,7 +411,11 @@ const schemaEncodedRules: readonly { readonly apply: (manifest: MutableManifest)
   { apply: (manifest) => { manifest.distribution.channels = ['local', 'local']; }, rule: 'channels are unique' },
   { apply: (manifest) => { manifest.distribution.install = {}; }, rule: 'install names a pointer' },
   { apply: (manifest) => { manifest.routes.cli!.mode = 'conventional'; }, rule: 'cli commands appear only in generated mode' },
-  { apply: (manifest) => { manifest.routes.cli!.routes[0]!.kind = 'script'; }, rule: 'cli routes are cli routes' },
+  { apply: (manifest) => { manifest.routes.cli!.routes[0]!.kind = 'script'; }, rule: 'cli routes are cli routes or projected MCP tool routes' },
+  {
+    apply: (manifest) => { manifest.executables.hooks[0]!.routeId = 'pre-commit'; },
+    rule: 'hooks[].routeId is present exactly for event-route hooks',
+  },
   { apply: (manifest) => { manifest.routes.events[0]!.kind = 'script'; }, rule: 'event routes are event-route routes' },
   { apply: (manifest) => { manifest.routes.scripts[0]!.kind = 'event-route'; }, rule: 'script routes are script routes' },
   { apply: (manifest) => { manifest.routes.servers[0]!.routes[0]!.kind = 'cli'; }, rule: 'server routes are MCP route kinds' },

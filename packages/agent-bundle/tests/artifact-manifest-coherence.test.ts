@@ -13,6 +13,7 @@ import {
   type ArtifactManifestMcpServer,
   type ArtifactManifestProjection,
 } from '../src/build/manifest.ts';
+import { validateArtifactManifestSchema } from '../src/build/manifest-schema.ts';
 import { validateArtifact } from '../src/build/validate-artifact.ts';
 import type { Diagnostic } from '../src/core/diagnostics.ts';
 import { sha256Hex, stableJson } from '../src/core/digest.ts';
@@ -194,6 +195,11 @@ it('a clean composite root of every built-in host raises neither AB6039 nor AB60
 
   const copy = await copyArtifact();
   await expect(validateArtifact({ artifactRoot: copy })).resolves.toEqual([]);
+});
+
+it('the writer\'s manifest validates against the shipped JSON Schema', async () => {
+  const bytes = await readFile(join(artifactRoot, artifactManifestName), 'utf8');
+  expect(validateArtifactManifestSchema(JSON.parse(bytes))).toEqual([]);
 });
 
 it('AB6040 names the host plugin manifest whose version disagrees with application.version, without AB6004', async () => {

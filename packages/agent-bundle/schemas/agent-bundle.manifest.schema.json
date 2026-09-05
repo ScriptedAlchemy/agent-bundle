@@ -882,13 +882,16 @@
         },
         "routes": {
           "type": "array",
-          "description": "Sorted by `id` with no duplicates; cli routes only.",
+          "description": "Sorted by `id` with no duplicates; cli routes plus the MCP tool routes `routes.mcpCommands` projects into the executable.",
           "items": {
             "type": "object",
             "$ref": "#/$defs/route",
             "properties": {
               "kind": {
-                "const": "cli"
+                "enum": [
+                  "cli",
+                  "tool"
+                ]
               }
             }
           },
@@ -1083,7 +1086,7 @@
     },
     "hook": {
       "type": "object",
-      "description": "`host` names a declared projection (parser-enforced).",
+      "description": "`host` names a declared projection and `routeId` names a declared `routes.events[]` row (parser-enforced). `routeId` is present exactly for event-route hooks.",
       "additionalProperties": false,
       "properties": {
         "event": {
@@ -1107,6 +1110,9 @@
         "path": {
           "$ref": "#/$defs/relativePath"
         },
+        "routeId": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
         "timeout": {
           "$ref": "#/$defs/positiveSafeInteger"
         }
@@ -1118,7 +1124,26 @@
         "kind",
         "name",
         "path"
-      ]
+      ],
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "event-route"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "routeId"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "routeId"
+          ]
+        }
+      }
     },
     "mcpApp": {
       "type": "object",
