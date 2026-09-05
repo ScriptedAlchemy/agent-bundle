@@ -1,4 +1,4 @@
-export type DistFreshnessStatus = 'fresh' | 'stale' | 'missing';
+export type DistFreshnessStatus = 'fresh' | 'stale' | 'missing' | 'contaminated';
 
 export interface DistDescriptor {
   /** Package name, as printed in the failure message. */
@@ -26,6 +26,8 @@ export interface DistFreshness {
   readonly newestInput: NewestEntry;
   /** Undefined when `status` is `missing`. */
   readonly newestOutput: NewestEntry | undefined;
+  /** Built file containing the packed-test fixture marker. */
+  readonly fixtureMarkerPath?: string;
 }
 
 export interface NewestEntryOptions {
@@ -43,6 +45,8 @@ export interface FormatDistFreshnessOptions {
 export declare const isSkippedInputDirectory: (name: string) => boolean;
 
 export declare const newestEntry: (path: string, options?: NewestEntryOptions) => NewestEntry | undefined;
+
+export declare const runtimeRebundleFixtureMarker: string;
 
 export declare const distFreshness: (descriptor: DistDescriptor) => DistFreshness;
 
