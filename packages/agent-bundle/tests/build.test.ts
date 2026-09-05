@@ -354,21 +354,23 @@ it('low-level build writes and returns the exact canonical manifest for a config
     expect(manifestBytes).toBe(serializeArtifactManifest(result.manifest));
     expect(manifest).toMatchObject({
       files: files.map(({ bytes, path, sha256 }) => ({ bytes, path, sha256 })),
-      project: {
-        configPath: 'agent-bundle.config.ts',
-        sourceInputs: expect.arrayContaining([
-          expect.objectContaining({ path: 'agent-bundle.config.ts' }),
-          expect.objectContaining({ path: 'src/skills/review/SKILL.md' }),
-        ]),
+      compiler: {
+        project: {
+          configPath: 'agent-bundle.config.ts',
+          sourceInputs: expect.arrayContaining([
+            expect.objectContaining({ path: 'agent-bundle.config.ts' }),
+            expect.objectContaining({ path: 'src/skills/review/SKILL.md' }),
+          ]),
+        },
+        validation: {
+          artifact: { status: 'passed' },
+          projections: [{ host: 'portable', status: 'passed' }],
+          source: { status: 'passed' },
+        },
       },
       manifestVersion: 2,
       projections: [expect.objectContaining({ host: 'portable' })],
       runtime: { node: '22.12.0' },
-      validation: {
-        artifact: { status: 'passed' },
-        projections: [{ host: 'portable', status: 'passed' }],
-        source: { status: 'passed' },
-      },
     });
     for (const file of files.filter((entry) => entry.path.endsWith('.json'))) {
       expect(JSON.parse(await readFile(join(project.outputRoot, file.path), 'utf8'))).toBeDefined();
@@ -386,6 +388,9 @@ it('low-level build writes and returns the exact canonical manifest for a config
     await expect(readFile(emittedProjectAsset)).resolves.toEqual(await readFile(project.assetPath));
     expect(manifest.files).toContainEqual(expect.objectContaining({
       kind: 'copy',
+      path: 'assets/branding/logo.svg',
+    }));
+    expect(manifest.compiler.provenance).toContainEqual(expect.objectContaining({
       path: 'assets/branding/logo.svg',
       sourceInputs: ['assets/branding/logo.svg'],
     }));
@@ -416,6 +421,9 @@ it('low-level build writes and returns the exact canonical manifest for a config
         mode: 0o751,
         path: resource.path,
         sha256: sha256Hex(contents),
+      }));
+      expect(manifest.compiler.provenance).toContainEqual(expect.objectContaining({
+        path: resource.path,
         sourceInputs: expect.arrayContaining([
           resource.path.replace('', 'src/'),
           'src/skills/review/SKILL.md',
@@ -445,7 +453,7 @@ it('uses the package version in a manifest produced by the raw source build modu
       ),
     });
 
-    expect(result.manifest.producer).toEqual({ name: 'agent-bundle', version: packageManifest.version });
+    expect(result.manifest.compiler.producer).toEqual({ name: 'agent-bundle', version: packageManifest.version });
     await expect(readFile(join(project.outputRoot, 'agent-bundle.manifest.json'), 'utf8')).resolves.toContain(
       `"version":"${packageManifest.version}"`,
     );

@@ -127,9 +127,9 @@ it('serves compiled routes and durable state across packed process restarts', as
     const harnessManifest = await compileTestManifest({ root: project });
     const artifactManifest = JSON.parse(
       await readFile(join(artifact, 'agent-bundle.manifest.json'), 'utf8'),
-    ) as { readonly project: { readonly revision: string } };
+    ) as { readonly compiler: { readonly project: { readonly revision: string } } };
     const eventRuntimeEndpointId =
-      `${artifactManifest.project.revision}:${dirname(dirname(resolve(entry)))}`;
+      `${artifactManifest.compiler.project.revision}:${dirname(dirname(resolve(entry)))}`;
     const deletedSource = await removeProjectSource({ projectRoot: project });
 
     // The artifact-hosted routed CLI and the `main`-envelope script probe

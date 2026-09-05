@@ -419,7 +419,7 @@ export const openInstalledHostMcpServer = async (
   const eventRuntimeEndpointPath = artifactManifest === undefined || resolvedEntry === undefined
     ? undefined
     : eventRuntimeEndpoint(
-      `${artifactManifest.project.revision}:${dirname(dirname(resolvedEntry))}`,
+      `${artifactManifest.compiler.project.revision}:${dirname(dirname(resolvedEntry))}`,
     );
   if (eventRuntimeEndpointPath === undefined && failures.length === 0) {
     failures.push({ check: 'mcp-command', reason: 'installed event runtime endpoint could not be derived' });
@@ -472,9 +472,12 @@ export const openInstalledHostMcpServer = async (
       reason: `source=${sourceVersion || 'missing'}, builtArtifact=${builtVersion || 'missing'}, installedArtifact=${installedVersion || 'missing'}, runningProcess=${runningVersion || 'missing'}`,
     });
   }
+  const adapter = target === undefined
+    ? undefined
+    : artifactManifest?.compiler.adapters.find((entry) => entry.host === target.host);
   const metadata: InstalledHostEvidenceMetadata = Object.freeze({
-    adapterRevision: target?.adapterRevision ?? 'unavailable',
-    frameworkVersion: artifactManifest?.producer.version ?? 'unavailable',
+    adapterRevision: adapter?.adapterRevision ?? 'unavailable',
+    frameworkVersion: artifactManifest?.compiler.producer.version ?? 'unavailable',
     hostBinaryVersion: options.hostBinaryVersion === undefined
       ? Object.freeze({
         reason: 'adapter simulator does not invoke a host binary',
@@ -483,7 +486,7 @@ export const openInstalledHostMcpServer = async (
       : Object.freeze({ status: 'observed' as const, value: options.hostBinaryVersion }),
     manifestSchemaDigest: digest({
       manifest: sha256Hex(artifactBytes),
-      schemas: target?.schemas ?? [],
+      schemas: adapter?.schemas ?? [],
     }),
   });
   const observation: InstalledHostObservation = Object.freeze({

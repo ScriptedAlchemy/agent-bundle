@@ -680,9 +680,9 @@ export class EvalService {
       artifact: storedArtifactBinding(this.#projectRoot, directory, artifact),
       projectRoot: this.#projectRoot,
       provenance: Object.freeze({
-        agentBundleVersion: artifact.manifest.producer.version,
+        agentBundleVersion: artifact.manifest.compiler.producer.version,
         harness: harness.name,
-        projectRevision: artifact.manifest.project.revision,
+        projectRevision: artifact.manifest.compiler.project.revision,
       }),
       runId,
       runsDir: config.runsDir,

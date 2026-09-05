@@ -95,8 +95,8 @@ const createBuildProject = async (root: string): Promise<{ readonly output: stri
 const producerFrom = async (output: string): Promise<{ readonly name: string; readonly version: string }> => {
   const manifest = JSON.parse(
     await readFile(join(output, 'agent-bundle.manifest.json'), 'utf8'),
-  ) as { readonly producer: { readonly name: string; readonly version: string } };
-  return manifest.producer;
+  ) as { readonly compiler: { readonly producer: { readonly name: string; readonly version: string } } };
+  return manifest.compiler.producer;
 };
 
 it('keeps package output filenames stable', async () => {

@@ -2,9 +2,11 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
+  artifactCompilerRecordVersion,
   artifactManifestName,
   assembleArtifactManifest,
   type ArtifactManifest,
+  type ArtifactManifestCompilerAdapter,
   type ArtifactManifestProjection,
 } from '../../src/build/manifest.ts';
 import { digest, sha256Hex } from '../../src/core/digest.ts';
@@ -38,6 +40,7 @@ export const writeInstallFixtureManifest = async (
     sha256: sha256Hex('install fixture config\n'),
   })]);
   const projectionRows: ArtifactManifestProjection[] = [];
+  const adapterRows: ArtifactManifestCompilerAdapter[] = [];
   const documentPaths = new Set<string>();
   for (const projection of projections) {
     const plugin = pluginDocuments[projection.host];
@@ -48,7 +51,6 @@ export const writeInstallFixtureManifest = async (
     if (marketplace !== undefined) documentPaths.add(marketplace);
     if (projection.mcp !== undefined) documentPaths.add(projection.mcp);
     projectionRows.push({
-      adapterRevision: `${projection.host}-fixture-v1`,
       // The fixture hosts are the shipped adapters, so identity and name coincide.
       builtInHost: projection.host,
       documents: {
@@ -60,11 +62,16 @@ export const writeInstallFixtureManifest = async (
       ...(projection.marketplace === undefined
         ? {}
         : { marketplace: { name: projection.marketplace } }),
+    });
+    adapterRows.push({
+      adapterRevision: `${projection.host}-fixture-v1`,
+      host: projection.host,
       observedVersion: 'fixture',
       schemas: [],
     });
   }
   projectionRows.sort((left, right) => left.host.localeCompare(right.host));
+  adapterRows.sort((left, right) => left.host.localeCompare(right.host));
   const files = await Promise.all([...documentPaths].sort().map(async (path) => {
     const bytes = await readFile(join(bundleRoot, path));
     return {
@@ -72,32 +79,44 @@ export const writeInstallFixtureManifest = async (
       kind: 'generated' as const,
       path,
       sha256: sha256Hex(bytes),
-      sourceInputs: ['agent-bundle.config.ts'],
     };
   }));
   const manifest: ArtifactManifest = {
-    agentSkills: {
-      schemaSha256: 'b9079c0c10b7930e8c6a20ff2bc10cda2a3343c55185120e3f1116a1a529b220',
-      sourceRevision: '69ef37e9424c0a7ea9dd2293b559e43ec8176379',
-      specification: 'https://raw.githubusercontent.com/agentskills/agentskills/69ef37e9424c0a7ea9dd2293b559e43ec8176379/docs/specification.mdx',
-    },
     application: {
       id: `application:${application.name}`,
       name: application.name,
       version: application.version,
     },
+    compiler: {
+      adapters: adapterRows,
+      agentSkills: {
+        schemaSha256: 'b9079c0c10b7930e8c6a20ff2bc10cda2a3343c55185120e3f1116a1a529b220',
+        sourceRevision: '69ef37e9424c0a7ea9dd2293b559e43ec8176379',
+        specification: 'https://raw.githubusercontent.com/agentskills/agentskills/69ef37e9424c0a7ea9dd2293b559e43ec8176379/docs/specification.mdx',
+      },
+      producer: { name: 'agent-bundle', version: '0.1.0' },
+      project: {
+        configDigest: sourceInputs[0]!.sha256,
+        configPath: sourceInputs[0]!.path,
+        modelDigest: sha256Hex('install fixture model\n'),
+        revision: digest({ inputs: sourceInputs }),
+        sourceInputs,
+      },
+      provenance: files.map((file) => ({
+        path: file.path,
+        sourceInputs: ['agent-bundle.config.ts'],
+      })),
+      recordVersion: artifactCompilerRecordVersion,
+      validation: {
+        artifact: { status: 'passed' },
+        projections: projectionRows.map(({ host }) => ({ host, status: 'passed' })),
+        source: { status: 'passed' },
+      },
+    },
     distribution: { channels: ['local'] },
     executables: { bins: [], hooks: [], mcpServers: [], scripts: [] },
     files,
     manifestVersion: 2,
-    producer: { name: 'agent-bundle', version: '0.1.0' },
-    project: {
-      configDigest: sourceInputs[0]!.sha256,
-      configPath: sourceInputs[0]!.path,
-      modelDigest: sha256Hex('install fixture model\n'),
-      revision: digest({ inputs: sourceInputs }),
-      sourceInputs,
-    },
     projections: projectionRows,
     routes: {
       digest: sha256Hex('install fixture routes\n'),
@@ -108,11 +127,6 @@ export const writeInstallFixtureManifest = async (
       servers: [],
     },
     runtime: { node: '22.12.0' },
-    validation: {
-      artifact: { status: 'passed' },
-      projections: projectionRows.map(({ host }) => ({ host, status: 'passed' })),
-      source: { status: 'passed' },
-    },
   };
   await writeFile(join(bundleRoot, artifactManifestName), assembleArtifactManifest(manifest).bytes);
 };

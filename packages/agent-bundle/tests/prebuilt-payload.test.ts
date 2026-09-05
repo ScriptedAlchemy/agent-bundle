@@ -137,7 +137,7 @@ it('packages prebuilt payloads at stable paths and lowers prebuilt entries throu
     expect(manifest.executables.hooks).toEqual([]);
     const chunk = manifest.files.find((file) => file.path === 'runtime/chunks/417.js');
     expect(chunk).toMatchObject({ kind: 'prebuilt', sourceInputs: ['agent-bundle.config.ts', 'built/runtime/chunks/417.js'] });
-    expect(manifest.project.sourceInputs.some((input) => input.path === 'built/runtime/mcp/server.js')).toBe(true);
+    expect(manifest.compiler.project.sourceInputs.some((input) => input.path === 'built/runtime/mcp/server.js')).toBe(true);
 
     // The published artifact revalidates cleanly from disk alone.
     const revalidated = await validate({ artifact: join(root, 'out'), root });

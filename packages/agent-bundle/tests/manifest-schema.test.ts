@@ -7,7 +7,11 @@ import {
   artifactManifestSchema as apiArtifactManifestSchema,
   validateArtifactManifestSchema as apiValidateArtifactManifestSchema,
 } from '../src/api.ts';
-import { parseArtifactManifest, type ArtifactManifest } from '../src/build/manifest.ts';
+import {
+  artifactCompilerRecordVersion,
+  parseArtifactManifest,
+  type ArtifactManifest,
+} from '../src/build/manifest.ts';
 import { artifactManifestSchema, validateArtifactManifestSchema } from '../src/build/manifest-schema.ts';
 import { digest, stableJson } from '../src/core/digest.ts';
 import type { JsonObject, JsonValue } from '../src/dev/types.ts';
@@ -29,14 +33,21 @@ const sourceInputs = [
 const file = (
   path: string,
   kind: ArtifactManifest['files'][number]['kind'],
-  extra: Partial<Pick<ArtifactManifest['files'][number], 'mode' | 'sourceInputs'>> = {},
+  extra: Partial<Pick<ArtifactManifest['files'][number], 'mode'>> = {},
 ): ArtifactManifest['files'][number] => ({
   bytes: 64,
   kind,
   path,
   sha256: hash('c'),
-  sourceInputs: ['agent-bundle.config.ts'],
   ...extra,
+});
+
+const provenance = (
+  path: string,
+  inputs: readonly string[] = ['agent-bundle.config.ts'],
+): ArtifactManifest['compiler']['provenance'][number] => ({
+  path,
+  sourceInputs: inputs,
 });
 
 /**
@@ -47,12 +58,63 @@ const file = (
  * reaches every closed object.
  */
 const validManifest = (): ArtifactManifest => ({
-  agentSkills: {
-    schemaSha256: hash('d'),
-    sourceRevision: '69ef37e9424c0a7ea9dd2293b559e43ec8176379',
-    specification: 'https://raw.githubusercontent.com/agentskills/agentskills/69ef37e9424c0a7ea9dd2293b559e43ec8176379/docs/specification.mdx',
-  },
   application: { description: 'Reviews pull requests.', id: 'acme.review', name: 'Review', version: '1.2.3' },
+  compiler: {
+    adapters: [
+      {
+        adapterRevision: 'claude-adapter-v1',
+        host: 'claude',
+        observedVersion: '1.0.0',
+        schemas: [{ name: 'claude-hooks', revision: 'hooks-v1', sha256: hash('f') }],
+      },
+      {
+        adapterRevision: 'codex-adapter-v1',
+        host: 'codex',
+        observedVersion: '0.147.0',
+        schemas: [],
+      },
+    ],
+    agentSkills: {
+      schemaSha256: hash('d'),
+      sourceRevision: '69ef37e9424c0a7ea9dd2293b559e43ec8176379',
+      specification: 'https://raw.githubusercontent.com/agentskills/agentskills/69ef37e9424c0a7ea9dd2293b559e43ec8176379/docs/specification.mdx',
+    },
+    producer: { name: 'agent-bundle', version: '0.1.0' },
+    project: {
+      configDigest: hash('a'),
+      configPath: 'agent-bundle.config.ts',
+      modelDigest: hash('e'),
+      packageName: '@acme/review',
+      packageVersion: '1.2.3',
+      revision: digest({ inputs: sourceInputs }),
+      sourceInputs,
+    },
+    provenance: [
+      provenance('claude/hooks.json'),
+      provenance('claude/plugin.json'),
+      provenance('codex/marketplace.json'),
+      provenance('codex/mcp.json'),
+      provenance('codex/plugin.json'),
+      provenance('install.md'),
+      provenance('install.sh'),
+      provenance('runtime/bin/review.mjs', ['agent-bundle.config.ts', 'src/review.ts']),
+      provenance('runtime/bin/review.worker.mjs', ['src/review.ts']),
+      provenance('runtime/hooks/post-commit.mjs'),
+      provenance('runtime/hooks/pre-commit.mjs'),
+      provenance('runtime/mcp/apps/dashboard.html'),
+      provenance('runtime/mcp/apps/vendor.html', []),
+      provenance('runtime/mcp/review.mjs'),
+      provenance('runtime/mcp/review.worker.mjs'),
+      provenance('runtime/scripts/lint.mjs'),
+      provenance('runtime/scripts/lint.worker.mjs'),
+    ],
+    recordVersion: artifactCompilerRecordVersion,
+    validation: {
+      artifact: { status: 'passed' },
+      projections: [{ host: 'claude', status: 'passed' }, { host: 'codex', status: 'passed' }],
+      source: { status: 'passed' },
+    },
+  },
   distribution: { channels: ['local', 'npm'], install: { instructions: 'install.md', script: 'install.sh' } },
   executables: {
     bins: [{ hosts: ['claude', 'codex'], name: 'review', path: 'runtime/bin/review.mjs', worker: 'runtime/bin/review.worker.mjs' }],
@@ -90,44 +152,28 @@ const validManifest = (): ArtifactManifest => ({
     file('codex/plugin.json', 'generated'),
     file('install.md', 'copy'),
     file('install.sh', 'copy', { mode: 0o755 }),
-    file('runtime/bin/review.mjs', 'bundle', { mode: 0o755, sourceInputs: ['agent-bundle.config.ts', 'src/review.ts'] }),
-    file('runtime/bin/review.worker.mjs', 'bundle', { sourceInputs: ['src/review.ts'] }),
+    file('runtime/bin/review.mjs', 'bundle', { mode: 0o755 }),
+    file('runtime/bin/review.worker.mjs', 'bundle'),
     file('runtime/hooks/post-commit.mjs', 'bundle'),
     file('runtime/hooks/pre-commit.mjs', 'bundle'),
     file('runtime/mcp/apps/dashboard.html', 'bundle'),
-    file('runtime/mcp/apps/vendor.html', 'prebuilt', { sourceInputs: [] }),
+    file('runtime/mcp/apps/vendor.html', 'prebuilt'),
     file('runtime/mcp/review.mjs', 'bundle'),
     file('runtime/mcp/review.worker.mjs', 'bundle'),
     file('runtime/scripts/lint.mjs', 'bundle'),
     file('runtime/scripts/lint.worker.mjs', 'bundle'),
   ],
   manifestVersion: 2,
-  producer: { name: 'agent-bundle', version: '0.1.0' },
-  project: {
-    configDigest: hash('a'),
-    configPath: 'agent-bundle.config.ts',
-    modelDigest: hash('e'),
-    packageName: '@acme/review',
-    packageVersion: '1.2.3',
-    revision: digest({ inputs: sourceInputs }),
-    sourceInputs,
-  },
   projections: [
     {
-      adapterRevision: 'claude-adapter-v1',
       builtInHost: 'claude',
       documents: { hooks: 'claude/hooks.json', plugin: 'claude/plugin.json' },
       host: 'claude',
-      observedVersion: '1.0.0',
-      schemas: [{ name: 'claude-hooks', revision: 'hooks-v1', sha256: hash('f') }],
     },
     {
-      adapterRevision: 'codex-adapter-v1',
       documents: { marketplace: 'codex/marketplace.json', mcp: 'codex/mcp.json', plugin: 'codex/plugin.json' },
       host: 'codex',
       marketplace: { name: 'acme' },
-      observedVersion: '0.147.0',
-      schemas: [],
     },
   ],
   routes: {
@@ -194,33 +240,33 @@ const validManifest = (): ArtifactManifest => ({
     }],
   },
   runtime: { node: '22.12.0' },
-  validation: {
-    artifact: { status: 'passed' },
-    projections: [{ host: 'claude', status: 'passed' }, { host: 'codex', status: 'passed' }],
-    source: { status: 'passed' },
-  },
 });
 
 /** The smallest manifest both validators accept: no optional key, every list empty. */
 const minimalManifest = (): ArtifactManifest => ({
-  agentSkills: validManifest().agentSkills,
   application: { id: 'acme.empty', name: 'Empty', version: '0.0.1' },
+  compiler: {
+    adapters: [],
+    agentSkills: validManifest().compiler.agentSkills,
+    producer: { name: 'agent-bundle', version: '0.1.0' },
+    project: {
+      configDigest: hash('a'),
+      configPath: 'agent-bundle.config.ts',
+      modelDigest: hash('e'),
+      revision: digest({ inputs: [sourceInputs[0]] }),
+      sourceInputs: [sourceInputs[0]],
+    },
+    provenance: [],
+    recordVersion: artifactCompilerRecordVersion,
+    validation: { artifact: { status: 'passed' }, projections: [], source: { status: 'passed' } },
+  },
   distribution: { channels: ['local'] },
   executables: { bins: [], hooks: [], mcpServers: [], scripts: [] },
   files: [],
   manifestVersion: 2,
-  producer: { name: 'agent-bundle', version: '0.1.0' },
-  project: {
-    configDigest: hash('a'),
-    configPath: 'agent-bundle.config.ts',
-    modelDigest: hash('e'),
-    revision: digest({ inputs: [sourceInputs[0]] }),
-    sourceInputs: [sourceInputs[0]],
-  },
   projections: [],
   routes: { digest: hash('1'), events: [], layouts: [], providers: [], scripts: [], servers: [] },
   runtime: { node: '22.12.0' },
-  validation: { artifact: { status: 'passed' }, projections: [], source: { status: 'passed' } },
 });
 
 type Mutable<Value> = Value extends readonly (infer Item)[]
@@ -324,8 +370,8 @@ const sweepMutations = (fixture: ArtifactManifest): readonly Mutation[] => {
  */
 const sweepDisagreements: ReadonlyMap<string, string> = new Map([
   [
-    '/project/sourceInputs/1: delete executable',
-    'project.revision is digest({ inputs: sourceInputs }), so dropping an optional executable flag changes the digest (digest cross-reference)',
+    '/compiler/project/sourceInputs/1: delete executable',
+    'compiler.project.revision is digest({ inputs: sourceInputs }), so dropping an optional executable flag changes the digest (digest cross-reference)',
   ],
   [
     '/routes/servers/0/routes/1/inputSchema/properties: delete path',
@@ -357,8 +403,10 @@ const parserOnlyRules: readonly { readonly apply: (manifest: MutableManifest) =>
     apply: (manifest) => { manifest.files.push({ ...manifest.files[manifest.files.length - 1]!, sha256: hash('9') }); },
     rule: 'files unique by path (duplicate sort key with a distinct payload)',
   },
-  { apply: (manifest) => { manifest.project.sourceInputs.reverse(); }, rule: 'project.sourceInputs sorted by path' },
-  { apply: (manifest) => { manifest.files[7]!.sourceInputs.reverse(); }, rule: 'files[].sourceInputs sorted' },
+  { apply: (manifest) => { manifest.compiler.project.sourceInputs.reverse(); }, rule: 'compiler.project.sourceInputs sorted by path' },
+  { apply: (manifest) => { manifest.compiler.provenance[7]!.sourceInputs.reverse(); }, rule: 'compiler.provenance[].sourceInputs sorted' },
+  { apply: (manifest) => { manifest.compiler.provenance.reverse(); }, rule: 'compiler.provenance sorted by path' },
+  { apply: (manifest) => { manifest.compiler.adapters.reverse(); }, rule: 'compiler.adapters sorted by host' },
   { apply: (manifest) => { manifest.projections.reverse(); }, rule: 'projections sorted by host' },
   { apply: (manifest) => { manifest.executables.hooks.reverse(); }, rule: 'executables.hooks sorted by (host, id)' },
   { apply: (manifest) => { manifest.executables.bins[0]!.hosts.reverse(); }, rule: 'hosts sorted' },
@@ -367,11 +415,13 @@ const parserOnlyRules: readonly { readonly apply: (manifest: MutableManifest) =>
   { apply: (manifest) => { manifest.routes.cli!.commands![0]!.aliases.reverse(); }, rule: 'cli command aliases sorted' },
   { apply: (manifest) => { manifest.routes.cli!.commands![0]!.options.reverse(); }, rule: 'cli command options sorted by key' },
   { apply: (manifest) => { manifest.executables.mcpServers[0]!.apps.reverse(); }, rule: 'mcpServers[].apps sorted by id' },
-  { apply: (manifest) => { manifest.validation.projections.reverse(); }, rule: 'validation.projections sorted by host' },
+  { apply: (manifest) => { manifest.compiler.validation.projections.reverse(); }, rule: 'compiler.validation.projections sorted by host' },
   // Cross-references between sections.
   { apply: (manifest) => { manifest.executables.bins[0]!.hosts = ['claude', 'zed']; }, rule: 'hosts name declared projections' },
   { apply: (manifest) => { manifest.executables.hooks[1]!.host = 'zed'; }, rule: 'hooks[].host names a declared projection' },
-  { apply: (manifest) => { manifest.validation.projections[1]!.host = 'cursor'; }, rule: 'validation.projections mirror projections' },
+  { apply: (manifest) => { manifest.compiler.validation.projections[1]!.host = 'cursor'; }, rule: 'compiler.validation.projections mirror projections' },
+  { apply: (manifest) => { manifest.compiler.provenance[0]!.path = 'missing.json'; }, rule: 'compiler.provenance paths match files' },
+  { apply: (manifest) => { manifest.compiler.adapters[0]!.host = 'zed'; }, rule: 'compiler.adapters hosts match projections' },
   { apply: (manifest) => { manifest.executables.bins[0]!.path = 'runtime/bin/missing.mjs'; }, rule: 'bins[].path names a manifest file' },
   { apply: (manifest) => { manifest.executables.hooks[0]!.path = 'runtime/hooks/missing.mjs'; }, rule: 'hooks[].path names a manifest file' },
   { apply: (manifest) => { manifest.executables.mcpServers[0]!.entry!.worker = 'runtime/mcp/missing.mjs'; }, rule: 'mcpServers[].entry.worker names a manifest file' },
@@ -387,18 +437,18 @@ const parserOnlyRules: readonly { readonly apply: (manifest: MutableManifest) =>
   { apply: (manifest) => { manifest.routes.servers[0]!.routes[1]!.contract = 'contract:nope#x'; }, rule: 'route.contract names a declared contract' },
   { apply: (manifest) => { manifest.routes.contracts![0]!.routes = ['review-tool', 'summary']; }, rule: 'contracts[].routes are exactly the routes binding the contract' },
   { apply: (manifest) => { manifest.routes.contracts![0]!.routes = ['nope']; }, rule: 'contracts[].routes name declared routes' },
-  { apply: (manifest) => { manifest.files[1]!.sourceInputs = ['src/other.ts']; }, rule: 'files[].sourceInputs name project source inputs' },
+  { apply: (manifest) => { manifest.compiler.provenance[1]!.sourceInputs = ['src/other.ts']; }, rule: 'compiler.provenance[].sourceInputs name project source inputs' },
   {
     apply: (manifest) => { manifest.routes.servers[0]!.routes[1]!.inputSchema!.required = ['nope']; },
     rule: 'inputSchema.required names declared properties',
   },
   // Digests.
-  { apply: (manifest) => { manifest.project.configDigest = hash('9'); }, rule: 'project.configDigest equals the configPath source input hash' },
-  { apply: (manifest) => { manifest.project.revision = hash('9'); }, rule: 'project.revision equals digest(sourceInputs)' },
+  { apply: (manifest) => { manifest.compiler.project.configDigest = hash('9'); }, rule: 'compiler.project.configDigest equals the configPath source input hash' },
+  { apply: (manifest) => { manifest.compiler.project.revision = hash('9'); }, rule: 'compiler.project.revision equals digest(sourceInputs)' },
   // Value validity beyond a grammar.
   { apply: (manifest) => { manifest.runtime.node = '18.0.0'; }, rule: 'runtime.node satisfies the generated runtime floor' },
-  { apply: (manifest) => { manifest.project.packageName = 'Not A Package'; }, rule: 'project.packageName is a valid npm name' },
-  { apply: (manifest) => { manifest.project.packageVersion = 'v1'; }, rule: 'project.packageVersion is a semantic version' },
+  { apply: (manifest) => { manifest.compiler.project.packageName = 'Not A Package'; }, rule: 'compiler.project.packageName is a valid npm name' },
+  { apply: (manifest) => { manifest.compiler.project.packageVersion = 'v1'; }, rule: 'compiler.project.packageVersion is a semantic version' },
 ];
 
 /**
@@ -407,11 +457,12 @@ const parserOnlyRules: readonly { readonly apply: (manifest: MutableManifest) =>
  */
 const schemaEncodedRules: readonly { readonly apply: (manifest: MutableManifest) => void; readonly rule: string }[] = [
   { apply: (manifest) => { (manifest as Record_).manifestVersion = 1; }, rule: 'manifestVersion is 2' },
-  { apply: (manifest) => { (manifest.producer as Record_).name = 'other'; }, rule: 'producer.name is agent-bundle' },
+  { apply: (manifest) => { (manifest.compiler.producer as Record_).name = 'other'; }, rule: 'compiler.producer.name is agent-bundle' },
+  { apply: (manifest) => { (manifest.compiler as Record_).recordVersion = 2; }, rule: 'compiler.recordVersion is 1' },
   { apply: (manifest) => { manifest.runtime.node = '22.12'; }, rule: 'runtime.node is major.minor.patch' },
   { apply: (manifest) => { manifest.runtime.node = 'v22.12.0'; }, rule: 'runtime.node has no prefix' },
   { apply: (manifest) => { manifest.runtime.node = '22.012.0'; }, rule: 'runtime.node has no leading zeros' },
-  { apply: (manifest) => { manifest.agentSkills.schemaSha256 = hash('A'); }, rule: 'sha256 fields are lowercase hex' },
+  { apply: (manifest) => { manifest.compiler.agentSkills.schemaSha256 = hash('A'); }, rule: 'sha256 fields are lowercase hex' },
   { apply: (manifest) => { manifest.routes.digest = 'abc'; }, rule: 'sha256 fields are 64 characters' },
   { apply: (manifest) => { manifest.application.description = ''; }, rule: 'strings are non-empty' },
   { apply: (manifest) => { manifest.files[0]!.path = 'agent-bundle.manifest.json'; }, rule: 'files never name the manifest' },
@@ -445,7 +496,7 @@ const schemaEncodedRules: readonly { readonly apply: (manifest: MutableManifest)
   { apply: (manifest) => { manifest.routes.layouts[0]!.serverId = 'review'; }, rule: 'root layouts carry no serverId' },
   { apply: (manifest) => { manifest.executables.mcpServers[0]!.kind = 'remote'; }, rule: 'only compiled servers carry an entry' },
   { apply: (manifest) => { manifest.executables.mcpServers[0]!.apps[1]!.path = 'runtime/mcp/apps/vendor.html'; }, rule: 'prebuilt apps carry no path' },
-  { apply: (manifest) => { (manifest.validation.artifact as Record_).status = 'failed'; }, rule: 'validation status is passed' },
+  { apply: (manifest) => { (manifest.compiler.validation.artifact as Record_).status = 'failed'; }, rule: 'validation status is passed' },
   { apply: (manifest) => { (manifest.routes.servers[0]!.routes[1]!.inputSchema as Record_).additionalProperties = true; }, rule: 'inputSchema is closed' },
   { apply: (manifest) => { (manifest.routes.servers[0]!.routes[1]!.inputSchema as Record_).type = 'array'; }, rule: 'inputSchema is an object schema' },
   {
@@ -516,7 +567,7 @@ it('agrees with the parser on every delete, unknown-key, and retype mutation, ex
     '/executables/hooks/1: delete timeout',
     '/executables/mcpServers/0/entry: delete worker',
     '/executables/scripts/0: delete rendered',
-    '/project: delete packageVersion',
+    '/compiler/project: delete packageVersion',
     '/projections/1: delete marketplace',
     '/routes: delete cli',
     '/routes/cli/commands/0: delete mcp',

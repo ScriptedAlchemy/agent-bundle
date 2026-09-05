@@ -167,15 +167,18 @@ export class ArtifactInspectionService {
     const validated = await this.#validatedManifest(reference.root);
     const { manifest } = validated;
     const sourceInputs = new Map<string, ArtifactInspectionSourceInput>();
-    for (const input of manifest.project.sourceInputs) {
+    for (const input of manifest.compiler.project.sourceInputs) {
       sourceInputs.set(input.path, Object.freeze({ path: input.path, sha256: input.sha256 }));
     }
+    const provenanceByPath = new Map(
+      manifest.compiler.provenance.map((entry) => [entry.path, entry.sourceInputs]),
+    );
 
     const files = Object.freeze(manifest.files
-      .map((file) => this.#file(file, sourceInputs))
+      .map((file) => this.#file(file, sourceInputs, provenanceByPath.get(file.path) ?? []))
       .sort(comparePaths));
     const filesByPath = new Map(files.map((file) => [file.path, file]));
-    const project = this.#project(manifest.project, sourceInputs);
+    const project = this.#project(manifest.compiler.project, sourceInputs);
     const runtime = this.#runtime(filesByPath, manifest, validated.runtime);
 
     return Object.freeze({
@@ -221,8 +224,9 @@ export class ArtifactInspectionService {
   #file(
     file: ArtifactManifest['files'][number],
     sourceInputs: ReadonlyMap<string, ArtifactInspectionSourceInput>,
+    provenanceInputs: readonly string[],
   ): ArtifactInspectionFile {
-    const inputs = file.sourceInputs.map((path) => sourceInputs.get(path));
+    const inputs = provenanceInputs.map((path) => sourceInputs.get(path));
     if (inputs.some((input) => input === undefined)) {
       throw inspectionError(
         'ARTIFACT_INSPECTION_INVALID',
@@ -241,7 +245,7 @@ export class ArtifactInspectionService {
   }
 
   #project(
-    project: ArtifactManifest['project'],
+    project: ArtifactManifest['compiler']['project'],
     sourceInputs: ReadonlyMap<string, ArtifactInspectionSourceInput>,
   ): ProjectContext {
     const inputs = project.sourceInputs.map((input) => sourceInputs.get(input.path));

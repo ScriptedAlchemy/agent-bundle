@@ -304,7 +304,7 @@ export const runDeterministicTrial = async (
     ...(pluginFailure === undefined ? {} : { pluginFailure }),
     prompt: options.evalCase.prompt,
     provenance: Object.freeze({
-      hostCliVersion: deterministicHarnessIdentity(options.artifact.manifest.producer.version),
+      hostCliVersion: deterministicHarnessIdentity(options.artifact.manifest.compiler.producer.version),
       invocation: Object.freeze({ ...options.evalCase.invocation }),
       semanticGrader: null,
     }),

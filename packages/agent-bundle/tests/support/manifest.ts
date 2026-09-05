@@ -3,7 +3,11 @@ import { join } from 'node:path';
 
 import { createDefaultRegistry } from '../../src/adapters/registry.ts';
 import { listArtifactFiles, writeManifest } from '../../src/build/emit.ts';
-import { artifactManifestVersion, type ArtifactManifest } from '../../src/build/manifest.ts';
+import {
+  artifactCompilerRecordVersion,
+  artifactManifestVersion,
+  type ArtifactManifest,
+} from '../../src/build/manifest.ts';
 import { digest } from '../../src/core/digest.ts';
 import { agentSkillsSchemaRevision } from '../../src/schemas/agent-skills/contract.ts';
 import { deepFreeze } from '../../src/core/freeze.ts';
@@ -39,9 +43,12 @@ export const writeFixtureManifest = async (options: {
       ...((file.mode & 0o111) === 0 ? {} : { mode: file.mode }),
       path: file.path,
       sha256: file.sha256,
-      sourceInputs: ['agent-bundle.config.ts'],
     }))
     .sort((left, right) => left.path.localeCompare(right.path));
+  const provenance = files.map((file) => ({
+    path: file.path,
+    sourceInputs: ['agent-bundle.config.ts'],
+  }));
   const pluginPaths: Readonly<Record<string, string>> = {
     claude: '.claude-plugin/plugin.json',
     codex: '.codex-plugin/plugin.json',
@@ -52,10 +59,17 @@ export const writeFixtureManifest = async (options: {
   const projections = projectionMetadata.map((projection) => {
     const plugin = pluginPaths[projection.host];
     return {
-      ...projection,
+      ...(projection.builtInHost === undefined ? {} : { builtInHost: projection.builtInHost }),
       documents: plugin !== undefined && filePaths.has(plugin) ? { plugin } : {},
+      host: projection.host,
     };
   });
+  const adapters = projectionMetadata.map((projection) => ({
+    adapterRevision: projection.adapterRevision,
+    host: projection.host,
+    observedVersion: projection.observedVersion,
+    schemas: projection.schemas,
+  }));
   const applicationDocumentPath = projections
     .map(({ documents }) => documents.plugin)
     .find((path): path is string => path !== undefined);
@@ -69,12 +83,30 @@ export const writeFixtureManifest = async (options: {
   return writeManifest({
     artifactRoot: options.artifactRoot,
     manifest: {
-      agentSkills: agentSkillsSchemaRevision,
       application: {
         ...(plugin?.description === undefined ? {} : { description: plugin.description }),
         id: `plugin:${plugin?.name ?? 'fixture'}`,
         name: plugin?.name ?? 'fixture',
         version: plugin?.version ?? '1.0.0',
+      },
+      compiler: {
+        adapters,
+        agentSkills: agentSkillsSchemaRevision,
+        producer: { name: 'agent-bundle', version: '0.1.0' },
+        project: {
+          configDigest: fixtureConfigDigest,
+          configPath: 'agent-bundle.config.ts',
+          modelDigest: 'b'.repeat(64),
+          revision: digest({ inputs: fixtureSourceInputs }),
+          sourceInputs: fixtureSourceInputs,
+        },
+        provenance,
+        recordVersion: artifactCompilerRecordVersion,
+        validation: {
+          artifact: { status: 'passed' },
+          projections: projections.map(({ host }) => ({ host, status: 'passed' as const })),
+          source: { status: 'passed' },
+        },
       },
       distribution: { channels: ['local'] },
       executables: {
@@ -85,14 +117,6 @@ export const writeFixtureManifest = async (options: {
       },
       files,
       manifestVersion: artifactManifestVersion,
-      producer: { name: 'agent-bundle', version: '0.1.0' },
-      project: {
-        configDigest: fixtureConfigDigest,
-        configPath: 'agent-bundle.config.ts',
-        modelDigest: 'b'.repeat(64),
-        revision: digest({ inputs: fixtureSourceInputs }),
-        sourceInputs: fixtureSourceInputs,
-      },
       projections,
       routes: {
         digest: 'c'.repeat(64),
@@ -103,11 +127,6 @@ export const writeFixtureManifest = async (options: {
         servers: [],
       },
       runtime: { node: '22.12.0' },
-      validation: {
-        artifact: { status: 'passed' },
-        projections: projections.map(({ host }) => ({ host, status: 'passed' as const })),
-        source: { status: 'passed' },
-      },
     },
   });
 };
