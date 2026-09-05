@@ -19,7 +19,8 @@ npx agent-bundle dev --root . --port 3100 --no-open
 - **仅 loopback。** 服务器只绑定 loopback，绝不会暴露到本机之外。
 - **前台开发会话，而不是托管服务。** 关闭进程即结束会话。
 - **按 epoch 固定的读取。** 没有任何东西会隐式跟随一次新构建；读取产物的表面会指明自己读取的 epoch。
-- **只做可信本地操作。** 浏览器绝不提供命令、工作目录、原生模型或凭据。见[安全](../../reference/security.mdx)。
+- **只做可信本地操作。** 浏览器只能选择一项已编译的命令投影；它绝不提供任意可执行文件、工作目录、
+  原生模型或凭据。见[安全](../../reference/security.mdx)。
 
 ## Workbench 导航
 
@@ -71,6 +72,10 @@ schema 生成，并提供适用的夹具以及为该叶子保留的上次输入�
 
 浏览器不会导入或执行任意路由模块。服务器运行生成式可执行文件所用的同一条 RSC 路由路径，并把其语义
 渲染事件流与最终的 Agent Document 发送给 Workbench。
+
+带有同目录 CLI 投影的工具在树中仍只有一个叶子和一个规范 `tool:<server>/<tool>` 操作。其表面选择器提供
+**MCP**、**CLI `<command>`** 与 **Unit render**。CLI 选项会显示投影后的 argv，并运行生成 CLI bin 的
+确认、默认值、`mapInput` 与规范校验；它不会创建第二个 `cli:` 操作。
 
 ### 事件路由
 
@@ -165,16 +170,25 @@ Workbench 外壳，因此路由、trace、Problems 与 Advanced 的深度链接�
 - `GET /api/routes/invocations/<id>` 返回一次调用。
 - `/api/project/events` 以 `route.invocation` 事件发布已完成的摘要。
 
-请求默认使用 `mode: "production"`。生产模式从最近发布的编译器 epoch 执行所选路由，因此编译器
-alias 与 define、生成入口的请求作用域、providers、持久状态、CLI `mapInput` 与确认、事件
-preflight 以及渲染语义都与已安装制品一致。`mode: "unit-render"` 是显式的组件预览后备模式：
-它通过 route-unit 测试工具加载实时源码并挂载一次性状态，不能作为制品一致性的证明。
+请求以 `routeId` 标识一个规范操作，并可选择一种有固定形状的 `surface`：
+`{ kind: "mcp" }`、`{ kind: "cli", command, args }`、
+`{ kind: "event", host?, fixtureId? }`、`{ kind: "script" }` 或
+`{ kind: "unit-render" }`。省略时，表面由路由种类决定：tool/resource/prompt 使用 MCP，
+event 使用 event，script 使用 script，独立 CLI 路由使用其已编译命令和空 argv。
+`unit-render` 绝不会成为默认值。
+
+生产表面从最近发布的编译器 epoch 执行所选路由，因此编译器 alias 与 define、生成入口的请求作用域、
+providers、持久状态、CLI `mapInput` 与确认、事件 preflight 以及渲染语义都与已安装制品一致。
+显式的 `unit-render` 表面是组件预览后备模式：它通过 route-unit 测试工具加载实时源码并挂载一次性状态，
+不能作为制品一致性的证明。投影后的 CLI 命令保留规范 `tool:` 路由 id；命令不匹配报告 `AB8253`，
+使用看似重复的 `cli:` id 则报告 `AB8254`，并给出应使用的规范 id 与表面。
 生产状态位于 `<project>/.agent-bundle/state`，在 retirement 会移除的已发布 epoch 之外。它通过
 `AGENT_BUNDLE_STATE_ROOT` 与开发期 MCP 会话共享，因此能跨一次成功的重新发布保留；`unit-render`
 仍为每次运行使用新的临时状态根。
 
-该信封携带规范输入、请求上下文、providers、有序渲染事件、最终的 Agent Document、结构化结果、投影、
-诊断与执行计时。`providers` 列出子进程实际测到的结果（`mounted`、`failed` 或 `skipped`），仅在测到
+该信封在 `routeId` 旁记录解析后的 `surface`，并携带规范输入、请求上下文、providers、有序渲染事件、
+最终的 Agent Document、结构化结果、投影、诊断与执行计时。`providers` 列出子进程实际测到的结果
+（`mounted`、`failed` 或 `skipped`），仅在测到
 时长时带 `durationMs`。子进程未报告观测值时（普通脚本，或在任何 provider 运行之前失败），每个目录
 provider 为 `unobserved` 且省略 `durationMs`；`0` 是测得的零，不是「未知」。`timings` 只列出已测量
 阶段：`render`（子进程的渲染或普通脚本运行时长）、`projection`（服务端的宿主投影时间），以及观测到
@@ -182,7 +196,8 @@ provider 为 `unobserved` 且省略 `durationMs`；`0` 是测得的零，不是�
 不会伪造 `failed` 的 provider 行。被表示的 `Agent.Error` 仍是一份已渲染结果；未知路由或
 invocation id（`AB8231`）、不可用的 epoch（`AB8232`）、渲染超时或崩溃（`AB8236`）、格式错误的请求
 （`AB8237`）、未知 fixture id（`AB8238`）、在获得并发槽位前发布修订已变更的排队调用（`AB8239`）、不可用的编译制品
-（`AB8250`）、缺失的已编译路由可执行项（`AB8251`），以及已编译投影或 preflight 失败（`AB8252`）会作为诊断报告。
+（`AB8250`）、缺失的已编译路由可执行项（`AB8251`）、已编译投影或 preflight 失败（`AB8252`）、
+CLI 命令/操作不匹配（`AB8253`）以及投影形成的重复 CLI id（`AB8254`）会作为诊断报告。
 各条触发条件与恢复指引见[诊断参考](../../reference/diagnostics.md)。
 
 ## 以编程方式使用同一个会话

@@ -34,6 +34,13 @@ const manifest: RouteManifest = {
       options: [],
       path: ['library', 'audit'],
       routeId: 'cli:library/audit',
+    }, {
+      aliases: [],
+      exitCode: 'zero',
+      options: [],
+      path: ['alpha'],
+      projection: { mapInput: true, module: 'src/mcp/alpha/tools/a-tool.cli.ts' },
+      routeId: 'tool:alpha/a-tool',
     }],
     mode: 'generated',
     routes: [route('cli:library/audit', 'cli', 'src/cli/library/audit.ts')],
@@ -120,6 +127,11 @@ describe('application tree derivation', () => {
     expect(mcp.servers[0]!.subgroups[0]!.leaves.map((leaf) => leaf.label)).toEqual([
       'a-tool', 'z-tool',
     ]);
+    expect(mcp.servers[0]!.subgroups[0]!.leaves[0]?.command).toMatchObject({
+      path: ['alpha'],
+      routeId: 'tool:alpha/a-tool',
+    });
+    expect(applicationLeaves(result).filter((leaf) => leaf.ref.kind === 'cli')).toHaveLength(1);
     expect(mcp.servers[0]!.subgroups.map((group) => group.leaves[0]!.execution)).toEqual([
       'invoke', 'invoke', 'invoke', 'preview',
     ]);

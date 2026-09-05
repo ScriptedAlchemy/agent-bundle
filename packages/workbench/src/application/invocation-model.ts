@@ -128,5 +128,6 @@ export const invocationSummaryOf = (
   sourceRevision: invocation.sourceRevision,
   startedAt: invocation.startedAt,
   status: invocation.status,
+  surface: invocation.surface,
   timings: invocation.timings,
 });

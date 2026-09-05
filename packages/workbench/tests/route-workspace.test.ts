@@ -37,7 +37,7 @@ const controllerWith = (overrides: Partial<RouteInvocationController> = {}): Rou
 });
 
 const succeeded = controllerWith({
-  request: { correlationId: 'corr-1', input: { title: 'Dune' }, routeId: toolLeaf.routeId! },
+  request: { correlationId: 'corr-1', input: { title: 'Dune' }, routeId: toolLeaf.routeId!, surface: { kind: 'mcp' } },
   state: { durationMs: 432, invocation, phase: 'succeeded' },
 });
 
@@ -100,13 +100,28 @@ describe('RouteWorkspace dispatch', () => {
     expect(markup).not.toContain('role="tabpanel" aria-label="Source"');
     expect(markup).toContain('search_audible');
     expect(markup).toContain('Search Audible regions and return ranked identity evidence.');
+    expect(markup).toContain('aria-label="Invocation surface"');
+    expect(markup).toContain('>MCP</button>');
+    expect(markup).toContain('>CLI <code>audible search</code></button>');
+    expect(markup).toContain('>Unit render</button>');
+    expect(markup).toContain('tool:curator/search_audible · MCP');
     expect(markup).toContain('Title (required)');
     expect(markup).toContain('via dev-server');
     expect(markup).toContain('Not run yet');
     // The fake backend answers the request shape the workspace sends.
-    const answered = await backend.invoke(toolLeaf, { correlationId: 'x', input: { title: 'Dune' }, routeId: toolLeaf.routeId! });
+    const answered = await backend.invoke(toolLeaf, {
+      correlationId: 'x',
+      input: { title: 'Dune' },
+      routeId: toolLeaf.routeId!,
+      surface: { kind: 'mcp' },
+    });
     expect(answered.correlationId).toBe('x');
-    expect(backend.requests).toEqual([{ correlationId: 'x', input: { title: 'Dune' }, routeId: 'tool:curator/search_audible' }]);
+    expect(backend.requests).toEqual([{
+      correlationId: 'x',
+      input: { title: 'Dune' },
+      routeId: 'tool:curator/search_audible',
+      surface: { kind: 'mcp' },
+    }]);
   });
 
   it('says when no backend accepts the leaf', () => {

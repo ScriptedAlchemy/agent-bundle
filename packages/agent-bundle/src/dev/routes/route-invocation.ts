@@ -21,29 +21,27 @@ export type RouteInvocationKind = 'cli' | 'event-route' | 'prompt' | 'resource' 
 /** The hosts an event route can be invoked as; `canonical` submits the canonical payload directly. */
 export type RouteInvocationEventHost = 'claude' | 'codex' | 'cursor';
 
-export interface RouteInvocationEventOptions {
-  /**
-   * When present, `input` is the host's native hook payload and the service
-   * canonicalizes it exactly as the emitted wrapper would (the lifecycle
-   * replay path); when absent, `input` is the canonical event payload.
-   */
-  readonly host?: RouteInvocationEventHost;
-  /** A fixture id from the route's manifest fixtures; the service seeds `input` from it when `input` is absent. */
-  readonly fixtureId?: string;
-}
+export type RouteInvocationSurface =
+  | Readonly<{ readonly kind: 'mcp' }>
+  | Readonly<{ readonly args: readonly string[]; readonly command: string; readonly kind: 'cli' }>
+  | Readonly<{
+    readonly fixtureId?: string;
+    /** When present, `input` is the host's native hook payload; otherwise it is canonical. */
+    readonly host?: RouteInvocationEventHost;
+    readonly kind: 'event';
+  }>
+  | Readonly<{ readonly kind: 'script' }>
+  | Readonly<{ readonly kind: 'unit-render' }>;
 
 export interface RouteInvocationRequest {
-  /** CLI routes only: the argv the routed CLI would receive after the command path. */
-  readonly args?: readonly string[];
   /** Browser-minted correlation id, echoed on the envelope and on the `route.invocation` project event. */
   readonly correlationId?: string;
-  readonly event?: RouteInvocationEventOptions;
-  /** Tool/prompt/script input, event payload (canonical or native — see `event.host`), or resource parameters. */
+  /** Tool/prompt input, event payload (canonical or native), script input, or resource parameters. */
   readonly input?: JsonValue;
-  /** Generated-entry parity by default; component-only rendering is an explicit fallback. */
-  readonly mode?: 'production' | 'unit-render';
   /** The compiled route id, for example `tool:curator/search_audible`, `event:tool/before`, `cli:audible/search`, `script:sync`. */
   readonly routeId: string;
+  /** Selected execution surface. Omission selects the canonical default for the route kind. */
+  readonly surface?: RouteInvocationSurface;
 }
 
 export type RouteInvocationStatus = 'failed' | 'succeeded';
@@ -130,6 +128,8 @@ export interface RouteInvocationSummary {
   readonly sourceRevision: string;
   readonly startedAt: string;
   readonly status: RouteInvocationStatus;
+  /** The resolved surface, including defaults when the request omitted it. */
+  readonly surface: RouteInvocationSurface;
   readonly timings: readonly RouteInvocationTiming[];
 }
 

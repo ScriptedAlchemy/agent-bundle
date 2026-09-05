@@ -42,10 +42,11 @@ import type {
   RouteInvocationKind,
   RouteInvocationProvider,
   RouteInvocationRequest,
+  RouteInvocationSurface,
   RouteInvocationSummary,
   RouteInvocationTiming,
 } from './route-invocation.ts';
-import type { RouteManifest, RouteManifestRoute } from './route-manifest.ts';
+import type { RouteManifest, RouteManifestCliCommand, RouteManifestRoute } from './route-manifest.ts';
 import type { RouteManifestRouteService } from './route-manifest-routes.ts';
 
 export const ROUTE_INVOCATION_UNKNOWN_ROUTE_CODE = 'AB8231';
@@ -54,6 +55,8 @@ export const ROUTE_INVOCATION_CHILD_FAILURE_CODE = 'AB8236';
 export const ROUTE_INVOCATION_MALFORMED_REQUEST_CODE = 'AB8237';
 export const ROUTE_INVOCATION_UNKNOWN_FIXTURE_CODE = 'AB8238';
 export const ROUTE_INVOCATION_STALE_REVISION_CODE = 'AB8239';
+export const ROUTE_INVOCATION_CLI_COMMAND_MISMATCH_CODE = 'AB8253';
+export const ROUTE_INVOCATION_PROJECTED_CLI_ID_CODE = 'AB8254';
 export const ROUTE_INVOCATION_STALE_REVISION_MESSAGE =
   'The published route manifest changed while this invocation waited to run. Retry against the current revision.';
 
@@ -118,16 +121,14 @@ export interface RouteInvocationServiceOptions {
 }
 
 export interface RouteInvocationChildRequest {
-  readonly args?: readonly string[];
   readonly artifactEpoch?: string;
   readonly artifactRoot?: string;
   readonly context: RequestContextProvenance;
-  readonly eventTarget?: RouteInvocationEventHost;
   readonly input: JsonValue;
   readonly manifest: AgentBundleTestManifest;
-  readonly mode?: 'production' | 'unit-render';
   readonly routeId: string;
   readonly stateRoot: string;
+  readonly surface: RouteInvocationSurface;
 }
 
 export interface RouteInvocationChildResult {
@@ -160,6 +161,8 @@ export type RouteInvocationChildResponse =
 export class RouteInvocationRequestError extends Error {
   readonly code:
     | typeof ROUTE_INVOCATION_MALFORMED_REQUEST_CODE
+    | typeof ROUTE_INVOCATION_CLI_COMMAND_MISMATCH_CODE
+    | typeof ROUTE_INVOCATION_PROJECTED_CLI_ID_CODE
     | typeof ROUTE_INVOCATION_UNKNOWN_FIXTURE_CODE
     | typeof ROUTE_INVOCATION_UNKNOWN_ROUTE_CODE
     | typeof ROUTE_INVOCATION_MANIFEST_UNAVAILABLE_CODE
@@ -189,35 +192,52 @@ const malformed = (): never => {
 const boundedString = (value: unknown, maxLength = 4_096): value is string =>
   typeof value === 'string' && value.length > 0 && value.length <= maxLength && value.trim() === value && !value.includes('\0');
 
-const eventOptions = (value: unknown): RouteInvocationRequest['event'] => {
-  if (!isRecord(value) || !hasOnlyOwnKeys(value, ['fixtureId', 'host'])) return malformed();
-  const fixtureId = value.fixtureId;
-  const host = value.host;
-  if (fixtureId !== undefined && !boundedString(fixtureId)) return malformed();
-  if (host !== undefined && (typeof host !== 'string' || !concreteHosts.has(host as RouteInvocationEventHost))) {
-    return malformed();
+const surfaceOptions = (value: unknown): RouteInvocationSurface => {
+  if (!isRecord(value) || !boundedString(value.kind, 32)) return malformed();
+  switch (value.kind) {
+    case 'mcp':
+    case 'script':
+    case 'unit-render':
+      if (!hasOnlyOwnKeys(value, ['kind'])) return malformed();
+      return Object.freeze({ kind: value.kind });
+    case 'cli': {
+      if (!hasOnlyOwnKeys(value, ['args', 'command', 'kind'])) return malformed();
+      if (!boundedString(value.command)) return malformed();
+      if (
+        !Array.isArray(value.args)
+        || value.args.length > 1_024
+        || value.args.some((argument) => !boundedString(argument, 16_384))
+      ) return malformed();
+      return Object.freeze({ args: [...value.args] as readonly string[], command: value.command, kind: 'cli' });
+    }
+    case 'event': {
+      if (!hasOnlyOwnKeys(value, ['fixtureId', 'host', 'kind'])) return malformed();
+      const fixtureId = value.fixtureId;
+      const host = value.host;
+      if (fixtureId !== undefined && !boundedString(fixtureId)) return malformed();
+      if (host !== undefined && (typeof host !== 'string' || !concreteHosts.has(host as RouteInvocationEventHost))) {
+        return malformed();
+      }
+      return Object.freeze({
+        ...(fixtureId === undefined ? {} : { fixtureId }),
+        ...(host === undefined ? {} : { host: host as RouteInvocationEventHost }),
+        kind: 'event',
+      });
+    }
+    default:
+      return malformed();
   }
-  return Object.freeze({
-    ...(fixtureId === undefined ? {} : { fixtureId }),
-    ...(host === undefined ? {} : { host: host as RouteInvocationEventHost }),
-  });
 };
 
 /** Strict wire decoder used by both the HTTP boundary and unit callers. */
 export const parseRouteInvocationRequest = (
   value: Readonly<Record<string, unknown>>,
 ): RouteInvocationRequest => {
-  if (!hasOnlyOwnKeys(value, ['args', 'correlationId', 'event', 'input', 'mode', 'routeId'])) return malformed();
+  if (!hasOnlyOwnKeys(value, ['correlationId', 'input', 'routeId', 'surface'])) return malformed();
   const routeId = value.routeId;
   const correlationId = value.correlationId;
-  const args = value.args;
-  const mode = value.mode;
   if (!boundedString(routeId)) return malformed();
   if (correlationId !== undefined && !boundedString(correlationId, 256)) return malformed();
-  if (mode !== undefined && mode !== 'production' && mode !== 'unit-render') return malformed();
-  if (args !== undefined && (!Array.isArray(args) || args.length > 1_024 || args.some((argument) => !boundedString(argument, 16_384)))) {
-    return malformed();
-  }
   let input: JsonValue | undefined;
   if (Object.hasOwn(value, 'input')) {
     try {
@@ -226,14 +246,12 @@ export const parseRouteInvocationRequest = (
       return malformed();
     }
   }
-  const event = value.event === undefined ? undefined : eventOptions(value.event);
+  const surface = value.surface === undefined ? undefined : surfaceOptions(value.surface);
   return deepFreeze({
-    ...(args === undefined ? {} : { args: [...args] as readonly string[] }),
     ...(correlationId === undefined ? {} : { correlationId }),
-    ...(event === undefined ? {} : { event }),
     ...(input === undefined ? {} : { input }),
-    ...(mode === undefined ? {} : { mode }),
     routeId,
+    ...(surface === undefined ? {} : { surface }),
   });
 };
 
@@ -307,6 +325,88 @@ const allManifestRoutes = (manifest: RouteManifest): readonly RouteManifestRoute
   ...manifest.scripts,
 ]);
 
+const commandName = (command: RouteManifestCliCommand): string => command.path.join(' ');
+
+const projectedCommandForCliId = (
+  manifest: RouteManifest,
+  routeId: string,
+): RouteManifestCliCommand | undefined => {
+  if (!routeId.startsWith('cli:')) return undefined;
+  const path = routeId.slice('cli:'.length);
+  return manifest.cli?.commands?.find((command) =>
+    command.projection !== undefined
+    && command.routeId.startsWith('tool:')
+    && command.path.join('/') === path);
+};
+
+const defaultSurface = (
+  route: RouteManifestRoute,
+  manifest: RouteManifest,
+): RouteInvocationSurface => {
+  switch (route.kind) {
+    case 'tool':
+    case 'resource':
+    case 'prompt':
+      return Object.freeze({ kind: 'mcp' });
+    case 'event-route':
+      return Object.freeze({ kind: 'event' });
+    case 'script':
+      return Object.freeze({ kind: 'script' });
+    case 'cli': {
+      const command = manifest.cli?.commands?.find((candidate) => candidate.routeId === route.id);
+      if (command === undefined) return malformed();
+      return Object.freeze({ args: Object.freeze([]), command: commandName(command), kind: 'cli' });
+    }
+    case 'app':
+      return malformed();
+    default: {
+      const exhaustive: never = route.kind;
+      return exhaustive;
+    }
+  }
+};
+
+const resolvedSurface = (
+  route: RouteManifestRoute,
+  requested: RouteInvocationSurface | undefined,
+  manifest: RouteManifest,
+): RouteInvocationSurface => {
+  const surface = requested ?? defaultSurface(route, manifest);
+  switch (surface.kind) {
+    case 'mcp':
+      if (route.kind !== 'tool' && route.kind !== 'resource' && route.kind !== 'prompt') return malformed();
+      return surface;
+    case 'event':
+      if (route.kind !== 'event-route') return malformed();
+      return surface;
+    case 'script':
+      if (route.kind !== 'script') return malformed();
+      return surface;
+    case 'unit-render':
+      if (route.kind === 'script') return malformed();
+      return surface;
+    case 'cli': {
+      if (route.kind !== 'cli' && route.kind !== 'tool') return malformed();
+      const command = manifest.cli?.commands?.find((candidate) =>
+        candidate.routeId === route.id
+        && commandName(candidate) === surface.command
+        && (route.kind === 'cli' || candidate.projection !== undefined));
+      if (command === undefined) {
+        throw new RouteInvocationRequestError(
+          ROUTE_INVOCATION_CLI_COMMAND_MISMATCH_CODE,
+          `CLI command ${JSON.stringify(surface.command)} does not project onto canonical operation ${JSON.stringify(route.id)}.`,
+          400,
+        );
+      }
+      return surface;
+    }
+    default: {
+      const exhaustive: never = surface;
+      return exhaustive;
+    }
+  }
+};
+
 const diagnostic = (code: string, message: string): Diagnostic =>
   Object.freeze({ code, message, severity: 'error' });
 
@@ -318,18 +418,22 @@ const unavailable = <Value>(
 const contextFor = (
   route: RouteManifestRoute,
   root: string,
-  host: RouteInvocationEventHost | undefined,
+  surface: RouteInvocationSurface,
 ): RequestContextProvenance => deepFreeze({
   actor: unavailable('not-provided'),
-  host: host === undefined
+  host: surface.kind !== 'event' || surface.host === undefined
     ? unavailable('host-omitted')
-    : { source: 'derived', state: 'available', value: { name: host } },
+    : { source: 'derived', state: 'available', value: { name: surface.host } },
   invocation: {
-    kind: route.kind === 'event-route'
+    kind: surface.kind === 'event'
       ? 'event'
-      : route.kind === 'cli' ? 'cli' : route.kind === 'script' ? 'script' : 'tool',
+      : surface.kind === 'cli' ? 'cli' : surface.kind === 'script' ? 'script' : 'tool',
     operationId: route.id,
-    surface: route.event ?? route.id.slice(route.id.lastIndexOf('/') + 1),
+    surface: surface.kind === 'cli'
+      ? surface.command
+      : surface.kind === 'event'
+        ? route.event
+        : surface.kind,
   },
   lineage: unavailable('no-shared-runtime'),
   session: unavailable('not-provided'),
@@ -580,7 +684,7 @@ const resultExitCode = (policy: 'result' | 'zero', result: JsonValue | undefined
 
 const invocationProjection = (
   route: RouteManifestRoute,
-  request: RouteInvocationRequest,
+  surface: RouteInvocationSurface,
   input: JsonValue,
   result: JsonValue | undefined,
   mcp: JsonObject | undefined,
@@ -589,18 +693,21 @@ const invocationProjection = (
   prepared: RouteInvocationPreparedProject,
   registry: TargetRegistry,
 ): RouteInvocation['projection'] => {
-  if (route.kind === 'tool') {
-    if (mcp === undefined) throw new Error('Route invocation child omitted the tool MCP projection.');
-    return deepFreeze({ mcp });
-  }
-  if (route.kind === 'resource' || route.kind === 'prompt') {
+  if (surface.kind === 'mcp' || (surface.kind === 'unit-render' && route.kind === 'tool')) {
+    if (route.kind === 'tool') {
+      if (mcp === undefined) throw new Error('Route invocation child omitted the tool MCP projection.');
+      return deepFreeze({ mcp });
+    }
     return deepFreeze({ ...(jsonObject(result) === undefined ? {} : { mcp: jsonObject(result) }) });
   }
-  if (route.kind === 'cli' || route.kind === 'script') {
-    const command = manifest.cli?.commands?.find((candidate) => candidate.routeId === route.id);
+  if (surface.kind === 'cli' || surface.kind === 'script') {
+    const command = surface.kind === 'cli'
+      ? manifest.cli?.commands?.find((candidate) =>
+          candidate.routeId === route.id && commandName(candidate) === surface.command)
+      : undefined;
     // A plain script's exit code is its process status, carried in `result`;
     // a rendered script exits zero like a rendered CLI command.
-    const policy = route.kind === 'script'
+    const policy = surface.kind === 'script'
       ? (plainScriptFor(prepared, route) === undefined ? 'zero' : 'result')
       : command?.exitCode ?? 'zero';
     return deepFreeze({
@@ -611,8 +718,8 @@ const invocationProjection = (
       },
     });
   }
-  if (route.kind === 'event-route') {
-    const selected = request.event?.host === undefined ? prepared.targets : [request.event.host];
+  if (surface.kind === 'event') {
+    const selected = surface.host === undefined ? prepared.targets : [surface.host];
     const hosts = selected.map((host) => {
       const mapped = eventContract(registry, host, route.event as CanonicalAgentEvent);
       if (mapped === undefined) {
@@ -630,7 +737,7 @@ const invocationProjection = (
           route.event as CanonicalAgentEvent,
           host,
           mapped.nativeEvent,
-          request.event?.host === host && isJsonRecord(input) ? input : undefined,
+          surface.host === host && isJsonRecord(input) ? input : undefined,
         );
         return { diagnostics: [], host, ...(native === undefined ? {} : { native: jsonObject(native) }) };
       } catch (error) {
@@ -645,7 +752,9 @@ const invocationProjection = (
     });
     return deepFreeze({ hosts });
   }
-  return {};
+  if (surface.kind === 'unit-render') return {};
+  const exhaustive: never = surface;
+  return exhaustive;
 };
 
 const failedInvocation = (input: {
@@ -658,6 +767,7 @@ const failedInvocation = (input: {
   readonly request: RouteInvocationRequest;
   readonly route: RouteManifestRoute;
   readonly startedAt: Date;
+  readonly surface: RouteInvocationSurface;
 }): RouteInvocation => {
   const renderedInput = input.request.input;
   const canonical = input.route.kind === 'event-route' && renderedInput !== undefined && isJsonRecord(renderedInput)
@@ -680,6 +790,7 @@ const failedInvocation = (input: {
     sourceRevision: input.manifest.sourceRevision,
     startedAt: input.startedAt.toISOString(),
     status: 'failed',
+    surface: input.surface,
     timings: [timing('elapsed', input.startedAt, input.completedAt.getTime() - input.startedAt.getTime())],
   });
 };
@@ -741,13 +852,22 @@ export class RouteInvocationService {
     }
     const route = allManifestRoutes(queued).find((candidate) => candidate.id === request.routeId);
     if (route === undefined || !invocationKinds.has(route.kind as RouteInvocationKind)) {
+      const projected = projectedCommandForCliId(queued, request.routeId);
+      if (projected !== undefined) {
+        const command = commandName(projected);
+        throw new RouteInvocationRequestError(
+          ROUTE_INVOCATION_PROJECTED_CLI_ID_CODE,
+          `CLI operation ${JSON.stringify(request.routeId)} is a projection of canonical operation ${JSON.stringify(projected.routeId)}; invoke that route with surface ${JSON.stringify({ kind: 'cli', command, args: [] })}.`,
+          400,
+        );
+      }
       throw new RouteInvocationRequestError(
         ROUTE_INVOCATION_UNKNOWN_ROUTE_CODE,
         `Route ${JSON.stringify(request.routeId)} is not available for invocation.`,
         404,
       );
     }
-    if (request.event !== undefined && route.kind !== 'event-route') return malformed();
+    const surface = resolvedSurface(route, request.surface, queued);
     const id = `inv_${this.#now().getTime().toString(36)}${randomBytes(8).toString('hex')}`;
     const startedAt = this.#now();
     const running = this.#semaphore.run<RouteInvocation>(async () => {
@@ -775,14 +895,7 @@ export class RouteInvocationService {
             409,
           );
         }
-        if (
-          request.args !== undefined
-          && route.kind !== 'cli'
-          && !prepared.manifest.cliCommands.some((command) => command.routeId === route.id)
-        ) {
-          return malformed();
-        }
-        const fixtureId = request.event?.fixtureId;
+        const fixtureId = surface.kind === 'event' ? surface.fixtureId : undefined;
         const fixture = fixtureId === undefined
           ? undefined
           : prepared.fixtures?.[route.id]?.find((candidate) => candidate.id === fixtureId);
@@ -795,9 +908,9 @@ export class RouteInvocationService {
         }
         const rawInput = request.input ?? fixture?.input ?? {};
         const input = route.kind === 'event-route'
-          ? eventInput(route, rawInput, request.event?.host, this.#registry)
+          ? eventInput(route, rawInput, surface.kind === 'event' ? surface.host : undefined, this.#registry)
           : rawInput;
-        const context = contextFor(route, prepared.manifest.projectRoot, request.event?.host);
+        const context = contextFor(route, prepared.manifest.projectRoot, surface);
         const controller = new AbortController();
         this.#controllers.add(controller);
         if (this.#closed) {
@@ -809,7 +922,6 @@ export class RouteInvocationService {
         try {
           child = plainScript === undefined
             ? await this.#renderChild({
-              ...(request.args === undefined ? {} : { args: request.args }),
               ...(prepared.artifact === undefined
                 ? {}
                 : {
@@ -817,12 +929,11 @@ export class RouteInvocationService {
                     artifactRoot: join(prepared.manifest.projectRoot, '.agent-bundle', 'epochs', prepared.artifact.epochId),
                   }),
               context,
-              ...(request.event?.host === undefined ? {} : { eventTarget: request.event.host }),
               input,
               manifest: prepared.manifest,
-              ...(request.mode === undefined ? {} : { mode: request.mode }),
               routeId: route.id,
               stateRoot: prepared.stateRoot,
+              surface,
             }, controller.signal)
             : await runPlainScript(this.#scripts, prepared, plainScript, input, controller.signal);
         } catch (error) {
@@ -844,6 +955,7 @@ export class RouteInvocationService {
             request: { ...request, input },
             route,
             startedAt,
+            surface,
           });
         } finally {
           clearTimeout(timeout);
@@ -852,7 +964,7 @@ export class RouteInvocationService {
         const projectionStartedAt = this.#now();
         const projection = invocationProjection(
           route,
-          request,
+          surface,
           rawInput,
           child.result,
           child.mcp,
@@ -878,7 +990,9 @@ export class RouteInvocationService {
                   // event detail detached from the identical public `input`.
                   canonical: jsonObject(canonical)!,
                   event: route.event!,
-                  ...(request.event?.host === undefined ? {} : { host: request.event.host, native: rawInput as JsonObject }),
+                  ...(surface.kind !== 'event' || surface.host === undefined
+                    ? {}
+                    : { host: surface.host, native: rawInput as JsonObject }),
                 },
               }
             : {}),
@@ -895,6 +1009,7 @@ export class RouteInvocationService {
           sourceRevision: manifest.sourceRevision,
           startedAt: startedAt.toISOString(),
           status: 'succeeded',
+          surface,
           ...(child.trace === undefined ? {} : { trace: child.trace }),
           timings: invocationTimings(child, startedAt, projectionStartedAt, completedAt),
         });

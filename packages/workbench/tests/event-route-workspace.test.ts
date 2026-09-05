@@ -73,11 +73,17 @@ describe('event fixtures', () => {
 
   it('attaches the host while submitting the editor payload directly', () => {
     const native = { hook_event_name: 'PreToolUse', tool_name: 'Bash' };
-    expect(eventRequestFor('canonical', { input: { tool: {} } })).toEqual({ input: { tool: {} } });
-    expect(eventRequestFor('claude', { input: native })).toEqual({ event: { host: 'claude' }, input: native });
+    expect(eventRequestFor('canonical', { input: { tool: {} } })).toEqual({
+      input: { tool: {} },
+      surface: { kind: 'event' },
+    });
+    expect(eventRequestFor('claude', { input: native }, 'claude:PreToolUse')).toEqual({
+      input: native,
+      surface: { fixtureId: 'claude:PreToolUse', host: 'claude', kind: 'event' },
+    });
     expect(eventRequestFor('claude', { input: { ...native, tool_name: 'Edit' } })).toEqual({
-      event: { host: 'claude' },
       input: { ...native, tool_name: 'Edit' },
+      surface: { host: 'claude', kind: 'event' },
     });
   });
 });

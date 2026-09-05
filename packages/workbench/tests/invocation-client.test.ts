@@ -54,6 +54,7 @@ const invocation = Object.freeze({
   sourceRevision: 'source-a',
   startedAt: '2026-09-05T07:00:00.000Z',
   status: 'succeeded' as const,
+  surface: Object.freeze({ kind: 'mcp' as const }),
   timings: Object.freeze([{
     durationMs: 1,
     phase: 'render',
@@ -99,6 +100,7 @@ it('strictly decodes invoke, list, and read responses', async () => {
     sourceRevision: 'source-a',
     startedAt: invocation.startedAt,
     status: 'succeeded',
+    surface: { kind: 'mcp' },
     timings: invocation.timings,
   }]);
   await expect(client.read('invocation a')).resolves.toEqual(invocation);
