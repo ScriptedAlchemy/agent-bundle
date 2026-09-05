@@ -29,7 +29,7 @@ export default defineConfig({
 | `assets` | `string[]` | The root `assets/` convention. |
 | `bin` | `false \| Record<string, string \| { entry }>` | The `src/cli.ts` convention. |
 | `lib` | `false \| string \| { entry, dts? }` | The `src/index.ts` convention. |
-| `routes` | Route-graph policy | Convention-derived. |
+| `routes` | Route-graph policy (`cli`, `mcpCommands`, `servers`) | Convention-derived. A tool with a colocated `<tool>.cli.ts` is excluded from `routes.mcpCommands`. |
 | `output` | `{ distPath? }` | `artifact` from the CLI; `dist` from `build()` without `packageOutputs`. |
 | `runtime` | `{ node }` | Node 22.12. |
 | `payload` | `Record<string, string \| { source, targets? }>` | None. |
@@ -58,7 +58,10 @@ route compiler still parses `routes` during discovery, so `agent-bundle validate
 malformed override through the route graph's diagnostics; `validateSource` never reads `evals` —
 the [`evals` rules below](#evals) fire when `agent-bundle eval` or the Workbench loads the config,
 as `EVAL_CONFIG_INVALID`, `EVAL_INCLUDE_INVALID`, or `EVAL_RUNS_DIR_INVALID` errors rather than
-`AB` diagnostics.
+`AB` diagnostics. A tool that already has a colocated `<tool>.cli.ts` CLI surface projection is
+excluded from `routes.mcpCommands` so the bulk `<bin> <server> <tool> --input` command is not
+also compiled for that operation. See
+[Project one tool as an idiomatic command](../guide/authoring/package-entries.mdx#project-one-tool-as-an-idiomatic-command).
 
 | Field | Type definition |
 | --- | --- |

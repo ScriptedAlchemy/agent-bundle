@@ -23,6 +23,7 @@ my-plugin/
     ├── mcp/<server-id>.ts     # a handwritten stdio MCP server entry
     ├── mcp/<server>/          # or a generated server, one module per route
     │   ├── tools/*.tsx
+    │   ├── tools/<tool>.cli.ts # opt-in CLI surface projection; not a route
     │   ├── resources/*.tsx
     │   ├── prompts/*.tsx
     │   ├── apps/*.tsx         # browser MCP Apps compiled to self-contained HTML
@@ -45,6 +46,7 @@ my-plugin/
 | `src/rules/*.mdc` | Flat host rule documents, emitted by Cursor, which keeps `description`, `globs`, and `alwaysApply`. The same per-host judgment applies: `AB4907` for an explicit target, `AB4908` as a warning for an implicit one. | Remove the file. |
 | `src/mcp/<server-id>.ts` | Stdio entry for a declared MCP server that names no `entry`, `command`, or `url`. | Declare `entry` explicitly. |
 | `src/mcp/<server>/{tools,resources,prompts}/*` | Generated MCP server routes. The path supplies identity; each module supplies static `config`, schemas, and one async default Server Component. | Set `routes.servers.<server>` to `custom`, `command`, or `remote`. |
+| `src/mcp/<server>/tools/<tool>.cli.ts` | CLI surface projection of the sibling tool route. Not a route; excluded from `routes.mcpCommands`. See [Project one tool as an idiomatic command](../authoring/package-entries.mdx#project-one-tool-as-an-idiomatic-command). | Prefix `_` to park it. |
 | `src/mcp/<server>/apps/*` | Browser MCP App entries compiled to self-contained HTML and registered on the generated server. Static `config.resourceUri` is required. | Use a custom server, or prefix the file with `_`. |
 | `src/scripts/<name>.ts` | A plain script compiled to `scripts/<name>.mjs` in every selected target. Nested modules are a hard error (`AB4808`). | Prefix a path segment with `_`, or claim the file with an explicit `scripts` entry. |
 | `src/scripts/<name>.tsx` | A rendered script: the async default component receives `argv` and `signal` and renders through the Agent renderer with the CLI output contract. | Rename to `.ts`, prefix a path segment with `_`, or claim the file. |

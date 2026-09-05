@@ -210,9 +210,12 @@ grammar as an inline schema:
   reference chain (`inputSchema -> statusInputSchema (src/lib/protocol-schemas.ts) ->
   requestStatusSchema -> requestStatuses`) and the boundary that stopped the resolver; a cyclic
   chain is `AB4839`, whose message prints the cycle.
-- Only CLI routes raise `AB4838`/`AB4839`, because only there the static grammar is load-bearing.
-  An MCP route whose schema the resolver cannot follow keeps working exactly as an out-of-grammar
-  inline schema does: the generated server derives its JSON Schema from the real zod object.
+- Only CLI routes, or a tool route with a CLI projection, raise `AB4838`/`AB4839`, because only
+  there the static grammar is load-bearing. An MCP route without a projection whose schema the
+  resolver cannot follow keeps working exactly as an out-of-grammar inline schema does: the
+  generated server derives its JSON Schema from the real zod object. On a tool route with a CLI
+  projection the message prefix is `Tool route <path> (CLI projection <module>)` instead of
+  `CLI route <path>`.
 - `resultSchema` may be imported the same way. Its presence is checked statically, its type
   flows through TypeScript, and the runtime validates with the real zod object.
 
@@ -220,6 +223,143 @@ Both routes then bind one canonical
 [route contract](./index.mdx#route-contracts-application-ir), which is what the argv grammar,
 the static MCP `inputSchema`, the generated route types, the Workbench, and
 `agent-bundle inspect --routes` read.
+
+### Project one tool as an idiomatic command
+
+Sharing one `RouteContract` still leaves two *routes* when the CLI grammar cannot be the
+automatic kebab projection of the schema. cargo-hauler keeps `src/cli/status.tsx` beside
+`src/mcp/hauler/tools/hauler_status.tsx` so `--lane` can mean `laneKey`, and
+`src/cli/request.tsx` beside `hauler_request.tsx` so `hauler request -- cargo check` can feed
+`argv` and `mapInput` can derive `cwd`. That second module is a second operation (`cli:status`)
+with its own `operationId` and typegen entry. A colocated `<tool>.cli.ts` is the CLI *surface*
+projection of the same operation — identity stays `tool:<server>/<tool>` — and is not a route.
+Host projection (`targets`) is unchanged and orthogonal.
+
+The module sits beside the tool, never under `src/cli/**`. Status needs only renames; the
+parser already emits canonical keys, so there is no `mapInput`:
+
+```ts
+// src/mcp/hauler/tools/hauler_status.cli.ts
+import type { CliProjectionConfig } from 'agent-bundle/routes';
+import type { inputSchema } from './hauler_status.js';
+
+export const config = {
+  command: ['status'],
+  confirm: false,
+  description:
+    'Show the queue, in-flight cargo work, lanes, and admission state.',
+  flags: {
+    laneKey: {
+      description: 'Only requests in this lane key',
+      name: 'lane',
+    },
+    limit: { description: 'Recent rows to show' },
+    statuses: {
+      description: 'Only these statuses (repeatable)',
+      name: 'status',
+    },
+    tickets: {
+      description: 'Only these tickets (repeatable)',
+      name: 'ticket',
+    },
+  },
+} satisfies CliProjectionConfig<typeof inputSchema>;
+```
+
+Request needs positionals plus a synchronous `mapInput` that fills canonical-required `cwd`
+from `process.cwd()` and splits comma-separated `--after` lists:
+
+```ts
+// src/mcp/hauler/tools/hauler_request.cli.ts
+import type { CliProjectionConfig } from 'agent-bundle/routes';
+import type { z } from 'zod';
+
+import { parseTicketList } from '../../../client/parse.js';
+import type { inputSchema } from './hauler_request.js';
+
+export const config = {
+  command: ['request'],
+  confirm: false,
+  description:
+    'Submit a background cargo request and print its ticket: ' +
+    'hauler request [--after cc-N] -- cargo check -p foo',
+  flags: {
+    after: {
+      description:
+        'Tickets that must finish first (repeatable, or comma-separated)',
+    },
+    cwd: {
+      description: 'Workspace directory (default: current directory)',
+      required: false,
+    },
+    host: { description: 'Agent host name for attribution' },
+    session: { description: 'Agent session id for attribution' },
+  },
+  positionals: ['argv'],
+} satisfies CliProjectionConfig<typeof inputSchema>;
+
+type CliInput = Omit<z.input<typeof inputSchema>, 'cwd' | 'after'> & {
+  readonly after?: readonly string[];
+  readonly cwd?: string;
+};
+
+export const mapInput = (
+  input: CliInput,
+): z.input<typeof inputSchema> => {
+  const after = parseTicketList(input.after ?? []);
+  return {
+    ...input,
+    cwd: input.cwd ?? process.cwd(),
+    ...(after.length === 0 ? {} : { after }),
+  };
+};
+```
+
+`CliProjectionConfig<Schema>` is exported from `agent-bundle/routes`. `flags` and `positionals`
+keys are constrained to `keyof z.input<Schema>`. `config` uses the same static extract grammar
+as a route module (`satisfies` unwraps). `mapInput` is an ordinary named export whose presence
+is recorded statically and loaded only by the CLI bin; the MCP worker never sees the module.
+
+| Key | Meaning |
+| --- | --- |
+| `command` | Command path segments; default `[tool]`. Each must pass `safeIdentitySegment`. |
+| `description` | Help text; default: the tool's `config.description`. |
+| `positionals` | Canonical keys consumed as bare arguments, in order (same rules as a `src/cli` route). |
+| `flags.<key>.name` | CLI spelling (kebab-case, no leading dashes); default `kebab(key)`. |
+| `flags.<key>.aliases` | Extra long-form `--spellings`, kebab-case, no leading dashes. |
+| `flags.<key>.description` | Overrides the schema `.describe()`. |
+| `flags.<key>.default` | CLI-only default the shell applies before `mapInput`. |
+| `flags.<key>.required` | `false` relaxes a canonical-required key; legal only when `mapInput` is exported. |
+| `aliases` | Command aliases (same rules as a `src/cli` route's `config.aliases`). |
+| `confirm` | Default: `!(tool config.annotations.readOnlyHint === true)`. |
+| `exitCode` | `'result'` or `'zero'`; default: the tool's `config.exitCode ?? 'zero'`. |
+
+`flags` is keyed by the canonical key of the tool's `RouteContract.input`. Discovery excludes
+`.cli.{ts,tsx}` before identity derivation and pairs the file with the sibling `.{ts,tsx}`. The
+suffix is reserved under `src/mcp/**`; prefix `_` parks it. An orphan, or a `.cli.*` under
+`resources/`, `prompts/`, or `apps/`, is `AB4840`. A missing or dynamic `config`, a key outside
+the closed set, a field of the wrong shape, a `mapInput` that is not statically a function, or
+`required: false` / a CLI `default` on a canonical-required key without `mapInput`, is `AB4841`.
+A `flags`/`positionals` key absent from the contract, a `name`/alias that is not kebab-case, is
+reserved (`help`, `json`, `ndjson`, `version`, and `yes` when confirm), or collides, or a
+`command` segment that is not a safe identity segment, is `AB4842`. Every message is
+`CLI projection <module> for tool:<server>/<tool>: <detail>.` A tool whose schema has no static
+contract becomes load-bearing once it has a projection: `AB4814`/`AB4838`/`AB4839` fire on the
+tool module with the prefix `Tool route <path> (CLI projection <module>)`.
+
+`agent-bundle inspect --routes` dumps the compiled graph, so
+`cli.commands[].projection` (`module`, `mapInput`, `relaxed?`) and
+`options[].{key,option,aliases}` appear with no extra renderer. The Workbench CLI row shows the
+same facts beside the canonical input editor. The compiled command's `routeId` is the tool id;
+at run time `invocation.kind` is `'cli'` and `operationId` is that tool id.
+
+No projection module means no command from this path — the bulk
+[`routes.mcpCommands`](#projecting-mcp-tools-into-the-cli) opt-in keeps working for every other
+tool. The MCP `inputSchema`, `tools/list`, annotations, and `_meta` are untouched by any
+projection field; `ToolConfig` gains nothing.
+
+Short `-x` aliases (the shell rejects single-dash tokens today) and an async `mapInput` are
+deferred.
 
 ### The routed CLI inside host artifacts
 
@@ -248,13 +388,16 @@ is unchanged.
 `routes.mcpCommands` adds tools from generated MCP servers to the same command graph and
 executable, including in projects with no `src/cli/**` routes at all. `true` selects every
 eligible tool; the object form takes `include` and `exclude` patterns matching the
-`<server>:<tool>` identity, with `*` as the only wildcard.
+`<server>:<tool>` identity, with `*` as the only wildcard. A tool that already has a colocated
+`<tool>.cli.ts` is excluded from this bulk projection: one operation compiles to one command. An
+`include` pattern that matches only such tools is `AB4822` and names the projection module.
 
-Each projected tool runs as `<plugin-bin> <server> <tool>` with the protocol tool name preserved
-verbatim. Its only input option is `--input` taking one JSON object. A tool is read-only only
-when its static MCP annotations explicitly set `readOnlyHint: true`; every other tool is
-mutation-capable and fails closed unless `--yes` is present. Every declared pattern must match at
-least one eligible tool, and a misspelling fails with `AB4822` listing the available identities.
+Each bulk-projected tool runs as `<plugin-bin> <server> <tool>` with the protocol tool name
+preserved verbatim. Its only input option is `--input` taking one JSON object. A tool is
+read-only only when its static MCP annotations explicitly set `readOnlyHint: true`; every other
+tool is mutation-capable and fails closed unless `--yes` is present. Every declared pattern must
+match at least one eligible tool, and a misspelling fails with `AB4822` listing the available
+identities.
 
 ## Release identity
 

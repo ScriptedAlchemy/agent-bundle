@@ -91,6 +91,10 @@ bound to schemas imported from a relative module inside the project
 [route contract](./index.mdx#route-contracts-application-ir) in the compiled graph; the
 resolution rules and the `AB4838`/`AB4839` diagnostics are under
 [Share one schema between MCP and CLI](./package-entries.mdx#share-one-schema-between-mcp-and-cli).
+A generated tool can also expose an idiomatic CLI command without a second route: a colocated
+`<tool>.cli.ts` is a CLI surface projection of the same operation (`tool:<server>/<tool>`), not a
+`cli:` route. See
+[Project one tool as an idiomatic command](./package-entries.mdx#project-one-tool-as-an-idiomatic-command).
 
 A route may re-export its component and schemas from another module. This is how one tool is
 placed on two generated servers when only `config` differs between the placements — an MCP App
