@@ -14,6 +14,7 @@ import { routedCliBins } from './build/cli-bins.ts';
 import { planComposite } from './build/compose.ts';
 import { buildPackageOutputs, type PackageBuildResult } from './build/package-build.ts';
 import {
+  packageBinDiagnostics,
   packInventoryDiagnostics,
   packOutputFromJson,
   type PackOutput,
@@ -1375,13 +1376,24 @@ export const prepack = async (options: BuildOptions): Promise<PrepackResult> => 
     cwd: result.packageBuild.outputRoot,
   });
   const pack = packOutputFromJson(stdout);
-  const diagnostics = await packInventoryDiagnostics({
+  const diagnostics = [...await packInventoryDiagnostics({
     model: result.model,
     packageBuild: result.packageBuild,
     packOutput: pack,
     packerRewritesWorkspaceProtocols: false,
     projectRoot: options.root,
-  });
+  })];
+  if (resolve(options.root) !== resolve(result.packageBuild.outputRoot)) {
+    const published = await execFile('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
+      cwd: options.root,
+    });
+    diagnostics.push(...await packageBinDiagnostics(
+      options.root,
+      packOutputFromJson(published.stdout),
+      'published package.json',
+    ));
+  }
+  diagnostics.sort((left, right) => left.code.localeCompare(right.code));
   if (hasErrors(diagnostics)) throw new DiagnosticError(diagnostics);
   return deepFreeze({ build: result, diagnostics, pack });
 };

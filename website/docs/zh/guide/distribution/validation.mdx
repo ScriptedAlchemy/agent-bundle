@@ -266,7 +266,7 @@ CLI、MCP 入口、钩子包装层以及包构建的 JavaScript bundle——都�
 | --- | --- |
 | `AB7010` | dry-run 的 npm 清单遗漏了某个预期 npm 根目录文件。请打包生成根目录，且不要排除其中的文件。 |
 | `AB7011` | npm 根目录中复制的某个产物文件与其清单 SHA-256 不再匹配。请重新构建，且不要修改生成根目录。 |
-| `AB7012` | 某个 `package.json` bin 指向 `src/`，或指名了一个被 npm 忽略的文件。路由式 CLI 应指向清单声明的 `bin/<name>.mjs`，手写 bin 应指向生成的 `bin/*.js` 文件。 |
+| `AB7012` | 生成 npm 根目录或实际发布的 `package.json` 中，某个 bin 指向 `src/`，或指名了不在该包打包文件集中的文件。每个 bin 都必须指向该包实际包含的文件；路由式 CLI 使用清单声明的 `bin/<name>.mjs`，手写 bin 使用生成的 `bin/*.js`。 |
 | `AB7013` | `package.json`、规范化后的插件元数据、某份宿主清单或产物 provenance 报告了不同的发布版本。请让每处发布标识一致。 |
 | `AB7014` | `dependencies`、`optionalDependencies` 或 `peerDependencies` 字段点名了消费者无需安装的包。必须有上列三类证据之一才算使用；已编译 bundle 内联该包不算。诊断会点名内联了这个未使用包的所有 `dist` bundle。对 `dependencies` 与 `optionalDependencies` 是 error，对 `peerDependencies` 是 warning；可选 peer 会跳过，`optionalDependencies` 中的同名项优先于 `dependencies`。 |
 | `AB7015` | `dependencies`、`optionalDependencies` 或 `peerDependencies` 中的某一项无法被消费者的 npm 经由注册表解析。包名与说明符一并交给 npm 自己的解析器 `npm-package-arg` 读取，结果分为三类：注册表类（版本、范围、dist-tag，或指向它们的 `npm:` 别名）、抓取类（git、GitHub 简写、远程 tarball 或路径来源——npm 12 默认拒绝 git 与远程抓取（`allow-git`、`allow-remote`），而路径在消费者磁盘上并不存在），以及不可解析类（npm 不接受的包名、它不支持的协议如 `link:`、`portal:` 或拼写错误、既非范围也非 URL 安全 dist-tag 的选择器、指向非注册表目标的别名，或非法 URL——清单本身就读不下去，因此即使出现在可选 peer 上也会被报告）。抓取类的 `optionalDependencies` 项只发出警告，因为 npm 可以在没有它时继续；但消费者安装脚本需要该包时会升级为错误：其 `bin` 命令位于命令位置、运行了 `node_modules/<name>/` 文件，或通过 `-r`/`--require`/`--import`/`--loader`（包括 `NODE_OPTIONS`）预加载了裸包。若 `dependencies` 或 `optionalDependencies` 也声明了同名 peer，则只按该具体条目判断。规范根目录按 `npm publish ./dist` 校验，因此 `workspace:` 与 `catalog:` 一律拒绝；已打包的 `bundleDependencies` 与包内可安装的 `file:` 来源不会被报告。请依赖已发布的版本，或把该包打包进产物并声明在 `devDependencies` 下。 |

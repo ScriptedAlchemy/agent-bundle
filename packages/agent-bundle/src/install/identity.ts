@@ -125,9 +125,12 @@ export const readBundleIdentity = async (
 };
 
 /** Reads and verifies the artifact-side inventory, preserving AB7001 as the bundle contract. */
-export const bundleInventory = async (identity: PluginIdentity): Promise<TreeInventory> => {
+export const bundleInventory = async (
+  identity: PluginIdentity,
+  options: { readonly restoreModes?: boolean } = {},
+): Promise<TreeInventory> => {
   try {
-    return await manifestInventory(identity.bundleRoot, identity.manifest);
+    return await manifestInventory(identity.bundleRoot, identity.manifest, options);
   } catch (error) {
     if (error instanceof DiagnosticError) throw error;
     throw failure('AB7001', errorMessage(error), identity.host);
@@ -150,7 +153,10 @@ export const installedBundleInventory = async (
         host,
       );
     case 'ok':
-      return manifestInventory(read.root, read.manifest, { verifyHashes: false });
+      return manifestInventory(read.root, read.manifest, {
+        hashManifestModes: false,
+        verifyHashes: false,
+      });
     default: {
       const exhaustive: never = read;
       throw new TypeError(`Unknown artifact manifest read result ${String(exhaustive)}.`);
