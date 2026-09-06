@@ -3,10 +3,10 @@
  * `library-audit`, and `select`, backed by `../curator-core.ts` and
  * `../library.ts`. All four retain evidence and never mutate media.
  */
-import { defineCliCommand, type CliCommandContext } from '../cli-command.js';
 import { z } from 'zod';
 
-import { inspectSources, type InspectionReceipt } from '../curator-core.ts';
+import type { CliCommandContext } from '../cli-command.js';
+import { inspectSources } from '../curator-core.ts';
 import { readJson, writeReceipt } from '../foundation.ts';
 import {
   auditLibrary,
@@ -17,25 +17,6 @@ import {
   type SelectionReceipt,
 } from '../library.ts';
 import { parityReceiptSchema, pathSchema, probeShape } from './schemas.ts';
-
-export interface DiscoveryOperations {
-  readonly inspect: (
-    input: { readonly maxFiles?: number; readonly root: string },
-    options: CliCommandContext,
-  ) => Promise<InspectionReceipt>;
-  readonly inventory?: (
-    input: { readonly report?: string; readonly source: string; readonly strict?: boolean },
-    options: CliCommandContext,
-  ) => Promise<InventoryReceipt>;
-  readonly libraryAudit?: (
-    input: { readonly concurrency?: number; readonly report?: string; readonly sources: readonly string[]; readonly strict?: boolean },
-    options: CliCommandContext,
-  ) => Promise<LibraryAuditReceipt>;
-  readonly select?: (
-    input: { readonly inventory: string; readonly report?: string },
-    options: CliCommandContext,
-  ) => Promise<SelectionReceipt>;
-}
 
 const inventoryResultSchema = parityReceiptSchema<InventoryReceipt>('inventory');
 const libraryResultSchema = parityReceiptSchema<LibraryAuditReceipt>('library-audit');
@@ -57,41 +38,35 @@ const inspectResultSchema = z.object({
   totalBytes: z.number().int().nonnegative(),
 }).strict();
 
-export const defaultDiscoveryOperations: Required<DiscoveryOperations> = {
-  inspect: (input, options) => inspectSources(input, options),
-  inventory: async (input, options) => {
-    const receipt = await createInventory(input, options);
-    if (input.report !== undefined) await writeReceipt(input.report, receipt, [input.source]);
-    return receipt;
-  },
-  libraryAudit: async (input, options) => {
-    const receipt = await auditLibrary(input, options);
-    if (input.report !== undefined) await writeReceipt(input.report, receipt, input.sources);
-    return receipt;
-  },
-  select: async (input) => {
-    const inventory = inventoryResultSchema.parse(await readJson(input.inventory));
-    const receipt = selectInventorySources(inventory, input.inventory);
-    if (input.report !== undefined) await writeReceipt(input.report, receipt, [input.inventory]);
-    return receipt;
-  },
-};
-
-export const discoveryOperations = (operations: Required<DiscoveryOperations>) => ({
-  inspect: defineCliCommand({
-    handler: operations.inspect,
+export const discoveryOperations = Object.freeze({
+  inspect: {
+    handler: inspectSources,
     id: 'inspect',
     inputSchema: inspectInputSchema,
     resultSchema: inspectResultSchema,
-  }),
-  inventory: defineCliCommand({
-    handler: operations.inventory,
+  },
+  inventory: {
+    handler: async (
+      input: { readonly report?: string; readonly source: string; readonly strict?: boolean },
+      options: CliCommandContext,
+    ) => {
+      const receipt = await createInventory(input, options);
+      if (input.report !== undefined) await writeReceipt(input.report, receipt, [input.source]);
+      return receipt;
+    },
     id: 'inventory',
     inputSchema: z.object({ report: pathSchema.optional(), source: pathSchema, strict: z.boolean().optional() }).strict(),
     resultSchema: inventoryResultSchema,
-  }),
-  libraryAudit: defineCliCommand({
-    handler: operations.libraryAudit,
+  },
+  libraryAudit: {
+    handler: async (
+      input: { readonly concurrency?: number; readonly report?: string; readonly sources: readonly string[]; readonly strict?: boolean },
+      options: CliCommandContext,
+    ) => {
+      const receipt = await auditLibrary(input, options);
+      if (input.report !== undefined) await writeReceipt(input.report, receipt, input.sources);
+      return receipt;
+    },
     id: 'library-audit',
     inputSchema: z.object({
       concurrency: z.number().int().min(1).max(8).optional(),
@@ -100,11 +75,19 @@ export const discoveryOperations = (operations: Required<DiscoveryOperations>) =
       strict: z.boolean().optional(),
     }).strict(),
     resultSchema: libraryResultSchema,
-  }),
-  select: defineCliCommand({
-    handler: operations.select,
+  },
+  select: {
+    handler: async (
+      input: { readonly inventory: string; readonly report?: string },
+      _context: CliCommandContext,
+    ) => {
+      const inventory = inventoryResultSchema.parse(await readJson(input.inventory));
+      const receipt = selectInventorySources(inventory, input.inventory);
+      if (input.report !== undefined) await writeReceipt(input.report, receipt, [input.inventory]);
+      return receipt;
+    },
     id: 'select',
     inputSchema: z.object({ inventory: pathSchema, report: pathSchema.optional() }).strict(),
     resultSchema: selectionResultSchema,
-  }),
+  },
 });

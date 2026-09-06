@@ -4,9 +4,9 @@ import type { ToolRouteProps } from 'agent-bundle';
 
 import { WhisperTrail } from '../../../components/evidence-trail.js';
 import type { WhisperReceipt } from '../../../evidence.js';
-import { defaultEvidenceOperations, evidenceOperations } from '../../../operations/evidence.js';
+import { evidenceOperations } from '../../../operations/evidence.js';
 
-const operation = evidenceOperations(defaultEvidenceOperations).whisperVerify;
+const operation = evidenceOperations.whisperVerify;
 
 export const config = {
   annotations: { readOnlyHint: false },

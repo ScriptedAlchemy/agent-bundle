@@ -6,7 +6,7 @@ import { basename, dirname, join, relative, resolve } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
-import { isInside } from '../core/paths.ts';
+import { exists, isInside } from '../core/paths.ts';
 import { hasExactOwnKeys, parseJsonWithoutDuplicateKeys } from '../core/strict-json.ts';
 import { runPromise, runSync } from '../effect/boundary.ts';
 import { liftPromise, liftTry } from '../effect/lift.ts';
@@ -173,16 +173,6 @@ const leaseMutexFor = (agentBundlePath: string): Semaphore.Semaphore => {
   const created = runSync(Semaphore.make(1));
   epochLeaseMutexes.set(agentBundlePath, created);
   return created;
-};
-
-const pathExists = async (path: string): Promise<boolean> => {
-  try {
-    await lstat(path);
-    return true;
-  } catch (error) {
-    if (isErrno(error, 'ENOENT')) return false;
-    throw error;
-  }
 };
 
 const isSafePathSegment = (value: string): boolean =>
@@ -639,7 +629,7 @@ export class EpochStore {
       let publication: EpochPublicationReceipt | undefined;
       let moved = false;
       const attempt = Effect.gen({ self: this }, function* (this: EpochStore) {
-        if (yield* liftPromise(() => pathExists(epochRoot))) {
+        if (yield* liftPromise(() => exists(epochRoot))) {
           return yield* Effect.fail(
             new EpochStoreError('EPOCH_ALREADY_EXISTS', `Epoch ${JSON.stringify(record.epoch.id)} already exists.`),
           );

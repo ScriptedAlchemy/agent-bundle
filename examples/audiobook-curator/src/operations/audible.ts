@@ -3,31 +3,20 @@
  * and `audible-cache`, backed by `../audible.ts`. Ranking is evidence only;
  * `audible-select` records the required human edition choice.
  */
-import { defineCliCommand, type CliCommandContext } from '../cli-command.js';
 import { z } from 'zod';
 
 import {
   cacheAudibleEdition,
   searchAudible,
   selectAudibleEdition,
-  type AudibleCacheInput,
   type AudibleCacheReceipt,
   type AudibleRegion,
-  type AudibleSearchInput,
   type AudibleSearchReceipt,
   type AudibleSelectionReceipt,
 } from '../audible.ts';
+import type { CliCommandContext } from '../cli-command.js';
 import { readJson, writeReceipt } from '../foundation.ts';
 import { audibleRegions, audibleRegionSchema, parityReceiptSchema, pathSchema } from './schemas.ts';
-
-export interface AudibleOperations {
-  readonly audibleCache?: (input: AudibleCacheInput, options: CliCommandContext) => Promise<AudibleCacheReceipt>;
-  readonly audibleSearch?: (input: AudibleSearchInput, options: CliCommandContext) => Promise<AudibleSearchReceipt>;
-  readonly audibleSelect?: (
-    input: { readonly candidate: number; readonly candidates: string; readonly note?: string; readonly receipt?: string },
-    options: CliCommandContext,
-  ) => Promise<AudibleSelectionReceipt>;
-}
 
 const audibleEvidenceSchema = z.object({
   authorMatch: z.boolean(), durationDifferencePercent: z.number().nonnegative().optional(), language: z.string().optional(),
@@ -46,21 +35,6 @@ export const audibleSearchResultSchema: z.ZodType<AudibleSearchReceipt> = z.obje
 const audibleSelectResultSchema = parityReceiptSchema<AudibleSelectionReceipt>('audible-select');
 const audibleCacheResultSchema = parityReceiptSchema<AudibleCacheReceipt>('audible-cache');
 
-export const defaultAudibleOperations: Required<AudibleOperations> = {
-  audibleCache: (input, options) => cacheAudibleEdition(input, options),
-  audibleSearch: (input, options) => searchAudible(input, options),
-  audibleSelect: async (input) => {
-    const report = audibleSearchResultSchema.parse(await readJson(input.candidates));
-    const receipt = selectAudibleEdition(report, {
-      candidate: input.candidate,
-      candidateReport: input.candidates,
-      ...(input.note === undefined ? {} : { note: input.note }),
-    });
-    if (input.receipt !== undefined) await writeReceipt(input.receipt, receipt, [input.candidates]);
-    return receipt;
-  },
-};
-
 /** Parses the CLI's comma-separated `--regions` list; shared with the routed `audible-search` command. */
 export const audibleRegionList = (value: string): readonly AudibleRegion[] => value.split(',').map((region) => {
   const candidate = region.trim().toLowerCase();
@@ -68,9 +42,9 @@ export const audibleRegionList = (value: string): readonly AudibleRegion[] => va
   return candidate as AudibleRegion;
 });
 
-export const audibleOperations = (operations: Required<AudibleOperations>) => ({
-  audibleSearch: defineCliCommand({
-    handler: operations.audibleSearch,
+export const audibleOperations = Object.freeze({
+  audibleSearch: {
+    handler: searchAudible,
     id: 'audible-search',
     inputSchema: z.object({
       attempts: z.number().int().min(1).max(10).optional(), author: z.string().min(1).max(512).optional(),
@@ -79,20 +53,32 @@ export const audibleOperations = (operations: Required<AudibleOperations>) => ({
       report: pathSchema.optional(), title: z.string().min(1).max(1024),
     }).strict(),
     resultSchema: audibleSearchResultSchema,
-  }),
-  audibleSelect: defineCliCommand({
-    handler: operations.audibleSelect,
+  },
+  audibleSelect: {
+    handler: async (
+      input: { readonly candidate: number; readonly candidates: string; readonly note?: string; readonly receipt?: string },
+      _context: CliCommandContext,
+    ) => {
+      const report = audibleSearchResultSchema.parse(await readJson(input.candidates));
+      const receipt = selectAudibleEdition(report, {
+        candidate: input.candidate,
+        candidateReport: input.candidates,
+        ...(input.note === undefined ? {} : { note: input.note }),
+      });
+      if (input.receipt !== undefined) await writeReceipt(input.receipt, receipt, [input.candidates]);
+      return receipt;
+    },
     id: 'audible-select',
     inputSchema: z.object({ candidate: z.number().int().min(1).max(500), candidates: pathSchema, note: z.string().max(4096).optional(), receipt: pathSchema.optional() }).strict(),
     resultSchema: audibleSelectResultSchema,
-  }),
-  audibleCache: defineCliCommand({
-    handler: operations.audibleCache,
+  },
+  audibleCache: {
+    handler: cacheAudibleEdition,
     id: 'audible-cache',
     inputSchema: z.object({
       asin: z.string().min(1).max(64), attempts: z.number().int().min(1).max(10).optional(), cacheDirectory: pathSchema,
       receipt: pathSchema.optional(), region: audibleRegionSchema.optional(),
     }).strict(),
     resultSchema: audibleCacheResultSchema,
-  }),
+  },
 });

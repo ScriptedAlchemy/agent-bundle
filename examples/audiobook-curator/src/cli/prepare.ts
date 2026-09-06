@@ -1,9 +1,9 @@
 import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
 import { z } from 'zod';
 
-import { defaultOutputOperations, outputOperations } from '../operations/output.js';
+import { outputOperations } from '../operations/output.js';
 
-const operation = outputOperations(defaultOutputOperations).prepare;
+const operation = outputOperations.prepare;
 
 export const config = {
   description: 'Plan an M4B output or apply the plan when explicitly requested.',

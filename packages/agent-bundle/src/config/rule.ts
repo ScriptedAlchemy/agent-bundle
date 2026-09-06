@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { stringify as stringifyYaml } from 'yaml';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
+import { errorMessage } from '../core/errors.ts';
 import { parseMarkdownFrontmatter } from './skill-references.ts';
 
 export interface RuleDocument {
@@ -116,7 +117,7 @@ export const parseRule = async (source: string): Promise<RuleDocument> => {
       body: '',
       diagnostics: [diagnostic(
         'AB4900',
-        `Unable to read rule file: ${error instanceof Error ? error.message : String(error)}`,
+        `Unable to read rule file: ${errorMessage(error)}`,
         source,
       )],
       emittedMarkdown: '',

@@ -4,9 +4,9 @@ import type { ToolRouteProps } from 'agent-bundle';
 
 import { PrepareMutation } from '../../../components/mutation-receipt.js';
 import type { PrepareReceipt } from '../../../curator-core.js';
-import { defaultOutputOperations, outputOperations } from '../../../operations/output.js';
+import { outputOperations } from '../../../operations/output.js';
 
-const operation = outputOperations(defaultOutputOperations).prepare;
+const operation = outputOperations.prepare;
 
 export const config = {
   annotations: { destructiveHint: true, readOnlyHint: false },

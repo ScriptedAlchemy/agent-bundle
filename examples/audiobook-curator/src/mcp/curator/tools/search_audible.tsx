@@ -5,9 +5,9 @@ import type { ToolRouteProps } from 'agent-bundle';
 import type { AudibleSearchReceipt } from '../../../audible.js';
 import { SearchRanking } from '../../../components/candidate-ranking.js';
 import { audibleSearchHeadline } from '../../../components/headlines.js';
-import { defaultAudibleOperations, audibleOperations } from '../../../operations/audible.js';
+import { audibleOperations } from '../../../operations/audible.js';
 
-const operation = audibleOperations(defaultAudibleOperations).audibleSearch;
+const operation = audibleOperations.audibleSearch;
 
 export const config = {
   annotations: { openWorldHint: true, readOnlyHint: false },

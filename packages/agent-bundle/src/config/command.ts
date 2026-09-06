@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
+import { errorMessage } from '../core/errors.ts';
 import { parseMarkdownFrontmatter } from './skill-references.ts';
 
 export interface CommandDocument {
@@ -116,7 +117,7 @@ export const parseCommand = async (source: string): Promise<CommandDocument> => 
       body: '',
       diagnostics: [diagnostic(
         'AB4920',
-        `Unable to read command file: ${error instanceof Error ? error.message : String(error)}`,
+        `Unable to read command file: ${errorMessage(error)}`,
         source,
       )],
       frontmatter: {},

@@ -29,6 +29,7 @@ import {
   runAgentRequest,
   unavailable,
 } from '@agent-bundle/runtime';
+import { errorMessage } from './core/errors.ts';
 import { isRecord } from './core/strict-json.ts';
 import type { createEventRuntimeServer, EventRuntimeTransportError } from './events/ipc.ts';
 import type { createCanonicalEventProps, projectEventDocument } from './events/project.ts';
@@ -744,8 +745,6 @@ const noticeDiagnostic = (line: string): void => {
   process.stderr.write(`[agent-bundle] notice inbox ${line}\n`);
 };
 
-const describeError = (error: unknown): string => (error instanceof Error ? error.message : String(error));
-
 /** stderr only: stdout is the protocol stream. */
 const eventRuntimeDiagnostic = (line: string): void => {
   process.stderr.write(`agent-bundle event runtime: ${line}\n`);
@@ -819,7 +818,7 @@ const installNoticeInboxSubscriptions = (
     } catch (error) {
       throw new ProtocolError(
         ProtocolErrorCode.InternalError,
-        `Notice inbox subscriptions are unavailable: ${describeError(error)}`,
+        `Notice inbox subscriptions are unavailable: ${errorMessage(error)}`,
       );
     }
     return {};
@@ -840,7 +839,7 @@ const installNoticeInboxSubscriptions = (
       case 'signalled':
         return;
       case 'failed':
-        noticeDiagnostic(`resources/updated ${outcome.stage} failed: ${describeError(outcome.error)}`);
+        noticeDiagnostic(`resources/updated ${outcome.stage} failed: ${errorMessage(outcome.error)}`);
         return;
       default: {
         const unreachable: never = outcome;
@@ -860,7 +859,7 @@ const installNoticeInboxSubscriptions = (
   let owed = false;
   const observe = (): void => {
     observing = notices.observe(send).then(report, (error: unknown) => {
-      noticeDiagnostic(`resources/updated observation failed: ${describeError(error)}`);
+      noticeDiagnostic(`resources/updated observation failed: ${errorMessage(error)}`);
     }).then(() => {
       observing = undefined;
       if (!owed) return;
