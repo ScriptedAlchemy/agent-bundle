@@ -680,7 +680,10 @@ it('inspects identical root-relative provenance after the published epochs are r
     await publish({ files: runtimeFiles(), id: epochId, registry, root, store: new EpochStore({ projectRoot: root }) });
     const before = await new ArtifactInspectionService(new EpochStore({ projectRoot: root }), registry).inspect(epochId);
 
-    // The epoch directories move to another project root; the origin keeps its active-build pointer.
+    // The epoch directories (bytes and store metadata) move to another project
+    // root; the origin keeps its active-build pointer. Acquiring an epoch by id
+    // reads only its directory and metadata id, so the inspection depends on
+    // nothing but the relocated manifest bytes.
     await mkdir(join(relocated, '.agent-bundle'), { recursive: true });
     await rename(join(root, '.agent-bundle', 'epochs'), join(relocated, '.agent-bundle', 'epochs'));
     const store = new TrackingEpochStore({ projectRoot: relocated });
