@@ -1,6 +1,7 @@
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -871,6 +872,58 @@ it('emits MCP progress notifications only when a progress token is supplied', { 
       { message: 'halfway', progress: 1, progressToken: 'tok-1', total: 2 },
       { message: 'done', progress: 2, progressToken: 'tok-1', total: 2 },
     ]);
+  } finally {
+    await session.close();
+  }
+});
+
+it('streams an authored Suspense fallback to the stdio client before the render completes (#686)', { retry: 2, timeout: 60_000 }, async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-generated-streaming-'));
+  roots.push(root);
+  await writeGeneratedProject(root, {
+    'src/mcp/curator/tools/gated.tsx': [
+      "import { existsSync } from 'node:fs';",
+      "import { Agent } from '@agent-bundle/runtime';",
+      "import { createElement, Suspense } from 'react';",
+      "import { z } from 'zod';",
+      "export const config = { annotations: { readOnlyHint: true }, description: 'Wait for a gate.' };",
+      'export const inputSchema = z.object({ gate: z.string() }).strict();',
+      'export const resultSchema = z.object({ ok: z.literal(true) }).strict();',
+      'const Gated = async ({ gate, signal }) => {',
+      '  while (!existsSync(gate)) {',
+      "    if (signal.aborted) throw new DOMException('gate abandoned', 'AbortError');",
+      '    await new Promise((resolve) => setTimeout(resolve, 25));',
+      '  }',
+      "  return createElement(Agent.Text, null, 'released');",
+      '};',
+      'export default async function GatedTool({ input, signal }) {',
+      "  return createElement(Agent.Result, { value: { ok: true } }, createElement(Suspense, { fallback: createElement(Agent.Progress, { completed: 0, message: 'waiting', total: 1 }) }, createElement(Gated, { gate: input.gate, signal })));",
+      '}',
+      '',
+    ].join('\n'),
+  });
+  const session = await connectGeneratedServer(root);
+  const notifications: Array<{ readonly message?: string; readonly progress: number }> = [];
+  session.client.setNotificationHandler('notifications/progress', (notification) => {
+    notifications.push(notification.params);
+  });
+  try {
+    const gate = join(root, 'gate.marker');
+    const pending = session.client.callTool({
+      arguments: { gate },
+      name: 'gated',
+      _meta: { progressToken: 'tok-gate' },
+    }, { signal: AbortSignal.timeout(20_000) });
+    // The fallback's progress node reaches the wire while the child is still
+    // blocked: the worker streamed the shell instead of buffering the render.
+    await expect.poll(() => notifications, { timeout: 15_000 }).toEqual([{ message: 'waiting', progress: 0, progressToken: 'tok-gate', total: 1 }]);
+    expect(existsSync(gate)).toBe(false);
+    await writeFile(gate, 'open\n');
+    await expect(pending).resolves.toMatchObject({
+      content: [{ text: 'released', type: 'text' }],
+      structuredContent: { ok: true },
+    });
+    expect(notifications).toHaveLength(1);
   } finally {
     await session.close();
   }
