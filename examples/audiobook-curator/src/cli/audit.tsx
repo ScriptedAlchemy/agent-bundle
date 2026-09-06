@@ -7,9 +7,9 @@ import { ChapterOutline, chaptersFromAuditReceipt } from '../components/chapter-
 import { integrityAuditHeadline } from '../components/headlines.js';
 import { IntegrityAuditReport } from '../components/integrity-report.js';
 import type { IntegrityAuditReceipt } from '../integrity-audit.js';
-import { defaultOutputOperations, outputOperations } from '../operations/output.js';
+import { outputOperations } from '../operations/output.js';
 
-const operation = outputOperations(defaultOutputOperations).audit;
+const operation = outputOperations.audit;
 
 export const config = {
   description: 'Validate metadata, chapters, source mapping, hashes, and optional complete decode.',

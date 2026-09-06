@@ -1,9 +1,9 @@
 import type { CliRouteConfig, CliRouteProps } from 'agent-bundle';
 import { z } from 'zod';
 
-import { defaultMediaMutationOperations, mediaMutationOperations } from '../operations/media-mutation.js';
+import { mediaMutationOperations } from '../operations/media-mutation.js';
 
-const operation = mediaMutationOperations(defaultMediaMutationOperations).applyChapters;
+const operation = mediaMutationOperations.applyChapters;
 
 export const config = {
   description: 'Plan or apply verified generic or Audible chapter rows without changing encoded audio.',

@@ -4,9 +4,9 @@ import type { ToolRouteProps } from 'agent-bundle';
 
 import type { AudibleCacheReceipt } from '../../../audible.js';
 import { Callout, DataList } from '../../../components/primitives.js';
-import { defaultAudibleOperations, audibleOperations } from '../../../operations/audible.js';
+import { audibleOperations } from '../../../operations/audible.js';
 
-const operation = audibleOperations(defaultAudibleOperations).audibleCache;
+const operation = audibleOperations.audibleCache;
 
 export const config = {
   annotations: { openWorldHint: true, readOnlyHint: false },

@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
 import { open, mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
+import { pipeline } from 'node:stream/promises';
 
 export const audioExtensions = Object.freeze(new Set([
   '.aac', '.aax', '.aaxc', '.aif', '.aiff', '.flac', '.m4a', '.m4b',
@@ -49,21 +51,9 @@ export const escapeFfmetadata = (value: string): string => value
   .replaceAll('\n', '\\n');
 
 export const sha256File = async (path: string): Promise<string> => {
-  const handle = await open(path, 'r');
-  try {
-    const hash = createHash('sha256');
-    const buffer = Buffer.allocUnsafe(1024 * 1024);
-    let position = 0;
-    while (true) {
-      const result = await handle.read(buffer, 0, buffer.length, position);
-      if (result.bytesRead === 0) break;
-      hash.update(buffer.subarray(0, result.bytesRead));
-      position += result.bytesRead;
-    }
-    return hash.digest('hex');
-  } finally {
-    await handle.close();
-  }
+  const hash = createHash('sha256');
+  await pipeline(createReadStream(path), hash);
+  return hash.digest('hex');
 };
 
 export const mapWithConcurrency = async <T, R>(

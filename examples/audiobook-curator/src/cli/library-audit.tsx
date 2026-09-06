@@ -7,9 +7,9 @@ import { libraryAuditCliHeadline } from '../components/headlines.js';
 import { LibraryAnalysis } from '../components/library-analysis.js';
 import { DataList } from '../components/primitives.js';
 import type { LibraryAuditReceipt } from '../library.js';
-import { defaultDiscoveryOperations, discoveryOperations } from '../operations/discovery.js';
+import { discoveryOperations } from '../operations/discovery.js';
 
-const operation = discoveryOperations(defaultDiscoveryOperations).libraryAudit;
+const operation = discoveryOperations.libraryAudit;
 
 /**
  * The rendered command of this CLI (#102 stage 3): the audit is the

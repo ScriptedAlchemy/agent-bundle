@@ -2,17 +2,19 @@ import { Buffer } from 'node:buffer';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { Readable } from 'node:stream';
 
-import { hasOnlyOwnKeys, isRecord as coreIsRecord, parseJsonWithoutDuplicateKeys } from '../../core/strict-json.ts';
 import {
+  badRequest,
+  decodedOpaqueSegment,
   diagnostic,
-  isJsonRequest,
+  hasOnly,
   isRequestDiagnostic,
+  noQuery,
   nonemptyString,
   rawPathname,
-  readBody,
+  readJsonBody,
   requestError,
   responseDiagnostic,
-  responseJson as writeJsonResponse,
+  responseJsonOrDestroy,
   type RequestDiagnostic,
 } from '../http.ts';
 import {
@@ -108,29 +110,12 @@ const authoringDiagnostic = (error: unknown): RequestDiagnostic | undefined => {
 const terminalEvent = (event: EvalRunEventsReplay['events'][number]): boolean =>
   event.kind === 'run.cancelled' || event.kind === 'run.completed' || event.kind === 'run.failed';
 
-const pathError = (): never => {
-  throw requestError(diagnostic('AB8070', 'Eval route path is not valid.', 400));
-};
+const pathError = badRequest('AB8070', 'Eval route path is not valid.');
 
-const invalidShape = (): never => {
-  throw requestError(diagnostic('AB8072', 'Eval request has an invalid shape.', 400));
-};
+const invalidShape = badRequest('AB8072', 'Eval request has an invalid shape.');
 
-const decodedSegment = (segment: string): string => {
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(segment);
-  } catch {
-    return pathError();
-  }
-  if (
-    decoded.length === 0 || decoded === '.' || decoded === '..' ||
-    decoded.includes('/') || decoded.includes('\\') || decoded.includes('\0')
-  ) {
-    return pathError();
-  }
-  return decoded;
-};
+const decodedSegment = (segment: string): string =>
+  decodedOpaqueSegment(segment, { code: 'AB8070', message: 'Eval route path is not valid.' });
 
 const opaqueArtifactRef = (value: string): string => {
   if (!/^[A-Za-z0-9_-]{1,8192}$/u.test(value)) return pathError();
@@ -168,11 +153,6 @@ const route = (requestTarget: string | undefined): Route | undefined => {
   return Object.freeze({ kind: 'run', runId: segments[1] ?? pathError() });
 };
 
-// Inputs are parsed JSON, so the canonical guard's unknown-record narrowing is retyped to JsonObject.
-const isRecord = coreIsRecord as (value: unknown) => value is JsonObject;
-
-const hasOnly: (value: JsonObject, fields: readonly string[]) => boolean = hasOnlyOwnKeys;
-
 const nameList = (value: unknown): readonly string[] => {
   if (!Array.isArray(value) || value.length === 0 || !value.every(nonemptyString)) return invalidShape();
   return Object.freeze([...value]);
@@ -185,19 +165,7 @@ const trials = (value: unknown): number => {
   return value;
 };
 
-const jsonBody = async (request: IncomingMessage): Promise<JsonObject> => {
-  if (!isJsonRequest(request)) {
-    throw requestError(diagnostic('AB8009', 'Request body must use application/json.', 415));
-  }
-  let parsed: unknown;
-  try {
-    parsed = parseJsonWithoutDuplicateKeys(await readBody(request));
-  } catch (error) {
-    if (isRequestDiagnostic(error)) throw error;
-    throw requestError(diagnostic('AB8001', 'Request body must be valid JSON.', 400));
-  }
-  return isRecord(parsed) ? parsed : invalidShape();
-};
+const jsonBody = (request: IncomingMessage): Promise<JsonObject> => readJsonBody(request, { invalidShape });
 
 /**
  * A browser selects authored suites, authored cases, and a trial count. Artifact
@@ -218,10 +186,6 @@ const runRequest = (value: JsonObject): Omit<EvalRunRequest, 'artifact' | 'signa
 
 const cancelRequest = async (request: IncomingMessage): Promise<void> => {
   if (!hasOnly(await jsonBody(request), [])) invalidShape();
-};
-
-const noQuery = (requestTarget: string | undefined): void => {
-  if (new URL(requestTarget ?? '/', 'http://localhost').searchParams.size > 0) invalidShape();
 };
 
 const eventCursor = (requestTarget: string | undefined): number => {
@@ -361,7 +325,7 @@ export class EvalRoutes {
         const selection = runRequest(await jsonBody(request));
         if (this.#closePromise !== undefined) throw this.#unavailable(503);
         const admission = await service.start(selection);
-        return writeJsonResponse(response, { run: admission.run }, { destroyIfEnded: true, status: 202 });
+        return responseJsonOrDestroy(response, { run: admission.run }, 202);
       } finally {
         finishAdmission();
       }
@@ -369,11 +333,11 @@ export class EvalRoutes {
     if (parsed.kind === 'cancel' && method === 'POST') {
       const finishAdmission = this.#beginAdmission();
       try {
-        noQuery(request.url);
+        noQuery(request.url, invalidShape);
         await cancelRequest(request);
         if (this.#closePromise !== undefined) throw this.#unavailable(503);
         const cancelled = await service.cancel(parsed.runId);
-        return writeJsonResponse(response, { cancelled, runId: parsed.runId }, { destroyIfEnded: true, status: 202 });
+        return responseJsonOrDestroy(response, { cancelled, runId: parsed.runId }, 202);
       } finally {
         finishAdmission();
       }
@@ -383,10 +347,10 @@ export class EvalRoutes {
     }
     if (parsed.kind === 'comparisons') {
       const query = comparisonQuery(request.url);
-      return writeJsonResponse(response, { comparison: await service.compare(query.base, query.candidate) }, { destroyIfEnded: true });
+      return responseJsonOrDestroy(response, { comparison: await service.compare(query.base, query.candidate) });
     }
     if (parsed.kind === 'events') {
-      return writeJsonResponse(response, { replay: await service.events(parsed.runId, eventCursor(request.url)) }, { destroyIfEnded: true });
+      return responseJsonOrDestroy(response, { replay: await service.events(parsed.runId, eventCursor(request.url)) });
     }
     if (parsed.kind === 'stream') {
       return this.#stream(response, service, parsed.runId, eventCursor(request.url));
@@ -394,10 +358,10 @@ export class EvalRoutes {
     if (parsed.kind === 'artifact') {
       return this.#artifact(request, response, service, parsed);
     }
-    noQuery(request.url);
-    if (parsed.kind === 'suites') return writeJsonResponse(response, await service.suites(), { destroyIfEnded: true });
-    if (parsed.kind === 'runs') return writeJsonResponse(response, { runs: await service.list() }, { destroyIfEnded: true });
-    return writeJsonResponse(response, { run: await service.read(parsed.runId) }, { destroyIfEnded: true });
+    noQuery(request.url, invalidShape);
+    if (parsed.kind === 'suites') return responseJsonOrDestroy(response, await service.suites());
+    if (parsed.kind === 'runs') return responseJsonOrDestroy(response, { runs: await service.list() });
+    return responseJsonOrDestroy(response, { run: await service.read(parsed.runId) });
   }
 
   #unavailable(status: number): Error {

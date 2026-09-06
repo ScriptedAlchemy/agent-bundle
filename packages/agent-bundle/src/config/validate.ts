@@ -632,7 +632,7 @@ const selfConnectingEntryNudge = (
     : conventionalEntry;
   if (source === undefined || !bundleScriptExtensions.has(extname(source).toLowerCase())) return [];
   try {
-    if (scanEntryExportsSource(readFileSync(source, 'utf8')).hasDefaultExport) return [];
+    if (scanEntryExportsSource(readFileSync(source, 'utf8'), source).hasDefaultExport) return [];
   } catch {
     // An unreadable entry is already reported by the existence diagnostics.
     return [];
@@ -2227,7 +2227,7 @@ const explicitBinNamesBySource = (loaded: LoadedConfig): ReadonlyMap<string, rea
  */
 const scriptEntryExports = (source: string): EntryExportScan | undefined => {
   try {
-    return scanEntryExportsSource(readFileSync(source, 'utf8'));
+    return scanEntryExportsSource(readFileSync(source, 'utf8'), source);
   } catch {
     return undefined;
   }
