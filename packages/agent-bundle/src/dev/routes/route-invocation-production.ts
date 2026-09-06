@@ -322,12 +322,11 @@ const streamFromWorker = (
     }
     pending.delete(message.id);
     entry.dispatchSignal.removeEventListener('abort', entry.abort);
-    if (message.type === 'complete' && message.bytes !== undefined) {
-      entry.controller.enqueue(message.bytes);
-      entry.controller.close();
-      return;
-    }
-    if (message.type === 'end') {
+    // `complete` is the whole render in one message from a Flight worker
+    // compiled before #718; the epoch store restores such artifacts across
+    // dev-server restarts until the project rebuilds.
+    if (message.type === 'complete' && message.bytes !== undefined) entry.controller.enqueue(message.bytes);
+    if (message.type === 'end' || message.type === 'complete') {
       entry.controller.close();
       return;
     }
@@ -340,11 +339,24 @@ const streamFromWorker = (
     }>): Promise<ReadableStream<Uint8Array>> => {
       const id = ++sequence;
       let controller!: ReadableStreamDefaultController<Uint8Array>;
-      const stream = new ReadableStream<Uint8Array>({ start: (opened) => { controller = opened; } });
-      const abort = (): void => {
+      const cancelRender = (): void => {
         worker.postMessage({ id, type: 'cancel' });
+        pending.delete(id);
+      };
+      const abort = (): void => {
+        cancelRender();
         controller.error(new DOMException('Agent render was aborted.', 'AbortError'));
       };
+      // The dispatcher cancels the stream when its session closes, which can
+      // precede the worker's `end`; dropping the entry keeps later chunks off
+      // the closed controller.
+      const stream = new ReadableStream<Uint8Array>({
+        cancel: () => {
+          cancelRender();
+          dispatch.signal.removeEventListener('abort', abort);
+        },
+        start: (opened) => { controller = opened; },
+      });
       pending.set(id, { abort, controller, dispatchSignal: dispatch.signal });
       dispatch.signal.addEventListener('abort', abort, { once: true });
       worker.postMessage({

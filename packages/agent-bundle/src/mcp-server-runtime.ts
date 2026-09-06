@@ -515,9 +515,8 @@ export const createFlightWorkerHost = (
 ): WarmFlightHost => {
   interface PendingRender {
     readonly abort: () => void;
+    readonly controller: ReadableStreamDefaultController<Uint8Array>;
     readonly progress?: AgentProgressReporter;
-    readonly reject: (error: Error) => void;
-    readonly resolve: (stream: ReadableStream<Uint8Array>) => void;
     readonly signal: AbortSignal;
   }
   // Generated route modules may write to stdout; stdout is the stdio
@@ -529,7 +528,7 @@ export const createFlightWorkerHost = (
   let sequence = 0;
   let exited = false;
   const failPending = (error: Error): void => {
-    for (const request of pending.values()) request.reject(error);
+    for (const request of pending.values()) request.controller.error(error);
     pending.clear();
   };
   const workerError = (message: FlightWorkerMessage): Error => {
@@ -560,25 +559,30 @@ export const createFlightWorkerHost = (
         : `The MCP render runtime restarted; worker exited with code ${String(code)}.`,
     ));
   });
+  const settle = (id: number, request: PendingRender, error?: Error): void => {
+    pending.delete(id);
+    request.signal.removeEventListener('abort', request.abort);
+    if (error === undefined) request.controller.close();
+    else request.controller.error(error);
+  };
   worker.on('message', (message: FlightWorkerMessage) => {
     const request = pending.get(message.id);
     if (request === undefined) return;
     if (message.type === 'progress') {
-      void request.progress?.report(message.update as never);
+      // A report the session no longer accepts (it completed or failed first)
+      // settles a still-pending render once instead of rejecting unhandled.
+      Promise.resolve(request.progress?.report(message.update as never)).catch((error: unknown) => {
+        if (pending.get(message.id) !== request) return;
+        worker.postMessage({ id: message.id, type: 'cancel' });
+        settle(message.id, request, error instanceof Error ? error : new Error(String(error)));
+      });
       return;
     }
-    pending.delete(message.id);
-    request.signal.removeEventListener('abort', request.abort);
-    if (message.type === 'error') {
-      request.reject(workerError(message));
+    if (message.type === 'chunk') {
+      request.controller.enqueue(message.bytes!);
       return;
     }
-    request.resolve(new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(message.bytes!);
-        controller.close();
-      },
-    }));
+    settle(message.id, request, message.type === 'error' ? workerError(message) : undefined);
   });
   const warmHost = createWarmFlightHost({
     artifactEpoch,
@@ -597,33 +601,45 @@ export const createFlightWorkerHost = (
         }
         const context = await agent();
         const id = ++sequence;
-        return new Promise<ReadableStream<Uint8Array>>((resolve, reject) => {
-          const abort = (): void => {
-            worker.postMessage({ id, type: 'cancel' });
-            pending.delete(id);
-            reject(new DOMException('Agent render was aborted', 'AbortError'));
-          };
-          pending.set(id, { abort, ...(progress === undefined ? {} : { progress }), reject, resolve, signal });
-          signal.addEventListener('abort', abort, { once: true });
-          if (signal.aborted) {
-            abort();
-            return;
-          }
-          worker.postMessage({
-            actor: context.actor,
-            artifactEpoch: requestEpoch ?? artifactEpoch,
-            host: context.host,
-            id,
-            invocation,
-            lineage: context.lineage,
-            plugin: context.plugin,
-            requestInvocation: context.invocation,
-            session: context.session,
-            terminal: context.terminal,
-            type: 'render',
-            workspace: context.workspace,
-          });
+        let controller!: ReadableStreamDefaultController<Uint8Array>;
+        const cancelRender = (): void => {
+          worker.postMessage({ id, type: 'cancel' });
+          pending.delete(id);
+        };
+        const abort = (): void => {
+          cancelRender();
+          controller.error(new DOMException('Agent render was aborted', 'AbortError'));
+        };
+        // A consumer that cancels the stream closes its controller; dropping the
+        // pending entry keeps later worker chunks from reaching a closed stream.
+        const stream = new ReadableStream<Uint8Array>({
+          cancel: () => {
+            cancelRender();
+            signal.removeEventListener('abort', abort);
+          },
+          start: (opened) => { controller = opened; },
         });
+        if (signal.aborted) {
+          controller.error(new DOMException('Agent render was aborted', 'AbortError'));
+          return stream;
+        }
+        pending.set(id, { abort, controller, ...(progress === undefined ? {} : { progress }), signal });
+        signal.addEventListener('abort', abort, { once: true });
+        worker.postMessage({
+          actor: context.actor,
+          artifactEpoch: requestEpoch ?? artifactEpoch,
+          host: context.host,
+          id,
+          invocation,
+          lineage: context.lineage,
+          plugin: context.plugin,
+          requestInvocation: context.invocation,
+          session: context.session,
+          terminal: context.terminal,
+          type: 'render',
+          workspace: context.workspace,
+        });
+        return stream;
       },
     },
   });
