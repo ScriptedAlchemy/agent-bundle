@@ -28,14 +28,16 @@ on:
 permissions:
   contents: read
 
-# Only the latest commit of a ref matters: a PR push cancels the superseded
-# PR run, and a main push or dispatch cancels the superseded main run, so the
-# site is only ever deployed from the tip and an older build can never deploy
-# over a newer one. Merge-queue entries (ref gh-readonly-queue/main/...) and
-# dispatches on other refs key on their own ref.
+# PR pushes cancel the superseded run of the same PR. Runs on main (push or
+# dispatch, both refs/heads/main) share one non-cancelling group because the
+# deploy job must never be killed mid-deployment: GitHub keeps at most one
+# pending run per group, so a burst of merges leaves the in-flight run plus
+# the newest pending one and drops the rest. Merge-queue entries (ref
+# gh-readonly-queue/main/...) and dispatches on other refs key on their own
+# ref.
 concurrency:
   group: docs-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:

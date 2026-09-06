@@ -25,7 +25,8 @@ permissions:
 # run of the same PR, and a main push cancels the superseded main run, so a
 # burst of merges leaves one run for the tip instead of a queue. Merge-queue
 # entries and dispatches key on their own ref. Same pattern as
-# package-preview.yml and docs.yml; release.yml never cancels a publish.
+# package-preview.yml; docs.yml and release.yml never cancel a main run
+# because a deploy or publish must not die mid-flight.
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
