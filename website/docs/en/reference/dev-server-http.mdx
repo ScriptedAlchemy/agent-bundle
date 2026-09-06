@@ -31,8 +31,9 @@ buffer: the newest 256 render events whose JSON totals at most 1 MiB, evicting o
 newest event always survives, however large, so a completed run keeps its `complete` event; the
 Agent Document, `result`, `outcome`, and correlation identifiers live outside the window and are
 never truncated. An envelope whose window lost events carries `evictedEvents` (the count), and a
-stream replay opens with one `truncated` event before the retained window; a cancelled run keeps
-the newest document a render event carried even after that event was evicted. A cancelled
+stream replay opens with one `truncated` event before the retained window; a cancelled or failed
+run keeps its retained window and the newest document a render event carried, even after that
+event was evicted. A cancelled
 invocation has `status: "cancelled"` and no `outcome`; cancelling an already-final invocation
 returns `AB8256` (409).
 
