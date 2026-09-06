@@ -5,6 +5,7 @@ import type {
   DevRuntimeRun,
   DevRuntimeSurface,
 } from '../../agent-bundle/src/contracts/runtime.ts';
+import { routeInvocationRenderHistoryLimits } from '../../agent-bundle/src/contracts/invocations.ts';
 import type { ApplicationLeaf } from '../src/application/application-tree-model.ts';
 import { createRuntimeBackend, type RuntimeInvocationClient } from '../src/application/runtime-backend.ts';
 import type { RuntimePlaygroundController } from '../src/runtime-controller.ts';
@@ -184,4 +185,24 @@ it('keeps the succeeded outcome invariant when a runtime run has no document eve
   expect(invocation.status).toBe('succeeded');
   expect(invocation.document).toBeUndefined();
   expect(invocation.outcome).toEqual({ kind: 'success' });
+});
+
+it('holds a long runtime run document under the shared render-history window', async () => {
+  const setup = fixture();
+  const flood = Object.freeze([
+    { document, sequence: 0, type: 'shell' as const },
+    ...Array.from({ length: 300 }, (_, index) => ({ completed: index, sequence: index + 1, type: 'progress' as const })),
+  ]);
+  const backend = createRuntimeBackend({
+    ...setup,
+    runtimeClient: { ...setup.runtimeClient, readRunDocument: async () => flood },
+  });
+
+  const invocation = await backend.invoke(leaf, { input: { title: 'Dune' }, routeId: leaf.routeId });
+
+  expect(invocation.events).toHaveLength(routeInvocationRenderHistoryLimits.maxEvents);
+  expect(invocation.events[0]).toEqual(flood[0]);
+  expect(invocation.events.at(-1)).toEqual(flood.at(-1));
+  expect(invocation.document).toEqual(document);
+  expect(invocation.retention).toMatchObject({ evictedEvents: 45, producedEvents: 301 });
 });

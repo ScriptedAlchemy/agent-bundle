@@ -32,6 +32,8 @@ export type {
 } from '../dev/routes/route-invocation-result.ts';
 export {
   emptyRetainedRenderEvents,
+  renderRetention,
+  retainedLatestDocument,
   retainedRenderEvents,
   retainRenderEvent,
   routeInvocationRenderHistoryLimits,
