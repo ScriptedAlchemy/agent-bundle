@@ -179,6 +179,8 @@ it.live('round-trips a bounded event envelope through the epoch-bound runtime so
         echoed: request.native,
         event: request.event,
         observedAt: request.observedAt,
+        preflight: request.preflight,
+        preflightFrozen: Object.isFrozen(request.preflight),
         sequence: request.sequence,
       }),
     })),
@@ -196,6 +198,7 @@ it.live('round-trips a bounded event envelope through the epoch-bound runtime so
     hostContractRevision: '2.1.250',
     native: { hook_event_name: 'PostToolUse', tool_name: 'Write' },
     observedAt: '2026-09-05T09:00:00.000Z',
+    preflight: { tickets: ['cc-7'] },
     sequence: 42,
     signal: new AbortController().signal,
     target: 'claude',
@@ -205,6 +208,8 @@ it.live('round-trips a bounded event envelope through the epoch-bound runtime so
     echoed: { hook_event_name: 'PostToolUse', tool_name: 'Write' },
     event: 'tool/after',
     observedAt: '2026-09-05T09:00:00.000Z',
+    preflight: { tickets: ['cc-7'] },
+    preflightFrozen: true,
     sequence: 42,
   });
 }));

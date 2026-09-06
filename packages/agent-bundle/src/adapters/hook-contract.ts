@@ -790,7 +790,7 @@ const eventRouteHookWrapperSource = (
                 '};',
               ]
             : []),
-          'const runStandalone = async (native, signal, observation) => {',
+          'const runStandalone = async (native, signal, observation, preflight) => {',
           '  const resolved = createCanonicalEventProps(canonicalEvent, native, target, nativeEvent, capabilityRevision, signal, observation);',
           ...(retiresLineage ? ['  await retireLineage(native, resolved.canonical.idempotencyKey, resolved.canonical.observedAt);'] : []),
           '  const sessionId = typeof native.session_id === "string" ? native.session_id : typeof native.conversation_id === "string" ? native.conversation_id : undefined;',
@@ -808,7 +808,7 @@ const eventRouteHookWrapperSource = (
           // A hook's stdout is its host envelope: no terminal, never probed (#511).
           '    terminal: available({ hostSurface: "hook", sharesTarget: false, stderr: { color: "none", kind: "none" }, stdout: { color: "none", kind: "none" } }, "derived"),',
           '    ...(workspaceRoot === undefined ? {} : { workspace: available({ root: workspaceRoot }, "native") }),',
-          '  }, async () => renderStandalone({ kind: "event", props: { event: canonicalEvent, payload: { canonical: resolved.canonical, native: resolved.native } } }, signal));',
+          '  }, async () => renderStandalone({ kind: "event", props: { event: canonicalEvent, payload: { canonical: resolved.canonical, native: resolved.native, ...(preflight === undefined ? {} : { preflight }) } } }, signal));',
           '  return projectEventDocument(document, canonicalEvent, target, nativeEvent, native);',
           '};',
         ]
@@ -826,29 +826,30 @@ const eventRouteHookWrapperSource = (
     ...(deferredExecution
       ? [
           '  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) fail("deferred input must be an object");',
-          '  const { native: nativeInput, observedAt, sequence } = parsed;',
+          '  const { native: nativeInput, observedAt, preflight, sequence } = parsed;',
           '  if (typeof observedAt !== "string" || !Number.isInteger(sequence) || sequence < 1) fail("deferred input has an invalid canonical observation");',
           '  const observation = { observedAt, sequence };',
         ]
       : [
           '  const nativeInput = parsed;',
           '  const observation = undefined;',
+          '  const preflight = undefined;',
         ]),
     '  const native = validateNativeEventEnvelope(nativeInput, { canonicalEvent, nativeEvent, target });',
     '  const controller = new AbortController();',
     '  let output;',
     '  if (runtimeMode === "standalone") {',
     ...(standalone
-      ? ['    output = await runStandalone(native, controller.signal, observation);']
+      ? ['    output = await runStandalone(native, controller.signal, observation, preflight);']
       : ['    fail("standalone runtime was not compiled");']),
     '  } else {',
     '    try {',
-    '      output = await requestEventRuntime({ artifactEpoch, endpointId, event: canonicalEvent, hostContractRevision: capabilityRevision, native, observedAt: observation?.observedAt, sequence: observation?.sequence, signal: controller.signal, target, timeoutMs });',
+    '      output = await requestEventRuntime({ artifactEpoch, endpointId, event: canonicalEvent, hostContractRevision: capabilityRevision, native, observedAt: observation?.observedAt, preflight, sequence: observation?.sequence, signal: controller.signal, target, timeoutMs });',
     '    } catch (error) {',
     ...(standalone
       ? [
           '      if (!(fallbackMode === "standalone" && error instanceof EventRuntimeTransportError && error.code === "runtime-unavailable")) throw error;',
-          '      output = await runStandalone(native, controller.signal, observation);',
+          '      output = await runStandalone(native, controller.signal, observation, preflight);',
         ]
       : ['      throw error;']),
     '    }',
@@ -910,7 +911,7 @@ const eventRoutePreflightWrapperSource = (
     '    signal,',
     '    terminal: { hostSurface: "hook", sharesTarget: false, stderr: { color: "none", kind: "none" }, stdout: { color: "none", kind: "none" } },',
     '  }, trace);',
-    '  const projected = gate === "execute" ? undefined : projectEventPreflightResult(gate, canonicalEvent, target, nativeEvent, native);',
+    '  const projected = gate === "execute" || gate.outcome === "execute" ? undefined : projectEventPreflightResult(gate, canonicalEvent, target, nativeEvent, native);',
     '  return Object.freeze({ gate, native, projected, props, runtime: runtimeMode, trace });',
     '};',
     'const runExecutor = (input, signal) => new Promise((resolve, reject) => {',
@@ -943,12 +944,12 @@ const eventRoutePreflightWrapperSource = (
     '  const controller = new AbortController();',
     '  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(timeoutMs)]);',
     '  const { gate, native, projected, props, trace } = await prepareRouteInvocation(parsed, signal);',
-    '  if (gate !== "execute") {',
+    '  if (gate !== "execute" && gate.outcome !== "execute") {',
     '    if (projected !== undefined) process.stdout.write(JSON.stringify(projected));',
     '    return;',
     '  }',
     '  trace.executeStart(runtimeMode);',
-    '  const executionInput = Buffer.from(JSON.stringify({ native, observedAt: props.canonical.observedAt, sequence: props.canonical.sequence }));',
+    '  const executionInput = Buffer.from(JSON.stringify({ native, observedAt: props.canonical.observedAt, ...(gate === "execute" ? {} : { preflight: gate.data }), sequence: props.canonical.sequence }));',
     '  const terminationSignals = ["SIGHUP", "SIGINT", "SIGTERM"];',
     '  const terminate = () => controller.abort();',
     '  for (const terminationSignal of terminationSignals) process.once(terminationSignal, terminate);',
