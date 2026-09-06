@@ -279,18 +279,21 @@ an object literal, a string, a class, or an identifier the module imports rather
 function). The route compiles without a gate beside the error, and because the diagnostic is an
 error the build fails rather than silently taking the expensive rendered path.
 
-Preflight may be synchronous or asynchronous and has exactly three results
+Preflight may be synchronous or asynchronous and has exactly four results
 (`EventPreflightResult`):
 
 | Result | Meaning |
 | --- | --- |
 | `'execute'` | Load the rendered route entry, resolve its declared providers, and render it. |
+| `{ outcome: 'execute', data }` | Load and render the route with the strict-JSON `data` available as its `preflight` prop. |
 | `{ outcome: 'continue' }` | Pass through: nothing is projected and no host decision is written, so the host's normal flow applies — on `tool/before`, its own permission prompt. |
 | `{ outcome: 'deny', reason }` | Deny with a non-empty reason, projected per host by the same rules as a rendered route's `deny` (`hookSpecificOutput.permissionDecision: 'deny'` with `permissionDecisionReason` on a Claude `tool/before`, for example). |
 
+When the rendered route needs a value the gate already computed, type both sides with the same JSON shape — `EventPreflight<'tool/after', CompletedTickets>` and `AgentEventRouteProps<'tool/after', CompletedTickets>` — then return `{ outcome: 'execute', data }`; the route receives that value as the optional `preflight` prop (it is absent after bare `'execute'` or when no gate exists). The kernel snapshots `data` as strict JSON before it crosses the existing deferred executor and shared-runtime boundaries, so functions, class instances, cycles, accessors, and non-finite numbers fail closed instead of reaching the route.
+
 `execute` is the only result that loads the rendered route runtime. Validation
 (`validateEventPreflightResult`, exported from `agent-bundle`) fails closed on everything else:
-`undefined`, the bare string `'continue'`, an outcome other than `continue` or `deny` — a gate has
+`undefined`, the bare string `'continue'`, an outcome other than `execute`, `continue`, or `deny` — a gate has
 no `allow`, `ask`, or `updatedInput`; return `'execute'` and let the rendered route make those
 decisions — any extra field (`reason` beside `continue`, `updatedInput` beside `deny`), an empty
 or whitespace-only reason, and `deny` on a family where no host projects a blocking denial.

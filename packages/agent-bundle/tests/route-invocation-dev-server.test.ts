@@ -89,7 +89,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         '',
         'export default () => {',
         "  appendFileSync(join(process.cwd(), '.agent-bundle', 'defer-gate.marker'), 'gate\\n');",
-        "  return 'execute';",
+        "  return { outcome: 'execute', data: { ticket: 'cc-7' } };",
         '};',
         '',
       ].join('\n'),
@@ -102,10 +102,10 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         '',
         "export const config = { providers: ['clock'], runtime: 'standalone' };",
         '',
-        'export default async function AfterTool({ canonical }) {',
+        'export default async function AfterTool({ canonical, preflight }) {',
         '  const context = await agent();',
         "  appendFileSync(join(process.cwd(), '.agent-bundle', 'defer-handler.marker'), 'run\\n');",
-        "  const value = { outcome: 'defer', providers: Object.keys(context.providers).sort() };",
+        "  const value = { outcome: 'defer', providers: Object.keys(context.providers).sort(), ticket: preflight.ticket };",
         "  return createElement(Agent.Result, { value }, createElement(Agent.Context, null, `Observed ${canonical.payload.toolName}.`));",
         '}',
         '',
@@ -368,7 +368,11 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     expect(event.invocation.outcome).toEqual({ kind: 'success' });
     expect(event.invocation.events.at(-1)?.type).toBe('complete');
     expect(event.invocation.document).toBeDefined();
-    expect(event.invocation.result).toEqual({ outcome: 'defer', providers: ['clock', 'processLifetime'] });
+    expect(event.invocation.result).toEqual({
+      outcome: 'defer',
+      providers: ['clock', 'processLifetime'],
+      ticket: 'cc-7',
+    });
     expect(await readFile(join(project.root, '.agent-bundle', 'defer-gate.marker'), 'utf8')).toBe('gate\n');
     expect(await readFile(join(project.root, '.agent-bundle', 'defer-handler.marker'), 'utf8')).toBe('run\n');
     expect(event.invocation.projection.hosts?.[0]).toMatchObject({ host: 'claude' });

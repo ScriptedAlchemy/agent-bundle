@@ -684,11 +684,12 @@ it('generates the warm react-server Flight worker separately from the MCP dispat
   );
   expect(source).toContain("lineage: message.lineage ?? unavailable('not-provided'),");
   expect(source).toContain("terminal: message.terminal ?? unavailable('not-provided'),");
+  expect(source).toContain('preflight: Object.freeze(message.invocation.props.payload.preflight)');
   expect(source).toContain('route.module.inputSchema.parse(message.invocation.props.input)');
   expect(source).toContain('message.validateInput !== true ? { input: message.invocation.props.input');
   expect(source).toContain("createElement(Agent.Error, { code: 'invalid-input' }");
   expect(createHash('sha256').update(source).digest('hex')).toBe(
-    '9780b027d8d5fef12aa0843ba9eb5ab6bd0336ef137ec1bfa552a2ff19daa217',
+    '68b593d21fdf4aaa5c51d99cffb1a106773e50ef1837072bfb0774699719f98c',
   );
   expect(generate({
     artifactEpoch: 'route-fixture@1.2.3',
