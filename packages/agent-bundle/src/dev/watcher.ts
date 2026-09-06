@@ -37,14 +37,15 @@ const relativePath = (root: string, path: string): string | undefined => {
  * Whether `source` is inside the staging directory an output root is
  * assembled in: the package build (`package-build.ts`) and the artifact
  * build (`build.ts`) `mkdtemp` a `.<output>.stage-XXXXXX` sibling of the
- * output root and rename it into place, so those paths are build output
- * too, not source. Without this, every `dist/` package build inside
+ * output root and rename it into place, and the package build compiles in a
+ * `.<output>.compile-XXXXXX` sibling first (#656), so those paths are build
+ * output too, not source. Without this, every `dist/` package build inside
  * `agent-bundle dev` would invalidate the epoch it just produced.
  */
 const isOutputStagingPath = (output: string, source: string): boolean => {
   const parent = dirname(output);
-  const prefix = `${parent === '.' ? '' : `${parent}/`}.${basename(output)}.stage-`;
-  return source.startsWith(prefix);
+  const prefix = `${parent === '.' ? '' : `${parent}/`}.${basename(output)}.`;
+  return source.startsWith(`${prefix}stage-`) || source.startsWith(`${prefix}compile-`);
 };
 
 const defaultPathSignature = async (path: string): Promise<string | undefined> => {
