@@ -28,7 +28,7 @@ Each Effect-consuming package has exactly one `src/effect/boundary.ts`:
 
 The boundary owns:
 
-- `runPromise` / `runSync` (plus `runPromiseExit` where a caller branches on `Exit`)
+- `runPromise` / `runSync` (a caller that branches on `Exit` wraps its program in `Effect.exit`)
 - `AbortSignal` ↔ interruption (`interruptWhenAborted`, `scopedAbortSignal`, `signal` on `runPromise`)
 - mapping the Effect error channel onto the existing typed Error contracts
 
@@ -207,7 +207,7 @@ keep boundary-runner assertions on the package boundary they are testing.
 Stage 2 uses Effect `Stream` for the #145 dispatcher: Flight bytes via
 `Stream.unfold` that waits for event-stream demand *before* `reader.read()`,
 pending boundaries via `Stream.paginate`, contract bounds as the emit stage
-(`boundRenderEventStream` / `createAgentRenderEventSequence`), and progress
+(`emitBoundRenderEvent` / `createAgentRenderEventSequence`), and progress
 via `Stream.merge` + `takeUntil(complete)` (not `Stream.callback` — a failed
 callback producer does not fail the stream). A `Latch` opened from the
 public event-stream pull gates Flight bytes after the shell. Host
