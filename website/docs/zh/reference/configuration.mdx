@@ -30,7 +30,7 @@ export default defineConfig({
 | `bin` | `false \| Record<string, string \| { entry }>` | `src/cli.ts` 约定。 |
 | `lib` | `false \| string \| { entry, dts? }` | `src/index.ts` 约定。 |
 | `routes` | 路由图策略（`cli`、`mcpCommands`、`servers`） | 由约定推导。同位置有 `<tool>.cli.ts` 的工具会从 `routes.mcpCommands` 中排除。 |
-| `output` | `{ distPath? }` | 命令行下为 `artifact`；不带 `packageOutputs` 的 `build()` 下为 `dist`。 |
+| `output` | `{ distPath?, sourceMap? }` | 命令行下为 `artifact`；不带 `packageOutputs` 的 `build()` 下为 `dist`。`sourceMap` 默认为 `false`。 |
 | `runtime` | `{ node }` | Node 22.12。 |
 | `payload` | `Record<string, string \| { source, targets? }>` | 无。 |
 | `state` | `false` | `src/state.ts` 约定。 |
@@ -109,6 +109,11 @@ export default defineConfig({
 `dist`。逐次调用的 `--output` 标志优先，但同样
 受相同的项目根包含性检查约束；绝对或外部输出路径、形态无效的路径，或落入保留编译器命名空间的路径
 均不受支持（`AB4707`–`AB4709`）。
+
+`output.sourceMap` 是生成式可执行文件的 source map 显式开关，默认为 `false`。设为 `true` 时，编译器
+profile 会把打包器的 `output.sourceMap` 设为内联 JS map，让 map 留在可执行文件内部——同级的 `.map`
+文件不属于计划中的产物文件集合。非布尔值是 `AB4707`。MCP App 视图仍保持自身的默认值（关闭），并继续
+通过 `tools.rsbuild.output.sourceMap` 选择加入。
 
 `runtime.node` 是 `major.minor[.patch]` 形式的最低 Node.js 版本。它只能抬高生成式可执行文件的默认下限，
 绝不能降低，且所选下限会作为 `runtime.node` 记录在产物清单中。这个下限本身在
@@ -228,6 +233,12 @@ web: {
 因为 `plugins` 数组会拼接、而 Rsbuild 从不按名称去重插件——框架会替你注册它。`AB4725` 会拒绝
 并非 `false` 的 `tools.rsbuild.output.autoExternal`，以及在 `tools.rsbuild.output` 或对象形式的
 `tools.rspack` 中、点名某个包（既不是 Node 内置模块、`pnpapi`，也不是相对路径）的字符串或对象 `externals` 条目。
+`AB4726` 会拒绝 `tools.rsbuild` 中已废弃或移除的 Rsbuild v2 路径：`source.alias`、
+`source.aliasStrategy`、`performance.bundleAnalyze`、`performance.removeMomentLocale`、
+`performance.profile`、`performance.chunkSplit`、`output.sourceMap.extract.js`、`provider`、
+`tools.webpack`、`tools.webpackChain`、`dev.setupMiddlewares`，以及旧版代理的 `context` / `on*`
+事件键。每条诊断都会给出当前替代项。此检查只针对 `tools.rsbuild` 中的这些特定路径，不会套用到作者自定义的
+`html.templateParameters` 变量或 `tools.rspack` 下的合法 Rspack 配置。
 
 逃生舱在同一个打包器引擎上执行——即 agent-bundle 所固定的 `@rsbuild/core` 背后的那个 `@rspack/core`，
 由 Rslib 编译的输出（产物脚本、MCP 入口、钩子、包构建）与 MCP App 视图共用——但这个引擎是 agent-bundle
@@ -240,6 +251,16 @@ MCP App 构建保留 Rsbuild 默认的 `resolve.aliasStrategy`（`prefer-tsconfi
 是例外：编译器会在解析开始之前把这个精确的导入改写为生成的身份模块，先于 `paths` 与任何
 `resolve.alias`，因此没有任何 `paths` 映射能够遮蔽它。已解析配置断言会拒绝移除这一改写的逃生舱取值，
 就像它拒绝破坏自包含输出的取值一样。
+
+合成的视图配置以 `Chrome >= 144` 为目标；设置这条基线时，它是当前发布的桌面 MCP App 宿主中
+最旧的 Chromium 代际：Cursor 3.18 报告
+[Chromium 144](https://forum.cursor.com/t/cursor-updates-in-windows-dont-relaunch-cursor/170082)，
+Claude Desktop 官方 Linux 包报告
+[Chromium 148](https://github.com/anthropics/claude-code/issues/79995)，Codex Windows 包报告
+[Chromium 151](https://github.com/openai/codex/issues/38310)。配置仅对 `react`、`react-dom` 与
+`scheduler` 去重，使 App 只解析到一份 React 运行时。作者 HTML 模板只会收到 Rsbuild 的安全默认参数
+`mountId`、`entryName` 与 `assetPrefix`，编译及插件内部对象仍不会暴露；框架的脚本注入以及默认的
+`root` 挂载点、语言和 App 标题保持不变。
 
 ### 插件
 

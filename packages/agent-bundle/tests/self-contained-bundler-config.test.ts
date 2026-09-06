@@ -10,7 +10,14 @@ import { join } from 'node:path';
 import { composeMcpAppsRsbuildConfig } from '../src/build/mcp-apps.ts';
 import { buildWithRslib } from '../src/build/compiler.ts';
 import { ArtifactDependencyAuditPlugin } from '../src/build/dependency-audit-plugin.ts';
-import { composeEntryLibConfig, entryLibId, type RslibEntry } from '../src/build/rslib.ts';
+import {
+  compilerHostNodeFloor,
+  composeEntryLibConfig,
+  entryLibId,
+  generatedExecutableLegalComments,
+  generatedExecutableSyntax,
+  type RslibEntry,
+} from '../src/build/rslib.ts';
 import type { AgentBundleMeta } from '../src/meta.ts';
 import { agentBundleNodeModules } from './helpers/workspace-paths.ts';
 
@@ -96,6 +103,39 @@ it('composes the executable lib profile with nothing externalized', () => {
   expect(lib.output?.autoExternal).toBe(false);
   expect(lib.autoExternal).toBeUndefined();
   expect(lib.output?.externals).toBeUndefined();
+});
+
+it('derives generated-executable syntax from the compiler host floor matching engines.node', async () => {
+  const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
+    readonly engines: { readonly node: string };
+  };
+  expect(pkg.engines.node).toBe(`>=${compilerHostNodeFloor}`);
+  expect(generatedExecutableSyntax).toBe('es2022');
+  const root = join(tmpdir(), 'agent-bundle-syntax-floor-profile');
+  const lib = composeEntryLibConfig(probeEntry(root), { cwd: root, meta: testMeta, outputRoot: join(root, 'dist') });
+  expect(lib.syntax).toBe(generatedExecutableSyntax);
+});
+
+it('reserves inline legal comments for future minification without adding a license asset today', () => {
+  expect(generatedExecutableLegalComments).toBe('inline');
+  const root = join(tmpdir(), 'agent-bundle-legal-comments-profile');
+  const lib = composeEntryLibConfig(probeEntry(root), { cwd: root, meta: testMeta, outputRoot: join(root, 'dist') });
+  expect(lib.output?.legalComments).toBe(generatedExecutableLegalComments);
+  expect(lib.output?.minify).toBe(false);
+  expect(lib.output?.sourceMap).toBe(false);
+});
+
+it('opts generated-executable source maps in through output.sourceMap', () => {
+  const root = join(tmpdir(), 'agent-bundle-source-map-profile');
+  const entry = probeEntry(root);
+  const outputRoot = join(root, 'dist');
+  const off = composeEntryLibConfig(entry, { cwd: root, meta: testMeta, outputRoot });
+  expect(off.output?.sourceMap).toBe(false);
+  const on = composeEntryLibConfig(entry, { cwd: root, meta: testMeta, outputRoot, sourceMap: true });
+  expect(on.output?.sourceMap).toEqual({ js: 'inline-source-map' });
+  expect(on.output?.autoExternal).toBe(false);
+  expect(on.bundle).toBe(true);
+  expect(on.splitChunks).toBe(false);
 });
 
 it('lowers a generated executable with only Node builtins external and inlines its dependencies', async () => {

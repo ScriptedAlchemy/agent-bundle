@@ -23,7 +23,7 @@ const pluginNames = (plugins: ExtendConfig['plugins']): readonly string[] => (pl
   typeof plugin === 'object' && plugin !== null && 'name' in plugin && typeof plugin.name === 'string' ? [plugin.name] : []
 ));
 
-const publishOnlyPlugins = ['plugin-publint', 'agent-bundle:esm-node-globals'];
+const publishOnlyPlugins = ['plugin-publint'];
 
 /** The pool config as a pool with no overrides of its own receives it, resolved once. */
 let poolConfig: Promise<ExtendConfig> | undefined;
@@ -45,6 +45,13 @@ describe('rstest.rslib.ts', () => {
         },
       },
     });
+  });
+
+  it('shims the CommonJS path globals through Rslib in both libs, not through a plugin of its own', () => {
+    for (const lib of agentBundleRslibConfig.lib ?? []) {
+      expect(lib.shims, lib.id).toEqual({ esm: { __dirname: true, __filename: true } });
+    }
+    expect(pluginNames(agentBundleRslibConfig.plugins)).toEqual(publishOnlyPlugins);
   });
 
   it('reads the lib entry through libId only — the adapter falls back to an empty entry without a diagnostic', async () => {

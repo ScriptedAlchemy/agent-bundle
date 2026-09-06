@@ -170,6 +170,12 @@ export interface AgentBundleOutputConfig {
    * check; absolute and external output paths are unsupported.
    */
   distPath?: string;
+  /**
+   * Opt in to source maps on generated executables. Defaults to false. When
+   * true, the compiler profile sets the bundler's `output.sourceMap` to an
+   * inline JS map so the artifact file set stays identical to provenance.
+   */
+  sourceMap?: boolean;
 }
 
 export interface AgentBundleHostConfig {
@@ -785,6 +791,11 @@ export interface NormalizedPlugin {
   readonly rules?: readonly NormalizedRule[];
   /** The generated-executable runtime floor selected during normalization. */
   readonly runtime: NormalizedRuntime;
+  /**
+   * True when `output.sourceMap` opted the generated-executable compiler
+   * profile in. Absent means source maps stay off.
+   */
+  readonly sourceMap?: true;
   readonly scripts: readonly NormalizedScript[];
   readonly skills: readonly NormalizedSkill[];
   readonly state?: NormalizedStateDefinition;

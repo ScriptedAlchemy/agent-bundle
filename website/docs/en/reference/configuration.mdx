@@ -30,7 +30,7 @@ export default defineConfig({
 | `bin` | `false \| Record<string, string \| { entry }>` | The `src/cli.ts` convention. |
 | `lib` | `false \| string \| { entry, dts? }` | The `src/index.ts` convention. |
 | `routes` | Route-graph policy (`cli`, `mcpCommands`, `servers`) | Convention-derived. A tool with a colocated `<tool>.cli.ts` is excluded from `routes.mcpCommands`. |
-| `output` | `{ distPath? }` | `artifact` from the CLI; `dist` from `build()` without `packageOutputs`. |
+| `output` | `{ distPath?, sourceMap? }` | `artifact` from the CLI; `dist` from `build()` without `packageOutputs`. `sourceMap` defaults to `false`. |
 | `runtime` | `{ node }` | Node 22.12. |
 | `payload` | `Record<string, string \| { source, targets? }>` | None. |
 | `state` | `false` | The `src/state.ts` convention. |
@@ -122,6 +122,12 @@ and that owns `dist/`; the programmatic `build()` defaults to `dist` unless `pac
 The per-invocation `--output` flag wins, but is subject to the same project-root
 containment check; an output path that is absolute or external, has an invalid shape, or lands
 in a reserved compiler namespace is unsupported (`AB4707`–`AB4709`).
+
+`output.sourceMap` is an explicit opt-in for source maps on generated executables. It defaults to
+`false`. When `true`, the compiler profile sets the bundler's `output.sourceMap` to an inline JS
+map so the map stays inside the executable — sibling `.map` files are not part of the planned
+artifact file set. A non-boolean value is `AB4707`. MCP App views keep their own default (off)
+and still opt in through `tools.rsbuild.output.sourceMap`.
 
 `runtime.node` is a minimum Node.js version in `major.minor[.patch]` form. It can only raise the
 default floor for generated executables, never lower it, and the selected floor is recorded as
@@ -255,7 +261,14 @@ hatch value that breaks an artifact contract is a hard diagnostic rather than a 
 never dedupes plugins by name — the framework registers it for you. `AB4725` rejects
 `tools.rsbuild.output.autoExternal` that is not `false`, and a string or object `externals`
 entry that names a package (neither a Node built-in, `pnpapi`, nor a relative path), in
-`tools.rsbuild.output` or an object-form `tools.rspack`.
+`tools.rsbuild.output` or an object-form `tools.rspack`. `AB4726` rejects deprecated or removed
+Rsbuild v2 paths in `tools.rsbuild`: `source.alias`, `source.aliasStrategy`,
+`performance.bundleAnalyze`, `performance.removeMomentLocale`, `performance.profile`,
+`performance.chunkSplit`, `output.sourceMap.extract.js`, `provider`, `tools.webpack`,
+`tools.webpackChain`, `dev.setupMiddlewares`, and legacy proxy `context` / `on*` event keys.
+Each diagnostic names the current replacement. This check is path-specific to `tools.rsbuild`;
+authored `html.templateParameters` variables and valid Rspack configuration under
+`tools.rspack` are not subject to it.
 
 The hatch executes on one bundler engine — the `@rspack/core` behind agent-bundle's pinned
 `@rsbuild/core`, shared by the Rslib-compiled outputs (artifact scripts, MCP entries, hooks, the
@@ -271,6 +284,17 @@ reserved `agent-bundle/meta` specifier is the exception: the compiler rewrites t
 to the generated identity module before resolution starts, ahead of both `paths` and any
 `resolve.alias`, so no `paths` mapping can shadow it. The resolved-config assertion refuses a
 hatch value that removes that rewrite, as it refuses one that breaks the self-contained output.
+
+The synthesized view profile targets `Chrome >= 144`, the oldest Chromium generation in the
+currently shipped desktop MCP App hosts when this floor was set: Cursor 3.18 reports
+[Chromium 144](https://forum.cursor.com/t/cursor-updates-in-windows-dont-relaunch-cursor/170082),
+Claude Desktop's official Linux package reports
+[Chromium 148](https://github.com/anthropics/claude-code/issues/79995), and the Codex Windows
+package reports [Chromium 151](https://github.com/openai/codex/issues/38310). It deduplicates
+exactly `react`, `react-dom`, and `scheduler` so an App resolves one React runtime. Author HTML
+templates receive only Rsbuild's safe `mountId`, `entryName`, and `assetPrefix` defaults;
+compilation and plugin internals remain withheld. Framework script injection and the default
+`root` mount, language, and App title remain intact.
 
 ### Plugins
 
