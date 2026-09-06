@@ -3,6 +3,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { dirname, extname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { hooksFlightWorkerPath } from '../adapters/composite-layout.ts';
 import type { NoticeDeliveryAdvertisement } from '../adapters/notice-delivery.ts';
 import {
   eventArtifactEpochToken,
@@ -601,7 +602,7 @@ export const planCompiledHooks = (
     ...(entry.timeout === undefined ? {} : { timeout: entry.timeout }),
     ...(index === workerOwner
       ? {
-        workerOutput: resolveArtifactDestination(resolve(options.outDir, 'hooks'), 'hooks-flight.mjs'),
+        workerOutput: resolveArtifactDestination(options.outDir, hooksFlightWorkerPath),
         workerSourceInputs,
       }
       : {}),
@@ -639,7 +640,7 @@ export const planHooksSurface = (
     ? undefined
     : {
       name: 'hooks-flight',
-      outputRelativePath: 'hooks/hooks-flight.mjs',
+      outputRelativePath: hooksFlightWorkerPath,
       reactServer: true as const,
       rscManifest: true as const,
       source: standaloneEventRoutes[0]!.source,
@@ -731,7 +732,7 @@ export const planHooksSurface = (
             ?? (() => { throw new Error(`Missing bundled deferred hook executor evidence for ${JSON.stringify(entry.name)}.`); })(),
         }),
         ...(entry.workerOutput === undefined ? {} : {
-          workerSourceInputs: evidenceByPath.get('hooks/hooks-flight.mjs') ?? (() => { throw new Error('Missing bundled hook Flight worker evidence.'); })(),
+          workerSourceInputs: evidenceByPath.get(hooksFlightWorkerPath) ?? (() => { throw new Error('Missing bundled hook Flight worker evidence.'); })(),
         }),
       })));
     },

@@ -62,3 +62,11 @@ export const hookWrapperPath = (
   const reached = hookTargets.filter((target) => selection.has(target));
   return reached.length > 1 ? `hooks/${hookName}.${host}.mjs` : `hooks/${hookName}.mjs`;
 };
+
+/**
+ * The artifact-relative path of the one standalone react-server Flight worker
+ * every event-route wrapper of the composite root shares (`planHooksSurface`).
+ * Emitted exactly when some event route runs or falls back standalone; it is
+ * a `files[]` row of the manifest, not an `executables` row of its own.
+ */
+export const hooksFlightWorkerPath = 'hooks/hooks-flight.mjs';
