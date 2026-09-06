@@ -688,8 +688,17 @@ it('generates the warm react-server Flight worker separately from the MCP dispat
   expect(source).toContain('route.module.inputSchema.parse(message.invocation.props.input)');
   expect(source).toContain('message.validateInput !== true ? { input: message.invocation.props.input');
   expect(source).toContain("createElement(Agent.Error, { code: 'invalid-input' }");
+  // Flight bytes leave the worker chunk by chunk inside the request scope —
+  // the same `chunk`/`end`/`error` transport the rendered CLI worker speaks —
+  // so a Suspense fallback reaches the consumer before the render completes (#686).
+  expect(source).toContain("parentPort.postMessage({ bytes, id: message.id, type: 'chunk' }, [bytes.buffer]);");
+  expect(source).toContain("parentPort.postMessage({ id: message.id, type: 'end' });");
+  expect(source).not.toContain('arrayBuffer');
+  expect(source).not.toContain("type: 'complete'");
+  expect(source.indexOf("type: 'chunk'")).toBeLessThan(source.indexOf("type: 'observed-render-finish'"));
+  expect(source.indexOf("type: 'end'")).toBeGreaterThan(source.indexOf("type: 'observed-render-finish'"));
   expect(createHash('sha256').update(source).digest('hex')).toBe(
-    '68b593d21fdf4aaa5c51d99cffb1a106773e50ef1837072bfb0774699719f98c',
+    'f363a6abcf9002e413be930cd00e1514da975ddfb8ca58a70be07f392601a4f4',
   );
   expect(generate({
     artifactEpoch: 'route-fixture@1.2.3',
