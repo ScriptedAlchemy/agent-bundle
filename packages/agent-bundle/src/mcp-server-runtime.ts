@@ -559,24 +559,30 @@ export const createFlightWorkerHost = (
         : `The MCP render runtime restarted; worker exited with code ${String(code)}.`,
     ));
   });
+  const settle = (id: number, request: PendingRender, error?: Error): void => {
+    pending.delete(id);
+    request.signal.removeEventListener('abort', request.abort);
+    if (error === undefined) request.controller.close();
+    else request.controller.error(error);
+  };
   worker.on('message', (message: FlightWorkerMessage) => {
     const request = pending.get(message.id);
     if (request === undefined) return;
     if (message.type === 'progress') {
-      void request.progress?.report(message.update as never);
+      // A report the session no longer accepts (it completed or failed first)
+      // settles a still-pending render once instead of rejecting unhandled.
+      Promise.resolve(request.progress?.report(message.update as never)).catch((error: unknown) => {
+        if (pending.get(message.id) === request) {
+          settle(message.id, request, error instanceof Error ? error : new Error(String(error)));
+        }
+      });
       return;
     }
     if (message.type === 'chunk') {
       request.controller.enqueue(message.bytes!);
       return;
     }
-    pending.delete(message.id);
-    request.signal.removeEventListener('abort', request.abort);
-    if (message.type === 'error') {
-      request.controller.error(workerError(message));
-      return;
-    }
-    request.controller.close();
+    settle(message.id, request, message.type === 'error' ? workerError(message) : undefined);
   });
   const warmHost = createWarmFlightHost({
     artifactEpoch,
@@ -613,12 +619,12 @@ export const createFlightWorkerHost = (
           },
           start: (opened) => { controller = opened; },
         });
-        pending.set(id, { abort, controller, ...(progress === undefined ? {} : { progress }), signal });
-        signal.addEventListener('abort', abort, { once: true });
         if (signal.aborted) {
-          abort();
+          controller.error(new DOMException('Agent render was aborted', 'AbortError'));
           return stream;
         }
+        pending.set(id, { abort, controller, ...(progress === undefined ? {} : { progress }), signal });
+        signal.addEventListener('abort', abort, { once: true });
         worker.postMessage({
           actor: context.actor,
           artifactEpoch: requestEpoch ?? artifactEpoch,

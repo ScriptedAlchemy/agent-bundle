@@ -168,7 +168,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         '  const context = await agent();',
         "  appendFileSync(join(process.cwd(), '.agent-bundle', 'defer-handler.marker'), 'run\\n');",
         "  const value = { outcome: 'defer', providers: Object.keys(context.providers).sort(), ticket: preflight.ticket };",
-        "  return createElement(Agent.Result, { value }, createElement(Suspense, { fallback: createElement(Agent.Progress, { completed: 0, message: 'event streaming', total: 1 }) }, createElement(Observed, { gate: canonical.payload.toolInput?.gate, signal, toolName: canonical.payload.toolName })));",
+        "  return createElement(Agent.Result, { value }, createElement(Suspense, { fallback: createElement(Agent.Progress, { completed: 0, message: 'event streaming', total: 1 }) }, createElement(Observed, { gate: canonical.payload.toolInput?.value?.gate, signal, toolName: canonical.payload.toolName?.value })));",
         '}',
         '',
       ].join('\n'),
@@ -356,7 +356,18 @@ it('invokes compiled tool and event routes through the foreground server', { tim
       return { id: started.invocation.id, stream: invocationMessages(stream) };
     };
     const gatePath = (gate: string): string => join(project.root, '.agent-bundle', gate);
-    const releaseGate = (gate: string): Promise<void> => writeFile(gatePath(gate), 'open\n');
+    // Releasing returns the release instant so a final envelope can prove the
+    // render completed after it — the fallback was streamed from a blocked
+    // render, not replayed from a finished one.
+    const releaseGate = async (gate: string): Promise<number> => {
+      expect(existsSync(gatePath(gate))).toBe(false);
+      const releasedAt = Date.now();
+      await writeFile(gatePath(gate), 'open\n');
+      return releasedAt;
+    };
+    const completedAfter = (message: StreamMessage, releasedAt: number): void => {
+      expect(Date.parse((message.invocation as RouteInvocationResponse['invocation']).completedAt)).toBeGreaterThanOrEqual(releasedAt);
+    };
 
     // The compiled MCP tool streams its authored Suspense fallback to the
     // Workbench consumer while the child is still blocked on the gate; no
@@ -364,11 +375,11 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     const live = await startStreaming({ input: { gate: 'live-gate' }, routeId: 'tool:status/live' });
     const liveFallback = await live.stream.next(isFallbackRender('streaming'));
     expect(liveFallback.event).toMatchObject({ type: 'shell' });
-    expect(existsSync(gatePath('live-gate'))).toBe(false);
     expect(renderEvents(live.stream.seen).map((event) => event.type)).toEqual(['shell']);
-    await releaseGate('live-gate');
+    const liveReleasedAt = await releaseGate('live-gate');
     const liveFinal = await live.stream.next(isFinal);
     expect(liveFinal).toMatchObject({ invocation: { status: 'succeeded' }, type: 'final' });
+    completedAfter(liveFinal, liveReleasedAt);
     const liveEvents = renderEvents(live.stream.seen);
     expect(liveEvents.map((event) => event.type)).toEqual(['shell', 'replace', 'complete']);
     const liveComplete = liveEvents.at(-1)!;
@@ -593,11 +604,11 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     });
     const eventFallback = await gatedEvent.stream.next(isFallbackRender('event streaming'));
     expect(eventFallback.event).toMatchObject({ type: 'shell' });
-    expect(existsSync(gatePath('event-gate'))).toBe(false);
     expect(renderEvents(gatedEvent.stream.seen).map((entry) => entry.type)).toEqual(['shell']);
-    await releaseGate('event-gate');
+    const eventReleasedAt = await releaseGate('event-gate');
     const gatedEventFinal = await gatedEvent.stream.next(isFinal);
     expect(gatedEventFinal).toMatchObject({ invocation: { status: 'succeeded' }, type: 'final' });
+    completedAfter(gatedEventFinal, eventReleasedAt);
     expect(renderEvents(gatedEvent.stream.seen).map((entry) => entry.type)).toEqual(['shell', 'replace', 'complete']);
     const gatedEventInvocation = gatedEventFinal.invocation as RouteInvocationResponse['invocation'];
     expect(gatedEventInvocation.result).toEqual(event.invocation.result);

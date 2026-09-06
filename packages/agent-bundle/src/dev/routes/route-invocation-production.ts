@@ -66,6 +66,7 @@ interface WorkerMessage {
   readonly status?: 'failed' | 'mounted';
   readonly type:
     | 'chunk'
+    | 'complete'
     | 'end'
     | 'error'
     | 'observed-handler'
@@ -360,7 +361,11 @@ const streamFromWorker = (
     }
     pending.delete(message.id);
     entry.dispatchSignal.removeEventListener('abort', entry.abort);
-    if (message.type === 'end') {
+    // `complete` is the whole render in one message from a Flight worker
+    // compiled before #718; the epoch store restores such artifacts across
+    // dev-server restarts until the project rebuilds.
+    if (message.type === 'complete' && message.bytes !== undefined) entry.controller.enqueue(message.bytes);
+    if (message.type === 'end' || message.type === 'complete') {
       entry.controller.close();
       return;
     }
