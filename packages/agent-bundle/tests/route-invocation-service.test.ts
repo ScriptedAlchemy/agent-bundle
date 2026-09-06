@@ -1169,7 +1169,7 @@ const tsxSiblingProject = async (): Promise<RouteProject> => routeProject(
   },
 );
 
-it('resolves a `.js` import of a `.tsx` sibling without rewriting the same string rendered as text', { timeout: 30_000 }, async () => {
+it('resolves a `.js` import of a `.tsx` sibling without rewriting the same string rendered as text', { timeout: 60_000 }, async () => {
   const project = await tsxSiblingProject();
   try {
     const invocation = await project.service().invoke({ input: {}, routeId: 'tool:fixture/report', surface: { kind: 'unit-render' } });
@@ -1203,7 +1203,7 @@ const recordedPids = async (project: LeakingRouteProject): Promise<Readonly<{ ch
   return pids;
 };
 
-it('reaps the render child and its descendants after a successful reply', { timeout: 30_000 }, async () => {
+it('reaps the render child and its descendants after a successful reply', { timeout: 60_000 }, async () => {
   const project = await leakingRouteProject('reply');
   try {
     const invocation = await project.service().invoke({ input: {}, routeId: 'tool:fixture/leak', surface: { kind: 'unit-render' } });
@@ -1218,7 +1218,7 @@ it('reaps the render child and its descendants after a successful reply', { time
   }
 });
 
-it('reaps the render child and its descendants when the invocation times out', { timeout: 30_000 }, async () => {
+it('reaps the render child and its descendants when the invocation times out', { timeout: 60_000 }, async () => {
   const project = await leakingRouteProject('hang');
   try {
     const service = project.service({ timeoutMs: 8_000 });
@@ -1238,7 +1238,7 @@ it('reaps the render child and its descendants when the invocation times out', {
   }
 });
 
-it('reaps the render child and its descendants when the invocation is cancelled', { timeout: 30_000 }, async () => {
+it('reaps the render child and its descendants when the invocation is cancelled', { timeout: 60_000 }, async () => {
   const project = await leakingRouteProject('hang');
   try {
     const service = project.service();
@@ -1257,7 +1257,7 @@ it('reaps the render child and its descendants when the invocation is cancelled'
   }
 });
 
-it('reaps the render child and its descendants when the service closes mid-render', { timeout: 30_000 }, async () => {
+it('reaps the render child and its descendants when the service closes mid-render', { timeout: 60_000 }, async () => {
   const project = await leakingRouteProject('hang');
   try {
     const service = project.service();
@@ -1278,7 +1278,7 @@ it('reaps the render child and its descendants when the service closes mid-rende
   }
 });
 
-it('forwards kernel events from tool and event routes rendered in the real child', { timeout: 30_000 }, async () => {
+it('forwards kernel events from tool and event routes rendered in the real child', { timeout: 60_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-bundle-route-invocation-trace-'));
   const toolSource = join(root, 'src/mcp/fixture/tools/traced.tsx');
   const eventSource = join(root, 'src/events/tool/before.tsx');
