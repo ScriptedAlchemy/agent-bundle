@@ -10,7 +10,7 @@ import { formatWorkbenchLocation, type WorkbenchArea, type WorkbenchLocation } f
 import './shell.css';
 
 export interface WorkbenchNavItem {
-  readonly area: Exclude<WorkbenchArea, 'sessions'>;
+  readonly area: WorkbenchArea;
   readonly glyph: string;
   readonly label: string;
   readonly location: WorkbenchLocation;
@@ -20,6 +20,7 @@ export interface WorkbenchNavItem {
 export const workbenchNavItems: readonly WorkbenchNavItem[] = Object.freeze([
   Object.freeze({ area: 'application' as const, glyph: '⌸', label: 'Application', location: Object.freeze({ area: 'application' as const }) }),
   Object.freeze({ area: 'trace' as const, glyph: '≡', label: 'Trace', location: Object.freeze({ area: 'trace' as const }) }),
+  Object.freeze({ area: 'sessions' as const, glyph: '▣', label: 'Host sessions', location: Object.freeze({ area: 'sessions' as const }) }),
   Object.freeze({ area: 'problems' as const, glyph: '!', label: 'Problems', location: Object.freeze({ area: 'problems' as const }) }),
   Object.freeze({ area: 'advanced' as const, glyph: '⚙', label: 'Advanced', location: Object.freeze({ area: 'advanced' as const, section: 'evals' as const }) }),
 ]);

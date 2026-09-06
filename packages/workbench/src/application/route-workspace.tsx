@@ -13,6 +13,7 @@
  */
 import React from 'react';
 
+import { OpenInHost } from '../sessions/open-in-host.tsx';
 import { AppRouteWorkspace } from './app-route-workspace.tsx';
 import type { ApplicationLeaf } from './application-tree-model.ts';
 import { EventRouteWorkspace } from './event-route-workspace.tsx';
@@ -59,9 +60,10 @@ export const DocumentWorkspace = ({ leaf }: { readonly leaf: ApplicationLeaf }):
 
 const InvokeWorkspace = ({ backends, clients, invocationId, leaf, onNavigate, tab, trace }: RouteWorkspaceProps): React.ReactNode => {
   const controller = useRouteInvocation({ backends, ...(invocationId === undefined ? {} : { invocationId }), leaf });
+  const actions = <OpenInHost client={clients.hostSessionClient} leaf={leaf} onNavigate={onNavigate} />;
   return leaf.ref.kind === 'event'
-    ? <EventRouteWorkspace clients={clients} controller={controller} invocationId={invocationId} leaf={leaf} onNavigate={onNavigate} tab={tab} trace={trace} />
-    : <ExecutableRouteWorkspace controller={controller} invocationId={invocationId} leaf={leaf} onNavigate={onNavigate} tab={tab} trace={trace} />;
+    ? <EventRouteWorkspace actions={actions} clients={clients} controller={controller} invocationId={invocationId} leaf={leaf} onNavigate={onNavigate} tab={tab} trace={trace} />
+    : <ExecutableRouteWorkspace actions={actions} controller={controller} invocationId={invocationId} leaf={leaf} onNavigate={onNavigate} tab={tab} trace={trace} />;
 };
 
 /** Mounts the workspace body the selected leaf's execution kind calls for. */

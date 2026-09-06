@@ -1,0 +1,4 @@
+@import '@xterm/xterm/css/xterm.css';
+
+.session-terminal { background: #101822; flex: 1; min-height: 0; padding: 8px; }
+.session-terminal .xterm { height: 100%; }

@@ -43,6 +43,8 @@
 .route-cancel { background: #fff; border: 1px solid #b31b23; border-radius: 4px; color: #b31b23; cursor: pointer; justify-self: start; padding: 6px 14px; }
 .route-cancel:disabled { cursor: not-allowed; opacity: .55; }
 .route-input-shortcut { color: #7a8492; font-size: 11px; }
+.route-open-in-host { background: #fff; border: 1px solid #bfc8d5; border-radius: 4px; color: #1e2938; cursor: pointer; font-size: 13px; font-weight: 600; padding: 7px 14px; }
+.route-open-in-host:disabled { cursor: not-allowed; opacity: .55; }
 .route-input-error { color: #aa1f2a; display: block; font-size: 11px; margin-top: 4px; }
 
 /* Status line and diagnostics */

@@ -32,7 +32,8 @@ const roundTrips: readonly Readonly<{ readonly location: WorkbenchLocation; read
   { location: { area: 'trace', correlation: 'tool:a/b c', invocationId: 'trc_12' }, url: '/trace/trc_12?correlation=tool%3Aa%2Fb%20c' },
   { location: { area: 'problems' }, url: '/problems' },
   { location: { area: 'sessions' }, url: '/sessions' },
-  { location: { area: 'sessions', host: 'claude' }, url: '/sessions/claude' },
+  { location: { area: 'sessions', session: 'hs_0123456789abcdef' }, url: '/sessions?session=hs_0123456789abcdef' },
+  { location: { area: 'sessions', session: 'a b/c' }, url: '/sessions?session=a%20b%2Fc' },
   ...advancedSections.map((section) => ({ location: { area: 'advanced' as const, section }, url: `/advanced/${section}` })),
 ];
 
@@ -96,6 +97,9 @@ it('normalizes trace, sessions, and advanced tails', () => {
   expect(parseWorkbenchLocation('/trace/a/b')).toEqual({ area: 'trace' });
   expect(parseWorkbenchLocation('/trace/%ZZ')).toEqual({ area: 'trace' });
   expect(parseWorkbenchLocation('/sessions/a/b')).toEqual({ area: 'sessions' });
+  expect(parseWorkbenchLocation('/sessions', '?session=')).toEqual({ area: 'sessions' });
+  expect(parseWorkbenchLocation('/sessions', '?session=a%00b')).toEqual({ area: 'sessions' });
+  expect(parseWorkbenchLocation('/sessions', '?invocation=inv-1&session=hs_1')).toEqual({ area: 'sessions', session: 'hs_1' });
   expect(parseWorkbenchLocation('/advanced')).toEqual({ area: 'advanced', section: 'evals' });
   expect(parseWorkbenchLocation('/advanced/nope')).toEqual({ area: 'advanced', section: 'evals' });
   expect(parseWorkbenchLocation('/advanced/logs/extra')).toEqual({ area: 'advanced', section: 'evals' });
