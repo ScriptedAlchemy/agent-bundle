@@ -552,7 +552,7 @@ const productionBindingFor = (
       candidate.routeId === route.id && candidate.path.join(' ') === surface.command);
     const bin = manifest.executables.bins.find((candidate) =>
       candidate.name === manifest.application.name && candidate.worker !== undefined);
-    if (command === undefined || !isRenderedCliRoute(route) || bin?.worker === undefined) {
+    if (command === undefined || (route.kind === 'cli' && !isRenderedCliRoute(route)) || bin?.worker === undefined) {
       return unavailableBinding(route.id, 'the selected CLI command has no compiled executable; rebuild the project.');
     }
     return Object.freeze({ executable: bin.worker, kind: 'cli', preparation: bin.path });
