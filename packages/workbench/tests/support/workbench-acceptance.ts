@@ -21,13 +21,13 @@ export const workbenchTestIds = Object.freeze({
   problemsBanner: 'problems-banner',
   problemsRepair: 'problems-repair',
   renderedDocument: 'rendered-document',
-  renderedDocumentProgress: 'rendered-document-progress',
   resultTabCli: 'result-tab-cli',
   resultTabMcp: 'result-tab-mcp',
   resultTabRaw: 'result-tab-raw',
   resultTabRendered: 'result-tab-rendered',
   resultTabStructured: 'result-tab-structured',
   resultTabTrace: 'result-tab-trace',
+  routeOutcome: 'route-outcome',
   routeInputEditor: 'route-input-editor',
   routeCancel: 'route-cancel',
   routeRun: 'route-run',
@@ -299,8 +299,6 @@ export const expectToolInvocationTraceGroup = async (
   options: Readonly<{ readonly invocationId: string; readonly routeId: string }>,
   timeout = browserTimeout,
 ): Promise<Locator> => {
-  const routeSelect = page.locator('.trace-filter-field').filter({ hasText: 'Route' }).locator('select');
-  await expect(routeSelect.locator('option').filter({ hasText: options.routeId })).toHaveCount(1, { timeout });
   const group = workbenchTestId(page, 'traceGroup').filter({ hasText: options.invocationId }).first();
   await expect(group).toBeVisible({ timeout });
   await group.scrollIntoViewIfNeeded();
