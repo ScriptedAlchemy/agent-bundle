@@ -107,6 +107,66 @@ const Rows = ({ rows }: { readonly rows: readonly InspectorRow[] }): React.React
 
 const Empty = ({ children }: { readonly children: React.ReactNode }): React.ReactNode => <p className="inspector-empty" role="status">{children}</p>;
 
+const resultSchemaRows = (
+  leaf: ApplicationLeaf,
+  invocation: RouteInvocation | undefined,
+): readonly InspectorRow[] => {
+  const structuredResult = row(
+    'Structured result',
+    invocation === undefined
+      ? 'Unavailable · the route has not run.'
+      : invocation.result === undefined
+        ? 'Unavailable · this invocation recorded no structured result.'
+        : 'Available · open Structured result.',
+  );
+  const state = leaf.resultSchemaState ?? 'unknown';
+  switch (state) {
+    case 'absent':
+      return [
+        row('Declaration', 'Absent · no resultSchema export was observed.'),
+        row('Static projection', 'Not applicable · no resultSchema is declared.'),
+        row('Validation / transformation', 'Not applicable · no declared resultSchema can validate or transform this result.'),
+        structuredResult,
+      ];
+    case 'unknown':
+      return [
+        row('Declaration', 'Unknown · static declaration evidence is unavailable.'),
+        row('Static projection', 'Unknown · no static result-schema projection evidence is available.'),
+        row('Validation / transformation', 'Unknown · declaration evidence is unavailable.'),
+        structuredResult,
+      ];
+    case 'unprojectable': {
+      const validatesResult = leaf.ref.kind === 'cli'
+        || leaf.ref.kind === 'prompt'
+        || leaf.ref.kind === 'resource'
+        || leaf.ref.kind === 'tool';
+      const validation = !validatesResult
+        ? 'Not applicable · this route execution contract does not apply resultSchema.'
+        : invocation === undefined
+          ? 'Not run · invoke the route to observe validation or transformation.'
+          : invocation.status !== 'succeeded'
+            ? 'Not recorded · the invocation did not complete with a parsed result.'
+            : invocation.outcome?.kind !== 'success'
+              ? 'Not recorded · the invocation completed without a successful outcome.'
+              : invocation.surface.kind !== 'unit-render'
+                ? 'Unknown · this invocation surface did not report resultSchema validation or transformation.'
+                : invocation.result === undefined
+                  ? 'Not recorded · execution returned no parsed resultSchema value.'
+                  : 'Succeeded · execution recorded the value parsed by resultSchema.';
+      return [
+        row('Declaration', 'Declared · the compiler observed a resultSchema export.'),
+        row('Static projection', 'Unavailable · resultSchema is not statically projected.'),
+        row('Validation / transformation', validation),
+        structuredResult,
+      ];
+    }
+    default: {
+      const exhaustive: never = state;
+      return exhaustive;
+    }
+  }
+};
+
 const SourceTab = ({ backendKind, invocation, leaf }: Pick<RouteInspectorProps, 'backendKind' | 'invocation' | 'leaf'>): React.ReactNode => <>
   <Rows rows={[
     ...(leaf.source === undefined ? [row('Source', 'Not a route module (declared in configuration)')] : [row('Source', leaf.source)]),
@@ -135,9 +195,7 @@ const SchemaTab = ({ invocation, leaf }: Pick<RouteInspectorProps, 'invocation' 
     ? <Empty>The input schema is richer than the statically projectable grammar; the editor accepts raw JSON and the route validates during execution.</Empty>
     : <pre className="inspector-json"><code>{displayAgentDocumentValue(leaf.inputSchema)}</code></pre>}
   <h3>Result schema</h3>
-  {invocation?.result === undefined
-    ? <Empty>The result schema is not projected statically. A route that exports <code>resultSchema</code> shows its parsed value under Structured result after a run.</Empty>
-    : <Empty>This route exports a <code>resultSchema</code>; its parsed value is under Structured result.</Empty>}
+  <Rows rows={resultSchemaRows(leaf, invocation)} />
 </>;
 
 const ProvidersTab = ({ invocation }: Pick<RouteInspectorProps, 'invocation'>): React.ReactNode => {

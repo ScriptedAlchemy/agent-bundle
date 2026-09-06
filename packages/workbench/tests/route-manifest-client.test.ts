@@ -88,6 +88,7 @@ const manifest = {
       },
       kind: 'tool',
       provenance: { kind: 'conventional' },
+      resultSchemaState: 'unprojectable',
       serverId: 'mcp:library',
       source: 'src/mcp/library/tools/echo.ts',
     }],
@@ -142,6 +143,7 @@ it('reads the compiled manifest over the shared foreground session', async () =>
   expect(decoded.servers[0]?.routes[0]?.contract).toBe(
     'contract:src/lib/protocol-schemas.ts#statusInputSchema',
   );
+  expect(decoded.servers[0]?.routes[0]?.resultSchemaState).toBe('unprojectable');
   expect(decoded.events[0]?.execution).toEqual({
     fallback: 'none',
     preflight: 'src/events/tool/after.preflight.ts',

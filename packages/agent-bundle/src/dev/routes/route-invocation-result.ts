@@ -18,7 +18,7 @@ export interface RouteInvocation extends RouteInvocationSummary {
   readonly events: readonly AgentRenderEvent[];
   readonly projection: RouteInvocationProjection;
   readonly providers: readonly RouteInvocationProvider[];
-  /** The document value parsed by the route's own `resultSchema`; absent when the module exports none or rendering failed. */
+  /** Structured value recorded by the selected surface; its presence alone proves neither a `resultSchema` declaration nor validation. */
   readonly result?: JsonValue;
   /** Event-kernel phase events emitted by a compiled preflight execution. */
   readonly trace?: readonly EventTraceEvent[];

@@ -67,6 +67,7 @@ export type {
   RouteContract,
   RouteContractOrigin,
   RouteProvenance,
+  RouteResultSchemaState,
 } from './types.ts';
 export { generateRouteTypes, routeTypesRelativePath, writeRouteTypes } from './typegen.ts';
 export {

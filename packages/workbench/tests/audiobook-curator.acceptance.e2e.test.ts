@@ -214,6 +214,11 @@ e2e('accepts the audiobook-curator Application workspace at 1440×900', { timeou
     await page.getByRole('tab', { name: 'Timings' }).click();
     const timingRow = page.locator('.inspector-timings li').filter({ hasText: finalTiming.phase });
     await expect(timingRow).toContainText(`${String(finalTiming.durationMs)} ms`);
+    await page.getByRole('tab', { name: 'Schema' }).click();
+    const schemaPanel = page.getByRole('tabpanel', { name: 'Schema' });
+    await expect(schemaPanel).toContainText('Declared · the compiler observed a resultSchema export.');
+    await expect(schemaPanel).toContainText('Unknown · this invocation surface did not report resultSchema validation or transformation.');
+    await expect(schemaPanel).toContainText('Available · open Structured result.');
 
     const epochBeforeEdit = await readBuildEpoch(page);
     const markedSearch = healthySearch.replace(

@@ -224,6 +224,8 @@ Claude 为 `retained-by-host`（缓存副本在 Claude 约 14 天的宽限期内
 `$XDG_STATE_HOME/agent-bundle/<plugin>-<digest>`）命名空间按构造归该安装独占。显式
 `AGENT_BUNDLE_STATE_ROOT` 只有在安装时原本不存在、由安装器创建并写入安装身份标记时才归该安装所有。
 预先存在的目录绝不会仅因服务器声明或卸载时的当前环境指向它而被递归删除。多个服务器与多个根会分别记录、分别判断。
+如果某份仍受支持的旧回执既没有状态元数据，也没有记录 `stateRoot`，当前环境或 home 就不能提供 purge 权限：
+Doctor 与 uninstall 会把观察到的根报告为 `unrecorded` / 无法证明并予以保留，即使之前运行过 `--keep-data` 也一样。
 
 ## doctor
 
@@ -251,6 +253,7 @@ Claude 为 `retained-by-host`（缓存副本在 Claude 约 14 天的宽限期内
 `AB7307` info 报告为 `missing`，而不是 corrupt 或 foreign。
 对于每份已安装副本，Doctor 会报告每个服务器对应的框架状态根、其 `native` 或 `derived` 来源、回执归属
 （`derived`、`marker`、`unowned` 或 `unrecorded`）、当前证据是否允许 purge、使用它的服务器、是否存在以及是否可写。
+对于记录了 `stateRoot` 的兼容回执，如果当前环境解析到别处，Doctor 还会单独列出这个历史根。
 升级 #640 之前留下的 `<plugin root>/state` 会单独报告，并以 `AB7332` 标记。
 
 ## validate

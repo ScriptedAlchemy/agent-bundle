@@ -944,6 +944,111 @@ it('consumes a migrated format/1 Cursor receipt without a crash', async () => {
   }
 });
 
+it('never derives legacy receipt purge ownership from the current environment', async () => {
+  const fixture = await createFixture('cursor');
+  const cursorRoot = join(fixture.home, '.cursor');
+  await mkdir(join(cursorRoot, 'plugins', 'local'), { recursive: true });
+  const destination = join(cursorRoot, 'plugins', 'local', 'uninstall-fixture');
+  const originalEnvironment = { XDG_STATE_HOME: join(fixture.cleanupRoot, 'original-state-home') };
+  const currentEnvironment = { XDG_STATE_HOME: join(fixture.cleanupRoot, 'current-state-home') };
+  const options = { from: fixture.bundleRoot, home: fixture.home, host: 'cursor' as const };
+  const originalStateRoot = userDataStateRoot(destination, originalEnvironment, fixture.home);
+  const currentStateRoot = userDataStateRoot(destination, currentEnvironment, fixture.home);
+  const currentSentinel = join(currentStateRoot, 'unrelated.txt');
+  try {
+    await installBundle({ ...options, environment: originalEnvironment });
+    await mkdir(originalStateRoot, { recursive: true });
+    await writeFile(join(originalStateRoot, 'state.sqlite'), 'original\n');
+    const receiptPath = join(destination, installReceiptFile);
+    const receipt = JSON.parse(await readFile(receiptPath, 'utf8')) as Record<string, unknown>;
+    const {
+      hostDirectories: _hostDirectories,
+      mode: _mode,
+      registrations: _registrations,
+      scope: _scope,
+      state: _state,
+      stateRoot: _stateRoot,
+      updatedAt: _updatedAt,
+      ...legacy
+    } = receipt;
+    await writeFile(receiptPath, JSON.stringify({
+      ...legacy,
+      format: 'agent-bundle-install-receipt/1',
+    }));
+    await mkdir(currentStateRoot, { recursive: true });
+    await writeFile(currentSentinel, 'unrelated\n');
+
+    const plan = await uninstallBundle({
+      ...options,
+      confirmPurge: true,
+      environment: currentEnvironment,
+      plan: true,
+      purgeData: true,
+    });
+    expect(plan.data).toMatchObject({
+      outcome: 'kept',
+      paths: [],
+      retained: [{ path: currentStateRoot, reason: 'unproven' }],
+    });
+    expect(plan.removed.directories).not.toContain(currentStateRoot);
+
+    const kept = await uninstallBundle({ ...options, environment: currentEnvironment, keepData: true });
+    expect(kept.data).toMatchObject({
+      outcome: 'kept',
+      paths: [],
+      retained: [{ path: currentStateRoot, reason: 'unproven' }],
+    });
+    const remnant = await readInstallReceipt(destination);
+    expect(remnant?.state).toBeUndefined();
+    expect(remnant?.stateRoot).toBeUndefined();
+
+    const purged = await uninstallBundle({
+      ...options,
+      confirmPurge: true,
+      environment: currentEnvironment,
+      purgeData: true,
+    });
+    expect(purged.data).toMatchObject({
+      outcome: 'kept',
+      paths: [],
+      retained: [{ path: currentStateRoot, reason: 'unproven' }],
+    });
+    expect(await readFile(currentSentinel, 'utf8')).toBe('unrelated\n');
+    expect(await readFile(join(originalStateRoot, 'state.sqlite'), 'utf8')).toBe('original\n');
+
+    // The #642 compatibility receipt remains authoritative only for the exact derived root it recorded.
+    await installBundle({ ...options, environment: originalEnvironment });
+    const currentReceipt = JSON.parse(await readFile(receiptPath, 'utf8')) as Record<string, unknown>;
+    const { state: _currentState, ...recordedLegacy } = currentReceipt;
+    await writeFile(receiptPath, JSON.stringify({
+      ...recordedLegacy,
+      stateRoot: { root: originalStateRoot, source: 'derived' },
+    }));
+    const recordedPlan = await uninstallBundle({
+      ...options,
+      confirmPurge: true,
+      environment: currentEnvironment,
+      plan: true,
+      purgeData: true,
+    });
+    expect(recordedPlan.data).toMatchObject({
+      outcome: 'purged',
+      paths: [originalStateRoot],
+    });
+    expect(recordedPlan.removed.directories).not.toContain(currentStateRoot);
+    await uninstallBundle({
+      ...options,
+      confirmPurge: true,
+      environment: currentEnvironment,
+      purgeData: true,
+    });
+    await expect(readFile(join(originalStateRoot, 'state.sqlite'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(currentSentinel, 'utf8')).toBe('unrelated\n');
+  } finally {
+    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+  }
+});
+
 const gitAvailable = (): Promise<boolean> => new Promise((resolvePromise) => {
   execFile('git', ['--version'], (error) => { resolvePromise(error === null); });
 });
@@ -1635,6 +1740,84 @@ it('purges Claude durable state only when confirmed and reports the host-retaine
     expect(purged.removed.files).toEqual([expect.stringContaining('uninstall-fixture.uninstall-fixture-marketplace.user.json')]);
     await expect(readdir(join(installPath, 'state'))).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readdir(dataDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await rm(fixture.cleanupRoot, { force: true, recursive: true });
+  }
+});
+
+it('never derives legacy host-receipt purge ownership from the current environment', async () => {
+  const fixture = await createFixture('claude');
+  const hostRoot = join(fixture.cleanupRoot, 'claude-root');
+  const installPath = join(hostRoot, 'plugins', 'cache', 'uninstall-fixture-marketplace', 'uninstall-fixture', '1.2.3');
+  const receiptPath = join(hostRoot, 'agent-bundle', 'receipts', 'uninstall-fixture.uninstall-fixture-marketplace.user.json');
+  const originalEnvironment = {
+    CLAUDE_CONFIG_DIR: hostRoot,
+    XDG_STATE_HOME: join(fixture.cleanupRoot, 'original-state-home'),
+  };
+  const currentEnvironment = {
+    CLAUDE_CONFIG_DIR: hostRoot,
+    XDG_STATE_HOME: join(fixture.cleanupRoot, 'current-state-home'),
+  };
+  const originalStateRoot = userDataStateRoot(installPath, originalEnvironment, fixture.home);
+  const currentStateRoot = userDataStateRoot(installPath, currentEnvironment, fixture.home);
+  const currentSentinel = join(currentStateRoot, 'unrelated.txt');
+  let installed = false;
+  const { runner } = recordingRunner((call) => {
+    const verb = call.args.join(' ');
+    if (verb === 'plugin list --json') {
+      return claudeListing(installed
+        ? [{ enabled: true, id: 'uninstall-fixture@uninstall-fixture-marketplace', installPath, scope: 'user', version: '1.2.3' }]
+        : []);
+    }
+    if (verb === 'plugin marketplace list --json') return JSON.stringify([{ name: 'uninstall-fixture-marketplace' }]);
+    if (verb.startsWith('plugin install ')) installed = true;
+    if (verb.startsWith('plugin uninstall ')) installed = false;
+    return '';
+  });
+  const options = {
+    commandRunner: runner,
+    from: fixture.bundleRoot,
+    home: fixture.home,
+    host: 'claude' as const,
+  };
+  try {
+    await installBundle({ ...options, environment: originalEnvironment });
+    await cp(fixture.bundleRoot, installPath, { recursive: true });
+    const receipt = JSON.parse(await readFile(receiptPath, 'utf8')) as Record<string, unknown>;
+    const { state: _state, stateRoot: _stateRoot, ...legacy } = receipt;
+    await writeFile(receiptPath, JSON.stringify(legacy));
+    await mkdir(originalStateRoot, { recursive: true });
+    await writeFile(join(originalStateRoot, 'state.sqlite'), 'original\n');
+    await mkdir(currentStateRoot, { recursive: true });
+    await writeFile(currentSentinel, 'unrelated\n');
+
+    const plan = await uninstallBundle({
+      ...options,
+      confirmPurge: true,
+      environment: currentEnvironment,
+      plan: true,
+      purgeData: true,
+    });
+    expect(plan.data).toMatchObject({
+      outcome: 'kept',
+      paths: [],
+      retained: [{ path: currentStateRoot, reason: 'unproven' }],
+    });
+    expect(plan.removed.directories).not.toContain(currentStateRoot);
+
+    const purged = await uninstallBundle({
+      ...options,
+      confirmPurge: true,
+      environment: currentEnvironment,
+      purgeData: true,
+    });
+    expect(purged.data).toMatchObject({
+      outcome: 'kept',
+      paths: [],
+      retained: [{ path: currentStateRoot, reason: 'unproven' }],
+    });
+    expect(await readFile(currentSentinel, 'utf8')).toBe('unrelated\n');
+    expect(await readFile(join(originalStateRoot, 'state.sqlite'), 'utf8')).toBe('original\n');
   } finally {
     await rm(fixture.cleanupRoot, { force: true, recursive: true });
   }

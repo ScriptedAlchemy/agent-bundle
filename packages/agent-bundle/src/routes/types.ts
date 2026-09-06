@@ -133,6 +133,12 @@ export interface RouteContract {
   readonly routes: readonly string[];
 }
 
+/**
+ * Static evidence for a route's `resultSchema`. Result schemas are executed
+ * as authored and are never reduced to the bounded input-schema projection.
+ */
+export type RouteResultSchemaState = 'absent' | 'unknown' | 'unprojectable';
+
 /** One conventional route module compiled into the immutable route graph. */
 export interface CompiledAgentRoute {
   /** Statically extracted from the module's `export const config` declaration; {@link emptyRouteConfig} when absent or rejected. */
@@ -148,6 +154,8 @@ export interface CompiledAgentRoute {
   /** Static cheap gate; present only on event routes that declare a valid relative default re-export. */
   readonly preflight?: CompiledEventPreflight;
   readonly provenance: RouteProvenance;
+  /** Omitted only by legacy or manually assembled graphs, where consumers must treat the declaration as unknown. */
+  readonly resultSchemaState?: RouteResultSchemaState;
   /** The owning MCP server id (`mcp:<name>`); MCP route kinds only. */
   readonly serverId?: string;
   /** Absolute route module path. */
