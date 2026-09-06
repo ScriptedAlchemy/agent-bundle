@@ -7,7 +7,7 @@ export interface SemanticVersion {
 
 /** Finds the first semver-shaped token inside surrounding CLI banner text. */
 export const parseSemanticVersion = (value: string): SemanticVersion | undefined => {
-  const match = /(?:^|[^0-9])(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?(?:$|[^0-9])/u.exec(value);
+  const match = /(?:^|[^0-9])(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?(?=$|[^0-9A-Za-z.-])/u.exec(value);
   if (match === null) return undefined;
   return Object.freeze({
     major: Number(match[1]),

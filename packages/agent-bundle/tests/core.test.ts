@@ -8,6 +8,7 @@ import {
 import { digest, stableJson } from '../src/core/digest.ts';
 import { assertInside } from '../src/core/paths.ts';
 import { typeScriptTransformFlags } from '../src/core/runtime.ts';
+import { meetsMinimumVersion, parseSemanticVersion } from '../src/core/semver.ts';
 import type { McpTransport } from '../src/index.ts';
 
 // Type-level contract: only modern MCP transports are public.
@@ -142,4 +143,23 @@ it('defaults to the flags this process accepts, so a child over process.execPath
   const flags = typeScriptTransformFlags();
   expect(flags).toEqual(typeScriptTransformFlags(process.allowedNodeEnvironmentFlags));
   for (const flag of flags) expect(process.allowedNodeEnvironmentFlags.has(flag)).toBe(true);
+});
+
+it('parses the first well-delimited semver token from a CLI banner', () => {
+  const parsed = (value: string) => {
+    const version = parseSemanticVersion(value);
+    return version && `${version.major}.${version.minor}.${version.patch}${version.prerelease ? '-pre' : ''}`;
+  };
+  expect(parsed('2.1.232 (Claude Code)')).toBe('2.1.232');
+  expect(parsed('codex-cli 0.147.0')).toBe('0.147.0');
+  expect(parsed('1.2.3-rc.1+build.7')).toBe('1.2.3-pre');
+  expect(parsed('2.1.232abc')).toBeUndefined();
+  expect(parsed('2.1.232.4')).toBe('1.232.4');
+  expect(parsed('no version here')).toBeUndefined();
+
+  const minimum = parseSemanticVersion('2.1.232')!;
+  expect(meetsMinimumVersion(parseSemanticVersion('2.1.232')!, minimum)).toBe(true);
+  expect(meetsMinimumVersion(parseSemanticVersion('2.1.232-beta')!, minimum)).toBe(false);
+  expect(meetsMinimumVersion(parseSemanticVersion('2.2.0-beta')!, minimum)).toBe(true);
+  expect(meetsMinimumVersion(parseSemanticVersion('2.1.231')!, minimum)).toBe(false);
 });
