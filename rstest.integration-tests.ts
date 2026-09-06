@@ -60,6 +60,7 @@ export const integrationTestFiles: readonly string[] = [
   'packages/agent-bundle/tests/host-mcp-proxy.test.ts',
   'packages/agent-bundle/tests/host-install-proof.test.ts',
   'packages/agent-bundle/tests/host-install-session.test.ts',
+  'packages/agent-bundle/tests/host-session-pty.test.ts',
   'packages/agent-bundle/tests/integration-matrix.test.ts',
   'packages/agent-bundle/tests/layout-build.test.ts',
   'packages/agent-bundle/tests/lifecycle-replay-dev-server.test.ts',
