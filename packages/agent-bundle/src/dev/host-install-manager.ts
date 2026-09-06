@@ -21,8 +21,10 @@ import { platformRunOf } from './platform-run.ts';
 import type { DevPlatformRuntime } from './platform-runtime.ts';
 import type { Diagnostic } from '../core/diagnostics.ts';
 import {
+  defaultCommandRunner,
   installBundle as defaultInstallBundle,
   type InstallBundleOptions,
+  type InstallCommandRunner,
   type InstallHost,
   type InstallResult,
 } from '../install/install.ts';
@@ -329,6 +331,7 @@ const syncDiagnostic = (host: InstallHost, epochId: string, error: unknown): Dia
 /** Owns opt-in host development installs for one foreground dev session. */
 export class DevHostInstallManager {
   readonly #adoption: EpochAdoptionSource | undefined;
+  readonly #commandRunner: InstallCommandRunner;
   readonly #epochStore: EpochReferenceSource;
   readonly #environment: Readonly<NodeJS.ProcessEnv>;
   readonly #eventHub: ProjectEventHub;
@@ -345,10 +348,20 @@ export class DevHostInstallManager {
 
   constructor(options: DevHostInstallManagerOptions) {
     this.#adoption = options.adoption;
-    this.#epochStore = options.epochStore;
     this.#environment = Object.freeze({ ...(options.environment ?? process.env) });
+    this.#commandRunner = Object.freeze({
+      run: (
+        command: string,
+        args: readonly string[],
+        commandOptions: { readonly cwd: string; readonly environment?: Readonly<NodeJS.ProcessEnv> },
+      ) => defaultCommandRunner.run(command, args, {
+        ...commandOptions,
+        environment: this.#environment,
+      }),
+    });
+    this.#epochStore = options.epochStore;
     this.#eventHub = options.eventHub;
-    this.#home = options.home;
+    this.#home = options.home ?? homedir();
     this.#hosts = Object.freeze([...new Set(options.hosts)]);
     this.#installBundle = options.installBundle ?? defaultInstallBundle;
     this.#projectRoot = resolve(options.projectRoot);
@@ -439,6 +452,7 @@ export class DevHostInstallManager {
       const root = stableDevBundle(this.#projectRoot, host);
       try {
         await this.#uninstallBundle({
+          commandRunner: this.#commandRunner,
           environment: this.#environment,
           force: true,
           from: root,
@@ -463,6 +477,7 @@ export class DevHostInstallManager {
       if (installed === undefined) {
         if (host !== 'cursor') await ensureStableDevBundle(prepared.root, source);
         const result = await this.#installBundle({
+          commandRunner: this.#commandRunner,
           environment: this.#environment,
           from: source,
           ...(this.#home === undefined ? {} : { home: this.#home }),
