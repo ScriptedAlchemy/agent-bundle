@@ -267,14 +267,13 @@ const assertEffectiveSurface = async (
   }
 
   const inspected = await inspect({ root: dirname(root) });
-  expect(inspected.state).toBe('ready');
   if (inspected.state !== 'ready') throw new TypeError(`inspect returned ${inspected.state}.`);
-    const summary = inspected.output.manifest;
-    if (summary === undefined || 'status' in summary) throw new TypeError('inspect did not return a valid artifact manifest.');
-    expect(summary.projections.map((projection) => projection.host)).toEqual(
-      manifest.projections.map((projection) => projection.host),
-    );
-    expect(summary.executables.hooks).toBe(manifest.executables.hooks.length);
+  const summary = inspected.output.manifest;
+  if (summary === undefined || 'status' in summary) throw new TypeError('inspect did not return a valid artifact manifest.');
+  expect(summary.projections.map((projection) => projection.host)).toEqual(
+    manifest.projections.map((projection) => projection.host),
+  );
+  expect(summary.executables.hooks).toBe(manifest.executables.hooks.length);
 };
 
 describe('composite plugin root (#555)', () => {
