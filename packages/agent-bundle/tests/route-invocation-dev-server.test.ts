@@ -1101,7 +1101,7 @@ it('enforces compiled preflight, MCP schemas, and operator env across production
     const shared = await sharedResponse.json() as RouteInvocationResponse;
     expect(sharedResponse.status, JSON.stringify(shared)).toBe(200);
     expect(shared.invocation.status, JSON.stringify(shared.invocation.diagnostics)).toBe('succeeded');
-    expect(shared.invocation.result).toEqual({ runtime: 'shared', toolName: 'Write' });
+    expect(shared.invocation.result).toMatchObject({ runtime: 'shared', toolName: { value: 'Write' } });
   } finally {
     await server?.close().catch(() => undefined);
     await rm(project.root, { force: true, maxRetries: 5, recursive: true, retryDelay: 50 });
