@@ -14,13 +14,16 @@
  * `RouteInvocation` envelope.
  */
 import type {
+  RunningRouteInvocation,
   RouteInvocation,
   RouteInvocationRequest,
+  RouteInvocationStreamMessage,
   RouteInvocationSummary,
 } from '../../../agent-bundle/src/contracts/invocations.ts';
 import type { ApplicationLeaf } from './application-tree-model.ts';
 
 export type InvocationBackendKind = 'dev-server' | 'runtime';
+export type InvocationBackendUpdate = RunningRouteInvocation | RouteInvocationStreamMessage;
 
 export interface InvocationBackend {
   /** Names the backend for the inspector's "Execution" panel. */
@@ -28,7 +31,13 @@ export interface InvocationBackend {
   /** True when this backend can run the leaf; the workspace picks the first backend that accepts. */
   accepts(leaf: ApplicationLeaf): boolean;
   /** Runs the leaf and resolves with the completed envelope; rejects with an `InvocationClientError`. */
-  invoke(leaf: ApplicationLeaf, request: RouteInvocationRequest, signal?: AbortSignal): Promise<RouteInvocation>;
+  invoke(
+    leaf: ApplicationLeaf,
+    request: RouteInvocationRequest,
+    signal?: AbortSignal,
+    listener?: (update: InvocationBackendUpdate) => void,
+  ): Promise<RouteInvocation>;
+  cancel?(invocationId: string, signal?: AbortSignal): Promise<RouteInvocation>;
   /** Recent invocations of the leaf this backend knows about, newest first. */
   history(leaf: ApplicationLeaf, signal?: AbortSignal): Promise<readonly RouteInvocationSummary[]>;
   /** Loads one invocation snapshot by id (deep links, trace entries). */

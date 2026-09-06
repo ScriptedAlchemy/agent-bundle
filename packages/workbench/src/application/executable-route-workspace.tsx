@@ -134,7 +134,25 @@ export const useRouteInvocation = ({ backends, invocationId, leaf }: UseRouteInv
     const next: RouteInvocationRequest = Object.freeze({ ...draft, correlationId, routeId });
     setRequest(next);
     dispatch({ correlationId, startedAt: Date.now(), type: 'start' });
-    void backend.invoke(leaf, next, controller.signal).then(
+    void backend.invoke(leaf, next, controller.signal, (update) => {
+      if ('status' in update) {
+        dispatch({ invocationId: update.id, type: 'stream.start' });
+        return;
+      }
+      switch (update.type) {
+        case 'render':
+          dispatch({ event: update.event, type: 'render' });
+          break;
+        case 'final':
+        case 'trace':
+        case 'truncated':
+          break;
+        default: {
+          const exhaustive: never = update;
+          return exhaustive;
+        }
+      }
+    }).then(
       (invocation) => { if (!controller.signal.aborted) dispatch({ completedAt: Date.now(), invocation, type: 'settle' }); },
       (reason: unknown) => {
         if (controller.signal.aborted || isAbortError(reason)) return;
@@ -143,14 +161,22 @@ export const useRouteInvocation = ({ backends, invocationId, leaf }: UseRouteInv
     );
   }, [backend, leaf, routeId]);
 
+  const cancel = useCallback((): void => {
+    if (backend?.cancel === undefined || state.phase !== 'running' || state.invocationId === undefined) return;
+    void backend.cancel(state.invocationId).catch((reason: unknown) => {
+      if (!isAbortError(reason)) dispatch({ completedAt: Date.now(), failure: failureOf(reason), type: 'fail' });
+    });
+  }, [backend, state]);
+
   return useMemo(() => Object.freeze({
     ...(backend === undefined ? {} : { backendKind: backend.kind }),
+    cancel,
     history,
     load,
     ...(request === undefined ? {} : { request }),
     run,
     state,
-  }), [backend, history, load, request, run, state]);
+  }), [backend, cancel, history, load, request, run, state]);
 };
 
 const stateSummary = (state: InvocationState): string => {
@@ -161,8 +187,10 @@ const stateSummary = (state: InvocationState): string => {
       return 'Running…';
     case 'succeeded':
       return `${statusLabel('succeeded')}${state.durationMs === undefined ? '' : ` in ${String(state.durationMs)} ms`}`;
-    case 'failed':
-      return `${statusLabel('failed')}${state.durationMs === undefined ? '' : ` after ${String(state.durationMs)} ms`}`;
+    case 'failed': {
+      const status = state.invocation?.status ?? 'failed';
+      return `${statusLabel(status)}${state.durationMs === undefined ? '' : ` after ${String(state.durationMs)} ms`}`;
+    }
     default: {
       const exhaustive: never = state;
       return exhaustive;
@@ -173,7 +201,7 @@ const stateSummary = (state: InvocationState): string => {
 const InvocationStatusLine = ({ backendKind, state }: { readonly backendKind?: string; readonly state: InvocationState }): React.ReactNode => {
   const invocation = invocationOf(state);
   return <p aria-live="polite" className={`route-status route-status--${state.phase}`} data-testid="route-status" role="status">
-    <span className="route-status-phase">{stateSummary(state)}</span>
+    <span className="route-status-phase" data-testid={state.phase === 'running' ? 'route-running-status' : undefined}>{stateSummary(state)}</span>
     {invocation?.outcome === undefined ? undefined : <OutcomeBadge outcome={invocation.outcome} />}
     {backendKind === undefined ? undefined : <span className="route-status-backend">via {backendKind}</span>}
     {invocation === undefined ? undefined : <span className="route-status-id">{invocation.id}</span>}
@@ -375,6 +403,15 @@ export const ExecutableRouteWorkspace = ({
         value={input}
       />
       <InvocationStatusLine backendKind={controller.backendKind} state={controller.state} />
+      {controller.state.phase === 'running'
+        ? <button
+          className="route-cancel"
+          data-testid="route-cancel"
+          disabled={controller.state.invocationId === undefined}
+          onClick={controller.cancel}
+          type="button"
+        >Cancel</button>
+        : undefined}
       {failed === undefined || (failed.diagnostics.length === 0 && failed.failure === undefined)
         ? undefined
         : <InvocationDiagnostics diagnostics={failed.diagnostics} failure={failed.failure} onNavigate={onNavigate} />}

@@ -96,6 +96,8 @@ export type RouteInvocationDraft = Omit<RouteInvocationRequest, 'correlationId' 
 export interface RouteInvocationController {
   /** Names the backend that runs this leaf; undefined when none accepts it. */
   readonly backendKind?: InvocationBackendKind;
+  /** Cancels the active dev-server invocation, when it has received its server id. */
+  readonly cancel: () => void;
   /** Recent invocations of this leaf, newest first (the Trace tab). */
   readonly history: readonly RouteInvocationSummary[];
   /** Loads one snapshot by id into `state` (trace entries, deep links). */

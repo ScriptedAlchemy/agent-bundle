@@ -2,11 +2,14 @@ import { z } from 'zod';
 
 import type {
   EventTraceEvent,
+  RunningRouteInvocation,
   RouteInvocation,
   RouteInvocationRequest,
+  RouteInvocationStreamMessage,
   RouteInvocationSummary,
 } from '../../../agent-bundle/src/contracts/invocations.ts';
 import type { Diagnostic } from '../../../agent-bundle/src/contracts/diagnostics.ts';
+import { parseJsonWithoutDuplicateKeys } from '../../../agent-bundle/src/contracts/strict-json.ts';
 import {
   agentDocumentSchema,
   agentRenderEventSchema,
@@ -139,7 +142,7 @@ const invocationSummaryFields = {
   source: z.string(),
   sourceRevision: textSchema,
   startedAt: textSchema,
-  status: z.enum(['failed', 'succeeded']),
+  status: z.enum(['cancelled', 'failed', 'succeeded']),
   surface: invocationSurfaceSchema,
   timings: z.array(timingSchema),
 } as const;
@@ -160,6 +163,20 @@ const invocationSchema: z.ZodType<RouteInvocation> = z.strictObject({
   trace: z.array(eventTraceSchema).optional(),
 }).refine(outcomeMatchesStatus);
 const invocationResponseSchema = z.strictObject({ invocation: invocationSchema });
+const runningInvocationSchema: z.ZodType<RunningRouteInvocation> = z.strictObject({
+  id: textSchema,
+  routeId: textSchema,
+  startedAt: textSchema,
+  status: z.literal('running'),
+  surface: invocationSurfaceSchema,
+});
+const runningInvocationResponseSchema = z.strictObject({ invocation: runningInvocationSchema });
+const streamMessageSchema: z.ZodType<RouteInvocationStreamMessage> = z.discriminatedUnion('type', [
+  z.strictObject({ event: agentRenderEventSchema, type: z.literal('render') }),
+  z.strictObject({ event: eventTraceSchema, type: z.literal('trace') }),
+  z.strictObject({ dropped: z.number().int().positive(), type: z.literal('truncated') }),
+  z.strictObject({ invocation: invocationSchema, type: z.literal('final') }),
+]);
 const invocationListResponseSchema = z.strictObject({
   invocations: z.array(invocationSummarySchema),
 });
@@ -228,6 +245,74 @@ export class InvocationClient {
       method: 'POST',
       ...(signal === undefined ? {} : { signal }),
     });
+    const body = await bodyFor(response);
+    if (!response.ok) throw responseError(body, response.status);
+    return invocationBody(body);
+  }
+
+  async start(request: RouteInvocationRequest, signal?: AbortSignal): Promise<RunningRouteInvocation> {
+    const response = await this.#foreground.protectedRequest('/api/routes/invocations', {
+      body: JSON.stringify({ ...request, stream: true }),
+      headers: { 'content-type': 'application/json' },
+      method: 'POST',
+      ...(signal === undefined ? {} : { signal }),
+    });
+    const body = await bodyFor(response);
+    if (!response.ok) throw responseError(body, response.status);
+    const decoded = runningInvocationResponseSchema.safeParse(body);
+    if (!decoded.success) throw invalid('Route invocation start returned an invalid response.');
+    return Object.freeze(decoded.data.invocation);
+  }
+
+  async stream(
+    id: string,
+    listener: (message: RouteInvocationStreamMessage) => void,
+    signal?: AbortSignal,
+  ): Promise<RouteInvocation> {
+    const response = await this.#foreground.protectedRequest(
+      `/api/routes/invocations/${opaqueInvocationId(id)}/stream`,
+      signal === undefined ? {} : { signal },
+    );
+    if (!response.ok) throw responseError(await bodyFor(response), response.status);
+    if (response.body === null) throw invalid('Route invocation stream returned no body.');
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder('utf-8', { fatal: true });
+    let buffered = '';
+    let final: RouteInvocation | undefined;
+    for (;;) {
+      const next = await reader.read();
+      buffered += decoder.decode(next.value, { stream: !next.done });
+      let boundary = buffered.indexOf('\n\n');
+      while (boundary !== -1) {
+        const frame = buffered.slice(0, boundary);
+        buffered = buffered.slice(boundary + 2);
+        const lines = frame.split('\n');
+        const event = lines.find((line) => line.startsWith('event: '))?.slice(7);
+        const data = lines.find((line) => line.startsWith('data: '))?.slice(6);
+        if (event === undefined || data === undefined) throw invalid('Route invocation stream returned an invalid frame.');
+        let parsed: unknown;
+        try {
+          parsed = parseJsonWithoutDuplicateKeys(data);
+        } catch {
+          throw invalid('Route invocation stream returned an invalid frame.');
+        }
+        const decoded = streamMessageSchema.safeParse(parsed);
+        if (!decoded.success || decoded.data.type !== event) throw invalid('Route invocation stream returned an invalid frame.');
+        listener(decoded.data);
+        if (decoded.data.type === 'final') final = decoded.data.invocation;
+        boundary = buffered.indexOf('\n\n');
+      }
+      if (next.done) break;
+    }
+    if (final === undefined) throw invalid('Route invocation stream ended without a final invocation.');
+    return final;
+  }
+
+  async cancel(id: string, signal?: AbortSignal): Promise<RouteInvocation> {
+    const response = await this.#foreground.protectedRequest(
+      `/api/routes/invocations/${opaqueInvocationId(id)}/cancel`,
+      { method: 'POST', ...(signal === undefined ? {} : { signal }) },
+    );
     const body = await bodyFor(response);
     if (!response.ok) throw responseError(body, response.status);
     return invocationBody(body);

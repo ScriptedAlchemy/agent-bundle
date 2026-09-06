@@ -46,13 +46,21 @@ export interface RouteInvocationRequest {
   readonly surface?: RouteInvocationSurface;
 }
 
+export interface RunningRouteInvocation {
+  readonly id: string;
+  readonly routeId: string;
+  readonly startedAt: string;
+  readonly status: 'running';
+  readonly surface: RouteInvocationSurface;
+}
+
 /**
  * Whether the execution boundary completed. `succeeded` means the route ran
  * to a final document (or a plain script exited) and the envelope carries
  * what it produced; what the run *meant* is `outcome`. `failed` means the
  * boundary never completed — child crash, timeout, abort, `AB825x`.
  */
-export type RouteInvocationStatus = 'failed' | 'succeeded';
+export type RouteInvocationStatus = 'cancelled' | 'failed' | 'succeeded';
 
 /**
  * The application result of a completed run, judged by the surface the route
@@ -160,9 +168,9 @@ export interface RouteInvocationListResponse {
   readonly invocations: readonly RouteInvocationSummary[];
 }
 
-/** The `route.invocation` project event payload published on `/api/project/events` when an invocation completes. */
+/** The running record and final summary published as `route.invocation` on `/api/project/events`. */
 export interface RouteInvocationEventPayload {
-  readonly invocation: RouteInvocationSummary;
+  readonly invocation: RouteInvocationSummary | RunningRouteInvocation;
 }
 
 const nativeText = (native: JsonObject, key: string): string | undefined => {

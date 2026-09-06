@@ -31,6 +31,7 @@ const noop = (): void => undefined;
 
 const controllerWith = (overrides: Partial<RouteInvocationController> = {}): RouteInvocationController => ({
   backendKind: 'dev-server',
+  cancel: noop,
   history: [summaryOf(invocation)],
   load: noop,
   run: noop,
@@ -61,6 +62,45 @@ describe('invocation state contract', () => {
     const loaded = reduceInvocationState(idleInvocationState, { invocation, type: 'load' });
     expect(loaded).toEqual({ invocation, phase: 'succeeded' });
     expect(reduceInvocationState(loaded, { type: 'reset' })).toBe(idleInvocationState);
+  });
+
+  it('streams render progress, exposes cancellation, and settles cancelled without an outcome', () => {
+    const running = reduceInvocationState(idleInvocationState, { correlationId: 'c', startedAt: 1_000, type: 'start' });
+    const identified = reduceInvocationState(running, { invocationId: 'inv-live', type: 'stream.start' });
+    const rendered = reduceInvocationState(identified, {
+      event: invocation.events[0]!,
+      type: 'render',
+    });
+    const progressed = reduceInvocationState(rendered, {
+      event: invocation.events[1]!,
+      type: 'render',
+    });
+    expect(progressed).toMatchObject({
+      events: [expect.objectContaining({ type: 'shell' }), expect.objectContaining({ type: 'progress' })],
+      invocationId: 'inv-live',
+      phase: 'running',
+    });
+
+    const { outcome: _outcome, ...withoutOutcome } = invocation;
+    const cancelled = { ...withoutOutcome, status: 'cancelled' as const };
+    expect(reduceInvocationState(progressed, {
+      completedAt: 1_200,
+      invocation: cancelled,
+      type: 'settle',
+    })).toMatchObject({
+      invocation: { status: 'cancelled' },
+      phase: 'failed',
+    });
+
+    const markup = renderToStaticMarkup(createElement(ExecutableRouteWorkspace, {
+      controller: controllerWith({ state: progressed }),
+      leaf: toolLeaf,
+      onNavigate: noop,
+    }));
+    expect(markup).toContain('data-testid="route-running-status"');
+    expect(markup).toContain('data-testid="route-cancel"');
+    expect(markup).toContain('data-testid="rendered-document-progress"');
+    expect(markup).toContain('Searching us');
   });
 
   it('selects the first backend that accepts the leaf', () => {

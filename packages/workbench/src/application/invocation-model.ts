@@ -14,6 +14,7 @@ import {
   parseJsonWithoutDuplicateKeys,
   type JsonValue,
 } from '../../../agent-bundle/src/contracts/strict-json.ts';
+import type { AgentRenderEvent } from '../runtime/agent-document-client.ts';
 import { snapshotStrictJsonValue } from '../strict-json.ts';
 import type { ApplicationLeaf } from './application-tree-model.ts';
 import type { InvocationBackend } from './invocation-backend.ts';
@@ -26,7 +27,13 @@ export interface InvocationFailure {
 /** The workspace's view of one run: idle, running, or settled with the envelope (or the transport failure). */
 export type InvocationState =
   | Readonly<{ readonly phase: 'idle' }>
-  | Readonly<{ readonly correlationId: string; readonly phase: 'running'; readonly startedAt: number }>
+  | Readonly<{
+      readonly correlationId: string;
+      readonly events?: readonly AgentRenderEvent[];
+      readonly invocationId?: string;
+      readonly phase: 'running';
+      readonly startedAt: number;
+    }>
   | Readonly<{ readonly durationMs?: number; readonly invocation: RouteInvocation; readonly phase: 'succeeded' }>
   | Readonly<{
       readonly diagnostics: readonly Diagnostic[];
@@ -42,6 +49,8 @@ export type InvocationAction =
   | Readonly<{ readonly completedAt: number; readonly invocation: RouteInvocation; readonly type: 'settle' }>
   /** The backend rejected (transport, malformed request, unknown route). */
   | Readonly<{ readonly completedAt: number; readonly failure: InvocationFailure; readonly type: 'fail' }>
+  | Readonly<{ readonly event: AgentRenderEvent; readonly type: 'render' }>
+  | Readonly<{ readonly invocationId: string; readonly type: 'stream.start' }>
   /** A snapshot loaded by id (deep link, trace entry) — no timing of our own. */
   | Readonly<{ readonly invocation: RouteInvocation; readonly type: 'load' }>
   | Readonly<{ readonly type: 'reset' }>;
@@ -65,6 +74,14 @@ export const reduceInvocationState = (state: InvocationState, action: Invocation
         failure: action.failure,
         phase: 'failed',
       });
+    case 'render':
+      return state.phase === 'running'
+        ? Object.freeze({ ...state, events: Object.freeze([...(state.events ?? []), action.event]) })
+        : state;
+    case 'stream.start':
+      return state.phase === 'running'
+        ? Object.freeze({ ...state, invocationId: action.invocationId })
+        : state;
     case 'load':
       return settled(action.invocation);
     case 'reset':
@@ -112,6 +129,8 @@ export const writeLastInput = (leafKey: string, input: JsonValue): void => {
 /** The execution status as the UI words it: the boundary completed or did not; never "succeeded", which the outcome decides. */
 export const statusLabel = (status: RouteInvocationStatus): string => {
   switch (status) {
+    case 'cancelled':
+      return 'Cancelled';
     case 'succeeded':
       return 'Completed';
     case 'failed':

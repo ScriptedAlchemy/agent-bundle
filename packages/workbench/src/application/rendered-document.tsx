@@ -223,7 +223,7 @@ export const RenderedAgentDocument = ({ emptyLabel, events, streaming = false }:
       {fold.document === undefined ? undefined : <span className="rendered-document-version">Version {String(fold.document.version)}</span>}
       {fold.progress === undefined || fold.complete
         ? undefined
-        : <span className="rendered-document-live-progress" role="status">
+        : <span className="rendered-document-live-progress" data-testid="rendered-document-progress" role="status">
           <ProgressBar completed={fold.progress.completed} total={fold.progress.total} />
           {agentDocumentProgressLabel(fold.progress)}
         </span>}

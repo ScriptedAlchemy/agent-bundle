@@ -11,6 +11,7 @@ import type { TracePublisher } from '../src/dev/trace/trace-hub.ts';
 import type { RouteInvocation } from '../src/dev/routes/route-invocation-result.ts';
 import {
   InvocationRingBuffer,
+  ROUTE_INVOCATION_ALREADY_FINAL_CODE,
   ROUTE_INVOCATION_STALE_REVISION_CODE,
   RouteInvocationService,
   RouteInvocationRequestError,
@@ -426,6 +427,124 @@ const childResult = (request: RouteInvocationChildRequest, text = 'ok'): RouteIn
 const preparedLease = async (project: RouteInvocationPreparedProject) => ({
   project,
   release: () => undefined,
+});
+
+const streamingService = (
+  renderChild: NonNullable<RouteInvocationServiceOptions['renderChild']>,
+  trace?: TracePublisher,
+): RouteInvocationService => new RouteInvocationService({
+  manifest: { manifest: () => catalog('digest', 'revision') },
+  prepared: () => preparedLease({
+    manifest: { projectRoot: '/project' } as never,
+    stateRoot: '/project/.agent-bundle/state',
+    targets: ['claude'],
+  }),
+  renderChild,
+  ...(trace === undefined ? {} : { trace }),
+});
+
+it('publishes render events before the final invocation', async () => {
+  const release = deferred();
+  const rendered = deferred();
+  const document = childResult({
+    context: {} as never,
+    input: {},
+    manifest: {} as never,
+    routeId: echoRoute.id,
+    stateRoot: '/project/state',
+    surface: { kind: 'unit-render' },
+  }).document;
+  const service = streamingService(async (request, _signal, _trace, publishRender) => {
+    publishRender({ document, sequence: 0, type: 'shell' });
+    rendered.resolve();
+    await release.promise;
+    publishRender({ document, sequence: 1, type: 'complete' });
+    return { ...childResult(request), events: [
+      { document, sequence: 0, type: 'shell' },
+      { document, sequence: 1, type: 'complete' },
+    ] };
+  });
+
+  const started = service.start({ input: {}, routeId: echoRoute.id });
+  await rendered.promise;
+  const messages: Parameters<Parameters<typeof service.subscribe>[1]>[0][] = [];
+  service.subscribe(started.invocation.id, (message) => messages.push(message));
+  expect(messages.map((message) => message.type)).toEqual(['render']);
+  release.resolve();
+  await started.result;
+  expect(messages.map((message) => message.type)).toEqual(['render', 'render', 'final']);
+});
+
+it('retains only the newest 256 render events and one truncation marker', async () => {
+  const release = deferred();
+  const rendered = deferred();
+  const document = childResult({
+    context: {} as never,
+    input: {},
+    manifest: {} as never,
+    routeId: echoRoute.id,
+    stateRoot: '/project/state',
+    surface: { kind: 'unit-render' },
+  }).document;
+  const service = streamingService(async (request, _signal, _trace, publishRender) => {
+    for (let sequence = 0; sequence < 300; sequence += 1) {
+      publishRender({ document, sequence, type: 'shell' });
+    }
+    rendered.resolve();
+    await release.promise;
+    return childResult(request);
+  });
+
+  const started = service.start({ input: {}, routeId: echoRoute.id });
+  await rendered.promise;
+  const messages: Parameters<Parameters<typeof service.subscribe>[1]>[0][] = [];
+  service.subscribe(started.invocation.id, (message) => messages.push(message));
+  expect(messages.filter((message) => message.type === 'render')).toHaveLength(256);
+  expect(messages.filter((message) => message.type === 'truncated')).toEqual([
+    { dropped: 44, type: 'truncated' },
+  ]);
+  expect(messages.find((message) => message.type === 'render')).toMatchObject({
+    event: { sequence: 44 },
+  });
+  release.resolve();
+  await started.result;
+});
+
+it('cancels a running invocation without an outcome and publishes cancellation', async () => {
+  const startedChild = deferred();
+  const trace = collectingTrace();
+  let childAborted = false;
+  const service = streamingService((_request, signal) => new Promise((_resolve, reject) => {
+    startedChild.resolve();
+    signal.addEventListener('abort', () => {
+      childAborted = true;
+      reject(signal.reason);
+    }, { once: true });
+  }), trace.publisher);
+
+  const started = service.start({ input: {}, routeId: echoRoute.id });
+  await startedChild.promise;
+  const cancelled = await service.cancel(started.invocation.id);
+
+  expect(childAborted).toBe(true);
+  expect(cancelled).toMatchObject({ id: started.invocation.id, status: 'cancelled' });
+  expect(cancelled).not.toHaveProperty('outcome');
+  expect(await started.result).toBe(cancelled);
+  expect(trace.entries.at(-1)).toMatchObject({
+    kind: 'invocation.cancelled',
+    status: 'error',
+  });
+});
+
+it('rejects cancellation after an invocation is final', async () => {
+  const service = streamingService(async (request) => childResult(request));
+  const started = service.start({ input: {}, routeId: echoRoute.id });
+  await started.result;
+
+  await expect(service.cancel(started.invocation.id)).rejects.toMatchObject({
+    code: ROUTE_INVOCATION_ALREADY_FINAL_CODE,
+    status: 409,
+  });
 });
 
 it('aborts and drains a running render when the service closes', async () => {
