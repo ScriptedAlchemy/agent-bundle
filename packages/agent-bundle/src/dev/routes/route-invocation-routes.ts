@@ -258,6 +258,12 @@ export class RouteInvocationRoutes {
     return true;
   }
 
+  /**
+   * Replays the retained window one frame per socket drain, then delivers
+   * live messages through the bounded queue. The replay is bounded by
+   * retention, not by the queue: bursting it into the queue would destroy
+   * every reconnect whose window outgrew the queue's live-consumer limits.
+   */
   #stream(service: RouteInvocationRouteService, id: string, response: ServerResponse): void {
     let terminal = false;
     const stream = { unsubscribe: undefined as (() => void) | undefined };
@@ -266,30 +272,46 @@ export class RouteInvocationRoutes {
       stream.unsubscribe?.();
       response.end();
     };
-    const writer = createBackpressuredWriter(response, {
-      byteLimit: streamQueueByteLimit,
-      onIdle: finish,
-      recordLimit: streamQueueEntryLimit,
-    });
     const deliver = (message: RouteInvocationStreamMessage): void => {
       const result = writer.enqueue(`event: ${message.type}\ndata: ${JSON.stringify(message)}\n\n`);
       if (result === 'overflow') response.destroy();
       if (message.type === 'final') terminal = true;
       finish();
     };
+    const replay: RouteInvocationStreamMessage[] = [];
+    let replaying = true;
+    let liveWhileReplaying = 0;
+    const pump = (): void => {
+      while (replaying && writer.idle && !response.destroyed) {
+        const next = replay.shift();
+        if (next === undefined) {
+          replaying = false;
+          break;
+        }
+        deliver(next);
+      }
+      finish();
+    };
+    const writer = createBackpressuredWriter(response, {
+      byteLimit: streamQueueByteLimit,
+      onIdle: pump,
+      recordLimit: streamQueueEntryLimit,
+    });
     response.once('close', () => {
       writer.markClosed();
       stream.unsubscribe?.();
     });
-    const replay: RouteInvocationStreamMessage[] = [];
-    let replaying = true;
-    stream.unsubscribe = service.subscribe(id, (message) => replaying ? replay.push(message) : deliver(message));
+    stream.unsubscribe = service.subscribe(id, (message) => {
+      if (!replaying) return deliver(message);
+      replay.push(message);
+      liveWhileReplaying += 1;
+      if (liveWhileReplaying > streamQueueEntryLimit) response.destroy();
+    });
+    liveWhileReplaying = 0;
     writeKeepAliveStreamHead(response, {
       cacheControl: 'no-cache',
       contentType: 'text/event-stream; charset=utf-8',
     });
-    replaying = false;
-    for (const message of replay) deliver(message);
-    finish();
+    pump();
   }
 }

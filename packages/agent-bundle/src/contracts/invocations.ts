@@ -1,8 +1,15 @@
 /**
  * Browser-consumable contract surface for dev-server route invocations — the
- * one execution path behind the Workbench route workspace. Type-only: routes
- * render on the server through the production runtime.
+ * one execution path behind the Workbench route workspace. Routes render on
+ * the server through the production runtime; the only runtime export is the
+ * render-history retention the browser's live buffer shares with the server.
  */
+export {
+  RENDER_EVENT_RETENTION,
+  emptyRetainedRenderEvents,
+  retainRenderEvent,
+  type RetainedRenderEvents,
+} from '../dev/routes/route-invocation-result.ts';
 export type {
   RouteInvocationCliProjection,
   RouteInvocationEvent,

@@ -1,14 +1,21 @@
 import { expect, it } from '@rstest/core';
 
-import type { AgentRenderEvent } from '@agent-bundle/runtime';
+import type { AgentDocument, AgentRenderEvent } from '@agent-bundle/runtime';
 
-import { MAX_RETAINED_RENDER_EVENTS, type RouteInvocationStreamMessage } from '../src/dev/routes/route-invocation-result.ts';
+import {
+  RENDER_EVENT_RETENTION,
+  renderEventBytes,
+  retainRenderEvents,
+  type RouteInvocationStreamMessage,
+} from '../src/dev/routes/route-invocation-result.ts';
 import {
   RouteInvocationService,
   type RouteInvocationChildRequest,
   type RouteInvocationChildResult,
+  type RouteInvocationServiceOptions,
 } from '../src/dev/routes/route-invocation-service.ts';
 import type { RouteManifest } from '../src/dev/routes/route-manifest.ts';
+import { deferred } from './support/eventually.ts';
 
 const echoRoute = {
   config: [],
@@ -29,27 +36,21 @@ const manifest: RouteManifest = {
   sourceRevision: 'revision',
 };
 
-const document = { root: { kind: 'text', text: 'ok' }, status: 'success', version: 1 } as const;
-const streamLength = MAX_RETAINED_RENDER_EVENTS * 4;
+const documentOf = (text: string): AgentDocument => ({ root: { kind: 'text', text }, status: 'success', version: 1 });
+const finalDocument = documentOf('final');
 
-const longRender = async (
-  request: RouteInvocationChildRequest,
-  _signal: AbortSignal,
-  _publishKernelEvent: unknown,
-  publishRender: (event: AgentRenderEvent) => void,
-): Promise<RouteInvocationChildResult> => {
-  const events: AgentRenderEvent[] = [];
-  for (let sequence = 0; sequence < streamLength; sequence += 1) {
-    const event: AgentRenderEvent = sequence === streamLength - 1
-      ? { document, sequence, type: 'complete' }
-      : { document, sequence, type: 'shell' };
-    events.push(event);
-    publishRender(event);
-  }
-  return { document, events, input: request.input, mcp: {}, renderDurationMs: 1 };
-};
+/** A shell, then progress snapshots, then `complete`; `bytes` pads every snapshot's text. */
+const stream = (length: number, bytes = 0): readonly AgentRenderEvent[] => Array.from({ length }, (_, sequence): AgentRenderEvent =>
+  sequence === 0
+    ? { document: documentOf('shell'), sequence, type: 'shell' }
+    : sequence === length - 1
+      ? { document: finalDocument, sequence, type: 'complete' }
+      : { boundaryId: 'b', document: documentOf(`${String(sequence)}:`.padEnd(bytes, 'x')), sequence, type: 'replace' });
 
-const service = (historyLimit: number): RouteInvocationService => new RouteInvocationService({
+const service = (
+  renderChild: NonNullable<RouteInvocationServiceOptions['renderChild']>,
+  historyLimit = 2,
+): RouteInvocationService => new RouteInvocationService({
   historyLimit,
   manifest: { manifest: () => manifest },
   prepared: async () => ({
@@ -60,40 +61,110 @@ const service = (historyLimit: number): RouteInvocationService => new RouteInvoc
     },
     release: () => undefined,
   }),
-  renderChild: longRender,
+  renderChild,
 });
 
-it('bounds a long render stream in the live replay and the completed envelope, keeping the outcome and correlation', async () => {
-  const invocations = service(2);
-  const started = invocations.start({ correlationId: 'browser-1', input: {}, routeId: echoRoute.id });
-  const invocation = await started.result;
-  const messages: RouteInvocationStreamMessage[] = [];
-  invocations.subscribe(invocation.id, (message) => messages.push(message));
+const childResult = (request: RouteInvocationChildRequest, events: readonly AgentRenderEvent[]): RouteInvocationChildResult => ({
+  document: finalDocument,
+  events,
+  input: request.input,
+  mcp: {},
+  renderDurationMs: 1,
+});
 
-  expect(invocation.events).toHaveLength(MAX_RETAINED_RENDER_EVENTS);
-  expect(invocation.events[0]?.sequence).toBe(streamLength - MAX_RETAINED_RENDER_EVENTS);
-  expect(invocation.events.at(-1)).toMatchObject({ sequence: streamLength - 1, type: 'complete' });
+const collect = (invocations: RouteInvocationService, id: string): RouteInvocationStreamMessage[] => {
+  const messages: RouteInvocationStreamMessage[] = [];
+  invocations.subscribe(id, (message) => messages.push(message));
+  return messages;
+};
+
+const bytesOf = (events: readonly AgentRenderEvent[]): number => events.reduce((sum, event) => sum + renderEventBytes(event), 0);
+
+it('bounds a long stream by count in the replay, the envelope, and history while keeping outcome and correlation', async () => {
+  const events = stream(RENDER_EVENT_RETENTION.maxEvents * 4);
+  const invocations = service(async (request, _signal, _kernel, publishRender) => {
+    for (const event of events) publishRender(event);
+    return childResult(request, events);
+  });
+  const invocation = await invocations.invoke({ correlationId: 'browser-1', input: {}, routeId: echoRoute.id });
+
+  expect(invocation.events).toHaveLength(RENDER_EVENT_RETENTION.maxEvents);
+  expect(invocation.evictedEvents).toBe(events.length - RENDER_EVENT_RETENTION.maxEvents);
+  expect(invocation.events[0]?.sequence).toBe(invocation.evictedEvents);
+  expect(invocation.events.at(-1)).toMatchObject({ sequence: events.length - 1, type: 'complete' });
   expect(invocation).toMatchObject({
     correlationId: 'browser-1',
-    document,
+    document: finalDocument,
     outcome: { kind: 'success' },
     routeId: echoRoute.id,
     status: 'succeeded',
   });
-  expect(invocations.read(invocation.id)?.events).toHaveLength(MAX_RETAINED_RENDER_EVENTS);
+  expect(invocations.read(invocation.id)).toBe(invocation);
 
-  expect(messages.filter((message) => message.type === 'render')).toHaveLength(MAX_RETAINED_RENDER_EVENTS);
-  expect(messages.filter((message) => message.type === 'truncated')).toHaveLength(1);
-  const final = messages.at(-1);
-  expect(final?.type).toBe('final');
-  if (final?.type !== 'final') throw new Error('The stream did not end with the final envelope.');
-  expect(final.invocation.events).toHaveLength(MAX_RETAINED_RENDER_EVENTS);
-  expect(final.invocation.id).toBe(invocation.id);
+  const messages = collect(invocations, invocation.id);
+  expect(messages[0]).toEqual({ type: 'truncated' });
+  expect(messages.filter((message) => message.type === 'render')).toHaveLength(RENDER_EVENT_RETENTION.maxEvents);
+  expect(messages.at(-1)).toMatchObject({ invocation: { evictedEvents: invocation.evictedEvents, id: invocation.id }, type: 'final' });
 
   const second = await invocations.invoke({ input: {}, routeId: echoRoute.id });
   const third = await invocations.invoke({ input: {}, routeId: echoRoute.id });
   expect(invocations.read(invocation.id)).toBeUndefined();
   expect(() => invocations.subscribe(invocation.id, () => undefined)).toThrow(/was not found/);
   expect(invocations.list().map((entry) => entry.id)).toEqual([third.id, second.id]);
-  expect(invocations.read(second.id)?.events).toHaveLength(MAX_RETAINED_RENDER_EVENTS);
+});
+
+it('bounds large intermediate snapshots by bytes without touching the final document', async () => {
+  const events = stream(64, 128 * 1024);
+  expect(bytesOf(events)).toBeGreaterThan(RENDER_EVENT_RETENTION.maxBytes);
+  const invocations = service(async (request, _signal, _kernel, publishRender) => {
+    for (const event of events) publishRender(event);
+    return childResult(request, events);
+  });
+  const invocation = await invocations.invoke({ input: {}, routeId: echoRoute.id });
+
+  expect(invocation.events.length).toBeLessThan(events.length);
+  expect(bytesOf(invocation.events)).toBeLessThanOrEqual(RENDER_EVENT_RETENTION.maxBytes);
+  expect(invocation.evictedEvents).toBe(events.length - invocation.events.length);
+  expect(invocation.events.at(-1)).toMatchObject({ sequence: events.length - 1, type: 'complete' });
+  expect(invocation.document).toEqual(finalDocument);
+  const replayed = collect(invocations, invocation.id);
+  expect(replayed[0]).toEqual({ type: 'truncated' });
+  expect(replayed.filter((message) => message.type === 'render')).toHaveLength(invocation.events.length);
+});
+
+it('never evicts the newest event, however large', () => {
+  const oversized = stream(3, RENDER_EVENT_RETENTION.maxBytes);
+  const retained = retainRenderEvents(oversized);
+  expect(retained.events).toEqual([oversized[2]]);
+  expect(retained.evicted).toBe(2);
+});
+
+it('reconnects with an explicit replay limitation and cancels with the latest document after the shell was evicted', async () => {
+  const rendered = deferred();
+  // Shell plus replaces, never completing: the run stays cancellable.
+  const events = stream(RENDER_EVENT_RETENTION.maxEvents + 11).slice(0, -1);
+  const evicted = events.length - RENDER_EVENT_RETENTION.maxEvents;
+  const invocations = service((_request, signal, _kernel, publishRender) => new Promise((_resolve, reject) => {
+    for (const event of events) publishRender(event);
+    rendered.resolve();
+    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+  }));
+  const started = invocations.start({ correlationId: 'browser-2', input: {}, routeId: echoRoute.id });
+  const live = collect(invocations, started.invocation.id);
+  await rendered.promise;
+  expect(live.filter((message) => message.type === 'render')).toHaveLength(events.length);
+  expect(live.filter((message) => message.type === 'truncated')).toHaveLength(1);
+
+  const reconnected = collect(invocations, started.invocation.id);
+  expect(reconnected[0]).toEqual({ type: 'truncated' });
+  expect(reconnected.filter((message) => message.type === 'render')).toHaveLength(RENDER_EVENT_RETENTION.maxEvents);
+  expect(reconnected.find((message) => message.type === 'render')).toMatchObject({ event: { sequence: evicted, type: 'replace' } });
+  expect(reconnected.some((message) => message.type === 'final')).toBe(false);
+
+  const cancelled = await invocations.cancel(started.invocation.id);
+  expect(cancelled).toMatchObject({ correlationId: 'browser-2', evictedEvents: evicted, status: 'cancelled' });
+  expect(cancelled).not.toHaveProperty('outcome');
+  expect(cancelled.events).toHaveLength(RENDER_EVENT_RETENTION.maxEvents);
+  expect(cancelled.document).toEqual(documentOf(`${String(events.length - 1)}:`));
+  expect(reconnected.at(-1)).toMatchObject({ invocation: { id: started.invocation.id, status: 'cancelled' }, type: 'final' });
 });

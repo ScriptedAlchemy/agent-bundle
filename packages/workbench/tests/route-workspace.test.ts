@@ -92,9 +92,9 @@ describe('invocation state contract', () => {
       type: 'render',
     });
     expect(progressed).toMatchObject({
-      events: [expect.objectContaining({ type: 'shell' }), expect.objectContaining({ type: 'progress' })],
       invocationId: 'inv-live',
       phase: 'running',
+      retained: { events: [expect.objectContaining({ type: 'shell' }), expect.objectContaining({ type: 'progress' })], evicted: 0 },
     });
 
     const { outcome: _outcome, ...withoutOutcome } = invocation;

@@ -48,7 +48,10 @@ import {
   ProductionRouteInvocationError,
 } from './route-invocation-production-error.ts';
 import {
-  MAX_RETAINED_RENDER_EVENTS,
+  emptyRetainedRenderEvents,
+  retainRenderEvent,
+  retainRenderEvents,
+  type RetainedRenderEvents,
   type RouteInvocation,
   type RouteInvocationStart,
   type RouteInvocationStreamMessage,
@@ -154,7 +157,10 @@ export interface RouteInvocationChildRequest {
 
 export interface RouteInvocationChildResult {
   readonly document: NonNullable<RouteInvocation['document']>;
+  /** The retained window of the render stream (`RENDER_EVENT_RETENTION`); the service re-applies the bound. */
   readonly events: RouteInvocation['events'];
+  /** Render events the child evicted before replying. */
+  readonly evictedEvents?: number;
   /**
    * Process surfaces only: the exit code the generated executable sets for
    * this completed run — a plain script's real exit status, the generated
@@ -1174,47 +1180,47 @@ const failedInvocation = (input: {
 
 interface InvocationStreamRecord {
   readonly controller: AbortController;
+  /** The newest document a render event carried, kept outside the evictable window. */
+  latestDocument?: AgentDocument;
   readonly listeners: Set<(message: RouteInvocationStreamMessage) => void>;
+  /** Kernel trace messages and the terminal `final`; never evicted. */
   readonly messages: RouteInvocationStreamMessage[];
+  readonly renders: RetainedRenderEvents;
   readonly running: RunningRouteInvocation;
   cancelRequested: boolean;
   final?: RouteInvocation;
   result?: Promise<RouteInvocation>;
 }
 
-const latestDocument = (
-  messages: readonly RouteInvocationStreamMessage[],
-): AgentDocument | undefined => {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index]!;
-    if (message.type !== 'render') continue;
-    if (message.event.type === 'shell' || message.event.type === 'replace' || message.event.type === 'complete') {
-      return message.event.document;
-    }
-  }
-  return undefined;
-};
+const truncatedMarker = deepFreeze<RouteInvocationStreamMessage>({ type: 'truncated' });
+
+/** Replay order: the truncation marker, the retained render window, then kernel trace and `final`. */
+const replayMessages = (record: InvocationStreamRecord): readonly RouteInvocationStreamMessage[] => [
+  ...(record.renders.evicted === 0 ? [] : [truncatedMarker]),
+  ...record.renders.events.map((event) => deepFreeze<RouteInvocationStreamMessage>({ event, type: 'render' })),
+  ...record.messages,
+];
 
 const cancelledInvocation = (input: {
   readonly context: RequestContextProvenance;
   readonly id: string;
   readonly manifest: RouteManifest;
-  readonly messages: readonly RouteInvocationStreamMessage[];
+  readonly record: InvocationStreamRecord;
   readonly request: RouteInvocationRequest;
   readonly route: RouteManifestRoute;
   readonly startedAt: Date;
   readonly surface: RouteInvocationSurface;
   readonly completedAt: Date;
 }): RouteInvocation => {
-  const events = input.messages.flatMap((message) => message.type === 'render' ? [message.event] : []);
-  const document = latestDocument(input.messages);
+  const { latestDocument: document, renders } = input.record;
   return deepFreeze({
     completedAt: input.completedAt.toISOString(),
     context: input.context,
     ...(input.request.correlationId === undefined ? {} : { correlationId: input.request.correlationId }),
     diagnostics: [],
     ...(document === undefined ? {} : { document }),
-    events,
+    events: [...renders.events],
+    ...(renders.evicted === 0 ? {} : { evictedEvents: renders.evicted }),
     id: input.id,
     input: input.request.input ?? {},
     kind: input.route.kind as RouteInvocationKind,
@@ -1281,7 +1287,7 @@ export class RouteInvocationService {
         404,
       );
     }
-    for (const message of record.messages) listener(message);
+    for (const message of replayMessages(record)) listener(message);
     if (record.final === undefined) record.listeners.add(listener);
     return () => record.listeners.delete(listener);
   }
@@ -1316,22 +1322,18 @@ export class RouteInvocationService {
   }
 
   #publishStream(record: InvocationStreamRecord, message: RouteInvocationStreamMessage): void {
-    if (message.type === 'render') {
-      const renderCount = record.messages.reduce((count, retained) =>
-        count + (retained.type === 'render' ? 1 : 0), 0);
-      if (renderCount === MAX_RETAINED_RENDER_EVENTS) {
-        const oldest = record.messages.findIndex((retained) => retained.type === 'render');
-        if (oldest !== -1) record.messages.splice(oldest, 1);
-        const markerIndex = record.messages.findIndex((retained) => retained.type === 'truncated');
-        if (markerIndex === -1) {
-          const marker = deepFreeze<RouteInvocationStreamMessage>({ type: 'truncated' });
-          record.messages.unshift(marker);
-          for (const listener of record.listeners) listener(marker);
-        }
-      }
-    }
     const frozen = deepFreeze(message);
-    record.messages.push(frozen);
+    if (frozen.type === 'render') {
+      const { event } = frozen;
+      if (event.type === 'shell' || event.type === 'replace' || event.type === 'complete') record.latestDocument = event.document;
+      const evictedBefore = record.renders.evicted;
+      retainRenderEvent(record.renders, event);
+      if (evictedBefore === 0 && record.renders.evicted > 0) {
+        for (const listener of record.listeners) listener(truncatedMarker);
+      }
+    } else {
+      record.messages.push(frozen);
+    }
     for (const listener of record.listeners) listener(frozen);
   }
 
@@ -1410,6 +1412,7 @@ export class RouteInvocationService {
       controller: operationController,
       listeners: new Set(),
       messages: [],
+      renders: emptyRetainedRenderEvents(),
       running: runningInvocation,
     };
     this.#streams.set(id, streamRecord);
@@ -1550,7 +1553,7 @@ export class RouteInvocationService {
               context,
               id,
               manifest,
-              messages: streamRecord.messages,
+              record: streamRecord,
               request: { ...request, input },
               route,
               startedAt,
@@ -1586,6 +1589,8 @@ export class RouteInvocationService {
         const projectionStartedAt = this.#now();
         const projection = invocationProjection(route, surface, rawInput, child, prepared, this.#registry);
         const completedAt = this.#now();
+        const retained = retainRenderEvents(child.events);
+        const evictedEvents = (child.evictedEvents ?? 0) + retained.evicted;
         const canonical = route.kind === 'event-route'
           ? (child.input as JsonObject).canonical
           : undefined;
@@ -1608,7 +1613,8 @@ export class RouteInvocationService {
                 },
               }
             : {}),
-          events: child.events.slice(-MAX_RETAINED_RENDER_EVENTS),
+          events: retained.events,
+          ...(evictedEvents === 0 ? {} : { evictedEvents }),
           id,
           input: canonical ?? child.input,
           kind: route.kind as RouteInvocationKind,
@@ -1637,7 +1643,7 @@ export class RouteInvocationService {
           context: cancellationContext,
           id,
           manifest: queued,
-          messages: streamRecord.messages,
+          record: streamRecord,
           request,
           route,
           startedAt,

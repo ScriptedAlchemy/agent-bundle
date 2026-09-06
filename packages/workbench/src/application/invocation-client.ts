@@ -157,6 +157,7 @@ const invocationSchema: z.ZodType<RouteInvocation> = z.strictObject({
   context: requestContextProvenanceSchema,
   document: agentDocumentSchema.optional(),
   events: z.array(agentRenderEventSchema),
+  evictedEvents: z.number().int().positive().optional(),
   projection: projectionSchema,
   providers: z.array(providerSchema),
   result: z.json().optional(),
