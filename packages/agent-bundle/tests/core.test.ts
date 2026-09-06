@@ -154,7 +154,9 @@ it('parses the first well-delimited semver token from a CLI banner', () => {
   expect(parsed('codex-cli 0.147.0')).toBe('0.147.0');
   expect(parsed('1.2.3-rc.1+build.7')).toBe('1.2.3-pre');
   expect(parsed('2.1.232abc')).toBeUndefined();
-  expect(parsed('2.1.232.4')).toBe('1.232.4');
+  expect(parsed('2.1.232.4')).toBeUndefined();
+  expect(parsed('codex-cli 0.146.9.1')).toBeUndefined();
+  expect(parsed('v22.19.0')).toBe('22.19.0');
   expect(parsed('no version here')).toBeUndefined();
 
   const minimum = parseSemanticVersion('2.1.232')!;
