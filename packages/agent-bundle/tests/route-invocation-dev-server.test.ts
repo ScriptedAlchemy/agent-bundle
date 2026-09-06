@@ -7,11 +7,13 @@ import { expect, it } from '@rstest/core';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
+import type { AgentRenderEvent } from '@agent-bundle/runtime';
+
 import {
   renderEventBytes,
   routeInvocationRenderHistoryLimits,
 } from '../src/dev/routes/route-invocation-render-history.ts';
-import type { RouteInvocationResponse } from '../src/dev/routes/route-invocation-result.ts';
+import type { RouteInvocation, RouteInvocationResponse } from '../src/dev/routes/route-invocation-result.ts';
 import type { RouteInvocationListResponse } from '../src/dev/routes/route-invocation.ts';
 import type { RouteManifestResponse } from '../src/dev/routes/route-manifest.ts';
 import type { TraceReplay } from '../src/dev/trace/trace-entry.ts';
@@ -95,6 +97,16 @@ const isFallbackRender = (fallback: string) => (message: StreamMessage): boolean
   message.type === 'render' && JSON.stringify(message.event).includes(JSON.stringify(fallback));
 
 const isFinal = (message: StreamMessage): boolean => message.type === 'final';
+
+/** Reads through `final` and returns every message seen. */
+const readInvocationStream = async (response: Response): Promise<readonly StreamMessage[]> => {
+  const stream = invocationMessages(response);
+  await stream.next(isFinal);
+  return stream.seen;
+};
+
+const renderBytes = (events: readonly AgentRenderEvent[]): number =>
+  events.reduce((sum, event) => sum + renderEventBytes(event), 0);
 
 it('invokes compiled tool and event routes through the foreground server', { timeout: 180_000 }, async () => {
   const project = await createProjectFixture({
@@ -1410,6 +1422,149 @@ it('publishes invocation routes only after a successful initial or recovered bui
         message: 'No published build and route manifest are available.',
       },
     });
+  } finally {
+    await server?.close().catch(() => undefined);
+    await rm(project.root, { force: true, maxRetries: 5, recursive: true, retryDelay: 50 });
+  }
+});
+
+it('bounds the render history a compiled child produces by count and bytes across the envelope, reads, replay, and cancellation', { timeout: 180_000 }, async () => {
+  const project = await createProjectFixture({
+    config: [
+      'export default {',
+      "  plugin: { name: 'route-invocation-retention', version: '1.0.0' },",
+      "  targets: ['claude'],",
+      '};',
+      '',
+    ].join('\n'),
+    files: {
+      'package.json': '{"dependencies":{"@agent-bundle/runtime":"workspace:*","react":"19.2.8","zod":"4.5.4"},"type":"module"}\n',
+      // One Suspense boundary per cell settles per macrotask, so the stream
+      // grows one `replace` snapshot at a time; `gate` names a file the last
+      // boundary waits for, or `none`.
+      'src/cli/flood.tsx': [
+        "import { existsSync } from 'node:fs';",
+        "import { Agent } from '@agent-bundle/runtime';",
+        "import { createElement, Suspense } from 'react';",
+        "import { z } from 'zod';",
+        '',
+        "export const config = { description: 'Streams many boundaries.', positionals: ['boundaries', 'bytes', 'gate'] };",
+        'export const inputSchema = z.object({ boundaries: z.number().int().min(1).max(900), bytes: z.number().int().min(1).max(4096), gate: z.string() }).strict();',
+        'export const resultSchema = z.object({ boundaries: z.number() }).strict();',
+        '',
+        'let turn = Promise.resolve();',
+        'const Cell = async ({ bytes, index }) => {',
+        '  const mine = turn.then(() => new Promise((resolve) => setImmediate(resolve)));',
+        '  turn = mine;',
+        '  await mine;',
+        "  return createElement(Agent.Text, null, `${index}:`.padEnd(bytes, 'x'));",
+        '};',
+        'const Gate = async ({ path }) => {',
+        '  while (!existsSync(path)) await new Promise((resolve) => setTimeout(resolve, 20));',
+        "  return createElement(Agent.Text, null, 'released');",
+        '};',
+        '',
+        'export default async function Flood({ input }) {',
+        "  const cells = Array.from({ length: input.boundaries }, (_, index) => createElement(Suspense, { fallback: createElement(Agent.Text, null, 'pending'), key: index }, createElement(Cell, { bytes: input.bytes, index })));",
+        "  const gate = input.gate === 'none' ? [] : [createElement(Suspense, { fallback: createElement(Agent.Text, null, 'waiting'), key: 'gate' }, createElement(Gate, { path: input.gate }))];",
+        '  return createElement(Agent.Result, { value: { boundaries: input.boundaries } }, ...cells, ...gate);',
+        '}',
+        '',
+      ].join('\n'),
+    },
+    prefix: 'agent-bundle-route-invocation-retention-',
+  });
+  const assetsRoot = join(project.root, 'workbench');
+  let server: Awaited<ReturnType<typeof startDevServer>> | undefined;
+  await mkdir(assetsRoot, { recursive: true });
+  await Promise.all([
+    symlink(agentBundleNodeModules, join(project.root, 'node_modules'), 'dir'),
+    writeFile(join(assetsRoot, 'index.html'), '<!doctype html><title>Route invocation retention</title>'),
+  ]);
+  try {
+    server = await startDevServer({
+      assets: createWorkbenchAssetSource({ root: assetsRoot }),
+      open: false,
+      port: 0,
+      root: project.root,
+    });
+    const bootstrap = await fetch(`${server.url}/api/project/session`, {
+      headers: { 'sec-fetch-site': 'same-origin' },
+    });
+    const session = await bootstrap.json() as { readonly token: string };
+    const headers = {
+      'content-type': 'application/json',
+      origin: server.url,
+      'x-agent-bundle-session': session.token,
+    };
+    await expect.poll(
+      async () => fetch(`${server!.url}/api/routes/manifest`, { headers }).then((response) => response.status),
+      { timeout: 20_000 },
+    ).toBe(200);
+    const boundaries = 300;
+    const flood = (args: readonly string[], stream: boolean) => fetch(`${server!.url}/api/routes/invocations`, {
+      body: JSON.stringify({
+        correlationId: 'retention-1',
+        routeId: 'cli:flood',
+        ...(stream ? { stream: true } : {}),
+        surface: { args, command: 'flood', kind: 'cli' },
+      }),
+      headers,
+      method: 'POST',
+    });
+    const expectBounded = (invocation: RouteInvocation): void => {
+      expect(invocation.events.length).toBeLessThanOrEqual(routeInvocationRenderHistoryLimits.maxEvents);
+      expect(renderBytes(invocation.events)).toBeLessThanOrEqual(routeInvocationRenderHistoryLimits.maxBytes);
+      expect(invocation.retention?.evictedEvents).toBeGreaterThan(0);
+      expect(invocation.retention?.producedEvents).toBe(invocation.retention!.evictedEvents + invocation.events.length);
+      // shell, one replace per settled boundary, then complete or the pending gate
+      expect(invocation.retention?.producedEvents).toBeGreaterThanOrEqual(boundaries + 1);
+      expect(invocation.correlationId).toBe('retention-1');
+    };
+
+    // Large intermediate snapshots: every replace carries the whole document,
+    // so bytes bound the window long before the event count does.
+    const completedResponse = await flood([String(boundaries), '256', 'none'], false);
+    expect(completedResponse.status).toBe(200);
+    const completed = (await completedResponse.json() as RouteInvocationResponse).invocation;
+    expect(completed.status, JSON.stringify(completed.diagnostics)).toBe('succeeded');
+    expectBounded(completed);
+    expect(completed.events.length).toBeLessThan(routeInvocationRenderHistoryLimits.maxEvents);
+    expect(completed.events.at(-1)?.type).toBe('complete');
+    expect(completed.outcome).toEqual({ kind: 'success' });
+    expect(completed.result).toEqual({ boundaries });
+    expect(JSON.stringify(completed.document)).toContain(`${String(boundaries - 1)}:`);
+    const read = (await (await fetch(`${server.url}/api/routes/invocations/${completed.id}`, { headers })).json() as RouteInvocationResponse).invocation;
+    expect(read).toEqual(completed);
+    const replayed = await readInvocationStream(await fetch(`${server.url}/api/routes/invocations/${completed.id}/stream`, { headers }));
+    expect(replayed[0]).toEqual({ type: 'truncated' });
+    expect(renderEvents(replayed)).toEqual(completed.events);
+    expect(replayed.at(-1)).toEqual({ invocation: completed, type: 'final' });
+
+    // Reconnect once the shell has been evicted, then cancel behind the gate.
+    const gate = join(project.root, '.agent-bundle', 'flood-gate');
+    const startedResponse = await flood([String(boundaries), '16', gate], true);
+    expect(startedResponse.status).toBe(202);
+    const started = await startedResponse.json() as { readonly invocation: { readonly id: string } };
+    const live = invocationMessages(await fetch(`${server.url}/api/routes/invocations/${started.invocation.id}/stream`, { headers }));
+    await live.next(() => renderEvents(live.seen).length >= boundaries + 1);
+    const reconnectedResponse = await fetch(`${server.url}/api/routes/invocations/${started.invocation.id}/stream`, { headers });
+    expect(reconnectedResponse.status).toBe(200);
+    const cancelResponse = await fetch(`${server.url}/api/routes/invocations/${started.invocation.id}/cancel`, { headers, method: 'POST' });
+    expect(cancelResponse.status).toBe(202);
+    const cancelled = (await cancelResponse.json() as RouteInvocationResponse).invocation;
+    expect(cancelled.status).toBe('cancelled');
+    expect(cancelled).not.toHaveProperty('outcome');
+    expectBounded(cancelled);
+    expect(cancelled.events[0]?.type).not.toBe('shell');
+    expect(JSON.stringify(cancelled.document)).toContain(`${String(boundaries - 1)}:`);
+    const reconnected = await readInvocationStream(reconnectedResponse);
+    expect(reconnected[0]).toEqual({ type: 'truncated' });
+    expect(renderEvents(reconnected)).toEqual(cancelled.events);
+    expect(reconnected.at(-1)).toEqual({ invocation: cancelled, type: 'final' });
+    await live.next(isFinal);
+    expect(live.seen.filter((message) => message.type === 'truncated')).toHaveLength(1);
+    expect(renderEvents(live.seen).length).toBeGreaterThan(routeInvocationRenderHistoryLimits.maxEvents);
   } finally {
     await server?.close().catch(() => undefined);
     await rm(project.root, { force: true, maxRetries: 5, recursive: true, retryDelay: 50 });

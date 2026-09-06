@@ -100,7 +100,7 @@ const RawDocument = ({ invocation }: { readonly invocation?: RouteInvocation }):
         : <p className="result-note" data-testid="render-events-retention">
           Retained {String(invocation.events.length)} of {String(invocation.retention.producedEvents)} events;
           {' '}{String(invocation.retention.evictedEvents)} older events ({String(invocation.retention.evictedBytes)} B) were evicted.
-          The Agent Document above is the complete final document.
+          The Agent Document above is never truncated.
         </p>}
       {invocation.events.length === 0
         ? <p className="result-note">The stream carried no events.</p>
