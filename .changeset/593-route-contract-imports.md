@@ -1,5 +1,0 @@
----
-"agent-bundle": patch
----
-
-Resolve `inputSchema` (and `config` string consts, `AB4806`) declared in another module: `export const inputSchema = statusInputSchema`, imported through relative specifiers inside the project across any number of `export const` alias hops, is parsed statically in the declaring module's scope — no module is executed — so a `src/cli/**` command and an MCP tool share one schema. The route graph normalizes each statically read schema once into a `RouteContract` (`id` = `contract:<module>#<binding>`, `input`, `origin`, `routes`), exposed as `contracts` on `CompiledRouteGraph`, `agent-bundle inspect --routes`, the route manifest, and the Workbench Routes page, and referenced by each route as `route.contract`; the argv grammar and static MCP `inputSchema` are projections of it. On CLI routes a reference the resolver cannot follow is `AB4838` (names the import chain and the boundary) and a cyclic chain is `AB4839`; grammar violations inside a resolved schema stay `AB4814` with the position qualified by the declaring module (#603)

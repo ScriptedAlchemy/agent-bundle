@@ -1,5 +1,0 @@
----
-"agent-bundle": patch
----
-
-Resolve the dev `/web/<server>/<app>` launch from the projections the artifact manifest declares instead of hardcoding portable (#620 review follow-up): validate an explicit `?target=` (invalid is an error, never a fallback), open unprompted when declared projections share one normalized launch descriptor, answer 409 (`AB8023`) naming the choices when they differ materially, and require no portable projection or `mcp.json` for a Claude- or Codex-only build. Cache web sessions by epoch, server, and resolved launch identity, retiring them only when a rebuild publishes a new epoch — a session pages still lease stays valid and closes at its last release, and a failed rebuild retires nothing. Run a non-read-only opening tool once per session, tool, App, and input (concurrent first loads share one call; `readOnlyHint: true` runs on every load) and rebind refreshes to the retained result. Move `<plugin> web` per-server state out of the installed artifact to `~/.agent-bundle/web-data/<plugin>-<digest>/<server>` so a read-only install launches. (#628)
