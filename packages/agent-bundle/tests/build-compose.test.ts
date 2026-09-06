@@ -11,7 +11,7 @@ import { codexAdapter, codexArtifactPaths } from '../src/adapters/codex.ts';
 import { cursorAdapter, cursorArtifactPaths } from '../src/adapters/cursor.ts';
 import { portableAdapter } from '../src/adapters/portable.ts';
 import type { TargetAdapter } from '../src/adapters/types.ts';
-import { build, type BuildProjectResult, createDefaultRegistry, runMcp, TargetRegistry, validate } from '../src/api.ts';
+import { build, type BuildProjectResult, createDefaultRegistry, inspect, runMcp, TargetRegistry, validate } from '../src/api.ts';
 import { parseArtifactManifest } from '../src/build/manifest.ts';
 import { sha256Hex } from '../src/core/digest.ts';
 import { DiagnosticError } from '../src/core/diagnostics.ts';
@@ -88,6 +88,12 @@ const writeProject = async (root: string, options: FixtureOptions = {}): Promise
       '---', 'name: review', 'description: Review changes', ...(options.skillFrontmatter ?? []), '---', '# Review', '',
     ].join('\n')),
     writeProjectFile(root, 'src/commands/summarize.md', `---\ndescription: Summarize the diff\n${commandTargets}---\nSummarize the current diff.\n`),
+    ...(options.targets?.includes('cursor') === true
+      ? [writeProjectFile(root, 'src/rules/cursor-only.mdc', [
+        '---', 'description: Cursor-only instruction', 'targets:', '  - cursor', '---',
+        'Apply only the Cursor instruction.',
+      ].join('\n'))]
+      : []),
   ]);
 };
 
@@ -173,6 +179,106 @@ const syntheticAdapter = syntheticAdapterNamed(syntheticTarget);
 const readJson = async (path: string): Promise<unknown> => JSON.parse(await readFile(path, 'utf8'));
 
 const topLevel = async (root: string): Promise<readonly string[]> => (await readdir(root)).sort();
+
+type BuiltInHost = 'claude' | 'codex' | 'cursor' | 'portable';
+
+const supportedPairs: readonly (readonly [BuiltInHost, BuiltInHost])[] = Object.freeze([
+  ['claude', 'codex'],
+  ['claude', 'portable'],
+  ['codex', 'cursor'],
+  ['codex', 'portable'],
+  ['cursor', 'portable'],
+]);
+
+const expectedDocuments = Object.freeze({
+  claude: Object.freeze({ hooks: 'hooks/hooks.json', mcp: '.mcp.json', plugin: '.claude-plugin/plugin.json' }),
+  codex: Object.freeze({ hooks: '.codex-plugin/hooks.json', mcp: '.codex-plugin/mcp.json', plugin: '.codex-plugin/plugin.json' }),
+  cursor: Object.freeze({ hooks: '.cursor-plugin/hooks.json', mcp: '.cursor-plugin/mcp.json', plugin: '.cursor-plugin/plugin.json' }),
+  portable: Object.freeze({ mcp: 'mcp.json', plugin: 'plugin.json' }),
+});
+
+const assertEffectiveSurface = async (
+  root: string,
+  selected: readonly BuiltInHost[],
+): Promise<void> => {
+  const manifest = parseArtifactManifest(await readFile(join(root, 'agent-bundle.manifest.json'), 'utf8'));
+  expect(manifest.projections.map(({ host }) => host)).toEqual([...selected].sort());
+  expect('discovery' in manifest).toBe(false);
+
+  for (const projection of manifest.projections) {
+    const host = projection.host as BuiltInHost;
+    expect(projection.documents).toMatchObject(expectedDocuments[host]);
+    const pluginPath = projection.documents.plugin;
+    if (pluginPath === undefined) throw new TypeError(`${host} projection did not record its plugin document.`);
+    const plugin = await readJson(join(root, pluginPath)) as Record<string, unknown>;
+
+    switch (host) {
+      case 'claude':
+        expect(plugin).not.toHaveProperty('hooks');
+        expect(projection.documents).toMatchObject({ hooks: 'hooks/hooks.json', mcp: '.mcp.json' });
+        break;
+      case 'codex':
+        expect(plugin).toMatchObject({
+          hooks: './.codex-plugin/hooks.json',
+          mcpServers: './.codex-plugin/mcp.json',
+          skills: './skills/',
+        });
+        break;
+      case 'cursor':
+        expect(plugin).toMatchObject({
+          commands: './commands/',
+          hooks: './.cursor-plugin/hooks.json',
+          mcpServers: './.cursor-plugin/mcp.json',
+          rules: './rules/',
+          skills: './skills/',
+        });
+        break;
+      case 'portable':
+        expect(plugin).not.toHaveProperty('hooks');
+        expect(plugin).not.toHaveProperty('rules');
+        expect(projection.documents).not.toHaveProperty('hooks');
+        break;
+      default: {
+        const exhaustive: never = host;
+        throw new TypeError(`Unknown built-in host ${String(exhaustive)}.`);
+      }
+    }
+
+    const hookPath = projection.documents.hooks;
+    if (hookPath === undefined) continue;
+    const hookText = await readFile(join(root, hookPath), 'utf8');
+    const ownHooks = manifest.executables.hooks.filter((hook) => hook.host === host);
+    const foreignHooks = manifest.executables.hooks.filter((hook) => hook.host !== host);
+    for (const hook of ownHooks) expect(hookText).toContain(hook.path);
+    for (const hook of foreignHooks) expect(hookText).not.toContain(hook.path);
+    if (host === 'claude') {
+      expect(hookText).toContain('echo claude-native');
+      expect(hookText).not.toContain('echo codex-native');
+    } else if (host === 'codex') {
+      expect(hookText).toContain('echo codex-native');
+      expect(hookText).not.toContain('echo claude-native');
+    } else {
+      expect(hookText).not.toMatch(/echo (?:claude|codex)-native/u);
+    }
+  }
+
+  if (selected.includes('cursor')) {
+    expect(await readFile(join(root, 'rules', 'cursor-only.mdc'), 'utf8')).toContain('Apply only the Cursor instruction.');
+  }
+
+  const inspected = await inspect({ root: dirname(root) });
+  expect(inspected.state).toBe('ready');
+  if (inspected.state === 'ready') {
+    const summary = inspected.output.manifest;
+    expect(summary).toBeDefined();
+    if (summary !== undefined && !('status' in summary)) {
+      expect(summary.projections.map((projection) => projection.host)).toEqual(
+        manifest.projections.map((projection) => projection.host),
+      );
+      expect(summary.executables.hooks).toBe(manifest.executables.hooks.length);
+    }
+  }
+};
 
 describe('composite plugin root (#555)', () => {
   it('emits one root whose top-level entries are exactly the selected projections and shared surfaces (acceptance 1)', { timeout: 120_000 }, async () => {
@@ -345,13 +451,89 @@ describe('composite plugin root (#555)', () => {
       'hooks',
       'install.mjs',
       'mcp',
+      'rules',
       'scripts',
       'skills',
     ]);
     expect(await topLevel(join(cursorOnly.output, '.cursor-plugin'))).toEqual(['hooks.json', 'mcp.json', 'plugin.json']);
     expect(await topLevel(join(cursorOnly.output, 'hooks'))).toEqual(['session-start-session-start-9781e2c5.mjs']);
+    expect(await topLevel(join(cursorOnly.output, 'rules'))).toEqual(['cursor-only.mdc']);
     const cursor = await readJson(join(cursorOnly.output, cursorArtifactPaths.hooks)) as { hooks: Record<string, { command: string }[]> };
     expect(cursor.hooks['sessionStart']).toEqual([{ command: 'node "${CURSOR_PLUGIN_ROOT}/hooks/session-start-session-start-9781e2c5.mjs"' }]);
+  });
+
+  it('preserves each supported pair effective discovery surface in either target order (#651)', { timeout: 600_000 }, async () => {
+    for (const pair of supportedPairs) {
+      const root = await mkdtemp(join(tmpdir(), 'agent-bundle-composite-discovery-'));
+      roots.push(root);
+      await writeProject(root, { targets: pair });
+      const output = join(root, 'artifact');
+
+      await build({ output, root, targets: pair });
+      const forward = await digestTree(output);
+      await assertEffectiveSurface(output, pair);
+
+      const reversed = [pair[1], pair[0]] as const;
+      await build({ output, root, targets: reversed });
+      expect([...await digestTree(output)], `${pair.join('+')} reversed order`).toEqual([...forward]);
+      await assertEffectiveSurface(output, pair);
+    }
+  });
+
+  it('rejects both target orders when native command dialects cannot share one path (#651, AB4103)', { timeout: 120_000 }, async () => {
+    for (const targets of [['claude', 'cursor'], ['cursor', 'claude']] as const) {
+      const root = await mkdtemp(join(tmpdir(), 'agent-bundle-composite-command-dialect-'));
+      roots.push(root);
+      await writeProject(root, { targets });
+      const failure = await build({ output: join(root, 'artifact'), root }).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(DiagnosticError);
+      expect((failure as DiagnosticError).diagnostics).toEqual([expect.objectContaining({
+        code: 'AB4103',
+        generatedPath: 'commands/summarize.md',
+        message: expect.stringContaining('claude and cursor projections'),
+      })]);
+    }
+  });
+
+  it('labels the Ponytail-shaped fixture synthetic and models explicit versus fallback hook discovery (#651)', () => {
+    type SyntheticHookContract =
+      | { readonly manifestPointer: string; readonly rule: 'explicit-replaces-fallback' }
+      | { readonly fallback: string; readonly rule: 'conventional-fallback' };
+    const discover = (
+      contract: SyntheticHookContract,
+      files: Readonly<Record<string, string>>,
+    ): readonly string[] => {
+      switch (contract.rule) {
+        case 'explicit-replaces-fallback':
+          return files[contract.manifestPointer] === undefined ? [] : [contract.manifestPointer];
+        case 'conventional-fallback':
+          return files[contract.fallback] === undefined ? [] : [contract.fallback];
+        default: {
+          const exhaustive: never = contract;
+          throw new TypeError(`Unknown synthetic discovery rule ${JSON.stringify(exhaustive)}.`);
+        }
+      }
+    };
+    const syntheticFixture = Object.freeze({
+      label: 'synthetic adapter fixture — Ponytail pattern, not native-host evidence',
+      hostA: Object.freeze({
+        hooks: Object.freeze({
+          manifestPointer: 'hooks/claude-codex-hooks.json',
+          rule: 'explicit-replaces-fallback' as const,
+        }),
+      }),
+      hostB: Object.freeze({
+        hooks: Object.freeze({ fallback: 'hooks/hooks.json', rule: 'conventional-fallback' as const }),
+      }),
+    });
+    const explicitOnly = Object.freeze({ 'hooks/claude-codex-hooks.json': 'A hooks' });
+    const withFallback = Object.freeze({ ...explicitOnly, 'hooks/hooks.json': 'B hooks' });
+
+    expect(syntheticFixture.label).toContain('synthetic');
+    expect(discover(syntheticFixture.hostA.hooks, explicitOnly)).toEqual(['hooks/claude-codex-hooks.json']);
+    expect(discover(syntheticFixture.hostA.hooks, withFallback)).toEqual(['hooks/claude-codex-hooks.json']);
+    expect(discover(syntheticFixture.hostB.hooks, explicitOnly)).toEqual([]);
+    expect(discover(syntheticFixture.hostB.hooks, withFallback)).toEqual(['hooks/hooks.json']);
   });
 
   it('records only the selected projections in the artifact manifest and hook index (acceptance 8)', { timeout: 120_000 }, async () => {

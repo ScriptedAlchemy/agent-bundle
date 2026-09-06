@@ -59,13 +59,16 @@ const sameBytes = (left: TargetArtifactEntry, right: TargetArtifactEntry): boole
   return false;
 };
 
-const collisionDiagnostic = (relativePath: string, owners: readonly string[]): Diagnostic => ({
-  code: 'AB4103',
-  generatedPath: relativePath,
-  message: `Artifact path ${JSON.stringify(relativePath)} is planned with different contents by the ${owners.join(' and ')} projections; one composite root cannot hold both.`,
-  recovery: 'Build the conflicting hosts into separate artifacts (one `targets` entry per build), or make the component identical for every selected host.',
-  severity: 'error',
-});
+const collisionDiagnostic = (relativePath: string, owners: readonly string[]): Diagnostic => {
+  const component = relativePath.includes('/') ? relativePath.slice(0, relativePath.indexOf('/')) : 'root manifest';
+  return {
+    code: 'AB4103',
+    generatedPath: relativePath,
+    message: `${component} component path ${JSON.stringify(relativePath)} is planned with different contents by the ${owners.join(' and ')} projections; deterministic projection ordering cannot choose one without changing native precedence.`,
+    recovery: 'Build the conflicting hosts into separate artifacts (one `targets` entry per build), or make the component identical for every selected host.',
+    severity: 'error',
+  };
+};
 
 interface MergedEntries {
   readonly diagnostics: readonly Diagnostic[];
