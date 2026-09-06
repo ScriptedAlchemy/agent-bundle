@@ -32,7 +32,7 @@ const readContractFixture = async (host: Host) => {
   };
 };
 
-const loadContractModule = async () => import('../src/host-contracts/host-contract.ts').catch(() => undefined);
+const loadContractModule = async () => import('./support/host-contract.ts').catch(() => undefined);
 const nativeIt = process.env.AGENT_BUNDLE_NATIVE_HOST_CONTRACTS === '1' ? it : it.skip;
 
 const jsonStringValues = (value: unknown): readonly string[] => {

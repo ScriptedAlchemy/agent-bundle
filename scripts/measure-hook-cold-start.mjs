@@ -6,7 +6,7 @@
  * docs/effect-cold-start-baseline.json, or checks it with --check.
  */
 
-import { spawn } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -34,32 +34,23 @@ const median = (values) => {
     : sorted[middle];
 };
 
-const run = (command, args, options) =>
-  new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd: options.cwd,
-      env: options.env ?? process.env,
-      stdio: options.input === undefined ? ['ignore', 'pipe', 'pipe'] : ['pipe', 'pipe', 'pipe'],
-    });
-    let stderr = '';
-    let stdout = '';
-    child.stderr?.on('data', (chunk) => {
-      stderr += chunk.toString();
-    });
-    child.stdout?.on('data', (chunk) => {
-      stdout += chunk.toString();
-    });
-    child.once('error', reject);
-    child.once('close', (code) => resolve({ code, stderr, stdout }));
-    if (options.input !== undefined) child.stdin?.end(options.input);
+const run = (command, args, options) => {
+  const result = spawnSync(command, args, {
+    cwd: options.cwd,
+    encoding: 'utf8',
+    input: options.input,
+    stdio: options.input === undefined ? ['ignore', 'pipe', 'pipe'] : ['pipe', 'pipe', 'pipe'],
   });
+  if (result.error !== undefined) throw result.error;
+  return result;
+};
 
-const measureOnce = async (hookPath) => {
+const measureOnce = (hookPath) => {
   const started = performance.now();
-  const result = await run(process.execPath, [hookPath], { input: nativeSessionStart });
+  const result = run(process.execPath, [hookPath], { input: nativeSessionStart });
   const elapsedMs = performance.now() - started;
-  if (result.code !== 0) {
-    throw new Error(`Generated hook exited ${String(result.code)}: ${result.stderr || result.stdout}`);
+  if (result.status !== 0) {
+    throw new Error(`Generated hook exited ${String(result.status)}: ${result.stderr || result.stdout}`);
   }
   return elapsedMs;
 };
@@ -98,16 +89,16 @@ const measure = async () => {
         "export default () => ({ additionalContext: 'cold-start', outcome: 'continue' as const });\n",
       ),
     ]);
-    const built = await run(process.execPath, [cli, 'build', '--root', root, '--output', output], {
+    const built = run(process.execPath, [cli, 'build', '--root', root, '--output', output], {
       cwd: workspaceRoot,
     });
-    if (built.code !== 0) {
+    if (built.status !== 0) {
       throw new Error(`agent-bundle build failed:\n${built.stderr || built.stdout}`);
     }
     const hookPath = await findGeneratedHook(output);
     const samplesMs = [];
     for (let index = 0; index < samples; index += 1) {
-      samplesMs.push(await measureOnce(hookPath));
+      samplesMs.push(measureOnce(hookPath));
     }
     const rounded = samplesMs.map((value) => Math.round(value * 100) / 100);
     return {

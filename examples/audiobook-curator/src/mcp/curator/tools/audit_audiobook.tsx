@@ -6,9 +6,9 @@ import { ChapterOutline, chaptersFromAuditReceipt } from '../../../components/ch
 import { integrityAuditHeadline } from '../../../components/headlines.js';
 import { IntegrityAuditReport } from '../../../components/integrity-report.js';
 import type { IntegrityAuditReceipt } from '../../../integrity-audit.js';
-import { defaultOutputOperations, outputOperations } from '../../../operations/output.js';
+import { outputOperations } from '../../../operations/output.js';
 
-const operation = outputOperations(defaultOutputOperations).audit;
+const operation = outputOperations.audit;
 
 export const config = {
   annotations: { readOnlyHint: false },

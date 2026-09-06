@@ -7,7 +7,7 @@ import { expect, it } from '@rstest/core';
 const fixtureRoot = new URL('../../../fixtures/contracts/hosts/codex/', import.meta.url);
 const nativeIt = process.env.AGENT_BUNDLE_NATIVE_CODEX_SMOKE === '1' ? it : it.skip;
 
-const loadContractModule = async () => import('../src/host-contracts/native-codex-contract.ts').catch(() => undefined);
+const loadContractModule = async () => import('./support/native-codex-smoke.ts').catch(() => undefined);
 
 it('builds the bounded temporary-home Codex lifecycle without API-key arguments', async () => {
   const contracts = await loadContractModule();

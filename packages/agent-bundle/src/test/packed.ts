@@ -13,12 +13,12 @@
  * instead: one artifact, one spawned server, every route asserted inside that
  * single session (#103's cost rule).
  */
-import { lstat, readdir, rm } from 'node:fs/promises';
+import { readdir, rm } from 'node:fs/promises';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 
 import type { Client } from '@modelcontextprotocol/client';
 
-import { isErrno } from '../core/errors.ts';
+import { exists } from '../core/paths.ts';
 import { AgentTestError } from './errors.ts';
 import {
   PACKED_DELETED_SOURCE_PROOF_LEVEL,
@@ -96,16 +96,6 @@ const loadSdk = async (): Promise<Sdk> => {
     return { Client: client.Client, StdioClientTransport: stdio.StdioClientTransport };
   })();
   return sdkPromise;
-};
-
-const pathExists = async (path: string): Promise<boolean> => {
-  try {
-    await lstat(path);
-    return true;
-  } catch (error) {
-    if (isErrno(error, 'ENOENT')) return false;
-    throw error;
-  }
 };
 
 const deletedSourceError = (
@@ -192,7 +182,7 @@ const verifyDeletedSourceReceipt = async (receipt: DeletedSourceReceipt): Promis
   let survived: readonly string[];
   try {
     survived = (
-      await Promise.all(paths.map(async (path) => ({ ...path, exists: await pathExists(path.absolute) })))
+      await Promise.all(paths.map(async (path) => ({ ...path, exists: await exists(path.absolute) })))
     ).filter((path) => path.exists).map((path) => path.relative);
   } catch (error) {
     throw deletedSourceError('The deleted-source receipt could not be verified before process spawn.', {
@@ -247,7 +237,7 @@ export const removeProjectSource = async (options: {
   const existing: readonly [string, string][] = (
     await Promise.all(
       [...candidates].map(async ([relativePath, absolute]) => (
-        await pathExists(absolute) ? [relativePath, absolute] as const : undefined
+        await exists(absolute) ? [relativePath, absolute] as const : undefined
       )),
     )
   ).filter((entry): entry is [string, string] => entry !== undefined);

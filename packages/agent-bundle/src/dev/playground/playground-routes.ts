@@ -17,16 +17,18 @@ import {
   type PlaygroundTraceEvent,
 } from './playground-store.ts';
 import {
+  badRequest,
   decodedOpaqueSegment,
   diagnostic,
   hasOnly,
   isRequestDiagnostic,
+  noQuery,
   nonemptyString,
   rawPathname,
   readJsonBody,
   requestError,
   responseDiagnostic,
-  responseJson as writeJsonResponse,
+  responseJsonOrDestroy,
   type RequestDiagnostic,
 } from '../http.ts';
 import type { NativePlaygroundCatalog } from './native-playground-service.ts';
@@ -78,9 +80,6 @@ export interface PlaygroundRoutesOptions {
   /** Omitted until the workbench composes a durable playground service. */
   readonly service?: PlaygroundRouteService;
 }
-
-const responseJson = (response: ServerResponse, body: unknown): void =>
-  writeJsonResponse(response, body, { destroyIfEnded: true });
 
 /**
  * Service failures stay actionable without republishing their messages, which
@@ -137,9 +136,7 @@ const route = (requestTarget: string | undefined): Route | undefined => {
   return sessionRouteKinds.includes(kind) ? Object.freeze({ id, kind }) : undefined;
 };
 
-const invalidShape = (): never => {
-  throw requestError(diagnostic('AB8042', 'Playground request has an invalid shape.', 400));
-};
+const invalidShape = badRequest('AB8042', 'Playground request has an invalid shape.');
 
 const jsonValue = (value: unknown, depth = 0): PlaygroundJsonValue => {
   if (depth > maxValueDepth) return invalidShape();
@@ -233,10 +230,6 @@ const queryCursor = (requestTarget: string | undefined): number => {
   return after;
 };
 
-const noQuery = (requestTarget: string | undefined): void => {
-  if (new URL(requestTarget ?? '/', 'http://localhost').searchParams.size > 0) invalidShape();
-};
-
 const catalogEpoch = (requestTarget: string | undefined): string | undefined => {
   const query = new URL(requestTarget ?? '/', 'http://localhost').searchParams;
   if ([...query.keys()].some((key) => key !== 'epochId') || query.getAll('epochId').length > 1) invalidShape();
@@ -298,37 +291,37 @@ export class PlaygroundRoutes {
       const catalog = service.catalog;
       if (catalog === undefined) throw this.#unavailable(404);
       const epochId = catalogEpoch(request.url);
-      return responseJson(response, { catalog: await catalog.call(service, epochId === undefined ? undefined : { epochId }) });
+      return responseJsonOrDestroy(response, { catalog: await catalog.call(service, epochId === undefined ? undefined : { epochId }) });
     }
     if (parsed.kind === 'runs') {
       if (method !== 'POST') return this.#methodNotAllowed(response);
-      return responseJson(response, { run: await service.run(operationInput(await jsonBody(request))) });
+      return responseJsonOrDestroy(response, { run: await service.run(operationInput(await jsonBody(request))) });
     }
     if (parsed.kind === 'cancel') {
       if (method !== 'POST') return this.#methodNotAllowed(response);
       if (!hasOnly(await jsonBody(request), [])) invalidShape();
-      return responseJson(response, { cancelled: await service.cancel(parsed.id) });
+      return responseJsonOrDestroy(response, { cancelled: await service.cancel(parsed.id) });
     }
     if (parsed.kind === 'session') {
       if (method === 'GET') {
-        noQuery(request.url);
+        noQuery(request.url, invalidShape);
         // A settled session may have been evicted from memory; reopen restores
         // it from its durable record before reporting not-found.
         const session = service.session(parsed.id) ?? await service.reopen?.(parsed.id).catch(() => undefined);
         if (session === undefined) throw requestError(serviceDiagnostics.PLAYGROUND_SESSION_NOT_FOUND);
-        return responseJson(response, { session });
+        return responseJsonOrDestroy(response, { session });
       }
       return this.#methodNotAllowed(response);
     }
     if (parsed.kind === 'replay') {
       if (method !== 'GET') return this.#methodNotAllowed(response);
       const replay = await service.replay(parsed.id, { afterSequence: queryCursor(request.url) });
-      return responseJson(response, { replay });
+      return responseJsonOrDestroy(response, { replay });
     }
     if (parsed.kind === 'export') {
       if (method !== 'GET') return this.#methodNotAllowed(response);
-      noQuery(request.url);
-      return responseJson(response, { export: await service.export(parsed.id) });
+      noQuery(request.url, invalidShape);
+      return responseJsonOrDestroy(response, { export: await service.export(parsed.id) });
     }
     if (parsed.kind === 'stream') {
       if (method !== 'GET') return this.#methodNotAllowed(response);
@@ -337,7 +330,7 @@ export class PlaygroundRoutes {
     if (method !== 'POST') return this.#methodNotAllowed(response);
     const body = await jsonBody(request);
     const draftEvalCase = await service.promoteToDraftEval(parsed.id, rawEventRefsInput(body));
-    return responseJson(response, { draftEvalCase });
+    return responseJsonOrDestroy(response, { draftEvalCase });
   }
 
   #methodNotAllowed(response: ServerResponse): void {

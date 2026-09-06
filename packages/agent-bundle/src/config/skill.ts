@@ -5,7 +5,7 @@ import fastGlob from 'fast-glob';
 import type { Ignore } from 'ignore';
 
 import type { Diagnostic } from '../core/diagnostics.ts';
-import { isErrno } from '../core/errors.ts';
+import { errorMessage, isErrno } from '../core/errors.ts';
 import {
   isProjectPathIgnored,
   readProjectIgnoreRules,
@@ -112,7 +112,7 @@ const missingFrontmatter = (source: string): Diagnostic => ({
 const malformedFrontmatter = (source: string, error: unknown): Diagnostic => ({
   code: 'AB3002',
   severity: 'error',
-  message: `Skill YAML frontmatter is invalid: ${error instanceof Error ? error.message : String(error)}`,
+  message: `Skill YAML frontmatter is invalid: ${errorMessage(error)}`,
   sourcePath: source,
 });
 
@@ -185,7 +185,7 @@ export const parseSkill = async (
         {
           code: 'AB3000',
           severity: 'error',
-          message: `Unable to read Skill Markdown: ${error instanceof Error ? error.message : String(error)}`,
+          message: `Unable to read Skill Markdown: ${errorMessage(error)}`,
           sourcePath: source,
         },
       ],

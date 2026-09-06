@@ -1,5 +1,6 @@
 import type { Diagnostic } from '../core/diagnostics.ts';
 import { deepFreeze } from '../core/freeze.ts';
+import { isPlainRecord } from '../core/strict-json.ts';
 import type {
   AgentBundleConfig,
   NormalizedNoticeRetention,
@@ -47,12 +48,6 @@ export const parseNoticeRetentionDuration = (value: unknown): number | undefined
   const milliseconds = amount * unit;
   return Number.isSafeInteger(milliseconds) ? milliseconds : undefined;
 };
-
-const isPlainRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  typeof value === 'object'
-  && value !== null
-  && !Array.isArray(value)
-  && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 
 const retentionKeys = new Set(['maxJournalBytes', 'maxTerminal', 'terminalTtl']);
 

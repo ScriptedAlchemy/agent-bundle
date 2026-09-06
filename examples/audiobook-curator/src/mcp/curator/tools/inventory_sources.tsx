@@ -6,9 +6,9 @@ import { z } from 'zod';
 import { inventoryHeadline } from '../../../components/headlines.js';
 import { InventoryShelf } from '../../../components/library-shelf.js';
 import type { InventoryReceipt } from '../../../library.js';
-import { defaultDiscoveryOperations, discoveryOperations } from '../../../operations/discovery.js';
+import { discoveryOperations } from '../../../operations/discovery.js';
 
-const operation = discoveryOperations(defaultDiscoveryOperations).inventory;
+const operation = discoveryOperations.inventory;
 
 export const config = {
   annotations: { readOnlyHint: false },

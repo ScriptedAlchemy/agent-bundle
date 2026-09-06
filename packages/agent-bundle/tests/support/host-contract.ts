@@ -1,13 +1,12 @@
 import { execFile as executeFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
-import { isRecord } from '../core/strict-json.ts';
-import { escapeRegExp } from '../core/strings.ts';
-import { isMissingExecutableError } from './native-host-spine.ts';
-import type { NativeHost } from './native-hosts.ts';
+import { isRecord } from '../../src/core/strict-json.ts';
+import { escapeRegExp } from '../../src/core/strings.ts';
+import { isMissingExecutableError } from '../../src/host-contracts/native-host-spine.ts';
+import type { NativeHost } from '../../src/host-contracts/native-hosts.ts';
 
 // Pure parsing and opt-in probing contract for subscription-backed native host CLIs.
-export type { NativeHost } from './native-hosts.ts';
 
 export type HostContractStatus = 'changed' | 'compatible' | 'incompatible' | 'missing' | 'skipped';
 

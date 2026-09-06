@@ -286,30 +286,6 @@ import {
 import { runWithPlatform, withTempDirectory } from './effect/platform.ts';
 import { liftPromise } from './effect/lift.ts';
 
-export {
-  compareInstalledHostContract,
-  compareLocalHostContract,
-  evaluateHostContract,
-  nativeHostContractComparisonEnabled,
-  parseHostContractManifest,
-  parseRedactedEventEnvelopes,
-} from './host-contracts/host-contract.ts';
-export type {
-  CompareInstalledHostContractOptions,
-  HostContractCommand,
-  HostContractCommandResult,
-  HostContractCommandRunner,
-  HostContractDiagnostic,
-  HostContractEvidence,
-  HostContractHelpProbe,
-  HostContractManifest,
-  HostContractProbe,
-  HostContractProbeKind,
-  HostContractReport,
-  HostContractStatus,
-  NativeHost,
-  RedactedEventEnvelope,
-} from './host-contracts/host-contract.ts';
 export { validateClaudePlugin, validateCodexPlugin, validateCursorPlugin, validatePortablePlugin };
 export type {
   ClaudePluginValidationReport,
