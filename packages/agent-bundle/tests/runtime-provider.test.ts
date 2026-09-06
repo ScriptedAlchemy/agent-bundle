@@ -22,7 +22,6 @@ import {
   DevRuntimeProviderLoadError,
   resolveDevRuntimeProvider,
 } from '../src/dev/runtime-provider-loader.ts';
-import { TraceHub } from '../src/dev/trace/trace-hub.ts';
 
 const createProviderFixture = async (): Promise<{
   readonly provider: string;
@@ -427,101 +426,6 @@ it('refreshes terminal run snapshots before completed or failed events without r
   await controller.close();
 });
 
-it('publishes correlated runtime lifecycle entries from the run surface and inspection envelope', async () => {
-  const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
-  const trace = new TraceHub({ now: () => new Date('2026-08-15T00:00:02.000Z'), projectRoot: '/work/project' });
-  let emit: Parameters<DevRuntimeProvider['start']>[0]['emit'] | undefined;
-  const tracedSurface = { ...surface, routeId: 'event:tool/after' };
-  const tracedRun = {
-    ...run,
-    result: {
-      ...run.result,
-      trace: [
-        { durationMs: 2, id: 'render', phase: 'render', startedAt: run.startedAt, status: 'succeeded' as const },
-        { durationMs: 3, id: 'lower', phase: 'lower', startedAt: run.startedAt, status: 'succeeded' as const },
-      ],
-    },
-    vector: { ...run.vector, artifactEpochId: 'epoch-a' },
-  } satisfies DevRuntimeRun;
-  const session = {
-    close: async () => undefined,
-    invoke: async () => {
-      emit?.({
-        mcpSessionId: 'mcp-a',
-        runId: tracedRun.id,
-        type: 'runtime.run.completed',
-      });
-      return tracedRun;
-    },
-    mcpRegistry: {},
-    reconcilePreparedRuntime: async () => undefined,
-    run: (runId: string) => runId === tracedRun.id ? tracedRun : undefined,
-    status: () => ({ activeVector: tracedRun.vector, descriptor, diagnostics: [], hmrReady: true, state: 'active' as const }),
-    surfaces: () => [tracedSurface],
-  } as unknown as DevRuntimeSession;
-  const controller = new DevRuntimeController({
-    artifactStatus: () => ({ state: 'missing' }),
-    emit: () => undefined,
-    environment: {},
-    preparedRuntime: { apps: [], provider: './src/dev/provider.ts', servers: [], sourceRevision: 'source-1' },
-    projectRoot: '/workspace/project',
-    provider: {
-      descriptor,
-      start: async (context) => {
-        emit = context.emit;
-        return session;
-      },
-    },
-    storageRoot: '/workspace/project/.agent-bundle/runtime',
-    trace,
-  });
-
-  await controller.start();
-  await controller.invoke({
-    correlationId: 'correlation-a',
-    input: {},
-    surfaceId: tracedSurface.id,
-    target: 'claude',
-  });
-  emit?.({ runtimeGenerationId: 'generation-a', type: 'runtime.generation.activated' });
-  emit?.({ runId: tracedRun.id, type: 'runtime.app.updated' });
-
-  expect(trace.replay().entries).toMatchObject([
-    {
-      correlation: {
-        correlationId: 'correlation-a',
-        epochId: 'epoch-a',
-        mcpSessionId: 'mcp-a',
-        routeId: 'event:tool/after',
-        runId: 'run-a',
-      },
-      durationMs: 5,
-      href: '/routes/events/tool/after?invocation=run-a',
-      kind: 'runtime.run.completed',
-      source: 'runtime',
-      status: 'ok',
-    },
-    {
-      correlation: { epochId: 'epoch-a' },
-      kind: 'runtime.generation.published',
-      source: 'runtime',
-      status: 'ok',
-    },
-    {
-      correlation: {
-        epochId: 'epoch-a',
-        routeId: 'event:tool/after',
-        runId: 'run-a',
-      },
-      href: '/routes/events/tool/after?invocation=run-a',
-      kind: 'runtime.app.updated',
-      source: 'runtime',
-      status: 'ok',
-    },
-  ]);
-  await controller.close();
-});
-
 it('does not overwrite a controller-owned lifecycle failure while publishing its status event', async () => {
   const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
   const controller = new DevRuntimeController({
@@ -824,7 +728,6 @@ it('buffers synchronous startup failure and status until controller snapshots in
 it('buffers synchronous startup activation until controller snapshots install', async () => {
   const descriptor = { environmentVariables: [], id: 'fixture-runtime', label: 'Fixture runtime', schemaVersion: 1 } as const;
   const seen: Array<Readonly<{ readonly generation?: string; readonly state: string; readonly surfaceCount: number; readonly type: string }>> = [];
-  const trace = new TraceHub({ projectRoot: '/work/project' });
   const controller = new DevRuntimeController({
     artifactStatus: () => ({ state: 'missing' }),
     emit: (event) => {
@@ -854,7 +757,6 @@ it('buffers synchronous startup activation until controller snapshots install', 
       },
     },
     storageRoot: '/workspace/project/.agent-bundle/runtime',
-    trace,
   });
 
   await controller.start();
@@ -862,10 +764,6 @@ it('buffers synchronous startup activation until controller snapshots install', 
   expect(seen).toEqual([
     { state: 'starting', surfaceCount: 0, type: 'runtime.generation.compiling' },
     { generation: vector.runtimeGenerationId, state: 'active', surfaceCount: 1, type: 'runtime.generation.activated' },
-  ]);
-  expect(trace.replay().entries).toMatchObject([
-    { kind: 'runtime.generation.published', status: 'running' },
-    { kind: 'runtime.generation.published', status: 'ok' },
   ]);
   await controller.close();
 });

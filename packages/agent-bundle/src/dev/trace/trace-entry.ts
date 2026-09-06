@@ -7,8 +7,6 @@ export const traceSources = Object.freeze([
   'kernel',
   /** JSON-RPC frames, progress, and logging on a Workbench-owned MCP session. */
   'mcp',
-  /** `devRuntime` provider runs and generations. */
-  'runtime',
   /** A host-invoked hook or event route observed against the dev plugin. */
   'hook',
   /** A dev log record that carries a correlation key. */
@@ -43,8 +41,6 @@ export interface TraceCorrelation {
   readonly requestId?: string;
   /** Compiled route id (`tool:<server>/<name>`, `event:tool/before`, …). */
   readonly routeId?: string;
-  /** `devRuntime` run id. */
-  readonly runId?: string;
   readonly sessionId?: string;
 }
 

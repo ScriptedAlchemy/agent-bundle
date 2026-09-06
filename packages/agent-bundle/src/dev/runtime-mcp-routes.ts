@@ -155,7 +155,7 @@ const restartSnapshot = (
 };
 
 const rpcRequest = (body: Record<string, unknown>, sessionId: string): DevRuntimeMcpOperationRequest => {
-  if (!hasOnly(body, ['arguments', 'correlationId', 'expectedSessionRevision', 'kind', 'name', 'uri']) || !positive(body.expectedSessionRevision)) {
+  if (!hasOnly(body, ['arguments', 'expectedSessionRevision', 'kind', 'name', 'uri']) || !positive(body.expectedSessionRevision)) {
     throw requestError(diagnostic('AB8203', 'Runtime request has an invalid shape.', 400));
   }
   if (body.kind === 'list-tools' || body.kind === 'list-resources') {
@@ -165,19 +165,8 @@ const rpcRequest = (body: Record<string, unknown>, sessionId: string): DevRuntim
   if (body.kind === 'read-resource' && hasOnly(body, ['expectedSessionRevision', 'kind', 'uri']) && nonempty(body.uri)) {
     return Object.freeze({ expectedSessionRevision: body.expectedSessionRevision, kind: 'read-resource', uri: body.uri });
   }
-  if (
-    body.kind === 'call-tool' &&
-    hasOnly(body, ['arguments', 'correlationId', 'expectedSessionRevision', 'kind', 'name']) &&
-    nonempty(body.name) && isRecord(body.arguments) && json(body.arguments) &&
-    (body.correlationId === undefined || (nonempty(body.correlationId) && body.correlationId.length <= 256))
-  ) {
-    return Object.freeze({
-      arguments: body.arguments as Readonly<Record<string, never>>,
-      ...(body.correlationId === undefined ? {} : { correlationId: body.correlationId }),
-      expectedSessionRevision: body.expectedSessionRevision,
-      kind: 'call-tool',
-      name: body.name,
-    });
+  if (body.kind === 'call-tool' && hasOnly(body, ['arguments', 'expectedSessionRevision', 'kind', 'name']) && nonempty(body.name) && isRecord(body.arguments) && json(body.arguments)) {
+    return Object.freeze({ arguments: body.arguments as Readonly<Record<string, never>>, expectedSessionRevision: body.expectedSessionRevision, kind: 'call-tool', name: body.name });
   }
   void sessionId;
   throw requestError(diagnostic('AB8203', 'Runtime request has an invalid shape.', 400));

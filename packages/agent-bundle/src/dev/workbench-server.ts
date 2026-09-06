@@ -689,7 +689,6 @@ const startDevServerSession = async (options: StartDevServerOptions, platformRun
       provider,
       providerLoadError,
       storageRoot: join(root, '.agent-bundle', 'runtime'),
-      trace: traceHub,
     });
   }
   const appPreviews = new DeferredMcpAppPreviewService();

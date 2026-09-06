@@ -776,6 +776,21 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     expect(secondCounter.invocation.result).toEqual({ count: 2 });
     expect(isolatedCounter.invocation.result).toEqual({ count: 1 });
 
+    const nonStreamingCounter = await fetch(`${server.url}/api/routes/invocations`, {
+      body: JSON.stringify({
+        input: { key: 'stream-false' },
+        routeId: 'tool:status/counter',
+        stream: false,
+      }),
+      headers,
+      method: 'POST',
+    });
+    expect(nonStreamingCounter.status).toBe(200);
+    const nonStreaming = await nonStreamingCounter.json() as RouteInvocationResponse;
+    expect(nonStreaming).toMatchObject({
+      invocation: { status: 'succeeded' },
+    });
+
     const scriptResponse = await fetch(`${server.url}/api/routes/invocations`, {
       body: JSON.stringify({ routeId: 'script:summary' }),
       headers,
@@ -798,9 +813,9 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     const listed = await listedResponse.json() as RouteInvocationListResponse;
     expect(listed.invocations.map((invocation) => invocation.id)).toEqual([
       script.invocation.id,
+      nonStreaming.invocation.id,
       isolatedCounter.invocation.id,
       secondCounter.invocation.id,
-      firstCounter.invocation.id,
     ]);
     const read = await fetch(`${server.url}/api/routes/invocations/${tool.invocation.id}`, { headers });
     await expect(read.json()).resolves.toEqual(tool);
@@ -901,7 +916,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     expect(republishedEpoch.activeEpoch.id).not.toBe(activeEpoch.activeEpoch.id);
     const republishedCounter = await counter();
     const republishedIsolatedCounter = await counter(true);
-    expect(republishedCounter.invocation.result).toEqual({ count: 3 });
+    expect(republishedCounter.invocation.result).toEqual({ count: 4 });
     expect(republishedIsolatedCounter.invocation.result).toEqual({ count: 1 });
 
     const missingApi = await fetch(`${server.url}/api/nope`);

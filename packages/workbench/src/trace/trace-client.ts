@@ -50,7 +50,7 @@ const maximumDurationMs = 1_000 * 60 * 60 * 24 * 365;
 const traceStatuses: readonly TraceStatus[] = Object.freeze(['ok', 'error', 'running']);
 const correlationKeys: readonly (keyof TraceCorrelation)[] = Object.freeze([
   'correlationId', 'conversationId', 'epochId', 'executionId', 'host', 'invocationId',
-  'mcpRequestId', 'mcpSessionId', 'requestId', 'routeId', 'runId', 'sessionId',
+  'mcpRequestId', 'mcpSessionId', 'requestId', 'routeId', 'sessionId',
 ]);
 const entryKeys: readonly string[] = Object.freeze(['correlation', 'id', 'kind', 'occurredAt', 'sequence', 'source', 'summary']);
 const optionalEntryKeys: readonly string[] = Object.freeze(['details', 'durationMs', 'href', 'status']);

@@ -38,8 +38,6 @@ const groupKeyLabel = (kind: TraceGroupKeyKind): string => {
       return 'invocation';
     case 'executionId':
       return 'execution';
-    case 'runId':
-      return 'run';
     case 'mcpRequestId':
       return 'MCP request';
     case 'correlationId':

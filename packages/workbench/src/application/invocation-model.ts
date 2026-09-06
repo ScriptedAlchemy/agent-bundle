@@ -61,6 +61,9 @@ const settled = (invocation: RouteInvocation, durationMs?: number): InvocationSt
 
 export const idleInvocationState: InvocationState = Object.freeze({ phase: 'idle' });
 
+/** Matches RouteInvocationService's retained render-event bound. */
+const maximumLiveRenderEvents = 256;
+
 export const reduceInvocationState = (state: InvocationState, action: InvocationAction): InvocationState => {
   switch (action.type) {
     case 'start':
@@ -76,7 +79,7 @@ export const reduceInvocationState = (state: InvocationState, action: Invocation
       });
     case 'render':
       return state.phase === 'running'
-        ? Object.freeze({ ...state, events: Object.freeze([...(state.events ?? []), action.event]) })
+        ? Object.freeze({ ...state, events: Object.freeze([...(state.events ?? []), action.event].slice(-maximumLiveRenderEvents)) })
         : state;
     case 'stream.start':
       return state.phase === 'running'

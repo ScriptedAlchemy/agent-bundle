@@ -96,6 +96,26 @@ it('reduces invocation lifecycle states without retaining stale failures', () =>
   expect(reduceInvocationState(running, { type: 'reset' })).toBe(idleInvocationState);
 });
 
+it('retains only the newest 256 live render events', () => {
+  let state = reduceInvocationState(idleInvocationState, { correlationId: 'c1', startedAt: 1_000, type: 'start' });
+  for (let sequence = 0; sequence < 300; sequence += 1) {
+    state = reduceInvocationState(state, {
+      event: {
+        document: { root: { kind: 'text', text: 'rendering' }, status: 'success', version: 1 },
+        sequence,
+        type: 'shell',
+      },
+      type: 'render',
+    });
+  }
+
+  expect(state).toMatchObject({ phase: 'running' });
+  if (state.phase !== 'running') throw new Error('Expected a running invocation.');
+  expect(state.events).toHaveLength(256);
+  expect(state.events?.[0]?.sequence).toBe(44);
+  expect(state.events?.at(-1)?.sequence).toBe(299);
+});
+
 it('stores strict JSON last-input snapshots by leaf key and tolerates unavailable storage', () => {
   writeLastInput(leaf.key, { regions: ['us'], title: 'Dune' });
   expect(readLastInput(leaf.key)).toEqual({ regions: ['us'], title: 'Dune' });

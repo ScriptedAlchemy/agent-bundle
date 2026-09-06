@@ -1,15 +1,8 @@
-import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 
 import { isRecord } from '../core/strict-json.ts';
 
-import {
-  applicationNodePath,
-  applicationNodeRefForRouteId,
-} from './routes/application-node.ts';
-import type { TraceStatus } from './trace/trace-entry.ts';
-import type { TracePublisher } from './trace/trace-hub.ts';
 import type { ArtifactStatus, JsonObject, JsonValue, RuntimeEvent } from './types.ts';
 import {
   DevRuntimeUnavailableError,
@@ -271,11 +264,11 @@ const snapshotFixture = (value: unknown): DevRuntimeSurface['fixtures'][number] 
 };
 
 const snapshotSurface = (value: unknown): DevRuntimeSurface => {
-  const surface = exactRecord(value, ['fixtures', 'id', 'kind', 'label', 'readOnly', 'targets'], [
-    'defaultTarget',
-    'inputSchema',
-    'routeId',
-  ]);
+  const surface = exactRecord(
+    value,
+    ['fixtures', 'id', 'kind', 'label', 'readOnly', 'targets'],
+    ['defaultTarget', 'inputSchema'],
+  );
   const kind = ownDataValue(surface, 'kind');
   const readOnly = ownDataValue(surface, 'readOnly');
   if (typeof kind !== 'string' || !surfaceKinds.has(kind as DevRuntimeSurface['kind']) || typeof readOnly !== 'boolean') return snapshotInvalid();
@@ -287,9 +280,6 @@ const snapshotSurface = (value: unknown): DevRuntimeSurface => {
     : undefined;
   if (inputSchemaValue !== undefined && !isRecord(inputSchemaValue)) return snapshotInvalid();
   const inputSchema = inputSchemaValue as JsonObject | undefined;
-  const routeId = Object.hasOwn(surface, 'routeId')
-    ? snapshotString(ownDataValue(surface, 'routeId'))
-    : undefined;
   return Object.freeze({
     ...(defaultTarget === undefined ? {} : { defaultTarget }),
     fixtures: Object.freeze(snapshotArray(ownDataValue(surface, 'fixtures')).map(snapshotFixture)),
@@ -298,7 +288,6 @@ const snapshotSurface = (value: unknown): DevRuntimeSurface => {
     kind: kind as DevRuntimeSurface['kind'],
     label: snapshotString(ownDataValue(surface, 'label')),
     readOnly,
-    ...(routeId === undefined ? {} : { routeId }),
     targets: snapshotStrings(ownDataValue(surface, 'targets')),
   });
 };
@@ -323,54 +312,7 @@ export interface DevRuntimeControllerOptions {
   readonly providerSessionId?: string;
   readonly startupTimeoutMs?: number;
   readonly storageRoot: string;
-  readonly trace?: TracePublisher;
 }
-
-interface RuntimeInvocationContext {
-  readonly correlationId?: string;
-  readonly surfaceId: string;
-}
-
-const runtimeTraceKind = (
-  type: DevRuntimeEventInput['type'],
-): Readonly<{ readonly kind: string; readonly status: TraceStatus }> | undefined => {
-  switch (type) {
-    case 'runtime.run.started':
-      return Object.freeze({ kind: type, status: 'running' });
-    case 'runtime.run.completed':
-      return Object.freeze({ kind: type, status: 'ok' });
-    case 'runtime.run.failed':
-      return Object.freeze({ kind: type, status: 'error' });
-    case 'runtime.generation.compiling':
-      return Object.freeze({ kind: 'runtime.generation.published', status: 'running' });
-    case 'runtime.generation.activated':
-      return Object.freeze({ kind: 'runtime.generation.published', status: 'ok' });
-    case 'runtime.generation.failed':
-      return Object.freeze({ kind: 'runtime.generation.published', status: 'error' });
-    case 'runtime.app.updated':
-      return Object.freeze({ kind: type, status: 'ok' });
-    case 'runtime.status':
-    case 'runtime.mcp.restarting':
-    case 'runtime.mcp.ready':
-    case 'runtime.mcp.failed':
-    case 'runtime.hmr.client-connected':
-    case 'runtime.hmr.client-disconnected':
-      return undefined;
-    default: {
-      const exhaustive: never = type;
-      return exhaustive;
-    }
-  }
-};
-
-const runtimeDurationMs = (run: DevRuntimeRun | undefined): number | undefined => {
-  if (run?.status !== 'succeeded') return undefined;
-  const durations = run.result.trace.flatMap((span) =>
-    span.durationMs === undefined ? [] : [span.durationMs]);
-  return durations.length === 0
-    ? undefined
-    : durations.reduce((total, duration) => total + duration, 0);
-};
 
 /**
  * Workbench-owned adapter around one optional trusted runtime provider. It owns
@@ -382,7 +324,6 @@ export class DevRuntimeController implements DevRuntimeSession {
   readonly #emit: (event: RuntimeEvent) => void;
   readonly #environment: Readonly<Record<string, string | undefined>>;
   readonly #initialProviderPath: string;
-  readonly #invocationContext = new AsyncLocalStorage<RuntimeInvocationContext>();
   readonly #mcpRegistry: DevRuntimeMcpRegistry;
   readonly #projectRoot: string;
   readonly #provider: DevRuntimeProvider | undefined;
@@ -390,7 +331,6 @@ export class DevRuntimeController implements DevRuntimeSession {
   readonly #sessionClosures = new WeakMap<object, Promise<void>>();
   readonly #startupTimeoutMs: number;
   readonly #storageRoot: string;
-  readonly #trace: TracePublisher | undefined;
   #bufferedPrepared: DevRuntimePreparedProject;
   #bufferedStartupEvents: readonly DevRuntimeEventInput[] = Object.freeze([]);
   #closePromise: Promise<void> | undefined;
@@ -421,7 +361,6 @@ export class DevRuntimeController implements DevRuntimeSession {
     this.#providerSessionId = options.providerSessionId ?? randomUUID();
     this.#startupTimeoutMs = options.startupTimeoutMs ?? defaultStartupTimeoutMs;
     this.#storageRoot = resolve(options.storageRoot, this.#providerSessionId);
-    this.#trace = options.trace;
     this.#status = options.provider === undefined
       ? statusFor(unavailableDescriptor, 'failed', [lifecycleDiagnostic()])
       : statusFor(options.provider.descriptor, 'starting');
@@ -451,13 +390,7 @@ export class DevRuntimeController implements DevRuntimeSession {
   }
 
   invoke(request: DevRuntimeInvocationRequest): Promise<DevRuntimeRun> {
-    return this.#invocationContext.run(
-      Object.freeze({
-        ...(request.correlationId === undefined ? {} : { correlationId: request.correlationId }),
-        surfaceId: request.surfaceId,
-      }),
-      () => this.#activeSession().invoke(request),
-    );
+    return this.#activeSession().invoke(request);
   }
 
   readAsset(request: DevRuntimeAssetRequest): Promise<DevRuntimeAsset | undefined> {
@@ -746,62 +679,10 @@ export class DevRuntimeController implements DevRuntimeSession {
       }
       if (!this.#refreshingSnapshot) this.#refreshSnapshot();
     }
-    this.#notify(event);
-  }
-
-  #notify(event: DevRuntimeEventInput): void {
     try {
       this.#emit(runtimeEvent(this.#providerSessionId, event));
     } catch {
       // Provider health must not depend on a failed observer.
-    }
-    this.#publishTrace(event);
-  }
-
-  #publishTrace(event: DevRuntimeEventInput): void {
-    const trace = this.#trace;
-    const lowered = runtimeTraceKind(event.type);
-    if (trace === undefined || lowered === undefined) return;
-    const invocation = this.#invocationContext.getStore();
-    let run: DevRuntimeRun | undefined;
-    if (event.runId !== undefined) {
-      try { run = this.#session?.run(event.runId); }
-      catch { run = undefined; }
-    }
-    const surfaceId = run?.surfaceId ?? invocation?.surfaceId;
-    const routeId = surfaceId === undefined
-      ? undefined
-      : this.#surfaces.find((surface) => surface.id === surfaceId)?.routeId;
-    const node = routeId === undefined ? undefined : applicationNodeRefForRouteId(routeId);
-    const durationMs = runtimeDurationMs(run);
-    const epochId = run?.vector.artifactEpochId ?? this.#status.activeVector?.artifactEpochId;
-    const correlationId = event.correlationId ?? invocation?.correlationId;
-    const occurredAt = event.type === 'runtime.run.started'
-      ? run?.startedAt
-      : event.type === 'runtime.run.completed' || event.type === 'runtime.run.failed'
-        ? run?.completedAt
-        : undefined;
-    try {
-      trace.publish({
-        correlation: Object.freeze({
-          ...(correlationId === undefined ? {} : { correlationId }),
-          ...(epochId === undefined ? {} : { epochId }),
-          ...(event.mcpSessionId === undefined ? {} : { mcpSessionId: event.mcpSessionId }),
-          ...(routeId === undefined ? {} : { routeId }),
-          ...(event.runId === undefined ? {} : { runId: event.runId }),
-        }),
-        ...(durationMs === undefined ? {} : { durationMs }),
-        ...(node === undefined || event.runId === undefined
-          ? {}
-          : { href: `${applicationNodePath(node)}?invocation=${encodeURIComponent(event.runId)}` }),
-        kind: lowered.kind,
-        ...(occurredAt === undefined ? {} : { occurredAt }),
-        source: 'runtime',
-        status: lowered.status,
-        summary: event.type.replaceAll('.', ' '),
-      });
-    } catch {
-      // Provider health must not depend on a failed trace observer.
     }
   }
 
@@ -818,7 +699,11 @@ export class DevRuntimeController implements DevRuntimeSession {
     this.#bufferedStartupEvents = Object.freeze([]);
     for (const event of events) {
       if (this.#closed || this.#topologyFailed || this.#session === undefined || !this.#refreshSnapshot()) return;
-      this.#notify(event);
+      try {
+        this.#emit(runtimeEvent(this.#providerSessionId, event));
+      } catch {
+        // Provider health must not depend on a failed observer.
+      }
     }
   }
 

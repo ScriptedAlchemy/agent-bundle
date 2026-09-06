@@ -26,14 +26,14 @@ const count = (markup: string, needle: string): number => markup.split(needle).l
 it('renders the correlated timeline oldest first with one line per entry, nested under its group headline', () => {
   const markup = render();
   expect(markup).toContain('<h1>Trace</h1>');
-  expect(markup).toContain('9 entries in 4 groups');
+  expect(markup).toContain('8 entries in 3 groups');
   expect(markup).toContain('data-testid="trace-timeline"');
-  expect(count(markup, 'data-testid="trace-group"')).toBe(4);
-  expect(count(markup, 'data-testid="trace-entry"')).toBe(9);
+  expect(count(markup, 'data-testid="trace-group"')).toBe(3);
+  expect(count(markup, 'data-testid="trace-entry"')).toBe(8);
   expect(markup).not.toContain('data-testid="trace-empty"');
   expect(markup).not.toContain('data-testid="trace-detail"');
 
-  expect(markup.indexOf('data-group-key="conversationId:conv-1"')).toBeLessThan(markup.indexOf('data-group-key="runId:run_9"'));
+  expect(markup.indexOf('data-group-key="conversationId:conv-1"')).toBeLessThan(markup.indexOf('data-group-key="invocationId:inv_3"'));
   expect(markup).toContain('22:41:04.101');
   expect(markup).toContain('22:41:09.541');
   expect(markup).toContain('Claude session started');
@@ -44,9 +44,7 @@ it('renders the correlated timeline oldest first with one line per entry, nested
   expect(markup).toContain('8.1 ms');
   expect(markup).toContain('15 ms');
   expect(markup).toContain('href="/trace/trc_3"');
-  expect(markup).toContain('trace-row--error');
-  expect(markup).toContain('aria-label="error"');
-  expect(markup).toContain('data-group-key="entry:trc_9"');
+  expect(markup).toContain('data-group-key="entry:trc_8"');
 });
 
 it('shows the empty state that explains what produces entries, and a connecting state before the first replay', () => {
@@ -83,7 +81,7 @@ it('opens the detail drawer for /trace/<id> with correlation links and the prima
   expect(invocation).toContain('data-entry-id="trc_7"');
   expect(invocation).toContain('href="/routes/mcp/curator/tool/search?invocation=inv_3"');
 
-  const routeless = render({ entryId: 'trc_9' });
+  const routeless = render({ entryId: 'trc_8' });
   expect(routeless).toContain('No route record behind this entry.');
   expect(routeless).toContain('This entry carries no correlation key.');
   expect(routeless).toContain('No details were published with this entry.');

@@ -49,7 +49,6 @@ export interface RouteInvocationRouteService {
     options?: Readonly<{ readonly signal?: AbortSignal }>,
   ): Promise<RouteInvocation>;
   cancel(id: string): Promise<RouteInvocation>;
-  has(id: string): boolean;
   list(limit?: number): RouteInvocationListResponse['invocations'];
   read(id: string): RouteInvocation | undefined;
   start(
@@ -203,7 +202,7 @@ export class RouteInvocationRoutes {
       response.once('close', cancel);
       try {
         if (response.destroyed) cancel();
-        invocation = await service.invoke(parseRouteInvocationRequest(body), { signal: controller.signal });
+        invocation = await service.invoke(parseRouteInvocationRequest(requestBody), { signal: controller.signal });
       } catch (error) {
         return throwInvocationError(error);
       } finally {
@@ -229,10 +228,11 @@ export class RouteInvocationRoutes {
     }
     if (path.kind === 'stream' && method === 'GET') {
       noQuery(request.url, invalidShape);
-      if (!service.has(path.id)) {
-        throw requestError(diagnostic('AB8231', `Route invocation ${JSON.stringify(path.id)} was not found.`, 404));
+      try {
+        this.#stream(service, path.id, response);
+      } catch (error) {
+        return throwInvocationError(error);
       }
-      this.#stream(service, path.id, response);
       return true;
     }
     if (path.kind === 'cancel' && method === 'POST') {
@@ -281,11 +281,15 @@ export class RouteInvocationRoutes {
       writer.markClosed();
       stream.unsubscribe?.();
     });
+    const replay: RouteInvocationStreamMessage[] = [];
+    let replaying = true;
+    stream.unsubscribe = service.subscribe(id, (message) => replaying ? replay.push(message) : deliver(message));
     writeKeepAliveStreamHead(response, {
       cacheControl: 'no-cache',
       contentType: 'text/event-stream; charset=utf-8',
     });
-    stream.unsubscribe = service.subscribe(id, deliver);
+    replaying = false;
+    for (const message of replay) deliver(message);
     finish();
   }
 }

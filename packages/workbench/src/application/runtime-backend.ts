@@ -339,8 +339,7 @@ export const createRuntimeBackend = ({
         );
       }
       leafBySurfaceId.set(surface.id, leaf);
-      const runtimeRequest = Object.freeze({
-        ...(request.correlationId === undefined ? {} : { correlationId: request.correlationId }),
+      const run = await runtimeClient.createRun(Object.freeze({
         ...(controller.model.status?.activeVector === undefined
           ? {}
           : {
@@ -350,8 +349,7 @@ export const createRuntimeBackend = ({
         input: request.input ?? Object.freeze({}),
         surfaceId: surface.id,
         target,
-      }) satisfies DevRuntimeInvocationRequest;
-      const run = await runtimeClient.createRun(runtimeRequest);
+      }));
       abortIfRequested(signal);
       if (request.correlationId !== undefined) {
         correlationByRunId.set(run.id, request.correlationId);

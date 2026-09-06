@@ -127,22 +127,21 @@ Trace 是前台服务器所观察到的应用活动的实时有序时间线。�
 
 ### 条目、关联与分组
 
-时间线是对已有记录的降级表示，不会再次复制调用、协议帧、运行时运行、钩子收据、日志记录或诊断。
+时间线是对已有记录的降级表示，不会再次复制调用、协议帧、钩子收据、日志记录或诊断。
 每一行都包含发生时间、`source`、由生产者所有的点分 `kind`、单行摘要、已知关联键、可选状态与耗时；
 当完整记录可用时，还包含指向它的 `href`：
 
 | 来源 | Kind | 关联键 | 目的地 |
 | --- | --- | --- | --- |
-| `invocation` | `invocation.started`、`invocation.completed`、`invocation.failed`、`invocation.cancelled` | `correlationId`、`requestId`、`invocationId`、`routeId`、`epochId`，以及可用时的会话/对话标识 | 带 `?invocation=<id>` 的 Application 路由 |
+| `invocation` | `invocation.started`、`invocation.completed`、`invocation.failed`、`invocation.cancelled` | `correlationId`、`invocationId`、`routeId`、`epochId`，以及可用时的会话/对话标识 | 带 `?invocation=<id>` 的 Application 路由 |
 | `kernel` | `kernel.preflight.start`、`kernel.preflight.outcome`、`kernel.execute.start`、provider 与 render 的开始/结束，以及 `kernel.failure` | `executionId`、路由、宿主，以及可用时的会话与对话标识 | 对应的路由调用 |
 | `mcp` | request、response、notification、progress、logging、session 与 stderr kind | `mcpSessionId`、JSON-RPC `mcpRequestId`、`requestId`，以及已知的路由与宿主元数据 | 带 `?session=<id>` 的路由工作区，或绑定的 Protocol 会话 |
-| `runtime` | 运行开始/完成/失败、世代发布与 App 更新 | `runId`、`correlationId`、`routeId`、`epochId`、`mcpSessionId` | 带 `?invocation=<runId>` 的路由 |
 | `hook` | 收据/完成/失败与宿主会话开始/结束 | `requestId`、`executionId`、`sessionId`、`conversationId`、`routeId`、`host` | 事件路由与捕获的收据 |
 | `log` | 具有共享键的记录对应的 `log.<producer>.<kind>` | 安全日志投影保留的任意关联键 | Advanced → Raw logs |
 | `diagnostic` | 构建、契约与宿主同步失败 | 已知的构建、epoch、路由与共享请求标识 | Problems 或受影响的路由 |
 
 Trace 会根据共享标识传递式地分组条目。组标签按以下顺序采用最强的可用键：对话、会话、调用、内核执行、
-运行时运行、MCP 请求，最后是浏览器生成的关联 id。MCP 请求 id 只在其 MCP 会话内参与关联。分组以证据
+MCP 请求，最后是浏览器生成的关联 id。MCP 请求 id 只在其 MCP 会话内参与关联。分组以证据
 为依据：不会仅因活动发生时间相近就把无关活动合并。`/trace?correlation=<value>` 会选中包含具有该精确
 关联值条目的组。
 
@@ -164,8 +163,8 @@ Trace 重放从 `GET /api/trace?after=<sequence>` 加载，实时视图再从
 token；模拟调用直接从前台服务器取得这对值，服务器关闭时会移除该文件。这个只写路由拒绝非 loopback
 对端以及任何带 `Origin` 标头的请求；Workbench cookie 与会话标头均不能授权它。收据包含执行标识、
 不含载荷的内核事件、宿主/会话/请求 id 与解析后的 lineage，绝不包含原生钩子载荷。提交预算为 750 ms，
-失败会被忽略，因此 Workbench 观察不会改变钩子结果。这是范围严格且经过认证的遥测，而不是远程控制或
-通用摄取端点。
+失败会被忽略，因此 Workbench 观察不会改变钩子结果。包装器会在写入 stdout 后等待该提交，因此同一个
+750 ms 超时也限定了新增的钩子退出延迟。这是范围严格且经过认证的遥测，而不是远程控制或通用摄取端点。
 
 ### 刻意排除的数据
 
@@ -238,7 +237,7 @@ Workbench 外壳，因此路由、trace、Problems 与 Advanced 的深度链接�
 - `POST /api/routes/invocations` 接受一条路由调用请求，并返回其已完成的调用信封。传入
   `stream: true` 时会立即以 `202` 返回运行中的 id。
 - `GET /api/routes/invocations/<id>/stream` 通过服务器发送事件重放并实时发送 `render`、`trace`、
-  `truncated` 与终止 `final` 消息。它保留最新 256 条 render 事件，并用一条标记报告被丢弃的旧事件。
+  `truncated` 与终止 `final` 消息。它保留最新 256 条 render 事件，并用一条标记表示发生了截断。
 - `POST /api/routes/invocations/<id>/cancel` 停止运行中或排队中的调用并返回取消后的最终信封；取消已经
   终止的调用会报告 `AB8256`（409）。
 - `GET /api/routes/invocations?limit=50` 为 Trace 返回按最新优先的摘要。
@@ -283,6 +282,8 @@ CLI 命令/操作不匹配（`AB8253`）、投影形成的重复 CLI id（`AB825
 信封、`route.invocation` 事件载荷与路由工作区报告两个彼此独立的事实。`status` 表示执行边界是否完成；
 `outcome` 表示一次已完成的运行意味着什么，由该路由所经过的表面来判定。失败的边界不带 `outcome`，
 已完成的运行总是带有一个，因此被表示的错误或非零退出码永远不会被报告为普通成功。
+`route.invocation` 也会在调用开始时触发，此时记录的 `status` 为 `"running"`，且没有
+`completedAt` 或 `outcome`；读取完成字段前请先按 `status` 缩小类型。
 
 | 字段 | 值 | 含义 |
 | --- | --- | --- |

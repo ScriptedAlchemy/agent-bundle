@@ -1350,26 +1350,23 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     if (createHash('sha256').update(bytes).digest('hex') !== asset.sha256) throw new Error('Historical runtime definition changed.');
     const definition = JSON.parse(bytes.toString('utf8')) as Partial<SerializedRuntimeDefinition>;
     const targets = Object.freeze([...new Set(generation.manifest.metadata.servers.map((server) => server.target))]);
-    const serverName = generation.manifest.metadata.servers[0]?.name;
     if (surfaceId.startsWith('hook.')) {
       const host = surfaceId.slice('hook.'.length);
       if ((host !== 'claude' && host !== 'codex') || !definition.nativeHooks?.some((hook) => hook.host === host)) {
         throw new Error(`Historical runtime surface ${JSON.stringify(surfaceId)} does not exist.`);
       }
-      return Object.freeze({ fixtures: fixturesForHook(host), id: surfaceId, kind: 'hook', label: `After tool hook (${host})`, readOnly: false, routeId: 'event:tool/after', targets: Object.freeze([host]) });
+      return Object.freeze({ fixtures: fixturesForHook(host), id: surfaceId, kind: 'hook', label: `After tool hook (${host})`, readOnly: false, targets: Object.freeze([host]) });
     }
     const name = surfaceId.startsWith('mcp.') ? surfaceId.slice('mcp.'.length) : '';
     if (definition.tools?.some((tool) => tool.name === name)) {
-      if (serverName === undefined) throw new Error('Historical runtime generation has no MCP server descriptor.');
-      return Object.freeze({ fixtures: Object.freeze([]), id: surfaceId, kind: 'mcp-tool', label: name, readOnly: true, routeId: `tool:${serverName}/${name}`, targets });
+      return Object.freeze({ fixtures: Object.freeze([]), id: surfaceId, kind: 'mcp-tool', label: name, readOnly: true, targets });
     }
     if (definition.resources?.some((resource) => resource.name === name)) {
-      if (serverName === undefined) throw new Error('Historical runtime generation has no MCP server descriptor.');
-      return Object.freeze({ fixtures: Object.freeze([]), id: surfaceId, kind: 'mcp-resource', label: name, readOnly: true, routeId: `resource:${serverName}/${name}`, targets });
+      return Object.freeze({ fixtures: Object.freeze([]), id: surfaceId, kind: 'mcp-resource', label: name, readOnly: true, targets });
     }
     const app = generation.manifest.metadata.appDefinitions.find((candidate) => candidate.name === name);
     if (app !== undefined) {
-      return Object.freeze({ fixtures: Object.freeze([]), id: surfaceId, kind: 'mcp-app', label: name, readOnly: true, routeId: `app:${app.serverName}/${name}`, targets: app.targets });
+      return Object.freeze({ fixtures: Object.freeze([]), id: surfaceId, kind: 'mcp-app', label: name, readOnly: true, targets: app.targets });
     }
     throw new Error(`Historical runtime surface ${JSON.stringify(surfaceId)} does not exist.`);
   }
@@ -2879,39 +2876,33 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
     prepared: Pick<DevRuntimePreparedProject, 'apps' | 'servers'>,
   ): void {
     this.#surfaces.clear();
-    const serverName = prepared.servers[0]?.name;
     for (const hook of snapshot.definition.nativeHooks) {
       this.#surfaces.set(`hook.${hook.host}`, Object.freeze({
         id: `hook.${hook.host}`,
         kind: 'hook',
         label: `After tool hook (${hook.host})`,
         readOnly: false,
-        routeId: 'event:tool/after',
         targets: Object.freeze([hook.host]),
         fixtures: fixturesForHook(hook.host),
       }));
     }
     for (const tool of snapshot.definition.tools) {
-      if (serverName === undefined) throw new Error('RSC runtime has no MCP server descriptor.');
       this.#surfaces.set(`mcp.${tool.name}`, Object.freeze({
         inputSchema: cloneJsonObject(tool.inputSchema),
         id: `mcp.${tool.name}`,
         kind: 'mcp-tool',
         label: tool.description,
         readOnly: tool.annotations.readOnlyHint,
-        routeId: `tool:${serverName}/${tool.name}`,
         targets: Object.freeze([...prepared.servers.flatMap((server) => server.targets)]),
         fixtures: Object.freeze([]),
       }));
     }
     for (const resource of snapshot.definition.resources) {
-      if (serverName === undefined) throw new Error('RSC runtime has no MCP server descriptor.');
       this.#surfaces.set(`mcp.${resource.name}`, Object.freeze({
         id: `mcp.${resource.name}`,
         kind: 'mcp-resource',
         label: resource.name,
         readOnly: true,
-        routeId: `resource:${serverName}/${resource.name}`,
         targets: Object.freeze([...prepared.servers.flatMap((server) => server.targets)]),
         fixtures: Object.freeze([]),
       }));
@@ -2922,7 +2913,6 @@ export class RsbuildRuntimeSession implements DevRuntimeSession {
         kind: 'mcp-app',
         label: app.name,
         readOnly: true,
-        routeId: `app:${app.serverName}/${app.name}`,
         targets: Object.freeze([...app.targets]),
         fixtures: Object.freeze([]),
       }));

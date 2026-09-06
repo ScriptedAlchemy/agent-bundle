@@ -19,7 +19,6 @@ export const traceJoinKeys = Object.freeze([
   'mcpSessionId',
   'invocationId',
   'executionId',
-  'runId',
   'mcpRequestId',
   'correlationId',
 ] as const);
@@ -97,18 +96,16 @@ const joinToken = (correlation: TraceCorrelation, key: TraceJoinKey): string | u
 const headlinePriority: Readonly<Record<TraceSource, number>> = Object.freeze({
   hook: 0,
   invocation: 1,
-  runtime: 2,
-  mcp: 3,
-  kernel: 4,
-  diagnostic: 5,
-  log: 6,
+  mcp: 2,
+  kernel: 3,
+  diagnostic: 4,
+  log: 5,
 });
 
 const isInvocationLevel = (entry: TraceEntry): boolean => {
   switch (entry.source) {
     case 'hook':
     case 'invocation':
-    case 'runtime':
       return true;
     case 'kernel':
     case 'mcp':
@@ -208,7 +205,7 @@ export const groupTraceEntries = (entries: readonly TraceEntry[]): readonly Trac
 };
 
 /** Every correlation value on an entry, plus its own id: what `?correlation=` may name. */
-export const traceEntryCorrelationValues = (entry: TraceEntry): readonly string[] => Object.freeze([
+const traceEntryCorrelationValues = (entry: TraceEntry): readonly string[] => Object.freeze([
   entry.id,
   ...Object.values(entry.correlation).filter((value): value is string => typeof value === 'string'),
 ]);
@@ -217,10 +214,10 @@ export const traceEntryCorrelationValues = (entry: TraceEntry): readonly string[
 export const selectTraceGroup = (groups: readonly TraceGroup[], id: string): TraceGroup | undefined =>
   groups.find((group) => group.rows.some((row) => traceEntryCorrelationValues(row.entry).includes(id)));
 
-/** Accepts both trace-entry ids and invocation/run ids used by existing deep links. */
+/** Accepts both trace-entry ids and invocation ids used by deep links. */
 export const selectTraceEntry = (entries: readonly TraceEntry[], id: string): TraceEntry | undefined =>
   entries.find((entry) => entry.id === id) ??
-  entries.findLast((entry) => entry.correlation.invocationId === id || entry.correlation.runId === id);
+  entries.findLast((entry) => entry.correlation.invocationId === id);
 
 const timeFormats = new Map<string | undefined, Intl.DateTimeFormat>();
 
@@ -259,8 +256,6 @@ export const traceSourceGlyph = (source: TraceSource): string => {
       return '⚙';
     case 'mcp':
       return '⇄';
-    case 'runtime':
-      return '◈';
     case 'hook':
       return '⚑';
     case 'log':
@@ -294,11 +289,6 @@ const kindLabels: ReadonlyMap<string, string> = new Map([
   ['mcp.session.started', 'MCP session started'],
   ['mcp.session.closed', 'MCP session closed'],
   ['mcp.stderr', 'MCP stderr'],
-  ['runtime.run.started', 'run started'],
-  ['runtime.run.completed', 'run completed'],
-  ['runtime.run.failed', 'run failed'],
-  ['runtime.generation.published', 'generation published'],
-  ['runtime.app.updated', 'app updated'],
   ['hook.received', 'hook received'],
   ['hook.completed', 'hook completed'],
   ['hook.failed', 'hook failed'],

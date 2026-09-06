@@ -15,7 +15,6 @@ import {
   HOOK_RECEIPT_TOO_LARGE_CODE,
   HOOK_RECEIPT_UNAUTHORIZED_CODE,
   HookReceiptDecodeError,
-  hookReceiptOutcome,
   lowerHookReceipt,
 } from '../src/dev/hooks/hook-receipts.ts';
 import { diagnostic, isRequestDiagnostic, responseDiagnostic } from '../src/dev/http.ts';
@@ -234,7 +233,6 @@ it('lowers a failure to hook.failed with the kernel error summary, and a gate ou
       { at: 3, durationMs: 3, kind: 'preflight.outcome', outcome: 'deny', phase: 'preflight', sequence: 1 },
     ],
   });
-  expect(hookReceiptOutcome(denied)).toEqual({ gate: 'deny', kind: 'completed' });
   const gated = lowerHookReceipt(denied);
   expect(gated[1]).toMatchObject({
     details: { gate: 'deny' },
@@ -368,7 +366,11 @@ it('publishes an owner-only endpoint record under the project and removes it on 
 
   const recordPath = eventTraceReceiptEndpointPath(projectRoot);
   await attachment.publishEndpoint('http://127.0.0.1:4321');
-  expect(JSON.parse(await readFile(recordPath, 'utf8'))).toEqual({ token: attachment.token, url: 'http://127.0.0.1:4321' });
+  expect(JSON.parse(await readFile(recordPath, 'utf8'))).toEqual({
+    pid: process.pid,
+    token: attachment.token,
+    url: 'http://127.0.0.1:4321',
+  });
   if (process.platform !== 'win32') expect((await stat(recordPath)).mode & 0o777).toBe(0o600);
 
   await attachment.publishEndpoint('http://127.0.0.1:4322');
@@ -401,6 +403,12 @@ it('resolves the wrapper endpoint from the environment, else the dev install mar
   await writeFile(join(root, 'bundle', DEV_INSTALL_MARKER_FILE), JSON.stringify({ epochId: 'e1', host: 'claude', projectRoot, schemaVersion: 1 }));
   await expect(resolveEventTraceReceiptEndpoint({ anchor, env: {} }))
     .resolves.toEqual({ token: attachment.token, url: 'http://127.0.0.1:5001' });
+  await writeFile(eventTraceReceiptEndpointPath(projectRoot), JSON.stringify({
+    pid: 2_147_483_647,
+    token: attachment.token,
+    url: 'http://127.0.0.1:5001',
+  }));
+  await expect(resolveEventTraceReceiptEndpoint({ anchor, env: {} })).resolves.toBeUndefined();
   await attachment.close();
   await expect(resolveEventTraceReceiptEndpoint({ anchor, env: {} })).resolves.toBeUndefined();
 });
@@ -417,7 +425,6 @@ it('records kernel events through the tracer and posts one bounded receipt that 
     env: { [EVENT_TRACE_RECEIPT_TOKEN_ENV]: 't', [EVENT_TRACE_RECEIPT_URL_ENV]: 'http://127.0.0.1:6000' },
     execution: traced,
     fetch: fetchStub,
-    now: () => new Date('2026-09-05T15:00:00.000Z'),
   });
   expect(recorder).toBeDefined();
   let clock = 50;
@@ -435,6 +442,7 @@ it('records kernel events through the tracer and posts one bounded receipt that 
   expect(posted[0]!.url).toBe('http://127.0.0.1:6000/api/trace/receipts');
   expect(posted[0]!.init.headers).toEqual({ authorization: 'Bearer t', 'content-type': 'application/json' });
   const body = JSON.parse(posted[0]!.init.body as string) as EventTraceReceipt;
+  expect(body.startedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
   expect(body).toEqual({
     events: [
       { at: 50, kind: 'execute.start', phase: 'execute', runtime: 'standalone', sequence: 0 },
@@ -444,7 +452,7 @@ it('records kernel events through the tracer and posts one bounded receipt that 
     execution: traced,
     identity: { conversationId: 's', requestId: 'u', sessionId: 's' },
     lineage: { reason: 'no-subagent-events', state: 'unavailable' },
-    startedAt: '2026-09-05T15:00:00.000Z',
+    startedAt: body.startedAt,
     version: 1,
   });
   expect(posted[0]!.init.body).not.toContain('secret');

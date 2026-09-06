@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { expect, it } from '@rstest/core';
+import { expect, it, rs } from '@rstest/core';
 
 import type { TraceEntry, TraceEntryInput } from '../src/dev/trace/trace-entry.ts';
 import type { TracePublisher } from '../src/dev/trace/trace-hub.ts';
@@ -501,7 +501,7 @@ it('retains only the newest 256 render events and one truncation marker', async 
   service.subscribe(started.invocation.id, (message) => messages.push(message));
   expect(messages.filter((message) => message.type === 'render')).toHaveLength(256);
   expect(messages.filter((message) => message.type === 'truncated')).toEqual([
-    { dropped: 44, type: 'truncated' },
+    { type: 'truncated' },
   ]);
   expect(messages.find((message) => message.type === 'render')).toMatchObject({
     event: { sequence: 44 },
@@ -548,6 +548,37 @@ it('rejects cancellation after an invocation is final', async () => {
     code: ROUTE_INVOCATION_ALREADY_FINAL_CODE,
     status: 409,
   });
+});
+
+it('rejects cancellation when completion wins the race', async () => {
+  const childCompleted = deferred();
+  const release = deferred();
+  const service = new RouteInvocationService({
+    manifest: { manifest: () => catalog('digest', 'revision') },
+    prepared: async () => ({
+      project: {
+        manifest: { projectRoot: '/project' } as never,
+        stateRoot: '/project/.agent-bundle/state',
+        targets: ['claude'],
+      },
+      release: () => release.promise,
+    }),
+    renderChild: async (request) => {
+      childCompleted.resolve();
+      return childResult(request);
+    },
+  });
+
+  const started = service.start({ input: {}, routeId: echoRoute.id });
+  await childCompleted.promise;
+  const cancelled = service.cancel(started.invocation.id);
+  release.resolve();
+
+  await expect(cancelled).rejects.toMatchObject({
+    code: ROUTE_INVOCATION_ALREADY_FINAL_CODE,
+    status: 409,
+  });
+  await expect(started.result).resolves.toMatchObject({ status: 'succeeded' });
 });
 
 it('aborts and drains a running render when the service closes', async () => {
@@ -640,6 +671,46 @@ it('rejects a queued invocation when the published revision moves before the slo
   });
   expect(executed).toHaveLength(1);
   expect(releases).toBe(2);
+});
+
+it('removes a rejecting invocation from the stream registry', async () => {
+  const encoded = rs.spyOn(Buffer.prototype, 'toString')
+    .mockReturnValueOnce('0101010101010101')
+    .mockReturnValueOnce('0202020202020202');
+  const hold = deferred();
+  const firstStarted = deferred();
+  let digest = 'digest-1';
+  const service = new RouteInvocationService({
+    concurrency: 1,
+    manifest: { manifest: () => catalog(digest, 'revision') },
+    now: () => new Date(0),
+    prepared: async () => ({
+      project: {
+        manifest: { projectRoot: '/project' } as never,
+        stateRoot: '/project/.agent-bundle/state',
+        targets: ['claude'],
+      },
+      release: () => undefined,
+    }),
+    renderChild: async (request) => {
+      firstStarted.resolve();
+      await hold.promise;
+      return childResult(request);
+    },
+  });
+
+  const first = service.invoke({ input: { n: 1 }, routeId: echoRoute.id });
+  await firstStarted.promise;
+  const second = service.invoke({ input: { n: 2 }, routeId: echoRoute.id });
+  digest = 'digest-2';
+  hold.resolve();
+  await first;
+  await expect(second).rejects.toMatchObject({ code: ROUTE_INVOCATION_STALE_REVISION_CODE });
+  encoded.mockRestore();
+
+  const id = 'inv_00202020202020202';
+  expect(service.has(id)).toBe(false);
+  expect(() => service.subscribe(id, () => undefined)).toThrow(RouteInvocationRequestError);
 });
 
 it('does not spawn a child for an invocation aborted while queued', async () => {

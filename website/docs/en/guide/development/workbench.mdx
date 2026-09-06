@@ -152,22 +152,21 @@ in the terminal row's details.
 ### Entries, correlation, and grouping
 
 The timeline is a lowering of records that already exist. It does not make a second copy of an
-invocation, protocol frame, runtime run, hook receipt, log record, or diagnostic. Each row carries
+invocation, protocol frame, hook receipt, log record, or diagnostic. Each row carries
 its occurrence time, `source`, publisher-owned dotted `kind`, one-line summary, known correlation
 keys, optional status and duration, and, when a full record is available, an `href` to it:
 
 | Source | Kinds | Correlation keys | Destination |
 | --- | --- | --- | --- |
-| `invocation` | `invocation.started`, `invocation.completed`, `invocation.failed`, `invocation.cancelled` | `correlationId`, `requestId`, `invocationId`, `routeId`, `epochId`, plus session/conversation when available | The Application route with `?invocation=<id>` |
+| `invocation` | `invocation.started`, `invocation.completed`, `invocation.failed`, `invocation.cancelled` | `correlationId`, `invocationId`, `routeId`, `epochId`, plus session/conversation when available | The Application route with `?invocation=<id>` |
 | `kernel` | `kernel.preflight.start`, `kernel.preflight.outcome`, `kernel.execute.start`, provider and render start/finish, `kernel.failure` | `executionId`, route, host, session and conversation identity when available | The corresponding route invocation |
 | `mcp` | request, response, notification, progress, logging, session, and stderr kinds | `mcpSessionId`, JSON-RPC `mcpRequestId`, `requestId`, route and host metadata when known | The route workspace with `?session=<id>`, or the bound Protocol session |
-| `runtime` | run start/completion/failure, generation publication, and App updates | `runId`, `correlationId`, `routeId`, `epochId`, `mcpSessionId` | The route with `?invocation=<runId>` |
 | `hook` | receipt/completion/failure and host session start/end | `requestId`, `executionId`, `sessionId`, `conversationId`, `routeId`, `host` | The event route and captured receipt |
 | `log` | `log.<producer>.<kind>` for records with a shared key | Any correlation key retained by the safe log projection | Advanced → Raw logs |
 | `diagnostic` | build, contract, and host-sync failures | Build, epoch, route, and shared request identity when known | Problems or the affected route |
 
 Trace groups entries transitively on shared identity. The group label uses the strongest available
-key in this order: conversation, session, invocation, kernel execution, runtime run, MCP request,
+key in this order: conversation, session, invocation, kernel execution, MCP request,
 then the browser-minted correlation id. An MCP request id joins only within its MCP session. The
 grouping is evidence-based: unrelated activity is not joined merely because it happened nearby.
 `/trace?correlation=<value>` selects the group containing an entry with that exact correlation
@@ -196,8 +195,9 @@ removes the file. The write-only route rejects a non-loopback peer and any reque
 `Origin` header; neither the Workbench cookie nor its session header authorizes it. A receipt
 contains execution identity, payload-free kernel events, host/session/request ids, and resolved
 lineage — never the native hook payload. Posting has a 750 ms budget and failure is ignored, so
-Workbench observation cannot change the hook result. This is narrow authenticated telemetry, not
-a remote-control or general-purpose ingestion endpoint.
+Workbench observation cannot change the hook result. Because the wrapper awaits that post after
+writing stdout, the same 750 ms timeout bounds added hook exit latency. This is narrow
+authenticated telemetry, not a remote-control or general-purpose ingestion endpoint.
 
 ### Deliberately absent data
 
@@ -280,7 +280,7 @@ The route workspace uses one authenticated, origin-guarded foreground API:
   invocation envelope. With `stream: true`, it returns `202` immediately with the running id.
 - `GET /api/routes/invocations/<id>/stream` streams retained and live `render`, `trace`,
   `truncated`, and terminal `final` messages as server-sent events. It retains the newest 256
-  render events and reports dropped older events once.
+  render events and signals truncation once.
 - `POST /api/routes/invocations/<id>/cancel` stops a running or queued invocation and returns its
   cancelled final envelope; cancelling an already-final invocation reports `AB8256` (409).
 - `GET /api/routes/invocations?limit=50` returns newest-first summaries for Trace.
@@ -335,6 +335,8 @@ facts. `status` says whether the execution boundary completed; `outcome` says wh
 run meant, judged by the surface the route runs through. A failed boundary carries no `outcome`,
 and a completed run always carries one, so a represented error or a non-zero exit is never
 reported as plain success.
+`route.invocation` also fires when a run starts with a `status: "running"` record that has no
+`completedAt` or `outcome`; narrow on `status` before reading completion fields.
 
 | Field | Value | Meaning |
 | --- | --- | --- |

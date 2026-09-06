@@ -194,7 +194,6 @@ it('rejects query-bearing manual runtime MCP routes before authorizing a control
 
 it('maps manual registry conflicts to 409 and waits for restart invalidation before returning a phase-safe failure', async () => {
   let invalidationsDrained = false;
-  const operations: unknown[] = [];
   const runtime = {
     mcpRegistry: {
       restart: async () => Object.freeze({
@@ -206,10 +205,7 @@ it('maps manual registry conflicts to 409 and waits for restart invalidation bef
         sequence: 4,
       }),
       session: (sessionId: string) => sessionId === 'session-a' ? Object.freeze({
-        execute: async (operation: unknown) => {
-          operations.push(operation);
-          throw Object.assign(new Error('stale'), { code: 'RUNTIME_MCP_REGISTRY_CONFLICT' });
-        },
+        execute: async () => { throw Object.assign(new Error('stale'), { code: 'RUNTIME_MCP_REGISTRY_CONFLICT' }); },
         snapshot: () => { throw new Error('unused'); },
         watchClosed: () => Object.freeze({ closed: false, unsubscribe: () => undefined }),
       }) : undefined,
@@ -237,30 +233,6 @@ it('maps manual registry conflicts to 409 and waits for restart invalidation bef
       body: JSON.stringify({ expectedSessionRevision: 2, kind: 'list-tools' }), headers, method: 'POST',
     });
     expect(stale.status).toBe(409);
-    const correlated = await fetch(`http://127.0.0.1:${address.port}/api/runtime/mcp/sessions/session-a/rpc`, {
-      body: JSON.stringify({
-        arguments: {},
-        correlationId: 'corr-runtime-app',
-        expectedSessionRevision: 2,
-        kind: 'call-tool',
-        name: 'forecast',
-      }),
-      headers,
-      method: 'POST',
-    });
-    expect(correlated.status).toBe(409);
-    const oversized = await fetch(`http://127.0.0.1:${address.port}/api/runtime/mcp/sessions/session-a/rpc`, {
-      body: JSON.stringify({
-        arguments: {},
-        correlationId: 'x'.repeat(257),
-        expectedSessionRevision: 2,
-        kind: 'call-tool',
-        name: 'forecast',
-      }),
-      headers,
-      method: 'POST',
-    });
-    expect(oversized.status).toBe(400);
     const unknown = await fetch(`http://127.0.0.1:${address.port}/api/runtime/mcp/sessions/unknown-a/rpc`, {
       body: JSON.stringify({ expectedSessionRevision: 2, kind: 'list-tools' }), headers, method: 'POST',
     });
@@ -269,16 +241,6 @@ it('maps manual registry conflicts to 409 and waits for restart invalidation bef
       body: JSON.stringify({ expectedSessionRevision: 2, sessionId: 'session-a' }), headers, method: 'POST',
     });
     expect(restart.status).toBe(409);
-    expect(operations).toEqual([
-      { expectedSessionRevision: 2, kind: 'list-tools' },
-      {
-        arguments: {},
-        correlationId: 'corr-runtime-app',
-        expectedSessionRevision: 2,
-        kind: 'call-tool',
-        name: 'forecast',
-      },
-    ]);
     expect(invalidationsDrained).toBe(true);
   } finally {
     await new Promise<void>((resolvePromise, rejectPromise) => server.close((error) => error === undefined ? resolvePromise() : rejectPromise(error)));

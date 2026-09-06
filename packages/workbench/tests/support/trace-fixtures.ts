@@ -12,7 +12,7 @@ const at = (millis: number): string => new Date(Date.UTC(2026, 8, 5, 22, 41, 4, 
 /**
  * The owner's sample timeline from the PR 2 brief: one Claude session whose
  * hook, kernel, and MCP entries share a conversation, a Workbench-invoked tool
- * on its own, a failed runtime run, and a log line with no correlation.
+ * on its own, and a log line with no correlation.
  */
 export const sampleTraceEntries: readonly TraceEntry[] = Object.freeze([
   traceEntry(1, {
@@ -77,15 +77,6 @@ export const sampleTraceEntries: readonly TraceEntry[] = Object.freeze([
     summary: 'tool:curator/search succeeded',
   }),
   traceEntry(8, {
-    correlation: { host: 'portable', routeId: 'tool:curator/search', runId: 'run_9' },
-    href: '/routes/mcp/curator/tool/search?invocation=run_9',
-    kind: 'runtime.run.failed',
-    occurredAt: at(12_000),
-    source: 'runtime',
-    status: 'error',
-    summary: 'devRuntime run failed: fixture invalid',
-  }),
-  traceEntry(9, {
     correlation: {},
     kind: 'log.build.started',
     occurredAt: at(15_000),

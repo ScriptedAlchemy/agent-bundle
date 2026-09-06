@@ -1177,7 +1177,6 @@ interface InvocationStreamRecord {
   readonly messages: RouteInvocationStreamMessage[];
   readonly running: RunningRouteInvocation;
   cancelRequested: boolean;
-  dropped: number;
   final?: RouteInvocation;
   result?: Promise<RouteInvocation>;
 }
@@ -1308,7 +1307,15 @@ export class RouteInvocationService {
     }
     record.cancelRequested = true;
     record.controller.abort(new DOMException('Route invocation cancelled by the operator.', 'AbortError'));
-    return record.result!;
+    const invocation = await record.result!;
+    if (invocation.status !== 'cancelled') {
+      throw new RouteInvocationRequestError(
+        ROUTE_INVOCATION_ALREADY_FINAL_CODE,
+        `Route invocation ${JSON.stringify(id)} is already final.`,
+        409,
+      );
+    }
+    return invocation;
   }
 
   #publishStream(record: InvocationStreamRecord, message: RouteInvocationStreamMessage): void {
@@ -1318,14 +1325,11 @@ export class RouteInvocationService {
       if (renderCount === 256) {
         const oldest = record.messages.findIndex((retained) => retained.type === 'render');
         if (oldest !== -1) record.messages.splice(oldest, 1);
-        record.dropped += 1;
-        const marker = deepFreeze<RouteInvocationStreamMessage>({ dropped: record.dropped, type: 'truncated' });
         const markerIndex = record.messages.findIndex((retained) => retained.type === 'truncated');
         if (markerIndex === -1) {
+          const marker = deepFreeze<RouteInvocationStreamMessage>({ type: 'truncated' });
           record.messages.unshift(marker);
           for (const listener of record.listeners) listener(marker);
-        } else {
-          record.messages[markerIndex] = marker;
         }
       }
     }
@@ -1407,7 +1411,6 @@ export class RouteInvocationService {
     const streamRecord: InvocationStreamRecord = {
       cancelRequested: false,
       controller: operationController,
-      dropped: 0,
       listeners: new Set(),
       messages: [],
       running: runningInvocation,
@@ -1644,7 +1647,10 @@ export class RouteInvocationService {
           surface,
         });
       }
-      if (!terminalErrors) throw error;
+      if (!terminalErrors) {
+        this.#streams.delete(id);
+        throw error;
+      }
       return failedInvocation({
         code: error instanceof RouteInvocationRequestError ? error.code : ROUTE_INVOCATION_CHILD_FAILURE_CODE,
         completedAt,

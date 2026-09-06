@@ -329,7 +329,7 @@ it('attaches one non-owning runtime App client through one exact App authority a
     { kind: 'tools/list' },
     { kind: 'resources/list' },
     { kind: 'resources/read', uri: 'weather://today' },
-    { arguments: { city: 'Paris' }, correlationId: 'corr-runtime-app', kind: 'tools/call', name: 'forecast' },
+    { arguments: { city: 'Paris' }, kind: 'tools/call', name: 'forecast' },
   ]);
   expect(calls).toEqual([]);
   expect(controller.history).toEqual([

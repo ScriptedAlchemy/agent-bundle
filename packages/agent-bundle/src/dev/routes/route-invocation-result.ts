@@ -27,7 +27,7 @@ export interface RouteInvocation extends RouteInvocationSummary {
 export type RouteInvocationStreamMessage =
   | Readonly<{ readonly event: AgentRenderEvent; readonly type: 'render' }>
   | Readonly<{ readonly event: EventTraceEvent; readonly type: 'trace' }>
-  | Readonly<{ readonly dropped: number; readonly type: 'truncated' }>
+  | Readonly<{ readonly type: 'truncated' }>
   | Readonly<{ readonly invocation: RouteInvocation; readonly type: 'final' }>;
 
 export interface RouteInvocationStart {

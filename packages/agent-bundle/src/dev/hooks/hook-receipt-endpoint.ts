@@ -116,8 +116,6 @@ export class HookReceiptRoutes {
 export interface AttachHookReceiptsOptions {
   /** The project whose dev server this is; the endpoint record lands under its `.agent-bundle/`. */
   readonly projectRoot: string;
-  /** Test seam; production mints 32 random bytes. */
-  readonly token?: string;
   readonly trace: TracePublisher;
 }
 
@@ -137,7 +135,7 @@ export interface HookReceiptAttachment {
 }
 
 export const attachHookReceipts = (options: AttachHookReceiptsOptions): HookReceiptAttachment => {
-  const token = options.token ?? randomBytes(32).toString('base64url');
+  const token = randomBytes(32).toString('base64url');
   const routes = new HookReceiptRoutes({ token, trace: options.trace });
   const recordPath = eventTraceReceiptEndpointPath(resolve(options.projectRoot));
   const endpoint = (url: string): EventTraceReceiptEndpoint => {
@@ -163,7 +161,7 @@ export const attachHookReceipts = (options: AttachHookReceiptsOptions): HookRece
       await mkdir(dirname(recordPath), { recursive: true });
       // `mode` applies on creation only: replace rather than overwrite a record with wider permissions.
       await rm(recordPath, { force: true });
-      await writeFile(recordPath, `${JSON.stringify({ token: target.token, url: target.url })}\n`, { mode: 0o600 });
+      await writeFile(recordPath, `${JSON.stringify({ pid: process.pid, token: target.token, url: target.url })}\n`, { mode: 0o600 });
     },
     routes,
     token,

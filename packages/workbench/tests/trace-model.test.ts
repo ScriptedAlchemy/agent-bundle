@@ -8,7 +8,6 @@ import {
   mergeTraceEntries,
   selectTraceEntry,
   selectTraceGroup,
-  traceEntryCorrelationValues,
   traceKindLabel,
   traceSourceGlyph,
 } from '../src/trace/trace-model.ts';
@@ -34,8 +33,7 @@ it('groups entries that share any join key transitively and names the group by i
   expect(groups.map((group) => [group.key, group.keyKind, sequences(group.rows.map((row) => row.entry))])).toEqual([
     ['conversationId:conv-1', 'conversationId', [1, 2, 3, 4, 5, 6]],
     ['invocationId:inv_3', 'invocationId', [7]],
-    ['runId:run_9', 'runId', [8]],
-    ['entry:trc_9', 'entry', [9]],
+    ['entry:trc_8', 'entry', [8]],
   ]);
   const session = groups[0]!;
   expect(session.headline.kind).toBe('session.started');
@@ -47,9 +45,9 @@ it('groups entries that share any join key transitively and names the group by i
     ['hook', 0], ['hook', 0], ['kernel', 1], ['hook', 0], ['mcp', 1], ['mcp', 1],
   ]);
   expect(groups[1]?.spanMs).toBe(sampleTraceEntries[6]!.durationMs);
-  expect(groups[2]?.status).toBe('error');
-  expect(groups[3]?.rows[0]?.depth).toBe(0);
-  expect(groups[3]?.spanMs).toBe(0);
+  expect(groups[2]?.status).toBe('ok');
+  expect(groups[2]?.rows[0]?.depth).toBe(0);
+  expect(groups[2]?.spanMs).toBe(0);
   expect(Object.isFrozen(groups) && groups.every((group) => Object.isFrozen(group) && Object.isFrozen(group.rows))).toBe(true);
 });
 
@@ -100,15 +98,12 @@ it('selects a group by any correlation value and an entry by its id or a PR 1 in
   const groups = groupTraceEntries(sampleTraceEntries);
   expect(selectTraceGroup(groups, 'exec-1')?.key).toBe('conversationId:conv-1');
   expect(selectTraceGroup(groups, 'mcp-1')?.key).toBe('conversationId:conv-1');
-  expect(selectTraceGroup(groups, 'trc_8')?.key).toBe('runId:run_9');
   expect(selectTraceGroup(groups, 'corr-1')?.key).toBe('invocationId:inv_3');
   expect(selectTraceGroup(groups, 'nope')).toBeUndefined();
 
   expect(selectTraceEntry(sampleTraceEntries, 'trc_3')?.sequence).toBe(3);
   expect(selectTraceEntry(sampleTraceEntries, 'inv_3')?.sequence).toBe(7);
-  expect(selectTraceEntry(sampleTraceEntries, 'run_9')?.sequence).toBe(8);
   expect(selectTraceEntry(sampleTraceEntries, 'exec-1')).toBeUndefined();
-  expect(traceEntryCorrelationValues(sampleTraceEntries[5]!)).toEqual(['trc_6', '7', 'mcp-1']);
 });
 
 it('formats times to the millisecond, durations by magnitude, and kinds to short labels', () => {
@@ -121,8 +116,8 @@ it('formats times to the millisecond, durations by magnitude, and kinds to short
   expect(formatTraceDuration(1_250)).toBe('1.25 s');
   expect(formatTraceDuration(-1)).toBe('');
   expect(traceKindLabel(sampleTraceEntries[2]!)).toBe('render finished');
-  expect(traceKindLabel(sampleTraceEntries[8]!)).toBe('build started');
+  expect(traceKindLabel(sampleTraceEntries[7]!)).toBe('build started');
   expect(traceKindLabel(traceEntry(1, { correlation: {}, kind: 'mcp.tasks.polled', occurredAt: '2026-09-05T07:00:00.000Z', source: 'mcp', summary: 'x' }))).toBe('tasks polled');
   expect(traceKindLabel(traceEntry(1, { correlation: {}, kind: 'session.started', occurredAt: '2026-09-05T07:00:00.000Z', source: 'hook', summary: 'x' }))).toBe('session started');
-  expect(new Set(['invocation', 'kernel', 'mcp', 'runtime', 'hook', 'log', 'diagnostic'].map((source) => traceSourceGlyph(source as 'mcp'))).size).toBe(7);
+  expect(new Set(['invocation', 'kernel', 'mcp', 'hook', 'log', 'diagnostic'].map((source) => traceSourceGlyph(source as 'mcp'))).size).toBe(6);
 });

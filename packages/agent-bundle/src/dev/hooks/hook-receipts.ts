@@ -20,7 +20,7 @@ export const HOOK_RECEIPT_UNAUTHORIZED_CODE = 'AB8247';
 export const HOOK_RECEIPT_MALFORMED_CODE = 'AB8248';
 export const HOOK_RECEIPT_TOO_LARGE_CODE = 'AB8249';
 
-export const HOOK_RECEIPT_MAX_EVENTS = 32;
+const hookReceiptMaxEvents = 32;
 const MAX_ID_LENGTH = 256;
 const MAX_ERROR_MESSAGE_LENGTH = 512;
 
@@ -229,7 +229,7 @@ export const decodeHookReceipt = (value: unknown): EventTraceReceipt => {
   const execution = record(input.execution, 'execution');
   onlyKeys(execution, ['event', 'executionId', 'host', 'nativeEvent'], 'execution');
   const rawEvents: unknown = input.events;
-  if (!Array.isArray(rawEvents) || rawEvents.length > HOOK_RECEIPT_MAX_EVENTS) fail('events');
+  if (!Array.isArray(rawEvents) || rawEvents.length > hookReceiptMaxEvents) fail('events');
   const events = rawEvents.map(decodeEvent);
   for (let index = 1; index < events.length; index += 1) {
     if (events[index]!.sequence <= events[index - 1]!.sequence) fail(`events[${index}].sequence`);
@@ -249,22 +249,11 @@ export const decodeHookReceipt = (value: unknown): EventTraceReceipt => {
   });
 };
 
-/** The trace kinds this lowering publishes, for consumers that filter. */
-export const hookTraceKinds = Object.freeze([
-  'hook.received',
-  'hook.completed',
-  'hook.failed',
-  'session.started',
-  'session.ended',
-] as const);
-export type HookTraceKind = (typeof hookTraceKinds)[number];
-
-export type HookReceiptOutcome =
+type HookReceiptOutcome =
   | Readonly<{ readonly kind: 'completed'; readonly gate?: 'continue' | 'deny' }>
   | Readonly<{ readonly error: EventTraceErrorSummary; readonly kind: 'failed'; readonly phase: EventTracePhase }>;
 
-/** What the kernel events say happened: a terminal `failure`, a gate that short-circuited, or a completed run. */
-export const hookReceiptOutcome = (receipt: EventTraceReceipt): HookReceiptOutcome => {
+const hookReceiptOutcome = (receipt: EventTraceReceipt): HookReceiptOutcome => {
   let gate: 'continue' | 'deny' | undefined;
   for (const event of receipt.events) {
     if (event.kind === 'failure') return Object.freeze({ error: event.error, kind: 'failed', phase: event.phase });

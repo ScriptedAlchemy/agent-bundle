@@ -312,7 +312,6 @@ it('binds a call-tool consent grant to one exact operation and rejects a browser
   expect(decision.grant).toMatchObject({ bindingId: preview.binding.id, capability: 'call-tool', scope: 'action' });
   await expect(service.operate(preview.binding.id, {
     consentId: decision.grant?.authorizationId,
-    correlationId: 'corr-runtime-app',
     kind: 'tools/call',
     name: 'show-weather',
   })).resolves.toMatchObject({ result: { operationId: 'op-4' } });
@@ -321,13 +320,7 @@ it('binds a call-tool consent grant to one exact operation and rejects a browser
     kind: 'tools/call',
     name: 'show-weather',
   })).rejects.toThrow('requires an approved consent');
-  expect(requests.at(-1)).toEqual({
-    arguments: {},
-    correlationId: 'corr-runtime-app',
-    expectedSessionRevision: 2,
-    kind: 'call-tool',
-    name: 'show-weather',
-  });
+  expect(requests.at(-1)).toEqual({ arguments: {}, expectedSessionRevision: 2, kind: 'call-tool', name: 'show-weather' });
 });
 
 it('times out and releases hung Runtime App operations without waiting for late provider settlement', async () => {

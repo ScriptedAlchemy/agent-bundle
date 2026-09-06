@@ -453,10 +453,10 @@ test('declares an optional runtime while keeping Claude and Codex artifacts buil
       });
       expect(session.status()).not.toHaveProperty('clientSurface');
       expect(session.surfaces()).toEqual(expect.arrayContaining([
-        expect.objectContaining({ kind: 'hook', routeId: 'event:tool/after' }),
-        expect.objectContaining({ id: 'mcp.render_edit_timeline', kind: 'mcp-tool', routeId: 'tool:timeline/render_edit_timeline' }),
-        expect.objectContaining({ id: 'mcp.edit-timeline', kind: 'mcp-resource', routeId: 'resource:timeline/edit-timeline' }),
-        expect.objectContaining({ id: 'mcp.timeline', kind: 'mcp-app', routeId: 'app:timeline/timeline' }),
+        expect.objectContaining({ kind: 'hook' }),
+        expect.objectContaining({ id: 'mcp.render_edit_timeline', kind: 'mcp-tool' }),
+        expect.objectContaining({ id: 'mcp.edit-timeline', kind: 'mcp-resource' }),
+        expect.objectContaining({ id: 'mcp.timeline', kind: 'mcp-app' }),
       ]));
       const registry = session.mcpRegistry.snapshot();
       expect(registry).toMatchObject({ runtimeGenerationId: expect.any(String) });

@@ -60,8 +60,6 @@ export interface OpenEventTraceReceiptOptions {
   readonly env: Readonly<NodeJS.ProcessEnv>;
   readonly execution: EventTraceExecution;
   readonly fetch?: typeof fetch;
-  readonly now?: () => Date;
-  readonly timeoutMs?: number;
 }
 
 /**
@@ -171,7 +169,15 @@ export const resolveEventTraceReceiptEndpoint = async (
   const marker = await readJsonRecord(markerPath);
   if (marker === undefined || typeof marker.projectRoot !== 'string' || marker.projectRoot === '') return undefined;
   const record = await readJsonRecord(eventTraceReceiptEndpointPath(marker.projectRoot));
-  return record === undefined ? undefined : receiptEndpoint(record.url, record.token);
+  if (record === undefined || typeof record.pid !== 'number' || !Number.isSafeInteger(record.pid)) return undefined;
+  if (record.pid !== process.pid) {
+    try {
+      process.kill(record.pid, 0);
+    } catch {
+      return undefined;
+    }
+  }
+  return receiptEndpoint(record.url, record.token);
 };
 
 const withoutExecution = (event: EventTraceEvent): EventTraceReceiptEvent => {
@@ -189,9 +195,7 @@ export const openEventTraceReceipt = async (
 ): Promise<EventTraceReceiptRecorder | undefined> => {
   const endpoint = await resolveEventTraceReceiptEndpoint(options);
   if (endpoint === undefined) return undefined;
-  const now = options.now ?? (() => new Date());
   const post = options.fetch ?? fetch;
-  const timeoutMs = options.timeoutMs ?? EVENT_TRACE_RECEIPT_TIMEOUT_MS;
   const events: EventTraceReceiptEvent[] = [];
   let startedAt: string | undefined;
   let identity: EventTraceReceiptIdentity = Object.freeze({});
@@ -209,7 +213,7 @@ export const openEventTraceReceipt = async (
       lineage = eventTraceReceiptLineage(observed);
     },
     observer: (event) => {
-      startedAt ??= now().toISOString();
+      startedAt ??= new Date().toISOString();
       events.push(withoutExecution(event));
     },
     send: async () => {
@@ -233,7 +237,7 @@ export const openEventTraceReceipt = async (
             'content-type': 'application/json',
           },
           method: 'POST',
-          signal: AbortSignal.timeout(timeoutMs),
+          signal: AbortSignal.timeout(EVENT_TRACE_RECEIPT_TIMEOUT_MS),
         });
       } catch {
         // The Workbench is an observer of the hook, never a participant in its outcome.

@@ -73,12 +73,7 @@ export interface CreateMcpAppRuntimeBindingOptions {
 export type McpAppRuntimeOperationRequest =
   | Readonly<{ readonly kind: 'list-tools' }>
   | Readonly<{ readonly kind: 'list-resources' }>
-  | Readonly<{
-      readonly arguments?: McpAppJsonValue;
-      readonly correlationId?: string;
-      readonly kind: 'call-tool';
-      readonly name: string;
-    }>
+  | Readonly<{ readonly arguments?: McpAppJsonValue; readonly kind: 'call-tool'; readonly name: string }>
   | Readonly<{ readonly kind: 'read-resource'; readonly uri: string }>;
 
 export interface McpAppRuntimeBindingInvalidation {
@@ -184,15 +179,8 @@ const canonicalOperation = (request: McpAppRuntimeOperationRequest, expectedSess
   if (request.kind === 'call-tool') {
     const argumentsValue = request.arguments === undefined ? Object.freeze({}) : cloneMcpAppFiniteJson(request.arguments, 'Runtime MCP App tool arguments');
     if (!isRecord(argumentsValue)) throw new TypeError('Runtime MCP App tool arguments must be a finite JSON object.');
-    const correlationId = request.correlationId === undefined
-      ? undefined
-      : nonempty(request.correlationId, 'Runtime MCP App correlation id');
-    if (correlationId !== undefined && correlationId.length > 256) {
-      throw new TypeError('Runtime MCP App correlation id must be at most 256 characters.');
-    }
     return Object.freeze({
       arguments: argumentsValue as Readonly<Record<string, McpAppJsonValue>>,
-      ...(correlationId === undefined ? {} : { correlationId }),
       expectedSessionRevision,
       kind: 'call-tool',
       name: nonempty(request.name, 'Runtime MCP App tool name'),

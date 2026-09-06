@@ -49,7 +49,7 @@ it('decodes the replay the hub produces and freezes it', async () => {
   const replay = await client.replay();
   expect(requested).toEqual(['/api/trace?after=0']);
   expect(replay.entries).toEqual(sampleTraceEntries);
-  expect(replay.latestSequence).toBe(9);
+  expect(replay.latestSequence).toBe(8);
   expect(Object.isFrozen(replay) && Object.isFrozen(replay.entries[1]) && Object.isFrozen(replay.entries[1]?.correlation) && Object.isFrozen(replay.entries[1]?.details)).toBe(true);
 
   const gap = { droppedCount: 2, firstAvailableSequence: 3, requestedAfterSequence: 0, type: 'trace.gap' };

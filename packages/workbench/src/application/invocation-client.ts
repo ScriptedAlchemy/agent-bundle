@@ -174,7 +174,7 @@ const runningInvocationResponseSchema = z.strictObject({ invocation: runningInvo
 const streamMessageSchema: z.ZodType<RouteInvocationStreamMessage> = z.discriminatedUnion('type', [
   z.strictObject({ event: agentRenderEventSchema, type: z.literal('render') }),
   z.strictObject({ event: eventTraceSchema, type: z.literal('trace') }),
-  z.strictObject({ dropped: z.number().int().positive(), type: z.literal('truncated') }),
+  z.strictObject({ type: z.literal('truncated') }),
   z.strictObject({ invocation: invocationSchema, type: z.literal('final') }),
 ]);
 const invocationListResponseSchema = z.strictObject({

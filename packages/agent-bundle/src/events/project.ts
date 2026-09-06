@@ -41,23 +41,5 @@ export {
   type EventTraceRuntime,
 } from './trace.ts';
 export {
-  DEV_INSTALL_MARKER_FILE,
-  EVENT_TRACE_RECEIPT_ENDPOINT_FILE,
-  EVENT_TRACE_RECEIPT_MAX_BYTES,
-  EVENT_TRACE_RECEIPT_PATH,
-  EVENT_TRACE_RECEIPT_TIMEOUT_MS,
-  EVENT_TRACE_RECEIPT_TOKEN_ENV,
-  EVENT_TRACE_RECEIPT_URL_ENV,
-  EVENT_TRACE_RECEIPT_VERSION,
-  eventTraceReceiptEndpointPath,
-  eventTraceReceiptIdentity,
-  eventTraceReceiptLineage,
   openEventTraceReceipt,
-  resolveEventTraceReceiptEndpoint,
-  type EventTraceReceipt,
-  type EventTraceReceiptEndpoint,
-  type EventTraceReceiptEvent,
-  type EventTraceReceiptIdentity,
-  type EventTraceReceiptRecorder,
-  type OpenEventTraceReceiptOptions,
 } from './trace-receipt.ts';

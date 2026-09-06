@@ -405,13 +405,9 @@ const runtimeOperationRequest = (request: DevRuntimeMcpOperationRequest): DevRun
   }
   if (request.kind === 'call-tool' && nonempty(request.name)) {
     const argumentsSnapshot = detachedJson(request.arguments);
-    if (
-      !isRecord(argumentsSnapshot) ||
-      (request.correlationId !== undefined && (!nonempty(request.correlationId) || request.correlationId.length > 256))
-    ) throw new McpRouteClientError('AB8015', 'Runtime MCP operation request is not valid.');
+    if (!isRecord(argumentsSnapshot)) throw new McpRouteClientError('AB8015', 'Runtime MCP operation request is not valid.');
     return Object.freeze({
       arguments: argumentsSnapshot as JsonObject,
-      ...(request.correlationId === undefined ? {} : { correlationId: request.correlationId }),
       expectedSessionRevision: request.expectedSessionRevision,
       kind: 'call-tool',
       name: request.name,
