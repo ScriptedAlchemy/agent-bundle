@@ -24,6 +24,56 @@ Trace 可以关联此次运行。完成后的信封包含输入、provenance 上
 Document、结果、投影、诊断与计时。Trace 条目链接到这份完整快照，而不会复制它。取消后的调用带有
 `status: "cancelled"` 且不含 `outcome`；取消已终止的调用会返回 `AB8256`（409）。
 
+## 宿主会话
+
+下表每条路由都要求前台会话 cookie 或 `x-agent-bundle-session` bearer 值。会话 id 匹配
+`hs_[0-9a-z]{16}`，JSON 请求正文采用严格校验，输入最多为 16 KiB UTF-8 文本，终端尺寸必须是
+1 到 500 的整数。
+
+| 方法 | 路径 | 正文与响应 |
+| --- | --- | --- |
+| `GET` | `/api/sessions` | `{ sessions: HostSession[], hosts: HostAvailability[] }` |
+| `POST` | `/api/sessions` | `{ host: "claude" \| "codex", prompt?: string, cols, rows }`；`201` 与 `{ session }` |
+| `GET` | `/api/sessions/<id>` | `{ session }` |
+| `GET` | `/api/sessions/<id>/stream` | 服务器发送的 `state`、`output` 与终止 `end` 事件 |
+| `POST` | `/api/sessions/<id>/input` | `{ data: string }`；`204` |
+| `POST` | `/api/sessions/<id>/resize` | `{ cols, rows }`；`204` |
+| `POST` | `/api/sessions/<id>/terminate` | `{}`；`200` 与 `{ session }` |
+| `POST` | `/api/sessions/<id>/restart` | `{ cols, rows }`；`201` 与替代会话 `{ session }` |
+| `DELETE` | `/api/sessions/<id>` | `204`；不能遗忘仍在运行的会话 |
+
+`HostSession` 报告 `id`、`host`、`state`、`startedAt`、可选的终止字段 `endedAt`、`exitCode`、
+`signal`、`pid`、`cols`、`rows`、可选的初始 `prompt`，以及可选的 `restartOf` 与
+`traceSessionId`。其 `authority` 包含绝对 `projectRoot`、已采用的 `epochId` 与宿主插件
+`install` 目的地。`HostAvailability` 包含 `host`、`launchable`，以及可选的 `reason` 与已解析
+`executable`。
+
+流以一条 state 帧开始，重放最多 256 KiB 的保留输出，再继续发送实时 state 与 output。它每 15 秒发送
+一条 keep-alive 注释，并在 `end` 后关闭。每个事件带有一个 JSON `data:` 对象：
+
+```text
+event: state
+data: { "session": HostSession }
+
+event: output
+data: { "data": "<base64 PTY bytes>" }
+
+event: end
+data: { "session": HostSession }
+```
+
+宿主会话失败使用以下诊断：
+
+| 代码 | 含义 |
+| --- | --- |
+| `AB8260` | 项目与框架后备位置均无法提供 `@lydell/node-pty`。 |
+| `AB8261` | 正文、路径、查询、尺寸、输入、方法状态或删除活动会话的请求格式错误。 |
+| `AB8262` | 会话 id 格式正确但未知。 |
+| `AB8263` | `PATH` 中没有可执行文件、已采用 epoch 没有附加开发安装，或生成进程失败。 |
+| `AB8264` | 已有四个活动会话。 |
+| `AB8265` | 宿主会话服务已关闭或不可用。 |
+| `AB8266` | 钩子收据或代理请求提供了无效的 `AGENT_BUNDLE_DEV_SESSION` 值。 |
+
 ## 开发运行时运行
 
 `POST /api/runtime/runs` 接受一份 `DevRuntimeInvocationRequest`，其中包含 `surfaceId`、`target`、

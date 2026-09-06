@@ -1,0 +1,4 @@
+#!/usr/bin/env node
+import { runFakeHost } from './fake-host.mjs';
+
+runFakeHost('claude');

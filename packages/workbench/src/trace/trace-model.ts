@@ -283,7 +283,16 @@ export const traceGroupKeyValue = (group: TraceGroup): string => {
 /** A group joined on a Workbench host-session id (`hs_…`) links back to that session in the Sessions pane. */
 export const traceGroupSessionLocation = (group: TraceGroup): WorkbenchLocation | undefined => {
   const value = traceGroupKeyValue(group);
-  return group.keyKind === 'sessionId' && value.startsWith('hs_') ? Object.freeze({ area: 'sessions', session: value }) : undefined;
+  if (group.keyKind === 'sessionId' && value.startsWith('hs_')) {
+    return Object.freeze({ area: 'sessions', session: value });
+  }
+  for (const { entry } of group.rows) {
+    const session = entry.href?.match(/^\/sessions\?session=(hs_[0-9a-z]{16})$/u)?.[1];
+    if (entry.source === 'session' && session !== undefined) {
+      return Object.freeze({ area: 'sessions', session });
+    }
+  }
+  return undefined;
 };
 
 const kindLabels: ReadonlyMap<string, string> = new Map([

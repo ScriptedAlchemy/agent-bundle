@@ -24,15 +24,16 @@ npx agent-bundle dev --root . --port 3100 --no-open
 
 ## Workbench 导航
 
-本版本的主导航有四个目的地：
+主导航有五个目的地：
 
 - **Application** — 已编译的应用树，以及所选叶子的工作区。
 - **Trace** — 本次前台开发会话中观察到的应用活动关联时间线。
+- **Host sessions** — 显式启动并附加到当前开发插件的 Claude Code 与 Codex 终端。
 - **Problems** — 当前的编译器、运行时与契约诊断。
 - **Advanced** — Evals、Artifact、Protocol、Host diagnostics 与 Raw logs。
 
 页眉在这些目的地之间始终可见。它显示项目名、构建状态与 epoch、契约门控与诊断失败计数（链接到
-Problems），以及前台连接状态。宿主 **Sessions** 会在后续版本中到来，不属于本版 Workbench。
+Problems），以及前台连接状态。
 
 ## Application 树
 
@@ -105,6 +106,37 @@ App 叶子把沙箱化的 MCP App 预览放在工作区中央，并绑定到它�
 Skill 叶子默认渲染输出的 Skill 文档。源码/生成差异、frontmatter、资源与 eval 覆盖位于检查器中。Skill
 Markdown 中的原始 HTML、JSX/MDX 与 Mermaid 保持惰性。
 
+## 宿主会话
+
+启动 `agent-bundle dev` 时，指定应跟随已采用 epoch 的开发期宿主安装：
+
+```sh
+pnpm add -D @lydell/node-pty
+npx agent-bundle dev --install-host claude --install-host codex
+```
+
+之后，**Host sessions** 可以在 PTY 中启动 `claude [<prompt>]` 或 `codex [<prompt>]`。命令与参数由
+服务器固定，工作目录始终是项目根目录；只有选择 **Launch Claude**、**Launch Codex**、
+**Open in Claude** 或 **Open in Codex** 后才会创建会话。路由操作会为 tool、event 与 CLI 叶子填入
+提示词，并在 `/sessions?session=<id>` 打开新终端。
+
+终端下方的 authority 条显示项目根目录、已采用的 epoch、宿主安装目的地、运行时进程 id 与当前状态。
+重启后的会话还会指出它替代的会话。最多可同时运行四个会话；每个会话最多保留 256 KiB PTY 输出供终端
+重连。项目中必须安装 `@lydell/node-pty`；无法解析或加载时，启动会以 `AB8260` 禁用。
+
+前台服务器仍仅限 loopback，并对每条 `/api/sessions` 路由应用相同的会话 cookie 或 bearer 守卫。
+请求不能选择可执行文件、参数、工作目录或环境。子进程不会收到前台会话 token，Agent Bundle 也不会向
+任何宿主传入权限或审批绕过参数。终端继承开发服务器环境，并增加钩子收据变量、
+`AGENT_BUNDLE_DEV_SESSION=<hs_…>`、`TERM=xterm-256color` 与 `COLORTERM=truecolor`。
+
+`AGENT_BUNDLE_DEV_SESSION` 是 Workbench 资源 id，不是凭据。生成的 SessionStart 钩子收据会把它作为
+`devSession`，并同时携带宿主自己的 `session_id`。收据到达后，Trace 会把资源别名关联到宿主会话 id，
+后续生命周期、钩子与 MCP 条目都按该 id 分组。Claude 会把该变量传给 stdio MCP 服务器，因此代理通过
+别名标头传递它。Codex 会过滤 stdio MCP 服务器的环境，因此代理无法继承该变量；代理始终改为发送自己的
+进程 id，前台服务器沿代理的父进程链查找到拥有 Workbench 会话的 PTY 子进程。Codex 帧还可以通过
+`x-codex-turn-metadata.session_id` 携带宿主会话 id。它的钩子仍继承
+`AGENT_BUNDLE_DEV_SESSION`，并发送收据的 `devSession` 字段。**Trace** 链接在宿主 id 可用后始终使用它。
+
 ## Trace
 
 Trace 是前台服务器所观察到的应用活动的实时有序时间线。例如，运行
@@ -137,6 +169,7 @@ Trace 是前台服务器所观察到的应用活动的实时有序时间线。�
 | `kernel` | `kernel.preflight.start`、`kernel.preflight.outcome`、`kernel.execute.start`、provider 与 render 的开始/结束，以及 `kernel.failure` | `executionId`、路由、宿主，以及可用时的会话与对话标识 | 对应的路由调用 |
 | `mcp` | request、response、notification、progress、logging、session 与 stderr kind | `mcpSessionId`、JSON-RPC `mcpRequestId`、`requestId`，以及已知的路由与宿主元数据 | 带 `?session=<id>` 的路由工作区，或绑定的 Protocol 会话 |
 | `hook` | 收据/完成/失败与宿主会话开始/结束 | `requestId`、`executionId`、`sessionId`、`conversationId`、`routeId`、`host` | 事件路由与捕获的收据 |
+| `session` | `session.started`、`session.attached`、`session.exited`、`session.terminated` | 宿主会话、宿主与 epoch 标识 | `/sessions?session=<hs id>` |
 | `log` | 具有共享键的记录对应的 `log.<producer>.<kind>` | 安全日志投影保留的任意关联键 | Advanced → Raw logs |
 | `diagnostic` | 构建、契约与宿主同步失败 | 已知的构建、epoch、路由与共享请求标识 | Problems 或受影响的路由 |
 
@@ -220,6 +253,8 @@ Workbench 使用路径与浏览器历史，而不是 `#page` 哈希：
 /routes/skills/<id>
 /routes/commands/<id>
 /routes/rules/<id>
+/sessions
+/sessions?session=<hs-id>
 /trace/<entry-id>
 /trace?correlation=<correlation-value>
 /problems

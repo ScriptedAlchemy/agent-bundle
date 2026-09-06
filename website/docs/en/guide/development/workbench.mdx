@@ -28,17 +28,19 @@ These are contracts, not defaults:
 
 ## Workbench navigation
 
-The primary navigation has four destinations in this release:
+The primary navigation has five destinations:
 
 - **Application** — the compiled application tree and the workspace for its selected leaf.
 - **Trace** — the correlated timeline of application activity observed in this foreground
   development session.
+- **Host sessions** — explicit Claude Code and Codex terminals attached to the current dev
+  plugin.
 - **Problems** — current compiler, runtime, and contract diagnostics.
 - **Advanced** — Evals, Artifact, Protocol, Host diagnostics, and Raw logs.
 
 The header stays visible across them. It shows the project name, build state and epoch,
 contract-gate and diagnostic failure count (linked to Problems), and foreground connection
-state. Host **Sessions** arrive in a later release and are not part of this Workbench.
+state.
 
 ## Application tree
 
@@ -127,6 +129,46 @@ A Skill leaf renders the emitted Skill document by default. Source/generated dif
 frontmatter, resources, and eval coverage live in the inspector. Raw HTML, JSX/MDX, and Mermaid
 inside Skill Markdown remain inert.
 
+## Host sessions
+
+Start `agent-bundle dev` with the hosts whose development installs should follow the adopted
+epoch:
+
+```sh
+pnpm add -D @lydell/node-pty
+npx agent-bundle dev --install-host claude --install-host codex
+```
+
+**Host sessions** can then launch `claude [<prompt>]` or `codex [<prompt>]` in a PTY. The command
+and arguments are fixed by the server, the working directory is always the project root, and no
+session starts until you select **Launch Claude**, **Launch Codex**, **Open in Claude**, or
+**Open in Codex**. The route actions seed a prompt for tool, event, and CLI leaves and open the
+new terminal at `/sessions?session=<id>`.
+
+The authority strip under the terminal shows the project root, adopted epoch, host install
+destination, process id while running, and current state. A restarted session also names the
+session it replaced. At most four sessions can be live at once, and each session retains at most
+256 KiB of PTY output for reconnecting terminals. Install `@lydell/node-pty` in the project; when
+it cannot be resolved or loaded, launch is disabled with `AB8260`.
+
+The foreground server remains loopback-only and applies the same session cookie or bearer guard
+to every `/api/sessions` route. Requests cannot choose an executable, arguments, working
+directory, or environment. The child never receives the foreground session token, and Agent
+Bundle does not pass a permission or approval bypass to either host. The terminal inherits the
+dev server environment plus the hook receipt variables, `AGENT_BUNDLE_DEV_SESSION=<hs_…>`,
+`TERM=xterm-256color`, and `COLORTERM=truecolor`.
+
+`AGENT_BUNDLE_DEV_SESSION` is the Workbench resource id, not a credential. A generated
+SessionStart hook receipt carries it as `devSession` alongside the host's own `session_id`. Once
+that receipt arrives, Trace aliases the resource to the host session id and groups later
+lifecycle, hook, and MCP entries by that id. Claude inherits the variable into its stdio MCP
+server, so the proxy supplies the alias header. Codex filters the environment of stdio MCP
+servers, so the proxy cannot inherit that variable; it always sends its process id instead, and
+the foreground server walks the proxy's parent process chain to the PTY child that owns the
+Workbench session. Codex frames can also carry the host session id in
+`x-codex-turn-metadata.session_id`. Its hook still inherits `AGENT_BUNDLE_DEV_SESSION` and sends
+the `devSession` receipt field. The **Trace** link always uses the learned host id when available.
+
 ## Trace
 
 Trace is the live, ordered timeline of what the foreground server observes the application doing.
@@ -162,6 +204,7 @@ keys, optional status and duration, and, when a full record is available, an `hr
 | `kernel` | `kernel.preflight.start`, `kernel.preflight.outcome`, `kernel.execute.start`, provider and render start/finish, `kernel.failure` | `executionId`, route, host, session and conversation identity when available | The corresponding route invocation |
 | `mcp` | request, response, notification, progress, logging, session, and stderr kinds | `mcpSessionId`, JSON-RPC `mcpRequestId`, `requestId`, route and host metadata when known | The route workspace with `?session=<id>`, or the bound Protocol session |
 | `hook` | receipt/completion/failure and host session start/end | `requestId`, `executionId`, `sessionId`, `conversationId`, `routeId`, `host` | The event route and captured receipt |
+| `session` | `session.started`, `session.attached`, `session.exited`, `session.terminated` | Host session, host, and epoch identity | `/sessions?session=<hs id>` |
 | `log` | `log.<producer>.<kind>` for records with a shared key | Any correlation key retained by the safe log projection | Advanced → Raw logs |
 | `diagnostic` | build, contract, and host-sync failures | Build, epoch, route, and shared request identity when known | Problems or the affected route |
 
@@ -261,6 +304,8 @@ Workbench uses paths and browser history, not `#page` hashes:
 /routes/skills/<id>
 /routes/commands/<id>
 /routes/rules/<id>
+/sessions
+/sessions?session=<hs-id>
 /trace/<entry-id>
 /trace?correlation=<correlation-value>
 /problems

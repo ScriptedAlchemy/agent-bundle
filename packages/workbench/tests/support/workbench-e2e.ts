@@ -7,7 +7,7 @@ import type { Page } from 'playwright-core';
 
 import { createWorkbenchAssetSource } from '../../../agent-bundle/src/dev/workbench-assets.ts';
 import { startDevServer, type DevServerSession, type StartDevServerOptions } from '../../../agent-bundle/src/dev/workbench-server.ts';
-import { createProjectFixture, removeProjectFixture, type ProjectFixture } from '../../../agent-bundle/tests/helpers/project-fixture.ts';
+import type { ProjectFixture } from '../../../agent-bundle/tests/helpers/project-fixture.ts';
 import { timeScale } from '../../../agent-bundle/tests/support/time-scale.ts';
 import { browserLaunchOptions } from './browser-launch-options.ts';
 
