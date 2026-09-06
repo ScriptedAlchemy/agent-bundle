@@ -66,6 +66,7 @@ import type {
 } from '../core/types.ts';
 import { appRouteTemplatePath, resolveAppRouteTemplate } from '../routes/app-template.ts';
 import { eventRouteExecutionFor } from '../routes/event-execution.ts';
+import { targetsSatisfyingEventRequirements } from '../routes/event-requirements.ts';
 import { mcpRouteProtocolName } from '../routes/protocol-name.ts';
 import type { CompiledCliSurface } from '../routes/types.ts';
 import { type DiscoveredProject, payloadDeclarationSource } from './discover.ts';
@@ -535,9 +536,14 @@ const normalizeHooks = (
   for (const route of discovered.routeGraph?.events ?? []) {
     const event = route.event!;
     const selected = route.config['targets'];
+    const requires = route.config['requires'];
     const targets = sortedUnique(
-      (Array.isArray(selected) ? selected.filter((target): target is string => typeof target === 'string') : targetNames)
-        .filter((target) => targetNames.includes(target)),
+      targetsSatisfyingEventRequirements(
+        requires,
+        (Array.isArray(selected) ? selected.filter((target): target is string => typeof target === 'string') : targetNames)
+          .filter((target) => targetNames.includes(target)),
+        registry,
+      ),
     );
     const tools = (Array.isArray(route.config['tools']) ? route.config['tools'] : [])
       .filter((tool): tool is CanonicalHookTool =>

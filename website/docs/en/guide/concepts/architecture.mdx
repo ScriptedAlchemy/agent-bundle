@@ -563,10 +563,10 @@ script. `artifact-inspection-service.ts` labels the same tree once per
 selected host (`compose.ts` `compositeNoticeDelivery`), applied to every
 shared MCP entry, and is not recorded on the manifest.
 
-**Capability selection is still host names.** Authors write
-`targets: ['claude', 'codex']` (or per-component `targets`) rather than
-`requires: ['hooks.preTool']`. The capability tables exist; the compiler
-does not yet resolve application requirements through them.
+**Capability selection is narrow.** Event routes can declare capability rows such as
+`requires: ['events.toolBefore.deny']`; the compiler selects supporting hosts from the pinned
+capability tables. Other components still use `targets`, which remains the event-route escape
+hatch when behavior is genuinely host-specific.
 
 ## Roadmap
 

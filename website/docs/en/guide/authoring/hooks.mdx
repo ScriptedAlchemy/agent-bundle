@@ -199,7 +199,7 @@ import type { AgentEventRouteConfig, AgentEventRouteProps } from 'agent-bundle';
 
 export const config = {
   runtime: 'standalone', // 'shared' renders inside the generated MCP server process
-  targets: ['claude', 'codex'],
+  requires: ['events.toolAfter.context'],
   timeoutMs: 30_000, // budget inside the host's own native deadline
   tools: ['file.write'], // canonical selector -> per-host native matcher
 } satisfies AgentEventRouteConfig;
@@ -225,6 +225,15 @@ hashed from the event, target, and native payload, `observedAt`, a `sequence`, t
 `provenance` naming the host and the native event that fired, and the family's canonical
 `payload`. `native` is a frozen snapshot of the validated host envelope. Nothing in
 `canonical` is fabricated: a host that does not report a field leaves it absent.
+
+`requires` selects every configured host whose capability table supports every listed row. The
+event-route rows are `events.sessionStart.context`, `events.stop.deny`,
+`events.toolAfter.context`, and `events.toolBefore.deny`; the generated
+[Event and hook matrix](../../reference/events.md) shows the underlying host support. Use
+`requires` when the route needs a semantic capability rather than a particular host. `targets`
+remains the host-specific escape hatch; an event route cannot declare both. If none of the
+configured hosts satisfies a requirement, validation names the capability row and every host
+that was considered.
 
 ### Preflight gates
 

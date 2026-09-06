@@ -1057,6 +1057,26 @@ it('reports the evidence-backed G10 event family matrix without inferred support
       state: 'unavailable',
     });
   }
+  const requirementRows = [
+    'events.sessionStart.context',
+    'events.stop.deny',
+    'events.toolAfter.context',
+    'events.toolBefore.deny',
+  ];
+  for (const target of ['claude', 'codex', 'cursor'] as const) {
+    for (const capability of requirementRows) {
+      expect(registry.get(target).capabilities[capability]).toMatchObject({
+        evidence: { target },
+        state: 'supported',
+      });
+    }
+  }
+  for (const capability of requirementRows) {
+    expect(registry.get('portable').capabilities[capability]).toMatchObject({
+      state: 'unavailable',
+    });
+  }
+  expect(registry.get('cursor').capabilities['events.toolBefore.context']).toBeUndefined();
 });
 
 it('reports evidence-backed installation support only for real host targets', () => {

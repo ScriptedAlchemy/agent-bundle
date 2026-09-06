@@ -80,6 +80,16 @@ export interface EventRouteCapabilityTableEntry {
   readonly state: string;
 }
 
+const eventRouteRequirementFeatures: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  'session/start': Object.freeze(['context']),
+  stop: Object.freeze(['deny']),
+  'tool/after': Object.freeze(['context']),
+  'tool/before': Object.freeze(['deny']),
+});
+
+const eventRequirementName = (event: string): string =>
+  `events.${event.replace(/\/(.)/gu, (_, character: string) => character.toUpperCase())}`;
+
 /**
  * Converts a pinned host table's semantic-event rows into the shared
  * capability-state namespace consumed by route validation and inspect.
@@ -88,18 +98,23 @@ export const eventRouteCapabilitiesFrom = (
   routes: Readonly<Record<string, EventRouteCapabilityTableEntry>>,
   evidence: CapabilityEvidence,
 ): Readonly<Record<string, CapabilityState>> => Object.freeze(Object.fromEntries(
-  Object.entries(routes).sort(([left], [right]) => left.localeCompare(right)).map(([event, capability]) => {
+  Object.entries(routes).sort(([left], [right]) => left.localeCompare(right)).flatMap(([event, capability]) => {
+    let state: CapabilityState;
     switch (capability.state) {
       case 'supported':
-        return [`event:${event}`, supportedCapability(evidence)];
+        state = supportedCapability(evidence);
+        break;
       case 'unavailable':
-        return [
-          `event:${event}`,
-          unavailableCapability(capability.reason ?? `The pinned ${evidence.target} contract does not support ${event}.`),
-        ];
+        state = unavailableCapability(capability.reason ?? `The pinned ${evidence.target} contract does not support ${event}.`);
+        break;
       default:
         throw new TypeError(`Unsupported event-route capability state ${JSON.stringify(capability.state)} for ${event}.`);
     }
+    const requirement = eventRequirementName(event);
+    return [
+      [`event:${event}`, state],
+      ...(eventRouteRequirementFeatures[event] ?? []).map((feature) => [`${requirement}.${feature}`, state] as const),
+    ];
   }),
 ));
 

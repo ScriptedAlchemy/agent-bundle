@@ -2400,6 +2400,87 @@ it('fails unavailable event routes before packaging while admitting supported ta
   expect(restricted.diagnostics).toEqual([]);
 });
 
+it('selects event-route projections by required capability rows', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    'agent-bundle.config.ts': [
+      'export default {',
+      "  plugin: { name: 'event-requires-fixture', version: '1.0.0' },",
+      "  targets: ['claude', 'codex', 'cursor', 'portable'],",
+      '};',
+      '',
+    ].join('\n'),
+    'package.json': '{"type":"module"}\n',
+    'src/events/tool/before.tsx': [
+      "export const config = { requires: ['events.toolBefore.deny'], runtime: 'standalone' };",
+      'export default async function ToolBefore() { return undefined; }',
+      '',
+    ].join('\n'),
+  });
+
+  const result = await validate({ root });
+  expect(result.diagnostics).toEqual([]);
+  expect(result.model?.hooks).toContainEqual(expect.objectContaining({
+    eventRoute: expect.objectContaining({ event: 'tool/before' }),
+    targets: ['claude', 'codex', 'cursor'],
+  }));
+});
+
+it('rejects event routes that declare both targets and requires', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    'agent-bundle.config.ts': [
+      'export default {',
+      "  plugin: { name: 'event-selection-fixture', version: '1.0.0' },",
+      "  targets: ['cursor'],",
+      '};',
+      '',
+    ].join('\n'),
+    'package.json': '{"type":"module"}\n',
+    'src/events/stop.tsx': [
+      "export const config = { requires: ['events.stop.deny'], targets: ['cursor'] };",
+      'export default async function Stop() { return undefined; }',
+      '',
+    ].join('\n'),
+  });
+
+  const result = await inspect({ root });
+  expect(result.state).toBe('invalid');
+  expect(result.diagnostics).toContainEqual(expect.objectContaining({
+    code: 'AB4825',
+    message: expect.stringContaining('both config.targets and config.requires'),
+    sourcePath: join(root, 'src/events/stop.tsx'),
+  }));
+});
+
+it('names every selected host and capability row when no projection satisfies a requirement', async () => {
+  const root = await createRoot();
+  await writeTree(root, {
+    'agent-bundle.config.ts': [
+      'export default {',
+      "  plugin: { name: 'event-requirement-fixture', version: '1.0.0' },",
+      "  targets: ['cursor', 'portable'],",
+      '};',
+      '',
+    ].join('\n'),
+    'package.json': '{"type":"module"}\n',
+    'src/events/session/start.tsx': [
+      "export const config = { requires: ['events.sessionStart.missing'] };",
+      'export default async function SessionStart() { return undefined; }',
+      '',
+    ].join('\n'),
+  });
+
+  const result = await inspect({ root });
+  expect(result.state).toBe('invalid');
+  const diagnostics = result.diagnostics.filter(({ code }) => code === 'AB4824');
+  expect(diagnostics.map(({ target }) => target)).toEqual(['cursor', 'portable']);
+  for (const diagnostic of diagnostics) {
+    expect(diagnostic.message).toContain('events.sessionStart.missing');
+    expect(diagnostic.message).toContain(diagnostic.target!);
+  }
+});
+
 it('rejects malformed event route targets with AB4825', async () => {
   const root = await createRoot();
   await writeTree(root, {

@@ -30,6 +30,7 @@ import {
   canonicalAgentEvents,
   type CanonicalAgentEvent,
 } from '../../routes/public.ts';
+import { targetsSatisfyingEventRequirements } from '../../routes/event-requirements.ts';
 import type { CompiledAgentRoute, CompiledRouteGraph } from '../../routes/types.ts';
 import type { RenderRouteContext, renderRouteEvents } from '../../test/render.ts';
 import type { AgentRouteModule } from '../../test/types.ts';
@@ -479,10 +480,15 @@ export class LifecycleReplayService {
     projectTargets: readonly string[],
   ): Readonly<{ readonly diagnostics: readonly LifecycleDiagnostic[]; readonly targets: readonly LifecycleTarget[] }> {
     const configured = route.config['targets'];
+    const requirements = route.config['requires'];
     const selected = expandedTargets(
-      Array.isArray(configured)
-        ? configured.filter((target): target is string => typeof target === 'string')
-        : projectTargets,
+      targetsSatisfyingEventRequirements(
+        requirements,
+        Array.isArray(configured)
+          ? configured.filter((target): target is string => typeof target === 'string')
+          : projectTargets,
+        this.#registry,
+      ),
     );
     const available = expandedTargets(projectTargets);
     const diagnostics: LifecycleDiagnostic[] = [];
