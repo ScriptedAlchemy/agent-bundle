@@ -20,6 +20,7 @@ import type {
   RouteInputSchemaLiteral,
 } from '../routes/types.ts';
 import {
+  artifactManifestFileKinds,
   artifactManifestName,
   artifactManifestVersion,
   mcpServerKinds,
@@ -30,7 +31,9 @@ import {
   requireLaunchFiles,
   requireLaunchReferences,
   requireManifestVersion,
+  type ArtifactManifestFileKind,
   type ArtifactManifestLaunch,
+  type ArtifactManifestServerLaunch,
   type ArtifactManifestLaunchArgument,
   type WebManifest,
 } from '../web-host/manifest.ts';
@@ -63,7 +66,7 @@ export type { ArtifactManifestLaunch, ArtifactManifestLaunchArgument };
 export { artifactManifestName, artifactManifestVersion };
 export const artifactCompilerRecordVersion = 1;
 
-export type ArtifactManifestFileKind = 'bundle' | 'copy' | 'generated' | 'prebuilt';
+export type { ArtifactManifestFileKind };
 export type ArtifactManifestValidationStatus = 'passed';
 
 export interface ArtifactManifestSourceInput {
@@ -622,16 +625,14 @@ const parseFiles = (value: unknown): readonly ArtifactManifestFile[] => {
     if (!Number.isSafeInteger(file.bytes) || (file.bytes as number) < 0) {
       fail(`files[${index}].bytes must be a non-negative safe integer.`);
     }
-    if (file.kind !== 'bundle' && file.kind !== 'copy' && file.kind !== 'generated' && file.kind !== 'prebuilt') {
-      fail(`files[${index}].kind is unknown.`);
-    }
+    const kind = requireOneOf(file.kind, `files[${index}].kind`, artifactManifestFileKinds);
     if (file.mode !== undefined && (!Number.isSafeInteger(file.mode) || (file.mode as number) < 0 || (file.mode as number) > 0o777)) {
       fail(`files[${index}].mode must be an integer from 0 through 0777.`);
     }
     const path = parseArtifactFilePath(file.path, `files[${index}].path`);
     return {
       bytes: file.bytes as number,
-      kind: file.kind as ArtifactManifestFileKind,
+      kind,
       ...(file.mode === undefined ? {} : { mode: file.mode as number }),
       path,
       sha256: requireHash(file.sha256, `files[${index}].sha256`),
@@ -1239,14 +1240,14 @@ const parseMcpApps = (value: unknown, location: string): readonly ArtifactManife
 const parseMcpServers = (
   value: unknown,
   hosts: ReadonlySet<string>,
-  launches: ReadonlyMap<string, ArtifactManifestLaunch>,
+  launches: ReadonlyMap<string, ArtifactManifestServerLaunch>,
 ): readonly ArtifactManifestMcpServer[] => {
   const servers = requireArray(value, 'executables.mcpServers').map((candidate, index) => {
     const location = `executables.mcpServers[${index}]`;
     const server = requireRecord(candidate, location);
     requireExactKeys(server, location, ['apps', 'hosts', 'id', 'kind', 'name', 'transport'], ['launch']);
     const name = requireString(server.name, `${location}.name`);
-    const launch = launches.get(name);
+    const launch = launches.get(name)?.launch;
     return {
       apps: parseMcpApps(server.apps, `${location}.apps`),
       hosts: parseHosts(server.hosts, `${location}.hosts`, hosts),
@@ -1418,8 +1419,11 @@ const referencedPaths = (manifest: {
   return references;
 };
 
-const launchesOf = (servers: readonly ArtifactManifestMcpServer[]): ReadonlyMap<string, ArtifactManifestLaunch> =>
-  new Map(servers.flatMap((server) => server.launch === undefined ? [] : [[server.name, server.launch] as const]));
+const launchesOf = (servers: readonly ArtifactManifestMcpServer[]): ReadonlyMap<string, ArtifactManifestServerLaunch> =>
+  new Map(servers.flatMap((server) =>
+    server.launch === undefined || (server.kind !== 'compiled' && server.kind !== 'prebuilt')
+      ? []
+      : [[server.name, { kind: server.kind, launch: server.launch }] as const]));
 
 const parseWeb = (value: unknown, servers: readonly ArtifactManifestMcpServer[]): WebManifest | undefined => {
   if (value === undefined) return undefined;
@@ -1588,7 +1592,7 @@ const validateManifest = (value: unknown): ArtifactManifest => {
     fail('distribution.channels lists "npm" exactly when compiler.project.packageName is present.');
   }
   const web = parseWeb(manifest.web, executables.mcpServers);
-  const filePaths = new Set(files.map((file) => file.path));
+  const fileKinds = new Map(files.map((file) => [file.path, file.kind]));
   for (const [index, payload] of distribution.payloads.entries()) {
     const prefix = `${payload.name}/`;
     if (!files.some((file) => file.kind === 'prebuilt' && file.path.startsWith(prefix))) {
@@ -1596,9 +1600,9 @@ const validateManifest = (value: unknown): ArtifactManifest => {
     }
   }
   for (const [location, path] of referencedPaths({ distribution, executables, projections })) {
-    if (!filePaths.has(path)) fail(`${location} names ${JSON.stringify(path)}, which is not a manifest file.`);
+    if (!fileKinds.has(path)) fail(`${location} names ${JSON.stringify(path)}, which is not a manifest file.`);
   }
-  requireLaunchFiles(launchesOf(executables.mcpServers), filePaths);
+  requireLaunchFiles(launchesOf(executables.mcpServers), fileKinds);
 
   return {
     application,

@@ -471,6 +471,16 @@ it('binds the launch record to compiled servers and every exposed App to a launc
   expect(() => serializeArtifactManifest(unlistedEntry))
     .toThrow('executables.mcpServers[catalog].launch.entry names "codex/scripts/missing.mjs", which is not a manifest file.');
 
+  const generatedEntry = withWeb();
+  (generatedEntry.executables.mcpServers[0]!.launch as { entry: string }).entry = 'codex/config.json';
+  expect(() => serializeArtifactManifest(generatedEntry))
+    .toThrow('executables.mcpServers[catalog].launch.entry names "codex/config.json", a generated file, not a bundle file.');
+
+  const prebuiltAtBundle = withWeb();
+  (prebuiltAtBundle.executables.mcpServers[0] as { kind: string }).kind = 'prebuilt';
+  expect(() => serializeArtifactManifest(prebuiltAtBundle))
+    .toThrow('executables.mcpServers[catalog].launch.entry names "codex/scripts/review.mjs", a bundle file, not a prebuilt file.');
+
   const escapedArgument = withWeb();
   (escapedArgument.executables.mcpServers[0]!.launch!.args as unknown[])[1] = { kind: 'artifact', path: 'codex/missing' };
   expect(() => serializeArtifactManifest(escapedArgument))

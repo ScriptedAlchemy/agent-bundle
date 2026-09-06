@@ -78,18 +78,37 @@ export const isContainedRelativePath = (value: string): boolean =>
   !/^[a-z]:/iu.test(value) &&
   !value.split(/[/\\]/u).includes('..');
 
+const windowsDeviceName = /^(?:con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(?:\.|$)/iu;
+
+/**
+ * One path segment every supported filesystem can hold and hand back unchanged:
+ * non-empty, never `.` or `..`, no control character or Windows-reserved
+ * character, not a Windows device name, and no trailing dot or space (which
+ * Windows strips). The manifest's `files[]` rows and the installer's receipt
+ * share this rule, so a manifest the parser accepts is one the installer can
+ * inventory, copy, and own.
+ */
+export const isPortablePathSegment = (segment: string): boolean =>
+  segment.length > 0 &&
+  segment !== '.' &&
+  segment !== '..' &&
+  !/[<>:"|?*]/u.test(segment) &&
+  [...segment].every((character) => character.charCodeAt(0) >= 0x20) &&
+  !windowsDeviceName.test(segment) &&
+  !segment.endsWith('.') &&
+  !segment.endsWith(' ');
+
 /**
  * The manifest's path rule: a non-empty POSIX path that is relative on every platform
- * (no leading `/`, no drive letter, no backslash, no NUL) and whose segments are
- * non-empty and never `.` or `..`, so the path means the same file wherever the root lands.
+ * (no leading `/`, no drive letter, no backslash) whose every segment is portable,
+ * so the path means the same file wherever the root lands.
  */
 export const isRelocatablePosixPath = (path: string): boolean =>
   path.length > 0 &&
   !path.includes('\\') &&
-  !path.includes('\0') &&
   !path.startsWith('/') &&
   !/^[a-z]:/iu.test(path) &&
-  path.split('/').every((segment) => segment.length > 0 && segment !== '.' && segment !== '..');
+  path.split('/').every(isPortablePathSegment);
 
 /** A normalized relative path that cannot traverse out of an artifact root. */
 export const safeArtifactPath = (path: string): boolean =>
