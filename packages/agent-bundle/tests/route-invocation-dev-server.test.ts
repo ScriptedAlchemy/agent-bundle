@@ -259,6 +259,12 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     } catch (error) {
       throw new Error(`Route manifest did not become ready: ${JSON.stringify(server.status())}`, { cause: error });
     }
+    await expect.poll(() => {
+      const status = server!.status();
+      return status.build.state === 'idle' && status.artifact.state === 'active'
+        ? status.artifact.activeEpoch.id
+        : undefined;
+    }).toEqual(expect.any(String));
 
     const cookie = bootstrap.headers.get('set-cookie')!.split(';', 1)[0]!;
     const stream = await fetch(`${server.url}/api/project/events`, {
@@ -524,7 +530,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     expect(projectedCli.invocation.result).toMatchObject({
       alias: 'aliased',
       define: 'defined',
-      pluginRoot: artifactRoot,
+      pluginRoot: expect.stringContaining(`${join(project.root, '.agent-bundle', 'epochs')}/`),
       service: 'projection',
       source: 'cli-projection',
       stateRoot,
@@ -539,34 +545,37 @@ it('invokes compiled tool and event routes through the foreground server', { tim
       command: 'report',
       kind: 'cli',
     });
-    const binName = (await readdir(join(artifactRoot, 'bin')))
+    const projectedArtifactRoot = (projectedCli.invocation.result as { readonly pluginRoot?: unknown } | undefined)
+      ?.pluginRoot;
+    if (typeof projectedArtifactRoot !== 'string') throw new Error('Projected CLI returned no plugin root.');
+    const binName = (await readdir(join(projectedArtifactRoot, 'bin')))
       .find((name) => name.endsWith('.mjs') && !name.endsWith('-flight.mjs'));
     if (binName === undefined) throw new Error('Expected a generated routed CLI bin.');
     const generatedUnconfirmed = await runNodeScript({
-      args: [join(artifactRoot, 'bin', binName), 'report', '--name', 'projection', '--json'],
+      args: [join(projectedArtifactRoot, 'bin', binName), 'report', '--name', 'projection', '--json'],
       cwd: project.root,
       env: {
-        [pluginRootEnvAnchor]: artifactRoot,
+        [pluginRootEnvAnchor]: projectedArtifactRoot,
         [pluginStateRootEnvAnchor]: stateRoot,
       },
     });
     expect(generatedUnconfirmed.code).toBe(2);
     expect(generatedUnconfirmed.stderr).toContain(confirmationMessage);
     const generatedBin = await runNodeScript({
-      args: [join(artifactRoot, 'bin', binName), 'report', '--name', 'projection', '--yes', '--json'],
+      args: [join(projectedArtifactRoot, 'bin', binName), 'report', '--name', 'projection', '--yes', '--json'],
       cwd: project.root,
       env: {
-        [pluginRootEnvAnchor]: artifactRoot,
+        [pluginRootEnvAnchor]: projectedArtifactRoot,
         [pluginStateRootEnvAnchor]: stateRoot,
       },
     });
     expect(generatedBin.code, generatedBin.stderr).toBe(0);
     expect(projectedCli.invocation.result).toEqual(JSON.parse(generatedBin.stdout));
     const generatedExit = await runNodeScript({
-      args: [join(artifactRoot, 'bin', binName), 'exit', '3'],
+      args: [join(projectedArtifactRoot, 'bin', binName), 'exit', '3'],
       cwd: project.root,
       env: {
-        [pluginRootEnvAnchor]: artifactRoot,
+        [pluginRootEnvAnchor]: projectedArtifactRoot,
         [pluginStateRootEnvAnchor]: stateRoot,
       },
     });
@@ -815,10 +824,12 @@ it('enforces compiled preflight, MCP schemas, and operator env across production
       async () => fetch(`${server!.url}/api/routes/manifest`, { headers }).then((response) => response.status),
       { timeout: 10_000 },
     ).toBe(200);
-    const artifact = server.status().artifact;
-    if (artifact.state !== 'active') throw new Error('Expected an active compiled epoch.');
-    await writeFile(join(project.root, '.agent-bundle', 'epochs', artifact.activeEpoch.id, '.env'), 'OPERATOR_VALUE=layered\n');
-
+    await expect.poll(() => {
+      const status = server!.status();
+      return status.build.state === 'idle' && status.artifact.state === 'active'
+        ? status.artifact.activeEpoch.id
+        : undefined;
+    }).toEqual(expect.any(String));
     const invalidResponse = await fetch(`${server.url}/api/routes/invocations`, {
       body: JSON.stringify({ input: { service: 1 }, routeId: 'tool:status/report' }),
       headers,
@@ -836,6 +847,9 @@ it('enforces compiled preflight, MCP schemas, and operator env across production
     expect(await readdir(join(project.root, '.agent-bundle'))).not.toContain('handler-ran');
 
     const invoke = async (surface: { readonly args: readonly string[]; readonly command: string; readonly kind: 'cli' } | { readonly kind: 'mcp' }) => {
+      const artifact = server!.status().artifact;
+      if (artifact.state !== 'active') throw new Error('Expected an active compiled epoch.');
+      await writeFile(join(project.root, '.agent-bundle', 'epochs', artifact.activeEpoch.id, '.env'), 'OPERATOR_VALUE=layered\n');
       const response = await fetch(`${server!.url}/api/routes/invocations`, {
         body: JSON.stringify({
           ...(surface.kind === 'mcp' ? { input: { service: 'mcp' } } : {}),
