@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useReducer, useRef } from 'react';
 import { errorMessage, isAbortError } from '../client-helpers.ts';
 import { ShellLink } from '../shell/shell-link.tsx';
 import type { WorkbenchLocation } from '../shell/workbench-location.ts';
-import type { HostSession, HostSessionHost, HostSessionSize } from './host-session-contracts.ts';
+import type { HostSession, HostSessionHost, HostSessionSize } from '../../../agent-bundle/src/contracts/host-sessions.ts';
 import type { HostSessionClient } from './host-session-client.ts';
 import {
   availabilityFor,

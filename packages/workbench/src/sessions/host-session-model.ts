@@ -5,7 +5,7 @@ import type {
   HostSessionHost,
   HostSessionSize,
   HostSessionState,
-} from './host-session-contracts.ts';
+} from '../../../agent-bundle/src/contracts/host-sessions.ts';
 
 /** The Sessions pane's view of the list; scrollback belongs to xterm, not here. */
 export interface HostSessionsState {

@@ -3,7 +3,7 @@ import React, { useEffect, useState } from 'react';
 import type { ApplicationLeaf } from '../application/application-tree-model.ts';
 import { errorMessage, isAbortError } from '../client-helpers.ts';
 import type { WorkbenchLocation } from '../shell/workbench-location.ts';
-import type { HostAvailability, HostSessionHost } from './host-session-contracts.ts';
+import type { HostAvailability, HostSessionHost } from '../../../agent-bundle/src/contracts/host-sessions.ts';
 import type { HostSessionClient } from './host-session-client.ts';
 import { availabilityFor, defaultHostSessionSize, hostLabel, hosts, hostSessionPromptFor } from './host-session-model.ts';
 

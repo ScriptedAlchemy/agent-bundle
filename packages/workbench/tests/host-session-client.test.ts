@@ -7,7 +7,7 @@ import {
   HostSessionClientError,
   type HostSessionStreamMessage,
 } from '../src/sessions/host-session-client.ts';
-import type { HostAvailability, HostSession } from '../src/sessions/host-session-contracts.ts';
+import type { HostAvailability, HostSession } from '../../agent-bundle/src/contracts/host-sessions.ts';
 
 const session: HostSession = Object.freeze({
   authority: Object.freeze({ epochId: 'epoch-1', install: '/home/dev/.claude/plugins/cache/curator', projectRoot: '/work/curator' }),

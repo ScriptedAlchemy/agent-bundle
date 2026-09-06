@@ -9,7 +9,7 @@ import type {
   HostSessionLaunchRequest,
   HostSessionList,
   HostSessionSize,
-} from './host-session-contracts.ts';
+} from '../../../agent-bundle/src/contracts/host-sessions.ts';
 
 export interface HostSessionClientOptions {
   readonly foreground: ForegroundRequestAuthority;

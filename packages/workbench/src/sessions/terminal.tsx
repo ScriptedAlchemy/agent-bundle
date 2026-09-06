@@ -3,7 +3,7 @@ import { Terminal } from '@xterm/xterm';
 import React, { useEffect, useRef } from 'react';
 
 import { errorMessage, isAbortError } from '../client-helpers.ts';
-import type { HostSession, HostSessionSize } from './host-session-contracts.ts';
+import type { HostSession, HostSessionSize } from '../../../agent-bundle/src/contracts/host-sessions.ts';
 import type { HostSessionClient } from './host-session-client.ts';
 import './terminal.css';
 

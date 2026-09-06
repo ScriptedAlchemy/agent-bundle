@@ -29,5 +29,20 @@ export interface HostAvailability {
   readonly executable?: string;
 }
 
+export interface HostSessionSize {
+  readonly cols: number;
+  readonly rows: number;
+}
+
+export interface HostSessionLaunchRequest extends HostSessionSize {
+  readonly host: HostSessionHost;
+  readonly prompt?: string;
+}
+
+export interface HostSessionList {
+  readonly hosts: readonly HostAvailability[];
+  readonly sessions: readonly HostSession[];
+}
+
 export const isHostSessionId = (value: unknown): value is string =>
   typeof value === 'string' && /^hs_[0-9a-z]{16}$/.test(value);

@@ -4,6 +4,8 @@ import {
   type HostAvailability,
   type HostSession,
   type HostSessionHost,
+  type HostSessionLaunchRequest,
+  type HostSessionSize,
   isHostSessionId,
 } from '../../contracts/host-sessions.ts';
 import {
@@ -72,7 +74,7 @@ const jsonBody = (request: IncomingMessage) => readJsonBody(request, {
   },
 });
 
-const dimensions = (value: Readonly<Record<string, unknown>>): Readonly<{ readonly cols: number; readonly rows: number }> => {
+const dimensions = (value: Readonly<Record<string, unknown>>): HostSessionSize => {
   if (
     !hasOnly(value, ['cols', 'rows'])
     || !Number.isInteger(value.cols) || (value.cols as number) < 1 || (value.cols as number) > 500
@@ -95,13 +97,13 @@ const creation = (value: Readonly<Record<string, unknown>>) => {
 export interface HostSessionRouteService {
   availability(): Promise<readonly HostAvailability[]>;
   close?(): Promise<void> | void;
-  create(request: Readonly<{ readonly cols: number; readonly host: HostSessionHost; readonly prompt?: string; readonly rows: number }>): Promise<HostSession>;
+  create(request: HostSessionLaunchRequest): Promise<HostSession>;
   forget(id: string): boolean;
   input(id: string, data: string): void;
   list(): readonly HostSession[];
   read(id: string): HostSession | undefined;
   resize(id: string, cols: number, rows: number): void;
-  restart(id: string, size: Readonly<{ readonly cols: number; readonly rows: number }>): Promise<HostSession>;
+  restart(id: string, size: HostSessionSize): Promise<HostSession>;
   subscribe(id: string, listener: (message: HostSessionStreamMessage) => void): () => void;
   terminate(id: string): Promise<HostSession>;
 }

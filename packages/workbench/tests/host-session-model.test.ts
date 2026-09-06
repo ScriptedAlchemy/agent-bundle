@@ -1,6 +1,6 @@
 import { expect, it } from '@rstest/core';
 
-import type { HostAvailability, HostSession } from '../src/sessions/host-session-contracts.ts';
+import type { HostAvailability, HostSession } from '../../agent-bundle/src/contracts/host-sessions.ts';
 import {
   availabilityFor,
   defaultHostSessionSize,
