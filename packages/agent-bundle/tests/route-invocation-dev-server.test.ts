@@ -6,6 +6,10 @@ import { expect, it } from '@rstest/core';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
+import {
+  renderEventBytes,
+  routeInvocationRenderHistoryLimits,
+} from '../src/dev/routes/route-invocation-render-history.ts';
 import type { RouteInvocationResponse } from '../src/dev/routes/route-invocation-result.ts';
 import type { RouteInvocationListResponse } from '../src/dev/routes/route-invocation.ts';
 import type { RouteManifestResponse } from '../src/dev/routes/route-manifest.ts';
@@ -239,6 +243,23 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         '}',
         '',
       ].join('\n'),
+      'src/mcp/status/tools/burst.tsx': [
+        "import { Agent, agent } from '@agent-bundle/runtime';",
+        "import { createElement } from 'react';",
+        "import { z } from 'zod';",
+        '',
+        'export const inputSchema = z.object({ messageBytes: z.number().int().min(1).max(65_536), ticks: z.number().int().min(1).max(900) }).strict();',
+        'export const resultSchema = z.object({ ticks: z.number() }).strict();',
+        '',
+        'export default async function Burst({ input }) {',
+        '  const { progress } = await agent();',
+        '  for (let step = 1; step <= input.ticks; step += 1) {',
+        "    await progress.report({ completed: step, message: `${step}:${'p'.repeat(input.messageBytes)}`, total: input.ticks });",
+        '  }',
+        "  return createElement(Agent.Result, { value: { ticks: input.ticks } }, createElement(Agent.Text, null, `Reported ${input.ticks} ticks.`));",
+        '}',
+        '',
+      ].join('\n'),
       'src/mcp/status/tools/report.cli.ts': [
         "export const config = { command: ['report'], confirm: true, flags: { service: { name: 'name' }, source: { required: false } } };",
         "export const mapInput = (input) => ({ ...input, source: input.source ?? 'cli-projection' });",
@@ -353,6 +374,48 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     await expect(finalCancelResponse.json()).resolves.toMatchObject({ diagnostic: { code: 'AB8256' } });
     const unknownStream = await fetch(`${server.url}/api/routes/invocations/inv_missing/stream`, { headers });
     expect(unknownStream.status).toBe(404);
+
+    // A compiled route that reports 400 progress ticks of 16 KiB each produces
+    // far more render events, and far more bytes (6.4 MiB), than the
+    // render-history window holds. Every reader must see the same bounded window.
+    const burstResponse = await fetch(`${server.url}/api/routes/invocations`, {
+      body: JSON.stringify({ correlationId: 'burst-1', input: { messageBytes: 16 * 1024, ticks: 400 }, routeId: 'tool:status/burst' }),
+      headers,
+      method: 'POST',
+    });
+    expect(burstResponse.status).toBe(200);
+    const burst = (await burstResponse.json() as RouteInvocationResponse).invocation;
+    expect(burst.status, JSON.stringify(burst.diagnostics)).toBe('succeeded');
+    expect(burst).toMatchObject({ correlationId: 'burst-1', outcome: { kind: 'success' }, result: { ticks: 400 } });
+    const burstComplete = burst.events.at(-1);
+    expect(burstComplete?.type).toBe('complete');
+    expect(burst.document).toEqual(burstComplete?.type === 'complete' ? burstComplete.document : undefined);
+    expect(JSON.stringify(burst.document)).toContain('Reported 400 ticks.');
+    expect(burst.retention).toBeDefined();
+    expect(burst.retention!.producedEvents).toBeGreaterThan(400);
+    expect(burst.retention!.producedEvents).toBe(burst.retention!.evictedEvents + burst.events.length);
+    expect(burst.events.length).toBeLessThan(routeInvocationRenderHistoryLimits.maxEvents);
+    expect(burst.events.filter((event) => event.type === 'progress').length).toBeGreaterThan(64);
+    expect(burst.events.at(-2)).toMatchObject({ completed: 400, total: 400, type: 'progress' });
+    const burstBytes = burst.events.reduce((sum, event) => sum + renderEventBytes(event), 0);
+    expect(burstBytes).toBeLessThanOrEqual(routeInvocationRenderHistoryLimits.maxBytes);
+    expect(burst.retention!.retainedBytes).toBe(burstBytes);
+    expect(burst.retention!.evictedBytes).toBeGreaterThan(4 * 1024 * 1024);
+    const burstRead = await fetch(`${server.url}/api/routes/invocations/${burst.id}`, { headers });
+    expect(burstRead.status).toBe(200);
+    expect(await burstRead.json()).toEqual({ invocation: burst });
+    const burstReplay = await fetch(`${server.url}/api/routes/invocations/${burst.id}/stream`, { headers });
+    expect(burstReplay.status).toBe(200);
+    const burstMessages = await readInvocationStream(burstReplay);
+    expect(burstMessages.filter((message) => message.type === 'truncated')).toEqual([{ type: 'truncated' }]);
+    expect(burstMessages[0]).toEqual({ type: 'truncated' });
+    expect(burstMessages.flatMap((message) => message.type === 'render' ? [message.event] : [])).toEqual(burst.events);
+    expect(burstMessages.at(-1)).toEqual({ invocation: burst, type: 'final' });
+    const burstList = await fetch(`${server.url}/api/routes/invocations?limit=5`, { headers });
+    const burstSummary = (await burstList.json() as RouteInvocationListResponse).invocations.find((entry) => entry.id === burst.id);
+    expect(burstSummary).toBeDefined();
+    expect(burstSummary).not.toHaveProperty('events');
+    expect(burstSummary).not.toHaveProperty('retention');
 
     const activeEpoch = server.status().artifact;
     if (activeEpoch.state !== 'active') throw new Error('Expected an active compiled epoch.');

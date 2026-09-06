@@ -10,6 +10,9 @@ import {
   createAgentRenderDispatcher,
   documentToCallToolResult,
   type AgentDocument,
+  type AgentProgressReporter,
+  type AgentProgressUpdate,
+  type AgentRenderDispatch,
   type AgentRenderEvent,
   type AgentRenderInvocation,
 } from '@agent-bundle/runtime';
@@ -287,6 +290,7 @@ const streamFromWorker = (
     readonly abort: () => void;
     readonly controller: ReadableStreamDefaultController<Uint8Array>;
     readonly dispatchSignal: AbortSignal;
+    readonly progress: AgentProgressReporter | undefined;
   }>();
   const failAll = (error: Error): void => {
     for (const [id, entry] of pending) {
@@ -302,7 +306,18 @@ const streamFromWorker = (
   worker.on('message', (message: WorkerMessage) => {
     const entry = pending.get(message.id);
     if (entry === undefined) return;
-    if (message.type === 'progress') return;
+    if (message.type === 'progress') {
+      // The route's reported progress becomes `progress` render events through
+      // the dispatcher's reporter, as the generated CLI session forwards it.
+      Promise.resolve()
+        .then(() => entry.progress?.report(message.update as AgentProgressUpdate))
+        .catch((error: unknown) => {
+          pending.delete(message.id);
+          entry.dispatchSignal.removeEventListener('abort', entry.abort);
+          entry.controller.error(error);
+        });
+      return;
+    }
     if (message.type === 'observed-providers-start') {
       trace?.providersStart();
       return;
@@ -373,10 +388,7 @@ const streamFromWorker = (
     entry.controller.error(new Error(message.message ?? 'Compiled route worker failed.'));
   });
   const host = Object.freeze({
-    execute: async (dispatch: Readonly<{
-      readonly invocation: AgentRenderInvocation;
-      readonly signal: AbortSignal;
-    }>): Promise<ReadableStream<Uint8Array>> => {
+    execute: async (dispatch: AgentRenderDispatch): Promise<ReadableStream<Uint8Array>> => {
       const id = ++sequence;
       let controller!: ReadableStreamDefaultController<Uint8Array>;
       const stream = new ReadableStream<Uint8Array>({ start: (opened) => { controller = opened; } });
@@ -384,7 +396,7 @@ const streamFromWorker = (
         worker.postMessage({ id, type: 'cancel' });
         controller.error(new DOMException('Agent render was aborted.', 'AbortError'));
       };
-      pending.set(id, { abort, controller, dispatchSignal: dispatch.signal });
+      pending.set(id, { abort, controller, dispatchSignal: dispatch.signal, progress: dispatch.progress });
       dispatch.signal.addEventListener('abort', abort, { once: true });
       worker.postMessage({
         actor: request.context.actor,

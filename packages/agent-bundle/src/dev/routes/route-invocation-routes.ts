@@ -27,6 +27,7 @@ import type {
   RouteInvocationListResponse,
   RouteInvocationRequest,
 } from './route-invocation.ts';
+import { routeInvocationRenderHistoryLimits } from './route-invocation-render-history.ts';
 import {
   invocationSummary,
   parseRouteInvocationRequest,
@@ -35,8 +36,15 @@ import {
   type RouteInvocationRequestError,
 } from './route-invocation-service.ts';
 
-const streamQueueByteLimit = 256 * 1024;
-const streamQueueEntryLimit = 128;
+/**
+ * Sized so one backpressured socket can still take a whole replay — the
+ * render-history window as `render` frames plus the `final` envelope, which
+ * repeats that window beside a document, result, and projections the runtime
+ * each bounds near 1 MiB — while a consumer that falls behind a live run is
+ * still cut off.
+ */
+const streamQueueByteLimit = 8 * routeInvocationRenderHistoryLimits.maxBytes;
+const streamQueueEntryLimit = 2 * routeInvocationRenderHistoryLimits.maxEvents;
 const invalidShape = badRequest(
   ROUTE_INVOCATION_MALFORMED_REQUEST_CODE,
   'Route invocation request has an invalid shape.',
