@@ -673,7 +673,7 @@ it('emits the artifact paths every recorded client reads, and none of the manife
       ).toBe(true);
     }
     for (const shadow of client.discovery.shadowedBy) {
-      expect(emitted, `${client.id} is shadowed by ${shadow}`).not.toContain(shadow);
+      expect(emitted, `${client.id} is shadowed by ${shadow.path}`).not.toContain(shadow.path);
     }
   }
   // A client recorded at no tier names no path, so nothing about it can pass by accident.
@@ -711,9 +711,26 @@ it('refuses a client record that claims a tier its own rows do not support', () 
   expect(() => clientCompatibilityFrom('portable', record({
     discovery: { evidence: ['2026-09-06: read from the vendor docs.'], required: ['mcp.json'] },
   }))).toThrow(/without reading the skill tree/u);
-  // An install block with no command would render no install line, so it is refused.
-  expect(() => clientCompatibilityFrom('portable', record({ install: { commands: [] } })))
-    .toThrow(/not a non-empty list of verbatim strings/u);
+  // An install block is refused without a source, without actions, and without
+  // exactly one action whose declared role is the install itself (#721 review).
+  expect(() => clientCompatibilityFrom('portable', record({ install: { actions: [] } })))
+    .toThrow(/install block with source undefined/u);
+  expect(() => clientCompatibilityFrom('portable', record({ install: { actions: [], source: 'local-directory' } })))
+    .toThrow(/install block with no actions/u);
+  expect(() => clientCompatibilityFrom('portable', record({
+    install: { actions: [{ command: 'demo plugins validate <plugin directory>', role: 'verify' }], source: 'local-directory' },
+  }))).toThrow(/without exactly one install action/u);
+  expect(() => clientCompatibilityFrom('portable', record({
+    install: { actions: [{ command: 'demo plugins add <plugin directory>', role: 'add' }], source: 'local-directory' },
+  }))).toThrow(/install action with role "add"/u);
+  // A shadow takes named surfaces; it never silently replaces the whole root.
+  expect(() => clientCompatibilityFrom('portable', record({
+    discovery: {
+      evidence: ['2026-09-06: read from the vendor docs.'],
+      required: ['skills'],
+      shadowedBy: [{ path: '.mcp.json' }],
+    },
+  }))).toThrow(/without naming the surfaces it takes/u);
   // A path that only resolves on one platform is not an artifact-relative path.
   expect(() => clientCompatibilityFrom('portable', record({
     discovery: { evidence: ['2026-09-06: read from the vendor docs.'], required: ['skills\\review'] },

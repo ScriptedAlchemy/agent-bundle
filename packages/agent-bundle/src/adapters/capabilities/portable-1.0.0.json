@@ -333,10 +333,20 @@
       "observed": "Agent Plugins 1.0.0; docs retrieved 2026-09-06, plugins documented as closed beta",
       "tier": "agent-plugins",
       "install": {
-        "commands": [
-          "devin plugins install <plugin directory>",
-          "devin plugins info <name>",
-          "devin plugins remove <name>"
+        "source": "local-directory",
+        "actions": [
+          {
+            "role": "install",
+            "command": "devin plugins install <plugin directory>"
+          },
+          {
+            "role": "inspect",
+            "command": "devin plugins info <name>"
+          },
+          {
+            "role": "remove",
+            "command": "devin plugins remove <name>"
+          }
         ],
         "location": "Devin's own plugin store; the CLI manages the copy"
       },
@@ -347,8 +357,30 @@
           "mcp.json"
         ],
         "shadowedBy": [
-          ".devin-plugin/plugin.json",
-          ".claude-plugin/plugin.json"
+          {
+            "path": ".devin-plugin/plugin.json",
+            "surfaces": [
+              "manifest",
+              "skills",
+              "mcp",
+              "placeholders"
+            ]
+          },
+          {
+            "path": ".claude-plugin/plugin.json",
+            "surfaces": [
+              "manifest",
+              "skills",
+              "mcp",
+              "placeholders"
+            ]
+          },
+          {
+            "path": ".mcp.json",
+            "surfaces": [
+              "mcp"
+            ]
+          }
         ],
         "evidence": [
           "2026-09-06: https://docs.devin.ai/cli/extensibility/plugins/overview states \"Devin also loads plugins packaged in two other layouts, with manifest precedence .devin-plugin/plugin.json > .claude-plugin/plugin.json > root plugin.json\", so a composite root that also carries a Devin or Claude manifest is read as that plugin instead.",
@@ -393,10 +425,24 @@
       "observed": "xai-org/grok-build main 72a61251fcffb464bcc687aeb5a998e5a98ec0c9, docs retrieved 2026-09-06",
       "tier": "skills",
       "install": {
-        "commands": [
-          "grok plugin install ./<plugin directory> --trust",
-          "grok plugin validate <plugin directory>",
-          "grok plugin enable <name>"
+        "source": "marketplace",
+        "actions": [
+          {
+            "role": "install",
+            "command": "grok plugin install <marketplace plugin name>"
+          },
+          {
+            "role": "trust",
+            "command": "grok plugin install <marketplace plugin name> --trust"
+          },
+          {
+            "role": "enable",
+            "command": "grok plugin enable <name>"
+          },
+          {
+            "role": "verify",
+            "command": "grok plugin validate <plugin directory>"
+          }
         ],
         "location": "~/.grok/plugins/<name> is trusted automatically; .grok/plugins/<name> requires /hooks-trust or --trust"
       },
@@ -407,7 +453,8 @@
         "shadowedBy": [],
         "evidence": [
           "2026-09-06: https://raw.githubusercontent.com/xai-org/grok-build/main/crates/codegen/xai-grok-pager/docs/user-guide/09-plugins.md states \"An optional plugin.json manifest can override paths or add metadata; without one, Grok discovers components from these standard directories\", and lists skills/ among them.",
-          "2026-09-06: the same pinned file lists the accepted install sources including \"a local path (`./local-dir` or `/absolute/path`)\", and states \"Grok trusts plugins in `~/.grok/plugins/` automatically; project plugins in `.grok/plugins/` require trust\", so the emitted directory installs in place with `--trust`.",
+          "2026-09-06: the documented install spec is a marketplace plugin name (`grok plugin install deploy-tools --trust`). The same pinned file lists \"a local path (`./local-dir` or `/absolute/path`)\" among the accepted source forms, but no page shows that form accepting a directory that is not a Grok plugin or marketplace layout, so no local-directory recipe for this artifact is recorded here.",
+          "2026-09-06: trust is a separate step from installation — \"Enabling a plugin loads its skills, commands, and agents. Trust is separate and controls whether a plugin's code runs\", and \"Grok trusts plugins in `~/.grok/plugins/` automatically; project plugins in `.grok/plugins/` require trust\".",
           "2026-09-06: no upstream page publishes the manifest's required fields or a precedence order among plugin.json, .grok-plugin/plugin.json, and .claude-plugin/plugin.json."
         ]
       },
@@ -445,10 +492,20 @@
       "observed": "Agent Plugins 1.0.0; docs retrieved 2026-09-06",
       "tier": "agent-plugins",
       "install": {
-        "commands": [
-          "openclaw plugins install <plugin directory>",
-          "openclaw plugins inspect <id>",
-          "openclaw plugins uninstall <id>"
+        "source": "local-directory",
+        "actions": [
+          {
+            "role": "install",
+            "command": "openclaw plugins install <plugin directory>"
+          },
+          {
+            "role": "inspect",
+            "command": "openclaw plugins inspect <id>"
+          },
+          {
+            "role": "remove",
+            "command": "openclaw plugins uninstall <id>"
+          }
         ],
         "location": "OpenClaw's own plugin store; `openclaw plugins inspect` reports `Bundle format: agent (Agent Plugins)`"
       },
@@ -459,10 +516,42 @@
           "mcp.json"
         ],
         "shadowedBy": [
-          "openclaw.plugin.json",
-          ".claude-plugin/plugin.json",
-          ".codex-plugin/plugin.json",
-          ".cursor-plugin/plugin.json"
+          {
+            "path": "openclaw.plugin.json",
+            "surfaces": [
+              "manifest",
+              "skills",
+              "mcp",
+              "placeholders"
+            ]
+          },
+          {
+            "path": ".claude-plugin/plugin.json",
+            "surfaces": [
+              "manifest",
+              "skills",
+              "mcp",
+              "placeholders"
+            ]
+          },
+          {
+            "path": ".codex-plugin/plugin.json",
+            "surfaces": [
+              "manifest",
+              "skills",
+              "mcp",
+              "placeholders"
+            ]
+          },
+          {
+            "path": ".cursor-plugin/plugin.json",
+            "surfaces": [
+              "manifest",
+              "skills",
+              "mcp",
+              "placeholders"
+            ]
+          }
         ],
         "evidence": [
           "2026-09-06: https://docs.openclaw.ai/plugins/bundles publishes the detection order — a native manifest or a package.json with openclaw.extensions, then client-specific bundle markers (.codex-plugin/, .cursor-plugin/, .claude-plugin/), then \"A root plugin.json -> Agent Plugins bundle\" — and states \"If a package carries both a client-specific marker and a root plugin.json, the client-specific format wins\", so a composite root is read as the client-specific bundle instead.",
@@ -507,10 +596,20 @@
       "observed": "docs retrieved 2026-09-06; no CLI version is published on any page",
       "tier": "skills",
       "install": {
-        "commands": [
-          "qoder plugins install <plugin directory> --scope user",
-          "qoder plugins validate <plugin directory>",
-          "qoder plugins list --json"
+        "source": "local-directory",
+        "actions": [
+          {
+            "role": "install",
+            "command": "qoder plugins install <plugin directory> --scope user"
+          },
+          {
+            "role": "verify",
+            "command": "qoder plugins validate <plugin directory>"
+          },
+          {
+            "role": "inspect",
+            "command": "qoder plugins list --json"
+          }
         ],
         "location": "the --scope target (user, project, or local); enablement is recorded in settings.json as enabledPlugins"
       },
@@ -519,11 +618,19 @@
           "skills",
           "mcp.json"
         ],
-        "shadowedBy": [],
+        "shadowedBy": [
+          {
+            "path": ".mcp.json",
+            "surfaces": [
+              "mcp"
+            ]
+          }
+        ],
         "evidence": [
           "2026-09-06: https://docs.qoder.com/cli/plugins-reference states the manifest \"is located at .qoder-plugin/plugin.json and must not be placed in the plugin root directory\", and that without a manifest \"the CLI loads components from conventional directories and uses the plugin directory name as the plugin name\".",
           "2026-09-06: https://docs.qoder.com/cli/plugins states \"plugins install for a local plugin requires at least one recognizable component or resource\", which the emitted skills/ tree and mcp.json satisfy.",
-          "2026-09-06: no manifest-precedence order is published, so the behavior of a composite root carrying both .qoder-plugin/plugin.json and plugin.json is unproven."
+          "2026-09-06: no manifest-precedence order is published, so the behavior of a composite root carrying both .qoder-plugin/plugin.json and plugin.json is unproven.",
+          "2026-09-06: precedence that is published is per file, not per root: https://docs.qoder.com/cli/mcp-reference states \"If both exist, .mcp.json takes precedence, and they are not merged\", which withholds the emitted mcp.json alone and leaves the shared skills/ tree discovered."
         ]
       },
       "surfaces": {

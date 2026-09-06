@@ -144,17 +144,17 @@ const messages = {
       'The `plugin` section of each table, flattened to dotted capability paths and grouped by top-level key. Boolean entries record a component the adapter emits; entries with a state carry the reason the host evidence supports or withholds it. Evidence notes stay in the JSON files.',
     clients: 'Recorded third-party clients',
     clientsIntro:
-      'The `clients` section of each table: agents that read the artifact this target already emits, pinned to their own documentation on the date it was read. These clients are not target adapters — nothing about them changes what the compiler writes — so every row is evidence about a reader of the existing artifact, never a projection. The tier says what the client loads: `agent-plugins` loads the emitted package as one plugin, `skills` loads the skill tree only, and `none` loads nothing from it as published. A surface without evidence is `unavailable` with a dated reason, and the reason names exactly what the client would need instead.',
+      'The `clients` section of each table: agents that read the artifact this target already emits, pinned to their own documentation on the date it was read. These clients are not target adapters — nothing about them changes what the compiler writes — so every row is evidence about a reader of the existing artifact, never a projection. The tier says what the client loads: `agent-plugins` loads the emitted package as one plugin, `skills` loads the skill tree only, and `none` loads nothing from it as published. Reading a document and running what it configures are separate rows: `mcp` records that the client reads the emitted `mcp.json` as MCP configuration, while `placeholders` records that it expands the reserved `${PLUGIN_ROOT}` / `${PLUGIN_DATA}` and provides them to the process it spawns. Precedence is per file and per surface — a file that wins for `mcp` leaves the skill tree discovered, and only a manifest that wins replaces the plugin. An install action carries the role its own documentation gives it, and a client whose documentation shows no local-directory install is recorded against its marketplace source instead. A surface without evidence is `unavailable` with a dated reason, and the reason names exactly what the client would need instead.',
     clientSurfaces: 'Client surfaces',
     clientDiscovery: 'Client discovery',
     headers: {
       client: 'Client',
       tier: 'Tier',
       observed: 'Observed',
-      install: 'Install',
+      install: 'Install actions',
       surface: 'Surface',
       required: 'Paths it reads',
-      shadowedBy: 'Shadowed by',
+      shadowedBy: 'Shadowed by (per surface)',
       lineageRow: 'Lineage row',
       host: 'Host',
       version: 'Observed version',
@@ -264,17 +264,17 @@ const messages = {
       '每张表的 `plugin` 部分，按点分能力路径展开并按顶层键分组。布尔条目表示适配器会发出的组件；带状态的条目记录宿主证据支持或保留该能力的原因。证据说明保留在 JSON 文件中。',
     clients: '已记录的第三方客户端',
     clientsIntro:
-      '每张表的 `clients` 部分：会读取该目标已经产出的构件的其他代理，按其自身文档以及阅读文档的日期固定记录。这些客户端不是目标适配器——它们不会改变编译器写出的任何内容——因此每一行都是关于既有构件读取方的证据，而不是一种投影。tier 表示客户端加载什么：`agent-plugins` 把产出的包作为一个插件加载，`skills` 只加载技能树，`none` 表示按当前产出形态它什么都不加载。没有证据的界面一律为 `unavailable` 并附带带日期的原因，原因中明确写出该客户端实际需要的是什么。',
+      '每张表的 `clients` 部分：会读取该目标已经产出的构件的其他代理，按其自身文档以及阅读文档的日期固定记录。这些客户端不是目标适配器——它们不会改变编译器写出的任何内容——因此每一行都是关于既有构件读取方的证据，而不是一种投影。tier 表示客户端加载什么：`agent-plugins` 把产出的包作为一个插件加载，`skills` 只加载技能树，`none` 表示按当前产出形态它什么都不加载。读取文档与运行文档所配置的内容是两行不同的记录：`mcp` 表示客户端会把产出的 `mcp.json` 当作 MCP 配置读取，而 `placeholders` 表示它会展开保留占位符 `${PLUGIN_ROOT}` / `${PLUGIN_DATA}` 并把它们提供给所启动的进程。优先级按文件、按界面生效——某个文件在 `mcp` 上胜出并不影响技能树被发现，只有清单胜出才会替换整个插件。安装操作带有其自身文档给定的角色；文档中没有本地目录安装形式的客户端，只按其市场来源记录。没有证据的界面一律为 `unavailable` 并附带带日期的原因，原因中明确写出该客户端实际需要的是什么。',
     clientSurfaces: '客户端界面',
     clientDiscovery: '客户端发现',
     headers: {
       client: '客户端',
       tier: '层级',
       observed: '观测依据',
-      install: '安装',
+      install: '安装操作',
       surface: '界面',
       required: '读取的路径',
-      shadowedBy: '被以下文件遮蔽',
+      shadowedBy: '被以下文件遮蔽（按界面）',
       lineageRow: '谱系行',
       host: '宿主',
       version: '观测版本',
@@ -660,7 +660,9 @@ function renderHosts(hosts: readonly HostCapabilityTable[], m: Messages): string
           escapeProse(record.observed),
           record.install === undefined
             ? m.notApplicable
-            : record.install.commands.map(command => code(command)).join('<br />'),
+            : record.install.actions
+                .map(action => `${escapeProse(action.role)}: ${code(action.command)}`)
+                .join('<br />'),
         ]),
       ),
     );
@@ -688,11 +690,18 @@ function renderHosts(hosts: readonly HostCapabilityTable[], m: Messages): string
     sections.push(
       table(
         [m.headers.client, m.headers.required, m.headers.shadowedBy],
-        clients.map(({ record }) => {
-          const paths = (value: readonly string[]): string =>
-            value.length > 0 ? value.map(entry => code(entry)).join(', ') : m.notApplicable;
-          return [escapeProse(record.name), paths(record.discovery.required), paths(record.discovery.shadowedBy)];
-        }),
+        clients.map(({ record }) => [
+          escapeProse(record.name),
+          record.discovery.required.length > 0
+            ? record.discovery.required.map(entry => code(entry)).join(', ')
+            : m.notApplicable,
+          // Precedence is per file and per surface, never a whole-root replacement.
+          record.discovery.shadowedBy.length > 0
+            ? record.discovery.shadowedBy
+                .map(shadow => `${code(shadow.path)} (${shadow.surfaces.map(surface => code(surface)).join(', ')})`)
+                .join('<br />')
+            : m.notApplicable,
+        ]),
       ),
     );
   }

@@ -250,47 +250,64 @@ const clientTierSentence = (record: ClientCompatibilityRecord): string => {
 };
 
 /**
- * The paths a client reads that this bundle actually carries. A record names
- * the client's fixed discovery locations; a bundle with no skill or no
- * portable MCP server emits fewer of them, and the line must not claim a file
- * that was never written.
+ * The paths a client reads that this build actually wrote. A record names the
+ * client's fixed discovery locations; the planned entries say which of them
+ * exist here, so the line never promises a file the compiler did not emit.
  */
-const clientReads = (record: ClientCompatibilityRecord, emitted: readonly string[]): readonly string[] =>
-  record.discovery.required.filter((path) => emitted.includes(path));
+const clientReads = (record: ClientCompatibilityRecord, planned: readonly string[]): readonly string[] =>
+  record.discovery.required.filter((path) => planned.some((entry) => entry === path || entry.startsWith(`${path}/`)));
 
-/** One line per recorded client: what it reads here, how to install it, and what it withholds. */
-const clientLine = (emitted: readonly string[]) => (record: ClientCompatibilityRecord): string => {
-  const withheld = Object.entries(record.surfaces)
-    .filter(([, row]) => row.state === 'unavailable' || row.state === 'prohibited')
-    .map(([surface]) => surface);
-  const reads = clientReads(record, emitted);
-  return [
-    `- **${record.name}** (${record.observed}) ${clientTierSentence(record)}.`,
-    record.tier === 'none'
-      ? ''
-      : reads.length === 0
-        ? ' This bundle emits none of the paths it reads.'
-        : ` Reads: \`${reads.join('`, `')}\`.`,
-    record.install === undefined ? '' : ` Install: \`${record.install.commands[0]}\`.`,
-    withheld.length === 0 ? '' : ` Not loaded: ${withheld.join(', ')}.`,
-    record.discovery.shadowedBy.length === 0
-      ? ''
-      : ` A root that also carries \`${record.discovery.shadowedBy.join('`, `')}\` is read as that plugin instead.`,
-  ].join('');
+/** The client's own install command, taken from its declared role, never from list order. */
+const clientInstallSentence = (record: ClientCompatibilityRecord): string => {
+  if (record.install === undefined) return '';
+  const command = record.install.actions.find((action) => action.role === 'install')!.command;
+  return record.install.source === 'marketplace'
+    ? ` Install (its own documentation shows no local-directory form): \`${command}\`.`
+    : ` Install: \`${command}\`.`;
 };
 
 /**
- * The fixed Agent Plugins discovery paths this bundle carries: the manifest
- * always, the skill tree and the MCP document only when the model has
- * something to write there.
+ * Precedence is per file: a manifest that wins replaces the plugin the client
+ * reads, while a file that wins for one surface leaves the rest discovered.
  */
-const portableEmittedPaths = (model: NormalizedPlugin): readonly string[] => [
-  'plugin.json',
-  ...model.skills.length === 0 ? [] : ['skills'],
-  ...model.mcpServers.some((server) => server.targets.includes('portable')) ? ['mcp.json'] : [],
-];
+const clientShadowSentences = (record: ClientCompatibilityRecord): string => {
+  const wholePlugin = record.discovery.shadowedBy.filter((shadow) => shadow.surfaces.includes('manifest'));
+  const perSurface = record.discovery.shadowedBy.filter((shadow) => !shadow.surfaces.includes('manifest'));
+  return [
+    wholePlugin.length === 0
+      ? ''
+      : ` A root that also carries \`${wholePlugin.map((shadow) => shadow.path).join('`, `')}\` is read as that plugin instead.`,
+    ...perSurface.map((shadow) => ` A root that also carries \`${shadow.path}\` uses it for ${shadow.surfaces.join(', ')} and still reads the rest.`),
+  ].join('');
+};
 
-const portableInstructions = (model: NormalizedPlugin): string[] => [
+/** One line per recorded client: what it reads here, how to install it, and what it withholds. */
+const clientLine = (planned: readonly string[]) => (record: ClientCompatibilityRecord): readonly string[] => {
+  const surfaces = Object.entries(record.surfaces);
+  const withheld = surfaces
+    .filter(([, row]) => row.state === 'unavailable' || row.state === 'prohibited')
+    .map(([surface]) => surface);
+  const reads = clientReads(record, planned);
+  return [
+    [
+      `- **${record.name}** (${record.observed}) ${clientTierSentence(record)}.`,
+      record.tier === 'none'
+        ? ''
+        : reads.length === 0
+          ? ' This bundle emits none of the paths it reads.'
+          : ` Reads: \`${reads.join('`, `')}\`.`,
+      clientInstallSentence(record),
+      withheld.length === 0 ? '' : ` Not loaded: ${withheld.join(', ')}.`,
+      clientShadowSentences(record),
+    ].join(''),
+    // A narrowed surface loads with a documented limit; the limit is the point.
+    ...surfaces
+      .filter(([, row]) => row.state === 'degraded')
+      .map(([surface, row]) => `  - Partial \`${surface}\`: ${row.reason}`),
+  ];
+};
+
+const portableInstructions = (planned: readonly string[]): string[] => [
   '## Portable Agent Plugin',
   '',
   'Portable is a distribution profile, not a host runtime with one universal install location.',
@@ -304,10 +321,14 @@ const portableInstructions = (model: NormalizedPlugin): string[] => [
   '',
   '### Other recorded clients',
   '',
-  'Each line below is pinned to that client\'s own documentation on the date shown; the surfaces it does',
-  'and does not load are recorded per client in the host capability reference.',
+  'Each line below is pinned to that client\'s own documentation on the date shown, and names only the',
+  'paths this build actually wrote. Recognizing a document and running what it configures are separate:',
+  '`mcp` records that the client reads the emitted `mcp.json` as MCP configuration, while `placeholders`',
+  'records that it expands the reserved `${PLUGIN_ROOT}` / `${PLUGIN_DATA}` and provides them to the',
+  'process it spawns. A client can do the first without the second, and then a plugin-relative server',
+  'is configured but not runnable there.',
   '',
-  ...portableClients.map(clientLine(portableEmittedPaths(model))),
+  ...portableClients.flatMap(clientLine(planned)),
   '',
   '### Cursor placeholder expansion',
   '',
@@ -356,7 +377,11 @@ const portableInstructions = (model: NormalizedPlugin): string[] => [
 const selectedBuiltInTargets = (selected: readonly string[]): readonly BuiltInHost[] =>
   builtInHostNames.filter((target) => selected.includes(target));
 
-const instructionsFor = (model: NormalizedPlugin, target: BuiltInHost): string[] => {
+const instructionsFor = (
+  model: NormalizedPlugin,
+  target: BuiltInHost,
+  planned: readonly string[],
+): string[] => {
   switch (target) {
     case 'claude':
       return claudeInstructions(model);
@@ -365,7 +390,7 @@ const instructionsFor = (model: NormalizedPlugin, target: BuiltInHost): string[]
     case 'cursor':
       return cursorInstructions(model);
     case 'portable':
-      return portableInstructions(model);
+      return portableInstructions(planned);
     default: {
       const exhaustive: never = target;
       throw new TypeError(`Unknown built-in install target ${String(exhaustive)}.`);
@@ -374,9 +399,13 @@ const instructionsFor = (model: NormalizedPlugin, target: BuiltInHost): string[]
 };
 
 /** One `INSTALL.md` for the composite root: a section per selected built-in host. */
-const installMarkdown = (model: NormalizedPlugin, selected: readonly string[]): string => [
+const installMarkdown = (
+  model: NormalizedPlugin,
+  selected: readonly string[],
+  planned: readonly string[],
+): string => [
   ...header(model),
-  ...selectedBuiltInTargets(selected).flatMap((target) => instructionsFor(model, target)),
+  ...selectedBuiltInTargets(selected).flatMap((target) => instructionsFor(model, target, planned)),
 ].join('\n');
 
 /**
@@ -1766,11 +1795,12 @@ export const installSurfaceRequirements = (
 export const installSurfaceEntries = (
   model: NormalizedPlugin,
   hosts: readonly BuiltInHost[],
+  planned: readonly string[],
 ): readonly TargetArtifactWrite[] => {
   if (hosts.length === 0) return Object.freeze([]);
   return Object.freeze([
     Object.freeze({
-      content: installMarkdown(model, hosts),
+      content: installMarkdown(model, hosts, planned),
       kind: 'write' as const,
       relativePath: 'INSTALL.md',
       sourceInputs: sourceInputs(model.metadata.provenance.sourcePath),

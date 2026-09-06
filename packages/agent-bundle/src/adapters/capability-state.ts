@@ -316,18 +316,35 @@ const CLIENT_COMPATIBILITY_SURFACES: readonly string[] =
 const CLIENT_COMPATIBILITY_TIERS: readonly string[] =
   Object.freeze(['agent-plugins', 'skills', 'none']);
 
+/**
+ * What a recorded install command does. A command's role is declared, never
+ * inferred from its position: a client whose verifier is listed first must not
+ * be documented as installing with it.
+ */
+const CLIENT_INSTALL_ROLES: readonly string[] =
+  Object.freeze(['install', 'trust', 'enable', 'verify', 'inspect', 'remove']);
+
+/**
+ * Where the recorded install command takes the artifact from. `local-directory`
+ * is only for a client whose own documentation installs a directory path;
+ * `marketplace` records a client that publishes no verified local form, so the
+ * install surface never prints an unproven recipe against the emitted bundle.
+ */
+const CLIENT_INSTALL_SOURCES: readonly string[] = Object.freeze(['local-directory', 'marketplace']);
+
 /** One authored client row from a pinned table's `clients` block. */
 export interface ClientCompatibilityTableEntry {
   readonly discovery: {
     readonly evidence?: readonly string[];
-    /** Artifact-relative paths this client reads instead when they are present. */
-    readonly shadowedBy?: readonly string[];
+    /** Per-file precedence: the paths that win, and the surfaces each one takes. */
+    readonly shadowedBy?: readonly { readonly path?: string; readonly surfaces?: readonly string[] }[];
     /** Artifact-relative paths the client must find for the recorded tier to hold. */
     readonly required?: readonly string[];
   };
   readonly install?: {
-    readonly commands?: readonly string[];
+    readonly actions?: readonly { readonly command?: string; readonly role?: string }[];
     readonly location?: string;
+    readonly source?: string;
   };
   readonly issue?: number;
   readonly name?: string;
@@ -338,15 +355,31 @@ export interface ClientCompatibilityTableEntry {
   readonly tier?: string;
 }
 
+/** One recorded install command with the role its own documentation gives it. */
+export interface ClientInstallAction {
+  readonly command: string;
+  readonly role: string;
+}
+
+/** One path that wins over the emitted artifact, and the surfaces it takes. */
+export interface ClientShadow {
+  readonly path: string;
+  readonly surfaces: readonly string[];
+}
+
 /** A validated client record: the install surface and generated matrix render these. */
 export interface ClientCompatibilityRecord {
   readonly discovery: {
     readonly evidence: readonly string[];
     readonly required: readonly string[];
-    readonly shadowedBy: readonly string[];
+    readonly shadowedBy: readonly ClientShadow[];
   };
   readonly id: string;
-  readonly install?: { readonly commands: readonly string[]; readonly location?: string };
+  readonly install?: {
+    readonly actions: readonly ClientInstallAction[];
+    readonly location?: string;
+    readonly source: string;
+  };
   readonly issue: number;
   readonly name: string;
   readonly observed: string;
@@ -369,6 +402,83 @@ const clientPaths = (
     );
   }
   return Object.freeze([...value].sort((left, right) => left.localeCompare(right)));
+};
+
+/**
+ * Precedence is per file and per surface: a client that prefers `.mcp.json`
+ * over the emitted `mcp.json` still reads the shared skill tree, so a shadow
+ * names the surfaces it takes rather than replacing the whole root.
+ */
+const clientShadows = (
+  target: string,
+  id: string,
+  value: readonly { readonly path?: string; readonly surfaces?: readonly string[] }[] | undefined,
+): readonly ClientShadow[] => {
+  if (value === undefined) return Object.freeze([]);
+  if (!Array.isArray(value)) {
+    throw new CapabilityStateError(`The pinned ${target} table declares discovery.shadowedBy for client ${id} as something other than a list.`);
+  }
+  return Object.freeze([...value]
+    .map((shadow): ClientShadow => {
+      if (typeof shadow?.path !== 'string' || !isRelocatablePosixPath(shadow.path)) {
+        throw new CapabilityStateError(
+          `The pinned ${target} table declares a discovery.shadowedBy path for client ${id} that is not an artifact-relative path.`,
+        );
+      }
+      const surfaces = shadow.surfaces ?? [];
+      if (!Array.isArray(surfaces) || surfaces.length === 0 || surfaces.some((surface) => !CLIENT_COMPATIBILITY_SURFACES.includes(surface))) {
+        throw new CapabilityStateError(
+          `The pinned ${target} table shadows ${shadow.path} for client ${id} without naming the surfaces it takes (${CLIENT_COMPATIBILITY_SURFACES.join(', ')}).`,
+        );
+      }
+      return Object.freeze({
+        path: shadow.path,
+        surfaces: Object.freeze(CLIENT_COMPATIBILITY_SURFACES.filter((surface) => surfaces.includes(surface))),
+      });
+    })
+    .sort((left, right) => left.path.localeCompare(right.path)));
+};
+
+/**
+ * A recorded install block. Every command declares its role, so the install
+ * surface prints the client's own install command instead of whichever one the
+ * record happens to list first, and `source` says whether that command was
+ * documented against a local directory at all.
+ */
+const clientInstall = (
+  target: string,
+  id: string,
+  install: ClientCompatibilityTableEntry['install'],
+): ClientCompatibilityRecord['install'] => {
+  if (install === undefined) return undefined;
+  if (!CLIENT_INSTALL_SOURCES.includes(install.source ?? '')) {
+    throw new CapabilityStateError(
+      `The pinned ${target} table gives client ${id} an install block with source ${JSON.stringify(install.source)} (expected ${CLIENT_INSTALL_SOURCES.join(' or ')}).`,
+    );
+  }
+  const actions = install.actions ?? [];
+  if (!Array.isArray(actions) || actions.length === 0) {
+    throw new CapabilityStateError(`The pinned ${target} table gives client ${id} an install block with no actions.`);
+  }
+  const validated = actions.map((action): ClientInstallAction => {
+    if (!CLIENT_INSTALL_ROLES.includes(action?.role ?? '')) {
+      throw new CapabilityStateError(
+        `The pinned ${target} table gives client ${id} an install action with role ${JSON.stringify(action?.role)} (expected ${CLIENT_INSTALL_ROLES.join(', ')}).`,
+      );
+    }
+    if (typeof action.command !== 'string' || action.command.trim().length === 0) {
+      throw new CapabilityStateError(`The pinned ${target} table gives client ${id} a ${action.role} action with no verbatim command.`);
+    }
+    return Object.freeze({ command: action.command, role: action.role! });
+  });
+  if (validated.filter((action) => action.role === 'install').length !== 1) {
+    throw new CapabilityStateError(`The pinned ${target} table gives client ${id} an install block without exactly one install action.`);
+  }
+  return Object.freeze({
+    actions: Object.freeze(validated),
+    ...(install.location === undefined ? {} : { location: install.location }),
+    source: install.source!,
+  });
 };
 
 const clientSurfaces = (
@@ -476,17 +586,17 @@ export const clientCompatibilityFrom = (
       if (entry.tier === 'none' && (required.length > 0 || CLIENT_COMPATIBILITY_SURFACES.some((surface) => supported(surface)))) {
         throw new CapabilityStateError(`Client ${id} claims no tier in the pinned ${target} table while recording a path or surface it reads.`);
       }
-      const commands = entry.install?.commands;
-      if (commands !== undefined && (!Array.isArray(commands) || commands.length === 0 || commands.some((command) => typeof command !== 'string' || command.trim().length === 0))) {
-        throw new CapabilityStateError(`The pinned ${target} table gives client ${id} an install block whose commands are not a non-empty list of verbatim strings.`);
-      }
+      const install = clientInstall(target, id, entry.install);
       const discoveryEvidence = entry.discovery?.evidence ?? [];
       if (!Array.isArray(discoveryEvidence) || discoveryEvidence.some((note) => typeof note !== 'string' || !DATED_REASON.test(note))) {
         throw new CapabilityStateError(`The pinned ${target} table gives client ${id} an undated discovery note.`);
       }
-      const shadowedBy = clientPaths(target, id, 'discovery.shadowedBy', entry.discovery?.shadowedBy);
+      const shadowedBy = clientShadows(target, id, entry.discovery?.shadowedBy);
       if (discoveryEvidence.length === 0 && required.length + shadowedBy.length > 0) {
         throw new CapabilityStateError(`Client ${id} names artifact paths in the pinned ${target} table with no dated evidence that it reads or shadows them.`);
+      }
+      if (install?.source === 'local-directory' && entry.tier === 'none') {
+        throw new CapabilityStateError(`Client ${id} records a local-directory install in the pinned ${target} table while reading nothing this artifact emits.`);
       }
       return Object.freeze({
         discovery: Object.freeze({
@@ -495,12 +605,7 @@ export const clientCompatibilityFrom = (
           shadowedBy,
         }),
         id,
-        ...(commands === undefined ? {} : {
-          install: Object.freeze({
-            commands: Object.freeze([...commands]),
-            ...(entry.install?.location === undefined ? {} : { location: entry.install.location }),
-          }),
-        }),
+        ...(install === undefined ? {} : { install }),
         issue: entry.issue!,
         name: entry.name,
         observed: entry.observed,
