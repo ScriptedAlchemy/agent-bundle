@@ -592,9 +592,11 @@ management but no non-interactive plugin install verb.
 The `portable` projection emits the [Agent Plugins open standard](https://agent-plugins.org)
 (specification 1.0.0), with schema hashes and the specification repository
 revision pinned in `src/adapters/schemas/portable/PROVENANCE.json`. Cursor loads
-this format natively alongside Cursor Plugins; Codex, VS Code, GitHub Copilot,
-Kiro, and ChatGPT are native clients too. Claude Code consumes the standard
-only through CLI translation, so its dedicated projection remains necessary. The
+this format natively alongside Cursor Plugins; every other client that reads
+the emitted package is recorded, with its tier and dated evidence, in the
+`clients` section of `src/adapters/capabilities/portable-1.0.0.json`. Claude
+Code consumes the standard only through CLI translation, so its dedicated
+projection remains necessary. The
 standard packages only skills and MCP servers, leaving rules, commands, and
 hooks honestly unavailable on the portable projection. The standard's manifest
 metadata (`author`, `homepage`, `repository`, `license`, `keywords`) and

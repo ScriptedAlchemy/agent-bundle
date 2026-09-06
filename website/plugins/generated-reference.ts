@@ -1,9 +1,11 @@
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { RspressPlugin } from '@rspress/core';
-import type {
-  CapabilityRow,
-  HostCapabilityTable,
+import {
+  type CapabilityRow,
+  type ClientCompatibilityTableEntry,
+  clientCompatibilityFrom,
+  type HostCapabilityTable,
 } from '../../packages/agent-bundle/src/adapters/capability-state.ts';
 import type { JsonObject, JsonValue } from '../../packages/agent-bundle/src/core/strict-json.ts';
 
@@ -142,7 +144,7 @@ const messages = {
       'The `plugin` section of each table, flattened to dotted capability paths and grouped by top-level key. Boolean entries record a component the adapter emits; entries with a state carry the reason the host evidence supports or withholds it. Evidence notes stay in the JSON files.',
     clients: 'Recorded third-party clients',
     clientsIntro:
-      'The `clients` section of each table: agents that read the artifact this target already emits, pinned to their own documentation on the date it was read. These clients are not target adapters — nothing about them changes what the compiler writes — so every row is evidence about a reader of the existing artifact, never a projection. The tier says what the client loads: `agent-plugins` loads the emitted package as one plugin, `skills` loads the skill tree but not the manifest, and `none` loads nothing from it as published. A surface without evidence is `unavailable` with a dated reason, and the reason names exactly what the client would need instead.',
+      'The `clients` section of each table: agents that read the artifact this target already emits, pinned to their own documentation on the date it was read. These clients are not target adapters — nothing about them changes what the compiler writes — so every row is evidence about a reader of the existing artifact, never a projection. The tier says what the client loads: `agent-plugins` loads the emitted package as one plugin, `skills` loads the skill tree only, and `none` loads nothing from it as published. A surface without evidence is `unavailable` with a dated reason, and the reason names exactly what the client would need instead.',
     clientSurfaces: 'Client surfaces',
     clientDiscovery: 'Client discovery',
     headers: {
@@ -262,7 +264,7 @@ const messages = {
       '每张表的 `plugin` 部分，按点分能力路径展开并按顶层键分组。布尔条目表示适配器会发出的组件；带状态的条目记录宿主证据支持或保留该能力的原因。证据说明保留在 JSON 文件中。',
     clients: '已记录的第三方客户端',
     clientsIntro:
-      '每张表的 `clients` 部分：会读取该目标已经产出的构件的其他代理，按其自身文档以及阅读文档的日期固定记录。这些客户端不是目标适配器——它们不会改变编译器写出的任何内容——因此每一行都是关于既有构件读取方的证据，而不是一种投影。tier 表示客户端加载什么：`agent-plugins` 把产出的包作为一个插件加载，`skills` 只加载技能树而不加载清单，`none` 表示按当前产出形态它什么都不加载。没有证据的界面一律为 `unavailable` 并附带带日期的原因，原因中明确写出该客户端实际需要的是什么。',
+      '每张表的 `clients` 部分：会读取该目标已经产出的构件的其他代理，按其自身文档以及阅读文档的日期固定记录。这些客户端不是目标适配器——它们不会改变编译器写出的任何内容——因此每一行都是关于既有构件读取方的证据，而不是一种投影。tier 表示客户端加载什么：`agent-plugins` 把产出的包作为一个插件加载，`skills` 只加载技能树，`none` 表示按当前产出形态它什么都不加载。没有证据的界面一律为 `unavailable` 并附带带日期的原因，原因中明确写出该客户端实际需要的是什么。',
     clientSurfaces: '客户端界面',
     clientDiscovery: '客户端发现',
     headers: {
@@ -640,22 +642,26 @@ function renderHosts(hosts: readonly HostCapabilityTable[], m: Messages): string
   if (clientHosts.length > 0) {
     sections.push(`## ${m.clients}\n`);
     sections.push(m.clientsIntro);
+    // The same validator the adapters read the records through, so an invalid
+    // record fails the docs build instead of rendering as a plausible row.
     const clients = clientHosts.flatMap(host =>
-      Object.entries(asObject(host.data.clients)).map(([id, value]) => ({ host, id, record: asObject(value) })),
+      clientCompatibilityFrom(
+        host.host,
+        asObject(host.data.clients) as unknown as Readonly<Record<string, ClientCompatibilityTableEntry>>,
+      ).map(record => ({ host, record })),
     );
     sections.push(
       table(
         [m.headers.client, m.headers.host, m.headers.tier, m.headers.observed, m.headers.install],
-        clients.map(({ host, record }) => {
-          const commands = asObject(record.install).commands;
-          return [
-            escapeProse(asString(record.name) ?? ''),
-            code(host.host),
-            code(asString(record.tier) ?? ''),
-            escapeProse(asString(record.observed) ?? ''),
-            Array.isArray(commands) ? commands.map(command => code(String(command))).join('<br />') : m.notApplicable,
-          ];
-        }),
+        clients.map(({ host, record }) => [
+          escapeProse(record.name),
+          code(host.host),
+          code(record.tier),
+          escapeProse(record.observed),
+          record.install === undefined
+            ? m.notApplicable
+            : record.install.commands.map(command => code(command)).join('<br />'),
+        ]),
       ),
     );
     sections.push(`### ${m.clientSurfaces}\n`);
@@ -663,15 +669,15 @@ function renderHosts(hosts: readonly HostCapabilityTable[], m: Messages): string
       table(
         [m.headers.client, m.headers.surface, m.headers.state, m.headers.detail],
         clients.flatMap(({ record }) =>
-          Object.entries(asObject(record.surfaces)).map(([surface, value]) => {
-            const row = capabilityRow(value);
-            const details: string[] = [];
-            if (row?.reason !== undefined) details.push(escapeProse(row.reason));
-            if (Array.isArray(row?.evidence)) details.push(m.evidenceNotes(row.evidence.length));
+          Object.entries(record.surfaces).map(([surface, row]) => {
+            const details = [
+              ...row.reason === undefined ? [] : [escapeProse(row.reason)],
+              ...row.evidence === undefined ? [] : [m.evidenceNotes(row.evidence.length)],
+            ];
             return [
-              escapeProse(asString(record.name) ?? ''),
+              escapeProse(record.name),
               code(surface),
-              row?.state ?? m.unavailable,
+              row.state,
               details.length > 0 ? details.join('<br />') : m.notApplicable,
             ];
           }),
@@ -683,14 +689,9 @@ function renderHosts(hosts: readonly HostCapabilityTable[], m: Messages): string
       table(
         [m.headers.client, m.headers.required, m.headers.shadowedBy],
         clients.map(({ record }) => {
-          const paths = (value: JsonValue | undefined): string =>
-            Array.isArray(value) && value.length > 0 ? value.map(entry => code(String(entry))).join(', ') : m.notApplicable;
-          const discovery = asObject(record.discovery);
-          return [
-            escapeProse(asString(record.name) ?? ''),
-            paths(discovery.required),
-            paths(discovery.shadowedBy),
-          ];
+          const paths = (value: readonly string[]): string =>
+            value.length > 0 ? value.map(entry => code(entry)).join(', ') : m.notApplicable;
+          return [escapeProse(record.name), paths(record.discovery.required), paths(record.discovery.shadowedBy)];
         }),
       ),
     );

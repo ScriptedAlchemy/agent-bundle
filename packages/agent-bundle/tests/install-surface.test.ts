@@ -46,8 +46,8 @@ const modelFor = (target: string): NormalizedPlugin => ({
 
 // The install surface is written once for the composite root, so the
 // production path is the composed plan, not one adapter's.
-const writesFor = (target: string): ReadonlyMap<string, string> => {
-  const plan = composeProjections(modelFor(target), createDefaultRegistry());
+const writesFor = (target: string, model: NormalizedPlugin = modelFor(target)): ReadonlyMap<string, string> => {
+  const plan = composeProjections(model, createDefaultRegistry());
   return new Map(plan.entries
     .filter((entry): entry is TargetArtifactWrite => entry.kind === 'write')
     .map((entry) => [entry.relativePath, entry.content]));
@@ -176,13 +176,52 @@ it('documents recorded Agent Plugins clients for the portable profile', () => {
   expect(install).toContain('### Other recorded clients');
   expect(install).toContain('**Devin CLI**');
   expect(install).toContain('`devin plugins install <plugin directory>`');
-  expect(install).toContain('loads this bundle as one plugin');
+  expect(install).toContain('installs this bundle as one plugin');
   expect(install).toContain('Not loaded: hooks.');
-  expect(install).toContain('is read as that instead');
+  expect(install).toContain('is read as that plugin instead');
   // A client whose own contract rejects the emitted manifest is named as such.
   expect(install).toContain('**Antigravity**');
   expect(install).toContain('loads nothing from this bundle as published');
   expect(install).not.toContain('Kiro');
+  // This fixture carries no skill and no MCP server, so a client that reads only
+  // those paths is told the bundle has none of them instead of promised a file.
+  expect(install).toContain('loads its skill tree only. This bundle emits none of the paths it reads.');
+  expect(install).toContain('installs this bundle as one plugin. Reads: `plugin.json`.');
+  // The install command a record names first is the one printed, not its validator.
+  expect(install).toContain('Install: `qoder plugins install <plugin directory> --scope user`.');
+});
+
+it('names the discovery paths a populated portable bundle really carries', () => {
+  const model = modelFor('portable');
+  const install = writesFor('portable', {
+    ...model,
+    mcpServers: [{
+      args: ['./mcp/serve.mjs'],
+      command: 'node',
+      id: 'mcp:stdio',
+      name: 'stdio',
+      provenance: { kind: 'config', sourcePath: '/project/agent-bundle.config.ts' },
+      targets: ['portable'],
+      transport: 'stdio',
+    }],
+    skills: [{
+      body: 'Review a change.',
+      description: 'Review a change',
+      dir: '/project/src/skills/review',
+      frontmatter: {},
+      id: 'skill:review',
+      markdown: '---\nname: review\n---\n\nReview a change.\n',
+      name: 'review',
+      provenance: { kind: 'conventional', sourcePath: '/project/src/skills/review/SKILL.md' },
+      resources: [],
+      source: '/project/src/skills/review/SKILL.md',
+      targets: ['portable'],
+    }],
+  }).get('INSTALL.md');
+
+  expect(install).toContain('installs this bundle as one plugin. Reads: `mcp.json`, `plugin.json`, `skills`.');
+  expect(install).toContain('loads its skill tree only. Reads: `mcp.json`, `skills`.');
+  expect(install).not.toContain('This bundle emits none of the paths it reads.');
   // The Cursor-only placeholder expansion is documented where the installer is (#426).
   expect(install).toContain('### Cursor placeholder expansion');
   expect(install).toContain('`~/.cursor/agent-bundle/plugin-data/<name>`');

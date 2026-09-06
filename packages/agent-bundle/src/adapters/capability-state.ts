@@ -1,7 +1,7 @@
 import { CapabilityStateError, unknownCapabilityStateError } from '../core/capabilities.ts';
 import type { CapabilityEvidence, CapabilityState } from '../core/capabilities.ts';
 import { featureCapabilityName } from '../core/components.ts';
-import { isContainedRelativePath } from '../core/paths.ts';
+import { isRelocatablePosixPath } from '../core/paths.ts';
 import type { JsonObject } from '../core/strict-json.ts';
 import {
   NOTICE_DELIVERY_ROUTES,
@@ -363,7 +363,7 @@ const clientPaths = (
   value: readonly string[] | undefined,
 ): readonly string[] => {
   if (value === undefined) return Object.freeze([]);
-  if (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string' || !isContainedRelativePath(entry))) {
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string' || !isRelocatablePosixPath(entry))) {
     throw new CapabilityStateError(
       `The pinned ${target} table declares ${field} for client ${id} as something other than artifact-relative paths.`,
     );
@@ -408,8 +408,15 @@ const clientSurfaces = (
         }
         return [surface, Object.freeze({ evidence, state: 'supported' })];
       }
-      case 'degraded':
-        return [surface, Object.freeze({ evidence: dated('evidence', row.evidence), reason: requireReason(), state: 'degraded' })];
+      case 'degraded': {
+        const evidence = dated('evidence', row.evidence);
+        if (evidence.length === 0) {
+          throw new CapabilityStateError(
+            `The pinned ${target} table marks the ${surface} surface of client ${id} degraded without evidence of the part it does load.`,
+          );
+        }
+        return [surface, Object.freeze({ evidence, reason: requireReason(), state: 'degraded' })];
+      }
       case 'unavailable':
       case 'prohibited':
         return [surface, Object.freeze({ reason: requireReason(), state: row.state })];
@@ -428,9 +435,10 @@ const clientSurfaces = (
  * here changes what the compiler writes — so a record is evidence about a
  * reader of the existing artifact, never a projection. A client whose
  * contract needs a document Agent Bundle does not emit is recorded at the
- * tier it really reaches, and the tier is held to the rows: `agent-plugins`
- * requires a manifest the client loads, `skills` requires the skill tree, and
- * `none` may claim no supported surface at all.
+ * tier it really reaches, and the tier is held to the rows and the paths:
+ * `agent-plugins` requires a `plugin.json` the client loads as a manifest,
+ * `skills` requires the skill tree, and `none` may name no path or loaded
+ * surface at all.
  */
 export const clientCompatibilityFrom = (
   target: string,
@@ -459,31 +467,32 @@ export const clientCompatibilityFrom = (
       const surfaces = clientSurfaces(target, id, entry.surfaces);
       const required = clientPaths(target, id, 'discovery.required', entry.discovery?.required);
       const supported = (surface: string): boolean => surfaces[surface]!.state !== 'unavailable' && surfaces[surface]!.state !== 'prohibited';
-      if (entry.tier === 'agent-plugins' && surfaces.manifest!.state !== 'supported') {
-        throw new CapabilityStateError(`Client ${id} claims the agent-plugins tier in the pinned ${target} table without a manifest it loads outright.`);
+      if (entry.tier === 'agent-plugins' && !(supported('manifest') && required.includes('plugin.json'))) {
+        throw new CapabilityStateError(`Client ${id} claims the agent-plugins tier in the pinned ${target} table without reading plugin.json as a manifest it loads.`);
       }
-      if (entry.tier === 'skills' && !supported('skills')) {
-        throw new CapabilityStateError(`Client ${id} claims the skills tier in the pinned ${target} table without loading the skill tree.`);
+      if (entry.tier === 'skills' && !(supported('skills') && required.includes('skills'))) {
+        throw new CapabilityStateError(`Client ${id} claims the skills tier in the pinned ${target} table without reading the skill tree.`);
       }
-      if (entry.tier === 'none' && CLIENT_COMPATIBILITY_SURFACES.some((surface) => supported(surface))) {
-        throw new CapabilityStateError(`Client ${id} claims no tier in the pinned ${target} table while recording a surface it loads.`);
-      }
-      if (entry.tier !== 'none' && required.length === 0) {
-        throw new CapabilityStateError(`Client ${id} claims the ${entry.tier} tier in the pinned ${target} table without naming the artifact paths it discovers.`);
+      if (entry.tier === 'none' && (required.length > 0 || CLIENT_COMPATIBILITY_SURFACES.some((surface) => supported(surface)))) {
+        throw new CapabilityStateError(`Client ${id} claims no tier in the pinned ${target} table while recording a path or surface it reads.`);
       }
       const commands = entry.install?.commands;
-      if (commands !== undefined && (!Array.isArray(commands) || commands.some((command) => typeof command !== 'string' || command.trim().length === 0))) {
-        throw new CapabilityStateError(`The pinned ${target} table gives client ${id} an install block whose commands are not verbatim strings.`);
+      if (commands !== undefined && (!Array.isArray(commands) || commands.length === 0 || commands.some((command) => typeof command !== 'string' || command.trim().length === 0))) {
+        throw new CapabilityStateError(`The pinned ${target} table gives client ${id} an install block whose commands are not a non-empty list of verbatim strings.`);
       }
       const discoveryEvidence = entry.discovery?.evidence ?? [];
       if (!Array.isArray(discoveryEvidence) || discoveryEvidence.some((note) => typeof note !== 'string' || !DATED_REASON.test(note))) {
         throw new CapabilityStateError(`The pinned ${target} table gives client ${id} an undated discovery note.`);
       }
+      const shadowedBy = clientPaths(target, id, 'discovery.shadowedBy', entry.discovery?.shadowedBy);
+      if (discoveryEvidence.length === 0 && required.length + shadowedBy.length > 0) {
+        throw new CapabilityStateError(`Client ${id} names artifact paths in the pinned ${target} table with no dated evidence that it reads or shadows them.`);
+      }
       return Object.freeze({
         discovery: Object.freeze({
           evidence: Object.freeze([...discoveryEvidence]),
           required,
-          shadowedBy: clientPaths(target, id, 'discovery.shadowedBy', entry.discovery?.shadowedBy),
+          shadowedBy,
         }),
         id,
         ...(commands === undefined ? {} : {

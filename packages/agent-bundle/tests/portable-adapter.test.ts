@@ -701,11 +701,36 @@ it('refuses a client record that claims a tier its own rows do not support', () 
 
   expect(() => clientCompatibilityFrom('portable', record({}))).not.toThrow();
   expect(() => clientCompatibilityFrom('portable', record({ tier: 'agent-plugins' })))
-    .toThrow(/without a manifest it loads outright/u);
+    .toThrow(/without reading plugin\.json as a manifest it loads/u);
   expect(() => clientCompatibilityFrom('portable', record({ tier: 'none' })))
-    .toThrow(/while recording a surface it loads/u);
+    .toThrow(/while recording a path or surface it reads/u);
   expect(() => clientCompatibilityFrom('portable', record({ tier: 'native' })))
     .toThrow(/Unsupported tier "native"/u);
+  // A tier is held to the paths as well as the rows: a client recorded at the
+  // skills tier that names another path has not recorded the tree it reads.
+  expect(() => clientCompatibilityFrom('portable', record({
+    discovery: { evidence: ['2026-09-06: read from the vendor docs.'], required: ['mcp.json'] },
+  }))).toThrow(/without reading the skill tree/u);
+  // An install block with no command would render no install line, so it is refused.
+  expect(() => clientCompatibilityFrom('portable', record({ install: { commands: [] } })))
+    .toThrow(/not a non-empty list of verbatim strings/u);
+  // A path that only resolves on one platform is not an artifact-relative path.
+  expect(() => clientCompatibilityFrom('portable', record({
+    discovery: { evidence: ['2026-09-06: read from the vendor docs.'], required: ['skills\\review'] },
+  }))).toThrow(/other than artifact-relative paths/u);
+  // Naming a path the client reads is a claim, so it carries its own dated note.
+  expect(() => clientCompatibilityFrom('portable', record({ discovery: { required: ['skills'] } })))
+    .toThrow(/no dated evidence that it reads or shadows them/u);
+  // A degraded surface records the part that does load, not only the narrowing.
+  expect(() => clientCompatibilityFrom('portable', record({
+    surfaces: {
+      hooks: { reason: '2026-09-06: no hooks document is emitted.', state: 'unavailable' },
+      manifest: { reason: '2026-09-06: the root manifest is not read.', state: 'unavailable' },
+      mcp: { reason: '2026-09-06: no MCP file is read.', state: 'unavailable' },
+      placeholders: { reason: '2026-09-06: no placeholder expansion is documented.', state: 'unavailable' },
+      skills: { reason: '2026-09-06: only the first skill loads.', state: 'degraded' },
+    },
+  }))).toThrow(/degraded without evidence of the part it does load/u);
 });
 
 it('refuses an undated or silent client record', () => {

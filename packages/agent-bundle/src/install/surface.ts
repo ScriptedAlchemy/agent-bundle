@@ -239,9 +239,9 @@ const portableClients: readonly ClientCompatibilityRecord[] =
 const clientTierSentence = (record: ClientCompatibilityRecord): string => {
   switch (record.tier) {
     case 'agent-plugins':
-      return 'loads this bundle as one plugin';
+      return 'installs this bundle as one plugin';
     case 'skills':
-      return `loads \`${record.discovery.required.join('`, `')}\` from this bundle, not its manifest`;
+      return 'loads its skill tree only';
     case 'none':
       return 'loads nothing from this bundle as published';
     default:
@@ -249,22 +249,48 @@ const clientTierSentence = (record: ClientCompatibilityRecord): string => {
   }
 };
 
-/** One line per recorded client: what it loads, how to install it, and what it withholds. */
-const clientLine = (record: ClientCompatibilityRecord): string => {
+/**
+ * The paths a client reads that this bundle actually carries. A record names
+ * the client's fixed discovery locations; a bundle with no skill or no
+ * portable MCP server emits fewer of them, and the line must not claim a file
+ * that was never written.
+ */
+const clientReads = (record: ClientCompatibilityRecord, emitted: readonly string[]): readonly string[] =>
+  record.discovery.required.filter((path) => emitted.includes(path));
+
+/** One line per recorded client: what it reads here, how to install it, and what it withholds. */
+const clientLine = (emitted: readonly string[]) => (record: ClientCompatibilityRecord): string => {
   const withheld = Object.entries(record.surfaces)
     .filter(([, row]) => row.state === 'unavailable' || row.state === 'prohibited')
     .map(([surface]) => surface);
+  const reads = clientReads(record, emitted);
   return [
     `- **${record.name}** (${record.observed}) ${clientTierSentence(record)}.`,
+    record.tier === 'none'
+      ? ''
+      : reads.length === 0
+        ? ' This bundle emits none of the paths it reads.'
+        : ` Reads: \`${reads.join('`, `')}\`.`,
     record.install === undefined ? '' : ` Install: \`${record.install.commands[0]}\`.`,
     withheld.length === 0 ? '' : ` Not loaded: ${withheld.join(', ')}.`,
     record.discovery.shadowedBy.length === 0
       ? ''
-      : ` A root that also carries \`${record.discovery.shadowedBy.join('`, `')}\` is read as that instead.`,
+      : ` A root that also carries \`${record.discovery.shadowedBy.join('`, `')}\` is read as that plugin instead.`,
   ].join('');
 };
 
-const portableInstructions = (): string[] => [
+/**
+ * The fixed Agent Plugins discovery paths this bundle carries: the manifest
+ * always, the skill tree and the MCP document only when the model has
+ * something to write there.
+ */
+const portableEmittedPaths = (model: NormalizedPlugin): readonly string[] => [
+  'plugin.json',
+  ...model.skills.length === 0 ? [] : ['skills'],
+  ...model.mcpServers.some((server) => server.targets.includes('portable')) ? ['mcp.json'] : [],
+];
+
+const portableInstructions = (model: NormalizedPlugin): string[] => [
   '## Portable Agent Plugin',
   '',
   'Portable is a distribution profile, not a host runtime with one universal install location.',
@@ -281,7 +307,7 @@ const portableInstructions = (): string[] => [
   'Each line below is pinned to that client\'s own documentation on the date shown; the surfaces it does',
   'and does not load are recorded per client in the host capability reference.',
   '',
-  ...portableClients.map(clientLine),
+  ...portableClients.map(clientLine(portableEmittedPaths(model))),
   '',
   '### Cursor placeholder expansion',
   '',
@@ -339,7 +365,7 @@ const instructionsFor = (model: NormalizedPlugin, target: BuiltInHost): string[]
     case 'cursor':
       return cursorInstructions(model);
     case 'portable':
-      return portableInstructions();
+      return portableInstructions(model);
     default: {
       const exhaustive: never = target;
       throw new TypeError(`Unknown built-in install target ${String(exhaustive)}.`);

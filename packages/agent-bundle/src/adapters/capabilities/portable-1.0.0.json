@@ -306,11 +306,11 @@
       },
       "surfaces": {
         "manifest": {
-          "reason": "2026-09-06: https://www.antigravity.google/docs/cli/plugins requires a root plugin.json and publishes a closed schema for it (\"additionalProperties\": false, \"required\": [\"name\"], properties name and description only), which rejects the Agent Plugins manifest fields version, author, homepage, repository, license, keywords, and $schema that this artifact emits.",
+          "reason": "2026-09-06: unproven. https://www.antigravity.google/docs/cli/plugins requires a root plugin.json and embeds a closed schema for it (\"additionalProperties\": false, \"required\": [\"name\"], properties name and description only) that omits every other Agent Plugins manifest field this artifact emits — including the $schema its own example shows — and the schema URL that example cites returns 404. No page states what install-time validation does with an unknown root key, and no CLI run against the emitted manifest is recorded here.",
           "state": "unavailable"
         },
         "skills": {
-          "reason": "2026-09-06: the root plugin.json is \"a mandatory manifest located at the root of your plugin directory\" (https://www.antigravity.google/docs/cli/plugins), so no component of this artifact is reachable while that manifest is rejected; Antigravity's own plugin layout does document skills/<skill-name>/SKILL.md.",
+          "reason": "2026-09-06: unproven. The root plugin.json is \"a mandatory manifest located at the root of your plugin directory\" (https://www.antigravity.google/docs/cli/plugins), so component discovery depends on the unproven manifest outcome above; Antigravity does document skills/<skill-name>/SKILL.md in its own plugin layout, and nothing here establishes whether the emitted tree is reached.",
           "state": "unavailable"
         },
         "mcp": {
@@ -348,8 +348,7 @@
         ],
         "shadowedBy": [
           ".devin-plugin/plugin.json",
-          ".claude-plugin/plugin.json",
-          ".mcp.json"
+          ".claude-plugin/plugin.json"
         ],
         "evidence": [
           "2026-09-06: https://docs.devin.ai/cli/extensibility/plugins/overview states \"Devin also loads plugins packaged in two other layouts, with manifest precedence .devin-plugin/plugin.json > .claude-plugin/plugin.json > root plugin.json\", so a composite root that also carries a Devin or Claude manifest is read as that plugin instead.",
@@ -395,7 +394,7 @@
       "tier": "skills",
       "install": {
         "commands": [
-          "grok plugin install <source> --trust",
+          "grok plugin install ./<plugin directory> --trust",
           "grok plugin validate <plugin directory>",
           "grok plugin enable <name>"
         ],
@@ -408,7 +407,7 @@
         "shadowedBy": [],
         "evidence": [
           "2026-09-06: https://raw.githubusercontent.com/xai-org/grok-build/main/crates/codegen/xai-grok-pager/docs/user-guide/09-plugins.md states \"An optional plugin.json manifest can override paths or add metadata; without one, Grok discovers components from these standard directories\", and lists skills/ among them.",
-          "2026-09-06: no upstream page documents installing from a local directory path; the documented examples name a marketplace plugin (`grok plugin install deploy-tools --trust`), so the local-install command shape above is unproven.",
+          "2026-09-06: the same pinned file lists the accepted install sources including \"a local path (`./local-dir` or `/absolute/path`)\", and states \"Grok trusts plugins in `~/.grok/plugins/` automatically; project plugins in `.grok/plugins/` require trust\", so the emitted directory installs in place with `--trust`.",
           "2026-09-06: no upstream page publishes the manifest's required fields or a precedence order among plugin.json, .grok-plugin/plugin.json, and .claude-plugin/plugin.json."
         ]
       },
@@ -509,8 +508,8 @@
       "tier": "skills",
       "install": {
         "commands": [
-          "qoder plugins validate <plugin directory>",
           "qoder plugins install <plugin directory> --scope user",
+          "qoder plugins validate <plugin directory>",
           "qoder plugins list --json"
         ],
         "location": "the --scope target (user, project, or local); enablement is recorded in settings.json as enabledPlugins"
@@ -520,10 +519,7 @@
           "skills",
           "mcp.json"
         ],
-        "shadowedBy": [
-          ".qoder-plugin/plugin.json",
-          ".mcp.json"
-        ],
+        "shadowedBy": [],
         "evidence": [
           "2026-09-06: https://docs.qoder.com/cli/plugins-reference states the manifest \"is located at .qoder-plugin/plugin.json and must not be placed in the plugin root directory\", and that without a manifest \"the CLI loads components from conventional directories and uses the plugin directory name as the plugin name\".",
           "2026-09-06: https://docs.qoder.com/cli/plugins states \"plugins install for a local plugin requires at least one recognizable component or resource\", which the emitted skills/ tree and mcp.json satisfy.",
