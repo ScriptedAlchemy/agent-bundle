@@ -182,7 +182,7 @@ const topLevel = async (root: string): Promise<readonly string[]> => (await read
 
 type BuiltInHost = 'claude' | 'codex' | 'cursor' | 'portable';
 
-const supportedPairs: readonly (readonly [BuiltInHost, BuiltInHost])[] = Object.freeze([
+const nonCollidingFixturePairs: readonly (readonly [BuiltInHost, BuiltInHost])[] = Object.freeze([
   ['claude', 'codex'],
   ['claude', 'portable'],
   ['codex', 'cursor'],
@@ -268,16 +268,13 @@ const assertEffectiveSurface = async (
 
   const inspected = await inspect({ root: dirname(root) });
   expect(inspected.state).toBe('ready');
-  if (inspected.state === 'ready') {
+  if (inspected.state !== 'ready') throw new TypeError(`inspect returned ${inspected.state}.`);
     const summary = inspected.output.manifest;
-    expect(summary).toBeDefined();
-    if (summary !== undefined && !('status' in summary)) {
-      expect(summary.projections.map((projection) => projection.host)).toEqual(
-        manifest.projections.map((projection) => projection.host),
-      );
-      expect(summary.executables.hooks).toBe(manifest.executables.hooks.length);
-    }
-  }
+    if (summary === undefined || 'status' in summary) throw new TypeError('inspect did not return a valid artifact manifest.');
+    expect(summary.projections.map((projection) => projection.host)).toEqual(
+      manifest.projections.map((projection) => projection.host),
+    );
+    expect(summary.executables.hooks).toBe(manifest.executables.hooks.length);
 };
 
 describe('composite plugin root (#555)', () => {
@@ -463,7 +460,7 @@ describe('composite plugin root (#555)', () => {
   });
 
   it('preserves each supported pair effective discovery surface in either target order (#651)', { timeout: 600_000 }, async () => {
-    for (const pair of supportedPairs) {
+    for (const pair of nonCollidingFixturePairs) {
       const root = await mkdtemp(join(tmpdir(), 'agent-bundle-composite-discovery-'));
       roots.push(root);
       await writeProject(root, { targets: pair });

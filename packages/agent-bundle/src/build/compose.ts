@@ -60,7 +60,7 @@ const sameBytes = (left: TargetArtifactEntry, right: TargetArtifactEntry): boole
 };
 
 const collisionDiagnostic = (relativePath: string, owners: readonly string[]): Diagnostic => {
-  const component = relativePath.includes('/') ? relativePath.slice(0, relativePath.indexOf('/')) : 'root manifest';
+  const component = relativePath.includes('/') ? relativePath.slice(0, relativePath.indexOf('/')) : 'root';
   return {
     code: 'AB4103',
     generatedPath: relativePath,
