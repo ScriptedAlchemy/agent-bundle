@@ -26,8 +26,9 @@ const declaresMain = (statement: ts.Statement): boolean => {
   return false;
 };
 
-export const scanEntryExportsSource = (source: string): EntryExportScan => {
-  const file = ts.createSourceFile('entry.ts', source, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
+/** `fileName` selects the grammar (`.tsx`/`.jsx` parse JSX; `.ts` keeps angle-bracket assertions). */
+export const scanEntryExportsSource = (source: string, fileName = 'entry.ts'): EntryExportScan => {
+  const file = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, false);
   let hasDefaultExport = false;
   let hasMainExport = false;
   for (const statement of file.statements) {
@@ -45,7 +46,7 @@ export const scanEntryExportsSource = (source: string): EntryExportScan => {
       }
       continue;
     }
-    if (!hasModifier(statement, ts.SyntaxKind.ExportKeyword)) continue;
+    if (!hasModifier(statement, ts.SyntaxKind.ExportKeyword) || hasModifier(statement, ts.SyntaxKind.DeclareKeyword)) continue;
     if (hasModifier(statement, ts.SyntaxKind.DefaultKeyword)) hasDefaultExport = true;
     else if (declaresMain(statement)) hasMainExport = true;
   }
@@ -53,4 +54,4 @@ export const scanEntryExportsSource = (source: string): EntryExportScan => {
 };
 
 export const scanEntryExports = async (source: string): Promise<EntryExportScan> =>
-  scanEntryExportsSource(await readFile(source, 'utf8'));
+  scanEntryExportsSource(await readFile(source, 'utf8'), source);

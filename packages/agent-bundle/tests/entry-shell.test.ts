@@ -68,6 +68,17 @@ describe('entry export scanning', () => {
     expect(scanEntryExportsSource('const t = `a ${`b ${1} export default c`} d`;').hasDefaultExport).toBe(false);
   });
 
+  it('parses JSX by file name and ignores ambient declarations', () => {
+    const tsx = 'const view = <main>export default nothing</main>;\nexport default () => view;';
+    expect(scanEntryExportsSource(tsx, '/app/entry.tsx').hasDefaultExport).toBe(true);
+    expect(scanEntryExportsSource('const n = <number>1; export const main = n;', '/app/entry.ts').hasMainExport).toBe(true);
+    expect(scanEntryExportsSource('export declare const main: number;')).toEqual({
+      hasDefaultExport: false,
+      hasMainExport: false,
+    });
+    expect(scanEntryExportsSource('export declare function main(): void;').hasMainExport).toBe(false);
+  });
+
   it('survives regex literals containing slashes', () => {
     const source = "const re = /https:\\/\\//u; export default re;";
     expect(scanEntryExportsSource(source).hasDefaultExport).toBe(true);
