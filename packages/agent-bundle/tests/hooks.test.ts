@@ -116,7 +116,7 @@ const fixtureHookManifest = (
     distribution: { channels: ['local'], payloads: [] },
     executables: { bins: [], hooks, mcpServers: [], scripts: [] },
     files,
-    manifestVersion: 2,
+    manifestVersion: 3,
     projections,
     routes: {
       digest: emptyCompiledRouteGraph.digest,

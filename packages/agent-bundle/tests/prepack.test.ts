@@ -1,5 +1,5 @@
 import { execFile as executeFile } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -8,6 +8,7 @@ import { gzipSync } from 'node:zlib';
 import { afterAll, beforeAll, expect, it } from '@rstest/core';
 
 import { prepack } from '../src/api.ts';
+import { packageCompileEvidenceFileName } from '../src/build/compile-evidence.ts';
 import { runCli } from '../src/cli.ts';
 import { type Diagnostic, DiagnosticError } from '../src/core/diagnostics.ts';
 import type { NormalizedPayload } from '../src/core/types.ts';
@@ -53,8 +54,6 @@ beforeAll(async () => {
   await symlink(workspaceNodeModules, join(projectRoot, 'node_modules'), 'dir');
   await Promise.all([
     writeFile(join(projectRoot, 'package.json'), `${JSON.stringify({
-      bin: { 'installer-fixture': './dist/bin/installer-fixture.js' },
-      files: ['dist', 'host-packs', 'README.md'],
       name: 'installer-fixture',
       type: 'module',
       version: '1.2.3',
@@ -73,7 +72,7 @@ beforeAll(async () => {
     writeFile(join(projectRoot, 'src', 'index.ts'), 'export const value = 1;\n'),
   ]);
   result = await prepack({ root: projectRoot });
-  payloadPath = join(projectRoot, 'host-packs', 'INSTALL.md');
+  payloadPath = join(projectRoot, 'dist', 'INSTALL.md');
   payloadBytes = await readFile(payloadPath, 'utf8');
 });
 
@@ -86,7 +85,6 @@ const diagnostics = (
   packerRewritesWorkspaceProtocols = false,
 ): Promise<readonly Diagnostic[]> =>
   packInventoryDiagnostics({
-    artifactRoot: result.build.build.outputRoot,
     model: result.build.model,
     packageBuild: result.build.packageBuild!,
     packOutput,
@@ -126,8 +124,8 @@ it('selects the intended pack entry by package name when npm lists sibling works
 
 it('prepack validates the complete dry-run inventory', async () => {
   expect(await diagnostics()).toEqual([]);
-  expect(result.pack.files.map((file) => file.path)).toContain('dist/bin/installer-fixture.js');
-  expect(result.pack.files.map((file) => file.path)).toContain('host-packs/agent-bundle.manifest.json');
+  expect(result.pack.files.map((file) => file.path)).toContain('index.js');
+  expect(result.pack.files.map((file) => file.path)).toContain('agent-bundle.manifest.json');
 });
 
 it('exposes --root, --output, and --json through the prepack command', async () => {
@@ -158,7 +156,7 @@ it('exposes --root, --output, and --json through the prepack command', async () 
 it('reports missing allowlisted artifacts as AB7010', async () => {
   const pack = {
     ...result.pack,
-    files: result.pack.files.filter((file) => file.path !== 'host-packs/INSTALL.md'),
+    files: result.pack.files.filter((file) => file.path !== 'INSTALL.md'),
   };
   expect(await diagnostics(pack)).toContainEqual(expect.objectContaining({ code: 'AB7010' }));
 });
@@ -180,7 +178,7 @@ it('requires README.md even when the source file is absent', async () => {
   }
 });
 
-it('reports stale artifact hashes as AB7011', async () => {
+it('reports stale npm-root hashes as AB7011', async () => {
   await writeFile(payloadPath, `${payloadBytes}stale\n`);
   try {
     expect(await diagnostics()).toContainEqual(expect.objectContaining({ code: 'AB7011' }));
@@ -189,19 +187,36 @@ it('reports stale artifact hashes as AB7011', async () => {
   }
 });
 
+it('reports package-only compile evidence drift as AB6039', async () => {
+  const path = join(projectRoot, 'dist', packageCompileEvidenceFileName);
+  const original = await readFile(path, 'utf8');
+  try {
+    await writeFile(path, '{"assets":[]}\n');
+    expect(await diagnostics()).toContainEqual(expect.objectContaining({ code: 'AB6039' }));
+  } finally {
+    await writeFile(path, original);
+  }
+});
+
 /** Runs `run` against `package.json` rewritten by `mutate`, restoring the original afterwards. */
 const withPackageDocument = async (
   mutate: (document: Record<string, unknown>) => void,
   run: () => Promise<void>,
 ): Promise<void> => {
-  const packagePath = join(projectRoot, 'package.json');
+  const sourcePackagePath = join(projectRoot, 'package.json');
+  const packagePath = join(projectRoot, 'dist', 'package.json');
+  const sourceOriginal = await readFile(sourcePackagePath, 'utf8');
   const original = await readFile(packagePath, 'utf8');
+  const sourceDocument = JSON.parse(sourceOriginal) as Record<string, unknown>;
   const document = JSON.parse(original) as Record<string, unknown>;
+  mutate(sourceDocument);
   mutate(document);
+  await writeFile(sourcePackagePath, `${JSON.stringify(sourceDocument, null, 2)}\n`);
   await writeFile(packagePath, `${JSON.stringify(document, null, 2)}\n`);
   try {
     await run();
   } finally {
+    await writeFile(sourcePackagePath, sourceOriginal);
     await writeFile(packagePath, original);
   }
 };
@@ -235,12 +250,12 @@ it('reports installed dependencies a consumer never needs as AB7014, per field',
     // One diagnostic per field; devDependencies never reach a consumer and optional peers are never installed, so
     // nothing has to use optional-host. The generated install bin inlines `effect`, so the compiler's evidence names
     // that bundle; `zod` reached no bundle and is only listed.
-    expect(result.build.packageBuild!.evidence.assets.find((asset) => asset.path === 'dist/bin/installer-fixture.js')?.packages)
-      .toContain('effect');
+    expect(result.build.packageBuild!.evidence.assets.find((asset) => asset.path === 'index.js')?.packages)
+      .toEqual([]);
     expect(reported.map((diagnostic) => diagnostic.message)).toEqual([
       'package.json dependencies names packages a consumer never needs installed: no packed declaration file references them, '
         + 'no consumer-side install script names or runs them, and no prebuilt payload declares them in runtimeDependencies: '
-        + '"effect", "zod". The build inlined "effect" into dist/bin/installer-fixture.js; every consumer installs them for nothing.',
+        + '"effect", "zod". Nothing packed reaches them at runtime; every consumer installs them for nothing.',
       expect.stringMatching(/^package\.json peerDependencies .*"react"\. If they only constrain the host version/u),
     ]);
     // A required peer nothing imports may be a deliberate host-compatibility contract: a warning, not a refusal.
@@ -253,7 +268,7 @@ it('reports installed dependencies a consumer never needs as AB7014, per field',
   },
 ));
 
-/** The shared fixture's package build, its evidence record's `packages` set per recorded asset path (`dist/…`). */
+/** The shared fixture's package build, with compiler package evidence replaced per package-root path. */
 const packageBuildBundling = (bundled: Readonly<Record<string, readonly string[]>>): PackageBuildResult => {
   const packageBuild = result.build.packageBuild!;
   return {
@@ -273,13 +288,11 @@ it('reports a dependency only compiled dist bundles inlined as AB7014, naming th
   },
   async () => {
     const paths = result.build.packageBuild!.files.map((file) => file.path);
-    expect(paths).toEqual(expect.arrayContaining(['bin/installer-fixture.js', 'index.js']));
+    expect(paths).toContain('index.js');
     const reported = withCode(await packInventoryDiagnostics({
-      artifactRoot: result.build.build.outputRoot,
       model: result.build.model,
       packageBuild: packageBuildBundling({
-        'dist/bin/installer-fixture.js': ['left-pad', 'tiny-pkg'],
-        'dist/index.js': ['left-pad', 'react'],
+        'index.js': ['left-pad', 'react', 'tiny-pkg'],
       }),
       packOutput: result.pack,
       packerRewritesWorkspaceProtocols: false,
@@ -289,9 +302,9 @@ it('reports a dependency only compiled dist bundles inlined as AB7014, naming th
     // field order and each name's bundles sorted. A peer the build inlined gets the same sentence; a field the
     // compiler never touched gets the plain tail.
     expect(reported.map((diagnostic) => diagnostic.message)).toEqual([
-      expect.stringMatching(/^package\.json dependencies .*: "left-pad", "never-loaded", "tiny-pkg"\. The build inlined "left-pad" into dist\/bin\/installer-fixture\.js and dist\/index\.js, and "tiny-pkg" into dist\/bin\/installer-fixture\.js; every consumer installs them for nothing\.$/u),
+      expect.stringMatching(/^package\.json dependencies .*: "left-pad", "never-loaded", "tiny-pkg"\. The build inlined "left-pad" into index\.js, and "tiny-pkg" into index\.js; every consumer installs them for nothing\.$/u),
       expect.stringMatching(/^package\.json optionalDependencies .*: "optional-extra"\. Nothing packed reaches them at runtime; every consumer installs them for nothing\.$/u),
-      expect.stringMatching(/^package\.json peerDependencies .*: "react"\. The build inlined "react" into dist\/index\.js; every consumer installs them for nothing\.$/u),
+      expect.stringMatching(/^package\.json peerDependencies .*: "react"\. The build inlined "react" into index\.js; every consumer installs them for nothing\.$/u),
     ]);
     expect(reported.map((diagnostic) => diagnostic.severity)).toEqual(['error', 'error', 'warning']);
   },
@@ -312,7 +325,6 @@ it('accepts a dependency declared by a prebuilt payload runtimeDependencies list
       targets: ['claude'],
     };
     const reported = withCode(await packInventoryDiagnostics({
-      artifactRoot: result.build.build.outputRoot,
       model: { ...result.build.model, payloads: [payload] },
       packageBuild: result.build.packageBuild!,
       packOutput: result.pack,
@@ -703,7 +715,7 @@ it('accepts a dependency a prebuilt payload declares in runtimeDependencies: pre
   expect(withCode(reported, 'AB6005')).toHaveLength(0);
   expect(withCode(reported, 'AB7014')).toHaveLength(0);
   // The payload is copied once into the composite root (#555): no `<target>/` partition under `distPath`.
-  expect(packed.pack.files.map((file) => file.path)).toContain('host-packs/runtime/mcp/server.js');
+  expect(packed.pack.files.map((file) => file.path)).toContain('runtime/mcp/server.js');
 }, 180_000);
 
 it('fails prepack with compile-time AB6005, never AB7014, when only a compiled dist bundle imports a declared dependency', async () => {
@@ -742,7 +754,7 @@ it('fails prepack with compile-time AB6005, never AB7014, when only a compiled d
   expect(withCode(reported, 'AB7014')).toHaveLength(0);
 }, 180_000);
 
-it('installs a real packed tarball and runs its Cursor installer from node_modules', async () => {
+it('installs a real generated tarball and runs its manifest-driven Cursor installer from node_modules', async () => {
   const tarballs = join(cleanupRoot, 'tarballs');
   const consumer = join(cleanupRoot, 'consumer');
   const home = join(cleanupRoot, 'home');
@@ -752,23 +764,20 @@ it('installs a real packed tarball and runs its Cursor installer from node_modul
     mkdir(join(home, '.cursor'), { recursive: true }),
   ]);
   const { stdout } = await execFile('npm', ['pack', '--json', '--ignore-scripts', '--pack-destination', tarballs], {
-    cwd: projectRoot,
+    cwd: join(projectRoot, 'dist'),
   });
   const packed = packOutputFromJson(stdout);
   await writeFile(join(consumer, 'package.json'), '{"private":true}\n');
   await execFile('npm', ['install', '--ignore-scripts', '--no-audit', '--no-fund', join(tarballs, packed.filename)], {
     cwd: consumer,
   });
-  const sourceCopy = join(cleanupRoot, 'source-copy');
-  await cp(projectRoot, sourceCopy, { recursive: true, filter: (source) => source !== join(projectRoot, 'node_modules') });
   await rm(projectRoot, { force: true, recursive: true });
 
-  const installedBin = join(consumer, 'node_modules', '.bin', 'installer-fixture');
-  const installed = await execFile(installedBin, ['install', 'cursor', '--json'], {
+  const installer = join(consumer, 'node_modules', 'installer-fixture', 'install.mjs');
+  const installed = await execFile(process.execPath, [installer], {
     cwd: consumer,
     env: { ...process.env, HOME: home },
   });
-  expect(JSON.parse(installed.stdout)).toMatchObject({ host: 'cursor', state: 'installed' });
+  expect(installed.stdout).toContain('Installed installer-fixture@1.2.3');
   await expect(stat(join(home, '.cursor', 'plugins', 'local', 'installer-fixture'))).resolves.toBeDefined();
-  expect(await readFile(join(sourceCopy, 'src', 'index.ts'), 'utf8')).toBe('export const value = 1;\n');
 });

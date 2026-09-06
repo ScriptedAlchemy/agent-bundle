@@ -8,7 +8,7 @@ import type {
 } from '../build/manifest.ts';
 import { DiagnosticError } from '../core/diagnostics.ts';
 import { errorMessage, isErrno } from '../core/errors.ts';
-import { manifestInventory, type TreeInventory } from './receipt.ts';
+import { manifestInventory, treeInventory, type TreeInventory } from './receipt.ts';
 
 export type BundleIdentityHost = 'claude' | 'codex' | 'cursor';
 
@@ -131,5 +131,29 @@ export const bundleInventory = async (identity: PluginIdentity): Promise<TreeInv
   } catch (error) {
     if (error instanceof DiagnosticError) throw error;
     throw failure('AB7001', errorMessage(error), identity.host);
+  }
+};
+
+/** Compares manifest-owned bytes for current installs and the full tree for pre-manifest host caches. */
+export const installedBundleInventory = async (
+  root: string,
+  host: BundleIdentityHost,
+): Promise<TreeInventory> => {
+  const read = await readArtifactManifest(root);
+  switch (read.status) {
+    case 'missing':
+      return treeInventory(read.root);
+    case 'invalid':
+      throw failure(
+        'AB7001',
+        `agent-bundle.manifest.json in ${read.root} is not a valid canonical artifact manifest: ${read.detail}`,
+        host,
+      );
+    case 'ok':
+      return manifestInventory(read.root, read.manifest, { verifyHashes: false });
+    default: {
+      const exhaustive: never = read;
+      throw new TypeError(`Unknown artifact manifest read result ${String(exhaustive)}.`);
+    }
   }
 };

@@ -1,13 +1,18 @@
 import { lstat } from 'node:fs/promises';
-import { join, relative, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import type { NormalizedPlugin } from '../core/types.ts';
 import type { Diagnostic, DiagnosticSeverity } from '../core/diagnostics.ts';
 import { sha256Hex } from '../core/digest.ts';
-import { isErrno } from '../core/errors.ts';
+import { errorMessage, isErrno } from '../core/errors.ts';
 import { deepFreeze } from '../core/freeze.ts';
 import { isRecord } from '../core/strict-json.ts';
 import { readFileBytes, readFileString, runWithPlatform } from '../effect/platform.ts';
+import {
+  compileEvidenceDiagnostics,
+  packageCompileEvidenceFileName,
+  parseCompileEvidenceRecord,
+} from './compile-evidence.ts';
 import { artifactManifestName } from './emit.ts';
 import { parseArtifactManifest } from './manifest.ts';
 import { declaredDependencies, type DeclaredDependency, type InstalledDependencyField } from '../core/package-dependencies.ts';
@@ -82,9 +87,6 @@ export const packOutputFromJson = (stdout: string, packageName?: string): PackOu
   return Object.freeze({ filename: entry.filename, files: Object.freeze(files) });
 };
 
-const toPosixRelative = (root: string, path: string): string =>
-  relative(resolve(root), resolve(path)).replaceAll('\\', '/');
-
 /** Stays on `lstat`: a dangling symlink at a host manifest path still counts as present. */
 const exists = async (path: string): Promise<boolean> => {
   try {
@@ -144,6 +146,7 @@ const dependencyDiagnostics = async (options: {
   /** Package → the packed bundles the compiler inlined it into, each sorted. */
   readonly bundledInto: ReadonlyMap<string, readonly string[]>;
   readonly declaredRuntimeDependencies: ReadonlySet<string>;
+  readonly dependencyRoot: string;
   readonly packageDocument: Readonly<Record<string, unknown>>;
   readonly packedPaths: readonly string[];
   readonly packerRewritesWorkspaceProtocols: boolean;
@@ -158,6 +161,7 @@ const dependencyDiagnostics = async (options: {
   });
   const installScripts = await installScriptDependencies({
     declared: declared.filter((dependency) => dependency.installed).map((dependency) => dependency.name),
+    dependencyRoot: options.dependencyRoot,
     packageDocument: options.packageDocument,
     projectRoot: options.projectRoot,
   });
@@ -233,7 +237,6 @@ const dependencyDiagnostics = async (options: {
 };
 
 export const packInventoryDiagnostics = async (options: {
-  readonly artifactRoot: string;
   readonly model: NormalizedPlugin;
   readonly packageBuild: PackageBuildResult;
   readonly packOutput: PackOutput;
@@ -241,21 +244,13 @@ export const packInventoryDiagnostics = async (options: {
   readonly packerRewritesWorkspaceProtocols: boolean;
   readonly projectRoot: string;
 }): Promise<readonly Diagnostic[]> => {
-  const projectRoot = resolve(options.projectRoot);
-  const artifactRoot = resolve(options.artifactRoot);
-  const artifactPrefix = toPosixRelative(projectRoot, artifactRoot);
-  const packagePrefix = toPosixRelative(projectRoot, options.packageBuild.outputRoot);
-  const manifestPath = join(artifactRoot, artifactManifestName);
+  const packageRoot = resolve(options.packageBuild.outputRoot);
+  const manifestPath = join(packageRoot, artifactManifestName);
   const manifest = parseArtifactManifest(await runWithPlatform(readFileString(manifestPath)));
-  const packageDocument = await jsonRecord(join(projectRoot, 'package.json'));
+  const packageDocument = await jsonRecord(join(packageRoot, 'package.json'));
   const packed = new Set(options.packOutput.files.map((file) => file.path.replace(/^\.\//u, '')));
   const expected = new Set<string>([
-    ...options.packageBuild.files.map((file) => `${packagePrefix}/${file.path}`),
-    `${artifactPrefix}/${artifactManifestName}`,
-    // Every emitted file is manifested, the install surface included: the
-    // artifact validator (`AB6023`/`AB6024`) already judged its presence by
-    // adapter identity, so the pack expects exactly what the manifest lists.
-    ...manifest.files.map((file) => `${artifactPrefix}/${file.path}`),
+    ...options.packageBuild.files.map((file) => file.path),
     'README.md',
   ]);
 
@@ -265,34 +260,53 @@ export const packInventoryDiagnostics = async (options: {
     diagnostics.push(diagnostic(
       'AB7010',
       `npm pack omits expected files: ${quoteAll(missing)}.`,
-      'Add the exact paths (including dist and the artifact directory) to the package.json "files" allowlist.',
+      'Pack the generated npm root without excluding its files.',
     ));
   }
 
   const stale: string[] = [];
   for (const file of manifest.files) {
-    const bytes = await runWithPlatform(readFileBytes(join(artifactRoot, file.path)));
-    if (sha256Hex(bytes) !== file.sha256) stale.push(`${artifactPrefix}/${file.path}`);
+    const bytes = await runWithPlatform(readFileBytes(join(packageRoot, file.path)));
+    if (sha256Hex(bytes) !== file.sha256) stale.push(file.path);
   }
   if (stale.length > 0) {
     diagnostics.push(diagnostic(
       'AB7011',
-      `Artifact files no longer match their manifest hashes: ${quoteAll(stale.sort())}.`,
-      'Run agent-bundle prepack again without modifying generated artifacts.',
+      `Packed npm-root files no longer match their manifest hashes: ${quoteAll(stale.sort())}.`,
+      'Run agent-bundle prepack again without modifying the generated npm root.',
+    ));
+  }
+
+  try {
+    const evidence = parseCompileEvidenceRecord(
+      await runWithPlatform(readFileString(join(packageRoot, packageCompileEvidenceFileName))),
+    );
+    const artifactPaths = new Set(manifest.files.map((file) => file.path));
+    diagnostics.push(...compileEvidenceDiagnostics(
+      evidence,
+      new Map(options.packageBuild.files
+        .filter((file) => file.kind === 'bundle' && !artifactPaths.has(file.path))
+        .map((file) => [file.path, { kind: file.kind, sha256: file.sha256 }])),
+    ));
+  } catch (error) {
+    diagnostics.push(diagnostic(
+      'AB6039',
+      `Package compile evidence cannot be read: ${errorMessage(error)}.`,
+      'Rebuild the generated npm root and do not modify its compile evidence sidecar.',
     ));
   }
 
   const invalidBins = binEntries(packageDocument.bin)
     .filter(([, target]) => {
       const normalized = target.replace(/^\.\//u, '');
-      return !normalized.startsWith(`${packagePrefix}/`) || normalized.startsWith('src/') || !packed.has(normalized);
+      return normalized.startsWith('src/') || !packed.has(normalized);
     });
   if (invalidBins.length > 0) {
     diagnostics.push(diagnostic(
       'AB7012',
-      `package.json bins must name packed dist outputs: ${invalidBins.map(([name, target]) =>
+      `package.json bins must name files in the packed npm root: ${invalidBins.map(([name, target]) =>
         `${JSON.stringify(name)} -> ${JSON.stringify(target)}`).join(', ')}.`,
-      'Point every package.json bin value at its generated file under dist/bin and include that file in "files".',
+      'Point routed CLIs at their manifest-declared bin/<name>.mjs and authored bins at generated bin/*.js files.',
     ));
   }
 
@@ -307,7 +321,7 @@ export const packInventoryDiagnostics = async (options: {
   for (const projection of manifest.projections) {
     const path = projection.documents.plugin;
     if (path === undefined) continue;
-    const absolute = join(artifactRoot, path);
+    const absolute = join(packageRoot, path);
     if (await exists(absolute)) {
       versions.push([path, (await jsonRecord(absolute)).version]);
     }
@@ -332,10 +346,11 @@ export const packInventoryDiagnostics = async (options: {
   diagnostics.push(...await dependencyDiagnostics({
     bundledInto,
     declaredRuntimeDependencies: new Set((options.model.payloads ?? []).flatMap((payload) => payload.runtimeDependencies)),
+    dependencyRoot: resolve(options.projectRoot),
     packageDocument,
     packedPaths: [...packed],
     packerRewritesWorkspaceProtocols: options.packerRewritesWorkspaceProtocols,
-    projectRoot,
+    projectRoot: packageRoot,
   }));
 
   return deepFreeze(diagnostics.sort((left, right) => left.code.localeCompare(right.code)));

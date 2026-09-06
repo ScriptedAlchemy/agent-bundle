@@ -57,7 +57,7 @@ those features, not the build. This example has no hooks.
   progress token, then replaces it with the completed analysis without changing the final
   structured receipt. No `progress.report()` call repeats the message.
 - **The framework owns the package build.** The config declares no `bin` or `scripts` field. The routed
-  `src/cli/` commands compile into `dist/bin/audiobook-curator.js` for `package.json` `bin`, and
+  `src/cli/` commands compile into `dist/bin/audiobook-curator.mjs` for `package.json` `bin`, and
   `dist/index.js` plus declarations serve `exports`. See
   [CLI and library package entries](../guide/authoring/package-entries.mdx).
 - **`package.json` is the single version source.** The config declares no `plugin.version`; the
@@ -110,7 +110,7 @@ directory already on `PATH`:
 
 ```sh
 cd examples/audiobook-curator
-ln -s "$(pwd)/dist/bin/audiobook-curator.js" ~/.local/bin/audiobook-curator
+ln -s "$(pwd)/dist/bin/audiobook-curator.mjs" ~/.local/bin/audiobook-curator
 audiobook-curator --help
 ```
 

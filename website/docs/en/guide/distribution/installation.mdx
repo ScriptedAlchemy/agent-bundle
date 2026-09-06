@@ -1,5 +1,5 @@
 ---
-description: 'Install a built agent-bundle into Claude Code, Codex, or Cursor: the install command, host scopes, the standalone install.mjs, the installer bin, and Doctor.'
+description: 'Install a built agent-bundle into Claude Code, Codex, or Cursor: the install command, host scopes, the standalone install.mjs, npm CLI parity, and Doctor.'
 ---
 
 # Host installation
@@ -55,7 +55,9 @@ node ./install.mjs
 ```
 
 Its staged copy is idempotent for identical content and refuses version or content collisions. It
-never invokes `sudo` and never changes `PATH`.
+never invokes `sudo` and never changes `PATH`. When `agent-bundle.manifest.json` is present, the
+installer reads the selected projection's plugin and MCP pointers from it; conventional
+`.cursor-plugin/*` and root Agent Plugins paths are fallback discovery for manifest-less packs only.
 
 For a root Cursor loads as an Agent Plugins 1.0.0 pack — `portable` selected without `cursor`,
 so the root `plugin.json` is the only manifest Cursor finds — the installer also expands the
@@ -75,21 +77,24 @@ Cursor behaviour: the provenance is `derived`, and a root that carries `.cursor-
 Artifact validation rejects a root whose required install surface is missing, so a bundle cannot
 ship without the installer it promises.
 
-## The package-relative installer bin
+## The npm-installed CLI
 
-When package outputs ship beside a root with a built-in host selected, the build also emits a
-package-relative installer bin. It uses the plugin name when no configured bin claims it, and
-`<plugin-name>-install` otherwise (with a numeric suffix if both are taken). Map that name to the
-generated `dist/bin/*.js` file in `package.json`; consumers then run:
+The npm package root contains every manifest-owned composite-plugin byte plus npm-only metadata
+and authored package entries. Commands such as `validate --artifact` still take the bare composite
+artifact; `install --from` is manifest-aware and accepts either root. For a generated routed CLI,
+`package.json` points its `bin` at the same `bin/<name>.mjs` executable the artifact exposes,
+without a second compilation or wrapper. Its complete command surface, including `web`, therefore
+works from `node_modules` exactly as it does from a copied artifact. **No npm lifecycle performs a
+host installation** — installing a package never mutates a host's plugin state.
 
-```sh
-<bin> install <host> [--scope <scope>] [--json]
-```
+Repository `AGENTS.md` instructions are copied as authored package metadata. They are never
+replaced by generated projection instructions; a path collision fails the package build.
 
-Help lists only the hosts that were actually built. The executable locates the artifact directory
-beside the installed package from `import.meta.url`, never the caller's working directory, so it
-works from `node_modules` regardless of where it is invoked. **No npm lifecycle performs an
-installation** — installing a package never mutates a host's plugin state.
+Install any supported host explicitly from that root with
+`npx agent-bundle install <host> --from node_modules/<package>`. This manifest-aware path excludes
+npm-only metadata and authored package entries from host ownership comparisons. The packed host
+proof reconstructs the manifest-owned artifact from the installed package and exercises
+`agent-bundle install --from` after deleting the source checkout.
 
 ## Development installs are a different thing
 
@@ -100,8 +105,8 @@ covered in [Developer Workbench](../development/workbench.mdx) and is not the sa
 
 ## Reinstalling after a rebuild
 
-Every emitted installer — `agent-bundle install <host>`, the package-relative bin, and the
-standalone `install.mjs` — shares one replace policy. An identical copy is an `already-installed`
+Every emitted installer — `agent-bundle install <host>` and the standalone `install.mjs` —
+shares one replace policy. An identical copy is an `already-installed`
 no-op. A copy of the **same version whose content hash differs** is replaced automatically, so
 rebuilding without a version bump no longer needs an uninstall and `rm -rf`. A different version is
 refused with `AB7005` unless you pass `--replace` (alias `--force`), and a foreign directory — one

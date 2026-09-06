@@ -37,7 +37,7 @@ it.concurrent('scaffolds the mcp-server template and serves the conventional ent
 
   const checked = await npmRun(projectRoot, 'check');
   await expectCleanValidate(projectRoot);
-  await npmRun(projectRoot, 'prepack');
+  await npmRun(projectRoot, 'pack:check');
 
   // The template's own harness pools ran inside `check`, and they are asserted
   // positively — a silent `check` would also pass if the pools were dropped or
@@ -88,7 +88,7 @@ it.concurrent('scaffolds the cli-tool template with a routed bin, lib, and artif
   expect(checked).toContain('tests/projection/cli-dispatch.test.ts');
   expect(checked).toContain('tests/projection/script-dispatch.test.ts');
   await expectCleanValidate(projectRoot);
-  await npmRun(projectRoot, 'prepack');
+  await npmRun(projectRoot, 'pack:check');
   // The projection pool dispatches through the framework's own generated
   // setup, resolved from the packed tarball's `agent-bundle/rstest` export.
   await expectPassedPool(projectRoot, 'test:projection', [
@@ -98,7 +98,7 @@ it.concurrent('scaffolds the cli-tool template with a routed bin, lib, and artif
 
   // The src/cli/** convention produced the routed executable package bin:
   // generated help, the compiled argv grammar, and one canonical JSON line.
-  const bin = join(projectRoot, 'dist', 'bin', 'greeter.js');
+  const bin = join(projectRoot, 'dist', 'bin', 'greeter.mjs');
   expect((await stat(bin)).mode & 0o111).not.toBe(0);
   expect((await readFile(bin, 'utf8')).startsWith('#!/usr/bin/env node\n')).toBe(true);
   const environment = installedEnvironment();
@@ -131,15 +131,15 @@ it.concurrent('scaffolds the cli-tool template with a routed bin, lib, and artif
   try {
     const { stdout } = await execFile('npm', [
       'pack', '--json', '--ignore-scripts', '--pack-destination', packDestination,
-    ], { cwd: projectRoot, env: installedEnvironment() });
+    ], { cwd: join(projectRoot, 'dist'), env: installedEnvironment() });
     // packOutputFromJson handles both npm pack --json shapes (array and
     // package-keyed object), unlike a bare array destructure.
     const packedPaths = packOutputFromJson(stdout).files.map((file) => file.path);
-    expect(packedPaths).toContain('artifact/agent-bundle.manifest.json');
-    expect(packedPaths).toContain('artifact/plugin.json');
-    expect(packedPaths).toContain('artifact/.codex-plugin/plugin.json');
-    expect(packedPaths).toContain('artifact/.claude-plugin/plugin.json');
-    expect(packedPaths).toContain('dist/bin/greeter-install.js');
+    expect(packedPaths).toContain('agent-bundle.manifest.json');
+    expect(packedPaths).toContain('plugin.json');
+    expect(packedPaths).toContain('.codex-plugin/plugin.json');
+    expect(packedPaths).toContain('.claude-plugin/plugin.json');
+    expect(packedPaths).toContain('bin/greeter.mjs');
   } finally {
     await rm(packDestination, { force: true, recursive: true });
   }

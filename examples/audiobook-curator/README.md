@@ -33,7 +33,7 @@ Build and globally link the workspace package without a tarball:
 ```sh
 pnpm --filter @agent-bundle-example/audiobook-curator build
 cd examples/audiobook-curator
-ln -s "$(pwd)/dist/bin/audiobook-curator.js" ~/.local/bin/audiobook-curator
+ln -s "$(pwd)/dist/bin/audiobook-curator.mjs" ~/.local/bin/audiobook-curator
 audiobook-curator --help
 ```
 
@@ -44,7 +44,7 @@ One `agent-bundle build` produces everything: one plugin root at `artifact/`
 that both Claude Code and Codex install (each host's manifest directory,
 `.claude-plugin/` and `.codex-plugin/`, over the shared Skill, bundled CLI
 script, and lifecycle-wrapped MCP server) plus the npm package beneath `dist/`
-(`dist/bin/audiobook-curator.js` for `package.json` `bin`, and `dist/index.js`
+(`dist/bin/audiobook-curator.mjs` for `package.json` `bin`, and `dist/index.js`
 plus declarations for `exports`). The example uses only public `agent-bundle`
 and `@agent-bundle/runtime` exports with `workspace:*` dependencies.
 

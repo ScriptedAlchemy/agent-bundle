@@ -291,15 +291,13 @@ content)` (`AB7308`), `version mismatch` (`AB7309`), `foreign install`
 (`AB7321`), `not installed` (`AB7307`), or `unknown` when the host inventory
 could not be read.
 
-When package outputs ship one of those host packs, the build also emits a
-package-relative installer bin. It uses the plugin name when no configured bin
-claims it and `<plugin-name>-install` otherwise. Map that name to the generated
-`dist/bin/*.js` file in `package.json`; consumers run
-`<bin> install <host> [--scope <scope>] [--replace|--force] [--json]` and
-`<bin> uninstall <host> [--scope <scope>] [--mode local|marketplace] [--keep-data | --purge-data --confirm-purge] [--force] [--plan] [--json]`.
-The executable locates the artifact directory beside the installed package, so
-it works from `node_modules` regardless of the current directory. No npm
-lifecycle performs an installation.
+When package outputs ship one of those host packs, `dist/` becomes the npm
+root containing that complete composite artifact. A generated routed CLI is
+not compiled again: `package.json` points its `bin` at the manifest-declared
+`bin/<name>.mjs` copied unchanged from the validated artifact. Consumers
+therefore get the same complete command surface, including `web`, whether they
+run the artifact or the npm-installed bin. No npm lifecycle performs a host
+installation.
 
 ### Uninstall by receipt
 
@@ -1051,8 +1049,9 @@ self-contained module run as `node <plugin-root>/bin/<plugin-name>.mjs <command>
 route can spawn its `../bin/<plugin-name>.mjs` sibling and a Claude skill can point at
 `${CLAUDE_PLUGIN_ROOT}/bin/<plugin-name>.mjs` without a separate npm install. Every built-in host
 publishes the `cli` capability that admits it; `inspect` accounts for it as a `cli` component, and
-the manifest records both files with bundle provenance. The npm package bin under `dist/bin/` is
-unchanged. See `docs/entry-conventions.md` for the layout and diagnostics (`AB4765`, `AB4766`).
+the manifest records both files with bundle provenance. The generated npm root copies this
+executable unchanged and points `package.json` `bin` at it. See `docs/entry-conventions.md` for the
+layout and diagnostics (`AB4765`–`AB4767`).
 
 ### What gets hashed
 

@@ -394,6 +394,64 @@ it('emitted install.mjs expands Agent Plugins placeholders for the Cursor copy o
   }
 }, 60_000);
 
+it('reads plugin identity and MCP launch paths from the artifact manifest before conventional fallbacks', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-install-mjs-manifest-'));
+  const bundle = join(root, 'bundle');
+  const home = join(root, 'home');
+  const destination = join(home, '.cursor', 'plugins', 'local', 'install-fixture');
+  const pluginData = join(home, '.cursor', 'agent-bundle', 'plugin-data', 'install-fixture');
+  const installer = join(bundle, 'install.mjs');
+  const declaredMcp = `${JSON.stringify(agentPluginsMcp, null, 2)}\n`;
+  try {
+    const writes = writesFor('portable');
+    await Promise.all([
+      mkdir(join(bundle, 'declared'), { recursive: true }),
+      mkdir(join(home, '.cursor'), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(installer, writes.get('install.mjs') ?? ''),
+      writeFile(join(bundle, 'INSTALL.md'), writes.get('INSTALL.md') ?? ''),
+      writeFile(join(bundle, 'agent-bundle.manifest.json'), JSON.stringify({
+        files: [
+          { path: 'declared/mcp.json' },
+          { path: 'declared/plugin.json' },
+          { path: 'INSTALL.md' },
+          { path: 'install.mjs' },
+        ],
+        projections: [{
+          builtInHost: 'portable',
+          documents: { mcp: 'declared/mcp.json', plugin: 'declared/plugin.json' },
+        }],
+      })),
+      writeFile(join(bundle, 'declared', 'plugin.json'), JSON.stringify({
+        $schema: 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json',
+        name: 'install-fixture',
+        version: '1.2.3',
+      })),
+      writeFile(join(bundle, 'declared', 'mcp.json'), declaredMcp),
+      writeFile(join(bundle, 'plugin.json'), JSON.stringify({ name: 'conventional-decoy', version: '9.9.9' })),
+      writeFile(join(bundle, 'mcp.json'), '{"mcpServers":{}}\n'),
+      writeFile(join(bundle, 'package.json'), '{"name":"npm-only"}\n'),
+    ]);
+
+    const installed = await run(installer, [], home);
+    expect(installed).toMatchObject({ code: 0, stderr: '' });
+    expect(installed.stdout).toContain('Installed install-fixture@1.2.3');
+    expect(installed.stdout).toContain('Expanded Agent Plugins placeholders for Cursor');
+    expect((await readInstallReceipt(destination))?.cursorExpansion).toMatchObject({
+      documents: { 'declared/mcp.json': declaredMcp },
+      pluginData,
+      pluginRoot: destination,
+    });
+    expect(JSON.parse(await readFile(join(destination, 'declared', 'mcp.json'), 'utf8')))
+      .toMatchObject({ mcpServers: { probe: { cwd: destination } } });
+    await expect(readFile(join(destination, 'mcp.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(join(destination, 'package.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}, 30_000);
+
 it('documents the same-version reinstall recipe per host, including Claude\'s version-gated update', () => {
   const claude = writesFor('claude').get('INSTALL.md') ?? '';
   expect(claude).toContain('Reinstall after a same-version rebuild');

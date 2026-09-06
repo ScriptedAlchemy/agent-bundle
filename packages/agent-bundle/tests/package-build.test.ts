@@ -9,6 +9,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from '@rstest/core';
 
 import { build, runMcp } from '../src/api.ts';
+import { packageCompileEvidenceFileName } from '../src/build/compile-evidence.ts';
 import { runCli } from '../src/cli.ts';
 import { DiagnosticError, type Diagnostic } from '../src/core/diagnostics.ts';
 import { captureCliTerminal } from './support/cli-terminal.ts';
@@ -37,15 +38,6 @@ const fixtureRoot = async (files: Readonly<Record<string, string>>): Promise<str
     await mkdir(join(destination, '..'), { recursive: true });
     await writeFile(destination, contents);
   }
-  if ('packages/linked-dep/package.json' in files) {
-    await mkdir(join(root, 'node_modules'), { recursive: true });
-    await symlink(join(root, 'packages', 'linked-dep'), join(root, 'node_modules', 'linked-dep'), 'dir');
-    await symlink(
-      join(root, 'packages', 'linked-dep', 'vendor', 'linked-nested'),
-      join(root, 'node_modules', 'linked-nested'),
-      'dir',
-    );
-  }
   return root;
 };
 
@@ -58,16 +50,9 @@ const conventionFixture = (): Readonly<Record<string, string>> => ({
     '};',
     '',
   ].join('\n'),
-  'package.json': '{"name":"package-build-fixture","type":"module","private":true,"dependencies":{"linked-dep":"1.0.0"}}\n',
+  'package.json': '{"name":"package-build-fixture","type":"module","private":true}\n',
   'node_modules/evidence-package/index.js': 'globalThis.__evidencePackageLoaded = true;\n',
   'node_modules/evidence-package/package.json': '{"name":"evidence-package","type":"module","version":"1.0.0"}\n',
-  // Linked into node_modules below, as a package manager links a workspace dependency.
-  'packages/linked-dep/index.js': "import 'linked-nested';\nglobalThis.__linkedDepLoaded = true;\n",
-  'packages/linked-dep/package.json':
-    '{"name":"linked-dep","type":"module","version":"1.0.0","dependencies":{"linked-nested":"1.0.0"}}\n',
-  // A linked dependency's own linked dependency, whose real root sits inside the parent's.
-  'packages/linked-dep/vendor/linked-nested/index.js': 'globalThis.__linkedNestedLoaded = true;\n',
-  'packages/linked-dep/vendor/linked-nested/package.json': '{"name":"linked-nested","type":"module","version":"1.0.0"}\n',
   'tsconfig.json': JSON.stringify({
     compilerOptions: {
       module: 'esnext',
@@ -79,7 +64,6 @@ const conventionFixture = (): Readonly<Record<string, string>> => ({
   }),
   'src/cli.ts': [
     "import 'evidence-package';",
-    "import 'linked-dep';",
     '',
     'export const main = async (argv: readonly string[]): Promise<number> => {',
     "  process.stdout.write(`ran:${argv.join(',')}\\n`);",
@@ -143,7 +127,11 @@ const unpublishedPackageOutput = async (root: string): Promise<void> => {
 
 describe('framework-owned package build', () => {
   it('builds bin, lib, and dts outputs from conventions and stays deterministic', async () => {
-    const root = await fixtureRoot(conventionFixture());
+    const root = await fixtureRoot({
+      ...conventionFixture(),
+      'AGENTS.md': '# Authored repository instructions\n',
+      'package.json': '{"name":"package-build-fixture","type":"module","private":true,"imports":{"#fixture":"./dist/index.js"},"scripts":{"prepack":"agent-bundle prepack","test":"rstest"}}\n',
+    });
     await installTypescriptToolchain(root);
     const result = await build({ output: 'artifact', packageOutputs: true, root });
 
@@ -154,20 +142,32 @@ describe('framework-owned package build', () => {
     const packageBuild = result.packageBuild;
     expect(packageBuild).toBeDefined();
     expect(packageBuild!.outputRoot).toBe(join(root, 'dist'));
+    const packageDocument = JSON.parse(await readFile(join(root, 'dist', 'package.json'), 'utf8'));
+    expect(packageDocument).toMatchObject({
+      bin: { 'package-build-fixture': './bin/package-build-fixture.js' },
+      imports: { '#fixture': './index.js' },
+      name: 'package-build-fixture',
+      private: true,
+      scripts: { test: 'rstest' },
+      type: 'module',
+    });
     const paths = packageBuild!.files.map((file) => file.path);
+    expect(paths).toContain('AGENTS.md');
     expect(paths).toContain('bin/package-build-fixture.js');
     expect(paths).toContain('index.js');
     expect(paths).toContain('index.d.ts');
+    expect(paths).toContain(packageCompileEvidenceFileName);
     expect(packageBuild!.evidence.assets.map((asset) => asset.path)).toEqual(
-      expect.arrayContaining(['dist/bin/package-build-fixture.js', 'dist/index.js']),
+      expect.arrayContaining(['bin/package-build-fixture.js', 'index.js']),
     );
     expect(packageBuild!.evidence.assets.flatMap((asset) => asset.externals)
       .every((external) => external.kind === 'builtin')).toBe(true);
-    // A package under `node_modules` is named by its path; a workspace-linked one, which Rspack records at its
-    // real path, by the declaration that reached it — the deepest such root when one sits inside another.
     expect(packageBuild!.evidence.assets
-      .find((asset) => asset.path === 'dist/bin/package-build-fixture.js')?.packages)
-      .toEqual(['evidence-package', 'linked-dep', 'linked-nested']);
+      .find((asset) => asset.path === 'bin/package-build-fixture.js')?.packages)
+      .toContain('evidence-package');
+    expect(JSON.parse(await readFile(join(root, 'dist', packageCompileEvidenceFileName), 'utf8')))
+      .toEqual(packageBuild!.evidence);
+    expect(await readFile(join(root, 'dist', 'AGENTS.md'), 'utf8')).toBe('# Authored repository instructions\n');
     for (const file of packageBuild!.files) {
       expect(file.sourceInputs).toEqual([...file.sourceInputs].sort((left, right) => left.localeCompare(right)));
     }
@@ -187,6 +187,27 @@ describe('framework-owned package build', () => {
     expect(rebuilt.packageBuild?.files).toEqual(packageBuild!.files);
   }, 120_000);
 
+  it('rejects lifecycle paths absent from the generated npm root as AB4768', async () => {
+    const root = await fixtureRoot({
+      ...conventionFixture(),
+      'package.json': JSON.stringify({
+        name: 'package-build-fixture',
+        private: true,
+        scripts: { postinstall: 'node setup.js' },
+        type: 'module',
+      }),
+    });
+    await installTypescriptToolchain(root);
+    await expect(build({ output: 'artifact', packageOutputs: true, root })).rejects.toMatchObject({
+      diagnostics: [expect.objectContaining({
+        code: 'AB4768',
+        severity: 'error',
+        sourcePath: join(root, 'package.json'),
+      })],
+      name: 'DiagnosticError',
+    });
+  }, 120_000);
+
   it('ships a bin-claimed src/scripts module as both the npm bin and the artifact script (#389)', async () => {
     const root = await fixtureRoot({
       'agent-bundle.config.ts': [
@@ -197,7 +218,13 @@ describe('framework-owned package build', () => {
         '};',
         '',
       ].join('\n'),
-      'package.json': '{"name":"package-build-fixture","type":"module","private":true}\n',
+      'package.json': JSON.stringify({
+        bin: { hauler: './dist/bin/hauler.js' },
+        name: 'package-build-fixture',
+        private: true,
+        scripts: { postinstall: 'node ./dist/bin/hauler.js' },
+        type: 'module',
+      }),
       'src/scripts/hauler.ts': [
         'export const main = async (argv: readonly string[]): Promise<number> => {',
         "  process.stdout.write(`hauled:${argv.join(',')}\\n`);",
@@ -220,6 +247,9 @@ describe('framework-owned package build', () => {
 
     // Both outputs exist and run.
     expect(result.packageBuild?.files.map((file) => file.path)).toContain('bin/hauler.js');
+    expect(JSON.parse(await readFile(join(root, 'dist', 'package.json'), 'utf8'))).toMatchObject({
+      scripts: { postinstall: 'node "./bin/hauler.js"' },
+    });
     await expect(execFile(join(root, 'dist', 'bin', 'hauler.js'), ['alpha'])).resolves.toMatchObject({ stdout: 'hauled:alpha\n' });
     expect(result.build.outputProvenance.map((record) => record.path)).toContain('scripts/hauler.mjs');
     const script = join(root, 'artifact', 'scripts', 'hauler.mjs');
@@ -498,8 +528,6 @@ describe('framework-owned package build', () => {
   }, 120_000);
 
   it('fails the package build with AB6005 on a literal import the compiler was told to ignore in a dist bundle', async () => {
-    // `rspackIgnore`/`webpackIgnore` leave the call verbatim with no module, external, or warning;
-    // the walk over the record-proven bundle holds each lexed import to the recorded externals.
     const root = await fixtureRoot({
       ...conventionFixture(),
       'agent-bundle.config.ts': [
@@ -522,10 +550,7 @@ describe('framework-owned package build', () => {
         '};',
         '',
       ].join('\n'),
-      'src/index.ts': [
-        "export const sibling = () => import(/* rspackIgnore: true */ './bin/package-build-fixture.js');",
-        '',
-      ].join('\n'),
+      'src/index.ts': "export const sibling = () => import(/* rspackIgnore: true */ './bin/package-build-fixture.js');\n",
     });
 
     const failure = await packageBuildFailure(root);

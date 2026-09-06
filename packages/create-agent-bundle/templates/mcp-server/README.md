@@ -17,11 +17,13 @@ npm run test:projection  # in-memory MCP projection pool
 npx agent-bundle mcp list --server status --target portable --artifact artifact
 
 # after publishing/removing "private" and installing the package
-npx my-agent-plugin install claude
+npx agent-bundle install claude --from node_modules/my-agent-plugin
 ```
 
-Installing the npm package does not mutate any host; run the generated
-`my-agent-plugin install <host>` command explicitly.
+Installing the npm package does not mutate any host; run
+`npx agent-bundle install <host> --from node_modules/<package>` explicitly.
+Validate and publish the generated npm root with
+`npm run pack:check && npm publish ./dist --ignore-scripts`.
 
 ## Layout
 

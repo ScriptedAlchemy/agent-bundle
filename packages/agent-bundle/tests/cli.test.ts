@@ -619,7 +619,7 @@ it('includes a built-manifest summary on inspect --json after a build, and omits
     expect(JSON.parse(after.stdout).output.manifest).toMatchObject({
       application: { id: 'plugin:cli-fixture', name: 'cli-fixture', version: '1.0.0' },
       executables: { bins: [], hooks: 0, mcpServers: [], scripts: [] },
-      manifestVersion: 2,
+      manifestVersion: 3,
       projections: [{ host: 'codex' }, { host: 'portable' }],
     });
     expect(JSON.parse(after.stdout).output.manifest.path).toMatch(/agent-bundle\.manifest\.json$/u);

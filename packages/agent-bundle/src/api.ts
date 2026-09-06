@@ -13,7 +13,6 @@ import { build as buildArtifact, type BuildResult } from './build/build.ts';
 import { routedCliBins } from './build/cli-bins.ts';
 import { planComposite } from './build/compose.ts';
 import { buildPackageOutputs, type PackageBuildResult } from './build/package-build.ts';
-import { rewritesWorkspaceProtocols } from './build/pack-dependencies.ts';
 import {
   packInventoryDiagnostics,
   packOutputFromJson,
@@ -1299,7 +1298,7 @@ export const build = async (options: BuildOptions): Promise<BuildProjectResult> 
   let packageBuild: PackageBuildResult | undefined;
   if (packageOutputRoot !== undefined) {
     packageBuild = await buildPackageOutputs({
-      ...(isInsideOrEqual(prepared.root, output) ? { artifactRoot: output } : {}),
+      artifactRoot: output,
       model,
       projectRoot: prepared.root,
       ...(prepared.tools === undefined ? {} : { tools: prepared.tools }),
@@ -1373,15 +1372,14 @@ export const prepack = async (options: BuildOptions): Promise<PrepackResult> => 
     }]);
   }
   const { stdout } = await execFile('npm', ['pack', '--dry-run', '--json', '--ignore-scripts'], {
-    cwd: resolve(options.root),
+    cwd: result.packageBuild.outputRoot,
   });
   const pack = packOutputFromJson(stdout);
   const diagnostics = await packInventoryDiagnostics({
-    artifactRoot: result.build.outputRoot,
     model: result.model,
     packageBuild: result.packageBuild,
     packOutput: pack,
-    packerRewritesWorkspaceProtocols: rewritesWorkspaceProtocols(process.env.npm_config_user_agent),
+    packerRewritesWorkspaceProtocols: false,
     projectRoot: options.root,
   });
   if (hasErrors(diagnostics)) throw new DiagnosticError(diagnostics);
