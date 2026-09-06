@@ -51,7 +51,7 @@ time of its merge, which is the state that landed on `main`.
 
 ## Pin an exact commit
 
-Any commit that had a package-preview run can be installed by SHA (short SHAs
+Any commit whose package-preview run completed can be installed by SHA (short SHAs
 work), which is the right form for lockfiles and reproducible setups:
 
 ```sh
@@ -107,11 +107,11 @@ installable artifacts.
 `pnpm preview:publish` (`pkg-pr-new publish --previewVersion --peerDeps
 --no-compact --no-template './packages/agent-bundle' './packages/rsc-runtime'
 './packages/rsc-markdown-stream' './packages/create-agent-bundle'`)
-after a full build, on every pull request and on every push to `main`. Runs for
-`main` pushes use a per-commit concurrency group, so overlapping pushes
-cannot cancel one another and every `main` commit has an installable
-snapshot. (PR runs cancel superseded builds for the same PR — only the
-latest preview of a PR matters.) The "Publish pkg.pr.new preview"
+after a full build, on every pull request and on every push to `main`. Runs are
+grouped per PR and per branch with `cancel-in-progress`, so a newer push
+cancels the superseded build: only the latest preview of a PR or of `main`
+matters, and a `main` commit overtaken before its preview published has no
+installable snapshot (pin the tip instead). The "Publish pkg.pr.new preview"
 check on a PR or commit links to the exact URLs for that build. Previews are
 built from the same `pnpm build` output the release gates verify; they are
 not npm releases and carry preview version strings.

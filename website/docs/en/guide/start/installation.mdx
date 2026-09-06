@@ -17,15 +17,15 @@ in the artifact manifest.
 
 Nothing is published to npm yet. This is deliberate: the current package names are
 placeholders, and the `agent-bundle` name on npm currently belongs to an unrelated project.
-Until the first release, install the preview tarballs CI publishes for every commit and pull
-request:
+Until the first release, install the preview tarballs CI publishes for every pull request and
+for the tip of `main`:
 
 ```sh
 npm i -D https://pkg.pr.new/ScriptedAlchemy/agent-bundle/agent-bundle@<sha-or-pr>
 ```
 
-Use a PR number or the SHA of a commit whose package-preview run succeeded — every green `main`
-commit has one. Short SHAs work, and a SHA is the right form for lockfiles and reproducible
+Use a PR number or the SHA of a commit whose package-preview run succeeded — a `main` commit
+overtaken before its run finished has none. Short SHAs work, and a SHA is the right form for lockfiles and reproducible
 setups; a PR number tracks that pull request's most recent build.
 
 ### Pair the runtime package from the same commit

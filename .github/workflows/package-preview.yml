@@ -7,11 +7,12 @@ on:
 
 permissions: {}
 
-# PR builds cancel superseded runs (only the latest preview matters), but each
-# push to main gets a SHA-keyed group so overlapping pushes never cancel a
-# main preview publish — every main commit must stay installable by SHA.
+# Only the latest preview of a ref matters: a PR push cancels the superseded
+# PR run and a main push cancels the superseded main run. A main commit that
+# was overtaken before its preview published is not installable by SHA; the
+# tip always is.
 concurrency:
-  group: package-preview-${{ github.event.pull_request.number || github.sha }}
+  group: package-preview-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
