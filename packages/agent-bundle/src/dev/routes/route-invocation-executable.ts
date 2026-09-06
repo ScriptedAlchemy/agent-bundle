@@ -28,12 +28,6 @@ export interface RouteExecutableBinding {
 
 export interface ResolveRouteExecutableInput {
   readonly artifactRoot: string;
-  /**
-   * The generated MCP server the compiler pass named as the shared event
-   * runtime owner (`AgentBundleTestManifest.eventRuntimeServerId`); breaks
-   * the tie when several compiled servers of one host carry a Flight worker.
-   */
-  readonly eventRuntimeServerId?: string;
   readonly manifest: ArtifactManifest;
   readonly routeId: string;
   readonly surface: RouteInvocationSurface;
@@ -83,28 +77,22 @@ const bindMcpWorker = (input: ResolveRouteExecutableInput, route: ArtifactManife
 
 /**
  * The compiled server whose Flight worker registers the composite root's
- * event routes for `host` (`eventRuntimeHosting`): the runtime owner the
- * compiler pass named when it reaches the host, else the one server that
- * does. Two candidates and no named owner is a choice the manifest cannot
- * make, so none is made.
+ * event routes for `host`. `eventRuntimeHosting` (`build/entries.ts`) gives
+ * the runtime to the first generated server in model order that targets the
+ * host; `normalizeMcpServers` orders the model by server name and
+ * `executables.mcpServers[]` is sorted by `id` (`mcp:<name>`), so the first
+ * compiled row with a Flight worker reaching the host is that server. A
+ * canonical (host-less) run takes the first such row of any host: being
+ * first by name, it hosts the runtime for every host it reaches, and every
+ * hosting worker registers every event route.
  */
 const sharedRuntimeWorker = (
   input: ResolveRouteExecutableInput,
   host: string | undefined,
 ): string | undefined => {
-  const candidates = input.manifest.executables.mcpServers.flatMap((server) =>
-    server.kind === 'compiled' && server.launch?.worker !== undefined && (host === undefined || server.hosts.includes(host))
-      ? [{ id: server.id, worker: server.launch.worker }]
-      : []);
-  const owner = candidates.find((server) => server.id === input.eventRuntimeServerId)
-    ?? (candidates.length === 1 ? candidates[0] : undefined);
-  if (owner === undefined && candidates.length > 1) {
-    throw unavailable(
-      `Event route ${JSON.stringify(input.routeId)} could run in ${String(candidates.length)} compiled servers `
-      + `(${candidates.map((server) => server.id).join(', ')}) and the published artifact names no shared runtime owner among them.`,
-    );
-  }
-  return owner === undefined ? undefined : join(input.artifactRoot, owner.worker);
+  const owner = input.manifest.executables.mcpServers.find((server) =>
+    server.kind === 'compiled' && server.launch?.worker !== undefined && (host === undefined || server.hosts.includes(host)));
+  return owner?.launch?.worker === undefined ? undefined : join(input.artifactRoot, owner.launch.worker);
 };
 
 /**
@@ -158,8 +146,8 @@ const bindEventExecutable = (input: ResolveRouteExecutableInput, route: Artifact
  * (#604): the routed CLI bin and its worker for a CLI surface, the rendered
  * script's worker, the owning compiled MCP server's worker, or — for an
  * event route — the host's wrapper row plus the worker its execution record
- * selects: `hooks/hooks-flight.mjs` for a standalone runtime, the shared
- * runtime owner's worker otherwise, the standalone worker again when the
+ * selects: `hooks/hooks-flight.mjs` for a standalone runtime, the host's
+ * shared runtime owner otherwise, the standalone worker again when the
  * route declares that fallback and no compiled server hosts the runtime.
  * Fails closed (`AB8251`, `AB8252`) instead of guessing: a route the
  * artifact does not compile, a hosted event with no wrapper row, and a

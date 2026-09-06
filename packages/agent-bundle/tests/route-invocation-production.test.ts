@@ -173,14 +173,7 @@ const bind = (
   routeId: string,
   surface: RouteInvocationSurface,
   manifest: ArtifactManifest = manifestFixture(),
-  eventRuntimeServerId?: string,
-) => resolveRouteExecutable({
-  artifactRoot: '/artifact',
-  ...(eventRuntimeServerId === undefined ? {} : { eventRuntimeServerId }),
-  manifest,
-  routeId,
-  surface,
-});
+) => resolveRouteExecutable({ artifactRoot: '/artifact', manifest, routeId, surface });
 
 describe('resolveRouteExecutable', () => {
   it('binds MCP, script, and CLI routes to the executables the manifest rows name', () => {
@@ -200,20 +193,24 @@ describe('resolveRouteExecutable', () => {
     expect(bind('event:tool/before', { kind: 'event' })).toEqual({ worker: '/artifact/hooks/hooks-flight.mjs' });
   });
 
-  it('binds a shared-runtime event to the server the compiler named as runtime owner', () => {
-    const shared = manifestFixture({ execution: { fallback: 'none', runtime: 'shared' }, hooksWorker: false });
+  it('binds a shared-runtime event to the first compiled server reaching the host, as eventRuntimeHosting does', () => {
+    // `alpha` reaches claude only; cursor's runtime owner is the next server by
+    // name (`beta`), not the first server overall and not the last one.
+    const shared = manifestFixture({
+      execution: { fallback: 'none', runtime: 'shared' },
+      hooksWorker: false,
+      servers: [{ hosts: ['claude'], name: 'alpha' }, { hosts: ['cursor'], name: 'beta' }, { hosts: ['cursor'], name: 'gamma' }],
+    });
 
-    expect(bind('event:tool/before', { host: 'claude', kind: 'event' }, shared, 'mcp:beta')).toEqual({
-      worker: '/artifact/mcp/mcp-beta-flight.mjs',
+    expect(bind('event:tool/before', { host: 'claude', kind: 'event' }, shared)).toEqual({
+      worker: '/artifact/mcp/mcp-alpha-flight.mjs',
       wrapper: '/artifact/hooks/event-route-tool-before.claude.mjs',
     });
-    expect(() => bind('event:tool/before', { host: 'claude', kind: 'event' }, shared)).toThrow(expect.objectContaining({
-      code: 'AB8251',
-      message: expect.stringContaining('names no shared runtime owner'),
-    }));
-    expect(() => bind('event:tool/before', { host: 'claude', kind: 'event' }, shared, 'mcp:gamma')).toThrow(
-      expect.objectContaining({ code: 'AB8251' }),
-    );
+    expect(bind('event:tool/before', { host: 'cursor', kind: 'event' }, shared)).toEqual({
+      worker: '/artifact/mcp/mcp-beta-flight.mjs',
+      wrapper: '/artifact/hooks/event-route-tool-before.cursor.mjs',
+    });
+    expect(bind('event:tool/before', { kind: 'event' }, shared)).toEqual({ worker: '/artifact/mcp/mcp-alpha-flight.mjs' });
   });
 
   it('binds a shared-runtime event to the one compiled server reaching the host, else to the declared standalone fallback', () => {

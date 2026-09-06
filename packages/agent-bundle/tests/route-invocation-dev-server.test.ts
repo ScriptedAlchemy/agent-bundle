@@ -935,6 +935,15 @@ it('enforces compiled preflight, MCP schemas, and operator env across production
     config: "export default { plugin: { name: 'route-parity', version: '1.0.0' }, targets: ['claude'] };\n",
     files: {
       'package.json': '{"dependencies":{"@agent-bundle/runtime":"workspace:*","react":"19.2.8","zod":"4.5.4"},"type":"module"}\n',
+      'src/events/tool/after.tsx': [
+        "import { Agent } from '@agent-bundle/runtime';",
+        "import { createElement } from 'react';",
+        '',
+        'export default async function AfterTool({ canonical }) {',
+        "  return createElement(Agent.Result, { value: { runtime: 'shared', toolName: canonical.payload.toolName } });",
+        '}',
+        '',
+      ].join('\n'),
       'src/events/tool/before.preflight.ts': "export default () => ({ outcome: 'deny', reason: 'blocked' });\n",
       'src/events/tool/before.tsx': [
         "export { default as preflight } from './before.preflight.js';",
@@ -1059,6 +1068,40 @@ it('enforces compiled preflight, MCP schemas, and operator env across production
     expect(deniedResponse.status, JSON.stringify(denied)).toBe(200);
     expect(denied.invocation.timings.map((entry) => entry.phase)).toEqual(['projection']);
     expect(denied.invocation.providers).toEqual([]);
+
+    // The artifact carries two Flight workers: the generated `status` server's
+    // (the shared event runtime) and `hooks/hooks-flight.mjs` (standalone
+    // routes only). `tool/after` runs shared, so only the server worker
+    // registers it; with no second candidate to fall back to, a rendered
+    // result proves the manifest bound that worker.
+    const manifest = JSON.parse(await readFile(
+      join(project.root, '.agent-bundle', 'epochs', artifact.activeEpoch.id, 'agent-bundle.manifest.json'),
+      'utf8',
+    )) as { readonly files: readonly { readonly path: string }[]; readonly routes: { readonly events: readonly { readonly execution: { readonly runtime: string }; readonly id: string }[] } };
+    expect(manifest.routes.events.find((route) => route.id === 'event:tool/after')?.execution.runtime).toBe('shared');
+    expect(manifest.files.some((file) => file.path === 'hooks/hooks-flight.mjs')).toBe(true);
+    const sharedResponse = await fetch(`${server.url}/api/routes/invocations`, {
+      body: JSON.stringify({
+        input: {
+          cwd: project.root,
+          hook_event_name: 'PostToolUse',
+          session_id: 'session-shared',
+          tool_input: {},
+          tool_name: 'Write',
+          tool_response: { ok: true },
+          tool_use_id: 'use-shared',
+          transcript_path: join(project.root, 'transcript.json'),
+        },
+        routeId: 'event:tool/after',
+        surface: { host: 'claude', kind: 'event' },
+      }),
+      headers,
+      method: 'POST',
+    });
+    const shared = await sharedResponse.json() as RouteInvocationResponse;
+    expect(sharedResponse.status, JSON.stringify(shared)).toBe(200);
+    expect(shared.invocation.status, JSON.stringify(shared.invocation.diagnostics)).toBe('succeeded');
+    expect(shared.invocation.result).toEqual({ runtime: 'shared', toolName: 'Write' });
   } finally {
     await server?.close().catch(() => undefined);
     await rm(project.root, { force: true, maxRetries: 5, recursive: true, retryDelay: 50 });

@@ -134,7 +134,6 @@ const bindExecutable = async (request: ProductionRequest): Promise<RouteExecutab
   }
   return resolveRouteExecutable({
     artifactRoot: request.artifactRoot,
-    ...(request.manifest.eventRuntimeServerId === undefined ? {} : { eventRuntimeServerId: request.manifest.eventRuntimeServerId }),
     manifest: read.manifest,
     routeId: request.routeId,
     surface: request.surface,
