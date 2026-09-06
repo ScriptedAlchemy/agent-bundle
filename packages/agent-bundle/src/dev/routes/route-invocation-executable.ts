@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 
 import { hooksFlightWorkerPath } from '../../adapters/composite-layout.ts';
-import type { ArtifactManifest, ArtifactManifestMcpServer, ArtifactManifestRoute } from '../../build/manifest.ts';
+import type { ArtifactManifest, ArtifactManifestEventExecution, ArtifactManifestRoute } from '../../build/manifest.ts';
 import {
   ProductionRouteInvocationError,
   ROUTE_INVOCATION_COMPILED_ROUTE_UNAVAILABLE_CODE,
@@ -81,10 +81,6 @@ const bindMcpWorker = (input: ResolveRouteExecutableInput, route: ArtifactManife
   return Object.freeze({ worker: join(input.artifactRoot, server.launch.worker) });
 };
 
-const hostsFlightWorker = (server: ArtifactManifestMcpServer): server is ArtifactManifestMcpServer & Readonly<{
-  readonly launch: Readonly<{ readonly worker: string }>;
-}> => server.kind === 'compiled' && server.launch?.worker !== undefined;
-
 /**
  * The compiled server whose Flight worker registers the composite root's
  * event routes for `host` (`eventRuntimeHosting`): the runtime owner the
@@ -96,17 +92,44 @@ const sharedRuntimeWorker = (
   input: ResolveRouteExecutableInput,
   host: string | undefined,
 ): string | undefined => {
-  const candidates = input.manifest.executables.mcpServers
-    .filter(hostsFlightWorker)
-    .filter((server) => host === undefined || server.hosts.includes(host));
-  const owner = candidates.find((server) => server.id === input.eventRuntimeServerId) ?? (candidates.length === 1 ? candidates[0] : undefined);
+  const candidates = input.manifest.executables.mcpServers.flatMap((server) =>
+    server.kind === 'compiled' && server.launch?.worker !== undefined && (host === undefined || server.hosts.includes(host))
+      ? [{ id: server.id, worker: server.launch.worker }]
+      : []);
+  const owner = candidates.find((server) => server.id === input.eventRuntimeServerId)
+    ?? (candidates.length === 1 ? candidates[0] : undefined);
   if (owner === undefined && candidates.length > 1) {
     throw unavailable(
       `Event route ${JSON.stringify(input.routeId)} could run in ${String(candidates.length)} compiled servers `
       + `(${candidates.map((server) => server.id).join(', ')}) and the published artifact names no shared runtime owner among them.`,
     );
   }
-  return owner === undefined ? undefined : join(input.artifactRoot, owner.launch.worker);
+  return owner === undefined ? undefined : join(input.artifactRoot, owner.worker);
+};
+
+/**
+ * The host's wrapper row: the only module that can run the route's compiled
+ * preflight. A canonical (host-less) submission has no wrapper, so a route
+ * with preflight cannot be prepared and must not reach its handler.
+ */
+const eventWrapper = (
+  input: ResolveRouteExecutableInput,
+  execution: ArtifactManifestEventExecution,
+  host: string | undefined,
+): string | undefined => {
+  if (host === undefined) {
+    if (execution.preflight === undefined) return undefined;
+    throw new ProductionRouteInvocationError(
+      ROUTE_INVOCATION_PREPARATION_FAILURE_CODE,
+      `Event route ${JSON.stringify(input.routeId)} has compiled preflight ${JSON.stringify(execution.preflight)}; canonical execution cannot select a host wrapper to run it, so the handler is not reached.`,
+    );
+  }
+  const hook = input.manifest.executables.hooks.find((candidate) =>
+    candidate.kind === 'event-route' && candidate.routeId === input.routeId && candidate.host === host);
+  if (hook === undefined) {
+    throw unavailable(`The published artifact compiles no ${host} wrapper for event route ${JSON.stringify(input.routeId)}.`);
+  }
+  return join(input.artifactRoot, hook.path);
 };
 
 const bindEventExecutable = (input: ResolveRouteExecutableInput, route: ArtifactManifestRoute): RouteExecutableBinding => {
@@ -115,22 +138,7 @@ const bindEventExecutable = (input: ResolveRouteExecutableInput, route: Artifact
     throw unavailable(`Event route ${JSON.stringify(input.routeId)} carries no execution record in the published artifact.`);
   }
   const host = input.surface.kind === 'event' ? input.surface.host : undefined;
-  let wrapper: string | undefined;
-  if (host === undefined) {
-    if (execution.preflight !== undefined) {
-      throw new ProductionRouteInvocationError(
-        ROUTE_INVOCATION_PREPARATION_FAILURE_CODE,
-        `Event route ${JSON.stringify(input.routeId)} has compiled preflight ${JSON.stringify(execution.preflight)}; canonical execution cannot select a host wrapper to run it, so the handler is not reached.`,
-      );
-    }
-  } else {
-    const hook = input.manifest.executables.hooks.find((candidate) =>
-      candidate.kind === 'event-route' && candidate.routeId === input.routeId && candidate.host === host);
-    if (hook === undefined) {
-      throw unavailable(`The published artifact compiles no ${host} wrapper for event route ${JSON.stringify(input.routeId)}.`);
-    }
-    wrapper = join(input.artifactRoot, hook.path);
-  }
+  const wrapper = eventWrapper(input, execution, host);
   const standaloneWorker = input.manifest.files.some((file) => file.path === hooksFlightWorkerPath)
     ? join(input.artifactRoot, hooksFlightWorkerPath)
     : undefined;
