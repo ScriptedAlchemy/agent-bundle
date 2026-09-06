@@ -67,6 +67,7 @@ export const applicationTreeFor = (sources: ApplicationTreeSources): Application
         label: skill.name,
         ...(skill.provenance === undefined ? {} : { source: skill.provenance.sourcePath }),
       })),
+      staticDocuments: sources.skillTree.staticDocuments,
     }),
     state: applicationState(sources.state),
   });

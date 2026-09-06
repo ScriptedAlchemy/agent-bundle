@@ -452,6 +452,24 @@ it('rejects portable Agent Plugin tokens instead of emitting a hybrid Cursor art
   expect(manifest).not.toHaveProperty('variables');
 });
 
+it('does not manufacture Cursor MCP or hook documents from a static portable selection', () => {
+  const base = plugin();
+  const model: NormalizedPlugin = {
+    ...base,
+    mcpServers: [],
+    targets: [
+      ...base.targets,
+      { id: 'target:portable', name: 'portable', provenance: { kind: 'config', sourcePath: configPath } },
+    ],
+  };
+  const documents = writeContents(model);
+  expect(documents).not.toHaveProperty('.cursor-plugin/hooks.json');
+  expect(documents).not.toHaveProperty('.cursor-plugin/mcp.json');
+  const manifest = JSON.parse(documents['.cursor-plugin/plugin.json']!) as Record<string, unknown>;
+  expect(manifest).not.toHaveProperty('hooks');
+  expect(manifest).not.toHaveProperty('mcpServers');
+});
+
 it('rejects the plugin-data token and omits the failed server from the document', () => {
   const model = plugin();
   const plan = cursorAdapter.plan({

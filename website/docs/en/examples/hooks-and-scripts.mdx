@@ -18,8 +18,8 @@ an authored script.
 ## What it proves
 
 - **A hook is authored as a handler, not a host document.** `src/hooks/session-start.ts` is one
-  module. The build lowers it into each host's own hook document shape and emits the wrapper each
-  host's document runs from the shared `hooks/` directory. See
+  module that calls the application-owned `releaseContext` function. The build bundles that plain
+  Node dependency into each host wrapper; it does not start an MCP server or render worker. See
   [Hooks](../guide/authoring/hooks.mdx).
 - **Both script declaration modes.** `verify-release` ships by convention — any unclaimed plain
   script under `src/scripts/` is discovered — while `detect-risk` stays explicitly configured
@@ -40,6 +40,7 @@ an authored script.
 | Path | What it is |
 | --- | --- |
 | `src/hooks/session-start.ts` | The `sessionStart` handler that directs a release session through both checks. |
+| `src/release-context.ts` | The shared application function used by the plain Hook handler. |
 | `src/scripts/verify-release.ts` | The manifest-backed packaging check, discovered by convention. |
 | `src/scripts/detect-risk.ts` | The risk-register check, explicitly configured to restrict its targets. |
 | `release/release-manifest.json` | The packaged release manifest, copied as an asset. |

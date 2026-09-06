@@ -71,8 +71,8 @@ artifact/
 无论选择了哪些宿主，这些路径都是固定的，因此单宿主根目录与四宿主根目录共用同一种布局。Claude Code 与
 portable 的 Agent Plugins 格式从约定的插件根位置加载文档，无法重定向；Codex 与 Cursor 的清单携带显式的
 `hooks` 与 MCP 指针，因此它们的文档紧挨着各自的清单。这两个宿主在指针缺失时还会回退到对约定路径的目录
-发现，因此当另一个所选宿主占用了约定路径时，没有自己文档的 Codex 或 Cursor 投影仍会指向一份空文档——
-Cursor 绝不会加载 Claude Code 的 `hooks/hooks.json`。
+发现，因此当钩子或 MCP 服务器到达另一个所选宿主的约定路径时，没有自己文档的 Codex 或 Cursor 投影仍会
+指向一份空文档——Cursor 绝不会加载 Claude Code 的 `hooks/hooks.json`。
 
 ### 钩子 wrapper
 

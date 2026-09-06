@@ -62,7 +62,7 @@ import {
   type TargetArtifactPlan,
 } from './types.ts';
 import { pluginLogoManifestRef, withPluginLogoEntry } from './plugin-logo.ts';
-import { folderDiscoveryShadowed, hookWrapperPath } from './composite-layout.ts';
+import { hookWrapperPath } from './composite-layout.ts';
 import { deepFreeze } from '../core/freeze.ts';
 
 export interface CodexInterfaceConfig {
@@ -1121,6 +1121,12 @@ export const planCodexArtifacts = (model: NormalizedPlugin): TargetArtifactPlan 
   const mcpRelativePath = mcpRuntime.manifestPath;
   const planContract = planHookContract(selected);
   const isSelected = (targets: readonly string[]): boolean => targets.includes(targetName);
+  const claudeHooks = selected.includes('claude') && (
+    model.hooks.some((hook) => hook.targets.includes('claude'))
+    || nativeHooksFor(model, 'claude')?.document !== undefined
+  );
+  const claudeMcp = selected.includes('claude')
+    && model.mcpServers.some((server) => server.targets.includes('claude'));
   const diagnostics: Diagnostic[] = [];
   const servers: Record<string, Record<string, unknown>> = Object.create(null) as Record<string, Record<string, unknown>>;
   for (const server of model.mcpServers) {
@@ -1133,7 +1139,7 @@ export const planCodexArtifacts = (model: NormalizedPlugin): TargetArtifactPlan 
   // An empty document still carries the manifest pointer when Claude's
   // conventional `.mcp.json` shares the root, so Codex never loads it (#555).
   const mcp = Object.keys(servers).length === 0
-    ? (folderDiscoveryShadowed('.mcp.json', selected) ? { mcpServers: {} } : undefined)
+    ? (claudeMcp ? { mcpServers: {} } : undefined)
     : { mcpServers: servers };
   const mcpValid = mcp !== undefined && validateMcp(mcp);
   if (mcp !== undefined) diagnostics.push(...schemaDiagnostics('mcp', mcpValid, validateMcp.errors));
@@ -1156,7 +1162,7 @@ export const planCodexArtifacts = (model: NormalizedPlugin): TargetArtifactPlan 
   diagnostics.push(...nativeHooks.diagnostics);
   // Likewise an empty hooks document keeps Codex off Claude's `hooks/hooks.json`.
   const hookDocument = mergeHookDocuments(generatedHooks.document, nativeHooks.document)
-    ?? (folderDiscoveryShadowed('hooks/hooks.json', selected) ? emptyHookDocument(planContract) : undefined);
+    ?? (claudeHooks ? emptyHookDocument(planContract) : undefined);
   const hookSemantics = hookDocument === undefined ? [] : codexHookDocumentDiagnostics(hookDocument);
   diagnostics.push(...hookSemantics);
   const hookDocumentValid = hookDocument !== undefined && hookSemantics.length === 0 && validateHooks(hookDocument);

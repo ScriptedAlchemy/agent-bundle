@@ -80,9 +80,9 @@ layout. Claude Code and the portable Agent Plugins format load their documents f
 conventional plugin-root locations and cannot be redirected; Codex and Cursor manifests carry
 explicit `hooks` and MCP pointers, so their documents sit beside their manifests. Both of those
 hosts also fall back to folder discovery of the conventional paths when the pointer is absent, so
-a Codex or Cursor projection with no document of its own still points at an empty one whenever
-another selected host claims the conventional path — Cursor never loads Claude Code's
-`hooks/hooks.json`.
+a Codex or Cursor projection with no document of its own still points at an empty one when a Hook
+or MCP server reaches another selected host's conventional path — Cursor never loads Claude
+Code's `hooks/hooks.json`.
 
 ### Hook wrappers
 

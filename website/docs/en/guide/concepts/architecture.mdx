@@ -195,8 +195,7 @@ distribution form, or the application.
 
 `adapters/composite-layout.ts` owns the selection helpers:
 `sortedProjections`, `projectionIdentity` (sorted names joined by `+`, for
-example `claude+codex`), `hookWrapperPath`, and
-`folderDiscoveryShadowed`.
+example `claude+codex`), and `hookWrapperPath`.
 
 Declaration-level `targets` on a command, rule, hook, or script still
 mean "this component reaches these hosts." A component is included when that
@@ -249,9 +248,9 @@ then `codex`, `claude`, and `cursor`. There is no `plugin` adapter.
   (`hookWrapperPath`).
 - Codex and Cursor hook/MCP documents live beside their manifests
   (`.codex-plugin/hooks.json`, `.cursor-plugin/mcp.json`, …). When another
-  selected host claims the conventional `hooks/hooks.json` / `.mcp.json` /
-  `mcp.json` path, those projections emit an empty shield document so folder
-  discovery cannot load the other host's file.
+  selected host has a Hook or MCP server that reaches the conventional
+  `hooks/hooks.json` / `.mcp.json` / `mcp.json` path, those projections emit
+  an empty shield document so folder discovery cannot load that file.
 
 The `CompositePlan` the build stages carries `entries`, `hookEntries`,
 `selected`, `identity`, `projections` (one planned host each), `cliBin`

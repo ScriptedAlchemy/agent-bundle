@@ -45,6 +45,31 @@ const generatedDocument = Object.freeze({
   resources: Object.freeze([Object.freeze({ bytes: 42, relativePath: 'assets/diagram.svg' })]),
 });
 
+const staticDocument = Object.freeze({
+  body: 'Review the release.',
+  frontmatter: Object.freeze({ description: 'Review release evidence' }),
+  id: 'command:review-release',
+  kind: 'command' as const,
+  markdown: 'Review the release.',
+  name: 'review-release',
+  projections: Object.freeze([
+    Object.freeze({
+      capability: Object.freeze({
+        evidence: Object.freeze({ observedVersion: '2.1.260', target: 'claude' }),
+        state: 'supported' as const,
+      }),
+      markdown: 'Review the release.',
+      path: 'commands/review-release.md',
+      target: 'claude',
+    }),
+    Object.freeze({
+      capability: Object.freeze({ reason: 'No command surface.', state: 'unavailable' as const }),
+      target: 'portable',
+    }),
+  ]),
+  provenance: Object.freeze({ kind: 'conventional' as const, sourcePath: 'src/commands/review-release.md' }),
+});
+
 it('reads source and explicit generated documents only from typed workbench routes', async () => {
   const calls: string[] = [];
   const client = new SkillClient({
@@ -78,13 +103,17 @@ it('decodes and freezes canonical detached Skill DTOs from source and generated 
     fetch: async (input) => String(input).includes('/epochs/')
       ? response({ document: generatedDocument })
       : String(input).endsWith('/source')
-        ? response({ diagnostics: [], skills: [sourceDocument] })
+        ? response({ diagnostics: [], skills: [sourceDocument], staticDocuments: [staticDocument] })
         : response({ document: sourceDocument }),
   });
 
   await expect(client.source('skill:review')).resolves.toEqual(sourceDocument);
   await expect(client.generated('epoch-01', 'portable', 'skill:review')).resolves.toEqual(generatedDocument);
-  await expect(client.sourceTree()).resolves.toEqual({ diagnostics: [], skills: [sourceDocument] });
+  await expect(client.sourceTree()).resolves.toEqual({
+    diagnostics: [],
+    skills: [sourceDocument],
+    staticDocuments: [staticDocument],
+  });
 
   const document = await client.source('skill:review');
   expect(Object.isFrozen(document)).toBe(true);
