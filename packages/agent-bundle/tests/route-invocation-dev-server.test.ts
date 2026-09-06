@@ -366,11 +366,13 @@ it('invokes compiled tool and event routes through the foreground server', { tim
       ].join('\n'),
       'src/mcp/status/tools/plain.cli.ts': "export const config = { command: ['plain-tool'] };\n",
       'src/mcp/status/tools/plain.ts': [
+        "import { Agent } from '@agent-bundle/runtime';",
+        "import { createElement } from 'react';",
         "import { z } from 'zod';",
         '',
         'export const inputSchema = z.object({}).strict();',
         "export const resultSchema = z.object({ selected: z.literal('plain-tool') }).strict();",
-        "export default async function PlainTool() { return { selected: 'plain-tool' }; }",
+        "export default async function PlainTool() { return createElement(Agent.Result, { value: { selected: 'plain-tool' } }); }",
         '',
       ].join('\n'),
       'src/providers/clock.ts': [
@@ -1142,18 +1144,17 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     const plainToolCliResponse = await fetch(`${server.url}/api/routes/invocations`, {
       body: JSON.stringify({
         routeId: 'tool:status/plain',
-        surface: { args: [], command: 'plain-tool', kind: 'cli' },
+        surface: { args: ['--yes'], command: 'plain-tool', kind: 'cli' },
       }),
       headers,
       method: 'POST',
     });
     expect(plainToolCliResponse.status).toBe(200);
-    await expect(plainToolCliResponse.json()).resolves.toMatchObject({
-      invocation: {
-        projection: { cli: { exitCode: 0 } },
-        result: { selected: 'plain-tool' },
-        status: 'succeeded',
-      },
+    const plainToolCli = await plainToolCliResponse.json() as RouteInvocationResponse;
+    expect(plainToolCli.invocation, JSON.stringify(plainToolCli.invocation.diagnostics)).toMatchObject({
+      projection: { cli: { exitCode: 0 } },
+      result: { selected: 'plain-tool' },
+      status: 'succeeded',
     });
 
     const binName = (await readdir(join(artifactRoot, 'bin')))
