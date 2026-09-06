@@ -21,7 +21,12 @@ description: 'Workbench 调用、统一 Trace、Raw logs 与宿主钩子收据�
 POST 正文是一份 `RouteInvocationRequest`：包含 `routeId`，以及可选的 `input`、`args`、
 `correlationId`、调用方 `requestId` 与事件夹具选项。前台会把这两个标识回显到调用上，使路由工作区与
 Trace 可以关联此次运行。完成后的信封包含输入、provenance 上下文、providers、渲染事件、Agent
-Document、结果、投影、诊断与计时。Trace 条目链接到这份完整快照，而不会复制它。取消后的调用带有
+Document、结果、投影、诊断与计时。Trace 条目链接到这份完整快照，而不会复制它。渲染历史在所有保存它的
+地方都遵循同一条策略——渲染子进程、其回复、流回放、完成后的信封、历史读取以及 Workbench 的实时缓冲：
+只保留最新的 256 个渲染事件，且其 JSON 总量不超过 1 MiB，按最旧优先淘汰。最新的事件无论多大都始终保留，
+因此完成的运行总会保留其 `complete` 事件；Agent Document、`result`、`outcome` 与关联标识位于该窗口之外，
+永不截断。窗口丢失过事件的信封带有 `evictedEvents`（数量），流回放会在保留窗口之前先发出一个 `truncated`
+事件；被取消或失败的运行仍保留其保留窗口，以及渲染事件带来的最新文档——即使承载该文档的事件已被淘汰。取消后的调用带有
 `status: "cancelled"` 且不含 `outcome`；取消已终止的调用会返回 `AB8256`（409）。
 
 ## 宿主会话

@@ -26,6 +26,7 @@ import type {
 } from './route-invocation-service.ts';
 import { ProductionRouteInvocationError } from './route-invocation-production-error.ts';
 import { renderProductionRoute } from './route-invocation-production.ts';
+import { retainRenderEvents } from './route-invocation-result.ts';
 import { createRouteModuleLoader } from './route-module-loader.ts';
 
 const { load } = createRouteModuleLoader();
@@ -153,13 +154,14 @@ const renderUnitRoute = async (request: RouteInvocationChildRequest): Promise<Ro
 };
 
 const render = async (request: RouteInvocationChildRequest): Promise<RouteInvocationChildResult> => {
-  const result = request.surface.kind === 'unit-render'
-    ? await renderUnitRoute(request)
-    : await renderProductionRoute(request, forwardEventTrace, forwardRenderEvent);
-  if (request.surface.kind === 'unit-render') {
-    for (const event of result.events) forwardRenderEvent(event);
+  if (request.surface.kind !== 'unit-render') {
+    return renderProductionRoute(request, forwardEventTrace, forwardRenderEvent);
   }
-  return result;
+  const result = await renderUnitRoute(request);
+  for (const event of result.events) forwardRenderEvent(event);
+  // The harness collects the whole stream; only the retained window crosses IPC.
+  const retained = retainRenderEvents(result.events);
+  return { ...result, events: retained.events, evictedEvents: retained.evicted };
 };
 
 process.once('message', (request: RouteInvocationChildRequest) => {

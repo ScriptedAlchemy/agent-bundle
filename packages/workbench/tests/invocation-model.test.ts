@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it } from '@rstest/core';
 
-import type { RouteInvocation } from '../../agent-bundle/src/contracts/invocations.ts';
+import { RENDER_EVENT_RETENTION, type RouteInvocation } from '../../agent-bundle/src/contracts/invocations.ts';
 import type { ApplicationLeaf } from '../src/application/application-tree-model.ts';
 import type { InvocationBackend } from '../src/application/invocation-backend.ts';
 import {
@@ -96,7 +96,7 @@ it('reduces invocation lifecycle states without retaining stale failures', () =>
   expect(reduceInvocationState(running, { type: 'reset' })).toBe(idleInvocationState);
 });
 
-it('retains only the newest 256 live render events', () => {
+it('retains only the newest 256 live render events and counts the evicted ones', () => {
   let state = reduceInvocationState(idleInvocationState, { correlationId: 'c1', startedAt: 1_000, type: 'start' });
   for (let sequence = 0; sequence < 300; sequence += 1) {
     state = reduceInvocationState(state, {
@@ -111,9 +111,31 @@ it('retains only the newest 256 live render events', () => {
 
   expect(state).toMatchObject({ phase: 'running' });
   if (state.phase !== 'running') throw new Error('Expected a running invocation.');
-  expect(state.events).toHaveLength(256);
-  expect(state.events?.[0]?.sequence).toBe(44);
-  expect(state.events?.at(-1)?.sequence).toBe(299);
+  expect(state.retained?.events).toHaveLength(256);
+  expect(state.retained?.events[0]?.sequence).toBe(44);
+  expect(state.retained?.events.at(-1)?.sequence).toBe(299);
+  expect(state.retained?.evicted).toBe(44);
+});
+
+it('bounds live render events by retained bytes like the server does', () => {
+  let state = reduceInvocationState(idleInvocationState, { correlationId: 'c1', startedAt: 1_000, type: 'start' });
+  for (let sequence = 0; sequence < 24; sequence += 1) {
+    state = reduceInvocationState(state, {
+      event: {
+        boundaryId: 'b',
+        document: { root: { kind: 'text', text: 'x'.repeat(128 * 1024) }, status: 'success', version: 1 },
+        sequence,
+        type: 'replace',
+      },
+      type: 'render',
+    });
+  }
+
+  if (state.phase !== 'running') throw new Error('Expected a running invocation.');
+  expect(state.retained!.events.length).toBeLessThan(24);
+  expect(state.retained?.bytes).toBeLessThanOrEqual(RENDER_EVENT_RETENTION.maxBytes);
+  expect(state.retained?.evicted).toBe(24 - state.retained!.events.length);
+  expect(state.retained?.events.at(-1)?.sequence).toBe(23);
 });
 
 it('stores strict JSON last-input snapshots by leaf key and tolerates unavailable storage', () => {

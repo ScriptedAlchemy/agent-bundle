@@ -30,6 +30,7 @@ import {
   ROUTE_INVOCATION_COMPILED_ROUTE_UNAVAILABLE_CODE,
   ROUTE_INVOCATION_PREPARATION_FAILURE_CODE,
 } from './route-invocation-production-error.ts';
+import { emptyRetainedRenderEvents, retainRenderEvent } from './route-invocation-result.ts';
 import type { RouteInvocationProvider, RouteInvocationTiming } from './route-invocation.ts';
 
 interface CompiledCliInvocationModule {
@@ -447,6 +448,7 @@ const renderCompiled = async (
   readonly document: AgentDocument;
   readonly durationMs: number;
   readonly events: readonly AgentRenderEvent[];
+  readonly evictedEvents: number;
   readonly observed: {
     readonly providers: readonly RouteInvocationProvider[];
     readonly timings: readonly RouteInvocationTiming[];
@@ -457,21 +459,22 @@ const renderCompiled = async (
   for (const workerPath of candidates) {
     const startedAt = performance.now();
     const session = streamFromWorker(workerPath, request, invocation, input, signal, env, trace);
-    const events: AgentRenderEvent[] = [];
+    const retained = emptyRetainedRenderEvents();
     try {
       const reader = session.events.getReader();
       for (;;) {
         const next = await reader.read();
         if (next.done) break;
-        events.push(next.value);
+        retainRenderEvent(retained, next.value);
         publishRender?.(next.value);
       }
-      const complete = events.findLast((event) => event.type === 'complete');
-      if (complete === undefined) throw new Error('Compiled route render ended without a complete event.');
+      const complete = retained.events.at(-1);
+      if (complete?.type !== 'complete') throw new Error('Compiled route render ended without a complete event.');
       return Object.freeze({
         document: complete.document,
         durationMs: performance.now() - startedAt,
-        events: Object.freeze(events),
+        events: Object.freeze(retained.events),
+        evictedEvents: retained.evicted,
         observed: {
           providers: Object.freeze([...session.observed.providers]),
           timings: Object.freeze([...session.observed.timings]),
@@ -558,6 +561,7 @@ export const renderProductionRoute = async (
     return Object.freeze({
       document: rendered.document,
       events: rendered.events,
+      evictedEvents: rendered.evictedEvents,
       ...(exitCode === undefined ? {} : { exitCode }),
       input: prepared.input,
       ...(kind === 'tool'

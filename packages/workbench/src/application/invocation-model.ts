@@ -4,11 +4,14 @@
  * the summary projection of an envelope.
  */
 import type { Diagnostic } from '../../../agent-bundle/src/contracts/diagnostics.ts';
-import type {
-  RouteInvocation,
-  RouteInvocationOutcome,
-  RouteInvocationStatus,
-  RouteInvocationSummary,
+import {
+  emptyRetainedRenderEvents,
+  retainRenderEvent,
+  type RetainedRenderEvents,
+  type RouteInvocation,
+  type RouteInvocationOutcome,
+  type RouteInvocationStatus,
+  type RouteInvocationSummary,
 } from '../../../agent-bundle/src/contracts/invocations.ts';
 import {
   parseJsonWithoutDuplicateKeys,
@@ -29,9 +32,10 @@ export type InvocationState =
   | Readonly<{ readonly phase: 'idle' }>
   | Readonly<{
       readonly correlationId: string;
-      readonly events?: readonly AgentRenderEvent[];
       readonly invocationId?: string;
       readonly phase: 'running';
+      /** The live render window, bounded like the server's (`RENDER_EVENT_RETENTION`). */
+      readonly retained?: Readonly<RetainedRenderEvents>;
       readonly startedAt: number;
     }>
   | Readonly<{ readonly durationMs?: number; readonly invocation: RouteInvocation; readonly phase: 'succeeded' }>
@@ -61,8 +65,17 @@ const settled = (invocation: RouteInvocation, durationMs?: number): InvocationSt
 
 export const idleInvocationState: InvocationState = Object.freeze({ phase: 'idle' });
 
-/** Matches RouteInvocationService's retained render-event bound. */
-const maximumLiveRenderEvents = 256;
+const retainLiveRenderEvent = (
+  retained: Readonly<RetainedRenderEvents> | undefined,
+  event: AgentRenderEvent,
+): Readonly<RetainedRenderEvents> => {
+  const next = retained === undefined
+    ? emptyRetainedRenderEvents()
+    : { bytes: retained.bytes, events: [...retained.events], evicted: retained.evicted };
+  retainRenderEvent(next, event);
+  Object.freeze(next.events);
+  return Object.freeze(next);
+};
 
 export const reduceInvocationState = (state: InvocationState, action: InvocationAction): InvocationState => {
   switch (action.type) {
@@ -79,7 +92,7 @@ export const reduceInvocationState = (state: InvocationState, action: Invocation
       });
     case 'render':
       return state.phase === 'running'
-        ? Object.freeze({ ...state, events: Object.freeze([...(state.events ?? []), action.event].slice(-maximumLiveRenderEvents)) })
+        ? Object.freeze({ ...state, retained: retainLiveRenderEvent(state.retained, action.event) })
         : state;
     case 'stream.start':
       return state.phase === 'running'

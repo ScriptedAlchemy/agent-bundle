@@ -93,6 +93,9 @@ const RawDocument = ({ invocation }: { readonly invocation?: RouteInvocation }):
     </details>
     <section aria-label="Render events" className="result-raw-events">
       <h3>Render events ({String(invocation.events.length)})</h3>
+      {invocation.evictedEvents === undefined
+        ? undefined
+        : <p className="result-note">The {String(invocation.evictedEvents)} oldest events were evicted from retained history.</p>}
       {invocation.events.length === 0
         ? <p className="result-note">The stream carried no events.</p>
         : <ol>{invocation.events.map((event) => <li key={`${event.type}-${String(event.sequence)}`}>
@@ -207,7 +210,7 @@ const useTraceEntries = (trace: TraceClient | undefined): TraceLoadState => {
 export const ResultTabs = ({ controller, extraTabs = [], leaf, onNavigate, onTabChange, tab, trace }: ResultTabsProps): React.ReactNode => {
   const invocation = invocationOf(controller.state);
   const running = controller.state.phase === 'running';
-  const events = running ? controller.state.events ?? [] : invocation?.events ?? [];
+  const events = running ? controller.state.retained?.events ?? [] : invocation?.events ?? [];
   const traceState = useTraceEntries(trace);
   const definitions: readonly ResultTabDefinition[] = [
     { id: 'rendered', label: coreTabLabels.rendered, render: () => <RenderedAgentDocument

@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import type { ProjectEventHub } from '../events.ts';
@@ -37,6 +38,19 @@ import {
 
 const streamQueueByteLimit = 256 * 1024;
 const streamQueueEntryLimit = 128;
+
+interface PendingFrame {
+  readonly bytes: number;
+  readonly final: boolean;
+  /** Arrived after the replay snapshot was taken. */
+  readonly live: boolean;
+  readonly text: string;
+}
+
+const pendingFrame = (message: RouteInvocationStreamMessage, live: boolean): PendingFrame => {
+  const text = `event: ${message.type}\ndata: ${JSON.stringify(message)}\n\n`;
+  return { bytes: Buffer.byteLength(text, 'utf8'), final: message.type === 'final', live, text };
+};
 const invalidShape = badRequest(
   ROUTE_INVOCATION_MALFORMED_REQUEST_CODE,
   'Route invocation request has an invalid shape.',
@@ -258,6 +272,12 @@ export class RouteInvocationRoutes {
     return true;
   }
 
+  /**
+   * Replays the retained window one frame per socket drain, then delivers
+   * live messages through the bounded queue. The replay is bounded by
+   * retention, not by the queue: bursting it into the queue would destroy
+   * every reconnect whose window outgrew the queue's live-consumer limits.
+   */
   #stream(service: RouteInvocationRouteService, id: string, response: ServerResponse): void {
     let terminal = false;
     const stream = { unsubscribe: undefined as (() => void) | undefined };
@@ -266,30 +286,56 @@ export class RouteInvocationRoutes {
       stream.unsubscribe?.();
       response.end();
     };
-    const writer = createBackpressuredWriter(response, {
-      byteLimit: streamQueueByteLimit,
-      onIdle: finish,
-      recordLimit: streamQueueEntryLimit,
-    });
-    const deliver = (message: RouteInvocationStreamMessage): void => {
-      const result = writer.enqueue(`event: ${message.type}\ndata: ${JSON.stringify(message)}\n\n`);
-      if (result === 'overflow') response.destroy();
-      if (message.type === 'final') terminal = true;
+    const deliver = (frame: PendingFrame): void => {
+      if (writer.enqueue(frame.text) === 'overflow') response.destroy();
+      if (frame.final) terminal = true;
       finish();
     };
+    // The replay drains one frame per socket drain. Live frames that arrive
+    // meanwhile wait behind it, held to the live queue's own limits.
+    const pending: PendingFrame[] = [];
+    let replaying = true;
+    let subscribed = false;
+    let liveBytes = 0;
+    let liveRecords = 0;
+    const pump = (): void => {
+      while (replaying && writer.idle && !response.destroyed) {
+        const next = pending.shift();
+        if (next === undefined) {
+          replaying = false;
+          break;
+        }
+        if (next.live) {
+          liveBytes -= next.bytes;
+          liveRecords -= 1;
+        }
+        deliver(next);
+      }
+      finish();
+    };
+    const writer = createBackpressuredWriter(response, {
+      byteLimit: streamQueueByteLimit,
+      onIdle: pump,
+      recordLimit: streamQueueEntryLimit,
+    });
     response.once('close', () => {
       writer.markClosed();
       stream.unsubscribe?.();
     });
-    const replay: RouteInvocationStreamMessage[] = [];
-    let replaying = true;
-    stream.unsubscribe = service.subscribe(id, (message) => replaying ? replay.push(message) : deliver(message));
+    stream.unsubscribe = service.subscribe(id, (message) => {
+      const frame = pendingFrame(message, subscribed);
+      if (!replaying) return deliver(frame);
+      pending.push(frame);
+      if (!frame.live) return;
+      liveBytes += frame.bytes;
+      liveRecords += 1;
+      if (liveBytes > streamQueueByteLimit || liveRecords > streamQueueEntryLimit) response.destroy();
+    });
+    subscribed = true;
     writeKeepAliveStreamHead(response, {
       cacheControl: 'no-cache',
       contentType: 'text/event-stream; charset=utf-8',
     });
-    replaying = false;
-    for (const message of replay) deliver(message);
-    finish();
+    pump();
   }
 }
