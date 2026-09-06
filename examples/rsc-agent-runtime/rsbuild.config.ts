@@ -195,18 +195,18 @@ const emitRuntimeManifest = (): RsbuildPlugin => ({
 });
 
 /**
- * The RSC environment emits production Flight because its bytes cross into
- * the framework decoder, while the App environment ships each entry as one
- * self-contained production HTML document. The resolved App configuration is
- * checked before the compiler exists, and the emitted asset set after
- * inlining, so a config drift fails instead of quietly emitting a sibling file
- * the host never serves.
+ * The App environment ships each entry as exactly one self-contained HTML
+ * document (the framework's MCP App compiler invariant): scripts, styles,
+ * licence comments, and every asset inline, no sibling files. The resolved
+ * configuration is checked before the compiler exists, and the emitted asset
+ * set after inlining, so a config drift fails the compile instead of quietly
+ * emitting a sibling file the host never serves.
  */
-const runtimeEnvironmentModesPlugin = (): RsbuildPlugin => ({
-  name: 'agent-bundle:rsc-runtime-environment-modes',
+const selfContainedAppPlugin = (): RsbuildPlugin => ({
+  name: 'agent-bundle:rsc-runtime-self-contained-app',
   setup(api) {
     api.modifyEnvironmentConfig((config, { name }) => {
-      if (name === 'rsc' || name === 'app') config.mode = 'production';
+      if (name === 'app') config.mode = 'production';
     });
     api.onBeforeCreateCompiler(({ bundlerConfigs }) => {
       const config = api.getNormalizedConfig({ environment: 'app' });
@@ -371,10 +371,13 @@ export const createRscRuntimeRsbuildConfig = (
     development ? join(options.compilerRoot as string, name) : productionRoot;
 
   return {
-    // Provider session vs packaged artifacts: development keeps the compiler
-    // topology and widget in development mode. The environment modes plugin
-    // pins RSC to production so its cross-process Flight is portable, and
-    // pins the App because Rsbuild only inlines scripts and styles there.
+    // Provider session vs packaged artifacts: development compiles React and
+    // react-server-dom as their development variants (warnings, readable
+    // identifiers) for the RSC and widget environments. The App environment
+    // is overridden to production by `selfContainedAppPlugin` because Rsbuild
+    // only honors `inlineScripts: true` and `inlineStyles: true` in production
+    // and otherwise emits development source maps beside the HTML. Topology
+    // (dev entries, compiler roots) still follows `options.mode`.
     mode: options.mode,
     // Compile errors reach consumers as diagnostics: the dev session's
     // `AB8206` carries every Rspack error, so Rsbuild's own console output —
@@ -392,10 +395,10 @@ export const createRscRuntimeRsbuildConfig = (
       server: { host: '127.0.0.1', port: 0, printUrls: false },
     } : {}),
     plugins: [
-      runtimeEnvironmentModesPlugin(),
       pluginReact(rscRuntimeReactPluginOptions),
       pluginRSC({ environments: { server: 'rsc', client: 'widget' } }),
       emitRuntimeManifest(),
+      selfContainedAppPlugin(),
       ...(options.onAppReload === undefined ? [] : [runtimeAppReloadPlugin(options.onAppReload)]),
       ...(options.onCompile === undefined ? [] : [runtimeCompileObserverPlugin(options.onCompile)]),
     ],

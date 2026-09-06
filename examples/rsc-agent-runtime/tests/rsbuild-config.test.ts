@@ -37,7 +37,7 @@ test('sets an explicit Chromium browserslist on the web hosts only', () => {
   expect(webOutput(development, 'widget')?.overrideBrowserslist).toEqual([...rscRuntimeBrowserHost]);
 });
 
-test('resolved development inspect keeps portable Flight and the self-contained App in production mode', async () => {
+test('resolved development inspect keeps only the self-contained App in production mode', async () => {
   const compilerRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-config-'));
   try {
     const rsbuild = await createRsbuild({
@@ -50,7 +50,7 @@ test('resolved development inspect keeps portable Flight and the self-contained 
 
     expect(inspection.origin.rsbuildConfig.mode).toBe('development');
     expect(inspection.origin.environmentConfigs.app?.mode).toBe('production');
-    expect(inspection.origin.environmentConfigs.rsc?.mode).toBe('production');
+    expect(inspection.origin.environmentConfigs.rsc?.mode).toBe('development');
     expect(inspection.origin.environmentConfigs.widget?.mode).toBe('development');
     expect(inspection.origin.environmentConfigs.app?.output.overrideBrowserslist).toEqual([...rscRuntimeBrowserHost]);
     expect(inspection.origin.environmentConfigs.app?.output.sourceMap).toBe(false);
