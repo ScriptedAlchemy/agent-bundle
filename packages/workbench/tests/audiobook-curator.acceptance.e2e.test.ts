@@ -13,22 +13,7 @@ import {
   expectHealthyExamplePage,
   writeExampleReport,
 } from './support/example-acceptance.ts';
-import {
-  editWatchedSource,
-  expectApplicationTree,
-  expectPrimaryNav,
-  expectRenderedDocument,
-  expectUnknownRouteMessage,
-  fillRouteInput,
-  openWorkbench,
-  readBuildEpoch,
-  readInvocationId,
-  rebuildTimeout,
-  runSelectedRoute,
-  selectApplicationLeaf,
-  waitForBuildEpochAdvance,
-  workbenchTestId,
-} from './support/workbench-acceptance.ts';
+import { editWatchedSource, expectApplicationTree, expectHeading, expectPrimaryNav, expectRenderedDocument, expectUnknownRouteMessage, fillRouteInput, openWorkbench, readBuildEpoch, readInvocationId, rebuildTimeout, runSelectedRoute, selectApplicationLeaf, waitForBuildEpochAdvance, workbenchTestId } from './support/workbench-acceptance.ts';
 import { buildWorkbench, e2e, waitForWorkbenchIdle, workbenchAssets, workbenchUrl } from './support/workbench-e2e.ts';
 import { inspectWorkbenchSurface, workbenchLeafPath } from '../../agent-bundle/src/test/index.ts';
 import { applicationLeafForRouteId, applicationLeaves } from '../src/application/application-tree-model.ts';
@@ -216,7 +201,7 @@ e2e('accepts the audiobook-curator Application workspace at 1440×900', { timeou
     await expect(page.getByRole('table', { name: /finding|bundle|store|probe/iu })).toHaveCount(0);
 
     await openWorkbench(page, server.url, '/advanced/artifact');
-    await expect(page.getByRole('heading', { name: 'Emitted files' })).toBeVisible({ timeout: browserTimeout });
+    await expectHeading(page, 'Emitted files');
     const detailsToggle = page.locator('.artifact-table').getByRole('button', { name: 'Details' }).first();
     await expect(detailsToggle).toBeVisible({ timeout: browserTimeout });
     await detailsToggle.click();
