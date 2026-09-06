@@ -4,11 +4,14 @@
  * the summary projection of an envelope.
  */
 import type { Diagnostic } from '../../../agent-bundle/src/contracts/diagnostics.ts';
-import type {
-  RouteInvocation,
-  RouteInvocationOutcome,
-  RouteInvocationStatus,
-  RouteInvocationSummary,
+import {
+  emptyRetainedRenderEvents,
+  retainRenderEvent,
+  type RetainedRenderEvents,
+  type RouteInvocation,
+  type RouteInvocationOutcome,
+  type RouteInvocationStatus,
+  type RouteInvocationSummary,
 } from '../../../agent-bundle/src/contracts/invocations.ts';
 import {
   parseJsonWithoutDuplicateKeys,
@@ -29,7 +32,8 @@ export type InvocationState =
   | Readonly<{ readonly phase: 'idle' }>
   | Readonly<{
       readonly correlationId: string;
-      readonly events?: readonly AgentRenderEvent[];
+      /** The live render window, held under the same retention policy the server applies to its replay and envelope. */
+      readonly history?: RetainedRenderEvents;
       readonly invocationId?: string;
       readonly phase: 'running';
       readonly startedAt: number;
@@ -61,9 +65,6 @@ const settled = (invocation: RouteInvocation, durationMs?: number): InvocationSt
 
 export const idleInvocationState: InvocationState = Object.freeze({ phase: 'idle' });
 
-/** Matches RouteInvocationService's retained render-event bound. */
-const maximumLiveRenderEvents = 256;
-
 export const reduceInvocationState = (state: InvocationState, action: InvocationAction): InvocationState => {
   switch (action.type) {
     case 'start':
@@ -79,7 +80,7 @@ export const reduceInvocationState = (state: InvocationState, action: Invocation
       });
     case 'render':
       return state.phase === 'running'
-        ? Object.freeze({ ...state, events: Object.freeze([...(state.events ?? []), action.event].slice(-maximumLiveRenderEvents)) })
+        ? Object.freeze({ ...state, history: retainRenderEvent(state.history ?? emptyRetainedRenderEvents, action.event).retained })
         : state;
     case 'stream.start':
       return state.phase === 'running'

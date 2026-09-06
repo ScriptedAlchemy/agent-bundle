@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, expect, it } from '@rstest/core';
 
-import type { RouteInvocation } from '../../agent-bundle/src/contracts/invocations.ts';
+import {
+  emptyRetainedRenderEvents,
+  retainedRenderEvents,
+  routeInvocationRenderHistoryLimits,
+  type RouteInvocation,
+} from '../../agent-bundle/src/contracts/invocations.ts';
 import type { ApplicationLeaf } from '../src/application/application-tree-model.ts';
 import type { InvocationBackend } from '../src/application/invocation-backend.ts';
 import {
@@ -12,7 +17,10 @@ import {
   selectBackend,
   statusLabel,
   writeLastInput,
+  type InvocationState,
 } from '../src/application/invocation-model.ts';
+import { foldAgentDocumentEvents } from '../src/application/rendered-document.tsx';
+import type { AgentRenderEvent } from '../src/runtime/agent-document-client.ts';
 
 const invocation = Object.freeze({
   completedAt: '2026-09-05T07:00:01.000Z',
@@ -96,6 +104,11 @@ it('reduces invocation lifecycle states without retaining stale failures', () =>
   expect(reduceInvocationState(running, { type: 'reset' })).toBe(idleInvocationState);
 });
 
+const liveEvents = (state: InvocationState): readonly AgentRenderEvent[] => {
+  if (state.phase !== 'running') throw new Error('Expected a running invocation.');
+  return retainedRenderEvents(state.history ?? emptyRetainedRenderEvents);
+};
+
 it('retains only the newest 256 live render events', () => {
   let state = reduceInvocationState(idleInvocationState, { correlationId: 'c1', startedAt: 1_000, type: 'start' });
   for (let sequence = 0; sequence < 300; sequence += 1) {
@@ -110,10 +123,54 @@ it('retains only the newest 256 live render events', () => {
   }
 
   expect(state).toMatchObject({ phase: 'running' });
+  const events = liveEvents(state);
+  expect(events).toHaveLength(256);
+  expect(events[0]?.sequence).toBe(44);
+  expect(events.at(-1)?.sequence).toBe(299);
   if (state.phase !== 'running') throw new Error('Expected a running invocation.');
-  expect(state.events).toHaveLength(256);
-  expect(state.events?.[0]?.sequence).toBe(44);
-  expect(state.events?.at(-1)?.sequence).toBe(299);
+  expect(state.history).toMatchObject({ evictedEvents: 44, producedEvents: 300 });
+});
+
+it('pins the latest document event while a long progress sequence evicts the rest', () => {
+  const shell = {
+    document: { root: { kind: 'text' as const, text: 'shell' }, status: 'success' as const, version: 1 as const },
+    sequence: 0,
+    type: 'shell' as const,
+  };
+  let state = reduceInvocationState(idleInvocationState, { correlationId: 'c1', startedAt: 1_000, type: 'start' });
+  state = reduceInvocationState(state, { event: shell, type: 'render' });
+  for (let sequence = 1; sequence <= 400; sequence += 1) {
+    state = reduceInvocationState(state, { event: { completed: sequence, sequence, total: 400, type: 'progress' }, type: 'render' });
+  }
+
+  const events = liveEvents(state);
+  expect(events).toHaveLength(routeInvocationRenderHistoryLimits.maxEvents);
+  expect(events[0]).toEqual(shell);
+  expect(events[1]?.sequence).toBe(146);
+  expect(events.at(-1)?.sequence).toBe(400);
+  expect(foldAgentDocumentEvents(events)).toMatchObject({
+    complete: false,
+    document: shell.document,
+    progress: { completed: 400 },
+  });
+});
+
+it('bounds the live window by retained bytes, not only by event count', () => {
+  const snapshot = (sequence: number) => ({
+    boundaryId: 'b',
+    document: { root: { kind: 'text' as const, text: 'x'.repeat(256 * 1024) }, status: 'success' as const, version: 1 as const },
+    sequence,
+    type: 'replace' as const,
+  });
+  let state = reduceInvocationState(idleInvocationState, { correlationId: 'c1', startedAt: 1_000, type: 'start' });
+  for (let sequence = 0; sequence < 24; sequence += 1) {
+    state = reduceInvocationState(state, { event: snapshot(sequence), type: 'render' });
+  }
+
+  if (state.phase !== 'running') throw new Error('Expected a running invocation.');
+  expect(state.history?.retainedBytes).toBeLessThanOrEqual(routeInvocationRenderHistoryLimits.maxBytes);
+  expect(state.history?.evictedEvents).toBe(17);
+  expect(liveEvents(state).map((event) => event.sequence)).toEqual([17, 18, 19, 20, 21, 22, 23]);
 });
 
 it('stores strict JSON last-input snapshots by leaf key and tolerates unavailable storage', () => {
