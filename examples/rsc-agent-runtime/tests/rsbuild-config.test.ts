@@ -16,9 +16,9 @@ const webOutput = (
   name: 'app' | 'rsc' | 'widget',
 ) => config.environments?.[name]?.output;
 
-test('uses development mode for the provider session and production for rsbuild build', () => {
+test('keeps the provider session and rsbuild build in production mode', () => {
   expect(createRscRuntimeRsbuildConfig({ compilerRoot: '/tmp/rsc-compiler', mode: 'development' }).mode)
-    .toBe('development');
+    .toBe('production');
   expect(createRscRuntimeRsbuildConfig({ mode: 'production' }).mode).toBe('production');
 });
 
@@ -37,7 +37,7 @@ test('sets an explicit Chromium browserslist on the web hosts only', () => {
   expect(webOutput(development, 'widget')?.overrideBrowserslist).toEqual([...rscRuntimeBrowserHost]);
 });
 
-test('resolved development inspect keeps only the self-contained App in production mode', async () => {
+test('resolved development topology keeps every React environment in production mode', async () => {
   const compilerRoot = await mkdtemp(join(tmpdir(), 'rsc-agent-runtime-config-'));
   try {
     const rsbuild = await createRsbuild({
@@ -48,10 +48,10 @@ test('resolved development inspect keeps only the self-contained App in producti
     const widgetBundler = inspection.origin.bundlerConfigs.find((config) => config.name === 'widget');
     const appBundler = inspection.origin.bundlerConfigs.find((config) => config.name === 'app');
 
-    expect(inspection.origin.rsbuildConfig.mode).toBe('development');
+    expect(inspection.origin.rsbuildConfig.mode).toBe('production');
     expect(inspection.origin.environmentConfigs.app?.mode).toBe('production');
-    expect(inspection.origin.environmentConfigs.rsc?.mode).toBe('development');
-    expect(inspection.origin.environmentConfigs.widget?.mode).toBe('development');
+    expect(inspection.origin.environmentConfigs.rsc?.mode).toBe('production');
+    expect(inspection.origin.environmentConfigs.widget?.mode).toBe('production');
     expect(inspection.origin.environmentConfigs.app?.output.overrideBrowserslist).toEqual([...rscRuntimeBrowserHost]);
     expect(inspection.origin.environmentConfigs.app?.output.sourceMap).toBe(false);
     expect(inspection.origin.environmentConfigs.widget?.output.overrideBrowserslist).toEqual([...rscRuntimeBrowserHost]);

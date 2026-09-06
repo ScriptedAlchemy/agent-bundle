@@ -94,14 +94,11 @@ The published Agent Bundle library is built with Rslib. This example's separate
 production RSC/runtime artifacts are built by its explicit Rsbuild production
 command (`pnpm --filter @agent-bundle/rsc-agent-runtime-demo build`); its provider
 uses a separate long-lived Rsbuild development/HMR session only when an
-`agent-bundle dev` project opts into `dev.runtime.provider`. That session
-keeps the RSC and widget environments in development mode (development React
-and react-server-dom, readable identifiers) while overriding only the App
-environment to production: Rsbuild 2.2 inlines scripts and styles only in
-production mode and otherwise emits source-map siblings, both incompatible
-with the App's single-file contract. `rsbuild build --mode production` stays
-production for every environment so Flight payloads and packaged App HTML
-remain compact. `@rsbuild/plugin-react` is configured as
+`agent-bundle dev` project opts into `dev.runtime.provider`. The session uses
+development entries, output roots, and HMR topology while compiling every
+environment in production mode: production decoders cannot read development
+Flight payloads, and Rsbuild only inlines the App's scripts and styles in
+production mode. `@rsbuild/plugin-react` is configured as
 `pluginReact({ fastRefresh: false })`: the compiler App is an opaque srcdoc
 child with `hmr: false`, and the runtime-surface outer document owns the one
 HMR socket. The `widget` and `app` web environments set

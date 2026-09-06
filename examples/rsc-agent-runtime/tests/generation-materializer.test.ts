@@ -273,8 +273,8 @@ test('resolves the coherent development compiler configuration through Rsbuild',
     expect(environments.rsc?.output.distPath.root).toBe(join(compilerRoot, 'rsc'));
     expect(environments.widget?.output.distPath.root).toBe(join(compilerRoot, 'widget'));
     expect(environments.app?.output.distPath.root).toBe(join(compilerRoot, 'app'));
-    expect(developmentConfig.mode).toBe('development');
-    expect(inspection.origin.rsbuildConfig.mode).toBe('development');
+    expect(developmentConfig.mode).toBe('production');
+    expect(inspection.origin.rsbuildConfig.mode).toBe('production');
     expect(inspection.origin.rsbuildConfig.dev.writeToDisk).toBe(true);
     expect(inspection.origin.rsbuildConfig.server.host).toBe('127.0.0.1');
     expect(inspection.origin.rsbuildConfig.server.port).toBe(0);

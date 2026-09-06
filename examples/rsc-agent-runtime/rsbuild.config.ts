@@ -205,9 +205,6 @@ const emitRuntimeManifest = (): RsbuildPlugin => ({
 const selfContainedAppPlugin = (): RsbuildPlugin => ({
   name: 'agent-bundle:rsc-runtime-self-contained-app',
   setup(api) {
-    api.modifyEnvironmentConfig((config, { name }) => {
-      if (name === 'app') config.mode = 'production';
-    });
     api.onBeforeCreateCompiler(({ bundlerConfigs }) => {
       const config = api.getNormalizedConfig({ environment: 'app' });
       const bundler = bundlerConfigs.find((candidate) => candidate.name === 'app');
@@ -371,14 +368,10 @@ export const createRscRuntimeRsbuildConfig = (
     development ? join(options.compilerRoot as string, name) : productionRoot;
 
   return {
-    // Provider session vs packaged artifacts: development compiles React and
-    // react-server-dom as their development variants (warnings, readable
-    // identifiers) for the RSC and widget environments. The App environment
-    // is overridden to production by `selfContainedAppPlugin` because Rsbuild
-    // only honors `inlineScripts: true` and `inlineStyles: true` in production
-    // and otherwise emits development source maps beside the HTML. Topology
-    // (dev entries, compiler roots) still follows `options.mode`.
-    mode: options.mode,
+    // Flight must use React's production wire format because production
+    // decoders cannot read development payloads. `options.mode` still selects
+    // the dev entries, output roots, and server topology.
+    mode: 'production',
     // Compile errors reach consumers as diagnostics: the dev session's
     // `AB8206` carries every Rspack error, so Rsbuild's own console output —
     // which would print the same errors to the provider's stderr — is
