@@ -26,9 +26,10 @@ export interface RouteInvocationRenderHistoryLimits {
 }
 
 /**
- * 256 events and 2 MiB. The runtime caps one event at `maxEventBytes`
- * (1 MiB + 1 KiB), so the pinned document event and the newest event always
- * fit together and the byte bound holds strictly for runtime-produced streams.
+ * 256 events and 2 MiB. The window exceeds `maxBytes` only by what its two
+ * pinned events need; the runtime caps one event at `maxEventBytes`
+ * (1 MiB + 1 KiB), so a runtime-produced window never holds more than
+ * 2 MiB + 2 KiB.
  */
 export const routeInvocationRenderHistoryLimits: RouteInvocationRenderHistoryLimits = Object.freeze({
   maxBytes: 2 * 1024 * 1024,

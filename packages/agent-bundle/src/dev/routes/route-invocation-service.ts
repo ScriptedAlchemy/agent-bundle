@@ -1148,10 +1148,24 @@ const invocationProjection = (
   return {};
 };
 
+/** The retained render stream and its truncation account, shared by every envelope a stream record settles into. */
+const retainedHistory = (
+  history: RetainedRenderEvents,
+): Pick<RouteInvocation, 'document' | 'events' | 'retention'> => {
+  const document = retainedLatestDocument(history);
+  const retention = renderRetention(history);
+  return {
+    ...(document === undefined ? {} : { document }),
+    events: retainedRenderEvents(history),
+    ...(retention === undefined ? {} : { retention }),
+  };
+};
+
 const failedInvocation = (input: {
   readonly code: string;
   readonly completedAt: Date;
   readonly context: RequestContextProvenance;
+  readonly history: RetainedRenderEvents;
   readonly id: string;
   readonly manifest: RouteManifest;
   readonly message: string;
@@ -1169,7 +1183,7 @@ const failedInvocation = (input: {
     context: input.context,
     ...(input.request.correlationId === undefined ? {} : { correlationId: input.request.correlationId }),
     diagnostics: [diagnostic(input.code, input.message)],
-    events: [],
+    ...retainedHistory(input.history),
     id: input.id,
     input: canonical ?? renderedInput ?? {},
     kind: input.route.kind as RouteInvocationKind,
@@ -1199,14 +1213,6 @@ interface InvocationStreamRecord {
   result?: Promise<RouteInvocation>;
 }
 
-/** The retained render stream and its truncation account, shared by the completed, cancelled, and replayed envelopes. */
-const retainedHistory = (
-  history: RetainedRenderEvents,
-): Pick<RouteInvocation, 'events' | 'retention'> => {
-  const retention = renderRetention(history);
-  return { events: retainedRenderEvents(history), ...(retention === undefined ? {} : { retention }) };
-};
-
 const cancelledInvocation = (input: {
   readonly context: RequestContextProvenance;
   readonly history: RetainedRenderEvents;
@@ -1217,30 +1223,26 @@ const cancelledInvocation = (input: {
   readonly startedAt: Date;
   readonly surface: RouteInvocationSurface;
   readonly completedAt: Date;
-}): RouteInvocation => {
-  const document = retainedLatestDocument(input.history);
-  return deepFreeze({
-    completedAt: input.completedAt.toISOString(),
-    context: input.context,
-    ...(input.request.correlationId === undefined ? {} : { correlationId: input.request.correlationId }),
-    diagnostics: [],
-    ...(document === undefined ? {} : { document }),
-    ...retainedHistory(input.history),
-    id: input.id,
-    input: input.request.input ?? {},
-    kind: input.route.kind as RouteInvocationKind,
-    manifestDigest: input.manifest.digest,
-    projection: {},
-    providers: unobservedProviders(input.manifest),
-    routeId: input.route.id,
-    source: input.route.source,
-    sourceRevision: input.manifest.sourceRevision,
-    startedAt: input.startedAt.toISOString(),
-    status: 'cancelled',
-    surface: input.surface,
-    timings: [timing('elapsed', input.startedAt, input.completedAt.getTime() - input.startedAt.getTime())],
-  });
-};
+}): RouteInvocation => deepFreeze({
+  completedAt: input.completedAt.toISOString(),
+  context: input.context,
+  ...(input.request.correlationId === undefined ? {} : { correlationId: input.request.correlationId }),
+  diagnostics: [],
+  ...retainedHistory(input.history),
+  id: input.id,
+  input: input.request.input ?? {},
+  kind: input.route.kind as RouteInvocationKind,
+  manifestDigest: input.manifest.digest,
+  projection: {},
+  providers: unobservedProviders(input.manifest),
+  routeId: input.route.id,
+  source: input.route.source,
+  sourceRevision: input.manifest.sourceRevision,
+  startedAt: input.startedAt.toISOString(),
+  status: 'cancelled',
+  surface: input.surface,
+  timings: [timing('elapsed', input.startedAt, input.completedAt.getTime() - input.startedAt.getTime())],
+});
 
 export class RouteInvocationService {
   readonly #completedStreams: string[] = [];
@@ -1579,6 +1581,7 @@ export class RouteInvocationService {
             code: childCode,
             completedAt,
             context,
+            history: streamRecord.history,
             id,
             manifest,
             message: controller.signal.reason instanceof DOMException && controller.signal.reason.name === 'TimeoutError'
@@ -1609,7 +1612,6 @@ export class RouteInvocationService {
           context,
           ...(request.correlationId === undefined ? {} : { correlationId: request.correlationId }),
           diagnostics: [],
-          document: child.document,
           ...(canonical !== undefined && isJsonRecord(canonical)
             ? {
                 event: {
@@ -1624,6 +1626,7 @@ export class RouteInvocationService {
               }
             : {}),
           ...retainedHistory(streamRecord.history),
+          document: child.document,
           id,
           input: canonical ?? child.input,
           kind: route.kind as RouteInvocationKind,
@@ -1667,6 +1670,7 @@ export class RouteInvocationService {
         code: error instanceof RouteInvocationRequestError ? error.code : ROUTE_INVOCATION_CHILD_FAILURE_CODE,
         completedAt,
         context: cancellationContext,
+        history: streamRecord.history,
         id,
         manifest: queued,
         message: error instanceof Error ? error.message : String(error),

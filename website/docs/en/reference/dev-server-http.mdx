@@ -25,9 +25,9 @@ The POST body is a `RouteInvocationRequest`: `routeId` plus optional `input`, `a
 identifiers on the invocation so the route workspace and trace can join the run. The completed
 envelope holds the input, provenance context, providers, render events, Agent Document, result,
 projections, diagnostics, and timings. Trace entries link to that full snapshot instead of
-duplicating it. Render events are the render-history window (newest 256 events, at most 2 MiB,
-newest document-bearing event always kept) shared by the envelope, the item route, and the
-stream replay; when events were evicted the envelope carries `retention` with `producedEvents`,
+duplicating it. Render events are the render-history window (newest 256 events, at most 2 MiB
+plus the pinned newest and newest document-bearing events) shared by the envelope, the item
+route, and the stream replay; when events were evicted the envelope carries `retention` with `producedEvents`,
 `evictedEvents`, `evictedBytes`, and `retainedBytes`, and the stream sends `truncated` once.
 The Agent Document, result, and outcome are never truncated by it. A cancelled invocation has
 `status: "cancelled"` and no `outcome`; cancelling an already-final invocation returns `AB8256`

@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 import { describe, expect, it } from '@rstest/core';
 
-import type { RouteInvocation } from '../../agent-bundle/src/contracts/invocations.ts';
+import { retainedRenderEvents, type RouteInvocation } from '../../agent-bundle/src/contracts/invocations.ts';
 import type { TraceEntry } from '../../agent-bundle/src/contracts/trace.ts';
 import { appResourceUriFor, appToolCallRequest, catalogToolsFor, orderedToolsForApp } from '../src/application/app-route-workspace.tsx';
 import type { ApplicationLeaf } from '../src/application/application-tree-model.ts';
@@ -92,10 +92,15 @@ describe('invocation state contract', () => {
       type: 'render',
     });
     expect(progressed).toMatchObject({
-      events: [expect.objectContaining({ type: 'shell' }), expect.objectContaining({ type: 'progress' })],
+      history: { evictedEvents: 0, producedEvents: 2 },
       invocationId: 'inv-live',
       phase: 'running',
     });
+    if (progressed.phase !== 'running') throw new Error('Expected a running invocation.');
+    expect(retainedRenderEvents(progressed.history!)).toEqual([
+      expect.objectContaining({ type: 'shell' }),
+      expect.objectContaining({ type: 'progress' }),
+    ]);
 
     const { outcome: _outcome, ...withoutOutcome } = invocation;
     const cancelled = { ...withoutOutcome, status: 'cancelled' as const };

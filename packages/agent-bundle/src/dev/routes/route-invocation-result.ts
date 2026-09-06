@@ -13,7 +13,11 @@ import type {
 
 export interface RouteInvocation extends RouteInvocationSummary {
   readonly context: RequestContextProvenance;
-  /** The final Agent Document; absent when rendering failed before a document existed. Never truncated by `retention`. */
+  /**
+   * The final Agent Document of a `succeeded` run. A `cancelled` or `failed`
+   * run carries the latest document its retained stream reached, absent when
+   * none did. Never truncated by `retention`.
+   */
   readonly document?: AgentDocument;
   /**
    * The production `shell | progress | replace | error | complete` stream, in
