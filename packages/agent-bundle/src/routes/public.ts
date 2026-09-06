@@ -67,7 +67,8 @@ export type AgentEventNativePayload = Readonly<Record<string, unknown>>;
  * Props received by an event route's async default Server Component.
  * `canonical.payload` is the cross-host reading of the envelope for the
  * route's family; `native` is the frozen host envelope itself, for the
- * host-specific fields the payload does not model.
+ * host-specific fields the payload does not model; `preflight` is strict JSON
+ * returned by the route's gate with an execute outcome.
  *
  * Read transport-owned request context with `await agent()` from
  * `@agent-bundle/runtime`. The invocation, host, session, actor, workspace,
@@ -78,9 +79,13 @@ export type AgentEventNativePayload = Readonly<Record<string, unknown>>;
  * is unavailable on hook-driven event scopes. The framework never derives or
  * surfaces the operator's identity from a host payload.
  */
-export interface AgentEventRouteProps<E extends CanonicalAgentEvent = CanonicalAgentEvent> {
+export interface AgentEventRouteProps<
+  E extends CanonicalAgentEvent = CanonicalAgentEvent,
+  Preflight extends JsonValue = JsonValue,
+> {
   readonly canonical: AgentEventCanonicalIdentity<E>;
   readonly native: AgentEventNativePayload;
+  readonly preflight?: Preflight;
   readonly signal: AbortSignal;
 }
 
