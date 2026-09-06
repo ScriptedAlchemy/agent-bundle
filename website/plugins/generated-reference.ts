@@ -140,7 +140,19 @@ const messages = {
     pluginComponents: 'Plugin components',
     pluginComponentsIntro:
       'The `plugin` section of each table, flattened to dotted capability paths and grouped by top-level key. Boolean entries record a component the adapter emits; entries with a state carry the reason the host evidence supports or withholds it. Evidence notes stay in the JSON files.',
+    clients: 'Recorded third-party clients',
+    clientsIntro:
+      'The `clients` section of each table: agents that read the artifact this target already emits, pinned to their own documentation on the date it was read. These clients are not target adapters — nothing about them changes what the compiler writes — so every row is evidence about a reader of the existing artifact, never a projection. The tier says what the client loads: `agent-plugins` loads the emitted package as one plugin, `skills` loads the skill tree but not the manifest, and `none` loads nothing from it as published. A surface without evidence is `unavailable` with a dated reason, and the reason names exactly what the client would need instead.',
+    clientSurfaces: 'Client surfaces',
+    clientDiscovery: 'Client discovery',
     headers: {
+      client: 'Client',
+      tier: 'Tier',
+      observed: 'Observed',
+      install: 'Install',
+      surface: 'Surface',
+      required: 'Paths it reads',
+      shadowedBy: 'Shadowed by',
       lineageRow: 'Lineage row',
       host: 'Host',
       version: 'Observed version',
@@ -248,7 +260,19 @@ const messages = {
     pluginComponents: '插件组件',
     pluginComponentsIntro:
       '每张表的 `plugin` 部分，按点分能力路径展开并按顶层键分组。布尔条目表示适配器会发出的组件；带状态的条目记录宿主证据支持或保留该能力的原因。证据说明保留在 JSON 文件中。',
+    clients: '已记录的第三方客户端',
+    clientsIntro:
+      '每张表的 `clients` 部分：会读取该目标已经产出的构件的其他代理，按其自身文档以及阅读文档的日期固定记录。这些客户端不是目标适配器——它们不会改变编译器写出的任何内容——因此每一行都是关于既有构件读取方的证据，而不是一种投影。tier 表示客户端加载什么：`agent-plugins` 把产出的包作为一个插件加载，`skills` 只加载技能树而不加载清单，`none` 表示按当前产出形态它什么都不加载。没有证据的界面一律为 `unavailable` 并附带带日期的原因，原因中明确写出该客户端实际需要的是什么。',
+    clientSurfaces: '客户端界面',
+    clientDiscovery: '客户端发现',
     headers: {
+      client: '客户端',
+      tier: '层级',
+      observed: '观测依据',
+      install: '安装',
+      surface: '界面',
+      required: '读取的路径',
+      shadowedBy: '被以下文件遮蔽',
       lineageRow: '谱系行',
       host: '宿主',
       version: '观测版本',
@@ -611,6 +635,66 @@ function renderHosts(hosts: readonly HostCapabilityTable[], m: Messages): string
       ),
     ),
   );
+
+  const clientHosts = hosts.filter(host => Object.keys(asObject(host.data.clients)).length > 0);
+  if (clientHosts.length > 0) {
+    sections.push(`## ${m.clients}\n`);
+    sections.push(m.clientsIntro);
+    const clients = clientHosts.flatMap(host =>
+      Object.entries(asObject(host.data.clients)).map(([id, value]) => ({ host, id, record: asObject(value) })),
+    );
+    sections.push(
+      table(
+        [m.headers.client, m.headers.host, m.headers.tier, m.headers.observed, m.headers.install],
+        clients.map(({ host, record }) => {
+          const commands = asObject(record.install).commands;
+          return [
+            escapeProse(asString(record.name) ?? ''),
+            code(host.host),
+            code(asString(record.tier) ?? ''),
+            escapeProse(asString(record.observed) ?? ''),
+            Array.isArray(commands) ? commands.map(command => code(String(command))).join('<br />') : m.notApplicable,
+          ];
+        }),
+      ),
+    );
+    sections.push(`### ${m.clientSurfaces}\n`);
+    sections.push(
+      table(
+        [m.headers.client, m.headers.surface, m.headers.state, m.headers.detail],
+        clients.flatMap(({ record }) =>
+          Object.entries(asObject(record.surfaces)).map(([surface, value]) => {
+            const row = capabilityRow(value);
+            const details: string[] = [];
+            if (row?.reason !== undefined) details.push(escapeProse(row.reason));
+            if (Array.isArray(row?.evidence)) details.push(m.evidenceNotes(row.evidence.length));
+            return [
+              escapeProse(asString(record.name) ?? ''),
+              code(surface),
+              row?.state ?? m.unavailable,
+              details.length > 0 ? details.join('<br />') : m.notApplicable,
+            ];
+          }),
+        ),
+      ),
+    );
+    sections.push(`### ${m.clientDiscovery}\n`);
+    sections.push(
+      table(
+        [m.headers.client, m.headers.required, m.headers.shadowedBy],
+        clients.map(({ record }) => {
+          const paths = (value: JsonValue | undefined): string =>
+            Array.isArray(value) && value.length > 0 ? value.map(entry => code(String(entry))).join(', ') : m.notApplicable;
+          const discovery = asObject(record.discovery);
+          return [
+            escapeProse(asString(record.name) ?? ''),
+            paths(discovery.required),
+            paths(discovery.shadowedBy),
+          ];
+        }),
+      ),
+    );
+  }
 
   sections.push(`## ${m.pluginComponents}\n`);
   sections.push(m.pluginComponentsIntro);

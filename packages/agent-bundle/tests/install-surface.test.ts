@@ -164,7 +164,7 @@ it('documents both Cursor delivery modes without user-level hooks registration',
   expect(install).toContain('`agent-bundle doctor --host cursor`');
 });
 
-it('documents native Agent Plugins clients for the portable profile', () => {
+it('documents recorded Agent Plugins clients for the portable profile', () => {
   const install = writesFor('portable').get('INSTALL.md');
 
   expect(install).toContain(
@@ -172,7 +172,17 @@ it('documents native Agent Plugins clients for the portable profile', () => {
   );
   expect(install).toContain('`~/.cursor/plugins/local/<name>`');
   expect(install).toContain('Developer: Reload Window');
-  expect(install).toContain('Codex, VS Code, GitHub Copilot, Kiro, and ChatGPT');
+  // Every client sentence comes from a pinned record, never a bare list (#693-#714).
+  expect(install).toContain('### Other recorded clients');
+  expect(install).toContain('**Devin CLI**');
+  expect(install).toContain('`devin plugins install <plugin directory>`');
+  expect(install).toContain('loads this bundle as one plugin');
+  expect(install).toContain('Not loaded: hooks.');
+  expect(install).toContain('is read as that instead');
+  // A client whose own contract rejects the emitted manifest is named as such.
+  expect(install).toContain('**Antigravity**');
+  expect(install).toContain('loads nothing from this bundle as published');
+  expect(install).not.toContain('Kiro');
   // The Cursor-only placeholder expansion is documented where the installer is (#426).
   expect(install).toContain('### Cursor placeholder expansion');
   expect(install).toContain('`~/.cursor/agent-bundle/plugin-data/<name>`');

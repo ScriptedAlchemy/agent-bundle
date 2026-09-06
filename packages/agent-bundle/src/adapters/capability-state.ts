@@ -1,6 +1,7 @@
 import { CapabilityStateError, unknownCapabilityStateError } from '../core/capabilities.ts';
 import type { CapabilityEvidence, CapabilityState } from '../core/capabilities.ts';
 import { featureCapabilityName } from '../core/components.ts';
+import { isContainedRelativePath } from '../core/paths.ts';
 import type { JsonObject } from '../core/strict-json.ts';
 import {
   NOTICE_DELIVERY_ROUTES,
@@ -301,6 +302,204 @@ export const intersectNoticeDeliveryAdvertisements = (
     })];
   }),
 )) as NoticeDeliveryAdvertisement;
+
+/**
+ * The surfaces every third-party client record is judged on (#693–#714).
+ * A record declares all of them, so a client that loads the manifest but not
+ * the hooks file says so in a row and the install surface never implies a
+ * surface the client's own documentation withholds.
+ */
+const CLIENT_COMPATIBILITY_SURFACES: readonly string[] =
+  Object.freeze(['manifest', 'skills', 'mcp', 'placeholders', 'hooks']);
+
+/** What the client loads from the emitted artifact, and therefore what its record may promise. */
+const CLIENT_COMPATIBILITY_TIERS: readonly string[] =
+  Object.freeze(['agent-plugins', 'skills', 'none']);
+
+/** One authored client row from a pinned table's `clients` block. */
+export interface ClientCompatibilityTableEntry {
+  readonly discovery: {
+    readonly evidence?: readonly string[];
+    /** Artifact-relative paths this client reads instead when they are present. */
+    readonly shadowedBy?: readonly string[];
+    /** Artifact-relative paths the client must find for the recorded tier to hold. */
+    readonly required?: readonly string[];
+  };
+  readonly install?: {
+    readonly commands?: readonly string[];
+    readonly location?: string;
+  };
+  readonly issue?: number;
+  readonly name?: string;
+  /** The client version, release channel, or documentation date the rows were read against. */
+  readonly observed?: string;
+  readonly surfaces?: Readonly<Record<string, CapabilityTableRow>>;
+  /** JSON imports widen literals; unknown tiers fail closed below. */
+  readonly tier?: string;
+}
+
+/** A validated client record: the install surface and generated matrix render these. */
+export interface ClientCompatibilityRecord {
+  readonly discovery: {
+    readonly evidence: readonly string[];
+    readonly required: readonly string[];
+    readonly shadowedBy: readonly string[];
+  };
+  readonly id: string;
+  readonly install?: { readonly commands: readonly string[]; readonly location?: string };
+  readonly issue: number;
+  readonly name: string;
+  readonly observed: string;
+  readonly surfaces: Readonly<Record<string, CapabilityTableRow>>;
+  readonly tier: string;
+}
+
+const CLIENT_ID = /^[a-z\d]+(?:-[a-z\d]+)*$/u;
+
+const clientPaths = (
+  target: string,
+  id: string,
+  field: string,
+  value: readonly string[] | undefined,
+): readonly string[] => {
+  if (value === undefined) return Object.freeze([]);
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string' || !isContainedRelativePath(entry))) {
+    throw new CapabilityStateError(
+      `The pinned ${target} table declares ${field} for client ${id} as something other than artifact-relative paths.`,
+    );
+  }
+  return Object.freeze([...value].sort((left, right) => left.localeCompare(right)));
+};
+
+const clientSurfaces = (
+  target: string,
+  id: string,
+  surfaces: Readonly<Record<string, CapabilityTableRow>> | undefined,
+): Readonly<Record<string, CapabilityTableRow>> => Object.freeze(Object.fromEntries(
+  CLIENT_COMPATIBILITY_SURFACES.map((surface): [string, CapabilityTableRow] => {
+    const row = surfaces?.[surface];
+    if (row === undefined) {
+      throw new CapabilityStateError(`The pinned ${target} table leaves client ${id} silent about its ${surface} surface.`);
+    }
+    const dated = (field: string, value: unknown): readonly string[] => {
+      const notes = value === undefined ? [] : value as readonly string[];
+      if (!Array.isArray(notes) || notes.some((note) => typeof note !== 'string' || !DATED_REASON.test(note))) {
+        throw new CapabilityStateError(
+          `The pinned ${target} table gives client ${id} an undated ${field} note for ${surface} (an ISO date such as 2026-09-06 naming when the client's documentation was read).`,
+        );
+      }
+      return Object.freeze([...notes]);
+    };
+    const requireReason = (): string => {
+      if (typeof row.reason !== 'string' || !DATED_REASON.test(row.reason)) {
+        throw new CapabilityStateError(
+          `The pinned ${target} table marks the ${surface} surface of client ${id} ${row.state} without a dated reason.`,
+        );
+      }
+      return row.reason;
+    };
+    switch (row.state) {
+      case 'supported': {
+        const evidence = dated('evidence', row.evidence);
+        if (evidence.length === 0) {
+          throw new CapabilityStateError(
+            `The pinned ${target} table marks the ${surface} surface of client ${id} supported without evidence.`,
+          );
+        }
+        return [surface, Object.freeze({ evidence, state: 'supported' })];
+      }
+      case 'degraded':
+        return [surface, Object.freeze({ evidence: dated('evidence', row.evidence), reason: requireReason(), state: 'degraded' })];
+      case 'unavailable':
+      case 'prohibited':
+        return [surface, Object.freeze({ reason: requireReason(), state: row.state })];
+      default:
+        throw new CapabilityStateError(
+          `Unsupported ${surface} state ${JSON.stringify(row.state)} for client ${id} in the pinned ${target} table.`,
+        );
+    }
+  }),
+));
+
+/**
+ * Reads a pinned table's optional `clients` block: the third-party clients
+ * that load the artifact this target emits, each pinned to its own
+ * documentation (#693–#714). These clients are not target adapters — nothing
+ * here changes what the compiler writes — so a record is evidence about a
+ * reader of the existing artifact, never a projection. A client whose
+ * contract needs a document Agent Bundle does not emit is recorded at the
+ * tier it really reaches, and the tier is held to the rows: `agent-plugins`
+ * requires a manifest the client loads, `skills` requires the skill tree, and
+ * `none` may claim no supported surface at all.
+ */
+export const clientCompatibilityFrom = (
+  target: string,
+  clients: Readonly<Record<string, ClientCompatibilityTableEntry>> | undefined,
+): readonly ClientCompatibilityRecord[] => Object.freeze(
+  Object.entries(clients ?? {})
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([id, entry]): ClientCompatibilityRecord => {
+      if (!CLIENT_ID.test(id)) {
+        throw new CapabilityStateError(`The pinned ${target} table names a client ${JSON.stringify(id)} that is not a kebab-case id.`);
+      }
+      if (typeof entry.name !== 'string' || entry.name.trim().length === 0) {
+        throw new CapabilityStateError(`The pinned ${target} table gives client ${id} no display name.`);
+      }
+      if (!Number.isInteger(entry.issue)) {
+        throw new CapabilityStateError(`The pinned ${target} table gives client ${id} no tracking issue number.`);
+      }
+      if (typeof entry.observed !== 'string' || !DATED_REASON.test(entry.observed)) {
+        throw new CapabilityStateError(
+          `The pinned ${target} table gives client ${id} no dated observation (the client version or documentation date the rows were read against).`,
+        );
+      }
+      if (!CLIENT_COMPATIBILITY_TIERS.includes(entry.tier ?? '')) {
+        throw new CapabilityStateError(`Unsupported tier ${JSON.stringify(entry.tier)} for client ${id} in the pinned ${target} table.`);
+      }
+      const surfaces = clientSurfaces(target, id, entry.surfaces);
+      const required = clientPaths(target, id, 'discovery.required', entry.discovery?.required);
+      const supported = (surface: string): boolean => surfaces[surface]!.state !== 'unavailable' && surfaces[surface]!.state !== 'prohibited';
+      if (entry.tier === 'agent-plugins' && surfaces.manifest!.state !== 'supported') {
+        throw new CapabilityStateError(`Client ${id} claims the agent-plugins tier in the pinned ${target} table without a manifest it loads outright.`);
+      }
+      if (entry.tier === 'skills' && !supported('skills')) {
+        throw new CapabilityStateError(`Client ${id} claims the skills tier in the pinned ${target} table without loading the skill tree.`);
+      }
+      if (entry.tier === 'none' && CLIENT_COMPATIBILITY_SURFACES.some((surface) => supported(surface))) {
+        throw new CapabilityStateError(`Client ${id} claims no tier in the pinned ${target} table while recording a surface it loads.`);
+      }
+      if (entry.tier !== 'none' && required.length === 0) {
+        throw new CapabilityStateError(`Client ${id} claims the ${entry.tier} tier in the pinned ${target} table without naming the artifact paths it discovers.`);
+      }
+      const commands = entry.install?.commands;
+      if (commands !== undefined && (!Array.isArray(commands) || commands.some((command) => typeof command !== 'string' || command.trim().length === 0))) {
+        throw new CapabilityStateError(`The pinned ${target} table gives client ${id} an install block whose commands are not verbatim strings.`);
+      }
+      const discoveryEvidence = entry.discovery?.evidence ?? [];
+      if (!Array.isArray(discoveryEvidence) || discoveryEvidence.some((note) => typeof note !== 'string' || !DATED_REASON.test(note))) {
+        throw new CapabilityStateError(`The pinned ${target} table gives client ${id} an undated discovery note.`);
+      }
+      return Object.freeze({
+        discovery: Object.freeze({
+          evidence: Object.freeze([...discoveryEvidence]),
+          required,
+          shadowedBy: clientPaths(target, id, 'discovery.shadowedBy', entry.discovery?.shadowedBy),
+        }),
+        id,
+        ...(commands === undefined ? {} : {
+          install: Object.freeze({
+            commands: Object.freeze([...commands]),
+            ...(entry.install?.location === undefined ? {} : { location: entry.install.location }),
+          }),
+        }),
+        issue: entry.issue!,
+        name: entry.name,
+        observed: entry.observed,
+        surfaces,
+        tier: entry.tier!,
+      });
+    }),
+);
 
 export const capabilityStateFromSupport = (
   supported: boolean,

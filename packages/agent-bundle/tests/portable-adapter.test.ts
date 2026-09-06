@@ -2,6 +2,8 @@ import { readFile } from 'node:fs/promises';
 import { expect, it } from '@rstest/core';
 
 import { TargetRegistry, createDefaultRegistry } from '../src/adapters/registry.ts';
+import { clientCompatibilityFrom } from '../src/adapters/capability-state.ts';
+import capabilityTable from '../src/adapters/capabilities/portable-1.0.0.json' with { type: 'json' };
 import { portableAdapter } from '../src/adapters/portable.ts';
 import { sha256Hex } from '../src/core/digest.ts';
 import type { NormalizedPlugin } from '../src/core/types.ts';
@@ -636,6 +638,109 @@ it('rejects duplicate adapters without exposing mutable registry snapshots', () 
   expect(registry.defaultTargetNames()).toEqual(['portable']);
   expect(Object.isFrozen(registry.get('portable').capabilities)).toBe(true);
   expect(new TargetRegistry().has('portable')).toBe(false);
+});
+
+/**
+ * Effective discovery for every recorded third-party client (#693-#714): the
+ * paths its record claims it reads are paths this projection really emits, and
+ * the manifests that would shadow them are absent from a portable-only build.
+ */
+it('emits the artifact paths every recorded client reads, and none of the manifests that shadow them', () => {
+  const model = plugin();
+  const plan = createDefaultRegistry().get('portable').plan({
+    ...model,
+    mcpServers: [{
+      args: ['./mcp/serve.mjs'],
+      command: 'node',
+      id: 'mcp:stdio',
+      name: 'stdio',
+      provenance: { kind: 'config' as const, sourcePath: '/workspace/agent-bundle.config.ts' },
+      targets: ['portable'],
+      transport: 'stdio' as const,
+    }],
+  });
+  const emitted = plan.entries.map((entry) => entry.relativePath);
+  const clients = clientCompatibilityFrom('portable', capabilityTable.clients);
+
+  expect(clients.map((client) => client.id)).toEqual(
+    ['antigravity', 'devin-cli', 'grok-build', 'openclaw', 'qoder-cli'],
+  );
+  for (const client of clients) {
+    for (const required of client.discovery.required) {
+      expect(
+        emitted.some((path) => path === required || path.startsWith(`${required}/`)),
+        `${client.id} reads ${required}`,
+      ).toBe(true);
+    }
+    for (const shadow of client.discovery.shadowedBy) {
+      expect(emitted, `${client.id} is shadowed by ${shadow}`).not.toContain(shadow);
+    }
+  }
+  // A client recorded at no tier names no path, so nothing about it can pass by accident.
+  expect(clients.find((client) => client.id === 'antigravity')?.discovery.required).toEqual([]);
+});
+
+it('refuses a client record that claims a tier its own rows do not support', () => {
+  const record = (overrides: Record<string, unknown>) => ({
+    demo: {
+      discovery: { evidence: ['2026-09-06: read from the vendor docs.'], required: ['skills'] },
+      issue: 1,
+      name: 'Demo',
+      observed: 'docs retrieved 2026-09-06',
+      surfaces: {
+        hooks: { reason: '2026-09-06: no hooks document is emitted.', state: 'unavailable' },
+        manifest: { reason: '2026-09-06: the root manifest is not read.', state: 'unavailable' },
+        mcp: { reason: '2026-09-06: no MCP file is read.', state: 'unavailable' },
+        placeholders: { reason: '2026-09-06: no placeholder expansion is documented.', state: 'unavailable' },
+        skills: { evidence: ['2026-09-06: skills/ is a documented discovery root.'], state: 'supported' },
+      },
+      tier: 'skills',
+      ...overrides,
+    },
+  });
+
+  expect(() => clientCompatibilityFrom('portable', record({}))).not.toThrow();
+  expect(() => clientCompatibilityFrom('portable', record({ tier: 'agent-plugins' })))
+    .toThrow(/without a manifest it loads outright/u);
+  expect(() => clientCompatibilityFrom('portable', record({ tier: 'none' })))
+    .toThrow(/while recording a surface it loads/u);
+  expect(() => clientCompatibilityFrom('portable', record({ tier: 'native' })))
+    .toThrow(/Unsupported tier "native"/u);
+});
+
+it('refuses an undated or silent client record', () => {
+  const surfaces = {
+    hooks: { reason: '2026-09-06: no hooks document is emitted.', state: 'unavailable' },
+    manifest: { evidence: ['2026-09-06: the root manifest loads.'], state: 'supported' },
+    mcp: { evidence: ['2026-09-06: mcp.json loads.'], state: 'supported' },
+    placeholders: { evidence: ['2026-09-06: ${PLUGIN_ROOT} expands.'], state: 'supported' },
+    skills: { evidence: ['2026-09-06: skills/ loads.'], state: 'supported' },
+  };
+  const base = {
+    discovery: { evidence: ['2026-09-06: read from the vendor docs.'], required: ['plugin.json'] },
+    issue: 2,
+    name: 'Demo',
+    observed: 'docs retrieved 2026-09-06',
+    surfaces,
+    tier: 'agent-plugins',
+  };
+
+  expect(() => clientCompatibilityFrom('portable', { demo: { ...base, observed: 'latest' } }))
+    .toThrow(/no dated observation/u);
+  expect(() => clientCompatibilityFrom('portable', {
+    demo: { ...base, surfaces: { ...surfaces, hooks: { reason: 'no hooks', state: 'unavailable' } } },
+  })).toThrow(/without a dated reason/u);
+  expect(() => clientCompatibilityFrom('portable', {
+    demo: { ...base, surfaces: { ...surfaces, mcp: { state: 'supported' } } },
+  })).toThrow(/supported without evidence/u);
+  expect(() => clientCompatibilityFrom('portable', {
+    demo: { ...base, surfaces: Object.fromEntries(Object.entries(surfaces).filter(([key]) => key !== 'mcp')) },
+  })).toThrow(/silent about its mcp surface/u);
+  expect(() => clientCompatibilityFrom('portable', {
+    demo: { ...base, discovery: { ...base.discovery, required: ['../escape'] } },
+  })).toThrow(/artifact-relative paths/u);
+  expect(() => clientCompatibilityFrom('portable', { 'Demo Client': base }))
+    .toThrow(/not a kebab-case id/u);
 });
 
 it('ships the pinned schema snapshots recorded in provenance', async () => {

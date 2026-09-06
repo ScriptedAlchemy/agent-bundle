@@ -1,6 +1,8 @@
 import { stateOwnershipMarkerFile, type NormalizedPlugin } from '../core/types.ts';
 import { preservedRuntimeEntries } from '../core/paths.ts';
 import { type BuiltInHost, builtInHostNames } from '../adapters/composite-layout.ts';
+import { clientCompatibilityFrom, type ClientCompatibilityRecord } from '../adapters/capability-state.ts';
+import portableCapabilityTable from '../adapters/capabilities/portable-1.0.0.json' with { type: 'json' };
 import { sourceInputs, type TargetArtifactWrite } from '../adapters/types.ts';
 import {
   installReceiptFile,
@@ -224,18 +226,62 @@ const cursorInstructions = (model: NormalizedPlugin): string[] => [
   '',
 ];
 
+/**
+ * The third-party clients recorded in the pinned portable capability table
+ * (#693–#714). Every sentence this section prints about a client outside the
+ * four shipped adapters comes from a record there, so the install surface
+ * names what each client's own documentation says it loads — and what it does
+ * not — instead of asserting a bare list of native clients.
+ */
+const portableClients: readonly ClientCompatibilityRecord[] =
+  clientCompatibilityFrom('portable', portableCapabilityTable.clients);
+
+const clientTierSentence = (record: ClientCompatibilityRecord): string => {
+  switch (record.tier) {
+    case 'agent-plugins':
+      return 'loads this bundle as one plugin';
+    case 'skills':
+      return `loads \`${record.discovery.required.join('`, `')}\` from this bundle, not its manifest`;
+    case 'none':
+      return 'loads nothing from this bundle as published';
+    default:
+      throw new TypeError(`Unknown client compatibility tier ${JSON.stringify(record.tier)} for ${record.id}.`);
+  }
+};
+
+/** One line per recorded client: what it loads, how to install it, and what it withholds. */
+const clientLine = (record: ClientCompatibilityRecord): string => {
+  const withheld = Object.entries(record.surfaces)
+    .filter(([, row]) => row.state === 'unavailable' || row.state === 'prohibited')
+    .map(([surface]) => surface);
+  return [
+    `- **${record.name}** (${record.observed}) ${clientTierSentence(record)}.`,
+    record.install === undefined ? '' : ` Install: \`${record.install.commands[0]}\`.`,
+    withheld.length === 0 ? '' : ` Not loaded: ${withheld.join(', ')}.`,
+    record.discovery.shadowedBy.length === 0
+      ? ''
+      : ` A root that also carries \`${record.discovery.shadowedBy.join('`, `')}\` is read as that instead.`,
+  ].join('');
+};
+
 const portableInstructions = (): string[] => [
   '## Portable Agent Plugin',
   '',
   'Portable is a distribution profile, not a host runtime with one universal install location.',
   'This bundle follows the Agent Plugins open standard (Agent Plugins 1.0.0, https://agent-plugins.org).',
   'Cursor loads this format natively from `~/.cursor/plugins/local/<name>`; restart Cursor or run',
-  '`Developer: Reload Window` after copying it. Codex, VS Code, GitHub Copilot, Kiro, and ChatGPT',
-  'are also native clients. The bundled installer provides the Cursor local copy:',
+  '`Developer: Reload Window` after copying it. The bundled installer provides the Cursor local copy:',
   '',
   '```sh',
   'node ./install.mjs',
   '```',
+  '',
+  '### Other recorded clients',
+  '',
+  'Each line below is pinned to that client\'s own documentation on the date shown; the surfaces it does',
+  'and does not load are recorded per client in the host capability reference.',
+  '',
+  ...portableClients.map(clientLine),
   '',
   '### Cursor placeholder expansion',
   '',
@@ -249,7 +295,7 @@ const portableInstructions = (): string[] => [
   'it, and every stdio server gains `PLUGIN_ROOT` / `PLUGIN_DATA` in its environment. The bundle itself',
   `stays spec-conformant; the pre-expansion document is kept in \`${installReceiptFile}\` (\`cursorExpansion\`),`,
   'and the optional `agent-bundle doctor --host cursor` verifies the expanded paths (`AB7326`). Nothing is changed for',
-  'other Agent Plugins clients, which expand the placeholders themselves.',
+  'other clients; the recorded clients above name which of them expand the placeholders themselves.',
   '',
   '### Reinstall after a same-version rebuild',
   '',
@@ -257,7 +303,7 @@ const portableInstructions = (): string[] => [
   'place when the same version was rebuilt with different content; runtime state (`state/`) is never',
   'touched. Pass `--replace` (alias `--force`) to replace a different installed version or to adopt a',
   'copy installed before receipts existed. Foreign directories are refused with a content-hash',
-  'comparison. For Codex and other native clients, remove and re-add the plugin through the client',
+  'comparison. For a client that manages its own copy, remove and re-add the plugin through that client',
   'when only content changed at the same version.',
   '',
   '### Uninstall',

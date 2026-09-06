@@ -46,7 +46,7 @@ single directory at `artifact/` (or `output.distPath`) that every selected host 
 | `claude` | The Claude Code plugin layout: `.claude-plugin/`, `hooks/hooks.json`, `.mcp.json`. |
 | `codex` | The Codex plugin layout: `.codex-plugin/` with its own `hooks.json` and `mcp.json`. |
 | `cursor` | The Cursor plugin layout: `.cursor-plugin/` with its own `hooks.json` and `mcp.json`. |
-| `portable` | The [Agent Plugins open standard](https://agent-plugins.org) (specification 1.0.0): root `plugin.json` and `mcp.json`. Cursor, Codex, VS Code, GitHub Copilot, Kiro, and ChatGPT are native clients. |
+| `portable` | The [Agent Plugins open standard](https://agent-plugins.org) (specification 1.0.0): root `plugin.json` and `mcp.json`. Cursor loads it natively; every other client that reads this artifact is recorded, with the surfaces it does and does not load, under [recorded third-party clients](/reference/hosts). |
 
 Host manifests live in their own dotfolders; `skills/`, `hooks/`, `mcp/`, `scripts/`, `bin/`, and
 `assets/` are emitted once and shared. Omit `targets` and the build emits only the `portable`
