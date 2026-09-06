@@ -125,8 +125,9 @@ const parentPid = async (pid: number): Promise<number | undefined> => {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 };
 
+/** node-pty reports `signal: 0` for a normal exit; only a real signal is a signal. */
 const signalName = (signal: number | undefined): string | undefined =>
-  signal === undefined ? undefined : signalNames.get(signal) ?? String(signal);
+  signal === undefined || signal === 0 ? undefined : signalNames.get(signal) ?? String(signal);
 
 export class HostSessionService {
   readonly #attached: HostSessionServiceOptions['attached'];
@@ -416,7 +417,7 @@ export class HostSessionService {
     record.state = record.terminating ? 'terminated' : 'exited';
     record.endedAt = this.#now();
     record.exitCode = exitCode;
-    record.signal = record.terminating ? signal ?? 'SIGTERM' : signal;
+    record.signal = signal;
     const session = this.#snapshot(record);
     this.#send(record, { session, type: 'state' });
     this.#send(record, { session, type: 'end' });
