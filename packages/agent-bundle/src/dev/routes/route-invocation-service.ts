@@ -558,31 +558,39 @@ const productionBindingFor = (
 
   if (route.kind === 'event-route') {
     const host = surface.kind === 'event' ? surface.host : undefined;
-    if (host === undefined) {
-      return unavailableBinding(route.id, 'the compiled event route requires a concrete eligible host.');
+    const wrappers = manifest.executables.hooks.filter((candidate) =>
+      candidate.kind === 'event-route' && candidate.routeId === route.id);
+    const wrapper = host === undefined
+      ? undefined
+      : wrappers.find((candidate) => candidate.host === host);
+    if (host === undefined && wrappers.length === 0) {
+      return unavailableBinding(route.id, 'the canonical event route has no eligible emitted executable.');
     }
-    const wrapper = manifest.executables.hooks.find((candidate) =>
-      candidate.kind === 'event-route' && candidate.routeId === route.id && candidate.host === host);
-    if (wrapper === undefined) {
+    if (host !== undefined && wrapper === undefined) {
       return unavailableBinding(
         route.id,
         `host ${JSON.stringify(host)} is not an eligible emitted projection, or its preparation executable is missing.`,
       );
     }
-    const runtimeServer = manifest.routes.servers.find((server) => server.mode === 'generated');
-    const shared = runtimeServer === undefined
-      ? undefined
-      : manifest.executables.mcpServers.find((candidate) =>
-          candidate.id === runtimeServer.id
-          && candidate.kind === 'compiled'
-          && candidate.hosts.includes(host)
-          && candidate.launch?.worker !== undefined);
+    const eligibleHosts = host === undefined
+      ? new Set(wrappers.map((candidate) => candidate.host))
+      : new Set([host]);
+    const shared = manifest.routes.servers
+      .filter((server) => server.mode === 'generated')
+      .map((server) => manifest.executables.mcpServers.find((candidate) =>
+        candidate.id === server.id
+        && candidate.kind === 'compiled'
+        && candidate.hosts.some((candidateHost) => eligibleHosts.has(candidateHost))
+        && candidate.launch?.worker !== undefined))
+      .find((candidate) => candidate !== undefined);
     const executable = shared?.launch?.worker
       ?? manifest.files.find((file) => file.path === 'hooks/hooks-flight.mjs')?.path;
     if (executable === undefined) {
       return unavailableBinding(route.id, 'the selected event preparation has no compiled route executable.');
     }
-    return Object.freeze({ executable, kind: 'event', preparation: wrapper.path });
+    return wrapper === undefined
+      ? Object.freeze({ executable, kind: 'direct' })
+      : Object.freeze({ executable, kind: 'event', preparation: wrapper.path });
   }
 
   if (route.kind === 'script') {

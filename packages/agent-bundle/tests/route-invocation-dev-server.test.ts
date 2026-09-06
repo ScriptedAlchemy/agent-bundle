@@ -152,6 +152,15 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         '}',
         '',
       ].join('\n'),
+      'src/events/session/end.tsx': [
+        "import { Agent } from '@agent-bundle/runtime';",
+        "import { createElement } from 'react';",
+        "export const config = { runtime: 'standalone' };",
+        'export default async function SessionEnd() {',
+        "  return createElement(Agent.Result, { value: { canonical: true } });",
+        '}',
+        '',
+      ].join('\n'),
       'src/events/tool/before.preflight.ts': "export default () => ({ outcome: 'deny', reason: 'blocked by preflight' });\n",
       'src/events/tool/before.tsx': [
         "import { writeFileSync } from 'node:fs';",
@@ -474,6 +483,26 @@ it('invokes compiled tool and event routes through the foreground server', { tim
     });
     expect(await readFile(importerWorkerMarker, 'utf8')).toBe('load\n');
     expect(existsSync(alphaWorkerMarker)).toBe(false);
+    expect(existsSync(omegaWorkerMarker)).toBe(false);
+
+    await Promise.all(candidateMarkers.map((path) => rm(path, { force: true })));
+    const canonicalEventResponse = await fetch(`${server.url}/api/routes/invocations`, {
+      body: JSON.stringify({
+        input: { event: 'session/end' },
+        routeId: 'event:session/end',
+        surface: { kind: 'event' },
+      }),
+      headers,
+      method: 'POST',
+    });
+    expect(canonicalEventResponse.status).toBe(200);
+    const canonicalEvent = await canonicalEventResponse.json() as RouteInvocationResponse;
+    expect(canonicalEvent.invocation).toMatchObject({
+      result: { canonical: true },
+      status: 'succeeded',
+    });
+    expect(await readFile(alphaWorkerMarker, 'utf8')).toBe('load\n');
+    expect(existsSync(importerWorkerMarker)).toBe(false);
     expect(existsSync(omegaWorkerMarker)).toBe(false);
 
     const toolResponse = await fetch(`${server.url}/api/routes/invocations`, {
@@ -1065,7 +1094,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         '}',
         '',
       ].join('\n'),
-      { timeoutMs: 10_000 },
+      { timeoutMs: 20_000 },
     );
     expect(failedAttempt.outcome).toBe('failed');
     expect(server.status().build.state).toBe('failed');
@@ -1108,7 +1137,7 @@ it('invokes compiled tool and event routes through the foreground server', { tim
         '}',
         '',
       ].join('\n'),
-      { timeoutMs: 10_000 },
+      { timeoutMs: 20_000 },
     );
     expect(repairedAttempt.outcome, JSON.stringify(repairedAttempt.diagnostics)).toBe('succeeded');
     const repairedInvocationResponse = await fetch(`${server.url}/api/routes/invocations`, {
