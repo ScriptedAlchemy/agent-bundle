@@ -36,6 +36,16 @@ export interface DeclaredDependency {
   readonly installed: boolean;
 }
 
+export const packageBinEntries = (
+  packageDocument: Readonly<Record<string, unknown>>,
+): readonly (readonly [string, string])[] => {
+  if (typeof packageDocument.bin === 'string') return Object.freeze([['bin', packageDocument.bin] as const]);
+  if (!isRecord(packageDocument.bin)) return Object.freeze([]);
+  return Object.freeze(Object.entries(packageDocument.bin)
+    .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+    .sort(([left], [right]) => left.localeCompare(right)));
+};
+
 /** Peers `peerDependenciesMeta` marks optional: npm parses but never installs them. */
 const optionalPeers = (packageDocument: Readonly<Record<string, unknown>>): ReadonlySet<string> => {
   const meta = packageDocument.peerDependenciesMeta;

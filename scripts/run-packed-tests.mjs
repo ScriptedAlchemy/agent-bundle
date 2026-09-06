@@ -44,6 +44,7 @@ const publishableDistBeforePackedTests = await digestTree(publishableDist);
 
 const packDirectory = await mkdtemp(join(tmpdir(), 'agent-bundle-shared-pack-'));
 try {
+  const sharedPacks = new Map();
   // [shared-pack key, packages/ directory]
   await Promise.all([
     ['agent-bundle', 'agent-bundle'],
@@ -56,8 +57,31 @@ try {
       destination: packDirectory,
       env: { ...environment, NODE_ENV: 'production' },
     });
+    sharedPacks.set(packageName, pack);
     await writeFile(join(packDirectory, `${packageName}.json`), `${JSON.stringify(pack)}\n`);
   }));
+  const binConsumer = join(packDirectory, 'bin-consumer');
+  await mkdir(binConsumer);
+  await writeFile(join(binConsumer, 'package.json'), '{"private":true}\n');
+  const binPackages = ['agent-bundle', 'create-agent-bundle'];
+  await execFile('npm', [
+    'install',
+    '--ignore-scripts',
+    '--no-audit',
+    '--no-fund',
+    '--prefer-offline',
+    ...binPackages.map((name) => sharedPacks.get(name).tarball),
+  ], { cwd: binConsumer, env: environment });
+  for (const packageName of binPackages) {
+    const packageDocument = JSON.parse(await readFile(join(binConsumer, 'node_modules', packageName, 'package.json'), 'utf8'));
+    const bins = typeof packageDocument.bin === 'string'
+      ? [[packageDocument.name.replace(/^@[^/]+\//u, ''), packageDocument.bin]]
+      : Object.entries(packageDocument.bin ?? {});
+    for (const [name] of bins) {
+      const executable = join(binConsumer, 'node_modules', '.bin', process.platform === 'win32' ? `${name}.cmd` : name);
+      await execFile(executable, ['--help'], { cwd: binConsumer, env: environment });
+    }
+  }
   // Build the synthetic private sibling into a separate package image. The
   // normal dist and shared release tarball above remain the publish candidate.
   const fixtureDist = join(packDirectory, 'runtime-rebundle-dist');

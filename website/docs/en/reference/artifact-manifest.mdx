@@ -442,7 +442,7 @@ mismatch in either direction is a rebuild, not a fallback.
 | `AB6001` | The manifest is not a strict canonical manifest, or it changed while validation ran. |
 | `AB6004` | A `files[]` row and the tree disagree. |
 | `AB6018` | `executables.hooks[]` and a host hooks document disagree about the compiler wrappers. |
-| `AB7001` | `install`, `uninstall`, or `doctor` cannot resolve the host from the manifest at `--from`, or a listed file is missing or differs from its `files[]` row in size, executable bit, or digest. |
+| `AB7001` | `install`, `uninstall`, or `doctor` cannot resolve the host from the manifest at `--from`, or a listed file is missing or differs from its `files[]` row in size, digest, or installed executable state. Declared package bins must remain executable; files not declared executable must remain non-executable. Install restores manifest modes before copying an npm-installed artifact into a host. |
 
 All are described in the [Diagnostics reference](./diagnostics.md).
 

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Stats } from 'node:fs';
 import {
+  chmod,
   cp,
   lstat,
   mkdir,
@@ -18,6 +19,8 @@ import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
 import { stableJson } from '../core/digest.ts';
 import { isErrno } from '../core/errors.ts';
+import { packageBinEntries } from '../core/package-dependencies.ts';
+import { isRecord } from '../core/strict-json.ts';
 import { matchesManifestFile } from '../build/artifact-layout.ts';
 import { exists, installReceiptFile, isInstallReceiptEntry, isPortablePathSegment, isPreservedRuntimeRoot } from '../core/paths.ts';
 import { stateOwnershipMarkerFile } from '../core/types.ts';
@@ -273,10 +276,11 @@ const hashEntry = (
   relativePath: string,
   metadata: Stats,
   bytes: Uint8Array,
+  executable = (metadata.mode & 0o111) !== 0,
 ): void => {
   hash.update(toPosix(relativePath));
   hash.update('\0');
-  hash.update((metadata.mode & 0o111) === 0 ? '-' : 'x');
+  hash.update(executable ? 'x' : '-');
   hash.update('\0');
   hash.update(bytes);
   hash.update('\0');
@@ -328,6 +332,23 @@ export const treeInventory = async (root: string): Promise<TreeInventory> => {
   return Object.freeze({ files: Object.freeze(files), hash: hash.digest('hex') });
 };
 
+const installedPackageBinTargets = async (root: string): Promise<ReadonlySet<string> | undefined> => {
+  let candidate = resolve(root);
+  while (true) {
+    const parent = dirname(candidate);
+    if (
+      basename(parent) === 'node_modules' ||
+      (basename(parent).startsWith('@') && basename(dirname(parent)) === 'node_modules')
+    ) {
+      const packageDocument: unknown = JSON.parse(await readFile(join(candidate, 'package.json'), 'utf8'));
+      if (!isRecord(packageDocument)) throw new TypeError(`Expected a JSON object at ${JSON.stringify(join(candidate, 'package.json'))}.`);
+      return new Set(packageBinEntries(packageDocument).map(([, target]) => resolve(candidate, target)));
+    }
+    if (parent === candidate) return undefined;
+    candidate = parent;
+  }
+};
+
 /**
  * Reads only the fixed paths declared by the authoritative artifact manifest,
  * plus the manifest itself and conventional operator environment overlays.
@@ -335,7 +356,11 @@ export const treeInventory = async (root: string): Promise<TreeInventory> => {
 export const manifestInventory = async (
   root: string,
   manifest: ArtifactManifest,
-  options: { readonly verifyHashes?: boolean } = {},
+  options: {
+    readonly hashManifestModes?: boolean;
+    readonly restoreModes?: boolean;
+    readonly verifyHashes?: boolean;
+  } = {},
 ): Promise<TreeInventory> => {
   const rootMetadata = await lstat(root);
   if (rootMetadata.isSymbolicLink() || !rootMetadata.isDirectory()) throw unsupportedEntry('.');
@@ -352,6 +377,7 @@ export const manifestInventory = async (
   }
   const files = [...paths].sort(compareTreePaths);
   await assertRealAncestors(root, files);
+  const npmBinTargets = await installedPackageBinTargets(root);
   const hash = createHash('sha256');
   for (const relativePath of files) {
     const path = join(root, relativePath);
@@ -368,15 +394,44 @@ export const manifestInventory = async (
       throw error;
     }
     const row = rows.get(relativePath);
-    if (options.verifyHashes !== false && row !== undefined && !matchesManifestFile({
+    const file = {
       bytes: metadata.size,
       mode: metadata.mode & 0o777,
       path: relativePath,
       sha256: createHash('sha256').update(bytes).digest('hex'),
-    }, row)) {
+    };
+    // npm forces declared bins executable; other files keep the publisher's executable state while rw bits follow umask.
+    const executable = (file.mode & 0o111) !== 0;
+    const manifestExecutable = row?.mode !== undefined && (row.mode & 0o111) !== 0;
+    const npmModeMatches = npmBinTargets !== undefined && (
+      npmBinTargets.has(resolve(root, relativePath))
+        ? executable
+        : manifestExecutable || !executable
+    );
+    if (
+      options.verifyHashes !== false &&
+      row !== undefined &&
+      !matchesManifestFile(file, row) &&
+      !(npmModeMatches && matchesManifestFile({ ...file, mode: row.mode ?? file.mode }, row))
+    ) {
       throw new Error(`--from root does not match its manifest: ${relativePath} differs from its files[] row in bytes, mode, or digest.`);
     }
-    hashEntry(hash, relativePath, metadata, bytes);
+    if (
+      options.restoreModes === true &&
+      npmModeMatches &&
+      row?.mode !== undefined &&
+      file.mode !== row.mode
+    ) {
+      await chmod(path, row.mode);
+      metadata = await lstat(path);
+    }
+    hashEntry(
+      hash,
+      relativePath,
+      metadata,
+      bytes,
+      options.hashManifestModes === false || row === undefined ? undefined : manifestExecutable,
+    );
   }
   return Object.freeze({ files: Object.freeze(files), hash: hash.digest('hex') });
 };

@@ -15,7 +15,12 @@ import {
 } from './compile-evidence.ts';
 import { artifactManifestName } from './emit.ts';
 import { parseArtifactManifest } from './manifest.ts';
-import { declaredDependencies, type DeclaredDependency, type InstalledDependencyField } from '../core/package-dependencies.ts';
+import {
+  declaredDependencies,
+  packageBinEntries,
+  type DeclaredDependency,
+  type InstalledDependencyField,
+} from '../core/package-dependencies.ts';
 import {
   classifyDependency,
   installScriptDependencies,
@@ -104,18 +109,30 @@ const jsonRecord = async (path: string): Promise<Readonly<Record<string, unknown
   return value;
 };
 
-const binEntries = (value: unknown): readonly [string, string][] => {
-  if (typeof value === 'string') return Object.freeze([['bin', value] as const]);
-  if (!isRecord(value)) return Object.freeze([]);
-  return Object.freeze(Object.entries(value)
-    .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
-    .sort(([left], [right]) => left.localeCompare(right)));
-};
-
 const diagnostic = (code: string, message: string, recovery: string, severity: DiagnosticSeverity = 'error'): Diagnostic =>
   Object.freeze({ code, message, recovery, severity });
 
 const quoteAll = (values: readonly string[]): string => values.map((value) => JSON.stringify(value)).join(', ');
+
+export const packageBinDiagnostics = async (
+  packageRoot: string,
+  packOutput: PackOutput,
+  source = 'generated npm-root package.json',
+): Promise<readonly Diagnostic[]> => {
+  const packageDocument = await jsonRecord(join(packageRoot, 'package.json'));
+  const packed = new Set(packOutput.files.map((file) => file.path.replace(/^\.\//u, '')));
+  const invalidBins = packageBinEntries(packageDocument)
+    .filter(([, target]) => {
+      const normalized = target.replace(/^\.\//u, '');
+      return normalized.startsWith('src/') || !packed.has(normalized);
+    });
+  return invalidBins.length === 0 ? [] : [diagnostic(
+    'AB7012',
+    `${source} bins must name files in its packed file set: ${invalidBins.map(([name, target]) =>
+      `${JSON.stringify(name)} -> ${JSON.stringify(target)}`).join(', ')}.`,
+    'Point each bin at a file included by that package; routed CLIs use manifest-declared bin/<name>.mjs and authored bins use generated bin/*.js files.',
+  )];
+};
 
 /** One diagnostic per installed-dependency field that has offending entries, entries sorted by name. */
 const perField = (
@@ -297,19 +314,7 @@ export const packInventoryDiagnostics = async (options: {
     ));
   }
 
-  const invalidBins = binEntries(packageDocument.bin)
-    .filter(([, target]) => {
-      const normalized = target.replace(/^\.\//u, '');
-      return normalized.startsWith('src/') || !packed.has(normalized);
-    });
-  if (invalidBins.length > 0) {
-    diagnostics.push(diagnostic(
-      'AB7012',
-      `package.json bins must name files in the packed npm root: ${invalidBins.map(([name, target]) =>
-        `${JSON.stringify(name)} -> ${JSON.stringify(target)}`).join(', ')}.`,
-      'Point routed CLIs at their manifest-declared bin/<name>.mjs and authored bins at generated bin/*.js files.',
-    ));
-  }
+  diagnostics.push(...await packageBinDiagnostics(packageRoot, options.packOutput));
 
   const versions: Array<readonly [string, unknown]> = [
     ['package.json', packageDocument.version],

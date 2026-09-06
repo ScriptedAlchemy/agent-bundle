@@ -10,10 +10,12 @@ import { Ajv } from 'ajv/dist/ajv.js';
 import addFormats from 'ajv-formats';
 
 import cursorMarketplaceSchema from '../src/adapters/schemas/cursor/marketplace.schema.json' with { type: 'json' };
+import { packOutputFromJson } from '../src/build/pack-inventory.ts';
 import { stageCursorMarketplace } from '../src/install/cursor-marketplace.ts';
+import { runDoctor } from '../src/install/doctor.ts';
 import { formatInstallResult } from '../src/install/format.ts';
 import { stableJson } from '../src/core/digest.ts';
-import { readBundleIdentity } from '../src/install/identity.ts';
+import { installedBundleInventory, readBundleIdentity } from '../src/install/identity.ts';
 import { installBundle, type InstallCommandRunner } from '../src/install/install.ts';
 import {
   copyInventoryFiles,
@@ -926,6 +928,91 @@ it('reports manifest-indexed mode drift as AB7001', async () => {
       rm(fixture.cleanupRoot, { force: true, recursive: true }),
       rm(home, { force: true, recursive: true }),
     ]);
+  }
+});
+
+it('accepts npm normalization while preserving executable-bit tamper checks', async () => {
+  if (process.platform === 'win32') return;
+  const root = await mkdtemp(join(tmpdir(), 'agent-bundle-npm-modes-'));
+  const packageRoot = join(root, 'package');
+  const artifactRoot = join(packageRoot, 'artifact');
+  const consumer = join(root, 'consumer');
+  const tarballs = join(root, 'tarballs');
+  await Promise.all([
+    mkdir(join(artifactRoot, '.cursor-plugin'), { recursive: true }),
+    mkdir(join(packageRoot, 'bin'), { recursive: true }),
+    mkdir(consumer),
+    mkdir(tarballs),
+  ]);
+  await Promise.all([
+    writeJson(join(artifactRoot, '.cursor-plugin', 'plugin.json'), {
+      name: 'npm-mode-fixture',
+      version: '1.0.0',
+    }),
+    writeFile(join(artifactRoot, 'executable.mjs'), '#!/usr/bin/env node\n'),
+    writeFile(join(artifactRoot, 'preserved-executable.mjs'), '#!/usr/bin/env node\n'),
+    writeFile(join(packageRoot, 'bin', 'npm-mode-fixture.mjs'), '#!/usr/bin/env node\n'),
+    writeFile(join(packageRoot, 'package.json'), `${JSON.stringify({
+      bin: { 'npm-mode-fixture': './bin/npm-mode-fixture.mjs' },
+      files: ['artifact', 'bin'],
+      name: 'npm-mode-fixture',
+      version: '1.0.0',
+    })}\n`),
+    writeFile(join(consumer, 'package.json'), '{"private":true}\n'),
+  ]);
+  await Promise.all([
+    chmod(join(artifactRoot, 'executable.mjs'), 0o755),
+    chmod(join(artifactRoot, 'preserved-executable.mjs'), 0o755),
+    chmod(join(packageRoot, 'bin', 'npm-mode-fixture.mjs'), 0o755),
+  ]);
+  await writeInstallFixtureManifest(
+    artifactRoot,
+    { name: 'npm-mode-fixture', version: '1.0.0' },
+    [{ host: 'cursor' }],
+  );
+  await Promise.all([
+    chmod(join(artifactRoot, 'executable.mjs'), 0o664),
+    chmod(join(packageRoot, 'bin', 'npm-mode-fixture.mjs'), 0o664),
+  ]);
+  const npmMajor = Number.parseInt((await execFile('npm', ['--version'])).stdout, 10);
+  // Pin the affected npm generation when the host has npm 12+, whose pack JSON and mode behavior changed.
+  const npm = (args: readonly string[], cwd: string) => npmMajor === 10 || npmMajor === 11
+    ? execFile('npm', [...args], { cwd })
+    : execFile('pnpm', ['--silent', 'dlx', 'npm@11.19.1', ...args], { cwd });
+
+  try {
+    const packed = await npm(['pack', '--json', '--ignore-scripts', '--pack-destination', tarballs], packageRoot);
+    const tarball = join(tarballs, packOutputFromJson(packed.stdout).filename);
+    await npm(['install', '--ignore-scripts', '--no-audit', '--no-fund', tarball], consumer);
+    const installed = join(consumer, 'node_modules', 'npm-mode-fixture');
+    expect((await stat(join(installed, 'bin', 'npm-mode-fixture.mjs'))).mode & 0o111).not.toBe(0);
+    const installedExecutable = join(installed, 'artifact', 'executable.mjs');
+    expect((await stat(installedExecutable)).mode & 0o111).toBe(0);
+    const preservedExecutable = join(installed, 'artifact', 'preserved-executable.mjs');
+    expect((await stat(preservedExecutable)).mode & 0o111).not.toBe(0);
+    await chmod(preservedExecutable, 0o775);
+
+    const identity = await readBundleIdentity(join(installed, 'artifact'), 'cursor');
+    await expect(manifestInventory(identity.bundleRoot, identity.manifest)).resolves.toEqual(
+      expect.objectContaining({ files: expect.arrayContaining(['executable.mjs', 'preserved-executable.mjs']) }),
+    );
+    const home = join(root, 'home');
+    await mkdir(join(home, '.cursor'), { recursive: true });
+    const beforeInstall = await runDoctor({ from: identity.bundleRoot, home, hosts: ['cursor'] });
+    expect(beforeInstall.diagnostics.filter((entry) => entry.code === 'AB7001')).toEqual([]);
+    await expect(installBundle({ from: identity.bundleRoot, home, host: 'cursor' }))
+      .resolves.toMatchObject({ state: 'installed' });
+    expect((await stat(join(home, '.cursor', 'plugins', 'local', 'npm-mode-fixture', 'executable.mjs'))).mode & 0o111)
+      .not.toBe(0);
+    await chmod(installedExecutable, 0o664);
+    const doctor = await runDoctor({ from: identity.bundleRoot, home, hosts: ['cursor'] });
+    expect(doctor.diagnostics.filter((entry) => entry.code === 'AB7001' || entry.code === 'AB7308')).toEqual([]);
+    const installedRoot = join(home, '.cursor', 'plugins', 'local', 'npm-mode-fixture');
+    const current = await installedBundleInventory(installedRoot, 'cursor');
+    await chmod(join(installedRoot, 'executable.mjs'), 0o644);
+    expect((await installedBundleInventory(installedRoot, 'cursor')).hash).not.toBe(current.hash);
+  } finally {
+    await rm(root, { force: true, recursive: true });
   }
 });
 
