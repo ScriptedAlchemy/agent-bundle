@@ -83,8 +83,8 @@ is reproduced here beyond counts, codes, and field names.
    `normalHome: 'settings-and-plugins-unchanged'`; `packed-native-smoke.test.ts`
    gained a unit test that a `.claude.json` rewrite passes while a
    `settings.json` or `plugins/` change fails.
-3. **`runNativeClaudeSmoke` (product code,
-   `packages/agent-bundle/src/host-contracts/native-claude-contract.ts`) has
+3. **`runNativeClaudeSmoke` (then product code at
+   `packages/agent-bundle/src/host-contracts/native-claude-contract.ts`, since moved to `packages/agent-bundle/tests/support/native-claude-smoke.ts`) has
    the same guard** and therefore cannot pass on Claude Code 2.1.257: its
    `snapshotClaudeNormalHome` digests `.claude.json` (`claudeJson`) beside
    `config.json`, `settings.local.json`, `plugins/`, and `settings.json`, and
